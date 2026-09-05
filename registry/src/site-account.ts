@@ -10,10 +10,10 @@ import type { V2Account, V2Device } from './v2-accounts'
  * script's whole job is the four verbs — check a name, sign in, revoke a
  * device, sign out.
  *
- * PASSKEYS AND AUTHENTICATORS ARE PHASE 4. They appear on this page as inert
- * rows saying so, because an account's security posture should be readable
- * before it is complete — and a row that says "coming" is more honest than a
- * button that refuses.
+ * PHASE 4 FILLED THE SECURITY SECTION. The passkey and authenticator rows are
+ * real now: they carry the verbs factors.js performs, and the account's own
+ * keys are listed by the name their owner gave them. Requests to sign in from
+ * another device appear under them, polled, with APPROVE / DENY / NOT ME.
  */
 
 const KIND_LABEL: Record<V2Device['kind'], string> = { desktop: 'Desktop', phone: 'Phone', browser: 'Browser' }
@@ -35,6 +35,23 @@ function deviceRow(device: V2Device, current: boolean): string {
 ${action}</li>`
 }
 
+/** One row per enrolled passkey — a factor, so removing the last is allowed. */
+function passkeyRows(passkeys: readonly { id: string; name: string; addedAt: number }[]): string {
+  return passkeys
+    .map(
+      (p) => `<li><span class="chip">Passkey</span>
+<span><b>${esc(p.name)}</b><br><span class="meta">Added ${esc(day(p.addedAt))}</span></span>
+<button class="btn sm danger" data-drop-passkey="${esc(p.id)}">Remove</button></li>`
+    )
+    .join('')
+}
+
+function authenticatorRow(active: boolean): string {
+  return active
+    ? `<li><span class="chip">Factor</span><span><b>Authenticator app</b><br><span class="meta">Six digits, every thirty seconds. Asked for on a device this account has not seen.</span></span><button class="btn sm danger" data-drop-totp>Remove</button></li>`
+    : `<li><span class="chip">Factor</span><span><b>Authenticator app</b><br><span class="meta">A six-digit code from an app on your phone. The secret is shown once, as text.</span></span><button class="btn sm" data-add-totp>Add</button></li>`
+}
+
 function desktopRow(name: string, workspaces: readonly { id: string; name: string }[]): string {
   const list = workspaces.length === 0 ? 'No workspaces registered yet' : workspaces.map((w) => esc(w.name)).join(' · ')
   return `<li><span class="chip">Mac</span><span><b>${esc(name)}</b><br><span class="meta">${list}</span></span>
@@ -48,7 +65,15 @@ function desktopRow(name: string, workspaces: readonly { id: string; name: strin
  * is a 401 that is still a page: somebody following a link deserves a sentence
  * and a way in, not a JSON body.
  */
-export function mePage(input: { account: V2Account; currentDeviceId: string } | null): Page {
+/** What phase 4 knows about an account, for the Security rows. */
+export interface FactorSummary {
+  passkeys: readonly { id: string; name: string; addedAt: number }[]
+  totp: boolean
+}
+
+export function mePage(
+  input: { account: V2Account; currentDeviceId: string; factors?: FactorSummary } | null
+): Page {
   if (input === null) {
     return page(
       { title: 'Your account — Cookrew', kind: 'app', cache: 0, status: 401, noindex: true, scripts: ['site.js'] },
@@ -58,6 +83,7 @@ export function mePage(input: { account: V2Account; currentDeviceId: string } | 
     )
   }
   const { account, currentDeviceId } = input
+  const factors: FactorSummary = input.factors ?? { passkeys: [], totp: false }
   const face =
     account.avatar === null
       ? `<span class="avatar">${esc(initials(account))}</span>`
@@ -87,11 +113,17 @@ export function mePage(input: { account: V2Account; currentDeviceId: string } | 
 <h2 style="margin-top:30px">Security</h2>
 <ul class="doors me-list" id="me-security">
 <li><span class="chip">Password</span><span><b>Your password</b><br><span class="meta">At least 12 characters. It goes only to cookrew.dev.</span></span><button class="btn sm" data-password>Change</button></li>
-<li><span class="chip">Factor</span><span><b>Passkey (Touch ID / Face ID)</b><br><span class="meta">Recommended — coming in a later release.</span></span><span class="chip">Coming</span></li>
-<li><span class="chip">Factor</span><span><b>Authenticator app</b><br><span class="meta">A six-digit code — coming in a later release.</span></span><span class="chip">Coming</span></li>
+${passkeyRows(factors.passkeys)}
+<li><span class="chip">Factor</span><span><b>Passkey (Touch ID / Face ID)</b><br><span class="meta" data-passkey-note>Recommended. It lives on this device and cannot be typed by anyone else.</span></span><button class="btn sm" data-add-passkey>Add</button></li>
+${authenticatorRow(factors.totp)}
 <li><span class="chip">Rescue</span><span><b>Recovery codes</b><br><span class="meta" id="me-codes-note">${codes === 0 ? 'None saved. Each code opens the account once.' : `${codes} unused. Showing a new set replaces them.`}</span></span><button class="btn sm" data-recovery>Show</button></li>
 </ul>
 <pre class="cmd" id="me-codes" hidden></pre>
+<pre class="cmd" id="me-totp" hidden></pre>
+
+<h2 style="margin-top:30px">Requests</h2>
+<p class="meta">A device asking to sign in as @${esc(account.username)}. Approve attaches it and names it in Devices; deny does nothing else; “not me” signs every other device out and locks the password until you change it.</p>
+<ul class="doors me-list" id="me-approvals"></ul>
 
 <h2 style="margin-top:30px">Your desktops</h2>
 <p class="meta">Names and ids only — cookrew.dev never holds what is on a canvas.</p>

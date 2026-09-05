@@ -145,14 +145,24 @@ describe('/me', () => {
     expect(res.headers.get('cache-control')).toBe('private, no-store')
   })
 
-  it('lists passkeys and authenticators as coming, not as buttons', async () => {
+  it('offers a passkey, an authenticator and the requests waiting to be answered', async () => {
     const body = await (await get('/me', { cookie: `cr_session=${session}` })).text()
+    // Phase 4: these are verbs now, not a row that says "coming".
     expect(body).toContain('Passkey (Touch ID / Face ID)')
+    expect(body).toContain('data-add-passkey')
     expect(body).toContain('Authenticator app')
-    expect(body).toContain('coming in a later release')
+    expect(body).toContain('data-add-totp')
+    expect(body).toContain('id="me-approvals"')
     expect(body).toContain('data-recovery')
     expect(body).toContain('data-signout')
-    expect(body).not.toContain('data-passkey')
+    expect(body).not.toContain('coming in a later release')
+  })
+
+  it('loads the ladder’s screens beside the account sheet', async () => {
+    const res = await get('/me', { cookie: `cr_session=${session}` })
+    expect(await res.text()).toContain('/assets/factors.js')
+    // Still one origin and no inline script: the CSP has not been widened.
+    expect(res.headers.get('content-security-policy')).toContain("script-src 'self'")
   })
 
   it('escapes what a person typed into their own profile', async () => {

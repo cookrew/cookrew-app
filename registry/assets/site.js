@@ -502,6 +502,13 @@
           location.assign('/me')
           return
         }
+        // PHASE 4: the password was right and the account wants one more step.
+        // The sheet becomes the ladder; factors.js owns every screen after
+        // this line, and the pending id never leaves that closure.
+        if (out.status === 401 && out.body?.error === 'second_factor' && window.cookrewFactors) {
+          window.cookrewFactors.ladder({ dialog, step: out.body, username, device })
+          return
+        }
         say(out.body?.message ?? 'That did not go through. Try again in a moment.')
       } catch (error) {
         say('This browser could not reach cookrew.dev. Nothing local stops.')
@@ -615,6 +622,8 @@
   window.cookrewAccount = {
     token,
     handle: async () => (await loadAccount())?.handle ?? null,
+    /** This browser as a device — what a passwordless passkey sign-in attaches. */
+    device: async () => devicePayload(await deviceIdentity()),
     signIn: signInFlow,
     /** The v2 sheet — a username and a password. What the header opens. */
     account: openAccountSheet,

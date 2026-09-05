@@ -213,7 +213,10 @@ function shell(options: ShellOptions, main: string): string {
     options.kind === 'app'
       ? `<button class="btn sm" id="signin" data-signin>🔑 Sign in</button>`
       : `<a class="btn sm" href="/market#account">🔑 Sign in</a>`
+  // The ladder's screens travel with the account sheet: every page that
+  // carries site.js is a page a second factor can be asked on.
   const scripts = (options.kind === 'app' ? options.scripts ?? [] : [])
+    .flatMap((s) => (s === 'site.js' ? [s, 'factors.js'] : [s]))
     .map((s) => `<script src="/assets/${esc(s)}?v=${ASSET_VERSION}" defer></script>`)
     .join('')
   const styles = (options.kind === 'app' ? options.styles ?? [] : [])
@@ -420,4 +423,13 @@ dialog.acct::backdrop{background:rgba(20,17,10,.55)}
 .me-head{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .avatar{width:56px;height:56px;display:grid;place-items:center;border:2px solid var(--line);box-shadow:3px 3px 0 var(--line);background:var(--amber);color:#2d2a20;font:700 18px var(--font-pixel);object-fit:cover}
 ul.me-list li{grid-template-columns:auto 1fr auto}
+/* phase 4 — the ladder in the sheet, and the Security rows */
+.acct-passkey{width:100%;margin:0 0 8px}
+.acct-ladder{margin-top:8px}
+.acct-rung{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line-soft)}
+.acct-rung .sp{flex:1;font-size:14px}
+.acct-code{font:16px var(--font-mono);letter-spacing:.12em;padding:9px 11px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink);outline:none;flex:1;min-width:0}
+.acct-code:focus{background:var(--amber-soft)}
+.acct-asked{font:700 12px var(--font-pixel);letter-spacing:.06em;text-transform:uppercase;margin:2px 0 6px}
+ul.me-list li .btn.sm+.btn.sm{margin-left:6px}
 `
