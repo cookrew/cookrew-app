@@ -5,6 +5,8 @@ import { SESSION_TTL_MS, V2Tokens, type V2Claims } from './v2-tokens'
 import { Limiter, callerAddress } from './v2-limiter'
 import { passwordGate } from './v2-hash-gate'
 import { v2Error, type V2Error } from './v2-copy'
+import { createFactorState, type FactorState } from './v2-factor-state'
+import { handleFactorRoute, signInWithLadder } from './v2-factor-routes'
 
 /**
  * IDENTITY v2 — THE ROUTES.
@@ -39,12 +41,23 @@ export interface V2Identity {
    * header the caller writes is not a caller's address.
    */
   trustedProxies: readonly string[]
+  /** Phase 4: passkeys, authenticators, pending sign-ins and approvals. */
+  factors: FactorState
+  /**
+   * The canonical public origin, when the deployment knows it. WebAuthn
+   * compares an assertion's origin and rpId against a string, so a
+   * deployment's own name beats the Host header a caller wrote; null means
+   * "use the Host", which is what a dev binary and a test do.
+   */
+  origin: string | null
 }
 
 export interface V2Options {
   limits?: { accountsPerMinute: number; sessionsPerMinute: number; lookupsPerMinute?: number }
   now?: () => number
   trustedProxies?: readonly string[]
+  /** The origin a browser sees — `https://cookrew.dev` in production. */
+  origin?: string
 }
 
 /**
@@ -70,7 +83,9 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
       // whole directory of who has an account here.
       lookups: new Limiter(options.limits?.lookupsPerMinute ?? 60, 60_000, options.now)
     },
-    trustedProxies: options.trustedProxies ?? []
+    trustedProxies: options.trustedProxies ?? [],
+    factors: createFactorState(base, { now: options.now }),
+    origin: options.origin ?? null
   }
 }
 
@@ -210,6 +225,11 @@ export function handleV2Route(ctx: V2Context): boolean {
   }
   const rest = parts.slice(1)
 
+  // PHASE 4, in one line and ahead of everything: the ladder's routes live
+  // under /v2/sessions/… and /v2/me/… , and `/v2/me` below would swallow the
+  // second half of them. It answers false for every path it does not own.
+  if (handleFactorRoute(ctx)) return true
+
   if (rest.length === 1 && rest[0] === 'keys' && method === 'GET') {
     v2Json(response, 200, { jwk: ctx.v2.tokens.publicKeyJwk(), revoked: ctx.v2.accounts.revokedIds() })
     return true
@@ -331,38 +351,17 @@ async function openSession(ctx: V2Context): Promise<void> {
     refuse(response, 429, 'rate_limited', undefined, { 'retry-after': '60' })
     return
   }
-  const out = await v2.accounts.signIn({
-    username: body.value.username,
-    password: body.value.password,
-    device: body.value.device
-  })
-  if (!out.ok) {
-    refuse(response, out.reason === 'bad_device' ? 400 : 401, out.reason)
-    return
-  }
   /**
-   * PHASE 4'S SEAM. When an account has a passkey or an authenticator this is
-   * where the ladder starts: the answer becomes a 401 naming the factors
-   * instead of a session. Today every account answers null, and the route is
-   * written so that adding factors is a branch here rather than a new route.
+   * PHASE 4'S SEAM, filled. The password is checked and then the ladder
+   * decides: a session for an account with no factors on a device it knows,
+   * and otherwise a 401 naming the ways this account can finish.
+   *
+   * The device is NOT attached here any more. It travels with the pending
+   * record and is attached only when a rung is climbed — a password alone
+   * putting a new device on an account is the thing the ladder exists to
+   * stop.
    */
-  const factor = v2.accounts.nextFactorFor(out.account)
-  if (factor !== null) {
-    refuse(response, 401, 'unauthenticated')
-    return
-  }
-  const session = v2.accounts.startSession(out.account.username, out.device.id)
-  if (session === null) {
-    refuse(response, 500, 'malformed')
-    return
-  }
-  const minted = v2.tokens.mintSession(out.account.username, out.device.id, session.jti)
-  v2Json(
-    response,
-    201,
-    { token: minted.token, exp: minted.exp, deviceId: out.device.id },
-    { 'set-cookie': cookie(minted.token, ctx.secure) }
-  )
+  await signInWithLadder(ctx, body.value)
 }
 
 function signOut(ctx: V2Context): void {
@@ -505,6 +504,9 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
       refuse(response, out.reason === 'bad_credentials' ? 401 : 400, out.reason)
       return
     }
+    // The change is what "not me" was waiting for: the old password is gone,
+    // so the lock it put on signing in comes off.
+    v2.factors.store.setMustChangePassword(account.username, false)
     noContent(response)
     return
   }

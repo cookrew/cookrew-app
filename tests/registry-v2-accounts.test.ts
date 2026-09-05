@@ -366,13 +366,33 @@ describe('tokens', () => {
   })
 })
 
-describe('the phase 4 seam', () => {
-  it('asks for no second factor yet, and says so in one place', async () => {
-    await store.create({ username: 'drej', password: PASSWORD, device: device() })
-    const account = store.get('drej')
-    expect(account).not.toBeNull()
-    if (!account) return
-    expect(store.nextFactorFor(account)).toBeNull()
+describe('the phase 4 seam, filled', () => {
+  /**
+   * The seam moved: what an account HAS is phase 4's own store (a TOTP seed
+   * is a secret and does not belong in the file a profile renders from), so
+   * what stays here is the half only this store can do — ending every sitting
+   * but one, which is what "not me" asks for.
+   */
+  it('ends every other sitting and publishes their ids, keeping the caller’s', async () => {
+    const first = device()
+    const second = device('phone', 'iPhone')
+    await store.create({ username: 'drej', password: PASSWORD, device: first })
+    store.attachDevice('drej', second)
+    const mine = store.startSession('drej', first.id)
+    const theirs = store.startSession('drej', second.id)
+    expect(mine).not.toBeNull()
+    expect(theirs).not.toBeNull()
+    if (!mine || !theirs) return
+
+    expect(store.endOtherSessions('drej', mine.jti)).toBe(1)
+    expect(store.isLiveSession('drej', mine.jti)).toBe(true)
+    expect(store.isLiveSession('drej', theirs.jti)).toBe(false)
+    // A door verifies offline, so the ended sitting has to be published.
+    expect(store.revokedFor('drej')).toContain(theirs.jti)
+    // The phone itself stays attached: "not me" ends sittings, it does not
+    // take somebody's device off their account.
+    expect(store.get('drej')?.devices.some((d) => d.id === second.id)).toBe(true)
+    expect(store.endOtherSessions('drej', mine.jti)).toBe(0)
   })
 })
 

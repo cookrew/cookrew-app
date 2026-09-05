@@ -237,15 +237,31 @@ export class V2Accounts {
   }
 
   /**
-   * PHASE 4'S SEAM, and deliberately the only one.
+   * PHASE 4 FILLED THIS SEAM, and moved it.
    *
-   * The sign-in ladder — passkey, authenticator, approve on a trusted device,
-   * recovery code — is phase 4. Until then every account's answer is "nothing
-   * more", and it is answered HERE so that the route does not grow a second
-   * opinion about it later.
+   * The ladder — passkey, authenticator, approve on a trusted device,
+   * recovery code — needs to know what an account HAS, and what it has lives
+   * in `v2-factor-store.ts` (a TOTP seed is a secret; it does not belong in
+   * the file rendered on every profile). So the decision is made in
+   * `factorsFor` there, and this store keeps the two things only it can
+   * answer: the devices, and the sittings below.
    */
-  nextFactorFor(_account: V2Account): null {
-    return null
+
+  /**
+   * END EVERY SITTING BUT ONE — what "not me" does.
+   *
+   * The same machinery a password change uses: the other session ids join the
+   * published revoked list, so a door verifying OFFLINE refuses them without
+   * asking us, and the devices stay attached (taking somebody's phone off the
+   * account is not what they said). The caller's own sitting survives.
+   */
+  endOtherSessions(username: string, keepJti: string): number {
+    const account = this.get(username)
+    if (!account) return 0
+    const ended = this.otherSessions(account, keepJti)
+    if (ended.length === 0) return 0
+    this.replace(this.withRevoked({ ...account, sessions: this.keptSessions(account, keepJti) }, ended))
+    return ended.length
   }
 
   // ── claiming and signing in ────────────────────────────────────────────
