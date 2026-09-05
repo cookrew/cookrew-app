@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
+import { writeFileAtomic } from './atomic'
 import { publicJwk, type Jwk } from './jwk'
 
 /**
@@ -49,6 +50,12 @@ export interface Device {
   revokedAt?: number
   /** Passkeys only: the authenticator's own credential id, base64url. */
   credentialId?: string
+  /**
+   * Passkeys only: the highest signature counter this authenticator has
+   * reported. A count that fails to advance is a REPLAY or a clone, and it is
+   * the only signal WebAuthn gives about either.
+   */
+  signCount?: number
 }
 
 export interface Account {
@@ -98,7 +105,8 @@ export function presentable(device: Device): Record<string, unknown> {
     boundBy: device.boundBy,
     at: device.at,
     ...(device.revokedAt === undefined ? {} : { revokedAt: device.revokedAt }),
-    ...(device.credentialId === undefined ? {} : { credentialId: device.credentialId })
+    ...(device.credentialId === undefined ? {} : { credentialId: device.credentialId }),
+    ...(device.signCount === undefined ? {} : { signCount: device.signCount })
   }
 }
 
@@ -112,12 +120,28 @@ export class AccountStore {
     this.file = path.join(base, 'accounts.json')
     this.now = now
     if (existsSync(this.file)) {
+      let parsed: unknown
       try {
-        const parsed = JSON.parse(readFileSync(this.file, 'utf8')) as Accounts
-        this.accounts = sane(parsed)
-      } catch {
-        this.accounts = {}
+        parsed = JSON.parse(readFileSync(this.file, 'utf8'))
+      } catch (error) {
+        /**
+         * REFUSE TO START rather than start empty.
+         *
+         * Reading a torn accounts.json as `{}` is the worst possible answer:
+         * the registry comes up, every account looks unminted, every
+         * revocation has silently reverted, and the first thing that happens
+         * is somebody re-mints a handle that already had an owner. A process
+         * that will not boot is a page someone fixes; a process that boots
+         * without its accounts is a data loss nobody notices for a day.
+         */
+        throw new Error(
+          `${this.file} exists but is not readable JSON — restore it or move it aside; ` +
+            `the registry will not start with an empty accounts table (${
+              error instanceof Error ? error.message : String(error)
+            })`
+        )
       }
+      this.accounts = sane(parsed)
     }
   }
 
@@ -244,7 +268,7 @@ export class AccountStore {
     handle: string,
     input: unknown,
     boundBy: string,
-    extra: { credentialId?: string } = {}
+    extra: { credentialId?: string; signCount?: number } = {}
   ): { ok: true; deviceId: string } | { ok: false; reason: BindFailure } {
     const clean = handle.toLowerCase()
     const account = this.accounts[clean]
@@ -270,7 +294,8 @@ export class AccountStore {
             ...device,
             boundBy,
             at: this.now(),
-            ...(extra.credentialId === undefined ? {} : { credentialId: extra.credentialId })
+            ...(extra.credentialId === undefined ? {} : { credentialId: extra.credentialId }),
+            ...(extra.signCount === undefined ? {} : { signCount: extra.signCount })
           }
         ]
       }
@@ -301,6 +326,26 @@ export class AccountStore {
     return { ok: true }
   }
 
+  /**
+   * Advance a passkey's signature counter. Monotonic by construction: a lower
+   * count never overwrites a higher one, so a request that lost a race cannot
+   * roll the ceiling back and re-open the replay it was meant to close.
+   */
+  recordSignCount(handle: string, id: string, count: number): void {
+    const clean = handle.toLowerCase()
+    const account = this.accounts[clean]
+    if (account === undefined || !Number.isInteger(count) || count < 0) return
+    const target = account.devices.find((d) => d.id === id.toLowerCase())
+    if (target === undefined || (target.signCount ?? 0) >= count) return
+    this.accounts = {
+      ...this.accounts,
+      [clean]: {
+        devices: account.devices.map((d) => (d.id === target.id ? { ...d, signCount: count } : d))
+      }
+    }
+    this.persist()
+  }
+
   /** Forget every account. DEV ONLY — the twin of the credential map's own. */
   forgetAll(): void {
     this.accounts = {}
@@ -308,7 +353,8 @@ export class AccountStore {
   }
 
   private persist(): void {
-    writeFileSync(this.file, JSON.stringify(this.accounts, null, 2))
+    // Sibling-then-rename, 0600: this file decides who may act for an account.
+    writeFileAtomic(this.file, JSON.stringify(this.accounts, null, 2))
   }
 }
 
@@ -330,7 +376,8 @@ function sane(parsed: unknown): Accounts {
           boundBy: typeof raw.boundBy === 'string' ? raw.boundBy : 'first',
           at: typeof raw.at === 'number' ? raw.at : 0,
           ...(typeof raw.revokedAt === 'number' ? { revokedAt: raw.revokedAt } : {}),
-          ...(typeof raw.credentialId === 'string' ? { credentialId: raw.credentialId } : {})
+          ...(typeof raw.credentialId === 'string' ? { credentialId: raw.credentialId } : {}),
+          ...(typeof raw.signCount === 'number' ? { signCount: raw.signCount } : {})
         }
       ]
     })
@@ -352,6 +399,17 @@ const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 const CODE_LENGTH = 6
 /** In memory and capped: a code is worthless in two minutes and must not accrue. */
 const MAX_CODES = 512
+/**
+ * Wrong guesses a code survives before it is thrown away.
+ *
+ * Six characters from a 32-letter alphabet is a billion codes, so guessing one
+ * is not the threat — guessing ONE OF THE OUTSTANDING ones is, and a busy
+ * registry may have many. Ten is far more than a person mistypes and far fewer
+ * than a script needs, and burning the code rather than merely refusing the
+ * attempt means the attacker has to make the owner ask for a new one, which is
+ * a thing the owner notices.
+ */
+const MAX_WRONG = 10
 
 export interface LinkCode {
   code: string
@@ -361,7 +419,7 @@ export interface LinkCode {
 export type CodeFailure = 'unknown' | 'expired' | 'wrong_handle'
 
 export class LinkCodes {
-  private readonly codes = new Map<string, { handle: string; by: string; exp: number }>()
+  private readonly codes = new Map<string, { handle: string; by: string; exp: number; wrong: number }>()
 
   constructor(
     private readonly ttlMs: number,
@@ -382,7 +440,7 @@ export class LinkCodes {
       code = draw()
     } while (this.codes.has(code))
     const exp = this.now() + this.ttlMs
-    this.codes.set(code, { handle: handle.toLowerCase(), by, exp })
+    this.codes.set(code, { handle: handle.toLowerCase(), by, exp, wrong: 0 })
     return { code, exp }
   }
 
@@ -401,10 +459,39 @@ export class LinkCodes {
     const entry = this.codes.get(key)
     this.codes.delete(key)
     this.sweep()
-    if (entry === undefined) return { ok: false, reason: 'unknown' }
+    if (entry === undefined) {
+      // A GUESS. It cannot be counted against the code that was guessed at —
+      // there isn't one — so it is counted against every code outstanding for
+      // the account being guessed at, and a code that has been shot at ten
+      // times is thrown away before the eleventh.
+      this.missed(handle)
+      return { ok: false, reason: 'unknown' }
+    }
     if (entry.exp < this.now()) return { ok: false, reason: 'expired' }
     if (entry.handle !== handle.toLowerCase()) return { ok: false, reason: 'wrong_handle' }
     return { ok: true, by: entry.by }
+  }
+
+  /** How many wrong guesses a code has survived. For the tests and the logs. */
+  wrongGuesses(code: string): number | null {
+    return this.codes.get(String(code ?? '').trim().toUpperCase())?.wrong ?? null
+  }
+
+  /** Outstanding codes for one account. */
+  outstanding(handle: string): number {
+    this.sweep()
+    const clean = handle.toLowerCase()
+    return [...this.codes.values()].filter((entry) => entry.handle === clean).length
+  }
+
+  private missed(handle: string): void {
+    const clean = handle.toLowerCase()
+    for (const [code, entry] of this.codes) {
+      if (entry.handle !== clean) continue
+      const wrong = entry.wrong + 1
+      if (wrong >= MAX_WRONG) this.codes.delete(code)
+      else this.codes.set(code, { ...entry, wrong })
+    }
   }
 
   private sweep(): void {

@@ -61,6 +61,7 @@ export function attestationFor(options: {
   flags?: number
   key?: { x: Buffer; y: Buffer }
   trailing?: Buffer
+  signCount?: number
 } = {}): { attestationObject: Buffer; credentialId: string; jwk: Record<string, unknown> } {
   const keys = generateKeyPairSync('ec', { namedCurve: 'P-256' })
   const jwk = keys.publicKey.export({ format: 'jwk' }) as Record<string, string>
@@ -79,7 +80,7 @@ export function attestationFor(options: {
   const authData = Buffer.concat([
     createHash('sha256').update(options.rpId ?? RP_ID).digest(),
     Buffer.from([options.flags ?? 0x41]),
-    Buffer.from([0, 0, 0, 1]),
+    counterBytes(options.signCount ?? 1),
     Buffer.alloc(16, 9),
     Buffer.from([credentialId.byteLength >> 8, credentialId.byteLength & 0xff]),
     credentialId,
@@ -100,24 +101,44 @@ export function attestationFor(options: {
 }
 
 
-/** A platform authenticator: registers once, then signs assertions like a real one. */
-export function platformAuthenticator(options: { rpId?: string; origin: string; credentialId?: Buffer }) {
+/** A four-byte big-endian signature counter, as an authenticator writes it. */
+const counterBytes = (count: number): Buffer => {
+  const out = Buffer.alloc(4)
+  out.writeUInt32BE(count)
+  return out
+}
+
+/**
+ * A platform authenticator: registers once, then signs assertions like a real
+ * one — INCLUDING the signature counter, which advances by one per assertion
+ * unless a test pins it to make a replay.
+ */
+export function platformAuthenticator(options: {
+  rpId?: string
+  origin: string
+  credentialId?: Buffer
+  /** The count it registers at. 0 means an authenticator that does not count. */
+  signCount?: number
+}) {
   const keys = generateKeyPairSync('ec', { namedCurve: 'P-256' })
   const jwk = keys.publicKey.export({ format: 'jwk' }) as Record<string, string>
   const rpId = options.rpId ?? 'localhost'
   const credentialId = options.credentialId ?? Buffer.from('platform-credential-id', 'utf8')
+  const enrolledAt = options.signCount ?? 1
   const registration = attestationFor({
     rpId,
     credentialId,
+    signCount: enrolledAt,
     key: { x: Buffer.from(jwk.x, 'base64url'), y: Buffer.from(jwk.y, 'base64url') }
   })
-  const assertionAuthData = Buffer.concat([
-    createHash('sha256').update(rpId).digest(),
-    Buffer.from([0x05]),
-    Buffer.from([0, 0, 0, 9])
-  ])
+  // An authenticator that registered at zero does not count at all, and the
+  // specification permits that: it stays at zero for every assertion.
+  let counter = enrolledAt
+  const authDataFor = (count: number): Buffer =>
+    Buffer.concat([createHash('sha256').update(rpId).digest(), Buffer.from([0x05]), counterBytes(count)])
   return {
     credentialId: registration.credentialId,
+    enrolledAt,
     /** What `navigator.credentials.create` would post back. */
     create(challenge: string, tweak: { origin?: string; type?: string } = {}) {
       const clientDataJSON = Buffer.from(
@@ -139,7 +160,9 @@ export function platformAuthenticator(options: { rpId?: string; origin: string; 
       }
     },
     /** What `navigator.credentials.get` would post back. */
-    get(challenge: string, tweak: { origin?: string } = {}) {
+    get(challenge: string, tweak: { origin?: string; signCount?: number } = {}) {
+      const count = tweak.signCount ?? (enrolledAt === 0 ? 0 : ++counter)
+      const assertionAuthData = authDataFor(count)
       const clientDataJSON = Buffer.from(
         JSON.stringify({
           type: 'webauthn.get',

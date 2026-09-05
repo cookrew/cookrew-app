@@ -565,7 +565,10 @@ export function createRegistry(deps: RegistryDeps): Server {
             return
           }
           const out = identity.register(parsed.credentialId, parsed.publicKeyJwk)
-          json(response, out.ok ? 201 : 409, out.ok ? { ok: true } : { error: out.reason })
+          // 409 is "that id is somebody else's"; a key this registry cannot
+          // verify is a malformed request and must not read as a taken name.
+          const code = out.ok ? 201 : out.reason === 'credential_exists' ? 409 : 400
+          json(response, code, out.ok ? { ok: true } : { error: out.reason })
           return
         }
         if (parts[2] === 'assert') {

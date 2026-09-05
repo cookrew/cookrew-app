@@ -391,6 +391,56 @@ describe('link codes', () => {
   })
 })
 
+describe('POST /v1/accounts/@h/link under guessing', () => {
+  /** Issue a code the way a device holding the account would. */
+  const issue = async (handle = 'drej'): Promise<{ code: string; held: Held }> => {
+    const held = await account(handle)
+    const token = await tokenFor(held, handle, 'account')
+    const out = (await (await post(`/v1/accounts/@${handle}/link-codes`, {}, token)).json()) as {
+      code: string
+    }
+    return { code: out.code, held }
+  }
+
+  const guess = (code: string, handle = 'drej'): Promise<Response> =>
+    post(`/v1/accounts/@${handle}/link`, { code, device: device('browser').wire })
+
+  it('answers 429 once a caller has burned its burst', async () => {
+    await issue()
+    for (let i = 0; i < 10; i++) expect((await guess('AAAAAA')).status).toBe(404)
+    const refused = await guess('AAAAAA')
+    expect(refused.status).toBe(429)
+    expect(Number(refused.headers.get('retry-after'))).toBeGreaterThan(0)
+    const body = (await refused.json()) as { error: string; message: string }
+    expect(body.error).toBe('too_many_attempts')
+    // A sentence, because this is the one refusal a person hits by accident
+    // and the only useful next step is a fresh code from the other device.
+    expect(body.message).toMatch(/fresh code/)
+  })
+
+  it('REVOKES the code early after ten wrong guesses, even across windows', async () => {
+    const { code } = await issue()
+    // Nine inside the burst, then the short window rolls and the tenth lands.
+    for (let i = 0; i < 9; i++) expect((await guess('AAAAAA')).status).toBe(404)
+    now += 61 * 1000
+    expect((await guess('AAAAAA')).status).toBe(404)
+    // The real code is gone — the attacker has to make the owner ask for
+    // another, which is a thing the owner notices.
+    const real = await guess(code)
+    expect(real.status).toBe(404)
+    expect(identity.accounts.active('drej')).toHaveLength(1)
+  })
+
+  it('does not let guessing at one account cost another account its code', async () => {
+    await issue('drej')
+    const mira = await issue('mira')
+    for (let i = 0; i < 10; i++) await guess('AAAAAA', 'drej')
+    const browser = device('browser')
+    const res = await post('/v1/accounts/@mira/link', { code: mira.code, device: browser.wire })
+    expect(res.status).toBe(201)
+  })
+})
+
 /* ── passkeys ────────────────────────────────────────────────────────────── */
 
 describe('passkeys', () => {
@@ -494,6 +544,34 @@ describe('passkeys', () => {
       token
     )
     expect(replay.status).toBe(400)
+  })
+
+  it('refuses a replayed assertion whose counter did not advance', async () => {
+    const laptop = await account('drej')
+    const token = await tokenFor(laptop, 'drej', 'account')
+    const options = (await (await post('/v1/accounts/@drej/passkey/options', {}, token)).json()) as {
+      challenge: string
+    }
+    const auth = authenticator()
+    expect(
+      (await post('/v1/accounts/@drej/passkey', { name: 'Touch ID', credential: auth.create(options.challenge) }, token))
+        .status
+    ).toBe(201)
+
+    const signIn = async (tweak: { signCount?: number } = {}): Promise<Response> => {
+      const c = (await (await post('/v1/identity/challenge')).json()) as { challenge: string }
+      return post('/v1/identity/assert', { ...auth.get(c.challenge, tweak), scope: 'download' })
+    }
+    expect((await signIn()).status).toBe(200)
+    expect((await signIn()).status).toBe(200)
+    const stored = identity.accounts.byCredentialId(auth.credentialId)?.device.signCount ?? 0
+    expect(stored).toBeGreaterThan(1)
+    // A capture replayed: same key, same shape, a counter that has already
+    // been seen. The refusal reason stays server-side, as every other one does.
+    expect((await signIn({ signCount: stored })).status).toBe(401)
+    expect((await signIn({ signCount: 1 })).status).toBe(401)
+    // The real device still works, and the ceiling did not move.
+    expect((await signIn()).status).toBe(200)
   })
 
   it('refuses an enrolment nobody with an account token asked for', async () => {

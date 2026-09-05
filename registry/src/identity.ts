@@ -8,9 +8,12 @@ import {
   verify,
   type KeyObject
 } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
+import { writeFileAtomic } from './atomic'
 import { AccountStore, LinkCodes, type Device } from './accounts'
+import { jwkThumbprint, publicJwk } from './jwk'
+import { LINK_LIMIT, RateLimiter } from './rate-limit'
 
 /**
  * IDENTITY (P2-A2) — WebAuthn assertion verification and short-lived tokens.
@@ -194,6 +197,12 @@ export type AssertFailure =
    * replay rather than a forgery.
    */
   | 'wrong_binding'
+  /**
+   * The authenticator's signature counter did not advance. WebAuthn gives one
+   * signal that a credential has been cloned or an assertion replayed from a
+   * capture, and this is it.
+   */
+  | 'sign_count'
 
 const b64url = (buf: Buffer): string => buf.toString('base64url')
 const fromB64url = (value: string): Buffer => Buffer.from(value, 'base64url')
@@ -249,6 +258,12 @@ interface Candidate {
   sub: string
   dev?: string
   jwk: Record<string, unknown>
+  /**
+   * Passkeys only. Present means the counter is ENFORCED for this candidate;
+   * absent means the device does not keep one — the software ceremony writes a
+   * constant, so checking it there would refuse every second sign-in.
+   */
+  signCount?: number
 }
 
 export class IdentityService {
@@ -279,6 +294,8 @@ export class IdentityService {
   readonly accounts: AccountStore
   /** Codes a person reads off one screen and types into another. */
   readonly linkCodes: LinkCodes
+  /** Attempts against the one route that cannot ask for a credential. */
+  readonly linkAttempts: RateLimiter
   /** Spent `link` token ids. Single use is the point of the scope. */
   private readonly spentJti = new Map<string, number>()
 
@@ -297,6 +314,10 @@ export class IdentityService {
     }
     this.accounts = new AccountStore(base, now)
     this.linkCodes = new LinkCodes(config.linkTtlMs ?? 2 * 60 * 1000, now)
+    this.linkAttempts = new RateLimiter(
+      { ...LINK_LIMIT, longMs: config.linkTtlMs ?? LINK_LIMIT.longMs },
+      now
+    )
     // MIGRATION, at boot and non-destructively: every handle that had a
     // credential keeps working, now as an account with one device, and
     // credentials.json is left untouched so a rollback loses nothing.
@@ -315,17 +336,26 @@ export class IdentityService {
    * deployment must parse attestation before this endpoint faces the internet.
    */
   register(credentialId: string, jwk: Record<string, unknown>): { ok: boolean; reason?: string } {
+    // NARROWED ON THE WAY IN. An exported JWK can carry `d`, and a caller that
+    // posted one would turn this file into a key escrow. It also refuses a key
+    // nothing here can verify — a credential that can never sign again is a
+    // locked-out identity stored as if it were a working one.
+    const narrowed = publicJwk(jwk)
+    if (narrowed === null) return { ok: false, reason: 'bad_key' }
     const existing = this.credentials.find((c) => c.credentialId === credentialId)
     if (existing) {
-      const same = JSON.stringify(existing.jwk) === JSON.stringify(jwk)
+      // Compared by THUMBPRINT, not by JSON: a key stored before this narrowing
+      // has its members in another order, and re-registering it must not read
+      // as somebody trying to take the identity over.
+      const same = jwkThumbprint(existing.jwk) === jwkThumbprint(narrowed)
       return same ? { ok: true } : { ok: false, reason: 'credential_exists' }
     }
-    this.credentials = [...this.credentials, { credentialId, jwk }]
-    writeFileSync(this.file, JSON.stringify(this.credentials, null, 2))
+    this.credentials = [...this.credentials, { credentialId, jwk: narrowed }]
+    writeFileAtomic(this.file, JSON.stringify(this.credentials, null, 2))
     // The same enrolment, in the shape everything after this reads: a handle
     // with one device. Additive, so an existing account is never touched — this
     // route cannot add a key to somebody else's account.
-    this.accounts.migrate([{ credentialId, jwk }])
+    this.accounts.migrate([{ credentialId, jwk: narrowed }])
     return { ok: true }
   }
 
@@ -346,7 +376,7 @@ export class IdentityService {
    */
   forgetAll(): void {
     this.credentials = []
-    writeFileSync(this.file, JSON.stringify([], null, 2))
+    writeFileAtomic(this.file, JSON.stringify([], null, 2))
     this.accounts.forgetAll()
   }
 
@@ -435,7 +465,16 @@ export class IdentityService {
       return { ok: false, reason: 'unknown_credential' }
     }
     const out = this.verifyCeremony(
-      [{ sub: found.handle, dev: found.device.id, jwk: found.device.jwk }],
+      [
+        {
+          sub: found.handle,
+          dev: found.device.id,
+          jwk: found.device.jwk,
+          // Defined even when the stored value is zero: presence is what turns
+          // the check on, and a passkey always keeps a ceiling from now on.
+          signCount: found.device.signCount ?? 0
+        }
+      ],
       {
         clientDataJSON: credential.response.clientDataJSON,
         authenticatorData: credential.response.authenticatorData,
@@ -444,6 +483,11 @@ export class IdentityService {
       null
     )
     if (!out.ok) return out
+    // Raised only on success, and only upward: a refused assertion must not
+    // move the ceiling, or a failed replay would lock out the real device.
+    if (out.signCount !== undefined) {
+      this.accounts.recordSignCount(found.handle, found.device.id, out.signCount)
+    }
     return {
       ok: true,
       sub: out.sub,
@@ -581,7 +625,7 @@ export class IdentityService {
     candidates: readonly Candidate[],
     input: { clientDataJSON: string; authenticatorData: string; signature: string },
     expectedBinding: string | null
-  ): { ok: true; sub: string; dev?: string } | { ok: false; reason: AssertFailure } {
+  ): { ok: true; sub: string; dev?: string; signCount?: number } | { ok: false; reason: AssertFailure } {
     if (candidates.length === 0) return { ok: false, reason: 'unknown_credential' }
     if (
       typeof input.clientDataJSON !== 'string' ||
@@ -637,6 +681,33 @@ export class IdentityService {
         good = false
       }
       if (good) {
+        /**
+         * THE SIGNATURE COUNTER, checked here rather than at a call site.
+         *
+         * WebAuthn's one anti-cloning signal: an authenticator that keeps a
+         * counter increments it on every assertion, so a count that fails to
+         * advance is either a replay of captured bytes or a second copy of a
+         * key that should exist once. It is checked AFTER the signature —
+         * a forged assertion should be refused as a forgery — and only for
+         * candidates that keep one, because the software ceremony writes a
+         * constant and enforcing it there would refuse every second sign-in.
+         *
+         * Zero means "this authenticator does not count", which the
+         * specification explicitly permits; those stay at zero forever and
+         * are never refused on this ground.
+         */
+        if (candidate.signCount !== undefined) {
+          const presented = authData.readUInt32BE(33)
+          if (candidate.signCount > 0 && presented <= candidate.signCount) {
+            return { ok: false, reason: 'sign_count' }
+          }
+          return {
+            ok: true,
+            sub: candidate.sub,
+            ...(candidate.dev === undefined ? {} : { dev: candidate.dev }),
+            signCount: presented
+          }
+        }
         return {
           ok: true,
           sub: candidate.sub,
@@ -660,7 +731,10 @@ export class IdentityService {
     // not invalidate every outstanding token — that would read to a client as
     // the gate randomly demanding re-authentication.
     const pair = generateKeyPairSync('ed25519')
-    writeFileSync(this.signingKeyFile, JSON.stringify(pair.privateKey.export({ format: 'jwk' })))
+    // A PRIVATE KEY. 0600 and atomic for the same two reasons as everything
+    // else here — and more sharply, because a half-written one is a registry
+    // that can no longer verify a single token it ever signed.
+    writeFileAtomic(this.signingKeyFile, JSON.stringify(pair.privateKey.export({ format: 'jwk' })))
     this.signingKey = pair
     return pair
   }
