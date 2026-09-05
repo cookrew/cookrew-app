@@ -23,7 +23,7 @@ import type { Release, ReleaseCache } from './releases'
 import { handleV2Route, signedIn, v2AccountOf, type V2Identity } from './v2-routes'
 import { teamAddress } from './v2-seats'
 import { mePage } from './site-account'
-import { relayStubPage } from './site-reach'
+import { createCanvasRelay, type CanvasRelay } from './v2-canvas-relay'
 
 /**
  * REGISTRY SERVER (P2-A1) — routes only. Every answer is chosen by a decision
@@ -168,6 +168,18 @@ export function createRegistry(deps: RegistryDeps): Server {
     }
   }
 
+  /**
+   * THE OWNER'S OWN CANVAS, through cookrew.dev (identity v2, phase 3).
+   *
+   * A separate hub from the doors', under its own namespace and its own gate:
+   * a door is opened by whoever the door admits, and this is opened only by a
+   * device attached to the account whose desktop holds the line. Present
+   * wherever v2 is, because it is part of what an account is FOR.
+   */
+  const canvas: CanvasRelay | null = deps.v2
+    ? createCanvasRelay({ v2: deps.v2, ...(deps.note === undefined ? {} : { log: deps.note }) })
+    : null
+
   const relay: RelayHttp | null = deps.relay
     ? createRelayHttp({
         identity: deps.identity,
@@ -276,6 +288,14 @@ export function createRegistry(deps: RegistryDeps): Server {
     // must not be delayed behind anything, and because it owns its whole path
     // prefix: nothing under /v1/relay is served by the rest of this file.
     if (relay && relay.handle(request, response, parts, url)) return
+
+    // ── THE PRIVATE RELAY SESSION, beside it ─────────────────────────────
+    //
+    // Owns /v2/canvas, /v2/me/desktops/:id/relay-status and the whole of
+    // /relay/@user/desktop/:id — a canvas arriving through one address is a
+    // whole origin's worth of app, so the prefix is claimed here rather than
+    // route by route below.
+    if (canvas && canvas.handle(request, response, parts, url)) return
 
     // ── IDENTITY v2 ──────────────────────────────────────────────────────
     //
@@ -757,18 +777,6 @@ export function createRegistry(deps: RegistryDeps): Server {
         response,
         mePage(signed === null ? null : { account: signed.account, currentDeviceId: signed.claims.dev })
       )
-      return
-    }
-
-    // GET /relay/@<username>/desktop/<deviceId> — the picker's relay path.
-    // PHASE 3 builds the private session behind it; until then this is a page
-    // that says so, because the picker sends a PERSON here and a person needs
-    // a sentence, not a 404 that reads as "you mistyped".
-    if (deps.v2 && method === 'GET' && parts.length === 4 && parts[0] === 'relay' && parts[2] === 'desktop') {
-      // The name comes from the SESSION, never from the path: a page that
-      // echoed whatever a link put in the URL is a page a link can write.
-      const signed = signedIn(request, deps.v2)
-      respondPage(response, relayStubPage(signed?.account.username ?? null))
       return
     }
 

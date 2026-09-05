@@ -172,16 +172,19 @@ describe('the page stays inert', () => {
     expect(ASSETS['device-id.js']?.type).toBe('text/javascript; charset=utf-8')
     expect(ASSETS['reach.js'].body).toContain('/api/hello')
     expect(ASSETS['reach.js'].body).toContain('cr_pair:')
+    // Phase 3: the relay is asked about, and the winner is remembered.
+    expect(ASSETS['reach.js'].body).toContain('relay-status')
+    expect(ASSETS['reach.js'].body).toContain('cr_path:')
   })
 })
 
-describe('the relay path is a stub until phase 3', () => {
-  it('answers 503 with the sentence, as a page', async () => {
-    const res = await fetch(`${origin}/relay/@picker/desktop/${deviceId}?open=x&key=ABCDEF`, {
-      headers: { cookie: `cr_session=${session}` }
+describe('the relay path, when the Mac is holding no line (phase 3)', () => {
+  it('answers 503 with a sentence and a way back, as a page', async () => {
+    const res = await fetch(`${origin}/relay/@picker/desktop/${deviceId}/?open=x&key=ABCDEF`, {
+      headers: { cookie: `cr_session=${session}`, accept: 'text/html' }
     })
     expect(res.status).toBe(503)
     expect(res.headers.get('content-type')).toContain('text/html')
-    expect(await res.text()).toContain('Reaching your Mac through cookrew.dev arrives in the next phase.')
+    expect(await res.text()).toContain('Not reachable just now')
   })
 })

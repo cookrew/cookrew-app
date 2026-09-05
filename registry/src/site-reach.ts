@@ -1,4 +1,4 @@
-import { esc, page, type Page } from './site-shell'
+import { esc } from './site-shell'
 import type { V2Desktop } from './v2-accounts'
 
 /**
@@ -82,31 +82,4 @@ export function reachOrigins(desktops: readonly V2Desktop[]): string[] {
     if (desktop.reach?.tailnet) found.add(desktop.reach.tailnet.url)
   }
   return [...found]
-}
-
-/**
- * THE RELAY PATH, WHICH IS PHASE 3.
- *
- * A page rather than a JSON 503, because this address is somewhere a person is
- * SENT: the picker chose the relay, called `location.assign`, and whoever
- * lands here deserves a sentence and a way back rather than a machine value.
- * 503 rather than 404 because the address is right and the thing behind it is
- * not built yet — a 404 would read as "you mistyped".
- */
-export function relayStubPage(username: string | null): Page {
-  const whose = username === null ? 'your' : `@${esc(username)}’s`
-  return page(
-    {
-      title: 'Reaching your Mac — Cookrew',
-      kind: 'app',
-      cache: 0,
-      status: 503,
-      noindex: true,
-      scripts: ['device-id.js', 'site.js']
-    },
-    `<div class="wrap" style="padding-top:44px"><h1>Not this way yet</h1>
-<p class="lede">Reaching your Mac through cookrew.dev arrives in the next phase.</p>
-<p class="meta">Until then, open ${whose} Mac from a network it is on — your Wi-Fi or your tailnet — and the picker goes direct.</p>
-<p class="row"><a class="btn lg" href="/me">Your desktops</a><a class="btn lg" href="/market">Marketplace</a></p></div>`
-  )
 }
