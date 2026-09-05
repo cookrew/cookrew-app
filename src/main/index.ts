@@ -600,9 +600,6 @@ const ACCOUNT_REGISTRY = RELAY_ORIGIN || 'https://cookrew.dev'
  * pair the way it always did, so the door stays open across the upgrade.
  */
 let provisionalHandle: string | null = null
-/** The boot-time adoption, awaited by the first status read so the setup
- *  sheet is not shown for the second it takes the registry to answer. */
-let accountBoot: Promise<void> = Promise.resolve()
 
 function relayHandle(): string {
   const known = loadAccount() ?? (provisionalHandle === null ? null : { handle: provisionalHandle })
@@ -3838,7 +3835,7 @@ if (selfHosted) {
 }
 
 app.whenReady().then(() => {
-  accountBoot = ensureAccountAtBoot()
+  void ensureAccountAtBoot()
   // Dock icon must be set at runtime in dev; packaged builds also bundle
   // resources/icon.icns via the packager config when one is added.
   if (process.platform === 'darwin' && app.dock) {
@@ -4339,9 +4336,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   // could otherwise claim the owner's username at cookrew.dev, once, forever.
   ipcMain.handle(
     'account:status',
-    ownerOnly(async () => {
-      // Bounded: a registry that never answers must not hold the window hostage.
-      await Promise.race([accountBoot, new Promise((r) => setTimeout(r, 8000))])
+    ownerOnly(() => {
       const account = loadAccount()
       return {
         handle: account?.handle ?? provisionalHandle,
