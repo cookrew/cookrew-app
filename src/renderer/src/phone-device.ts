@@ -81,9 +81,9 @@ export function deviceIdFromDigest(digest: ArrayBuffer | Uint8Array): string {
 }
 
 /**
- * Bind, once. `known` is what the phone already stored; a phone that has a
- * binding does NOT re-post — pairing happens on every boot and a bind on every
- * boot would be a write to the registry for a fact that has not changed.
+ * Announce at every pairing. `known` is what the phone already stored and is
+ * sent along; the desktop confirms it (no write when nothing changed) or
+ * replaces it when the account no longer lists this device.
  */
 export async function bindPhoneDevice(input: {
   device: PhoneDeviceKey
