@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ReconnectingStream, type EventStreamLike } from '../src/renderer/src/live-stream'
 import {
+  currentOriginState,
   currentPathBadge,
   pathLinkState,
   recordLatency,
   resetPathLink,
   setDesktopName,
   setPathLink,
+  setProbing,
   subscribePathLink
 } from '../src/renderer/src/path-link'
 
@@ -67,6 +69,27 @@ describe('the companion link store', () => {
     const view = currentPathBadge()
     expect(view.state).toBe('LAN')
     expect(view.desktopName).toBe('MacBook Pro')
+  })
+
+  it('reads PROBING while a better path is being raced, and no prompt with it', () => {
+    stubWindow('https://cookrew.dev')
+    expect(currentPathBadge().state).toBe('RELAY')
+    setProbing(true)
+    const view = currentPathBadge()
+    expect(view.state).toBe('PROBING')
+    expect(view.pulsing).toBe(true)
+    // And back to the fact, not to a memory of one, when the race is over.
+    setProbing(false)
+    expect(currentPathBadge().state).toBe('RELAY')
+  })
+
+  it('reads the origin alone for the switcher, whatever the transport says', () => {
+    stubWindow('https://cookrew.dev')
+    setProbing(true)
+    setPathLink('reconnecting')
+    // currentPathBadge would say PROBING here, and a switcher reading that
+    // would treat the path it is already on as an improvement over itself.
+    expect(currentOriginState()).toBe('RELAY')
   })
 
   it('follows the origin the page was actually served from', () => {

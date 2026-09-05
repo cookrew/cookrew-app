@@ -27,6 +27,16 @@ export type PathBadgeInput = {
   readonly registryOrigin?: string
   readonly desktopName?: string
   readonly latencyMs?: number | null
+  /**
+   * The companion is racing a better path right now (path/switch.ts).
+   *
+   * Separate from `link`, because the two are different facts: `reconnecting`
+   * means the channel this page is using is down, and probing means it is up
+   * and something better may exist. Both read PROBING, and a probe must never
+   * be spelled as a failing transport — that would make an idle 30-second
+   * check look like a dropped connection every 30 seconds.
+   */
+  readonly probing?: boolean
 }
 
 export type PathBadgeView = {
@@ -124,7 +134,7 @@ export const pathBadgeView = (input: PathBadgeInput): PathBadgeView => {
   const state: PathState =
     input.link === 'failed'
       ? 'OFFLINE'
-      : input.link === 'reconnecting'
+      : input.link === 'reconnecting' || input.probing === true
         ? 'PROBING'
         : classifyOrigin(input.origin, registryOrigin)
   return {

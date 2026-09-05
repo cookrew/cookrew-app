@@ -1,4 +1,10 @@
-import { classifyOrigin, pathBadgeView, type PathLink, type PathBadgeView } from '../../shared/path-badge'
+import {
+  classifyOrigin,
+  pathBadgeView,
+  type PathLink,
+  type PathBadgeView,
+  type PathState
+} from '../../shared/path-badge'
 
 /**
  * WHAT THE COMPANION KNOWS ABOUT ITS OWN LINK.
@@ -22,9 +28,13 @@ export type PathLinkState = {
   readonly link: PathLink
   readonly latencyMs: number | null
   readonly desktopName: string | null
+  /** A better path is being raced right now. See path/switch.ts. */
+  readonly probing: boolean
 }
 
-let state: PathLinkState = { link: 'live', latencyMs: null, desktopName: null }
+const IDLE: PathLinkState = { link: 'live', latencyMs: null, desktopName: null, probing: false }
+
+let state: PathLinkState = IDLE
 const listeners = new Set<(next: PathLinkState) => void>()
 
 const announce = (): void => listeners.forEach((listener) => listener(state))
@@ -51,6 +61,19 @@ export const recordLatency = (ms: number): void => {
   announce()
 }
 
+/**
+ * The companion is looking for a better way to the Mac.
+ *
+ * The badge says PROBING and nothing else happens — no prompt, no spinner over
+ * the canvas. A probe that interrupted would be a worse experience than the
+ * slow path it is trying to replace.
+ */
+export const setProbing = (on: boolean): void => {
+  if (state.probing === on) return
+  state = { ...state, probing: on }
+  announce()
+}
+
 export const setDesktopName = (name: string | null): void => {
   if (state.desktopName === name) return
   state = { ...state, desktopName: name }
@@ -64,7 +87,7 @@ export const subscribePathLink = (listener: (next: PathLinkState) => void): (() 
 
 /** Test seam: the module is a singleton, and a test needs a clean one. */
 export const resetPathLink = (): void => {
-  state = { link: 'live', latencyMs: null, desktopName: null }
+  state = IDLE
   listeners.clear()
 }
 
@@ -87,8 +110,18 @@ export const currentPathBadge = (): PathBadgeView =>
     origin: originOf(),
     link: state.link,
     latencyMs: state.latencyMs,
+    probing: state.probing,
     ...(state.desktopName ? { desktopName: state.desktopName } : {}),
     ...(registryOf() ? { registryOrigin: registryOf() as string } : {})
   })
+
+/**
+ * Where this page is, from its ORIGIN alone.
+ *
+ * Deliberately not `currentPathBadge().state`: that folds in the transport, so
+ * a companion mid-probe would read PROBING and the switcher would then treat
+ * every path — including the one it is already on — as an improvement.
+ */
+export const currentOriginState = (): PathState => classifyOrigin(originOf(), registryOf())
 
 export { classifyOrigin }
