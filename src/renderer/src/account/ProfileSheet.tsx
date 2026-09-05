@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { AccountProfile, AccountStatus } from '../../../shared/account-v2'
+import type { ApprovalRequest } from '../../../shared/account-approvals'
 import type { WorkspaceMeta } from '../../../shared/model'
 import { cookrew } from '../api'
 import {
@@ -9,6 +10,7 @@ import {
   refusalSentence,
   revokeSentence,
 } from './account-store'
+import { ApprovalCard } from './ApprovalCard'
 import { SecurityCard } from './SecurityCard'
 import { securityActions } from './security-actions'
 import '../grant-surface.css'
@@ -54,11 +56,14 @@ function ago(at: number, now: number): string {
 export function ProfileSheet({
   status,
   initialTab = 'PROFILE',
+  focusRequestId = null,
   onClose,
   onStatus,
 }: {
   status: AccountStatus
   initialTab?: ProfileTab
+  /** The request a notification was clicked for; its card is shown first. */
+  focusRequestId?: string | null
   onClose: () => void
   onStatus: (next: AccountStatus) => void
 }): React.JSX.Element {
@@ -69,9 +74,21 @@ export function ProfileSheet({
   const [profile, setProfile] = useState<AccountProfile | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [confirming, setConfirming] = useState<string | null>(null)
+  /** The devices waiting for an answer (D6) — main's polled queue. */
+  const [requests, setRequests] = useState<readonly ApprovalRequest[]>([])
   /** The display name while it is being edited; null when it is not. */
   const [editing, setEditing] = useState<string | null>(null)
   const username = status.username ?? ''
+
+  // Re-read whenever the count changes, so approving on the card and the
+  // badge in the bar cannot disagree about what is still waiting.
+  useEffect(() => {
+    const call = cookrew().accountApprovals
+    if (!call) return
+    void call()
+      .then(setRequests)
+      .catch(() => undefined)
+  }, [status.requests])
 
   useEffect(() => {
     void cookrew()
@@ -188,6 +205,16 @@ export function ProfileSheet({
             {error}
           </p>
         )}
+
+        {/* THE REQUEST COMES FIRST, above every tab: a person who clicked
+            the notification or the rose badge is here for this and nothing
+            else, and it must not be behind a tab they have to find. */}
+        <ApprovalCard
+          requests={requests}
+          username={username}
+          focusId={focusRequestId}
+          onStatus={onStatus}
+        />
 
         {tab === 'PROFILE' && (
           <section className="cr-acct-pane" aria-label="Profile">

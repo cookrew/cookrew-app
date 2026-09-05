@@ -623,6 +623,23 @@ export class Accounts {
     return on
   }
 
+  /**
+   * ONE AUTHENTICATED CALL, for the modules that came after this one.
+   *
+   * Approvals (D6) and the factor ladder (D3) are their own modules — they
+   * are their own problem, and this file is long enough — but they need the
+   * session, which lives here and only here. So they are given the CALL, not
+   * the token: nothing outside this class ever holds the bearer, and the
+   * expiry check, the refusal mapping and the offline answer stay in one
+   * place rather than being re-implemented per feature.
+   */
+  call<T>(
+    pathname: string,
+    init: RequestInit & { parse?: boolean } = {},
+  ): Promise<AccountResult<T>> {
+    return this.authed<T>(pathname, init)
+  }
+
   /** The idle-lock setting, 0 meaning off. Persisted beside the account. */
   setLockAfterMs(ms: number): number {
     const account = this.cached

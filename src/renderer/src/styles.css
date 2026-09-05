@@ -5600,3 +5600,65 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   padding: 4px 6px;
   cursor: pointer;
 }
+/* ---- identity v2, phase 4: the approval card (D6) and the factor ladder ----
+   The request card sits at the top of the profile sheet and has to read as a
+   claim about the world, not as a control panel: the sentence is the biggest
+   thing in it and the three answers sit under it in the order the design
+   weights them. */
+
+.cr-acct-request {
+  border: 2px solid var(--rose);
+  box-shadow: 3px 3px 0 var(--line);
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+
+.cr-acct-asklead {
+  margin: 0 0 4px;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.cr-acct-askdetail {
+  margin: 0;
+  font-size: 12px;
+}
+
+.cr-acct-askfoot {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* The passkey row's fallback, when this build has no platform authenticator. */
+.cr-acct-elsewhere .cr-acct-seclabel {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.cr-acct-mustchange {
+  border: 2px solid var(--amber);
+  box-shadow: 3px 3px 0 var(--line);
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+
+/* BLACK ON WHITE IN BOTH THEMES: this one is read by a camera, not by a
+   person, and a themed QR is a QR that does not scan. */
+.cr-acct-qr {
+  display: block;
+  width: min(200px, 60vw);
+  height: auto;
+  margin: 12px auto 6px;
+  background: #ffffff;
+  border: 2px solid var(--line);
+}
+
+/* The same secret as the QR, for the phone that cannot scan this screen. */
+.cr-acct-secret {
+  margin: 0 0 10px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  text-align: center;
+  word-break: break-all;
+}

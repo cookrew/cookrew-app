@@ -8,19 +8,24 @@ import { describe, expect, it } from 'vitest'
 import type { AccountStatus } from '../src/shared/account-v2'
 import {
   ACCOUNT_COPY,
+  approvalView,
   avatarView,
   claimView,
   deviceName,
+  factorRows,
   initialsOf,
   lockLabel,
   lockNote,
   lockRowLabel,
+  mustChangeBanner,
+  passkeyElsewhere,
   refusalSentence,
   rescueState,
   revokeSentence,
   takenSentence,
   wrongPasswordSentence,
 } from '../src/renderer/src/account/account-store'
+import { startedAgo, type ApprovalRequest } from '../src/shared/account-approvals'
 
 const STRONG = 'correct-horse-battery'
 
@@ -278,5 +283,136 @@ describe('the tabs this phase leaves empty are honest about it', () => {
 
   it('says what leaves this Mac in the Workspaces tab', () => {
     expect(ACCOUNT_COPY.WORKSPACES_NOTE).toContain('Names and ids only leave this Mac')
+  })
+})
+
+// ---- phase 4: the badge's producer, the request card and the ladder ----
+
+const NOW = 1_757_000_000_000
+
+const request = (over: Partial<ApprovalRequest> = {}): ApprovalRequest => ({
+  id: 'req-1',
+  deviceName: 'Chrome on macOS in Sydney',
+  kind: 'browser',
+  address: '203.0.113.9',
+  at: NOW - 12_000,
+  expiresAt: NOW + 120_000,
+  ...over,
+})
+
+const factorsView = (over: Partial<Parameters<typeof factorRows>[0] & object> = {}): NonNullable<
+  Parameters<typeof factorRows>[0]
+> => ({
+  totp: false,
+  passkeys: [],
+  mustChangePassword: false,
+  registry: 'https://registry.test',
+  ...over,
+})
+
+describe('the rose badge now has a producer (D1)', () => {
+  it('wears the count, and says how many are waiting on hover', () => {
+    const view = avatarView(status({ requests: 2 }))
+    expect(view.badge).toBe(2)
+    expect(view.title).toBe('@drej — 2 devices waiting')
+  })
+
+  it('says it in the singular for one, and disappears at zero', () => {
+    expect(avatarView(status({ requests: 1 })).title).toBe('@drej — 1 device waiting')
+    expect(avatarView(status({ requests: 0 })).badge).toBeNull()
+  })
+})
+
+describe('the request card, word for word (D6)', () => {
+  it('is the design sentence, split into its two lines', () => {
+    const view = approvalView(request(), { username: 'drej', hasSecondFactor: false, now: NOW })
+    expect(view.lead).toBe('Chrome on macOS in Sydney wants to sign in as @drej.')
+    expect(view.detail).toBe(
+      'Started 12 seconds ago · 203.0.113.9 · no second factor on the account yet.',
+    )
+  })
+
+  it('says what NOT ME does before it is done', () => {
+    const view = approvalView(request(), { username: 'drej', hasSecondFactor: false, now: NOW })
+    expect(view.confirm).toBe(
+      'Every other device signs out and you will set a new password.',
+    )
+  })
+
+  it('drops the factor clause rather than inventing a reassuring one', () => {
+    const view = approvalView(request(), { username: 'drej', hasSecondFactor: true, now: NOW })
+    expect(view.detail).toBe('Started 12 seconds ago · 203.0.113.9.')
+  })
+
+  it('counts in the units a person reads: seconds, then minutes, then hours', () => {
+    expect(startedAgo(1_000)).toBe('1 second')
+    expect(startedAgo(12_000)).toBe('12 seconds')
+    expect(startedAgo(89_000)).toBe('89 seconds')
+    expect(startedAgo(120_000)).toBe('2 minutes')
+    expect(startedAgo(7_200_000)).toBe('2 hours')
+  })
+})
+
+describe('the factor ladder, in both states (D3)', () => {
+  it('recommends a passkey FIRST while there is none', () => {
+    const rows = factorRows(null)
+    expect(rows.map((row) => row.factor)).toEqual(['passkey', 'totp'])
+    expect(rows[0]).toMatchObject({
+      label: 'Add a passkey (Touch ID)',
+      state: 'RECOMMENDED',
+      action: 'add',
+    })
+    expect(rows[1]).toMatchObject({ label: 'Add an authenticator app', action: 'add' })
+  })
+
+  it('lists what is enrolled, by name, and stops recommending', () => {
+    const rows = factorRows(
+      factorsView({
+        totp: true,
+        passkeys: [
+          { id: 'pk-1', name: 'Touch ID on this Mac', addedAt: 1 },
+          { id: 'pk-2', name: 'iPhone', addedAt: 2 },
+        ],
+      }),
+    )
+    expect(rows).toHaveLength(3)
+    expect(rows.map((row) => row.label)).toEqual([
+      'Touch ID on this Mac',
+      'iPhone',
+      'Authenticator app',
+    ])
+    expect(rows.every((row) => row.action === 'remove')).toBe(true)
+    expect(rows.some((row) => row.state === 'RECOMMENDED')).toBe(false)
+    // Each passkey is removable BY ITS OWN ID, not by position.
+    expect(rows[1].id).toBe('pk-2')
+  })
+
+  it('names the state of a half-enrolled account correctly', () => {
+    const rows = factorRows(factorsView({ totp: true }))
+    expect(rows[0]).toMatchObject({ state: 'RECOMMENDED', action: 'add' })
+    expect(rows[1]).toMatchObject({ label: 'Authenticator app', state: 'ACTIVE', action: 'remove' })
+  })
+})
+
+describe('after "not me"', () => {
+  it('the banner says what happened, not what to do', () => {
+    expect(mustChangeBanner(factorsView({ mustChangePassword: true }))).toBe(
+      'Set a new password — every other device was signed out.',
+    )
+  })
+
+  it('is silent in the normal case', () => {
+    expect(mustChangeBanner(factorsView())).toBeNull()
+    expect(mustChangeBanner(null)).toBeNull()
+  })
+})
+
+describe('the passkey a desktop cannot make', () => {
+  it('offers the browser, at THIS registry, with the design sentence', () => {
+    const elsewhere = passkeyElsewhere('https://registry.test')
+    expect(elsewhere.note).toBe(
+      'Add a passkey on cookrew.dev in your browser — it works from any device',
+    )
+    expect(elsewhere.url).toBe('https://registry.test/me#security')
   })
 })

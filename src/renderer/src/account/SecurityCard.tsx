@@ -1,19 +1,42 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { LOCK_CHOICES } from '../../../shared/account-v2'
+import type { FactorsView } from '../../../shared/account-approvals'
 import { cookrew } from '../api'
-import { ACCOUNT_COPY, lockRowLabel, refusalSentence, rescueState } from './account-store'
+import {
+  ACCOUNT_COPY,
+  lockRowLabel,
+  mustChangeBanner,
+  refusalSentence,
+  rescueState,
+  type FactorRow,
+} from './account-store'
+import { FactorRows, Row } from './FactorRows'
+import { NewPasswordCard } from './NewPasswordCard'
+import { TotpSheet } from './TotpSheet'
+import {
+  cannotMakePasskey,
+  fromCredential,
+  hasPlatformAuthenticator,
+  toCreationOptions,
+} from './webauthn'
 import '../grant-surface.css'
 
 /**
  * THE SECURITY CARD (D3) — shown once right after claiming, and again from
- * Profile → Security.
+ * Profile → Security. Every row is live now.
  *
- * Each row is a single action with its state. Two of them are INERT and both
- * SAY SO AND LOOK IT: passkeys and the authenticator app are the phase 4
- * ladder. A row that reads exactly like the live ones and does nothing when
- * clicked costs the whole card its claim to be telling the truth — so COMING
- * is muted and its badge is dashed, the same "not filled in yet" the empty
- * avatar uses.
+ * PASSKEY FIRST, by the ruling: it is the recommended factor and the one a
+ * person already knows how to use. The row is RECOMMENDED only while there is
+ * none — a card that keeps recommending something already done stops being
+ * read. Phase 4 retires the two COMING rows: nothing on this card is inert any
+ * more, so nothing on it has to apologise for itself.
+ *
+ * WHEN THIS ELECTRON CANNOT MAKE A PASSKEY, THE ROW SAYS SO. A desktop build
+ * without a platform authenticator refuses `navigator.credentials.create`, and
+ * the honest answer is the one the design writes: add it in a browser, where
+ * it works, and it lands on the same account. What this must never do is
+ * report a factor that does not exist — the whole value of the row is that the
+ * owner can trust what it says about their way back in.
  *
  * THE LOCK IS REACHABLE, not just configurable. Setting a delay and having no
  * way to lock now is a lock you can only meet by walking away from the desk.
@@ -21,37 +44,8 @@ import '../grant-surface.css'
 
 /** Nobody dismisses the codes by reflex: the primary waits five seconds. */
 const CODES_SETTLE_MS = 5_000
-
-function Row({
-  kind,
-  label,
-  state,
-  action,
-  coming = false,
-  saved = false,
-}: {
-  kind: string
-  label: string
-  state?: string
-  action: React.ReactNode
-  /** Phase 4: drawn muted, with a dashed badge, so it cannot be mistaken. */
-  coming?: boolean
-  saved?: boolean
-}): React.JSX.Element {
-  return (
-    <li className={`cr-acct-secrow${coming ? ' cr-acct-coming' : ''}`}>
-      <span className="cr-acct-kind">{kind}</span>
-      <span className="cr-acct-seclabel">{label}</span>
-      {state && (
-        <span className={`cr-acct-secstate${coming ? ' cr-acct-soon' : ''}`}>
-          {saved && <span aria-hidden="true">✓ </span>}
-          {state}
-        </span>
-      )}
-      {action}
-    </li>
-  )
-}
+/** What a passkey made here is called, as the Devices tab lists it (D4). */
+const THIS_MAC_PASSKEY = 'Touch ID on this Mac'
 
 export function SecurityCard({
   username,
@@ -71,8 +65,35 @@ export function SecurityCard({
   onCodesSaved: () => void
 }): React.JSX.Element {
   const [codes, setCodes] = useState<readonly string[] | null>(null)
+  const [factors, setFactors] = useState<FactorsView | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [settled, setSettled] = useState(false)
+  const [totp, setTotp] = useState(false)
+  /** This build refused to make a passkey; the row offers the browser. */
+  const [elsewhere, setElsewhere] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  const readFactors = useCallback(() => {
+    const call = cookrew().accountFactors
+    if (!call) return
+    void call()
+      .then((result) => {
+        if (result.ok) setFactors(result.value)
+        else setError(refusalSentence(result.reason, result.message, username))
+      })
+      .catch(() => setError('Something went wrong on this side. Try again.'))
+  }, [username])
+
+  useEffect(readFactors, [readFactors])
+
+  // ASK BEFORE OFFERING. This build may have no Touch ID to give (see
+  // webauthn.ts), and a row that says so up front beats a row that says it
+  // after the owner has cancelled a dialog about a security key.
+  useEffect(() => {
+    void hasPlatformAuthenticator().then((yes) => {
+      if (!yes) setElsewhere(true)
+    })
+  }, [])
 
   useEffect(() => {
     if (codes === null) return
@@ -122,6 +143,67 @@ export function SecurityCard({
     setCodes(null)
   }
 
+  /**
+   * Ask the registry for options, ask the browser for a credential, and file
+   * what came back — in that order, and only what came back.
+   */
+  const addPasskey = async (): Promise<void> => {
+    const api = cookrew()
+    if (!api.accountPasskeyOptions || !api.accountPasskeyAdd || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      const options = await api.accountPasskeyOptions()
+      if (!options.ok) {
+        setError(refusalSentence(options.reason, options.message, username))
+        return
+      }
+      let credential: PublicKeyCredential | null = null
+      try {
+        credential = (await navigator.credentials?.create({
+          publicKey: toCreationOptions(options.value),
+        })) as PublicKeyCredential | null
+      } catch (err: unknown) {
+        // NOT A FAILURE MESSAGE: the row changes to the sentence that says
+        // where this does work (D3), and no passkey is filed.
+        if (cannotMakePasskey(err)) {
+          setElsewhere(true)
+          return
+        }
+        throw err
+      }
+      if (credential === null) {
+        setElsewhere(true)
+        return
+      }
+      const filed = await api.accountPasskeyAdd({
+        name: THIS_MAC_PASSKEY,
+        credential: fromCredential(credential),
+      })
+      if (!filed.ok) setError(refusalSentence(filed.reason, filed.message, username))
+      else readFactors()
+    } catch {
+      setError('This Mac could not make a passkey. Try it in a browser instead.')
+      setElsewhere(true)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const removeFactor = (row: FactorRow): void => {
+    const api = cookrew()
+    const call = row.factor === 'totp' ? api.accountTotpRemove : undefined
+    const promise = call ? call() : api.accountPasskeyRemove?.(row.id)
+    if (!promise) return
+    setError(null)
+    void promise
+      .then((result) => {
+        if (!result.ok) setError(refusalSentence(result.reason, result.message, username))
+        else readFactors()
+      })
+      .catch(() => setError('Something went wrong on this side. Try again.'))
+  }
+
   if (codes !== null) {
     return (
       <section className="cr-acct-card" aria-label="Recovery codes">
@@ -158,33 +240,23 @@ export function SecurityCard({
   }
 
   const rescue = rescueState(recoveryCodesSavedAt, recoveryCodesLeft)
+  const banner = mustChangeBanner(factors)
   return (
     <section className="cr-acct-card" aria-label="Security">
+      {banner !== null && <NewPasswordCard username={username} onDone={readFactors} />}
       <h3 className="cr-acct-cardhead">
         @{username} is yours <span className="gs-dim">protect it</span>
       </h3>
       <ul className="cr-acct-secrows">
-        <Row
-          kind="FACTOR"
-          label="Add a passkey (Touch ID)"
-          state="COMING"
-          coming
-          action={
-            <button className="gs-ghost" disabled title="Phase 4">
-              ADD
-            </button>
+        <FactorRows
+          factors={factors}
+          busy={busy}
+          elsewhere={elsewhere}
+          onAdd={(row) =>
+            row.factor === 'totp' ? setTotp(true) : void addPasskey().catch(() => undefined)
           }
-        />
-        <Row
-          kind="FACTOR"
-          label="Add an authenticator app"
-          state="COMING"
-          coming
-          action={
-            <button className="gs-ghost" disabled title="Phase 4">
-              ADD
-            </button>
-          }
+          onRemove={removeFactor}
+          onOpenBrowser={(url) => void cookrew().openExternal?.(url)}
         />
         <Row
           kind="RESCUE"
@@ -232,6 +304,16 @@ export function SecurityCard({
       )}
       <p className="gs-foot-note">{ACCOUNT_COPY.LOCK_NOW_WHY}</p>
       <p className="gs-foot-note">{ACCOUNT_COPY.SECURITY_WHY}</p>
+      {totp && (
+        <TotpSheet
+          username={username}
+          onClose={() => setTotp(false)}
+          onActive={() => {
+            setTotp(false)
+            readFactors()
+          }}
+        />
+      )}
     </section>
   )
 }

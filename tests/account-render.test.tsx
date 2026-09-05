@@ -173,22 +173,30 @@ const card = (over: Partial<React.ComponentProps<typeof SecurityCard>> = {}): st
     />,
   )
 
-describe('the security card is honest about what is coming (D3)', () => {
+describe('the security card offers the whole ladder (D3)', () => {
   const html = card()
 
-  it('offers passkey and authenticator as COMING, and inert', () => {
+  it('offers passkey first and RECOMMENDED, then the authenticator — both live', () => {
     expect(html).toContain('Add a passkey (Touch ID)')
     expect(html).toContain('Add an authenticator app')
-    expect(html.match(/COMING/g)).toHaveLength(2)
-    expect(html.match(/disabled=""/g)).toHaveLength(2)
+    expect(html.indexOf('passkey')).toBeLessThan(html.indexOf('authenticator'))
+    // The ruling puts the passkey first and recommends only that one.
+    expect(html.match(/RECOMMENDED/g)).toHaveLength(1)
+    // PHASE 4 TURNED THESE ON. Nothing on this card is inert any more, so a
+    // disabled attribute here would mean a row that cannot do what it says.
+    expect(html).not.toContain('COMING')
+    expect(html).not.toContain('disabled=""')
+    expect(html.match(/>ADD</g)).toHaveLength(2)
   })
 
-  it('draws the COMING rows VISIBLY disabled, not as live rows', () => {
-    // They used to be the same grey as the working rows: a person clicks, gets
-    // nothing, and the card loses its claim to be describing their account.
-    expect(html.match(/cr-acct-secrow cr-acct-coming/g)).toHaveLength(2)
-    expect(html.match(/cr-acct-secstate cr-acct-soon/g)).toHaveLength(2)
-    // A live row carries neither marker.
+  it('draws NO muted row at all — the COMING pair is what phase 4 replaced', () => {
+    // The fix-up drew the inert rows grey with a dashed badge so nobody spent
+    // a click on them. Phase 4 removes the reason: every factor row now does
+    // what it says, so a muted marker here would be describing an account
+    // state that no longer exists.
+    expect(html).not.toContain('cr-acct-coming')
+    expect(html).not.toContain('cr-acct-soon')
+    expect(html).toContain('<li class="cr-acct-secrow"><span class="cr-acct-kind">FACTOR')
     expect(html).toContain('<li class="cr-acct-secrow"><span class="cr-acct-kind">RESCUE')
   })
 
