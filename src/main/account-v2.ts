@@ -237,6 +237,8 @@ const REFUSALS: Record<string, AccountRefusal> = {
   bad_device: 'bad_device',
   bad_credentials: 'bad_credentials',
   last_device: 'last_device',
+  not_found: 'not_found',
+  already_seated: 'already_seated',
 }
 
 async function wireError(
@@ -436,8 +438,15 @@ export class Accounts {
     return { ok: true, value: session }
   }
 
-  /** One authenticated call, with the session checked before the socket. */
-  private async authed<T>(
+  /**
+   * One authenticated call, with the session checked before the socket.
+   *
+   * PUBLIC, because seats live at cookrew.dev under the OWNER's session and
+   * nowhere else (door-seats.ts). The alternative was a second copy of this
+   * seven-line preamble beside the seat routes, and a second place for the
+   * session check to be forgotten. The token itself never leaves this class.
+   */
+  async authed<T>(
     pathname: string,
     init: RequestInit & { parse?: boolean } = {},
   ): Promise<AccountResult<T>> {
