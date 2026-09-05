@@ -50,6 +50,14 @@ export interface AccountIpcDeps {
   factors: Factors
   /** COOKREW_HANDLE, when serving was pointed at a name by the environment. */
   envUsername: string | null
+  /**
+   * THE HANDLE THIS MAC HELD BEFORE PASSWORDS (phase 6), or null.
+   *
+   * Read at boot, when it decides what the claim sheet is FOR: a Mac with a
+   * key and no account is not claiming a name, it is setting a password on
+   * the one it already serves under.
+   */
+  legacy?: { handle: string } | null
   /** This Mac's workspaces, by id and name — never their content (P1). */
   workspaces: () => readonly { id: string; name: string }[]
   /**
@@ -108,6 +116,8 @@ export const ACCOUNT_CHANNELS = [
   'account:activity',
   'account:check',
   'account:claim',
+  // Phase 6: the same sheet, for a name this Mac already holds a key for.
+  'account:migrate',
   'account:lock',
   'account:unlock',
   'account:profile',
@@ -166,6 +176,9 @@ export function accountStatus(deps: AccountIpcDeps): AccountStatus {
     // and the profile sheet's card read this one number.
     requests: deps.approvals.count,
     envUsername: deps.envUsername,
+    // Only until the crossing: once account.json exists this is null, and the
+    // sheet is an ordinary claim sheet again.
+    legacy: account === null ? (deps.legacy ?? null) : null,
     recoveryCodesSavedAt: account?.recoveryCodesSavedAt ?? null,
     recoveryCodesLeft: null,
     sessionExpired: account !== null && !deps.accounts.sessionLive(),
@@ -219,6 +232,29 @@ async function claim(deps: AccountIpcDeps, input: unknown): Promise<AccountResul
   return { ok: true, value: accountStatus(deps) }
 }
 
+
+/**
+ * SETTING A PASSWORD ON THE NAME THIS MAC ALREADY HAS (phase 6).
+ *
+ * The same answer as a claim, because from the sheet's side it IS one: the
+ * status, never the account file. The username is not taken from the call —
+ * it is whatever the key on this Mac holds, so a renderer cannot ask for a
+ * password to be set on somebody else's name.
+ */
+async function migrate(deps: AccountIpcDeps, input: unknown): Promise<AccountResult<AccountStatus>> {
+  const record = (typeof input === 'object' && input !== null ? input : {}) as Record<
+    string,
+    unknown
+  >
+  const result = await deps.accounts.migrate({
+    password: asString(record.password),
+    ...(typeof record.name === 'string' ? { name: record.name } : {}),
+  })
+  if (!result.ok) return result
+  deps.lock.setLockAfterMs(result.value.lockAfterMs)
+  void deps.accounts.registerDesktop(deps.workspaces()).catch(() => undefined)
+  return { ok: true, value: accountStatus(deps) }
+}
 
 /**
  * A SEAT CHANNEL WITH NO ACCOUNT BEHIND IT REFUSES; it does not disappear.
@@ -309,6 +345,7 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     'account:check': (username: unknown): Promise<UsernameCheck> =>
       deps.accounts.checkUsername(asString(username)),
     'account:claim': (input: unknown) => claim(deps, input),
+    'account:migrate': (input: unknown) => migrate(deps, input),
     'account:lock': () => {
       deps.lock.lock()
       return accountStatus(deps)

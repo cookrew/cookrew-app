@@ -107,6 +107,9 @@ export function useAccountSurface(): AccountSurface {
     <>
       {sheet === 'claim' && (
         <ClaimSheet
+          // PHASE 6: a Mac that already serves under a handle is not claiming
+          // a name, it is setting a password on the one it has.
+          legacy={status?.legacy ?? null}
           onClose={() => setSheet('none')}
           onClaimed={(next) => {
             setStatus(next)

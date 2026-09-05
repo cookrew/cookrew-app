@@ -13,6 +13,7 @@ import {
   type V2Context
 } from './v2-http'
 import { handleSeatRoute, mySeats } from './v2-seat-routes'
+import { handleMigrateRoute, legacyHolds, refuseIfLegacy } from './v2-migrate-routes'
 import type { V2Account, V2Desktop } from './v2-accounts'
 import { readReach, verifyHello } from './v2-reach'
 import { callerAddress } from './v2-limiter'
@@ -100,6 +101,8 @@ export function handleV2Route(ctx: V2Context): boolean {
     void mine(ctx, rest.slice(1))
     return true
   }
+  // Phase 6 — a handle from before passwords, becoming an account. Its own file.
+  if (handleMigrateRoute(ctx, rest)) return true
   // Seats — a person at somebody else's door. Its own file, same plumbing.
   if (handleSeatRoute(ctx, rest)) return true
   refuse(response, 404, 'not_found')
@@ -121,6 +124,11 @@ async function claimAccount(ctx: V2Context): Promise<void> {
     refuse(response, body.reason === 'too_large' ? 413 : 400, 'malformed')
     return
   }
+  // A NAME A KEY ALREADY HOLDS IS NOT FREE (phase 6), and it is refused here
+  // — before anything is created — because a handle serving live doors being
+  // minted as a stranger's account is the one mistake this migration cannot
+  // take back.
+  if (refuseIfLegacy(ctx, body.value.username)) return
   const out = await v2.accounts.create({
     username: body.value.username,
     password: body.value.password,
@@ -166,7 +174,9 @@ function lookUpAccount(ctx: V2Context, username: string): void {
   }
   const profile = ctx.v2.accounts.publicProfile(username)
   if (ctx.method === 'HEAD') {
-    head(ctx.response, profile === null ? 404 : 200)
+    // Taken covers a name a v1 key holds with no account behind it yet: the
+    // sheet must never call it free, whatever it goes on to say about it.
+    head(ctx.response, profile === null && !legacyHolds(ctx, username) ? 404 : 200)
     return
   }
   if (profile === null) {

@@ -39,6 +39,7 @@ const BASE: AccountStatus = {
   lockAfterMs: 900_000,
   requests: 0,
   envUsername: null,
+  legacy: null,
   sessionExpired: false,
   workspacesReachable: true,
   recoveryCodesSavedAt: null,

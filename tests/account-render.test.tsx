@@ -44,6 +44,7 @@ const BASE: AccountStatus = {
   lockAfterMs: 900_000,
   requests: 0,
   envUsername: null,
+  legacy: null,
   sessionExpired: false,
   workspacesReachable: true,
   recoveryCodesSavedAt: null,
@@ -157,6 +158,45 @@ describe('the claim sheet paints, and refuses in sentences (D2)', () => {
   it('offers NOT NOW, and says what it keeps', () => {
     expect(html).toContain('NOT NOW')
     expect(html).toContain(ACCOUNT_COPY.NOT_NOW)
+  })
+})
+
+/**
+ * THE SAME SHEET ON A MAC THAT IS ALREADY SOMEBODY (phase 6).
+ *
+ * The name is not a field: it is the handle this Mac's key holds and the
+ * doors are published under. What the sheet must show is that nothing is at
+ * stake here — the name is already theirs, and only the password is missing.
+ */
+describe('the claim sheet, for a handle from before passwords', () => {
+  const crossing = renderToStaticMarkup(
+    <ClaimSheet onClose={() => undefined} onClaimed={() => undefined} legacy={{ handle: 'drej' }} />,
+  )
+
+  it('says the name is already yours, in the copy table’s words', () => {
+    expect(crossing).toContain('You are @drej here already — set a password to keep it.')
+  })
+
+  it('does not offer the name as something to type', () => {
+    expect(crossing).toContain('readonly=""')
+    expect(crossing).toContain('@drej')
+    expect(crossing).not.toContain('placeholder="@drej"')
+  })
+
+  it('is the password half of D2 — the rule, the confirmation, and nothing else', () => {
+    expect(crossing).toContain('At least 12 characters')
+    expect((crossing.match(/type="password"/g) ?? []).length).toBe(2)
+    expect(crossing).toContain('SET A PASSWORD')
+    expect(crossing).not.toContain('CLAIM')
+  })
+
+  it('starts with the primary DOWN, like every other sheet here', () => {
+    expect(crossing).toMatch(/<button class="gs-primary" disabled=""/)
+  })
+
+  it('says what NOT NOW keeps for a Mac that is serving', () => {
+    expect(crossing).toContain(ACCOUNT_COPY.LEGACY_KEEP_SERVING)
+    expect(crossing).toContain('serving under the name it has')
   })
 })
 

@@ -54,7 +54,13 @@ const SESSIONS_MAX = 50
 const REVOKED_MAX = 200
 const RECOVERY_CODES = 8
 
-export type DeviceKind = 'desktop' | 'phone' | 'browser'
+/**
+ * `legacy` is the key a handle held BEFORE passwords (phase 6). It is never
+ * self-declared: `readDevice` still accepts only the three a client may name,
+ * and the migration route is the one place that files one — a device that
+ * could call itself legacy would be a stranger claiming the old world's trust.
+ */
+export type DeviceKind = 'desktop' | 'phone' | 'browser' | 'legacy'
 
 export interface DeviceInput {
   id: string
@@ -395,6 +401,36 @@ export class V2Accounts {
     const owner = this.ownerOfDevice(device.id)
     if (owner !== null && owner !== account.username) return false
     return !(account.revoked ?? []).some((r) => r.id === device.id)
+  }
+
+  /**
+   * FILE THE KEY THIS NAME HELD BEFORE PASSWORDS (phase 6).
+   *
+   * Not `attachDevice`: nothing on the wire may say `legacy`, and this device
+   * describes itself with a key the REGISTRY already holds (credentials.json)
+   * rather than one a request brought. So the migration route is the only
+   * caller, and what it passes is the id derived from that stored key.
+   *
+   * Null rather than a throw when it cannot be filed — the account it belongs
+   * to has just been created, and a device row is not worth losing it over.
+   */
+  attachLegacyKey(username: string, input: { id: string; name: string; jwk: unknown }): V2Device | null {
+    const account = this.get(username)
+    if (!account) return null
+    const jwk = sanitiseJwk(input.jwk)
+    if (jwk === null || !UUID.test(input.id)) return null
+    if (this.ownerOfDevice(input.id) !== null) return null
+    const at = this.now()
+    const device: V2Device = {
+      id: input.id,
+      kind: 'legacy',
+      name: input.name.slice(0, DEVICE_NAME_MAX),
+      jwk,
+      addedAt: at,
+      lastSeenAt: at
+    }
+    this.replace({ ...account, devices: [...account.devices, device] })
+    return device
   }
 
   private readDevice(input: unknown): V2Device | null {

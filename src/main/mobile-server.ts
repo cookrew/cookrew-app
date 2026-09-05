@@ -213,6 +213,14 @@ export function startMobileServer(deps: MobileServerDeps): void {
   // route on this server requires it (see handleMobileApi's gate). The
   // fallback is the PERSISTED token: a per-run UUID silently unpaired every
   // phone on each restart, and the renderer swallowed the resulting 401s.
+  //
+  // PHASE 6 KEEPS THIS EXACTLY AS IT IS. New phones pair through cookrew.dev
+  // — the phone signs in there and scans the desktop's device id and rotating
+  // six-character key (`?open=` above, pairing-key.ts) — but a phone paired
+  // the old way holds a `?token=` URL that `cookrew mobile` printed as a QR,
+  // and taking that away would unpair every one of them at once to tidy up a
+  // credential. It stays until a phone has re-paired, which is a thing that
+  // happens by itself.
   activePairingToken = deps.pairingToken ?? loadOrCreatePairingToken()
   activeWallToken = deps.wallToken ?? randomUUID()
 

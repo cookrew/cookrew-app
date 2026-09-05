@@ -85,7 +85,50 @@ export const ACCOUNT_COPY = {
   /** The registry is not answering. */
   REGISTRY_DOWN:
     'cookrew.dev did not answer, so this name cannot be checked yet. Nothing local stops.',
+  /**
+   * D2, PHASE 6 — a cookrew.dev that predates passwords.
+   *
+   * The sentence has to be a promise, not an error: this Mac is serving under
+   * this name right now and nothing about that changes because the crossing
+   * is not available yet.
+   */
+  REGISTRY_NO_V2: 'cookrew.dev is not ready for passwords yet — nothing changes until it is.',
+  /** D2, phase 6: NOT NOW, said for a Mac that is already serving. */
+  LEGACY_KEEP_SERVING:
+    'Not now keeps this Mac serving under the name it has. You can set the password later from the avatar.',
+  /** D2, phase 6: the name is already this person's, on another device's key. */
+  LEGACY_ELSEWHERE:
+    'This name belongs to a key on another device — set the password there, or use that device to link this one.',
 } as const
+
+/**
+ * "You are @drej here already — set a password to keep it." (phase 6)
+ *
+ * The whole legacy step in one line: nothing is being claimed, nothing is at
+ * risk, and the only thing missing is the password.
+ */
+export function legacySentence(handle: string): string {
+  return `You are @${normaliseUsername(handle)} here already — set a password to keep it.`
+}
+
+/**
+ * D4, phase 6 — the environment still names something, and it is ignored.
+ *
+ * The old sentence said serving kept the environment's handle "until a later
+ * phase". This is that phase: the account decides, and a person reading two
+ * names on one screen is owed the one that is true.
+ */
+export function envIgnoredSentence(env: string, username: string): string {
+  return (
+    `COOKREW_HANDLE names @${normaliseUsername(env)}; this Mac serves as @${normaliseUsername(username)}. ` +
+    'The environment is a development override now, not a name.'
+  )
+}
+
+/** The 409 a stranger gets for a name that is waiting for its password. */
+export function legacyTakenSentence(username: string): string {
+  return `@${normaliseUsername(username)} already exists from before passwords — sign in with the key that holds it and set a password.`
+}
 
 /** "@anvz is someone else's. Try another." — the table, with the name in it. */
 export function takenSentence(username: string): string {
@@ -128,6 +171,10 @@ export function refusalSentence(reason: AccountRefusal, message?: string, userna
       return 'cookrew.dev is asking us to slow down. Try again in a minute.'
     case 'offline':
       return ACCOUNT_COPY.REGISTRY_DOWN
+    case 'no_passwords_yet':
+      return ACCOUNT_COPY.REGISTRY_NO_V2
+    case 'legacy':
+      return legacyTakenSentence(username)
     case 'session-expired':
     case 'bad_credentials':
       return 'Your session ended. Type your password once and this carries on.'
@@ -296,6 +343,35 @@ export function claimView(fields: ClaimFields): ClaimView {
       isValidUsername(name) &&
       fields.password.length >= MIN_PASSWORD &&
       fields.confirm === fields.password,
+  }
+}
+
+/**
+ * THE SAME SHEET, FOR A NAME THAT IS ALREADY YOURS (phase 6).
+ *
+ * No username field and no availability check: the name is whatever key this
+ * Mac holds, and offering to type one would offer a choice the registry will
+ * not honour. So the view is the password half of D2 and one sentence saying
+ * why there is nothing above it.
+ */
+export interface MigrateView {
+  lead: string
+  password: FieldView
+  confirm: FieldView
+  primary: string
+  canClaim: boolean
+}
+
+export function migrateView(
+  fields: { password: string; confirm: string },
+  handle: string,
+): MigrateView {
+  return {
+    lead: legacySentence(handle),
+    password: passwordField(fields.password),
+    confirm: confirmField(fields.password, fields.confirm),
+    primary: 'SET A PASSWORD',
+    canClaim: fields.password.length >= MIN_PASSWORD && fields.confirm === fields.password,
   }
 }
 
