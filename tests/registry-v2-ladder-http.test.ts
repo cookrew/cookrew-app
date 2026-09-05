@@ -649,6 +649,27 @@ describe('POST /v2/me/passkeys', () => {
   })
 })
 
+describe('GET /v2/me/factors', () => {
+  it('says what the account has and never what the secret is', async () => {
+    const owner = await claim()
+    const before = await bodyOf<{ passkeys: unknown[]; totp: boolean; mustChangePassword: boolean }>(
+      await call('GET', '/v2/me/factors', undefined, bearer(owner.token))
+    )
+    expect(before).toEqual({ passkeys: [], totp: false, mustChangePassword: false })
+
+    await addTotp(owner)
+    await addPasskey(owner, p256())
+    const res = await call('GET', '/v2/me/factors', undefined, bearer(owner.token))
+    const after = await bodyOf<{ passkeys: { id: string; name: string; addedAt: number }[]; totp: boolean }>(res)
+    expect(after.totp).toBe(true)
+    expect(after.passkeys).toHaveLength(1)
+    expect(after.passkeys[0].name).toBe('This Mac')
+    expect(JSON.stringify(after)).not.toContain('credentialId')
+    expect(JSON.stringify(after)).not.toContain('secret')
+    expect((await call('GET', '/v2/me/factors')).status).toBe(401)
+  })
+})
+
 describe('every phase 4 answer', () => {
   it('is private, never stored, and carries a sentence when it refuses', async () => {
     const owner = await claim()

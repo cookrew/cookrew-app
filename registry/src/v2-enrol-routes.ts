@@ -27,7 +27,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export function handleMeFactorRoute(ctx: V2Context, rest: string[]): boolean {
   const { method } = ctx
   const owns =
-    rest[0] === 'approvals' || rest[0] === 'totp' || rest[0] === 'passkeys'
+    rest[0] === 'approvals' || rest[0] === 'totp' || rest[0] === 'passkeys' || rest[0] === 'factors'
   if (!owns) return false
 
   const signed = signedIn(ctx.request, ctx.v2)
@@ -37,6 +37,18 @@ export function handleMeFactorRoute(ctx: V2Context, rest: string[]): boolean {
   }
   const who = signed.account.username
 
+  /**
+   * WHAT THIS ACCOUNT HAS, for a Security screen that is not this website's.
+   *
+   * The app half renders the same posture on the desktop, and a route it can
+   * read is better than the desktop guessing from a 401 it has not been sent
+   * yet. Never a secret: a passkey's name and when it arrived, and whether an
+   * authenticator is active — not its seed.
+   */
+  if (rest.length === 1 && rest[0] === 'factors' && method === 'GET') {
+    json(ctx.response, 200, ctx.v2.factors.store.summary(who))
+    return true
+  }
   if (rest.length === 1 && rest[0] === 'approvals' && method === 'GET') {
     listApprovals(ctx, who)
     return true
