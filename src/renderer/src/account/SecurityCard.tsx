@@ -7,10 +7,11 @@ import {
   lockRowLabel,
   mustChangeBanner,
   refusalSentence,
+  removeFactorPrompt,
   rescueState,
   type FactorRow,
 } from './account-store'
-import { FactorRows, Row } from './FactorRows'
+import { FactorRows, RemoveFactorRow, Row } from './FactorRows'
 import { NewPasswordCard } from './NewPasswordCard'
 import { TotpSheet } from './TotpSheet'
 import {
@@ -71,6 +72,9 @@ export function SecurityCard({
   const [totp, setTotp] = useState(false)
   /** This build refused to make a passkey; the row offers the browser. */
   const [elsewhere, setElsewhere] = useState(false)
+  /** The factor a REMOVE was pressed on, waiting for the password. */
+  const [removing, setRemoving] = useState<FactorRow | null>(null)
+  const [current, setCurrent] = useState('')
   const [busy, setBusy] = useState(false)
 
   const readFactors = useCallback(() => {
@@ -190,18 +194,41 @@ export function SecurityCard({
     }
   }
 
-  const removeFactor = (row: FactorRow): void => {
+  /**
+   * REMOVING A FACTOR COSTS THE PASSWORD, and the card asks for it here.
+   *
+   * The registry gates both removals on the current password — taking off the
+   * thing that protects a password must not be cheaper than changing it — so
+   * the row opens a field rather than firing a DELETE that would come back
+   * refused. Its refusal is shown in the registry's own words.
+   */
+  const removeFactor = (): void => {
+    const row = removing
+    if (row === null || current.length === 0 || busy) return
     const api = cookrew()
-    const call = row.factor === 'totp' ? api.accountTotpRemove : undefined
-    const promise = call ? call() : api.accountPasskeyRemove?.(row.id)
+    const promise =
+      row.factor === 'totp'
+        ? api.accountTotpRemove?.(current)
+        : api.accountPasskeyRemove?.(row.id, current)
     if (!promise) return
+    setBusy(true)
     setError(null)
     void promise
       .then((result) => {
-        if (!result.ok) setError(refusalSentence(result.reason, result.message, username))
-        else readFactors()
+        setBusy(false)
+        if (!result.ok) {
+          setError(refusalSentence(result.reason, result.message, username))
+          return
+        }
+        // The password leaves the component the moment it has been spent.
+        setCurrent('')
+        setRemoving(null)
+        readFactors()
       })
-      .catch(() => setError('Something went wrong on this side. Try again.'))
+      .catch(() => {
+        setBusy(false)
+        setError('Something went wrong on this side. Try again.')
+      })
   }
 
   if (codes !== null) {
@@ -255,9 +282,26 @@ export function SecurityCard({
           onAdd={(row) =>
             row.factor === 'totp' ? setTotp(true) : void addPasskey().catch(() => undefined)
           }
-          onRemove={removeFactor}
+          onRemove={(row) => {
+            setCurrent('')
+            setError(null)
+            setRemoving(row)
+          }}
           onOpenBrowser={(url) => void cookrew().openExternal?.(url)}
         />
+        {removing !== null && (
+          <RemoveFactorRow
+            row={removing}
+            current={current}
+            busy={busy}
+            onCurrent={setCurrent}
+            onConfirm={removeFactor}
+            onCancel={() => {
+              setCurrent('')
+              setRemoving(null)
+            }}
+          />
+        )}
         <Row
           kind="RESCUE"
           label="Save your recovery codes"

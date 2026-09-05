@@ -32,7 +32,19 @@ export interface AccountSurface {
 }
 
 export function useAccountSurface(): AccountSurface {
-  const supported = typeof cookrew().accountStatus === 'function'
+  /**
+   * THE OWNER'S SURFACE, feature-detected — and `accountStatus` alone stopped
+   * being the marker.
+   *
+   * Phase 2 gave the companion a READ-ONLY `accountStatus` over HTTP so the
+   * phone's own avatar could draw initials. This hook kept treating that as
+   * "there is an owner surface here" and mounted a second avatar beside the
+   * companion's, in the same brand group — two identical circles, one of
+   * which opens sheets whose IPC the phone does not have. `accountClaim` is
+   * the honest marker: only main exposes it, and only where a name can be
+   * claimed is this whole surface meaningful.
+   */
+  const supported = typeof cookrew().accountClaim === 'function'
   const [status, setStatus] = useState<AccountStatus | null>(null)
   const [sheet, setSheet] = useState<'none' | 'claim' | 'profile' | 'security'>('none')
   const [tab, setTab] = useState<ProfileTab>('PROFILE')

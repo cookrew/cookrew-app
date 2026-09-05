@@ -72,13 +72,55 @@ describe('what the Security tab reads', () => {
     })
   })
 
-  it('reads a registry that sends no factors as NOTHING ENROLLED, not an error', async () => {
+  it('ASKS /v2/me/factors when /v2/me did not carry them', async () => {
+    // The registry has a dedicated route for the posture, and reading its
+    // absence from /v2/me as "nothing enrolled" is how the card offers ADD AN
+    // AUTHENTICATOR to an account that already has one — and stays silent
+    // about a password the registry is demanding be changed.
     const h = harness()
-    h.setAnswer(() => ({ ok: true, value: { username: 'drej' } }))
+    h.setAnswer((path) =>
+      path === '/v2/me'
+        ? { ok: true, value: { username: 'drej' } }
+        : { ok: true, value: { totp: true, passkeys: [], mustChangePassword: true } },
+    )
     const view = await h.factors.view()
-    expect(view).toMatchObject({
+    expect(h.calls.map((call) => call.path)).toEqual(['/v2/me', '/v2/me/factors'])
+    expect(view).toMatchObject({ ok: true, value: { totp: true, mustChangePassword: true } })
+  })
+
+  it('takes /v2/me\'s own factors when it sends them, and asks nothing more', async () => {
+    const h = harness()
+    h.setAnswer(() => ({
+      ok: true,
+      value: { username: 'drej', factors: { totp: false, passkeys: [] } },
+    }))
+    await h.factors.view()
+    expect(h.calls.map((call) => call.path)).toEqual(['/v2/me'])
+  })
+
+  it('reads a registry with no factor route at all as NOTHING ENROLLED', async () => {
+    // 404 there means a registry with no phase 4: an empty ladder is the
+    // truth, not a guess. Any other refusal is passed through below.
+    const h = harness()
+    h.setAnswer((path) =>
+      path === '/v2/me' ? { ok: true, value: { username: 'drej' } } : { ok: false, reason: 'unknown' },
+    )
+    await expect(h.factors.view()).resolves.toMatchObject({
       ok: true,
       value: { totp: false, passkeys: [], mustChangePassword: false },
+    })
+  })
+
+  it('passes a session refusal from the factor route through', async () => {
+    const h = harness()
+    h.setAnswer((path) =>
+      path === '/v2/me'
+        ? { ok: true, value: { username: 'drej' } }
+        : { ok: false, reason: 'session-expired' },
+    )
+    await expect(h.factors.view()).resolves.toMatchObject({
+      ok: false,
+      reason: 'session-expired',
     })
   })
 
@@ -128,13 +170,24 @@ describe('the authenticator app', () => {
     expect(h.calls).toHaveLength(0)
   })
 
-  it('removes with a DELETE and expects no body back', async () => {
+  it('removes with a DELETE that CARRIES THE PASSWORD, as the registry gates it', async () => {
     const h = harness()
     h.setAnswer(() => ({ ok: true, value: undefined }))
-    await h.factors.removeTotp()
+    await h.factors.removeTotp('correct-horse-battery')
     expect(h.calls[0]).toMatchObject({ path: '/v2/me/totp' })
     expect(h.calls[0].init?.method).toBe('DELETE')
+    expect(h.calls[0].init?.body).toBe('{"current":"correct-horse-battery"}')
     expect(h.calls[0].init?.parse).toBe(false)
+  })
+
+  it('does not send a removal with no password — the refusal is the sentence', async () => {
+    const h = harness()
+    const result = await h.factors.removeTotp('')
+    expect(result).toMatchObject({ ok: false })
+    expect(result.ok ? '' : result.message).toBe(
+      'Type your password to take a factor off the account.',
+    )
+    expect(h.calls).toHaveLength(0)
   })
 })
 
@@ -168,13 +221,18 @@ describe('passkeys', () => {
     expect(h.calls).toHaveLength(0)
   })
 
-  it('removes one by id, escaped', async () => {
+  it('removes one by id, escaped, with the password in the body', async () => {
     const h = harness()
     h.setAnswer(() => ({ ok: true, value: undefined }))
-    await h.factors.removePasskey('pk 2/3')
+    await h.factors.removePasskey('pk 2/3', 'correct-horse-battery')
     expect(h.calls[0].path).toBe('/v2/me/passkeys/pk%202%2F3')
     expect(h.calls[0].init?.method).toBe('DELETE')
-    await expect(h.factors.removePasskey('')).resolves.toMatchObject({ ok: false })
+    expect(h.calls[0].init?.body).toBe('{"current":"correct-horse-battery"}')
+    await expect(h.factors.removePasskey('', 'correct-horse-battery')).resolves.toMatchObject({
+      ok: false,
+    })
+    // Neither a missing id nor a missing password reaches the socket.
+    await expect(h.factors.removePasskey('pk-1', '')).resolves.toMatchObject({ ok: false })
     expect(h.calls).toHaveLength(1)
   })
 

@@ -71,6 +71,12 @@ export const APPROVAL_COPY = {
   MUST_CHANGE: 'Set a new password — every other device was signed out.',
   /** D3, the passkey row when this Electron cannot make one. */
   PASSKEY_ELSEWHERE: 'Add a passkey on cookrew.dev in your browser — it works from any device',
+  /**
+   * D3, taking a factor off. The registry's own sentence, because it is the
+   * one it sends back when the password is missing — two wordings for one
+   * rule is how a person learns the app and the site disagree.
+   */
+  REMOVE_NEEDS_PASSWORD: 'Type your password to take a factor off the account.',
   /** D3, the authenticator sheet. */
   TOTP_HOW: 'Scan this with your authenticator app, or type the secret into it.',
   /** The confirm field's rule, and why a wrong code is usually just late. */

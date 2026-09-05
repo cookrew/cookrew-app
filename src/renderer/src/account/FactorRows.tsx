@@ -1,5 +1,5 @@
 import type { FactorsView } from '../../../shared/account-approvals'
-import { factorRows, passkeyElsewhere, type FactorRow } from './account-store'
+import { factorRows, passkeyElsewhere, removeFactorPrompt, type FactorRow } from './account-store'
 
 /**
  * THE FACTOR LADDER'S ROWS (D3), as pixels only.
@@ -88,5 +88,52 @@ export function FactorRows({
         </li>
       )}
     </>
+  )
+}
+
+/**
+ * THE PASSWORD A REMOVAL COSTS (registry: removeFactor).
+ *
+ * Its own component for the same reason the rows are: this appears only after
+ * a press, and a state that can only be reached by an event is a state nobody
+ * ever paints in a test. The two answers are weighted against the damage —
+ * REMOVE IT is the danger colour and KEEP IT is the way out.
+ */
+export function RemoveFactorRow({
+  row,
+  current,
+  busy = false,
+  onCurrent,
+  onConfirm,
+  onCancel,
+}: {
+  row: FactorRow
+  current: string
+  busy?: boolean
+  onCurrent: (value: string) => void
+  onConfirm: () => void
+  onCancel: () => void
+}): React.JSX.Element {
+  return (
+    <li className="cr-acct-secrow cr-acct-removefactor">
+      <label className="gs-label" htmlFor="cr-acct-factorpass">
+        {removeFactorPrompt(row)}
+      </label>
+      <input
+        id="cr-acct-factorpass"
+        type="password"
+        className="gs-input"
+        autoComplete="current-password"
+        value={current}
+        onChange={(e) => onCurrent(e.target.value)}
+        onKeyDown={(e) => e.key === 'Enter' && onConfirm()}
+      />
+      <button className="gs-revoke" disabled={busy || current.length === 0} onClick={onConfirm}>
+        REMOVE IT
+      </button>
+      <button className="gs-ghost" onClick={onCancel}>
+        KEEP IT
+      </button>
+    </li>
   )
 }

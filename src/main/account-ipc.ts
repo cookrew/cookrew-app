@@ -443,7 +443,11 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     'account:totpEnrol': (): Promise<AccountResult<TotpEnrolment>> => deps.factors.enrolTotp(),
     'account:totpConfirm': (code: unknown): Promise<AccountResult<void>> =>
       deps.factors.confirmTotp(asString(code)),
-    'account:totpRemove': (): Promise<AccountResult<void>> => deps.factors.removeTotp(),
+    // BOTH REMOVALS CARRY THE PASSWORD. The registry gates them on it, and a
+    // channel that could not pass one would be a REMOVE button that always
+    // fails with a sentence about a field the card never showed.
+    'account:totpRemove': (current: unknown): Promise<AccountResult<void>> =>
+      deps.factors.removeTotp(asString(current)),
     'account:passkeys': (): Promise<AccountResult<readonly PasskeySummary[]>> =>
       deps.factors.passkeys(),
     'account:passkeyOptions': (): Promise<AccountResult<Record<string, unknown>>> =>
@@ -455,8 +459,8 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
         credential: asRecord(record.credential),
       })
     },
-    'account:passkeyRemove': (id: unknown): Promise<AccountResult<void>> =>
-      deps.factors.removePasskey(asString(id)),
+    'account:passkeyRemove': (id: unknown, current: unknown): Promise<AccountResult<void>> =>
+      deps.factors.removePasskey(asString(id), asString(current)),
     'account:seats': () => seats(deps),
     'account:teamSeats': (slug: unknown) => teamSeats(deps, slug),
     'account:grantSeat': (input: unknown) => grantSeat(deps, input),

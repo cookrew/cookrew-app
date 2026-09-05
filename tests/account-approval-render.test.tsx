@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ApprovalRequest, FactorsView } from '../src/shared/account-approvals'
 import { ApprovalCard } from '../src/renderer/src/account/ApprovalCard'
-import { FactorRows } from '../src/renderer/src/account/FactorRows'
+import { FactorRows, RemoveFactorRow } from '../src/renderer/src/account/FactorRows'
 import { NewPasswordCard } from '../src/renderer/src/account/NewPasswordCard'
 import { QrCode } from '../src/renderer/src/account/QrCode'
 import { TotpSheet } from '../src/renderer/src/account/TotpSheet'
@@ -194,5 +194,38 @@ describe('the new password, after "not me"', () => {
   it('keeps the primary down until both fields are filled', () => {
     expect(html).toMatch(/<button class="gs-primary" disabled=""/)
     expect(html).toContain('SET A NEW PASSWORD')
+  })
+})
+
+describe('the password a removal costs', () => {
+  const rowFor = (factor: 'passkey' | 'totp'): Parameters<typeof RemoveFactorRow>[0]['row'] => ({
+    id: factor === 'totp' ? 'totp' : 'pk-1',
+    label: factor === 'totp' ? 'Authenticator app' : 'Touch ID on this Mac',
+    state: 'ACTIVE',
+    action: 'remove',
+    factor,
+  })
+
+  const removal = (factor: 'passkey' | 'totp', current = ''): string =>
+    renderToStaticMarkup(
+      <RemoveFactorRow
+        row={rowFor(factor)}
+        current={current}
+        onCurrent={() => undefined}
+        onConfirm={() => undefined}
+        onCancel={() => undefined}
+      />,
+    )
+
+  it('asks for the password, and names what is going', () => {
+    expect(removal('totp')).toContain('Your password, to remove the authenticator')
+    expect(removal('passkey')).toContain('Your password, to remove this passkey')
+    expect(removal('totp')).toContain('type="password"')
+  })
+
+  it('keeps REMOVE IT down until a password is typed, and offers the way out', () => {
+    expect(removal('totp')).toMatch(/class="gs-revoke" disabled=""/)
+    expect(removal('totp', 'correct-horse-battery')).not.toContain('disabled=""')
+    expect(removal('totp')).toContain('KEEP IT')
   })
 })
