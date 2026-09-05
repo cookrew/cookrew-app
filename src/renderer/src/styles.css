@@ -54,6 +54,17 @@
   box-sizing: border-box;
 }
 
+/* iOS Safari "text autosizing" inflates nowrap inline-block text runs it
+   judges too small for a wide block — with no regard for the font-size the
+   sheet asked for. On the phone it blew the checkpoint rail's 12.5px titles
+   up to headline size while the 8px T-tags beside them stayed put (IMG_3251,
+   2026-09-05). 100%, not none: `none` also disables the user's own
+   accessibility text scaling on some engines, which is not ours to take. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 html,
 body,
 #root {
