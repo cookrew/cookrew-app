@@ -1,0 +1,57 @@
+name: Perf
+
+# The perf gates (tests/perf/*.perf.ts) run on their own schedule, not inside
+# the 4,600-test CI suite: they time things and measure retained heap, so they
+# want a process and a runner to themselves. Nightly, on demand, and on any
+# change to the gates or their budgets.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'tests/perf/**'
+      - 'vitest.perf.config.ts'
+      - 'scripts/perf-eval*.mjs'
+      - '.github/workflows/perf.yml'
+
+concurrency:
+  group: perf-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Perf gates
+        env:
+          # A shared runner is slower and noisier than the idle Apple Silicon
+          # the budgets were calibrated on: wall-clock budgets get 3x headroom.
+          # Structural and retained-heap assertions are never scaled.
+          COOKREW_PERF_SCALE: 3
+          # Runners are dedicated, so tails are asserted regardless of load.
+          COOKREW_PERF_STRICT: 1
+          COOKREW_PERF_REPORT: perf-results/${{ matrix.os }}.jsonl
+        run: npm run test:perf
+
+      - name: Upload measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-${{ matrix.os }}
+          path: perf-results/
+          if-no-files-found: ignore
