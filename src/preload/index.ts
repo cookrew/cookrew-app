@@ -58,6 +58,36 @@ const api = {
     ipcRenderer.invoke('account:setProfile', patch),
   accountWorkspacesReachable: (on: boolean) =>
     ipcRenderer.invoke('account:workspacesReachable', on),
+
+  // ── phase 4: the approval prompt (D6) and the factor ladder (D3) ──
+  //
+  // Same guard, same reasoning: these can approve a device onto the account,
+  // sign every other device out, and add a way in. Owner window's top frame
+  // or nothing.
+  accountApprovals: () => ipcRenderer.invoke('account:approvals'),
+  accountDecide: (input: { id: string; decision: 'approve' | 'deny' | 'not-me' }) =>
+    ipcRenderer.invoke('account:decide', input),
+  accountSetPassword: (input: { current: string; next: string }) =>
+    ipcRenderer.invoke('account:setPassword', input),
+  accountFactors: () => ipcRenderer.invoke('account:factors'),
+  /** The secret and its QR, for the moment the sheet draws them. */
+  accountTotpEnrol: () => ipcRenderer.invoke('account:totpEnrol'),
+  accountTotpConfirm: (code: string) => ipcRenderer.invoke('account:totpConfirm', code),
+  accountTotpRemove: () => ipcRenderer.invoke('account:totpRemove'),
+  accountPasskeys: () => ipcRenderer.invoke('account:passkeys'),
+  accountPasskeyOptions: () => ipcRenderer.invoke('account:passkeyOptions'),
+  accountPasskeyAdd: (input: { name: string; credential: Record<string, unknown> }) =>
+    ipcRenderer.invoke('account:passkeyAdd', input),
+  accountPasskeyRemove: (id: string) => ipcRenderer.invoke('account:passkeyRemove', id),
+  /**
+   * The queue changed, or a notification was clicked (then with the request's
+   * id, so the sheet opens on the one the owner was told about).
+   */
+  onAccountRequests: (cb: (requestId: string | null) => void) => {
+    const listener = (_e: unknown, requestId: string | null): void => cb(requestId)
+    ipcRenderer.on('account:requests', listener)
+    return () => ipcRenderer.removeListener('account:requests', listener)
+  },
   /** Main locked or unlocked the owner's view; the overlay follows this. */
   onAccountLocked: (cb: (locked: boolean) => void) => {
     const listener = (_e: unknown, locked: boolean): void => cb(locked)

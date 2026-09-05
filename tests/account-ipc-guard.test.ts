@@ -23,6 +23,8 @@ import {
 } from '../src/main/account-ipc'
 import { IdleLock } from '../src/main/lock'
 import { Accounts, DEFAULT_LOCK_AFTER_MS } from '../src/main/account-v2'
+import { Approvals } from '../src/main/approvals'
+import { Factors } from '../src/main/factors'
 
 const OWNER = { id: 'owner-webcontents' }
 const TOP = { parent: null }
@@ -37,6 +39,9 @@ function deps(over: Partial<AccountIpcDeps> = {}): AccountIpcDeps {
   return {
     accounts,
     lock: new IdleLock({ lockAfterMs: DEFAULT_LOCK_AFTER_MS, verify: () => false }),
+    // Never started: a poll on a test's clock is a socket nobody asked for.
+    approvals: new Approvals({ accounts, notify: () => undefined }),
+    factors: new Factors({ accounts, registry: 'https://registry.test' }),
     envUsername: null,
     workspaces: () => [],
     ...over,
@@ -80,8 +85,30 @@ describe('every account channel is registered, once, through the owner guard', (
     }
   })
 
+  it('carries the phase 4 channels, and carries them through the same guard', () => {
+    // The approval prompt and the factor ladder are the two surfaces that can
+    // lock an account down and add a way into it. If either arrived on an
+    // unguarded channel, a browser card could deny a sign-in the owner wanted
+    // or enrol a factor they never saw.
+    for (const channel of [
+      'account:approvals',
+      'account:decide',
+      'account:setPassword',
+      'account:factors',
+      'account:totpEnrol',
+      'account:totpConfirm',
+      'account:totpRemove',
+      'account:passkeys',
+      'account:passkeyOptions',
+      'account:passkeyAdd',
+      'account:passkeyRemove',
+    ]) {
+      expect(ACCOUNT_CHANNELS).toContain(channel)
+    }
+  })
+
   it('main wires the account IPC through ownerOnly, not channel by channel', () => {
-    // The one place a thirteenth channel could be added unguarded is the call
+    // The one place a further channel could be added unguarded is the call
     // site. It takes a `register`, so the wrapper is applied by construction —
     // this asserts the call site still passes one that applies it.
     const source = readFileSync(path.join(__dirname, '..', 'src', 'main', 'index.ts'), 'utf8')
@@ -113,6 +140,51 @@ describe('the status the owner window is given', () => {
     expect(keys).not.toContain('privateKeyJwk')
     expect(keys).not.toContain('session')
     expect(keys).not.toContain('unlock')
+  })
+})
+
+describe('the phase 4 handlers', () => {
+  it('the status carries the live count of waiting devices, not a zero', () => {
+    const shared = deps()
+    vi.spyOn(shared.approvals, 'count', 'get').mockReturnValue(2)
+    expect(accountStatus(shared).requests).toBe(2)
+  })
+
+  it('a decision answers with the STATUS, so the badge is right at once', async () => {
+    const shared = deps()
+    vi.spyOn(shared.approvals, 'decide').mockResolvedValue({ ok: true, value: undefined })
+    const answer = (await accountHandlers(shared)['account:decide']({
+      id: 'req-1',
+      decision: 'approve',
+    })) as { ok: true; value: { requests: number } }
+    expect(shared.approvals.decide).toHaveBeenCalledWith('req-1', 'approve')
+    expect(answer.ok).toBe(true)
+    expect(answer.value.requests).toBe(0)
+  })
+
+  it('REFUSES a decision it does not recognise, rather than guessing one', async () => {
+    const shared = deps()
+    const decide = vi.spyOn(shared.approvals, 'decide')
+    for (const decision of ['approve!', '', null, { decision: 'deny' }]) {
+      await expect(
+        accountHandlers(shared)['account:decide']({ id: 'req-1', decision }),
+      ).resolves.toMatchObject({ ok: false })
+    }
+    expect(decide).not.toHaveBeenCalled()
+  })
+
+  it('coerces junk on every phase 4 channel instead of throwing at the bridge', async () => {
+    const handlers = accountHandlers(deps())
+    await expect(handlers['account:decide'](null)).resolves.toMatchObject({ ok: false })
+    await expect(handlers['account:totpConfirm'](undefined)).resolves.toMatchObject({ ok: false })
+    await expect(handlers['account:passkeyAdd'](7)).resolves.toMatchObject({ ok: false })
+    await expect(handlers['account:passkeyRemove'](null)).resolves.toMatchObject({ ok: false })
+    await expect(handlers['account:setPassword'](null)).resolves.toMatchObject({ ok: false })
+  })
+
+  it('the approvals channel answers the polled list, opening no socket', () => {
+    const shared = deps()
+    expect(accountHandlers(shared)['account:approvals']()).toEqual([])
   })
 })
 
