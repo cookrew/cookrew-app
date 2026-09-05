@@ -34,13 +34,16 @@ function deps(over: Partial<AccountIpcDeps> = {}): AccountIpcDeps {
     origin: 'https://registry.test',
     fetch: () => Promise.reject(new Error('no network in this test')),
   })
-  return {
+  const base: AccountIpcDeps = {
     accounts,
     lock: new IdleLock({ lockAfterMs: DEFAULT_LOCK_AFTER_MS, verify: () => false }),
     envUsername: null,
     workspaces: () => [],
-    ...over,
+    saveCodes: () => Promise.resolve({ ok: false, reason: 'no_window' }),
   }
+  // Spread over a COMPLETE deps object, so an override cannot widen a field to
+  // include undefined and quietly hand a handler nothing to call.
+  return { ...base, ...over }
 }
 
 /** The wrapper main applies — restated here so the refusal is exercised. */
@@ -114,6 +117,10 @@ describe('the status the owner window is given', () => {
     expect(keys).not.toContain('session')
     expect(keys).not.toContain('unlock')
   })
+
+  it('reports whether the recovery codes were put away', () => {
+    expect(accountStatus(deps()).recoveryCodesSavedAt).toBeNull()
+  })
 })
 
 describe('the handlers', () => {
@@ -144,6 +151,32 @@ describe('the handlers', () => {
     })) as { ok: boolean; reason: string }
     expect(result).toMatchObject({ ok: false, reason: 'weak_password' })
     expect(JSON.stringify(result)).not.toContain('privateKeyJwk')
+  })
+
+  it('SAVE AS FILE takes no arguments — main writes the batch IT minted', async () => {
+    // A channel that accepted text plus a path would write chosen bytes
+    // wherever the owner happened to click. With nothing minted, there is
+    // nothing to save and the dialog is never opened.
+    const written: unknown[] = []
+    const shared = deps({
+      saveCodes: (codes) => {
+        written.push(codes)
+        return Promise.resolve({ ok: true })
+      },
+    })
+    const handlers = accountHandlers(shared)
+    expect(await handlers['account:saveRecoveryCodes']('/etc/passwd', 'anything')).toEqual({
+      ok: false,
+      reason: 'nothing_to_save',
+    })
+    expect(written).toEqual([])
+  })
+
+  it('records I SAVED THEM in the status it answers with', () => {
+    const shared = deps()
+    const marked = vi.spyOn(shared.accounts, 'markRecoveryCodesSaved')
+    accountHandlers(shared)['account:codesSaved']()
+    expect(marked).toHaveBeenCalled()
   })
 
   it('coerces junk arguments instead of throwing at the bridge', async () => {

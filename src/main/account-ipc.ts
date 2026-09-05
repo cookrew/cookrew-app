@@ -29,6 +29,16 @@ export interface AccountIpcDeps {
   envUsername: string | null
   /** This Mac's workspaces, by id and name — never their content (P1). */
   workspaces: () => readonly { id: string; name: string }[]
+  /**
+   * Put the pending recovery codes on disk, behind a save dialog.
+   *
+   * Injected because this module must stay free of Electron — it is the one
+   * account surface a rendered page could try to reach, and the guard test's
+   * whole premise is that it never touches ipcMain or a dialog itself. Main
+   * supplies the dialog; the CODES come from the account, never from the
+   * renderer, so nothing here can be talked into writing chosen bytes.
+   */
+  saveCodes: (codes: readonly string[]) => Promise<{ ok: boolean; reason?: string }>
 }
 
 /** An IPC handler as this module writes them: args in, a value or promise out. */
@@ -51,6 +61,8 @@ export const ACCOUNT_CHANNELS = [
   'account:devices',
   'account:revoke',
   'account:recoveryCodes',
+  'account:saveRecoveryCodes',
+  'account:codesSaved',
   'account:setLock',
   'account:setProfile',
   'account:workspacesReachable',
@@ -74,6 +86,8 @@ export function accountStatus(deps: AccountIpcDeps): AccountStatus {
     // this phase deliberately does not build.
     requests: 0,
     envUsername: deps.envUsername,
+    recoveryCodesSavedAt: account?.recoveryCodesSavedAt ?? null,
+    recoveryCodesLeft: null,
     sessionExpired: account !== null && !deps.accounts.sessionLive(),
     workspacesReachable: account?.workspacesReachable ?? false,
   }
@@ -151,6 +165,23 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
       deps.accounts.revokeDevice(asString(id)),
     'account:recoveryCodes': (): Promise<AccountResult<readonly string[]>> =>
       deps.accounts.recoveryCodes(),
+    /**
+     * SAVE AS FILE. The codes are read from main's own memory, never from the
+     * call — the renderer already has them on screen, and a channel that took
+     * text plus a path would write whatever it was handed.
+     */
+    'account:saveRecoveryCodes': async (): Promise<{ ok: boolean; reason?: string }> => {
+      const codes = deps.accounts.pendingRecoveryCodes()
+      if (!codes) return { ok: false, reason: 'nothing_to_save' }
+      const saved = await deps.saveCodes(codes)
+      if (saved.ok) deps.accounts.markRecoveryCodesSaved()
+      return saved
+    },
+    /** I SAVED THEM — recorded, so the RESCUE row stops saying NOT SAVED. */
+    'account:codesSaved': () => {
+      deps.accounts.markRecoveryCodesSaved()
+      return accountStatus(deps)
+    },
     'account:setLock': (ms: unknown) => {
       const value = typeof ms === 'number' ? ms : 0
       deps.accounts.setLockAfterMs(value)

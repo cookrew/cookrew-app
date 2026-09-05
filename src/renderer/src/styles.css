@@ -5566,3 +5566,37 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   font-size: 14px;
   letter-spacing: 0.06em;
 }
+
+/* A row whose action is phase 4 must not read like the live ones. Muted text
+   and a DASHED badge — the same "not filled in yet" the empty avatar wears —
+   so nobody spends a click finding out the button does nothing. */
+.cr-acct-coming .cr-acct-kind,
+.cr-acct-coming .cr-acct-seclabel {
+  color: var(--dim);
+}
+
+.cr-acct-coming button {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.cr-acct-soon {
+  padding: 1px 6px;
+  border: 1px dashed var(--line-soft);
+  border-radius: 9px;
+  color: var(--dim);
+}
+
+/* The idle delay is a closed list, so it is a select, sized like the row's
+   other controls rather than like a form field. */
+.cr-acct-select {
+  flex: 0 0 auto;
+  border: 2px solid var(--line);
+  background: var(--cream-hi);
+  color: var(--ink);
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  padding: 4px 6px;
+  cursor: pointer;
+}
