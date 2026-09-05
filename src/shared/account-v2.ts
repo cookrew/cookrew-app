@@ -102,8 +102,12 @@ export function normaliseUsername(raw: string): string {
   return raw.trim().replace(/^@+/, '')
 }
 
+/** `acct-` is the door-side namespace for registry callers; never a username. */
+const RESERVED = /^acct-/
+
 export function isValidUsername(raw: string): boolean {
-  return USERNAME.test(normaliseUsername(raw))
+  const name = normaliseUsername(raw)
+  return USERNAME.test(name) && !RESERVED.test(name)
 }
 
 /** How many of lower / upper / digit / other the password draws on. */
