@@ -17,7 +17,14 @@ import type { V2Account, V2Device } from './v2-accounts'
  * button that refuses.
  */
 
-const KIND_LABEL: Record<V2Device['kind'], string> = { desktop: 'Desktop', phone: 'Phone', browser: 'Browser' }
+const KIND_LABEL: Record<V2Device['kind'], string> = {
+  desktop: 'Desktop',
+  phone: 'Phone',
+  browser: 'Browser',
+  // The key this name held before it had a password (phase 6). Listed like
+  // any other device, and revocable like one: that is how the old world ends.
+  legacy: 'Key'
+}
 
 const initials = (account: V2Account): string =>
   (account.displayName.trim() || account.username).slice(0, 2).toUpperCase()

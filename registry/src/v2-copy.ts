@@ -14,6 +14,12 @@
 
 export type V2Error =
   | 'taken'
+  /**
+   * PHASE 6. A name that exists in the OLD credential file and has no account
+   * behind it yet. It is not free and it is not somebody else's — it is this
+   * person's, and what they are missing is a password.
+   */
+  | 'legacy'
   | 'bad_username'
   | 'weak_password'
   | 'bad_device'
@@ -37,6 +43,8 @@ export type V2Error =
 
 const SENTENCES: Record<V2Error, string> = {
   taken: 'That name is someone else’s. Try another.',
+  legacy:
+    'That name already exists from before passwords — sign in with the key that holds it and set a password.',
   bad_username: 'A username is lowercase letters, digits and dashes, up to 32 of them.',
   weak_password: 'Too easy to guess. Use 12 characters or more; a sentence works.',
   bad_device: 'This device did not say what it is, so it cannot be attached to an account.',
@@ -71,6 +79,11 @@ export function sentenceFor(error: V2Error, subject?: string): string {
   // The one refusal that is worth naming its subject: "taken" is the sentence
   // a person reads while typing, and "that name" is a worse answer than theirs.
   if (error === 'taken') return `@${subject} is someone else’s. Try another.`
+  // Phase 6's whole point is that the name is NOT lost, so the sentence names
+  // it and says the one thing that will get it back.
+  if (error === 'legacy') {
+    return `@${subject} already exists from before passwords — sign in with the key that holds it and set a password.`
+  }
   // At a door the 401 is not "sign in to see this" — it is the reason a seat
   // is worth signing in for at all (the copy table's own sentence).
   if (error === 'unauthenticated') return 'A seat is yours, not a browser’s. Sign in so it follows you.'

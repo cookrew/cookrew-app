@@ -464,16 +464,48 @@
         tab.classList.toggle('primary', on)
         tab.setAttribute('aria-selected', on ? 'true' : 'false')
       }
-      $('acct-confirm-row').hidden = next !== 'register'
-      $('acct-password').setAttribute('autocomplete', next === 'register' ? 'new-password' : 'current-password')
-      $('acct-submit').textContent = next === 'register' ? 'Create account' : 'Continue'
+      // Every field comes back on, whatever the legacy step turned off: the
+      // tabs are the way back from a name typed by mistake, and a way back
+      // that leaves the fields dead is not one.
+      $('acct-password').disabled = false
+      $('acct-confirm').disabled = false
+      $('acct-submit').disabled = false
+      $('acct-confirm-row').hidden = next === 'signin'
+      $('acct-username').readOnly = next === 'legacy'
+      $('acct-password').setAttribute('autocomplete', next === 'signin' ? 'current-password' : 'new-password')
+      $('acct-submit').textContent =
+        next === 'register' ? 'Create account' : next === 'legacy' ? 'Set a password' : 'Continue'
       $('acct-lede').textContent =
         next === 'register'
           ? 'This browser becomes your first device. A username and a password — the site never asks for an email.'
-          : 'A username and a password. The site never asks for an email.'
+          : next === 'legacy'
+            ? `Set a password for @${$('acct-username').value.trim().toLowerCase()}. This browser holds the key that owns it.`
+            : 'A username and a password. The site never asks for an email.'
       $('acct-message').textContent = ''
       chip('acct-username-note', '')
       chip('acct-confirm-note', '')
+    }
+
+    /**
+     * A NAME FROM BEFORE PASSWORDS (phase 6).
+     *
+     * The name is not free and it is not somebody else's — it is this
+     * person's, held by the key that enrolled it. The step is refused BEFORE
+     * anything is typed when this browser does not hold that key: a password
+     * field that cannot be spent is worse than a sentence saying where to go.
+     */
+    const toLegacy = async (username, message) => {
+      $('acct-username').value = username
+      setMode('legacy')
+      const account = await loadAccount()
+      const holds = account && account.handle === username
+      $('acct-submit').disabled = !holds
+      $('acct-password').disabled = !holds
+      $('acct-confirm').disabled = !holds
+      $('acct-message').textContent = holds
+        ? (message ?? `@${username} already exists from before passwords. Set one and it stays yours.`)
+        : 'This name belongs to a key on another device — set the password there, or use that device to link this one.'
+      if (holds) $('acct-password').focus()
     }
 
     const checkName = async () => {
@@ -498,7 +530,7 @@
       const value = $('acct-password').value
       if (value === '') return chip('acct-password-note', '')
       chip('acct-password-note', value.length < 12 ? 'weak' : 'strong', value.length < 12 ? 'no' : 'ok')
-      if (mode === 'register' && value.length < 12) {
+      if (mode !== 'signin' && value.length < 12) {
         $('acct-message').textContent = 'Too easy to guess. Use 12 characters or more; a sentence works.'
       }
       if ($('acct-confirm').value !== '') {
@@ -534,30 +566,77 @@
       const say = (text) => ($('acct-message').textContent = text)
       if (!USERNAME.test(username)) return say('A username is lowercase letters, digits and dashes, up to 32 of them.')
       if (password.length < 12) return say('Too easy to guess. Use 12 characters or more; a sentence works.')
-      if (mode === 'register' && $('acct-confirm').value !== password) return say('The two passwords are not the same.')
+      if (mode !== 'signin' && $('acct-confirm').value !== password) return say('The two passwords are not the same.')
       $('acct-submit').disabled = true
-      say(mode === 'register' ? `Claiming @${username}…` : 'Signing in…')
+      say(mode === 'register' ? `Claiming @${username}…` : mode === 'legacy' ? `Setting a password for @${username}…` : 'Signing in…')
+      // Set when this attempt ENDED in the legacy step, which decides for
+      // itself whether the primary comes back on — a browser that does not
+      // hold the key must not be handed a button that cannot work.
+      let crossed = false
       try {
         const device = devicePayload(await deviceIdentity())
         const out =
           mode === 'register'
             ? await v2('POST', '/v2/accounts', { username, password, device })
-            : await v2('POST', '/v2/sessions', { username, password, device })
+            : mode === 'legacy'
+              ? await migrateWithOldKey(username, password, device)
+              : await v2('POST', '/v2/sessions', { username, password, device })
         if (out.status === 201) {
           dialog.close()
           location.assign('/me')
           return
         }
+        // A NAME FROM BEFORE PASSWORDS, either way it is met: REGISTER is
+        // told so by the 409, and SIGN IN finds out by asking, because a
+        // legacy name refuses a password with the same 401 as a typo.
+        if (mode === 'register' && out.status === 409 && out.body?.error === 'legacy') {
+          crossed = true
+          return void (await toLegacy(username, out.body?.message))
+        }
+        if (mode === 'signin' && out.status === 401) {
+          const waiting = await v2('GET', `/v2/migrate/${encodeURIComponent(username)}`)
+          if (waiting.status === 200) {
+            crossed = true
+            return void (await toLegacy(username, waiting.body?.message))
+          }
+        }
         say(out.body?.message ?? 'That did not go through. Try again in a moment.')
       } catch (error) {
         say('This browser could not reach cookrew.dev. Nothing local stops.')
       } finally {
-        $('acct-submit').disabled = false
+        if (!crossed) $('acct-submit').disabled = false
       }
     }
 
     setMode('signin')
     return dialog
+  }
+
+  /**
+   * THE CROSSING, signed by the key this browser already holds.
+   *
+   * The v1 ceremony, unchanged — the same `assertion()` the stars and the
+   * line use — because the whole point of it is that the registry can already
+   * verify it. Nothing new is enrolled and nothing old is forgotten: the key
+   * stays where it is and becomes a device of the account it just made.
+   */
+  async function migrateWithOldKey(username, password, device) {
+    const account = await loadAccount()
+    if (!account || account.handle !== username) {
+      return {
+        status: 0,
+        body: {
+          message:
+            'This name belongs to a key on another device — set the password there, or use that device to link this one.'
+        }
+      }
+    }
+    return v2('POST', '/v2/migrate', {
+      username,
+      password,
+      device,
+      assertion: await assertion(account, 'download')
+    })
   }
 
   function openAccountSheet() {

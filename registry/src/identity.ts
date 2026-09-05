@@ -247,6 +247,18 @@ export class IdentityService {
     return this.credentials.some((c) => c.credentialId === credentialId)
   }
 
+  /**
+   * The PUBLIC key enrolled under a credential id, or null.
+   *
+   * Read-only, and it exists for one caller: the migration route (phase 6),
+   * which files this key as the account's `legacy` device so the handle's old
+   * key is still a thing the account knows about after it has a password.
+   * Nothing about v1 changes — this hands out the half that was always public.
+   */
+  jwkFor(credentialId: string): Record<string, unknown> | null {
+    return this.credentials.find((c) => c.credentialId === credentialId)?.jwk ?? null
+  }
+
   /** Enrolled credential ids. For the dev harness only — see the dev routes. */
   enrolled(): string[] {
     return this.credentials.map((c) => c.credentialId)

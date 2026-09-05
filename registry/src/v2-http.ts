@@ -5,6 +5,7 @@ import { SESSION_TTL_MS, V2Tokens, type V2Claims } from './v2-tokens'
 import { Limiter, callerAddress } from './v2-limiter'
 import { passwordGate } from './v2-hash-gate'
 import { v2Error, type V2Error } from './v2-copy'
+import type { LegacyIdentity } from './v2-migrate-routes'
 import type { DoorRecord } from './doors'
 
 /**
@@ -97,6 +98,12 @@ export interface V2Context {
    * rather than a crash.
    */
   doors?: { get: (handle: string, name: string) => DoorRecord | null }
+  /**
+   * The v1 identity service, for the migration routes only (phase 6): a
+   * handle it knows is RESERVED for the key that holds it. Absent on a
+   * registry with no v1 credentials, where nothing has to be migrated.
+   */
+  legacy?: LegacyIdentity
 }
 
 // ── answers ──────────────────────────────────────────────────────────────

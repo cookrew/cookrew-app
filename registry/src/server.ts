@@ -320,7 +320,10 @@ export function createRegistry(deps: RegistryDeps): Server {
         // The directory, for the seat routes: a seat is held at a TEAM, and
         // the team's own terms (free or priced, and on which rails) are the
         // door's to state, never the seat's.
-        ...(deps.doors === undefined ? {} : { doors: deps.doors })
+        ...(deps.doors === undefined ? {} : { doors: deps.doors }),
+        // The v1 credentials, for the migration route: which handles are
+        // spoken for by a key that has no password yet (phase 6).
+        ...(deps.identity === undefined ? {} : { legacy: deps.identity })
       })
     )
       return
