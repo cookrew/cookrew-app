@@ -32,6 +32,12 @@ export interface MobileIdentityDeps {
   readonly acceptsPairingKey: (key: string) => boolean
   /** The credential a legacy pairing produces; an admitted phone gets it too. */
   readonly pairingToken: () => string | null
+  /**
+   * The origins THIS server answers on, so a companion served over one of
+   * them may read `/api/hello` from another while it looks for a better path.
+   * Supplied by mobile-server, which is the only thing that knows them.
+   */
+  readonly selfOrigins?: () => readonly string[]
   readonly now?: () => number
   readonly log?: (message: string) => void
 }
@@ -51,7 +57,11 @@ export const handleIdentityRoutes = async (
   const log = deps.log ?? ((): void => undefined)
 
   if (url.pathname === '/api/hello') {
-    const cors = helloCorsHeaders(request.headers.origin, deps.registryOrigin())
+    const cors = helloCorsHeaders(
+      request.headers.origin,
+      deps.registryOrigin(),
+      deps.selfOrigins?.() ?? []
+    )
     if (method === 'OPTIONS') {
       response.writeHead(204, { ...cors, 'content-length': '0' })
       response.end()

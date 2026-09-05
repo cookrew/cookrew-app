@@ -136,6 +136,24 @@ describe('hello cors', () => {
     }
   })
 
+  it("lets this Mac's own other addresses read it, for the live path switch", () => {
+    const tailnet = 'https://100.68.81.64:8643'
+    const lan = 'https://192.168.1.24:8643'
+    // A companion served over the tailnet asking a LAN address of the SAME Mac
+    // whether it is the same Mac. Without this the answer is unreadable and
+    // the phone can never learn the faster path is there.
+    const headers = helloCorsHeaders(tailnet, registry, [lan, tailnet])
+    expect(headers['access-control-allow-origin']).toBe(tailnet)
+    expect(headers['access-control-allow-credentials']).toBeUndefined()
+  })
+
+  it('still says nothing to an address this Mac does not answer on', () => {
+    const headers = helloCorsHeaders('https://192.168.1.99:8643', registry, [
+      'https://192.168.1.24:8643'
+    ])
+    expect(headers['access-control-allow-origin']).toBeUndefined()
+  })
+
   it('always varies on origin, so a proxy cannot cache one answer for all', () => {
     expect(helloCorsHeaders(undefined, registry).vary).toBe('origin')
     expect(helloCorsHeaders(registry, registry).vary).toBe('origin')

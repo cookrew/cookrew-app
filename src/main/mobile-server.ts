@@ -49,7 +49,8 @@ import { rendererSourceFor, staleBuildNotice } from './renderer-choice'
 import { fetchRendererDevResource, rendererDevPathAllowed } from './renderer-dev-proxy'
 import { isViteHmrUpgrade, proxyViteHmrUpgrade } from './hmr-proxy'
 import { handleIdentityRoutes, type MobileIdentityDeps } from './mobile-identity-routes'
-import { certFingerprint } from './reach'
+import { RELAY_MARKER } from './canvas-bridge'
+import { certFingerprint, reachCard } from './reach'
 
 // Re-exported so existing importers keep their import path; the constants
 // themselves live in an Electron-free module so pure code can use them.
@@ -468,6 +469,28 @@ export function mobileUrls(): string[] {
 }
 
 /**
+ * The origins this server answers on, WITHOUT the token that rides the URLs.
+ *
+ * Two callers, both phase 3: the CORS allow-list on `/api/hello`, so a
+ * companion on one of these addresses may ask another whether it is the same
+ * Mac; and `/api/reach`, which hands the companion the candidates to race. A
+ * `?token=` in either would be the pairing credential leaving on a route that
+ * is not the pairing URL, so it is stripped rather than trusted not to matter.
+ */
+export function mobileSelfOrigins(): string[] {
+  const seen = new Set<string>()
+  for (const endpoint of mobileEndpointList()) {
+    try {
+      const url = new URL(endpoint.url)
+      seen.add(`${url.protocol}//${url.host}`)
+    } catch {
+      // An endpoint that is not a URL cannot be an origin either.
+    }
+  }
+  return [...seen]
+}
+
+/**
  * The fingerprint a phone will see on the TLS handshake, or null when HTTPS
  * never came up. This is what the reach card pins, so a direct connection is
  * never trust-on-first-use.
@@ -714,7 +737,10 @@ function rendererSource(
     remoteAddress: request.socket.remoteAddress,
     devAvailable: !!deps.rendererDevUrl,
     builtAvailable: existsSync(path.join(deps.rendererDir, 'index.html')),
-    requested: raw === 'dev' || raw === 'built' ? raw : null
+    requested: raw === 'dev' || raw === 'built' ? raw : null,
+    // The relay bridge dials this server from loopback on behalf of the most
+    // remote client there is. See canvas-bridge.ts.
+    viaRelay: request.headers[RELAY_MARKER] === '1'
   })
 }
 
@@ -826,7 +852,19 @@ async function handle(
   // arrived from cookrew.dev and hands it the same session a legacy pairing
   // would. Neither answers without an account, so nothing changes for a
   // desktop that has not claimed a username.
-  if (await handleIdentityRoutes(request, response, url, deps.identity)) return
+  if (
+    await handleIdentityRoutes(
+      request,
+      response,
+      url,
+      // The origins are the SERVER's, not the account's, so they are threaded
+      // in here rather than asked of index.ts — which would have to learn
+      // about listeners it deliberately knows nothing about.
+      deps.identity && { ...deps.identity, selfOrigins: mobileSelfOrigins }
+    )
+  ) {
+    return
+  }
 
   if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
     // Loopback (and ?renderer=dev) uses Vite's current transforms; every
@@ -877,6 +915,41 @@ async function handle(
   // property that made the read hole findable in the first place.
   if (request.method === 'GET' && url.pathname === '/api/browser/capabilities') {
     respondJson(response, 200, { interactive: deps.interactiveBrowserEnabled() })
+    return
+  }
+
+  /**
+   * WHERE ELSE THIS MAC ANSWERS — the companion's own copy of the reach card.
+   *
+   * A phone reached over the relay has no way to discover that the Mac is on
+   * the Wi-Fi it just joined: its origin is cookrew.dev and cookrew.dev is the
+   * long way round. So the desktop tells it, over whatever path it is already
+   * on, and the phone races what it is told (path/switch.ts).
+   *
+   * THE SAME CARD IT PUBLISHES, built by the same function — a second
+   * classification here would be a second chance to call a tailnet address a
+   * LAN one and switch a phone onto a path that cannot carry it.
+   *
+   * BELOW handleMobileApi ON PURPOSE, which is what gates it: the addresses of
+   * someone's Mac and the fingerprint of its certificate are not for anyone who
+   * can reach the port. `relay` is absent because this route cannot know it —
+   * the link is index.ts's, and a phone reading this is not looking for the
+   * path it is already on.
+   */
+  if (request.method === 'GET' && url.pathname === '/api/reach') {
+    const account = deps.identity?.account() ?? null
+    if (!account) {
+      respondJson(response, 404, { error: 'no account on this desktop' })
+      return
+    }
+    const card = reachCard({
+      deviceId: account.deviceId,
+      endpoints: mobileEndpointList(),
+      certFp: activeCertFingerprint(),
+      relay: false,
+      at: Date.now()
+    })
+    respondJson(response, 200, { deviceId: card.deviceId, lan: card.lan, tailnet: card.tailnet })
     return
   }
 

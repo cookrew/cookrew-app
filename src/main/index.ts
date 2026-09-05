@@ -86,6 +86,8 @@ import { createAdmittedDeviceStore } from './admitted-devices'
 import { createPairingKeyRing } from './pairing-key'
 import { createRegistryKeyCache } from './registry-keys'
 import { createReachPublisher, type ReachPublisher } from './reach'
+import { createCanvasLink } from './canvas-link'
+import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
 import { IdleLock } from './lock'
 import { registerAccountIpc } from './account-ipc'
 import { Approvals } from './approvals'
@@ -610,6 +612,40 @@ const pairingKeys = createPairingKeyRing()
 const admittedDevices = createAdmittedDeviceStore()
 const registryKeyCache = createRegistryKeyCache({ origin: registryOrigin() })
 let reachPublisher: ReachPublisher | null = null
+
+/**
+ * THE DESKTOP'S OWN LINE AT cookrew.dev — the picker's third path.
+ *
+ * A phone on LTE cannot dial this Mac, so this Mac dials out and holds a line
+ * for its OWN CANVAS; the phone's request travels down it backwards and lands
+ * on the companion's own loopback listener, where the admission ceremony and
+ * the pairing gate answer exactly as they do on the LAN. The relay adds no
+ * authority — see canvas-bridge.ts.
+ *
+ * The credential is re-asked on every dial and every redial, so no account, an
+ * expired session, or reachability switched off all mean the same thing: no
+ * line. Both of the last two are the owner saying no, and neither is an error.
+ */
+const canvasLink = createCanvasLink({
+  origin: () => registryOrigin(),
+  credential: () => {
+    const account = accounts.account()
+    if (!account || !account.workspacesReachable) return null
+    const session = account.session
+    if (!session || session.exp <= Date.now()) return null
+    return { token: session.token, deviceId: account.deviceId }
+  },
+  log: (message) => console.error(`[cookrew] ${message}`)
+})
+const canvasBridge = createCanvasBridge({
+  send: (line) => canvasLink.send(line),
+  dial: loopbackDialer(MOBILE_PORT),
+  log: (message) => console.error(`[cookrew] ${message}`)
+})
+canvasLink.onFrame(canvasBridge.frame)
+// A line that ended takes every exchange riding it with it; a local request
+// left running would be an event stream nobody will ever read again.
+canvasLink.onDrop(canvasBridge.reset)
 
 /**
  * SERVING STILL PICKS ITS HANDLE FROM THE ENVIRONMENT. Phase 6 migrates
@@ -4432,13 +4468,21 @@ app.whenReady().then(() => {
     account: () => accounts.account(),
     endpoints: () => mobileEndpointList(),
     certFp: () => activeCertFingerprint(),
-    // Relay serving is up only when the environment pointed this Mac at a
-    // registry AND a handle; anything less and there is no uplink to claim.
-    relay: () => relayServing !== null,
+    // TRUE ONLY WHILE THE LINE IS ACTUALLY HELD. `held()` is ready-received
+    // and neither aborted nor closed — a card claiming a relay that is not
+    // carrying sends a phone down a path that receives every request and
+    // answers none. (The door relay is a different thing entirely: it carries
+    // a served team, not this Mac's canvas.)
+    relay: () => canvasLink.held(),
     workspaces: () => store.list().workspaces.map((w) => ({ id: w.id, name: w.name })),
     register: (workspaces, reach) => accounts.registerDesktop(workspaces, reach),
     log: (message) => console.error(`[cookrew] ${message}`)
   })
+  // The line's state IS half the card, so a line that comes up or goes down
+  // republishes: without this a Mac that dialled out after boot would sit
+  // advertising `relay: false` until the next network change.
+  canvasLink.onChange(() => void reachPublisher?.republish('relay link').catch(() => undefined))
+  canvasLink.start()
   void reachPublisher.republish('boot').catch(() => undefined)
   // The addresses move without anyone asking: a laptop lid, a new Wi-Fi, a
   // Tailscale that finally came up. Polling is the only honest way to notice.
@@ -4477,6 +4521,11 @@ app.on('before-quit', (event) => {
   // deliveries) and await the bounded TERM→KILL settlements (Sol r10).
   defaultProducerLease().retireAll()
   browserCast.shutdown()
+  // The line goes down BEFORE the app does, so the registry stops handing the
+  // owner's phone a name whose Mac is quitting — a downlink the process drops
+  // silently is a relay that claims this desktop for as long as it takes the
+  // pulse to notice.
+  canvasLink.stop()
   store.flush()
   events.flush()
   sessionSync.dispose()
@@ -4605,7 +4654,12 @@ function registerIpc(handlers: RestoreHandlers): void {
       list: () => admittedDevices.list(),
       forget: (deviceId) => admittedDevices.forget(deviceId)
     },
-    publishReach: (reason) => void reachPublisher?.republish(reason).catch(() => undefined),
+    publishReach: (reason) => {
+      // The reachability toggle and a fresh claim both land here, and both
+      // change whether there is a line to hold at all.
+      canvasLink.refresh()
+      void reachPublisher?.republish(reason).catch(() => undefined)
+    },
     // SAVE AS FILE. The dialog lives here because account-ipc.ts must stay
     // free of Electron; the CODES come from main's own memory, never from the
     // call, so the renderer chooses the file and nothing else. 0600, because

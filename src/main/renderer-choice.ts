@@ -42,6 +42,15 @@ export interface RendererChoice {
   builtAvailable: boolean
   /** Explicit `?renderer=` override from the client, when present. */
   requested?: RendererSource | null
+  /**
+   * The peer is loopback only because the RELAY BRIDGE is loopback.
+   *
+   * A relayed phone reaches this server from 127.0.0.1 — the bridge dials it
+   * in-process — so the address says "local" about the most remote client
+   * there is, and the live module graph is exactly the payload a relay cannot
+   * carry. The bridge sets a marker; this is where it is honoured.
+   */
+  viaRelay?: boolean
 }
 
 /** `::ffff:100.68.81.64` → `100.68.81.64`; dual-stack peers arrive mapped. */
@@ -63,6 +72,7 @@ export function rendererSourceFor(choice: RendererChoice): RendererSource {
   if (!choice.devAvailable) return 'built'
   if (!choice.builtAvailable) return 'dev'
   if (choice.requested === 'dev' || choice.requested === 'built') return choice.requested
+  if (choice.viaRelay === true) return 'built'
   const peer = choice.remoteAddress ? unmap(choice.remoteAddress) : ''
   return isLoopback(peer) ? 'dev' : 'built'
 }

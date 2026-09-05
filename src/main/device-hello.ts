@@ -94,14 +94,31 @@ export const helloAnswer = (account: AccountFile | null, nonce: string | null): 
  * ambient authority rides along; and it is written here rather than in the
  * shared respondJson, so nothing else can inherit it by accident.
  */
+/**
+ * THIS MAC'S OWN OTHER ADDRESSES, and why they are the second exception.
+ *
+ * Live path switching (phase 3) is a companion served over the TAILNET asking
+ * a LAN address of the SAME Mac whether it is the same Mac. The asking page's
+ * origin is then `https://100.x.x.x:8643` — not the registry — so with one
+ * allowed origin the answer is unreadable and the phone can never learn that
+ * the better path is there. It would stay on the slow one forever, which is
+ * the whole thing the badge exists to avoid.
+ *
+ * It is still as narrow as it can be: exact origins this server ITSELF
+ * advertises, echoed only on match, and still no `allow-credentials` — so no
+ * cookie and no ambient authority rides along, on any of them.
+ */
 export const helloCorsHeaders = (
   requestOrigin: string | undefined,
-  registryOrigin: string
+  registryOrigin: string,
+  selfOrigins: readonly string[] = []
 ): Record<string, string> => {
-  const allowed = registryOrigin.replace(/\/+$/, '')
+  const trim = (origin: string): string => origin.replace(/\/+$/, '')
+  const allowed = new Set([trim(registryOrigin), ...selfOrigins.map(trim)])
   const headers: Record<string, string> = { vary: 'origin' }
-  if (requestOrigin && requestOrigin.replace(/\/+$/, '') === allowed) {
-    headers['access-control-allow-origin'] = allowed
+  const asked = requestOrigin ? trim(requestOrigin) : null
+  if (asked && allowed.has(asked)) {
+    headers['access-control-allow-origin'] = asked
     headers['access-control-allow-methods'] = 'GET, OPTIONS'
     headers['access-control-allow-headers'] = 'content-type'
     headers['access-control-max-age'] = '600'
