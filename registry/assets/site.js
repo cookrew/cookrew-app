@@ -592,6 +592,7 @@
         if (out.status === 401 && out.body?.error === 'second_factor' && window.cookrewFactors) {
           window.cookrewFactors.ladder({ dialog, step: out.body, username, device })
           return
+        }
         // A NAME FROM BEFORE PASSWORDS, either way it is met: REGISTER is
         // told so by the 409, and SIGN IN finds out by asking, because a
         // legacy name refuses a password with the same 401 as a typo.
@@ -651,9 +652,34 @@
       void signInFlow()
       return
     }
+    if (dialog.open) return
     dialog.showModal()
     $('acct-username')?.focus()
   }
+
+  /**
+   * #account OPENS THE SHEET, on any page that carries it.
+   *
+   * The front page is a DOCUMENT — no script, by its own CSP — so its SIGN IN
+   * cannot open anything; it links to `/market#account` instead, and the
+   * market page is where the sheet actually lives. Without this the link
+   * landed on the marketplace with nothing happening, which reads as a broken
+   * button rather than as a page that scrolled somewhere.
+   *
+   * `hashchange` as well as load, because a second click on the same link
+   * from the same page changes nothing about the URL the browser will report.
+   */
+  const SHEET_HASH = /^#(account|signin)$/
+  const openFromHash = async () => {
+    if (!SHEET_HASH.test(location.hash)) return
+    // Somebody already signed in does not want to be asked again: the same
+    // link means "my account", and for them that page is /me.
+    const out = await v2('GET', '/v2/me').catch(() => ({ status: 0 }))
+    if (out.status === 200 && out.body?.username) location.assign('/me')
+    else openAccountSheet()
+  }
+  window.addEventListener('hashchange', () => void openFromHash())
+  void openFromHash()
 
   /* ── /me: revoke, sign out, recovery codes, display name ───────────────── */
   const me = $('me')

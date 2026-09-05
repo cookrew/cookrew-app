@@ -21,6 +21,15 @@ import type { V2Desktop } from './v2-accounts'
 export const PAIR_SENTENCE = 'Open the avatar on the Mac → Pair a phone. Then:'
 /** What a desktop says when the six characters were yesterday's. */
 export const WRONG_KEY_SENTENCE = 'Not this Mac’s key — it changes every two minutes.'
+/**
+ * What a desktop says when the link named the MAC where the phone should be.
+ * A canvas token names both ends, so a link built with the wrong end is
+ * refused before the key is even looked at — and the reader needs to know it
+ * was the link and not their key, or they will retype a key that was fine.
+ */
+export const WRONG_DEVICE_SENTENCE = 'That link named the Mac, not the phone — open it again from cookrew.dev.'
+/** What the six-character field says when what was typed is not six characters. */
+export const KEY_SHAPE_SENTENCE = 'Six characters, letters and digits — the ones shown beside the QR.'
 
 const BADGES: readonly [string, string, string][] = [
   ['probing', '◌ PROBING', 'busy'],
@@ -55,7 +64,9 @@ function desktopRow(desktop: V2Desktop): string {
 <button class="btn sm primary" data-open-desktop="${id}" hidden>OPEN</button>
 <button class="btn sm" data-scan="${id}" hidden>SCAN QR</button>
 <button class="btn sm" data-type-key="${id}" hidden>TYPE KEY</button>
-<button class="btn sm" data-forget-pair="${id}" hidden>FORGET KEY</button></span></li>`
+<button class="btn sm" data-forget-pair="${id}" hidden>FORGET KEY</button>
+<span class="pair-key" data-key-form="${id}" hidden><input class="pair-input" data-key-input="${id}" maxlength="6" size="6" spellcheck="false" autocomplete="one-time-code" autocapitalize="characters" placeholder="7KQ2M8" aria-label="The six characters beside the QR on the Mac"><button class="btn sm primary" data-key-link="${id}">LINK</button></span></span>
+<span class="meta" data-key-note hidden>${KEY_SHAPE_SENTENCE}</span></li>`
 }
 
 /**
@@ -71,6 +82,7 @@ export function desktopsSection(desktops: readonly V2Desktop[]): string {
   return `<h2 style="margin-top:30px">Desktops</h2>
 <p class="meta">Names, ids and addresses only — cookrew.dev never holds what is on a canvas. The badge is the path this browser found just now: LAN, then your tailnet, then the relay.</p>
 <p class="meta" id="reach-refused" hidden>${WRONG_KEY_SENTENCE}</p>
+<p class="meta" id="reach-refused-device" hidden>${WRONG_DEVICE_SENTENCE}</p>
 <ul class="doors me-list" id="me-desktops">${rows}</ul>`
 }
 
