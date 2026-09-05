@@ -1,4 +1,7 @@
+import type { AdmittedDevice } from './admitted-devices'
+import type { PairingKeyRing } from './pairing-key'
 import type { AccountStatus, AccountResult, UsernameCheck } from '../shared/account-v2'
+import type { PairingKeyHandout } from '../shared/account-v2'
 import type { AccountDevice, AccountProfile } from '../shared/account-v2'
 import type { Accounts } from './account-v2'
 import type { IdleLock, UnlockOutcome } from './lock'
@@ -29,6 +32,19 @@ export interface AccountIpcDeps {
   envUsername: string | null
   /** This Mac's workspaces, by id and name — never their content (P1). */
   workspaces: () => readonly { id: string; name: string }[]
+  /**
+   * The rotating pairing key shown in the popout. Owner-only like everything
+   * else here, and for a sharper reason: it is a live credential for two
+   * minutes, and any page that could read it could pair itself.
+   */
+  pairing?: PairingKeyRing
+  /** Phones this Mac has admitted, listed beside the registry's devices. */
+  admitted?: {
+    list: () => readonly AdmittedDevice[]
+    forget: (deviceId: string) => boolean
+  }
+  /** Republish the reach card — the reachability toggle's other half. */
+  publishReach?: (reason: string) => void
 }
 
 /** An IPC handler as this module writes them: args in, a value or promise out. */
@@ -54,6 +70,9 @@ export const ACCOUNT_CHANNELS = [
   'account:setLock',
   'account:setProfile',
   'account:workspacesReachable',
+  'account:pairingKey',
+  'account:admittedDevices',
+  'account:forgetAdmitted',
 ] as const
 
 export type AccountChannel = (typeof ACCOUNT_CHANNELS)[number]
@@ -173,9 +192,42 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
       deps.accounts.setWorkspacesReachable(on === true)
       // Re-file the desktop so the change reaches cookrew.dev now rather than
       // at the next boot — the toggle's promise is about what the phone sees.
-      void deps.accounts.registerDesktop(deps.workspaces()).catch(() => undefined)
+      // With reach wired, the publisher does the filing so the addresses go up
+      // with the workspaces; without it, the plain register still happens.
+      if (deps.publishReach) deps.publishReach('reachable toggled')
+      else void deps.accounts.registerDesktop(deps.workspaces()).catch(() => undefined)
       return accountStatus(deps)
     },
+    /**
+     * The popout's key. Handing out the DEVICE ID beside it is deliberate —
+     * the QR carries both, and the phone needs the id to know which of the
+     * account's desktops it just pointed at. No URL and no token: the phone
+     * is already signed in at cookrew.dev, and an address on a screen is the
+     * thing v2 exists to stop printing.
+     *
+     * Null when there is no account: a Mac with no username has no device id
+     * to name, and the popout falls back to the legacy URL QR.
+     */
+    'account:pairingKey': (): PairingKeyHandout | null => {
+      const account = deps.accounts.account()
+      if (!account || !deps.pairing) return null
+      const current = deps.pairing.current()
+      return {
+        deviceId: account.deviceId,
+        key: current.key,
+        expiresAt: current.expiresAt,
+        desktopName: account.name,
+      }
+    },
+    'account:admittedDevices': (): readonly AdmittedDevice[] => deps.admitted?.list() ?? [],
+    /**
+     * FORGET is local and says so. It drops the admission on this Mac; it does
+     * not revoke the phone at cookrew.dev, which is a heavier act with its own
+     * button. The phone stays attached to the account and has to be admitted
+     * here again.
+     */
+    'account:forgetAdmitted': (deviceId: unknown): boolean =>
+      typeof deviceId === 'string' ? (deps.admitted?.forget(deviceId) ?? false) : false,
   }
 }
 

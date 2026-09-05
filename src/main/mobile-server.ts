@@ -48,6 +48,8 @@ import { sendBody } from './http-compress'
 import { rendererSourceFor, staleBuildNotice } from './renderer-choice'
 import { fetchRendererDevResource, rendererDevPathAllowed } from './renderer-dev-proxy'
 import { isViteHmrUpgrade, proxyViteHmrUpgrade } from './hmr-proxy'
+import { handleIdentityRoutes, type MobileIdentityDeps } from './mobile-identity-routes'
+import { certFingerprint } from './reach'
 
 // Re-exported so existing importers keep their import path; the constants
 // themselves live in an Electron-free module so pure code can use them.
@@ -73,6 +75,17 @@ let activeWallToken: string | null = null
 
 /** SAN list of the cert actually in use; empty until HTTPS starts. */
 let certSans: string[] = []
+
+/**
+ * SHA-256 of the DER of the cert actually in use, null until HTTPS starts.
+ *
+ * Kept at module scope because the cert Buffer was function-local and the
+ * reach card needs the fingerprint of the cert BEING SERVED, not of whatever
+ * ensureCert would return if asked again. watchTailnetCert can swap the
+ * context mid-run, and a published pin that outlives the cert it names turns
+ * every direct path into a refusal.
+ */
+let activeCertFp: string | null = null
 
 /** Active power-save-blocker id, boxed so tests can reset it. */
 const powerBlockerId: { current: number | null } = { current: null }
@@ -128,6 +141,12 @@ export interface MobileServerDeps {
   browserThumb: (browserId: string) => ThumbFrame | undefined
   /** Whether browser nodes are backed by the node-owned headless runtime. */
   interactiveBrowserEnabled: () => boolean
+  /**
+   * Identity v2: `/api/hello` and the `?open=` admission. Absent = neither
+   * route exists and the legacy `?token=` pairing is the only way in, which
+   * is exactly the state of a desktop with no account.
+   */
+  identity?: MobileIdentityDeps
   /**
    * Whether workspace sessions are multi-instance. Gates slug routing: off,
    * /<slug>/... is not a route and every path keeps its existing meaning.
@@ -229,6 +248,7 @@ export function startMobileServer(deps: MobileServerDeps): void {
   const cert = ensureCert(advertisedCertHosts())
   if (cert) {
     certSans = sansOf(new X509Certificate(cert.cert).subjectAltName)
+    activeCertFp = certFingerprint(cert.cert)
     const secure = https.createServer({ key: cert.key, cert: cert.cert }, requestHandler)
     // Long keep-alive matters MOST here: this is the server the phone reaches
     // over the tailnet, where a re-handshake is a visible typing stall.
@@ -320,6 +340,7 @@ function watchTailnetCert(secure: https.Server): void {
         const reissued = ensureCert(hosts)
         if (!reissued) return
         certSans = sansOf(new X509Certificate(reissued.cert).subjectAltName)
+        activeCertFp = certFingerprint(reissued.cert)
         secure.setSecureContext({ key: reissued.key, cert: reissued.cert })
         console.error(`Mobile cert reissued for ${missing.join(', ')} — no restart needed`)
       })
@@ -444,6 +465,20 @@ export function mobileEndpointList(): MobileEndpoint[] {
 
 export function mobileUrls(): string[] {
   return mobileEndpointList().map((endpoint) => endpoint.url)
+}
+
+/**
+ * The fingerprint a phone will see on the TLS handshake, or null when HTTPS
+ * never came up. This is what the reach card pins, so a direct connection is
+ * never trust-on-first-use.
+ */
+export function activeCertFingerprint(): string | null {
+  return httpsReady ? activeCertFp : null
+}
+
+/** The credential a paired phone holds; null before the server starts. */
+export function activePairingTokenValue(): string | null {
+  return activePairingToken
 }
 
 /**
@@ -784,6 +819,14 @@ async function handle(
         '(or start the dev server) and reload.</p>'
     )
   }
+
+  // Identity v2, ABOVE the pairing gate on purpose: both routes exist for a
+  // phone that does not hold the pairing token yet. `/api/hello` proves this
+  // Mac is the device the registry named; `/?open=` admits a phone that
+  // arrived from cookrew.dev and hands it the same session a legacy pairing
+  // would. Neither answers without an account, so nothing changes for a
+  // desktop that has not claimed a username.
+  if (await handleIdentityRoutes(request, response, url, deps.identity)) return
 
   if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
     // Loopback (and ?renderer=dev) uses Vite's current transforms; every

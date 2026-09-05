@@ -155,3 +155,29 @@ export type AccountRefusal =
  */
 export type AccountResult<T> =
   { ok: true; value: T } | { ok: false; reason: AccountRefusal; message?: string }
+
+/**
+ * What the pairing popout is handed. No URL and no token by construction:
+ * everything the phone needs from this Mac is the device id and six
+ * characters, and everything else it needs it already has from cookrew.dev.
+ */
+export interface PairingKeyHandout {
+  deviceId: string
+  key: string
+  expiresAt: number
+  desktopName: string
+}
+
+/**
+ * A phone this Mac has admitted, as the Devices tab sees it.
+ *
+ * Deliberately NOT an AccountDevice: those are the account's devices, known to
+ * cookrew.dev and revocable there. This is a local fact — "I open for this
+ * phone" — and forgetting one here does not revoke it at the registry.
+ */
+export interface AdmittedPhone {
+  deviceId: string
+  name?: string
+  admittedAt: number
+  lastSeenAt: number
+}

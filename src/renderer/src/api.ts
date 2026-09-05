@@ -32,6 +32,8 @@ import type {
   AccountProfile,
   AccountResult,
   AccountStatus,
+  AdmittedPhone,
+  PairingKeyHandout,
   UsernameCheck,
 } from "../../shared/account-v2";
 
@@ -518,6 +520,12 @@ export interface CookrewApi {
     avatar?: string | null;
   }) => Promise<AccountResult<AccountProfile>>;
   accountWorkspacesReachable?: (on: boolean) => Promise<AccountStatus>;
+  /** The popout's rotating key, or null when this Mac has no account. */
+  accountPairingKey?: () => Promise<PairingKeyHandout | null>;
+  /** Phones this Mac has let in, listed beside the registry's devices. */
+  accountAdmittedDevices?: () => Promise<readonly AdmittedPhone[]>;
+  /** Drops the admission HERE. Does not revoke the phone at cookrew.dev. */
+  accountForgetAdmitted?: (deviceId: string) => Promise<boolean>;
   onAccountLocked?: (cb: (locked: boolean) => void) => () => void;
   /**
    * Re-establish the push channel if it has died. Remote clients only: a
