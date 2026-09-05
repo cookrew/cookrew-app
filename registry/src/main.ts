@@ -17,6 +17,10 @@
 //   GET  /v1/log?from=&preset=       transparency log, replayable; preset narrows it (R20)
 //   POST /v1/identity/register       enrol a credential (TOFU)
 //   POST /v1/identity/assert         verify a ceremony, mint a short-lived token
+//   POST /v2/accounts                claim a username with a password (identity v2)
+//   POST /v2/sessions                sign in; the server sets cr_session HttpOnly
+//   GET  /v2/me                      the reader's devices, desktops and security
+//   GET  /me                         the same, as a page
 //
 // Flags: --port --data --seed --origin --chain --terms-ttl. The origin defaults to the port that is
 // bound; pass it only to serve a ceremony on a host other than localhost, and a
@@ -38,6 +42,7 @@ import { StarStore } from './stars'
 import { ReleaseCache } from './releases'
 import { CommitsCache } from './github-commits'
 import { Pulse } from './pulse'
+import { createV2 } from './v2-routes'
 import { buildManifest, signManifest } from '../../src/main/preset-publish'
 import { scrubForPublish } from '../../src/main/preset-scrub'
 import type { TeamSnapshot } from '../../src/main/teams'
@@ -220,6 +225,12 @@ createRegistry({
   releases: new ReleaseCache(),
   commits: new CommitsCache(),
   pulse: new Pulse(DATA),
+  // IDENTITY v2 — a username and a password, with devices attached. Built
+  // from the same data directory as everything else, and sharing the token
+  // key identity.ts already writes there, so one key signs every token this
+  // registry mints. A torn account file refuses at boot rather than starting
+  // with every name looking free.
+  v2: createV2(DATA),
   note: (message) => console.error(message),
   authorize: makeAuthorize(store, identity, pricing)
 }).listen(PORT, () => {

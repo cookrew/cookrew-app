@@ -19,7 +19,8 @@ import type { CommitsCache } from './github-commits'
 import { respondPage } from './site-shell'
 import type { StarStore } from './stars'
 import type { Release, ReleaseCache } from './releases'
-import { handleV2Route, v2AccountOf, type V2Identity } from './v2-routes'
+import { handleV2Route, signedIn, v2AccountOf, type V2Identity } from './v2-routes'
+import { mePage } from './site-account'
 
 /**
  * REGISTRY SERVER (P2-A1) — routes only. Every answer is chosen by a decision
@@ -738,6 +739,19 @@ export function createRegistry(deps: RegistryDeps): Server {
       })
     )
       return
+
+    // GET /me — the reader's own account: devices, security, desktops. A page
+    // rather than a JSON route because it is where a person GOES; signed out
+    // it is a 401 that is still a page, since somebody following a link
+    // deserves a sentence and a way in.
+    if (deps.v2 && method === 'GET' && parts.length === 1 && parts[0] === 'me') {
+      const signed = signedIn(request, deps.v2)
+      respondPage(
+        response,
+        mePage(signed === null ? null : { account: signed.account, currentDeviceId: signed.claims.dev })
+      )
+      return
+    }
 
     // ── THE PUBLIC FACE, last ────────────────────────────────────────────
     //

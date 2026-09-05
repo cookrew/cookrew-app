@@ -301,7 +301,11 @@
       navigator.clipboard.writeText(el.dataset.copy).then(() => toast('Address copied. Paste it into Cookrew → Import a team.'))
     } else if (el.dataset.signin !== undefined) {
       event.preventDefault()
-      void signInFlow()
+      // The header's button is the v2 sheet now. The v1 ceremony is still
+      // reachable — line.js calls it by name when a door needs the older
+      // key-based sign-in — but it is no longer what a person clicks.
+      if (el.dataset.signin === 'me') location.assign('/me')
+      else openAccountSheet()
     }
   })
 
@@ -339,6 +343,244 @@
       sign: async (text) => b64u(await sign(account, enc.encode(text)))
     }
   }
+  /* ── identity v2: a username, a password, and this browser as a device ── */
+  /*
+   * The v1 flow above is a handle plus a key, with no password and no way
+   * back if the key is lost. v2 is what a PERSON signs into: the name is
+   * claimed once with a password, and this browser is one device attached to
+   * it. Both live here — the old one still opens doors whose apps predate
+   * accounts, and it is what `window.cookrewAccount.signIn` still means.
+   *
+   * The session token never touches this script. The sheet posts to
+   * /v2/sessions and the SERVER sets `cr_session` HttpOnly; a token a script
+   * can read is a token a script can leak.
+   */
+  const loadDevice = () => idb('readonly', (s) => s.get('device'))
+  const saveDevice = (value) => idb('readwrite', (s) => s.put(value, 'device'))
+
+  /** "Chrome on macOS" — what the Devices list will call this browser. */
+  function browserName() {
+    const ua = navigator.userAgent
+    const engine = /Firefox\//.test(ua) ? 'Firefox' : /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Browser'
+    const os = /Mac OS X/.test(ua) ? 'macOS' : /Windows/.test(ua) ? 'Windows' : /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Linux/.test(ua) ? 'Linux' : 'this computer'
+    return `${engine} on ${os}`
+  }
+
+  /** This browser's device: a uuid and a non-extractable key, minted once. */
+  async function deviceIdentity() {
+    const held = await loadDevice()
+    if (held) return held
+    const key = await mintKey()
+    const full = await crypto.subtle.exportKey('jwk', key.pair.publicKey)
+    const jwk = key.alg === 'Ed25519' ? { kty: full.kty, crv: full.crv, x: full.x } : { kty: full.kty, crv: full.crv, x: full.x, y: full.y }
+    const device = { id: crypto.randomUUID(), kind: 'browser', name: browserName(), jwk, pair: key.pair }
+    await saveDevice(device)
+    return device
+  }
+  const devicePayload = (d) => ({ id: d.id, kind: d.kind, name: d.name, jwk: d.jwk })
+
+  const v2 = async (method, path, body) => {
+    const res = await fetch(path, {
+      method,
+      credentials: 'same-origin',
+      headers: body === undefined ? {} : { 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body)
+    })
+    let out = null
+    try {
+      out = res.status === 204 ? {} : await res.json()
+    } catch {
+      out = null
+    }
+    return { status: res.status, body: out }
+  }
+
+  const USERNAME = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/
+  const chip = (id, text, tone) => {
+    const el = $(id)
+    if (!el) return
+    el.textContent = text
+    el.className = `chip${tone ? ` ${tone}` : ''}`
+    el.hidden = text === ''
+  }
+
+  function accountSheet() {
+    const dialog = $('account-sheet')
+    if (!dialog || dialog.dataset.wired === '1') return dialog
+    dialog.dataset.wired = '1'
+    let mode = 'signin'
+    let checking = 0
+
+    const setMode = (next) => {
+      mode = next
+      for (const tab of dialog.querySelectorAll('[data-acct-tab]')) {
+        const on = tab.dataset.acctTab === next
+        tab.classList.toggle('primary', on)
+        tab.setAttribute('aria-selected', on ? 'true' : 'false')
+      }
+      $('acct-confirm-row').hidden = next !== 'register'
+      $('acct-password').setAttribute('autocomplete', next === 'register' ? 'new-password' : 'current-password')
+      $('acct-submit').textContent = next === 'register' ? 'Create account' : 'Continue'
+      $('acct-lede').textContent =
+        next === 'register'
+          ? 'This browser becomes your first device. A username and a password — the site never asks for an email.'
+          : 'A username and a password. The site never asks for an email.'
+      $('acct-message').textContent = ''
+      chip('acct-username-note', '')
+      chip('acct-confirm-note', '')
+    }
+
+    const checkName = async () => {
+      const name = $('acct-username').value.trim().toLowerCase()
+      if (mode !== 'register' || name === '') return chip('acct-username-note', '')
+      if (!USERNAME.test(name)) return chip('acct-username-note', 'invalid', 'no')
+      const mine = ++checking
+      try {
+        const res = await fetch(`/v2/accounts/${encodeURIComponent(name)}`, { method: 'HEAD' })
+        if (mine !== checking) return
+        chip('acct-username-note', res.status === 200 ? 'taken' : 'free', res.status === 200 ? 'no' : 'ok')
+        $('acct-message').textContent =
+          res.status === 200 ? `@${name} is someone else’s. Try another.` : 'Yours to take.'
+      } catch {
+        if (mine !== checking) return
+        chip('acct-username-note', 'unknown')
+        $('acct-message').textContent = 'cookrew.dev did not answer, so this name cannot be checked yet.'
+      }
+    }
+
+    const checkPassword = () => {
+      const value = $('acct-password').value
+      if (value === '') return chip('acct-password-note', '')
+      chip('acct-password-note', value.length < 12 ? 'weak' : 'strong', value.length < 12 ? 'no' : 'ok')
+      if (mode === 'register' && value.length < 12) {
+        $('acct-message').textContent = 'Too easy to guess. Use 12 characters or more; a sentence works.'
+      }
+      if ($('acct-confirm').value !== '') {
+        const same = $('acct-confirm').value === value
+        chip('acct-confirm-note', same ? 'matches' : 'no match', same ? 'ok' : 'no')
+      }
+    }
+
+    let typing
+    dialog.addEventListener('input', (event) => {
+      if (event.target.id === 'acct-username') {
+        clearTimeout(typing)
+        typing = setTimeout(checkName, 280)
+      } else if (event.target.id === 'acct-password' || event.target.id === 'acct-confirm') {
+        checkPassword()
+      }
+    })
+    dialog.addEventListener('click', (event) => {
+      const tab = event.target.closest('[data-acct-tab]')
+      if (tab) {
+        event.preventDefault()
+        setMode(tab.dataset.acctTab)
+      }
+    })
+    $('acct-submit').addEventListener('click', (event) => {
+      event.preventDefault()
+      void submit()
+    })
+
+    async function submit() {
+      const username = $('acct-username').value.trim().toLowerCase()
+      const password = $('acct-password').value
+      const say = (text) => ($('acct-message').textContent = text)
+      if (!USERNAME.test(username)) return say('A username is lowercase letters, digits and dashes, up to 32 of them.')
+      if (password.length < 12) return say('Too easy to guess. Use 12 characters or more; a sentence works.')
+      if (mode === 'register' && $('acct-confirm').value !== password) return say('The two passwords are not the same.')
+      $('acct-submit').disabled = true
+      say(mode === 'register' ? `Claiming @${username}…` : 'Signing in…')
+      try {
+        const device = devicePayload(await deviceIdentity())
+        const out =
+          mode === 'register'
+            ? await v2('POST', '/v2/accounts', { username, password, device })
+            : await v2('POST', '/v2/sessions', { username, password, device })
+        if (out.status === 201) {
+          dialog.close()
+          location.assign('/me')
+          return
+        }
+        say(out.body?.message ?? 'That did not go through. Try again in a moment.')
+      } catch (error) {
+        say('This browser could not reach cookrew.dev. Nothing local stops.')
+      } finally {
+        $('acct-submit').disabled = false
+      }
+    }
+
+    setMode('signin')
+    return dialog
+  }
+
+  function openAccountSheet() {
+    const dialog = accountSheet()
+    if (!dialog) {
+      void signInFlow()
+      return
+    }
+    dialog.showModal()
+    $('acct-username')?.focus()
+  }
+
+  /* ── /me: revoke, sign out, recovery codes, display name ───────────────── */
+  const me = $('me')
+  if (me) {
+    const refresh = () => location.reload()
+    document.addEventListener('click', (event) => {
+      const el = event.target.closest('[data-revoke],[data-signout],[data-recovery],[data-edit-name],[data-password]')
+      if (!el) return
+      event.preventDefault()
+      if (el.dataset.revoke !== undefined) {
+        const own = el.dataset.current === '1'
+        const question = own
+          ? 'Sign this browser out and detach it from the account?'
+          : 'This device stops opening the account within a minute. It keeps working on its own Wi-Fi until it is paired again. Revoke it?'
+        if (!confirm(question)) return
+        void v2('DELETE', `/v2/me/devices/${encodeURIComponent(el.dataset.revoke)}`).then((out) => {
+          if (out.status === 204) return own ? location.assign('/') : refresh()
+          toast(out.body?.message ?? 'That device could not be revoked.', 6000)
+        })
+      } else if (el.dataset.signout !== undefined) {
+        void v2('POST', '/v2/sessions/current').then(() => location.assign('/'))
+      } else if (el.dataset.recovery !== undefined) {
+        if (!confirm('A new set of eight codes replaces any you already have. Show them?')) return
+        void v2('POST', '/v2/me/recovery-codes', {}).then((out) => {
+          if (out.status !== 201) return toast(out.body?.message ?? 'The codes could not be made.', 6000)
+          const box = $('me-codes')
+          box.textContent = out.body.codes.join('\n')
+          box.hidden = false
+          $('me-codes-note').textContent = 'Shown once. Copy them somewhere safe; each opens the account exactly once.'
+        })
+      } else if (el.dataset.editName !== undefined) {
+        const displayName = prompt('Display name (up to 40 characters)', '')
+        if (displayName === null) return
+        void v2('PATCH', '/v2/me', { displayName }).then((out) => {
+          if (out.status === 200) return refresh()
+          toast(out.body?.message ?? 'That name was not accepted.', 6000)
+        })
+      } else if (el.dataset.password !== undefined) {
+        const current = prompt('Your current password')
+        if (current === null) return
+        const next = prompt('The new one — at least 12 characters')
+        if (next === null) return
+        void v2('POST', '/v2/me/password', { current, next }).then((out) => {
+          toast(out.status === 204 ? 'Password changed.' : (out.body?.message ?? 'That did not go through.'), 6000)
+        })
+      }
+    })
+  }
+
+  /** Who the header should name: a v2 session first, then the v1 key. */
+  void v2('GET', '/v2/me').then((out) => {
+    if (out.status !== 200 || !out.body?.username) return
+    const button = $('signin')
+    if (!button) return
+    button.textContent = `@${out.body.username}`
+    button.dataset.signin = 'me'
+  })
+
   /* ── the crew builder (/start) ─────────────────────────────────────────── */
   const builder = $('crew-builder')
   if (builder) {
@@ -370,5 +612,13 @@
     render()
   }
 
-  window.cookrewAccount = { token, handle: async () => (await loadAccount())?.handle ?? null, signIn: signInFlow, toast, doorKey }
+  window.cookrewAccount = {
+    token,
+    handle: async () => (await loadAccount())?.handle ?? null,
+    signIn: signInFlow,
+    /** The v2 sheet — a username and a password. What the header opens. */
+    account: openAccountSheet,
+    toast,
+    doorKey
+  }
 })()
