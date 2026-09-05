@@ -1,19 +1,11 @@
 /* cookrew.dev — the site's one script: account, stars, deep links, copy.
  *
- * ACCOUNT. A cookrew.dev account is a HANDLE with DEVICES, and this browser is
- * one device of it. The key never leaves the browser (a non-extractable
- * WebCrypto key in IndexedDB); signing in is the registry's own ceremony — the
- * same one the app performs with node:crypto — and it mints a short-lived
- * token. There is no password and nothing to reset.
- *
- * Three ways in, and they are three different situations rather than three
- * spellings of one:
- *
- *   ENROL    a brand-new handle, with this browser as its first device.
- *   LINK     an account you already hold, using a six-character code you read
- *            off the app or your phone. This browser becomes another device.
- *   PASSKEY  a platform authenticator that some device of the account added;
- *            the account is found through it, so nothing has to be typed.
+ * ACCOUNT. A cookrew.dev account is a handle plus a key this browser holds.
+ * The key never leaves the browser (a non-extractable WebCrypto key in
+ * IndexedDB); signing in is the registry's own ceremony — the same one the
+ * app performs with node:crypto — and it mints a short-lived token. There is
+ * no password and nothing to reset: a handle is taken by the first key that
+ * enrols it, on any device.
  *
  * Exposed as window.cookrewAccount for line.js: token(scope, aud), handle().
  */
@@ -113,13 +105,10 @@
   }
 
   /* ── the ceremony ──────────────────────────────────────────────────────── */
-  const api = async (path, body, bearer) => {
+  const api = async (path, body) => {
     const res = await fetch(path, {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...(bearer ? { authorization: `Bearer ${bearer}` } : {})
-      },
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body ?? {})
     })
     let json = null
@@ -172,291 +161,85 @@
     const key = `${scope}|${aud ?? ''}`
     const held = tokens.get(key)
     if (held && (claimsOf(held)?.exp ?? 0) > Date.now() + 15_000) return held
-    // A browser signed in BY PASSKEY holds no key of its own, so every fresh
-    // token is another authenticator ceremony. That is why the cache above
-    // matters more here than anywhere else: without it, starring a team would
-    // ask for Touch ID twice.
-    const body = account.passkey
-      ? { ...(await passkeyAssertion(account.handle)), scope, ...(aud ? { aud } : {}) }
-      : await assertion(account, scope, aud)
-    const out = await api('/v1/identity/assert', body)
-    if (out.status !== 200 || !out.body?.token) throw new Error('sign-in was refused — this browser may have been revoked from the account')
+    const out = await api('/v1/identity/assert', await assertion(account, scope, aud))
+    if (out.status !== 200 || !out.body?.token) throw new Error('sign-in was refused — is this handle enrolled from another device?')
     tokens.set(key, out.body.token)
     if (scope === 'download') setCookie(out.body.token)
     else sessionStorage.removeItem('cr_refreshed')
     return out.body.token
   }
 
-  /* ── passkeys ──────────────────────────────────────────────────────────── */
-  const hasPasskeys = () => typeof window.PublicKeyCredential === 'function'
-
-  /** A real WebAuthn assertion, encoded the way the registry reads it. */
-  async function passkeyAssertion(handle) {
-    const issued = await api('/v1/identity/challenge')
-    if (issued.status !== 200 || !issued.body?.challenge) throw new Error('the registry issued no challenge')
-    const credential = await navigator.credentials.get({
-      publicKey: {
-        challenge: unb64u(issued.body.challenge),
-        rpId: location.hostname,
-        userVerification: 'preferred',
-        timeout: 60_000
-      }
-    })
-    if (!credential) throw new Error('no passkey was offered')
-    return {
-      ...(handle ? { handle } : {}),
-      credential: {
-        id: credential.id,
-        rawId: b64u(credential.rawId),
-        type: credential.type,
-        response: {
-          clientDataJSON: b64u(credential.response.clientDataJSON),
-          authenticatorData: b64u(credential.response.authenticatorData),
-          signature: b64u(credential.response.signature),
-          ...(credential.response.userHandle ? { userHandle: b64u(credential.response.userHandle) } : {})
-        }
-      }
-    }
-  }
-
-  /** Sign in with a passkey: the account is discovered, never typed. */
-  async function signInWithPasskey() {
-    const out = await api('/v1/identity/assert', { ...(await passkeyAssertion()), scope: 'download' })
-    if (out.status !== 200 || !out.body?.token) throw new Error('that passkey is not enrolled here')
-    const claims = claimsOf(out.body.token)
-    if (!claims?.sub) throw new Error('the registry answered with a token it will not explain')
-    await saveAccount({ handle: claims.sub, passkey: true })
-    tokens.set('download|', out.body.token)
-    setCookie(out.body.token)
-    return claims.sub
-  }
-
-  /** Add a platform passkey to the account this browser already holds. */
-  async function addPasskey(handle) {
-    const bearer = await token('account')
-    if (!bearer) throw new Error('sign in first')
-    const opts = await api(`/v1/accounts/@${handle}/passkey/options`, {}, bearer)
-    if (opts.status !== 200 || !opts.body?.challenge) throw new Error('the registry refused to start the ceremony')
-    const created = await navigator.credentials.create({
-      publicKey: {
-        ...opts.body,
-        challenge: unb64u(opts.body.challenge),
-        user: { ...opts.body.user, id: unb64u(opts.body.user.id) }
-      }
-    })
-    if (!created) throw new Error('no passkey was created')
-    const res = await api(
-      `/v1/accounts/@${handle}/passkey`,
-      {
-        name: `${location.hostname} passkey`,
-        credential: {
-          id: created.id,
-          rawId: b64u(created.rawId),
-          response: {
-            clientDataJSON: b64u(created.response.clientDataJSON),
-            attestationObject: b64u(created.response.attestationObject)
-          }
-        }
-      },
-      bearer
-    )
-    if (res.status !== 201) throw new Error(`the registry refused the passkey (${res.status})`)
-    return res.body
-  }
-
-  const cleanHandle = (handle) => {
-    const clean = String(handle ?? '').trim().toLowerCase().replace(/^@/, '')
-    if (!/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/.test(clean)) {
-      throw new Error('a handle is 1–32 lowercase letters, digits or dashes')
-    }
-    return clean
-  }
-
-  /** This browser as a DEVICE: a fresh key, a UUID it chooses, a readable name. */
-  async function newDevice() {
-    const key = await mintKey()
-    const jwk = await crypto.subtle.exportKey('jwk', key.pair.publicKey)
-    const publicHalf =
-      jwk.kty === 'OKP' ? { kty: jwk.kty, crv: jwk.crv, x: jwk.x } : { kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y }
-    return {
-      key,
-      device: {
-        id: crypto.randomUUID(),
-        jwk: publicHalf,
-        kind: 'browser',
-        name: `${location.hostname} browser`
-      }
-    }
-  }
-
-  /** A brand-new handle, with this browser as its first device. */
   async function enrol(handle) {
-    const clean = cleanHandle(handle)
-    const { key, device } = await newDevice()
-    const res = await api('/v1/accounts', { handle: clean, device })
-    if (res.status === 409) throw new Error(`@${clean} is already taken — link this browser with a code from a device you hold`)
+    const clean = handle.trim().toLowerCase().replace(/^@/, '')
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/.test(clean)) throw new Error('a handle is 1–32 lowercase letters, digits or dashes')
+    const key = await mintKey()
+    const publicKeyJwk = await crypto.subtle.exportKey('jwk', key.pair.publicKey)
+    const res = await api('/v1/identity/register', { credentialId: clean, publicKeyJwk })
+    if (res.status === 409) throw new Error(`@${clean} is already taken — if it is yours, it belongs to the device that enrolled it`)
     if (res.status !== 201) throw new Error(`the registry refused the enrolment (${res.status})`)
-    await saveAccount({ handle: clean, deviceId: device.id, alg: key.alg, pair: key.pair })
-    return clean
-  }
-
-  /**
-   * Join an account this browser has never seen, with a code from one that
-   * holds it. The code is the authority — this browser has no key the account
-   * knows yet, which is the entire reason the route takes no token.
-   */
-  async function linkBrowser(handle, code) {
-    const clean = cleanHandle(handle)
-    const typed = String(code ?? '').trim().toUpperCase()
-    if (!/^[A-Z2-9]{6}$/.test(typed)) throw new Error('a link code is six characters from another device')
-    const { key, device } = await newDevice()
-    const res = await api(`/v1/accounts/@${clean}/link`, { code: typed, device })
-    if (res.status === 410) throw new Error('that code has expired — ask for another, they last two minutes')
-    if (res.status !== 201) throw new Error('that code was not recognised for this handle')
-    await saveAccount({ handle: clean, deviceId: device.id, alg: key.alg, pair: key.pair })
+    await saveAccount({ handle: clean, alg: key.alg, pair: key.pair })
     return clean
   }
 
   /* ── the sign-in sheet ─────────────────────────────────────────────────── */
-  const FIELD =
-    'font:14px var(--font-mono);padding:8px 10px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink);min-width:170px'
-
-  /**
-   * The sheet is BUILT, never assembled from a string with handlers in it: the
-   * site's CSP forbids inline script, and a dialog whose buttons only work
-   * because of an onclick attribute is a sheet that silently stops working the
-   * day the policy is tightened. Every button is a form value the close handler
-   * reads.
-   */
   function sheet() {
     let dialog = $('signin-sheet')
     if (dialog) return dialog
     dialog = document.createElement('dialog')
     dialog.id = 'signin-sheet'
     dialog.className = 'card'
-    const title = document.createElement('h3')
-    title.style.marginTop = '0'
-    title.textContent = 'Your cookrew.dev account'
-    const lede = document.createElement('p')
-    lede.className = 'meta'
-    lede.id = 'signin-lede'
-    const form = document.createElement('form')
-    form.method = 'dialog'
-    form.id = 'signin-form'
-    const note = document.createElement('p')
-    note.className = 'meta'
-    note.id = 'signin-note'
-    note.style.marginTop = '10px'
-    dialog.append(title, lede, form, note)
+    dialog.innerHTML = `<h3 style="margin-top:0">Your cookrew.dev account</h3>
+<p class="meta">A handle plus a key this browser holds. No password. The first key to enrol a handle owns it.</p>
+<form method="dialog" id="signin-form"><div class="row"><input id="signin-handle" placeholder="handle" autocomplete="username" spellcheck="false" style="font:14px var(--font-mono);padding:8px 10px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink);min-width:200px"><button class="btn primary" value="enrol">Enrol this browser</button><button class="btn" value="cancel">Cancel</button></div></form>
+<p class="meta" id="signin-note" style="margin-top:10px"></p>`
     document.body.appendChild(dialog)
     return dialog
   }
 
-  const button = (value, label, primary) => {
-    const el = document.createElement('button')
-    el.className = primary ? 'btn primary' : 'btn'
-    el.value = value
-    el.textContent = label
-    return el
-  }
-
-  const field = (id, placeholder, extra) => {
-    const el = document.createElement('input')
-    el.id = id
-    el.placeholder = placeholder
-    el.spellcheck = false
-    el.setAttribute('style', FIELD)
-    if (extra) Object.assign(el, extra)
-    return el
-  }
-
-  const row = (...children) => {
-    const el = document.createElement('div')
-    el.className = 'row'
-    el.append(...children)
-    return el
-  }
-
-  /** The sheet for a browser that already holds an account. */
-  function signedInSheet(dialog, account) {
-    const form = dialog.querySelector('#signin-form')
-    form.replaceChildren()
-    const who = document.createElement('span')
-    who.className = 'chip amber'
-    who.textContent = `@${account.handle}`
-    const buttons = [who]
-    // Adding a passkey is what makes losing every device survivable, so it is
-    // offered wherever the browser can actually do it.
-    if (hasPasskeys() && !account.passkey) buttons.push(button('passkey', 'Add a passkey'))
-    buttons.push(button('out', "Forget this browser's key"), button('cancel', 'Close'))
-    form.append(row(...buttons))
-    dialog.querySelector('#signin-lede').textContent =
-      'This browser is one device of your account. Other devices can be added, and any of them can drop this one.'
-    dialog.querySelector('#signin-note').textContent =
-      'Stars and the line use this account. Forgetting the key here removes nothing from the account — revoke this device from another one.'
-  }
-
-  /** The sheet for a browser with no account: enrol, link, or a passkey. */
-  function signedOutSheet(dialog) {
-    const form = dialog.querySelector('#signin-form')
-    form.replaceChildren()
-    form.append(
-      row(field('signin-handle', 'handle', { autocomplete: 'username' }), button('enrol', 'Enrol a new handle', true)),
-      row(field('signin-code', 'link code', { maxLength: 6, autocomplete: 'one-time-code' }), button('link', 'Link this browser'))
-    )
-    if (hasPasskeys()) form.append(row(button('passkey', 'Sign in with a passkey')))
-    form.append(row(button('cancel', 'Cancel')))
-    dialog.querySelector('#signin-lede').textContent =
-      'A handle with devices. No password: this browser holds a key, and a device you already have vouches for it.'
-    dialog.querySelector('#signin-note').textContent =
-      'Already have a handle? Ask a device that holds it for a six-character code, type the handle and the code, and press Link.'
-  }
-
-  async function signedInAction(action, account) {
-    if (action === 'out') {
-      await forgetAccount()
-      tokens.clear()
-      document.cookie = 'cr_account=; Path=/; Max-Age=0'
-      location.reload()
-      return
-    }
-    if (action === 'passkey') {
-      await addPasskey(account.handle)
-      toast('Passkey added. It can sign in for this account on any device that syncs it.')
-    }
-  }
-
-  async function signedOutAction(action, dialog) {
-    const handle = dialog.querySelector('#signin-handle')?.value ?? ''
-    const code = dialog.querySelector('#signin-code')?.value ?? ''
-    if (action === 'passkey') {
-      const who = await signInWithPasskey()
-      toast(`Signed in as @${who}.`)
-    } else if (action === 'link') {
-      const who = await linkBrowser(handle, code)
-      await token('download')
-      toast(`This browser is now a device of @${who}.`)
-    } else {
-      const who = await enrol(handle)
-      await token('download')
-      toast(`Enrolled @${who}. Signed in.`)
-    }
-    setTimeout(() => location.reload(), 600)
-  }
-
   async function signInFlow() {
     const account = await loadAccount()
+    if (account) {
+      const dialog = sheet()
+      const form = dialog.querySelector('#signin-form')
+      form.replaceChildren()
+      const row = document.createElement('div')
+      row.className = 'row'
+      const who = document.createElement('span')
+      who.className = 'chip amber'
+      who.textContent = `@${account.handle}`
+      const out = document.createElement('button')
+      out.className = 'btn'
+      out.value = 'out'
+      out.textContent = "Forget this browser's key"
+      const cancel = document.createElement('button')
+      cancel.className = 'btn'
+      cancel.value = 'cancel'
+      cancel.textContent = 'Close'
+      row.append(who, out, cancel)
+      form.append(row)
+      dialog.querySelector('#signin-note').textContent = 'Stars and the line use this account. Forgetting the key here does not release the handle.'
+      dialog.showModal()
+      dialog.onclose = async () => {
+        if (dialog.returnValue === 'out') {
+          await forgetAccount()
+          tokens.clear()
+          document.cookie = 'cr_account=; Path=/; Max-Age=0'
+          location.reload()
+        }
+      }
+      return
+    }
     const dialog = sheet()
-    if (account) signedInSheet(dialog, account)
-    else signedOutSheet(dialog)
     dialog.showModal()
-    if (!account) dialog.querySelector('#signin-handle')?.focus()
+    dialog.querySelector('#signin-handle')?.focus()
     dialog.onclose = async () => {
-      const action = dialog.returnValue
-      if (action === 'cancel' || action === '') return
+      if (dialog.returnValue !== 'enrol') return
+      const handle = dialog.querySelector('#signin-handle')?.value ?? ''
       try {
-        if (account) await signedInAction(action, account)
-        else await signedOutAction(action, dialog)
+        await enrol(handle)
+        await token('download')
+        toast(`Enrolled @${handle.trim().toLowerCase().replace(/^@/, '')}. Signed in.`)
+        setTimeout(() => location.reload(), 600)
       } catch (error) {
         toast(error.message, 6000)
       }
@@ -587,15 +370,5 @@
     render()
   }
 
-  window.cookrewAccount = {
-    token,
-    handle: async () => (await loadAccount())?.handle ?? null,
-    signIn: signInFlow,
-    toast,
-    doorKey,
-    // Additive: the shape above is what line.js binds to and does not move.
-    device: async () => (await loadAccount())?.deviceId ?? null,
-    addPasskey,
-    linkBrowser
-  }
+  window.cookrewAccount = { token, handle: async () => (await loadAccount())?.handle ?? null, signIn: signInFlow, toast, doorKey }
 })()

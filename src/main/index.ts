@@ -28,18 +28,6 @@ import { selfHostedLaunch, selfHostRefusalMessage } from './self-host-guard'
 import { DEEP_LINK_SCHEME, createDeepLinkQueue, deepLinkInArgv, parseDeepLink } from './deep-link'
 import { DEEP_LINK_CHANNEL } from '../shared/deep-link'
 import { createRegistryTokenVerifier, registryKeyOverHttp } from './registry-token'
-import {
-  checkHandle,
-  currentAccount,
-  loadAccount,
-  mintAccount,
-  normaliseHandle,
-  resolveServingHandle,
-  suggestHandle,
-  AccountError
-} from './account'
-import { adoptLegacyAccount } from './account'
-import { loadLegacyRegistryAccount } from './registry-account'
 import { faceWords, harnessesOf } from './served-face'
 import { askTerminal, beginShutdown, cancelAllAsks, ownerSubmit, pasteAndSubmit } from './ask'
 import { defaultProducerLease } from './producer-lease'
@@ -570,43 +558,15 @@ const servedCallers = new ServedCallers()
  * existing test about reach meaningful rather than merely still-passing.
  */
 const RELAY_ORIGIN = process.env.COOKREW_REGISTRY ?? ''
-
-/**
- * WHERE THE ACCOUNT IS MINTED. The relay is opt-in; the account is not — a
- * person picks their username on first run whether or not they ever serve, so
- * this falls back to the real registry rather than leaving the setup sheet
- * with nowhere to ask.
- */
-const ACCOUNT_REGISTRY = RELAY_ORIGIN || 'https://cookrew.dev'
-
-/**
- * THE HANDLE IS THE ACCOUNT'S, NOT THE ENVIRONMENT'S.
- *
- * `COOKREW_HANDLE` used to BE the identity: set it and this app served under
- * that name, whatever key it actually held. It is now a development override
- * and nothing more — resolveServingHandle() refuses a mismatch out loud rather
- * than picking a side, because serving under a name whose key this machine
- * does not hold produces a door every caller's token fails to verify against,
- * with nothing on either end saying why.
- *
- * READ PER USE, not once at boot: the account is minted from the setup sheet
- * while the app is running, and a handle captured at module load would leave a
- * freshly named app unable to serve until it was restarted.
- */
-function relayHandle(): string {
-  const verdict = resolveServingHandle(loadAccount(), process.env.COOKREW_HANDLE)
-  if (verdict.ok) return verdict.handle
-  console.error(`not serving on the relay — ${verdict.reason}`)
-  return ''
-}
-
-const relayServing = RELAY_ORIGIN
-  ? createRelayServing({
-      origin: RELAY_ORIGIN,
-      loopbackPort: () => MOBILE_PORT,
-      log: (message) => console.error(message)
-    })
-  : null
+const RELAY_HANDLE = process.env.COOKREW_HANDLE ?? ''
+const relayServing =
+  RELAY_ORIGIN && RELAY_HANDLE
+    ? createRelayServing({
+        origin: RELAY_ORIGIN,
+        loopbackPort: () => MOBILE_PORT,
+        log: (message) => console.error(message)
+      })
+    : null
 
 /**
  * Sign-in with a cookrew.dev token needs the registry's public key, and only
@@ -648,15 +608,11 @@ function servedAddress(slug: string): string {
  */
 async function joinRelayFor(template: ServedTemplate): Promise<void> {
   if (!relayServing) return
-  // No account (or an env override that disagrees with it) is a refusal to
-  // serve, not a silent local-only door: the reason was already printed.
-  const handle = relayHandle()
-  if (handle.length === 0) return
   const snapshot = teams.load(template.templateId)
   const joined = await relayServing.serve({
     slug: template.slug,
     team: template.slug,
-    handle,
+    handle: RELAY_HANDLE,
     face: {
       title: snapshot?.name ?? template.templateId,
       door: (snapshot ? orchAgentOf(snapshot) : null) ?? '',
@@ -3826,7 +3782,6 @@ if (selfHosted) {
 }
 
 app.whenReady().then(() => {
-  void ensureAccountAtBoot()
   // Dock icon must be set at runtime in dev; packaged builds also bundle
   // resources/icon.icns via the packager config when one is added.
   if (process.platform === 'darwin' && app.dock) {
@@ -4319,87 +4274,6 @@ function registerIpc(handlers: RestoreHandlers): void {
       }
       return op(...args)
     }
-
-  // ---- the owner's account (owner-only: minting a username is permanent) ----
-  //
-  // Behind the SAME ownerOnly guard as the grant surface, and for a stronger
-  // reason: a page this app merely renders — a browser card, an install page —
-  // could otherwise claim the owner's username at cookrew.dev, once, forever.
-  ipcMain.handle(
-    'account:status',
-    ownerOnly(() => {
-      const account = loadAccount()
-      return {
-        handle: account?.handle ?? null,
-        registry: ACCOUNT_REGISTRY,
-        // A suggestion, never an identity (D3). The field starts here and the
-        // person changes it; nothing mints from this on its own.
-        suggestion: suggestHandle(),
-        // Named so the setup sheet can say WHY it is refusing to close.
-        envHandle: normaliseHandle(process.env.COOKREW_HANDLE ?? '') || null
-      }
-    })
-  )
-
-  ipcMain.handle(
-    'account:check',
-    ownerOnly(async (handle: unknown) => {
-      if (typeof handle !== 'string') return { availability: 'invalid' as const }
-      const availability = await checkHandle(handle, { registry: ACCOUNT_REGISTRY })
-      return { availability }
-    })
-  )
-
-  ipcMain.handle(
-    'account:mint',
-    ownerOnly(async (handle: unknown, name: unknown) => {
-      if (typeof handle !== 'string') {
-        return { ok: false as const, kind: 'handle-shape', reason: 'that is not a username' }
-      }
-      // Minting twice would strand the first name: the file is the only record
-      // of the key that owns it, and the second write would overwrite it.
-      const existing = loadAccount()
-      if (existing !== null) {
-        return {
-          ok: false as const,
-          kind: 'refused',
-          reason: `this app is already @${existing.handle} — a username is minted once`
-        }
-      }
-      try {
-        const minted = await mintAccount({
-          handle,
-          registry: ACCOUNT_REGISTRY,
-          ...(typeof name === 'string' && name.length > 0 ? { name } : {})
-        })
-        return { ok: true as const, handle: minted.handle, deviceId: minted.deviceId }
-      } catch (error) {
-        if (error instanceof AccountError) {
-          return { ok: false as const, kind: error.reason, reason: error.message }
-        }
-        console.error('account:mint failed:', error)
-        return {
-          ok: false as const,
-          kind: 'refused',
-          reason: 'the username could not be claimed — try again'
-        }
-      }
-    })
-  )
-
-  ipcMain.handle(
-    'account:devices',
-    ownerOnly(async () => {
-      const session = currentAccount()
-      if (session === null) return { ok: false as const, reason: 'no account on this machine' }
-      try {
-        return { ok: true as const, devices: await session.listDevices() }
-      } catch (error) {
-        console.error('account:devices failed:', error)
-        return { ok: false as const, reason: 'the registry did not answer' }
-      }
-    })
-  )
 
   ipcMain.handle(
     'grant:enrol',
@@ -5022,38 +4896,4 @@ function registerIpc(handlers: RestoreHandlers): void {
     if (ok) waiter.resolve(output)
     else waiter.reject(new Error(output))
   })
-}
-
-/**
- * THE ACCOUNT, AT BOOT, WITHOUT A CEREMONY WHERE NONE IS NEEDED.
- *
- * An app that already registered a key at the registry before accounts
- * existed (registry-account.ts) is that account's first device after the
- * registry's migration: adopt it, and the setup sheet never shows. Failing
- * that, a `COOKREW_HANDLE` override mints under that name so a developer's
- * env keeps meaning what it meant. Anything else is the setup sheet's job —
- * and every refusal here is a sentence in the log, never a silent fallback.
- */
-async function ensureAccountAtBoot(): Promise<void> {
-  if (loadAccount() !== null) return
-  const legacy = loadLegacyRegistryAccount(ACCOUNT_REGISTRY)
-  if (legacy !== null) {
-    const adopted = await adoptLegacyAccount({ registry: ACCOUNT_REGISTRY, legacy })
-    if (adopted !== null) {
-      console.log(`account: adopted @${adopted.handle} from the key this app already held`)
-      return
-    }
-    console.error(
-      `account: the registry does not know this app's old key as @${legacy.handle} — the setup sheet will ask for a username`
-    )
-  }
-  const override = normaliseHandle(process.env.COOKREW_HANDLE ?? '')
-  if (override.length === 0) return
-  try {
-    const minted = await mintAccount({ handle: override, registry: ACCOUNT_REGISTRY })
-    console.log(`account: minted @${minted.handle} from COOKREW_HANDLE`)
-  } catch (error) {
-    const reason = error instanceof AccountError ? error.message : String(error)
-    console.error(`account: COOKREW_HANDLE=@${override} could not be minted — ${reason}`)
-  }
 }

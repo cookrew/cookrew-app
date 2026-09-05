@@ -14,7 +14,6 @@ import {
 import { agentStatus } from './herdr-agent-status'
 import { endpointCertHosts, mobileEndpoints, type MobileEndpoint } from './mobile-endpoints'
 import { loadOrCreatePairingToken, rotatePairingToken } from './pairing-token'
-import { currentAccount, type AccountSession } from './account'
 import type { VersionPinRecord } from '../shared/version-pin'
 import { readTailnetAsync, type CertHosts, type TailnetIdentity } from './tailscale'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
@@ -79,12 +78,6 @@ let certSans: string[] = []
 const powerBlockerId: { current: number | null } = { current: null }
 
 export interface MobileServerDeps {
-  /**
-   * The owner's account, for the phone's bind-at-pairing route. Omitted = read
-   * from `~/.cookrew/account.json` per request, which is what the real app
-   * wants; a test supplies its own so it needs no home directory.
-   */
-  account?: () => AccountSession | null
   store: WorkspaceStore
   ptys: PtyManager
   voice: VoiceEngine
@@ -826,9 +819,6 @@ async function handle(
     // this server already holds — tail-read, no PTY.
     latestCheckpoint: (terminalId: string) => deps.traces.latestCheckpoint(terminalId),
     pairingToken: activePairingToken ?? deps.pairingToken,
-    // The owner's account, read per request (session-free): a phone paired
-    // before the username was picked binds on its next boot, not never.
-    account: deps.account ?? ((): AccountSession | null => currentAccount()),
     wallToken: activeWallToken ?? deps.wallToken
   }
   if (await handleMobileApi(request, response, url, authed as MobileApiDeps)) return

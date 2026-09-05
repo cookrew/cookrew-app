@@ -9,16 +9,6 @@ ipcRenderer.on('app:deep-link', (_e, link: unknown) => {
 
 const api = {
   getWorkspace: () => ipcRenderer.invoke('workspace:get'),
-  // The owner's ACCOUNT — the username this app minted and every device bound
-  // to it. Behind the same owner-window guard as the grant surface: minting is
-  // permanent and first-mint-wins, so a page the app merely renders must never
-  // be able to claim a name. Absent on the remote and demo transports, which
-  // is how the setup sheet knows it is not on the owner's desktop.
-  accountStatus: () => ipcRenderer.invoke('account:status'),
-  accountCheck: (handle: string) => ipcRenderer.invoke('account:check', handle),
-  accountMint: (handle: string, name?: string) =>
-    ipcRenderer.invoke('account:mint', handle, name),
-  accountDevices: () => ipcRenderer.invoke('account:devices'),
   // The owner's grant surface. Main refuses any sender that is not the owner
   // window's TOP frame, so exposing it here does not hand it to a browser card
   // or an install page — see owner-grant.ts and grant-surface-shape.test.ts.

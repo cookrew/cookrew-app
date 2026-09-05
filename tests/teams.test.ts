@@ -168,68 +168,6 @@ describe('TeamStore', () => {
     const store = makeStore()
     expect(() => store.save(state(), () => [], 'Ghost', ['nope'])).toThrow(/matched nothing/)
   })
-
-  // THE LEADER (owner ruling, 2026-09-05): the first agent terminal the owner
-  // selected leads the exported team; no orch node needed in the selection.
-  it('stamps the FIRST SELECTED terminal as the team leader, demoting the workspace orch', () => {
-    const store = makeStore()
-    const orch = { ...terminal('conductor'), name: 'Conductor', orch: true }
-    const full: WorkspaceState = {
-      ...state(),
-      nodes: [orch, terminal('a'), terminal('b'), note('n1')],
-      connections: []
-    }
-    store.save(full, () => [], 'Led', ['n1', 'b', 'conductor', 'a'])
-    const loaded = store.load('Led')!
-    expect(loaded.entryAgent).toBe(loaded.nodes.find((n) => n.id === 'b')?.name)
-    expect(
-      loaded.nodes.filter((n) => n.kind === 'terminal').map((n) => [n.id, n.orch])
-    ).toEqual([
-      ['conductor', false],
-      ['a', false],
-      ['b', true]
-    ])
-    // The live workspace's own orch was not demoted by the save.
-    expect(orch.orch).toBe(true)
-  })
-
-  it('a whole-workspace save (no selection) keeps the workspace orch as leader', () => {
-    const store = makeStore()
-    const full: WorkspaceState = {
-      ...state(),
-      nodes: [terminal('a'), { ...terminal('c'), name: 'Conductor', orch: true }],
-      connections: []
-    }
-    store.save(full, () => [], 'Whole')
-    const loaded = store.load('Whole')!
-    expect(loaded.entryAgent).toBe('Conductor')
-    expect(loaded.nodes.map((n) => (n.kind === 'terminal' ? n.orch : null))).toEqual([false, true])
-  })
-
-  it('migrates a leaderless legacy template: its entry agent becomes the orch', () => {
-    const store = makeStore()
-    store.save({ ...state(), nodes: [terminal('a'), terminal('b')], connections: [] }, () => [], 'Old', [
-      'b',
-      'a'
-    ])
-    // Strip what a pre-leader save never wrote.
-    const file = path.join((store as unknown as { dir: string }).dir, 'old.json')
-    const raw = JSON.parse(readFileSync(file, 'utf8'))
-    writeFileSync(
-      file,
-      JSON.stringify({
-        ...raw,
-        entryAgent: undefined,
-        nodes: raw.nodes.map((n: { kind: string }) => (n.kind === 'terminal' ? { ...n, orch: false } : n))
-      })
-    )
-    expect(store.migrateEntryAgents()).toBe(1)
-    const loaded = store.load('Old')!
-    expect(loaded.entryAgent).toBe(loaded.nodes[0].name)
-    expect(loaded.nodes.map((n) => (n.kind === 'terminal' ? n.orch : null))).toEqual([true, false])
-    // Idempotent: a second boot migrates nothing.
-    expect(store.migrateEntryAgents()).toBe(0)
-  })
 })
 
 describe('planTeamFork', () => {

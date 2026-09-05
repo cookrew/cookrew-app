@@ -1,14 +1,10 @@
 import { describe, expect, it, beforeEach } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import path from 'node:path'
 import {
   SessionInstantiator,
   type InstantiatorDeps,
   type ResolvedTemplate,
   type SessionIdentity
 } from '../src/main/session-instantiator'
-import { createSeatStore, seatsFile, type SeatStore } from '../src/main/session-seats'
 
 /**
  * THE INSTANTIATOR'S DECISIONS, with no filesystem, PTY or network — which is
@@ -315,104 +311,5 @@ describe('conductorFor — only the orch answers (design S5)', () => {
     route.present = false
     const ana = await inst.admit('svc', 'ana')
     expect(inst.conductorFor(ana.session.identity.sessionId)).toBeNull()
-  })
-})
-
-describe('seats — a caller comes back to their own session after a restart', () => {
-  const restart = (seats: SeatStore): SessionInstantiator =>
-    new SessionInstantiator({
-      templates: new FakeTemplates(),
-      minter: new FakeMinter(),
-      route: new FakeRoute(),
-      ender: new FakeEnder(),
-      seats
-    })
-
-  it('reuses the SAME session, and the same identity, across a restart', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-seats-'))
-    const seats = createSeatStore(dir)
-    const before = restart(seats)
-    const first = await before.admit('svc-research', 'mira')
-
-    // The owner's app dies. A fresh instantiator reads the seats file.
-    const after = restart(seats)
-    const second = await after.admit('svc-research', 'mira')
-
-    expect(second.created).toBe(false)
-    expect(second.session.identity.sessionId).toBe(first.session.identity.sessionId)
-    expect(second.session.identity.slug).toBe(first.session.identity.slug)
-    expect(second.session.workspaceId).toBe(first.session.workspaceId)
-    expect(after.sessionForCaller('svc-research', 'mira')?.ordinal).toBe(1)
-    rmSync(dir, { recursive: true, force: true })
-  })
-
-  it('NEVER re-mints a closed ordinal — END deleted that sandbox', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-seats-'))
-    const seats = createSeatStore(dir)
-    const before = restart(seats)
-    const first = await before.admit('svc-research', 'mira')
-    before.end(first.session.identity.sessionId)
-
-    const after = restart(seats)
-    // Ordinal 1 is spent even though nothing is open: re-using it would mint
-    // onto the path cleanup just removed.
-    expect(after.hadSession('svc-research', 'mira')).toBe(true)
-    const next = await after.admit('svc-research', 'mira')
-    expect(next.created).toBe(true)
-    expect(next.session.ordinal).toBe(2)
-    rmSync(dir, { recursive: true, force: true })
-  })
-
-  it('keeps one caller out of another seat', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-seats-'))
-    const seats = createSeatStore(dir)
-    const before = restart(seats)
-    await before.admit('svc-research', 'mira')
-    await before.admit('svc-research', 'ana')
-
-    const after = restart(seats)
-    const mira = await after.admit('svc-research', 'mira')
-    const ana = await after.admit('svc-research', 'ana')
-    expect(mira.session.identity.sessionId).not.toBe(ana.session.identity.sessionId)
-    expect(mira.created).toBe(false)
-    expect(ana.created).toBe(false)
-    rmSync(dir, { recursive: true, force: true })
-  })
-
-  it('writes one file per service, owner-only', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-seats-'))
-    const seats = createSeatStore(dir)
-    await restart(seats).admit('svc-research', 'mira')
-    const file = seatsFile('svc-research', dir)
-    expect(existsSync(file)).toBe(true)
-    if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600)
-    // Another service's seats are somewhere else entirely.
-    expect(existsSync(seatsFile('svc-triage', dir))).toBe(false)
-    rmSync(dir, { recursive: true, force: true })
-  })
-
-  it('starts empty rather than overwriting a seats file it cannot read', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-seats-'))
-    const file = seatsFile('svc-research', dir)
-    mkdirSync(path.dirname(file), { recursive: true })
-    writeFileSync(file, 'not json')
-    const seats = createSeatStore(dir)
-    expect(seats.read('svc-research')).toEqual([])
-    // Untouched: it is the only record of which ordinals are spent.
-    expect(readFileSync(file, 'utf8')).toBe('not json')
-    rmSync(dir, { recursive: true, force: true })
-  })
-
-  it('forgets by default — no store, no file, the old behaviour', async () => {
-    const first = await inst.admit('svc', 'ana')
-    const fresh = new SessionInstantiator({
-      templates: new FakeTemplates(),
-      minter: new FakeMinter(),
-      route: new FakeRoute(),
-      ender: new FakeEnder()
-    })
-    const second = await fresh.admit('svc', 'ana')
-    expect(second.created).toBe(true)
-    expect(second.session.identity.sessionId).toBe(first.session.identity.sessionId)
   })
 })

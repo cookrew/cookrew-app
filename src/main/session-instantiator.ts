@@ -1,5 +1,4 @@
 import { nextOrdinal, sessionIdentity, type SessionIdentity } from './session-identity'
-import { memorySeatStore, type Seat, type SeatStore } from './session-seats'
 
 // Re-exported: the seams below name it in their signatures, so an adapter or a
 // test that implements one must be able to import it from here.
@@ -127,13 +126,6 @@ export interface InstantiatorDeps {
   minter: Minter
   route: ConductorRoute
   ender: Ender
-  /**
-   * WHERE SEATS SURVIVE A RESTART (session-seats.ts). Absent = a store that
-   * forgets, which is exactly the behaviour every existing test was written
-   * against — persistence is opt-in at the wiring, not a new requirement on
-   * every embedder.
-   */
-  seats?: SeatStore
 }
 
 /** The outcome of admitting a call: the session, and whether this call minted it. */
@@ -182,82 +174,9 @@ export class SessionInstantiator {
    * and each would forkTeam a workspace, leaking the first.
    */
   private readonly mintingByPair = new Map<string, Promise<SessionRecord>>()
-  /**
-   * The seat ledger, and the services already read out of it. Hydration is
-   * LAZY and per service: the instantiator is built before anyone knows which
-   * doors will be knocked on, and reading every service's file at boot would
-   * be work for doors that are not serving.
-   */
-  private readonly seats: SeatStore
-  private readonly hydrated = new Set<string>()
 
   constructor(deps: InstantiatorDeps) {
     this.deps = deps
-    this.seats = deps.seats ?? memorySeatStore()
-  }
-
-  /**
-   * Read this service's seats into memory, once.
-   *
-   * The identity strings are RECOMPUTED with `sessionIdentity`, never read
-   * from the file: that is what guarantees a rehydrated seat is the same
-   * `svc-<team>-<account>-<n>` it was before the restart, and it means a file
-   * somebody edited cannot rename a session onto another caller's sandbox.
-   */
-  private hydrate(serviceId: string): void {
-    if (this.hydrated.has(serviceId)) return
-    this.hydrated.add(serviceId)
-    for (const seat of this.seats.read(serviceId)) {
-      this.usedOrdinals.set(pairKey(serviceId, seat.accountId), [...seat.ordinals])
-      for (const open of seat.open) {
-        const identity = sessionIdentity(serviceId, seat.accountId, open.ordinal)
-        // A file that names a different sessionId for this (service, account,
-        // ordinal) is not trusted to rename anything — the ordinal is kept
-        // (it is spent either way) and the stale open record is dropped.
-        if (identity.sessionId !== open.sessionId) continue
-        this.openById.set(
-          identity.sessionId,
-          Object.freeze({
-            identity,
-            workspaceId: open.workspaceId,
-            serviceId,
-            accountId: seat.accountId,
-            ordinal: open.ordinal,
-            version: open.version,
-            pinAddress: open.pinAddress
-          })
-        )
-      }
-    }
-  }
-
-  /** Write this service's whole seat table. Small, and never partially true. */
-  private persist(serviceId: string): void {
-    const byAccount = new Map<string, Seat>()
-    for (const [key, ordinals] of this.usedOrdinals) {
-      const [service, accountId] = JSON.parse(key) as [string, string]
-      if (service !== serviceId) continue
-      byAccount.set(accountId, { accountId, ordinals: [...ordinals], open: [] })
-    }
-    for (const record of this.openById.values()) {
-      if (record.serviceId !== serviceId) continue
-      const seat = byAccount.get(record.accountId)
-      if (!seat) continue
-      byAccount.set(record.accountId, {
-        ...seat,
-        open: [
-          ...seat.open,
-          {
-            sessionId: record.identity.sessionId,
-            workspaceId: record.workspaceId,
-            ordinal: record.ordinal,
-            version: record.version,
-            pinAddress: record.pinAddress
-          }
-        ]
-      })
-    }
-    this.seats.write(serviceId, [...byAccount.values()])
   }
 
   /**
@@ -276,7 +195,6 @@ export class SessionInstantiator {
    * one place that assumption must hold.
    */
   async admit(serviceId: string, accountId: string): Promise<Admission> {
-    this.hydrate(serviceId)
     const existing = this.openFor(serviceId, accountId)
     if (existing) return { session: existing, created: false }
 
@@ -303,7 +221,6 @@ export class SessionInstantiator {
    * moved since ana-1, its own version.
    */
   async startNew(serviceId: string, accountId: string): Promise<SessionRecord> {
-    this.hydrate(serviceId)
     return this.mintNew(serviceId, accountId)
   }
 
@@ -339,10 +256,6 @@ export class SessionInstantiator {
     // mints afresh if this was the last — because reuse reads openById, ending
     // one session cannot strand another. The ordinal stays used.
     this.openById.delete(sessionId)
-    // The ordinal STAYS used, and the seat says so on disk: a closed ordinal
-    // that came back after a restart would re-mint onto the sandbox this
-    // cleanup is about to delete.
-    this.persist(record.serviceId)
 
     this.deps.ender.cleanup(target)
     return { stopped }
@@ -355,7 +268,6 @@ export class SessionInstantiator {
    * with no open session is a first visit or the aftermath of an end.
    */
   hadSession(serviceId: string, accountId: string): boolean {
-    this.hydrate(serviceId)
     return (this.usedOrdinals.get(pairKey(serviceId, accountId)) ?? []).length > 0
   }
 
@@ -370,7 +282,6 @@ export class SessionInstantiator {
    * the wire, so a credential can never select another caller's transcript.
    */
   sessionForCaller(serviceId: string, accountId: string): SessionRecord | null {
-    this.hydrate(serviceId)
     return this.openFor(serviceId, accountId)
   }
 
@@ -443,7 +354,6 @@ export class SessionInstantiator {
       pinAddress: template.pinAddress
     })
     this.openById.set(identity.sessionId, record)
-    this.persist(serviceId)
     return record
   }
 }

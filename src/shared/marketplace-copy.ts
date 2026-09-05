@@ -591,7 +591,7 @@ export const MKT_TEMPLATE = {
 export const MKT_SERVE = {
   'mkt.serve.title': 'Serve {templateName}',
   'mkt.serve.door':
-    'Callers talk to {orch} only — the first terminal you selected leads the team. It runs the others the way it always has; they are never exposed.',
+    'Callers talk to {orch} only. It runs the rest of the team the way it always has — the others are never exposed.',
   'mkt.serve.who': 'Who can call it?',
   'mkt.serve.who.none': 'Just me',
   'mkt.serve.who.none.sub': "Stays on your shelf. That's where it is now.",
@@ -685,7 +685,7 @@ export const MKT_SERVE = {
    * rather than the reason the crew cannot answer anybody.
    */
   'mkt.serve.no-orch':
-    'Select at least one agent terminal before you serve this — callers talk to exactly one agent, and the first terminal you select leads the team.',
+    'Pick an orch before you serve this — callers talk to exactly one agent, and this crew has none. Mark one card as the orch and it becomes the door.',
   /** The gate's reasons, in the owner's words. Keyed by ServeRefusal. */
   'mkt.serve.refused.bad-price': 'A paid door needs a price above zero.',
   'mkt.serve.refused.priced-free-door': 'A free door cannot carry a price.',

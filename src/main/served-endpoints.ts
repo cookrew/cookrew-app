@@ -305,24 +305,6 @@ export async function handleServedRoute(
     return json(200, { ok: true, token: deps.issuer.mint(result.sub, serviceId) })
   }
 
-  if (method === 'GET' && pathname === '/api/call/whoami') {
-    // WHO THE DOOR THINKS YOU ARE. A caller holding a Bearer cannot otherwise
-    // tell whether it was seated as an account or as a bare key — and those
-    // two are different session directories, so "it worked" is not the same
-    // answer as "it worked as me". Behind the same 401 as every other route:
-    // it discloses only what the presented credential already proves.
-    const auth = authorizeCaller(deps, template, input.headers)
-    if (!auth.ok) return auth.response
-    const { sub } = auth.claims
-    const handle = handleOf(sub)
-    const dev = deps.callers.deviceOf(serviceId, sub)
-    return json(200, {
-      sub,
-      ...(handle === null ? {} : { handle }),
-      ...(dev === null ? {} : { dev })
-    })
-  }
-
   if (method === 'POST' && pathname === '/ask') {
     return askRoute(deps, template, input)
   }
@@ -365,13 +347,10 @@ async function registryAssert(
   }
   const verified = (await deps.registryTokens?.verify(token, name)) ?? null
   if (verified === null) return json(401, {})
-  const sub = `${ACCOUNT_SUB_PREFIX}${verified.sub}`
-  // The device is remembered, never gated on: the seat is the ACCOUNT, so a
-  // caller who moves from their laptop to their phone mid-session must land in
-  // the same session. Refusing on a changed device would make "the same seat
-  // from another device" — the reason accounts exist — impossible.
-  if (verified.dev !== undefined) deps.callers.noteDevice(template.serviceId, sub, verified.dev)
-  return json(200, { ok: true, token: deps.issuer.mint(sub, template.serviceId) })
+  return json(200, {
+    ok: true,
+    token: deps.issuer.mint(`${ACCOUNT_SUB_PREFIX}${verified.sub}`, template.serviceId)
+  })
 }
 
 export type CallerClaims = { sub: string; workspace: string }
@@ -390,27 +369,7 @@ export function identifyCaller(
   return authorizeCaller(deps, template, headers)
 }
 
-/**
- * THE NAME THE 401 ANSWERS IN.
- *
- * A caller mints a registry `call` token for exactly one audience, and that
- * audience is the door's published `@handle/team`. If the challenge named the
- * local slug instead, a client reading the realm would ask the registry for a
- * token aud'd to `research` — which no door will ever accept — and the failure
- * would surface as a bare 401 with nothing to debug. So the realm IS the
- * audience when the door has one, and the slug only when it does not (a door
- * off the relay takes keys, and the slug is what a key signs against).
- */
-export function callerRealm(deps: ServedEndpointDeps, template: ServedTemplate): string {
-  return deps.doorName?.(template) ?? template.slug
-}
-
-/** The account behind a seated sub, when the sub came from the registry. */
-export function handleOf(sub: string): string | null {
-  return sub.startsWith(ACCOUNT_SUB_PREFIX) ? sub.slice(ACCOUNT_SUB_PREFIX.length) : null
-}
-
-export function authorizeCaller(
+function authorizeCaller(
   deps: ServedEndpointDeps,
   template: ServedTemplate,
   headers: Record<string, string | undefined>
@@ -422,7 +381,7 @@ export function authorizeCaller(
     return {
       ok: false,
       response: json(401, {}, {
-        'www-authenticate': `Cookrew realm="${callerRealm(deps, template)}", challenge=${deps.issuer.challenge(template.serviceId)}`
+        'www-authenticate': `Cookrew realm="${template.slug}", challenge=${deps.issuer.challenge(template.serviceId)}`
       })
     }
   }

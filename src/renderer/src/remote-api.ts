@@ -6,7 +6,6 @@ import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 import type { VersionPinRecord } from '../../shared/version-pin'
 import { apiPath } from './api-base'
 import { createRawInputQueue } from './raw-input-queue'
-import { bindPhoneDevice, loadOrMintPhoneDevice, rememberBinding } from './phone-device'
 
 /**
  * CookrewApi over HTTP + Server-Sent-Events, used when the renderer bundle is
@@ -214,50 +213,9 @@ function checkAuthOnBoot(): void {
     .then((scope) => {
       if (scope === 'none') {
         authStore().report(new AuthError('This device is not paired.', 'none'))
-        return
       }
-      // PAIRED → BIND (D2). Here rather than in the re-pair overlay because a
-      // phone paired by opening the desktop's URL never passes through that
-      // overlay at all, and a hook it can skip is a hook that binds only the
-      // people who had trouble.
-      if (scope === 'pairing') void bindThisPhone()
     })
     .catch(() => undefined)
-}
-
-/**
- * Give this phone a key in the owner's account, once.
- *
- * Silent by design and silent on failure: the phone is already usable over the
- * pairing token, so a refusal here costs it nothing today — it is the door and
- * cookrew.dev, later, that need the binding. The desktop's own sentence is
- * logged rather than thrown so the boot path is never the thing that breaks.
- */
-async function bindThisPhone(): Promise<void> {
-  try {
-    const device = await loadOrMintPhoneDevice()
-    const outcome = await bindPhoneDevice({
-      device,
-      known: device.bound,
-      remember: rememberBinding,
-      name: navigator.userAgent.includes('Android') ? 'an Android phone' : 'an iPhone',
-      post: async (body) => {
-        const token = authStore().token()
-        const response = await fetch(apiPath('/api/pair/device'), {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            ...(token ? { authorization: `Bearer ${token}` } : {})
-          },
-          body: JSON.stringify(body)
-        })
-        return { status: response.status, body: await response.json().catch(() => ({})) }
-      }
-    })
-    if (outcome.state === 'refused') console.error(`this phone is not signed in: ${outcome.reason}`)
-  } catch (error) {
-    console.error('this phone could not mint a device key:', error)
-  }
 }
 
 export function createRemoteApi(): CookrewApi {

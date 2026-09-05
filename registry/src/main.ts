@@ -176,21 +176,7 @@ if (!resolved.ok) {
   console.error(`refusing to start: ${resolved.reason}`)
   process.exit(1)
 }
-/**
- * A DATA DIRECTORY THAT WILL NOT LOAD IS A BOOT REFUSAL, not a stack trace.
- *
- * The accounts store refuses to come up on a torn accounts.json rather than
- * starting empty — every revocation would have silently reverted — and that
- * refusal reaches an operator the same way every other one here does: one
- * sentence naming the file, and exit 1.
- */
-let identity: IdentityService
-try {
-  identity = new IdentityService(DATA, resolved.config)
-} catch (error) {
-  console.error(`refusing to start: ${error instanceof Error ? error.message : String(error)}`)
-  process.exit(1)
-}
+const identity = new IdentityService(DATA, resolved.config)
 
 if (!Number.isInteger(TERMS_TTL_MS) || TERMS_TTL_MS < 1) {
   console.error(`refusing to start: --terms-ttl ${flag('terms-ttl', '')} is not a positive number of ms`)

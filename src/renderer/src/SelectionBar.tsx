@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { GitInfo, TeamClipStatus, TeamMeta, WorkspaceState } from '../../shared/model'
 import { saveClash, selectionSummary } from '../../shared/team-actions'
 import { cookrew, isDemoMode } from './api'
-import { useOwnerAccount } from './owner-account'
 import { MKT_SERVE, fillCopy } from '../../shared/marketplace-copy'
 import {
   EMPTY_SERVED_PAYMENT_STATUS,
@@ -85,9 +84,6 @@ export function SelectionBar({
   const [servedAt, setServedAt] = useState<string | null>(null)
   const [servedName, setServedName] = useState('')
   const [copied, setCopied] = useState(false)
-  // The app's own username, when this transport carries one. Null on the phone
-  // and in a browser card, where the card is not the owner's to hand out.
-  const ownerHandle = useOwnerAccount()?.handle ?? null
   const [name, setName] = useState('')
   const [teams, setTeams] = useState<TeamMeta[]>([])
   /** The overwrite guard is only trustworthy once the list has ARRIVED —
@@ -263,16 +259,10 @@ export function SelectionBar({
    * to a zsh prompt. The backend's matching fallback is gone too; both sides
    * now agree that no orch means no door (owner ruling, 2026-08-26).
    */
-  //
-  // THE LEADER (owner ruling, 2026-09-05): the first agent terminal the owner
-  // SELECTED leads the exported team — no orch node needed. `picked` is a Set
-  // kept in click order, and main's TeamStore.save reads the same order from
-  // the ids this bar sends it, so the name shown here is the door that will
-  // be saved. Null only when no terminal is in the selection.
   const orchName =
-    [...picked]
-      .map((id) => workspace.nodes.find((n) => n.id === id))
-      .find((n) => n?.kind === 'terminal')?.name ?? null
+    workspace.nodes.find(
+      (n) => picked.has(n.id) && n.kind === 'terminal' && (n as { orch?: boolean }).orch
+    )?.name ?? null
   const submittable =
     canSubmitShare(access, priceUsd, orchName, paymentRails) &&
     faceWordsLookGood(access, faceSummary, tagsRaw)
@@ -492,15 +482,6 @@ export function SelectionBar({
               {copied ? 'COPIED ✓' : 'COPY LINK'}
             </button>
           </div>
-          {/* WHOSE DOOR THIS IS. The address alone does not say, and the
-              caller's token is minted for `@handle/team` — so the name the
-              app minted is shown here, where the owner is about to hand the
-              link over. */}
-          {ownerHandle !== null && (
-            <p className="sos-note" data-owner-handle={ownerHandle}>
-              served by @{ownerHandle}
-            </p>
-          )}
           <p className="sos-note">{MKT_SERVE['mkt.serve.live.handoff']}</p>
           <div className="cr-selbar-served-acts">
             <button className="cr-btn sm" onClick={() => setServedAt(null)}>
