@@ -1,8 +1,11 @@
+import { createHash } from 'node:crypto'
 import { validateCallPrompt } from './call-prompt'
 import { safeCallReply } from './call-reply'
 import type { ServedTemplate } from './session-served'
 import { ACCOUNT_SUB_PREFIX, type ServedCallers } from './served-callers'
 import type { RegistryTokenVerifier } from './registry-token'
+import type { V2CallIdentity, V2CallTokenVerifier } from './v2-call-token'
+import { noSeatSentence } from '../shared/seats'
 import { pageTurns, type TurnPageRequest, type TurnRecord } from '../shared/turn'
 import type {
   TraceBoundaryMarker,
@@ -89,6 +92,30 @@ export interface ServedEndpointDeps {
   doorName?(template: ServedTemplate): string | null
   /** Sign-in with a cookrew.dev token; absent means the door takes keys only. */
   registryTokens?: RegistryTokenVerifier
+  /**
+   * IDENTITY v2 — sign in with an ACCOUNT and, at a paid door, a SEAT.
+   *
+   * Beside `registryTokens` rather than replacing it: a v1 token and a v2
+   * token are two wire contracts that overlap in nothing but their shape, and
+   * phase 6 is where the old one retires. Absent means this door does not
+   * take v2 tokens yet, which is a 401 like any other unreadable credential.
+   */
+  v2Tokens?: V2CallTokenVerifier
+  /**
+   * A v2 caller was admitted. Told to main so the owner's canvas can put a
+   * face on them (D7) — the username, the device kind and the seat that let
+   * them in are all in the token and nowhere else, so this is the only moment
+   * they can be recorded.
+   */
+  onV2Seated?(seated: V2Seated): void
+  /**
+   * MONEY MOVED, at this door, for this caller. Fires once, immediately after
+   * a settle returns 'ok' and before the caller is admitted — the moment the
+   * 402 is paid, which is the only moment a seat can be reported to
+   * cookrew.dev as bought (seat-settle.ts). Never fires for a refused or an
+   * unverifiable settlement: a seat is a receipt, not an attempt.
+   */
+  onPaid?(paid: DoorPayment): void
   admit(serviceId: string, sub: string): Promise<{ workspaceId: string; sessionId: string; created: boolean }>
   /** Does this account hold an OPEN session? Open = already paid for. */
   hasOpenSession(serviceId: string, sub: string): boolean
@@ -293,6 +320,10 @@ export async function handleServedRoute(
 
   if (method === 'POST' && pathname === '/api/call/assert') {
     const body = (input.body ?? {}) as Record<string, unknown>
+    // THREE SIGN-INS, ONE VERB, and the body picks which. Each is exclusive —
+    // a token beside a key is two claims about who is knocking — so the field
+    // that is present decides, and the other paths are left byte-identical.
+    if ('v2Token' in body) return v2Assert(deps, template, body)
     if ('registryToken' in body) return registryAssert(deps, template, body)
     const result = deps.callers.assert(
       serviceId,
@@ -350,6 +381,139 @@ async function registryAssert(
   return json(200, {
     ok: true,
     token: deps.issuer.mint(`${ACCOUNT_SUB_PREFIX}${verified.sub}`, template.serviceId)
+  })
+}
+
+/** What a v2 sign-in put at the door, for the surfaces that draw people. */
+export interface V2Seated {
+  serviceId: string
+  /** The door-side account id: `acct-<username>`. */
+  sub: string
+  username: string
+  dev: string
+  /**
+   * The seat that admitted them, or null. The SOURCE is deliberately not here:
+   * a token says which seat, never how it was come by, and inventing a value
+   * would put a guess on the owner's canvas. door-seats.ts resolves it against
+   * the team's real seat list, where the answer actually lives.
+   */
+  seat: string | null
+}
+
+/** One settled payment at this door, named by who made it. */
+export interface DoorPayment {
+  serviceId: string
+  /** The door-side account id that paid — `acct-<username>` for a v2 caller. */
+  sub: string
+  /** Which rail moved the money. */
+  by: 'stripe' | 'x402'
+  /** The rail's own reference, so a settle can be traced back to a charge. */
+  receipt: string
+  amountUsd: string
+}
+
+/**
+ * WHICH RAIL MOVED THE MONEY, read off the caller's own X-Payment envelope.
+ *
+ * The gate itself still knows no rail — this is the payment-rails dispatch
+ * rule restated for a LABEL, not for a decision: a Stripe envelope is base64
+ * JSON naming `rail: 'stripe'`, and everything else on this seam is x402.
+ * Getting the label wrong costs a wrong word on a receipt at cookrew.dev; it
+ * cannot admit or refuse anybody, which is why it is allowed to be a guess.
+ */
+export function paymentRailOf(payment: string): 'stripe' | 'x402' {
+  try {
+    const value: unknown = JSON.parse(Buffer.from(payment, 'base64').toString('utf8'))
+    return (value as { rail?: unknown } | null)?.rail === 'stripe' ? 'stripe' : 'x402'
+  } catch {
+    return 'x402'
+  }
+}
+
+/**
+ * The rail's own reference for this payment — a `cs_…` Checkout id, or a hash
+ * of the x402 envelope. NEVER the envelope itself: it carries the caller's
+ * signed authorization, and a receipt is filed at cookrew.dev.
+ */
+export function paymentReceiptOf(payment: string): string {
+  try {
+    const value: unknown = JSON.parse(Buffer.from(payment, 'base64').toString('utf8'))
+    const session = (value as { session?: unknown } | null)?.session
+    if (typeof session === 'string' && /^cs_[A-Za-z0-9_]+$/.test(session)) return session
+  } catch {
+    // Not a Stripe envelope; fall through to the digest.
+  }
+  return `x402:${createHash('sha256').update(payment).digest('base64url').slice(0, 32)}`
+}
+
+/** The owner's handle, out of the door's published `@handle/team`. */
+export function doorOwnerOf(name: string): string {
+  return name.slice(1).split('/')[0] ?? ''
+}
+
+/**
+ * THE v2 SIGN-IN — an account, and at a paid door a SEAT.
+ *
+ * The ladder, in the architecture note's order: 401 (this returns it for any
+ * token it cannot read), then 403 for a paid door the caller holds no seat at,
+ * and only then the 402 — which lives in `gateCaller`, at session start, as it
+ * always has. Nothing here takes money; a seat is bought at the 402 and
+ * reported to cookrew.dev afterwards (seat-settle.ts).
+ *
+ * ABSENCE IS NOT A WILDCARD. A token with no `seat` claim is a person who was
+ * not admitted by a seat — never "a seat we could not read". The registry only
+ * ever puts a seat in a token it minted from one, so the two cases the door
+ * must let through without one are named explicitly: the OWNER of the door
+ * (their own team is not something they buy into) and a FREE team, where
+ * signing in IS the gate (P7).
+ *
+ * THE SEATED IDENTITY IS THE USERNAME. `acct-<username>` — the same namespace
+ * the v1 registry path seats into and the one served-callers refuses to
+ * key-based subs, so @mira the account and 'mira' the key-holder can never
+ * share a session directory. The prefix is required because the key namespace
+ * is the older tenant of that string; the identity is the username, and the
+ * prefix is how it is spelled where a path segment is what it becomes.
+ */
+async function v2Assert(
+  deps: ServedEndpointDeps,
+  template: ServedTemplate,
+  body: Record<string, unknown>
+): Promise<ServedResponse> {
+  const token = body.v2Token
+  const name = deps.doorName?.(template) ?? null
+  if (Object.keys(body).length !== 1 || typeof token !== 'string' || name === null) {
+    return json(401, {})
+  }
+  const verified: V2CallIdentity | null = (await deps.v2Tokens?.verify(token, name)) ?? null
+  if (verified === null) return json(401, {})
+
+  const owner = doorOwnerOf(name)
+  const isOwner = owner !== '' && verified.username === owner
+  if (template.access === 'paid' && !isOwner && verified.seat === null) {
+    // The one refusal with a voice, because it is the one a person can act on
+    // without leaving the page. It names them (the usual cause is being signed
+    // in as somebody else) and it names who can say yes.
+    return json(403, {
+      reason: 'no_seat',
+      error: noSeatSentence(verified.username, owner)
+    })
+  }
+
+  const sub = `${ACCOUNT_SUB_PREFIX}${verified.username}`
+  deps.onV2Seated?.({
+    serviceId: template.serviceId,
+    sub,
+    username: verified.username,
+    dev: verified.dev,
+    seat: verified.seat
+  })
+  return json(200, {
+    ok: true,
+    token: deps.issuer.mint(sub, template.serviceId),
+    // The caller's own UI names who it just opened the line as, without a
+    // second round trip for a fact it has already proved.
+    account: verified.username,
+    seat: verified.seat
   })
 }
 
@@ -522,6 +686,18 @@ export async function gateCaller(
       return { ok: false, response: json(402, { terms }) }
     }
     const settled = await deps.settle(payment, template.priceUsd ?? '')
+    if (settled === 'ok') {
+      // THE MOMENT THE 402 IS PAID, and the only one. Reported before the
+      // caller is admitted so a registry outage cannot lose the purchase —
+      // the settle queue takes it to disk first and to cookrew.dev after.
+      deps.onPaid?.({
+        serviceId,
+        sub: claims.sub,
+        by: paymentRailOf(payment),
+        receipt: paymentReceiptOf(payment),
+        amountUsd: template.priceUsd ?? ''
+      })
+    }
     if (settled === 'refused') {
       // The accusation voice: the payment is at fault, nothing was charged here.
       return { ok: false, response: json(402, { reason: 'invalid', retryable: false }) }
