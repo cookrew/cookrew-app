@@ -3976,8 +3976,12 @@ app.whenReady().then(() => {
   if (importedDoors()) void relayProxy()
 
   // THE OWNER'S END OF THE RELAY, for every team still being served. The
-  // templates came back from disk; their doors have to be dialled again.
-  for (const template of serving.served.list()) void joinRelayFor(template)
+  // templates came back from disk; their doors have to be dialled again —
+  // AFTER the account is known, because a door is dialled under a handle and
+  // the boot adoption that produces it is a round trip to the registry.
+  void accountBoot.then(() => {
+    for (const template of serving.served.list()) void joinRelayFor(template)
+  })
 
   startMobileServer({
     servedSlug: handleServedSlug,
