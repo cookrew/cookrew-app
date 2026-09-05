@@ -34,6 +34,11 @@ import type {
   AccountStatus,
   UsernameCheck,
 } from "../../shared/account-v2";
+import type {
+  SeatFace,
+  SeatsSurface,
+  ServedCallersRow,
+} from "../../shared/seats";
 
 /**
  * What `accountUnlock` answers. The lock's own outcome, plus whether the
@@ -518,6 +523,20 @@ export interface CookrewApi {
     avatar?: string | null;
   }) => Promise<AccountResult<AccountProfile>>;
   accountWorkspacesReachable?: (on: boolean) => Promise<AccountStatus>;
+  // ── seats & teams (identity v2, phase 5) ──
+  //
+  // Optional for the same reason as the rest: main is the only bridge that
+  // serves teams, so an absent `accountSeats` IS "no seats surface here".
+  accountSeats?: () => Promise<AccountResult<SeatsSurface>>;
+  accountTeamSeats?: (slug: string) => Promise<AccountResult<readonly SeatFace[]>>;
+  accountGrantSeat?: (input: {
+    slug: string;
+    username: string;
+  }) => Promise<AccountResult<SeatFace>>;
+  accountEndSeat?: (input: { slug: string; id: string }) => Promise<AccountResult<void>>;
+  /** The owner's canvas, told who is at its doors. */
+  servingCallers?: () => Promise<readonly ServedCallersRow[]>;
+  onServingCallers?: (cb: (rows: readonly ServedCallersRow[]) => void) => () => void;
   onAccountLocked?: (cb: (locked: boolean) => void) => () => void;
   /**
    * Re-establish the push channel if it has died. Remote clients only: a

@@ -58,6 +58,20 @@ const api = {
     ipcRenderer.invoke('account:setProfile', patch),
   accountWorkspacesReachable: (on: boolean) =>
     ipcRenderer.invoke('account:workspacesReachable', on),
+  // ── seats & teams (identity v2, phase 5) ──
+  accountSeats: () => ipcRenderer.invoke('account:seats'),
+  accountTeamSeats: (slug: string) => ipcRenderer.invoke('account:teamSeats', slug),
+  accountGrantSeat: (input: { slug: string; username: string }) =>
+    ipcRenderer.invoke('account:grantSeat', input),
+  accountEndSeat: (input: { slug: string; id: string }) =>
+    ipcRenderer.invoke('account:endSeat', input),
+  /** Who is at this desktop's served doors right now (D7's avatars). */
+  onServingCallers: (cb: (rows: unknown) => void) => {
+    const listener = (_e: unknown, rows: unknown): void => cb(rows)
+    ipcRenderer.on('serving:callers', listener)
+    return () => ipcRenderer.removeListener('serving:callers', listener)
+  },
+  servingCallers: () => ipcRenderer.invoke('serving:callers'),
   /** Main locked or unlocked the owner's view; the overlay follows this. */
   onAccountLocked: (cb: (locked: boolean) => void) => {
     const listener = (_e: unknown, locked: boolean): void => cb(locked)

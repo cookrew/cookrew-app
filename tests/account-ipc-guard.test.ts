@@ -153,3 +153,153 @@ describe('the handlers', () => {
     expect(() => handlers['account:workspacesReachable']('yes please')).not.toThrow()
   })
 })
+
+/**
+ * THE SEAT CHANNELS (phase 5) ride the same guard as everything else here —
+ * they grant and revoke other people's access to this Mac's doors, so an
+ * unguarded one is worse than an unguarded profile read. The set assertion at
+ * the top of this file already covers "registered through ownerOnly"; these
+ * cover what they answer, and that they answer rather than throw.
+ */
+describe('the seat channels', () => {
+  const seatDeps = (over: Partial<AccountIpcDeps['seats']> = {}): AccountIpcDeps =>
+    deps({
+      seats: {
+        door: null,
+        serving: () => [],
+        origin: 'https://registry.test',
+        ...over,
+      },
+    })
+
+  it('is in the named set, so the guard test above covers all four', () => {
+    for (const channel of [
+      'account:seats',
+      'account:teamSeats',
+      'account:grantSeat',
+      'account:endSeat',
+    ]) {
+      expect(ACCOUNT_CHANNELS).toContain(channel)
+    }
+  })
+
+  it('refuses with no_account on a desktop that never claimed a name', async () => {
+    const handlers = accountHandlers(deps())
+    for (const channel of [
+      'account:seats',
+      'account:teamSeats',
+      'account:grantSeat',
+      'account:endSeat',
+    ] as const) {
+      await expect(handlers[channel]({ slug: 'x', username: 'mira', id: 's' })).resolves.toEqual({
+        ok: false,
+        reason: 'no_account',
+      })
+    }
+  })
+
+  it('refuses a slug this Mac is not serving, without touching the registry', async () => {
+    let asked = false
+    const handlers = accountHandlers(
+      seatDeps({
+        door: {
+          forTeam: async () => {
+            asked = true
+            return { ok: true, value: [] }
+          },
+        } as never,
+      }),
+    )
+    await expect(handlers['account:teamSeats']('nobody')).resolves.toEqual({
+      ok: false,
+      reason: 'not_found',
+    })
+    expect(asked).toBe(false)
+  })
+
+  it('refuses a served team that has no published name — it can hold no seats', async () => {
+    const handlers = accountHandlers(
+      seatDeps({
+        door: {} as never,
+        serving: () => [
+          {
+            serviceId: 'svc-a',
+            slug: 'alpha',
+            team: null,
+            title: 'COOKREW Alpha',
+            access: 'paid' as const,
+            priceUsd: '1',
+          },
+        ],
+      }),
+    )
+    await expect(handlers['account:teamSeats']('alpha')).resolves.toEqual({
+      ok: false,
+      reason: 'not_found',
+    })
+  })
+
+  it('grants and ends against the team the slug publishes as', async () => {
+    const granted: string[] = []
+    const ended: string[] = []
+    const handlers = accountHandlers(
+      seatDeps({
+        door: {
+          grant: async (team: string, username: string) => {
+            granted.push(`${team}|${username}`)
+            return { ok: true, value: { id: 'seat-1' } }
+          },
+          end: async (team: string, id: string) => {
+            ended.push(`${team}|${id}`)
+            return { ok: true, value: undefined }
+          },
+        } as never,
+        serving: () => [
+          {
+            serviceId: 'svc-a',
+            slug: 'alpha',
+            team: '@drej/alpha',
+            title: 'COOKREW Alpha',
+            access: 'paid' as const,
+            priceUsd: '1',
+          },
+        ],
+      }),
+    )
+    await handlers['account:grantSeat']({ slug: 'alpha', username: 'mira' })
+    await handlers['account:endSeat']({ slug: 'alpha', id: 'seat-1' })
+    expect(granted).toEqual(['@drej/alpha|mira'])
+    expect(ended).toEqual(['@drej/alpha|seat-1'])
+  })
+
+  it('coerces junk at the bridge instead of throwing', async () => {
+    const handlers = accountHandlers(seatDeps({ door: {} as never }))
+    await expect(handlers['account:grantSeat'](null)).resolves.toMatchObject({ ok: false })
+    await expect(handlers['account:endSeat'](42)).resolves.toMatchObject({ ok: false })
+    await expect(handlers['account:teamSeats'](undefined)).resolves.toMatchObject({ ok: false })
+  })
+
+  it('refuses an empty username before the registry can park a seat on nobody', async () => {
+    const handlers = accountHandlers(
+      seatDeps({
+        door: {
+          grant: async () => {
+            throw new Error('must not be asked')
+          },
+        } as never,
+        serving: () => [
+          {
+            serviceId: 'svc-a',
+            slug: 'alpha',
+            team: '@drej/alpha',
+            title: 'A',
+            access: 'account' as const,
+          },
+        ],
+      }),
+    )
+    await expect(handlers['account:grantSeat']({ slug: 'alpha', username: '  ' })).resolves.toEqual(
+      { ok: false, reason: 'bad_username' },
+    )
+  })
+})
