@@ -12,11 +12,22 @@ function harness(over: { attached?: boolean; working?: boolean } = {}) {
     attached = false
   })
   const watchWorking = vi.fn()
+  // The mirror LINGERS past its last viewer (see MIRROR_LINGER_MS): a phone
+  // whose connection iOS reaped is not a user who left. These cases are about
+  // the DECISION, so the window is driven rather than waited out.
+  const queue = new Map<number, () => void>()
+  let nextTimer = 1
   const lazy = new LazyTerminalAttachments({
     attach,
     detach,
     isWorking: () => working,
-    watchWorking
+    watchWorking,
+    schedule: (run) => {
+      const id = nextTimer++
+      queue.set(id, run)
+      return id
+    },
+    cancel: (handle) => void queue.delete(handle as number)
   })
   return {
     lazy,
@@ -24,6 +35,12 @@ function harness(over: { attached?: boolean; working?: boolean } = {}) {
     detach,
     watchWorking,
     attached: () => attached,
+    /** Let every armed linger window come due. */
+    elapse: () => {
+      const entries = [...queue.entries()]
+      queue.clear()
+      for (const [, run] of entries) run()
+    },
     setWorking: (value: boolean) => {
       working = value
     }
@@ -47,6 +64,9 @@ describe('LazyTerminalAttachments', () => {
     h.lazy.release('t1')
     expect(h.detach).not.toHaveBeenCalled()
     h.lazy.release('t1')
+    // Not on the spot — the last viewer opens the linger window.
+    expect(h.detach).not.toHaveBeenCalled()
+    h.elapse()
     expect(h.detach).toHaveBeenCalledOnce()
     expect(h.attached()).toBe(false)
   })
@@ -59,6 +79,7 @@ describe('LazyTerminalAttachments', () => {
 
     h.setWorking(false)
     h.lazy.observeStatus('t1', 'idle')
+    h.elapse()
     expect(h.detach).toHaveBeenCalledOnce()
   })
 

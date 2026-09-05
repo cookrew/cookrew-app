@@ -687,6 +687,10 @@
 .sos-s { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-soft); line-height: 1.45; }
 .sos-price { display: flex; align-items: center; gap: 8px; padding: 2px 0 2px 30px; flex-wrap: wrap; }
 .sos-price-input { max-width: 90px; }
+.sos-words { display: flex; align-items: center; gap: 8px; padding: 2px 0 2px 30px; flex-wrap: wrap; }
+.sos-summary-input { flex: 1 1 220px; min-width: 0; }
+.sos-tags-input { flex: 1 1 160px; min-width: 0; }
+.sos-count { font-family: var(--font-mono); font-size: 10px; color: var(--ink-soft); }
 .sos-unit { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-soft); }
 .sos-rails { font-family: var(--font-mono); font-size: 10.5px; color: var(--violet); }
 .sos-bad { font-family: var(--font-mono); font-size: 10px; color: var(--rose); }
@@ -729,6 +733,16 @@
   font-family: var(--font-mono); font-size: 12px; padding: 5px 8px;
   border: 1.5px solid var(--violet); flex: 1; min-width: 0; word-break: break-all;
 }
+/* WHO CAN OPEN IT — a fact about the link, directly under the link. Quiet by
+   default; the "why" half only appears when the answer is narrow, because a
+   door anyone can reach needs no explanation. */
+.stc-reach {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.stc-reach-why { color: var(--dim); }
 .stc-sessions { display: flex; flex-direction: column; gap: 5px; margin-top: 12px; }
 .stc-payment-gap { margin-top: 12px; padding: 10px 12px; border-left: 3px solid var(--rose); background: rgba(220, 38, 38, 0.08); }
 .stc-payment-gap p { margin: 0 0 8px; font-size: 12px; }
@@ -749,3 +763,168 @@
 .stc-confirm-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
 .stc-danger { background: var(--rose); border-color: var(--rose); }
 .stc-danger-text { color: var(--rose); }
+
+/* ── the save-flow sheets, in the house dress ──
+   PaymentSettingsSheet, ServedTeamCard and ImportServedSheet reuse the grant
+   surface's gs-* skeleton, whose --cr-* tokens are defined nowhere in this
+   app — every surface wearing them fell back to a foreign dark theme, dark
+   enough that the app's own ink disappeared on it. cr-sheet re-dresses that
+   skeleton in the house materials: cream, hard lines, the offset shadow,
+   pixel headings. Structure stays gs-*; treatment is ours.
+
+   Two cascade facts to respect when editing:
+   - This file reaches the bundle BEFORE grant-surface.css (it loads
+     transitively via RosterPanel → TeamForkPicker, not via the sheets
+     themselves), so every specificity TIE with a gs-* rule loses — beat
+     compound gs-* selectors with more classes, never rely on order.
+   - `cr-sheet` rides on both the sheet AND its .gs-scrim. */
+.cr-sheet.gs-sheet {
+  background: var(--cream-hi);
+  color: var(--ink);
+  border: 2px solid var(--line);
+  border-radius: 0;
+  box-shadow: 4px 4px 0 var(--line);
+  overscroll-behavior: contain;
+}
+.cr-sheet .gs-sheet-head h2 {
+  font-family: var(--font-pixel);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+.cr-sheet .gs-x {
+  color: var(--ink-soft);
+}
+.cr-sheet .gs-sub {
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.cr-sheet .payment-rail-section {
+  border-bottom: 1px solid var(--line-soft);
+}
+.cr-sheet .payment-rail-section h3 {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.cr-sheet .gs-label {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+.cr-sheet .gs-input {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--cream);
+  border: 1.5px solid var(--line);
+  border-radius: 0;
+}
+.cr-sheet .gs-input:focus {
+  border-color: var(--amber-deep);
+  outline: none;
+}
+.cr-sheet .gs-hint,
+.cr-sheet .gs-foot-note {
+  font-family: var(--font-body);
+  font-size: 11px;
+  color: var(--muted);
+}
+/* Violet carries "serving" here as a border, not as text — #9b8acb ink on
+   cream is 3:1, and this line is the only signal a rail is configured. */
+.cr-sheet .payment-ready {
+  color: var(--ink-soft);
+  font: 700 10px var(--font-mono);
+  letter-spacing: 0.04em;
+  border-left: 3px solid var(--violet);
+  padding-left: 7px;
+}
+.cr-sheet .gs-primary {
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  background: var(--amber);
+  border: 2px solid var(--line);
+  border-radius: 0;
+  box-shadow: 2px 2px 0 var(--line);
+  padding: 6px 10px;
+}
+.cr-sheet .gs-primary:disabled {
+  opacity: 0.45;
+}
+/* END keeps the rose fill but earns the house line and cream ink on it. */
+.cr-sheet .gs-primary.stc-danger {
+  background: var(--rose);
+  border-color: var(--line);
+  color: var(--cream-hi);
+}
+.cr-sheet .gs-ghost {
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: var(--cream-hi);
+  color: var(--ink-soft);
+  border: 2px solid var(--line);
+  border-radius: 0;
+  padding: 6px 10px;
+}
+/* STOP SERVING is a ghost, but never a quiet one — (0,3,0) so the ghost
+   recolor above cannot strip the danger it carries. */
+.cr-sheet .gs-ghost.stc-danger-text {
+  color: var(--rose);
+}
+/* The .gs-loud variant is the ONLY error the payment sheet renders; the
+   compound selector outguns grant-surface's `.gs-paste-error.gs-loud` tie. */
+.cr-sheet .gs-paste-error,
+.cr-sheet .gs-paste-error.gs-loud {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--rose);
+  border: 1.5px dashed var(--rose);
+  border-radius: 0;
+  background: rgba(220, 38, 38, 0.06);
+  padding: 6px 9px;
+}
+.cr-sheet .stc-row {
+  border: 1px solid var(--line-soft);
+}
+.cr-sheet .stc-state,
+.cr-sheet .stc-confirm-b {
+  color: var(--muted);
+}
+
+/* The import sheet's own bits, re-inked (they wore --cr-* fallbacks too). */
+.cr-sheet .isv-dim {
+  color: var(--muted);
+}
+.cr-sheet .isv-team {
+  border: 1.5px solid var(--line-soft);
+  border-radius: 0;
+}
+.cr-sheet .isv-team:hover:not(:disabled) {
+  border-color: var(--amber-deep);
+}
+.cr-sheet .isv-team-off {
+  color: var(--amber-deep);
+}
+
+/* Phones: the sheet takes the width it can get and leaves the thumb room.
+   Doubled classes: `.gs-sheet.gs-small` and `.gs-scrim` are emitted AFTER
+   this file, so a plain tie here would lose (see the header note). */
+@media (max-width: 700px) {
+  .gs-scrim.cr-sheet {
+    padding: 12px;
+  }
+  .cr-sheet.cr-sheet.gs-sheet {
+    width: 100%;
+    max-height: 85dvh;
+    padding: 16px 14px calc(16px + env(safe-area-inset-bottom));
+  }
+}

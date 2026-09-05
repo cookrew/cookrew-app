@@ -25,7 +25,11 @@ import {
 } from './dispatch'
 import { HerdrHostMultiplexer, HERDR_SESSION } from './herdr-host-multiplexer'
 import { selfHostedLaunch, selfHostRefusalMessage } from './self-host-guard'
-import { askTerminal, beginShutdown, cancelAllAsks, pasteAndSubmit } from './ask'
+import { DEEP_LINK_SCHEME, createDeepLinkQueue, deepLinkInArgv, parseDeepLink } from './deep-link'
+import { DEEP_LINK_CHANNEL } from '../shared/deep-link'
+import { createRegistryTokenVerifier, registryKeyOverHttp } from './registry-token'
+import { faceWords, harnessesOf } from './served-face'
+import { askTerminal, beginShutdown, cancelAllAsks, ownerSubmit, pasteAndSubmit } from './ask'
 import { defaultProducerLease } from './producer-lease'
 import {
   boardSourcesFrom,
@@ -45,6 +49,7 @@ import { startSocketServer } from './socket-server'
 import { RoutineScheduler } from './routines'
 import { VoiceEngine } from './voice'
 import {
+  cachedTailnet,
   startMobileServer,
   mobileUrls,
   mobileEndpointList,
@@ -92,10 +97,10 @@ import { SessionRegistry } from './session-registry'
 import { LazyTerminalAttachments } from './lazy-terminal'
 import { planWorkspaceSwitch } from './workspace-switch'
 import { SwitchRunner } from './switch-runner'
-import { looksLikeInstallLink, presetIdFromInstallUrl } from './registry-install-link'
 import { terminalHasLiveWork } from './session-liveness'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { canonicalExternalUrl } from '../shared/external-url'
+import { isChromiumErrorPage } from '../shared/browser-navigation'
 import {
   claudeSessionFile,
   claudeSpawnCommand,
@@ -112,12 +117,7 @@ import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
 import { blocksResume, holderOf, liveSessionHolders, planHeldSessionFork } from './claude-live-session'
 import { createRestoreHandlers, registerRestoreIpc, RestoreHandlers } from './restore'
 import { withSessionLineage } from './session-lineage'
-import { registryHostHelp, resolveRegistryHosts } from '../shared/registry-host'
-import { RegistryHostSettings } from './registry-settings'
-import { publishPreset, type PayoutBinding, type PublishOutcome } from './publish-preset'
-import { pushToRegistry } from './registry-client'
 import { buildManifest, loadPublishingKey, signManifest } from './preset-publish'
-import { scrubForPublish } from './preset-scrub'
 import type { PresetPricing } from '../shared/preset-manifest'
 import { carrySessionToCwd } from './session-move'
 import { moveTerminalCwd } from './terminal-cwd'
@@ -144,6 +144,13 @@ import {
 } from './teams'
 import http from 'node:http'
 import { MOBILE_HTTPS_PORT, MOBILE_PORT } from './mobile-ports'
+import { createRelayServing } from './relay-serving'
+import { startRelayProxy, type RelayProxy } from './relay-proxy'
+import { importedDoors, rememberDoor, resolveDoor } from './relay-doorbook'
+import { SERVED_SESSION_END_PATH } from '../shared/served-transcript'
+import { DoorTranscript } from './door-transcript'
+import { DoorWatch } from './door-watch'
+import { doorNameOf, transcriptSourceFor } from './transcript-source'
 import { readJson, respondJson } from './mobile-http'
 import { deriveSlug, uniqueSlug } from './workspace-slug'
 import { networkInterfaces } from 'node:os'
@@ -156,7 +163,29 @@ import { ServedCallers } from './served-callers'
 import { serviceGrants } from './service-grants-store'
 import { requestHarnessCompletion, servedGrantPreflight } from './served-grant-preflight'
 import { servedSessionProvisioner } from './served-onboarding'
-import { handleServedRoute } from './served-endpoints'
+import {
+  gateCaller,
+  handleServedRoute,
+  identifyCaller,
+  type ServedEndpointDeps
+} from './served-endpoints'
+import { handleServedLineRoute, type LinePtyView } from './served-line'
+import {
+  orchTerminalNode,
+  parseAccountAddress,
+  parseServeAddress,
+  safeFaceName,
+  validateFace,
+  type ImportFace,
+  type ServeTarget
+} from './import-session'
+import {
+  openAdmission,
+  signInToDoor,
+  startStripeCheckout,
+  stripePaymentHeader
+} from './served-admission'
+import { buildX402Payment, deviceWallet } from './x402-caller'
 import { servedTurnReply } from './served-turn-reply'
 import { handleServedPayRoute } from './served-pay-route'
 import { railSettle } from './payment-rails'
@@ -175,16 +204,12 @@ import {
   x402Settle,
   type PaymentRequirements
 } from './x402-rail'
-import { RemoteCrewStore, parseCrewLink } from './remote-crews'
-import { crewLineCommand } from './crew-line-command'
-import { ServedRemoteTranscriptClient } from './served-remote-transcript'
 import { ServeRefused, type ServeAccess, type ServedTemplate } from './session-served'
 import { servedPaymentRails } from '../shared/served-payment-rails'
-import { PresetStore, isPresetId } from './preset-store'
+import type { ServeTransport } from '../shared/serve-transport'
 import { PinStore } from './pin-store'
 import { rekeyPinsByUuid } from './pin-rekey'
 import { cutVersionPin, type VersionPinRecord } from '../shared/version-pin'
-import { planPresetImport } from './preset-import'
 import { TeamClipboard } from './team-clip'
 import { UNCOPYABLE_PHASES } from '../shared/turn'
 import { GitInfoCache, addWorktree } from './git'
@@ -192,7 +217,7 @@ import { buildRoleBootMessage } from '../shared/fork'
 import { pageTurns } from '../shared/turn'
 import type { TurnPageRequest } from '../shared/turn'
 import { defaultAttachmentsDir, saveAttachment } from './attachments'
-import { sweepStorage } from './storage-gc-scan'
+import { sweepStorageInWorker } from './storage-gc-worker'
 
 // ── COMPOSITOR BUDGET — the golden-frame flicker ─────────────────────────────
 // Chromium sizes its raster-tile budget from a conservative GPU-memory guess.
@@ -207,8 +232,6 @@ app.commandLine.appendSwitch('force-gpu-mem-available-mb', '2048')
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const store = new WorkspaceStore()
-/** Installed marketplace presets — the dock's third chip family (§8). */
-const presetStore = new PresetStore()
 /** Version pins per terminal (§10) — what the rail's third marker class draws. */
 const pinStore = new PinStore()
 
@@ -501,19 +524,110 @@ const serving: Serving = wireServing({
 })
 /** Who has signed in to each served crew (TOFU accounts, M1). */
 const servedCallers = new ServedCallers()
-/** The crews this user added by link — the dock's third chip family. */
-const remoteCrews = new RemoteCrewStore(sessionsBase)
 
 /**
- * The address an owner hands out for a served crew — a LAN URL, because M1 has
- * no public domain and the honest thing to give someone is a link that actually
- * works from where they are. Loopback only when nothing else is up.
+ * The address an owner hands out for a served team, AND how far it carries.
+ *
+ * The two are one answer, which is why they are returned together. The card
+ * hands this string to a person who will send it to someone else, so the card
+ * has to be able to say who that someone can be — a LAN address shared with a
+ * colleague in another city is a link that cannot work, and the product used
+ * to give it out with no indication of that.
+ *
+ * The tailnet wins when it is up, for the same reason the phone's endpoint
+ * list puts it first: the owner already has the wider of two links, and
+ * advertising the narrower one would be choosing worse on their behalf. The
+ * relay (cookrew.dev) joins this function when it exists; nothing else has to
+ * change, because everything downstream reads the transport rather than
+ * guessing from the shape of the URL.
  */
-function servedAddress(slug: string): string {
+/**
+ * THE RELAY, and why it is opt-in rather than the default it will become.
+ *
+ * Turning this on hands a team's door to a machine we operate, and until
+ * cookrew.dev is actually standing there that would be a promise the product
+ * cannot keep. Configured → the card offers a cookrew.dev name; not configured
+ * → everything below behaves exactly as it did, which is what keeps every
+ * existing test about reach meaningful rather than merely still-passing.
+ */
+const RELAY_ORIGIN = process.env.COOKREW_REGISTRY ?? ''
+const RELAY_HANDLE = process.env.COOKREW_HANDLE ?? ''
+const relayServing =
+  RELAY_ORIGIN && RELAY_HANDLE
+    ? createRelayServing({
+        origin: RELAY_ORIGIN,
+        loopbackPort: () => MOBILE_PORT,
+        log: (message) => console.error(message)
+      })
+    : null
+
+/**
+ * Sign-in with a cookrew.dev token needs the registry's public key, and only
+ * a door on the relay has a name a token could be minted for — so the verifier
+ * exists exactly when the relay does. See registry-token.ts.
+ */
+const registryTokens = RELAY_ORIGIN
+  ? createRegistryTokenVerifier({ keys: registryKeyOverHttp(RELAY_ORIGIN) })
+  : null
+
+function servedReach(slug: string): { address: string; transport: ServeTransport } {
+  // THE RELAY WINS when it is carrying this door, because it is the only
+  // address that works for the person an owner is most likely to send it to.
+  const relayed = relayServing?.addressFor(slug)
+  if (relayed) return { address: relayed.address, transport: 'relay' }
+  // MagicDNS name, never a raw tailnet IP: it survives re-auth, and it is the
+  // one a caller can actually type back to us.
+  const magic = cachedTailnet()?.magicDnsName
+  if (magic) {
+    return { address: `https://${magic}:${MOBILE_HTTPS_PORT}/${slug}`, transport: 'tailnet' }
+  }
   const lan = Object.values(networkInterfaces())
     .flatMap((list) => list ?? [])
     .find((net) => net.family === 'IPv4' && !net.internal)?.address
-  return `http://${lan ?? '127.0.0.1'}:${MOBILE_PORT}/${slug}`
+  return { address: `http://${lan ?? '127.0.0.1'}:${MOBILE_PORT}/${slug}`, transport: 'lan' }
+}
+
+function servedAddress(slug: string): string {
+  return servedReach(slug).address
+}
+
+/**
+ * Put a served team on the relay — the same door, whether it was just served
+ * or is being served again after a restart. Serving is an INTENT that
+ * survives the app dying (served-persist); the relay connection does not, so
+ * boot re-dials every template it rehydrates. Without this a restart left
+ * the registry saying `live: false` and every imported card saying "Nobody
+ * is serving", while the owner's surface said the team was up.
+ */
+async function joinRelayFor(template: ServedTemplate): Promise<void> {
+  if (!relayServing) return
+  const snapshot = teams.load(template.templateId)
+  const joined = await relayServing.serve({
+    slug: template.slug,
+    team: template.slug,
+    handle: RELAY_HANDLE,
+    face: {
+      title: snapshot?.name ?? template.templateId,
+      door: (snapshot ? orchAgentOf(snapshot) : null) ?? '',
+      agents: (snapshot?.nodes ?? []).filter((n) => n.kind === 'terminal').length,
+      access: template.access,
+      ...(template.access === 'paid' && template.priceUsd !== undefined
+        ? { priceUsd: template.priceUsd }
+        : {}),
+      rails: servedPaymentRails(
+        servedPaymentTerms({
+          slug: template.slug,
+          ...(template.priceUsd !== undefined ? { priceUsd: template.priceUsd } : {})
+        })
+      ),
+      // The owner's words, verbatim, and the harness NAMES behind the door —
+      // products, never the roster (served-face.ts).
+      ...(template.summary !== undefined ? { summary: template.summary } : {}),
+      ...(template.tags !== undefined ? { tags: template.tags } : {}),
+      ...(snapshot ? { harnesses: harnessesOf(snapshot) } : {})
+    }
+  })
+  if (!joined.ok) console.error(`serving ${template.slug}: not on the relay (${joined.reason})`)
 }
 
 function servedPaymentReturn(slug: string): string {
@@ -639,10 +753,13 @@ async function handleServedSlug(
   const settlementClaims = authorization.startsWith('Bearer ')
     ? issuer.verifyToken(authorization.slice(7))
     : null
-  const answer = await handleServedRoute(
-    {
+  const servedDeps: ServedEndpointDeps = {
       issuer,
       callers: servedCallers,
+      // A registry token is minted for ONE published name; a door that is not
+      // on the relay has none, and refuses every such token.
+      doorName: (template) => relayServing?.addressFor(template.slug)?.name ?? null,
+      ...(registryTokens ? { registryTokens } : {}),
       admit: async (serviceId, sub) => {
         const { session, created } = await serving.instantiator.admit(serviceId, sub)
         return { workspaceId: session.workspaceId, sessionId: session.identity.sessionId, created }
@@ -669,9 +786,24 @@ async function handleServedSlug(
           prompt
         )
       },
+      endSession: (serviceId, sub) => {
+        const session = serving.instantiator.sessionForCaller(serviceId, sub)
+        if (session === null) return false
+        endServedSession(session.identity.sessionId)
+        return true
+      },
       sessionForCaller: (serviceId, sub) => {
         const session = serving.instantiator.sessionForCaller(serviceId, sub)
         if (session === null) return null
+        // A SESSION WHOSE WORKSPACE IS GONE IS OVER. The owner removed it from
+        // the canvas; the record outlived it and answered every read with 503
+        // ("not available right now — usually is again shortly") forever,
+        // while the caller's line hung on "opening". Ended here, so the
+        // caller is told 404 — no session — and their next line mints afresh.
+        if (!store.list().workspaces.some((w) => w.id === session.workspaceId)) {
+          serving.instantiator.end(session.identity.sessionId)
+          return null
+        }
         return {
           conductorId: serving.instantiator.conductorFor(session.identity.sessionId)
         }
@@ -746,16 +878,42 @@ async function handleServedSlug(
           agents: nodes.filter((n) => n.kind === 'terminal').length
         }
       }
+  }
+
+  // The caller's PTY line (SSE + raw + resize) writes the response itself, so
+  // it mounts beside the value-shaped routes rather than through them.
+  const lineHandled = await handleServedLineRoute(
+    {
+      gate: (lineHeaders) => gateCaller(servedDeps, template, lineHeaders),
+      identify: (lineHeaders) => identifyCaller(servedDeps, template, lineHeaders),
+      admit: async (serviceId, sub) => {
+        const { sessionId, created } = await servedDeps.admit(serviceId, sub)
+        return { sessionId, created }
+      },
+      conductorFor: (sessionId) => serving.instantiator.conductorFor(sessionId),
+      openConductorFor: (serviceId, sub) =>
+        servedDeps.sessionForCaller(serviceId, sub)?.conductorId ?? null,
+      hadSession: (serviceId, sub) => serving.instantiator.hadSession(serviceId, sub),
+      attach: attachServedLine,
+      resident: (conductorId) => ptys.get(conductorId) ?? null,
+      write: async (conductorId, data) => {
+        const session = ptys.get(conductorId)
+        if (!session) return { ok: false, reason: 'the line is not up' }
+        return ownerSubmit(session, data)
+      }
     },
     template,
     method,
     pathname,
-    {
-      headers,
-      body,
-      query: Object.fromEntries(url.searchParams.entries())
-    }
+    { headers, body, request, response }
   )
+  if (lineHandled) return true
+
+  const answer = await handleServedRoute(servedDeps, template, method, pathname, {
+    headers,
+    body,
+    query: Object.fromEntries(url.searchParams.entries())
+  })
   if (answer === null) return false
   // The 401's www-authenticate carries the ceremony's challenge, so it is set
   // before the body goes out (respondJson writes the head itself).
@@ -770,6 +928,22 @@ async function handleServedSlug(
   }
   return true
 }
+/**
+ * Boot the conductor's PTY mirror and wait (bounded, ~2s) for residency — the
+ * served-line analogue of acquireViewWhenReady. ensureTerminalMirror is the
+ * same primitive the /ask path re-attaches with, so a line and an ask can
+ * never disagree about whether the crew is standing there.
+ */
+async function attachServedLine(conductorId: string): Promise<LinePtyView | null> {
+  if (!ptys.get(conductorId)) ensureTerminalMirror(conductorId)
+  for (let i = 0; i < 40; i += 1) {
+    const session = ptys.get(conductorId)
+    if (session) return session
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  return ptys.get(conductorId) ?? null
+}
+
 const boardProbe = createProbeSampler(
   tmuxProbeDeps({
     knownTerminalIds: () => agents.list().map((entry) => entry.id),
@@ -808,71 +982,147 @@ const traces = new TraceReader(store, {
 })
 
 /**
- * Local and served cards share one transcript capability surface. A served
- * client holds its Bearer in main memory; node data contains only origin+slug.
+ * THE RECORD BEHIND A CARD comes from one of three places (transcript-source):
+ * the harness's session file, the PTY scrape, or — for an imported card — the
+ * DOOR the card is a line into. The five reads below are the only seam: the
+ * renderer asks the same questions over the same IPC for every card, and the
+ * rail, pager and idle preview are the same components. A remote card differs
+ * from a preset card in where its record lives, and nowhere else.
+ *
+ * (The R30 crew lane once threaded a remote client through seven seams and a
+ * second card type; the owner reverted it. This is one seam and no new card.)
  */
-const servedTranscriptClients = new Map<string, ServedRemoteTranscriptClient>()
+const doorTranscripts = new Map<string, Promise<DoorTranscript | null>>()
 
-function servedTranscriptFor(terminalId: string): ServedRemoteTranscriptClient | null {
-  const node = store.nodeAcrossWorkspaces(terminalId)?.node
-  if (node?.kind !== 'terminal' || !node.servedTranscript) return null
-  const key = JSON.stringify([node.servedTranscript.origin, node.servedTranscript.slug])
-  let client = servedTranscriptClients.get(key)
-  if (!client) {
-    client = new ServedRemoteTranscriptClient(node.servedTranscript)
-    servedTranscriptClients.set(key, client)
+function doorTranscriptFor(terminalId: string): Promise<DoorTranscript | null> {
+  const hit = store.nodeAcrossWorkspaces(terminalId)
+  if (!hit || hit.node.kind !== 'terminal' || transcriptSourceFor(hit.node) !== 'door') {
+    return Promise.resolve(null)
   }
-  return client
+  const existing = doorTranscripts.get(terminalId)
+  if (existing) return existing
+  const node = hit.node
+  const facts = node.servedSession as NonNullable<TerminalNodeData['servedSession']>
+  const name = doorNameOf(node)
+  const made = (async (): Promise<DoorTranscript | null> => {
+    // A relayed door is read at the relay's loopback end, exactly where the
+    // card's own line goes; a dialled door at its address. Same sign-in
+    // either way — the same key file and the same sub the line uses.
+    const target = name
+      ? { origin: `http://127.0.0.1:${(await relayProxy()).port}`, slug: name }
+      : { origin: facts.origin, slug: facts.slug }
+    return new DoorTranscript(target, { signIn: (at) => signInToDoor(at) })
+  })().catch((error) => {
+    console.error(`door transcript for ${terminalId}: ${String(error)}`)
+    // NEVER the local file. A door card whose door cannot be reached is a
+    // door card with a refusal to show, not a local card — so the answer is
+    // a client that says 'not-serving' on every read, forgotten at once so
+    // the next read tries the relay again.
+    doorTranscripts.delete(terminalId)
+    return new DoorTranscript(
+      { origin: facts.origin, slug: facts.slug },
+      {
+        signIn: async () => {
+          throw error instanceof Error ? error : new Error(String(error))
+        }
+      }
+    )
+  })
+  doorTranscripts.set(terminalId, made)
+  return made
+}
+
+/** Tell the door this card's session is over — as the same caller the card is. */
+async function endSessionAtDoor(node: TerminalNodeData): Promise<void> {
+  const facts = node.servedSession
+  if (!facts) return
+  try {
+    const name = doorNameOf(node)
+    const target = name
+      ? { origin: `http://127.0.0.1:${(await relayProxy()).port}`, slug: name }
+      : { origin: facts.origin, slug: facts.slug }
+    const token = await signInToDoor(target)
+    const res = await fetch(`${target.origin}/${target.slug}${SERVED_SESSION_END_PATH}`, {
+      method: 'POST',
+      redirect: 'manual',
+      signal: AbortSignal.timeout(15000),
+      headers: { authorization: `Bearer ${token}` }
+    })
+    if (res.status !== 200 && res.status !== 404) {
+      console.error(`ending the session behind ${node.name}: the door answered ${res.status}`)
+    }
+  } catch (error) {
+    console.error(`ending the session behind ${node.name}: ${String(error)}`)
+  }
+}
+
+/** Sync form, for the seams that must not await (pins, watch routing). The
+ *  focused workspace is in memory and answers almost every call; the
+ *  cross-workspace scan (which can read parked workspaces off disk) is only
+ *  for a card that is not here. */
+function isDoorCard(terminalId: string): boolean {
+  const here = store.focusedState.nodes.find((node) => node.id === terminalId)
+  const node = here ?? store.nodeAcrossWorkspaces(terminalId)?.node
+  return node?.kind === 'terminal' && transcriptSourceFor(node) === 'door'
 }
 
 const turnHistoryFor = async (terminalId: string) => {
-  const remote = servedTranscriptFor(terminalId)
-  return remote ? (await remote.listTurns({})).turns : turns.history(terminalId)
+  const door = await doorTranscriptFor(terminalId)
+  return door ? door.turns() : turns.history(terminalId)
 }
 
 const turnPageFor = async (terminalId: string, request: TurnPageRequest = {}) => {
-  const remote = servedTranscriptFor(terminalId)
-  return remote ? remote.listTurns(request) : pageTurns(turns.history(terminalId), request)
+  const door = await doorTranscriptFor(terminalId)
+  return door ? door.turnsPage(request) : pageTurns(turns.history(terminalId), request)
 }
 
 const traceIndexFor = async (
   terminalId: string,
   request: Parameters<TraceReader['index']>[1] = {}
 ) => {
-  const remote = servedTranscriptFor(terminalId)
-  return remote ? remote.listTraceIndex(request) : traces.index(terminalId, request)
+  const door = await doorTranscriptFor(terminalId)
+  return door ? door.traceIndex(request) : traces.index(terminalId, request)
 }
 
 const traceMarkersFor = async (terminalId: string) => {
-  const remote = servedTranscriptFor(terminalId)
-  return remote ? remote.listTraceMarkers() : traces.boundaryMarkers(terminalId)
+  const door = await doorTranscriptFor(terminalId)
+  return door ? door.traceMarkers() : traces.boundaryMarkers(terminalId)
 }
 
 /** Earlier lineage segments (pre-compact/pre-clear checkpoints). Local files
- *  only: a served transcript's lineage lives on the author's machine, and an
- *  empty listing is the honest answer here. */
-const lineageSegmentsFor = async (terminalId: string) => {
-  const remote = servedTranscriptFor(terminalId)
-  return remote ? [] : traces.lineageSegments(terminalId)
-}
+ *  only: a remote card's earlier session files exist at the author's app, and
+ *  an empty listing is the honest answer — the ◆ markers themselves still
+ *  render, they just do not open anything (parity contract §3). */
+const lineageSegmentsFor = async (terminalId: string) =>
+  isDoorCard(terminalId) ? [] : traces.lineageSegments(terminalId)
 
 const tracePageFor = async (
   terminalId: string,
   request: Parameters<TraceReader['page']>[1] = {}
 ) => {
-  const remote = servedTranscriptFor(terminalId)
-  return remote ? remote.listTrace(request) : traces.page(terminalId, request)
+  const door = await doorTranscriptFor(terminalId)
+  return door ? door.tracePage(request) : traces.page(terminalId, request)
 }
 
 const latestCheckpointFor = async (terminalId: string) => {
-  const remote = servedTranscriptFor(terminalId)
-  if (!remote) return traces.latestCheckpoint(terminalId)
-  const page = await remote.listTurns({ limit: 1 })
-  const turn = page.turns[page.turns.length - 1]
-  return turn
-    ? { prompt: turn.prompt, reply: turn.reply, ...(turn.title ? { title: turn.title } : {}) }
-    : null
+  const door = await doorTranscriptFor(terminalId)
+  return door ? door.latest() : traces.latestCheckpoint(terminalId)
 }
+
+/** What the record behind a remote card is doing; null for every local card. */
+const transcriptStatusFor = async (terminalId: string) => {
+  const door = await doorTranscriptFor(terminalId)
+  if (!door) return null
+  // A FRESH answer, not the last one: the state is re-read from the door
+  // (one record, memoised for a second) so a card asked "why is the rail
+  // empty" is not told about a refusal from before the door came up.
+  await door.fingerprint().catch(() => undefined)
+  return door.state()
+}
+
+/** Version pins are caller-side annotations of a LOCAL session; a remote rail
+ *  draws none (parity contract Q4: absent-and-not-rendering). */
+const pinsFor = (terminalId: string) => (isDoorCard(terminalId) ? [] : pinStore.list(terminalId))
 
 // Trace-perf T4: push a "your checkpoint changed" nudge to the renderer the
 // instant a watched session file grows, so a card reflects a new turn without
@@ -880,6 +1130,20 @@ const latestCheckpointFor = async (terminalId: string) => {
 // the backstop for anything fs.watch coalesces or drops.
 const latestWatch = new LatestFileWatcher({
   resolveFile: (terminalId) => traces.watchSpec(terminalId)?.file ?? null,
+  onChange: (terminalId) => mainWindow?.webContents.send('trace:latest-changed', terminalId)
+})
+// The same nudge for a record that lives at somebody else's app: while a
+// remote card is subscribed, its door is asked on a short interval and the
+// card is pushed when the answer changes (door-watch). Routed by source below.
+const doorWatch = new DoorWatch({
+  probe: async (terminalId) => {
+    // Network traffic through the relay, unattended: not while nobody can
+    // see the card. Null means "nothing new", and the poll simply resumes.
+    if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible() || mainWindow.isMinimized()) {
+      return null
+    }
+    return (await doorTranscriptFor(terminalId))?.fingerprint() ?? null
+  },
   onChange: (terminalId) => mainWindow?.webContents.send('trace:latest-changed', terminalId)
 })
 
@@ -898,6 +1162,10 @@ function terminalIdForSessionName(sessionName: string): string | null {
 const lazyTerminals = new LazyTerminalAttachments({
   attach: (terminalId) => ensureTerminalMirror(terminalId),
   detach: (terminalId) => detachTerminalMirror(terminalId),
+  // Only a resident mirror can be kept alive — trim() is reached for every
+  // terminal at boot and on every status event, and a linger armed for a
+  // terminal with no mirror would defer its watch/tracker release for nothing.
+  resident: (terminalId) => ptys.isLive(terminalId),
   isWorking: (terminalId) =>
     agentStatus(sessionNameFor(terminalId)) === 'working' || turns.inTurn(terminalId),
   watchWorking: (terminalId) => {
@@ -921,6 +1189,55 @@ for (const terminal of store.terminalsAcross()) {
 store.on('op', (e) => events.append(e))
 events.on('event', (e) => mainWindow?.webContents.send('event:new', e))
 let mainWindow: BrowserWindow | null = null
+
+/**
+ * DEEP LINKS — `cookrew://import/@handle/team` and its kin (deep-link.ts).
+ *
+ * A link can arrive before the window exists (the app was launched BY it),
+ * so it is queued until the renderer has loaded and delivered on
+ * `app:deep-link` as the PARSED object; a link that does not parse goes
+ * nowhere. Main never acts on a link itself — the renderer opens the same
+ * sheet a person would, and the sheet still asks before anything is placed.
+ */
+const deepLinks = createDeepLinkQueue((link) => {
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send(DEEP_LINK_CHANNEL, link)
+  }
+})
+
+function acceptDeepLink(raw: string): void {
+  const link = parseDeepLink(raw)
+  if (link === null) {
+    // The link itself is not logged: it is whatever a stranger's page put in
+    // an href, and a log line is not the place to reproduce it.
+    console.error('deep link refused: not a shape this app acts on')
+    return
+  }
+  deepLinks.push(link)
+}
+
+/** A link's arrival is the person asking for this window. */
+function focusMainWindow(): void {
+  if (!mainWindow) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.focus()
+}
+
+/**
+ * Claim the `cookrew://` scheme. A packaged app registers its own bundle; in
+ * development the running Electron binary has to be told which script it
+ * launches with, or the OS would open a bare Electron shell on the link
+ * (the form Electron's own docs prescribe).
+ */
+function registerDeepLinkScheme(): void {
+  const claimed = app.isPackaged
+    ? app.setAsDefaultProtocolClient(DEEP_LINK_SCHEME)
+    : process.argv.length >= 2 &&
+      app.setAsDefaultProtocolClient(DEEP_LINK_SCHEME, process.execPath, [
+        path.resolve(process.argv[1])
+      ])
+  if (!claimed) console.error(`could not register ${DEEP_LINK_SCHEME}:// with the OS`)
+}
 
 // Installed the moment the store and the log exist, and before any boot path
 // can start a background promise. Node ≥15 makes an unhandled rejection fatal,
@@ -1273,7 +1590,10 @@ function spawnTracked(t: {
         // name; `sessionEnv` still allowlists on top, so a value here reaches
         // nothing that grantedKeys does not name.
         ownerEnv: grants.ownerEnvFor(servedCtx.serviceId),
-        grantedKeys: grants.envKeysFor(servedCtx.serviceId)
+        grantedKeys: grants.envKeysFor(servedCtx.serviceId),
+        // The canvas control plane is the owner's alone: pty.ts withholds the
+        // env keys that name this socket, and the profile denies the connect.
+        controlSocketPath: ptys.socketPath
       })
     : undefined
   const session = ptys.spawn(
@@ -1833,11 +2153,35 @@ function switchWorkspace(nameOrId: string): WorkspaceMeta {
   return store.switchWorkspace(meta.id)
 }
 
+/**
+ * END A SERVED SESSION, ALL OF IT. The instantiator forgets the record and
+ * removes the sandbox; the WORKSPACE it minted — the terminals a stranger's
+ * session was running on this machine — is destroyed with it. Whether the
+ * owner ended it from the Sessions table or the caller ended it from their
+ * card, nothing of the session is left running afterwards.
+ */
+function endServedSession(sessionId: string): { stopped: number } {
+  const record = serving.instantiator.sessions().find((s) => s.identity.sessionId === sessionId)
+  const stopped = serving.instantiator.end(sessionId)
+  if (record && store.list().workspaces.some((w) => w.id === record.workspaceId)) {
+    try {
+      removeWorkspace(record.workspaceId)
+    } catch (error) {
+      console.error(`ending ${sessionId}: its workspace could not be removed: ${String(error)}`)
+    }
+  }
+  return stopped
+}
+
 function removeWorkspace(nameOrId: string): ReturnType<WorkspaceStore['list']> {
   const meta =
     store.list().workspaces.find((w) => w.id === nameOrId) ?? store.metaByName(nameOrId)
   if (!meta) throw new Error(`Workspace '${nameOrId}' not found`)
   const browserIds = store.browserIdsOf(meta.id)
+  // A served session's workspace: the session ends WITH it. Otherwise the
+  // record lingers open with no conductor and every caller read is a 503.
+  const servedHere = serving.instantiator.sessionForWorkspace(meta.id)
+  if (servedHere) serving.instantiator.end(servedHere.identity.sessionId)
   // Kill this workspace's terminals BEFORE deleting it — store.removeWorkspace
   // only switches away (detach) and rm's the state dir, so without this each
   // terminal's tmux session (a claude CLI, bypassPermissions) would leak
@@ -2211,12 +2555,24 @@ function retireTerminal(id: string, why: string): void {
   // A dead generation's lease holder becomes invisible and its late release
   // a no-op — a reborn id must never inherit a stranded submission window.
   defaultProducerLease().retire(id)
+  // Same rule for the mirror's linger window: an armed one belongs to the
+  // dead generation and would detach a reborn id's fresh mirror.
+  lazyTerminals.forget(id)
   sessionSync.unwatch(id)
   turns.untrack(id)
 }
 
 async function removeNode(id: string): Promise<void> {
+  // A removed remote card forgets its door; a re-import signs in afresh.
+  doorTranscripts.delete(id)
+  doorWatch.forget(id)
   const node = store.node(id)
+  // "END THIS SESSION" means at the door, too. The card is the caller's only
+  // handle on a session running at someone else's app; closing it without
+  // telling the door left that session — its workspace, its agents — running
+  // there for nobody. Best effort and off the critical path: the card goes
+  // whatever the door says, and a door that cannot be reached is logged.
+  if (node?.kind === 'terminal' && node.servedSession) void endSessionAtDoor(node)
   retireTerminal(id, 'terminal removed')
   defaultProducerLease().forgetTerminal(id)
   // A permanently removed uuid never returns: its input-provenance fact
@@ -2249,12 +2605,10 @@ interface CreateTerminalOpts {
   /** Boot a fresh agent from a saved role instead of a bare preset. */
   roleName?: string
   /**
-   * Run THIS instead of the preset's command. Used by a placed remote crew,
-   * whose card is a line to someone else's orch rather than a local harness.
+   * Run THIS instead of the preset's command. Used by a placed remote-orch
+   * card, whose command is a line to someone else's orch, not a local harness.
    */
   command?: string
-  /** Public transcript address for a placed remote crew. */
-  servedTranscript?: TerminalNodeData['servedTranscript']
 }
 
 function createTerminal(opts: CreateTerminalOpts): CanvasNode {
@@ -2283,7 +2637,6 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
     cwd: store.focusedState.dir,
     orch: opts.orch ?? false,
     role: role ? role.name : null,
-    ...(opts.servedTranscript ? { servedTranscript: opts.servedTranscript } : {}),
     ...(restoredSessionId ? { claudeSessionId: restoredSessionId } : {}),
     position: opts.position ?? { ...DEFAULT_CANVAS_POSITION },
     size: DEFAULT_TERMINAL_SIZE
@@ -2483,17 +2836,373 @@ async function createWorkspaceFromTeam(
  * fixture path) the orch still points at 127.0.0.1's own listener, so the flow
  * is exercisable end to end before any public relay exists.
  */
-/** The proxy terminal's mirror client, resolved for dev and packaged. */
-function crewLineScript(): string {
-  return app.isPackaged
-    ? path.join(process.resourcesPath, 'crew-line.mjs')
-    : path.join(dirname, '../../resources/crew-line.mjs')
-}
-
 function orchMirrorScript(): string {
   return app.isPackaged
     ? path.join(process.resourcesPath, 'orch-mirror.mjs')
     : path.join(dirname, '../../resources/orch-mirror.mjs')
+}
+
+/** The remote-import card's transport, resolved for dev and packaged. */
+/**
+ * THE CALLER'S SIDE OF IMPORTING A SERVED TEAM — one set of operations,
+ * reached from the desktop over IPC and from the phone over the mobile API.
+ *
+ * The phone used to be refused ("served teams can only be imported from the
+ * desktop app") on the reasoning that a phone has no terminal to place. It
+ * never needed one: the card is placed and spawned HERE, at the desktop, and
+ * the phone is a remote view of this canvas — placing a preset from the phone
+ * already works that way. The refusal was a missing route, not a rule.
+ *
+ * Every Bearer and every key stays in this process either way.
+ */
+const serveOps = {
+  inspect: (link: string) => inspectServeAddress(link),
+  browse: async (link: string) => {
+    const account = parseAccountAddress(link)
+    if (!account) return { ok: false as const, reason: 'bad-address' as const }
+    try {
+      const found = await fetch(new URL(`/v1/doors/@${account.handle}`, account.origin), {
+        redirect: 'manual',
+        signal: AbortSignal.timeout(5000)
+      })
+      if (!found.ok) return { ok: false as const, reason: 'not-serving' as const }
+      const body = (await found.json()) as { doors?: unknown }
+      const doors = Array.isArray(body.doors) ? body.doors : []
+      return {
+        ok: true as const,
+        handle: account.handle,
+        teams: doors.map(publicTeam).filter((t): t is BrowsedTeam => t !== null)
+      }
+    } catch {
+      return { ok: false as const, reason: 'unreachable' as const }
+    }
+  },
+  gate: async (link: string) => {
+    const target = parseServeAddress(link)
+    if (!target) return { ok: false as const, reason: 'bad-address' as const }
+    try {
+      const reached = await reachable(target)
+      if (!reached) return { ok: false as const, reason: 'sign-in' as const, detail: 'not serving' }
+      const at = reached.at
+      const token = await signInToDoor(at)
+      callerTokens.set(targetKey(target), token)
+      const phase = await openAdmission(at, token)
+      return { ok: true as const, phase, wallet: deviceWallet() }
+    } catch (error) {
+      return {
+        ok: false as const,
+        reason: 'sign-in' as const,
+        detail: error instanceof Error ? error.message : String(error)
+      }
+    }
+  },
+  checkout: async (link: string) => {
+    const target = parseServeAddress(link)
+    const token = target ? callerTokens.get(targetKey(target)) : undefined
+    if (!target || !token) return { ok: false as const, reason: 'not-signed-in' as const }
+    try {
+      const reached = await reachable(target)
+      if (!reached) return { ok: false as const, reason: 'unavailable' as const }
+      const checkout = await startStripeCheckout(reached.at, token)
+      // The URL comes back too: a hand-off that silently failed to raise a
+      // browser would otherwise leave the person waiting on a page they never
+      // saw, with no way to reach it. It is a capability — the sheet keeps it
+      // to re-open, and never prints it.
+      return { ok: true as const, session: checkout.session, url: checkout.url }
+    } catch (error) {
+      return {
+        ok: false as const,
+        reason: 'unavailable' as const,
+        detail: error instanceof Error ? error.message : String(error)
+      }
+    }
+  },
+  settle: async (link: string, rail: 'x402' | 'stripe', session?: string) => {
+      const target = parseServeAddress(link)
+      const token = target ? callerTokens.get(targetKey(target)) : undefined
+      if (!target || !token) return { ok: false as const, reason: 'not-signed-in' as const }
+      try {
+        const reached = await reachable(target)
+        if (!reached) return { ok: false as const, reason: 'refused' as const }
+        const at = reached.at
+        let payment: string
+        if (rail === 'stripe') {
+          if (!session) return { ok: false as const, reason: 'no-session' as const }
+          payment = stripePaymentHeader(session)
+        } else {
+          const quoted = await openAdmission(at, token)
+          const terms =
+            quoted.kind === 'pay'
+              ? quoted.rails.find((entry) => entry.rail === 'x402')
+              : undefined
+          if (!terms || terms.rail !== 'x402') {
+            // Already open, or this door stopped quoting USDC. Either way there
+            // is nothing to sign, and signing a stale quote is money gone.
+            return { ok: true as const, phase: quoted }
+          }
+          payment = await buildX402Payment(terms.requirements)
+        }
+        return { ok: true as const, phase: await openAdmission(at, token, payment) }
+      } catch (error) {
+        return {
+          ok: false as const,
+          reason: 'refused' as const,
+          detail: error instanceof Error ? error.message : String(error)
+        }
+      }
+  },
+  import: async (
+    link: string,
+    position?: { x: number; y: number },
+    paid?: { price: string; asset: string; rail: 'x402' | 'stripe' }
+  ) => {
+      const inspected = await inspectServeAddress(link)
+      if (!inspected.ok) return inspected
+      const node = orchTerminalNode(
+        inspected.face,
+        inspected.target,
+        orchLineScript(),
+        randomUUID(),
+        store.focusedState.dir,
+        position ?? { x: 160, y: 120 },
+        // The receipt, taken at the moment of admission — not re-derived
+        // later, when the door may be quoting a different price.
+        { openedAt: Date.now(), ...(paid ? { paid } : {}) }
+      )
+      const placed = store.addNode(node)
+      /**
+       * PLACING IS THE COMMITMENT; booting the terminal is not.
+       *
+       * A throw here used to reject the whole call, so the sheet showed a raw
+       * internal error — no herdr pane labelled … ensureSession first — while
+       * the card sat on the canvas anyway. The person was told it failed and
+       * given the thing at the same time, which is the worst of both.
+       *
+       * The card is placed. If its terminal could not start this second it
+       * starts when the card is opened, like every other card that boots late.
+       */
+      try {
+        spawnTracked(placed as TerminalNodeData)
+      } catch (error) {
+        console.error(`import: ${inspected.face.name} was placed but did not boot: ${String(error)}`)
+      }
+      store.recordEvent('session.imported', inspected.face.name, inspected.face.door, link.trim())
+      return { ok: true as const, node: placed }
+  }
+}
+
+function orchLineScript(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'orch-line.mjs')
+    : path.join(dirname, '../../resources/orch-line.mjs')
+}
+
+/** A public face is small; anything larger is not a face we should parse. */
+const MAX_FACE_BYTES = 64 * 1024
+
+/**
+ * Bearers held for doors this app has signed in to, while an import is being
+ * decided. MAIN-ONLY BY CONSTRUCTION: the gate sheet drives the ceremony over
+ * IPC by naming the door, never by holding its credential, so a renderer bug
+ * cannot leak one. Keyed by origin+slug; a token outlives the sheet only until
+ * the app quits (they expire on their own at the door).
+ */
+const callerTokens = new Map<string, string>()
+
+/**
+ * One key per door, and NOT its wire address.
+ *
+ * A relayed door is reached through a loopback port that changes with every
+ * restart, so keying a token by where it was reached would lose it the moment
+ * the app came back. A published name is the durable identity; a dialled
+ * door's address is its own.
+ */
+function targetKey(target: ServeTarget): string {
+  return target.door ?? `${target.origin}/${target.slug}`
+}
+
+/** One team, as a directory listing describes it. Validated, like any face. */
+interface BrowsedTeam {
+  title: string
+  door: string
+  agents: number
+  access: 'account' | 'paid'
+  priceUsd?: string
+  live: boolean
+  /** The address to import — built here so the sheet never assembles one. */
+  link: string
+}
+
+/**
+ * A directory entry, validated before anything renders it.
+ *
+ * This is a stranger's registry answering over the network, so it is treated
+ * exactly like a door's face: a known shape, bounded, or nothing.
+ */
+function publicTeam(value: unknown): BrowsedTeam | null {
+  if (typeof value !== 'object' || value === null) return null
+  const raw = value as Record<string, unknown>
+  const title = safeFaceName(raw.title)
+  const door = safeFaceName(raw.door)
+  const handle = typeof raw.handle === 'string' ? raw.handle : ''
+  const name = typeof raw.name === 'string' ? raw.name : ''
+  if (title === null || door === null || !handle || !name) return null
+  if (raw.access !== 'account' && raw.access !== 'paid') return null
+  const priceUsd = typeof raw.priceUsd === 'string' ? raw.priceUsd.slice(0, 32) : undefined
+  return {
+    title,
+    door,
+    agents: Number.isFinite(raw.agents) ? (raw.agents as number) : 0,
+    access: raw.access,
+    ...(priceUsd !== undefined ? { priceUsd } : {}),
+    live: raw.live !== false,
+    link: `@${handle}/${name}`
+  }
+}
+
+/**
+ * ONE PROXY for every relayed door this app is reaching.
+ *
+ * Started the first time one is needed rather than at boot: a caller who never
+ * imports a relayed team never has a listener they did not ask for.
+ */
+let callerProxy: RelayProxy | null = null
+/**
+ * The one in-flight start, so two callers cannot each begin one.
+ *
+ * A boot-time start and a first import raced: both saw `callerProxy` null,
+ * both started a listener, and both wrote the file a card reads its port from.
+ * Whichever lost still held a socket, and the first call through the loser
+ * failed with nothing in any log to say why. A promise is the whole fix —
+ * everybody waits on the same start.
+ */
+let callerProxyStarting: Promise<RelayProxy> | null = null
+
+function relayProxy(): Promise<RelayProxy> {
+  if (callerProxy) return Promise.resolve(callerProxy)
+  if (!callerProxyStarting) {
+    callerProxyStarting = startRelayProxy({
+      log: (message) => console.error(message),
+      // A card placed months ago starts with nothing in memory. This is how it
+      // finds its door again without being imported a second time.
+      resolve: resolveDoor
+    }).then((proxy) => {
+      callerProxy = proxy
+      return proxy
+    })
+  }
+  return callerProxyStarting
+}
+
+/**
+ * Where to actually send a request for this target.
+ *
+ * A dialled door is its own address. A RELAYED door is a name, so the door
+ * record is fetched from the directory it names — for its seal key, which the
+ * caller pins from this moment on — and the request goes to the loopback end
+ * of the relay instead.
+ */
+async function reachable(
+  target: ServeTarget
+): Promise<{ at: ServeTarget; listed: boolean; live: boolean } | null> {
+  if (!target.door) return { at: target, listed: false, live: true }
+  try {
+    const found = await fetch(new URL(`/v1/doors/${target.door}`, target.origin), {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(5000)
+    })
+    if (!found.ok) return null
+    const record = (await found.json()) as {
+      sealKey?: unknown
+      transport?: unknown
+      live?: unknown
+    }
+    // No key means nothing to pin, and an unpinned relayed door is one the
+    // relay could stand in the middle of. Refused rather than reached.
+    if (typeof record.sealKey !== 'string' || record.transport !== 'relay') return null
+    const proxy = await relayProxy()
+    // Which directory this door came from, kept — a name alone does not say,
+    // and guessing would look a team up on a registry it was never on.
+    rememberDoor(target.door, target.origin)
+    proxy.serve({ name: target.door, key: record.sealKey, relayOrigin: target.origin })
+    // The SAME shape as a dialled door, so everything downstream — the
+    // sign-in, the 402, the settle — is unchanged and unaware.
+    return {
+      at: { origin: `http://127.0.0.1:${proxy.port}`, slug: target.door, door: target.door },
+      listed: true,
+      live: record.live !== false
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Read a served door's public face — what the owner chose to publish.
+ *
+ * Hostile until proven otherwise: this fetches an address a user pasted, from
+ * the MAIN process, and what comes back becomes a card's command. So the
+ * request does not follow redirects (a public-looking address must not bounce
+ * the probe onto loopback), is time- and size-bounded, and the body is
+ * validated into a known shape before any consumer sees it.
+ */
+async function inspectServeAddress(
+  link: string
+): Promise<
+  | { ok: true; target: ServeTarget; face: ImportFace }
+  | {
+      ok: false
+      reason: 'bad-address' | 'not-serving' | 'unreachable' | 'offline' | 'flaky'
+    }
+> {
+  const target = parseServeAddress(link)
+  if (!target) return { ok: false, reason: 'bad-address' }
+  /**
+   * WHAT WE ALREADY KNOW when the face fetch fails.
+   *
+   * A door we just read a record for is not an address that might not exist,
+   * and it is certainly not evidence that the person's own app is down. Held
+   * out here so the catch can say something true instead of the worst guess.
+   */
+  let known: { listed: boolean; live: boolean } = { listed: false, live: false }
+  try {
+    const reached = await reachable(target)
+    if (!reached) return { ok: false, reason: 'not-serving' }
+    const { at, listed, live } = reached
+    known = { listed, live }
+    // LISTED BUT NOT THERE is its own answer. A team whose record exists and
+    // whose author's machine is simply shut is not a wrong address, and being
+    // told "nobody is serving a team at that address" sends a person off to
+    // check a link that was right all along.
+    if (listed && !live) return { ok: false, reason: 'offline' }
+    const res = await fetch(`${at.origin}/${at.slug}/crew`, {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(5000)
+    })
+    if (!res.ok) return { ok: false, reason: failedButKnown(known) }
+    const body = await res.arrayBuffer()
+    if (body.byteLength > MAX_FACE_BYTES) return { ok: false, reason: 'not-serving' }
+    const face = validateFace(JSON.parse(new TextDecoder().decode(body)))
+    if (face === null) return { ok: false, reason: 'not-serving' }
+    return { ok: true, target, face }
+  } catch {
+    // The SAME judgement as above. Thrown or refused, the question is what we
+    // knew before we asked — not which line of ours noticed.
+    return { ok: false, reason: known.listed ? failedButKnown(known) : 'unreachable' }
+  }
+}
+
+/**
+ * A door we know exists did not answer. Which is it?
+ *
+ * `flaky` matters because the alternative sentence blames the reader's own
+ * machine for a team the app had just been told was live, which is the most
+ * damaging thing this flow can say: a correct address, a working setup, and a
+ * message sending them to check both.
+ */
+function failedButKnown(known: { listed: boolean; live: boolean }): 'offline' | 'flaky' | 'not-serving' {
+  if (!known.listed) return 'not-serving'
+  return known.live ? 'flaky' : 'offline'
 }
 
 async function importTemplateAsSession(
@@ -2744,144 +3453,20 @@ function activeBrowserNode(browserId: string): BrowserNodeData | null {
 }
 
 /** Reflect real headless-page navigation/title state into the browser node. */
-/**
- * Registry hosts whose /install/<presetId> links this app understands (R21).
- *
- * Configured, never inferred: the app must not learn to trust a host because a
- * page it was showing claimed to be one. Empty by default, which recognises
- * nothing — the marketplace is not shipped yet, and an unconfigured registry
- * failing closed is the correct posture until it is.
- */
-/**
- * Publish a saved team — the one owner action, wired to the real primitives.
- *
- * This is the caller Tinker's H1 found missing. `checkPayoutAddress` runs
- * inside publishPreset, and publishPreset is reached from here, so the payout
- * verification is in force rather than merely written.
- *
- * The transport posts the shape registry/src/publish-routes.ts actually reads
- * — {manifest, team, teamName} — rather than a shape invented from the commit
- * message. The registry lives in this tree now, so there is no excuse for a
- * guessed contract.
- */
-async function publishSavedTeam(input: {
-  team: string
-  handle: string
-  pricing?: unknown
-  payout?: unknown
-}): Promise<PublishOutcome> {
-  const snapshot = teams.load(input.team)
-  if (!snapshot) {
-    return { ok: false, step: 'scrub', reason: `No saved team called '${input.team}'.` }
-  }
-  const key = loadPublishingKey()
-  return publishPreset(
-    {
-      hosts: registryHosts,
-      hostHelp: () => registryHostHelp(resolveRegistryHosts(registryHostInput()).rejected),
-      scrub: (team) => scrubForPublish(team as TeamSnapshot),
-      manifest: (built) => buildManifest(built as Parameters<typeof buildManifest>[0]),
-      sign: (manifest) => signManifest(manifest, key.privateKey),
-      push: (pushed) => pushToRegistry(pushed)
-    },
-    {
-      snapshot,
-      handle: input.handle,
-      ...(input.pricing !== undefined ? { pricing: input.pricing as PresetPricing } : {}),
-      ...(input.payout !== undefined ? { payout: input.payout as PayoutBinding } : {})
-    }
-  )
-}
-
-/** Installation-wide trust list; not workspace state, so it has its own file. */
-const registryHostSettings = new RegistryHostSettings()
-
-const registryHosts = (): string[] => resolveRegistryHosts(registryHostInput()).hosts
-
-/**
- * The inputs the host resolution reads. Split out so the refusal path and the
- * recognition path can never disagree about what is configured.
- */
-const registryHostInput = (): Parameters<typeof resolveRegistryHosts>[0] => ({
-  configured: process.env.COOKREW_REGISTRY_HOST ?? '',
-  settings: registryHostSettings.list(),
-  // A PACKAGED build recognises nothing it was not told to. Loopback exists
-  // only where a shipped app cannot carry it, so the journey is walkable in
-  // dev without the product ever trusting a host nobody chose.
-  packaged: app.isPackaged
-})
-
-/**
- * Why nothing is recognised, in words an owner can act on.
- *
- * The empty default was always deliberate; what was missing is that it never
- * said so. An install link whose only instruction cannot work is a dead end,
- * and a refusal without the fix is the same dead end with better manners.
- */
-const registryHostRefusal = (): string => registryHostHelp()
-
-/**
- * A browser card navigated to a marketplace install link (R21).
- *
- * The id is all that crosses. This does NOT install: main owns download,
- * signature verification and the review sheet, and the user owns the decision
- * — a page must never be able to install by being navigated to, only to ask.
- * The ask is announced on the ordinary event stream, so the toast layer, the
- * event panel and the phone all see it without a private channel.
- */
-function noteRegistryInstallLink(browserId: string, url: string): void {
-  const hosts = registryHosts()
-  const presetId = presetIdFromInstallUrl(url, hosts)
-  if (presetId === null) {
-    // H2: the refusal that makes this NOT a dead end has to reach a human.
-    //
-    // A link that looks like an install link and is not recognised because NO
-    // host is configured is precisely Magpie's give-up #2 — the shared link's
-    // only instruction cannot work. Saying nothing here reproduces it exactly:
-    // the owner sees a page, nothing happens, and there is no way to learn why.
-    //
-    // Only for links SHAPED like install links, and only when the list is
-    // empty. An unrecognised host on a populated list is a deliberate refusal
-    // and announcing it would teach the owner to add whatever host asked.
-    if (hosts.length === 0 && looksLikeInstallLink(url)) {
-      store.recordEventIn(
-        store.ownerOf(browserId) ?? store.focusedId,
-        'preset.install.refused',
-        url,
-        activeBrowserNode(browserId)?.name ?? browserId,
-        registryHostHelp(resolveRegistryHosts(registryHostInput()).rejected)
-      )
-    }
-    return
-  }
-  const node = activeBrowserNode(browserId)
-  store.recordEventIn(
-    store.ownerOf(browserId) ?? store.focusedId,
-    'preset.install.requested',
-    presetId,
-    node?.name ?? browserId,
-    'registry install link'
-  )
-  if (mainWindow && !mainWindow.webContents.isDestroyed()) {
-    // The renderer opens the review sheet. Only the id and where it came from
-    // travel — the URL, its query and the page itself stay on the web side.
-    mainWindow.webContents.send('preset:install-requested', { presetId, browserId })
-  }
-}
 
 function recordHeadlessPageState(
   browserId: string,
   tabId: string,
   state: { url: string; title: string }
 ): void {
-  // BEFORE the early returns below: an install link is worth noticing even
-  // when the tab's recorded url/title have not changed (a re-navigation to the
-  // same link is a fresh ask), and even for a node the canvas has since lost.
-  noteRegistryInstallLink(browserId, state.url)
   const node = activeBrowserNode(browserId)
   if (!node) return
   const tabs = browserTabs(node)
   const tab = tabs.find((candidate) => candidate.id === tabId)
+  // Chrome's private failure document is an implementation detail, not the
+  // address the user or agent requested. Persisting it makes a later sync try
+  // to navigate to chrome-error:// explicitly.
+  if (isChromiumErrorPage(state.url)) return
   if (!tab || (tab.url === state.url && tab.title === state.title)) return
   const nextTabs = tabs.map((candidate) =>
     candidate.id === tabId ? { ...candidate, url: state.url, title: state.title } : candidate
@@ -3044,8 +3629,12 @@ function createWindow(): void {
   } else {
     void mainWindow.loadFile(path.join(dirname, '../renderer/index.html'))
   }
+  // A deep link waits for the renderer, not for the window: the subscriber
+  // lives in App.tsx, which does not exist until the page has loaded.
+  mainWindow.webContents.on('did-finish-load', () => deepLinks.ready())
   mainWindow.on('closed', () => {
     mainWindow = null
+    deepLinks.gone()
   })
   // Browser webviews: window.open / target=_blank must become a tab in the
   // same browser, never a detached native window. The renderer maps the
@@ -3079,6 +3668,26 @@ function createWindow(): void {
 if (!app.requestSingleInstanceLock()) {
   console.error('Another Cookrew instance is already running — exiting.')
   app.exit(1)
+} else {
+  // THE FIRST INSTANCE HEARS THE SECOND. On Windows and Linux a protocol link
+  // launches a fresh process, which exits above — but not before the OS hands
+  // its argv to the instance holding the lock, and that argv carries the link.
+  app.on('second-instance', (_event, argv) => {
+    focusMainWindow()
+    const link = deepLinkInArgv(argv)
+    if (link) deepLinks.push(link)
+  })
+  // macOS hands a link to the running app as an event instead.
+  app.on('open-url', (event, url) => {
+    event.preventDefault()
+    acceptDeepLink(url)
+    focusMainWindow()
+  })
+  registerDeepLinkScheme()
+  // The link this very launch was started with, on the platforms that pass it
+  // as an argument.
+  const launchedWith = deepLinkInArgv(process.argv)
+  if (launchedWith) deepLinks.push(launchedWith)
 }
 
 // See self-host-guard.ts. Same medicine as the single-instance lock above:
@@ -3122,19 +3731,20 @@ app.whenReady().then(() => {
   // deliberately quiet on the happy path — a sweep that frees nothing is the
   // normal case and does not deserve a line in the log.
   setTimeout(() => {
-    try {
-      const swept = sweepStorage({ apply: true })
-      if (swept.remove.length > 0) {
-        const mb = (swept.bytes / 1024 / 1024).toFixed(1)
-        console.error(`storage sweep: reclaimed ${swept.remove.length} files (${mb}MB)`)
-      }
-      if (swept.failed.length > 0) {
-        console.error(`storage sweep: ${swept.failed.length} file(s) could not be removed`)
-      }
-    } catch (error) {
-      // Reclaiming disk is never worth a failed launch.
-      console.error('storage sweep failed:', error)
-    }
+    void sweepStorageInWorker(path.join(dirname, 'storage-gc-worker.js'), { apply: true })
+      .then((swept) => {
+        if (swept.remove.length > 0) {
+          const mb = (swept.bytes / 1024 / 1024).toFixed(1)
+          console.error(`storage sweep: reclaimed ${swept.remove.length} files (${mb}MB)`)
+        }
+        if (swept.failed.length > 0) {
+          console.error(`storage sweep: ${swept.failed.length} file(s) could not be removed`)
+        }
+      })
+      .catch((error) => {
+        // Reclaiming disk is never worth freezing or failing the app.
+        console.error('storage sweep worker failed:', error)
+      })
   }, 30_000)
 
   // Re-key legacy version pins by checkpoint uuid (pin-rekey.ts — the re-key
@@ -3219,12 +3829,27 @@ app.whenReady().then(() => {
   })
   routines.start()
 
+  // THE CALLER'S END OF THE RELAY, up before any card can ask for it.
+  //
+  // Started whenever this app has ever imported a relayed team, because those
+  // cards start with the app and go looking for a loopback port. Left lazy,
+  // they would find the PREVIOUS run's port number in a file and dial a socket
+  // nobody is holding — which reads as the team having gone away.
+  if (importedDoors()) void relayProxy()
+
+  // THE OWNER'S END OF THE RELAY, for every team still being served. The
+  // templates came back from disk; their doors have to be dialled again.
+  for (const template of serving.served.list()) void joinRelayFor(template)
+
   startMobileServer({
     servedSlug: handleServedSlug,
     store,
+    // Importing a served team from the phone: the same operations the desktop
+    // sheet drives, over the mobile API.
+    serve: serveOps,
     // §10: the same pin store the desktop rail reads — the phone's rail must
     // not drift from what the canvas shows.
-    listPins: (terminalId) => (servedTranscriptFor(terminalId) ? [] : pinStore.list(terminalId)),
+    listPins: (terminalId) => pinsFor(terminalId),
     // Gates slug routing: off, /<slug>/... is not a route (see mobile-server).
     multiInstance: () => store.isMultiInstance,
     // THE INTERNET GATE (§9 · ④), mounted per workspace session. Reachable only
@@ -3460,7 +4085,9 @@ app.on('before-quit', (event) => {
   store.flush()
   events.flush()
   sessionSync.dispose()
+  lazyTerminals.dispose()
   latestWatch.dispose()
+  doorWatch.dispose()
   turns.flushHistories()
   turns.disposeAll()
   ptys.disposeAll()
@@ -3642,37 +4269,6 @@ function registerIpc(handlers: RestoreHandlers): void {
 
   // ---- the author journey (Door A), reachable at last -------------------
   //
-  // H1/H2/H3 of Tinker's review were ONE bug wearing three faces: the payout
-  // check, the host refusal and the settings surface were all written, tested
-  // and called by nothing. A check with no caller is not protection, and a
-  // commit message that says it is will be believed by the next lane. These
-  // handlers are the callers.
-
-  /** The trust list, and the two ways an owner changes it. H3. */
-  ipcMain.handle('registry:hosts', () => ({
-    hosts: registryHosts(),
-    configured: registryHostSettings.list(),
-    source: resolveRegistryHosts(registryHostInput()).source,
-    help: registryHostHelp(resolveRegistryHosts(registryHostInput()).rejected),
-    rejected: resolveRegistryHosts(registryHostInput()).rejected
-  }))
-  ipcMain.handle('registry:host:add', (_e, host: string) => registryHostSettings.add(host))
-  ipcMain.handle('registry:host:remove', (_e, host: string) =>
-    registryHostSettings.remove(host)
-  )
-
-  /**
-   * Publish a saved team. ONE owner action — the thing that did not exist.
-   *
-   * Every refusal comes back named, because the author has to act on it: a
-   * bare failure sends them to the ~140 hand-written lines this replaces.
-   */
-  ipcMain.handle(
-    'publish:preset',
-    async (_e, input: { team: string; handle: string; pricing?: unknown; payout?: unknown }) =>
-      publishSavedTeam(input)
-  )
-
   ipcMain.handle('workspace:list', () => store.list())
   ipcMain.handle('workspace:create', (_e, name: string, dir: string, team?: string) =>
     team ? createWorkspaceFromTeam(name, dir, team) : createWorkspace(name, dir)
@@ -3688,12 +4284,21 @@ function registerIpc(handlers: RestoreHandlers): void {
     'serving:serve',
     async (
       _e,
-      input: { templateId: string; access: ServeAccess; priceUsd?: string }
+      input: {
+        templateId: string
+        access: ServeAccess
+        priceUsd?: string
+        summary?: string
+        tags?: readonly string[]
+      }
     ) => {
       if (!teams.load(input.templateId)) return { ok: false, reason: 'no-template' as const }
       if (input.access === 'paid' && servedPayments.rails().length === 0) {
         return { ok: false, reason: 'no-payment-rail' as const }
       }
+      // The owner's words, bounded — refused, never trimmed (served-face.ts).
+      const words = faceWords({ summary: input.summary, tags: input.tags })
+      if (!words.ok) return { ok: false as const, reason: words.reason }
       // The slug is derived from the team's own name and made unique against
       // the workspace namespace it shares — a service must not shadow a
       // workspace the owner named, and a live workspace wins the slug anyway.
@@ -3709,23 +4314,31 @@ function registerIpc(handlers: RestoreHandlers): void {
       // registry's own copy; now every reason — including the orch — comes back
       // from serve() itself, so the owner surface and the gate can never
       // disagree about what is servable.
+      const template: ServedTemplate = {
+        serviceId,
+        templateId: input.templateId,
+        slug,
+        access: input.access,
+        ...(input.access === 'paid' ? { priceUsd: input.priceUsd } : {}),
+        ...words.words
+      }
       try {
-        await serving.serve({
-          serviceId,
-          templateId: input.templateId,
-          slug,
-          access: input.access,
-          ...(input.access === 'paid' ? { priceUsd: input.priceUsd } : {})
-        })
+        await serving.serve(template)
       } catch (error) {
         if (error instanceof ServeRefused) return { ok: false as const, reason: error.reason }
         throw error
       }
+      // THE RELAY, when it is configured. Its refusal is not the serve's:
+      // the team IS being served on this network either way, so a relay that
+      // could not be joined narrows the reach rather than undoing the act.
+      await joinRelayFor(template)
       return { ok: true as const, serviceId, slug, address: servedAddress(slug) }
     }
   )
-  ipcMain.handle('serving:stop', (_e, serviceId: string) => {
+  ipcMain.handle('serving:stop', async (_e, serviceId: string) => {
+    const stopping = serving.served.list().find((t) => t.serviceId === serviceId)
     serving.stop(serviceId)
+    if (stopping) await relayServing?.withdraw(stopping.slug)
     return { ok: true as const }
   })
   ipcMain.handle('serving:payment-status', () => configuredServedPaymentStatus())
@@ -3740,7 +4353,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('serving:list', () =>
     serving.served.list().map((t) => ({
       ...t,
-      address: servedAddress(t.slug),
+      ...servedReach(t.slug),
       paymentRails: t.access === 'paid' ? servedPaymentRails(servedPaymentTerms(t)) : []
     }))
   )
@@ -3751,69 +4364,78 @@ function registerIpc(handlers: RestoreHandlers): void {
       serviceId: s.serviceId,
       caller: s.accountId,
       workspaceName: s.identity.workspaceName,
-      version: s.version
+      version: s.version,
+      // The door's own card for this session — what a caller's imported card
+      // is a line into. Owner-only; the twin-census gate diffs the two.
+      conductorId: serving.instantiator.conductorFor(s.identity.sessionId)
     }))
   )
   /** END destroys someone else's workspace, so it is the owner's act alone. */
-  ipcMain.handle('serving:end', (_e, sessionId: string) => serving.instantiator.end(sessionId))
+  ipcMain.handle('serving:end', (_e, sessionId: string) => endServedSession(sessionId))
 
-  // ---- the dock's crews (import side): add is free and inert ----
-  ipcMain.handle('crew:list', () => remoteCrews.list())
-  ipcMain.handle('crew:remove', (_e, id: string) => {
-    remoteCrews.remove(id)
-    return { ok: true as const }
-  })
-  ipcMain.handle('crew:unlock', (_e, id: string, payRef: string) => {
-    // The gate sheet settled a payment; the chip stops being locked.
-    const crew = remoteCrews.patch(id, { payRef })
-    return crew ? { ok: true as const, crew } : { ok: false as const, reason: 'gone' as const }
-  })
-  ipcMain.handle('crew:add', async (_e, link: string) => {
-    const parsed = parseCrewLink(link)
-    if (!parsed) return { ok: false as const, reason: 'bad-link' as const }
-    // Read the public face — what the owner chose to publish, nothing more.
-    try {
-      const res = await fetch(`${parsed.origin}/${parsed.slug}/crew`)
-      if (!res.ok) return { ok: false as const, reason: 'not-serving' as const }
-      const face = (await res.json()) as {
-        name: string
-        door: string
-        access: 'account' | 'paid'
-        priceUsd?: string
-        version: number
-        agents: number
-      }
-      const crew = remoteCrews.add({
-        origin: parsed.origin,
-        slug: parsed.slug,
-        name: face.name,
-        door: face.door,
-        access: face.access,
-        ...(face.priceUsd !== undefined ? { priceUsd: face.priceUsd } : {}),
-        version: face.version,
-        agents: face.agents
-      })
-      return { ok: true as const, crew }
-    } catch {
-      return { ok: false as const, reason: 'unreachable' as const }
-    }
-  })
+  // ---- import a served team (caller side): one address, one orch card ----
+  ipcMain.handle('serve:inspect', (_e, link: string) => serveOps.inspect(link))
+
   /**
-   * Place a crew: ONE orch card on the caller's own canvas, running the line
-   * script. The card is the door — the crew behind it runs at the author's app.
+   * BROWSE AN OWNER — what one account is serving.
+   *
+   * The import sheet takes a team's address, which assumes the person already
+   * has one. An owner hands out their own name at least as often, and until
+   * now that was a dead end: you could read their page in a browser and then
+   * had to copy a second address out of it by hand.
+   *
+   * Free and commits nothing, like inspect: it reads a directory, and the door
+   * still decides everything when you actually knock.
    */
-  ipcMain.handle('crew:place', (_e, id: string, position?: { x: number; y: number }) => {
-    const crew = remoteCrews.get(id)
-    if (!crew) return { ok: false as const, reason: 'gone' as const }
-    const node = createTerminal({
-      name: `${crew.name} · ${crew.slug}`,
-      preset: PRESETS[PRESETS.length - 1].name,
-      position,
-      command: crewLineCommand(crewLineScript(), crew),
-      servedTranscript: { origin: crew.origin, slug: crew.slug }
-    })
-    return { ok: true as const, node }
+  ipcMain.handle('serve:browse', (_e, link: string) => serveOps.browse(link))
+
+  /**
+   * THE GATE, asked. Sign in as the account the card will use, then open the
+   * line once to hear what the door wants. Free doors answer `open` and the
+   * import proceeds; a paid one answers `pay` with the terms it quoted, which
+   * is what the gate sheet paints.
+   *
+   * The Bearer never leaves the main process — the renderer drives the sheet,
+   * it does not hold the credential.
+   */
+  ipcMain.handle('serve:gate', (_e, link: string) => serveOps.gate(link))
+
+  /**
+   * Start a card payment: the door mints a hosted Checkout session and we open
+   * it in the user's REAL browser. It cannot be paid inside the app — an
+   * embedded page has no wallet and no autofill — and a hosted page is where
+   * Stripe wants the card, so the hand-off is the honest move.
+   */
+  ipcMain.handle('serve:checkout', async (_e, link: string) => {
+    const checkout = await serveOps.checkout(link)
+    // The desktop opens the hosted page in the user's REAL browser itself; a
+    // phone opens the URL it is handed, in its own.
+    if (checkout.ok) await shell.openExternal(checkout.url)
+    return checkout
   })
+
+  /**
+   * Present a payment and be admitted. For a card that is the Checkout session
+   * id; for x402 it is a transfer authorization signed HERE, by the wallet the
+   * owner of this device provisioned — the key never reaches the renderer.
+   *
+   * On success the session is open at the author's app, so the card placed
+   * next opens its line into it and never meets the money.
+   */
+  ipcMain.handle('serve:settle', (_e, link: string, rail: 'x402' | 'stripe', session?: string) =>
+    serveOps.settle(link, rail, session)
+  )
+  /**
+   * Place the imported team's interface: ONE orch card on the caller's own
+   * canvas, running the line script. The card is the door — the team behind it
+   * runs in the session workspace the author's app mints for this caller.
+   */
+  ipcMain.handle(
+    'serve:import',
+    (_e, link: string, position?: { x: number; y: number }, paid?: { price: string; asset: string; rail: 'x402' | 'stripe' }) =>
+      serveOps.import(link, position, paid)
+  )
+
   ipcMain.handle('workspace:switch', (_e, id: string) => {
     switchWorkspace(id)
     return store.list()
@@ -3941,11 +4563,18 @@ function registerIpc(handlers: RestoreHandlers): void {
   // T4 push: a card subscribes while it shows a checkpoint; the file watch then
   // nudges it (`trace:latest-changed`) on every append, no poll wait.
   ipcMain.handle('trace:latest-watch', (_e, terminalId: string) => {
-    latestWatch.subscribe(terminalId)
+    if (isDoorCard(terminalId)) doorWatch.subscribe(terminalId)
+    else latestWatch.subscribe(terminalId)
   })
   ipcMain.handle('trace:latest-unwatch', (_e, terminalId: string) => {
+    // Both, unconditionally: by the time a removed card's view unmounts the
+    // node no longer resolves, and routing by source here would strand the
+    // door poll forever. Each is a no-op when it holds nothing.
+    doorWatch.unsubscribe(terminalId)
     latestWatch.unsubscribe(terminalId)
   })
+  // A remote card's rail says WHY it is empty or stale, in a sentence (P10).
+  ipcMain.handle('trace:status', (_e, terminalId: string) => transcriptStatusFor(terminalId))
   // Observability event log: filtered history + counts + agent roster.
   ipcMain.handle('events:query', (_e, query) => events.query(query ?? {}))
   ipcMain.handle('events:count', (_e, query) => events.count(query ?? {}))
@@ -3991,103 +4620,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   ])
 
   ipcMain.handle('terminal:create', (_e, opts: CreateTerminalOpts) => createTerminal(opts))
-
-  // ---- marketplace presets (§8): the dock's third chip family ----
-  // `preset:*` was already taken by the HARNESS presets above. These are a
-  // different list with a different shape, so they get their own namespace —
-  // reusing the channel threw on registration (Electron refuses a second
-  // handler) and took every handler after it down with it.
-  ipcMain.handle('preset:installed:list', () => presetStore.list())
-  /**
-   * §10's read path. Asked per terminal, because a pin belongs to a transcript
-   * and not to a workspace.
-   */
-  ipcMain.handle('pins:list', (_e, terminalId: string) => pinStore.list(terminalId))
-  /**
-   * R20 — the buyer's two answers to a key rotation.
-   *
-   * `seen` retires the SHEET and nothing else: the rotation itself stays, so
-   * the chip keeps saying KEY CHANGED until it is resolved. Once as a sheet,
-   * never once as a fact.
-   *
-   * `trust` moves the pin forward — and it can only ever confirm the rotation
-   * the client itself recorded. The key is checked against what is on disk
-   * rather than taken from the renderer, because a channel that accepted any
-   * key id would be a way to pin an attacker's key by IPC alone, which is
-   * precisely the decision the sheet exists to put in front of a person.
-   */
-  ipcMain.handle('preset:installed:rotation:seen', (_e, id: string) => {
-    if (!isPresetId(id)) throw new Error('not a preset id')
-    presetStore.markRotationSheetSeen(id)
-  })
-  ipcMain.handle('preset:installed:rotation:trust', (_e, id: string, newKeyId: string) => {
-    if (!isPresetId(id)) throw new Error('not a preset id')
-    const rotation = presetStore.rotationOf(id)
-    if (rotation === null || rotation.newKeyId !== newKeyId) {
-      throw new Error('no such rotation to trust')
-    }
-    presetStore.trustAuthorKey(id, newKeyId)
-  })
-  ipcMain.handle('preset:installed:uninstall', (_e, id: string) => {
-    // C1: the id crosses from the renderer and ends at a recursive delete.
-    // The store validates it too; this refuses at the boundary so a hostile
-    // string never reaches a filesystem call in the first place.
-    if (!isPresetId(id)) throw new Error('not a preset id')
-    presetStore.uninstall(id)
-  })
-  /**
-   * R2: the canvas click is the aimed confirm, so this both aims and commits.
-   *
-   * Both kinds place through the ordinary node-add path. A team used to be
-   * handed to copyTeam, which is workspace-to-workspace and validates
-   * nodeIds + intoWorkspaceId — so it threw on its first guard EVERY time, and
-   * an `as never` on the argument is what let that compile. Adding the planned
-   * nodes directly is also the only way `command` and `cwd` survive; forwarding
-   * {name, preset, position, orch} to createTerminal dropped both and fell back
-   * to a built-in preset whenever the name was not one of them.
-   */
-  ipcMain.handle(
-    'preset:installed:place',
-    async (_e, id: string, position: CanvasPosition, orch: boolean) => {
-      if (!isPresetId(id)) throw new Error('not a preset id')
-      // N4: THE GATE IS ENFORCED HERE, not in the renderer. The chip's click
-      // handler declining to place a locked preset is presentation; the channel
-      // is reachable without it, so a locked preset was placeable by anyone who
-      // could call the IPC. Refuse where the decision is authoritative.
-      if (presetStore.list().find((p) => p.id === id)?.entitled === false) {
-        throw new Error('preset is not entitled')
-      }
-      const stored = presetStore.read(id)
-      // Null covers absent, a blob that no longer matches its manifest, and a
-      // signature that does not verify against the key pinned at install.
-      if (stored === null) throw new Error('preset is missing or failed verification')
-      const snapshot = JSON.parse(stored.teamBytes.toString('utf8')) as TeamSnapshot
-      const plan = planPresetImport(snapshot, {
-        dirs: store.focusedState.dirs?.length ? store.focusedState.dirs : [store.focusedState.dir],
-        cutAt: Date.now(),
-        position,
-        manifestId: stored.manifest.id
-      })
-      const placed = plan.nodes.map((node) =>
-        // orch is the placer's choice for the agents being placed; notes and
-        // browsers have no such flag.
-        node.kind === 'terminal' ? ({ ...node, orch } as CanvasNode) : node
-      )
-      if (plan.kind === 'single') {
-        recordPins([addNode(placed[0])], plan.pin)
-        return
-      }
-      // N2: ONE write and ONE broadcast for a team. The add-then-connect loop
-      // cost a disk write and a state broadcast per node AND per cable — seven
-      // of each for a four-node preset — and left the canvas legible in
-      // between, so a paste arrived as a stutter of half-teams. This lands the
-      // whole team in a single patch; adoptLiveNode still runs per node
-      // afterwards, because spawning a PTY is inherently per-terminal.
-      const added = store.appendTeamToWorkspace(store.focusedId, placed, plan.connections)
-      for (const node of added) adoptLiveNode(node)
-      recordPins(added, plan.pin)
-    }
-  )
+  ipcMain.handle('pins:list', (_e, terminalId: string) => pinsFor(terminalId))
 
   // Team fork / team save / roles (contract in note team-fork-roles-spec-v1).
   ipcMain.handle('team:fork', (_e, spec: TeamForkSpec) => teamFork(spec))

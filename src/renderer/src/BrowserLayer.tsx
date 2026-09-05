@@ -3,6 +3,10 @@ import type { BrowserNodeData, BrowserTab } from '../../shared/model'
 import { activeBrowserTab, browserTabs } from '../../shared/model'
 import { resolveAddress } from '../../shared/address-bar'
 import {
+  browserUrlForLoad,
+  observedBrowserUrl
+} from '../../shared/browser-navigation'
+import {
   findBrowserTabByWebContentsId,
   registerBrowserTab,
   setBrowserActiveTab,
@@ -23,7 +27,7 @@ import type { ScreenRect } from './zoom-lod'
 import type { LodLayout } from './zoom-lod'
 import { useCanvasUi } from './canvas-ui'
 import { CrIcon } from './icons'
-import { browserRenderMode, type StreamClient } from './browser-stream'
+import { browserRenderMode, nextCapability, type StreamClient } from './browser-stream'
 import { browserHostsToRender } from './browser-host-policy'
 
 const THUMB_INTERVAL_MS = 5000
@@ -99,29 +103,66 @@ export function useInteractiveBrowserCapability(): InteractiveBrowserCapability 
   const [capability, setCapability] = useState<InteractiveBrowserCapability | null>(null)
   useEffect(() => {
     let disposed = false
+    let latest = 0
     const api = cookrew()
-    void api
-      .interactiveBrowserEnabled()
-      .then(async (enabled) => {
-        if (!enabled || !hasNativeWebview()) {
-          if (!disposed) setCapability({ enabled, desktopToken: null })
-          return
-        }
-        let desktopToken: string | null = null
-        try {
-          desktopToken = await api.browserStreamToken()
-        } catch (error) {
-          console.error('[browser-stream] failed to resolve the desktop stream credential:', error)
-        }
-        if (!disposed) setCapability({ enabled, desktopToken })
+    const adopt = (enabled: boolean, desktopToken: string | null): void => {
+      if (disposed) return
+      setCapability((prev) => {
+        // Never DOWNGRADE the surface that can mount a webview: main's flag
+        // is fixed per launch so this cannot fire today, and if that ever
+        // changes, this is the line that keeps a legacy webview from opening
+        // a second page beside a live headless one.
+        if (hasNativeWebview() && prev?.enabled === true && !enabled) return prev
+        return nextCapability(prev, { enabled, desktopToken })
       })
-      .catch((error) => {
-        // Fail closed: without an ownership answer, mounting a webview could
-        // create a second page/profile while headless mode is actually on.
-        console.error('[browser-stream] failed to resolve browser ownership:', error)
-      })
+    }
+    const resolve = (): void => {
+      const seq = ++latest
+      void api
+        .interactiveBrowserEnabled()
+        .then(async (enabled) => {
+          // Latest wins: rapid foreground flips on a slow link put two
+          // answers in flight, and the older one must never overwrite.
+          if (seq !== latest) return
+          // No answer is not an answer (a captive portal's 200, a stranger
+          // on the port): keep what we know rather than adopting undefined.
+          if (typeof enabled !== 'boolean') return
+          if (!enabled || !hasNativeWebview()) {
+            adopt(enabled, null)
+            return
+          }
+          let desktopToken: string | null = null
+          try {
+            desktopToken = await api.browserStreamToken()
+          } catch (error) {
+            console.error('[browser-stream] failed to resolve the desktop stream credential:', error)
+          }
+          if (seq !== latest) return
+          adopt(enabled, desktopToken)
+        })
+        .catch((error) => {
+          // Fail closed: without an ownership answer, mounting a webview could
+          // create a second page/profile while headless mode is actually on.
+          // A previously-resolved answer is kept — staleness beats a null.
+          console.error('[browser-stream] failed to resolve browser ownership:', error)
+        })
+    }
+    resolve()
+    // "Fixed at launch" means the SERVER's launch, not this page's. A phone
+    // tab outlives app restarts — the shared stream heals and the canvas
+    // repopulates — but a capability frozen at first mount left the phone
+    // rendering the dead thumb fallback ("BROWSER PREVIEW" on black) against
+    // a server that had long since gone headless. Re-ask on foreground and
+    // network return, the same pair the canvas resync listens to.
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') resolve()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('online', resolve)
     return () => {
       disposed = true
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('online', resolve)
     }
   }, [])
   return capability
@@ -428,10 +469,11 @@ function BrowserTabView({
     if (interactiveBrowser !== false) return
     const webview = webviewRef.current
     if (!webview) return
+    const target = browserUrlForLoad(tab.url)
     try {
       // getURL/loadURL throw until the webview reaches dom-ready.
-      if (webview.getURL() !== tab.url) {
-        void webview.loadURL(tab.url).catch(() => undefined)
+      if (webview.getURL() !== target) {
+        void webview.loadURL(target).catch(() => undefined)
       }
     } catch {
       // not attached yet — the src attribute already points at tab.url
@@ -446,7 +488,9 @@ function BrowserTabView({
     if (!webview) return
     const onNavigate = (event: Event): void => {
       const url = (event as Event & { url?: string }).url
-      if (url) patchTab(tab.id, { url })
+      if (!url) return
+      const observed = observedBrowserUrl(tab.url, url)
+      if (observed !== tab.url) patchTab(tab.id, { url: observed })
     }
     const onTitle = (event: Event): void => {
       const title = (event as Event & { title?: string }).title
@@ -460,7 +504,7 @@ function BrowserTabView({
       webview.removeEventListener('did-navigate-in-page', onNavigate)
       webview.removeEventListener('page-title-updated', onTitle)
     }
-  }, [tab.id, patchTab, interactiveBrowser])
+  }, [tab.id, tab.url, patchTab, interactiveBrowser])
 
   // Thumbnail loop for the active tab: after loads and on a slow interval.
   // capturePage() only exists on real <webview>s (Electron renderer).
@@ -600,7 +644,7 @@ function BrowserTabView({
           ref={(el: unknown) => {
             webviewRef.current = el as WebviewElement | null
           }}
-          src={tab.url}
+          src={browserUrlForLoad(tab.url)}
           className={visible ? 'browser-body' : 'browser-body browser-body-hidden'}
           partition={`persist:browser-${browserId}`}
           allowpopups="true"

@@ -13,6 +13,7 @@ import {
   completionRequest,
   createHarnessCompletionRequester,
   explicitGrantEnv,
+  requestHarnessCompletion,
   servedGrantPreflight,
   type HarnessCompletionRequest
 } from '../src/main/served-grant-preflight'
@@ -68,10 +69,30 @@ describe('explicit grant environment', () => {
   })
 })
 
+describe('the production runner', () => {
+  it('closes the probe\'s stdin — a harness that reads stdin to EOF answers, instead of timing out', async () => {
+    // A stand-in harness that behaves like pi/claude on a pipe: it reads
+    // stdin until EOF and only then prints. With stdin left open this never
+    // returns (the bug: 60s, then 'grant-unusable' for a perfectly good grant).
+    const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-probe-'))
+    const fake = path.join(dir, 'fake-pi')
+    writeFileSync(fake, '#!/bin/sh\ncat >/dev/null\necho OK\n', { mode: 0o755 })
+    const started = Date.now()
+    const ok = await requestHarnessCompletion({ harness: 'pi', file: fake, args: [], env: {}, files: [] })
+    expect(ok).toBe(true)
+    expect(Date.now() - started).toBeLessThan(5000)
+    rmSync(dir, { recursive: true, force: true })
+  })
+})
+
 describe('minimal native harness requests', () => {
   it.each([
     ['claude --permission-mode bypassPermissions', 'claude', 'claude', '--print'],
     ['pi --model qwen-local/fake-model', 'pi', 'pi', '--no-tools'],
+    // A wrapper IS the pi harness (isPiCommand): the probe runs the wrapper,
+    // so the provider/model the wrapper bakes in are what gets probed.
+    ['/Users/x/.cookrew/bin/qwen-pi', 'pi', '/Users/x/.cookrew/bin/qwen-pi', '--no-tools'],
+    ['pi --provider qwen-local --model qwen3.8-27b-q8', 'pi', 'pi', '--provider'],
     ['codex --model fake-model', 'codex', 'codex', 'exec'],
     ['opencode --model fake/model', 'opencode', 'opencode', 'run']
   ] as const)('builds %s without replaying the saved shell command', (command, harness, file, flag) => {
@@ -87,6 +108,15 @@ describe('minimal native harness requests', () => {
       'qwen-local/fake:model'
     )
     expect(completionRequest('pi --model "bad model"', {})?.args).not.toContain('bad model')
+    // A wrapper path with shell syntax is never the executable.
+    expect(completionRequest('/tmp/x;y-pi', {})?.file).toBe('pi')
+    expect(completionRequest('/tmp/$(id)-pi', {})?.file).toBe('pi')
+    // Relative and traversing paths are never the executable; `~` is the
+    // shell's and is expanded to the real home, not handed to execFile.
+    expect(completionRequest('./x-pi', {})?.file).toBe('pi')
+    expect(completionRequest('/a/../../tmp/x-pi', {})?.file).toBe('pi')
+    expect(completionRequest('~/.cookrew/bin/qwen-pi', {})?.file).toMatch(/^\/.*\/\.cookrew\/bin\/qwen-pi$/)
+    expect(completionRequest('pi --provider "a b"', {})?.args).not.toContain('--provider')
     expect(completionRequest('bash -lc anything', {})).toBeNull()
   })
 })

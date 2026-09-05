@@ -29,7 +29,6 @@ import { Dock } from './Dock'
 import { CardMenu, type CardMenuAnchor } from './CardMenu'
 import { TerminalOverlayLayer } from './TerminalOverlay'
 import { useLodLayout } from './zoom-lod'
-import type { InstalledPreset } from '../../shared/preset-chip'
 import { browserInFullView } from './dock-target'
 import { BrowserLayer, useInteractiveBrowserCapability } from './BrowserLayer'
 import {
@@ -59,9 +58,8 @@ import { SnapGuides } from './SnapGuides'
 import { EventToastLayer } from './EventToast'
 import { RosterPanel } from './RosterPanel'
 import { MetricsPanel } from './MetricsPanel'
-import { AddCrewSheet } from './AddCrewSheet'
 import { GateSheet } from './GateSheet'
-import type { RemoteCrewView } from './api'
+import { ImportServedSheet } from './ImportServedSheet'
 import { SelectionBar } from './SelectionBar'
 import { ConfirmClose } from './ConfirmClose'
 import { apiPath } from './api-base'
@@ -200,52 +198,14 @@ function Canvas(): React.JSX.Element {
    * removeNode, so there is one dialog and no close button can skip it.
    */
   const [closingId, setClosingId] = useState<string | null>(null)
-  /**
-   * Marketplace presets (§8) and the one currently armed. Arming is exclusive
-   * with the harness-preset and role chips: three families, one selection.
-   */
-  const [installedPresets, setInstalledPresets] = useState<InstalledPreset[]>([])
-  const [presetId, setPresetId] = useState<string | null>(null)
-  // R30 import side: crews added by link, the armed one, and the two sheets.
-  const [crews, setCrews] = useState<readonly RemoteCrewView[]>([])
-  const [crewId, setCrewId] = useState<string | null>(null)
-  const [addCrewOpen, setAddCrewOpen] = useState(false)
-  const [crewGate, setCrewGate] = useState<RemoteCrewView | null>(null)
-  const refreshPresets = useCallback(() => {
-    void cookrew()
-      .listInstalledPresets()
-      .then(setInstalledPresets)
-      .catch((error) => console.error('listInstalledPresets failed:', error))
+  // R30 import side: the one entry for a served team's address.
+  const [importServedOpen, setImportServedOpen] = useState(false)
+  /** An address that arrived by `cookrew://` link, for the sheet to look up. */
+  const [importPrefill, setImportPrefill] = useState<string | null>(null)
+  const closeImportServed = useCallback((): void => {
+    setImportServedOpen(false)
+    setImportPrefill(null)
   }, [])
-  useEffect(refreshPresets, [refreshPresets])
-  const refreshCrews = useCallback(() => {
-    void cookrew()
-      .crewList()
-      .then(setCrews)
-      .catch((error) => console.error('crewList failed:', error))
-  }, [])
-  useEffect(refreshCrews, [refreshCrews])
-  /**
-   * M3: STABLE identities. Inline arrows here were new objects every render, so
-   * the dock's effect re-fired on each one and the R3 batch never settled.
-   * M5: no console TODOs — the gate sheet and the HEAD request are the
-   * registry's work, and until they exist these are no-ops that change nothing
-   * rather than log lines pretending to.
-   */
-  /**
-   * N4: a locked chip must ACKNOWLEDGE the click. The 401/402/403 sheets land
-   * with the gate, but "nothing happens" is indistinguishable from a broken
-   * chip, so until then the chip answers for itself and says it is locked.
-   */
-  const [gatedId, setGatedId] = useState<string | null>(null)
-  const openPresetGate = useCallback((id: string) => {
-    setGatedId(id)
-    window.setTimeout(() => setGatedId((current) => (current === id ? null : current)), 2400)
-  }, [])
-  const checkPresetUpdates = useCallback((_ids: string[]) => {
-    // A manifest HEAD by version (R3) needs a registry to ask.
-  }, [])
-
   useEffect(() => {
     void cookrew()
       .listPresets()
@@ -446,6 +406,31 @@ function Canvas(): React.JSX.Element {
 
   // ⌘W from the main process, resolved against the latest layer state.
   useEffect(() => cookrew().onCmdW(() => cmdWRef.current()), [])
+
+  // A `cookrew://` link the OS handed to the app, parsed by main
+  // (src/main/deep-link.ts). Every verb lands on a sheet a person could have
+  // opened themselves, and the sheet still asks before anything is placed.
+  useEffect(
+    () =>
+      cookrew().onDeepLink((link) => {
+        if (link.verb === 'import') {
+          // `session=new` is read and set aside: the import path has no such
+          // option (a session is minted per caller at the door, every time).
+          setImportPrefill(link.address)
+          setImportServedOpen(true)
+          return
+        }
+        if (link.verb === 'install') {
+          // No in-app surface takes a preset id yet; the marketplace entry
+          // the app does have is the import sheet, so the link opens that.
+          setImportPrefill(null)
+          setImportServedOpen(true)
+        }
+        // 'serve' would open the share sheet for a saved template; that sheet
+        // exists only on a selection today, so the link is set aside.
+      }),
+    []
+  )
 
   // A file dropped outside a terminal overlay would make Chromium navigate
   // to it, killing the app — swallow drags at the window level so only the
@@ -971,39 +956,6 @@ function Canvas(): React.JSX.Element {
     async (event: React.MouseEvent) => {
       const position = screenToFlowPosition({ x: event.clientX, y: event.clientY })
       if (tool === 'terminal') {
-        // R2: an armed marketplace chip places HERE — this click is the aimed
-        // confirm, so there is no dialog between the chip and the canvas, not
-        // even for a team paste. It takes precedence over the harness/role
-        // chips because arming one clears the others.
-        if (presetId) {
-          // M4: the reset must survive a throw. Placement now REFUSES loudly
-          // (bad id, missing preset, failed signature), and without this a
-          // refusal left the chip armed and the tool stuck — every later click
-          // on the canvas would try to place the same broken preset again.
-          try {
-            await cookrew().placeInstalledPreset(presetId, position, orch)
-          } catch (error) {
-            console.error('Placing preset failed:', error)
-          } finally {
-            setPresetId(null)
-            setTool('move')
-          }
-          return
-        }
-        // AN ARMED CREW places ONE orch card: the whole crew answers through
-        // it, running at the author's app. The canvas click is the confirm,
-        // exactly as it is for every other chip (R2).
-        if (crewId) {
-          try {
-            await cookrew().crewPlace(crewId, position)
-          } catch (error) {
-            console.error('Placing crew failed:', error)
-          } finally {
-            setCrewId(null)
-            setTool('move')
-          }
-          return
-        }
         // A SAVED TEMPLATE placed as a preset IMPORTS a session: a new
         // workspace forked from the template — team, worktree, workdir —
         // switched to. Not a terminal on this canvas, so it returns before
@@ -1065,12 +1017,9 @@ function Canvas(): React.JSX.Element {
         setConnectFrom(null)
       }
     },
-    // presetId belongs here: without it the callback closes over a stale arm
-    // and the click places the PREVIOUSLY armed preset, or nothing at all.
-    // crewId and templates are CONSULTED above; leaving them out froze the
-    // closure at crewId=null, so an armed crew chip fell through to plain
-    // terminal creation — the canvas click placed a Shell instead of the crew.
-    [tool, preset, role, roles, orch, clipping, presetId, crewId, templates, screenToFlowPosition, zoomToNode]
+    // templates is CONSULTED above; leaving it out freezes the closure and a
+    // template placement falls through to plain terminal creation.
+    [tool, preset, role, roles, orch, clipping, templates, screenToFlowPosition, zoomToNode]
   )
 
   const onNodesDelete = useCallback((deleted: Node[]) => {
@@ -1344,50 +1293,29 @@ function Canvas(): React.JSX.Element {
           clipping={clipping}
           onToggleClipping={toggleClipping}
           presets={presets}
+          templates={templates}
           preset={preset}
           onPreset={(name) => {
             setPreset(name)
             setRole(null)
-            setPresetId(null)
           }}
           roles={roles}
           role={role}
           onRole={(name) => {
             setRole(name)
-            setPresetId(null)
           }}
-          installedPresets={installedPresets}
-          presetId={presetId}
-          onPresetChip={(id) => {
-            // Arm only — the canvas click commits (R2).
-            setPresetId(id)
-            setRole(null)
-          }}
-          crews={crews}
-          crewId={crewId}
-          onCrew={(id) => {
-            const crew = crews.find((c) => c.id === id)
-            if (!crew) return
-            // A locked chip is the gate's UI, never a disabled button: clicking
-            // it opens the sheet rather than arming a placement it can't do.
-            if (crew.access === 'paid' && !crew.payRef) {
-              setCrewGate(crew)
-              return
-            }
-            setCrewId(id)
-            setPresetId(null)
-            setRole(null)
-            setTool('terminal')
-          }}
-          onAddCrew={() => setAddCrewOpen(true)}
-          gatedPresetId={gatedId}
-          onPresetGate={openPresetGate}
-          onCheckUpdates={checkPresetUpdates}
+          onImportServed={() => setImportServedOpen(true)}
           orch={orch}
           onOrch={setOrch}
           voiceFor={
             zoomedTerminalId && terminals.some((t) => t.id === zoomedTerminalId)
-              ? { id: zoomedTerminalId, activity: activities[zoomedTerminalId] }
+              ? {
+                  id: zoomedTerminalId,
+                  activity: activities[zoomedTerminalId],
+                  // An imported card runs at someone else's app: the dock's
+                  // attach button would paste THIS machine's paths into it.
+                  remote: terminals.find((t) => t.id === zoomedTerminalId)?.servedSession != null
+                }
               : null
           }
           browserFor={browserInFullView(lod.primaryId, browsers)}
@@ -1414,50 +1342,31 @@ function Canvas(): React.JSX.Element {
           onPrimaryChange={setZoomedTerminalId}
         />
         {metricsOpen && <MetricsPanel onClose={() => setMetricsOpen(false)} />}
-        {/* The dock's + ADD BY LINK — adding is free and inert; commitment
-            happens at the gate, money at the sheet, connection at placement. */}
-        {/* A locked crew chip opens the GATE, never a placement it cannot do.
-            M1 settles against the dev facilitator, so "pay" mints a reference
-            the placed card presents once, at session start (R5). */}
-        {crewGate && (
-          <GateSheet
-            scene={{
-              door: 'install',
-              phase: { kind: 'pay' },
-              pricing: {
-                model: 'one-time',
-                terms: {
-                  price: crewGate.priceUsd ?? '0',
-                  asset: 'USDC',
-                  chain: 'dev',
-                  author: `@${crewGate.slug}`,
-                  expiry: 0
-                }
-              }
-            }}
-            title={crewGate.name}
-            version={`V${crewGate.version}`}
-            agentCount={crewGate.agents}
-            bannerLine={`${crewGate.priceUsd} USDC · per session — paid directly to @${crewGate.slug}`}
-            wallets={[{ id: 'dev', label: 'DEV FACILITATOR', icon: '◈' }]}
-            selectedWallet="dev"
-            onDismiss={() => setCrewGate(null)}
-            onPay={() => {
-              const crew = crewGate
-              setCrewGate(null)
-              void cookrew()
-                .crewUnlock(crew.id, `dev-${Date.now()}`)
-                .then(() => refreshCrews())
-                .catch((error) => console.error('crewUnlock failed:', error))
-            }}
-          />
-        )}
-        {addCrewOpen && (
-          <AddCrewSheet
-            onClose={() => setAddCrewOpen(false)}
-            onAdded={() => {
-              setAddCrewOpen(false)
-              refreshCrews()
+        {importServedOpen && (
+          <ImportServedSheet
+            /* A second link while the sheet is open is a new question: remount
+               so the field and the lookup start from the new address. */
+            key={importPrefill ?? ''}
+            {...(importPrefill !== null ? { prefill: importPrefill } : {})}
+            onClose={closeImportServed}
+            onImported={(placed) => {
+              closeImportServed()
+              // GO AND SHOW IT. The card is placed at canvas coordinates that
+              // have nothing to do with where the person is looking, so
+              // without this the button's promise — place the orch card — was
+              // kept somewhere they could not see, which reads as a failure.
+              if (!placed) return
+              const size = placed.size ?? { width: 420, height: 300 }
+              window.setTimeout(
+                () =>
+                  zoomToNode(placed.id, {
+                    x: placed.position.x,
+                    y: placed.position.y,
+                    width: size.width,
+                    height: size.height
+                  }),
+                60
+              )
             }}
           />
         )}

@@ -1,4 +1,3 @@
-import type { RotationSheetPayload } from './preset-rotation'
 import type { ServedPaymentRail } from './served-payment-rails'
 
 /**
@@ -17,34 +16,6 @@ import type { ServedPaymentRail } from './served-payment-rails'
  * tests/preset-rotation.test.ts pins each one so the drift cannot be quiet.
  */
 
-/** Section 5d — the author key rotation sheet (R20). Eleven strings. */
-export const MKT_ROTATION = {
-  /** The event, named plainly. Never "security alert". */
-  'mkt.rotation.title': '{author} changed signing keys',
-  /** The what-survived clause — the first thing read after the title. */
-  'mkt.rotation.survived': 'Your installed version keeps working. Nothing changed on your canvas.',
-  /** The refusal as a standing state, not a failure. */
-  'mkt.rotation.refused': "Cookrew won't install updates signed with the new key until you accept it.",
-  'mkt.rotation.evidence.old': 'previously signed by {oldKeyId}',
-  'mkt.rotation.evidence.new': 'now signing with {newKeyId}',
-  /**
-   * "Same account" is the one fact that makes this ordinary rather than
-   * alarming — it is the countersignature, said in buyer's English.
-   */
-  'mkt.rotation.evidence.when': 'rotated {date} · countersigned by the same account',
-  /** The link — the buyer can verify without trusting us. */
-  'mkt.rotation.evidence.log': 'view in the transparency log',
-  /** The one forward action. */
-  'mkt.rotation.action': 'TRUST THE NEW KEY',
-  /** Names the safe state, which is already true — not "Cancel". */
-  'mkt.rotation.dismiss': 'Keep v{current}',
-  /** Where the decision lives after the sheet is dismissed (R20's "once"). */
-  'mkt.rotation.chip': 'KEY CHANGED',
-  /** Toast; the update badge appears normally afterwards. */
-  'mkt.rotation.trusted': 'Now trusting {newKeyId} for {presetName}.'
-} as const
-
-export type MktRotationId = keyof typeof MKT_ROTATION
 
 /**
  * Section 5 — the denial sheet's FORWARD-COMPATIBILITY contract.
@@ -164,33 +135,6 @@ export function authorLabel(handle: string): string {
 }
 
 /**
- * The rotation sheet's strings, rendered from the payload.
- *
- * The DATE arrives already formatted. Absolute dates are the deck's rule (§7)
- * but their spelling is a locale decision, and a formatter frozen in a shared
- * module would be the wrong one for somebody. The caller formats `payload.at`
- * and passes the result.
- */
-export function rotationSheetCopy(
-  payload: RotationSheetPayload,
-  options: { date: string }
-): Record<MktRotationId, string> {
-  const vars = {
-    author: payload.authorHandle,
-    presetName: payload.presetName,
-    current: payload.currentVersion,
-    oldKeyId: shortKeyId(payload.oldKeyId),
-    newKeyId: shortKeyId(payload.newKeyId),
-    date: options.date
-  }
-  const out = {} as Record<MktRotationId, string>
-  for (const [id, template] of Object.entries(MKT_ROTATION) as [MktRotationId, string][]) {
-    out[id] = fillCopy(template, vars)
-  }
-  return out
-}
-
-/**
  * ── THE PROTOCOL MOMENTS ─────────────────────────────────────────────────────
  *
  * Magpie's give-up reason 5: every human decision point in this product is raw
@@ -281,7 +225,35 @@ export const MKT_PAY = {
   'mkt.pay.credit.head': 'Prepaid calls',
   'mkt.pay.credit.add': 'Add {amount} {asset} for remote calls',
   'mkt.pay.credit.estimate': '≈ {n} calls at today’s rate',
-  'mkt.pay.credit.skip': 'Top up any time from the chip.'
+  'mkt.pay.credit.skip': 'Top up any time from the chip.',
+
+  /**
+   * ── THE RAILS, as chips ───────────────────────────────────────────────────
+   * A door may take a card, USDC, or both. The chip row is the choice, so each
+   * label says the instrument, and the wallet one says WHOSE wallet — a person
+   * about to sign should never wonder which key is about to move money.
+   */
+  'mkt.pay.rail.card': 'CARD',
+  'mkt.pay.rail.usdc': 'USDC · {wallet}',
+  'mkt.pay.rail.usdc.nowallet': 'USDC — NO WALLET HERE',
+  /** The card hand-off. It leaves the app on purpose; say so before it does. */
+  'mkt.pay.card.handoff':
+    'Your card is entered on Stripe’s own page, in your browser — never in Cookrew.',
+  'mkt.pay.card.waiting.title': 'Waiting for your card payment',
+  'mkt.pay.card.waiting.body':
+    'Finish on the Stripe page that just opened. This unlocks itself when it lands — you can leave it.',
+  /** A settle the door refused: the accusation voice, per R-two-voices. */
+  'mkt.pay.error.invalid.title': "That payment didn't verify",
+  'mkt.pay.error.invalid.body':
+    'The door checked it and would not take it, so no session was started. Nothing was charged by us.',
+  /** Our checker could not answer: the apology voice. Never "declined". */
+  'mkt.pay.error.unverifiable.title': "We couldn't check that payment",
+  'mkt.pay.error.unverifiable.body':
+    'Your payment may be perfectly fine — our checker could not reach a verdict. Trying again will not charge you twice.',
+  /** No wallet provisioned on this device. Not a refusal — a missing tool. */
+  'mkt.pay.error.nowallet.title': 'No wallet on this device',
+  'mkt.pay.error.nowallet.body':
+    'Cookrew never holds keys, so it can only sign with a wallet you set up here. Pay by card instead, or set one up and come back.'
 } as const
 
 /**
@@ -337,7 +309,39 @@ export const MKT_DENIED_REASONS = {
   'mkt.denied.scope.title': "Cookrew couldn't get permission for that",
   'mkt.denied.scope.body':
     'It asked twice and was refused both times, so it stopped rather than keep asking. Nothing was installed and nothing was charged.',
-  'mkt.denied.scope.action': 'COPY DETAILS'
+  'mkt.denied.scope.action': 'COPY DETAILS',
+
+  /**
+   * ── A SERVED DOOR's refusals ──────────────────────────────────────────────
+   * Someone else's team, on their machine, on their terms. Each of these is a
+   * state the served gate can actually answer with, and each says the same two
+   * things the rest of this block says: what did NOT happen to your money, and
+   * the one move that is yours.
+   */
+
+  /** 429 — the OWNER's lent budget, not the caller's payment. Nothing to buy. */
+  'mkt.denied.budget.title': 'This team is out of sessions',
+  'mkt.denied.budget.body':
+    'Its owner lends it a fixed number and they are used up. Nothing was charged — a payment now would buy a session that cannot start.',
+  'mkt.denied.budget.action': 'ASK ITS OWNER',
+
+  /** 503 — a paid door with no working rail. Refusing to quote, not to serve. */
+  'mkt.denied.payment_unavailable.title': "This team can't take payment right now",
+  'mkt.denied.payment_unavailable.body':
+    'It asks to be paid but has no working way to accept it, so nothing was charged and no session was started.',
+  'mkt.denied.payment_unavailable.action': 'TRY LATER',
+
+  /** 403 — the credential is for another door. Ours to explain, not theirs. */
+  'mkt.denied.workspace.title': "That sign-in isn't for this door",
+  'mkt.denied.workspace.body':
+    'The credential belongs to a different team. Nothing was charged. Opening the address again signs you in to the right one.',
+  'mkt.denied.workspace.action': 'START AGAIN',
+
+  /** 503 — admitted, but the team did not come up. Never the caller's fault. */
+  'mkt.denied.not_answering.title': 'This team is not answering',
+  'mkt.denied.not_answering.body':
+    'The door is up but its orch did not start, so no session began. Nothing was charged.',
+  'mkt.denied.not_answering.action': 'TRY AGAIN'
 } as const
 
 /**
@@ -645,7 +649,28 @@ export const MKT_SERVE = {
   'mkt.serve.live.address': 'Callers land on {orch} · {priceLine}',
   /** The hand-off: what the owner DOES with the address they were just shown. */
   'mkt.serve.live.handoff':
-    'Hand this address to a caller — in their Cookrew it goes under TERMINAL → + ADD BY LINK.',
+    'Hand this address to a caller — in their Cookrew it goes under TERMINAL → + IMPORT.',
+  /**
+   * WHO CAN OPEN THIS LINK — the one question an owner should be asked about
+   * serving, and the one the card could not answer.
+   *
+   * It is about REACHING the door, never about getting in: the sign-in, the
+   * price and the owner's own lending limit are all still ahead. Blurring the
+   * two would tell someone their paid door is open to anyone, which is a
+   * sentence about entitlement wearing the clothes of a sentence about
+   * networks.
+   *
+   * These say who, not how. The transport is ours to solve; "who can reach
+   * this?" is the owner's whole concern.
+   */
+  'mkt.serve.reach.lan': 'Only people on this network can open it.',
+  'mkt.serve.reach.tailnet': 'Only people on your tailnet can open it.',
+  'mkt.serve.reach.public': 'Anyone with the link can open it.',
+  'mkt.serve.reach.relay': 'Anyone with the link can open it.',
+  /** Said beside the reach line when the door is not reachable from outside —
+   *  the fix, not a scolding, because the owner did nothing wrong. */
+  'mkt.serve.reach.narrow.why':
+    'Sending it further needs a way in from outside — turn on Tailscale, or serve it through cookrew.dev.',
   'mkt.serve.stop.action': 'STOP SERVING',
   'mkt.serve.stop.confirm':
     'Stop serving {templateName}? {n} workspaces end now, including any mid-call. The template stays on your shelf.',
@@ -665,7 +690,11 @@ export const MKT_SERVE = {
   'mkt.serve.refused.bad-price': 'A paid door needs a price above zero.',
   'mkt.serve.refused.priced-free-door': 'A free door cannot carry a price.',
   'mkt.serve.refused.grant-unusable':
-    'Not taking callers — this crew’s orch could not answer one check with the credential it was lent. Match the grant to the orch, or fix the endpoint’s request template.'
+    'Not taking callers — this crew’s orch could not answer one check with the credential it was lent. Match the grant to the orch, or fix the endpoint’s request template.',
+  /** The remote transport's standing refusal: publish is owner-IPC only (the
+   *  grant-surface rule), so a phone can save a team but never open a door. */
+  'mkt.serve.refused.desktop-only':
+    'a door opens from the desktop app, never from this remote screen. Save the team again on the desktop to start taking callers.'
 } as const
 
 /** The SESSIONS table. Owner-side; the word lives here and nowhere else. */
@@ -726,10 +755,10 @@ export const MKT_SVC = {
   'mkt.svc.payment.received': 'Payment received — retry your call in Cookrew.',
   'mkt.svc.open.title': 'Start in Cookrew',
   'mkt.svc.open.account':
-    'In Cookrew, choose + ADD BY LINK and paste the address below. The crew card signs you in when you start.',
+    'In Cookrew, choose + IMPORT and paste the address below. You get one card — {orch}’s terminal — and it signs you in when it starts.',
   'mkt.svc.open.paid':
-    'In Cookrew, choose + ADD BY LINK and paste the address below. The crew card walks you through sign-in and payment when you start.',
-  'mkt.svc.open.address': 'Crew address',
+    'In Cookrew, choose + IMPORT and paste the address below. It shows the terms and takes the payment once, before anything is placed — then you get one card, {orch}’s terminal.',
+  'mkt.svc.open.address': 'Address',
   'mkt.svc.availability.title': 'Availability',
   /**
    * FLAGGED FOR ATLAS. "They can't see inside it" is a claim about what the
@@ -1055,7 +1084,6 @@ export type MktGateId = keyof typeof MKT_GATE
 /** Every group, so a renderer can resolve any id without knowing its family. */
 export const MKT_ALL = {
   ...MKT_GATE,
-  ...MKT_ROTATION,
   ...MKT_DENIED,
   ...MKT_AUTH,
   ...MKT_PAY,

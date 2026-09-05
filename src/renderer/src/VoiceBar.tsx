@@ -123,10 +123,13 @@ function TermKeys({ terminalId }: { terminalId: string }): React.JSX.Element {
 
 export function VoiceBar({
   terminalId,
-  activity
+  activity,
+  remote = false
 }: {
   terminalId: string
   activity: TerminalActivity | undefined
+  /** The terminal is a line into a session elsewhere: nothing here attaches. */
+  remote?: boolean
 }): React.JSX.Element {
   const [text, setText] = useState('')
   const [listening, setListening] = useState(false)
@@ -196,7 +199,7 @@ export function VoiceBar({
 
   return (
     <div className="voice-bar nodrag">
-      <AttachButton terminalId={terminalId} />
+      {!remote && <AttachButton terminalId={terminalId} />}
       {hasRecognition && (
         <button
           className={`cr-btn sm voice-mic${listening ? ' listening' : ''}`}

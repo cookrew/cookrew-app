@@ -95,6 +95,20 @@ export interface MobileOps {
   roleDelete: (name: string) => boolean;
 }
 
+/** The caller's side of importing a served team; index.ts builds it once. */
+export interface ServeOps {
+  inspect(link: string): Promise<unknown>;
+  browse(link: string): Promise<unknown>;
+  gate(link: string): Promise<unknown>;
+  checkout(link: string): Promise<unknown>;
+  settle(link: string, rail: "x402" | "stripe", session?: string): Promise<unknown>;
+  import(
+    link: string,
+    position?: { x: number; y: number },
+    paid?: { price: string; asset: string; rail: "x402" | "stripe" },
+  ): Promise<unknown>;
+}
+
 export interface MobileApiDeps {
   store: WorkspaceStore;
   /**
@@ -148,6 +162,12 @@ export interface MobileApiDeps {
    * absent = /api/board answers 503 rather than pretending the board is empty.
    */
   board?: BoardSources;
+  /**
+   * Importing a served team FROM THE PHONE — the desktop's own operations,
+   * reached over this API. Absent = the six /api/serve routes answer 503
+   * rather than pretending; the phone bridge then reports the refusal.
+   */
+  serve?: ServeOps;
   /**
    * READ-ONLY scope token (persisted as ~/.cookrew/wall-token). Authorizes the
    * SAME routes as pairingToken but for GET only — there is no separate
@@ -496,6 +516,52 @@ export async function handleMobileApi(
       200,
       await ops.gitInfo(url.searchParams.get("dir") ?? ""),
     );
+    return true;
+  }
+
+  // ---- importing a served team, from the phone ----
+  // Six verbs, one shape: POST with a JSON body, the link in it. Positions and
+  // payment receipts are validated to their shape here; everything about the
+  // door — the sign-in, the 402, the placement — is the same code the desktop
+  // sheet drives, and it runs at the desktop.
+  if (method === "POST" && p.startsWith("/api/serve/")) {
+    const verb = p.slice("/api/serve/".length);
+    if (!["inspect", "browse", "gate", "checkout", "settle", "import"].includes(verb)) {
+      return false;
+    }
+    if (!deps.serve) {
+      respondJson(response, 503, { ok: false, reason: "not-wired" });
+      return true;
+    }
+    const body = await readJson<{
+      link?: unknown;
+      position?: unknown;
+      paid?: unknown;
+      rail?: unknown;
+      session?: unknown;
+    }>(request);
+    if (typeof body.link !== "string" || body.link.length === 0 || body.link.length > 2048) {
+      respondJson(response, 400, { ok: false, reason: "bad-address" });
+      return true;
+    }
+    const link = body.link;
+    const position = servePosition(body.position);
+    const paid = servePaid(body.paid);
+    const rail = body.rail === "x402" || body.rail === "stripe" ? body.rail : null;
+    const session = typeof body.session === "string" ? body.session : undefined;
+    let answer: unknown;
+    if (verb === "inspect") answer = await deps.serve.inspect(link);
+    else if (verb === "browse") answer = await deps.serve.browse(link);
+    else if (verb === "gate") answer = await deps.serve.gate(link);
+    else if (verb === "checkout") answer = await deps.serve.checkout(link);
+    else if (verb === "settle") {
+      if (rail === null) {
+        respondJson(response, 400, { ok: false, reason: "bad-rail" });
+        return true;
+      }
+      answer = await deps.serve.settle(link, rail, session);
+    } else answer = await deps.serve.import(link, position, paid);
+    respondJson(response, 200, answer);
     return true;
   }
 
@@ -1184,4 +1250,24 @@ function parseEventQuery(params: URLSearchParams): EventQuery {
     until: num("until"),
     limit: num("limit"),
   };
+}
+
+/** A canvas position off the wire, or nothing — never a NaN the canvas cannot place. */
+function servePosition(value: unknown): { x: number; y: number } | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const at = value as { x?: unknown; y?: unknown };
+  return Number.isFinite(at.x) && Number.isFinite(at.y)
+    ? { x: at.x as number, y: at.y as number }
+    : undefined;
+}
+
+/** The receipt the gate sheet took, in its exact shape, or nothing. */
+function servePaid(
+  value: unknown,
+): { price: string; asset: string; rail: "x402" | "stripe" } | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const paid = value as { price?: unknown; asset?: unknown; rail?: unknown };
+  if (typeof paid.price !== "string" || typeof paid.asset !== "string") return undefined;
+  if (paid.rail !== "x402" && paid.rail !== "stripe") return undefined;
+  return { price: paid.price.slice(0, 32), asset: paid.asset.slice(0, 16), rail: paid.rail };
 }

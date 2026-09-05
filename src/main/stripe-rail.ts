@@ -171,7 +171,17 @@ export async function stripeCreateCheckout(
   form.set('line_items[0][price_data][unit_amount]', String(amount))
   form.set('line_items[0][price_data][product_data][name]', `One session with the ${input.slug} crew`)
   form.set('line_items[0][quantity]', '1')
-  form.set('expires_at', String(Math.floor((deps.now?.() ?? Date.now()) / 1000) + CHECKOUT_TTL_SECONDS))
+  // EXPIRY IS BUCKETED, and that is what makes the idempotency key below
+  // usable twice. A wall-clock `now + TTL` moves on every call, and Stripe
+  // refuses a repeated key whose body changed AT ALL — so the second time a
+  // buyer pressed PAY the door answered "card payment is not available right
+  // now" and stayed that way for a day. Quantising the expiry to the TTL
+  // window makes every attempt inside one window byte-identical (one
+  // purchase, however many retries), and a later window is a genuinely new
+  // quote — which is exactly when a new session SHOULD be minted.
+  const nowSeconds = Math.floor((deps.now?.() ?? Date.now()) / 1000)
+  const window = Math.floor(nowSeconds / CHECKOUT_TTL_SECONDS)
+  form.set('expires_at', String((window + 2) * CHECKOUT_TTL_SECONDS))
   form.set('metadata[serviceId]', input.serviceId)
   form.set('metadata[sub]', input.sub)
   form.set('metadata[slug]', input.slug)
@@ -195,11 +205,13 @@ export async function stripeCreateCheckout(
     response = await deps.post(`${STRIPE_API}/checkout/sessions`, {
       // Keyed by the CALLER'S INTENT, not by the attempt: the same buyer
       // asking the same crew for the same price is one purchase however many
-      // times the request is retried.
+      // times the request is retried. The window is part of the key because it
+      // is part of the body (see expires_at above) — a key must never outlive
+      // the parameters it was minted with, or every later attempt is refused.
       headers: stripeHeaders(
         deps.config,
         true,
-        `checkout:${input.serviceId}:${input.sub}:${amount}`
+        `checkout:${input.serviceId}:${input.sub}:${amount}:${window}`
       ),
       body: form.toString()
     })

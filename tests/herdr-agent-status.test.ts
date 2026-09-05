@@ -18,9 +18,16 @@ const EVENT = (paneId: string, status: string): string =>
   JSON.stringify({ event: 'pane.agent_status_changed', data: { pane_id: paneId, agent_status: status } })
 
 /** A socket whose incoming data the test drives by hand. */
-function fakeSocket(): StatusSocket & { emit: (s: string) => void; written: string[]; close: () => void } {
+function fakeSocket(): StatusSocket & {
+  emit: (s: string) => void
+  written: string[]
+  close: () => void
+  fail: () => void
+  ended: () => boolean
+} {
   const handlers: Record<string, ((chunk: string) => void)[]> = {}
   const written: string[] = []
+  let didEnd = false
   return {
     written,
     on(event: string, cb: (chunk: string) => void) {
@@ -29,12 +36,19 @@ function fakeSocket(): StatusSocket & { emit: (s: string) => void; written: stri
     write(line: string) {
       written.push(line)
     },
-    end() {},
+    end() { didEnd = true },
+    destroy() { didEnd = true },
     emit(chunk: string) {
       for (const cb of handlers.data ?? []) cb(chunk)
     },
     close() {
       for (const cb of handlers.close ?? []) cb('')
+    },
+    fail() {
+      for (const cb of handlers.error ?? []) cb('')
+    },
+    ended() {
+      return didEnd
     }
   } as never
 }
@@ -173,7 +187,7 @@ describe('subscription', () => {
     feed.stop()
   })
 
-  it('coalesces a terminal-spawn burst into one subscription rebuild', async () => {
+  it('coalesces a terminal-spawn burst and keeps the socket when panes are unchanged', async () => {
     let connects = 0
     let lists = 0
     const feed = new HerdrStatusFeed({
@@ -193,11 +207,132 @@ describe('subscription', () => {
     const initialLists = lists
     const initialConnects = connects
 
-    for (let i = 0; i < 30; i += 1) feed.refreshSoon()
+    // Long-run fixture: opening/closing the same transcript ten thousand times
+    // must still own one subscription, not ten thousand retired sockets.
+    for (let i = 0; i < 10_000; i += 1) feed.refreshSoon()
     await Promise.resolve()
 
     expect(lists - initialLists).toBe(1)
-    expect(connects - initialConnects).toBe(1)
+    expect(connects - initialConnects).toBe(0)
+    feed.stop()
+  })
+
+  it('replaces the subscription once when the pane set changes', () => {
+    const sockets = [fakeSocket(), fakeSocket()]
+    let panes: FeedPane[] = [{ paneId: 'w1:p1', label: 'a' }]
+    let connects = 0
+    const feed = new HerdrStatusFeed({
+      session: 'cookrew',
+      configPath: '/c',
+      listPanes: () => panes,
+      resolveSocketPath: () => '/tmp/h.sock',
+      connect: () => sockets[connects++]
+    })
+    feed.start()
+    panes = [...panes, { paneId: 'w1:p2', label: 'b' }]
+    feed.refresh()
+
+    expect(connects).toBe(2)
+    expect(sockets[0].ended()).toBe(true)
+    expect(feed.connected).toBe(true)
+    feed.stop()
+  })
+
+  it('an old socket closing cannot orphan the replacement or reconnect again', async () => {
+    const sockets = [fakeSocket(), fakeSocket(), fakeSocket()]
+    let panes: FeedPane[] = [{ paneId: 'w1:p1', label: 'a' }]
+    let connects = 0
+    const feed = new HerdrStatusFeed({
+      session: 'cookrew',
+      configPath: '/c',
+      listPanes: () => panes,
+      resolveSocketPath: () => '/tmp/h.sock',
+      connect: () => sockets[connects++],
+      reconnectMs: 1
+    })
+    feed.start()
+    panes = [...panes, { paneId: 'w1:p2', label: 'b' }]
+    feed.refresh()
+    expect(connects).toBe(2)
+
+    // Real net.Socket.end() closes asynchronously. This is the exact race:
+    // socket B is current before socket A reports close.
+    sockets[0].close()
+    expect(feed.connected).toBe(true)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(connects).toBe(2)
+    expect(sockets[1].ended()).toBe(false)
+    feed.stop()
+  })
+
+  it('drops late data from the retired subscription inventory', () => {
+    const sockets = [fakeSocket(), fakeSocket()]
+    let panes: FeedPane[] = [{ paneId: 'w1:p1', label: 'a', status: 'idle' }]
+    let connects = 0
+    const feed = new HerdrStatusFeed({
+      session: 'cookrew',
+      configPath: '/c',
+      listPanes: () => panes,
+      resolveSocketPath: () => '/tmp/h.sock',
+      connect: () => sockets[connects++]
+    })
+    feed.start()
+    panes = [{ paneId: 'w1:p2', label: 'b', status: 'idle' }]
+    feed.refresh()
+
+    sockets[0].emit(EVENT('w1:p1', 'working') + '\n')
+    expect(feed.statusFor('a')).toBeNull()
+    expect(feed.statusFor('b')).toBe('idle')
+    feed.stop()
+  })
+
+  it('keeps exactly one live socket across a long run of delayed closes', () => {
+    const sockets: ReturnType<typeof fakeSocket>[] = []
+    let panes: FeedPane[] = [{ paneId: 'w1:p1', label: 'a' }]
+    const feed = new HerdrStatusFeed({
+      session: 'cookrew',
+      configPath: '/c',
+      listPanes: () => panes,
+      resolveSocketPath: () => '/tmp/h.sock',
+      connect: () => {
+        const socket = fakeSocket()
+        sockets.push(socket)
+        return socket
+      }
+    })
+    feed.start()
+
+    for (let i = 0; i < 500; i += 1) {
+      const retired = sockets[sockets.length - 1]
+      panes = [{ paneId: i % 2 === 0 ? 'w1:p2' : 'w1:p1', label: 'a' }]
+      feed.refresh()
+      // Model the old kernel close notification arriving only after the next
+      // subscription is installed.
+      retired.close()
+      expect(sockets.filter((socket) => !socket.ended())).toHaveLength(1)
+      expect(feed.connected).toBe(true)
+    }
+
+    feed.stop()
+    expect(sockets.filter((socket) => !socket.ended())).toHaveLength(0)
+  })
+
+  it('error followed by close schedules only one replacement', async () => {
+    const sockets = [fakeSocket(), fakeSocket()]
+    let connects = 0
+    const feed = new HerdrStatusFeed({
+      session: 'cookrew',
+      configPath: '/c',
+      listPanes: () => [{ paneId: 'w1:p1', label: 'a' }],
+      resolveSocketPath: () => '/tmp/h.sock',
+      connect: () => sockets[connects++],
+      reconnectMs: 1
+    })
+    feed.start()
+    sockets[0].fail()
+    sockets[0].close()
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(connects).toBe(2)
     feed.stop()
   })
 })

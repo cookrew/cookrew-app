@@ -33,6 +33,14 @@ asarUnpack:
   # node-pty is native and must be a real file on disk to be spawnable.
   - node_modules/node-pty/**/*
 
+# cookrew://import/@handle/team and its kin — the link a team's page on
+# cookrew.dev hands to the app. Parsed in src/main/deep-link.ts; the OS
+# registration is claimed at launch (app.setAsDefaultProtocolClient).
+protocols:
+  name: Cookrew
+  schemes:
+    - cookrew
+
 mac:
   category: public.app-category.developer-tools
   icon: resources/icon.icns

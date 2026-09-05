@@ -1,17 +1,5 @@
-import type {
-  TraceBoundaryMarker,
-  TraceIndexEntry,
-  TraceIndexRequest,
-  TracePage,
-  TracePageRequest
-} from './trace-blocks'
-import type { TurnPage, TurnPageRequest, TurnRecord } from './turn'
-
-/** Public address of the served transcript behind one placed crew card. */
-export interface ServedTranscriptTarget {
-  origin: string
-  slug: string
-}
+import type { TracePage } from './trace-blocks'
+import type { TurnPage, TurnRecord } from './turn'
 
 /** Stable caller-scoped routes. None accepts a terminal, workspace, or session id. */
 export const SERVED_TRANSCRIPT_PATHS = Object.freeze({
@@ -21,22 +9,17 @@ export const SERVED_TRANSCRIPT_PATHS = Object.freeze({
   traceMarkers: '/trace/markers'
 } as const)
 
+/**
+ * The caller ENDS their own session here. Caller-scoped like the transcript
+ * routes — no id on the wire, the credential subject is the session — and the
+ * only thing a caller may destroy at a door: their own seat, and the workspace
+ * the owner's app minted for it.
+ */
+export const SERVED_SESSION_END_PATH = '/session/end'
+
 export type ServedTranscriptPath =
   (typeof SERVED_TRANSCRIPT_PATHS)[keyof typeof SERVED_TRANSCRIPT_PATHS]
 
 export type ServedTraceSource = 'claude' | 'codex' | 'pi' | null
 export type ServedTracePage = TracePage & { source: ServedTraceSource }
 export type ServedTurnsWireResponse = TurnRecord[] | TurnPage
-
-/**
- * Renderer integration contract for one placed crew card. Unlike the local
- * bridge, there is deliberately no terminalId argument: the Bearer subject and
- * served slug resolve the caller's orch session on the server. Implementations
- * add `Authorization: Bearer ...` internally and treat 404 as no open session.
- */
-export interface ServedRemoteTurnSource {
-  listTurns(request: TurnPageRequest): Promise<TurnPage>
-  listTrace(request: TracePageRequest): Promise<ServedTracePage>
-  listTraceIndex(request?: TraceIndexRequest): Promise<TraceIndexEntry[]>
-  listTraceMarkers(): Promise<TraceBoundaryMarker[]>
-}

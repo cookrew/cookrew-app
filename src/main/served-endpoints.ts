@@ -1,7 +1,8 @@
 import { validateCallPrompt } from './call-prompt'
 import { safeCallReply } from './call-reply'
 import type { ServedTemplate } from './session-served'
-import type { ServedCallers } from './served-callers'
+import { ACCOUNT_SUB_PREFIX, type ServedCallers } from './served-callers'
+import type { RegistryTokenVerifier } from './registry-token'
 import { pageTurns, type TurnPageRequest, type TurnRecord } from '../shared/turn'
 import type {
   TraceBoundaryMarker,
@@ -10,6 +11,7 @@ import type {
   TracePageRequest
 } from '../shared/trace-blocks'
 import {
+  SERVED_SESSION_END_PATH,
   SERVED_TRANSCRIPT_PATHS,
   type ServedTracePage,
   type ServedTranscriptPath,
@@ -57,7 +59,7 @@ export interface CrewFace {
   /** The identity the sign-in payload binds to. Public — it IS the address. */
   serviceId: string
   slug: string
-  /** The public address the caller pastes into Cookrew's + ADD BY LINK. */
+  /** The public address the caller pastes into Cookrew's + IMPORT. */
   address: string
   version: number
   access: 'account' | 'paid'
@@ -79,9 +81,25 @@ export interface ServedEndpointDeps {
     verifyToken(token: string): { sub: string; workspace: string } | null
   }
   callers: ServedCallers
+  /**
+   * THE DOOR'S PUBLISHED NAME — `@handle/team` — or null when this door is
+   * not on the relay. A registry token is minted for exactly one name, so a
+   * door without one has nothing a token could be for and refuses them all.
+   */
+  doorName?(template: ServedTemplate): string | null
+  /** Sign-in with a cookrew.dev token; absent means the door takes keys only. */
+  registryTokens?: RegistryTokenVerifier
   admit(serviceId: string, sub: string): Promise<{ workspaceId: string; sessionId: string; created: boolean }>
   /** Does this account hold an OPEN session? Open = already paid for. */
   hasOpenSession(serviceId: string, sub: string): boolean
+  /**
+   * END the caller's open session and DESTROY what was minted for it — the
+   * workspace on the owner's canvas, its terminals, its sandbox. The caller
+   * said "end this session"; a workspace that outlives that is a stranger's
+   * agents left running on the owner's machine with nobody to talk to.
+   * Returns false when the caller has no open session.
+   */
+  endSession(serviceId: string, sub: string): boolean
   conductorFor(sessionId: string): string | null
   /** Run the prompt against the conductor's terminal; resolves to raw output. */
   ask(conductorId: string, prompt: string): Promise<string>
@@ -194,7 +212,8 @@ export function renderServedCrewFace(face: CrewFace, paymentReceived: boolean): 
         }<p>${copy(
           face.access === 'account'
             ? MKT_SVC['mkt.svc.open.account']
-            : MKT_SVC['mkt.svc.open.paid']
+            : MKT_SVC['mkt.svc.open.paid'],
+          { orch: face.door }
         )}</p><span class="address-label">${copy(
           MKT_SVC['mkt.svc.open.address']
         )}</span><code class="address">${escapeHtml(face.address)}</code></section>`
@@ -263,7 +282,7 @@ export async function handleServedRoute(
   }
 
   if (method === 'GET' && pathname === '/crew') {
-    // The public face — the ADD BY LINK preview. Free to read: it is exactly
+    // The public face — the import sheet's preview. Free to read: it is exactly
     // what the owner chose to publish, and nothing else.
     return json(200, publicCrewFace(deps, template))
   }
@@ -273,6 +292,8 @@ export async function handleServedRoute(
   }
 
   if (method === 'POST' && pathname === '/api/call/assert') {
+    const body = (input.body ?? {}) as Record<string, unknown>
+    if ('registryToken' in body) return registryAssert(deps, template, body)
     const result = deps.callers.assert(
       serviceId,
       (input.body ?? {}) as Record<string, unknown>,
@@ -288,6 +309,14 @@ export async function handleServedRoute(
     return askRoute(deps, template, input)
   }
 
+  if (method === 'POST' && pathname === SERVED_SESSION_END_PATH) {
+    // The same 401/403 bearer scope as every caller route; the session is
+    // the credential subject's own, never one named on the wire.
+    const auth = authorizeCaller(deps, template, input.headers)
+    if (!auth.ok) return auth.response
+    return deps.endSession(serviceId, auth.claims.sub) ? json(200, { ended: true }) : json(404, {})
+  }
+
   if (
     method === 'GET' &&
     Object.values(SERVED_TRANSCRIPT_PATHS).includes(pathname as ServedTranscriptPath)
@@ -298,7 +327,47 @@ export async function handleServedRoute(
   return null
 }
 
-type CallerClaims = { sub: string; workspace: string }
+/**
+ * The second sign-in: a registry token, no key. The body is that ONE field —
+ * a token beside a sub or a challenge is two claims about who is knocking,
+ * and a gate that picked one would be choosing which story to believe.
+ * The seated sub is `acct-<handle>`, the namespace served-callers refuses to
+ * the key path, so a registry caller and a key caller can never share a
+ * session directory.
+ */
+async function registryAssert(
+  deps: ServedEndpointDeps,
+  template: ServedTemplate,
+  body: Record<string, unknown>
+): Promise<ServedResponse> {
+  const token = body.registryToken
+  const name = deps.doorName?.(template) ?? null
+  if (Object.keys(body).length !== 1 || typeof token !== 'string' || name === null) {
+    return json(401, {})
+  }
+  const verified = (await deps.registryTokens?.verify(token, name)) ?? null
+  if (verified === null) return json(401, {})
+  return json(200, {
+    ok: true,
+    token: deps.issuer.mint(`${ACCOUNT_SUB_PREFIX}${verified.sub}`, template.serviceId)
+  })
+}
+
+export type CallerClaims = { sub: string; workspace: string }
+
+/**
+ * Identity alone: the 401/403 rungs, no budget and no money. The caller's
+ * input routes gate on THIS — they prove their session with an open-session
+ * lookup, and running the money rung there would settle a presented payment
+ * for a session those routes never mint.
+ */
+export function identifyCaller(
+  deps: ServedEndpointDeps,
+  template: ServedTemplate,
+  headers: Record<string, string | undefined>
+): { ok: true; claims: CallerClaims } | { ok: false; response: ServedResponse } {
+  return authorizeCaller(deps, template, headers)
+}
 
 function authorizeCaller(
   deps: ServedEndpointDeps,
@@ -391,16 +460,22 @@ async function transcriptRoute(
   return json(200, response)
 }
 
-async function askRoute(
+/**
+ * The whole admission ladder short of the prompt: identity (401/403), the
+ * owner's grant budget (429, BEFORE the money), the 402 at session start.
+ * Shared by /ask and the caller's PTY line — one gate, two doors, so the
+ * ladder cannot drift between them.
+ */
+export async function gateCaller(
   deps: ServedEndpointDeps,
   template: ServedTemplate,
-  input: { headers: Record<string, string | undefined>; body: unknown }
-): Promise<ServedResponse> {
+  headers: Record<string, string | undefined>
+): Promise<{ ok: true; claims: CallerClaims } | { ok: false; response: ServedResponse }> {
   const { serviceId } = template
 
   // ── identity: shared byte-for-byte with the caller transcript reads ──
-  const auth = authorizeCaller(deps, template, input.headers)
-  if (!auth.ok) return auth.response
+  const auth = authorizeCaller(deps, template, headers)
+  if (!auth.ok) return auth
   const { claims } = auth
 
   // ── the owner's grant budget — BEFORE the money, deliberately ──
@@ -420,36 +495,56 @@ async function askRoute(
     // of sessions and they are gone — a limit a caller can understand and an
     // owner can raise, so it is named rather than hidden behind "try again
     // shortly", which would be a lie about a wait that never ends.
-    return json(429, {
-      reason: 'budget',
-      error: 'this crew has used up what its owner lent it — ask them to raise it'
-    })
+    return {
+      ok: false,
+      response: json(429, {
+        reason: 'budget',
+        error: 'this crew has used up what its owner lent it — ask them to raise it'
+      })
+    }
   }
 
   // ── the 402, at session START only ──
   if (template.access === 'paid' && !deps.hasOpenSession(serviceId, claims.sub)) {
-    const payment = input.headers['x-payment']
+    const payment = headers['x-payment']
     if (payment === undefined || payment.length === 0) {
       const terms = deps.paymentTerms(template)
       // A crew we cannot price is not a crew a stranger may use for free.
       if (terms === null) {
-        return json(503, {
-          reason: 'payment_unavailable',
-          error: MKT_GATE['mkt.gate.payment.unavailable']
-        })
+        return {
+          ok: false,
+          response: json(503, {
+            reason: 'payment_unavailable',
+            error: MKT_GATE['mkt.gate.payment.unavailable']
+          })
+        }
       }
-      return json(402, { terms })
+      return { ok: false, response: json(402, { terms }) }
     }
     const settled = await deps.settle(payment, template.priceUsd ?? '')
     if (settled === 'refused') {
       // The accusation voice: the payment is at fault, nothing was charged here.
-      return json(402, { reason: 'invalid', retryable: false })
+      return { ok: false, response: json(402, { reason: 'invalid', retryable: false }) }
     }
     if (settled === 'unverifiable') {
       // The apology voice: WE could not check; retrying will not double-charge.
-      return json(402, { reason: 'unverifiable', retryable: true })
+      return { ok: false, response: json(402, { reason: 'unverifiable', retryable: true }) }
     }
   }
+
+  return { ok: true, claims }
+}
+
+async function askRoute(
+  deps: ServedEndpointDeps,
+  template: ServedTemplate,
+  input: { headers: Record<string, string | undefined>; body: unknown }
+): Promise<ServedResponse> {
+  const { serviceId } = template
+
+  const gate = await gateCaller(deps, template, input.headers)
+  if (!gate.ok) return gate.response
+  const { claims } = gate
 
   // ── the prompt, refused not stripped ──
   const body = (input.body ?? {}) as Record<string, unknown>

@@ -8,9 +8,10 @@
  *     herdr: lost connection to server: Resource temporarily unavailable (os error 35)
  *
  * and exits. The SERVER is fine and THE PANE IS FINE; only our view of it died.
- * But PtyManager's exit handler simply drops the session from its map, so the
- * card is left showing that sentence forever and the agent behind it becomes
- * unreachable until someone restarts or recovers the terminal by hand.
+ * The recovery must keep the PtySession object itself alive: every desktop and
+ * mobile transcript stream is subscribed to that EventEmitter. Replacing the
+ * object can bring up a client underneath the UI while leaving the visible
+ * card connected to the dead one.
  *
  * runWithHerdrRetry (herdr-retry.ts) does not help here. It wraps the CLI calls
  * Cookrew makes itself; this is a child process printing to a terminal, and
@@ -66,11 +67,13 @@ export function decideReattach(
   state: ReattachState,
   now: number
 ): ReattachDecision {
-  // A clean exit is the user closing the card or the agent ending. Never fight
-  // a deliberate exit — that would resurrect terminals people just closed.
-  if (exit.exitCode === 0) return { reattach: false, reason: 'clean-exit' }
   if (GONE.test(exit.tail)) return { reattach: false, reason: 'pane-gone' }
-  if (!TRANSIENT_DISCONNECT.test(exit.tail)) return { reattach: false, reason: 'not-transient' }
+  // The exact disconnect is authoritative even if a herdr version maps it to
+  // exit 0. PtySession filters its deliberate dispose before calling here, so
+  // this cannot resurrect a card the user intentionally closed.
+  if (!TRANSIENT_DISCONNECT.test(exit.tail)) {
+    return { reattach: false, reason: exit.exitCode === 0 ? 'clean-exit' : 'not-transient' }
+  }
 
   // A window that has gone quiet starts over, so an app up for days does not
   // accumulate its way to a permanent refusal.

@@ -152,6 +152,14 @@ export interface ProfileInput {
    * owner's refresh token. See owner-secrets.ts for why it is a denylist.
    */
   secretPaths: readonly string[]
+  /**
+   * The app's CLI control-plane socket (PtyManager.socketPath), denied so a
+   * served agent cannot drive the owner's canvas. The env keys that name it
+   * are already withheld from served panes (pty.ts) — this is the second lock,
+   * because the path is also written to ~/.cookrew/socket and a determined
+   * process could simply read it there.
+   */
+  controlSocketPath?: string
 }
 
 /**
@@ -204,6 +212,16 @@ export function seatbeltProfile(input: ProfileInput): string {
     ...input.secretPaths.map(
       (secret) => `(deny file-read* (subpath ${quote(secret)}) (literal ${quote(secret)}))`
     ),
+    // The CLI socket. `(allow network*)` above covers unix-domain connects, so
+    // without this a served agent that learned the path could speak to the
+    // app's command socket — which takes orders with no credential and accepts
+    // `--as <any agent>`. Denying the connect closes that from the other side.
+    ...(input.controlSocketPath
+      ? [
+          `(deny network-outbound (literal ${quote(input.controlSocketPath)}))`,
+          `(deny file-read* file-write* (literal ${quote(input.controlSocketPath)}))`
+        ]
+      : []),
     // TRAVERSAL. Found by running it: denying the service root outright made a
     // session unable to reach its OWN sandbox — `cd` into it failed with "Not a
     // directory", because reaching a child means traversing the parent. The

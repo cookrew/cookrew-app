@@ -2,6 +2,10 @@
 <html>
   <head>
     <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: http: https:; media-src 'self' data: blob: http: https:; connect-src 'self' http: https: ws: wss:; worker-src 'self' blob:; frame-src http: https:"
+    />
     <!-- maximum-scale=1: iOS auto-zooms the PAGE when focusing an input with a
          small font — xterm's hidden textarea qualifies, so zooming into a
          terminal bounced the whole page zoom in/out through a focus→zoom→

@@ -197,3 +197,20 @@ export function startSse(response: http.ServerResponse): SseSend {
     write(`event: ${event}\ndata: ${payload}\n\n`)
   }
 }
+
+/**
+ * Hold keep-alive sockets open long enough to span a reader's pause.
+ *
+ * Node's 5s default is tuned for servers behind a fronting proxy; this one
+ * has none, and its client TYPES INTERMITTENTLY. Every pause longer than the
+ * window closed the connection, so the next keystroke paid a fresh TCP+TLS
+ * handshake — over a relayed tailnet (round trips 300ms–2.5s) that is the
+ * difference between an echo and a stall, and it read as "the terminal is
+ * laggy" when the pty itself answered instantly. headersTimeout stays above
+ * keepAliveTimeout: Node documents an ECONNRESET race for reused sockets
+ * torn down between those two clocks.
+ */
+export function holdSocketsOpen(server: http.Server): void {
+  server.keepAliveTimeout = 75_000
+  server.headersTimeout = 80_000
+}

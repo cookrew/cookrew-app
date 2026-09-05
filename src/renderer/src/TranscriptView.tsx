@@ -17,13 +17,15 @@ import {
   fractionOfIdentity,
   identityAtFraction,
   isAtBottom,
+  shouldStick,
   jumpScrollBehavior,
   mergeTrace,
   pruneToTotal,
   refineEstimate,
   type TraceAnchor,
   type TracePage,
-  type TraceBlock
+  type TraceBlock,
+  wheelGoesToTranscript
 } from './transcript'
 
 /** Blocks fetched per lazy page, and the cap of FULL blocks kept in memory. */
@@ -96,6 +98,18 @@ export const TranscriptView = forwardRef<
     jumpToken: number
     /** Live-tail clip (unified-scroll item 1): rows of the idle TUI tail, or null. */
     clipRows: number | null
+    /**
+     * The turn is at rest (idle / replied): a wheel over the live layer moves
+     * through the combined space whether or not a clip was found. See
+     * wheelGoesToTranscript for why the clip alone was not enough.
+     */
+    atRest?: boolean
+    /**
+     * Where the live terminal's viewport is in its own scrollback. The wheel
+     * over the live layer scrolls THAT first and hands off to the transcript
+     * only at its edges (wheelGoesToTranscript).
+     */
+    liveEdges?: () => { atTop: boolean; atBottom: boolean }
     /** Reports the identity in view (+ marker fraction) for the timeline. */
     onActiveBlockChange?: (active: ActiveBlock) => void
     /** Reports a checkpoint whose content is FETCHING for a jump, null once filled. */
@@ -120,6 +134,8 @@ export const TranscriptView = forwardRef<
     selectedIndex,
     jumpToken,
     clipRows,
+    atRest = false,
+    liveEdges,
     onActiveBlockChange,
     onPending,
     onTailLoaded,
@@ -140,6 +156,10 @@ export const TranscriptView = forwardRef<
   const pinnedRef = useRef(true)
   const clipRef = useRef(clipRows)
   clipRef.current = clipRows
+  const restRef = useRef(atRest)
+  restRef.current = atRest
+  const liveEdgesRef = useRef(liveEdges)
+  liveEdgesRef.current = liveEdges
   // Eviction anchor (the identity in view) so the cap keeps the visible window.
   const anchorIndexRef = useRef<number>(Number.MAX_SAFE_INTEGER)
   // The identity currently at the viewport top — tells a genuine jump from a
@@ -196,12 +216,18 @@ export const TranscriptView = forwardRef<
     const scroller = scrollRef.current
     if (!live || !scroller) return
     const onWheel = (e: WheelEvent): void => {
-      if (clipRef.current === null) return
-      if (e.deltaY < 0 && scroller.scrollTop > 0) {
-        e.preventDefault()
-        e.stopPropagation()
-        scroller.scrollTop += e.deltaY
-      }
+      const takes = wheelGoesToTranscript({
+        atRest: restRef.current,
+        clipped: clipRef.current !== null,
+        deltaY: e.deltaY,
+        scrollTop: scroller.scrollTop,
+        atBottom: isAtBottom(scroller.scrollTop, scroller.scrollHeight, scroller.clientHeight),
+        live: liveEdgesRef.current?.()
+      })
+      if (!takes) return
+      e.preventDefault()
+      e.stopPropagation()
+      scroller.scrollTop += e.deltaY
     }
     live.addEventListener('wheel', onWheel, { capture: true, passive: false })
     return () => live.removeEventListener('wheel', onWheel, { capture: true } as EventListenerOptions)
@@ -406,6 +432,13 @@ export const TranscriptView = forwardRef<
   const scrollToTarget = useCallback((index: number, behavior: 'auto' | 'smooth'): boolean => {
     const node = blockRefs.current.get(index)
     if (!node) return false
+    // The pin is dropped AT the jump, not one frame later in onScroll's rAF:
+    // the pin-keeper's MutationObserver stick() is a microtask and its
+    // ResizeObserver stick() beats the scroll event, so a stale-true pin
+    // would re-write scrollTop to the bottom and eat this jump (measured —
+    // the tap silently reverted to the live tail). onScroll re-derives the
+    // truth a frame later, so a jump that lands at the bottom re-pins.
+    pinnedRef.current = false
     node.scrollIntoView({ block: 'start', behavior })
     return true
   }, [])
@@ -518,6 +551,44 @@ export const TranscriptView = forwardRef<
     const el = scrollRef.current
     if (el && pinnedRef.current) el.scrollTop = el.scrollHeight
   }, [blocks, total, estHeight])
+
+  // The pin, ENFORCED. The effect above fires only when React knows the
+  // content changed; on the phone the scroller grows behind React's back —
+  // a content-visibility block renders and its 88px intrinsic estimate
+  // becomes hundreds of real ones, the live seam grows as the xterm fit
+  // settles, the trace index inserts placeholders above the viewport.
+  // Chromium's scroll anchoring absorbed all of that on desktop; WebKit
+  // implements none of it, so an open on the phone landed mid-history with
+  // the pin still notionally set. While pinned, any child that resizes or
+  // mounts re-sticks the bottom; the moment the reader scrolls away,
+  // onScroll drops the pin and this goes quiet.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || typeof ResizeObserver !== 'function') return
+    const stick = (): void => {
+      if (shouldStick(pinnedRef.current, el.scrollTop, el.scrollHeight, el.clientHeight)) {
+        el.scrollTop = el.scrollHeight
+      }
+    }
+    const ro = new ResizeObserver(stick)
+    for (const child of Array.from(el.children)) ro.observe(child)
+    const mo = new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of Array.from(record.addedNodes)) {
+          if (node instanceof Element) ro.observe(node)
+        }
+        for (const node of Array.from(record.removedNodes)) {
+          if (node instanceof Element) ro.unobserve(node)
+        }
+      }
+      stick()
+    })
+    mo.observe(el, { childList: true })
+    return () => {
+      mo.disconnect()
+      ro.disconnect()
+    }
+  }, [])
 
   return (
     <div className="ctx-transcript" ref={scrollRef} onScroll={onScroll}>

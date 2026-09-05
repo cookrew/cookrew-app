@@ -15,7 +15,7 @@ import { agentStatus } from './herdr-agent-status'
 import { endpointCertHosts, mobileEndpoints, type MobileEndpoint } from './mobile-endpoints'
 import { loadOrCreatePairingToken, rotatePairingToken } from './pairing-token'
 import type { VersionPinRecord } from '../shared/version-pin'
-import { readTailnet, type CertHosts, type TailnetIdentity } from './tailscale'
+import { readTailnetAsync, type CertHosts, type TailnetIdentity } from './tailscale'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { powerSaveBlocker } from 'electron'
 import type { WorkspaceStore } from './store'
@@ -40,8 +40,8 @@ import {
 } from './ask-delivery'
 import { ASK_HTTP_STATUS, ASK_REMEDY } from '../shared/ask-outcome'
 import { ensureCert, missingHosts, sansOf } from './cert'
-import { enrichStateWithGit, handleMobileApi, MobileApiDeps, MobileOps } from './mobile-api'
-import { readJson, respondJson } from './mobile-http'
+import { enrichStateWithGit, handleMobileApi, MobileApiDeps, MobileOps, type ServeOps } from './mobile-api'
+import { holdSocketsOpen, readJson, respondJson } from './mobile-http'
 import { handleCallRoutes, type CallEndpointDeps } from './call-endpoints'
 import { createTlsPortGate, httpsRedirectTarget } from './tls-port-gate'
 import { sendBody } from './http-compress'
@@ -90,6 +90,8 @@ export interface MobileServerDeps {
   turnHistory?: (terminalId: string) => Promise<TurnRecord[]>
   /** Activity Board data plane; absent = /api/board answers 503. */
   board?: BoardSources
+  /** Importing a served team from the phone (mobile-api ServeOps). */
+  serve?: ServeOps
   /** Attach-free dispatch engine (v4 §3); absent = the routes answer 503. */
   dispatch?: DispatchService
   /**
@@ -216,6 +218,7 @@ export function startMobileServer(deps: MobileServerDeps): void {
   // Plain HTTP: fine for the Mac's own localhost (a secure context) and as a
   // no-mic fallback on the LAN.
   const plain = http.createServer(requestHandler)
+  holdSocketsOpen(plain)
   attachUpgrade(plain)
   listenWithRetry(plain, MOBILE_PORT)
 
@@ -227,6 +230,9 @@ export function startMobileServer(deps: MobileServerDeps): void {
   if (cert) {
     certSans = sansOf(new X509Certificate(cert.cert).subjectAltName)
     const secure = https.createServer({ key: cert.key, cert: cert.cert }, requestHandler)
+    // Long keep-alive matters MOST here: this is the server the phone reaches
+    // over the tailnet, where a re-handshake is a visible typing stall.
+    holdSocketsOpen(secure)
     attachUpgrade(secure)
     // The TLS server does not bind the port itself — the gate does, and hands
     // it the connections that are actually TLS. See tls-port-gate.ts: a phone
@@ -270,11 +276,11 @@ function httpsRedirector(): http.Server {
  * Every host we hand out, as a cert requirement. One source for both, so the
  * cert can never fail to cover a URL the desktop just printed.
  */
-function advertisedCertHosts(): CertHosts {
+function advertisedCertHosts(tailnet = cachedTailnet()): CertHosts {
   return endpointCertHosts(
     mobileEndpoints({
       addresses: localAddresses(),
-      tailnet: refreshTailnet(),
+      tailnet,
       // Neither affects which HOSTS are advertised, only how they are spelled.
       secure: false,
       token: null
@@ -305,18 +311,23 @@ const TAILNET_WATCH_MS = 60_000
  * already connected is not knocked off to fix one that is not yet.
  */
 function watchTailnetCert(secure: https.Server): void {
-  const timer = setInterval(() => {
-    // Past the TTL deliberately: this IS the poll for "has Tailscale come up".
-    tailnetCache.readAt = 0
-    const hosts = advertisedCertHosts()
-    const missing = missingHosts(certSans, hosts)
-    if (missing.length === 0) return
-    const reissued = ensureCert(hosts)
-    if (!reissued) return
-    certSans = sansOf(new X509Certificate(reissued.cert).subjectAltName)
-    secure.setSecureContext({ key: reissued.key, cert: reissued.cert })
-    console.error(`Mobile cert reissued for ${missing.join(', ')} — no restart needed`)
-  }, TAILNET_WATCH_MS)
+  const refresh = (): void => {
+    void refreshTailnetNow(true)
+      .then((tailnet) => {
+        const hosts = advertisedCertHosts(tailnet)
+        const missing = missingHosts(certSans, hosts)
+        if (missing.length === 0) return
+        const reissued = ensureCert(hosts)
+        if (!reissued) return
+        certSans = sansOf(new X509Certificate(reissued.cert).subjectAltName)
+        secure.setSecureContext({ key: reissued.key, cert: reissued.cert })
+        console.error(`Mobile cert reissued for ${missing.join(', ')} — no restart needed`)
+      })
+      .catch((error) => console.error('Tailscale certificate refresh failed:', error))
+  }
+  // Fill the cold cache immediately, but outside the startup call stack.
+  refresh()
+  const timer = setInterval(refresh, TAILNET_WATCH_MS)
   timer.unref()
 }
 
@@ -377,14 +388,42 @@ function localAddresses(): string[] {
  * demand rather than pinned at startup — but not on every call: `tailscale
  * status` forks a process, and `cookrew mobile` is not the only caller.
  */
-const tailnetCache: { value: TailnetIdentity | null; readAt: number } = { value: null, readAt: 0 }
+const tailnetCache: {
+  value: TailnetIdentity | null
+  readAt: number
+  refreshing: Promise<TailnetIdentity | null> | null
+} = { value: null, readAt: 0, refreshing: null }
 const TAILNET_TTL_MS = 15_000
 
-function refreshTailnet(): TailnetIdentity | null {
-  const now = Date.now()
-  if (now - tailnetCache.readAt < TAILNET_TTL_MS) return tailnetCache.value
-  tailnetCache.value = readTailnet()
-  tailnetCache.readAt = now
+function refreshTailnetNow(force = false): Promise<TailnetIdentity | null> {
+  const fresh = Date.now() - tailnetCache.readAt < TAILNET_TTL_MS
+  if (!force && fresh) return Promise.resolve(tailnetCache.value)
+  if (tailnetCache.refreshing) return tailnetCache.refreshing
+
+  const pending = readTailnetAsync()
+    .then((value) => {
+      tailnetCache.value = value
+      tailnetCache.readAt = Date.now()
+      return value
+    })
+    .finally(() => {
+      if (tailnetCache.refreshing === pending) tailnetCache.refreshing = null
+    })
+  tailnetCache.refreshing = pending
+  return pending
+}
+
+/**
+ * Return immediately from the last snapshot and refresh stale data behind it.
+ *
+ * Exported because the SERVED address needs the same answer the phone gets: a
+ * door advertised on the LAN while a tailnet is up would hand out the narrower
+ * of two links the owner already has.
+ */
+export function cachedTailnet(): TailnetIdentity | null {
+  if (Date.now() - tailnetCache.readAt >= TAILNET_TTL_MS) {
+    void refreshTailnetNow().catch(() => undefined)
+  }
   return tailnetCache.value
 }
 
@@ -397,7 +436,7 @@ function refreshTailnet(): TailnetIdentity | null {
 export function mobileEndpointList(): MobileEndpoint[] {
   return mobileEndpoints({
     addresses: localAddresses(),
-    tailnet: refreshTailnet(),
+    tailnet: cachedTailnet(),
     secure: httpsReady,
     token: activePairingToken
   })

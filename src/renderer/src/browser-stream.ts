@@ -78,6 +78,26 @@ export function browserRenderMode(opts: {
   return 'legacy-webview'
 }
 
+export interface BrowserCapability {
+  enabled: boolean
+  desktopToken: string | null
+}
+
+/**
+ * Adopt a re-resolved capability, preserving object identity on a same
+ * answer. Consumers narrow to scalars, so identity buys skipping an App
+ * re-render across a full canvas at the moment a phone wakes — not a
+ * remount, which never happens either way. Pure — unit-tested.
+ */
+export function nextCapability(
+  prev: BrowserCapability | null,
+  next: BrowserCapability
+): BrowserCapability {
+  return prev && prev.enabled === next.enabled && prev.desktopToken === next.desktopToken
+    ? prev
+    : next
+}
+
 /** Clamp a requested viewport dimension to the server's accepted range (rounded). */
 export function clampViewport(px: number): number {
   if (!Number.isFinite(px) || px <= 0) return VIEWPORT_MIN

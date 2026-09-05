@@ -203,14 +203,6 @@ export function createDemoApi(): CookrewApi {
       broadcast({ ...state, connections: state.connections.filter((c) => c.id !== connId) })
       return Promise.resolve()
     },
-    // The demo backend has no ~/.cookrew to install into, so the marketplace
-    // chip family is simply empty here — the dock renders exactly as it did
-    // before presets existed.
-    listInstalledPresets: () => Promise.resolve([]),
-    placeInstalledPreset: () => Promise.resolve(),
-    uninstallPreset: () => Promise.resolve(),
-    markPresetRotationSeen: () => Promise.resolve(),
-    trustPresetAuthorKey: () => Promise.resolve(),
     listPins: () => Promise.resolve([]),
     listPresets: () =>
       Promise.resolve([
@@ -325,10 +317,13 @@ export function createDemoApi(): CookrewApi {
     onBrowserOpenTab: () => () => undefined,
     onBrowserPhoneViewing: () => () => undefined,
     onCmdW: () => () => undefined,
+    // No OS hands this surface a link: the phone and the demo are reached by
+    // one, never launched by one.
+    onDeepLink: () => () => undefined,
 
-    // R30 serving + the dock's crews. Owner-desktop surfaces: this transport
-    // cannot mount them, and a stub that pretended to succeed would publish
-    // nothing while telling the user it had. It refuses, visibly.
+    // R30 serving. Owner-desktop surfaces: this transport cannot mount them,
+    // and a stub that pretended to succeed would publish nothing while telling
+    // the user it had. It refuses, visibly.
     servingServe: async () => ({ ok: false as const, reason: 'desktop-only' }),
     servingStop: async () => ({ ok: false }),
     servingPaymentStatus: async () => ({ x402: { ready: false }, stripe: { ready: false } }),
@@ -337,11 +332,14 @@ export function createDemoApi(): CookrewApi {
     servingList: async () => [],
     servingSessions: async () => [],
     servingEnd: async () => ({ stopped: 0 }),
-    crewList: async () => [],
-    crewAdd: async () => ({ ok: false as const, reason: 'desktop-only' }),
-    crewRemove: async () => ({ ok: false }),
-    crewUnlock: async () => ({ ok: false as const, reason: 'desktop-only' }),
-    crewPlace: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    serveInspect: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    // Same refusal as inspect: importing a served team places a terminal, and
+    // a phone has none to place.
+    serveBrowse: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    serveImport: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    serveGate: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    serveCheckout: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    serveSettle: async () => ({ ok: false as const, reason: 'desktop-only' }),
     quitApp: () => undefined
   }
   return api
