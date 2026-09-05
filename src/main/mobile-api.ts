@@ -37,6 +37,8 @@ import type {
   RestoreResult,
 } from "../shared/model";
 import { readBytes, readJson, respondJson, startSse, pairingAuthorized } from "./mobile-http";
+import { bindPairedDevice } from "./pair-device";
+import type { AccountSession } from "./account";
 import { ownerSubmit } from "./ask";
 import { MAX_ATTACHMENT_BYTES } from "./attachments";
 
@@ -186,6 +188,13 @@ export interface MobileApiDeps {
    * unauthenticated (loopback-only embedders, tests).
    */
   pairingToken?: string;
+  /**
+   * The owner's account, for POST /api/pair/device. A FUNCTION because the
+   * username may be minted after a phone is already paired; read once at
+   * wiring time it would tell that phone there is no account forever. Absent
+   * or answering null = the route 409s with a sentence naming the desktop.
+   */
+  account?: () => AccountSession | null;
   /**
    * Attach-free dispatch engine (v4 §3). Optional so this module compiles and
    * serves before it is wired; absent = the two dispatch routes answer 503
@@ -1221,6 +1230,17 @@ export async function handleMobileApi(
     respondJson(response, result.status, result.body);
     return true;
   }
+  // BIND THIS PHONE TO THE OWNER'S ACCOUNT (D2). Behind the C1 gate above, so
+  // reaching here already means the pairing token — which is what proves this
+  // phone is the owner's. The desktop countersigns with its account key; the
+  // phone keeps the handle and the device id it gets back.
+  if (method === "POST" && p === "/api/pair/device") {
+    const body = await readJson<unknown>(request);
+    const outcome = await bindPairedDevice(body, deps.account ?? (() => null));
+    respondJson(response, outcome.status, outcome.body);
+    return true;
+  }
+
   const recoverMatch = p.match(/^\/api\/agents\/([^/]+)\/recover$/);
   if (recoverMatch && method === "POST") {
     try {

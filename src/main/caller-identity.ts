@@ -3,6 +3,7 @@ import { createPrivateKey, generateKeyPairSync, sign } from 'node:crypto'
 import { homedir, userInfo } from 'node:os'
 import path from 'node:path'
 import { callAssertionPayload } from './call-ceremony'
+import { HANDLE_SHAPE, loadAccount } from './account'
 
 /**
  * THE CALLER'S ACCOUNT AT SOMEONE ELSE'S DOOR.
@@ -132,4 +133,51 @@ export function signChallenge(
 ): string {
   const payload = Buffer.from(callAssertionPayload(serviceId, sub, challenge), 'utf8')
   return sign(null, payload, key.priv).toString('base64url')
+}
+
+/**
+ * WHO IS CALLING — the account, when this machine has one.
+ *
+ * `callerSub()` above answers with the OS username, and that was the whole
+ * caller identity until accounts existed. It cannot stay that: two people
+ * called `admin` are one subject at every door they both use, and the door
+ * keys a session sandbox by that subject. The account is a name the registry
+ * made unique, so when one has been minted it IS the caller.
+ *
+ * The OS username survives ONLY as the no-account fallback — a machine that
+ * has never opened the setup sheet still has to be able to knock on a door on
+ * the LAN — and it is marked as such (`source`), so a surface can say which
+ * name it is about to use rather than implying the person chose it.
+ */
+export interface CallingIdentity {
+  sub: string
+  source: 'account' | 'os-user'
+  /**
+   * The key that signs for this subject. The ACCOUNT key when the subject is
+   * an account: one key for one name is the point — a per-door key would make
+   * the same person a different stranger at every door, which is the TOFU
+   * problem accounts exist to end. Null means "mint or read a per-door key",
+   * the old path.
+   */
+  key: CallerKey | null
+}
+
+export function callingIdentity(
+  options: { baseDir?: string; osUser?: string } = {}
+): CallingIdentity {
+  const account = loadAccount(options.baseDir)
+  // A handle is already a legal door sub (its shape is a subset), so it is
+  // used verbatim rather than pushed through callerSub() — normalising a name
+  // the registry minted could only ever change it into somebody else's.
+  if (account !== null && HANDLE_SHAPE.test(account.handle)) {
+    return {
+      sub: account.handle,
+      source: 'account',
+      key: {
+        priv: createPrivateKey({ key: account.privateKeyJwk as never, format: 'jwk' }),
+        jwk: account.publicKeyJwk
+      }
+    }
+  }
+  return { sub: callerSub(options.osUser), source: 'os-user', key: null }
 }

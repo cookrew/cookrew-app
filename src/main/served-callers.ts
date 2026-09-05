@@ -47,9 +47,30 @@ export const ACCOUNT_SUB_PREFIX = 'acct-'
 export class ServedCallers {
   /** serviceId → sub → jwk. In-memory M1; persistence rides the accounts work. */
   private readonly byService = new Map<string, Map<string, Record<string, unknown>>>()
+  /**
+   * serviceId → sub → the DEVICE that last signed in for it.
+   *
+   * Not a credential and not consulted by any gate: the door's own Bearer
+   * carries only the subject, so `/api/call/whoami` would otherwise have to
+   * answer "I don't know which of your devices this is" to a caller who just
+   * told it. In memory on purpose — it is a fact about this run's sign-ins,
+   * and a stale one read off disk would name a device that is no longer here.
+   */
+  private readonly deviceBySub = new Map<string, Map<string, string>>()
 
   keyOf(serviceId: string, sub: string): Record<string, unknown> | null {
     return this.byService.get(serviceId)?.get(sub) ?? null
+  }
+
+  /** Remember which device signed a registry token for this sub. */
+  noteDevice(serviceId: string, sub: string, dev: string): void {
+    const service = this.deviceBySub.get(serviceId) ?? new Map<string, string>()
+    service.set(sub, dev)
+    this.deviceBySub.set(serviceId, service)
+  }
+
+  deviceOf(serviceId: string, sub: string): string | null {
+    return this.deviceBySub.get(serviceId)?.get(sub) ?? null
   }
 
   /**

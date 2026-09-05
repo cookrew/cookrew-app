@@ -8,8 +8,12 @@ import {
   verify,
   type KeyObject
 } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
+import { writeFileAtomic } from './atomic'
+import { AccountStore, LinkCodes, type Device } from './accounts'
+import { jwkThumbprint, publicJwk } from './jwk'
+import { LINK_LIMIT, RateLimiter } from './rate-limit'
 
 /**
  * IDENTITY (P2-A2) — WebAuthn assertion verification and short-lived tokens.
@@ -31,6 +35,12 @@ export interface IdentityConfig {
   tokenTtlMs: number
   /** Challenge lifetime. */
   challengeTtlMs: number
+  /**
+   * A `link` token's lifetime. Two minutes, not ten: it vouches for ONE new
+   * device and is read off one screen onto another, so its whole life is the
+   * few seconds a person spends doing that.
+   */
+  linkTtlMs?: number
 }
 
 /**
@@ -42,7 +52,8 @@ export const DEV_CONFIG: IdentityConfig = {
   rpId: 'localhost',
   origin: 'http://localhost:8790',
   tokenTtlMs: 10 * 60 * 1000,
-  challengeTtlMs: 90 * 1000
+  challengeTtlMs: 90 * 1000,
+  linkTtlMs: 2 * 60 * 1000
 }
 
 export type ConfigRefusal = { ok: false; reason: string }
@@ -126,10 +137,24 @@ export function identityConfigFor(input: {
  * spec §6 requires a fresh ceremony per manifest, so a stolen download token
  * must not be a publishing credential.
  */
-export type TokenScope = 'download' | 'publish' | 'call'
+export type TokenScope = 'download' | 'publish' | 'call' | 'account' | 'link' | 'serve'
+
+const SCOPES: readonly TokenScope[] = ['download', 'publish', 'call', 'account', 'link', 'serve']
+
+/** A scope a caller may ask for by name, defaulting to the narrowest. */
+export function readScope(value: unknown): TokenScope {
+  return SCOPES.find((s) => s === value) ?? 'download'
+}
 
 export interface TokenClaims {
   sub: string
+  /**
+   * WHICH DEVICE of the account signed. New with accounts, and the reason
+   * revocation can mean anything at all: a token names the key that produced
+   * it, so a door refreshing the registry's key document learns that a stolen
+   * laptop's tokens are worthless before they expire.
+   */
+  dev?: string
   scope: TokenScope
   exp: number
   /**
@@ -137,12 +162,24 @@ export interface TokenClaims {
    * this against its own name before it seats the caller. Without it a token
    * minted to knock on one door would open every door that trusts this
    * registry; with it a stolen token is worth exactly one address.
+   *
+   * A `link` token's audience is the ONE device id it may vouch for.
    */
   aud?: string
+  /** A `link` token's single-use id. Spent at the registry, never reusable. */
+  jti?: string
 }
 
 /** The shape a call token's audience must have: a door's canonical name. */
 const AUDIENCE = /^@[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?\/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/
+
+/** A link token's audience: the new device's id. */
+const DEVICE_AUDIENCE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** The bytes one device signs to vouch for another. Versioned, so it can move. */
+export function bindStatement(handle: string, deviceId: string, thumbprint: string): string {
+  return `cookrew-bind/1 ${handle} ${deviceId} ${thumbprint}`
+}
 
 export type AssertFailure =
   | 'unknown_credential'
@@ -160,6 +197,12 @@ export type AssertFailure =
    * replay rather than a forgery.
    */
   | 'wrong_binding'
+  /**
+   * The authenticator's signature counter did not advance. WebAuthn gives one
+   * signal that a credential has been cloned or an assertion replayed from a
+   * capture, and this is it.
+   */
+  | 'sign_count'
 
 const b64url = (buf: Buffer): string => buf.toString('base64url')
 const fromB64url = (value: string): Buffer => Buffer.from(value, 'base64url')
@@ -188,6 +231,41 @@ export interface AssertionInput {
   signature: string
 }
 
+/**
+ * A REAL WebAuthn assertion, as `navigator.credentials.get` returns it once the
+ * ArrayBuffers are base64url-encoded. Distinct from `AssertionInput` because
+ * the credential id here is the AUTHENTICATOR's — a random value that means
+ * nothing until the accounts table maps it to a device — rather than a handle.
+ */
+export interface PasskeyAssertion {
+  /** Optional: the account the page believes it is signing in as. */
+  handle?: string
+  credential: {
+    id: string
+    rawId?: string
+    type?: string
+    response: {
+      clientDataJSON: string
+      authenticatorData: string
+      signature: string
+      userHandle?: string
+    }
+  }
+}
+
+/** One key that might have produced an assertion, and who it would speak for. */
+interface Candidate {
+  sub: string
+  dev?: string
+  jwk: Record<string, unknown>
+  /**
+   * Passkeys only. Present means the counter is ENFORCED for this candidate;
+   * absent means the device does not keep one — the software ceremony writes a
+   * constant, so checking it there would refuse every second sign-in.
+   */
+  signCount?: number
+}
+
 export class IdentityService {
   private readonly file: string
   private readonly signingKeyFile: string
@@ -205,6 +283,21 @@ export class IdentityService {
   private readonly challenges = new Map<string, { exp: number; binding: string | null }>()
   private credentials: Credential[] = []
   private signingKey: { publicKey: KeyObject; privateKey: KeyObject } | null = null
+  /**
+   * THE ACCOUNTS, beside the ceremony rather than inside it.
+   *
+   * A handle is no longer one key: it is a name with devices, and this is the
+   * table the ceremony resolves a signer against. It is public because the
+   * routes that bind and revoke devices are their own module — the ceremony has
+   * no opinion about who may edit an account, only about who signed.
+   */
+  readonly accounts: AccountStore
+  /** Codes a person reads off one screen and types into another. */
+  readonly linkCodes: LinkCodes
+  /** Attempts against the one route that cannot ask for a credential. */
+  readonly linkAttempts: RateLimiter
+  /** Spent `link` token ids. Single use is the point of the scope. */
+  private readonly spentJti = new Map<string, number>()
 
   constructor(base: string, config: IdentityConfig = DEV_CONFIG, now: () => number = Date.now) {
     mkdirSync(base, { recursive: true })
@@ -219,6 +312,16 @@ export class IdentityService {
         this.credentials = []
       }
     }
+    this.accounts = new AccountStore(base, now)
+    this.linkCodes = new LinkCodes(config.linkTtlMs ?? 2 * 60 * 1000, now)
+    this.linkAttempts = new RateLimiter(
+      { ...LINK_LIMIT, longMs: config.linkTtlMs ?? LINK_LIMIT.longMs },
+      now
+    )
+    // MIGRATION, at boot and non-destructively: every handle that had a
+    // credential keeps working, now as an account with one device, and
+    // credentials.json is left untouched so a rollback loses nothing.
+    this.accounts.migrate(this.credentials)
   }
 
   /**
@@ -233,13 +336,26 @@ export class IdentityService {
    * deployment must parse attestation before this endpoint faces the internet.
    */
   register(credentialId: string, jwk: Record<string, unknown>): { ok: boolean; reason?: string } {
+    // NARROWED ON THE WAY IN. An exported JWK can carry `d`, and a caller that
+    // posted one would turn this file into a key escrow. It also refuses a key
+    // nothing here can verify — a credential that can never sign again is a
+    // locked-out identity stored as if it were a working one.
+    const narrowed = publicJwk(jwk)
+    if (narrowed === null) return { ok: false, reason: 'bad_key' }
     const existing = this.credentials.find((c) => c.credentialId === credentialId)
     if (existing) {
-      const same = JSON.stringify(existing.jwk) === JSON.stringify(jwk)
+      // Compared by THUMBPRINT, not by JSON: a key stored before this narrowing
+      // has its members in another order, and re-registering it must not read
+      // as somebody trying to take the identity over.
+      const same = jwkThumbprint(existing.jwk) === jwkThumbprint(narrowed)
       return same ? { ok: true } : { ok: false, reason: 'credential_exists' }
     }
-    this.credentials = [...this.credentials, { credentialId, jwk }]
-    writeFileSync(this.file, JSON.stringify(this.credentials, null, 2))
+    this.credentials = [...this.credentials, { credentialId, jwk: narrowed }]
+    writeFileAtomic(this.file, JSON.stringify(this.credentials, null, 2))
+    // The same enrolment, in the shape everything after this reads: a handle
+    // with one device. Additive, so an existing account is never touched — this
+    // route cannot add a key to somebody else's account.
+    this.accounts.migrate([{ credentialId, jwk: narrowed }])
     return { ok: true }
   }
 
@@ -260,7 +376,8 @@ export class IdentityService {
    */
   forgetAll(): void {
     this.credentials = []
-    writeFileSync(this.file, JSON.stringify([], null, 2))
+    writeFileAtomic(this.file, JSON.stringify([], null, 2))
+    this.accounts.forgetAll()
   }
 
   /** Mint a single-use challenge for the LOGIN ceremony. A nonce, not a session. */
@@ -297,13 +414,10 @@ export class IdentityService {
    * the tests, never for the wire: a client learns only that it must try again.
    */
   assert(input: AssertionInput, scope: TokenScope = 'download', aud?: string):
-    | { ok: true; token: string; sub: string }
+    | { ok: true; token: string; sub: string; dev?: string }
     | { ok: false; reason: AssertFailure | 'bad_audience' } {
-    // A call token without a door, or with a malformed one, is refused rather
-    // than minted broad: the audience is what confines it.
-    if (scope === 'call' && (typeof aud !== 'string' || !AUDIENCE.test(aud))) {
-      return { ok: false, reason: 'bad_audience' }
-    }
+    const audience = this.checkAudience(scope, aud)
+    if (!audience.ok) return audience
     // Binding null: a login ceremony completes only a login nonce. A
     // countersign nonce presented here is `wrong_binding`, so a publish
     // ceremony can never be spent as a session instead.
@@ -312,8 +426,103 @@ export class IdentityService {
     return {
       ok: true,
       sub: out.credentialId,
-      token: this.mint(out.credentialId, scope, scope === 'call' ? aud : undefined)
+      ...(out.dev === undefined ? {} : { dev: out.dev }),
+      token: this.mint(out.credentialId, scope, { aud: audience.aud, dev: out.dev })
     }
+  }
+
+  /**
+   * A REAL WebAuthn assertion — a platform passkey, not the site's software
+   * ceremony. The credential id here belongs to the AUTHENTICATOR, so the only
+   * thing that turns it into an account is the devices table: a passkey signs
+   * for whichever account bound it, and for no other.
+   */
+  assertPasskey(input: PasskeyAssertion, scope: TokenScope = 'download', aud?: string):
+    | { ok: true; token: string; sub: string; dev: string }
+    | { ok: false; reason: AssertFailure | 'bad_audience' } {
+    const audience = this.checkAudience(scope, aud)
+    if (!audience.ok) return audience
+    const credential = input?.credential
+    if (
+      typeof credential !== 'object' ||
+      credential === null ||
+      typeof credential.id !== 'string' ||
+      typeof credential.response !== 'object' ||
+      credential.response === null
+    ) {
+      return { ok: false, reason: 'unknown_credential' }
+    }
+    if (credential.type !== undefined && credential.type !== 'public-key') {
+      return { ok: false, reason: 'unknown_credential' }
+    }
+    const found = this.accounts.byCredentialId(credential.id)
+    // A revoked passkey is not a passkey. Same refusal as an unknown one: which
+    // of the two it was is not a client's business.
+    if (found === null || found.device.revokedAt !== undefined) {
+      return { ok: false, reason: 'unknown_credential' }
+    }
+    if (typeof input.handle === 'string' && input.handle.replace(/^@/, '').toLowerCase() !== found.handle) {
+      return { ok: false, reason: 'unknown_credential' }
+    }
+    const out = this.verifyCeremony(
+      [
+        {
+          sub: found.handle,
+          dev: found.device.id,
+          jwk: found.device.jwk,
+          // Defined even when the stored value is zero: presence is what turns
+          // the check on, and a passkey always keeps a ceiling from now on.
+          signCount: found.device.signCount ?? 0
+        }
+      ],
+      {
+        clientDataJSON: credential.response.clientDataJSON,
+        authenticatorData: credential.response.authenticatorData,
+        signature: credential.response.signature
+      },
+      null
+    )
+    if (!out.ok) return out
+    // Raised only on success, and only upward: a refused assertion must not
+    // move the ceiling, or a failed replay would lock out the real device.
+    if (out.signCount !== undefined) {
+      this.accounts.recordSignCount(found.handle, found.device.id, out.signCount)
+    }
+    return {
+      ok: true,
+      sub: out.sub,
+      dev: found.device.id,
+      token: this.mint(out.sub, scope, { aud: audience.aud, dev: found.device.id })
+    }
+  }
+
+  /**
+   * A scope that names one thing must name it well. `call` is confined to a
+   * door and `link` to a single device id; every other scope has no audience,
+   * and one supplied is dropped rather than carried.
+   */
+  private checkAudience(
+    scope: TokenScope,
+    aud?: string
+  ): { ok: true; aud?: string } | { ok: false; reason: 'bad_audience' } {
+    if (scope === 'call') {
+      return typeof aud === 'string' && AUDIENCE.test(aud)
+        ? { ok: true, aud }
+        : { ok: false, reason: 'bad_audience' }
+    }
+    if (scope === 'link') {
+      return typeof aud === 'string' && DEVICE_AUDIENCE.test(aud)
+        ? { ok: true, aud: aud.toLowerCase() }
+        : { ok: false, reason: 'bad_audience' }
+    }
+    return { ok: true }
+  }
+
+  /** Mint a token for a device this server has ALREADY authenticated. */
+  mintFor(sub: string, dev: string, scope: TokenScope, aud?: string): string | null {
+    const audience = this.checkAudience(scope, aud)
+    if (!audience.ok) return null
+    return this.mint(sub, scope, { aud: audience.aud, dev })
   }
 
   /**
@@ -324,6 +533,33 @@ export class IdentityService {
    */
   publicKeyJwk(): Record<string, unknown> {
     return this.keys().publicKey.export({ format: 'jwk' }) as Record<string, unknown>
+  }
+
+  /** The relying party this registry is — what a page must build a ceremony for. */
+  rp(): { id: string; origin: string } {
+    return { id: this.config.rpId, origin: this.config.origin }
+  }
+
+  /**
+   * Consume a challenge this server issued for a REGISTRATION ceremony. The
+   * login path spends nonces inside `verifyCeremony`; enrolling a passkey is
+   * the other ceremony, and it must spend one too or a captured
+   * `attestationObject` could be enrolled twice.
+   */
+  spendChallenge(challenge: unknown): boolean {
+    if (typeof challenge !== 'string') return false
+    const entry = this.challenges.get(challenge)
+    this.challenges.delete(challenge)
+    return entry !== undefined && entry.exp >= this.now() && entry.binding === null
+  }
+
+  /**
+   * The device ids no token may name any more — published beside the key so a
+   * door that verifies offline learns about a revoked laptop on its next
+   * refresh instead of at the end of a ten-minute TTL.
+   */
+  revokedDevices(): string[] {
+    return this.accounts.revoked()
   }
 
   /**
@@ -349,9 +585,55 @@ export class IdentityService {
   private verifyAssertion(
     input: AssertionInput,
     expectedBinding: string | null
-  ): { ok: true; credentialId: string } | { ok: false; reason: AssertFailure } {
-    const credential = this.credentials.find((c) => c.credentialId === input.credentialId)
-    if (!credential) return { ok: false, reason: 'unknown_credential' }
+  ): { ok: true; credentialId: string; dev?: string } | { ok: false; reason: AssertFailure } {
+    const out = this.verifyCeremony(this.candidates(input.credentialId), input, expectedBinding)
+    if (!out.ok) return out
+    return { ok: true, credentialId: out.sub, ...(out.dev === undefined ? {} : { dev: out.dev }) }
+  }
+
+  /**
+   * EVERY KEY THAT MIGHT SPEAK FOR THIS NAME, in the order they are trusted.
+   *
+   * An account's unrevoked devices come first: after the migration that is
+   * where every handle lives, and it is what makes one name work from four
+   * machines. The legacy flat credential map is kept as a fallback for the one
+   * release the design allots it — a credential whose id is not handle-shaped
+   * never became an account, and refusing it here would log somebody out for a
+   * reason they could not act on.
+   */
+  private candidates(credentialId: string): Candidate[] {
+    const handle = typeof credentialId === 'string' ? credentialId.toLowerCase() : ''
+    const devices = this.accounts
+      .active(handle)
+      // A passkey answers the WebAuthn path, where the authenticator names its
+      // own credential id; it is not a key for the handle-shaped ceremony.
+      .filter((device: Device) => device.kind !== 'passkey')
+      .map((device: Device) => ({ sub: handle, dev: device.id, jwk: device.jwk }))
+    const legacy = this.credentials
+      .filter((c) => c.credentialId === credentialId)
+      .map((c) => ({ sub: c.credentialId, jwk: c.jwk }))
+    return [...devices, ...legacy]
+  }
+
+  /**
+   * The one WebAuthn verification. Every check but the signature is made once,
+   * against the server's own record; only the signature is tried against each
+   * candidate key, because an account with four devices is four keys and one
+   * ceremony rather than four ceremonies.
+   */
+  private verifyCeremony(
+    candidates: readonly Candidate[],
+    input: { clientDataJSON: string; authenticatorData: string; signature: string },
+    expectedBinding: string | null
+  ): { ok: true; sub: string; dev?: string; signCount?: number } | { ok: false; reason: AssertFailure } {
+    if (candidates.length === 0) return { ok: false, reason: 'unknown_credential' }
+    if (
+      typeof input.clientDataJSON !== 'string' ||
+      typeof input.authenticatorData !== 'string' ||
+      typeof input.signature !== 'string'
+    ) {
+      return { ok: false, reason: 'bad_signature' }
+    }
 
     let clientData: { type?: string; origin?: string; challenge?: string }
     try {
@@ -390,16 +672,50 @@ export class IdentityService {
       authData,
       createHash('sha256').update(fromB64url(input.clientDataJSON)).digest()
     ])
-    const { key, hash } = keyFor(credential.jwk)
-    let good = false
-    try {
-      good = verify(hash, signed, key, fromB64url(input.signature))
-    } catch {
-      good = false
+    for (const candidate of candidates) {
+      let good = false
+      try {
+        const { key, hash } = keyFor(candidate.jwk)
+        good = verify(hash, signed, key, fromB64url(input.signature))
+      } catch {
+        good = false
+      }
+      if (good) {
+        /**
+         * THE SIGNATURE COUNTER, checked here rather than at a call site.
+         *
+         * WebAuthn's one anti-cloning signal: an authenticator that keeps a
+         * counter increments it on every assertion, so a count that fails to
+         * advance is either a replay of captured bytes or a second copy of a
+         * key that should exist once. It is checked AFTER the signature —
+         * a forged assertion should be refused as a forgery — and only for
+         * candidates that keep one, because the software ceremony writes a
+         * constant and enforcing it there would refuse every second sign-in.
+         *
+         * Zero means "this authenticator does not count", which the
+         * specification explicitly permits; those stay at zero forever and
+         * are never refused on this ground.
+         */
+        if (candidate.signCount !== undefined) {
+          const presented = authData.readUInt32BE(33)
+          if (candidate.signCount > 0 && presented <= candidate.signCount) {
+            return { ok: false, reason: 'sign_count' }
+          }
+          return {
+            ok: true,
+            sub: candidate.sub,
+            ...(candidate.dev === undefined ? {} : { dev: candidate.dev }),
+            signCount: presented
+          }
+        }
+        return {
+          ok: true,
+          sub: candidate.sub,
+          ...(candidate.dev === undefined ? {} : { dev: candidate.dev })
+        }
+      }
     }
-    if (!good) return { ok: false, reason: 'bad_signature' }
-
-    return { ok: true, credentialId: credential.credentialId }
+    return { ok: false, reason: 'bad_signature' }
   }
 
   /** The server's token key, generated once and persisted beside the data. */
@@ -415,21 +731,49 @@ export class IdentityService {
     // not invalidate every outstanding token — that would read to a client as
     // the gate randomly demanding re-authentication.
     const pair = generateKeyPairSync('ed25519')
-    writeFileSync(this.signingKeyFile, JSON.stringify(pair.privateKey.export({ format: 'jwk' })))
+    // A PRIVATE KEY. 0600 and atomic for the same two reasons as everything
+    // else here — and more sharply, because a half-written one is a registry
+    // that can no longer verify a single token it ever signed.
+    writeFileAtomic(this.signingKeyFile, JSON.stringify(pair.privateKey.export({ format: 'jwk' })))
     this.signingKey = pair
     return pair
   }
 
-  private mint(sub: string, scope: TokenScope, aud?: string): string {
+  private mint(sub: string, scope: TokenScope, options: { aud?: string; dev?: string } = {}): string {
+    // A link token lives two minutes and carries a jti, because it is spent
+    // once. Everything else is the ten-minute retry ticket it always was.
+    const ttl = scope === 'link' ? this.config.linkTtlMs ?? 2 * 60 * 1000 : this.config.tokenTtlMs
     const claims: TokenClaims = {
       sub,
+      ...(options.dev === undefined ? {} : { dev: options.dev }),
       scope,
-      exp: this.now() + this.config.tokenTtlMs,
-      ...(aud === undefined ? {} : { aud })
+      exp: this.now() + ttl,
+      ...(options.aud === undefined ? {} : { aud: options.aud }),
+      ...(scope === 'link' ? { jti: b64url(randomBytes(16)) } : {})
     }
     const body = b64url(Buffer.from(JSON.stringify(claims), 'utf8'))
     const signature = sign(null, Buffer.from(body, 'utf8'), this.keys().privateKey)
     return `${body}.${b64url(signature)}`
+  }
+
+  /**
+   * SPEND a link token: verify it and refuse the second presentation.
+   *
+   * Single use is the difference between "this device may be vouched for" and
+   * "this device may be vouched for repeatedly by anyone who saw the request".
+   */
+  spendLink(token: string, deviceId: string): TokenClaims | null {
+    const claims = this.verifyToken(token)
+    if (claims === null || claims.scope !== 'link') return null
+    if (typeof claims.jti !== 'string') return null
+    if (claims.aud !== deviceId.toLowerCase()) return null
+    if (this.spentJti.has(claims.jti)) return null
+    this.spentJti.set(claims.jti, claims.exp)
+    // A spent id is worthless once the token it names has expired.
+    for (const [jti, exp] of this.spentJti) {
+      if (exp < this.now()) this.spentJti.delete(jti)
+    }
+    return claims
   }
 
   /**
@@ -446,9 +790,15 @@ export class IdentityService {
         return null
       }
       const claims = JSON.parse(fromB64url(body).toString('utf8')) as TokenClaims
+      if (typeof claims.sub !== 'string' || claims.sub === '') return null
       if (typeof claims.exp !== 'number' || claims.exp < this.now()) return null
-      if (claims.scope !== 'download' && claims.scope !== 'publish' && claims.scope !== 'call') return null
+      if (!SCOPES.includes(claims.scope)) return null
       if (claims.scope === 'call' && (typeof claims.aud !== 'string' || !AUDIENCE.test(claims.aud))) return null
+      if (claims.scope === 'link' && (typeof claims.aud !== 'string' || !DEVICE_AUDIENCE.test(claims.aud))) return null
+      // REVOCATION, before expiry. A token names the device that signed for it,
+      // and a device dropped from its account stops being able to act the
+      // moment it is dropped rather than ten minutes later.
+      if (typeof claims.dev === 'string' && this.accounts.isRevoked(claims.dev)) return null
       return claims
     } catch {
       return null

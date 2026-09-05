@@ -7,6 +7,7 @@ import type {
   Minter,
   TemplateSource
 } from './session-instantiator'
+import type { SeatStore } from './session-seats'
 
 /**
  * WIRING — the four seams, built from the real subsystems (slice 3).
@@ -202,6 +203,8 @@ export function instantiatorDeps(parts: {
   minter: Minter
   route: ConductorRoute
   ender: Ender
+  /** Where seats persist (session-seats.ts). Omitted = forgotten at exit. */
+  seats?: SeatStore
 }): InstantiatorDeps {
   return parts
 }

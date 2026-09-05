@@ -1,7 +1,8 @@
-import { createHash, createPrivateKey, generateKeyPairSync, sign } from 'node:crypto'
+import { generateKeyPairSync } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
+import { buildRegistryAssertion, type RegistryAssertion } from './registry-assertion'
 
 /**
  * THE OWNER'S ACCOUNT AT A REGISTRY.
@@ -21,6 +22,14 @@ import path from 'node:path'
  * ONE ACCOUNT PER REGISTRY, filed by origin. A key that followed the owner
  * between a local registry and cookrew.dev would make a test deployment able
  * to speak for the real one.
+ *
+ * SUPERSEDED BY account.ts. The account is now the USERNAME, minted once and
+ * held in `~/.cookrew/account.json` with every other surface bound to it as a
+ * device. This file remains for the doors and relay tickets a machine
+ * registered under the old per-registry credential — the key is the same
+ * algorithm and the ceremony is the same bytes (registry-assertion.ts), so an
+ * existing registration keeps working while it is migrated rather than being
+ * orphaned by the rename.
  */
 
 export interface RegistryAccount {
@@ -32,20 +41,13 @@ export interface RegistryAccount {
   enrolment(): { credentialId: string; publicKeyJwk: Record<string, unknown> }
 }
 
-export interface RegistryAssertion {
-  credentialId: string
-  clientDataJSON: string
-  authenticatorData: string
-  signature: string
-}
+export type { RegistryAssertion }
 
 interface Stored {
   handle: string
   privateKeyJwk: Record<string, unknown>
   publicKeyJwk: Record<string, unknown>
 }
-
-const B64 = 'base64url' as const
 
 /** Where accounts live. Beside the other secrets the app keeps, and as private. */
 function accountFile(origin: string): string {
@@ -63,41 +65,29 @@ function accountFile(origin: string): string {
 export function registryAccount(origin: string, handle: string): RegistryAccount {
   const file = accountFile(origin)
   const stored = load(file) ?? create(file, handle)
-  const rpId = new URL(origin).hostname
   const exact = new URL(origin).origin
 
   return {
     handle: stored.handle,
     enrolment: () => ({ credentialId: stored.handle, publicKeyJwk: stored.publicKeyJwk }),
-    assert(challenge) {
-      const clientDataJSON = Buffer.from(
-        JSON.stringify({ type: 'webauthn.get', origin: exact, challenge }),
-        'utf8'
-      )
-      // rpIdHash ‖ flags ‖ counter. The user-present bit is set because the
-      // owner started this app and told it to serve; the counter is fixed
-      // because this is a key, not a device with a monotonic clock.
-      const authenticatorData = Buffer.concat([
-        createHash('sha256').update(rpId).digest(),
-        Buffer.from([0x01]),
-        Buffer.from([0, 0, 0, 1])
-      ])
-      const signature = sign(
-        null,
-        Buffer.concat([
-          authenticatorData,
-          createHash('sha256').update(clientDataJSON).digest()
-        ]),
-        createPrivateKey({ key: stored.privateKeyJwk as never, format: 'jwk' })
-      )
-      return {
+    assert: (challenge) =>
+      buildRegistryAssertion({
+        origin: exact,
         credentialId: stored.handle,
-        clientDataJSON: clientDataJSON.toString(B64),
-        authenticatorData: authenticatorData.toString(B64),
-        signature: signature.toString(B64)
-      }
-    }
+        privateKeyJwk: stored.privateKeyJwk,
+        challenge
+      })
   }
+}
+
+/**
+ * The key this app registered at a registry BEFORE accounts existed, if any.
+ * The registry's migration made that key the account's first device, so the
+ * account file adopts it (account.ts adoptLegacyAccount) rather than minting
+ * a second name the registry would refuse as taken.
+ */
+export function loadLegacyRegistryAccount(origin: string): Stored | null {
+  return load(accountFile(origin))
 }
 
 function load(file: string): Stored | null {
