@@ -32,17 +32,36 @@
 /** A stream id. Assigned by the RELAY, so two callers can never collide. */
 export type StreamId = string
 
+/**
+ * THE SEAM A SEAL GOES THROUGH, reserved on every frame that carries payload.
+ *
+ * TLS to the relay and TLS onward is not end to end: the relay terminates
+ * both, so it could read what it forwards. When the sealed channel lands, the
+ * ciphertext goes HERE — `sealed` carries the sealed `headers` and `data`, and
+ * the plaintext members go away for that exchange. Reserving it now means the
+ * hub, the transports and both clients already move it, so sealing is a change
+ * to two endpoints rather than to the wire everything shares.
+ *
+ * Nothing writes it yet. It is carried through unread wherever it appears.
+ */
 export type RelayFrame =
   /** The relay is ready and this door is bound to a name. */
   | { t: 'ready'; name: string }
   /** A caller opened a request. Headers are lowercased, as on the wire. */
-  | { t: 'open'; id: StreamId; method: string; path: string; headers: Record<string, string> }
+  | {
+      t: 'open'
+      id: StreamId
+      method: string
+      path: string
+      headers: Record<string, string>
+      sealed?: string
+    }
   /** Request body, for the small JSON posts the gate takes. */
-  | { t: 'body'; id: StreamId; data: string; done?: boolean }
+  | { t: 'body'; id: StreamId; data: string; done?: boolean; sealed?: string }
   /** The door's answer, headers first — an SSE stream stops here and chunks. */
-  | { t: 'head'; id: StreamId; status: number; headers: Record<string, string> }
+  | { t: 'head'; id: StreamId; status: number; headers: Record<string, string>; sealed?: string }
   /** Response body or stream payload. */
-  | { t: 'chunk'; id: StreamId; data: string }
+  | { t: 'chunk'; id: StreamId; data: string; sealed?: string }
   /** This exchange is finished, by either side. */
   | { t: 'end'; id: StreamId }
   /** Given up on. `reason` is for logs; it never reaches a rendered sheet. */
@@ -102,6 +121,7 @@ export function decodeFrame(raw: string): RelayFrame | null {
       return {
         t: 'open',
         id: frame.id as string,
+        ...sealedOf(frame),
         // Normalised here so the door's dispatch never has to care which side
         // of the wire spelled a method or a header differently.
         method: frame.method.toUpperCase(),
@@ -113,6 +133,7 @@ export function decodeFrame(raw: string): RelayFrame | null {
       return {
         t: 'body',
         id: frame.id as string,
+        ...sealedOf(frame),
         data: frame.data,
         ...(frame.done === true ? { done: true } : {})
       }
@@ -122,12 +143,13 @@ export function decodeFrame(raw: string): RelayFrame | null {
       return {
         t: 'head',
         id: frame.id as string,
+        ...sealedOf(frame),
         status: frame.status,
         headers: lowercaseKeys(frame.headers as Record<string, string>)
       }
     case 'chunk':
       return id && typeof frame.data === 'string'
-        ? { t: 'chunk', id: frame.id as string, data: frame.data }
+        ? { t: 'chunk', id: frame.id as string, ...sealedOf(frame), data: frame.data }
         : null
     case 'end':
       return id ? { t: 'end', id: frame.id as string } : null
@@ -142,6 +164,13 @@ export function decodeFrame(raw: string): RelayFrame | null {
     default:
       return null
   }
+}
+
+/** The reserved seal, when a sender put one there. Absent otherwise, never null. */
+function sealedOf(frame: Record<string, unknown>): { sealed?: string } {
+  return typeof frame.sealed === 'string' && frame.sealed.length <= MAX_FRAME_BYTES
+    ? { sealed: frame.sealed }
+    : {}
 }
 
 function validHeaders(value: unknown): boolean {
