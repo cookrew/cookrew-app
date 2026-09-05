@@ -1,6 +1,7 @@
 import {
   callerKeyCandidates,
   callerSub,
+  callingIdentity,
   mintCallerKey,
   readCallerKey,
   saveCallerKey,
@@ -103,7 +104,13 @@ export async function signInToDoor(
   target: ServeTargetRef,
   store: CallerKeyStore = {}
 ): Promise<string> {
-  const sub = store.sub ?? callerSub()
+  // WHO IS KNOCKING. The account when this machine has minted one, the OS
+  // username only when it has not — see callingIdentity(). The account also
+  // brings its OWN key, so the same person is the same key at every door
+  // rather than a fresh stranger at each; the per-door key walk below stays
+  // for machines with no account and for doors enrolled before there was one.
+  const identity = store.sub === undefined ? callingIdentity() : null
+  const sub = store.sub ?? identity?.sub ?? callerSub()
   const face = await api(target, '/crew', { method: 'GET' })
   const serviceId = (face.body as { serviceId?: string } | null)?.serviceId ?? ''
   if (serviceId.length === 0) throw new Error('this door did not say who it is')
@@ -133,6 +140,11 @@ export async function signInToDoor(
   // Trying them is the caller's own disk answering "which of my keys is this
   // account?", and the one that works is promoted to the canonical file so the
   // question is never asked twice.
+  // The account key first when there is one: it is the key this name means.
+  if (identity?.key) {
+    const token = await attempt(identity.key)
+    if (token !== null) return token
+  }
   const candidates =
     store.candidates?.(serviceId) ?? callerKeyCandidates(target.origin, target.slug, serviceId)
   const canonical = store.canonical?.(serviceId) ?? candidates[0]

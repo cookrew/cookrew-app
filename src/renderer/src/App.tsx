@@ -19,6 +19,8 @@ import type { AgentRole, CanvasNode, BrowserNodeData, TeamClipStatus, TerminalNo
 import { activeBrowserTab, browserTabs } from '../../shared/model'
 import type { TerminalActivity } from '../../shared/turn'
 import { cookrew, isRemoteMode } from './api'
+import { AccountSetupSheet } from './AccountSetupSheet'
+import { accountBridge, useOwnerAccount } from './owner-account'
 import { isViewed, markViewed, pruneViewers, type ViewerClocks } from '../../shared/phone-viewing'
 import { TerminalNode } from './nodes/TerminalNode'
 import { NoteNode } from './nodes/NoteNode'
@@ -198,6 +200,13 @@ function Canvas(): React.JSX.Element {
    * removeNode, so there is one dialog and no close button can skip it.
    */
   const [closingId, setClosingId] = useState<string | null>(null)
+  // FIRST RUN: the username. Undefined while it is being read, null on a
+  // transport that has no owner account (the phone, a browser card) — only a
+  // real "this desktop has no account" opens the sheet.
+  const ownerAccount = useOwnerAccount()
+  const accountApi = useMemo(() => accountBridge(), [])
+  const [mintedHandle, setMintedHandle] = useState<string | null>(null)
+
   // R30 import side: the one entry for a served team's address.
   const [importServedOpen, setImportServedOpen] = useState(false)
   /** An address that arrived by `cookrew://` link, for the sheet to look up. */
@@ -1342,6 +1351,20 @@ function Canvas(): React.JSX.Element {
           onPrimaryChange={setZoomedTerminalId}
         />
         {metricsOpen && <MetricsPanel onClose={() => setMetricsOpen(false)} />}
+        {/* No Cancel and no scrim dismissal: there is no state of this app in
+            which "no username" is something the owner chose. */}
+        {accountApi !== null &&
+          ownerAccount !== undefined &&
+          ownerAccount !== null &&
+          ownerAccount.handle === null &&
+          mintedHandle === null && (
+            <AccountSetupSheet
+              suggestion={ownerAccount.suggestion}
+              check={accountApi.check}
+              mint={accountApi.mint}
+              onMinted={setMintedHandle}
+            />
+          )}
         {importServedOpen && (
           <ImportServedSheet
             /* A second link while the sheet is open is a new question: remount
