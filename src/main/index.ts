@@ -54,7 +54,8 @@ import {
   mobileUrls,
   mobileEndpointList,
   uncoveredCertHosts,
-  rotateActivePairingToken
+  rotateActivePairingToken,
+  activeCertFingerprint
 } from './mobile-server'
 import {
   activeBrowserTab,
@@ -81,6 +82,10 @@ import { AgentRegistry } from './agent-registry'
 import { AgentExportStore } from './agent-export'
 import { OwnerGrant, isOwnerSender } from './owner-grant'
 import { Accounts, DEFAULT_LOCK_AFTER_MS, registryOrigin } from './account-v2'
+import { createAdmittedDeviceStore } from './admitted-devices'
+import { createPairingKeyRing } from './pairing-key'
+import { createRegistryKeyCache } from './registry-keys'
+import { createReachPublisher, type ReachPublisher } from './reach'
 import { IdleLock } from './lock'
 import { registerAccountIpc } from './account-ipc'
 import { Approvals } from './approvals'
@@ -581,6 +586,20 @@ const relayServing =
  * than throws. Nothing here is on the serving path.
  */
 const accounts = new Accounts({ deviceName: hostname() })
+
+/**
+ * IDENTITY V2, PHASE 2 — pairing through cookrew.dev, and the reach card.
+ *
+ * The pairing key ring, the admitted-phone list and the registry's signing key
+ * are all created here, before the mobile server starts, because the server
+ * needs the first two to answer `/?open=` and the reach publisher needs the
+ * account to sign. Every one of them is inert without an account: no username,
+ * no admission route, no hello, nothing published.
+ */
+const pairingKeys = createPairingKeyRing()
+const admittedDevices = createAdmittedDeviceStore()
+const registryKeyCache = createRegistryKeyCache({ origin: registryOrigin() })
+let reachPublisher: ReachPublisher | null = null
 
 /**
  * SERVING STILL PICKS ITS HANDLE FROM THE ENVIRONMENT. Phase 6 migrates
@@ -4124,6 +4143,19 @@ app.whenReady().then(() => {
     unsubscribeTerminal: (terminalId) => sessionSync.unsubscribe(terminalId),
     wallToken,
     pairingToken,
+    // Identity v2: `/api/hello` and the `?open=` admission. Both answer above
+    // the pairing-token gate because both exist for a phone that has not got
+    // the token yet; both go silent the moment there is no account.
+    identity: {
+      account: () => accounts.account(),
+      registryOrigin: () => registryOrigin(),
+      keys: () => registryKeyCache.keys(),
+      refreshKeys: () => registryKeyCache.refresh(),
+      admitted: admittedDevices,
+      acceptsPairingKey: (key: string) => pairingKeys.accepts(key),
+      pairingToken: () => pairingToken,
+      log: (message: string) => console.error(`[cookrew] ${message}`)
+    },
     recoverAgent,
     restoreCheckpoint,
     undoRestore,
@@ -4239,9 +4271,25 @@ app.whenReady().then(() => {
   // File this Mac's workspaces under the account, by NAME AND ID only (P1).
   // Best effort and never awaited: a registry that is down must not delay a
   // boot, and a desktop with no account has nothing to file.
-  void accounts
-    .registerDesktop(store.list().workspaces.map((w) => ({ id: w.id, name: w.name })))
-    .catch(() => undefined)
+  // The reach card rides with them: the addresses this Mac answers on, the
+  // fingerprint of the certificate it serves, and whether the relay is up —
+  // signed by the device key, so cookrew.dev is a repeater and not an
+  // authority about where to find this machine.
+  reachPublisher = createReachPublisher({
+    account: () => accounts.account(),
+    endpoints: () => mobileEndpointList(),
+    certFp: () => activeCertFingerprint(),
+    // Relay serving is up only when the environment pointed this Mac at a
+    // registry AND a handle; anything less and there is no uplink to claim.
+    relay: () => relayServing !== null,
+    workspaces: () => store.list().workspaces.map((w) => ({ id: w.id, name: w.name })),
+    register: (workspaces, reach) => accounts.registerDesktop(workspaces, reach),
+    log: (message) => console.error(`[cookrew] ${message}`)
+  })
+  void reachPublisher.republish('boot').catch(() => undefined)
+  // The addresses move without anyone asking: a laptop lid, a new Wi-Fi, a
+  // Tailscale that finally came up. Polling is the only honest way to notice.
+  reachPublisher.watch()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -4399,6 +4447,12 @@ function registerIpc(handlers: RestoreHandlers): void {
     factors,
     envUsername: RELAY_HANDLE || null,
     workspaces: () => store.list().workspaces.map((w) => ({ id: w.id, name: w.name })),
+    pairing: pairingKeys,
+    admitted: {
+      list: () => admittedDevices.list(),
+      forget: (deviceId) => admittedDevices.forget(deviceId)
+    },
+    publishReach: (reason) => void reachPublisher?.republish(reason).catch(() => undefined),
     // SAVE AS FILE. The dialog lives here because account-ipc.ts must stay
     // free of Electron; the CODES come from main's own memory, never from the
     // call, so the renderer chooses the file and nothing else. 0600, because

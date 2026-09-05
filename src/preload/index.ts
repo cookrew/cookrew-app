@@ -63,6 +63,15 @@ const api = {
     ipcRenderer.invoke('account:setProfile', patch),
   accountWorkspacesReachable: (on: boolean) =>
     ipcRenderer.invoke('account:workspacesReachable', on),
+  // ── pairing a phone through cookrew.dev (identity v2, phase 2) ──
+  //
+  // The key is a live credential for two minutes, which is exactly why it goes
+  // through the same owner-only gate as a recovery code: a page that could
+  // read it could pair itself to this Mac.
+  accountPairingKey: () => ipcRenderer.invoke('account:pairingKey'),
+  accountAdmittedDevices: () => ipcRenderer.invoke('account:admittedDevices'),
+  accountForgetAdmitted: (deviceId: string) =>
+    ipcRenderer.invoke('account:forgetAdmitted', deviceId),
 
   // ── phase 4: the approval prompt (D6) and the factor ladder (D3) ──
   //

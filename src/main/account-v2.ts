@@ -1,9 +1,13 @@
 import {
   createHash,
+  createPrivateKey,
+  createPublicKey,
   generateKeyPairSync,
   randomBytes,
   scryptSync,
+  sign,
   timingSafeEqual,
+  verify,
 } from 'node:crypto'
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -172,6 +176,40 @@ export function mintDeviceKey(): {
   return {
     privateKeyJwk: privateKey.export({ format: 'jwk' }) as Record<string, unknown>,
     publicKeyJwk: publicKey.export({ format: 'jwk' }) as Record<string, unknown>,
+  }
+}
+
+/**
+ * Sign a string with this device's key.
+ *
+ * The account file's own authority on the wire is a bearer session token, and
+ * that is right for talking to cookrew.dev: the registry issued it and the
+ * registry can revoke it. But two things this Mac says are read by parties
+ * that hold no session of ours — a phone deciding whether the box answering on
+ * 192.168.1.24 is really this Mac, and the registry storing a reach card it
+ * will hand to other devices later. Those have to be signatures, verifiable
+ * offline against the public JWK the account was claimed with.
+ *
+ * Ed25519, so the algorithm argument is null and the message is signed whole
+ * rather than pre-hashed. Base64url out, because every one of these travels in
+ * a URL or a JSON field.
+ */
+export function signWithDevice(account: AccountFile, message: string): string {
+  const key = createPrivateKey({ key: account.privateKeyJwk as never, format: 'jwk' })
+  return sign(null, Buffer.from(message, 'utf8'), key).toString('base64url')
+}
+
+/** The other half, for tests and for anyone verifying one of ours locally. */
+export function verifyWithDevice(
+  publicKeyJwk: Record<string, unknown>,
+  message: string,
+  signature: string,
+): boolean {
+  try {
+    const key = createPublicKey({ key: publicKeyJwk as never, format: 'jwk' })
+    return verify(null, Buffer.from(message, 'utf8'), key, Buffer.from(signature, 'base64url'))
+  } catch {
+    return false
   }
 }
 
@@ -600,8 +638,18 @@ export class Accounts {
    * the Workspaces tab is a statement about what cookrew.dev may offer their
    * phone, so honouring it has to happen before the request, not after.
    */
+  /**
+   * File this desktop with the registry: its name, the workspaces it will open
+   * for the account's other devices, and — when one is offered — the signed
+   * reach card saying how to get here.
+   *
+   * The reach card is passed in rather than computed here because reach is a
+   * fact about the mobile server's listeners and certificate, which this class
+   * knows nothing about. What this class owns is the device key that signs it.
+   */
   async registerDesktop(
     workspaces: readonly { id: string; name: string }[],
+    reach?: { reach: unknown; sig: string },
   ): Promise<AccountResult<void>> {
     const account = this.cached
     if (!account) return { ok: false, reason: 'no_account' }
@@ -610,7 +658,14 @@ export class Accounts {
       : []
     return this.authed<void>(`/v2/me/desktops/${encodeURIComponent(account.deviceId)}`, {
       method: 'PUT',
-      body: JSON.stringify({ name: account.name, workspaces: listed }),
+      body: JSON.stringify({
+        name: account.name,
+        workspaces: listed,
+        // Omitted rather than null when there is nothing to publish: a desktop
+        // with reachability off must not overwrite yesterday's card with an
+        // empty one, it must leave the registry with nothing new to say.
+        ...(reach ? { reach: reach.reach, sig: reach.sig } : {}),
+      }),
       parse: false,
     })
   }
