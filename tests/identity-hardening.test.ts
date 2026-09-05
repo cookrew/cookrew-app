@@ -111,34 +111,3 @@ describe('a handle in the reserved acct- namespace is not mintable', () => {
     expect(asked).toBe(0)
   })
 })
-
-describe('adopting the legacy key against a registry that predates accounts', () => {
-  it('reports legacy-registry when the key is recognised but no device id comes back', async () => {
-    const { adoptLegacyAccount } = await import('../src/main/account')
-    const keys = generateKeyPairSync('ed25519')
-    const legacy = {
-      handle: 'drej',
-      privateKeyJwk: keys.privateKey.export({ format: 'jwk' }) as Record<string, unknown>,
-      publicKeyJwk: jwkOf(keys)
-    }
-    const claims = Buffer.from(
-      JSON.stringify({ sub: 'drej', scope: 'account', exp: 9e12 })
-    ).toString('base64url')
-    const fetch = (async (url: URL | string) => {
-      const at = String(url)
-      if (at.endsWith('/v1/identity/challenge')) return Response.json({ challenge: 'c' })
-      if (at.endsWith('/v1/identity/assert')) return Response.json({ token: `${claims}.sig` })
-      return new Response('{}', { status: 404 })
-    }) as unknown as typeof globalThis.fetch
-    const home = mkdtempSync(path.join(tmpdir(), 'identity-legacy-registry-'))
-    expect(
-      await adoptLegacyAccount({ registry: 'https://r.test', legacy, fetch, baseDir: home })
-    ).toEqual({
-      state: 'legacy-registry',
-      handle: 'drej'
-    })
-    // Nothing is written: the app serves under the name, and adopts for real later.
-    expect(existsSync(accountFile(home))).toBe(false)
-    rmSync(home, { recursive: true, force: true })
-  })
-})

@@ -297,13 +297,6 @@ function deviceOf(token: string): string | null {
   }
 }
 
-/** What adopting the legacy key found at the registry. */
-export type AdoptOutcome =
-  | { state: 'adopted'; account: AccountFile }
-  /** The registry knows the key as this handle but has no accounts yet. */
-  | { state: 'legacy-registry'; handle: string }
-  | { state: 'unknown' }
-
 /**
  * ADOPT the key this app registered before accounts existed.
  *
@@ -327,11 +320,11 @@ export async function adoptLegacyAccount(
     }
     name?: string
   } & AccountOptions
-): Promise<AdoptOutcome> {
+): Promise<AccountFile | null> {
   const doFetch = input.fetch ?? globalThis.fetch
   const origin = new URL(input.registry).origin
   const handle = normaliseHandle(input.legacy.handle)
-  if (!HANDLE_SHAPE.test(handle)) return { state: 'unknown' }
+  if (!HANDLE_SHAPE.test(handle)) return null
   const post = (at: string, body: unknown): Promise<Response> =>
     doFetch(new URL(at, origin), {
       method: 'POST',
@@ -342,7 +335,7 @@ export async function adoptLegacyAccount(
   try {
     const asked = await post('/v1/identity/challenge', {})
     const offered = (await asked.json().catch(() => ({}))) as { challenge?: string }
-    if (!asked.ok || typeof offered.challenge !== 'string') return { state: 'unknown' }
+    if (!asked.ok || typeof offered.challenge !== 'string') return null
     const minted = await post('/v1/identity/assert', {
       ...buildRegistryAssertion({
         origin,
@@ -353,13 +346,10 @@ export async function adoptLegacyAccount(
       scope: 'account'
     })
     const out = (await minted.json().catch(() => ({}))) as { token?: string }
-    if (!minted.ok || typeof out.token !== 'string') return { state: 'unknown' }
+    if (!minted.ok || typeof out.token !== 'string') return null
     const deviceId = deviceOf(out.token)
-    // Recognised, but no device id: the registry predates accounts. The key
-    // still speaks for the handle there, so the app may serve under it the way
-    // it always has; adoption completes on the first boot after the upgrade.
-    if (deviceId === null) return { state: 'legacy-registry', handle }
-    const account = writeAccount(
+    if (deviceId === null) return null
+    return writeAccount(
       {
         handle,
         deviceId,
@@ -372,9 +362,8 @@ export async function adoptLegacyAccount(
       },
       input.baseDir
     )
-    return { state: 'adopted', account }
   } catch {
-    return { state: 'unknown' }
+    return null
   }
 }
 

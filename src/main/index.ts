@@ -593,17 +593,8 @@ const ACCOUNT_REGISTRY = RELAY_ORIGIN || 'https://cookrew.dev'
  * while the app is running, and a handle captured at module load would leave a
  * freshly named app unable to serve until it was restarted.
  */
-/**
- * The handle the registry recognised this app's OLD key as, when the registry
- * predates accounts (ensureAccountAtBoot). Serving needs a name and a key the
- * registry accepts; a registry that has no accounts yet accepts exactly that
- * pair the way it always did, so the door stays open across the upgrade.
- */
-let provisionalHandle: string | null = null
-
 function relayHandle(): string {
-  const known = loadAccount() ?? (provisionalHandle === null ? null : { handle: provisionalHandle })
-  const verdict = resolveServingHandle(known, process.env.COOKREW_HANDLE)
+  const verdict = resolveServingHandle(loadAccount(), process.env.COOKREW_HANDLE)
   if (verdict.ok) return verdict.handle
   console.error(`not serving on the relay — ${verdict.reason}`)
   return ''
@@ -4339,8 +4330,7 @@ function registerIpc(handlers: RestoreHandlers): void {
     ownerOnly(() => {
       const account = loadAccount()
       return {
-        handle: account?.handle ?? provisionalHandle,
-        provisional: account === null && provisionalHandle !== null,
+        handle: account?.handle ?? null,
         registry: ACCOUNT_REGISTRY,
         // A suggestion, never an identity (D3). The field starts here and the
         // person changes it; nothing mints from this on its own.
@@ -5049,15 +5039,8 @@ async function ensureAccountAtBoot(): Promise<void> {
   const legacy = loadLegacyRegistryAccount(ACCOUNT_REGISTRY)
   if (legacy !== null) {
     const adopted = await adoptLegacyAccount({ registry: ACCOUNT_REGISTRY, legacy })
-    if (adopted.state === 'adopted') {
-      console.log(`account: adopted @${adopted.account.handle} from the key this app already held`)
-      return
-    }
-    if (adopted.state === 'legacy-registry') {
-      provisionalHandle = adopted.handle
-      console.log(
-        `account: the registry predates accounts and knows this app as @${adopted.handle} — serving under it; adoption completes once the registry is upgraded`
-      )
+    if (adopted !== null) {
+      console.log(`account: adopted @${adopted.handle} from the key this app already held`)
       return
     }
     console.error(
