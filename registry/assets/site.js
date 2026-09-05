@@ -355,25 +355,71 @@
    * /v2/sessions and the SERVER sets `cr_session` HttpOnly; a token a script
    * can read is a token a script can leak.
    */
-  const loadDevice = () => idb('readonly', (s) => s.get('device'))
-  const saveDevice = (value) => idb('readwrite', (s) => s.put(value, 'device'))
+  /**
+   * The device key has its OWN database (`cookrew-device`), beside the v1
+   * account key's. Two stores rather than one because the two are forgotten
+   * for different reasons: "forget this browser's key" drops the v1 handle and
+   * must not silently detach the device from a v2 account.
+   */
+  const DEVICE_DB = 'cookrew-device'
+  const openDeviceDb = () =>
+    new Promise((resolve, reject) => {
+      const req = indexedDB.open(DEVICE_DB, 1)
+      req.onupgradeneeded = () => req.result.createObjectStore('keys')
+      req.onsuccess = () => resolve(req.result)
+      req.onerror = () => reject(req.error)
+    })
+  const deviceIdb = async (mode, fn) => {
+    const db = await openDeviceDb()
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('keys', mode)
+      const req = fn(tx.objectStore('keys'))
+      req.onsuccess = () => resolve(req.result)
+      req.onerror = () => reject(req.error)
+      tx.oncomplete = () => db.close()
+    })
+  }
+  const loadDevice = () => deviceIdb('readonly', (s) => s.get('device'))
+  const saveDevice = (value) => deviceIdb('readwrite', (s) => s.put(value, 'device'))
 
-  /** "Chrome on macOS" — what the Devices list will call this browser. */
-  function browserName() {
+  /**
+   * A PHONE IS A DEVICE, and so is a browser (P2). Which one this is comes
+   * from the user agent, because the two are the same code and only the
+   * Devices list and the pairing sheet care about the difference: "iPhone"
+   * reads as a thing in a pocket, "Chrome on macOS" as a window on a desk.
+   */
+  const MOBILE = /iPhone|iPad|Android/
+  const deviceKind = () => (MOBILE.test(navigator.userAgent) ? 'phone' : 'browser')
+
+  /** "iPhone", "Android phone", "Chrome on macOS" — what Devices will call it. */
+  function deviceName() {
     const ua = navigator.userAgent
+    if (/iPad/.test(ua)) return 'iPad'
+    if (/iPhone/.test(ua)) return 'iPhone'
+    if (/Android/.test(ua)) return 'Android phone'
     const engine = /Firefox\//.test(ua) ? 'Firefox' : /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Browser'
-    const os = /Mac OS X/.test(ua) ? 'macOS' : /Windows/.test(ua) ? 'Windows' : /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Linux/.test(ua) ? 'Linux' : 'this computer'
+    const os = /Mac OS X/.test(ua) ? 'macOS' : /Windows/.test(ua) ? 'Windows' : /Linux/.test(ua) ? 'Linux' : 'this computer'
     return `${engine} on ${os}`
   }
 
-  /** This browser's device: a uuid and a non-extractable key, minted once. */
+  /**
+   * This browser's device: a non-extractable key minted once, and an id
+   * DERIVED FROM IT rather than a fresh uuid.
+   *
+   * Derived because the id must not be able to drift from the key it names —
+   * the desktop computes the same value from the same public key
+   * (device-id.js says how), so one key is one device wherever it is seen. A
+   * random uuid would have made a re-mint after a cleared store a second
+   * device on the account for the same person on the same phone.
+   */
   async function deviceIdentity() {
     const held = await loadDevice()
     if (held) return held
     const key = await mintKey()
     const full = await crypto.subtle.exportKey('jwk', key.pair.publicKey)
     const jwk = key.alg === 'Ed25519' ? { kty: full.kty, crv: full.crv, x: full.x } : { kty: full.kty, crv: full.crv, x: full.x, y: full.y }
-    const device = { id: crypto.randomUUID(), kind: 'browser', name: browserName(), jwk, pair: key.pair }
+    const id = await globalThis.cookrewDeviceId.deviceIdFrom(jwk)
+    const device = { id, kind: deviceKind(), name: deviceName(), jwk, pair: key.pair }
     await saveDevice(device)
     return device
   }
@@ -569,6 +615,78 @@
           toast(out.status === 204 ? 'Password changed.' : (out.body?.message ?? 'That did not go through.'), 6000)
         })
       }
+    })
+  }
+
+  /* ── seats on a team page (W2) ──────────────────────────────────────────
+   *
+   * The page is already rendered for whoever asked: signed out, unseated,
+   * seated, or the owner's own view. These are only the VERBS — copy the ask
+   * link, grant a seat, end one, and press the line's own entry. Nothing here
+   * re-renders a state the server decided, so the two can never disagree.
+   */
+  const seatbar = $('seatbar')
+  if (seatbar) {
+    const team = seatbar.dataset.team ?? ''
+    /** The line's own gate button. Buying and opening are its ceremony, unchanged. */
+    const pressTheLine = () => {
+      const open = $('btn-open')
+      if (!open) return toast('This team is not on the relay — open it in Cookrew.')
+      open.scrollIntoView({ block: 'center' })
+      // A disabled entry swallows a click silently, and silence reads as a
+      // broken button rather than as "nobody is serving this right now".
+      if (open.disabled) return toast('Nobody is serving this team right now — the address stays valid.', 5000)
+      open.click()
+    }
+
+    /**
+     * COPY THE ASK LINK. navigator.clipboard is absent over plain http and on
+     * an older browser, so the link is put on the page instead of being lost:
+     * a person can always copy what they can see.
+     */
+    const copyAsk = async (link) => {
+      try {
+        await navigator.clipboard.writeText(link)
+        toast('Link copied. Send it to the owner; it names you.')
+      } catch {
+        const shown = $('seat-ask-link')
+        if (shown) {
+          shown.hidden = false
+          shown.textContent = link
+          const range = document.createRange()
+          range.selectNodeContents(shown)
+          getSelection()?.removeAllRanges()
+          getSelection()?.addRange(range)
+        }
+        toast('This browser would not take the clipboard — the link is on the page, ready to copy.', 6000)
+      }
+    }
+
+    const seatCall = (method, path, body) =>
+      v2(method, `/v2/teams/${team}${path}`, body).then((out) => {
+        if (out.status === 201 || out.status === 204) return location.reload()
+        toast(out.body?.message ?? 'That did not go through. Try again in a moment.', 6000)
+      })
+
+    seatbar.addEventListener('click', (event) => {
+      const el = event.target.closest('[data-seat-ask],[data-seat-buy],[data-seat-open],[data-seat-grant],[data-seat-end]')
+      if (!el) return
+      event.preventDefault()
+      if (el.dataset.seatAsk !== undefined) void copyAsk(el.dataset.seatAsk)
+      else if (el.dataset.seatBuy !== undefined || el.dataset.seatOpen !== undefined) pressTheLine()
+      else if (el.dataset.seatGrant !== undefined) {
+        const username = ($('seat-username')?.value ?? '').trim().toLowerCase().replace(/^@/, '')
+        if (!USERNAME.test(username)) return toast('A username is lowercase letters, digits and dashes.')
+        void seatCall('POST', '/seats', { username })
+      } else if (el.dataset.seatEnd !== undefined) {
+        if (!confirm('This person stops opening the team at their next call. Their session ends when they close it. End the seat?')) return
+        void seatCall('DELETE', `/seats/${encodeURIComponent(el.dataset.seatEnd)}`)
+      }
+    })
+    $('seat-username')?.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return
+      event.preventDefault()
+      seatbar.querySelector('[data-seat-grant]')?.click()
     })
   }
 

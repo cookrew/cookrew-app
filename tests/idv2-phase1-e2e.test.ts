@@ -86,7 +86,7 @@ describe('phase 1 — claim, unlock, profile, devices', () => {
     const bad = await app.claim({ username: 'Drej Smith', password: PASSWORD })
     expect(bad.ok).toBe(false)
     if (!bad.ok) expect(bad.reason).toBe('bad_username')
-    expect(await app.checkUsername('acct-drej')).toBe('invalid')
+    expect(await app.checkUsername('acct-drej')).toBe('reserved')
     expect(existsSync(accountFilePath(home))).toBe(false)
   })
 

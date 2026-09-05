@@ -40,17 +40,17 @@ const request = (over: Partial<http.IncomingMessage> = {}): http.IncomingMessage
 
 const registry = () => {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519')
-  const b64 = (v: unknown): string => Buffer.from(JSON.stringify(v)).toString('base64url')
   return {
     keys: { jwk: publicKey.export({ format: 'jwk' }), revoked: [] } as RegistryKeys,
+    // The registry's two-segment shape: base64url(claims).base64url(sig),
+    // signed over the body SEGMENT and not over the JSON behind it.
     mint: (claims: Record<string, unknown>) => {
-      const head = b64({ alg: 'EdDSA', typ: 'JWT' })
-      const body = b64(claims)
+      const body = Buffer.from(JSON.stringify(claims), 'utf8').toString('base64url')
       const key = createPrivateKey({
         key: privateKey.export({ format: 'jwk' }) as never,
         format: 'jwk'
       })
-      return `${head}.${body}.${sign(null, Buffer.from(`${head}.${body}`), key).toString('base64url')}`
+      return `${body}.${sign(null, Buffer.from(body, 'utf8'), key).toString('base64url')}`
     }
   }
 }

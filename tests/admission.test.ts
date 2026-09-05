@@ -11,22 +11,24 @@ import { verifyCanvasToken, type RegistryKeys } from '../src/main/canvas-token'
 import { createPairingKeyRing } from '../src/main/pairing-key'
 import { fakeAccount, tempBase } from './support/idv2'
 
-/** The registry's signing key, and a mint that speaks its wire shape. */
+/**
+ * A stand-in for the registry, minting EXACTLY the way registry/src/v2-tokens
+ * does: two segments, and the signature over the base64url body STRING rather
+ * than over the JSON behind it. Getting that wrong is the one mistake that
+ * would pass every test written on this side and fail against the real thing,
+ * so the last test in this file checks a token from the registry's own class.
+ */
 const registry = (): {
   keys: RegistryKeys
-  mint: (claims: Record<string, unknown>, over?: { alg?: string }) => string
+  mint: (claims: Record<string, unknown>) => string
 } => {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519')
-  const jwk = publicKey.export({ format: 'jwk' }) as Record<string, unknown>
-  const b64 = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url')
   return {
-    keys: { jwk, revoked: [] },
-    mint: (claims, over = {}) => {
-      const head = b64({ alg: over.alg ?? 'EdDSA', typ: 'JWT' })
-      const body = b64(claims)
+    keys: { jwk: publicKey.export({ format: 'jwk' }) as Record<string, unknown>, revoked: [] },
+    mint: (claims) => {
+      const body = Buffer.from(JSON.stringify(claims), 'utf8').toString('base64url')
       const key = createPrivateKey({ key: privateKey.export({ format: 'jwk' }) as never, format: 'jwk' })
-      const sig = sign(null, Buffer.from(`${head}.${body}`, 'utf8'), key).toString('base64url')
-      return `${head}.${body}.${sig}`
+      return `${body}.${sign(null, Buffer.from(body, 'utf8'), key).toString('base64url')}`
     }
   }
 }
@@ -96,23 +98,37 @@ describe('canvas token claims, each refused on its own', () => {
       .toEqual({ ok: false, reason: 'bad_signature' })
   })
 
+  it('refuses a revoked DEVICE id — the list holds both kinds', () => {
+    // registry/src/v2-tokens publishes device ids and session jtis in one
+    // `revoked` array, so a verifier must not assume the entries are one kind.
+    const keys: RegistryKeys = { ...reg.keys, revoked: [PHONE] }
+    expect(verifyCanvasToken(reg.mint(good), keys, expectation))
+      .toEqual({ ok: false, reason: 'revoked' })
+  })
+
   it('refuses a tampered payload', () => {
-    const token = reg.mint(good)
-    const [head, , sig] = token.split('.')
+    const [, sig] = reg.mint(good).split('.')
     const forged = Buffer.from(JSON.stringify({ ...good, sub: 'mira' })).toString('base64url')
-    expect(verifyCanvasToken(`${head}.${forged}.${sig}`, reg.keys, expectation))
+    expect(verifyCanvasToken(`${forged}.${sig}`, reg.keys, expectation))
       .toEqual({ ok: false, reason: 'bad_signature' })
   })
 
-  it('never lets the token choose its own algorithm', () => {
-    expect(verifyCanvasToken(reg.mint(good, { alg: 'none' }), reg.keys, expectation))
-      .toEqual({ ok: false, reason: 'bad_algorithm' })
-    expect(verifyCanvasToken(reg.mint(good, { alg: 'HS256' }), reg.keys, expectation))
-      .toEqual({ ok: false, reason: 'bad_algorithm' })
+  it('refuses a signature made over the RAW JSON instead of the body segment', () => {
+    // The one mistake that would pass a test written only on this side: the
+    // registry signs the base64url segment it transmits, not the JSON behind
+    // it, and a verifier that checks the other one agrees with nobody.
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519')
+    const json = JSON.stringify(good)
+    const body = Buffer.from(json, 'utf8').toString('base64url')
+    const key = createPrivateKey({ key: privateKey.export({ format: 'jwk' }) as never, format: 'jwk' })
+    const wrong = sign(null, Buffer.from(json, 'utf8'), key).toString('base64url')
+    const keys: RegistryKeys = { jwk: publicKey.export({ format: 'jwk' }) as Record<string, unknown>, revoked: [] }
+    expect(verifyCanvasToken(`${body}.${wrong}`, keys, expectation))
+      .toEqual({ ok: false, reason: 'bad_signature' })
   })
 
-  it('refuses anything that is not three non-empty base64url segments', () => {
-    for (const bad of ['', 'a.b', 'a.b.c.d', 'a..c', '...', 'not-a-token']) {
+  it('refuses anything that is not two non-empty segments', () => {
+    for (const bad of ['', 'a', 'a.b.c', '.b', 'a.', '..', 'not-a-token']) {
       expect(verifyCanvasToken(bad, reg.keys, expectation).ok, bad).toBe(false)
     }
   })
@@ -121,6 +137,47 @@ describe('canvas token claims, each refused on its own', () => {
     const { jti: _drop, ...missing } = good
     expect(verifyCanvasToken(reg.mint(missing), reg.keys, expectation))
       .toEqual({ ok: false, reason: 'malformed' })
+  })
+
+  it('agrees with the registry\'s OWN minter, key and all', async () => {
+    // The two sides are one format described in two places. This is the only
+    // test that can tell whether the descriptions still match.
+    const { V2Tokens } = await import('../registry/src/v2-tokens')
+    const temp = tempBase()
+    try {
+      const tokens = new V2Tokens(temp.base)
+      const minted = tokens.mintCanvasToken(account.username, PHONE, account.deviceId)
+      const keys: RegistryKeys = { jwk: tokens.publicKeyJwk(), revoked: [] }
+      const result = verifyCanvasToken(minted.token, keys, { ...expectation, now: Date.now() })
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.claims).toMatchObject({
+        sub: account.username,
+        dev: PHONE,
+        scope: 'canvas',
+        aud: account.deviceId,
+        jti: minted.jti
+      })
+      // And the registry reads back what it minted, so neither side drifted.
+      expect(tokens.verify(minted.token, { scope: 'canvas', aud: account.deviceId })).not.toBeNull()
+    } finally {
+      temp.clean()
+    }
+  })
+
+  it('refuses a canvas token minted for another desktop by the real minter', async () => {
+    const { V2Tokens } = await import('../registry/src/v2-tokens')
+    const temp = tempBase()
+    try {
+      const tokens = new V2Tokens(temp.base)
+      const other = fakeAccount()
+      const minted = tokens.mintCanvasToken(account.username, PHONE, other.deviceId)
+      const keys: RegistryKeys = { jwk: tokens.publicKeyJwk(), revoked: [] }
+      expect(verifyCanvasToken(minted.token, keys, { ...expectation, now: Date.now() }))
+        .toEqual({ ok: false, reason: 'wrong_desktop' })
+    } finally {
+      temp.clean()
+    }
   })
 
   it('checks the signature before it reads a claim', () => {

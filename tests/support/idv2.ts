@@ -25,6 +25,7 @@ export const fakeAccount = (over: Partial<AccountFile> = {}): AccountFile => {
     lockAfterMs: 900_000,
     claimedAt: 1_700_000_000_000,
     workspacesReachable: true,
+    recoveryCodesSavedAt: null,
     ...over
   }
 }

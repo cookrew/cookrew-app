@@ -185,12 +185,46 @@
   }
 
   /* ── sign-in at the door, with the registry's word ─────────────────────── */
+
+  /**
+   * THE v2 WORD FOR THIS DOOR — a call token naming the seat that admits us.
+   *
+   * Asked for FIRST, because a seat belongs to the account a person signed in
+   * with and follows them to any device. 401 means there is no v2 session in
+   * this browser, and the older key-based path below still works for the
+   * accounts that only have that; 403 means the account is real and has no
+   * seat here, which is the page's sentence and not a thing to retry.
+   */
+  async function v2CallToken() {
+    let res
+    try {
+      res = await fetch(`/v2/teams/${door}/call-token`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: '{}'
+      })
+    } catch {
+      return null
+    }
+    if (res.status === 401) return null
+    let body = null
+    try {
+      body = await res.json()
+    } catch {
+      body = null
+    }
+    if (res.status === 201 && body?.token) return body
+    throw new LineError('refused', body?.message ?? `cookrew.dev would not mint a token for this door (${res.status})`)
+  }
+
   async function signIn() {
     const acct = account()
     if (!acct) throw new LineError('account', 'the account script did not load')
-    const handleName = await acct.handle()
+    const seated = await v2CallToken()
+    const handleName = seated?.account ?? (await acct.handle())
     if (!handleName) throw new LineError('account', 'sign in to cookrew.dev first')
-    const registryToken = await acct.token('call', door)
+    const registryToken = seated?.token ?? (await acct.token('call', door))
     const JSON_HEADERS = { 'content-type': 'application/json' }
     let res = await exchange('POST', '/api/call/assert', JSON_HEADERS, JSON.stringify({ registryToken }))
     if (res.status === 401) {

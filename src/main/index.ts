@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from 'electron'
 import path from 'node:path'
-import { existsSync, statSync } from 'node:fs'
+import { chmodSync, existsSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
@@ -88,6 +88,8 @@ import { createRegistryKeyCache } from './registry-keys'
 import { createReachPublisher, type ReachPublisher } from './reach'
 import { IdleLock } from './lock'
 import { registerAccountIpc } from './account-ipc'
+import { Approvals } from './approvals'
+import { Factors } from './factors'
 import { buildGrantRoster } from './grant-roster'
 import { CallCredentialService } from './call-credential'
 import { makeCallCeremony } from './call-ceremony'
@@ -628,6 +630,61 @@ const ownerLock = new IdleLock({
 })
 /** Idleness is a question about a clock, so something has to ask it. */
 setInterval(() => ownerLock.tick(), 15_000).unref()
+
+/**
+ * THE APPROVAL QUEUE (D6) AND THE FACTOR LADDER (D3).
+ *
+ * A waiting device is announced as a SYSTEM NOTIFICATION and as the avatar's
+ * rose badge — never as a modal over the canvas. Clicking the notification
+ * brings the window forward and opens the profile sheet on the request, which
+ * is the same place the badge leads: one destination, so a person who saw the
+ * toast and a person who saw the badge end up looking at the same card.
+ */
+const approvals = new Approvals({
+  accounts,
+  hasSecondFactor: () => accountHasFactor,
+  notify: ({ title, body, request }) => {
+    const note = new Notification({ title, body })
+    note.on('click', () => {
+      if (!mainWindow || mainWindow.webContents.isDestroyed()) return
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+      mainWindow.webContents.send('account:requests', request.id)
+    })
+    note.show()
+  },
+  onChange: () => {
+    if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+      mainWindow.webContents.send('account:requests', null)
+    }
+  }
+})
+const factors = new Factors({ accounts, registry: registryOrigin() })
+
+/**
+ * Only the SENTENCE depends on this, so it is cached rather than fetched.
+ *
+ * The D6 line ends "no second factor on the account yet" when there is none.
+ * Asking the registry for the factor list inside the poll would double every
+ * request for one clause, so it is read at boot and every five minutes after
+ * — a factor is added once in the life of an account, and the clause it
+ * changes is the third one in a sentence about a device that is still waiting.
+ */
+const FACTOR_CACHE_MS = 300_000
+let accountHasFactor = false
+const readFactors = (): void => {
+  void factors
+    .view()
+    .then((result) => {
+      if (result.ok) accountHasFactor = result.value.totp || result.value.passkeys.length > 0
+    })
+    .catch(() => undefined)
+}
+if (accounts.account()) {
+  readFactors()
+  setInterval(readFactors, FACTOR_CACHE_MS).unref()
+  approvals.start()
+}
 
 /**
  * Sign-in with a cookrew.dev token needs the registry's public key, and only
@@ -3769,6 +3826,9 @@ function createWindow(): void {
   // Focus is presence, for the same reason a keystroke is. Without it, coming
   // back to a window left open for twenty minutes locks a second later.
   mainWindow.on('focus', () => ownerLock.focus())
+  // And it is the moment the owner can actually answer a waiting device, so
+  // the queue is re-read then rather than waiting out the poll (D6).
+  mainWindow.on('focus', () => void approvals.refresh())
 
   if (process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -4383,6 +4443,8 @@ function registerIpc(handlers: RestoreHandlers): void {
   registerAccountIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), {
     accounts,
     lock: ownerLock,
+    approvals,
+    factors,
     envUsername: RELAY_HANDLE || null,
     workspaces: () => store.list().workspaces.map((w) => ({ id: w.id, name: w.name })),
     pairing: pairingKeys,
@@ -4390,7 +4452,33 @@ function registerIpc(handlers: RestoreHandlers): void {
       list: () => admittedDevices.list(),
       forget: (deviceId) => admittedDevices.forget(deviceId)
     },
-    publishReach: (reason) => void reachPublisher?.republish(reason).catch(() => undefined)
+    publishReach: (reason) => void reachPublisher?.republish(reason).catch(() => undefined),
+    // SAVE AS FILE. The dialog lives here because account-ipc.ts must stay
+    // free of Electron; the CODES come from main's own memory, never from the
+    // call, so the renderer chooses the file and nothing else. 0600, because
+    // eight of these open the account.
+    saveCodes: async (codes) => {
+      if (!mainWindow) return { ok: false, reason: 'no_window' }
+      const picked = await dialog.showSaveDialog(mainWindow, {
+        title: 'Save your recovery codes',
+        defaultPath: path.join(app.getPath('downloads'), 'cookrew-recovery-codes.txt'),
+        filters: [{ name: 'Text', extensions: ['txt'] }]
+      })
+      if (picked.canceled || !picked.filePath) return { ok: false, reason: 'cancelled' }
+      try {
+        writeFileSync(picked.filePath, `${codes.join('\n')}\n`, {
+          encoding: 'utf8',
+          mode: 0o600
+        })
+        chmodSync(picked.filePath, 0o600)
+        return { ok: true }
+      } catch (error) {
+        // The path, never the codes — an error line is the one place a secret
+        // reaches a log by accident.
+        console.error('Could not save the recovery codes:', error)
+        return { ok: false, reason: 'write_failed' }
+      }
+    }
   })
 
   ipcMain.handle(

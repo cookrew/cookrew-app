@@ -1,7 +1,8 @@
 import type { ListedDoor } from './site'
 import { priceChip } from './site-home'
-import { esc, page, type Page } from './site-shell'
+import { day, esc, page, type Page } from './site-shell'
 import { breadcrumbs, organization, teamProduct, webPage } from './site-seo'
+import type { V2Seat } from './v2-seats'
 
 /**
  * A SERVED TEAM'S PAGE — the door's own terminal, on the web.
@@ -31,6 +32,92 @@ export interface TeamInput {
   /** Whether the signed-in reader starred it; false for a stranger. */
   starred: boolean
   account: string | null
+  /** The reader's own active seat here, when they hold one. */
+  seat?: V2Seat | null
+  /** Who is in the room — only ever passed when the reader may see it. */
+  seated?: readonly string[]
+  /** Every seat this team ever had. The owner's list; empty for everyone else. */
+  seats?: readonly V2Seat[]
+  /** Whether the reader owns this team. */
+  owner?: boolean
+  /** `?ask=` — the username a guest copied a link to be seated under. */
+  ask?: string | null
+}
+
+/**
+ * THE SEAT BAR (W2) — the same address, rendered by what the request holds.
+ *
+ * Five states, decided here rather than by a script, because the CSP forbids
+ * an inline one and because a page that said "buy a seat" and then changed its
+ * mind after a fetch has already told the reader something untrue. The gate
+ * order is written into the buttons: sign in, then a seat, then payment, then
+ * the line.
+ *
+ * The BUY and OPEN buttons do not invent a ceremony — they press the line's
+ * own entry below, which is where the door's 402 and its session already live.
+ */
+function seatBar(input: TeamInput, door: ListedDoor, address: string): string {
+  const owner = input.owner === true
+  const seat = input.seat ?? null
+  const seated = input.seated ?? []
+  const paid = door.access === 'paid'
+  const price = door.priceUsd ?? ''
+
+  if (input.account === null) {
+    return `<section class="card seat" id="seatbar" data-team="${esc(`@${door.handle}/${door.name}`)}">
+<h2>Open this team</h2>
+<p class="lede" style="margin:0 0 10px">A seat is yours, not a browser’s. Sign in so it follows you.</p>
+<p class="row" style="margin:0"><button class="btn primary lg" data-signin>Sign in to open</button></p></section>`
+  }
+
+  const room =
+    seated.length === 0
+      ? ''
+      : `<p class="meta" id="seat-room" style="margin:10px 0 0">seated here: ${esc(seated.map((who) => `@${who}`).join(', '))}</p>`
+
+  if (owner) {
+    const rows =
+      input.seats === undefined || input.seats.length === 0
+        ? `<li><span class="chip">Empty</span><span class="meta">Nobody is seated yet. Grant one by username, or share the address.</span><span></span></li>`
+        : input.seats
+            .map((held) => {
+              const gone = held.endedAt !== undefined
+              const where =
+                held.source === 'bought'
+                  ? `bought · ${esc(day(held.createdAt))}`
+                  : `granted by you · ${esc(day(held.createdAt))}`
+              const action = gone
+                ? `<span class="chip">${esc(held.endedAt === undefined ? '' : `ended ${day(held.endedAt)}`)}</span>`
+                : `<button class="btn sm danger" data-seat-end="${esc(held.id)}">${held.source === 'bought' ? 'End' : 'Revoke'}</button>`
+              return `<li><span class="chip">${esc(held.account.slice(0, 2).toUpperCase())}</span>
+<span><b>@${esc(held.account)}</b><br><span class="meta">${where}</span></span>${action}</li>`
+            })
+            .join('')
+    const asked = input.ask ?? ''
+    return `<section class="card seat" id="seatbar" data-team="${esc(address)}" data-owner="1">
+<h2>Your team · ${seated.length} seated</h2>
+<p class="meta" style="margin:0 0 10px">A seat is per account and follows the person to any device they sign in on. Ending one stops their next call at the door.</p>
+<div class="row" id="seat-grant"><input id="seat-username" value="${esc(asked)}" placeholder="username" autocomplete="off" spellcheck="false" maxlength="32">
+<button class="btn primary" data-seat-grant>Grant a seat</button></div>
+<ul class="doors me-list" id="seat-list">${rows}</ul></section>`
+  }
+
+  if (seat !== null || !paid) {
+    const since = seat === null ? 'This team charges nothing — you are signed in, so the line is yours.' : `Seat since ${esc(day(seat.createdAt))} · your session continues where you left it.`
+    return `<section class="card seat" id="seatbar" data-team="${esc(address)}">
+<h2>You are @${esc(input.account)}</h2>
+<p class="lede" style="margin:0 0 10px">${since}</p>
+<p class="row" style="margin:0"><button class="btn primary lg" data-seat-open>Open the line</button></p>${room}</section>`
+  }
+
+  const ask = `${esc(`${input.origin}/@${door.handle}/${door.name}?ask=${input.account}`)}`
+  return `<section class="card seat" id="seatbar" data-team="${esc(address)}">
+<h2>You are @${esc(input.account)} · no seat here yet</h2>
+<p class="lede" style="margin:0 0 10px">Buy one, or ask @${esc(door.handle)} for one. A seat is yours, not this browser’s.</p>
+<p class="row" style="margin:0"><button class="btn primary lg" data-seat-buy>Buy a seat · $${esc(price)}</button>
+<button class="btn lg" data-seat-ask="${ask}">Copy link to ask @${esc(door.handle)}</button></p>
+<p class="meta" style="margin:10px 0 0">No queue: the link is this page with your username on it. @${esc(door.handle)} grants the seat by username, and it is here the next time you open this page.</p>
+<code class="cmd" id="seat-ask-link" hidden>${ask}</code></section>`
 }
 
 export function teamPage(input: TeamInput): Page {
@@ -60,7 +147,7 @@ answer the same, so the directory cannot be used to enumerate what is here.</p><
       title: `${door.title} — @${door.handle} · Cookrew`,
       kind: 'app',
       active: 'market',
-      scripts: ['xterm.js', 'addon-fit.js', 'site.js', 'seal.js', 'line.js'],
+      scripts: ['xterm.js', 'addon-fit.js', 'device-id.js', 'site.js', 'seal.js', 'line.js'],
       styles: ['xterm.css'],
       cache: 0,
       description: `${door.title}: ${door.door} answers on behalf of ${door.agents} agent${door.agents === 1 ? '' : 's'} served by @${door.handle} on Cookrew. ${door.summary ?? 'Open a live, sandboxed session from your browser or the Cookrew app.'}`.slice(0, 158),
@@ -83,6 +170,7 @@ answer the same, so the directory cannot be used to enumerate what is here.</p><
 <div class="addr" style="width:min(420px,88vw)"><span id="addr">${esc(address)}</span><button class="btn sm" data-copy="${esc(address)}">copy</button></div>
 </div></div>
 
+${seatBar(input, door, name)}
 <div class="tp">
 <div>
 <p class="kicker"><span class="no">LINE</span>this team’s own terminal, bound to cookrew.dev</p>
