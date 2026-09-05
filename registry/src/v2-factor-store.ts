@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { StoredPasskey } from './v2-passkeys'
-import { mintTotpSecret, otpauthUrl, totpMatches } from './v2-totp'
+import { mintTotpSecret, otpauthUrl, totpStepFor } from './v2-totp'
 
 /**
  * IDENTITY v2 — WHAT AN ACCOUNT HAS BESIDES A PASSWORD.
@@ -34,6 +34,15 @@ export interface TotpState {
   /** False until a code proves the phone actually holds the secret. */
   active: boolean
   addedAt: number
+  /**
+   * The last thirty-second step this account signed in with.
+   *
+   * A code is good for ninety seconds, which is ninety seconds in which one
+   * read over a shoulder — or relayed by a page pretending to be us while
+   * the owner's own attempt succeeds — is still good. RFC 6238 §5.2 says a
+   * verifier must not accept the same code twice; this is how it does not.
+   */
+  lastStep?: number
 }
 
 export interface FactorRecord {
@@ -251,16 +260,28 @@ export class V2Factors {
   confirmTotp(username: string, code: unknown): boolean {
     const record = this.get(username)
     if (record.totp === null) return false
-    if (!totpMatches(record.totp.secret, code, this.now())) return false
-    if (!record.totp.active) this.write({ ...record, totp: { ...record.totp, active: true } })
+    const step = this.spendStep(record, code)
+    if (step === null) return false
+    this.write({ ...record, totp: { ...record.totp, active: true, lastStep: step } })
     return true
   }
 
-  /** True when this code opens this account's authenticator right now. */
+  /** True when this code opens this account's authenticator right now — once. */
   checkTotp(username: string, code: unknown): boolean {
     const record = this.get(username)
     if (record.totp === null || !record.totp.active) return false
-    return totpMatches(record.totp.secret, code, this.now())
+    const step = this.spendStep(record, code)
+    if (step === null) return false
+    this.write({ ...record, totp: { ...record.totp, lastStep: step } })
+    return true
+  }
+
+  /** The step a code names, or null — refusing one already spent. */
+  private spendStep(record: FactorRecord, code: unknown): number | null {
+    if (record.totp === null) return null
+    const step = totpStepFor(record.totp.secret, code, this.now())
+    if (step === null) return null
+    return step <= (record.totp.lastStep ?? -1) ? null : step
   }
 
   clearTotp(username: string): void {

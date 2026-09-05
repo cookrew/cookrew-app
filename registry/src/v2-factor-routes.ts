@@ -66,9 +66,13 @@ export function factorsFor(v2: V2Identity, account: V2Account): Factor[] {
  * Is a password enough on its own? Only for an account with no factors being
  * opened on a device it already knows — or on its very first device, which is
  * the account that has just been claimed.
+ *
+ * DERIVED FROM `factorsFor` AND NOTHING ELSE. It was a second predicate that
+ * happened to agree with the first, which is a ladder that disappears the day
+ * somebody adds a factor kind to one list and not the other.
  */
-function ladderApplies(v2: V2Identity, account: V2Account, deviceId: string): boolean {
-  const hasFactor = v2.factors.store.hasPasskey(account.username) || v2.factors.store.totpActive(account.username)
+function ladderApplies(next: readonly Factor[], account: V2Account, deviceId: string): boolean {
+  const hasFactor = next.includes('passkey') || next.includes('totp')
   const known = account.devices.some((d) => d.id === deviceId)
   return hasFactor || (!known && account.devices.length > 0)
 }
@@ -103,19 +107,27 @@ export async function signInWithLadder(ctx: V2Context, body: Record<string, unkn
     return
   }
   const device = deviceShape(body.device)
-  if (device === null) {
+  /**
+   * THE WHOLE DEVICE, CHECKED HERE. `deviceShape` reads only what the ladder
+   * needs; the account store is the authority on the rest (a usable key, an
+   * id no other account holds, an id this account has not revoked). Asking it
+   * now means a rung is never climbed — and a recovery code never burned —
+   * for a device that could not have been attached at the end of it.
+   */
+  if (device === null || !v2.accounts.mayAttach(account.username, body.device)) {
     refuse(response, 400, 'bad_device')
     return
   }
-  if (!ladderApplies(v2, account, device.id)) {
+  const next = factorsFor(v2, account)
+  if (!ladderApplies(next, account, device.id)) {
     completeSignIn(ctx, account.username, body.device)
     return
   }
-  const next = factorsFor(v2, account)
   if (next.length === 0) {
-    // Defensive: an account that triggered the ladder always has a rung, but
-    // stranding a person on a list of nothing would be the worse bug.
-    completeSignIn(ctx, account.username, body.device)
+    // Cannot happen — the ladder applies only when there is a factor or a
+    // device to approve from — and it FAILS CLOSED if it ever does. A
+    // security ladder's default branch must not be "let them in".
+    refuseFactor(response, 403, 'no_factor')
     return
   }
   const pending = v2.factors.pending.open({
@@ -189,8 +201,22 @@ export function handleFactorRoute(ctx: V2Context): boolean {
 
 // ── one rung at a time ────────────────────────────────────────────────────
 
-/** The pending this request names, having spent one of its five tries. */
+/**
+ * The pending this request names, having spent one of its five tries.
+ *
+ * THE ALARM CLOSES EVERY DOOR, not just the one it was pressed on. A request
+ * the account denied — or an account whose password was disowned — must not
+ * remain climbable by the OTHER rungs: the whole point of "deny" and "not
+ * me" is that the sign-in they answered does not happen.
+ */
 function attemptOn(ctx: V2Context, id: string, factor: Factor): Pending | null {
+  const held = ctx.v2.factors.pending.get(id)
+  if (held !== null && !held.next.includes(factor)) {
+    // Checked before a try is spent: asking for a rung that was never offered
+    // is a client bug, and it should not cost the person their budget.
+    refuseFactor(ctx.response, 400, 'not_offered')
+    return null
+  }
   const pending = ctx.v2.factors.pending.attempt(id)
   if (pending === null) {
     // Gone, expired or spent — one answer, because telling a caller which is
@@ -198,8 +224,14 @@ function attemptOn(ctx: V2Context, id: string, factor: Factor): Pending | null {
     refuseFactor(ctx.response, 410, 'expired')
     return null
   }
-  if (!pending.next.includes(factor)) {
-    refuseFactor(ctx.response, 400, 'not_offered')
+  if (ctx.v2.factors.pending.refused(pending)) {
+    ctx.v2.factors.pending.close(id)
+    refuseFactor(ctx.response, 410, 'denied')
+    return null
+  }
+  if (ctx.v2.factors.store.mustChangePassword(pending.username)) {
+    ctx.v2.factors.pending.close(id)
+    refuseFactor(ctx.response, 403, 'password_change_required')
     return null
   }
   return pending
@@ -241,19 +273,27 @@ async function recoveryStep(ctx: V2Context, id: string): Promise<void> {
 function assertionOptions(
   ctx: V2Context,
   key: string,
-  allow: readonly { id: string }[]
+  allow: readonly { id: string }[],
+  verify: 'preferred' | 'required' = 'preferred'
 ): Record<string, unknown> {
   const { rpId } = relyingParty(ctx)
   return {
     challenge: ctx.v2.factors.challenges.issue(key),
     rpId,
     timeout: 120_000,
-    userVerification: 'preferred',
+    // A rung behind a password asks; the passwordless button REQUIRES. There
+    // the passkey is the whole answer, and a tap on a key somebody found is
+    // not an answer.
+    userVerification: verify,
     allowCredentials: allow.map((c) => ({ type: 'public-key', id: c.id }))
   }
 }
 
 function pendingPasskeyOptions(ctx: V2Context, id: string): void {
+  if (!ctx.v2.factors.options.take(`ladder|${asking(ctx)}`)) {
+    refuse(ctx.response, 429, 'rate_limited', { 'retry-after': '60' })
+    return
+  }
   const pending = ctx.v2.factors.pending.get(id)
   if (pending === null) {
     refuseFactor(ctx.response, 410, 'expired')
@@ -325,7 +365,8 @@ function checkAssertion(
   ctx: V2Context,
   key: string,
   credential: Assertion,
-  found: { username: string; passkey: { id: string; jwk: Record<string, string>; signCount: number } }
+  found: { username: string; passkey: { id: string; jwk: Record<string, string>; signCount: number } },
+  requireUserVerification = false
 ): boolean {
   const challenge = spendChallenge(ctx.v2.factors.challenges, key, credential.response.clientDataJSON)
   if (challenge === null) {
@@ -340,7 +381,7 @@ function checkAssertion(
       signature: credential.response.signature
     },
     found.passkey,
-    { challenge, origin, rpId }
+    { challenge, origin, rpId, requireUserVerification }
   )
   if (!out.ok) {
     refuseFactor(ctx.response, 401, 'passkey_refused')
@@ -353,6 +394,10 @@ function checkAssertion(
 // ── approve on a device the account already trusts ────────────────────────
 
 function askForApproval(ctx: V2Context, id: string): void {
+  if (!ctx.v2.factors.options.take(`ladder|${asking(ctx)}`)) {
+    refuse(ctx.response, 429, 'rate_limited', { 'retry-after': '60' })
+    return
+  }
   const pending = ctx.v2.factors.pending.get(id)
   if (pending === null) {
     refuseFactor(ctx.response, 410, 'expired')
@@ -416,7 +461,7 @@ function discoveryOptions(ctx: V2Context): void {
     refuse(ctx.response, 429, 'rate_limited', { 'retry-after': '60' })
     return
   }
-  json(ctx.response, 200, assertionOptions(ctx, `ip|${asking(ctx)}`, []))
+  json(ctx.response, 200, assertionOptions(ctx, `ip|${asking(ctx)}`, [], 'required'))
 }
 
 async function passwordlessPasskey(ctx: V2Context): Promise<void> {
@@ -447,6 +492,6 @@ async function passwordlessPasskey(ctx: V2Context): Promise<void> {
     refuseFactor(ctx.response, 401, 'passkey_refused')
     return
   }
-  if (!checkAssertion(ctx, `ip|${asking(ctx)}`, credential, found)) return
+  if (!checkAssertion(ctx, `ip|${asking(ctx)}`, credential, found, true)) return
   completeSignIn(ctx, found.username, body.value.device)
 }

@@ -118,6 +118,8 @@ export const clientData = (input: { type: string; challenge: string; origin: str
 export const CREATE_FLAGS = 0x41
 /** UP: a person was there. */
 export const GET_FLAGS = 0x01
+/** UP + UV: and the authenticator checked a PIN, a face or a fingerprint. */
+export const GET_FLAGS_VERIFIED = 0x05
 
 /** What `navigator.credentials.create` would hand back. */
 export function makeCredential(input: {
@@ -154,12 +156,14 @@ export function getAssertion(input: {
   rpId: string
   signCount?: number
   userHandle?: string
+  /** GET_FLAGS by default; GET_FLAGS_VERIFIED where user verification is required. */
+  flags?: number
 }): {
   id: string
   rawId: string
   response: { clientDataJSON: string; authenticatorData: string; signature: string; userHandle?: string }
 } {
-  const data = authData({ rpId: input.rpId, flags: GET_FLAGS, signCount: input.signCount ?? 0 })
+  const data = authData({ rpId: input.rpId, flags: input.flags ?? GET_FLAGS, signCount: input.signCount ?? 0 })
   const clientDataJSON = clientData({ type: 'webauthn.get', challenge: input.challenge, origin: input.origin })
   const signed = Buffer.concat([data, createHash('sha256').update(Buffer.from(clientDataJSON, 'base64url')).digest()])
   const signature = input.pair.alg === -8 ? sign(null, signed, input.pair.privateKey) : sign('sha256', signed, input.pair.privateKey)

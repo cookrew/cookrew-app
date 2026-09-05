@@ -70,7 +70,9 @@ export const asking = (ctx: V2Context): string =>
  * arrived on, which is what a browser used and therefore what it signed over.
  */
 export function relyingParty(ctx: V2Context): { origin: string; rpId: string } {
-  const configured = ctx.v2.origin ?? null
+  // An empty configured origin is NOT a configuration: it would make
+  // `new URL('')` throw and quietly hand the rpId back to the Host header.
+  const configured = ctx.v2.origin === null || ctx.v2.origin === '' ? null : ctx.v2.origin
   const host = ctx.request.headers.host ?? 'localhost'
   const origin = configured ?? `${ctx.secure ? 'https' : 'http'}://${host}`
   try {
@@ -136,7 +138,9 @@ export function completeSignIn(ctx: V2Context, username: string, device: unknown
  *
  * Read first, then SPENT, then handed to the verifier as what to expect — so
  * a replayed assertion fails on the second presentation whatever else about
- * it is perfect.
+ * it is perfect. The ANTI-REPLAY IS `take`, not the equality check downstream:
+ * by the time the verifier compares, it is comparing the challenge we just
+ * proved we issued against itself.
  */
 export function spendChallenge(
   challenges: { take: (key: string, challenge: unknown) => boolean },

@@ -46,6 +46,16 @@ export interface PasskeyExpectation {
   /** scheme://host — string equality, never a suffix test. */
   origin: string
   rpId: string
+  /**
+   * DEMAND USER VERIFICATION where the passkey is the whole answer.
+   *
+   * The ladder's passkey rung sits behind a password, so a tap is enough
+   * there. The passwordless button is not behind anything: without this, a
+   * roaming key with no PIN, or one left plugged into an unattended laptop,
+   * is a full session and a permanently attached device for whoever holds
+   * it. Possession is not identity.
+   */
+  requireUserVerification?: boolean
 }
 
 export type PasskeyRefusal =
@@ -56,6 +66,7 @@ export type PasskeyRefusal =
   | 'bad_origin'
   | 'bad_rp'
   | 'not_present'
+  | 'not_verified'
   | 'no_credential'
   | 'unsupported_key'
   | 'bad_signature'
@@ -74,6 +85,8 @@ const MAX_SIGNATURE = 1024
 const B64U = /^[A-Za-z0-9_-]*$/
 
 const FLAG_UP = 0x01
+/** The authenticator checked a PIN, a face or a fingerprint — not just a tap. */
+const FLAG_UV = 0x04
 const FLAG_AT = 0x40
 
 /** base64url in, bytes out — or null, because a stranger typed it. */
@@ -234,6 +247,9 @@ export function verifyAssertion(
   if (auth === null) return { ok: false, reason: 'malformed' }
   if (!same(auth.rpIdHash, sha256(expected.rpId))) return { ok: false, reason: 'bad_rp' }
   if ((auth.flags & FLAG_UP) === 0) return { ok: false, reason: 'not_present' }
+  if (expected.requireUserVerification === true && (auth.flags & FLAG_UV) === 0) {
+    return { ok: false, reason: 'not_verified' }
+  }
   const key = publicKeyOf(passkey.jwk)
   if (key === null) return { ok: false, reason: 'unsupported_key' }
   const signed = Buffer.concat([raw, sha256(clientDataJSON)])

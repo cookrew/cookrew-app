@@ -98,15 +98,38 @@ export function totpAt(secret: Uint8Array, atMs: number, digits = TOTP_DIGITS): 
  * the timing says nothing about how far a phone's clock has drifted.
  */
 export function totpMatches(secretBase32: unknown, code: unknown, atMs: number, window = TOTP_WINDOW): boolean {
+  return totpStepFor(secretBase32, code, atMs, window) !== null
+}
+
+/**
+ * WHICH STEP a code belongs to, or null — so a verifier can remember it.
+ *
+ * RFC 6238 §5.2: a code that has been accepted must not be accepted again.
+ * Ninety seconds of validity is ninety seconds in which a code read over
+ * somebody's shoulder, or relayed by a page pretending to be us, is still
+ * good — unless the step it names is written down and refused next time.
+ * Returning the step is what makes that possible.
+ */
+export function totpStepFor(
+  secretBase32: unknown,
+  code: unknown,
+  atMs: number,
+  window = TOTP_WINDOW
+): number | null {
   const secret = base32Decode(secretBase32)
-  if (secret === null) return false
+  if (secret === null) return null
   const typed = typeof code === 'string' ? code.replace(/\s/g, '') : ''
-  if (!new RegExp(`^\\d{${TOTP_DIGITS}}$`).test(typed)) return false
+  if (!new RegExp(`^\\d{${TOTP_DIGITS}}$`).test(typed)) return null
   const given = Buffer.from(typed, 'utf8')
-  let matched = false
+  let matched: number | null = null
   for (let shift = -window; shift <= window; shift++) {
-    const candidate = Buffer.from(totpAt(secret, atMs + shift * TOTP_STEP_MS), 'utf8')
-    if (candidate.byteLength === given.byteLength && timingSafeEqual(candidate, given)) matched = true
+    const at = atMs + shift * TOTP_STEP_MS
+    const candidate = Buffer.from(totpAt(secret, at), 'utf8')
+    // Every candidate is compared and the loop is not cut short: the answer
+    // takes the same time whichever step matched.
+    if (candidate.byteLength === given.byteLength && timingSafeEqual(candidate, given)) {
+      matched = Math.floor(at / TOTP_STEP_MS)
+    }
   }
   return matched
 }

@@ -370,6 +370,26 @@ export class V2Accounts {
     return { ok: true, account: next, device: attached }
   }
 
+  /**
+   * WOULD THIS DEVICE ATTACH? Asked before a rung is climbed.
+   *
+   * The ladder holds a device payload for ten minutes without acting on it,
+   * and only attaches when a factor passes. Without this, a payload that can
+   * never attach — an unusable key, an id another account holds, an id this
+   * account revoked — would be discovered AFTER a recovery code had been
+   * spent on it. The same rules `attachDevice` applies, asked early and
+   * changing nothing.
+   */
+  mayAttach(username: string, input: unknown): boolean {
+    const account = this.get(username)
+    if (!account) return false
+    const device = this.readDevice(input)
+    if (device === null) return false
+    const owner = this.ownerOfDevice(device.id)
+    if (owner !== null && owner !== account.username) return false
+    return !(account.revoked ?? []).some((r) => r.id === device.id)
+  }
+
   private readDevice(input: unknown): V2Device | null {
     if (typeof input !== 'object' || input === null || Array.isArray(input)) return null
     const raw = input as Partial<DeviceInput>

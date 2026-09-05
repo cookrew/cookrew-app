@@ -13,7 +13,7 @@ import { DoorStore } from '../registry/src/doors'
 import { StarStore } from '../registry/src/stars'
 import { createV2 } from '../registry/src/v2-routes'
 import { base32Decode, totpAt, TOTP_STEP_MS } from '../registry/src/v2-totp'
-import { b64u, ed25519, getAssertion, makeCredential, p256, type Pair } from './support/webauthn'
+import { b64u, ed25519, getAssertion, GET_FLAGS_VERIFIED, makeCredential, p256, type Pair } from './support/webauthn'
 
 /**
  * PHASE 4 OVER HTTP — the sign-in ladder, every route, on the real router.
@@ -112,7 +112,10 @@ async function addTotp(owner: Owner): Promise<string> {
   expect(res.status).toBe(201)
   const { secret, otpauth } = await bodyOf<{ secret: string; otpauth: string }>(res)
   expect(otpauth).toContain(`otpauth://totp/cookrew.dev:${owner.username}`)
-  const code = totpAt(base32Decode(secret) as Buffer, Date.now())
+  // Confirmed with the step BEFORE this one. A code is single use now, and
+  // confirming with the current one would spend the code every test below
+  // then reaches for.
+  const code = codeFor(secret, -1)
   expect((await call('POST', '/v2/me/totp/confirm', { code }, bearer(owner.token))).status).toBe(204)
   return secret
 }
@@ -219,15 +222,26 @@ describe('POST /v2/sessions/:pending/totp', () => {
     expect((await call('POST', `/v2/sessions/${step.pending}/totp`, { code: codeFor(secret) })).status).toBe(410)
   })
 
-  it('takes a code one step either side of now, and nothing further out', async () => {
+  it('takes this step and the next, and never the same code twice', async () => {
     const owner = await claim()
     const secret = await addTotp(owner)
-    for (const shift of [-1, 1]) {
+    const tryCode = async (shift: number): Promise<number> => {
       const step = await askForStep(owner)
-      expect((await call('POST', `/v2/sessions/${step.pending}/totp`, { code: codeFor(secret, shift) })).status).toBe(201)
+      return (await call('POST', `/v2/sessions/${step.pending}/totp`, { code: codeFor(secret, shift) })).status
     }
-    const far = await askForStep(owner)
-    expect((await call('POST', `/v2/sessions/${far.pending}/totp`, { code: codeFor(secret, 5) })).status).toBe(401)
+    expect(await tryCode(0)).toBe(201)
+    /**
+     * RFC 6238 §5.2 — the same code, again, is refused. Ninety seconds of
+     * validity is ninety seconds in which a code read over a shoulder, or
+     * relayed by a page pretending to be us while the owner's own attempt
+     * succeeds, would otherwise still open the account.
+     */
+    expect(await tryCode(0)).toBe(401)
+    // A phone a little fast is still a phone: the next step is ahead of what
+    // was accepted, so it is taken.
+    expect(await tryCode(1)).toBe(201)
+    // And five steps out was never in the window at all.
+    expect(await tryCode(5)).toBe(401)
   })
 
   it('drops the pending after five tries, and answers 410 from then on', async () => {
@@ -358,7 +372,12 @@ describe('approve on a trusted device', () => {
     expect(list[0].deviceName).toBe('Chrome on macOS')
     expect(list[0].kind).toBe('browser')
     expect(list[0].address).toBe('127.0.0.1')
-    expect(list[0].sentence).toBe(`Chrome on macOS at 127.0.0.1 wants to sign in as @${owner.username}.`)
+    // The device chose that name, so it is quoted and is not the sentence's
+    // subject: a device calling itself "cookrew.dev security check" must not
+    // read as our own words in the prompt where the owner decides.
+    expect(list[0].sentence).toBe(
+      `A device calling itself “Chrome on macOS”, at 127.0.0.1, wants to sign in as @${owner.username}.`
+    )
 
     expect(
       (await call('POST', `/v2/me/approvals/${approval}`, { decision: 'approve' }, bearer(owner.token))).status
@@ -475,6 +494,88 @@ describe('“not me”', () => {
   })
 })
 
+describe('an answered request closes every door, not just its own', () => {
+  it('deny stops the other rungs of the pending it denied', async () => {
+    const owner = await claim()
+    const secret = await addTotp(owner)
+    const step = await askForStep(owner)
+    expect(step.next).toEqual(['totp', 'approve'])
+    const { approval } = await bodyOf<{ approval: string }>(await call('POST', `/v2/sessions/${step.pending}/approve`))
+    expect((await call('POST', `/v2/me/approvals/${approval}`, { decision: 'deny' }, bearer(owner.token))).status).toBe(204)
+
+    // The stranger has the password AND the code, and the owner said no.
+    const climbed = await call('POST', `/v2/sessions/${step.pending}/totp`, { code: codeFor(secret) })
+    expect(climbed.status).toBe(410)
+    expect((await bodyOf<{ error: string }>(climbed)).error).toBe('denied')
+    const me = await bodyOf<{ devices: unknown[] }>(await call('GET', '/v2/me', undefined, bearer(owner.token)))
+    expect(me.devices).toHaveLength(1)
+  })
+
+  it('“not me” drops every sign-in this account has in flight', async () => {
+    const owner = await claim()
+    const secret = await addTotp(owner)
+    const other = await askForStep(owner, device('browser', 'A second try'))
+    const theirs = await askForStep(owner, device('browser', 'Chrome on Windows'))
+    const { approval } = await bodyOf<{ approval: string }>(await call('POST', `/v2/sessions/${theirs.pending}/approve`))
+    expect(
+      (await call('POST', `/v2/me/approvals/${approval}`, { decision: 'not-me' }, bearer(owner.token))).status
+    ).toBe(204)
+
+    // The disowned one is unclimbable by its other rungs …
+    const disowned = await call('POST', `/v2/sessions/${theirs.pending}/totp`, { code: codeFor(secret) })
+    expect(disowned.status).toBe(410)
+    // … and so is the second one the same stranger had opened beside it.
+    expect((await call('POST', `/v2/sessions/${other.pending}/totp`, { code: codeFor(secret, 1) })).status).toBe(410)
+
+    // The recovery door beside the ladder is locked too: those codes come off
+    // the same screen the password was taken from.
+    const { codes } = await bodyOf<{ codes: string[] }>(
+      await call('POST', '/v2/me/recovery-codes', {}, bearer(owner.token))
+    )
+    const rescue = await call('POST', '/v2/recovery', {
+      username: owner.username,
+      code: codes[0],
+      device: device('browser', 'Chrome on Windows')
+    })
+    expect(rescue.status).toBe(403)
+    expect((await bodyOf<{ error: string }>(rescue)).error).toBe('password_change_required')
+  })
+
+  it('keeps only the last few sign-ins per account in flight', async () => {
+    const owner = await claim()
+    const first = await askForStep(owner)
+    for (let i = 0; i < 5; i++) await askForStep(owner)
+    // The oldest went to make room — and only this account's, so a stranger
+    // churning their own cannot evict a victim's approval.
+    expect((await call('GET', `/v2/sessions/${first.pending}`)).status).toBe(410)
+  })
+})
+
+describe('a device that could never attach', () => {
+  it('is refused at the password step, before a rescue code is burned', async () => {
+    const owner = await claim()
+    const { codes } = await bodyOf<{ codes: string[] }>(
+      await call('POST', '/v2/me/recovery-codes', {}, bearer(owner.token))
+    )
+    const unusable = { ...device(), jwk: { kty: 'RSA', n: 'nope' } }
+    const res = await call('POST', '/v2/sessions', { username: owner.username, password: PASSWORD, device: unusable })
+    expect(res.status).toBe(400)
+    expect((await bodyOf<{ error: string }>(res)).error).toBe('bad_device')
+
+    // The code was never offered to it, so it still opens the account.
+    const step = await askForStep(owner)
+    expect((await call('POST', `/v2/sessions/${step.pending}/recovery`, { code: codes[0] })).status).toBe(201)
+  })
+
+  it('is refused when another account already holds its id', async () => {
+    const mine = await claim()
+    const theirs = await claim()
+    const held = { ...device('phone', 'iPhone'), id: theirs.deviceId }
+    const res = await call('POST', '/v2/sessions', { username: mine.username, password: PASSWORD, device: held })
+    expect(res.status).toBe(400)
+  })
+})
+
 /* ── the W1 sheet's first button ──────────────────────────────────────────── */
 
 describe('passwordless passkey sign-in', () => {
@@ -485,12 +586,20 @@ describe('passwordless passkey sign-in', () => {
 
     const options = await call('GET', '/v2/sessions/passkey/options')
     expect(options.status).toBe(200)
-    const asked = await bodyOf<{ challenge: string; rpId: string; allowCredentials: unknown[] }>(options)
+    const asked = await bodyOf<{
+      challenge: string
+      rpId: string
+      userVerification: string
+      allowCredentials: unknown[]
+    }>(options)
     // Discoverable: the page does not know who is signing in, so it names no
     // credential and there is nothing here to enumerate accounts with.
     expect(asked.allowCredentials).toEqual([])
     expect(asked.rpId).toBe(site.rpId)
 
+    // The passkey is the WHOLE answer here, so the registry asks for user
+    // verification and the authenticator says it happened.
+    expect(asked.userVerification).toBe('required')
     const joining = device('browser', 'Safari on iOS')
     const credential = getAssertion({
       pair,
@@ -498,7 +607,8 @@ describe('passwordless passkey sign-in', () => {
       challenge: asked.challenge,
       origin: site.origin,
       rpId: site.rpId,
-      signCount: 3
+      signCount: 3,
+      flags: GET_FLAGS_VERIFIED
     })
     const out = await call('POST', '/v2/sessions/passkey', { credential, device: joining })
     expect(out.status).toBe(201)
@@ -506,6 +616,20 @@ describe('passwordless passkey sign-in', () => {
     expect(session.deviceId).toBe(joining.id)
     const me = await bodyOf<{ username: string }>(await call('GET', '/v2/me', undefined, bearer(session.token)))
     expect(me.username).toBe(owner.username)
+  })
+
+  it('refuses a passkey that only proves possession — a tap is not a person', async () => {
+    const owner = await claim()
+    const pair = p256()
+    const credentialId = await addPasskey(owner, pair)
+    const { challenge } = await bodyOf<{ challenge: string }>(await call('GET', '/v2/sessions/passkey/options'))
+    // UP but not UV: a roaming key with no PIN, or one left in an unattended
+    // laptop. Behind a password that is a second factor; on its own it is not
+    // an answer at all.
+    const tapped = getAssertion({ pair, credentialId, challenge, origin: site.origin, rpId: site.rpId, signCount: 4 })
+    const res = await call('POST', '/v2/sessions/passkey', { credential: tapped, device: device() })
+    expect(res.status).toBe(401)
+    expect((await bodyOf<{ error: string }>(res)).error).toBe('passkey_refused')
   })
 
   it('refuses a user handle that is not the credential’s account, and an unknown credential', async () => {
@@ -520,6 +644,7 @@ describe('passwordless passkey sign-in', () => {
       origin: site.origin,
       rpId: site.rpId,
       signCount: 2,
+      flags: GET_FLAGS_VERIFIED,
       userHandle: b64u(Buffer.alloc(16, 1))
     })
     const refused = await call('POST', '/v2/sessions/passkey', { credential, device: device() })
@@ -533,7 +658,8 @@ describe('passwordless passkey sign-in', () => {
       challenge: second,
       origin: site.origin,
       rpId: site.rpId,
-      signCount: 1
+      signCount: 1,
+      flags: GET_FLAGS_VERIFIED
     })
     const unknown = await call('POST', '/v2/sessions/passkey', { credential: stranger, device: device() })
     expect(unknown.status).toBe(401)
@@ -563,7 +689,13 @@ describe('POST /v2/me/totp', () => {
     expect(twice.status).toBe(409)
     expect((await bodyOf<{ error: string }>(twice)).error).toBe('totp_active')
 
-    expect((await call('DELETE', '/v2/me/totp', undefined, bearer(owner.token))).status).toBe(204)
+    // Taking a factor OFF costs the password — the asymmetry the other way
+    // round would let one stolen session lower the account's floor for good.
+    const bare = await call('DELETE', '/v2/me/totp', {}, bearer(owner.token))
+    expect(bare.status).toBe(403)
+    expect((await bodyOf<{ error: string }>(bare)).error).toBe('password_required')
+    expect((await call('DELETE', '/v2/me/totp', { current: 'not it at all' }, bearer(owner.token))).status).toBe(401)
+    expect((await call('DELETE', '/v2/me/totp', { current: PASSWORD }, bearer(owner.token))).status).toBe(204)
     expect((await askForStep(owner)).next).toEqual(['approve'])
   })
 
@@ -615,9 +747,11 @@ describe('POST /v2/me/passkeys', () => {
     const replay = await call('POST', '/v2/me/passkeys', { name: 'Touch ID', credential }, bearer(owner.token))
     expect(replay.status).toBe(401)
 
-    // A passkey is a factor, not a device: the last one may go.
-    expect((await call('DELETE', `/v2/me/passkeys/${id}`, undefined, bearer(owner.token))).status).toBe(204)
-    expect((await call('DELETE', `/v2/me/passkeys/${id}`, undefined, bearer(owner.token))).status).toBe(404)
+    // A passkey is a factor, not a device: the last one may go — for the
+    // password, which is what stops one stolen session stripping the account.
+    expect((await call('DELETE', `/v2/me/passkeys/${id}`, {}, bearer(owner.token))).status).toBe(403)
+    expect((await call('DELETE', `/v2/me/passkeys/${id}`, { current: PASSWORD }, bearer(owner.token))).status).toBe(204)
+    expect((await call('DELETE', `/v2/me/passkeys/${id}`, { current: PASSWORD }, bearer(owner.token))).status).toBe(404)
     expect((await askForStep(owner)).next).toEqual(['approve'])
   })
 

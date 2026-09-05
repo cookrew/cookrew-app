@@ -1,4 +1,5 @@
 import { readJsonBody } from './http'
+import { passwordGate } from './v2-hash-gate'
 import { json, noContent, refuse, refuseFactor, relyingParty, spendChallenge } from './v2-factor-http'
 import { parseRegistration } from './v2-passkeys'
 import type { Decision } from './v2-pending'
@@ -66,8 +67,10 @@ export function handleMeFactorRoute(ctx: V2Context, rest: string[]): boolean {
     return true
   }
   if (rest.length === 1 && rest[0] === 'totp' && method === 'DELETE') {
-    ctx.v2.factors.store.clearTotp(who)
-    noContent(ctx.response)
+    void removeFactor(ctx, who, () => {
+      ctx.v2.factors.store.clearTotp(who)
+      return true
+    })
     return true
   }
   if (rest.length === 2 && rest[0] === 'passkeys' && rest[1] === 'options' && method === 'POST') {
@@ -80,15 +83,49 @@ export function handleMeFactorRoute(ctx: V2Context, rest: string[]): boolean {
   }
   if (rest.length === 2 && rest[0] === 'passkeys' && method === 'DELETE') {
     const id = (ctx.decode(rest[1]) ?? '').toLowerCase()
-    if (!UUID.test(id) || !ctx.v2.factors.store.removePasskey(who, id)) {
-      refuse(ctx.response, 404, 'not_found')
-      return true
-    }
-    noContent(ctx.response)
+    void removeFactor(ctx, who, () => UUID.test(id) && ctx.v2.factors.store.removePasskey(who, id))
     return true
   }
   refuse(ctx.response, 404, 'not_found')
   return true
+}
+
+/**
+ * TAKING A FACTOR OFF COSTS THE PASSWORD.
+ *
+ * Changing a password needs the current one; deleting the thing that PROTECTS
+ * the password needed nothing at all, which is the wrong way round. A stranger
+ * who got one session — one mis-tapped Approve — could strip every passkey and
+ * the authenticator and leave the account password-only for good, with the
+ * owner's "not me" no longer able to restore anything.
+ *
+ * So both removals take `{current}` in the body. A DELETE with a body is
+ * unusual and it is deliberate: the alternative is a verb that says "remove"
+ * and a route that means "remove, and also lower the account's floor".
+ */
+async function removeFactor(ctx: V2Context, username: string, remove: () => boolean): Promise<void> {
+  if (passwordGate.overloaded) {
+    refuse(ctx.response, 503, 'busy', { 'retry-after': '5' })
+    return
+  }
+  const body = await readJsonBody(ctx.request, SMALL_BODY)
+  if (!body.ok) {
+    refuse(ctx.response, body.reason === 'too_large' ? 413 : 400, 'malformed')
+    return
+  }
+  if (typeof body.value.current !== 'string' || body.value.current === '') {
+    refuseFactor(ctx.response, 403, 'password_required')
+    return
+  }
+  if (!(await ctx.v2.accounts.verifyPassword(username, body.value.current))) {
+    refuse(ctx.response, 401, 'bad_credentials')
+    return
+  }
+  if (!remove()) {
+    refuse(ctx.response, 404, 'not_found')
+    return
+  }
+  noContent(ctx.response)
 }
 
 // ── approvals (D6) ────────────────────────────────────────────────────────
@@ -146,6 +183,11 @@ async function answerApproval(ctx: V2Context, username: string, id: string, keep
   if (decision === 'not-me') {
     ctx.v2.accounts.endOtherSessions(username, keepJti)
     ctx.v2.factors.store.setMustChangePassword(username, true)
+    // Every OTHER sign-in in flight goes with it. A password-verified pending
+    // that survives the alarm is the same stranger walking through the door
+    // beside the one just slammed; this one is kept only so its own poll can
+    // say "denied" rather than "expired".
+    ctx.v2.factors.pending.closeAllFor(username, answered.pending)
   }
   noContent(ctx.response)
 }

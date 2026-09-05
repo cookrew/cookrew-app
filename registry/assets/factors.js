@@ -392,7 +392,10 @@
     const row = el('li')
     row.append(el('span', 'chip', 'Request'))
     const middle = el('span')
-    middle.append(el('b', null, request.sentence ?? `${request.deviceName} wants to sign in.`))
+    // The sentence quotes the name the asking device gave itself (see
+    // v2-pending.ts). textContent all the way down: that name is a stranger's
+    // string, and this is the prompt where the owner decides.
+    middle.append(el('b', null, request.sentence ?? 'A device wants to sign in as you.'))
     middle.append(document.createElement('br'))
     middle.append(
       el(
@@ -455,12 +458,17 @@
     if (target.dataset.addPasskey !== undefined) void addPasskey()
     else if (target.dataset.addTotp !== undefined) void addTotp()
     else if (target.dataset.dropPasskey !== undefined) {
-      void api('DELETE', `/v2/me/passkeys/${encodeURIComponent(target.dataset.dropPasskey)}`).then((out) =>
+      // Taking a factor OFF costs the password, the same as changing it: one
+      // session must not be able to lower the account's floor by itself.
+      const current = prompt('Your password, to remove this passkey')
+      if (current === null) return
+      void api('DELETE', `/v2/me/passkeys/${encodeURIComponent(target.dataset.dropPasskey)}`, { current }).then((out) =>
         out.status === 204 ? location.reload() : toast(said(out, 'That passkey was not removed.'), 6000)
       )
     } else if (target.dataset.dropTotp !== undefined) {
-      if (!confirm('Remove the authenticator? The account keeps its password and any passkeys.')) return
-      void api('DELETE', '/v2/me/totp').then((out) =>
+      const current = prompt('Your password, to remove the authenticator')
+      if (current === null) return
+      void api('DELETE', '/v2/me/totp', { current }).then((out) =>
         out.status === 204 ? location.reload() : toast(said(out, 'That did not go through.'), 6000)
       )
     }

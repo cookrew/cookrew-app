@@ -30,6 +30,15 @@ export const PENDING_TTL_MS = 10 * 60 * 1000
 export const PENDING_ATTEMPTS = 5
 /** More pending sign-ins than a busy hour has; a stranger cannot spend it. */
 const PENDING_MAX = 1000
+/**
+ * And a cap PER ACCOUNT. The global one alone meant the oldest pending in the
+ * whole registry was evicted whatever it was — so a caller with any valid
+ * password could churn a thousand of their own and make a victim's approval
+ * vanish as "expired", which is a denial of the approve rung specifically.
+ */
+const PENDING_PER_ACCOUNT = 5
+/** More requests than the owner's prompt can honestly show at once. */
+const APPROVALS_SHOWN = 10
 
 export type Decision = 'approve' | 'deny' | 'not-me'
 
@@ -74,9 +83,17 @@ export interface OpenInput {
   next: readonly Factor[]
 }
 
-/** The one sentence D6 shows and the approvals list repeats. */
+/**
+ * The one sentence D6 shows and the approvals list repeats.
+ *
+ * THE DEVICE NAME IS IN QUOTES, and it is not the sentence's subject. It is
+ * chosen by whoever is asking to sign in — a device calling itself
+ * `cookrew.dev security check` would otherwise be reading as our own words
+ * in the prompt where the owner decides. Quoted, it is plainly a name the
+ * asking device gave itself.
+ */
 export const approvalSentence = (deviceName: string, address: string, username: string): string =>
-  `${deviceName} at ${address} wants to sign in as @${username}.`
+  `A device calling itself “${deviceName}”, at ${address}, wants to sign in as @${username}.`
 
 export class PendingSignIns {
   private readonly now: () => number
@@ -107,8 +124,12 @@ export class PendingSignIns {
       attempts: 0,
       approval: null
     }
-    // Bounded by count as well as by time: the oldest goes rather than the
-    // process growing a map a stranger decides the size of.
+    // Bounded by count as well as by time — this account's own oldest first,
+    // so the pressure of a busy account is felt only by that account.
+    const mine = [...this.pendings.values()].filter((p) => p.username === input.username).sort((a, b) => a.at - b.at)
+    for (const spare of mine.slice(0, Math.max(0, mine.length - (PENDING_PER_ACCOUNT - 1)))) {
+      this.pendings.delete(spare.id)
+    }
     if (this.pendings.size >= PENDING_MAX) {
       const oldest = [...this.pendings.values()].sort((a, b) => a.at - b.at)[0]
       if (oldest) this.pendings.delete(oldest.id)
@@ -151,6 +172,30 @@ export class PendingSignIns {
     this.pendings.delete(id)
   }
 
+  /**
+   * EVERY SIGN-IN THIS ACCOUNT HAS IN FLIGHT, DROPPED — what "not me" means.
+   *
+   * The alarm was pressed. A pending that survives it is a password-verified
+   * record with four tries left on it, and the ladder's other rungs would
+   * have let the same stranger in through the door beside the one just
+   * slammed. `keep` is the disowned request itself, kept only so its poll can
+   * still answer "denied" rather than "expired".
+   */
+  closeAllFor(username: string, keep?: string): number {
+    let closed = 0
+    for (const [id, pending] of this.pendings) {
+      if (pending.username !== username || id === keep) continue
+      this.pendings.delete(id)
+      closed += 1
+    }
+    return closed
+  }
+
+  /** Has this request been answered with anything but an approval? */
+  refused(pending: Pending): boolean {
+    return pending.approval !== null && pending.approval.decision !== null && pending.approval.decision !== 'approve'
+  }
+
   // ── approvals ──────────────────────────────────────────────────────────
 
   /**
@@ -186,6 +231,7 @@ export class PendingSignIns {
       .filter((p) => p.username === username && p.approval !== null && p.approval.decision === null)
       .map((p) => p.approval as Approval)
       .sort((a, b) => b.at - a.at)
+      .slice(0, APPROVALS_SHOWN)
   }
 
   /** Answer one, on behalf of the account it belongs to. */

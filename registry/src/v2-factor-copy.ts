@@ -18,6 +18,8 @@ export type FactorError =
   | 'bad_recovery'
   | 'passkey_refused'
   | 'not_offered'
+  | 'no_factor'
+  | 'password_required'
   | 'expired'
   | 'denied'
   | 'too_many_attempts'
@@ -37,6 +39,8 @@ const SENTENCES: Record<FactorError, string> = {
   bad_recovery: 'That is not one of your recovery codes. Each one opens the account exactly once.',
   passkey_refused: 'That passkey did not answer for this account. Try another way in.',
   not_offered: 'This account cannot be opened that way. Choose one of the ways it offers.',
+  no_factor: 'This account has no way to finish a sign-in on a new device. Use a recovery code on a device it already knows.',
+  password_required: 'Type your password to take a factor off the account.',
   expired: 'That sign-in took too long, so it was dropped. Start again with your password.',
   denied: 'That sign-in was denied on your other device. Nothing was attached.',
   too_many_attempts: 'Too many tries on this sign-in. Start again with your password.',

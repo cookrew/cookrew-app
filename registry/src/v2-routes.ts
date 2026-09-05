@@ -5,6 +5,7 @@ import { SESSION_TTL_MS, V2Tokens, type V2Claims } from './v2-tokens'
 import { Limiter, callerAddress } from './v2-limiter'
 import { passwordGate } from './v2-hash-gate'
 import { v2Error, type V2Error } from './v2-copy'
+import { factorError } from './v2-factor-copy'
 import { createFactorState, type FactorState } from './v2-factor-state'
 import { handleFactorRoute, signInWithLadder } from './v2-factor-routes'
 
@@ -384,6 +385,19 @@ async function redeemRecovery(ctx: V2Context): Promise<void> {
   const named = typeof body.value.username === 'string' ? body.value.username.trim().toLowerCase() : ''
   if (!v2.limits.sessions.take(`signin|${named}|${who}`)) {
     refuse(response, 429, 'rate_limited', undefined, { 'retry-after': '60' })
+    return
+  }
+  /**
+   * "NOT ME" LOCKS THIS DOOR TOO.
+   *
+   * Phase 4's ladder refuses the password until it changes; this route is a
+   * code and a device with no password at all, and the codes usually come off
+   * the same screen the password was phished from. Leaving it open would
+   * leave the alarm with a door beside it. The owner is not stranded: they
+   * still hold the sitting they answered "not me" from.
+   */
+  if (v2.factors.store.mustChangePassword(named)) {
+    v2Json(response, 403, factorError('password_change_required'))
     return
   }
   // Spent BEFORE the device is looked at: a code that was read out is gone
