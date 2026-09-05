@@ -95,21 +95,23 @@ function fakeContainer(): {
  * - scheduleCommitSend(): what _finalizeComposition(true) really does — the
  *   committed text goes out on a setTimeout(0), NOT synchronously.
  */
-function fakeXterm(pty: string[]): {
-  emitCount: () => number
+function fakeXterm(pty: string[], clock: { t: number }): {
+  emitted: () => { count: number; log: readonly { at: number; text: string }[] }
   emit: (text: string) => void
   scheduleCommitSend: (text: string) => void
   scheduleTextareaDiffSend: (text: string) => void
   finalizeNow: (text: string) => void
 } {
   let count = 0
+  let log: { at: number; text: string }[] = []
   let pendingCommit: string | null = null
   const emit = (text: string): void => {
     count += 1
+    log = [...log, { at: clock.t, text }]
     pty.push(text)
   }
   return {
-    emitCount: () => count,
+    emitted: () => ({ count, log }),
     emit,
     // _finalizeComposition(true): the commit goes out on a timer, NOT now.
     scheduleCommitSend: (text: string) => {
@@ -148,11 +150,11 @@ describe('composition commit — the doubling that got b08fbb6 reverted', () => 
   } {
     const pty: string[] = []
     const { target, dispatch, listenerCount } = fakeContainer()
-    const xterm = fakeXterm(pty)
     const clock = { t: 1_000_000 }
+    const xterm = fakeXterm(pty, clock)
     const detach = attachImeBridge(
       target,
-      xterm.emitCount,
+      xterm.emitted,
       (text) => pty.push(text),
       () => clock.t
     )
@@ -211,8 +213,8 @@ describe('composition commit — the doubling that got b08fbb6 reverted', () => 
     // synchronously, so the count comparison alone must decline the event.
     const pty: string[] = []
     const c = fakeContainer()
-    const x = fakeXterm(pty)
-    attachImeBridge(c.target, x.emitCount, (text) => pty.push(text))
+    const x = fakeXterm(pty, { t: 0 })
+    attachImeBridge(c.target, x.emitted, (text) => pty.push(text), () => 0)
     c.target.addEventListener('input', () => x.emit('a'), true)
     c.dispatch('input', { inputType: 'insertText', data: 'a' })
     // MUST flush: the bridge's send is deferred, so asserting before the timers
@@ -301,6 +303,53 @@ describe('composition commit — the doubling that got b08fbb6 reverted', () => 
     r.xterm.finalizeNow('端') // Enter arrives; xterm flushes now, cancels timer
     vi.runAllTimers()
     expect(r.pty).toEqual(['端'])
+  })
+
+  it("DEVICE: 'VVery good' — the first letter arrives by key, then the phrase", () => {
+    // Trace from the harness, matching the owner's phone: xterm emits the key
+    // event's letter BEFORE any input event (keypress path), then that key
+    // fires its own input/insertText for the letter, then Typeless commits the
+    // whole phrase — first letter included — as a second insertText.
+    const r = rig()
+    r.xterm.emit('V') // keypress, before the input event exists
+    r.clock.t += 1
+    r.dispatch('input', { inputType: 'insertText', data: 'V' })
+    r.clock.t += 1
+    r.dispatch('input', { inputType: 'insertText', data: 'Very good' })
+    vi.runAllTimers()
+    expect(r.pty.join('')).toBe('Very good')
+  })
+
+  it("DEVICE: 'FFirst letter' — same shape, and the head is stripped exactly once", () => {
+    const r = rig()
+    r.xterm.emit('F')
+    r.clock.t += 1
+    r.dispatch('input', { inputType: 'insertText', data: 'F' })
+    r.clock.t += 1
+    r.dispatch('input', { inputType: 'insertText', data: 'First letter' })
+    vi.runAllTimers()
+    expect(r.pty.join('')).toBe('First letter')
+  })
+
+  it('a letter xterm sent LONG ago is not treated as a duplicate', () => {
+    // The recency window is what keeps head-stripping from eating a genuine
+    // repeated letter: "F" typed, then two seconds later a phrase starting
+    // with F is dictated. Both belong in the PTY.
+    const r = rig()
+    r.xterm.emit('F')
+    r.clock.t += 2000
+    r.dispatch('input', { inputType: 'insertText', data: 'First' })
+    vi.runAllTimers()
+    expect(r.pty.join('')).toBe('FFirst')
+  })
+
+  it('a recent emit that is NOT a head of the text strips nothing', () => {
+    const r = rig()
+    r.xterm.emit('x')
+    r.clock.t += 1
+    r.dispatch('input', { inputType: 'insertText', data: 'Very good' })
+    vi.runAllTimers()
+    expect(r.pty.join('')).toBe('xVery good')
   })
 
   it('detach removes every listener it added', () => {

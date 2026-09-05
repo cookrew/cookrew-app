@@ -654,15 +654,20 @@ function TerminalOverlay({
       })
       // Counts every emit so the IME bridge can tell whether xterm already
       // claimed an input event — see ime-input-bridge.ts for why iOS needs one.
+      // Count AND a short log of what was sent: the bridge needs the text to
+      // recognise a letter xterm emitted just before the input event it is
+      // deciding about (a count cannot see that — see withoutWhatXtermJustSent).
       let xtermDataCount = 0
+      let xtermRecent: { at: number; text: string }[] = []
       const inputSub = term.onData((input) => {
         xtermDataCount += 1
+        xtermRecent = [...xtermRecent.slice(-15), { at: Date.now(), text: input }]
         cookrew().ptyInput(node.id, input)
       })
       cleanups.push(
         attachImeBridge(
           container,
-          () => xtermDataCount,
+          () => ({ count: xtermDataCount, log: xtermRecent }),
           (text) => cookrew().ptyInput(node.id, text)
         )
       )

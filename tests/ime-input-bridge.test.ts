@@ -19,7 +19,7 @@
 // doubles characters — which would break the input that currently works.
 
 import { describe, expect, it } from 'vitest'
-import { imeTextToForward } from '../src/renderer/src/ime-input-bridge'
+import { imeTextToForward, withoutWhatXtermJustSent } from '../src/renderer/src/ime-input-bridge'
 
 const NOT_SENT = false
 const XTERM_SENT = true
@@ -87,5 +87,28 @@ describe('what it must not claim — doubling is worse than dropping', () => {
   it('an insertText carrying nothing', () => {
     expect(imeTextToForward('insertText', null, NOT_SENT)).toBeNull()
     expect(imeTextToForward('insertText', '', NOT_SENT)).toBeNull()
+  })
+})
+
+describe('withoutWhatXtermJustSent — content, not count', () => {
+  const T = 1000
+  it('a pure duplicate of what xterm just sent forwards nothing', () => {
+    expect(withoutWhatXtermJustSent('V', [{ at: T - 1, text: 'V' }], T)).toBe('')
+  })
+  it('strips the head xterm just sent, keeps the rest', () => {
+    expect(withoutWhatXtermJustSent('Very good', [{ at: T - 1, text: 'V' }], T)).toBe('ery good')
+  })
+  it('ignores an emit outside the window', () => {
+    expect(withoutWhatXtermJustSent('Very good', [{ at: T - 5000, text: 'V' }], T)).toBe('Very good')
+  })
+  it('ignores an emit AFTER the input event', () => {
+    // Only what came before this input can be its duplicate.
+    expect(withoutWhatXtermJustSent('Very good', [{ at: T + 1, text: 'V' }], T)).toBe('Very good')
+  })
+  it('strips only a head, never an interior match', () => {
+    expect(withoutWhatXtermJustSent('Very good', [{ at: T - 1, text: 'good' }], T)).toBe('Very good')
+  })
+  it('with nothing recent, forwards untouched', () => {
+    expect(withoutWhatXtermJustSent('Very good', [], T)).toBe('Very good')
   })
 })

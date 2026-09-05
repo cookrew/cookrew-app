@@ -57,6 +57,32 @@ export function imeTextToForward(
   return data
 }
 
+/** One thing xterm sent to the PTY, and when. */
+export interface XtermEmit {
+  at: number
+  text: string
+}
+
+/** What the bridge is told about xterm's output: a running count plus a recent log. */
+export interface XtermEmitted {
+  count: number
+  log: readonly XtermEmit[]
+}
+
+/**
+ * How far back "xterm just sent this" reaches.
+ *
+ * The owner's "VVery good" / "FFirst letter": a dictation keyboard delivers
+ * the first letter as a KEY event — which xterm emits itself, via keypress,
+ * BEFORE any input event exists — and that same key also fires an
+ * input/insertText for the letter, then the whole phrase, first letter
+ * included, as a second insertText. A count comparison is blind to both: the
+ * emit landed before the input event, so the snapshot already includes it.
+ * Measured in the harness at ~1ms between the emit and the input events.
+ * 50ms is generous for that and far below anything a human types twice.
+ */
+const RECENT_EMIT_MS = 50
+
 /** The slice of an EventTarget the bridge needs; a test can fake it. */
 export interface ImeBridgeTarget {
   addEventListener(type: string, listener: (ev: Event) => void, capture?: boolean): void
@@ -80,6 +106,34 @@ export interface ImeBridgeTarget {
  * on the strength of an imagined event-cancellation defense.
  */
 /**
+ * Strip from `text` whatever xterm itself emitted just before the input event
+ * it came from. Returns '' when the whole thing is a duplicate.
+ *
+ * Content, not count, because the count cannot see an emit that PRECEDED the
+ * input event. Two shapes, both from the owner's device:
+ *   - the letter itself: xterm sent "V" via keypress, then the key's own
+ *     input/insertText "V" arrives — a pure duplicate, forward nothing;
+ *   - the phrase: Typeless then commits "Very good", first letter included,
+ *     so the head xterm already sent is stripped and "ery good" goes out.
+ * Only a HEAD is stripped, and only one that xterm sent within the window: a
+ * genuine repeated letter typed by a human is seconds apart, not ~1ms.
+ */
+export function withoutWhatXtermJustSent(
+  text: string,
+  log: readonly XtermEmit[],
+  inputAt: number
+): string {
+  const recent = log
+    .filter((e) => e.at >= inputAt - RECENT_EMIT_MS && e.at <= inputAt)
+    .map((e) => e.text)
+    .join('')
+  if (recent.length === 0) return text
+  if (text === recent) return ''
+  if (text.startsWith(recent)) return text.slice(recent.length)
+  return text
+}
+
+/**
  * How long the just-committed window may stay open.
  *
  * The window used to be "one macrotask", which is a scheduling event and not a
@@ -94,10 +148,11 @@ const COMMIT_WINDOW_MS = 50
 
 export function attachImeBridge(
   container: ImeBridgeTarget,
-  xtermEmitCount: () => number,
+  emitted: () => XtermEmitted,
   send: (text: string) => void,
   now: () => number = () => Date.now()
 ): () => void {
+  const xtermEmitCount = (): number => emitted().count
   let countBeforeInput = 0
   let inComposition = false
   let commitPending = false
@@ -149,8 +204,10 @@ export function attachImeBridge(
     return true
   }
 
+  let inputAt = 0
   const onInputCapture = (): void => {
     countBeforeInput = xtermEmitCount()
+    inputAt = now()
   }
   const onInputBubble = (event: Event): void => {
     const ie = event as InputEvent
@@ -174,9 +231,11 @@ export function attachImeBridge(
     // ordering, but it is not proven impossible — if it happens, the commit is
     // forwarded twice and this comment is where to start.
     const countAtQueue = xtermEmitCount()
+    const at = inputAt
     later(() => {
       if (xtermEmitCount() !== countAtQueue) return
-      send(text)
+      const remainder = withoutWhatXtermJustSent(text, emitted().log, at)
+      if (remainder.length > 0) send(remainder)
     })
   }
   container.addEventListener('compositionstart', onCompositionStart, false)
