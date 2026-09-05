@@ -5,6 +5,7 @@ import {
   type Minter,
   type TemplateSource
 } from './session-instantiator'
+import { createSeatStore } from './session-seats'
 import {
   instantiatorDeps,
   makeConductorRoute,
@@ -151,7 +152,12 @@ export function wireServing(deps: ServingDeps): Serving {
   const route: ConductorRoute = makeConductorRoute(deps.entry)
   const ender: Ender = makeEnder({ base: deps.base, cutter: deps.callsInFlight, remover: deps.remover })
 
-  const instantiator = new SessionInstantiator(instantiatorDeps({ templates, minter, route, ender }))
+  // SEATS ON DISK. `deps.base` is `~/.cookrew`, the same root the sandboxes
+  // live under, so a service's seats sit beside its sessions rather than in a
+  // second place with its own lifetime.
+  const instantiator = new SessionInstantiator(
+    instantiatorDeps({ templates, minter, route, ender, seats: createSeatStore(deps.base) })
+  )
 
   const resolveInboundCall = async (slug: string, accountId: string): Promise<InboundCall> => {
     const scope = resolveCallScope(slug, {

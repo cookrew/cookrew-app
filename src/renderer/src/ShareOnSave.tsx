@@ -52,9 +52,10 @@ export function saveButtonLabel(access: ShareAccess, busy: boolean): string {
  * meets later: a silent save that 503s a stranger is a failure the owner never
  * sees and the caller cannot explain.
  *
- * `door` is null when nothing in the selection is flagged as the orch. A
- * private save is unaffected — `just-me` publishes nothing, so it needs no
- * door.
+ * `door` is the first agent terminal in the selection — the leader (owner
+ * ruling, 2026-09-05: no orch node needed) — and null only when the selection
+ * holds no terminal at all. A private save is unaffected — `just-me`
+ * publishes nothing, so it needs no door.
  */
 export function canSubmitShare(
   access: ShareAccess,

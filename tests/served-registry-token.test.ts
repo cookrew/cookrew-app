@@ -317,4 +317,132 @@ describe('POST /api/call/assert with { registryToken }', () => {
     const res = await assert(TEMPLATE, { sub: 'ana', challenge, signature, jwk: jwkOf(caller.publicKey) })
     expect(res!.status).toBe(200)
   })
+
+  it('CHALLENGES IN THE DOOR\'S PUBLISHED NAME — the realm is the token audience', async () => {
+    const res = await handleServedRoute(deps, TEMPLATE, 'GET', '/api/call/whoami', {
+      headers: {},
+      body: null
+    })
+    expect(res!.status).toBe(401)
+    const header = res!.headers?.['www-authenticate'] ?? ''
+    // A client reads the realm and asks the registry for a token aud'd to it.
+    // The slug would produce a token no door on earth accepts.
+    expect(header).toContain(`Cookrew realm="${DOOR}"`)
+    expect(header).toMatch(/challenge=[^,\s]+$/)
+  })
+
+  it('falls back to the slug for a door that is not on the relay', async () => {
+    const lan: ServedTemplate = { ...TEMPLATE, slug: 'lan-only', serviceId: 'svc-lan' }
+    const res = await handleServedRoute(deps, lan, 'GET', '/api/call/whoami', {
+      headers: {},
+      body: null
+    })
+    expect(res!.headers?.['www-authenticate']).toContain('Cookrew realm="lan-only"')
+  })
+
+  it('whoami names the account and the device that signed in', async () => {
+    const signed = await assert(TEMPLATE, { registryToken: good({ dev: 'd_laptop' }) })
+    const bearer = (signed!.body as { token: string }).token
+    const res = await handleServedRoute(deps, TEMPLATE, 'GET', '/api/call/whoami', {
+      headers: { authorization: `Bearer ${bearer}` },
+      body: null
+    })
+    expect(res!.status).toBe(200)
+    expect(res!.body).toEqual({ sub: 'acct-ana', handle: 'ana', dev: 'd_laptop' })
+  })
+
+  it('whoami names no handle for a key-based caller — it has no account', async () => {
+    const caller = generateKeyPairSync('ed25519')
+    const ch = await handleServedRoute(deps, TEMPLATE, 'POST', '/api/call/challenge', { headers: {}, body: null })
+    const challenge = (ch!.body as { challenge: string }).challenge
+    const signature = sign(
+      null,
+      Buffer.from(callAssertionPayload(TEMPLATE.serviceId, 'ana', challenge), 'utf8'),
+      caller.privateKey
+    ).toString('base64url')
+    const signed = await assert(TEMPLATE, {
+      sub: 'ana',
+      challenge,
+      signature,
+      jwk: jwkOf(caller.publicKey)
+    })
+    const bearer = (signed!.body as { token: string }).token
+    const res = await handleServedRoute(deps, TEMPLATE, 'GET', '/api/call/whoami', {
+      headers: { authorization: `Bearer ${bearer}` },
+      body: null
+    })
+    expect(res!.body).toEqual({ sub: 'ana' })
+  })
+})
+
+describe('the revoked device — a token that is valid and still refused', () => {
+  const doc = (revoked: readonly string[]): RegistryKeySource => ({
+    fetch: async () => ({ jwk: registryJwk, revoked: [...revoked] })
+  })
+
+  it('carries dev through when the device is not revoked', async () => {
+    const verifier = createRegistryTokenVerifier({ keys: doc([]), now: () => NOW })
+    expect(await verifier.verify(good({ dev: 'd_laptop' }), DOOR)).toEqual({
+      sub: 'ana',
+      dev: 'd_laptop'
+    })
+  })
+
+  it('REFUSES a revoked device, though the signature and the exp are good', async () => {
+    const verifier = createRegistryTokenVerifier({ keys: doc(['d_stolen']), now: () => NOW })
+    expect(await verifier.verify(good({ dev: 'd_stolen' }), DOOR)).toBeNull()
+    // The same token from a device that was not revoked is fine — it is the
+    // device that is refused, not the account.
+    expect(await verifier.verify(good({ dev: 'd_laptop' }), DOOR)).toMatchObject({ sub: 'ana' })
+  })
+
+  it('refetches ONCE on a revoked-miss, so a stale list cannot lock a caller out', async () => {
+    let asked = 0
+    const keys: RegistryKeySource = {
+      fetch: async () => {
+        asked += 1
+        // The first answer is the stale hour-old list; the second is current.
+        return { jwk: registryJwk, revoked: asked === 1 ? ['d_laptop'] : [] }
+      }
+    }
+    const verifier = createRegistryTokenVerifier({ keys, now: () => NOW })
+    expect(await verifier.verify(good({ dev: 'd_laptop' }), DOOR)).toEqual({
+      sub: 'ana',
+      dev: 'd_laptop'
+    })
+    expect(asked).toBe(2)
+  })
+
+  it('still refuses when the refetched list agrees the device is gone', async () => {
+    let asked = 0
+    const keys: RegistryKeySource = {
+      fetch: async () => {
+        asked += 1
+        return { jwk: registryJwk, revoked: ['d_stolen'] }
+      }
+    }
+    const verifier = createRegistryTokenVerifier({ keys, now: () => NOW })
+    expect(await verifier.verify(good({ dev: 'd_stolen' }), DOOR)).toBeNull()
+    expect(asked).toBe(2)
+  })
+
+  it('accepts a bare jwk — a registry that publishes no revocations is not broken', async () => {
+    const verifier = createRegistryTokenVerifier({
+      keys: { fetch: async () => registryJwk },
+      now: () => NOW
+    })
+    expect(await verifier.verify(good({ dev: 'd_laptop' }), DOOR)).toMatchObject({ sub: 'ana' })
+    expect(verifyRegistryToken(good({ dev: 'd_x' }), registryJwk, DOOR, NOW)).toMatchObject({
+      sub: 'ana'
+    })
+  })
+
+  it('refuses a revoked device in the pure check too', () => {
+    const document = { jwk: registryJwk, revoked: ['d_stolen'] }
+    expect(verifyRegistryToken(good({ dev: 'd_stolen' }), document, DOOR, NOW)).toBeNull()
+    expect(verifyRegistryToken(good({ dev: 'd_ok' }), document, DOOR, NOW)).toEqual({
+      sub: 'ana',
+      dev: 'd_ok'
+    })
+  })
 })
