@@ -3,9 +3,16 @@ import type { AccountProfile, AccountStatus } from '../../../shared/account-v2'
 import type { ApprovalRequest } from '../../../shared/account-approvals'
 import type { WorkspaceMeta } from '../../../shared/model'
 import { cookrew } from '../api'
-import { ACCOUNT_COPY, initialsOf, refusalSentence, revokeSentence } from './account-store'
+import {
+  ACCOUNT_COPY,
+  deviceName,
+  initialsOf,
+  refusalSentence,
+  revokeSentence,
+} from './account-store'
 import { ApprovalCard } from './ApprovalCard'
 import { SecurityCard } from './SecurityCard'
+import { securityActions } from './security-actions'
 import '../grant-surface.css'
 
 /**
@@ -69,6 +76,8 @@ export function ProfileSheet({
   const [confirming, setConfirming] = useState<string | null>(null)
   /** The devices waiting for an answer (D6) — main's polled queue. */
   const [requests, setRequests] = useState<readonly ApprovalRequest[]>([])
+  /** The display name while it is being edited; null when it is not. */
+  const [editing, setEditing] = useState<string | null>(null)
   const username = status.username ?? ''
 
   // Re-read whenever the count changes, so approving on the card and the
@@ -122,12 +131,25 @@ export function ProfileSheet({
       })
   }
 
-  const setLock = (ms: number): void => {
-    const call = cookrew().accountSetLock
+  /**
+   * The display name is the ONE profile fact this phase can change.
+   *
+   * Saved on its own, not as part of a form: nothing else on this tab is
+   * editable, so a SAVE that implied otherwise would be lying about its scope.
+   */
+  const saveName = (next: string): void => {
+    const call = cookrew().accountSetProfile
+    setEditing(null)
     if (!call) return
-    void call(ms)
-      .then(onStatus)
-      .catch(() => undefined)
+    void call({ displayName: next.trim() })
+      .then((result) => {
+        if (result.ok) setProfile(result.value)
+        else setError(refusalSentence(result.reason, result.message, username))
+      })
+      .catch((err: unknown) => {
+        console.error('set display name:', err)
+        setError('Something went wrong on this side. Try again.')
+      })
   }
 
   const setReachable = (on: boolean): void => {
@@ -196,10 +218,35 @@ export function ProfileSheet({
 
         {tab === 'PROFILE' && (
           <section className="cr-acct-pane" aria-label="Profile">
-            <p className="gs-sub">
-              {profile?.displayName || username}
-              {profile ? ` · member since ${new Date(profile.claimedAt).toLocaleDateString()}` : ''}
-            </p>
+            {editing === null ? (
+              <p className="gs-sub">
+                {profile?.displayName || username}
+                {profile
+                  ? ` · member since ${new Date(profile.claimedAt).toLocaleDateString()}`
+                  : ''}{' '}
+                <button className="gs-ghost" onClick={() => setEditing(profile?.displayName ?? '')}>
+                  EDIT
+                </button>
+              </p>
+            ) : (
+              <div className="cr-acct-row">
+                <input
+                  className="gs-input"
+                  autoFocus
+                  aria-label="Display name"
+                  placeholder="Your name"
+                  value={editing}
+                  onChange={(e) => setEditing(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') saveName(editing)
+                    if (e.key === 'Escape') setEditing(null)
+                  }}
+                />
+                <button className="gs-primary" onClick={() => saveName(editing)}>
+                  SAVE
+                </button>
+              </div>
+            )}
             {status.envUsername && status.envUsername !== username && (
               /* Phase 6 migrates identity; today's door keeps the env handle,
                  and saying so is better than two names and no explanation. */
@@ -217,7 +264,7 @@ export function ProfileSheet({
               {(profile?.devices ?? []).map((device) => (
                 <li key={device.id} className="cr-acct-device">
                   <span className="cr-acct-kind">{KIND_LABEL[device.kind] ?? 'DEVICE'}</span>
-                  <span className="cr-acct-seclabel">{device.name}</span>
+                  <span className="cr-acct-seclabel">{deviceName(device.name)}</span>
                   {device.current ? (
                     <span className="cr-acct-secstate">THIS DEVICE</span>
                   ) : (
@@ -232,7 +279,7 @@ export function ProfileSheet({
                   )}
                   {confirming === device.id && (
                     <p className="gs-consequence">
-                      {revokeSentence(device.name)}{' '}
+                      {revokeSentence(deviceName(device.name))}{' '}
                       <button className="gs-revoke" onClick={() => revoke(device.id)}>
                         REVOKE IT
                       </button>
@@ -251,7 +298,9 @@ export function ProfileSheet({
           <SecurityCard
             username={username}
             lockAfterMs={status.lockAfterMs}
-            onLockAfterMs={setLock}
+            recoveryCodesSavedAt={status.recoveryCodesSavedAt}
+            recoveryCodesLeft={profile?.recoveryCodesLeft ?? status.recoveryCodesLeft}
+            {...securityActions(onStatus, onClose)}
           />
         )}
 

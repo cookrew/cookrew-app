@@ -53,6 +53,11 @@ const api = {
   accountDevices: () => ipcRenderer.invoke('account:devices'),
   accountRevoke: (deviceId: string) => ipcRenderer.invoke('account:revoke', deviceId),
   accountRecoveryCodes: () => ipcRenderer.invoke('account:recoveryCodes'),
+  /** SAVE AS FILE. Takes nothing: main writes the batch IT minted, never the
+   *  renderer's copy, so this cannot be talked into writing chosen bytes. */
+  accountSaveRecoveryCodes: () => ipcRenderer.invoke('account:saveRecoveryCodes'),
+  /** I SAVED THEM — recorded locally so the RESCUE row stops saying NOT SAVED. */
+  accountCodesSaved: () => ipcRenderer.invoke('account:codesSaved'),
   accountSetLock: (ms: number) => ipcRenderer.invoke('account:setLock', ms),
   accountSetProfile: (patch: { displayName?: string; avatar?: string | null }) =>
     ipcRenderer.invoke('account:setProfile', patch),

@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
-import { DEFAULT_LOCK_AFTER_MS } from '../../../shared/account-v2'
+import { LOCK_CHOICES } from '../../../shared/account-v2'
 import type { FactorsView } from '../../../shared/account-approvals'
 import { cookrew } from '../api'
-import { ACCOUNT_COPY, mustChangeBanner, refusalSentence, type FactorRow } from './account-store'
+import {
+  ACCOUNT_COPY,
+  lockRowLabel,
+  mustChangeBanner,
+  refusalSentence,
+  rescueState,
+  type FactorRow,
+} from './account-store'
 import { FactorRows, Row } from './FactorRows'
 import { NewPasswordCard } from './NewPasswordCard'
 import { TotpSheet } from './TotpSheet'
@@ -18,17 +25,21 @@ import '../grant-surface.css'
  * THE SECURITY CARD (D3) — shown once right after claiming, and again from
  * Profile → Security. Every row is live now.
  *
- * PASSKEY FIRST, by the ruling: it is the recommended factor and it is the
- * one a person already knows how to use. The row is only RECOMMENDED while
- * there is none — a card that keeps recommending something already done stops
- * being read.
+ * PASSKEY FIRST, by the ruling: it is the recommended factor and the one a
+ * person already knows how to use. The row is RECOMMENDED only while there is
+ * none — a card that keeps recommending something already done stops being
+ * read. Phase 4 retires the two COMING rows: nothing on this card is inert any
+ * more, so nothing on it has to apologise for itself.
  *
  * WHEN THIS ELECTRON CANNOT MAKE A PASSKEY, THE ROW SAYS SO. A desktop build
- * without a platform authenticator refuses `navigator.credentials.create`,
- * and the honest answer is the one the design writes: add it in a browser,
- * where it works, and it lands on the same account. What this must never do
- * is report a factor that does not exist — the whole value of the row is that
- * the owner can trust what it says about their way back in.
+ * without a platform authenticator refuses `navigator.credentials.create`, and
+ * the honest answer is the one the design writes: add it in a browser, where
+ * it works, and it lands on the same account. What this must never do is
+ * report a factor that does not exist — the whole value of the row is that the
+ * owner can trust what it says about their way back in.
+ *
+ * THE LOCK IS REACHABLE, not just configurable. Setting a delay and having no
+ * way to lock now is a lock you can only meet by walking away from the desk.
  */
 
 /** Nobody dismisses the codes by reflex: the primary waits five seconds. */
@@ -39,11 +50,19 @@ const THIS_MAC_PASSKEY = 'Touch ID on this Mac'
 export function SecurityCard({
   username,
   lockAfterMs,
+  recoveryCodesSavedAt,
+  recoveryCodesLeft = null,
   onLockAfterMs,
+  onLockNow,
+  onCodesSaved,
 }: {
   username: string
   lockAfterMs: number
+  recoveryCodesSavedAt: number | null
+  recoveryCodesLeft?: number | null
   onLockAfterMs: (ms: number) => void
+  onLockNow: () => void
+  onCodesSaved: () => void
 }): React.JSX.Element {
   const [codes, setCodes] = useState<readonly string[] | null>(null)
   const [factors, setFactors] = useState<FactorsView | null>(null)
@@ -96,6 +115,32 @@ export function SecurityCard({
         console.error('recovery codes:', err)
         setError('Something went wrong on this side. Try again.')
       })
+  }
+
+  /** SAVE AS FILE. Main owns the dialog and the codes; this only asks. */
+  const saveAsFile = (): void => {
+    const call = cookrew().accountSaveRecoveryCodes
+    if (!call) return
+    setError(null)
+    void call()
+      .then((result) => {
+        if (result.ok) {
+          onCodesSaved()
+          setCodes(null)
+          return
+        }
+        // Cancelling a save dialog is a decision, not a failure to report.
+        if (result.reason !== 'cancelled') setError('Could not write that file. Try another place.')
+      })
+      .catch((err: unknown) => {
+        console.error('save recovery codes:', err)
+        setError('Something went wrong on this side. Try again.')
+      })
+  }
+
+  const putAway = (): void => {
+    onCodesSaved()
+    setCodes(null)
   }
 
   /**
@@ -171,6 +216,11 @@ export function SecurityCard({
             <li key={code}>{code}</li>
           ))}
         </ul>
+        {error && (
+          <p className="gs-paste-error" role="alert">
+            {error}
+          </p>
+        )}
         <div className="gs-sheet-foot">
           <button
             className="gs-ghost"
@@ -178,7 +228,10 @@ export function SecurityCard({
           >
             COPY
           </button>
-          <button className="gs-primary" disabled={!settled} onClick={() => setCodes(null)}>
+          <button className="gs-ghost" onClick={saveAsFile}>
+            SAVE AS FILE
+          </button>
+          <button className="gs-primary" disabled={!settled} onClick={putAway}>
             I SAVED THEM
           </button>
         </div>
@@ -186,7 +239,7 @@ export function SecurityCard({
     )
   }
 
-  const lockOn = lockAfterMs > 0
+  const rescue = rescueState(recoveryCodesSavedAt, recoveryCodesLeft)
   const banner = mustChangeBanner(factors)
   return (
     <section className="cr-acct-card" aria-label="Security">
@@ -208,23 +261,38 @@ export function SecurityCard({
         <Row
           kind="RESCUE"
           label="Save your recovery codes"
-          state="NOT SAVED"
+          state={rescue.label}
+          saved={rescue.saved}
           action={
             <button className="gs-primary" onClick={show}>
-              SHOW
+              {rescue.saved ? 'SHOW NEW' : 'SHOW'}
             </button>
           }
         />
         <Row
           kind="LOCK"
-          label="Lock Cookrew after 15 min idle"
+          label={lockRowLabel(lockAfterMs)}
           action={
-            <button
-              className={`gs-ghost${lockOn ? ' on' : ''}`}
-              aria-pressed={lockOn}
-              onClick={() => onLockAfterMs(lockOn ? 0 : DEFAULT_LOCK_AFTER_MS)}
+            <select
+              className="cr-acct-select"
+              aria-label="Lock after idle"
+              value={String(lockAfterMs)}
+              onChange={(e) => onLockAfterMs(Number(e.target.value))}
             >
-              {lockOn ? 'ON' : 'OFF'}
+              {LOCK_CHOICES.map((choice) => (
+                <option key={choice.ms} value={String(choice.ms)}>
+                  {choice.label}
+                </option>
+              ))}
+            </select>
+          }
+        />
+        <Row
+          kind="LOCK"
+          label="Lock this Mac now"
+          action={
+            <button className="gs-ghost" onClick={onLockNow}>
+              LOCK NOW
             </button>
           }
         />
@@ -234,6 +302,7 @@ export function SecurityCard({
           {error}
         </p>
       )}
+      <p className="gs-foot-note">{ACCOUNT_COPY.LOCK_NOW_WHY}</p>
       <p className="gs-foot-note">{ACCOUNT_COPY.SECURITY_WHY}</p>
       {totp && (
         <TotpSheet

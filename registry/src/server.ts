@@ -11,6 +11,7 @@ import type { IdentityService, TokenScope } from './identity'
 import type { Terms } from './terms'
 import type { PaymentFailure } from './payment'
 import { DoorStore, doorPath, type DoorInput, type DoorRecord } from './doors'
+import type { V2Seat } from './v2-seats'
 import { createRelayHttp, type RelayHttp } from './relay-http'
 import { RESERVED_HANDLES, handlePage, homePage, marketPage, marketQuery, teamPage } from './site'
 import { handleSiteRoute } from './site-routes'
@@ -20,7 +21,9 @@ import { respondPage } from './site-shell'
 import type { StarStore } from './stars'
 import type { Release, ReleaseCache } from './releases'
 import { handleV2Route, signedIn, v2AccountOf, type V2Identity } from './v2-routes'
+import { teamAddress } from './v2-seats'
 import { mePage } from './site-account'
+import { relayStubPage } from './site-reach'
 
 /**
  * REGISTRY SERVER (P2-A1) — routes only. Every answer is chosen by a decision
@@ -293,7 +296,11 @@ export function createRegistry(deps: RegistryDeps): Server {
         // which says nothing behind a terminator.
         secure:
           request.headers['x-forwarded-proto'] === 'https' || (deps.origin?.startsWith('https://') ?? false),
-        decode
+        decode,
+        // The directory, for the seat routes: a seat is held at a TEAM, and
+        // the team's own terms (free or priced, and on which rails) are the
+        // door's to state, never the seat's.
+        ...(deps.doors === undefined ? {} : { doors: deps.doors })
       })
     )
       return
@@ -753,6 +760,18 @@ export function createRegistry(deps: RegistryDeps): Server {
       return
     }
 
+    // GET /relay/@<username>/desktop/<deviceId> — the picker's relay path.
+    // PHASE 3 builds the private session behind it; until then this is a page
+    // that says so, because the picker sends a PERSON here and a person needs
+    // a sentence, not a 404 that reads as "you mistyped".
+    if (deps.v2 && method === 'GET' && parts.length === 4 && parts[0] === 'relay' && parts[2] === 'desktop') {
+      // The name comes from the SESSION, never from the path: a page that
+      // echoed whatever a link put in the URL is a page a link can write.
+      const signed = signedIn(request, deps.v2)
+      respondPage(response, relayStubPage(signed?.account.username ?? null))
+      return
+    }
+
     // ── THE PUBLIC FACE, last ────────────────────────────────────────────
     //
     // Last because an owner's page lives at /<handle>, which would otherwise
@@ -826,7 +845,10 @@ export function createRegistry(deps: RegistryDeps): Server {
             origin: at,
             stars: starsOf(handle, name),
             starred: account !== null && (deps.stars?.starred(account, handle, name) ?? false),
-            account
+            account,
+            // W2: the page's state is decided HERE, by what the request holds.
+            // A seated guest may see the room; only the owner sees the list.
+            ...seatState(deps.v2, found, account, url.searchParams.get('ask'))
           })
         )
         return
@@ -837,6 +859,42 @@ export function createRegistry(deps: RegistryDeps): Server {
   }
 }
 
+
+/**
+ * WHAT A TEAM PAGE MAY SAY TO THIS READER (W2).
+ *
+ * One function so the five states cannot drift apart: signed out holds
+ * nothing; a signed-in stranger holds no seat; a seated guest holds a seat and
+ * may see the room; the owner holds the list and the grant form. The `?ask=`
+ * on the link a guest copied is only ever read back as a username, and only
+ * for the owner — it is a prefill, never an instruction.
+ */
+function seatState(
+  v2: V2Identity | undefined,
+  door: DoorRecord | null,
+  account: string | null,
+  ask: string | null
+): {
+  seat: V2Seat | null
+  seated: readonly string[]
+  seats: readonly V2Seat[]
+  owner: boolean
+  ask: string | null
+} {
+  const none = { seat: null, seated: [], seats: [], owner: false, ask: null }
+  if (!v2 || door === null || account === null) return none
+  const team = teamAddress(door.handle, door.name)
+  const owner = account === door.handle
+  const seat = v2.seats.activeFor(team, account)
+  const asked = typeof ask === 'string' && /^@?[a-z0-9][a-z0-9-]{0,31}$/.test(ask) ? ask.replace(/^@/, '') : null
+  return {
+    seat,
+    seated: owner || seat !== null ? v2.seats.seatedAt(team) : [],
+    seats: owner ? v2.seats.forTeam(team) : [],
+    owner,
+    ask: owner ? asked : null
+  }
+}
 
 /**
  * REGISTERING A DOOR — the write side of the directory.

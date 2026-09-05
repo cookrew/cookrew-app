@@ -19,7 +19,7 @@ export function startPage(release: Release | null): Page {
       title: 'Get started with Cookrew — install, place your first agent, build a crew',
       kind: 'app',
       active: 'start',
-      scripts: ['site.js'],
+      scripts: ['device-id.js', 'site.js'],
       description: 'Two steps: place an agent and let it orchestrate your workflow teammates, then save the team as a preset and choose to publish it at cookrew.dev — with a crew builder that writes the commands.',
       path: '/start',
       jsonLd: [

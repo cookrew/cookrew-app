@@ -519,6 +519,8 @@ export interface CookrewApi {
   accountDevices?: () => Promise<AccountResult<readonly AccountDevice[]>>;
   accountRevoke?: (deviceId: string) => Promise<AccountResult<void>>;
   accountRecoveryCodes?: () => Promise<AccountResult<readonly string[]>>;
+  accountSaveRecoveryCodes?: () => Promise<{ ok: boolean; reason?: string }>;
+  accountCodesSaved?: () => Promise<AccountStatus>;
   accountSetLock?: (ms: number) => Promise<AccountStatus>;
   accountSetProfile?: (patch: {
     displayName?: string;

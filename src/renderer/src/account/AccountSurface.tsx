@@ -6,6 +6,7 @@ import { ClaimSheet } from './ClaimSheet'
 import { LockScreen } from './LockScreen'
 import { ProfileSheet, type ProfileTab } from './ProfileSheet'
 import { SecurityCard } from './SecurityCard'
+import { securityActions } from './security-actions'
 
 /**
  * THE ACCOUNT SURFACE, assembled — one hook, so App gains three lines.
@@ -120,12 +121,9 @@ export function useAccountSurface(): AccountSurface {
             <SecurityCard
               username={status.username}
               lockAfterMs={status.lockAfterMs}
-              onLockAfterMs={(ms) => {
-                void cookrew()
-                  .accountSetLock?.(ms)
-                  .then(setStatus)
-                  .catch(() => undefined)
-              }}
+              recoveryCodesSavedAt={status.recoveryCodesSavedAt}
+              recoveryCodesLeft={status.recoveryCodesLeft}
+              {...securityActions(setStatus, () => setSheet('none'))}
             />
             <div className="gs-sheet-foot">
               <button className="gs-ghost" onClick={() => setSheet('none')}>

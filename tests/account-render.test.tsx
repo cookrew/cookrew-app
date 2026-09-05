@@ -14,6 +14,7 @@ import { AccountAvatar } from '../src/renderer/src/account/Avatar'
 import { ClaimSheet } from '../src/renderer/src/account/ClaimSheet'
 import { LockScreen } from '../src/renderer/src/account/LockScreen'
 import { SecurityCard } from '../src/renderer/src/account/SecurityCard'
+import { ProfileSheet } from '../src/renderer/src/account/ProfileSheet'
 import { ACCOUNT_COPY } from '../src/renderer/src/account/account-store'
 
 /**
@@ -33,7 +34,9 @@ function stubBridge(): void {
     clearTimeout: () => undefined,
   }
 }
-const status = (over: Partial<AccountStatus> = {}): AccountStatus => ({
+/** A complete status; `over` is spread over it so the result stays AccountStatus
+ *  rather than every field widening to include undefined. */
+const BASE: AccountStatus = {
   username: 'drej',
   displayName: '',
   avatar: null,
@@ -43,8 +46,11 @@ const status = (over: Partial<AccountStatus> = {}): AccountStatus => ({
   envUsername: null,
   sessionExpired: false,
   workspacesReachable: true,
-  ...over,
-})
+  recoveryCodesSavedAt: null,
+  recoveryCodesLeft: null,
+}
+
+const status = (over: Partial<AccountStatus> = {}): AccountStatus => ({ ...BASE, ...over })
 
 // Collection time as well as test time: the sheets below are painted in their
 // describe bodies, which run before any hook.
@@ -154,10 +160,21 @@ describe('the claim sheet paints, and refuses in sentences (D2)', () => {
   })
 })
 
-describe('the security card offers the whole ladder (D3)', () => {
-  const html = renderToStaticMarkup(
-    <SecurityCard username="drej" lockAfterMs={900_000} onLockAfterMs={() => undefined} />,
+const card = (over: Partial<React.ComponentProps<typeof SecurityCard>> = {}): string =>
+  renderToStaticMarkup(
+    <SecurityCard
+      username="drej"
+      lockAfterMs={900_000}
+      recoveryCodesSavedAt={null}
+      onLockAfterMs={() => undefined}
+      onLockNow={() => undefined}
+      onCodesSaved={() => undefined}
+      {...over}
+    />,
   )
+
+describe('the security card offers the whole ladder (D3)', () => {
+  const html = card()
 
   it('offers passkey first and RECOMMENDED, then the authenticator — both live', () => {
     expect(html).toContain('Add a passkey (Touch ID)')
@@ -172,22 +189,64 @@ describe('the security card offers the whole ladder (D3)', () => {
     expect(html.match(/>ADD</g)).toHaveLength(2)
   })
 
-  it('offers the one factor it can give, and the one lock it can enforce', () => {
-    expect(html).toContain('Save your recovery codes')
-    expect(html).toContain('>SHOW<')
-    expect(html).toContain('Lock Cookrew after 15 min idle')
-    expect(html).toContain('>ON<')
+  it('draws NO muted row at all — the COMING pair is what phase 4 replaced', () => {
+    // The fix-up drew the inert rows grey with a dashed badge so nobody spent
+    // a click on them. Phase 4 removes the reason: every factor row now does
+    // what it says, so a muted marker here would be describing an account
+    // state that no longer exists.
+    expect(html).not.toContain('cr-acct-coming')
+    expect(html).not.toContain('cr-acct-soon')
+    expect(html).toContain('<li class="cr-acct-secrow"><span class="cr-acct-kind">FACTOR')
+    expect(html).toContain('<li class="cr-acct-secrow"><span class="cr-acct-kind">RESCUE')
   })
 
   it('says why a second factor is worth it', () => {
     expect(html).toContain(ACCOUNT_COPY.SECURITY_WHY)
   })
+})
 
-  it('says OFF when the idle lock is off', () => {
-    const off = renderToStaticMarkup(
-      <SecurityCard username="drej" lockAfterMs={0} onLockAfterMs={() => undefined} />,
+describe('the lock can be set AND reached from the card', () => {
+  it('offers the five delays, with the current one selected', () => {
+    const html = card({ lockAfterMs: 300_000 })
+    for (const label of ['1 min', '5 min', '15 min', '30 min', 'off']) {
+      expect(html).toContain(`>${label}</option>`)
+    }
+    expect(html).toContain('<option value="300000" selected="">5 min</option>')
+    expect(html).toContain('Lock Cookrew after 5 min idle')
+  })
+
+  it('offers LOCK NOW — a lock you can only meet by walking away is not one', () => {
+    expect(card()).toContain('LOCK NOW')
+    expect(card()).toContain('Lock this Mac now')
+  })
+
+  it('says the delay is off without pretending the row is gone', () => {
+    const off = card({ lockAfterMs: 0 })
+    expect(off).toContain('<option value="0" selected="">off</option>')
+    expect(off).toContain('Lock Cookrew when idle')
+    expect(off).toContain('LOCK NOW')
+  })
+})
+
+describe('the RESCUE row tracks what was actually saved', () => {
+  it('says NOT SAVED, with SHOW, before anything happened', () => {
+    const html = card()
+    expect(html).toContain('NOT SAVED')
+    expect(html).toContain('>SHOW<')
+  })
+
+  it('says when they were saved, with a check, and offers SHOW NEW', () => {
+    const html = card({ recoveryCodesSavedAt: 1_757_116_800_000 })
+    expect(html).not.toContain('NOT SAVED')
+    expect(html).toContain('Saved ')
+    expect(html).toContain('✓')
+    expect(html).toContain('SHOW NEW')
+  })
+
+  it('adds the registry’s remaining count when it sent one', () => {
+    expect(card({ recoveryCodesSavedAt: 1_757_116_800_000, recoveryCodesLeft: 6 })).toContain(
+      '6 left',
     )
-    expect(off).toContain('>OFF<')
   })
 })
 
@@ -212,5 +271,41 @@ describe('the lock screen (D5)', () => {
   it('covers the canvas as its own layer, not as a sheet', () => {
     expect(html).toContain('cr-acct-lock')
     expect(html).toContain('aria-modal="true"')
+  })
+})
+
+describe('the profile sheet (D4)', () => {
+  const sheet = (over: Partial<React.ComponentProps<typeof ProfileSheet>> = {}): string =>
+    renderToStaticMarkup(
+      <ProfileSheet
+        status={status()}
+        onClose={() => undefined}
+        onStatus={() => undefined}
+        {...over}
+      />,
+    )
+
+  it('shows all five tabs, so a person knows where a thing will appear', () => {
+    const html = sheet()
+    // `&` arrives escaped, as it must in markup.
+    for (const tab of ['PROFILE', 'DEVICES', 'SECURITY', 'WORKSPACES', 'SEATS &amp; TEAMS']) {
+      expect(html).toContain(tab)
+    }
+  })
+
+  it('offers EDIT for the display name — the one profile fact this phase can change', () => {
+    expect(sheet()).toContain('>EDIT<')
+  })
+
+  it('says No seats yet. rather than leaving the tab blank', () => {
+    expect(sheet({ initialTab: 'SEATS & TEAMS' })).toContain('No seats yet.')
+  })
+
+  it('says what leaves this Mac before offering the reachability toggle', () => {
+    const html = sheet({ initialTab: 'WORKSPACES' })
+    expect(html).toContain('Reachable from my other devices')
+    expect(html).toContain('Names and ids only leave this Mac')
+    // Recorded program decision: reachability defaults ON.
+    expect(html).toContain('checked=""')
   })
 })

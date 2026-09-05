@@ -17,17 +17,25 @@ export function Row({
   label,
   state,
   action,
+  saved = false,
 }: {
   kind: string
   label: string
   state?: string
   action: React.ReactNode
+  /** The RESCUE row's tick, once the owner says they wrote the codes down. */
+  saved?: boolean
 }): React.JSX.Element {
   return (
     <li className="cr-acct-secrow">
       <span className="cr-acct-kind">{kind}</span>
       <span className="cr-acct-seclabel">{label}</span>
-      {state && <span className="cr-acct-secstate">{state}</span>}
+      {state && (
+        <span className="cr-acct-secstate">
+          {saved && <span aria-hidden="true">✓ </span>}
+          {state}
+        </span>
+      )}
       {action}
     </li>
   )
