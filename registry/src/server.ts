@@ -7,7 +7,8 @@ import { html, json, readJsonBody } from './http'
 import { handlePublish, handleRotate } from './publish-routes'
 import type { PricingDeps } from './authorize'
 import { publicKeyFromId, verifyManifest } from '../../src/main/preset-publish'
-import type { IdentityService, TokenScope } from './identity'
+import { readScope, type IdentityService, type TokenScope } from './identity'
+import { handleAccountRoutes } from './account-routes'
 import type { Terms } from './terms'
 import type { PaymentFailure } from './payment'
 import { DoorStore, doorPath, type DoorInput, type DoorRecord } from './doors'
@@ -214,7 +215,9 @@ export function createRegistry(deps: RegistryDeps): Server {
     const token = auth.startsWith('Bearer ') ? auth.slice(7) : cookie
     if (!token) return null
     const claims = identity.verifyToken(token)
-    if (!claims || claims.scope === 'call') return null
+    // A `call` token is for one door and a `link` token is for one bind; both
+    // name this reader, and neither is a permission to read as them here.
+    if (!claims || claims.scope === 'call' || claims.scope === 'link') return null
     return claims.sub
   }
   const starsOf = (handle: string, name: string): number => deps.stars?.count(handle, name) ?? 0
@@ -490,6 +493,16 @@ export function createRegistry(deps: RegistryDeps): Server {
       return
     }
 
+    // ── ACCOUNTS — one username, many devices ────────────────────────────
+    //
+    // Its own module, and it owns the whole /v1/accounts prefix: minting a
+    // handle, binding a device to it, listing them, revoking one, link codes
+    // and passkeys. Mounted only with an identity service, because every one of
+    // those decisions is made against a token this registry signed.
+    if (deps.identity && handleAccountRoutes(deps.identity, request, response, method, parts)) {
+      return
+    }
+
     // POST /v1/identity/challenge — a login nonce for the site's own ceremony.
     // Every other route hands one out only inside a 401; a page signing in on
     // purpose should not have to provoke a refusal to get one.
@@ -500,7 +513,13 @@ export function createRegistry(deps: RegistryDeps): Server {
     // GET /v1/identity/key — the token key's public half, for a DOOR to verify
     // a call token without asking here on every knock.
     if (deps.identity && method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'identity' && parts[2] === 'key') {
-      json(response, 200, { jwk: deps.identity.publicKeyJwk() })
+      // `jwk` stays exactly where it was: a door built against the old shape
+      // keeps verifying. `revoked` is additive — the device ids whose tokens a
+      // door should refuse before their ten minutes are up.
+      json(response, 200, {
+        jwk: deps.identity.publicKeyJwk(),
+        revoked: deps.identity.revokedDevices()
+      })
       return
     }
     // GET /v1/identity/whoami — the account a Bearer (or the site cookie) names.
@@ -557,18 +576,26 @@ export function createRegistry(deps: RegistryDeps): Server {
           // absent value falls back to `download`: the narrower scope is the
           // safe default, and a caller asking for something unrecognised must
           // not be handed the broader one.
-          const scope: TokenScope =
-            parsed.scope === 'publish' ? 'publish' : parsed.scope === 'call' ? 'call' : 'download'
-          const out = identity.assert(
-            {
-              credentialId: parsed.credentialId,
-              clientDataJSON: parsed.clientDataJSON,
-              authenticatorData: parsed.authenticatorData,
-              signature: parsed.signature
-            },
-            scope,
-            typeof parsed.aud === 'string' ? parsed.aud : undefined
-          )
+          const scope: TokenScope = readScope(parsed.scope)
+          const aud = typeof parsed.aud === 'string' ? parsed.aud : undefined
+          // TWO SHAPES, ONE ROUTE. A `credential` means a real WebAuthn
+          // assertion from a platform passkey, resolved through the accounts
+          // table; anything else is the handle-shaped ceremony the site and
+          // the app perform with their own keys.
+          const out =
+            typeof (parsed as { credential?: unknown }).credential === 'object' &&
+            (parsed as { credential?: unknown }).credential !== null
+              ? identity.assertPasskey(parsed as never, scope, aud)
+              : identity.assert(
+                  {
+                    credentialId: parsed.credentialId,
+                    clientDataJSON: parsed.clientDataJSON,
+                    authenticatorData: parsed.authenticatorData,
+                    signature: parsed.signature
+                  },
+                  scope,
+                  aud
+                )
           // The refusal REASON stays server-side. A client learns only that the
           // ceremony did not take, because which check failed is a map of the
           // verifier for anyone probing it.
@@ -612,6 +639,16 @@ export function createRegistry(deps: RegistryDeps): Server {
             ? [
                 'POST /v1/identity/register',
                 'POST /v1/identity/assert',
+                'POST /v1/accounts',
+                'HEAD /v1/accounts/:handle',
+                'GET /v1/accounts/:handle',
+                'GET /v1/accounts/:handle/devices',
+                'POST /v1/accounts/:handle/devices',
+                'DELETE /v1/accounts/:handle/devices/:id',
+                'POST /v1/accounts/:handle/link-codes',
+                'POST /v1/accounts/:handle/link',
+                'POST /v1/accounts/:handle/passkey/options',
+                'POST /v1/accounts/:handle/passkey',
                 'POST /v1/presets',
                 'POST /v1/presets/:id/rotate'
               ]
