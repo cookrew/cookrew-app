@@ -44,6 +44,32 @@ export const SITE_FRAMES = `${SITE_ASSETS}site/`
 export const SITE_FONTS = '/assets/'
 export { GITHUB_REPO, SITE_ORIGIN } from './site-content'
 
+/** W1 — one sheet, two tabs. Register is sign-in plus a confirmation. */
+export const ACCOUNT_SHEET = `<dialog id="account-sheet" class="card acct" aria-label="Your cookrew.dev account">
+<form method="dialog" id="account-form">
+<div class="acct-tabs" role="tablist">
+<button class="btn sm primary" type="button" role="tab" aria-selected="true" data-acct-tab="signin">Sign in</button>
+<button class="btn sm" type="button" role="tab" aria-selected="false" data-acct-tab="register">Register</button>
+</div>
+<p class="meta" id="acct-lede">A username and a password. The site never asks for an email.</p>
+<label class="acct-row"><span>Username</span>
+<input id="acct-username" name="username" autocomplete="username" spellcheck="false" maxlength="32" placeholder="mira">
+<em class="chip" id="acct-username-note" hidden></em></label>
+<label class="acct-row"><span>Password</span>
+<input id="acct-password" name="password" type="password" autocomplete="current-password" maxlength="256">
+<em class="chip" id="acct-password-note" hidden></em></label>
+<label class="acct-row" id="acct-confirm-row" hidden><span>Confirm</span>
+<input id="acct-confirm" name="confirm" type="password" autocomplete="new-password" maxlength="256">
+<em class="chip" id="acct-confirm-note" hidden></em></label>
+<p class="meta" id="acct-message" role="status"></p>
+<div class="row">
+<button class="btn primary" id="acct-submit" value="go">Continue</button>
+<button class="btn" value="cancel" formnovalidate>Cancel</button>
+</div>
+<p class="meta" id="acct-foot">Forgot it? Any of your devices can let you in; or a recovery code.</p>
+</form>
+</dialog>`
+
 export type PageKind = 'document' | 'app'
 
 const CSP: Record<PageKind, string> = {
@@ -194,7 +220,7 @@ function shell(options: ShellOptions, main: string): string {
     .map((s) => `<link rel="stylesheet" href="/assets/${esc(s)}?v=${ASSET_VERSION}">`)
     .join('')
   return `<!doctype html>
-<html lang="en"><head>${head(options)}${styles}<style>${FONT_FACES}${SITE_STYLE}</style>${scripts}</head>
+<html lang="en"><head>${head(options)}${styles}<style>${FONT_FACES}${SITE_STYLE}${ACCOUNT_STYLE}</style>${scripts}</head>
 <body>
 <header class="hdr"><div class="wrap">
 <a class="mark" href="/">${LOGO}<span>COOK<b>REW</b></span></a>
@@ -207,6 +233,7 @@ ${main}
 <p class="meta" style="margin-top:12px">Cookrew is open source under the MIT license. Every page here is generated from the registry's live directory; nothing is staged, and every number carries its date.</p>
 </div></footer>
 <div class="toast" id="toast" hidden></div>
+${options.kind === 'app' ? ACCOUNT_SHEET : ''}
 </body></html>`
 }
 
@@ -378,4 +405,19 @@ ul.one-liners li:last-child{border-bottom:none}ul.one-liners a{text-decoration:n
 @media (max-width:700px){ul.one-liners li{grid-template-columns:1fr}}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--cream-hi);border:2px solid var(--line);box-shadow:4px 4px 0 var(--line);padding:10px 14px;font-size:14px;display:none;z-index:99;max-width:90vw}
 .toast.on{display:block}
+`
+/** The sheet's and /me's own dress, appended to the site's one stylesheet. */
+export const ACCOUNT_STYLE = `
+dialog.acct{max-width:420px;width:calc(100vw - 32px);border:2px solid var(--line);box-shadow:6px 6px 0 var(--line);background:var(--cream-hi);color:var(--ink);padding:20px}
+dialog.acct::backdrop{background:rgba(20,17,10,.55)}
+.acct-tabs{display:flex;gap:6px;margin-bottom:12px}
+.acct-row{display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:center;margin:10px 0}
+.acct-row>span{grid-column:1/-1;font:9px var(--font-pixel);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft)}
+.acct-row input{font:14px var(--font-mono);padding:9px 11px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink);outline:none;width:100%}
+.acct-row input:focus{background:var(--amber-soft)}
+.acct-row .chip{justify-self:end}
+.acct-row .chip.ok{background:var(--hp);color:#14110a}.acct-row .chip.no{background:var(--rose);color:#fffef5}
+.me-head{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.avatar{width:56px;height:56px;display:grid;place-items:center;border:2px solid var(--line);box-shadow:3px 3px 0 var(--line);background:var(--amber);color:#2d2a20;font:700 18px var(--font-pixel);object-fit:cover}
+ul.me-list li{grid-template-columns:auto 1fr auto}
 `
