@@ -39,10 +39,30 @@ function mainSources(): string[] {
     .map((f) => readFileSync(path.join(dir, f), 'utf8'))
 }
 
+/**
+ * A THIRD FORM: a declared channel table.
+ *
+ * The account surface (account-ipc.ts) registers its channels by iterating a
+ * `const ACCOUNT_CHANNELS = [...] as const` and handing each to a `register`
+ * the call site supplies — which is what applies the owner-only guard to all
+ * of them by construction instead of twelve times by hand. No channel name is
+ * ever spelled next to `ipcMain.handle`, so the two scrapes above see none of
+ * them and would call every one of their preload methods an orphan.
+ *
+ * Reading the table is not a loophole: the module's own test asserts that
+ * `registerAccountIpc` registers exactly this set and nothing else, so the
+ * array IS the registration.
+ */
+const declaredTables = (src: string): string[] =>
+  [...src.matchAll(/const\s+\w*_CHANNELS\s*=\s*\[([\s\S]*?)\]\s*as const/g)].flatMap((m) =>
+    matchAll(m[1], /['"]([^'"]+)['"]/g)
+  )
+
 const handled = (): string[] =>
   mainSources().flatMap((src) => [
     ...matchAll(src, /ipcMain\.handle\(\s*['"]([^'"]+)['"]/g),
-    ...matchAll(src, /(?<!\.)\bhandle\(\s*['"]([^'"]+)['"]/g)
+    ...matchAll(src, /(?<!\.)\bhandle\(\s*['"]([^'"]+)['"]/g),
+    ...declaredTables(src)
   ])
 
 const invoked = (): string[] => matchAll(preloadSrc, /ipcRenderer\.invoke\(\s*['"]([^'"]+)['"]/g)

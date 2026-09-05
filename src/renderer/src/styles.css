@@ -5359,3 +5359,210 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
      LOD pane measurements read it — while every heavy inner layer drops. */
   display: none;
 }
+
+/* ---- identity v2: the account surface (D1–D5) ----
+   The avatar lives in the header's brand group and must not change the bar's
+   height, so it is the mark's own 24 px. Everything else here rides the gs-*
+   sheet primitives (grant-surface.css) — this file adds only what identity
+   itself needs, under one prefix. */
+
+.cr-acct-avatar {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  background: var(--amber);
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+  cursor: pointer;
+  overflow: visible;
+}
+
+/* NOBODY YET. Dashed reads as a slot waiting to be filled; it never pulses
+   and never nags, because everything here works without an account. */
+.cr-acct-none {
+  border-style: dashed;
+  background: transparent;
+  color: var(--muted);
+}
+
+.cr-acct-face {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+
+/* The same rose badge the BOARD button wears for attention, offset onto the
+   avatar's shoulder. Two badge styles for "something needs you" would make
+   neither mean anything. */
+.cr-acct-badge {
+  position: absolute;
+  top: -6px;
+  right: -8px;
+}
+
+/* The sheets' larger avatar: the profile head and the lock card. */
+.cr-acct-big {
+  width: 44px;
+  height: 44px;
+  font-size: 15px;
+  cursor: default;
+}
+
+.cr-acct-sheet .cr-acct-who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* A field and its verdict on one line — the reason is always beside it. */
+.cr-acct-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cr-acct-tag {
+  flex: 0 0 auto;
+  min-width: 62px;
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.cr-acct-good { color: var(--hp); }
+.cr-acct-bad { color: var(--rose); }
+.cr-acct-dim { color: var(--muted); }
+
+.cr-acct-tabs {
+  display: flex;
+  margin: 16px 0 4px;
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  overflow: hidden;
+}
+
+.cr-acct-tab {
+  flex: 1 1 auto;
+  border: none;
+  border-right: 2px solid var(--line);
+  background: none;
+  padding: 6px 8px;
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  color: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cr-acct-tab:last-child { border-right: none; }
+.cr-acct-tab[aria-selected='true'] { background: var(--amber); color: var(--ink); }
+
+.cr-acct-pane { margin-top: 14px; }
+
+.cr-acct-card { margin-top: 6px; }
+.cr-acct-cardhead { margin: 0 0 10px; font-size: 15px; }
+
+.cr-acct-secrows,
+.cr-acct-devices,
+.cr-acct-workspaces {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.cr-acct-secrow,
+.cr-acct-device {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--cr-line, #332f27);
+}
+
+.cr-acct-kind {
+  flex: 0 0 auto;
+  min-width: 58px;
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.cr-acct-seclabel { flex: 1 1 auto; font-size: 13px; }
+
+.cr-acct-secstate {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.cr-acct-workspaces li { padding: 6px 0; font-size: 13px; }
+
+.cr-acct-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+/* Shown once. Monospaced so a code read off the screen is unambiguous. */
+.cr-acct-codes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 18px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+/* THE LOCK COVERS EVERYTHING, including the sheets — z-index above .gs-scrim
+   (60), because a lock drawn under a dialog is not a lock. */
+.cr-acct-lock {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.72);
+}
+
+.cr-acct-lockcard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: min(340px, 90vw);
+  padding: 26px 24px;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 4px 4px 0 var(--line);
+  text-align: center;
+}
+
+.cr-acct-lockcard h2 {
+  margin: 0;
+  font-family: var(--font-pixel);
+  font-size: 14px;
+  letter-spacing: 0.06em;
+}

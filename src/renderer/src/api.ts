@@ -27,6 +27,25 @@ import type {
   PaymentConfigReply,
   ServedPaymentStatus,
 } from "../../shared/served-payment-config";
+import type {
+  AccountDevice,
+  AccountProfile,
+  AccountResult,
+  AccountStatus,
+  UsernameCheck,
+} from "../../shared/account-v2";
+
+/**
+ * What `accountUnlock` answers. The lock's own outcome, plus whether the
+ * password it was given also bought a fresh session — see account-ipc.ts,
+ * where the fold is argued.
+ */
+export type UnlockAnswer =
+  | { ok: true; sessionRenewed?: boolean }
+  | { ok: false; reason: "wrong"; triesLeft: number }
+  | { ok: false; reason: "paused"; pausedForMs: number }
+  | { ok: false; reason: "no-account" };
+
 
 /**
  * GET /api/board's payload, mirrored here rather than imported from main —
@@ -473,6 +492,33 @@ export interface CookrewApi {
   /** Still of a headless browser page for its card thumbnail; null when the
    *  flag is off or the page cannot be captured right now. */
   browserSnapshot?: (browserId: string) => Promise<string | null>;
+  // ── the owner's account (identity v2, phase 1) ──
+  //
+  // ALL OPTIONAL, and the surface feature-detects rather than branching on
+  // isRemoteMode(): main is the only bridge that has them, so an absent
+  // `accountStatus` IS the statement "no account surface here". The phone
+  // gets its own in phase 2.
+  accountStatus?: () => Promise<AccountStatus>;
+  accountActivity?: () => Promise<boolean>;
+  accountCheck?: (username: string) => Promise<UsernameCheck>;
+  accountClaim?: (input: {
+    username: string;
+    password: string;
+    name?: string;
+  }) => Promise<AccountResult<AccountStatus>>;
+  accountLock?: () => Promise<AccountStatus>;
+  accountUnlock?: (password: string) => Promise<UnlockAnswer>;
+  accountProfile?: () => Promise<AccountResult<AccountProfile>>;
+  accountDevices?: () => Promise<AccountResult<readonly AccountDevice[]>>;
+  accountRevoke?: (deviceId: string) => Promise<AccountResult<void>>;
+  accountRecoveryCodes?: () => Promise<AccountResult<readonly string[]>>;
+  accountSetLock?: (ms: number) => Promise<AccountStatus>;
+  accountSetProfile?: (patch: {
+    displayName?: string;
+    avatar?: string | null;
+  }) => Promise<AccountResult<AccountProfile>>;
+  accountWorkspacesReachable?: (on: boolean) => Promise<AccountStatus>;
+  onAccountLocked?: (cb: (locked: boolean) => void) => () => void;
   /**
    * Re-establish the push channel if it has died. Remote clients only: a
    * desktop renderer talks to main over IPC, which cannot go down while the
