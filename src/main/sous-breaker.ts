@@ -67,20 +67,52 @@ const REASON_MAX_CHARS = 160
 
 /**
  * A failure reason as it may be logged and served on /api/health: no URL
- * (a Sous URL may carry credentials), no credential form, and short.
+ * (a Sous URL may carry credentials), no credential form, no bare
+ * host:port, and short.
  */
 export function redactReason(reason: string): string {
   return reason
     .replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, '<url>')
     .replace(/\/\/[^@\s/]+@/g, '//<redacted>@')
+    .replace(/\b[a-z0-9.-]+:\d{2,5}\b/gi, '<host>')
     .slice(0, REASON_MAX_CHARS)
 }
 
-function describeError(error: unknown): string {
-  if (!(error instanceof Error)) return String(error)
-  const cause = (error as { cause?: { code?: string } }).cause
-  const code = cause && typeof cause.code === 'string' ? ` (${cause.code})` : ''
-  return `${error.name}: ${error.message}${code}`
+/** The libuv / undici codes that mean the server, not this program. */
+const NETWORK_CODES = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'ETIMEDOUT',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'EPIPE',
+  'ECONNABORTED'
+])
+
+function causeCode(error: Error): string | null {
+  const cause = (error as { cause?: { code?: unknown } }).cause
+  return cause && typeof cause.code === 'string' ? cause.code : null
+}
+
+/**
+ * Is this the server failing to answer — a timeout, a refused or dropped
+ * connection, an undici "fetch failed" — as opposed to a bug in this
+ * program? Only the former joins the failure ladder; a TypeError from our
+ * own code must never hold the breaker open under a line that blames Sous.
+ */
+export function isNetworkError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  if (error.name === 'TimeoutError' || error.name === 'AbortError') return true
+  const code = causeCode(error)
+  if (code !== null && (NETWORK_CODES.has(code) || code.startsWith('UND_ERR'))) return true
+  return error.name === 'TypeError' && /^fetch failed/i.test(error.message)
+}
+
+function describeError(error: Error): string {
+  const code = causeCode(error)
+  return `${error.name}: ${error.message}${code === null ? '' : ` (${code})`}`
 }
 
 export function formatDuration(ms: number): string {
@@ -157,6 +189,11 @@ class Breaker implements SousBreaker {
     }
   }
 
+  /**
+   * Run `attempt` if admitted. Null without a request when refused; null
+   * and a counted failure when the server did not answer; a programming
+   * error rethrows to the caller and leaves the breaker as it was.
+   */
   async guard<T>(attempt: () => Promise<SousAttempt<T>>): Promise<T | null> {
     const admitted = this.admit()
     if (admitted === null) return null
@@ -169,7 +206,11 @@ class Breaker implements SousBreaker {
       this.failure(admitted, outcome.reason)
       return null
     } catch (error) {
-      this.failure(admitted, describeError(error))
+      if (!isNetworkError(error)) {
+        this.inFlight -= 1
+        throw error
+      }
+      this.failure(admitted, describeError(error as Error))
       return null
     }
   }

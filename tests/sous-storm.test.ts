@@ -118,7 +118,9 @@ describe('Sous under a permanent timeout', () => {
     vi.useFakeTimers()
     let attempts = 0
     const breaker = createSousBreaker({ log: () => undefined })
-    const timingOut: TurnSummarizer = () =>
+    // What is counted is the TRACKER's calls: a pump that asks every tick and
+    // is refused by the breaker still asked, and that is the regression.
+    const timingOut = vi.fn<TurnSummarizer>(() =>
       breaker.guard(
         () =>
           new Promise((_resolve, reject) => {
@@ -126,6 +128,7 @@ describe('Sous under a permanent timeout', () => {
             setTimeout(() => reject(TIMEOUT_ERROR()), 8000)
           })
       )
+    )
     const { TurnTracker } = await import('../src/main/turn-tracker')
     const tracker = new TurnTracker(timingOut, null, undefined, () => breaker.readiness())
     const session = new FakeSession('term-0')
@@ -143,7 +146,8 @@ describe('Sous under a permanent timeout', () => {
     )
     await vi.advanceTimersByTimeAsync(60 * 2000)
     tracker.disposeAll()
-    expect(attempts).toBeLessThanOrEqual(SOUS_BREAKER_THRESHOLD + 1)
+    expect(timingOut.mock.calls.length).toBeLessThanOrEqual(SOUS_BREAKER_THRESHOLD + 1)
+    expect(attempts).toBe(timingOut.mock.calls.length)
     expect(breaker.state().state).toBe('open')
     expect(tracker.history('term-0').every((r) => r.title === undefined)).toBe(true)
   })

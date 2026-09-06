@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createSousBreaker, formatDuration, redactReason, type SousAttempt } from '../src/main/sous-breaker'
+import { createSousBreaker, formatDuration, isNetworkError, redactReason, type SousAttempt } from '../src/main/sous-breaker'
 
 /**
  * The breaker in front of Sous: K consecutive failures open it for a
@@ -241,18 +241,43 @@ describe('Sous circuit breaker', () => {
   it('never keeps a URL or a credential in the failure it records', async () => {
     const h = harness()
     const leaky = async (): Promise<SousAttempt<string>> => {
-      throw new TypeError(
-        'Request cannot be constructed from a URL that includes credentials: http://user:s3cr3t@ollama.internal:11434/api/generate'
-      )
+      const error = new TypeError('fetch failed: http://user:s3cr3t@ollama.internal:11434/api/generate')
+      ;(error as { cause?: unknown }).cause = { code: 'ECONNREFUSED' }
+      throw error
     }
     for (let i = 0; i < 3; i += 1) await h.breaker.guard(leaky)
     const recorded = JSON.stringify(h.breaker.state())
     expect(recorded).not.toContain('s3cr3t')
     expect(recorded).not.toContain('ollama.internal')
     expect(h.lines.join('\n')).not.toContain('s3cr3t')
-    expect(h.breaker.state().lastFailure).toBe('TypeError: Request cannot be constructed from a URL that includes credentials: <url>')
+    expect(h.breaker.state().lastFailure).toBe('TypeError: fetch failed: <url> (ECONNREFUSED)')
     expect(redactReason('x'.repeat(500))).toHaveLength(160)
     expect(redactReason('at //user:pw@host/x')).toBe('at //<redacted>@host/x')
+    expect(redactReason('connect ECONNREFUSED 127.0.0.1:11434')).toBe('connect ECONNREFUSED <host>')
+    expect(redactReason('ollama.internal:11434 refused')).toBe('<host> refused')
+    expect(redactReason('Ollama returned 404 for model qwen2.5:1.5b')).toBe('Ollama returned 404 for model qwen2.5:1.5b')
+  })
+
+  it('a programming error rethrows to the caller and leaves the breaker as it was', async () => {
+    const h = harness()
+    const bug = async (): Promise<SousAttempt<string>> => {
+      throw new TypeError("Cannot read properties of undefined (reading 'join')")
+    }
+    for (let i = 0; i < 5; i += 1) await expect(h.breaker.guard(bug)).rejects.toThrow(/reading 'join'/)
+    const state = h.breaker.state()
+    expect(state.state).toBe('closed')
+    expect(state.consecutiveFailures).toBe(0)
+    expect(state.inFlight).toBe(0)
+    expect(state.lastFailure).toBeNull()
+    expect(h.lines).toEqual([])
+    // The server's failures still count.
+    expect(isNetworkError(new DOMException('aborted', 'TimeoutError'))).toBe(true)
+    const refused = new TypeError('fetch failed')
+    ;(refused as { cause?: unknown }).cause = { code: 'ECONNREFUSED' }
+    expect(isNetworkError(refused)).toBe(true)
+    expect(isNetworkError(new TypeError('fetch failed'))).toBe(true)
+    expect(isNetworkError(new RangeError('Invalid array length'))).toBe(false)
+    expect(isNetworkError('boom')).toBe(false)
   })
 
   it('formats windows the way the log line reads them', () => {

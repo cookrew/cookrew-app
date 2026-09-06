@@ -2729,8 +2729,8 @@ export class TurnTracker extends EventEmitter {
    * back to the safe full write — correctness never rides on position.
    */
   private async finalizeTitle(t: TrackedTerminal, recordIndex: number): Promise<void> {
-    // Breaker open: the record stays untitled and the backfill pump owns it.
-    if (this.sousReady() === 'open') return
+    // Breaker open or busy: the record stays untitled and the pump owns it.
+    if (this.sousReady() !== 'ready') return
     const gen = t.titleGen
     const title = await this.summarize({
       prompt: t.prompt ?? '',
