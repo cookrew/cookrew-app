@@ -118,72 +118,62 @@ describe('the DESKTOPS section', () => {
     expect(html).toContain('PROBING')
   })
 
-  it('carries the reach card the page will probe, and nothing else about the Mac', async () => {
+  it('names the three badges the script switches between, and no more', async () => {
     const { html } = await mePage()
-    expect(html).toContain('data-reach="')
-    expect(html).toContain('192.168.1.24')
-    expect(html).toContain('mac.tail1234.ts.net')
+    for (const badge of ['PROBING', 'ONLINE', 'OFFLINE']) expect(html).toContain(badge)
+    for (const gone of ['LAN', 'TAILNET', 'RELAY', 'NEEDS PAIRING']) expect(html).not.toContain(gone)
   })
 
-  it('names every badge the probe can land on, so the script only switches between them', async () => {
+  /**
+   * REACH v2.1. Pairing happens on the phone, on the companion's own "Not
+   * paired" card, with the token the Mac prints. A row here that offered to
+   * scan, to type six characters, to forget a key or to explain why the last
+   * one was refused was a ceremony that no longer exists — and it put the
+   * credential on the wrong device besides.
+   */
+  it('offers no pairing at all — no QR, no key field, no LINK, no refusals', async () => {
     const { html } = await mePage()
-    for (const badge of ['LAN', 'TAILNET', 'RELAY', 'OFFLINE', 'PROBING', 'NEEDS PAIRING']) {
-      expect(html).toContain(badge)
+    for (const gone of [
+      'SCAN QR',
+      'TYPE KEY',
+      'FORGET KEY',
+      'data-scan=',
+      'data-type-key=',
+      'data-key-form=',
+      'data-key-input=',
+      'data-key-link=',
+      'data-forget-pair=',
+      'data-key-note',
+      'data-refused-key',
+      'data-refused-device',
+      'reach-refused',
+      'data-pair-note',
+      'Pair a phone'
+    ]) {
+      expect(html, gone).not.toContain(gone)
     }
   })
-})
 
-describe('the NEEDS PAIRING state', () => {
-  it('is in the page the server sent, with both actions and the owner’s sentence', async () => {
+  it('says nothing about a Mac but its name, its workspaces and where it lives here', async () => {
     const { html } = await mePage()
-    expect(html).toContain('NEEDS PAIRING')
-    expect(html).toContain('Open the avatar on the Mac → Pair a phone. Then:')
-    expect(html).toContain('SCAN QR')
-    expect(html).toContain('TYPE KEY')
-    expect(html).toContain('data-scan=')
-    expect(html).toContain('data-type-key=')
-    expect(html).toContain('data-open-desktop=')
+    // The addresses the Mac published are its own directory fact; the page no
+    // longer probes them, so it no longer carries them either. They come back
+    // in phase C3, as names a browser will trust.
+    expect(html).not.toContain('data-reach="')
+    expect(html).not.toContain('192.168.1.24')
+    expect(html).not.toContain('mac.tail1234.ts.net')
   })
 
-  it('carries the refusal sentence for a key the Mac did not take', async () => {
+  /**
+   * OPEN IS AN href IN THE MARKUP, so it works with the script broken, and it
+   * carries nothing: no token, no key, no device. Opening a Mac from
+   * cookrew.dev never leaves cookrew.dev.
+   */
+  it('opens the Mac at cookrew.dev\u2019s own relay prefix, with a bare query', async () => {
     const { html } = await mePage()
-    expect(html).toContain('Not this Mac’s key — it changes every two minutes.')
-  })
-
-  it('carries the other refusal too — the link that named the Mac', async () => {
-    const { html } = await mePage()
-    expect(html).toContain('id="reach-refused-device"')
-    expect(html).toContain('That link named the Mac, not the phone — open it again from cookrew.dev.')
-  })
-
-  it('gives each row its own copy of both refusals, so the sentence sits under its Mac', async () => {
-    const { html } = await mePage()
-    expect(html).toContain('data-refused-key')
-    expect(html).toContain('data-refused-device')
-  })
-
-  it('ships OPEN disabled, because the server cannot know this browser holds a key', async () => {
-    const { html } = await mePage()
-    expect(html).toContain(`data-open-desktop="${deviceId}" hidden disabled`)
-  })
-
-  it('gives the six characters a field in the row rather than a native prompt', async () => {
-    const { html } = await mePage()
-    expect(html).toContain(`data-key-form="${deviceId}"`)
-    expect(html).toContain(`data-key-input="${deviceId}"`)
-    expect(html).toContain(`data-key-link="${deviceId}"`)
-    expect(html).toContain('maxlength="6"')
-    expect(html).toContain('Six characters, letters and digits — the ones shown beside the QR.')
-  })
-
-  it('names the device READING the page, which an admission has to carry', async () => {
-    const { html } = await mePage()
-    // From the SESSION, not from the row: whoever is reading is the device an
-    // admission names, and here that happens to be the Mac itself. The picker
-    // reads this attribute rather than the row's, which is the whole fix.
-    expect(html).toContain(`id="me" data-username="picker"`)
-    expect(html).toContain(`data-device="${deviceId}"`)
-    expect(html).toContain('data-device-name="MacBook Pro"')
+    expect(html).toContain(`href="/relay/@picker/desktop/${deviceId}/">OPEN</a>`)
+    expect(html).not.toContain('?open=')
+    expect(html).not.toContain('data-open-desktop')
   })
 })
 
@@ -196,27 +186,27 @@ describe('the page stays inert', () => {
     expect(csp).toContain("script-src 'self'")
   })
 
-  it('opens connect-src to exactly the reach origins it will probe', async () => {
+  it('keeps connect-src to this origin, because the page reaches nowhere else', async () => {
     const { csp } = await mePage()
-    expect(csp).toContain('https://192.168.1.24:8643')
-    expect(csp).toContain('https://mac.tail1234.ts.net:8643')
+    expect(csp).toContain("connect-src 'self'")
     expect(csp).not.toContain('connect-src *')
+    expect(csp).not.toContain('192.168.1.24')
   })
 
   it('bundles reach.js and device-id.js so the one file the registry is carries them', () => {
     expect(ASSETS['reach.js']?.type).toBe('text/javascript; charset=utf-8')
     expect(ASSETS['device-id.js']?.type).toBe('text/javascript; charset=utf-8')
-    expect(ASSETS['reach.js'].body).toContain('/api/hello')
-    expect(ASSETS['reach.js'].body).toContain('cr_pair:')
-    // Phase 3: the relay is asked about, and the winner is remembered.
+    // The one question it asks, and the three it no longer does.
     expect(ASSETS['reach.js'].body).toContain('relay-status')
-    expect(ASSETS['reach.js'].body).toContain('cr_path:')
+    expect(ASSETS['reach.js'].body).not.toContain('/api/hello')
+    expect(ASSETS['reach.js'].body).not.toContain('cr_pair:')
+    expect(ASSETS['reach.js'].body).not.toContain('cr_path:')
   })
 })
 
 describe('the relay path, when the Mac is holding no line (phase 3)', () => {
   it('answers 503 with a sentence and a way back, as a page', async () => {
-    const res = await fetch(`${origin}/relay/@picker/desktop/${deviceId}/?open=x&key=ABCDEF`, {
+    const res = await fetch(`${origin}/relay/@picker/desktop/${deviceId}/`, {
       headers: { cookie: `cr_session=${session}`, accept: 'text/html' }
     })
     expect(res.status).toBe(503)
