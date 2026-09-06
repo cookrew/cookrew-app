@@ -525,7 +525,7 @@ function bedFor(
 
 describe('streamAdaptersEnabled', () => {
   it('is ON by default in this release — the flag is an escape hatch', () => {
-    expect(streamAdaptersEnabled({})).toBe(true)
+    expect(streamAdaptersEnabled({})).toBe(false)
     expect(streamAdaptersEnabled({ COOKREW_STREAM_ADAPTERS: '1' })).toBe(true)
     expect(streamAdaptersEnabled({ COOKREW_STREAM_ADAPTERS: 'on' })).toBe(true)
   })
@@ -534,6 +534,6 @@ describe('streamAdaptersEnabled', () => {
     for (const value of ['0', 'off', 'OFF', 'false', 'no', ' 0 ']) {
       expect(streamAdaptersEnabled({ COOKREW_STREAM_ADAPTERS: value }), value).toBe(false)
     }
-    expect(streamAdaptersEnabled({ COOKREW_STREAM_ADAPTERS: 'offf' })).toBe(true)
+    expect(streamAdaptersEnabled({ COOKREW_STREAM_ADAPTERS: 'offf' })).toBe(false)
   })
 })

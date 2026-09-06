@@ -62,15 +62,19 @@ import type { StreamBlock } from './stream'
 /**
  * Is the stream answering the old routes?
  *
- * Default ON in this branch (the design's "for one release"), so the flag is
- * an ESCAPE HATCH rather than an opt-in nobody would ever flip. Only the four
- * explicit off-words turn it off; a typo leaves the adapters on, which is the
- * safer failure for a value that is read from an environment.
+ * OFF until T4 lands the marks migration. With the adapters on, `/turns`
+ * takes titles from the marks ledger — which holds nothing until the 8,137
+ * Sous titles in the old store are carried across — so every title on every
+ * rail would vanish the moment this shipped, and the ordinal would jump on
+ * every card that has ever compacted (Conductor: 486 → 1,232) before anyone
+ * has looked at the rail with the new numbering. Both are the intended end
+ * state; neither is something to discover by surprise. T4 flips the default
+ * to on and this becomes the escape hatch the design describes.
  */
 export function streamAdaptersEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = env.COOKREW_STREAM_ADAPTERS
-  if (raw === undefined) return true
-  return !/^(0|off|false|no)$/i.test(raw.trim())
+  if (raw === undefined) return false
+  return /^(1|on|true|yes)$/i.test(raw.trim())
 }
 
 export interface StreamAdapterDeps {
