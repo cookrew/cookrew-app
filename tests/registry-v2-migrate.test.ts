@@ -198,7 +198,7 @@ describe('POST /v2/migrate', () => {
     const desktop = device('MacBook Pro')
     const answer = await call('POST', '/v2/migrate', await migrateBody({ device: desktop }))
     expect(answer.status).toBe(201)
-    expect(answer.headers.get('set-cookie') ?? '').toContain('cr_session=')
+    expect(answer.headers.get('set-cookie') ?? '').toContain('__Host-cr_session=')
     const body = (await answer.json()) as {
       username?: string
       deviceId?: string

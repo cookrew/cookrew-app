@@ -18,7 +18,7 @@
 //   POST /v1/identity/register       enrol a credential (TOFU)
 //   POST /v1/identity/assert         verify a ceremony, mint a short-lived token
 //   POST /v2/accounts                claim a username with a password (identity v2)
-//   POST /v2/sessions                sign in; the server sets cr_session HttpOnly
+//   POST /v2/sessions                sign in; the server sets __Host-cr_session HttpOnly
 //   GET  /v2/me                      the reader's devices, desktops and security
 //   GET  /me                         the same, as a page
 //   POST /v2/me/desktops/:id/cert    a Mac's own certificate, by ACME dns-01

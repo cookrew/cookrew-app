@@ -154,7 +154,7 @@ async function claimAccount(ctx: V2Context): Promise<void> {
       deviceId: out.device.id,
       session: { token: minted.token, exp: minted.exp }
     },
-    { 'set-cookie': cookie(minted.token, ctx.secure) }
+    { 'set-cookie': cookie(minted.token) }
   )
 }
 
@@ -224,7 +224,7 @@ function signOut(ctx: V2Context): void {
   if (signed !== null) ctx.v2.accounts.closeSession(signed.account.username, signed.claims.jti)
   // 204 either way: signing out of a session that has already ended is not an
   // error, and telling a caller which it was leaks whether a token was live.
-  noContent(ctx.response, { 'set-cookie': clearedCookie(ctx.secure) })
+  noContent(ctx.response, { 'set-cookie': clearedCookie() })
 }
 
 async function redeemRecovery(ctx: V2Context): Promise<void> {
@@ -275,7 +275,7 @@ async function redeemRecovery(ctx: V2Context): Promise<void> {
     response,
     201,
     { token: minted.token, exp: minted.exp, deviceId: attached.device.id },
-    { 'set-cookie': cookie(minted.token, ctx.secure) }
+    { 'set-cookie': cookie(minted.token) }
   )
 }
 
@@ -459,7 +459,7 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     // Revoking the device in your hand is allowed, and it ends this session —
     // so the browser is handed an empty cookie rather than one that no longer
     // opens anything.
-    noContent(response, id === claims.dev ? { 'set-cookie': clearedCookie(ctx.secure) } : {})
+    noContent(response, id === claims.dev ? { 'set-cookie': clearedCookie() } : {})
     return
   }
   if (rest.length === 1 && rest[0] === 'password' && method === 'POST') {

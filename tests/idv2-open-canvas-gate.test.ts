@@ -246,7 +246,7 @@ const asPhone = (path: string, init: RequestInit = {}): Promise<Response> =>
     redirect: 'manual',
     ...init,
     headers: {
-      cookie: `cr_session=${phoneSession}`,
+      cookie: `__Host-cr_session=${phoneSession}`,
       'sec-fetch-site': 'same-origin',
       accept: 'text/html',
       ...(init.headers as Record<string, string>)
@@ -257,7 +257,7 @@ const asPhone = (path: string, init: RequestInit = {}): Promise<Response> =>
 const openToken = async (): Promise<string> => {
   const res = await fetch(`${site.origin}/v2/me/desktops/${deviceId}/open`, {
     method: 'POST',
-    headers: { cookie: `cr_session=${phoneSession}` }
+    headers: { cookie: `__Host-cr_session=${phoneSession}` }
   })
   expect(res.status).toBe(201)
   return ((await res.json()) as { token: string }).token

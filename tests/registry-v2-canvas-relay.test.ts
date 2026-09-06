@@ -323,7 +323,7 @@ afterAll(async () => {
 
 const prefix = (): string => `/relay/@${username}/desktop/${deviceId}`
 const asPhone = (headers: Record<string, string> = {}): Record<string, string> => ({
-  cookie: `cr_session=${phoneSession}`,
+  cookie: `__Host-cr_session=${phoneSession}`,
   ...headers
 })
 
@@ -394,7 +394,7 @@ const relayStatus = async (
   session: string = phoneSession
 ): Promise<{ live?: boolean; error?: string }> => {
   const res = await fetch(`${site.origin}/v2/me/desktops/${id}/relay-status`, {
-    headers: { cookie: `cr_session=${session}` }
+    headers: { cookie: `__Host-cr_session=${session}` }
   })
   const body = (await res.json()) as { live?: boolean; error?: string }
   return body.error === undefined ? { live: body.live } : { error: body.error }
@@ -434,7 +434,7 @@ describe('/relay/@user/desktop/:id — who is admitted to the prefix', () => {
 
   it('reads as not-there for another account, so it cannot be used to find desktops', async () => {
     const res = await fetch(`${site.origin}${prefix()}/`, {
-      headers: { accept: 'text/html', cookie: `cr_session=${strangerSession}` }
+      headers: { accept: 'text/html', cookie: `__Host-cr_session=${strangerSession}` }
     })
     expect(res.status).toBe(404)
     expect(await res.text()).toContain('Not found')
@@ -444,7 +444,7 @@ describe('/relay/@user/desktop/:id — who is admitted to the prefix', () => {
     const asleep = await claim('sleeper', 'desktop')
     const session = (await attach('sleeper', 'phone', asleep.token)).token
     const res = await fetch(`${site.origin}/relay/@sleeper/desktop/${asleep.id}/`, {
-      headers: { accept: 'text/html', cookie: `cr_session=${session}` }
+      headers: { accept: 'text/html', cookie: `__Host-cr_session=${session}` }
     })
     expect(res.status).toBe(503)
     expect(await res.text()).toContain('Not reachable just now')
@@ -515,7 +515,7 @@ describe('a phone of the account, reaching its own canvas', () => {
 
   it('NEVER hands the desktop cookrew.dev’s own session', async () => {
     const { body } = await echo('/', {
-      headers: { cookie: `cr_session=${phoneSession}; canvas=yes; cr_account=v1token` }
+      headers: { cookie: `__Host-cr_session=${phoneSession}; canvas=yes; cr_account=v1token` }
     })
     expect(body.headers.cookie).toBe('canvas=yes')
     expect(body.headers.cookie).not.toContain(phoneSession)
@@ -752,7 +752,7 @@ describe('the cross-site gate on both prefixes', () => {
 
   it('refuses a cross-site GET at the downlink, which would otherwise squat a name', async () => {
     const res = await fetch(`${site.origin}/v2/canvas/link/${randomUUID()}`, {
-      headers: { cookie: `cr_session=${phoneSession}`, 'sec-fetch-site': 'cross-site' }
+      headers: { cookie: `__Host-cr_session=${phoneSession}`, 'sec-fetch-site': 'cross-site' }
     })
     expect(res.status).toBe(403)
     expect(((await res.json()) as { error: string }).error).toBe('bad_origin')
@@ -871,8 +871,11 @@ describe('what the relay keeps', () => {
 
 describe('the header and cookie rules, by themselves', () => {
   it('keeps the desktop’s cookies and drops cookrew.dev’s own', () => {
-    expect(forwardableCookies('cr_session=abc; canvas=1; cr_account=xyz; other=2')).toBe('canvas=1; other=2')
-    expect(forwardableCookies('cr_session=abc')).toBe('')
+    expect(forwardableCookies('__Host-cr_session=abc; canvas=1; cr_account=xyz; other=2')).toBe('canvas=1; other=2')
+    expect(forwardableCookies('__Host-cr_session=abc')).toBe('')
+    // The name it had before is dropped too, so a stale copy still in a jar
+    // never travels to somebody else's door.
+    expect(forwardableCookies('cr_session=abc; canvas=1')).toBe('canvas=1')
   })
 
   it('allows content-type, accept, the companion’s own credential and its headers — nothing else', () => {

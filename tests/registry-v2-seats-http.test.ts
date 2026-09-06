@@ -198,7 +198,7 @@ describe('POST /v2/teams/@o/t/seats — the owner seats somebody', () => {
       'POST',
       '/v2/teams/@drej/alpha/seats',
       { username: 'lin' },
-      { cookie: `cr_session=${people.drej.token}`, origin: 'https://evil.example' }
+      { cookie: `__Host-cr_session=${people.drej.token}`, origin: 'https://evil.example' }
     )
     expect(res.status).toBe(403)
     expect(((await res.json()) as { error: string }).error).toBe('bad_origin')

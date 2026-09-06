@@ -56,8 +56,9 @@ export const refuseFactor = (
   headers: Record<string, string> = {}
 ): void => json(response, code, factorError(error), headers)
 
-export const sessionCookie = (token: string, secure: boolean): string =>
-  `${SESSION_COOKIE}=${token}; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`
+/** Secure, Path=/, no Domain — the three the `__Host-` prefix requires. */
+export const sessionCookie = (token: string): string =>
+  `${SESSION_COOKIE}=${token}; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}; HttpOnly; SameSite=Lax; Secure`
 
 /** The address a limiter counts by; never an identity (see v2-limiter.ts). */
 export const asking = (ctx: V2Context): string =>
@@ -128,7 +129,7 @@ export function completeSignIn(ctx: V2Context, username: string, device: unknown
     response,
     201,
     { token: minted.token, exp: minted.exp, deviceId: attached.device.id },
-    { 'set-cookie': sessionCookie(minted.token, ctx.secure) }
+    { 'set-cookie': sessionCookie(minted.token) }
   )
   return true
 }

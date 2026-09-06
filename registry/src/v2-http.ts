@@ -24,8 +24,32 @@ import type { NamesFeature } from './names'
  *   · a cookie-carried write from another site is refused, not performed.
  */
 
-/** The browser's session cookie. HttpOnly, so no script can read or steal it. */
-export const SESSION_COOKIE = 'cr_session'
+/**
+ * THE BROWSER'S SESSION COOKIE, AND WHY ITS NAME BEGINS WITH `__Host-`.
+ *
+ * It was `cr_session`, a host-only cookie — and reach v2.1 introduces
+ * attacker-influenced names under `*.d.cookrew.dev`. A document served from
+ * one of those is same-site with cookrew.dev, and a same-site document may set
+ * a cookie with `Domain=cookrew.dev`, which then arrives on every request to
+ * cookrew.dev alongside the real one. `sessionTokenOf` takes the first match,
+ * so a stranger could choose which session the registry believed it was
+ * talking to: session fixation, by writing a cookie from a subdomain.
+ *
+ * The `__Host-` prefix is the browser-enforced answer. A cookie with this
+ * prefix is REFUSED unless it is Secure, Path=/, and carries no Domain at all
+ * — which means no subdomain of ours, however it is obtained, can write one.
+ * All three attributes are therefore not optional here, and `Secure` is set
+ * unconditionally rather than only over https: without it the prefix rule
+ * rejects the cookie outright, and every current browser accepts a Secure
+ * cookie over http://localhost, which is the only place we are not on https.
+ *
+ * NO DUAL READ. The old name is not accepted for a release: accepting it is
+ * precisely the shadowing hole this closes, and every live session was ended
+ * by the v2 rollout in any case. The cost is that everyone signs in once more.
+ */
+export const SESSION_COOKIE = '__Host-cr_session'
+/** The name it had before, kept so the relay never forwards a stale one. */
+export const LEGACY_SESSION_COOKIE = 'cr_session'
 const COOKIE_VALUE = /^[A-Za-z0-9._-]+$/
 
 export const PRIVATE: Record<string, string> = {
@@ -164,10 +188,11 @@ export function head(response: ServerResponse, code: number): void {
   response.end()
 }
 
-export const cookie = (token: string, secure: boolean): string =>
-  `${SESSION_COOKIE}=${token}; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`
-export const clearedCookie = (secure: boolean): string =>
-  `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`
+/** Secure, Path=/, no Domain — the three the `__Host-` prefix requires. */
+export const cookie = (token: string): string =>
+  `${SESSION_COOKIE}=${token}; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}; HttpOnly; SameSite=Lax; Secure`
+export const clearedCookie = (): string =>
+  `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure`
 
 // ── reading who is asking ────────────────────────────────────────────────
 
@@ -178,6 +203,8 @@ export function sessionTokenOf(request: IncomingMessage, mode: 'any' | 'bearer' 
     return COOKIE_VALUE.test(value) ? value : null
   }
   if (mode === 'bearer') return null
+  // ONLY the prefixed name. The old one is never read: a cookie a subdomain
+  // could have written is exactly what this stopped being willing to believe.
   const found = new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([A-Za-z0-9._-]+)`).exec(request.headers.cookie ?? '')
   return found?.[1] ?? null
 }

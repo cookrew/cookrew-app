@@ -246,6 +246,6 @@ async function migrate(ctx: V2Context): Promise<void> {
       deviceId: out.device.id,
       session: { token: minted.token, exp: minted.exp }
     },
-    { 'set-cookie': cookie(minted.token, ctx.secure) }
+    { 'set-cookie': cookie(minted.token) }
   )
 }
