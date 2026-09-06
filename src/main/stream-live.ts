@@ -120,6 +120,104 @@ function sameMark(a: StreamMarkFields | undefined, b: StreamMarkFields | undefin
 }
 
 /**
+ * The tail, from whichever provider this card has.
+ *
+ * A 'file' card goes through the reader (and its settled finality); a 'door'
+ * or 'scrape' card through the SAME provider the old routes use, because
+ * neither has a transcript this process can walk.
+ */
+function tailFrameReader(
+  terminalId: string,
+  source: TranscriptSource,
+  deps: StreamLiveDeps
+): () => Promise<TailFrame> {
+  const service = deps.stream as StreamService
+  return async () => {
+    if (source === 'file') {
+      const state = await service.tailState(terminalId)
+      return {
+        block: state.block,
+        final: state.final,
+        ordinal: state.block?.ordinal ?? null,
+        total: state.total
+      }
+    }
+    const history = (await deps.turnHistory?.(terminalId)) ?? []
+    const last = history[history.length - 1]
+    if (last === undefined) return { block: null, final: false, ordinal: null, total: 0 }
+    const block = blockOfRecord(last)
+    return { block, final: last.final === true, ordinal: block.ordinal, total: history.length }
+  }
+}
+
+/** Emits one `mark` per identity whose folded marks differ from last pass. */
+function markPusher(
+  terminalId: string,
+  service: StreamService,
+  send: SseSend
+): () => void {
+  let last = new Map<string, StreamMarkFields>()
+  return () => {
+    const next = new Map<string, StreamMarkFields>()
+    for (const [identity, mark] of service.marks(terminalId)) {
+      const fields = markFieldsOf(mark)
+      if (fields !== undefined) next.set(identity, fields)
+    }
+    for (const [identity, fields] of next) {
+      if (!sameMark(last.get(identity), fields)) send('mark', { identity, mark: fields })
+    }
+    for (const identity of last.keys()) {
+      // A cleared mark is a CHANGE, not an absence: the rail has to drop the
+      // title, and a client that never hears about it keeps showing it.
+      if (!next.has(identity)) send('mark', { identity, mark: null })
+    }
+    last = next
+  }
+}
+
+/**
+ * The change detector: one pass, and the state it carries between passes.
+ *
+ * `force` is the open — the first frame goes out unconditionally so a
+ * subscriber is never left with nothing until the agent happens to move.
+ */
+function changeDetector(
+  terminalId: string,
+  source: TranscriptSource,
+  deps: StreamLiveDeps,
+  send: SseSend
+): (force: boolean) => Promise<void> {
+  const service = deps.stream as StreamService
+  const statOf = deps.statOf ?? realStat
+  const tailFrameOf = tailFrameReader(terminalId, source, deps)
+  const pushMarks = markPusher(terminalId, service, send)
+  let lastTranscript: Stamp | null = null
+  let lastLedger: Stamp | null = null
+  let lastTail: TailFrame | null = null
+
+  return async (force) => {
+    const ledger = await stampOf(service.marksFile(terminalId) ?? '', statOf)
+    if (force || !sameStamp(lastLedger, ledger)) {
+      lastLedger = ledger
+      pushMarks()
+    }
+    if (source === 'file') {
+      const chain = await service.chain(terminalId)
+      const tailFile = chain.files[chain.files.length - 1]?.file ?? ''
+      const transcript = await stampOf(tailFile, statOf)
+      // UNCHANGED BYTES, NO READ. This is the bound the design asks for.
+      if (!force && sameStamp(lastTranscript, transcript)) return
+      lastTranscript = transcript
+    }
+    const frame = await tailFrameOf()
+    if (force || !sameTail(lastTail, frame)) {
+      lastTail = frame
+      send('tail', frame)
+    }
+  }
+}
+
+/**
  * Open a live subscription. Synchronous by design: the SSE head and the
  * cleanup registration must be in place before the first await, or a client
  * that disconnects during the first read leaks its timers.
@@ -131,90 +229,20 @@ export function handleStreamLive(
   source: TranscriptSource,
   deps: StreamLiveDeps
 ): void {
-  const service = deps.stream as StreamService
-  const statOf = deps.statOf ?? realStat
   const send = startSse(response)
   const now = deps.now ?? Date.now
+  const heartbeatMs = deps.heartbeatMs ?? STREAM_HEARTBEAT_MS
+  send('hello', { terminalId, source, heartbeatMs })
+
+  const detect = changeDetector(terminalId, source, deps, send)
   let closed = false
-
-  send('hello', { terminalId, source, heartbeatMs: deps.heartbeatMs ?? STREAM_HEARTBEAT_MS })
-
-  let lastTranscript: Stamp | null = null
-  let lastLedger: Stamp | null = null
-  let lastTail: TailFrame | null = null
-  let lastMarks = new Map<string, StreamMarkFields>()
   /** One pass at a time: a slow read must never stack up behind the timer. */
   let running = false
-
-  const tailFrameOf = async (): Promise<TailFrame> => {
-    if (source === 'file') {
-      const state = await service.tailState(terminalId)
-      return {
-        block: state.block,
-        final: state.final,
-        ordinal: state.block?.ordinal ?? null,
-        total: state.total
-      }
-    }
-    const history = await deps.turnHistory?.(terminalId) ?? []
-    const last = history[history.length - 1]
-    if (last === undefined) return { block: null, final: false, ordinal: null, total: 0 }
-    const block = blockOfRecord(last)
-    return {
-      block,
-      final: last.final === true,
-      ordinal: block.ordinal,
-      total: history.length
-    }
-  }
-
-  const pushMarks = (): void => {
-    const marks = service.marks(terminalId)
-    const next = new Map<string, StreamMarkFields>()
-    for (const [identity, mark] of marks) {
-      const fields = markFieldsOf(mark)
-      if (fields !== undefined) next.set(identity, fields)
-    }
-    for (const [identity, fields] of next) {
-      if (!sameMark(lastMarks.get(identity), fields)) send('mark', { identity, mark: fields })
-    }
-    for (const identity of lastMarks.keys()) {
-      // A cleared mark is a CHANGE, not an absence: the rail has to drop the
-      // title, and a client that never hears about it keeps showing it.
-      if (!next.has(identity)) send('mark', { identity, mark: null })
-    }
-    lastMarks = next
-  }
-
-  /**
-   * One pass of the change detector.
-   *
-   * `force` is the open: the first frame is sent unconditionally so a
-   * subscriber is never left with nothing until the agent happens to move.
-   */
   const pass = async (force: boolean): Promise<void> => {
     if (closed || running) return
     running = true
     try {
-      const ledger = await stampOf(service.marksFile(terminalId) ?? '', statOf)
-      if (force || !sameStamp(lastLedger, ledger)) {
-        lastLedger = ledger
-        pushMarks()
-      }
-      let transcript: Stamp | null = null
-      if (source === 'file') {
-        const chain = await service.chain(terminalId)
-        const tailFile = chain.files[chain.files.length - 1]?.file ?? ''
-        transcript = await stampOf(tailFile, statOf)
-        // UNCHANGED BYTES, NO READ. This is the bound the design asks for.
-        if (!force && sameStamp(lastTranscript, transcript)) return
-        lastTranscript = transcript
-      }
-      const frame = await tailFrameOf()
-      if (force || !sameTail(lastTail, frame)) {
-        lastTail = frame
-        send('tail', frame)
-      }
+      await detect(force)
     } catch (error) {
       // A failed pass costs this tick, never the subscription: the next tick
       // re-stats and recovers. Reported, because a rail that silently stops
@@ -226,13 +254,9 @@ export function handleStreamLive(
   }
 
   void pass(true)
-
   const poll = setInterval(() => void pass(false), deps.pollMs ?? STREAM_POLL_MS)
   poll.unref?.()
-  const beat = setInterval(
-    () => send('heartbeat', { at: now() }),
-    deps.heartbeatMs ?? STREAM_HEARTBEAT_MS
-  )
+  const beat = setInterval(() => send('heartbeat', { at: now() }), heartbeatMs)
   beat.unref?.()
 
   const close = (): void => {

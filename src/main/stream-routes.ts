@@ -198,6 +198,30 @@ export function windowByIdentity(
 const MARK_PATCH_FIELDS = ['title', 'seenAt', 'pin', 'anchor', 'fork'] as const
 
 /**
+ * Why this body is not a mark patch, or null when it is one.
+ *
+ * Shape only. The VALUE rules (a title is a line not a document, a pin is a
+ * finite number) belong to marks.ts and stay there — this refuses the two
+ * things that can be decided without reading the ledger's rules at all.
+ */
+export function patchRefusal(body: unknown): string | null {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return 'a mark patch must be an object'
+  }
+  const unknown = unknownMarkKeys(body as Record<string, unknown>)
+  if (unknown.length > 0) {
+    return (
+      `refusing unknown mark field(s): ${unknown.join(', ')} — a mark carries ` +
+      'title, seenAt, pin, anchor or fork, and never conversation text'
+    )
+  }
+  const identity = (body as Record<string, unknown>).identity
+  return typeof identity === 'string' && identity.length > 0
+    ? null
+    : 'a mark needs a checkpoint identity (the block uuid, or the derived digest)'
+}
+
+/**
  * PUT /stream/marks — the ONLY write in this design.
  *
  * The body is passed to writeMark almost verbatim, because marks.ts owns the
@@ -221,27 +245,12 @@ async function serveMarkWrite(
     respondJson(response, 400, { ok: false, error: `unreadable body: ${messageOf(error)}` })
     return
   }
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-    respondJson(response, 400, { ok: false, error: 'a mark patch must be an object' })
+  const refusal = patchRefusal(body)
+  if (refusal !== null) {
+    respondJson(response, 400, { ok: false, error: refusal })
     return
   }
-  const unknown = unknownMarkKeys(body)
-  if (unknown.length > 0) {
-    respondJson(response, 400, {
-      ok: false,
-      error: `refusing unknown mark field(s): ${unknown.join(', ')} — a mark carries ` +
-        'title, seenAt, pin, anchor or fork, and never conversation text'
-    })
-    return
-  }
-  if (typeof body.identity !== 'string' || body.identity.length === 0) {
-    respondJson(response, 400, {
-      ok: false,
-      error: 'a mark needs a checkpoint identity (the block uuid, or the derived digest)'
-    })
-    return
-  }
-  const patch = { ...body, identity: body.identity } as MarkPatch
+  const patch = { ...body, identity: body.identity as string } as MarkPatch
   try {
     const result = service.writeMark(terminalId, patch)
     if (!result.ok) {

@@ -141,13 +141,13 @@ export async function streamChainOf(
  */
 export const CHAIN_COALESCE_MS = 250
 
-export function createStreamService(deps: StreamServiceDeps): StreamService {
-  const chainCache = new Map<string, { at: number; chain: Promise<StreamChain> }>()
+/** The coalescing chain resolver — see CHAIN_COALESCE_MS. */
+function chainResolver(deps: StreamServiceDeps): (terminalId: string) => Promise<StreamChain> {
+  const cache = new Map<string, { at: number; chain: Promise<StreamChain> }>()
   const clock = deps.now ?? Date.now
   const ttl = deps.chainCoalesceMs ?? CHAIN_COALESCE_MS
-
-  const chainOf = async (terminalId: string): Promise<StreamChain> => {
-    const cached = chainCache.get(terminalId)
+  return async (terminalId) => {
+    const cached = cache.get(terminalId)
     const at = clock()
     if (cached !== undefined && at - cached.at < ttl) return cached.chain
     const node = deps.nodeOf(terminalId)
@@ -155,12 +155,16 @@ export function createStreamService(deps: StreamServiceDeps): StreamService {
     const chain = streamChainOf(node, deps).catch((error) => {
       // A failed walk is not remembered: the next call re-resolves rather
       // than serving a quarter second of "this card has no transcript".
-      chainCache.delete(terminalId)
+      cache.delete(terminalId)
       throw error
     })
-    chainCache.set(terminalId, { at, chain })
+    cache.set(terminalId, { at, chain })
     return chain
   }
+}
+
+export function createStreamService(deps: StreamServiceDeps): StreamService {
+  const chainOf = chainResolver(deps)
 
   const readerDeps: StreamReaderDeps = {
     chainOf,
