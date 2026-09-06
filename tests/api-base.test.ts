@@ -13,7 +13,7 @@
 
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { API_BASE, apiPath, clientSlug } from '../src/renderer/src/api-base'
 
 const RENDERER = path.join(__dirname, '..', 'src', 'renderer', 'src')
@@ -52,6 +52,61 @@ describe('apiPath at the unslugged root', () => {
     expect(API_BASE).toBe('')
     expect(apiPath('/api/state')).toBe('/api/state')
     expect(apiPath('/api/terminal/t1/input')).toBe('/api/terminal/t1/input')
+  })
+})
+
+describe('apiPath under a relay prefix', () => {
+  /**
+   * The globals are read ONCE at module load, deliberately — so a test that
+   * wants a different client has to load a different module instance. That is
+   * the same reason the app cannot be re-pointed at another workspace (or
+   * another desktop) by mutating a global after boot.
+   */
+  const clientServedAt = async (
+    injected: Record<string, unknown>
+  ): Promise<typeof import('../src/renderer/src/api-base')> => {
+    Object.assign(globalThis, injected)
+    vi.resetModules()
+    return import('../src/renderer/src/api-base')
+  }
+
+  afterEach(() => {
+    delete (globalThis as { COOKREW_BASE?: unknown }).COOKREW_BASE
+    delete (globalThis as { COOKREW_SLUG?: unknown }).COOKREW_SLUG
+    vi.resetModules()
+  })
+
+  const BASE = '/relay/@owner/desktop/11111111-2222-3333-4444-555555555555'
+
+  it('prefixes every request with the base the page was served under', async () => {
+    // Pressing OPEN on /me lands the companion here. Without the prefix its
+    // `/api/state` leaves the relay path and hits cookrew.dev's own routes —
+    // the page renders and then talks to the registry instead of the Mac.
+    const api = await clientServedAt({ COOKREW_BASE: BASE, COOKREW_SLUG: '' })
+    expect(api.clientBase()).toBe(BASE)
+    expect(api.API_BASE).toBe(BASE)
+    expect(api.apiPath('/api/state')).toBe(`${BASE}/api/state`)
+    expect(api.apiPath('/api/events')).toBe(`${BASE}/api/events`)
+  })
+
+  it('composes with the slug rather than replacing it', async () => {
+    // Two different questions — where the app is served from, and which
+    // workspace it is for. A relayed client under a slug needs both, and
+    // preferring one would silently answer for the focused canvas.
+    const api = await clientServedAt({ COOKREW_BASE: BASE, COOKREW_SLUG: 'playground' })
+    expect(api.API_BASE).toBe(`${BASE}/playground`)
+    expect(api.apiPath('/api/state')).toBe(`${BASE}/playground/api/state`)
+  })
+
+  it('tolerates a trailing slash on the injected base', async () => {
+    const api = await clientServedAt({ COOKREW_BASE: `${BASE}/` })
+    expect(api.apiPath('/api/state')).toBe(`${BASE}/api/state`)
+  })
+
+  it('is the identity again for a companion served at the root', async () => {
+    const api = await clientServedAt({ COOKREW_BASE: '', COOKREW_SLUG: '' })
+    expect(api.API_BASE).toBe('')
+    expect(api.apiPath('/api/state')).toBe('/api/state')
   })
 })
 

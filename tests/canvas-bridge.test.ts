@@ -172,6 +172,47 @@ describe('one relayed exchange', () => {
     expect(echo.headers[RELAY_MARKER]).toBe('1')
   })
 
+  it('passes the relay base through to the companion unchanged', async () => {
+    // The registry says where the page is; the bridge must not have an
+    // opinion about it. It is read once, at the shell, under the loopback and
+    // marker rules in relay-base.ts.
+    const base = '/relay/@owner/desktop/11111111-2222-3333-4444-555555555555'
+    const bridge = standUp()
+    bridge.frame({
+      t: 'open',
+      id: 'base',
+      method: 'GET',
+      path: '/',
+      headers: { 'x-cookrew-base': base }
+    })
+    bridge.frame({ t: 'body', id: 'base', data: '', done: true })
+    await until(() => ended(bridge.of('base')), 'the shell')
+    const echo = JSON.parse(bodyOf(bridge.of('base')).toString('utf8')) as {
+      headers: Record<string, string>
+    }
+    expect(echo.headers['x-cookrew-base']).toBe(base)
+    // And the marker is still the bridge's own word, written over whatever
+    // the caller sent — that pair is the whole trust rule.
+    expect(echo.headers[RELAY_MARKER]).toBe('1')
+  })
+
+  it('speaks the marker over a caller that tried to claim it', async () => {
+    const bridge = standUp()
+    bridge.frame({
+      t: 'open',
+      id: 'forge',
+      method: 'GET',
+      path: '/',
+      headers: { [RELAY_MARKER]: 'not-mine' }
+    })
+    bridge.frame({ t: 'body', id: 'forge', data: '', done: true })
+    await until(() => ended(bridge.of('forge')), 'the answer')
+    const echo = JSON.parse(bodyOf(bridge.of('forge')).toString('utf8')) as {
+      headers: Record<string, string>
+    }
+    expect(echo.headers[RELAY_MARKER]).toBe('1')
+  })
+
   it('carries bytes that are not text, because a canvas serves images', async () => {
     const bridge = standUp()
     bridge.frame({ t: 'open', id: 's3', method: 'GET', path: '/bytes', headers: {} })
