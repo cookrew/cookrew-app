@@ -53,16 +53,18 @@ export const MEMORY = {
   /** Rendering with the cache cleared each time: the renderer holds nothing. */
   noteRenderNoCacheMb: 4,
   /**
-   * The note-markdown render cache is bounded by ENTRY COUNT (64), not bytes,
-   * so its retained size scales with note size. Measured 2026-09-05: 64
-   * cached 64 KB notes retain 50.5 MB — ~790 KB per entry, the key plus a
-   * rendered HTML string about four times the source. This budget holds
-   * THAT shape and fails the day the bound is lost; a byte-bounded cache
-   * (say 8 MB) would let it drop to single digits, and should re-baseline.
-   * Headroom is generous because string layout is a V8 detail that moves
-   * with Node minors; a lost bound shows as hundreds of MB, not 60.
+   * The note-markdown render cache is bounded in BYTES: 8 MiB accounted at
+   * 2 bytes per UTF-16 unit, keyed by a content hash, HTML stored flat
+   * (perf lane L3, 2026-09-06). Before: the bound was 64 ENTRIES and 64
+   * cached 64 KB notes retained 51.5 MB — 771 KB an entry, of which 83% was
+   * the cons-string rope marked returns. After: 31 entries of this shape fit
+   * (265 KB accounted each) and retain 4.0 MB, since V8 keeps this Latin-1
+   * HTML at one byte a char. Twice the measurement is 8; the budget is 12 so
+   * a two-byte (CJK) body that fills the whole 8 MiB still passes, while a
+   * return to the entry-count bound (51 MB) or an unflattened store (24 MB
+   * at 31 entries) fails outright.
    */
-  noteRenderCacheMb: 96
+  noteRenderCacheMb: 12
 } as const
 
 export const STORAGE = {
