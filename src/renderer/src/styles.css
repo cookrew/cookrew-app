@@ -5880,3 +5880,17 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
 .cr-acct-removefactor .gs-input {
   flex: 1 1 160px;
 }
+
+/* THE SESSION ENDED. Rose-edged, above whatever tab is open, because nothing
+   under it can succeed until it is answered — and it carries its own field, so
+   the sentence is never on screen without somewhere to reply to it. */
+.cr-acct-resume {
+  margin: 12px 0 4px;
+  padding: 12px 14px;
+  border: 2px solid var(--rose);
+  background: var(--cream-md);
+}
+
+.cr-acct-resume .gs-consequence {
+  margin: 0 0 8px;
+}

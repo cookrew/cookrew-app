@@ -527,6 +527,7 @@ export interface CookrewApi {
   }) => Promise<AccountResult<AccountStatus>>;
   accountLock?: () => Promise<AccountResult<AccountStatus>>;
   accountUnlock?: (password: string) => Promise<UnlockAnswer>;
+  accountResume?: (password: string) => Promise<AccountResult<AccountStatus>>;
   accountProfile?: () => Promise<AccountResult<AccountProfile>>;
   accountDevices?: () => Promise<AccountResult<readonly AccountDevice[]>>;
   accountRevoke?: (deviceId: string) => Promise<AccountResult<void>>;
@@ -565,6 +566,7 @@ export interface CookrewApi {
   /** The owner's canvas, told who is at its doors. */
   servingCallers?: () => Promise<readonly ServedCallersRow[]>;
   onServingCallers?: (cb: (rows: readonly ServedCallersRow[]) => void) => () => void;
+  onAccountChanged?: (cb: () => void) => () => void;
   onAccountLocked?: (cb: (locked: boolean) => void) => () => void;
   // ── phase 4: the approval prompt (D6) and the factor ladder (D3) ──
   //

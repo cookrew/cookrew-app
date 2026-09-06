@@ -13,12 +13,7 @@ import type {
 import type { SeatFace, SeatsSurface } from '../shared/seats'
 import type { Accounts } from './account-v2'
 import type { Approvals } from './approvals'
-import {
-  seatsSurface,
-  teamForSlug,
-  type DoorSeats,
-  type ServedTeamRef
-} from './door-seats'
+import { seatsSurface, teamForSlug, type DoorSeats, type ServedTeamRef } from './door-seats'
 import type { Factors } from './factors'
 import type { IdleLock, UnlockOutcome } from './lock'
 
@@ -125,6 +120,7 @@ export const ACCOUNT_CHANNELS = [
   'account:migrate',
   'account:lock',
   'account:unlock',
+  'account:resume',
   'account:profile',
   'account:devices',
   'account:revoke',
@@ -254,6 +250,31 @@ async function unlock(
 }
 
 /**
+ * THE SESSION ENDED — trade the password for a new one.
+ *
+ * A SEPARATE CHANNEL FROM UNLOCK, and the live bug is the argument for it.
+ * `unlock` checks the password against the LOCAL verifier first, and after a
+ * password change made on the web that verifier holds the old one: the new
+ * password fails the offline check before it is ever offered to cookrew.dev,
+ * and the old one is refused there. Neither opens anything, and the owner is
+ * left typing correct passwords into a box that keeps coming back.
+ *
+ * So this goes STRAIGHT to /v2/sessions with the existing device — which is
+ * still attached, so there is no ladder to climb — and `resume` re-derives the
+ * local verifier from the password the registry accepted. One password again.
+ */
+async function resume(
+  deps: AccountIpcDeps,
+  password: string,
+): Promise<AccountResult<AccountStatus>> {
+  const result = await deps.accounts.resume(password)
+  if (!result.ok) return result
+  // The account is answering again, so the lock has nothing left to hold shut.
+  deps.lock.unlock(password)
+  return { ok: true, value: accountStatus(deps) }
+}
+
+/**
  * Claiming answers with the STATUS, not the account file.
  *
  * The file holds a private key. Handing the renderer "the account it just
@@ -279,7 +300,6 @@ async function claim(deps: AccountIpcDeps, input: unknown): Promise<AccountResul
   return { ok: true, value: accountStatus(deps) }
 }
 
-
 /**
  * SETTING A PASSWORD ON THE NAME THIS MAC ALREADY HAS (phase 6).
  *
@@ -288,7 +308,10 @@ async function claim(deps: AccountIpcDeps, input: unknown): Promise<AccountResul
  * it is whatever the key on this Mac holds, so a renderer cannot ask for a
  * password to be set on somebody else's name.
  */
-async function migrate(deps: AccountIpcDeps, input: unknown): Promise<AccountResult<AccountStatus>> {
+async function migrate(
+  deps: AccountIpcDeps,
+  input: unknown,
+): Promise<AccountResult<AccountStatus>> {
   const record = (typeof input === 'object' && input !== null ? input : {}) as Record<
     string,
     unknown
@@ -317,7 +340,7 @@ function seatDeps(deps: AccountIpcDeps): SeatsIpcDeps | null {
 /** The team a slug publishes as, or the refusal that says why there is none. */
 function teamOf(
   seats: SeatsIpcDeps,
-  slug: unknown
+  slug: unknown,
 ): { ok: true; team: string } | { ok: false; reason: 'no_account' | 'not_found' } {
   const team = teamForSlug(seats.serving(), asString(slug))
   // A door that is not on the relay has no published name, so it has no seats
@@ -350,10 +373,7 @@ async function teamSeats(
   return wired.door.forTeam(team.team)
 }
 
-async function grantSeat(
-  deps: AccountIpcDeps,
-  input: unknown,
-): Promise<AccountResult<SeatFace>> {
+async function grantSeat(deps: AccountIpcDeps, input: unknown): Promise<AccountResult<SeatFace>> {
   const wired = seatDeps(deps)
   if (wired === null || wired.door === null) return { ok: false, reason: 'no_account' }
   const fields = record(input)
@@ -393,9 +413,9 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
       deps.accounts.checkUsername(asString(username)),
     'account:claim': (input: unknown) => claim(deps, input),
     'account:migrate': (input: unknown) => migrate(deps, input),
-    'account:lock': () =>
-      settled(deps, 'This Mac could not be locked', () => deps.lock.lock()),
+    'account:lock': () => settled(deps, 'This Mac could not be locked', () => deps.lock.lock()),
     'account:unlock': (password: unknown) => unlock(deps, asString(password)),
+    'account:resume': (password: unknown) => resume(deps, asString(password)),
     'account:profile': async (): Promise<AccountResult<AccountProfile>> => {
       const result = await deps.accounts.profile()
       // Every successful read refreshes what the phone will be shown. This is
