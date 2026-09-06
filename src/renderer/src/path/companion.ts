@@ -2,11 +2,21 @@ import { apiPath, clientBase } from '../api-base'
 import { isRemoteMode } from '../api'
 import { authHeaders, authStore } from '../auth-gate'
 import { dataPlane, setDataPlane, subscribeDataPlane, type DataPlane } from '../data-plane'
+import type { LocalNetworkState } from '../local-network'
+import { isLocalOrigin, localNetworkState, requestLocalNetwork } from '../local-network'
+import { offerLocalNetwork, setLocalNetwork } from '../local-network-gate'
+import { recordAttempts, type PathAttempt } from '../path-attempts'
+import { createPathMemory, watchNetwork, type PathMemory, type PathMemoryDeps } from '../path-memory'
 import { planeFetch } from '../plane-fetch'
 import { planeHealth, type LinkHealth } from '../plane-health'
 import { followDataPlane } from '../plane-streams'
 import { currentOriginState, forgetLatency, setProbing, subscribePathLink } from '../path-link'
-import { PLANE_PROBE_EVERY_MS, switchPlaneIfBetter, type HelloClaim } from './plane-switch'
+import {
+  PLANE_PROBE_EVERY_MS,
+  planeCandidates,
+  switchPlaneIfBetter,
+  type HelloClaim
+} from './plane-switch'
 import { startPlaneRecheck } from './plane-recheck'
 import {
   PATH_MEMORY_PREFIX,
@@ -88,18 +98,64 @@ const fetchCard = async (): Promise<ReachCardLite | null> => {
   }
 }
 
-/** Private-mode Safari throws on storage access rather than returning null. */
-const memory = (): { read: (key: string) => string | null; write: (key: string, value: string) => void } => {
+/**
+ * WHAT THIS PHONE CAN CHEAPLY SAY ABOUT ITS OWN CONNECTION.
+ *
+ * `navigator.connection` is the Network Information API — Chrome and the
+ * Android web view have it, Safari does not — and `type`/`effectiveType` are
+ * the two members that change when a phone moves from Wi-Fi to a radio. Null
+ * where there is nothing to read, which is a DIFFERENT answer from "unknown
+ * network" and is why path-memory.ts keeps two lifetimes rather than one.
+ */
+const connectionHint = (): string | null => {
+  try {
+    const link = (window as unknown as {
+      navigator?: { connection?: { type?: string; effectiveType?: string } }
+    }).navigator?.connection
+    if (!link) return null
+    const described = [link.type, link.effectiveType].filter(Boolean).join('/')
+    return described.length > 0 ? described : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The path memory over this phone's real storage.
+ *
+ * Private-mode Safari THROWS on storage access rather than returning null, so
+ * the whole surface is probed once here and every method inside path-memory.ts
+ * is guarded again — a hint is worth one saved probe and is never worth an
+ * exception on a boot path.
+ */
+const memory = (): PathMemory => {
+  const dead: PathMemoryDeps = {
+    read: () => null,
+    write: () => undefined,
+    remove: () => undefined,
+    now: () => Date.now(),
+    network: connectionHint,
+    keys: () => []
+  }
   try {
     const storage = window.localStorage
     storage.getItem(PATH_MEMORY_PREFIX)
-    return {
+    return createPathMemory({
+      ...dead,
       read: (key) => storage.getItem(key),
-      write: (key, value) => storage.setItem(key, value)
-    }
+      write: (key, value) => storage.setItem(key, value),
+      remove: (key) => storage.removeItem(key),
+      keys: () => Object.keys(storage)
+    })
   } catch {
-    return { read: () => null, write: () => undefined }
+    return createPathMemory(dead)
   }
+}
+
+/** window, as the two watchers here need it. */
+const listen = (event: string, listener: () => void): (() => void) => {
+  window.addEventListener(event, listener)
+  return () => window.removeEventListener(event, listener)
 }
 
 /**
@@ -165,8 +221,51 @@ export const verifyHello = async (claim: HelloClaim, timeoutMs = VERIFY_TIMEOUT_
  * not reloaded — which is the entire difference between this and the switch
  * that put a phone on a certificate warning.
  */
+/**
+ * READ THE LOCAL-NETWORK PERMISSION, AND TELL THE REST OF THE APP.
+ *
+ * One read per race, and the store it updates is what the badge's sentence and
+ * the explainer row both hang off — so there is exactly one moment in the
+ * companion where this fact is established and everything else follows it.
+ */
+const readLocalNetwork = async (): Promise<LocalNetworkState> => {
+  const state = await localNetworkState()
+  setLocalNetwork(state)
+  return state
+}
+
+/**
+ * THE ONE ASK, aimed at the best trusted name the desktop currently publishes.
+ *
+ * A permission prompt has to be raised by a real request, and a request to
+ * nowhere would spend the single ask a reader will ever grant. So the card is
+ * fetched first and the ask is simply not offered when the Mac has no trusted
+ * name — which is the honest state on a desktop with no certificate yet.
+ */
+const askForLocalNetwork = async (): Promise<void> => {
+  const card = await fetchCard()
+  // The first LOCAL candidate, not simply the first: a prompt is only raised
+  // by a request the permission covers, and probing a CGNAT tailnet address
+  // would spend the press without ever showing a dialog.
+  const best = card
+    ? planeCandidates(card, dataPlane().kind).find((candidate) => isLocalOrigin(candidate.origin))
+    : undefined
+  if (!best) {
+    await readLocalNetwork()
+    return
+  }
+  setLocalNetwork(await requestLocalNetwork({ url: best.origin }))
+}
+
 const startPlaneSwitch = (): (() => void) => {
   const health = planeHealth()
+  // Set by the loop at start; the ONE-AT-A-TIME guard stays the loop's, so a
+  // press cannot start a second race beside the timer's.
+  let raceNow: () => void = () => undefined
+  // True for exactly one race: the one a person asked for by pressing ALLOW.
+  // Every other race — the timer, `online`, a tab coming back — must never
+  // raise a dialog at a phone nobody is looking at.
+  let pressed = false
   // The link store announces on EVERY change it holds — latency, probing, the
   // desktop's name — and only the transport's own state is evidence about the
   // plane. Without this the latency recorded by each successful request would
@@ -208,8 +307,17 @@ const startPlaneSwitch = (): (() => void) => {
       // far end is still the Mac before the session keeps using it.
       if (reconnected) recheck.now()
     }),
+    offerLocalNetwork(async () => {
+      await askForLocalNetwork()
+      // Whatever the browser decided, look again immediately — a grant that
+      // waited up to a minute for the next tick would read as a button that
+      // did nothing.
+      pressed = true
+      raceNow()
+    }),
     startRaceLoop({
       everyMs: PLANE_PROBE_EVERY_MS,
+      ready: (run) => void (raceNow = run),
       race: () =>
         switchPlaneIfBetter({
           plane: dataPlane,
@@ -221,7 +329,21 @@ const startPlaneSwitch = (): (() => void) => {
           adopt: (plane: DataPlane) => setDataPlane(plane),
           nonce: () => randomNonce((bytes) => window.crypto.getRandomValues(bytes)),
           held: () => health.held(),
-          probing: setProbing
+          probing: setProbing,
+          note: (rows) =>
+            recordAttempts(
+              // The two shapes are the same fact and are kept apart on
+              // purpose: plane-switch.ts must not import a renderer store, or
+              // the rule stops being testable without one.
+              rows as readonly PathAttempt[],
+              dataPlane().kind === 'lan' ? 'LAN' : dataPlane().kind === 'tailnet' ? 'TAILNET' : 'RELAY'
+            ),
+          permission: readLocalNetwork,
+          mayPrompt: () => {
+            const may = pressed
+            pressed = false
+            return may
+          }
         })
     })
   ]
@@ -241,8 +363,12 @@ export const startCompanionPathSwitch = (): (() => void) => {
   // Already as close as it gets. Nothing on the card can beat this origin.
   if (pathRank(currentOriginState()) >= pathRank('LAN')) return noop
   const store = memory()
+  // The hint is flushed by the same two events that start a race, and it is
+  // flushed FIRST: a race that read a stale hint would put an address from the
+  // last network at the front of the queue on this one.
+  const unwatch = watchNetwork(store, listen)
 
-  return startPathSwitching({
+  const stop = startPathSwitching({
     deps: {
       current: currentOriginState,
       card: fetchCard,
@@ -250,9 +376,13 @@ export const startCompanionPathSwitch = (): (() => void) => {
       credential: () => authStore().token(),
       go: (url) => window.location.replace(url),
       nonce: () => randomNonce((bytes) => window.crypto.getRandomValues(bytes)),
-      remembered: (deviceId) => store.read(`${PATH_MEMORY_PREFIX}${deviceId}`),
-      remember: (deviceId, url) => store.write(`${PATH_MEMORY_PREFIX}${deviceId}`, url),
+      remembered: (deviceId) => store.remembered(deviceId),
+      remember: (deviceId, url) => store.remember(deviceId, url),
       probing: setProbing
     }
   })
+  return () => {
+    unwatch()
+    stop()
+  }
 }

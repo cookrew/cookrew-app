@@ -1,5 +1,6 @@
 import { clientBase } from './api-base'
 import { dataPlane } from './data-plane'
+import { localNetworkGate } from './local-network-gate'
 import {
   classifyOrigin,
   pathBadgeView,
@@ -174,7 +175,7 @@ export const currentPathBadge = (): PathBadgeView =>
     latencyMs: state.latencyMs,
     probing: state.probing,
     relayed: relayed(),
-    ...(relayed() ? { plane: planeState() } : {}),
+    ...(relayed() ? { plane: planeState(), localNetwork: localNetworkGate() } : {}),
     ...(state.desktopName ? { desktopName: state.desktopName } : {}),
     ...(registryOf() ? { registryOrigin: registryOf() as string } : {})
   })
