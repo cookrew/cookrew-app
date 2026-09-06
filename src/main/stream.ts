@@ -37,6 +37,7 @@ import { existsSync } from 'node:fs'
 import {
   fileEntriesOf,
   streamPositionsOf,
+  type CompactionFacts,
   type FileEntry,
   type StreamIndexEntry,
   type StreamPosition
@@ -68,6 +69,11 @@ export interface StreamBlock extends TraceBlock {
   ordinal: number
   /** First block after a compaction boundary (declared, or a file rotation). */
   compacted: boolean
+  /** What the declared boundary said about itself (T2: the rail's ◆ shows
+   *  these, and /trace/markers is one of the routes that adapt over this). */
+  compaction?: CompactionFacts
+  /** The session this block's file rotated out of — the ⇥ marker's pointer. */
+  previousSessionId?: string
   file: string
   sessionId: string
 }
@@ -82,6 +88,14 @@ export interface StreamBlocksRequest {
   /** Return the blocks AFTER this identity. Omitted starts at the stream's
    *  oldest block — a cursor walk forward, which is what /stream?after= is. */
   after?: string
+  /**
+   * Return the `limit` blocks BEFORE this identity — the drawer scrolling UP,
+   * which is the direction a transcript is actually read (T2). Symmetric with
+   * `after` on purpose: a window is named by an identity at one of its ends,
+   * never by an array offset, so a page cannot shift under a caller when the
+   * stream grows. `after` wins if both are given.
+   */
+  before?: string
   limit?: number
 }
 
@@ -94,6 +108,8 @@ export interface StreamBlocksResult {
    *  rather than silently falling back to the start — a cursor that resolves
    *  to the wrong place is how a pager duplicates or skips a page. */
   unknownAfter?: true
+  /** Same, for the backward cursor. */
+  unknownBefore?: true
 }
 
 export interface StreamTailResult {
@@ -229,6 +245,12 @@ export function createStreamReader(deps: StreamReaderDeps): StreamReader {
       ...block,
       ordinal: position.entry.ordinal,
       compacted: position.entry.compacted,
+      ...(position.entry.compaction !== undefined
+        ? { compaction: position.entry.compaction }
+        : {}),
+      ...(position.entry.previousSessionId !== undefined
+        ? { previousSessionId: position.entry.previousSessionId }
+        : {}),
       file: file.file,
       sessionId: file.sessionId
     }
@@ -244,16 +266,21 @@ export function createStreamReader(deps: StreamReaderDeps): StreamReader {
       const { files, positions, missing } = await positionsOf(terminalId)
       const limit = Math.max(1, request.limit ?? STREAM_PAGE_DEFAULT_LIMIT)
       const total = positions.length
-      if (request.after === undefined) {
-        return { blocks: positions.slice(0, limit).map((p) => blockAt(files, p)), total, missing }
+      const window = (from: number, to: number): StreamBlock[] =>
+        positions.slice(from, to).map((p) => blockAt(files, p))
+      if (request.after !== undefined) {
+        const at = positions.findIndex((position) => position.entry.identity === request.after)
+        if (at < 0) return { blocks: [], total, missing, unknownAfter: true }
+        return { blocks: window(at + 1, at + 1 + limit), total, missing }
       }
-      const at = positions.findIndex((position) => position.entry.identity === request.after)
-      if (at < 0) return { blocks: [], total, missing, unknownAfter: true }
-      return {
-        blocks: positions.slice(at + 1, at + 1 + limit).map((p) => blockAt(files, p)),
-        total,
-        missing
+      if (request.before !== undefined) {
+        const at = positions.findIndex((position) => position.entry.identity === request.before)
+        if (at < 0) return { blocks: [], total, missing, unknownBefore: true }
+        // SHORT at the start rather than shifted forward: a virtualizer that
+        // asked for the page before block 3 must never be handed block 4.
+        return { blocks: window(Math.max(0, at - limit), at), total, missing }
       }
+      return { blocks: window(0, limit), total, missing }
     },
 
     async tail(terminalId) {

@@ -30,6 +30,20 @@ import type { TraceBlock, TraceBoundaryMarker } from './trace-blocks'
 export const PROMPT_HEAD_CHARS = 120
 
 /**
+ * What a compaction boundary said about itself.
+ *
+ * Carried on the entry (T2) because the rail's ◆ marker shows the token
+ * counts, and /trace/markers is one of the five routes that become adapters
+ * over this reader — an adapter that dropped `preTokens`/`postTokens` would
+ * be a visibly poorer answer than the route it replaces, which is not the
+ * trade this design is making.
+ */
+export interface CompactionFacts {
+  preTokens?: number
+  postTokens?: number
+}
+
+/**
  * One block's LIGHT projection inside a single file: everything the rail
  * needs and nothing of the conversation beyond a head. `index` is the block's
  * own in-file ordinal (TraceBlock.index — the shared CheckpointAssigner's
@@ -44,6 +58,8 @@ export interface FileEntry {
   promptHead: string
   /** A compaction boundary declared IN THIS FILE sits immediately before it. */
   compacted: boolean
+  /** The declared boundary's own metadata, when it carried any. */
+  compaction?: CompactionFacts
 }
 
 /** A block's position in the whole stream — the rail's row. */
@@ -59,6 +75,15 @@ export interface StreamIndexEntry {
   /** This block is the first after a compaction boundary — either one the
    *  transcript declares in-file, or the file rotation itself. */
   compacted: boolean
+  /** The declared boundary's own metadata (absent for a bare rotation). */
+  compaction?: CompactionFacts
+  /**
+   * The session this block's file ROTATED OUT OF — set only on the first
+   * block of a file that is not the chain's oldest. It is the same fact the
+   * old rail carried as TraceBoundaryMarker.previousSessionId, and it is the
+   * one piece of a boundary that no single file can know about itself.
+   */
+  previousSessionId?: string
   /** The transcript this block was read from. */
   file: string
 }
@@ -77,6 +102,9 @@ export interface StreamPosition {
 /** A file's parsed contribution to the stream, as the reader loads it. */
 export interface StreamFileEntries {
   file: string
+  /** The session this file belongs to — the predecessor pointer a rotation
+   *  boundary needs. Optional so a pure test can feed files without ids. */
+  sessionId?: string
   entries: readonly FileEntry[]
 }
 
@@ -94,10 +122,16 @@ export function promptHeadOf(prompt: string): string {
  * the first block after it carries in-file index afterIndex + 1 — the same
  * arithmetic trace.ts's rail uses, kept in one place.
  */
-function compactedIndexes(markers: readonly TraceBoundaryMarker[]): Set<number> {
-  const indexes = new Set<number>()
+function compactedIndexes(
+  markers: readonly TraceBoundaryMarker[]
+): Map<number, CompactionFacts> {
+  const indexes = new Map<number, CompactionFacts>()
   for (const marker of markers) {
-    if (marker.kind === 'compact') indexes.add(marker.afterIndex + 1)
+    if (marker.kind !== 'compact') continue
+    indexes.set(marker.afterIndex + 1, {
+      ...(marker.preTokens !== undefined ? { preTokens: marker.preTokens } : {}),
+      ...(marker.postTokens !== undefined ? { postTokens: marker.postTokens } : {})
+    })
   }
   return indexes
 }
@@ -118,14 +152,18 @@ export function fileEntriesOf(
 ): FileEntry[] {
   const compacted = compactedIndexes(markers)
   const start = Math.max(0, Math.min(from, blocks.length))
-  return blocks.slice(start).map((block) => ({
-    identity: block.id,
-    index: block.index,
-    startedAt: block.startedAt,
-    endedAt: block.endedAt,
-    promptHead: promptHeadOf(block.prompt),
-    compacted: compacted.has(block.index)
-  }))
+  return blocks.slice(start).map((block) => {
+    const facts = compacted.get(block.index)
+    return {
+      identity: block.id,
+      index: block.index,
+      startedAt: block.startedAt,
+      endedAt: block.endedAt,
+      promptHead: promptHeadOf(block.prompt),
+      compacted: facts !== undefined,
+      ...(facts !== undefined && Object.keys(facts).length > 0 ? { compaction: facts } : {})
+    }
+  })
 }
 
 /**
@@ -147,8 +185,10 @@ export function streamPositionsOf(files: readonly StreamFileEntries[]): StreamPo
   const positions: StreamPosition[] = []
   let ordinal = 0
   files.forEach((file, fileAt) => {
+    const rotatedFrom = fileAt > 0 ? files[fileAt - 1].sessionId : undefined
     file.entries.forEach((entry, localAt) => {
       ordinal += 1
+      const rotation = fileAt > 0 && localAt === 0
       positions.push({
         entry: {
           identity: entry.identity,
@@ -156,7 +196,9 @@ export function streamPositionsOf(files: readonly StreamFileEntries[]): StreamPo
           startedAt: entry.startedAt,
           endedAt: entry.endedAt,
           promptHead: entry.promptHead,
-          compacted: entry.compacted || (fileAt > 0 && localAt === 0),
+          compacted: entry.compacted || rotation,
+          ...(entry.compaction !== undefined ? { compaction: entry.compaction } : {}),
+          ...(rotation && rotatedFrom !== undefined ? { previousSessionId: rotatedFrom } : {}),
           file: file.file
         },
         fileAt,
