@@ -883,10 +883,15 @@ export class Accounts {
    * The reach card is passed in rather than computed here because reach is a
    * fact about the mobile server's listeners and certificate, which this class
    * knows nothing about. What this class owns is the device key that signs it.
+   *
+   * `trusted` rides beside the card for the same reason and one step further:
+   * it is not signed at all, because it is a claim the registry can check
+   * against the certificate it issued and has no reason to take on trust.
    */
   async registerDesktop(
     workspaces: readonly { id: string; name: string }[],
     reach?: { reach: unknown; sig: string },
+    trusted?: readonly string[],
   ): Promise<AccountResult<void>> {
     const account = this.cached
     if (!account) return { ok: false, reason: 'no_account' }
@@ -902,6 +907,13 @@ export class Accounts {
         // with reachability off must not overwrite yesterday's card with an
         // empty one, it must leave the registry with nothing new to say.
         ...(reach ? { reach: reach.reach, sig: reach.sig } : {}),
+        // REACH v2.1 — the origins a browser will trust for this Mac, OUTSIDE
+        // the signed card. `reach` is signed over exactly the members the
+        // registry's reader names (registry/src/v2-reach.ts · `cardOf`), so a
+        // field added inside it would fail every verification; and the
+        // registry computes its own `names` flag from the ACME order rather
+        // than believing this, which is why nothing here needs to be signed.
+        ...(trusted && trusted.length > 0 ? { trusted: [...trusted] } : {}),
       }),
       parse: false,
     })

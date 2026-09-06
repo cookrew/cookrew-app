@@ -156,9 +156,19 @@ export type ReachPublisherDeps = {
   readonly certFp: () => string | null
   readonly relay: () => boolean
   readonly workspaces: () => readonly { id: string; name: string }[]
+  /**
+   * REACH v2.1 — the origins a browser will trust for this Mac right now.
+   *
+   * EMPTY unless a certificate is actually held (mobile-server · trustedOrigins),
+   * because a phone reads this list as "these load without a warning". Absent
+   * is the same as empty: a build with no certificate half publishes exactly
+   * what it published before names existed.
+   */
+  readonly trusted?: () => readonly string[]
   readonly register: (
     workspaces: readonly { id: string; name: string }[],
-    reach: SignedReach
+    reach: SignedReach,
+    trusted: readonly string[]
   ) => Promise<{ ok: boolean; reason?: string; message?: string } | unknown>
   readonly now?: () => number
   /** How often the address list is re-read looking for a network change. */
@@ -197,6 +207,13 @@ export const createReachPublisher = (deps: ReachPublisherDeps): ReachPublisher =
   const later = deps.setTimeout ?? ((fn, ms) => setTimeout(fn, ms))
   const cancel = deps.clearTimeout ?? ((handle) => clearTimeout(handle as NodeJS.Timeout))
   let last: ReachCard | null = null
+  /**
+   * The trusted list the REGISTRY took, beside the card it took. It is not in
+   * the card and not in the signature, so `sameReach` cannot see it — and a
+   * Mac whose first certificate has just arrived would otherwise read
+   * "unchanged" and never tell cookrew.dev its names exist.
+   */
+  let lastTrusted = ''
   let attempt = 0
   let retryHandle: unknown = null
   let retryAt: number | null = null
@@ -251,8 +268,11 @@ export const createReachPublisher = (deps: ReachPublisherDeps): ReachPublisher =
     const built = build()
     if (!built) return 'skipped'
     let refusal: string | null = null
+    const trusted = deps.trusted?.() ?? []
     try {
-      refusal = refusalOf(await deps.register(deps.workspaces(), signReach(built.account, built.card)))
+      refusal = refusalOf(
+        await deps.register(deps.workspaces(), signReach(built.account, built.card), trusted)
+      )
     } catch (error) {
       refusal = (error as Error).message || 'network'
     }
@@ -266,6 +286,7 @@ export const createReachPublisher = (deps: ReachPublisherDeps): ReachPublisher =
       return 'refused'
     }
     last = built.card
+    lastTrusted = trusted.join(' ')
     attempt = 0
     announced = null
     clearRetry()
@@ -276,7 +297,9 @@ export const createReachPublisher = (deps: ReachPublisherDeps): ReachPublisher =
   const publish = async (reason: string): Promise<PublishOutcome> => {
     const built = build()
     if (!built) return 'skipped'
-    if (sameReach(last, built.card)) return 'unchanged'
+    if (sameReach(last, built.card) && (deps.trusted?.() ?? []).join(' ') === lastTrusted) {
+      return 'unchanged'
+    }
     return send(reason)
   }
 

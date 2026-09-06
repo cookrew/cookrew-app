@@ -299,6 +299,23 @@ describe('ordering a certificate for this Mac’s names', () => {
     expect((subject.held()?.notAfter ?? 0) - Date.now()).toBeGreaterThan(RENEW_BEFORE_MS)
   })
 
+  it('treats a 5xx as a bad minute and a 4xx as a verdict', async () => {
+    const { store } = freshStore()
+    const log: string[] = []
+    const subject = cert(store, log)
+    fake.post = [{ status: 500, body: { error: 'server_error' } }]
+    expect(await subject.ensure('boot')).toBe('failed')
+    // No quiet period: it asks again on the next pass.
+    expect(await subject.ensure('again')).toBe('failed')
+
+    const { store: other } = freshStore()
+    const second = cert(other, log)
+    fake.post = [{ status: 403, body: { error: 'not_this_desktop' } }]
+    expect(await second.ensure('boot')).toBe('refused')
+    expect(await second.ensure('again')).toBe('skipped')
+    expect(log.join('\n')).toContain('not_this_desktop')
+  })
+
   it('is offline, not broken, when the registry cannot be reached', async () => {
     const { store } = freshStore()
     const subject = createDesktopCert({

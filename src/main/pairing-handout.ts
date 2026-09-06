@@ -34,6 +34,13 @@ export type PairingHandoutAccount = {
 export type PairingEndpoint = {
   readonly url: string
   readonly kind: string
+  /**
+   * The same address under this Mac's trusted name (reach v2.1). Preferred
+   * when it is there: the direct handout is scanned by a phone with no
+   * account, and that phone has no way to accept a self-signed certificate
+   * other than a warning it has been taught to fear.
+   */
+  readonly trustedUrl?: string
 }
 
 export type PairingHandoutDeps = {
@@ -45,9 +52,14 @@ export type PairingHandoutDeps = {
   readonly pairingToken: () => string | null
 }
 
-/** The first address a phone could actually dial, or null. */
-const bestDirect = (endpoints: readonly PairingEndpoint[]): string | null =>
-  endpoints.find((endpoint) => endpoint.kind !== 'loopback')?.url ?? null
+/** The first address a phone could actually dial, spelled its best way. */
+const bestDirect = (endpoints: readonly PairingEndpoint[]): string | null => {
+  const reachable = endpoints.filter((endpoint) => endpoint.kind !== 'loopback')
+  // A trusted name anywhere in the list beats a bare address at the top of
+  // it: order is about reachability, and this choice is about the warning.
+  const named = reachable.find((endpoint) => endpoint.trustedUrl !== undefined)
+  return named?.trustedUrl ?? reachable[0]?.url ?? null
+}
 
 export const pairingHandout = (deps: PairingHandoutDeps): PairingHandout | null => {
   const token = deps.pairingToken()

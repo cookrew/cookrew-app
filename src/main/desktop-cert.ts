@@ -216,11 +216,18 @@ export function createDesktopCert(deps: DesktopCertDeps): DesktopCert {
     if (response.status === 409) return poll(name)
     if (!response.ok) {
       const body = await bodyOf(response)
-      sayOnce(
-        `names: cookrew.dev refused the certificate request (${String(body.error ?? response.status)}${
-          typeof body.detail === 'string' ? `: ${body.detail}` : ''
-        })`
-      )
+      const said = `${String(body.error ?? response.status)}${
+        typeof body.detail === 'string' ? `: ${body.detail}` : ''
+      }`
+      // A 5xx is the registry having a bad minute, not a verdict on this
+      // request — the hourly check tries again. A 4xx IS a verdict (a CSR it
+      // will never accept, a session that is not this desktop's), and asking
+      // again inside the hour would only spend the ledger.
+      if (response.status >= 500) {
+        sayOnce(`names: cookrew.dev could not answer the certificate request (${said})`)
+        return 'failed'
+      }
+      sayOnce(`names: cookrew.dev refused the certificate request (${said})`)
       quiet(QUIET_MS)
       return 'refused'
     }

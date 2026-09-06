@@ -50,6 +50,22 @@ export interface MobileHelpInput {
 /** Group order matches mobileEndpoints(): most-reachable first. */
 const GROUP_ORDER: EndpointKind[] = ['tailscale', 'lan', 'other', 'loopback']
 
+/**
+ * THE NAME, WHEN THERE IS ONE — the bare address otherwise.
+ *
+ * `https://192-168-2-40.<id>.d.cookrew.dev:8643/?token=…` is the SAME listener
+ * as `https://192.168.2.40:8643/?token=…`; the only difference is that a
+ * browser has a certificate chain for the first and shows the interstitial for
+ * the second. Printing both would be two URLs for one address and an invitation
+ * to scan the one that warns, so a Mac that holds a certificate prints only
+ * the name — and the self-signed sentence below goes with it.
+ */
+const printed = (endpoint: MobileEndpoint): string => endpoint.trustedUrl ?? endpoint.url
+
+/** True when anything printed above is a name a browser already trusts. */
+const anyTrusted = (endpoints: readonly MobileEndpoint[]): boolean =>
+  endpoints.some((endpoint) => endpoint.trustedUrl !== undefined)
+
 export function renderMobileHelp(input: MobileHelpInput): string {
   const lines: string[] = [
     'Cookrew Mobile — open on your phone:',
@@ -61,7 +77,7 @@ export function renderMobileHelp(input: MobileHelpInput): string {
     const group = input.endpoints.filter((endpoint) => endpoint.kind === kind)
     if (group.length === 0) continue
     lines.push(`  ${group[0].label}`)
-    for (const endpoint of group) lines.push(`    ${endpoint.url}`)
+    for (const endpoint of group) lines.push(`    ${printed(endpoint)}`)
     lines.push('')
   }
 
@@ -71,11 +87,19 @@ export function renderMobileHelp(input: MobileHelpInput): string {
     lines.push('from any network instead of only this Wi-Fi.', '')
   }
 
-  lines.push(
-    input.secure
-      ? 'HTTPS is self-signed: the phone warns once — tap Advanced → Proceed.\nIt is required for 🎙️ dictation, which needs a secure context.'
-      : '⚠ HTTP only (openssl not found): 🎙️ dictation needs HTTPS, so the mic will\nbe blocked on the phone. Everything else works.'
-  )
+  if (!input.secure) {
+    lines.push(
+      '⚠ HTTP only (openssl not found): 🎙️ dictation needs HTTPS, so the mic will\nbe blocked on the phone. Everything else works.'
+    )
+  } else if (anyTrusted(input.endpoints)) {
+    // No warning to give: the URLs above carry a real certificate issued
+    // through cookrew.dev, so the phone loads them like any other site.
+    lines.push('These addresses have a real certificate — the phone loads them with no warning.')
+  } else {
+    lines.push(
+      'HTTPS is self-signed: the phone warns once — tap Advanced → Proceed.\nIt is required for 🎙️ dictation, which needs a secure context.'
+    )
+  }
 
   if (input.uncovered.length > 0) {
     lines.push(
@@ -126,6 +150,6 @@ export function renderRotated(
     '',
     'New URLs:',
     ...relay,
-    ...endpoints.map((endpoint) => `  ${endpoint.url}`)
+    ...endpoints.map((endpoint) => `  ${printed(endpoint)}`)
   ].join('\n')
 }
