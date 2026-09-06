@@ -132,11 +132,21 @@ const noteMarked = new Marked({
  *     it is not re-parsed on every React render either — the click-path
  *     stall is the reason the cache exists. Ill-formed UTF-16 (an unpaired
  *     surrogate, which any body truncated at a byte limit can carry) cannot
- *     be hashed safely and gets a side slot of its own, matched by exact
- *     source equality. Each slot is dropped above SIDE_SLOT_MAX_FACTOR times
- *     the budget, so "bounded" stays true of the whole module: at most the
- *     budget plus two slots of four budgets each, never "plus the largest
- *     note ever rendered";
+ *     be hashed safely and gets a side cache of its own, matched by exact
+ *     source equality. Each side cache holds at most SIDE_CACHE_MAX_ENTRIES
+ *     renders under SIDE_CACHE_MAX_FACTOR budgets, and a render above that
+ *     cap is not kept at all, so "bounded" stays true of the whole module:
+ *     WORST CASE 8 + 16 + 16 = 40 MiB accounted (map + two side caches),
+ *     never "plus the largest note ever rendered". Two is the factor and not
+ *     four because 72 MiB accounted is 5% of the ceiling iOS kills the
+ *     renderer at, for a shape no real canvas has, and a note that only
+ *     fits at four budgets is 8–16M chars of HTML — a DOM that is broken
+ *     before the cache matters. The cliff that leaves: two OVERSIZED notes
+ *     (over 8 MiB accounted each) on one canvas cannot both be held and
+ *     thrash the side cache, one full parse per render each. Named, not
+ *     solved: that is 70x the largest note ever measured. Ill-formed notes
+ *     are the realistic case and are small, so up to four of them share
+ *     the 16 MiB;
  *   - marked keeps the LAST PARSE TREE alive through the custom renderer
  *     (Parser assigns itself to renderer.parser, and the tree hangs off it):
  *     measured 46 MB after one 1.3M-char parse. An empty parse afterwards
@@ -151,17 +161,49 @@ const NOTE_CACHE_MAX_BYTES = 8 * 1024 * 1024
 /** A Map slot, two string headers, and the key's own characters. */
 const ENTRY_OVERHEAD_BYTES = 128
 const BYTES_PER_CHAR = 2
-/** A side slot holds at most this many budgets; above it the render is not kept at all. */
-const SIDE_SLOT_MAX_FACTOR = 4
+/** A side cache holds at most this many budgets in total; a render above it alone is not kept at all. */
+const SIDE_CACHE_MAX_FACTOR = 2
+/** …and at most this many renders, so two ill-formed notes on one canvas do not thrash a single slot. */
+const SIDE_CACHE_MAX_ENTRIES = 4
 
 interface CacheEntry {
   readonly html: string
   readonly bytes: number
 }
 
-interface SideSlot extends CacheEntry {
-  /** The hash key (oversized) or the source itself (ill-formed, which cannot be hashed). */
-  readonly match: string
+/**
+ * A few renders outside the main map, under their own byte cap: insertion
+ * order, oldest out first, and a render that would not fit alone is not kept.
+ * Matched by the hash key (oversized) or the source itself (ill-formed, which
+ * cannot be hashed).
+ */
+class SideCache {
+  private readonly entries = new Map<string, CacheEntry>()
+  private total = 0
+
+  get bytes(): number {
+    return this.total
+  }
+
+  get(match: string): string | undefined {
+    return this.entries.get(match)?.html
+  }
+
+  put(match: string, html: string, bytes: number, maxBytes: number): void {
+    if (bytes > maxBytes) return
+    for (const [key, entry] of this.entries) {
+      if (this.total + bytes <= maxBytes && this.entries.size < SIDE_CACHE_MAX_ENTRIES) break
+      this.entries.delete(key)
+      this.total -= entry.bytes
+    }
+    this.entries.set(match, { html, bytes })
+    this.total += bytes
+  }
+
+  clear(): void {
+    this.entries.clear()
+    this.total = 0
+  }
 }
 
 let maxCacheBytes = NOTE_CACHE_MAX_BYTES
@@ -171,10 +213,14 @@ let misses = 0
 let oversizedParses = 0
 let illFormedParses = 0
 const renderCache = new Map<string, CacheEntry>()
-/** The one entry too large for the budget: outside the map and its total, matched by key. */
-let oversizedSlot: SideSlot | null = null
-/** The one ill-formed body: outside the map, matched by exact source equality. */
-let illFormedSlot: SideSlot | null = null
+/** Entries too large for the budget: outside the map and its total, matched by key. */
+const oversizedCache = new SideCache()
+/** Ill-formed bodies: outside the map, matched by exact source equality. */
+const illFormedCache = new SideCache()
+
+function maxSideBytes(): number {
+  return SIDE_CACHE_MAX_FACTOR * maxCacheBytes
+}
 
 /**
  * Hashing feeds a fixed scratch buffer and hashes it four bytes at a time.
@@ -242,6 +288,12 @@ export function noteMarkdownEntryBytes(key: string, html: string): number {
  * indexed read: same string, one sixth the retained bytes. The code unit is
  * folded into module state so the read is observable and cannot be dropped
  * as a pure expression with an unused result.
+ *
+ * WARNING: this depends on the MINIFIER keeping that store. esbuild (what
+ * electron-vite runs today) keeps it; terser would drop a never-read module
+ * variable silently and the 6x would vanish with no test failing but the
+ * perf gate in tests/perf/memory.perf.ts. Check that gate if the build
+ * pipeline changes.
  */
 let flattenSink = 0
 function flattened(html: string): string {
@@ -267,21 +319,17 @@ function evictUntilFits(incoming: number): void {
   }
 }
 
-/** The slot's new content, or null when the render is too large to keep even alone. */
-function sideSlot(match: string, html: string, bytes: number): SideSlot | null {
-  return bytes > SIDE_SLOT_MAX_FACTOR * maxCacheBytes ? null : { match, html, bytes }
-}
-
-/** Ill-formed UTF-16 cannot be hashed safely: rendered into its own slot, matched by the source itself. */
+/** Ill-formed UTF-16 cannot be hashed safely: rendered into its own side cache, matched by the source itself. */
 function renderIllFormed(content: string): string {
-  if (illFormedSlot !== null && illFormedSlot.match === content) {
+  const hit = illFormedCache.get(content)
+  if (hit !== undefined) {
     hits += 1
-    return illFormedSlot.html
+    return hit
   }
   illFormedParses += 1
   const html = parseNote(content)
-  // The source is retained by the slot, so it is accounted alongside the html.
-  illFormedSlot = sideSlot(content, html, noteMarkdownEntryBytes(content, html))
+  // The source is retained as the key, so it is accounted alongside the html.
+  illFormedCache.put(content, html, noteMarkdownEntryBytes(content, html), maxSideBytes())
   return html
 }
 
@@ -294,16 +342,17 @@ export function renderNoteMarkdown(content: string): string {
     hits += 1
     return hit.html
   }
-  if (oversizedSlot !== null && oversizedSlot.match === key) {
+  const oversizedHit = oversizedCache.get(key)
+  if (oversizedHit !== undefined) {
     hits += 1
-    return oversizedSlot.html
+    return oversizedHit
   }
   const html = parseNote(content)
   const bytes = noteMarkdownEntryBytes(key, html)
   if (bytes > maxCacheBytes) {
-    // Too big for the budget: the side slot, never the map. Evicts nothing.
+    // Too big for the budget: the side cache, never the map. Evicts nothing here.
     oversizedParses += 1
-    oversizedSlot = sideSlot(key, html, bytes)
+    oversizedCache.put(key, html, bytes, maxSideBytes())
     return html
   }
   misses += 1
@@ -318,17 +367,19 @@ export interface NoteMarkdownCacheStats {
   /** Accounted bytes in the map. Never above maxBytes. */
   readonly bytes: number
   readonly maxBytes: number
-  /** Answered from the map or a side slot. */
+  /** Byte cap of EACH side cache: SIDE_CACHE_MAX_FACTOR × maxBytes. The module's bound is maxBytes + 2 × this. */
+  readonly maxSideBytes: number
+  /** Answered from the map or a side cache. */
   readonly hits: number
   /** Parsed and stored in the map. */
   readonly misses: number
-  /** Parsed into the oversized slot: the entry outweighs the budget. */
+  /** Parsed into the oversized side cache: the entry outweighs the budget. */
   readonly oversizedParses: number
-  /** Parsed into the ill-formed slot: the source has an unpaired surrogate. */
+  /** Parsed into the ill-formed side cache: the source has an unpaired surrogate. */
   readonly illFormedParses: number
-  /** Accounted weight of the oversized slot; 0 when empty. Never above 4 × maxBytes. */
+  /** Accounted weight of the oversized side cache; 0 when empty. Never above maxSideBytes. */
   readonly oversizedBytes: number
-  /** Accounted weight of the ill-formed slot (source and html); 0 when empty. Never above 4 × maxBytes. */
+  /** Accounted weight of the ill-formed side cache (sources and html); 0 when empty. Never above maxSideBytes. */
   readonly illFormedBytes: number
 }
 
@@ -343,12 +394,13 @@ export function noteMarkdownCacheStats(): NoteMarkdownCacheStats {
     entries: renderCache.size,
     bytes: cachedBytes,
     maxBytes: maxCacheBytes,
+    maxSideBytes: maxSideBytes(),
     hits,
     misses,
     oversizedParses,
     illFormedParses,
-    oversizedBytes: oversizedSlot === null ? 0 : oversizedSlot.bytes,
-    illFormedBytes: illFormedSlot === null ? 0 : illFormedSlot.bytes
+    oversizedBytes: oversizedCache.bytes,
+    illFormedBytes: illFormedCache.bytes
   }
 }
 
@@ -360,8 +412,8 @@ export function noteMarkdownCacheStats(): NoteMarkdownCacheStats {
  */
 export function clearNoteMarkdownCache(maxBytes: number = NOTE_CACHE_MAX_BYTES): void {
   renderCache.clear()
-  oversizedSlot = null
-  illFormedSlot = null
+  oversizedCache.clear()
+  illFormedCache.clear()
   cachedBytes = 0
   hits = 0
   misses = 0

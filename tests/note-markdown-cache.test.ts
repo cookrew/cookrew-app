@@ -39,7 +39,7 @@ describe('byte accounting', () => {
   afterAll(() => clearNoteMarkdownCache())
 
   it('starts empty and reports the budget it was given', () => {
-    expect(noteMarkdownCacheStats()).toEqual({ entries: 0, bytes: 0, maxBytes: 16 * KB, hits: 0, misses: 0, oversizedParses: 0, illFormedParses: 0, oversizedBytes: 0, illFormedBytes: 0 })
+    expect(noteMarkdownCacheStats()).toEqual({ entries: 0, bytes: 0, maxBytes: 16 * KB, maxSideBytes: 32 * KB, hits: 0, misses: 0, oversizedParses: 0, illFormedParses: 0, oversizedBytes: 0, illFormedBytes: 0 })
   })
 
   it('charges each entry its key plus its html at two bytes a char, plus a fixed overhead', () => {
@@ -80,7 +80,7 @@ describe('byte accounting', () => {
   it('clear returns the accounting to zero and the budget to its default', () => {
     renderNoteMarkdown(note('a', 1000))
     clearNoteMarkdownCache()
-    expect(noteMarkdownCacheStats()).toEqual({ entries: 0, bytes: 0, maxBytes: 8 * 1024 * 1024, hits: 0, misses: 0, oversizedParses: 0, illFormedParses: 0, oversizedBytes: 0, illFormedBytes: 0 })
+    expect(noteMarkdownCacheStats()).toEqual({ entries: 0, bytes: 0, maxBytes: 8 * 1024 * 1024, maxSideBytes: 16 * 1024 * 1024, hits: 0, misses: 0, oversizedParses: 0, illFormedParses: 0, oversizedBytes: 0, illFormedBytes: 0 })
   })
 })
 
@@ -160,34 +160,38 @@ describe('oversized bypass', () => {
     expect(isCached(small)).toBe(true)
   })
 
-  it('the side slot answers the same oversized note again without a re-parse, and holds only the latest', () => {
+  it('the side cache answers the same oversized note again without a re-parse, under its own byte cap', () => {
     const html = renderNoteMarkdown(huge)
     expect(noteMarkdownCacheStats()).toMatchObject({ oversizedParses: 1, hits: 0 })
     expect(renderNoteMarkdown(huge)).toBe(html)
     expect(noteMarkdownCacheStats()).toMatchObject({ oversizedParses: 1, hits: 1, entries: 0, bytes: 0 })
-    // A second oversized note replaces the first: one slot, bounded by one note.
+    // Two oversized notes are each over the budget, so together they are over
+    // the two-budget cap: the second evicts the first. This is the named
+    // cliff — for notes that are, at the real budget, 70x the largest measured.
     const other = `# Other\n\n${'- *row*\n'.repeat(700)}` // ~28 KB accounted: over budget, under the cap
     renderNoteMarkdown(other)
     const stats = noteMarkdownCacheStats()
     expect(stats).toMatchObject({ oversizedParses: 2, hits: 1, entries: 0, bytes: 0 })
     expect(stats.oversizedBytes).toBe(noteMarkdownEntryBytes(noteMarkdownCacheKey(other), renderNoteMarkdown(other)))
+    expect(stats.oversizedBytes).toBeLessThanOrEqual(stats.maxSideBytes)
     expect(isCached(huge)).toBe(false)
   })
 
-  it('the side slot is bounded too: a render above four budgets is not kept at all', () => {
-    // 16 KB budget, so anything over 64 KB accounted is dropped after it is returned.
+  it('the side cache is bounded too: a render above its cap is not kept at all', () => {
+    // 16 KB budget, 32 KB side cap: anything over 32 KB accounted is dropped after it is returned.
     const giant = `# Giant\n\n${'- **row** with `code`\n'.repeat(6000)}` // ~320 KB of html
     const html = renderNoteMarkdown(giant)
-    expect(noteMarkdownEntryBytes(noteMarkdownCacheKey(giant), html)).toBeGreaterThan(4 * 16 * KB)
+    expect(noteMarkdownEntryBytes(noteMarkdownCacheKey(giant), html)).toBeGreaterThan(32 * KB)
     expect(noteMarkdownCacheStats()).toMatchObject({ oversizedParses: 1, oversizedBytes: 0, entries: 0 })
     expect(renderNoteMarkdown(giant)).toBe(html)
     expect(noteMarkdownCacheStats()).toMatchObject({ oversizedParses: 2, hits: 0, oversizedBytes: 0 })
-    // and it did not disturb a slot that was within bounds before? No — it replaced it with nothing,
-    // which is the documented shape: one slot, the latest oversized render, or empty.
+    // A render that does not fit does not disturb what the cache already holds.
     renderNoteMarkdown(huge)
-    expect(noteMarkdownCacheStats().oversizedBytes).toBeGreaterThan(0)
+    const kept = noteMarkdownCacheStats().oversizedBytes
+    expect(kept).toBeGreaterThan(0)
     renderNoteMarkdown(giant)
-    expect(noteMarkdownCacheStats().oversizedBytes).toBe(0)
+    expect(noteMarkdownCacheStats().oversizedBytes).toBe(kept)
+    expect(isCached(huge)).toBe(true)
   })
 
   it('an entry whose html exceeds the budget is bypassed however small its source', () => {
@@ -209,7 +213,7 @@ describe('ill-formed UTF-16', () => {
     const high = renderNoteMarkdown('alpha \uD800 omega')
     expect(high).toContain('\uD800')
     expect(noteMarkdownCacheStats()).toMatchObject({ entries: 0, hits: 0, misses: 0, illFormedParses: 1 })
-    // The same body again is a hit from the ill-formed slot, not a re-parse:
+    // The same body again is a hit from the ill-formed cache, not a re-parse:
     // a body truncated at a byte limit must not re-parse on every React render.
     expect(renderNoteMarkdown('alpha \uD800 omega')).toBe(high)
     expect(noteMarkdownCacheStats()).toMatchObject({ hits: 1, illFormedParses: 1 })
@@ -219,20 +223,41 @@ describe('ill-formed UTF-16', () => {
     expect(low).not.toBe(high)
     expect(low).toContain('\uDC00')
     expect(noteMarkdownCacheStats()).toMatchObject({ hits: 1, illFormedParses: 2, entries: 0 })
-    // One slot: the first body is a parse again now.
-    renderNoteMarkdown('alpha \uD800 omega')
-    expect(noteMarkdownCacheStats()).toMatchObject({ hits: 1, illFormedParses: 3 })
   })
 
-  it('accounts the retained source alongside the html, and drops the slot above four budgets', () => {
+  it('two ill-formed notes on one canvas are both held — no single-slot thrash', () => {
+    // ~4 KB accounted each: four fit under the 32 KB side cap, so the entry
+    // count is what bounds them here.
+    const a = `- *a*\n`.repeat(80) + '\uD800'
+    const b = `- *b*\n`.repeat(80) + '\uDC00'
+    renderNoteMarkdown(a)
+    renderNoteMarkdown(b)
+    expect(isCached(a)).toBe(true)
+    expect(isCached(b)).toBe(true)
+    expect(noteMarkdownCacheStats()).toMatchObject({ illFormedParses: 2, hits: 2 })
+    // Up to four; the fifth evicts the oldest, in insertion order. (A miss
+    // probe re-inserts, so the survivors are probed first.)
+    const more = ['c', 'd', 'e'].map((t) => `- *${t}*\n`.repeat(80) + '\uD800')
+    for (const src of more) renderNoteMarkdown(src)
+    expect(noteMarkdownCacheStats().illFormedBytes).toBeLessThan(32 * KB)
+    expect(isCached(more[2])).toBe(true)
+    expect(isCached(b)).toBe(true)
+    expect(isCached(a)).toBe(false)
+  })
+
+  it('accounts the retained source alongside the html, and drops a render above the side cap', () => {
     const src = `- *i*\n`.repeat(500) + '\uD800'
     const html = renderNoteMarkdown(src)
-    expect(noteMarkdownCacheStats().illFormedBytes).toBe(noteMarkdownEntryBytes(src, html))
+    const stats = noteMarkdownCacheStats()
+    expect(stats.illFormedBytes).toBe(noteMarkdownEntryBytes(src, html))
+    expect(stats.illFormedBytes).toBeLessThanOrEqual(stats.maxSideBytes)
     const giant = `# Giant\n\n${'- **row** with `code`\n'.repeat(6000)}\uDC00`
     renderNoteMarkdown(giant)
-    expect(noteMarkdownCacheStats()).toMatchObject({ illFormedParses: 2, illFormedBytes: 0 })
+    // Not kept, and what was there before is undisturbed.
+    expect(noteMarkdownCacheStats()).toMatchObject({ illFormedParses: 2, illFormedBytes: stats.illFormedBytes })
     renderNoteMarkdown(giant)
     expect(noteMarkdownCacheStats()).toMatchObject({ illFormedParses: 3, hits: 0 })
+    expect(isCached(src)).toBe(true)
   })
 
   it('a properly paired surrogate is well-formed and caches as usual', () => {
