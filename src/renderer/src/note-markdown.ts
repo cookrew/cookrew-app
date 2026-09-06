@@ -342,9 +342,21 @@ function renderIllFormed(content: string): string {
   return html
 }
 
+/**
+ * String.prototype.isWellFormed is ES2024 — Chrome 111+. The TV box in the
+ * living room runs Chrome 108 and crashed the whole canvas on it (measured
+ * 2026-09-06: "content.isWellFormed is not a function"). A lone surrogate is
+ * what ill-formed means, so the fallback looks for exactly that.
+ */
+const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+function isWellFormedString(content: string): boolean {
+  const native = (content as { isWellFormed?: () => boolean }).isWellFormed
+  return typeof native === 'function' ? native.call(content) : !LONE_SURROGATE_RE.test(content)
+}
+
 /** Note content → HTML for the card body. Inert: no tag survives from the source. */
 export function renderNoteMarkdown(content: string): string {
-  if (!content.isWellFormed()) return renderIllFormed(content)
+  if (!isWellFormedString(content)) return renderIllFormed(content)
   const key = noteMarkdownCacheKey(content)
   const hit = renderCache.get(key)
   if (hit !== undefined) {
