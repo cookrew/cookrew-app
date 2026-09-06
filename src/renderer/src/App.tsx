@@ -706,10 +706,12 @@ function Canvas(): React.JSX.Element {
   }, [sousReply])
   const ptt = usePushToTalk({
     enabled: true,
-    onFinal: (text) => {
+    onFinal: (text, alternates) => {
       if (!text.trim()) return
       const zoomed = zoomedTerminalIdRef.current
-      const ctx = zoomed ? { surface: 'zoom' as const, focusedAgentId: zoomed } : { surface: 'canvas' as const }
+      const ctx = zoomed
+        ? { surface: 'zoom' as const, focusedAgentId: zoomed, alternates }
+        : { surface: 'canvas' as const, alternates }
       void cookrew()
         .sousCommand(text, ctx)
         .then((result) => {

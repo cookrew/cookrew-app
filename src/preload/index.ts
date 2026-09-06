@@ -365,7 +365,7 @@ const api = {
     return () => ipcRenderer.removeListener('app:cmd-w', listener)
   },
   // Sous driving the canvas: a sentence up, zoom / zoom-back down.
-  sousCommand: (text: string, ctx: { surface: string; focusedAgentId?: string | null }) =>
+  sousCommand: (text: string, ctx: { surface: string; focusedAgentId?: string | null; alternates?: string[] }) =>
     ipcRenderer.invoke('sous:command', text, ctx),
   onUiCommand: (cb: (event: unknown) => void) => {
     const listener = (_e: unknown, event: unknown): void => cb(event)

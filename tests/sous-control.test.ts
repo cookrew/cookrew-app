@@ -144,6 +144,38 @@ describe('ask', () => {
   })
 })
 
+describe('two ears', () => {
+  it('when the zh ear mangles a name, the en ear\'s transcript of the same audio is used', async () => {
+    const h = harness()
+    const r = await h.controller.handle({
+      text: '帮我问问双球',
+      alternates: ['ask Conductor'],
+      surface: 'canvas'
+    })
+    expect(r).toMatchObject({ intent: 'ask', agentId: 'a-cond', needs: 'prompt' })
+  })
+  it('the primary wins whenever it resolved on its own', async () => {
+    const h = harness()
+    const r = await h.controller.handle({ text: '帮我问问 Paul', alternates: ['ask Magpie'], surface: 'canvas' })
+    expect(r).toMatchObject({ intent: 'ask', agentId: 'a-paul' })
+  })
+  it('dictation is never swapped for an alternate — prose is the primary\'s words', async () => {
+    const h = harness()
+    const r = await h.controller.handle({
+      text: '给 fetch 加一个重试',
+      alternates: ['ask Paul'],
+      surface: 'zoom',
+      focusedAgentId: 'a-cc'
+    })
+    expect(r).toMatchObject({ intent: 'prompt', agentId: 'a-cc', text: '给 fetch 加一个重试' })
+  })
+  it('a refusal that asks which stays a refusal — the alternate is not used to guess', async () => {
+    const h = harness({ active: null })
+    const r = await h.controller.handle({ text: 'ask Conductor', alternates: ['ask Paul'], surface: 'cli' })
+    expect(r).toMatchObject({ intent: 'refused', needs: 'which-agent' })
+  })
+})
+
 describe('the zoom view — dictation, Typeless style', () => {
   it('plain speech is typed into the agent on screen and LEFT there: the owner sends', async () => {
     const h = harness()

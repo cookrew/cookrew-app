@@ -14,7 +14,8 @@ import { cookrew } from './api'
  */
 export function usePushToTalk(options: {
   enabled: boolean
-  onFinal: (text: string) => void
+  /** The primary transcript, and what the other ears heard of the same audio. */
+  onFinal: (text: string, alternates: string[]) => void
   onError?: (message: string) => void
 }): { listening: boolean; partial: string; available: boolean } {
   const [available, setAvailable] = useState(false)
@@ -80,7 +81,7 @@ export function usePushToTalk(options: {
           setListening(false)
           setPartial('')
           apply(pttStep(stateRef.current, { type: 'ended' }, performance.now()))
-          if (event.kind === 'final') onFinalRef.current(event.text)
+          if (event.kind === 'final') onFinalRef.current(event.text, Object.values(event.alternates ?? {}))
           else onErrorRef.current?.(event.message)
         }
       }),

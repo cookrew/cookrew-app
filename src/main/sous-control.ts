@@ -56,6 +56,13 @@ export interface SousControlDeps {
 
 export interface SousCommandInput {
   text: string
+  /**
+   * What the other ears heard of the same audio. Tried, in order, when the
+   * primary sentence is not a command or names someone the roster does not
+   * have — the zh-CN ear's 双球 is the en-US ear's Conductor. Never used for
+   * dictation: prose goes in as the primary heard it.
+   */
+  alternates?: readonly string[]
   surface: Surface
   /**
    * WHO is speaking on that surface — the desktop, one phone, one speaker.
@@ -126,17 +133,26 @@ export class SousController {
   async handle(input: SousCommandInput): Promise<SousCommandResult> {
     const roster = this.deps.roster()
     const key = callerKey(input.surface, input.callerId)
-    const parsed = parseUtterance(
-      input.text,
-      {
-        surface: input.surface,
-        activeWorkspaceId: this.deps.activeWorkspaceId(),
-        focusedAgentId: input.focusedAgentId ?? this.focus.get(key) ?? null,
-        pending: this.pendingFor(input.surface, input.callerId)
-      },
-      roster,
-      this.now()
-    )
+    const ctx = {
+      surface: input.surface,
+      activeWorkspaceId: this.deps.activeWorkspaceId(),
+      focusedAgentId: input.focusedAgentId ?? this.focus.get(key) ?? null,
+      pending: this.pendingFor(input.surface, input.callerId)
+    }
+    const now = this.now()
+    let parsed = parseUtterance(input.text, ctx, roster, now)
+    // Another ear may have heard the names right. Only a COMMAND is worth
+    // switching for, and only when the primary came up empty-handed: `none`,
+    // or a name nobody on the roster has. A prompt stays the primary's words.
+    if (!isCommandThatResolved(parsed)) {
+      for (const alternate of input.alternates ?? []) {
+        const other = parseUtterance(alternate, ctx, roster, now)
+        if (isCommandThatResolved(other)) {
+          parsed = other
+          break
+        }
+      }
+    }
     if (!parsed.ok) {
       return {
         intent: 'refused',
@@ -268,6 +284,12 @@ export class SousController {
   private now(): number {
     return this.deps.now?.() ?? Date.now()
   }
+}
+
+/** A command whose names all resolved — the thing an alternate ear can beat. */
+function isCommandThatResolved(parsed: ReturnType<typeof parseUtterance>): boolean {
+  if (!parsed.ok) return parsed.needs === 'which-agent' || parsed.needs === 'which-workspace' || parsed.needs === 'bad-name'
+  return parsed.intent.kind !== 'none' && parsed.intent.kind !== 'prompt'
 }
 
 function callerKey(surface: Surface, callerId: string | undefined): string {

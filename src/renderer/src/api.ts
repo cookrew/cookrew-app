@@ -504,7 +504,10 @@ export interface CookrewApi {
    * already happened in main. Zoom / zoom-back arrive separately as ui
    * commands, on every surface, so the TV follows the owner's voice too.
    */
-  sousCommand: (text: string, ctx: { surface: SousSurface; focusedAgentId?: string | null }) => Promise<SousCommandResult>;
+  sousCommand: (
+    text: string,
+    ctx: { surface: SousSurface; focusedAgentId?: string | null; alternates?: string[] }
+  ) => Promise<SousCommandResult>;
   onUiCommand: (cb: (event: UiCommandEvent) => void) => () => void;
   /**
    * Hold ⌘ to talk (desktop only — the phone dictates through the Web Speech

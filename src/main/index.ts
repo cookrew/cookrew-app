@@ -4314,7 +4314,15 @@ app.whenReady().then(() => {
     return {
       agents: store.terminalsAcross().map((t) => {
         const workspaceId = store.ownerOf(t.id) ?? ''
-        return { id: t.id, name: t.name, workspaceId, workspaceName: nameOf(workspaceId), aliases: aliases[t.name] }
+        return {
+          id: t.id,
+          name: t.name,
+          workspaceId,
+          workspaceName: nameOf(workspaceId),
+          aliases: aliases[t.name],
+          role: t.role,
+          orch: t.orch === true
+        }
       }),
       workspaces: workspaces.map((w) => ({ id: w.id, name: w.name })),
       presets: PRESETS.map((p) => p.name)
@@ -4368,8 +4376,14 @@ app.whenReady().then(() => {
   })
   ipcMain.handle(
     'sous:command',
-    (_e, text: string, ctx: { surface: SousSurface; focusedAgentId?: string | null }) =>
-      sous.handle({ text, surface: ctx.surface, callerId: 'desktop', focusedAgentId: ctx.focusedAgentId ?? null })
+    (_e, text: string, ctx: { surface: SousSurface; focusedAgentId?: string | null; alternates?: string[] }) =>
+      sous.handle({
+        text,
+        alternates: ctx.alternates,
+        surface: ctx.surface,
+        callerId: 'desktop',
+        focusedAgentId: ctx.focusedAgentId ?? null
+      })
   )
 
   // THE MAC'S EAR. One recognizer child per hold of ⌘; the roster's names go
@@ -4378,7 +4392,13 @@ app.whenReady().then(() => {
     binary: app.isPackaged
       ? path.join(process.resourcesPath, 'cr-listen')
       : path.join(dirname, '../../resources/cr-listen/cr-listen'),
-    locale: () => readSousVoiceConfig().locale,
+    // Two ears: the owner's locale first (its partials are what the pill
+    // shows), en-US alongside because that is the ear that spells the
+    // roster's English names right. Same audio, one microphone.
+    locales: () => {
+      const primary = readSousVoiceConfig().locale
+      return primary === 'en-US' ? [primary] : [primary, 'en-US']
+    },
     hints: () => {
       const roster = sousRoster()
       return [

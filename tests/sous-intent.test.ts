@@ -6,11 +6,11 @@ import { parseUtterance, resolveName, type IntentContext, type IntentRoster } fr
 // ambiguity the parser must refuse to guess through.
 const roster: IntentRoster = {
   agents: [
-    { id: 'a-cond', name: 'Conductor', workspaceId: 'ws-dev', workspaceName: 'cookrew dev', aliases: ['指挥'] },
-    { id: 'a-cc', name: 'claude-code', workspaceId: 'ws-dev', workspaceName: 'cookrew dev' },
-    { id: 'a-paul', name: 'Paul', workspaceId: 'ws-dev', workspaceName: 'cookrew dev' },
-    { id: 'a-cond2', name: 'Conductor', workspaceId: 'ws-mall', workspaceName: 'agentmall' },
-    { id: 'a-magpie', name: 'Magpie', workspaceId: 'ws-mall', workspaceName: 'agentmall' }
+    { id: 'a-cond', name: 'Conductor', workspaceId: 'ws-dev', workspaceName: 'cookrew dev', aliases: ['指挥'], orch: true },
+    { id: 'a-cc', name: 'claude-code', workspaceId: 'ws-dev', workspaceName: 'cookrew dev', role: 'Developer' },
+    { id: 'a-paul', name: 'Paul', workspaceId: 'ws-dev', workspaceName: 'cookrew dev', role: 'QA (Browser)' },
+    { id: 'a-cond2', name: 'Conductor', workspaceId: 'ws-mall', workspaceName: 'agentmall', orch: true },
+    { id: 'a-magpie', name: 'Magpie', workspaceId: 'ws-mall', workspaceName: 'agentmall', role: 'QA (Browser)' }
   ],
   workspaces: [
     { id: 'ws-dev', name: 'cookrew dev' },
@@ -124,6 +124,31 @@ describe('ask', () => {
     expect(parseUtterance('帮我问问指挥', canvas, roster, NOW)).toMatchObject({
       ok: true,
       intent: { kind: 'ask', agentId: 'a-cond' }
+    })
+  })
+  it('“the orch” by any of its words means the active workspace\'s orch, no name needed', () => {
+    for (const said of ['帮我问问指挥官', 'ask the orch', 'turn to orchestrator', '找编排']) {
+      expect(parseUtterance(said, canvas, roster, NOW)).toMatchObject({
+        ok: true,
+        intent: { kind: 'ask', agentId: 'a-cond' }
+      })
+    }
+    // From the other workspace it is THAT orch.
+    expect(parseUtterance('ask the orch', home, roster, NOW)).toMatchObject({ intent: { kind: 'ask', agentId: 'a-cond2' } })
+  })
+  it('a role said instead of a name resolves through the roster\'s roles', () => {
+    expect(parseUtterance('帮我问问负责测试的', canvas, roster, NOW)).toMatchObject({
+      ok: true,
+      intent: { kind: 'ask', agentId: 'a-paul' }
+    })
+    expect(parseUtterance('ask the developer one', canvas, roster, NOW)).toMatchObject({
+      intent: { kind: 'ask', agentId: 'a-cc' }
+    })
+    // Two QA agents with no active workspace to break the tie: asked back.
+    expect(parseUtterance('ask the QA one', { surface: 'cli', activeWorkspaceId: null }, roster, NOW)).toMatchObject({
+      ok: false,
+      needs: 'which-agent',
+      choices: ['Paul (cookrew dev)', 'Magpie (agentmall)']
     })
   })
   it('an unknown agent is refused in words', () => {

@@ -19,7 +19,43 @@ export interface RosterAgent {
   workspaceName: string
   /** Other ways the owner says this name — 指挥 for Conductor. */
   aliases?: readonly string[]
+  /** The saved role, when the card has one — "QA (Browser)", "Developer". */
+  role?: string | null
+  /** The workspace's orch: what 指挥 / "the orch" means without a name. */
+  orch?: boolean
 }
+
+/**
+ * Ways of saying "the orch" — the one agent every workspace has, and the one
+ * an on-device Chinese recognizer never spells right when it is called
+ * Conductor. Resolved against the roster's `orch` flag, never a name.
+ */
+const ORCH_WORDS = ['指挥', '指挥官', '编排', '总管', 'orch', 'the orch', 'orchestrator', 'conductor']
+
+/**
+ * Roles are saved in English ("QA (Browser)", "Developer") and said in either
+ * language; a said word matches a role that contains it or any of its kin.
+ */
+const ROLE_SYNONYMS: readonly (readonly string[])[] = [
+  ['qa', 'test', 'tester', 'testing', '测试', '质检', '验收'],
+  ['dev', 'developer', 'development', 'engineer', '开发', '写代码', '工程师'],
+  ['design', 'designer', 'ui', '设计', '设计师'],
+  ['marketing', 'market', 'growth', '市场', '营销', '推广'],
+  ['bugfix', 'bug', 'fix', 'fixer', '修bug', '修复', '修问题'],
+  ['browser', 'web', '浏览器', '网页'],
+  ['orch', 'orchestrator', '指挥', '编排']
+]
+
+function roleMatches(role: string, said: string): boolean {
+  const r = normalize(role)
+  if (r.includes(said)) return true
+  return ROLE_SYNONYMS.some(
+    (group) => group.some((w) => normalize(w) === said) && group.some((w) => r.includes(normalize(w)))
+  )
+}
+
+/** "负责测试的" / "the QA one": a role said instead of a name. */
+const ROLE_SAID_RE = /^(?:负责|做|管)?\s*(.+?)\s*(?:的那个|的)$|^(?:the\s+)?(.+?)\s+(?:one|agent|guy)$/iu
 
 export interface IntentRoster {
   agents: ReadonlyArray<RosterAgent>
@@ -106,6 +142,30 @@ export function resolveName<T extends Named>(said: string, pool: ReadonlyArray<T
   const prefix = pool.filter((p) => normalize(p.name).startsWith(wanted))
   if (prefix.length === 1) return { hit: prefix[0] }
   if (prefix.length > 1) return { ambiguous: prefix }
+  return { miss: true }
+}
+
+/**
+ * A name, or the two things people say instead of one: "the orch" (指挥) and
+ * a role ("负责测试的", "the QA one"). Name first — an agent literally named
+ * 指挥 wins over the flag — then orch, then role, each by the same
+ * exact→unique-prefix rule so an ambiguity is still an ambiguity.
+ */
+export function resolveAgentWords(said: string, pool: ReadonlyArray<RosterAgent>): NameHit<RosterAgent> {
+  const byName = resolveName(said, pool)
+  if (!('miss' in byName)) return byName
+  const wanted = normalize(said)
+  if (ORCH_WORDS.some((w) => normalize(w) === wanted)) {
+    const orchs = pool.filter((a) => a.orch === true)
+    if (orchs.length === 1) return { hit: orchs[0] }
+    if (orchs.length > 1) return { ambiguous: orchs }
+  }
+  const role = ROLE_SAID_RE.exec(said.trim())
+  const roleSaid = normalize(role?.[1] ?? role?.[2] ?? said)
+  if (roleSaid === '') return { miss: true }
+  const byRole = pool.filter((a) => a.role && roleMatches(a.role, roleSaid))
+  if (byRole.length === 1) return { hit: byRole[0] }
+  if (byRole.length > 1) return { ambiguous: byRole }
   return { miss: true }
 }
 
@@ -336,7 +396,7 @@ function resolve(match: Match, ctx: IntentContext, roster: IntentRoster, lang: L
   // is asked back with the workspaces spelled out.
   const agent = (name: string | undefined, scope: string | null): Resolved<RosterAgent> => {
     const pool = scope ? roster.agents.filter((a) => a.workspaceId === scope) : roster.agents
-    let hit = resolveName(name ?? '', pool)
+    let hit = resolveAgentWords(name ?? '', pool)
     if ('ambiguous' in hit && !scope && ctx.activeWorkspaceId) {
       const local = hit.ambiguous.filter((a) => a.workspaceId === ctx.activeWorkspaceId)
       if (local.length === 1) hit = { hit: local[0] }

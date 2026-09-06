@@ -7,13 +7,18 @@ import { MacListener, parseListenLine, type ListenEvent } from '../src/main/list
 
 describe('parseListenLine', () => {
   it('reads the four shapes the helper emits', () => {
-    expect(parseListenLine('{"ready":true,"locale":"zh-CN","onDevice":true}')).toEqual({
+    expect(parseListenLine('{"ready":true,"locales":["zh-CN","en-US"],"onDevice":true}')).toEqual({
       kind: 'ready',
-      locale: 'zh-CN',
+      locales: ['zh-CN', 'en-US'],
       onDevice: true
     })
     expect(parseListenLine('{"partial":"切换工作台到"}')).toEqual({ kind: 'partial', text: '切换工作台到' })
     expect(parseListenLine('{"final":"ask Conductor"}')).toEqual({ kind: 'final', text: 'ask Conductor' })
+    expect(parseListenLine('{"final":"帮我问问双球","alternates":{"en-US":"ask Conductor","fr-FR":""}}')).toEqual({
+      kind: 'final',
+      text: '帮我问问双球',
+      alternates: { 'en-US': 'ask Conductor' }
+    })
     expect(parseListenLine('{"error":"microphone not authorized"}')).toEqual({
       kind: 'error',
       message: 'microphone not authorized'
@@ -41,17 +46,25 @@ class FakeChild extends EventEmitter {
   }
 }
 
-function harness(): { listener: MacListener; children: FakeChild[]; args: string[][]; binary: string } {
+function harness(locales = ['zh-CN', 'en-US']): {
+  listener: MacListener
+  children: FakeChild[]
+  args: string[][]
+  events: ListenEvent[]
+  start: () => boolean
+} {
   const dir = mkdtempSync(path.join(tmpdir(), 'cr-listen-'))
   const binary = path.join(dir, 'cr-listen')
   writeFileSync(binary, '')
   const children: FakeChild[] = []
   const args: string[][] = []
+  const events: ListenEvent[] = []
   const listener = new MacListener({
     binary,
-    locale: () => 'zh-CN',
+    locales: () => locales,
     hints: () => ['Conductor', 'cookrew dev'],
     graceMs: 5,
+    settleMs: 10,
     spawnFn: ((_bin: string, argv: string[]) => {
       const child = new FakeChild()
       children.push(child)
@@ -59,67 +72,97 @@ function harness(): { listener: MacListener; children: FakeChild[]; args: string
       return child as never
     }) as never
   })
-  return { listener, children, args, binary }
+  return { listener, children, args, events, start: () => listener.start((e) => events.push(e)) }
 }
 
 const darwin = process.platform === 'darwin' ? it : it.skip
 
-describe('MacListener', () => {
-  darwin('spawns the helper with the locale and every hint, and relays its lines', () => {
+describe('MacListener — one child per ear', () => {
+  darwin('spawns one helper per locale, hints to each; only the primary\'s partials are relayed', () => {
     const h = harness()
-    const events: ListenEvent[] = []
-    expect(h.listener.start((e) => events.push(e))).toBe(true)
-    expect(h.args[0]).toEqual([
-      '--locale', 'zh-CN', '--max-seconds', '30', '--hint', 'Conductor', '--hint', 'cookrew dev'
+    expect(h.start()).toBe(true)
+    expect(h.args).toEqual([
+      ['--max-seconds', '30', '--locale', 'zh-CN', '--hint', 'Conductor', '--hint', 'cookrew dev'],
+      ['--max-seconds', '30', '--locale', 'en-US', '--hint', 'Conductor', '--hint', 'cookrew dev']
     ])
-    const child = h.children[0]
-    child.say('{"ready":true,"locale":"zh-CN","onDevice":true}')
-    child.say('{"partial":"ask"}')
-    child.say('{"partial":"ask Conductor"}')
-    child.say('{"final":"ask Conductor"}')
-    child.emit('exit', 0)
-    expect(events.map((e) => e.kind)).toEqual(['ready', 'partial', 'partial', 'final'])
+    const [zh, en] = h.children
+    zh.say('{"ready":true,"locales":["zh-CN"],"onDevice":true}')
+    zh.say('{"partial":"帮我"}')
+    en.say('{"partial":"help"}')
+    zh.say('{"partial":"帮我问问"}')
+    expect(h.events.map((e) => (e.kind === 'partial' ? e.text : e.kind))).toEqual(['ready', '帮我', '帮我问问'])
+  })
+  darwin('the finals are merged: the primary is the text, the others are alternates by locale', () => {
+    const h = harness()
+    h.start()
+    const [zh, en] = h.children
+    zh.say('{"final":"帮我问问双球"}')
+    expect(h.events.filter((e) => e.kind === 'final')).toEqual([]) // waiting on the English ear
+    en.say('{"final":"ask Conductor"}')
+    expect(h.events.at(-1)).toEqual({ kind: 'final', text: '帮我问问双球', alternates: { 'en-US': 'ask Conductor' } })
     expect(h.listener.listening).toBe(false)
   })
-  darwin('one child at a time — a second start while listening is refused', () => {
+  darwin('an alternate that is slow past the settle deadline is dropped and killed; the primary still lands', async () => {
     const h = harness()
-    expect(h.listener.start(() => undefined)).toBe(true)
-    expect(h.listener.start(() => undefined)).toBe(false)
-    expect(h.children).toHaveLength(1)
+    h.start()
+    const [zh, en] = h.children
+    zh.say('{"final":"切换到 agentmall"}')
+    await new Promise((r) => setTimeout(r, 30))
+    expect(h.events.at(-1)).toEqual({ kind: 'final', text: '切换到 agentmall' })
+    expect(en.signals).toContain('SIGKILL')
   })
-  darwin('stop sends SIGINT, then SIGKILL if the child does not settle in time', async () => {
+  darwin('an alternate that fails is just an alternate we do not have', () => {
     const h = harness()
-    h.listener.start(() => undefined)
+    h.start()
+    const [zh, en] = h.children
+    en.say('{"error":"recognizer for en-US is not available"}')
+    zh.say('{"final":"回到画布"}')
+    expect(h.events.at(-1)).toEqual({ kind: 'final', text: '回到画布' })
+  })
+  darwin('the primary failing is the owner\'s problem', () => {
+    const h = harness()
+    h.start()
+    h.children[0].say('{"error":"microphone not authorized"}')
+    expect(h.events.at(-1)).toEqual({ kind: 'error', message: 'microphone not authorized' })
+    expect(h.listener.listening).toBe(false)
+  })
+  darwin('one hold at a time — a second start while listening is refused', () => {
+    const h = harness()
+    expect(h.start()).toBe(true)
+    expect(h.start()).toBe(false)
+    expect(h.children).toHaveLength(2)
+  })
+  darwin('stop sends SIGINT to every ear, then SIGKILL to the ones that do not settle', async () => {
+    const h = harness()
+    h.start()
     h.listener.stop()
-    expect(h.children[0].signals).toEqual(['SIGINT'])
+    expect(h.children.map((c) => c.signals)).toEqual([['SIGINT'], ['SIGINT']])
     await new Promise((r) => setTimeout(r, 20))
-    expect(h.children[0].signals).toEqual(['SIGINT', 'SIGKILL'])
+    expect(h.children[0].signals).toContain('SIGKILL')
   })
-  darwin('a child that exits clean without a final said nothing — an empty final, once', () => {
+  darwin('ears that exit clean without a final said nothing — one empty final', () => {
     const h = harness()
-    const events: ListenEvent[] = []
-    h.listener.start((e) => events.push(e))
-    h.children[0].emit('exit', 0)
-    h.children[0].emit('exit', 0)
-    expect(events).toEqual([{ kind: 'final', text: '' }])
+    h.start()
+    h.children[0].emit('exit', 0, null)
+    h.children[1].emit('exit', 0, null)
+    h.children[0].emit('exit', 0, null)
+    expect(h.events.filter((e) => e.kind === 'final')).toEqual([{ kind: 'final', text: '' }])
   })
-  darwin('a child that dies is an error the owner can read', () => {
-    const h = harness()
-    const events: ListenEvent[] = []
-    h.listener.start((e) => events.push(e))
-    h.children[0].emit('exit', 1, null)
-    expect(events).toEqual([{ kind: 'error', message: 'speech helper exited 1' }])
-  })
-  darwin('a child we stopped that died to the signal said nothing — silence, not a fault', () => {
-    const h = harness()
-    const events: ListenEvent[] = []
-    h.listener.start((e) => events.push(e))
+  darwin('a primary we stopped that died to the signal is silence, not a fault', () => {
+    const h = harness(['zh-CN'])
+    h.start()
     h.listener.stop()
     h.children[0].emit('exit', null, 'SIGINT')
-    expect(events).toEqual([{ kind: 'final', text: '' }])
+    expect(h.events.at(-1)).toEqual({ kind: 'final', text: '' })
+  })
+  darwin('a primary that dies on its own is an error the owner can read', () => {
+    const h = harness(['zh-CN'])
+    h.start()
+    h.children[0].emit('exit', 1, null)
+    expect(h.events.at(-1)).toEqual({ kind: 'error', message: 'speech helper exited 1' })
   })
   it('without the helper binary there is no listening, and the reason is said', () => {
-    const listener = new MacListener({ binary: '/nowhere/cr-listen', locale: () => 'en-US', hints: () => [] })
+    const listener = new MacListener({ binary: '/nowhere/cr-listen', locales: () => ['en-US'], hints: () => [] })
     const events: ListenEvent[] = []
     expect(listener.start((e) => events.push(e))).toBe(false)
     expect(events[0]).toMatchObject({ kind: 'error' })
