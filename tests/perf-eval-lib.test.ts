@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { latencyStats } from '../src/shared/stats'
 import {
+  BUCKET_POLICY,
+  SERVED_GRACE_MS,
   bucketOf,
   bucketStorage,
   judge,
@@ -10,7 +12,9 @@ import {
   parsePsTable,
   percentiles,
   pickAppProcesses,
+  renderBuckets,
   renderTable,
+  servedSessions,
   slopePerHour,
   worstOf
 } from '../scripts/perf-eval-lib.mjs'
@@ -192,5 +196,36 @@ describe('report helpers', () => {
     expect(worstOf(['ok', 'warn', 'ok'])).toBe('warn')
     expect(worstOf(['ok', 'fail', 'warn'])).toBe('fail')
     expect(worstOf([])).toBe('ok')
+  })
+})
+
+describe('served sessions — a policy beside the size', () => {
+  const DAY = 24 * 60 * 60 * 1000
+  const NOW = 1_800_000_000_000
+
+  it('rolls storage entries up to one row per sandbox, oldest first, aged by its newest write', () => {
+    const rows = servedSessions(
+      [
+        { path: 'sessions/svc-x/ana-1/.claude/plugins/a.json', bytes: 100, mtimeMs: NOW - 40 * DAY },
+        { path: 'sessions/svc-x/ana-1/.cookrew/turns/t.jsonl', bytes: 5, mtimeMs: NOW - 2 * DAY },
+        { path: 'sessions/svc-x/bob-1/.claude.json', bytes: 7, mtimeMs: NOW - 45 * DAY },
+        { path: 'sessions/svc-x/stray-file', bytes: 999, mtimeMs: NOW },
+        { path: 'turns/x.jsonl', bytes: 999, mtimeMs: NOW - 100 * DAY }
+      ],
+      NOW
+    )
+    expect(rows).toEqual([
+      { key: 'svc-x/bob-1', bytes: 7, newestMtimeMs: NOW - 45 * DAY, ageMs: 45 * DAY },
+      { key: 'svc-x/ana-1', bytes: 105, newestMtimeMs: NOW - 2 * DAY, ageMs: 2 * DAY }
+    ])
+    expect(rows.filter((r) => r.ageMs > SERVED_GRACE_MS).map((r) => r.key)).toEqual(['svc-x/bob-1'])
+  })
+
+  it('the bucket table carries the policy for the buckets that have one', () => {
+    const table = renderBuckets({ 'served-sessions': 83 * 1024 * 1024, backups: 34 * 1024 * 1024, turns: 1024 })
+    expect(table).toContain(BUCKET_POLICY['served-sessions'])
+    expect(table).toContain(BUCKET_POLICY.backups)
+    expect(BUCKET_POLICY['served-sessions']).toMatch(/30 d/)
+    expect(BUCKET_POLICY.backups).toMatch(/never removed/)
   })
 })

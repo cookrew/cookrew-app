@@ -7,6 +7,10 @@ export const BUDGETS = {
     totalMb: { warn: 1500, fail: 3000 },
     growthMbPerDay: { warn: 50, fail: 200 },
     orphanSidecarMb: { warn: 0 },
+    // Ended served-session sandboxes past the 30 d grace still on disk: any
+    // amount means the boot sweep has not run since they aged (or a session
+    // has been open for a month).
+    servedPastGraceMb: { warn: 0 },
     backupsMb: { warn: 50 }
   },
   memory: {

@@ -78,6 +78,41 @@ const BUCKETS = [
   ['perf-history', (p) => p.startsWith('perf-history/')]
 ]
 
+/**
+ * What the app DOES about a bucket — the policy a size is read against. A
+ * bucket without a line here has none yet; a lane that gives it one adds the
+ * line. The served-session grace mirrors DEFAULT_GRACE_MS in
+ * src/main/storage-gc-scan.ts (30 d), which this plain-JS runner cannot import.
+ */
+export const BUCKET_POLICY = {
+  'served-sessions': 'ended sandboxes swept at boot after 30 d; open sessions kept',
+  backups: 'hand-made — reported by the sweep and the boot log, never removed'
+}
+
+export const SERVED_GRACE_MS = 30 * 24 * 60 * 60 * 1000
+
+/**
+ * The served-session sandboxes among storage entries, one row per
+ * `sessions/<service>/<session>`, with bytes summed and the newest mtime.
+ * Entries carry { path, bytes, mtimeMs } as walkFiles reports them. The eval
+ * cannot know which sessions are OPEN (that is the running app's fact), so a
+ * row's age is only ever an upper bound on what the next boot sweep reclaims.
+ */
+export function servedSessions(entries, now) {
+  const rows = new Map()
+  for (const { path, bytes, mtimeMs } of entries) {
+    const parts = path.split('/')
+    if (parts[0] !== 'sessions' || parts.length < 4) continue
+    const key = `${parts[1]}/${parts[2]}`
+    const row = rows.get(key) ?? { key, bytes: 0, newestMtimeMs: 0 }
+    const newest = Math.max(row.newestMtimeMs, Number.isFinite(mtimeMs) ? mtimeMs : 0)
+    rows.set(key, { key, bytes: row.bytes + bytes, newestMtimeMs: newest })
+  }
+  return [...rows.values()]
+    .map((row) => ({ ...row, ageMs: now - row.newestMtimeMs }))
+    .sort((a, b) => b.ageMs - a.ageMs)
+}
+
 export function bucketOf(relativePath) {
   const hit = BUCKETS.find(([, test]) => test(relativePath))
   return hit ? hit[0] : 'other'
@@ -212,7 +247,7 @@ export function renderBuckets(buckets) {
   const rows = Object.entries(buckets)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 8)
-    .map(([name, bytes]) => ['    ', name, fmtMb(bytes), ''])
+    .map(([name, bytes]) => ['    ', name, fmtMb(bytes), BUCKET_POLICY[name] ?? ''])
   return renderTable(rows)
 }
 

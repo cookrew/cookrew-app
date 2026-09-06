@@ -27,6 +27,16 @@ export interface TimedSample {
 export interface FileEntry {
   path: string
   bytes: number
+  /** Present when the walker stats for it (perf-eval.mjs does). */
+  mtimeMs?: number
+}
+
+export interface ServedSessionRow {
+  /** `<service dir>/<session dir>` — the sweep's candidate key. */
+  key: string
+  bytes: number
+  newestMtimeMs: number
+  ageMs: number
 }
 
 export interface TeamSessions {
@@ -64,6 +74,9 @@ export interface AppProcess {
 export function percentiles(values: readonly number[]): Percentiles | null
 export function judge(value: number | null | undefined, budget: Budget | undefined): Verdict
 export function slopePerHour(samples: readonly TimedSample[]): number | null
+export const BUCKET_POLICY: Record<string, string>
+export const SERVED_GRACE_MS: number
+export function servedSessions(entries: readonly FileEntry[], now: number): ServedSessionRow[]
 export function bucketOf(relativePath: string): string
 export function bucketStorage(entries: readonly FileEntry[]): { buckets: Record<string, number>; total: number }
 export function orphanSidecars(teams: readonly TeamSessions[], sidecars: readonly SidecarListing[]): Orphan[]

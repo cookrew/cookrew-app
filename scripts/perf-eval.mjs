@@ -33,6 +33,8 @@ import { cpus, homedir, loadavg } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  BUCKET_POLICY,
+  SERVED_GRACE_MS,
   bucketStorage,
   fmtMb,
   fmtMs,
@@ -44,6 +46,7 @@ import {
   pickAppProcesses,
   renderBuckets,
   renderSection,
+  servedSessions,
   slopePerHour,
   worstOf
 } from './perf-eval-lib.mjs'
@@ -124,7 +127,8 @@ function walkFiles(root) {
       if (entry.isDirectory()) visit(full)
       else if (entry.isFile()) {
         try {
-          out.push({ path: path.relative(root, full).split(path.sep).join('/'), bytes: statSync(full).size })
+          const stat = statSync(full)
+          out.push({ path: path.relative(root, full).split(path.sep).join('/'), bytes: stat.size, mtimeMs: stat.mtimeMs })
         } catch {
           // Removed between readdir and stat — the store is live. Skip.
         }
@@ -170,7 +174,10 @@ function evalStorage(opts, now) {
   const { teams, sidecars } = readTeamSidecars(opts.base)
   const orphans = orphanSidecars(teams, sidecars)
   const orphanBytes = orphans.reduce((s, o) => s + o.bytes, 0)
-  appendHistory(opts.history, 'storage', { t: now, total, buckets, orphanBytes })
+  const served = servedSessions(files, now)
+  const servedPastGrace = served.filter((s) => s.ageMs > SERVED_GRACE_MS)
+  const servedPastGraceBytes = servedPastGrace.reduce((s, r) => s + r.bytes, 0)
+  appendHistory(opts.history, 'storage', { t: now, total, buckets, orphanBytes, servedPastGraceBytes })
   const week = readHistory(opts.history, 'storage', now - 7 * DAY).map((r) => ({ t: r.t, value: r.total / MB }))
   const slope = slopePerHour(week)
   const growthMbPerDay = slope === null ? null : slope * 24
@@ -191,14 +198,26 @@ function evalStorage(opts, now) {
       note: orphans.length ? `${orphans.length} file(s): ${[...new Set(orphans.map((o) => o.slug))].join(', ')}` : ''
     },
     {
+      // Sandboxes older than the sweep's grace that are still on disk. After
+      // one app restart this should read 0 MB: the boot sweep reclaims every
+      // ended sandbox past grace, and at boot every sandbox is ended.
+      name: 'served sessions past grace',
+      value: servedPastGraceBytes / MB,
+      unit: 'MB',
+      verdict: judge(servedPastGraceBytes / MB, BUDGETS.storage.servedPastGraceMb),
+      note: servedPastGrace.length
+        ? `${servedPastGrace.length} of ${served.length} sandbox(es) older than 30 d — reclaimed at next boot unless open`
+        : `${served.length} sandbox(es), none past grace — ${BUCKET_POLICY['served-sessions']}`
+    },
+    {
       name: 'backup residue',
       value: (buckets.backups ?? 0) / MB,
       unit: 'MB',
       verdict: judge((buckets.backups ?? 0) / MB, BUDGETS.storage.backupsMb),
-      note: buckets.backups ? '*.bak-* / lineage-restore-backup-* — hand-made, never swept' : ''
+      note: buckets.backups ? `*.bak-* / lineage-* — ${BUCKET_POLICY.backups}` : ''
     }
   ]
-  return { total, buckets, orphans, growthMbPerDay, checks, verdict: worstOf(checks.map((c) => c.verdict)) }
+  return { total, buckets, orphans, served, growthMbPerDay, checks, verdict: worstOf(checks.map((c) => c.verdict)) }
 }
 
 // ---------------------------------------------------------------------------
