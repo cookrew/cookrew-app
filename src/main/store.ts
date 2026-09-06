@@ -27,6 +27,8 @@ import {
 } from '../shared/model'
 import { addDir, removeDir, setPrimary } from '../shared/workspace-dirs'
 import { slugFor } from './workspace-slug'
+import { recordLineageIds } from './lineage-spill'
+import { lineageIdsOf } from './session-lineage'
 import type { CookrewEvent, EventActor } from './event-log'
 import { upgradeNode } from './node-upgrades'
 import type { RecoverableSnapshot } from './recoverable'
@@ -1185,7 +1187,27 @@ export class WorkspaceStore extends EventEmitter {
     if (!updated) return this.updateNodeAcrossWorkspacesUnsafe(id, patch)
     this.mutate({ ...this.focusedState, nodes })
     if (updated.kind === 'note') void this.persistNoteFile(updated)
+    this.spillLineage(updated, patch)
     return updated
+  }
+
+  /**
+   * THE SINGLE WRITER for the durable lineage.
+   *
+   * Every path that binds or rebinds a Claude session lands here — spawn
+   * resolve, rotation commit, restore, fork adoption — so the durable record
+   * is written once, in one place, instead of at each call site that
+   * remembers to. 2026-09-06: the lineage lived only in the node payload and
+   * was capped at 20; the card at the cap was one rebind away from an
+   * unreachable transcript, and every future writer that forgets to spill
+   * would reopen that hole. A patch that changes nothing appends nothing
+   * (mergeSpill is idempotent), and a failed write is reported by the spill,
+   * never thrown into a rebind.
+   */
+  private spillLineage(updated: CanvasNode, patch: Partial<CanvasNode>): void {
+    if (updated.kind !== 'terminal') return
+    if (!('claudeSessionId' in patch) && !('sessionLineage' in patch)) return
+    recordLineageIds(updated.id, lineageIdsOf(updated as TerminalNodeData))
   }
 
   /**
@@ -1209,6 +1231,7 @@ export class WorkspaceStore extends EventEmitter {
         return updated
       })
     }))
+    if (updated) this.spillLineage(updated, patch)
     return updated
   }
 

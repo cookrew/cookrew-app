@@ -28,7 +28,8 @@
 // the pane pid from the multiplexer, cached per pane by PanePidCache because
 // the herdr lookup is a synchronous child process.
 
-import { isSessionUuid, realCwd } from './claude-fork'
+import { realCwd } from './claude-fork'
+import { paneAgentOf } from '../shared/pane-agent.mjs'
 import type { SessionHolder } from './claude-live-session'
 
 /** What the pane's own process says it is writing. */
@@ -42,6 +43,12 @@ export interface LiveSessionClaim {
  * said: no pane pid, no record for that pid, a background holder (a pane is
  * never a bg agent), a malformed id, or a record whose cwd is not this
  * terminal's (a pid reused by a process that is not ours).
+ *
+ * THE RULE ITSELF LIVES IN src/shared/pane-agent.mjs, and this is a thin
+ * adapter over it. On 2026-09-06 the gate script carried its OWN copy — ps for
+ * COOKREW_TERMINAL_ID, take a matching pid — and a background job that had
+ * inherited the terminal id made it print MISMATCH for a correctly bound card.
+ * The app was right and the alarm was wrong. One module now, imported by both.
  */
 export function liveSessionOfPane(
   panePid: number | null,
@@ -49,12 +56,7 @@ export function liveSessionOfPane(
   cwd: string,
   real: (dir: string) => string = realCwd
 ): LiveSessionClaim | null {
-  if (panePid === null || !Number.isInteger(panePid) || panePid <= 0) return null
-  const holder = holders.find((h) => h.pid === panePid)
-  if (!holder || holder.kind === 'bg') return null
-  if (!isSessionUuid(holder.sessionId)) return null
-  if (holder.cwd && real(holder.cwd) !== real(cwd)) return null
-  return { pid: holder.pid, sessionId: holder.sessionId }
+  return paneAgentOf(panePid, holders, cwd, real)
 }
 
 /** What the invariant says to do about a binding, given the oracle's answer. */
