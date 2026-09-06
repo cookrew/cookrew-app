@@ -73,7 +73,7 @@ export function createNames(options: NamesOptions): NamesFeature {
   const zone = options.zone.toLowerCase().replace(/\.$/, '')
   const now = options.now ?? Date.now
   const note = options.log ?? ((): void => undefined)
-  const certs = new CertStore(options.dataDir, now)
+  const certs = new CertStore(options.dataDir, now, note)
   const wildcardFor = (deviceId: string): string => `*.${deviceId}.${zone}`
   /** `_acme-challenge.<id>.<zone>` back to the id the store is keyed by. */
   const deviceOf = (host: string): string | null => {

@@ -231,7 +231,10 @@ const ACME_DIRECTORY = flag('acme-directory', LETSENCRYPT_STAGING)
 const ACME_EMAIL = flag('acme-email', '')
 
 let names: NamesFeature | undefined
-if (DNS_PORT > 0 || DNS_NS !== null) {
+// The TRIGGER is the flag being present, not the value parsing: `--dns-port`
+// with nothing after it must refuse rather than start a registry that silently
+// serves no names at all.
+if (args.includes('--dns-port') || DNS_NS !== null) {
   if (!Number.isInteger(DNS_PORT) || DNS_PORT < 1 || DNS_PORT > 65535) {
     console.error(`refusing to start: --dns-port ${flag('dns-port', '')} is not a port`)
     process.exit(1)

@@ -82,7 +82,9 @@ export class CertStore {
 
   constructor(
     base: string,
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    /** Operational notes. Never a chain, never a device id. */
+    private readonly note: (message: string) => void = () => undefined
   ) {
     mkdirSync(base, { recursive: true })
     this.file = path.join(base, FILE)
@@ -101,11 +103,25 @@ export class CertStore {
     }
   }
 
+  /**
+   * WRITE-THROUGH, AND A FAILURE TO WRITE IS NOT A FAILURE TO SERVE.
+   *
+   * The in-memory state is already correct by the time this runs; the file is
+   * how it survives a rollout. A full volume, a read-only mount or a directory
+   * that vanished under a test must therefore be a line in the log — a throw
+   * here escapes into the background order that called it and takes the whole
+   * process down as an unhandled rejection, which is a far worse outcome than
+   * a chain that has to be ordered again after a restart.
+   */
   private save(): void {
-    const body: Persisted = { version: 1, devices: this.devices }
-    const temporary = `${this.file}.tmp`
-    writeFileSync(temporary, JSON.stringify(body), { mode: 0o600 })
-    renameSync(temporary, this.file)
+    try {
+      const body: Persisted = { version: 1, devices: this.devices }
+      const temporary = `${this.file}.tmp`
+      writeFileSync(temporary, JSON.stringify(body), { mode: 0o600 })
+      renameSync(temporary, this.file)
+    } catch {
+      this.note('certs: the certificate store could not be written')
+    }
   }
 
   private record(deviceId: string): DeviceRecord {
