@@ -49,6 +49,7 @@ import { startSocketServer } from './socket-server'
 import { RoutineScheduler } from './routines'
 import { VoiceEngine } from './voice'
 import { SousController } from './sous-control'
+import { MacListener } from './listen'
 import { readSousVoiceConfig } from './sous-voice-config'
 import type { IntentRoster, Surface as SousSurface } from '../shared/sous-intent'
 import type { UiCommandEvent } from '../shared/sous-ui'
@@ -4365,6 +4366,30 @@ app.whenReady().then(() => {
     (_e, text: string, ctx: { surface: SousSurface; focusedAgentId?: string | null }) =>
       sous.handle({ text, surface: ctx.surface, focusedAgentId: ctx.focusedAgentId ?? null })
   )
+
+  // THE MAC'S EAR. One recognizer child per hold of ⌘; the roster's names go
+  // in as hints so "cookrew dev" is not heard as "cooker Dev".
+  const listener = new MacListener({
+    binary: app.isPackaged
+      ? path.join(process.resourcesPath, 'cr-listen')
+      : path.join(dirname, '../../resources/cr-listen/cr-listen'),
+    locale: () => readSousVoiceConfig().locale,
+    hints: () => {
+      const roster = sousRoster()
+      return [
+        'Sous',
+        'Cookrew',
+        ...roster.agents.map((a) => a.name),
+        ...roster.workspaces.map((w) => w.name),
+        ...roster.presets
+      ]
+    }
+  })
+  ipcMain.handle('listen:available', () => listener.available())
+  ipcMain.handle('listen:start', () =>
+    listener.start((event) => mainWindow?.webContents.send('listen:event', event))
+  )
+  ipcMain.handle('listen:stop', () => listener.stop())
 
   startSocketServer({
     store,

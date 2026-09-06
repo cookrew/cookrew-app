@@ -476,6 +476,12 @@ export function createRemoteApi(): CookrewApi {
     // back on the shared events stream like everything else the canvas does.
     sousCommand: (text, ctx) => req(apiPath('/api/sous/command'), 'POST', { text, ...ctx }),
     onUiCommand: (cb) => subscribe<UiCommandEvent>('ui', cb),
+    // The phone hears through its own browser (VoiceBar); the Mac's ear is
+    // the desktop's alone.
+    listenAvailable: () => Promise.resolve(false),
+    listenStart: () => Promise.resolve(false),
+    listenStop: () => Promise.resolve(),
+    onListenEvent: () => () => undefined,
     // No OS hands this surface a link: the phone and the demo are reached by
     // one, never launched by one.
     onDeepLink: () => () => undefined,

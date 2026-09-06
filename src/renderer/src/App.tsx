@@ -67,6 +67,9 @@ import { apiPath } from './api-base'
 import { planeFetch } from './plane-fetch'
 import { authHeaders } from './auth-gate'
 import { CrIcon } from './icons'
+import { SousPill } from './SousPill'
+import { speakSous } from './sous-speak'
+import { usePushToTalk } from './use-push-to-talk'
 import {
   canvasVisualModeOf,
   nextCanvasVisualMode,
@@ -691,6 +694,32 @@ function Canvas(): React.JSX.Element {
       }),
     [zoomToNode, zoomBack]
   )
+
+  // Hold ⌘ to talk. On the canvas the sentence is a command; over a zoomed
+  // terminal it is dictation for that agent (shared/sous-intent decides, from
+  // the surface). What comes back is said aloud and shown for a beat.
+  const [sousReply, setSousReply] = useState<{ text: string; refused: boolean } | null>(null)
+  useEffect(() => {
+    if (!sousReply) return
+    const timer = window.setTimeout(() => setSousReply(null), 3500)
+    return () => window.clearTimeout(timer)
+  }, [sousReply])
+  const ptt = usePushToTalk({
+    enabled: true,
+    onFinal: (text) => {
+      if (!text.trim()) return
+      const zoomed = zoomedTerminalIdRef.current
+      const ctx = zoomed ? { surface: 'zoom' as const, focusedAgentId: zoomed } : { surface: 'canvas' as const }
+      void cookrew()
+        .sousCommand(text, ctx)
+        .then((result) => {
+          if (!result.spoken) return
+          setSousReply({ text: result.spoken, refused: result.intent === 'refused' })
+          speakSous(result.spoken)
+        })
+    },
+    onError: (message) => setSousReply({ text: message, refused: true })
+  })
 
   /**
    * Dock tool selection. There is no MOVE button — the resting hand is what
@@ -1416,6 +1445,7 @@ function Canvas(): React.JSX.Element {
           interactiveCapability={interactiveCapability}
         />
         <EventToastLayer />
+        <SousPill listening={ptt.listening} partial={ptt.partial} reply={sousReply} />
         {/* Identity: the sheets and the lock. Mounted here, after everything
             else, so the lock screen is drawn over the canvas it covers. */}
         {account.overlays}

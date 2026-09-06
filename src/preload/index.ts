@@ -372,6 +372,15 @@ const api = {
     ipcRenderer.on('ui:command', listener)
     return () => ipcRenderer.removeListener('ui:command', listener)
   },
+  // Hold ⌘ to talk: main runs the on-device recognizer and streams what it hears.
+  listenAvailable: () => ipcRenderer.invoke('listen:available'),
+  listenStart: () => ipcRenderer.invoke('listen:start'),
+  listenStop: () => ipcRenderer.invoke('listen:stop'),
+  onListenEvent: (cb: (event: unknown) => void) => {
+    const listener = (_e: unknown, event: unknown): void => cb(event)
+    ipcRenderer.on('listen:event', listener)
+    return () => ipcRenderer.removeListener('listen:event', listener)
+  },
   quitApp: () => ipcRenderer.send('app:quit'),
   // A `cookrew://` link, already parsed by main (src/main/deep-link.ts) —
   // the renderer only ever sees one of the three verbs, never a raw URL.

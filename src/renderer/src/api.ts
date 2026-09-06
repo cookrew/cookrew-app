@@ -2,6 +2,7 @@ import type { DeepLink } from '../../shared/deep-link'
 import type { TranslateResult } from '../../shared/translate'
 import type { Surface as SousSurface } from '../../shared/sous-intent'
 import type { SousCommandResult } from '../../main/sous-control'
+import type { ListenEvent } from '../../main/listen'
 import type { UiCommandEvent } from '../../shared/sous-ui'
 import type {
   AgentRole,
@@ -505,6 +506,15 @@ export interface CookrewApi {
    */
   sousCommand: (text: string, ctx: { surface: SousSurface; focusedAgentId?: string | null }) => Promise<SousCommandResult>;
   onUiCommand: (cb: (event: UiCommandEvent) => void) => () => void;
+  /**
+   * Hold ⌘ to talk (desktop only — the phone dictates through the Web Speech
+   * API in VoiceBar). Main spawns the on-device recognizer on start, SIGINTs
+   * it on stop, and streams ready / partial / final / error here.
+   */
+  listenAvailable: () => Promise<boolean>;
+  listenStart: () => Promise<boolean>;
+  listenStop: () => Promise<void>;
+  onListenEvent: (cb: (event: ListenEvent) => void) => () => void;
   /**
    * A `cookrew://` link the OS handed to the app, already parsed by main —
    * one of three verbs, never a raw URL (shared/deep-link.ts).
