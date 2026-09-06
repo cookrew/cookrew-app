@@ -3,7 +3,7 @@ import { isRemoteMode } from '../api'
 import { authHeaders, authStore } from '../auth-gate'
 import { dataPlane, setDataPlane, subscribeDataPlane, type DataPlane } from '../data-plane'
 import { planeFetch } from '../plane-fetch'
-import { planeHealth } from '../plane-health'
+import { planeHealth, type LinkHealth } from '../plane-health'
 import { followDataPlane } from '../plane-streams'
 import { currentOriginState, forgetLatency, setProbing, subscribePathLink } from '../path-link'
 import { PLANE_PROBE_EVERY_MS, switchPlaneIfBetter, type HelloClaim } from './plane-switch'
@@ -127,6 +127,12 @@ const verifyHello = async (claim: HelloClaim): Promise<boolean> => {
  */
 const startPlaneSwitch = (): (() => void) => {
   const health = planeHealth()
+  // The link store announces on EVERY change it holds — latency, probing, the
+  // desktop's name — and only the transport's own state is evidence about the
+  // plane. Without this the latency recorded by each successful request would
+  // read as "the channel is live" and quietly disarm the watchdog that is
+  // waiting to see whether a dropped stream comes back.
+  let lastLink: LinkHealth | null = null
   const offs: (() => void)[] = [
     followDataPlane(),
     // The badge's latency is a measurement of the path it was taken on, and
@@ -135,7 +141,11 @@ const startPlaneSwitch = (): (() => void) => {
     subscribeDataPlane(forgetLatency),
     // The push channel is the first thing to notice a plane that has died, so
     // its state is fed to the health watchdog rather than only to the badge.
-    subscribePathLink((state) => health.link(state.link)),
+    subscribePathLink((state) => {
+      if (state.link === lastLink) return
+      lastLink = state.link
+      health.link(state.link)
+    }),
     startRaceLoop({
       everyMs: PLANE_PROBE_EVERY_MS,
       race: () =>
