@@ -14,6 +14,8 @@ import {
   START_HOWTO as HOWTO
 } from './site-content'
 import { commitsSection, compareTable, featuresGrid } from './site-features'
+import { ASSET_VERSION } from './assets-bundle'
+import { WIRE_HAND_64, lensEyeSvg } from '../../src/shared/brand-hand'
 import { faqPage, organization, softwareApplication, teamList, webPage } from './site-seo'
 
 /**
@@ -95,6 +97,22 @@ export function presetCard(p: PresetSummary): string {
 <div class="body"><p class="dim">Reviewed in the app before anything is installed.</p></div>
 <div class="foot"><span class="price free">download · review first</span><span class="sp"></span><a class="btn sm primary" href="/install/${esc(p.id)}">Review in Cookrew</a></div>
 </article>`
+}
+
+/**
+ * THE LOCKUP (owner ruling, 2026-09-06 — the render itself): the cyan
+ * wireframe render is the C, two robot lens eyes are the O's, K R E W is
+ * outlined, and a second, mirrored hand under the letters types them in and
+ * backspaces them out on a six-second loop; dashed cables tie each hand to an
+ * eye, bottoming out on one line. Cyan on a phosphor band, CSS only — the
+ * front page carries no script. The full render is /assets/wire-hand.png; the
+ * small hand is the 64 px data URI the app's bar uses.
+ */
+export function brandBand(): string {
+  const eye = `<span class="o">${lensEyeSvg()}</span>`
+  const left = 'M 46 120 C 46 176 46 176 100 176 L 150 176 C 199 176 199 176 199 91'
+  const right = 'M 291 91 C 291 176 291 176 340 176 L 372 176 C 417 176 417 176 417 169'
+  return `<div class="brand-band" role="img" aria-label="COOKREW"><span class="lk"><svg class="cb" viewBox="0 -20 700 240" aria-hidden="true"><path d="${left}"/><path class="tt" d="${right}"/><rect x="192" y="86" width="14" height="9" rx="2"/><rect x="284" y="86" width="14" height="9" rx="2"/><rect x="38" y="116" width="16" height="8" rx="2"/><rect class="wp" x="409" y="163" width="16" height="8" rx="2"/></svg><img class="c" src="/assets/wire-hand.png?v=${ASSET_VERSION}" alt="" width="72" height="72">${eye}${eye}<span class="t" aria-hidden="true"><img class="h" src="${WIRE_HAND_64}" alt=""><span class="l">K</span><span class="l">R</span><span class="l">E</span><span class="l">W</span></span></span></div>`
 }
 
 /** The download links, at the top of the page — the DOWNLOAD button lands here. */
@@ -202,7 +220,7 @@ export function homePage(input: HomeInput): Page {
     `<div class="wrap home">
 <div class="home-body">
 <div class="hero"><div class="wrap">
-<div><span class="tagline">OPEN SOURCE · ${FACTS.harnesses.slice(0, 4).join(' · ').toUpperCase()}</span>
+<div>${brandBand()}<span class="tagline">OPEN SOURCE · ${FACTS.harnesses.slice(0, 4).join(' · ').toUpperCase()}</span>
 <h1>${esc(HEADLINE)}</h1>
 <p class="lede">${esc(ONE_LINE)} Every turn is a checkpoint. Serve a team at a cookrew.dev address and anyone can open it.</p>
 ${downloadButtons(input.release)}</div>
