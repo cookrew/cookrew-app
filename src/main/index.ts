@@ -55,6 +55,7 @@ import {
   mobileEndpointList,
   uncoveredCertHosts,
   rotateActivePairingToken,
+  activePairingTokenValue,
   activeCertFingerprint
 } from './mobile-server'
 import {
@@ -84,6 +85,8 @@ import { OwnerGrant, isOwnerSender } from './owner-grant'
 import { Accounts, DEFAULT_LOCK_AFTER_MS, registryOrigin } from './account-v2'
 import { relayHandle } from './legacy-identity'
 import { createAdmittedDeviceStore } from './admitted-devices'
+import { pairingHandout } from './pairing-handout'
+import type { PairingHandout } from '../shared/account-v2'
 import { createPairingKeyRing } from './pairing-key'
 import { createRegistryKeyCache } from './registry-keys'
 import { createSpentTokenStore } from './spent-tokens'
@@ -647,6 +650,30 @@ const relayServing =
  */
 const pairingKeys = createPairingKeyRing()
 const admittedDevices = createAdmittedDeviceStore()
+
+/**
+ * THE ONE URL, for both surfaces that show it.
+ *
+ * `cookrew mobile` prints it and the avatar popout draws it as a QR; they call
+ * the same function so the terminal and the window can never disagree about
+ * which credential is current.
+ *
+ * The token is read LIVE rather than captured: `cookrew mobile --rotate`
+ * replaces it inside the running server, and a handout holding the boot value
+ * would keep printing a credential that no longer opens anything.
+ */
+const currentPairingHandout = (): PairingHandout | null =>
+  pairingHandout({
+    account: () => {
+      const account = accounts.account()
+      return account
+        ? { username: account.username, deviceId: account.deviceId, name: account.name }
+        : null
+    },
+    registryOrigin: () => registryOrigin(),
+    endpoints: () => mobileEndpointList(),
+    pairingToken: () => activePairingTokenValue() ?? pairingToken
+  })
 /**
  * Canvas tokens already spent. Persisted because a restart that forgot them
  * would reopen the replay window this closes, and a Mac restarts far more
@@ -4248,6 +4275,7 @@ app.whenReady().then(() => {
     mobileEndpoints: mobileEndpointList,
     uncoveredCertHosts,
     rotatePairingToken: rotateActivePairingToken,
+    pairingHandout: currentPairingHandout,
     listWorkspaces,
     createWorkspace,
     createWorkspaceFromTeam,
