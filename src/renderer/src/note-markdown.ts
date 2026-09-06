@@ -346,10 +346,12 @@ function renderIllFormed(content: string): string {
  * String.prototype.isWellFormed is ES2024 — Chrome 111+. The TV box in the
  * living room runs Chrome 108 and crashed the whole canvas on it (measured
  * 2026-09-06: "content.isWellFormed is not a function"). A lone surrogate is
- * what ill-formed means, so the fallback looks for exactly that.
+ * what ill-formed means, so the fallback looks for exactly that. Exported so
+ * the test can pin the fallback to the native answer with the native stubbed
+ * away — on Node the native is always present, so nothing else exercises it.
  */
 const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
-function isWellFormedString(content: string): boolean {
+export function isWellFormedString(content: string): boolean {
   const native = (content as { isWellFormed?: () => boolean }).isWellFormed
   return typeof native === 'function' ? native.call(content) : !LONE_SURROGATE_RE.test(content)
 }
