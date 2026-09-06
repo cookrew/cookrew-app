@@ -118,7 +118,9 @@ describe('Sous under a permanent timeout', () => {
     vi.useFakeTimers()
     let attempts = 0
     const breaker = createSousBreaker({ log: () => undefined })
-    const timingOut: TurnSummarizer = () =>
+    // What is counted is the TRACKER's calls: a pump that asks every tick and
+    // is refused by the breaker still asked, and that is the regression.
+    const timingOut = vi.fn<TurnSummarizer>(() =>
       breaker.guard(
         () =>
           new Promise((_resolve, reject) => {
@@ -126,6 +128,7 @@ describe('Sous under a permanent timeout', () => {
             setTimeout(() => reject(TIMEOUT_ERROR()), 8000)
           })
       )
+    )
     const { TurnTracker } = await import('../src/main/turn-tracker')
     const tracker = new TurnTracker(timingOut, null, undefined, () => breaker.readiness())
     const session = new FakeSession('term-0')
@@ -143,7 +146,8 @@ describe('Sous under a permanent timeout', () => {
     )
     await vi.advanceTimersByTimeAsync(60 * 2000)
     tracker.disposeAll()
-    expect(attempts).toBeLessThanOrEqual(SOUS_BREAKER_THRESHOLD + 1)
+    expect(timingOut.mock.calls.length).toBeLessThanOrEqual(SOUS_BREAKER_THRESHOLD + 1)
+    expect(attempts).toBe(timingOut.mock.calls.length)
     expect(breaker.state().state).toBe('open')
     expect(tracker.history('term-0').every((r) => r.title === undefined)).toBe(true)
   })
@@ -213,6 +217,68 @@ describe('Sous under a permanent timeout', () => {
     await vi.advanceTimersByTimeAsync(2000)
     expect(summarize).toHaveBeenCalledTimes(1)
     tracker.disposeAll()
+  })
+
+  it('a summarizer that throws once does not silence the live title cadence', async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    const summarize: TurnSummarizer = async () => {
+      calls += 1
+      if (calls === 1) throw new TypeError("Cannot read properties of undefined (reading 'join')")
+      return 'Recovered title'
+    }
+    const { TurnTracker } = await import('../src/main/turn-tracker')
+    const tracker = new TurnTracker(summarize, null, undefined, () => 'ready')
+    const session = new FakeSession('term-0')
+    tracker.track(session as unknown as PtySession, true)
+    const rejections: unknown[] = []
+    const onRejection = (reason: unknown): void => {
+      rejections.push(reason)
+    }
+    process.on('unhandledRejection', onRejection)
+    try {
+      session.emit('input', 'work\r')
+      await vi.advanceTimersByTimeAsync(1000) // the first refresh throws
+      expect(calls).toBe(1)
+      expect(tracker.list()[0].title).not.toBe('Recovered title')
+      await vi.advanceTimersByTimeAsync(15_000) // the cadence survived
+      expect(calls).toBe(2)
+      expect(tracker.list()[0].title).toBe('Recovered title')
+    } finally {
+      process.off('unhandledRejection', onRejection)
+      tracker.disposeAll()
+    }
+  })
+
+  it('a backfill that throws is counted as a failure: the cooldown grows and the stack is logged once', async () => {
+    vi.useFakeTimers()
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    let calls = 0
+    const summarize: TurnSummarizer = async () => {
+      calls += 1
+      throw new RangeError('Invalid array length')
+    }
+    const { TurnTracker } = await import('../src/main/turn-tracker')
+    const tracker = new TurnTracker(summarize, null, undefined, () => 'ready')
+    const session = new FakeSession('term-0')
+    tracker.track(session as unknown as PtySession, true)
+    tracker.replaceHistory('term-0', [{ index: 1, prompt: 'a', reply: 'r', uuid: 'u1', startedAt: 1, endedAt: 2 }])
+    try {
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(calls).toBe(1)
+      await vi.advanceTimersByTimeAsync(60_000) // 60 s after the first failure
+      expect(calls).toBe(2)
+      await vi.advanceTimersByTimeAsync(60_000) // not yet: the second wait is 2 min
+      expect(calls).toBe(2)
+      await vi.advanceTimersByTimeAsync(62_000)
+      expect(calls).toBe(3)
+      const logged = errors.mock.calls.filter((c) => String(c[0]).startsWith('Sous: title backfill'))
+      expect(logged).toHaveLength(1)
+      expect(logged[0][0]).toBe('Sous: title backfill of term-0:1 threw:')
+    } finally {
+      errors.mockRestore()
+      tracker.disposeAll()
+    }
   })
 
   it('a title that failed still backfills once the summarizer answers', async () => {

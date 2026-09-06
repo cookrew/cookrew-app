@@ -64,14 +64,14 @@ export function sousBreakerState(): SousBreakerState {
   return breaker.state()
 }
 
-async function requestTitle(input: TitleInput): Promise<SousAttempt<string | null>> {
+async function requestTitle(prompt: string): Promise<SousAttempt<string | null>> {
   const res = await fetch(`${BASE_URL}/api/generate`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     signal: AbortSignal.timeout(warmed ? REQUEST_TIMEOUT_MS : COLD_TIMEOUT_MS),
     body: JSON.stringify({
       model: MODEL,
-      prompt: buildTitlePrompt(input),
+      prompt,
       stream: false,
       keep_alive: KEEP_ALIVE,
       options: { temperature: 0.2, num_predict: 32 }
@@ -80,7 +80,15 @@ async function requestTitle(input: TitleInput): Promise<SousAttempt<string | nul
   // 404 = model not pulled; other statuses = server-side trouble. Either way
   // it is a failure the breaker counts.
   if (!res.ok) return { ok: false, reason: `Ollama returned ${res.status} for model ${MODEL}` }
-  const body = (await res.json()) as OllamaGenerateResponse
+  let body: OllamaGenerateResponse
+  try {
+    body = (await res.json()) as OllamaGenerateResponse
+  } catch {
+    // A 200 whose body is not JSON — a proxy in front of Ollama serving its
+    // HTML error page, say — is the server misbehaving, and counts like any
+    // other failure rather than rethrowing as a bug of ours.
+    return { ok: false, reason: `Ollama answered ${res.status} with an unreadable body` }
+  }
   warmed = true
   return { ok: true, value: sanitizeTitle(body.response ?? '') }
 }
@@ -92,5 +100,8 @@ async function requestTitle(input: TitleInput): Promise<SousAttempt<string | nul
  */
 export async function summarizeTurn(input: TitleInput): Promise<string | null> {
   if (DISABLED) return null
-  return breaker.guard(() => requestTitle(input))
+  // Built before the guard: a bug in the prompt is ours, not a Sous failure,
+  // and must not be counted by the breaker or blamed on the server.
+  const prompt = buildTitlePrompt(input)
+  return breaker.guard(() => requestTitle(prompt))
 }
