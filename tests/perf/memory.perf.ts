@@ -3,7 +3,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { EventLog, type CookrewEvent } from '../../src/main/event-log'
 import { WorkspaceStore } from '../../src/main/store'
-import { clearNoteMarkdownCache, renderNoteMarkdown } from '../../src/renderer/src/note-markdown'
+import { clearNoteMarkdownCache, noteMarkdownCacheStats, renderNoteMarkdown } from '../../src/renderer/src/note-markdown'
 import type { CanvasNode } from '../../src/shared/model'
 import { MEMORY, STORAGE } from './budgets'
 import { heapGrowth, removeRoot, tempRoot } from './perf-harness'
@@ -170,31 +170,69 @@ describe('workspace store — churn and switching retain nothing', () => {
 describe('note markdown — the render cache is bounded', () => {
   const body = (i: number): string => `# Note ${i}\n\n${'- item with **bold** and `code`\n'.repeat(2100)}`
 
-  it('the renderer itself retains nothing (control)', async () => {
+  it('the renderer retains nothing once the cache is cleared — not even marked\'s last parse tree (control)', async () => {
     const growth = await heapGrowth(300, (i) => {
       renderNoteMarkdown(body(i))
       clearNoteMarkdownCache()
     })
     expect(growth.retainedMb).toBeLessThan(MEMORY.noteRenderNoCacheMb)
+    // marked keeps the last parse's whole token tree alive through the custom
+    // renderer (Parser assigns itself to renderer.parser): measured 46 MB
+    // after one 1.3M-char parse, 224 MB after a 7.2M-char one. The module
+    // releases it with an empty parse; this is the assertion that it still
+    // does, at a size the count-of-64-KB-notes loop above cannot see.
+    const large = `# Large\n\n${'- item with **bold** and `code`\n'.repeat(40_000)}`
+    expect(large.length).toBeGreaterThan(1_000_000)
+    const afterLarge = await heapGrowth(1, () => {
+      renderNoteMarkdown(large)
+      clearNoteMarkdownCache()
+    })
+    expect(afterLarge.retainedMb).toBeLessThan(MEMORY.noteRenderNoCacheMb)
   })
 
   it('rendering 300 distinct 64 KB notes retains only the cache bound', async () => {
     expect(body(0).length).toBeGreaterThan(60 * 1024)
+    const base = noteMarkdownCacheStats()
     const growth = await heapGrowth(300, (i) => {
       renderNoteMarkdown(body(i))
     })
     expect(growth.retainedMb).toBeLessThan(MEMORY.noteRenderCacheMb)
+    // STRUCTURE: the bound is in bytes and it held — and it is USED. Three
+    // hundred distinct notes went in as parses, the running total never reads
+    // above its budget, and a cache that evicted too eagerly (fewer than 20
+    // of this shape, or under 80% of its budget) is as much a defect as one
+    // that never evicts.
+    const held = noteMarkdownCacheStats()
+    process.stdout.write(`perf note cache: entries=${held.entries} bytes=${held.bytes} of ${held.maxBytes}\n`)
+    expect(held.misses - base.misses).toBeGreaterThanOrEqual(300)
+    expect(held.hits).toBe(base.hits)
+    expect(held.oversizedParses).toBe(base.oversizedParses)
+    expect(held.illFormedParses).toBe(base.illFormedParses)
+    // Real retention is the map plus the two side slots, and every part of it
+    // is bounded: the map by the budget, each slot by four budgets.
+    expect(held.bytes).toBeLessThanOrEqual(held.maxBytes)
+    expect(held.oversizedBytes).toBeLessThanOrEqual(4 * held.maxBytes)
+    expect(held.illFormedBytes).toBeLessThanOrEqual(4 * held.maxBytes)
+    expect(held.bytes + held.oversizedBytes + held.illFormedBytes).toBeLessThanOrEqual(held.maxBytes)
+    expect(held.bytes).toBeGreaterThan(held.maxBytes * 0.8)
+    expect(held.entries).toBeGreaterThan(20)
+    expect(held.entries).toBeLessThan(held.misses - base.misses)
     // And the bound is a window, not a leak: the most recent note answers
-    // from the cache (the SAME string object both times), while the first one
-    // rendered was evicted and renders afresh (an equal but distinct string).
-    // Identity, not timing — two clocks racing on a CI runner is a coin toss.
+    // from the cache, while the first one rendered was evicted and renders
+    // afresh, then answers from the cache again. Strings are primitives, so
+    // toBe here is equality — the COUNTERS are what tell a hit from a parse.
+    // Counters, not timing — two clocks racing on a CI runner is a coin toss.
     const recent = body(300)
     expect(renderNoteMarkdown(recent)).toBe(renderNoteMarkdown(recent))
+    expect(noteMarkdownCacheStats()).toMatchObject({ hits: held.hits + 2, misses: held.misses })
     const first = renderNoteMarkdown(body(1))
+    expect(noteMarkdownCacheStats()).toMatchObject({ hits: held.hits + 2, misses: held.misses + 1 })
     const again = renderNoteMarkdown(body(1))
     expect(again).toBe(first)
+    expect(noteMarkdownCacheStats()).toMatchObject({ hits: held.hits + 3, misses: held.misses + 1 })
     const evicted = renderNoteMarkdown(body(2))
     expect(renderNoteMarkdown(body(2))).toBe(evicted)
     expect(evicted).not.toBe(first)
+    expect(noteMarkdownCacheStats()).toMatchObject({ hits: held.hits + 4, misses: held.misses + 2, oversizedParses: base.oversizedParses })
   })
 })
