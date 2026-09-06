@@ -183,6 +183,7 @@ import { reapOrphanBrowserProfiles, removeBrowserProfile } from './browser-profi
 import { purgeRegenerableProfileData, reapOrphanPartitions } from './browser-storage-gc'
 
 import { TraceReader, type SessionWatchSpec } from './trace'
+import { createStreamService } from './stream-service'
 import { LatestFileWatcher } from './latest-watch'
 import { SessionTurnSync } from './session-sync'
 import { RoleStore } from './roles'
@@ -1423,6 +1424,27 @@ const traces = new TraceReader(store, {
     const servedCtx = owner ? servedSpawnContexts.get(owner) : undefined
     return servedCtx ? path.join(servedCtx.sandbox, '.pi', 'agent') : undefined
   }
+})
+
+/**
+ * THE ONE STREAM (docs/site/one-stream-2026-09-07.html, phase T2).
+ *
+ * The lineage's transcripts read as one conversation, joined once with the
+ * marks ledger, serving /api/terminal/:id/stream* — and, behind
+ * COOKREW_STREAM_ADAPTERS, the five old routes as well. It composes what
+ * already exists rather than standing anything up: `traces.documentOf` is the
+ * SAME windowed per-file cache the pager uses (two caches over 119 MB files
+ * is the "out of application memory" incident, not an abstraction cost), and
+ * `traces.watchSpec` is the registry's own file resolution for the harnesses
+ * that do not rotate.
+ */
+const streamService = createStreamService({
+  nodeOf: (terminalId) => {
+    const hit = store.nodeAcrossWorkspaces(terminalId)
+    return hit && hit.node.kind === 'terminal' ? hit.node : null
+  },
+  documentOf: (file, kind) => traces.documentOf(file, kind),
+  fileOf: (node) => traces.watchSpec(node.id)?.file ?? null
 })
 
 /**
@@ -4718,6 +4740,9 @@ app.whenReady().then(() => {
       latestCheckpoint: latestCheckpointFor
     },
     turnHistory: turnHistoryFor,
+    // One stream (T2): the three new routes, and the five old ones as
+    // adapters over the same reader while COOKREW_STREAM_ADAPTERS is on.
+    stream: streamService,
     // Activity Board data plane. Without this /api/board answers 503 —
     // deliberately, so a missing wire-up is loud instead of an empty board.
     // probe (L2) is absent until the tmux sampler lands; rows then degrade to
