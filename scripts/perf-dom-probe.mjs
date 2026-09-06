@@ -34,7 +34,9 @@
  *            Memory.getDOMCounters (nodes INCLUDING detached ones).
  *
  * The pairing token is read from ~/.cookrew/pairing-token and rides the page
- * URL the way the phone's own pairing URL carries it. It is never printed.
+ * URL as the `#pair=` FRAGMENT the auth gate accepts — the house rule: a
+ * fragment never leaves the browser, a query lands in the server's access
+ * log. It is never printed.
  */
 import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
@@ -196,6 +198,9 @@ export const HOOK_SCRIPT = `(() => {
   let recording = false
   let commits = 0
   let renders = {}
+  // WHICH cards rendered, by node id — a count says how many times, this says
+  // how many cards. One renamed card must be one id here.
+  let cards = new Set()
   const nameOf = (fiber) => {
     const t = fiber.type
     if (typeof t === 'function') return t.displayName || t.name || 'anonymous'
@@ -212,6 +217,7 @@ export const HOOK_SCRIPT = `(() => {
       if ((fiber.flags & PERFORMED_WORK) !== 0) {
         const name = nameOf(fiber)
         if (name !== null) renders[name] = (renders[name] || 0) + 1
+        if (name === 'NodeWrapper' && fiber.memoizedProps && fiber.memoizedProps.id) cards.add(fiber.memoizedProps.id)
       }
       if (fiber.sibling) stack.push(fiber.sibling)
       // Descend only into a child list React rebuilt in this commit. A
@@ -235,8 +241,8 @@ export const HOOK_SCRIPT = `(() => {
   }
   Object.defineProperty(window, '__REACT_DEVTOOLS_GLOBAL_HOOK__', { value: hook, configurable: true })
   window.__crRenderCensus = {
-    start() { commits = 0; renders = {}; recording = true },
-    stop() { recording = false; return { commits, renders } }
+    start() { commits = 0; renders = {}; cards = new Set(); recording = true },
+    stop() { recording = false; return { commits, renders, cards: [...cards] } }
   }
 })()`
 
@@ -336,8 +342,11 @@ function watchLayers(page) {
   })
   return async () => {
     await page.send('LayerTree.enable').catch(() => undefined)
-    // A no-op style write nudges a tree update out of a page that has gone quiet.
-    await page.evaluate('(document.body.style.outlineOffset = "0px", 1)')
+    // A no-op style write nudges a tree update out of a page that has gone
+    // quiet; it is put back the way it was found.
+    await page.evaluate(
+      '(() => { const s = document.body.style; const was = s.outlineOffset; s.outlineOffset = "0px"; requestAnimationFrame(() => { s.outlineOffset = was }); return 1 })()'
+    )
     await sleep(400)
     if (!latest) return { count: null, contentLayers: null, backingMb: null }
     const content = latest.filter((l) => l.drawsContent)
@@ -356,7 +365,7 @@ export async function recordFrames(page, run) {
       .sort((a, b) => b[1] - a[1])
       .slice(0, 16)
   )
-  return { frames, commits: census.commits, commitsPerFrame: census.commits / Math.max(1, frames), renders: topRenders }
+  return { frames, commits: census.commits, commitsPerFrame: census.commits / Math.max(1, frames), renders: topRenders, cards: census.cards }
 }
 
 export async function pan(page, point, frames, step = 6) {
@@ -399,10 +408,12 @@ async function idle(page, ms) {
   return frames
 }
 
+/** The header's view switch: the segment button whose label says the view. */
 const BOARD_CLICK = (view) => `(() => {
-  const button = [...document.querySelectorAll('.cr-header button')].find((b) => ${
-    view === 'agents' ? "/board/i.test(b.title || '')" : "/canvas/i.test(b.title || '') || b.getAttribute('aria-pressed') === 'false'"
-  })
+  const label = ${JSON.stringify(view === 'agents' ? 'Board' : 'Canvas')}
+  const button = [...document.querySelectorAll('.cr-viewseg button')].find(
+    (b) => (b.querySelector('.cr-viewseg-label')?.textContent || '').trim() === label
+  )
   if (!button) return false
   button.click()
   return true
@@ -511,60 +522,78 @@ async function workspaceShape(apiPort, token) {
  * Load the companion in a fresh headless Chrome and measure it at rest, under
  * a pan, under a zoom, idle, and across a board open/close.
  */
-export async function probeCompanion({ viewport = 'phone', apiPort = 8639, serve = null, frames = 30, gestures = true, token = readToken() } = {}) {
+export async function probeCompanion({
+  viewport = 'phone',
+  apiPort = 8639,
+  serve = null,
+  frames = 30,
+  gestures = true,
+  token = readToken(),
+  /** The whole probe, load to last measurement; Chrome is killed either way. */
+  timeoutMs = 5 * 60_000
+} = {}) {
   if (!token) throw new Error('no pairing token')
   const size = VIEWPORTS[viewport] ?? VIEWPORTS.phone
   const served = serve ? await serveBuild(serve, apiPort) : null
   const origin = served ? `http://127.0.0.1:${served.port}/` : `http://127.0.0.1:${apiPort}/?renderer=built`
-  const url = `${origin}${origin.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`
+  const url = `${origin}#pair=${encodeURIComponent(token)}`
   const chrome = await launchChrome(size)
+  let timer = null
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`dom probe exceeded ${Math.round(timeoutMs / 1000)} s`)), timeoutMs)
+  })
   try {
-    const page = await connectPage(chrome.port)
-    await page.send('Page.enable')
-    await page.send('Runtime.enable')
-    await page.send('Performance.enable')
-    await page.send('Emulation.setDeviceMetricsOverride', { width: size.width, height: size.height, deviceScaleFactor: size.mobile ? 3 : 2, mobile: size.mobile })
-    if (size.mobile) await page.send('Emulation.setTouchEmulationEnabled', { enabled: true })
-    await page.send('Page.addScriptToEvaluateOnNewDocument', { source: HOOK_SCRIPT })
-    const layers = watchLayers(page)
-    await page.send('Page.navigate', { url })
-    await waitForCanvas(page)
-    const workspace = await workspaceShape(apiPort, token)
-    const result = {
-      viewport,
-      size: { width: size.width, height: size.height },
-      source: served ? path.resolve(serve) : 'app build (?renderer=built)',
-      workspace,
-      rest: { dom: await page.evaluate(CENSUS), fiber: await page.evaluate(FIBER_CENSUS), layers: await layers(), metrics: await metrics(page) }
-    }
-    if (gestures) {
-      const point = await page.evaluate(PANE_POINT)
-      result.idle = await recordFrames(page, () => idle(page, 3000))
-      if (point) {
-        result.pan = await recordFrames(page, () => pan(page, point, frames))
-        result.zoom = await recordFrames(page, () => zoom(page, point, frames))
-      } else {
-        result.pan = null
-        result.zoom = null
-      }
-      // The board: open, measure; close, collect, measure — what it leaves behind.
-      const opened = await page.evaluate(BOARD_CLICK('agents'))
-      if (opened) {
-        await sleep(2000)
-        result.board = { open: { dom: await page.evaluate(CENSUS), layers: await layers(), metrics: await metrics(page) } }
-        await page.evaluate(BOARD_CLICK('canvas'))
-        await sleep(1500)
-        await page.send('HeapProfiler.collectGarbage').catch(() => undefined)
-        await sleep(500)
-        result.board.closed = { dom: await page.evaluate(CENSUS), fiber: await page.evaluate(FIBER_CENSUS), layers: await layers(), metrics: await metrics(page) }
-      }
-    }
-    page.close()
-    return result
+    return await Promise.race([deadline, measureCompanion(chrome, { size, url, apiPort, token, frames, gestures, serve, served })])
   } finally {
+    clearTimeout(timer)
     await chrome.kill()
     served?.close()
   }
+}
+
+async function measureCompanion(chrome, { size, url, apiPort, token, frames, gestures, serve, served }) {
+  const page = await connectPage(chrome.port)
+  await page.send('Page.enable')
+  await page.send('Runtime.enable')
+  await page.send('Performance.enable')
+  await page.send('Emulation.setDeviceMetricsOverride', { width: size.width, height: size.height, deviceScaleFactor: size.mobile ? 3 : 2, mobile: size.mobile })
+  if (size.mobile) await page.send('Emulation.setTouchEmulationEnabled', { enabled: true })
+  await page.send('Page.addScriptToEvaluateOnNewDocument', { source: HOOK_SCRIPT })
+  const layers = watchLayers(page)
+  await page.send('Page.navigate', { url })
+  await waitForCanvas(page)
+  const workspace = await workspaceShape(apiPort, token)
+  const result = {
+    viewport,
+    size: { width: size.width, height: size.height },
+    source: served ? path.resolve(serve) : 'app build (?renderer=built)',
+    workspace,
+    rest: { dom: await page.evaluate(CENSUS), fiber: await page.evaluate(FIBER_CENSUS), layers: await layers(), metrics: await metrics(page) }
+  }
+  if (gestures) {
+    const point = await page.evaluate(PANE_POINT)
+    result.idle = await recordFrames(page, () => idle(page, 3000))
+    if (point) {
+      result.pan = await recordFrames(page, () => pan(page, point, frames))
+      result.zoom = await recordFrames(page, () => zoom(page, point, frames))
+    } else {
+      result.pan = null
+      result.zoom = null
+    }
+    // The board: open, measure; close, collect, measure — what it leaves behind.
+    const opened = await page.evaluate(BOARD_CLICK('agents'))
+    if (opened) {
+      await sleep(2000)
+      result.board = { open: { dom: await page.evaluate(CENSUS), layers: await layers(), metrics: await metrics(page) } }
+      await page.evaluate(BOARD_CLICK('canvas'))
+      await sleep(1500)
+      await page.send('HeapProfiler.collectGarbage').catch(() => undefined)
+      await sleep(500)
+      result.board.closed = { dom: await page.evaluate(CENSUS), fiber: await page.evaluate(FIBER_CENSUS), layers: await layers(), metrics: await metrics(page) }
+    }
+  }
+  page.close()
+  return result
 }
 
 /** Read-only census of a page already running with remote debugging on. */
@@ -573,7 +602,9 @@ export async function probeAttached(port) {
   await page.send('Performance.enable')
   const layers = watchLayers(page)
   const result = { attached: port, rest: { dom: await page.evaluate(CENSUS), fiber: await page.evaluate(FIBER_CENSUS), layers: await layers(), metrics: await metrics(page) } }
+  // An observer leaves the page as it found it.
   await page.send('LayerTree.disable').catch(() => undefined)
+  await page.send('Performance.disable').catch(() => undefined)
   page.close()
   return result
 }

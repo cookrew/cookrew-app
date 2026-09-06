@@ -7,7 +7,7 @@
  *   node scripts/perf-eval.mjs            # table + exit 1 on any FAIL
  *   node scripts/perf-eval.mjs --json     # the same, as one JSON document
  *   node scripts/perf-eval.mjs --no-probe # skip the HTTP latency probe
- *   node scripts/perf-eval.mjs --no-dom   # skip the headless-Chrome DOM probe
+ *   node scripts/perf-eval.mjs --dom      # add the headless-Chrome DOM probe
  *
  * Four sections, each honest about its instrument:
  *
@@ -31,7 +31,11 @@
  *            headless Chrome at the phone viewport: elements at rest, React
  *            commits and card renders per real pan frame, compositing layers,
  *            and what the board leaves mounted after it closes. See
- *            scripts/perf-dom-probe.mjs. Skipped, and says so, without Chrome
+ *            scripts/perf-dom-probe.mjs. OPT-IN (--dom): the probe drives the
+ *            owner's live canvas (a pan, a zoom, the board opened and closed)
+ *            and measures the RUNNING build, so the hourly job — an observer,
+ *            and one that must not fail on a build the app has not restarted
+ *            into yet — leaves it out. Skipped, and says so, without Chrome
  *            or a running app.
  *
  * History lives in ~/.cookrew/perf-history/*.jsonl. `npm run perf:install`
@@ -83,7 +87,7 @@ function parseArgs(argv) {
   return {
     json: flag('--json'),
     probe: !flag('--no-probe'),
-    dom: !flag('--no-dom'),
+    dom: flag('--dom'),
     base,
     history: value('--history', path.join(base, 'perf-history')),
     samples: Math.max(3, Math.min(100, Number(value('--samples', 12)) || 12)),
@@ -478,13 +482,16 @@ const skippedDom = (note) => ({
   verdict: 'ok'
 })
 
+/** Load to last measurement. Under a load of 88 the probe took ~4 min; the eval's lock is 45. */
+const DOM_PROBE_TIMEOUT_MS = 6 * 60_000
+
 /**
  * A pan is 30 real mouse moves out and 30 back; the counts are per frame of
  * that gesture, so they do not depend on how fast this machine is — a loaded
  * box pans in fewer frames per second, not in more renders per frame.
  */
 async function evalDom(opts, now) {
-  if (!opts.dom) return skippedDom('skipped (--no-dom)')
+  if (!opts.dom) return skippedDom('skipped — opt in with --dom (drives the live canvas)')
   if (!findChrome()) return skippedDom('no Chrome — probe skipped (COOKREW_CHROME to name one)')
   const token = readToken(opts.base)
   if (!token) return skippedDom('no pairing token — probe skipped')
@@ -499,11 +506,13 @@ async function evalDom(opts, now) {
   }
   let result
   try {
-    result = await probeCompanion({ viewport: 'phone', apiPort: opts.port, frames: 30, token })
+    result = await probeCompanion({ viewport: 'phone', apiPort: opts.port, frames: 30, token, timeoutMs: DOM_PROBE_TIMEOUT_MS })
   } catch (error) {
     return { checks: [{ name: 'dom', value: null, unit: '', verdict: 'warn', note: `probe failed: ${error.message}` }], verdict: 'warn' }
   }
   const pan = result.pan
+  // A measurement that did not happen is not a pass.
+  const judged = (value, budget) => (value === null || value === undefined ? 'warn' : judge(value, budget))
   const cardRendersPerFrame = pan ? (pan.renders.NodeWrapper ?? 0) / Math.max(1, pan.frames) : null
   const residue = result.board ? result.board.closed.dom.total - result.rest.dom.total : null
   const record = {
@@ -521,27 +530,27 @@ async function evalDom(opts, now) {
   appendHistory(opts.history, 'dom', record)
   const shape = result.workspace ? `${result.workspace.nodes} nodes, ${result.rest.dom.cards} cards on stage` : ''
   const checks = [
-    { name: 'elements at rest', value: record.elements, unit: '', verdict: judge(record.elements, BUDGETS.dom.elements), note: shape },
+    { name: 'elements at rest', value: record.elements, unit: '', verdict: judged(record.elements, BUDGETS.dom.elements), note: shape },
     {
       name: 'card renders per pan frame',
       value: cardRendersPerFrame,
       unit: '/frame',
-      verdict: judge(cardRendersPerFrame, BUDGETS.dom.cardRendersPerPanFrame),
+      verdict: judged(cardRendersPerFrame, BUDGETS.dom.cardRendersPerPanFrame),
       note: pan ? `${pan.renders.NodeWrapper ?? 0} over ${pan.frames} frames` : 'no pane point — pan skipped'
     },
     {
       name: 'commits per pan frame',
       value: pan?.commitsPerFrame ?? null,
       unit: '/frame',
-      verdict: judge(pan?.commitsPerFrame ?? null, BUDGETS.dom.commitsPerPanFrame),
+      verdict: judged(pan?.commitsPerFrame ?? null, BUDGETS.dom.commitsPerPanFrame),
       note: pan ? `${pan.commits} commits; idle ${result.idle?.commits ?? 0} in 3 s` : ''
     },
-    { name: 'compositing layers', value: record.layers, unit: '', verdict: judge(record.layers, BUDGETS.dom.layers), note: result.rest.layers.backingMb === null ? 'layer tree not reported' : `${fmtMb(result.rest.layers.backingMb * MB)} backing` },
+    { name: 'compositing layers', value: record.layers, unit: '', verdict: judged(record.layers, BUDGETS.dom.layers), note: result.rest.layers.backingMb === null ? 'layer tree not reported' : `${fmtMb(result.rest.layers.backingMb * MB)} backing` },
     {
       name: 'board residue',
       value: residue,
       unit: 'elements',
-      verdict: judge(residue, BUDGETS.dom.boardResidueElements),
+      verdict: judged(residue, BUDGETS.dom.boardResidueElements),
       note: result.board ? `${result.board.open.dom.total} open → ${result.board.closed.dom.total} closed` : 'board not found'
     }
   ]

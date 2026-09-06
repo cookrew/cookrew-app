@@ -54,6 +54,8 @@ const describeWithChrome = chrome ? describe : describe.skip
 interface Census {
   cards: number
   pan: FrameCensus
+  /** One card renamed while recording — the app page only. */
+  rename: FrameCensus | null
   errors: string[]
 }
 
@@ -104,8 +106,17 @@ describeWithChrome('React render count across viewport changes', () => {
       const point = await page.evaluate<{ x: number; y: number } | null>(PANE_POINT)
       expect(point, 'a pane point to pan from').not.toBeNull()
       const result = await recordFrames(page, () => pan(page, point!, FRAMES, 2))
+      const rename =
+        pageName === 'index.html'
+          ? await recordFrames(page, async () => {
+              await page.evaluate("window.__renameCard('Agent 0, renamed')")
+              await page.frame()
+              await page.frame()
+              return 2
+            })
+          : null
       page.close()
-      return { cards, pan: result, errors }
+      return { cards, pan: result, rename, errors }
     } finally {
       await browser.kill()
     }
@@ -116,8 +127,14 @@ describeWithChrome('React render count across viewport changes', () => {
       .slice(0, 6)
       .map(([k, v]) => `${k} ${v}`)
       .join(', ')
+    const rename = c.rename
+      ? ` | rename: ${c.rename.commits} commits; ${Object.entries(c.rename.renders)
+          .slice(0, 8)
+          .map(([k, v]) => `${k} ${v}`)
+          .join(', ')}`
+      : ''
     process.stdout.write(
-      `render-count ${label}: ${c.cards} cards, ${c.pan.frames} frames, ${c.pan.commits} commits (${c.pan.commitsPerFrame.toFixed(2)}/frame); ${top}\n`
+      `render-count ${label}: ${c.cards} cards, ${c.pan.frames} frames, ${c.pan.commits} commits (${c.pan.commitsPerFrame.toFixed(2)}/frame); ${top}${rename}\n`
     )
   }
 
@@ -129,6 +146,7 @@ describeWithChrome('React render count across viewport changes', () => {
     // Structural. Every card wrapper is memo'd on stable props and reads no
     // viewport; the arbiter that does is a leaf. Zero, not "few".
     expect(c.pan.renders.NodeWrapper ?? 0).toBe(0)
+    expect(c.pan.cards).toEqual([])
     expect(c.pan.renders.Canvas ?? 0).toBe(0)
     expect(c.pan.renders.Header ?? 0).toBe(0)
     expect(c.pan.renders.Dock ?? 0).toBe(0)
@@ -136,8 +154,19 @@ describeWithChrome('React render count across viewport changes', () => {
     // of ours should be close.
     expect(c.pan.renders.LodArbiter ?? 0).toBeGreaterThan(0)
     expect(c.pan.commitsPerFrame).toBeLessThanOrEqual(RENDER.commitsPerPanFrameMax)
+    // The other side of zero: a frozen canvas would also render nothing on a
+    // pan. One card renamed through the api must reach exactly that card and
+    // no other. Counted by node id, not by render: ReactFlow re-measures a
+    // changed card, so the one card renders a few times across the
+    // broadcast's commits — what must not happen is a second card.
+    expect(c.rename?.cards).toEqual(['card-0'])
+    expect(c.rename?.renders.TerminalNode ?? 0).toBeGreaterThanOrEqual(1)
   }, 240_000)
 
+  // This one is also the canary for the name the gate keys on: `NodeWrapper`
+  // is xyflow's internal component. If a library upgrade renames it, this
+  // test — which must see thousands of them — is what goes red first, and
+  // the app test's zero stops meaning anything until the name is updated.
   it('the wiring this gate exists for: the LOD in the parent re-renders every card every frame', async () => {
     const c = await census('legacy.html')
     line('legacy', c)

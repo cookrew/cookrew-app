@@ -14,6 +14,9 @@ import { seedNodes } from './seed'
 async function boot(): Promise<void> {
   const api = cookrew()
   for (const node of seedNodes()) await api.addNode(node)
+  // The gate's other side: one real change must reach exactly one card.
+  ;(window as unknown as { __renameCard: (name: string) => Promise<unknown> }).__renameCard = (name) =>
+    api.updateNode('card-0', { name })
   createRoot(document.getElementById('root')!).render(<App />)
 }
 

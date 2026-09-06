@@ -42,6 +42,8 @@ export interface FrameCensus {
   commits: number
   commitsPerFrame: number
   renders: Record<string, number>
+  /** Node ids whose card wrapper rendered. */
+  cards: string[]
 }
 
 export function recordFrames(page: CdpPage, run: () => Promise<number>): Promise<FrameCensus>
@@ -65,6 +67,7 @@ export function probeCompanion(options?: {
   frames?: number
   gestures?: boolean
   token?: string | null
+  timeoutMs?: number
 }): Promise<Record<string, unknown>>
 
 export function probeAttached(port: number): Promise<Record<string, unknown>>
