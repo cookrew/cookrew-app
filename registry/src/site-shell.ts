@@ -220,13 +220,12 @@ function head(options: ShellOptions): string {
 }
 
 function shell(options: ShellOptions, main: string): string {
+  // HOME, the MARKET and the account (owner ruling, 2026-09-06). The sections
+  // of the homepage are its own catalog, on the right rail (site-home.ts);
+  // GitHub is in the footer with the rest of the outbound links.
   const nav = [
-    ['/market', 'Marketplace', 'market'],
-    // Three sections of the homepage, not three pages (2026-09-06).
-    ['/#features', 'Features', 'features'],
-    ['/#start', 'Get started', 'start'],
-    ['/#download', 'Download', 'download'],
-    [GITHUB_REPO, 'GitHub', 'github']
+    ['/', 'Home', 'home'],
+    ['/market', 'Marketplace', 'market']
   ]
     .map(
       ([href, label, key]) =>
@@ -411,6 +410,25 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
 .dl{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin:18px 0}
 .dl .card small{display:block;color:var(--muted);margin-top:6px;font-size:12.5px}
 .hero{padding:64px 0 52px;border-bottom:2px solid var(--line)}
+/* the homepage: the page in one column, its catalog on the right rail. The
+   sections keep their own .wrap markup; inside the column it is just a box. */
+.home{display:grid;grid-template-columns:minmax(0,1fr) 188px;gap:0 40px;align-items:start}
+.home .home-body{min-width:0}
+.home .home-body .wrap{max-width:none;padding:0}
+.toc{position:sticky;top:18px;order:2;padding-top:64px}
+.toc .kicker{margin-bottom:8px}
+.toc ol{list-style:none;margin:0;padding:0;border-left:2px solid var(--line)}
+.toc a{display:block;padding:6px 12px;font:700 9.5px var(--font-pixel);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);text-decoration:none}
+.toc a:hover{background:var(--amber-soft);color:var(--ink)}
+.toc li.sub a{font:500 12.5px var(--font-body);letter-spacing:0;text-transform:none;color:var(--muted);padding:3px 12px 3px 22px}
+@media (max-width:1000px){
+  .home{grid-template-columns:1fr}
+  .toc{position:static;order:-1;padding:14px 0 0}
+  .toc .kicker{display:none}
+  .toc ol{display:flex;flex-wrap:wrap;gap:6px;border-left:none}
+  .toc li.sub{display:none}
+  .toc a{border:1.5px solid var(--line);background:var(--cream-hi);box-shadow:2px 2px 0 var(--line)}
+}
 .hero .wrap{display:grid;gap:40px;grid-template-columns:minmax(0,6fr) minmax(0,6fr);align-items:center}
 @media (max-width:900px){.hero .wrap{grid-template-columns:1fr}}
 .tagline{display:inline-block;background:var(--amber);color:#2d2a20;font:700 9.5px var(--font-pixel);letter-spacing:.14em;padding:4px 10px;border:2px solid var(--line);transform:rotate(-1deg);margin-bottom:18px}

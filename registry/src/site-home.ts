@@ -22,9 +22,11 @@ import { faqPage, organization, softwareApplication, teamList, webPage } from '.
  * What used to be three pages is one, in the order a newcomer reads: what
  * Cookrew is and the download, then GET STARTED (the two steps and the crew
  * builder), then the FEATURES (every one with its recorded frame, the
- * comparison, the questions, the commits), then the live market. The header's
- * FEATURES, GET STARTED and DOWNLOAD buttons are anchors into this page; the
- * old /start and /features addresses redirect to them. A feature's own page
+ * comparison, the questions, the commits), then the live market. The page's
+ * sections are its catalog, on the right rail — where the header's FEATURES,
+ * GET STARTED and DOWNLOAD buttons went; the header keeps HOME, the market
+ * and the account. The old /start and /features addresses redirect to the
+ * sections. A feature's own page
  * (/features/<slug>) stays — that is the long tail, and the cards lead there.
  *
  * A DOCUMENT page, still: no script, no form, no handler (the site tests hold
@@ -137,6 +139,28 @@ ${featuresGrid()}
 ${commitsSection(commits)}`
 }
 
+/**
+ * THE CATALOG, on the right rail: the page's own sections, which is where
+ * the header's FEATURES, GET STARTED and DOWNLOAD buttons went. Plain
+ * anchors, because the front page has no script.
+ */
+function catalog(): string {
+  const items: [string, string, boolean][] = [
+    ['#download', 'Download', false],
+    ['#start', 'Get started', false],
+    ['#serve', 'Save and serve a team', true],
+    ['#build', 'What your orch runs', true],
+    ['#features', 'Features', false],
+    ['#compare', 'Chat tab, one agent, or a team', true],
+    ['#faq', 'Questions', true],
+    ['#built', 'What landed on dev', true],
+    ['#market', 'Market', false]
+  ]
+  return `<aside class="toc" aria-label="On this page"><p class="kicker"><span class="no">ON THIS PAGE</span></p><ol>${items
+    .map(([href, label, sub]) => `<li${sub ? ' class="sub"' : ''}><a href="${href}">${esc(label)}</a></li>`)
+    .join('')}</ol></aside>`
+}
+
 function marketSection(input: HomeInput): string {
   const serving = input.doors.filter((d) => d.live !== false).length
   const teams = input.doors.slice(0, 6).map((d) => teamCard(d, input.stars(d.handle, d.name), input.pulse(d.handle, d.name)))
@@ -175,7 +199,8 @@ export function homePage(input: HomeInput): Page {
         teamList(input.doors)
       ]
     },
-    `
+    `<div class="wrap home">
+<div class="home-body">
 <div class="hero"><div class="wrap">
 <div><span class="tagline">OPEN SOURCE · ${FACTS.harnesses.slice(0, 4).join(' · ').toUpperCase()}</span>
 <h1>${esc(HEADLINE)}</h1>
@@ -188,6 +213,9 @@ ${startSection()}
 
 ${featuresSection(input.commits ?? null)}
 
-${marketSection(input)}`
+${marketSection(input)}
+</div>
+${catalog()}
+</div>`
   )
 }

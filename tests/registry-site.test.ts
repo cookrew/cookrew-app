@@ -296,8 +296,19 @@ describe('the front page', () => {
     expect(body).toContain('$ cookrew orch "Forge"')
     expect(body).not.toContain('/assets/site.js')
     expect(body).toContain('"@type":"HowTo"')
-    // The header lands on the sections, not on pages that used to exist.
-    for (const href of ['/#features', '/#start', '/#download']) expect(body).toContain(`href="${href}"`)
+    // The sections are the page's own catalog, on the right rail; the header
+    // keeps HOME, the market and the account, and nothing that used to be a page.
+    const rail = body.slice(body.indexOf('<aside class="toc"'), body.indexOf('</aside>'))
+    for (const href of ['#download', '#start', '#features', '#market']) expect(rail).toContain(`href="${href}"`)
+    expect(body.indexOf('<div class="home-body">')).toBeLessThan(body.indexOf('<aside class="toc"'))
+    const header = body.slice(body.indexOf('<nav class="top">'), body.indexOf('</nav>'))
+    expect(header).toContain('href="/"')
+    expect(header).toContain('href="/market"')
+    expect(header).toContain('Sign in')
+    expect(header).not.toContain('Features')
+    expect(header).not.toContain('Get started')
+    expect(header).not.toContain('Download')
+    expect(header).not.toContain('github.com')
     expect(body).not.toContain('href="/start"')
     expect(body).not.toContain('href="/features"')
   })
