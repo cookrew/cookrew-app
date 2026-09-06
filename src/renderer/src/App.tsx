@@ -714,7 +714,10 @@ function Canvas(): React.JSX.Element {
         .sousCommand(text, ctx)
         .then((result) => {
           if (!result.spoken) return
-          setSousReply({ text: result.spoken, refused: result.intent === 'refused' })
+          // What landed, next to what was said about it — the cleaned-up
+          // sentence is the thing the owner wants to check.
+          const shown = result.text ? `${result.spoken} · ${result.text}` : result.spoken
+          setSousReply({ text: shown, refused: result.intent === 'refused' })
           speakSous(result.spoken)
         })
     },

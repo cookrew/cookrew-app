@@ -24,6 +24,15 @@ export const SOUS_TRANSLATE_MODEL =
   process.env.COOKREW_SOUS_TRANSLATE_MODEL ?? process.env.COOKREW_SOUS_MODEL ?? 'qwen2.5:1.5b'
 
 /**
+ * The model that cleans up dictation (shared/sous-polish). Defaults to the
+ * titling model for the same reason translation does: it is the one that is
+ * known to be pulled. A bigger resident model (COOKREW_SOUS_POLISH_MODEL)
+ * does noticeably better at self-corrections in Chinese.
+ */
+export const SOUS_POLISH_MODEL =
+  process.env.COOKREW_SOUS_POLISH_MODEL ?? process.env.COOKREW_SOUS_MODEL ?? 'qwen2.5:1.5b'
+
+/**
  * How long Ollama keeps the model resident. Default 5m so a ~1.25GB model does
  * not sit in memory all day for occasional work.
  */

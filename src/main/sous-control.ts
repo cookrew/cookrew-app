@@ -16,6 +16,7 @@ import {
   PENDING_PROMPT_MS,
   parseUtterance,
   type IntentRoster,
+  type Lang,
   type PendingPrompt,
   type Refusal,
   type SousIntent,
@@ -34,8 +35,19 @@ export interface SousControlDeps {
   createBrowser: (anchorTerminalId: string, name: string) => Promise<void>
   connect: (a: string, b: string) => void
   rename: (agentId: string, name: string) => void
-  /** Resolves when the prompt is SUBMITTED; the reply is the ledger's business. */
-  submit: (agentId: string, text: string) => Promise<void>
+  /**
+   * Put text into the agent. `enter` false types it into the input box and
+   * leaves it there for the owner to read and send — Typeless behaviour, for
+   * the surface where they are looking at the box; true submits it, for the
+   * surfaces where nobody can press Enter (a speaker in a room). Resolves at
+   * submission; the reply is the ledger's business.
+   */
+  submit: (agentId: string, text: string, options: { enter: boolean }) => Promise<void>
+  /**
+   * Thinking-aloud → the text they meant (shared/sous-polish). Given the raw
+   * transcript, returns the cleaned one or the raw one, never nothing.
+   */
+  polish?: (text: string) => Promise<{ text: string; polished: boolean }>
   ui: (command: UiCommand, workspaceId: string) => void
   /** One ledger line per executed intent, so a misheard rename has a trail. */
   note?: (kind: string, subjectId: string | null, detail: string) => void
@@ -68,12 +80,24 @@ export interface SousCommandResult {
   choices?: string[]
   /** The agent the sentence ended up about, when there is one. */
   agentId?: string
+  /** The text that went into the agent, after polish — so a surface can show it. */
+  text?: string
+  polished?: boolean
 }
 
 const FAILED = {
   zh: (what: string) => `没做成：${what}`,
   en: (what: string) => `That did not work: ${what}`
 } as const
+
+/** Typed into the box, not sent: the owner is looking at it. */
+const IN_THE_BOX = {
+  zh: (agent: string) => `已放进 ${agent} 的输入框，回车发送`,
+  en: (agent: string) => `In ${agent}'s box — Enter sends`
+} as const
+
+/** Where a dictated sentence is typed and left, rather than submitted. */
+const TYPES_WITHOUT_ENTER: ReadonlySet<Surface> = new Set(['zoom'])
 
 export class SousController {
   /**
@@ -122,7 +146,7 @@ export class SousController {
       }
     }
     try {
-      return await this.run(parsed.intent, parsed.spoken, key, roster)
+      return await this.run(parsed.intent, parsed.spoken, key, roster, input.surface, parsed.lang)
     } catch (error) {
       const what = error instanceof Error ? error.message : String(error)
       console.error(`Sous: ${parsed.intent.kind} failed:`, error)
@@ -134,7 +158,9 @@ export class SousController {
     intent: SousIntent,
     spoken: string,
     key: string,
-    roster: IntentRoster
+    roster: IntentRoster,
+    surface: Surface,
+    lang: Lang
   ): Promise<SousCommandResult> {
     const active = this.deps.activeWorkspaceId()
     switch (intent.kind) {
@@ -168,16 +194,14 @@ export class SousController {
           return { intent: 'ask', spoken, needs: 'prompt', agentId: agent.id }
         }
         this.pending.delete(key)
-        await this.deps.submit(agent.id, intent.prompt)
-        this.note('prompt', agent.id, agent.name)
-        return { intent: 'ask', spoken, agentId: agent.id }
+        const sent = await this.deliver(agent, intent.prompt, surface, lang, spoken)
+        return { intent: 'ask', ...sent }
       }
       case 'prompt': {
         const agent = agentOf(roster, intent.agentId)
         this.pending.delete(key)
-        await this.deps.submit(agent.id, intent.text)
-        this.note('prompt', agent.id, agent.name)
-        return { intent: 'prompt', spoken, agentId: agent.id }
+        const sent = await this.deliver(agent, intent.text, surface, lang, spoken)
+        return { intent: 'prompt', ...sent }
       }
       case 'create': {
         const target = intent.workspaceId ?? active
@@ -203,6 +227,31 @@ export class SousController {
         this.note('rename', agent.id, `${agent.name} → ${intent.to}`)
         return { intent: 'rename', spoken, agentId: agent.id }
       }
+    }
+  }
+
+  /**
+   * Free text into the agent the owner named: cleaned up first when Sous can
+   * (thinking-aloud → the sentence they meant), typed-and-left where the
+   * owner is looking at the box, submitted where nobody can press Enter.
+   */
+  private async deliver(
+    agent: IntentRoster['agents'][number],
+    raw: string,
+    surface: Surface,
+    lang: Lang,
+    spoken: string
+  ): Promise<Omit<SousCommandResult, 'intent'>> {
+    const cleaned = this.deps.polish ? await this.deps.polish(raw) : { text: raw, polished: false }
+    const text = cleaned.text.trim() === '' ? raw : cleaned.text
+    const enter = !TYPES_WITHOUT_ENTER.has(surface)
+    await this.deps.submit(agent.id, text, { enter })
+    this.note(enter ? 'prompt' : 'typed', agent.id, agent.name)
+    return {
+      spoken: enter ? spoken : IN_THE_BOX[lang](agent.name),
+      agentId: agent.id,
+      text,
+      polished: cleaned.polished
     }
   }
 

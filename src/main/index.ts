@@ -50,6 +50,7 @@ import { RoutineScheduler } from './routines'
 import { VoiceEngine } from './voice'
 import { SousController } from './sous-control'
 import { MacListener } from './listen'
+import { polishTranscript } from './sous-polish'
 import { readSousVoiceConfig } from './sous-voice-config'
 import type { IntentRoster, Surface as SousSurface } from '../shared/sous-intent'
 import type { UiCommandEvent } from '../shared/sous-ui'
@@ -4342,7 +4343,7 @@ app.whenReady().then(() => {
     // the right sink: it holds the producer lease and answers at submission,
     // and a refusal (busy input box, armed dispatch) is a sentence, not a
     // silently dropped prompt.
-    submit: async (agentId, text) => {
+    submit: async (agentId, text, { enter }) => {
       const node = store.terminalsAcross().find((t) => t.id === agentId)
       if (!node) throw new Error('that agent is not on any canvas')
       let session = ptys.get(agentId)
@@ -4351,9 +4352,13 @@ app.whenReady().then(() => {
         session = ptys.get(agentId)
       }
       if (!session) throw new Error(`${node.name} has no running terminal`)
-      const verdict = await ownerSubmit(session, `${text}\r`)
+      // Typed-and-left goes in as one bracketed paste so a line break inside
+      // the cleaned text is a line break in the box, not an Enter.
+      const bytes = enter ? `${text}\r` : `\x1b[200~${text}\x1b[201~`
+      const verdict = await ownerSubmit(session, bytes)
       if (!verdict.ok) throw new Error(verdict.reason)
     },
+    polish: (text) => polishTranscript(text),
     ui: (command, workspaceId) => {
       const event: UiCommandEvent = { workspaceId, command }
       mainWindow?.webContents.send('ui:command', event)

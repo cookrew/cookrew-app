@@ -18,7 +18,7 @@ const roster: IntentRoster = {
 }
 
 /** Every dep records its call; the tests read the trail. */
-function harness(options: { active?: string | null; failing?: string } = {}) {
+function harness(options: { active?: string | null; failing?: string; polish?: (t: string) => string | null } = {}) {
   const calls: string[] = []
   let active: string | null = options.active === undefined ? 'ws-dev' : options.active
   let clock = 1_000_000
@@ -39,10 +39,19 @@ function harness(options: { active?: string | null; failing?: string } = {}) {
     },
     connect: (a, b) => calls.push(`connect ${a} ${b}`),
     rename: (id, name) => calls.push(`rename ${id} ${name}`),
-    submit: async (id, text) => {
-      calls.push(`submit ${id} ${text}`)
+    submit: async (id, text, { enter }) => {
+      calls.push(`${enter ? 'submit' : 'type'} ${id} ${text}`)
       if (options.failing === 'submit') throw new Error('input box is busy')
     },
+    ...(options.polish
+      ? {
+          polish: async (text: string) => {
+            calls.push(`polish ${text}`)
+            const out = options.polish?.(text) ?? null
+            return out === null ? { text, polished: false } : { text: out, polished: true }
+          }
+        }
+      : {}),
     ui: (command, workspaceId) =>
       calls.push(`ui ${command.kind}${'nodeId' in command ? ` ${command.nodeId}` : ''} @${workspaceId}`),
     note: (kind, id, detail) => calls.push(`note ${kind} ${id ?? '-'} ${detail}`),
@@ -106,7 +115,9 @@ describe('ask', () => {
     // …and another caller on the same surface still has none.
     const stranger = await h.controller.handle({ text: 'add a retry', surface: 'zoom', callerId: 'speaker-2' })
     expect(stranger).toMatchObject({ intent: 'none' })
-    expect(h.calls.filter((c) => c.startsWith('submit'))).toEqual(['submit a-paul hello', 'submit a-paul add a retry'])
+    // Zoom surface: typed and left, never submitted — the owner sends.
+    expect(h.calls.filter((c) => c.startsWith('type'))).toEqual(['type a-paul hello', 'type a-paul add a retry'])
+    expect(h.calls.filter((c) => c.startsWith('submit'))).toEqual([])
   })
   it('leaving the zoom forgets the focus', async () => {
     const h = harness()
@@ -133,12 +144,42 @@ describe('ask', () => {
   })
 })
 
-describe('the zoom view', () => {
-  it('plain speech goes to the agent on screen, and nowhere else', async () => {
+describe('the zoom view — dictation, Typeless style', () => {
+  it('plain speech is typed into the agent on screen and LEFT there: the owner sends', async () => {
     const h = harness()
     const r = await h.controller.handle({ text: 'add a retry around the fetch', surface: 'zoom', focusedAgentId: 'a-cc' })
-    expect(r).toMatchObject({ intent: 'prompt', agentId: 'a-cc' })
-    expect(h.calls).toEqual(['submit a-cc add a retry around the fetch', 'note prompt a-cc claude-code'])
+    expect(r).toMatchObject({
+      intent: 'prompt',
+      agentId: 'a-cc',
+      text: 'add a retry around the fetch',
+      spoken: "In claude-code's box — Enter sends"
+    })
+    expect(h.calls).toEqual(['type a-cc add a retry around the fetch', 'note typed a-cc claude-code'])
+  })
+  it('thinking aloud is cleaned up before it lands, and the result says so', async () => {
+    const h = harness({ polish: () => '帮我写一个今日打卡，发到朋友圈。' })
+    const said = '嗯那个帮我写一个今日打卡然后发到小红书，不对，发到朋友圈'
+    const r = await h.controller.handle({ text: said, surface: 'zoom', focusedAgentId: 'a-cc' })
+    expect(r).toMatchObject({
+      intent: 'prompt',
+      text: '帮我写一个今日打卡，发到朋友圈。',
+      polished: true,
+      spoken: '已放进 claude-code 的输入框，回车发送'
+    })
+    expect(h.calls).toEqual([`polish ${said}`, 'type a-cc 帮我写一个今日打卡，发到朋友圈。', 'note typed a-cc claude-code'])
+  })
+  it('when Sous cannot clean it in time the words still land, raw', async () => {
+    const h = harness({ polish: () => null })
+    const r = await h.controller.handle({ text: 'um add a retry around the fetch', surface: 'zoom', focusedAgentId: 'a-cc' })
+    expect(r).toMatchObject({ text: 'um add a retry around the fetch', polished: false })
+    expect(h.calls).toContain('type a-cc um add a retry around the fetch')
+  })
+  it('from a speaker nobody can press Enter, so the cleaned prompt is submitted', async () => {
+    const h = harness({ polish: () => 'Write a daily check-in and post it.' })
+    await h.controller.handle({ text: 'ask Paul', surface: 'home', callerId: 'lx01' })
+    const r = await h.controller.handle({ text: 'um write a daily check-in and, uh, post it', surface: 'home', callerId: 'lx01' })
+    expect(r).toMatchObject({ intent: 'prompt', spoken: 'Sent to Paul', polished: true })
+    expect(h.calls).toContain('submit a-paul Write a daily check-in and post it.')
   })
 })
 
