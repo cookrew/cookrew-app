@@ -38,6 +38,13 @@
 //                         scrape-only harness, or a deleted session file), so
 //                         the stream is empty and the old ledger is all there
 //                         is. Reported per card, never silently skipped.
+//   no-card               the ledger outlived its card: no terminal in any
+//                         workspace carries this id any more, so there is no
+//                         cwd and no binding to resolve a transcript from.
+//                         Distinct from no-transcript on purpose — one says
+//                         the transcript is gone, the other says the CARD is,
+//                         and only the first would be evidence against the
+//                         reader.
 //
 // Everything else — a missing identity, an extra one, a reordering, two
 // different titles for the same identity — is a REAL difference and fails
@@ -79,6 +86,7 @@ export type DiffClass =
   | 'title-unmigrated'
   | 'legacy-no-uuid'
   | 'no-transcript'
+  | 'no-card'
 
 /** Classes a difference may fall into and still pass the gate — each one
  *  explained in the header, each one a property of the OLD store. */
@@ -88,7 +96,8 @@ export const ALLOWED_CLASSES: readonly DiffClass[] = [
   'stream-ahead',
   'title-unmigrated',
   'legacy-no-uuid',
-  'no-transcript'
+  'no-transcript',
+  'no-card'
 ]
 
 export interface Difference {
@@ -112,6 +121,13 @@ export interface Comparison {
 export interface CompareOptions {
   /** False when the card has no readable transcript at all. */
   streamAvailable?: boolean
+  /**
+   * False when no terminal in any workspace carries this id any more — the
+   * ledger outlived its card. Kept separate from streamAvailable because the
+   * two say different things about the reader: a vanished CARD is not
+   * evidence that the stream cannot read a transcript.
+   */
+  cardKnown?: boolean
 }
 
 /** Where `needle` sits inside `haystack` as a contiguous run, else -1. An
@@ -187,13 +203,23 @@ export function compareCheckpoints(
 
   if (options.streamAvailable === false) {
     if (older.length > 0) {
-      differences.push({
-        class: 'no-transcript',
-        identity: '',
-        ordinal: null,
-        field: 'stream',
-        detail: `no readable transcript; the old store holds ${older.length} record(s)`
-      })
+      differences.push(
+        options.cardKnown === false
+          ? {
+              class: 'no-card',
+              identity: '',
+              ordinal: null,
+              field: 'stream',
+              detail: `no card carries this id; the old store holds ${older.length} record(s)`
+            }
+          : {
+              class: 'no-transcript',
+              identity: '',
+              ordinal: null,
+              field: 'stream',
+              detail: `no readable transcript; the old store holds ${older.length} record(s)`
+            }
+      )
     }
     return finish(differences, counts)
   }

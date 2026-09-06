@@ -94,9 +94,19 @@ describe('compareCheckpoints — allowed classes', () => {
     expect(result.classCounts).toEqual({ 'no-transcript': 1 })
   })
 
+  it('no-card: the ledger outlived the card, which is not the reader’s failure', () => {
+    const result = compareCheckpoints([older('u1', 1)], [], {
+      streamAvailable: false,
+      cardKnown: false
+    })
+    expect(result.allowed).toBe(true)
+    expect(result.classCounts).toEqual({ 'no-card': 1 })
+  })
+
   it('every allowed class is a property of the OLD store, and the list is closed', () => {
     expect([...ALLOWED_CLASSES].sort()).toEqual([
       'legacy-no-uuid',
+      'no-card',
       'no-transcript',
       'old-noise-prompt',
       'stream-ahead',
