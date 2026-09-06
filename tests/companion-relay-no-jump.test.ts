@@ -12,10 +12,16 @@
 // Reach v2.1 answers that by making the certificate the product's problem
 // (real names, real chain — phases R1/R2) and by moving the switch from a
 // NAVIGATION to a live data-plane move that never touches the address bar
-// (phase C3). Until C3 exists, the only correct behaviour under a relay prefix
-// is to do nothing at all — and "nothing at all" is exactly the kind of thing
-// that gets re-enabled by accident, so it is asserted here rather than left as
-// a comment in the switcher.
+// (phase C3, now landed: path/plane-switch.ts).
+//
+// So the assertion is no longer "does nothing"; it is the thing that actually
+// matters and always did — UNDER A RELAY PREFIX NOTHING NAVIGATES. The
+// companion may probe, may verify, may move its whole data plane onto the
+// Mac's LAN address; what it may never do is call location.replace and take
+// the reader off the account's origin. That is the line, and it is asserted
+// here rather than left as a comment in the switcher because "we stopped
+// navigating" is exactly the kind of thing a later refactor re-enables by
+// accident.
 //
 // The switcher's own rules (only better, never sideways; prove it is the Mac)
 // are untouched and still covered by path-switch.test.ts — this is only about
@@ -86,6 +92,9 @@ const servedAt = async (base: string): Promise<{
   }
 }
 
+/** Let the boot race run to its end; nothing here waits on a real timer. */
+const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
 afterEach(() => {
   delete (globalThis as { COOKREW_BASE?: unknown }).COOKREW_BASE
   delete (globalThis as { fetch?: unknown }).fetch
@@ -93,25 +102,30 @@ afterEach(() => {
 })
 
 describe('startCompanionPathSwitch under a relay prefix', () => {
-  it('does nothing — no probe, no listener, no navigation', async () => {
+  it('races for a better plane, and never navigates', async () => {
     const phone = stubPhone('https://cookrew.dev')
     const { companion } = await servedAt(RELAY_BASE)
     const stop = companion.startCompanionPathSwitch()
+    await settle()
 
-    expect(phone.fetched()).toBe(0)
-    expect(phone.listened()).toEqual([])
+    // It looks — that is the feature. The stub fetch throws, which is the Mac
+    // being unreachable, and an unreachable Mac leaves the plane alone.
+    expect(phone.fetched()).toBeGreaterThan(0)
+    // And it wakes on the two moments a phone changes network.
+    expect(phone.listened()).toContain('online')
+    expect(phone.listened()).toContain('visibilitychange')
+    // The one thing it must never do.
     expect(phone.replaced()).toEqual([])
-    // Still a teardown, so the caller needs no branch of its own.
     expect(() => stop()).not.toThrow()
   })
 
-  it('stays quiet even when the prefix sits in front of a LAN-looking host', async () => {
+  it('does not navigate even when the prefix fronts a LAN-looking host', async () => {
     // Whatever the address bar says, leaving this page means leaving the relay
     // prefix — and every /api call the bundle makes is scoped to that prefix.
     const phone = stubPhone('https://192.168.2.40:8643')
     const { companion } = await servedAt(RELAY_BASE)
     companion.startCompanionPathSwitch()
-    expect(phone.fetched()).toBe(0)
+    await settle()
     expect(phone.replaced()).toEqual([])
   })
 })

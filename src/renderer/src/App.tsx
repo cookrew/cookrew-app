@@ -64,6 +64,7 @@ import { useAccountSurface } from './account/AccountSurface'
 import { SelectionBar } from './SelectionBar'
 import { ConfirmClose } from './ConfirmClose'
 import { apiPath } from './api-base'
+import { planeFetch } from './plane-fetch'
 import { authHeaders } from './auth-gate'
 import { CrIcon } from './icons'
 import {
@@ -816,7 +817,7 @@ function Canvas(): React.JSX.Element {
         // A HEADER, not ?token=. This is an ordinary fetch and can set one, so
         // the token stays out of the URL — see tokenParam, which exists only
         // for the two EventSources that genuinely cannot.
-        void fetch(apiPath(`/api/browser/${id}/thumb?v=${now}`), {
+        void planeFetch(apiPath(`/api/browser/${id}/thumb?v=${now}`), {
           headers: authHeaders()
         })
           .then((r) => {

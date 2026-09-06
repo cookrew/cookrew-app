@@ -1,4 +1,5 @@
 import { clientBase } from './api-base'
+import { dataPlane } from './data-plane'
 import {
   classifyOrigin,
   pathBadgeView,
@@ -136,6 +137,20 @@ const registryOf = (): string | undefined => {
  */
 const relayed = (): boolean => clientBase() !== ''
 
+/**
+ * WHICH TRANSPORT IS CARRYING THE DATA PLANE, for a page under a prefix.
+ *
+ * The address bar says cookrew.dev whatever happens — that is the promise —
+ * so this is the only place a reader can learn that their phone is talking to
+ * the Mac over the Wi-Fi. Read straight off the store that composes the
+ * request URLs (data-plane.ts), because a second answer derived from anything
+ * else would eventually disagree with where the requests are actually going.
+ */
+const planeState = (): 'LAN' | 'TAILNET' | 'RELAY' => {
+  const kind = dataPlane().kind
+  return kind === 'lan' ? 'LAN' : kind === 'tailnet' ? 'TAILNET' : 'RELAY'
+}
+
 /** The badge's whole view, from this page's own origin and link state. */
 export const currentPathBadge = (): PathBadgeView =>
   pathBadgeView({
@@ -144,19 +159,23 @@ export const currentPathBadge = (): PathBadgeView =>
     latencyMs: state.latencyMs,
     probing: state.probing,
     relayed: relayed(),
+    ...(relayed() ? { plane: planeState() } : {}),
     ...(state.desktopName ? { desktopName: state.desktopName } : {}),
     ...(registryOf() ? { registryOrigin: registryOf() as string } : {})
   })
 
 /**
- * Where this page is, from where it was SERVED — the relay prefix first, then
- * the origin.
+ * Where this page's REQUESTS are going — the data plane first, then the origin.
  *
- * Deliberately not `currentPathBadge().state`: that folds in the transport, so
- * a companion mid-probe would read PROBING and the switcher would then treat
- * every path — including the one it is already on — as an improvement.
+ * Under a relay prefix the origin says nothing (it is the account's host on
+ * every path), so the plane is the answer. At the root the page origin IS the
+ * transport, exactly as before.
+ *
+ * Deliberately not `currentPathBadge().state`: that folds in the link health,
+ * so a companion mid-probe would read PROBING and the switcher would then
+ * treat every path — including the one it is already on — as an improvement.
  */
 export const currentOriginState = (): PathState =>
-  relayed() ? 'RELAY' : classifyOrigin(originOf(), registryOf())
+  relayed() ? planeState() : classifyOrigin(originOf(), registryOf())
 
 export { classifyOrigin }
