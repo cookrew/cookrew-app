@@ -458,3 +458,21 @@ describe('what a desktop registers, and what it never does', () => {
     expect(readFileSync(accountFilePath(base), 'utf8')).not.toContain(PASSWORD)
   })
 })
+
+describe('a 401 with a named refusal is that refusal, not a dead session', () => {
+  it('a wrong authenticator code keeps its sentence; a bare 401 is a dead session', async () => {
+    const sentence =
+      'That is not the code showing right now. Wait for the next one and type it as it appears.'
+    const script = scriptedFetch([
+      { status: 201, body: { ...CLAIMED, session: { token: 'tok', exp: Date.now() + 3.6e6 } } },
+      { status: 401, body: { error: 'bad_code', message: sentence } },
+      { status: 401, body: { error: 'unauthenticated' } }
+    ])
+    const it = new Accounts({ base: scratch(), origin: ORIGIN, fetch: script.fetch })
+    await it.claim({ username: 'drej', password: PASSWORD })
+    const wrong = await it.call<void>('/v2/me/totp/confirm', { method: 'POST' })
+    expect(wrong).toMatchObject({ ok: false, reason: 'unknown', message: sentence })
+    const dead = await it.call<void>('/v2/me', { method: 'GET' })
+    expect(dead).toMatchObject({ ok: false, reason: 'session-expired' })
+  })
+})
