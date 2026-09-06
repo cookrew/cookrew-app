@@ -21,6 +21,20 @@
 //   POST /v2/sessions                sign in; the server sets cr_session HttpOnly
 //   GET  /v2/me                      the reader's devices, desktops and security
 //   GET  /me                         the same, as a page
+//   POST /v2/me/desktops/:id/cert    a Mac's own certificate, by ACME dns-01
+//   GET  /v2/me/desktops/:id/cert    pending / issued / failed
+//
+// REACH v2.1 flags, ALL OPTIONAL and off by default:
+//   --dns-port 8753          bind UDP+TCP DNS on this port. Absent → no listener.
+//   --dns-zone d.cookrew.dev the zone we are authoritative for.
+//   --dns-ns ns1.d.cookrew.dev=1.2.3.4,ns2.d.cookrew.dev=5.6.7.8
+//                            the NS records and their glue — the same values
+//                            typed once at the parent zone.
+//   --acme-directory <url>   default Let's Encrypt STAGING. Production is
+//                            always an explicit value: a typo must not be able
+//                            to spend the real 50-a-week allowance.
+//   --acme-email <addr>      optional contact on the ACME account.
+// Absent flags mean nothing listens and nothing changes.
 //
 // Flags: --port --data --seed --origin --chain --terms-ttl. The origin defaults to the port that is
 // bound; pass it only to serve a ceremony on a host other than localhost, and a
@@ -43,6 +57,10 @@ import { ReleaseCache } from './releases'
 import { CommitsCache } from './github-commits'
 import { Pulse } from './pulse'
 import { createV2 } from './v2-routes'
+import { AcmeClient, LETSENCRYPT_STAGING } from './acme-client'
+import { createNames, type NamesFeature } from './names'
+import { createDnsServer } from './dns-server'
+import type { NameServer } from './dns-zone'
 import { buildManifest, signManifest } from '../../src/main/preset-publish'
 import { scrubForPublish } from '../../src/main/preset-scrub'
 import type { TeamSnapshot } from '../../src/main/teams'
@@ -182,6 +200,66 @@ if (!resolved.ok) {
   process.exit(1)
 }
 const identity = new IdentityService(DATA, resolved.config)
+// The v2 half, built before the names half because the DNS zone reads its
+// desktops: one store of where a Mac is, answered on two protocols.
+const v2 = createV2(DATA, { origin: resolved.config.origin })
+
+/**
+ * REACH v2.1 — DNS AND ACME, ASSEMBLED ONLY IF ASKED FOR.
+ *
+ * Both flags together or neither: a port with no name servers would serve an
+ * SOA naming nobody, and name servers with no port would be a promise nothing
+ * answers. A malformed value REFUSES AT BOOT rather than starting a listener
+ * that quietly answers the wrong glue — the parent zone's records are typed by
+ * hand once and have to match these exactly.
+ */
+const nameServers = (spec: string): NameServer[] | null => {
+  if (spec === '') return null
+  const out: NameServer[] = []
+  for (const entry of spec.split(',')) {
+    const [host, address] = entry.split('=')
+    if (!host || !address || !host.includes('.')) return null
+    out.push({ host: host.trim().toLowerCase(), address: address.trim() })
+  }
+  return out.length === 0 ? null : out
+}
+
+const DNS_PORT = Number(flag('dns-port', '0'))
+const DNS_ZONE = flag('dns-zone', 'd.cookrew.dev').toLowerCase()
+const DNS_NS = nameServers(flag('dns-ns', ''))
+const ACME_DIRECTORY = flag('acme-directory', LETSENCRYPT_STAGING)
+const ACME_EMAIL = flag('acme-email', '')
+
+let names: NamesFeature | undefined
+if (DNS_PORT > 0 || DNS_NS !== null) {
+  if (!Number.isInteger(DNS_PORT) || DNS_PORT < 1 || DNS_PORT > 65535) {
+    console.error(`refusing to start: --dns-port ${flag('dns-port', '')} is not a port`)
+    process.exit(1)
+  }
+  if (DNS_NS === null) {
+    console.error('refusing to start: --dns-port needs --dns-ns host=address,host=address')
+    process.exit(1)
+  }
+  names = createNames({
+    zone: DNS_ZONE,
+    ns: DNS_NS,
+    dataDir: DATA,
+    // The DNS gate reads the SAME store the /me page does: a name exists only
+    // while that Mac is publishing that address, and there is exactly one
+    // place that fact lives.
+    desktops: {
+      find: (deviceId) => v2.accounts.desktopFor(deviceId),
+      changedAt: () => v2.accounts.desktopsChangedAt()
+    },
+    acme: new AcmeClient({
+      directory: ACME_DIRECTORY,
+      dataDir: DATA,
+      ...(ACME_EMAIL === '' ? {} : { email: ACME_EMAIL }),
+      log: (message) => console.log(message)
+    }),
+    log: (message) => console.log(message)
+  })
+}
 
 if (!Number.isInteger(TERMS_TTL_MS) || TERMS_TTL_MS < 1) {
   console.error(`refusing to start: --terms-ttl ${flag('terms-ttl', '')} is not a positive number of ms`)
@@ -232,14 +310,29 @@ createRegistry({
   // with every name looking free.
   // The origin a browser sees, which is what WebAuthn compares an assertion
   // against — the same string /v1 identity is configured with.
-  v2: createV2(DATA, { origin: resolved.config.origin }),
+  v2,
   note: (message) => console.error(message),
+  ...(names === undefined ? {} : { names }),
   authorize: makeAuthorize(store, identity, pricing)
 }).listen(PORT, () => {
   // Print the ORIGIN, not a different spelling of the same port. The old banner
   // said 127.0.0.1 while identity accepted only localhost, so the server was
   // advertising the one address on which nobody could authenticate.
   console.log(`registry on ${resolved.config.origin}  data=${DATA}${DEV ? '  [DEV]' : ''}`)
+  if (names !== undefined && DNS_NS !== null) {
+    // ONE LINE PER FEATURE, and nothing in either of them that is a secret:
+    // the zone, the port and the glue are public by definition (they are typed
+    // into the parent zone), and the ACME account key is never printed.
+    console.log(`dns on :${DNS_PORT}  zone=${DNS_ZONE}  ns=${DNS_NS.map((n) => `${n.host}=${n.address}`).join(',')}`)
+    console.log(`acme directory=${ACME_DIRECTORY}${ACME_EMAIL === '' ? '' : `  contact=${ACME_EMAIL}`}`)
+    void createDnsServer({ port: DNS_PORT, respond: names.respond, log: (m) => console.log(m) })
+      .start()
+      .catch((error: unknown) => {
+        // The HTTP half is already serving. A DNS port that will not bind is a
+        // loud line and a registry that still answers, never a dead process.
+        console.error(`dns did not start: ${error instanceof Error ? error.message : String(error)}`)
+      })
+  }
   for (const p of store.list()) {
     console.log(`  ${p.name.padEnd(16)} v${String(p.version).padEnd(3)} ${p.visibility.padEnd(11)} ${p.id}`)
   }

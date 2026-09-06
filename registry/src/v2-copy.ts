@@ -33,6 +33,15 @@ export type V2Error =
   | 'bad_desktop'
   | 'bad_reach'
   | 'not_this_device'
+  /**
+   * REACH v2.1. The cert route is the desktop's OWN, not the account's: a
+   * phone signed in on the same account asking for a Mac's certificate is a
+   * different refusal from a stranger's, and the sentence has to say so.
+   */
+  | 'not_this_desktop'
+  | 'bad_csr'
+  | 'in_flight'
+  | 'names_disabled'
   | 'bad_origin'
   | 'no_seat'
   | 'not_owner'
@@ -60,6 +69,11 @@ const SENTENCES: Record<V2Error, string> = {
   bad_reach:
     'That address card is not this Mac’s. A desktop signs its own addresses, and they must be on your own network, your tailnet or a .local name.',
   not_this_device: 'Only that desktop can say what is on it.',
+  not_this_desktop: 'Only that Mac itself can ask for its own certificate.',
+  bad_csr:
+    'That certificate request is not this Mac’s. It must ask for this Mac’s name and no other, with an EC P-256 or 2048-bit RSA key.',
+  in_flight: 'This Mac already has a certificate on the way. Ask again in a moment.',
+  names_disabled: 'This registry is not issuing certificates — no DNS zone is configured for it.',
   bad_origin: 'That request came from another site, so it was not carried out.',
   no_seat: 'No seat here yet. Buy one, or ask the owner for one.',
   not_owner: 'Only the owner of this team can seat people at it.',

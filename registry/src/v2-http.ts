@@ -8,6 +8,7 @@ import { createFactorState, type FactorState } from './v2-factor-state'
 import { v2Error, type V2Error } from './v2-copy'
 import type { LegacyIdentity } from './v2-migrate-routes'
 import type { DoorRecord } from './doors'
+import type { NamesFeature } from './names'
 
 /**
  * IDENTITY v2 — THE PLUMBING EVERY /v2 ROUTE SHARES.
@@ -113,6 +114,12 @@ export interface V2Context {
    * rather than a crash.
    */
   doors?: { get: (handle: string, name: string) => DoorRecord | null }
+  /**
+   * REACH v2.1 — the DNS zone and the ACME client, when this deployment was
+   * given one. Absent → the cert route answers 503 and the reach card carries
+   * `names: false`, which is the truth rather than a missing field.
+   */
+  names?: NamesFeature
   /**
    * The v1 identity service, for the migration routes only (phase 6): a
    * handle it knows is RESERVED for the key that holds it. Absent on a

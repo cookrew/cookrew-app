@@ -21,6 +21,7 @@ import { respondPage } from './site-shell'
 import type { StarStore } from './stars'
 import type { Release, ReleaseCache } from './releases'
 import { handleV2Route, signedIn, v2AccountOf, type V2Identity } from './v2-routes'
+import type { NamesFeature } from './names'
 import { teamAddress } from './v2-seats'
 import { mePage } from './site-account'
 import { createCanvasRelay, type CanvasRelay } from './v2-canvas-relay'
@@ -118,6 +119,14 @@ export interface RegistryDeps {
    * passing.
    */
   v2?: V2Identity
+  /**
+   * REACH v2.1 — the DNS zone for d.cookrew.dev and the ACME client behind it.
+   *
+   * Present → /v2/me/desktops/:id/cert issues real certificates and a reach
+   * card carries `names`. Absent → that route answers 503 and everything else
+   * is exactly as it was, which is what lets the feature ship dark.
+   */
+  names?: NamesFeature
 }
 
 /** An account name: the same shape a handle has everywhere else on this site. */
@@ -323,7 +332,9 @@ export function createRegistry(deps: RegistryDeps): Server {
         ...(deps.doors === undefined ? {} : { doors: deps.doors }),
         // The v1 credentials, for the migration route: which handles are
         // spoken for by a key that has no password yet (phase 6).
-        ...(deps.identity === undefined ? {} : { legacy: deps.identity })
+        ...(deps.identity === undefined ? {} : { legacy: deps.identity }),
+        // The names half, for the cert route and the `names` bit on a card.
+        ...(deps.names === undefined ? {} : { names: deps.names })
       })
     )
       return

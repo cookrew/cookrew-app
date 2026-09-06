@@ -556,6 +556,37 @@ export class V2Accounts {
   }
 
   /**
+   * THE DESKTOP WITH THIS DEVICE ID, whoever owns it.
+   *
+   * Every other reader of this store comes in through an account, because a
+   * machine's addresses belong to the person who owns it. DNS does not: a
+   * resolver asks about a name and knows nothing about accounts, so the zone
+   * needs the one lookup that crosses them — and answers only with what the
+   * desktop itself signed and published.
+   *
+   * A SCAN, not an index. The alpha's registry holds a handful of accounts,
+   * and an index would be a second copy of the truth to keep in step through
+   * every attach, revoke and PUT. Worth revisiting when a scan stops being
+   * cheaper than the bug.
+   */
+  desktopFor(deviceId: string): V2Desktop | null {
+    for (const account of this.accounts) {
+      const found = account.desktops.find((d) => d.deviceId === deviceId)
+      if (found !== undefined) return found
+    }
+    return null
+  }
+
+  /** The most recent change to any desktop — half of the DNS zone's serial. */
+  desktopsChangedAt(): number {
+    let latest = 0
+    for (const account of this.accounts) {
+      for (const desktop of account.desktops) latest = Math.max(latest, desktop.updatedAt)
+    }
+    return latest
+  }
+
+  /**
    * A desktop tells the directory which workspaces exist on it, by name and
    * id. Only that desktop may — the route checks the token's device against
    * the path — and both lists are bounded, because this is a fact about a
