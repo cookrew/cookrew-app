@@ -458,57 +458,93 @@ export function createDnsServer(options: DnsServerOptions): DnsServer {
     })
   }
 
-  return {
-    start: () =>
-      new Promise<number>((resolve, reject) => {
-        const address = options.address ?? '::'
-        /**
-         * ONE SOCKET FOR BOTH FAMILIES. `udp6` with `ipv6Only` unset is dual
-         * stack: a v4 peer arrives as `::ffff:a.b.c.d` and is answered on the
-         * same socket, which is what a resolver reaching us over either
-         * protocol needs and what the Service in front of this hands us. A
-         * literal v4 bind address — every test, and a pod that was told one —
-         * still gets a v4 socket, because `udp6` cannot bind 127.0.0.1.
-         *
-         * AND NO reuseAddr. It bought nothing here (this port is bound once,
-         * at boot, by one process) and it is how a second copy of the registry
-         * binds the same UDP port silently instead of refusing loudly — two
-         * processes then split the queries between them at the kernel's whim.
-         */
-        const socket = address.includes(':')
-          ? createSocket({ type: 'udp6', ipv6Only: false })
-          : createSocket({ type: 'udp4' })
-        /**
-         * THE BIND-TIME HANDLERS ARE REPLACED, NOT KEPT.
-         *
-         * `reject` belongs to a promise that has already settled by the time
-         * the listener is serving; leaving it attached meant every runtime
-         * socket error after start was swallowed into a resolved promise and
-         * nobody was ever told. Node also treats an EventEmitter with no
-         * 'error' listener as fatal, so removing them without putting
-         * something back would trade silence for a dead process.
-         */
-        socket.on('error', reject)
-        socket.on('message', onDatagram)
-        socket.bind(options.port, address, () => {
-          udp = socket
-          socket.off('error', reject)
-          socket.on('error', (error) => note(`dns: the udp socket errored (${error.message})`))
-          // BOUND FROM THE UDP PORT, not from the flag: a test asks for port 0
-          // and both listeners must still be the same port, or a resolver's
-          // TC retry lands somewhere else entirely.
-          const bound = socket.address().port
-          const server = createServer(onConnection)
-          server.on('error', reject)
-          server.listen(bound, address, () => {
-            tcp = server
-            server.off('error', reject)
-            server.on('error', (error) => note(`dns: the tcp listener errored (${error.message})`))
-            note(`dns on ${address}:${bound} (udp+tcp)`)
-            resolve(bound)
+  /**
+   * PORT 0 IS TWO ANSWERS, AND ONLY ONE OF THEM IS THE KERNEL'S.
+   *
+   * The UDP socket picks the ephemeral port and TCP is then told to take the
+   * same number, because a resolver's TC retry has to arrive at this server.
+   * But an ephemeral UDP port says nothing about the TCP port of the same
+   * number, and under vitest every worker is listening on TCP ephemerals —
+   * so the second bind lost the race and `start()` rejected with EADDRINUSE
+   * on a port nobody asked for (tests/registry-cert-issuance.test.ts, once,
+   * on 50597). A caller that asked for a SPECIFIC port still fails loudly on
+   * the first try; only the "any port" case draws again.
+   */
+  const PORT_0_ATTEMPTS = 8
+
+  const listenOnce = (address: string): Promise<number | 'taken'> =>
+    new Promise<number | 'taken'>((resolve, reject) => {
+      /**
+       * ONE SOCKET FOR BOTH FAMILIES. `udp6` with `ipv6Only` unset is dual
+       * stack: a v4 peer arrives as `::ffff:a.b.c.d` and is answered on the
+       * same socket, which is what a resolver reaching us over either
+       * protocol needs and what the Service in front of this hands us. A
+       * literal v4 bind address — every test, and a pod that was told one —
+       * still gets a v4 socket, because `udp6` cannot bind 127.0.0.1.
+       *
+       * AND NO reuseAddr. It bought nothing here (this port is bound once,
+       * at boot, by one process) and it is how a second copy of the registry
+       * binds the same UDP port silently instead of refusing loudly — two
+       * processes then split the queries between them at the kernel's whim.
+       */
+      const socket = address.includes(':')
+        ? createSocket({ type: 'udp6', ipv6Only: false })
+        : createSocket({ type: 'udp4' })
+      /**
+       * THE BIND-TIME HANDLERS ARE REPLACED, NOT KEPT.
+       *
+       * `reject` belongs to a promise that has already settled by the time
+       * the listener is serving; leaving it attached meant every runtime
+       * socket error after start was swallowed into a resolved promise and
+       * nobody was ever told. Node also treats an EventEmitter with no
+       * 'error' listener as fatal, so removing them without putting
+       * something back would trade silence for a dead process.
+       */
+      socket.on('error', reject)
+      socket.on('message', onDatagram)
+      socket.bind(options.port, address, () => {
+        socket.off('error', reject)
+        socket.on('error', (error) => note(`dns: the udp socket errored (${error.message})`))
+        // BOUND FROM THE UDP PORT, not from the flag: a test asks for port 0
+        // and both listeners must still be the same port, or a resolver's
+        // TC retry lands somewhere else entirely.
+        const bound = socket.address().port
+        const server = createServer(onConnection)
+        const refused = (error: NodeJS.ErrnoException): void => {
+          // The pair is abandoned WHOLE — a half-open UDP socket on a port
+          // this server does not serve TCP on is worse than no server.
+          server.close(() => undefined)
+          socket.close(() => {
+            if (options.port === 0 && error.code === 'EADDRINUSE') return resolve('taken')
+            reject(error)
           })
+        }
+        server.once('error', refused)
+        server.listen(bound, address, () => {
+          // Published only once BOTH listeners are up, so a retried attempt
+          // never leaves `stop()` holding a socket it already closed.
+          udp = socket
+          tcp = server
+          server.off('error', refused)
+          server.on('error', (error) => note(`dns: the tcp listener errored (${error.message})`))
+          note(`dns on ${address}:${bound} (udp+tcp)`)
+          resolve(bound)
         })
-      }),
+      })
+    })
+
+  return {
+    start: async () => {
+      const address = options.address ?? '::'
+      const attempts = options.port === 0 ? PORT_0_ATTEMPTS : 1
+      for (let left = attempts; left > 1; left -= 1) {
+        const bound = await listenOnce(address)
+        if (bound !== 'taken') return bound
+      }
+      const last = await listenOnce(address)
+      if (last === 'taken') throw new Error('dns: could not find a free udp+tcp port pair')
+      return last
+    },
     stop: async () => {
       for (const socket of open) socket.destroy()
       open.clear()

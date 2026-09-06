@@ -155,6 +155,14 @@ export function makeCsr(options: {
 export interface Ca {
   pair: Pair
   certificate: string
+  /**
+   * The root's own subject, so a leaf can name the issuer that actually
+   * signed it. It was a literal, which meant a CA made under any other name
+   * signed leaves claiming `Cookrew Test CA` as their issuer — a chain no
+   * verifier can build, failing as "unable to get local issuer certificate"
+   * rather than as the mismatch it is.
+   */
+  commonName: string
 }
 
 /** A one-off root, made per test run. It signs leaves and nothing else. */
@@ -174,7 +182,8 @@ export function makeCa(commonName = 'Cookrew Test CA'): Ca {
   const signature = sign('sha256', tbs, pair.privateKey)
   return {
     pair,
-    certificate: pem('CERTIFICATE', DER.seq(tbs, signatureAlgorithm(pair.privateKey), DER.bitString(signature)))
+    certificate: pem('CERTIFICATE', DER.seq(tbs, signatureAlgorithm(pair.privateKey), DER.bitString(signature))),
+    commonName
   }
 }
 
@@ -191,7 +200,7 @@ export function issueLeaf(options: {
     DER.context(0, DER.int(2)),
     DER.int(options.serial),
     signatureAlgorithm(options.ca.pair.privateKey),
-    name('Cookrew Test CA'),
+    name(options.ca.commonName),
     DER.seq(DER.utcTime(options.notBefore), DER.utcTime(options.notAfter)),
     name(options.names[0] ?? 'leaf'),
     options.spki,
