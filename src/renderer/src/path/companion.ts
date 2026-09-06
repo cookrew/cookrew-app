@@ -1,11 +1,11 @@
 import { apiPath, clientBase } from '../api-base'
 import { isRemoteMode } from '../api'
 import { authHeaders, authStore } from '../auth-gate'
-import { dataPlane, setDataPlane, type DataPlane } from '../data-plane'
+import { dataPlane, setDataPlane, subscribeDataPlane, type DataPlane } from '../data-plane'
 import { planeFetch } from '../plane-fetch'
 import { planeHealth } from '../plane-health'
 import { followDataPlane } from '../plane-streams'
-import { currentOriginState, setProbing, subscribePathLink } from '../path-link'
+import { currentOriginState, forgetLatency, setProbing, subscribePathLink } from '../path-link'
 import { PLANE_PROBE_EVERY_MS, switchPlaneIfBetter, type HelloClaim } from './plane-switch'
 import {
   PATH_MEMORY_PREFIX,
@@ -129,6 +129,10 @@ const startPlaneSwitch = (): (() => void) => {
   const health = planeHealth()
   const offs: (() => void)[] = [
     followDataPlane(),
+    // The badge's latency is a measurement of the path it was taken on, and
+    // the smoothing that keeps it steady within a path makes it a lie across
+    // one. So a switch drops it and the next request re-establishes it.
+    subscribeDataPlane(forgetLatency),
     // The push channel is the first thing to notice a plane that has died, so
     // its state is fed to the health watchdog rather than only to the badge.
     subscribePathLink((state) => health.link(state.link)),

@@ -64,6 +64,21 @@ export const recordLatency = (ms: number): void => {
 }
 
 /**
+ * FORGET THE OLD PATH'S LATENCY. Called when the data plane moves.
+ *
+ * The number is smoothed (70% of the old reading) because one slow request on
+ * a busy Wi-Fi is not the network. That is right within a path and wrong
+ * across one: a phone that has just moved from a 400 ms relay onto a 6 ms LAN
+ * would read 280, then 200, then 140 — a dozen requests of a measurement that
+ * describes a path it is no longer on.
+ */
+export const forgetLatency = (): void => {
+  if (state.latencyMs === null) return
+  state = { ...state, latencyMs: null }
+  announce()
+}
+
+/**
  * The companion is looking for a better way to the Mac.
  *
  * The badge says PROBING and nothing else happens — no prompt, no spinner over
