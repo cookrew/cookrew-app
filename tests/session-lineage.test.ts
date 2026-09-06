@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { SESSION_LINEAGE_CAP, withSessionLineage } from '../src/main/session-lineage'
+import { withSessionLineage } from '../src/main/session-lineage'
 
 describe('withSessionLineage — the rebind choke point', () => {
   it('a transition appends the OLD id (oldest first), immutably', () => {
@@ -19,11 +19,20 @@ describe('withSessionLineage — the rebind choke point', () => {
     expect(withSessionLineage({}, 'a').sessionLineage).toEqual([])
   })
 
-  it(`caps the lineage at ${SESSION_LINEAGE_CAP}, dropping the oldest`, () => {
-    const lineage = Array.from({ length: SESSION_LINEAGE_CAP }, (_, i) => `s${i}`)
+  // WAS: "caps the lineage at 20, dropping the oldest". That cap is the
+  // 2026-09-06 checkpoint-loss defect — Conductor sat at exactly 20 and the
+  // next rebind would have sliced its oldest transcript out of every path
+  // that can reach a checkpoint. The lineage is APPEND-ONLY now.
+  it('never drops an id, however long the chain gets', () => {
+    const lineage = Array.from({ length: 40 }, (_, i) => `s${i}`)
     const patch = withSessionLineage({ claudeSessionId: 'cur', sessionLineage: lineage }, 'next')
-    expect(patch.sessionLineage).toHaveLength(SESSION_LINEAGE_CAP)
-    expect(patch.sessionLineage?.[0]).toBe('s1') // s0 dropped
-    expect(patch.sessionLineage?.[SESSION_LINEAGE_CAP - 1]).toBe('cur')
+    expect(patch.sessionLineage).toHaveLength(41)
+    expect(patch.sessionLineage?.[0]).toBe('s0') // the id the cap used to eat
+    expect(patch.sessionLineage?.at(-1)).toBe('cur')
+  })
+
+  it('an id already on the chain is not appended twice (idempotent)', () => {
+    const patch = withSessionLineage({ claudeSessionId: 'b', sessionLineage: ['a', 'b'] }, 'c')
+    expect(patch.sessionLineage).toEqual(['a', 'b'])
   })
 })
