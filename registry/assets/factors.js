@@ -410,19 +410,144 @@
     else toast(said(out, 'That passkey was not enrolled.'), 6000)
   }
 
+  /**
+   * THE QR, AS ONE SVG PATH.
+   *
+   * `rows` are the registry's own '0'/'1' strings — the same shape the desktop
+   * sheet draws. Drawn as a single path of unit squares in module coordinates
+   * and scaled by the viewBox, so it is crisp at any size instead of a bitmap
+   * that a phone camera has to guess at; `crispEdges` keeps the module grid
+   * off the anti-aliaser. The QUIET ZONE is four modules on every side and it
+   * is not decoration: a scanner needs it to find the symbol at all.
+   */
+  const QUIET = 4
+  function qrSvg(rows) {
+    const modules = rows.length
+    if (modules === 0) return null
+    const span = modules + QUIET * 2
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    svg.setAttribute('viewBox', `0 0 ${span} ${span}`)
+    svg.setAttribute('width', '220')
+    svg.setAttribute('height', '220')
+    svg.setAttribute('shape-rendering', 'crispEdges')
+    svg.setAttribute('role', 'img')
+    svg.setAttribute('aria-label', 'Scan this with your authenticator app')
+    svg.dataset.modules = String(modules)
+    const paper = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+    paper.setAttribute('width', String(span))
+    paper.setAttribute('height', String(span))
+    paper.setAttribute('fill', '#fff')
+    const dark = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    let d = ''
+    for (let row = 0; row < modules; row++) {
+      const line = rows[row]
+      for (let col = 0; col < line.length; col++) {
+        if (line[col] === '1') d += `M${col + QUIET} ${row + QUIET}h1v1h-1z`
+      }
+    }
+    dark.setAttribute('d', d)
+    // Ink, not currentColor: a QR read off a screen in dark mode is a QR that
+    // has to stay dark-on-white whatever the page around it is doing.
+    dark.setAttribute('fill', '#14110a')
+    svg.append(paper, dark)
+    return svg
+  }
+
+  /**
+   * ADD AN AUTHENTICATOR — scan, then verify, in the page.
+   *
+   * The owner's note: /me must do what the desktop sheet does. It used to be
+   * two `prompt()` boxes with the secret as text, which is unscannable and
+   * asks a person to type 32 characters from a dialog they cannot copy from.
+   *
+   * NOTHING IS ENROLLED UNTIL A CODE COMES BACK. The secret lives in this
+   * closure and on the account as an INACTIVE record; CANCEL just drops the
+   * panel, and the next ADD replaces it server-side. Only `confirm` makes it
+   * a factor, and only then does the row change.
+   */
   async function addTotp() {
+    const panel = $('me-totp')
+    if (!panel) return
     const started = await api('POST', '/v2/me/totp/enrol', {})
     if (started.status !== 201) return toast(said(started, 'That did not go through.'), 6000)
-    const box = $('me-totp')
-    if (box) {
-      box.textContent = `${started.body.secret}\n\n${started.body.otpauth}`
-      box.hidden = false
+    const { secret, otpauth, qr } = started.body
+
+    panel.replaceChildren()
+    panel.hidden = false
+    panel.append(el('p', 'meta', 'Scan this with your authenticator app, then type the six digits it shows.'))
+    const picture = qrSvg(Array.isArray(qr) ? qr : [])
+    if (picture) panel.append(picture)
+
+    // The secret as selectable text, for a phone that cannot scan a screen it
+    // is standing in front of — and the URL for an app that takes one.
+    const typed = el('p', 'meta')
+    typed.append(document.createTextNode('or type this secret: '))
+    typed.append(el('code', 'totp-secret', secret))
+    panel.append(typed)
+    const link = el('a', 'meta totp-link', otpauth)
+    link.setAttribute('href', otpauth)
+    link.setAttribute('rel', 'noreferrer')
+    panel.append(link)
+
+    const field = el('input')
+    field.className = 'acct-code'
+    field.setAttribute('inputmode', 'numeric')
+    field.setAttribute('autocomplete', 'one-time-code')
+    field.setAttribute('maxlength', '6')
+    field.placeholder = '123456'
+    const verify = button('Verify', 'primary')
+    const cancel = button('Cancel')
+    const row = el('div', 'row')
+    row.append(field, verify, cancel)
+    const message = el('p', 'meta totp-said')
+    message.setAttribute('role', 'status')
+    panel.append(row, message)
+    field.focus()
+
+    const close = () => {
+      panel.replaceChildren()
+      panel.hidden = true
     }
-    const code = prompt('Add the secret above to your authenticator app, then type the six digits it shows')
-    if (code === null) return
-    const out = await api('POST', '/v2/me/totp/confirm', { code })
-    if (out.status === 204) location.reload()
-    else toast(said(out, 'That code was not the one showing.'), 6000)
+    cancel.addEventListener('click', close)
+
+    const send = async () => {
+      verify.disabled = true
+      const out = await api('POST', '/v2/me/totp/confirm', { code: field.value })
+      verify.disabled = false
+      if (out.status !== 204) {
+        // The registry's own sentence, under the field where it was typed.
+        message.textContent = said(out, 'That code was not the one showing.')
+        field.focus()
+        return
+      }
+      close()
+      activateTotpRow()
+    }
+    verify.addEventListener('click', () => void send())
+    field.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault()
+        void send()
+      }
+    })
+  }
+
+  /**
+   * The row becomes what the server would now render for it — in place, rather
+   * than by reloading the page under somebody who has just typed six digits.
+   * The sentence is the one site-account.ts writes, so the two agree.
+   */
+  function activateTotpRow() {
+    const row = $('me-totp-row')
+    if (!row) return
+    const note = $('me-totp-note')
+    if (note) note.textContent = 'Six digits, every thirty seconds. Asked for on a device this account has not seen.'
+    const add = row.querySelector('[data-add-totp]')
+    if (!add) return
+    const remove = button('Remove', 'danger')
+    remove.dataset.dropTotp = '1'
+    add.remove()
+    row.append(remove)
   }
 
   /* ── /me: D6, the approvals waiting for an answer ──────────────────────── */

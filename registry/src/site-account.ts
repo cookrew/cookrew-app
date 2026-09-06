@@ -50,10 +50,23 @@ function passkeyRows(passkeys: readonly { id: string; name: string; addedAt: num
     .join('')
 }
 
+/**
+ * ONE ROW, TWO STATES — and the words for both live here.
+ *
+ * factors.js flips this row in place the moment a code is verified, rather
+ * than reloading the page under somebody who has just typed six digits. So
+ * the sentences it writes are the sentences below, exported for it to use by
+ * id: two copies of a sentence become two different sentences.
+ */
+export const TOTP_ACTIVE_NOTE =
+  'Six digits, every thirty seconds. Asked for on a device this account has not seen.'
+export const TOTP_ADD_NOTE =
+  'A six-digit code from an app on your phone. Scan a QR, or type the secret.'
+
 function authenticatorRow(active: boolean): string {
   return active
-    ? `<li><span class="chip">Factor</span><span><b>Authenticator app</b><br><span class="meta">Six digits, every thirty seconds. Asked for on a device this account has not seen.</span></span><button class="btn sm danger" data-drop-totp>Remove</button></li>`
-    : `<li><span class="chip">Factor</span><span><b>Authenticator app</b><br><span class="meta">A six-digit code from an app on your phone. The secret is shown once, as text.</span></span><button class="btn sm" data-add-totp>Add</button></li>`
+    ? `<li id="me-totp-row"><span class="chip">Factor</span><span><b>Authenticator app</b><br><span class="meta" id="me-totp-note">${TOTP_ACTIVE_NOTE}</span></span><button class="btn sm danger" data-drop-totp>Remove</button></li>`
+    : `<li id="me-totp-row"><span class="chip">Factor</span><span><b>Authenticator app</b><br><span class="meta" id="me-totp-note">${TOTP_ADD_NOTE}</span></span><button class="btn sm" data-add-totp>Add</button></li>`
 }
 
 function desktopRow(name: string, workspaces: readonly { id: string; name: string }[]): string {
@@ -145,7 +158,7 @@ ${authenticatorRow(factors.totp)}
 <li><span class="chip">Rescue</span><span><b>Recovery codes</b><br><span class="meta" id="me-codes-note">${codes === 0 ? 'None saved. Each code opens the account once.' : `${codes} unused. Showing a new set replaces them.`}</span></span><button class="btn sm" data-recovery>Show</button></li>
 </ul>
 <pre class="cmd" id="me-codes" hidden></pre>
-<pre class="cmd" id="me-totp" hidden></pre>
+<div class="totp-panel" id="me-totp" hidden></div>
 
 <h2 style="margin-top:30px">Requests</h2>
 <p class="meta">A device asking to sign in as @${esc(account.username)}. Approve attaches it and names it in Devices; deny does nothing else; “not me” signs every other device out and locks the password until you change it.</p>

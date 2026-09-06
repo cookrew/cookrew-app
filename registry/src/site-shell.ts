@@ -464,4 +464,11 @@ li.desktop [data-key-note]{grid-column:1/-1;color:var(--rose)}
 .acct-code:focus{background:var(--amber-soft)}
 .acct-asked{font:700 12px var(--font-pixel);letter-spacing:.06em;text-transform:uppercase;margin:2px 0 6px}
 ul.me-list li .btn.sm+.btn.sm{margin-left:6px}
+/* the authenticator's scan-then-verify panel on /me */
+.totp-panel{border:2px solid var(--line);background:var(--cream-hi);padding:14px;margin:10px 0;max-width:420px}
+.totp-panel svg{display:block;margin:8px 0;border:2px solid var(--line);background:#fff}
+.totp-secret{font:13px var(--font-mono);letter-spacing:.08em;background:var(--cream-md);padding:2px 6px;user-select:all}
+.totp-link{display:block;font:11px var(--font-mono);word-break:break-all;color:var(--muted);margin:6px 0 10px}
+.totp-said:empty{display:none}
+.totp-said{color:var(--rose)}
 `
