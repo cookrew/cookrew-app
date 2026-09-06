@@ -198,7 +198,7 @@ describe('the schedule', () => {
   it('is five minutes, and also whenever the phone comes back online', async () => {
     expect(RECHECK_EVERY_MS).toBe(300_000)
     const listeners: Record<string, () => void> = {}
-    let tick: (() => void) | null = null
+    const timer: { fn: (() => void) | null } = { fn: null }
     let asked = 0
     const recheck = startPlaneRecheck({
       deps: {
@@ -214,8 +214,8 @@ describe('the schedule', () => {
       },
       setInterval: (fn, ms) => {
         expect(ms).toBe(RECHECK_EVERY_MS)
-        tick = fn
-        return () => void (tick = null)
+        timer.fn = fn
+        return () => void (timer.fn = null)
       },
       on: (event, listener) => {
         listeners[event] = listener
@@ -224,7 +224,7 @@ describe('the schedule', () => {
     })
     // Nothing at construction: the plane has just proved itself.
     expect(asked).toBe(0)
-    tick?.()
+    timer.fn?.()
     await settle()
     listeners.online?.()
     await settle()
@@ -238,14 +238,14 @@ describe('the schedule', () => {
 
   it('runs one at a time, however many moments land together', async () => {
     let asked = 0
-    let release: (() => void) | null = null
+    const gate: { release: (() => void) | null } = { release: null }
     const recheck = startPlaneRecheck({
       deps: {
         plane: () => LAN,
         deviceId: () => DEVICE,
         hello: async (_o, nonce) => {
           asked += 1
-          await new Promise<void>((resolve) => void (release = resolve))
+          await new Promise<void>((resolve) => void (gate.release = resolve))
           return answer(nonce)
         },
         verify: async () => true,
@@ -259,7 +259,7 @@ describe('the schedule', () => {
     recheck.now()
     recheck.now()
     expect(asked).toBe(1)
-    release?.()
+    gate.release?.()
     recheck.stop()
   })
 })
