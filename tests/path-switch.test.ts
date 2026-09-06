@@ -190,6 +190,16 @@ describe('one race', () => {
     expect(run.asked()).toEqual([])
   })
 
+  it('leaves the relay prefix behind when it leaves the relay', async () => {
+    // Under the relay the page lives at /relay/@user/desktop/<id>/ and every
+    // request it makes carries that prefix. The LAN address is a DIFFERENT
+    // ORIGIN serving the app at its own root — carrying the prefix across
+    // would land the phone on a 404 with no way back.
+    const run = await race()
+    expect(run.went()).toBe(`${LAN}/?token=the-pairing-token`)
+    expect(run.went()).not.toContain('/relay/')
+  })
+
   it('escapes a credential that needs it', async () => {
     const run = await race({ credential: () => 'a b/c' })
     expect(run.went()).toBe(`${LAN}/?token=a%20b%2Fc`)

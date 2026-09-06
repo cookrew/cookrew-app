@@ -215,11 +215,16 @@ describe('the app half, holding a real line', () => {
     expect(echo.cookie ?? '').not.toContain('cr_session')
   })
 
-  it("never hands the desktop the phone's Authorization header", async () => {
+  it("hands the desktop the companion's OWN Authorization, which is what it is for", async () => {
+    // Reversed on 2026-09-06, and the reversal is the point: the companion
+    // authenticates to its Mac with `Authorization: Bearer <companion token>`
+    // (mobile-http.presentedToken). Stripped, every API call the canvas makes
+    // was a 401 and the phone sat on a shell that could read nothing.
+    // cookrew.dev's own credential is the COOKIE, and that is still stripped.
     const echo = (await (
-      await asPhone('/api/state', { headers: { authorization: 'Bearer something-of-mine' } })
+      await asPhone('/api/state', { headers: { authorization: 'Bearer the-companion-token' } })
     ).json()) as { authorization: string | null }
-    expect(echo.authorization).toBe(null)
+    expect(echo.authorization).toBe('Bearer the-companion-token')
   })
 
   it('carries a POST body through', async () => {
@@ -236,7 +241,11 @@ describe('the app half, holding a real line', () => {
   it('admits a phone through the relay exactly as it does over the LAN', async () => {
     const answer = await asPhone(`/?open=a-canvas-token&key=ABC234&device=${randomUUID()}`)
     expect(answer.status).toBe(303)
-    expect(answer.headers.get('location')).toBe('/?token=the-pairing-token')
+    // UNDER THE PREFIX. The desktop says `/?token=…` because on the LAN it is
+    // the root; forwarded as it stands that sent the phone to cookrew.dev's
+    // home page with a credential in the address bar, and the canvas was never
+    // reached (found on the live site, 2026-09-06).
+    expect(answer.headers.get('location')).toBe(`${prefix()}/?token=the-pairing-token`)
     // The desktop said Path=/ and no Domain; the registry re-pins it under the
     // relay prefix, so nothing it sets can ever reach cookrew.dev's own routes.
     const cookies = answer.headers.getSetCookie()
