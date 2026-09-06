@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Node } from '@xyflow/react'
-import { reconcileFlowNodes, toFlowNode, canvasNodeEqual } from '../src/renderer/src/flow-nodes'
+import { reconcileFlowEdges, reconcileFlowNodes, toFlowNode, canvasNodeEqual } from '../src/renderer/src/flow-nodes'
 import {
   CARD_DRAG_SURFACE,
   DRAG_HANDLE_SELECTOR,
@@ -138,5 +138,33 @@ describe('canvasNodeEqual', () => {
     expect(canvasNodeEqual({ tabs: [1, 2] }, { tabs: [1, 2] })).toBe(true)
     expect(canvasNodeEqual({ tabs: [1, 2] }, { tabs: [2, 1] })).toBe(false)
     expect(canvasNodeEqual({ tabs: [1] }, { tabs: [1, 2] })).toBe(false)
+  })
+})
+
+describe('reconcileFlowEdges', () => {
+  const cable = (id: string, a: string, b: string) => ({ id, a, b })
+
+  it('hands back the SAME array when no cable changed — a broadcast re-renders no edge', () => {
+    const first = reconcileFlowEdges([], [cable('c1', 'a', 'b'), cable('c2', 'b', 'c')])
+    // A workspace push deserialises a fresh connections array every time.
+    const again = reconcileFlowEdges(first, [cable('c1', 'a', 'b'), cable('c2', 'b', 'c')])
+    expect(again).toBe(first)
+    expect(again[0]).toEqual({ id: 'c1', source: 'a', target: 'b', type: 'cable' })
+  })
+
+  it('keeps an unchanged edge object and rebuilds only the changed one', () => {
+    const first = reconcileFlowEdges([], [cable('c1', 'a', 'b'), cable('c2', 'b', 'c')])
+    const next = reconcileFlowEdges(first, [cable('c1', 'a', 'b'), cable('c2', 'b', 'd')])
+    expect(next).not.toBe(first)
+    expect(next[0]).toBe(first[0])
+    expect(next[1]).not.toBe(first[1])
+    expect(next[1].target).toBe('d')
+  })
+
+  it('a removed, added or reordered cable is a new list', () => {
+    const first = reconcileFlowEdges([], [cable('c1', 'a', 'b'), cable('c2', 'b', 'c')])
+    expect(reconcileFlowEdges(first, [cable('c1', 'a', 'b')])).toHaveLength(1)
+    expect(reconcileFlowEdges(first, [cable('c2', 'b', 'c'), cable('c1', 'a', 'b')])).not.toBe(first)
+    expect(reconcileFlowEdges(first, [...[cable('c1', 'a', 'b'), cable('c2', 'b', 'c')], cable('c3', 'c', 'a')])).toHaveLength(3)
   })
 })

@@ -43,7 +43,7 @@ import {
 import { retry } from './retry'
 import { CanvasUiContext, ToolId } from './canvas-ui'
 import { activityStore, thumbStore, useActivity, useActivityPhaseCount } from './activity-thumb-store'
-import { reconcileFlowNodes } from './flow-nodes'
+import { reconcileFlowEdges, reconcileFlowNodes } from './flow-nodes'
 import {
   CARD_FIT_PADDING,
   CARD_ZOOM_MS,
@@ -136,15 +136,6 @@ function selectedIds(nodes: Node[]): Set<string> {
   return new Set(nodes.filter((n) => n.selected).map((n) => n.id))
 }
 
-
-function toFlowEdges(state: WorkspaceState): Edge[] {
-  return state.connections.map((c) => ({
-    id: c.id,
-    source: c.a,
-    target: c.b,
-    type: 'cable'
-  }))
-}
 
 function Canvas(): React.JSX.Element {
   const interactiveCapability = useInteractiveBrowserCapability()
@@ -501,7 +492,15 @@ function Canvas(): React.JSX.Element {
   // Cables light up with the hovered card while clipping — the hover tells
   // you what would travel with the selection before you commit to it. Split
   // memos so resting-hand hovers never rebuild the edge set.
-  const baseEdges = useMemo(() => (workspace ? toFlowEdges(workspace) : []), [workspace])
+  // Reconciled, not rebuilt: a workspace broadcast is a fresh object even when
+  // no cable changed, and rebuilding the edge list from it handed all 232
+  // EdgeWrappers new identity on every agent event (perf lane L6).
+  const baseEdgesRef = useRef<Edge[]>([])
+  const baseEdges = useMemo(() => {
+    const next = reconcileFlowEdges(baseEdgesRef.current, workspace?.connections ?? [])
+    baseEdgesRef.current = next
+    return next
+  }, [workspace?.connections])
   const edges = useMemo(() => {
     if (!clipping || hoverId === null) return baseEdges
     return baseEdges.map((e) =>
