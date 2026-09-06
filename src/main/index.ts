@@ -58,7 +58,8 @@ import {
   activePairingTokenValue,
   activeCertFingerprint,
   trustedOrigins,
-  allowedCompanionOrigins
+  allowedCompanionOrigins,
+  companionTokenAccepted
 } from './mobile-server'
 import { createDesktopCert, type DesktopCert } from './desktop-cert'
 import { DEFAULT_NAME_ZONE } from '../shared/reach-names'
@@ -4042,7 +4043,14 @@ const browserCast = createBrowserCast({
   // plane moves onto this Mac's own name, so its Origin is the registry's.
   // Same-host alone would refuse it and the browser card would never stream
   // over the fast path. Exact origins only; see companion-cors.ts.
-  allowedOrigins: () => allowedCompanionOrigins(registryOrigin())
+  allowedOrigins: () => allowedCompanionOrigins(registryOrigin()),
+  // AND THE ORIGIN ONLY FILTERS — this is what authenticates the socket. The
+  // global pairing token or an admitted phone's own companion token, compared
+  // by the same code as every HTTP route (mobile-http.ts · tokenAccepted).
+  // The TV wall's read-only token is deliberately NOT accepted: this socket
+  // carries pointer and key INPUT, so admitting a read-only credential here
+  // would hand it a write it does not have anywhere else.
+  paired: (credential) => companionTokenAccepted(credential, (one) => admittedDevices.accepts(one))
 })
 
 const headlessBrowserCommands = new HeadlessBrowserCommandEngine({

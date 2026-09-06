@@ -114,6 +114,7 @@ function fakeInstance(): HeadlessInstance {
 const okDeps = () => ({
   enabled: () => true,
   desktopToken: () => 'desktop-secret',
+  paired: () => true,
   getInstance: vi.fn(() => Promise.resolve(fakeInstance()))
 })
 
@@ -153,6 +154,62 @@ describe('upgrade() guards (sync, before any instance work)', () => {
   })
 })
 
+/**
+ * ORIGIN IS A FILTER. THE TOKEN IS THE AUTHENTICATION.
+ *
+ * WebSocket has no cross-origin protection of its own: the browser sends the
+ * handshake and attaches no CORS check to it, and any process that is not a
+ * browser can put whatever it likes in the Origin header. A page that has been
+ * rebound onto this Mac keeps an Origin we may well allow. So the header can
+ * only ever narrow who gets in — what decides is the pairing token, the same
+ * credential every ordinary route demands. Logitech Options' local socket had
+ * neither and was driven by any page on the internet.
+ */
+describe('who may open the cast socket', () => {
+  it('refuses a socket that presents no token, however perfect its Origin', () => {
+    const socket = socketStub()
+    const deps = { ...okDeps(), paired: () => false }
+    createBrowserCast(deps).upgrade(req('/api/browser/abc/stream?w=390&h=844'), socket)
+    expect(socket.destroy).toHaveBeenCalled()
+    expect(socket.writes.join('')).not.toMatch(/101/)
+    // Refused before Chrome is asked for anything.
+    expect(deps.getInstance).not.toHaveBeenCalled()
+  })
+
+  it('reads the credential from ?token= — a browser cannot header a socket', () => {
+    const seen: (string | null)[] = []
+    const socket = socketStub()
+    createBrowserCast({
+      ...okDeps(),
+      paired: (credential) => {
+        seen.push(credential)
+        return credential === 'pairing-token'
+      }
+    }).upgrade(req('/api/browser/abc/stream?w=390&h=844&token=pairing-token'), socket)
+    expect(seen).toEqual(['pairing-token'])
+    expect(socket.writes.join('')).toMatch(/HTTP\/1\.1 101 Switching Protocols/)
+  })
+
+  it('still refuses a foreign Origin even when the token is right', () => {
+    const socket = socketStub()
+    createBrowserCast(okDeps()).upgrade(
+      req('/api/browser/abc/stream?token=pairing-token', 'https://evil.example'),
+      socket
+    )
+    expect(socket.destroy).toHaveBeenCalled()
+    expect(socket.writes.join('')).not.toMatch(/101/)
+  })
+
+  it('refuses two Origin headers rather than believing the first', () => {
+    expect(
+      originAllowed(
+        { headers: { origin: ['https://cookrew.dev', 'https://evil.example'], host: 'localhost' } },
+        ['https://cookrew.dev']
+      )
+    ).toBe(false)
+  })
+})
+
 describe('upgrade() attaches to the node-owned instance', () => {
   it('resolves the browser id through the manager', async () => {
     const deps = okDeps()
@@ -170,6 +227,7 @@ describe('upgrade() attaches to the node-owned instance', () => {
     const cast = createBrowserCast({
       enabled: () => true,
       desktopToken: () => 'desktop-secret',
+      paired: () => true,
       getInstance: vi.fn(() => pending)
     })
     cast.upgrade(req('/api/browser/slow/stream'), socket)
@@ -187,6 +245,7 @@ describe('upgrade() attaches to the node-owned instance', () => {
     const cast = createBrowserCast({
       enabled: () => true,
       desktopToken: () => 'desktop-secret',
+      paired: () => true,
       getInstance: vi.fn(() => Promise.resolve(instance))
     })
     cast.upgrade(req('/api/browser/shared/stream'), socket)
@@ -206,6 +265,7 @@ describe('upgrade() attaches to the node-owned instance', () => {
     createBrowserCast({
       enabled: () => true,
       desktopToken: () => 'desktop-secret',
+      paired: () => true,
       getInstance: vi.fn(() => Promise.resolve(instance))
     }).upgrade(req('/api/browser/secure/stream'), socket)
     await Promise.resolve()
@@ -232,6 +292,7 @@ describe('upgrade() attaches to the node-owned instance', () => {
     createBrowserCast({
       enabled: () => true,
       desktopToken: () => 'desktop-secret',
+      paired: () => true,
       getInstance: vi.fn(() => Promise.resolve(instance))
     }).upgrade(req('/api/browser/secure/stream'), socket)
     await Promise.resolve()
@@ -312,6 +373,7 @@ describe('upgrade() attaches to the node-owned instance', () => {
     createBrowserCast({
       enabled: () => true,
       desktopToken: () => 'desktop-secret',
+      paired: () => true,
       getInstance: vi.fn(() => Promise.resolve(instance))
     }).upgrade(req('/api/browser/pinch/stream'), socket)
     await Promise.resolve()
@@ -391,6 +453,7 @@ describe('upgrade() attaches to the node-owned instance', () => {
     createBrowserCast({
       enabled: () => true,
       desktopToken: () => 'desktop-secret',
+      paired: () => true,
       getInstance: vi.fn(() => Promise.resolve(instance))
     }).upgrade(req('/api/browser/pinch/stream'), socket)
     await Promise.resolve()
@@ -449,6 +512,7 @@ describe('upgrade() attaches to the node-owned instance', () => {
     createBrowserCast({
       enabled: () => true,
       desktopToken: () => 'desktop-secret',
+      paired: () => true,
       getInstance: vi.fn(() => Promise.resolve(instance))
     }).upgrade(req('/api/browser/secure/stream'), socket)
     await Promise.resolve()
@@ -496,6 +560,7 @@ describe('upgrade() attaches to the node-owned instance', () => {
     const cast = createBrowserCast({
       enabled: () => true,
       desktopToken: () => 'desktop-secret',
+      paired: () => true,
       getInstance: vi.fn(() => Promise.resolve(instance))
     })
     cast.upgrade(req('/api/browser/shared/stream'), fast)
