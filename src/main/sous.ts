@@ -80,7 +80,15 @@ async function requestTitle(prompt: string): Promise<SousAttempt<string | null>>
   // 404 = model not pulled; other statuses = server-side trouble. Either way
   // it is a failure the breaker counts.
   if (!res.ok) return { ok: false, reason: `Ollama returned ${res.status} for model ${MODEL}` }
-  const body = (await res.json()) as OllamaGenerateResponse
+  let body: OllamaGenerateResponse
+  try {
+    body = (await res.json()) as OllamaGenerateResponse
+  } catch {
+    // A 200 whose body is not JSON — a proxy in front of Ollama serving its
+    // HTML error page, say — is the server misbehaving, and counts like any
+    // other failure rather than rethrowing as a bug of ours.
+    return { ok: false, reason: `Ollama answered ${res.status} with an unreadable body` }
+  }
   warmed = true
   return { ok: true, value: sanitizeTitle(body.response ?? '') }
 }

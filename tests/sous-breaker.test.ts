@@ -256,6 +256,31 @@ describe('Sous circuit breaker', () => {
     expect(redactReason('connect ECONNREFUSED 127.0.0.1:11434')).toBe('connect ECONNREFUSED <host>')
     expect(redactReason('ollama.internal:11434 refused')).toBe('<host> refused')
     expect(redactReason('Ollama returned 404 for model qwen2.5:1.5b')).toBe('Ollama returned 404 for model qwen2.5:1.5b')
+    expect(redactReason('localhost:11434 down')).toBe('<host> down')
+    // Not a host: a clock time, a file:line, a bare word with a port-like number.
+    expect(redactReason('at 12:30 the probe failed')).toBe('at 12:30 the probe failed')
+    expect(redactReason('thrown at sous.ts:83 and index.mjs:4470')).toBe('thrown at sous.ts:83 and index.mjs:4470')
+    expect(redactReason('retry:120 later')).toBe('retry:120 later')
+  })
+
+  it('a rethrow during the half-open probe gives the probe back and strikes the request', async () => {
+    const h = harness()
+    for (let i = 0; i < 3; i += 1) await h.breaker.guard(h.fail)
+    h.advance(30_000)
+    const requestsBefore = h.breaker.state().requests
+    const bug = async (): Promise<SousAttempt<string>> => {
+      throw new RangeError('Invalid array length')
+    }
+    await expect(h.breaker.guard(bug)).rejects.toThrow(RangeError)
+    const state = h.breaker.state()
+    expect(state.state).toBe('open') // not left half-open with a phantom probe
+    expect(state.inFlight).toBe(0)
+    expect(state.requests).toBe(requestsBefore)
+    expect(state.windowMs).toBe(30_000) // the ladder did not move
+    expect(h.breaker.readiness()).toBe('ready') // the window's one probe is still to come
+    expect(await h.breaker.guard(h.succeed)).toBe('Fixing the login bug')
+    expect(h.breaker.state().state).toBe('closed')
+    expect(h.lines).toHaveLength(2)
   })
 
   it('a programming error rethrows to the caller and leaves the breaker as it was', async () => {

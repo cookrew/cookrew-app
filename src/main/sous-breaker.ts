@@ -74,9 +74,17 @@ export function redactReason(reason: string): string {
   return reason
     .replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, '<url>')
     .replace(/\/\/[^@\s/]+@/g, '//<redacted>@')
-    .replace(/\b[a-z0-9.-]+:\d{2,5}\b/gi, '<host>')
+    .replace(HOST_PORT, (match, host: string) => (SOURCE_FILE.test(host) ? match : '<host>'))
     .slice(0, REASON_MAX_CHARS)
 }
+
+/**
+ * A bare host:port — an IPv4, localhost, or a dotted name — with a port of
+ * two to five digits. A clock time has no dotted host and a file:line
+ * ends in a source extension, so neither is eaten.
+ */
+const HOST_PORT = /\b((?:\d{1,3}\.){3}\d{1,3}|localhost|[a-z0-9-]+(?:\.[a-z0-9-]+)+):\d{2,5}\b/gi
+const SOURCE_FILE = /\.(?:[cm]?[jt]sx?|py|go|rs|java|rb)$/i
 
 /** The libuv / undici codes that mean the server, not this program. */
 const NETWORK_CODES = new Set([
@@ -102,7 +110,7 @@ function causeCode(error: Error): string | null {
  * program? Only the former joins the failure ladder; a TypeError from our
  * own code must never hold the breaker open under a line that blames Sous.
  */
-export function isNetworkError(error: unknown): boolean {
+export function isNetworkError(error: unknown): error is Error {
   if (!(error instanceof Error)) return false
   if (error.name === 'TimeoutError' || error.name === 'AbortError') return true
   const code = causeCode(error)
@@ -192,7 +200,9 @@ class Breaker implements SousBreaker {
   /**
    * Run `attempt` if admitted. Null without a request when refused; null
    * and a counted failure when the server did not answer; a programming
-   * error rethrows to the caller and leaves the breaker as it was.
+   * error rethrows to the caller and leaves the breaker as it was — the
+   * request is struck from the count, and a half-open probe it burned is
+   * given back so the window's one probe is still to come.
    */
   async guard<T>(attempt: () => Promise<SousAttempt<T>>): Promise<T | null> {
     const admitted = this.admit()
@@ -207,10 +217,10 @@ class Breaker implements SousBreaker {
       return null
     } catch (error) {
       if (!isNetworkError(error)) {
-        this.inFlight -= 1
+        this.abandon(admitted)
         throw error
       }
-      this.failure(admitted, describeError(error as Error))
+      this.failure(admitted, describeError(error))
       return null
     }
   }
@@ -230,8 +240,23 @@ class Breaker implements SousBreaker {
     return this.epoch
   }
 
-  private success(epoch: number): void {
+  /** One admitted call has ended, whichever way. */
+  private settle(): void {
     this.inFlight -= 1
+  }
+
+  /** The call was never a request of Sous: it threw before it could be judged. */
+  private abandon(epoch: number): void {
+    this.settle()
+    this.requests -= 1
+    if (epoch === this.epoch && this.phase === 'half-open') {
+      this.phase = 'open'
+      this.probeStartedAt = null
+    }
+  }
+
+  private success(epoch: number): void {
+    this.settle()
     this.lastSuccessAt = this.now()
     if (epoch !== this.epoch) return
     this.consecutiveFailures = 0
@@ -239,7 +264,7 @@ class Breaker implements SousBreaker {
   }
 
   private failure(epoch: number, reason: string): void {
-    this.inFlight -= 1
+    this.settle()
     this.lastFailure = redactReason(reason)
     this.lastFailureAt = this.now()
     if (epoch !== this.epoch) return
