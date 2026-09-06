@@ -3,6 +3,8 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import { roleSlug } from './roles'
 import { planStorageGc, type GcCandidate, type GcPlan } from './storage-gc'
+import { scanResidue, type ResidueEntry } from './storage-gc-residue'
+import { servedSessionCandidates } from './storage-gc-served'
 
 /**
  * The disk half of the storage sweep: read the stores, build the three
@@ -23,6 +25,10 @@ export const DEFAULT_GRACE_MS = 30 * DAY
 const SIDECAR_SUFFIX = '-sessions'
 
 export interface StorageRoots {
+  /** The store itself (~/.cookrew): where hand-made backup residue is found. */
+  base: string
+  /** Served-session sandboxes, `sessions/<service>/<session>`. */
+  sessions: string
   turns: string
   attachments: string
   workspaces: string
@@ -32,6 +38,8 @@ export interface StorageRoots {
 
 export function defaultStorageRoots(base = path.join(homedir(), '.cookrew')): StorageRoots {
   return {
+    base,
+    sessions: path.join(base, 'sessions'),
     turns: path.join(base, 'turns'),
     attachments: path.join(base, 'attachments'),
     workspaces: path.join(base, 'workspaces'),
@@ -217,11 +225,19 @@ export interface SweepOptions {
   graceMs?: number
   /** False plans without unlinking — the dry run is the same code path. */
   apply?: boolean
+  /**
+   * servedSessionKey of every session OPEN in the instantiator, from index.ts.
+   * An array, not a Set, because it crosses into the sweep worker by
+   * structured clone. Absent or null: unknown, and the served class is not
+   * planned — the boot sweep always says (an empty list at boot, since served
+   * sessions die with the app).
+   */
+  openServedSessions?: readonly string[] | null
 }
 
 /** A candidate class the sweep knows how to plan. */
-export type SweepClass = 'ledgers' | 'attachments' | 'sidecars'
-const EVERY_CLASS: readonly SweepClass[] = ['ledgers', 'attachments', 'sidecars']
+export type SweepClass = 'ledgers' | 'attachments' | 'sidecars' | 'served'
+const EVERY_CLASS: readonly SweepClass[] = ['ledgers', 'attachments', 'sidecars', 'served']
 
 export interface SweepResult extends GcPlan {
   applied: boolean
@@ -229,8 +245,18 @@ export interface SweepResult extends GcPlan {
   /**
    * Classes planned as NOTHING because a store could not be read — every
    * class, since one unreadable store (a missing canvas root, a half-written
-   * team JSON) names references for all of them. Empty on a normal sweep.
+   * team JSON) names references for all of them. A sessions root that cannot
+   * be read names nothing for the others, so it skips `served` alone. Empty
+   * on a normal sweep.
    */
+  skipped: readonly SweepClass[]
+  /**
+   * Hand-made backup copies (`*.bak-*`, `lineage-restore-backup-*`, …),
+   * largest first. REPORTED, never in `remove`: the app did not make them
+   * and does not delete them. See storage-gc-residue.ts.
+   */
+  residue: readonly ResidueEntry[]
+  residueBytes: number
   skipped: readonly SweepClass[]
 }
 
@@ -252,15 +278,33 @@ export interface SweepResult extends GcPlan {
  */
 export function sweepStorage(options: SweepOptions = {}): SweepResult {
   const roots = options.roots ?? defaultStorageRoots()
+  // The report half has nothing to abort: residue is named even on a sweep
+  // that refuses to plan.
+  const residue = scanResidue(roots.base)
+  const residueBytes = residue.reduce((sum, r) => sum + r.bytes, 0)
   const empty: SweepResult = {
     remove: [],
     bytes: 0,
     kept: { live: 0, withinGrace: 0 },
     applied: false,
     failed: [],
-    skipped: EVERY_CLASS
+    skipped: EVERY_CLASS,
+    residue,
+    residueBytes
   }
   if (!existsSync(roots.workspaces)) return empty
+
+  // Served sessions: the open set is the app's to state. Not stated, and the
+  // class is not planned — a caller's choice, not a skip. Stated, and the
+  // sandboxes are listed here with every other candidate class, before any
+  // reference is read; a sessions root that exists but cannot be read (null
+  // from the scan) skips this class alone, since it names nothing for the
+  // others.
+  const openServed =
+    options.openServedSessions == null ? undefined : new Set(options.openServedSessions)
+  const servedScan = openServed === undefined ? [] : servedSessionCandidates(roots.sessions)
+  const served = servedScan ?? []
+  const skipped: SweepClass[] = servedScan === null ? ['served'] : []
 
   const ledgers = candidatesIn(roots.turns, terminalIdOf)
   const attachments = candidatesIn(roots.attachments, (f) => path.basename(f))
@@ -278,18 +322,22 @@ export function sweepStorage(options: SweepOptions = {}): SweepResult {
       attachments.map((a) => a.key)
     ),
     referencedSidecars,
+    servedSessions: served,
+    openServedSessions: openServed,
     now: options.now ?? Date.now(),
     graceMs: options.graceMs ?? DEFAULT_GRACE_MS
   })
-  if (options.apply !== true) return { ...plan, applied: false, failed: [], skipped: [] }
+  if (options.apply !== true) return { ...plan, applied: false, failed: [], skipped, residue, residueBytes }
 
   const failed: string[] = []
   for (const target of plan.remove) {
     try {
-      rmSync(target.path, { force: true })
+      // Recursive because a served-session candidate is a whole sandbox
+      // directory; on a file it changes nothing.
+      rmSync(target.path, { recursive: true, force: true })
     } catch {
       failed.push(target.path)
     }
   }
-  return { ...plan, applied: true, failed, skipped: [] }
+  return { ...plan, applied: true, failed, skipped, residue, residueBytes }
 }

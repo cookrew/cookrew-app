@@ -32,6 +32,13 @@
  *   on what the disk gives back. They are removed anyway: nothing can read
  *   them, and they hold the disk once the source is gone.
  *
+ * Collected with its OWN live rule: the served-session sandboxes
+ * (~/.cookrew/sessions/<service>/<session>, storage-gc-served.ts). A sandbox is
+ * live while its session is OPEN in the running instantiator — a fact only the
+ * app holds, handed in as a set — and an ended one is collected once its newest
+ * write is past the grace period. A planner that was not told which sessions
+ * are open plans nothing for the class: "no open set" is unknown, not empty.
+ *
  * The planner is pure and total: it decides, it does not unlink. That is what
  * makes a dry run the same code path as the sweep. The scan decides one thing
  * the planner cannot — whether the store was READABLE — and expresses a
@@ -42,7 +49,8 @@
 export interface GcCandidate {
   /**
    * Terminal id for a ledger; file name for an attachment; for a sidecar the
-   * path relative to the teams root (`<slug>-sessions/<file>`).
+   * path relative to the teams root (`<slug>-sessions/<file>`); for a served
+   * session `<service dir>/<session dir>` (servedSessionKey).
    */
   key: string
   path: string
@@ -72,6 +80,19 @@ export interface GcPlanInput {
    * value of its sessions map, `<fileSlug(team.name)>-sessions/<value>`.
    */
   referencedSidecars: ReadonlySet<string>
+  /**
+   * Served-session sandbox DIRECTORIES, one candidate each, keyed by
+   * servedSessionKey. Its `mtimeMs` is the newest write anywhere inside, so a
+   * sandbox still being written to is inside grace by construction.
+   */
+  servedSessions?: readonly GcCandidate[]
+  /**
+   * Keys of the sessions OPEN in the running instantiator. Absent means the
+   * caller could not say — and then every served candidate is kept, because
+   * the difference between "none open" and "nobody told me" is a caller's
+   * crew deleted out from under them.
+   */
+  openServedSessions?: ReadonlySet<string>
   now: number
   /** Nothing younger than this is ever collected. */
   graceMs: number
@@ -123,6 +144,14 @@ export function planStorageGc(input: GcPlanInput): GcPlan {
   }
   for (const sidecar of input.sidecars) {
     consider(sidecar, input.referencedSidecars.has(sidecar.key))
+  }
+  // No open set = unknown = the class is not planned at all. Not even counted
+  // as kept: a number that says "43 live" when the truth is "did not look"
+  // would be the report lying in the safe direction, which is still lying.
+  if (input.openServedSessions !== undefined) {
+    for (const session of input.servedSessions ?? []) {
+      consider(session, input.openServedSessions.has(session.key))
+    }
   }
 
   return {

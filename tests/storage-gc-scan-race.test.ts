@@ -122,7 +122,7 @@ describe('sweepStorage — races with a concurrent TeamStore', () => {
 
     const out = sweepStorage({ roots })
 
-    expect(out.skipped).toEqual(['ledgers', 'attachments', 'sidecars'])
+    expect(out.skipped).toEqual(['ledgers', 'attachments', 'sidecars', 'served'])
     expect(out.remove).toEqual([])
   })
 })

@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  rmSync,
   symlinkSync,
   utimesSync,
   writeFileSync
@@ -22,7 +23,14 @@ const DAY = 24 * 60 * 60 * 1000
 const made: string[] = []
 
 afterEach(() => {
-  made.length = 0
+  for (const dir of made.splice(0).reverse()) {
+    try {
+      chmodSync(dir, 0o700)
+    } catch {
+      // gone already
+    }
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 /** A store on disk: one live card, one dead card, and some attachments. */
@@ -117,7 +125,7 @@ describe('sweepStorage — reads the stores, plans, and only then unlinks', () =
     const out = sweepStorage({ roots: blind, apply: true })
 
     expect(out.remove).toEqual([])
-    expect(out.skipped).toEqual(['ledgers', 'attachments', 'sidecars'])
+    expect(out.skipped).toEqual(['ledgers', 'attachments', 'sidecars', 'served'])
     expect(existsSync(path.join(roots.turns, 'live-term.jsonl'))).toBe(true)
   })
 
@@ -238,7 +246,7 @@ describe('sweepStorage — team session sidecars', () => {
     const out = sweepStorage({ roots, apply: true })
 
     expect(collectReferencedSidecars(roots)).toBeNull()
-    expect(out.skipped).toEqual(['ledgers', 'attachments', 'sidecars'])
+    expect(out.skipped).toEqual(['ledgers', 'attachments', 'sidecars', 'served'])
     expect(out.remove).toEqual([])
     expect(existsSync(path.join(roots.turns, 'dead-term.jsonl'))).toBe(true)
     expect(existsSync(path.join(roots.attachments, 'orphan.png'))).toBe(true)
@@ -284,7 +292,7 @@ describe('sweepStorage — team session sidecars', () => {
 
     const out = sweepStorage({ roots, apply: true })
 
-    expect(out.skipped).toEqual(['ledgers', 'attachments', 'sidecars'])
+    expect(out.skipped).toEqual(['ledgers', 'attachments', 'sidecars', 'served'])
     expect(existsSync(path.join(roots.teams, 'lost-sessions', 'x.jsonl'))).toBe(true)
   })
 
@@ -346,5 +354,111 @@ describe('sweepStorage — team session sidecars', () => {
     expect(sidecarCandidates(blind)).toEqual([])
     expect(collectReferencedSidecars(blind)).toEqual(new Set())
     expect(sweepStorage({ roots: blind, apply: true }).remove).toEqual([])
+  })
+})
+
+/** Backdate every directory under `dir` too: a sandbox's age is its NEWEST write, directories included. */
+function ageDirs(dir: string, ageDays: number): void {
+  const when = new Date(Date.now() - ageDays * DAY)
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) ageDirs(path.join(dir, entry.name), ageDays)
+  }
+  utimesSync(dir, when, when)
+}
+
+describe('sweepStorage — served-session sandboxes', () => {
+  /** A sandbox with the files a served crew actually leaves behind. */
+  function sandbox(roots: ReturnType<typeof defaultStorageRoots>, key: string, ageDays: number): string {
+    const dir = path.join(roots.sessions, key)
+    aged(path.join(dir, '.claude', 'plugins', 'marketplace.json'), '{}'.padEnd(4096, ' '), ageDays)
+    aged(path.join(dir, '.cookrew', 'turns', 'orch.jsonl'), '{}', ageDays)
+    aged(path.join(dir, '.claude.json'), '{}', ageDays)
+    ageDirs(dir, ageDays)
+    return dir
+  }
+
+  it('removes an ended sandbox past grace as one directory, and keeps the open one', () => {
+    const roots = store()
+    const ended = sandbox(roots, 'svc-x/ana-1', 90)
+    const open = sandbox(roots, 'svc-x/ana-2', 90)
+    const out = sweepStorage({ roots, apply: true, openServedSessions: ['svc-x/ana-2'] })
+    expect(out.remove.map((c) => c.key)).toEqual(['svc-x/ana-1'])
+    expect(out.bytes).toBe(4096 + 2 + 2)
+    expect(existsSync(ended)).toBe(false)
+    expect(existsSync(open)).toBe(true)
+    // The service directory itself is never a candidate.
+    expect(existsSync(path.join(roots.sessions, 'svc-x'))).toBe(true)
+  })
+
+  it('grace holds: an ended sandbox with one recent write survives', () => {
+    const roots = store()
+    const dir = sandbox(roots, 'svc-x/ana-1', 90)
+    aged(path.join(dir, '.cookrew', 'turns', 'orch.jsonl'), '{"fresh":true}', 1)
+    const out = sweepStorage({ roots, apply: true, openServedSessions: [] })
+    expect(out.remove).toEqual([])
+    expect(out.kept.withinGrace).toBe(1)
+    expect(existsSync(dir)).toBe(true)
+  })
+
+  it('a sweep not told which sessions are open leaves every sandbox alone — and still sweeps ledgers', () => {
+    const roots = store()
+    const dir = sandbox(roots, 'svc-x/ana-1', 90)
+    aged(path.join(roots.turns, 'dead-term.jsonl'), '{}')
+    for (const openServedSessions of [undefined, null]) {
+      const out = sweepStorage({ roots, apply: false, openServedSessions })
+      expect(out.remove.map((c) => c.key)).toEqual(['dead-term'])
+      // Not told is a choice, not an unreadable store.
+      expect(out.skipped).toEqual([])
+    }
+    expect(existsSync(dir)).toBe(true)
+  })
+
+  it('a sessions store that cannot be read plans nothing for the class', () => {
+    const roots = store()
+    const dir = sandbox(roots, 'svc-x/ana-1', 90)
+    aged(path.join(roots.turns, 'dead-term.jsonl'), '{}')
+    chmodSync(roots.sessions, 0o000)
+    made.push(roots.sessions)
+    const out = sweepStorage({ roots, apply: true, openServedSessions: [] })
+    expect(out.remove.map((c) => c.key)).toEqual(['dead-term'])
+    expect(out.skipped).toEqual(['served'])
+    chmodSync(roots.sessions, 0o700)
+    expect(existsSync(dir)).toBe(true)
+  })
+
+  it('never reaches outside sessions/: roles/sessions and pi-sessions are not its store', () => {
+    const roots = store()
+    aged(path.join(roots.base, 'roles', 'sessions', 'svc-x', 'ana-1', 'x.json'), '{}')
+    aged(path.join(roots.base, 'pi-sessions', 'svc-x', 'ana-1', 'x.jsonl'), '{}')
+    const out = sweepStorage({ roots, apply: true, openServedSessions: [] })
+    expect(out.remove).toEqual([])
+    expect(existsSync(path.join(roots.base, 'roles', 'sessions', 'svc-x', 'ana-1', 'x.json'))).toBe(true)
+  })
+})
+
+describe('sweepStorage — backup residue is reported, never planned', () => {
+  it('names each hand-made copy with its size, in the result and outside remove', () => {
+    const roots = store()
+    aged(path.join(roots.base, 'turns.bak-20260807-011637', 'a.jsonl'), 'x'.repeat(500))
+    aged(path.join(roots.base, 'lineage-restore-backup-20260823-222123', 'w', 'workspace.json'), '{}')
+    aged(path.join(roots.turns, 'dead-term.jsonl'), '{}')
+    const out = sweepStorage({ roots, apply: true, openServedSessions: [] })
+    expect(out.residue.map((r) => [path.basename(r.path), r.bytes, r.files])).toEqual([
+      ['turns.bak-20260807-011637', 500, 1],
+      ['lineage-restore-backup-20260823-222123', 2, 1]
+    ])
+    expect(out.residueBytes).toBe(502)
+    expect(out.remove.map((c) => c.key)).toEqual(['dead-term'])
+    expect(out.bytes).toBe(2)
+    expect(existsSync(path.join(roots.base, 'turns.bak-20260807-011637', 'a.jsonl'))).toBe(true)
+  })
+
+  it('is reported even when the sweep refuses to plan', () => {
+    const roots = store()
+    aged(path.join(roots.base, 'certs.bak-20260807-112810', 'cert.pem'), 'pem')
+    const blind = { ...roots, workspaces: path.join(roots.workspaces, 'does-not-exist') }
+    const out = sweepStorage({ roots: blind, apply: true })
+    expect(out.remove).toEqual([])
+    expect(out.residue.map((r) => path.basename(r.path))).toEqual(['certs.bak-20260807-112810'])
   })
 })
