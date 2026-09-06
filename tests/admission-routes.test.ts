@@ -618,3 +618,71 @@ describe('a recorded admission cannot be replayed', () => {
     expect(retry.written.headers.location).toContain('token=')
   })
 })
+
+describe('the owner-reported bug, at the wire', () => {
+  // OPEN succeeded on a key that did not match, because the phone had been
+  // admitted before and the check was skipped rather than run.
+  const account = fakeAccount()
+  const reg = registry()
+  const claims = {
+    sub: account.username,
+    scope: 'canvas',
+    aud: account.deviceId,
+    dev: PHONE,
+    exp: NOW + 600_000,
+    jti: 'j-wire'
+  }
+  let temp: { base: string; clean: () => void }
+  let ring: ReturnType<typeof createPairingKeyRing>
+  let spent: ReturnType<typeof createSpentTokenStore>
+
+  const deps = (): MobileIdentityDeps => ({
+    account: () => account,
+    registryOrigin: () => REGISTRY,
+    keys: async () => reg.keys,
+    refreshKeys: async () => reg.keys,
+    admitted: createAdmittedDeviceStore({ base: temp.base, now: () => NOW }),
+    acceptsPairingKey: (key) => ring.accepts(key),
+    pairingToken: () => 'the-pairing-token',
+    httpsReady: () => true,
+    spend: (jti, exp) => spent.spend(jti, exp),
+    now: () => NOW
+  })
+
+  beforeEach(() => {
+    temp = tempBase()
+    ring = createPairingKeyRing({ now: () => NOW })
+    spent = createSpentTokenStore({ base: temp.base, now: () => NOW })
+    createAdmittedDeviceStore({ base: temp.base, now: () => NOW }).admit({ deviceId: PHONE })
+  })
+  afterEach(() => temp.clean())
+
+  const open = (key: string | null): URL =>
+    new URL(
+      `https://mac.local:8643/?open=${reg.mint(claims)}&device=${PHONE}` +
+        (key === null ? '' : `&key=${key}`)
+    )
+
+  it('sends an admitted phone with a WRONG key back with ?refused=key', async () => {
+    ring.current()
+    const { written, response } = recorder()
+    await handleIdentityRoutes(request(), response, open('ZZZZZZ'), deps())
+    expect(written.status).toBe(303)
+    expect(written.headers.location).toContain('refused=key')
+    expect(written.headers.location).not.toContain('token=')
+  })
+
+  it('still opens for an admitted phone that presents no key', async () => {
+    const { written, response } = recorder()
+    await handleIdentityRoutes(request(), response, open(null), deps())
+    expect(written.status).toBe(303)
+    expect(written.headers.location).toContain('token=')
+  })
+
+  it('opens for an admitted phone that presents the RIGHT key', async () => {
+    const { written, response } = recorder()
+    await handleIdentityRoutes(request(), response, open(ring.current().key), deps())
+    expect(written.status).toBe(303)
+    expect(written.headers.location).toContain('token=')
+  })
+})
