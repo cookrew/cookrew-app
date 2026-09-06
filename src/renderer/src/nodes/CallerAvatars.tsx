@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   CALLER_AVATAR_LIMIT,
   callerSentence,
@@ -7,6 +7,7 @@ import {
   type ServedCallersRow
 } from '../../../shared/seats'
 import { cookrew } from '../api'
+import { useServedCallers } from '../served-callers-store'
 
 /**
  * D7 — THE CALLERS AT A SERVED DOOR, on the card that is the door.
@@ -71,20 +72,13 @@ export function callerHue(username: string): number {
   return hash
 }
 
-/** Live callers at this desktop's doors, pushed from main. */
-export function useServedCallers(): readonly ServedCallersRow[] {
-  const [rows, setRows] = useState<readonly ServedCallersRow[]>([])
-  useEffect(() => {
-    const api = cookrew()
-    if (!api.servingCallers) return
-    void api
-      .servingCallers()
-      .then(setRows)
-      .catch(() => undefined)
-    return api.onServingCallers?.(setRows)
-  }, [])
-  return rows
-}
+/**
+ * Live callers at this desktop's doors, pushed from main. Lives in
+ * served-callers-store.ts now — one IPC subscription shared by every card,
+ * where this used to be one per mounted card — and is re-exported here so the
+ * name and the return type stay where callers found them.
+ */
+export { useServedCallers }
 
 export function CallerAvatars({
   callers,
