@@ -419,12 +419,12 @@ const BOARD_CLICK = (view) => `(() => {
   return true
 })()`
 
-export async function waitForCanvas(page, timeoutMs = 150_000) {
+export async function waitForCanvas(page, timeoutMs = 150_000, settleMs = 2500) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     const cards = await page.evaluate("document.querySelectorAll('.react-flow__node').length").catch(() => 0)
     if (cards > 0) {
-      await sleep(2500) // thumbs, checkpoints and the first activity seed
+      await sleep(settleMs) // thumbs, checkpoints and the first activity seed
       return cards
     }
     await sleep(250)
@@ -530,7 +530,9 @@ export async function probeCompanion({
   gestures = true,
   token = readToken(),
   /** The whole probe, load to last measurement; Chrome is killed either way. */
-  timeoutMs = 5 * 60_000
+  timeoutMs = 5 * 60_000,
+  /** How long the canvas gets to settle after its first card. */
+  settleMs = 2500
 } = {}) {
   if (!token) throw new Error('no pairing token')
   const size = VIEWPORTS[viewport] ?? VIEWPORTS.phone
@@ -543,7 +545,10 @@ export async function probeCompanion({
     timer = setTimeout(() => reject(new Error(`dom probe exceeded ${Math.round(timeoutMs / 1000)} s`)), timeoutMs)
   })
   try {
-    return await Promise.race([deadline, measureCompanion(chrome, { size, url, apiPort, token, frames, gestures, serve, served })])
+    return await Promise.race([
+      deadline,
+      measureCompanion(chrome, { viewport, size, url, apiPort, token, frames, gestures, serve, served, settleMs })
+    ])
   } finally {
     clearTimeout(timer)
     await chrome.kill()
@@ -551,8 +556,18 @@ export async function probeCompanion({
   }
 }
 
-async function measureCompanion(chrome, { size, url, apiPort, token, frames, gestures, serve, served }) {
-  const page = await connectPage(chrome.port)
+/**
+ * The measurement itself, against an open Chrome. `connect` is injectable so
+ * tests/perf-dom-probe-smoke.test.ts can run this whole body against a fake
+ * page: a plain .mjs has no typecheck, and a ReferenceError in here once hid
+ * behind the opt-in flag until a reviewer read the file.
+ */
+export async function measureCompanion(
+  chrome,
+  { viewport, size, url, apiPort, token, frames, gestures, serve, served, settleMs = 2500 },
+  connect = connectPage
+) {
+  const page = await connect(chrome.port)
   await page.send('Page.enable')
   await page.send('Runtime.enable')
   await page.send('Performance.enable')
@@ -561,7 +576,7 @@ async function measureCompanion(chrome, { size, url, apiPort, token, frames, ges
   await page.send('Page.addScriptToEvaluateOnNewDocument', { source: HOOK_SCRIPT })
   const layers = watchLayers(page)
   await page.send('Page.navigate', { url })
-  await waitForCanvas(page)
+  await waitForCanvas(page, 150_000, settleMs)
   const workspace = await workspaceShape(apiPort, token)
   const result = {
     viewport,

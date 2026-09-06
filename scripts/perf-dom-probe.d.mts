@@ -49,7 +49,26 @@ export interface FrameCensus {
 export function recordFrames(page: CdpPage, run: () => Promise<number>): Promise<FrameCensus>
 export function pan(page: CdpPage, point: { x: number; y: number }, frames: number, step?: number): Promise<number>
 export function zoom(page: CdpPage, point: { x: number; y: number }, frames: number, delta?: number): Promise<number>
-export function waitForCanvas(page: CdpPage, timeoutMs?: number): Promise<number>
+export function waitForCanvas(page: CdpPage, timeoutMs?: number, settleMs?: number): Promise<number>
+
+export interface MeasureOptions {
+  viewport: string
+  size: Viewport
+  url: string
+  apiPort: number
+  token: string
+  frames: number
+  gestures: boolean
+  serve: string | null
+  served: Served | null
+  settleMs?: number
+}
+
+export function measureCompanion(
+  chrome: { port: number },
+  options: MeasureOptions,
+  connect?: (port: number) => Promise<CdpPage>
+): Promise<Record<string, unknown>>
 
 export interface Served {
   port: number
@@ -68,6 +87,7 @@ export function probeCompanion(options?: {
   gestures?: boolean
   token?: string | null
   timeoutMs?: number
+  settleMs?: number
 }): Promise<Record<string, unknown>>
 
 export function probeAttached(port: number): Promise<Record<string, unknown>>
