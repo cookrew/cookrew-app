@@ -33,8 +33,15 @@ import type http from 'node:http'
  * methods and header names, identical for every path on this server.
  */
 
-/** Long enough to spare a round trip per route on a slow link, short enough
- * that a rotated allow-list is honoured within the hour. */
+/**
+ * Long enough to spare a round trip per route on a slow link, short enough
+ * that a rotated allow-list is honoured within ten minutes.
+ *
+ * 600 seconds is the ceiling OWASP's CORS guidance names, and it is a ceiling
+ * for a reason: a cached preflight is an allow-list decision the browser keeps
+ * making after we have changed our mind. Chrome caps it at 600 anyway; Firefox
+ * at 86400, which is a day of a revoked origin still being let through.
+ */
 export const CORS_MAX_AGE = '600'
 
 /** Everything the companion sends. Nothing is echoed back from the request. */
@@ -54,12 +61,20 @@ export const CORS_EXPOSE_HEADERS = ''
 
 const trim = (origin: string): string => origin.replace(/\/+$/, '')
 
-/** The request's origin if it is one we answer for, else null. */
+/**
+ * The request's origin if it is one we answer for, else null.
+ *
+ * TWO ORIGIN HEADERS IS NOT AN ORIGIN. A browser sends the field once; two
+ * values mean something in the middle wrote one and something else wrote the
+ * other, and picking either is picking which of the two readers to agree with.
+ * Refused outright, like a doubled Host (host-gate.ts).
+ */
 export function allowedOrigin(
   requestOrigin: string | string[] | undefined,
   allowed: readonly string[]
 ): string | null {
-  const raw = Array.isArray(requestOrigin) ? requestOrigin[0] : requestOrigin
+  if (Array.isArray(requestOrigin)) return null
+  const raw = requestOrigin
   if (typeof raw !== 'string' || raw.length === 0 || raw === 'null') return null
   const asked = trim(raw)
   const set = new Set(allowed.filter((origin) => origin.length > 0).map(trim))

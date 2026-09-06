@@ -35,7 +35,7 @@ describe('verifying a hello', () => {
         })
     )
     const { verifyHello } = await import('../src/renderer/src/path/companion')
-    const answered = await verifyHello({ deviceId: 'a', nonce: 'b', sig: 'c' }, 20)
+    const answered = await verifyHello({ deviceId: 'a', nonce: 'b', sig: 'c', origin: 'https://mac.test', issuedAtMs: 1 }, 20)
     expect(answered).toBe(false)
   })
 
@@ -43,6 +43,6 @@ describe('verifying a hello', () => {
     stubPhone()
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
     const { verifyHello } = await import('../src/renderer/src/path/companion')
-    expect(await verifyHello({ deviceId: 'a', nonce: 'b', sig: 'c' }, 1000)).toBe(true)
+    expect(await verifyHello({ deviceId: 'a', nonce: 'b', sig: 'c', origin: 'https://mac.test', issuedAtMs: 1 }, 1000)).toBe(true)
   })
 })

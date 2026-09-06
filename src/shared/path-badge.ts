@@ -17,6 +17,25 @@
 
 import { addressFromTrustedName } from './reach-names'
 
+/**
+ * A browser permission, in the four states local-network.ts reads.
+ *
+ * Spelled here rather than imported so this module stays shared code with no
+ * renderer dependency; the two are pinned to each other by the badge tests.
+ */
+export type LocalNetworkPermission = 'unsupported' | 'granted' | 'denied' | 'prompt'
+
+/**
+ * WHAT THE RELAY SENTENCE BECOMES AFTER A REFUSAL.
+ *
+ * Kept in step with LOCAL_NETWORK_COPY.denied in the renderer's path-copy.ts,
+ * because a reader who refuses meets this line twice — once on the row that
+ * asked and once in the badge sheet — and two spellings of the same fact read
+ * as two different facts.
+ */
+export const RELAY_REFUSED_SENTENCE =
+  "Staying on the relay. You can allow local network access in the browser's site settings."
+
 export type PathState = 'LAN' | 'TAILNET' | 'RELAY' | 'OFFLINE' | 'PROBING'
 
 /** What the companion's transport knows about itself. */
@@ -66,6 +85,16 @@ export type PathBadgeInput = {
    * plane that has not moved has not moved.
    */
   readonly plane?: 'LAN' | 'TAILNET' | 'RELAY'
+  /**
+   * WHETHER THE BROWSER WILL LET THIS PAGE REACH THE HOUSE AT ALL.
+   *
+   * Only ever changes the SENTENCE, never the word: the word is a fact about
+   * the transport carrying the session and a permission does not alter it.
+   * What it alters is the reason, and the ordinary relay reason — "your Mac is
+   * not on this network" — is false after a refusal, when the Mac may be three
+   * feet away and the browser simply will not let us knock.
+   */
+  readonly localNetwork?: LocalNetworkPermission
 }
 
 export type PathBadgeView = {
@@ -190,11 +219,15 @@ export const pathBadgeView = (input: PathBadgeInput): PathBadgeView => {
             // fact about the transport, and the plane is a fact about the path.
             (input.plane ?? 'RELAY')
           : classifyOrigin(input.origin, registryOrigin)
+  // A refusal is only the reason when the relay is what we ended up with. On a
+  // direct plane the plane is the fact, and a permission read on some other
+  // network is stale the moment the phone moves.
+  const refused = state === 'RELAY' && input.localNetwork === 'denied'
   return {
     state,
     word: state,
     pulsing: state === 'PROBING',
-    sentence: PATH_SENTENCES[state],
+    sentence: refused ? RELAY_REFUSED_SENTENCE : PATH_SENTENCES[state],
     desktopName: input.desktopName ?? null,
     latencyMs: typeof input.latencyMs === 'number' ? input.latencyMs : null,
     switchDesktopUrl: input.registryOrigin

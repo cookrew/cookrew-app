@@ -71,7 +71,22 @@ export function pairingAuthorized(
   token: string,
   extra?: (candidate: string) => boolean
 ): boolean {
-  const candidate = presentedToken(request, url)
+  return tokenAccepted(presentedToken(request, url), token, extra)
+}
+
+/**
+ * The same comparison, for a caller that already holds the credential.
+ *
+ * The WebSocket upgrade is the one: it carries `?token=` on the handshake URL
+ * (a browser cannot set a header on `new WebSocket`), and it needs the same
+ * answer this gate gives every ordinary route — one rule, compared one way,
+ * constant-time, so a socket cannot be authenticated more loosely than a GET.
+ */
+export function tokenAccepted(
+  candidate: string | null,
+  token: string,
+  extra?: (candidate: string) => boolean
+): boolean {
   if (!candidate) return false
   const a = Buffer.from(candidate)
   const b = Buffer.from(token)

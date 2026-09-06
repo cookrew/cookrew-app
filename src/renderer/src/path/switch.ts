@@ -1,3 +1,4 @@
+import { addressSpaceInitFor, type AddressSpaceInit } from '../local-network'
 import { classifyOrigin, type PathState } from '../../../shared/path-badge'
 
 /**
@@ -83,6 +84,13 @@ export type SwitchOutcome =
 export const pathRank = (state: PathState): number =>
   state === 'LAN' ? 3 : state === 'TAILNET' ? 2 : state === 'RELAY' ? 1 : 0
 
+/**
+ * Where the last winning address is kept, one entry per desktop.
+ *
+ * The VALUE is keyed by network as well as by desktop — see path-memory.ts,
+ * and RFC 8305 on why remembered addresses must not cross an interface. This
+ * module only knows that a hint arrives and is put at the front of the queue.
+ */
 export const PATH_MEMORY_PREFIX = 'cr_path:'
 
 /** Every candidate strictly better than where the phone is, best first. */
@@ -97,8 +105,10 @@ export const betterCandidates = (
     ...(card.tailnet ? [{ url: card.tailnet.url, state: 'TAILNET' } as Candidate] : [])
   ]
   const better = all.filter((candidate) => pathRank(candidate.state) > here)
-  // The address that worked last time on this network goes first. It is a
-  // hint and never a decision: it is still asked to prove it is the Mac.
+  // The address that worked last time ON THIS NETWORK goes first — the caller
+  // is responsible for not offering one learned somewhere else. It is a hint
+  // and never a decision: it is still asked to prove it is the Mac, so the
+  // worst a stale one can do is waste a single probe.
   const won = better.filter((candidate) => candidate.url === remembered)
   return [...won, ...better.filter((candidate) => candidate.url !== remembered)]
 }
@@ -117,6 +127,17 @@ export interface HelloReply {
    * signed by the same public CA — so `/v2/verify-hello` is the gate there.
    */
   readonly sig?: string
+  /**
+   * HELLO v2 — present only when the caller asked for it, and the whole point
+   * of asking. `origin` is the endpoint the MAC believes it answered at, and
+   * comparing it with the endpoint this client actually dialled is what
+   * catches a box that relayed our challenge to the real Mac. `issuedAtMs` is
+   * the Mac's clock at signing; the registry, not this page, holds the clock
+   * that judges it. See src/shared/hello-proof.ts.
+   */
+  readonly v?: number
+  readonly origin?: string
+  readonly issuedAtMs?: number
 }
 
 export interface SwitchDeps {
@@ -196,23 +217,52 @@ export const randomNonce = (random: (bytes: Uint8Array) => Uint8Array): string =
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
-/** One `fetch` with a deadline, answering null rather than throwing. */
+export interface AskHelloOptions {
+  readonly timeoutMs?: number
+  /**
+   * ASK FOR VERSION 2, by telling the Mac which endpoint this client thinks it
+   * dialled. It is a HINT and never the signed value: the Mac signs what IT
+   * saw, and refuses with 421 when the two disagree — which is the cheap end
+   * of catching a relayed challenge. Omit it and the Mac answers version 1,
+   * exactly as it always did, which is what the navigating switch wants: it
+   * dials bare addresses the Mac has published no name for.
+   */
+  readonly origin?: string
+}
+
+/**
+ * One `fetch` with a deadline, answering null rather than throwing.
+ *
+ * THE FIRST REQUEST TO THE HOUSE, and therefore the one that raises Chrome's
+ * Local Network Access prompt. The annotation is derived from the URL rather
+ * than assumed, because `targetAddressSpace` is an assertion the browser then
+ * CHECKS: a tailnet candidate on 100.64/10 is public by every browser's
+ * reckoning, and claiming it local would fail the probe instead of permitting
+ * it. See addressSpaceInitFor.
+ *
+ * Whether the prompt should be allowed to appear AT ALL is a different
+ * question, answered before the race starts (see the permission policy in
+ * plane-switch.ts). This function only makes the request it is asked to make.
+ */
 export const askHello = async (
   url: string,
   nonce: string,
-  timeoutMs = HELLO_TIMEOUT_MS
+  options: AskHelloOptions = {}
 ): Promise<HelloReply | null> => {
   const abort = new AbortController()
-  const timer = setTimeout(() => abort.abort(), timeoutMs)
+  const timer = setTimeout(() => abort.abort(), options.timeoutMs ?? HELLO_TIMEOUT_MS)
+  const asked =
+    options.origin === undefined ? '' : `&origin=${encodeURIComponent(options.origin)}`
   try {
-    const response = await fetch(`${url}/api/hello?nonce=${encodeURIComponent(nonce)}`, {
+    const response = await fetch(`${url}/api/hello?nonce=${encodeURIComponent(nonce)}${asked}`, {
+      ...addressSpaceInitFor(url),
       signal: abort.signal,
       // No cookies and no credentials: the answer is a public fact about the
       // Mac, and sending anything else to an address that has not yet proved
       // it IS the Mac would be sending it to whatever answered.
       credentials: 'omit',
       cache: 'no-store'
-    })
+    } as AddressSpaceInit)
     if (!response.ok) return null
     return (await response.json()) as HelloReply
   } catch {
@@ -231,6 +281,14 @@ export interface RaceLoopOptions {
   /** window, or a stand-in with the three listeners this uses. */
   readonly on?: (event: string, listener: () => void) => () => void
   readonly setInterval?: (fn: () => void, ms: number) => () => void
+  /**
+   * Handed the loop's own guarded race trigger, once, at start.
+   *
+   * The ONE-AT-A-TIME guard has to stay the loop's, so a person pressing
+   * ALLOW cannot start a second race beside the timer's. Everything that
+   * wakes this loop is an event except that press, and it needs a door.
+   */
+  readonly ready?: (raceNow: () => void) => void
 }
 
 /**
@@ -277,6 +335,7 @@ export const startRaceLoop = (options: RaceLoopOptions): (() => void) => {
     listen('online', race),
     listen('visibilitychange', race)
   ]
+  options.ready?.(race)
   race()
   return () => offs.forEach((off) => off())
 }

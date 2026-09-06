@@ -19,7 +19,7 @@
  * of the global silently re-point a live client at another workspace.
  */
 
-import { dataPlane, planePath, planeRequestInit } from './data-plane'
+import { dataPlane, planePath, planeRequestInit, type PlaneRequestInit } from './data-plane'
 
 const injected = (globalThis as { COOKREW_SLUG?: unknown }).COOKREW_SLUG
 const SLUG = typeof injected === 'string' ? injected : ''
@@ -76,7 +76,13 @@ export function apiPath(path: string): string {
   return planePath(dataPlane(), BASE, SLUG, path)
 }
 
-/** The fetch options this request needs, given where the plane is pointing. */
-export function apiRequestInit(): Pick<RequestInit, 'mode' | 'credentials'> {
+/**
+ * The fetch options this request needs, given where the plane is pointing.
+ *
+ * Carries the local-network annotation on a direct plane, which is why every
+ * call site that already went through planeFetch is covered by Chrome 142
+ * without being touched.
+ */
+export function apiRequestInit(): PlaneRequestInit {
   return planeRequestInit(dataPlane())
 }

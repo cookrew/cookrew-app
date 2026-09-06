@@ -35,6 +35,16 @@ export interface BrowserCastDeps {
    * what this was before names existed.
    */
   allowedOrigins?: () => readonly string[]
+  /**
+   * DOES THIS CREDENTIAL OPEN THE COMPANION? Required, never optional.
+   *
+   * The pairing token is what AUTHENTICATES this socket; Origin only filters.
+   * A dep the caller may omit would be an authentication check any wiring
+   * could switch off by forgetting a field — which is the exact shape of the
+   * hole mobile-server.ts found in its own C1 gate ("the escape now requires
+   * deliberately constructing deps without one").
+   */
+  paired: (credential: string | null) => boolean
 }
 
 const STREAM_RE = /^\/api\/browser\/([^/]+)\/stream$/
@@ -61,12 +71,23 @@ const STREAM_RE = /^\/api\/browser\/([^/]+)\/stream$/
  * NO ORIGIN AT ALL is still allowed: that is a non-browser client (the app's
  * own renderer, a test), which is not what this guard defends against — a
  * browser always sends one.
+ *
+ * AND ORIGIN IS A FILTER, NEVER THE AUTHENTICATION. Any process that is not a
+ * browser can set the header to whatever it likes, and a browser can be made
+ * to send an allowed one by a page that has been rebound onto this Mac. So a
+ * socket that passes this still has to present the pairing token
+ * (`deps.paired`), which is the part that actually decides. Logitech Options'
+ * local socket had neither and was driven by any page on the internet; the MCP
+ * inspector (CVE-2025-49596) needed authentication PLUS Origin and Host
+ * validation, not one of the three.
  */
 export function originAllowed(
   req: { headers: { origin?: string | string[]; host?: string } },
   allowed: readonly string[] = []
 ): boolean {
-  const origin = Array.isArray(req.headers.origin) ? req.headers.origin[0] : req.headers.origin
+  // Two Origin headers is not an origin — see companion-cors.ts.
+  if (Array.isArray(req.headers.origin)) return false
+  const origin = req.headers.origin
   if (!origin) return true
   const trimmed = origin.replace(/\/+$/, '')
   if (allowed.some((one) => one.length > 0 && one.replace(/\/+$/, '') === trimmed)) return true
@@ -99,9 +120,14 @@ export function createBrowserCast(deps: BrowserCastDeps): BrowserCast {
     }
     const key = req.headers['sec-websocket-key']
     const desktopAuthorized = url.searchParams.get('desktopToken') === deps.desktopToken()
+    // `?token=`, not a header: `new WebSocket(...)` cannot set one, which is
+    // the same constraint EventSource has and the same answer the HTTP gate
+    // gives it (mobile-http.ts · pairingAuthorized).
+    const authorized = desktopAuthorized || deps.paired(url.searchParams.get('token'))
     if (
       !deps.enabled() ||
       typeof key !== 'string' ||
+      !authorized ||
       (!originAllowed(req, deps.allowedOrigins?.() ?? []) && !desktopAuthorized)
     ) {
       return void socket.destroy()

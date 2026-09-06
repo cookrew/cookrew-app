@@ -56,6 +56,18 @@ export interface PlaneHealth {
   readonly note: (ok: boolean) => void
   /** The push channel changed state. */
   readonly link: (state: LinkHealth) => void
+  /**
+   * THIS PLANE IS NOT THE MAC. Fall back now, without counting.
+   *
+   * The two signals above are evidence that a plane STOPPED WORKING, and both
+   * wait for a few of them because one is a hiccup. This is evidence that the
+   * plane is the wrong machine — a re-check whose signature named another
+   * origin, or a registry that no longer vouches for it (path/plane-recheck.ts)
+   * — and there is nothing to wait for: every further request would carry the
+   * pairing token to it. The hold comes with it, so the switcher cannot adopt
+   * the same name again on the next tick.
+   */
+  readonly condemn: () => void
   /** Is the switcher holding off after a fallback? */
   readonly held: () => boolean
   readonly reset: () => void
@@ -109,6 +121,7 @@ export const createPlaneHealth = (deps: PlaneHealthDeps = {}): PlaneHealth => {
         give()
       }, STREAM_GRACE_MS)
     },
+    condemn: give,
     held: () => now() < holdUntil,
     reset: () => {
       failures = 0

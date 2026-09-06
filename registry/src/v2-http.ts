@@ -9,6 +9,8 @@ import { v2Error, type V2Error } from './v2-copy'
 import type { LegacyIdentity } from './v2-migrate-routes'
 import type { DoorRecord } from './doors'
 import type { NamesFeature } from './names'
+import { createHelloBurn, helloBurnTtlMs, type HelloBurn } from './hello-nonces'
+import { HELLO_SKEW_MS } from './hello-verify'
 
 /**
  * IDENTITY v2 — THE PLUMBING EVERY /v2 ROUTE SHARES.
@@ -65,6 +67,11 @@ export interface V2Identity {
   /** Per-IP on claiming, per username+IP on signing in. The contract's numbers. */
   /** Per-IP on claiming, per username+IP on signing in, loose on lookups. */
   limits: { accounts: Limiter; sessions: Limiter; lookups: Limiter; hello: Limiter }
+  /**
+   * Hello nonces already spent. In memory and only for the freshness window —
+   * see hello-nonces.ts for why outliving the window would protect nothing.
+   */
+  helloNonces: HelloBurn
   /** Addresses whose X-Forwarded-For may be believed. Empty by default. */
   trustedProxies: readonly string[]
   /** Phase 4: passkeys, authenticators, pending sign-ins and approvals. */
@@ -117,6 +124,7 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
       // asking the registry to verify signatures for sport.
       hello: new Limiter(options.limits?.helloPerMinute ?? 60, 60_000, options.now)
     },
+    helloNonces: createHelloBurn(helloBurnTtlMs(HELLO_SKEW_MS)),
     trustedProxies: options.trustedProxies ?? [],
     factors: createFactorState(base, { now: options.now }),
     origin: options.origin ?? null
