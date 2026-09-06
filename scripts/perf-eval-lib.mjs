@@ -86,7 +86,9 @@ const BUCKETS = [
  */
 export const BUCKET_POLICY = {
   'served-sessions': 'ended sandboxes swept at boot after 30 d; open sessions kept',
-  backups: 'hand-made — reported by the sweep and the boot log, never removed'
+  // A `.bak-` file INSIDE a served sandbox buckets here by name but is a
+  // caller's file: the sweep removes it with the sandbox, not as residue.
+  backups: 'hand-made — reported by the sweep and the boot log, never removed (a .bak- inside a served sandbox goes with its sandbox)'
 }
 
 export const SERVED_GRACE_MS = 30 * 24 * 60 * 60 * 1000

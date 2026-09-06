@@ -229,7 +229,14 @@ function evalStorage(opts, now) {
       note: buckets.backups ? `*.bak-* / lineage-* — ${BUCKET_POLICY.backups}` : ''
     }
   ]
-  return { total, buckets, orphans, served, growthMbPerDay, checks, verdict: worstOf(checks.map((c) => c.verdict)) }
+  // Only the two aggregates leave this function. A per-sandbox row is keyed
+  // <service>/<account>-<ordinal>, and this report lands in
+  // ~/.cookrew/perf-history/last-report.json and on stdout under --json —
+  // both readable by a served caller's agent (Seatbelt denies sessions/, not
+  // perf-history/). Listing every caller's account id there would be the
+  // cross-tenant leak the sibling deny in session-sandbox.ts exists to stop.
+  const servedSummary = { sandboxes: served.length, pastGrace: servedPastGrace.length, pastGraceBytes: servedPastGraceBytes }
+  return { total, buckets, orphans, served: servedSummary, growthMbPerDay, checks, verdict: worstOf(checks.map((c) => c.verdict)) }
 }
 
 // ---------------------------------------------------------------------------
