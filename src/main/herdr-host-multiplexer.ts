@@ -953,6 +953,33 @@ export class HerdrHostMultiplexer implements Multiplexer {
   }
 
   /**
+   * The same listing on the async runner — the board probe's tick read
+   * (perf/tempo, 2026-09-06). listSessions() above forks `pane list` inline,
+   * which on a 3 s timer was the one periodic synchronous child left on
+   * Electron main. An attach burst's snapshot answers first, as everywhere
+   * else. A well-formed listing is ALSO published as the admission inventory
+   * (the same strict rule refreshAdmissionCacheSoon applies), so the
+   * captureAsync that follows resolves its pane from this read rather than
+   * missing on a cold cache. Failure or malformed output answers [] — the
+   * "nothing detached" the probe already treats as no signal — and leaves the
+   * cache alone.
+   */
+  async listSessionsAsync(): Promise<string[]> {
+    const labels = (panes: readonly HerdrPane[]): string[] =>
+      panes.map((pane) => pane.label).filter((label): label is string => typeof label === 'string' && label.length > 0)
+    if (this.attachSnapshot) return labels(this.attachSnapshot)
+    let panes: HerdrPane[] | null
+    try {
+      panes = parsePaneListStrict(await this.runAsync(['pane', 'list'], 3000))
+    } catch {
+      return []
+    }
+    if (panes === null) return []
+    this.admissionCache = { at: Date.now(), panes }
+    return labels(panes)
+  }
+
+  /**
    * Create the pane and start the agent — unless the pane already exists AND
    * is genuinely running one, in which case do NOTHING and let the attach
    * reattach the live agent. That early return is the persistence guarantee.

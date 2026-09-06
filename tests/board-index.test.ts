@@ -460,3 +460,161 @@ describe('createProbeSampler — cost discipline', () => {
     vi.useRealTimers()
   })
 })
+
+// ---------------------------------------------------------------------------
+// perf/tempo (2026-09-06): the probe's reach is the DETACHED SET from ONE
+// inventory per tick, and with async reads the tick forks nothing inline.
+// Before: every tick listed the panes twice (probeOnce + hasDetachedSessions)
+// and captured each detached pane synchronously on Electron main.
+// ---------------------------------------------------------------------------
+
+import { detachedTerminals, probeDetachedAsync } from '../src/main/board-index'
+
+describe('detachedTerminals — the reach', () => {
+  it('is known ∖ attached ∩ live, from the set it is handed', () => {
+    let listed = 0
+    const deps = probeDeps({
+      listSessions: () => {
+        listed += 1
+        return []
+      },
+      knownTerminalIds: () => ['attached', 'paneless', 'd1', 'd2'],
+      isAttached: (id) => id === 'attached'
+    })
+    const live = new Set(['cookrew_attached', 'cookrew_d1', 'cookrew_d2'])
+    expect(detachedTerminals(deps, live)).toEqual([
+      { terminalId: 'd1', session: 'cookrew_d1' },
+      { terminalId: 'd2', session: 'cookrew_d2' }
+    ])
+    expect(detachedTerminals(deps, new Set())).toEqual([])
+    expect(listed).toBe(0) // the inventory is the caller's, never re-read
+  })
+
+  it('probeOnce and hasDetachedSessions accept a pre-read inventory', () => {
+    let listed = 0
+    const deps = probeDeps({
+      listSessions: () => {
+        listed += 1
+        return ['cookrew_t1']
+      },
+      knownTerminalIds: () => ['t1'],
+      capturePane: () => WORKING_PANE
+    })
+    const live = new Set(['cookrew_t1'])
+    expect(probeOnce(deps, live).get('t1')).toBe('working')
+    expect(hasDetachedSessions(deps, live)).toBe(true)
+    expect(listed).toBe(0)
+    // Without one they read it themselves, exactly once each.
+    probeOnce(deps)
+    hasDetachedSessions(deps)
+    expect(listed).toBe(2)
+  })
+})
+
+describe('createProbeSampler — one inventory per tick', () => {
+  it('lists the panes exactly once per pass, self-stop included', () => {
+    vi.useFakeTimers()
+    let listed = 0
+    const sampler = createProbeSampler(
+      probeDeps({
+        listSessions: () => {
+          listed += 1
+          return ['cookrew_t1']
+        },
+        knownTerminalIds: () => ['t1'],
+        capturePane: () => WORKING_PANE
+      })
+    )
+    sampler.start()
+    expect(listed).toBe(1)
+    vi.advanceTimersByTime(PROBE_INTERVAL_MS * 3)
+    expect(listed).toBe(4)
+    expect(sampler.running).toBe(true)
+    sampler.stop()
+    vi.useRealTimers()
+  })
+})
+
+describe('createProbeSampler — the async tick forks nothing inline', () => {
+  const asyncDeps = (over: Partial<ProbeDeps> = {}) => {
+    const calls = { listSync: 0, captureSync: 0, listAsync: 0, captureAsync: 0 }
+    const deps = probeDeps({
+      listSessions: () => {
+        calls.listSync += 1
+        return ['cookrew_t1', 'cookrew_t2']
+      },
+      capturePane: () => {
+        calls.captureSync += 1
+        return WORKING_PANE
+      },
+      listSessionsAsync: async () => {
+        calls.listAsync += 1
+        return ['cookrew_t1', 'cookrew_t2']
+      },
+      capturePaneAsync: async (session) => {
+        calls.captureAsync += 1
+        return session === 'cookrew_t1' ? WORKING_PANE : WAITING_PANE
+      },
+      knownTerminalIds: () => ['t1', 't2', 't3'],
+      ...over
+    })
+    return { deps, calls }
+  }
+
+  it('reads the inventory and every detached pane through the async seam only', async () => {
+    const { deps, calls } = asyncDeps()
+    const held: number[] = []
+    const sampler = createProbeSampler(deps, PROBE_INTERVAL_MS, { observe: (ms) => held.push(ms) })
+    const phases = await sampler.sampleAsync()
+    expect(phases.get('t1')).toBe('working')
+    expect(phases.get('t2')).toBe('waiting')
+    expect(phases.has('t3')).toBe(false) // no pane → the ledger's row
+    expect(calls).toEqual({ listSync: 0, captureSync: 0, listAsync: 1, captureAsync: 2 })
+    expect(held).toHaveLength(1)
+    expect(held[0]).toBeGreaterThanOrEqual(0)
+  })
+
+  it('asks herdr first and captures only the panes it has no answer for', async () => {
+    const { deps, calls } = asyncDeps({ askedStatus: (id) => (id === 't1' ? 'working' : null) })
+    const phases = await probeDetachedAsync(deps, detachedTerminals(deps, new Set(['cookrew_t1', 'cookrew_t2'])))
+    expect(phases.get('t1')).toBe('working')
+    expect(phases.get('t2')).toBe('waiting')
+    expect(calls.captureAsync).toBe(1)
+  })
+
+  it('runs the periodic tick on the async reads and never stacks passes', async () => {
+    vi.useFakeTimers()
+    let release: (() => void) | null = null
+    const { deps, calls } = asyncDeps({
+      listSessionsAsync: () =>
+        new Promise<string[]>((resolve) => {
+          calls.listAsync += 1
+          release = () => resolve(['cookrew_t1'])
+        })
+    })
+    const sampler = createProbeSampler(deps)
+    sampler.start() // kicks one async pass
+    expect(calls.listAsync).toBe(1)
+    vi.advanceTimersByTime(PROBE_INTERVAL_MS * 3) // three ticks while the first pass is still in flight
+    expect(calls.listAsync).toBe(1) // single-flight spans the whole awaited pass
+    expect(calls.listSync).toBe(0)
+    release!()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(sampler.phases().get('t1')).toBe('working')
+    vi.advanceTimersByTime(PROBE_INTERVAL_MS)
+    expect(calls.listAsync).toBe(2)
+    sampler.stop()
+    vi.useRealTimers()
+  })
+
+  it('parks itself from the same inventory when nothing is detached', async () => {
+    vi.useFakeTimers()
+    const { deps, calls } = asyncDeps({ listSessionsAsync: async () => [] })
+    const sampler = createProbeSampler(deps)
+    sampler.start()
+    await vi.advanceTimersByTimeAsync(PROBE_INTERVAL_MS)
+    expect(sampler.running).toBe(false)
+    expect(calls.listSync).toBe(0)
+    vi.useRealTimers()
+  })
+})
