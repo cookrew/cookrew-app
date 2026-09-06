@@ -144,9 +144,9 @@ export interface MobileServerDeps {
   /** Whether browser nodes are backed by the node-owned headless runtime. */
   interactiveBrowserEnabled: () => boolean
   /**
-   * Identity v2: `/api/hello` and the `?open=` admission. Absent = neither
-   * route exists and the legacy `?token=` pairing is the only way in, which
-   * is exactly the state of a desktop with no account.
+   * Identity v2.1: `/api/hello`, and the phones this Mac has let in. Absent =
+   * the route does not exist and nothing is recorded, which is exactly the
+   * state of a desktop that has not claimed a username.
    */
   identity?: MobileIdentityDeps
   /**
@@ -215,13 +215,11 @@ export function startMobileServer(deps: MobileServerDeps): void {
   // fallback is the PERSISTED token: a per-run UUID silently unpaired every
   // phone on each restart, and the renderer swallowed the resulting 401s.
   //
-  // PHASE 6 KEEPS THIS EXACTLY AS IT IS. New phones pair through cookrew.dev
-  // — the phone signs in there and scans the desktop's device id and rotating
-  // six-character key (`?open=` above, pairing-key.ts) — but a phone paired
-  // the old way holds a `?token=` URL that `cookrew mobile` printed as a QR,
-  // and taking that away would unpair every one of them at once to tidy up a
-  // credential. It stays until a phone has re-paired, which is a thing that
-  // happens by itself.
+  // REACH v2.1 MAKES THIS THE ONLY CREDENTIAL. A phone pairs by holding this
+  // token, whether it scanned the relay URL that carries it in a fragment or
+  // the direct `?token=` URL on this Wi-Fi. There is no second ceremony and no
+  // second thing to revoke: `cookrew mobile --rotate` ends every session on
+  // every path at once.
   activePairingToken = deps.pairingToken ?? loadOrCreatePairingToken()
   activeWallToken = deps.wallToken ?? randomUUID()
 
@@ -776,29 +774,6 @@ function rendererSource(
   })
 }
 
-/**
- * The identity deps, plus the two facts only this module holds: whether the
- * TLS listener is up, and where it is. Both exist so a pairing that arrived on
- * the plaintext port is sent to the secure one rather than completing there.
- */
-function identityRouteDeps(deps: MobileServerDeps): MobileIdentityDeps | undefined {
-  if (!deps.identity) return undefined
-  return {
-    ...deps.identity,
-    httpsReady: () => httpsReady,
-    secureLocation: (request, url) =>
-      httpsRedirectTarget({
-        hostHeader: request.headers.host,
-        // The WHOLE query travels, so the ceremony completes over TLS rather
-        // than arriving at a bare page with the token stripped off it.
-        target: `${url.pathname}${url.search}`,
-        localAddress: request.socket.localAddress,
-        advertisedHosts: mobileEndpointList().map((endpoint) => endpoint.host),
-        port: MOBILE_HTTPS_PORT
-      })
-  }
-}
-
 async function handle(
   request: http.IncomingMessage,
   response: http.ServerResponse,
@@ -901,12 +876,10 @@ async function handle(
     )
   }
 
-  // Identity v2, ABOVE the pairing gate on purpose: both routes exist for a
-  // phone that does not hold the pairing token yet. `/api/hello` proves this
-  // Mac is the device the registry named; `/?open=` admits a phone that
-  // arrived from cookrew.dev and hands it the same session a legacy pairing
-  // would. Neither answers without an account, so nothing changes for a
-  // desktop that has not claimed a username.
+  // `/api/hello`, ABOVE the pairing gate on purpose: it exists for a phone
+  // that does not hold the pairing token yet, and proves this Mac is the
+  // device the registry named before the phone sends it anything. It answers
+  // nothing without an account.
   if (
     await handleIdentityRoutes(
       request,

@@ -1,5 +1,4 @@
 import type http from 'node:http'
-import { statSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   COMPANION_TOKEN_BYTES,
@@ -8,7 +7,6 @@ import {
   readAdmittedDevices
 } from '../src/main/admitted-devices'
 import { pairingAuthorized, presentedToken } from '../src/main/mobile-http'
-import { createSpentTokenStore, readSpentTokens, spentTokensFile } from '../src/main/spent-tokens'
 import { tempBase } from './support/idv2'
 
 const GLOBAL = 'the-one-global-pairing-token'
@@ -120,55 +118,5 @@ describe('the read gate takes both doors', () => {
   it('still works with no second door wired, for a desktop with no account', () => {
     expect(pairingAuthorized(bearer(GLOBAL), url(), GLOBAL)).toBe(true)
     expect(pairingAuthorized(bearer('nope'), url(), GLOBAL)).toBe(false)
-  })
-})
-
-describe('spent canvas tokens', () => {
-  const NOW = 1_800_000_000_000
-  let temp: { base: string; clean: () => void }
-  beforeEach(() => (temp = tempBase()))
-  afterEach(() => temp.clean())
-
-  it('burns a jti once', () => {
-    const store = createSpentTokenStore({ base: temp.base, now: () => NOW })
-    expect(store.spend('j1', NOW + 60_000)).toBe(true)
-    expect(store.spend('j1', NOW + 60_000)).toBe(false)
-    expect(store.spent('j1')).toBe(true)
-  })
-
-  it('persists, so a restart does not reopen the window', () => {
-    createSpentTokenStore({ base: temp.base, now: () => NOW }).spend('j1', NOW + 60_000)
-    const restarted = createSpentTokenStore({ base: temp.base, now: () => NOW })
-    expect(restarted.spend('j1', NOW + 60_000)).toBe(false)
-  })
-
-  it('forgets a jti once its own token has expired', () => {
-    let clock = NOW
-    const store = createSpentTokenStore({ base: temp.base, now: () => clock })
-    store.spend('j1', NOW + 60_000)
-    clock = NOW + 60_001
-    // The token refuses itself on `exp` now; keeping the entry is dead weight.
-    expect(store.spent('j1')).toBe(false)
-    expect(store.list()).toEqual([])
-  })
-
-  it('is bounded, and drops what was closest to expiring anyway', () => {
-    const store = createSpentTokenStore({ base: temp.base, now: () => NOW, max: 3 })
-    store.spend('soon', NOW + 1000)
-    store.spend('later', NOW + 90_000)
-    store.spend('latest', NOW + 120_000)
-    store.spend('new', NOW + 100_000)
-    const kept = store.list().map((entry) => entry.jti)
-    expect(kept).not.toContain('soon')
-    expect(kept).toHaveLength(3)
-    expect(kept).toEqual(expect.arrayContaining(['later', 'latest', 'new']))
-  })
-
-  it('is written 0600 and reads an absent file as nothing spent', () => {
-    expect(readSpentTokens(temp.base)).toEqual([])
-    const store = createSpentTokenStore({ base: temp.base, now: () => NOW })
-    store.spend('j1', NOW + 60_000)
-    expect(readSpentTokens(temp.base)).toHaveLength(1)
-    expect(statSync(spentTokensFile(temp.base)).mode & 0o777).toBe(0o600)
   })
 })

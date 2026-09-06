@@ -87,9 +87,6 @@ import { relayHandle } from './legacy-identity'
 import { createAdmittedDeviceStore } from './admitted-devices'
 import { pairingHandout } from './pairing-handout'
 import type { PairingHandout } from '../shared/account-v2'
-import { createPairingKeyRing } from './pairing-key'
-import { createRegistryKeyCache } from './registry-keys'
-import { createSpentTokenStore } from './spent-tokens'
 import { createReachPublisher, type ReachPublisher } from './reach'
 import { createCanvasLink } from './canvas-link'
 import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
@@ -640,15 +637,19 @@ const relayServing =
     : null
 
 /**
- * IDENTITY V2, PHASE 2 — pairing through cookrew.dev, and the reach card.
+ * IDENTITY V2.1 — one credential, and the reach card.
  *
- * The pairing key ring, the admitted-phone list and the registry's signing key
- * are all created here, before the mobile server starts, because the server
- * needs the first two to answer `/?open=` and the reach publisher needs the
- * account to sign. Every one of them is inert without an account: no username,
- * no admission route, no hello, nothing published.
+ * The admitted-phone list is created here, before the mobile server starts,
+ * because the server records into it and the reach publisher needs the account
+ * to sign. Both are inert without an account: no username, no hello, nothing
+ * published.
+ *
+ * WHAT USED TO BE HERE: a six-character key ring, a cache of the registry's
+ * signing key and a store of spent canvas tokens — the three moving parts of
+ * the `?open=&key=&device=` ceremony. There is one credential now (the pairing
+ * token this Mac mints), so a phone is authorised by holding it, on the relay
+ * exactly as on the LAN, and none of the three has anything left to decide.
  */
-const pairingKeys = createPairingKeyRing()
 const admittedDevices = createAdmittedDeviceStore()
 
 /**
@@ -674,13 +675,6 @@ const currentPairingHandout = (): PairingHandout | null =>
     endpoints: () => mobileEndpointList(),
     pairingToken: () => activePairingTokenValue() ?? pairingToken
   })
-/**
- * Canvas tokens already spent. Persisted because a restart that forgot them
- * would reopen the replay window this closes, and a Mac restarts far more
- * often than a token's ten minutes.
- */
-const spentCanvasTokens = createSpentTokenStore()
-const registryKeyCache = createRegistryKeyCache({ origin: registryOrigin() })
 let reachPublisher: ReachPublisher | null = null
 
 /**
@@ -4403,18 +4397,14 @@ app.whenReady().then(() => {
     unsubscribeTerminal: (terminalId) => sessionSync.unsubscribe(terminalId),
     wallToken,
     pairingToken,
-    // Identity v2: `/api/hello` and the `?open=` admission. Both answer above
-    // the pairing-token gate because both exist for a phone that has not got
-    // the token yet; both go silent the moment there is no account.
+    // Identity v2.1: `/api/hello`, the phones this Mac has let in, and the
+    // owner's public face. `/api/hello` answers above the pairing-token gate
+    // because it exists for a phone that has not got the token yet — it is how
+    // the phone checks it found the right Mac before it sends a credential.
     identity: {
       account: () => accounts.account(),
       registryOrigin: () => registryOrigin(),
-      keys: () => registryKeyCache.keys(),
-      refreshKeys: () => registryKeyCache.refresh(),
       admitted: admittedDevices,
-      acceptsPairingKey: (key: string) => pairingKeys.accepts(key),
-      spend: (jti: string, exp: number) => spentCanvasTokens.spend(jti, exp),
-      pairingToken: () => pairingToken,
       // Whatever the last successful profile read left behind. Never fetched
       // on the request path: the avatar must draw a letter immediately, and a
       // phone waiting on cookrew.dev to learn the owner's initials is a phone
