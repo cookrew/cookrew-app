@@ -613,7 +613,7 @@ describe('board open AND busy — a rebuilt frame does not re-arm a listing', ()
     const { calls, sampler } = eventFleet()
     const board = boardSourcesFrom({
       store: { focusedId: 'ws' },
-      turns: { list: () => [] },
+      turns: { listVerified: () => [] },
       turnStore: { loadAll: () => new Map() },
       agents: { list: () => [] },
       probe: () => sampler.touch(),
@@ -680,7 +680,7 @@ describe('board push — the SSE stream is pushed on change and holds the probe'
     const { calls, sampler, status } = eventFleet()
     const board = boardSourcesFrom({
       store: { focusedId: 'ws' },
-      turns: { list: () => [] },
+      turns: { listVerified: () => [] },
       // A probe-only row needs a task to show (merge rule 3): one settled turn.
       turnStore: {
         loadAll: () =>
@@ -709,7 +709,12 @@ describe('board push — the SSE stream is pushed on change and holds the probe'
     void handleMobileApi(request, response, new URL(`http://lan.local/api/events?board=1`), deps)
     await sleep(100)
     expect(sampler.stats().subscribers).toBe(1)
-    await sleep(LADDER[0] + 200) // the first pass landed and was pushed
+    // The first pass lands and is pushed — polled, with a deadline.
+    const settledBy = Date.now() + 30_000
+    while (!sampler.stats().everCompleted || sampler.stats().subscribers < 1) {
+      if (Date.now() > settledBy) throw new Error(`first pass did not land: ${JSON.stringify(sampler.stats())}`)
+      await sleep(20)
+    }
     const before = frames.filter((f) => f.startsWith('event: board')).length
     expect(before).toBeGreaterThanOrEqual(1)
 
