@@ -3,6 +3,7 @@ import type { AccountStatus } from '../../../shared/account-v2'
 import type { ApprovalDecision, ApprovalRequest } from '../../../shared/account-approvals'
 import { cookrew } from '../api'
 import { approvalView, refusalSentence } from './account-store'
+import { DOING, problemSentence } from './problem'
 import '../grant-surface.css'
 
 /**
@@ -59,8 +60,7 @@ function Card({
       })
       .catch((err: unknown) => {
         setBusy(false)
-        console.error('approval decision:', err)
-        setError('Something went wrong on this side. Try again.')
+        setError(problemSentence(DOING.DECIDE, err))
       })
   }
 

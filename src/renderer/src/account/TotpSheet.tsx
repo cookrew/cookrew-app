@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { APPROVAL_COPY, type TotpEnrolment } from '../../../shared/account-approvals'
 import { cookrew } from '../api'
 import { refusalSentence } from './account-store'
+import { DOING, problemSentence } from './problem'
 import { QrCode } from './QrCode'
 import '../grant-surface.css'
 
@@ -46,12 +47,7 @@ export function TotpSheet({
         if (result.ok) setEnrolment(result.value)
         else setError(refusalSentence(result.reason, result.message, username))
       })
-      .catch(() => {
-        // NEVER the raw error: an IPC rejection here can carry the URI it
-        // failed on, and that URI is the second factor.
-        console.error('authenticator enrolment failed')
-        setError('Something went wrong on this side. Try again.')
-      })
+      .catch((err: unknown) => setError(problemSentence(DOING.TOTP_ENROL, err)))
   }, [username])
 
   const confirm = (): void => {
@@ -65,9 +61,9 @@ export function TotpSheet({
         if (result.ok) onActive()
         else setError(refusalSentence(result.reason, result.message, username))
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         setBusy(false)
-        setError('Something went wrong on this side. Try again.')
+        setError(problemSentence(DOING.TOTP_CONFIRM, err))
       })
   }
 

@@ -183,9 +183,13 @@ export function refusalSentence(reason: AccountRefusal, message?: string, userna
     case 'no_account':
       return 'There is no account on this Mac yet.'
     case 'bad_device':
+      return 'cookrew.dev does not know this Mac as a device on the account. Sign in again here.'
     case 'unknown':
     default:
-      return 'Something went wrong on this side. Try again.'
+      // NOT "something went wrong": that sentence was on screen for eleven
+      // different failures and told a person nothing about any of them. This
+      // one at least says who answered and what it cost them — nothing.
+      return 'cookrew.dev answered something this app could not read. Nothing was changed.'
   }
 }
 
@@ -437,26 +441,32 @@ export interface FactorRow {
  * enrolled passkey gets its OWN row so it can be removed by name; the
  * authenticator is one row because an account has one secret.
  */
-export function factorRows(factors: FactorsView | null): readonly FactorRow[] {
+export function factorRows(
+  factors: FactorsView | null,
+  format: (at: number) => string = (at) =>
+    new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }),
+): readonly FactorRow[] {
   const passkeys = factors?.passkeys ?? []
-  const passkeyRows: readonly FactorRow[] =
-    passkeys.length > 0
-      ? passkeys.map((passkey) => ({
-          id: passkey.id,
-          label: passkey.name,
-          state: 'FACTOR',
-          action: 'remove' as const,
-          factor: 'passkey' as const,
-        }))
-      : [
-          {
-            id: 'passkey',
-            label: 'Add a passkey (Touch ID)',
-            state: 'RECOMMENDED',
-            action: 'add' as const,
-            factor: 'passkey' as const,
-          },
-        ]
+  // EVERY ENROLLED PASSKEY IS A ROW, and the ADD row stays underneath them.
+  // The card listed either the keys or the invitation, never both, so a
+  // passkey enrolled in a browser was invisible on the Mac while the card
+  // went on recommending the thing the account already had.
+  const enrolled: readonly FactorRow[] = passkeys.map((passkey) => ({
+    id: passkey.id,
+    label: passkey.name,
+    state: `Added ${format(passkey.addedAt)}`,
+    action: 'remove' as const,
+    factor: 'passkey' as const,
+  }))
+  const addPasskey: FactorRow = {
+    id: 'passkey',
+    label: 'Add a passkey (Touch ID)',
+    // RECOMMENDED only while there is none: a card that keeps recommending
+    // something already done stops being read.
+    state: enrolled.length === 0 ? 'RECOMMENDED' : '',
+    action: 'add',
+    factor: 'passkey',
+  }
   const totp: FactorRow = factors?.totp
     ? {
         id: 'totp',
@@ -472,7 +482,7 @@ export function factorRows(factors: FactorsView | null): readonly FactorRow[] {
         action: 'add',
         factor: 'totp',
       }
-  return [...passkeyRows, totp]
+  return [...enrolled, addPasskey, totp]
 }
 
 /**
