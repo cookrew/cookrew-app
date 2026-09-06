@@ -300,6 +300,11 @@ async function claim(deps: AccountIpcDeps, input: unknown): Promise<AccountResul
   // Register the workspaces at once: a name claimed and no desktop filed under
   // it is an account whose Workspaces tab is empty until the next boot.
   void deps.accounts.registerDesktop(deps.workspaces()).catch(() => undefined)
+  // AND START LISTENING FOR THE PHONE. The poll is armed at boot only when an
+  // account is already on disk, so a Mac that claims its name while running
+  // never heard the first device ask to sign in — the phone waited out its
+  // whole expiry against a badge that could not appear until a restart.
+  deps.approvals.start()
   return { ok: true, value: accountStatus(deps) }
 }
 
@@ -326,6 +331,7 @@ async function migrate(
   if (!result.ok) return result
   deps.lock.setLockAfterMs(result.value.lockAfterMs)
   void deps.accounts.registerDesktop(deps.workspaces()).catch(() => undefined)
+  deps.approvals.start()
   return { ok: true, value: accountStatus(deps) }
 }
 

@@ -290,6 +290,25 @@ describe('the handlers', () => {
     expect(JSON.stringify(result)).not.toContain('privateKeyJwk')
   })
 
+  it('a claim made while the app is running arms the approval poll', async () => {
+    // The poll is armed at boot only when an account is already on disk, so a
+    // Mac that claimed its name mid-session never heard the first phone ask to
+    // sign in: the badge could not appear until a restart.
+    const shared = deps()
+    vi.spyOn(shared.accounts, 'claim').mockResolvedValue({
+      ok: true,
+      value: { lockAfterMs: DEFAULT_LOCK_AFTER_MS } as never,
+    })
+    vi.spyOn(shared.accounts, 'registerDesktop').mockResolvedValue({ ok: true, value: undefined })
+    const started = vi.spyOn(shared.approvals, 'start')
+    await accountHandlers(shared)['account:claim']({
+      username: 'drej',
+      password: 'a-long-enough-password',
+    })
+    expect(started).toHaveBeenCalled()
+    shared.approvals.stop()
+  })
+
   it('SAVE AS FILE takes no arguments — main writes the batch IT minted', async () => {
     // A channel that accepted text plus a path would write chosen bytes
     // wherever the owner happened to click. With nothing minted, there is
