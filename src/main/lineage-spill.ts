@@ -107,6 +107,16 @@ export class LineageSpill {
     }
     const wanted = unionLineage(ids)
     if (wanted.length === 0) return { ok: true, appended: [] }
+    // Fast path: nothing to add means no lock and no write. The rail asks for
+    // the reachable chain on every expansion, and the steady state is that
+    // every id is already recorded — taking a file lock to decide that would
+    // put a filesystem round trip on a UI path for no reason. Skipping when
+    // there is nothing to append is safe under any interleaving: a concurrent
+    // writer can only ADD ids, never remove the ones we just saw.
+    const known = this.read(terminalId)
+    if (known && wanted.every((id) => known.ids.includes(id))) {
+      return { ok: true, appended: [] }
+    }
     try {
       return withFileLock(file, () => this.mergeLocked(terminalId, file, wanted), {
         rename: this.hooks.rename
