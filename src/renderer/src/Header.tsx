@@ -1,5 +1,6 @@
 import { isDemoMode, isRemoteMode } from './api'
 import { CrLogoMark } from './CrLogoMark'
+import { lensEyeSvg } from '../../shared/brand-hand'
 import { CompanionAvatar, PathBadge } from './PathBadge'
 import { CrIcon } from './icons'
 import { StatusCoin } from './nodes/AgentAvatar'
@@ -97,7 +98,22 @@ export function Header({
             <CrLogoMark />
           </button>
         )}
-        <span className="cr-logo">COOKREW</span>
+        {/* THE LOCKUP (2026-09-06): the render is the C, two robot lens eyes are
+            the O's, KREW is outlined, dashed cables tie each hand to an eye,
+            and a small mirrored hand under the letters types them in once when
+            the bar first paints, then holds still. COOKREW stays in the name. */}
+        <span className="cr-logo cr-lockup" role="img" aria-label="COOKREW">
+          <svg className="cr-cables" viewBox="0 -20 700 240" aria-hidden="true">
+            <path d="M 46 120 C 46 176 46 176 100 176 L 150 176 C 199 176 199 176 199 91" />
+            <path className="cr-tether" d="M 291 91 C 291 176 291 176 340 176 L 372 176 C 417 176 417 176 417 169" />
+          </svg>
+          <span className="cr-eye" aria-hidden="true" dangerouslySetInnerHTML={{ __html: lensEyeSvg() }} />
+          <span className="cr-eye" aria-hidden="true" dangerouslySetInnerHTML={{ __html: lensEyeSvg() }} />
+          <span className="cr-letters" aria-hidden="true">
+            <span className="cr-hand2"><CrLogoMark className="cr-hand2-mark" /></span>
+            <span>K</span><span>R</span><span>E</span><span>W</span>
+          </span>
+        </span>
         {/* IDENTITY LIVES IN THE BRAND GROUP (D1), right after the wordmark and
             at the mark's own 24 px, so the group stays one line. */}
         {avatar}
