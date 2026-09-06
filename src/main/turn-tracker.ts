@@ -1254,6 +1254,12 @@ export class TurnTracker extends EventEmitter {
     return null
   }
 
+  private countBackfillFailure(key: string): number {
+    const failures = (this.backfillFailures.get(key) ?? 0) + 1
+    this.backfillFailures.set(key, failures)
+    return failures
+  }
+
   /** 60 s after the first failure, 2 min after the second, 4 min … capped. */
   private backfillCooldown(key: string): number {
     const failures = this.backfillFailures.get(key) ?? 0
@@ -1274,14 +1280,24 @@ export class TurnTracker extends EventEmitter {
     this.backfillInFlight = true
     this.backfillAttempt.set(next.key, Date.now())
     try {
-      const title = await this.summarize({
-        prompt: next.record.prompt,
-        tools: [],
-        lines: next.record.reply.split('\n')
-      })
+      let title: string | null
+      try {
+        title = await this.summarize({
+          prompt: next.record.prompt,
+          tools: [],
+          lines: next.record.reply.split('\n')
+        })
+      } catch (error) {
+        // A programming error, not Sous (the breaker rethrows only those).
+        // It counts as this record's failure so the cooldown grows instead
+        // of re-throwing every 60 s forever; the stack is logged once.
+        const failures = this.countBackfillFailure(next.key)
+        if (failures === 1) console.error(`Sous: title backfill of ${next.key} threw:`, error)
+        return
+      }
       if (title === null) {
         // Sous down, refused or unusable; retried after a growing cooldown.
-        this.backfillFailures.set(next.key, (this.backfillFailures.get(next.key) ?? 0) + 1)
+        this.countBackfillFailure(next.key)
         return
       }
       this.backfillFailures.delete(next.key)
@@ -2550,18 +2566,30 @@ export class TurnTracker extends EventEmitter {
     }
     const gen = t.titleGen
     const delta = diffOutput(t.snapshot, t.session.fullText())
-    const title = await this.summarize({
-      prompt: t.prompt ?? '',
-      tools: parseAgentGlance(delta).tools,
-      lines: cleanTurnLines(delta)
-    })
-    if (this.tracked.get(t.session.terminalId) !== t || t.titleGen !== gen) return
-    if (t.phase !== 'thinking' && t.phase !== 'waiting') return
+    let title: string | null = null
+    try {
+      title = await this.summarize({
+        prompt: t.prompt ?? '',
+        tools: parseAgentGlance(delta).tools,
+        lines: cleanTurnLines(delta)
+      })
+    } finally {
+      // Whatever the summarizer did — answered, refused, or threw a bug of
+      // ours back — the cadence continues while this is still the live
+      // turn. One rethrow must not silence titles for the rest of it.
+      if (this.isLiveTurn(t, gen)) this.scheduleTitle(t, TITLE_REFRESH_MS)
+    }
+    if (!this.isLiveTurn(t, gen)) return
     if (title !== null && title !== t.title) {
       t.title = title
       this.push(t)
     }
-    this.scheduleTitle(t, TITLE_REFRESH_MS)
+  }
+
+  /** Still the tracked terminal, the same turn, and still running it. */
+  private isLiveTurn(t: TrackedTerminal, gen: number): boolean {
+    if (this.tracked.get(t.session.terminalId) !== t || t.titleGen !== gen) return false
+    return t.phase === 'thinking' || t.phase === 'waiting'
   }
 
   /**
@@ -2851,8 +2879,8 @@ export class TurnTracker extends EventEmitter {
    * back to the safe full write — correctness never rides on position.
    */
   private async finalizeTitle(t: TrackedTerminal, recordIndex: number): Promise<void> {
-    // Breaker open: the record stays untitled and the backfill pump owns it.
-    if (this.sousReady() === 'open') return
+    // Breaker open or busy: the record stays untitled and the pump owns it.
+    if (this.sousReady() !== 'ready') return
     const gen = t.titleGen
     const title = await this.summarize({
       prompt: t.prompt ?? '',
