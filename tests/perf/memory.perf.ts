@@ -1,10 +1,11 @@
+import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { EventLog, type CookrewEvent } from '../../src/main/event-log'
 import { WorkspaceStore } from '../../src/main/store'
 import { clearNoteMarkdownCache, renderNoteMarkdown } from '../../src/renderer/src/note-markdown'
 import type { CanvasNode } from '../../src/shared/model'
-import { MEMORY } from './budgets'
+import { MEMORY, STORAGE } from './budgets'
 import { heapGrowth, removeRoot, tempRoot } from './perf-harness'
 
 /**
@@ -43,6 +44,47 @@ function event(i: number): CookrewEvent {
     ...(i % 5 === 0 ? { durationMs: 1000 + (i % 900) } : {})
   }
 }
+
+/** Retained heap, in MB, that `run` adds once garbage is collected. */
+function retainedBy(run: () => void): number {
+  const gc = (globalThis as { gc?: () => void }).gc
+  if (!gc) throw new Error('heap gates need --expose-gc: run through vitest.perf.config.ts (npm run test:perf)')
+  gc()
+  gc()
+  const before = process.memoryUsage().heapUsed
+  run()
+  gc()
+  gc()
+  return Math.max(0, process.memoryUsage().heapUsed - before) / (1024 * 1024)
+}
+
+describe('event log — the rotated-file cache is bounded by the rotation policy', () => {
+  it('holds the parsed rotated files of a live-shaped log, and nothing more on later queries', () => {
+    const dir = root('mem-events-cache')
+    const log = new EventLog(path.join(dir, 'events.jsonl'), { ...STORAGE.eventLog, flushMs: 60_000 })
+    const target = STORAGE.eventLog.maxBytes * (STORAGE.eventLog.keepFiles + 1)
+    let written = 0
+    let i = 0
+    while (written < target) {
+      for (let k = 0; k < 500; k += 1, i += 1) log.append(event(i))
+      log.flush()
+      written = fs
+        .readdirSync(dir)
+        .map((f) => fs.statSync(path.join(dir, f)).size)
+        .reduce((a, b) => a + b, 0)
+    }
+    const firstQuery = retainedBy(() => log.query({ type: 'turn.completed', limit: 200 }))
+    const laterQueries = retainedBy(() => {
+      for (let n = 0; n < 20; n += 1) log.query({ type: 'turn.completed', limit: 200 })
+      log.count({ type: 'turn.' })
+    })
+    process.stdout.write(
+      `perf heap event-log cache (live shape, ${i} events): first query retained=${firstQuery.toFixed(2)}MB, 20 more retained=${laterQueries.toFixed(2)}MB\n`
+    )
+    expect(firstQuery).toBeLessThan(MEMORY.eventLogRotatedCacheMb)
+    expect(laterQueries).toBeLessThan(1)
+  })
+})
 
 describe('event log — cycles retain nothing', () => {
   it('append, flush and query 300 times on a rotating log', async () => {

@@ -48,6 +48,16 @@ export const LATENCY = {
 export const MEMORY = {
   /** EventLog append/flush/query cycles must retain nothing between them. */
   eventLogCyclesMb: 4,
+  /**
+   * What the EventLog keeps after its first query at the live shape: the
+   * parsed rows of every rotated file (three 4 MB files, ~71k rows), pinned
+   * to the files so they are never parsed again. Measured 2026-09-06 with
+   * --expose-gc: 7.12 MB with repeated strings shared per file (14.0 MB
+   * before sharing). Bounded by keepFiles x maxBytes; the gate holds THAT
+   * shape and fails the day the bound is lost, and a second assertion holds
+   * later queries at zero growth.
+   */
+  eventLogRotatedCacheMb: 16,
   /** Node churn and workspace switching in a WorkspaceStore. */
   storeChurnMb: 6,
   /** Rendering with the cache cleared each time: the renderer holds nothing. */
