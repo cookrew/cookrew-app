@@ -1,4 +1,4 @@
-import { apiPath } from '../api-base'
+import { apiPath, clientBase } from '../api-base'
 import { isRemoteMode } from '../api'
 import { authHeaders, authStore } from '../auth-gate'
 import { currentOriginState, setProbing } from '../path-link'
@@ -65,6 +65,22 @@ const memory = (): { read: (key: string) => string | null; write: (key: string, 
 export const startCompanionPathSwitch = (): (() => void) => {
   const noop = (): void => undefined
   if (!isRemoteMode()) return noop
+  // A COMPANION LOADED UNDER cookrew.dev NEVER LEAVES cookrew.dev.
+  //
+  // The race below ends in `location.replace(<direct URL>)`, and a page served
+  // through the relay that does that walks off the account's origin onto the
+  // Mac's own listener. Until Reach v2.1's certificates exist (R1/R2) that
+  // listener answers with a self-signed certificate, so the owner's phone
+  // landed mid-session on ERR_CERT_AUTHORITY_INVALID — an interstitial telling
+  // the reader not to trust the page, with the pairing token in the address
+  // bar. The certificate problem is the product's to solve, never the
+  // reader's.
+  //
+  // So under a relay prefix this does nothing at all. It is NOT the fix: the
+  // fix is phase C3, where the data plane (fetch base, EventSource, WebSocket)
+  // moves to a verified direct path with no navigation and no change to the
+  // address bar. The decision in switch.ts is left whole and tested for that.
+  if (clientBase() !== '') return noop
   // Already as close as it gets. Nothing on the card can beat this origin.
   if (pathRank(currentOriginState()) >= pathRank('LAN')) return noop
   const store = memory()

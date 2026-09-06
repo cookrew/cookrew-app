@@ -37,6 +37,21 @@ export type PathBadgeInput = {
    * check look like a dropped connection every 30 seconds.
    */
   readonly probing?: boolean
+  /**
+   * THIS PAGE WAS SERVED UNDER A RELAY PREFIX, so the relay is what is
+   * carrying the data plane — whatever host the address bar shows.
+   *
+   * The origin alone cannot answer this. Reach v2.1 gives every Mac real
+   * certificates for names like `192-168-2-40.<id>.d.cookrew.dev`, and a relay
+   * can be fronted by any host at all; classifying by hostname would then read
+   * LAN off a page whose every request is going through cookrew.dev.
+   *
+   * It is `relayed` and not a full path override because there is nothing to
+   * override yet: under a prefix the data plane IS the relay, always. Phase C3
+   * moves the data plane live without changing the address bar, and this is
+   * where that fact will be supplied when it exists.
+   */
+  readonly relayed?: boolean
 }
 
 export type PathBadgeView = {
@@ -145,7 +160,11 @@ export const pathBadgeView = (input: PathBadgeInput): PathBadgeView => {
       ? 'OFFLINE'
       : input.link === 'reconnecting' || input.probing === true
         ? 'PROBING'
-        : classifyOrigin(input.origin, registryOrigin)
+        : input.relayed === true
+          ? // A dead or reconnecting channel still outranks this: OFFLINE is a
+            // fact about the transport, RELAY is a fact about the path.
+            'RELAY'
+          : classifyOrigin(input.origin, registryOrigin)
   return {
     state,
     word: state,

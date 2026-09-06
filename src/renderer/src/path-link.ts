@@ -1,3 +1,4 @@
+import { clientBase } from './api-base'
 import {
   classifyOrigin,
   pathBadgeView,
@@ -124,6 +125,17 @@ const registryOf = (): string | undefined => {
   return typeof configured === 'string' && configured.length > 0 ? configured : undefined
 }
 
+/**
+ * SERVED THROUGH THE RELAY, as a fact about the PREFIX and not the hostname.
+ *
+ * `clientBase()` is non-empty only when the bundle was served under
+ * `/relay/@user/desktop/<id>/`, which is exactly the case where every request
+ * this client makes goes through cookrew.dev. Reading it off the origin would
+ * be wrong twice over in Reach v2.1: a Mac's own certificates now carry names
+ * under `d.cookrew.dev`, and a relay may be fronted by any host at all.
+ */
+const relayed = (): boolean => clientBase() !== ''
+
 /** The badge's whole view, from this page's own origin and link state. */
 export const currentPathBadge = (): PathBadgeView =>
   pathBadgeView({
@@ -131,17 +143,20 @@ export const currentPathBadge = (): PathBadgeView =>
     link: state.link,
     latencyMs: state.latencyMs,
     probing: state.probing,
+    relayed: relayed(),
     ...(state.desktopName ? { desktopName: state.desktopName } : {}),
     ...(registryOf() ? { registryOrigin: registryOf() as string } : {})
   })
 
 /**
- * Where this page is, from its ORIGIN alone.
+ * Where this page is, from where it was SERVED — the relay prefix first, then
+ * the origin.
  *
  * Deliberately not `currentPathBadge().state`: that folds in the transport, so
  * a companion mid-probe would read PROBING and the switcher would then treat
  * every path — including the one it is already on — as an improvement.
  */
-export const currentOriginState = (): PathState => classifyOrigin(originOf(), registryOf())
+export const currentOriginState = (): PathState =>
+  relayed() ? 'RELAY' : classifyOrigin(originOf(), registryOf())
 
 export { classifyOrigin }

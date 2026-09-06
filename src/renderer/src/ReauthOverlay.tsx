@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { AuthError, authStore, reauthMessage, tokenFromInput } from './auth-gate'
+import { AuthError, authStore, REAUTH_COPY, reauthMessage, tokenFromInput } from './auth-gate'
 import { checkAuth } from './remote-api'
 import './auth-gate.css'
 
@@ -32,7 +32,7 @@ export function ReauthOverlay(): React.JSX.Element | null {
   const submit = useCallback(async (): Promise<void> => {
     const token = tokenFromInput(pasted)
     if (!token) {
-      setError('That is not a pairing URL or token. Paste the whole line `cookrew mobile` printed.')
+      setError(REAUTH_COPY.shape)
       return
     }
     setBusy(true)
@@ -42,7 +42,7 @@ export function ReauthOverlay(): React.JSX.Element | null {
       // the phone in the same silent-failure state, one screen later.
       const scope = await checkAuth(token)
       if (scope === 'none') {
-        setError('The desktop rejected that token. It may have been rotated — run `cookrew mobile` again.')
+        setError(REAUTH_COPY.refused)
         return
       }
       authStore().save(token)
@@ -69,11 +69,11 @@ export function ReauthOverlay(): React.JSX.Element | null {
     <div className="cr-reauth" role="dialog" aria-modal="true" aria-labelledby="cr-reauth-title">
       <div className="cr-reauth-card">
         <h2 id="cr-reauth-title" className="cr-reauth-title">
-          {readOnly ? 'Read-only device' : 'Not paired'}
+          {readOnly ? REAUTH_COPY.readOnlyTitle : REAUTH_COPY.title}
         </h2>
         <p className="cr-reauth-body">{reauthMessage(blocked.scope)}</p>
         <label className="cr-reauth-label" htmlFor="cr-reauth-input">
-          Pairing URL or token
+          {REAUTH_COPY.label}
         </label>
         <input
           id="cr-reauth-input"
@@ -83,7 +83,7 @@ export function ReauthOverlay(): React.JSX.Element | null {
           onKeyDown={(e) => {
             if (e.key === 'Enter') void submit()
           }}
-          placeholder="https://…:8643/?token=…"
+          placeholder={REAUTH_COPY.placeholder}
           autoComplete="off"
           autoCapitalize="off"
           autoCorrect="off"
@@ -96,11 +96,11 @@ export function ReauthOverlay(): React.JSX.Element | null {
         <div className="cr-reauth-actions">
           {readOnly && (
             <button className="cr-btn sm" type="button" onClick={() => setDismissed(true)}>
-              Continue read-only
+              {REAUTH_COPY.continueReadOnly}
             </button>
           )}
           <button className="cr-btn sm primary" type="button" disabled={busy} onClick={() => void submit()}>
-            {busy ? 'Checking…' : 'Pair'}
+            {busy ? REAUTH_COPY.checking : REAUTH_COPY.pair}
           </button>
         </div>
       </div>
