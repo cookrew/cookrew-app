@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { WorkspaceStore } from '../../src/main/store'
 import type http from 'node:http'
 import { Readable } from 'node:stream'
-import { boardSourcesFrom, createProbeSampler, type ProbeDeps } from '../../src/main/board-index'
+import { BOARD_EVENT_DEBOUNCE_MS, boardSourcesFrom, createProbeSampler, type ProbeDeps } from '../../src/main/board-index'
 import { ADMISSION_FRESH_MS, HerdrHostMultiplexer, type AsyncCliRunner } from '../../src/main/herdr-host-multiplexer'
 import { handleMobileApi, type MobileApiDeps } from '../../src/main/mobile-api'
 import { latencyStats } from '../../src/shared/stats'
@@ -224,11 +224,11 @@ function boardReader(sampler: ReturnType<typeof createProbeSampler>) {
     turns: { listVerified: () => [] },
     turnStore: { loadAll: () => new Map() },
     agents: { list: () => [] },
-    probe: () => {
-      sampler.start()
-      return sampler.phases()
-    },
-    probeWarm: () => sampler.warm()
+    // Exactly as index.ts wires it: a read touches, never starts.
+    probe: () => sampler.touch(),
+    probeWarm: () => sampler.warm(),
+    probeSubscribe: () => sampler.subscribe(),
+    probeOnChange: (listener) => sampler.onChange(listener)
   })
   const apiDeps = { pairingToken: TOKEN, board } as unknown as MobileApiDeps
   const read = async (): Promise<number> => {
@@ -319,7 +319,7 @@ describe('board read — while a pass is in flight, a read with something to sho
     expectTail(measured, LATENCY.boardReadIdleFleet)
     expectEvery(measured, 'waited', false)
     expectEvery(measured, 'phases', 0)
-    expect(listings()).toBeGreaterThanOrEqual(2) // the reads DID restart the probe — they just did not wait on it
+    expect(listings()).toBeGreaterThanOrEqual(2) // the reads DID touch the probe (one pass each, no timer) — they just did not wait on it
   })
 })
 
@@ -470,5 +470,214 @@ describe('session drain — one tick over 40 parked sessions reads nothing', () 
     expectEvery(measured, 'residentAfter', 1)
     expectEvery(measured, 'registryAfter', 1)
     expectEvery(measured, 'home', true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// perf/tempo-board — the board is event-driven; the tick is a backed-off
+// fallback that runs only while someone is looking.
+//
+// The production ladder is 3 s → 10 s → 30 s → 60 s; these gates run it at
+// one tenth (300 ms → 1 s → 3 s → 6 s), so a "scaled minute" is 6 s and the
+// counts below are per scaled minute — the same shape, ten times sooner.
+// ---------------------------------------------------------------------------
+const LADDER = [300, 1000, 3000, 6000]
+const SCALED_MINUTE = LADDER[LADDER.length - 1]
+
+/** 40 detached panes with no herdr status, through a real herdr host; every child counted. */
+function eventFleet() {
+  const calls = { sync: 0, asyncList: 0, asyncRead: 0 }
+  const status = new Map<string, 'working' | 'blocked' | 'idle' | 'done'>()
+  const runner: CommandRunner = {
+    run: () => {
+      calls.sync += 1
+      throw new Error('synchronous herdr child on the probe path')
+    },
+    runQuiet: () => {
+      calls.sync += 1
+    },
+    probe: () => {
+      calls.sync += 1
+      return true
+    }
+  }
+  const asyncRunner: AsyncCliRunner = async (args) => {
+    if (args[0] === 'pane' && args[1] === 'list') {
+      calls.asyncList += 1
+      return envelope(40)
+    }
+    if (args[0] === 'pane' && args[1] === 'read') {
+      calls.asyncRead += 1
+      await new Promise((resolve) => setTimeout(resolve, 2))
+      return WORKING_PANE
+    }
+    throw new Error(`unexpected herdr call ${args.join(' ')}`)
+  }
+  const mux = new HerdrHostMultiplexer({ session: 'cookrewperf', configPath: '/tmp/cookrew-perf.toml', runner, asyncRunner })
+  const deps: ProbeDeps = {
+    listSessions: () => mux.listSessions(),
+    capturePane: (name) => mux.capture(name) ?? '',
+    listSessionsAsync: () => mux.listSessionsAsync(),
+    capturePaneAsync: async (name) => (await mux.captureAsync(name)) ?? '',
+    knownTerminalIds: () => Array.from({ length: 40 }, (_, i) => `t${i}`),
+    isAttached: () => false,
+    sessionNameFor: (id) => `cookrew_${id}`,
+    detectWorking: (chunk) => /esc to interrupt/.test(chunk),
+    detectWaiting: () => false,
+    askedStatus: (id) => status.get(id) ?? null
+  }
+  const sampler = createProbeSampler(deps, LADDER[0], { backoffMs: LADDER })
+  return { calls, sampler, status, read: boardReader(sampler).read }
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+describe('board closed — a detached fleet costs nothing', () => {
+  it('after a one-shot read, zero passes and zero herdr children per scaled minute', async () => {
+    const { calls, sampler, read } = eventFleet()
+    await read() // the one-shot read: at most one pass
+    await sleep(50)
+    const passesAfterRead = sampler.stats().passesLastMinute
+    const childrenAfterRead = calls.asyncList + calls.asyncRead
+    await sleep(SCALED_MINUTE + LADDER[0])
+    const passes = sampler.stats().passesLastMinute - passesAfterRead
+    const children = calls.asyncList + calls.asyncRead - childrenAfterRead
+    process.stdout.write(`perf board closed: ${passes} passes, ${children} children per scaled minute · ${calls.sync} sync\n`)
+    expect(passesAfterRead).toBe(1)
+    expect(sampler.running).toBe(false)
+    expect(passes).toBe(0)
+    expect(children).toBe(0)
+    expect(calls.sync).toBe(0)
+  })
+})
+
+describe('board open, fleet quiet — the ladder climbs and a push beats the tick', () => {
+  it('at most one listing per top rung once settled; a status transition lands within 1 s with no listing', async () => {
+    const { calls, sampler, status } = eventFleet()
+    const release = sampler.subscribe()
+    try {
+      // Climb: the first pass changes the map (empty → 40 working); the next
+      // ones find nothing new. 300 + 1000 + 3000 ms later the top rung holds.
+      await sleep(LADDER[0] + LADDER[1] + LADDER[2] + 500)
+      expect(sampler.stats().intervalMs).toBe(SCALED_MINUTE)
+      const listingsSettled = calls.asyncList
+      await sleep(SCALED_MINUTE * 2)
+      const quiet = calls.asyncList - listingsSettled
+      process.stdout.write(`perf board open, quiet: ${quiet} listings over two scaled minutes (${quiet / 2}/min)\n`)
+      expect(quiet).toBeLessThanOrEqual(2)
+      expect(quiet).toBeGreaterThanOrEqual(1)
+
+      // A herdr status push for one pane: the phase changes with no listing.
+      const listingsBefore = calls.asyncList
+      const changed = new Promise<number>((resolve) => {
+        const started = performance.now()
+        const off = sampler.onChange(() => {
+          off()
+          resolve(performance.now() - started)
+        })
+      })
+      status.set('t7', 'blocked')
+      void sampler.invalidate('t7')
+      const latency = await changed
+      process.stdout.write(`perf status push → snapshot: ${latency.toFixed(2)} ms, listings +${calls.asyncList - listingsBefore}\n`)
+      expect(sampler.phases().get('t7')).toBe('waiting')
+      expect(latency).toBeLessThan(1000)
+      expect(calls.asyncList - listingsBefore).toBe(0)
+      expect(sampler.stats().intervalMs).toBe(LADDER[0]) // the event dropped the ladder
+      expect(calls.sync).toBe(0)
+    } finally {
+      release()
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The push: a phone on /api/events?board=1 gets the board frame after a
+// change, and its stream holds the probe open exactly as long as it lives.
+// ---------------------------------------------------------------------------
+import { EventEmitter } from 'node:events'
+
+function sseStub() {
+  const frames: string[] = []
+  const response = Object.assign(new EventEmitter(), {
+    writeHead() {
+      return response
+    },
+    write(chunk: string) {
+      frames.push(chunk)
+      return true
+    },
+    end() {
+      response.emit('close')
+    },
+    destroy() {
+      response.emit('close')
+    },
+    destroyed: false,
+    writableEnded: false,
+    req: undefined
+  }) as unknown as http.ServerResponse & EventEmitter
+  const request = Object.assign(Readable.from([]) as http.IncomingMessage, {
+    method: 'GET',
+    headers: { authorization: `Bearer ${TOKEN}` }
+  })
+  return { request, response, frames, close: () => (request as unknown as EventEmitter).emit('close') }
+}
+
+describe('board push — the SSE stream is pushed on change and holds the probe', () => {
+  it('a status transition reaches the ?board=1 stream within the coalesce window; closing releases the probe', async () => {
+    const { calls, sampler, status } = eventFleet()
+    const board = boardSourcesFrom({
+      store: { focusedId: 'ws' },
+      turns: { list: () => [] },
+      // A probe-only row needs a task to show (merge rule 3): one settled turn.
+      turnStore: {
+        loadAll: () =>
+          new Map([['t7', [{ index: 0, prompt: 'fix the build', reply: 'done', startedAt: Date.now() - 60_000, endedAt: Date.now() - 30_000 }]]])
+      },
+      agents: {
+        list: () => [
+          { id: 't7', name: 'Seven', preset: 'Claude Code', role: null, cwd: '/tmp', workspaceId: 'ws', workspaceName: 'WS', orch: false, active: true }
+        ]
+      },
+      probe: () => sampler.touch(),
+      probeWarm: () => sampler.warm(),
+      probeSubscribe: () => sampler.subscribe(),
+      probeOnChange: (listener) => sampler.onChange(listener)
+    })
+    const turns = new EventEmitter() as unknown as MobileApiDeps['turns']
+    const store = new EventEmitter() as unknown as MobileApiDeps['store']
+    const deps = {
+      pairingToken: TOKEN,
+      board,
+      turns: Object.assign(turns, { list: () => [] }),
+      store: Object.assign(store, { focusedState: { nodes: [] } }),
+      ops: { listWorkspaces: () => ({ workspaces: [], activeId: 'ws' }) }
+    } as unknown as MobileApiDeps
+    const { request, response, frames, close } = sseStub()
+    void handleMobileApi(request, response, new URL(`http://lan.local/api/events?board=1`), deps)
+    await sleep(100)
+    expect(sampler.stats().subscribers).toBe(1)
+    await sleep(LADDER[0] + 200) // the first pass landed and was pushed
+    const before = frames.filter((f) => f.startsWith('event: board')).length
+    expect(before).toBeGreaterThanOrEqual(1)
+
+    status.set('t7', 'blocked') // every pane read as working; herdr now says this one is stuck
+    const started = performance.now()
+    void sampler.invalidate('t7')
+    while (frames.filter((f) => f.startsWith('event: board')).length === before) {
+      if (performance.now() - started > 3000) throw new Error('no board push')
+      await sleep(5)
+    }
+    const pushMs = performance.now() - started
+    const last = frames.filter((f) => f.startsWith('event: board')).pop() ?? ''
+    process.stdout.write(`perf status push → SSE frame: ${pushMs.toFixed(0)} ms (coalesce window ${BOARD_EVENT_DEBOUNCE_MS} ms)\n`)
+    expect(last).toContain('"waiting"')
+    expect(pushMs).toBeLessThan(BOARD_EVENT_DEBOUNCE_MS + 500)
+    close()
+    await sleep(20)
+    expect(sampler.stats().subscribers).toBe(0)
+    expect(sampler.running).toBe(false)
+    expect(calls.sync).toBe(0)
   })
 })
