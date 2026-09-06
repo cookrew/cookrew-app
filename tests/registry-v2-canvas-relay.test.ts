@@ -14,9 +14,12 @@ import { StarStore } from '../registry/src/stars'
 import { createV2 } from '../registry/src/v2-routes'
 import {
   allowedRequestHeaders,
+  CANVAS_BASE_HEADER,
   canvasName,
   createCanvasRelay,
   crossSite,
+  rewriteLocation,
+  rewriteRefresh,
   forwardableCookies,
   isCanvasName,
   rewriteCookiePath,
@@ -71,6 +74,20 @@ const mobileServer = (): Server =>
       response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
       response.write('data: one\n\n')
       setTimeout(() => response.write('data: two\n\n'), 30)
+      return
+    }
+    if (url.pathname === '/redirect') {
+      // Whatever the test asked to be sent back, verbatim — the three shapes a
+      // desktop actually answers with are exercised through this one route.
+      response.writeHead(Number(url.searchParams.get('code') ?? 303), {
+        location: url.searchParams.get('to') ?? '/'
+      })
+      response.end()
+      return
+    }
+    if (url.pathname === '/refresh') {
+      response.writeHead(200, { 'content-type': 'text/plain', refresh: '5; url=/board' })
+      response.end('later')
       return
     }
     if (url.pathname === '/hang') {
@@ -482,15 +499,17 @@ describe('a phone of the account, reaching its own canvas', () => {
         'x-cookrew-app': 'companion',
         'x-forwarded-for': '203.0.113.9',
         'accept-language': 'en-GB',
-        // The app's own, for its own Mac. It must neither admit anyone here
-        // nor be read as cookrew.dev's credential.
-        authorization: 'Bearer a-canvas-token-of-the-apps-own'
+        // The app's own, for its own Mac: it crosses, because that is the
+        // credential the companion authenticates with. It must never be read
+        // as cookrew.dev's own — the cookie is that, and the cookie is what
+        // admits anyone here.
+        authorization: 'Bearer a-companion-token-of-the-apps-own'
       })
     })
     expect(body.headers['x-cookrew-app']).toBe('companion')
     expect(body.headers.accept).toBe('application/json')
     expect(body.headers['x-forwarded-for']).toBeUndefined()
-    expect(body.headers.authorization).toBeUndefined()
+    expect(body.headers.authorization).toBe('Bearer a-companion-token-of-the-apps-own')
     expect(body.headers['accept-language']).toBeUndefined()
   })
 
@@ -509,6 +528,55 @@ describe('a phone of the account, reaching its own canvas', () => {
     expect(cookies[0]).toBe(`canvas=yes; HttpOnly; Path=${prefix()}/`)
     expect(cookies[1]).toBe(`wide=1; Path=${prefix()}/`)
     for (const cookie of cookies) expect(cookie).not.toContain('Domain')
+  })
+
+  it('tells the desktop which prefix it is being served under', async () => {
+    const { body } = await echo('/', { headers: asPhone() })
+    expect(body.headers[CANVAS_BASE_HEADER]).toBe(prefix())
+  })
+
+  it('does not let a caller write that prefix for the desktop', async () => {
+    const { body } = await echo('/', {
+      headers: asPhone({ [CANVAS_BASE_HEADER]: '/relay/@somebody/desktop/elsewhere' })
+    })
+    expect(body.headers[CANVAS_BASE_HEADER]).toBe(prefix())
+  })
+
+  it('moves the admission’s own redirect under the prefix, where the Mac is', async () => {
+    // THE LIVE BUG (2026-09-06): the desktop answers `303 /?token=…` because on
+    // the LAN it is the root. Forwarded as it stands, OPEN landed on
+    // cookrew.dev's home page with a credential in the address bar.
+    const res = await fetch(
+      `${site.origin}${prefix()}/redirect?code=303&to=${encodeURIComponent('/?token=abc')}`,
+      { headers: asPhone(), redirect: 'manual' }
+    )
+    expect(res.status).toBe(303)
+    expect(res.headers.get('location')).toBe(`${prefix()}/?token=abc`)
+  })
+
+  it('moves a redirect the Mac wrote to its OWN origin under the prefix too', async () => {
+    const res = await fetch(
+      `${site.origin}${prefix()}/redirect?code=302&to=${encodeURIComponent('https://127.0.0.1:8639/board?x=1')}`,
+      { headers: asPhone(), redirect: 'manual' }
+    )
+    expect(res.status).toBe(302)
+    expect(res.headers.get('location')).toBe(`${prefix()}/board?x=1`)
+  })
+
+  it('leaves a redirect back to cookrew.dev alone — that is where ?refused= goes', async () => {
+    const back = `${site.origin}/me?refused=key`
+    const res = await fetch(
+      `${site.origin}${prefix()}/redirect?code=303&to=${encodeURIComponent(back)}`,
+      { headers: asPhone(), redirect: 'manual' }
+    )
+    expect(res.status).toBe(303)
+    expect(res.headers.get('location')).toBe(back)
+  })
+
+  it('moves a Refresh header by the same rule, since it is a redirect with a delay', async () => {
+    const res = await fetch(`${site.origin}${prefix()}/refresh`, { headers: asPhone() })
+    expect(res.headers.get('refresh')).toBe(`5; url=${prefix()}/board`)
+    await res.text()
   })
 
   it('carries bytes that are not text, unmangled', async () => {
@@ -807,7 +875,7 @@ describe('the header and cookie rules, by themselves', () => {
     expect(forwardableCookies('cr_session=abc')).toBe('')
   })
 
-  it('allows content-type, accept and the app’s own headers, and nothing else', () => {
+  it('allows content-type, accept, the companion’s own credential and its headers — nothing else', () => {
     expect(
       allowedRequestHeaders({
         'content-type': 'application/json',
@@ -817,15 +885,40 @@ describe('the header and cookie rules, by themselves', () => {
         'x-forwarded-proto': 'https',
         'x-real-ip': '203.0.113.9',
         host: 'cookrew.dev',
-        authorization: 'Bearer nope',
+        authorization: 'Bearer the-companion-token',
+        // A caller's own copy of the base is DROPPED: it is a statement about
+        // where the request was addressed, and the registry is what knows that.
+        'x-cookrew-base': '/relay/@somebody/desktop/elsewhere',
         referer: 'https://cookrew.dev/me'
       })
     ).toEqual({
       'content-type': 'application/json',
       accept: '*/*',
       'last-event-id': '7',
-      'x-cr-run': 'abc'
+      'x-cr-run': 'abc',
+      authorization: 'Bearer the-companion-token'
     })
+  })
+
+  it('rewrites a Location by where it points, and only then', () => {
+    const at = { prefix: '/relay/@u/desktop/d', path: '/?open=x', host: 'cookrew.dev' }
+    expect(rewriteLocation('/?token=abc', at)).toBe('/relay/@u/desktop/d/?token=abc')
+    expect(rewriteLocation('https://127.0.0.1:8639/board', at)).toBe('/relay/@u/desktop/d/board')
+    expect(rewriteLocation('https://192.168.1.24:8643/x#y', at)).toBe('/relay/@u/desktop/d/x#y')
+    // Ours: left exactly as written, whatever the scheme in front of it.
+    expect(rewriteLocation('https://cookrew.dev/me?refused=key', at)).toBe('https://cookrew.dev/me?refused=key')
+    // A relative reference resolves against the path this exchange was for,
+    // which is what a browser would have done with the desktop's answer.
+    expect(rewriteLocation('board', { ...at, path: '/api/thing' })).toBe('/relay/@u/desktop/d/api/board')
+  })
+
+  it('rewrites a Refresh’s url and leaves its delay alone', () => {
+    const at = { prefix: '/relay/@u/desktop/d', path: '/', host: 'cookrew.dev' }
+    expect(rewriteRefresh('5; url=/board', at)).toBe('5; url=/relay/@u/desktop/d/board')
+    expect(rewriteRefresh('0;url="/x"', at)).toBe('0; url=/relay/@u/desktop/d/x')
+    expect(rewriteRefresh('5; url=https://cookrew.dev/me', at)).toBe('5; url=https://cookrew.dev/me')
+    // No target at all is not a redirect; nothing to move.
+    expect(rewriteRefresh('30', at)).toBe('30')
   })
 
   it('replaces a cookie’s path rather than adding to it, and refuses a domain', () => {
