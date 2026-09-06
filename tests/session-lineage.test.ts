@@ -35,4 +35,22 @@ describe('withSessionLineage — the rebind choke point', () => {
     const patch = withSessionLineage({ claudeSessionId: 'b', sessionLineage: ['a', 'b'] }, 'c')
     expect(patch.sessionLineage).toEqual(['a', 'b'])
   })
+
+  // THE MEASURED SHAPE, 2026-09-06. Conductor's persisted lineage was 20
+  // entries long and held FOUR distinct ids: 5a4cdb91, f16cf111, then
+  // 295d5f1c/a78aa3e5 alternating eight times. The card was flapping between
+  // its real session and one a background job held, and every flap ate a slot
+  // of a 20-slot cap — two more and the 2026-09-05 sessions would have been
+  // evicted. Deduping is what makes a flap cost nothing.
+  it('a card flapping between two sessions never eats its own history', () => {
+    let node: { claudeSessionId?: string | null; sessionLineage?: string[] } = {
+      claudeSessionId: '295d5f1c',
+      sessionLineage: ['5a4cdb91', 'f16cf111']
+    }
+    for (let flap = 0; flap < 8; flap++) {
+      node = withSessionLineage(node, 'a78aa3e5')
+      node = withSessionLineage(node, '295d5f1c')
+    }
+    expect(node.sessionLineage).toEqual(['5a4cdb91', 'f16cf111', '295d5f1c', 'a78aa3e5'])
+  })
 })
