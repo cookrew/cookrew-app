@@ -244,6 +244,14 @@ export async function handleStreamAdapters(
   if (service.sourceOf(terminalId) !== 'file') return false
 
   try {
+    // AN EMPTY STREAM IS AN ABSENCE, NOT AN ANSWER. A card that is booting —
+    // bound to a session id whose transcript does not exist yet — has no
+    // chain to read, while the old store may still hold everything the PTY
+    // scraped before the file appeared. Answering [] there would blank a
+    // working card for the length of a boot, so the request goes back to the
+    // handler that can still answer it.
+    const chain = await service.chain(terminalId)
+    if (chain.files.length === 0) return false
     const view = await viewOf(service, terminalId)
     if (match[2] === 'turns') serveTurns(response, url, view)
     else if (match[2] === 'latest') serveLatest(response, view)
@@ -251,9 +259,7 @@ export async function handleStreamAdapters(
     else if (match[2] === 'trace/markers') {
       respondJson(response, 200, markersOf(view, service.rewindPoints(terminalId)))
     } else {
-      const chain = await service.chain(terminalId)
-      const kind = chain.files[chain.files.length - 1]?.kind ?? null
-      serveTracePage(response, url, view, kind)
+      serveTracePage(response, url, view, chain.files[chain.files.length - 1]?.kind ?? null)
     }
     return true
   } catch (error) {

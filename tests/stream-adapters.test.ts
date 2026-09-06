@@ -265,6 +265,49 @@ describe('the five old routes, answered off the one reader', () => {
     const bare = await fixture.port('old')
     expect(((await get(bare, '/turns')) as TurnRecord[]).length).toBe(4)
   })
+
+  it('hands a card with NO transcript back to the old store rather than answering []', async () => {
+    // A card bound to a session id whose file has not appeared yet (an agent
+    // mid-boot) still has scraped history in the store. Answering [] from an
+    // empty stream would blank a working card for the length of the boot.
+    const base = mkdtempSync(path.join(tmpdir(), 'adapters-none-'))
+    const store = new WorkspaceStore(mkdtempSync(path.join(tmpdir(), 'adapters-none-ws-')))
+    const node = store.addNode(
+      terminal({ claudeSessionId: 'dddddddd-1111-2222-3333-444444444444' })
+    ) as TerminalNodeData
+    const traces = new TraceReader(store, { projectsDir: base })
+    const scraped: TurnRecord[] = [
+      { index: 1, prompt: 'typed at the pane', reply: 'before the file existed', startedAt: T0, endedAt: T0 + 1 }
+    ]
+    const deps = {
+      pairingToken: TOKEN,
+      store,
+      turns: { history: () => scraped },
+      turnHistory: async () => scraped,
+      latestCheckpoint: (id: string) => traces.latestCheckpoint(id),
+      traces: {
+        index: (id: string, request?: unknown) => traces.index(id, request as never),
+        boundaryMarkers: (id: string) => traces.boundaryMarkers(id),
+        page: (id: string, request?: unknown) => traces.page(id, request as never)
+      },
+      stream: createStreamService({
+        nodeOf: () => node,
+        documentOf: (target, kind) => traces.documentOf(target, kind),
+        chainOptions: { projectsDir: base, lineageIds: () => [] },
+        chainCoalesceMs: 0
+      })
+    } as unknown as MobileApiDeps
+    const server = http.createServer((request, response) => {
+      const url = new URL(request.url ?? '/', `http://${request.headers.host}`)
+      void handleMobileApi(request, response, url, deps).then((handled) => {
+        if (!handled) response.writeHead(404).end('{}')
+      })
+    })
+    cleanup.push(() => server.close())
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as net.AddressInfo).port
+    expect(await get(port, '/turns')).toEqual(scraped)
+  })
 })
 
 // ---- the differences, stated and pinned rather than discovered later ----
