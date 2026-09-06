@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DNS_CLASS_IN, DNS_TYPE, RCODE } from '../registry/src/dns-wire'
+import { readNameServers } from '../registry/src/dns-glue'
 import {
   ADDRESS_TTL,
   NEGATIVE_TTL,
@@ -223,5 +224,59 @@ describe('the label mapping, both ways', () => {
     }
     expect(addressFromLabel('a--b--c')).toBeNull()
     expect(addressFromLabel('not-an-address')).toBeNull()
+  })
+})
+
+/**
+ * M2 — THE GLUE, WHICH IS TYPED BY HAND INTO SOMEBODY ELSE'S ZONE.
+ *
+ * `--dns-ns host=address` accepted any string on the right of the `=`. The
+ * zone then answered `ns1.d.cookrew.dev A` from it, found it would not encode
+ * as rdata, and returned NODATA — so the delegation was broken in a way
+ * nothing said out loud, and the symptom was an intermittent lookup failure
+ * that looks like somebody else's resolver. It refuses at boot now, read by
+ * the same parser that would have had to serve it.
+ */
+describe('the name servers a deployment is given', () => {
+  it('takes a host and a literal address, one or several', () => {
+    expect(readNameServers('ns1.d.cookrew.dev=203.0.113.10')).toEqual([
+      { host: 'ns1.d.cookrew.dev', address: '203.0.113.10' }
+    ])
+    expect(readNameServers('NS1.d.cookrew.dev=203.0.113.10,ns2.d.cookrew.dev=2001:db8::53')).toEqual([
+      { host: 'ns1.d.cookrew.dev', address: '203.0.113.10' },
+      { host: 'ns2.d.cookrew.dev', address: '2001:db8::53' }
+    ])
+  })
+
+  it('refuses anything on the right of the = that is not an address', () => {
+    for (const spec of [
+      '',
+      'ns1.d.cookrew.dev',
+      'ns1.d.cookrew.dev=',
+      'ns1.d.cookrew.dev=ns2.example.com',
+      'ns1.d.cookrew.dev=203.0.113.10.',
+      'ns1.d.cookrew.dev=203.0.113.010',
+      'ns1.d.cookrew.dev=999.1.1.1',
+      'ns1.d.cookrew.dev=localhost',
+      '=203.0.113.10',
+      'ns1=203.0.113.10',
+      'ns1.d.cookrew.dev=203.0.113.10,ns2.d.cookrew.dev=nonsense'
+    ]) {
+      expect(readNameServers(spec)).toBeNull()
+    }
+  })
+
+  it('agrees with the zone: what boots is exactly what gets served', () => {
+    const ns = readNameServers('ns1.d.cookrew.dev=203.0.113.10')!
+    const zone = createZone({
+      zone: ZONE,
+      ns,
+      reach: { find: () => null },
+      challenges: { textsFor: () => [] },
+      changedAt: () => 1_757_000_000_000
+    })
+    const answer = zone({ name: 'ns1.d.cookrew.dev', type: DNS_TYPE.A, class: DNS_CLASS_IN })
+    expect(answer.answers).toHaveLength(1)
+    expect(answer.answers[0]).toMatchObject({ type: 'A', address: '203.0.113.10' })
   })
 })

@@ -60,7 +60,7 @@ import { createV2 } from './v2-routes'
 import { AcmeClient, LETSENCRYPT_STAGING } from './acme-client'
 import { createNames, type NamesFeature } from './names'
 import { createDnsServer, type DnsServer } from './dns-server'
-import type { NameServer } from './dns-zone'
+import { readNameServers } from './dns-glue'
 import { buildManifest, signManifest } from '../../src/main/preset-publish'
 import { scrubForPublish } from '../../src/main/preset-scrub'
 import type { TeamSnapshot } from '../../src/main/teams'
@@ -213,20 +213,9 @@ const v2 = createV2(DATA, { origin: resolved.config.origin })
  * that quietly answers the wrong glue — the parent zone's records are typed by
  * hand once and have to match these exactly.
  */
-const nameServers = (spec: string): NameServer[] | null => {
-  if (spec === '') return null
-  const out: NameServer[] = []
-  for (const entry of spec.split(',')) {
-    const [host, address] = entry.split('=')
-    if (!host || !address || !host.includes('.')) return null
-    out.push({ host: host.trim().toLowerCase(), address: address.trim() })
-  }
-  return out.length === 0 ? null : out
-}
-
 const DNS_PORT = Number(flag('dns-port', '0'))
 const DNS_ZONE = flag('dns-zone', 'd.cookrew.dev').toLowerCase()
-const DNS_NS = nameServers(flag('dns-ns', ''))
+const DNS_NS = readNameServers(flag('dns-ns', ''))
 const ACME_DIRECTORY = flag('acme-directory', LETSENCRYPT_STAGING)
 const ACME_EMAIL = flag('acme-email', '')
 
@@ -244,7 +233,10 @@ if (args.includes('--dns-port') || DNS_NS !== null) {
     process.exit(1)
   }
   if (DNS_NS === null) {
-    console.error('refusing to start: --dns-port needs --dns-ns host=address,host=address')
+    console.error(
+      'refusing to start: --dns-port needs --dns-ns host=address,host=address, ' +
+        'where every address is a literal IP — the same glue typed into the parent zone'
+    )
     process.exit(1)
   }
   names = createNames({
