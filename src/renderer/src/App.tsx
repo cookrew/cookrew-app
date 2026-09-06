@@ -121,6 +121,18 @@ function sameViewport(
   return Math.abs(a.x - b.x) < 1 && Math.abs(a.y - b.y) < 1 && Math.abs(a.zoom - b.zoom) < 0.01
 }
 
+/**
+ * MiniMap node attributes as FUNCTIONS, module-level so their identity never
+ * changes. React Flow wraps a string value in a fresh arrow on every MiniMap
+ * render and passes that to its memo'd per-node components, so with the
+ * defaults all 170 minimap nodes re-rendered on every commit. The values are
+ * the library's own defaults; the fill actually shown comes from
+ * .cookrew-minimap in styles.css either way.
+ */
+const minimapNodeColor = (): string => '#e2e2e2'
+const minimapNodeStrokeColor = (): string => 'transparent'
+const minimapNodeClassName = (): string => ''
+
 const nodeTypes = { terminal: TerminalNode, note: NoteNode, browser: BrowserNode }
 const edgeTypes = { cable: CableEdge }
 
@@ -1134,6 +1146,26 @@ function Canvas(): React.JSX.Element {
     [tool, preset, role, roles, orch, clipping, templates, screenToFlowPosition, zoomToNode]
   )
 
+  // STABLE, on purpose. React Flow hands these three straight to every
+  // NodeWrapper as props, and NodeWrapper is memo'd on them: an inline arrow
+  // here is a new identity per Canvas render, which re-rendered EVERY mounted
+  // card (and its handles, pick box and status coin) on every commit — 104
+  // cards at the desktop overview, 2.5 commits per pan frame (perf lane L6,
+  // scripts/perf-dom-probe.mjs, 2026-09-06). Clipping is read through a ref so
+  // the hover handlers never change identity when the toggle flips.
+  const onNodeContextMenu = useCallback((e: React.MouseEvent, node: Node) => {
+    // Right-click edits the card under the cursor (touch gets the same menu
+    // via long-press — see the stage effect above).
+    e.preventDefault()
+    setCardMenu({ nodeId: node.id, x: e.clientX, y: e.clientY })
+  }, [])
+  const onNodeMouseEnter = useCallback((_e: React.MouseEvent, n: Node) => {
+    if (clippingRef.current) setHoverId(n.id)
+  }, [])
+  const onNodeMouseLeave = useCallback(() => {
+    if (clippingRef.current) setHoverId(null)
+  }, [])
+
   const onNodesDelete = useCallback((deleted: Node[]) => {
     for (const node of deleted) void cookrew().removeNode(node.id)
   }, [])
@@ -1235,18 +1267,9 @@ function Canvas(): React.JSX.Element {
             onNodeDragStop={onNodeDragStop}
             onNodeClick={onNodeClick}
             onPaneClick={onPaneClick}
-            onNodeContextMenu={(e, node) => {
-              // Right-click edits the card under the cursor (touch gets the
-              // same menu via long-press — see the stage effect above).
-              e.preventDefault()
-              setCardMenu({ nodeId: node.id, x: e.clientX, y: e.clientY })
-            }}
-            onNodeMouseEnter={(_e, n) => {
-              if (clipping) setHoverId(n.id)
-            }}
-            onNodeMouseLeave={() => {
-              if (clipping) setHoverId(null)
-            }}
+            onNodeContextMenu={onNodeContextMenu}
+            onNodeMouseEnter={onNodeMouseEnter}
+            onNodeMouseLeave={onNodeMouseLeave}
             /* Cards stay draggable while clipping — the clipboard is a
                toggle over the resting hand, not a separate one: the header
                drags, the body click picks (click again cancels). */
@@ -1268,7 +1291,14 @@ function Canvas(): React.JSX.Element {
           >
             <Background variant={BackgroundVariant.Dots} gap={22} size={1.5} color="#D9D3C5" />
             <SnapGuides guides={guides} />
-            <MiniMap pannable zoomable className="cookrew-minimap" />
+            <MiniMap
+              pannable
+              zoomable
+              className="cookrew-minimap"
+              nodeColor={minimapNodeColor}
+              nodeStrokeColor={minimapNodeStrokeColor}
+              nodeClassName={minimapNodeClassName}
+            />
             <Controls position="bottom-right" showInteractive={false}>
               <ControlButton
                 className={`canvas-visual-toggle mode-${canvasVisualMode}`}
