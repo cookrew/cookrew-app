@@ -71,18 +71,51 @@ export function callerHue(username: string): number {
   return hash
 }
 
+/**
+ * ONE subscription for every card. The push from main is the same payload
+ * for all of them, and every card subscribing on its own meant a canvas of
+ * thirty cards was thirty IPC listeners each parsing it — Electron's
+ * "11 serving:callers listeners" warning filling the log (measured
+ * 2026-09-06), and the work multiplied by cards. Main is listened to once;
+ * the cards watch this, and the listener goes away with the last card.
+ */
+type Watcher = (rows: readonly ServedCallersRow[]) => void
+let sharedRows: readonly ServedCallersRow[] = []
+const watchers = new Set<Watcher>()
+let unsubscribeMain: (() => void) | null = null
+
+function publish(rows: readonly ServedCallersRow[]): void {
+  sharedRows = rows
+  for (const watcher of watchers) watcher(rows)
+}
+
+function watchServedCallers(watcher: Watcher): () => void {
+  watchers.add(watcher)
+  if (unsubscribeMain === null) {
+    const api = cookrew()
+    if (api.servingCallers) {
+      void api
+        .servingCallers()
+        .then(publish)
+        .catch(() => undefined)
+    }
+    unsubscribeMain = api.onServingCallers?.(publish) ?? ((): void => undefined)
+  } else {
+    watcher(sharedRows)
+  }
+  return () => {
+    watchers.delete(watcher)
+    if (watchers.size === 0 && unsubscribeMain !== null) {
+      unsubscribeMain()
+      unsubscribeMain = null
+    }
+  }
+}
+
 /** Live callers at this desktop's doors, pushed from main. */
 export function useServedCallers(): readonly ServedCallersRow[] {
-  const [rows, setRows] = useState<readonly ServedCallersRow[]>([])
-  useEffect(() => {
-    const api = cookrew()
-    if (!api.servingCallers) return
-    void api
-      .servingCallers()
-      .then(setRows)
-      .catch(() => undefined)
-    return api.onServingCallers?.(setRows)
-  }, [])
+  const [rows, setRows] = useState<readonly ServedCallersRow[]>(sharedRows)
+  useEffect(() => watchServedCallers(setRows), [])
   return rows
 }
 
