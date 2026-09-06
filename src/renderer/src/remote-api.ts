@@ -453,6 +453,10 @@ export function createRemoteApi(): CookrewApi {
         locked: false,
         lockAfterMs: 0,
         requests: 0,
+        // Which registry the DESKTOP is pointed at is the desktop's business
+        // and the desktop's screen; a phone reading the companion cannot know
+        // it and must not guess.
+        registryMismatch: null,
         envUsername: null,
         sessionExpired: false,
         workspacesReachable: true,

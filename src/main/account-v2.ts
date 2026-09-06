@@ -377,6 +377,8 @@ export class Accounts {
   private cached: AccountFile | null
   /** The last minted batch, in memory only — never written, never logged. */
   private freshCodes: readonly string[] | null = null
+  /** Said once per run: a poll refused every tick must not be a log flood. */
+  private saidMismatch = false
   private readonly legacy: () => RegistryAccount | null
   private readonly changed: (() => void) | undefined
 
@@ -425,6 +427,22 @@ export class Accounts {
   }
 
   /**
+   * WHERE THE ACCOUNT LIVES vs WHERE THE APP IS POINTED, when they differ.
+   *
+   * `account.registry` is written at claim time and is the only registry that
+   * can say anything about this session. Null when they agree, and null when
+   * the file is old enough not to name one — there is nothing to disagree with
+   * then, so everything behaves exactly as it did.
+   */
+  registryMismatch(): { signedInAt: string; pointedAt: string } | null {
+    const pinned = this.cached?.registry
+    if (typeof pinned !== 'string' || pinned.length === 0) return null
+    const same = (origin: string): string => origin.toLowerCase().replace(/\/+$/, '')
+    if (same(pinned) === same(this.origin)) return null
+    return { signedInAt: pinned, pointedAt: this.origin }
+  }
+
+  /**
    * cookrew.dev refused this token. Record it, atomically.
    *
    * The write is what makes the fix hold: `sessionLive()` then answers false,
@@ -433,10 +451,27 @@ export class Accounts {
    * a token the registry has already thrown away. Everything that polls
    * (approvals, the factor rows) short-circuits on the same flag rather than
    * spending a request per tick learning the same 401.
+   *
+   * BUT ONLY THE ACCOUNT'S OWN REGISTRY MAY END IT. The owner relaunched the
+   * app with a different COOKREW_REGISTRY; that deployment knows nothing of
+   * this token and answers 401 unauthenticated, and this method wrote the
+   * session off — permanently, since the refusal is persisted — while it was
+   * still live at the registry the account actually lives at. A 401 from
+   * somewhere else is a different building saying it does not know you.
    */
   private endSession(): void {
     const account = this.cached
     if (!account?.session || account.session.endedAt !== undefined) return
+    const elsewhere = this.registryMismatch()
+    if (elsewhere !== null) {
+      if (!this.saidMismatch) {
+        this.saidMismatch = true
+        console.error(
+          `[cookrew] ignoring a 401 from ${elsewhere.pointedAt}: this Mac is signed in at ${elsewhere.signedInAt}, so its session there stands`,
+        )
+      }
+      return
+    }
     this.save({ ...account, session: { ...account.session, endedAt: this.now() } })
   }
 
