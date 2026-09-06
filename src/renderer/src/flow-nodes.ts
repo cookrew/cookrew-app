@@ -88,6 +88,18 @@ export function toFlowEdge(c: Connection): Edge {
 }
 
 /**
+ * Does this edge still say what the connection says? Pinned to the type: the
+ * rest-destructure fails to compile the day Connection grows a field this
+ * compare does not look at.
+ */
+function sameConnection(edge: Edge, c: Connection): boolean {
+  const { id, a, b, ...rest } = c
+  const exhaustive: Record<string, never> = rest
+  void exhaustive
+  return edge.id === id && edge.source === a && edge.target === b
+}
+
+/**
  * The same identity discipline for edges. A connection that still joins the
  * same two nodes keeps its previous edge object; the ARRAY is reused too when
  * nothing changed, so a broadcast that touched no cable hands ReactFlow the
@@ -98,7 +110,7 @@ export function reconcileFlowEdges(prev: Edge[], connections: readonly Connectio
   let unchanged = prev.length === connections.length
   const next = connections.map((c, i) => {
     const existing = prevById.get(c.id)
-    if (existing && existing.source === c.a && existing.target === c.b) {
+    if (existing && sameConnection(existing, c)) {
       if (prev[i] !== existing) unchanged = false
       return existing
     }

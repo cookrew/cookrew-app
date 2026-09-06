@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react'
+import { useCallback, useSyncExternalStore } from 'react'
 import { KeyedStore } from './keyed-store'
 import type { TerminalActivity, TurnPhase } from '../../shared/turn'
 
@@ -13,10 +13,10 @@ export const thumbStore = new KeyedStore<string>()
 
 /** One terminal's latest activity. Re-renders only when THIS id changes. */
 export function useActivity(id: string): TerminalActivity | undefined {
-  return useSyncExternalStore(
-    (cb) => activityStore.subscribeKey(id, cb),
-    () => activityStore.get(id)
-  )
+  // Keyed on the id: a fresh subscribe function per render would make React
+  // unsubscribe and resubscribe on every render of the caller.
+  const subscribe = useCallback((cb: () => void) => activityStore.subscribeKey(id, cb), [id])
+  return useSyncExternalStore(subscribe, () => activityStore.get(id))
 }
 
 /** The whole activity map — for the header count / roster. Re-renders on any change. */
@@ -47,10 +47,8 @@ export function useActivityPhaseCount(ids: readonly string[], phase: TurnPhase):
 
 /** One browser's latest thumbnail data URL. Re-renders only when THIS id changes. */
 export function useThumb(id: string): string | undefined {
-  return useSyncExternalStore(
-    (cb) => thumbStore.subscribeKey(id, cb),
-    () => thumbStore.get(id)
-  )
+  const subscribe = useCallback((cb: () => void) => thumbStore.subscribeKey(id, cb), [id])
+  return useSyncExternalStore(subscribe, () => thumbStore.get(id))
 }
 
 /** The whole thumbnail map — for the roster sidebar. Re-renders on any change. */

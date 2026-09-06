@@ -120,11 +120,11 @@ function sameViewport(
  * MiniMap node attributes as FUNCTIONS, module-level so their identity never
  * changes. React Flow wraps a string value in a fresh arrow on every MiniMap
  * render and passes that to its memo'd per-node components, so with the
- * defaults all 170 minimap nodes re-rendered on every commit. The values are
- * the library's own defaults; the fill actually shown comes from
- * .cookrew-minimap in styles.css either way.
+ * defaults all 170 minimap nodes re-rendered on every commit. The colour is
+ * applied INLINE by the library (it beats the .cookrew-minimap rule in
+ * styles.css), so it names the same token that rule does.
  */
-const minimapNodeColor = (): string => '#e2e2e2'
+const minimapNodeColor = (): string => 'var(--line-soft)'
 const minimapNodeStrokeColor = (): string => 'transparent'
 const minimapNodeClassName = (): string => ''
 
