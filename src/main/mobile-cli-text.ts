@@ -50,6 +50,46 @@ export interface MobileHelpInput {
 /** Group order matches mobileEndpoints(): most-reachable first. */
 const GROUP_ORDER: EndpointKind[] = ['tailscale', 'lan', 'other', 'loopback']
 
+/**
+ * THE NAME, WHEN THERE IS ONE — the bare address otherwise.
+ *
+ * `https://192-168-2-40.<id>.d.cookrew.dev:8643/?token=…` is the SAME listener
+ * as `https://192.168.2.40:8643/?token=…`; the only difference is that a
+ * browser has a certificate chain for the first and shows the interstitial for
+ * the second. Printing both would be two URLs for one address and an invitation
+ * to scan the one that warns, so a Mac that holds a certificate prints only
+ * the name — and the self-signed sentence below goes with it.
+ */
+const printed = (endpoint: MobileEndpoint): string => endpoint.trustedUrl ?? endpoint.url
+
+/**
+ * THE MARKER THAT BINDS A SENTENCE TO A URL.
+ *
+ * A Mac's list is usually MIXED: its LAN address and its tailnet IP are
+ * spelled as trusted names, and its MagicDNS name is not — that name resolves
+ * through Tailscale and no certificate of ours covers it, so it is served
+ * self-signed. One footer sentence for the whole list therefore had to be a
+ * lie about half of it, and the one it told was the generous one: "these
+ * addresses have a real certificate — the phone loads them with no warning",
+ * printed directly above a URL that shows the interstitial.
+ *
+ * So when both families are on screen each line says which it is, and the
+ * footer explains the two markers instead of making one promise. When every
+ * URL is of one family there is nothing to disambiguate and the plain sentence
+ * comes back.
+ */
+const TRUSTED_MARK = '✓'
+const SELF_SIGNED_MARK = '⚠'
+
+const isTrusted = (endpoint: MobileEndpoint): boolean => endpoint.trustedUrl !== undefined
+
+/** True when anything printed above is a name a browser already trusts. */
+const anyTrusted = (endpoints: readonly MobileEndpoint[]): boolean => endpoints.some(isTrusted)
+
+/** True when the list is BOTH kinds at once — the case that needs markers. */
+const mixed = (endpoints: readonly MobileEndpoint[]): boolean =>
+  anyTrusted(endpoints) && endpoints.some((endpoint) => !isTrusted(endpoint))
+
 export function renderMobileHelp(input: MobileHelpInput): string {
   const lines: string[] = [
     'Cookrew Mobile — open on your phone:',
@@ -61,7 +101,11 @@ export function renderMobileHelp(input: MobileHelpInput): string {
     const group = input.endpoints.filter((endpoint) => endpoint.kind === kind)
     if (group.length === 0) continue
     lines.push(`  ${group[0].label}`)
-    for (const endpoint of group) lines.push(`    ${endpoint.url}`)
+    const mark = input.secure && mixed(input.endpoints)
+    for (const endpoint of group) {
+      const tag = !mark ? '' : ` ${isTrusted(endpoint) ? TRUSTED_MARK : SELF_SIGNED_MARK}`
+      lines.push(`    ${printed(endpoint)}${tag}`)
+    }
     lines.push('')
   }
 
@@ -71,11 +115,25 @@ export function renderMobileHelp(input: MobileHelpInput): string {
     lines.push('from any network instead of only this Wi-Fi.', '')
   }
 
-  lines.push(
-    input.secure
-      ? 'HTTPS is self-signed: the phone warns once — tap Advanced → Proceed.\nIt is required for 🎙️ dictation, which needs a secure context.'
-      : '⚠ HTTP only (openssl not found): 🎙️ dictation needs HTTPS, so the mic will\nbe blocked on the phone. Everything else works.'
-  )
+  if (!input.secure) {
+    lines.push(
+      '⚠ HTTP only (openssl not found): 🎙️ dictation needs HTTPS, so the mic will\nbe blocked on the phone. Everything else works.'
+    )
+  } else if (mixed(input.endpoints)) {
+    // Each promise over the URLs it is actually true of, and no others.
+    lines.push(
+      `${TRUSTED_MARK} A real certificate through cookrew.dev — the phone loads it with no warning.`,
+      `${SELF_SIGNED_MARK} HTTPS is self-signed here: the phone warns once — tap Advanced → Proceed.`
+    )
+  } else if (anyTrusted(input.endpoints)) {
+    // No warning to give: the URLs above carry a real certificate issued
+    // through cookrew.dev, so the phone loads them like any other site.
+    lines.push('These addresses have a real certificate — the phone loads them with no warning.')
+  } else {
+    lines.push(
+      'HTTPS is self-signed: the phone warns once — tap Advanced → Proceed.\nIt is required for 🎙️ dictation, which needs a secure context.'
+    )
+  }
 
   if (input.uncovered.length > 0) {
     lines.push(
@@ -126,6 +184,6 @@ export function renderRotated(
     '',
     'New URLs:',
     ...relay,
-    ...endpoints.map((endpoint) => `  ${endpoint.url}`)
+    ...endpoints.map((endpoint) => `  ${printed(endpoint)}`)
   ].join('\n')
 }

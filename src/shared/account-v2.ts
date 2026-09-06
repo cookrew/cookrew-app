@@ -85,6 +85,15 @@ export interface AccountStatus {
   legacy: { handle: string } | null
   /** The session died of old age; the next authed action needs the password. */
   sessionExpired: boolean
+  /**
+   * THE APP IS POINTED AT A REGISTRY THIS ACCOUNT WAS NOT CLAIMED AT.
+   *
+   * Null in the ordinary case. Non-null means every authed call is going to a
+   * deployment that has never heard of this token, so its refusals say nothing
+   * about the session — which is why they no longer end it. The surface says so
+   * rather than leaving the owner with an account that answers nothing.
+   */
+  registryMismatch: { signedInAt: string; pointedAt: string } | null
   /** Workspaces of THIS Mac may be offered to the account's other devices. */
   workspacesReachable: boolean
   /**
@@ -358,3 +367,13 @@ export interface AdmittedPhone {
   admittedAt: number
   lastSeenAt: number
 }
+
+/**
+ * The one sentence for a registry mismatch, said the same way wherever it is
+ * shown. Both origins are named: which one is wrong depends on what the owner
+ * meant, and only they know.
+ */
+export const registryMismatchSentence = (at: {
+  signedInAt: string
+  pointedAt: string
+}): string => `This Mac is signed in at ${at.signedInAt}; the app is pointed at ${at.pointedAt}.`

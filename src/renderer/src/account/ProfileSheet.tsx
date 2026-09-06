@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { registryMismatchSentence } from '../../../shared/account-v2'
 import type { AccountProfile, AccountStatus, AdmittedPhone } from '../../../shared/account-v2'
 import type { ApprovalRequest } from '../../../shared/account-approvals'
 import type { WorkspaceMeta } from '../../../shared/model'
@@ -242,6 +243,16 @@ export function ProfileSheet({
             </button>
           ))}
         </nav>
+
+        {/* THE APP IS AT THE WRONG REGISTRY. Above the session row, because
+            while this is true every refusal underneath it — including "your
+            session ended" — is coming from a deployment that has never heard
+            of this account, and answering the password prompt cannot help. */}
+        {status.registryMismatch && (
+          <p className="gs-paste-error" role="alert">
+            {registryMismatchSentence(status.registryMismatch)}
+          </p>
+        )}
 
         {/* THE SESSION ENDED — the sentence comes WITH the field, in the
             header, so it is on screen whichever tab is open. Every tab's own

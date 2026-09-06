@@ -43,6 +43,22 @@ export interface ReachCardLite {
   readonly deviceId: string
   readonly lan: readonly ReachAddressLite[]
   readonly tailnet: ReachAddressLite | null
+  /**
+   * THE ORIGINS A PAGE UNDER THE RELAY BASE IS ALLOWED TO TRY (Reach v2.1).
+   *
+   * `lan` and `tailnet` are bare-IP URLs. They are perfectly good for a page
+   * that is already off cookrew.dev and about to navigate, and they are
+   * USELESS to a page that must not navigate: opening one from cookrew.dev
+   * gets a certificate warning or a silent failure, because no public CA will
+   * ever vouch for `https://192.168.2.40:8643`.
+   *
+   * `trusted` holds the same addresses under names the Mac holds a real
+   * certificate for — `https://192-168-2-40.<id>.d.cookrew.dev:8643` — and is
+   * EMPTY when it holds none (no account, no internet, issuance not done). An
+   * empty list is the honest answer and it simply means no live switch today,
+   * never a fall back to a bare IP.
+   */
+  readonly trusted?: readonly string[]
 }
 
 export interface Candidate {
@@ -91,6 +107,16 @@ export const betterCandidates = (
 export interface HelloReply {
   readonly deviceId?: string
   readonly nonce?: string
+  /**
+   * The device's signature over the challenge, checked by the REGISTRY.
+   *
+   * Unused by the navigating switch, which is judged sufficient by the device
+   * id and the echoed nonce: it runs on a page already served by the Mac, so
+   * the candidate has already presented a certificate this browser accepted.
+   * A page under the relay base has no such proof — every trusted name is
+   * signed by the same public CA — so `/v2/verify-hello` is the gate there.
+   */
+  readonly sig?: string
 }
 
 export interface SwitchDeps {
@@ -198,25 +224,29 @@ export const askHello = async (
   }
 }
 
-export interface PathSwitchOptions {
-  readonly deps: SwitchDeps
+export interface RaceLoopOptions {
+  /** One race. Never rejects; the loop drops a rejection anyway. */
+  readonly race: () => Promise<unknown>
   readonly everyMs?: number
   /** window, or a stand-in with the three listeners this uses. */
   readonly on?: (event: string, listener: () => void) => () => void
   readonly setInterval?: (fn: () => void, ms: number) => () => void
-  readonly log?: (message: string) => void
 }
 
 /**
- * Run the race on a timer, and whenever the network might just have changed.
+ * Run a race on a timer, and whenever the network might just have changed.
  *
  * `online` and `visibilitychange` are the two moments that matter and neither
  * is covered by a 30-second clock: a phone taken out of a pocket inside the
  * house is on the LAN the instant its screen wakes, and waiting half a minute
  * to notice is the difference between "it just works" and "it eventually works".
+ *
+ * Shared by both switchers — the navigating one below and the data-plane one
+ * in plane-switch.ts. The schedule and the ONE-AT-A-TIME rule are the same
+ * problem in both, and a second copy is a second place for a phone to end up
+ * running three probes every time it wakes.
  */
-export const startPathSwitching = (options: PathSwitchOptions): (() => void) => {
-  const log = options.log ?? ((): void => undefined)
+export const startRaceLoop = (options: RaceLoopOptions): (() => void) => {
   let running = false
 
   const race = (): void => {
@@ -225,10 +255,8 @@ export const startPathSwitching = (options: PathSwitchOptions): (() => void) => 
     // could navigate twice.
     if (running) return
     running = true
-    void switchIfBetter(options.deps)
-      .then((outcome) => {
-        if (outcome === 'switched' || outcome === 'unreachable') log(`path switch: ${outcome}`)
-      })
+    void options
+      .race()
       .catch(() => undefined)
       .finally(() => void (running = false))
   }
@@ -251,6 +279,30 @@ export const startPathSwitching = (options: PathSwitchOptions): (() => void) => 
   ]
   race()
   return () => offs.forEach((off) => off())
+}
+
+export interface PathSwitchOptions {
+  readonly deps: SwitchDeps
+  readonly everyMs?: number
+  /** window, or a stand-in with the three listeners this uses. */
+  readonly on?: (event: string, listener: () => void) => () => void
+  readonly setInterval?: (fn: () => void, ms: number) => () => void
+  readonly log?: (message: string) => void
+}
+
+/** The navigating switch, on the loop. Root-served companions only. */
+export const startPathSwitching = (options: PathSwitchOptions): (() => void) => {
+  const log = options.log ?? ((): void => undefined)
+  return startRaceLoop({
+    ...(options.everyMs !== undefined ? { everyMs: options.everyMs } : {}),
+    ...(options.on ? { on: options.on } : {}),
+    ...(options.setInterval ? { setInterval: options.setInterval } : {}),
+    race: () =>
+      switchIfBetter(options.deps).then((outcome) => {
+        if (outcome === 'switched' || outcome === 'unreachable') log(`path switch: ${outcome}`)
+        return outcome
+      })
+  })
 }
 
 /** Where this page is, as the badge reads it. */

@@ -47,7 +47,7 @@ const claim = async (username: string): Promise<string> => {
 }
 
 const read = (p: string, who?: string): Promise<string> =>
-  fetch(`${origin}${p}`, { headers: who === undefined ? {} : { cookie: `cr_session=${who}` } }).then((r) => r.text())
+  fetch(`${origin}${p}`, { headers: who === undefined ? {} : { cookie: `__Host-cr_session=${who}` } }).then((r) => r.text())
 
 beforeAll(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'v2-team-page-'))
@@ -209,7 +209,7 @@ describe('the page itself', () => {
   })
 
   it('is never cached, because it is rendered for one reader', async () => {
-    const res = await fetch(`${origin}/@drej/alpha`, { headers: { cookie: `cr_session=${token.mira}` } })
+    const res = await fetch(`${origin}/@drej/alpha`, { headers: { cookie: `__Host-cr_session=${token.mira}` } })
     expect(res.headers.get('cache-control')).toBe('private, no-store')
   })
 

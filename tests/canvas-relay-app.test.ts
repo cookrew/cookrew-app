@@ -184,7 +184,7 @@ const asPhone = async (path: string, init: RequestInit = {}): Promise<Response> 
   fetch(`${site.origin}${prefix()}${path}`, {
     ...init,
     redirect: 'manual',
-    headers: { cookie: `cr_session=${phoneSession}`, ...(init.headers as Record<string, string>) }
+    headers: { cookie: `__Host-cr_session=${phoneSession}`, ...(init.headers as Record<string, string>) }
   })
 
 describe('the app half, holding a real line', () => {

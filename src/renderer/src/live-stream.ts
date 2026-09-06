@@ -116,6 +116,22 @@ export class ReconnectingStream {
     this.connect()
   }
 
+  /**
+   * Reconnect WHETHER OR NOT the link is down — the data plane moved and this
+   * connection is on the old one (plane-streams.ts).
+   *
+   * The opposite of `revive`, and deliberately its own method rather than a
+   * flag: reviving is about a channel that failed, and restarting is about a
+   * healthy channel that is now pointed at the wrong place. Collapsing the two
+   * would mean either dropping live streams on every foreground return or
+   * leaving the canvas fed through the relay after a switch onto the LAN.
+   */
+  restart(): void {
+    if (this.closed) return
+    this.retry = 0
+    this.connect()
+  }
+
   close(): void {
     this.closed = true
     if (this.timer !== null) this.cancel(this.timer)
@@ -184,6 +200,8 @@ export interface TerminalStreamHandle {
   close(): void
   /** Reconnect NOW if the link is down — foreground return, network back. */
   revive(): void
+  /** Reopen on the current data plane, live or not. See plane-streams.ts. */
+  restart(): void
 }
 
 export const TERMINAL_STREAM_BACKOFF = [400, 800, 1500, 3000, 5000] as const
@@ -200,5 +218,9 @@ export function attachTerminalStream(
   stream.on('hello', (e) => onHello?.(JSON.parse(e.data as string) as { cols: number; rows: number }))
   stream.on('data', (e) => onData(JSON.parse(e.data as string) as string))
   stream.on('exit', () => stream.close())
-  return { close: () => stream.close(), revive: () => stream.revive() }
+  return {
+    close: () => stream.close(),
+    revive: () => stream.revive(),
+    restart: () => stream.restart()
+  }
 }

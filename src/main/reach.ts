@@ -2,7 +2,7 @@ import { X509Certificate, createHash } from 'node:crypto'
 import { canonicalJson } from '../shared/canonical-json'
 import type { AccountFile } from './account-v2'
 import { signWithDevice } from './account-v2'
-import { isTailnetHost } from './tailscale'
+import { reachSlots } from './reach-slots'
 
 /**
  * THE REACH CARD: how to get to this Mac, said once, signed.
@@ -52,8 +52,8 @@ export type ReachCard = {
   readonly at: string
 }
 
-/** More addresses than a machine with three interfaces has; the registry's cap. */
-export const LAN_MAX = 8
+/** The registry's own cap, decided once beside the slot rule. */
+export { LAN_MAX } from './reach-slots'
 
 export type SignedReach = {
   readonly reach: ReachCard
@@ -95,33 +95,33 @@ export type ReachInput = {
  * The card. Tailnet first because there is at most one and it is the address
  * that works off the LAN; everything else direct and verifiable is `lan`.
  *
+ * WHICH addresses land in which slot is reach-slots.ts · `reachSlots`, shared
+ * with the endpoint list so that what this Mac PRINTS as a trusted name and
+ * what the registry's zone will ANSWER are the same set by construction.
+ *
  * The LAN list is capped at the registry's own limit rather than sent long and
  * refused whole: a machine that briefly has nine interfaces (a VM bridge, a
  * VPN coming up) would otherwise lose its reach card entirely, and the ninth
  * address is never the one that matters.
  */
 export const reachCard = (input: ReachInput): ReachCard => {
-  const lan: ReachAddress[] = []
-  let tailnet: ReachAddress | null = null
+  const certFp = input.certFp
   const seen = new Set<string>()
-  for (const endpoint of input.endpoints) {
-    if (endpoint.kind === 'loopback') continue
-    const url = withoutQuery(endpoint.url)
-    if (!url || !input.certFp || seen.has(url)) continue
-    seen.add(url)
-    const address: ReachAddress = { url, certFp: input.certFp }
-    // `kind` is the server's own classification; the host check is the
-    // backstop for an endpoint list that grew a new kind name.
-    if (endpoint.kind === 'tailscale' || isTailnetHost(endpoint.host)) {
-      if (!tailnet) tailnet = address
-      continue
+  const usable: { kind: string; host: string; url: string }[] = []
+  if (certFp) {
+    for (const endpoint of input.endpoints) {
+      const url = withoutQuery(endpoint.url)
+      if (!url || seen.has(url)) continue
+      seen.add(url)
+      usable.push({ kind: endpoint.kind, host: endpoint.host, url })
     }
-    lan.push(address)
   }
+  const slots = reachSlots(usable)
   return {
     deviceId: input.deviceId,
-    lan: lan.slice(0, LAN_MAX),
-    tailnet,
+    lan: slots.lan.map((slot) => ({ url: slot.url, certFp: certFp as string })),
+    tailnet:
+      slots.tailnet === null ? null : { url: slots.tailnet.url, certFp: certFp as string },
     relay: input.relay,
     at: new Date(input.at).toISOString()
   }
@@ -156,9 +156,19 @@ export type ReachPublisherDeps = {
   readonly certFp: () => string | null
   readonly relay: () => boolean
   readonly workspaces: () => readonly { id: string; name: string }[]
+  /**
+   * REACH v2.1 — the origins a browser will trust for this Mac right now.
+   *
+   * EMPTY unless a certificate is actually held (mobile-server · trustedOrigins),
+   * because a phone reads this list as "these load without a warning". Absent
+   * is the same as empty: a build with no certificate half publishes exactly
+   * what it published before names existed.
+   */
+  readonly trusted?: () => readonly string[]
   readonly register: (
     workspaces: readonly { id: string; name: string }[],
-    reach: SignedReach
+    reach: SignedReach,
+    trusted: readonly string[]
   ) => Promise<{ ok: boolean; reason?: string; message?: string } | unknown>
   readonly now?: () => number
   /** How often the address list is re-read looking for a network change. */
@@ -197,6 +207,13 @@ export const createReachPublisher = (deps: ReachPublisherDeps): ReachPublisher =
   const later = deps.setTimeout ?? ((fn, ms) => setTimeout(fn, ms))
   const cancel = deps.clearTimeout ?? ((handle) => clearTimeout(handle as NodeJS.Timeout))
   let last: ReachCard | null = null
+  /**
+   * The trusted list the REGISTRY took, beside the card it took. It is not in
+   * the card and not in the signature, so `sameReach` cannot see it — and a
+   * Mac whose first certificate has just arrived would otherwise read
+   * "unchanged" and never tell cookrew.dev its names exist.
+   */
+  let lastTrusted = ''
   let attempt = 0
   let retryHandle: unknown = null
   let retryAt: number | null = null
@@ -251,8 +268,11 @@ export const createReachPublisher = (deps: ReachPublisherDeps): ReachPublisher =
     const built = build()
     if (!built) return 'skipped'
     let refusal: string | null = null
+    const trusted = deps.trusted?.() ?? []
     try {
-      refusal = refusalOf(await deps.register(deps.workspaces(), signReach(built.account, built.card)))
+      refusal = refusalOf(
+        await deps.register(deps.workspaces(), signReach(built.account, built.card), trusted)
+      )
     } catch (error) {
       refusal = (error as Error).message || 'network'
     }
@@ -266,6 +286,7 @@ export const createReachPublisher = (deps: ReachPublisherDeps): ReachPublisher =
       return 'refused'
     }
     last = built.card
+    lastTrusted = trusted.join(' ')
     attempt = 0
     announced = null
     clearRetry()
@@ -276,7 +297,9 @@ export const createReachPublisher = (deps: ReachPublisherDeps): ReachPublisher =
   const publish = async (reason: string): Promise<PublishOutcome> => {
     const built = build()
     if (!built) return 'skipped'
-    if (sameReach(last, built.card)) return 'unchanged'
+    if (sameReach(last, built.card) && (deps.trusted?.() ?? []).join(' ') === lastTrusted) {
+      return 'unchanged'
+    }
     return send(reason)
   }
 

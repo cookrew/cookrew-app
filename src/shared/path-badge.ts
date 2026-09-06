@@ -15,6 +15,8 @@
  * PROBING no matter which host is in the address bar.
  */
 
+import { addressFromTrustedName } from './reach-names'
+
 export type PathState = 'LAN' | 'TAILNET' | 'RELAY' | 'OFFLINE' | 'PROBING'
 
 /** What the companion's transport knows about itself. */
@@ -46,12 +48,24 @@ export type PathBadgeInput = {
    * can be fronted by any host at all; classifying by hostname would then read
    * LAN off a page whose every request is going through cookrew.dev.
    *
-   * It is `relayed` and not a full path override because there is nothing to
-   * override yet: under a prefix the data plane IS the relay, always. Phase C3
-   * moves the data plane live without changing the address bar, and this is
-   * where that fact will be supplied when it exists.
+   * It says only "do not read the address bar"; WHICH path is carrying the
+   * data plane is `plane`, below.
    */
   readonly relayed?: boolean
+  /**
+   * WHICH TRANSPORT IS ACTUALLY CARRYING THE DATA PLANE (phase C3).
+   *
+   * Only meaningful under a prefix, and it is the whole of the promise the
+   * address bar can no longer keep: the page stays at cookrew.dev for the life
+   * of the session while the requests underneath move to the Mac's own trusted
+   * name and back. The badge is then the only thing on screen telling the
+   * truth about the transport, which is why it is a supplied FACT — read off
+   * the store that composes the request URLs — and never re-derived here.
+   *
+   * Absent means the relay, because the shell arrived over the relay and a
+   * plane that has not moved has not moved.
+   */
+  readonly plane?: 'LAN' | 'TAILNET' | 'RELAY'
 }
 
 export type PathBadgeView = {
@@ -144,6 +158,17 @@ export const classifyOrigin = (
 ): PathState => {
   const host = hostOf(origin)
   if (!host) return 'OFFLINE'
+  /**
+   * A REACH v2.1 NAME IS THE ADDRESS IT SPELLS, NOT THE ZONE IT SITS IN.
+   *
+   * `192-168-2-40.<id>.d.cookrew.dev` is the Wi-Fi, and it fell through every
+   * test below to the closing "a public name we cannot name" — so the badge
+   * said RELAY over a page whose bytes never left the house. That is the one
+   * reading the badge exists to prevent, and it is what a phone gets from
+   * every trusted URL `cookrew mobile` prints.
+   */
+  const spelled = addressFromTrustedName(host)
+  if (spelled !== null) return isTailnetHostname(spelled) ? 'TAILNET' : isLanHostname(spelled) ? 'LAN' : 'RELAY'
   const registryHost = hostOf(registryOrigin)
   if (registryHost && bareHost(host) === bareHost(registryHost)) return 'RELAY'
   if (isTailnetHostname(host)) return 'TAILNET'
@@ -162,8 +187,8 @@ export const pathBadgeView = (input: PathBadgeInput): PathBadgeView => {
         ? 'PROBING'
         : input.relayed === true
           ? // A dead or reconnecting channel still outranks this: OFFLINE is a
-            // fact about the transport, RELAY is a fact about the path.
-            'RELAY'
+            // fact about the transport, and the plane is a fact about the path.
+            (input.plane ?? 'RELAY')
           : classifyOrigin(input.origin, registryOrigin)
   return {
     state,

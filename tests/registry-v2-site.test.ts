@@ -117,7 +117,7 @@ describe('the sign-in sheet (W1)', () => {
     expect(ASSETS['site.js'].body).toContain('account-sheet')
     expect(ASSETS['site.js'].body).toContain('/v2/sessions')
     // The session token is never read by a script: the server sets the cookie.
-    expect(ASSETS['site.js'].body).not.toContain('cr_session=')
+    expect(ASSETS['site.js'].body).not.toContain('__Host-cr_session=')
   })
 })
 
@@ -134,7 +134,7 @@ describe('/me', () => {
   })
 
   it('renders the reader’s own account with the cookie', async () => {
-    const res = await get('/me', { cookie: `cr_session=${session}` })
+    const res = await get('/me', { cookie: `__Host-cr_session=${session}` })
     expect(res.status).toBe(200)
     const body = await res.text()
     expect(body).toContain('@drej')
@@ -146,7 +146,7 @@ describe('/me', () => {
   })
 
   it('offers a passkey, an authenticator and the requests waiting to be answered', async () => {
-    const body = await (await get('/me', { cookie: `cr_session=${session}` })).text()
+    const body = await (await get('/me', { cookie: `__Host-cr_session=${session}` })).text()
     // Phase 4: these are verbs now, not a row that says "coming".
     expect(body).toContain('Passkey (Touch ID / Face ID)')
     expect(body).toContain('data-add-passkey')
@@ -159,27 +159,27 @@ describe('/me', () => {
   })
 
   it('loads the ladder’s screens beside the account sheet', async () => {
-    const res = await get('/me', { cookie: `cr_session=${session}` })
+    const res = await get('/me', { cookie: `__Host-cr_session=${session}` })
     expect(await res.text()).toContain('/assets/factors.js')
     // Still one origin and no inline script: the CSP has not been widened.
     expect(res.headers.get('content-security-policy')).toContain("script-src 'self'")
   })
 
   it('escapes what a person typed into their own profile', async () => {
-    const body = await (await get('/me', { cookie: `cr_session=${session}` })).text()
+    const body = await (await get('/me', { cookie: `__Host-cr_session=${session}` })).text()
     expect(body).toContain('Drej &lt;script&gt;')
     expect(body).not.toContain('Drej <script>')
   })
 
   it('refuses a cookie that is not a live session', async () => {
-    expect((await get('/me', { cookie: 'cr_session=rubbish.rubbish' })).status).toBe(401)
+    expect((await get('/me', { cookie: '__Host-cr_session=rubbish.rubbish' })).status).toBe(401)
     // A v1 account cookie is not a v2 session and must not open this page.
     expect((await get('/me', { cookie: 'cr_account=rubbish.rubbish' })).status).toBe(401)
   })
 
   it('cannot be taken as a handle', async () => {
     // /me is reserved: an owner called "me" must never shadow this page.
-    const body = await (await get('/me', { cookie: `cr_session=${session}` })).text()
+    const body = await (await get('/me', { cookie: `__Host-cr_session=${session}` })).text()
     expect(body).toContain('id="me"')
   })
 })

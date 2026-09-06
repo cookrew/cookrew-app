@@ -159,7 +159,7 @@ describe('POST /v2/accounts — claiming a name', () => {
     expect(body.session.exp).toBeGreaterThan(Date.now())
 
     const cookie = res.headers.get('set-cookie') ?? ''
-    expect(cookie).toMatch(/^cr_session=/)
+    expect(cookie).toMatch(/^__Host-cr_session=/)
     expect(cookie).toContain('HttpOnly')
     expect(cookie).toContain('SameSite=Lax')
     expect(cookie).toContain('Path=/')
@@ -288,7 +288,7 @@ describe('GET /v2/me — the profile behind a session', () => {
 
   it('takes the session cookie as well as the Bearer', async () => {
     const owner = await claim()
-    const res = await call('GET', '/v2/me', undefined, { cookie: `cr_session=${owner.token}` })
+    const res = await call('GET', '/v2/me', undefined, { cookie: `__Host-cr_session=${owner.token}` })
     expect(res.status).toBe(200)
     expect(((await res.json()) as { username: string }).username).toBe(owner.username)
   })
@@ -457,7 +457,7 @@ describe('DELETE /v2/sessions/current — signing out', () => {
 
   it('is also reachable as a POST, because a page can only send those', async () => {
     const owner = await claim()
-    const out = await call('POST', '/v2/sessions/current', undefined, { cookie: `cr_session=${owner.token}` })
+    const out = await call('POST', '/v2/sessions/current', undefined, { cookie: `__Host-cr_session=${owner.token}` })
     expect(out.status).toBe(204)
     expect((await call('GET', '/v2/me', undefined, bearer(owner.token))).status).toBe(401)
   })
@@ -467,7 +467,7 @@ describe('a cookie-carried write from another site', () => {
   it('is refused when the Origin is not ours', async () => {
     const owner = await claim()
     const res = await call('PATCH', '/v2/me', { displayName: 'Taken over' }, {
-      cookie: `cr_session=${owner.token}`,
+      cookie: `__Host-cr_session=${owner.token}`,
       origin: 'https://evil.example'
     })
     expect(res.status).toBe(403)
@@ -478,7 +478,7 @@ describe('a cookie-carried write from another site', () => {
 describe('accountOf — v1 and v2 agree about who is reading', () => {
   it('answers whoami for a v2 session cookie and Bearer alike', async () => {
     const owner = await claim()
-    const byCookie = await call('GET', '/v1/identity/whoami', undefined, { cookie: `cr_session=${owner.token}` })
+    const byCookie = await call('GET', '/v1/identity/whoami', undefined, { cookie: `__Host-cr_session=${owner.token}` })
     expect(byCookie.status).toBe(200)
     expect(((await byCookie.json()) as { sub: string }).sub).toBe(owner.username)
 
@@ -620,7 +620,7 @@ describe('the security review’s findings, over HTTP', () => {
   it('treats a null Origin as another site, not as no site', async () => {
     const owner = await claim()
     const res = await call('PATCH', '/v2/me', { displayName: 'From a sandbox' }, {
-      cookie: `cr_session=${owner.token}`,
+      cookie: `__Host-cr_session=${owner.token}`,
       origin: 'null'
     })
     expect(res.status).toBe(403)

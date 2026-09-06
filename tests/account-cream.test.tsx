@@ -58,6 +58,7 @@ const STATUS: AccountStatus = {
   envUsername: null,
   legacy: null,
   sessionExpired: false,
+  registryMismatch: null,
   workspacesReachable: true,
   recoveryCodesSavedAt: null,
   recoveryCodesLeft: null,

@@ -244,6 +244,9 @@ export function accountStatus(deps: AccountIpcDeps): AccountStatus {
     recoveryCodesSavedAt: account?.recoveryCodesSavedAt ?? null,
     recoveryCodesLeft: null,
     sessionExpired: account !== null && !deps.accounts.sessionLive(),
+    // Non-null only when account.json names one registry and this process is
+    // talking to another — the state in which a 401 means nothing at all.
+    registryMismatch: account === null ? null : deps.accounts.registryMismatch(),
     workspacesReachable: account?.workspacesReachable ?? false,
   }
 }

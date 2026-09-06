@@ -18,9 +18,27 @@
 //   POST /v1/identity/register       enrol a credential (TOFU)
 //   POST /v1/identity/assert         verify a ceremony, mint a short-lived token
 //   POST /v2/accounts                claim a username with a password (identity v2)
-//   POST /v2/sessions                sign in; the server sets cr_session HttpOnly
+//   POST /v2/sessions                sign in; the server sets __Host-cr_session HttpOnly
 //   GET  /v2/me                      the reader's devices, desktops and security
 //   GET  /me                         the same, as a page
+//   POST /v2/me/desktops/:id/cert    a Mac's own certificate, by ACME dns-01
+//   GET  /v2/me/desktops/:id/cert    pending / issued / failed
+//
+// REACH v2.1 flags, ALL OPTIONAL and off by default:
+//   --dns-port 8753          bind UDP+TCP DNS on this port. Absent → no listener.
+//   --dns-zone d.cookrew.dev the zone we are authoritative for.
+//   --dns-ns ns1.d.cookrew.dev=1.2.3.4,ns2.d.cookrew.dev=5.6.7.8
+//                            the NS records and their glue — the same values
+//                            typed once at the parent zone.
+//   --acme-directory <url>   default Let's Encrypt STAGING. Production is
+//                            always an explicit value: a typo must not be able
+//                            to spend the real 50-a-week allowance.
+//   --acme-email <addr>      optional contact on the ACME account.
+//   --acme-weekly-budget 35  new certificates this registry may order in a
+//                            week, across every Mac. Let's Encrypt counts 50
+//                            per registered domain and cookrew.dev's OWN
+//                            renewal comes out of the same allowance.
+// Absent flags mean nothing listens and nothing changes.
 //
 // Flags: --port --data --seed --origin --chain --terms-ttl. The origin defaults to the port that is
 // bound; pass it only to serve a ceremony on a host other than localhost, and a
@@ -43,6 +61,11 @@ import { ReleaseCache } from './releases'
 import { CommitsCache } from './github-commits'
 import { Pulse } from './pulse'
 import { createV2 } from './v2-routes'
+import { AcmeClient, LETSENCRYPT_STAGING } from './acme-client'
+import { createNames, type NamesFeature } from './names'
+import { ORDERS_PER_WEEK } from './cert-store'
+import { createDnsServer, type DnsServer } from './dns-server'
+import { readNameServers } from './dns-glue'
 import { buildManifest, signManifest } from '../../src/main/preset-publish'
 import { scrubForPublish } from '../../src/main/preset-scrub'
 import type { TeamSnapshot } from '../../src/main/teams'
@@ -182,6 +205,73 @@ if (!resolved.ok) {
   process.exit(1)
 }
 const identity = new IdentityService(DATA, resolved.config)
+// The v2 half, built before the names half because the DNS zone reads its
+// desktops: one store of where a Mac is, answered on two protocols.
+const v2 = createV2(DATA, { origin: resolved.config.origin })
+
+/**
+ * REACH v2.1 — DNS AND ACME, ASSEMBLED ONLY IF ASKED FOR.
+ *
+ * Both flags together or neither: a port with no name servers would serve an
+ * SOA naming nobody, and name servers with no port would be a promise nothing
+ * answers. A malformed value REFUSES AT BOOT rather than starting a listener
+ * that quietly answers the wrong glue — the parent zone's records are typed by
+ * hand once and have to match these exactly.
+ */
+const DNS_PORT = Number(flag('dns-port', '0'))
+const DNS_ZONE = flag('dns-zone', 'd.cookrew.dev').toLowerCase()
+const DNS_NS = readNameServers(flag('dns-ns', ''))
+const ACME_DIRECTORY = flag('acme-directory', LETSENCRYPT_STAGING)
+const ACME_EMAIL = flag('acme-email', '')
+const ACME_WEEKLY_BUDGET = Number(flag('acme-weekly-budget', String(ORDERS_PER_WEEK)))
+
+/** One counts line a minute, once DNS is up. Totals only — never a query. */
+const COUNTS_EVERY_MS = 60_000
+/** Held for the lifetime of the process, so its counters stay reachable. */
+let dns: DnsServer | null = null
+let names: NamesFeature | undefined
+// The TRIGGER is the flag being present, not the value parsing: `--dns-port`
+// with nothing after it must refuse rather than start a registry that silently
+// serves no names at all.
+if (args.includes('--dns-port') || DNS_NS !== null) {
+  if (!Number.isInteger(DNS_PORT) || DNS_PORT < 1 || DNS_PORT > 65535) {
+    console.error(`refusing to start: --dns-port ${flag('dns-port', '')} is not a port`)
+    process.exit(1)
+  }
+  if (!Number.isInteger(ACME_WEEKLY_BUDGET) || ACME_WEEKLY_BUDGET < 1) {
+    console.error(
+      `refusing to start: --acme-weekly-budget ${flag('acme-weekly-budget', '')} is not a positive number of certificates`
+    )
+    process.exit(1)
+  }
+  if (DNS_NS === null) {
+    console.error(
+      'refusing to start: --dns-port needs --dns-ns host=address,host=address, ' +
+        'where every address is a literal IP — the same glue typed into the parent zone'
+    )
+    process.exit(1)
+  }
+  names = createNames({
+    zone: DNS_ZONE,
+    ns: DNS_NS,
+    dataDir: DATA,
+    // The DNS gate reads the SAME store the /me page does: a name exists only
+    // while that Mac is publishing that address, and there is exactly one
+    // place that fact lives.
+    desktops: {
+      find: (deviceId) => v2.accounts.desktopFor(deviceId),
+      changedAt: () => v2.accounts.desktopsChangedAt()
+    },
+    weeklyBudget: ACME_WEEKLY_BUDGET,
+    acme: new AcmeClient({
+      directory: ACME_DIRECTORY,
+      dataDir: DATA,
+      ...(ACME_EMAIL === '' ? {} : { email: ACME_EMAIL }),
+      log: (message) => console.log(message)
+    }),
+    log: (message) => console.log(message)
+  })
+}
 
 if (!Number.isInteger(TERMS_TTL_MS) || TERMS_TTL_MS < 1) {
   console.error(`refusing to start: --terms-ttl ${flag('terms-ttl', '')} is not a positive number of ms`)
@@ -232,14 +322,52 @@ createRegistry({
   // with every name looking free.
   // The origin a browser sees, which is what WebAuthn compares an assertion
   // against — the same string /v1 identity is configured with.
-  v2: createV2(DATA, { origin: resolved.config.origin }),
+  v2,
   note: (message) => console.error(message),
+  ...(names === undefined ? {} : { names }),
   authorize: makeAuthorize(store, identity, pricing)
 }).listen(PORT, () => {
   // Print the ORIGIN, not a different spelling of the same port. The old banner
   // said 127.0.0.1 while identity accepted only localhost, so the server was
   // advertising the one address on which nobody could authenticate.
   console.log(`registry on ${resolved.config.origin}  data=${DATA}${DEV ? '  [DEV]' : ''}`)
+  if (names !== undefined && DNS_NS !== null) {
+    // ONE LINE PER FEATURE, and nothing in either of them that is a secret:
+    // the zone, the port and the glue are public by definition (they are typed
+    // into the parent zone), and the ACME account key is never printed.
+    console.log(`dns on :${DNS_PORT}  zone=${DNS_ZONE}  ns=${DNS_NS.map((n) => `${n.host}=${n.address}`).join(',')}`)
+    console.log(
+      `acme directory=${ACME_DIRECTORY}${ACME_EMAIL === '' ? '' : `  contact=${ACME_EMAIL}`}` +
+        `  weekly-budget=${ACME_WEEKLY_BUDGET}`
+    )
+    /**
+     * HELD, NOT DROPPED. The server was created inline and thrown away, so
+     * `counts()` — the only window this process has onto whether DNS is
+     * answering or being flooded — was unreachable from the moment it started.
+     * One line a minute, and nothing in it that is a query: totals only.
+     */
+    dns = createDnsServer({ port: DNS_PORT, respond: names.respond, log: (m) => console.log(m) })
+    void dns
+      .start()
+      .then(() => {
+        const timer = setInterval(() => {
+          const c = dns?.counts()
+          if (c === undefined) return
+          console.log(
+            `dns counts queries=${c.queries} answers=${c.answers} truncated=${c.truncated} ` +
+              `rate-limited=${c.refusedByRate} malformed=${c.malformed} ` +
+              `tcp-refused=${c.tcpRefused} tcp-cut-off=${c.tcpCutOff}`
+          )
+        }, COUNTS_EVERY_MS)
+        // A metrics line must not be the reason the process stays alive.
+        timer.unref()
+      })
+      .catch((error: unknown) => {
+        // The HTTP half is already serving. A DNS port that will not bind is a
+        // loud line and a registry that still answers, never a dead process.
+        console.error(`dns did not start: ${error instanceof Error ? error.message : String(error)}`)
+      })
+  }
   for (const p of store.list()) {
     console.log(`  ${p.name.padEnd(16)} v${String(p.version).padEnd(3)} ${p.visibility.padEnd(11)} ${p.id}`)
   }

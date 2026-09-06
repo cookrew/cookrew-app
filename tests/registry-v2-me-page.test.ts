@@ -98,7 +98,7 @@ afterAll(async () => {
 })
 
 const mePage = async (): Promise<{ status: number; csp: string; html: string }> => {
-  const res = await fetch(`${origin}/me`, { headers: { cookie: `cr_session=${session}` } })
+  const res = await fetch(`${origin}/me`, { headers: { cookie: `__Host-cr_session=${session}` } })
   return {
     status: res.status,
     csp: res.headers.get('content-security-policy') ?? '',
@@ -207,7 +207,7 @@ describe('the page stays inert', () => {
 describe('the relay path, when the Mac is holding no line (phase 3)', () => {
   it('answers 503 with a sentence and a way back, as a page', async () => {
     const res = await fetch(`${origin}/relay/@picker/desktop/${deviceId}/`, {
-      headers: { cookie: `cr_session=${session}`, accept: 'text/html' }
+      headers: { cookie: `__Host-cr_session=${session}`, accept: 'text/html' }
     })
     expect(res.status).toBe(503)
     expect(res.headers.get('content-type')).toContain('text/html')

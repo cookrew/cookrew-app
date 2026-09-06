@@ -235,7 +235,7 @@ const asPhone = (path: string, init: RequestInit = {}): Promise<Response> =>
     redirect: 'manual',
     ...init,
     headers: {
-      cookie: `cr_session=${phoneSession}`,
+      cookie: `__Host-cr_session=${phoneSession}`,
       'sec-fetch-site': 'same-origin',
       accept: 'text/html',
       ...(init.headers as Record<string, string>)
