@@ -30,9 +30,14 @@ export function measureTree(entry: string): TreeMeasure {
     let measured: TreeMeasure
     try {
       measured = measureTree(full)
-    } catch {
-      // Removed between readdir and stat — the store is live. Skip it.
-      continue
+    } catch (error) {
+      // Removed between readdir and stat — the store is live — is the one
+      // failure that means "nothing here". Anything else (EACCES, ELOOP) is
+      // a part of the tree we cannot see, and a measure that quietly left it
+      // out would report an age the hidden part may contradict. Let it throw;
+      // the caller keeps what it cannot measure.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+      throw error
     }
     bytes += measured.bytes
     files += measured.files

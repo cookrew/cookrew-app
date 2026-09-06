@@ -4238,15 +4238,22 @@ app.whenReady().then(() => {
   // deliberately quiet on the happy path — a sweep that frees nothing is the
   // normal case and does not deserve a line in the log.
   setTimeout(() => {
-    void sweepStorageInWorker(path.join(dirname, 'storage-gc-worker.js'), {
-      apply: true,
-      // Which served sessions are OPEN is a fact only the instantiator holds;
-      // a sweep not told it plans nothing for that class. At boot the answer
-      // is the empty list — served sessions die with the app — and saying so
-      // is what lets the sandboxes a crash left behind be reclaimed.
-      openServedSessions: serving.instantiator
+    // Which served sessions are OPEN is a fact only the instantiator holds;
+    // a sweep not told it plans nothing for that class. At boot the answer
+    // is the empty list — served sessions die with the app — and saying so
+    // is what lets the sandboxes a crash left behind be reclaimed. A throw
+    // here is "not told", never an uncaught error in a timer.
+    let openServedSessions: string[] | null = null
+    try {
+      openServedSessions = serving.instantiator
         .sessions()
         .map((s) => servedSessionKey(s.serviceId, s.identity.sessionId))
+    } catch (error) {
+      console.error('storage sweep: could not read open served sessions:', error)
+    }
+    void sweepStorageInWorker(path.join(dirname, 'storage-gc-worker.js'), {
+      apply: true,
+      openServedSessions
     })
       .then((swept) => {
         if (swept.skipped.length > 0) {

@@ -1,4 +1,4 @@
-import { mkdirSync, realpathSync } from 'node:fs'
+import { mkdirSync, realpathSync, utimesSync } from 'node:fs'
 import path from 'node:path'
 
 /**
@@ -93,6 +93,15 @@ export function sessionSegment(serviceId: string, sessionId: string): string {
 export function sandboxRoot(base: string, serviceId: string, sessionId: string): string {
   const dir = path.join(serviceRoot(base, serviceId), sessionSegment(serviceId, sessionId))
   mkdirSync(dir, { recursive: true })
+  // A mint is a write, and it must LOOK like one: `mkdir -p` on a directory
+  // that already exists (ordinals restart at 1 with the app, so a returning
+  // account lands on last run's path) touches nothing, and the storage sweep
+  // reads a sandbox's age from its newest write. Without this line a sweep in
+  // flight could measure the old directory, miss the session the instantiator
+  // has not registered yet, and remove a booting crew's HOME
+  // (storage-gc-served.ts writtenSincePlan is the other half).
+  const now = new Date()
+  utimesSync(dir, now, now)
   return realpathSync(dir)
 }
 

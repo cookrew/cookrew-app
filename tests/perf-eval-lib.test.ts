@@ -221,6 +221,28 @@ describe('served sessions — a policy beside the size', () => {
     expect(rows.filter((r) => r.ageMs > SERVED_GRACE_MS).map((r) => r.key)).toEqual(['svc-x/bob-1'])
   })
 
+  it('directories count as writes, as they do for the sweep; an empty sandbox is still a row', () => {
+    const rows = servedSessions(
+      [{ path: 'sessions/svc-x/ana-1/.claude.json', bytes: 7, mtimeMs: NOW - 45 * DAY }],
+      NOW,
+      [
+        { path: 'sessions/svc-x/ana-1', mtimeMs: NOW - 45 * DAY },
+        { path: 'sessions/svc-x/ana-1/.cookrew', mtimeMs: NOW - 1 * DAY },
+        { path: 'sessions/svc-x/empty-2', mtimeMs: NOW - 60 * DAY },
+        { path: 'sessions/svc-x', mtimeMs: NOW }
+      ]
+    )
+    expect(rows.map((r) => [r.key, r.bytes, r.ageMs / DAY])).toEqual([
+      ['svc-x/empty-2', 0, 60],
+      ['svc-x/ana-1', 7, 1]
+    ])
+  })
+
+  it('an entry with no mtime is treated as written now, never as ancient', () => {
+    const rows = servedSessions([{ path: 'sessions/svc-x/ana-1/.claude.json', bytes: 1 }], NOW)
+    expect(rows).toEqual([{ key: 'svc-x/ana-1', bytes: 1, newestMtimeMs: NOW, ageMs: 0 }])
+  })
+
   it('the bucket table carries the policy for the buckets that have one', () => {
     const table = renderBuckets({ 'served-sessions': 83 * 1024 * 1024, backups: 34 * 1024 * 1024, turns: 1024 })
     expect(table).toContain(BUCKET_POLICY['served-sessions'])

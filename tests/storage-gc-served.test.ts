@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { sandboxRoot } from '../src/main/session-sandbox'
-import { servedSessionCandidates, servedSessionKey } from '../src/main/storage-gc-served'
+import { servedSessionCandidates, servedSessionKey, writtenSincePlan } from '../src/main/storage-gc-served'
 
 const DAY = 24 * 60 * 60 * 1000
 const made: string[] = []
@@ -100,5 +100,70 @@ describe('servedSessionCandidates — one candidate per sandbox, or nothing', ()
     chmodSync(path.join(sessions, 'svc-b'), 0o000)
     made.push(path.join(sessions, 'svc-b'))
     expect(servedSessionCandidates(sessions)).toBeNull()
+  })
+})
+
+describe('the mint is a write the sweep can see', () => {
+  // After a restart the ordinal ledger is empty, so a returning account mints
+  // onto LAST run's directory; mkdir -p on it touches nothing. The sweep reads
+  // a sandbox's age from its newest write, so the mint must leave one.
+  it('sandboxRoot refreshes the mtime of a directory that already exists', () => {
+    const root = base()
+    const sessions = path.join(root, 'sessions')
+    fill(sessions, 'svc-a/ana-1/.claude.json', '{}', 90)
+    const when = new Date(Date.now() - 90 * DAY)
+    utimesSync(path.join(sessions, 'svc-a', 'ana-1'), when, when)
+    const before = servedSessionCandidates(sessions)![0].mtimeMs
+    expect(Date.now() - before).toBeGreaterThan(89 * DAY)
+
+    sandboxRoot(root, 'svc-a', 'svc-a-ana-1')
+
+    const after = servedSessionCandidates(sessions)![0].mtimeMs
+    expect(Date.now() - after).toBeLessThan(60_000)
+  })
+
+  it('writtenSincePlan: an old sandbox is not, a re-minted or written-to one is', () => {
+    const root = base()
+    const sessions = path.join(root, 'sessions')
+    fill(sessions, 'svc-a/ana-1/.claude.json', '{}', 90)
+    const when = new Date(Date.now() - 90 * DAY)
+    utimesSync(path.join(sessions, 'svc-a', 'ana-1'), when, when)
+    const [candidate] = servedSessionCandidates(sessions)!
+    const now = Date.now()
+    const grace = 30 * DAY
+    expect(writtenSincePlan(candidate, now, grace)).toBe(false)
+
+    sandboxRoot(root, 'svc-a', 'svc-a-ana-1')
+    expect(writtenSincePlan(candidate, now, grace)).toBe(true)
+
+    utimesSync(path.join(sessions, 'svc-a', 'ana-1'), when, when)
+    fill(sessions, 'svc-a/ana-1/.cookrew/turns/orch.jsonl', '{"turn":1}', 0)
+    expect(writtenSincePlan(candidate, now, grace)).toBe(true)
+  })
+
+  it('writtenSincePlan: a sandbox that vanished has nothing to spare; one that cannot be read is spared', () => {
+    const root = base()
+    const sessions = path.join(root, 'sessions')
+    fill(sessions, 'svc-a/ana-1/.claude.json', '{}', 90)
+    const [candidate] = servedSessionCandidates(sessions)!
+    rmSync(candidate.path, { recursive: true })
+    expect(writtenSincePlan(candidate, Date.now(), 30 * DAY)).toBe(false)
+
+    fill(sessions, 'svc-a/ana-1/.claude.json', '{}', 90)
+    fill(sessions, 'svc-a/ana-1/hidden/x', 'x', 90)
+    chmodSync(path.join(candidate.path, 'hidden'), 0o000)
+    made.push(path.join(candidate.path, 'hidden'))
+    expect(writtenSincePlan(candidate, Date.now(), 30 * DAY)).toBe(true)
+  })
+
+  it('a sandbox with an unreadable corner is not a candidate at all — kept, never half-deleted', () => {
+    const root = base()
+    const sessions = path.join(root, 'sessions')
+    fill(sessions, 'svc-a/ana-1/.claude.json', '{}', 90)
+    fill(sessions, 'svc-a/ana-1/hidden/recent', 'x', 0)
+    fill(sessions, 'svc-a/bob-1/.claude.json', '{}', 90)
+    chmodSync(path.join(sessions, 'svc-a', 'ana-1', 'hidden'), 0o000)
+    made.push(path.join(sessions, 'svc-a', 'ana-1', 'hidden'))
+    expect(servedSessionCandidates(sessions)?.map((c) => c.key)).toEqual(['svc-a/bob-1'])
   })
 })

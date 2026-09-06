@@ -3,8 +3,8 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import { roleSlug } from './roles'
 import { planStorageGc, type GcCandidate, type GcPlan } from './storage-gc'
-import { scanResidue, type ResidueEntry } from './storage-gc-residue'
-import { servedSessionCandidates } from './storage-gc-served'
+import { isResidueName, scanResidue, type ResidueEntry } from './storage-gc-residue'
+import { dirTouchedWithinGrace, servedSessionCandidates, writtenSincePlan } from './storage-gc-served'
 
 /**
  * The disk half of the storage sweep: read the stores, build the three
@@ -195,6 +195,10 @@ export function collectReferencedSidecars(roots: StorageRoots): Set<string> | nu
 function candidatesIn(dir: string, keyOf: (file: string) => string): GcCandidate[] {
   const out: GcCandidate[] = []
   for (const file of walk(dir)) {
+    // A hand-made copy inside a store (`turns/<id>.jsonl.bak-…`) would key
+    // as the ledger it backs up and be collected with it. It is residue:
+    // reported, never a candidate.
+    if (isResidueName(path.basename(file))) continue
     try {
       const stat = statSync(file)
       out.push({ key: keyOf(file), path: file, bytes: stat.size, mtimeMs: stat.mtimeMs })
@@ -257,7 +261,6 @@ export interface SweepResult extends GcPlan {
    */
   residue: readonly ResidueEntry[]
   residueBytes: number
-  skipped: readonly SweepClass[]
 }
 
 /**
@@ -329,15 +332,47 @@ export function sweepStorage(options: SweepOptions = {}): SweepResult {
   })
   if (options.apply !== true) return { ...plan, applied: false, failed: [], skipped, residue, residueBytes }
 
+  const now = options.now ?? Date.now()
+  const graceMs = options.graceMs ?? DEFAULT_GRACE_MS
   const failed: string[] = []
+  const removed: GcCandidate[] = []
+  let spared = 0
   for (const target of plan.remove) {
+    // A directory candidate is a served sandbox, and the plan is seconds old
+    // by now. A mint that landed on it since (see writtenSincePlan) makes it
+    // recent again, and recent is kept — the same grace rule, asked at the
+    // last possible moment.
+    if (writtenSincePlan(target, now, graceMs)) {
+      spared += 1
+      continue
+    }
+    // That walk took time. One stat of the directory itself — the thing a
+    // mint touches — right before the unlink is the last word.
+    if (dirTouchedWithinGrace(target.path, now, graceMs)) {
+      spared += 1
+      continue
+    }
     try {
       // Recursive because a served-session candidate is a whole sandbox
       // directory; on a file it changes nothing.
       rmSync(target.path, { recursive: true, force: true })
+      removed.push(target)
     } catch {
       failed.push(target.path)
     }
   }
-  return { ...plan, applied: true, failed, skipped, residue, residueBytes }
+  return {
+    ...plan,
+    // What was actually removed — not what was planned, not what failed —
+    // so the boot log's count and bytes never include a sandbox spared at
+    // the last moment or a file that is still there.
+    remove: removed,
+    bytes: removed.reduce((sum, c) => sum + c.bytes, 0),
+    kept: { ...plan.kept, withinGrace: plan.kept.withinGrace + spared },
+    applied: true,
+    failed,
+    skipped,
+    residue,
+    residueBytes
+  }
 }

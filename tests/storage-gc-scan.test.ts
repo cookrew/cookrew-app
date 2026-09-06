@@ -12,6 +12,7 @@ import {
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { sandboxRoot } from '../src/main/session-sandbox'
 import {
   collectReferencedSidecars,
   defaultStorageRoots,
@@ -413,6 +414,23 @@ describe('sweepStorage — served-session sandboxes', () => {
     expect(existsSync(dir)).toBe(true)
   })
 
+  it('spares, at the last moment, a planned sandbox that was minted onto since the plan', () => {
+    // The plan is made with `now` far enough ahead that the sandbox is past
+    // grace; the re-check before rm -rf uses the same `now`, so the only
+    // thing that can change the verdict is a write — here, the mint's touch.
+    const roots = store()
+    const dir = sandbox(roots, 'svc-x/ana-1', 90)
+    const planned = sweepStorage({ roots, apply: false, openServedSessions: [] })
+    expect(planned.remove.map((c) => c.key)).toEqual(['svc-x/ana-1'])
+    // A mint lands on the old path (ordinals restart with the app).
+    sandboxRoot(roots.base, 'svc-x', 'svc-x-ana-1')
+    const applied = sweepStorage({ roots, apply: true, openServedSessions: [] })
+    expect(applied.remove).toEqual([])
+    expect(applied.bytes).toBe(0)
+    expect(applied.kept.withinGrace).toBe(1)
+    expect(existsSync(dir)).toBe(true)
+  })
+
   it('a sessions store that cannot be read plans nothing for the class', () => {
     const roots = store()
     const dir = sandbox(roots, 'svc-x/ana-1', 90)
@@ -451,6 +469,20 @@ describe('sweepStorage — backup residue is reported, never planned', () => {
     expect(out.remove.map((c) => c.key)).toEqual(['dead-term'])
     expect(out.bytes).toBe(2)
     expect(existsSync(path.join(roots.base, 'turns.bak-20260807-011637', 'a.jsonl'))).toBe(true)
+  })
+
+  it('a hand-made copy INSIDE a store is residue, not a ledger — reported, never a candidate', () => {
+    const roots = store()
+    aged(path.join(roots.turns, 'dead-term.jsonl'), '{}')
+    aged(path.join(roots.turns, 'dead-term.jsonl.bak-20260823-105126'), '{"copy":true}')
+    aged(path.join(roots.attachments, 'shot.png.bak-1'), 'png')
+    const out = sweepStorage({ roots, apply: true, openServedSessions: [] })
+    expect(out.remove.map((c) => path.basename(c.path))).toEqual(['dead-term.jsonl'])
+    expect(out.residue.map((r) => path.basename(r.path)).sort()).toEqual([
+      'dead-term.jsonl.bak-20260823-105126',
+      'shot.png.bak-1'
+    ])
+    expect(existsSync(path.join(roots.turns, 'dead-term.jsonl.bak-20260823-105126'))).toBe(true)
   })
 
   it('is reported even when the sweep refuses to plan', () => {

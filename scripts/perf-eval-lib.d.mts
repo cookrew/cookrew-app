@@ -76,7 +76,11 @@ export function judge(value: number | null | undefined, budget: Budget | undefin
 export function slopePerHour(samples: readonly TimedSample[]): number | null
 export const BUCKET_POLICY: Record<string, string>
 export const SERVED_GRACE_MS: number
-export function servedSessions(entries: readonly FileEntry[], now: number): ServedSessionRow[]
+export interface DirEntry {
+  path: string
+  mtimeMs?: number
+}
+export function servedSessions(files: readonly FileEntry[], now: number, dirs?: readonly DirEntry[]): ServedSessionRow[]
 export function bucketOf(relativePath: string): string
 export function bucketStorage(entries: readonly FileEntry[]): { buckets: Record<string, number>; total: number }
 export function orphanSidecars(teams: readonly TeamSessions[], sidecars: readonly SidecarListing[]): Orphan[]

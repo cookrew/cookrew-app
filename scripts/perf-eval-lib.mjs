@@ -94,19 +94,35 @@ export const SERVED_GRACE_MS = 30 * 24 * 60 * 60 * 1000
 /**
  * The served-session sandboxes among storage entries, one row per
  * `sessions/<service>/<session>`, with bytes summed and the newest mtime.
- * Entries carry { path, bytes, mtimeMs } as walkFiles reports them. The eval
- * cannot know which sessions are OPEN (that is the running app's fact), so a
- * row's age is only ever an upper bound on what the next boot sweep reclaims.
+ * `files` are { path, bytes, mtimeMs } as walkFiles reports them; `dirs`
+ * are the directories it saw, { path, mtimeMs }, and they COUNT: the sweep
+ * (storage-gc-tree.ts) reads a sandbox's age from its newest write,
+ * directories included, so a mint or an emptied directory keeps it young,
+ * and this must agree or it reports as past grace what no sweep will take.
+ * An entry with no usable mtime is treated as written NOW — the direction
+ * that cannot overstate what is reclaimable. The eval cannot know which
+ * sessions are OPEN (that is the running app's fact), so a row's age is
+ * only ever an upper bound on what the next boot sweep reclaims.
  */
-export function servedSessions(entries, now) {
+export function servedSessions(files, now, dirs = []) {
   const rows = new Map()
-  for (const { path, bytes, mtimeMs } of entries) {
+  const keyOf = (path) => {
     const parts = path.split('/')
-    if (parts[0] !== 'sessions' || parts.length < 4) continue
-    const key = `${parts[1]}/${parts[2]}`
-    const row = rows.get(key) ?? { key, bytes: 0, newestMtimeMs: 0 }
-    const newest = Math.max(row.newestMtimeMs, Number.isFinite(mtimeMs) ? mtimeMs : 0)
-    rows.set(key, { key, bytes: row.bytes + bytes, newestMtimeMs: newest })
+    return parts[0] === 'sessions' && parts.length >= 3 ? `${parts[1]}/${parts[2]}` : null
+  }
+  const mtimeOf = (mtimeMs) => (Number.isFinite(mtimeMs) ? mtimeMs : now)
+  const touch = (key, bytes, mtimeMs) => {
+    const row = rows.get(key) ?? { key, bytes: 0, newestMtimeMs: -Infinity }
+    rows.set(key, { key, bytes: row.bytes + bytes, newestMtimeMs: Math.max(row.newestMtimeMs, mtimeOf(mtimeMs)) })
+  }
+  for (const { path, mtimeMs } of dirs) {
+    const key = keyOf(path)
+    if (key !== null) touch(key, 0, mtimeMs)
+  }
+  for (const { path, bytes, mtimeMs } of files) {
+    const key = keyOf(path)
+    // A file directly under the service dir is not a sandbox (parts.length 3 is the sandbox dir itself).
+    if (key !== null && path.split('/').length >= 4) touch(key, bytes, mtimeMs)
   }
   return [...rows.values()]
     .map((row) => ({ ...row, ageMs: now - row.newestMtimeMs }))

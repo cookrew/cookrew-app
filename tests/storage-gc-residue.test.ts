@@ -70,12 +70,24 @@ describe('scanResidue — a report with sizes, never a plan', () => {
     expect(Date.now() - out[1].newestMtimeMs).toBeGreaterThan(29 * DAY)
   })
 
-  it('looks only at the top level and does not follow a link', () => {
+  it('finds residue inside the stores too — the live machine has turns/<id>.jsonl.bak-*', () => {
     const root = base()
-    fill(root, 'workspaces/w/turns.bak-nested/x', 'deep')
+    fill(root, 'turns/0bd65d5f.jsonl.bak-20260823-105126', 'x'.repeat(40))
+    fill(root, 'workspaces/712d/workspace.json.bak-1784623825914', '{}')
+    fill(root, 'turns/0bd65d5f.jsonl', 'live')
+    expect(scanResidue(root).map((e) => [path.relative(root, e.path), e.files])).toEqual([
+      ['turns/0bd65d5f.jsonl.bak-20260823-105126', 1],
+      ['workspaces/712d/workspace.json.bak-1784623825914', 1]
+    ])
+  })
+
+  it('measures a residue entry whole and does not look inside it, nor into sessions/, nor through a link', () => {
+    const root = base()
+    fill(root, 'lineage-restore-backup-1/turns/x.jsonl.bak-2', 'inner')
+    fill(root, 'sessions/svc-a/ana-1/notes.bak-1', 'a caller made this')
     fill(root, 'elsewhere/big', 'x'.repeat(1000))
     symlinkSync(path.join(root, 'elsewhere'), path.join(root, 'certs.bak-link'))
-    expect(scanResidue(root)).toEqual([])
+    expect(scanResidue(root).map((e) => path.basename(e.path))).toEqual(['lineage-restore-backup-1'])
   })
 
   it('a missing base is an empty report, not a throw', () => {

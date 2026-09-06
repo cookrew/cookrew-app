@@ -1,4 +1,4 @@
-import { readdirSync } from 'node:fs'
+import { readdirSync, type Dirent } from 'node:fs'
 import path from 'node:path'
 import { measureTree } from './storage-gc-tree'
 
@@ -23,8 +23,10 @@ export interface ResidueEntry {
 }
 
 /**
- * The names that count as residue. The same patterns perf-eval-lib's
- * `backups` bucket uses, so the two never disagree about what residue is.
+ * The names that count as residue, at any depth. The same patterns
+ * perf-eval-lib's `backups` bucket uses, so the two never disagree about
+ * what residue is — and the sweep's other classes consult this too, so a
+ * `turns/<id>.jsonl.bak-…` is never mistaken for a ledger and collected.
  */
 export function isResidueName(name: string): boolean {
   return (
@@ -34,28 +36,48 @@ export function isResidueName(name: string): boolean {
 }
 
 /**
- * Residue directly under `base`, measured. Top level only: that is where
- * every hand-made copy has been found, and a deeper walk would read every
- * store on the machine to answer a question about a handful of names. A
- * missing or unreadable base answers empty — a report has nothing to abort.
+ * Directories the report does not look inside. Served sandboxes are a
+ * stranger's HOME, and a `foo.bak-1` a caller's agent made there is theirs,
+ * not the owner's residue; the sweep's served class handles that directory
+ * as a unit anyway.
+ */
+const NOT_WALKED = new Set(['sessions'])
+
+/**
+ * Residue anywhere under `base`, measured, largest first. Recursive because
+ * the copies are not only at the top: the live store holds
+ * `turns/<id>.jsonl.bak-*` and `workspaces/<id>/workspace.json.bak-*` too,
+ * and a report that missed them would let the sweep collect one as an
+ * ordinary ledger while the boot log said backups are never removed. A
+ * residue entry is measured whole and not descended into (a backup of a
+ * backup is one thing). The walk is readdir + stat only — a quarter second
+ * over the owner's 3,400 entries — and a directory that cannot be read
+ * contributes nothing: a report has nothing to abort.
  */
 export function scanResidue(base: string): ResidueEntry[] {
-  let entries
-  try {
-    entries = readdirSync(base, { withFileTypes: true })
-  } catch {
-    return []
-  }
   const out: ResidueEntry[] = []
-  for (const entry of entries) {
-    if (entry.isSymbolicLink() || !isResidueName(entry.name)) continue
-    const full = path.join(base, entry.name)
+  const visit = (dir: string, top: boolean): void => {
+    let entries: Dirent[]
     try {
-      const { bytes, files, newestMtimeMs } = measureTree(full)
-      out.push({ path: full, bytes, files, newestMtimeMs })
+      entries = readdirSync(dir, { withFileTypes: true })
     } catch {
-      // Removed while we looked. Not residue any more.
+      return
+    }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue
+      const full = path.join(dir, entry.name)
+      if (isResidueName(entry.name)) {
+        try {
+          const { bytes, files, newestMtimeMs } = measureTree(full)
+          out.push({ path: full, bytes, files, newestMtimeMs })
+        } catch {
+          // Removed or unreadable while we looked. Not reportable.
+        }
+        continue
+      }
+      if (entry.isDirectory() && !(top && NOT_WALKED.has(entry.name))) visit(full, false)
     }
   }
+  visit(base, true)
   return out.sort((a, b) => b.bytes - a.bytes)
 }

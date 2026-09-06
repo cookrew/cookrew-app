@@ -1,4 +1,4 @@
-import { readdirSync, type Dirent } from 'node:fs'
+import { readdirSync, statSync, type Dirent } from 'node:fs'
 import path from 'node:path'
 import { safeSegment, sessionSegment } from './session-sandbox'
 import type { GcCandidate } from './storage-gc'
@@ -71,7 +71,9 @@ export function servedSessionCandidates(sessionsRoot: string): GcCandidate[] | n
       try {
         measured = measureTree(dir)
       } catch {
-        // Gone between readdir and stat: an END raced us. Nothing to plan.
+        // Gone between readdir and stat (an END raced us), or a part of it
+        // we cannot read. Either way it is not planned: what cannot be
+        // measured is kept.
         continue
       }
       out.push({
@@ -83,4 +85,46 @@ export function servedSessionCandidates(sessionsRoot: string): GcCandidate[] | n
     }
   }
   return out
+}
+
+/**
+ * Has this sandbox been written to since the plan was made? Asked once more,
+ * immediately before `rm -rf`, because the plan's open set is a snapshot and
+ * the mint is not atomic: `sandboxRoot` creates (or, after a restart, RE-USES
+ * — ordinals restart at 1) the directory before the instantiator registers
+ * the session, and the fork it awaits takes seconds. A sweep that measured
+ * the old directory before that mint would otherwise delete a booting crew's
+ * HOME. `sandboxRoot` refreshes the directory's mtime for exactly this
+ * reader, and any file the harness writes counts too.
+ *
+ * A directory that is gone answers false (there is nothing to spare); one
+ * that cannot be measured answers true (keep what you cannot see).
+ */
+export function writtenSincePlan(candidate: GcCandidate, now: number, graceMs: number): boolean {
+  try {
+    if (!statSync(candidate.path).isDirectory()) return false
+  } catch {
+    return false
+  }
+  try {
+    return now - measureTree(candidate.path).newestMtimeMs <= graceMs
+  } catch {
+    return true
+  }
+}
+
+/**
+ * The cheap half of the same question, asked once more immediately before
+ * the unlink: `writtenSincePlan` walks the whole sandbox and takes time, and
+ * the mint's own write is to the directory itself (`sandboxRoot` utimes it),
+ * so one stat of that directory is the last word. Gone answers false; a
+ * directory that cannot be stat'ed answers true.
+ */
+export function dirTouchedWithinGrace(dir: string, now: number, graceMs: number): boolean {
+  try {
+    const stat = statSync(dir)
+    return stat.isDirectory() && now - stat.mtimeMs <= graceMs
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT'
+  }
 }
