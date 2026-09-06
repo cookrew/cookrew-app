@@ -156,6 +156,17 @@ describe('the NEEDS PAIRING state', () => {
     expect(html).toContain('That link named the Mac, not the phone — open it again from cookrew.dev.')
   })
 
+  it('gives each row its own copy of both refusals, so the sentence sits under its Mac', async () => {
+    const { html } = await mePage()
+    expect(html).toContain('data-refused-key')
+    expect(html).toContain('data-refused-device')
+  })
+
+  it('ships OPEN disabled, because the server cannot know this browser holds a key', async () => {
+    const { html } = await mePage()
+    expect(html).toContain(`data-open-desktop="${deviceId}" hidden disabled`)
+  })
+
   it('gives the six characters a field in the row rather than a native prompt', async () => {
     const { html } = await mePage()
     expect(html).toContain(`data-key-form="${deviceId}"`)
