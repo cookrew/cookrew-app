@@ -100,8 +100,15 @@ export function sandboxRoot(base: string, serviceId: string, sessionId: string):
   // flight could measure the old directory, miss the session the instantiator
   // has not registered yet, and remove a booting crew's HOME
   // (storage-gc-served.ts writtenSincePlan is the other half).
-  const now = new Date()
-  utimesSync(dir, now, now)
+  // Cosmetic for the mint itself: a refresh that fails (a read-only mount,
+  // a directory that vanished under us) must never fail the session.
+  try {
+    const now = new Date()
+    utimesSync(dir, now, now)
+  } catch {
+    // The sweep's other half (writtenSincePlan) still sees the harness's own
+    // writes; only the mkdir-only window loses its marker.
+  }
   return realpathSync(dir)
 }
 
