@@ -139,6 +139,27 @@ export class V2Accounts {
   private accounts: readonly V2Account[] = []
   /** Names being claimed right now — see `create`, which awaits a hash midway. */
   private readonly claiming = new Set<string>()
+  /**
+   * deviceId → the desktop with that id, and whose it is.
+   *
+   * THE ONE READER THAT DOES NOT COME IN THROUGH AN ACCOUNT is DNS, and it is
+   * also the only one an unauthenticated stranger can drive: every NXDOMAIN
+   * asks this question and then the one below it, on the same event loop that
+   * serves the HTTPS API. A scan across every account per UDP packet is a
+   * denial of service somebody else gets to schedule, so the crossing lookup
+   * is an index — maintained in `replace`, which is the single function every
+   * write to an account goes through.
+   */
+  private desktops = new Map<string, { username: string; desktop: V2Desktop }>()
+  /**
+   * Epoch ms of the last change to any desktop — the DNS zone's SOA serial.
+   *
+   * Kept rather than computed for the same reason, and moved only when the
+   * desktops of an account actually changed: `touch` rewrites an account on
+   * every /v2/me read, and a serial that moved with it would make every page
+   * view look like a zone change.
+   */
+  private desktopsChanged = 0
 
   constructor(base: string, now: () => number = Date.now) {
     mkdirSync(base, { recursive: true })
@@ -178,6 +199,18 @@ export class V2Accounts {
       }
     }
     this.accounts = held.accounts as V2Account[]
+    this.reindex()
+  }
+
+  /** The whole index, from the accounts as they stand. Load-time only. */
+  private reindex(): void {
+    this.desktops = new Map()
+    for (const account of this.accounts) {
+      for (const desktop of account.desktops) {
+        this.desktops.set(desktop.deviceId, { username: account.username, desktop })
+        this.desktopsChanged = Math.max(this.desktopsChanged, desktop.updatedAt)
+      }
+    }
   }
 
   /** Temp file then rename: a reader never sees half a write, whatever happens. */
@@ -198,9 +231,29 @@ export class V2Accounts {
   }
 
   private replace(account: V2Account): V2Account {
+    const previous = this.accounts.find((a) => a.username === account.username) ?? null
     this.accounts = this.accounts.map((a) => (a.username === account.username ? account : a))
+    // REFERENCE EQUALITY IS THE TEST, and it is exact rather than approximate:
+    // every write in this file builds a new account object and reuses the
+    // arrays it did not touch, so an unchanged `desktops` is the same array.
+    if (previous === null || previous.desktops !== account.desktops) this.trackDesktops(previous, account)
     this.save()
     return account
+  }
+
+  /** The index and the serial, for one account whose desktops moved. */
+  private trackDesktops(previous: V2Account | null, account: V2Account): void {
+    for (const desktop of previous?.desktops ?? []) {
+      if (this.desktops.get(desktop.deviceId)?.username === account.username) {
+        this.desktops.delete(desktop.deviceId)
+      }
+    }
+    for (const desktop of account.desktops) {
+      this.desktops.set(desktop.deviceId, { username: account.username, desktop })
+    }
+    // Never backwards: a clock that stepped back would hand a secondary a
+    // serial it has already seen and freeze the zone at the old contents.
+    this.desktopsChanged = Math.max(this.desktopsChanged, this.now())
   }
 
   // ── reading ────────────────────────────────────────────────────────────
@@ -329,6 +382,9 @@ export class V2Accounts {
       revoked: []
     }
     this.accounts = [...this.accounts, account]
+    // A new account has no desktops, so this files nothing today — and it is
+    // here so that the index cannot be wrong the day one arrives with some.
+    this.trackDesktops(null, account)
     this.save()
     return { ok: true, account, device }
   }
@@ -553,6 +609,30 @@ export class V2Accounts {
     }
     this.replace({ ...account, displayName, avatar })
     return { ok: true }
+  }
+
+  /**
+   * THE DESKTOP WITH THIS DEVICE ID, whoever owns it.
+   *
+   * Every other reader of this store comes in through an account, because a
+   * machine's addresses belong to the person who owns it. DNS does not: a
+   * resolver asks about a name and knows nothing about accounts, so the zone
+   * needs the one lookup that crosses them — and answers only with what the
+   * desktop itself signed and published.
+   *
+   * AN INDEX, not a scan. It was a scan, on the argument that the alpha holds
+   * a handful of accounts — but the caller is unauthenticated UDP and the cost
+   * is paid on the API's own event loop, so the size of the registry was
+   * something a stranger got to choose. The index is kept in step by `replace`
+   * alone, which every write to an account already goes through.
+   */
+  desktopFor(deviceId: string): V2Desktop | null {
+    return this.desktops.get(deviceId)?.desktop ?? null
+  }
+
+  /** The most recent change to any desktop — half of the DNS zone's serial. */
+  desktopsChangedAt(): number {
+    return this.desktopsChanged
   }
 
   /**

@@ -352,7 +352,7 @@
    * accounts, and it is what `window.cookrewAccount.signIn` still means.
    *
    * The session token never touches this script. The sheet posts to
-   * /v2/sessions and the SERVER sets `cr_session` HttpOnly; a token a script
+   * /v2/sessions and the SERVER sets `__Host-cr_session` HttpOnly; a token a script
    * can read is a token a script can leak.
    */
   /**

@@ -205,7 +205,12 @@ export function callerDeviceHeaders(device: { id: string; name: string }): Recor
 }
 
 /** cookrew.dev's OWN cookies, which never leave cookrew.dev. */
-const OUR_COOKIES = new Set(['cr_session', 'cr_account'])
+/**
+ * Ours, and never forwarded. Both spellings of the session cookie: the
+ * prefixed one a browser holds now, and the name it had before, so a stale
+ * copy still sitting in somebody's jar is dropped here rather than travelling.
+ */
+const OUR_COOKIES = new Set(['__Host-cr_session', 'cr_session', 'cr_account'])
 /** Hop-by-hop, plus the length we cannot honour because we stream. */
 const HOP_BY_HOP = new Set([
   'connection',

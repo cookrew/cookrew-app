@@ -12,6 +12,7 @@ import {
   overloaded,
   type V2Context
 } from './v2-http'
+import { handleCertRoute } from './v2-cert-routes'
 import { handleSeatRoute, mySeats } from './v2-seat-routes'
 import { handleMigrateRoute, legacyHolds, refuseIfLegacy } from './v2-migrate-routes'
 import type { V2Account, V2Desktop } from './v2-accounts'
@@ -153,7 +154,7 @@ async function claimAccount(ctx: V2Context): Promise<void> {
       deviceId: out.device.id,
       session: { token: minted.token, exp: minted.exp }
     },
-    { 'set-cookie': cookie(minted.token, ctx.secure) }
+    { 'set-cookie': cookie(minted.token) }
   )
 }
 
@@ -223,7 +224,7 @@ function signOut(ctx: V2Context): void {
   if (signed !== null) ctx.v2.accounts.closeSession(signed.account.username, signed.claims.jti)
   // 204 either way: signing out of a session that has already ended is not an
   // error, and telling a caller which it was leaks whether a token was live.
-  noContent(ctx.response, { 'set-cookie': clearedCookie(ctx.secure) })
+  noContent(ctx.response, { 'set-cookie': clearedCookie() })
 }
 
 async function redeemRecovery(ctx: V2Context): Promise<void> {
@@ -274,7 +275,7 @@ async function redeemRecovery(ctx: V2Context): Promise<void> {
     response,
     201,
     { token: minted.token, exp: minted.exp, deviceId: attached.device.id },
-    { 'set-cookie': cookie(minted.token, ctx.secure) }
+    { 'set-cookie': cookie(minted.token) }
   )
 }
 
@@ -325,12 +326,23 @@ async function checkHello(ctx: V2Context): Promise<void> {
  * person who owns it may read. `publicProfile` never touches this shape, and
  * that is on purpose rather than by omission.
  */
-export function desktopBody(desktop: V2Desktop): Record<string, unknown> {
+export function desktopBody(desktop: V2Desktop, names = false): Record<string, unknown> {
   return {
     deviceId: desktop.deviceId,
     name: desktop.name,
     workspaces: desktop.workspaces,
     reach: desktop.reach ?? null,
+    /**
+     * REACH v2.1. Does a trusted name exist for this Mac right now?
+     *
+     * OUTSIDE THE SIGNED CARD, on purpose. The card is signed by the desktop
+     * over exactly the members `cardOf` names, and a field the registry adds
+     * inside it would break every signature check on the phone. This is the
+     * registry's own fact — only it knows whether an ACME order finished — so
+     * it sits beside the card, where a reader can use it and a verifier can
+     * ignore it.
+     */
+    names,
     updatedAt: desktop.updatedAt
   }
 }
@@ -356,7 +368,8 @@ export const NO_FACTORS: FactorPosture = { passkeys: [], totp: false, mustChange
 export function meBody(
   account: V2Account,
   currentDeviceId: string,
-  factors: FactorPosture = NO_FACTORS
+  factors: FactorPosture = NO_FACTORS,
+  names: (deviceId: string) => boolean = () => false
 ): Record<string, unknown> {
   return {
     username: account.username,
@@ -371,11 +384,19 @@ export function meBody(
       lastSeenAt: d.lastSeenAt,
       current: d.id === currentDeviceId
     })),
-    desktops: account.desktops.map(desktopBody),
+    desktops: account.desktops.map((desktop) => desktopBody(desktop, names(desktop.deviceId))),
     recoveryCodesLeft: account.recovery.length,
     factors
   }
 }
+
+/**
+ * Whether a trusted name exists for a Mac, as a function of its device id.
+ * A registry with no zone answers false for every one of them — which is the
+ * truth, not a missing capability.
+ */
+const hasNames = (ctx: V2Context): ((deviceId: string) => boolean) =>
+  ctx.names === undefined ? () => false : (deviceId) => ctx.names!.hasNames(deviceId)
 
 async function mine(ctx: V2Context, rest: string[]): Promise<void> {
   const { response, v2, method } = ctx
@@ -389,7 +410,7 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
   if (rest.length === 0 && method === 'GET') {
     v2.accounts.touch(account.username, claims.dev)
     const fresh = v2.accounts.get(account.username) ?? account
-    v2Json(response, 200, meBody(fresh, claims.dev, v2.factors.store.summary(account.username)))
+    v2Json(response, 200, meBody(fresh, claims.dev, v2.factors.store.summary(account.username), hasNames(ctx)))
     return
   }
   if (rest.length === 0 && method === 'PATCH') {
@@ -409,7 +430,12 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     v2Json(
       response,
       200,
-      meBody(v2.accounts.get(account.username) ?? account, claims.dev, v2.factors.store.summary(account.username))
+      meBody(
+        v2.accounts.get(account.username) ?? account,
+        claims.dev,
+        v2.factors.store.summary(account.username),
+        hasNames(ctx)
+      )
     )
     return
   }
@@ -433,7 +459,7 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     // Revoking the device in your hand is allowed, and it ends this session —
     // so the browser is handed an empty cookie rather than one that no longer
     // opens anything.
-    noContent(response, id === claims.dev ? { 'set-cookie': clearedCookie(ctx.secure) } : {})
+    noContent(response, id === claims.dev ? { 'set-cookie': clearedCookie() } : {})
     return
   }
   if (rest.length === 1 && rest[0] === 'password' && method === 'POST') {
@@ -471,7 +497,13 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     // ONLY THIS ACCOUNT'S. Any device of it may read them — that is the whole
     // point of the picker — but the answer is built from the signed-in
     // account and never from anything the caller named.
-    v2Json(response, 200, account.desktops.map(desktopBody))
+    v2Json(response, 200, account.desktops.map((desktop) => desktopBody(desktop, hasNames(ctx)(desktop.deviceId))))
+    return
+  }
+  // REACH v2.1 — the Mac's own certificate. Before /open, because both are
+  // three parts under desktops and this one owns its whole verb set.
+  if (rest.length === 3 && rest[0] === 'desktops' && rest[2] === 'cert') {
+    handleCertRoute(ctx, signed, (ctx.decode(rest[1]) ?? '').toLowerCase())
     return
   }
   /*
