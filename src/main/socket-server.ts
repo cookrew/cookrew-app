@@ -19,6 +19,7 @@ import {
 } from '../shared/model'
 import { resolveCallerTerminalId } from '../shared/caller-identity'
 import { WorkspaceStore, WorkspaceNodeHit } from './store'
+import type { PairingHandout } from '../shared/account-v2'
 import type { MobileEndpoint } from './mobile-endpoints'
 import { renderMobileHelp, renderRotated } from './mobile-cli-text'
 import { readProxyConfig, tailnetProxyGaps } from './proxy-bypass'
@@ -73,6 +74,12 @@ export interface SocketServerDeps {
   uncoveredCertHosts: () => string[]
   /** Revoke the pairing token; every paired device must re-pair. */
   rotatePairingToken: () => string
+  /**
+   * The one URL to scan (pairing-handout.ts). Read at print time, never
+   * cached: it carries the live pairing token, and `--rotate` changes it in
+   * the same command that prints it.
+   */
+  pairingHandout: () => PairingHandout | null
   /** LAN URLs of the TV wall (HTTP, wall-token bearing). */
   /** Workspace registry + switching (switching rebuilds PTYs). */
   listWorkspaces: () => WorkspaceList
@@ -1138,7 +1145,8 @@ export function cmdMobile(request: CliRequest, deps: SocketServerDeps): string {
   // burning a leaked token would believe it was dead while it stayed live.
   if (request.flags.rotate === true) {
     deps.rotatePairingToken()
-    return renderRotated(deps.mobileEndpoints())
+    // AFTER the rotation, so the URL carries the token that now works.
+    return renderRotated(deps.mobileEndpoints(), deps.pairingHandout())
   }
   const endpoints = deps.mobileEndpoints()
   const tailnetHosts = endpoints
@@ -1146,6 +1154,7 @@ export function cmdMobile(request: CliRequest, deps: SocketServerDeps): string {
     .map((endpoint) => endpoint.host)
   return renderMobileHelp({
     endpoints,
+    pairing: deps.pairingHandout(),
     secure: endpoints.some((endpoint) => endpoint.url.startsWith('https')),
     uncovered: deps.uncoveredCertHosts(),
     tailnet: endpoints.some((endpoint) => endpoint.kind === 'tailscale'),

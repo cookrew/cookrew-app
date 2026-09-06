@@ -12,19 +12,12 @@ import { IdentityService } from '../registry/src/identity'
 import { DoorStore } from '../registry/src/doors'
 import { StarStore } from '../registry/src/stars'
 import { createV2 } from '../registry/src/v2-routes'
-import {
-  CANVAS_BASE_HEADER,
-  CANVAS_DEVICE_HEADER,
-  CANVAS_DEVICE_NAME_HEADER
-} from '../registry/src/v2-canvas-relay'
+import { CANVAS_BASE_HEADER } from '../registry/src/v2-canvas-relay'
 import { createCanvasLink, type CanvasLink } from '../src/main/canvas-link'
 import { createCanvasBridge, loopbackDialer } from '../src/main/canvas-bridge'
 import { createAdmittedDeviceStore } from '../src/main/admitted-devices'
-import { createPairingKeyRing } from '../src/main/pairing-key'
-import { createSpentTokenStore } from '../src/main/spent-tokens'
 import { handleIdentityRoutes, type MobileIdentityDeps } from '../src/main/mobile-identity-routes'
 import { pairingAuthorized } from '../src/main/mobile-http'
-import type { RegistryKeys } from '../src/main/canvas-token'
 import { mintDeviceKey, deviceIdFor } from '../src/main/account-v2'
 import { fakeAccount, tempBase } from './support/idv2'
 
@@ -32,24 +25,23 @@ import { fakeAccount, tempBase } from './support/idv2'
  * THE PERMANENT GATE: PRESSING OPEN LANDS ON THE CANVAS.
  *
  * Every piece here is the shipping one — the registry's router, the app's own
- * canvas link and bridge, the desktop's real mobile routes — and the assertion
+ * canvas link and bridge, the companion's own pairing gate — and the assertion
  * is the only one the owner cares about: the phone that pressed OPEN ends up
  * looking at the companion, and the companion can then read its API.
  *
  * IT EXISTS BECAUSE THE PIECES WERE ALL GREEN AND THE PRODUCT WAS NOT. The
- * desktop answered the admission with `303 Location: /?token=…` — correct on
- * the LAN, where it is the root — and the relay forwarded that untouched, so
- * OPEN over the relay navigated to cookrew.dev's HOME PAGE with a credential
- * in the address bar (live, 2026-09-06). Nothing in either half's own suite
- * could see it: the bug lived exactly in the seam between them.
+ * desktop answered the old admission with `303 Location: /?token=…` — correct
+ * on the LAN, where it is the root — and the relay forwarded that untouched,
+ * so OPEN over the relay navigated to cookrew.dev's HOME PAGE with a
+ * credential in the address bar (live, 2026-09-06). Nothing in either half's
+ * own suite could see it: the bug lived exactly in the seam between them.
  *
- * REACH v2.1 CHANGES WHAT OPEN IS, not what it must do. There is no canvas
- * token, no six characters and no query: OPEN is a plain navigation to
- * `/relay/@user/desktop/<id>/`, the account cookie is what admits the reader
- * HERE, and the pairing token the Mac prints is what admits them AT THE MAC.
- * So the walk stands, and two facts are added to it — the desktop is told
- * which prefix it is served under, and which device of the account is asking,
- * because with the ceremony gone nothing else in the request says so.
+ * REACH v2.1 REMOVES THE CEREMONY that redirect belonged to. There is one
+ * credential — the pairing token — and a relayed request is authorised by it
+ * exactly as a direct one is. So the rule this file enforces is now stated
+ * without any redirect at all: the shell is served UNDER the prefix, and the
+ * API under that prefix answers the token and refuses its absence. THE RELAY
+ * ADDS NO AUTHORITY; it carries the asking.
  */
 
 const PASSWORD = 'correct horse battery staple'
@@ -91,8 +83,7 @@ let deviceId = ''
 let desktopToken = ''
 let phoneSession = ''
 let phoneDeviceId = ''
-const ring = createPairingKeyRing()
-const PAIRING_TOKEN = 'the-token-the-mac-prints'
+const PAIRING_TOKEN = 'the-one-pairing-token'
 
 beforeAll(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'open-canvas-gate-'))
@@ -141,22 +132,12 @@ beforeAll(async () => {
     body: JSON.stringify({ name: 'This Mac', workspaces: [{ id: 'w1', name: 'Cookrew Dev' }] })
   })
 
-  // ── the desktop's mobile server: the real admission, and a companion ─────
+  // ── the desktop's mobile server: the real gate, and a companion ─────────
   const admitted = createAdmittedDeviceStore({ base: base.base })
-  const spent = createSpentTokenStore({ base: base.base })
-  const registryKeys = async (): Promise<RegistryKeys | null> => {
-    const res = await fetch(`${site.origin}/v2/keys`)
-    return res.ok ? ((await res.json()) as RegistryKeys) : null
-  }
   const identity: MobileIdentityDeps = {
     account: () => account,
     registryOrigin: () => site.origin,
-    keys: registryKeys,
-    refreshKeys: registryKeys,
-    admitted,
-    acceptsPairingKey: (key) => ring.accepts(key),
-    pairingToken: () => PAIRING_TOKEN,
-    spend: spent.spend
+    admitted
   }
   desktop = await listen(
     createServer((request, response) => {
@@ -164,25 +145,15 @@ beforeAll(async () => {
       void handleIdentityRoutes(request, response, url, identity).then((handled) => {
         if (handled) return
         if (url.pathname === '/api/reach') {
-          // The companion's own gate: the pairing token the Mac printed, which
-          // the phone was given on its own "Not paired" card and carries as a
-          // Bearer (mobile-http.presentedToken). One credential, every path.
+          // The companion's own gate, unchanged: the pairing token the phone
+          // holds, as a Bearer (mobile-http.presentedToken).
           if (!pairingAuthorized(request, url, PAIRING_TOKEN, admitted.accepts)) {
             response.writeHead(401, { 'content-type': 'application/json' })
             response.end('{"error":"unpaired"}')
             return
           }
           response.writeHead(200, { 'content-type': 'application/json' })
-          // WHO IS ON THIS CANVAS. The Mac lists admitted devices from what
-          // the registry states about the caller, not from a key ceremony.
-          response.end(
-            JSON.stringify({
-              lan: [],
-              relay: true,
-              device: request.headers[CANVAS_DEVICE_HEADER] ?? null,
-              deviceName: request.headers[CANVAS_DEVICE_NAME_HEADER] ?? null
-            })
-          )
+          response.end(JSON.stringify({ lan: [], relay: true }))
           return
         }
         if (url.pathname === '/') {
@@ -271,78 +242,42 @@ const asPhone = (path: string, init: RequestInit = {}): Promise<Response> =>
     }
   })
 
-describe('pressing OPEN', () => {
-  /**
-   * THE WALK. OPEN is an href on /me and nothing else, so this is the whole
-   * of it: navigate to the prefix with the account cookie, follow whatever
-   * the desktop answers, and never leave the prefix on the way.
-   */
-  it('lands on the companion, served under the relay prefix, with no query at all', async () => {
-    const opened = `${prefix()}/`
-    expect(opened).not.toContain('?')
-
-    let at = opened
-    let answer = await asPhone(at)
-    for (let hop = 0; hop < 5 && answer.status >= 300 && answer.status < 400; hop += 1) {
-      const location = answer.headers.get('location') ?? ''
-      // A Location that leaves the prefix is a reader sent to cookrew.dev's
-      // own pages with the canvas never reached.
-      expect(location.startsWith(`${prefix()}/`), `hop ${hop} left the prefix: ${location}`).toBe(true)
-      const asUrl = new URL(location, site.origin)
-      at = `${asUrl.pathname}${asUrl.search}`
-      answer = await asPhone(at)
-    }
-
+describe('pressing OPEN with the relay path', () => {
+  it('serves the companion under the prefix, and gates its API on the token', async () => {
+    // OPEN is now a navigation to the prefix and nothing else: no ceremony, no
+    // redirect chain, no credential in the address bar.
+    const answer = await asPhone(`${prefix()}/`)
     expect(answer.status).toBe(200)
     expect(answer.headers.get('content-type')).toContain('text/html')
     const html = await answer.text()
     expect(html).toContain(ROOT_MARKER)
     // And it knows where it is: every API path the client builds hangs off this.
     expect(html).toContain(`window.COOKREW_BASE="${prefix()}"`)
-  })
 
-  /**
-   * THE CREDENTIAL IS THE PAIRING TOKEN, and it is the phone's, not
-   * cookrew.dev's. The relay carries the asking; it never admits anyone at the
-   * Mac, and it hands the Mac nothing it could be admitted with.
-   */
-  it('reads the API with the pairing token the Mac printed, and not without one', async () => {
+    // The API the shell will call, under the same prefix, with the ONE
+    // credential — the same token that opens this Mac on the LAN.
     const reach = await asPhone(`${prefix()}/api/reach`, {
       headers: { accept: 'application/json', authorization: `Bearer ${PAIRING_TOKEN}` }
     })
     expect(reach.status).toBe(200)
-    const body = (await reach.json()) as { lan: unknown[]; relay: boolean; device: string; deviceName: string }
-    expect(body.relay).toBe(true)
+    expect((await reach.json()) as { relay: boolean }).toEqual({ lan: [], relay: true })
 
+    // A phone that cannot set headers sends it as ?token=, and that works too.
+    const queried = await asPhone(`${prefix()}/api/reach?token=${PAIRING_TOKEN}`, {
+      headers: { accept: 'application/json' }
+    })
+    expect(queried.status).toBe(200)
+
+    // An unauthenticated call is still refused: the relay carries the asking,
+    // it never admits anyone at the Mac.
     const bare = await asPhone(`${prefix()}/api/reach`, { headers: { accept: 'application/json' } })
     expect(bare.status).toBe(401)
-  })
 
-  /**
-   * WHO IS ON THE CANVAS, without a key ceremony. The Mac can list admitted
-   * devices because the registry states the caller from the session it just
-   * verified — and a caller that writes those headers itself is overwritten.
-   */
-  it('tells the Mac which device of the account is asking', async () => {
-    const reach = await asPhone(`${prefix()}/api/reach`, {
-      headers: {
-        accept: 'application/json',
-        authorization: `Bearer ${PAIRING_TOKEN}`,
-        [CANVAS_DEVICE_HEADER]: randomUUID(),
-        [CANVAS_DEVICE_NAME_HEADER]: 'Somebody else'
-      }
+    // And a wrong token is refused the same way a wrong one is on the LAN —
+    // being signed in at cookrew.dev buys reaching the Mac, never opening it.
+    const wrong = await asPhone(`${prefix()}/api/reach`, {
+      headers: { accept: 'application/json', authorization: 'Bearer not-the-token' }
     })
-    const body = (await reach.json()) as { device: string; deviceName: string }
-    expect(body.device).toBe(phoneDeviceId)
-    expect(body.deviceName).toBe('A phone')
-  })
-
-  /** The route that minted the old admission's token is gone, not merely unused. */
-  it('cannot be given a canvas token by cookrew.dev any more', async () => {
-    const res = await fetch(`${site.origin}/v2/me/desktops/${deviceId}/open`, {
-      method: 'POST',
-      headers: { cookie: `cr_session=${phoneSession}` }
-    })
-    expect(res.status).toBe(404)
+    expect(wrong.status).toBe(401)
   })
 })

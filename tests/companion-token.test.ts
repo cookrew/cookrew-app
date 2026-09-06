@@ -1,64 +1,75 @@
 import type http from 'node:http'
-import { statSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
-  COMPANION_TOKEN_BYTES,
   createAdmittedDeviceStore,
   hashToken,
-  readAdmittedDevices
+  readAdmittedDevices,
+  writeAdmittedDevices
 } from '../src/main/admitted-devices'
 import { pairingAuthorized, presentedToken } from '../src/main/mobile-http'
-import { createSpentTokenStore, readSpentTokens, spentTokensFile } from '../src/main/spent-tokens'
 import { tempBase } from './support/idv2'
+
+/**
+ * THE SECOND DOOR, AFTER THE CEREMONY THAT CUT IT.
+ *
+ * The retired v2 admission handed each admitted phone 24 bytes of its own and
+ * stored the SHA-256 in the admitted-devices file. Reach v2.1 has ONE
+ * credential and mints no more of these — but the ones already on disk must
+ * keep opening this Mac, or an upgrade unpairs every phone that paired the old
+ * way. So the door stays, and FORGET stays the thing that closes it.
+ *
+ * The rows are therefore SEEDED here rather than minted: that is exactly how
+ * they exist in the world now, written by a version that is gone.
+ */
 
 const GLOBAL = 'the-one-global-pairing-token'
 const url = (query = ''): URL => new URL(`https://mac.local:8643/api/state${query}`)
 const bearer = (token: string): Pick<http.IncomingMessage, 'headers'> =>
   ({ headers: { authorization: `Bearer ${token}` } }) as http.IncomingMessage
 
-describe('each admitted phone gets its own credential', () => {
+/** A phone admitted under the old ceremony, as its row survives on disk. */
+const seed = (base: string, deviceId: string, token: string): void =>
+  writeAdmittedDevices(
+    [
+      ...readAdmittedDevices(base),
+      { deviceId, admittedAt: 1, lastSeenAt: 1, tokenHash: hashToken(token) }
+    ],
+    base
+  )
+
+describe('a per-device token that is already on disk', () => {
   let temp: { base: string; clean: () => void }
   beforeEach(() => (temp = tempBase()))
   afterEach(() => temp.clean())
 
-  it('mints 24 bytes and stores ONLY the hash', () => {
-    const store = createAdmittedDeviceStore({ base: temp.base })
-    const { token, device } = store.admit({ deviceId: 'p1', name: 'iPhone' })
-    expect(Buffer.from(token, 'base64url')).toHaveLength(COMPANION_TOKEN_BYTES)
-    expect(device.tokenHash).toBe(hashToken(token))
-    // The file is 0600, but a stored bearer token is still a stored bearer
-    // token — the plaintext must not be in it.
+  it('is stored as a hash and never as the token', () => {
+    seed(temp.base, 'p1', 'a-phones-own-token')
     const onDisk = JSON.stringify(readAdmittedDevices(temp.base))
-    expect(onDisk).not.toContain(token)
-    expect(onDisk).toContain(hashToken(token))
+    expect(onDisk).not.toContain('a-phones-own-token')
+    expect(onDisk).toContain(hashToken('a-phones-own-token'))
   })
 
-  it('gives two phones two different tokens, and neither opens for the other', () => {
+  it('opens for its own phone and for no other', () => {
     const store = createAdmittedDeviceStore({ base: temp.base })
-    const a = store.admit({ deviceId: 'p1' })
-    const b = store.admit({ deviceId: 'p2' })
-    expect(a.token).not.toBe(b.token)
-    expect(store.accepts(a.token)).toBe(true)
-    expect(store.accepts(b.token)).toBe(true)
-  })
-
-  it('mints a FRESH token every admission', () => {
-    // An admission is somebody standing at the Mac with a valid canvas token,
-    // which is exactly the moment to replace whatever the phone was carrying.
-    const store = createAdmittedDeviceStore({ base: temp.base })
-    const first = store.admit({ deviceId: 'p1' }).token
-    const second = store.admit({ deviceId: 'p1' }).token
-    expect(second).not.toBe(first)
-    expect(store.accepts(first)).toBe(false)
-    expect(store.accepts(second)).toBe(true)
+    seed(temp.base, 'p1', 'token-a')
+    seed(temp.base, 'p2', 'token-b')
+    expect(store.accepts('token-a')).toBe(true)
+    expect(store.accepts('token-b')).toBe(true)
+    expect(store.accepts('token-c')).toBe(false)
   })
 
   it('refuses a token nobody was ever given', () => {
     const store = createAdmittedDeviceStore({ base: temp.base })
-    store.admit({ deviceId: 'p1' })
+    seed(temp.base, 'p1', 'token-a')
     expect(store.accepts('not-a-token')).toBe(false)
     expect(store.accepts('')).toBe(false)
     expect(store.accepts(GLOBAL)).toBe(false)
+  })
+
+  it('IS NOT MINTED BY A SIGHTING — recording a phone hands out no credential', () => {
+    const store = createAdmittedDeviceStore({ base: temp.base })
+    store.record({ deviceId: 'p3', name: 'iPhone' })
+    expect(store.list()[0].tokenHash).toBeUndefined()
   })
 })
 
@@ -74,18 +85,18 @@ describe('the read gate takes both doors', () => {
 
   it("ACCEPTS AN ADMITTED PHONE'S OWN token", () => {
     const store = createAdmittedDeviceStore({ base: temp.base })
-    const { token } = store.admit({ deviceId: 'p1' })
-    expect(pairingAuthorized(bearer(token), url(), GLOBAL, store.accepts)).toBe(true)
+    seed(temp.base, 'p1', 'token-a')
+    expect(pairingAuthorized(bearer('token-a'), url(), GLOBAL, store.accepts)).toBe(true)
   })
 
   it('takes it as a query token too, which is how the path switch carries it', () => {
-    // path/switch.ts hands the credential to the new origin in the URL, the
-    // same way the admission redirect did — so a per-device token has to pass
-    // the query door or a live switch would land the phone on a 401.
+    // path/switch.ts hands the credential to the new origin in the URL, so a
+    // per-device token has to pass the query door or a live switch would land
+    // the phone on a 401.
     const store = createAdmittedDeviceStore({ base: temp.base })
-    const { token } = store.admit({ deviceId: 'p1' })
-    const query = url(`?token=${encodeURIComponent(token)}`)
-    expect(presentedToken({ headers: {} } as http.IncomingMessage, query)).toBe(token)
+    seed(temp.base, 'p1', 'token-a')
+    const query = url('?token=token-a')
+    expect(presentedToken({ headers: {} } as http.IncomingMessage, query)).toBe('token-a')
     expect(pairingAuthorized({ headers: {} } as http.IncomingMessage, query, GLOBAL, store.accepts))
       .toBe(true)
   })
@@ -94,25 +105,25 @@ describe('the read gate takes both doors', () => {
     // Before per-device tokens, every phone held the same global one, so
     // forgetting a device revoked nothing at all.
     const store = createAdmittedDeviceStore({ base: temp.base })
-    const { token } = store.admit({ deviceId: 'p1' })
-    expect(pairingAuthorized(bearer(token), url(), GLOBAL, store.accepts)).toBe(true)
+    seed(temp.base, 'p1', 'token-a')
+    expect(pairingAuthorized(bearer('token-a'), url(), GLOBAL, store.accepts)).toBe(true)
     expect(store.forget('p1')).toBe(true)
-    expect(store.accepts(token)).toBe(false)
-    expect(pairingAuthorized(bearer(token), url(), GLOBAL, store.accepts)).toBe(false)
+    expect(store.accepts('token-a')).toBe(false)
+    expect(pairingAuthorized(bearer('token-a'), url(), GLOBAL, store.accepts)).toBe(false)
   })
 
   it('leaves the OTHER phones alone when one is forgotten', () => {
     const store = createAdmittedDeviceStore({ base: temp.base })
-    const kept = store.admit({ deviceId: 'p1' }).token
-    const gone = store.admit({ deviceId: 'p2' }).token
+    seed(temp.base, 'p1', 'kept')
+    seed(temp.base, 'p2', 'gone')
     store.forget('p2')
-    expect(pairingAuthorized(bearer(kept), url(), GLOBAL, store.accepts)).toBe(true)
-    expect(pairingAuthorized(bearer(gone), url(), GLOBAL, store.accepts)).toBe(false)
+    expect(pairingAuthorized(bearer('kept'), url(), GLOBAL, store.accepts)).toBe(true)
+    expect(pairingAuthorized(bearer('gone'), url(), GLOBAL, store.accepts)).toBe(false)
   })
 
   it('refuses everything when no credential is presented at all', () => {
     const store = createAdmittedDeviceStore({ base: temp.base })
-    store.admit({ deviceId: 'p1' })
+    seed(temp.base, 'p1', 'token-a')
     expect(pairingAuthorized({ headers: {} } as http.IncomingMessage, url(), GLOBAL, store.accepts))
       .toBe(false)
   })
@@ -120,55 +131,5 @@ describe('the read gate takes both doors', () => {
   it('still works with no second door wired, for a desktop with no account', () => {
     expect(pairingAuthorized(bearer(GLOBAL), url(), GLOBAL)).toBe(true)
     expect(pairingAuthorized(bearer('nope'), url(), GLOBAL)).toBe(false)
-  })
-})
-
-describe('spent canvas tokens', () => {
-  const NOW = 1_800_000_000_000
-  let temp: { base: string; clean: () => void }
-  beforeEach(() => (temp = tempBase()))
-  afterEach(() => temp.clean())
-
-  it('burns a jti once', () => {
-    const store = createSpentTokenStore({ base: temp.base, now: () => NOW })
-    expect(store.spend('j1', NOW + 60_000)).toBe(true)
-    expect(store.spend('j1', NOW + 60_000)).toBe(false)
-    expect(store.spent('j1')).toBe(true)
-  })
-
-  it('persists, so a restart does not reopen the window', () => {
-    createSpentTokenStore({ base: temp.base, now: () => NOW }).spend('j1', NOW + 60_000)
-    const restarted = createSpentTokenStore({ base: temp.base, now: () => NOW })
-    expect(restarted.spend('j1', NOW + 60_000)).toBe(false)
-  })
-
-  it('forgets a jti once its own token has expired', () => {
-    let clock = NOW
-    const store = createSpentTokenStore({ base: temp.base, now: () => clock })
-    store.spend('j1', NOW + 60_000)
-    clock = NOW + 60_001
-    // The token refuses itself on `exp` now; keeping the entry is dead weight.
-    expect(store.spent('j1')).toBe(false)
-    expect(store.list()).toEqual([])
-  })
-
-  it('is bounded, and drops what was closest to expiring anyway', () => {
-    const store = createSpentTokenStore({ base: temp.base, now: () => NOW, max: 3 })
-    store.spend('soon', NOW + 1000)
-    store.spend('later', NOW + 90_000)
-    store.spend('latest', NOW + 120_000)
-    store.spend('new', NOW + 100_000)
-    const kept = store.list().map((entry) => entry.jti)
-    expect(kept).not.toContain('soon')
-    expect(kept).toHaveLength(3)
-    expect(kept).toEqual(expect.arrayContaining(['later', 'latest', 'new']))
-  })
-
-  it('is written 0600 and reads an absent file as nothing spent', () => {
-    expect(readSpentTokens(temp.base)).toEqual([])
-    const store = createSpentTokenStore({ base: temp.base, now: () => NOW })
-    store.spend('j1', NOW + 60_000)
-    expect(readSpentTokens(temp.base)).toHaveLength(1)
-    expect(statSync(spentTokensFile(temp.base)).mode & 0o777).toBe(0o600)
   })
 })

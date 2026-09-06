@@ -2,9 +2,37 @@
 // without a socket server, a listener or a tailnet.
 
 import type { EndpointKind, MobileEndpoint } from './mobile-endpoints'
+import type { PairingHandout } from '../shared/account-v2'
+
+/**
+ * THE PAIRING URL, PRINTED FIRST — and the direct ones underneath, unchanged.
+ *
+ * The relay URL is the only address that reaches this Mac from a phone that is
+ * not on this Wi-Fi, so it leads. The `?token=` URLs stay exactly where they
+ * were, because two readers still need them: a phone that is not signed in to
+ * cookrew.dev, and a Mac whose uplink is down.
+ *
+ * Only the RELAY handout is printed here. A `direct` handout is one of the
+ * URLs already listed below it, and printing it twice under a heading that
+ * says "from anywhere" would be a promise this Mac cannot keep.
+ */
+const pairingLines = (pairing: PairingHandout | null | undefined): string[] => {
+  if (!pairing || pairing.via !== 'relay') return []
+  return [
+    '  From anywhere, through cookrew.dev',
+    `    ${pairing.url}`,
+    '    The token is after the # — cookrew.dev never sees it.',
+    ''
+  ]
+}
 
 export interface MobileHelpInput {
   endpoints: MobileEndpoint[]
+  /**
+   * The one URL to scan (pairing-handout.ts), when there is an account.
+   * Absent or `direct` = this Mac has no account and prints what it always did.
+   */
+  pairing?: PairingHandout | null
   /** True once the HTTPS listener is up (self-signed). */
   secure: boolean
   /** Endpoint hosts the running cert does not cover (name-mismatch on load). */
@@ -23,7 +51,11 @@ export interface MobileHelpInput {
 const GROUP_ORDER: EndpointKind[] = ['tailscale', 'lan', 'other', 'loopback']
 
 export function renderMobileHelp(input: MobileHelpInput): string {
-  const lines: string[] = ['Cookrew Mobile — open on your phone:', '']
+  const lines: string[] = [
+    'Cookrew Mobile — open on your phone:',
+    '',
+    ...pairingLines(input.pairing)
+  ]
 
   for (const kind of GROUP_ORDER) {
     const group = input.endpoints.filter((endpoint) => endpoint.kind === kind)
@@ -76,13 +108,24 @@ export function renderMobileHelp(input: MobileHelpInput): string {
   return lines.join('\n')
 }
 
-/** Confirmation text after a rotation, including the fresh URLs. */
-export function renderRotated(endpoints: MobileEndpoint[]): string {
+/**
+ * Confirmation text after a rotation, including the fresh URLs.
+ *
+ * The pairing URL leads, because the token inside it is the thing that just
+ * changed — a rotation that printed only the LAN addresses would leave the
+ * owner re-scanning a QR that carries the credential they just revoked.
+ */
+export function renderRotated(
+  endpoints: MobileEndpoint[],
+  pairing?: PairingHandout | null
+): string {
+  const relay = pairing && pairing.via === 'relay' ? [`  ${pairing.url}`] : []
   return [
     'Pairing token rotated. Every previously paired device is now unpaired',
     'and will ask to re-pair.',
     '',
     'New URLs:',
+    ...relay,
     ...endpoints.map((endpoint) => `  ${endpoint.url}`)
   ].join('\n')
 }

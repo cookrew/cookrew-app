@@ -74,7 +74,7 @@ const api = {
   // The key is a live credential for two minutes, which is exactly why it goes
   // through the same owner-only gate as a recovery code: a page that could
   // read it could pair itself to this Mac.
-  accountPairingKey: () => ipcRenderer.invoke('account:pairingKey'),
+  accountPairingUrl: () => ipcRenderer.invoke('account:pairingUrl'),
   accountAdmittedDevices: () => ipcRenderer.invoke('account:admittedDevices'),
   accountForgetAdmitted: (deviceId: string) =>
     ipcRenderer.invoke('account:forgetAdmitted', deviceId),
