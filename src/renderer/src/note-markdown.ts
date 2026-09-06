@@ -123,9 +123,11 @@ const noteMarked = new Marked({
  *   - eviction is insertion order, oldest first, until the new entry fits.
  *     Not an LRU — the working set is the notes on one canvas, and a real LRU
  *     would cost a Map delete/set on every read to buy nothing measurable;
- *   - an entry that would not fit even in an empty cache is returned uncached
- *     and evicts NOTHING: one giant note must not empty the cache for the
- *     other hundred cards.
+ *   - an entry that would not fit even in an empty cache never enters the
+ *     map and evicts NOTHING: one giant note must not empty the cache for
+ *     the other hundred cards. It is held in a single side slot instead, so
+ *     it is not re-parsed on every React render either — the click-path
+ *     stall is the reason the cache exists.
  *
  * Why 8 MiB: the heaviest measured canvas renders to about 1.8 MB accounted,
  * so it fits whole with 4x room and no note re-parses on a zoom round trip;
@@ -148,6 +150,8 @@ let hits = 0
 let misses = 0
 let bypasses = 0
 const renderCache = new Map<string, CacheEntry>()
+/** The one entry too large for the budget: outside the map and its total. */
+let oversized: (CacheEntry & { readonly key: string }) | null = null
 
 /**
  * Hashing feeds a fixed scratch buffer and hashes it four bytes at a time.
@@ -160,22 +164,32 @@ const HASH_CHUNK_BYTES = 64 * 1024
 const hashScratch = new Uint8Array(HASH_CHUNK_BYTES)
 const hashWords = new Uint32Array(hashScratch.buffer)
 const utf8 = new TextEncoder()
+/**
+ * Seeded once per process, so a colliding pair cannot be precomputed offline
+ * by someone who can write notes. Keys are in-process only — seeded, and
+ * read as native-endian words — and must never be persisted or compared
+ * across machines.
+ */
+const HASH_SEED = (Math.random() * 0x100000000) >>> 0
+/** Ill-formed UTF-16: an unpaired surrogate. In `u` mode a paired one is a single code point and does not match. */
+const LONE_SURROGATE = /\p{Surrogate}/u
 
 /**
  * `length:h1:h2` — two 32-bit lanes of a cyrb53-style imul mix over the UTF-8
  * bytes, finished with an avalanche. The hash is not cryptographic. An
  * accidental collision among N entries is about N² / 2⁶⁵ (and the lengths
- * must match too); a crafted one is constructible by someone who can write
- * notes. Either shows one note's SANITISED render on another note until
+ * must match too); a crafted one is harder than that only by the per-process
+ * seed. Either shows one note's SANITISED render on another note until
  * either is edited — a display defect, never an unsafe one, because every
- * value in this cache came out of the sanitising renderer above. (The same
- * holds for the one known systematic case: encodeInto writes every LONE
- * surrogate as U+FFFD, so two malformed bodies differing only in which lone
- * surrogate they carry share a key.)
+ * value in this cache came out of the sanitising renderer above.
+ *
+ * Well-formed input only: encodeInto writes every lone surrogate as U+FFFD,
+ * so two ill-formed bodies differing only in which lone surrogate they carry
+ * would share a key. renderNoteMarkdown does not cache those at all.
  */
 export function noteMarkdownCacheKey(content: string): string {
-  let h1 = 0xdeadbeef
-  let h2 = 0x41c6ce57
+  let h1 = 0xdeadbeef ^ HASH_SEED
+  let h2 = 0x41c6ce57 ^ HASH_SEED
   let offset = 0
   while (offset < content.length) {
     const { read, written } = utf8.encodeInto(offset === 0 ? content : content.substring(offset), hashScratch)
@@ -205,6 +219,18 @@ export function noteMarkdownEntryBytes(key: string, html: string): number {
   return ENTRY_OVERHEAD_BYTES + BYTES_PER_CHAR * (key.length + html.length)
 }
 
+/**
+ * marked's output is a rope, and V8 collapses it in place on the first
+ * indexed read: same string, one sixth the retained bytes. The code unit is
+ * folded into module state so the read is observable and cannot be dropped
+ * as a pure expression with an unused result.
+ */
+let flattenSink = 0
+function flattened(html: string): string {
+  flattenSink ^= html.charCodeAt(0) | 0
+  return html
+}
+
 function evictUntilFits(incoming: number): void {
   for (const [key, entry] of renderCache) {
     if (cachedBytes + incoming <= maxCacheBytes) return
@@ -215,10 +241,8 @@ function evictUntilFits(incoming: number): void {
 
 /** Note content → HTML for the card body. Inert: no tag survives from the source. */
 export function renderNoteMarkdown(content: string): string {
-  // A source that alone outweighs the budget cannot produce a cacheable
-  // entry in practice (markdown rarely renders shorter than it was written),
-  // so it is not even hashed.
-  if (BYTES_PER_CHAR * content.length > maxCacheBytes) {
+  // Ill-formed UTF-16 is rendered uncached: see noteMarkdownCacheKey.
+  if (LONE_SURROGATE.test(content)) {
     bypasses += 1
     return noteMarked.parse(content, { async: false })
   }
@@ -228,13 +252,16 @@ export function renderNoteMarkdown(content: string): string {
     hits += 1
     return hit.html
   }
-  const html = noteMarked.parse(content, { async: false })
-  // Flatten: marked's output is a rope, and V8 collapses it in place on the
-  // first indexed read. Same string, one sixth the retained bytes.
-  html.charCodeAt(0)
+  if (oversized !== null && oversized.key === key) {
+    hits += 1
+    return oversized.html
+  }
+  const html = flattened(noteMarked.parse(content, { async: false }))
   const bytes = noteMarkdownEntryBytes(key, html)
   if (bytes > maxCacheBytes) {
+    // Too big for the budget: the side slot, never the map. Evicts nothing.
     bypasses += 1
+    oversized = { key, html, bytes }
     return html
   }
   misses += 1
@@ -252,8 +279,10 @@ export interface NoteMarkdownCacheStats {
   readonly hits: number
   /** Parsed and stored. */
   readonly misses: number
-  /** Parsed and NOT stored: the entry (or its source alone) outweighs the budget. */
+  /** Parsed and NOT stored in the map: ill-formed input, or an entry that outweighs the budget. */
   readonly bypasses: number
+  /** Accounted weight of the one oversized render held in the side slot; 0 when empty. */
+  readonly oversizedBytes: number
 }
 
 /**
@@ -263,7 +292,15 @@ export interface NoteMarkdownCacheStats {
  * answer from a fresh equal render.
  */
 export function noteMarkdownCacheStats(): NoteMarkdownCacheStats {
-  return { entries: renderCache.size, bytes: cachedBytes, maxBytes: maxCacheBytes, hits, misses, bypasses }
+  return {
+    entries: renderCache.size,
+    bytes: cachedBytes,
+    maxBytes: maxCacheBytes,
+    hits,
+    misses,
+    bypasses,
+    oversizedBytes: oversized === null ? 0 : oversized.bytes
+  }
 }
 
 /**
@@ -274,6 +311,7 @@ export function noteMarkdownCacheStats(): NoteMarkdownCacheStats {
  */
 export function clearNoteMarkdownCache(maxBytes: number = NOTE_CACHE_MAX_BYTES): void {
   renderCache.clear()
+  oversized = null
   cachedBytes = 0
   hits = 0
   misses = 0

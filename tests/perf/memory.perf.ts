@@ -138,18 +138,25 @@ describe('note markdown — the render cache is bounded', () => {
 
   it('rendering 300 distinct 64 KB notes retains only the cache bound', async () => {
     expect(body(0).length).toBeGreaterThan(60 * 1024)
+    const base = noteMarkdownCacheStats()
     const growth = await heapGrowth(300, (i) => {
       renderNoteMarkdown(body(i))
     })
     expect(growth.retainedMb).toBeLessThan(MEMORY.noteRenderCacheMb)
-    // STRUCTURE: the bound is in bytes and it held. 301 notes went in, an
-    // 8 MiB accounted budget keeps about 31 of this shape, and the running
-    // total never reads above the budget it was given.
+    // STRUCTURE: the bound is in bytes and it held — and it is USED. Three
+    // hundred distinct notes went in as parses, the running total never reads
+    // above its budget, and a cache that evicted too eagerly (fewer than 20
+    // of this shape, or under 80% of its budget) is as much a defect as one
+    // that never evicts.
     const held = noteMarkdownCacheStats()
+    process.stdout.write(`perf note cache: entries=${held.entries} bytes=${held.bytes} of ${held.maxBytes}\n`)
+    expect(held.misses - base.misses).toBeGreaterThanOrEqual(300)
+    expect(held.hits).toBe(base.hits)
+    expect(held.bypasses).toBe(base.bypasses)
     expect(held.bytes).toBeLessThanOrEqual(held.maxBytes)
-    expect(held.entries).toBeGreaterThan(1)
-    expect(held.entries).toBeLessThan(301)
-    expect(held.misses).toBe(301)
+    expect(held.bytes).toBeGreaterThan(held.maxBytes * 0.8)
+    expect(held.entries).toBeGreaterThan(20)
+    expect(held.entries).toBeLessThan(held.misses - base.misses)
     // And the bound is a window, not a leak: the most recent note answers
     // from the cache, while the first one rendered was evicted and renders
     // afresh, then answers from the cache again. Strings are primitives, so
@@ -157,15 +164,15 @@ describe('note markdown — the render cache is bounded', () => {
     // Counters, not timing — two clocks racing on a CI runner is a coin toss.
     const recent = body(300)
     expect(renderNoteMarkdown(recent)).toBe(renderNoteMarkdown(recent))
-    expect(noteMarkdownCacheStats().hits).toBe(held.hits + 2)
+    expect(noteMarkdownCacheStats()).toMatchObject({ hits: held.hits + 2, misses: held.misses })
     const first = renderNoteMarkdown(body(1))
-    expect(noteMarkdownCacheStats().misses).toBe(302)
+    expect(noteMarkdownCacheStats()).toMatchObject({ hits: held.hits + 2, misses: held.misses + 1 })
     const again = renderNoteMarkdown(body(1))
     expect(again).toBe(first)
-    expect(noteMarkdownCacheStats().hits).toBe(held.hits + 3)
+    expect(noteMarkdownCacheStats()).toMatchObject({ hits: held.hits + 3, misses: held.misses + 1 })
     const evicted = renderNoteMarkdown(body(2))
     expect(renderNoteMarkdown(body(2))).toBe(evicted)
     expect(evicted).not.toBe(first)
-    expect(noteMarkdownCacheStats()).toMatchObject({ misses: 303, hits: held.hits + 4, bypasses: 0 })
+    expect(noteMarkdownCacheStats()).toMatchObject({ hits: held.hits + 4, misses: held.misses + 2, bypasses: base.bypasses })
   })
 })

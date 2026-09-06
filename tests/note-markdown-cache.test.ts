@@ -39,7 +39,7 @@ describe('byte accounting', () => {
   afterAll(() => clearNoteMarkdownCache())
 
   it('starts empty and reports the budget it was given', () => {
-    expect(noteMarkdownCacheStats()).toEqual({ entries: 0, bytes: 0, maxBytes: 16 * KB, hits: 0, misses: 0, bypasses: 0 })
+    expect(noteMarkdownCacheStats()).toEqual({ entries: 0, bytes: 0, maxBytes: 16 * KB, hits: 0, misses: 0, bypasses: 0, oversizedBytes: 0 })
   })
 
   it('charges each entry its key plus its html at two bytes a char, plus a fixed overhead', () => {
@@ -80,7 +80,7 @@ describe('byte accounting', () => {
   it('clear returns the accounting to zero and the budget to its default', () => {
     renderNoteMarkdown(note('a', 1000))
     clearNoteMarkdownCache()
-    expect(noteMarkdownCacheStats()).toEqual({ entries: 0, bytes: 0, maxBytes: 8 * 1024 * 1024, hits: 0, misses: 0, bypasses: 0 })
+    expect(noteMarkdownCacheStats()).toEqual({ entries: 0, bytes: 0, maxBytes: 8 * 1024 * 1024, hits: 0, misses: 0, bypasses: 0, oversizedBytes: 0 })
   })
 })
 
@@ -143,35 +143,61 @@ describe('oversized bypass', () => {
   beforeEach(() => clearNoteMarkdownCache(16 * KB))
   afterAll(() => clearNoteMarkdownCache())
 
-  it('a note larger than the whole budget renders correctly but is not cached, and evicts nothing', () => {
+  const huge = `# Big\n\n${'- **row** with `code`\n'.repeat(1500)}` // ~80 KB of html, > 16 KB
+
+  it('a note larger than the whole budget renders correctly, stays out of the map, and evicts nothing', () => {
     const small = note('small', 1000)
     renderNoteMarkdown(small)
     const before = noteMarkdownCacheStats()
-    const huge = `# Big\n\n${'- **row** with `code`\n'.repeat(1500)}` // ~40 KB of html, > 16 KB
     const html = renderNoteMarkdown(huge)
     expect(html).toContain('<h1>Big</h1>')
     expect(html).toContain('<strong>row</strong>')
-    // Nothing changed in the cache: not the count, not the bytes, not the small entry.
-    expect(noteMarkdownCacheStats()).toEqual({ ...before, bypasses: 1 })
+    // Nothing changed in the map: not the count, not the bytes, not the small entry.
+    const weight = noteMarkdownEntryBytes(noteMarkdownCacheKey(huge), html)
+    expect(weight).toBeGreaterThan(16 * KB)
+    expect(noteMarkdownCacheStats()).toEqual({ ...before, bypasses: 1, oversizedBytes: weight })
     expect(isCached(small)).toBe(true)
-    // And the huge note bypasses every time.
-    expect(renderNoteMarkdown(huge)).toBe(html)
-    expect(noteMarkdownCacheStats().bypasses).toBe(2)
   })
 
-  it('an entry whose html alone exceeds the budget is bypassed even when its source did not', () => {
-    // Source under budget (7,800 chars, 15.6 KB at 2 bytes/char) that expands
-    // past it: every line becomes a list item wrapped in tags, ~3x the source.
+  it('the side slot answers the same oversized note again without a re-parse, and holds only the latest', () => {
+    const html = renderNoteMarkdown(huge)
+    expect(noteMarkdownCacheStats()).toMatchObject({ bypasses: 1, hits: 0 })
+    expect(renderNoteMarkdown(huge)).toBe(html)
+    expect(noteMarkdownCacheStats()).toMatchObject({ bypasses: 1, hits: 1, entries: 0, bytes: 0 })
+    // A second oversized note replaces the first: one slot, bounded by one note.
+    const other = `# Other\n\n${'- *row*\n'.repeat(3000)}`
+    renderNoteMarkdown(other)
+    const stats = noteMarkdownCacheStats()
+    expect(stats).toMatchObject({ bypasses: 2, hits: 1, entries: 0, bytes: 0 })
+    expect(stats.oversizedBytes).toBe(noteMarkdownEntryBytes(noteMarkdownCacheKey(other), renderNoteMarkdown(other)))
+    expect(isCached(huge)).toBe(false)
+  })
+
+  it('an entry whose html exceeds the budget is bypassed however small its source', () => {
+    // 7,800 chars of source (15.6 KB at 2 bytes/char) that expands past the
+    // budget: every line becomes a list item wrapped in tags, ~3x the source.
     const src = '- *i*\n'.repeat(1300)
     expect(2 * src.length).toBeLessThan(16 * KB)
     const html = renderNoteMarkdown(src)
     expect(noteMarkdownEntryBytes(noteMarkdownCacheKey(src), html)).toBeGreaterThan(16 * KB)
     expect(noteMarkdownCacheStats()).toMatchObject({ entries: 0, bytes: 0, misses: 0, bypasses: 1 })
   })
+
+  it('ill-formed UTF-16 renders but is never cached — lone surrogates would share a key', () => {
+    const high = renderNoteMarkdown('alpha \uD800 omega')
+    const low = renderNoteMarkdown('alpha \uDC00 omega')
+    expect(high).not.toBe(low)
+    expect(high).toContain('\uD800')
+    expect(low).toContain('\uDC00')
+    expect(noteMarkdownCacheStats()).toMatchObject({ entries: 0, hits: 0, misses: 0, bypasses: 2, oversizedBytes: 0 })
+    // A properly paired surrogate is well-formed and caches as usual.
+    expect(isCached('alpha \u{1F600} omega')).toBe(false)
+    expect(isCached('alpha \u{1F600} omega')).toBe(true)
+  })
 })
 
 describe('the key', () => {
-  it('is a pure function of the content and carries its length', () => {
+  it('is a pure function of the content (within a process) and carries its length', () => {
     const src = note('k', 3000)
     expect(noteMarkdownCacheKey(src)).toBe(noteMarkdownCacheKey(`${src.slice(0, 10)}${src.slice(10)}`))
     expect(noteMarkdownCacheKey(src).startsWith(`${src.length}:`)).toBe(true)

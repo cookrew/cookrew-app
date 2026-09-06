@@ -58,11 +58,11 @@ export const MEMORY = {
    * (perf lane L3, 2026-09-06). Before: the bound was 64 ENTRIES and 64
    * cached 64 KB notes retained 51.5 MB — 771 KB an entry, of which 83% was
    * the cons-string rope marked returns. After: 31 entries of this shape fit
-   * (265 KB accounted each) and retain 4.0 MB, since V8 keeps this Latin-1
-   * HTML at one byte a char. Twice the measurement is 8; the budget is 12 so
-   * a two-byte (CJK) body that fills the whole 8 MiB still passes, while a
-   * return to the entry-count bound (51 MB) or an unflattened store (24 MB
-   * at 31 entries) fails outright.
+   * (265 KB accounted each, 98% of the budget) and retain 3.66 MB, since V8
+   * keeps this Latin-1 HTML at one byte a char. Twice the measurement is 8;
+   * the budget is 12 so a two-byte (CJK) body that fills the whole 8 MiB
+   * still passes, while a return to the entry-count bound (51 MB) or an
+   * unflattened store (24 MB at 31 entries) fails outright.
    */
   noteRenderCacheMb: 12
 } as const
