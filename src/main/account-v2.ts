@@ -722,23 +722,10 @@ export class Accounts {
     pathname: string,
     init: RequestInit & { parse?: boolean } = {},
   ): Promise<AccountResult<T>> {
-    const account = this.cached
-    if (!account) return { ok: false, reason: 'no_account' }
-    if (!this.sessionLive()) return { ok: false, reason: 'session-expired' }
     const { parse = true, ...rest } = init
-    let response: Response
-    try {
-      response = await this.http(`${this.origin}${pathname}`, {
-        ...rest,
-        headers: {
-          ...(rest.body !== undefined ? { 'content-type': 'application/json' } : {}),
-          ...(rest.headers as Record<string, string> | undefined),
-          authorization: `Bearer ${account.session?.token ?? ''}`,
-        },
-      })
-    } catch {
-      return { ok: false, reason: 'offline' }
-    }
+    const sent = await this.authedResponse(pathname, rest)
+    if (!sent.ok) return sent
+    const response = sent.response
     if (!response.ok) {
       const refused = await wireError(response)
       // THE FIX: a 401 the registry called `unauthenticated` (or did not name)
@@ -752,6 +739,42 @@ export class Accounts {
       return { ok: true, value: (await response.json()) as T }
     } catch {
       return { ok: false, reason: 'unknown' }
+    }
+  }
+
+  /**
+   * THE SAME CALL, ANSWERED AS A RESPONSE — status, headers and all.
+   *
+   * `authed` above flattens every refusal into a reason, which is right for
+   * the surfaces it feeds: a sheet does not care whether "no" was a 409 or a
+   * 429. The certificate order (reach v2.1) does. 202 and 200 are different
+   * states of the same request, 429 carries a `retry-after` that is the CA's
+   * clock rather than ours, and 503 means "this registry certifies no names"
+   * — three facts that do not survive being turned into one word.
+   *
+   * So the preamble stays in one place and there are two ways to read the
+   * answer. The token still never leaves this class: what comes back is a
+   * Response, not a credential.
+   */
+  async authedResponse(
+    pathname: string,
+    init: RequestInit = {},
+  ): Promise<{ ok: true; response: Response } | { ok: false; reason: AccountRefusal }> {
+    const account = this.cached
+    if (!account) return { ok: false, reason: 'no_account' }
+    if (!this.sessionLive()) return { ok: false, reason: 'session-expired' }
+    try {
+      const response = await this.http(`${this.origin}${pathname}`, {
+        ...init,
+        headers: {
+          ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
+          ...(init.headers as Record<string, string> | undefined),
+          authorization: `Bearer ${account.session?.token ?? ''}`,
+        },
+      })
+      return { ok: true, response }
+    } catch {
+      return { ok: false, reason: 'offline' }
     }
   }
 
