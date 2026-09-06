@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { cookrew, isRemoteMode } from './api'
+import { LocalNetworkRow } from './LocalNetworkRow'
 import { currentPathBadge, subscribePathLink } from './path-link'
 import type { PathBadgeView } from '../../shared/path-badge'
 
@@ -41,6 +42,11 @@ export function PathBadge({ onRefresh }: { onRefresh: () => void }): React.JSX.E
         <span className="cr-path-dot" aria-hidden="true" />
         <span className="cr-path-word">{view.word}</span>
       </button>
+      {/* UNDER the badge, not inside the sheet: the ask has to be visible
+          without a tap, because a permission nobody knows to look for is a
+          permission nobody grants. It renders nothing in three of the four
+          states, so on most phones the bar is exactly as it was. */}
+      <LocalNetworkRow />
       {open && <PathSheet view={view} onClose={() => setOpen(false)} />}
     </>
   )

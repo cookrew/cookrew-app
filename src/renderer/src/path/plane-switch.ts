@@ -1,5 +1,6 @@
 import { trustedNetwork, type TrustedNetwork } from '../../../shared/trusted-origin'
 import type { DataPlane, DataPlaneKind } from '../data-plane'
+import type { LocalNetworkState } from '../local-network'
 import type { HelloReply, ReachCardLite } from './switch'
 
 /**
@@ -48,6 +49,10 @@ export type PlaneOutcome =
   | 'no-trusted'
   /** Trusted names exist and none of them proved to be this Mac. */
   | 'unreachable'
+  /** The browser refuses this page the local network. Nothing was tried. */
+  | 'refused'
+  /** The browser would prompt, and nobody is looking. Nothing was tried. */
+  | 'unasked'
   | 'switched'
 
 /** LAN beats tailnet beats relay, as everywhere else. */
@@ -105,7 +110,37 @@ export interface PlaneSwitchDeps {
   /** True while the switcher is holding off after a direct plane failed. */
   readonly held?: () => boolean
   readonly probing?: (on: boolean) => void
+  /**
+   * What the browser will do about the local network, read fresh per race.
+   *
+   * Absent means the question cannot be asked here, which is treated exactly
+   * as 'unsupported': race, and let the request answer.
+   */
+  readonly permission?: () => Promise<LocalNetworkState>
+  /**
+   * MAY THIS RACE RAISE A PERMISSION PROMPT? False for every race the clock
+   * started; true only for the one a person pressed.
+   */
+  readonly mayPrompt?: () => boolean
 }
+
+/**
+ * THE PERMISSION POLICY, as one rule with the four states side by side.
+ *
+ *   denied      — do not race. Every probe would be blocked, and a blocked
+ *                 probe is indistinguishable from a sleeping Mac, so racing
+ *                 would spend battery AND make the "why this path" panel lie.
+ *   prompt      — race only when a person asked. Chrome raises the dialog from
+ *                 the request itself; a race off the 60-second timer therefore
+ *                 puts a dialog in front of a phone in a pocket, and an unseen
+ *                 dialog is dismissed — which is a refusal that then persists.
+ *   granted     — race.
+ *   unsupported — race. Safari today: a browser that never prompts either
+ *                 allows the request or fails it, and a failed request is
+ *                 already "not this path".
+ */
+export const mayRace = (state: LocalNetworkState, mayPrompt: boolean): boolean =>
+  state === 'denied' ? false : state === 'prompt' ? mayPrompt : true
 
 /**
  * One race. Returns what happened, so a caller can log it and a test can read
@@ -119,6 +154,14 @@ export const switchPlaneIfBetter = async (deps: PlaneSwitchDeps): Promise<PlaneO
   // adopted, dropped, and adopted again forever — a flap the reader sees as a
   // badge blinking between LAN and RELAY.
   if (deps.held?.() === true) return 'skipped'
+  // AFTER the cheap local answers and BEFORE any request. A phone already on
+  // the LAN, or holding off after a fallback, has no permission question to
+  // ask; a phone that has been refused must not even fetch the card, because
+  // nothing on it could be used.
+  const permission = await deps.permission?.().catch((): LocalNetworkState => 'unsupported')
+  if (permission !== undefined && !mayRace(permission, deps.mayPrompt?.() === true)) {
+    return permission === 'denied' ? 'refused' : 'unasked'
+  }
   const card = await deps.card().catch(() => null)
   if (!card || card.deviceId.length === 0) return 'no-card'
   const candidates = planeCandidates(card, current.kind)

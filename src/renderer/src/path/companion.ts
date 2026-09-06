@@ -2,11 +2,19 @@ import { apiPath, clientBase } from '../api-base'
 import { isRemoteMode } from '../api'
 import { authHeaders, authStore } from '../auth-gate'
 import { dataPlane, setDataPlane, subscribeDataPlane, type DataPlane } from '../data-plane'
+import type { LocalNetworkState } from '../local-network'
+import { localNetworkState, requestLocalNetwork } from '../local-network'
+import { offerLocalNetwork, setLocalNetwork } from '../local-network-gate'
 import { planeFetch } from '../plane-fetch'
 import { planeHealth, type LinkHealth } from '../plane-health'
 import { followDataPlane } from '../plane-streams'
 import { currentOriginState, forgetLatency, setProbing, subscribePathLink } from '../path-link'
-import { PLANE_PROBE_EVERY_MS, switchPlaneIfBetter, type HelloClaim } from './plane-switch'
+import {
+  PLANE_PROBE_EVERY_MS,
+  planeCandidates,
+  switchPlaneIfBetter,
+  type HelloClaim
+} from './plane-switch'
 import {
   PATH_MEMORY_PREFIX,
   askHello,
@@ -148,8 +156,46 @@ export const verifyHello = async (claim: HelloClaim, timeoutMs = VERIFY_TIMEOUT_
  * not reloaded — which is the entire difference between this and the switch
  * that put a phone on a certificate warning.
  */
+/**
+ * READ THE LOCAL-NETWORK PERMISSION, AND TELL THE REST OF THE APP.
+ *
+ * One read per race, and the store it updates is what the badge's sentence and
+ * the explainer row both hang off — so there is exactly one moment in the
+ * companion where this fact is established and everything else follows it.
+ */
+const readLocalNetwork = async (): Promise<LocalNetworkState> => {
+  const state = await localNetworkState()
+  setLocalNetwork(state)
+  return state
+}
+
+/**
+ * THE ONE ASK, aimed at the best trusted name the desktop currently publishes.
+ *
+ * A permission prompt has to be raised by a real request, and a request to
+ * nowhere would spend the single ask a reader will ever grant. So the card is
+ * fetched first and the ask is simply not offered when the Mac has no trusted
+ * name — which is the honest state on a desktop with no certificate yet.
+ */
+const askForLocalNetwork = async (): Promise<void> => {
+  const card = await fetchCard()
+  const best = card ? planeCandidates(card, dataPlane().kind)[0] : undefined
+  if (!best) {
+    await readLocalNetwork()
+    return
+  }
+  setLocalNetwork(await requestLocalNetwork({ url: best.origin }))
+}
+
 const startPlaneSwitch = (): (() => void) => {
   const health = planeHealth()
+  // Set by the loop at start; the ONE-AT-A-TIME guard stays the loop's, so a
+  // press cannot start a second race beside the timer's.
+  let raceNow: () => void = () => undefined
+  // True for exactly one race: the one a person asked for by pressing ALLOW.
+  // Every other race — the timer, `online`, a tab coming back — must never
+  // raise a dialog at a phone nobody is looking at.
+  let pressed = false
   // The link store announces on EVERY change it holds — latency, probing, the
   // desktop's name — and only the transport's own state is evidence about the
   // plane. Without this the latency recorded by each successful request would
@@ -169,8 +215,17 @@ const startPlaneSwitch = (): (() => void) => {
       lastLink = state.link
       health.link(state.link)
     }),
+    offerLocalNetwork(async () => {
+      await askForLocalNetwork()
+      // Whatever the browser decided, look again immediately — a grant that
+      // waited up to a minute for the next tick would read as a button that
+      // did nothing.
+      pressed = true
+      raceNow()
+    }),
     startRaceLoop({
       everyMs: PLANE_PROBE_EVERY_MS,
+      ready: (run) => void (raceNow = run),
       race: () =>
         switchPlaneIfBetter({
           plane: dataPlane,
@@ -180,7 +235,13 @@ const startPlaneSwitch = (): (() => void) => {
           adopt: (plane: DataPlane) => setDataPlane(plane),
           nonce: () => randomNonce((bytes) => window.crypto.getRandomValues(bytes)),
           held: () => health.held(),
-          probing: setProbing
+          probing: setProbing,
+          permission: readLocalNetwork,
+          mayPrompt: () => {
+            const may = pressed
+            pressed = false
+            return may
+          }
         })
     })
   ]

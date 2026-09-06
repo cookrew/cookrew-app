@@ -247,6 +247,14 @@ export interface RaceLoopOptions {
   /** window, or a stand-in with the three listeners this uses. */
   readonly on?: (event: string, listener: () => void) => () => void
   readonly setInterval?: (fn: () => void, ms: number) => () => void
+  /**
+   * Handed the loop's own guarded race trigger, once, at start.
+   *
+   * The ONE-AT-A-TIME guard has to stay the loop's, so a person pressing
+   * ALLOW cannot start a second race beside the timer's. Everything that
+   * wakes this loop is an event except that press, and it needs a door.
+   */
+  readonly ready?: (raceNow: () => void) => void
 }
 
 /**
@@ -293,6 +301,7 @@ export const startRaceLoop = (options: RaceLoopOptions): (() => void) => {
     listen('online', race),
     listen('visibilitychange', race)
   ]
+  options.ready?.(race)
   race()
   return () => offs.forEach((off) => off())
 }
