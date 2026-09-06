@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { qrMatrix } from '../src/shared/qr'
 import { PairBody, PairPhoneSheet } from '../src/renderer/src/account/PairPhoneSheet'
 import {
   PAIRING_POLL_MS,
@@ -275,5 +276,23 @@ describe('the popout clock — one interval, a countdown that moves', () => {
     const h = harness(async () => null)
     await flush()
     expect(h.seen[h.seen.length - 1]).toMatchObject({ asked: true, handout: null })
+  })
+})
+
+describe('the popout QR carries its quiet zone', () => {
+  it('reserves four light modules on every side, inside the SVG', () => {
+    // Not a CSS margin: the quiet zone is how a scanner FINDS the symbol, and
+    // an 8 px cream border is under two modules at this size, in the wrong
+    // colour, and gone the moment the box is restyled.
+    const view = pairingPopoutView({
+      desktopName: 'MacBook Pro',
+      key: { deviceId: DEVICE, key: '7KQ2M8', expiresAt: NOW + 102_000 },
+      now: NOW
+    })
+    const html = renderToStaticMarkup(<PairBody view={view} />)
+    const modules = (qrMatrix((view as { qr: string }).qr) as boolean[][]).length
+    expect(html).toContain(`viewBox="0 0 ${modules + 8} ${modules + 8}"`)
+    expect(html).toContain('translate(4 4)')
+    expect(html).toContain('fill="#ffffff"')
   })
 })

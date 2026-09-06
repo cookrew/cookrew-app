@@ -123,23 +123,36 @@ export function PairBody({ view }: { view: PairingPopoutView }): React.JSX.Eleme
 }
 
 /**
- * One SVG path for the whole symbol. A grid of rects is thousands of nodes
- * that React then has to diff every second as the key rotates; a path is one.
+ * THE QUIET ZONE IS FOUR MODULES AND IT IS NOT A MARGIN.
+ *
+ * It is how a scanner FINDS the symbol: the finder patterns are recognised by
+ * their 1:1:3:1:1 run of dark and light, and the outermost light run is the
+ * quiet zone itself. This drew the matrix edge to edge inside its own box, and
+ * leaned on an 8 px CSS border in cream to stand in for it — under two modules
+ * at this size, in the wrong colour, and gone entirely if the box is ever
+ * restyled. Now it is inside the SVG, in white, where it cannot be lost.
+ *
+ * One path for the whole symbol: a grid of rects is thousands of nodes React
+ * has to diff as the key rotates, and a path is one.
  */
+const QUIET = 4
+
 function Qr({ text, label }: { text: string; label: string }): React.JSX.Element {
   const modules = qrMatrix(text)
   if (!modules) return <p className="gs-paste-error">That code is too long to draw.</p>
-  const size = modules.length
+  const span = modules.length + QUIET * 2
   return (
     <svg
       className="cr-pair-qr"
-      viewBox={`0 0 ${size} ${size}`}
+      viewBox={`0 0 ${span} ${span}`}
       role="img"
       aria-label={label}
       shapeRendering="crispEdges"
     >
-      <rect width={size} height={size} fill="#ffffff" />
-      <path d={qrPath(modules)} fill="#000000" />
+      <rect width={span} height={span} fill="#ffffff" />
+      <g transform={`translate(${QUIET} ${QUIET})`}>
+        <path d={qrPath(modules)} fill="#000000" />
+      </g>
     </svg>
   )
 }
