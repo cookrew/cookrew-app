@@ -984,9 +984,9 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * captureAsync that follows resolves its pane from this read rather than
    * missing on a cold cache — through publishInventory, so a listing that
    * finishes after a newer one cannot roll the cache back. Failure or
-   * malformed output answers [] — the "nothing detached" the probe already
-   * treats as no signal — and leaves the cache AND the admission backoff
-   * alone: the probe's failures are its own.
+   * malformed output REJECTS — distinguishable from an empty fleet — and
+   * leaves the cache AND the admission backoff alone: the probe's failures
+   * are its own.
    */
   async listSessionsAsync(): Promise<string[]> {
     const labels = (panes: readonly HerdrPane[]): string[] =>
@@ -1002,8 +1002,11 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // A failure here is the probe's alone: its caller is single-flight and
     // interval-paced, so one bounded child per tick is the whole cost, and
     // it must NOT touch the admission backoff — a flaky herdr retried every
-    // 3 s would otherwise keep dispatch admission backed off for good.
-    if (panes === null) return []
+    // 3 s would otherwise keep dispatch admission backed off for good. It
+    // THROWS rather than answering []: an empty fleet and a failed listing
+    // are different facts, and the probe must not blank its map on the
+    // second one.
+    if (panes === null) throw new Error('herdr pane list failed or malformed')
     this.publishInventory(startedAt, panes)
     return labels(panes)
   }

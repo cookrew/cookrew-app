@@ -93,6 +93,13 @@ export const LATENCY = {
   // 40 ms. Structural: no read waited (>100 ms); an EMPTY board's first read
   // does wait, bounded at 1.5 s.
   boardReadDuringPass: { p50: 2, p95: 5, p98: 10 },
+  // A GET /api/board on an all-attached idle fleet (the map is empty for
+  // good, the sampler self-parks) with a 300 ms listing in flight: the read
+  // answers at once because a pass has completed before. 2026-09-06, worst
+  // of three runs at load 2/core: p50 0.31 / p95 2.33 / p98 2.60 for 6 reads (was 800-900 ms each on
+  // a 900 ms listing when warm() keyed on emptiness). Structural: none
+  // waited, phases 0, and the reads did restart the probe.
+  boardReadIdleFleet: { p50: 2, p95: 5, p98: 10 },
   // One drain tick over 40 parked sessions × 5 terminals, all resident
   // (multi-instance), zero workspace reads. Worst of four 30-sample runs
   // 2026-09-06 at load 4-8/core: p50 0.14 / p95 1.74 / p98 3.27.

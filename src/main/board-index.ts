@@ -362,10 +362,12 @@ export interface ProbeSampler {
    */
   sampleAsync: () => Promise<Map<string, BoardPhase>>
   /**
-   * start(), then the phases — at once when there is anything to show, or
-   * once the pass that start kicked has landed when there is nothing. What a
-   * board READ awaits, bounded by the caller: the first frame after the
-   * sampler parked is not an empty one, and no other read waits on a pass.
+   * start(), then the phases — at once once ANY pass has completed, or once
+   * the very first pass lands. What a board READ awaits, bounded by the
+   * caller: the first frame ever is not an empty one, and no later read
+   * waits on a pass. Completion, not emptiness, is the key: an all-attached
+   * fleet has a legitimately empty map forever, and keying on that made
+   * every idle board read wait on a live listing.
    */
   warm: () => Promise<Map<string, BoardPhase>>
   readonly running: boolean
@@ -409,8 +411,10 @@ export function createProbeSampler(
   let lastSampleAt = 0
   /** Whether the last pass found anything to look at — the self-stop input. */
   let lastDetached = 0
-  /** The async pass in flight, so a read with nothing to show can await it. */
+  /** The async pass in flight, so a read before the first completion can await it. */
   let pending: Promise<Map<string, BoardPhase>> | null = null
+  /** Any pass has run to its end (fresh, partial or failed) — after that, no read waits. */
+  let everCompleted = false
   const usesAsync = typeof deps.listSessionsAsync === 'function'
 
   const observe = (ms: number): void => {
@@ -435,6 +439,7 @@ export function createProbeSampler(
       console.error('Board probe failed:', error)
     } finally {
       inFlight = false
+      everCompleted = true
       observe(performance.now() - started)
     }
     return latest
@@ -462,6 +467,7 @@ export function createProbeSampler(
       heldMs += performance.now() - segment
       inFlight = false
       pending = null
+      everCompleted = true
       observe(heldMs)
     }
     return latest
@@ -501,10 +507,12 @@ export function createProbeSampler(
     sampleAsync,
     warm: () => {
       sampler.start()
-      // Only a read with NOTHING to show waits. A pass outlasts the interval
-      // on a big detached fleet, so "a pass is running" is the usual state;
-      // waiting on it from every read would hand back what the lane saved.
-      if (latest.size > 0) return Promise.resolve(latest)
+      // Only a read BEFORE THE FIRST COMPLETED PASS waits. A pass outlasts
+      // the interval on a big detached fleet, so "a pass is running" is the
+      // usual state, and an all-attached fleet's map is empty for good —
+      // waiting on either from every read would hand back what the lane
+      // saved (measured: 800-900 ms per idle board read on a 900 ms listing).
+      if (everCompleted) return Promise.resolve(latest)
       return pending ?? Promise.resolve(latest)
     },
     start: (): void => {
@@ -587,7 +595,9 @@ export function tmuxProbeDeps(runtime: {
     capturePane: (sessionName) => multiplexer()?.capture(sessionName) ?? '',
     // The periodic tick takes these. A backend with an async runner (herdr
     // host) answers off the main thread; one without falls through to the
-    // sync read inside the same promise, which is no worse than before.
+    // sync read inside the same promise, which is no worse than before. A
+    // listing that FAILS rejects — the pass logs and leaves the last map
+    // alone — rather than reading as an empty fleet.
     listSessionsAsync: async () => {
       const mux = multiplexer()
       if (!mux) return []

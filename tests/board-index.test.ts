@@ -629,6 +629,33 @@ describe('createProbeSampler — a read can wait for the pass it kicked', () => 
     sampler.stop()
   })
 
+  it('a listing that fails leaves the last map alone and counts as a completed attempt', async () => {
+    let fail = false
+    const sampler = createProbeSampler(
+      probeDeps({
+        listSessionsAsync: async () => {
+          if (fail) throw new Error('herdr pane list failed')
+          return ['cookrew_t1']
+        },
+        capturePaneAsync: async () => WORKING_PANE,
+        knownTerminalIds: () => ['t1']
+      })
+    )
+    expect((await sampler.sampleAsync()).get('t1')).toBe('working')
+    fail = true
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      expect((await sampler.sampleAsync()).get('t1')).toBe('working') // not blanked
+      expect(spy).toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+    }
+    const started = performance.now()
+    await sampler.warm()
+    expect(performance.now() - started).toBeLessThan(50)
+    sampler.stop()
+  })
+
   it('a wedged backend reports a partial pass at the deadline instead of holding the latch', async () => {
     const { PROBE_PASS_DEADLINE_TICKS } = await import('../src/main/board-index')
     let reads = 0
@@ -661,6 +688,37 @@ describe('createProbeSampler — a read can wait for the pass it kicked', () => 
 describe('createProbeSampler — review round two', () => {
   const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
+  it('warm() does not wait on a running pass once any pass has completed — even with an empty fleet', async () => {
+    // The all-attached idle state: the map is legitimately empty forever and
+    // the sampler self-parks. A read must not wait on the listing it kicks.
+    let listings = 0
+    let gate: (() => void) | null = null
+    const sampler = createProbeSampler(
+      probeDeps({
+        listSessionsAsync: () =>
+          new Promise<string[]>((resolve) => {
+            listings += 1
+            if (listings === 1) resolve([])
+            else gate = () => resolve([])
+          }),
+        capturePaneAsync: async () => WORKING_PANE,
+        knownTerminalIds: () => ['t1'],
+        isAttached: () => true
+      }),
+      5
+    )
+    expect((await sampler.sampleAsync()).size).toBe(0) // first pass completed: nothing detached
+    await sleep(10) // past the interval, so the next start() kicks a pass
+    const started = performance.now()
+    const warmed = await sampler.warm()
+    expect(performance.now() - started).toBeLessThan(50)
+    expect(warmed.size).toBe(0)
+    expect(listings).toBe(2) // the read kicked a listing, and did not wait on it
+    gate!()
+    await sleep(0)
+    sampler.stop()
+  })
+
   it('warm() does not wait on a running pass when there is something to show', async () => {
     let gate: (() => void) | null = null
     let passes = 0
@@ -679,6 +737,8 @@ describe('createProbeSampler — review round two', () => {
     expect((await sampler.sampleAsync()).get('t1')).toBe('working')
     const second = sampler.sampleAsync() // in flight, held at the read
     await sleep(0)
+    // Never-ran is the ONLY state that waits: pinned above ("warm() resolves
+    // with the fresh pass"); here a completed pass exists.
     const started = performance.now()
     const warmed = await sampler.warm()
     expect(performance.now() - started).toBeLessThan(50)

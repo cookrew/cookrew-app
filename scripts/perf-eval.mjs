@@ -257,7 +257,8 @@ async function evalMemory(opts, now) {
   const processes = pickAppProcesses(parsePsTable(table))
   const health = processes.length ? await probeHealth(opts) : { loop: null, note: '' }
   for (const p of processes) {
-    appendHistory(opts.history, 'memory', { t: now, ...p, ...(p.role === 'main' && health.loop ? { loop: health.loop } : {}) })
+    const loop = p.role === 'main' && health.loop ? { loop: health.loop } : {}
+    appendHistory(opts.history, 'memory', { t: now, ...p, ...loop })
   }
   const recent = readHistory(opts.history, 'memory', now - 3 * HOUR)
   const load = loadPerCore()
@@ -319,7 +320,9 @@ function loopCheck(p, health, load, capped) {
     value: loop.p95,
     unit: 'ms p95',
     verdict: capped(verdict),
-    note: `${loop.window} n=${loop.samples} p50=${fmtMs(loop.p50)} p98=${fmtMs(loop.p98)} max=${fmtMs(loop.max)}${elu}${held}${shaped}`
+    note:
+      `${loop.window} n=${loop.samples} p50=${fmtMs(loop.p50)} p98=${fmtMs(loop.p98)} ` +
+      `max=${fmtMs(loop.max)}${elu}${held}${shaped}`
   }
 }
 

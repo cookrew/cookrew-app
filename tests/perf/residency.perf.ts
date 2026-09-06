@@ -45,8 +45,13 @@ import { expectEvery, expectTail, measure, removeRoot, report, tempRoot } from '
 const realRead = fs.readFileSync
 const counter = { on: false, workspaceReads: 0 }
 beforeAll(() => {
-  fs.readFileSync = function countedRead(this: unknown, file: Parameters<typeof fs.readFileSync>[0], ...rest: unknown[]) {
-    if (counter.on && typeof file === 'string' && file.endsWith(`${path.sep}workspace.json`)) counter.workspaceReads += 1
+  fs.readFileSync = function countedRead(
+    this: unknown,
+    file: Parameters<typeof fs.readFileSync>[0],
+    ...rest: unknown[]
+  ) {
+    const isWorkspace = typeof file === 'string' && file.endsWith(`${path.sep}workspace.json`)
+    if (counter.on && isWorkspace) counter.workspaceReads += 1
     return (realRead as (...a: unknown[]) => Buffer | string).call(this, file, ...rest)
   } as typeof fs.readFileSync
   syncBuiltinESMExports()
@@ -65,7 +70,13 @@ const READ_MS = 15
 const envelope = (n: number): string =>
   JSON.stringify({
     id: 'cli:pane:list',
-    result: { panes: Array.from({ length: n }, (_, i) => ({ pane_id: `w1:p${i}`, label: `cookrew_t${i}`, agent_status: 'unknown' })) }
+    result: {
+      panes: Array.from({ length: n }, (_, i) => ({
+        pane_id: `w1:p${i}`,
+        label: `cookrew_t${i}`,
+        agent_status: 'unknown'
+      }))
+    }
   })
 
 function herdrHarness(panes: number) {
@@ -97,7 +108,12 @@ function herdrHarness(panes: number) {
     }
     throw new Error(`unexpected herdr call ${args.join(' ')}`)
   }
-  const mux = new HerdrHostMultiplexer({ session: 'cookrewperf', configPath: '/tmp/cookrew-perf.toml', runner, asyncRunner })
+  const mux = new HerdrHostMultiplexer({
+    session: 'cookrewperf',
+    configPath: '/tmp/cookrew-perf.toml',
+    runner,
+    asyncRunner
+  })
   const deps: ProbeDeps = {
     listSessions: () => mux.listSessions(),
     capturePane: (name) => mux.capture(name) ?? '',
@@ -144,7 +160,8 @@ describe('board probe — one pass over 40 detached panes forks nothing synchron
     expectEvery(measured, 'outlastsFreshness', true)
     expectEvery(measured, 'reads', 40)
     expectEvery(measured, 'phases', 40)
-    process.stdout.write(`perf probe tick listings per pass: ${[...new Set(measured.structurals.map((s) => s.listings))].join(', ')}\n`)
+    const listingsSeen = [...new Set(measured.structurals.map((s) => s.listings))].join(', ')
+    process.stdout.write(`perf probe tick listings per pass: ${listingsSeen}\n`)
   })
 })
 
@@ -174,20 +191,34 @@ function apiResponse(): { response: http.ServerResponse; status: () => number } 
   return { response, status: () => status }
 }
 
-/** A sampler over `panes` fake panes whose every read takes `readMs`. */
-function slowSampler(panes: number, readMs: number) {
+/** How long the idle fleet's listing takes — the field's slow herdr. */
+const LISTING_MS = 300
+
+/** A sampler over an all-attached fleet whose listing takes `listingMs`. */
+function idleSampler(listingMs: number) {
+  let listings = 0
   const deps: ProbeDeps = {
     listSessions: () => [],
     capturePane: () => '',
-    listSessionsAsync: async () => Array.from({ length: panes }, (_, i) => `cookrew_t${i}`),
-    capturePaneAsync: () => new Promise<string>((resolve) => setTimeout(() => resolve(WORKING_PANE), readMs)),
-    knownTerminalIds: () => Array.from({ length: panes }, (_, i) => `t${i}`),
-    isAttached: () => false,
+    listSessionsAsync: () =>
+      new Promise<string[]>((resolve) => {
+        listings += 1
+        setTimeout(() => resolve(['cookrew_t0', 'cookrew_t1']), listingMs)
+      }),
+    capturePaneAsync: async () => WORKING_PANE,
+    knownTerminalIds: () => ['t0', 't1'],
+    isAttached: () => true, // every agent attached: L1 has them all
     sessionNameFor: (id) => `cookrew_${id}`,
-    detectWorking: (chunk) => /esc to interrupt/.test(chunk),
+    detectWorking: () => true,
     detectWaiting: () => false
   }
-  const sampler = createProbeSampler(deps, 3000)
+  const sampler = createProbeSampler(deps, 20)
+  const { read } = boardReader(sampler)
+  return { sampler, read, listings: () => listings }
+}
+
+/** GET /api/board through handleMobileApi against a sampler, timed. */
+function boardReader(sampler: ReturnType<typeof createProbeSampler>) {
   const board = boardSourcesFrom({
     store: { focusedId: 'ws' },
     turns: { list: () => [] },
@@ -208,6 +239,24 @@ function slowSampler(panes: number, readMs: number) {
     if (status() !== 200) throw new Error(`/api/board answered ${status()}`)
     return ms
   }
+  return { read }
+}
+
+/** A sampler over `panes` fake panes whose every read takes `readMs`. */
+function slowSampler(panes: number, readMs: number) {
+  const deps: ProbeDeps = {
+    listSessions: () => [],
+    capturePane: () => '',
+    listSessionsAsync: async () => Array.from({ length: panes }, (_, i) => `cookrew_t${i}`),
+    capturePaneAsync: () => new Promise<string>((resolve) => setTimeout(() => resolve(WORKING_PANE), readMs)),
+    knownTerminalIds: () => Array.from({ length: panes }, (_, i) => `t${i}`),
+    isAttached: () => false,
+    sessionNameFor: (id) => `cookrew_${id}`,
+    detectWorking: (chunk) => /esc to interrupt/.test(chunk),
+    detectWaiting: () => false
+  }
+  const sampler = createProbeSampler(deps, 3000)
+  const { read } = boardReader(sampler)
   return { sampler, read }
 }
 
@@ -226,19 +275,51 @@ describe('board read — while a pass is in flight, a read with something to sho
     sampler.stop()
     const stats = latencyStats(times)
     if (!stats) throw new Error('no samples')
-    const measured = { name: 'board read during pass n=30', stats, structurals: times.map((ms) => ({ waited: ms > 100 })) }
+    const measured = {
+      name: 'board read during pass n=30',
+      stats,
+      structurals: times.map((ms) => ({ waited: ms > 100 }))
+    }
     report(measured)
     expectTail(measured, LATENCY.boardReadDuringPass)
     expectEvery(measured, 'waited', false)
 
-    // The one read that SHOULD wait: nothing to show yet, a short pass running.
-    const empty = slowSampler(10, 30)
+    // The one read that SHOULD wait: no pass has ever completed, a short one running.
+    const never = slowSampler(10, 30)
     const started = performance.now()
-    const first = await empty.read()
-    empty.sampler.stop()
-    expect(first, 'an empty board waits for the pass it kicked').toBeGreaterThanOrEqual(200)
+    const first = await never.read()
+    never.sampler.stop()
+    expect(first, 'a board with no completed pass waits for the one it kicked').toBeGreaterThanOrEqual(200)
     expect(performance.now() - started).toBeLessThan(1500 + 200)
-    expect(empty.sampler.phases().size).toBe(10)
+    expect(never.sampler.phases().size).toBe(10)
+  })
+
+  it('an all-attached idle fleet: the map is empty for good, and no read waits on the listing it kicks', async () => {
+    // The common idle state the sampler self-parks for. Each read past the
+    // interval restarts the sampler (a listing, off the main thread); the
+    // read itself answers at once because a pass has completed before.
+    const { sampler, read, listings } = idleSampler(LISTING_MS)
+    await sampler.sampleAsync() // the first pass: completed, nothing detached
+    const times: number[] = []
+    for (let i = 0; i < 6; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, LISTING_MS + 50)) // past the pass and the interval
+      times.push(await read())
+    }
+    sampler.stop()
+    const stats = latencyStats(times)
+    if (!stats) throw new Error('no samples')
+    const measured = {
+      name: 'board read on an idle all-attached fleet n=6',
+      stats,
+      structurals: times.map((ms) => ({ waited: ms > 100, phases: sampler.phases().size }))
+    }
+    report(measured)
+    const readsSeen = times.map((t) => t.toFixed(1)).join(', ')
+    process.stdout.write(`perf idle-fleet reads: ${readsSeen} ms · listings ${listings()}\n`)
+    expectTail(measured, LATENCY.boardReadIdleFleet)
+    expectEvery(measured, 'waited', false)
+    expectEvery(measured, 'phases', 0)
+    expect(listings()).toBeGreaterThanOrEqual(2) // the reads DID restart the probe — they just did not wait on it
   })
 })
 
@@ -264,7 +345,8 @@ function parkedFleet(root: string, parked: number, terminals: number) {
   const store = new WorkspaceStore(root, { multiInstance: true })
   const home = store.focusedId
   for (let i = 0; i < parked; i += 1) {
-    const meta = store.createWorkspaceWithState(`Parked ${i}`, '/work', Array.from({ length: terminals }, (_, k) => terminal(i * 100 + k)), [])
+    const nodes = Array.from({ length: terminals }, (_, k) => terminal(i * 100 + k))
+    const meta = store.createWorkspaceWithState(`Parked ${i}`, '/work', nodes, [])
     store.switchWorkspace(meta.id)
   }
   store.switchWorkspace(home)
@@ -290,7 +372,8 @@ function singleInstanceFleet(root: string, parked: number, terminals: number, no
   const home = store.focusedId
   const drain = createSessionDrain({ store, ...noopFacts, now })
   for (let i = 0; i < parked; i += 1) {
-    const meta = store.createWorkspaceWithState(`Parked ${i}`, '/work', Array.from({ length: terminals }, (_, k) => terminal(i * 100 + k)), [])
+    const nodes = Array.from({ length: terminals }, (_, k) => terminal(i * 100 + k))
+    const meta = store.createWorkspaceWithState(`Parked ${i}`, '/work', nodes, [])
     store.switchWorkspace(meta.id)
     drain.tick()
   }
@@ -370,7 +453,12 @@ describe('session drain — one tick over 40 parked sessions reads nothing', () 
         counter.on = false
         return {
           elapsed,
-          structural: { reads: counter.workspaceReads, residentAfter: store.resident().length, registryAfter: drain.sessions.residentCount(), home: store.focusedId === home }
+          structural: {
+            reads: counter.workspaceReads,
+            residentAfter: store.resident().length,
+            registryAfter: drain.sessions.residentCount(),
+            home: store.focusedId === home
+          }
         }
       } finally {
         counter.on = false

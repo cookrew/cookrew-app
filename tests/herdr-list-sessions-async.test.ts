@@ -45,7 +45,7 @@ describe('HerdrHostMultiplexer.listSessionsAsync', () => {
     // The probe retries every 3 s; if its failure set the shared backoff, a
     // flaky herdr would keep dispatch admission backed off for good.
     const { mux, async } = harness({ 'pane list': new Error('herdr: os error 35') })
-    expect(await mux.listSessionsAsync()).toEqual([])
+    await expect(mux.listSessionsAsync()).rejects.toThrow()
     const before = async.length
     mux.sessionExistsCached('cookrew_a') // a cold admission read kicks a refresh — unless backed off
     expect(async.length).toBe(before + 1)
@@ -100,7 +100,11 @@ describe('HerdrHostMultiplexer.listSessionsAsync', () => {
 
   it('lists through the async runner only and publishes the inventory', async () => {
     const { mux, sync, async } = harness({
-      'pane list': envelope([pane('cookrew_a', 'w1:p1'), pane('cookrew_b', 'w1:p2'), { pane_id: 'w1:p3', label: null }]),
+      'pane list': envelope([
+        pane('cookrew_a', 'w1:p1'),
+        pane('cookrew_b', 'w1:p2'),
+        { pane_id: 'w1:p3', label: null }
+      ]),
       'pane read': 'some pane text'
     })
     expect(await mux.listSessionsAsync()).toEqual(['cookrew_a', 'cookrew_b'])
@@ -113,12 +117,12 @@ describe('HerdrHostMultiplexer.listSessionsAsync', () => {
     expect(sync).toEqual([])
   })
 
-  it('answers [] for a failed or malformed listing and publishes nothing', async () => {
+  it('rejects a failed or malformed listing — not an empty fleet — and publishes nothing', async () => {
     const failed = harness({ 'pane list': new Error('herdr: os error 35') })
-    expect(await failed.mux.listSessionsAsync()).toEqual([])
+    await expect(failed.mux.listSessionsAsync()).rejects.toThrow()
     expect(await failed.mux.captureAsync('cookrew_a')).toBeNull() // still cold
     const malformed = harness({ 'pane list': '{"id":"x","result":{"panes":[null]}}' })
-    expect(await malformed.mux.listSessionsAsync()).toEqual([])
+    await expect(malformed.mux.listSessionsAsync()).rejects.toThrow()
     expect(failed.sync).toEqual([])
     expect(malformed.sync).toEqual([])
   })
@@ -159,7 +163,13 @@ describe('HerdrHostMultiplexer.listSessionsAsync', () => {
       }
       return 'text'
     }
-    const runner: CommandRunner = { run: () => { throw new Error('sync') }, runQuiet: () => undefined, probe: () => true }
+    const runner: CommandRunner = {
+      run: () => {
+        throw new Error('sync')
+      },
+      runQuiet: () => undefined,
+      probe: () => true
+    }
     const mux = new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/tmp/c.toml', runner, asyncRunner })
     const first = mux.listSessionsAsync() // spawned first, answers last
     await new Promise((resolve) => setTimeout(resolve, 5))

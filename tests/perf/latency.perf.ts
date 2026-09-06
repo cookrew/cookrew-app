@@ -384,7 +384,12 @@ describe('workspace switch — flush one, load one, emit', () => {
     try {
       const store = new WorkspaceStore(root, { multiInstance: true })
       const ids = Array.from({ length: 8 }, (_, w) =>
-        store.createWorkspaceWithState(`WS ${w}`, '/work/repo', Array.from({ length: 20 }, (_, i) => terminalNode(w * 100 + i)), []).id
+        store.createWorkspaceWithState(
+          `WS ${w}`,
+          '/work/repo',
+          Array.from({ length: 20 }, (_, i) => terminalNode(w * 100 + i)),
+          []
+        ).id
       )
       let cursor = 0
       const ops: string[] = []
@@ -404,7 +409,12 @@ describe('workspace switch — flush one, load one, emit', () => {
         counters.on = true
         const sample = timed(() => {
           store.switchWorkspace(target)
-          return { reads: counters.workspaceReads, writes: counters.workspaceWrites, events: ops.length, focused: store.focusedId === target }
+          return {
+            reads: counters.workspaceReads,
+            writes: counters.workspaceWrites,
+            events: ops.length,
+            focused: store.focusedId === target
+          }
         })
         counters.on = false
         return sample

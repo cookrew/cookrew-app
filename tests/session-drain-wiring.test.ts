@@ -25,8 +25,13 @@ import type { TerminalNodeData } from '../src/shared/model'
 const realRead = fs.readFileSync
 const counter = { on: false, workspaceReads: 0 }
 beforeAll(() => {
-  fs.readFileSync = function countedRead(this: unknown, file: Parameters<typeof fs.readFileSync>[0], ...rest: unknown[]) {
-    if (counter.on && typeof file === 'string' && file.endsWith(`${path.sep}workspace.json`)) counter.workspaceReads += 1
+  fs.readFileSync = function countedRead(
+    this: unknown,
+    file: Parameters<typeof fs.readFileSync>[0],
+    ...rest: unknown[]
+  ) {
+    const isWorkspace = typeof file === 'string' && file.endsWith(`${path.sep}workspace.json`)
+    if (counter.on && isWorkspace) counter.workspaceReads += 1
     return (realRead as (...a: unknown[]) => Buffer | string).call(this, file, ...rest)
   } as typeof fs.readFileSync
   syncBuiltinESMExports()

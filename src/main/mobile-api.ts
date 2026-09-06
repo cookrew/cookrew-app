@@ -1130,11 +1130,15 @@ export async function handleMobileApi(
       : null;
     const onBoardSignal = (): void => boardNotifier?.schedule();
     if (board) {
+      const sentProbe = board.probe?.();
       send("board", buildBoard(board));
-      // The first frame went out from what the probe held; when the pass it
-      // kicked lands, push the board again so a parked sampler's stale map
-      // is on screen for one coalesce window, not until the next signal.
-      void board.probeWarm?.().then(onBoardSignal, () => undefined);
+      // A first frame before the probe's FIRST pass has landed carries no
+      // L2 phases; when that pass lands the map object changes, and the
+      // board is pushed again. Once any pass has completed probeWarm answers
+      // at once with the same map, and nothing extra is pushed.
+      void board.probeWarm?.().then((fresh) => {
+        if (fresh !== sentProbe) onBoardSignal();
+      }, () => undefined);
     }
     if (scope === null) store.on("change", onChange);
     else store.on("workspace-change", onScopedChange);
