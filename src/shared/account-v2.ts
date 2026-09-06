@@ -241,21 +241,6 @@ export type AccountResult<T> =
   { ok: true; value: T } | { ok: false; reason: AccountRefusal; message?: string }
 
 /**
- * What the pairing popout is handed. No URL and no token by construction:
- * everything the phone needs from this Mac is the device id and six
- * characters, and everything else it needs it already has from cookrew.dev.
- *
- * REPLACED BY PairingHandout below — kept only until the popout and its IPC
- * channel move over in the same series of commits.
- */
-export interface PairingKeyHandout {
-  deviceId: string
-  key: string
-  expiresAt: number
-  desktopName: string
-}
-
-/**
  * What the pairing popout is handed: ONE URL, and which kind it is.
  *
  * `relay` is the canonical one — cookrew.dev's address for this desktop with

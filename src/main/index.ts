@@ -4729,7 +4729,7 @@ function registerIpc(handlers: RestoreHandlers): void {
     // on a password, not on a name. Read at boot, and null once it has crossed.
     legacy: LEGACY_HANDLE === null ? null : { handle: LEGACY_HANDLE },
     workspaces: () => store.list().workspaces.map((w) => ({ id: w.id, name: w.name })),
-    pairing: pairingKeys,
+    pairingHandout: currentPairingHandout,
     admitted: {
       list: () => admittedDevices.list(),
       forget: (deviceId) => admittedDevices.forget(deviceId)

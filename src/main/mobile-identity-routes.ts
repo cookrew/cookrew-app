@@ -6,7 +6,9 @@ import type { RegistryKeys } from './canvas-token'
 import { helloAnswer, helloCorsHeaders } from './device-hello'
 import { respondJson } from './mobile-http'
 import { plaintextVerdict } from './plaintext-gate'
-import { PAIRING_COPY } from '../shared/pairing-qr'
+
+/** The one sentence this module still says out loud. */
+const INSECURE = 'Pair over the secure address — open it again from cookrew.dev.'
 
 /**
  * THE TWO ROUTES PAIRING THROUGH cookrew.dev ADDS, AND WHY THEY SIT HERE.
@@ -116,7 +118,7 @@ export const handleIdentityRoutes = async (
     // 426: the request is fine, the transport is not, and there is no secure
     // address to name — which is a real state (no openssl, no certificate).
     log('admission refused: plaintext listener, and no secure address to offer')
-    respondJson(response, 426, { error: PAIRING_COPY.INSECURE })
+    respondJson(response, 426, { error: INSECURE })
     return true
   }
 

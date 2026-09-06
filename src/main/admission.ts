@@ -2,7 +2,22 @@ import type { AccountFile } from './account-v2'
 import type { AdmittedDevice, AdmittedDeviceStore } from './admitted-devices'
 import type { CanvasTokenResult, RegistryKeys } from './canvas-token'
 import { verifyCanvasToken } from './canvas-token'
-import { PAIRING_COPY, deviceIdPrefix } from '../shared/pairing-qr'
+import { deviceIdPrefix } from '../shared/pairing-qr'
+
+/**
+ * The ceremony's own sentences.
+ *
+ * They used to sit in shared/pairing-qr beside the popout's copy, back when
+ * the popout and the admission were two halves of one six-character
+ * ceremony. The popout has moved to the one pairing URL, so these are the
+ * last readers and they live where they are read.
+ */
+const COPY = {
+  WRONG_KEY: "Not this Mac's key — it changes every two minutes.",
+  NAMED_THE_MAC: 'That link named the Mac, not the phone — open it again from cookrew.dev.',
+  ALREADY_USED: 'That link was already used — open it again from cookrew.dev.',
+  NOT_THIS_MAC: 'This sign-in is not for this Mac — open it again from cookrew.dev.'
+} as const
 
 /**
  * LETTING A PHONE IN, ONCE, WITHOUT A URL.
@@ -91,19 +106,19 @@ export type AdmissionDeps = {
 const tokenRefusal = (reason: string): AdmissionRefusal => ({
   kind: 'token',
   reason,
-  sentence: PAIRING_COPY.NOT_THIS_MAC
+  sentence: COPY.NOT_THIS_MAC
 })
 
-const KEY_REFUSAL: AdmissionRefusal = { kind: 'key', sentence: PAIRING_COPY.WRONG_KEY }
+const KEY_REFUSAL: AdmissionRefusal = { kind: 'key', sentence: COPY.WRONG_KEY }
 
 const REPLAY_REFUSAL: AdmissionRefusal = {
   kind: 'replay',
-  sentence: PAIRING_COPY.ALREADY_USED
+  sentence: COPY.ALREADY_USED
 }
 
 const DEVICE_REFUSAL: AdmissionRefusal = {
   kind: 'device',
-  sentence: PAIRING_COPY.NAMED_THE_MAC
+  sentence: COPY.NAMED_THE_MAC
 }
 
 /**
