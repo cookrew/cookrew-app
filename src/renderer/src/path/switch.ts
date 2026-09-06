@@ -84,6 +84,13 @@ export type SwitchOutcome =
 export const pathRank = (state: PathState): number =>
   state === 'LAN' ? 3 : state === 'TAILNET' ? 2 : state === 'RELAY' ? 1 : 0
 
+/**
+ * Where the last winning address is kept, one entry per desktop.
+ *
+ * The VALUE is keyed by network as well as by desktop — see path-memory.ts,
+ * and RFC 8305 on why remembered addresses must not cross an interface. This
+ * module only knows that a hint arrives and is put at the front of the queue.
+ */
 export const PATH_MEMORY_PREFIX = 'cr_path:'
 
 /** Every candidate strictly better than where the phone is, best first. */
@@ -98,8 +105,10 @@ export const betterCandidates = (
     ...(card.tailnet ? [{ url: card.tailnet.url, state: 'TAILNET' } as Candidate] : [])
   ]
   const better = all.filter((candidate) => pathRank(candidate.state) > here)
-  // The address that worked last time on this network goes first. It is a
-  // hint and never a decision: it is still asked to prove it is the Mac.
+  // The address that worked last time ON THIS NETWORK goes first — the caller
+  // is responsible for not offering one learned somewhere else. It is a hint
+  // and never a decision: it is still asked to prove it is the Mac, so the
+  // worst a stale one can do is waste a single probe.
   const won = better.filter((candidate) => candidate.url === remembered)
   return [...won, ...better.filter((candidate) => candidate.url !== remembered)]
 }

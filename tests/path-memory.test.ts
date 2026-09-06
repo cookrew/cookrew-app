@@ -39,6 +39,7 @@ const phone = (
     remove: (key) => void store.delete(key),
     now: () => clock,
     network: () => network,
+    keys: () => [...store.keys()],
     ...over
   }
   return {

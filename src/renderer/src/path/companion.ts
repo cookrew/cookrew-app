@@ -5,6 +5,7 @@ import { dataPlane, setDataPlane, subscribeDataPlane, type DataPlane } from '../
 import type { LocalNetworkState } from '../local-network'
 import { localNetworkState, requestLocalNetwork } from '../local-network'
 import { offerLocalNetwork, setLocalNetwork } from '../local-network-gate'
+import { createPathMemory, watchNetwork, type PathMemory, type PathMemoryDeps } from '../path-memory'
 import { planeFetch } from '../plane-fetch'
 import { planeHealth, type LinkHealth } from '../plane-health'
 import { followDataPlane } from '../plane-streams'
@@ -79,18 +80,64 @@ const fetchCard = async (): Promise<ReachCardLite | null> => {
   }
 }
 
-/** Private-mode Safari throws on storage access rather than returning null. */
-const memory = (): { read: (key: string) => string | null; write: (key: string, value: string) => void } => {
+/**
+ * WHAT THIS PHONE CAN CHEAPLY SAY ABOUT ITS OWN CONNECTION.
+ *
+ * `navigator.connection` is the Network Information API — Chrome and the
+ * Android web view have it, Safari does not — and `type`/`effectiveType` are
+ * the two members that change when a phone moves from Wi-Fi to a radio. Null
+ * where there is nothing to read, which is a DIFFERENT answer from "unknown
+ * network" and is why path-memory.ts keeps two lifetimes rather than one.
+ */
+const connectionHint = (): string | null => {
+  try {
+    const link = (window as unknown as {
+      navigator?: { connection?: { type?: string; effectiveType?: string } }
+    }).navigator?.connection
+    if (!link) return null
+    const described = [link.type, link.effectiveType].filter(Boolean).join('/')
+    return described.length > 0 ? described : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The path memory over this phone's real storage.
+ *
+ * Private-mode Safari THROWS on storage access rather than returning null, so
+ * the whole surface is probed once here and every method inside path-memory.ts
+ * is guarded again — a hint is worth one saved probe and is never worth an
+ * exception on a boot path.
+ */
+const memory = (): PathMemory => {
+  const dead: PathMemoryDeps = {
+    read: () => null,
+    write: () => undefined,
+    remove: () => undefined,
+    now: () => Date.now(),
+    network: connectionHint,
+    keys: () => []
+  }
   try {
     const storage = window.localStorage
     storage.getItem(PATH_MEMORY_PREFIX)
-    return {
+    return createPathMemory({
+      ...dead,
       read: (key) => storage.getItem(key),
-      write: (key, value) => storage.setItem(key, value)
-    }
+      write: (key, value) => storage.setItem(key, value),
+      remove: (key) => storage.removeItem(key),
+      keys: () => Object.keys(storage)
+    })
   } catch {
-    return { read: () => null, write: () => undefined }
+    return createPathMemory(dead)
   }
+}
+
+/** window, as the two watchers here need it. */
+const listen = (event: string, listener: () => void): (() => void) => {
+  window.addEventListener(event, listener)
+  return () => window.removeEventListener(event, listener)
 }
 
 /**
@@ -261,8 +308,12 @@ export const startCompanionPathSwitch = (): (() => void) => {
   // Already as close as it gets. Nothing on the card can beat this origin.
   if (pathRank(currentOriginState()) >= pathRank('LAN')) return noop
   const store = memory()
+  // The hint is flushed by the same two events that start a race, and it is
+  // flushed FIRST: a race that read a stale hint would put an address from the
+  // last network at the front of the queue on this one.
+  const unwatch = watchNetwork(store, listen)
 
-  return startPathSwitching({
+  const stop = startPathSwitching({
     deps: {
       current: currentOriginState,
       card: fetchCard,
@@ -270,9 +321,13 @@ export const startCompanionPathSwitch = (): (() => void) => {
       credential: () => authStore().token(),
       go: (url) => window.location.replace(url),
       nonce: () => randomNonce((bytes) => window.crypto.getRandomValues(bytes)),
-      remembered: (deviceId) => store.read(`${PATH_MEMORY_PREFIX}${deviceId}`),
-      remember: (deviceId, url) => store.write(`${PATH_MEMORY_PREFIX}${deviceId}`, url),
+      remembered: (deviceId) => store.remembered(deviceId),
+      remember: (deviceId, url) => store.remember(deviceId, url),
       probing: setProbing
     }
   })
+  return () => {
+    unwatch()
+    stop()
+  }
 }
