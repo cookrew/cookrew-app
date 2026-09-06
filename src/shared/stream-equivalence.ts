@@ -1,14 +1,22 @@
 // THE EQUIVALENCE COMPARATOR (design: docs/site/one-stream-2026-09-07.html).
 //
-// The gate before anything is switched: "for every card, the checkpoint list
-// from the stream equals the list from the old store — same count, same
-// identities, same titles — on the owner's real 279 files. Any difference is
-// listed by card and identity."
+// The gate before anything is switched: for every card, the stream's
+// checkpoint list must equal the old store's. Pure on purpose — the harness
+// reads the real files and prints; the JUDGEMENT lives here, where it is
+// unit-tested and the allow-list is a data structure rather than a paragraph
+// in a report nobody can re-run.
 //
-// Pure on purpose. The harness that runs it against the real machine reads
-// files and prints; the JUDGEMENT lives here, where it can be unit-tested,
-// and where the allow-list is a data structure rather than a paragraph in a
-// report nobody can re-run.
+// THE CLAIM, STATED EXACTLY. The first draft demanded the old list be a
+// CONTIGUOUS run inside the stream. The owner's real files say otherwise, and
+// the honest response is to state the claim the evidence supports rather than
+// widen the allow-list quietly:
+//
+//   every checkpoint the old store holds is in the stream, in the same order.
+//   The stream may hold MORE, and every extra block is counted and classed.
+//
+// A stream MISSING an old checkpoint would be the 400-checkpoint incident
+// happening again, and it fails. A stream holding history the ledger could not
+// address IS the fix.
 //
 // WHAT AN ALLOWED DIFFERENCE IS. Not "small". A difference is allowed only
 // when the stream and the old store disagree for a reason that is written
@@ -16,9 +24,8 @@
 //
 //   old-noise-prompt      the old ledger holds a record whose prompt is noise
 //                         by the current rule (isNoisePrompt — slash-command
-//                         wrappers, interruptions, caveats). Those records
-//                         predate the rule; the stream cannot mint them and
-//                         should not.
+//                         wrappers, interruptions, caveats). Those predate the
+//                         rule; the stream cannot mint them and should not.
 //   stream-reaches-back   the stream holds blocks BEFORE the old list starts.
 //                         This is the fix itself: the old ledger addressed the
 //                         current file's T1..Tn, and the pre-compaction history
@@ -31,9 +38,8 @@
 //                         does not. EXPECTED IN T1 BY CONSTRUCTION: migration
 //                         is dry-run only, so no mark has been written yet.
 //                         This class MUST go to zero once T4 migrates.
-//   legacy-no-uuid        an old record carrying no session uuid at all
-//                         (scrape-era). The renderer pairs those by index
-//                         today; the stream has no identity to pair with.
+//   legacy-no-uuid        an old record with no session uuid at all (scrape-
+//                         era); the stream has no identity to pair it with.
 //   no-transcript         the card has no readable transcript at all (a
 //                         scrape-only harness, or a deleted session file), so
 //                         the stream is empty and the old ledger is all there
@@ -45,28 +51,14 @@
 //                         each predecessor file at a rotation, which the old
 //                         ledger's stitching dropped. The transcripts have
 //                         them; the ledger never did. Counted, never hidden.
-//   no-card               the ledger outlived its card: no terminal in any
-//                         workspace carries this id any more, so there is no
-//                         cwd and no binding to resolve a transcript from.
-//                         Distinct from no-transcript on purpose — one says
-//                         the transcript is gone, the other says the CARD is,
-//                         and only the first would be evidence against the
-//                         reader.
+//   no-card               the ledger outlived its card: no terminal carries
+//                         this id any more, so there is no cwd and no binding
+//                         to resolve a transcript from. Kept apart from
+//                         no-transcript because only that one would be
+//                         evidence against the reader.
 //
 // Everything else — a missing identity, a reordering, two different titles
 // for the same identity — is a REAL difference and fails the gate.
-//
-// THE CLAIM, STATED EXACTLY. The first draft of this gate demanded that the
-// old list be a CONTIGUOUS run inside the stream. The owner's real files say
-// otherwise, and the honest response is to state the claim the evidence
-// supports rather than to widen the allow-list quietly:
-//
-//   every checkpoint the old store holds is in the stream, in the same order.
-//   The stream may hold MORE, and every extra block is counted and classed.
-//
-// That is the direction that matters. A stream missing an old checkpoint
-// would be the 400-checkpoint incident happening again, and it fails. A
-// stream holding history the ledger could not address IS the fix.
 
 import { isNoisePrompt } from './session-turns'
 
