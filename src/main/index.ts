@@ -606,6 +606,14 @@ const accounts = new Accounts({
     if (mainWindow && !mainWindow.webContents.isDestroyed()) {
       mainWindow.webContents.send('account:changed')
     }
+    // REACH v2.1 — A CLAIM IS THE MOMENT A CERTIFICATE BECOMES POSSIBLE.
+    // `ensure` was only ever called at boot and hourly, so a Mac that claimed
+    // its account after starting served self-signed for up to an hour and
+    // published `trusted: []` the whole time — the first run of the product,
+    // every time. The pass is idempotent (it holds a lock, a quiet window and
+    // the chain it already has), so saying it on every account write costs a
+    // function call and closes the gap.
+    void nameCertificate.ensure('the account changed').catch(() => undefined)
   }
 })
 
