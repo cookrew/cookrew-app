@@ -162,9 +162,23 @@ const keyOf = (spki: Tlv): CsrKey | null => {
   if (inner === null || inner.tag !== SEQUENCE) return null
   const rsa = children(inner)
   if (rsa === null || rsa.length < 1 || rsa[0].tag !== INTEGER) return null
-  // A leading zero is DER's sign byte, not a bit of the modulus.
-  const modulus = rsa[0].content[0] === 0 ? rsa[0].content.subarray(1) : rsa[0].content
-  return { kind: 'rsa', bits: modulus.length * 8 }
+  /**
+   * THE SIZE IS ARITHMETIC, NOT A BYTE COUNT.
+   *
+   * This used to strip DER's sign byte and multiply the rest by eight. DER as
+   * OpenSSL accepts it is not minimal: left-pad the modulus INTEGER with 129
+   * zero bytes and a 1024-bit key measures 2056 bits, verifies its own
+   * signature, and walks through a gate that asks for 2048. So the number
+   * comes from the key itself, which is also the only reading a CA will agree
+   * with.
+   */
+  try {
+    const bits = createPublicKey({ key: Buffer.from(spki.whole), format: 'der', type: 'spki' })
+      .asymmetricKeyDetails?.modulusLength
+    return typeof bits === 'number' ? { kind: 'rsa', bits } : null
+  } catch {
+    return null
+  }
 }
 
 const sansOf = (attributes: Tlv): string[] | null => {

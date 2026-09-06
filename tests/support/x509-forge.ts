@@ -121,8 +121,20 @@ export interface Pair {
 export const ecPair = (): Pair => generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
 export const rsaPair = (bits = 2048): Pair => generateKeyPairSync('rsa', { modulusLength: bits })
 
-/** A PEM certificate request for these dNSNames, signed by its own key. */
-export function makeCsr(options: { pair: Pair; names: readonly string[]; commonName?: string | null }): string {
+/**
+ * A PEM certificate request for these dNSNames, signed by its own key.
+ *
+ * `spki` overrides the SubjectPublicKeyInfo the request carries, so a test can
+ * present a key whose DER says one thing and whose arithmetic says another —
+ * the shape L3 is about. The signature is still made with `pair`, over the
+ * info as written, so the request is genuinely self-signed either way.
+ */
+export function makeCsr(options: {
+  pair: Pair
+  names: readonly string[]
+  commonName?: string | null
+  spki?: Buffer
+}): string {
   const attributes =
     options.names.length === 0
       ? DER.context(0, Buffer.alloc(0))
@@ -133,7 +145,7 @@ export function makeCsr(options: { pair: Pair; names: readonly string[]; commonN
   const info = DER.seq(
     DER.int(0),
     name(options.commonName === undefined ? null : options.commonName),
-    spkiOf(options.pair.publicKey),
+    options.spki ?? spkiOf(options.pair.publicKey),
     attributes
   )
   const signature = sign('sha256', info, options.pair.privateKey)
@@ -214,3 +226,36 @@ export function spkiFromCsr(csrPem: string): Buffer {
 }
 
 export const keyFromPem = (text: string): KeyObject => createPrivateKey(text)
+
+/**
+ * The same public key, with its RSA modulus left-padded with zero bytes.
+ *
+ * Non-minimal DER, and OpenSSL takes it anyway and reports the true modulus
+ * length — which is exactly why counting the encoded bytes is not a way to
+ * measure a key. 129 extra zeros turn a 1024-bit modulus into 257 bytes of
+ * content, which a byte counter reads as 2056 bits.
+ */
+export function paddedRsaSpki(key: KeyObject, zeros = 129): Buffer {
+  const der = spkiOf(key)
+  const read = (buf: Buffer, at: number): { content: Buffer; whole: Buffer; next: number } => {
+    const first = buf[at + 1]
+    let length = first
+    let headerEnd = at + 2
+    if ((first & 0x80) !== 0) {
+      const count = first & 0x7f
+      length = 0
+      for (let i = 0; i < count; i += 1) length = length * 256 + buf[headerEnd + i]
+      headerEnd += count
+    }
+    return { content: buf.subarray(headerEnd, headerEnd + length), whole: buf.subarray(at, headerEnd + length), next: headerEnd + length }
+  }
+  const top = read(der, 0)
+  const algorithm = read(top.content, 0)
+  const bits = read(top.content, algorithm.next)
+  const inner = read(bits.content.subarray(1), 0)
+  const modulus = read(inner.content, 0)
+  const exponent = read(inner.content, modulus.next)
+  const padded = tlv(0x02, cat(Buffer.alloc(zeros), modulus.content))
+  const rebuilt = tlv(0x30, cat(padded, exponent.whole))
+  return tlv(0x30, cat(algorithm.whole, tlv(0x03, cat(Buffer.from([0]), rebuilt))))
+}

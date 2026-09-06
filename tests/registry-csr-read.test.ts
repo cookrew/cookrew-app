@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { X509Certificate } from 'node:crypto'
 import { csrDer, readCsr } from '../registry/src/csr-read'
-import { DER, ecPair, issueLeaf, makeCa, makeCsr, rsaPair, spkiFromCsr } from './support/x509-forge'
+import { DER, ecPair, issueLeaf, makeCa, makeCsr, paddedRsaSpki, rsaPair, spkiFromCsr } from './support/x509-forge'
 
 /**
  * THE CSR READER, AGAINST REQUESTS BUILT BY A DIFFERENT IMPLEMENTATION.
@@ -143,5 +143,29 @@ describe('a request built to break the reader', () => {
   it('keeps the round trip intact when nothing was tampered with', () => {
     const pem = makeCsr({ pair: ecPair(), names: [NAME] })
     expect(readCsr(rewrap(split(pem))).ok).toBe(true)
+  })
+})
+
+/**
+ * L3 — A KEY'S SIZE IS ARITHMETIC, NOT A BYTE COUNT.
+ *
+ * The modulus was measured by the length of its DER encoding, and DER as
+ * OpenSSL accepts it is not minimal: left-pad the INTEGER with zeros and a
+ * 1024-bit key reads as 2056 bits. It verifies its own signature, so every
+ * other check on the way through passes, and the gate in names.ts waves a key
+ * half the size it demands straight into a public certificate.
+ */
+describe('how big the key actually is', () => {
+  it('reads the modulus length from the key, not from how it was written', () => {
+    const pair = rsaPair(1024)
+    const out = readCsr(makeCsr({ pair, names: [NAME], spki: paddedRsaSpki(pair.publicKey) }))
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    expect(out.csr.key).toEqual({ kind: 'rsa', bits: 1024 })
+  })
+
+  it('still reads an ordinary 2048-bit request as 2048', () => {
+    const out = readCsr(makeCsr({ pair: rsaPair(2048), names: [NAME] }))
+    expect(out.ok && out.csr.key).toEqual({ kind: 'rsa', bits: 2048 })
   })
 })
