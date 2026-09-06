@@ -78,6 +78,59 @@ const BUCKETS = [
   ['perf-history', (p) => p.startsWith('perf-history/')]
 ]
 
+/**
+ * What the app DOES about a bucket — the policy a size is read against. A
+ * bucket without a line here has none yet; a lane that gives it one adds the
+ * line. The served-session grace mirrors DEFAULT_GRACE_MS in
+ * src/main/storage-gc-scan.ts (30 d), which this plain-JS runner cannot import.
+ */
+export const BUCKET_POLICY = {
+  'served-sessions': 'ended sandboxes swept at boot after 30 d; open sessions kept',
+  // A `.bak-` file INSIDE a served sandbox buckets here by name but is a
+  // caller's file: the sweep removes it with the sandbox, not as residue.
+  backups: 'hand-made — reported by the sweep and the boot log, never removed (a .bak- inside a served sandbox goes with its sandbox)'
+}
+
+export const SERVED_GRACE_MS = 30 * 24 * 60 * 60 * 1000
+
+/**
+ * The served-session sandboxes among storage entries, one row per
+ * `sessions/<service>/<session>`, with bytes summed and the newest mtime.
+ * `files` are { path, bytes, mtimeMs } as walkFiles reports them; `dirs`
+ * are the directories it saw, { path, mtimeMs }, and they COUNT: the sweep
+ * (storage-gc-tree.ts) reads a sandbox's age from its newest write,
+ * directories included, so a mint or an emptied directory keeps it young,
+ * and this must agree or it reports as past grace what no sweep will take.
+ * An entry with no usable mtime is treated as written NOW — the direction
+ * that cannot overstate what is reclaimable. The eval cannot know which
+ * sessions are OPEN (that is the running app's fact), so a row's age is
+ * only ever an upper bound on what the next boot sweep reclaims.
+ */
+export function servedSessions(files, now, dirs = []) {
+  const rows = new Map()
+  const keyOf = (path) => {
+    const parts = path.split('/')
+    return parts[0] === 'sessions' && parts.length >= 3 ? `${parts[1]}/${parts[2]}` : null
+  }
+  const mtimeOf = (mtimeMs) => (Number.isFinite(mtimeMs) ? mtimeMs : now)
+  const touch = (key, bytes, mtimeMs) => {
+    const row = rows.get(key) ?? { key, bytes: 0, newestMtimeMs: -Infinity }
+    rows.set(key, { key, bytes: row.bytes + bytes, newestMtimeMs: Math.max(row.newestMtimeMs, mtimeOf(mtimeMs)) })
+  }
+  for (const { path, mtimeMs } of dirs) {
+    const key = keyOf(path)
+    if (key !== null) touch(key, 0, mtimeMs)
+  }
+  for (const { path, bytes, mtimeMs } of files) {
+    const key = keyOf(path)
+    // A file directly under the service dir is not a sandbox (parts.length 3 is the sandbox dir itself).
+    if (key !== null && path.split('/').length >= 4) touch(key, bytes, mtimeMs)
+  }
+  return [...rows.values()]
+    .map((row) => ({ ...row, ageMs: now - row.newestMtimeMs }))
+    .sort((a, b) => b.ageMs - a.ageMs)
+}
+
 export function bucketOf(relativePath) {
   const hit = BUCKETS.find(([, test]) => test(relativePath))
   return hit ? hit[0] : 'other'
@@ -212,7 +265,7 @@ export function renderBuckets(buckets) {
   const rows = Object.entries(buckets)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 8)
-    .map(([name, bytes]) => ['    ', name, fmtMb(bytes), ''])
+    .map(([name, bytes]) => ['    ', name, fmtMb(bytes), BUCKET_POLICY[name] ?? ''])
   return renderTable(rows)
 }
 

@@ -33,6 +33,8 @@ import { cpus, homedir, loadavg } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  BUCKET_POLICY,
+  SERVED_GRACE_MS,
   bucketStorage,
   fmtMb,
   fmtMs,
@@ -44,6 +46,7 @@ import {
   pickAppProcesses,
   renderBuckets,
   renderSection,
+  servedSessions,
   slopePerHour,
   worstOf
 } from './perf-eval-lib.mjs'
@@ -109,7 +112,8 @@ function readHistory(dir, name, since) {
 // STORAGE
 // ---------------------------------------------------------------------------
 
-function walkFiles(root) {
+/** Every file under root, and — into `dirs`, when given — every directory with its mtime. */
+function walkFiles(root, dirs = null) {
   const out = []
   const visit = (dir) => {
     let entries
@@ -121,10 +125,19 @@ function walkFiles(root) {
     for (const entry of entries) {
       const full = path.join(dir, entry.name)
       if (entry.isSymbolicLink()) continue
-      if (entry.isDirectory()) visit(full)
-      else if (entry.isFile()) {
+      if (entry.isDirectory()) {
+        if (dirs) {
+          try {
+            dirs.push({ path: path.relative(root, full).split(path.sep).join('/'), mtimeMs: statSync(full).mtimeMs })
+          } catch {
+            // Removed between readdir and stat. Skip.
+          }
+        }
+        visit(full)
+      } else if (entry.isFile()) {
         try {
-          out.push({ path: path.relative(root, full).split(path.sep).join('/'), bytes: statSync(full).size })
+          const stat = statSync(full)
+          out.push({ path: path.relative(root, full).split(path.sep).join('/'), bytes: stat.size, mtimeMs: stat.mtimeMs })
         } catch {
           // Removed between readdir and stat — the store is live. Skip.
         }
@@ -162,7 +175,8 @@ function readTeamSidecars(base) {
 }
 
 function evalStorage(opts, now) {
-  const files = walkFiles(opts.base)
+  const dirs = []
+  const files = walkFiles(opts.base, dirs)
   const { buckets, total: everything } = bucketStorage(files)
   // The eval's own history and log live under base; judging them would make
   // the tool count its own output as the store's growth.
@@ -170,7 +184,10 @@ function evalStorage(opts, now) {
   const { teams, sidecars } = readTeamSidecars(opts.base)
   const orphans = orphanSidecars(teams, sidecars)
   const orphanBytes = orphans.reduce((s, o) => s + o.bytes, 0)
-  appendHistory(opts.history, 'storage', { t: now, total, buckets, orphanBytes })
+  const served = servedSessions(files, now, dirs)
+  const servedPastGrace = served.filter((s) => s.ageMs > SERVED_GRACE_MS)
+  const servedPastGraceBytes = servedPastGrace.reduce((s, r) => s + r.bytes, 0)
+  appendHistory(opts.history, 'storage', { t: now, total, buckets, orphanBytes, servedPastGraceBytes })
   const week = readHistory(opts.history, 'storage', now - 7 * DAY).map((r) => ({ t: r.t, value: r.total / MB }))
   const slope = slopePerHour(week)
   const growthMbPerDay = slope === null ? null : slope * 24
@@ -191,14 +208,35 @@ function evalStorage(opts, now) {
       note: orphans.length ? `${orphans.length} file(s): ${[...new Set(orphans.map((o) => o.slug))].join(', ')}` : ''
     },
     {
+      // Sandboxes older than the sweep's grace that are still on disk: what
+      // the NEXT boot sweep would reclaim (an upper bound — an open session
+      // is kept whatever its age, and the eval cannot see which are open).
+      // The sweep runs only at boot, so on a machine that stays up this
+      // climbs until a restart; the budget warns at a size, not at any.
+      name: 'served sessions past grace',
+      value: servedPastGraceBytes / MB,
+      unit: 'MB',
+      verdict: judge(servedPastGraceBytes / MB, BUDGETS.storage.servedPastGraceMb),
+      note: servedPastGrace.length
+        ? `${servedPastGrace.length} of ${served.length} sandbox(es) older than 30 d — the next boot sweep reclaims those not open`
+        : `${served.length} sandbox(es), none past grace — ${BUCKET_POLICY['served-sessions']}`
+    },
+    {
       name: 'backup residue',
       value: (buckets.backups ?? 0) / MB,
       unit: 'MB',
       verdict: judge((buckets.backups ?? 0) / MB, BUDGETS.storage.backupsMb),
-      note: buckets.backups ? '*.bak-* / lineage-restore-backup-* — hand-made, never swept' : ''
+      note: buckets.backups ? `*.bak-* / lineage-* — ${BUCKET_POLICY.backups}` : ''
     }
   ]
-  return { total, buckets, orphans, growthMbPerDay, checks, verdict: worstOf(checks.map((c) => c.verdict)) }
+  // Only the two aggregates leave this function. A per-sandbox row is keyed
+  // <service>/<account>-<ordinal>, and this report lands in
+  // ~/.cookrew/perf-history/last-report.json and on stdout under --json —
+  // both readable by a served caller's agent (Seatbelt denies sessions/, not
+  // perf-history/). Listing every caller's account id there would be the
+  // cross-tenant leak the sibling deny in session-sandbox.ts exists to stop.
+  const servedSummary = { sandboxes: served.length, pastGrace: servedPastGrace.length, pastGraceBytes: servedPastGraceBytes }
+  return { total, buckets, orphans, served: servedSummary, growthMbPerDay, checks, verdict: worstOf(checks.map((c) => c.verdict)) }
 }
 
 // ---------------------------------------------------------------------------

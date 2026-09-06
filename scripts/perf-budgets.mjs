@@ -7,6 +7,10 @@ export const BUDGETS = {
     totalMb: { warn: 1500, fail: 3000 },
     growthMbPerDay: { warn: 50, fail: 200 },
     orphanSidecarMb: { warn: 0 },
+    // Served-session sandboxes past the 30 d grace still on disk — what the
+    // next boot sweep reclaims. The sweep runs only at boot, so this climbs
+    // between restarts on purpose; it warns when a restart is worth doing.
+    servedPastGraceMb: { warn: 50 },
     backupsMb: { warn: 50 }
   },
   memory: {

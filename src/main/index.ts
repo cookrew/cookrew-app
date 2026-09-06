@@ -253,6 +253,7 @@ import { buildRoleBootMessage } from '../shared/fork'
 import { pageTurns } from '../shared/turn'
 import type { TurnPageRequest } from '../shared/turn'
 import { defaultAttachmentsDir, saveAttachment } from './attachments'
+import { servedSessionKey } from './storage-gc-served'
 import { sweepStorageInWorker } from './storage-gc-worker'
 
 // ── COMPOSITOR BUDGET — the golden-frame flicker ─────────────────────────────
@@ -4237,7 +4238,23 @@ app.whenReady().then(() => {
   // deliberately quiet on the happy path — a sweep that frees nothing is the
   // normal case and does not deserve a line in the log.
   setTimeout(() => {
-    void sweepStorageInWorker(path.join(dirname, 'storage-gc-worker.js'), { apply: true })
+    // Which served sessions are OPEN is a fact only the instantiator holds;
+    // a sweep not told it plans nothing for that class. At boot the answer
+    // is the empty list — served sessions die with the app — and saying so
+    // is what lets the sandboxes a crash left behind be reclaimed. A throw
+    // here is "not told", never an uncaught error in a timer.
+    let openServedSessions: string[] | null = null
+    try {
+      openServedSessions = serving.instantiator
+        .sessions()
+        .map((s) => servedSessionKey(s.serviceId, s.identity.sessionId))
+    } catch (error) {
+      console.error('storage sweep: could not read open served sessions:', error)
+    }
+    void sweepStorageInWorker(path.join(dirname, 'storage-gc-worker.js'), {
+      apply: true,
+      openServedSessions
+    })
       .then((swept) => {
         if (swept.skipped.length > 0) {
           // A store it could not read: nothing was freed, and this is why.
@@ -4251,6 +4268,13 @@ app.whenReady().then(() => {
         }
         if (swept.failed.length > 0) {
           console.error(`storage sweep: ${swept.failed.length} file(s) could not be removed`)
+        }
+        // Hand-made backup copies are the owner's to remove, so this is the
+        // one line that stops them being invisible.
+        if (swept.residue.length > 0) {
+          const mb = (swept.residueBytes / 1024 / 1024).toFixed(1)
+          const names = swept.residue.map((r) => path.basename(r.path)).join(', ')
+          console.error(`storage sweep: ${swept.residue.length} hand-made backup(s) (${mb}MB) left in place: ${names}`)
         }
       })
       .catch((error) => {

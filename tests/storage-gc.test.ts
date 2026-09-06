@@ -169,3 +169,54 @@ describe('planStorageGc — the plan is a report, not a side effect', () => {
     expect(out.bytes).toBe(0)
   })
 })
+
+describe('planStorageGc — served sessions have their own live rule', () => {
+  // A sandbox is live while its session is OPEN in the running instantiator.
+  // Nothing on disk says that; the app hands the set in. Every other class is
+  // referenced by a scan that can only over-read; this one is referenced by a
+  // fact, and an absent fact is not the same as an empty one.
+  const sandbox = (key: string, over: Partial<GcCandidate> = {}): GcCandidate =>
+    cand(key, { path: `/store/sessions/${key}`, bytes: 6_000_000, ...over })
+
+  it('keeps an OPEN session however old its newest write is', () => {
+    const out = plan({
+      servedSessions: [sandbox('svc-x/ana-1', { mtimeMs: NOW - 400 * DAY })],
+      openServedSessions: new Set(['svc-x/ana-1'])
+    })
+    expect(out.remove).toEqual([])
+    expect(out.kept.live).toBe(1)
+  })
+
+  it('removes an ENDED session once it is past grace — the whole sandbox, as one candidate', () => {
+    const out = plan({
+      servedSessions: [sandbox('svc-x/ana-1')],
+      openServedSessions: new Set<string>()
+    })
+    expect(out.remove.map((c) => c.path)).toEqual(['/store/sessions/svc-x/ana-1'])
+    expect(out.bytes).toBe(6_000_000)
+  })
+
+  it('grace holds an ended session that was written to recently', () => {
+    const out = plan({
+      servedSessions: [sandbox('svc-x/ana-1', { mtimeMs: NOW - 1 * DAY })],
+      openServedSessions: new Set<string>()
+    })
+    expect(out.remove).toEqual([])
+    expect(out.kept.withinGrace).toBe(1)
+  })
+
+  it('plans NOTHING for the class when no open set was given — unknown is not empty', () => {
+    const out = plan({ servedSessions: [sandbox('svc-x/ana-1', { mtimeMs: NOW - 400 * DAY })] })
+    expect(out.remove).toEqual([])
+    // Not counted as live either: the class was not looked at.
+    expect(out.kept).toEqual({ live: 0, withinGrace: 0 })
+  })
+
+  it('an open session on another service does not vouch for a same-named one here', () => {
+    const out = plan({
+      servedSessions: [sandbox('svc-x/ana-1'), sandbox('svc-y/ana-1')],
+      openServedSessions: new Set(['svc-y/ana-1'])
+    })
+    expect(out.remove.map((c) => c.key)).toEqual(['svc-x/ana-1'])
+  })
+})
