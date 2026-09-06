@@ -50,7 +50,7 @@ import { fetchRendererDevResource, rendererDevPathAllowed } from './renderer-dev
 import { isViteHmrUpgrade, proxyViteHmrUpgrade } from './hmr-proxy'
 import { handleIdentityRoutes, type MobileIdentityDeps } from './mobile-identity-routes'
 import { companionAccount } from './companion-account'
-import { RELAY_MARKER } from './canvas-bridge'
+import { RELAY_BASE_HEADER, RELAY_MARKER, relayBaseOf } from './relay-base'
 import { certFingerprint, reachCard } from './reach'
 
 // Re-exported so existing importers keep their import path; the constants
@@ -565,8 +565,9 @@ export function uncoveredCertHosts(): string[] {
  * second of two locks rather than the only one — but a lock that only works
  * because of the other lock is not a second lock.
  */
-export const remoteBoot = (slug: string | null): string => `<script>
+export const remoteBoot = (slug: string | null, base = ''): string => `<script>
 window.COOKREW_SLUG = ${JSON.stringify(slug ?? '').replace(/</g, '\\u003c')}
+window.COOKREW_BASE = ${JSON.stringify(base).replace(/</g, '\\u003c')}
 window.COOKREW_MOBILE = 1
 document.addEventListener('DOMContentLoaded', () => {
   document.body.classList.add('cookrew-mobile')
@@ -574,6 +575,26 @@ document.addEventListener('DOMContentLoaded', () => {
   if (viewport) viewport.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, interactive-widget=resizes-content')
 })
 </script>`
+
+/**
+ * The boot script for THIS request, base and all.
+ *
+ * The base is not a parameter of the route because it is not a decision the
+ * route makes: it is a fact about where the request came from, and reading it
+ * anywhere else would be a second place the trust rule could be got wrong.
+ */
+export const remoteBootFor = (
+  request: http.IncomingMessage,
+  slug: string | null
+): string =>
+  remoteBoot(
+    slug,
+    relayBaseOf({
+      marker: request.headers[RELAY_MARKER],
+      base: request.headers[RELAY_BASE_HEADER],
+      remoteAddress: request.socket?.remoteAddress
+    })
+  )
 
 const STATIC_MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -649,7 +670,7 @@ function serveRendererIndex(
   if (!built) return false
   const html = readFileSync(built.index, 'utf8').replace(
     '<head>',
-    `<head>${remoteBoot(slug)}${staleBanner(built.notice)}`
+    `<head>${remoteBootFor(request, slug)}${staleBanner(built.notice)}`
   )
   // no-store, not no-cache: assets are hash-named, but iOS Safari's
   // crash-recovery reload ("因为出现问题,此网页已重新载入") reuses a cached
@@ -717,7 +738,9 @@ async function serveRendererDev(
   )
   if (!resource) return false
   const body = injectRemoteBoot
-    ? Buffer.from(resource.body.toString('utf8').replace('<head>', `<head>${remoteBoot(slug)}`))
+    ? Buffer.from(
+        resource.body.toString('utf8').replace('<head>', `<head>${remoteBootFor(request, slug)}`)
+      )
     : resource.body
   sendBody(
     response,

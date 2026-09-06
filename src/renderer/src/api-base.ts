@@ -22,11 +22,30 @@
 const injected = (globalThis as { COOKREW_SLUG?: unknown }).COOKREW_SLUG
 const SLUG = typeof injected === 'string' ? injected : ''
 
-/** '' at the root, '/<slug>' under a workspace scope. */
-export const API_BASE = SLUG ? `/${SLUG}` : ''
+/**
+ * THE PREFIX THE WHOLE APP IS SERVED UNDER, which is not always `/`.
+ *
+ * Through the relay the companion lives at `/relay/@user/desktop/<id>/`. Every
+ * root-absolute request the bundle makes would otherwise leave that prefix and
+ * land on cookrew.dev's own routes — the page renders and then talks to the
+ * registry instead of the Mac, which is what pressing OPEN on /me did.
+ *
+ * COMPOSED WITH THE SLUG, not preferred over it. The two answer different
+ * questions — where this app is served from, and which workspace it is for —
+ * and a relayed client under a slug needs both. Injected by mobile-server and
+ * believed only when it came down the bridge (see relay-base.ts).
+ */
+const injectedBase = (globalThis as { COOKREW_BASE?: unknown }).COOKREW_BASE
+const BASE = typeof injectedBase === 'string' ? injectedBase.replace(/\/+$/, '') : ''
+
+/** '' at the root, '/<slug>' under a workspace scope, prefixed by any base. */
+export const API_BASE = `${BASE}${SLUG ? `/${SLUG}` : ''}`
 
 /** The workspace slug this client was served for, or '' at the root. */
 export const clientSlug = (): string => SLUG
+
+/** The relay prefix this client was served under, or '' when it is at the root. */
+export const clientBase = (): string => BASE
 
 /**
  * Scope a root-absolute API path to the workspace this client was served for.
