@@ -2,7 +2,6 @@ import type { ServerResponse } from 'node:http'
 import { ASSET_VERSION } from './assets-bundle'
 import { GITHUB_REPO, SITE_ORIGIN } from './site-content'
 import { jsonLd } from './site-seo'
-import { markSvg } from '../../src/shared/brand-mark'
 
 /**
  * THE SITE'S ONE SHELL — cookrew.dev in the app's own dress.
@@ -182,9 +181,7 @@ export function respondPage(response: ServerResponse, rendered: Page): void {
   response.end(payload)
 }
 
-/* The mark: the wireframe hand from src/shared/brand-mark.ts — the same three
-   paths the app draws in CrLogoMark.tsx. Ink here, on the cream header. */
-const LOGO = markSvg({ stroke: 2, attrs: 'aria-hidden="true"' })
+const LOGO = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="20" height="20" fill="#14110a" stroke="currentColor" stroke-width="2"/><rect x="5" y="6" width="6" height="2" fill="#e9b949"/><rect x="5" y="10" width="10" height="2" fill="#e9b949"/><rect x="5" y="14" width="4" height="2" fill="#e9b949"/><rect x="11" y="14" width="2" height="2" fill="#ffd600"><animate attributeName="opacity" values="1;0;1" dur="1.1s" repeatCount="indefinite"/></rect></svg>`
 
 /** The app's four fonts, from the bundle; `optional` because a font that arrives late must not shift the page — they are preloaded, so it rarely does. */
 const FONT_FACES = `
@@ -413,34 +410,6 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
 .dl{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin:18px 0}
 .dl .card small{display:block;color:var(--muted);margin-top:6px;font-size:12.5px}
 .hero{padding:64px 0 52px;border-bottom:2px solid var(--line)}
-/* the lockup on its phosphor band (site-home.ts brandBand): cyan wireframe,
-   CSS only. 100 units = 1em of --wm. */
-.brand-band{display:inline-block;padding:30px 30px 52px 26px;margin:0 0 20px;background:#0b0f12;border:2px solid var(--line);box-shadow:4px 4px 0 var(--line);color:#3ee8e0;max-width:100%;overflow:hidden}
-.lk{--wm:48px;position:relative;display:inline-flex;align-items:center;gap:.1em;font:700 var(--wm)/1 var(--font-pixel);letter-spacing:.06em;white-space:nowrap}
-.lk .c{width:calc(var(--wm) * 1.5);height:calc(var(--wm) * 1.5);margin:calc(var(--wm) * -.3) 0 calc(var(--wm) * -.2) 0;flex:0 0 auto;position:relative;z-index:1;filter:drop-shadow(0 0 .14em rgba(62,232,224,.5))}
-.lk .c svg,.lk .h svg{width:100%;height:100%;display:block}
-.lk .o{position:relative;z-index:1;width:calc(var(--wm) * .82);height:calc(var(--wm) * .82);border-radius:50%;border:.035em solid currentColor;background:#07191b;display:grid;place-items:center;flex:0 0 auto;box-shadow:0 0 .2em rgba(62,232,224,.35)}
-.lk .o::before{content:'';position:absolute;inset:.07em;border-radius:50%;border:1px dashed currentColor;opacity:.5}
-.lk .p{width:34%;height:34%;border-radius:50%;background:#dffcfa;box-shadow:0 0 .12em currentColor;animation:lk-glance 6s cubic-bezier(.6,0,.2,1) infinite}
-.lk .t{position:relative;display:inline-flex;letter-spacing:0;margin-left:.12em;z-index:1}
-.lk .l{display:inline-block;width:.96em;text-align:center;color:transparent;-webkit-text-stroke:.035em currentColor;text-shadow:0 0 .16em rgba(62,232,224,.55);animation:6s steps(1,end) infinite}
-.lk .l:nth-of-type(1){animation-name:lk-k}.lk .l:nth-of-type(2){animation-name:lk-r}.lk .l:nth-of-type(3){animation-name:lk-e}.lk .l:nth-of-type(4){animation-name:lk-w}
-.lk .h{position:absolute;left:.02em;bottom:-.8em;width:.8em;height:.66em;animation:lk-crab 6s cubic-bezier(.5,0,.5,1) infinite;filter:drop-shadow(0 0 .1em rgba(62,232,224,.5))}
-.lk .cb{position:absolute;left:0;top:calc(var(--wm) * -.2);width:calc(var(--wm) * 7);height:calc(var(--wm) * 2.4);z-index:0;overflow:visible;pointer-events:none}
-.lk .cb path{fill:none;stroke:currentColor;stroke-width:2.2;stroke-dasharray:7 5;stroke-linecap:round;stroke-linejoin:round}
-.lk .cb rect{fill:currentColor}
-.lk .cb .tt{animation:lk-tether 6s cubic-bezier(.5,0,.5,1) infinite}
-.lk .cb .wp{animation:lk-wport 6s cubic-bezier(.5,0,.5,1) infinite}
-@keyframes lk-glance{0%,6%{transform:translate(0,0)}10%,46%{transform:translate(24%,10%)}50%,62%{transform:translate(30%,0)}66%,84%{transform:translate(-4%,10%)}90%,100%{transform:translate(0,0)}}
-@keyframes lk-k{0%,7%{opacity:0}8%,83%{opacity:1}84%,100%{opacity:0}}
-@keyframes lk-r{0%,20%{opacity:0}21%,77%{opacity:1}78%,100%{opacity:0}}
-@keyframes lk-e{0%,33%{opacity:0}34%,71%{opacity:1}72%,100%{opacity:0}}
-@keyframes lk-w{0%,47%{opacity:0}48%,65%{opacity:1}66%,100%{opacity:0}}
-@keyframes lk-crab{0%,6%{transform:translate(0,0) scaleX(-1)}7%{transform:translate(0,-.14em) scaleX(-1)}9%{transform:translate(0,0) scaleX(-1)}13%,19%{transform:translate(.96em,0) scaleX(-1)}20%{transform:translate(.96em,-.14em) scaleX(-1)}22%{transform:translate(.96em,0) scaleX(-1)}26%,32%{transform:translate(1.92em,0) scaleX(-1)}33%{transform:translate(1.92em,-.14em) scaleX(-1)}35%{transform:translate(1.92em,0) scaleX(-1)}39%,46%{transform:translate(2.88em,0) scaleX(-1)}47%{transform:translate(2.88em,-.14em) scaleX(-1)}49%,64%{transform:translate(2.88em,0) scaleX(-1)}65%{transform:translate(2.88em,-.14em) scaleX(-1)}67%,70%{transform:translate(2.88em,0) scaleX(-1)}71%{transform:translate(1.92em,-.14em) scaleX(-1)}73%,76%{transform:translate(1.92em,0) scaleX(-1)}77%{transform:translate(.96em,-.14em) scaleX(-1)}79%,82%{transform:translate(.96em,0) scaleX(-1)}83%{transform:translate(0,-.14em) scaleX(-1)}85%,100%{transform:translate(0,0) scaleX(-1)}}
-@keyframes lk-tether{0%,8%{d:path("M 291 91 C 291 176 291 176 340 176 L 372 176 C 417 176 417 176 417 169")}13%,21%{d:path("M 291 91 C 291 176 291 176 340 176 L 468 176 C 513 176 513 176 513 169")}26%,34%{d:path("M 291 91 C 291 176 291 176 340 176 L 564 176 C 609 176 609 176 609 169")}39%,66%{d:path("M 291 91 C 291 176 291 176 340 176 L 660 176 C 705 176 705 176 705 169")}71%,74%{d:path("M 291 91 C 291 176 291 176 340 176 L 564 176 C 609 176 609 176 609 169")}77%,80%{d:path("M 291 91 C 291 176 291 176 340 176 L 468 176 C 513 176 513 176 513 169")}83%,100%{d:path("M 291 91 C 291 176 291 176 340 176 L 372 176 C 417 176 417 176 417 169")}}
-@keyframes lk-wport{0%,8%{transform:translateX(0)}13%,21%{transform:translateX(96px)}26%,34%{transform:translateX(192px)}39%,66%{transform:translateX(288px)}71%,74%{transform:translateX(192px)}77%,80%{transform:translateX(96px)}83%,100%{transform:translateX(0)}}
-@media (prefers-reduced-motion:reduce){.lk *{animation:none !important}.lk .l{opacity:1}.lk .h{display:none}}
-@media (max-width:700px){.lk{--wm:34px}.brand-band{padding:22px 18px 40px 16px}}
 /* the homepage: the page in one column, its catalog on the right rail. The
    sections keep their own .wrap markup; inside the column it is just a box. */
 .home{display:grid;grid-template-columns:minmax(0,1fr) 188px;gap:0 40px;align-items:start}
