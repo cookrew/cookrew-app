@@ -7,7 +7,7 @@
 // second is fine; losing the words is not.
 
 import { SOUS_BASE_URL, SOUS_DISABLED, SOUS_KEEP_ALIVE, SOUS_POLISH_MODEL } from './sous-config'
-import { remoteSous } from './sous-remote-config'
+import { localTranslateModel, remoteSous } from './sous-remote-config'
 import { textFromContent, type MessagesResponse } from '../shared/anthropic-content'
 import { buildPolishPrompt, buildPolishSystem, needsPolish, sanitizePolish } from '../shared/sous-polish'
 
@@ -53,7 +53,10 @@ async function polishLocal(raw: string, budget: number, fetchFn: typeof fetch): 
     headers: { 'content-type': 'application/json' },
     signal: AbortSignal.timeout(budget),
     body: JSON.stringify({
-      model: SOUS_POLISH_MODEL,
+      // The owner's `localModel` in sous.json outranks the env default, as it
+      // does for translation: measured, 1.5b translates a Chinese transcript
+      // to English every time, 3b cleans it — the knob they already turned.
+      model: localTranslateModel(SOUS_POLISH_MODEL),
       system: buildPolishSystem(),
       prompt: buildPolishPrompt(raw),
       stream: false,
@@ -67,7 +70,7 @@ async function polishLocal(raw: string, budget: number, fetchFn: typeof fetch): 
     })
   })
   if (!res.ok) {
-    console.error(`Sous polish: Ollama returned ${res.status} for model ${SOUS_POLISH_MODEL}`)
+    console.error(`Sous polish: Ollama returned ${res.status} for model ${localTranslateModel(SOUS_POLISH_MODEL)}`)
     return null
   }
   const body = (await res.json()) as OllamaGenerateResponse

@@ -31,7 +31,7 @@ export function buildPolishSystem(): string {
     '- remove fillers (嗯, 那个, 呃, 就是说, um, uh, like, you know);',
     '- apply self-corrections: when they change their mind, keep only the final version;',
     '- fix punctuation and sentence breaks; use a list only if they enumerated;',
-    '- keep their language, their wording and their tone;',
+    '- keep their language, their wording and their tone — a Chinese transcript stays Chinese, never translate;',
     '- keep names, code, file paths, commands and numbers exactly as said;',
     '- never add, answer, shorten to a summary, or explain anything.',
     'Output only the cleaned text.'
