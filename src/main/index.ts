@@ -166,6 +166,7 @@ import {
   ORACLE_SWEEP_MS,
   PanePidCache
 } from './claude-session-oracle'
+import { RebindDamper } from './rebind-damper'
 import { createRestoreHandlers, registerRestoreIpc, RestoreHandlers } from './restore'
 import { withSessionLineage } from './session-lineage'
 import { LineageSpill, installLineageSpill } from './lineage-spill'
@@ -1980,16 +1981,25 @@ function spawnTracked(t: {
     // NOTE: a still-live tmux session is reattached by `new-session -A`, which
     // ignores this command — so resume only takes on a session that was killed
     // and recreated, never on one that merely detached.
-    const sessionId = resolveClaudeSessionId({
+    const resolved = resolveClaudeSessionId({
       command,
       cwd: t.cwd,
       storedId: t.claudeSessionId,
-      turns: turns.history(t.id)
+      turns: turns.history(t.id),
+      // The pane's own process is the authority over any file (the 2026-09-06
+      // adoption defect, claude-session-adoption.ts) — but ONLY from the warm
+      // cache: a cold pane-pid lookup is a synchronous herdr child process,
+      // and a fleet respawning at once would pay for one each. A card with no
+      // cached pid resolves exactly as before and the oracle's boot retries
+      // land the live answer seconds later.
+      live: { panePid: panePids.isWarm(t.id) ? panePids.pidOf(t.id) : null }
     })
+    const sessionId = dampedSpawnSession(t, resolved)
     if (t.claudeSessionId !== sessionId) {
       // Re-resolve = a transition (e.g. the stored id's file vanished after a
       // /clear): record the old binding on the lineage so the rail keeps the
       // earlier segment visible and rewind can still cut into it.
+      if (t.claudeSessionId) rebinds.left(t.id, t.claudeSessionId)
       store.updateNodeUnsafe(t.id, withSessionLineage(t, sessionId))
     }
     // A session another LIVE claude process still holds cannot be resumed —
@@ -2265,6 +2275,45 @@ const claimedReported = new Map<string, string>()
 const panePids = new PanePidCache((terminalId) => ptys.panePid(terminalId))
 
 /**
+ * Bindings a card has recently walked away from (rebind-damper.ts). A move
+ * BACK onto one of them inside REBIND_BACKOFF_MS is the 2026-09-06 ping-pong
+ * and is refused here, at both places a binding can change automatically.
+ */
+const rebinds = new RebindDamper()
+/** Flaps already logged: terminal → the id whose re-adoption was refused. */
+const flapReported = new Map<string, string>()
+
+/** Report a refused ping-pong once per (card, session) pair, never per tick. */
+function reportFlap(terminalId: string, name: string, sessionId: string): void {
+  if (flapReported.get(terminalId) === sessionId) return
+  flapReported.set(terminalId, sessionId)
+  console.error(
+    `Claude card ${name} (${terminalId.slice(0, 8)}) tried to bind back to session ` +
+      `${sessionId.slice(0, 8)} it left moments ago; refused — a card that ping-pongs ` +
+      'is a bug report, not a state machine (see rebind-damper.ts)'
+  )
+}
+
+/**
+ * The session a spawn may actually adopt.
+ *
+ * The resolver answers from files and from the live processes; this is the one
+ * thing it cannot know — that the card was bound to `resolved` a moment ago and
+ * something moved it off. Re-adopting it now is the flap, so the incumbent
+ * binding is kept and the refusal is logged once. A genuine rotation names a
+ * session the card has never left and is never damped.
+ */
+function dampedSpawnSession(
+  t: { id: string; claudeSessionId?: string | null },
+  resolved: string
+): string {
+  const stored = t.claudeSessionId
+  if (!stored || stored === resolved || rebinds.allows(t.id, resolved)) return resolved
+  reportFlap(t.id, store.nodeAcrossWorkspaces(t.id)?.node.name ?? t.id.slice(0, 8), resolved)
+  return stored
+}
+
+/**
  * THE CHECKPOINT ⇔ LIVE-TRANSCRIPT SWEEP. Every live Claude card is held to
  * the invariant in claude-session-oracle.ts on a slow clock: the binding the
  * rail reads from is the session the pane's process reports. Oracle only —
@@ -2389,6 +2438,18 @@ function commitRotatedClaudeSession(
   })
   if (verdict !== 'commit') return
   const rotated = chain[chain.length - 1]
+  // THE DAMPER (2026-09-06). Every automatic rebind lands here, so this is
+  // where a return to an id the card just left is refused: a conversation only
+  // moves forward, and a move back is two mechanisms disagreeing. The refusal
+  // leaves the binding exactly where it is — the card keeps reading the session
+  // it is on — and the window closes on its own.
+  if (!rebinds.allows(terminalId, rotated)) {
+    reportFlap(terminalId, node.name, rotated)
+    return
+  }
+  // Every id the card passes through is one it LEFT — an intermediate hop is
+  // as wrong a place to come back to as the id we started from.
+  for (const left of [bound, ...chain.slice(0, -1)]) rebinds.left(terminalId, left)
   // Folded hop by hop so EVERY session the agent passed through lands on
   // the lineage: the rail keeps each earlier segment behind its own clear
   // marker, and cross-clear rewind can still cut into them.

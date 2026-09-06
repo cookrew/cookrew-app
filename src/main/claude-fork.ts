@@ -25,6 +25,7 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import type { TurnRecord } from '../shared/turn'
 import { parseClaudeTrace } from '../shared/trace-blocks'
+import { mayAdopt, sessionAuthority, type LiveClaudeView } from './claude-session-adoption'
 import {
   buildForkedSessionLinesAtTurn,
   buildForkedSessionLinesAtUuid,
@@ -118,6 +119,12 @@ export interface ResolveSessionOptions {
   turns: TurnRecord[]
   /** Override for tests; defaults to ~/.claude/projects. */
   projectsDir?: string
+  /**
+   * What the LIVE claude processes say (claude-session-adoption.ts). Absent
+   * means "read claude's own records"; a caller that already knows the pane's
+   * pid passes it so the pane's own statement can win outright.
+   */
+  live?: LiveClaudeView
 }
 
 /**
@@ -132,6 +139,8 @@ export interface ResolveSessionOptions {
  * conversation — the "agent didn't recover after reboot" bug.
  *
  * Resolution order:
+ *  0. THE PANE'S OWN PROCESS. A live, non-background holder in this pane is
+ *     the authority (claude-session-adoption.ts) — no directory is scored.
  *  1. A stored id whose session file exists — the normal resume path.
  *  2. A session id baked into the launch command whose file exists (legacy forks).
  *  3. Recovery: match the terminal's turn history against the real session files
@@ -140,6 +149,10 @@ export interface ResolveSessionOptions {
  *     agent's own sessions — its real conversation, never a neighbour's.
  *  4. No signal → keep a valid stored id (idempotent) or mint a fresh one that
  *     claude adopts on a genuinely new terminal's first boot.
+ *
+ * Steps 2 and 3 DISCOVER a session, and everything discovered is filtered
+ * through `mayAdopt`: a session a background job is writing is never adopted.
+ * See claude-session-adoption.ts for the 2026-09-06 incident that rule ends.
  */
 /**
  * Strict resolution for the RECOVER path (EXACT-CONTEXT gate): returns the
@@ -162,8 +175,25 @@ export function resolveExistingClaudeSession(options: ResolveSessionOptions): st
  * resolvers so the EXACT-CONTEXT gate can never disagree with what spawns.
  */
 function findExistingClaudeSession(options: ResolveSessionOptions): string | null {
-  const { command, cwd, storedId, turns, projectsDir } = options
+  const { cwd, storedId, projectsDir } = options
   try {
+    const authority = sessionAuthority(options.live ?? {}, cwd, realCwd)
+    // 0. The pane's own process outranks every file. Bound to a name with a
+    // file behind it: the live record precedes claude's first write by a
+    // moment, and binding a card to a file that does not exist is a bug this
+    // codebase has already paid for once (bindForkWhenWritten). In that one
+    // moment the paths below answer, and the oracle's boot retries land the
+    // real id seconds later.
+    if (
+      authority.paneSession &&
+      existsSync(claudeSessionFile(cwd, authority.paneSession, projectsDir))
+    ) {
+      return authority.paneSession
+    }
+    // 1. The INCUMBENT binding — not an adoption, and deliberately exempt from
+    // the bg filter: a card whose own session was grabbed by a leftover
+    // `claude bg-spare` is repaired by planHeldSessionFork (resume from a copy),
+    // never by forgetting the conversation.
     if (
       storedId &&
       SESSION_UUID_RE.test(storedId) &&
@@ -171,24 +201,41 @@ function findExistingClaudeSession(options: ResolveSessionOptions): string | nul
     ) {
       return followContinuedIn(cwd, storedId, projectsDir)
     }
-    const flagged = extractSessionFlag(command)
-    if (flagged && existsSync(claudeSessionFile(cwd, flagged, projectsDir))) {
-      return followContinuedIn(cwd, flagged, projectsDir)
-    }
-    const dir = claudeProjectDir(cwd, projectsDir)
-    if (turns.length > 0 && existsSync(dir)) {
-      // readCandidates sorts newest-first; the strict-greater reduce keeps the
-      // newest file on score ties — the live conversation over a stale sibling.
-      const best = readCandidates(dir, turns).reduce<Candidate | null>(
-        (acc, c) => (acc === null || c.score > acc.score ? c : acc),
-        null
-      )
-      if (best !== null && best.score >= 1) return path.basename(best.file, '.jsonl')
-    }
+    return discoverClaudeSession(options, (id) => mayAdopt(id, authority))
   } catch (error) {
     console.error('Claude session resolution failed:', error)
+    return null
   }
-  return null
+}
+
+/**
+ * Steps 2 and 3: the paths that DISCOVER a session the card was not bound to.
+ *
+ * `adoptable` is applied to the flagged id AND to every scan candidate before
+ * it is scored — an excluded session is not merely rejected as the winner, it
+ * never competes, so the runner-up (this card's real, older transcript) still
+ * wins. That is the whole of the 2026-09-06 fix: the background job's file was
+ * both the newest and the best prompt match, and it must not be in the race.
+ */
+function discoverClaudeSession(
+  options: ResolveSessionOptions,
+  adoptable: (sessionId: string) => boolean
+): string | null {
+  const { command, cwd, turns, projectsDir } = options
+  const flagged = extractSessionFlag(command)
+  if (flagged && adoptable(flagged) && existsSync(claudeSessionFile(cwd, flagged, projectsDir))) {
+    const followed = followContinuedIn(cwd, flagged, projectsDir)
+    if (adoptable(followed)) return followed
+  }
+  const dir = claudeProjectDir(cwd, projectsDir)
+  if (turns.length === 0 || !existsSync(dir)) return null
+  // readCandidates sorts newest-first; the strict-greater reduce keeps the
+  // newest file on score ties — the live conversation over a stale sibling.
+  const best = readCandidates(dir, turns, adoptable).reduce<Candidate | null>(
+    (acc, c) => (acc === null || c.score > acc.score ? c : acc),
+    null
+  )
+  return best !== null && best.score >= 1 ? path.basename(best.file, '.jsonl') : null
 }
 
 /**
@@ -327,9 +374,21 @@ interface Candidate {
   score: number
 }
 
-function readCandidates(dir: string, turns: TurnRecord[]): Candidate[] {
+/**
+ * The newest session files, scored against a terminal's turn history.
+ *
+ * `adoptable` drops a session from the race BEFORE it is read or scored — the
+ * 2026-09-06 background job's transcript was both the newest file and the best
+ * prompt match, and rejecting it only as the winner would still have hidden
+ * this card's real, older session behind it.
+ */
+function readCandidates(
+  dir: string,
+  turns: TurnRecord[],
+  adoptable: (sessionId: string) => boolean = () => true
+): Candidate[] {
   const files = readdirSync(dir)
-    .filter((f) => f.endsWith('.jsonl'))
+    .filter((f) => f.endsWith('.jsonl') && adoptable(path.basename(f, '.jsonl')))
     .map((f) => path.join(dir, f))
     .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
     .slice(0, CANDIDATE_FILES)

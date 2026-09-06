@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// THE CHECKPOINT GATE. Two claims, printed separately, per Claude card.
+// THE CHECKPOINT GATE. Three claims, printed separately, per Claude card.
 //
 //   REACH   NO CHECKPOINT IS UNREACHABLE — every session id ever bound to the
 //           card is still in (binding ∪ lineage ∪ spill) and names a
@@ -9,6 +9,11 @@
 //   LIVE    the card is bound to the session its pane's process reports, for
 //           cards whose pane agent can be IDENTIFIED. Anything else is
 //           UNKNOWN — see below.
+//   FLAP    the card is NOT alternating between two sessions — no rotation
+//           destination in its recent event log repeats. Reported only, never
+//           a failure: a flap is a wrong rail and a noisy history, not a lost
+//           checkpoint (2026-09-06, Conductor: 295d5f1c <-> a78aa3e5 x8, the
+//           spawn-time adoption defect claude-session-adoption.ts ends).
 //
 //   npm run gate:checkpoints            (exit 1 on any FAIL or MISMATCH)
 //
@@ -32,7 +37,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { resolvePaneAgent, withoutDescendantsOfPeers } from '../src/shared/pane-agent.mjs'
-import { liveVerdict, reachVerdict } from '../src/shared/checkpoint-gate.mjs'
+import { flapVerdict, liveVerdict, reachVerdict } from '../src/shared/checkpoint-gate.mjs'
 import { SPILL_DIR_NAME, parseSpill } from '../src/shared/lineage-spill-format.mjs'
 
 const HOME = homedir()
@@ -135,15 +140,20 @@ function spillIdsOf(terminalId) {
 }
 
 /**
- * Ids the app itself recorded binding to this card, as 8-char witnesses.
+ * What the app itself recorded about this card's rotations.
  *
- * The event log is the INDEPENDENT witness the reach claim needs: it was
+ * The event log is the INDEPENDENT witness both derived claims need: it was
  * written when the rotation happened, by the app, and it is not the structure
  * under test. It rotates (events.1.jsonl …), so its silence proves nothing —
  * only what it names is evidence.
+ *
+ * Two readings of the same `terminal.session-rotated` details ("<from> →
+ * <to>"): the SET of 8-char ids ever bound (reach), and the ORDERED list of
+ * destinations (flap — a destination that repeats is a card alternating).
  */
-function everBoundOf(nodes) {
+function rotationsOf(nodes) {
   const witnesses = new Map()
+  const hops = new Map()
   for (const name of readdirSync(COOKREW).filter((n) => /^events(\.\d+)?\.jsonl$/.test(n))) {
     let lines = []
     try {
@@ -161,15 +171,25 @@ function everBoundOf(nodes) {
       }
       if (!nodes.has(event.entityId)) continue
       const ids = String(event.details ?? '').match(/[0-9a-f]{8}/g) ?? []
+      if (ids.length === 0) continue
       witnesses.set(event.entityId, new Set([...(witnesses.get(event.entityId) ?? []), ...ids]))
+      hops.set(event.entityId, [
+        ...(hops.get(event.entityId) ?? []),
+        { at: Number(event.timestamp) || 0, to: ids[ids.length - 1] }
+      ])
     }
   }
-  return witnesses
+  // The rotated files are read after the live one, so order by the timestamp
+  // the app wrote rather than by the order the lines were gathered.
+  const destinations = new Map(
+    [...hops].map(([id, list]) => [id, [...list].sort((a, b) => a.at - b.at).map((h) => h.to)])
+  )
+  return { witnesses, destinations }
 }
 
-/** Both verdicts for one card. */
+/** All three verdicts for one card. */
 function rowFor({ workspace, node }, context) {
-  const { records, byTerminal, ppidOf, witnesses } = context
+  const { records, byTerminal, ppidOf, witnesses, destinations } = context
   const holders = (byTerminal.get(node.id) ?? [])
     .map((pid) => records.get(pid))
     .filter((record) => record !== undefined)
@@ -187,9 +207,11 @@ function rowFor({ workspace, node }, context) {
     everBound: [...(witnesses.get(node.id) ?? [])],
     hasTranscript: (id) => existsSync(path.join(dir, `${id}.jsonl`))
   })
+  const flap = flapVerdict({ rotations: destinations.get(node.id) ?? [] })
   return {
     reach: reach.verdict,
     live: live.verdict,
+    flap: flap.verdict === 'FLAP' ? flap.ids.join('/') : '',
     workspace,
     card: node.name ?? node.id.slice(0, 8),
     bound: bound ? `${bound.slice(0, 8)} (${ageOf(path.join(dir, `${bound}.jsonl`))})` : '—',
@@ -213,8 +235,10 @@ function rowFor({ workspace, node }, context) {
 const records = liveRecords()
 const { byTerminal, ppidOf } = processTable()
 const cards = claudeNodes()
-const witnesses = everBoundOf(new Set(cards.map(({ node }) => node.id)))
-const rows = cards.map((card) => rowFor(card, { records, byTerminal, ppidOf, witnesses }))
+const { witnesses, destinations } = rotationsOf(new Set(cards.map(({ node }) => node.id)))
+const rows = cards.map((card) =>
+  rowFor(card, { records, byTerminal, ppidOf, witnesses, destinations })
+)
 
 if (rows.length === 0) {
   console.log('checkpoint-gate: no Claude card found')
@@ -237,6 +261,12 @@ console.log(
 console.log(
   `LIVE   ${rows.length - mismatched.length - unknown.length}/${rows.length} card(s) bound to the ` +
     `session their pane process writes, ${unknown.length} undecidable (UNKNOWN is not an alarm)`
+)
+const flapping = rows.filter((r) => r.flap !== '')
+console.log(
+  `FLAP   ${flapping.length} card(s) rotating back onto a session they already left ` +
+    '(reported, never a failure)' +
+    (flapping.length === 0 ? '' : `: ${flapping.map((r) => `${r.card} ${r.flap}`).join(', ')}`)
 )
 const failed = unreachable.length + mismatched.length
 console.log(
