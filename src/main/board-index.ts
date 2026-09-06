@@ -219,9 +219,15 @@ export interface ProbeSampler {
  * detached parks the timer, so an idle machine pays nothing. Callers restart
  * it when the board is next requested.
  */
+export interface ProbeSamplerOptions {
+  /** Called with each pass's duration in ms — the loop-health seam. */
+  observe?: (ms: number) => void
+}
+
 export function createProbeSampler(
   deps: ProbeDeps,
-  intervalMs: number = PROBE_INTERVAL_MS
+  intervalMs: number = PROBE_INTERVAL_MS,
+  options: ProbeSamplerOptions = {}
 ): ProbeSampler {
   let latest = new Map<string, BoardPhase>()
   let timer: ReturnType<typeof setInterval> | null = null
@@ -232,12 +238,14 @@ export function createProbeSampler(
     if (inFlight) return latest // single-flight: never stack scans
     inFlight = true
     lastSampleAt = Date.now()
+    const started = performance.now()
     try {
       latest = probeOnce(deps)
     } catch (error) {
       console.error('Board probe failed:', error)
     } finally {
       inFlight = false
+      options.observe?.(performance.now() - started)
     }
     return latest
   }

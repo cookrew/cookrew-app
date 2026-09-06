@@ -23,11 +23,19 @@ export const BUDGETS = {
       gpu: { warn: 300, fail: 600 },
       utility: { warn: 150, fail: 300 }
     },
-    risingMbPerHour: { warn: 20, fail: 60 }
+    risingMbPerHour: { warn: 20, fail: 60 },
+    // Main-thread event-loop delay p95 over the app's last complete minute,
+    // from GET /api/health (src/main/loop-health.ts). A healthy Electron main
+    // sits under 10 ms; 50 is a loop that is starting to hold itself, 500 is
+    // one timer in twenty waiting half a second. Capped at WARN under machine
+    // load like the latency section — the ELU next to it says whose fault.
+    loopDelayP95Ms: { warn: 50, fail: 500 }
   },
   latency: {
     events: {
-      'workspace.switched': { p95: { warn: 1000, fail: 3000 } },
+      // Tightened 2026-09-06 (perf/tempo): the all-time p95 is 457 ms and
+      // the trailing day 130; 3 s was one 4.3 s switch on a 9-sample day.
+      'workspace.switched': { p95: { warn: 1000, fail: 2000 } },
       'terminal.booted': { p95: { warn: 8000, fail: 15000 } }
       // turn.completed is agent think time, not app latency: reported only.
     },

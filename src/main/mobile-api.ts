@@ -37,6 +37,7 @@ import type {
   RestoreResult,
 } from "../shared/model";
 import { readBytes, readJson, respondJson, startSse, pairingAuthorized } from "./mobile-http";
+import type { LoopHealthSnapshot } from "./loop-health";
 import { ownerSubmit } from "./ask";
 import { MAX_ATTACHMENT_BYTES } from "./attachments";
 
@@ -162,6 +163,12 @@ export interface MobileApiDeps {
    * absent = /api/board answers 503 rather than pretending the board is empty.
    */
   board?: BoardSources;
+  /**
+   * The main thread's own pulse (loop-health.ts): event-loop delay, ELU and
+   * per-loop tick durations. Read-only; absent = /api/health answers 503 so
+   * a missing wire-up is loud rather than a fabricated all-clear.
+   */
+  health?: () => LoopHealthSnapshot;
   /**
    * Importing a served team FROM THE PHONE — the desktop's own operations,
    * reached over this API. Absent = the six /api/serve routes answer 503
@@ -389,6 +396,17 @@ export async function handleMobileApi(
       200,
       await enrichStateWithGit(scopedState(), ops.gitInfo),
     );
+    return true;
+  }
+  // The main process reading its own event loop. Behind the /api GET gate
+  // above like every other read; the payload is timings and counts, never a
+  // token or a path.
+  if (method === "GET" && p === "/api/health") {
+    if (!deps.health) {
+      respondJson(response, 503, { error: "health not wired" });
+      return true;
+    }
+    respondJson(response, 200, deps.health());
     return true;
   }
   if (method === "GET" && p === "/api/presets") {

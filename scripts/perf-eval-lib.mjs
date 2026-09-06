@@ -239,6 +239,32 @@ export function latencyFromEvents(lines, since = 0) {
   return Object.fromEntries(Object.entries(byType).map(([type, values]) => [type, percentiles(values)]))
 }
 
+/**
+ * The loop-delay row the memory history keeps, from a GET /api/health body
+ * (src/main/loop-health.ts). Prefers the last COMPLETE window; falls back to
+ * the one still filling (the first minute after a restart). Null when the
+ * body is not a health snapshot — an older build answering 404 HTML, say.
+ */
+export function loopFromHealth(body) {
+  const window = body?.loop?.lastMinute ?? body?.loop?.current
+  if (!window || typeof window.p95 !== 'number') return null
+  const loops = {}
+  for (const [name, ticks] of Object.entries(body.loops ?? {})) {
+    if (ticks && typeof ticks.max === 'number') loops[name] = { count: ticks.count, p95: ticks.p95, max: ticks.max }
+  }
+  return {
+    window: body.loop?.lastMinute ? 'lastMinute' : 'current',
+    samples: window.samples ?? 0,
+    p50: window.p50,
+    p95: window.p95,
+    p98: window.p98,
+    max: window.max,
+    elu: typeof window.elu === 'number' ? window.elu : null,
+    loops,
+    residency: body.residency ?? {}
+  }
+}
+
 export const fmtMb = (bytes) => `${(bytes / MB).toFixed(1)} MB`
 export const fmtMs = (ms) => (ms === null || ms === undefined ? '—' : `${Math.round(ms)} ms`)
 

@@ -87,6 +87,18 @@ export function orphanSidecars(teams: readonly TeamSessions[], sidecars: readonl
 export function parseEtime(text: string): number | null
 export function pickAppProcesses(rows: readonly PsRow[]): AppProcess[]
 export function parsePsTable(text: string): PsRow[]
+export interface LoopSample {
+  window: 'lastMinute' | 'current'
+  samples: number
+  p50: number
+  p95: number
+  p98: number
+  max: number
+  elu: number | null
+  loops: Record<string, { count: number; p95: number; max: number }>
+  residency: Record<string, number>
+}
+export function loopFromHealth(body: unknown): LoopSample | null
 export function latencyFromEvents(lines: readonly string[], since?: number): Record<string, Percentiles>
 export function fmtMb(bytes: number): string
 export function fmtMs(ms: number | null | undefined): string

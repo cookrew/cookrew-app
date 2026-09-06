@@ -36,8 +36,10 @@ import {
   buildBoard,
   boardWindowMs,
   createProbeSampler,
+  PROBE_INTERVAL_MS,
   tmuxProbeDeps
 } from './board-index'
+import { createLoopHealth } from './loop-health'
 import { loadOrCreateReadOnlyToken } from './readonly-token'
 import { loadOrCreatePairingToken } from './pairing-token'
 import { searchTurns } from '../shared/turn-search'
@@ -1350,11 +1352,23 @@ async function attachServedLine(conductorId: string): Promise<LinePtyView | null
   return ptys.get(conductorId) ?? null
 }
 
+/**
+ * The main thread's own pulse — loop delay, ELU, and how long each periodic
+ * loop held the thread — read by GET /api/health and sampled hourly by
+ * scripts/perf-eval.mjs. Residency counts ride along so the O(active) claim
+ * of the residency loops can be checked against what is actually held.
+ */
+const loopHealth = createLoopHealth({
+  residency: () => ({ store: store.resident().length, registry: sessions.residentCount() })
+})
+
 const boardProbe = createProbeSampler(
   tmuxProbeDeps({
     knownTerminalIds: () => agents.list().map((entry) => entry.id),
     isAttached: (terminalId) => ptys.get(terminalId) !== undefined
-  })
+  }),
+  PROBE_INTERVAL_MS,
+  { observe: (ms) => loopHealth.observe('boardProbe', ms) }
 )
 /** Board sources incl. L2; probing restarts lazily whenever the board is read. */
 function boardSources(): ReturnType<typeof boardSourcesFrom> {
@@ -2822,11 +2836,13 @@ const sessions = new SessionRegistry<{ id: string }>({
 const SESSION_DRAIN_TICK_MS = 5_000
 
 const sessionDrain = setInterval(() => {
-  // Materialise whatever the store is holding, then let liveness decide. The
-  // registry never PINS anything — get() deliberately does not clear the death
-  // clock, so a session that is merely resident still drains.
-  for (const id of store.resident()) sessions.get(id)
-  sessions.drainTick()
+  loopHealth.timed('sessionDrain', () => {
+    // Materialise whatever the store is holding, then let liveness decide. The
+    // registry never PINS anything — get() deliberately does not clear the death
+    // clock, so a session that is merely resident still drains.
+    for (const id of store.resident()) sessions.get(id)
+    sessions.drainTick()
+  })
 }, SESSION_DRAIN_TICK_MS)
 sessionDrain.unref?.()
 
@@ -4472,6 +4488,8 @@ app.whenReady().then(() => {
     // probe (L2) is absent until the tmux sampler lands; rows then degrade to
     // their last known task rather than claiming a phase nobody observed.
     board: boardSources(),
+    // The main thread's pulse (loop-health.ts) for GET /api/health.
+    health: () => loopHealth.snapshot(),
     // Attach-free dispatch (v4 §3): the two /api routes answer 503 without it.
     dispatch: dispatchService,
     // While a dispatch is armed, the HTTP input/ask producers refuse 409 —
@@ -4677,6 +4695,7 @@ app.on('before-quit', (event) => {
   // reads the ledger after the restart.
   clearInterval(dispatchSweep)
   clearInterval(sessionDrain)
+  loopHealth.stop()
   // Latch FIRST: no new ask may register after the drain snapshot begins
   // (Sol r11) — then interrupt commissioned work and retire the lease
   // generations, firing the abort seam into everything still in flight.
