@@ -29,10 +29,7 @@ const FILES = [
   ['jetbrains-mono.woff2', 'fonts/jetbrains-mono.woff2', 'font/woff2', 'base64'],
   ['silkscreen-400.woff2', 'fonts/silkscreen-400.woff2', 'font/woff2', 'base64'],
   ['silkscreen-700.woff2', 'fonts/silkscreen-700.woff2', 'font/woff2', 'base64'],
-  ['vt323-400.woff2', 'fonts/vt323-400.woff2', 'font/woff2', 'base64'],
-  // the brand: the owner's cyan wireframe render of the hand, cut out (2026-09-06)
-  ['wire-hand.png', 'brand/wire-hand.png', 'image/png', 'base64'],
-  ['wire-hand-64.png', 'brand/wire-hand-64.png', 'image/png', 'base64']
+  ['vt323-400.woff2', 'fonts/vt323-400.woff2', 'font/woff2', 'base64']
 ]
 
 const entries = FILES.map(([name, file, type, encoding]) => {

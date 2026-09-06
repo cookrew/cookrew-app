@@ -1,6 +1,5 @@
 import type { ListedDoor } from './site'
 import type { Release } from './releases'
-import { BRAND_GROUND, WIRE_HAND_64 } from '../../src/shared/brand-hand'
 import { DEFINITION, FACTS, FEATURES, GITHUB_REPO, SITE_NAME, SITE_ORIGIN, type Faq } from './site-content'
 
 /**
@@ -179,8 +178,7 @@ export function sitemapXml(allDoors: readonly ListedDoor[]): string {
 }
 
 /** The pixel mark: a phosphor screen with three lines and a blinking cursor. */
-/** The favicon: the wireframe render on the dark tile — the same bytes the app's bar draws. */
-export const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="${BRAND_GROUND}"/><image href="${WIRE_HAND_64}" x="2" y="3" width="28" height="26" preserveAspectRatio="xMidYMid meet"/></svg>`
+export const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="1" y="1" width="22" height="22" fill="#14110a" stroke="#2d2a20" stroke-width="2"/><rect x="5" y="6" width="6" height="2" fill="#e9b949"/><rect x="5" y="10" width="10" height="2" fill="#e9b949"/><rect x="5" y="14" width="4" height="2" fill="#e9b949"/><rect x="11" y="14" width="2" height="2" fill="#ffd600"/></svg>`
 
 export function webManifest(): string {
   return JSON.stringify({

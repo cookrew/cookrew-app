@@ -144,17 +144,11 @@ body,
   gap: 8px;
 }
 
-/* The mark is the cyan wireframe RENDER on its own dark tile (brand-hand.ts),
-   so it reads on the cream bar the way the favicon reads on a tab. */
 .cr-logo-mark {
   width: 24px;
   height: 24px;
   flex: 0 0 auto;
   display: block;
-  object-fit: contain;
-  padding: 2px;
-  border-radius: 6px;
-  background: #0b0f12;
 }
 
 .cr-logo {
@@ -163,147 +157,6 @@ body,
   font-size: 17px;
   letter-spacing: 0.08em;
   text-shadow: 2px 2px 0 var(--amber);
-}
-
-/* ---- the lockup: C (the render) · two lens eyes · outlined KREW · dashed cables ----
-   The pick of 2026-09-06 (docs/design/brand-renders.html #all-wireframe), at
-   bar size. Cyan lives on dark: the eyes are dark screens, the cables and
-   the small hand are ink on the cream bar. The letters are outlined. The
-   small hand types the word once on first paint and then rests; the eyes
-   glance once and blink now and then; nothing on the bar spins. */
-.cr-lockup {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.1em;
-  margin-left: -2px;
-  padding-bottom: 0.6em;
-  margin-bottom: -0.6em;
-}
-
-.cr-cables {
-  position: absolute;
-  left: -1.55em;
-  top: -0.2em;
-  width: 7em;
-  height: 2.4em;
-  z-index: 0;
-  overflow: visible;
-  pointer-events: none;
-}
-
-.cr-cables path {
-  fill: none;
-  stroke: var(--ink);
-  stroke-width: 2.2;
-  stroke-dasharray: 7 5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.cr-tether { animation: cr-tether 6s cubic-bezier(0.5, 0, 0.5, 1) 1 both; }
-
-@keyframes cr-tether {
-  0%, 8% { d: path('M 291 91 C 291 176 291 176 340 176 L 372 176 C 417 176 417 176 417 169'); }
-  13%, 21% { d: path('M 291 91 C 291 176 291 176 340 176 L 468 176 C 513 176 513 176 513 169'); }
-  26%, 34% { d: path('M 291 91 C 291 176 291 176 340 176 L 564 176 C 609 176 609 176 609 169'); }
-  39%, 100% { d: path('M 291 91 C 291 176 291 176 340 176 L 660 176 C 705 176 705 176 705 169'); }
-}
-
-.cr-eye {
-  position: relative;
-  z-index: 1;
-  width: 0.92em;
-  height: 0.92em;
-  flex: 0 0 auto;
-  color: #3ee8e0;
-  display: block;
-}
-
-.cr-eye .eye { width: 100%; height: 100%; overflow: visible; display: block; }
-.cr-eye .eye * { transform-box: fill-box; transform-origin: center; }
-.cr-eye .rim { fill: #07191b; stroke: currentColor; stroke-width: 3; }
-.cr-eye .ticks { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-dasharray: 2 6.2; }
-.cr-eye .iris { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-dasharray: 11 7; }
-.cr-eye .iris2 { fill: none; stroke: currentColor; stroke-width: 1; opacity: 0.6; }
-.cr-eye .pupil { animation: cr-gaze 6s cubic-bezier(0.6, 0, 0.2, 1) 1; }
-.cr-eye .pupil circle:first-child { fill: currentColor; }
-.cr-eye .pupil circle:last-child { fill: none; stroke: currentColor; stroke-width: 1; }
-.cr-eye .lid { fill: #07191b; transform: scaleY(0); animation: cr-lid 5.2s steps(1, end) infinite 6s; }
-.cr-eye .lidline { stroke: currentColor; stroke-width: 2.4; opacity: 0; animation: cr-lidline 5.2s steps(1, end) infinite 6s; }
-
-@keyframes cr-gaze {
-  0%, 6% { transform: translate(0, 0); }
-  10%, 46% { transform: translate(11px, 4px); }
-  50%, 62% { transform: translate(15px, 0); }
-  66%, 100% { transform: translate(0, 0); }
-}
-
-@keyframes cr-lid { 0%, 94% { transform: scaleY(0); } 95%, 98% { transform: scaleY(1); } 99%, 100% { transform: scaleY(0); } }
-@keyframes cr-lidline { 0%, 94% { opacity: 0; } 95%, 98% { opacity: 1; } 99%, 100% { opacity: 0; } }
-
-.cr-letters {
-  position: relative;
-  z-index: 1;
-  display: inline-flex;
-  letter-spacing: 0;
-  margin-left: 0.12em;
-}
-
-.cr-letters > span:not(.cr-hand2) {
-  display: inline-block;
-  width: 0.96em;
-  text-align: center;
-  color: transparent;
-  -webkit-text-stroke: 1px var(--ink);
-  text-shadow: 2px 2px 0 var(--amber);
-  animation: 6s steps(1, end) 1 both;
-}
-
-.cr-letters > span:nth-of-type(2) { animation-name: cr-type-k; }
-.cr-letters > span:nth-of-type(3) { animation-name: cr-type-r; }
-.cr-letters > span:nth-of-type(4) { animation-name: cr-type-e; }
-.cr-letters > span:nth-of-type(5) { animation-name: cr-type-w; }
-
-@keyframes cr-type-k { 0%, 7% { opacity: 0; } 8%, 100% { opacity: 1; } }
-@keyframes cr-type-r { 0%, 20% { opacity: 0; } 21%, 100% { opacity: 1; } }
-@keyframes cr-type-e { 0%, 33% { opacity: 0; } 34%, 100% { opacity: 1; } }
-@keyframes cr-type-w { 0%, 47% { opacity: 0; } 48%, 100% { opacity: 1; } }
-
-/* The small hand: the same render, mirrored, under the letters; it presses
-   each in from below and rests under the W once the word stands. */
-.cr-hand2 {
-  position: absolute;
-  left: 0.02em;
-  bottom: -0.78em;
-  width: 0.8em;
-  height: 0.66em;
-  text-shadow: none;
-  animation: cr-crab 6s cubic-bezier(0.5, 0, 0.5, 1) 1 both;
-  pointer-events: none;
-  z-index: 2;
-}
-
-.cr-hand2-mark { width: 100%; height: 100%; display: block; object-fit: contain; }
-
-@keyframes cr-crab {
-  0%, 6% { transform: translate(0, 0) scaleX(-1); }
-  7% { transform: translate(0, -0.14em) scaleX(-1); }
-  9%, 12% { transform: translate(0, 0) scaleX(-1); }
-  13%, 19% { transform: translate(0.96em, 0) scaleX(-1); }
-  20% { transform: translate(0.96em, -0.14em) scaleX(-1); }
-  22%, 25% { transform: translate(0.96em, 0) scaleX(-1); }
-  26%, 32% { transform: translate(1.92em, 0) scaleX(-1); }
-  33% { transform: translate(1.92em, -0.14em) scaleX(-1); }
-  35%, 38% { transform: translate(1.92em, 0) scaleX(-1); }
-  39%, 46% { transform: translate(2.88em, 0) scaleX(-1); }
-  47% { transform: translate(2.88em, -0.14em) scaleX(-1); }
-  49%, 100% { transform: translate(2.88em, 0) scaleX(-1); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .cr-eye .pupil, .cr-eye .lid, .cr-eye .lidline, .cr-letters > span, .cr-hand2, .cr-tether { animation: none; }
-  .cr-letters > span { opacity: 1; }
 }
 
 .cr-header-meta {
