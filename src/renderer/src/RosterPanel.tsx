@@ -9,7 +9,8 @@ import { exportStateOf, useGrantRoster } from './grant-state'
 import { EXPORT_ERROR, fill } from './grant-copy'
 import { NoteRow } from './NoteRow'
 import { BrowserRow } from './BrowserRow'
-import { buildAgentRows, type AgentRow as Row } from './agent-rows'
+import { buildAgentRows, checkpointWanted, type AgentRow as Row } from './agent-rows'
+import { useLatestCheckpoints } from './use-latest-checkpoints'
 import { advanceClock, type ActivityClock } from './activity-clock'
 import { searchAgents } from './agent-search'
 import type { TurnMatch } from '../../shared/turn-search'
@@ -154,9 +155,15 @@ export function RosterPanel({
     () => ({ ...eventClock(events), ...clock.current }),
     [events, clock.current],
   )
+  // THE SAME SOURCE AS THE CARD. An agent the tracker has nothing on since
+  // the restart still has its last turn on file; the canvas card tails it
+  // (trace-perf T1) and so does its row here, or the Board says QUIET about
+  // a crew the canvas shows mid-sentence.
+  const idle = useMemo(() => checkpointWanted(roster, activities), [roster, activities])
+  const checkpoints = useLatestCheckpoints(idle)
   const all = useMemo(
-    () => buildAgentRows({ roster, activities, now, changedAt }),
-    [roster, activities, now, changedAt],
+    () => buildAgentRows({ roster, activities, checkpoints, now, changedAt }),
+    [roster, activities, checkpoints, now, changedAt],
   )
   // Facet TAGS speak for the CURRENT workspace only — a wall of every
   // workspace's presets/roles was noise; the list itself stays global.
