@@ -309,6 +309,13 @@ code,.mono{font-family:var(--font-mono);font-size:.88em}
 .note{background:var(--note-bg);border:2px solid var(--line);box-shadow:3px 3px 0 var(--line);padding:12px 14px;font-size:14px;transform:rotate(-.6deg)}
 .grid{display:grid;gap:18px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
 .grid .card p{color:var(--muted);font-size:14.5px;margin:0}
+/* a frame as a card's face (the features index): a 16:10 window onto the
+   top-left of the recording, never the image at its own pixel size — the
+   only img rule above is scoped to figure.shot, and a 1400px frame dropped
+   bare into a 260px card painted as a tall cropped strip. */
+.grid.shots{grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
+.card-shot{display:block;background:var(--phos-bg);border-bottom:2px solid var(--line)}
+.card-shot img{display:block;width:100%;height:auto;aspect-ratio:16/10;object-fit:cover;object-position:left top}
 /* CRT screen (phosphor) */
 .crt{background:var(--phos-bg);color:var(--phos);font:15px/1.25 var(--font-screen);position:relative;border:2px solid var(--line);box-shadow:4px 4px 0 var(--line);overflow:hidden}
 .crt::before{content:'';position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(to bottom,rgba(255,255,255,.03) 0,rgba(255,255,255,.03) 1px,transparent 1px,transparent 3px)}
