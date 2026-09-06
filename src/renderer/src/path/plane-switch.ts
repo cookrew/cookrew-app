@@ -1,3 +1,4 @@
+import { readHelloReply } from '../../../shared/hello-proof'
 import { trustedNetwork, type TrustedNetwork } from '../../../shared/trusted-origin'
 import type { DataPlane, DataPlaneKind } from '../data-plane'
 import type { HelloReply, ReachCardLite } from './switch'
@@ -84,11 +85,14 @@ export const planeCandidates = (
   ]
 }
 
-/** What the registry is asked, and what it answers: one bit. */
+/** What the registry is asked, and what it answers: one bit and a reason. */
 export interface HelloClaim {
   readonly deviceId: string
   readonly nonce: string
   readonly sig: string
+  /** HELLO v2: the endpoint the Mac signed, and its clock when it signed. */
+  readonly origin: string
+  readonly issuedAtMs: number
 }
 
 export interface PlaneSwitchDeps {
@@ -129,13 +133,18 @@ export const switchPlaneIfBetter = async (deps: PlaneSwitchDeps): Promise<PlaneO
     for (const candidate of candidates) {
       const nonce = deps.nonce()
       const reply = await deps.hello(candidate.origin, nonce).catch(() => null)
-      // The device id says it is the right Mac and the echoed nonce says the
-      // answer was made just now — both cheap, both checked here so a wrong
-      // one never costs the registry a request.
-      if (!reply || reply.deviceId !== card.deviceId || reply.nonce !== nonce) continue
-      if (typeof reply.sig !== 'string' || reply.sig.length === 0) continue
+      // Everything checkable without the registry, checked here so a wrong
+      // answer never costs it a request — INCLUDING THE ONE THAT MATTERS: a
+      // signature naming a different origin is our own challenge relayed to
+      // the real Mac by whatever answered here. src/shared/hello-proof.ts.
+      const read = readHelloReply(reply, {
+        origin: candidate.origin,
+        deviceId: card.deviceId,
+        nonce
+      })
+      if (!read.ok) continue
       const proved = await deps
-        .verify({ deviceId: card.deviceId, nonce, sig: reply.sig })
+        .verify({ deviceId: card.deviceId, nonce, ...read.proof })
         .catch(() => false)
       if (!proved) continue
       deps.adopt({ origin: candidate.origin, kind: candidate.kind })

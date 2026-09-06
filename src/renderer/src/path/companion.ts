@@ -7,6 +7,7 @@ import { planeHealth, type LinkHealth } from '../plane-health'
 import { followDataPlane } from '../plane-streams'
 import { currentOriginState, forgetLatency, setProbing, subscribePathLink } from '../path-link'
 import { PLANE_PROBE_EVERY_MS, switchPlaneIfBetter, type HelloClaim } from './plane-switch'
+import { startPlaneRecheck } from './plane-recheck'
 import {
   PATH_MEMORY_PREFIX,
   askHello,
@@ -43,6 +44,21 @@ import {
  * anyway would be pointless requests off a device on battery.
  */
 
+/**
+ * WHICH DESKTOP THE PLANE WAS ADOPTED FOR.
+ *
+ * The re-check has to compare a hello against a device id, and it must not
+ * spend a request on `/api/reach` to learn one it already knew. The card is
+ * fetched by the switcher on every race up to the moment it switches — after
+ * that the switcher is `skipped` and fetches nothing — so the last id seen is
+ * exactly the id that was proved. It is only ever overwritten by a fresher
+ * card, never by a failed fetch.
+ */
+let lastDeviceId: string | null = null
+
+/** The desktop this companion is talking to, as far as the card ever said. */
+export const cardDeviceId = (): string | null => lastDeviceId
+
 /** The desktop's own reach card, over whatever plane is already working. */
 const fetchCard = async (): Promise<ReachCardLite | null> => {
   try {
@@ -60,6 +76,7 @@ const fetchCard = async (): Promise<ReachCardLite | null> => {
     const trusted = Array.isArray(body.trusted)
       ? body.trusted.filter((origin): origin is string => typeof origin === 'string')
       : []
+    lastDeviceId = body.deviceId
     return {
       deviceId: body.deviceId,
       lan: body.lan,
@@ -156,7 +173,25 @@ const startPlaneSwitch = (): (() => void) => {
   // read as "the channel is live" and quietly disarm the watchdog that is
   // waiting to see whether a dropped stream comes back.
   let lastLink: LinkHealth | null = null
+  /**
+   * THE RE-CHECK, on the plane the companion is actually using. One line of
+   * wiring; the rule is in path/plane-recheck.ts. It runs on its own five
+   * minute clock and on `online`, and is poked below whenever the push stream
+   * comes back — a stream that reconnected made a new connection, which is the
+   * moment a name could have started answering as somebody else.
+   */
+  const recheck = startPlaneRecheck({
+    deps: {
+      plane: dataPlane,
+      deviceId: cardDeviceId,
+      hello: (origin, nonce) => askHello(origin, nonce, { origin }),
+      verify: verifyHello,
+      nonce: () => randomNonce((bytes) => window.crypto.getRandomValues(bytes)),
+      health: { note: health.note, condemn: health.condemn }
+    }
+  })
   const offs: (() => void)[] = [
+    recheck.stop,
     followDataPlane(),
     // The badge's latency is a measurement of the path it was taken on, and
     // the smoothing that keeps it steady within a path makes it a lie across
@@ -166,8 +201,12 @@ const startPlaneSwitch = (): (() => void) => {
     // its state is fed to the health watchdog rather than only to the badge.
     subscribePathLink((state) => {
       if (state.link === lastLink) return
+      const reconnected = state.link === 'live' && lastLink !== null
       lastLink = state.link
       health.link(state.link)
+      // A stream that dropped and came back opened a new connection. Prove the
+      // far end is still the Mac before the session keeps using it.
+      if (reconnected) recheck.now()
     }),
     startRaceLoop({
       everyMs: PLANE_PROBE_EVERY_MS,
@@ -175,7 +214,9 @@ const startPlaneSwitch = (): (() => void) => {
         switchPlaneIfBetter({
           plane: dataPlane,
           card: fetchCard,
-          hello: (origin, nonce) => askHello(origin, nonce),
+          // The origin is sent so the Mac answers version 2 — a proof bound
+          // to the endpoint, which is the only kind this switcher accepts.
+          hello: (origin, nonce) => askHello(origin, nonce, { origin }),
           verify: verifyHello,
           adopt: (plane: DataPlane) => setDataPlane(plane),
           nonce: () => randomNonce((bytes) => window.crypto.getRandomValues(bytes)),

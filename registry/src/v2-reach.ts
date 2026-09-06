@@ -50,8 +50,6 @@ const URL_MAX = 200
 const CERT_FP = /^[0-9a-f]{64}$/
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/
 const BASE64URL = /^[A-Za-z0-9_-]{16,1024}$/
-/** 16 bytes of base64url is 22 characters; the floor the contract names. */
-const NONCE = /^[A-Za-z0-9_-]{22,256}$/
 
 /**
  * CANONICAL JSON: keys sorted at every depth, no whitespace, arrays as they
@@ -196,19 +194,17 @@ export function readReach(
 }
 
 /**
- * THE HELLO A DESKTOP ANSWERS WITH. `cookrew-hello/1 <deviceId> <nonce>`,
- * signed by the device key — one line, so it can be typed into a test and read
- * in a log. The nonce is the phone's, which is what makes the answer this
- * conversation's rather than a recording of an earlier one.
+ * THE HELLO A DESKTOP ANSWERS WITH, VERSION 1. `cookrew-hello/1 <deviceId>
+ * <nonce>`, signed by the device key — one line, so it can be typed into a
+ * test and read in a log. The nonce is the phone's, which is what makes the
+ * answer this conversation's rather than a recording of an earlier one.
+ *
+ * It proves KEY POSSESSION AND NOTHING ELSE — not which endpoint answered — so
+ * a box on the LAN can relay the challenge to the real Mac and pass off the
+ * reply as its own. Version 2 signs the origin and the moment as well; the
+ * whole verdict, both versions, lives in hello-verify.ts. This string stays
+ * here because it is still accepted for one release, for phones on an older
+ * bundle.
  */
 export const HELLO_PREFIX = 'cookrew-hello/1'
 export const helloMessage = (deviceId: string, nonce: string): string => `${HELLO_PREFIX} ${deviceId} ${nonce}`
-
-export function verifyHello(
-  jwk: Record<string, string>,
-  input: { deviceId: unknown; nonce: unknown; sig: unknown }
-): boolean {
-  const { deviceId, nonce } = input
-  if (typeof deviceId !== 'string' || typeof nonce !== 'string' || !NONCE.test(nonce)) return false
-  return verifyDeviceSignature(jwk, helloMessage(deviceId, nonce), input.sig)
-}

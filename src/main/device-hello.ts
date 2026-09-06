@@ -1,6 +1,7 @@
 import type { AccountFile } from './account-v2'
 import { signWithDevice } from './account-v2'
 import { allowedOrigin, CORS_MAX_AGE } from './companion-cors'
+import { helloMessageV2, normaliseOrigin, type HelloV2Body } from '../shared/hello-proof'
 
 /**
  * "ARE YOU THE MAC I THINK YOU ARE?"
@@ -14,6 +15,13 @@ import { allowedOrigin, CORS_MAX_AGE } from './companion-cors'
  * So the probe asks for a signature over a nonce it just made. Replaying a
  * recorded answer needs the same nonce, and only the device key can produce a
  * new one. That is the whole protocol.
+ *
+ * THAT IS NO LONGER THE WHOLE PROTOCOL. A nonce proves the answer is fresh
+ * and the key proves the answerer holds it — neither proves WHICH ENDPOINT
+ * answered, so a box on the LAN can forward our challenge to the real Mac and
+ * return its signature as its own. Version 2 signs the origin too; see
+ * `helloAnswerV2` below and src/shared/hello-proof.ts. Version 1 is still
+ * answered for phones on an older bundle, and is refused by every current one.
  *
  * It is UNAUTHENTICATED on purpose. It reveals the device id — which the phone
  * already has, since it came from the registry — and the Mac's name, which is
@@ -133,4 +141,72 @@ export const helloCorsHeaders = (
     headers['access-control-max-age'] = CORS_MAX_AGE
   }
   return headers
+}
+
+// ── version 2: the proof that names the endpoint ──────────────────────────
+
+/**
+ * WHAT THIS MAC WILL SWEAR TO, and the three things it refuses to.
+ *
+ * The signature covers `cookrew-hello/2 <deviceId> <origin> <issuedAtMs>
+ * <nonce>`, where `origin` is what THIS server saw the request arrive at — the
+ * listener's scheme and the Host header, once the Host has been checked
+ * against the names this Mac actually published. A caller cannot put a string
+ * of its choosing into a signature this Mac makes, which is the whole point:
+ * a relayed challenge comes back naming the real Mac, not the relay.
+ *
+ *   404  no account, so there is no identity to assert. Answered FIRST, as in
+ *        version 1: the absent account is the first fact about this machine.
+ *   421  Misdirected Request. Either the Host is not a name this Mac published
+ *        — which is what a rebound DNS name looks like from in here — or the
+ *        caller's `?origin=` disagrees with where the request actually landed,
+ *        which is what a relay looks like. 421 is the honest status: the
+ *        request reached a server that is not the one it was addressed to.
+ *   400  the nonce is missing or out of bounds, exactly as in version 1.
+ */
+export type HelloAnswerV2 =
+  | { readonly status: 200; readonly body: HelloV2Body }
+  | { readonly status: 400 | 404 | 421; readonly body: { error: string } }
+
+export interface HelloV2Request {
+  readonly account: AccountFile | null
+  readonly nonce: string | null
+  /** `?origin=` — what the caller believes it dialled. A hint, never the signed value. */
+  readonly asked: string | null
+  /** Where the request actually arrived, or null when the Host is not one of ours. */
+  readonly arrived: string | null
+  readonly now: number
+}
+
+export const helloAnswerV2 = (input: HelloV2Request): HelloAnswerV2 => {
+  const { account, arrived } = input
+  if (!account) return { status: 404, body: { error: 'no account on this desktop' } }
+  if (arrived === null) {
+    return { status: 421, body: { error: 'this is not a name this desktop published' } }
+  }
+  // The fast refusal the client asks for: if the caller already knows it
+  // dialled something else, say so now rather than spending a signature and
+  // letting the client discover the mismatch a round trip later.
+  if (input.asked !== null && normaliseOrigin(input.asked) !== normaliseOrigin(arrived)) {
+    return { status: 421, body: { error: 'that is not the address this request reached' } }
+  }
+  if (input.nonce === null || !nonceAcceptable(input.nonce)) {
+    return { status: 400, body: { error: 'nonce must be 16 to 64 base64url bytes' } }
+  }
+  const issuedAtMs = input.now
+  return {
+    status: 200,
+    body: {
+      v: 2,
+      deviceId: account.deviceId,
+      name: account.name,
+      origin: arrived,
+      issuedAtMs,
+      nonce: input.nonce,
+      sig: signWithDevice(
+        account,
+        helloMessageV2(account.deviceId, arrived, issuedAtMs, input.nonce)
+      )
+    }
+  }
 }

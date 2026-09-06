@@ -16,7 +16,8 @@ import { handleCertRoute } from './v2-cert-routes'
 import { handleSeatRoute, mySeats } from './v2-seat-routes'
 import { handleMigrateRoute, legacyHolds, refuseIfLegacy } from './v2-migrate-routes'
 import type { V2Account, V2Desktop } from './v2-accounts'
-import { readReach, verifyHello } from './v2-reach'
+import { readReach } from './v2-reach'
+import { verifyHelloClaim } from './hello-verify'
 import { callerAddress } from './v2-limiter'
 import { passwordGate } from './v2-hash-gate'
 import { v2Error, type V2Error } from './v2-copy'
@@ -288,10 +289,14 @@ async function redeemRecovery(ctx: V2Context): Promise<void> {
  * check that signature itself — the device's public key is a fact the registry
  * holds — so it asks here, and gets one bit back.
  *
- * ONE BIT, AND ALWAYS THE SAME SHAPE. A device this account does not have, a
- * nonce that is not the one asked about, a signature by another key: all
- * `{ok:false}`. Anything richer would let a signed-in caller use this to learn
- * which device ids exist on other accounts.
+ * ONE BIT FOR A STRANGER, A REASON FOR YOUR OWN. A device this account does
+ * not have is `{ok:false}` and nothing more — a richer answer there would let
+ * a signed-in caller learn which device ids exist on other accounts. For a
+ * device the account DOES hold, the refusal is named — `stale`, `replayed`,
+ * `wrong_origin`, `bad_signature` — because those are different events and a
+ * companion that cannot tell a two-minute clock drift from an attacker on the
+ * wire cannot report either. The names describe the caller's own device to
+ * the caller, which is a fact they already have.
  */
 async function checkHello(ctx: V2Context): Promise<void> {
   const { response, v2 } = ctx
@@ -312,8 +317,20 @@ async function checkHello(ctx: V2Context): Promise<void> {
   }
   const deviceId = typeof body.value.deviceId === 'string' ? body.value.deviceId.toLowerCase() : ''
   const device = signed.account.devices.find((d) => d.id === deviceId) ?? null
-  const ok = device !== null && verifyHello(device.jwk, { deviceId, nonce: body.value.nonce, sig: body.value.sig })
-  v2Json(response, 200, { ok })
+  if (device === null) {
+    v2Json(response, 200, { ok: false })
+    return
+  }
+  const desktop = signed.account.desktops.find((d) => d.deviceId === deviceId) ?? null
+  const verdict = verifyHelloClaim({
+    jwk: device.jwk,
+    deviceId,
+    reach: desktop?.reach ?? null,
+    claim: body.value,
+    now: Date.now(),
+    burn: v2.helloNonces
+  })
+  v2Json(response, 200, verdict.ok ? { ok: true } : { ok: false, reason: verdict.reason })
 }
 
 // ── /v2/me ───────────────────────────────────────────────────────────────
