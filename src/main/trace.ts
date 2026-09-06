@@ -23,6 +23,7 @@ import {
 } from '../shared/trace-blocks'
 import { claudeSessionFile } from './claude-fork'
 import { sessionChain } from './lineage-ledger'
+import { reachableLineage } from './lineage-spill'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { isCodexCommand, validCodexSessionRef } from './codex-bind'
 import { harnessFor , type TurnFinality } from './harness'
@@ -350,7 +351,17 @@ export class TraceReader {
     const chain = await sessionChain(node.cwd, node.claudeSessionId, {
       projectsDir: this.options.projectsDir
     })
-    const earlier = chain.filter((step) => step.sessionId !== node.claudeSessionId)
+    const earlier = [
+      // RECORDED ids the transcripts no longer declare, oldest first. A
+      // declared edge is a fact and stays the primary source — but an id THIS
+      // APP wrote down when it bound the session is a fact too, and it is the
+      // only thing left when a /clear broke the edge or (2026-09-06) the old
+      // 20-entry cap sliced the head off the chain. Node lineage ∪ spill, and
+      // only ones whose transcript is actually on disk: an id with no file is
+      // honestly absent rather than an empty segment nobody can open.
+      ...this.recordedSegments(node, chain.map((step) => step.sessionId)),
+      ...chain
+    ].filter((step) => step.sessionId !== node.claudeSessionId)
     const segments: { sessionId: string; count: number; entries: TraceIndexEntry[] }[] = []
     for (const step of earlier) {
       const blocks = await this.blocksOf(step.file, 'claude')
@@ -361,6 +372,24 @@ export class TraceReader {
       })
     }
     return segments
+  }
+
+  /**
+   * Segments for ids this app recorded but no transcript declares — the
+   * safety net under lineageSegments. Kept tiny and synchronous: an existsSync
+   * per recorded id, only for ids the walk did not already produce.
+   */
+  private recordedSegments(
+    node: TerminalNodeData,
+    walked: readonly string[]
+  ): { sessionId: string; file: string }[] {
+    return reachableLineage(node.id, node)
+      .filter((sessionId) => !walked.includes(sessionId))
+      .map((sessionId) => ({
+        sessionId,
+        file: claudeSessionFile(node.cwd, sessionId, this.options.projectsDir)
+      }))
+      .filter((step) => existsSync(step.file))
   }
 
   /**

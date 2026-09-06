@@ -168,6 +168,7 @@ import {
 } from './claude-session-oracle'
 import { createRestoreHandlers, registerRestoreIpc, RestoreHandlers } from './restore'
 import { withSessionLineage } from './session-lineage'
+import { LineageSpill, installLineageSpill } from './lineage-spill'
 import { buildManifest, loadPublishingKey, signManifest } from './preset-publish'
 import type { PresetPricing } from '../shared/preset-manifest'
 import { carrySessionToCwd } from './session-move'
@@ -282,6 +283,13 @@ import { sweepStorageInWorker } from './storage-gc-worker'
 app.commandLine.appendSwitch('force-gpu-mem-available-mb', '2048')
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
+
+// The durable lineage, installed BEFORE the store can patch a node: every
+// session id ever bound to a card gets a copy outside workspace.json, so the
+// 2026-09-06 loss shape (the node's capped array was the only record, and the
+// cap dropped the oldest id) cannot cost a transcript again. Installed here
+// and nowhere else — a unit test that constructs a store gets the no-op sink.
+installLineageSpill(new LineageSpill())
 
 const store = new WorkspaceStore()
 /** Version pins per terminal (§10) — what the rail's third marker class draws. */
