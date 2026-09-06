@@ -97,7 +97,18 @@ export function Header({
             <CrLogoMark />
           </button>
         )}
-        <span className="cr-logo">COOKREW</span>
+        {/* THE LOCKUP (2026-09-06): the mark is the C, two lens eyes are the
+            O's, and KREW is typed in once by a small hand when the bar first
+            paints, then holds still — a bar that keeps moving is a bar you
+            look at. The text COOKREW stays in the accessible name. */}
+        <span className="cr-logo cr-lockup" role="img" aria-label="COOKREW">
+          <span className="cr-eye" aria-hidden="true"><span className="cr-pupil" /></span>
+          <span className="cr-eye" aria-hidden="true"><span className="cr-pupil" /></span>
+          <span className="cr-letters" aria-hidden="true">
+            <span className="cr-hand2"><CrLogoMark plain className="cr-hand2-mark" /></span>
+            <span>K</span><span>R</span><span>E</span><span>W</span>
+          </span>
+        </span>
         {/* IDENTITY LIVES IN THE BRAND GROUP (D1), right after the wordmark and
             at the mark's own 24 px, so the group stays one line. */}
         {avatar}
