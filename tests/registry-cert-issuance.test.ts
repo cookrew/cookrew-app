@@ -59,6 +59,10 @@ async function up(
     notAfter?: Date
     /** H1 — a names half that raises where the route cannot see it coming. */
     breakNames?: boolean
+    /** L4 — three ways a CA can name something it has no business naming. */
+    lieIdentifier?: string
+    offOriginUrls?: boolean
+    redirectAuthz?: boolean
   } = {}
 ): Promise<Up> {
   const dir = mkdtempSync(path.join(tmpdir(), 'cert-issue-'))
@@ -79,7 +83,10 @@ async function up(
     badNonceOnce: true,
     ...(options.refuseAll === undefined ? {} : { refuseAll: options.refuseAll }),
     ...(options.challengeDelayMs === undefined ? {} : { challengeDelayMs: options.challengeDelayMs }),
-    ...(options.notAfter === undefined ? {} : { notAfter: options.notAfter })
+    ...(options.notAfter === undefined ? {} : { notAfter: options.notAfter }),
+    ...(options.lieIdentifier === undefined ? {} : { lieIdentifier: options.lieIdentifier }),
+    ...(options.offOriginUrls === undefined ? {} : { offOriginUrls: options.offOriginUrls }),
+    ...(options.redirectAuthz === undefined ? {} : { redirectAuthz: options.redirectAuthz })
   })
   if (options.names !== false) {
     names = createNames({
@@ -501,3 +508,49 @@ function emptyAlgorithmCsr(deviceId: string): string {
   const rebuilt = DER.seq(info.whole, Buffer.from([0x30, 0x00]), signature.whole)
   return `-----BEGIN CERTIFICATE REQUEST-----\n${rebuilt.toString('base64')}\n-----END CERTIFICATE REQUEST-----\n`
 }
+
+/**
+ * L4 — THE CA IS TRUSTED TO ISSUE, NOT TO NAVIGATE.
+ *
+ * Every URL in an ACME conversation and the identifier every authorization
+ * carries come out of a body the CA wrote. Two of those URLs are then fetched
+ * with a signed request carrying our account key, and the identifier decides
+ * which name in our own zone gets a TXT record written under it. A CA that has
+ * been taken — or one bug in one field — should not be able to point this
+ * client at another host or to make it publish under a name the order never
+ * mentioned.
+ */
+describe('a CA that names something it should not', () => {
+  it('refuses an authorization for a name this order did not ask for', async () => {
+    const site = await up({ lieIdentifier: 'cookrew.dev' })
+    const mac = await claim(site, 'drej')
+    await publish(site, mac)
+    expect((await postCert(site, mac, csrFor(mac.deviceId))).status).toBe(202)
+    const failed = await settle(site, mac, 'failed')
+    expect(String(failed.reason)).toContain('did not ask for')
+    // Nothing was published under any name, and nothing was issued.
+    expect((await txtFor(site, mac.deviceId)).rcode).toBe(3)
+    expect(site.fake.seen()).toHaveLength(0)
+    expect(site.fake.issued()).toBe(0)
+  })
+
+  it('refuses a URL off the directory’s own origin', async () => {
+    const site = await up({ offOriginUrls: true })
+    const mac = await claim(site, 'drej')
+    await publish(site, mac)
+    expect((await postCert(site, mac, csrFor(mac.deviceId))).status).toBe(202)
+    const failed = await settle(site, mac, 'failed')
+    expect(String(failed.reason)).toContain('origin')
+    expect(site.fake.issued()).toBe(0)
+  })
+
+  it('refuses a redirect rather than following it', async () => {
+    const site = await up({ redirectAuthz: true })
+    const mac = await claim(site, 'drej')
+    await publish(site, mac)
+    expect((await postCert(site, mac, csrFor(mac.deviceId))).status).toBe(202)
+    const failed = await settle(site, mac, 'failed')
+    expect(String(failed.reason)).toContain('redirected')
+    expect(site.fake.issued()).toBe(0)
+  })
+})

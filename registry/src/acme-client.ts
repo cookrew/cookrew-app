@@ -19,6 +19,23 @@ import { b64url, accountKey, dns01Digest, externalAccountBinding, signJws, type 
  * THE CHALLENGE IS PUBLISHED BY THE CALLER. This file never touches the DNS
  * zone; it hands the digest to `publish` and takes it back with `retract` in a
  * `finally`, so a failed order cannot leave a TXT record standing.
+ *
+ * THE CA IS TRUSTED TO ISSUE, NOT TO NAVIGATE. Every URL in this conversation
+ * comes out of a body or a header the CA wrote: the directory names the
+ * endpoints, the order names its authorizations, the authorization names its
+ * challenge and its identifier. Two of those are followed with a signed
+ * request carrying our account key, and one of them decides which name we put
+ * a TXT record under. So both are pinned:
+ *
+ *   · EVERY URL MUST BE ON THE DIRECTORY'S OWN ORIGIN, and redirects are
+ *     refused rather than followed. Otherwise one field in one JSON body
+ *     points our authenticated client — and its nonce, and its JWS — at
+ *     somebody else's host.
+ *
+ *   · EVERY AUTHORIZATION MUST NAME A NAME WE ASKED FOR. An authorization
+ *     that names something else is either a CA bug or a CA that has been
+ *     taken, and either way answering it means writing a record under a name
+ *     this order has no business touching.
  */
 
 /** Let's Encrypt STAGING. Production is always an explicit flag — see main.ts. */
@@ -107,12 +124,40 @@ export class AcmeClient {
 
   // ── transport ──────────────────────────────────────────────────────────
 
+  /** The one origin every request in this conversation is allowed to reach. */
+  private get origin(): string | null {
+    try {
+      return new URL(this.options.directory).origin
+    } catch {
+      return null
+    }
+  }
+
+  private onOrigin(url: string): boolean {
+    const origin = this.origin
+    if (origin === null) return false
+    try {
+      return new URL(url).origin === origin
+    } catch {
+      return false
+    }
+  }
+
   private async http(url: string, init: RequestInit): Promise<AcmeResult<Wire>> {
+    // PINNED BEFORE IT IS SENT. Every URL here came out of a CA-written body
+    // or header, and the request about to go out carries our account key.
+    if (!this.onOrigin(url)) return refuse('rejected', 'the CA named a URL off its own directory’s origin')
     try {
       const response = await this.fetcher(url, {
         ...init,
+        // NOT FOLLOWED. A 30x is the same off-origin hop written a different
+        // way, and there is no ACME flow that needs one.
+        redirect: 'manual',
         signal: AbortSignal.timeout(this.options.timeoutMs ?? 10_000)
       })
+      if (response.status >= 300 && response.status < 400) {
+        return refuse('rejected', `${url} redirected, which this client does not follow`)
+      }
       const replay = response.headers.get('replay-nonce')
       if (replay !== null) this.nonce = replay
       const text = await response.text()
@@ -285,7 +330,13 @@ export class AcmeClient {
     }
     this.note(`order for ${request.identifiers.length} name(s)`)
 
-    const challenges = await this.challenges(order.authorizations as string[])
+    /**
+     * WHAT WE ASKED FOR, with the wildcard removed: a wildcard order is
+     * authorised against the BASE name, so `*.x.example` is answered by an
+     * authorization for `x.example` and by nothing else.
+     */
+    const wanted = new Set(request.identifiers.map((one) => one.replace(/^\*\./, '').toLowerCase()))
+    const challenges = await this.challenges(order.authorizations as string[], wanted)
     if (!challenges.ok) return challenges
 
     // One publish per NAME: a wildcard and its base share `_acme-challenge`,
@@ -330,7 +381,8 @@ export class AcmeClient {
 
   /** Each authorization's dns-01 challenge, as a name and a digest to publish. */
   private async challenges(
-    urls: readonly string[]
+    urls: readonly string[],
+    wanted: ReadonlySet<string>
   ): Promise<AcmeResult<{ authzUrl: string; challengeUrl: string; host: string; digest: string }[]>> {
     const out: { authzUrl: string; challengeUrl: string; host: string; digest: string }[] = []
     for (const url of urls) {
@@ -347,6 +399,12 @@ export class AcmeClient {
       const challenge = (body.challenges ?? []).find((one) => one.type === 'dns-01')
       if (typeof value !== 'string' || challenge === undefined) {
         return refuse('rejected', 'the CA offered no dns-01 challenge for a name')
+      }
+      // THE NAME HAS TO BE ONE OF OURS. This value decides which name a TXT
+      // record is written under; a CA that answers with somebody else's is
+      // asking us to publish a record for a name this order never mentioned.
+      if (!wanted.has(value.toLowerCase())) {
+        return refuse('rejected', 'the CA authorised a name this order did not ask for')
       }
       if (typeof challenge.url !== 'string' || typeof challenge.token !== 'string') {
         return refuse('malformed', 'the CA answered a challenge we could not read')

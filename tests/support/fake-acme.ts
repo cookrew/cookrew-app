@@ -38,6 +38,17 @@ export interface FakeAcmeOptions {
   /** Hold the challenge this long, so an order is provably still in flight. */
   challengeDelayMs?: number
   notAfter?: Date
+  /**
+   * L4 — three ways a CA can misbehave, all of them a body it wrote.
+   *
+   * `lieIdentifier`: the authorization names a name the order never asked for.
+   * `offOriginUrls`: the order's URLs point at another origin (the same server
+   *   under a different host, which is off-origin and therefore off-limits).
+   * `redirectAuthz`: the authorization answers 302 to somewhere else.
+   */
+  lieIdentifier?: string
+  offOriginUrls?: boolean
+  redirectAuthz?: boolean
 }
 
 export interface FakeAcme {
@@ -218,6 +229,9 @@ export async function startFakeAcme(options: FakeAcmeOptions): Promise<FakeAcme>
       if (url === '/new-order') {
         const identifiers = (opened.payload.identifiers as { value: string }[]).map((one) => one.value)
         const id = String(orders.size + 1)
+        // `localhost` and `127.0.0.1` are the same machine and different
+        // origins, which is exactly the distinction being tested.
+        const elsewhere = options.offOriginUrls === true ? base.replace('127.0.0.1', 'localhost') : base
         const authz = identifiers.map((value, i) => {
           const authzId = `${id}-${i}`
           authzs.set(authzId, {
@@ -229,13 +243,13 @@ export async function startFakeAcme(options: FakeAcmeOptions): Promise<FakeAcme>
             token: b64url(randomBytes(16)),
             status: 'pending'
           })
-          return `${base}/authz/${authzId}`
+          return `${elsewhere}/authz/${authzId}`
         })
         orders.set(id, { id, identifiers, authz, status: 'pending' })
         send(
           response,
           201,
-          { status: 'pending', identifiers: identifiers.map((value) => ({ type: 'dns', value })), authorizations: authz, finalize: `${base}/order/${id}/finalize` },
+          { status: 'pending', identifiers: identifiers.map((value) => ({ type: 'dns', value })), authorizations: authz, finalize: `${elsewhere}/order/${id}/finalize` },
           { location: `${base}/order/${id}` }
         )
         return
@@ -244,9 +258,14 @@ export async function startFakeAcme(options: FakeAcmeOptions): Promise<FakeAcme>
       if (authzMatch !== null) {
         const held = authzs.get(authzMatch[1])
         if (held === undefined) return problem(response, 404, 'urn:ietf:params:acme:error:malformed', 'no authz')
+        if (options.redirectAuthz === true) {
+          response.writeHead(302, { location: `${base}/authz-moved/${held.id}`, 'replay-nonce': mint() })
+          response.end()
+          return
+        }
         send(response, 200, {
           status: held.status,
-          identifier: { type: 'dns', value: held.value },
+          identifier: { type: 'dns', value: options.lieIdentifier ?? held.value },
           challenges: [{ type: 'dns-01', url: `${base}/chall/${held.id}`, token: held.token, status: held.status }],
           ...(held.status === 'invalid' ? { error: { detail: 'no valid TXT record found' } } : {})
         })
