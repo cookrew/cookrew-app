@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import {
+  SideCache,
   clearNoteMarkdownCache,
   noteMarkdownCacheKey,
   noteMarkdownCacheStats,
@@ -297,5 +298,37 @@ describe('identity', () => {
     expect(renderNoteMarkdown(src)).toBe(first)
     expect(renderNoteMarkdown(`${src.slice(0, 5)}${src.slice(5)}`)).toBe(first)
     expect(noteMarkdownCacheStats()).toMatchObject({ entries: 1, hits: 2, misses: 1, oversizedParses: 0, illFormedParses: 0 })
+  })
+})
+
+describe('SideCache', () => {
+  it('overwriting a key replaces its bytes instead of adding to them', () => {
+    const cache = new SideCache()
+    cache.put('k', 'first', 1000, 4096)
+    cache.put('k', 'second', 1500, 4096)
+    expect(cache.get('k')).toBe('second')
+    expect(cache.bytes).toBe(1500)
+    // and the overwritten entry does not count against the entry limit either
+    cache.put('a', 'a', 100, 4096)
+    cache.put('b', 'b', 100, 4096)
+    cache.put('c', 'c', 100, 4096)
+    expect(cache.get('k')).toBe('second')
+    expect(cache.bytes).toBe(1800)
+  })
+
+  it('evicts oldest first under the byte cap and the entry limit, and refuses a render above the cap alone', () => {
+    const cache = new SideCache()
+    cache.put('a', 'a', 1000, 2500)
+    cache.put('b', 'b', 1000, 2500)
+    cache.put('c', 'c', 1000, 2500) // a out: 3000 > 2500
+    expect(cache.get('a')).toBeUndefined()
+    expect(cache.get('b')).toBe('b')
+    expect(cache.bytes).toBe(2000)
+    cache.put('huge', 'h', 3000, 2500) // not kept, nothing disturbed
+    expect(cache.get('huge')).toBeUndefined()
+    expect(cache.bytes).toBe(2000)
+    cache.clear()
+    expect(cache.bytes).toBe(0)
+    expect(cache.get('b')).toBeUndefined()
   })
 })
