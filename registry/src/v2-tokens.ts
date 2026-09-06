@@ -136,10 +136,18 @@ export class V2Tokens {
   }
 
   /**
-   * A CANVAS TOKEN — what a signed-in phone or browser carries to the owner's
+   * A CANVAS TOKEN — what a signed-in phone or browser carried to the owner's
    * OWN desktop. It names the desktop it may open (`aud`) and the device
    * asking (`dev`), so the desktop can verify it offline against /v2/keys and
    * still know which of the account's devices is at the door.
+   *
+   * NOTHING MINTS ONE ANY MORE. Reach v2.1 retired the `?open=&key=&device=`
+   * admission and the route behind it, and a phone is now admitted at the Mac
+   * by the pairing token it already holds. The minter stays for exactly as
+   * long as the MAC's verifier does (src/main/canvas-token.ts): the two are
+   * one wire format described in two places, and tests/admission.test.ts is
+   * the only thing that can tell whether the descriptions still agree. Both
+   * halves go together when the Mac's ceremony does.
    */
   mintCanvasToken(sub: string, dev: string, aud: string): Minted {
     if (!DEVICE_AUDIENCE.test(aud)) throw new Error('a canvas token names one desktop, by its device id')

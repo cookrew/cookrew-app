@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
@@ -6,10 +6,11 @@ import path from 'node:path'
 /**
  * PHONES THIS MAC HAS LET IN.
  *
- * The pairing key proves presence once. This file is what makes that once
- * enough: a phone admitted here opens the canvas again tomorrow, from the
- * office or over the relay, without anyone reading six characters off a screen
- * a second time.
+ * The pairing token is what opens this Mac. This file is the LEDGER of who has
+ * opened it: a row per phone, filled in from the name the relay carries down
+ * the bridge (relay-device.ts) on the first authorised request it makes, and
+ * refreshed as it keeps asking. It is what the account sheet lists and what
+ * FORGET removes.
  *
  * It is deliberately NOT the account's device list. The registry knows which
  * devices belong to @drej; this file knows which of them THIS Mac has agreed to
@@ -20,16 +21,13 @@ import path from 'node:path'
  * 0600 and temp-and-rename for the same reason the account file is: a torn
  * write here is a Mac that stops opening for a phone the owner is holding.
  *
- * AND EACH PHONE GETS ITS OWN CREDENTIAL. Every admitted phone used to be
- * handed the same global pairing token — in a URL — which meant one captured
- * phone was every phone, and FORGET revoked nothing at all: the token it had
- * been given still worked, because it was everybody's. So admission mints 24
- * random bytes per device and stores only their SHA-256 here. Forgetting a
- * device deletes the hash, and that phone stops being able to ask.
- *
- * The global token stays for legacy phones and for the QR `cookrew mobile`
- * prints; it is a second door, not a replacement, and it is the one the owner
- * can rotate wholesale.
+ * PER-DEVICE TOKENS ARE NO LONGER MINTED, AND ARE STILL HONOURED. The v2
+ * admission ceremony handed each admitted phone 24 random bytes of its own and
+ * stored the SHA-256 here; reach v2.1 has ONE credential and no ceremony to
+ * mint a second one in. The hashes already on disk keep working — mobile-api's
+ * second door still accepts them — because deleting them would unpair every
+ * phone that paired the old way, in an upgrade, to tidy up a field. FORGET
+ * still removes the row and the hash with it.
  */
 
 export type AdmittedDevice = {
@@ -50,21 +48,23 @@ export type AdmittedDeviceStore = {
   readonly list: () => AdmittedDevice[]
   readonly has: (deviceId: string) => boolean
   /**
-   * Record an admission and mint this phone's own companion token, or refresh
-   * the last-seen of one already recorded and mint it a fresh token.
+   * Note that this phone asked, and that it was allowed to.
    *
-   * A NEW TOKEN ON EVERY ADMISSION, deliberately: an admission is somebody
-   * standing at the Mac with a valid canvas token, so it is the right moment
-   * to replace whatever the phone was carrying.
+   * CALLED ON EVERY AUTHORISED REQUEST THE BRIDGE NAMES A DEVICE ON, which is
+   * why it writes as little as it can: a phone polling this server touches
+   * this several times a second, and a file rewrite each time is a 0600 JSON
+   * file rewritten a few hundred thousand times a day for no new fact. So the
+   * write happens only when something actually changed — a phone never seen,
+   * a name that moved — or when the last sighting is over a minute old.
    */
-  readonly admit: (device: { deviceId: string; name?: string }) => {
-    readonly device: AdmittedDevice
-    /** The plaintext token, seen here and in the redirect and nowhere else. */
-    readonly token: string
-  }
-  /** Does this bearer token belong to a phone this Mac still admits? */
+  readonly record: (device: { deviceId: string; name?: string }) => AdmittedDevice
+  /**
+   * Does this bearer token belong to a phone this Mac still admits?
+   *
+   * Only phones admitted under the retired v2 ceremony have one; it stays
+   * because forgetting a phone must remain the thing that ends its access.
+   */
   readonly accepts: (token: string) => boolean
-  readonly touch: (deviceId: string) => void
   /**
    * Drop the admission. TRUE means the phone is not admitted any more — which
    * is the question the caller is actually asking, and which an already-absent
@@ -125,10 +125,13 @@ export const writeAdmittedDevices = (devices: readonly AdmittedDevice[], base?: 
   chmodSync(file, 0o600)
 }
 
-/** 24 bytes: the same width as the global pairing token it sits beside. */
-export const COMPANION_TOKEN_BYTES = 24
-
-const mintToken = (): string => randomBytes(COMPANION_TOKEN_BYTES).toString('base64url')
+/**
+ * How stale a sighting may be before it is written down again.
+ *
+ * A minute is far below anything a person reads off the row ("last seen") and
+ * far above the rate a phone polls at, which is the whole trade.
+ */
+export const SIGHTING_REFRESH_MS = 60_000
 
 export const hashToken = (token: string): string =>
   createHash('sha256').update(token, 'utf8').digest('hex')
@@ -149,24 +152,30 @@ export const createAdmittedDeviceStore = (
   return {
     list: () => load().sort((a, b) => b.lastSeenAt - a.lastSeenAt),
     has: (deviceId) => load().some((device) => device.deviceId === deviceId),
-    admit: ({ deviceId, name }) => {
+    record: ({ deviceId, name }) => {
       const at = now()
       const existing = load()
       const previous = existing.find((device) => device.deviceId === deviceId)
-      const token = mintToken()
-      const admitted: AdmittedDevice = {
+      // A device that arrives without a name keeps the one it had: the relay
+      // only carries a name when the registry knows one.
+      const kept = name ?? previous?.name
+      const seen: AdmittedDevice = {
+        ...(previous ?? {}),
         deviceId,
-        // A device that arrives without a name keeps the one it had.
-        ...(name ?? previous?.name ? { name: name ?? previous?.name } : {}),
+        ...(kept ? { name: kept } : {}),
         admittedAt: previous?.admittedAt ?? at,
-        lastSeenAt: at,
-        tokenHash: hashToken(token)
+        lastSeenAt: at
       }
+      const unchanged =
+        previous !== undefined &&
+        previous.name === seen.name &&
+        at - previous.lastSeenAt < SIGHTING_REFRESH_MS
+      if (unchanged) return previous
       writeAdmittedDevices(
-        [...existing.filter((device) => device.deviceId !== deviceId), admitted],
+        [...existing.filter((device) => device.deviceId !== deviceId), seen],
         deps.base
       )
-      return { device: admitted, token }
+      return seen
     },
     accepts: (token) => {
       if (typeof token !== 'string' || token.length === 0) return false
@@ -178,17 +187,6 @@ export const createAdmittedDeviceStore = (
           typeof device.tokenHash === 'string' &&
           device.tokenHash.length === candidate.length &&
           timingSafeEqual(Buffer.from(device.tokenHash), Buffer.from(candidate))
-      )
-    },
-    touch: (deviceId) => {
-      const existing = load()
-      const previous = existing.find((device) => device.deviceId === deviceId)
-      if (!previous) return
-      writeAdmittedDevices(
-        existing.map((device) =>
-          device.deviceId === deviceId ? { ...device, lastSeenAt: now() } : device
-        ),
-        deps.base
       )
     },
     forget: (deviceId) => {

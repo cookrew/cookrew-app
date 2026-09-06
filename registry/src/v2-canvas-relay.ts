@@ -146,6 +146,64 @@ const REQUEST_HEADERS = new Set(['content-type', 'accept', 'last-event-id', 'aut
  * a client pointed anywhere.
  */
 export const CANVAS_BASE_HEADER = 'x-cookrew-base'
+
+/**
+ * WHO IS ASKING, told to the desktop — reach v2.1.
+ *
+ * The Mac has to be able to name the devices it is serving: its admitted list,
+ * its log, the sentence a person reads about a phone that is on their canvas
+ * right now. It used to learn that from the admission ceremony — a canvas
+ * token plus `?device=&name=` on the query — and that whole ceremony is gone
+ * (one credential, one URL). Nothing else in a relayed request says who the
+ * reader is, because the credential that admitted them is cookrew.dev's own
+ * cookie and the cookie is stripped.
+ *
+ * So the registry states it, on every forwarded exchange, FROM THE SESSION it
+ * just verified and from nothing the client sent. A client-supplied copy is
+ * REMOVED first, exactly as `x-cookrew-base` is: a caller who could write
+ * these could sit at somebody's Mac under any name they liked, and the Mac
+ * would have no way to tell.
+ *
+ * The value is the caller's v2 device id; the name header is the device's
+ * name, made header-safe. Both are absent from a request the registry did not
+ * write them on, which is the desktop's signal that it is not being relayed.
+ */
+export const CANVAS_DEVICE_HEADER = 'x-cookrew-device'
+export const CANVAS_DEVICE_NAME_HEADER = 'x-cookrew-device-name'
+/** The same ceiling the account store puts on a device name, so nothing is cut that was not already. */
+export const DEVICE_NAME_MAX = 64
+
+/**
+ * A device name a header can actually carry.
+ *
+ * A person names their phone in their own alphabet — "Dréj's iPhone", an
+ * emoji, a tab pasted in by accident — and node throws `ERR_INVALID_CHAR` on a
+ * header value outside Latin-1, which would turn a fond name into a relay that
+ * refuses every request from that phone. So the name is reduced to printable
+ * ASCII, runs of blanks collapse, and it is cut to the store's own limit.
+ * What survives is a label, not an identity: the id beside it is the identity.
+ */
+export function headerSafeName(name: string): string {
+  return [...name]
+    .map((ch) => (ch >= ' ' && ch <= '~' ? ch : ' '))
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, DEVICE_NAME_MAX)
+}
+
+/**
+ * The caller's identity as headers, or nothing it could not vouch for. An
+ * empty name is left OFF rather than sent empty — a header with no value in it
+ * is a fact the desktop would have to un-learn.
+ */
+export function callerDeviceHeaders(device: { id: string; name: string }): Record<string, string> {
+  const id = headerSafeName(device.id)
+  if (id === '') return {}
+  const name = headerSafeName(device.name)
+  return { [CANVAS_DEVICE_HEADER]: id, ...(name === '' ? {} : { [CANVAS_DEVICE_NAME_HEADER]: name }) }
+}
+
 /** cookrew.dev's OWN cookies, which never leave cookrew.dev. */
 const OUR_COOKIES = new Set(['cr_session', 'cr_account'])
 /** Hop-by-hop, plus the length we cannot honour because we stream. */
@@ -193,8 +251,10 @@ export function allowedRequestHeaders(headers: IncomingHttpHeaders): Record<stri
       continue
     }
     // OURS TO WRITE, NEVER THEIRS. Set below from the address the request
-    // actually arrived at.
-    if (name === CANVAS_BASE_HEADER) continue
+    // actually arrived at, and from the session it arrived with.
+    if (name === CANVAS_BASE_HEADER || name === CANVAS_DEVICE_HEADER || name === CANVAS_DEVICE_NAME_HEADER) {
+      continue
+    }
     if (REQUEST_HEADERS.has(name)) out[name] = value
     // The app's own headers pass; the proxy's own never do, because they
     // describe the reader's network rather than the reader's request.
@@ -565,11 +625,12 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
   /**
    * EVERYTHING UNDER /relay/@user/desktop/<id>/, forwarded as it stands.
    *
-   * The first request is the ADMISSION and it is not special here: the
-   * picker's `?open=<canvasToken>&key=<pairing key>&device=<id>` rides through
-   * unchanged, and the desktop admits exactly as it does over the LAN. This
-   * end has no opinion about it, which is what keeps one admission ceremony
-   * rather than two that drift.
+   * The first request is not special: OPEN on /me is a plain navigation to
+   * this prefix with nothing on the query, and the desktop serves its shell.
+   * What admits a reader HERE is the account cookie; what admits them at the
+   * MAC is the pairing token their companion already holds. Two credentials
+   * for two different questions, and neither is invented on the way through —
+   * this end only says which prefix and which device (`callerDeviceHeaders`).
    */
   const proxy = (request: IncomingMessage, response: ServerResponse, url: URL): void => {
     const segments = url.pathname.split('/')
@@ -651,7 +712,12 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
         prefix: base,
         cookiePath,
         host,
-        headers: { ...allowedRequestHeaders(request.headers), [CANVAS_BASE_HEADER]: base },
+        headers: {
+          ...allowedRequestHeaders(request.headers),
+          [CANVAS_BASE_HEADER]: base,
+          // LAST, so nothing a caller invented can shadow them.
+          ...callerDeviceHeaders(signed.device)
+        },
         body
       })
     })

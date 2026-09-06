@@ -33,7 +33,10 @@ function deps(): SocketServerDeps & { rotatePairingToken: ReturnType<typeof vi.f
   return {
     rotatePairingToken: vi.fn(() => 'new-token'),
     mobileEndpoints: () => [ENDPOINT],
-    uncoveredCertHosts: () => []
+    uncoveredCertHosts: () => [],
+    // A Mac with no account: the direct URL is the one thing to scan, so the
+    // printed text is the same list it always was.
+    pairingHandout: () => ({ url: ENDPOINT.url, via: 'direct' as const, desktopName: 'This Mac' })
   } as unknown as SocketServerDeps & { rotatePairingToken: ReturnType<typeof vi.fn> }
 }
 

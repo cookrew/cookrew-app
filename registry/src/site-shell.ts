@@ -80,11 +80,15 @@ const CSP: Record<PageKind, string> = {
 /**
  * A HANDFUL OF NAMED ORIGINS, and never a wildcard.
  *
- * /me probes the addresses one reader's own desktops published, which are not
- * this origin — so `connect-src 'self'` alone would block the probe. They are
- * spelled out rather than opened with `https:` because the page is rendered
- * for one reader and we know exactly which addresses it will try; a wildcard
- * would let anything that ever gets a script onto this page reach anywhere.
+ * An app page whose script has to reach somewhere that is not this origin says
+ * WHICH somewhere, and the policy names them one by one. They are spelled out
+ * rather than opened with `https:` because such a page is rendered for one
+ * reader and we know exactly which addresses it will try; a wildcard would let
+ * anything that ever gets a script onto the page reach anywhere.
+ *
+ * No page asks for one today: /me stopped probing desktops directly when the
+ * badge became a single question to cookrew.dev itself. It comes back in phase
+ * C3, when a Mac's addresses have names a browser will trust.
  */
 const withConnect = (policy: string, connect: readonly string[]): string =>
   connect.length === 0 ? policy : policy.replace("connect-src 'self'", `connect-src 'self' ${connect.join(' ')}`)
@@ -457,11 +461,7 @@ ul.me-list li{grid-template-columns:auto 1fr auto}
 .seat ul.me-list{margin-top:12px}
 li.desktop .reach-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 li.desktop .chip[data-badge]{min-width:78px;justify-content:center}
-li.desktop .pair-key{display:inline-flex;align-items:center;gap:6px}
-li.desktop .pair-input{font:700 14px var(--font-mono);letter-spacing:.22em;text-transform:uppercase;width:8.5ch;
-padding:6px 8px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink);outline:none;text-align:center}
-li.desktop .pair-input:focus{background:var(--amber-soft)}
-li.desktop [data-key-note]{grid-column:1/-1;color:var(--rose)}
+li.desktop .chip.ok{background:var(--hp);color:#14110a}
 /* phase 4 — the ladder in the sheet, and the Security rows */
 .acct-passkey{width:100%;margin:0 0 8px}
 .acct-ladder{margin-top:8px}

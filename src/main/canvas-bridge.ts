@@ -24,9 +24,11 @@ import { decodeFrame, encodeFrame, type RelayFrame } from '../shared/relay-frame
  * white. `x-cookrew-relay: 1` says "this peer is not really local", and it is
  * set HERE rather than inferred there because only this file knows it.
  *
- * THE FIRST REQUEST IS THE ADMISSION, and it is not special. `?open=&key=&
- * device=` rides through in the path exactly as it does over the LAN, so there
- * is one admission ceremony rather than two that drift apart.
+ * NO REQUEST IS SPECIAL, INCLUDING THE FIRST. A phone is authorised at this
+ * Mac by the pairing token, on the relay exactly as on the LAN, so there is
+ * one gate rather than two that drift apart. The registry names the caller in
+ * `x-cookrew-device` on the way through; the marker written below is half of
+ * what makes that name believable, and relay-device.ts is the other half.
  *
  * WHAT IT REFUSES: more than `maxOpen` exchanges at once, a request body over
  * the registry's own ceiling, and nothing else. Both refusals are `abort`

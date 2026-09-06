@@ -1,79 +1,47 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { cookrew } from '../api'
 import { qrMatrix, qrPath } from '../../../shared/qr'
-import {
-  PAIRING_COPY,
-  pairingPopoutView,
-  type PairingPopoutView
-} from '../../../shared/pairing-qr'
-import { startPairingPoll, type PairingPollState } from './pairing-poll'
+import { pairingPopoutView, type PairingPopoutView } from '../../../shared/pairing-qr'
+import type { PairingHandout } from '../../../shared/account-v2'
 import '../grant-surface.css'
 
 /**
- * PAIR A PHONE — the popout, in v2 shape.
+ * PAIR A PHONE — the popout, in v2.1 shape.
  *
- * What it shows is deliberately small: a QR carrying the desktop id and a
- * six-character key, the key in readable type, how long until it renews, and
- * which Mac this is. NO URL. The phone is already signed in at cookrew.dev and
- * gets the address from there; putting one on this screen was the thing that
- * made a photograph of this window a permanent credential and a route home.
+ * ONE QR, of the one URL. It is the same string `cookrew mobile` prints: the
+ * relay address for this desktop with the pairing token in its fragment, so a
+ * phone scanning it lands on cookrew.dev, stays there, and reaches this Mac
+ * from any network. A Mac with no account shows its direct `?token=` URL and
+ * says that is what it is.
  *
- * A Mac with no account keeps the old QR, because it has nowhere to publish
- * itself and the phone has nothing to sign in to. It says so in a sentence
- * rather than silently degrading.
+ * NO CLOCK. The six-character key rotated every two minutes and the sheet had
+ * a one-second interval to count it down; there is nothing to count now. The
+ * URL changes only when the owner runs `cookrew mobile --rotate`, which is a
+ * deliberate act that unpairs every phone — so the sheet asks main ONCE when
+ * it opens and says what rotation costs, instead of polling for a change that
+ * cannot happen while it is on screen.
  */
 
-/**
- * The clock, as a module-level default.
- *
- * It was `now = () => Date.now()` in the parameter list, which makes a NEW
- * function every render — and that function was in the effect's dependency
- * array. See pairing-poll.ts for what that cost. One stable reference, and a
- * loop that lives outside React where it can be tested.
- */
-const wallClock = (): number => Date.now()
+export function PairPhoneSheet({ onClose }: { onClose: () => void }): React.JSX.Element {
+  const [handout, setHandout] = useState<PairingHandout | null>(null)
+  const [asked, setAsked] = useState(false)
 
-export function PairPhoneSheet({
-  onClose,
-  legacyUrl = null,
-  now = wallClock
-}: {
-  onClose: () => void
-  legacyUrl?: string | null
-  now?: () => number
-}): React.JSX.Element {
-  const [poll, setPoll] = useState<PairingPollState>(() => ({
-    handout: null,
-    asked: false,
-    tick: now()
-  }))
-
-  // Held in a ref so a caller that passes an inline `now` still gets ONE
-  // interval for the life of the sheet rather than one per render.
-  const clock = useRef(now)
-  clock.current = now
-
-  useEffect(
-    () =>
-      startPairingPoll({
-        load: () => cookrew().accountPairingKey?.() ?? Promise.resolve(null),
-        now: () => clock.current(),
-        onState: setPoll
-      }),
-    // Empty on purpose: nothing in here may change while the sheet is open.
-    []
-  )
-
-  const { handout } = poll
-  const view = pairingPopoutView({
-    desktopName: handout?.desktopName ?? 'This Mac',
-    key: handout
-      ? { deviceId: handout.deviceId, key: handout.key, expiresAt: handout.expiresAt }
-      : null,
-    legacyUrl,
-    // Derived from the live clock every tick, so the countdown cannot freeze.
-    now: poll.tick
-  })
+  useEffect(() => {
+    let live = true
+    const settle = (next: PairingHandout | null): void => {
+      // A sheet that has been closed must not write state, and a refusal is
+      // still an answer: it has to stop saying "reading…" either way.
+      if (!live) return
+      setHandout(next)
+      setAsked(true)
+    }
+    void (cookrew().accountPairingUrl?.() ?? Promise.resolve(null))
+      .then(settle)
+      .catch(() => settle(null))
+    return () => {
+      live = false
+    }
+  }, [])
 
   return (
     <div className="gs-scrim cr-sheet" role="dialog" aria-modal="true" aria-label="Pair a phone">
@@ -90,10 +58,10 @@ export function PairPhoneSheet({
             ✕
           </button>
         </header>
-        {!poll.asked ? (
-          <p className="gs-sub">Reading this Mac&rsquo;s key&hellip;</p>
+        {!asked ? (
+          <p className="gs-sub">Reading this Mac&rsquo;s pairing URL&hellip;</p>
         ) : (
-          <PairBody view={view} />
+          <PairBody view={pairingPopoutView(handout)} />
         )}
       </div>
     </div>
@@ -101,23 +69,15 @@ export function PairPhoneSheet({
 }
 
 export function PairBody({ view }: { view: PairingPopoutView }): React.JSX.Element {
-  if (view.mode === 'legacy') {
-    return (
-      <>
-        <p className="gs-sub">{view.sentence}</p>
-        {view.qr && <Qr text={view.qr} label="Pairing URL" />}
-      </>
-    )
-  }
   return (
     <>
-      <Qr text={view.qr} label="Pairing code" />
-      <p className="cr-pair-key">{view.key}</p>
-      <p className="cr-pair-renews">renews in {view.renewsIn}</p>
+      <p className="gs-sub">{view.sentence}</p>
+      {view.qr && <Qr text={view.qr} label="Pairing URL" />}
       <p className="cr-pair-desktop">
-        {view.desktopName} · id {view.deviceIdPrefix}
+        {view.desktopName}
+        {view.deviceIdPrefix ? ` · id ${view.deviceIdPrefix}` : ''}
       </p>
-      <p className="gs-hint">{PAIRING_COPY.TYPED_KEY}</p>
+      <p className="gs-hint">{view.rotateNote}</p>
     </>
   )
 }
@@ -133,7 +93,7 @@ export function PairBody({ view }: { view: PairingPopoutView }): React.JSX.Eleme
  * restyled. Now it is inside the SVG, in white, where it cannot be lost.
  *
  * One path for the whole symbol: a grid of rects is thousands of nodes React
- * has to diff as the key rotates, and a path is one.
+ * has to diff, and a path is one.
  */
 const QUIET = 4
 

@@ -286,45 +286,37 @@ describe('who may read a reach card', () => {
   })
 })
 
-describe('the open token', () => {
-  it('names the caller, the desktop and the canvas scope', async () => {
+/**
+ * REACH v2.1 — THE OPEN TOKEN IS GONE.
+ *
+ * `POST /v2/me/desktops/:id/open` minted a canvas token for the
+ * `?open=&key=&device=` admission. The relay prefix is already gated by the
+ * account session and the Mac admits by the pairing token it prints, so the
+ * route is not "unused", it is retired: it must not answer at all, to anyone.
+ */
+describe('the retired open route', () => {
+  it('is a 404 for the owner of the desktop it named', async () => {
     const who = await claim('opentoken')
     await publish(who)
     const res = await api(`/v2/me/desktops/${who.deviceId}/open`, { method: 'POST', headers: bearer(who.token) })
-    expect(res.status).toBe(201)
-    const body = (await res.json()) as { token: string; exp: number }
-    const claims = site.v2.tokens.verify(body.token, { scope: 'canvas', aud: who.deviceId })
-    expect(claims).not.toBeNull()
-    expect(claims?.sub).toBe('opentoken')
-    expect(claims?.dev).toBe(who.deviceId)
-    expect(claims?.scope).toBe('canvas')
-    expect(claims?.aud).toBe(who.deviceId)
-    expect(typeof claims?.jti).toBe('string')
-    // Ten minutes: carried to one desktop and spent.
-    expect(body.exp - Date.now()).toBeGreaterThan(9 * 60_000)
-    expect(body.exp - Date.now()).toBeLessThanOrEqual(10 * 60_000)
+    expect(res.status).toBe(404)
+    expect(((await res.json()) as { error: string }).error).toBe('not_found')
   })
 
-  it('is refused for another audience and for another scope', async () => {
-    const who = await claim('openaud')
+  it('is a 404 for a desktop that does not exist, and a 401 with no session', async () => {
+    const who = await claim('openmissing')
+    expect((await api(`/v2/me/desktops/${randomUUID()}/open`, { method: 'POST', headers: bearer(who.token) })).status)
+      .toBe(404)
+    expect((await api(`/v2/me/desktops/${randomUUID()}/open`, { method: 'POST' })).status).toBe(401)
+  })
+
+  it('answers nothing that could be spent at a Mac', async () => {
+    const who = await claim('opennothing')
     await publish(who)
     const body = (await (
       await api(`/v2/me/desktops/${who.deviceId}/open`, { method: 'POST', headers: bearer(who.token) })
-    ).json()) as { token: string }
-    expect(site.v2.tokens.verify(body.token, { scope: 'canvas', aud: randomUUID() })).toBeNull()
-    expect(site.v2.tokens.verify(body.token, 'session')).toBeNull()
-    expect(site.v2.tokens.verify(body.token, 'call')).toBeNull()
-  })
-
-  it('refuses a desktop this account does not have', async () => {
-    const who = await claim('openmissing')
-    const res = await api(`/v2/me/desktops/${randomUUID()}/open`, { method: 'POST', headers: bearer(who.token) })
-    expect(res.status).toBe(404)
-  })
-
-  it('refuses a caller with no session', async () => {
-    const res = await api(`/v2/me/desktops/${randomUUID()}/open`, { method: 'POST' })
-    expect(res.status).toBe(401)
+    ).json()) as Record<string, unknown>
+    expect(body.token).toBeUndefined()
   })
 })
 

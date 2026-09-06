@@ -241,15 +241,26 @@ export type AccountResult<T> =
   { ok: true; value: T } | { ok: false; reason: AccountRefusal; message?: string }
 
 /**
- * What the pairing popout is handed. No URL and no token by construction:
- * everything the phone needs from this Mac is the device id and six
- * characters, and everything else it needs it already has from cookrew.dev.
+ * What the pairing popout is handed: ONE URL, and which kind it is.
+ *
+ * `relay` is the canonical one — cookrew.dev's address for this desktop with
+ * the pairing token in its fragment — and it is what a phone anywhere in the
+ * world can scan. `direct` is the fallback a Mac with no account has: the
+ * `?token=` URL on this Wi-Fi, exactly as `cookrew mobile` has always printed
+ * it.
+ *
+ * IT CARRIES A LIVE CREDENTIAL, which is why the channel that answers it is
+ * owner-only like the rest of the account surface. That is a deliberate change
+ * from the six-character key it replaces: there is one credential now, and the
+ * popout's job is to put it on screen as a QR the way the terminal puts it on
+ * screen as text.
  */
-export interface PairingKeyHandout {
-  deviceId: string
-  key: string
-  expiresAt: number
+export interface PairingHandout {
+  url: string
+  via: 'relay' | 'direct'
   desktopName: string
+  /** Present only on the relay URL — a Mac with no account has no device id. */
+  deviceId?: string
 }
 
 /**

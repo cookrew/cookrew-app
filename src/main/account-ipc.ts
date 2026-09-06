@@ -1,7 +1,6 @@
 import type { AdmittedDevice } from './admitted-devices'
-import type { PairingKeyRing } from './pairing-key'
 import type { AccountStatus, AccountResult, UsernameCheck } from '../shared/account-v2'
-import type { PairingKeyHandout } from '../shared/account-v2'
+import type { PairingHandout } from '../shared/account-v2'
 import type { AccountDevice, AccountProfile } from '../shared/account-v2'
 import type {
   ApprovalDecision,
@@ -56,11 +55,15 @@ export interface AccountIpcDeps {
   /** This Mac's workspaces, by id and name — never their content (P1). */
   workspaces: () => readonly { id: string; name: string }[]
   /**
-   * The rotating pairing key shown in the popout. Owner-only like everything
-   * else here, and for a sharper reason: it is a live credential for two
-   * minutes, and any page that could read it could pair itself.
+   * The one URL the popout draws as a QR (pairing-handout.ts). Owner-only
+   * like everything else here, and for a sharper reason than the rest: it
+   * carries the live pairing token, so any page that could read it could pair
+   * itself. That is the trade v2.1 makes deliberately — one credential shown
+   * in two places (this sheet and `cookrew mobile`) beats three that can
+   * disagree, and this channel is behind the same ownerOnly wrapper that
+   * guards claiming a name and revoking a device.
    */
-  pairing?: PairingKeyRing
+  pairingHandout?: () => PairingHandout | null
   /** Phones this Mac has admitted, listed beside the registry's devices. */
   admitted?: {
     list: () => readonly AdmittedDevice[]
@@ -130,7 +133,7 @@ export const ACCOUNT_CHANNELS = [
   'account:setLock',
   'account:setProfile',
   'account:workspacesReachable',
-  'account:pairingKey',
+  'account:pairingUrl',
   'account:admittedDevices',
   'account:forgetAdmitted',
   // ── phase 4: the approval prompt (D6) and the factor ladder (D3) ──
@@ -297,6 +300,11 @@ async function claim(deps: AccountIpcDeps, input: unknown): Promise<AccountResul
   // Register the workspaces at once: a name claimed and no desktop filed under
   // it is an account whose Workspaces tab is empty until the next boot.
   void deps.accounts.registerDesktop(deps.workspaces()).catch(() => undefined)
+  // AND START LISTENING FOR THE PHONE. The poll is armed at boot only when an
+  // account is already on disk, so a Mac that claims its name while running
+  // never heard the first device ask to sign in — the phone waited out its
+  // whole expiry against a badge that could not appear until a restart.
+  deps.approvals.start()
   return { ok: true, value: accountStatus(deps) }
 }
 
@@ -323,6 +331,7 @@ async function migrate(
   if (!result.ok) return result
   deps.lock.setLockAfterMs(result.value.lockAfterMs)
   void deps.accounts.registerDesktop(deps.workspaces()).catch(() => undefined)
+  deps.approvals.start()
   return { ok: true, value: accountStatus(deps) }
 }
 
@@ -553,26 +562,13 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
       return accountStatus(deps)
     },
     /**
-     * The popout's key. Handing out the DEVICE ID beside it is deliberate —
-     * the QR carries both, and the phone needs the id to know which of the
-     * account's desktops it just pointed at. No URL and no token: the phone
-     * is already signed in at cookrew.dev, and an address on a screen is the
-     * thing v2 exists to stop printing.
+     * The popout's URL — the same string `cookrew mobile` prints.
      *
-     * Null when there is no account: a Mac with no username has no device id
-     * to name, and the popout falls back to the legacy URL QR.
+     * Null when main wired no handout, or when the server has no pairing
+     * token yet: the sheet then says it has nothing to show rather than
+     * drawing a QR of an address that will not answer.
      */
-    'account:pairingKey': (): PairingKeyHandout | null => {
-      const account = deps.accounts.account()
-      if (!account || !deps.pairing) return null
-      const current = deps.pairing.current()
-      return {
-        deviceId: account.deviceId,
-        key: current.key,
-        expiresAt: current.expiresAt,
-        desktopName: account.name,
-      }
-    },
+    'account:pairingUrl': (): PairingHandout | null => deps.pairingHandout?.() ?? null,
     'account:admittedDevices': (): readonly AdmittedDevice[] => deps.admitted?.list() ?? [],
     /**
      * FORGET is local and says so. It drops the admission on this Mac; it does

@@ -1,98 +1,70 @@
+import type { PairingHandout } from './account-v2'
+
 /**
- * WHAT THE POPOUT PUTS ON THE SCREEN.
+ * WHAT THE POPOUT PUTS ON THE SCREEN — ONE QR, AND NO SIX CHARACTERS.
  *
- * The v2 QR carries the desktop's device id and a rotating six-character key,
- * and NOTHING ELSE — no address, no token, no URL. The phone is already signed
- * in on cookrew.dev when it scans; where this Mac lives is the registry's
- * answer to give, not a string on a screen. That is the whole point of the
- * change: a photograph of this window is worth two minutes of standing in the
- * same room, instead of a permanent credential and a route to the house.
+ * v2 drew a QR of `cookrew-pair:<deviceId>:<KEY>` beside a six-character key
+ * that rotated every two minutes. The key answered "is somebody standing at
+ * this Mac", and the phone's authority came from a canvas token cookrew.dev
+ * minted for it. That is three moving credentials for one act, and the phone
+ * had to be signed in at cookrew.dev before any of it worked.
  *
- * The legacy shape is kept for a Mac with no account, because such a Mac has
- * nowhere to publish itself and the phone has nothing to sign in to. There the
- * popout still shows the old URL-with-token QR, and says so plainly.
+ * v2.1 has ONE credential — the pairing token the Mac already persists and
+ * `cookrew mobile` already prints — and ONE address: the relay URL, with the
+ * token in the fragment so cookrew.dev never receives it. So the popout is a
+ * QR of exactly the string the terminal prints, and nothing else. Nothing
+ * rotates on a clock any more; the token changes only when the owner rotates
+ * it, which unpairs every phone at once and is worth saying on the sheet.
+ *
+ * THE FALLBACK IS THE DIRECT URL, for a Mac with no account: it has nothing to
+ * publish and the phone has nothing to sign in to, so the `?token=` address on
+ * this Wi-Fi is the only door. It says which one it is showing rather than
+ * degrading silently — a QR that quietly stops working off the LAN is the
+ * failure the address deck exists to make visible.
  */
-
-export const PAIRING_QR_SCHEME = 'cookrew-pair'
-
-export type PairingQrPayload = {
-  readonly deviceId: string
-  readonly key: string
-}
-
-export const pairingQrPayload = ({ deviceId, key }: PairingQrPayload): string =>
-  `${PAIRING_QR_SCHEME}:${deviceId}:${key}`
-
-/** The inverse, for the registry page and for tests. Null if it is not ours. */
-export const parsePairingQr = (raw: string): PairingQrPayload | null => {
-  const parts = raw.trim().split(':')
-  if (parts.length !== 3) return null
-  const [scheme, deviceId, key] = parts
-  if (scheme !== PAIRING_QR_SCHEME) return null
-  if (deviceId.length === 0 || key.length === 0) return null
-  return { deviceId, key }
-}
-
-/** "renews in 1:42" — the countdown beside the key. */
-export const renewsIn = (expiresAt: number, now: number): string => {
-  const left = Math.max(0, Math.ceil((expiresAt - now) / 1000))
-  return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`
-}
 
 /** Enough of the device id to tell two Macs apart, and no more. */
 export const deviceIdPrefix = (deviceId: string): string => `${deviceId.slice(0, 8)}…`
 
 export const PAIRING_COPY = {
-  NO_ACCOUNT:
-    'Claim a username to pair through cookrew.dev; this QR pairs on this Wi-Fi only.',
-  WRONG_KEY: "Not this Mac's key — it changes every two minutes.",
-  NAMED_THE_MAC: 'That link named the Mac, not the phone — open it again from cookrew.dev.',
-  ALREADY_USED: 'That link was already used — open it again from cookrew.dev.',
-  INSECURE: 'Pair over the secure address — open it again from cookrew.dev.',
-  NOT_THIS_MAC: 'This sign-in is not for this Mac — open it again from cookrew.dev.',
-  TYPED_KEY: 'Six characters, valid two minutes.'
+  RELAY: 'Scan on the phone — this works from any network.',
+  DIRECT:
+    'Claim a username to pair from anywhere; this QR pairs on this Wi-Fi only.',
+  NONE: 'No address to show yet — the phone server is still starting.',
+  /** The same sentence `cookrew mobile` ends with, for the same reason. */
+  ROTATE:
+    'This QR carries the pairing token. `cookrew mobile --rotate` replaces it and unpairs every phone.'
 } as const
 
-export type PairingPopoutView =
-  | {
-      readonly mode: 'key'
-      readonly qr: string
-      readonly key: string
-      readonly renewsIn: string
-      readonly desktopName: string
-      readonly deviceIdPrefix: string
-    }
-  | {
-      readonly mode: 'legacy'
-      readonly qr: string | null
-      readonly sentence: string
-      readonly desktopName: string
-    }
-
-export type PairingPopoutInput = {
+export type PairingPopoutView = {
+  readonly mode: 'relay' | 'direct' | 'none'
+  /** The exact string to encode, or null when there is nothing to show. */
+  readonly qr: string | null
+  readonly sentence: string
+  readonly rotateNote: string
   readonly desktopName: string
-  /** Absent when the Mac has no account: there is no device id to name. */
-  readonly key: { deviceId: string; key: string; expiresAt: number } | null
-  /** The old URL-with-token endpoint, used only in the legacy shape. */
-  readonly legacyUrl?: string | null
-  readonly now: number
+  /** Only the relay URL names a device; a Mac with no account has no id. */
+  readonly deviceIdPrefix: string | null
 }
 
-export const pairingPopoutView = (input: PairingPopoutInput): PairingPopoutView => {
-  if (!input.key) {
+export const pairingPopoutView = (handout: PairingHandout | null): PairingPopoutView => {
+  if (!handout) {
     return {
-      mode: 'legacy',
-      qr: input.legacyUrl ?? null,
-      sentence: PAIRING_COPY.NO_ACCOUNT,
-      desktopName: input.desktopName
+      mode: 'none',
+      qr: null,
+      sentence: PAIRING_COPY.NONE,
+      rotateNote: PAIRING_COPY.ROTATE,
+      desktopName: 'This Mac',
+      deviceIdPrefix: null
     }
   }
+  const relay = handout.via === 'relay'
   return {
-    mode: 'key',
-    qr: pairingQrPayload(input.key),
-    key: input.key.key,
-    renewsIn: renewsIn(input.key.expiresAt, input.now),
-    desktopName: input.desktopName,
-    deviceIdPrefix: deviceIdPrefix(input.key.deviceId)
+    mode: relay ? 'relay' : 'direct',
+    qr: handout.url,
+    sentence: relay ? PAIRING_COPY.RELAY : PAIRING_COPY.DIRECT,
+    rotateNote: PAIRING_COPY.ROTATE,
+    desktopName: handout.desktopName,
+    deviceIdPrefix: handout.deviceId ? deviceIdPrefix(handout.deviceId) : null
   }
 }

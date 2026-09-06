@@ -14,7 +14,10 @@ import { StarStore } from '../registry/src/stars'
 import { createV2 } from '../registry/src/v2-routes'
 import {
   allowedRequestHeaders,
+  callerDeviceHeaders,
   CANVAS_BASE_HEADER,
+  CANVAS_DEVICE_HEADER,
+  CANVAS_DEVICE_NAME_HEADER,
   canvasName,
   createCanvasRelay,
   crossSite,
@@ -23,6 +26,7 @@ import {
   forwardableCookies,
   isCanvasName,
   rewriteCookiePath,
+  headerSafeName,
   type CanvasRelay
 } from '../registry/src/v2-canvas-relay'
 import { decodeFrame, encodeFrame } from '../src/shared/relay-frame'
@@ -233,6 +237,8 @@ let username = ''
 let deviceId = ''
 let desktopToken = ''
 let phoneSession = ''
+let phoneDeviceId = ''
+let phoneDeviceName = ''
 let strangerSession = ''
 let desktop: Linked | null = null
 
@@ -306,7 +312,11 @@ beforeAll(async () => {
     headers: { authorization: `Bearer ${desktopToken}`, 'content-type': 'application/json' },
     body: JSON.stringify({ name: 'This Mac', workspaces: [{ id: 'w1', name: 'Cookrew Dev' }] })
   })
-  phoneSession = (await attach(username, 'phone', desktopToken)).token
+  const phone = await attach(username, 'phone', desktopToken)
+  phoneSession = phone.token
+  phoneDeviceId = phone.id
+  // What `attach` names every device it makes; the header must carry it.
+  phoneDeviceName = 'Another machine'
   const stranger = await claim('stranger', 'desktop')
   strangerSession = (await attach('stranger', 'phone', stranger.token)).token
 
@@ -533,6 +543,31 @@ describe('a phone of the account, reaching its own canvas', () => {
   it('tells the desktop which prefix it is being served under', async () => {
     const { body } = await echo('/', { headers: asPhone() })
     expect(body.headers[CANVAS_BASE_HEADER]).toBe(prefix())
+  })
+
+  /**
+   * REACH v2.1 — WHO IS ASKING, FROM THE SESSION.
+   *
+   * The Mac lists the devices on its canvas. With the key ceremony retired
+   * nothing else in a relayed request names the reader, so the registry says
+   * it — and it says it from the cookie it just verified, never from a header
+   * the caller wrote.
+   */
+  it('tells the desktop which device of the account is asking', async () => {
+    const { body } = await echo('/', { headers: asPhone() })
+    expect(body.headers[CANVAS_DEVICE_HEADER]).toBe(phoneDeviceId)
+    expect(body.headers[CANVAS_DEVICE_NAME_HEADER]).toBe(phoneDeviceName)
+  })
+
+  it('does not let a caller name itself — its copies are dropped and ours written', async () => {
+    const { body } = await echo('/', {
+      headers: asPhone({
+        [CANVAS_DEVICE_HEADER]: '00000000-0000-4000-8000-000000000000',
+        [CANVAS_DEVICE_NAME_HEADER]: "The owner's own Mac"
+      })
+    })
+    expect(body.headers[CANVAS_DEVICE_HEADER]).toBe(phoneDeviceId)
+    expect(body.headers[CANVAS_DEVICE_NAME_HEADER]).toBe(phoneDeviceName)
   })
 
   it('does not let a caller write that prefix for the desktop', async () => {
@@ -898,6 +933,38 @@ describe('the header and cookie rules, by themselves', () => {
       'x-cr-run': 'abc',
       authorization: 'Bearer the-companion-token'
     })
+  })
+
+  it('drops a caller\u2019s copy of who it is, the same way it drops the base', () => {
+    expect(
+      allowedRequestHeaders({
+        'x-cookrew-device': '00000000-0000-4000-8000-000000000000',
+        'x-cookrew-device-name': 'Not this phone',
+        accept: '*/*'
+      })
+    ).toEqual({ accept: '*/*' })
+  })
+
+  it('states the caller as two headers, and leaves an unnameable device unnamed', () => {
+    expect(callerDeviceHeaders({ id: 'dev-1', name: 'A phone' })).toEqual({
+      'x-cookrew-device': 'dev-1',
+      'x-cookrew-device-name': 'A phone'
+    })
+    // A name that survives nothing is left off rather than sent empty.
+    expect(callerDeviceHeaders({ id: 'dev-1', name: '\u{1F4F1}\u{1F4F1}' })).toEqual({
+      'x-cookrew-device': 'dev-1'
+    })
+    // No id, nothing said at all: the desktop must not read a blank as a name.
+    expect(callerDeviceHeaders({ id: '', name: 'A phone' })).toEqual({})
+  })
+
+  it('makes a device name something a header can carry at all', () => {
+    // Node throws ERR_INVALID_CHAR on a header outside Latin-1; a fond name
+    // must not become a relay that refuses every request from that phone.
+    expect(headerSafeName('Dr\u00e9j\u2019s iPhone \u{1F4F1}')).toBe('Dr j s iPhone')
+    expect(headerSafeName('  two\r\n  blanks  ')).toBe('two blanks')
+    expect(headerSafeName('x'.repeat(200))).toHaveLength(64)
+    expect(headerSafeName('')).toBe('')
   })
 
   it('rewrites a Location by where it points, and only then', () => {
