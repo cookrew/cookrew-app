@@ -47,7 +47,7 @@ import {
 import { ASK_HTTP_STATUS, ASK_REMEDY } from '../shared/ask-outcome'
 import { ensureCert, missingHosts, sansOf } from './cert'
 import { enrichStateWithGit, handleMobileApi, MobileApiDeps, MobileOps, type ServeOps } from './mobile-api'
-import { holdSocketsOpen, pairingAuthorized, readJson, respondJson } from './mobile-http'
+import { holdSocketsOpen, pairingAuthorized, readJson, respondJson, tokenAccepted } from './mobile-http'
 import { handleCallRoutes, type CallEndpointDeps } from './call-endpoints'
 import { createTlsPortGate, httpsRedirectTarget } from './tls-port-gate'
 import { sendBody } from './http-compress'
@@ -644,6 +644,27 @@ export function allowedCompanionOrigins(registryOrigin: string): string[] {
  */
 export function activeCertFingerprint(): string | null {
   return httpsReady ? activeCertFp : null
+}
+
+/**
+ * DOES THIS CREDENTIAL OPEN THE COMPANION? The socket's authentication.
+ *
+ * The browser-cast WebSocket cannot call `pairingAuthorized` — there is no
+ * request/URL pair to read at the point it decides — but it must not answer
+ * the question a second way either, so it asks here and the comparison stays
+ * the one in mobile-http.ts. `extra` is the admitted-device door, exactly as
+ * on the HTTP routes.
+ *
+ * False when no token has been minted yet: before startMobileServer runs there
+ * is no session to join, and "no token configured" must not read as "everyone
+ * is welcome" on a socket that carries INPUT.
+ */
+export function companionTokenAccepted(
+  credential: string | null,
+  extra?: (candidate: string) => boolean
+): boolean {
+  if (activePairingToken === null) return false
+  return tokenAccepted(credential, activePairingToken, extra)
 }
 
 /** The credential a paired phone holds; null before the server starts. */

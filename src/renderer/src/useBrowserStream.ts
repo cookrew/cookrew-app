@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { hasNativeWebview, isRemoteMode } from './api'
 import { apiPath } from './api-base'
+import { tokenParam } from './auth-gate'
 import { useDataPlaneOrigin } from './use-data-plane'
 import {
   DESKTOP_STREAM_ORIGIN,
@@ -279,7 +280,11 @@ export function useBrowserStream(
         ws = new WebSocket(
           client === 'desktop'
             ? streamUrl(DESKTOP_STREAM_ORIGIN, browserId, w, h, desktopToken)
-            : socketUrl(window.location.origin, apiPath(streamPath(browserId, w, h, null)))
+            : // THE TOKEN RIDES THE URL, because `new WebSocket(...)` cannot
+              // set a header — the same constraint EventSource has, answered
+              // the same way. Without it the socket is an unauthenticated
+              // stream, and the desktop now refuses those (browser-cast.ts).
+              socketUrl(window.location.origin, tokenParam(apiPath(streamPath(browserId, w, h, null))))
         )
       } catch {
         fail('error')
