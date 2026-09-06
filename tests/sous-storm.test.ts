@@ -221,6 +221,7 @@ describe('Sous under a permanent timeout', () => {
 
   it('a summarizer that throws once does not silence the live title cadence', async () => {
     vi.useFakeTimers()
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     let calls = 0
     const summarize: TurnSummarizer = async () => {
       calls += 1
@@ -244,8 +245,53 @@ describe('Sous under a permanent timeout', () => {
       await vi.advanceTimersByTimeAsync(15_000) // the cadence survived
       expect(calls).toBe(2)
       expect(tracker.list()[0].title).toBe('Recovered title')
+      expect(rejections).toEqual([]) // caught and logged, not thrown into the void call
+      expect(errors.mock.calls.filter((c) => String(c[0]).startsWith('Sous: title refresh'))).toHaveLength(1)
     } finally {
       process.off('unhandledRejection', onRejection)
+      errors.mockRestore()
+      tracker.disposeAll()
+    }
+  })
+
+  it('a deterministic fault in the live title path is one log line per turn, never an unhandled rejection', async () => {
+    vi.useFakeTimers()
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const summarize: TurnSummarizer = async () => {
+      throw new TypeError('always')
+    }
+    const { TurnTracker } = await import('../src/main/turn-tracker')
+    const tracker = new TurnTracker(summarize, null, undefined, () => 'ready')
+    const session = new FakeSession('term-0')
+    tracker.track(session as unknown as PtySession, true)
+    const rejections: unknown[] = []
+    const onRejection = (reason: unknown): void => {
+      rejections.push(reason)
+    }
+    process.on('unhandledRejection', onRejection)
+    try {
+      session.emit('input', 'work\r')
+      await vi.advanceTimersByTimeAsync(1000 + 15_000 * 4) // five refreshes, all throwing
+      const refreshLines = errors.mock.calls.filter((c) => String(c[0]).startsWith('Sous: title refresh'))
+      expect(refreshLines).toHaveLength(1)
+      expect(refreshLines[0][0]).toBe('Sous: title refresh for term-0 threw:')
+      // The turn completes: finalizeTitle throws too, but the turn has
+      // already reported its fault, so it adds nothing.
+      session.full = '⏺ done, all tests pass'
+      session.idle = 99_999
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(tracker.list()[0].phase).toBe('replied')
+      const titleLines = (): number => errors.mock.calls.filter((c) => String(c[0]).startsWith('Sous: title ')).length
+      expect(titleLines()).toBe(1)
+      // A NEW turn is a new fault report, from whichever stage throws first.
+      session.idle = 0
+      session.emit('input', 'again\r')
+      await vi.advanceTimersByTimeAsync(1000 + 15_000)
+      expect(titleLines()).toBe(2)
+      expect(rejections).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onRejection)
+      errors.mockRestore()
       tracker.disposeAll()
     }
   })

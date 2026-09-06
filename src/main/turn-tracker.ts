@@ -443,6 +443,11 @@ interface TrackedTerminal {
   title: string | null
   /** Bumped on every turn start so stale summaries are dropped. */
   titleGen: number
+  /**
+   * The titleGen whose summarizer throw has been logged, so a deterministic
+   * fault is one line per turn, not one unhandled rejection every 15 s.
+   */
+  titleThrewGen: number | null
   turnStartedAt: number
   pushTimer: NodeJS.Timeout | null
   pollTimer: NodeJS.Timeout | null
@@ -1913,6 +1918,7 @@ export class TurnTracker extends EventEmitter {
       reply: null,
       title: null,
       titleGen: 0,
+      titleThrewGen: null,
       turnStartedAt: 0,
       pushTimer: null,
       pollTimer: null,
@@ -2573,10 +2579,12 @@ export class TurnTracker extends EventEmitter {
         tools: parseAgentGlance(delta).tools,
         lines: cleanTurnLines(delta)
       })
+    } catch (error) {
+      this.logTitleThrow(t, gen, 'refresh', error)
     } finally {
       // Whatever the summarizer did — answered, refused, or threw a bug of
       // ours back — the cadence continues while this is still the live
-      // turn. One rethrow must not silence titles for the rest of it.
+      // turn. One throw must not silence titles for the rest of it.
       if (this.isLiveTurn(t, gen)) this.scheduleTitle(t, TITLE_REFRESH_MS)
     }
     if (!this.isLiveTurn(t, gen)) return
@@ -2584,6 +2592,18 @@ export class TurnTracker extends EventEmitter {
       t.title = title
       this.push(t)
     }
+  }
+
+  /**
+   * A summarizer throw is a programming error (the breaker rethrows only
+   * those). Logged once per turn and otherwise swallowed here: an unhandled
+   * rejection every 15 s per live turn is a stack and an app.rejection
+   * event each time, for the same fault.
+   */
+  private logTitleThrow(t: TrackedTerminal, gen: number, stage: 'refresh' | 'finalize', error: unknown): void {
+    if (t.titleThrewGen === gen) return
+    t.titleThrewGen = gen
+    console.error(`Sous: title ${stage} for ${t.session.terminalId} threw:`, error)
   }
 
   /** Still the tracked terminal, the same turn, and still running it. */
@@ -2882,11 +2902,17 @@ export class TurnTracker extends EventEmitter {
     // Breaker open or busy: the record stays untitled and the pump owns it.
     if (this.sousReady() !== 'ready') return
     const gen = t.titleGen
-    const title = await this.summarize({
-      prompt: t.prompt ?? '',
-      tools: [],
-      lines: (t.reply ?? '').split('\n')
-    })
+    let title: string | null
+    try {
+      title = await this.summarize({
+        prompt: t.prompt ?? '',
+        tools: [],
+        lines: (t.reply ?? '').split('\n')
+      })
+    } catch (error) {
+      this.logTitleThrow(t, gen, 'finalize', error)
+      return
+    }
     if (title === null) return
     const id = t.session.terminalId
     const history = this.histories.get(id)
