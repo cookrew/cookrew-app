@@ -42,12 +42,7 @@ import {
 } from './browser-thumb-policy'
 import { retry } from './retry'
 import { CanvasUiContext, ToolId } from './canvas-ui'
-import {
-  activityStore,
-  thumbStore,
-  useActivitiesSnapshot,
-  useThumbsSnapshot
-} from './activity-thumb-store'
+import { activityStore, thumbStore, useActivity, useActivityPhaseCount } from './activity-thumb-store'
 import { reconcileFlowNodes } from './flow-nodes'
 import {
   CARD_FIT_PADDING,
@@ -186,10 +181,9 @@ function Canvas(): React.JSX.Element {
   const [role, setRole] = useState<string | null>(null)
   // Per-terminal activity + per-browser thumbnails live in an external per-id
   // store (activity-thumb-store), NOT React state on this context — a stream of
-  // activity events must not re-render every card. App reads the whole map via
-  // the snapshot hooks (it needs the aggregate counts); cards subscribe per id.
-  const activities = useActivitiesSnapshot()
-  const thumbs = useThumbsSnapshot()
+  // activity events must not re-render every card, and not this component
+  // either: it subscribes to two COUNTS (below) and to the one card a dialog
+  // is about; the dock and the overlays subscribe per id themselves.
   /** Alignment guides while a card resize is snapped to a neighbour edge. */
   const [guides, setGuides] = useState<SnapGuide[]>([])
   /** Terminal whose overlay owns the stage — the dock shows its composer. */
@@ -567,8 +561,6 @@ function Canvas(): React.JSX.Element {
   viewRef.current = view
   const clippingRef = useRef(clipping)
   clippingRef.current = clipping
-  const activitiesRef = useRef(activities)
-  activitiesRef.current = activities
   // Long-press on a card = right-click: the touch path into the card edit
   // menu. 550ms hold with a 10px slop, touch pointers only; interactive
   // descendants (buttons, editors, the live terminal) keep their own
@@ -651,7 +643,7 @@ function Canvas(): React.JSX.Element {
       if (!state) return
       // Working agents are uncopyable, so ⌘A leaves them out — a pick-all
       // that traps the selection behind a busy agent isn't "all".
-      const working = activitiesRef.current
+      const working = activityStore.getSnapshot()
       setPicked(
         new Set(
           state.nodes
@@ -1203,8 +1195,11 @@ function Canvas(): React.JSX.Element {
   const closingNode = closingId
     ? (workspace?.nodes.find((n) => n.id === closingId) ?? null)
     : null
-  const busyCount = terminals.filter((t) => activities[t.id]?.phase === 'thinking').length
-  const attentionCount = terminals.filter((t) => activities[t.id]?.phase === 'waiting').length
+  const terminalIds = useMemo(() => terminals.map((t) => t.id), [terminals])
+  const busyCount = useActivityPhaseCount(terminalIds, 'thinking')
+  const attentionCount = useActivityPhaseCount(terminalIds, 'waiting')
+  /** The card a close dialog is about — '' subscribes to nothing. */
+  const closingActivity = useActivity(closingId ?? '')
 
   // ⌘W closes the focused card and its session (ESC handles un-zooming):
   //   • a zoomed-in browser with >1 tab → close the active tab
@@ -1417,7 +1412,6 @@ function Canvas(): React.JSX.Element {
             zoomedTerminalId && terminals.some((t) => t.id === zoomedTerminalId)
               ? {
                   id: zoomedTerminalId,
-                  activity: activities[zoomedTerminalId],
                   // An imported card runs at someone else's app: the dock's
                   // attach button would paste THIS machine's paths into it.
                   remote: terminals.find((t) => t.id === zoomedTerminalId)?.servedSession != null
@@ -1444,7 +1438,6 @@ function Canvas(): React.JSX.Element {
         <LodOverlays
           terminals={terminals}
           browsers={browsers}
-          activities={activities}
           deliberateOpen={deliberateOpenRef}
           focused={zoomedNodeIdRef}
           arrivedId={arrivedId}
@@ -1491,7 +1484,7 @@ function Canvas(): React.JSX.Element {
         {closingNode && (
           <ConfirmClose
             node={closingNode}
-            activity={activities[closingNode.id] ?? null}
+            activity={closingActivity ?? null}
             onCancel={() => setClosingId(null)}
             onConfirm={() => confirmClose(closingNode.id)}
           />

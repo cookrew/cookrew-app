@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { KeyedStore } from './keyed-store'
-import type { TerminalActivity } from '../../shared/turn'
+import type { TerminalActivity, TurnPhase } from '../../shared/turn'
 
 /**
  * Per-terminal activity and per-browser thumbnails, moved OUT of the canvas-ui
@@ -24,6 +24,24 @@ export function useActivitiesSnapshot(): Record<string, TerminalActivity> {
   return useSyncExternalStore(
     (cb) => activityStore.subscribeGlobal(cb),
     () => activityStore.getSnapshot()
+  )
+}
+
+/**
+ * How many of `ids` are in `phase` — the header's WORKING / attention counts.
+ * A number, so the caller re-renders when the COUNT changes (an agent starts
+ * or finishes), not on every activity event: App read the whole map for these
+ * two counts and re-rendered — with the dock and the header — four times a
+ * second while any agent worked (perf lane L6, 2026-09-06).
+ */
+export function useActivityPhaseCount(ids: readonly string[], phase: TurnPhase): number {
+  return useSyncExternalStore(
+    (cb) => activityStore.subscribeGlobal(cb),
+    () => {
+      let count = 0
+      for (const id of ids) if (activityStore.get(id)?.phase === phase) count += 1
+      return count
+    }
   )
 }
 

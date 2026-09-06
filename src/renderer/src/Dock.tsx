@@ -1,6 +1,6 @@
 import type { ToolId } from './canvas-ui'
-import type { TerminalActivity } from '../../shared/turn'
 import type { AgentRole } from '../../shared/model'
+import { useActivity } from './activity-thumb-store'
 import { VoiceBar } from './VoiceBar'
 import { useKeyboardInset } from './keyboard-inset'
 import { CrIcon, type CrIconName } from './icons'
@@ -62,7 +62,7 @@ interface DockProps {
   /** Import a served team by its address — places ONE orch interface card. */
   onImportServed?: () => void
   /** Zoomed-in terminal: the dock swaps the tool group for its composer. */
-  voiceFor: { id: string; activity: TerminalActivity | undefined; remote: boolean } | null
+  voiceFor: { id: string; remote: boolean } | null
   /**
    * Zoomed-in browser: the whole bar stands down so the page keeps its height.
    * The controls that DO apply there (viewport fit, keyboard, open in browser)
@@ -106,6 +106,9 @@ export function Dock({
   boardFor
 }: DockProps): React.JSX.Element {
   const hint = tool === 'connect' ? connectHint : (HINTS[tool] ?? null)
+  // The composer's terminal, subscribed HERE: App used to hand the activity
+  // down, which re-rendered the whole app on every event of a zoomed agent.
+  const voiceActivity = useActivity(voiceFor?.id ?? '')
   /** Either occupant of the slide-in pane parks the canvas tools. */
   const slidIn = voiceFor !== null || boardFor !== null
   // `presets` arrives as harnesses AND saved teams in one list, because a
@@ -226,7 +229,7 @@ export function Dock({
           <VoiceBar
             key={voiceFor.id}
             terminalId={voiceFor.id}
-            activity={voiceFor.activity}
+            activity={voiceActivity}
             remote={voiceFor.remote}
           />
         )}
