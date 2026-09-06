@@ -535,6 +535,15 @@ function eventFleet() {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
+/** Wait for the ladder to reach its top rung — polled, with a deadline; a fixed sleep needs four passes inside it. */
+async function settleLadder(sampler: ReturnType<typeof createProbeSampler>, deadlineMs = 30_000): Promise<void> {
+  const until = Date.now() + deadlineMs
+  while (sampler.stats().intervalMs !== SCALED_MINUTE) {
+    if (Date.now() > until) throw new Error(`ladder did not settle within ${deadlineMs} ms: ${JSON.stringify(sampler.stats())}`)
+    await sleep(50)
+  }
+}
+
 describe('board closed — a detached fleet costs nothing', () => {
   it('after a one-shot read, zero passes and zero herdr children per scaled minute', async () => {
     const { calls, sampler, read } = eventFleet()
@@ -561,7 +570,7 @@ describe('board open, fleet quiet — the ladder climbs and a push beats the tic
     try {
       // Climb: the first pass changes the map (empty → 40 working); the next
       // ones find nothing new. 300 + 1000 + 3000 ms later the top rung holds.
-      await sleep(LADDER[0] + LADDER[1] + LADDER[2] + 500)
+      await settleLadder(sampler)
       expect(sampler.stats().intervalMs).toBe(SCALED_MINUTE)
       const listingsSettled = calls.asyncList
       await sleep(SCALED_MINUTE * 2)
@@ -614,7 +623,7 @@ describe('board open AND busy — a rebuilt frame does not re-arm a listing', ()
     })
     const release = board.probeSubscribe!()
     try {
-      await sleep(LADDER[0] + LADDER[1] + LADDER[2] + 500)
+      await settleLadder(sampler)
       expect(sampler.stats().intervalMs).toBe(SCALED_MINUTE)
       const settled = calls.asyncList
       const until = Date.now() + SCALED_MINUTE * 2

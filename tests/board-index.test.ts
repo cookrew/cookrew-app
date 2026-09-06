@@ -1133,3 +1133,25 @@ describe('createProbeSampler — review of #70', () => {
     release()
   })
 })
+
+describe('createProbeSampler — the release epoch', () => {
+  it('a release token minted before stop() is void, not a debit against a newer hold', () => {
+    vi.useFakeTimers()
+    try {
+      const sampler = createProbeSampler(
+        probeDeps({ listSessions: () => ['cookrew_t1'], knownTerminalIds: () => ['t1'], capturePane: () => WORKING_PANE })
+      )
+      const old = sampler.subscribe()
+      sampler.stop()
+      const fresh = sampler.subscribe()
+      expect(sampler.running).toBe(true)
+      old() // from before the stop: must not release the newer hold
+      expect(sampler.running).toBe(true)
+      expect(sampler.stats().subscribers).toBe(1)
+      fresh()
+      expect(sampler.running).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

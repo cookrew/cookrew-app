@@ -41,11 +41,11 @@ import {
   boardSourcesFrom,
   buildBoard,
   boardWindowMs,
-  createBoardNotifier,
   createProbeSampler,
   PROBE_INTERVAL_MS,
   tmuxProbeDeps
 } from './board-index'
+import { createBoardHolds } from './board-hold'
 import { createLoopHealth } from './loop-health'
 import { loadOrCreateReadOnlyToken } from './readonly-token'
 import { loadOrCreatePairingToken } from './pairing-token'
@@ -5635,58 +5635,12 @@ function registerIpc(handlers: RestoreHandlers): void {
       boardWindowMs(typeof window === 'string' ? window : null)
     )
   )
-  // A desktop board panel that stays open: hold the probe, push on change
-  // (coalesced like the SSE stream), release on the last unsubscribe or when
-  // the window goes. Refcounted per sender so two panels share one hold.
-  const boardHolds = new Map<number, { count: number; release: () => void }>()
-  ipcMain.handle('board:subscribe', (event) => {
-    const sender = event.sender
-    const held = boardHolds.get(sender.id)
-    if (held) {
-      held.count += 1
-      return true
-    }
-    const sources = boardSources()
-    const notifier = createBoardNotifier(() => {
-      if (!sender.isDestroyed()) sender.send('board:update', buildBoard(sources))
-    })
-    const releaseProbe = sources.probeSubscribe?.() ?? (() => undefined)
-    const offChange = sources.probeOnChange?.(() => notifier.schedule()) ?? (() => undefined)
-    const onSignal = (): void => notifier.schedule()
-    turns.on('activity', onSignal)
-    store.on('change', onSignal)
-    store.on('workspaces', onSignal)
-    // A reload destroys the JS context, not the webContents: the preload's
-    // release never runs, so the hold must go with the navigation itself.
-    // Every listener is removed inside release, or the next cycle's stale
-    // one could delete a newer hold.
-    const gone = (): void => release()
-    const release = (): void => {
-      if (boardHolds.get(sender.id)?.release !== release) return
-      notifier.cancel()
-      offChange()
-      releaseProbe()
-      turns.removeListener('activity', onSignal)
-      store.removeListener('change', onSignal)
-      store.removeListener('workspaces', onSignal)
-      sender.removeListener('destroyed', gone)
-      sender.removeListener('did-start-navigation', gone)
-      sender.removeListener('render-process-gone', gone)
-      boardHolds.delete(sender.id)
-    }
-    sender.on('destroyed', gone)
-    sender.on('did-start-navigation', gone)
-    sender.on('render-process-gone', gone)
-    boardHolds.set(sender.id, { count: 1, release })
-    return true
-  })
-  ipcMain.handle('board:unsubscribe', (event) => {
-    const held = boardHolds.get(event.sender.id)
-    if (!held) return false
-    held.count -= 1
-    if (held.count <= 0) held.release()
-    return true
-  })
+  // A desktop board panel that stays open: hold the probe, push on change,
+  // release on the last unsubscribe, the page going, or the renderer going
+  // (src/main/board-hold.ts owns the rules and has the units).
+  const boardHolds = createBoardHolds({ sources: boardSources, turns, store })
+  ipcMain.handle('board:subscribe', (event) => boardHolds.subscribe(event.sender))
+  ipcMain.handle('board:unsubscribe', (event) => boardHolds.unsubscribe(event.sender))
   ipcMain.handle('agent:recover', (_e, id: string) => recoverAgent(id))
   // Endpoint restore channels live alongside the executor (M10).
   registerRestoreIpc(ipcMain.handle.bind(ipcMain), handlers)

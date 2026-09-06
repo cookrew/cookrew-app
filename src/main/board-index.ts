@@ -504,6 +504,8 @@ export function createProbeSampler(
   /** Any pass has run to its end (fresh, partial or failed) — after that, no read waits. */
   let everCompleted = false
   let subscribers = 0
+  /** Bumped by stop(): a release token minted before it is void, not a debit against a newer hold. */
+  let epoch = 0
   let rung = 0
   const listeners = new Set<(phases: Map<string, BoardPhase>) => void>()
   const usesAsync = typeof rawDeps.listSessionsAsync === 'function'
@@ -698,10 +700,12 @@ export function createProbeSampler(
     subscribe: () => {
       subscribers += 1
       if (subscribers === 1) begin()
+      const minted = epoch
       let released = false
       return () => {
         if (released) return
         released = true
+        if (minted !== epoch) return // stop() already released this one
         release()
       }
     },
@@ -740,6 +744,7 @@ export function createProbeSampler(
       running: subscribers > 0
     }),
     stop: (): void => {
+      epoch += 1
       while (subscribers > 0) release()
     },
     get running(): boolean {
