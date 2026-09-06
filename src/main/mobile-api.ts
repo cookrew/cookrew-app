@@ -37,6 +37,7 @@ import type {
   RestoreResult,
 } from "../shared/model";
 import { readBytes, readJson, respondJson, startSse, pairingAuthorized } from "./mobile-http";
+import type { LoopHealthSnapshot } from "./loop-health";
 import { ownerSubmit } from "./ask";
 import { MAX_ATTACHMENT_BYTES } from "./attachments";
 
@@ -163,6 +164,12 @@ export interface MobileApiDeps {
    */
   board?: BoardSources;
   /**
+   * The main thread's own pulse (loop-health.ts): event-loop delay, ELU and
+   * per-loop tick durations. Read-only; absent = /api/health answers 503 so
+   * a missing wire-up is loud rather than a fabricated all-clear.
+   */
+  health?: () => LoopHealthSnapshot;
+  /**
    * Importing a served team FROM THE PHONE — the desktop's own operations,
    * reached over this API. Absent = the six /api/serve routes answer 503
    * rather than pretending; the phone bridge then reports the refusal.
@@ -280,6 +287,24 @@ export async function acquireViewWhenReady(
   return false;
 }
 
+/** How long a board read waits for the probe's in-flight pass. */
+const PROBE_WARM_MS = 1500;
+
+/** The probe's pass, or the timer, whichever lands first. Never throws. */
+async function probeWarmed(board: BoardSources): Promise<void> {
+  if (!board.probeWarm) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const bound = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, PROBE_WARM_MS);
+    timer.unref?.();
+  });
+  try {
+    await Promise.race([board.probeWarm().catch(() => undefined), bound]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function handleMobileApi(
   request: http.IncomingMessage,
   response: http.ServerResponse,
@@ -391,6 +416,17 @@ export async function handleMobileApi(
     );
     return true;
   }
+  // The main process reading its own event loop. Behind the /api GET gate
+  // above like every other read; the payload is timings and counts, never a
+  // token or a path.
+  if (method === "GET" && p === "/api/health") {
+    if (!deps.health) {
+      respondJson(response, 503, { error: "health not wired" });
+      return true;
+    }
+    respondJson(response, 200, deps.health());
+    return true;
+  }
   if (method === "GET" && p === "/api/presets") {
     respondJson(response, 200, presets);
     return true;
@@ -431,6 +467,11 @@ export async function handleMobileApi(
       respondJson(response, 503, { error: "board index not wired" });
       return true;
     }
+    // The probe samples off the main thread now, so the first read after it
+    // parked would otherwise paint the map from before the park. Wait for
+    // the pass it just kicked — bounded, so a slow backend costs a moment,
+    // never the request.
+    await probeWarmed(deps.board);
     respondJson(
       response,
       200,
@@ -1088,7 +1129,17 @@ export async function handleMobileApi(
       ? createBoardNotifier(() => send("board", buildBoard(board)))
       : null;
     const onBoardSignal = (): void => boardNotifier?.schedule();
-    if (board) send("board", buildBoard(board));
+    if (board) {
+      const sentProbe = board.probe?.();
+      send("board", buildBoard(board));
+      // A first frame before the probe's FIRST pass has landed carries no
+      // L2 phases; when that pass lands the map object changes, and the
+      // board is pushed again. Once any pass has completed probeWarm answers
+      // at once with the same map, and nothing extra is pushed.
+      void board.probeWarm?.().then((fresh) => {
+        if (fresh !== sentProbe) onBoardSignal();
+      }, () => undefined);
+    }
     if (scope === null) store.on("change", onChange);
     else store.on("workspace-change", onScopedChange);
     store.on("workspaces", onWorkspaces);

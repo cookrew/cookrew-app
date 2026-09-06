@@ -22,6 +22,7 @@ import {
   type BoardRow,
   type BoardSummary
 } from '../shared/board'
+import { performance } from 'node:perf_hooks'
 import { detectAttention, detectLiveWork } from '../shared/turn'
 import type { TerminalActivity, TurnRecord } from '../shared/turn'
 import { agentStatus, type HerdrStatus } from './herdr-agent-status'
@@ -51,6 +52,12 @@ export interface BoardSources {
    * inventing a phase.
    */
   probe?: () => Map<string, BoardPhase>
+  /**
+   * The probe's in-flight pass, for a READ that would rather wait a bounded
+   * moment than paint the map from before the sampler parked. Optional; a
+   * board without it answers from whatever probe() holds.
+   */
+  probeWarm?: () => Promise<unknown>
   /** Injectable clock so windowing is testable. */
   now?: () => number
 }
@@ -91,6 +98,7 @@ export interface BoardRuntime {
   turnStore: { loadAll: () => Map<string, TurnRecord[]> }
   agents: { list: () => readonly BoardAgentMeta[] }
   probe?: () => Map<string, BoardPhase>
+  probeWarm?: () => Promise<unknown>
 }
 
 /**
@@ -115,7 +123,8 @@ export function boardSourcesFrom(runtime: BoardRuntime): BoardSources {
         orch: entry.orch,
         active: entry.active
       })),
-    ...(runtime.probe ? { probe: runtime.probe } : {})
+    ...(runtime.probe ? { probe: runtime.probe } : {}),
+    ...(runtime.probeWarm ? { probeWarm: runtime.probeWarm } : {})
   }
 }
 
@@ -129,8 +138,11 @@ export function boardSourcesFrom(runtime: BoardRuntime): BoardSources {
 //
 // Cost discipline: only DETACHED sessions are captured (attached ones are
 // already L1), the sampler is single-flight, and it stops itself when nothing
-// is detached. Measured baseline: 19 sessions scanned in ~107 ms, so at a 3 s
-// period the duty cycle is ~3.6%.
+// is detached. The inventory is read ONCE per tick and, where the backend has
+// an async runner, every read of a tick is awaited rather than forked inline:
+// the 2026-09-06 baseline (perf/tempo) was 2 + N synchronous herdr children
+// per tick on Electron main, N = 38 detached panes without a herdr status,
+// each 30-300 ms under load — the stall behind the program's 3 s API p95.
 // ---------------------------------------------------------------------------
 
 /** Sampling period. 107 ms per full scan / 3 s ⇒ well under a 5% duty cycle. */
@@ -141,6 +153,17 @@ export interface ProbeDeps {
   listSessions: () => string[]
   /** Visible pane text for a session name; '' when it cannot be read. */
   capturePane: (sessionName: string) => string
+  /**
+   * The same two reads OFF the main thread. When both are present the
+   * sampler's periodic tick awaits them instead of forking inline: on the
+   * live machine every tick was two synchronous `herdr pane list` children
+   * plus one `pane read` per detached pane without a herdr status (38 of 56
+   * panes, 2026-09-06), and each child under load held Electron main for
+   * 30-300 ms — the stalls the perf program measured as a 3 s API p95.
+   * Absent (tmux, direct), the sync reads stay exactly as before.
+   */
+  listSessionsAsync?: () => Promise<string[]>
+  capturePaneAsync?: (sessionName: string) => Promise<string>
   /** Terminal ids worth probing (the registry's agents). */
   knownTerminalIds: () => string[]
   /** True when a live pty already covers this terminal — L1 wins, skip it. */
@@ -158,49 +181,171 @@ export interface ProbeDeps {
   askedStatus?: (terminalId: string) => HerdrStatus | null
 }
 
+/** One terminal the probe will look at: a live pane with no pty over it. */
+export interface DetachedTerminal {
+  terminalId: string
+  session: string
+}
+
 /**
- * One sampling pass. Reports ONLY the two phases this layer can actually
- * establish — 'working' and 'waiting'. An idle detached pane is deliberately
- * omitted rather than guessed at, so the ledger layer keeps deciding between
- * unread/offline instead of the probe inventing a completion it never saw.
+ * THE PROBE'S REACH: the detached set, computed once from one inventory.
  *
- * herdr is consulted FIRST where the backend can answer: a status that is
- * asked beats one inferred from pixels. Its working/blocked map straight onto
- * the two probe phases. An idle/done answer sets nothing AND suppresses the
- * scrape — a detached pane's last painted frame can hold a stale spinner
- * forever, and frozen pixels must not overrule an answer — while still never
- * clearing an unread marker, because omission leaves that call to the ledger.
- * Null means no signal, and the capture-pane path decides exactly as before.
+ * Every known terminal is considered, but only the ones with a live pane and
+ * no pty survive — attached terminals are L1's, paneless ones the ledger's.
+ * The walk is in-memory set lookups; what this function pins is that the
+ * inventory (`live`) is read ONCE per pass and shared with the self-stop
+ * check, where before each tick listed the panes twice.
  */
-export function probeOnce(deps: ProbeDeps): Map<string, BoardPhase> {
-  const phases = new Map<string, BoardPhase>()
-  const live = new Set(deps.listSessions())
-  if (live.size === 0) return phases
+export function detachedTerminals(deps: ProbeDeps, live: ReadonlySet<string>): DetachedTerminal[] {
+  if (live.size === 0) return []
+  const out: DetachedTerminal[] = []
   for (const terminalId of deps.knownTerminalIds()) {
     if (deps.isAttached(terminalId)) continue // L1 already has full fidelity
     const session = deps.sessionNameFor(terminalId)
     if (!live.has(session)) continue // no pane at all → a ledger row
-    const asked = deps.askedStatus?.(terminalId) ?? null
+    out.push({ terminalId, session })
+  }
+  return out
+}
+
+/**
+ * herdr's answer as a probe phase. `null` = no signal (scrape decides);
+ * `undefined` = herdr said idle/done, which sets nothing AND suppresses the
+ * scrape — a detached pane's last painted frame can hold a stale spinner
+ * forever, and frozen pixels must not overrule an answer.
+ */
+function phaseFromAsked(asked: HerdrStatus | null): BoardPhase | null | undefined {
+  if (asked === null) return null
+  if (asked === 'working') return 'working'
+  if (asked === 'blocked') return 'waiting'
+  return undefined
+}
+
+/** The scrape: only the two phases pixels can actually establish. */
+function phaseFromPane(deps: ProbeDeps, chunk: string): BoardPhase | undefined {
+  if (chunk.length === 0) return undefined
+  if (deps.detectWorking(chunk)) return 'working'
+  if (deps.detectWaiting(chunk.split('\n'))) return 'waiting'
+  return undefined
+}
+
+/**
+ * One sampling pass over an already-computed detached set. Reports ONLY the
+ * two phases this layer can actually establish — 'working' and 'waiting'. An
+ * idle detached pane is deliberately omitted rather than guessed at, so the
+ * ledger layer keeps deciding between unread/offline instead of the probe
+ * inventing a completion it never saw.
+ *
+ * herdr is consulted FIRST where the backend can answer: a status that is
+ * asked beats one inferred from pixels (see phaseFromAsked). Null means no
+ * signal, and the capture-pane path decides exactly as before.
+ */
+export function probeDetached(deps: ProbeDeps, detached: readonly DetachedTerminal[]): Map<string, BoardPhase> {
+  const phases = new Map<string, BoardPhase>()
+  for (const { terminalId, session } of detached) {
+    const asked = phaseFromAsked(deps.askedStatus?.(terminalId) ?? null)
     if (asked !== null) {
-      if (asked === 'working') phases.set(terminalId, 'working')
-      else if (asked === 'blocked') phases.set(terminalId, 'waiting')
+      if (asked !== undefined) phases.set(terminalId, asked)
       continue
     }
-    const chunk = deps.capturePane(session)
-    if (chunk.length === 0) continue
-    if (deps.detectWorking(chunk)) phases.set(terminalId, 'working')
-    else if (deps.detectWaiting(chunk.split('\n'))) phases.set(terminalId, 'waiting')
+    const phase = phaseFromPane(deps, deps.capturePane(session))
+    if (phase) phases.set(terminalId, phase)
   }
   return phases
 }
 
-/** True when at least one known terminal has a tmux session but no live pty. */
-export function hasDetachedSessions(deps: ProbeDeps): boolean {
-  const live = new Set(deps.listSessions())
-  if (live.size === 0) return false
-  return deps
-    .knownTerminalIds()
-    .some((id) => !deps.isAttached(id) && live.has(deps.sessionNameFor(id)))
+/** What one async pass produced, and how far it got. */
+export interface DetachedPass {
+  phases: Map<string, BoardPhase>
+  /** Terminals looked at before the deadline — the rest were not reached. */
+  reached: number
+  /** Main-thread time: the sum of the synchronous segments between awaits. */
+  heldMs: number
+}
+
+/**
+ * The same pass with the pane reads awaited, sequentially: one child at a
+ * time, so a detached fleet of forty is forty short waits libuv owns rather
+ * than forty forks Electron main owns. Falls back to the sync read where no
+ * async one was given, so a backend without one behaves exactly as before.
+ *
+ * Reports how far it got: past the deadline (a wedged backend answers each
+ * read at its bound) the pass stops and says so, and the caller decides what
+ * the unreached terminals show. Also reports its own main-thread hold — the
+ * synchronous segments only, never the awaits, so the number names this
+ * loop for what it did and not for what else the loop was doing meanwhile.
+ */
+export async function runDetachedPass(
+  deps: ProbeDeps,
+  detached: readonly DetachedTerminal[],
+  options: { deadline?: number } = {}
+): Promise<DetachedPass> {
+  const phases = new Map<string, BoardPhase>()
+  let heldMs = 0
+  let segment = performance.now()
+  let reached = 0
+  for (const { terminalId, session } of detached) {
+    if (options.deadline !== undefined && Date.now() > options.deadline) break
+    reached += 1
+    const asked = phaseFromAsked(deps.askedStatus?.(terminalId) ?? null)
+    if (asked !== null) {
+      if (asked !== undefined) phases.set(terminalId, asked)
+      continue
+    }
+    let chunk: string
+    if (deps.capturePaneAsync) {
+      const read = deps.capturePaneAsync(session)
+      heldMs += performance.now() - segment
+      chunk = await read
+      segment = performance.now()
+    } else {
+      chunk = deps.capturePane(session)
+    }
+    const phase = phaseFromPane(deps, chunk)
+    if (phase) phases.set(terminalId, phase)
+  }
+  heldMs += performance.now() - segment
+  return { phases, reached, heldMs }
+}
+
+/** The pass's phases alone — the shape callers that do not merge want. */
+export async function probeDetachedAsync(
+  deps: ProbeDeps,
+  detached: readonly DetachedTerminal[],
+  options: { deadline?: number } = {}
+): Promise<Map<string, BoardPhase>> {
+  return (await runDetachedPass(deps, detached, options)).phases
+}
+
+/**
+ * A truncated pass over the previous map: the terminals it reached take
+ * their fresh verdict (including "no phase"), the ones it did not reach keep
+ * what the last pass said. Stale beats blank — a wedged herdr must not turn
+ * every working agent into a row with no phase.
+ */
+export function mergePartialPass(
+  previous: ReadonlyMap<string, BoardPhase>,
+  pass: DetachedPass,
+  detached: readonly DetachedTerminal[]
+): Map<string, BoardPhase> {
+  if (pass.reached >= detached.length) return pass.phases
+  const merged = new Map(pass.phases)
+  for (const { terminalId } of detached.slice(pass.reached)) {
+    const kept = previous.get(terminalId)
+    if (kept) merged.set(terminalId, kept)
+  }
+  return merged
+}
+
+/**
+ * One sampling pass from an inventory read here (or one handed in, so a
+ * caller that already listed the panes does not list them again).
+ */
+export function probeOnce(
+  deps: ProbeDeps,
+  live: ReadonlySet<string> = new Set(deps.listSessions())
+): Map<string, BoardPhase> {
+  return probeDetached(deps, detachedTerminals(deps, live))
 }
 
 export interface ProbeSampler {
@@ -209,51 +354,182 @@ export interface ProbeSampler {
   /** Begin periodic sampling (idempotent). */
   start: () => void
   stop: () => void
-  /** Run one pass now; returns the fresh map (used by tests and first paint). */
+  /** Run one SYNCHRONOUS pass now; returns the fresh map (tests, sync backends). */
   sampleNow: () => Map<string, BoardPhase>
+  /**
+   * One pass on the async reads when the deps have them (else sampleNow).
+   * What the periodic tick runs; exposed so a test can await a tick.
+   */
+  sampleAsync: () => Promise<Map<string, BoardPhase>>
+  /**
+   * start(), then the phases — at once once ANY pass has completed, or once
+   * the very first pass lands. What a board READ awaits, bounded by the
+   * caller: the first frame ever is not an empty one, and no later read
+   * waits on a pass. Completion, not emptiness, is the key: an all-attached
+   * fleet has a legitimately empty map forever, and keying on that made
+   * every idle board read wait on a live listing.
+   */
+  warm: () => Promise<Map<string, BoardPhase>>
   readonly running: boolean
+}
+
+/** A pass may run at most this many intervals before it reports partial. */
+export const PROBE_PASS_DEADLINE_TICKS = 10
+
+export interface ProbeSamplerOptions {
+  /**
+   * Called with how long each pass held the MAIN THREAD, in ms — the
+   * loop-health seam. For a synchronous pass that is its wall time; for an
+   * async pass it is the sum of the synchronous segments between awaits,
+   * never the awaits themselves, so the number names this loop for what it
+   * did and not for whatever else the loop was busy with meanwhile.
+   */
+  observe?: (ms: number) => void
 }
 
 /**
  * Periodic single-flight sampler. Self-stopping: a pass that finds nothing
  * detached parks the timer, so an idle machine pays nothing. Callers restart
  * it when the board is next requested.
+ *
+ * The tick reads the inventory ONCE and derives both the phases and the
+ * "anything detached?" decision from it. With async reads available the tick
+ * awaits them, and the single-flight latch spans the whole awaited pass: a
+ * pass longer than the interval means the next interval is skipped, never
+ * stacked. A read while a pass is in flight answers with the previous pass —
+ * the same "last known" degrade the board already documents — unless there
+ * is no previous pass at all, in which case warm() lets it wait.
  */
 export function createProbeSampler(
   deps: ProbeDeps,
-  intervalMs: number = PROBE_INTERVAL_MS
+  intervalMs: number = PROBE_INTERVAL_MS,
+  options: ProbeSamplerOptions = {}
 ): ProbeSampler {
   let latest = new Map<string, BoardPhase>()
   let timer: ReturnType<typeof setInterval> | null = null
   let inFlight = false
   let lastSampleAt = 0
+  /** Whether the last pass found anything to look at — the self-stop input. */
+  let lastDetached = 0
+  /** The async pass in flight, so a read before the first completion can await it. */
+  let pending: Promise<Map<string, BoardPhase>> | null = null
+  /** Any pass has run to its end (fresh, partial or failed) — after that, no read waits. */
+  let everCompleted = false
+  const usesAsync = typeof deps.listSessionsAsync === 'function'
+
+  const observe = (ms: number): void => {
+    try {
+      options.observe?.(ms)
+    } catch {
+      // An observer's failure is not the probe's.
+    }
+  }
 
   const sampleNow = (): Map<string, BoardPhase> => {
     if (inFlight) return latest // single-flight: never stack scans
     inFlight = true
     lastSampleAt = Date.now()
+    lastDetached = 0 // a pass that throws must not park or hold on the last one's verdict
+    const started = performance.now()
     try {
-      latest = probeOnce(deps)
+      const detached = detachedTerminals(deps, new Set(deps.listSessions()))
+      lastDetached = detached.length
+      latest = probeDetached(deps, detached)
     } catch (error) {
       console.error('Board probe failed:', error)
     } finally {
       inFlight = false
+      everCompleted = true
+      observe(performance.now() - started)
     }
     return latest
   }
 
-  const tick = (): void => {
-    sampleNow()
+  const runAsyncPass = async (): Promise<Map<string, BoardPhase>> => {
+    const deadline = Date.now() + intervalMs * PROBE_PASS_DEADLINE_TICKS
+    let heldMs = 0
+    // The open synchronous segment, or null while an await is in flight —
+    // so a rejection thrown INTO the finally from an await bills nothing for
+    // the off-thread wait it interrupted. (An 801 ms listing failure was
+    // once reported as an 801 ms main-thread hold, on the failure mode this
+    // module now uses on purpose.)
+    let segment: number | null = performance.now()
+    const close = (): void => {
+      if (segment !== null) heldMs += performance.now() - segment
+      segment = null
+    }
+    try {
+      const listing = deps.listSessionsAsync!()
+      close()
+      const live = new Set(await listing)
+      segment = performance.now()
+      const detached = detachedTerminals(deps, live)
+      lastDetached = detached.length
+      close()
+      const pass = await runDetachedPass(deps, detached, { deadline })
+      segment = performance.now()
+      heldMs += pass.heldMs
+      latest = mergePartialPass(latest, pass, detached)
+    } catch (error) {
+      console.error('Board probe failed:', error)
+    } finally {
+      close()
+      inFlight = false
+      pending = null
+      everCompleted = true
+      observe(heldMs)
+    }
+    return latest
+  }
+
+  const sampleAsync = (): Promise<Map<string, BoardPhase>> => {
+    if (!usesAsync) return Promise.resolve(sampleNow())
+    if (inFlight) return pending ?? Promise.resolve(latest)
+    inFlight = true
+    lastSampleAt = Date.now()
+    lastDetached = 0
+    pending = runAsyncPass()
+    return pending
+  }
+
+  const settle = (): void => {
     // Nothing detached → stop burning a timer until someone asks again.
-    if (latest.size === 0 && !hasDetachedSessions(deps)) sampler.stop()
+    if (latest.size === 0 && lastDetached === 0) sampler.stop()
+  }
+
+  const tick = (): void => {
+    // A tick that lands while a pass is still in flight is simply skipped —
+    // it must not settle either, or an empty `latest` would park the sampler
+    // on a verdict no pass has reached yet.
+    if (inFlight) return
+    if (usesAsync) {
+      void sampleAsync().then(settle)
+      return
+    }
+    sampleNow()
+    settle()
   }
 
   const sampler: ProbeSampler = {
     phases: () => latest,
     sampleNow,
+    sampleAsync,
+    warm: () => {
+      sampler.start()
+      // Only a read BEFORE THE FIRST COMPLETED PASS waits. A pass outlasts
+      // the interval on a big detached fleet, so "a pass is running" is the
+      // usual state, and an all-attached fleet's map is empty for good —
+      // waiting on either from every read would hand back what the lane
+      // saved (measured: 800-900 ms per idle board read on a 900 ms listing).
+      if (everCompleted) return Promise.resolve(latest)
+      return pending ?? Promise.resolve(latest)
+    },
     start: (): void => {
       if (timer) return
-      if (Date.now() - lastSampleAt >= intervalMs) sampleNow()
+      if (Date.now() - lastSampleAt >= intervalMs) {
+        if (usesAsync) void sampleAsync().then(settle)
+        else sampleNow()
+      }
       timer = setInterval(tick, intervalMs)
       if (typeof timer === 'object' && timer !== null && 'unref' in timer) {
         ;(timer as { unref: () => void }).unref()
@@ -326,6 +602,21 @@ export function tmuxProbeDeps(runtime: {
     // treats as no signal rather than as a phase.
     listSessions: () => multiplexer()?.listSessions() ?? [],
     capturePane: (sessionName) => multiplexer()?.capture(sessionName) ?? '',
+    // The periodic tick takes these. A backend with an async runner (herdr
+    // host) answers off the main thread; one without falls through to the
+    // sync read inside the same promise, which is no worse than before. A
+    // listing that FAILS rejects — the pass logs and leaves the last map
+    // alone — rather than reading as an empty fleet.
+    listSessionsAsync: async () => {
+      const mux = multiplexer()
+      if (!mux) return []
+      return mux.listSessionsAsync ? mux.listSessionsAsync() : mux.listSessions()
+    },
+    capturePaneAsync: async (sessionName) => {
+      const mux = multiplexer()
+      if (!mux) return ''
+      return (mux.captureAsync ? await mux.captureAsync(sessionName) : mux.capture(sessionName)) ?? ''
+    },
     knownTerminalIds: runtime.knownTerminalIds,
     isAttached: runtime.isAttached,
     sessionNameFor,

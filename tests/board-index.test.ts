@@ -12,7 +12,6 @@ import {
   BOARD_EVENT_DEBOUNCE_MS,
   PROBE_INTERVAL_MS,
   createProbeSampler,
-  hasDetachedSessions,
   probeOnce,
   type ProbeDeps,
   boardSourcesFrom,
@@ -379,15 +378,6 @@ describe('probeOnce — only DETACHED panes, only phases it can prove', () => {
   })
 })
 
-describe('hasDetachedSessions', () => {
-  it('is true only when a known terminal has a session but no pty', () => {
-    const base = { listSessions: () => ['cookrew_t1'], knownTerminalIds: () => ['t1'] }
-    expect(hasDetachedSessions(probeDeps(base))).toBe(true)
-    expect(hasDetachedSessions(probeDeps({ ...base, isAttached: () => true }))).toBe(false)
-    expect(hasDetachedSessions(probeDeps({ ...base, listSessions: () => [] }))).toBe(false)
-  })
-})
-
 describe('createProbeSampler — cost discipline', () => {
   it('samples on start and caches the result between ticks', () => {
     vi.useFakeTimers()
@@ -458,5 +448,394 @@ describe('createProbeSampler — cost discipline', () => {
     expect(sampler.phases().size).toBe(0)
     sampler.stop()
     vi.useRealTimers()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// perf/tempo (2026-09-06): the probe's reach is the DETACHED SET from ONE
+// inventory per tick, and with async reads the tick forks nothing inline.
+// Before: every tick listed the panes twice (probeOnce, then a detached check)
+// and captured each detached pane synchronously on Electron main.
+// ---------------------------------------------------------------------------
+
+import { detachedTerminals, mergePartialPass, probeDetachedAsync, runDetachedPass } from '../src/main/board-index'
+
+describe('detachedTerminals — the reach', () => {
+  it('is known ∖ attached ∩ live, from the set it is handed', () => {
+    let listed = 0
+    const deps = probeDeps({
+      listSessions: () => {
+        listed += 1
+        return []
+      },
+      knownTerminalIds: () => ['attached', 'paneless', 'd1', 'd2'],
+      isAttached: (id) => id === 'attached'
+    })
+    const live = new Set(['cookrew_attached', 'cookrew_d1', 'cookrew_d2'])
+    expect(detachedTerminals(deps, live)).toEqual([
+      { terminalId: 'd1', session: 'cookrew_d1' },
+      { terminalId: 'd2', session: 'cookrew_d2' }
+    ])
+    expect(detachedTerminals(deps, new Set())).toEqual([])
+    expect(listed).toBe(0) // the inventory is the caller's, never re-read
+  })
+
+  it('probeOnce accepts a pre-read inventory and reads one itself otherwise', () => {
+    let listed = 0
+    const deps = probeDeps({
+      listSessions: () => {
+        listed += 1
+        return ['cookrew_t1']
+      },
+      knownTerminalIds: () => ['t1'],
+      capturePane: () => WORKING_PANE
+    })
+    expect(probeOnce(deps, new Set(['cookrew_t1'])).get('t1')).toBe('working')
+    expect(listed).toBe(0)
+    probeOnce(deps)
+    expect(listed).toBe(1)
+  })
+})
+
+describe('createProbeSampler — one inventory per tick', () => {
+  it('lists the panes exactly once per pass, self-stop included', () => {
+    vi.useFakeTimers()
+    let listed = 0
+    const sampler = createProbeSampler(
+      probeDeps({
+        listSessions: () => {
+          listed += 1
+          return ['cookrew_t1']
+        },
+        knownTerminalIds: () => ['t1'],
+        capturePane: () => WORKING_PANE
+      })
+    )
+    sampler.start()
+    expect(listed).toBe(1)
+    vi.advanceTimersByTime(PROBE_INTERVAL_MS * 3)
+    expect(listed).toBe(4)
+    expect(sampler.running).toBe(true)
+    sampler.stop()
+    vi.useRealTimers()
+  })
+})
+
+describe('createProbeSampler — the async tick forks nothing inline', () => {
+  const asyncDeps = (over: Partial<ProbeDeps> = {}) => {
+    const calls = { listSync: 0, captureSync: 0, listAsync: 0, captureAsync: 0 }
+    const deps = probeDeps({
+      listSessions: () => {
+        calls.listSync += 1
+        return ['cookrew_t1', 'cookrew_t2']
+      },
+      capturePane: () => {
+        calls.captureSync += 1
+        return WORKING_PANE
+      },
+      listSessionsAsync: async () => {
+        calls.listAsync += 1
+        return ['cookrew_t1', 'cookrew_t2']
+      },
+      capturePaneAsync: async (session) => {
+        calls.captureAsync += 1
+        return session === 'cookrew_t1' ? WORKING_PANE : WAITING_PANE
+      },
+      knownTerminalIds: () => ['t1', 't2', 't3'],
+      ...over
+    })
+    return { deps, calls }
+  }
+
+  it('reads the inventory and every detached pane through the async seam only', async () => {
+    const { deps, calls } = asyncDeps()
+    const held: number[] = []
+    const sampler = createProbeSampler(deps, PROBE_INTERVAL_MS, { observe: (ms) => held.push(ms) })
+    const phases = await sampler.sampleAsync()
+    expect(phases.get('t1')).toBe('working')
+    expect(phases.get('t2')).toBe('waiting')
+    expect(phases.has('t3')).toBe(false) // no pane → the ledger's row
+    expect(calls).toEqual({ listSync: 0, captureSync: 0, listAsync: 1, captureAsync: 2 })
+    expect(held).toHaveLength(1)
+    expect(held[0]).toBeGreaterThanOrEqual(0)
+  })
+
+  it('asks herdr first and captures only the panes it has no answer for', async () => {
+    const { deps, calls } = asyncDeps({ askedStatus: (id) => (id === 't1' ? 'working' : null) })
+    const phases = await probeDetachedAsync(deps, detachedTerminals(deps, new Set(['cookrew_t1', 'cookrew_t2'])))
+    expect(phases.get('t1')).toBe('working')
+    expect(phases.get('t2')).toBe('waiting')
+    expect(calls.captureAsync).toBe(1)
+  })
+
+  it('runs the periodic tick on the async reads and never stacks passes', async () => {
+    vi.useFakeTimers()
+    let release: (() => void) | null = null
+    const { deps, calls } = asyncDeps({
+      listSessionsAsync: () =>
+        new Promise<string[]>((resolve) => {
+          calls.listAsync += 1
+          release = () => resolve(['cookrew_t1'])
+        })
+    })
+    const sampler = createProbeSampler(deps)
+    sampler.start() // kicks one async pass
+    expect(calls.listAsync).toBe(1)
+    vi.advanceTimersByTime(PROBE_INTERVAL_MS * 3) // three ticks while the first pass is still in flight
+    expect(calls.listAsync).toBe(1) // single-flight spans the whole awaited pass
+    expect(calls.listSync).toBe(0)
+    release!()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(sampler.phases().get('t1')).toBe('working')
+    vi.advanceTimersByTime(PROBE_INTERVAL_MS)
+    expect(calls.listAsync).toBe(2)
+    sampler.stop()
+    vi.useRealTimers()
+  })
+
+  it('parks itself from the same inventory when nothing is detached', async () => {
+    vi.useFakeTimers()
+    const { deps, calls } = asyncDeps({ listSessionsAsync: async () => [] })
+    const sampler = createProbeSampler(deps)
+    sampler.start()
+    await vi.advanceTimersByTimeAsync(PROBE_INTERVAL_MS)
+    expect(sampler.running).toBe(false)
+    expect(calls.listSync).toBe(0)
+    vi.useRealTimers()
+  })
+})
+
+describe('createProbeSampler — a read can wait for the pass it kicked', () => {
+  it('warm() resolves with the fresh pass, not the map from before the park', async () => {
+    let release: (() => void) | null = null
+    let listed = 0
+    const sampler = createProbeSampler(
+      probeDeps({
+        listSessionsAsync: () =>
+          new Promise<string[]>((resolve) => {
+            listed += 1
+            release = () => resolve(['cookrew_t1'])
+          }),
+        capturePaneAsync: async () => WORKING_PANE,
+        knownTerminalIds: () => ['t1']
+      })
+    )
+    expect(sampler.phases().size).toBe(0)
+    const warmed = sampler.warm()
+    expect(listed).toBe(1)
+    expect(sampler.running).toBe(true)
+    release!()
+    expect((await warmed).get('t1')).toBe('working')
+    sampler.stop()
+  })
+
+  it('a failed pass bills only its synchronous segments, never the wait it was interrupted in', async () => {
+    const held: number[] = []
+    const failAfter = (ms: number): Promise<string[]> =>
+      new Promise((_resolve, reject) => setTimeout(() => reject(new Error('herdr pane list failed')), ms))
+    const sampler = createProbeSampler(
+      probeDeps({ listSessionsAsync: () => failAfter(120), knownTerminalIds: () => ['t1'] }),
+      PROBE_INTERVAL_MS,
+      { observe: (ms) => held.push(ms) }
+    )
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      const started = performance.now()
+      await sampler.sampleAsync()
+      expect(performance.now() - started).toBeGreaterThanOrEqual(100) // the wait happened
+      expect(held).toHaveLength(1)
+      expect(held[0]).toBeLessThan(10) // but the probe held the thread for single-digit ms
+    } finally {
+      spy.mockRestore()
+    }
+    // The same for a read that fails mid-pass.
+    const held2: number[] = []
+    const sampler2 = createProbeSampler(
+      probeDeps({
+        listSessionsAsync: async () => ['cookrew_t1'],
+        capturePaneAsync: () => new Promise((_r, reject) => setTimeout(() => reject(new Error('read failed')), 120)),
+        knownTerminalIds: () => ['t1']
+      }),
+      PROBE_INTERVAL_MS,
+      { observe: (ms) => held2.push(ms) }
+    )
+    const spy2 = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      await sampler2.sampleAsync()
+      expect(held2[0]).toBeLessThan(10)
+    } finally {
+      spy2.mockRestore()
+    }
+  })
+
+  it('a listing that fails leaves the last map alone and counts as a completed attempt', async () => {
+    let fail = false
+    const sampler = createProbeSampler(
+      probeDeps({
+        listSessionsAsync: async () => {
+          if (fail) throw new Error('herdr pane list failed')
+          return ['cookrew_t1']
+        },
+        capturePaneAsync: async () => WORKING_PANE,
+        knownTerminalIds: () => ['t1']
+      })
+    )
+    expect((await sampler.sampleAsync()).get('t1')).toBe('working')
+    fail = true
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      expect((await sampler.sampleAsync()).get('t1')).toBe('working') // not blanked
+      expect(spy).toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+    }
+    const started = performance.now()
+    await sampler.warm()
+    expect(performance.now() - started).toBeLessThan(50)
+    sampler.stop()
+  })
+
+  it('a wedged backend reports a partial pass at the deadline instead of holding the latch', async () => {
+    const { PROBE_PASS_DEADLINE_TICKS } = await import('../src/main/board-index')
+    let reads = 0
+    let clock = 1_800_000_000_000
+    const realNow = Date.now
+    Date.now = () => clock
+    try {
+      const sampler = createProbeSampler(
+        probeDeps({
+          listSessionsAsync: async () => ['cookrew_a', 'cookrew_b', 'cookrew_c'],
+          capturePaneAsync: async () => {
+            reads += 1
+            clock += 10 * PROBE_PASS_DEADLINE_TICKS + 1 // each read overruns the whole deadline
+            return WORKING_PANE
+          },
+          knownTerminalIds: () => ['a', 'b', 'c']
+        }),
+        10
+      )
+      const phases = await sampler.sampleAsync()
+      expect(reads).toBe(1)
+      expect(phases.size).toBe(1)
+      expect(sampler.running).toBe(false)
+    } finally {
+      Date.now = realNow
+    }
+  })
+})
+
+describe('createProbeSampler — review round two', () => {
+  const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+  it('warm() does not wait on a running pass once any pass has completed — even with an empty fleet', async () => {
+    // The all-attached idle state: the map is legitimately empty forever and
+    // the sampler self-parks. A read must not wait on the listing it kicks.
+    let listings = 0
+    let gate: (() => void) | null = null
+    const sampler = createProbeSampler(
+      probeDeps({
+        listSessionsAsync: () =>
+          new Promise<string[]>((resolve) => {
+            listings += 1
+            if (listings === 1) resolve([])
+            else gate = () => resolve([])
+          }),
+        capturePaneAsync: async () => WORKING_PANE,
+        knownTerminalIds: () => ['t1'],
+        isAttached: () => true
+      }),
+      5
+    )
+    expect((await sampler.sampleAsync()).size).toBe(0) // first pass completed: nothing detached
+    await sleep(10) // past the interval, so the next start() kicks a pass
+    const started = performance.now()
+    const warmed = await sampler.warm()
+    expect(performance.now() - started).toBeLessThan(50)
+    expect(warmed.size).toBe(0)
+    expect(listings).toBe(2) // the read kicked a listing, and did not wait on it
+    gate!()
+    await sleep(0)
+    sampler.stop()
+  })
+
+  it('warm() does not wait on a running pass when there is something to show', async () => {
+    let gate: (() => void) | null = null
+    let passes = 0
+    const sampler = createProbeSampler(
+      probeDeps({
+        listSessionsAsync: async () => ['cookrew_t1'],
+        capturePaneAsync: () =>
+          new Promise<string>((resolve) => {
+            passes += 1
+            if (passes === 1) resolve(WORKING_PANE)
+            else gate = () => resolve(WAITING_PANE)
+          }),
+        knownTerminalIds: () => ['t1']
+      })
+    )
+    expect((await sampler.sampleAsync()).get('t1')).toBe('working')
+    const second = sampler.sampleAsync() // in flight, held at the read
+    await sleep(0)
+    // Never-ran is the ONLY state that waits: pinned above ("warm() resolves
+    // with the fresh pass"); here a completed pass exists.
+    const started = performance.now()
+    const warmed = await sampler.warm()
+    expect(performance.now() - started).toBeLessThan(50)
+    expect(warmed.get('t1')).toBe('working') // the previous pass, not a wait on the running one
+    gate!()
+    expect((await second).get('t1')).toBe('waiting')
+    sampler.stop()
+  })
+
+  it('a deadline-truncated pass keeps the previous phase of every terminal it did not reach', async () => {
+    const detached = [
+      { terminalId: 'a', session: 'cookrew_a' },
+      { terminalId: 'b', session: 'cookrew_b' },
+      { terminalId: 'c', session: 'cookrew_c' }
+    ]
+    const previous = new Map<string, 'working' | 'waiting'>([
+      ['a', 'working'],
+      ['b', 'working'],
+      ['c', 'waiting']
+    ])
+    // a is reached and now idle (no phase); b, c are never reached.
+    const merged = mergePartialPass(
+      previous,
+      { phases: new Map(), reached: 1, heldMs: 0 },
+      detached
+    )
+    expect(merged.has('a')).toBe(false)
+    expect(merged.get('b')).toBe('working')
+    expect(merged.get('c')).toBe('waiting')
+    // A complete pass replaces wholesale.
+    const complete = mergePartialPass(previous, { phases: new Map(), reached: 3, heldMs: 0 }, detached)
+    expect(complete.size).toBe(0)
+  })
+
+  it('reports its main-thread hold as the synchronous segments, never the awaits', async () => {
+    const held: number[] = []
+    const sampler = createProbeSampler(
+      probeDeps({
+        listSessionsAsync: async () => ['cookrew_a', 'cookrew_b', 'cookrew_c'],
+        capturePaneAsync: () => new Promise<string>((resolve) => setTimeout(() => resolve(WORKING_PANE), 25)),
+        knownTerminalIds: () => ['a', 'b', 'c']
+      }),
+      PROBE_INTERVAL_MS,
+      { observe: (ms) => held.push(ms) }
+    )
+    const started = performance.now()
+    await sampler.sampleAsync()
+    const wall = performance.now() - started
+    expect(wall).toBeGreaterThanOrEqual(70)
+    expect(held).toHaveLength(1)
+    expect(held[0]).toBeGreaterThanOrEqual(0)
+    expect(held[0]).toBeLessThan(wall / 2)
+    const pass = await runDetachedPass(
+      probeDeps({ capturePaneAsync: async () => WORKING_PANE }),
+      [{ terminalId: 'a', session: 'cookrew_a' }]
+    )
+    expect(pass.reached).toBe(1)
+    expect(pass.heldMs).toBeGreaterThanOrEqual(0)
+    expect(await probeDetachedAsync(probeDeps({ capturePaneAsync: async () => WORKING_PANE }), [])).toEqual(new Map())
   })
 })

@@ -7,6 +7,7 @@ import {
   bucketStorage,
   judge,
   latencyFromEvents,
+  loopFromHealth,
   orphanSidecars,
   parseEtime,
   parsePsTable,
@@ -249,5 +250,40 @@ describe('served sessions — a policy beside the size', () => {
     expect(table).toContain(BUCKET_POLICY.backups)
     expect(BUCKET_POLICY['served-sessions']).toMatch(/30 d/)
     expect(BUCKET_POLICY.backups).toMatch(/never removed/)
+  })
+})
+
+describe('loopFromHealth — the row the memory history keeps', () => {
+  const window = { at: 1, elapsedMs: 60_000, samples: 2950, p50: 0.5, p95: 12.1, p98: 40.2, max: 2605, elu: 0.31 }
+
+  it('prefers the last complete window and carries the loop maxima', () => {
+    const row = loopFromHealth({
+      loop: { lastMinute: window, current: { ...window, p95: 999 }, windows: [] },
+      loops: { boardProbe: { count: 20, p50: 88, p95: 2400, max: 5100, lastMs: 90, lastAt: 3 } },
+      residency: { store: 3, registry: 3 }
+    })
+    expect(row).toEqual({
+      window: 'lastMinute',
+      samples: 2950,
+      p50: 0.5,
+      p95: 12.1,
+      p98: 40.2,
+      max: 2605,
+      elu: 0.31,
+      loops: { boardProbe: { count: 20, p95: 2400, max: 5100 } },
+      residency: { store: 3, registry: 3 }
+    })
+  })
+
+  it('falls back to the filling window in the first minute after a restart', () => {
+    const row = loopFromHealth({ loop: { lastMinute: null, current: window, windows: [] } })
+    expect(row?.window).toBe('current')
+    expect(row?.loops).toEqual({})
+  })
+
+  it('is null for anything that is not a health snapshot', () => {
+    expect(loopFromHealth(null)).toBeNull()
+    expect(loopFromHealth({ error: 'not found' })).toBeNull()
+    expect(loopFromHealth({ loop: { current: { p95: 'fast' } } })).toBeNull()
   })
 })
