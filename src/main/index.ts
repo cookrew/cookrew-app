@@ -56,8 +56,12 @@ import {
   uncoveredCertHosts,
   rotateActivePairingToken,
   activePairingTokenValue,
-  activeCertFingerprint
+  activeCertFingerprint,
+  trustedOrigins,
+  allowedCompanionOrigins
 } from './mobile-server'
+import { createDesktopCert, type DesktopCert } from './desktop-cert'
+import { NameCertStore } from './name-cert-store'
 import {
   activeBrowserTab,
   AgentRole,
@@ -651,6 +655,32 @@ const relayServing =
  * exactly as on the LAN, and none of the three has anything left to decide.
  */
 const admittedDevices = createAdmittedDeviceStore()
+
+/**
+ * REACH v2.1 — THIS MAC'S OWN TRUSTED CERTIFICATE.
+ *
+ * The key is minted here and never leaves; cookrew.dev runs the ACME order and
+ * answers a chain for `*.<deviceId>.d.cookrew.dev`. Held at module scope
+ * because four surfaces read it and none of them hold the others' state: the
+ * HTTPS listener (by SNI), the endpoint list `cookrew mobile` prints, the
+ * origins the CORS gate allows, and the reach card's `trusted` list.
+ *
+ * `ensure` is only ever called on a timer and at boot, and it answers rather
+ * than throws — a Mac with no account, no internet or a registry that certifies
+ * no names keeps its self-signed certificate and everything it always did.
+ */
+const nameCertificate: DesktopCert = createDesktopCert({
+  store: new NameCertStore(),
+  // The one authenticated call, with the session checked before the socket.
+  // The token stays inside Accounts; what comes back is a Response.
+  fetch: (pathname, init) => accounts.authedResponse(pathname, init),
+  deviceId: () => accounts.account()?.deviceId ?? null,
+  // A new chain means new trusted origins, and those are NOT in the signed
+  // card — nothing else would notice that a Mac which published "no names"
+  // now has some.
+  onIssued: () => void reachPublisher?.republish('certificate issued').catch(() => undefined),
+  log: (message: string) => console.error(`[cookrew] ${message}`)
+})
 
 /**
  * THE ONE URL, for both surfaces that show it.
@@ -3995,7 +4025,12 @@ const browserManager = new HeadlessBrowserManager({
 const browserCast = createBrowserCast({
   getInstance: (browserId) => browserManager.get(browserId),
   enabled: interactiveBrowserEnabled,
-  desktopToken: () => desktopBrowserStreamToken
+  desktopToken: () => desktopBrowserStreamToken,
+  // REACH v2.1 — the companion at cookrew.dev keeps its address while its data
+  // plane moves onto this Mac's own name, so its Origin is the registry's.
+  // Same-host alone would refuse it and the browser card would never stream
+  // over the fast path. Exact origins only; see companion-cors.ts.
+  allowedOrigins: () => allowedCompanionOrigins(registryOrigin())
 })
 
 const headlessBrowserCommands = new HeadlessBrowserCommandEngine({
@@ -4304,6 +4339,9 @@ app.whenReady().then(() => {
   startMobileServer({
     servedSlug: handleServedSlug,
     store,
+    // Serves the CA-issued chain by SNI for this Mac's names, keeps the
+    // self-signed one as the default, and spells the printed URLs.
+    nameCert: nameCertificate,
     // Importing a served team from the phone: the same operations the desktop
     // sheet drives, over the mobile API.
     serve: serveOps,
@@ -4542,7 +4580,12 @@ app.whenReady().then(() => {
     // a served team, not this Mac's canvas.)
     relay: () => canvasLink.held(),
     workspaces: () => store.list().workspaces.map((w) => ({ id: w.id, name: w.name })),
-    register: (workspaces, reach) => accounts.registerDesktop(workspaces, reach),
+    // The origins a browser will trust for this Mac right now — empty until a
+    // chain is actually held, because the phone reads this list as "these load
+    // without a warning".
+    trusted: () => trustedOrigins(),
+    register: (workspaces, reach, trusted) =>
+      accounts.registerDesktop(workspaces, reach, trusted),
     log: (message) => console.error(`[cookrew] ${message}`)
   })
   // The line's state IS half the card, so a line that comes up or goes down
@@ -4554,6 +4597,12 @@ app.whenReady().then(() => {
   // The addresses move without anyone asking: a laptop lid, a new Wi-Fi, a
   // Tailscale that finally came up. Polling is the only honest way to notice.
   reachPublisher.watch()
+
+  // The certificate, once the account and the addresses are known. Best
+  // effort and never awaited: an order is seconds of polling at the registry
+  // and a boot must not wait on cookrew.dev for any of them.
+  void nameCertificate.ensure('boot').catch(() => undefined)
+  nameCertificate.watch()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

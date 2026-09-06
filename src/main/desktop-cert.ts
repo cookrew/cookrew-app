@@ -69,6 +69,12 @@ export interface DesktopCertDeps {
   readonly zone?: string
   readonly now?: () => number
   readonly log?: (message: string) => void
+  /**
+   * A chain just landed. The reach card has to be republished — the trusted
+   * origins are not in the signed card, so nothing else would notice that a
+   * Mac which published "no names" now has some.
+   */
+  readonly onIssued?: (cert: HeldCert) => void
   /** Test seams: the sleep between polls and the renewal timer. */
   readonly wait?: (ms: number) => Promise<void>
   readonly pollBackoffMs?: readonly number[]
@@ -163,6 +169,12 @@ export function createDesktopCert(deps: DesktopCertDeps): DesktopCert {
     announced = null
     quietUntil = 0
     note(`names: a certificate for ${name} is held until ${new Date(saved.notAfter).toISOString()}`)
+    try {
+      deps.onIssued?.(saved)
+    } catch (error) {
+      // Telling the world is not part of holding the certificate.
+      note(`names: could not announce the new certificate (${(error as Error).message})`)
+    }
     return 'issued'
   }
 

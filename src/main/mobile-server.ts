@@ -580,9 +580,8 @@ export function trustedOrigins(): string[] {
  * certificate is held, their trusted names. Nothing is loosened for anybody
  * else; a suffix match is how `notcookrew.dev` gets in.
  */
-export function allowedCompanionOrigins(deps: Pick<MobileServerDeps, 'identity'>): string[] {
-  const registry = deps.identity?.registryOrigin() ?? ''
-  return [registry, ...mobileSelfOrigins()].filter((origin) => origin.length > 0)
+export function allowedCompanionOrigins(registryOrigin: string): string[] {
+  return [registryOrigin, ...mobileSelfOrigins()].filter((origin) => origin.length > 0)
 }
 
 /**
@@ -917,7 +916,9 @@ async function handle(
    * header names, identical for every path here, so answering it early
    * reveals nothing. See companion-cors.ts for the allow-list rule.
    */
-  if (applyCompanionCors(request, response, allowedCompanionOrigins(deps))) return
+  if (applyCompanionCors(request, response, allowedCompanionOrigins(deps.identity?.registryOrigin() ?? ''))) {
+    return
+  }
 
   // FIRST, and before any route can read them: the caller's own
   // `x-cookrew-device` headers are taken off the request whatever they say, so
