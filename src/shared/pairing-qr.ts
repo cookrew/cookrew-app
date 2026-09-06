@@ -33,7 +33,7 @@ export const PAIRING_COPY = {
   NONE: 'No address to show yet — the phone server is still starting.',
   /** The same sentence `cookrew mobile` ends with, for the same reason. */
   ROTATE:
-    'This QR carries the pairing key. `cookrew mobile --rotate` replaces it and unpairs every phone.'
+    'This QR carries the pairing token. `cookrew mobile --rotate` replaces it and unpairs every phone.'
 } as const
 
 export type PairingPopoutView = {
