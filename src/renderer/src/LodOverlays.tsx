@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type RefObject } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, type MutableRefObject } from 'react'
 import type { BrowserNodeData, TerminalNodeData } from '../../shared/model'
 import type { TerminalActivity } from '../../shared/turn'
 import { isRemoteMode } from './api'
@@ -25,8 +25,19 @@ import { BrowserLayer, type InteractiveBrowserCapability } from './BrowserLayer'
  * that changes nothing costs one small render and two bail-outs.
  *
  * Canvas still needs the winner — for the dock's browser target and to hide
- * the clipboard bar under a full view — and gets it by callback, one commit
- * later. Nothing the user can perceive rides on that commit.
+ * the clipboard bar under a full view — and gets it by callback from a LAYOUT
+ * effect, so Canvas re-renders inside the same commit and no painted frame
+ * shows the stale winner.
+ *
+ * Two invariants, both load-bearing and both invisible by construction:
+ *   - NOT memoised. Canvas sets the refs below and starts the animation
+ *     without rendering; this component must re-render whenever Canvas does
+ *     (any state change) OR the viewport moves, and a memo would remove the
+ *     first of those. That is what guarantees the phone's pinned full view
+ *     releases the moment zoomBack clears the refs.
+ *   - NOT conditionally mounted. The one-shot arrival bypass is tracked here
+ *     while `arrivedId` lives in Canvas; an unmount would re-arm the bypass
+ *     without clearing arrivedId — the shape of the 2026-08-27 remount loop.
  */
 interface LodOverlaysProps {
   terminals: TerminalNodeData[]
@@ -38,8 +49,8 @@ interface LodOverlaysProps {
    * the viewport frames that follow — the same moments the old Canvas-level
    * call read them.
    */
-  deliberateOpen: RefObject<boolean>
-  focused: RefObject<string | null>
+  deliberateOpen: MutableRefObject<boolean>
+  focused: MutableRefObject<string | null>
   arrivedId: string | null
   /** The one-shot arrival bypass has been used up; Canvas clears arrivedId. */
   onArrivalConsumed: () => void
@@ -78,12 +89,16 @@ export function LodOverlays({
   // in the corner while the focused one filled the stage.
   const lod = useLodLayout(
     overlayNodes,
-    !isRemoteMode() || deliberateOpen.current === true,
+    !isRemoteMode() || deliberateOpen.current,
     focused.current,
     arrivedId
   )
 
-  useEffect(() => {
+  // Layout effect, not passive: a passive one runs after paint, and that one
+  // frame would show the clipboard bar over a fresh full view and the dock in
+  // the wrong state on a browser open. Winner changes are rare, so the
+  // synchronous Canvas re-render costs nothing on the per-frame path.
+  useLayoutEffect(() => {
     onPrimaryChange(lod.primaryId)
   }, [lod.primaryId, onPrimaryChange])
 

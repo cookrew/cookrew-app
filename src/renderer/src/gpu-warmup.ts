@@ -3,7 +3,8 @@
  *
  * The first WebGL context a renderer process creates is expensive — it brings
  * up the GPU channel, ANGLE and the shader cache — and every one after it is
- * not. Measured in the running desktop app: 76ms for the first `getContext`,
+ * not. Not run on the phone, which never uses WebGL (demo mode in a plain
+ * browser tab does run it; harmless, nothing there to benefit). Measured in the running desktop app: 76ms for the first `getContext`,
  * 5ms for the next. xterm's WebGL addon creates its context when a card's
  * full view mounts, so without this the first zoom-to-card after every launch
  * spends that inside the mount, on the main thread, after the animation has

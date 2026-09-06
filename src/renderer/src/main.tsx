@@ -34,8 +34,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   </React.StrictMode>
 )
 
-// Desktop only: the first WebGL context in this process costs ~75ms and the
+// Not on the phone: the first WebGL context in this process costs ~75ms and the
 // terminal overlay's renderer will need one on the first zoom-to-card. Take
 // that hit at idle, after first paint, instead (gpu-warmup.ts). The phone
-// never uses WebGL (see TerminalOverlay), so there is nothing to warm there.
+// never uses WebGL (see TerminalOverlay), so there is nothing to warm there;
+// demo mode in a browser tab also runs it, harmlessly.
 if (!isRemoteMode()) scheduleWebglWarmup()
