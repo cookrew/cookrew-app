@@ -125,7 +125,7 @@ import { makeCallRun } from './call-run'
 import { RecoverableStore, planRecovery } from './recoverable'
 import { EventLog } from './event-log'
 import { installProcessGuards } from './process-guards'
-import { SessionRegistry } from './session-registry'
+import { createSessionDrain, SESSION_DRAIN_TICK_MS } from './session-drain'
 import { LazyTerminalAttachments } from './lazy-terminal'
 import { planWorkspaceSwitch } from './workspace-switch'
 import { SwitchRunner } from './switch-runner'
@@ -2802,47 +2802,25 @@ function deliverPendingInject(t: TerminalNodeData): void {
  * liveness facts are read from where they already live, so there is still
  * nothing to set and nothing to leak.
  */
-const sessions = new SessionRegistry<{ id: string }>({
-  // One window today; step 4 turns this into a per-window count.
-  boundWindows: (id) => (id === store.focusedId ? 1 : 0),
+const drain = createSessionDrain({
+  store,
   // A phone or SSE reader watching any of this workspace's terminals.
-  subscribers: (id) =>
-    store.terminalIdsOf(id).reduce((n, tid) => n + sessionSync.subscriberCount(tid), 0),
+  subscriberCount: (tid) => sessionSync.subscriberCount(tid),
   // Work in flight: a terminal mid-turn is work, whoever is looking.
-  // A terminal mid-turn is work, whoever is looking — plus any remote call
-  // this workspace is currently serving, which the inferred signals cannot see
-  // during a cold fork's boot.
-  inFlightWork: (id) =>
-    store.terminalIdsOf(id).filter(hasLiveWork).length + callsInFlight.count(id),
-  hydrate: (id) => ({ id }),
-  release: (id) => {
-    // Order matters, and the comment used to lie about it: detachWorkspace
-    // RETURNS the ids, so releasing inside that loop stopped the watches
-    // AFTER the PTYs had already gone. The switch path has it right — release
-    // and untrack first, then detach — so a watch can never re-arm against a
-    // terminal being torn out from under it. Read the set, then tear down.
-    const held = store.terminalIdsOf(id)
-    for (const tid of held) {
-      sessionSync.release(tid)
-      turns.untrack(tid)
-    }
-    ptys.detachWorkspace(id)
-    store.releaseSession(id)
+  hasLiveWork,
+  // Plus any remote call this workspace is currently serving, which the
+  // inferred signals cannot see during a cold fork's boot.
+  callsInFlight: (id) => callsInFlight.count(id),
+  releaseTerminal: (tid) => {
+    sessionSync.release(tid)
+    turns.untrack(tid)
   },
-  now: () => Date.now()
+  detachWorkspace: (id) => ptys.detachWorkspace(id)
 })
-
-/** How often the drain looks; a session must be dead across two of these. */
-const SESSION_DRAIN_TICK_MS = 5_000
+const sessions = drain.sessions
 
 const sessionDrain = setInterval(() => {
-  loopHealth.timed('sessionDrain', () => {
-    // Materialise whatever the store is holding, then let liveness decide. The
-    // registry never PINS anything — get() deliberately does not clear the death
-    // clock, so a session that is merely resident still drains.
-    for (const id of store.resident()) sessions.get(id)
-    sessions.drainTick()
-  })
+  loopHealth.timed('sessionDrain', () => drain.tick())
 }, SESSION_DRAIN_TICK_MS)
 sessionDrain.unref?.()
 

@@ -160,7 +160,8 @@ export class WorkspaceStore extends EventEmitter {
     return this.registry.workspaces.map((w) => w.slug).filter((s): s is string => !!s)
   }
 
-  private isResident(id: string): boolean {
+  /** Whether the store is holding this workspace in memory. A read, never a promise to keep it. */
+  isResident(id: string): boolean {
     return this.hydrated.has(id)
   }
 
