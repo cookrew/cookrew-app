@@ -53,6 +53,8 @@ const api = {
   accountLock: () => ipcRenderer.invoke('account:lock'),
   /** Also renews a session that died, since the password is in hand once. */
   accountUnlock: (password: string) => ipcRenderer.invoke('account:unlock', password),
+  /** The session ended: trade the password for a new one, no ladder. */
+  accountResume: (password: string) => ipcRenderer.invoke('account:resume', password),
   accountProfile: () => ipcRenderer.invoke('account:profile'),
   accountDevices: () => ipcRenderer.invoke('account:devices'),
   accountRevoke: (deviceId: string) => ipcRenderer.invoke('account:revoke', deviceId),
@@ -123,6 +125,15 @@ const api = {
   },
   servingCallers: () => ipcRenderer.invoke('serving:callers'),
   /** Main locked or unlocked the owner's view; the overlay follows this. */
+  /**
+   * The account file changed in main — most importantly, a session cookrew.dev
+   * refused. The surface re-reads the status and opens its password prompt.
+   */
+  onAccountChanged: (cb: () => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('account:changed', listener)
+    return () => ipcRenderer.removeListener('account:changed', listener)
+  },
   onAccountLocked: (cb: (locked: boolean) => void) => {
     const listener = (_e: unknown, locked: boolean): void => cb(locked)
     ipcRenderer.on('account:locked', listener)

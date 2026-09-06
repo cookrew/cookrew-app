@@ -15,6 +15,7 @@ import { ClaimSheet } from '../src/renderer/src/account/ClaimSheet'
 import { LockScreen } from '../src/renderer/src/account/LockScreen'
 import { SecurityCard } from '../src/renderer/src/account/SecurityCard'
 import { ProfileSheet } from '../src/renderer/src/account/ProfileSheet'
+import { ResumeSession } from '../src/renderer/src/account/ResumeSession'
 import { ACCOUNT_COPY } from '../src/renderer/src/account/account-store'
 
 /**
@@ -347,5 +348,65 @@ describe('the profile sheet (D4)', () => {
     expect(html).toContain('Names and ids only leave this Mac')
     // Recorded program decision: reachability defaults ON.
     expect(html).toContain('checked=""')
+  })
+})
+
+/**
+ * THE SENTENCE NEVER COMES ALONE.
+ *
+ * The live bug in one line: "Your session ended. Type your password once and
+ * this carries on." was on screen with nowhere to type it, because
+ * `sessionExpired` was derived from the token's clock and the surface had no
+ * field to offer even when it was true. So the invariant asserted here is not
+ * "the resume card renders" — it is that WHEREVER that sentence appears, a
+ * password input appears with it.
+ */
+const saysSessionEnded = (html: string): boolean => html.includes(ACCOUNT_COPY.SESSION_ENDED)
+const offersAPassword = (html: string): boolean => html.includes('type="password"')
+
+describe('a session cookrew.dev threw away is answerable on screen', () => {
+  it('the resume card is the sentence AND the field, never one of them', () => {
+    const html = renderToStaticMarkup(<ResumeSession onResumed={() => undefined} />)
+    expect(saysSessionEnded(html)).toBe(true)
+    expect(offersAPassword(html)).toBe(true)
+    expect(html).toContain('CARRY ON')
+  })
+
+  it('the profile sheet grows the field the moment the session is expired', () => {
+    const before = renderToStaticMarkup(
+      <ProfileSheet status={status()} onClose={() => undefined} onStatus={() => undefined} />,
+    )
+    expect(saysSessionEnded(before)).toBe(false)
+
+    const after = renderToStaticMarkup(
+      <ProfileSheet
+        status={status({ sessionExpired: true })}
+        onClose={() => undefined}
+        onStatus={() => undefined}
+      />,
+    )
+    expect(saysSessionEnded(after)).toBe(true)
+    expect(offersAPassword(after)).toBe(true)
+  })
+
+  it('carries the field on EVERY tab, not only the one it was noticed on', () => {
+    for (const tab of ['PROFILE', 'DEVICES', 'SECURITY', 'WORKSPACES'] as const) {
+      const html = renderToStaticMarkup(
+        <ProfileSheet
+          status={status({ sessionExpired: true })}
+          initialTab={tab}
+          onClose={() => undefined}
+          onStatus={() => undefined}
+        />,
+      )
+      expect(saysSessionEnded(html), `${tab} says it`).toBe(true)
+      expect(offersAPassword(html), `${tab} offers a field`).toBe(true)
+    }
+  })
+
+  it('the security card alone never says it — it has no field to offer', () => {
+    // The guarantee that makes the invariant hold: the sentence lives in
+    // ResumeSession and nowhere else, so no card can print it on its own.
+    expect(saysSessionEnded(card({ sessionExpired: true }))).toBe(false)
   })
 })

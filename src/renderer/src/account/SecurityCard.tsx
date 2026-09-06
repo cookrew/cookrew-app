@@ -54,6 +54,7 @@ export function SecurityCard({
   lockAfterMs,
   recoveryCodesSavedAt,
   recoveryCodesLeft = null,
+  sessionExpired = false,
   problem = null,
   onLockAfterMs,
   onLockNow,
@@ -63,6 +64,11 @@ export function SecurityCard({
   lockAfterMs: number
   recoveryCodesSavedAt: number | null
   recoveryCodesLeft?: number | null
+  /**
+   * cookrew.dev has thrown this Mac's session away. The card stops reading
+   * factors it will only be refused, and the caller shows the resume field.
+   */
+  sessionExpired?: boolean
   /** A failure from the actions the parent owns (the lock, the codes file). */
   problem?: string | null
   onLockAfterMs: (ms: number) => void
@@ -83,14 +89,17 @@ export function SecurityCard({
 
   const readFactors = useCallback(() => {
     const call = cookrew().accountFactors
-    if (!call) return
+    // BACK OFF WHILE THE SESSION IS DEAD. /v2/me answers 401 until the owner
+    // resumes, and a row that redraws its error on every mount is noise on top
+    // of the one sentence that can actually be acted on.
+    if (!call || sessionExpired) return
     void call()
       .then((result) => {
         if (result.ok) setFactors(result.value)
         else setError(refusedSentence(DOING.FACTORS, result, username))
       })
       .catch((err: unknown) => setError(problemSentence(DOING.FACTORS, err)))
-  }, [username])
+  }, [username, sessionExpired])
 
   useEffect(readFactors, [readFactors])
 

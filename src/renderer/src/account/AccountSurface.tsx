@@ -5,6 +5,7 @@ import { AccountAvatar } from './Avatar'
 import { ClaimSheet } from './ClaimSheet'
 import { LockScreen } from './LockScreen'
 import { ProfileSheet, type ProfileTab } from './ProfileSheet'
+import { ResumeSession } from './ResumeSession'
 import { SecurityCard } from './SecurityCard'
 import { securityActions } from './security-actions'
 
@@ -64,8 +65,15 @@ export function useAccountSurface(): AccountSurface {
   useEffect(() => {
     if (!supported) return
     refresh()
-    const off = cookrew().onAccountLocked?.(() => refresh())
-    return off
+    const offLock = cookrew().onAccountLocked?.(() => refresh())
+    // THE ACCOUNT CAN CHANGE WITHOUT A CLICK HERE — a password changed on the
+    // web ends this session, and nothing local would notice. Main pushes; this
+    // re-reads, and the resume field appears on its own.
+    const offChanged = cookrew().onAccountChanged?.(() => refresh())
+    return () => {
+      offLock?.()
+      offChanged?.()
+    }
   }, [supported, refresh])
 
   // A DEVICE IS ASKING (D6). The queue changed, or the owner clicked the
@@ -135,11 +143,16 @@ export function useAccountSurface(): AccountSurface {
       {sheet === 'security' && status?.username && (
         <div className="gs-scrim cr-sheet" role="dialog" aria-modal="true" aria-label="Security">
           <div className="gs-sheet gs-small cr-acct-sheet">
+            {/* The card's own rows read /v2/me. If cookrew.dev has thrown this
+                session away, the way back is here, above them — never a
+                sentence with nowhere to answer it. */}
+            {status.sessionExpired && <ResumeSession onResumed={setStatus} />}
             <SecurityCard
               username={status.username}
               lockAfterMs={status.lockAfterMs}
               recoveryCodesSavedAt={status.recoveryCodesSavedAt}
               recoveryCodesLeft={status.recoveryCodesLeft}
+              sessionExpired={status.sessionExpired}
               problem={problem}
               {...securityActions(setStatus, () => setSheet('none'), setProblem)}
             />
