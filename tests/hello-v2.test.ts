@@ -4,7 +4,17 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createAdmittedDeviceStore } from '../src/main/admitted-devices'
 import { verifyWithDevice } from '../src/main/account-v2'
 import { helloAnswerV2 } from '../src/main/device-hello'
-import { HELLO_V2_CONTEXT, helloMessageV2, publishedRequestOrigin } from '../src/shared/hello-proof'
+import {
+  HELLO_SKEW_MS,
+  HELLO_V2_CONTEXT,
+  helloMessageV2,
+  publishedRequestOrigin
+} from '../src/shared/hello-proof'
+import {
+  HELLO_SKEW_MS as REGISTRY_SKEW_MS,
+  HELLO_V2_PREFIX,
+  helloMessageV2 as registryMessageV2
+} from '../registry/src/hello-verify'
 import { handleIdentityRoutes, type MobileIdentityDeps } from '../src/main/mobile-identity-routes'
 import { fakeAccount, tempBase } from './support/idv2'
 
@@ -231,5 +241,26 @@ describe('GET /api/hello over the wire', () => {
   it('does not Host-pin version 1 — an old phone keeps working', async () => {
     const answered = await ask(`?nonce=${nonce}`, 'somewhere.else.test')
     expect(answered.status).toBe(200)
+  })
+})
+
+describe('the two halves spell the same message', () => {
+  /**
+   * The Mac signs with src/shared and the registry verifies with its own copy,
+   * because the registry bundles alone and imports nothing outside itself. Two
+   * copies is two chances to drift, and a drift here is not a crash: it is
+   * every live switch quietly failing as `bad_signature`.
+   */
+  it('byte for byte, and to the same skew allowance', () => {
+    expect(HELLO_V2_PREFIX).toBe(HELLO_V2_CONTEXT)
+    expect(REGISTRY_SKEW_MS).toBe(HELLO_SKEW_MS)
+    for (const [deviceId, origin, at, spent] of [
+      ['dev', 'https://mac.test', 1, 'n'],
+      [account.deviceId, ORIGIN, NOW, nonce]
+    ] as const) {
+      expect(registryMessageV2(deviceId, origin, at, spent)).toBe(
+        helloMessageV2(deviceId, origin, at, spent)
+      )
+    }
   })
 })
