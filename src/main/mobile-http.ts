@@ -168,7 +168,9 @@ export function startSse(response: http.ServerResponse): SseSend {
     'content-type': 'text/event-stream',
     'cache-control': 'no-store',
     connection: 'keep-alive',
-    ...(compressed ? { 'content-encoding': 'gzip', vary: 'accept-encoding' } : {})
+    // `origin` beside `accept-encoding`: `writeHead` replaces what the CORS
+    // gate set, and a stream whose allow-origin varies must say so.
+    ...(compressed ? { 'content-encoding': 'gzip', vary: 'accept-encoding, origin' } : {})
   })
 
   const gzip = compressed ? createGzip() : null

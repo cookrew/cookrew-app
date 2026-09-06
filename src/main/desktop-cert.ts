@@ -81,6 +81,13 @@ export interface DesktopCert {
   readonly held: () => HeldCert | null
   /** The one name a certificate here may cover, or null without an account. */
   readonly wildcard: () => string | null
+  /**
+   * The device id and zone to SPELL names with — null unless a valid chain is
+   * held right now. One reader for "may this Mac print a trusted URL", so the
+   * printed name, the published `trusted` list, the CORS allow-list and the
+   * SNI answer can never disagree about whether a certificate exists.
+   */
+  readonly naming: () => { deviceId: string; zone: string } | null
   /** One pass. Never throws; the outcome is the whole report. */
   readonly ensure: (reason: string) => Promise<CertOutcome>
   /** Check hourly, order at thirty days left. Returns the stop function. */
@@ -250,17 +257,23 @@ export function createDesktopCert(deps: DesktopCertDeps): DesktopCert {
     }
   }
 
+  const held = (): HeldCert | null => {
+    const name = wildcard()
+    if (name === null) return null
+    // Cached rather than re-read: this is called per TLS handshake, and a
+    // renewal replaces the cached value the moment it lands.
+    if (current !== null && current.wildcard === name && current.notAfter > now()) return current
+    current = deps.store.held(name, now())
+    return current
+  }
+
   return {
-    held: () => {
-      const name = wildcard()
-      if (name === null) return null
-      // Cached rather than re-read: this is called per TLS handshake, and a
-      // renewal replaces the cached value the moment it lands.
-      if (current !== null && current.wildcard === name && current.notAfter > now()) return current
-      current = deps.store.held(name, now())
-      return current
-    },
+    held,
     wildcard,
+    naming: () => {
+      const id = deps.deviceId()
+      return id === null || held() === null ? null : { deviceId: id, zone }
+    },
     ensure,
     watch: () => {
       const start = deps.setInterval ?? ((fn, ms) => setInterval(fn, ms))
