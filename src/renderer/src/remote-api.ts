@@ -228,6 +228,21 @@ export function parseOnce<T>(e: MessageEvent): T {
   return parsed
 }
 
+const SOUS_CALLER_KEY = 'cookrew-sous-caller'
+
+/** A stable id for this browser install, minted once. */
+function sousCallerId(): string {
+  try {
+    const existing = localStorage.getItem(SOUS_CALLER_KEY)
+    if (existing) return existing
+    const minted = `phone-${Math.random().toString(36).slice(2, 10)}`
+    localStorage.setItem(SOUS_CALLER_KEY, minted)
+    return minted
+  } catch {
+    return 'phone'
+  }
+}
+
 function subscribe<T>(event: string, cb: (data: T) => void): () => void {
   return sharedEvents().on(event, (e) => cb(parseOnce<T>(e)))
 }
@@ -474,7 +489,11 @@ export function createRemoteApi(): CookrewApi {
     onCmdW: () => () => undefined,
     // Sous from the phone: the sentence goes over the API, the zoom comes
     // back on the shared events stream like everything else the canvas does.
-    sousCommand: (text, ctx) => req(apiPath('/api/sous/command'), 'POST', { text, ...ctx }),
+    // This phone, not "a phone": the id keeps Sous's pending question ours.
+    // focusedAgentId is deliberately not sent — a network door names agents
+    // by name only (see SousCommandInput).
+    sousCommand: (text, ctx) =>
+      req(apiPath('/api/sous/command'), 'POST', { text, surface: ctx.surface, callerId: sousCallerId() }),
     onUiCommand: (cb) => subscribe<UiCommandEvent>('ui', cb),
     // The phone hears through its own browser (VoiceBar); the Mac's ear is
     // the desktop's alone.

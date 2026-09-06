@@ -45,7 +45,19 @@ export interface SousControlDeps {
 export interface SousCommandInput {
   text: string
   surface: Surface
-  /** In the zoom view, the agent on screen. */
+  /**
+   * WHO is speaking on that surface — the desktop, one phone, one speaker.
+   * A surface is a class of door, not a device: two phones are both 'phone',
+   * and a question Sous asked one of them must not be answered by the other.
+   */
+  callerId?: string
+  /**
+   * In the zoom view, the agent on screen. Trusted from the desktop and the
+   * CLI (same trust boundary as the owner's keyboard); a network door must
+   * NOT pass it — the controller remembers where it last zoomed each caller
+   * and uses that instead, so free text over HTTP still cannot reach an agent
+   * nobody named.
+   */
   focusedAgentId?: string | null
 }
 
@@ -65,20 +77,23 @@ const FAILED = {
 
 export class SousController {
   /**
-   * "需要问 Conductor 什么呢？" — asked on one surface, answered on the same
-   * one. Keyed by surface so the phone and the speaker never complete each
-   * other's questions.
+   * "需要问 Conductor 什么呢？" — asked by one caller on one surface, answered
+   * by the same one. Keyed by both, so two phones, or the phone and the
+   * speaker, never complete each other's questions.
    */
-  private readonly pending = new Map<Surface, PendingPrompt>()
+  private readonly pending = new Map<string, PendingPrompt>()
+  /** Where Sous last zoomed each caller — the only focus a network door gets. */
+  private readonly focus = new Map<string, string>()
 
   constructor(private readonly deps: SousControlDeps) {}
 
-  /** What Sous is still waiting on for a surface, if anything unexpired. */
-  pendingFor(surface: Surface): PendingPrompt | null {
-    const slot = this.pending.get(surface)
+  /** What Sous is still waiting on for a caller, if anything unexpired. */
+  pendingFor(surface: Surface, callerId?: string): PendingPrompt | null {
+    const key = callerKey(surface, callerId)
+    const slot = this.pending.get(key)
     if (!slot) return null
     if (slot.until <= this.now()) {
-      this.pending.delete(surface)
+      this.pending.delete(key)
       return null
     }
     return slot
@@ -86,13 +101,14 @@ export class SousController {
 
   async handle(input: SousCommandInput): Promise<SousCommandResult> {
     const roster = this.deps.roster()
+    const key = callerKey(input.surface, input.callerId)
     const parsed = parseUtterance(
       input.text,
       {
         surface: input.surface,
         activeWorkspaceId: this.deps.activeWorkspaceId(),
-        focusedAgentId: input.focusedAgentId ?? null,
-        pending: this.pendingFor(input.surface)
+        focusedAgentId: input.focusedAgentId ?? this.focus.get(key) ?? null,
+        pending: this.pendingFor(input.surface, input.callerId)
       },
       roster,
       this.now()
@@ -106,7 +122,7 @@ export class SousController {
       }
     }
     try {
-      return await this.run(parsed.intent, parsed.spoken, input.surface, roster)
+      return await this.run(parsed.intent, parsed.spoken, key, roster)
     } catch (error) {
       const what = error instanceof Error ? error.message : String(error)
       console.error(`Sous: ${parsed.intent.kind} failed:`, error)
@@ -117,7 +133,7 @@ export class SousController {
   private async run(
     intent: SousIntent,
     spoken: string,
-    surface: Surface,
+    key: string,
     roster: IntentRoster
   ): Promise<SousCommandResult> {
     const active = this.deps.activeWorkspaceId()
@@ -126,14 +142,17 @@ export class SousController {
         return { intent: 'none', spoken: '' }
       case 'back':
         if (active) this.deps.ui({ kind: 'zoom-back' }, active)
+        this.focus.delete(key)
         return { intent: 'back', spoken }
       case 'open':
         if (active) this.deps.ui({ kind: 'zoom-back' }, active)
+        this.focus.delete(key)
         this.note('open', null, 'cookrew')
         return { intent: 'open', spoken }
       case 'switch': {
         await this.moveTo(intent.workspaceId)
         this.deps.ui({ kind: 'zoom-back' }, intent.workspaceId)
+        this.focus.delete(key)
         this.note('switch', intent.workspaceId, workspaceName(roster, intent.workspaceId))
         return { intent: 'switch', spoken }
       }
@@ -142,19 +161,20 @@ export class SousController {
         await this.moveTo(agent.workspaceId)
         this.deps.ui({ kind: 'zoom', nodeId: agent.id }, agent.workspaceId)
         this.deps.ui({ kind: 'focus-input', nodeId: agent.id }, agent.workspaceId)
+        this.focus.set(key, agent.id)
         if (intent.prompt === null) {
-          this.pending.set(surface, { kind: 'prompt', agentId: agent.id, until: this.now() + PENDING_PROMPT_MS })
+          this.pending.set(key, { kind: 'prompt', agentId: agent.id, until: this.now() + PENDING_PROMPT_MS })
           this.note('ask', agent.id, agent.name)
           return { intent: 'ask', spoken, needs: 'prompt', agentId: agent.id }
         }
-        this.pending.delete(surface)
+        this.pending.delete(key)
         await this.deps.submit(agent.id, intent.prompt)
         this.note('prompt', agent.id, agent.name)
         return { intent: 'ask', spoken, agentId: agent.id }
       }
       case 'prompt': {
         const agent = agentOf(roster, intent.agentId)
-        this.pending.delete(surface)
+        this.pending.delete(key)
         await this.deps.submit(agent.id, intent.text)
         this.note('prompt', agent.id, agent.name)
         return { intent: 'prompt', spoken, agentId: agent.id }
@@ -166,6 +186,7 @@ export class SousController {
         if (intent.browser) await this.deps.createBrowser(node.id, `${node.name} browser`)
         const workspaceId = this.deps.activeWorkspaceId() ?? target ?? ''
         this.deps.ui({ kind: 'zoom', nodeId: node.id }, workspaceId)
+        this.focus.set(key, node.id)
         this.note('create', node.id, `${node.name}${intent.browser ? ' + browser' : ''}`)
         return { intent: 'create', spoken, agentId: node.id }
       }
@@ -198,6 +219,10 @@ export class SousController {
   private now(): number {
     return this.deps.now?.() ?? Date.now()
   }
+}
+
+function callerKey(surface: Surface, callerId: string | undefined): string {
+  return `${surface}:${callerId ?? ''}`
 }
 
 function agentOf(roster: IntentRoster, id: string): IntentRoster['agents'][number] {

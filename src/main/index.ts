@@ -4364,7 +4364,7 @@ app.whenReady().then(() => {
   ipcMain.handle(
     'sous:command',
     (_e, text: string, ctx: { surface: SousSurface; focusedAgentId?: string | null }) =>
-      sous.handle({ text, surface: ctx.surface, focusedAgentId: ctx.focusedAgentId ?? null })
+      sous.handle({ text, surface: ctx.surface, callerId: 'desktop', focusedAgentId: ctx.focusedAgentId ?? null })
   )
 
   // THE MAC'S EAR. One recognizer child per hold of ⌘; the roster's names go

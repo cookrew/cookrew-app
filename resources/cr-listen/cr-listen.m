@@ -44,16 +44,22 @@ static void __attribute__((noreturn)) fail(NSString *reason) {
   exit(1);
 }
 
+/// Long enough for a person to read the permission dialog and click; a
+/// dialog dismissed with no answer, or an OS that never calls back (stale
+/// TCC state happens), must still end in a sentence and an exit.
+static const int64_t AUTHORIZE_TIMEOUT_SECONDS = 60;
+
 /// Ask once, block until answered. A CLI has no run loop of its own yet, so
 /// the callbacks are waited on with semaphores rather than dispatched.
 static void authorize(void) {
+  dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, AUTHORIZE_TIMEOUT_SECONDS * NSEC_PER_SEC);
   dispatch_semaphore_t speech = dispatch_semaphore_create(0);
   __block SFSpeechRecognizerAuthorizationStatus speechStatus = SFSpeechRecognizerAuthorizationStatusNotDetermined;
   [SFSpeechRecognizer requestAuthorization:^(SFSpeechRecognizerAuthorizationStatus status) {
     speechStatus = status;
     dispatch_semaphore_signal(speech);
   }];
-  dispatch_semaphore_wait(speech, DISPATCH_TIME_FOREVER);
+  if (dispatch_semaphore_wait(speech, deadline) != 0) fail(@"speech recognition permission was not answered");
   if (speechStatus != SFSpeechRecognizerAuthorizationStatusAuthorized) {
     fail([NSString stringWithFormat:@"speech recognition not authorized (%ld)", (long)speechStatus]);
   }
@@ -65,7 +71,7 @@ static void authorize(void) {
                              micGranted = granted;
                              dispatch_semaphore_signal(mic);
                            }];
-  dispatch_semaphore_wait(mic, DISPATCH_TIME_FOREVER);
+  if (dispatch_semaphore_wait(mic, deadline) != 0) fail(@"microphone permission was not answered");
   if (!micGranted) fail(@"microphone not authorized");
 }
 
@@ -88,6 +94,7 @@ static void authorize(void) {
   SFSpeechRecognitionTask *_task;
   NSString *_lastText;
   BOOL _finished;
+  BOOL _stopping;
   BOOL _onDevice;
 }
 
@@ -250,7 +257,10 @@ static void authorize(void) {
 /// where it does not, so the last partial becomes the final rather than
 /// nothing.
 - (void)stop {
-  if (_finished) return;
+  // SIGINT then SIGTERM a moment later is an ordinary supervisor pattern, and
+  // the max-seconds timer may fire in the same instant: teardown runs once.
+  if (_finished || _stopping) return;
+  _stopping = YES;
   [_engine.inputNode removeTapOnBus:0];
   [_engine stop];
   [_request endAudio];

@@ -275,10 +275,14 @@ export function parseUtterance(
   if (text === '') return { ok: true, intent: { kind: 'none' }, spoken: '', lang }
 
   // In the zoom view the terminal IS the input: prose is a prompt for the
-  // agent on screen, and only a sentence addressed to Sous is a command.
-  // "rename foo to bar" is something you say TO an agent.
-  if (ctx.surface === 'zoom' && !addressed) {
-    if (ctx.focusedAgentId) return promptFor(ctx.focusedAgentId, text, roster, lang)
+  // agent on screen, and only a sentence addressed to Sous AND shaped like a
+  // command is one. "rename foo to bar" is something you say TO an agent, and
+  // so is "Sous vide is a technique, add a class for it" — a sentence that
+  // merely begins with the word goes to the agent whole, never swallowed.
+  if (ctx.surface === 'zoom') {
+    const command = addressed ? matchShape(text) : null
+    if (command) return resolve(command, ctx, roster, lang, text)
+    if (ctx.focusedAgentId) return promptFor(ctx.focusedAgentId, addressed ? trimmed : text, roster, lang)
     return { ok: true, intent: { kind: 'none' }, spoken: '', lang }
   }
 

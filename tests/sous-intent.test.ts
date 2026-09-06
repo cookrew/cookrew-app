@@ -168,6 +168,11 @@ describe('the zoom view', () => {
     expect(parseUtterance('Sous, back to canvas', zoom, roster, NOW)).toMatchObject({ intent: { kind: 'back' } })
     expect(parseUtterance('苏斯，回到画布', zoom, roster, NOW)).toMatchObject({ intent: { kind: 'back' } })
   })
+  it('a sentence that merely begins with the word Sous is prose, sent whole', () => {
+    expect(parseUtterance('Sous vide is a technique, add a class for it', zoom, roster, NOW)).toMatchObject({
+      intent: { kind: 'prompt', agentId: 'a-cc', text: 'Sous vide is a technique, add a class for it' }
+    })
+  })
   it('a sentence that looks like a control verb but is not addressed to Sous stays a prompt', () => {
     // "rename the variable to count" is something you say TO an agent.
     expect(parseUtterance('rename foo to bar', zoom, roster, NOW)).toMatchObject({

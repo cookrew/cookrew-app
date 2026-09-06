@@ -1061,7 +1061,7 @@ async function cmdSous(request: CliRequest, deps: SocketServerDeps): Promise<str
     throw new Error(`Unknown surface '${surface}'. One of: ${[...SOUS_SURFACES].join(', ')}`)
   }
   const focusedAgentId = request.flags.focused ? String(request.flags.focused) : null
-  const result = await deps.sous.handle({ text, surface: surface as SousSurface, focusedAgentId })
+  const result = await deps.sous.handle({ text, surface: surface as SousSurface, callerId: 'cli', focusedAgentId })
   return JSON.stringify(result)
 }
 

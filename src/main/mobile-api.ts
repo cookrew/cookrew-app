@@ -45,6 +45,8 @@ import type { UiCommandEvent } from "../shared/sous-ui";
 import type { EventEmitter } from "node:events";
 
 const SOUS_SURFACES: ReadonlySet<string> = new Set(["canvas", "zoom", "phone", "home", "cli"]);
+/** A spoken sentence; anything longer is a document and has other routes. */
+const SOUS_MAX_TEXT = 2000;
 
 /**
  * Workspace operations shared with the renderer IPC handlers — the mobile
@@ -1065,14 +1067,32 @@ export async function handleMobileApi(
       respondJson(response, 503, { error: "Sous is not listening on this desktop" });
       return true;
     }
-    const body = await readJson<{ text?: string; surface?: string; focusedAgentId?: string | null }>(request);
+    const body = await readJson<{ text?: string; surface?: string; callerId?: string }>(request);
     const text = (body.text ?? "").trim();
     if (!text) {
       respondJson(response, 400, { error: "Missing text" });
       return true;
     }
-    const surface = SOUS_SURFACES.has(body.surface ?? "") ? (body.surface as SousSurface) : "phone";
-    const result = await deps.sous.handle({ text, surface, focusedAgentId: body.focusedAgentId ?? null });
+    if (text.length > SOUS_MAX_TEXT) {
+      respondJson(response, 400, { error: `Text longer than ${SOUS_MAX_TEXT} characters is not a sentence` });
+      return true;
+    }
+    // A wrong or missing surface is refused, not folded into the phone's
+    // bucket: a gateway that forgot to say 'home' would otherwise share the
+    // phone's pending question.
+    if (!SOUS_SURFACES.has(body.surface ?? "")) {
+      respondJson(response, 400, { error: `surface must be one of ${[...SOUS_SURFACES].join(", ")}` });
+      return true;
+    }
+    // WHO is speaking: the caller's own id when it sends one (the speaker's
+    // room, the phone's install), else the address it came from. Never the
+    // token — one token is every phone. And no focusedAgentId from the body:
+    // a network door may not name an agent by id, only by name.
+    const callerId =
+      typeof body.callerId === "string" && body.callerId.trim() !== ""
+        ? body.callerId.trim().slice(0, 64)
+        : (request.socket.remoteAddress ?? "unknown");
+    const result = await deps.sous.handle({ text, surface: body.surface as SousSurface, callerId });
     respondJson(response, 200, result);
     return true;
   }
