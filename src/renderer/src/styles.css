@@ -144,17 +144,11 @@ body,
   gap: 8px;
 }
 
-/* The mark is the voxel RENDER and it is the wordmark's C: 30 px so its
-   blocks sit on the word's baseline, with the same amber hard shadow the
-   letters wear, one step deeper so hand and letters read as one depth. */
 .cr-logo-mark {
-  width: 32px;
-  height: 32px;
+  width: 24px;
+  height: 24px;
   flex: 0 0 auto;
   display: block;
-  object-fit: contain;
-  margin: -4px -3px -4px 0;
-  filter: drop-shadow(2px 2px 0 var(--amber));
 }
 
 .cr-logo {
@@ -162,7 +156,7 @@ body,
   font-weight: 700;
   font-size: 17px;
   letter-spacing: 0.08em;
-  text-shadow: 2px 2px 0 var(--amber), 3px 3px 0 var(--amber-deep);
+  text-shadow: 2px 2px 0 var(--amber);
 }
 
 .cr-header-meta {
