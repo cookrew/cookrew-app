@@ -3,8 +3,7 @@ import { json } from './http'
 import { serveAsset } from './assets'
 import { RELEASES_PAGE, pickAsset, type Release } from './releases'
 import type { Commit } from './github-commits'
-import { featurePage, featuresIndexPage } from './site-features'
-import { startPage } from './site-start'
+import { featurePage } from './site-features'
 import { FAVICON_SVG, robotsTxt, sitemapXml, webManifest } from './site-seo'
 import { FEATURES, llmsText } from './site-content'
 import { notFoundPage, respondPage } from './site-shell'
@@ -44,15 +43,15 @@ export function handleSiteRoute(ctx: SiteRouteContext): boolean {
     crawlFile(ctx, parts[0])
     return true
   }
-  if (parts[0] === 'features' && parts.length <= 2) {
-    if (parts.length === 1) {
-      ctx.pulse?.page('/features')
-      void ctx
-        .commits()
-        .then((commits) => respondPage(response, featuresIndexPage({ commits })))
-        .catch((error: unknown) => failed(ctx, error))
-      return true
-    }
+  // /features and /start are SECTIONS OF THE HOMEPAGE now (2026-09-06). The
+  // addresses keep working for every link already out there, as a permanent
+  // redirect to the anchor; the feature pages themselves stay where they are.
+  if (parts.length === 1 && (parts[0] === 'features' || parts[0] === 'start')) {
+    response.writeHead(301, { location: `/#${parts[0]}`, 'cache-control': 'public, max-age=86400' })
+    response.end()
+    return true
+  }
+  if (parts[0] === 'features' && parts.length === 2) {
     // Resolve before counting: only a page that exists is a page viewed.
     const slug = ctx.decode(parts[1]) ?? ''
     const known = FEATURES.some((f) => f.slug === slug)
@@ -63,14 +62,6 @@ export function handleSiteRoute(ctx: SiteRouteContext): boolean {
     }
     ctx.pulse?.page(`/features/${slug}`)
     respondPage(response, rendered)
-    return true
-  }
-  if (parts.length === 1 && parts[0] === 'start') {
-    ctx.pulse?.page('/start')
-    void ctx
-      .release()
-      .then((release) => respondPage(response, startPage(release)))
-      .catch((error: unknown) => failed(ctx, error))
     return true
   }
   if (parts.length === 2 && parts[0] === 'assets') {

@@ -156,8 +156,8 @@ export function sitemapXml(allDoors: readonly ListedDoor[]): string {
   const entries: SitemapEntry[] = [
     { path: '/', priority: 1 },
     { path: '/market', priority: 0.9 },
-    { path: '/start', priority: 0.8 },
-    { path: '/features', priority: 0.7 },
+    // /start and /features are anchors on the homepage now; a fragment is not
+    // a sitemap URL, and the redirects cover old links.
     ...FEATURES.map((f) => ({ path: `/features/${f.slug}`, priority: 0.7 })),
     ...handles.map((h) => ({ path: `/${h}`, priority: 0.5 })),
     // No lastmod on a team: its heartbeat is not a change, and a date that

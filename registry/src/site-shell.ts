@@ -167,7 +167,7 @@ export function page(options: ShellOptions, main: string): Page {
 export function notFoundPage(what: string): Page {
   return page(
     { title: 'Not found — Cookrew', kind: 'document', cache: 0, status: 404, noindex: true },
-    `<div class="wrap" style="padding-top:44px"><h1>Not found</h1><p class="lede">There is no ${esc(what)} at that address.</p><p class="row"><a class="btn" href="/">Home</a><a class="btn" href="/market">Marketplace</a><a class="btn" href="/features">Features</a></p></div>`
+    `<div class="wrap" style="padding-top:44px"><h1>Not found</h1><p class="lede">There is no ${esc(what)} at that address.</p><p class="row"><a class="btn" href="/">Home</a><a class="btn" href="/market">Marketplace</a><a class="btn" href="/#features">Features</a></p></div>`
   )
 }
 
@@ -222,9 +222,10 @@ function head(options: ShellOptions): string {
 function shell(options: ShellOptions, main: string): string {
   const nav = [
     ['/market', 'Marketplace', 'market'],
-    ['/features', 'Features', 'features'],
-    ['/start', 'Get started', 'start'],
-    ['/download', 'Download', 'download'],
+    // Three sections of the homepage, not three pages (2026-09-06).
+    ['/#features', 'Features', 'features'],
+    ['/#start', 'Get started', 'start'],
+    ['/#download', 'Download', 'download'],
     [GITHUB_REPO, 'GitHub', 'github']
   ]
     .map(
@@ -255,7 +256,7 @@ function shell(options: ShellOptions, main: string): string {
 </div></header>
 ${main}
 <footer><div class="wrap">
-<nav class="row" aria-label="Site"><a href="/market">Marketplace</a><a href="/features">Features</a><a href="/start">Get started</a><a href="/download">Download</a><a href="${GITHUB_REPO}">Source</a><a href="${GITHUB_REPO}/releases">Releases</a><a href="/v1/doors">Directory as data</a><a href="/sitemap.xml">Sitemap</a><a href="/llms.txt">llms.txt</a></nav>
+<nav class="row" aria-label="Site"><a href="/market">Marketplace</a><a href="/#features">Features</a><a href="/#start">Get started</a><a href="/#download">Download</a><a href="${GITHUB_REPO}">Source</a><a href="${GITHUB_REPO}/releases">Releases</a><a href="/v1/doors">Directory as data</a><a href="/sitemap.xml">Sitemap</a><a href="/llms.txt">llms.txt</a></nav>
 <p class="meta" style="margin-top:12px">Cookrew is open source under the MIT license. Every page here is generated from the registry's live directory; nothing is staged, and every number carries its date.</p>
 </div></footer>
 <div class="toast" id="toast" hidden></div>

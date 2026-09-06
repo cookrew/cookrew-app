@@ -159,8 +159,17 @@ describe('the crawl files and the long tail', () => {
     expect((await get('/site.webmanifest')).headers.get('content-type')).toContain('manifest')
   })
 
-  it('serves every feature page, the index and the start page', async () => {
-    expect((await get('/features')).status).toBe(200)
+  it('serves every feature page, and sends the old index and start addresses into the homepage', async () => {
+    // Three pages became one (2026-09-06): the addresses redirect to the
+    // section, permanently, so every link already out there still lands.
+    for (const [path, anchor] of [['/features', '#features'], ['/start', '#start']]) {
+      const gone = await get(path)
+      expect(gone.status, path).toBe(301)
+      expect(gone.headers.get('location')).toBe(`/${anchor}`)
+    }
+    const homepage = await get('/')
+    expect(homepage.status).toBe(200)
+    expect(await homepage.text()).toContain('id="crew-commands"')
     const canvas = await get('/features/canvas')
     expect(canvas.status).toBe(200)
     expect(await canvas.text()).toContain('"@type":"BreadcrumbList"')
@@ -172,9 +181,6 @@ describe('the crawl files and the long tail', () => {
     const head = await fetch(`${origin}/robots.txt`, { method: 'HEAD' })
     expect(head.status).toBe(200)
     expect(head.headers.get('content-type')).toContain('text/plain')
-    const start = await get('/start')
-    expect(start.status).toBe(200)
-    expect(await start.text()).toContain('id="crew-builder"')
   })
 
   it('a door on the wire carries today’s counts', async () => {
