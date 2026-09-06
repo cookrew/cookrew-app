@@ -97,7 +97,12 @@ export function Header({
             <CrLogoMark />
           </button>
         )}
-        <span className="cr-logo">COOKREW</span>
+        {/* THE HAND IS THE C (2026-09-06): on the desktop the mark takes the
+            letter's place and the word reads OOKREW after it. On the phone the
+            path badge stands where the mark was, so the word is written out. */}
+        <span className="cr-logo" aria-label="COOKREW">
+          {isRemoteMode() ? 'COOKREW' : 'OOKREW'}
+        </span>
         {/* IDENTITY LIVES IN THE BRAND GROUP (D1), right after the wordmark and
             at the mark's own 24 px, so the group stays one line. */}
         {avatar}
