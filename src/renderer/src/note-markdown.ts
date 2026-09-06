@@ -87,7 +87,7 @@ const noteMarked = new Marked({
 })
 
 /**
- * Rendered notes, keyed by their source.
+ * Rendered notes, keyed by a hash of their source.
  *
  * WHY A CACHE AND NOT useMemo. NoteNode called this straight from its render
  * body, so every canvas re-render re-parsed every note. Measured on the real
@@ -104,28 +104,179 @@ const noteMarked = new Marked({
  * survives that, which is the access pattern here — content changes rarely,
  * mount/unmount churns constantly.
  *
- * Bounded, because a note body is unbounded: 64 entries, oldest evicted. Not an
- * LRU — insertion order is enough when the working set is the notes on one
- * canvas, and a real LRU here would cost a Map delete/set on every read to buy
- * nothing measurable.
+ * BOUNDED IN BYTES, NOT ENTRIES. The first version held 64 entries, and a note
+ * body is unbounded, so the cache's weight scaled with note size: measured
+ * 2026-09-06, 64 cached 64 KB notes retained 51.5 MB — in the renderer, the
+ * process iOS kills at 1.5 GB. Two things made an entry heavy, neither of them
+ * the count. The key was the source itself, 64 KB retained per entry and a
+ * DEAD copy once the note was edited. And the value was six times heavier
+ * than its characters: marked builds its output by concatenation, V8 keeps
+ * that as a rope of cons-string nodes, and the rope survived in the cache —
+ * 771 KB for 132K chars of HTML, 129 KB once flattened. So:
+ *
+ *   - the key is `length:hash64`, about 25 chars, never the source;
+ *   - the HTML is flattened before it is stored (one indexed read makes V8
+ *     collapse the rope in place; the string's identity does not change);
+ *   - the bound is a running byte total against NOTE_CACHE_MAX_BYTES, with
+ *     an estimate of 2 bytes per UTF-16 unit — an upper bound, since V8 keeps
+ *     Latin-1 text at one byte per char — plus a fixed overhead per entry;
+ *   - eviction is insertion order, oldest first, until the new entry fits.
+ *     Not an LRU — the working set is the notes on one canvas, and a real LRU
+ *     would cost a Map delete/set on every read to buy nothing measurable;
+ *   - an entry that would not fit even in an empty cache is returned uncached
+ *     and evicts NOTHING: one giant note must not empty the cache for the
+ *     other hundred cards.
+ *
+ * Why 8 MiB: the heaviest measured canvas renders to about 1.8 MB accounted,
+ * so it fits whole with 4x room and no note re-parses on a zoom round trip;
+ * and 8 MiB is under 1% of the renderer's ceiling, where the old bound had
+ * none at all for notes larger than 64 KB.
  */
-const RENDER_CACHE_MAX = 64
-const renderCache = new Map<string, string>()
+const NOTE_CACHE_MAX_BYTES = 8 * 1024 * 1024
+/** A Map slot, two string headers, and the key's own characters. */
+const ENTRY_OVERHEAD_BYTES = 128
+const BYTES_PER_CHAR = 2
+
+interface CacheEntry {
+  readonly html: string
+  readonly bytes: number
+}
+
+let maxCacheBytes = NOTE_CACHE_MAX_BYTES
+let cachedBytes = 0
+let hits = 0
+let misses = 0
+let bypasses = 0
+const renderCache = new Map<string, CacheEntry>()
+
+/**
+ * Hashing feeds a fixed scratch buffer and hashes it four bytes at a time.
+ * encodeInto never splits a code point and the buffer size is a constant, so
+ * the chunk boundaries — and therefore the key — are a pure function of the
+ * content. Measured: 0.043 ms per 64 KB against 0.17 ms for a charCodeAt loop,
+ * which matters because NoteNode calls this on every render, hits included.
+ */
+const HASH_CHUNK_BYTES = 64 * 1024
+const hashScratch = new Uint8Array(HASH_CHUNK_BYTES)
+const hashWords = new Uint32Array(hashScratch.buffer)
+const utf8 = new TextEncoder()
+
+/**
+ * `length:h1:h2` — two 32-bit lanes of a cyrb53-style imul mix over the UTF-8
+ * bytes, finished with an avalanche. The hash is not cryptographic. An
+ * accidental collision among N entries is about N² / 2⁶⁵ (and the lengths
+ * must match too); a crafted one is constructible by someone who can write
+ * notes. Either shows one note's SANITISED render on another note until
+ * either is edited — a display defect, never an unsafe one, because every
+ * value in this cache came out of the sanitising renderer above. (The same
+ * holds for the one known systematic case: encodeInto writes every LONE
+ * surrogate as U+FFFD, so two malformed bodies differing only in which lone
+ * surrogate they carry share a key.)
+ */
+export function noteMarkdownCacheKey(content: string): string {
+  let h1 = 0xdeadbeef
+  let h2 = 0x41c6ce57
+  let offset = 0
+  while (offset < content.length) {
+    const { read, written } = utf8.encodeInto(offset === 0 ? content : content.substring(offset), hashScratch)
+    if (read === 0) break
+    offset += read
+    const words = written >>> 2
+    for (let i = 0; i < words; i += 1) {
+      const w = hashWords[i]
+      h1 = Math.imul(h1 ^ w, 2654435761)
+      h2 = Math.imul(h2 ^ w, 1597334677)
+    }
+    for (let i = words << 2; i < written; i += 1) {
+      const b = hashScratch[i]
+      h1 = Math.imul(h1 ^ b, 2654435761)
+      h2 = Math.imul(h2 ^ b, 1597334677)
+    }
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507)
+  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909)
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507)
+  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909)
+  return `${content.length}:${(h1 >>> 0).toString(36)}:${(h2 >>> 0).toString(36)}`
+}
+
+/** Accounted weight of one entry — the estimate the bound is kept in. */
+export function noteMarkdownEntryBytes(key: string, html: string): number {
+  return ENTRY_OVERHEAD_BYTES + BYTES_PER_CHAR * (key.length + html.length)
+}
+
+function evictUntilFits(incoming: number): void {
+  for (const [key, entry] of renderCache) {
+    if (cachedBytes + incoming <= maxCacheBytes) return
+    renderCache.delete(key)
+    cachedBytes -= entry.bytes
+  }
+}
 
 /** Note content → HTML for the card body. Inert: no tag survives from the source. */
 export function renderNoteMarkdown(content: string): string {
-  const hit = renderCache.get(content)
-  if (hit !== undefined) return hit
-  const html = noteMarked.parse(content, { async: false })
-  if (renderCache.size >= RENDER_CACHE_MAX) {
-    const oldest = renderCache.keys().next()
-    if (!oldest.done) renderCache.delete(oldest.value)
+  // A source that alone outweighs the budget cannot produce a cacheable
+  // entry in practice (markdown rarely renders shorter than it was written),
+  // so it is not even hashed.
+  if (BYTES_PER_CHAR * content.length > maxCacheBytes) {
+    bypasses += 1
+    return noteMarked.parse(content, { async: false })
   }
-  renderCache.set(content, html)
+  const key = noteMarkdownCacheKey(content)
+  const hit = renderCache.get(key)
+  if (hit !== undefined) {
+    hits += 1
+    return hit.html
+  }
+  const html = noteMarked.parse(content, { async: false })
+  // Flatten: marked's output is a rope, and V8 collapses it in place on the
+  // first indexed read. Same string, one sixth the retained bytes.
+  html.charCodeAt(0)
+  const bytes = noteMarkdownEntryBytes(key, html)
+  if (bytes > maxCacheBytes) {
+    bypasses += 1
+    return html
+  }
+  misses += 1
+  evictUntilFits(bytes)
+  renderCache.set(key, { html, bytes })
+  cachedBytes += bytes
   return html
 }
 
-/** Test seam: the cache is module state, so a suite must be able to clear it. */
-export function clearNoteMarkdownCache(): void {
+export interface NoteMarkdownCacheStats {
+  readonly entries: number
+  readonly bytes: number
+  readonly maxBytes: number
+  /** Answered from the cache. */
+  readonly hits: number
+  /** Parsed and stored. */
+  readonly misses: number
+  /** Parsed and NOT stored: the entry (or its source alone) outweighs the budget. */
+  readonly bypasses: number
+}
+
+/**
+ * Read-only view of the accounting, for the tests and the perf eval. The
+ * counters are the only honest way to see a hit: a string is a primitive, so
+ * `Object.is(a, b)` is equality, not identity, and cannot tell a cached
+ * answer from a fresh equal render.
+ */
+export function noteMarkdownCacheStats(): NoteMarkdownCacheStats {
+  return { entries: renderCache.size, bytes: cachedBytes, maxBytes: maxCacheBytes, hits, misses, bypasses }
+}
+
+/**
+ * Test seam: the cache is module state, so a suite must be able to clear it.
+ * `maxBytes` lets a unit test drive eviction with small notes; omitted, the
+ * budget returns to the default, so one suite cannot leave it shrunk for the
+ * next.
+ */
+export function clearNoteMarkdownCache(maxBytes: number = NOTE_CACHE_MAX_BYTES): void {
   renderCache.clear()
+  cachedBytes = 0
+  hits = 0
+  misses = 0
+  bypasses = 0
+  maxCacheBytes = maxBytes
 }
