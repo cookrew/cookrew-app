@@ -40,6 +40,7 @@ import {
   boardSourcesFrom,
   buildBoard,
   boardWindowMs,
+  createBoardNotifier,
   createProbeSampler,
   PROBE_INTERVAL_MS,
   tmuxProbeDeps
@@ -1395,7 +1396,8 @@ async function attachServedLine(conductorId: string): Promise<LinePtyView | null
 const loopHealth = createLoopHealth({
   residency: () => ({ store: store.resident().length, registry: sessions.residentCount() }),
   // The Sous breaker, so a loaded machine's silent titles are explained.
-  sous: () => sousBreakerState()
+  sous: () => sousBreakerState(),
+  probe: () => boardProbe.stats()
 })
 
 const boardProbe = createProbeSampler(
@@ -1406,20 +1408,28 @@ const boardProbe = createProbeSampler(
   PROBE_INTERVAL_MS,
   { observe: (ms) => loopHealth.observe('boardProbe', ms) }
 )
-/** Board sources incl. L2; probing restarts lazily whenever the board is read. */
+/**
+ * Board sources incl. L2. A one-shot read TOUCHES the probe (at most one
+ * pass, never the timer); a consumer that stays — the SSE ?board=1 stream,
+ * the desktop panel's board:subscribe — holds it open through
+ * probeSubscribe and is pushed through probeOnChange. The probe's cadence
+ * is events first (see the invalidations wired below), a backed-off pass
+ * as the fallback.
+ */
 function boardSources(): ReturnType<typeof boardSourcesFrom> {
   return boardSourcesFrom({
     store,
     turns,
     turnStore,
     agents,
-    probe: () => {
-      boardProbe.start()
-      return boardProbe.phases()
-    },
-    probeWarm: () => boardProbe.warm()
+    probe: () => boardProbe.touch(),
+    probeWarm: () => boardProbe.warm(),
+    probeSubscribe: () => boardProbe.subscribe(),
+    probeOnChange: (listener) => boardProbe.onChange(listener)
   })
 }
+// A turn boundary is a phase change for one terminal: recompute it, no listing.
+turns.on('turn', ({ terminalId }: { terminalId: string }) => void boardProbe.invalidate(terminalId))
 const events = new EventLog()
 const recoverable = new RecoverableStore()
 // Snapshot every killed terminal (node + position + session refs + edges)
@@ -1691,6 +1701,8 @@ statusFeed()?.on('status', ({ sessionName, status }: StatusObservation) => {
   if (!terminalId) return
   lazyTerminals.observeStatus(terminalId, status)
   turns.observeBackendPhase(terminalId, backendPhaseOf(status), isAgentTerminal(terminalId))
+  // herdr's push IS the board's phase for this pane: fold it in at once.
+  void boardProbe.invalidate(terminalId)
 })
 
 /**
@@ -3049,6 +3061,7 @@ function residentBrowsers(): BrowserNodeData[] {
 function bootTerminal(t: TerminalNodeData): void {
   spawnTracked(t)
   deliverPendingInject(t)
+  void boardProbe.invalidate(t.id) // attached now: L1 owns it, the probe's row goes
 }
 
 /** Open the local mirror for a zoomed transcript, never for canvas startup. */
@@ -3065,6 +3078,7 @@ function detachTerminalMirror(terminalId: string): void {
   sessionSync.release(terminalId)
   turns.untrack(terminalId)
   ptys.detach(terminalId)
+  void boardProbe.invalidate(terminalId) // detached now: the probe's to watch
 }
 
 function addNode(node: CanvasNode): CanvasNode {
@@ -5614,6 +5628,47 @@ function registerIpc(handlers: RestoreHandlers): void {
       boardWindowMs(typeof window === 'string' ? window : null)
     )
   )
+  // A desktop board panel that stays open: hold the probe, push on change
+  // (coalesced like the SSE stream), release on the last unsubscribe or when
+  // the window goes. Refcounted per sender so two panels share one hold.
+  const boardHolds = new Map<number, { count: number; release: () => void }>()
+  ipcMain.handle('board:subscribe', (event) => {
+    const sender = event.sender
+    const held = boardHolds.get(sender.id)
+    if (held) {
+      held.count += 1
+      return true
+    }
+    const sources = boardSources()
+    const notifier = createBoardNotifier(() => {
+      if (!sender.isDestroyed()) sender.send('board:update', buildBoard(sources))
+    })
+    const releaseProbe = sources.probeSubscribe?.() ?? (() => undefined)
+    const offChange = sources.probeOnChange?.(() => notifier.schedule()) ?? (() => undefined)
+    const onSignal = (): void => notifier.schedule()
+    turns.on('activity', onSignal)
+    store.on('change', onSignal)
+    store.on('workspaces', onSignal)
+    const release = (): void => {
+      notifier.cancel()
+      offChange()
+      releaseProbe()
+      turns.removeListener('activity', onSignal)
+      store.removeListener('change', onSignal)
+      store.removeListener('workspaces', onSignal)
+      boardHolds.delete(sender.id)
+    }
+    sender.once('destroyed', release)
+    boardHolds.set(sender.id, { count: 1, release })
+    return true
+  })
+  ipcMain.handle('board:unsubscribe', (event) => {
+    const held = boardHolds.get(event.sender.id)
+    if (!held) return false
+    held.count -= 1
+    if (held.count <= 0) held.release()
+    return true
+  })
   ipcMain.handle('agent:recover', (_e, id: string) => recoverAgent(id))
   // Endpoint restore channels live alongside the executor (M10).
   registerRestoreIpc(ipcMain.handle.bind(ipcMain), handlers)

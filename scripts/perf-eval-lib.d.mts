@@ -97,6 +97,13 @@ export interface LoopSample {
   elu: number | null
   loops: Record<string, { count: number; p95: number; max: number }>
   residency: Record<string, number>
+  probe: {
+    subscribers: number
+    intervalMs: number | null
+    passesPerMinute: number
+    listingsPerMinute: number
+    invalidationsPerMinute: number
+  } | null
 }
 export function loopFromHealth(body: unknown): LoopSample | null
 export function latencyFromEvents(lines: readonly string[], since?: number): Record<string, Percentiles>

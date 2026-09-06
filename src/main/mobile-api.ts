@@ -1219,11 +1219,18 @@ export async function handleMobileApi(
     // Same data as /api/board, so the same gate: an unauthenticated
     // subscriber still gets workspace/activity/event (existing behaviour,
     // untouched) but never the board stream.
-    const board = !deps.pairingToken || canRead ? deps.board : undefined;
+    // The board stream is OPT-IN (?board=1): a stream that takes it is a
+    // board CONSUMER, holds the probe open for its lifetime, and is pushed
+    // on every change. Nothing renders the frame today, so the default
+    // stream no longer carries a whole-fleet recompute per signal per phone.
+    const wantsBoard = url.searchParams.get("board") === "1";
+    const board = wantsBoard && (!deps.pairingToken || canRead) ? deps.board : undefined;
     const boardNotifier = board
       ? createBoardNotifier(() => send("board", buildBoard(board)))
       : null;
     const onBoardSignal = (): void => boardNotifier?.schedule();
+    const releaseProbe = board?.probeSubscribe?.() ?? null;
+    const offProbeChange = board?.probeOnChange?.(onBoardSignal) ?? null;
     if (board) {
       const sentProbe = board.probe?.();
       send("board", buildBoard(board));
@@ -1259,6 +1266,8 @@ export async function handleMobileApi(
         store.removeListener("change", onBoardSignal);
         store.removeListener("workspaces", onBoardSignal);
       }
+      offProbeChange?.();
+      releaseProbe?.(); // the last board consumer leaving stops the probe
     });
     return true;
   }

@@ -267,7 +267,10 @@ async function evalMemory(opts, now) {
   for (const p of processes) {
     const budget = BUDGETS.memory.rssMb[p.role]
     checks.push({ name: `${p.role} rss (pid ${p.pid})`, value: p.rssMb, unit: 'MB', verdict: judge(p.rssMb, budget) })
-    if (p.role === 'main') checks.push(loopCheck(p, health, load, capped))
+    if (p.role === 'main') {
+      checks.push(loopCheck(p, health, load, capped))
+      checks.push(boardCheck(p, health))
+    }
     const line = recent.filter((r) => r.pid === p.pid).map((r) => ({ t: r.t, value: r.rssMb }))
     const slope = slopePerHour(line)
     checks.push({
@@ -323,6 +326,22 @@ function loopCheck(p, health, load, capped) {
     note:
       `${loop.window} n=${loop.samples} p50=${fmtMs(loop.p50)} p98=${fmtMs(loop.p98)} ` +
       `max=${fmtMs(loop.max)}${elu}${held}${shaped}`
+  }
+}
+
+/** The board probe's cadence — listings per minute, one herdr child each. */
+function boardCheck(p, health) {
+  const name = `main board listings/min (pid ${p.pid})`
+  const probe = health.loop?.probe
+  if (!probe) return { name, value: null, unit: '', verdict: 'ok', note: health.loop ? 'no probe stats in this build' : health.note }
+  return {
+    name,
+    value: probe.listingsPerMinute,
+    unit: '/min',
+    verdict: judge(probe.listingsPerMinute, BUDGETS.memory.boardListingsPerMinute),
+    note:
+      `subscribers ${probe.subscribers} · rung ${probe.intervalMs === null ? '—' : `${probe.intervalMs} ms`} · ` +
+      `passes ${probe.passesPerMinute}/min · invalidations ${probe.invalidationsPerMinute}/min`
   }
 }
 
