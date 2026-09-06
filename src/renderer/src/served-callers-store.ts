@@ -46,11 +46,22 @@ export function sameRows(a: unknown, b: unknown): boolean {
   return keys.every((key) => key in right && sameRows(left[key], right[key]))
 }
 
-/** Adopt a push. Identical rows keep the snapshot's identity and notify nobody. */
+/**
+ * Adopt a push. Identical rows keep the snapshot's identity and notify nobody.
+ * Each listener is fenced: one card's throw must not starve the cards after it
+ * in the set, and useSyncExternalStore has no error path for a subscribe
+ * callback anyway.
+ */
 function publish(next: readonly ServedCallersRow[]): void {
   if (sameRows(rows, next)) return
   rows = next
-  for (const cb of listeners) cb()
+  for (const cb of listeners) {
+    try {
+      cb()
+    } catch (error) {
+      console.error('served-callers listener threw:', error)
+    }
+  }
 }
 
 function open(): void {
@@ -68,6 +79,14 @@ function open(): void {
   release = api.onServingCallers?.(publish) ?? null
 }
 
+/**
+ * The rows are KEPT across a close. A workspace switch unmounts every card,
+ * so the last consumer goes and the first one back — often within the same
+ * frame — renders the previous rows for one tick until the fresh invoke
+ * resolves. That is the right tick: served doors are per desktop, not per
+ * workspace, so the previous rows are the truth far more often than an empty
+ * row would be, and an owner watching a caller's face should not see it blink.
+ */
 function close(): void {
   generation += 1
   release?.()
@@ -84,8 +103,14 @@ export function subscribeServedCallers(cb: Listener): () => void {
     if (!live) return
     live = false
     listeners.delete(cb)
-    consumers -= 1
-    if (consumers === 0) close()
+    // Clamped: resetServedCallersStore zeroes the count under any closure
+    // still held by a mounted component, and a closure that then ran would
+    // otherwise drive it negative and wedge the store shut (a later mount
+    // would count to 0, never to 1, and open nothing).
+    const remaining = Math.max(0, consumers - 1)
+    const wasLast = consumers > 0 && remaining === 0
+    consumers = remaining
+    if (wasLast) close()
   }
 }
 

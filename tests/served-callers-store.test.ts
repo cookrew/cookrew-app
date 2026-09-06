@@ -133,13 +133,33 @@ describe('one IPC subscription for the whole canvas', () => {
     expect(servedCallersStoreStats().consumers).toBe(0)
   })
 
-  it('a remount after the last unmount opens a fresh subscription and invokes once more', () => {
+  it('a remount after the last unmount opens a fresh subscription and invokes once more, showing the previous rows meanwhile', () => {
     const first = mountCards(2)
+    bridge.push([row('Forge', 'ada')])
+    const shown = getServedCallersSnapshot()
     for (const un of first.unmount) un()
     const second = mountCards(1)
     expect(bridge.registrations).toBe(2)
     expect(bridge.invokes).toBe(2)
+    // Kept across the close: a workspace switch must not blink the faces off.
+    expect(getServedCallersSnapshot()).toBe(shown)
     for (const un of second.unmount) un()
+  })
+})
+
+describe('after a reset with a closure still alive', () => {
+  it('an old unsubscribe cannot drive the count negative and wedge the store shut', () => {
+    const before = mountCards(1)
+    resetServedCallersStore() // what a suite does between tests, under a still-mounted component
+    expect(servedCallersStoreStats()).toEqual({ consumers: 0, subscribed: false })
+    before.unmount[0]() // the stale closure runs late
+    expect(servedCallersStoreStats()).toEqual({ consumers: 0, subscribed: false })
+    // The next mount must still count to ONE and open the door.
+    const after = mountCards(1)
+    expect(servedCallersStoreStats()).toEqual({ consumers: 1, subscribed: true })
+    expect(bridge.registrations).toBe(2)
+    after.unmount[0]()
+    expect(servedCallersStoreStats()).toEqual({ consumers: 0, subscribed: false })
   })
 })
 
@@ -159,6 +179,29 @@ describe('the snapshot', () => {
     expect(getServedCallersSnapshot()).toBe(shown)
     expect(cards.notified).toEqual([1, 1, 1, 1, 1])
     for (const un of cards.unmount) un()
+  })
+
+  it('one listener that throws does not starve the listeners after it', () => {
+    const errors: unknown[] = []
+    const original = console.error
+    console.error = (...args: unknown[]) => errors.push(args)
+    try {
+      const first = mountCards(1)
+      const thrower = subscribeServedCallers(() => {
+        throw new Error('card exploded')
+      })
+      const last = mountCards(1)
+      bridge.push([row('Forge', 'ada')])
+      expect(first.notified).toEqual([1])
+      expect(last.notified).toEqual([1])
+      expect(getServedCallersSnapshot()).toEqual([row('Forge', 'ada')])
+      expect(errors).toHaveLength(1)
+      thrower()
+      first.unmount[0]()
+      last.unmount[0]()
+    } finally {
+      console.error = original
+    }
   })
 
   it('a changed push swaps the reference and notifies every consumer exactly once', () => {
