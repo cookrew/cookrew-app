@@ -15,6 +15,7 @@
 // budget: measured at 0.031ms per frame across all 63 overlay nodes in the real
 // workspace, it never showed up.
 
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { CARD_ZOOM_MS } from '../src/renderer/src/nodes/card-zoom'
 import { admitsFullView } from '../src/renderer/src/zoom-lod'
@@ -62,5 +63,37 @@ describe('admitsFullView — what counts as "the viewport has stopped"', () => {
     // Otherwise the corner-card bug comes back through a different door.
     expect(admitsFullView(false, true, true, true)).toBe(false)
     expect(admitsFullView(false, false, false, true)).toBe(false)
+  })
+})
+
+// The second cut (2026-09-06). With the debounce gone, the full view was
+// STILL landing at 400–530ms on the owner's canvas instead of ~300. The CPU
+// profile put it on the animation's own thread: Canvas subscribed to the
+// viewport through useLodLayout, so every frame re-rendered the whole app —
+// every visible card via React Flow's node renderer, every offscreen browser
+// view via the browser layer — three 40–90ms stalls inside a 280ms zoom.
+// These pin the shape that fixes it, since nothing else would notice if the
+// hook quietly moved back up.
+const src = (path: string): string => readFileSync(new URL(`../src/renderer/src/${path}`, import.meta.url), 'utf8')
+
+describe('who watches the viewport every frame', () => {
+  it('is LodOverlays, a leaf — never Canvas', () => {
+    const app = src('App.tsx')
+    expect(app).not.toMatch(/useLodLayout\(/)
+    expect(app).not.toMatch(/useViewport\(/)
+    expect(app).toMatch(/<LodOverlays/)
+    expect(src('LodOverlays.tsx')).toMatch(/useLodLayout\(/)
+  })
+
+  it('and the layers under it are memoised, so a frame that changes nothing costs two bail-outs', () => {
+    expect(src('TerminalOverlay.tsx')).toMatch(/export const TerminalOverlayLayer = memo\(/)
+    expect(src('BrowserLayer.tsx')).toMatch(/export const BrowserLayer = memo\(/)
+  })
+
+  it('pays the first WebGL context at idle after boot, desktop only', () => {
+    // 76ms for the first context in the process, 5ms for the next — measured
+    // in the running app. Without this the first zoom after launch eats it.
+    const main = src('main.tsx')
+    expect(main).toMatch(/if \(!isRemoteMode\(\)\) scheduleWebglWarmup\(\)/)
   })
 })

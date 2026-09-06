@@ -17,6 +17,30 @@ import type { CookrewApi } from './api'
 
 const DEMO_PROMPT = '\x1b[32m➜\x1b[0m \x1b[36mdemo\x1b[0m $ '
 
+/**
+ * Extra terminal cards for the zoom-latency harness (scratchpad/zoom-latency):
+ * `?demoCards=60` lays 60 more cards on the real grid pitch so a click-to-live
+ * measurement runs against a canvas the size of the owner's, not three nodes.
+ * Absent from the URL, this is empty and the demo is unchanged.
+ */
+function benchCards(): CanvasNode[] {
+  if (typeof location === 'undefined') return []
+  const count = Number(new URLSearchParams(location.search).get('demoCards') ?? 0)
+  if (!Number.isFinite(count) || count <= 0) return []
+  return Array.from({ length: Math.min(count, 400) }, (_, i) => ({
+    kind: 'terminal',
+    id: `demo-bench-${i}`,
+    name: `Bench ${i}`,
+    preset: 'Shell',
+    command: '',
+    cwd: '~',
+    orch: false,
+    role: null,
+    position: { x: 340 + (i % 8) * 600, y: 560 + Math.floor(i / 8) * 560 },
+    size: { width: 560, height: 560 }
+  }))
+}
+
 function demoWorkspace(): WorkspaceState {
   const conductor: CanvasNode = {
     kind: 'terminal',
@@ -53,7 +77,7 @@ function demoWorkspace(): WorkspaceState {
     name: 'Cookrew Demo',
     dir: '~',
     dirs: ['~'],
-    nodes: [conductor, note, browser],
+    nodes: [conductor, note, browser, ...benchCards()],
     connections: [
       { id: 'demo-c1', a: 'demo-conductor', b: 'demo-note' },
       { id: 'demo-c2', a: 'demo-conductor', b: 'demo-browser' }

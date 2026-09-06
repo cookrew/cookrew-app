@@ -5,6 +5,8 @@ import './styles.css'
 import { authStore } from './auth-gate'
 import { startPhoneBeacon } from './phone-beacon'
 import { startCompanionPathSwitch } from './path/companion'
+import { isRemoteMode } from './api'
+import { scheduleWebglWarmup } from './gpu-warmup'
 
 // PAIRING, FIRST — before anything on this page can make a request.
 //
@@ -31,3 +33,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <App />
   </React.StrictMode>
 )
+
+// Desktop only: the first WebGL context in this process costs ~75ms and the
+// terminal overlay's renderer will need one on the first zoom-to-card. Take
+// that hit at idle, after first paint, instead (gpu-warmup.ts). The phone
+// never uses WebGL (see TerminalOverlay), so there is nothing to warm there.
+if (!isRemoteMode()) scheduleWebglWarmup()

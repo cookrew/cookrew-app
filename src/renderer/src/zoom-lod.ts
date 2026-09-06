@@ -226,9 +226,45 @@ function useViewportSettled(): boolean {
  */
 export interface LodLayout {
   activeIds: Set<string>
+  /**
+   * Screen rects. Only the ACTIVE ids' entries are contractually current: the
+   * hook hands back the same object across viewport frames while nothing an
+   * overlay reads has changed (see sameLayout), so an inactive node's rect may
+   * be a frame stale. Both consumers already read rects only for active ids.
+   */
   rects: Record<string, ScreenRect>
   /** Most-covered active node — the one a single shared composer targets. */
   primaryId: string | null
+}
+
+function sameRect(a: ScreenRect | undefined, b: ScreenRect | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b
+  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+}
+
+/**
+ * Would an overlay consumer see any difference between these two layouts?
+ * Same winner, same active set, and the same rect for every active id.
+ * Inactive rects are deliberately NOT compared — nobody reads them, and they
+ * change on every frame of every pan, which is exactly the churn this exists
+ * to hide from React.memo.
+ *
+ * Why it matters: the hook subscribes to the viewport, so its host re-renders
+ * on EVERY animation frame. A fresh object each frame forced both overlay
+ * layers — and under them every offscreen-hosted browser view — to re-render
+ * 60 times a second during the zoom-to-card animation, on the same thread
+ * the animation runs on. Measured: three main-thread stalls of 40–90ms inside
+ * a 280ms zoom, and the full view arriving 120–250ms after the animation
+ * should have ended.
+ */
+export function sameLayout(a: LodLayout, b: LodLayout): boolean {
+  if (a.primaryId !== b.primaryId) return false
+  if (a.activeIds.size !== b.activeIds.size) return false
+  for (const id of a.activeIds) {
+    if (!b.activeIds.has(id)) return false
+    if (!sameRect(a.rects[id], b.rects[id])) return false
+  }
+  return true
 }
 
 /**
@@ -250,6 +286,15 @@ export function useLodLayout(
   const settled = useViewportSettled()
   const prevActive = useRef<Set<string>>(new Set())
   const prevPrimary = useRef<string | null>(null)
+  // The last layout handed out. Returned again, same identity, whenever the
+  // new one would read the same to every consumer — that is what lets the
+  // memoised overlay layers sit out the per-frame re-renders (sameLayout).
+  const stable = useRef<LodLayout | null>(null)
+  const settle = (next: LodLayout): LodLayout => {
+    if (stable.current !== null && sameLayout(stable.current, next)) return stable.current
+    stable.current = next
+    return next
+  }
 
   // The stage doesn't move during pan/zoom — only re-measure when its size
   // changes, not on every viewport frame.
@@ -322,7 +367,7 @@ export function useLodLayout(
     rects[focusedId] = { x: bounds.left, y: bounds.top, width: paneWidth, height: paneHeight }
     prevActive.current = only
     prevPrimary.current = focusedId
-    return { activeIds: only, rects, primaryId: focusedId }
+    return settle({ activeIds: only, rects, primaryId: focusedId })
   }
   const winner = allowAutoOpen
     ? pickOverlayWinner(activeIds, coverages, prevPrimary.current, focusedId)
@@ -330,7 +375,7 @@ export function useLodLayout(
   if (winner === null) {
     prevActive.current = new Set()
     prevPrimary.current = null
-    return { activeIds: new Set(), rects, primaryId: null }
+    return settle({ activeIds: new Set(), rects, primaryId: null })
   }
   const only = new Set([winner])
   if (isRemoteMode()) {
@@ -338,5 +383,5 @@ export function useLodLayout(
   }
   prevActive.current = only
   prevPrimary.current = winner
-  return { activeIds: only, rects, primaryId: winner }
+  return settle({ activeIds: only, rects, primaryId: winner })
 }

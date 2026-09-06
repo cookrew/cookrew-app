@@ -27,10 +27,9 @@ import { CableEdge } from './CableEdge'
 import { Header, type MainView } from './Header'
 import { Dock } from './Dock'
 import { CardMenu, type CardMenuAnchor } from './CardMenu'
-import { TerminalOverlayLayer } from './TerminalOverlay'
-import { useLodLayout } from './zoom-lod'
+import { LodOverlays } from './LodOverlays'
 import { browserInFullView } from './dock-target'
-import { BrowserLayer, useInteractiveBrowserCapability } from './BrowserLayer'
+import { useInteractiveBrowserCapability } from './BrowserLayer'
 import {
   recordThumbFailure,
   recordThumbSuccess,
@@ -258,6 +257,13 @@ function Canvas(): React.JSX.Element {
    * full view mount without waiting out the LOD's settle debounce.
    */
   const [arrivedId, setArrivedId] = useState<string | null>(null)
+  /**
+   * The overlay winner (terminal or browser), as LodOverlays last reported it.
+   * Canvas no longer runs the arbitration itself — that hook re-renders its
+   * host on every viewport frame, and this host is the whole app.
+   */
+  const [overlayPrimaryId, setOverlayPrimaryId] = useState<string | null>(null)
+  const clearArrived = useCallback(() => setArrivedId(null), [])
   /**
    * Did the user DELIBERATELY zoom into a card (tap → zoomToNode)? On mobile the
    * overview is zoomed in to bound rendered-node count (OOM fix), so a large
@@ -1064,43 +1070,6 @@ function Canvas(): React.JSX.Element {
   // The snapshot poll reads this instead of `browsers`, so it subscribes once
   // rather than tearing down its interval on every workspace push.
   browsersRef.current = browsers
-  // ONE shared overlay arbitration across terminals AND browsers — per-kind
-  // instances each picked their own remote fullscreen winner, stacking a
-  // browser view over the zoomed terminal (Magpie E2 HIGH 2).
-  const overlayNodes = useMemo(() => [...terminals, ...browsers], [terminals, browsers])
-  // Desktop always allows the passive coverage-open (zoom into a card to open
-  // it). On a phone only a deliberate tap opens one — see deliberateOpenRef.
-  // The zoomed card is passed through so the arbiter can honour the user's
-  // choice: geometry alone cannot tell the card they tapped from a card that
-  // happens to be big, which is how the full view ended up on a card off in the
-  // corner while the focused one filled the stage.
-  const lod = useLodLayout(
-    overlayNodes,
-    !isRemoteMode() || deliberateOpenRef.current,
-    zoomedNodeIdRef.current,
-    arrivedId
-  )
-  // The arrival bypass is ONE-SHOT: once the arrived card has actually held
-  // primary and then lost it, the bypass must not re-admit it on the very
-  // next render after a drop — that zero-cooldown remount was the loop engine
-  // (Pilot's phone-crash hunt, 2026-08-27, section 2). Consumption is tracked
-  // so a slow first admission can't burn the bypass before it ever lands: the
-  // clear fires only after primaryId has EQUALLED arrivedId at least once.
-  const arrivalConsumedRef = useRef(false)
-  useEffect(() => {
-    if (arrivedId === null) {
-      arrivalConsumedRef.current = false
-      return
-    }
-    if (lod.primaryId === arrivedId) {
-      arrivalConsumedRef.current = true
-      return
-    }
-    if (arrivalConsumedRef.current) {
-      arrivalConsumedRef.current = false
-      setArrivedId(null)
-    }
-  }, [lod.primaryId, arrivedId])
   /** Null once the node is gone, which is also how the dialog self-dismisses. */
   const closingNode = closingId
     ? (workspace?.nodes.find((n) => n.id === closingId) ?? null)
@@ -1275,7 +1244,7 @@ function Canvas(): React.JSX.Element {
               picked cards (cables included). Present the whole time the
               toggle is on — PASTE must be reachable before anything is
               picked. Hidden when a card zooms to full view. */}
-          {workspace && clipping && view === 'canvas' && lod.primaryId === null && (
+          {workspace && clipping && view === 'canvas' && overlayPrimaryId === null && (
             <SelectionBar
               workspace={workspace}
               picked={picked}
@@ -1328,7 +1297,7 @@ function Canvas(): React.JSX.Element {
                 }
               : null
           }
-          browserFor={browserInFullView(lod.primaryId, browsers)}
+          browserFor={browserInFullView(overlayPrimaryId, browsers)}
           /* Board view: the canvas tools glide out and the board's
              clipboard selection toggle glides in — the SAME dock, the same
              motion as zooming a terminal. */
@@ -1345,11 +1314,19 @@ function Canvas(): React.JSX.Element {
               : null
           }
         />
-        <TerminalOverlayLayer
+        <LodOverlays
           terminals={terminals}
+          browsers={browsers}
           activities={activities}
-          lod={lod}
-          onPrimaryChange={setZoomedTerminalId}
+          deliberateOpen={deliberateOpenRef}
+          focused={zoomedNodeIdRef}
+          arrivedId={arrivedId}
+          onArrivalConsumed={clearArrived}
+          onPrimaryChange={setOverlayPrimaryId}
+          onPrimaryTerminalChange={setZoomedTerminalId}
+          onThumb={onThumb}
+          isPhoneViewing={isPhoneViewing}
+          interactiveCapability={interactiveCapability}
         />
         {metricsOpen && <MetricsPanel onClose={() => setMetricsOpen(false)} />}
         {importServedOpen && (
@@ -1392,13 +1369,6 @@ function Canvas(): React.JSX.Element {
             onConfirm={() => confirmClose(closingNode.id)}
           />
         )}
-        <BrowserLayer
-          browsers={browsers}
-          lod={lod}
-          onThumb={onThumb}
-          isPhoneViewing={isPhoneViewing}
-          interactiveCapability={interactiveCapability}
-        />
         <EventToastLayer />
         {/* Identity: the sheets and the lock. Mounted here, after everything
             else, so the lock screen is drawn over the canvas it covers. */}

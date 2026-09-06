@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import type { IClipboardProvider } from '@xterm/addon-clipboard'
@@ -62,7 +62,12 @@ function languageName(code: string | null): string {
   return languageByCode(code)?.name ?? code
 }
 
-export function TerminalOverlayLayer({
+/**
+ * Memoised: the host (LodOverlays) re-renders on every viewport frame, and
+ * this layer only has work to do when the arbitration result changes — which
+ * useLodLayout guarantees by handing back the same `lod` object until it does.
+ */
+export const TerminalOverlayLayer = memo(function TerminalOverlayLayer({
   terminals,
   activities,
   lod,
@@ -92,7 +97,7 @@ export function TerminalOverlayLayer({
         ))}
     </>
   )
-}
+})
 
 function clip(text: string, max: number): string {
   const flat = text.replace(/\s+/g, ' ').trim()

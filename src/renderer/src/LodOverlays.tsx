@@ -1,0 +1,129 @@
+import { useEffect, useMemo, useRef, type RefObject } from 'react'
+import type { BrowserNodeData, TerminalNodeData } from '../../shared/model'
+import type { TerminalActivity } from '../../shared/turn'
+import { isRemoteMode } from './api'
+import { useLodLayout } from './zoom-lod'
+import { TerminalOverlayLayer } from './TerminalOverlay'
+import { BrowserLayer, type InteractiveBrowserCapability } from './BrowserLayer'
+
+/**
+ * The one component that watches the viewport every frame.
+ *
+ * useLodLayout subscribes to the React Flow viewport, so whatever calls it
+ * re-renders on every animation frame. That used to be Canvas itself — the
+ * whole app tree — and a Canvas render is not cheap: its inline callbacks
+ * give React Flow's node renderer new props, which re-renders every visible
+ * card, and the browser layer re-renders every offscreen-hosted browser view.
+ * All of it on the thread the zoom animation is running on. Measured on the
+ * owner's canvas: three 40–90ms stalls inside the 280ms zoom-to-card, the
+ * animation's completion promise firing 120–250ms late, and the full view
+ * mounting at 400–530ms instead of ~300 (scratchpad/zoom-latency).
+ *
+ * Moving the subscription here confines the per-frame render to this leaf.
+ * The two layers under it are memoised and receive the same `lod` object
+ * until the arbitration actually changes (zoom-lod sameLayout), so a frame
+ * that changes nothing costs one small render and two bail-outs.
+ *
+ * Canvas still needs the winner — for the dock's browser target and to hide
+ * the clipboard bar under a full view — and gets it by callback, one commit
+ * later. Nothing the user can perceive rides on that commit.
+ */
+interface LodOverlaysProps {
+  terminals: TerminalNodeData[]
+  browsers: BrowserNodeData[]
+  activities: Record<string, TerminalActivity>
+  /**
+   * Refs, not values, on purpose: zoomToNode sets them and starts the
+   * animation without a Canvas render, and this component reads them fresh on
+   * the viewport frames that follow — the same moments the old Canvas-level
+   * call read them.
+   */
+  deliberateOpen: RefObject<boolean>
+  focused: RefObject<string | null>
+  arrivedId: string | null
+  /** The one-shot arrival bypass has been used up; Canvas clears arrivedId. */
+  onArrivalConsumed: () => void
+  /** The shared winner (terminal OR browser), reported to Canvas. */
+  onPrimaryChange: (id: string | null) => void
+  /** The zoomed TERMINAL — the dock composer's target. */
+  onPrimaryTerminalChange: (id: string | null) => void
+  onThumb: (id: string, dataUrl: string) => void
+  isPhoneViewing: (browserId: string) => boolean
+  interactiveCapability: InteractiveBrowserCapability | null
+}
+
+export function LodOverlays({
+  terminals,
+  browsers,
+  activities,
+  deliberateOpen,
+  focused,
+  arrivedId,
+  onArrivalConsumed,
+  onPrimaryChange,
+  onPrimaryTerminalChange,
+  onThumb,
+  isPhoneViewing,
+  interactiveCapability
+}: LodOverlaysProps): React.JSX.Element {
+  // ONE shared overlay arbitration across terminals AND browsers — per-kind
+  // instances each picked their own remote fullscreen winner, stacking a
+  // browser view over the zoomed terminal (Magpie E2 HIGH 2).
+  const overlayNodes = useMemo(() => [...terminals, ...browsers], [terminals, browsers])
+  // Desktop always allows the passive coverage-open (zoom into a card to open
+  // it). On a phone only a deliberate tap opens one — see deliberateOpenRef in
+  // App. The zoomed card is passed through so the arbiter can honour the
+  // user's choice: geometry alone cannot tell the card they tapped from a card
+  // that happens to be big, which is how the full view ended up on a card off
+  // in the corner while the focused one filled the stage.
+  const lod = useLodLayout(
+    overlayNodes,
+    !isRemoteMode() || deliberateOpen.current === true,
+    focused.current,
+    arrivedId
+  )
+
+  useEffect(() => {
+    onPrimaryChange(lod.primaryId)
+  }, [lod.primaryId, onPrimaryChange])
+
+  // The arrival bypass is ONE-SHOT: once the arrived card has actually held
+  // primary and then lost it, the bypass must not re-admit it on the very
+  // next render after a drop — that zero-cooldown remount was the loop engine
+  // (Pilot's phone-crash hunt, 2026-08-27, section 2). Consumption is tracked
+  // so a slow first admission can't burn the bypass before it ever lands: the
+  // clear fires only after primaryId has EQUALLED arrivedId at least once.
+  const arrivalConsumedRef = useRef(false)
+  useEffect(() => {
+    if (arrivedId === null) {
+      arrivalConsumedRef.current = false
+      return
+    }
+    if (lod.primaryId === arrivedId) {
+      arrivalConsumedRef.current = true
+      return
+    }
+    if (arrivalConsumedRef.current) {
+      arrivalConsumedRef.current = false
+      onArrivalConsumed()
+    }
+  }, [lod.primaryId, arrivedId, onArrivalConsumed])
+
+  return (
+    <>
+      <TerminalOverlayLayer
+        terminals={terminals}
+        activities={activities}
+        lod={lod}
+        onPrimaryChange={onPrimaryTerminalChange}
+      />
+      <BrowserLayer
+        browsers={browsers}
+        lod={lod}
+        onThumb={onThumb}
+        isPhoneViewing={isPhoneViewing}
+        interactiveCapability={interactiveCapability}
+      />
+    </>
+  )
+}

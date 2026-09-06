@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import type { BrowserNodeData, BrowserTab } from '../../shared/model'
 import { activeBrowserTab, browserTabs } from '../../shared/model'
 import { resolveAddress } from '../../shared/address-bar'
@@ -63,7 +63,13 @@ interface BrowserLayerProps {
  * The unresolved capability renders a neutral body so a transient second page
  * instance can never start before ownership is known.
  */
-export function BrowserLayer({
+/**
+ * Memoised, like TerminalOverlayLayer: every browser view is hosted here
+ * permanently (offscreen while its card is a thumbnail), so a re-render of
+ * this layer re-renders every one of them. The host re-renders per viewport
+ * frame; `lod` keeps its identity until the arbitration actually changes.
+ */
+export const BrowserLayer = memo(function BrowserLayer({
   browsers,
   lod,
   onThumb,
@@ -91,7 +97,7 @@ export function BrowserLayer({
       ))}
     </>
   )
-}
+})
 
 export interface InteractiveBrowserCapability {
   enabled: boolean
