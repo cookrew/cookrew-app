@@ -115,7 +115,37 @@ export const BODY_BUDGET = 64 * 1024 * 1024
  * `x-forwarded-for` and the reader's IP are all things the desktop has no
  * business learning from a relay.
  */
-const REQUEST_HEADERS = new Set(['content-type', 'accept', 'last-event-id'])
+const REQUEST_HEADERS = new Set(['content-type', 'accept', 'last-event-id', 'authorization'])
+
+/**
+ * `authorization` CROSSES, and the reason it now does is the whole shape of
+ * this path.
+ *
+ * It was stripped at first, on the reasoning that cookrew.dev's credential is
+ * none of the desktop's business. That was right about the credential and
+ * wrong about the header: the companion authenticates to its OWN Mac with
+ * `Authorization: Bearer <companion token>` (mobile-http.presentedToken), so
+ * stripping it made every API call the canvas issues a 401 — the phone landed
+ * on a shell that could not read a thing. cookrew.dev's own session lives in
+ * the cookie, which IS stripped, and nothing here reads this header any more
+ * (the prefix is admitted by cookie alone), so it is the desktop's to receive.
+ */
+
+/**
+ * THE PREFIX THIS CANVAS IS BEING SERVED UNDER, told to the desktop.
+ *
+ * The companion computes every API path from a global the desktop injects into
+ * index.html (`COOKREW_SLUG` → `API_BASE`, api-base.ts). Through the relay the
+ * desktop cannot know it is being served under `/relay/@user/desktop/<id>` —
+ * nothing in the request says so — and a client that issues root-absolute
+ * `/api/...` under that prefix is asking cookrew.dev, which has no such route.
+ *
+ * So the registry says it, on every forwarded exchange. A client-supplied copy
+ * is REMOVED first: this header is a statement about where the request was
+ * addressed, and a caller that could write it could tell the desktop to serve
+ * a client pointed anywhere.
+ */
+export const CANVAS_BASE_HEADER = 'x-cookrew-base'
 /** cookrew.dev's OWN cookies, which never leave cookrew.dev. */
 const OUR_COOKIES = new Set(['cr_session', 'cr_account'])
 /** Hop-by-hop, plus the length we cannot honour because we stream. */
@@ -162,6 +192,9 @@ export function allowedRequestHeaders(headers: IncomingHttpHeaders): Record<stri
       if (mine.length > 0) out.cookie = mine
       continue
     }
+    // OURS TO WRITE, NEVER THEIRS. Set below from the address the request
+    // actually arrived at.
+    if (name === CANVAS_BASE_HEADER) continue
     if (REQUEST_HEADERS.has(name)) out[name] = value
     // The app's own headers pass; the proxy's own never do, because they
     // describe the reader's network rather than the reader's request.
@@ -192,6 +225,58 @@ export function rewriteCookiePath(cookie: string, path: string): string {
       return name !== 'path' && name !== 'domain'
     })
   return [...kept, `Path=${path}`].join('; ')
+}
+
+/**
+ * WHERE A REDIRECT FROM THE DESKTOP ACTUALLY POINTS.
+ *
+ * The admission answers `303 Location: /?token=<companion token>` — root
+ * absolute, because on the LAN the desktop IS the root. Forwarded as it stands
+ * that sends the browser to `https://cookrew.dev/?token=…`, which is the home
+ * page: OPEN over the relay landed on the marketing site with a credential in
+ * the address bar, and the canvas was never reached. (Found on the live site,
+ * 2026-09-06.)
+ *
+ * Three cases, and the third is the one that must NOT be rewritten:
+ *   `/…`                        → under the prefix, where the desktop is.
+ *   an absolute URL elsewhere   → its path, under the prefix: the desktop
+ *                                 naming its own LAN origin still means "me".
+ *   an absolute URL at OUR host → untouched. `?refused=key` sends the reader
+ *                                 back to /me on cookrew.dev, and prefixing
+ *                                 that would send them to a canvas instead.
+ *
+ * A relative reference (`board`) resolves against the path this exchange was
+ * for, which is what a browser would have done with the desktop's answer.
+ */
+export function rewriteLocation(
+  value: string,
+  at: { prefix: string; path: string; host: string }
+): string {
+  try {
+    const target = new URL(value, `https://desktop.invalid${at.path}`)
+    if (target.host === at.host) return value
+    return `${at.prefix}${target.pathname}${target.search}${target.hash}`
+  } catch {
+    // Not a location this can reason about. Left alone rather than guessed at.
+    return value
+  }
+}
+
+/**
+ * `Refresh: 5; url=/board` — a redirect wearing a different hat, and it has to
+ * be rewritten by the same rule or it is the same bug with a delay on it.
+ */
+export function rewriteRefresh(value: string, at: { prefix: string; path: string; host: string }): string {
+  const semicolon = value.indexOf(';')
+  if (semicolon === -1) return value
+  const head = value.slice(0, semicolon)
+  const tail = value.slice(semicolon + 1).trim()
+  const named = /^url\s*=\s*(.*)$/i.exec(tail)
+  const target = named === null ? tail : named[1].trim()
+  if (target.length === 0) return value
+  const quoted = /^(['"])(.*)\1$/.exec(target)
+  const rewritten = rewriteLocation(quoted === null ? target : quoted[2], at)
+  return `${head}; url=${rewritten}`
 }
 
 /** What the /relay prefix logs, and the only numbers it keeps. */
@@ -513,6 +598,8 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
     const rest = url.pathname.slice(base.length)
     const path = `${rest.length === 0 ? '/' : rest}${url.search}`
     const cookiePath = `${base}/`
+    /** Our own host, so a redirect BACK to cookrew.dev is left where it points. */
+    const host = typeof request.headers.host === 'string' ? request.headers.host : ''
 
     const method = (request.method ?? 'GET').toUpperCase()
     const chunks: Buffer[] = []
@@ -561,8 +648,10 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
         name,
         method,
         path,
+        prefix: base,
         cookiePath,
-        headers: allowedRequestHeaders(request.headers),
+        host,
+        headers: { ...allowedRequestHeaders(request.headers), [CANVAS_BASE_HEADER]: base },
         body
       })
     })
@@ -576,7 +665,11 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
       name: string
       method: string
       path: string
+      /** `/relay/@user/desktop/<id>`, with no trailing slash. */
+      prefix: string
       cookiePath: string
+      /** The host this request arrived at — cookrew.dev's own. */
+      host: string
       headers: Record<string, string>
       body: Buffer
     }
@@ -627,7 +720,15 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
         if (frame.t === 'head' && !headed) {
           headed = true
           startClock(idleMs, 'went silent after its head')
-          response.writeHead(frame.status, answerHeaders(frame.headers, exchange.cookiePath))
+          response.writeHead(
+            frame.status,
+            answerHeaders(frame.headers, {
+              cookiePath: exchange.cookiePath,
+              prefix: exchange.prefix,
+              path: exchange.path,
+              host: exchange.host
+            })
+          )
           return
         }
         if (frame.t === 'chunk') {
@@ -794,13 +895,17 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
  */
 function answerHeaders(
   headers: Record<string, string>,
-  cookiePath: string
+  at: { cookiePath: string; prefix: string; path: string; host: string }
 ): Record<string, string | string[]> {
   const out: Record<string, string | string[]> = {}
   for (const [key, value] of Object.entries(headers)) {
     const name = key.toLowerCase()
     if (HOP_BY_HOP.has(name)) continue
-    out[name] = value
+    // A redirect the desktop wrote is written for its own root. Both headers
+    // that carry one are moved under the prefix — see rewriteLocation.
+    if (name === 'location') out[name] = rewriteLocation(value, at)
+    else if (name === 'refresh') out[name] = rewriteRefresh(value, at)
+    else out[name] = value
   }
   const cookies = headers['set-cookie']
   if (typeof cookies === 'string' && cookies.length > 0) {
@@ -808,7 +913,7 @@ function answerHeaders(
       .split('\n')
       .map((cookie) => cookie.trim())
       .filter((cookie) => cookie.length > 0)
-      .map((cookie) => rewriteCookiePath(cookie, cookiePath))
+      .map((cookie) => rewriteCookiePath(cookie, at.cookiePath))
   }
   // A canvas is one reader's, and an SSE stream must not be held by a proxy
   // until it ends — which for the line is never.
