@@ -1,7 +1,9 @@
 import type http from 'node:http'
+import type { TLSSocket } from 'node:tls'
 import type { AccountFile } from './account-v2'
 import type { AdmittedDeviceStore } from './admitted-devices'
-import { helloAnswer, helloCorsHeaders } from './device-hello'
+import { helloAnswer, helloAnswerV2, helloCorsHeaders } from './device-hello'
+import { publishedRequestOrigin } from '../shared/hello-proof'
 
 /**
  * THE ONE ROUTE PAIRING ADDS, AND WHY IT SITS HERE.
@@ -76,7 +78,7 @@ export const handleIdentityRoutes = async (
     return true
   }
   if (method !== 'GET') return false
-  const answer = helloAnswer(deps.account(), url.searchParams.get('nonce'))
+  const answer = helloFor(request, url, deps)
   response.writeHead(answer.status, {
     ...cors,
     'content-type': 'application/json',
@@ -84,4 +86,46 @@ export const handleIdentityRoutes = async (
   })
   response.end(JSON.stringify(answer.body))
   return true
+}
+
+/**
+ * WHICH VERSION THIS CALLER ASKED FOR, and why the query says so.
+ *
+ * `?origin=` is the version marker: only a client that intends to check the
+ * signed origin sends the origin it dialled, and only that client can use a
+ * version 2 answer. A phone on an older bundle sends no `origin` and gets
+ * exactly the answer it got before — unchanged, down to the byte — so an
+ * update to the Mac never strands a companion that has not been reloaded.
+ *
+ * THE HOST PIN LIVES HERE, and only on the version 2 path, deliberately. It
+ * exists to make the SIGNED origin true; version 1 signs no origin, so pinning
+ * it there would refuse working phones to protect a field that does not exist.
+ * The names are the ones this server actually answers on (`selfOrigins`, from
+ * mobile-server). An empty list means this Mac cannot say what it published —
+ * no certificate, no account — and a proof it cannot stand behind is a 421
+ * rather than a guess made from the caller's own Host header.
+ *
+ * NOTE for whoever lands the server-wide Host allow-list: this is the minimal
+ * check, scoped to this one route. Replace it with the shared one when it
+ * arrives; the contract it must keep is `publishedRequestOrigin`.
+ */
+const helloFor = (
+  request: http.IncomingMessage,
+  url: URL,
+  deps: MobileIdentityDeps
+): ReturnType<typeof helloAnswer> | ReturnType<typeof helloAnswerV2> => {
+  const nonce = url.searchParams.get('nonce')
+  const asked = url.searchParams.get('origin')
+  if (asked === null) return helloAnswer(deps.account(), nonce)
+  return helloAnswerV2({
+    account: deps.account(),
+    nonce,
+    asked,
+    arrived: publishedRequestOrigin(
+      request.headers.host,
+      (request.socket as TLSSocket).encrypted === true,
+      deps.selfOrigins?.() ?? []
+    ),
+    now: deps.now?.() ?? Date.now()
+  })
 }
