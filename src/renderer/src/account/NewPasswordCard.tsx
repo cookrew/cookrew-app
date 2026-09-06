@@ -3,6 +3,7 @@ import { MIN_PASSWORD, passwordStrength } from '../../../shared/account-v2'
 import { APPROVAL_COPY } from '../../../shared/account-approvals'
 import { cookrew } from '../api'
 import { ACCOUNT_COPY, refusalSentence } from './account-store'
+import { DOING, problemSentence } from './problem'
 import '../grant-surface.css'
 
 /**
@@ -51,9 +52,9 @@ export function NewPasswordCard({
         setNext('')
         onDone()
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         setBusy(false)
-        setError('Something went wrong on this side. Try again.')
+        setError(problemSentence(DOING.PASSWORD, err))
       })
   }
 

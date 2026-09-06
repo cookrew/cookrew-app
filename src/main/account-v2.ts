@@ -318,12 +318,22 @@ async function wireError(
   response: Response,
 ): Promise<{ reason: AccountRefusal; message?: string }> {
   if (response.status === 429) return { reason: 'rate_limited' }
-  if (response.status === 401) return { reason: 'session-expired' }
   let body: WireError = {}
   try {
     body = (await response.json()) as WireError
   } catch {
     // A refusal with no body is still a refusal; it just has no sentence.
+  }
+  // A 401 is a dead session ONLY when the registry says so (no error, or
+  // `unauthenticated`). A wrong authenticator code or a refused passkey also
+  // arrive as 401, with their own error and sentence — telling the owner
+  // "your session ended" for a mistyped code sent them to the wrong fix.
+  if (response.status === 401) {
+    if (typeof body.error !== 'string' || body.error === 'unauthenticated') {
+      return { reason: 'session-expired' }
+    }
+    const named: AccountRefusal = REFUSALS[body.error] ?? 'unknown'
+    return body.message ? { reason: named, message: body.message } : { reason: named }
   }
   const reason: AccountRefusal =
     (typeof body.error === 'string' ? REFUSALS[body.error] : undefined) ?? 'unknown'
@@ -451,7 +461,14 @@ export class Accounts {
     } catch {
       return { ok: false, reason: 'offline' }
     }
-    if (response.status !== 201) return { ok: false, ...(await wireError(response)) }
+    if (response.status !== 201) {
+      const refused = await wireError(response)
+      // The surface keeps its password prompt open on 'session-expired'; a
+      // wrong password on a resume is that same prompt again, with the sentence.
+      return refused.reason === 'bad_credentials'
+        ? { ok: false, reason: 'session-expired', ...(refused.message ? { message: refused.message } : {}) }
+        : { ok: false, ...refused }
+    }
 
     let body: { username?: string; deviceId?: string; session?: AccountSession }
     try {
@@ -600,7 +617,14 @@ export class Accounts {
     } catch {
       return { ok: false, reason: 'offline' }
     }
-    if (response.status !== 201) return { ok: false, ...(await wireError(response)) }
+    if (response.status !== 201) {
+      const refused = await wireError(response)
+      // The surface keeps its password prompt open on 'session-expired'; a
+      // wrong password on a resume is that same prompt again, with the sentence.
+      return refused.reason === 'bad_credentials'
+        ? { ok: false, reason: 'session-expired', ...(refused.message ? { message: refused.message } : {}) }
+        : { ok: false, ...refused }
+    }
     let body: { token?: string; exp?: number }
     try {
       body = (await response.json()) as typeof body

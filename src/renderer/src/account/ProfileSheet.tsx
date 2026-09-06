@@ -13,6 +13,7 @@ import {
   revokeSentence,
 } from './account-store'
 import { ApprovalCard } from './ApprovalCard'
+import { DOING, problemSentence } from './problem'
 import { PairPhoneSheet } from './PairPhoneSheet'
 import { SecurityCard } from './SecurityCard'
 import { SeatsTab } from './SeatsTab'
@@ -89,6 +90,8 @@ export function ProfileSheet({
   const [requests, setRequests] = useState<readonly ApprovalRequest[]>([])
   /** The display name while it is being edited; null when it is not. */
   const [editing, setEditing] = useState<string | null>(null)
+  /** A failure from the security card's own actions (lock, codes file). */
+  const [problem, setProblem] = useState<string | null>(null)
   const username = status.username ?? ''
 
   // Re-read whenever the count changes, so approving on the card and the
@@ -121,10 +124,7 @@ export function ProfileSheet({
         if (result.ok) setProfile(result.value)
         else setError(refusalSentence(result.reason, result.message, username))
       })
-      .catch((err: unknown) => {
-        console.error('profile sheet:', err)
-        setError('Something went wrong on this side. Try again.')
-      })
+      .catch((err: unknown) => setError(problemSentence(DOING.PROFILE, err)))
   }, [username, key])
 
   useEffect(() => {
@@ -153,10 +153,7 @@ export function ProfileSheet({
         if (forgotten) setAdmitted((prior) => prior.filter((p) => p.deviceId !== deviceId))
         else setError('That phone could not be forgotten. Try again.')
       })
-      .catch((err: unknown) => {
-        console.error('forget admitted:', err)
-        setError('Something went wrong on this side. Try again.')
-      })
+      .catch((err: unknown) => setError(problemSentence(DOING.FORGET, err)))
   }
 
   const revoke = (id: string): void => {
@@ -173,10 +170,7 @@ export function ProfileSheet({
           prior ? { ...prior, devices: prior.devices.filter((d) => d.id !== id) } : prior,
         )
       })
-      .catch((err: unknown) => {
-        console.error('revoke device:', err)
-        setError('Something went wrong on this side. Try again.')
-      })
+      .catch((err: unknown) => setError(problemSentence(DOING.REVOKE, err)))
   }
 
   /**
@@ -194,10 +188,7 @@ export function ProfileSheet({
         if (result.ok) setProfile(result.value)
         else setError(refusalSentence(result.reason, result.message, username))
       })
-      .catch((err: unknown) => {
-        console.error('set display name:', err)
-        setError('Something went wrong on this side. Try again.')
-      })
+      .catch((err: unknown) => setError(problemSentence(DOING.DISPLAY_NAME, err)))
   }
 
   const setReachable = (on: boolean): void => {
@@ -378,7 +369,8 @@ export function ProfileSheet({
             lockAfterMs={status.lockAfterMs}
             recoveryCodesSavedAt={status.recoveryCodesSavedAt}
             recoveryCodesLeft={profile?.recoveryCodesLeft ?? status.recoveryCodesLeft}
-            {...securityActions(onStatus, onClose)}
+            problem={problem}
+            {...securityActions(onStatus, onClose, setProblem)}
           />
         )}
 

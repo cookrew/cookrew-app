@@ -131,14 +131,23 @@ describe('the security rows, in both states (D3)', () => {
     expect(html).not.toContain('REMOVE')
   })
 
-  it('ENROLLED: the passkey by name and the app as ACTIVE, both removable', () => {
+  it('ENROLLED: every passkey by name, the app as ACTIVE, and ADD still beneath', () => {
     const html = rows(
-      factors({ totp: true, passkeys: [{ id: 'pk-1', name: 'Touch ID on this Mac', addedAt: 1 }] }),
+      factors({
+        totp: true,
+        passkeys: [
+          { id: 'pk-1', name: 'Comet on M1Pro', addedAt: 1_757_116_800_000 },
+          { id: 'pk-2', name: 'Touch ID on this Mac', addedAt: 1_757_116_800_000 },
+        ],
+      }),
     )
+    expect(html).toContain('Comet on M1Pro')
     expect(html).toContain('Touch ID on this Mac')
+    expect(html).toContain('Added ')
     expect(html).toContain('ACTIVE')
-    expect(html.match(/>REMOVE</g)).toHaveLength(2)
-    expect(html).not.toContain('>ADD<')
+    // Two passkeys and the authenticator come off; adding another stays open.
+    expect(html.match(/>REMOVE</g)).toHaveLength(3)
+    expect(html.match(/>ADD</g)).toHaveLength(1)
     expect(html).not.toContain('RECOMMENDED')
   })
 

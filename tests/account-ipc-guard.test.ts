@@ -223,12 +223,50 @@ describe('the phase 4 handlers', () => {
 })
 
 describe('the handlers', () => {
-  it('lock() locks and the status says so', async () => {
+  it('lock() locks and answers the status inside a result', async () => {
     const shared = deps()
     const handlers = accountHandlers(shared)
-    expect((await handlers['account:lock']()) as { locked: boolean }).toMatchObject({
-      locked: true,
+    expect(await handlers['account:lock']()).toMatchObject({
+      ok: true,
+      value: { locked: true },
     })
+  })
+
+  it('a channel that writes to the disk answers a SENTENCE, not a rejection', async () => {
+    // Real-UI QA found a red box with no cause in it on the SECURITY tab. A
+    // handler that throws rejects the invoke, and every rejection looked the
+    // same by the time it reached the card.
+    const shared = deps()
+    vi.spyOn(shared.accounts, 'setLockAfterMs').mockImplementation(() => {
+      throw new Error('EROFS: read-only file system')
+    })
+    const answer = (await accountHandlers(shared)['account:setLock'](0)) as {
+      ok: false
+      message: string
+    }
+    expect(answer.ok).toBe(false)
+    expect(answer.message).toContain('The lock setting could not be saved on this Mac')
+    expect(answer.message).toContain('EROFS')
+  })
+
+  it('keeps 0 as the OFF choice rather than reading it as a missing argument', async () => {
+    const shared = deps()
+    const setting = vi.spyOn(shared.accounts, 'setLockAfterMs')
+    await accountHandlers(shared)['account:setLock'](0)
+    expect(setting).toHaveBeenCalledWith(0)
+    expect(shared.lock.lockAfterMs).toBe(0)
+  })
+
+  it('answers a sentence when the recovery codes cannot be made', async () => {
+    const shared = deps()
+    vi.spyOn(shared.accounts, 'recoveryCodes').mockRejectedValue(new Error('socket hang up'))
+    const answer = (await accountHandlers(shared)['account:recoveryCodes']()) as {
+      ok: false
+      message: string
+    }
+    expect(answer).toMatchObject({ ok: false })
+    expect(answer.message).toContain('New recovery codes could not be made')
+    expect(answer.message).toContain('socket hang up')
   })
 
   it('setLock writes the setting to BOTH the file and the live timer', () => {

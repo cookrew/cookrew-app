@@ -10,6 +10,7 @@ import {
 } from '../../../shared/seats'
 import { cookrew } from '../api'
 import { ACCOUNT_COPY, refusalSentence } from './account-store'
+import { DOING, problemSentence } from './problem'
 
 /**
  * D4's fifth tab — SEATS & TEAMS.
@@ -73,10 +74,7 @@ export function SeatsTab({ username }: { username: string }): React.JSX.Element 
         if (result.ok) setSurface(result.value)
         else setError(refusalSentence(result.reason, result.message, username))
       })
-      .catch((err: unknown) => {
-        console.error('seats tab:', err)
-        setError('Something went wrong on this side. Try again.')
-      })
+      .catch((err: unknown) => setError(problemSentence(DOING.SEATS, err)))
   }, [username])
 
   useEffect(load, [load])
@@ -119,9 +117,9 @@ export function SeatsTab({ username }: { username: string }): React.JSX.Element 
         setTyped('')
         refresh(slug)
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         setBusy(false)
-        setError('Something went wrong on this side. Try again.')
+        setError(problemSentence(DOING.SEAT, err))
       })
   }
 

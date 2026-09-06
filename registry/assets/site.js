@@ -718,7 +718,7 @@
   if (me) {
     const refresh = () => location.reload()
     document.addEventListener('click', (event) => {
-      const el = event.target.closest('[data-revoke],[data-signout],[data-recovery],[data-edit-name],[data-password]')
+      const el = event.target.closest('[data-revoke],[data-signout],[data-recovery],[data-edit-name]')
       if (!el) return
       event.preventDefault()
       if (el.dataset.revoke !== undefined) {
@@ -749,15 +749,12 @@
           if (out.status === 200) return refresh()
           toast(out.body?.message ?? 'That name was not accepted.', 6000)
         })
-      } else if (el.dataset.password !== undefined) {
-        const current = prompt('Your current password')
-        if (current === null) return
-        const next = prompt('The new one — at least 12 characters')
-        if (next === null) return
-        void v2('POST', '/v2/me/password', { current, next }).then((out) => {
-          toast(out.status === 204 ? 'Password changed.' : (out.body?.message ?? 'That did not go through.'), 6000)
-        })
       }
+      // CHANGE IS factors.js's NOW. It was two `prompt()` boxes here — no
+      // current password on the screen, no strength, no repeat — and a
+      // password change is the one thing on this page that ends every other
+      // sitting. It belongs in a panel with three fields, which is where the
+      // ladder's own screens already live.
     })
   }
 

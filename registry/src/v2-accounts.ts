@@ -617,13 +617,21 @@ export class V2Accounts {
     current: unknown,
     next: unknown,
     keepJti?: string
-  ): Promise<{ ok: true } | Refused<'bad_credentials' | 'weak_password'>> {
+  ): Promise<{ ok: true } | Refused<'bad_credentials' | 'weak_password' | 'same_password'>> {
     const account = this.get(username)
     const right = await passwordGate.run(() =>
       verifyPassword(account?.password ?? null, typeof current === 'string' ? current : '')
     )
     if (!right || !account) return { ok: false, reason: 'bad_credentials' }
     if (!passwordIsAcceptable(next)) return { ok: false, reason: 'weak_password' }
+    /**
+     * THE SAME PASSWORD IS NOT A CHANGE, and answering 204 to one would be a
+     * lie with consequences: a person changes their password because they
+     * think somebody else has it, and this route ends every OTHER sitting as
+     * part of doing so. Told "done", they would walk away believing the one
+     * thing they came to fix had been fixed.
+     */
+    if (next === current) return { ok: false, reason: 'same_password' }
     const hashed = await passwordGate.run(() => hashPassword(next))
     // Re-read: stretching took long enough that a device may have signed in
     // meanwhile, and that sitting must be ended by this change too.
