@@ -59,7 +59,7 @@ export interface SousCommandInput {
   /**
    * What the other ears heard of the same audio. Tried, in order, when the
    * primary sentence is not a command or names someone the roster does not
-   * have — the zh-CN ear's 双球 is the en-US ear's Conductor. Never used for
+   * have — the zh-CN ear's garbled syllables are the en-US ear's Conductor. Never used for
    * dictation: prose goes in as the primary heard it.
    */
   alternates?: readonly string[]
@@ -108,7 +108,7 @@ const TYPES_WITHOUT_ENTER: ReadonlySet<Surface> = new Set(['zoom'])
 
 export class SousController {
   /**
-   * "需要问 Conductor 什么呢？" — asked by one caller on one surface, answered
+   * "What should I ask Conductor?" — asked by one caller on one surface, answered
    * by the same one. Keyed by both, so two phones, or the phone and the
    * speaker, never complete each other's questions.
    */

@@ -7,7 +7,7 @@
 // the machine, partial results as they form.
 //
 // TWO EARS, ONE MICROPHONE. Measured 2026-09-06: the zh-CN recognizer turns
-// "Conductor" into 双球 and "cookrew dev" into 肌肉求生, hints or no hints,
+// "Conductor" and "cookrew dev" into unrelated Chinese syllables, hints or no hints,
 // while en-US hears both exactly. `--locale` may be given more than once —
 // every recognizer gets the same audio, the FIRST is the primary, the others
 // come back as `alternates` — BUT two on-device recognizers in ONE process
@@ -23,8 +23,8 @@
 // Contract (main spawns it on ⌘-down, SIGINTs it on ⌘-up):
 //   stdout, one JSON object per line
 //     {"ready":true,"locales":["zh-CN","en-US"],"onDevice":true}
-//     {"partial":"切换工作台到"}                       the primary, as it forms
-//     {"final":"切换工作台到 cookrew dev",
+//     {"partial":"switch workspace to"}                       the primary, as it forms
+//     {"final":"switch workspace to cookrew dev",
 //      "alternates":{"en-US":"switch to cookrew dev"}} once, then exit 0
 //     {"error":"<reason>"}                              then exit 1
 //   flags

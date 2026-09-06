@@ -10,7 +10,7 @@
 // The first locale is the PRIMARY: its partials are what the pill shows and
 // its final is `text`. The others ride along as `alternates` (by locale) for
 // the parser to try when the primary's names miss — a zh-CN ear hears
-// "Conductor" as 双球, an en-US ear hears it exactly.
+// "Conductor" as two unrelated Chinese syllables, an en-US ear hears it exactly.
 //
 // Spawned on ⌘-down (after the beat), SIGINT'd on ⌘-up; each child answers
 // with JSON lines (resources/cr-listen/cr-listen.m). A child that outlives
