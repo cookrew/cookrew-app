@@ -2570,6 +2570,41 @@ a.card-close {
   gap: 6px;
 }
 
+/* Phone clipboard (terminal-clipboard.ts): a beat of feedback under the
+   header, and the fallback paste field — a real editable the finger can
+   long-press, which xterm's hidden textarea is not. */
+.popout-clip-note {
+  padding: 4px 12px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-soft, #6b6257);
+  background: var(--cream, #f4efe4);
+  border-bottom: 1px solid var(--line);
+}
+
+.popout-paste-field {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  background: var(--cream, #f4efe4);
+  border-bottom: 1px solid var(--line);
+}
+
+.popout-paste-input {
+  flex: 1;
+  min-height: 36px;
+  resize: none;
+  font: inherit;
+  font-size: 16px; /* 16px: below this iOS auto-zooms the page on focus */
+  padding: 6px 8px;
+  border: 2px solid var(--line);
+  border-radius: 4px;
+  background: var(--cream-hi);
+  color: inherit;
+}
+
 /* ✕ next to ⤢ CANVAS: closes the card and kills its session (⌘W twin). */
 .popout-kill:hover {
   background: var(--rose);
