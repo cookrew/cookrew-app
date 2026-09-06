@@ -14,5 +14,5 @@
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "noEmit": true
   },
-  "include": ["src/renderer/**/*", "src/shared/**/*", "src/preload/index.d.ts"]
+  "include": ["src/renderer/**/*", "src/shared/**/*", "src/preload/index.d.ts", "tests/perf/fixtures/**/*"]
 }
