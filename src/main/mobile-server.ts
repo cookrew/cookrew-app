@@ -290,8 +290,7 @@ export function startMobileServer(deps: MobileServerDeps): void {
         // everything else. See name-sni.ts.
         SNICallback: createNameSni({
           held: () => nameCert?.held() ?? null,
-          deviceId: () => nameCert?.naming()?.deviceId ?? null,
-          zone: nameCert?.naming()?.zone,
+          naming: () => nameCert?.naming() ?? null,
           log: (message) => console.error(message)
         })
       },

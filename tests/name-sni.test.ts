@@ -44,8 +44,7 @@ describe('which certificate a handshake gets', () => {
   const held = (store: NameCertStore): ReturnType<typeof createNameSni> =>
     createNameSni({
       held: () => store.held(WILDCARD),
-      deviceId: () => MAC,
-      zone: DEFAULT_NAME_ZONE
+      naming: () => ({ deviceId: MAC, zone: DEFAULT_NAME_ZONE })
     })
 
   it('answers the trusted chain for a label under this Mac’s wildcard', async () => {
@@ -77,11 +76,14 @@ describe('which certificate a handshake gets', () => {
     const empty = mkdtempSync(path.join(tmpdir(), 'cookrew-sni-'))
     bases.push(empty)
     const nothing = new NameCertStore(empty)
-    const sni = createNameSni({ held: () => nothing.held(WILDCARD), deviceId: () => MAC })
+    const sni = createNameSni({
+      held: () => nothing.held(WILDCARD),
+      naming: () => ({ deviceId: MAC, zone: DEFAULT_NAME_ZONE })
+    })
     expect(await ask(sni, `192-168-2-40.${MAC}.${DEFAULT_NAME_ZONE}`)).toBeUndefined()
 
     const store = storeWithChain()
-    const anonymous = createNameSni({ held: () => store.held(WILDCARD), deviceId: () => null })
+    const anonymous = createNameSni({ held: () => store.held(WILDCARD), naming: () => null })
     expect(await ask(anonymous, `192-168-2-40.${MAC}.${DEFAULT_NAME_ZONE}`)).toBeUndefined()
   })
 
@@ -113,7 +115,7 @@ describe('which certificate a handshake gets', () => {
   it('serves the default rather than refusing when the chain will not load', async () => {
     const sni = createNameSni({
       held: () => ({ key: 'not a key', chain: 'not a chain', notAfter: Date.now() + DAY, wildcard: WILDCARD }),
-      deviceId: () => MAC,
+      naming: () => ({ deviceId: MAC, zone: DEFAULT_NAME_ZONE }),
       log: () => undefined
     })
     expect(await ask(sni, `192-168-2-40.${MAC}.${DEFAULT_NAME_ZONE}`)).toBeUndefined()

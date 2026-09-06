@@ -1,6 +1,6 @@
 import { createSecureContext, type SecureContext } from 'node:tls'
 import type { HeldCert } from './name-cert-store'
-import { coveredByWildcard, DEFAULT_NAME_ZONE } from '../shared/reach-names'
+import { coveredByWildcard } from '../shared/reach-names'
 
 /**
  * WHICH CERTIFICATE THIS LISTENER ANSWERS WITH, PER HANDSHAKE.
@@ -27,9 +27,16 @@ import { coveredByWildcard, DEFAULT_NAME_ZONE } from '../shared/reach-names'
 export interface NameSniDeps {
   /** The trusted chain this Mac holds, or null. Read per handshake. */
   readonly held: () => HeldCert | null
-  /** This Mac's device id, or null without an account. */
-  readonly deviceId: () => string | null
-  readonly zone?: string
+  /**
+   * The device id and zone to answer for — null unless a chain is held.
+   *
+   * ONE reader rather than a device id and a zone read separately: the zone is
+   * configuration, and a listener that captured it at startup would answer for
+   * the wrong names on a self-hosted registry. `DesktopCert.naming` is exactly
+   * this shape, so the certificate and the name it is served under can never
+   * come from two different opinions.
+   */
+  readonly naming: () => { deviceId: string; zone: string } | null
   readonly log?: (message: string) => void
 }
 
@@ -40,7 +47,6 @@ export type SniCallback = (
 ) => void
 
 export function createNameSni(deps: NameSniDeps): SniCallback {
-  const zone = deps.zone ?? DEFAULT_NAME_ZONE
   const note = deps.log ?? ((): void => undefined)
   /** One built context per chain, keyed by the chain itself. */
   let cachedFor: string | null = null
@@ -65,9 +71,9 @@ export function createNameSni(deps: NameSniDeps): SniCallback {
   }
 
   return (servername, callback) => {
-    const deviceId = deps.deviceId()
-    if (typeof servername !== 'string' || deviceId === null) return callback(null, undefined)
-    if (!coveredByWildcard(servername, deviceId, zone)) return callback(null, undefined)
+    const naming = deps.naming()
+    if (typeof servername !== 'string' || naming === null) return callback(null, undefined)
+    if (!coveredByWildcard(servername, naming.deviceId, naming.zone)) return callback(null, undefined)
     const cert = deps.held()
     if (cert === null) return callback(null, undefined)
     const context = contextFor(cert)

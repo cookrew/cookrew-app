@@ -61,6 +61,7 @@ import {
   allowedCompanionOrigins
 } from './mobile-server'
 import { createDesktopCert, type DesktopCert } from './desktop-cert'
+import { DEFAULT_NAME_ZONE } from '../shared/reach-names'
 import { NameCertStore } from './name-cert-store'
 import {
   activeBrowserTab,
@@ -675,6 +676,9 @@ const nameCertificate: DesktopCert = createDesktopCert({
   // The token stays inside Accounts; what comes back is a Response.
   fetch: (pathname, init) => accounts.authedResponse(pathname, init),
   deviceId: () => accounts.account()?.deviceId ?? null,
+  // The registry is configurable (COOKREW_REGISTRY), so the zone it is
+  // authoritative for has to be too — a self-hosted one certifies its own.
+  zone: process.env.COOKREW_NAME_ZONE || DEFAULT_NAME_ZONE,
   // A new chain means new trusted origins, and those are NOT in the signed
   // card — nothing else would notice that a Mac which published "no names"
   // now has some.
