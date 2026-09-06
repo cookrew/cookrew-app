@@ -5976,3 +5976,19 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
 .cr-sheet .cr-acct-resume .gs-consequence {
   margin: 0 0 8px;
 }
+
+/* ONE MORE STEP, inside the same rose-edged card. The rungs sit under the
+   registry's sentence rather than replacing it: the person is still answering
+   "your session ended", and a card that swapped its whole contents would read
+   as a second, unrelated demand. */
+.cr-acct-ladder .gs-label {
+  margin-top: 8px;
+}
+
+/* The other ways in, on one line under the field. They are ghosts, not
+   primaries: there is exactly one recommended rung on screen at a time and it
+   is the one with the field open. */
+.cr-acct-ladder-ways {
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
