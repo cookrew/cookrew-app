@@ -172,13 +172,18 @@ describe('renderNoteMarkdown caches, and stays bounded', () => {
   })
 
   it('evicts rather than growing without limit', () => {
-    // A note body is unbounded; the cache must not be. 64 entries, so 200
-    // distinct sources must not leave 200 behind.
-    for (let i = 0; i < 200; i++) renderNoteMarkdown(`note number ${i}`)
+    // A note body is unbounded; the cache is bounded in BYTES. With the
+    // budget shrunk through the seam, 200 distinct sources must not leave
+    // 200 behind (tests/note-markdown-cache.test.ts covers the order).
+    clearNoteMarkdownCache(8 * 1024)
+    for (let i = 0; i < 200; i++) renderNoteMarkdown(`note number ${i} ${'x'.repeat(400)}`)
     // the oldest is gone: re-rendering it produces a fresh object
-    const oldAgain = renderNoteMarkdown('note number 0')
-    expect(Object.is(oldAgain, renderNoteMarkdown('note number 0'))).toBe(true)
+    const oldest = `note number 0 ${'x'.repeat(400)}`
+    const oldAgain = renderNoteMarkdown(oldest)
+    expect(Object.is(oldAgain, renderNoteMarkdown(oldest))).toBe(true)
     // and the most recent is still a hit
-    expect(Object.is(renderNoteMarkdown('note number 199'), renderNoteMarkdown('note number 199'))).toBe(true)
+    const newest = `note number 199 ${'x'.repeat(400)}`
+    expect(Object.is(renderNoteMarkdown(newest), renderNoteMarkdown(newest))).toBe(true)
+    clearNoteMarkdownCache()
   })
 })
