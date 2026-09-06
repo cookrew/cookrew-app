@@ -308,8 +308,35 @@ int main(int argc, const char *argv[]) {
       }
     }
 
+    // Signals first, permission second: the key can come up while the
+    // permission dialog is still on screen, and that must end this process
+    // quietly (an empty final) rather than let the default SIGINT kill it
+    // before it has said anything.
+    // The sources live on a background queue because authorize() blocks the
+    // main thread; a signal that arrives while the dialog is up ends the
+    // process from there. Once listening, the stop is handed to main, where
+    // the audio engine lives.
+    __block Listener *listener = nil;
+    dispatch_queue_t signals = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
+    void (^onStop)(void) = ^{
+      Listener *live = listener;
+      if (!live) {
+        emit(@{@"final" : @""});
+        exit(0);
+      }
+      dispatch_async(dispatch_get_main_queue(), ^{ [live stop]; });
+    };
+    signal(SIGINT, SIG_IGN);
+    dispatch_source_t sigint = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGINT, 0, signals);
+    dispatch_source_set_event_handler(sigint, onStop);
+    dispatch_resume(sigint);
+    signal(SIGTERM, SIG_IGN);
+    dispatch_source_t sigterm = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGTERM, 0, signals);
+    dispatch_source_set_event_handler(sigterm, onStop);
+    dispatch_resume(sigterm);
+
     authorize();
-    Listener *listener = [[Listener alloc] initWithLocale:locale allowServer:allowServer];
+    listener = [[Listener alloc] initWithLocale:locale allowServer:allowServer];
     listener.hints = hints;
     if (file) {
       // Diagnostic / test mode: no microphone, no signals — the file ends itself.
@@ -321,16 +348,6 @@ int main(int argc, const char *argv[]) {
       [[NSRunLoop mainRunLoop] run];
       return 0;
     }
-
-    // SIGINT from main (⌘-up), or a hand on Ctrl-C while trying it out.
-    signal(SIGINT, SIG_IGN);
-    dispatch_source_t sigint = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGINT, 0, dispatch_get_main_queue());
-    dispatch_source_set_event_handler(sigint, ^{ [listener stop]; });
-    dispatch_resume(sigint);
-    signal(SIGTERM, SIG_IGN);
-    dispatch_source_t sigterm = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGTERM, 0, dispatch_get_main_queue());
-    dispatch_source_set_event_handler(sigterm, ^{ [listener stop]; });
-    dispatch_resume(sigterm);
 
     // A key that never lifts (window lost focus mid-hold) must not listen forever.
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(maxSeconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{

@@ -107,8 +107,16 @@ describe('MacListener', () => {
     const h = harness()
     const events: ListenEvent[] = []
     h.listener.start((e) => events.push(e))
-    h.children[0].emit('exit', 1)
+    h.children[0].emit('exit', 1, null)
     expect(events).toEqual([{ kind: 'error', message: 'speech helper exited 1' }])
+  })
+  darwin('a child we stopped that died to the signal said nothing — silence, not a fault', () => {
+    const h = harness()
+    const events: ListenEvent[] = []
+    h.listener.start((e) => events.push(e))
+    h.listener.stop()
+    h.children[0].emit('exit', null, 'SIGINT')
+    expect(events).toEqual([{ kind: 'final', text: '' }])
   })
   it('without the helper binary there is no listening, and the reason is said', () => {
     const listener = new MacListener({ binary: '/nowhere/cr-listen', locale: () => 'en-US', hints: () => [] })

@@ -56,6 +56,8 @@ export interface ListenerOptions {
 export class MacListener {
   private child: ChildProcess | null = null
   private killTimer: NodeJS.Timeout | null = null
+  /** Children we asked to stop — their death by signal is not news. */
+  private readonly stopped = new WeakSet<ChildProcess>()
 
   constructor(private readonly options: ListenerOptions) {}
 
@@ -112,12 +114,15 @@ export class MacListener {
       settle({ kind: 'error', message: `could not start the speech helper: ${error.message}` })
       this.forget(child)
     })
-    child.on('exit', (code) => {
+    child.on('exit', (code, signal) => {
       // A child that exits without a final said nothing; that is an empty
-      // final, not an error — the owner held the key and did not speak.
+      // final, not an error — the owner held the key and did not speak. The
+      // same for one we stopped ourselves and that died to the signal (still
+      // waiting on the permission dialog, say): silence, not a fault.
       const tail = parseListenLine(buffer)
       if (tail && (tail.kind === 'final' || tail.kind === 'error')) settle(tail)
-      else settle(code === 0 ? { kind: 'final', text: '' } : { kind: 'error', message: `speech helper exited ${code}` })
+      else if (code === 0 || (this.stopped.has(child) && signal !== null)) settle({ kind: 'final', text: '' })
+      else settle({ kind: 'error', message: `speech helper exited ${code ?? signal}` })
       this.forget(child)
     })
     return true
@@ -127,6 +132,7 @@ export class MacListener {
   stop(): void {
     const child = this.child
     if (!child) return
+    this.stopped.add(child)
     child.kill('SIGINT')
     this.killTimer = setTimeout(() => {
       if (this.child === child) child.kill('SIGKILL')
