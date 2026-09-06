@@ -31,6 +31,23 @@ export const BUDGETS = {
     // load like the latency section — the ELU next to it says whose fault.
     loopDelayP95Ms: { warn: 50, fail: 500 }
   },
+  // The renderer DOM, measured by scripts/perf-dom-probe.mjs in a headless
+  // Chrome at the phone viewport against the local companion (the same React
+  // app the desktop runs). Calibrated 2026-09-06 on the 170-node Cookrew Dev
+  // workspace after perf lane L6: 1,165 elements at rest, 0.0 commits per
+  // idle frame, 84 card renders over a 60-frame pan (cards scrolling into
+  // view; before the lane, 2,681 — every card on every commit), 5-6 layers.
+  // Card renders per pan frame is the structural one: a return to an app
+  // that re-renders per viewport frame puts every visible card back into
+  // every commit (34 cards x 2.4 commits = 80 a frame) and fails outright.
+  dom: {
+    elements: { warn: 3000, fail: 6000 },
+    cardRendersPerPanFrame: { warn: 4, fail: 20 },
+    commitsPerPanFrame: { warn: 4, fail: 8 },
+    layers: { warn: 24, fail: 60 },
+    // Elements the board leaves mounted after it closes: none.
+    boardResidueElements: { warn: 50, fail: 500 }
+  },
   latency: {
     events: {
       'workspace.switched': { p95: { warn: 1000, fail: 3000 } },

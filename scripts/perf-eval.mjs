@@ -7,8 +7,9 @@
  *   node scripts/perf-eval.mjs            # table + exit 1 on any FAIL
  *   node scripts/perf-eval.mjs --json     # the same, as one JSON document
  *   node scripts/perf-eval.mjs --no-probe # skip the HTTP latency probe
+ *   node scripts/perf-eval.mjs --no-dom   # skip the headless-Chrome DOM probe
  *
- * Three sections, each honest about its instrument:
+ * Four sections, each honest about its instrument:
  *
  *   STORAGE  walks ~/.cookrew and buckets every byte (team sidecars, served
  *            sessions, turns, events, backup residue …). Finds sidecar files
@@ -26,6 +27,12 @@
  *            an HTTP probe of the companion API on localhost — N samples per
  *            route, p50/p95/p98, bearer token read from ~/.cookrew and never
  *            printed.
+ *   DOM      the companion page — the same React app the desktop runs — in a
+ *            headless Chrome at the phone viewport: elements at rest, React
+ *            commits and card renders per real pan frame, compositing layers,
+ *            and what the board leaves mounted after it closes. See
+ *            scripts/perf-dom-probe.mjs. Skipped, and says so, without Chrome
+ *            or a running app.
  *
  * History lives in ~/.cookrew/perf-history/*.jsonl. `npm run perf:install`
  * schedules this hourly through launchd; see scripts/perf-eval-install.mjs.
@@ -55,6 +62,7 @@ import {
   worstOf
 } from './perf-eval-lib.mjs'
 import { BUDGETS } from './perf-budgets.mjs'
+import { findChrome, probeCompanion } from './perf-dom-probe.mjs'
 
 const MB = 1024 * 1024
 const HOUR = 60 * 60 * 1000
@@ -75,6 +83,7 @@ function parseArgs(argv) {
   return {
     json: flag('--json'),
     probe: !flag('--no-probe'),
+    dom: !flag('--no-dom'),
     base,
     history: value('--history', path.join(base, 'perf-history')),
     samples: Math.max(3, Math.min(100, Number(value('--samples', 12)) || 12)),
@@ -461,6 +470,85 @@ async function evalLatency(opts, now) {
 }
 
 // ---------------------------------------------------------------------------
+// DOM
+// ---------------------------------------------------------------------------
+
+const skippedDom = (note) => ({
+  checks: [{ name: 'dom', value: null, unit: '', verdict: 'ok', note }],
+  verdict: 'ok'
+})
+
+/**
+ * A pan is 30 real mouse moves out and 30 back; the counts are per frame of
+ * that gesture, so they do not depend on how fast this machine is — a loaded
+ * box pans in fewer frames per second, not in more renders per frame.
+ */
+async function evalDom(opts, now) {
+  if (!opts.dom) return skippedDom('skipped (--no-dom)')
+  if (!findChrome()) return skippedDom('no Chrome — probe skipped (COOKREW_CHROME to name one)')
+  const token = readToken(opts.base)
+  if (!token) return skippedDom('no pairing token — probe skipped')
+  try {
+    const res = await fetch(`http://127.0.0.1:${opts.port}/api/workspaces`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+    })
+    if (!res.ok) return skippedDom(`app answered ${res.status} — probe skipped`)
+  } catch {
+    return skippedDom('unreachable — app not running?')
+  }
+  let result
+  try {
+    result = await probeCompanion({ viewport: 'phone', apiPort: opts.port, frames: 30, token })
+  } catch (error) {
+    return { checks: [{ name: 'dom', value: null, unit: '', verdict: 'warn', note: `probe failed: ${error.message}` }], verdict: 'warn' }
+  }
+  const pan = result.pan
+  const cardRendersPerFrame = pan ? (pan.renders.NodeWrapper ?? 0) / Math.max(1, pan.frames) : null
+  const residue = result.board ? result.board.closed.dom.total - result.rest.dom.total : null
+  const record = {
+    t: now,
+    viewport: result.viewport,
+    nodes: result.workspace?.nodes ?? null,
+    elements: result.rest.dom.total,
+    cards: result.rest.dom.cards,
+    layers: result.rest.layers.count,
+    heapMb: result.rest.metrics.jsHeapUsedMb,
+    commitsPerPanFrame: pan?.commitsPerFrame ?? null,
+    cardRendersPerPanFrame: cardRendersPerFrame,
+    boardResidueElements: residue
+  }
+  appendHistory(opts.history, 'dom', record)
+  const shape = result.workspace ? `${result.workspace.nodes} nodes, ${result.rest.dom.cards} cards on stage` : ''
+  const checks = [
+    { name: 'elements at rest', value: record.elements, unit: '', verdict: judge(record.elements, BUDGETS.dom.elements), note: shape },
+    {
+      name: 'card renders per pan frame',
+      value: cardRendersPerFrame,
+      unit: '/frame',
+      verdict: judge(cardRendersPerFrame, BUDGETS.dom.cardRendersPerPanFrame),
+      note: pan ? `${pan.renders.NodeWrapper ?? 0} over ${pan.frames} frames` : 'no pane point — pan skipped'
+    },
+    {
+      name: 'commits per pan frame',
+      value: pan?.commitsPerFrame ?? null,
+      unit: '/frame',
+      verdict: judge(pan?.commitsPerFrame ?? null, BUDGETS.dom.commitsPerPanFrame),
+      note: pan ? `${pan.commits} commits; idle ${result.idle?.commits ?? 0} in 3 s` : ''
+    },
+    { name: 'compositing layers', value: record.layers, unit: '', verdict: judge(record.layers, BUDGETS.dom.layers), note: result.rest.layers.backingMb === null ? 'layer tree not reported' : `${fmtMb(result.rest.layers.backingMb * MB)} backing` },
+    {
+      name: 'board residue',
+      value: residue,
+      unit: 'elements',
+      verdict: judge(residue, BUDGETS.dom.boardResidueElements),
+      note: result.board ? `${result.board.open.dom.total} open → ${result.board.closed.dom.total} closed` : 'board not found'
+    }
+  ]
+  return { record, checks, verdict: worstOf(checks.map((c) => c.verdict)) }
+}
+
+// ---------------------------------------------------------------------------
 // Run.
 // ---------------------------------------------------------------------------
 
@@ -506,8 +594,9 @@ async function runLocked(opts) {
   const storage = evalStorage(opts, now)
   const memory = await evalMemory(opts, now)
   const latency = await evalLatency(opts, now)
-  const verdict = worstOf([storage.verdict, memory.verdict, latency.verdict])
-  const report = { at: new Date(now).toISOString(), verdict, storage, memory, latency }
+  const dom = await evalDom(opts, now)
+  const verdict = worstOf([storage.verdict, memory.verdict, latency.verdict, dom.verdict])
+  const report = { at: new Date(now).toISOString(), verdict, storage, memory, latency, dom }
   mkdirSync(opts.history, { recursive: true })
   writeFileSync(path.join(opts.history, 'last-report.json'), JSON.stringify(report, null, 2))
   if (opts.json) {
@@ -523,6 +612,8 @@ async function runLocked(opts) {
         renderSection('MEMORY', memory),
         '',
         renderSection('LATENCY', latency),
+        '',
+        renderSection('DOM', dom),
         '',
         `history: ${opts.history}`
       ].join('\n') + '\n'

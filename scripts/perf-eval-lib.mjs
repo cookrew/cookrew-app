@@ -281,7 +281,9 @@ export function renderSection(title, section) {
   const rows = section.checks.map((c) => [
     MARK[c.verdict],
     c.name,
-    c.value === null || c.value === undefined ? '—' : `${c.value.toFixed(c.unit.startsWith('MB') ? 1 : 0)} ${c.unit}`,
+    c.value === null || c.value === undefined
+      ? '—'
+      : `${c.value.toFixed(c.unit.startsWith('MB') ? 1 : c.unit.includes('frame') ? 2 : 0)} ${c.unit}`,
     c.note ?? ''
   ])
   return `${title} — ${section.verdict.toUpperCase()}\n${renderTable(rows)}`
