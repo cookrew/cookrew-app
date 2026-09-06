@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from 'vitest'
 import { createHash, createHmac, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto'
-import { mkdtempSync, rmSync, statSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
@@ -50,6 +50,31 @@ describe('the account key', () => {
 
     // A different directory is a different account.
     expect(accountKey(dir()).thumbprint).not.toBe(first.thumbprint)
+  })
+
+  /**
+   * L1 — REWRITING A FILE DOES NOT REPAIR ITS MODE.
+   *
+   * The repair path wrote the same bytes back with `{ mode: 0o600 }`, and the
+   * mode argument only applies when the file is CREATED. So a key that had
+   * drifted to 0644 — a restore from a backup, a copy from another volume, an
+   * older build that wrote it without a mode — stayed world-readable, and the
+   * check that existed to notice ran on every boot and did nothing. Whoever
+   * holds this key can revoke every certificate we have ever issued.
+   */
+  it('repairs a mode that has drifted, rather than only appearing to', () => {
+    const base = dir()
+    const file = path.join(base, ACCOUNT_KEY_FILE)
+    const first = accountKey(base)
+    chmodSync(file, 0o644)
+    expect(statSync(file).mode & 0o777).toBe(0o644)
+
+    const again = accountKey(base)
+    expect(statSync(file).mode & 0o777).toBe(0o600)
+    // And it is the SAME account: a new key would orphan every certificate
+    // ordered under the old one.
+    expect(again.thumbprint).toBe(first.thumbprint)
+    expect(readFileSync(file, 'utf8')).toContain('PRIVATE KEY')
   })
 
   it('computes the RFC 7638 thumbprint over the three members, in order', () => {

@@ -1,5 +1,5 @@
 import { createHash, createHmac, createPrivateKey, createPublicKey, generateKeyPairSync, sign, type KeyObject } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
 /**
@@ -53,15 +53,21 @@ const publicJwkOf = (key: KeyObject): AccountKey['jwk'] => {
  * The account key on the data volume, made on first use.
  *
  * A key that already exists is REUSED even if its mode has drifted — the file
- * is re-chmodded rather than replaced, because throwing away an ACME account
- * silently orphans every certificate issued under it.
+ * is chmodded rather than replaced, because throwing away an ACME account
+ * silently orphans every certificate issued under it. Chmodded and not
+ * rewritten: `writeFileSync`'s `mode` applies only when it creates the file,
+ * so writing the same bytes back left a 0644 key exactly as it was found.
  */
 export function accountKey(dataDir: string): AccountKey {
   mkdirSync(dataDir, { recursive: true })
   const file = path.join(dataDir, ACCOUNT_KEY_FILE)
   if (existsSync(file)) {
     const key = createPrivateKey(readFileSync(file, 'utf8'))
-    if ((statSync(file).mode & 0o077) !== 0) writeFileSync(file, readFileSync(file), { mode: 0o600 })
+    // chmod, NOT a rewrite. `writeFileSync(..., { mode })` applies the mode
+    // only when it CREATES the file, so writing the same bytes back left a key
+    // that had drifted to 0644 exactly as world-readable as it was — and the
+    // check that existed to notice ran on every boot and did nothing.
+    if ((statSync(file).mode & 0o077) !== 0) chmodSync(file, 0o600)
     const jwk = publicJwkOf(key)
     return { key, jwk, thumbprint: thumbprintOf(jwk) }
   }
