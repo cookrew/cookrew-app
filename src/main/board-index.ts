@@ -448,15 +448,24 @@ export function createProbeSampler(
   const runAsyncPass = async (): Promise<Map<string, BoardPhase>> => {
     const deadline = Date.now() + intervalMs * PROBE_PASS_DEADLINE_TICKS
     let heldMs = 0
-    let segment = performance.now()
+    // The open synchronous segment, or null while an await is in flight —
+    // so a rejection thrown INTO the finally from an await bills nothing for
+    // the off-thread wait it interrupted. (An 801 ms listing failure was
+    // once reported as an 801 ms main-thread hold, on the failure mode this
+    // module now uses on purpose.)
+    let segment: number | null = performance.now()
+    const close = (): void => {
+      if (segment !== null) heldMs += performance.now() - segment
+      segment = null
+    }
     try {
       const listing = deps.listSessionsAsync!()
-      heldMs += performance.now() - segment
+      close()
       const live = new Set(await listing)
       segment = performance.now()
       const detached = detachedTerminals(deps, live)
       lastDetached = detached.length
-      heldMs += performance.now() - segment
+      close()
       const pass = await runDetachedPass(deps, detached, { deadline })
       segment = performance.now()
       heldMs += pass.heldMs
@@ -464,7 +473,7 @@ export function createProbeSampler(
     } catch (error) {
       console.error('Board probe failed:', error)
     } finally {
-      heldMs += performance.now() - segment
+      close()
       inFlight = false
       pending = null
       everCompleted = true

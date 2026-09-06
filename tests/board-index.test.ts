@@ -629,6 +629,45 @@ describe('createProbeSampler — a read can wait for the pass it kicked', () => 
     sampler.stop()
   })
 
+  it('a failed pass bills only its synchronous segments, never the wait it was interrupted in', async () => {
+    const held: number[] = []
+    const failAfter = (ms: number): Promise<string[]> =>
+      new Promise((_resolve, reject) => setTimeout(() => reject(new Error('herdr pane list failed')), ms))
+    const sampler = createProbeSampler(
+      probeDeps({ listSessionsAsync: () => failAfter(120), knownTerminalIds: () => ['t1'] }),
+      PROBE_INTERVAL_MS,
+      { observe: (ms) => held.push(ms) }
+    )
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      const started = performance.now()
+      await sampler.sampleAsync()
+      expect(performance.now() - started).toBeGreaterThanOrEqual(100) // the wait happened
+      expect(held).toHaveLength(1)
+      expect(held[0]).toBeLessThan(10) // but the probe held the thread for single-digit ms
+    } finally {
+      spy.mockRestore()
+    }
+    // The same for a read that fails mid-pass.
+    const held2: number[] = []
+    const sampler2 = createProbeSampler(
+      probeDeps({
+        listSessionsAsync: async () => ['cookrew_t1'],
+        capturePaneAsync: () => new Promise((_r, reject) => setTimeout(() => reject(new Error('read failed')), 120)),
+        knownTerminalIds: () => ['t1']
+      }),
+      PROBE_INTERVAL_MS,
+      { observe: (ms) => held2.push(ms) }
+    )
+    const spy2 = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      await sampler2.sampleAsync()
+      expect(held2[0]).toBeLessThan(10)
+    } finally {
+      spy2.mockRestore()
+    }
+  })
+
   it('a listing that fails leaves the last map alone and counts as a completed attempt', async () => {
     let fail = false
     const sampler = createProbeSampler(
