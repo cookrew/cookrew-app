@@ -22,7 +22,10 @@
  *   THE BUDGET IS THE ANSWER'S, not the question's. A query with no EDNS0 OPT
  *   gets 512 bytes and the TC bit beyond that; one that advertises more gets
  *   the smaller of what it asked for and our own 1232. That ceiling is what
- *   keeps the amplification factor near 1 — see dns-server.ts.
+ *   BOUNDS the amplification factor — it does not make it 1. Measured over the
+ *   wire (tests/registry-dns-server.test.ts): 1.0× for a REFUSED, 1.9–2.5× for
+ *   an address, a TXT set or an NXDOMAIN, and 3.9× for the apex SOA, which is
+ *   the largest thing a 31-byte question can buy. See dns-server.ts.
  */
 
 import { parseIp } from './dns-address'
@@ -362,9 +365,10 @@ export const budgetFor = (edns: number | null): number =>
  *
  * The truncated form keeps the header, the question and the OPT and drops
  * every record — a resolver's only job on TC is to come back over TCP, and
- * sending it half a record set is bytes nobody reads. It is also what holds
- * the amplification factor down: the biggest thing a spoofed UDP packet can
- * make us emit is one small answer or this.
+ * sending it half a record set is bytes nobody reads. It is also what CAPS the
+ * amplification factor: whatever the zone would have said, a spoofed UDP
+ * packet can never make us emit more than the budget, and the truncated form
+ * is roughly the question's own size.
  */
 export function answerWithin(spec: AnswerSpec, budget: number): Uint8Array | null {
   const full = buildAnswer(spec)

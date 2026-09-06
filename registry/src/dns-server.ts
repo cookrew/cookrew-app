@@ -19,9 +19,25 @@ import type { Responder } from './dns-zone'
  * the Kubernetes Service in front of this maps 53 onto. The file holds no
  * knowledge of the zone: it parses, asks the responder, builds, and counts.
  *
- * WHY THE RATE LIMIT IS SILENT. A refusal is still a packet, and a packet sent
- * to a forged source address is exactly the attack the limit exists to stop.
- * Over the budget, the query is dropped and a counter moves; nobody is told.
+ * WHY THE RATE LIMIT IS NOT QUITE SILENT. A refusal is still a packet, and a
+ * packet sent to a forged source address is exactly the attack the limit
+ * exists to stop — so most over-budget queries are dropped and only a counter
+ * moves. Every second one, though, gets the question echoed with TC set and
+ * nothing else (BIND's slip 2), because total silence is indistinguishable
+ * from a dead server and would hand an attacker a way to take the zone away
+ * from a chosen resolver. A TC answer is the same size as the question.
+ *
+ * WHAT THIS ACTUALLY AMPLIFIES, measured rather than hoped for
+ * (tests/registry-dns-server.test.ts, "amplification, measured"):
+ *
+ *   REFUSED, out of zone or ANY   1.0×   (29 bytes in, 29 out)
+ *   an address, a TXT set, NXDOMAIN 1.9–2.5×
+ *   the apex SOA                  3.9×   (31 bytes in, 121 out)
+ *
+ * Nothing here is a reflector worth building — an open resolver is 50×, and a
+ * DNSSEC-signed ANY is hundreds — but it is not 1×, and a comment that said so
+ * was a reason not to look. The EDNS ceiling, the refusal of ANY and AXFR, and
+ * the empty TC form are what hold the top of that range where it is.
  *
  * WHY THE COUNTERS ARE ALL THERE IS. A query name is somebody's device id and
  * somebody's address. This process never writes one down — the operational

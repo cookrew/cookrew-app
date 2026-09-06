@@ -520,3 +520,42 @@ describe('the listener’s own errors', () => {
     }
   })
 })
+
+/**
+ * L5 — WHAT THE AMPLIFICATION FACTOR ACTUALLY IS.
+ *
+ * "Near 1" was a claim nobody had measured. It is not 1 for the answers that
+ * carry records — an apex NS or a TXT set is several times the question that
+ * asked for it — and pretending otherwise is the kind of comment that stops
+ * somebody looking. This measures every shape the zone can emit so the number
+ * in the docblock is a number rather than a hope, and pins the ceiling.
+ */
+describe('amplification, measured', () => {
+  it('never turns a spoofed question into a much bigger answer', async () => {
+    challenges.set(MAC, [`digest-${'x'.repeat(38)}`])
+    const shapes: { what: string; query: Buffer }[] = [
+      { what: 'apex SOA', query: buildQuery({ name: ZONE, type: T.SOA }) },
+      { what: 'apex NS', query: buildQuery({ name: ZONE, type: T.NS }) },
+      { what: 'ns1 A', query: buildQuery({ name: `ns1.${ZONE}`, type: T.A }) },
+      { what: 'address A', query: buildQuery({ name: `192-168-2-40.${MAC}.${ZONE}`, type: T.A }) },
+      { what: 'challenge TXT', query: buildQuery({ name: `_acme-challenge.${MAC}.${ZONE}`, type: T.TXT }) },
+      { what: 'NXDOMAIN', query: buildQuery({ name: `8-8-8-8.${MAC}.${ZONE}`, type: T.A }) },
+      { what: 'REFUSED (out of zone)', query: buildQuery({ name: 'example.com', type: T.A }) },
+      { what: 'ANY (refused)', query: buildQuery({ name: ZONE, type: T.ANY }) }
+    ]
+    const measured: string[] = []
+    let worst = 0
+    for (const shape of shapes) {
+      const reply = await askUdp(port, shape.query)
+      expect(reply).not.toBeNull()
+      const factor = reply!.length / shape.query.length
+      worst = Math.max(worst, factor)
+      measured.push(`${shape.what} ${shape.query.length}→${reply!.length} (${factor.toFixed(2)}×)`)
+    }
+    console.log(`L5: ${measured.join(', ')}`)
+    // The whole reason ANY, AXFR and recursion are refused, and the reason the
+    // UDP budget is what it is. Five would already be worth a second look.
+    expect(worst).toBeLessThan(5)
+    challenges.clear()
+  })
+})
