@@ -474,19 +474,15 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     v2Json(response, 200, account.desktops.map(desktopBody))
     return
   }
-  if (rest.length === 3 && rest[0] === 'desktops' && rest[2] === 'open' && method === 'POST') {
-    const deviceId = (ctx.decode(rest[1]) ?? '').toLowerCase()
-    if (!account.desktops.some((d) => d.deviceId === deviceId)) {
-      refuse(response, 404, 'not_found')
-      return
-    }
-    // NAMES BOTH ENDS: the desktop it opens and the device asking. The desktop
-    // verifies it offline against /v2/keys, so this is the only moment the
-    // registry is in the path of somebody opening their own canvas.
-    const minted = v2.tokens.mintCanvasToken(account.username, claims.dev, deviceId)
-    v2Json(response, 201, { token: minted.token, exp: minted.exp })
-    return
-  }
+  /*
+   * THERE IS NO `POST …/desktops/:id/open` ANY MORE (reach v2.1).
+   *
+   * It minted a canvas token for the `?open=&key=&device=` admission, and that
+   * whole ceremony is retired: the relay prefix is already gated by the
+   * account session, and what admits a phone AT THE MAC is the pairing token
+   * the Mac prints, held by the companion. A second credential minted here
+   * would be a second thing to get wrong about a door that is already shut.
+   */
   if (rest.length === 2 && rest[0] === 'desktops' && method === 'PUT') {
     const deviceId = (ctx.decode(rest[1]) ?? '').toLowerCase()
     // Only that desktop may describe itself: another device of the same
