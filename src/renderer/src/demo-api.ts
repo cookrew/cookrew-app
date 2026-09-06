@@ -317,6 +317,13 @@ export function createDemoApi(): CookrewApi {
     onBrowserOpenTab: () => () => undefined,
     onBrowserPhoneViewing: () => () => undefined,
     onCmdW: () => () => undefined,
+    // No Sous in the demo: nothing to drive, so every sentence is `none`.
+    sousCommand: () => Promise.resolve({ intent: 'none' as const, spoken: '' }),
+    onUiCommand: () => () => undefined,
+    listenAvailable: () => Promise.resolve(false),
+    listenStart: () => Promise.resolve(false),
+    listenStop: () => Promise.resolve(),
+    onListenEvent: () => () => undefined,
     // No OS hands this surface a link: the phone and the demo are reached by
     // one, never launched by one.
     onDeepLink: () => () => undefined,

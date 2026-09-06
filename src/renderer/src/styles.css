@@ -6095,3 +6095,53 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   flex-wrap: wrap;
   margin-top: 10px;
 }
+
+/* Sous, heard and answering — one pill at the top of the stage (SousPill).
+   Above every layer including a zoomed terminal, because the words are what
+   the owner is looking for while they hold the key. */
+.sous-pill {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(70vw, 720px);
+  padding: 8px 14px;
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  box-shadow: 4px 4px 0 var(--ink);
+  pointer-events: none;
+}
+.sous-pill .cr-icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+.sous-pill.listening .cr-icon {
+  color: var(--danger, #c0392b);
+  animation: sous-pulse 1.1s ease-in-out infinite;
+}
+.sous-pill.refused {
+  border-style: dashed;
+}
+.sous-pill-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@keyframes sous-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}

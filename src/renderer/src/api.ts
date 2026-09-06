@@ -1,5 +1,9 @@
 import type { DeepLink } from '../../shared/deep-link'
 import type { TranslateResult } from '../../shared/translate'
+import type { Surface as SousSurface } from '../../shared/sous-intent'
+import type { SousCommandResult } from '../../main/sous-control'
+import type { ListenEvent } from '../../main/listen'
+import type { UiCommandEvent } from '../../shared/sous-ui'
 import type {
   AgentRole,
   CanvasNode,
@@ -494,6 +498,26 @@ export interface CookrewApi {
   onBrowserPhoneViewing: (cb: (browserId: string) => void) => () => void;
   /** Main routes ⌘W here so the renderer can close the topmost layer first. */
   onCmdW: (cb: () => void) => () => void;
+  /**
+   * Sous driving the canvas (shared/sous-intent). A sentence goes up with the
+   * surface it was spoken on; what comes back is what to SAY — the doing has
+   * already happened in main. Zoom / zoom-back arrive separately as ui
+   * commands, on every surface, so the TV follows the owner's voice too.
+   */
+  sousCommand: (
+    text: string,
+    ctx: { surface: SousSurface; focusedAgentId?: string | null; alternates?: string[] }
+  ) => Promise<SousCommandResult>;
+  onUiCommand: (cb: (event: UiCommandEvent) => void) => () => void;
+  /**
+   * Hold ⌘ to talk (desktop only — the phone dictates through the Web Speech
+   * API in VoiceBar). Main spawns the on-device recognizer on start, SIGINTs
+   * it on stop, and streams ready / partial / final / error here.
+   */
+  listenAvailable: () => Promise<boolean>;
+  listenStart: () => Promise<boolean>;
+  listenStop: () => Promise<void>;
+  onListenEvent: (cb: (event: ListenEvent) => void) => () => void;
   /**
    * A `cookrew://` link the OS handed to the app, already parsed by main —
    * one of three verbs, never a raw URL (shared/deep-link.ts).

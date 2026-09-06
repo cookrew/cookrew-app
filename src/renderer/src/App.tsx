@@ -67,6 +67,9 @@ import { apiPath } from './api-base'
 import { planeFetch } from './plane-fetch'
 import { authHeaders } from './auth-gate'
 import { CrIcon } from './icons'
+import { SousPill } from './SousPill'
+import { speakSous } from './sous-speak'
+import { usePushToTalk } from './use-push-to-talk'
 import {
   canvasVisualModeOf,
   nextCanvasVisualMode,
@@ -675,6 +678,53 @@ function Canvas(): React.JSX.Element {
   }, [reactFlow])
 
   const requestClose = useCallback((nodeId: string) => setClosingId(nodeId), [])
+
+  // Sous at the wheel (shared/sous-ui): main has already switched the
+  // workspace and placed the card; this is the VIEW catching up. No workspace
+  // check on purpose — the command can outrun the workspace:state it follows,
+  // and a zoom to a card that is not here yet falls back to fitView, which is
+  // the same place zoom-back lands. focus-input is a zoom too: the full view
+  // hands focus to the terminal on open.
+  useEffect(
+    () =>
+      cookrew().onUiCommand((event) => {
+        const command = event.command
+        if (command.kind === 'zoom-back') zoomBack()
+        else zoomToNode(command.nodeId)
+      }),
+    [zoomToNode, zoomBack]
+  )
+
+  // Hold ⌘ to talk. On the canvas the sentence is a command; over a zoomed
+  // terminal it is dictation for that agent (shared/sous-intent decides, from
+  // the surface). What comes back is said aloud and shown for a beat.
+  const [sousReply, setSousReply] = useState<{ text: string; refused: boolean } | null>(null)
+  useEffect(() => {
+    if (!sousReply) return
+    const timer = window.setTimeout(() => setSousReply(null), 3500)
+    return () => window.clearTimeout(timer)
+  }, [sousReply])
+  const ptt = usePushToTalk({
+    enabled: true,
+    onFinal: (text, alternates) => {
+      if (!text.trim()) return
+      const zoomed = zoomedTerminalIdRef.current
+      const ctx = zoomed
+        ? { surface: 'zoom' as const, focusedAgentId: zoomed, alternates }
+        : { surface: 'canvas' as const, alternates }
+      void cookrew()
+        .sousCommand(text, ctx)
+        .then((result) => {
+          if (!result.spoken) return
+          // What landed, next to what was said about it — the cleaned-up
+          // sentence is the thing the owner wants to check.
+          const shown = result.text ? `${result.spoken} · ${result.text}` : result.spoken
+          setSousReply({ text: shown, refused: result.intent === 'refused' })
+          speakSous(result.spoken)
+        })
+    },
+    onError: (message) => setSousReply({ text: message, refused: true })
+  })
 
   /**
    * Dock tool selection. There is no MOVE button — the resting hand is what
@@ -1400,6 +1450,7 @@ function Canvas(): React.JSX.Element {
           interactiveCapability={interactiveCapability}
         />
         <EventToastLayer />
+        <SousPill listening={ptt.listening} partial={ptt.partial} reply={sousReply} />
         {/* Identity: the sheets and the lock. Mounted here, after everything
             else, so the lock screen is drawn over the canvas it covers. */}
         {account.overlays}

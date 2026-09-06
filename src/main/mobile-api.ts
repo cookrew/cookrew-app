@@ -39,6 +39,14 @@ import type {
 import { readBytes, readJson, respondJson, startSse, pairingAuthorized } from "./mobile-http";
 import { ownerSubmit } from "./ask";
 import { MAX_ATTACHMENT_BYTES } from "./attachments";
+import type { SousDoor } from "./socket-server";
+import type { Surface as SousSurface } from "../shared/sous-intent";
+import type { UiCommandEvent } from "../shared/sous-ui";
+import type { EventEmitter } from "node:events";
+
+const SOUS_SURFACES: ReadonlySet<string> = new Set(["canvas", "zoom", "phone", "home", "cli"]);
+/** A spoken sentence; anything longer is a document and has other routes. */
+const SOUS_MAX_TEXT = 2000;
 
 /**
  * Workspace operations shared with the renderer IPC handlers — the mobile
@@ -144,6 +152,13 @@ export interface MobileApiDeps {
   events: EventLog;
   /** Durable agent roster cache (~/.cookrew/agents.json). */
   agents: AgentRegistry;
+  /**
+   * Sous's door for the phone and for voice-gateway (POST /api/sous/command),
+   * and the bus its zoom/zoom-back commands ride to every /api/events
+   * subscriber as `ui`. Optional so a test server without a voice has none.
+   */
+  sous?: SousDoor;
+  uiBus?: EventEmitter;
   /** Recover an inactive teammate as it was (agent-recover feature). */
   recoverAgent: (id: string) => RecoverResult;
   /** Endpoint restore: rewind an agent to a checkpoint (+ undo). The optional
@@ -1042,10 +1057,57 @@ export async function handleMobileApi(
     }
   }
 
+  // Sous, spoken to from a phone or a speaker. POST, so the read-only wall
+  // token is refused exactly as for every other mutating route; the sentence
+  // is the whole request, the controller's answer is the whole response —
+  // `spoken` is what the surface says back, `needs: 'prompt'` means Sous
+  // asked a question and the next sentence from the same surface answers it.
+  if (method === "POST" && p === "/api/sous/command") {
+    if (!deps.sous) {
+      respondJson(response, 503, { error: "Sous is not listening on this desktop" });
+      return true;
+    }
+    const body = await readJson<{ text?: string; surface?: string; callerId?: string }>(request);
+    const text = (body.text ?? "").trim();
+    if (!text) {
+      respondJson(response, 400, { error: "Missing text" });
+      return true;
+    }
+    if (text.length > SOUS_MAX_TEXT) {
+      respondJson(response, 400, { error: `Text longer than ${SOUS_MAX_TEXT} characters is not a sentence` });
+      return true;
+    }
+    // A wrong or missing surface is refused, not folded into the phone's
+    // bucket: a gateway that forgot to say 'home' would otherwise share the
+    // phone's pending question.
+    if (!SOUS_SURFACES.has(body.surface ?? "")) {
+      respondJson(response, 400, { error: `surface must be one of ${[...SOUS_SURFACES].join(", ")}` });
+      return true;
+    }
+    // WHO is speaking: the caller's own id when it sends one (the speaker's
+    // room, the phone's install), else the address it came from. Never the
+    // token — one token is every phone. And no focusedAgentId from the body:
+    // a network door may not name an agent by id, only by name.
+    const callerId =
+      typeof body.callerId === "string" && body.callerId.trim() !== ""
+        ? body.callerId.trim().slice(0, 64)
+        : (request.socket.remoteAddress ?? "unknown");
+    const result = await deps.sous.handle({ text, surface: body.surface as SousSurface, callerId });
+    respondJson(response, 200, result);
+    return true;
+  }
+
   if (method === "GET" && p === "/api/events") {
     const send = startSse(response);
     send("workspace", scopedState());
     send("workspaces", ops.listWorkspaces());
+    // Sous's zoom / zoom-back, so the phone and the TV follow the owner's
+    // voice. A scoped stream only hears about its own canvas.
+    const onUi = (event: UiCommandEvent): void => {
+      if (scope === null || event.workspaceId === scope) send("ui", event);
+    };
+    deps.uiBus?.on("command", onUi);
+    request.on("close", () => deps.uiBus?.removeListener("command", onUi));
     // Activities are keyed by terminal id across every workspace, so a scoped
     // stream filters them or it leaks other canvases' agents into this one.
     const inScopedCanvas = (terminalId: string): boolean =>

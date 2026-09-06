@@ -14,7 +14,7 @@
     "registry:assets": "node scripts/registry-assets.mjs",
     "registry:build": "node scripts/registry-assets.mjs && esbuild --bundle registry/src/main.ts --format=esm --platform=node --define:__SITE_REF__=\\\"$(git rev-parse HEAD)\\\" --outfile=/tmp/registry.mjs",
     "start": "electron-vite preview",
-    "postinstall": "electron-rebuild -f -w node-pty; node scripts/ensure-node-pty.mjs",
+    "postinstall": "electron-rebuild -f -w node-pty; node scripts/ensure-node-pty.mjs; node scripts/build-cr-listen.mjs",
     "test": "vitest run",
     "test:perf": "vitest run -c vitest.perf.config.ts",
     "perf:eval": "node scripts/perf-eval.mjs",
