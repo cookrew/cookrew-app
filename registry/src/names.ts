@@ -89,14 +89,27 @@ export function createNames(options: NamesOptions): NamesFeature {
    */
   const reach: ReachLookup = {
     find: (deviceId) => {
-      const card = options.desktops.find(deviceId)?.reach ?? null
-      if (card === null) return null
+      const held = options.desktops.find(deviceId)
+      const card = held?.reach ?? null
+      if (card === null || held === null) return null
       const at = Date.parse(card.at)
       if (!Number.isFinite(at)) return null
       const addresses = [...card.lan.map((a) => a.url), ...(card.tailnet === null ? [] : [card.tailnet.url])]
         .map(hostOf)
         .filter((host): host is string => host !== null)
-      return { addresses, at }
+      /**
+       * THE OLDER OF THE TWO CLOCKS, and one of them is not ours.
+       *
+       * The zone drops a card older than the reach TTL so that a Mac somebody
+       * unplugged stops pointing a public name into whoever's network now
+       * holds that address. Measured against the `at` the DESKTOP wrote, that
+       * is a promise the desktop gets to break: a card dated 2099 is never
+       * stale, and a machine off for a month keeps its name for seventy years.
+       * `updatedAt` is stamped by putDesktop here, so it is the half nobody
+       * outside this process can move — and a card cannot be fresher than the
+       * last time it was actually handed to us.
+       */
+      return { addresses, at: Math.min(at, held.updatedAt) }
     }
   }
 
