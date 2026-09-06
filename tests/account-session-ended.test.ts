@@ -252,13 +252,29 @@ describe('resume trades the password for a new session', () => {
     expect(it.sessionLive()).toBe(false)
   })
 
-  it('names a second factor rather than blaming the password', async () => {
+  it('hands back the LADDER rather than blaming the password', async () => {
+    // The live bug in one assertion. A second factor is not a refusal with a
+    // sentence on it; it is a pending id and the rungs this account can
+    // finish on, and the card climbs one of them without asking again.
     const base = claimed()
     const { it } = accountsAt(base, [
       UNAUTHENTICATED,
-      { status: 401, body: { error: 'second_factor' } },
+      {
+        status: 401,
+        body: {
+          error: 'second_factor',
+          message: 'One more step. Prove it is you.',
+          next: ['totp', 'approve'],
+          pending: '11111111-2222-4333-8444-555555555555',
+          expiresAt: Date.now() + 600_000,
+        },
+      },
     ])
     await it.profile()
-    expect(await it.resume(NEW_PASSWORD)).toMatchObject({ ok: false, reason: 'second_factor' })
+    const out = await it.resume(NEW_PASSWORD)
+    expect(out).toMatchObject({ ok: false, reason: 'second_factor' })
+    if (out.ok || out.reason !== 'second_factor') throw new Error('expected a step')
+    expect(out.step.next).toEqual(['totp', 'approve'])
+    expect(out.step.pending).toBe('11111111-2222-4333-8444-555555555555')
   })
 })

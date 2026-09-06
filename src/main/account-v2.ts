@@ -22,8 +22,20 @@ import {
   type AccountProfile,
   type AccountRefusal,
   type AccountResult,
+  type ApprovalAsked,
+  type SignInAnswer,
   type UsernameCheck,
 } from '../shared/account-v2'
+import {
+  LadderPasswords,
+  askForApproval,
+  climbTyped,
+  stepFrom,
+  waitForApproval,
+  type LadderPort,
+  type TypedFactor,
+} from './account-ladder'
+import { bodyOf, classify, plainRefusal, wireError } from './account-wire'
 import { legacyKey, migrateAtRegistry } from './legacy-identity'
 import type { RegistryAccount } from './registry-account'
 
@@ -316,51 +328,6 @@ export interface AccountsDeps {
   onChange?: () => void
 }
 
-interface WireError {
-  error?: string
-  message?: string
-}
-
-const REFUSALS: Record<string, AccountRefusal> = {
-  taken: 'taken',
-  legacy: 'legacy',
-  no_passwords_yet: 'no_passwords_yet',
-  bad_username: 'bad_username',
-  weak_password: 'weak_password',
-  bad_device: 'bad_device',
-  bad_credentials: 'bad_credentials',
-  second_factor: 'second_factor',
-  last_device: 'last_device',
-  not_found: 'not_found',
-  already_seated: 'already_seated',
-}
-
-async function wireError(
-  response: Response,
-): Promise<{ reason: AccountRefusal; message?: string }> {
-  if (response.status === 429) return { reason: 'rate_limited' }
-  let body: WireError = {}
-  try {
-    body = (await response.json()) as WireError
-  } catch {
-    // A refusal with no body is still a refusal; it just has no sentence.
-  }
-  // A 401 is a dead session ONLY when the registry says so (no error, or
-  // `unauthenticated`). A wrong authenticator code or a refused passkey also
-  // arrive as 401, with their own error and sentence — telling the owner
-  // "your session ended" for a mistyped code sent them to the wrong fix.
-  if (response.status === 401) {
-    if (typeof body.error !== 'string' || body.error === 'unauthenticated') {
-      return { reason: 'session-expired' }
-    }
-    const named: AccountRefusal = REFUSALS[body.error] ?? 'unknown'
-    return body.message ? { reason: named, message: body.message } : { reason: named }
-  }
-  const reason: AccountRefusal =
-    (typeof body.error === 'string' ? REFUSALS[body.error] : undefined) ?? 'unknown'
-  return body.message ? { reason, message: body.message } : { reason }
-}
-
 /**
  * The account, as the rest of main uses it.
  *
@@ -379,6 +346,15 @@ export class Accounts {
   private freshCodes: readonly string[] | null = null
   private readonly legacy: () => RegistryAccount | null
   private readonly changed: (() => void) | undefined
+  /**
+   * The passwords of the sign-ins half done right now (account-ladder.ts).
+   *
+   * In memory, keyed by the registry's pending id, ten minutes at most. It
+   * exists because the LAST act of a sign-in — re-deriving the offline unlock
+   * verifier — needs the password, and every rung between the password and
+   * that moment is addressed to the pending and carries none.
+   */
+  private readonly ladder: LadderPasswords
 
   constructor(deps: AccountsDeps = {}) {
     this.base = deps.base
@@ -389,6 +365,7 @@ export class Accounts {
     this.cached = loadAccount(deps.base)
     this.legacy = deps.legacy ?? ((): RegistryAccount | null => legacyKey(this.origin, this.base))
     this.changed = deps.onChange
+    this.ladder = new LadderPasswords(this.now)
   }
 
   /**
@@ -649,14 +626,22 @@ export class Accounts {
   }
 
   /**
-   * Trade the password for a new session.
+   * Trade the password for a new session — the first rung, and often the only.
    *
    * There is no refresh token by design: the session is the only bearer this
    * app holds, so a silent renewal would mean a credential that never expires
    * living in a file. When it dies, the person is asked once — which is what
    * `session-expired` sends every surface to do.
+   *
+   * IT IS A SIGN-IN FROM SCRATCH FOR THE ACCOUNT'S OWN NAME, with the device
+   * id and key this Mac already holds. Same device, so it stays attached; and
+   * because it is attached, an account with no factors finishes here.
+   *
+   * WHEN IT DOES NOT, the answer is a `step`, not a sentence. That is the live
+   * bug in one line: the card used to print "One more step. Prove it is you."
+   * with nowhere to take the step, and the only Mac on the account went dark.
    */
-  async resume(password: string): Promise<AccountResult<AccountSession>> {
+  async resume(password: string): Promise<SignInAnswer<AccountSession>> {
     const account = this.cached
     if (!account) return { ok: false, reason: 'no_account' }
     let response: Response
@@ -678,8 +663,25 @@ export class Accounts {
     } catch {
       return { ok: false, reason: 'offline' }
     }
+    if (response.status === 429) return { ok: false, reason: 'rate_limited' }
+    const body = await bodyOf(response)
     if (response.status !== 201) {
-      const refused = await wireError(response)
+      if (response.status === 401 && body.error === 'second_factor') {
+        const step = stepFrom(body)
+        if (step !== null) {
+          // The password is put away HERE and nowhere else: this is the only
+          // moment it is in hand and the only moment a pending id exists to
+          // key it by.
+          this.ladder.remember(step.pending, password)
+          return {
+            ok: false,
+            reason: 'second_factor',
+            step,
+            ...(typeof body.message === 'string' ? { message: body.message } : {}),
+          }
+        }
+      }
+      const refused = classify(response.status, body)
       // The surface keeps its password prompt open on 'session-expired'; a
       // wrong password on a resume is that same prompt again, with the sentence.
       return refused.reason === 'bad_credentials'
@@ -688,26 +690,74 @@ export class Accounts {
             reason: 'session-expired',
             ...(refused.message ? { message: refused.message } : {}),
           }
-        : { ok: false, ...refused }
+        : plainRefusal(refused)
     }
-    let body: { token?: string; exp?: number }
-    try {
-      body = (await response.json()) as typeof body
-    } catch {
-      return { ok: false, reason: 'unknown' }
-    }
+    return this.landSession(password, body)
+  }
+
+  /**
+   * THE END OF EVERY RUNG — the one place a resumed session is written.
+   *
+   * Whatever proved it (the password alone, six digits, a rescue code, a nod
+   * from the phone), the finish is identical, which is why it is one function:
+   * four copies of this block would be four chances to forget the verifier.
+   *
+   * THE LOCAL VERIFIER IS RE-DERIVED, and this is the half that made the live
+   * bug unrecoverable. The owner changed their password ON THE WEB, so the
+   * scrypt verifier in this file still holds the OLD one: the new password
+   * fails the offline check, the old one fails at the registry, and there is
+   * no password that opens both. cookrew.dev has just proved this password IS
+   * the account's, so it becomes what unlocks the app too.
+   */
+  private landSession(password: string, body: Record<string, unknown>): SignInAnswer<AccountSession> {
+    const account = this.cached
+    if (!account) return { ok: false, reason: 'no_account' }
     if (typeof body.token !== 'string' || typeof body.exp !== 'number') {
       return { ok: false, reason: 'unknown' }
     }
     const session = { token: body.token, exp: body.exp }
-    // THE LOCAL VERIFIER IS RE-DERIVED, and this is the half that made the
-    // live bug unrecoverable. The owner changed their password ON THE WEB, so
-    // the scrypt verifier in this file still holds the OLD one: the new
-    // password fails the offline check, the old one fails at the registry, and
-    // there is no password that opens both. cookrew.dev has just proved this
-    // password IS the account's, so it becomes what unlocks the app too.
     this.save({ ...account, session, unlock: unlockVerifierFor(password) })
     return { ok: true, value: session }
+  }
+
+  /**
+   * WHAT A RUNG IS ALLOWED TO SEE — the port, built once.
+   *
+   * The three rungs live in account-ladder.ts and are handed this rather than
+   * the account: a socket, an origin, a clock, the passwords in flight, and
+   * ONE way to write a session. They read no token, list no device and touch
+   * no file except through `land`.
+   */
+  private port(): LadderPort {
+    return {
+      http: this.http,
+      origin: this.origin,
+      now: this.now,
+      passwords: this.ladder,
+      land: (password, body) => this.landSession(password, body),
+    }
+  }
+
+  /** The authenticator's six digits, or a rescue code. */
+  resumeWithCode(
+    pending: string,
+    factor: TypedFactor,
+    code: string,
+  ): Promise<SignInAnswer<AccountSession>> {
+    return climbTyped(this.port(), pending, factor, code)
+  }
+
+  /** Ask a device the account already trusts to approve this sign-in (D6). */
+  resumeAsk(pending: string): Promise<AccountResult<ApprovalAsked>> {
+    return askForApproval(this.port(), pending)
+  }
+
+  /** And wait for the nod, on the two-second interval the site polls on. */
+  resumeWait(
+    pending: string,
+    options: { everyMs?: number; forMs?: number } = {},
+  ): Promise<SignInAnswer<AccountSession>> {
+    return waitForApproval(this.port(), pending, options)
   }
 
   /**

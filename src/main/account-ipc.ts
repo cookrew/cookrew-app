@@ -1,5 +1,12 @@
 import type { AdmittedDevice } from './admitted-devices'
-import type { AccountStatus, AccountResult, UsernameCheck } from '../shared/account-v2'
+import type {
+  AccountStatus,
+  AccountResult,
+  ApprovalAsked,
+  SignInAnswer,
+  UsernameCheck,
+} from '../shared/account-v2'
+import { isTypedFactor } from './account-ladder'
 import type { PairingHandout } from '../shared/account-v2'
 import type { AccountDevice, AccountProfile } from '../shared/account-v2'
 import type {
@@ -124,6 +131,15 @@ export const ACCOUNT_CHANNELS = [
   'account:lock',
   'account:unlock',
   'account:resume',
+  // ── the second-factor ladder, on the way back in ──
+  //
+  // The password step is `account:resume`; these three are the rungs after a
+  // 401 second_factor. They take a PENDING ID, never a password — main is
+  // holding that for the length of the ladder (account-ladder.ts), so nothing
+  // secret crosses the bridge a second time.
+  'account:resumeCode',
+  'account:resumeAsk',
+  'account:resumeWait',
   'account:profile',
   'account:devices',
   'account:revoke',
@@ -269,12 +285,72 @@ async function unlock(
 async function resume(
   deps: AccountIpcDeps,
   password: string,
-): Promise<AccountResult<AccountStatus>> {
+): Promise<SignInAnswer<AccountStatus>> {
   const result = await deps.accounts.resume(password)
-  if (!result.ok) return result
-  // The account is answering again, so the lock has nothing left to hold shut.
-  deps.lock.unlock(password)
-  return { ok: true, value: accountStatus(deps) }
+  return result.ok ? { ok: true, value: signedIn(deps) } : result
+}
+
+/**
+ * A RUNG OF THE LADDER: the authenticator's six digits, or a rescue code.
+ *
+ * It takes the pending id and the code and NOTHING ELSE. The password that
+ * opened this pending is in main already; asking the renderer to hand it back
+ * for every rung would put it on the bridge once per keystroke's worth of
+ * retries, and would leave it in React state across a ten-minute poll.
+ *
+ * A factor this app cannot type is refused as `not_offered` rather than being
+ * passed through — the registry would answer the same, and spending one of the
+ * five tries to learn it is a try the owner does not get back.
+ */
+async function resumeCode(
+  deps: AccountIpcDeps,
+  input: unknown,
+): Promise<SignInAnswer<AccountStatus>> {
+  const fields = asRecord(input)
+  const factor = fields.factor
+  if (!isTypedFactor(factor)) return { ok: false, reason: 'not_offered' }
+  const result = await deps.accounts.resumeWithCode(
+    asString(fields.pending),
+    factor,
+    asString(fields.code),
+  )
+  return result.ok ? { ok: true, value: signedIn(deps) } : result
+}
+
+/** The approve rung's other half: wait for the nod, then be signed in. */
+async function resumeWait(
+  deps: AccountIpcDeps,
+  pending: string,
+): Promise<SignInAnswer<AccountStatus>> {
+  const result = await deps.accounts.resumeWait(pending)
+  return result.ok ? { ok: true, value: signedIn(deps) } : result
+}
+
+/**
+ * THE WORK A LIVE SESSION UNBLOCKS, in one place — whatever rung landed it.
+ *
+ * A signed-out Mac is not a Mac with a stale token: it stopped hearing devices
+ * ask to sign in, its reach card went unpublished and its relay line went
+ * down, and the door read offline. None of that comes back on its own, because
+ * every one of those is armed at BOOT from the account on disk. So the moment
+ * a session lands, this does what a fresh claim does (see `claim` below).
+ *
+ * FOUR CALLERS, ONE FUNCTION. The password step and the three rungs all end
+ * here, so a Mac signed in with an authenticator code is exactly as reachable
+ * as one signed in with a password alone — which is the failure that started
+ * this: an owner who got past the ladder would still have had a dark Mac.
+ */
+function signedIn(deps: AccountIpcDeps): AccountStatus {
+  // cookrew.dev has just asked for the password and, where the account wants
+  // one, a second factor. That is more than the idle lock asks for.
+  deps.lock.proven()
+  deps.approvals.start()
+  // The reach publisher refreshes the canvas link and files the desktop with
+  // its addresses; without one wired, the plain registration still happens so
+  // the Workspaces tab is not empty until the next boot.
+  if (deps.publishReach) deps.publishReach('signed in again')
+  else void deps.accounts.registerDesktop(deps.workspaces()).catch(() => undefined)
+  return accountStatus(deps)
 }
 
 /**
@@ -425,6 +501,10 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     'account:lock': () => settled(deps, 'This Mac could not be locked', () => deps.lock.lock()),
     'account:unlock': (password: unknown) => unlock(deps, asString(password)),
     'account:resume': (password: unknown) => resume(deps, asString(password)),
+    'account:resumeCode': (input: unknown) => resumeCode(deps, input),
+    'account:resumeAsk': (pending: unknown): Promise<AccountResult<ApprovalAsked>> =>
+      deps.accounts.resumeAsk(asString(pending)),
+    'account:resumeWait': (pending: unknown) => resumeWait(deps, asString(pending)),
     'account:profile': async (): Promise<AccountResult<AccountProfile>> => {
       const result = await deps.accounts.profile()
       // Every successful read refreshes what the phone will be shown. This is

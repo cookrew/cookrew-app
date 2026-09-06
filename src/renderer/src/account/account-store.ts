@@ -83,13 +83,32 @@ export const ACCOUNT_COPY = {
   /** The session ended — said only beside the field that ends it. */
   SESSION_ENDED: 'Your session ended. Type your password once and this carries on.',
   /**
-   * The registry wants the ladder, not the password.
+   * The registry wants one more step — and this card is where it is taken.
    *
-   * Naming the wall matters: a person told only that their password failed
-   * types it again, then tries to claim the name a third time.
+   * THE OLD SENTENCE SENT THE OWNER SOMEWHERE ELSE ("use a recovery code on
+   * cookrew.dev"), which on a Mac with no session is a place they cannot get
+   * to and, worse, is not where the step needs to happen: the pending is this
+   * app's, and only this app can finish it. The sentence now describes the
+   * rungs that are on screen underneath it.
    */
-  SESSION_SECOND_FACTOR:
-    'cookrew.dev wants a second factor for this sign-in. Approve it on a device you are already signed in on, or use a recovery code on cookrew.dev.',
+  SESSION_SECOND_FACTOR: 'One more step. Prove it is you, and this carries on.',
+  /** Over the six-digit field. */
+  LADDER_TOTP_LABEL: 'Authenticator code',
+  LADDER_TOTP_HINT: 'The six digits your authenticator app is showing now.',
+  /** Over the rescue field, once the owner has asked for it. */
+  LADDER_RECOVERY_LABEL: 'Recovery code',
+  LADDER_RECOVERY_HINT: 'One of the codes you saved. Each opens the account exactly once.',
+  /** The approve rung, before and after it is pressed. */
+  LADDER_ASK: 'Ask my other device',
+  LADDER_ASKED: 'Asked. Approve it on your phone or another Mac.',
+  /**
+   * The ladder is over and the password step is the way back.
+   *
+   * Said as an instruction, not as an apology: the person is looking at a card
+   * that is about to change under them, and the next thing to do is the whole
+   * message.
+   */
+  LADDER_OVER: 'That sign-in was dropped. Type your password again.',
   /** D5. */
   LOCKED_WHY: 'Locked while you were away. Your agents kept working.',
   /** The registry is not answering. */
@@ -193,6 +212,25 @@ export function refusalSentence(reason: AccountRefusal, message?: string, userna
       return ACCOUNT_COPY.SESSION_ENDED
     case 'second_factor':
       return ACCOUNT_COPY.SESSION_SECOND_FACTOR
+    // THE LADDER'S OWN REFUSALS. cookrew.dev sends a sentence for every one of
+    // these and it wins above; these are the fallbacks for a registry that
+    // answered a bare error, and they keep the same split the reasons do —
+    // "type it again" versus "start again".
+    case 'bad_code':
+      return 'That is not the code showing right now. Wait for the next one and type it as it appears.'
+    case 'bad_recovery':
+      return 'That is not one of your recovery codes. Each one opens the account exactly once.'
+    case 'passkey_refused':
+      return 'That passkey did not answer for this account. Try another way in.'
+    case 'expired':
+    case 'not_offered':
+      return ACCOUNT_COPY.LADDER_OVER
+    case 'too_many_attempts':
+      return 'Too many tries on this sign-in. Type your password again.'
+    case 'denied':
+      return 'That sign-in was denied on your other device. Nothing was attached.'
+    case 'password_change_required':
+      return 'Somebody said a sign-in was not them, so this password is locked out until you change it. Change it on a device you are still signed in on.'
     case 'last_device':
       return 'This is the last device on the account, so it cannot be revoked.'
     case 'no_account':
