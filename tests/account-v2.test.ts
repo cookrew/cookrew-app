@@ -471,7 +471,10 @@ describe('a 401 with a named refusal is that refusal, not a dead session', () =>
     const it = new Accounts({ base: scratch(), origin: ORIGIN, fetch: script.fetch })
     await it.claim({ username: 'drej', password: PASSWORD })
     const wrong = await it.call<void>('/v2/me/totp/confirm', { method: 'POST' })
-    expect(wrong).toMatchObject({ ok: false, reason: 'unknown', message: sentence })
+    // NAMED now, not the catch-all: the ladder's refusals are in REFUSALS, so
+    // the card can tell "type it again" from "start over" without reading the
+    // sentence back.
+    expect(wrong).toMatchObject({ ok: false, reason: 'bad_code', message: sentence })
     const dead = await it.call<void>('/v2/me', { method: 'GET' })
     expect(dead).toMatchObject({ ok: false, reason: 'session-expired' })
   })

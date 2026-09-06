@@ -210,11 +210,27 @@ export type AccountRefusal =
   | 'last_device'
   | 'no_account'
   | 'session-expired'
-  // A resume the registry will not complete on the password alone. The device
-  // is still attached, so the way through is an approval on a trusted device
-  // — never a re-claim, which is what a person reaches for when told only
-  // that their password was refused.
+  // A resume the registry will not complete on the password alone. It is not
+  // a dead end: it carries a `step` (see SignInAnswer) naming the rungs this
+  // account can finish on, and the same card climbs one of them.
   | 'second_factor'
+  // ── the rungs' own refusals, in the registry's vocabulary ──
+  //
+  // Kept apart from 'bad_credentials' on purpose. A mistyped six digits and a
+  // wrong password are both 401s and both feel like "it said no", but only one
+  // of them means the ladder is still standing — so only one of them may leave
+  // the code field on screen.
+  | 'bad_code'
+  | 'bad_recovery'
+  | 'passkey_refused'
+  // The ladder is over and the password step is the way back: the pending went
+  // cold, its five tries are spent, another device said no, or the rung asked
+  // for was never offered.
+  | 'expired'
+  | 'too_many_attempts'
+  | 'denied'
+  | 'not_offered'
+  | 'password_change_required'
   | 'offline'
   // Seats (phase 5). A seat operation refuses for reasons an account one
   // cannot, and they are two different things to say to a person: 'not_found'
@@ -239,6 +255,72 @@ export type AccountRefusal =
  */
 export type AccountResult<T> =
   { ok: true; value: T } | { ok: false; reason: AccountRefusal; message?: string }
+
+/**
+ * A RUNG OF THE SIGN-IN LADDER, named exactly as cookrew.dev names it.
+ *
+ * The registry decides the order (recommended first, rescue last) and filters
+ * it to what this account actually has, so the desktop never invents a rung
+ * and never re-sorts one: `next` is shown in the order it arrived.
+ */
+export type LadderFactor = 'passkey' | 'totp' | 'approve' | 'recovery'
+
+/**
+ * A sign-in that is half done — the password was right and the account wants
+ * one more step.
+ *
+ * The pending id is a handle on a conversation the registry is holding open
+ * for ten minutes. It is NOT a credential: on its own it opens nothing, which
+ * is why it may cross the IPC bridge while the password may not.
+ */
+export interface SecondFactorStep {
+  pending: string
+  next: readonly LadderFactor[]
+  /** When the registry drops it. The card counts down against this. */
+  expiresAt: number
+}
+
+/**
+ * What a sign-in answers: done, one-more-step, or refused.
+ *
+ * A THIRD ARM RATHER THAN A FLAG ON THE SECOND. `second_factor` is the only
+ * refusal that carries somewhere to go, and typing it that way is what stops a
+ * surface from printing the sentence without also drawing the rungs — the
+ * exact shape of the bug this whole change closes.
+ */
+export type SignInAnswer<T> =
+  | { ok: true; value: T }
+  | { ok: false; reason: 'second_factor'; step: SecondFactorStep; message?: string }
+  | { ok: false; reason: Exclude<AccountRefusal, 'second_factor'>; message?: string }
+
+/**
+ * Is this refusal the end of the ladder, or may the card stay on the rung?
+ *
+ * Stated ONCE, here, because main decides whether to forget the password it is
+ * holding and the renderer decides whether to keep the code field on screen —
+ * and those two answers disagreeing is a card that asks for a code the pending
+ * behind it no longer has.
+ */
+export function ladderIsOver(reason: AccountRefusal): boolean {
+  return (
+    reason === 'expired' ||
+    reason === 'too_many_attempts' ||
+    reason === 'denied' ||
+    reason === 'not_offered' ||
+    reason === 'password_change_required' ||
+    reason === 'no_account' ||
+    reason === 'bad_credentials' ||
+    reason === 'session-expired'
+  )
+}
+
+/** What the registry answers a request for an approval with (202). */
+export interface ApprovalAsked {
+  approval: string
+  expiresAt: number
+  /** The registry's own D6 sentence, shown on the approving device. */
+  sentence: string
+}
 
 /**
  * What the pairing popout is handed: ONE URL, and which kind it is.

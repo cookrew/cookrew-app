@@ -18,12 +18,23 @@ import {
   RESERVED_PREFIXES,
   normaliseUsername,
   usernameProblem,
+  ladderIsOver,
   type AccountDevice,
   type AccountProfile,
   type AccountRefusal,
   type AccountResult,
+  type ApprovalAsked,
+  type SignInAnswer,
   type UsernameCheck,
 } from '../shared/account-v2'
+import {
+  APPROVAL_POLL_MS,
+  LADDER_TTL_MS,
+  LadderPasswords,
+  askedFrom,
+  stepFrom,
+  type TypedFactor,
+} from './account-ladder'
 import { legacyKey, migrateAtRegistry } from './legacy-identity'
 import type { RegistryAccount } from './registry-account'
 
@@ -333,23 +344,35 @@ const REFUSALS: Record<string, AccountRefusal> = {
   last_device: 'last_device',
   not_found: 'not_found',
   already_seated: 'already_seated',
+  // The ladder's own vocabulary (v2-factor-copy.ts). Named here so a mistyped
+  // code arrives as 'bad_code' rather than as the catch-all — the card keeps
+  // its field open for one and sends the owner back to the password for the
+  // other, and it cannot tell them apart from 'unknown'.
+  bad_code: 'bad_code',
+  bad_recovery: 'bad_recovery',
+  passkey_refused: 'passkey_refused',
+  expired: 'expired',
+  too_many_attempts: 'too_many_attempts',
+  denied: 'denied',
+  not_offered: 'not_offered',
+  password_change_required: 'password_change_required',
 }
 
-async function wireError(
-  response: Response,
-): Promise<{ reason: AccountRefusal; message?: string }> {
-  if (response.status === 429) return { reason: 'rate_limited' }
-  let body: WireError = {}
-  try {
-    body = (await response.json()) as WireError
-  } catch {
-    // A refusal with no body is still a refusal; it just has no sentence.
-  }
+/**
+ * A refusal's body, already read, as a reason and a sentence.
+ *
+ * SPLIT OUT OF `wireError` because the ladder has to read the body ITSELF: a
+ * 401 that says `second_factor` carries the pending id in the same JSON, and a
+ * Response body can only be consumed once. Both paths classify identically
+ * because both call this.
+ */
+function classify(status: number, body: WireError): { reason: AccountRefusal; message?: string } {
+  if (status === 429) return { reason: 'rate_limited' }
   // A 401 is a dead session ONLY when the registry says so (no error, or
   // `unauthenticated`). A wrong authenticator code or a refused passkey also
   // arrive as 401, with their own error and sentence — telling the owner
   // "your session ended" for a mistyped code sent them to the wrong fix.
-  if (response.status === 401) {
+  if (status === 401) {
     if (typeof body.error !== 'string' || body.error === 'unauthenticated') {
       return { reason: 'session-expired' }
     }
@@ -359,6 +382,39 @@ async function wireError(
   const reason: AccountRefusal =
     (typeof body.error === 'string' ? REFUSALS[body.error] : undefined) ?? 'unknown'
   return body.message ? { reason, message: body.message } : { reason }
+}
+
+/** A JSON body, or an empty one: a refusal with no body is still a refusal. */
+async function bodyOf(response: Response): Promise<WireError & Record<string, unknown>> {
+  try {
+    return (await response.json()) as WireError & Record<string, unknown>
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * A refusal as the third arm of a `SignInAnswer` — everything but the step.
+ *
+ * `second_factor` reaching here is a step this app could not read (no pending
+ * id, or no rung it knows). There is nothing a person can do about that, so it
+ * is reported as an answer we could not read rather than as a ladder with no
+ * rungs on it.
+ */
+function plainRefusal(refused: { reason: AccountRefusal; message?: string }): {
+  ok: false
+  reason: Exclude<AccountRefusal, 'second_factor'>
+  message?: string
+} {
+  const reason = refused.reason === 'second_factor' ? 'unknown' : refused.reason
+  return { ok: false, reason, ...(refused.message ? { message: refused.message } : {}) }
+}
+
+async function wireError(
+  response: Response,
+): Promise<{ reason: AccountRefusal; message?: string }> {
+  if (response.status === 429) return { reason: 'rate_limited' }
+  return classify(response.status, await bodyOf(response))
 }
 
 /**
@@ -379,6 +435,15 @@ export class Accounts {
   private freshCodes: readonly string[] | null = null
   private readonly legacy: () => RegistryAccount | null
   private readonly changed: (() => void) | undefined
+  /**
+   * The passwords of the sign-ins half done right now (account-ladder.ts).
+   *
+   * In memory, keyed by the registry's pending id, ten minutes at most. It
+   * exists because the LAST act of a sign-in — re-deriving the offline unlock
+   * verifier — needs the password, and every rung between the password and
+   * that moment is addressed to the pending and carries none.
+   */
+  private readonly ladder: LadderPasswords
 
   constructor(deps: AccountsDeps = {}) {
     this.base = deps.base
@@ -389,6 +454,7 @@ export class Accounts {
     this.cached = loadAccount(deps.base)
     this.legacy = deps.legacy ?? ((): RegistryAccount | null => legacyKey(this.origin, this.base))
     this.changed = deps.onChange
+    this.ladder = new LadderPasswords(this.now)
   }
 
   /**
@@ -649,14 +715,22 @@ export class Accounts {
   }
 
   /**
-   * Trade the password for a new session.
+   * Trade the password for a new session — the first rung, and often the only.
    *
    * There is no refresh token by design: the session is the only bearer this
    * app holds, so a silent renewal would mean a credential that never expires
    * living in a file. When it dies, the person is asked once — which is what
    * `session-expired` sends every surface to do.
+   *
+   * IT IS A SIGN-IN FROM SCRATCH FOR THE ACCOUNT'S OWN NAME, with the device
+   * id and key this Mac already holds. Same device, so it stays attached; and
+   * because it is attached, an account with no factors finishes here.
+   *
+   * WHEN IT DOES NOT, the answer is a `step`, not a sentence. That is the live
+   * bug in one line: the card used to print "One more step. Prove it is you."
+   * with nowhere to take the step, and the only Mac on the account went dark.
    */
-  async resume(password: string): Promise<AccountResult<AccountSession>> {
+  async resume(password: string): Promise<SignInAnswer<AccountSession>> {
     const account = this.cached
     if (!account) return { ok: false, reason: 'no_account' }
     let response: Response
@@ -678,8 +752,25 @@ export class Accounts {
     } catch {
       return { ok: false, reason: 'offline' }
     }
+    if (response.status === 429) return { ok: false, reason: 'rate_limited' }
+    const body = await bodyOf(response)
     if (response.status !== 201) {
-      const refused = await wireError(response)
+      if (response.status === 401 && body.error === 'second_factor') {
+        const step = stepFrom(body)
+        if (step !== null) {
+          // The password is put away HERE and nowhere else: this is the only
+          // moment it is in hand and the only moment a pending id exists to
+          // key it by.
+          this.ladder.remember(step.pending, password)
+          return {
+            ok: false,
+            reason: 'second_factor',
+            step,
+            ...(typeof body.message === 'string' ? { message: body.message } : {}),
+          }
+        }
+      }
+      const refused = classify(response.status, body)
       // The surface keeps its password prompt open on 'session-expired'; a
       // wrong password on a resume is that same prompt again, with the sentence.
       return refused.reason === 'bad_credentials'
@@ -688,26 +779,163 @@ export class Accounts {
             reason: 'session-expired',
             ...(refused.message ? { message: refused.message } : {}),
           }
-        : { ok: false, ...refused }
+        : plainRefusal(refused)
     }
-    let body: { token?: string; exp?: number }
-    try {
-      body = (await response.json()) as typeof body
-    } catch {
-      return { ok: false, reason: 'unknown' }
-    }
+    return this.landSession(password, body)
+  }
+
+  /**
+   * THE END OF EVERY RUNG — the one place a resumed session is written.
+   *
+   * Whatever proved it (the password alone, six digits, a rescue code, a nod
+   * from the phone), the finish is identical, which is why it is one function:
+   * four copies of this block would be four chances to forget the verifier.
+   *
+   * THE LOCAL VERIFIER IS RE-DERIVED, and this is the half that made the live
+   * bug unrecoverable. The owner changed their password ON THE WEB, so the
+   * scrypt verifier in this file still holds the OLD one: the new password
+   * fails the offline check, the old one fails at the registry, and there is
+   * no password that opens both. cookrew.dev has just proved this password IS
+   * the account's, so it becomes what unlocks the app too.
+   */
+  private landSession(password: string, body: Record<string, unknown>): SignInAnswer<AccountSession> {
+    const account = this.cached
+    if (!account) return { ok: false, reason: 'no_account' }
     if (typeof body.token !== 'string' || typeof body.exp !== 'number') {
       return { ok: false, reason: 'unknown' }
     }
     const session = { token: body.token, exp: body.exp }
-    // THE LOCAL VERIFIER IS RE-DERIVED, and this is the half that made the
-    // live bug unrecoverable. The owner changed their password ON THE WEB, so
-    // the scrypt verifier in this file still holds the OLD one: the new
-    // password fails the offline check, the old one fails at the registry, and
-    // there is no password that opens both. cookrew.dev has just proved this
-    // password IS the account's, so it becomes what unlocks the app too.
     this.save({ ...account, session, unlock: unlockVerifierFor(password) })
     return { ok: true, value: session }
+  }
+
+  /**
+   * A rung that is typed: the authenticator's six digits, or a rescue code.
+   *
+   * ONE METHOD FOR BOTH because the wire is the same shape — `POST
+   * /v2/sessions/:pending/{totp|recovery}` with `{code}` — and the difference
+   * is entirely copy, which belongs to the card. A wrong code comes back
+   * `bad_code` or `bad_recovery` and the ladder STAYS OPEN: the registry
+   * allows five tries on a pending, and a card that closed on the first
+   * fat-fingered digit would spend the other four on nothing.
+   */
+  async resumeWithCode(
+    pending: string,
+    factor: TypedFactor,
+    code: string,
+  ): Promise<SignInAnswer<AccountSession>> {
+    const password = this.ladder.for(pending)
+    // No password for this pending means the ladder outlived its ten minutes
+    // (or main restarted under it). Either way the honest answer is the
+    // password step — NOT a rung that could land a session this app would
+    // then be unable to unlock itself with.
+    if (password === null) return { ok: false, reason: 'expired' }
+    const answer = await this.climb(pending, password, () =>
+      this.http(`${this.origin}/v2/sessions/${encodeURIComponent(pending)}/${factor}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ code }),
+      }),
+    )
+    // 'waiting' is the POLL's 202 and a typed rung never sends one; this
+    // narrows the shared return rather than branching on something no request
+    // from here can produce.
+    return answer === 'waiting' ? { ok: false, reason: 'unknown' } : answer
+  }
+
+  /**
+   * Ask the account's other devices to approve this sign-in (the D6 prompt).
+   *
+   * Answers the registry's own sentence, unchanged: it names the asking device
+   * and the address it is asking from, and this Mac is not the party that
+   * knows those. Asking twice does not raise two prompts — the registry holds
+   * one approval per pending.
+   */
+  async resumeAsk(pending: string): Promise<AccountResult<ApprovalAsked>> {
+    if (this.ladder.for(pending) === null) return { ok: false, reason: 'expired' }
+    let response: Response
+    try {
+      response = await this.http(`${this.origin}/v2/sessions/${encodeURIComponent(pending)}/approve`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      })
+    } catch {
+      return { ok: false, reason: 'offline' }
+    }
+    if (response.status !== 202) {
+      const refused = await wireError(response)
+      if (ladderIsOver(refused.reason)) this.ladder.forget(pending)
+      return { ok: false, ...refused }
+    }
+    const asked = askedFrom(await bodyOf(response))
+    return asked === null ? { ok: false, reason: 'unknown' } : { ok: true, value: asked }
+  }
+
+  /**
+   * WAIT FOR THE NOD — poll until the other device answers, or time runs out.
+   *
+   * Two seconds, the same interval cookrew.dev's own waiting screen uses, and
+   * BOUNDED: it stops at the pending's own expiry, so a card somebody walked
+   * away from cannot leave a request looping in main forever. Polling is not
+   * guessing and the registry does not count it against the five tries.
+   *
+   * A single long-running call rather than "ask me again in two seconds"
+   * because the thing being waited on is one event with one answer; a renderer
+   * that unmounts simply drops the promise, and the poll ends at the deadline.
+   */
+  async resumeWait(
+    pending: string,
+    options: { everyMs?: number; forMs?: number } = {},
+  ): Promise<SignInAnswer<AccountSession>> {
+    const password = this.ladder.for(pending)
+    if (password === null) return { ok: false, reason: 'expired' }
+    const everyMs = options.everyMs ?? APPROVAL_POLL_MS
+    const until = this.now() + Math.min(options.forMs ?? LADDER_TTL_MS, LADDER_TTL_MS)
+    for (;;) {
+      const answer = await this.climb(pending, password, () =>
+        this.http(`${this.origin}/v2/sessions/${encodeURIComponent(pending)}`, { method: 'GET' }),
+        // 202 is "still waiting", which is neither a session nor a refusal.
+        202,
+      )
+      if (answer !== 'waiting') return answer
+      if (this.now() + everyMs >= until) return { ok: false, reason: 'expired' }
+      await new Promise((resolve) => setTimeout(resolve, everyMs))
+    }
+  }
+
+  /**
+   * One rung, sent and read: a session, a refusal, or (polling only) waiting.
+   *
+   * THE PASSWORD IS FORGOTTEN ON EVERY ENDING, success or otherwise, and that
+   * is the point of routing all three rungs through here. A ladder that ended
+   * while its password stayed in the map would be a secret kept for a
+   * conversation nobody can finish.
+   */
+  private async climb(
+    pending: string,
+    password: string,
+    send: () => Promise<Response>,
+    waitingStatus = -1,
+  ): Promise<SignInAnswer<AccountSession> | 'waiting'> {
+    let response: Response
+    try {
+      response = await send()
+    } catch {
+      // Not the end of the ladder: a Wi-Fi that dropped for one request is a
+      // retry, and the pending is still standing at the registry.
+      return { ok: false, reason: 'offline' }
+    }
+    if (response.status === waitingStatus) return 'waiting'
+    if (response.status === 429) return { ok: false, reason: 'rate_limited' }
+    const body = await bodyOf(response)
+    if (response.status === 201) {
+      this.ladder.forget(pending)
+      return this.landSession(password, body)
+    }
+    const refused = classify(response.status, body)
+    if (ladderIsOver(refused.reason)) this.ladder.forget(pending)
+    return plainRefusal(refused)
   }
 
   /**
