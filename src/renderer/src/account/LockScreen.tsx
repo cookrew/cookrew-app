@@ -54,7 +54,9 @@ export function LockScreen({
   const username = status.username ?? ''
   return (
     <div className="cr-acct-lock" role="dialog" aria-modal="true" aria-label="Cookrew is locked">
-      <div className="cr-acct-lockcard">
+      {/* cr-sheet re-dresses the gs-* field and primary inside the card in the
+          house materials; without it they fall to grant-surface's dark theme. */}
+      <div className="cr-acct-lockcard cr-sheet">
         <span className="cr-acct-avatar cr-acct-claimed cr-acct-big">
           <span className="cr-acct-initials">{initialsOf(username, status.displayName)}</span>
         </span>

@@ -142,7 +142,7 @@ export function useAccountSurface(): AccountSurface {
       )}
       {sheet === 'security' && status?.username && (
         <div className="gs-scrim cr-sheet" role="dialog" aria-modal="true" aria-label="Security">
-          <div className="gs-sheet gs-small cr-acct-sheet">
+          <div className="gs-sheet gs-small cr-sheet cr-acct-sheet">
             {/* The card's own rows read /v2/me. If cookrew.dev has thrown this
                 session away, the way back is here, above them — never a
                 sentence with nowhere to answer it. */}

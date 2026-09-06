@@ -915,6 +915,82 @@
   color: var(--amber-deep);
 }
 
+/* The veil under a house sheet is the same ink veil the fork picker uses
+   (.tf-scrim), not grant-surface's black. (0,2,0) beats .gs-scrim wherever
+   it loads. */
+.cr-sheet.gs-scrim {
+  background: rgba(45, 42, 32, 0.45);
+}
+
+/* The account sheets' own four gs-* primitives, re-dressed (identity v2).
+   Each of these had a --cr-* fallback that was invisible or wrong on cream:
+   gs-consequence was near-white text, gs-revoke a salmon 2.4:1, gs-dim a
+   dark-theme grey, and a bad field's border the salmon again. */
+.cr-sheet .gs-consequence {
+  flex: 1 0 100%;
+  margin: 6px 0 0;
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+.cr-sheet .gs-dim {
+  color: var(--muted);
+}
+.cr-sheet .gs-input.gs-bad {
+  border-color: var(--rose);
+}
+/* REVOKE, REMOVE, DENY, END: the spec's `.act` — pixel, bare, on the row —
+   in rose because each one takes something away. Never the loudest thing on
+   the row, always one click (grant-surface's own rule, kept). */
+.cr-sheet .gs-revoke {
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--rose);
+  background: none;
+  border: 1.5px solid transparent;
+  border-radius: 0;
+  padding: 3px 6px;
+  text-decoration: none;
+}
+.cr-sheet .gs-revoke:hover {
+  border-color: var(--rose);
+}
+.cr-sheet .gs-revoke:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+/* The same bare act in the neutral ink: PAIR A PHONE, GRANT A SEAT, OPEN.
+   They ride gs-revoke for its shape, not its meaning. */
+.cr-sheet .gs-revoke.cr-acct-act {
+  color: var(--ink-soft);
+}
+.cr-sheet .gs-revoke.cr-acct-act:hover {
+  border-color: var(--line);
+}
+/* A ghost ON A ROW (ADD, LOCK NOW, EDIT, OPEN) is the bare act too; the boxed
+   ghost stays for the sheet's footer, where it sits beside the primary. */
+.cr-sheet .cr-acct-secrow .gs-ghost,
+.cr-sheet .cr-acct-device .gs-ghost,
+.cr-sheet .cr-acct-pane > .gs-sub .gs-ghost {
+  background: none;
+  border: 1.5px solid transparent;
+  padding: 3px 6px;
+  box-shadow: none;
+}
+.cr-sheet .cr-acct-secrow .gs-ghost:hover,
+.cr-sheet .cr-acct-device .gs-ghost:hover,
+.cr-sheet .cr-acct-pane > .gs-sub .gs-ghost:hover {
+  border-color: var(--line);
+}
+.cr-sheet .gs-ghost:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* Phones: the sheet takes the width it can get and leaves the thumb room.
    Doubled classes: `.gs-sheet.gs-small` and `.gs-scrim` are emitted AFTER
    this file, so a plain tie here would lose (see the header note). */

@@ -164,7 +164,7 @@ export function SeatsTab({ username }: { username: string }): React.JSX.Element 
             {row.team === null ? (
               <span className="cr-acct-secstate">NOT PUBLISHED</span>
             ) : (
-              <button className="gs-revoke" onClick={() => setGranting(row.slug)}>
+              <button className="gs-revoke cr-acct-act" onClick={() => setGranting(row.slug)}>
                 {GRANT_LABEL}
               </button>
             )}
@@ -188,7 +188,11 @@ export function SeatsTab({ username }: { username: string }): React.JSX.Element 
                     if (e.key === 'Escape') setGranting(null)
                   }}
                 />{' '}
-                <button className="gs-revoke" disabled={busy} onClick={() => grant(row.slug)}>
+                <button
+                  className="gs-revoke cr-acct-act"
+                  disabled={busy}
+                  onClick={() => grant(row.slug)}
+                >
                   GRANT
                 </button>
               </p>
@@ -233,13 +237,16 @@ function OpenTeam({ url }: { url: string }): React.JSX.Element {
   const bridged = cookrew().openExternal
   if (!bridged) {
     return (
-      <a className="gs-revoke" href={url} target="_blank" rel="noopener noreferrer">
+      <a className="gs-revoke cr-acct-act" href={url} target="_blank" rel="noopener noreferrer">
         OPEN
       </a>
     )
   }
   return (
-    <button className="gs-revoke" onClick={() => void bridged(url).catch(() => undefined)}>
+    <button
+      className="gs-revoke cr-acct-act"
+      onClick={() => void bridged(url).catch(() => undefined)}
+    >
       OPEN
     </button>
   )

@@ -5441,39 +5441,65 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   text-transform: uppercase;
 }
 
-.cr-acct-good { color: var(--hp); }
+/* The verdict greens are the spec's `.hint.ok` (#1f7a4d): the arcade --hp
+   is a fill colour, and as 8 px text on cream it is 2.2:1. */
+.cr-acct-good { color: #1f7a4d; }
 .cr-acct-bad { color: var(--rose); }
 .cr-acct-dim { color: var(--muted); }
 
+/* D4's tabs, as the spec draws them: a rule under the row, and the open tab
+   is ink with an amber underline — not an amber fill, which would make five
+   primaries out of a navigation. */
 .cr-acct-tabs {
   display: flex;
   margin: 16px 0 4px;
-  border: 2px solid var(--line);
-  box-shadow: 2px 2px 0 var(--line);
-  overflow: hidden;
+  border-bottom: 2px solid var(--line);
 }
 
 .cr-acct-tab {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   border: none;
-  border-right: 2px solid var(--line);
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
   background: none;
   padding: 6px 8px;
   font-family: var(--font-pixel);
   font-size: 8.5px;
   letter-spacing: 0.06em;
-  color: inherit;
+  color: var(--muted);
   cursor: pointer;
   white-space: nowrap;
 }
 
-.cr-acct-tab:last-child { border-right: none; }
-.cr-acct-tab[aria-selected='true'] { background: var(--amber); color: var(--ink); }
+.cr-acct-tab[aria-selected='true'] {
+  color: var(--ink);
+  border-bottom-color: var(--amber);
+}
 
 .cr-acct-pane { margin-top: 14px; }
 
 .cr-acct-card { margin-top: 6px; }
-.cr-acct-cardhead { margin: 0 0 10px; font-size: 15px; }
+
+/* The card's caption is the spec's `.cap`: pixel, uppercase, with the aside
+   in mono and lower case so it reads as a note on the title, not more title. */
+.cr-acct-cardhead {
+  margin: 0 0 10px;
+  font-family: var(--font-pixel);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+.cr-acct-cardhead .gs-dim {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
+}
 
 .cr-acct-secrows,
 .cr-acct-devices,
@@ -5483,6 +5509,9 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   padding: 0;
 }
 
+/* The spec's `.list`: a soft rule between rows, the kind in mono, the label
+   in body type, the state as a badge. --cr-line was the grant surface's
+   dark-theme rule and drew near-black hairlines on cream. */
 .cr-acct-secrow,
 .cr-acct-device {
   display: flex;
@@ -5490,28 +5519,45 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   gap: 10px;
   flex-wrap: wrap;
   padding: 9px 0;
-  border-bottom: 1px solid var(--cr-line, #332f27);
+  border-bottom: 1px solid var(--line-soft);
 }
 
 .cr-acct-kind {
   flex: 0 0 auto;
   min-width: 58px;
-  font-family: var(--font-pixel);
-  font-size: 8px;
-  letter-spacing: 0.06em;
+  font-family: var(--font-mono);
+  font-size: 11px;
   color: var(--muted);
 }
 
-.cr-acct-seclabel { flex: 1 1 auto; font-size: 13px; }
+.cr-acct-seclabel {
+  flex: 1 1 auto;
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--ink);
+}
 
+/* The state is the spec's `.badge`: a small hard-edged box, never coloured
+   text, so THIS DEVICE, NOT SAVED and ACTIVE all read as the same kind of
+   fact. */
 .cr-acct-secstate {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1.5px solid var(--line);
+  background: var(--cream-hi);
   font-family: var(--font-pixel);
   font-size: 8px;
   letter-spacing: 0.06em;
-  color: var(--muted);
+  text-transform: uppercase;
+  color: var(--ink);
+  white-space: nowrap;
 }
 
-.cr-acct-workspaces li { padding: 6px 0; font-size: 13px; }
+.cr-acct-workspaces li {
+  padding: 6px 0;
+  font-size: 13px;
+  border-bottom: 1px solid var(--line-soft);
+}
 
 .cr-acct-toggle {
   display: flex;
@@ -5522,21 +5568,28 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   cursor: pointer;
 }
 
-/* Shown once. Monospaced so a code read off the screen is unambiguous. */
+/* Shown once, in the spec's `.term`: the one phosphor box on a cream sheet,
+   because these are read off the screen like a terminal and a code in body
+   type on cream is a code someone mis-copies. Monospaced for the same reason. */
 .cr-acct-codes {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 10px 12px;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px 18px;
+  background: var(--phos-bg);
+  border: 2px solid var(--line);
+  color: var(--phos);
   font-family: var(--font-mono);
   font-size: 13px;
   letter-spacing: 0.04em;
 }
 
 /* THE LOCK COVERS EVERYTHING, including the sheets — z-index above .gs-scrim
-   (60), because a lock drawn under a dialog is not a lock. */
+   (60), because a lock drawn under a dialog is not a lock. The veil is the
+   house ink, not black, and heavier than a sheet's: a lock that leaves the
+   canvas readable through it is not hiding anything. */
 .cr-acct-lock {
   position: fixed;
   inset: 0;
@@ -5544,7 +5597,7 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.72);
+  background: rgba(45, 42, 32, 0.86);
 }
 
 .cr-acct-lockcard {
@@ -5690,6 +5743,15 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   font-size: 9px;
   letter-spacing: 0.08em;
   color: var(--muted);
+}
+
+/* THE BRACE ABOVE IS LOAD-BEARING. 0ad80cfb pasted the D7 block inside this
+   rule, which the browser read as one unclosed block running to the end of
+   the file: every rule below — the approval card, the must-change card, the
+   lock select, the seat rows, the TOTP secret — was dead on dev while the
+   file looked fine to a reader. tests/account-cream.test.tsx parses this file
+   and fails on the next unclosed block. */
+
 /* ── D7 · callers at a served door ──────────────────────────────────────
    The only place another person appears on the owner's canvas. Sized off
    the card's inverse-zoom var so a face reads the same at 30% as at 100%,
@@ -5720,11 +5782,14 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
 }
 
 .cr-caller-more {
-  background: var(--cr-line, #332f27);
+  background: var(--cream-lo);
   color: var(--muted);
   cursor: default;
 }
 
+/* The house popover — cream, the 2 px line, the hard shadow — on a card that
+   is itself cream. It wore the grant surface's dark panel before, which no
+   one saw: this rule was inside the unclosed block above. */
 .cr-caller-menu {
   position: absolute;
   top: 22px;
@@ -5735,23 +5800,29 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   gap: 6px;
   width: 220px;
   padding: 10px;
-  border: 1px solid var(--cr-line, #332f27);
-  border-radius: 6px;
-  background: var(--cr-panel, #1b1916);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  border: 2px solid var(--line);
+  background: var(--cream-hi);
+  color: var(--ink);
+  box-shadow: 3px 3px 0 var(--line);
 }
 
 .cr-caller-why { font-size: 12px; line-height: 1.4; }
 
-/* The grant field in Seats & Teams: a username, and nothing else fits. */
+/* The grant field in Seats & Teams: a username, and nothing else fits. The
+   same field as every other on the sheet (.cr-sheet .gs-input), sized down. */
 .cr-acct-grant-name {
   width: 160px;
   padding: 4px 6px;
-  border: 1px solid var(--cr-line, #332f27);
-  border-radius: 4px;
-  background: var(--cr-panel, #1b1916);
-  color: var(--cr-ink, #ece6d8);
-  font-size: 12.5px;
+  border: 1.5px solid var(--line);
+  background: var(--cream);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.cr-acct-grant-name:focus {
+  border-color: var(--amber-deep);
+  outline: none;
 }
 
 .cr-acct-seats {
@@ -5808,17 +5879,24 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
    thing in it and the three answers sit under it in the order the design
    weights them. */
 
+/* The spec's `.note` (D6): amber-soft with the deep-amber edge. A claim about
+   the world, drawn like the notes the design uses for one — not a rose box,
+   which would be the app deciding the answer is DENY before the owner reads
+   the sentence. */
 .cr-acct-request {
-  border: 2px solid var(--rose);
-  box-shadow: 3px 3px 0 var(--line);
-  padding: 12px 14px;
+  background: var(--amber-soft);
+  border-left: 4px solid var(--amber-deep);
+  padding: 10px 12px;
   margin-bottom: 12px;
 }
 
 .cr-acct-asklead {
   margin: 0 0 4px;
+  font-family: var(--font-body);
   font-size: 14px;
+  font-weight: 700;
   line-height: 1.35;
+  color: var(--ink);
 }
 
 .cr-acct-askdetail {
@@ -5838,7 +5916,8 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
 }
 
 .cr-acct-mustchange {
-  border: 2px solid var(--amber);
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
   box-shadow: 3px 3px 0 var(--line);
   padding: 12px 14px;
   margin-bottom: 14px;
@@ -5892,6 +5971,8 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   background: var(--cream-md);
 }
 
-.cr-acct-resume .gs-consequence {
+/* (0,3,0): team-fork.css's `.cr-sheet .gs-consequence` loads after this file
+   and would take the tie. */
+.cr-sheet .cr-acct-resume .gs-consequence {
   margin: 0 0 8px;
 }
