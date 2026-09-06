@@ -69,7 +69,27 @@ export const LATENCY = {
   // per sample (once with an open set, once blind). The cost is one stat per
   // file to find each sandbox's newest write. 2026-09-06 under load 3.9/core:
   // p50 108 / p95 111 / p98 112 (n=30).
-  storageSweepServed40: { p50: 250, p95: 400, p98: 500 }
+  storageSweepServed40: { p50: 250, p95: 400, p98: 500 },
+  // ---- L5 Tempo (perf/tempo, 2026-09-06): the residency loops ----
+  // A workspace switch under multi-instance, 8 workspaces × 20 terminals,
+  // the target not yet resident: flush the outgoing canvas (one write),
+  // load the incoming one (one read), emit. Worst of four 30-sample runs,
+  // 2026-09-06 at load 4-8/core: p50 1.10 / p95 6.45 / p98 7.17 (0.23 /
+  // 0.28 / 0.30 on the quietest). Structural: reads 1, writes 1, events 1.
+  workspaceSwitch8x20: { p50: 3, p95: 13, p98: 15 },
+  // One board-probe pass over 40 detached panes with NO herdr status, through
+  // a real HerdrHostMultiplexer: the sync runner is called ZERO times and the
+  // main thread's active time across the pass is what is measured (the
+  // observe seam), not the wall time of the awaits — an UPPER bound, since
+  // everything else the loop did across the pass counts too, which is why
+  // it moves with the machine. Worst of four 30-sample runs 2026-09-06 at
+  // load 4-8/core: p50 12.2 / p95 51.4 / p98 58.0 (0.69 / 1.0 / 1.2 on the
+  // quietest). Structural: 0 sync children, 1 listing, 40 reads, 40 phases.
+  probeTick40Detached: { p50: 25, p95: 105, p98: 120 },
+  // One drain tick over 40 parked sessions × 5 terminals, all resident, zero
+  // workspace reads. Worst of four 30-sample runs 2026-09-06 at load
+  // 4-8/core: p50 0.14 / p95 1.74 / p98 3.27. Structural: reads 0.
+  drainTick40Parked: { p50: 1, p95: 4, p98: 7 }
 } as const
 
 export const MEMORY = {

@@ -358,3 +358,64 @@ describe('workspace state — serialising the heaviest live canvas', () => {
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// L5 Tempo (perf/tempo): a workspace switch on the live shape.
+// ---------------------------------------------------------------------------
+
+function terminalNode(i: number): CanvasNode {
+  return {
+    kind: 'terminal',
+    id: `term-${i}`,
+    name: `Agent ${i}`,
+    preset: 'Claude Code',
+    command: 'claude',
+    cwd: '/work/repo',
+    orch: false,
+    role: null,
+    position: { x: (i % 10) * 420, y: Math.floor(i / 10) * 320 },
+    size: { width: 400, height: 300 }
+  } as CanvasNode
+}
+
+describe('workspace switch — flush one, load one, emit', () => {
+  it('8 workspaces × 20 terminals: one read, one write, one event per switch', async () => {
+    const root = tempRoot('switch')
+    try {
+      const store = new WorkspaceStore(root, { multiInstance: true })
+      const ids = Array.from({ length: 8 }, (_, w) =>
+        store.createWorkspaceWithState(`WS ${w}`, '/work/repo', Array.from({ length: 20 }, (_, i) => terminalNode(w * 100 + i)), []).id
+      )
+      let cursor = 0
+      const ops: string[] = []
+      store.on('op', (observed: { type: string }) => {
+        if (counters.on) ops.push(observed.type)
+      })
+      const measured = await measure('workspace switch 8x20', () => {
+        // The target must NOT be resident, or the shape is a no-read focus
+        // change: release it first (a no-op when it never was).
+        const target = ids[cursor % ids.length]
+        cursor += 1
+        store.releaseSession(target)
+        // The outgoing canvas carries a pending edit, as a live switch does.
+        store.updateNodeUnsafe(store.terminals()[0]?.id ?? '', { name: `Agent ${cursor}` })
+        resetCounters()
+        ops.length = 0
+        counters.on = true
+        const sample = timed(() => {
+          store.switchWorkspace(target)
+          return { reads: counters.workspaceReads, writes: counters.workspaceWrites, events: ops.length, focused: store.focusedId === target }
+        })
+        counters.on = false
+        return sample
+      })
+      expectTail(measured, LATENCY.workspaceSwitch8x20)
+      expectEvery(measured, 'reads', 1)
+      expectEvery(measured, 'writes', 1)
+      expectEvery(measured, 'events', 1)
+      expectEvery(measured, 'focused', true)
+    } finally {
+      removeRoot(root)
+    }
+  })
+})
