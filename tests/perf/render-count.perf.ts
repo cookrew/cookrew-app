@@ -30,12 +30,16 @@ import { RENDER } from './budgets'
  * counts every commit and every component React rebuilt in it.
  *
  * Structure, not speed: the gate is that a pan which moves no card off the
- * stage renders NO card wrapper and never the app shell. Before the lane a
- * pan re-rendered every visible card on every one of ~2.5 commits a frame,
+ * stage renders NO card wrapper and never the app shell, and that one card
+ * changed through the api reaches exactly that card. Before the lane a pan
+ * re-rendered every visible card on every one of ~2.5 commits a frame,
  * because App itself subscribed to the viewport and handed ReactFlow inline
- * handlers. That wiring is reproduced in legacy.tsx and asserted to do
- * exactly that, so a green result here is known to come from a counter that
- * can see the regression it guards against.
+ * handlers. dev's LodOverlays leaf (24e91b6) fixed the first half — measured
+ * on dev alone: pan 0 card renders, but one rename still rendered all 27
+ * cards (57 wrapper renders) — and the stable handlers here fix the second.
+ * The old wiring is reproduced in legacy.tsx and asserted to do exactly
+ * that, so a green result here is known to come from a counter that can see
+ * the regression it guards against.
  *
  * Needs a Chrome (scripts/perf-dom-probe.mjs findChrome; COOKREW_CHROME to
  * name one). Without it the file reports why and skips — a machine with no
@@ -150,9 +154,9 @@ describeWithChrome('React render count across viewport changes', () => {
     expect(c.pan.renders.Canvas ?? 0).toBe(0)
     expect(c.pan.renders.Header ?? 0).toBe(0)
     expect(c.pan.renders.Dock ?? 0).toBe(0)
-    // The arbiter DOES render per frame — that is its job — and nothing else
-    // of ours should be close.
-    expect(c.pan.renders.LodArbiter ?? 0).toBeGreaterThan(0)
+    // The leaf that watches the viewport (dev's LodOverlays) DOES render per
+    // frame — that is its job — and nothing else of ours should be close.
+    expect(c.pan.renders.LodOverlays ?? 0).toBeGreaterThan(0)
     expect(c.pan.commitsPerFrame).toBeLessThanOrEqual(RENDER.commitsPerPanFrameMax)
     // The other side of zero: a frozen canvas would also render nothing on a
     // pan. One card renamed through the api must reach exactly that card and
