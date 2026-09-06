@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { detachedTerminals, probeDetachedAsync, type ProbeDeps } from '../src/main/board-index'
 import { HerdrHostMultiplexer, type AsyncCliRunner } from '../src/main/herdr-host-multiplexer'
 import type { CommandRunner } from '../src/main/multiplexer'
 
@@ -40,6 +41,63 @@ function harness(replies: Record<string, string | Error>) {
 }
 
 describe('HerdrHostMultiplexer.listSessionsAsync', () => {
+  it('a failed probe listing does not back admission off', async () => {
+    // The probe retries every 3 s; if its failure set the shared backoff, a
+    // flaky herdr would keep dispatch admission backed off for good.
+    const { mux, async } = harness({ 'pane list': new Error('herdr: os error 35') })
+    expect(await mux.listSessionsAsync()).toEqual([])
+    const before = async.length
+    mux.sessionExistsCached('cookrew_a') // a cold admission read kicks a refresh — unless backed off
+    expect(async.length).toBe(before + 1)
+    expect(async[async.length - 1].slice(0, 2)).toEqual(['pane', 'list'])
+  })
+
+  it('a pass longer than the admission freshness window kicks async refreshes, never a sync child', async () => {
+    // What "one inventory per tick" actually means in the field: the probe
+    // lists once; a capture past ADMISSION_FRESH_MS (500 ms) finds the cache
+    // stale and kicks the refresher — one more ASYNC listing per window, off
+    // the main thread. The sync runner stays untouched throughout.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(1_800_000_000_000)
+      const listing = envelope([pane('cookrew_a', 'w1:p1'), pane('cookrew_b', 'w1:p2'), pane('cookrew_c', 'w1:p3')])
+      const sync: string[][] = []
+      const async: string[][] = []
+      const runner: CommandRunner = {
+        run: (_f, args) => { sync.push(args); throw new Error('sync') },
+        runQuiet: (_f, args) => { sync.push(args) },
+        probe: (_f, args) => { sync.push(args); return true }
+      }
+      const asyncRunner: AsyncCliRunner = async (args) => {
+        async.push(args)
+        if (args[1] === 'list') return listing
+        vi.setSystemTime(Date.now() + 300) // each read costs 300 ms of wall clock
+        return 'text'
+      }
+      const mux = new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/tmp/c.toml', runner, asyncRunner })
+      const deps: ProbeDeps = {
+        listSessions: () => mux.listSessions(),
+        capturePane: (name) => mux.capture(name) ?? '',
+        listSessionsAsync: () => mux.listSessionsAsync(),
+        capturePaneAsync: async (name) => (await mux.captureAsync(name)) ?? '',
+        knownTerminalIds: () => ['a', 'b', 'c'],
+        isAttached: () => false,
+        sessionNameFor: (id) => `cookrew_${id}`,
+        detectWorking: () => true,
+        detectWaiting: () => false
+      }
+      const live = new Set(await deps.listSessionsAsync!())
+      const phases = await probeDetachedAsync(deps, detachedTerminals(deps, live))
+      expect(phases.size).toBe(3)
+      expect(sync).toEqual([])
+      const listings = async.filter((a) => a[1] === 'list').length
+      expect(listings).toBe(2) // the probe's, plus one refresh once the cache went stale at 600 ms
+      expect(async.filter((a) => a[1] === 'read')).toHaveLength(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('lists through the async runner only and publishes the inventory', async () => {
     const { mux, sync, async } = harness({
       'pane list': envelope([pane('cookrew_a', 'w1:p1'), pane('cookrew_b', 'w1:p2'), { pane_id: 'w1:p3', label: null }]),

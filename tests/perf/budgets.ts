@@ -78,18 +78,31 @@ export const LATENCY = {
   // 0.28 / 0.30 on the quietest). Structural: reads 1, writes 1, events 1.
   workspaceSwitch8x20: { p50: 3, p95: 13, p98: 15 },
   // One board-probe pass over 40 detached panes with NO herdr status, through
-  // a real HerdrHostMultiplexer: the sync runner is called ZERO times and the
-  // main thread's active time across the pass is what is measured (the
-  // observe seam), not the wall time of the awaits — an UPPER bound, since
-  // everything else the loop did across the pass counts too, which is why
-  // it moves with the machine. Worst of four 30-sample runs 2026-09-06 at
-  // load 4-8/core: p50 12.2 / p95 51.4 / p98 58.0 (0.69 / 1.0 / 1.2 on the
-  // quietest). Structural: 0 sync children, 1 listing, 40 reads, 40 phases.
-  probeTick40Detached: { p50: 25, p95: 105, p98: 120 },
-  // One drain tick over 40 parked sessions × 5 terminals, all resident, zero
-  // workspace reads. Worst of four 30-sample runs 2026-09-06 at load
-  // 4-8/core: p50 0.14 / p95 1.74 / p98 3.27. Structural: reads 0.
-  drainTick40Parked: { p50: 1, p95: 4, p98: 7 }
+  // a real HerdrHostMultiplexer whose fake reads take 15 ms each (the pass
+  // outlasts the 500 ms admission freshness window, as in the field). The
+  // sync runner is called ZERO times; what is timed is the probe's OWN
+  // main-thread hold — the sum of its synchronous segments between awaits,
+  // never the awaits. Worst of three 10-sample runs 2026-09-06 at load
+  // 3-4/core: p50 3.07 / p95 5.86 / p98 7.44. Structural: 0 sync
+  // children, listings within 1 + ceil(pass/500 ms), 40 reads, 40 phases.
+  probeTick40Detached: { p50: 7, p95: 12, p98: 15 },
+  // A GET /api/board while a 2.4 s probe pass is in flight and the previous
+  // pass gave it something to show: the read must not wait on the pass.
+  // 2026-09-06, worst of three runs at load 3-4/core: p50 0.16 / p95 0.50 /
+  // p98 1.14 (Atlas measured p95 1502 before the fix) for 30 reads paced
+  // 40 ms. Structural: no read waited (>100 ms); an EMPTY board's first read
+  // does wait, bounded at 1.5 s.
+  boardReadDuringPass: { p50: 2, p95: 5, p98: 10 },
+  // One drain tick over 40 parked sessions × 5 terminals, all resident
+  // (multi-instance), zero workspace reads. Worst of four 30-sample runs
+  // 2026-09-06 at load 4-8/core: p50 0.14 / p95 1.74 / p98 3.27.
+  drainTick40Parked: { p50: 1, p95: 4, p98: 7 },
+  // The shipped default (multiInstance false): 10 parked sessions the store
+  // evicted, registry entries alive, files on disk. The old wiring read each
+  // file twice per tick; now the observing tick reads nothing and the
+  // release tick reads each once. 2026-09-06, worst of three runs: p50 0.00 /
+  // p95 0.01 / p98 0.07. Structural: observing 0, releasing 10, after 0.
+  drainTick10ParkedSingle: { p50: 1, p95: 1, p98: 2 }
 } as const
 
 export const MEMORY = {

@@ -72,6 +72,44 @@ function parkedFleet(parked: number, terminals: number) {
   return { base, store, home, ids }
 }
 
+/**
+ * The shipped default: multiInstance false. Each workspace is focused once
+ * with a drain tick in between, so the registry materialises it, and the
+ * next switch evicts it from the store — parked, file on disk, registry
+ * entry alive. The clock stands still during the build so nothing releases.
+ */
+function singleInstanceFleet(parked: number, terminals: number) {
+  const base = mkdtempSync(path.join(tmpdir(), 'cookrew-drain-single-'))
+  const store = new WorkspaceStore(base, { multiInstance: false })
+  const home = store.focusedId
+  let clock = 1_800_000_000_000
+  const journal: string[] = []
+  const drain = createSessionDrain({
+    store,
+    subscriberCount: () => 0,
+    hasLiveWork: () => false,
+    callsInFlight: () => 0,
+    releaseTerminal: (tid) => journal.push(`release:${tid}`),
+    detachWorkspace: (id) => journal.push(`detach:${id}`),
+    now: () => clock
+  })
+  const ids: string[] = []
+  for (let i = 0; i < parked; i += 1) {
+    const meta = store.createWorkspaceWithState(
+      `Parked ${i}`,
+      '/work',
+      Array.from({ length: terminals }, (_, k) => terminal(i * 100 + k)),
+      []
+    )
+    store.switchWorkspace(meta.id)
+    drain.tick()
+    ids.push(meta.id)
+  }
+  store.switchWorkspace(home)
+  drain.tick()
+  return { base, store, drain, ids, journal, tick: (ms: number) => void (clock += ms) }
+}
+
 describe('the drain over forty parked sessions', () => {
   const roots: string[] = []
   afterEach(() => {
@@ -146,34 +184,36 @@ describe('the drain over forty parked sessions', () => {
     expect(store.resident().sort()).toEqual([store.focusedId, ...ids].sort())
   })
 
-  it('answers a session the store no longer holds from memory and lets it go', () => {
-    // A registry entry can outlive its store session (removeWorkspace drops
-    // the store's copy directly). Its facts must not go to disk for it.
-    const { base, store, ids } = parkedFleet(2, 2)
+  it('single-instance (the shipped default): parked sessions the store evicted cost no reads per tick', () => {
+    // Under multiInstance false a switch EVICTS the outgoing workspace, so a
+    // registry entry outlives its store session with its file still on disk.
+    // The old wiring asked store.terminalIdsOf twice per tick for each —
+    // two disk reads per parked session per tick, forever until release.
+    // This is the arm that can fail: multi-instance parks stay hydrated and
+    // read nothing either way.
+    const { base, store, drain, ids, journal, tick } = singleInstanceFleet(10, 2)
     roots.push(base)
-    let clock = 1_800_000_000_000
-    const drain = createSessionDrain({
-      store,
-      subscriberCount: () => 0,
-      hasLiveWork: () => false,
-      callsInFlight: () => 0,
-      releaseTerminal: () => undefined,
-      detachWorkspace: () => undefined,
-      now: () => clock
-    })
-    drain.tick()
-    store.removeWorkspace(ids[0])
-    expect(store.isResident(ids[0])).toBe(false)
-    expect(drain.sessions.peek(ids[0])).toBeDefined()
+    expect(store.resident()).toEqual([store.focusedId])
+    expect(drain.sessions.residentCount()).toBe(11)
 
     counter.workspaceReads = 0
     counter.on = true
-    clock += DRAIN_DEBOUNCE_MS + SESSION_DRAIN_TICK_MS
+    drain.tick()
+    drain.tick()
+    drain.tick()
+    const observing = counter.workspaceReads
+    tick(DRAIN_DEBOUNCE_MS + SESSION_DRAIN_TICK_MS)
+    drain.tick() // release: once per lifetime, the store's view is read so every watch is handed back
+    const releasing = counter.workspaceReads - observing
     drain.tick()
     counter.on = false
 
-    expect(counter.workspaceReads).toBe(0)
-    expect(drain.sessions.peek(ids[0])).toBeUndefined()
+    expect(observing).toBe(0)
+    expect(releasing).toBe(10)
+    expect(counter.workspaceReads).toBe(10)
+    expect(drain.sessions.resident()).toEqual([store.focusedId])
+    expect(journal.filter((e) => e.startsWith('release:'))).toHaveLength(10 * 2)
+    expect(journal.filter((e) => e.startsWith('detach:')).map((e) => e.slice(7)).sort()).toEqual([...ids].sort())
   })
 
   it('the death clock is untouched: two ticks, debounced, and get() never resets it', () => {

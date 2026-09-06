@@ -254,46 +254,98 @@ export function probeDetached(deps: ProbeDeps, detached: readonly DetachedTermin
   return phases
 }
 
+/** What one async pass produced, and how far it got. */
+export interface DetachedPass {
+  phases: Map<string, BoardPhase>
+  /** Terminals looked at before the deadline — the rest were not reached. */
+  reached: number
+  /** Main-thread time: the sum of the synchronous segments between awaits. */
+  heldMs: number
+}
+
 /**
  * The same pass with the pane reads awaited, sequentially: one child at a
  * time, so a detached fleet of forty is forty short waits libuv owns rather
  * than forty forks Electron main owns. Falls back to the sync read where no
  * async one was given, so a backend without one behaves exactly as before.
+ *
+ * Reports how far it got: past the deadline (a wedged backend answers each
+ * read at its bound) the pass stops and says so, and the caller decides what
+ * the unreached terminals show. Also reports its own main-thread hold — the
+ * synchronous segments only, never the awaits, so the number names this
+ * loop for what it did and not for what else the loop was doing meanwhile.
  */
-export async function probeDetachedAsync(
+export async function runDetachedPass(
   deps: ProbeDeps,
   detached: readonly DetachedTerminal[],
   options: { deadline?: number } = {}
-): Promise<Map<string, BoardPhase>> {
+): Promise<DetachedPass> {
   const phases = new Map<string, BoardPhase>()
+  let heldMs = 0
+  let segment = performance.now()
+  let reached = 0
   for (const { terminalId, session } of detached) {
-    // A wedged backend answers each read at its bound (3 s); forty of those
-    // would hold the single-flight latch for minutes. Past the deadline the
-    // pass reports what it has — partial, never stale by minutes.
     if (options.deadline !== undefined && Date.now() > options.deadline) break
+    reached += 1
     const asked = phaseFromAsked(deps.askedStatus?.(terminalId) ?? null)
     if (asked !== null) {
       if (asked !== undefined) phases.set(terminalId, asked)
       continue
     }
-    const chunk = deps.capturePaneAsync ? await deps.capturePaneAsync(session) : deps.capturePane(session)
+    let chunk: string
+    if (deps.capturePaneAsync) {
+      const read = deps.capturePaneAsync(session)
+      heldMs += performance.now() - segment
+      chunk = await read
+      segment = performance.now()
+    } else {
+      chunk = deps.capturePane(session)
+    }
     const phase = phaseFromPane(deps, chunk)
     if (phase) phases.set(terminalId, phase)
   }
-  return phases
+  heldMs += performance.now() - segment
+  return { phases, reached, heldMs }
+}
+
+/** The pass's phases alone — the shape callers that do not merge want. */
+export async function probeDetachedAsync(
+  deps: ProbeDeps,
+  detached: readonly DetachedTerminal[],
+  options: { deadline?: number } = {}
+): Promise<Map<string, BoardPhase>> {
+  return (await runDetachedPass(deps, detached, options)).phases
+}
+
+/**
+ * A truncated pass over the previous map: the terminals it reached take
+ * their fresh verdict (including "no phase"), the ones it did not reach keep
+ * what the last pass said. Stale beats blank — a wedged herdr must not turn
+ * every working agent into a row with no phase.
+ */
+export function mergePartialPass(
+  previous: ReadonlyMap<string, BoardPhase>,
+  pass: DetachedPass,
+  detached: readonly DetachedTerminal[]
+): Map<string, BoardPhase> {
+  if (pass.reached >= detached.length) return pass.phases
+  const merged = new Map(pass.phases)
+  for (const { terminalId } of detached.slice(pass.reached)) {
+    const kept = previous.get(terminalId)
+    if (kept) merged.set(terminalId, kept)
+  }
+  return merged
 }
 
 /**
  * One sampling pass from an inventory read here (or one handed in, so a
  * caller that already listed the panes does not list them again).
  */
-export function probeOnce(deps: ProbeDeps, live: ReadonlySet<string> = new Set(deps.listSessions())): Map<string, BoardPhase> {
+export function probeOnce(
+  deps: ProbeDeps,
+  live: ReadonlySet<string> = new Set(deps.listSessions())
+): Map<string, BoardPhase> {
   return probeDetached(deps, detachedTerminals(deps, live))
-}
-
-/** True when at least one known terminal has a tmux session but no live pty. */
-export function hasDetachedSessions(deps: ProbeDeps, live: ReadonlySet<string> = new Set(deps.listSessions())): boolean {
-  return detachedTerminals(deps, live).length > 0
 }
 
 export interface ProbeSampler {
@@ -310,9 +362,10 @@ export interface ProbeSampler {
    */
   sampleAsync: () => Promise<Map<string, BoardPhase>>
   /**
-   * start(), then the phases once the pass that start kicked (or the one in
-   * flight) has landed — what a board READ awaits, bounded by the caller, so
-   * the first frame after the sampler parked is not an empty one.
+   * start(), then the phases — at once when there is anything to show, or
+   * once the pass that start kicked has landed when there is nothing. What a
+   * board READ awaits, bounded by the caller: the first frame after the
+   * sampler parked is not an empty one, and no other read waits on a pass.
    */
   warm: () => Promise<Map<string, BoardPhase>>
   readonly running: boolean
@@ -325,9 +378,9 @@ export interface ProbeSamplerOptions {
   /**
    * Called with how long each pass held the MAIN THREAD, in ms — the
    * loop-health seam. For a synchronous pass that is its wall time; for an
-   * async pass it is the loop's active time across the pass (an upper bound:
-   * other work in the same span counts too), never the wall time of the
-   * awaits, which would name this loop for stalls it did not cause.
+   * async pass it is the sum of the synchronous segments between awaits,
+   * never the awaits themselves, so the number names this loop for what it
+   * did and not for whatever else the loop was busy with meanwhile.
    */
   observe?: (ms: number) => void
 }
@@ -341,9 +394,9 @@ export interface ProbeSamplerOptions {
  * "anything detached?" decision from it. With async reads available the tick
  * awaits them, and the single-flight latch spans the whole awaited pass: a
  * pass longer than the interval means the next interval is skipped, never
- * stacked. The first read after start() may therefore answer with the
- * previous pass — the same "last known" degrade the board already documents
- * for a probe that has not run yet.
+ * stacked. A read while a pass is in flight answers with the previous pass —
+ * the same "last known" degrade the board already documents — unless there
+ * is no previous pass at all, in which case warm() lets it wait.
  */
 export function createProbeSampler(
   deps: ProbeDeps,
@@ -356,9 +409,17 @@ export function createProbeSampler(
   let lastSampleAt = 0
   /** Whether the last pass found anything to look at — the self-stop input. */
   let lastDetached = 0
-  /** The async pass in flight, so a read can await it. */
+  /** The async pass in flight, so a read with nothing to show can await it. */
   let pending: Promise<Map<string, BoardPhase>> | null = null
   const usesAsync = typeof deps.listSessionsAsync === 'function'
+
+  const observe = (ms: number): void => {
+    try {
+      options.observe?.(ms)
+    } catch {
+      // An observer's failure is not the probe's.
+    }
+  }
 
   const sampleNow = (): Map<string, BoardPhase> => {
     if (inFlight) return latest // single-flight: never stack scans
@@ -374,28 +435,34 @@ export function createProbeSampler(
       console.error('Board probe failed:', error)
     } finally {
       inFlight = false
-      options.observe?.(performance.now() - started)
+      observe(performance.now() - started)
     }
     return latest
   }
 
   const runAsyncPass = async (): Promise<Map<string, BoardPhase>> => {
-    const base = performance.eventLoopUtilization()
     const deadline = Date.now() + intervalMs * PROBE_PASS_DEADLINE_TICKS
+    let heldMs = 0
+    let segment = performance.now()
     try {
-      const detached = detachedTerminals(deps, new Set(await deps.listSessionsAsync!()))
+      const listing = deps.listSessionsAsync!()
+      heldMs += performance.now() - segment
+      const live = new Set(await listing)
+      segment = performance.now()
+      const detached = detachedTerminals(deps, live)
       lastDetached = detached.length
-      latest = await probeDetachedAsync(deps, detached, { deadline })
+      heldMs += performance.now() - segment
+      const pass = await runDetachedPass(deps, detached, { deadline })
+      segment = performance.now()
+      heldMs += pass.heldMs
+      latest = mergePartialPass(latest, pass, detached)
     } catch (error) {
       console.error('Board probe failed:', error)
     } finally {
+      heldMs += performance.now() - segment
       inFlight = false
       pending = null
-      try {
-        options.observe?.(performance.eventLoopUtilization(base).active)
-      } catch {
-        // An observer's failure is not the probe's.
-      }
+      observe(heldMs)
     }
     return latest
   }
@@ -434,6 +501,10 @@ export function createProbeSampler(
     sampleAsync,
     warm: () => {
       sampler.start()
+      // Only a read with NOTHING to show waits. A pass outlasts the interval
+      // on a big detached fleet, so "a pass is running" is the usual state;
+      // waiting on it from every read would hand back what the lane saved.
+      if (latest.size > 0) return Promise.resolve(latest)
       return pending ?? Promise.resolve(latest)
     },
     start: (): void => {

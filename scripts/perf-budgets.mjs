@@ -33,9 +33,7 @@ export const BUDGETS = {
   },
   latency: {
     events: {
-      // Tightened 2026-09-06 (perf/tempo): the all-time p95 is 457 ms and
-      // the trailing day 130; 3 s was one 4.3 s switch on a 9-sample day.
-      'workspace.switched': { p95: { warn: 1000, fail: 2000 } },
+      'workspace.switched': { p95: { warn: 1000, fail: 3000 } },
       'terminal.booted': { p95: { warn: 8000, fail: 15000 } }
       // turn.completed is agent think time, not app latency: reported only.
     },

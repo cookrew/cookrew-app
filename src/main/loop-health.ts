@@ -121,7 +121,13 @@ export function createLoopHealth(deps: LoopHealthDeps = {}): LoopHealth {
   let windows: LoopWindow[] = []
   let windowStart = startedAt
   let eluBase: EventLoopUtilization = performance.eventLoopUtilization()
-  let ticks = new Map<LoopName, Tick[]>()
+  /**
+   * Per loop, the recent ticks. Mutated in place on purpose: observe() runs
+   * on every tick of every loop, and rebuilding the map plus copying a
+   * 4000-entry array there would make the instrument a loop of its own.
+   * Bounded by count here, by age on read.
+   */
+  const ticks = new Map<LoopName, Tick[]>()
   let memo: { at: number; snapshot: LoopHealthSnapshot } | null = null
 
   const summarise = (): LoopWindow => {
@@ -154,8 +160,10 @@ export function createLoopHealth(deps: LoopHealthDeps = {}): LoopHealth {
   timer.unref?.()
 
   const observe = (loop: LoopName, ms: number): void => {
-    const at = now()
-    ticks = new Map(ticks).set(loop, [...prune(ticks.get(loop) ?? [], horizon()), { at, ms }])
+    const list = ticks.get(loop) ?? []
+    list.push({ at: now(), ms })
+    if (list.length > TICKS_KEPT_PER_LOOP) list.splice(0, list.length - TICKS_KEPT_PER_LOOP)
+    ticks.set(loop, list)
   }
 
   return {

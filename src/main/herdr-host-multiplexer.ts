@@ -76,7 +76,7 @@ const SHELL_NAMES = /^(sh|bash|zsh|fish|dash|ksh)$/
  * (sessionExistsCached) and pane RESOLUTION (paneFromInventory) — the same
  * bounded staleness, the same stale-serve discipline.
  */
-const ADMISSION_FRESH_MS = 500
+export const ADMISSION_FRESH_MS = 500
 
 /** An unref'd wait — background retries must never hold the app open. */
 const sleepUnref = (ms: number): Promise<void> =>
@@ -985,8 +985,8 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * missing on a cold cache — through publishInventory, so a listing that
    * finishes after a newer one cannot roll the cache back. Failure or
    * malformed output answers [] — the "nothing detached" the probe already
-   * treats as no signal — leaves the cache alone, and takes the refresher's
-   * backoff.
+   * treats as no signal — and leaves the cache AND the admission backoff
+   * alone: the probe's failures are its own.
    */
   async listSessionsAsync(): Promise<string[]> {
     const labels = (panes: readonly HerdrPane[]): string[] =>
@@ -999,12 +999,11 @@ export class HerdrHostMultiplexer implements Multiplexer {
     } catch {
       panes = null
     }
-    if (panes === null) {
-      // The same backoff the refresher takes: a broken herdr is one fact,
-      // whichever child discovered it.
-      this.admissionBackoffUntil = Date.now() + 5000
-      return []
-    }
+    // A failure here is the probe's alone: its caller is single-flight and
+    // interval-paced, so one bounded child per tick is the whole cost, and
+    // it must NOT touch the admission backoff — a flaky herdr retried every
+    // 3 s would otherwise keep dispatch admission backed off for good.
+    if (panes === null) return []
     this.publishInventory(startedAt, panes)
     return labels(panes)
   }

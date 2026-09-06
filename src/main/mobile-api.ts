@@ -293,10 +293,16 @@ const PROBE_WARM_MS = 1500;
 /** The probe's pass, or the timer, whichever lands first. Never throws. */
 async function probeWarmed(board: BoardSources): Promise<void> {
   if (!board.probeWarm) return;
-  await Promise.race([
-    board.probeWarm().catch(() => undefined),
-    new Promise<void>((resolve) => setTimeout(resolve, PROBE_WARM_MS).unref?.()),
-  ]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const bound = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, PROBE_WARM_MS);
+    timer.unref?.();
+  });
+  try {
+    await Promise.race([board.probeWarm().catch(() => undefined), bound]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export async function handleMobileApi(

@@ -12,7 +12,6 @@ import {
   BOARD_EVENT_DEBOUNCE_MS,
   PROBE_INTERVAL_MS,
   createProbeSampler,
-  hasDetachedSessions,
   probeOnce,
   type ProbeDeps,
   boardSourcesFrom,
@@ -379,15 +378,6 @@ describe('probeOnce — only DETACHED panes, only phases it can prove', () => {
   })
 })
 
-describe('hasDetachedSessions', () => {
-  it('is true only when a known terminal has a session but no pty', () => {
-    const base = { listSessions: () => ['cookrew_t1'], knownTerminalIds: () => ['t1'] }
-    expect(hasDetachedSessions(probeDeps(base))).toBe(true)
-    expect(hasDetachedSessions(probeDeps({ ...base, isAttached: () => true }))).toBe(false)
-    expect(hasDetachedSessions(probeDeps({ ...base, listSessions: () => [] }))).toBe(false)
-  })
-})
-
 describe('createProbeSampler — cost discipline', () => {
   it('samples on start and caches the result between ticks', () => {
     vi.useFakeTimers()
@@ -464,11 +454,11 @@ describe('createProbeSampler — cost discipline', () => {
 // ---------------------------------------------------------------------------
 // perf/tempo (2026-09-06): the probe's reach is the DETACHED SET from ONE
 // inventory per tick, and with async reads the tick forks nothing inline.
-// Before: every tick listed the panes twice (probeOnce + hasDetachedSessions)
+// Before: every tick listed the panes twice (probeOnce, then a detached check)
 // and captured each detached pane synchronously on Electron main.
 // ---------------------------------------------------------------------------
 
-import { detachedTerminals, probeDetachedAsync } from '../src/main/board-index'
+import { detachedTerminals, mergePartialPass, probeDetachedAsync, runDetachedPass } from '../src/main/board-index'
 
 describe('detachedTerminals — the reach', () => {
   it('is known ∖ attached ∩ live, from the set it is handed', () => {
@@ -490,7 +480,7 @@ describe('detachedTerminals — the reach', () => {
     expect(listed).toBe(0) // the inventory is the caller's, never re-read
   })
 
-  it('probeOnce and hasDetachedSessions accept a pre-read inventory', () => {
+  it('probeOnce accepts a pre-read inventory and reads one itself otherwise', () => {
     let listed = 0
     const deps = probeDeps({
       listSessions: () => {
@@ -500,14 +490,10 @@ describe('detachedTerminals — the reach', () => {
       knownTerminalIds: () => ['t1'],
       capturePane: () => WORKING_PANE
     })
-    const live = new Set(['cookrew_t1'])
-    expect(probeOnce(deps, live).get('t1')).toBe('working')
-    expect(hasDetachedSessions(deps, live)).toBe(true)
+    expect(probeOnce(deps, new Set(['cookrew_t1'])).get('t1')).toBe('working')
     expect(listed).toBe(0)
-    // Without one they read it themselves, exactly once each.
     probeOnce(deps)
-    hasDetachedSessions(deps)
-    expect(listed).toBe(2)
+    expect(listed).toBe(1)
   })
 })
 
@@ -669,5 +655,88 @@ describe('createProbeSampler — a read can wait for the pass it kicked', () => 
     } finally {
       Date.now = realNow
     }
+  })
+})
+
+describe('createProbeSampler — review round two', () => {
+  const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+  it('warm() does not wait on a running pass when there is something to show', async () => {
+    let gate: (() => void) | null = null
+    let passes = 0
+    const sampler = createProbeSampler(
+      probeDeps({
+        listSessionsAsync: async () => ['cookrew_t1'],
+        capturePaneAsync: () =>
+          new Promise<string>((resolve) => {
+            passes += 1
+            if (passes === 1) resolve(WORKING_PANE)
+            else gate = () => resolve(WAITING_PANE)
+          }),
+        knownTerminalIds: () => ['t1']
+      })
+    )
+    expect((await sampler.sampleAsync()).get('t1')).toBe('working')
+    const second = sampler.sampleAsync() // in flight, held at the read
+    await sleep(0)
+    const started = performance.now()
+    const warmed = await sampler.warm()
+    expect(performance.now() - started).toBeLessThan(50)
+    expect(warmed.get('t1')).toBe('working') // the previous pass, not a wait on the running one
+    gate!()
+    expect((await second).get('t1')).toBe('waiting')
+    sampler.stop()
+  })
+
+  it('a deadline-truncated pass keeps the previous phase of every terminal it did not reach', async () => {
+    const detached = [
+      { terminalId: 'a', session: 'cookrew_a' },
+      { terminalId: 'b', session: 'cookrew_b' },
+      { terminalId: 'c', session: 'cookrew_c' }
+    ]
+    const previous = new Map<string, 'working' | 'waiting'>([
+      ['a', 'working'],
+      ['b', 'working'],
+      ['c', 'waiting']
+    ])
+    // a is reached and now idle (no phase); b, c are never reached.
+    const merged = mergePartialPass(
+      previous,
+      { phases: new Map(), reached: 1, heldMs: 0 },
+      detached
+    )
+    expect(merged.has('a')).toBe(false)
+    expect(merged.get('b')).toBe('working')
+    expect(merged.get('c')).toBe('waiting')
+    // A complete pass replaces wholesale.
+    const complete = mergePartialPass(previous, { phases: new Map(), reached: 3, heldMs: 0 }, detached)
+    expect(complete.size).toBe(0)
+  })
+
+  it('reports its main-thread hold as the synchronous segments, never the awaits', async () => {
+    const held: number[] = []
+    const sampler = createProbeSampler(
+      probeDeps({
+        listSessionsAsync: async () => ['cookrew_a', 'cookrew_b', 'cookrew_c'],
+        capturePaneAsync: () => new Promise<string>((resolve) => setTimeout(() => resolve(WORKING_PANE), 25)),
+        knownTerminalIds: () => ['a', 'b', 'c']
+      }),
+      PROBE_INTERVAL_MS,
+      { observe: (ms) => held.push(ms) }
+    )
+    const started = performance.now()
+    await sampler.sampleAsync()
+    const wall = performance.now() - started
+    expect(wall).toBeGreaterThanOrEqual(70)
+    expect(held).toHaveLength(1)
+    expect(held[0]).toBeGreaterThanOrEqual(0)
+    expect(held[0]).toBeLessThan(wall / 2)
+    const pass = await runDetachedPass(
+      probeDeps({ capturePaneAsync: async () => WORKING_PANE }),
+      [{ terminalId: 'a', session: 'cookrew_a' }]
+    )
+    expect(pass.reached).toBe(1)
+    expect(pass.heldMs).toBeGreaterThanOrEqual(0)
+    expect(await probeDetachedAsync(probeDeps({ capturePaneAsync: async () => WORKING_PANE }), [])).toEqual(new Map())
   })
 })
