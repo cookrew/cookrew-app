@@ -41,6 +41,7 @@ export const DOING = {
   TOTP_ENROL: 'The authenticator could not be set up',
   TOTP_CONFIRM: 'That code could not be checked',
   PASSWORD: 'Your password could not be changed',
+  RESUME: 'Your session could not be started again',
   DECIDE: 'That answer did not reach cookrew.dev',
   SEATS: 'The seats on your account could not be read',
   SEAT: 'That seat could not be changed',

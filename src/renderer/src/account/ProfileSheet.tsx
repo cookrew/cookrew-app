@@ -15,6 +15,7 @@ import {
 import { ApprovalCard } from './ApprovalCard'
 import { DOING, problemSentence } from './problem'
 import { PairPhoneSheet } from './PairPhoneSheet'
+import { ResumeSession } from './ResumeSession'
 import { SecurityCard } from './SecurityCard'
 import { SeatsTab } from './SeatsTab'
 import { securityActions } from './security-actions'
@@ -98,11 +99,11 @@ export function ProfileSheet({
   // badge in the bar cannot disagree about what is still waiting.
   useEffect(() => {
     const call = cookrew().accountApprovals
-    if (!call) return
+    if (!call || status.sessionExpired) return
     void call()
       .then(setRequests)
       .catch(() => undefined)
-  }, [status.requests])
+  }, [status.requests, status.sessionExpired])
 
   useEffect(() => {
     void cookrew()
@@ -118,14 +119,17 @@ export function ProfileSheet({
   const key = profileKey(status)
   useEffect(() => {
     const call = cookrew().accountProfile
-    if (!call) return
+    // BACK OFF WHILE THE SESSION IS DEAD. Every read would spend a request to
+    // be told the same 401, and each refusal would overwrite the header with a
+    // sentence the resume card is already saying better.
+    if (!call || status.sessionExpired) return
     void call()
       .then((result) => {
         if (result.ok) setProfile(result.value)
         else setError(refusalSentence(result.reason, result.message, username))
       })
       .catch((err: unknown) => setError(problemSentence(DOING.PROFILE, err)))
-  }, [username, key])
+  }, [username, key, status.sessionExpired])
 
   useEffect(() => {
     const call = cookrew().accountAdmittedDevices
@@ -239,7 +243,12 @@ export function ProfileSheet({
           ))}
         </nav>
 
-        {error && (
+        {/* THE SESSION ENDED — the sentence comes WITH the field, in the
+            header, so it is on screen whichever tab is open. Every tab's own
+            reads are refused underneath it until this is answered. */}
+        {status.sessionExpired && <ResumeSession onResumed={onStatus} />}
+
+        {error && !status.sessionExpired && (
           <p className="gs-paste-error" role="alert">
             {error}
           </p>
@@ -369,6 +378,7 @@ export function ProfileSheet({
             lockAfterMs={status.lockAfterMs}
             recoveryCodesSavedAt={status.recoveryCodesSavedAt}
             recoveryCodesLeft={profile?.recoveryCodesLeft ?? status.recoveryCodesLeft}
+            sessionExpired={status.sessionExpired}
             problem={problem}
             {...securityActions(onStatus, onClose, setProblem)}
           />

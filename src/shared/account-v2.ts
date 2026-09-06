@@ -210,6 +210,11 @@ export type AccountRefusal =
   | 'last_device'
   | 'no_account'
   | 'session-expired'
+  // A resume the registry will not complete on the password alone. The device
+  // is still attached, so the way through is an approval on a trusted device
+  // — never a re-claim, which is what a person reaches for when told only
+  // that their password was refused.
+  | 'second_factor'
   | 'offline'
   // Seats (phase 5). A seat operation refuses for reasons an account one
   // cannot, and they are two different things to say to a person: 'not_found'

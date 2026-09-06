@@ -80,6 +80,16 @@ export const ACCOUNT_COPY = {
   NO_SEATS: 'No seats yet.',
   /** The LOCK NOW row, under the delay. */
   LOCK_NOW_WHY: 'Locking hides your canvas behind your password. Your agents keep working.',
+  /** The session ended — said only beside the field that ends it. */
+  SESSION_ENDED: 'Your session ended. Type your password once and this carries on.',
+  /**
+   * The registry wants the ladder, not the password.
+   *
+   * Naming the wall matters: a person told only that their password failed
+   * types it again, then tries to claim the name a third time.
+   */
+  SESSION_SECOND_FACTOR:
+    'cookrew.dev wants a second factor for this sign-in. Approve it on a device you are already signed in on, or use a recovery code on cookrew.dev.',
   /** D5. */
   LOCKED_WHY: 'Locked while you were away. Your agents kept working.',
   /** The registry is not answering. */
@@ -177,7 +187,12 @@ export function refusalSentence(reason: AccountRefusal, message?: string, userna
       return legacyTakenSentence(username)
     case 'session-expired':
     case 'bad_credentials':
-      return 'Your session ended. Type your password once and this carries on.'
+      // THE SENTENCE AND THE FIELD TRAVEL TOGETHER. It is a constant so that
+      // ResumeSession — the one component that offers somewhere to type the
+      // password — is the only thing that can say it.
+      return ACCOUNT_COPY.SESSION_ENDED
+    case 'second_factor':
+      return ACCOUNT_COPY.SESSION_SECOND_FACTOR
     case 'last_device':
       return 'This is the last device on the account, so it cannot be revoked.'
     case 'no_account':

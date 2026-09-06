@@ -73,6 +73,18 @@ export function registryOrigin(): string {
 export interface AccountSession {
   token: string
   exp: number
+  /**
+   * When cookrew.dev REFUSED this token, or absent while it still works.
+   *
+   * A session does not only die of old age. Changing the password on the web
+   * ends every other session by design — including this Mac's — and the token
+   * in this file keeps a perfectly good `exp` long afterwards. Judging life by
+   * `exp` alone is why the surface said "your session ended" and then offered
+   * nowhere to type the password: the status was derived from a clock that had
+   * not run out. The refusal is recorded here so it survives a restart and so
+   * `sessionLive()` can answer with what the registry actually said.
+   */
+  endedAt?: number
 }
 
 /** Offline unlock: scrypt over the password, salt and hash both base64url. */
@@ -294,6 +306,14 @@ export interface AccountsDeps {
    * the act that makes it somebody.
    */
   legacy?: () => RegistryAccount | null
+  /**
+   * The account file changed.
+   *
+   * Main pushes the new status to the owner window on this. It matters most
+   * for the one change nobody asked for: a session ended by a password change
+   * made somewhere else, which no click on this Mac would otherwise reveal.
+   */
+  onChange?: () => void
 }
 
 interface WireError {
@@ -309,6 +329,7 @@ const REFUSALS: Record<string, AccountRefusal> = {
   weak_password: 'weak_password',
   bad_device: 'bad_device',
   bad_credentials: 'bad_credentials',
+  second_factor: 'second_factor',
   last_device: 'last_device',
   not_found: 'not_found',
   already_seated: 'already_seated',
@@ -357,6 +378,7 @@ export class Accounts {
   /** The last minted batch, in memory only — never written, never logged. */
   private freshCodes: readonly string[] | null = null
   private readonly legacy: () => RegistryAccount | null
+  private readonly changed: (() => void) | undefined
 
   constructor(deps: AccountsDeps = {}) {
     this.base = deps.base
@@ -366,6 +388,7 @@ export class Accounts {
     this.deviceName = deps.deviceName ?? 'This Mac'
     this.cached = loadAccount(deps.base)
     this.legacy = deps.legacy ?? ((): RegistryAccount | null => legacyKey(this.origin, this.base))
+    this.changed = deps.onChange
   }
 
   /**
@@ -389,7 +412,32 @@ export class Accounts {
   private save(next: AccountFile): AccountFile {
     writeAccount(next, this.base)
     this.cached = next
+    // Told after the write, never before: a surface that redrew from a change
+    // that then failed to persist would be describing a file that does not
+    // exist. Never allowed to throw into a caller — a listener that breaks
+    // must not undo the write it is being told about.
+    try {
+      this.changed?.()
+    } catch (error) {
+      console.error('account change listener failed:', error)
+    }
     return next
+  }
+
+  /**
+   * cookrew.dev refused this token. Record it, atomically.
+   *
+   * The write is what makes the fix hold: `sessionLive()` then answers false,
+   * `status.sessionExpired` turns true, the surface opens its password prompt,
+   * and — because it is in the file — a restart does not go back to believing
+   * a token the registry has already thrown away. Everything that polls
+   * (approvals, the factor rows) short-circuits on the same flag rather than
+   * spending a request per tick learning the same 401.
+   */
+  private endSession(): void {
+    const account = this.cached
+    if (!account?.session || account.session.endedAt !== undefined) return
+    this.save({ ...account, session: { ...account.session, endedAt: this.now() } })
   }
 
   /**
@@ -466,7 +514,11 @@ export class Accounts {
       // The surface keeps its password prompt open on 'session-expired'; a
       // wrong password on a resume is that same prompt again, with the sentence.
       return refused.reason === 'bad_credentials'
-        ? { ok: false, reason: 'session-expired', ...(refused.message ? { message: refused.message } : {}) }
+        ? {
+            ok: false,
+            reason: 'session-expired',
+            ...(refused.message ? { message: refused.message } : {}),
+          }
         : { ok: false, ...refused }
     }
 
@@ -581,10 +633,19 @@ export class Accounts {
     return matchesUnlock(account.unlock, password)
   }
 
-  /** Is the session usable right now? Expiry is judged with a minute of skew. */
+  /**
+   * Is the session usable right now?
+   *
+   * Two ways to be dead and BOTH are asked about. Old age, judged with a
+   * minute of skew — and a refusal the registry already gave us, which no
+   * clock can predict: the owner changing their password on the web ends this
+   * Mac's session while its `exp` is still hours away.
+   */
   sessionLive(): boolean {
     const session = this.cached?.session
-    return session !== null && session !== undefined && session.exp - SESSION_SKEW_MS > this.now()
+    if (session === null || session === undefined) return false
+    if (session.endedAt !== undefined) return false
+    return session.exp - SESSION_SKEW_MS > this.now()
   }
 
   /**
@@ -622,7 +683,11 @@ export class Accounts {
       // The surface keeps its password prompt open on 'session-expired'; a
       // wrong password on a resume is that same prompt again, with the sentence.
       return refused.reason === 'bad_credentials'
-        ? { ok: false, reason: 'session-expired', ...(refused.message ? { message: refused.message } : {}) }
+        ? {
+            ok: false,
+            reason: 'session-expired',
+            ...(refused.message ? { message: refused.message } : {}),
+          }
         : { ok: false, ...refused }
     }
     let body: { token?: string; exp?: number }
@@ -635,7 +700,13 @@ export class Accounts {
       return { ok: false, reason: 'unknown' }
     }
     const session = { token: body.token, exp: body.exp }
-    this.save({ ...account, session })
+    // THE LOCAL VERIFIER IS RE-DERIVED, and this is the half that made the
+    // live bug unrecoverable. The owner changed their password ON THE WEB, so
+    // the scrypt verifier in this file still holds the OLD one: the new
+    // password fails the offline check, the old one fails at the registry, and
+    // there is no password that opens both. cookrew.dev has just proved this
+    // password IS the account's, so it becomes what unlocks the app too.
+    this.save({ ...account, session, unlock: unlockVerifierFor(password) })
     return { ok: true, value: session }
   }
 
@@ -668,7 +739,14 @@ export class Accounts {
     } catch {
       return { ok: false, reason: 'offline' }
     }
-    if (!response.ok) return { ok: false, ...(await wireError(response)) }
+    if (!response.ok) {
+      const refused = await wireError(response)
+      // THE FIX: a 401 the registry called `unauthenticated` (or did not name)
+      // is this token being told it is finished. Recorded here, once, where
+      // every authenticated call already passes.
+      if (refused.reason === 'session-expired') this.endSession()
+      return { ok: false, ...refused }
+    }
     if (!parse || response.status === 204) return { ok: true, value: undefined as T }
     try {
       return { ok: true, value: (await response.json()) as T }

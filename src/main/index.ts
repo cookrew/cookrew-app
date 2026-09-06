@@ -592,7 +592,17 @@ const ENV_HANDLE = process.env.COOKREW_HANDLE ?? ''
  * app boots, works and serves nothing, and every call below answers rather
  * than throws. Nothing here is on the serving path.
  */
-const accounts = new Accounts({ deviceName: hostname() })
+const accounts = new Accounts({
+  deviceName: hostname(),
+  // THE ACCOUNT CHANGED WITHOUT A CLICK ON THIS MAC. A password changed on the
+  // web ends this session; nothing local would ever notice. Pushing the status
+  // is what turns that into a password prompt the owner can actually answer.
+  onChange: () => {
+    if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+      mainWindow.webContents.send('account:changed')
+    }
+  }
+})
 
 /** The handle the key in ~/.cookrew/registry holds, if this Mac ever served. */
 const LEGACY_HANDLE = accounts.legacyHandle()
