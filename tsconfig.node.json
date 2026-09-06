@@ -2,6 +2,8 @@
   "compilerOptions": {
     "jsx": "react-jsx",
     "target": "ES2022",
+    // ES2024 is for TYPES: a bare ES2024 call (String.prototype.isWellFormed) typechecks
+    // here but crashes Chrome < 111 — the living-room TV box. Feature-detect at the call site.
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
