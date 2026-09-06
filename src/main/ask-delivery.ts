@@ -30,7 +30,8 @@ const SUBMIT_SETTLE_MS = 1200
 
 /** The tracker surface this module needs — narrowed so tests need no TurnTracker. */
 export interface TurnCountSource {
-  list: () => readonly { terminalId: string; turnCount: number }[]
+  /** VERIFIED only: a phase-only skeleton has no turn count worth trusting. */
+  listVerified: () => readonly { terminalId: string; turnCount: number }[]
 }
 
 /**
@@ -45,7 +46,7 @@ export function terminalDeliveryDeps(
   write: (data: string) => void
 ): DeliveryDeps {
   const turnCountOf = (terminalId: string): number | null =>
-    turns.list().find((entry) => entry.terminalId === terminalId)?.turnCount ?? null
+    turns.listVerified().find((entry) => entry.terminalId === terminalId)?.turnCount ?? null
   return {
     turnCountOf,
     capture: (terminalId) => multiplexer()?.capture(sessionNameFor(terminalId)) ?? null,

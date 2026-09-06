@@ -87,7 +87,7 @@ export function buildBoard(sources: BoardSources, windowMs = BOARD_WINDOW_MS): B
 /** Minimal shapes of the main-process singletons the adapter needs. */
 export interface BoardRuntime {
   store: { readonly focusedId: string }
-  turns: { list: () => TerminalActivity[] }
+  turns: { listVerified: () => TerminalActivity[] }
   turnStore: { loadAll: () => Map<string, TurnRecord[]> }
   agents: { list: () => readonly BoardAgentMeta[] }
   probe?: () => Map<string, BoardPhase>
@@ -101,7 +101,10 @@ export interface BoardRuntime {
 export function boardSourcesFrom(runtime: BoardRuntime): BoardSources {
   return {
     activeWorkspaceId: () => runtime.store.focusedId,
-    live: () => runtime.turns.list(),
+    // VERIFIED only: L2's probe derives the same herdr status and labels
+    // it honestly, so a skeleton here would outrank it while claiming a
+    // live tail it does not have.
+    live: () => runtime.turns.listVerified(),
     ledger: () => runtime.turnStore.loadAll(),
     registry: () =>
       runtime.agents.list().map((entry) => ({

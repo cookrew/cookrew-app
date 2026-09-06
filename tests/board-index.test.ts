@@ -121,7 +121,7 @@ describe('boardSourcesFrom — adapting the main-process singletons', () => {
     }
     const built = boardSourcesFrom({
       store: { focusedId: 'ws-1' },
-      turns: { list: () => [] },
+      turns: { listVerified: () => [] },
       turnStore: { loadAll: () => new Map() },
       agents: { list: () => [entry] }
     })
@@ -133,7 +133,7 @@ describe('boardSourcesFrom — adapting the main-process singletons', () => {
   it('omits probe entirely when the runtime has no sampler', () => {
     const built = boardSourcesFrom({
       store: { focusedId: 'ws' },
-      turns: { list: () => [] },
+      turns: { listVerified: () => [] },
       turnStore: { loadAll: () => new Map() },
       agents: { list: () => [] }
     })
@@ -146,7 +146,7 @@ describe('boardSourcesFrom — adapting the main-process singletons', () => {
       store: { focusedId: 'ws' },
       turns: (() => {
         const t = {
-          list: (): TerminalActivity[] => {
+          listVerified: (): TerminalActivity[] => {
             calls += 1
             return []
           }

@@ -19,6 +19,7 @@ import type { AgentRole, CanvasNode, BrowserNodeData, TeamClipStatus, TerminalNo
 import { activeBrowserTab, browserTabs } from '../../shared/model'
 import type { TerminalActivity } from '../../shared/turn'
 import { cookrew, isRemoteMode } from './api'
+import { mergeActivity } from './turn-view-model'
 import { isViewed, markViewed, pruneViewers, type ViewerClocks } from '../../shared/phone-viewing'
 import { TerminalNode } from './nodes/TerminalNode'
 import { NoteNode } from './nodes/NoteNode'
@@ -418,7 +419,7 @@ function Canvas(): React.JSX.Element {
       // the store.
       .catch(() => undefined)
     return cookrew().onTerminalActivity((activity) => {
-      activityStore.set(activity.terminalId, activity)
+      activityStore.set(activity.terminalId, mergeActivity(activityStore.get(activity.terminalId), activity))
     })
   }, [])
 

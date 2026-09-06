@@ -45,10 +45,20 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
   // zoomed), the card renders its LATEST checkpoint from a tail read instead of
   // "Ready" — no mirror. The rich live view wins the moment activity flows.
   const liveModel = turnViewOf(activity)
-  const liveEmpty = isEmptyTurnView(liveModel)
+  // A MIRRORLESS activity is a phase and nothing else, so it counts as empty
+  // however loudly it says "Working…": otherwise a cold canvas would trade
+  // its cards' last ask-and-reply for a single verb, which is a worse card
+  // than the one this path exists to fix.
+  const liveEmpty = isEmptyTurnView(liveModel) || activity?.mirrorless === true
   const wantCheckpoint = agent && mode !== 'mini' && liveEmpty && !paging.viewing
   const checkpoint = useLatestCheckpoint(node.id, wantCheckpoint)
-  const checkpointModel = wantCheckpoint ? checkpointViewModel(checkpoint) : null
+  const checkpointBody = wantCheckpoint ? checkpointViewModel(checkpoint) : null
+  // Both, when both are known: the checkpoint's words with the live verb over
+  // them, so a working agent reads WORKING and still shows what it last did.
+  const checkpointModel =
+    checkpointBody && activity?.mirrorless === true && liveModel.latest
+      ? { ...checkpointBody, latest: liveModel.latest }
+      : checkpointBody
 
   // The picked highlight belongs to the clipboard toggle — a pick survives
   // the toggle being off (the board keeps it too) but never SHOWS then.

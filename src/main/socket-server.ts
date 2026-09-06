@@ -730,7 +730,10 @@ async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<stri
  */
 function cmdStatus(request: CliRequest, deps: SocketServerDeps): string {
   const [name] = request.args
-  const activities = deps.turns.list()
+  // NEVER herdr: this command's whole contract is the tracker's verified
+  // busy/idle, because the per-pane detector flaps (measured stuck at idle
+  // under a live spinner). A skeleton is that detector wearing an activity.
+  const activities = deps.turns.listVerified()
   const rows = name
     ? activities.filter(
         (entry) =>
