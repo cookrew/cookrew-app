@@ -152,8 +152,14 @@ describe('note markdown — the render cache is bounded', () => {
     process.stdout.write(`perf note cache: entries=${held.entries} bytes=${held.bytes} of ${held.maxBytes}\n`)
     expect(held.misses - base.misses).toBeGreaterThanOrEqual(300)
     expect(held.hits).toBe(base.hits)
-    expect(held.bypasses).toBe(base.bypasses)
+    expect(held.oversizedParses).toBe(base.oversizedParses)
+    expect(held.illFormedParses).toBe(base.illFormedParses)
+    // Real retention is the map plus the two side slots, and every part of it
+    // is bounded: the map by the budget, each slot by four budgets.
     expect(held.bytes).toBeLessThanOrEqual(held.maxBytes)
+    expect(held.oversizedBytes).toBeLessThanOrEqual(4 * held.maxBytes)
+    expect(held.illFormedBytes).toBeLessThanOrEqual(4 * held.maxBytes)
+    expect(held.bytes + held.oversizedBytes + held.illFormedBytes).toBeLessThanOrEqual(held.maxBytes)
     expect(held.bytes).toBeGreaterThan(held.maxBytes * 0.8)
     expect(held.entries).toBeGreaterThan(20)
     expect(held.entries).toBeLessThan(held.misses - base.misses)
@@ -173,6 +179,6 @@ describe('note markdown — the render cache is bounded', () => {
     const evicted = renderNoteMarkdown(body(2))
     expect(renderNoteMarkdown(body(2))).toBe(evicted)
     expect(evicted).not.toBe(first)
-    expect(noteMarkdownCacheStats()).toMatchObject({ hits: held.hits + 4, misses: held.misses + 2, bypasses: base.bypasses })
+    expect(noteMarkdownCacheStats()).toMatchObject({ hits: held.hits + 4, misses: held.misses + 2, oversizedParses: base.oversizedParses })
   })
 })
