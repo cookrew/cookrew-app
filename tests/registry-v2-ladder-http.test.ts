@@ -13,6 +13,7 @@ import { DoorStore } from '../registry/src/doors'
 import { StarStore } from '../registry/src/stars'
 import { createV2 } from '../registry/src/v2-routes'
 import { base32Decode, totpAt, TOTP_STEP_MS } from '../registry/src/v2-totp'
+import { qrRows } from '../registry/src/v2-qr'
 import { b64u, ed25519, getAssertion, GET_FLAGS_VERIFIED, makeCredential, p256, type Pair } from './support/webauthn'
 
 /**
@@ -702,6 +703,38 @@ describe('POST /v2/me/totp', () => {
     expect((await call('DELETE', '/v2/me/totp', { current: 'not it at all' }, bearer(owner.token))).status).toBe(401)
     expect((await call('DELETE', '/v2/me/totp', { current: PASSWORD }, bearer(owner.token))).status).toBe(204)
     expect((await askForStep(owner)).next).toEqual(['approve'])
+  })
+
+  it('hands down a QR of the same URL, and never a picture of anything else', async () => {
+    const owner = await claim()
+    const res = await call('POST', '/v2/me/totp/enrol', {}, bearer(owner.token))
+    expect(res.status).toBe(201)
+    const started = await bodyOf<{ secret: string; otpauth: string; qr: string[] }>(res)
+    // The page cannot encode it — the CSP forbids an inline script and there
+    // is no encoder in the browser bundle — so the matrix comes down with the
+    // secret, on the one private answer that already carries it.
+    expect(started.qr).toEqual(qrRows(started.otpauth))
+    expect(started.qr.length).toBeGreaterThan(20)
+    expect(started.qr.every((row) => row.length === started.qr.length)).toBe(true)
+    expect(started.qr.join('')).toMatch(/^[01]+$/)
+    expect(res.headers.get('cache-control')).toBe('private, no-store')
+  })
+
+  it('replaces an enrolment nobody finished, so an abandoned secret opens nothing', async () => {
+    const owner = await claim()
+    const first = await bodyOf<{ secret: string }>(await call('POST', '/v2/me/totp/enrol', {}, bearer(owner.token)))
+    // CANCEL is just walking away: the next ADD writes over it.
+    const second = await bodyOf<{ secret: string }>(await call('POST', '/v2/me/totp/enrol', {}, bearer(owner.token)))
+    expect(second.secret).not.toBe(first.secret)
+
+    const stale = await call('POST', '/v2/me/totp/confirm', { code: codeFor(first.secret) }, bearer(owner.token))
+    expect(stale.status).toBe(401)
+    expect((await bodyOf<{ error: string }>(stale)).error).toBe('bad_code')
+    // And neither one counted as a factor while it was unconfirmed.
+    expect((await askForStep(owner)).next).toEqual(['approve'])
+
+    expect((await call('POST', '/v2/me/totp/confirm', { code: codeFor(second.secret) }, bearer(owner.token))).status).toBe(204)
+    expect((await askForStep(owner)).next).toEqual(['totp', 'approve'])
   })
 
   it('refuses a confirmation nobody started, and every route without a session', async () => {
