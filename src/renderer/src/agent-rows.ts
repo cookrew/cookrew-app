@@ -1,4 +1,9 @@
-import { turnViewOf, type TurnViewModel } from './turn-view-model'
+import {
+  checkpointViewModel,
+  turnViewOf,
+  type LatestCheckpoint,
+  type TurnViewModel,
+} from './turn-view-model'
 import type { ActivityClock } from './activity-clock'
 import type { AgentRegistryEntry } from './agent-registry'
 import type { TerminalActivity } from '../../shared/turn'
@@ -48,6 +53,14 @@ export interface AgentRowsInput {
   roster: AgentRegistryEntry[]
   /** TurnTracker state — the LOADED workspace only; others have no entry. */
   activities: Record<string, TerminalActivity>
+  /**
+   * Each agent's LATEST CHECKPOINT, from the same tail read the canvas card
+   * uses when the live tracker has nothing (trace-perf T1). After a restart
+   * the tracker knows nothing about an agent that has not spoken since, and a
+   * board that read only the tracker folded the whole crew into QUIET while
+   * every card on the canvas showed its last turn. Absent → tracker only.
+   */
+  checkpoints?: Record<string, LatestCheckpoint | null>
   now: number
   /** TV density puts what needs you first; interactive densities do not. */
   floatWaiting?: boolean
@@ -80,10 +93,24 @@ const FLOAT_RANK: Record<AgentPhase, number> = {
 }
 
 /** A turn worth showing: something was asked, replied, or is on screen. */
-function hasTurn(activity: TerminalActivity | undefined): boolean {
+export function hasTurn(activity: TerminalActivity | undefined): boolean {
   if (!activity) return false
   if (activity.prompt !== null || activity.reply !== null) return true
   return (activity.lines ?? []).some((l) => l.trim().length > 0)
+}
+
+/**
+ * The agents whose row would otherwise be empty: in the loaded workspace (a
+ * checkpoint can only be tailed for a terminal this app holds) with nothing
+ * tracked. These are the ids the board asks the trace reader about — never
+ * the whole cross-workspace roster, which would be one file watch per agent
+ * that ever existed.
+ */
+export function checkpointWanted(
+  roster: readonly AgentRegistryEntry[],
+  activities: Record<string, TerminalActivity>,
+): string[] {
+  return roster.filter((entry) => entry.active && !hasTurn(activities[entry.id])).map((e) => e.id)
 }
 
 /**
@@ -103,9 +130,16 @@ function sortKeyOf(activity: TerminalActivity | undefined): number | null {
   return (inTurn ? activity.turnStartedAt : null) ?? activity.updatedAt
 }
 
-function phaseOf(activity: TerminalActivity | undefined, active: boolean): AgentPhase {
+function phaseOf(
+  activity: TerminalActivity | undefined,
+  active: boolean,
+  turn: TurnViewModel | null,
+): AgentPhase {
   if (!active) return 'offline'
-  if (!activity) return 'quiet'
+  // Nothing tracked, but a checkpoint on file: a finished turn, which is what
+  // the canvas card calls it too. Nothing at all is one of the 220 that have
+  // never run here.
+  if (!activity) return turn === null ? 'quiet' : 'done'
   switch (activity.phase) {
     case 'thinking':
       return 'working'
@@ -114,18 +148,21 @@ function phaseOf(activity: TerminalActivity | undefined, active: boolean): Agent
     case 'replied':
       return 'done'
     case 'idle':
-      // Idle with a turn behind it has something to show; idle with nothing
-      // tracked is one of the 220 that have never run here. Same test as the
+      // Idle with a turn behind it has something to show. Same test as the
       // live/quiet split, so phase and bucket can never disagree.
-      return hasTurn(activity) ? 'done' : 'quiet'
+      return turn === null ? 'quiet' : 'done'
   }
 }
 
 function rowOf(
   entry: AgentRegistryEntry,
   activity: TerminalActivity | undefined,
+  checkpoint: LatestCheckpoint | null | undefined,
   changedAt: number | undefined,
 ): AgentRow {
+  // The live tracker wins the moment it has anything; the checkpoint is the
+  // fallback, through the same view model the card binds (T1).
+  const turn = hasTurn(activity) ? turnViewOf(activity) : checkpointViewModel(checkpoint ?? null)
   return {
     id: entry.id,
     name: entry.name,
@@ -137,8 +174,8 @@ function rowOf(
     workspaceName: entry.workspaceName,
     cwd: entry.cwd,
     spawnedAt: entry.spawnedAt,
-    phase: phaseOf(activity, entry.active),
-    turn: hasTurn(activity) ? turnViewOf(activity) : null,
+    phase: phaseOf(activity, entry.active, turn),
+    turn,
     turnCount: activity?.turnCount ?? 0,
     lastActivityAt: changedAt ?? sortKeyOf(activity) ?? entry.spawnedAt,
   }
@@ -161,16 +198,26 @@ function facetsOf(roster: AgentRegistryEntry[]): WorkspaceFacet[] {
 }
 
 export function buildAgentRows(input: AgentRowsInput): AgentRows {
-  const { roster, activities, floatWaiting = false, workspaceId = null, changedAt = {} } = input
+  const {
+    roster,
+    activities,
+    checkpoints = {},
+    floatWaiting = false,
+    workspaceId = null,
+    changedAt = {},
+  } = input
   const workspaces = facetsOf(roster)
 
   const rows = roster
     .filter((entry) => workspaceId === null || entry.workspaceId === workspaceId)
-    .map((entry) => rowOf(entry, activities[entry.id], changedAt[entry.id]))
+    .map((entry) =>
+      rowOf(entry, activities[entry.id], checkpoints[entry.id], changedAt[entry.id]),
+    )
 
-  // A row is quiet when there is nothing to say about it — no turn tracked at
-  // all. Everything else earns a place on the timeline, including agents that
-  // died mid-task, which are exactly the ones worth noticing.
+  // A row is quiet when there is nothing to say about it — no turn tracked
+  // and no checkpoint on file. Everything else earns a place on the timeline,
+  // including agents that died mid-task, which are exactly the ones worth
+  // noticing.
   const quiet = rows.filter((row) => row.turn === null).sort((a, b) => b.spawnedAt - a.spawnedAt)
 
   const live = rows
