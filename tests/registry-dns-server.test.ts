@@ -473,3 +473,50 @@ describe('the budget, and what going over it looks like', () => {
     }
   })
 })
+
+/**
+ * M5 — A PORT THAT WILL NOT BIND IS STILL LOUD, and one that HAS bound no
+ * longer hands its runtime errors to a promise that settled minutes ago. The
+ * bind-time `reject` handlers are swapped for logging ones the moment the
+ * listener is serving: leaving them attached swallowed every socket error
+ * after start, and simply removing them would make the next one fatal, since
+ * Node treats an emitter with no 'error' listener as a crash.
+ */
+describe('the listener’s own errors', () => {
+  it('refuses to start on a port it cannot have, and says so', async () => {
+    const taken = createDnsServer({ port: 0, address: '127.0.0.1', respond: responder })
+    const on = await taken.start()
+    const second = createDnsServer({ port: on, address: '127.0.0.1', respond: responder })
+    try {
+      await expect(second.start()).rejects.toThrow(/EADDRINUSE|EACCES/)
+    } finally {
+      await second.stop()
+      await taken.stop()
+    }
+  })
+
+  it('counts what an operator needs and nothing that names anybody', async () => {
+    const counted = createDnsServer({ port: 0, address: '127.0.0.1', respond: responder })
+    const on = await counted.start()
+    try {
+      await askUdp(on, buildQuery({ name: ZONE, type: T.SOA }))
+      const counts = counted.counts()
+      expect(counts.queries).toBeGreaterThan(0)
+      expect(counts.answers).toBeGreaterThan(0)
+      // Every field is a number. A name or an address in here would be the one
+      // thing this process has promised never to write down.
+      for (const value of Object.values(counts)) expect(typeof value).toBe('number')
+      expect(Object.keys(counts).sort()).toEqual([
+        'answers',
+        'malformed',
+        'queries',
+        'refusedByRate',
+        'tcpCutOff',
+        'tcpRefused',
+        'truncated'
+      ])
+    } finally {
+      await counted.stop()
+    }
+  })
+})

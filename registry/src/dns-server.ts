@@ -462,10 +462,22 @@ export function createDnsServer(options: DnsServerOptions): DnsServer {
         const socket = address.includes(':')
           ? createSocket({ type: 'udp6', ipv6Only: false })
           : createSocket({ type: 'udp4' })
+        /**
+         * THE BIND-TIME HANDLERS ARE REPLACED, NOT KEPT.
+         *
+         * `reject` belongs to a promise that has already settled by the time
+         * the listener is serving; leaving it attached meant every runtime
+         * socket error after start was swallowed into a resolved promise and
+         * nobody was ever told. Node also treats an EventEmitter with no
+         * 'error' listener as fatal, so removing them without putting
+         * something back would trade silence for a dead process.
+         */
         socket.on('error', reject)
         socket.on('message', onDatagram)
         socket.bind(options.port, address, () => {
           udp = socket
+          socket.off('error', reject)
+          socket.on('error', (error) => note(`dns: the udp socket errored (${error.message})`))
           // BOUND FROM THE UDP PORT, not from the flag: a test asks for port 0
           // and both listeners must still be the same port, or a resolver's
           // TC retry lands somewhere else entirely.
@@ -474,6 +486,8 @@ export function createDnsServer(options: DnsServerOptions): DnsServer {
           server.on('error', reject)
           server.listen(bound, address, () => {
             tcp = server
+            server.off('error', reject)
+            server.on('error', (error) => note(`dns: the tcp listener errored (${error.message})`))
             note(`dns on ${address}:${bound} (udp+tcp)`)
             resolve(bound)
           })

@@ -59,7 +59,7 @@ import { Pulse } from './pulse'
 import { createV2 } from './v2-routes'
 import { AcmeClient, LETSENCRYPT_STAGING } from './acme-client'
 import { createNames, type NamesFeature } from './names'
-import { createDnsServer } from './dns-server'
+import { createDnsServer, type DnsServer } from './dns-server'
 import type { NameServer } from './dns-zone'
 import { buildManifest, signManifest } from '../../src/main/preset-publish'
 import { scrubForPublish } from '../../src/main/preset-scrub'
@@ -230,6 +230,10 @@ const DNS_NS = nameServers(flag('dns-ns', ''))
 const ACME_DIRECTORY = flag('acme-directory', LETSENCRYPT_STAGING)
 const ACME_EMAIL = flag('acme-email', '')
 
+/** One counts line a minute, once DNS is up. Totals only — never a query. */
+const COUNTS_EVERY_MS = 60_000
+/** Held for the lifetime of the process, so its counters stay reachable. */
+let dns: DnsServer | null = null
 let names: NamesFeature | undefined
 // The TRIGGER is the flag being present, not the value parsing: `--dns-port`
 // with nothing after it must refuse rather than start a registry that silently
@@ -328,8 +332,28 @@ createRegistry({
     // into the parent zone), and the ACME account key is never printed.
     console.log(`dns on :${DNS_PORT}  zone=${DNS_ZONE}  ns=${DNS_NS.map((n) => `${n.host}=${n.address}`).join(',')}`)
     console.log(`acme directory=${ACME_DIRECTORY}${ACME_EMAIL === '' ? '' : `  contact=${ACME_EMAIL}`}`)
-    void createDnsServer({ port: DNS_PORT, respond: names.respond, log: (m) => console.log(m) })
+    /**
+     * HELD, NOT DROPPED. The server was created inline and thrown away, so
+     * `counts()` — the only window this process has onto whether DNS is
+     * answering or being flooded — was unreachable from the moment it started.
+     * One line a minute, and nothing in it that is a query: totals only.
+     */
+    dns = createDnsServer({ port: DNS_PORT, respond: names.respond, log: (m) => console.log(m) })
+    void dns
       .start()
+      .then(() => {
+        const timer = setInterval(() => {
+          const c = dns?.counts()
+          if (c === undefined) return
+          console.log(
+            `dns counts queries=${c.queries} answers=${c.answers} truncated=${c.truncated} ` +
+              `rate-limited=${c.refusedByRate} malformed=${c.malformed} ` +
+              `tcp-refused=${c.tcpRefused} tcp-cut-off=${c.tcpCutOff}`
+          )
+        }, COUNTS_EVERY_MS)
+        // A metrics line must not be the reason the process stays alive.
+        timer.unref()
+      })
       .catch((error: unknown) => {
         // The HTTP half is already serving. A DNS port that will not bind is a
         // loud line and a registry that still answers, never a dead process.
