@@ -30,11 +30,12 @@ export const BUDGETS = {
     // one timer in twenty waiting half a second. Capped at WARN under machine
     // load like the latency section — the ELU next to it says whose fault.
     loopDelayP95Ms: { warn: 50, fail: 500 },
-    // Board probe inventory listings per minute (one herdr child each), from
-    // GET /api/health. The 3 s poll was 20/min whenever anything was
-    // detached; with the board closed the number is 0, with it open and the
-    // fleet quiet it backs off to 1/min. 10 says the ladder stopped climbing.
-    boardListingsPerMinute: { warn: 10 }
+    // Board probe herdr children per minute — listings AND pane reads, one
+    // child each — from GET /api/health. The 3 s poll was 20 listings/min
+    // plus a read per pixels-only pane whenever anything was detached; with
+    // the board closed the number is 0, open and quiet it backs off to 1/min
+    // plus the per-event reads. 10 says the ladder stopped climbing.
+    boardChildrenPerMinute: { warn: 10 }
   },
   latency: {
     events: {

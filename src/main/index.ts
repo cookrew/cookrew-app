@@ -12,7 +12,8 @@ import {
   agentStatus,
   statusFeed,
   type HerdrStatus,
-  type StatusObservation
+  type StatusObservation,
+  type StatusRetraction
 } from './herdr-agent-status'
 import { resolveRotationChain, rotationCommitVerdict } from './claude-rotation'
 import { BootLatency, shouldTimeBoot, type BootSample } from './boot-latency'
@@ -1703,6 +1704,12 @@ statusFeed()?.on('status', ({ sessionName, status }: StatusObservation) => {
   turns.observeBackendPhase(terminalId, backendPhaseOf(status), isAgentTerminal(terminalId))
   // herdr's push IS the board's phase for this pane: fold it in at once.
   void boardProbe.invalidate(terminalId)
+})
+// herdr withdrawing a state is a change too: the pane is pixels-only again,
+// and without this it would wait for the fallback pass at whatever rung.
+statusFeed()?.on('retracted', ({ sessionName }: StatusRetraction) => {
+  const terminalId = terminalIdForSessionName(sessionName)
+  if (terminalId) void boardProbe.invalidate(terminalId)
 })
 
 /**
@@ -5649,16 +5656,27 @@ function registerIpc(handlers: RestoreHandlers): void {
     turns.on('activity', onSignal)
     store.on('change', onSignal)
     store.on('workspaces', onSignal)
+    // A reload destroys the JS context, not the webContents: the preload's
+    // release never runs, so the hold must go with the navigation itself.
+    // Every listener is removed inside release, or the next cycle's stale
+    // one could delete a newer hold.
+    const gone = (): void => release()
     const release = (): void => {
+      if (boardHolds.get(sender.id)?.release !== release) return
       notifier.cancel()
       offChange()
       releaseProbe()
       turns.removeListener('activity', onSignal)
       store.removeListener('change', onSignal)
       store.removeListener('workspaces', onSignal)
+      sender.removeListener('destroyed', gone)
+      sender.removeListener('did-start-navigation', gone)
+      sender.removeListener('render-process-gone', gone)
       boardHolds.delete(sender.id)
     }
-    sender.once('destroyed', release)
+    sender.on('destroyed', gone)
+    sender.on('did-start-navigation', gone)
+    sender.on('render-process-gone', gone)
     boardHolds.set(sender.id, { count: 1, release })
     return true
   })

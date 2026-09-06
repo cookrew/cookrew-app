@@ -456,3 +456,16 @@ describe('staleness — the frozen checkpoint rail (2026-08-09)', () => {
     expect(feed.statusFor('cookrew_abc')).toBeNull()
   })
 })
+
+describe('a retraction is announced', () => {
+  it("herdr's unknown emits 'retracted' with the session name, and statusFor answers null", () => {
+    const { feed, socket } = feedWith([{ paneId: 'w1:p1', label: 'cookrew_a', status: 'working' }])
+    const retracted: string[] = []
+    feed.on('retracted', ({ sessionName }: { sessionName: string }) => retracted.push(sessionName))
+    expect(feed.statusFor('cookrew_a')).toBe('working')
+    socket.emit(EVENT('w1:p1', 'unknown') + '\n')
+    expect(feed.statusFor('cookrew_a')).toBeNull()
+    expect(retracted).toEqual(['cookrew_a'])
+    feed.stop()
+  })
+})

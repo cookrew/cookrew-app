@@ -407,7 +407,7 @@ describe('createProbeSampler — cost discipline', () => {
         capturePane: () => WORKING_PANE
       })
     )
-    sampler.start()
+    sampler.subscribe()
     expect(sampler.phases().get('t1')).toBe('working')
     const afterStart = scans
     // Reading phases() repeatedly must not re-scan.
@@ -516,8 +516,8 @@ describe('createProbeSampler — cost discipline', () => {
         }
       })
     )
-    expect(() => sampler.start()).not.toThrow()
-    sampler.start()
+    expect(() => sampler.subscribe()).not.toThrow()
+    sampler.subscribe()
     expect(sampler.phases().size).toBe(0)
     sampler.stop()
     vi.useRealTimers()
@@ -588,7 +588,7 @@ describe('createProbeSampler — one inventory per tick', () => {
         PROBE_INTERVAL_MS,
         { observe: () => void (passes += 1), backoffMs: [PROBE_INTERVAL_MS, PROBE_INTERVAL_MS, PROBE_INTERVAL_MS] }
       )
-      sampler.start()
+      sampler.subscribe()
       expect(listed).toBe(1)
       vi.advanceTimersByTime(PROBE_INTERVAL_MS * 3)
       expect(passes).toBe(4)
@@ -659,7 +659,7 @@ describe('createProbeSampler — the async tick forks nothing inline', () => {
         })
     })
     const sampler = createProbeSampler(deps)
-    sampler.start() // kicks one async pass
+    sampler.subscribe() // kicks one async pass
     expect(calls.listAsync).toBe(1)
     vi.advanceTimersByTime(PROBE_INTERVAL_MS * 3) // three ticks while the first pass is still in flight
     expect(calls.listAsync).toBe(1) // single-flight spans the whole awaited pass
@@ -837,9 +837,8 @@ describe('createProbeSampler — review round two', () => {
     const warmed = await sampler.warm()
     expect(performance.now() - started).toBeLessThan(50)
     expect(warmed.size).toBe(0)
-    expect(listings).toBe(2) // the read kicked a listing, and did not wait on it
-    gate!()
-    await sleep(0)
+    expect(listings).toBe(1) // an idle fleet's reads back off with the ladder: no listing within the second rung
+    expect(gate).toBeNull()
     sampler.stop()
   })
 
@@ -994,11 +993,12 @@ describe('createProbeSampler — events first, the tick as fallback', () => {
   })
 
   it('an event drops the ladder back to the first rung', async () => {
-    const { sampler, listings } = fleet()
+    const { sampler, status, listings } = fleet()
     const release = sampler.subscribe()
     await sleep(5)
     await sleep(60) // rung 0 fires (unchanged → rung 1 = 200 ms)
     expect(sampler.stats().intervalMs).toBe(200)
+    status.set('pushed', 'working') // news for this pane
     await sampler.invalidate('pushed')
     expect(sampler.stats().intervalMs).toBe(50)
     const before = listings()
@@ -1014,6 +1014,7 @@ describe('createProbeSampler — events first, the tick as fallback', () => {
       intervalMs: 50,
       passesLastMinute: 0,
       listingsLastMinute: 0,
+      readsLastMinute: 0,
       invalidationsLastMinute: 0,
       everCompleted: false,
       running: false
@@ -1021,5 +1022,114 @@ describe('createProbeSampler — events first, the tick as fallback', () => {
     await sampler.sampleAsync()
     const s = sampler.stats()
     expect([s.passesLastMinute, s.listingsLastMinute, s.everCompleted]).toEqual([1, 1, true])
+  })
+})
+
+describe('createProbeSampler — review of #70', () => {
+  const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+  it('C1: a late invalidation keeps what a concurrent pass discovered', async () => {
+    // A pixels-only invalidation reads its pane (30-300 ms in the field);
+    // a fallback pass lands meanwhile and discovers t2 → working. The
+    // invalidation must change ITS key on the map as it stands after the
+    // wait, not install a copy taken before it.
+    let releaseRead: (() => void) | null = null
+    let reads = 0
+    const pane = new Map<string, string>([
+      ['cookrew_t1', WORKING_PANE],
+      ['cookrew_t2', IDLE_PANE]
+    ])
+    const deps = probeDeps({
+      listSessionsAsync: async () => ['cookrew_t1', 'cookrew_t2'],
+      capturePaneAsync: (session) =>
+        new Promise<string>((resolve) => {
+          reads += 1
+          if (session === 'cookrew_t1' && reads === 3) releaseRead = () => resolve(pane.get(session) ?? '')
+          else resolve(pane.get(session) ?? '')
+        }),
+      knownTerminalIds: () => ['t1', 't2']
+    })
+    const sampler = createProbeSampler(deps)
+    await sampler.sampleAsync() // t1 working, t2 idle
+    expect([...sampler.phases().keys()]).toEqual(['t1'])
+    const late = sampler.invalidate('t1') // held at its read (the third read overall)
+    await sleep(0)
+    pane.set('cookrew_t2', WORKING_PANE)
+    await sampler.sampleAsync() // the concurrent pass: discovers t2
+    expect(sampler.phases().get('t2')).toBe('working')
+    releaseRead!()
+    await late
+    expect(sampler.phases().get('t2')).toBe('working') // NOT erased by the late invalidation
+    expect(sampler.phases().get('t1')).toBe('working')
+  })
+
+  it('H3: the refcount never goes negative and stop() releases through the clamp', () => {
+    vi.useFakeTimers()
+    try {
+      const sampler = createProbeSampler(
+        probeDeps({ listSessions: () => ['cookrew_t1'], knownTerminalIds: () => ['t1'], capturePane: () => WORKING_PANE })
+      )
+      const a = sampler.subscribe()
+      const b = sampler.subscribe()
+      sampler.stop() // every subscriber released
+      expect(sampler.running).toBe(false)
+      a()
+      b() // the real releases land on a count already at zero
+      expect(sampler.stats().subscribers).toBe(0)
+      expect(sampler.running).toBe(false)
+      const c = sampler.subscribe() // and the sampler can still start
+      expect(sampler.running).toBe(true)
+      expect(sampler.stats().subscribers).toBe(1)
+      c()
+      expect(sampler.running).toBe(false)
+      expect(sampler.stats().passesLastMinute).toBe(1)
+      vi.advanceTimersByTime(PROBE_INTERVAL_MS * 10) // half a minute: still inside the stats window
+      expect(sampler.stats().passesLastMinute).toBe(1) // nothing ticks for nobody
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('only an invalidation that changed the map drops the ladder', async () => {
+    const status = new Map<string, 'working' | 'idle'>([['t1', 'working']])
+    const sampler = createProbeSampler(
+      probeDeps({
+        listSessionsAsync: async () => ['cookrew_t1'],
+        capturePaneAsync: async () => WORKING_PANE,
+        knownTerminalIds: () => ['t1'],
+        askedStatus: (id) => status.get(id) ?? null
+      }),
+      PROBE_INTERVAL_MS,
+      { backoffMs: [20, 50, 200] }
+    )
+    const release = sampler.subscribe()
+    await sleep(120) // climb: 20 → 50 → 200
+    expect(sampler.stats().intervalMs).toBe(200)
+    await sampler.invalidate('t1') // herdr re-announcing the same fact
+    expect(sampler.stats().intervalMs).toBe(200) // no news, no reset
+    status.set('t1', 'idle')
+    await sampler.invalidate('t1')
+    expect(sampler.stats().intervalMs).toBe(20) // news
+    release()
+  })
+
+  it('counts per-event pane reads as children, and is running while a pass is in flight', async () => {
+    let gate: (() => void) | null = null
+    const sampler = createProbeSampler(
+      probeDeps({
+        listSessionsAsync: () => new Promise<string[]>((resolve) => (gate = () => resolve(['cookrew_t1']))),
+        capturePaneAsync: async () => WORKING_PANE,
+        knownTerminalIds: () => ['t1']
+      })
+    )
+    const release = sampler.subscribe() // a pass starts and holds at the listing
+    await sleep(0)
+    expect(sampler.stats().running).toBe(true) // held open, even though the timer is not armed mid-pass
+    gate!()
+    await sleep(5)
+    expect(sampler.stats().readsLastMinute).toBe(1)
+    await sampler.invalidate('t1')
+    expect(sampler.stats().readsLastMinute).toBe(2) // the event's read is a child too
+    release()
   })
 })

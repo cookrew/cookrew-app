@@ -331,16 +331,17 @@ function loopCheck(p, health, load, capped) {
 
 /** The board probe's cadence — listings per minute, one herdr child each. */
 function boardCheck(p, health) {
-  const name = `main board listings/min (pid ${p.pid})`
+  const name = `main board herdr children/min (pid ${p.pid})`
   const probe = health.loop?.probe
   if (!probe) return { name, value: null, unit: '', verdict: 'ok', note: health.loop ? 'no probe stats in this build' : health.note }
   return {
     name,
-    value: probe.listingsPerMinute,
+    value: probe.childrenPerMinute,
     unit: '/min',
-    verdict: judge(probe.listingsPerMinute, BUDGETS.memory.boardListingsPerMinute),
+    verdict: judge(probe.childrenPerMinute, BUDGETS.memory.boardChildrenPerMinute),
     note:
-      `subscribers ${probe.subscribers} · rung ${probe.intervalMs === null ? '—' : `${probe.intervalMs} ms`} · ` +
+      `listings ${probe.listingsPerMinute} + reads ${probe.readsPerMinute} · subscribers ${probe.subscribers} · ` +
+      `rung ${probe.intervalMs === null ? '—' : `${probe.intervalMs} ms`} · ` +
       `passes ${probe.passesPerMinute}/min · invalidations ${probe.invalidationsPerMinute}/min`
   }
 }

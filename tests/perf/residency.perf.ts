@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
 import path from 'node:path'
@@ -5,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { WorkspaceStore } from '../../src/main/store'
 import type http from 'node:http'
 import { Readable } from 'node:stream'
-import { BOARD_EVENT_DEBOUNCE_MS, boardSourcesFrom, createProbeSampler, type ProbeDeps } from '../../src/main/board-index'
+import { BOARD_EVENT_DEBOUNCE_MS, boardSourcesFrom, buildBoard, createProbeSampler, type ProbeDeps } from '../../src/main/board-index'
 import { ADMISSION_FRESH_MS, HerdrHostMultiplexer, type AsyncCliRunner } from '../../src/main/herdr-host-multiplexer'
 import { handleMobileApi, type MobileApiDeps } from '../../src/main/mobile-api'
 import { latencyStats } from '../../src/shared/stats'
@@ -319,7 +320,9 @@ describe('board read — while a pass is in flight, a read with something to sho
     expectTail(measured, LATENCY.boardReadIdleFleet)
     expectEvery(measured, 'waited', false)
     expectEvery(measured, 'phases', 0)
-    expect(listings()).toBeGreaterThanOrEqual(2) // the reads DID touch the probe (one pass each, no timer) — they just did not wait on it
+    // The reads touch the probe but the ladder climbed after the first
+    // (unchanged) pass, so an idle fleet's reads cost no further listing.
+    expect(listings()).toBe(1)
   })
 })
 
@@ -591,12 +594,51 @@ describe('board open, fleet quiet — the ladder climbs and a push beats the tic
   })
 })
 
+describe('board open AND busy — a rebuilt frame does not re-arm a listing', () => {
+  it('with change signals every half scaled-second, listings stay at the top rung', async () => {
+    // Every pushed frame rebuilds the board, and buildBoard reads the probe.
+    // A read that touched the probe at the first rung made the ladder
+    // decorative on any board that moves (measured 12 listings/min at 1/10
+    // scale with one plain change signal per 5 s). Under a subscription the
+    // read touches nothing: the subscription owns the cadence.
+    const { calls, sampler } = eventFleet()
+    const board = boardSourcesFrom({
+      store: { focusedId: 'ws' },
+      turns: { list: () => [] },
+      turnStore: { loadAll: () => new Map() },
+      agents: { list: () => [] },
+      probe: () => sampler.touch(),
+      probeWarm: () => sampler.warm(),
+      probeSubscribe: () => sampler.subscribe(),
+      probeOnChange: (listener) => sampler.onChange(listener)
+    })
+    const release = board.probeSubscribe!()
+    try {
+      await sleep(LADDER[0] + LADDER[1] + LADDER[2] + 500)
+      expect(sampler.stats().intervalMs).toBe(SCALED_MINUTE)
+      const settled = calls.asyncList
+      const until = Date.now() + SCALED_MINUTE * 2
+      let rebuilt = 0
+      while (Date.now() < until) {
+        buildBoard(board) // what a change signal does to a subscribed board
+        rebuilt += 1
+        await sleep(500)
+      }
+      const busy = calls.asyncList - settled
+      process.stdout.write(`perf board open, busy: ${busy} listings over two scaled minutes (${busy / 2}/min) across ${rebuilt} rebuilds\n`)
+      expect(busy).toBeLessThanOrEqual(2)
+      expect(rebuilt).toBeGreaterThanOrEqual(20)
+      expect(calls.sync).toBe(0)
+    } finally {
+      release()
+    }
+  })
+})
+
 // ---------------------------------------------------------------------------
 // The push: a phone on /api/events?board=1 gets the board frame after a
 // change, and its stream holds the probe open exactly as long as it lives.
 // ---------------------------------------------------------------------------
-import { EventEmitter } from 'node:events'
-
 function sseStub() {
   const frames: string[] = []
   const response = Object.assign(new EventEmitter(), {

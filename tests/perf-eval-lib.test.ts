@@ -279,9 +279,17 @@ describe('loopFromHealth — the row the memory history keeps', () => {
   it('carries the board probe cadence when the build reports it', () => {
     const row = loopFromHealth({
       loop: { lastMinute: window, current: window, windows: [] },
-      probe: { subscribers: 1, intervalMs: 60_000, passesLastMinute: 1, listingsLastMinute: 1, invalidationsLastMinute: 4 }
+      probe: { subscribers: 1, intervalMs: 60_000, passesLastMinute: 1, listingsLastMinute: 1, readsLastMinute: 3, invalidationsLastMinute: 4 }
     })
-    expect(row?.probe).toEqual({ subscribers: 1, intervalMs: 60_000, passesPerMinute: 1, listingsPerMinute: 1, invalidationsPerMinute: 4 })
+    expect(row?.probe).toEqual({
+      subscribers: 1,
+      intervalMs: 60_000,
+      passesPerMinute: 1,
+      listingsPerMinute: 1,
+      readsPerMinute: 3,
+      childrenPerMinute: 4,
+      invalidationsPerMinute: 4
+    })
   })
 
   it('falls back to the filling window in the first minute after a restart', () => {

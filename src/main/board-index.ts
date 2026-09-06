@@ -372,17 +372,19 @@ export interface ProbeStats {
   passesLastMinute: number
   /** Inventory listings (one child each) in the last minute. */
   listingsLastMinute: number
+  /** Pane reads (one child each) in the last minute — passes and per-event recomputes alike. */
+  readsLastMinute: number
   /** Per-terminal recomputes from events in the last minute. */
   invalidationsLastMinute: number
   everCompleted: boolean
+  /** Held open by at least one subscriber. */
   running: boolean
 }
 
 export interface ProbeSampler {
   /** Latest sampled phases — what BoardSources.probe hands to mergeBoard. */
   phases: () => Map<string, BoardPhase>
-  /** Begin periodic sampling (idempotent). subscribe() is the normal way in. */
-  start: () => void
+  /** Release EVERY subscriber and stop the timer (tests, shutdown). */
   stop: () => void
   /** Run one SYNCHRONOUS pass now; returns the fresh map (tests, sync backends). */
   sampleNow: () => Map<string, BoardPhase>
@@ -392,9 +394,12 @@ export interface ProbeSampler {
    */
   sampleAsync: () => Promise<Map<string, BoardPhase>>
   /**
-   * A ONE-SHOT read's touch: at most one pass (only when nothing is in
-   * flight and the last pass is older than the first rung), never the
-   * timer. Returns the phases as they stand.
+   * A ONE-SHOT read's touch: with no subscriber, at most one pass (only when
+   * nothing is in flight and the last pass is older than the CURRENT rung —
+   * idle reads back off exactly like the tick), never the timer. With a
+   * subscriber the subscription owns the cadence and a read touches
+   * nothing: every pushed frame rebuilds the board, and a rebuild that
+   * re-armed a listing made the ladder decorative. Returns the phases.
    */
   touch: () => Map<string, BoardPhase>
   /**
@@ -482,7 +487,7 @@ export function samePhases(a: ReadonlyMap<string, BoardPhase>, b: ReadonlyMap<st
  * wait.
  */
 export function createProbeSampler(
-  deps: ProbeDeps,
+  rawDeps: ProbeDeps,
   intervalMs: number = PROBE_INTERVAL_MS,
   options: ProbeSamplerOptions = {}
 ): ProbeSampler {
@@ -501,11 +506,28 @@ export function createProbeSampler(
   let subscribers = 0
   let rung = 0
   const listeners = new Set<(phases: Map<string, BoardPhase>) => void>()
-  const usesAsync = typeof deps.listSessionsAsync === 'function'
+  const usesAsync = typeof rawDeps.listSessionsAsync === 'function'
+  // Every pane read is a child too — passes and per-event recomputes alike —
+  // so the reads seam counts them for stats(); the rest of the bag is the caller's.
+  const deps: ProbeDeps = {
+    ...rawDeps,
+    capturePane: (session) => {
+      note('reads')
+      return rawDeps.capturePane(session)
+    },
+    ...(rawDeps.capturePaneAsync
+      ? {
+          capturePaneAsync: (session: string) => {
+            note('reads')
+            return rawDeps.capturePaneAsync!(session)
+          }
+        }
+      : {})
+  }
 
   // Bounded event journals for stats(): timestamps of the last minute.
   const MINUTE = 60_000
-  const journal = { passes: [] as number[], listings: [] as number[], invalidations: [] as number[] }
+  const journal = { passes: [] as number[], listings: [] as number[], reads: [] as number[], invalidations: [] as number[] }
   const note = (kind: keyof typeof journal): void => {
     const list = journal[kind]
     list.push(now())
@@ -640,28 +662,24 @@ export function createProbeSampler(
     void sampleAsync().then(schedule)
   }
 
-  /** Recompute one terminal from what the app already knows — no listing. */
-  const recompute = async (terminalId: string): Promise<Map<string, BoardPhase>> => {
-    const next = new Map(latest)
-    if (deps.isAttached(terminalId)) {
-      next.delete(terminalId) // L1 owns it now
-      return next
-    }
+  /**
+   * One terminal's phase from what the app already knows — no listing.
+   * `undefined` = no opinion (leave the map alone); `null` = no phase (the
+   * row goes). The DECISION is made here and the map is touched by the
+   * caller AFTER any await: a pass can land while a pane read is in flight,
+   * and a copy of `latest` taken before the wait would erase what that pass
+   * discovered about every other terminal.
+   */
+  const decide = async (terminalId: string): Promise<BoardPhase | null | undefined> => {
+    if (deps.isAttached(terminalId)) return null // L1 owns it now
     const session = deps.sessionNameFor(terminalId)
     const asked = phaseFromAsked(deps.askedStatus?.(terminalId) ?? null)
-    if (asked !== null) {
-      if (asked === undefined) next.delete(terminalId)
-      else next.set(terminalId, asked)
-      return next
-    }
+    if (asked !== null) return asked === undefined ? null : asked
     // Pixels only: one read of this pane, if the last listing saw it. A pane
     // the last listing did not see is the next pass's to find.
-    if (!lastLive.has(session)) return next
+    if (!lastLive.has(session)) return undefined
     const chunk = deps.capturePaneAsync ? await deps.capturePaneAsync(session) : deps.capturePane(session)
-    const phase = phaseFromPane(deps, chunk)
-    if (phase) next.set(terminalId, phase)
-    else next.delete(terminalId)
-    return next
+    return phaseFromPane(deps, chunk) ?? null
   }
 
   const sampler: ProbeSampler = {
@@ -669,7 +687,7 @@ export function createProbeSampler(
     sampleNow,
     sampleAsync,
     touch: () => {
-      if (!inFlight && now() - lastSampleAt >= ladder[0]) void sampleAsync()
+      if (subscribers <= 0 && !inFlight && now() - lastSampleAt >= ladder[rung]) void sampleAsync()
       return latest
     },
     warm: () => {
@@ -679,23 +697,29 @@ export function createProbeSampler(
     },
     subscribe: () => {
       subscribers += 1
-      if (subscribers === 1) sampler.start()
+      if (subscribers === 1) begin()
       let released = false
       return () => {
         if (released) return
         released = true
-        subscribers -= 1
-        if (subscribers === 0) sampler.stop()
+        release()
       }
     },
     invalidate: async (terminalId) => {
       note('invalidations')
-      rung = 0
-      if (timer) schedule() // drop the ladder: the next fallback pass comes at the first rung
       try {
-        const next = await recompute(terminalId)
-        if (samePhases(latest, next)) return
+        const phase = await decide(terminalId)
+        if (phase === undefined) return
+        // The map as it stands NOW, after the wait — one key changes.
+        if (latest.get(terminalId) === (phase ?? undefined)) return
+        const next = new Map(latest)
+        if (phase === null) next.delete(terminalId)
+        else next.set(terminalId, phase)
         latest = next
+        // Only a change drops the ladder: herdr announces every observation
+        // and a reconnect replays every pane, none of which is news.
+        rung = 0
+        if (timer) schedule()
         announce()
       } catch (error) {
         console.error('Board probe invalidation failed:', error)
@@ -710,31 +734,38 @@ export function createProbeSampler(
       intervalMs: ladder[rung],
       passesLastMinute: lastMinute('passes'),
       listingsLastMinute: lastMinute('listings'),
+      readsLastMinute: lastMinute('reads'),
       invalidationsLastMinute: lastMinute('invalidations'),
       everCompleted,
-      running: timer !== null
+      running: subscribers > 0
     }),
-    start: (): void => {
-      if (timer) return
-      if (subscribers === 0) subscribers = 1 // a bare start() is one anonymous subscriber; stop() is its release
-      if (now() - lastSampleAt < ladder[0]) {
-        schedule()
-        return
-      }
-      if (!usesAsync) {
-        sampleNow()
-        schedule()
-        return
-      }
-      void sampleAsync().then(schedule)
-    },
     stop: (): void => {
-      subscribers = 0
-      clearTimer()
+      while (subscribers > 0) release()
     },
     get running(): boolean {
-      return timer !== null
+      return subscribers > 0
     }
+  }
+
+  /** The first subscriber arrived: a pass now if the last is stale, then the ladder. */
+  function begin(): void {
+    if (timer) return
+    if (now() - lastSampleAt < ladder[rung]) {
+      schedule()
+      return
+    }
+    if (!usesAsync) {
+      sampleNow()
+      schedule()
+      return
+    }
+    void sampleAsync().then(schedule)
+  }
+
+  /** One subscriber left. Clamped at zero: a release can never owe a negative hold. */
+  function release(): void {
+    subscribers = Math.max(0, subscribers - 1)
+    if (subscribers <= 0) clearTimer()
   }
   return sampler
 }

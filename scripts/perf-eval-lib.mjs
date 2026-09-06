@@ -271,6 +271,9 @@ export function loopFromHealth(body) {
             intervalMs: body.probe.intervalMs ?? null,
             passesPerMinute: body.probe.passesLastMinute ?? 0,
             listingsPerMinute: body.probe.listingsLastMinute,
+            readsPerMinute: body.probe.readsLastMinute ?? 0,
+            // Every listing and every pane read is one herdr child.
+            childrenPerMinute: body.probe.listingsLastMinute + (body.probe.readsLastMinute ?? 0),
             invalidationsPerMinute: body.probe.invalidationsLastMinute ?? 0
           }
         : null

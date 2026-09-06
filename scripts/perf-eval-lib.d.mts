@@ -102,6 +102,8 @@ export interface LoopSample {
     intervalMs: number | null
     passesPerMinute: number
     listingsPerMinute: number
+    readsPerMinute: number
+    childrenPerMinute: number
     invalidationsPerMinute: number
   } | null
 }
