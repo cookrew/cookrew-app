@@ -30,14 +30,16 @@ const real = {
   writeFileSync: fs.writeFileSync,
   appendFileSync: fs.appendFileSync
 }
-const counters = { on: false, workspaceReads: 0, workspaceWrites: 0, appends: 0 }
+const counters = { on: false, workspaceReads: 0, workspaceWrites: 0, appends: 0, jsonlReads: [] as string[] }
 
 const isWorkspaceJson = (file: unknown): boolean =>
   typeof file === 'string' && file.endsWith(`${path.sep}workspace.json`)
+const isJsonl = (file: unknown): file is string => typeof file === 'string' && file.endsWith('.jsonl')
 
 beforeAll(() => {
   fs.readFileSync = function countedRead(this: unknown, file: Parameters<typeof fs.readFileSync>[0], ...rest: unknown[]) {
     if (counters.on && isWorkspaceJson(file)) counters.workspaceReads += 1
+    if (counters.on && isJsonl(file)) counters.jsonlReads.push(path.basename(file))
     return (real.readFileSync as (...a: unknown[]) => Buffer | string).call(this, file, ...rest)
   } as typeof fs.readFileSync
   fs.writeFileSync = function countedWrite(this: unknown, file: Parameters<typeof fs.writeFileSync>[0], ...rest: unknown[]) {
@@ -62,6 +64,7 @@ const resetCounters = (): void => {
   counters.workspaceReads = 0
   counters.workspaceWrites = 0
   counters.appends = 0
+  counters.jsonlReads = []
 }
 
 // ---------------------------------------------------------------------------
@@ -221,18 +224,73 @@ describe('event log — query over a live-shaped log', () => {
 
   afterAll(() => removeRoot(root))
 
-  it('answers a filtered, limited query within budget and spans every rotated file', async () => {
+  const liveQuery = { type: 'turn.completed', limit: 200 } as const
+
+  it('reads every file once, then only events.jsonl for the same query again', () => {
     const files = fs.readdirSync(root).filter((f) => f.endsWith('.jsonl')).length
     expect(files).toBe(STORAGE.eventLog.keepFiles + 1)
-    const measured = await measure('event-log query type+limit (live shape)', () =>
-      timed(() => {
-        const rows = log.query({ type: 'turn.completed', limit: 200 })
+    // A fresh instance over the same files: cold by construction, whatever
+    // ran before.
+    const coldLog = new EventLog(path.join(root, 'events.jsonl'), { ...STORAGE.eventLog, flushMs: 60_000 })
+    resetCounters()
+    counters.on = true
+    const first = coldLog.query(liveQuery)
+    const cold = [...counters.jsonlReads]
+    resetCounters()
+    const second = coldLog.query(liveQuery)
+    const warm = [...counters.jsonlReads]
+    counters.on = false
+    expect(cold).toHaveLength(STORAGE.eventLog.keepFiles + 1)
+    // The structural gate: a warm query is ONE read, and it is the live file.
+    // Rotated files are immutable; parsing them again is the regression.
+    expect(warm).toEqual(['events.jsonl'])
+    expect(second).toEqual(first)
+  })
+
+  it('answers a filtered, limited query within budget and spans every rotated file', async () => {
+    const measured = await measure('event-log query type+limit (live shape)', () => {
+      resetCounters()
+      counters.on = true
+      const sample = timed(() => {
+        const rows = log.query(liveQuery)
         return { rows: rows.length, allTimed: rows.every((r) => typeof r.durationMs === 'number') }
       })
-    )
+      counters.on = false
+      const reads = counters.jsonlReads
+      return {
+        ...sample,
+        structural: { ...sample.structural, reads: reads.length, liveOnly: reads.every((f) => f === 'events.jsonl') }
+      }
+    })
     expectTail(measured, LATENCY.eventQueryLiveShape)
     expectEvery(measured, 'rows', 200)
     expectEvery(measured, 'allTimed', true)
+    expectEvery(measured, 'reads', 1)
+    expectEvery(measured, 'liveOnly', true)
+  })
+
+  // /api/events/query answers with query() AND count() over the same filter,
+  // so the route pays for both; count() is the full walk that remains.
+  it('counts over the same filter with one read, within budget', async () => {
+    const measured = await measure('event-log count type-prefix (live shape)', () => {
+      resetCounters()
+      counters.on = true
+      const sample = timed(() => {
+        const counts = log.count({ type: 'turn.' })
+        return { types: Object.keys(counts).length, total: Object.values(counts).reduce((a, b) => a + b, 0) }
+      })
+      counters.on = false
+      const reads = counters.jsonlReads
+      return {
+        ...sample,
+        structural: { ...sample.structural, reads: reads.length, liveOnly: reads.every((f) => f === 'events.jsonl') }
+      }
+    })
+    expectTail(measured, LATENCY.eventCountLiveShape)
+    expectEvery(measured, 'types', 1)
+    expectEvery(measured, 'reads', 1)
+    expectEvery(measured, 'liveOnly', true)
+    expect(measured.structurals[0].total).toBeGreaterThan(1000)
   })
 })
 
