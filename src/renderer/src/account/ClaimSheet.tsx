@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AccountStatus, UsernameCheck } from '../../../shared/account-v2'
 import { cookrew } from '../api'
+import { DOING, problemSentence } from './problem'
 import {
   ACCOUNT_COPY,
   claimView,
@@ -123,10 +124,9 @@ export function ClaimSheet({
       })
       .catch((err: unknown) => {
         setBusy(false)
-        // NEVER THE RAW MESSAGE: what reaches here is an IPC rejection, which
-        // tells a person nothing while implying they broke something.
-        console.error('claim sheet:', err)
-        setError('Something went wrong on this side. Try again.')
+        // The rejection NAMES THE CHANNEL, which is the difference between a
+        // bug report and a shrug; the stack goes to the console with it.
+        setError(problemSentence(DOING.CLAIM, err))
       })
   }
 

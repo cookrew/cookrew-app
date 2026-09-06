@@ -12,6 +12,7 @@ import {
   type FactorRow,
 } from './account-store'
 import { FactorRows, RemoveFactorRow, Row } from './FactorRows'
+import { DOING, problemSentence, refusedSentence } from './problem'
 import { NewPasswordCard } from './NewPasswordCard'
 import { TotpSheet } from './TotpSheet'
 import {
@@ -53,6 +54,7 @@ export function SecurityCard({
   lockAfterMs,
   recoveryCodesSavedAt,
   recoveryCodesLeft = null,
+  problem = null,
   onLockAfterMs,
   onLockNow,
   onCodesSaved,
@@ -61,6 +63,8 @@ export function SecurityCard({
   lockAfterMs: number
   recoveryCodesSavedAt: number | null
   recoveryCodesLeft?: number | null
+  /** A failure from the actions the parent owns (the lock, the codes file). */
+  problem?: string | null
   onLockAfterMs: (ms: number) => void
   onLockNow: () => void
   onCodesSaved: () => void
@@ -83,9 +87,9 @@ export function SecurityCard({
     void call()
       .then((result) => {
         if (result.ok) setFactors(result.value)
-        else setError(refusalSentence(result.reason, result.message, username))
+        else setError(refusedSentence(DOING.FACTORS, result, username))
       })
-      .catch(() => setError('Something went wrong on this side. Try again.'))
+      .catch((err: unknown) => setError(problemSentence(DOING.FACTORS, err)))
   }, [username])
 
   useEffect(readFactors, [readFactors])
@@ -115,10 +119,7 @@ export function SecurityCard({
         if (result.ok) setCodes(result.value)
         else setError(refusalSentence(result.reason, result.message, username))
       })
-      .catch((err: unknown) => {
-        console.error('recovery codes:', err)
-        setError('Something went wrong on this side. Try again.')
-      })
+      .catch((err: unknown) => setError(problemSentence(DOING.CODES, err)))
   }
 
   /** SAVE AS FILE. Main owns the dialog and the codes; this only asks. */
@@ -136,10 +137,7 @@ export function SecurityCard({
         // Cancelling a save dialog is a decision, not a failure to report.
         if (result.reason !== 'cancelled') setError('Could not write that file. Try another place.')
       })
-      .catch((err: unknown) => {
-        console.error('save recovery codes:', err)
-        setError('Something went wrong on this side. Try again.')
-      })
+      .catch((err: unknown) => setError(problemSentence(DOING.SAVE_CODES, err)))
   }
 
   const putAway = (): void => {
@@ -225,9 +223,9 @@ export function SecurityCard({
         setRemoving(null)
         readFactors()
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         setBusy(false)
-        setError('Something went wrong on this side. Try again.')
+        setError(problemSentence(DOING.REMOVE_FACTOR, err))
       })
   }
 
@@ -341,9 +339,9 @@ export function SecurityCard({
           }
         />
       </ul>
-      {error && (
+      {(error ?? problem) && (
         <p className="gs-paste-error" role="alert">
-          {error}
+          {error ?? problem}
         </p>
       )}
       <p className="gs-foot-note">{ACCOUNT_COPY.LOCK_NOW_WHY}</p>

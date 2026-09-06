@@ -167,6 +167,48 @@ const asRecord = (value: unknown): Record<string, unknown> =>
 const isDecision = (value: unknown): value is ApprovalDecision =>
   value === 'approve' || value === 'deny' || value === 'not-me'
 
+/**
+ * A CHANNEL THAT WRITES TO THIS MAC ANSWERS A SENTENCE, NEVER A REJECTION.
+ *
+ * Locking, changing the lock delay and recording that the codes were saved
+ * all WRITE ~/.cookrew/account.json. A full disk, a permission, a read-only
+ * home — any of those threw out of the handler, rejected the invoke, and
+ * surfaced in the renderer as one apology with no cause in it. The refusal
+ * vocabulary already exists for exactly this, so these use it: the status
+ * when the write happened, and a sentence naming what did not when it did
+ * not.
+ */
+function settled(
+  deps: AccountIpcDeps,
+  doing: string,
+  act: () => void,
+): AccountResult<AccountStatus> {
+  try {
+    act()
+    return { ok: true, value: accountStatus(deps) }
+  } catch (error) {
+    return { ok: false, reason: 'unknown', message: `${doing}: ${detailOf(error)}` }
+  }
+}
+
+/** The same guarantee for a channel that already answers a result. */
+async function attempt<T>(
+  doing: string,
+  run: () => Promise<AccountResult<T>>,
+): Promise<AccountResult<T>> {
+  try {
+    return await run()
+  } catch (error) {
+    return { ok: false, reason: 'unknown', message: `${doing}: ${detailOf(error)}` }
+  }
+}
+
+/** What a throwable can honestly be said to have told us. */
+function detailOf(error: unknown): string {
+  if (error instanceof Error && error.message !== '') return error.message
+  return typeof error === 'string' && error !== '' ? error : 'the app got no reason back'
+}
+
 /** The status, rebuilt from main's own state on every ask. */
 export function accountStatus(deps: AccountIpcDeps): AccountStatus {
   const account = deps.accounts.account()
@@ -351,10 +393,8 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
       deps.accounts.checkUsername(asString(username)),
     'account:claim': (input: unknown) => claim(deps, input),
     'account:migrate': (input: unknown) => migrate(deps, input),
-    'account:lock': () => {
-      deps.lock.lock()
-      return accountStatus(deps)
-    },
+    'account:lock': () =>
+      settled(deps, 'This Mac could not be locked', () => deps.lock.lock()),
     'account:unlock': (password: unknown) => unlock(deps, asString(password)),
     'account:profile': async (): Promise<AccountResult<AccountProfile>> => {
       const result = await deps.accounts.profile()
@@ -371,30 +411,47 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     'account:revoke': (id: unknown): Promise<AccountResult<void>> =>
       deps.accounts.revokeDevice(asString(id)),
     'account:recoveryCodes': (): Promise<AccountResult<readonly string[]>> =>
-      deps.accounts.recoveryCodes(),
+      attempt('New recovery codes could not be made', () => deps.accounts.recoveryCodes()),
     /**
      * SAVE AS FILE. The codes are read from main's own memory, never from the
      * call — the renderer already has them on screen, and a channel that took
      * text plus a path would write whatever it was handed.
      */
-    'account:saveRecoveryCodes': async (): Promise<{ ok: boolean; reason?: string }> => {
-      const codes = deps.accounts.pendingRecoveryCodes()
-      if (!codes) return { ok: false, reason: 'nothing_to_save' }
-      const saved = await deps.saveCodes(codes)
-      if (saved.ok) deps.accounts.markRecoveryCodesSaved()
-      return saved
+    'account:saveRecoveryCodes': async (): Promise<{
+      ok: boolean
+      reason?: string
+      message?: string
+    }> => {
+      try {
+        const codes = deps.accounts.pendingRecoveryCodes()
+        if (!codes) return { ok: false, reason: 'nothing_to_save' }
+        const saved = await deps.saveCodes(codes)
+        if (saved.ok) deps.accounts.markRecoveryCodesSaved()
+        return saved
+      } catch (error) {
+        // A save dialog that raised, or a file that could not be written: the
+        // sentence says which, because "try again" on a read-only disk is a
+        // suggestion to repeat the same failure.
+        return {
+          ok: false,
+          reason: 'unknown',
+          message: `Those codes could not be written: ${detailOf(error)}`,
+        }
+      }
     },
     /** I SAVED THEM — recorded, so the RESCUE row stops saying NOT SAVED. */
-    'account:codesSaved': () => {
-      deps.accounts.markRecoveryCodesSaved()
-      return accountStatus(deps)
-    },
-    'account:setLock': (ms: unknown) => {
-      const value = typeof ms === 'number' ? ms : 0
-      deps.accounts.setLockAfterMs(value)
-      deps.lock.setLockAfterMs(value)
-      return accountStatus(deps)
-    },
+    'account:codesSaved': () =>
+      settled(deps, 'That could not be recorded on this Mac', () =>
+        deps.accounts.markRecoveryCodesSaved(),
+      ),
+    // ZERO IS A SETTING, not a missing argument: it is the OFF choice in the
+    // delay picker, and it has to survive the coercion that guards this bridge.
+    'account:setLock': (ms: unknown) =>
+      settled(deps, 'The lock setting could not be saved on this Mac', () => {
+        const value = typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 ? ms : 0
+        deps.accounts.setLockAfterMs(value)
+        deps.lock.setLockAfterMs(value)
+      }),
     'account:setProfile': async (patch: unknown): Promise<AccountResult<AccountProfile>> => {
       const record = (typeof patch === 'object' && patch !== null ? patch : {}) as Record<
         string,

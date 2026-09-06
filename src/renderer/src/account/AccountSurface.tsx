@@ -50,6 +50,8 @@ export function useAccountSurface(): AccountSurface {
   const [tab, setTab] = useState<ProfileTab>('PROFILE')
   /** The request a system notification was clicked for (D6). */
   const [focusRequest, setFocusRequest] = useState<string | null>(null)
+  /** A failure from the D3 card's own actions, said on the card. */
+  const [problem, setProblem] = useState<string | null>(null)
 
   const refresh = useCallback(() => {
     const call = cookrew().accountStatus
@@ -138,7 +140,8 @@ export function useAccountSurface(): AccountSurface {
               lockAfterMs={status.lockAfterMs}
               recoveryCodesSavedAt={status.recoveryCodesSavedAt}
               recoveryCodesLeft={status.recoveryCodesLeft}
-              {...securityActions(setStatus, () => setSheet('none'))}
+              problem={problem}
+              {...securityActions(setStatus, () => setSheet('none'), setProblem)}
             />
             <div className="gs-sheet-foot">
               <button className="gs-ghost" onClick={() => setSheet('none')}>

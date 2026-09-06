@@ -1,5 +1,6 @@
-import type { AccountStatus } from '../../../shared/account-v2'
+import type { AccountResult, AccountStatus } from '../../../shared/account-v2'
 import { cookrew } from '../api'
+import { DOING, problemSentence, refusedSentence } from './problem'
 
 /**
  * The three things the security card DOES, wired once.
@@ -17,17 +18,28 @@ import { cookrew } from '../api'
 export function securityActions(
   onStatus: (next: AccountStatus) => void,
   after?: () => void,
+  /**
+   * Where a failure is SAID. These three write to the disk, so they can fail
+   * for a reason the owner can act on — and a swallowed `.catch` was how a
+   * lock delay could refuse to stick with the card still showing the value
+   * that had not been saved.
+   */
+  onProblem: (sentence: string) => void = () => undefined,
 ): {
   onLockAfterMs: (ms: number) => void
   onLockNow: () => void
   onCodesSaved: () => void
 } {
+  const settle = (result: AccountResult<AccountStatus>): void => {
+    if (result.ok) onStatus(result.value)
+    else onProblem(refusedSentence(DOING.LOCK, result))
+  }
   return {
     onLockAfterMs: (ms) => {
       void cookrew()
         .accountSetLock?.(ms)
-        .then(onStatus)
-        .catch(() => undefined)
+        .then(settle)
+        .catch((err: unknown) => onProblem(problemSentence(DOING.LOCK, err)))
     },
     /**
      * LOCK NOW. `after` closes the sheet the button was pressed in: the lock
@@ -38,14 +50,17 @@ export function securityActions(
       after?.()
       void cookrew()
         .accountLock?.()
-        .then(onStatus)
-        .catch(() => undefined)
+        .then(settle)
+        .catch((err: unknown) => onProblem(problemSentence(DOING.LOCK, err)))
     },
     onCodesSaved: () => {
       void cookrew()
         .accountCodesSaved?.()
-        .then(onStatus)
-        .catch(() => undefined)
+        .then((result) => {
+          if (result.ok) onStatus(result.value)
+          else onProblem(refusedSentence(DOING.SAVE_CODES, result))
+        })
+        .catch((err: unknown) => onProblem(problemSentence(DOING.SAVE_CODES, err)))
     },
   }
 }

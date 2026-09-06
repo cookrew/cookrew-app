@@ -368,26 +368,39 @@ describe('the factor ladder, in both states (D3)', () => {
     expect(rows[1]).toMatchObject({ label: 'Add an authenticator app', action: 'add' })
   })
 
-  it('lists what is enrolled, by name, and stops recommending', () => {
+  it('lists EVERY enrolled passkey, keeps ADD beneath, and stops recommending', () => {
+    // Real-UI QA: a passkey enrolled in a browser ("Comet on M1Pro") never
+    // appeared on the Mac, because the card listed either the keys or the
+    // invitation and never both — so the account's only passkey was invisible
+    // while the row went on recommending one.
     const rows = factorRows(
       factorsView({
         totp: true,
         passkeys: [
-          { id: 'pk-1', name: 'Touch ID on this Mac', addedAt: 1 },
+          { id: 'pk-1', name: 'Comet on M1Pro', addedAt: 1_757_116_800_000 },
           { id: 'pk-2', name: 'iPhone', addedAt: 2 },
         ],
       }),
+      () => '6 Sept',
     )
-    expect(rows).toHaveLength(3)
     expect(rows.map((row) => row.label)).toEqual([
-      'Touch ID on this Mac',
+      'Comet on M1Pro',
       'iPhone',
+      'Add a passkey (Touch ID)',
       'Authenticator app',
     ])
-    expect(rows.every((row) => row.action === 'remove')).toBe(true)
-    expect(rows.some((row) => row.state === 'RECOMMENDED')).toBe(false)
+    expect(rows[0]).toMatchObject({ state: 'Added 6 Sept', action: 'remove', id: 'pk-1' })
     // Each passkey is removable BY ITS OWN ID, not by position.
     expect(rows[1].id).toBe('pk-2')
+    // The invitation stays, unrecommended: the account already has one.
+    expect(rows[2]).toMatchObject({ action: 'add', state: '' })
+    expect(rows.some((row) => row.state === 'RECOMMENDED')).toBe(false)
+  })
+
+  it('recommends the passkey only while the account has none', () => {
+    const rows = factorRows(factorsView())
+    expect(rows.map((row) => row.action)).toEqual(['add', 'add'])
+    expect(rows[0]).toMatchObject({ label: 'Add a passkey (Touch ID)', state: 'RECOMMENDED' })
   })
 
   it('names the state of a half-enrolled account correctly', () => {

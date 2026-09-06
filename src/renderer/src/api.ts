@@ -525,15 +525,21 @@ export interface CookrewApi {
     password: string;
     name?: string;
   }) => Promise<AccountResult<AccountStatus>>;
-  accountLock?: () => Promise<AccountStatus>;
+  accountLock?: () => Promise<AccountResult<AccountStatus>>;
   accountUnlock?: (password: string) => Promise<UnlockAnswer>;
   accountProfile?: () => Promise<AccountResult<AccountProfile>>;
   accountDevices?: () => Promise<AccountResult<readonly AccountDevice[]>>;
   accountRevoke?: (deviceId: string) => Promise<AccountResult<void>>;
   accountRecoveryCodes?: () => Promise<AccountResult<readonly string[]>>;
-  accountSaveRecoveryCodes?: () => Promise<{ ok: boolean; reason?: string }>;
-  accountCodesSaved?: () => Promise<AccountStatus>;
-  accountSetLock?: (ms: number) => Promise<AccountStatus>;
+  accountSaveRecoveryCodes?: () => Promise<{
+    ok: boolean;
+    reason?: string;
+    message?: string;
+  }>;
+  accountCodesSaved?: () => Promise<AccountResult<AccountStatus>>;
+  // THESE THREE WRITE TO THE DISK, so they answer a result: the status when
+  // the write happened, a sentence when it did not.
+  accountSetLock?: (ms: number) => Promise<AccountResult<AccountStatus>>;
   accountSetProfile?: (patch: {
     displayName?: string;
     avatar?: string | null;
