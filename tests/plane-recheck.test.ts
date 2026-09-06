@@ -139,7 +139,7 @@ describe('one re-check', () => {
     expect(run.condemned).toBe(1)
   })
 
-  it('does NOT condemn on silence — that is the transport counter's business', async () => {
+  it("does NOT condemn on silence — that is the transport counter's business", async () => {
     const run = await check({ hello: async () => null })
     expect(run.outcome).toBe('unreachable')
     expect(run.condemned).toBe(0)
