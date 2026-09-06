@@ -8,7 +8,12 @@ import { WorkspaceStore } from './store'
 import { PtyManager, multiplexer, sessionNameFor } from './pty'
 import type { PtySession } from './pty'
 import type { PaneCardInfo } from './multiplexer'
-import { agentStatus, statusFeed, type StatusObservation } from './herdr-agent-status'
+import {
+  agentStatus,
+  statusFeed,
+  type HerdrStatus,
+  type StatusObservation
+} from './herdr-agent-status'
 import { resolveRotationChain, rotationCommitVerdict } from './claude-rotation'
 import { BootLatency, shouldTimeBoot, type BootSample } from './boot-latency'
 import { TurnTracker, type CompletedTurn } from './turn-tracker'
@@ -248,7 +253,7 @@ import { PinStore } from './pin-store'
 import { rekeyPinsByUuid } from './pin-rekey'
 import { cutVersionPin, type VersionPinRecord } from '../shared/version-pin'
 import { TeamClipboard } from './team-clip'
-import { UNCOPYABLE_PHASES } from '../shared/turn'
+import { UNCOPYABLE_PHASES, type TurnPhase } from '../shared/turn'
 import { GitInfoCache, addWorktree } from './git'
 import { buildRoleBootMessage } from '../shared/fork'
 import { pageTurns } from '../shared/turn'
@@ -1579,16 +1584,61 @@ const lazyTerminals = new LazyTerminalAttachments({
   }
 })
 
+/**
+ * The backend's word on a mirrorless terminal, in the card's own vocabulary.
+ *
+ * 'idle' and 'done' map to null rather than to 'idle': a card with no mirror
+ * has nothing to say about a resting agent that its checkpoint preview does
+ * not say better, and claiming READY is what this whole path exists to stop.
+ * Only the two states a person needs to SEE from across the canvas are
+ * published — the same mapping the board plane already makes.
+ */
+const backendPhaseOf = (status: HerdrStatus): TurnPhase | null =>
+  status === 'working' ? 'thinking' : status === 'blocked' ? 'waiting' : null
+
 statusFeed()?.on('status', ({ sessionName, status }: StatusObservation) => {
   const terminalId = terminalIdForSessionName(sessionName)
-  if (terminalId) lazyTerminals.observeStatus(terminalId, status)
+  if (!terminalId) return
+  lazyTerminals.observeStatus(terminalId, status)
+  turns.observeBackendPhase(terminalId, backendPhaseOf(status), isAgentTerminal(terminalId))
 })
 
-// The feed may have seeded its cache before this listener was installed.
-for (const terminal of store.terminalsAcross()) {
-  const status = agentStatus(sessionNameFor(terminal.id))
-  if (status) lazyTerminals.observeStatus(terminal.id, status)
+/**
+ * Re-ask herdr about every terminal, INCLUDING the ones it has nothing to
+ * say about.
+ *
+ * The status feed only ever pushes; three silences never arrive as events —
+ * the feed disconnecting (it clears its map and emits nothing), a retraction
+ * to `unknown` (deleted, not recorded), and a pane that simply went away. A
+ * phase learned once and never retracted is the stuck `working` that
+ * herdr-agent-status was hardened against, and here it would outlive the
+ * terminal: a ghost board row, a drain that never reaches zero. agentStatus
+ * answers null for all three, so passing that null through is the whole
+ * retraction channel.
+ */
+function syncBackendPhases(): void {
+  for (const terminal of store.terminalsAcross()) {
+    const status = agentStatus(sessionNameFor(terminal.id))
+    if (status) lazyTerminals.observeStatus(terminal.id, status)
+    turns.observeBackendPhase(
+      terminal.id,
+      status ? backendPhaseOf(status) : null,
+      terminal.command.trim().length > 0
+    )
+  }
 }
+
+/** Does this terminal run an agent, or is it a bare shell? */
+function isAgentTerminal(terminalId: string): boolean {
+  const hit = store.nodeAcrossWorkspaces(terminalId)
+  return hit?.node.kind === 'terminal' && (hit.node as TerminalNodeData).command.trim().length > 0
+}
+
+// The feed may have seeded its cache before this listener was installed.
+// This is also where a COLD canvas learns what its agents are doing: nothing
+// is attached yet, so without it every card paints READY until someone zooms
+// one open.
+syncBackendPhases()
 // Observability: the store's op choke-point feeds the durable event log;
 // the log's live stream broadcasts to the renderer (mobile gets the same
 // stream over the /api/events SSE, subscribed in mobile-api).
@@ -2191,6 +2241,10 @@ const panePids = new PanePidCache((terminalId) => ptys.panePid(terminalId))
  * within ORACLE_SWEEP_MS instead of the 33 hours measured on 2026-09-05.
  */
 const oracleSweep = setInterval(() => {
+  // Retract phases herdr no longer stands behind — the silences it never
+  // sends as events. This walks the same terminalsAcross() the sweep already
+  // pays for, and every read is a map lookup.
+  syncBackendPhases()
   // A cold pane-pid lookup is a synchronous herdr child process, so at most
   // ONE per tick: a fleet that all boots at once warms up over a few sweeps
   // instead of stalling the main thread for the whole fleet in one go.
@@ -3042,6 +3096,9 @@ function retireTerminal(id: string, why: string): void {
   // Same rule for the mirror's linger window: an armed one belongs to the
   // dead generation and would detach a reborn id's fresh mirror.
   lazyTerminals.forget(id)
+  // A retired terminal has no phase; leaving one behind is a board row and a
+  // drain reference that outlive the card.
+  turns.observeBackendPhase(id, null)
   sessionSync.unwatch(id)
   turns.untrack(id)
 }
@@ -3194,7 +3251,9 @@ function carrySessionToPastedCard(from: TerminalNodeData, to: TerminalNodeData):
  *  detached (untracked) terminal reads as not-working — the paste result
  *  carries `staleSource` so that blindness is surfaced, not hidden. */
 function terminalIsWorking(id: string): boolean {
-  const activity = turns.list().find((a) => a.terminalId === id)
+  // A detached terminal reads as not-working — the paste carries
+  // staleSource instead of blocking on a detector's guess.
+  const activity = turns.listVerified().find((a) => a.terminalId === id)
   return activity !== undefined && UNCOPYABLE_PHASES.has(activity.phase)
 }
 
@@ -4325,7 +4384,7 @@ app.whenReady().then(() => {
     spawnTracked,
     // Restore/undo kill the CLI; refuse while a turn is in flight so the
     // session file is never truncated out from under a writing process.
-    phaseOf: (id) => turns.list().find((a) => a.terminalId === id)?.phase ?? null,
+    phaseOf: (id) => turns.listVerified().find((a) => a.terminalId === id)?.phase ?? null,
     // A detached/background target has no tracked phase but may carry an
     // armed dispatch or an open-turn fact — restore must not kill and rebind
     // a session mid-commissioned-work (Sol r4).

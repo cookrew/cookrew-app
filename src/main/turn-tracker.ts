@@ -552,6 +552,18 @@ export interface CompletedTurn {
  */
 export class TurnTracker extends EventEmitter {
   private tracked = new Map<string, TrackedTerminal>()
+  /**
+   * Phases known from the MULTIPLEXER for terminals with no local mirror.
+   *
+   * Terminals stay detached on a cold start, and everything else here is
+   * derived from a live PtySession — so a boot canvas of hard-working agents
+   * painted itself entirely READY, green coins and all, until someone zoomed
+   * a card and attached a PTY. The backend already knew: herdr reports
+   * working/blocked per pane, for free, before any mirror exists. This holds
+   * that answer for exactly the terminals that cannot answer for themselves;
+   * the moment a mirror attaches, the real screen outranks it.
+   */
+  private backendPhase = new Map<string, { phase: TurnPhase; agent: boolean; at: number }>()
 
   /**
    * The local-producer serializer (Sol r3 P0-2c, synchronous-durable per
@@ -1944,13 +1956,94 @@ export class TurnTracker extends EventEmitter {
    * cheap question becomes O(terminals x scrollback).
    */
   phaseOf(terminalId: string): TurnPhase | undefined {
-    return this.tracked.get(terminalId)?.phase
+    return this.tracked.get(terminalId)?.phase ?? this.backendPhase.get(terminalId)?.phase
+  }
+
+  /**
+   * What the multiplexer says a MIRRORLESS terminal is doing. Null forgets it
+   * (the pane went idle, or away). A tracked terminal's own phase always
+   * wins, so this can never contradict a live screen — see backendPhase.
+   */
+  observeBackendPhase(terminalId: string, phase: TurnPhase | null, agent = true): void {
+    const current = this.backendPhase.get(terminalId)
+    if (phase === null) {
+      if (current === undefined) return
+      this.backendPhase.delete(terminalId)
+      // Resting, not blank: an unread reply must survive a herdr idle tick —
+      // seen() promises no TTL on the unread mark, and demoting to a flat
+      // 'idle' here would expire it from the outside.
+      if (!this.tracked.has(terminalId)) {
+        this.emit('activity', this.backendActivity(terminalId, this.restingPhase(terminalId), current.agent))
+      }
+      return
+    }
+    if (current?.phase === phase) return
+    this.backendPhase.set(terminalId, { phase, agent, at: Date.now() })
+    // A tracked terminal reports its own truth; announcing this one would
+    // race the real screen for the same card.
+    if (!this.tracked.has(terminalId)) {
+      this.emit('activity', this.backendActivity(terminalId, phase, agent))
+    }
+  }
+
+  /** What a mirrorless terminal rests at: unread reply, else idle. */
+  private restingPhase(terminalId: string): TurnPhase {
+    const last = this.liveHistory(terminalId).at(-1)
+    return last && last.seenAt === undefined ? 'replied' : 'idle'
+  }
+
+  /**
+   * A phase, and honestly nothing else. Every field a live mirror would fill
+   * from the screen stays empty rather than being guessed — the card shows
+   * WORKING with no invented prompt or reply under it.
+   */
+  private backendActivity(terminalId: string, phase: TurnPhase, agent: boolean): TerminalActivity {
+    return {
+      terminalId,
+      agent,
+      // The marker every consumer that needs a VERIFIED fact filters on.
+      mirrorless: true,
+      phase,
+      prompt: null,
+      pendingInput: null,
+      lines: [],
+      reply: null,
+      glance: null,
+      title: null,
+      turnCount: this.historyCount(terminalId),
+      turnStartedAt: null,
+      turnStartLine: null,
+      scrollRow: null,
+      scrollBase: null,
+      tailLines: null,
+      dispatchId: null,
+      // WHEN IT WAS OBSERVED, not when it was asked for: list() runs on every
+      // board build and roster sort, and minting `now` each time made a
+      // six-hour agent read as if it had just started.
+      updatedAt: this.backendPhase.get(terminalId)?.at ?? Date.now()
+    } satisfies TerminalActivity
+  }
+
+  /**
+   * Only what a real screen stood behind. `cookrew status` refuses to answer
+   * from herdr on purpose, the board ranks a live tail above a detector, and
+   * the clipboard/restore guards would rather read a detached agent as
+   * not-working than block on one — all of them want this, not list().
+   */
+  listVerified(): TerminalActivity[] {
+    return this.list().filter((a) => a.mirrorless !== true)
   }
 
   list(): TerminalActivity[] {
-    return [...this.tracked.keys()].map((id) => this.activityOf(id)).filter(
-      (a): a is TerminalActivity => a !== null
-    )
+    const live = [...this.tracked.keys()]
+      .map((id) => this.activityOf(id))
+      .filter((a): a is TerminalActivity => a !== null)
+    // Mirrorless terminals the backend has an opinion about, appended once
+    // each — a tracked terminal is already above and must not appear twice.
+    const skeletons = [...this.backendPhase.entries()]
+      .filter(([id]) => !this.tracked.has(id))
+      .map(([id, known]) => this.backendActivity(id, known.phase, known.agent))
+    return [...live, ...skeletons]
   }
 
   disposeAll(): void {
