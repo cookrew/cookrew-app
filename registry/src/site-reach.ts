@@ -11,6 +11,11 @@ import type { V2Desktop } from './v2-accounts'
  * nobody can read in view-source, nobody can style, and nobody can test
  * without a browser.
  *
+ * A REFUSAL BELONGS TO A ROW. A desktop that would not take the six
+ * characters sends the reader back naming itself, and the sentence goes under
+ * THAT Mac, beside the field that fixes it — a line at the top of the page
+ * makes a reader with three Macs guess which one it is about.
+ *
  * The BADGE IS NOT A FACT THE REGISTRY HAS. cookrew.dev knows the addresses a
  * desktop published; whether this phone, on this network, behind this proxy,
  * can reach any of them is only knowable from inside the page. So the server
@@ -61,12 +66,14 @@ function desktopRow(desktop: V2Desktop): string {
 <span><b>${esc(desktop.name)}</b><br><span class="meta">${workspaces}</span>
 <span class="meta" data-pair-note hidden>${PAIR_SENTENCE}</span></span>
 <span class="reach-actions">${badges()}
-<button class="btn sm primary" data-open-desktop="${id}" hidden>OPEN</button>
+<button class="btn sm primary" data-open-desktop="${id}" hidden disabled>OPEN</button>
 <button class="btn sm" data-scan="${id}" hidden>SCAN QR</button>
 <button class="btn sm" data-type-key="${id}" hidden>TYPE KEY</button>
 <button class="btn sm" data-forget-pair="${id}" hidden>FORGET KEY</button>
 <span class="pair-key" data-key-form="${id}" hidden><input class="pair-input" data-key-input="${id}" maxlength="6" size="6" spellcheck="false" autocomplete="one-time-code" autocapitalize="characters" placeholder="7KQ2M8" aria-label="The six characters beside the QR on the Mac"><button class="btn sm primary" data-key-link="${id}">LINK</button></span></span>
-<span class="meta" data-key-note hidden>${KEY_SHAPE_SENTENCE}</span></li>`
+<span class="meta" data-key-note hidden>${KEY_SHAPE_SENTENCE}</span>
+<span class="meta" data-refused-key hidden>${WRONG_KEY_SENTENCE}</span>
+<span class="meta" data-refused-device hidden>${WRONG_DEVICE_SENTENCE}</span></li>`
 }
 
 /**
@@ -83,6 +90,9 @@ export function desktopsSection(desktops: readonly V2Desktop[]): string {
 <p class="meta">Names, ids and addresses only — cookrew.dev never holds what is on a canvas. The badge is the path this browser found just now: LAN, then your tailnet, then the relay.</p>
 <p class="meta" id="reach-refused" hidden>${WRONG_KEY_SENTENCE}</p>
 <p class="meta" id="reach-refused-device" hidden>${WRONG_DEVICE_SENTENCE}</p>
+<!-- The page-level pair above is the FALLBACK, for a refusal that named no
+     desktop. A refusal that named one belongs under that row, beside the
+     field that fixes it. -->
 <ul class="doors me-list" id="me-desktops">${rows}</ul>`
 }
 

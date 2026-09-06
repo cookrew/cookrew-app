@@ -131,6 +131,12 @@
       if (el) el.hidden = !on
     }
     show('[data-open-desktop]', paired)
+    // DISABLED as well as hidden. Hidden is a fact about the layout and a
+    // stylesheet can undo it; disabled is a fact about the button, and there
+    // is no key to send, so there is nothing for a click to do but fail at
+    // the Mac with a sentence about pairing.
+    const openButton = row.querySelector('[data-open-desktop]')
+    if (openButton) openButton.disabled = !paired
     show('[data-forget-pair]', paired)
     show('[data-pair-note]', !paired)
     show('[data-type-key]', !paired)
@@ -401,6 +407,19 @@
     row.querySelector('[data-key-input]')?.focus?.()
   }
 
+  /** The two sentences a desktop can send a reader back with, under its own row. */
+  const clearRefusal = (row) => {
+    for (const selector of ['[data-refused-key]', '[data-refused-device]']) {
+      const note = row.querySelector(selector)
+      if (note) note.hidden = true
+    }
+  }
+  const showRefusal = (row, reason) => {
+    clearRefusal(row)
+    const note = row.querySelector(reason === 'device' ? '[data-refused-device]' : '[data-refused-key]')
+    if (note) note.hidden = false
+  }
+
   /** ENTER, or LINK: the six characters become this browser's key for that Mac. */
   function linkKey(deviceId) {
     const row = rowFor(deviceId)
@@ -422,13 +441,20 @@
     }
     if (input) input.value = ''
     if (note) note.hidden = true
+    clearRefusal(row)
     void refresh(row)
   }
 
   /* ── wiring ────────────────────────────────────────────────────────────── */
   list.addEventListener('keydown', (event) => {
     const el = event.target.closest?.('[data-key-input]')
-    if (!el || event.key !== 'Enter') return
+    if (!el) return
+    // The refusal was about the LAST key. The moment a new one is being typed
+    // it is stale, and a sentence that outlives what it described is a
+    // sentence a reader tries to obey.
+    const row = rowFor(el.dataset.keyInput)
+    if (row) clearRefusal(row)
+    if (event.key !== 'Enter') return
     event.preventDefault()
     linkKey(el.dataset.keyInput)
   })
@@ -448,16 +474,29 @@
     }
   })
 
-  // Sent back by a desktop that refused the key. The Mac rotates it every two
-  // minutes, so the answer is almost always "scan it again", not "you are not
-  // allowed" — and the sentence says which.
-  const refused = new URLSearchParams(location.search).get('refused')
-  // Two different mistakes with two different fixes: a key that moved on is
-  // retyped, a link that named the Mac is thrown away and the Mac opened from
-  // here again. One sentence for each, and never the other one's.
-  const refusalNote = refused === 'key' ? 'reach-refused' : refused === 'device' ? 'reach-refused-device' : null
-  if (refusalNote !== null) {
-    const note = document.getElementById(refusalNote)
+  /*
+   * COMING BACK REFUSED.
+   *
+   * The Mac rotates its six characters every two minutes, so the answer is
+   * almost always "get them again" rather than "you are not allowed". Two
+   * mistakes with two fixes: a key that moved on is retyped, a link that named
+   * the Mac is thrown away and the Mac opened from here again.
+   *
+   * THE STALE KEY IS DELETED, not kept. Keeping it left the row offering OPEN
+   * and sending the same refused characters at every press — a loop the reader
+   * cannot see the cause of, because from the outside the button simply stops
+   * working. Once it is gone the row is NEEDS PAIRING, which is true, and the
+   * field is already open with the cursor in it.
+   */
+  const query = new URLSearchParams(location.search)
+  const refused = query.get('refused')
+  const refusedDesktop = (query.get('desktop') ?? '').toLowerCase()
+  const refusedRow = refused === 'key' || refused === 'device' ? rowFor(refusedDesktop) : null
+  if (refusedRow !== null) {
+    forgetKey(refusedDesktop)
+  } else if (refused === 'key' || refused === 'device') {
+    // No desktop named — the page-level line is all that can honestly be said.
+    const note = document.getElementById(refused === 'key' ? 'reach-refused' : 'reach-refused-device')
     if (note) note.hidden = false
   }
 
@@ -483,4 +522,12 @@
   setInterval(reprobe, REPROBE_MS)
 
   reprobe()
+
+  // AFTER the first race, so `actions` has already drawn the row as NEEDS
+  // PAIRING: the field opens on top of a row that is telling the truth, with
+  // the reason under it and the cursor where the new characters go.
+  if (refusedRow !== null) {
+    typeKey(refusedDesktop)
+    showRefusal(refusedRow, refused)
+  }
 })()

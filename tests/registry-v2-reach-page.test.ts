@@ -30,6 +30,7 @@ interface Node {
   cls: string
   dataset: Record<string, string>
   hidden: boolean
+  disabled: boolean
   value: string
   focused: boolean
   focus(): void
@@ -61,6 +62,7 @@ function node(tag: string, cls = '', dataset: Record<string, string> = {}): Node
     cls,
     dataset,
     hidden: false,
+    disabled: false,
     value: '',
     focused: false,
     focus: () => {
@@ -92,6 +94,8 @@ interface Scene {
   remembered?: { kind: string; url: string | null; at: number }
   /** `?refused=…` on the way back from a desktop that would not take it. */
   refused?: string
+  /** Leave `&desktop=` off, for the fallback the page still has to answer. */
+  namesDesktop?: boolean
   /** No key held for this Mac: the NEEDS PAIRING row, with its field. */
   unpaired?: boolean
 }
@@ -109,6 +113,11 @@ interface Mounted {
   /** The row's own six-character field, as a reader meets it. */
   keyField: () => Node
   keyNote: () => Node
+  /** Which sentence sits under THIS row, if any. */
+  rowRefusal: () => 'key' | 'device' | 'none'
+  openButton: () => Node
+  /** Put characters in the field the way a person does — one key at a time. */
+  type: (text: string) => void
   keyForm: () => Node
   typeKeyButton: () => Node
   pressTypeKey: () => void
@@ -141,7 +150,11 @@ function mount(scene: Scene): Mounted {
   const linkButton = node('button', 'btn', { keyLink: deviceId })
   const keyNote = node('span', 'meta', { keyNote: '' })
   keyNote.hidden = true
-  row.children.push(keyForm, keyInput, linkButton, keyNote)
+  const refusedKeyNote = node('span', 'meta', { refusedKey: '' })
+  refusedKeyNote.hidden = true
+  const refusedDeviceNote = node('span', 'meta', { refusedDevice: '' })
+  refusedDeviceNote.hidden = true
+  row.children.push(keyForm, keyInput, linkButton, keyNote, refusedKeyNote, refusedDeviceNote)
 
   const list = node('ul', 'doors')
   list.children.push(row)
@@ -204,7 +217,10 @@ function mount(scene: Scene): Mounted {
       removeItem: (key: string) => store.delete(key)
     },
     location: {
-      search: scene.refused === undefined ? '' : `?refused=${scene.refused}`,
+      search:
+        scene.refused === undefined
+          ? ''
+          : `?refused=${scene.refused}${scene.namesDesktop === false ? '' : `&desktop=${deviceId}`}`,
       assign: (url: string) => assigned.push(url)
     },
     navigator: {},
@@ -240,6 +256,12 @@ function mount(scene: Scene): Mounted {
     openDesktop: () => click(openButton),
     keyField: () => keyInput,
     keyNote: () => keyNote,
+    rowRefusal: () => (!refusedKeyNote.hidden ? 'key' : !refusedDeviceNote.hidden ? 'device' : 'none'),
+    openButton: () => openButton,
+    type: (text) => {
+      keyInput.value = text
+      handlers.get('ul:keydown')?.({ target: keyInput, key: 'A', preventDefault: () => undefined })
+    },
     keyForm: () => keyForm,
     typeKeyButton: () => typeKeyButton,
     pressTypeKey: () => click(typeKeyButton),
@@ -416,18 +438,76 @@ describe('the server-rendered states', () => {
 // ── coming back refused ──────────────────────────────────────────────────
 
 describe('a desktop that would not take it', () => {
-  it('says the key moved on when it was the key', async () => {
+  /**
+   * THE OWNER'S BUG. The sentence appeared and nothing else changed: the
+   * refused six characters stayed in localStorage and the row went on
+   * offering OPEN, which sent the same refused characters again. From the
+   * outside the button had simply stopped working.
+   */
+  it('throws the refused key away and draws the row as NEEDS PAIRING', async () => {
     const picker = mount({ lanAnswers: true, refused: 'key' })
     await settle()
-    expect(picker.shown('reach-refused')).toBe(true)
-    expect(picker.shown('reach-refused-device')).toBe(false)
+    expect(picker.stored(`cr_pair:${picker.deviceId}`)).toBeNull()
+    expect(picker.badge()).toBe('pairing')
+    expect(picker.openButton().hidden).toBe(true)
+    expect(picker.openButton().disabled).toBe(true)
+  })
+
+  it('opens the field with the cursor in it and the reason under that row', async () => {
+    const picker = mount({ lanAnswers: true, refused: 'key' })
+    await settle()
+    expect(picker.keyForm().hidden).toBe(false)
+    expect(picker.keyField().focused).toBe(true)
+    expect(picker.rowRefusal()).toBe('key')
+    // Under the row, not at the top: a reader with three Macs must not have
+    // to guess which one the line is about.
+    expect(picker.shown('reach-refused')).toBe(false)
   })
 
   it('says the LINK named the Mac when it was the device', async () => {
     const picker = mount({ lanAnswers: true, refused: 'device' })
     await settle()
-    expect(picker.shown('reach-refused-device')).toBe(true)
-    expect(picker.shown('reach-refused')).toBe(false)
+    expect(picker.rowRefusal()).toBe('device')
+    expect(picker.stored(`cr_pair:${picker.deviceId}`)).toBeNull()
+  })
+
+  it('sends nothing at all while the refused key is gone', async () => {
+    const picker = mount({ lanAnswers: true, refused: 'key' })
+    await settle()
+    picker.openDesktop()
+    await settle()
+    expect(picker.assigned).toHaveLength(0)
+    expect(picker.asked.some((address) => address.includes('/open'))).toBe(false)
+  })
+
+  it('clears the sentence the moment new characters are typed', async () => {
+    const picker = mount({ lanAnswers: true, refused: 'key' })
+    await settle()
+    expect(picker.rowRefusal()).toBe('key')
+    picker.type('A')
+    expect(picker.rowRefusal()).toBe('none')
+  })
+
+  it('takes a fresh key and goes back to offering OPEN', async () => {
+    const picker = mount({ lanAnswers: true, refused: 'key' })
+    await settle()
+    picker.type('P7Q2M8')
+    picker.pressLink()
+    await settle()
+    expect(picker.stored(`cr_pair:${picker.deviceId}`)).toBe('P7Q2M8')
+    expect(picker.rowRefusal()).toBe('none')
+    expect(picker.badge()).toBe('lan')
+    expect(picker.openButton().hidden).toBe(false)
+    expect(picker.openButton().disabled).toBe(false)
+  })
+
+  it('falls back to the page-level line when the refusal named no desktop', async () => {
+    const picker = mount({ lanAnswers: true, refused: 'key', namesDesktop: false })
+    await settle()
+    expect(picker.shown('reach-refused')).toBe(true)
+    expect(picker.rowRefusal()).toBe('none')
+    // Nothing was named, so nothing is thrown away.
+    expect(picker.stored(`cr_pair:${picker.deviceId}`)).toBe('A2B3C4')
   })
 
   it('says nothing at all on an ordinary visit', async () => {
@@ -435,6 +515,32 @@ describe('a desktop that would not take it', () => {
     await settle()
     expect(picker.shown('reach-refused')).toBe(false)
     expect(picker.shown('reach-refused-device')).toBe(false)
+    expect(picker.rowRefusal()).toBe('none')
+  })
+})
+
+describe('OPEN needs a key in hand', () => {
+  it('is hidden and disabled on a Mac this browser has never paired with', async () => {
+    const picker = mount({ unpaired: true, lanAnswers: true })
+    await settle()
+    expect(picker.openButton().hidden).toBe(true)
+    expect(picker.openButton().disabled).toBe(true)
+    picker.openDesktop()
+    await settle()
+    expect(picker.assigned).toHaveLength(0)
+  })
+
+  it('keeps the key where it is when the open succeeds and the page goes away', async () => {
+    const picker = mount({ lanAnswers: true })
+    await settle()
+    expect(picker.openButton().disabled).toBe(false)
+    picker.openDesktop()
+    await settle()
+    expect(picker.assigned).toHaveLength(1)
+    // Nothing to undo: the navigation leaves, and the key is still here when
+    // the reader comes back to /me.
+    expect(picker.stored(`cr_pair:${picker.deviceId}`)).toBe('A2B3C4')
+    expect(picker.rowRefusal()).toBe('none')
   })
 })
 
