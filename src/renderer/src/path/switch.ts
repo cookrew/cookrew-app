@@ -1,3 +1,4 @@
+import { directAddressSpaceInit, type AddressSpaceInit } from '../local-network'
 import { classifyOrigin, type PathState } from '../../../shared/path-badge'
 
 /**
@@ -196,7 +197,21 @@ export const randomNonce = (random: (bytes: Uint8Array) => Uint8Array): string =
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
-/** One `fetch` with a deadline, answering null rather than throwing. */
+/**
+ * One `fetch` with a deadline, answering null rather than throwing.
+ *
+ * THE FIRST REQUEST TO THE HOUSE, and therefore the one that raises Chrome's
+ * Local Network Access prompt. Every candidate this is pointed at is an
+ * address on the reader's own network — that is the entire point of the race —
+ * so the annotation is unconditional here rather than derived from the URL: a
+ * candidate is only ever a `lan` or `tailnet` entry off the desktop's card,
+ * and reading the address back out of the name to decide would be a second
+ * spelling of a fact plane-switch.ts has already established.
+ *
+ * Whether the prompt should be allowed to appear AT ALL is a different
+ * question, answered before the race starts (see the permission policy in
+ * plane-switch.ts). This function only makes the request it is asked to make.
+ */
 export const askHello = async (
   url: string,
   nonce: string,
@@ -206,13 +221,14 @@ export const askHello = async (
   const timer = setTimeout(() => abort.abort(), timeoutMs)
   try {
     const response = await fetch(`${url}/api/hello?nonce=${encodeURIComponent(nonce)}`, {
+      ...directAddressSpaceInit(),
       signal: abort.signal,
       // No cookies and no credentials: the answer is a public fact about the
       // Mac, and sending anything else to an address that has not yet proved
       // it IS the Mac would be sending it to whatever answered.
       credentials: 'omit',
       cache: 'no-store'
-    })
+    } as AddressSpaceInit)
     if (!response.ok) return null
     return (await response.json()) as HelloReply
   } catch {

@@ -22,10 +22,14 @@
  *   quietly talking to something that is not the Mac, which is why nothing
  *   sets it except that one verified path.
  *
- * Pure and dependency-free on purpose: api-base.ts composes with it rather
- * than the other way round, so the composition rule below can be tested
- * without a browser and there is no import cycle to reason about.
+ * Pure on purpose: api-base.ts composes with it rather than the other way
+ * round, so the composition rule below can be tested without a browser. Its
+ * one import is local-network.ts, which imports nothing itself — the address
+ * space a request is aimed at is a property of the plane and belongs beside
+ * the credential mode, not at a call site that has to remember it.
  */
+
+import { directAddressSpaceInit, type AddressSpace } from './local-network'
 
 /** relay = same origin under the page's base; the others are absolute origins. */
 export type DataPlaneKind = 'relay' | 'lan' | 'tailnet'
@@ -89,6 +93,11 @@ export const resetDataPlane = (): void => {
  * because it answers the other question — which workspace this client is for —
  * and that is true on every path.
  */
+/** The request options a plane composes, annotation included on a direct one. */
+export type PlaneRequestInit = Pick<RequestInit, 'mode' | 'credentials'> & {
+  readonly targetAddressSpace?: AddressSpace
+}
+
 export const planePath = (
   current: DataPlane,
   base: string,
@@ -102,18 +111,30 @@ export const planePath = (
 }
 
 /**
- * The fetch options a plane needs, which differ in the one way that matters.
+ * The fetch options a plane needs, which differ in the ways that matter.
  *
  * RELAY: same origin, and the relay prefix is gated by the ACCOUNT SESSION
  * cookie — omitting credentials there would 401 every request the companion
- * makes.
+ * makes. It is NOT annotated for the local network: cookrew.dev is a public
+ * host on a public network, and claiming otherwise would ask a browser for a
+ * permission over a path that never needed one.
  *
  * DIRECT: a different origin entirely. Cookies must not travel (the Mac
  * authorises by the pairing token in an Authorization header and nothing
- * else), and the request is explicitly `cors` so a misconfigured Mac fails
- * loudly at the browser rather than being read as an empty answer.
+ * else), the request is explicitly `cors` so a misconfigured Mac fails loudly
+ * at the browser rather than being read as an empty answer, and it carries
+ * `targetAddressSpace: 'local'` because every direct origin is an address on
+ * the reader's own network. Chrome 142 blocks it outright without that
+ * annotation, and a trusted name buys no exemption — a public hostname that
+ * resolves to a private address is exactly the case Local Network Access was
+ * written for. Safe on every other browser: see local-network.ts on why an
+ * unknown `RequestInit` member is dropped rather than raised.
+ *
+ * ON EVERY REQUEST, not once. The specification requires the address-space
+ * check "for each new connection made", because a name can be re-resolved
+ * between two requests — which is the rebinding attack it exists to stop.
  */
-export const planeRequestInit = (current: DataPlane): Pick<RequestInit, 'mode' | 'credentials'> =>
+export const planeRequestInit = (current: DataPlane): PlaneRequestInit =>
   current.origin === ''
     ? { credentials: 'same-origin' }
-    : { mode: 'cors', credentials: 'omit' }
+    : { mode: 'cors', credentials: 'omit', ...directAddressSpaceInit() }
