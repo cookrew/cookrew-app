@@ -41,7 +41,7 @@ import {
 import { ASK_HTTP_STATUS, ASK_REMEDY } from '../shared/ask-outcome'
 import { ensureCert, missingHosts, sansOf } from './cert'
 import { enrichStateWithGit, handleMobileApi, MobileApiDeps, MobileOps, type ServeOps } from './mobile-api'
-import { holdSocketsOpen, readJson, respondJson } from './mobile-http'
+import { holdSocketsOpen, pairingAuthorized, readJson, respondJson } from './mobile-http'
 import { handleCallRoutes, type CallEndpointDeps } from './call-endpoints'
 import { createTlsPortGate, httpsRedirectTarget } from './tls-port-gate'
 import { sendBody } from './http-compress'
@@ -51,6 +51,7 @@ import { isViteHmrUpgrade, proxyViteHmrUpgrade } from './hmr-proxy'
 import { handleIdentityRoutes, type MobileIdentityDeps } from './mobile-identity-routes'
 import { companionAccount } from './companion-account'
 import { RELAY_BASE_HEADER, RELAY_MARKER, relayBaseOf } from './relay-base'
+import { takeRelayDevice, type RelayDevice } from './relay-device'
 import { certFingerprint, reachCard } from './reach'
 
 // Re-exported so existing importers keep their import path; the constants
@@ -774,12 +775,49 @@ function rendererSource(
   })
 }
 
+/**
+ * The phone the bridge named, once it has proved it holds the credential.
+ *
+ * TWO INDEPENDENT FACTS, and neither stands in for the other. The headers say
+ * WHO — the registry knows the caller's session and this Mac cannot — and they
+ * are believed only from the bridge (relay-device.ts). The pairing token says
+ * MAY, and it is the same check every other route on this server makes. So a
+ * named request without the token records nothing, and a request with the
+ * token and no name is served exactly as it always was; the row in the ledger
+ * needs both.
+ *
+ * A ledger that cannot be written is not a reason to refuse the request: the
+ * phone is authorised either way, and a full disk must not take the companion
+ * down with it.
+ */
+function recordBridgeDevice(
+  request: http.IncomingMessage,
+  url: URL,
+  deps: MobileServerDeps,
+  device: RelayDevice | null,
+  token: string | undefined
+): void {
+  const admitted = deps.identity?.admitted
+  if (!device || !admitted || !token) return
+  if (!pairingAuthorized(request, url, token, (candidate) => admitted.accepts(candidate))) return
+  try {
+    admitted.record(device)
+  } catch (error) {
+    console.error('Could not record the phone the relay named:', error)
+  }
+}
+
 async function handle(
   request: http.IncomingMessage,
   response: http.ServerResponse,
   deps: MobileServerDeps
 ): Promise<void> {
   const url = new URL(request.url ?? '/', `http://${request.headers.host}`)
+
+  // FIRST, and before any route can read them: the caller's own
+  // `x-cookrew-device` headers are taken off the request whatever they say, so
+  // only the bridge can name a phone here. See relay-device.ts.
+  const bridgeDevice = takeRelayDevice(request)
 
   // Step 3: /<slug>/... addresses ONE workspace session. The path is rewritten
   // to what the existing handlers expect, and `scope` carries which session
@@ -934,6 +972,7 @@ async function handle(
     companionToken: (candidate: string) => deps.identity?.admitted.accepts(candidate) ?? false,
     wallToken: activeWallToken ?? deps.wallToken
   }
+  recordBridgeDevice(request, url, deps, bridgeDevice, authed.pairingToken)
   if (await handleMobileApi(request, response, url, authed as MobileApiDeps)) return
 
   // MOVED BELOW THE DELEGATION, and that is the whole change to it.

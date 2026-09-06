@@ -26,7 +26,7 @@ describe('the admitted-devices file', () => {
 
   it('is written 0600 — it decides who opens this Mac', () => {
     const store = createAdmittedDeviceStore({ base: temp.base })
-    store.admit({ deviceId: PHONE })
+    store.record({ deviceId: PHONE })
     expect(statSync(admittedDevicesFile(temp.base)).mode & 0o777).toBe(0o600)
   })
 
@@ -40,9 +40,9 @@ describe('the admitted-devices file', () => {
   it('lists the most recently seen phone first', () => {
     let clock = 1000
     const store = createAdmittedDeviceStore({ base: temp.base, now: () => clock })
-    store.admit({ deviceId: 'a' })
+    store.record({ deviceId: 'a' })
     clock = 2000
-    store.admit({ deviceId: 'b' })
+    store.record({ deviceId: 'b' })
     expect(store.list().map((d) => d.deviceId)).toEqual(['b', 'a'])
   })
 })
@@ -57,7 +57,7 @@ describe('forgetting an admitted phone answers the question that was asked', () 
     // questions, and only the second is the one the sheet is asking. The old
     // answer reported false while succeeding, and the row came back.
     const store = createAdmittedDeviceStore({ base: temp.base })
-    store.admit({ deviceId: PHONE })
+    store.record({ deviceId: PHONE })
     expect(store.forget(PHONE)).toBe(true)
     expect(store.forget(PHONE)).toBe(true)
     expect(store.has(PHONE)).toBe(false)
@@ -69,7 +69,7 @@ describe('forgetting an admitted phone answers the question that was asked', () 
 
   it('is FALSE only when the file would not take the change', () => {
     const store = createAdmittedDeviceStore({ base: temp.base })
-    store.admit({ deviceId: PHONE })
+    store.record({ deviceId: PHONE })
     // Readable but not writable: the row can still be seen, so this is a real
     // failure to remove it rather than a "nothing was there" no-op — the one
     // case where the sheet must keep the phone on screen.
