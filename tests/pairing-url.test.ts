@@ -69,6 +69,15 @@ describe('the canonical pairing URL', () => {
     ).toBe(`https://registry.example/relay/@drej/desktop/${DEVICE}/#pair=${TOKEN}`)
   })
 
+  it('allows a plain-http registry only on loopback, where nothing is on the path', () => {
+    expect(
+      pairingUrl({ registryOrigin: 'http://127.0.0.1:8797', username: 'drej', deviceId: DEVICE, pairingToken: TOKEN })
+    ).toBe(`http://127.0.0.1:8797/relay/@drej/desktop/${DEVICE}/#pair=${TOKEN}`)
+    expect(
+      pairingUrl({ registryOrigin: 'http://registry.example', username: 'drej', deviceId: DEVICE, pairingToken: TOKEN })
+    ).toBeNull()
+  })
+
   it('is nothing at all when any part of it is missing or malformed', () => {
     const good = {
       registryOrigin: 'https://cookrew.dev',

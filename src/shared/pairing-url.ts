@@ -53,11 +53,18 @@ export type PairingUrlInput = RelayDesktopInput & {
  * https only: the fragment is the credential's only protection on the phone's
  * own screen, but the shell it loads is what will hold that credential, and a
  * shell served in the clear can be rewritten in flight by anyone on the path.
+ *
+ * THE ONE EXCEPTION IS LOOPBACK. A registry on 127.0.0.1 is a developer's own
+ * process on this same machine; nothing is on the path to rewrite anything,
+ * and refusing it would leave the real pairing flow untestable end to end.
  */
+const LOOPBACK = new Set(['127.0.0.1', '[::1]', 'localhost'])
+
 const originOf = (raw: string): string | null => {
   try {
     const url = new URL(raw)
-    if (url.protocol !== 'https:') return null
+    const clear = url.protocol === 'http:' && LOOPBACK.has(url.hostname)
+    if (url.protocol !== 'https:' && !clear) return null
     return `${url.protocol}//${url.host}`
   } catch {
     return null
