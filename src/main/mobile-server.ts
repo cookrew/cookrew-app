@@ -12,7 +12,12 @@ import {
   scopedRouteSupported
 } from './mobile-slug-route'
 import { agentStatus } from './herdr-agent-status'
-import { endpointCertHosts, mobileEndpoints, type MobileEndpoint } from './mobile-endpoints'
+import {
+  endpointCertHosts,
+  mobileEndpoints,
+  trustedOriginsOf,
+  type MobileEndpoint
+} from './mobile-endpoints'
 import { loadOrCreatePairingToken, rotatePairingToken } from './pairing-token'
 import type { VersionPinRecord } from '../shared/version-pin'
 import { readTailnetAsync, type CertHosts, type TailnetIdentity } from './tailscale'
@@ -553,21 +558,15 @@ export function mobileSelfOrigins(): string[] {
  * names will load without a warning", and an entry that is only true once the
  * certificate arrives is a promise made too early.
  *
- * Loopback is excluded for the same reason it is excluded everywhere else: a
- * phone cannot reach it.
+ * NARROWED TO THE CARD'S OWN ADDRESSES (reach-slots.ts): every `lan[]` entry
+ * plus the single `tailnet` entry when it is an IP. The registry's zone
+ * answers exactly those; it answers NXDOMAIN for a second tailnet address and
+ * cannot spell a MagicDNS name at all, and both used to be advertised here as
+ * trusted. Loopback is excluded for the same reason it is excluded everywhere
+ * else: a phone cannot reach it.
  */
 export function trustedOrigins(): string[] {
-  const seen = new Set<string>()
-  for (const endpoint of mobileEndpointList()) {
-    if (endpoint.kind === 'loopback' || endpoint.trustedUrl === undefined) continue
-    try {
-      const url = new URL(endpoint.trustedUrl)
-      seen.add(`${url.protocol}//${url.host}`)
-    } catch {
-      // Unspellable is not trusted.
-    }
-  }
-  return [...seen]
+  return trustedOriginsOf(mobileEndpointList())
 }
 
 /**

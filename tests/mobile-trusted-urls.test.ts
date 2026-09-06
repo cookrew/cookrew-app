@@ -49,16 +49,51 @@ describe('the URLs a Mac with a certificate prints', () => {
     expect(text).not.toContain('https://100.101.102.103:8643')
   })
 
-  it('drops the self-signed sentence when a trusted name is printed', () => {
+  /**
+   * THE PROMISE SITS ONLY OVER THE URLS IT IS TRUE OF.
+   *
+   * This Mac's list is mixed — two trusted names and a MagicDNS name that is
+   * served self-signed — and one footer sentence for the whole list said "a
+   * real certificate — no warning" directly above the URL that shows the
+   * interstitial. Both sentences are now printed, each bound to its own URLs
+   * by a marker.
+   */
+  it('promises no warning ONLY for the names, and marks the rest self-signed', () => {
     const trusted = renderMobileHelp({
       endpoints: endpoints(true),
       secure: true,
       uncovered: [],
       tailnet: true
     })
-    expect(trusted).not.toContain('self-signed')
     expect(trusted).toContain('no warning')
+    expect(trusted).toContain('self-signed')
+    // The MagicDNS line carries the warning marker; the names carry the tick.
+    expect(trusted).toContain('https://workbench.example-tailnet.ts.net:8643/?token=tok ⚠')
+    expect(trusted).toContain(`https://192-168-2-13.${MAC}.${ZONE}:8643/?token=tok ✓`)
+    expect(trusted).toContain(`https://100-101-102-103.${MAC}.${ZONE}:8643/?token=tok ✓`)
+  })
 
+  it('says it plainly, with no markers, when every URL is a trusted name', () => {
+    // No tailnet at all: nothing on screen is self-signed, so there is nothing
+    // to disambiguate and the one sentence is honest again.
+    const text = renderMobileHelp({
+      endpoints: mobileEndpoints({
+        addresses: ['192.168.2.13'],
+        tailnet: null,
+        secure: true,
+        token: 'tok',
+        trusted: { deviceId: MAC, zone: ZONE }
+      }),
+      secure: true,
+      uncovered: [],
+      tailnet: false
+    })
+    expect(text).toContain('These addresses have a real certificate')
+    expect(text).not.toContain('self-signed')
+    expect(text).not.toContain('✓')
+  })
+
+  it('keeps the self-signed sentence when no name is held at all', () => {
     const bare = renderMobileHelp({
       endpoints: endpoints(false),
       secure: true,

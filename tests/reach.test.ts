@@ -50,7 +50,17 @@ describe('the reach card', () => {
     expect(JSON.stringify(card)).not.toContain('token')
   })
 
-  it('puts the tailnet address in its own slot, and only one of them', () => {
+  /**
+   * THE TAILNET SLOT IS THE ADDRESS, NOT THE NAME.
+   *
+   * The MagicDNS name used to win the slot because it is the friendliest thing
+   * to print — and it is the one spelling the registry's zone can do nothing
+   * with. A wildcard under `<id>.d.cookrew.dev` cannot cover `*.ts.net`, so the
+   * card named a host nobody here can certify while the tailnet IP, which the
+   * zone answers happily, was dropped. The name is still PRINTED; it is no
+   * longer what the card carries.
+   */
+  it('puts the tailnet IPv4 in its own slot, over the MagicDNS name', () => {
     const card = reachCard({
       deviceId: 'd1',
       endpoints: [
@@ -62,8 +72,50 @@ describe('the reach card', () => {
       relay: false,
       at: AT
     })
-    expect(card.tailnet).toEqual({ url: 'https://mac.tail1.ts.net:8643', certFp: FP })
+    expect(card.tailnet).toEqual({ url: 'https://100.101.1.2:8643', certFp: FP })
     expect(card.lan).toEqual([{ url: 'https://192.168.1.24:8643', certFp: FP }])
+  })
+
+  it('prefers the tailnet IPv4 over the tailnet IPv6, and carries only one', () => {
+    const card = reachCard({
+      deviceId: 'd1',
+      endpoints: [
+        endpoint('https://[fd7a:115c:a1e0::1234]:8643/', 'tailscale', 'fd7a:115c:a1e0::1234'),
+        endpoint('https://100.101.1.2:8643/', 'tailscale', '100.101.1.2')
+      ],
+      certFp: FP,
+      relay: false,
+      at: AT
+    })
+    expect(card.tailnet).toEqual({ url: 'https://100.101.1.2:8643', certFp: FP })
+    expect(card.lan).toEqual([])
+  })
+
+  it('falls back to the tailnet IPv6 when there is no IPv4', () => {
+    const card = reachCard({
+      deviceId: 'd1',
+      endpoints: [
+        endpoint('https://mac.tail1.ts.net:8643/', 'tailscale', 'mac.tail1.ts.net'),
+        endpoint('https://[fd7a:115c:a1e0::1234]:8643/', 'tailscale', 'fd7a:115c:a1e0::1234')
+      ],
+      certFp: FP,
+      relay: false,
+      at: AT
+    })
+    expect(card.tailnet).toEqual({ url: 'https://[fd7a:115c:a1e0::1234]:8643', certFp: FP })
+  })
+
+  it('falls back to the MagicDNS name when there is no tailnet address at all', () => {
+    // A tailnet that reports only a name is the card exactly as it was before
+    // addresses were preferred — never nothing.
+    const card = reachCard({
+      deviceId: 'd1',
+      endpoints: [endpoint('https://mac.tail1.ts.net:8643/', 'tailscale', 'mac.tail1.ts.net')],
+      certFp: FP,
+      relay: false,
+      at: AT
+    })
+    expect(card.tailnet).toEqual({ url: 'https://mac.tail1.ts.net:8643', certFp: FP })
   })
 
   it('classifies a tailnet host even when the endpoint kind does not say so', () => {
@@ -408,6 +460,38 @@ describe('the two sides of the reach card agree', () => {
       at: reach.at
     }
     expect(canonicalJson(card)).toBe(registryCanonicalJson(card))
+  })
+
+  /**
+   * THE HALF THAT MADE THE NARROWING SAFE.
+   *
+   * The tailnet slot now carries an ADDRESS rather than the MagicDNS name, and
+   * an address in that slot is only useful if the registry still takes the
+   * card. It does: 100.64/10 is `tailnet` to `reachHostKind` and the tailnet
+   * IPv6 is `lan`, and `readAddress` asks only that the kind is not null.
+   */
+  it('THE REGISTRY ACCEPTS A CARD WHOSE TAILNET SLOT IS AN ADDRESS', () => {
+    const { reach, sig } = signedCard({
+      endpoints: [
+        endpoint('https://192.168.1.24:8643/?token=t', 'lan', '192.168.1.24'),
+        endpoint('https://mac.tail1.ts.net:8643/', 'tailscale', 'mac.tail1.ts.net'),
+        endpoint('https://100.101.1.2:8643/', 'tailscale', '100.101.1.2')
+      ]
+    })
+    const read = readReach(account.deviceId, jwk, { reach, sig })
+    expect(read?.tailnet).toEqual({ url: 'https://100.101.1.2:8643', certFp: FP })
+    expect(reachHostKind('https://100.101.1.2:8643')).toBe('tailnet')
+  })
+
+  it('takes the IPv6 fallback too, which it reads as a private address', () => {
+    const { reach, sig } = signedCard({
+      endpoints: [
+        endpoint('https://mac.tail1.ts.net:8643/', 'tailscale', 'mac.tail1.ts.net'),
+        endpoint('https://[fd7a:115c:a1e0::1234]:8643/', 'tailscale', 'fd7a:115c:a1e0::1234')
+      ]
+    })
+    const read = readReach(account.deviceId, jwk, { reach, sig })
+    expect(read?.tailnet).toEqual({ url: 'https://[fd7a:115c:a1e0::1234]:8643', certFp: FP })
   })
 
   it('names only hosts the registry allows', () => {

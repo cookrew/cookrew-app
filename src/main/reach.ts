@@ -2,7 +2,7 @@ import { X509Certificate, createHash } from 'node:crypto'
 import { canonicalJson } from '../shared/canonical-json'
 import type { AccountFile } from './account-v2'
 import { signWithDevice } from './account-v2'
-import { isTailnetHost } from './tailscale'
+import { reachSlots } from './reach-slots'
 
 /**
  * THE REACH CARD: how to get to this Mac, said once, signed.
@@ -52,8 +52,8 @@ export type ReachCard = {
   readonly at: string
 }
 
-/** More addresses than a machine with three interfaces has; the registry's cap. */
-export const LAN_MAX = 8
+/** The registry's own cap, decided once beside the slot rule. */
+export { LAN_MAX } from './reach-slots'
 
 export type SignedReach = {
   readonly reach: ReachCard
@@ -95,33 +95,33 @@ export type ReachInput = {
  * The card. Tailnet first because there is at most one and it is the address
  * that works off the LAN; everything else direct and verifiable is `lan`.
  *
+ * WHICH addresses land in which slot is reach-slots.ts · `reachSlots`, shared
+ * with the endpoint list so that what this Mac PRINTS as a trusted name and
+ * what the registry's zone will ANSWER are the same set by construction.
+ *
  * The LAN list is capped at the registry's own limit rather than sent long and
  * refused whole: a machine that briefly has nine interfaces (a VM bridge, a
  * VPN coming up) would otherwise lose its reach card entirely, and the ninth
  * address is never the one that matters.
  */
 export const reachCard = (input: ReachInput): ReachCard => {
-  const lan: ReachAddress[] = []
-  let tailnet: ReachAddress | null = null
+  const certFp = input.certFp
   const seen = new Set<string>()
-  for (const endpoint of input.endpoints) {
-    if (endpoint.kind === 'loopback') continue
-    const url = withoutQuery(endpoint.url)
-    if (!url || !input.certFp || seen.has(url)) continue
-    seen.add(url)
-    const address: ReachAddress = { url, certFp: input.certFp }
-    // `kind` is the server's own classification; the host check is the
-    // backstop for an endpoint list that grew a new kind name.
-    if (endpoint.kind === 'tailscale' || isTailnetHost(endpoint.host)) {
-      if (!tailnet) tailnet = address
-      continue
+  const usable: { kind: string; host: string; url: string }[] = []
+  if (certFp) {
+    for (const endpoint of input.endpoints) {
+      const url = withoutQuery(endpoint.url)
+      if (!url || seen.has(url)) continue
+      seen.add(url)
+      usable.push({ kind: endpoint.kind, host: endpoint.host, url })
     }
-    lan.push(address)
   }
+  const slots = reachSlots(usable)
   return {
     deviceId: input.deviceId,
-    lan: lan.slice(0, LAN_MAX),
-    tailnet,
+    lan: slots.lan.map((slot) => ({ url: slot.url, certFp: certFp as string })),
+    tailnet:
+      slots.tailnet === null ? null : { url: slots.tailnet.url, certFp: certFp as string },
     relay: input.relay,
     at: new Date(input.at).toISOString()
   }
