@@ -69,7 +69,47 @@ export const LATENCY = {
   // per sample (once with an open set, once blind). The cost is one stat per
   // file to find each sandbox's newest write. 2026-09-06 under load 3.9/core:
   // p50 108 / p95 111 / p98 112 (n=30).
-  storageSweepServed40: { p50: 250, p95: 400, p98: 500 }
+  storageSweepServed40: { p50: 250, p95: 400, p98: 500 },
+  // ---- L5 Tempo (perf/tempo, 2026-09-06): the residency loops ----
+  // A workspace switch under multi-instance, 8 workspaces × 20 terminals,
+  // the target not yet resident: flush the outgoing canvas (one write),
+  // load the incoming one (one read), emit. Worst of four 30-sample runs,
+  // 2026-09-06 at load 4-8/core: p50 1.10 / p95 6.45 / p98 7.17 (0.23 /
+  // 0.28 / 0.30 on the quietest). Structural: reads 1, writes 1, events 1.
+  workspaceSwitch8x20: { p50: 3, p95: 13, p98: 15 },
+  // One board-probe pass over 40 detached panes with NO herdr status, through
+  // a real HerdrHostMultiplexer whose fake reads take 15 ms each (the pass
+  // outlasts the 500 ms admission freshness window, as in the field). The
+  // sync runner is called ZERO times; what is timed is the probe's OWN
+  // main-thread hold — the sum of its synchronous segments between awaits,
+  // never the awaits. Worst of three 10-sample runs 2026-09-06 at load
+  // 3-4/core: p50 3.07 / p95 5.86 / p98 7.44. Structural: 0 sync
+  // children, listings within 1 + ceil(pass/500 ms), 40 reads, 40 phases.
+  probeTick40Detached: { p50: 7, p95: 12, p98: 15 },
+  // A GET /api/board while a 2.4 s probe pass is in flight and the previous
+  // pass gave it something to show: the read must not wait on the pass.
+  // 2026-09-06, worst of three runs at load 3-4/core: p50 0.16 / p95 0.50 /
+  // p98 1.14 (Atlas measured p95 1502 before the fix) for 30 reads paced
+  // 40 ms. Structural: no read waited (>100 ms); an EMPTY board's first read
+  // does wait, bounded at 1.5 s.
+  boardReadDuringPass: { p50: 2, p95: 5, p98: 10 },
+  // A GET /api/board on an all-attached idle fleet (the map is empty for
+  // good, the sampler self-parks) with a 300 ms listing in flight: the read
+  // answers at once because a pass has completed before. 2026-09-06, worst
+  // of three runs at load 2/core: p50 0.31 / p95 2.33 / p98 2.60 for 6 reads (was 800-900 ms each on
+  // a 900 ms listing when warm() keyed on emptiness). Structural: none
+  // waited, phases 0, and the reads did restart the probe.
+  boardReadIdleFleet: { p50: 2, p95: 5, p98: 10 },
+  // One drain tick over 40 parked sessions × 5 terminals, all resident
+  // (multi-instance), zero workspace reads. Worst of four 30-sample runs
+  // 2026-09-06 at load 4-8/core: p50 0.14 / p95 1.74 / p98 3.27.
+  drainTick40Parked: { p50: 1, p95: 4, p98: 7 },
+  // The shipped default (multiInstance false): 10 parked sessions the store
+  // evicted, registry entries alive, files on disk. The old wiring read each
+  // file twice per tick; now the observing tick reads nothing and the
+  // release tick reads each once. 2026-09-06, worst of three runs: p50 0.00 /
+  // p95 0.01 / p98 0.07. Structural: observing 0, releasing 10, after 0.
+  drainTick10ParkedSingle: { p50: 1, p95: 1, p98: 2 }
 } as const
 
 export const MEMORY = {
@@ -112,8 +152,10 @@ export const MEMORY = {
    * The map is not the whole module. Two side caches (oversized renders,
    * ill-formed bodies) each hold up to four renders under 2x the budget, so
    * the WORST CASE the module can retain is 8 + 16 + 16 = 40 MiB accounted
-   * (about 20 MB real for Latin-1 text) — and only with two notes over
-   * 8 MiB accounted and four ill-formed ones on one canvas. This budget
+   * (about 20 MB real for Latin-1 text) — and only with the map full, ONE
+   * note between 8 and 16 MiB accounted (two oversized notes can never be
+   * resident together: each is over the budget, so together they are over
+   * the cap) and up to four ill-formed bodies totalling 16 MiB. This budget
    * gates the map alone; the side-cache test in memory.perf.ts asserts the
    * 40 MiB bound with both caches populated.
    */

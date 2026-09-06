@@ -41,8 +41,10 @@ import {
   buildBoard,
   boardWindowMs,
   createProbeSampler,
+  PROBE_INTERVAL_MS,
   tmuxProbeDeps
 } from './board-index'
+import { createLoopHealth } from './loop-health'
 import { loadOrCreateReadOnlyToken } from './readonly-token'
 import { loadOrCreatePairingToken } from './pairing-token'
 import { searchTurns } from '../shared/turn-search'
@@ -135,7 +137,7 @@ import { makeCallRun } from './call-run'
 import { RecoverableStore, planRecovery } from './recoverable'
 import { EventLog } from './event-log'
 import { installProcessGuards } from './process-guards'
-import { SessionRegistry } from './session-registry'
+import { createSessionDrain, SESSION_DRAIN_TICK_MS } from './session-drain'
 import { LazyTerminalAttachments } from './lazy-terminal'
 import { planWorkspaceSwitch } from './workspace-switch'
 import { SwitchRunner } from './switch-runner'
@@ -1362,11 +1364,23 @@ async function attachServedLine(conductorId: string): Promise<LinePtyView | null
   return ptys.get(conductorId) ?? null
 }
 
+/**
+ * The main thread's own pulse — loop delay, ELU, and how long each periodic
+ * loop held the thread — read by GET /api/health and sampled hourly by
+ * scripts/perf-eval.mjs. Residency counts ride along so the O(active) claim
+ * of the residency loops can be checked against what is actually held.
+ */
+const loopHealth = createLoopHealth({
+  residency: () => ({ store: store.resident().length, registry: sessions.residentCount() })
+})
+
 const boardProbe = createProbeSampler(
   tmuxProbeDeps({
     knownTerminalIds: () => agents.list().map((entry) => entry.id),
     isAttached: (terminalId) => ptys.get(terminalId) !== undefined
-  })
+  }),
+  PROBE_INTERVAL_MS,
+  { observe: (ms) => loopHealth.observe('boardProbe', ms) }
 )
 /** Board sources incl. L2; probing restarts lazily whenever the board is read. */
 function boardSources(): ReturnType<typeof boardSourcesFrom> {
@@ -1378,7 +1392,8 @@ function boardSources(): ReturnType<typeof boardSourcesFrom> {
     probe: () => {
       boardProbe.start()
       return boardProbe.phases()
-    }
+    },
+    probeWarm: () => boardProbe.warm()
   })
 }
 const events = new EventLog()
@@ -2850,45 +2865,25 @@ function deliverPendingInject(t: TerminalNodeData): void {
  * liveness facts are read from where they already live, so there is still
  * nothing to set and nothing to leak.
  */
-const sessions = new SessionRegistry<{ id: string }>({
-  // One window today; step 4 turns this into a per-window count.
-  boundWindows: (id) => (id === store.focusedId ? 1 : 0),
+const drain = createSessionDrain({
+  store,
   // A phone or SSE reader watching any of this workspace's terminals.
-  subscribers: (id) =>
-    store.terminalIdsOf(id).reduce((n, tid) => n + sessionSync.subscriberCount(tid), 0),
+  subscriberCount: (tid) => sessionSync.subscriberCount(tid),
   // Work in flight: a terminal mid-turn is work, whoever is looking.
-  // A terminal mid-turn is work, whoever is looking — plus any remote call
-  // this workspace is currently serving, which the inferred signals cannot see
-  // during a cold fork's boot.
-  inFlightWork: (id) =>
-    store.terminalIdsOf(id).filter(hasLiveWork).length + callsInFlight.count(id),
-  hydrate: (id) => ({ id }),
-  release: (id) => {
-    // Order matters, and the comment used to lie about it: detachWorkspace
-    // RETURNS the ids, so releasing inside that loop stopped the watches
-    // AFTER the PTYs had already gone. The switch path has it right — release
-    // and untrack first, then detach — so a watch can never re-arm against a
-    // terminal being torn out from under it. Read the set, then tear down.
-    const held = store.terminalIdsOf(id)
-    for (const tid of held) {
-      sessionSync.release(tid)
-      turns.untrack(tid)
-    }
-    ptys.detachWorkspace(id)
-    store.releaseSession(id)
+  hasLiveWork,
+  // Plus any remote call this workspace is currently serving, which the
+  // inferred signals cannot see during a cold fork's boot.
+  callsInFlight: (id) => callsInFlight.count(id),
+  releaseTerminal: (tid) => {
+    sessionSync.release(tid)
+    turns.untrack(tid)
   },
-  now: () => Date.now()
+  detachWorkspace: (id) => ptys.detachWorkspace(id)
 })
-
-/** How often the drain looks; a session must be dead across two of these. */
-const SESSION_DRAIN_TICK_MS = 5_000
+const sessions = drain.sessions
 
 const sessionDrain = setInterval(() => {
-  // Materialise whatever the store is holding, then let liveness decide. The
-  // registry never PINS anything — get() deliberately does not clear the death
-  // clock, so a session that is merely resident still drains.
-  for (const id of store.resident()) sessions.get(id)
-  sessions.drainTick()
+  loopHealth.timed('sessionDrain', () => drain.tick())
 }, SESSION_DRAIN_TICK_MS)
 sessionDrain.unref?.()
 
@@ -4657,6 +4652,8 @@ app.whenReady().then(() => {
     // probe (L2) is absent until the tmux sampler lands; rows then degrade to
     // their last known task rather than claiming a phase nobody observed.
     board: boardSources(),
+    // The main thread's pulse (loop-health.ts) for GET /api/health.
+    health: () => loopHealth.snapshot(),
     // Attach-free dispatch (v4 §3): the two /api routes answer 503 without it.
     dispatch: dispatchService,
     // While a dispatch is armed, the HTTP input/ask producers refuse 409 —
@@ -4862,6 +4859,7 @@ app.on('before-quit', (event) => {
   // reads the ledger after the restart.
   clearInterval(dispatchSweep)
   clearInterval(sessionDrain)
+  loopHealth.stop()
   // Latch FIRST: no new ask may register after the drain snapshot begins
   // (Sol r11) — then interrupt commissioned work and retire the lease
   // generations, firing the abort seam into everything still in flight.

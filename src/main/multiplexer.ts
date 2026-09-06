@@ -237,6 +237,16 @@ export interface Multiplexer {
   capture(name: string): string | null
 
   /**
+   * The inventory and a pane read OFF the main thread, for callers that run
+   * on a timer (the board probe). Optional: only a backend with an async
+   * runner can answer; the probe falls back to the synchronous reads above.
+   * The herdr host has both; a listing it takes also refreshes the cached
+   * admission inventory, so the read that follows resolves its pane.
+   */
+  listSessionsAsync?(): Promise<string[]>
+  captureAsync?(name: string): Promise<string | null>
+
+  /**
    * The same read, but reaching back `lines` rows into scrollback.
    *
    * `capture` is bounded — visible rows on tmux, a fixed recent window on

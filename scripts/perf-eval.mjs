@@ -17,7 +17,10 @@
  *   MEMORY   samples RSS of the app's own processes (main, renderer, gpu,
  *            utility) through ps — nothing is injected into the app. Rising
  *            is the slope over the trailing three hours FOR THE SAME PID, in
- *            MB/hour; a restart starts a new line.
+ *            MB/hour; a restart starts a new line. The main row also carries
+ *            the app's own event-loop delay (GET /api/health: p50/p95/p98/max
+ *            over its last minute, plus ELU and per-loop tick maxima), so a
+ *            stall can be told apart from a loaded machine.
  *   LATENCY  two sources. The event log's own durations (turn.completed,
  *            workspace.switched, terminal.booted) over the trailing day, and
  *            an HTTP probe of the companion API on localhost — N samples per
@@ -40,6 +43,7 @@ import {
   fmtMs,
   judge,
   latencyFromEvents,
+  loopFromHealth,
   orphanSidecars,
   parsePsTable,
   percentiles,
@@ -243,7 +247,7 @@ function evalStorage(opts, now) {
 // MEMORY
 // ---------------------------------------------------------------------------
 
-function evalMemory(opts, now) {
+async function evalMemory(opts, now) {
   let table = ''
   try {
     table = execFileSync('ps', ['-Ao', 'pid,ppid,rss,etime,args'], { encoding: 'utf8', maxBuffer: 64 * MB })
@@ -251,12 +255,19 @@ function evalMemory(opts, now) {
     return { processes: [], checks: [], verdict: 'ok', note: `ps failed: ${error.message}` }
   }
   const processes = pickAppProcesses(parsePsTable(table))
-  for (const p of processes) appendHistory(opts.history, 'memory', { t: now, ...p })
+  const health = processes.length ? await probeHealth(opts) : { loop: null, note: '' }
+  for (const p of processes) {
+    const loop = p.role === 'main' && health.loop ? { loop: health.loop } : {}
+    appendHistory(opts.history, 'memory', { t: now, ...p, ...loop })
+  }
   const recent = readHistory(opts.history, 'memory', now - 3 * HOUR)
+  const load = loadPerCore()
+  const capped = (verdict) => (load > LOADED_PER_CORE && verdict === 'fail' ? 'warn' : verdict)
   const checks = []
   for (const p of processes) {
     const budget = BUDGETS.memory.rssMb[p.role]
     checks.push({ name: `${p.role} rss (pid ${p.pid})`, value: p.rssMb, unit: 'MB', verdict: judge(p.rssMb, budget) })
+    if (p.role === 'main') checks.push(loopCheck(p, health, load, capped))
     const line = recent.filter((r) => r.pid === p.pid).map((r) => ({ t: r.t, value: r.rssMb }))
     const slope = slopePerHour(line)
     checks.push({
@@ -268,7 +279,51 @@ function evalMemory(opts, now) {
     })
   }
   if (processes.length === 0) checks.push({ name: 'app', value: null, unit: '', verdict: 'ok', note: 'not running' })
-  return { processes, checks, verdict: worstOf(checks.map((c) => c.verdict)) }
+  return { processes, loop: health.loop, checks, verdict: worstOf(checks.map((c) => c.verdict)) }
+}
+
+/**
+ * The main process's own event loop, read from GET /api/health. Absent on a
+ * build without the route (404), an unpaired store, or a --no-probe run —
+ * reported as a note, never as a failure, because a missing instrument is
+ * not a slow app.
+ */
+async function probeHealth(opts) {
+  if (!opts.probe) return { loop: null, note: 'probe skipped' }
+  const token = readToken(opts.base)
+  if (!token) return { loop: null, note: 'no pairing token' }
+  try {
+    const res = await fetch(`http://127.0.0.1:${opts.port}/api/health`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+    })
+    if (res.status === 404) return { loop: null, note: 'no /api/health in this build' }
+    if (res.status !== 200) return { loop: null, note: `health answered ${res.status}` }
+    const loop = loopFromHealth(await res.json())
+    return loop ? { loop, note: '' } : { loop: null, note: 'health body unrecognised' }
+  } catch {
+    return { loop: null, note: 'app not answering' }
+  }
+}
+
+function loopCheck(p, health, load, capped) {
+  const name = `main loop delay (pid ${p.pid})`
+  if (!health.loop) return { name, value: null, unit: '', verdict: 'ok', note: health.note }
+  const { loop } = health
+  const verdict = judge(loop.p95, BUDGETS.memory.loopDelayP95Ms)
+  const worstLoop = Object.entries(loop.loops).sort((a, b) => b[1].max - a[1].max)[0]
+  const elu = loop.elu === null ? '' : ` busy ${Math.round(loop.elu * 100)}%`
+  const held = worstLoop ? ` · ${worstLoop[0]} max ${fmtMs(worstLoop[1].max)}` : ''
+  const shaped = load > LOADED_PER_CORE && verdict !== 'ok' ? ` (load ${load.toFixed(1)}/core — capped at WARN)` : ''
+  return {
+    name,
+    value: loop.p95,
+    unit: 'ms p95',
+    verdict: capped(verdict),
+    note:
+      `${loop.window} n=${loop.samples} p50=${fmtMs(loop.p50)} p98=${fmtMs(loop.p98)} ` +
+      `max=${fmtMs(loop.max)}${elu}${held}${shaped}`
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -449,7 +504,7 @@ export async function run(argv = process.argv.slice(2)) {
 async function runLocked(opts) {
   const now = Date.now()
   const storage = evalStorage(opts, now)
-  const memory = evalMemory(opts, now)
+  const memory = await evalMemory(opts, now)
   const latency = await evalLatency(opts, now)
   const verdict = worstOf([storage.verdict, memory.verdict, latency.verdict])
   const report = { at: new Date(now).toISOString(), verdict, storage, memory, latency }

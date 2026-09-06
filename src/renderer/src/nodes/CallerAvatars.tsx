@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   CALLER_AVATAR_LIMIT,
   callerSentence,
@@ -7,6 +7,7 @@ import {
   type ServedCallersRow
 } from '../../../shared/seats'
 import { cookrew } from '../api'
+import { useServedCallers } from '../served-callers-store'
 
 /**
  * D7 — THE CALLERS AT A SERVED DOOR, on the card that is the door.
@@ -72,52 +73,12 @@ export function callerHue(username: string): number {
 }
 
 /**
- * ONE subscription for every card. The push from main is the same payload
- * for all of them, and every card subscribing on its own meant a canvas of
- * thirty cards was thirty IPC listeners each parsing it — Electron's
- * "11 serving:callers listeners" warning filling the log (measured
- * 2026-09-06), and the work multiplied by cards. Main is listened to once;
- * the cards watch this, and the listener goes away with the last card.
+ * Live callers at this desktop's doors, pushed from main. Lives in
+ * served-callers-store.ts now — one IPC subscription shared by every card,
+ * where this used to be one per mounted card — and is re-exported here so the
+ * name and the return type stay where callers found them.
  */
-type Watcher = (rows: readonly ServedCallersRow[]) => void
-let sharedRows: readonly ServedCallersRow[] = []
-const watchers = new Set<Watcher>()
-let unsubscribeMain: (() => void) | null = null
-
-function publish(rows: readonly ServedCallersRow[]): void {
-  sharedRows = rows
-  for (const watcher of watchers) watcher(rows)
-}
-
-function watchServedCallers(watcher: Watcher): () => void {
-  watchers.add(watcher)
-  if (unsubscribeMain === null) {
-    const api = cookrew()
-    if (api.servingCallers) {
-      void api
-        .servingCallers()
-        .then(publish)
-        .catch(() => undefined)
-    }
-    unsubscribeMain = api.onServingCallers?.(publish) ?? ((): void => undefined)
-  } else {
-    watcher(sharedRows)
-  }
-  return () => {
-    watchers.delete(watcher)
-    if (watchers.size === 0 && unsubscribeMain !== null) {
-      unsubscribeMain()
-      unsubscribeMain = null
-    }
-  }
-}
-
-/** Live callers at this desktop's doors, pushed from main. */
-export function useServedCallers(): readonly ServedCallersRow[] {
-  const [rows, setRows] = useState<readonly ServedCallersRow[]>(sharedRows)
-  useEffect(() => watchServedCallers(setRows), [])
-  return rows
-}
+export { useServedCallers }
 
 export function CallerAvatars({
   callers,

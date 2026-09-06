@@ -137,16 +137,18 @@ const noteMarked = new Marked({
  *     renders under SIDE_CACHE_MAX_FACTOR budgets, and a render above that
  *     cap is not kept at all, so "bounded" stays true of the whole module:
  *     WORST CASE 8 + 16 + 16 = 40 MiB accounted (map + two side caches),
- *     never "plus the largest note ever rendered". Two is the factor and not
- *     four because 72 MiB accounted is 5% of the ceiling iOS kills the
- *     renderer at, for a shape no real canvas has, and a note that only
- *     fits at four budgets is 8–16M chars of HTML — a DOM that is broken
- *     before the cache matters. The cliff that leaves: two OVERSIZED notes
- *     (over 8 MiB accounted each) on one canvas cannot both be held and
- *     thrash the side cache, one full parse per render each. Named, not
- *     solved: that is 70x the largest note ever measured. Ill-formed notes
- *     are the realistic case and are small, so up to four of them share
- *     the 16 MiB;
+ *     never "plus the largest note ever rendered". Why the factor is two:
+ *     the cap exists to hold the ONE realistic oversized note (between 8
+ *     and 16 MiB accounted, still 35x the largest ever measured) without a
+ *     re-parse per render, and every budget above that buys memory for a
+ *     note that would be 8M+ chars of HTML — a DOM that is broken before
+ *     the cache matters — at 8 MiB of the ceiling iOS kills the renderer
+ *     at, per budget, per side. The cliff that leaves: two OVERSIZED notes
+ *     on one canvas cannot both be held (each is over the budget, so
+ *     together they are over the 2x cap) and thrash the side cache, one
+ *     full parse per render each. Named, not solved: that is 70x the
+ *     largest note ever measured. Ill-formed notes are the realistic case
+ *     and are small, so up to four of them share the 16 MiB;
  *   - marked keeps the LAST PARSE TREE alive through the custom renderer
  *     (Parser assigns itself to renderer.parser, and the tree hangs off it):
  *     measured 46 MB after one 1.3M-char parse. An empty parse afterwards
@@ -175,9 +177,9 @@ interface CacheEntry {
  * A few renders outside the main map, under their own byte cap: insertion
  * order, oldest out first, and a render that would not fit alone is not kept.
  * Matched by the hash key (oversized) or the source itself (ill-formed, which
- * cannot be hashed).
+ * cannot be hashed). Exported for its unit test only.
  */
-class SideCache {
+export class SideCache {
   private readonly entries = new Map<string, CacheEntry>()
   private total = 0
 
@@ -191,6 +193,13 @@ class SideCache {
 
   put(match: string, html: string, bytes: number, maxBytes: number): void {
     if (bytes > maxBytes) return
+    // Overwriting a key replaces its bytes; it must not add to them. Both
+    // call sites get() first today, so this is the guard for the next one.
+    const prior = this.entries.get(match)
+    if (prior !== undefined) {
+      this.entries.delete(match)
+      this.total -= prior.bytes
+    }
     for (const [key, entry] of this.entries) {
       if (this.total + bytes <= maxBytes && this.entries.size < SIDE_CACHE_MAX_ENTRIES) break
       this.entries.delete(key)
