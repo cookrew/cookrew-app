@@ -1,21 +1,36 @@
 import type { ListedDoor } from './site'
 import type { PresetSummary } from './store'
+import type { Commit } from './github-commits'
 import { FRAMES, frameImg, frameUrl, type Frame } from './site-frames'
 import { GITHUB_REPO, esc, page, type Page } from './site-shell'
 import { RELEASES_PAGE, pickAsset, type Release } from './releases'
 import type { DoorPulse } from './pulse'
-import { DEFINITION, FACTS, FEATURES, HEADLINE } from './site-content'
-import { organization, softwareApplication, teamList, webPage } from './site-seo'
+import {
+  DEFINITION,
+  FACTS,
+  FAQ,
+  HEADLINE,
+  START_FAQ,
+  START_HOWTO as HOWTO
+} from './site-content'
+import { commitsSection, compareTable, featuresGrid } from './site-features'
+import { faqPage, organization, softwareApplication, teamList, webPage } from './site-seo'
 
 /**
- * THE FRONT PAGE — short on purpose.
+ * THE FRONT PAGE — one page, top to bottom (owner ruling, 2026-09-06).
  *
- * Three things, in this order: what Cookrew is and where to get it, the
- * market (served teams and presets, real, with today's numbers), and one
- * line per feature that leads to its own page. Everything longer — the
- * recorded sequences, the comparison, the FAQ, the commits — lives on the
- * pages a reader clicks into, so this one can be read in a minute and still
- * says the sentence an answer engine quotes.
+ * What used to be three pages is one, in the order a newcomer reads: what
+ * Cookrew is and the download, then GET STARTED (the two steps and the crew
+ * builder), then the FEATURES (every one with its recorded frame, the
+ * comparison, the questions, the commits), then the live market. The header's
+ * FEATURES, GET STARTED and DOWNLOAD buttons are anchors into this page; the
+ * old /start and /features addresses redirect to them. A feature's own page
+ * (/features/<slug>) stays — that is the long tail, and the cards lead there.
+ *
+ * A DOCUMENT page, still: no script, no form, no handler (the site tests hold
+ * the front page to that, and an owner's page with it). So the crew builder's
+ * interactive half — tick harnesses, copy the commands — did not move here;
+ * the commands it writes are shown as they are, which is what a reader pastes.
  */
 
 export interface HomeInput {
@@ -27,6 +42,8 @@ export interface HomeInput {
   pulse: (handle: string, name: string) => DoorPulse
   /** Lines opened at every door today. */
   linesToday: number
+  /** The latest commits on dev, for the PROOF section; null when GitHub has not answered. */
+  commits?: readonly Commit[] | null
 }
 
 /** The definition's first sentence: enough to quote, short enough to read. */
@@ -78,19 +95,53 @@ export function presetCard(p: PresetSummary): string {
 </article>`
 }
 
+/** The download links, at the top of the page — the DOWNLOAD button lands here. */
 function downloadButtons(release: Release | null): string {
   const mac = release ? pickAsset(release, 'mac') : null
   const win = release ? pickAsset(release, 'windows') : null
   const date = release?.publishedAt ? release.publishedAt.slice(0, 10) : ''
-  return `<p class="row"><a class="btn primary lg" href="${mac ? esc(mac.url) : '/download'}">⬇ Download for macOS</a>${win ? `<a class="btn lg" href="${esc(win.url)}">Windows preview</a>` : ''}<a class="btn lg" href="${GITHUB_REPO}" target="_blank" rel="noopener">Source ↗</a></p>
-<p class="meta">${release ? `v${esc(release.version)}${date ? ` · ${esc(date)}` : ''}` : `<a href="${RELEASES_PAGE}">latest release</a>`} · ${FACTS.license} · Apple Silicon, Windows preview · <a href="/start">get started →</a></p>`
+  return `<p class="row" id="download"><a class="btn primary lg" href="${mac ? esc(mac.url) : '/download'}">⬇ Download for macOS</a>${win ? `<a class="btn lg" href="${esc(win.url)}">Windows preview</a>` : ''}<a class="btn lg" href="${GITHUB_REPO}" target="_blank" rel="noopener">Source ↗</a></p>
+<p class="meta">${release ? `v${esc(release.version)}${date ? ` · ${esc(date)}` : ''}` : `<a href="${RELEASES_PAGE}">latest release</a>`} · ${FACTS.license} · Apple Silicon, Windows preview · Node 20+ · tmux or herdr · <a href="#start">get started ↓</a></p>`
+}
+
+/** GET STARTED: the two steps, the crew builder, and the two questions people ask first. */
+function startSection(): string {
+  return `<section id="start"><div class="wrap">
+<p class="kicker"><span class="no">START</span>two steps to a working crew</p>
+<h2>Get started</h2>
+<ol class="howto two">${HOWTO.map((s, i) => `<li${i === 1 ? ' id="serve"' : ''}><h3>${esc(s.name)}</h3><p>${esc(s.text)}</p><ul class="pts">${s.detail.map((d) => `<li>${esc(d)}</li>`).join('')}</ul></li>`).join('')}</ol>
+
+<h3 id="build" style="margin-top:26px">What your orch runs</h3>
+<p>These are the commands the orchestrator runs when you ask it for teammates — or paste them yourself into any terminal with Cookrew running. Any of ${esc(FACTS.harnesses.filter((h) => h !== 'Shell').join(', '))} goes after <code>--preset</code>.</p>
+<div class="card soft" id="crew-commands">
+<code class="cmd">$ cookrew recruit "Forge" --preset "Claude Code" --role "builder"
+$ cookrew recruit "Bench" --preset "Codex" --role "reviewer"
+$ cookrew connect "Forge" "Bench"
+$ cookrew orch "Forge"</code>
+<p class="meta" style="margin:10px 0 0">Names are placeholders; rename them on the canvas. The first one is the orchestrator.</p>
+</div>
+<div class="faq" style="margin-top:18px">${START_FAQ.map((f) => `<details><summary>${esc(f.q)}</summary><p>${esc(f.a)}</p></details>`).join('')}</div>
+</div></section>`
+}
+
+/** FEATURES: every one with its recorded frame, then what each thing can do, the questions, the proof. */
+function featuresSection(commits: readonly Commit[] | null): string {
+  return `<section id="features"><div class="wrap">
+<p class="kicker"><span class="no">FEATURES</span>recorded, not described</p>
+<h2>What Cookrew does</h2>
+<p class="lede">${esc(DEFINITION)}</p>
+${featuresGrid()}
+<h3 id="compare" style="margin-top:32px">A chat tab, one CLI agent, or a team</h3>${compareTable()}
+<h3 id="faq" style="margin-top:32px">Questions and answers</h3><div class="faq">${FAQ.map((f) => `<details><summary>${esc(f.q)}</summary><p>${esc(f.a)}</p></details>`).join('')}</div>
+</div></section>
+${commitsSection(commits)}`
 }
 
 function marketSection(input: HomeInput): string {
   const serving = input.doors.filter((d) => d.live !== false).length
   const teams = input.doors.slice(0, 6).map((d) => teamCard(d, input.stars(d.handle, d.name), input.pulse(d.handle, d.name)))
   const presets = input.presets.slice(0, 6).map(presetCard)
-  const serveYours = `<article class="team" style="border-style:dashed;box-shadow:none"><div class="body" style="justify-content:center;text-align:center;padding:26px 16px"><h3 style="margin:0 0 6px">Serve yours</h3><p>Save a team in the app, press SERVE. It is listed here while your relay connection is up.</p><p class="row" style="justify-content:center;margin-top:12px"><a class="btn primary" href="/start#serve">How →</a></p></div></article>`
+  const serveYours = `<article class="team" style="border-style:dashed;box-shadow:none"><div class="body" style="justify-content:center;text-align:center;padding:26px 16px"><h3 style="margin:0 0 6px">Serve yours</h3><p>Save a team in the app, press SERVE. It is listed here while your relay connection is up.</p><p class="row" style="justify-content:center;margin-top:12px"><a class="btn primary" href="#serve">How ↑</a></p></div></article>`
   return `<section id="market"><div class="wrap">
 <p class="kicker"><span class="no">MARKET</span>${serving} serving now · ${input.linesToday} line${input.linesToday === 1 ? '' : 's'} opened today</p>
 <h2>Teams you can open right now</h2>
@@ -98,15 +149,6 @@ function marketSection(input: HomeInput): string {
 ${input.doors.length === 0 ? `<p class="empty">Nobody is serving a team here yet.</p>` : ''}<div class="teams">${teams.join('')}${serveYours}</div>
 ${presets.length > 0 ? `<h3 style="margin-top:26px">Presets to download</h3><div class="teams">${presets.join('')}</div>` : ''}
 <p class="row" style="margin-top:18px"><a class="btn primary" href="/market">Explore the marketplace →</a></p>
-</div></section>`
-}
-
-function featuresSection(): string {
-  return `<section id="features"><div class="wrap">
-<p class="kicker"><span class="no">FEATURES</span>one line each · recorded on the pages</p>
-<h2>What is in the app</h2>
-<ul class="one-liners">${FEATURES.map((f) => `<li><a href="/features/${f.slug}"><b>${esc(f.title)}</b></a><span>${esc(f.short)}</span></li>`).join('')}</ul>
-<p class="row" style="margin-top:14px"><a class="btn" href="/features">All features, with recorded steps →</a><a class="btn" href="/features#faq">Questions →</a></p>
 </div></section>`
 }
 
@@ -123,6 +165,13 @@ export function homePage(input: HomeInput): Page {
         organization(),
         softwareApplication(input.release),
         webPage({ path: '/', name: 'Cookrew', description: DEFINITION }),
+        {
+          '@type': 'HowTo',
+          name: 'Get started with Cookrew',
+          description: 'Place an agent and let it orchestrate your workflow; save the team as a preset and choose to publish it.',
+          step: HOWTO.map((s, i) => ({ '@type': 'HowToStep', position: i + 1, name: s.name, text: s.text }))
+        },
+        faqPage([...START_FAQ, ...FAQ]),
         teamList(input.doors)
       ]
     },
@@ -135,8 +184,10 @@ ${downloadButtons(input.release)}</div>
 <div>${figure(FRAMES.canvas, { eager: true })}</div>
 </div></div>
 
-${marketSection(input)}
+${startSection()}
 
-${featuresSection()}`
+${featuresSection(input.commits ?? null)}
+
+${marketSection(input)}`
   )
 }

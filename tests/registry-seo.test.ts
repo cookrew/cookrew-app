@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { faqPage, jsonLd, robotsTxt, sitemapXml, softwareApplication, teamProduct } from '../registry/src/site-seo'
 import { DEFINITION, FAQ, FEATURES, llmsText } from '../registry/src/site-content'
 import { parseCommits } from '../registry/src/github-commits'
-import { featurePage, featuresIndexPage } from '../registry/src/site-features'
-import { startPage } from '../registry/src/site-start'
+import { featurePage } from '../registry/src/site-features'
+import { homePage } from '../registry/src/site-home'
 import type { ListedDoor } from '../registry/src/site'
 
 /**
@@ -70,7 +70,10 @@ describe('the crawl files', () => {
     const xml = sitemapXml([door, { ...door, name: 'b<c', handle: 'mira' }])
     expect(xml).toContain('<loc>https://cookrew.dev/</loc>')
     expect(xml).toContain('<loc>https://cookrew.dev/market</loc>')
-    expect(xml).toContain('<loc>https://cookrew.dev/start</loc>')
+    // /start and /features are sections of the homepage now; a fragment is
+    // not a sitemap URL, and the old addresses redirect.
+    expect(xml).not.toContain('<loc>https://cookrew.dev/start</loc>')
+    expect(xml).not.toContain('<loc>https://cookrew.dev/features</loc>')
     for (const f of FEATURES) expect(xml).toContain(`<loc>https://cookrew.dev/features/${f.slug}</loc>`)
     expect(xml).toContain('<loc>https://cookrew.dev/drej/cookrew-alpha</loc><priority>0.8</priority>')
     expect(xml).not.toContain('lastmod')
@@ -105,20 +108,30 @@ describe('the feature and start pages', () => {
     expect(featurePage('../x')).toBeNull()
   })
 
-  it('the index links every feature', () => {
-    const index = featuresIndexPage({ commits: [{ sha: 'a7e1d0b', title: 'feat: the web line', date: '2026-09-03', url: 'https://github.com/cookrew/cookrew-app/commit/a7e1d0b' }] })
-    for (const f of FEATURES) expect(index.body).toContain(`href="/features/${f.slug}"`)
-    expect(index.body).toContain('"@type":"FAQPage"')
-    expect(index.body).toContain('feat: the web line')
+  // The features index and the start page are sections of the homepage now
+  // (2026-09-06); what they promised a crawler, the homepage promises.
+  const home = homePage({
+    doors: [],
+    presets: [],
+    release: null,
+    commits: [{ sha: 'a7e1d0b', title: 'feat: the web line', date: '2026-09-03', url: 'https://github.com/cookrew/cookrew-app/commit/a7e1d0b' }],
+    stars: () => 0,
+    pulse: () => ({ lines: 0, calls: 0 }),
+    linesToday: 0
   })
 
-  it('the start page is a HowTo with the crew builder', () => {
-    const start = startPage(null)
-    expect(start.headers['content-security-policy']).toContain("script-src 'self'")
-    expect(start.body).toContain('"@type":"HowTo"')
-    expect(start.body).toContain('id="crew-builder"')
-    expect(start.body).toContain('cookrew recruit')
-    expect(start.body).toContain('href="https://github.com/cookrew/cookrew-app/releases/latest"')
+  it('the homepage links every feature, with the questions and the commits', () => {
+    for (const f of FEATURES) expect(home.body).toContain(`href="/features/${f.slug}"`)
+    expect(home.body).toContain('"@type":"FAQPage"')
+    expect(home.body).toContain('feat: the web line')
+  })
+
+  it('the homepage is a HowTo with the commands the orch runs, and stays a document', () => {
+    expect(home.headers['content-security-policy']).toContain("script-src 'none'")
+    expect(home.body).toContain('"@type":"HowTo"')
+    expect(home.body).toContain('id="crew-commands"')
+    expect(home.body).toContain('cookrew recruit')
+    expect(home.body).toContain('href="https://github.com/cookrew/cookrew-app/releases/latest"')
   })
 })
 

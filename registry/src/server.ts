@@ -807,15 +807,20 @@ export function createRegistry(deps: RegistryDeps): Server {
 
       if (parts.length === 0) {
         deps.pulse?.page('/')
-        void (deps.releases?.latest() ?? Promise.resolve<Release | null>(null))
-          .catch(() => null)
-          .then((release) => {
+        // The release and the commits are two GitHub reads; neither may hold
+        // the page, and either missing renders as "not answered yet".
+        void Promise.all([
+          (deps.releases?.latest() ?? Promise.resolve<Release | null>(null)).catch(() => null),
+          (deps.commits?.latest() ?? Promise.resolve(null)).catch(() => null)
+        ])
+          .then(([release, commits]) => {
             respondPage(
               response,
               homePage({
                 doors: site.list().map(withLive),
                 presets: store.list(),
                 release,
+                commits,
                 stars: starsOf,
                 pulse: pulseOf,
                 linesToday: deps.pulse?.linesToday() ?? 0

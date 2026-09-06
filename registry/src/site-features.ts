@@ -1,24 +1,22 @@
 import { FRAMES, frameImg, type Frame } from './site-frames'
 import { esc, page, type Page } from './site-shell'
-import { COMPARE, DEFINITION, FAQ, FEATURES, GITHUB_REPO, type FeatureSpec } from './site-content'
+import { COMPARE, DEFINITION, FEATURES, GITHUB_REPO, type FeatureSpec } from './site-content'
 import type { Commit } from './github-commits'
 import { SEQUENCES, type Step } from './site-sequences'
 import { breadcrumbs, faqPage, organization, webPage } from './site-seo'
 
-export interface FeaturesIndexInput {
-  commits: readonly Commit[] | null
-}
-
 /**
  * FEATURE PAGES — one page per question people ask about the product.
  *
- * The homepage owns the brand; these own the long tail: "run claude code and
- * codex together", "ai agent checkpoints", "agent team marketplace". Each
- * page is the same shape — an intent-shaped H1, the definition in one
- * paragraph, the recorded step sequence QA captured (a picture per step,
- * with what was done in the past tense), the points, its own FAQ, and links
- * to the features it touches — so a reader who lands on any of them learns
- * the product and finds the next page.
+ * The homepage owns the brand and, since 2026-09-06, the features overview
+ * too (site-home.ts renders the grid, the comparison and the commits from
+ * here); these own the long tail: "run claude code and codex together", "ai
+ * agent checkpoints", "agent team marketplace". Each page is the same shape
+ * — an intent-shaped H1, the definition in one paragraph, the recorded step
+ * sequence QA captured (a picture per step, with what was done in the past
+ * tense), the points, its own FAQ, and links to the features it touches — so
+ * a reader who lands on any of them learns the product and finds the next
+ * page.
  */
 
 function stepFigure(step: Step, index: number): string {
@@ -55,14 +53,14 @@ export function featurePage(slug: string): Page | null {
         webPage({ path, name: f.title, description: f.definition }),
         breadcrumbs([
           { name: 'Cookrew', path: '/' },
-          { name: 'Features', path: '/features' },
+          { name: 'Features', path: '/#features' },
           { name: f.title, path }
         ]),
         faqPage(f.faq)
       ]
     },
     `<div class="wrap" style="padding-top:36px">
-<p class="meta"><a href="/">Cookrew</a> / <a href="/features">Features</a> / ${esc(f.slug)}</p>
+<p class="meta"><a href="/">Cookrew</a> / <a href="/#features">Features</a> / ${esc(f.slug)}</p>
 <h1>${esc(f.title)}</h1>
 <p class="lede">${esc(f.definition)}</p>
 <ul class="pts">${f.pts.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>
@@ -80,13 +78,13 @@ export function featurePage(slug: string): Page | null {
   )
 }
 
-function compareTable(): string {
+export function compareTable(): string {
   return `<table class="cmp"><caption>Chat tab, single agent CLI, or Cookrew — what each can do (2026-09)</caption><thead><tr><th></th><th>A chat tab</th><th>One CLI agent</th><th>Cookrew</th></tr></thead><tbody>${COMPARE.map(
     (r) => `<tr><th scope="row">${esc(r.question)}</th><td>${esc(r.chat)}</td><td>${esc(r.singleAgent)}</td><td><b>${esc(r.cookrew)}</b></td></tr>`
   ).join('')}</tbody></table>`
 }
 
-function commitsSection(commits: readonly Commit[] | null): string {
+export function commitsSection(commits: readonly Commit[] | null): string {
   if (!commits || commits.length === 0) return ''
   return `<section id="built"><div class="wrap"><p class="kicker"><span class="no">PROOF</span>built in the open, by its own crew</p><h2>What landed on the dev branch</h2>
 <p>Cookrew is developed on its own canvas by a crew of agents — Forge writes features, Tinker fixes bugs, Magpie runs QA, Conductor directs — and every recorded frame on these pages comes from that canvas. These are the latest commits, straight from GitHub.</p>
@@ -96,30 +94,15 @@ function commitsSection(commits: readonly Commit[] | null): string {
     .join('')}</ol></div></section>`
 }
 
-export function featuresIndexPage(input: FeaturesIndexInput = { commits: null }): Page {
-  return page(
-    {
-      title: 'Cookrew features — canvas, harnesses, checkpoints, Board, CLI, phone, workspaces, marketplace',
-      kind: 'document',
-      active: 'features',
-      description: 'Every Cookrew feature, each with recorded frames from the running app: the canvas, multi-harness teams, checkpoints, the Board, the CLI, the phone companion, workspaces and the marketplace.',
-      path: '/features',
-      jsonLd: [organization(), webPage({ path: '/features', name: 'Cookrew features', description: DEFINITION }), breadcrumbs([{ name: 'Cookrew', path: '/' }, { name: 'Features', path: '/features' }]), faqPage(FAQ)]
-    },
-    `<div class="wrap" style="padding-top:44px">
-<p class="kicker"><span class="no">FEATURES</span>recorded, not described</p>
-<h1>What Cookrew does</h1>
-<p class="lede">${esc(DEFINITION)}</p>
-<div class="grid shots">${FEATURES.map((f) => {
-      const steps = SEQUENCES[f.slug] ?? []
-      const frame = steps[0] ? { file: steps[0].file, alt: steps[0].title, caption: steps[0].caption, width: steps[0].width, height: steps[0].height } : (FRAMES as Record<string, Frame>)[f.frames[0] ?? '']
-      return `<div class="card" style="padding:0;overflow:hidden">${frame ? `<a class="card-shot" href="/features/${f.slug}">${frameImg(frame, { sizes: '(max-width: 860px) 100vw, 33vw' })}</a>` : ''}<div style="padding:14px 16px"><h3><a href="/features/${f.slug}">${esc(f.title)}</a></h3><p>${esc(f.short)}</p></div></div>`
-    }).join('')}</div>
-</div>
-<section id="compare"><div class="wrap"><p class="kicker"><span class="no">COMPARE</span>what each can do</p><h2>A chat tab, one CLI agent, or a team</h2>${compareTable()}</div></section>
-<section id="faq"><div class="wrap"><p class="kicker"><span class="no">FAQ</span>the questions people type</p><h2>Questions and answers</h2><div class="faq">${FAQ.map(
-      (f) => `<details><summary>${esc(f.q)}</summary><p>${esc(f.a)}</p></details>`
-    ).join('')}</div></div></section>
-${commitsSection(input.commits)}`
-  )
+/**
+ * Every feature as a card with its first recorded frame — the overview the
+ * homepage shows. The frame is a card face (a 16:10 window onto the
+ * recording, .card-shot), never the image at its own pixel size.
+ */
+export function featuresGrid(): string {
+  return `<div class="grid shots">${FEATURES.map((f) => {
+    const steps = SEQUENCES[f.slug] ?? []
+    const frame = steps[0] ? { file: steps[0].file, alt: steps[0].title, caption: steps[0].caption, width: steps[0].width, height: steps[0].height } : (FRAMES as Record<string, Frame>)[f.frames[0] ?? '']
+    return `<div class="card" style="padding:0;overflow:hidden">${frame ? `<a class="card-shot" href="/features/${f.slug}">${frameImg(frame, { sizes: '(max-width: 860px) 100vw, 33vw' })}</a>` : ''}<div style="padding:14px 16px"><h3><a href="/features/${f.slug}">${esc(f.title)}</a></h3><p>${esc(f.short)}</p></div></div>`
+  }).join('')}</div>`
 }

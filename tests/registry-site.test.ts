@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import { RESERVED_HANDLES, handlePage, homePage, marketPage, marketQuery, teamPage } from '../registry/src/site'
-import { featuresIndexPage } from '../registry/src/site-features'
 import type { ListedDoor } from '../registry/src/site'
 import type { Release } from '../registry/src/releases'
 
@@ -43,15 +42,15 @@ const release: Release = {
 }
 
 const stars = (): number => 0
-const home = (doors: ListedDoor[], rel: Release | null = release) =>
-  homePage({
-    doors,
-    presets: [{ id: 'sha256:' + 'a'.repeat(64), name: 'Ship Crew', version: 4, author: 'drej', visibility: 'public', lineage: 'x', latestVersion: 4 }],
-    release: rel,
-    stars,
-    pulse: () => ({ lines: 2, calls: 9 }),
-    linesToday: 2
-  })
+const homeInput = (doors: ListedDoor[] = [], rel: Release | null = release): Parameters<typeof homePage>[0] => ({
+  doors,
+  presets: [{ id: 'sha256:' + 'a'.repeat(64), name: 'Ship Crew', version: 4, author: 'drej', visibility: 'public', lineage: 'x', latestVersion: 4 }],
+  release: rel,
+  stars,
+  pulse: () => ({ lines: 2, calls: 9 }),
+  linesToday: 2
+})
+const home = (doors: ListedDoor[], rel: Release | null = release) => homePage(homeInput(doors, rel))
 const team = (d: ListedDoor | null, over: Partial<Parameters<typeof teamPage>[0]> = {}) =>
   teamPage({ door: d, origin: 'https://cookrew.dev', stars: 0, starred: false, account: null, ...over })
 const market = (doors: ListedDoor[], params = '', over: Partial<Parameters<typeof marketPage>[0]> = {}) =>
@@ -264,14 +263,8 @@ describe('the front page', () => {
     expect(page.body).toContain('"@type":"ItemList"')
     expect(page.body).toContain('2 lines opened today')
     expect(page.body).toContain('1 serving now')
-    // Short on purpose: the presets, one line per feature, and nothing longer.
     expect(page.body).toContain('Ship Crew')
     expect(page.body).toContain('href="/install/sha256:' + 'a'.repeat(64) + '"')
-    expect(page.body).toContain('class="one-liners"')
-    expect(page.body).not.toContain('<table class="cmp">')
-    expect(page.body).not.toContain('<details>')
-    const prose = page.body.replace(/<(script|style)[\s\S]*?<\/\1>/g, ' ').replace(/<[^>]+>/g, ' ')
-    expect(prose.split(/\s+/).filter(Boolean).length).toBeLessThan(700)
     expect(page.body).toContain('width="1400" height="875"')
     expect(page.body).toContain('qa-canvas-800.jpg 800w')
     expect(page.body).toContain('rel="preload" as="image" href="https://raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/qa-canvas-800.jpg"')
@@ -279,22 +272,54 @@ describe('the front page', () => {
     expect(page.body).toContain('fetchpriority="high"')
   })
 
-  it('never claims a cut of anyone’s money', () => {
-    const flat = featuresIndexPage().body.replace(/\s+/g, ' ')
-    expect(flat).toContain('directly from caller to author')
-    expect(flat).toContain('cookrew.dev takes no cut')
-    expect(flat).toContain('<table class="cmp">')
+  /**
+   * ONE PAGE, TOP TO BOTTOM (owner ruling, 2026-09-06): the download, then
+   * GET STARTED, then the FEATURES, then the market. The header's three
+   * buttons are anchors into it.
+   */
+  it('is the three pages in one, in the order a newcomer reads', () => {
+    const body = home([door()]).body
+    const at = (marker: string): number => {
+      const i = body.indexOf(marker)
+      expect(i, marker).toBeGreaterThan(-1)
+      return i
+    }
+    expect(at('id="download"')).toBeLessThan(at('<section id="start">'))
+    expect(at('<section id="start">')).toBeLessThan(at('<section id="features">'))
+    expect(at('<section id="features">')).toBeLessThan(at('<section id="market">'))
+    // The download links sit under the headline, with the version beside them.
+    expect(body.indexOf('https://x/dmg')).toBeLessThan(body.indexOf('<section id="start">'))
+    // GET STARTED: the two steps and the commands the orch runs — as text,
+    // because the front page stays a document with no script (see below).
+    expect(body).toContain('Place an agent, and let it orchestrate your workflow')
+    expect(body).toContain('id="crew-commands"')
+    expect(body).toContain('$ cookrew orch "Forge"')
+    expect(body).not.toContain('/assets/site.js')
+    expect(body).toContain('"@type":"HowTo"')
+    // The header lands on the sections, not on pages that used to exist.
+    for (const href of ['/#features', '/#start', '/#download']) expect(body).toContain(`href="${href}"`)
+    expect(body).not.toContain('href="/start"')
+    expect(body).not.toContain('href="/features"')
   })
 
-  it('sizes every card’s frame — a bare <img> in a card painted at 1400px behind overflow:hidden', () => {
-    const body = featuresIndexPage().body
-    // Every frame on the index is a card face, and the stylesheet knows the
+  it('introduces every feature with its recorded frame, and says what each thing can do', () => {
+    const body = home([]).body
+    // Every frame in the grid is a card face, and the stylesheet knows the
     // class: the only other img rule is scoped to figure.shot.
     const faces = body.match(/<a class="card-shot" href="\/features\/[^"]+"><img /g) ?? []
     expect(faces.length).toBeGreaterThan(0)
-    expect((body.match(/<img /g) ?? []).length).toBe(faces.length)
     expect(body).toContain('.card-shot img{display:block;width:100%;height:auto;aspect-ratio:16/10;object-fit:cover')
     expect(body).toContain('<div class="grid shots">')
+    const flat = body.replace(/\s+/g, ' ')
+    expect(flat).toContain('<table class="cmp">')
+    expect(flat).toContain('directly from caller to author')
+    expect(flat).toContain('cookrew.dev takes no cut')
+  })
+
+  it('shows the latest commits when GitHub answered, and nothing when it did not', () => {
+    const commits = [{ sha: 'abc1234', title: 'fix: the board', url: 'https://github.com/x/y/commit/abc1234', date: '2026-09-06' }]
+    expect(homePage({ ...homeInput(), commits }).body).toContain('<code>abc1234</code>')
+    expect(home([]).body).not.toContain('<ol class="commits">')
   })
 })
 
