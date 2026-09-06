@@ -1,5 +1,5 @@
 import { day, esc, page, type Page } from './site-shell'
-import { desktopsSection, reachOrigins } from './site-reach'
+import { desktopsSection } from './site-reach'
 import type { V2Account, V2Device } from './v2-accounts'
 
 /**
@@ -107,17 +107,6 @@ export function mePage(
     )
   }
   const { account, currentDeviceId } = input
-  /**
-   * THE DEVICE READING THIS PAGE, which is the one a desktop admits.
-   *
-   * A canvas token names both ends — the Mac it opens and the device asking —
-   * so the picker has to hand the desktop THIS device's id, not the Mac's.
-   * It comes from the session rather than from the browser's own store
-   * because the session is what the token was minted against; a store that
-   * had drifted would send the desktop a name for a device the token does not
-   * name, and every hand-off would die on a signature that was fine.
-   */
-  const here = account.devices.find((d) => d.id === currentDeviceId) ?? null
   const factors: FactorSummary = input.factors ?? { passkeys: [], totp: false }
   const face =
     account.avatar === null
@@ -134,11 +123,9 @@ export function mePage(
       kind: 'app',
       cache: 0,
       noindex: true,
-      scripts: ['device-id.js', 'site.js', 'reach.js'],
-      connect: reachOrigins(account.desktops)
+      scripts: ['device-id.js', 'site.js', 'reach.js']
     },
-    `<div class="wrap" style="padding-top:44px" id="me" data-username="${esc(account.username)}"
-data-device="${esc(currentDeviceId)}" data-device-name="${esc(here?.name ?? '')}">
+    `<div class="wrap" style="padding-top:44px" id="me" data-username="${esc(account.username)}">
 <div class="me-head">${face}<div><h1 style="margin:0">@${esc(account.username)}</h1>
 <p class="meta" id="me-display">${esc(account.displayName || 'No display name yet')} · member since ${esc(day(account.claimedAt))}</p></div>
 <span class="sp" style="flex:1"></span>
@@ -165,7 +152,7 @@ ${authenticatorRow(factors.totp)}
 <p class="meta">A device asking to sign in as @${esc(account.username)}. Approve attaches it and names it in Devices; deny does nothing else; “not me” signs every other device out and locks the password until you change it.</p>
 <ul class="doors me-list" id="me-approvals"></ul>
 
-${desktopsSection(account.desktops)}
+${desktopsSection(account.username, account.desktops)}
 </div>`
   )
 }
