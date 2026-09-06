@@ -65,12 +65,50 @@ describe('HerdrHostMultiplexer.listSessionsAsync', () => {
     expect(malformed.sync).toEqual([])
   })
 
-  it('answers from the attach-burst snapshot while one is open', async () => {
-    const { mux, async } = harness({ 'pane list': envelope([pane('cookrew_late', 'w1:p9')]) })
-    // beginAttachBatch would fork the sync runner; the snapshot seam is what
-    // matters here, so it is set the way the batch does through the public
-    // surface of a mux whose sync runner refuses.
+  it('answers from the attach-burst snapshot while one is open, without a child', async () => {
+    // beginAttachBatch reads the panes through the SYNC runner (a lifecycle
+    // decision, never from a cache); while that snapshot is open the async
+    // listing answers from it and spawns nothing.
+    const listing = envelope([pane('cookrew_snap', 'w1:p9')])
+    const { mux, async, sync } = harness({ 'pane list': envelope([pane('cookrew_late', 'w1:p1')]) })
+    const syncRunner = (mux as unknown as { runner: { run: (file: string, args: string[]) => string } }).runner
+    syncRunner.run = (_file, args) => {
+      sync.push(args)
+      if (args[0] === 'pane' && args[1] === 'list') return listing
+      throw new Error('unexpected sync call')
+    }
+    mux.beginAttachBatch()
+    expect(await mux.listSessionsAsync()).toEqual(['cookrew_snap'])
+    expect(async).toHaveLength(0)
+    mux.endAttachBatch()
     expect(await mux.listSessionsAsync()).toEqual(['cookrew_late'])
     expect(async).toHaveLength(1)
+  })
+
+  it('an older listing landing after a newer one cannot roll the inventory back', async () => {
+    // Two children in flight — the probe's listing and the admission
+    // refresher's — finish out of order under load. The pane created between
+    // them must stay admitted: the cache moves forward in spawn time only.
+    let release: (() => void) | null = null
+    const older = new Promise<string>((resolve) => {
+      release = () => resolve(envelope([pane('cookrew_a', 'w1:p1')]))
+    })
+    let calls = 0
+    const asyncRunner: AsyncCliRunner = async (args) => {
+      if (args[0] === 'pane' && args[1] === 'list') {
+        calls += 1
+        return calls === 1 ? older : envelope([pane('cookrew_a', 'w1:p1'), pane('cookrew_new', 'w1:p2')])
+      }
+      return 'text'
+    }
+    const runner: CommandRunner = { run: () => { throw new Error('sync') }, runQuiet: () => undefined, probe: () => true }
+    const mux = new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/tmp/c.toml', runner, asyncRunner })
+    const first = mux.listSessionsAsync() // spawned first, answers last
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(await mux.listSessionsAsync()).toEqual(['cookrew_a', 'cookrew_new'])
+    release!()
+    expect(await first).toEqual(['cookrew_a'])
+    // The newer inventory still stands: the pane created between them resolves.
+    expect(await mux.captureAsync('cookrew_new')).toBe('text')
   })
 })

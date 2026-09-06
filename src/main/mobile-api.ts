@@ -287,6 +287,18 @@ export async function acquireViewWhenReady(
   return false;
 }
 
+/** How long a board read waits for the probe's in-flight pass. */
+const PROBE_WARM_MS = 1500;
+
+/** The probe's pass, or the timer, whichever lands first. Never throws. */
+async function probeWarmed(board: BoardSources): Promise<void> {
+  if (!board.probeWarm) return;
+  await Promise.race([
+    board.probeWarm().catch(() => undefined),
+    new Promise<void>((resolve) => setTimeout(resolve, PROBE_WARM_MS).unref?.()),
+  ]);
+}
+
 export async function handleMobileApi(
   request: http.IncomingMessage,
   response: http.ServerResponse,
@@ -449,6 +461,11 @@ export async function handleMobileApi(
       respondJson(response, 503, { error: "board index not wired" });
       return true;
     }
+    // The probe samples off the main thread now, so the first read after it
+    // parked would otherwise paint the map from before the park. Wait for
+    // the pass it just kicked — bounded, so a slow backend costs a moment,
+    // never the request.
+    await probeWarmed(deps.board);
     respondJson(
       response,
       200,
@@ -1106,7 +1123,13 @@ export async function handleMobileApi(
       ? createBoardNotifier(() => send("board", buildBoard(board)))
       : null;
     const onBoardSignal = (): void => boardNotifier?.schedule();
-    if (board) send("board", buildBoard(board));
+    if (board) {
+      send("board", buildBoard(board));
+      // The first frame went out from what the probe held; when the pass it
+      // kicked lands, push the board again so a parked sampler's stale map
+      // is on screen for one coalesce window, not until the next signal.
+      void board.probeWarm?.().then(onBoardSignal, () => undefined);
+    }
     if (scope === null) store.on("change", onChange);
     else store.on("workspace-change", onScopedChange);
     store.on("workspaces", onWorkspaces);

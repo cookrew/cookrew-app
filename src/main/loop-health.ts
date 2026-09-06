@@ -84,12 +84,22 @@ export interface LoopHealthDeps {
   keep?: number
 }
 
+/**
+ * The periodic loops that report. A closed set on purpose: the name lands
+ * verbatim as a key in an HTTP body, so it must never be a workspace or
+ * terminal id.
+ */
+export type LoopName = 'boardProbe' | 'sessionDrain'
+
+/** A read is memoised this long: the route must not perturb what it measures. */
+export const SNAPSHOT_MEMO_MS = 1000
+
 export interface LoopHealth {
   snapshot(): LoopHealthSnapshot
   /** Record one tick of a named loop. */
-  observe(loop: string, ms: number): void
+  observe(loop: LoopName, ms: number): void
   /** Run a synchronous tick and record how long it held the thread. */
-  timed<T>(loop: string, run: () => T): T
+  timed<T>(loop: LoopName, run: () => T): T
   stop(): void
 }
 
@@ -111,7 +121,8 @@ export function createLoopHealth(deps: LoopHealthDeps = {}): LoopHealth {
   let windows: LoopWindow[] = []
   let windowStart = startedAt
   let eluBase: EventLoopUtilization = performance.eventLoopUtilization()
-  let ticks = new Map<string, Tick[]>()
+  let ticks = new Map<LoopName, Tick[]>()
+  let memo: { at: number; snapshot: LoopHealthSnapshot } | null = null
 
   const summarise = (): LoopWindow => {
     const samples = histogram.count
@@ -142,7 +153,7 @@ export function createLoopHealth(deps: LoopHealthDeps = {}): LoopHealth {
   const timer = setInterval(closeWindow, windowMs)
   timer.unref?.()
 
-  const observe = (loop: string, ms: number): void => {
+  const observe = (loop: LoopName, ms: number): void => {
     const at = now()
     ticks = new Map(ticks).set(loop, [...prune(ticks.get(loop) ?? [], horizon()), { at, ms }])
   }
@@ -158,6 +169,7 @@ export function createLoopHealth(deps: LoopHealthDeps = {}): LoopHealth {
       }
     },
     snapshot: () => {
+      if (memo && now() - memo.at < SNAPSHOT_MEMO_MS) return memo.snapshot
       const since = horizon()
       const loops: Record<string, LoopTicks> = {}
       for (const [loop, list] of ticks) {
@@ -174,7 +186,7 @@ export function createLoopHealth(deps: LoopHealthDeps = {}): LoopHealth {
           lastAt: last.at
         }
       }
-      return {
+      const snapshot: LoopHealthSnapshot = {
         now: now(),
         uptimeMs: now() - startedAt,
         windowMs,
@@ -186,6 +198,8 @@ export function createLoopHealth(deps: LoopHealthDeps = {}): LoopHealth {
         loops,
         residency: deps.residency?.() ?? {}
       }
+      memo = { at: now(), snapshot }
+      return snapshot
     },
     stop: () => {
       clearInterval(timer)

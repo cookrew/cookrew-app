@@ -1380,7 +1380,8 @@ function boardSources(): ReturnType<typeof boardSourcesFrom> {
     probe: () => {
       boardProbe.start()
       return boardProbe.phases()
-    }
+    },
+    probeWarm: () => boardProbe.warm()
   })
 }
 const events = new EventLog()

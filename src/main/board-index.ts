@@ -52,6 +52,12 @@ export interface BoardSources {
    * inventing a phase.
    */
   probe?: () => Map<string, BoardPhase>
+  /**
+   * The probe's in-flight pass, for a READ that would rather wait a bounded
+   * moment than paint the map from before the sampler parked. Optional; a
+   * board without it answers from whatever probe() holds.
+   */
+  probeWarm?: () => Promise<unknown>
   /** Injectable clock so windowing is testable. */
   now?: () => number
 }
@@ -92,6 +98,7 @@ export interface BoardRuntime {
   turnStore: { loadAll: () => Map<string, TurnRecord[]> }
   agents: { list: () => readonly BoardAgentMeta[] }
   probe?: () => Map<string, BoardPhase>
+  probeWarm?: () => Promise<unknown>
 }
 
 /**
@@ -116,7 +123,8 @@ export function boardSourcesFrom(runtime: BoardRuntime): BoardSources {
         orch: entry.orch,
         active: entry.active
       })),
-    ...(runtime.probe ? { probe: runtime.probe } : {})
+    ...(runtime.probe ? { probe: runtime.probe } : {}),
+    ...(runtime.probeWarm ? { probeWarm: runtime.probeWarm } : {})
   }
 }
 
@@ -254,10 +262,15 @@ export function probeDetached(deps: ProbeDeps, detached: readonly DetachedTermin
  */
 export async function probeDetachedAsync(
   deps: ProbeDeps,
-  detached: readonly DetachedTerminal[]
+  detached: readonly DetachedTerminal[],
+  options: { deadline?: number } = {}
 ): Promise<Map<string, BoardPhase>> {
   const phases = new Map<string, BoardPhase>()
   for (const { terminalId, session } of detached) {
+    // A wedged backend answers each read at its bound (3 s); forty of those
+    // would hold the single-flight latch for minutes. Past the deadline the
+    // pass reports what it has — partial, never stale by minutes.
+    if (options.deadline !== undefined && Date.now() > options.deadline) break
     const asked = phaseFromAsked(deps.askedStatus?.(terminalId) ?? null)
     if (asked !== null) {
       if (asked !== undefined) phases.set(terminalId, asked)
@@ -296,8 +309,17 @@ export interface ProbeSampler {
    * What the periodic tick runs; exposed so a test can await a tick.
    */
   sampleAsync: () => Promise<Map<string, BoardPhase>>
+  /**
+   * start(), then the phases once the pass that start kicked (or the one in
+   * flight) has landed — what a board READ awaits, bounded by the caller, so
+   * the first frame after the sampler parked is not an empty one.
+   */
+  warm: () => Promise<Map<string, BoardPhase>>
   readonly running: boolean
 }
+
+/** A pass may run at most this many intervals before it reports partial. */
+export const PROBE_PASS_DEADLINE_TICKS = 10
 
 export interface ProbeSamplerOptions {
   /**
@@ -334,12 +356,15 @@ export function createProbeSampler(
   let lastSampleAt = 0
   /** Whether the last pass found anything to look at — the self-stop input. */
   let lastDetached = 0
+  /** The async pass in flight, so a read can await it. */
+  let pending: Promise<Map<string, BoardPhase>> | null = null
   const usesAsync = typeof deps.listSessionsAsync === 'function'
 
   const sampleNow = (): Map<string, BoardPhase> => {
     if (inFlight) return latest // single-flight: never stack scans
     inFlight = true
     lastSampleAt = Date.now()
+    lastDetached = 0 // a pass that throws must not park or hold on the last one's verdict
     const started = performance.now()
     try {
       const detached = detachedTerminals(deps, new Set(deps.listSessions()))
@@ -354,23 +379,35 @@ export function createProbeSampler(
     return latest
   }
 
-  const sampleAsync = async (): Promise<Map<string, BoardPhase>> => {
-    if (!usesAsync) return sampleNow()
-    if (inFlight) return latest
-    inFlight = true
-    lastSampleAt = Date.now()
+  const runAsyncPass = async (): Promise<Map<string, BoardPhase>> => {
     const base = performance.eventLoopUtilization()
+    const deadline = Date.now() + intervalMs * PROBE_PASS_DEADLINE_TICKS
     try {
       const detached = detachedTerminals(deps, new Set(await deps.listSessionsAsync!()))
       lastDetached = detached.length
-      latest = await probeDetachedAsync(deps, detached)
+      latest = await probeDetachedAsync(deps, detached, { deadline })
     } catch (error) {
       console.error('Board probe failed:', error)
     } finally {
       inFlight = false
-      options.observe?.(performance.eventLoopUtilization(base).active)
+      pending = null
+      try {
+        options.observe?.(performance.eventLoopUtilization(base).active)
+      } catch {
+        // An observer's failure is not the probe's.
+      }
     }
     return latest
+  }
+
+  const sampleAsync = (): Promise<Map<string, BoardPhase>> => {
+    if (!usesAsync) return Promise.resolve(sampleNow())
+    if (inFlight) return pending ?? Promise.resolve(latest)
+    inFlight = true
+    lastSampleAt = Date.now()
+    lastDetached = 0
+    pending = runAsyncPass()
+    return pending
   }
 
   const settle = (): void => {
@@ -395,10 +432,14 @@ export function createProbeSampler(
     phases: () => latest,
     sampleNow,
     sampleAsync,
+    warm: () => {
+      sampler.start()
+      return pending ?? Promise.resolve(latest)
+    },
     start: (): void => {
       if (timer) return
       if (Date.now() - lastSampleAt >= intervalMs) {
-        if (usesAsync) void sampleAsync()
+        if (usesAsync) void sampleAsync().then(settle)
         else sampleNow()
       }
       timer = setInterval(tick, intervalMs)

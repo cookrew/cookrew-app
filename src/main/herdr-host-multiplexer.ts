@@ -805,6 +805,15 @@ export class HerdrHostMultiplexer implements Multiplexer {
    */
   private admissionCache: { at: number; panes: HerdrPane[] } | null = null
   private admissionRefreshing = false
+  /**
+   * Spawn time of the listing the cache currently holds. Two listings can be
+   * in flight at once (the admission refresher and the board probe's
+   * listSessionsAsync), and children finish out of order under load; a
+   * listing spawned EARLIER must never overwrite one spawned later, or a
+   * pane created between them vanishes from admission for a freshness
+   * window. Every writer goes through publishInventory.
+   */
+  private admissionSpawnedAt = 0
   /** Epoch ms before which no new refresh may start (failure backoff). */
   private admissionBackoffUntil = 0
 
@@ -824,6 +833,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // the empty inventory (retryable 503) while the async child answers.
     if (this.admissionRefreshing || Date.now() < this.admissionBackoffUntil) return
     this.admissionRefreshing = true
+    const startedAt = Date.now()
     // GENUINELY async (Sol r6): a deferred synchronous fork still stalls the
     // main loop one turn later — the injectable runner (default: execFile
     // with a 3s SIGKILL bound) hands the wait to libuv and the snapshot
@@ -842,8 +852,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
           this.admissionBackoffUntil = Date.now() + 5000
           return
         }
-        this.admissionCache = { at: Date.now(), panes }
-        this.admissionBackoffUntil = 0
+        this.publishInventory(startedAt, panes)
       })
       .catch(() => {
         // Failure publishes a backoff timestamp: fast-failing children must
@@ -854,6 +863,19 @@ export class HerdrHostMultiplexer implements Multiplexer {
       .finally(() => {
         this.admissionRefreshing = false
       })
+  }
+
+  /**
+   * The one writer of the admission inventory. Monotonic in spawn time: an
+   * older listing landing after a newer one is dropped, so the cache can
+   * only move forward. A publish is also a success, so it clears the
+   * failure backoff whichever child earned it.
+   */
+  private publishInventory(startedAt: number, panes: HerdrPane[]): void {
+    if (startedAt < this.admissionSpawnedAt) return
+    this.admissionSpawnedAt = startedAt
+    this.admissionCache = { at: Date.now(), panes }
+    this.admissionBackoffUntil = 0
   }
 
   /**
@@ -960,22 +982,30 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * else. A well-formed listing is ALSO published as the admission inventory
    * (the same strict rule refreshAdmissionCacheSoon applies), so the
    * captureAsync that follows resolves its pane from this read rather than
-   * missing on a cold cache. Failure or malformed output answers [] — the
-   * "nothing detached" the probe already treats as no signal — and leaves the
-   * cache alone.
+   * missing on a cold cache — through publishInventory, so a listing that
+   * finishes after a newer one cannot roll the cache back. Failure or
+   * malformed output answers [] — the "nothing detached" the probe already
+   * treats as no signal — leaves the cache alone, and takes the refresher's
+   * backoff.
    */
   async listSessionsAsync(): Promise<string[]> {
     const labels = (panes: readonly HerdrPane[]): string[] =>
       panes.map((pane) => pane.label).filter((label): label is string => typeof label === 'string' && label.length > 0)
     if (this.attachSnapshot) return labels(this.attachSnapshot)
+    const startedAt = Date.now()
     let panes: HerdrPane[] | null
     try {
       panes = parsePaneListStrict(await this.runAsync(['pane', 'list'], 3000))
     } catch {
+      panes = null
+    }
+    if (panes === null) {
+      // The same backoff the refresher takes: a broken herdr is one fact,
+      // whichever child discovered it.
+      this.admissionBackoffUntil = Date.now() + 5000
       return []
     }
-    if (panes === null) return []
-    this.admissionCache = { at: Date.now(), panes }
+    this.publishInventory(startedAt, panes)
     return labels(panes)
   }
 

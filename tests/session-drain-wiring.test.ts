@@ -83,15 +83,14 @@ describe('the drain over forty parked sessions', () => {
     const { base, store, home, ids } = parkedFleet(40, 5)
     roots.push(base)
     let clock = 1_800_000_000_000
-    const released: string[] = []
-    const detached: string[] = []
+    const journal: string[] = []
     const drain = createSessionDrain({
       store,
       subscriberCount: () => 0,
       hasLiveWork: () => false,
       callsInFlight: () => 0,
-      releaseTerminal: (tid) => released.push(tid),
-      detachWorkspace: (id) => detached.push(id),
+      releaseTerminal: (tid) => journal.push(`release:${tid}`),
+      detachWorkspace: (id) => journal.push(`detach:${id}`),
       now: () => clock
     })
 
@@ -107,10 +106,18 @@ describe('the drain over forty parked sessions', () => {
     expect(counter.workspaceReads).toBe(0)
     expect(drain.sessions.resident()).toEqual([home])
     expect(store.resident()).toEqual([home])
+    const detached = journal.filter((e) => e.startsWith('detach:')).map((e) => e.slice('detach:'.length))
     expect(detached.sort()).toEqual([...ids].sort())
-    expect(released).toHaveLength(40 * 5)
-    // Release order per workspace: every terminal handed back BEFORE the detach.
-    expect(released.length).toBeGreaterThan(0)
+    expect(journal.filter((e) => e.startsWith('release:'))).toHaveLength(40 * 5)
+    // Release order per workspace: every terminal handed back BEFORE its detach.
+    for (const id of ids) {
+      const detachAt = journal.indexOf(`detach:${id}`)
+      for (const tid of store.workspaceState(id).nodes.map((n) => n.id)) {
+        const releaseAt = journal.indexOf(`release:${tid}`)
+        expect(releaseAt, `${tid} released before ${id} detached`).toBeGreaterThanOrEqual(0)
+        expect(releaseAt).toBeLessThan(detachAt)
+      }
+    }
   })
 
   it('keeps a parked session alive on any one fact, still without reading', () => {

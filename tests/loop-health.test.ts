@@ -51,34 +51,34 @@ describe('loop health', () => {
   it('summarises a named loop over its ticks, newest tick called out', () => {
     let clock = 1_800_000_000_000
     const h = make({ now: () => clock })
-    h.observe('drain', 1)
+    h.observe('sessionDrain', 1)
     clock += 5000
-    h.observe('drain', 3)
+    h.observe('sessionDrain', 3)
     clock += 5000
-    h.observe('drain', 2)
+    h.observe('sessionDrain', 2)
     const { loops } = h.snapshot()
-    expect(loops.drain).toEqual({ count: 3, p50: 2, p95: 2.9, max: 3, lastMs: 2, lastAt: clock })
+    expect(loops.sessionDrain).toEqual({ count: 3, p50: 2, p95: 2.9, max: 3, lastMs: 2, lastAt: clock })
   })
 
   it('forgets ticks older than the kept horizon', () => {
     let clock = 1_800_000_000_000
     const h = make({ now: () => clock, windowMs: 1000, keep: 2 })
-    h.observe('probe', 500)
+    h.observe('boardProbe', 500)
     clock += 5000 // beyond keep × windowMs
-    h.observe('probe', 1)
-    expect(h.snapshot().loops.probe.count).toBe(1)
-    expect(h.snapshot().loops.probe.max).toBe(1)
+    h.observe('boardProbe', 1)
+    expect(h.snapshot().loops.boardProbe.count).toBe(1)
+    expect(h.snapshot().loops.boardProbe.max).toBe(1)
   })
 
   it('timed() records the tick and re-throws what it threw', () => {
     const h = make()
     expect(() =>
-      h.timed('probe', () => {
+      h.timed('boardProbe', () => {
         throw new Error('tmux exploded')
       })
     ).toThrow('tmux exploded')
-    expect(h.timed('probe', () => 42)).toBe(42)
-    expect(h.snapshot().loops.probe.count).toBe(2)
+    expect(h.timed('boardProbe', () => 42)).toBe(42)
+    expect(h.snapshot().loops.boardProbe.count).toBe(2)
   })
 
   it('sees a stall it was awake for', async () => {

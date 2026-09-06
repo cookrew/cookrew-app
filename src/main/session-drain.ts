@@ -14,14 +14,16 @@
  * there is still nothing to set and nothing to leak.
  *
  * THE SHAPE, and the one thing this module adds (perf/tempo, 2026-09-06):
- * every fact is answered from MEMORY. A workspace the store is not holding
- * has no terminals anyone could be watching or working in — its ptys were
- * detached with it — so its terminal set is [] by construction rather than
- * a disk read, and the drain never hydrates anything. A parked session
- * costs the registry a timestamp (deadSince) and the store the session it
- * already holds; the tick walks the resident set and, per resident session,
- * its in-memory nodes. Zero I/O per tick is the gate
- * (tests/session-drain.test.ts, tests/perf/residency.perf.ts).
+ * every PER-TICK fact is answered from MEMORY. A workspace the store is not
+ * holding has no terminals anyone could be watching or working in — its
+ * ptys were detached with it — so for liveness its terminal set is [] by
+ * construction rather than a disk read, and the drain never hydrates
+ * anything. A parked session costs the registry a timestamp (deadSince) and
+ * the store the session it already holds; the tick walks the resident set
+ * and, per resident session, its in-memory nodes. Zero I/O per tick is the
+ * gate (tests/session-drain-wiring.test.ts, tests/perf/residency.perf.ts).
+ * The release — once per workspace lifetime — reads the store's view so no
+ * watch is left behind.
  */
 import { SessionRegistry } from './session-registry'
 
@@ -75,8 +77,12 @@ export function createSessionDrain(facts: SessionDrainFacts): SessionDrain {
     release: (id) => {
       // Order matters: release and untrack FIRST, then detach — so a watch
       // can never re-arm against a terminal being torn out from under it.
-      // Read the set, then tear down.
-      for (const tid of terminalsOf(id)) facts.releaseTerminal(tid)
+      // Read the set, then tear down. The STORE'S view, not terminalsOf: a
+      // release fires at most once per workspace lifetime, so a session the
+      // store evicted by another path may cost one read here — and every
+      // watch it still had is handed back, which the memory-only shortcut
+      // (right for the per-tick facts) would silently skip.
+      for (const tid of store.terminalIdsOf(id)) facts.releaseTerminal(tid)
       facts.detachWorkspace(id)
       store.releaseSession(id)
     },

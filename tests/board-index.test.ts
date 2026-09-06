@@ -618,3 +618,56 @@ describe('createProbeSampler — the async tick forks nothing inline', () => {
     vi.useRealTimers()
   })
 })
+
+describe('createProbeSampler — a read can wait for the pass it kicked', () => {
+  it('warm() resolves with the fresh pass, not the map from before the park', async () => {
+    let release: (() => void) | null = null
+    let listed = 0
+    const sampler = createProbeSampler(
+      probeDeps({
+        listSessionsAsync: () =>
+          new Promise<string[]>((resolve) => {
+            listed += 1
+            release = () => resolve(['cookrew_t1'])
+          }),
+        capturePaneAsync: async () => WORKING_PANE,
+        knownTerminalIds: () => ['t1']
+      })
+    )
+    expect(sampler.phases().size).toBe(0)
+    const warmed = sampler.warm()
+    expect(listed).toBe(1)
+    expect(sampler.running).toBe(true)
+    release!()
+    expect((await warmed).get('t1')).toBe('working')
+    sampler.stop()
+  })
+
+  it('a wedged backend reports a partial pass at the deadline instead of holding the latch', async () => {
+    const { PROBE_PASS_DEADLINE_TICKS } = await import('../src/main/board-index')
+    let reads = 0
+    let clock = 1_800_000_000_000
+    const realNow = Date.now
+    Date.now = () => clock
+    try {
+      const sampler = createProbeSampler(
+        probeDeps({
+          listSessionsAsync: async () => ['cookrew_a', 'cookrew_b', 'cookrew_c'],
+          capturePaneAsync: async () => {
+            reads += 1
+            clock += 10 * PROBE_PASS_DEADLINE_TICKS + 1 // each read overruns the whole deadline
+            return WORKING_PANE
+          },
+          knownTerminalIds: () => ['a', 'b', 'c']
+        }),
+        10
+      )
+      const phases = await sampler.sampleAsync()
+      expect(reads).toBe(1)
+      expect(phases.size).toBe(1)
+      expect(sampler.running).toBe(false)
+    } finally {
+      Date.now = realNow
+    }
+  })
+})
