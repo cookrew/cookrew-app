@@ -50,7 +50,13 @@ export const MEMORY = {
   eventLogCyclesMb: 4,
   /** Node churn and workspace switching in a WorkspaceStore. */
   storeChurnMb: 6,
-  /** Rendering with the cache cleared each time: the renderer holds nothing. */
+  /**
+   * Rendering with the cache cleared each time: the renderer holds nothing.
+   * Since 2026-09-06 that includes marked's last parse tree, which the custom
+   * renderer kept alive (46 MB after one 1.3M-char parse) and which
+   * note-markdown.ts now releases with an empty parse; the control renders
+   * one 1.3M-char note and asserts the same budget. Measured after: 0.0 MB.
+   */
   noteRenderNoCacheMb: 4,
   /**
    * The note-markdown render cache is bounded in BYTES: 8 MiB accounted at

@@ -137,6 +137,10 @@ const noteMarked = new Marked({
  *     the budget, so "bounded" stays true of the whole module: at most the
  *     budget plus two slots of four budgets each, never "plus the largest
  *     note ever rendered";
+ *   - marked keeps the LAST PARSE TREE alive through the custom renderer
+ *     (Parser assigns itself to renderer.parser, and the tree hangs off it):
+ *     measured 46 MB after one 1.3M-char parse. An empty parse afterwards
+ *     replaces it for 0.9 µs.
  *
  * Why 8 MiB: the heaviest measured canvas renders to about 1.8 MB accounted,
  * so it fits whole with 4x room and no note re-parses on a zoom round trip;
@@ -245,9 +249,11 @@ function flattened(html: string): string {
   return html
 }
 
-/** One sanitised, flattened render. */
+/** One sanitised, flattened render; marked's reference to the parse tree is released before returning. */
 function parseNote(content: string): string {
-  return flattened(noteMarked.parse(content, { async: false }))
+  const html = flattened(noteMarked.parse(content, { async: false }))
+  noteMarked.parse('', { async: false })
+  return html
 }
 
 function evictUntilFits(incoming: number): void {

@@ -128,12 +128,24 @@ describe('workspace store — churn and switching retain nothing', () => {
 describe('note markdown — the render cache is bounded', () => {
   const body = (i: number): string => `# Note ${i}\n\n${'- item with **bold** and `code`\n'.repeat(2100)}`
 
-  it('the renderer itself retains nothing (control)', async () => {
+  it('the renderer retains nothing once the cache is cleared — not even marked\'s last parse tree (control)', async () => {
     const growth = await heapGrowth(300, (i) => {
       renderNoteMarkdown(body(i))
       clearNoteMarkdownCache()
     })
     expect(growth.retainedMb).toBeLessThan(MEMORY.noteRenderNoCacheMb)
+    // marked keeps the last parse's whole token tree alive through the custom
+    // renderer (Parser assigns itself to renderer.parser): measured 46 MB
+    // after one 1.3M-char parse, 224 MB after a 7.2M-char one. The module
+    // releases it with an empty parse; this is the assertion that it still
+    // does, at a size the count-of-64-KB-notes loop above cannot see.
+    const large = `# Large\n\n${'- item with **bold** and `code`\n'.repeat(40_000)}`
+    expect(large.length).toBeGreaterThan(1_000_000)
+    const afterLarge = await heapGrowth(1, () => {
+      renderNoteMarkdown(large)
+      clearNoteMarkdownCache()
+    })
+    expect(afterLarge.retainedMb).toBeLessThan(MEMORY.noteRenderNoCacheMb)
   })
 
   it('rendering 300 distinct 64 KB notes retains only the cache bound', async () => {
