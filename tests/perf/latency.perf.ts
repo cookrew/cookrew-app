@@ -268,6 +268,30 @@ describe('event log — query over a live-shaped log', () => {
     expectEvery(measured, 'reads', 1)
     expectEvery(measured, 'liveOnly', true)
   })
+
+  // /api/events/query answers with query() AND count() over the same filter,
+  // so the route pays for both; count() is the full walk that remains.
+  it('counts over the same filter with one read, within budget', async () => {
+    const measured = await measure('event-log count type-prefix (live shape)', () => {
+      resetCounters()
+      counters.on = true
+      const sample = timed(() => {
+        const counts = log.count({ type: 'turn.' })
+        return { types: Object.keys(counts).length, total: Object.values(counts).reduce((a, b) => a + b, 0) }
+      })
+      counters.on = false
+      const reads = counters.jsonlReads
+      return {
+        ...sample,
+        structural: { ...sample.structural, reads: reads.length, liveOnly: reads.every((f) => f === 'events.jsonl') }
+      }
+    })
+    expectTail(measured, LATENCY.eventCountLiveShape)
+    expectEvery(measured, 'types', 1)
+    expectEvery(measured, 'reads', 1)
+    expectEvery(measured, 'liveOnly', true)
+    expect(measured.structurals[0].total).toBeGreaterThan(1000)
+  })
 })
 
 describe('workspace state — serialising the heaviest live canvas', () => {
