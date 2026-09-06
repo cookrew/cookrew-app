@@ -116,16 +116,32 @@ describe('V3 — no checkpoint is unreachable', () => {
     expect(verdict.missing).toEqual([OTHER.slice(0, 8)])
   })
 
-  it('FAILS when a chain id names a transcript that is not there', () => {
+  it('FAILS when a transcript the card really used is gone from disk', () => {
     const verdict = reachVerdict({
       bound: BOUND,
       lineage: [BG, OTHER],
       spillIds: [],
-      everBound: [],
+      everBound: [OTHER.slice(0, 8)], // the app watched this card rotate off it
       hasTranscript: (id: string) => id !== OTHER
     })
     expect(verdict.verdict).toBe('FAIL')
     expect(verdict.gone).toEqual([OTHER])
+  })
+
+  it('an id nothing ever wrote is reported, not failed (a card that never booted)', () => {
+    // Cookrew mints the id when it binds the card, so a dormant terminal
+    // carries an id with no transcript and no checkpoints to lose. Failing on
+    // those is how the line that matters gets skipped.
+    const verdict = reachVerdict({
+      bound: BOUND,
+      lineage: [],
+      spillIds: [],
+      everBound: [],
+      hasTranscript: () => false
+    })
+    expect(verdict.verdict).toBe('OK')
+    expect(verdict.unwritten).toEqual([BOUND])
+    expect(verdict.gone).toEqual([])
   })
 
   it('the spill alone is enough to keep a card reachable', () => {
