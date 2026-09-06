@@ -53,12 +53,26 @@ import { companionAccount } from './companion-account'
 import { RELAY_BASE_HEADER, RELAY_MARKER, relayBaseOf } from './relay-base'
 import { takeRelayDevice, type RelayDevice } from './relay-device'
 import { certFingerprint, reachCard } from './reach'
+import { applyCompanionCors } from './companion-cors'
+import { createNameSni } from './name-sni'
+import type { DesktopCert } from './desktop-cert'
 
 // Re-exported so existing importers keep their import path; the constants
 // themselves live in an Electron-free module so pure code can use them.
 export { MOBILE_PORT, MOBILE_HTTPS_PORT } from './mobile-ports'
 
 let httpsReady = false
+
+/**
+ * REACH v2.1 — the trusted certificate this Mac holds, or null.
+ *
+ * Module state beside the pairing token and for the same reason: the endpoint
+ * list, the origin allow-list and the reach card are read by `cookrew mobile`,
+ * by index.ts and by the routes here, none of which hold the server's deps.
+ * Null before the server starts, and null for ever on a Mac with no account —
+ * every reader treats that as "the self-signed certificate, as always".
+ */
+let nameCert: DesktopCert | null = null
 
 /**
  * The active pairing token (C1), minted per app run by startMobileServer and
@@ -191,6 +205,12 @@ export interface MobileServerDeps {
    * phones get ws:// on localhost and wss:// on the LAN.
    */
   onUpgrade?: (request: http.IncomingMessage, socket: import('node:stream').Duplex) => void
+  /**
+   * The trusted-name certificate (reach v2.1). Absent = this Mac serves the
+   * self-signed certificate on every name, prints bare addresses, and
+   * publishes no trusted origins — which is exactly what it did before.
+   */
+  nameCert?: DesktopCert
 }
 
 /**
@@ -223,6 +243,7 @@ export function startMobileServer(deps: MobileServerDeps): void {
   // every path at once.
   activePairingToken = deps.pairingToken ?? loadOrCreatePairingToken()
   activeWallToken = deps.wallToken ?? randomUUID()
+  nameCert = deps.nameCert ?? null
 
   const requestHandler = (request: http.IncomingMessage, response: http.ServerResponse): void => {
     void handle(request, response, deps).catch((error: Error) => {
@@ -258,7 +279,23 @@ export function startMobileServer(deps: MobileServerDeps): void {
   if (cert) {
     certSans = sansOf(new X509Certificate(cert.cert).subjectAltName)
     activeCertFp = certFingerprint(cert.cert)
-    const secure = https.createServer({ key: cert.key, cert: cert.cert }, requestHandler)
+    const secure = https.createServer(
+      {
+        key: cert.key,
+        cert: cert.cert,
+        // The self-signed pair stays the DEFAULT — bare IPs, localhost, the
+        // MagicDNS name and a Mac with no account all keep working exactly as
+        // they did. The callback answers the CA-issued chain for
+        // `<label>.<deviceId>.<zone>` and defers to the default for
+        // everything else. See name-sni.ts.
+        SNICallback: createNameSni({
+          held: () => nameCert?.held() ?? null,
+          naming: () => nameCert?.naming() ?? null,
+          log: (message) => console.error(message)
+        })
+      },
+      requestHandler
+    )
     // Long keep-alive matters MOST here: this is the server the phone reaches
     // over the tailnet, where a re-handshake is a visible typing stall.
     holdSocketsOpen(secure)
@@ -468,7 +505,11 @@ export function mobileEndpointList(): MobileEndpoint[] {
     addresses: localAddresses(),
     tailnet: cachedTailnet(),
     secure: httpsReady,
-    token: activePairingToken
+    token: activePairingToken,
+    // Non-null ONLY while a chain is actually held: a printed name with no
+    // certificate behind it is a URL that fails to resolve or fails to
+    // validate, and either reads as the product being broken.
+    trusted: nameCert?.naming() ?? null
   })
 }
 
@@ -488,14 +529,58 @@ export function mobileUrls(): string[] {
 export function mobileSelfOrigins(): string[] {
   const seen = new Set<string>()
   for (const endpoint of mobileEndpointList()) {
-    try {
-      const url = new URL(endpoint.url)
-      seen.add(`${url.protocol}//${url.host}`)
-    } catch {
-      // An endpoint that is not a URL cannot be an origin either.
+    // Both spellings of the same listener. The trusted name is an origin this
+    // server genuinely answers on, so a companion loaded there is as much
+    // "itself" as one loaded on the bare address — and leaving it out would
+    // refuse the very path the certificate exists to open.
+    for (const raw of [endpoint.url, endpoint.trustedUrl]) {
+      if (raw === undefined) continue
+      try {
+        const url = new URL(raw)
+        seen.add(`${url.protocol}//${url.host}`)
+      } catch {
+        // An endpoint that is not a URL cannot be an origin either.
+      }
     }
   }
   return [...seen]
+}
+
+/**
+ * THE ORIGINS THIS MAC CAN BE TRUSTED AT, for the reach card and /api/reach.
+ *
+ * Empty unless a valid chain is held — the phone reads this list as "these
+ * names will load without a warning", and an entry that is only true once the
+ * certificate arrives is a promise made too early.
+ *
+ * Loopback is excluded for the same reason it is excluded everywhere else: a
+ * phone cannot reach it.
+ */
+export function trustedOrigins(): string[] {
+  const seen = new Set<string>()
+  for (const endpoint of mobileEndpointList()) {
+    if (endpoint.kind === 'loopback' || endpoint.trustedUrl === undefined) continue
+    try {
+      const url = new URL(endpoint.trustedUrl)
+      seen.add(`${url.protocol}//${url.host}`)
+    } catch {
+      // Unspellable is not trusted.
+    }
+  }
+  return [...seen]
+}
+
+/**
+ * EVERY ORIGIN THIS SERVER ANSWERS CROSS-ORIGIN FOR — and no others.
+ *
+ * Two families, both exact strings rather than patterns: the registry from
+ * config (`COOKREW_REGISTRY`, so a test deployment and a self-hosted one are
+ * not hard-coded out), and this Mac's own origins — bare addresses and, once a
+ * certificate is held, their trusted names. Nothing is loosened for anybody
+ * else; a suffix match is how `notcookrew.dev` gets in.
+ */
+export function allowedCompanionOrigins(registryOrigin: string): string[] {
+  return [registryOrigin, ...mobileSelfOrigins()].filter((origin) => origin.length > 0)
 }
 
 /**
@@ -814,6 +899,26 @@ async function handle(
 ): Promise<void> {
   const url = new URL(request.url ?? '/', `http://${request.headers.host}`)
 
+  /**
+   * CROSS-ORIGIN ACCESS, DECIDED ONCE FOR THE WHOLE SERVER.
+   *
+   * Reach v2.1 keeps the phone's page at cookrew.dev and moves the DATA plane
+   * onto this Mac's own trusted name, so every route the companion uses is a
+   * cross-origin request. The headers are SET (not written) here, so the 200-
+   * odd call sites below keep their own `writeHead` and Node merges these
+   * underneath — one gate, and no route can forget it.
+   *
+   * The preflight is answered BEFORE the pairing gate, because a browser
+   * sends `OPTIONS` with no Authorization header by construction: behind the
+   * gate it would be a 401 the browser reports as a CORS failure, and the real
+   * request would never leave the phone. The answer is a list of methods and
+   * header names, identical for every path here, so answering it early
+   * reveals nothing. See companion-cors.ts for the allow-list rule.
+   */
+  if (applyCompanionCors(request, response, allowedCompanionOrigins(deps.identity?.registryOrigin() ?? ''))) {
+    return
+  }
+
   // FIRST, and before any route can read them: the caller's own
   // `x-cookrew-device` headers are taken off the request whatever they say, so
   // only the bridge can name a phone here. See relay-device.ts.
@@ -1020,7 +1125,22 @@ async function handle(
       relay: false,
       at: Date.now()
     })
-    respondJson(response, 200, { deviceId: card.deviceId, lan: card.lan, tailnet: card.tailnet })
+    /**
+     * `trusted` SITS BESIDE THE CARD, NEVER INSIDE IT.
+     *
+     * The card's members are the ones the registry's reader names and the
+     * ones a signature covers (registry/src/v2-reach.ts · `cardOf`); a field
+     * added inside it would break every verification on the phone. This is a
+     * fact about the CERTIFICATE rather than about where the Mac is, so it
+     * travels alongside — and it is EMPTY unless a valid chain is held, so a
+     * phone that reads a name here can dial it without a warning.
+     */
+    respondJson(response, 200, {
+      deviceId: card.deviceId,
+      lan: card.lan,
+      tailnet: card.tailnet,
+      trusted: trustedOrigins()
+    })
     return
   }
 

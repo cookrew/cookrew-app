@@ -1,5 +1,6 @@
 import type { AccountFile } from './account-v2'
 import { signWithDevice } from './account-v2'
+import { allowedOrigin, CORS_MAX_AGE } from './companion-cors'
 
 /**
  * "ARE YOU THE MAC I THINK YOU ARE?"
@@ -108,20 +109,28 @@ export const helloAnswer = (account: AccountFile | null, nonce: string | null): 
  * advertises, echoed only on match, and still no `allow-credentials` — so no
  * cookie and no ambient authority rides along, on any of them.
  */
+/**
+ * ONE ORIGIN RULE, TWO CALLERS. The decision — exact match against the
+ * registry origin plus this Mac's own — lives in companion-cors.ts, which is
+ * also what gates every other route now that the phone's data plane is direct
+ * from a page on cookrew.dev. Two allow-lists would be two chances to admit
+ * somebody, and only one of them would be reviewed.
+ *
+ * The VERBS stay narrow here because this route is narrow: a GET and its
+ * preflight, and no request body worth naming a content type for.
+ */
 export const helloCorsHeaders = (
   requestOrigin: string | undefined,
   registryOrigin: string,
   selfOrigins: readonly string[] = []
 ): Record<string, string> => {
-  const trim = (origin: string): string => origin.replace(/\/+$/, '')
-  const allowed = new Set([trim(registryOrigin), ...selfOrigins.map(trim)])
   const headers: Record<string, string> = { vary: 'origin' }
-  const asked = requestOrigin ? trim(requestOrigin) : null
-  if (asked && allowed.has(asked)) {
+  const asked = allowedOrigin(requestOrigin, [registryOrigin, ...selfOrigins])
+  if (asked !== null) {
     headers['access-control-allow-origin'] = asked
     headers['access-control-allow-methods'] = 'GET, OPTIONS'
     headers['access-control-allow-headers'] = 'content-type'
-    headers['access-control-max-age'] = '600'
+    headers['access-control-max-age'] = CORS_MAX_AGE
   }
   return headers
 }

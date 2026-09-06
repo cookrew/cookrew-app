@@ -127,7 +127,11 @@ export interface SendOptions {
  * Send a body, compressed when that helps and the client asked for it.
  *
  * `vary: accept-encoding` is not optional: without it a cache that saw one
- * client's brotli copy will hand it to a client that cannot decode it.
+ * client's brotli copy will hand it to a client that cannot decode it. `origin`
+ * rides with it for the same reason and one level up: the CORS gate
+ * (companion-cors.ts) writes an `access-control-allow-origin` that differs per
+ * caller, and `writeHead` REPLACES a header that `setHeader` put there — so a
+ * bare `vary: accept-encoding` here would silently drop the gate's half.
  */
 export function sendBody(
   response: http.ServerResponse,
@@ -151,7 +155,7 @@ export function sendBody(
   response.writeHead(status, {
     ...headers,
     'content-encoding': encoding,
-    vary: 'accept-encoding',
+    vary: 'accept-encoding, origin',
     'content-length': String(out.length)
   })
   response.end(out)

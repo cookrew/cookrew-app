@@ -11,6 +11,7 @@
 
 import { isTailnetAddress, type CertHosts, type TailnetIdentity } from './tailscale'
 import { MOBILE_PORT, MOBILE_HTTPS_PORT } from './mobile-ports'
+import { trustedName } from '../shared/reach-names'
 
 export type EndpointKind = 'tailscale' | 'lan' | 'other' | 'loopback'
 
@@ -25,6 +26,16 @@ export interface MobileEndpoint {
   host: string
   /** One line telling the user when this address is the right one. */
   label: string
+  /**
+   * REACH v2.1 — the same address spelled as a name a browser TRUSTS:
+   * `https://192-168-2-40.<id>.d.cookrew.dev:8643/?token=…`.
+   *
+   * Present only when this Mac actually holds a certificate covering it, and
+   * only for an address that can be a label (a MagicDNS name resolves
+   * elsewhere and is nobody's to re-answer). Absent means the bare address is
+   * still the only spelling there is, exactly as before names existed.
+   */
+  trustedUrl?: string
 }
 
 export interface EndpointInput {
@@ -35,6 +46,12 @@ export interface EndpointInput {
   secure: boolean
   /** Pairing token to embed, when the server has one. */
   token: string | null
+  /**
+   * The device id and zone to spell trusted names with — supplied ONLY when a
+   * valid certificate is held for them. Absent = no name is printed, which is
+   * the state of a Mac with no account, no internet, or a failed order.
+   */
+  trusted?: { deviceId: string; zone: string } | null
 }
 
 const LABELS: Record<EndpointKind, string> = {
@@ -96,11 +113,16 @@ export function mobileEndpoints(input: EndpointInput): MobileEndpoint[] {
   const add = (host: string, kind: EndpointKind): void => {
     if (seen.has(host)) return
     seen.add(host)
+    // Only over HTTPS: the trusted name exists to make the certificate match,
+    // and a name on a plaintext URL would be a promise about a listener that
+    // has no certificate at all.
+    const name = input.secure && input.trusted ? trustedName(host, input.trusted.deviceId, input.trusted.zone) : null
     endpoints.push({
       url: `${scheme}://${urlHost(host)}:${port}${query}`,
       kind,
       host,
-      label: LABELS[kind]
+      label: LABELS[kind],
+      ...(name === null ? {} : { trustedUrl: `${scheme}://${name}:${port}${query}` })
     })
   }
 

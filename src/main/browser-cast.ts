@@ -29,15 +29,47 @@ export interface BrowserCastDeps {
   enabled: () => boolean
   /** Per-process secret used only by the cross-origin Electron renderer. */
   desktopToken: () => string
+  /**
+   * Origins this server answers for besides its own host — the registry and
+   * this Mac's trusted names (reach v2.1). Absent = same-host only, which is
+   * what this was before names existed.
+   */
+  allowedOrigins?: () => readonly string[]
 }
 
 const STREAM_RE = /^\/api\/browser\/([^/]+)\/stream$/
 
-export function originAllowed(req: {
-  headers: { origin?: string | string[]; host?: string }
-}): boolean {
+/**
+ * WHO MAY OPEN THIS SOCKET, AND WHY THE LIST GREW BY ONE SHAPE.
+ *
+ * The guard is against cross-site WebSocket hijacking: a page anywhere can
+ * open a `wss://` to a LAN address, and the browser will attach no CORS check
+ * of its own — the Origin header is the only thing that says who is dialling.
+ * Same host was the whole rule, which was right while the only page that ever
+ * dialled this Mac was served BY this Mac.
+ *
+ * REACH v2.1 makes one more page legitimate: the companion at cookrew.dev,
+ * which keeps its address while its data plane moves onto this Mac's LAN
+ * name. Its Origin is the registry's, so same-host refuses it and the browser
+ * card never streams over the fast path.
+ *
+ * So the rule is now: same host, OR an EXACT match against the origins this
+ * server answers for (companion-cors.ts — the registry origin from config and
+ * this Mac's own origins, trusted names included). Not a suffix match, not a
+ * wildcard, and nothing loosened for anybody else.
+ *
+ * NO ORIGIN AT ALL is still allowed: that is a non-browser client (the app's
+ * own renderer, a test), which is not what this guard defends against — a
+ * browser always sends one.
+ */
+export function originAllowed(
+  req: { headers: { origin?: string | string[]; host?: string } },
+  allowed: readonly string[] = []
+): boolean {
   const origin = Array.isArray(req.headers.origin) ? req.headers.origin[0] : req.headers.origin
   if (!origin) return true
+  const trimmed = origin.replace(/\/+$/, '')
+  if (allowed.some((one) => one.length > 0 && one.replace(/\/+$/, '') === trimmed)) return true
   try {
     return new URL(origin).host === req.headers.host
   } catch {
@@ -70,7 +102,7 @@ export function createBrowserCast(deps: BrowserCastDeps): BrowserCast {
     if (
       !deps.enabled() ||
       typeof key !== 'string' ||
-      (!originAllowed(req) && !desktopAuthorized)
+      (!originAllowed(req, deps.allowedOrigins?.() ?? []) && !desktopAuthorized)
     ) {
       return void socket.destroy()
     }

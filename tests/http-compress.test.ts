@@ -84,7 +84,11 @@ describe('sendBody', () => {
   it('declares vary so a cache cannot hand gzip to a client without it', () => {
     const { response, captured } = stubResponse()
     sendBody(response, 200, { 'content-type': 'text/javascript' }, BIG_JS, 'gzip')
-    expect(captured.headers.vary).toBe('accept-encoding')
+    // `origin` rides with it since reach v2.1: `writeHead` REPLACES a header
+    // that `setHeader` put there, so a bare `accept-encoding` here would drop
+    // the CORS gate's own `vary` and a cache could hand one origin's
+    // `access-control-allow-origin` to another.
+    expect(captured.headers.vary).toBe('accept-encoding, origin')
   })
 
   it('sends plain bytes when the client did not offer gzip', () => {

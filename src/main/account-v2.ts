@@ -722,23 +722,10 @@ export class Accounts {
     pathname: string,
     init: RequestInit & { parse?: boolean } = {},
   ): Promise<AccountResult<T>> {
-    const account = this.cached
-    if (!account) return { ok: false, reason: 'no_account' }
-    if (!this.sessionLive()) return { ok: false, reason: 'session-expired' }
     const { parse = true, ...rest } = init
-    let response: Response
-    try {
-      response = await this.http(`${this.origin}${pathname}`, {
-        ...rest,
-        headers: {
-          ...(rest.body !== undefined ? { 'content-type': 'application/json' } : {}),
-          ...(rest.headers as Record<string, string> | undefined),
-          authorization: `Bearer ${account.session?.token ?? ''}`,
-        },
-      })
-    } catch {
-      return { ok: false, reason: 'offline' }
-    }
+    const sent = await this.authedResponse(pathname, rest)
+    if (!sent.ok) return sent
+    const response = sent.response
     if (!response.ok) {
       const refused = await wireError(response)
       // THE FIX: a 401 the registry called `unauthenticated` (or did not name)
@@ -752,6 +739,42 @@ export class Accounts {
       return { ok: true, value: (await response.json()) as T }
     } catch {
       return { ok: false, reason: 'unknown' }
+    }
+  }
+
+  /**
+   * THE SAME CALL, ANSWERED AS A RESPONSE — status, headers and all.
+   *
+   * `authed` above flattens every refusal into a reason, which is right for
+   * the surfaces it feeds: a sheet does not care whether "no" was a 409 or a
+   * 429. The certificate order (reach v2.1) does. 202 and 200 are different
+   * states of the same request, 429 carries a `retry-after` that is the CA's
+   * clock rather than ours, and 503 means "this registry certifies no names"
+   * — three facts that do not survive being turned into one word.
+   *
+   * So the preamble stays in one place and there are two ways to read the
+   * answer. The token still never leaves this class: what comes back is a
+   * Response, not a credential.
+   */
+  async authedResponse(
+    pathname: string,
+    init: RequestInit = {},
+  ): Promise<{ ok: true; response: Response } | { ok: false; reason: AccountRefusal }> {
+    const account = this.cached
+    if (!account) return { ok: false, reason: 'no_account' }
+    if (!this.sessionLive()) return { ok: false, reason: 'session-expired' }
+    try {
+      const response = await this.http(`${this.origin}${pathname}`, {
+        ...init,
+        headers: {
+          ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
+          ...(init.headers as Record<string, string> | undefined),
+          authorization: `Bearer ${account.session?.token ?? ''}`,
+        },
+      })
+      return { ok: true, response }
+    } catch {
+      return { ok: false, reason: 'offline' }
     }
   }
 
@@ -860,10 +883,15 @@ export class Accounts {
    * The reach card is passed in rather than computed here because reach is a
    * fact about the mobile server's listeners and certificate, which this class
    * knows nothing about. What this class owns is the device key that signs it.
+   *
+   * `trusted` rides beside the card for the same reason and one step further:
+   * it is not signed at all, because it is a claim the registry can check
+   * against the certificate it issued and has no reason to take on trust.
    */
   async registerDesktop(
     workspaces: readonly { id: string; name: string }[],
     reach?: { reach: unknown; sig: string },
+    trusted?: readonly string[],
   ): Promise<AccountResult<void>> {
     const account = this.cached
     if (!account) return { ok: false, reason: 'no_account' }
@@ -879,6 +907,13 @@ export class Accounts {
         // with reachability off must not overwrite yesterday's card with an
         // empty one, it must leave the registry with nothing new to say.
         ...(reach ? { reach: reach.reach, sig: reach.sig } : {}),
+        // REACH v2.1 — the origins a browser will trust for this Mac, OUTSIDE
+        // the signed card. `reach` is signed over exactly the members the
+        // registry's reader names (registry/src/v2-reach.ts · `cardOf`), so a
+        // field added inside it would fail every verification; and the
+        // registry computes its own `names` flag from the ACME order rather
+        // than believing this, which is why nothing here needs to be signed.
+        ...(trusted && trusted.length > 0 ? { trusted: [...trusted] } : {}),
       }),
       parse: false,
     })
