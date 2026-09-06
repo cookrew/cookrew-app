@@ -114,16 +114,20 @@ export interface StreamBlocksResult {
 
 export interface StreamTailResult {
   /**
-   * The OPEN last block, or null when the stream's tail is closed (or empty).
+   * The stream's LAST block, open or closed; null only for an empty stream.
+   *
+   * T1 returned this only while the tail was open, and T2 changed it — the
+   * block always travels now, with `open` saying what it is. A subscriber
+   * that has just watched a turn finish must be able to render the finished
+   * exchange without a second round trip, and nulling the block made "the
+   * turn ended" indistinguishable from "there is nothing here".
    *
    * `open` is the harness's own evidence, and only Codex and Pi write it into
    * the block shape (TraceBlock.final — `task_complete`/`turn_aborted`,
    * pi's terminal stopReasons). Claude's end-of-turn marker (`stop_reason:
    * "end_turn"`) is read by session-turns.ts and is NOT projected onto trace
-   * blocks today, so a Claude tail always reads as open here. That is the
-   * conservative direction on purpose: reporting a finished exchange as still
-   * live costs one redundant refresh, while the reverse freezes a running
-   * turn on the card. T2's SSE tail is where the live phase is decided.
+   * blocks, so a Claude tail always reads as open HERE — stream-finality.ts
+   * settles it at the tail, and StreamTailState.final is the answer.
    */
   block: StreamBlock | null
   open: boolean
@@ -288,8 +292,7 @@ export function createStreamReader(deps: StreamReaderDeps): StreamReader {
       const last = positions[positions.length - 1]
       if (last === undefined) return { block: null, open: false, missing }
       const block = blockAt(files, last)
-      const open = block.final !== true
-      return { block: open ? block : null, open, missing }
+      return { block, open: block.final !== true, missing }
     }
   }
 }

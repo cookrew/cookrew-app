@@ -160,8 +160,12 @@ export function handleStreamLive(
     const last = history[history.length - 1]
     if (last === undefined) return { block: null, final: false, ordinal: null, total: 0 }
     const block = blockOfRecord(last)
-    const final = last.final === true
-    return { block: final ? null : block, final, ordinal: block.ordinal, total: history.length }
+    return {
+      block,
+      final: last.final === true,
+      ordinal: block.ordinal,
+      total: history.length
+    }
   }
 
   const pushMarks = (): void => {

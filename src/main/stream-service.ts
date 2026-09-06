@@ -197,7 +197,10 @@ export function createStreamService(deps: StreamServiceDeps): StreamService {
       }
       const kind = chain.files.find((entry) => entry.file === block.file)?.kind ?? 'claude'
       const final = await tailIsFinal(block, block.file, kind, deps.finality ?? {})
-      return { ...tail, final, kind, total: window.total }
+      // `open` follows the SETTLED rule, not just the block's own evidence:
+      // a Claude turn that wrote its end_turn is over, and reporting it as
+      // still live is what would keep a card spinning after the agent stopped.
+      return { ...tail, open: !final, final, kind, total: window.total }
     },
     marks: (terminalId) => readMarks(terminalId, deps.markOptions ?? {}),
     writeMark: (terminalId, patch) => writeMark(terminalId, patch, deps.markOptions ?? {}),
