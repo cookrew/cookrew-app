@@ -8,8 +8,11 @@
  * always in the attacker's favour.
  *
  * So: dotted-quad IPv4, and IPv6 as plain hextets with at most one `::`. No
- * IPv4-mapped tail, no zone id, no leading-zero octets — a reach card cannot
- * carry any of them (see v2-reach.ts), and neither can a label.
+ * IPv4-mapped tail, no zone id, and NO LEADING ZEROS in either family — not a
+ * v4 octet and not a padded hextet. A reach card carries none of them (see
+ * v2-reach.ts), and neither can a label; and every extra spelling accepted
+ * here is another public name resolving to a machine nobody published under
+ * it, which is the whole thing the gate exists to prevent.
  */
 
 export interface Ip {
@@ -22,7 +25,11 @@ const v4 = (text: string): Uint8Array | null => {
   if (parts.length !== 4) return null
   const out = new Uint8Array(4)
   for (let i = 0; i < 4; i += 1) {
-    if (!/^\d{1,3}$/.test(parts[i])) return null
+    // NO LEADING ZEROS. Not a nicety: `010.0.0.1` is 8.0.0.1 to anything that
+    // reads it as octal and 10.0.0.1 to everything else, and every alternate
+    // spelling this accepts is another public label resolving to a machine
+    // nobody published under that name.
+    if (!/^(0|[1-9]\d{0,2})$/.test(parts[i])) return null
     const n = Number(parts[i])
     if (n > 255) return null
     out[i] = n
@@ -37,7 +44,9 @@ const v6 = (text: string): Uint8Array | null => {
     if (part === '') return []
     const out: number[] = []
     for (const hextet of part.split(':')) {
-      if (!/^[0-9a-f]{1,4}$/i.test(hextet)) return null
+      // Unpadded, for the same reason: `2001:0db8::1` and `2001:db8::1` are
+      // one address with two labels, and the gate compares one spelling.
+      if (!/^(0|[1-9a-f][0-9a-f]{0,3})$/i.test(hextet)) return null
       out.push(Number.parseInt(hextet, 16))
     }
     return out

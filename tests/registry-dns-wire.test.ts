@@ -45,6 +45,31 @@ describe('addresses', () => {
       expect(parseIp(bad)).toBeNull()
     }
   })
+
+  /**
+   * L2 — THE DOCBLOCK SAID NO LEADING ZEROS AND THE PARSER TOOK THEM ANYWAY.
+   *
+   * It matters because this parser is the gate: the same reader compares the
+   * address in a NAME against the address in a signed card, and every extra
+   * spelling it accepts is another label that resolves to the same machine —
+   * `010-0-0-1`, `0010-0-0-1`, and so on without end, each of them a distinct
+   * public name under our domain that nobody published. Elsewhere a leading
+   * zero is read as octal, which is how one parser's 010 becomes another's 8.
+   */
+  it('refuses a spelling with leading zeros in it, in either family', () => {
+    for (const bad of ['010.0.0.1', '192.168.02.40', '00.0.0.0', '1.2.3.04']) {
+      expect(parseIp(bad)).toBeNull()
+    }
+    for (const bad of ['2001:0db8::1', '::0001', 'fd7a:115c:a1e0:0000::1234', '00::1']) {
+      expect(parseIp(bad)).toBeNull()
+    }
+    // And the canonical spellings of the very same addresses are still read.
+    expect(parseIp('10.0.0.1')?.family).toBe(4)
+    expect(parseIp('0.0.0.0')?.family).toBe(4)
+    expect(parseIp('2001:db8::1')?.family).toBe(6)
+    expect(parseIp('::1')?.family).toBe(6)
+    expect(parseIp('fd7a:115c:a1e0:0:0:0:0:1234')?.family).toBe(6)
+  })
 })
 
 describe('names', () => {
