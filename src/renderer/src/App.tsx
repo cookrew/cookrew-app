@@ -676,6 +676,22 @@ function Canvas(): React.JSX.Element {
 
   const requestClose = useCallback((nodeId: string) => setClosingId(nodeId), [])
 
+  // Sous at the wheel (shared/sous-ui): main has already switched the
+  // workspace and placed the card; this is the VIEW catching up. No workspace
+  // check on purpose — the command can outrun the workspace:state it follows,
+  // and a zoom to a card that is not here yet falls back to fitView, which is
+  // the same place zoom-back lands. focus-input is a zoom too: the full view
+  // hands focus to the terminal on open.
+  useEffect(
+    () =>
+      cookrew().onUiCommand((event) => {
+        const command = event.command
+        if (command.kind === 'zoom-back') zoomBack()
+        else zoomToNode(command.nodeId)
+      }),
+    [zoomToNode, zoomBack]
+  )
+
   /**
    * Dock tool selection. There is no MOVE button — the resting hand is what
    * every tool falls back to: re-clicking the active tool stands it down,

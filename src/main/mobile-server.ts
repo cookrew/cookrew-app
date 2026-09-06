@@ -152,6 +152,9 @@ export interface MobileServerDeps {
   ) => Promise<boolean>
   /** Version pins (§10) for the rail's third marker class; absent = []. */
   listPins?: (terminalId: string) => readonly VersionPinRecord[]
+  /** Sous's door and its `ui` bus — see MobileApiDeps; passed through as-is. */
+  sous?: MobileApiDeps['sous']
+  uiBus?: MobileApiDeps['uiBus']
   recoverAgent: (id: string) => RecoverResult
   restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>
   undoRestore: (id: string) => Promise<RestoreResult>

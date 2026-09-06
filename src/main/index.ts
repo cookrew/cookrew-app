@@ -48,6 +48,11 @@ import { TRANSLATE_MAX_CHARS } from '../shared/translate'
 import { startSocketServer } from './socket-server'
 import { RoutineScheduler } from './routines'
 import { VoiceEngine } from './voice'
+import { SousController } from './sous-control'
+import { readSousVoiceConfig } from './sous-voice-config'
+import type { IntentRoster, Surface as SousSurface } from '../shared/sous-intent'
+import type { UiCommandEvent } from '../shared/sous-ui'
+import { EventEmitter } from 'node:events'
 import {
   cachedTailnet,
   startMobileServer,
@@ -4295,12 +4300,79 @@ app.whenReady().then(() => {
     hasOpenWork: (id) => turns.hasOpenTurnFact(id)
   })
 
+  // SOUS AT THE WHEEL. One controller behind four doors (⌘-hold, phone 🎙️,
+  // voice-gateway's POST, `cookrew sous`); it decides and does, the doors
+  // speak. The `ui` bus carries zoom/zoom-back to every surface: the desktop
+  // over IPC, the phone and the TV over /api/events.
+  const uiBus = new EventEmitter()
+  const sousRoster = (): IntentRoster => {
+    const aliases = readSousVoiceConfig().aliases
+    const workspaces = store.list().workspaces
+    const nameOf = (id: string | undefined): string => workspaces.find((w) => w.id === id)?.name ?? ''
+    return {
+      agents: store.terminalsAcross().map((t) => {
+        const workspaceId = store.ownerOf(t.id) ?? ''
+        return { id: t.id, name: t.name, workspaceId, workspaceName: nameOf(workspaceId), aliases: aliases[t.name] }
+      }),
+      workspaces: workspaces.map((w) => ({ id: w.id, name: w.name })),
+      presets: PRESETS.map((p) => p.name)
+    }
+  }
+  const sous = new SousController({
+    roster: sousRoster,
+    activeWorkspaceId: () => store.focusedId,
+    switchWorkspace: (id) => void switchWorkspace(id),
+    createTerminal: ({ preset, name }) => {
+      // To the right of everything on the canvas, so a spoken "create" never
+      // lands under an existing card.
+      const nodes = store.focusedState.nodes
+      const right = nodes.reduce((max, n) => Math.max(max, n.position.x + n.size.width), 0)
+      const node = createTerminal({ name, preset, position: { x: right + 60, y: nodes[0]?.position.y ?? 120 } })
+      return { id: node.id, name: node.name }
+    },
+    createBrowser: async (anchorId, name) => {
+      await browserCommand(['create', 'about:blank', name], anchorId)
+    },
+    connect: (a, b) => store.connectAcross(a, b),
+    rename: (id, name) => {
+      updateNode(id, { name })
+    },
+    // Short by nature (one spoken sentence), so the owner-submit primitive is
+    // the right sink: it holds the producer lease and answers at submission,
+    // and a refusal (busy input box, armed dispatch) is a sentence, not a
+    // silently dropped prompt.
+    submit: async (agentId, text) => {
+      const node = store.terminalsAcross().find((t) => t.id === agentId)
+      if (!node) throw new Error('that agent is not on any canvas')
+      let session = ptys.get(agentId)
+      if (!session) {
+        spawnTracked(node)
+        session = ptys.get(agentId)
+      }
+      if (!session) throw new Error(`${node.name} has no running terminal`)
+      const verdict = await ownerSubmit(session, `${text}\r`)
+      if (!verdict.ok) throw new Error(verdict.reason)
+    },
+    ui: (command, workspaceId) => {
+      const event: UiCommandEvent = { workspaceId, command }
+      mainWindow?.webContents.send('ui:command', event)
+      uiBus.emit('command', event)
+    },
+    note: (kind, subjectId, detail) => store.recordEvent(`sous.${kind}`, subjectId ?? '', detail, 'voice')
+  })
+  ipcMain.handle(
+    'sous:command',
+    (_e, text: string, ctx: { surface: SousSurface; focusedAgentId?: string | null }) =>
+      sous.handle({ text, surface: ctx.surface, focusedAgentId: ctx.focusedAgentId ?? null })
+  )
+
   startSocketServer({
     store,
     ptys,
     spawnTerminal: spawnTracked,
     agents,
     turns,
+    sous,
     // `ask --no-wait` and `cookrew dispatch <id>`: the SAME engine the HTTP
     // route uses, so a CLI-minted dispatch and an API-minted one are one
     // record with one lifecycle.
@@ -4351,6 +4423,9 @@ app.whenReady().then(() => {
   startMobileServer({
     servedSlug: handleServedSlug,
     store,
+    // Sous's door for the phone and for voice-gateway; `ui` events for both.
+    sous,
+    uiBus,
     // Serves the CA-issued chain by SNI for this Mac's names, keeps the
     // self-signed one as the default, and spells the printed URLs.
     nameCert: nameCertificate,

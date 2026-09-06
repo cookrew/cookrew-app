@@ -364,6 +364,14 @@ const api = {
     ipcRenderer.on('app:cmd-w', listener)
     return () => ipcRenderer.removeListener('app:cmd-w', listener)
   },
+  // Sous driving the canvas: a sentence up, zoom / zoom-back down.
+  sousCommand: (text: string, ctx: { surface: string; focusedAgentId?: string | null }) =>
+    ipcRenderer.invoke('sous:command', text, ctx),
+  onUiCommand: (cb: (event: unknown) => void) => {
+    const listener = (_e: unknown, event: unknown): void => cb(event)
+    ipcRenderer.on('ui:command', listener)
+    return () => ipcRenderer.removeListener('ui:command', listener)
+  },
   quitApp: () => ipcRenderer.send('app:quit'),
   // A `cookrew://` link, already parsed by main (src/main/deep-link.ts) —
   // the renderer only ever sees one of the three verbs, never a raw URL.

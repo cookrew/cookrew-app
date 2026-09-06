@@ -36,6 +36,8 @@ import {
 import { PRESETS } from './presets'
 import { RoutineScheduler, parseInterval } from './routines'
 import type { VoiceEngine } from './voice'
+import type { SousCommandInput, SousCommandResult } from './sous-control'
+import type { Surface as SousSurface } from '../shared/sous-intent'
 import type { TurnTracker } from './turn-tracker'
 import type { DispatchService } from './dispatch'
 
@@ -66,6 +68,8 @@ export interface SocketServerDeps {
   /** Debug helper: inject real input events into the app window. */
   injectInput: (args: string[]) => Promise<string>
   voice: VoiceEngine
+  /** Sous driving the canvas from a sentence — `cookrew sous "…"` is its CLI door. */
+  sous: SousDoor
   /** LAN URLs of the mobile companion server. */
   mobileUrls: () => string[]
   /** The same endpoints, classified (tailnet / LAN) and ordered. */
@@ -241,6 +245,8 @@ async function dispatch(request: CliRequest, deps: SocketServerDeps): Promise<st
       return cmdRoutine(request, deps)
     case 'voice':
       return cmdVoice(request, deps)
+    case 'sous':
+      return cmdSous(request, deps)
     case 'mobile':
       return cmdMobile(request, deps)
     case 'workspace':
@@ -1040,6 +1046,32 @@ async function cmdVoice(request: CliRequest, deps: SocketServerDeps): Promise<st
   }
 }
 
+/**
+ * The mic-less door: the same controller the ⌘-hold, the phone and the
+ * speaker reach, driven by a typed sentence. The answer is the controller's
+ * own JSON so a driver can assert on the intent and the spoken reply.
+ */
+async function cmdSous(request: CliRequest, deps: SocketServerDeps): Promise<string> {
+  const text = request.args.join(' ').trim()
+  if (!text) {
+    throw new Error('Usage: cookrew sous "what you would say" [--surface canvas|zoom|phone|home|cli]')
+  }
+  const surface = String(request.flags.surface ?? 'cli')
+  if (!SOUS_SURFACES.has(surface)) {
+    throw new Error(`Unknown surface '${surface}'. One of: ${[...SOUS_SURFACES].join(', ')}`)
+  }
+  const focusedAgentId = request.flags.focused ? String(request.flags.focused) : null
+  const result = await deps.sous.handle({ text, surface: surface as SousSurface, focusedAgentId })
+  return JSON.stringify(result)
+}
+
+const SOUS_SURFACES: ReadonlySet<string> = new Set(['canvas', 'zoom', 'phone', 'home', 'cli'])
+
+/** The one method of the controller a door needs; tests fake it in one line. */
+export interface SousDoor {
+  handle: (input: SousCommandInput) => Promise<SousCommandResult>
+}
+
 async function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const [sub, name] = request.args
   if (sub === 'list' || sub === undefined) {
@@ -1334,7 +1366,9 @@ Usage:
   cookrew voice on|off|status                   Spoken replies when an ask completes (macOS say)
   cookrew voice list | set "Name" | rate 200    Pick the voice that talks back, set speed
   cookrew voice say "text"                      Speak now
-  cookrew mobile                                Print (and QR) the phone companion URL — dictation + spoken replies
+  cookrew sous "sentence" [--surface S]        What Sous would do with that sentence, and does it:
+                                                switch / ask / create / connect / rename / back (zh or en)
+  cookrew mobile                               Print (and QR) the phone companion URL — dictation + spoken replies
   cookrew workspace list                        List workspaces (* = active)
   cookrew workspace create "Name" --dir PATH [--team "Template"]   (Orch) New workspace (optionally from a saved team template) + switch
   cookrew team list                             List saved team templates (name, agents, saved date)

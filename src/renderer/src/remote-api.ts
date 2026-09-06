@@ -5,6 +5,7 @@ import type { CompanionAccount } from '../../main/companion-account'
 import type { AccountStatus } from '../../shared/account-v2'
 import type { BoardSnapshotLike, CookrewApi } from './api'
 import type { CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
+import type { UiCommandEvent } from '../../shared/sous-ui'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 import type { VersionPinRecord } from '../../shared/version-pin'
 import { apiPath } from './api-base'
@@ -471,6 +472,10 @@ export function createRemoteApi(): CookrewApi {
     onBrowserOpenTab: () => () => undefined,
     onBrowserPhoneViewing: () => () => undefined,
     onCmdW: () => () => undefined,
+    // Sous from the phone: the sentence goes over the API, the zoom comes
+    // back on the shared events stream like everything else the canvas does.
+    sousCommand: (text, ctx) => req(apiPath('/api/sous/command'), 'POST', { text, ...ctx }),
+    onUiCommand: (cb) => subscribe<UiCommandEvent>('ui', cb),
     // No OS hands this surface a link: the phone and the demo are reached by
     // one, never launched by one.
     onDeepLink: () => () => undefined,

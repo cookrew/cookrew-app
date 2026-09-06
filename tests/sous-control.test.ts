@@ -1,0 +1,185 @@
+import { describe, expect, it } from 'vitest'
+import { SousController, type SousControlDeps } from '../src/main/sous-control'
+import { PENDING_PROMPT_MS, type IntentRoster } from '../src/shared/sous-intent'
+
+const roster: IntentRoster = {
+  agents: [
+    { id: 'a-cond', name: 'Conductor', workspaceId: 'ws-dev', workspaceName: 'cookrew dev' },
+    { id: 'a-cc', name: 'claude-code', workspaceId: 'ws-dev', workspaceName: 'cookrew dev' },
+    { id: 'a-paul', name: 'Paul', workspaceId: 'ws-dev', workspaceName: 'cookrew dev' },
+    { id: 'a-cond2', name: 'Conductor', workspaceId: 'ws-mall', workspaceName: 'agentmall' },
+    { id: 'a-magpie', name: 'Magpie', workspaceId: 'ws-mall', workspaceName: 'agentmall' }
+  ],
+  workspaces: [
+    { id: 'ws-dev', name: 'cookrew dev' },
+    { id: 'ws-mall', name: 'agentmall' }
+  ],
+  presets: ['Claude Code', 'Codex', 'Shell']
+}
+
+/** Every dep records its call; the tests read the trail. */
+function harness(options: { active?: string | null; failing?: string } = {}) {
+  const calls: string[] = []
+  let active: string | null = options.active === undefined ? 'ws-dev' : options.active
+  let clock = 1_000_000
+  const deps: SousControlDeps = {
+    roster: () => roster,
+    activeWorkspaceId: () => active,
+    switchWorkspace: (id) => {
+      calls.push(`switch ${id}`)
+      active = id
+    },
+    createTerminal: ({ preset, name }) => {
+      calls.push(`create ${preset} as ${name}`)
+      if (options.failing === 'create') throw new Error('no room')
+      return { id: 'a-new', name }
+    },
+    createBrowser: async (anchor, name) => {
+      calls.push(`browser ${anchor} ${name}`)
+    },
+    connect: (a, b) => calls.push(`connect ${a} ${b}`),
+    rename: (id, name) => calls.push(`rename ${id} ${name}`),
+    submit: async (id, text) => {
+      calls.push(`submit ${id} ${text}`)
+      if (options.failing === 'submit') throw new Error('input box is busy')
+    },
+    ui: (command, workspaceId) =>
+      calls.push(`ui ${command.kind}${'nodeId' in command ? ` ${command.nodeId}` : ''} @${workspaceId}`),
+    note: (kind, id, detail) => calls.push(`note ${kind} ${id ?? '-'} ${detail}`),
+    now: () => clock
+  }
+  return { calls, deps, controller: new SousController(deps), tick: (ms: number) => (clock += ms) }
+}
+
+describe('switch', () => {
+  it('switches, then brings the canvas back to the overview of the new workspace', async () => {
+    const h = harness()
+    const r = await h.controller.handle({ text: 'switch to agentmall', surface: 'canvas' })
+    expect(r).toMatchObject({ intent: 'switch', spoken: 'Switching to agentmall' })
+    expect(h.calls).toEqual(['switch ws-mall', 'ui zoom-back @ws-mall', 'note switch ws-mall agentmall'])
+  })
+  it('does not re-switch to the workspace already active', async () => {
+    const h = harness()
+    await h.controller.handle({ text: '切换到 cookrew dev', surface: 'home' })
+    expect(h.calls).toEqual(['ui zoom-back @ws-dev', 'note switch ws-dev cookrew dev'])
+  })
+})
+
+describe('ask', () => {
+  it('an agent elsewhere means switching first, then zoom and focus, then the question back', async () => {
+    const h = harness()
+    const r = await h.controller.handle({ text: 'ask Magpie', surface: 'canvas' })
+    expect(r).toMatchObject({ intent: 'ask', needs: 'prompt', agentId: 'a-magpie', spoken: 'What should I ask Magpie?' })
+    expect(h.calls).toEqual([
+      'switch ws-mall',
+      'ui zoom a-magpie @ws-mall',
+      'ui focus-input a-magpie @ws-mall',
+      'note ask a-magpie Magpie'
+    ])
+  })
+  it('the next sentence on the same surface is the prompt; another surface is not', async () => {
+    const h = harness()
+    await h.controller.handle({ text: '帮我问问Conductor', surface: 'home' })
+    const other = await h.controller.handle({ text: '帮我写今日打卡发到小红书', surface: 'phone' })
+    expect(other).toMatchObject({ intent: 'none' })
+    const answer = await h.controller.handle({ text: '帮我写今日打卡发到小红书', surface: 'home' })
+    expect(answer).toMatchObject({ intent: 'prompt', spoken: '已发给 Conductor', agentId: 'a-cond' })
+    expect(h.calls.at(-2)).toBe('submit a-cond 帮我写今日打卡发到小红书')
+    expect(h.controller.pendingFor('home')).toBeNull()
+  })
+  it('a slot expires', async () => {
+    const h = harness()
+    await h.controller.handle({ text: 'ask Paul', surface: 'home' })
+    h.tick(PENDING_PROMPT_MS + 1)
+    expect(h.controller.pendingFor('home')).toBeNull()
+    const late = await h.controller.handle({ text: 'do the thing', surface: 'home' })
+    expect(late).toMatchObject({ intent: 'none' })
+    expect(h.calls.filter((c) => c.startsWith('submit'))).toEqual([])
+  })
+  it('an inline prompt is submitted at once, with no slot left behind', async () => {
+    const h = harness()
+    const r = await h.controller.handle({ text: 'ask Paul: run the tests', surface: 'canvas' })
+    expect(r).toMatchObject({ intent: 'ask', spoken: 'Sent to Paul' })
+    expect(h.calls).toContain('submit a-paul run the tests')
+    expect(h.controller.pendingFor('canvas')).toBeNull()
+  })
+})
+
+describe('the zoom view', () => {
+  it('plain speech goes to the agent on screen, and nowhere else', async () => {
+    const h = harness()
+    const r = await h.controller.handle({ text: 'add a retry around the fetch', surface: 'zoom', focusedAgentId: 'a-cc' })
+    expect(r).toMatchObject({ intent: 'prompt', agentId: 'a-cc' })
+    expect(h.calls).toEqual(['submit a-cc add a retry around the fetch', 'note prompt a-cc claude-code'])
+  })
+})
+
+describe('create', () => {
+  it('“create claude-code on cookrew dev with a browser” from the speaker on another workspace', async () => {
+    const h = harness({ active: 'ws-mall' })
+    const r = await h.controller.handle({ text: 'create claude-code on cookrew dev with a browser', surface: 'home' })
+    expect(r).toMatchObject({ intent: 'create', agentId: 'a-new', spoken: 'Created Claude Code on cookrew dev with a browser' })
+    expect(h.calls).toEqual([
+      'switch ws-dev',
+      'create Claude Code as Claude Code',
+      'browser a-new Claude Code browser',
+      'ui zoom a-new @ws-dev',
+      'note create a-new Claude Code + browser'
+    ])
+  })
+  it('no workspace named means here, no browser means none', async () => {
+    const h = harness()
+    await h.controller.handle({ text: '新建一个 codex', surface: 'canvas' })
+    expect(h.calls).toEqual(['create Codex as Codex', 'ui zoom a-new @ws-dev', 'note create a-new Codex'])
+  })
+})
+
+describe('connect, rename, back, open', () => {
+  it('connect and rename call the store and leave a trail', async () => {
+    const h = harness()
+    await h.controller.handle({ text: 'link claude-code to Paul', surface: 'canvas' })
+    await h.controller.handle({ text: 'rename claude-code to Sam', surface: 'canvas' })
+    expect(h.calls).toEqual([
+      'connect a-cc a-paul',
+      'note connect a-cc claude-code ↔ Paul',
+      'rename a-cc Sam',
+      'note rename a-cc claude-code → Sam'
+    ])
+  })
+  it('back leaves the zoom — addressed to Sous, since bare words there are prose for the agent', async () => {
+    const h = harness()
+    await h.controller.handle({ text: 'Sous, back', surface: 'zoom', focusedAgentId: 'a-cc' })
+    expect(h.calls).toEqual(['ui zoom-back @ws-dev'])
+    await h.controller.handle({ text: '帮我打开cookrew', surface: 'home' })
+    expect(h.calls.slice(1)).toEqual(['ui zoom-back @ws-dev', 'note open - cookrew'])
+  })
+})
+
+describe('refusals and failures never touch the canvas', () => {
+  it('an ambiguous name is asked back and nothing runs', async () => {
+    const h = harness({ active: null })
+    const r = await h.controller.handle({ text: 'ask Conductor', surface: 'cli' })
+    expect(r).toMatchObject({ intent: 'refused', needs: 'which-agent', choices: ['Conductor (cookrew dev)', 'Conductor (agentmall)'] })
+    expect(h.calls).toEqual([])
+  })
+  it('an unknown preset is refused in words and nothing runs', async () => {
+    const h = harness()
+    const r = await h.controller.handle({ text: 'create gemini', surface: 'canvas' })
+    expect(r).toMatchObject({ intent: 'refused', needs: 'unknown-preset' })
+    expect(h.calls).toEqual([])
+  })
+  it('a sentence that is not ours is none — free text never reaches anything but submit', async () => {
+    const h = harness()
+    const r = await h.controller.handle({ text: 'rm -rf / && echo done', surface: 'canvas' })
+    expect(r).toMatchObject({ intent: 'none' })
+    expect(h.calls).toEqual([])
+  })
+  it('a failing step becomes a spoken failure, not a throw, in the sentence language', async () => {
+    const zh = harness({ failing: 'submit' })
+    const r = await zh.controller.handle({ text: '问问Paul，跑一下测试', surface: 'canvas' })
+    expect(r).toMatchObject({ intent: 'refused', spoken: '没做成：input box is busy' })
+    const en = harness({ failing: 'create' })
+    const c = await en.controller.handle({ text: 'create codex', surface: 'canvas' })
+    expect(c).toMatchObject({ intent: 'refused', spoken: 'That did not work: no room' })
+  })
+})
