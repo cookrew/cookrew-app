@@ -48,7 +48,7 @@ import { createLoopHealth } from './loop-health'
 import { loadOrCreateReadOnlyToken } from './readonly-token'
 import { loadOrCreatePairingToken } from './pairing-token'
 import { searchTurns } from '../shared/turn-search'
-import { summarizeTurn } from './sous'
+import { sousBreakerState, sousReadiness, summarizeTurn } from './sous'
 import { translateBody } from './sous-translate'
 import { remoteSousHost } from './sous-remote-config'
 import { TRANSLATE_MAX_CHARS } from '../shared/translate'
@@ -368,7 +368,7 @@ const pairingToken = loadOrCreatePairingToken()
  * already full-fidelity L1 — and the sampler parks itself when nothing is
  * detached, so an idle machine pays nothing.
  */
-const turns = new TurnTracker(summarizeTurn, turnStore)
+const turns = new TurnTracker(summarizeTurn, turnStore, undefined, sousReadiness)
 const sessionSync = new SessionTurnSync(turns, undefined, {
   // Settle confirmation for background dispatches: on a quiet poll, let the
   // file observer close an armed dispatch — unless herdr's push feed says
@@ -1379,7 +1379,9 @@ async function attachServedLine(conductorId: string): Promise<LinePtyView | null
  * of the residency loops can be checked against what is actually held.
  */
 const loopHealth = createLoopHealth({
-  residency: () => ({ store: store.resident().length, registry: sessions.residentCount() })
+  residency: () => ({ store: store.resident().length, registry: sessions.residentCount() }),
+  // The Sous breaker, so a loaded machine's silent titles are explained.
+  sous: () => sousBreakerState()
 })
 
 const boardProbe = createProbeSampler(

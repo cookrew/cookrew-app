@@ -30,6 +30,8 @@ let consumers = 0
 let release: (() => void) | null = null
 /** Bumped on every open and close, so an invoke that resolves after its lifetime is ignored. */
 let generation = 0
+/** Bumped by resetServedCallersStore, so a closure from before a reset is a no-op — never a decrement. */
+let resetEpoch = 0
 
 /** Structural equality for the plain JSON shapes main pushes (rows, callers, primitives). */
 export function sameRows(a: unknown, b: unknown): boolean {
@@ -99,18 +101,18 @@ export function subscribeServedCallers(cb: Listener): () => void {
   consumers += 1
   if (consumers === 1) open()
   let live = true
+  const epoch = resetEpoch
   return () => {
-    if (!live) return
+    // A closure from before a reset belongs to a count that no longer
+    // exists. It must not decrement (reset → stale → mount: a negative count
+    // wedges the store shut) and it must not close (reset → mount → stale: it
+    // would see consumers === 1 and shut the IPC door under a live card). So
+    // it is a total no-op, whichever order the two arrive in.
+    if (!live || epoch !== resetEpoch) return
     live = false
     listeners.delete(cb)
-    // Clamped: resetServedCallersStore zeroes the count under any closure
-    // still held by a mounted component, and a closure that then ran would
-    // otherwise drive it negative and wedge the store shut (a later mount
-    // would count to 0, never to 1, and open nothing).
-    const remaining = Math.max(0, consumers - 1)
-    const wasLast = consumers > 0 && remaining === 0
-    consumers = remaining
-    if (wasLast) close()
+    consumers -= 1
+    if (consumers === 0) close()
   }
 }
 
@@ -138,6 +140,7 @@ export function servedCallersStoreStats(): ServedCallersStoreStats {
 
 /** Test seam: the store is module state, so a suite must be able to reset it. */
 export function resetServedCallersStore(): void {
+  resetEpoch += 1
   if (release !== null) close()
   listeners.clear()
   consumers = 0
