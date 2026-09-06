@@ -158,7 +158,7 @@ afterAll(async () => {
 })
 
 describe('a version 2 hello at the registry', () => {
-  it('says ok for a hello signed at a name under this desktop own subdomain', async () => {
+  it('says ok for a hello signed at a name under this desktop's own subdomain', async () => {
     const who = await claim('hellov2ok')
     expect(await ask(who, claimBody(who))).toEqual({ ok: true })
   })
@@ -255,7 +255,7 @@ describe('a version 2 hello at the registry', () => {
     expect(await ask(who, body)).toEqual({ ok: false })
   })
 
-  it('accepts a bare address on the desktop own published card', async () => {
+  it('accepts a bare address on the desktop's own published card', async () => {
     const who = await claim('hellov2bare')
     await publish(who)
     const origin = 'https://192.168.1.24:8643'
@@ -311,7 +311,7 @@ describe('which origins a desktop may be believed at', () => {
     expect(originBelongsTo(device, `https://10-0-0-9.${device}.reg.example.test`, null)).toBe(true)
   })
 
-  it('is not another device subdomain, and not a public host', () => {
+  it('is not another device's subdomain, and not a public host', () => {
     expect(originBelongsTo(device, `https://192-168-1-24.${randomUUID()}.${ZONE}:8643`, null)).toBe(false)
     expect(originBelongsTo(device, 'https://evil.example', null)).toBe(false)
     expect(originBelongsTo(device, `https://cookrew.dev`, null)).toBe(false)
