@@ -9,6 +9,7 @@ import {
 } from '../src/main/admitted-devices'
 import { verifyCanvasToken, type RegistryKeys } from '../src/main/canvas-token'
 import { createPairingKeyRing } from '../src/main/pairing-key'
+import { createSpentTokenStore } from '../src/main/spent-tokens'
 import { fakeAccount, tempBase } from './support/idv2'
 
 /**
@@ -534,5 +535,174 @@ describe('forgetting an admitted phone answers the question that was asked', () 
     } finally {
       chmodSync(temp.base, 0o700)
     }
+  })
+})
+
+describe('a key that is presented is a key that is checked', () => {
+  // THE OWNER WATCHED OPEN SUCCEED ON A KEY THAT DID NOT MATCH. A device this
+  // Mac had admitted before skipped the check entirely, so a wrong key was not
+  // refused — it was never looked at, which reads exactly like a pass.
+  const account = fakeAccount()
+  const reg = registry()
+  const claims = {
+    sub: account.username,
+    scope: 'canvas',
+    aud: account.deviceId,
+    dev: PHONE,
+    exp: NOW + 600_000,
+    jti: 'j-key'
+  }
+  let temp: { base: string; clean: () => void }
+  let ring: ReturnType<typeof createPairingKeyRing>
+  let spent: ReturnType<typeof createSpentTokenStore>
+  let lines: string[]
+
+  const deps = (over: Partial<AdmissionDeps> = {}): AdmissionDeps => ({
+    account: () => account,
+    keys: async () => reg.keys,
+    refreshKeys: async () => reg.keys,
+    admitted: createAdmittedDeviceStore({ base: temp.base, now: () => NOW }),
+    acceptsPairingKey: (key) => ring.accepts(key),
+    spend: (jti, exp) => spent.spend(jti, exp),
+    log: (message) => lines.push(message),
+    now: () => NOW,
+    ...over
+  })
+
+  /** A phone this Mac has let in before. */
+  const alreadyAdmitted = (): void => {
+    createAdmittedDeviceStore({ base: temp.base, now: () => NOW }).admit({ deviceId: PHONE })
+  }
+
+  beforeEach(() => {
+    temp = tempBase()
+    ring = createPairingKeyRing({ now: () => NOW })
+    spent = createSpentTokenStore({ base: temp.base, now: () => NOW })
+    lines = []
+  })
+  afterEach(() => temp.clean())
+
+  it('REFUSES an admitted device that presents a WRONG key', async () => {
+    alreadyAdmitted()
+    ring.current()
+    const outcome = await admit(
+      { token: reg.mint(claims), key: 'ZZZZZZ', phoneDeviceId: PHONE },
+      deps()
+    )
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok) return
+    expect(outcome.refusal.kind).toBe('key')
+    expect(outcome.refusal.sentence).toBe("Not this Mac's key — it changes every two minutes.")
+  })
+
+  it('admits an admitted device that presents NO key', async () => {
+    alreadyAdmitted()
+    const outcome = await admit(
+      { token: reg.mint(claims), key: null, phoneDeviceId: PHONE },
+      deps()
+    )
+    expect(outcome.ok).toBe(true)
+    if (outcome.ok) expect(outcome.firstTime).toBe(false)
+  })
+
+  it('treats an empty ?key= as no key, not as a wrong one', async () => {
+    // It carries nothing to check, and refusing it would turn a page that
+    // happens to append the parameter into a phone that cannot get in.
+    alreadyAdmitted()
+    for (const key of ['', '   ']) {
+      const outcome = await admit(
+        { token: reg.mint({ ...claims, jti: `j-${key.length}` }), key, phoneDeviceId: PHONE },
+        deps()
+      )
+      expect(outcome.ok, JSON.stringify(key)).toBe(true)
+    }
+  })
+
+  it('refuses a NEW device that presents a wrong key', async () => {
+    ring.current()
+    const outcome = await admit(
+      { token: reg.mint(claims), key: 'ZZZZZZ', phoneDeviceId: PHONE },
+      deps()
+    )
+    expect(outcome.ok).toBe(false)
+    if (!outcome.ok) expect(outcome.refusal.kind).toBe('key')
+  })
+
+  it('admits a NEW device that presents the right key', async () => {
+    const outcome = await admit(
+      { token: reg.mint(claims), key: ring.current().key, phoneDeviceId: PHONE },
+      deps()
+    )
+    expect(outcome.ok).toBe(true)
+    if (outcome.ok) expect(outcome.firstTime).toBe(true)
+  })
+
+  it('refuses a NEW device that presents no key at all', async () => {
+    const outcome = await admit(
+      { token: reg.mint(claims), key: null, phoneDeviceId: PHONE },
+      deps()
+    )
+    expect(outcome.ok).toBe(false)
+    if (!outcome.ok) expect(outcome.refusal.kind).toBe('key')
+  })
+
+  it('takes the PREVIOUS rotation from an admitted device, as from any other', async () => {
+    alreadyAdmitted()
+    const first = ring.current().key
+    ring.current()
+    const outcome = await admit(
+      { token: reg.mint(claims), key: first, phoneDeviceId: PHONE },
+      deps()
+    )
+    expect(outcome.ok).toBe(true)
+  })
+
+  it('DOES NOT BURN THE CANVAS TOKEN on a key refusal, so a retry works', async () => {
+    alreadyAdmitted()
+    const token = reg.mint(claims)
+    const wrong = await admit({ token, key: 'ZZZZZZ', phoneDeviceId: PHONE }, deps())
+    expect(wrong.ok).toBe(false)
+    expect(spent.spent('j-key')).toBe(false)
+
+    // The same link, with the key read off the screen this time.
+    const retry = await admit({ token, key: ring.current().key, phoneDeviceId: PHONE }, deps())
+    expect(retry.ok).toBe(true)
+    expect(spent.spent('j-key')).toBe(true)
+  })
+
+  it('leaves the admission untouched when the key is refused', async () => {
+    alreadyAdmitted()
+    const before = createAdmittedDeviceStore({ base: temp.base }).list()
+    await admit({ token: reg.mint(claims), key: 'ZZZZZZ', phoneDeviceId: PHONE }, deps())
+    expect(createAdmittedDeviceStore({ base: temp.base }).list()).toEqual(before)
+  })
+
+  it('says one sentence per refusal, with a device prefix and NO KEY MATERIAL', async () => {
+    alreadyAdmitted()
+    const secret = ring.current().key
+    await admit({ token: reg.mint(claims), key: 'ZZZZZZ', phoneDeviceId: PHONE }, deps())
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toBe('admission refused for phone-de…: the key did not match')
+    // Neither the key that was typed nor the one that would have worked.
+    expect(lines[0]).not.toContain('ZZZZZZ')
+    expect(lines[0]).not.toContain(secret)
+    expect(lines[0]).not.toContain('j-key')
+  })
+
+  it('says one sentence for a refused token too, and none for a success', async () => {
+    const other = registry()
+    await admit(
+      { token: other.mint(claims), key: ring.current().key, phoneDeviceId: PHONE },
+      deps()
+    )
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('bad_signature')
+
+    lines = []
+    await admit(
+      { token: reg.mint(claims), key: ring.current().key, phoneDeviceId: PHONE },
+      deps({ log: (message) => lines.push(message) })
+    )
+    expect(lines).toEqual([])
   })
 })

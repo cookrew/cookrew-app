@@ -2,7 +2,7 @@ import type { AccountFile } from './account-v2'
 import type { AdmittedDevice, AdmittedDeviceStore } from './admitted-devices'
 import type { CanvasTokenResult, RegistryKeys } from './canvas-token'
 import { verifyCanvasToken } from './canvas-token'
-import { PAIRING_COPY } from '../shared/pairing-qr'
+import { PAIRING_COPY, deviceIdPrefix } from '../shared/pairing-qr'
 
 /**
  * LETTING A PHONE IN, ONCE, WITHOUT A URL.
@@ -80,6 +80,12 @@ export type AdmissionDeps = {
    */
   readonly spend?: (jti: string, exp: number) => boolean
   readonly now: () => number
+  /**
+   * One sentence per refusal. Never the key, never the token: a log line is
+   * the easiest place in the system to leak a live credential, and the only
+   * thing worth reading later is which device was turned away and why.
+   */
+  readonly log?: (message: string) => void
 }
 
 const tokenRefusal = (reason: string): AdmissionRefusal => ({
@@ -100,6 +106,23 @@ const DEVICE_REFUSAL: AdmissionRefusal = {
   sentence: PAIRING_COPY.NAMED_THE_MAC
 }
 
+/**
+ * Refuse, and say so once.
+ *
+ * The device id is cut to its prefix and the key is not in the argument list
+ * at all, so there is no path from here to a live credential in a log file.
+ */
+const refuse = (
+  deps: Pick<AdmissionDeps, 'log'>,
+  deviceId: string | null,
+  refusal: AdmissionRefusal,
+  why: string
+): AdmissionOutcome => {
+  const who = deviceId ? deviceIdPrefix(deviceId) : 'an unnamed device'
+  deps.log?.(`admission refused for ${who}: ${why}`)
+  return { ok: false, refusal }
+}
+
 /** True when the query looks like an admission attempt at all. */
 export const isAdmissionRequest = (request: AdmissionRequest): boolean =>
   request.token !== null
@@ -109,9 +132,11 @@ export const admit = async (
   deps: AdmissionDeps
 ): Promise<AdmissionOutcome> => {
   const account = deps.account()
-  if (!account) return { ok: false, refusal: tokenRefusal('no_account') }
-  if (!request.token) return { ok: false, refusal: tokenRefusal('malformed') }
-  if (!request.phoneDeviceId) return { ok: false, refusal: tokenRefusal('no_device') }
+  if (!account) return refuse(deps, null, tokenRefusal('no_account'), 'no account on this Mac')
+  if (!request.token) return refuse(deps, null, tokenRefusal('malformed'), 'no token')
+  if (!request.phoneDeviceId) {
+    return refuse(deps, null, tokenRefusal('no_device'), 'the link named no device')
+  }
   /**
    * THE PHONE IS NOT THE MAC. A page that sends this desktop's own id as
    * `device` would otherwise fail the `dev` claim and read as a forged token,
@@ -120,7 +145,7 @@ export const admit = async (
    * confusion worth naming.
    */
   if (request.phoneDeviceId === account.deviceId) {
-    return { ok: false, refusal: DEVICE_REFUSAL }
+    return refuse(deps, request.phoneDeviceId, DEVICE_REFUSAL, 'the link named the Mac')
   }
 
   const expectation = {
@@ -142,11 +167,42 @@ export const admit = async (
   }
 
   const verified = await check()
-  if (!verified.ok) return { ok: false, refusal: tokenRefusal(verified.reason) }
+  if (!verified.ok) {
+    return refuse(deps, request.phoneDeviceId, tokenRefusal(verified.reason), verified.reason)
+  }
 
+  /**
+   * A KEY THAT IS PRESENTED IS A KEY THAT IS CHECKED.
+   *
+   * This was `if (!already && ...)`: a device this Mac had admitted before
+   * skipped the check entirely, so a WRONG key was not refused — it was never
+   * looked at. The owner watched OPEN succeed on a key that did not match,
+   * which is the worst possible answer, because the six characters are the
+   * whole of "somebody is standing at this Mac right now" and a check that is
+   * silently skipped reads exactly like a check that passed.
+   *
+   * The rule is now about the REQUEST, not about the requester's history:
+   *
+   *   a key was presented  → it must match the current or previous rotation,
+   *                          whoever is asking and however often they have
+   *                          been let in before;
+   *   no key at all        → prior admission is what stands in for presence,
+   *                          which is what makes the first pairing the only
+   *                          one a phone ever does.
+   *
+   * An empty `?key=` is no key rather than a wrong one — it carries nothing to
+   * check, and treating it as a wrong key would refuse an admitted phone whose
+   * page happened to append the parameter.
+   */
+  const presented = request.key !== null && request.key.trim().length > 0 ? request.key : null
   const already = deps.admitted.has(request.phoneDeviceId)
-  if (!already && !(request.key !== null && deps.acceptsPairingKey(request.key))) {
-    return { ok: false, refusal: KEY_REFUSAL }
+
+  if (presented !== null) {
+    if (!deps.acceptsPairingKey(presented)) {
+      return refuse(deps, request.phoneDeviceId, KEY_REFUSAL, 'the key did not match')
+    }
+  } else if (!already) {
+    return refuse(deps, request.phoneDeviceId, KEY_REFUSAL, 'no key, and never admitted here')
   }
 
   /**
@@ -160,7 +216,7 @@ export const admit = async (
    * again. A wrong key is the ordinary case, not the attack.
    */
   if (deps.spend && !deps.spend(verified.claims.jti, verified.claims.exp)) {
-    return { ok: false, refusal: REPLAY_REFUSAL }
+    return refuse(deps, request.phoneDeviceId, REPLAY_REFUSAL, 'that link was already used')
   }
 
   const admitted = deps.admitted.admit({

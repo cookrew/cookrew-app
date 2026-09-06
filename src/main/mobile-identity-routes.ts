@@ -134,7 +134,8 @@ export const handleIdentityRoutes = async (
       admitted: deps.admitted,
       acceptsPairingKey: deps.acceptsPairingKey,
       ...(deps.spend ? { spend: deps.spend } : {}),
-      now: deps.now ?? Date.now
+      now: deps.now ?? Date.now,
+      log
     } satisfies AdmissionDeps
   )
 
