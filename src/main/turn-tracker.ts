@@ -22,6 +22,7 @@ import {
   type ProducerLease
 } from './producer-lease'
 import { summarizeTurn, TurnSummarizer } from './sous'
+import type { SousReadiness } from './sous-breaker'
 import type { TurnStore } from './turn-store'
 import {
   RECOVERED_PROMPT_LABEL,
@@ -62,11 +63,18 @@ const RESUME_WINDOW_MS = 30_000
 const HEAL_SCAN_MS = 1000
 /**
  * Paced Sous title-backfill: one record per tick so a burst never trips the
- * summarizer's down-cooldown (which would null out a whole sequential pass).
+ * summarizer's breaker (which would null out a whole sequential pass).
  */
 const BACKFILL_TICK_MS = 2000
-/** Cooldown before retrying the SAME record — lets a bad/slow one not starve the rest. */
+/**
+ * Cooldown before retrying the SAME record, doubled on every failure up to
+ * the cap — the record that just timed out is never the next tick's pick,
+ * and one unfittable record cannot starve the rest.
+ */
 const BACKFILL_RETRY_MS = 60_000
+const BACKFILL_RETRY_CAP_MS = 1_800_000
+/** A title refresh that found both summarizer slots taken tries again soon, not in 15 s. */
+const TITLE_BUSY_RETRY_MS = 1500
 /** Minimum turn duration before quiescence may end it (agent spin-up). */
 const GRACE_MS = 1500
 const POLL_MS = 400
@@ -581,7 +589,14 @@ export class TurnTracker extends EventEmitter {
   constructor(
     private summarize: TurnSummarizer = summarizeTurn,
     private store: TurnStore | null = null,
-    private lease: ProducerLease = defaultProducerLease()
+    private lease: ProducerLease = defaultProducerLease(),
+    /**
+     * Would the summarizer attempt a request right now? Checked BEFORE any
+     * work — no record picked, no output diffed — so an open breaker costs
+     * a tick nothing, and no log line. Defaults to always ready so a test's
+     * injected summarizer is the whole truth; index.ts wires sousReadiness.
+     */
+    private sousReady: () => SousReadiness = () => 'ready'
   ) {
     super()
   }
@@ -709,6 +724,8 @@ export class TurnTracker extends EventEmitter {
   private backfillInFlight = false
   /** Last backfill attempt per record ("terminalId:index" → epoch ms). */
   private backfillAttempt = new Map<string, number>()
+  /** Consecutive failed attempts per record: the exponent of its cooldown. */
+  private backfillFailures = new Map<string, number>()
 
   /**
    * Completed turns for a terminal, oldest first (lazy-loaded from disk) — a
@@ -1218,11 +1235,17 @@ export class TurnTracker extends EventEmitter {
         if (record.title !== undefined) continue
         if (record.reply.length === 0 && record.prompt.length === 0) continue
         const key = `${terminalId}:${record.index}`
-        if (now - (this.backfillAttempt.get(key) ?? 0) < BACKFILL_RETRY_MS) continue
+        if (now - (this.backfillAttempt.get(key) ?? 0) < this.backfillCooldown(key)) continue
         return { terminalId, record, key }
       }
     }
     return null
+  }
+
+  /** 60 s after the first failure, 2 min after the second, 4 min … capped. */
+  private backfillCooldown(key: string): number {
+    const failures = this.backfillFailures.get(key) ?? 0
+    return Math.min(BACKFILL_RETRY_MS * 2 ** Math.max(0, failures - 1), BACKFILL_RETRY_CAP_MS)
   }
 
   private async backfillTick(): Promise<void> {
@@ -1231,6 +1254,9 @@ export class TurnTracker extends EventEmitter {
       this.stopBackfillPump()
       return
     }
+    // Breaker open (or the summarizer otherwise busy): skip the tick without
+    // picking a record, so nobody's cooldown is spent on a call never made.
+    if (this.sousReady() !== 'ready') return
     const next = this.nextBackfill()
     if (!next) return // all untitled are in cooldown — a later tick retries
     this.backfillInFlight = true
@@ -1241,7 +1267,13 @@ export class TurnTracker extends EventEmitter {
         tools: [],
         lines: next.record.reply.split('\n')
       })
-      if (title === null) return // Sous down / cooldown; retried after BACKFILL_RETRY_MS
+      if (title === null) {
+        // Sous down, refused or unusable; retried after a growing cooldown.
+        this.backfillFailures.set(next.key, (this.backfillFailures.get(next.key) ?? 0) + 1)
+        return
+      }
+      this.backfillFailures.delete(next.key)
+      this.backfillAttempt.delete(next.key)
       const current = this.histories.get(next.terminalId)
       const live = current?.find((r) => r.index === next.record.index)
       // Skip if the turn was rewound / already titled while we summarized.
@@ -1811,6 +1843,13 @@ export class TurnTracker extends EventEmitter {
     this.deliveredPrompt.delete(terminalId)
     this.scrapeEmitted.delete(terminalId)
     this.openTurnFacts.delete(terminalId)
+    // A recycled id must not inherit the old records' backfill cooldowns.
+    for (const key of [...this.backfillAttempt.keys()]) {
+      if (key.startsWith(`${terminalId}:`)) this.backfillAttempt.delete(key)
+    }
+    for (const key of [...this.backfillFailures.keys()]) {
+      if (key.startsWith(`${terminalId}:`)) this.backfillFailures.delete(key)
+    }
   }
 
   /** Write out pending history saves now (app quit). */
@@ -2380,6 +2419,13 @@ export class TurnTracker extends EventEmitter {
    */
   private async refreshTitle(t: TrackedTerminal): Promise<void> {
     if (t.phase !== 'thinking' && t.phase !== 'waiting') return
+    const readiness = this.sousReady()
+    if (readiness !== 'ready') {
+      // Breaker open: keep the cadence, do none of the work, log nothing.
+      // Merely busy: both slots taken by other terminals, try again soon.
+      this.scheduleTitle(t, readiness === 'busy' ? TITLE_BUSY_RETRY_MS : TITLE_REFRESH_MS)
+      return
+    }
     const gen = t.titleGen
     const delta = diffOutput(t.snapshot, t.session.fullText())
     const title = await this.summarize({
@@ -2683,6 +2729,8 @@ export class TurnTracker extends EventEmitter {
    * back to the safe full write — correctness never rides on position.
    */
   private async finalizeTitle(t: TrackedTerminal, recordIndex: number): Promise<void> {
+    // Breaker open: the record stays untitled and the backfill pump owns it.
+    if (this.sousReady() === 'open') return
     const gen = t.titleGen
     const title = await this.summarize({
       prompt: t.prompt ?? '',
