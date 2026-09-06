@@ -22,7 +22,7 @@ import type net from 'node:net'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { handleMobileApi, type MobileApiDeps } from '../src/main/mobile-api'
 import { streamAdaptersEnabled } from '../src/main/stream-adapters'
 import { createStreamService } from '../src/main/stream-service'
@@ -100,6 +100,11 @@ interface Bed {
 
 describe('the five old routes, answered off the one reader', () => {
   const cleanup: Array<() => void> = []
+  // The adapters are OFF by default until T4 migrates the marks; these gates
+  // exercise them ON, the way T4 will ship them.
+  beforeEach(() => {
+    process.env.COOKREW_STREAM_ADAPTERS = '1'
+  })
   afterEach(() => {
     for (const run of cleanup.splice(0)) run()
     delete process.env.COOKREW_STREAM_ADAPTERS
