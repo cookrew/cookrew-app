@@ -112,8 +112,10 @@ export const MEMORY = {
    * The map is not the whole module. Two side caches (oversized renders,
    * ill-formed bodies) each hold up to four renders under 2x the budget, so
    * the WORST CASE the module can retain is 8 + 16 + 16 = 40 MiB accounted
-   * (about 20 MB real for Latin-1 text) — and only with two notes over
-   * 8 MiB accounted and four ill-formed ones on one canvas. This budget
+   * (about 20 MB real for Latin-1 text) — and only with the map full, ONE
+   * note between 8 and 16 MiB accounted (two oversized notes can never be
+   * resident together: each is over the budget, so together they are over
+   * the cap) and up to four ill-formed bodies totalling 16 MiB. This budget
    * gates the map alone; the side-cache test in memory.perf.ts asserts the
    * 40 MiB bound with both caches populated.
    */
