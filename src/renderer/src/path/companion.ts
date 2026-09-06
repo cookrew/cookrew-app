@@ -175,7 +175,9 @@ const startPlaneSwitch = (): (() => void) => {
         switchPlaneIfBetter({
           plane: dataPlane,
           card: fetchCard,
-          hello: (origin, nonce) => askHello(origin, nonce),
+          // The origin is sent so the Mac answers version 2 — a proof bound
+          // to the endpoint, which is the only kind this switcher accepts.
+          hello: (origin, nonce) => askHello(origin, nonce, { origin }),
           verify: verifyHello,
           adopt: (plane: DataPlane) => setDataPlane(plane),
           nonce: () => randomNonce((bytes) => window.crypto.getRandomValues(bytes)),

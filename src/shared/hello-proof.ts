@@ -104,31 +104,44 @@ export interface HelloExpectation {
   readonly nonce: string
 }
 
+/** The three fields a client hands on to the registry, once it believes them. */
+export interface HelloProof {
+  readonly origin: string
+  readonly issuedAtMs: number
+  readonly sig: string
+}
+
+export type HelloReading =
+  | { readonly ok: true; readonly proof: HelloProof }
+  | { readonly ok: false; readonly reason: HelloReplyRefusal }
+
 /**
- * Is this answer worth sending to the registry? Null means yes.
+ * Is this answer worth sending to the registry, and what did it prove?
  *
  * ORDER IS DELIBERATE: version first, because a v1 answer is a different
  * protocol and not a failure of this one; then the two cheap equalities; then
  * the origin, which is the one that names an attacker.
  */
-export const checkHelloReply = (
-  reply: HelloReplyLike | null,
+export const readHelloReply = (
+  reply: HelloReplyLike | null | undefined,
   expected: HelloExpectation
-): HelloReplyRefusal | null => {
-  if (reply === null || typeof reply !== 'object') return 'malformed'
+): HelloReading => {
+  const no = (reason: HelloReplyRefusal): HelloReading => ({ ok: false, reason })
+  if (reply === null || reply === undefined || typeof reply !== 'object') return no('malformed')
   // A Mac on an older bundle answers v1 and is simply not usable here. It is
   // refused rather than trusted: without a signed origin there is no way to
   // tell its answer from the same answer relayed by somebody else.
-  if (reply.v !== 2) return 'no_version'
-  if (reply.deviceId !== expected.deviceId) return 'wrong_device'
-  if (reply.nonce !== expected.nonce) return 'wrong_nonce'
-  if (typeof reply.sig !== 'string' || reply.sig.length === 0) return 'malformed'
-  if (!Number.isSafeInteger(reply.issuedAtMs) || (reply.issuedAtMs as number) <= 0) return 'malformed'
-  if (typeof reply.origin !== 'string' || reply.origin.length === 0) return 'malformed'
+  if (reply.v !== 2) return no('no_version')
+  if (reply.deviceId !== expected.deviceId) return no('wrong_device')
+  if (reply.nonce !== expected.nonce) return no('wrong_nonce')
+  const { origin, issuedAtMs, sig } = reply
+  if (typeof sig !== 'string' || sig.length === 0) return no('malformed')
+  if (!Number.isSafeInteger(issuedAtMs) || (issuedAtMs as number) <= 0) return no('malformed')
+  if (typeof origin !== 'string' || origin.length === 0) return no('malformed')
   // THE ATTACK, CAUGHT HERE. A signature relayed from the real Mac carries the
   // real Mac's origin, which is not the address this client dialled.
-  if (normaliseOrigin(reply.origin) !== normaliseOrigin(expected.origin)) return 'wrong_origin'
-  return null
+  if (normaliseOrigin(origin) !== normaliseOrigin(expected.origin)) return no('wrong_origin')
+  return { ok: true, proof: { origin, issuedAtMs: issuedAtMs as number, sig } }
 }
 
 /**

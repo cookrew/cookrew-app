@@ -117,6 +117,17 @@ export interface HelloReply {
    * signed by the same public CA — so `/v2/verify-hello` is the gate there.
    */
   readonly sig?: string
+  /**
+   * HELLO v2 — present only when the caller asked for it, and the whole point
+   * of asking. `origin` is the endpoint the MAC believes it answered at, and
+   * comparing it with the endpoint this client actually dialled is what
+   * catches a box that relayed our challenge to the real Mac. `issuedAtMs` is
+   * the Mac's clock at signing; the registry, not this page, holds the clock
+   * that judges it. See src/shared/hello-proof.ts.
+   */
+  readonly v?: number
+  readonly origin?: string
+  readonly issuedAtMs?: number
 }
 
 export interface SwitchDeps {
@@ -196,16 +207,31 @@ export const randomNonce = (random: (bytes: Uint8Array) => Uint8Array): string =
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
+export interface AskHelloOptions {
+  readonly timeoutMs?: number
+  /**
+   * ASK FOR VERSION 2, by telling the Mac which endpoint this client thinks it
+   * dialled. It is a HINT and never the signed value: the Mac signs what IT
+   * saw, and refuses with 421 when the two disagree — which is the cheap end
+   * of catching a relayed challenge. Omit it and the Mac answers version 1,
+   * exactly as it always did, which is what the navigating switch wants: it
+   * dials bare addresses the Mac has published no name for.
+   */
+  readonly origin?: string
+}
+
 /** One `fetch` with a deadline, answering null rather than throwing. */
 export const askHello = async (
   url: string,
   nonce: string,
-  timeoutMs = HELLO_TIMEOUT_MS
+  options: AskHelloOptions = {}
 ): Promise<HelloReply | null> => {
   const abort = new AbortController()
-  const timer = setTimeout(() => abort.abort(), timeoutMs)
+  const timer = setTimeout(() => abort.abort(), options.timeoutMs ?? HELLO_TIMEOUT_MS)
+  const asked =
+    options.origin === undefined ? '' : `&origin=${encodeURIComponent(options.origin)}`
   try {
-    const response = await fetch(`${url}/api/hello?nonce=${encodeURIComponent(nonce)}`, {
+    const response = await fetch(`${url}/api/hello?nonce=${encodeURIComponent(nonce)}${asked}`, {
       signal: abort.signal,
       // No cookies and no credentials: the answer is a public fact about the
       // Mac, and sending anything else to an address that has not yet proved
