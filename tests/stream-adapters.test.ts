@@ -322,6 +322,12 @@ describe('the five old routes, answered off the one reader', () => {
 // deliberate facts instead of as a failing byte comparison.
 
 describe('the differences the adapters do NOT hide', () => {
+  beforeEach(() => {
+    process.env.COOKREW_STREAM_ADAPTERS = '1'
+  })
+  afterEach(() => {
+    delete process.env.COOKREW_STREAM_ADAPTERS
+  })
   const cleanup: Array<() => void> = []
   afterEach(() => {
     for (const run of cleanup.splice(0)) run()
