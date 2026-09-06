@@ -1,6 +1,7 @@
+import { createSocket } from 'node:dgram'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { RCODE, UDP_FLOOR } from '../registry/src/dns-wire'
-import { createDnsServer, type DnsServer } from '../registry/src/dns-server'
+import { createDnsServer, sourceGroup, type DnsServer } from '../registry/src/dns-server'
 import { createZone } from '../registry/src/dns-zone'
 import { T, askTcp, askUdp, buildQuery, parseAnswer } from './support/dns-probe'
 
@@ -152,5 +153,57 @@ describe('the rate limit', () => {
     } finally {
       await limited.stop()
     }
+  })
+})
+
+/**
+ * L6 — ONE LISTENER, BOTH FAMILIES.
+ *
+ * A resolver reaching us over IPv6 was reaching a socket that did not exist:
+ * the listener was `udp4` only. `udp6` with `ipv6Only` unset is dual stack, so
+ * one socket answers both and a v4 peer arrives as `::ffff:a.b.c.d`. A test
+ * that names a v4 address still gets a v4 socket, because `udp6` cannot bind
+ * 127.0.0.1 — which is also what a pod told one interface gets.
+ */
+describe('dual stack', () => {
+  it('answers the same question over IPv4 and over IPv6 on one socket', async () => {
+    const both = createDnsServer({ port: 0, address: '::', respond: responder })
+    const on = await both.start()
+    try {
+      const query = buildQuery({ name: ZONE, type: T.SOA })
+      const over4 = await askUdp(on, query)
+      expect(over4).not.toBeNull()
+      expect(parseAnswer(over4!).rcode).toBe(RCODE.NOERROR)
+
+      const over6 = await new Promise<Buffer | null>((resolve) => {
+        const socket = createSocket('udp6')
+        const timer = setTimeout(() => {
+          socket.close()
+          resolve(null)
+        }, 700)
+        socket.on('message', (reply) => {
+          clearTimeout(timer)
+          socket.close()
+          resolve(reply)
+        })
+        socket.send(query, on, '::1')
+      })
+      expect(over6).not.toBeNull()
+      expect(parseAnswer(over6!).rcode).toBe(RCODE.NOERROR)
+    } finally {
+      await both.stop()
+    }
+  })
+
+  it('groups a v4-mapped peer with the v4 block it came from', () => {
+    expect(sourceGroup('::ffff:192.168.2.40')).toBe(sourceGroup('192.168.2.99'))
+    expect(sourceGroup('192.168.2.40')).not.toBe(sourceGroup('192.168.3.40'))
+    // /56 for v6 — seven bytes, so the fourth hextet's low byte is outside it
+    // and its high byte is inside. `…:1:2::` and `…:1:3::` are one customer;
+    // `…:1:200::` and `…:1:300::` are two.
+    expect(sourceGroup('2001:db8:1:2::1')).toBe(sourceGroup('2001:db8:1:3:ffff::9'))
+    expect(sourceGroup('2001:db8:1:200::1')).not.toBe(sourceGroup('2001:db8:1:300::1'))
+    // Something that is not an address at all is still its own key, not a crash.
+    expect(sourceGroup('')).toBe('')
   })
 })

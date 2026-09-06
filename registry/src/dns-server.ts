@@ -8,6 +8,7 @@ import {
   buildAnswer,
   parseQuery
 } from './dns-wire'
+import { parseIp } from './dns-address'
 import type { Responder } from './dns-zone'
 
 /**
@@ -65,6 +66,26 @@ export interface DnsServer {
   start: () => Promise<number>
   stop: () => Promise<void>
   counts: () => DnsCounts
+}
+
+/**
+ * A SOURCE IS A BLOCK, NOT AN ADDRESS.
+ *
+ * IPv4 to its /24 and IPv6 to its /56 — the smallest allocation one operator
+ * hands to one customer. Counting single addresses is counting something the
+ * sender chooses: a /64 is eighteen quintillion of them, and on IPv6 every
+ * packet of a flood can carry a source nothing has ever seen before.
+ *
+ * A `::ffff:` prefix is stripped first, because a dual-stack socket reports a
+ * v4 peer that way and it is the same block either way.
+ */
+export function sourceGroup(address: string): string {
+  const ip = parseIp(address.replace(/^::ffff:/i, ''))
+  if (ip === null) return address
+  const keep = ip.family === 4 ? 3 : 7
+  let key = ip.family === 4 ? '4' : '6'
+  for (let i = 0; i < keep; i += 1) key += `.${ip.bytes[i]}`
+  return key
 }
 
 /**
@@ -242,8 +263,23 @@ export function createDnsServer(options: DnsServerOptions): DnsServer {
   return {
     start: () =>
       new Promise<number>((resolve, reject) => {
-        const address = options.address ?? '0.0.0.0'
-        const socket = createSocket({ type: 'udp4', reuseAddr: true })
+        const address = options.address ?? '::'
+        /**
+         * ONE SOCKET FOR BOTH FAMILIES. `udp6` with `ipv6Only` unset is dual
+         * stack: a v4 peer arrives as `::ffff:a.b.c.d` and is answered on the
+         * same socket, which is what a resolver reaching us over either
+         * protocol needs and what the Service in front of this hands us. A
+         * literal v4 bind address — every test, and a pod that was told one —
+         * still gets a v4 socket, because `udp6` cannot bind 127.0.0.1.
+         *
+         * AND NO reuseAddr. It bought nothing here (this port is bound once,
+         * at boot, by one process) and it is how a second copy of the registry
+         * binds the same UDP port silently instead of refusing loudly — two
+         * processes then split the queries between them at the kernel's whim.
+         */
+        const socket = address.includes(':')
+          ? createSocket({ type: 'udp6', ipv6Only: false })
+          : createSocket({ type: 'udp4' })
         socket.on('error', reject)
         socket.on('message', onDatagram)
         socket.bind(options.port, address, () => {
