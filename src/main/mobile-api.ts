@@ -37,6 +37,9 @@ import type {
   RestoreResult,
 } from "../shared/model";
 import { readBytes, readJson, respondJson, startSse, pairingAuthorized } from "./mobile-http";
+import type { StreamService } from "./stream-service";
+import { handleStreamRoutes } from "./stream-routes";
+import { handleStreamAdapters } from "./stream-adapters";
 import type { LoopHealthSnapshot } from "./loop-health";
 import { ownerSubmit } from "./ask";
 import { MAX_ATTACHMENT_BYTES } from "./attachments";
@@ -172,6 +175,17 @@ export interface MobileApiDeps {
   undoRestore: (id: string) => Promise<RestoreResult>;
   /** Trace-sourced context reader (identity-keyed windows over agent files). */
   traces: Pick<TraceReader, 'index' | 'boundaryMarkers' | 'page'>;
+  /**
+   * THE ONE READER (one-stream T2, docs/site/one-stream-2026-09-07.html).
+   *
+   * Serves /stream, /stream/index, /stream/live and PUT /stream/marks, and —
+   * behind COOKREW_STREAM_ADAPTERS, on by default in this release — answers
+   * /turns, /latest and the three /trace routes off the same read. Optional
+   * so this module serves before it is wired: absent means the three new
+   * routes answer 503 (loud, not an invented empty history) and the five old
+   * ones keep answering exactly as they did.
+   */
+  stream?: StreamService;
   /**
    * Activity Board data plane (cross-workspace task view). Optional so this
    * module compiles and serves before the collectors are wired in index.ts;
@@ -827,6 +841,23 @@ export async function handleMobileApi(
     }
     return true;
   }
+
+  // ---- ONE STREAM (T2) ----
+  //
+  // THE THREE NEW ROUTES, beside the old ones rather than instead of them:
+  // /stream/index (the rail), /stream (a window of blocks by identity),
+  // /stream/live (the open tail over SSE) and PUT /stream/marks (the only
+  // write). They sit below the auth gates above and are covered by them —
+  // the read gate for the GETs, the C1 pairing gate for the PUT — because a
+  // second, differently-worded gate is how one of them ends up weaker.
+  if (await handleStreamRoutes(request, response, url, deps)) return true;
+  // THE FIVE OLD ROUTES, AS ADAPTERS over that same reader. Returns false —
+  // and the original handlers below run untouched — when the flag is off,
+  // when the reader is not wired, or for a card whose record is not a
+  // transcript this process can walk (a door's lives at the author's app, a
+  // scrape card's is the PTY). "A regression is a flag flip, not a restore"
+  // is only true because the fallback is the ORIGINAL code, not a rewrite.
+  if (await handleStreamAdapters(request, response, url, deps)) return true;
 
   const traceIndexMatch = p.match(/^\/api\/terminal\/([^/]+)\/trace\/index$/);
   if (traceIndexMatch && method === "GET") {

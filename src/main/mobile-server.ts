@@ -127,6 +127,10 @@ export interface MobileServerDeps {
   traces: Pick<TraceReader, 'index' | 'boundaryMarkers' | 'page' | 'latestCheckpoint'>
   /** Capability-routed history for local terminals and placed crews. */
   turnHistory?: (terminalId: string) => Promise<TurnRecord[]>
+  /** The one stream (T2) — passed straight through to handleMobileApi, which
+   *  serves /stream* from it and, behind COOKREW_STREAM_ADAPTERS, the five
+   *  old routes as well. Absent = the new routes 503, the old ones unchanged. */
+  stream?: MobileApiDeps['stream']
   /** Activity Board data plane; absent = /api/board answers 503. */
   board?: BoardSources
   /** Event-loop health (loop-health.ts); absent = /api/health answers 503. */
