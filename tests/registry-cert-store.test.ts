@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
@@ -154,5 +154,88 @@ describe('the challenge table', () => {
     clock += 5000
     certs.publish(MAC, ['a-digest'])
     expect(certs.changedAt()).toBeGreaterThan(before)
+  })
+})
+
+/**
+ * H4 — THE CEILING THE PER-DEVICE LIMITS CANNOT SEE.
+ *
+ * Let's Encrypt counts fifty new certificates per REGISTERED DOMAIN per week,
+ * and cookrew.dev is one registered domain — so every `*.<id>.d.cookrew.dev`
+ * comes out of the same allowance as cookrew.dev's own renewal. One an hour
+ * per device is a limit on a device; fifty devices each taking their one an
+ * hour spend the site's certificate in an afternoon, and the site's is the one
+ * nobody can order by hand at three in the morning.
+ */
+describe('the weekly budget, across every Mac', () => {
+  const budgeted = (weekly: number): CertStore => {
+    dir = mkdtempSync(path.join(tmpdir(), 'cert-budget-'))
+    dirs.push(dir)
+    return new CertStore(dir, () => clock, () => undefined, weekly)
+  }
+
+  it('refuses an order past the budget, whoever is asking and however clean their record', () => {
+    const certs = budgeted(3)
+    for (let i = 0; i < 3; i += 1) {
+      const device = `mac-${i}`
+      expect(certs.mayOrder(device).ok).toBe(true)
+      certs.beginOrder(device, `order-${i}`)
+    }
+    expect(certs.ordersThisWeek()).toBe(3)
+    // A Mac that has never asked for anything is still refused: the allowance
+    // is the registry's, not the device's.
+    const fresh = certs.mayOrder('mac-never-seen')
+    expect(fresh.ok).toBe(false)
+    if (!fresh.ok) {
+      expect(fresh.retryAfter).toBeGreaterThan(0)
+      // Until the oldest of the three ages out of the week, and no longer.
+      expect(fresh.retryAfter).toBeLessThanOrEqual(7 * 24 * 60 * 60)
+    }
+  })
+
+  it('lets the window roll rather than latching shut', () => {
+    const certs = budgeted(2)
+    certs.beginOrder('mac-a', 'one')
+    clock += 3 * 24 * HOUR
+    certs.beginOrder('mac-b', 'two')
+    expect(certs.mayOrder('mac-c').ok).toBe(false)
+    // Eight days after the first, four after the second: one slot is free.
+    clock += 5 * 24 * HOUR
+    expect(certs.ordersThisWeek()).toBe(1)
+    expect(certs.mayOrder('mac-c').ok).toBe(true)
+  })
+
+  it('survives the restart it exists to survive', () => {
+    const certs = budgeted(2)
+    certs.beginOrder('mac-a', 'one')
+    certs.beginOrder('mac-b', 'two')
+    expect(certs.mayOrder('mac-c').ok).toBe(false)
+    // A restart that forgot the ledger would hand the CA a fresh allowance,
+    // which is exactly the loop that gets an account rate-limited for a week.
+    const reopened = new CertStore(dir, () => clock, () => undefined, 2)
+    expect(reopened.ordersThisWeek()).toBe(2)
+    expect(reopened.mayOrder('mac-c').ok).toBe(false)
+  })
+
+  it('rebuilds the week from a file written before the ledger existed', () => {
+    const certs = budgeted(2)
+    certs.beginOrder('mac-a', 'one')
+    // A file from the old shape: per-device records, no global list.
+    const file = path.join(dir, 'certs.json')
+    const held = JSON.parse(readFileSync(file, 'utf8')) as { orders?: number[] }
+    delete held.orders
+    writeFileSync(file, JSON.stringify(held))
+    const reopened = new CertStore(dir, () => clock, () => undefined, 2)
+    expect(reopened.ordersThisWeek()).toBe(1)
+  })
+
+  it('leaves the per-device limits saying what they always said', () => {
+    const certs = budgeted(100)
+    expect(certs.mayOrder(MAC).ok).toBe(true)
+    certs.beginOrder(MAC, 'one')
+    const soon = certs.mayOrder(MAC)
+    expect(soon.ok).toBe(false)
+    // An hour, not a week: the specific answer and the short wait.
+    if (!soon.ok) expect(soon.retryAfter).toBeLessThanOrEqual(60 * 60)
   })
 })

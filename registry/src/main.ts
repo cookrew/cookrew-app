@@ -34,6 +34,10 @@
 //                            always an explicit value: a typo must not be able
 //                            to spend the real 50-a-week allowance.
 //   --acme-email <addr>      optional contact on the ACME account.
+//   --acme-weekly-budget 35  new certificates this registry may order in a
+//                            week, across every Mac. Let's Encrypt counts 50
+//                            per registered domain and cookrew.dev's OWN
+//                            renewal comes out of the same allowance.
 // Absent flags mean nothing listens and nothing changes.
 //
 // Flags: --port --data --seed --origin --chain --terms-ttl. The origin defaults to the port that is
@@ -59,6 +63,7 @@ import { Pulse } from './pulse'
 import { createV2 } from './v2-routes'
 import { AcmeClient, LETSENCRYPT_STAGING } from './acme-client'
 import { createNames, type NamesFeature } from './names'
+import { ORDERS_PER_WEEK } from './cert-store'
 import { createDnsServer, type DnsServer } from './dns-server'
 import { readNameServers } from './dns-glue'
 import { buildManifest, signManifest } from '../../src/main/preset-publish'
@@ -218,6 +223,7 @@ const DNS_ZONE = flag('dns-zone', 'd.cookrew.dev').toLowerCase()
 const DNS_NS = readNameServers(flag('dns-ns', ''))
 const ACME_DIRECTORY = flag('acme-directory', LETSENCRYPT_STAGING)
 const ACME_EMAIL = flag('acme-email', '')
+const ACME_WEEKLY_BUDGET = Number(flag('acme-weekly-budget', String(ORDERS_PER_WEEK)))
 
 /** One counts line a minute, once DNS is up. Totals only — never a query. */
 const COUNTS_EVERY_MS = 60_000
@@ -230,6 +236,12 @@ let names: NamesFeature | undefined
 if (args.includes('--dns-port') || DNS_NS !== null) {
   if (!Number.isInteger(DNS_PORT) || DNS_PORT < 1 || DNS_PORT > 65535) {
     console.error(`refusing to start: --dns-port ${flag('dns-port', '')} is not a port`)
+    process.exit(1)
+  }
+  if (!Number.isInteger(ACME_WEEKLY_BUDGET) || ACME_WEEKLY_BUDGET < 1) {
+    console.error(
+      `refusing to start: --acme-weekly-budget ${flag('acme-weekly-budget', '')} is not a positive number of certificates`
+    )
     process.exit(1)
   }
   if (DNS_NS === null) {
@@ -250,6 +262,7 @@ if (args.includes('--dns-port') || DNS_NS !== null) {
       find: (deviceId) => v2.accounts.desktopFor(deviceId),
       changedAt: () => v2.accounts.desktopsChangedAt()
     },
+    weeklyBudget: ACME_WEEKLY_BUDGET,
     acme: new AcmeClient({
       directory: ACME_DIRECTORY,
       dataDir: DATA,
@@ -323,7 +336,10 @@ createRegistry({
     // the zone, the port and the glue are public by definition (they are typed
     // into the parent zone), and the ACME account key is never printed.
     console.log(`dns on :${DNS_PORT}  zone=${DNS_ZONE}  ns=${DNS_NS.map((n) => `${n.host}=${n.address}`).join(',')}`)
-    console.log(`acme directory=${ACME_DIRECTORY}${ACME_EMAIL === '' ? '' : `  contact=${ACME_EMAIL}`}`)
+    console.log(
+      `acme directory=${ACME_DIRECTORY}${ACME_EMAIL === '' ? '' : `  contact=${ACME_EMAIL}`}` +
+        `  weekly-budget=${ACME_WEEKLY_BUDGET}`
+    )
     /**
      * HELD, NOT DROPPED. The server was created inline and thrown away, so
      * `counts()` — the only window this process has onto whether DNS is

@@ -36,6 +36,36 @@ export interface NamesOptions {
   now?: () => number
   log?: (message: string) => void
   reachTtlMs?: number
+  /** New certificates this registry may order in a week, across every Mac. */
+  weeklyBudget?: number
+  /** How many CA conversations may be in flight at once. */
+  concurrency?: number
+}
+
+/**
+ * AT MOST `width` ORDERS AT ONCE, in the order they were asked for.
+ *
+ * Nothing above this queues: the route answers 202 and the CA conversation
+ * runs behind it, so twenty Macs coming back from a rollout at the same moment
+ * were twenty simultaneous ACME orders — twenty sets of TXT records standing
+ * in the zone at once, twenty poll loops, and a CA whose own concurrency
+ * limits answer all of them at once with a refusal we then record as a
+ * failure. Three is a rate a CA reads as an ordinary client; the rest wait,
+ * and they are already recorded as pending with the Mac already polling.
+ */
+export function semaphore(width: number): (task: () => Promise<void>) => Promise<void> {
+  let running = 0
+  const waiting: (() => void)[] = []
+  return async (task) => {
+    if (running >= width) await new Promise<void>((resolve) => waiting.push(resolve))
+    running += 1
+    try {
+      await task()
+    } finally {
+      running -= 1
+      waiting.shift()?.()
+    }
+  }
 }
 
 export type CertRequest =
@@ -68,12 +98,15 @@ const hostOf = (url: string): string | null => {
 }
 
 const RSA_BITS_MIN = 2048
+/** Orders in flight at once. See `semaphore`. */
+const CONCURRENT_ORDERS = 3
 
 export function createNames(options: NamesOptions): NamesFeature {
   const zone = options.zone.toLowerCase().replace(/\.$/, '')
   const now = options.now ?? Date.now
   const note = options.log ?? ((): void => undefined)
-  const certs = new CertStore(options.dataDir, now, note)
+  const certs = new CertStore(options.dataDir, now, note, options.weeklyBudget)
+  const queue = semaphore(options.concurrency ?? CONCURRENT_ORDERS)
   const wildcardFor = (deviceId: string): string => `*.${deviceId}.${zone}`
   /** `_acme-challenge.<id>.<zone>` back to the id the store is keyed by. */
   const deviceOf = (host: string): string | null => {
@@ -157,34 +190,35 @@ export function createNames(options: NamesOptions): NamesFeature {
    * can end is recorded — a chain, or a reason — so the GET afterwards can
    * say something true rather than "still pending" for ever.
    */
-  const run = async (deviceId: string, der: Uint8Array): Promise<void> => {
-    try {
-      const out = await options.acme.issue({
-        identifiers: [wildcardFor(deviceId)],
-        csrDer: der,
-        publish: (host, digests) => {
-          const id = deviceOf(host)
-          if (id !== null) certs.publish(id, digests)
-        },
-        retract: (host) => {
-          const id = deviceOf(host)
-          if (id !== null) certs.retract(id)
+  const run = (deviceId: string, der: Uint8Array): Promise<void> =>
+    queue(async () => {
+      try {
+        const out = await options.acme.issue({
+          identifiers: [wildcardFor(deviceId)],
+          csrDer: der,
+          publish: (host, digests) => {
+            const id = deviceOf(host)
+            if (id !== null) certs.publish(id, digests)
+          },
+          retract: (host) => {
+            const id = deviceOf(host)
+            if (id !== null) certs.retract(id)
+          }
+        })
+        if (!out.ok) {
+          certs.fail(deviceId, `${out.reason}: ${out.detail}`)
+          note(`names: order failed (${out.reason})`)
+          return
         }
-      })
-      if (!out.ok) {
-        certs.fail(deviceId, `${out.reason}: ${out.detail}`)
-        note(`names: order failed (${out.reason})`)
-        return
+        const settled = certs.settle(deviceId, out.value.chain)
+        note(settled === null ? 'names: the CA answered no usable chain' : 'names: a certificate was issued')
+      } catch (error) {
+        // A throw from in here would be an unhandled rejection and nothing else;
+        // the Mac would poll a pending order that no longer exists.
+        certs.fail(deviceId, error instanceof Error ? error.message : 'the order ended unexpectedly')
+        note('names: an order ended unexpectedly')
       }
-      const settled = certs.settle(deviceId, out.value.chain)
-      note(settled === null ? 'names: the CA answered no usable chain' : 'names: a certificate was issued')
-    } catch (error) {
-      // A throw from in here would be an unhandled rejection and nothing else;
-      // the Mac would poll a pending order that no longer exists.
-      certs.fail(deviceId, error instanceof Error ? error.message : 'the order ended unexpectedly')
-      note('names: an order ended unexpectedly')
-    }
-  }
+    })
 
   return {
     zone,
