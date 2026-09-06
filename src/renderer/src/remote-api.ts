@@ -5,6 +5,7 @@ import type { CompanionAccount } from '../../main/companion-account'
 import type { AccountStatus } from '../../shared/account-v2'
 import type { BoardSnapshotLike, CookrewApi } from './api'
 import type { CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
+import type { UiCommandEvent } from '../../shared/sous-ui'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 import type { VersionPinRecord } from '../../shared/version-pin'
 import { apiPath } from './api-base'
@@ -27,8 +28,20 @@ import { createRawInputQueue } from './raw-input-queue'
  * lifts it into storage and strips it from the address bar. Mutating routes
  * require it as a bearer header; read-only GETs/SSE stay open.
  */
+/**
+ * A write the VIEW makes on its own — a resize on open, marking a turn seen —
+ * as opposed to one the person made. On a read-only device (the TV wall) the
+ * first kind is refused too, and must not raise the re-pair screen: nobody
+ * asked to write, and a screen without a pointer cannot dismiss it. Measured
+ * 2026-09-06 — Sous zoomed the TV into a terminal and the resize's 401 put
+ * "Read-only device" over the whole wall.
+ */
+interface ParseOptions {
+  passive?: boolean
+}
+
 /** Turn a server answer into a value, or into the right kind of failure. */
-async function parse<T>(response: Response): Promise<T> {
+async function parse<T>(response: Response, options: ParseOptions = {}): Promise<T> {
   if (!response.ok) {
     const detail = await response.json().catch(() => ({ error: String(response.status) }))
     const message = (detail as { error?: string }).error ?? `HTTP ${response.status}`
@@ -37,7 +50,7 @@ async function parse<T>(response: Response): Promise<T> {
       // see. Raise it as its own type so it reaches the re-pair screen
       // instead of being counted as a generic network hiccup.
       const failure = new AuthError(message, /read-only/i.test(message) ? 'read-only' : 'none')
-      authStore().report(failure)
+      if (!(options.passive && failure.scope === 'read-only')) authStore().report(failure)
       throw failure
     }
     throw new Error(message)
@@ -46,7 +59,7 @@ async function parse<T>(response: Response): Promise<T> {
   return (text ? JSON.parse(text) : undefined) as T
 }
 
-async function req<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+async function req<T>(path: string, method = 'GET', body?: unknown, parseOptions: ParseOptions = {}): Promise<T> {
   const options: RequestInit = { method }
   const headers: Record<string, string> = {}
   const token = authStore().token()
@@ -64,7 +77,7 @@ async function req<T>(path: string, method = 'GET', body?: unknown): Promise<T> 
     // plane needs (cookies same-origin through the relay, none at all
     // cross-origin to the Mac) and reports the transport failures that are the
     // only evidence a direct plane has died.
-    return parse<T>(await planeFetch(path, options))
+    return parse<T>(await planeFetch(path, options), parseOptions)
   } finally {
     recordLatency(Date.now() - started)
   }
@@ -129,6 +142,11 @@ async function mapLimited<T, R>(
  */
 function post(path: string, body: unknown): void {
   void req(path, 'POST', body).catch(() => undefined)
+}
+
+/** The view's own housekeeping writes: refused quietly on a read-only device. */
+function passivePost(path: string, body: unknown): void {
+  void req(path, 'POST', body, { passive: true }).catch(() => undefined)
 }
 
 /**
@@ -227,6 +245,21 @@ export function parseOnce<T>(e: MessageEvent): T {
   return parsed
 }
 
+const SOUS_CALLER_KEY = 'cookrew-sous-caller'
+
+/** A stable id for this browser install, minted once. */
+function sousCallerId(): string {
+  try {
+    const existing = localStorage.getItem(SOUS_CALLER_KEY)
+    if (existing) return existing
+    const minted = `phone-${Math.random().toString(36).slice(2, 10)}`
+    localStorage.setItem(SOUS_CALLER_KEY, minted)
+    return minted
+  } catch {
+    return 'phone'
+  }
+}
+
 function subscribe<T>(event: string, cb: (data: T) => void): () => void {
   return sharedEvents().on(event, (e) => cb(parseOnce<T>(e)))
 }
@@ -307,9 +340,9 @@ export function createRemoteApi(): CookrewApi {
     translateHost: () => req(apiPath('/api/translate/host')),
     translateCheckpoint: (text, language) =>
       req(apiPath('/api/translate'), 'POST', { text, language }),
-    turnSeen: (terminalId) => post(apiPath(`/api/terminal/${terminalId}/seen`), {}),
+    turnSeen: (terminalId) => passivePost(apiPath(`/api/terminal/${terminalId}/seen`), {}),
     ptyResize: (terminalId, cols, rows) =>
-      post(apiPath(`/api/terminal/${terminalId}/resize`), { cols, rows }),
+      passivePost(apiPath(`/api/terminal/${terminalId}/resize`), { cols, rows }),
     ptyAttach: (terminalId, onData, onHello) => {
       // Healing, not hoping — see attachTerminalStream for why a bare
       // EventSource left the live pane black on the first open of an idle
@@ -471,6 +504,20 @@ export function createRemoteApi(): CookrewApi {
     onBrowserOpenTab: () => () => undefined,
     onBrowserPhoneViewing: () => () => undefined,
     onCmdW: () => () => undefined,
+    // Sous from the phone: the sentence goes over the API, the zoom comes
+    // back on the shared events stream like everything else the canvas does.
+    // This phone, not "a phone": the id keeps Sous's pending question ours.
+    // focusedAgentId is deliberately not sent — a network door names agents
+    // by name only (see SousCommandInput).
+    sousCommand: (text, ctx) =>
+      req(apiPath('/api/sous/command'), 'POST', { text, surface: ctx.surface, callerId: sousCallerId() }),
+    onUiCommand: (cb) => subscribe<UiCommandEvent>('ui', cb),
+    // The phone hears through its own browser (VoiceBar); the Mac's ear is
+    // the desktop's alone.
+    listenAvailable: () => Promise.resolve(false),
+    listenStart: () => Promise.resolve(false),
+    listenStop: () => Promise.resolve(),
+    onListenEvent: () => () => undefined,
     // No OS hands this surface a link: the phone and the demo are reached by
     // one, never launched by one.
     onDeepLink: () => () => undefined,

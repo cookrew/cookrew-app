@@ -59,7 +59,13 @@ describe('the credential mode', () => {
     // A direct plane is a different origin. The Mac authorises by the pairing
     // token and nothing else; a cookie travelling there would be the account
     // session leaving the account's origin for no reason at all.
-    expect(planeRequestInit(LAN_PLANE)).toEqual({ mode: 'cors', credentials: 'omit' })
+    // The local-network annotation rides along on every direct request; it is
+    // pinned on its own in plane-address-space.test.ts.
+    expect(planeRequestInit(LAN_PLANE)).toEqual({
+      mode: 'cors',
+      credentials: 'omit',
+      targetAddressSpace: 'local'
+    })
   })
 })
 
@@ -134,7 +140,11 @@ describe('apiPath, live, under a relay base', () => {
     plane.setDataPlane({ origin: LAN, kind: 'lan' })
     expect(api.apiPath('/api/events')).toBe(`${LAN}/api/events`)
     expect(api.apiPath('/api/events')).not.toContain('/relay/')
-    expect(api.apiRequestInit()).toEqual({ mode: 'cors', credentials: 'omit' })
+    expect(api.apiRequestInit()).toEqual({
+      mode: 'cors',
+      credentials: 'omit',
+      targetAddressSpace: 'local'
+    })
 
     // The fall back is the same seam, in reverse. Nothing was reloaded.
     plane.fallBackToRelay()

@@ -81,6 +81,37 @@ describe('which origins the companion answers for', () => {
   })
 })
 
+describe('what the OWASP guidance asks of a local server', () => {
+  it('refuses two Origin headers rather than believing whichever came first', () => {
+    // A browser sends the field once. Two values mean two writers, and picking
+    // either is picking which of them to agree with — see host-gate.ts, which
+    // answers a doubled Host the same way.
+    expect(allowedOrigin([REGISTRY, 'https://evil.example'], ALLOWED)).toBeNull()
+    expect(allowedOrigin(['https://evil.example', REGISTRY], ALLOWED)).toBeNull()
+    expect(companionCorsHeaders([REGISTRY, REGISTRY], ALLOWED)['access-control-allow-origin']).toBeUndefined()
+  })
+
+  it('caches a preflight for ten minutes at the most', () => {
+    // A cached preflight is an allow-list decision the browser keeps making
+    // after we have changed our mind; 600 s is the ceiling the guidance names.
+    expect(Number(CORS_MAX_AGE)).toBeLessThanOrEqual(600)
+    expect(Number.isFinite(Number(CORS_MAX_AGE))).toBe(true)
+  })
+
+  it('never reflects, never matches a substring, and never trusts `null`', () => {
+    expect(allowedOrigin('null', [...ALLOWED, 'null'])).toBeNull()
+    expect(allowedOrigin(`${REGISTRY}.evil.example`, ALLOWED)).toBeNull()
+    expect(allowedOrigin(`https://evil.example?${REGISTRY}`, ALLOWED)).toBeNull()
+  })
+
+  it('sends no credentials header on any answer, allowed or refused', () => {
+    for (const origin of [REGISTRY, 'https://evil.example', undefined]) {
+      const headers = companionCorsHeaders(origin, ALLOWED)
+      expect(headers['access-control-allow-credentials']).toBeUndefined()
+    }
+  })
+})
+
 describe('the headers a companion request gets', () => {
   it('names the methods, the headers and the age — and no credentials', () => {
     const headers = companionCorsHeaders(REGISTRY, ALLOWED)

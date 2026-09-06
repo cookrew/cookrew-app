@@ -1,6 +1,7 @@
 import http from 'node:http'
 import https from 'node:https'
 import type net from 'node:net'
+import type { Duplex } from 'node:stream'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { networkInterfaces } from 'node:os'
@@ -46,7 +47,7 @@ import {
 import { ASK_HTTP_STATUS, ASK_REMEDY } from '../shared/ask-outcome'
 import { ensureCert, missingHosts, sansOf } from './cert'
 import { enrichStateWithGit, handleMobileApi, MobileApiDeps, MobileOps, type ServeOps } from './mobile-api'
-import { holdSocketsOpen, pairingAuthorized, readJson, respondJson } from './mobile-http'
+import { holdSocketsOpen, pairingAuthorized, readJson, respondJson, tokenAccepted } from './mobile-http'
 import { handleCallRoutes, type CallEndpointDeps } from './call-endpoints'
 import { createTlsPortGate, httpsRedirectTarget } from './tls-port-gate'
 import { sendBody } from './http-compress'
@@ -59,6 +60,8 @@ import { RELAY_BASE_HEADER, RELAY_MARKER, relayBaseOf } from './relay-base'
 import { takeRelayDevice, type RelayDevice } from './relay-device'
 import { certFingerprint, reachCard } from './reach'
 import { applyCompanionCors } from './companion-cors'
+import { companionHostsOf, LOOPBACK_HOSTS } from './companion-hosts'
+import { refuseMisdirected, refuseMisdirectedUpgrade } from './host-gate'
 import { createNameSni } from './name-sni'
 import type { DesktopCert } from './desktop-cert'
 
@@ -152,6 +155,9 @@ export interface MobileServerDeps {
   ) => Promise<boolean>
   /** Version pins (§10) for the rail's third marker class; absent = []. */
   listPins?: (terminalId: string) => readonly VersionPinRecord[]
+  /** Sous's door and its `ui` bus — see MobileApiDeps; passed through as-is. */
+  sous?: MobileApiDeps['sous']
+  uiBus?: MobileApiDeps['uiBus']
   recoverAgent: (id: string) => RecoverResult
   restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>
   undoRestore: (id: string) => Promise<RestoreResult>
@@ -261,12 +267,7 @@ export function startMobileServer(deps: MobileServerDeps): void {
   // unanswered dial is not inert: the client reads the abnormal close as a dev
   // server restart and reloads the page, forever. See hmr-proxy.ts.
   const attachUpgrade = (server: http.Server | https.Server): void => {
-    server.on('upgrade', (request, socket, head) => {
-      if (isViteHmrUpgrade(request) && proxyViteHmrUpgrade(deps.rendererDevUrl, request, socket, head)) {
-        return
-      }
-      deps.onUpgrade?.(request, socket)
-    })
+    server.on('upgrade', (request, socket, head) => handleUpgrade(deps, request, socket, head))
   }
 
   // Plain HTTP: fine for the Mac's own localhost (a secure context) and as a
@@ -316,6 +317,33 @@ export function startMobileServer(deps: MobileServerDeps): void {
     listenWithRetry(gate, MOBILE_HTTPS_PORT)
     watchTailnetCert(secure)
   }
+}
+
+/**
+ * ONE WEBSOCKET UPGRADE, FOR BOTH LISTENERS.
+ *
+ * Lifted out of `startMobileServer` so the gate below can be tested without
+ * binding a port — an upgrade never reaches `handle()`, so every check it gets
+ * it gets here, and a check that cannot be tested is a check that rots.
+ */
+export function handleUpgrade(
+  deps: MobileServerDeps,
+  request: http.IncomingMessage,
+  socket: Duplex,
+  head: Buffer
+): void {
+  // THE SAME HOST GATE, because an upgrade never reaches `handle()`.
+  //
+  // A WebSocket is the rebinding path that survives everything else: the
+  // browser attaches no CORS check to it at all, so a rebound page can open
+  // one and the only field that still tells the truth is the Host in the
+  // handshake. FIRST here too — ahead of the HMR proxy, which would otherwise
+  // dial the dev server on a misdirected request's behalf.
+  if (refuseMisdirectedUpgrade(request, socket, companionHosts())) return
+  if (isViteHmrUpgrade(request) && proxyViteHmrUpgrade(deps.rendererDevUrl, request, socket, head)) {
+    return
+  }
+  deps.onUpgrade?.(request, socket)
 }
 
 /**
@@ -565,6 +593,36 @@ export function mobileSelfOrigins(): string[] {
  * trusted. Loopback is excluded for the same reason it is excluded everywhere
  * else: a phone cannot reach it.
  */
+/**
+ * EVERY HOST THIS SERVER ANSWERS FOR, READ LIVE ON EVERY REQUEST.
+ *
+ * READ LIVE, NEVER CAPTURED. The set changes underneath a running process all
+ * the time: joining a Wi-Fi network, a tailnet coming up minutes after boot, a
+ * certificate arriving and adding a trusted name. A set captured at startup
+ * would refuse the address the phone is being told to use — a Host gate that
+ * fails on a network change is indistinguishable from a broken Mac, and the
+ * fix would be "restart the app", which is how a safety check gets deleted.
+ * `mobileEndpointList()` already re-reads the interfaces, the tailnet cache
+ * and the held certificate on every call; this is one more caller of it.
+ *
+ * FAIL CLOSED, WITH ONE NARROW EXCEPTION. If the live read THROWS — a broken
+ * `os.networkInterfaces()`, a certificate module in a bad state — the answer
+ * is the loopback literals and nothing else: the desktop's own renderer, the
+ * CLI and the relay bridge keep working, and every LAN and internet caller is
+ * refused until the read recovers on the next request. That is the only
+ * fail-open worth having, because those three names are constants that cannot
+ * be stale, and because a rebound page reaches this Mac by NAME — being on
+ * loopback buys it nothing that the pairing token does not still gate.
+ */
+export function companionHosts(): string[] {
+  try {
+    return companionHostsOf(mobileEndpointList())
+  } catch (error) {
+    console.error('Could not read this Mac’s own addresses; answering only for loopback:', error)
+    return [...LOOPBACK_HOSTS]
+  }
+}
+
 export function trustedOrigins(): string[] {
   return trustedOriginsOf(mobileEndpointList())
 }
@@ -589,6 +647,27 @@ export function allowedCompanionOrigins(registryOrigin: string): string[] {
  */
 export function activeCertFingerprint(): string | null {
   return httpsReady ? activeCertFp : null
+}
+
+/**
+ * DOES THIS CREDENTIAL OPEN THE COMPANION? The socket's authentication.
+ *
+ * The browser-cast WebSocket cannot call `pairingAuthorized` — there is no
+ * request/URL pair to read at the point it decides — but it must not answer
+ * the question a second way either, so it asks here and the comparison stays
+ * the one in mobile-http.ts. `extra` is the admitted-device door, exactly as
+ * on the HTTP routes.
+ *
+ * False when no token has been minted yet: before startMobileServer runs there
+ * is no session to join, and "no token configured" must not read as "everyone
+ * is welcome" on a socket that carries INPUT.
+ */
+export function companionTokenAccepted(
+  credential: string | null,
+  extra?: (candidate: string) => boolean
+): boolean {
+  if (activePairingToken === null) return false
+  return tokenAccepted(credential, activePairingToken, extra)
 }
 
 /** The credential a paired phone holds; null before the server starts. */
@@ -891,11 +970,26 @@ function recordBridgeDevice(
   }
 }
 
-async function handle(
+export async function handle(
   request: http.IncomingMessage,
   response: http.ServerResponse,
   deps: MobileServerDeps
 ): Promise<void> {
+  /**
+   * THE HOST GATE, FIRST — before auth, before routing, before CORS.
+   *
+   * DNS rebinding is the one attack this listener cannot otherwise see: the
+   * page keeps its own origin, so nothing below is ever consulted about it.
+   * The Host header is the only field that still names where the client
+   * thinks it is, so it is checked here and the request is finished if it is
+   * wrong. Ahead of the CORS gate deliberately — a refusal must not carry an
+   * allow-origin header, and answering a preflight for a name we do not serve
+   * would be telling a scanning page that something is here. See host-gate.ts.
+   *
+   * It is also ahead of the `new URL()` below, which parses the same header.
+   */
+  if (refuseMisdirected(request, response, companionHosts())) return
+
   const url = new URL(request.url ?? '/', `http://${request.headers.host}`)
 
   /**

@@ -48,6 +48,13 @@ import { TRANSLATE_MAX_CHARS } from '../shared/translate'
 import { startSocketServer } from './socket-server'
 import { RoutineScheduler } from './routines'
 import { VoiceEngine } from './voice'
+import { SousController } from './sous-control'
+import { MacListener } from './listen'
+import { polishTranscript } from './sous-polish'
+import { readSousVoiceConfig } from './sous-voice-config'
+import type { IntentRoster, Surface as SousSurface } from '../shared/sous-intent'
+import type { UiCommandEvent } from '../shared/sous-ui'
+import { EventEmitter } from 'node:events'
 import {
   cachedTailnet,
   startMobileServer,
@@ -58,7 +65,8 @@ import {
   activePairingTokenValue,
   activeCertFingerprint,
   trustedOrigins,
-  allowedCompanionOrigins
+  allowedCompanionOrigins,
+  companionTokenAccepted
 } from './mobile-server'
 import { createDesktopCert, type DesktopCert } from './desktop-cert'
 import { DEFAULT_NAME_ZONE } from '../shared/reach-names'
@@ -253,6 +261,7 @@ import { buildRoleBootMessage } from '../shared/fork'
 import { pageTurns } from '../shared/turn'
 import type { TurnPageRequest } from '../shared/turn'
 import { defaultAttachmentsDir, saveAttachment } from './attachments'
+import { servedSessionKey } from './storage-gc-served'
 import { sweepStorageInWorker } from './storage-gc-worker'
 
 // ── COMPOSITOR BUDGET — the golden-frame flicker ─────────────────────────────
@@ -4042,7 +4051,14 @@ const browserCast = createBrowserCast({
   // plane moves onto this Mac's own name, so its Origin is the registry's.
   // Same-host alone would refuse it and the browser card would never stream
   // over the fast path. Exact origins only; see companion-cors.ts.
-  allowedOrigins: () => allowedCompanionOrigins(registryOrigin())
+  allowedOrigins: () => allowedCompanionOrigins(registryOrigin()),
+  // AND THE ORIGIN ONLY FILTERS — this is what authenticates the socket. The
+  // global pairing token or an admitted phone's own companion token, compared
+  // by the same code as every HTTP route (mobile-http.ts · tokenAccepted).
+  // The TV wall's read-only token is deliberately NOT accepted: this socket
+  // carries pointer and key INPUT, so admitting a read-only credential here
+  // would hand it a write it does not have anywhere else.
+  paired: (credential) => companionTokenAccepted(credential, (one) => admittedDevices.accepts(one))
 })
 
 const headlessBrowserCommands = new HeadlessBrowserCommandEngine({
@@ -4237,14 +4253,43 @@ app.whenReady().then(() => {
   // deliberately quiet on the happy path — a sweep that frees nothing is the
   // normal case and does not deserve a line in the log.
   setTimeout(() => {
-    void sweepStorageInWorker(path.join(dirname, 'storage-gc-worker.js'), { apply: true })
+    // Which served sessions are OPEN is a fact only the instantiator holds;
+    // a sweep not told it plans nothing for that class. At boot the answer
+    // is the empty list — served sessions die with the app — and saying so
+    // is what lets the sandboxes a crash left behind be reclaimed. A throw
+    // here is "not told", never an uncaught error in a timer.
+    let openServedSessions: string[] | null = null
+    try {
+      openServedSessions = serving.instantiator
+        .sessions()
+        .map((s) => servedSessionKey(s.serviceId, s.identity.sessionId))
+    } catch (error) {
+      console.error('storage sweep: could not read open served sessions:', error)
+    }
+    void sweepStorageInWorker(path.join(dirname, 'storage-gc-worker.js'), {
+      apply: true,
+      openServedSessions
+    })
       .then((swept) => {
+        if (swept.skipped.length > 0) {
+          // A store it could not read: nothing was freed, and this is why.
+          console.error(`storage sweep: skipped ${swept.skipped.join(', ')} — a store was unreadable`)
+        }
         if (swept.remove.length > 0) {
+          // "up to": sidecars are APFS clones, so file length bounds what the
+          // disk actually gives back.
           const mb = (swept.bytes / 1024 / 1024).toFixed(1)
-          console.error(`storage sweep: reclaimed ${swept.remove.length} files (${mb}MB)`)
+          console.error(`storage sweep: reclaimed ${swept.remove.length} files (up to ${mb}MB)`)
         }
         if (swept.failed.length > 0) {
           console.error(`storage sweep: ${swept.failed.length} file(s) could not be removed`)
+        }
+        // Hand-made backup copies are the owner's to remove, so this is the
+        // one line that stops them being invisible.
+        if (swept.residue.length > 0) {
+          const mb = (swept.residueBytes / 1024 / 1024).toFixed(1)
+          const names = swept.residue.map((r) => path.basename(r.path)).join(', ')
+          console.error(`storage sweep: ${swept.residue.length} hand-made backup(s) (${mb}MB) left in place: ${names}`)
         }
       })
       .catch((error) => {
@@ -4295,12 +4340,127 @@ app.whenReady().then(() => {
     hasOpenWork: (id) => turns.hasOpenTurnFact(id)
   })
 
+  // SOUS AT THE WHEEL. One controller behind four doors (⌘-hold, phone 🎙️,
+  // voice-gateway's POST, `cookrew sous`); it decides and does, the doors
+  // speak. The `ui` bus carries zoom/zoom-back to every surface: the desktop
+  // over IPC, the phone and the TV over /api/events.
+  const uiBus = new EventEmitter()
+  const sousRoster = (): IntentRoster => {
+    const aliases = readSousVoiceConfig().aliases
+    const workspaces = store.list().workspaces
+    const nameOf = (id: string | undefined): string => workspaces.find((w) => w.id === id)?.name ?? ''
+    return {
+      agents: store.terminalsAcross().map((t) => {
+        const workspaceId = store.ownerOf(t.id) ?? ''
+        return {
+          id: t.id,
+          name: t.name,
+          workspaceId,
+          workspaceName: nameOf(workspaceId),
+          aliases: aliases[t.name],
+          role: t.role,
+          orch: t.orch === true
+        }
+      }),
+      workspaces: workspaces.map((w) => ({ id: w.id, name: w.name })),
+      presets: PRESETS.map((p) => p.name)
+    }
+  }
+  const sous = new SousController({
+    roster: sousRoster,
+    activeWorkspaceId: () => store.focusedId,
+    switchWorkspace: (id) => void switchWorkspace(id),
+    createTerminal: ({ preset, name }) => {
+      // To the right of everything on the canvas, so a spoken "create" never
+      // lands under an existing card.
+      const nodes = store.focusedState.nodes
+      const right = nodes.reduce((max, n) => Math.max(max, n.position.x + n.size.width), 0)
+      const node = createTerminal({ name, preset, position: { x: right + 60, y: nodes[0]?.position.y ?? 120 } })
+      return { id: node.id, name: node.name }
+    },
+    createBrowser: async (anchorId, name) => {
+      await browserCommand(['create', 'about:blank', name], anchorId)
+    },
+    connect: (a, b) => store.connectAcross(a, b),
+    rename: (id, name) => {
+      updateNode(id, { name })
+    },
+    // Short by nature (one spoken sentence), so the owner-submit primitive is
+    // the right sink: it holds the producer lease and answers at submission,
+    // and a refusal (busy input box, armed dispatch) is a sentence, not a
+    // silently dropped prompt.
+    submit: async (agentId, text, { enter }) => {
+      const node = store.terminalsAcross().find((t) => t.id === agentId)
+      if (!node) throw new Error('that agent is not on any canvas')
+      let session = ptys.get(agentId)
+      if (!session) {
+        spawnTracked(node)
+        session = ptys.get(agentId)
+      }
+      if (!session) throw new Error(`${node.name} has no running terminal`)
+      // Typed-and-left goes in as one bracketed paste so a line break inside
+      // the cleaned text is a line break in the box, not an Enter.
+      const bytes = enter ? `${text}\r` : `\x1b[200~${text}\x1b[201~`
+      const verdict = await ownerSubmit(session, bytes)
+      if (!verdict.ok) throw new Error(verdict.reason)
+    },
+    polish: (text) => polishTranscript(text),
+    ui: (command, workspaceId) => {
+      const event: UiCommandEvent = { workspaceId, command }
+      mainWindow?.webContents.send('ui:command', event)
+      uiBus.emit('command', event)
+    },
+    note: (kind, subjectId, detail) => store.recordEvent(`sous.${kind}`, subjectId ?? '', detail, 'voice')
+  })
+  ipcMain.handle(
+    'sous:command',
+    (_e, text: string, ctx: { surface: SousSurface; focusedAgentId?: string | null; alternates?: string[] }) =>
+      sous.handle({
+        text,
+        alternates: ctx.alternates,
+        surface: ctx.surface,
+        callerId: 'desktop',
+        focusedAgentId: ctx.focusedAgentId ?? null
+      })
+  )
+
+  // THE MAC'S EAR. One recognizer child per hold of ⌘; the roster's names go
+  // in as hints so "cookrew dev" is not heard as "cooker Dev".
+  const listener = new MacListener({
+    binary: app.isPackaged
+      ? path.join(process.resourcesPath, 'cr-listen')
+      : path.join(dirname, '../../resources/cr-listen/cr-listen'),
+    // Two ears: the owner's locale first (its partials are what the pill
+    // shows), en-US alongside because that is the ear that spells the
+    // roster's English names right. Same audio, one microphone.
+    locales: () => {
+      const primary = readSousVoiceConfig().locale
+      return primary === 'en-US' ? [primary] : [primary, 'en-US']
+    },
+    hints: () => {
+      const roster = sousRoster()
+      return [
+        'Sous',
+        'Cookrew',
+        ...roster.agents.map((a) => a.name),
+        ...roster.workspaces.map((w) => w.name),
+        ...roster.presets
+      ]
+    }
+  })
+  ipcMain.handle('listen:available', () => listener.available())
+  ipcMain.handle('listen:start', () =>
+    listener.start((event) => mainWindow?.webContents.send('listen:event', event))
+  )
+  ipcMain.handle('listen:stop', () => listener.stop())
+
   startSocketServer({
     store,
     ptys,
     spawnTerminal: spawnTracked,
     agents,
     turns,
+    sous,
     // `ask --no-wait` and `cookrew dispatch <id>`: the SAME engine the HTTP
     // route uses, so a CLI-minted dispatch and an API-minted one are one
     // record with one lifecycle.
@@ -4351,6 +4511,9 @@ app.whenReady().then(() => {
   startMobileServer({
     servedSlug: handleServedSlug,
     store,
+    // Sous's door for the phone and for voice-gateway; `ui` events for both.
+    sous,
+    uiBus,
     // Serves the CA-issued chain by SNI for this Mac's names, keeps the
     // self-signed one as the default, and spells the printed URLs.
     nameCert: nameCertificate,

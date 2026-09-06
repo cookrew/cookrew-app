@@ -1,5 +1,11 @@
-import { beforeEach, describe, expect, it } from 'vitest'
-import { escapeHtml, renderNoteMarkdown, safeUrl, clearNoteMarkdownCache } from '../src/renderer/src/note-markdown'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import {
+  clearNoteMarkdownCache,
+  escapeHtml,
+  noteMarkdownCacheStats,
+  renderNoteMarkdown,
+  safeUrl
+} from '../src/renderer/src/note-markdown'
 
 /**
  * The bug, verbatim. These six lines are copied out of the live CHECKPOINT UX
@@ -137,6 +143,7 @@ describe('escapeHtml', () => {
  */
 describe('renderNoteMarkdown caches, and stays bounded', () => {
   beforeEach(() => clearNoteMarkdownCache())
+  afterEach(() => clearNoteMarkdownCache())
 
   it('returns the same HTML for the same source', () => {
     const src = '# heading\n\nsome **bold** text'
@@ -172,13 +179,24 @@ describe('renderNoteMarkdown caches, and stays bounded', () => {
   })
 
   it('evicts rather than growing without limit', () => {
-    // A note body is unbounded; the cache must not be. 64 entries, so 200
-    // distinct sources must not leave 200 behind.
-    for (let i = 0; i < 200; i++) renderNoteMarkdown(`note number ${i}`)
-    // the oldest is gone: re-rendering it produces a fresh object
-    const oldAgain = renderNoteMarkdown('note number 0')
-    expect(Object.is(oldAgain, renderNoteMarkdown('note number 0'))).toBe(true)
+    // A note body is unbounded; the cache is bounded in BYTES. With the
+    // budget shrunk through the seam, 200 distinct sources must not leave
+    // 200 behind (tests/note-markdown-cache.test.ts covers the order).
+    // Strings are primitives, so Object.is cannot tell a hit from a fresh
+    // equal render; the counters can.
+    clearNoteMarkdownCache(8 * 1024)
+    for (let i = 0; i < 200; i++) renderNoteMarkdown(`note number ${i} ${'x'.repeat(400)}`)
+    const after = noteMarkdownCacheStats()
+    expect(after.misses).toBe(200)
+    expect(after.entries).toBeLessThan(20)
+    expect(after.bytes).toBeLessThanOrEqual(8 * 1024)
+    // the oldest is gone: re-rendering it is a parse, and only then a hit
+    renderNoteMarkdown(`note number 0 ${'x'.repeat(400)}`)
+    expect(noteMarkdownCacheStats()).toMatchObject({ misses: 201, hits: 0 })
+    renderNoteMarkdown(`note number 0 ${'x'.repeat(400)}`)
+    expect(noteMarkdownCacheStats()).toMatchObject({ misses: 201, hits: 1 })
     // and the most recent is still a hit
-    expect(Object.is(renderNoteMarkdown('note number 199'), renderNoteMarkdown('note number 199'))).toBe(true)
+    renderNoteMarkdown(`note number 199 ${'x'.repeat(400)}`)
+    expect(noteMarkdownCacheStats()).toMatchObject({ misses: 201, hits: 2 })
   })
 })

@@ -17,8 +17,10 @@ const plan = (over: Partial<Parameters<typeof planStorageGc>[0]> = {}) =>
   planStorageGc({
     ledgers: [],
     attachments: [],
+    sidecars: [],
     liveTerminalIds: new Set<string>(),
     referencedAttachments: new Set<string>(),
+    referencedSidecars: new Set<string>(),
     now: NOW,
     graceMs: GRACE,
     ...over
@@ -51,6 +53,60 @@ describe('planStorageGc — what may be reclaimed', () => {
       referencedAttachments: new Set(['used.png'])
     })
     expect(out.remove).toEqual([])
+  })
+})
+
+describe('planStorageGc — team session sidecars are the third class', () => {
+  // A sidecar key is the path the app resolves: <slug>-sessions/<file>. The
+  // planner does not know about slugs; it only asks whether the key is in the
+  // referenced set, which the scan built from every readable team JSON.
+  const key = 'crew-sessions/a.jsonl'
+
+  it('KEEPS a sidecar the owning team still names (live-named)', () => {
+    const out = plan({ sidecars: [cand(key)], referencedSidecars: new Set([key]) })
+    expect(out.remove).toEqual([])
+    expect(out.kept.live).toBe(1)
+  })
+
+  it('removes a sidecar under a live team that no longer names it (orphan-in-live-team)', () => {
+    const out = plan({
+      sidecars: [cand(key), cand('crew-sessions/gone.jsonl', { bytes: 7 })],
+      referencedSidecars: new Set([key])
+    })
+    expect(out.remove.map((c) => c.key)).toEqual(['crew-sessions/gone.jsonl'])
+    expect(out.bytes).toBe(7)
+  })
+
+  it('removes every file of a sidecar dir whose team is missing (team-missing)', () => {
+    const out = plan({
+      sidecars: [cand('lost-sessions/a.jsonl'), cand('lost-sessions/b.jsonl')],
+      referencedSidecars: new Set([key])
+    })
+    expect(out.remove.map((c) => c.key).sort()).toEqual(['lost-sessions/a.jsonl', 'lost-sessions/b.jsonl'])
+  })
+
+  it('the same file name under another team\'s dir is NOT a reference', () => {
+    // cookrew-team names 1faa.jsonl; the copy in cookrew-core-sessions is one
+    // no team can open, so it is a candidate — that is the live-store case.
+    const out = plan({
+      sidecars: [cand('cookrew-core-sessions/1faa.jsonl')],
+      referencedSidecars: new Set(['cookrew-team-sessions/1faa.jsonl'])
+    })
+    expect(out.remove.map((c) => c.key)).toEqual(['cookrew-core-sessions/1faa.jsonl'])
+  })
+
+  it('an unreadable team store arrives as NO candidates, so nothing is planned (unreadable-team-aborts)', () => {
+    // The scan expresses "I could not read every team" as sidecars: [] —
+    // the planner has no policy of its own and plans exactly what it is given.
+    const out = plan({ sidecars: [], referencedSidecars: new Set<string>() })
+    expect(out.remove).toEqual([])
+    expect(out.kept).toEqual({ live: 0, withinGrace: 0 })
+  })
+
+  it('never removes a sidecar younger than the grace period (grace-period-holds)', () => {
+    const out = plan({ sidecars: [cand('lost-sessions/new.jsonl', { mtimeMs: NOW - 2 * DAY })] })
+    expect(out.remove).toEqual([])
+    expect(out.kept.withinGrace).toBe(1)
   })
 })
 
@@ -111,5 +167,56 @@ describe('planStorageGc — the plan is a report, not a side effect', () => {
     const out = plan()
     expect(out.remove).toEqual([])
     expect(out.bytes).toBe(0)
+  })
+})
+
+describe('planStorageGc — served sessions have their own live rule', () => {
+  // A sandbox is live while its session is OPEN in the running instantiator.
+  // Nothing on disk says that; the app hands the set in. Every other class is
+  // referenced by a scan that can only over-read; this one is referenced by a
+  // fact, and an absent fact is not the same as an empty one.
+  const sandbox = (key: string, over: Partial<GcCandidate> = {}): GcCandidate =>
+    cand(key, { path: `/store/sessions/${key}`, bytes: 6_000_000, ...over })
+
+  it('keeps an OPEN session however old its newest write is', () => {
+    const out = plan({
+      servedSessions: [sandbox('svc-x/ana-1', { mtimeMs: NOW - 400 * DAY })],
+      openServedSessions: new Set(['svc-x/ana-1'])
+    })
+    expect(out.remove).toEqual([])
+    expect(out.kept.live).toBe(1)
+  })
+
+  it('removes an ENDED session once it is past grace — the whole sandbox, as one candidate', () => {
+    const out = plan({
+      servedSessions: [sandbox('svc-x/ana-1')],
+      openServedSessions: new Set<string>()
+    })
+    expect(out.remove.map((c) => c.path)).toEqual(['/store/sessions/svc-x/ana-1'])
+    expect(out.bytes).toBe(6_000_000)
+  })
+
+  it('grace holds an ended session that was written to recently', () => {
+    const out = plan({
+      servedSessions: [sandbox('svc-x/ana-1', { mtimeMs: NOW - 1 * DAY })],
+      openServedSessions: new Set<string>()
+    })
+    expect(out.remove).toEqual([])
+    expect(out.kept.withinGrace).toBe(1)
+  })
+
+  it('plans NOTHING for the class when no open set was given — unknown is not empty', () => {
+    const out = plan({ servedSessions: [sandbox('svc-x/ana-1', { mtimeMs: NOW - 400 * DAY })] })
+    expect(out.remove).toEqual([])
+    // Not counted as live either: the class was not looked at.
+    expect(out.kept).toEqual({ live: 0, withinGrace: 0 })
+  })
+
+  it('an open session on another service does not vouch for a same-named one here', () => {
+    const out = plan({
+      servedSessions: [sandbox('svc-x/ana-1'), sandbox('svc-y/ana-1')],
+      openServedSessions: new Set(['svc-y/ana-1'])
+    })
+    expect(out.remove.map((c) => c.key)).toEqual(['svc-x/ana-1'])
   })
 })

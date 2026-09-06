@@ -37,6 +37,7 @@ const TAILNET6 = `https://fd7a-115c-a1e0-ab12--1.${DEVICE}.d.cookrew.dev:8643`
 const BARE_LAN = 'https://192.168.1.24:8643'
 
 const RELAY: DataPlane = { origin: '', kind: 'relay' }
+const NOW = 1_800_000_000_000
 
 const card = (over: Partial<ReachCardLite> = {}): ReachCardLite => ({
   deviceId: DEVICE,
@@ -76,7 +77,10 @@ const race = async (
       (async (origin, nonce) => {
         asked.push(origin)
         const who = answers[origin]
-        return who === undefined ? null : { deviceId: who, nonce, sig: 'a-signature' }
+        // A version 2 answer: the Mac names the endpoint it answered at.
+        return who === undefined
+          ? null
+          : { v: 2, deviceId: who, origin, issuedAtMs: NOW, nonce, sig: 'a-signature' }
       }),
     verify:
       over.verify ??
@@ -202,8 +206,8 @@ describe('one race', () => {
     const run = await race({
       hello: async (origin, nonce) =>
         origin === LAN
-          ? { deviceId: DEVICE, nonce: 'a-nonce-from-yesterday', sig: 'a-signature' }
-          : { deviceId: DEVICE, nonce, sig: 'a-signature' }
+          ? { v: 2, deviceId: DEVICE, origin, issuedAtMs: NOW, nonce: 'a-nonce-from-yesterday', sig: 'a-signature' }
+          : { v: 2, deviceId: DEVICE, origin, issuedAtMs: NOW, nonce, sig: 'a-signature' }
     })
     expect(run.adopted()).toEqual({ origin: TAILNET, kind: 'tailnet' })
   })
@@ -219,7 +223,7 @@ describe('one race', () => {
 
   it('refuses an answer with no signature at all, without asking the registry', async () => {
     const run = await race({
-      hello: async (origin, nonce) => ({ deviceId: DEVICE, nonce })
+      hello: async (origin, nonce) => ({ v: 2, deviceId: DEVICE, origin, issuedAtMs: NOW, nonce })
     })
     expect(run.outcome()).toBe('unreachable')
     expect(run.verified()).toBe(0)

@@ -41,12 +41,24 @@ protocols:
   schemes:
     - cookrew
 
+# The Mac's ear for Sous (resources/cr-listen, built at postinstall). Shipped
+# beside the app, not inside the asar: it is a binary main spawns.
+extraResources:
+  - from: resources/cr-listen/cr-listen
+    to: cr-listen
+
 mac:
   category: public.app-category.developer-tools
   icon: resources/icon.icns
   target:
     - dmg
     - zip
+  # Without these two strings macOS refuses the microphone and the recognizer
+  # outright instead of asking — the hold-⌘-to-talk feature would fail in
+  # silence, which is the one way it must not fail.
+  extendInfo:
+    NSMicrophoneUsageDescription: Cookrew listens while you hold ⌘ so Sous can drive the canvas and take dictation.
+    NSSpeechRecognitionUsageDescription: Speech is recognized on this Mac, on device; nothing you say leaves it.
 
 win:
   icon: resources/icon.png

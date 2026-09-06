@@ -16,7 +16,10 @@ const RESULT: SweepResult = {
   bytes: 0,
   kept: { live: 2, withinGrace: 3 },
   applied: true,
-  failed: []
+  skipped: [],
+  failed: [],
+  residue: [],
+  residueBytes: 0
 }
 
 describe('sweepStorageInWorker', () => {
