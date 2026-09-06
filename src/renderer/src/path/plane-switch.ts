@@ -107,6 +107,14 @@ export interface PlaneSwitchDeps {
   /** Move the plane. NEVER a navigation — that is the point of this module. */
   readonly adopt: (plane: DataPlane) => void
   readonly nonce: () => string
+  /**
+   * A monotonic clock, for the round trip of each hello.
+   *
+   * `performance.now()` in a browser and a script in a test. Injected because
+   * the ordering rule below is the thing under test and a wall clock would
+   * make it a timing test.
+   */
+  readonly now?: () => number
   /** True while the switcher is holding off after a direct plane failed. */
   readonly held?: () => boolean
   readonly probing?: (on: boolean) => void
@@ -167,27 +175,95 @@ export const switchPlaneIfBetter = async (deps: PlaneSwitchDeps): Promise<PlaneO
   const candidates = planeCandidates(card, current.kind)
   if (candidates.length === 0) return 'no-trusted'
 
+  const now = deps.now ?? defaultNow
   deps.probing?.(true)
   try {
-    for (const candidate of candidates) {
-      const nonce = deps.nonce()
-      const reply = await deps.hello(candidate.origin, nonce).catch(() => null)
-      // The device id says it is the right Mac and the echoed nonce says the
-      // answer was made just now — both cheap, both checked here so a wrong
-      // one never costs the registry a request.
-      if (!reply || reply.deviceId !== card.deviceId || reply.nonce !== nonce) continue
-      if (typeof reply.sig !== 'string' || reply.sig.length === 0) continue
-      const proved = await deps
-        .verify({ deviceId: card.deviceId, nonce, sig: reply.sig })
-        .catch(() => false)
-      if (!proved) continue
-      deps.adopt({ origin: candidate.origin, kind: candidate.kind })
-      return 'switched'
+    // TIER BY TIER, AND NEVER ACROSS ONE. The LAN tier is exhausted — probed,
+    // ordered, verified — before the tailnet tier is touched at all, so a
+    // tailnet address that answers in 3 ms can never take a session off a LAN
+    // address that answers in 400. The rank encodes cost, not speed.
+    for (const kind of ['lan', 'tailnet'] as const) {
+      const tier = candidates.filter((candidate) => candidate.kind === kind)
+      if (tier.length === 0) continue
+      const answered = await measureTier(tier, card.deviceId, deps, now)
+      for (const attempt of answered) {
+        const proved = await deps
+          .verify({ deviceId: card.deviceId, nonce: attempt.nonce, sig: attempt.sig })
+          .catch(() => false)
+        // A fast name the registry will not vouch for must not push the phone
+        // down a tier: the next-fastest address on the SAME network is still
+        // better than the next network.
+        if (!proved) continue
+        deps.adopt({ origin: attempt.origin, kind })
+        return 'switched'
+      }
     }
     return 'unreachable'
   } finally {
     deps.probing?.(false)
   }
+}
+
+/** One candidate that said the right words, and how long it took to say them. */
+interface MeasuredReply {
+  readonly origin: string
+  readonly nonce: string
+  readonly sig: string
+  readonly ms: number
+}
+
+const defaultNow = (): number => {
+  try {
+    const clock = (globalThis as { performance?: { now?: () => number } }).performance
+    if (typeof clock?.now === 'function') return clock.now()
+  } catch {
+    // A web view without a performance object. Date is a worse clock and a
+    // perfectly good one for telling 6 ms from 90.
+  }
+  return Date.now()
+}
+
+/**
+ * PROBE ONE TIER AT ONCE, AND SORT WHAT ANSWERS BY HOW FAST IT ANSWERED.
+ *
+ * In parallel because the candidates within a tier are alternatives, not a
+ * queue: probing them in series would make the measurement of the second
+ * include the deadline of the first, and with an 800 ms budget each a Mac with
+ * two LAN addresses would take 1.6 s to answer a question worth 6 ms. RFC 8305
+ * would stagger these by a Connection Attempt Delay once the list grows past
+ * three; at two or three the saving is smaller than the added latency, so they
+ * go together (see the research verdict on the 800 ms deadline).
+ *
+ * The two cheap checks stay here, before any of this costs the registry a
+ * request: the device id says it is the right Mac, and the echoed nonce says
+ * the answer was made just now rather than replayed.
+ *
+ * SORT IS STABLE. Two addresses that measure the same keep the card's order,
+ * because the desktop listed them in the order it prefers and an arbitrary
+ * re-shuffle on a tie is a plane that moves for no reason.
+ */
+const measureTier = async (
+  tier: readonly PlaneCandidate[],
+  deviceId: string,
+  deps: PlaneSwitchDeps,
+  now: () => number
+): Promise<readonly MeasuredReply[]> => {
+  const measured = await Promise.all(
+    tier.map(async (candidate): Promise<MeasuredReply | null> => {
+      const nonce = deps.nonce()
+      const started = now()
+      const reply = await deps.hello(candidate.origin, nonce).catch(() => null)
+      const ms = Math.max(0, now() - started)
+      if (!reply || reply.deviceId !== deviceId || reply.nonce !== nonce) return null
+      if (typeof reply.sig !== 'string' || reply.sig.length === 0) return null
+      return { origin: candidate.origin, nonce, sig: reply.sig, ms }
+    })
+  )
+  return measured
+    .filter((reply): reply is MeasuredReply => reply !== null)
+    .map((reply, index) => ({ reply, index }))
+    .sort((a, b) => a.reply.ms - b.reply.ms || a.index - b.index)
+    .map(({ reply }) => reply)
 }
 
 /**

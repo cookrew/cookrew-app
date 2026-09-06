@@ -40,6 +40,19 @@ interface Run {
 }
 
 /**
+ * A VIRTUAL CLOCK THAT CAN REPRESENT TWO PROBES AT ONCE.
+ *
+ * The candidates in a tier are probed together, so a single counter that each
+ * hello adds to would measure them as a queue and prove nothing. Instead every
+ * probe starts at 0 and resolves after as many microtasks as it costs
+ * milliseconds — the two chains interleave one tick at a time, so they finish
+ * in cost order — and each sets the clock to its own cost as it lands.
+ */
+const ticks = async (count: number): Promise<void> => {
+  for (let i = 0; i < count; i += 1) await Promise.resolve()
+}
+
+/**
  * A race whose clock is a script: each origin costs exactly the number of
  * milliseconds given, so the ordering under test is the only variable.
  */
@@ -63,7 +76,8 @@ const race = async (
       asked.push(origin)
       const cost = costs[origin]
       if (cost === undefined) return null
-      clock += cost
+      await ticks(cost)
+      clock = cost
       return { deviceId: DEVICE, nonce, sig: `sig:${origin}` }
     },
     verify: async (claim) => {
