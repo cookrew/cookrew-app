@@ -135,6 +135,24 @@ export class IdleLock {
   }
 
   /**
+   * OPENED BY PROOF, not by a password typed at this screen.
+   *
+   * cookrew.dev has just completed a sign-in for this account: the password,
+   * and — where the account asks for one — a second factor as well. That is
+   * strictly MORE than this lock asks for, and `resume` has already re-derived
+   * the file's verifier from the same password. Staying shut would lock the
+   * owner out by the weaker check in the moment they passed the stronger one.
+   *
+   * Nothing was guessed here, so it never spends a try and never pauses.
+   */
+  proven(): void {
+    this.wrongTries = 0
+    this.pausedUntil = 0
+    this.lastActive = this.now()
+    this.set(false)
+  }
+
+  /**
    * Change the setting.
    *
    * Turning it OFF unlocks: leaving a locked screen behind a switch that says

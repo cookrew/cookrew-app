@@ -53,8 +53,21 @@ const api = {
   accountLock: () => ipcRenderer.invoke('account:lock'),
   /** Also renews a session that died, since the password is in hand once. */
   accountUnlock: (password: string) => ipcRenderer.invoke('account:unlock', password),
-  /** The session ended: trade the password for a new one, no ladder. */
+  /**
+   * The session ended: trade the password for a new one.
+   *
+   * It may answer a LADDER instead — `{reason:'second_factor', step}` — and
+   * the three calls under it climb it. They carry a pending id and a typed
+   * code, never the password: main holds that for the length of the ladder, so
+   * the renderer is not the custodian of a secret across a ten-minute poll.
+   */
   accountResume: (password: string) => ipcRenderer.invoke('account:resume', password),
+  accountResumeCode: (input: { pending: string; factor: 'totp' | 'recovery'; code: string }) =>
+    ipcRenderer.invoke('account:resumeCode', input),
+  /** Ask the account's other devices to approve this sign-in (D6). */
+  accountResumeAsk: (pending: string) => ipcRenderer.invoke('account:resumeAsk', pending),
+  /** And wait for the nod. One long call; the card drops it if it closes. */
+  accountResumeWait: (pending: string) => ipcRenderer.invoke('account:resumeWait', pending),
   accountProfile: () => ipcRenderer.invoke('account:profile'),
   accountDevices: () => ipcRenderer.invoke('account:devices'),
   accountRevoke: (deviceId: string) => ipcRenderer.invoke('account:revoke', deviceId),

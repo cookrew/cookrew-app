@@ -33,7 +33,9 @@ import type {
   AccountResult,
   AccountStatus,
   AdmittedPhone,
+  ApprovalAsked,
   PairingHandout,
+  SignInAnswer,
   UsernameCheck,
 } from "../../shared/account-v2";
 import type {
@@ -527,7 +529,19 @@ export interface CookrewApi {
   }) => Promise<AccountResult<AccountStatus>>;
   accountLock?: () => Promise<AccountResult<AccountStatus>>;
   accountUnlock?: (password: string) => Promise<UnlockAnswer>;
-  accountResume?: (password: string) => Promise<AccountResult<AccountStatus>>;
+  /**
+   * The password step, which may answer with the LADDER rather than a session.
+   * The three calls under it are its rungs; they take the pending id the step
+   * carried, never the password.
+   */
+  accountResume?: (password: string) => Promise<SignInAnswer<AccountStatus>>;
+  accountResumeCode?: (input: {
+    pending: string;
+    factor: 'totp' | 'recovery';
+    code: string;
+  }) => Promise<SignInAnswer<AccountStatus>>;
+  accountResumeAsk?: (pending: string) => Promise<AccountResult<ApprovalAsked>>;
+  accountResumeWait?: (pending: string) => Promise<SignInAnswer<AccountStatus>>;
   accountProfile?: () => Promise<AccountResult<AccountProfile>>;
   accountDevices?: () => Promise<AccountResult<readonly AccountDevice[]>>;
   accountRevoke?: (deviceId: string) => Promise<AccountResult<void>>;
