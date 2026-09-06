@@ -24,6 +24,22 @@ export declare function liveVerdict(
   resolution: PaneAgentResolution | null
 ): LiveVerdict
 
+export interface FlapVerdict {
+  verdict: 'OK' | 'FLAP'
+  /** Destinations the card rotated onto more than once inside the window. */
+  ids: string[]
+  /** How many rotations were examined. */
+  rotations: number
+}
+
+export declare const FLAP_WINDOW: number
+
+export declare function flapVerdict(input: {
+  /** Rotation destinations, oldest first (8-char prefixes from the event log). */
+  rotations: readonly string[]
+  window?: number
+}): FlapVerdict
+
 export declare function reachVerdict(input: {
   bound: string | null | undefined
   lineage: readonly string[]

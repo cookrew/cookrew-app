@@ -1,4 +1,4 @@
-// WHAT THE CHECKPOINT GATE ACTUALLY PROVES — two separate claims.
+// WHAT THE CHECKPOINT GATE ACTUALLY PROVES — three separate claims.
 //
 // LIVE (the old one, narrowed). For a card whose pane agent can be
 // IDENTIFIED, the session the card is bound to is the session that process
@@ -13,6 +13,10 @@
 // (binding ∪ lineage ∪ spill), and every transcript those ids name is on disk.
 // This is the claim the capped lineage broke — `slice(len - 20)` dropped the
 // oldest id with no error anywhere — and the one the live check never made.
+//
+// FLAP (2026-09-06, reported only). A card is not ALTERNATING between two
+// sessions. See flapVerdict below for why a repeated rotation destination is
+// always wrong, and why it must never fail the run.
 //
 // Pure verdicts over facts the caller gathered, so both halves are testable
 // without a machine in a particular state (tests/checkpoint-gate-verdict).
@@ -69,6 +73,42 @@ export function reachVerdict({ bound, lineage, spillIds, everBound, hasTranscrip
   const unwritten = absent.filter((id) => !witnessed(id))
   const verdict = missing.length === 0 && gone.length === 0 ? 'OK' : 'FAIL'
   return { verdict, chain, missing: dedupe(missing), gone, unwritten }
+}
+
+/** How many of a card's most recent rotations the flap check looks at. */
+export const FLAP_WINDOW = 8
+
+/**
+ * The third line, reported and never failing: is this card ALTERNATING?
+ *
+ * A conversation only ever moves forward — a compaction, a /clear, a resume
+ * and a held-session fork each mint a session id the card has never been bound
+ * to — so a rotation DESTINATION that repeats is not a rotation at all, it is
+ * two mechanisms disagreeing about which session the card owns. That is what
+ * Conductor's log showed on 2026-09-06: 295d5f1c and a78aa3e5 as destinations
+ * over and over, because spawn kept adopting a background job's transcript and
+ * the oracle sweep kept putting the binding back (claude-session-adoption.ts).
+ *
+ * `rotations` is the ordered list of destinations from the card's
+ * `terminal.session-rotated` events, oldest first, as 8-char prefixes. Only
+ * the last FLAP_WINDOW count: an alternation the owner already fixed is
+ * history, and a gate that keeps shouting about it teaches the reader to skip
+ * the line. Never failing — a flap is a wrong rail and a noisy history, not an
+ * unreachable checkpoint, and the two claims above are what exit 1 is for.
+ */
+export function flapVerdict({ rotations, window = FLAP_WINDOW }) {
+  const recent = (rotations ?? []).slice(-window)
+  const seen = new Set()
+  const repeated = []
+  for (const to of recent) {
+    if (seen.has(to)) repeated.push(to)
+    seen.add(to)
+  }
+  return {
+    verdict: repeated.length > 0 ? 'FLAP' : 'OK',
+    ids: dedupe(repeated),
+    rotations: recent.length
+  }
 }
 
 function dedupe(list) {
