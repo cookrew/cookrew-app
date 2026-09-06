@@ -148,7 +148,21 @@ describe('one IPC subscription for the whole canvas', () => {
 })
 
 describe('after a reset with a closure still alive', () => {
-  it('an old unsubscribe cannot drive the count negative and wedge the store shut', () => {
+  it('reset → mount → stale: the old closure does not close the door under the live card', () => {
+    const before = mountCards(1)
+    resetServedCallersStore()
+    const live = mountCards(1)
+    expect(servedCallersStoreStats()).toEqual({ consumers: 1, subscribed: true })
+    before.unmount[0]() // sees consumers === 1 — and must do nothing at all
+    expect(servedCallersStoreStats()).toEqual({ consumers: 1, subscribed: true })
+    expect(bridge.releases).toBe(1) // only the reset's own close
+    bridge.push([row('Forge', 'ada')])
+    expect(live.notified).toEqual([1])
+    live.unmount[0]()
+    expect(servedCallersStoreStats()).toEqual({ consumers: 0, subscribed: false })
+  })
+
+  it('reset → stale → mount: an old unsubscribe cannot drive the count negative and wedge the store shut', () => {
     const before = mountCards(1)
     resetServedCallersStore() // what a suite does between tests, under a still-mounted component
     expect(servedCallersStoreStats()).toEqual({ consumers: 0, subscribed: false })
