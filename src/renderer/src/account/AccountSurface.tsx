@@ -134,7 +134,7 @@ export function useAccountSurface(): AccountSurface {
       )}
       {sheet === 'security' && status?.username && (
         <div className="gs-scrim cr-sheet" role="dialog" aria-modal="true" aria-label="Security">
-          <div className="gs-sheet gs-small cr-acct-sheet">
+          <div className="gs-sheet gs-small cr-sheet cr-acct-sheet">
             <SecurityCard
               username={status.username}
               lockAfterMs={status.lockAfterMs}

@@ -75,7 +75,7 @@ export function TotpSheet({
       aria-label="Add an authenticator app"
     >
       <div
-        className="gs-sheet gs-small cr-acct-sheet"
+        className="gs-sheet gs-small cr-sheet cr-acct-sheet"
         onKeyDown={(e) => {
           if (e.key === 'Escape') onClose()
         }}

@@ -208,7 +208,7 @@ export function ProfileSheet({
       aria-label={`Profile @${username}`}
     >
       <div
-        className="gs-sheet cr-acct-sheet"
+        className="gs-sheet cr-sheet cr-acct-sheet"
         onKeyDown={(e) => {
           if (e.key === 'Escape') onClose()
         }}
@@ -296,7 +296,7 @@ export function ProfileSheet({
 
         {tab === 'DEVICES' && (
           <section className="cr-acct-pane" aria-label="Devices">
-            <button className="gs-revoke" onClick={() => setPairing(true)}>
+            <button className="gs-revoke cr-acct-act" onClick={() => setPairing(true)}>
               PAIR A PHONE
             </button>
             <ul className="cr-acct-devices">

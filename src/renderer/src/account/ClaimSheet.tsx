@@ -138,7 +138,7 @@ export function ClaimSheet({
       aria-label={legacy === null ? 'Claim a username' : 'Set a password'}
     >
       <div
-        className="gs-sheet gs-small cr-acct-sheet"
+        className="gs-sheet gs-small cr-sheet cr-acct-sheet"
         onKeyDown={(e) => {
           if (e.key === 'Escape') onClose()
         }}
