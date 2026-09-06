@@ -5,6 +5,7 @@ import { dataPlane, setDataPlane, subscribeDataPlane, type DataPlane } from '../
 import type { LocalNetworkState } from '../local-network'
 import { localNetworkState, requestLocalNetwork } from '../local-network'
 import { offerLocalNetwork, setLocalNetwork } from '../local-network-gate'
+import { recordAttempts, type PathAttempt } from '../path-attempts'
 import { createPathMemory, watchNetwork, type PathMemory, type PathMemoryDeps } from '../path-memory'
 import { planeFetch } from '../plane-fetch'
 import { planeHealth, type LinkHealth } from '../plane-health'
@@ -283,6 +284,14 @@ const startPlaneSwitch = (): (() => void) => {
           nonce: () => randomNonce((bytes) => window.crypto.getRandomValues(bytes)),
           held: () => health.held(),
           probing: setProbing,
+          note: (rows) =>
+            recordAttempts(
+              // The two shapes are the same fact and are kept apart on
+              // purpose: plane-switch.ts must not import a renderer store, or
+              // the rule stops being testable without one.
+              rows as readonly PathAttempt[],
+              dataPlane().kind === 'lan' ? 'LAN' : dataPlane().kind === 'tailnet' ? 'TAILNET' : 'RELAY'
+            ),
           permission: readLocalNetwork,
           mayPrompt: () => {
             const may = pressed

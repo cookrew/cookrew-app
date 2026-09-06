@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { cookrew, isRemoteMode } from './api'
 import { LocalNetworkRow } from './LocalNetworkRow'
+import { PathWhy } from './PathWhy'
 import { currentPathBadge, subscribePathLink } from './path-link'
 import type { PathBadgeView } from '../../shared/path-badge'
 
@@ -79,6 +80,10 @@ export function PathSheet({
         <p className="cr-path-latency">
           {view.latencyMs === null ? 'Latency not measured yet.' : `${view.latencyMs} ms round trip`}
         </p>
+        {/* The evidence behind the word above it. Closed, and absent entirely
+            until a race has happened — on a desktop-served companion there is
+            nothing to explain. */}
+        <PathWhy />
         <footer className="gs-sheet-foot">
           {/* Offered only once the desktop has said where its account lives.
               A hard-coded cookrew.dev sends a self-hosting owner somewhere

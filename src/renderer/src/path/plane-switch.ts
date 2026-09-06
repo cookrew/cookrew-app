@@ -1,3 +1,4 @@
+import { addressFromTrustedName } from '../../../shared/reach-names'
 import { trustedNetwork, type TrustedNetwork } from '../../../shared/trusted-origin'
 import type { DataPlane, DataPlaneKind } from '../data-plane'
 import type { LocalNetworkState } from '../local-network'
@@ -130,6 +131,38 @@ export interface PlaneSwitchDeps {
    * started; true only for the one a person pressed.
    */
   readonly mayPrompt?: () => boolean
+  /** What was tried and what happened, for the "why this path" panel. */
+  readonly note?: (attempts: readonly PlaneAttempt[]) => void
+}
+
+/** One candidate's story, as the panel tells it. See path-attempts.ts. */
+export interface PlaneAttempt {
+  /** The ADDRESS the trusted label spells — never the label, which is a device id. */
+  readonly name: string
+  readonly outcome: 'answered' | 'no-answer' | 'refused' | 'unverified'
+  readonly ms: number | null
+  readonly plane: 'LAN' | 'TAILNET'
+  readonly chosen: boolean
+}
+
+/**
+ * `https://192-168-1-24.<id>.d.cookrew.dev:8643` → `192.168.1.24:8643`.
+ *
+ * The label carries a permanent device identifier and certificate transparency
+ * publishes enough of those already; the port is kept because two desktops on
+ * one machine are told apart by nothing else. Falls back to the hostname only
+ * when the name spells no address, which planeCandidates has already refused —
+ * so it is unreachable in practice and is there so this cannot throw.
+ */
+export const attemptName = (origin: string): string => {
+  try {
+    const url = new URL(origin)
+    const address = addressFromTrustedName(url.hostname)
+    const host = address ?? url.hostname
+    return url.port ? `${host}:${url.port}` : host
+  } catch {
+    return origin
+  }
 }
 
 /**
@@ -168,6 +201,9 @@ export const switchPlaneIfBetter = async (deps: PlaneSwitchDeps): Promise<PlaneO
   // nothing on it could be used.
   const permission = await deps.permission?.().catch((): LocalNetworkState => 'unsupported')
   if (permission !== undefined && !mayRace(permission, deps.mayPrompt?.() === true)) {
+    // No rows: nothing was tried, and a panel showing what the LAST race tried
+    // would be describing a network the phone may no longer be on.
+    deps.note?.([])
     return permission === 'denied' ? 'refused' : 'unasked'
   }
   const card = await deps.card().catch(() => null)
@@ -176,6 +212,7 @@ export const switchPlaneIfBetter = async (deps: PlaneSwitchDeps): Promise<PlaneO
   if (candidates.length === 0) return 'no-trusted'
 
   const now = deps.now ?? defaultNow
+  const attempts: PlaneAttempt[] = []
   deps.probing?.(true)
   try {
     // TIER BY TIER, AND NEVER ACROSS ONE. The LAN tier is exhausted — probed,
@@ -186,6 +223,17 @@ export const switchPlaneIfBetter = async (deps: PlaneSwitchDeps): Promise<PlaneO
       const tier = candidates.filter((candidate) => candidate.kind === kind)
       if (tier.length === 0) continue
       const answered = await measureTier(tier, card.deviceId, deps, now)
+      const plane = kind === 'lan' ? 'LAN' : 'TAILNET'
+      for (const candidate of tier) {
+        const reply = answered.find((one) => one.origin === candidate.origin)
+        attempts.push({
+          name: attemptName(candidate.origin),
+          outcome: reply ? 'answered' : 'no-answer',
+          ms: reply ? Math.round(reply.ms) : null,
+          plane,
+          chosen: false
+        })
+      }
       for (const attempt of answered) {
         const proved = await deps
           .verify({ deviceId: card.deviceId, nonce: attempt.nonce, sig: attempt.sig })
@@ -193,15 +241,55 @@ export const switchPlaneIfBetter = async (deps: PlaneSwitchDeps): Promise<PlaneO
         // A fast name the registry will not vouch for must not push the phone
         // down a tier: the next-fastest address on the SAME network is still
         // better than the next network.
+        const name = attemptName(attempt.origin)
+        const row = attempts.findIndex((one) => one.name === name)
+        if (row >= 0) {
+          attempts[row] = { ...attempts[row], outcome: proved ? 'answered' : 'unverified', chosen: proved }
+        }
+        // A fast name the registry will not vouch for must not push the phone
+        // down a tier: the next-fastest address on the SAME network is still
+        // better than the next network.
         if (!proved) continue
         deps.adopt({ origin: attempt.origin, kind })
+        await report(deps, attempts)
         return 'switched'
       }
     }
+    await report(deps, attempts)
     return 'unreachable'
   } finally {
     deps.probing?.(false)
   }
+}
+
+/**
+ * HAND THE PANEL THE ROWS, AFTER ASKING ONE LAST QUESTION.
+ *
+ * A probe blocked by Local Network Access and a probe that reached a sleeping
+ * Mac arrive as the same TypeError; nothing in the response distinguishes
+ * them. The permission store does: a race that ran and then finds itself
+ * 'denied' was refused, and a reader told "no answer" would go and check their
+ * Mac when the fix is three taps into their own site settings.
+ *
+ * Only asked when something DID go silent, and only local — no request leaves
+ * the phone for this.
+ */
+const report = async (
+  deps: PlaneSwitchDeps,
+  attempts: readonly PlaneAttempt[]
+): Promise<void> => {
+  if (!deps.note) return
+  const silent = attempts.some((attempt) => attempt.outcome === 'no-answer')
+  const after = silent
+    ? await deps.permission?.().catch((): LocalNetworkState => 'unsupported')
+    : undefined
+  deps.note(
+    after === 'denied'
+      ? attempts.map((attempt) =>
+          attempt.outcome === 'no-answer' ? { ...attempt, outcome: 'refused' as const } : attempt
+        )
+      : attempts
+  )
 }
 
 /** One candidate that said the right words, and how long it took to say them. */
