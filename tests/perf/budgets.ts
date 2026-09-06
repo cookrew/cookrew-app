@@ -39,9 +39,17 @@ export const LATENCY = {
   // Serialising a 120-node canvas with 4 KB notes, the shape of the heaviest
   // live workspace. 2026-09-05 under load: p50 0.19 / p95 2.3 / p98 3.5.
   workspaceStateSerialize120: { p50: 1, p95: 5, p98: 8 },
-  // Planning (not applying) a sweep over 300 ledgers + 200 attachments.
-  // 2026-09-05 under load: p50 107 / p95 251 / p98 303. The cost is
-  // collectReferencedAttachments reading every store file once per sweep.
+  // Planning (not applying) a sweep over 300 ledgers + 200 attachments +
+  // 300 team session sidecars (three 100-file dirs: named, stale, lost).
+  // 2026-09-06, after sidecars joined the plan, worst of three 50-sample
+  // runs at load 0.9-1.3 per core: p50 26 / p95 53 / p98 74. Sidecars add
+  // one stat per file and one parse per team JSON, so the count-shaped cost
+  // is unchanged. The budget is kept where the 2026-09-05 pre-sidecar
+  // fixture put it (p50 107 / p98 303 under a load of 119) rather than
+  // tightened to this run, because this fixture models file COUNT only: on
+  // the live store the sweep takes ~100 s, all of it in
+  // collectReferencedAttachments reading every sidecar byte (1 GB) for
+  // attachment citations — a pre-existing cost this fixture does not carry.
   storageSweepPlan: { p50: 200, p95: 400, p98: 500 }
 } as const
 

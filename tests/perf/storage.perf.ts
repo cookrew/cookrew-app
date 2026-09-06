@@ -124,17 +124,12 @@ describe('team store — session sidecars follow the saved team', () => {
     expect(existsSync(sidecar)).toBe(false)
   })
 
-  // KNOWN GAP, pinned as it stands. The sweep collects dead turn ledgers and
-  // orphaned attachments; it does not look at teams/*-sessions. A team whose
-  // JSON is gone leaves its sidecar behind forever — on the live machine
-  // cookrew-core-sessions carries four files its team no longer names.
-  //
-  // Written as a positive assertion of today's behaviour rather than
-  // `it.fails`, because `it.fails` is satisfied by ANY throw — a renamed
-  // export in the setup would have kept the gate green while the gap stayed
-  // open. The day the sweep reclaims sidecars this fails loudly: flip the
-  // final expectation to `false` and retitle it.
-  it('does NOT yet reclaim a sidecar whose team file is gone (known gap)', () => {
+  // Closed 2026-09-06 (perf/sweep): the sweep walks teams/*-sessions and
+  // plans every file no readable team resolves to, through the same grace
+  // period as ledgers and attachments. This fixture is the live-machine case
+  // — a team saved by the real TeamStore, its JSON removed by hand — so a
+  // change to how TeamStore lays out a sidecar fails here, not in production.
+  it('reclaims a sidecar whose team file is gone', () => {
     const base = root('orphan')
     const projects = sessions(base, ['s1'], 16)
     const teams = new TeamStore(path.join(base, 'teams'), projects)
@@ -150,13 +145,32 @@ describe('team store — session sidecars follow the saved team', () => {
     writeFileSync(path.join(storeRoots.workspaces, 'workspace.json'), JSON.stringify({ nodes: [] }))
     const swept = sweepStorage({ roots: storeRoots, apply: true })
     expect(swept.applied).toBe(true)
+    expect(swept.remove.map((c) => c.key)).toEqual([path.join('crew-sessions', 'a.jsonl')])
+    expect(swept.bytes).toBe(16 * 1024)
+    expect(readdirSync(sidecar)).toEqual([])
+  })
+
+  it('keeps every sidecar a saved team still names, whatever its age', () => {
+    const base = root('named')
+    const projects = sessions(base, ['s1', 's2'], 16)
+    const teams = new TeamStore(path.join(base, 'teams'), projects)
+    teams.save(state([terminal('a', 's1'), terminal('b', 's2')]), () => [], 'Crew')
+    const sidecar = path.join(base, 'teams', 'crew-sessions')
+    const old = new Date(Date.now() - 400 * DAY)
+    for (const f of readdirSync(sidecar)) utimesSync(path.join(sidecar, f), old, old)
+
+    const storeRoots = defaultStorageRoots(base)
+    for (const dir of Object.values(storeRoots)) mkdirSync(dir, { recursive: true })
+    writeFileSync(path.join(storeRoots.workspaces, 'workspace.json'), JSON.stringify({ nodes: [] }))
+    const swept = sweepStorage({ roots: storeRoots, apply: true })
     expect(swept.remove).toEqual([])
-    expect(existsSync(path.join(sidecar, 'a.jsonl'))).toBe(true)
+    expect(swept.kept.live).toBe(2)
+    expect(readdirSync(sidecar).sort()).toEqual(['a.jsonl', 'b.jsonl'])
   })
 })
 
 describe('storage sweep — planning is cheap at live scale', () => {
-  it('plans 300 ledgers and 200 attachments within budget and finds every dead one', async () => {
+  it('plans 300 ledgers, 200 attachments and 300 sidecars within budget and finds every dead one', async () => {
     const base = root('sweep')
     const storeRoots = defaultStorageRoots(base)
     for (const dir of Object.values(storeRoots)) mkdirSync(dir, { recursive: true })
@@ -174,16 +188,35 @@ describe('storage sweep — planning is cheap at live scale', () => {
     for (const id of live) aged(path.join(storeRoots.turns, `${id}.jsonl`))
     for (let i = 0; i < 200; i += 1) aged(path.join(storeRoots.turns, `dead-${i}.jsonl`))
     for (let i = 0; i < 200; i += 1) aged(path.join(storeRoots.attachments, `orphan-${i}.png`))
+    // Three sidecar dirs of 100 files: one team names all of its files, one
+    // names none of them, one has no team JSON at all. 200 are dead.
+    const hundred = Array.from({ length: 100 }, (_, i) => `${i}.jsonl`)
+    const sidecarDir = (slug: string): void => {
+      mkdirSync(path.join(storeRoots.teams, `${slug}-sessions`), { recursive: true })
+      for (const f of hundred) aged(path.join(storeRoots.teams, `${slug}-sessions`, f))
+    }
+    // Full snapshots, so the same TeamStore the app uses agrees they are teams.
+    const teamJson = (slug: string, name: string, named: string[]): void => {
+      const sessions = Object.fromEntries(named.map((f, i) => [`t-${i}`, f]))
+      const snapshot = { name, savedAt: Date.now(), dir: '/work/repo', nodes: [], connections: [], turns: {}, sessions }
+      writeFileSync(path.join(storeRoots.teams, `${slug}.json`), JSON.stringify(snapshot))
+    }
+    sidecarDir('named')
+    teamJson('named', 'Named', hundred)
+    sidecarDir('stale')
+    teamJson('stale', 'Stale', [])
+    sidecarDir('lost')
+    expect(new TeamStore(storeRoots.teams).list().map((t) => t.name).sort()).toEqual(['Named', 'Stale'])
 
-    const measured = await measure('storage sweep plan 300+200', () =>
+    const measured = await measure('storage sweep plan 300+200+300', () =>
       timed(() => {
         const plan = sweepStorage({ roots: storeRoots, apply: false })
         return { remove: plan.remove.length, live: plan.kept.live, applied: plan.applied }
       })
     )
     expectTail(measured, LATENCY.storageSweepPlan)
-    expectEvery(measured, 'remove', 400)
-    expectEvery(measured, 'live', 100)
+    expectEvery(measured, 'remove', 600)
+    expectEvery(measured, 'live', 200)
     expectEvery(measured, 'applied', false)
   })
 })

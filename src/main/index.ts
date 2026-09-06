@@ -4239,9 +4239,15 @@ app.whenReady().then(() => {
   setTimeout(() => {
     void sweepStorageInWorker(path.join(dirname, 'storage-gc-worker.js'), { apply: true })
       .then((swept) => {
+        if (swept.skipped.length > 0) {
+          // A store it could not read: nothing was freed, and this is why.
+          console.error(`storage sweep: skipped ${swept.skipped.join(', ')} — a store was unreadable`)
+        }
         if (swept.remove.length > 0) {
+          // "up to": sidecars are APFS clones, so file length bounds what the
+          // disk actually gives back.
           const mb = (swept.bytes / 1024 / 1024).toFixed(1)
-          console.error(`storage sweep: reclaimed ${swept.remove.length} files (${mb}MB)`)
+          console.error(`storage sweep: reclaimed ${swept.remove.length} files (up to ${mb}MB)`)
         }
         if (swept.failed.length > 0) {
           console.error(`storage sweep: ${swept.failed.length} file(s) could not be removed`)
