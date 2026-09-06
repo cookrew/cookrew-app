@@ -9,7 +9,7 @@ describe('warmWebgl — a throwaway first context, released at once', () => {
 
   it('creates one context and loses it immediately', () => {
     const loseContext = vi.fn()
-    const getContext = vi.fn(() => ({ getExtension: () => ({ loseContext }) }))
+    const getContext = vi.fn((_kind: string) => ({ getExtension: () => ({ loseContext }) }))
     const doc = { createElement: () => ({ getContext }) } as unknown as Document
     expect(warmWebgl(doc)).toBe(true)
     expect(getContext).toHaveBeenCalledTimes(1)
@@ -39,7 +39,7 @@ describe('warmWebgl — a throwaway first context, released at once', () => {
 describe('scheduleWebglWarmup — at idle, bounded, never on the boot path', () => {
   it('uses requestIdleCallback with a timeout so a busy first paint cannot starve it', () => {
     const warm = vi.fn(() => true)
-    const requestIdleCallback = vi.fn((cb: () => void) => {
+    const requestIdleCallback = vi.fn((cb: () => void, _opts?: { timeout: number }) => {
       cb()
       return 1
     })
@@ -51,7 +51,7 @@ describe('scheduleWebglWarmup — at idle, bounded, never on the boot path', () 
 
   it('falls back to a timer where requestIdleCallback is missing (WebKit)', () => {
     const warm = vi.fn(() => true)
-    const setTimeout = vi.fn((cb: () => void) => cb())
+    const setTimeout = vi.fn((cb: () => void, _ms: number) => cb())
     scheduleWebglWarmup({ setTimeout }, warm)
     expect(setTimeout).toHaveBeenCalledTimes(1)
     expect(setTimeout.mock.calls[0][1]).toBe(WARMUP_FALLBACK_MS)
