@@ -102,6 +102,14 @@ export class El {
     this.attributes[name] = value
     if (name.startsWith('data-')) this.dataset[camel(name.slice(5))] = value
     if (name === 'class') this.className = value
+    // The handful of attributes that are also properties. `hidden` above all:
+    // the markup writes it as an attribute and every script reads it as a
+    // property, and a panel that reads as visible when it is not makes a test
+    // agree with a page nobody is looking at.
+    if (name === 'hidden') this.hidden = true
+    if (name === 'disabled') this.disabled = true
+    if (name === 'value') this.value = value
+    if (name === 'placeholder') this.placeholder = value
   }
   getAttribute(name: string): string | null {
     return this.attributes[name] ?? null
@@ -163,6 +171,12 @@ export class El {
   }
 
   querySelectorAll(selector: string): El[] {
+    // `a b` — one descendant step, which is as deep as anything here reaches.
+    const parts = selector.split(',').map((one) => one.trim())
+    if (parts.length === 1 && parts[0].includes(' ')) {
+      const [outer, ...rest] = parts[0].split(/\s+/)
+      return this.querySelectorAll(outer).flatMap((node) => node.querySelectorAll(rest.join(' ')))
+    }
     const found: El[] = []
     const walk = (node: El): void => {
       for (const child of node.children) {
@@ -241,6 +255,17 @@ export class MiniDocument {
 
   createElement(tag: string): El {
     return new El(tag, this)
+  }
+
+  /** SVG is built through this one in a browser; here it is the same tree. */
+  createElementNS(_namespace: string, tag: string): El {
+    return new El(tag, this)
+  }
+
+  createTextNode(text: string): El {
+    const node = new El('#text', this)
+    node.textContent = text
+    return node
   }
 
   /** From the ROOT. A node that was replaced away is not found — the point. */

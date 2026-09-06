@@ -2,6 +2,7 @@ import { readJsonBody } from './http'
 import { passwordGate } from './v2-hash-gate'
 import { json, noContent, refuse, refuseFactor, relyingParty, spendChallenge } from './v2-factor-http'
 import { parseRegistration } from './v2-passkeys'
+import { qrRows } from './v2-qr'
 import type { Decision } from './v2-pending'
 import { signedIn, type V2Context } from './v2-routes'
 
@@ -195,9 +196,18 @@ async function answerApproval(ctx: V2Context, username: string, id: string, keep
 // ── the authenticator ─────────────────────────────────────────────────────
 
 /**
- * The secret, shown once, as base32 AND as an otpauth URL in text. No QR:
- * drawing one would cost a dependency the bundle refuses, and a string a
- * person can copy into their app works on every phone.
+ * The secret, shown once: as a QR to scan, as base32 to type, and as the
+ * otpauth URL for an app that takes one. All three of the same thing, because
+ * a person enrolling an authenticator is at a phone with a camera OR at a
+ * keyboard, and being told to pick is worse than being given both.
+ *
+ * NOTHING HERE IS LOGGED. The matrix IS the secret — a photograph of it
+ * enrols the account elsewhere — so it goes into one private, no-store answer
+ * and nowhere else.
+ *
+ * INACTIVE UNTIL CONFIRMED, which is what makes CANCEL free: an enrolment
+ * nobody finished is replaced by the next `beginTotp`, and until a code proves
+ * the app holds it, `totpActive` is false and the ladder never offers it.
  */
 function beginTotp(ctx: V2Context, username: string): void {
   if (ctx.v2.factors.store.totpActive(username)) {
@@ -205,7 +215,7 @@ function beginTotp(ctx: V2Context, username: string): void {
     return
   }
   const started = ctx.v2.factors.store.beginTotp(username)
-  json(ctx.response, 201, started)
+  json(ctx.response, 201, { ...started, qr: qrRows(started.otpauth) })
 }
 
 async function confirmTotp(ctx: V2Context, username: string): Promise<void> {
