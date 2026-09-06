@@ -40,6 +40,22 @@ const SOURCES_MAX = 4096
 /** A DNS conversation over TCP is one question and one answer, then done. */
 const TCP_IDLE_MS = 5000
 const TCP_CONNECTIONS_MAX = 64
+/**
+ * AND FOUR OF THEM PER SOURCE, AND FIVE SECONDS EACH, WHATEVER ARRIVES.
+ *
+ * One global cap and an inactivity timer that any byte reset meant sixty-four
+ * sockets from one address — each announcing a 65535-byte message and
+ * dribbling a byte a second — held TCP DNS shut for as long as the attacker
+ * kept typing. Every resolver we had just told TC=1 then had nowhere to go.
+ *
+ * So: a cap per source, so one address can never hold more than a sixteenth of
+ * the pool; an ABSOLUTE deadline from accept that a byte does not push back;
+ * and a shorter one for a message that has been half-arrived too long. A real
+ * resolver's whole conversation is one round trip inside a few milliseconds.
+ */
+const TCP_PER_SOURCE_MAX = 4
+const TCP_DEADLINE_MS = 5000
+const TCP_PARTIAL_MS = 1000
 
 export interface DnsServerOptions {
   port: number
@@ -51,6 +67,15 @@ export interface DnsServerOptions {
   ratePerSecond?: number
   burst?: number
   now?: () => number
+  /** The TCP limits, settable so a test can fill a pool without sixty sockets. */
+  tcp?: {
+    max?: number
+    perSource?: number
+    /** From ACCEPT, not from the last byte. */
+    deadlineMs?: number
+    /** How long a half-arrived message may stay half-arrived. */
+    partialMs?: number
+  }
 }
 
 export interface DnsCounts {
@@ -59,6 +84,10 @@ export interface DnsCounts {
   refusedByRate: number
   malformed: number
   truncated: number
+  /** TCP connections turned away at accept — pool full, or that source's share. */
+  tcpRefused: number
+  /** TCP connections cut off by a deadline rather than by their own FIN. */
+  tcpCutOff: number
 }
 
 export interface DnsServer {
@@ -73,11 +102,11 @@ export interface DnsServer {
  *
  * IPv4 to its /24 and IPv6 to its /56 — the smallest allocation one operator
  * hands to one customer. Counting single addresses is counting something the
- * sender chooses: a /64 is eighteen quintillion of them, and on IPv6 every
- * packet of a flood can carry a source nothing has ever seen before.
+ * sender chooses: a /64 is 18 quintillion of them, and on IPv6 every packet of
+ * a flood can carry a source nothing has ever seen before.
  *
  * A `::ffff:` prefix is stripped first, because a dual-stack socket reports a
- * v4 peer that way and it is the same block either way.
+ * v4 peer that way and it is the same address either way.
  */
 export function sourceGroup(address: string): string {
   const ip = parseIp(address.replace(/^::ffff:/i, ''))
@@ -130,11 +159,25 @@ export function createDnsServer(options: DnsServerOptions): DnsServer {
     options.burst ?? BURST,
     options.now ?? Date.now
   )
-  const counts: DnsCounts = { queries: 0, answers: 0, refusedByRate: 0, malformed: 0, truncated: 0 }
+  const counts: DnsCounts = {
+    queries: 0,
+    answers: 0,
+    refusedByRate: 0,
+    malformed: 0,
+    truncated: 0,
+    tcpRefused: 0,
+    tcpCutOff: 0
+  }
+  const tcpMax = options.tcp?.max ?? TCP_CONNECTIONS_MAX
+  const tcpPerSource = options.tcp?.perSource ?? TCP_PER_SOURCE_MAX
+  const tcpDeadlineMs = options.tcp?.deadlineMs ?? TCP_DEADLINE_MS
+  const tcpPartialMs = options.tcp?.partialMs ?? TCP_PARTIAL_MS
   const note = options.log ?? ((): void => undefined)
   let udp: Socket | null = null
   let tcp: Server | null = null
   const open = new Set<TcpSocket>()
+  /** How many TCP connections each source group holds right now. */
+  const perSource = new Map<string, number>()
 
   /**
    * One message in, one message out — or null for "say nothing at all".
@@ -214,29 +257,61 @@ export function createDnsServer(options: DnsServerOptions): DnsServer {
   // ── TCP ────────────────────────────────────────────────────────────────
 
   const onConnection = (socket: TcpSocket): void => {
-    if (open.size >= TCP_CONNECTIONS_MAX) {
+    const source = sourceGroup(socket.remoteAddress ?? '')
+    const fromHere = perSource.get(source) ?? 0
+    // BOTH CAPS AT ACCEPT. The global one keeps the process's file descriptors
+    // finite; the per-source one keeps one address from spending them all.
+    if (open.size >= tcpMax || fromHere >= tcpPerSource) {
+      counts.tcpRefused += 1
       socket.destroy()
       return
     }
     open.add(socket)
-    const source = socket.remoteAddress ?? ''
+    perSource.set(source, fromHere + 1)
     let held = Buffer.alloc(0)
+    let partial: ReturnType<typeof setTimeout> | null = null
+    const stopPartial = (): void => {
+      if (partial === null) return
+      clearTimeout(partial)
+      partial = null
+    }
+    const cutOff = (): void => {
+      counts.tcpCutOff += 1
+      socket.destroy()
+    }
+    // ABSOLUTE, from accept. `setTimeout` on the socket is an INACTIVITY timer
+    // and every byte resets it, which is exactly what a dribbler sends.
+    const deadline = setTimeout(cutOff, tcpDeadlineMs)
+    deadline.unref?.()
     socket.setTimeout(TCP_IDLE_MS)
     socket.on('timeout', () => socket.destroy())
     socket.on('error', () => socket.destroy())
-    socket.on('close', () => open.delete(socket))
+    socket.on('close', () => {
+      clearTimeout(deadline)
+      stopPartial()
+      open.delete(socket)
+      const left = (perSource.get(source) ?? 1) - 1
+      if (left <= 0) perSource.delete(source)
+      else perSource.set(source, left)
+    })
     socket.on('data', (chunk) => {
       try {
         held = Buffer.concat([held, chunk])
+        // A buffer bigger than the biggest message that could be in it is not
+        // a slow client, it is somebody filling our heap one write at a time.
+        if (held.length > 2 + TCP_MAX) {
+          cutOff()
+          return
+        }
         // Two bytes of length, then that many bytes of message, repeatedly.
         for (;;) {
-          if (held.length < 2) return
+          if (held.length < 2) break
           const length = held.readUInt16BE(0)
           if (length === 0) {
             socket.destroy()
             return
           }
-          if (held.length < 2 + length) return
+          if (held.length < 2 + length) break
           const message = held.subarray(2, 2 + length)
           held = held.subarray(2 + length)
           if (!allowed(source)) {
@@ -252,6 +327,13 @@ export function createDnsServer(options: DnsServerOptions): DnsServer {
           framed.writeUInt16BE(answer.length, 0)
           framed.set(answer, 2)
           socket.write(framed)
+        }
+        // A message that is half here is on a clock of its own: a resolver's
+        // whole conversation is one round trip, so a second is generous.
+        if (held.length === 0) stopPartial()
+        else if (partial === null) {
+          partial = setTimeout(cutOff, tcpPartialMs)
+          partial.unref?.()
         }
       } catch {
         counts.malformed += 1

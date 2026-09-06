@@ -1,3 +1,4 @@
+import { connect } from 'node:net'
 import { createSocket } from 'node:dgram'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { RCODE, UDP_FLOOR } from '../registry/src/dns-wire'
@@ -152,6 +153,140 @@ describe('the rate limit', () => {
       expect(limited.counts().refusedByRate).toBeGreaterThan(0)
     } finally {
       await limited.stop()
+    }
+  })
+})
+
+/**
+ * H3 — SLOWLORIS OVER TCP.
+ *
+ * TCP DNS had one global cap of 64 connections and an INACTIVITY timer that
+ * any byte reset. Sixty-four sockets from one address, each announcing a
+ * 65535-byte message and dribbling a byte a second, therefore held the whole
+ * listener shut for as long as the attacker cared to keep typing — and every
+ * resolver that had been told TC=1 over UDP had nowhere to go.
+ *
+ * Three things stop it, and all three are proved here: a cap per source so one
+ * address cannot take the pool, an absolute deadline from accept that a byte
+ * does not extend, and a shorter one for a message that never completes.
+ */
+describe('a dribbling TCP client', () => {
+  /** Announces 0xffff and then sends a byte at a time, for ever. */
+  const dribble = (on: number): { socket: ReturnType<typeof connect>; closed: Promise<number> } => {
+    const socket = connect(on, '127.0.0.1')
+    const opened = Date.now()
+    socket.on('error', () => undefined)
+    socket.on('connect', () => {
+      socket.write(Buffer.from([0xff, 0xff]))
+      const tick = setInterval(() => {
+        if (socket.destroyed) return clearInterval(tick)
+        socket.write(Buffer.from([0x41]))
+      }, 40)
+      socket.on('close', () => clearInterval(tick))
+    })
+    return { socket, closed: new Promise<number>((resolve) => socket.on('close', () => resolve(Date.now() - opened))) }
+  }
+
+  /** One question over TCP to an explicit host, so a test can pick its source. */
+  const askFrom = (host: string, on: number, message: Buffer): Promise<Buffer | null> =>
+    new Promise((resolve) => {
+      const socket = connect(on, host)
+      let got = Buffer.alloc(0)
+      const done = (value: Buffer | null): void => {
+        socket.destroy()
+        resolve(value)
+      }
+      socket.setTimeout(1500, () => done(null))
+      socket.on('error', () => done(null))
+      socket.on('connect', () => {
+        const framed = Buffer.alloc(2 + message.length)
+        framed.writeUInt16BE(message.length, 0)
+        message.copy(framed, 2)
+        socket.write(framed)
+      })
+      socket.on('data', (chunk) => {
+        got = Buffer.concat([got, chunk])
+        if (got.length >= 2 && got.length >= 2 + got.readUInt16BE(0)) done(got.subarray(2, 2 + got.readUInt16BE(0)))
+      })
+      socket.on('close', () => resolve(null))
+    })
+
+  it('cannot take more than its share of the pool, so a real query still lands', async () => {
+    const guarded = createDnsServer({
+      port: 0,
+      // Dual stack, so the test has two source groups to work with: v4
+      // loopback is one block and ::1 is another, which is exactly the shape
+      // the cap is about — one address cannot spend everybody's pool.
+      address: '::',
+      respond: responder,
+      // The shipped numbers are 64 and 4; these are the same ratio, small
+      // enough that a test can fill the pool without opening sixty sockets.
+      tcp: { max: 8, perSource: 4, deadlineMs: 5000 }
+    })
+    const on = await guarded.start()
+    const dribblers = Array.from({ length: 8 }, () => dribble(on))
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      // Four of them were let in; the rest were shown the door on arrival.
+      expect(dribblers.filter((one) => !one.socket.destroyed).length).toBeLessThanOrEqual(4)
+      expect(guarded.counts().tcpRefused).toBeGreaterThanOrEqual(4)
+      // AND THE LISTENER STILL ANSWERS somebody else. Half the pool is free,
+      // which is the whole point of counting per source rather than in total.
+      const reply = await askFrom('::1', on, buildQuery({ name: ZONE, type: T.SOA }))
+      expect(reply).not.toBeNull()
+      expect(parseAnswer(reply!).rcode).toBe(RCODE.NOERROR)
+    } finally {
+      for (const one of dribblers) one.socket.destroy()
+      await guarded.stop()
+    }
+  })
+
+  it('is destroyed by a deadline it cannot push back with a byte', async () => {
+    const guarded = createDnsServer({
+      port: 0,
+      address: '127.0.0.1',
+      respond: responder,
+      // Far shorter than the idle timeout the dribbler keeps resetting, so
+      // what is being measured is the absolute deadline and nothing else.
+      tcp: { max: 8, perSource: 8, deadlineMs: 400, partialMs: 100_000 }
+    })
+    const on = await guarded.start()
+    const one = dribble(on)
+    try {
+      const lived = await Promise.race([
+        one.closed,
+        new Promise<number>((resolve) => setTimeout(() => resolve(-1), 2500))
+      ])
+      expect(lived).toBeGreaterThan(0)
+      expect(lived).toBeLessThan(2000)
+    } finally {
+      one.socket.destroy()
+      await guarded.stop()
+    }
+  })
+
+  it('is destroyed sooner still for a message that never completes', async () => {
+    const guarded = createDnsServer({
+      port: 0,
+      address: '127.0.0.1',
+      respond: responder,
+      tcp: { max: 8, perSource: 8, deadlineMs: 100_000, partialMs: 300 }
+    })
+    const on = await guarded.start()
+    const one = dribble(on)
+    try {
+      const lived = await Promise.race([
+        one.closed,
+        new Promise<number>((resolve) => setTimeout(() => resolve(-1), 2500))
+      ])
+      expect(lived).toBeGreaterThan(0)
+      expect(lived).toBeLessThan(2000)
+      // A whole message inside the same window is still served, of course.
+      const reply = await askTcp(on, buildQuery({ name: ZONE, type: T.SOA }), 1500)
+      expect(parseAnswer(reply!).rcode).toBe(RCODE.NOERROR)
+    } finally {
+      one.socket.destroy()
+      await guarded.stop()
     }
   })
 })
