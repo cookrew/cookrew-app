@@ -110,10 +110,10 @@ export function featuresIndexPage(input: FeaturesIndexInput = { commits: null })
 <p class="kicker"><span class="no">FEATURES</span>recorded, not described</p>
 <h1>What Cookrew does</h1>
 <p class="lede">${esc(DEFINITION)}</p>
-<div class="grid">${FEATURES.map((f) => {
+<div class="grid shots">${FEATURES.map((f) => {
       const steps = SEQUENCES[f.slug] ?? []
       const frame = steps[0] ? { file: steps[0].file, alt: steps[0].title, caption: steps[0].caption, width: steps[0].width, height: steps[0].height } : (FRAMES as Record<string, Frame>)[f.frames[0] ?? '']
-      return `<div class="card" style="padding:0;overflow:hidden">${frame ? `<a href="/features/${f.slug}">${frameImg(frame, { sizes: '(max-width: 860px) 100vw, 33vw' })}</a>` : ''}<div style="padding:14px 16px"><h3><a href="/features/${f.slug}">${esc(f.title)}</a></h3><p>${esc(f.short)}</p></div></div>`
+      return `<div class="card" style="padding:0;overflow:hidden">${frame ? `<a class="card-shot" href="/features/${f.slug}">${frameImg(frame, { sizes: '(max-width: 860px) 100vw, 33vw' })}</a>` : ''}<div style="padding:14px 16px"><h3><a href="/features/${f.slug}">${esc(f.title)}</a></h3><p>${esc(f.short)}</p></div></div>`
     }).join('')}</div>
 </div>
 <section id="compare"><div class="wrap"><p class="kicker"><span class="no">COMPARE</span>what each can do</p><h2>A chat tab, one CLI agent, or a team</h2>${compareTable()}</div></section>

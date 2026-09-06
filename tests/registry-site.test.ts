@@ -285,6 +285,17 @@ describe('the front page', () => {
     expect(flat).toContain('cookrew.dev takes no cut')
     expect(flat).toContain('<table class="cmp">')
   })
+
+  it('sizes every card’s frame — a bare <img> in a card painted at 1400px behind overflow:hidden', () => {
+    const body = featuresIndexPage().body
+    // Every frame on the index is a card face, and the stylesheet knows the
+    // class: the only other img rule is scoped to figure.shot.
+    const faces = body.match(/<a class="card-shot" href="\/features\/[^"]+"><img /g) ?? []
+    expect(faces.length).toBeGreaterThan(0)
+    expect((body.match(/<img /g) ?? []).length).toBe(faces.length)
+    expect(body).toContain('.card-shot img{display:block;width:100%;height:auto;aspect-ratio:16/10;object-fit:cover')
+    expect(body).toContain('<div class="grid shots">')
+  })
 })
 
 describe('the market', () => {
