@@ -6,9 +6,16 @@
 // Guardrails: writes are BUFFERED and flushed on a short timer (never block
 // PTY streams or the render loop), the file rolls at a size cap keeping N
 // rotated files, and events carry METADATA ONLY — never prompt/reply text.
+//
+// Reads: a rotated file is immutable once rotated, so its parsed rows are
+// cached and pinned to the file's identity (ino, size, mtime, birth time);
+// the live file (at most maxBytes) is read and split on every query. A
+// limited query walks newest-first and stops at the limit, so its cost does
+// not grow with the rotated log, only with the live file. Rows served from
+// the cache are SHARED objects — callers serialise them, never mutate.
 
 import { EventEmitter } from 'node:events'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, type Stats } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 
@@ -64,6 +71,32 @@ interface EventLogOptions {
 
 const DEFAULTS = { maxBytes: 4 * 1024 * 1024, keepFiles: 3, flushMs: 200 }
 
+/**
+ * What tells one file on disk from another, rename or not. A rename keeps all
+ * four; birth time is what still differs when a dropped file's inode is
+ * reused by a new one of the same size in the same mtime tick.
+ */
+interface FileIdentity {
+  ino: number
+  size: number
+  mtimeMs: number
+  birthtimeMs: number
+}
+
+/** A rotated file's rows, pinned to the file they were parsed from. */
+interface CachedFile extends FileIdentity {
+  events: readonly CookrewEvent[]
+}
+
+/**
+ * One place rows come from, oldest-first inside. A cached rotated file is
+ * already parsed; the live file and the buffer are raw lines that parse on
+ * demand, so a newest-first walk only pays for the lines it looks at.
+ */
+type Source =
+  | { readonly kind: 'parsed'; readonly events: readonly CookrewEvent[] }
+  | { readonly kind: 'raw'; readonly lines: readonly string[] }
+
 function isEvent(value: unknown): value is CookrewEvent {
   const e = value as CookrewEvent
   return (
@@ -91,6 +124,99 @@ function matches(event: CookrewEvent, query: EventQuery): boolean {
   return true
 }
 
+/** One JSONL line as an event, or null for an empty, torn or foreign line. */
+function parseLine(line: string): CookrewEvent | null {
+  if (line.trim().length === 0) return null
+  try {
+    const parsed: unknown = JSON.parse(line)
+    return isEvent(parsed) ? parsed : null
+  } catch {
+    return null // torn/corrupt line — skip
+  }
+}
+
+function parseLines(text: string): CookrewEvent[] {
+  const events: CookrewEvent[] = []
+  for (const line of text.split('\n')) {
+    const event = parseLine(line)
+    if (event) events.push(event)
+  }
+  return events
+}
+
+/**
+ * The same rows with one copy of each repeated string: types, ids and names
+ * recur on nearly every line, and JSON.parse hands each line its own. Only
+ * matters for the rows a cache keeps, where it roughly halves what they hold.
+ */
+function shareStrings(events: readonly CookrewEvent[]): CookrewEvent[] {
+  const seen = new Map<string, string>()
+  const one = <T extends string>(value: T): T => {
+    const known = seen.get(value)
+    if (known !== undefined) return known as T
+    seen.set(value, value)
+    return value
+  }
+  return events.map((e) => ({
+    ...e,
+    type: one(e.type),
+    entityId: one(e.entityId),
+    entityName: one(e.entityName),
+    workspaceId: one(e.workspaceId),
+    workspaceName: one(e.workspaceName),
+    actor: one(e.actor)
+  }))
+}
+
+function identityOf(stat: Stats): FileIdentity {
+  return { ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, birthtimeMs: stat.birthtimeMs }
+}
+
+function sameFile(a: FileIdentity, b: FileIdentity): boolean {
+  return a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.birthtimeMs === b.birthtimeMs
+}
+
+function isMissing(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException)?.code === 'ENOENT'
+}
+
+function lengthOf(source: Source): number {
+  return source.kind === 'parsed' ? source.events.length : source.lines.length
+}
+
+function eventAt(source: Source, index: number): CookrewEvent | null {
+  return source.kind === 'parsed' ? source.events[index] : parseLine(source.lines[index])
+}
+
+/** Every row across the sources, oldest first — the full walk count() needs. */
+function everyEvent(sources: readonly Source[]): CookrewEvent[] {
+  const events: CookrewEvent[] = []
+  for (const source of sources) {
+    for (let i = 0; i < lengthOf(source); i += 1) {
+      const event = eventAt(source, i)
+      if (event) events.push(event)
+    }
+  }
+  return events
+}
+
+/**
+ * The newest `limit` matches, oldest first: what filtering everything and
+ * keeping the tail returned, found by walking from the newest row backwards
+ * and stopping as soon as enough are held.
+ */
+function newestMatches(sources: readonly Source[], query: EventQuery, limit: number): CookrewEvent[] {
+  const collected: CookrewEvent[] = []
+  for (let s = sources.length - 1; s >= 0 && collected.length < limit; s -= 1) {
+    const source = sources[s]
+    for (let i = lengthOf(source) - 1; i >= 0 && collected.length < limit; i -= 1) {
+      const event = eventAt(source, i)
+      if (event && matches(event, query)) collected.push(event)
+    }
+  }
+  return collected.reverse()
+}
+
 /**
  * Emits 'event' with each appended CookrewEvent (renderer + mobile SSE
  * broadcast hook) in append order, before the batched write lands.
@@ -99,6 +225,8 @@ export class EventLog extends EventEmitter {
   private buffer: string[] = []
   private flushTimer: NodeJS.Timeout | null = null
   private readonly opts: Required<EventLogOptions>
+  /** The parsed rotated files, rebuilt on every read from what exists now. */
+  private rotatedCache: readonly CachedFile[] = []
 
   constructor(
     private file = path.join(homedir(), '.cookrew', 'events.jsonl'),
@@ -134,64 +262,102 @@ export class EventLog extends EventEmitter {
     }
   }
 
+  private rotated(n: number): string {
+    return this.file.replace(/\.jsonl$/, `.${n}.jsonl`)
+  }
+
   /** events.jsonl → events.1.jsonl → … → events.N.jsonl (oldest dropped). */
   private rotateIfNeeded(): void {
     try {
       if (!existsSync(this.file) || statSync(this.file).size < this.opts.maxBytes) return
-      const rotated = (n: number): string =>
-        this.file.replace(/\.jsonl$/, `.${n}.jsonl`)
       for (let n = this.opts.keepFiles - 1; n >= 1; n -= 1) {
-        if (existsSync(rotated(n))) renameSync(rotated(n), rotated(n + 1))
+        if (existsSync(this.rotated(n))) renameSync(this.rotated(n), this.rotated(n + 1))
       }
-      renameSync(this.file, rotated(1))
+      renameSync(this.file, this.rotated(1))
     } catch (error) {
       console.error('Event log rotation failed:', error)
     }
   }
 
-  /** All persisted + buffered events, oldest first (rotated files included). */
-  private readAll(): CookrewEvent[] {
-    const files: string[] = []
+  /**
+   * Everything persisted or buffered, oldest first: the rotated files from
+   * the cache, then the live file read fresh, then the buffer. Building the
+   * list is what refreshes the cache, so query() and count() cannot drift.
+   */
+  private sources(): Source[] {
+    const rotated: Source[] = []
+    const next: CachedFile[] = []
     for (let n = this.opts.keepFiles; n >= 1; n -= 1) {
-      files.push(this.file.replace(/\.jsonl$/, `.${n}.jsonl`))
+      const loaded = this.loadRotated(this.rotated(n))
+      if (!loaded) continue
+      if (loaded.pinned) next.push(loaded.entry)
+      rotated.push({ kind: 'parsed', events: loaded.entry.events })
     }
-    files.push(this.file)
-    const events: CookrewEvent[] = []
-    for (const file of files) {
-      try {
-        if (!existsSync(file)) continue
-        for (const line of readFileSync(file, 'utf8').split('\n')) {
-          if (line.trim().length === 0) continue
-          try {
-            const parsed: unknown = JSON.parse(line)
-            if (isEvent(parsed)) events.push(parsed)
-          } catch {
-            // torn/corrupt line — skip
-          }
-        }
-      } catch (error) {
-        console.error('Event log read failed:', error)
-      }
+    this.rotatedCache = next
+    return [...rotated, { kind: 'raw', lines: this.readLive() }, { kind: 'raw', lines: this.buffer }]
+  }
+
+  /**
+   * A rotated file's rows, from the cache when a cached file has the same
+   * identity — a rename keeps ino, size and mtime, so after a rotation the
+   * entry follows its file and only the newly rotated one is parsed. A file
+   * whose identity changed between the stat and the read is served but not
+   * pinned, so a swap by another process is re-checked next call.
+   */
+  private loadRotated(file: string): { entry: CachedFile; pinned: boolean } | null {
+    const before = this.identity(file)
+    if (!before) return null
+    for (const known of this.rotatedCache) {
+      if (sameFile(known, before)) return { entry: known, pinned: true }
     }
-    for (const line of this.buffer) {
-      const parsed: unknown = JSON.parse(line)
-      if (isEvent(parsed)) events.push(parsed)
+    let text = ''
+    try {
+      text = readFileSync(file, 'utf8')
+    } catch (error) {
+      if (!isMissing(error)) console.error('Event log read failed:', error)
+      return null
     }
-    return events
+    const after = this.identity(file)
+    const entry = { ...before, events: shareStrings(parseLines(text)) }
+    return { entry, pinned: after !== null && sameFile(before, after) }
+  }
+
+  private identity(file: string): FileIdentity | null {
+    try {
+      return identityOf(statSync(file))
+    } catch (error) {
+      if (!isMissing(error)) console.error('Event log stat failed:', error)
+      return null
+    }
+  }
+
+  /** The live file's lines, unparsed; the file is never cached. */
+  private readLive(): string[] {
+    try {
+      return readFileSync(this.file, 'utf8').split('\n')
+    } catch (error) {
+      if (!isMissing(error)) console.error('Event log read failed:', error)
+      return []
+    }
   }
 
   /** Filtered events, oldest first; `limit` keeps the NEWEST matches. */
   query(query: EventQuery = {}): CookrewEvent[] {
-    const filtered = this.readAll().filter((e) => matches(e, query))
-    return query.limit !== undefined && filtered.length > query.limit
-      ? filtered.slice(filtered.length - query.limit)
-      : filtered
+    const sources = this.sources()
+    // NaN and +Infinity never trimmed anything (the old `length > limit`
+    // test is false for both), so they are no limit here; every other value,
+    // -Infinity included, trims exactly as the old tail slice did.
+    const { limit } = query
+    if (limit !== undefined && !Number.isNaN(limit) && limit !== Infinity) {
+      return newestMatches(sources, query, limit)
+    }
+    return everyEvent(sources).filter((e) => matches(e, query))
   }
 
   /** Metric counts by event type over the same filter. */
   count(query: EventQuery = {}): Record<string, number> {
     const counts: Record<string, number> = {}
-    for (const e of this.readAll()) {
+    for (const e of everyEvent(this.sources())) {
       if (!matches(e, query)) continue
       counts[e.type] = (counts[e.type] ?? 0) + 1
     }

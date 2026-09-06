@@ -1,4 +1,5 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import fs, { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -21,6 +22,31 @@ function makeLog(options = {}): { log: EventLog; file: string } {
   const file = path.join(mkdtempSync(path.join(tmpdir(), 'cookrew-events-')), 'events.jsonl')
   return { log: new EventLog(file, { flushMs: 5, ...options }), file }
 }
+
+/**
+ * The .jsonl files `run` read, by base name, in order. event-log.ts imports
+ * named bindings from node:fs, so the counter goes on the default export and
+ * the ESM bindings are re-synced — the technique tests/perf/latency.perf.ts
+ * uses for the same question.
+ */
+function jsonlReadsDuring(run: () => void): string[] {
+  const real = fs.readFileSync
+  const seen: string[] = []
+  fs.readFileSync = function counted(this: unknown, file: Parameters<typeof fs.readFileSync>[0], ...rest: unknown[]) {
+    if (typeof file === 'string' && file.endsWith('.jsonl')) seen.push(path.basename(file))
+    return (real as (...a: unknown[]) => Buffer | string).call(this, file, ...rest)
+  } as typeof fs.readFileSync
+  syncBuiltinESMExports()
+  try {
+    run()
+  } finally {
+    fs.readFileSync = real
+    syncBuiltinESMExports()
+  }
+  return seen
+}
+
+const rotatedOf = (file: string, n: number): string => file.replace('.jsonl', `.${n}.jsonl`)
 
 describe('EventLog', () => {
   afterEach(() => vi.useRealTimers())
@@ -104,5 +130,105 @@ describe('EventLog', () => {
     writeFileSync(file, readFileSync(file, 'utf8') + '{torn line\n', 'utf8')
     log.append(event({ type: 'note.created' }))
     expect(log.query()).toHaveLength(2)
+  })
+
+  describe('rotated files are parsed once', () => {
+    const opts = { maxBytes: 600, keepFiles: 3 }
+
+    /** Enough same-shaped events, flushed in fours, to fill every rotated slot. */
+    function fillRotated(log: EventLog, count: number): void {
+      for (let i = 0; i < count; i += 1) {
+        log.append(
+          event({ type: i % 3 === 0 ? 'turn.completed' : 'terminal.created', entityId: `t${i}`, timestamp: i })
+        )
+        if (i % 4 === 3) log.flush()
+      }
+    }
+
+    it('a limited query on a rotated log keeps exactly the rows filter-then-slice kept', () => {
+      const { log, file } = makeLog(opts)
+      fillRotated(log, 60)
+      log.append(event({ type: 'turn.completed', entityId: 't60', timestamp: 60 })) // stays buffered
+      log.append(event({ entityId: 't61', timestamp: 61 }))
+      expect(existsSync(rotatedOf(file, 3))).toBe(true)
+
+      const liveFirst = JSON.parse(readFileSync(file, 'utf8').split('\n')[0]) as CookrewEvent
+      const queries = [
+        { type: 'turn.completed' },
+        { type: 'terminal.' },
+        { types: ['turn.completed', 'terminal.created'] },
+        { workspaceId: 'ws-a', since: 10, until: 50 },
+        {}
+      ]
+      // The old code, verbatim: filter everything, then keep the tail.
+      const oldTail = (rows: CookrewEvent[], limit: number): CookrewEvent[] =>
+        rows.length > limit ? rows.slice(rows.length - limit) : rows
+      for (const base of queries) {
+        const reference = log.query(base)
+        for (const limit of [1, 5, 13, 40, 1000, 0, -1, -0.5, 2.5, NaN, Infinity, -Infinity]) {
+          expect(log.query({ ...base, limit }), JSON.stringify({ ...base, limit })).toEqual(oldTail(reference, limit))
+        }
+      }
+      // The limited answer really spans the rotated files: keep two more rows
+      // than events.jsonl and the buffer hold, and the oldest row predates
+      // everything in events.jsonl while the newest is the buffered one.
+      const timed = log.query({ type: 'turn.completed' })
+      const recent = timed.filter((r) => r.timestamp >= liveFirst.timestamp).length
+      const spanning = log.query({ type: 'turn.completed', limit: recent + 2 })
+      expect(spanning).toHaveLength(recent + 2)
+      expect(spanning[0].timestamp).toBeLessThan(liveFirst.timestamp)
+      expect(spanning[recent + 1].entityId).toBe('t60')
+    })
+
+    it('reads only events.jsonl once the rotated files are cached, and follows a rotation', () => {
+      const { log, file } = makeLog(opts)
+      fillRotated(log, 40)
+      expect(existsSync(rotatedOf(file, 3))).toBe(true)
+
+      const cold = jsonlReadsDuring(() => log.query())
+      expect(cold).toEqual(['events.3.jsonl', 'events.2.jsonl', 'events.1.jsonl', 'events.jsonl'])
+      const warm = jsonlReadsDuring(() => log.query({ type: 'turn.completed', limit: 3 }))
+      expect(warm).toEqual(['events.jsonl'])
+
+      const before = log.query()
+      const oldestBefore = before[0].entityId
+      fillRotated(log, 60) // t40..t59 land, and the live file rolls at least once
+      const after = log.query()
+      // The rows are what a cache-less reader sees: the newest appended is
+      // there, the oldest rotated file has been dropped, nothing stale.
+      expect(after).toEqual(new EventLog(file, opts).query())
+      expect(after[after.length - 1].entityId).toBe('t59')
+      expect(after[0].entityId).not.toBe(oldestBefore)
+      // Only the file that just left events.jsonl was parsed; the arrays that
+      // moved from events.1 to events.2 and events.2 to events.3 came from
+      // the cache.
+      const reads = jsonlReadsDuring(() => log.query())
+      expect(reads).toEqual(['events.jsonl'])
+      // Query, then rotate exactly once, then query: one rotated read.
+      const flushesUntilRoll = (): void => {
+        const wasAt = fs.statSync(rotatedOf(file, 1)).ino
+        let i = 100
+        while (fs.statSync(rotatedOf(file, 1)).ino === wasAt) {
+          if (i > 200) throw new Error('the live file never rotated')
+          log.append(event({ entityId: `t${i}`, timestamp: i }))
+          log.flush()
+          i += 1
+        }
+      }
+      flushesUntilRoll()
+      expect(jsonlReadsDuring(() => log.query())).toEqual(['events.1.jsonl', 'events.jsonl'])
+      expect(jsonlReadsDuring(() => log.query())).toEqual(['events.jsonl'])
+    })
+
+    it('re-reads a rotated file whose size changed underneath the cache', () => {
+      const { log, file } = makeLog(opts)
+      fillRotated(log, 40)
+      log.query()
+      const extra = event({ type: 'note.created', entityId: 'injected', timestamp: 7 })
+      fs.appendFileSync(rotatedOf(file, 2), JSON.stringify(extra) + '\n', 'utf8')
+      const rows = log.query({ type: 'note.created' })
+      expect(rows.map((r) => r.entityId)).toEqual(['injected'])
+      expect(jsonlReadsDuring(() => log.query())).toEqual(['events.jsonl'])
+    })
   })
 })
