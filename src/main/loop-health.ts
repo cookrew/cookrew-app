@@ -23,6 +23,7 @@
  */
 import { monitorEventLoopDelay, performance, type EventLoopUtilization } from 'node:perf_hooks'
 import { latencyStats } from '../shared/stats'
+import type { SousBreakerState } from './sous-breaker'
 
 /** Window length; the read route reports the last COMPLETE window first. */
 export const LOOP_WINDOW_MS = 60_000
@@ -75,10 +76,13 @@ export interface LoopHealthSnapshot {
   loops: Record<string, LoopTicks>
   /** Whatever the caller wants read next to the loop — resident counts here. */
   residency: Record<string, number>
+  /** The Sous circuit breaker (sous-breaker.ts), or null when not wired. */
+  sous?: SousBreakerState | null
 }
 
 export interface LoopHealthDeps {
   residency?: () => Record<string, number>
+  sous?: () => SousBreakerState
   now?: () => number
   windowMs?: number
   keep?: number
@@ -204,7 +208,8 @@ export function createLoopHealth(deps: LoopHealthDeps = {}): LoopHealth {
           windows: [...windows]
         },
         loops,
-        residency: deps.residency?.() ?? {}
+        residency: deps.residency?.() ?? {},
+        sous: deps.sous?.() ?? null
       }
       memo = { at: now(), snapshot }
       return snapshot
