@@ -384,11 +384,92 @@ describe('the limiter under a flood from everywhere', () => {
       buckets.take(`filler-${i}`)
     }
     clock.at += 10_000
-    expect(buckets.take('4.203.0.113')).toBe(true)
-    expect(buckets.take('4.203.0.113')).toBe(true)
-    expect(buckets.take('4.203.0.113')).toBe(false)
+    expect(buckets.take('4.203.0.113').ok).toBe(true)
+    expect(buckets.take('4.203.0.113').ok).toBe(true)
+    expect(buckets.take('4.203.0.113').ok).toBe(false)
     // And it refills on the clock rather than on a timer.
     clock.at += 3000
-    expect(buckets.take('4.203.0.113')).toBe(true)
+    expect(buckets.take('4.203.0.113').ok).toBe(true)
+  })
+
+  it('slips every second refusal, so silence is never the only answer', () => {
+    const clock = { at: 1_757_000_000_000 }
+    const buckets = new Buckets(1, 1, () => clock.at)
+    expect(buckets.take('one').ok).toBe(true)
+    // Every SECOND one over: silence, then a truncation, then silence again.
+    expect(buckets.take('one')).toEqual({ ok: false, slip: false })
+    expect(buckets.take('one')).toEqual({ ok: false, slip: true })
+    expect(buckets.take('one')).toEqual({ ok: false, slip: false })
+    expect(buckets.take('one')).toEqual({ ok: false, slip: true })
+  })
+})
+
+/**
+ * M4 — WHOSE QUERIES A FLOOD ACTUALLY STOPS.
+ *
+ * The bucket was keyed on the source address alone and going over it meant
+ * silence. Both halves were exploitable together: a source address is
+ * something a UDP sender writes, so anyone could spend a chosen resolver's
+ * whole budget by spelling its address on their own packets — and the resolver
+ * would then be met with nothing at all, which reads as a dead server rather
+ * than as a busy one.
+ *
+ * So the budget is per (source block, name, type), which is what an attacker
+ * cannot aim at somebody else's question, and every SECOND over-budget query
+ * gets an empty answer with TC set instead of silence. A real resolver reads
+ * TC and comes back over TCP, where the source address is not a matter of
+ * opinion. The bytes are no more than the query's own, so it amplifies nothing.
+ */
+describe('the budget, and what going over it looks like', () => {
+  const limited = (): ReturnType<typeof createDnsServer> =>
+    createDnsServer({ port: 0, address: '127.0.0.1', respond: responder, ratePerSecond: 1, burst: 2 })
+
+  it('is spent per name, so one flooded name does not take the others down', async () => {
+    const server = limited()
+    const on = await server.start()
+    try {
+      // Two over budget on the apex.
+      for (let i = 0; i < 4; i += 1) await askUdp(on, buildQuery({ name: ZONE, type: T.SOA }), 250)
+      // A different question from the same address is untouched.
+      const other = await askUdp(on, buildQuery({ name: `ns1.${ZONE}`, type: T.A }), 500)
+      expect(other).not.toBeNull()
+      expect(parseAnswer(other!).answers[0]?.data).toBe('203.0.113.10')
+      // As is a different TYPE of the same name.
+      const byType = await askUdp(on, buildQuery({ name: ZONE, type: T.NS }), 500)
+      expect(parseAnswer(byType!).answers.length).toBeGreaterThan(0)
+    } finally {
+      await server.stop()
+    }
+  })
+
+  it('slips every second refusal back as an empty TC=1 answer, not as silence', async () => {
+    const server = limited()
+    const on = await server.start()
+    try {
+      const query = buildQuery({ name: ZONE, type: T.SOA, id: 0x7f7f })
+      const replies: (Buffer | null)[] = []
+      for (let i = 0; i < 6; i += 1) replies.push(await askUdp(on, query, 300))
+      // The first two are the burst; after that it is alternately nothing and
+      // a truncation, so a resolver behind the flood always has a way through.
+      const slips = replies.slice(2).filter((one): one is Buffer => one !== null)
+      expect(slips.length).toBeGreaterThan(0)
+      expect(replies.slice(2).filter((one) => one === null).length).toBeGreaterThan(0)
+      for (const slip of slips) {
+        const read = parseAnswer(slip)
+        expect(read.tc).toBe(true)
+        expect(read.id).toBe(0x7f7f)
+        expect(read.answers).toHaveLength(0)
+        expect(read.authority).toHaveLength(0)
+        // NO AMPLIFICATION: the way out of a flood must not be a bigger packet
+        // than the one that caused it.
+        expect(slip.length).toBeLessThanOrEqual(query.length + 16)
+      }
+      expect(server.counts().refusedByRate).toBeGreaterThan(0)
+      // And the whole answer is there over TCP, which is where TC sends it.
+      const overTcp = await askTcp(on, query)
+      expect(parseAnswer(overTcp!).answers[0]?.type).toBe(T.SOA)
+    } finally {
+      await server.stop()
+    }
   })
 })

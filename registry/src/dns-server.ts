@@ -6,7 +6,8 @@ import {
   answerWithin,
   budgetFor,
   buildAnswer,
-  parseQuery
+  parseQuery,
+  type ParsedQuery
 } from './dns-wire'
 import { parseIp } from './dns-address'
 import type { Responder } from './dns-zone'
@@ -32,9 +33,23 @@ import type { Responder } from './dns-zone'
  * with it, so each one is wrapped and the worst outcome is silence.
  */
 
-/** Twenty a second per source, bursting to forty: a resolver needs far less. */
-const RATE_PER_SECOND = 20
-const BURST = 40
+/**
+ * FIFTY A SECOND PER (SOURCE BLOCK, NAME, TYPE), bursting to a hundred.
+ *
+ * It was twenty a second per SOURCE, and both halves of that were wrong
+ * together. A source address is something a UDP sender writes, so anyone could
+ * spend a chosen resolver's whole budget by spelling its address on their own
+ * packets — and going over meant silence, which reads as a dead server rather
+ * than a busy one, so the victim's users saw an outage.
+ *
+ * The name and the type are in the key because they are the part an attacker
+ * cannot aim at somebody else's question: flooding `d.cookrew.dev SOA` costs
+ * that question its budget and leaves every Mac's own name alone. The floor is
+ * higher because the key is narrower, and a real resolver asking one question
+ * fifty times a second is already a broken one.
+ */
+const RATE_PER_SECOND = 50
+const BURST = 100
 /** A DNS conversation over TCP is one question and one answer, then done. */
 const TCP_IDLE_MS = 5000
 const TCP_CONNECTIONS_MAX = 64
@@ -149,10 +164,27 @@ function slotFor(key: string): number {
   return (hash >>> 0) & (BUCKETS - 1)
 }
 
+/**
+ * SLIP, as every rate-limiting authoritative server does it (BIND calls it
+ * slip 2). Silence is indistinguishable from a dead server, and a legitimate
+ * resolver whose block is being spoofed at us would simply lose the zone. So
+ * every SECOND query over the budget is answered with the question echoed and
+ * TC set and nothing else: a resolver reads TC and comes back over TCP, where
+ * the source address is not a matter of opinion, and the packet is no bigger
+ * than the one that caused it.
+ */
+export interface Verdict {
+  ok: boolean
+  /** Only meaningful when `ok` is false: answer with TC rather than say nothing. */
+  slip: boolean
+}
+
 export class Buckets {
   private readonly tokens = new Float64Array(BUCKETS)
   /** When each slot was last touched. Zero means never, which refills to full. */
   private readonly stamp = new Float64Array(BUCKETS)
+  /** Over-budget queries per slot, for the one-in-two slip. Wraps; only parity matters. */
+  private readonly over = new Uint8Array(BUCKETS)
 
   constructor(
     private readonly rate: number,
@@ -160,7 +192,7 @@ export class Buckets {
     private readonly now: () => number
   ) {}
 
-  take(key: string): boolean {
+  take(key: string): Verdict {
     const slot = slotFor(key)
     const at = this.now()
     // A slot never touched has stamp 0, and the refill from the epoch is
@@ -169,10 +201,11 @@ export class Buckets {
     this.stamp[slot] = at
     if (tokens < 1) {
       this.tokens[slot] = tokens
-      return false
+      this.over[slot] = (this.over[slot] + 1) & 0xff
+      return { ok: false, slip: this.over[slot] % 2 === 0 }
     }
     this.tokens[slot] = tokens - 1
-    return true
+    return { ok: true, slip: false }
   }
 }
 
@@ -211,8 +244,7 @@ export function createDnsServer(options: DnsServerOptions): DnsServer {
    * record we could not encode (a bug of ours, and a SERVFAIL storm is worse
    * than a gap).
    */
-  const answerFor = (message: Uint8Array, viaTcp: boolean): Uint8Array | null => {
-    const parsed = parseQuery(message)
+  const answerFor = (parsed: ParsedQuery, viaTcp: boolean): Uint8Array | null => {
     if (!parsed.ok) {
       counts.malformed += 1
       if (parsed.reason === 'drop' || parsed.id === null) return null
@@ -256,18 +288,60 @@ export function createDnsServer(options: DnsServerOptions): DnsServer {
     return answer
   }
 
-  const allowed = (source: string): boolean => {
-    if (buckets.take(source)) return true
-    counts.refusedByRate += 1
-    return false
+  /**
+   * THE KEY THE BUDGET IS SPENT AGAINST.
+   *
+   * The source BLOCK (a v4 /24, a v6 /56) and the question, which is the part
+   * an attacker cannot aim at somebody else. A packet too broken to hold a
+   * question shares one key per block — there is no question in it to protect.
+   *
+   * AND THE TRANSPORT, which matters more than it looks. A slip answer tells a
+   * resolver to come back over TCP; if TCP spent the same bucket, the door we
+   * had just pointed at would already be shut. UDP is the spoofable one and
+   * the one this budget is for — a TCP client has proved its address by
+   * completing a handshake, and is held by the connection caps above instead.
+   */
+  const keyFor = (group: string, parsed: ParsedQuery, viaTcp: boolean): string => {
+    const transport = viaTcp ? 't' : 'u'
+    return parsed.ok
+      ? `${transport}|${group}|${parsed.query.question.name}|${parsed.query.question.type}`
+      : `${transport}|${group}|?`
+  }
+
+  const verdictFor = (group: string, parsed: ParsedQuery, viaTcp: boolean): Verdict => {
+    const verdict = buckets.take(keyFor(group, parsed, viaTcp))
+    if (!verdict.ok) counts.refusedByRate += 1
+    return verdict
+  }
+
+  /**
+   * The query echoed with TC set and no records at all — the SLIP answer.
+   *
+   * Not `aa`: this says nothing about the zone, only "ask me again over TCP".
+   */
+  const slipFor = (parsed: ParsedQuery): Uint8Array | null => {
+    if (!parsed.ok) return null
+    counts.truncated += 1
+    return buildAnswer({
+      id: parsed.query.id,
+      question: parsed.query.question,
+      rcode: RCODE.NOERROR,
+      aa: false,
+      rd: parsed.query.rd,
+      edns: parsed.query.edns,
+      truncated: true
+    })
   }
 
   // ── UDP ────────────────────────────────────────────────────────────────
 
   const onDatagram = (message: Buffer, from: { address: string; port: number }): void => {
     try {
-      if (!allowed(from.address)) return
-      const answer = answerFor(message, false)
+      // PARSED BEFORE COUNTED, because the budget is per question now and the
+      // question is inside the packet. Parsing is bounded and cannot throw.
+      const parsed = parseQuery(message)
+      const verdict = verdictFor(sourceGroup(from.address), parsed, false)
+      const answer = verdict.ok ? answerFor(parsed, false) : verdict.slip ? slipFor(parsed) : null
       if (answer === null || udp === null) return
       udp.send(answer, from.port, from.address, () => undefined)
     } catch {
@@ -337,11 +411,14 @@ export function createDnsServer(options: DnsServerOptions): DnsServer {
           if (held.length < 2 + length) break
           const message = held.subarray(2, 2 + length)
           held = held.subarray(2 + length)
-          if (!allowed(source)) {
+          const parsed = parseQuery(message)
+          // No slip over TCP: the connection already proves the source, and a
+          // client over its budget on one socket is told by the FIN.
+          if (!verdictFor(source, parsed, true).ok) {
             socket.destroy()
             return
           }
-          const answer = answerFor(message, true)
+          const answer = answerFor(parsed, true)
           if (answer === null) {
             socket.destroy()
             return
