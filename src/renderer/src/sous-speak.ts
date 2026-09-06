@@ -1,5 +1,5 @@
 // Sous talking back on the desktop and the phone: the browser's own voice,
-// in the language of the sentence. Short confirmations only ("好的，切到
+// in the language of the sentence. Short confirmations only ("okay, switching to
 // cookrew dev"), so an utterance in flight is cut rather than queued — the
 // owner has already said the next thing.
 

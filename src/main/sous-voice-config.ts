@@ -3,11 +3,11 @@
 //   ~/.cookrew/sous.json
 //   {
 //     "voice": { "locale": "zh-CN" },
-//     "aliases": { "Conductor": ["指挥", "康达克特"] }
+//     "aliases": { "Conductor": ["<the owner's word for it>", "<a phonetic spelling>"] }
 //   }
 //
 // Aliases exist because an on-device zh-CN recognizer turns "Conductor" into
-// 收入条 with or without hints (measured, P0 spike) — the owner's own words
+// unrelated syllables with or without hints (measured, P0 spike) — the owner's own words
 // for an agent are the only reliable way a Chinese sentence names it. Read per
 // call, never cached: the file is edited by hand and a restart to see it is a
 // surprise.

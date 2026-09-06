@@ -17,11 +17,11 @@ export interface RosterAgent {
   name: string
   workspaceId: string
   workspaceName: string
-  /** Other ways the owner says this name — 指挥 for Conductor. */
+  /** Other ways the owner says this name — the Chinese word for "commander" for Conductor. */
   aliases?: readonly string[]
   /** The saved role, when the card has one — "QA (Browser)", "Developer". */
   role?: string | null
-  /** The workspace's orch: what 指挥 / "the orch" means without a name. */
+  /** The workspace's orch: what "the orch" (in either language) means without a name. */
   orch?: boolean
 }
 
@@ -54,7 +54,7 @@ function roleMatches(role: string, said: string): boolean {
   )
 }
 
-/** "负责测试的" / "the QA one": a role said instead of a name. */
+/** "the one in charge of testing" / "the QA one": a role said instead of a name. */
 const ROLE_SAID_RE = /^(?:负责|做|管)?\s*(.+?)\s*(?:的那个|的)$|^(?:the\s+)?(.+?)\s+(?:one|agent|guy)$/iu
 
 export interface IntentRoster {
@@ -63,7 +63,7 @@ export interface IntentRoster {
   presets: ReadonlyArray<string>
 }
 
-/** A question Sous asked and is still waiting on: "需要问 Conductor 什么呢？" */
+/** A question Sous asked and is still waiting on: "what should I ask Conductor?" */
 export interface PendingPrompt {
   kind: 'prompt'
   agentId: string
@@ -146,9 +146,9 @@ export function resolveName<T extends Named>(said: string, pool: ReadonlyArray<T
 }
 
 /**
- * A name, or the two things people say instead of one: "the orch" (指挥) and
- * a role ("负责测试的", "the QA one"). Name first — an agent literally named
- * 指挥 wins over the flag — then orch, then role, each by the same
+ * A name, or the two things people say instead of one: "the orch" and a role
+ * ("the one doing QA", "the QA one"). Name first — an agent literally named
+ * with the orch word wins over the flag — then orch, then role, each by the same
  * exact→unique-prefix rule so an ambiguity is still an ambiguity.
  */
 export function resolveAgentWords(said: string, pool: ReadonlyArray<RosterAgent>): NameHit<RosterAgent> {
@@ -173,7 +173,7 @@ export function resolveAgentWords(said: string, pool: ReadonlyArray<RosterAgent>
 
 const CJK_RE = /\p{Script=Han}/u
 const TRAILING_PUNCT_RE = /[\s。．.!！?？,，;；]+$/u
-/** "Sous, …" / "苏斯，…" — the address that makes prose a command in the zoom view. */
+/** "Sous, …" (or its Chinese spellings) — the address that makes prose a command in the zoom view. */
 const SOUS_ADDRESS_RE = /^(?:sous|苏斯|小厨)\s*[,，:：、]?\s*/iu
 const BROWSER_EN_RE = /\s+with\s+(?:a\s+|an\s+)?browser\b/i
 const BROWSER_ZH_RE = /\s*(?:带|加|配|和)\s*(?:一个|个)?\s*浏览器/u
@@ -186,8 +186,9 @@ interface Shape {
   slots: Partial<Record<'workspace' | 'agent' | 'prompt' | 'preset' | 'from' | 'to' | 'name', number>>
 }
 
-// Longest alternative first inside each group — "切换工作台到" must not be
-// eaten as "切换" + "工作台到…". Order across shapes matters too: back/open
+// Longest alternative first inside each group — the long Chinese form of
+// "switch workspace to" must not be eaten as "switch" + "workspace to…".
+// Order across shapes matters too: back/open
 // are exact, then the verbs that cannot be confused, then the wide ones.
 const SHAPES: Shape[] = [
   { kind: 'back', re: /^(?:回到画布|回画布|退出画面|退出|返回|back(?:\s+to\s+(?:the\s+)?canvas)?|canvas|zoom\s*out)$/iu, slots: {} },
