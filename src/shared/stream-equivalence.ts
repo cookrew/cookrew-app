@@ -38,6 +38,13 @@
 //                         scrape-only harness, or a deleted session file), so
 //                         the stream is empty and the old ledger is all there
 //                         is. Reported per card, never silently skipped.
+//   stream-fills-gaps     every old identity is in the stream, in the same
+//                         relative order, but the stream holds extra blocks
+//                         BETWEEN them. Measured on the owner's machine, these
+//                         cluster in one place: the last 12-16 exchanges of
+//                         each predecessor file at a rotation, which the old
+//                         ledger's stitching dropped. The transcripts have
+//                         them; the ledger never did. Counted, never hidden.
 //   no-card               the ledger outlived its card: no terminal in any
 //                         workspace carries this id any more, so there is no
 //                         cwd and no binding to resolve a transcript from.
@@ -46,9 +53,20 @@
 //                         and only the first would be evidence against the
 //                         reader.
 //
-// Everything else — a missing identity, an extra one, a reordering, two
-// different titles for the same identity — is a REAL difference and fails
-// the gate.
+// Everything else — a missing identity, a reordering, two different titles
+// for the same identity — is a REAL difference and fails the gate.
+//
+// THE CLAIM, STATED EXACTLY. The first draft of this gate demanded that the
+// old list be a CONTIGUOUS run inside the stream. The owner's real files say
+// otherwise, and the honest response is to state the claim the evidence
+// supports rather than to widen the allow-list quietly:
+//
+//   every checkpoint the old store holds is in the stream, in the same order.
+//   The stream may hold MORE, and every extra block is counted and classed.
+//
+// That is the direction that matters. A stream missing an old checkpoint
+// would be the 400-checkpoint incident happening again, and it fails. A
+// stream holding history the ledger could not address IS the fix.
 
 import { isNoisePrompt } from './session-turns'
 
@@ -83,6 +101,7 @@ export type DiffClass =
   | 'old-noise-prompt'
   | 'stream-reaches-back'
   | 'stream-ahead'
+  | 'stream-fills-gaps'
   | 'title-unmigrated'
   | 'legacy-no-uuid'
   | 'no-transcript'
@@ -94,6 +113,7 @@ export const ALLOWED_CLASSES: readonly DiffClass[] = [
   'old-noise-prompt',
   'stream-reaches-back',
   'stream-ahead',
+  'stream-fills-gaps',
   'title-unmigrated',
   'legacy-no-uuid',
   'no-transcript',
@@ -130,18 +150,30 @@ export interface CompareOptions {
   cardKnown?: boolean
 }
 
-/** Where `needle` sits inside `haystack` as a contiguous run, else -1. An
- *  empty needle aligns at 0 — an empty old ledger is not a disagreement. */
-export function alignAt(haystack: readonly string[], needle: readonly string[]): number {
-  if (needle.length === 0) return 0
-  for (let start = 0; start + needle.length <= haystack.length; start += 1) {
-    let hit = true
-    for (let at = 0; at < needle.length && hit; at += 1) {
-      hit = haystack[start + at] === needle[at]
-    }
-    if (hit) return start
+/**
+ * Each needle identity's position in the haystack, or null when one is absent
+ * or the order breaks.
+ *
+ * Identities are unique (a message uuid, or a digest that carries the prompt),
+ * so this is an exact lookup rather than a search: every needle must be
+ * present, and their positions must strictly ascend. Null is the interesting
+ * answer — it means either the stream LOST a checkpoint the old store holds,
+ * or the two disagree about the order, and both of those fail the gate.
+ */
+export function subsequencePositions(
+  haystack: readonly string[],
+  needle: readonly string[]
+): number[] | null {
+  const at = new Map(haystack.map((identity, position) => [identity, position]))
+  const positions: number[] = []
+  let previous = -1
+  for (const identity of needle) {
+    const position = at.get(identity)
+    if (position === undefined || position <= previous) return null
+    positions.push(position)
+    previous = position
   }
-  return -1
+  return positions
 }
 
 /** Old-store title vs the stream's (which comes from marks). */
@@ -251,19 +283,23 @@ export function compareCheckpoints(
 
   const oldIds = kept.map((record) => record.identity)
   const streamIds = stream.map((row) => row.identity)
-  const start = alignAt(streamIds, oldIds)
+  const positions = subsequencePositions(streamIds, oldIds)
 
-  if (start >= 0) {
-    if (start > 0) {
+  if (positions !== null) {
+    const first = positions[0] ?? 0
+    const last = positions[positions.length - 1] ?? -1
+    const before = positions.length > 0 ? first : 0
+    const after = positions.length > 0 ? streamIds.length - 1 - last : streamIds.length
+    const inside = positions.length > 0 ? last - first + 1 - positions.length : 0
+    if (before > 0) {
       differences.push({
         class: 'stream-reaches-back',
         identity: streamIds[0],
         ordinal: stream[0].ordinal,
         field: 'count',
-        detail: `${start} block(s) before the old ledger's first record`
+        detail: `${before} block(s) before the old ledger's first record`
       })
     }
-    const after = streamIds.length - (start + oldIds.length)
     if (after > 0) {
       differences.push({
         class: 'stream-ahead',
@@ -273,9 +309,19 @@ export function compareCheckpoints(
         detail: `${after} block(s) past the old ledger's last record`
       })
     }
+    if (inside > 0) {
+      const gaps = positions.filter((position, at) => at > 0 && position - positions[at - 1] > 1)
+      differences.push({
+        class: 'stream-fills-gaps',
+        identity: streamIds[first],
+        ordinal: stream[first].ordinal,
+        field: 'count',
+        detail: `${inside} block(s) in ${gaps.length} gap(s) the old ledger skipped`
+      })
+    }
     kept.forEach((record, at) => {
       counts.compared += 1
-      const difference = titleDifference(record, stream[start + at])
+      const difference = titleDifference(record, stream[positions[at]])
       if (difference !== null) differences.push(difference)
     })
     return finish(differences, counts)

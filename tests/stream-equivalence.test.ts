@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   ALLOWED_CLASSES,
-  alignAt,
+  subsequencePositions,
   compareCheckpoints,
   oldCheckpointOf,
   type OldCheckpoint,
@@ -23,11 +23,16 @@ const row = (identity: string, ordinal: number, title?: string): StreamCheckpoin
   ...(title !== undefined ? { title } : {})
 })
 
-describe('alignAt', () => {
-  it('finds the contiguous run and refuses a scattered one', () => {
-    expect(alignAt(['a', 'b', 'c', 'd'], ['c', 'd'])).toBe(2)
-    expect(alignAt(['a', 'b', 'c'], ['a', 'c'])).toBe(-1)
-    expect(alignAt(['a'], [])).toBe(0)
+describe('subsequencePositions', () => {
+  it('places every needle in ascending order, gaps allowed', () => {
+    expect(subsequencePositions(['a', 'b', 'c', 'd'], ['c', 'd'])).toEqual([2, 3])
+    expect(subsequencePositions(['a', 'b', 'c'], ['a', 'c'])).toEqual([0, 2])
+    expect(subsequencePositions(['a'], [])).toEqual([])
+  })
+
+  it('refuses a missing identity and a broken order — the two real failures', () => {
+    expect(subsequencePositions(['a', 'b'], ['a', 'z'])).toBeNull()
+    expect(subsequencePositions(['a', 'b'], ['b', 'a'])).toBeNull()
   })
 })
 
@@ -94,6 +99,18 @@ describe('compareCheckpoints — allowed classes', () => {
     expect(result.classCounts).toEqual({ 'no-transcript': 1 })
   })
 
+  it('stream-fills-gaps: exchanges the transcript has and the ledger skipped', () => {
+    // Measured shape on the owner's machine: the last exchanges of each
+    // predecessor file at a rotation are absent from the old ledger.
+    const result = compareCheckpoints(
+      [older('u1', 1), older('u4', 2)],
+      [row('u1', 1), row('u2', 2), row('u3', 3), row('u4', 4)]
+    )
+    expect(result.allowed).toBe(true)
+    expect(result.classCounts).toEqual({ 'stream-fills-gaps': 1 })
+    expect(result.differences[0].detail).toBe('2 block(s) in 1 gap(s) the old ledger skipped')
+  })
+
   it('no-card: the ledger outlived the card, which is not the reader’s failure', () => {
     const result = compareCheckpoints([older('u1', 1)], [], {
       streamAvailable: false,
@@ -110,6 +127,7 @@ describe('compareCheckpoints — allowed classes', () => {
       'no-transcript',
       'old-noise-prompt',
       'stream-ahead',
+      'stream-fills-gaps',
       'stream-reaches-back',
       'title-unmigrated'
     ])
@@ -124,10 +142,10 @@ describe('compareCheckpoints — real differences fail the gate', () => {
     expect(result.differences[0]).toMatchObject({ class: 'identity-missing', identity: 'ghost' })
   })
 
-  it('an identity only the stream holds, out of alignment', () => {
+  it('an identity the stream holds that breaks the old order', () => {
     const result = compareCheckpoints(
-      [older('u1', 1), older('u3', 2)],
-      [row('u1', 1), row('u2', 2), row('u3', 3)]
+      [older('u1', 1), older('u2', 2)],
+      [row('u2', 1), row('u1', 2), row('u9', 3)]
     )
     expect(result.allowed).toBe(false)
     expect(result.classCounts['identity-extra']).toBe(1)

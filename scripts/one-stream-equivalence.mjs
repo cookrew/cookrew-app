@@ -162,7 +162,7 @@ async function main() {
   if (onlyCard) ids = ids.filter((id) => id === onlyCard || id.startsWith(onlyCard))
   if (limit > 0) ids = ids.slice(0, limit)
 
-  const totals = { ok: 0, allowed: 0, failed: 0, oldRecords: 0, streamBlocks: 0 }
+  const totals = { ok: 0, allowed: 0, failed: 0, oldRecords: 0, streamBlocks: 0, withStream: 0 }
   const classCounts = {}
   const failures = []
   const started = Date.now()
@@ -198,6 +198,7 @@ async function main() {
 
     totals.oldRecords += records.length
     totals.streamBlocks += entries.length
+    if (chain.files.length > 0) totals.withStream += 1
     for (const [name, count] of Object.entries(result.classCounts)) {
       classCounts[name] = (classCounts[name] ?? 0) + count
     }
@@ -242,8 +243,17 @@ async function main() {
       `allowed-differences: ${totals.allowed}  FAILED: ${totals.failed}\n`
   )
   process.stdout.write(
+    `cards with a resolvable stream: ${totals.withStream}\n`
+  )
+  const delta = totals.streamBlocks - totals.oldRecords
+  process.stdout.write(
     `records: old=${totals.oldRecords} stream=${totals.streamBlocks} ` +
-      `(+${totals.streamBlocks - totals.oldRecords})\n`
+      `(${delta >= 0 ? '+' : ''}${delta})\n`
+  )
+  // The load-bearing claim, stated as a number rather than an absence.
+  process.stdout.write(
+    `checkpoints the old store holds that the stream cannot reach: ` +
+      `${classCounts['identity-missing'] ?? 0}\n`
   )
   for (const [name, count] of Object.entries(classCounts).sort((a, b) => b[1] - a[1])) {
     process.stdout.write(`  ${name}: ${count}\n`)
