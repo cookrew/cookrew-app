@@ -229,8 +229,22 @@ export function createZone(options: ZoneOptions): Responder {
     if (labels.length === 1) {
       const server = nameServer(name, type)
       if (server !== null) return server
-      // A device id on its own is an empty non-terminal while that Mac
-      // publishes anything at all: the name exists, it just has no records.
+      /**
+       * A device id on its own is an empty non-terminal while that Mac
+       * publishes anything at all: the name exists, it just has no records.
+       *
+       * AND IT STAYS NODATA, though the review asked whether NXDOMAIN would be
+       * better — NODATA here is an existence oracle for a device id. It would
+       * be, and the answer is still no. RFC 8020 says NXDOMAIN means nothing
+       * exists BELOW that name either, and a resolver doing QNAME
+       * minimisation asks for `<id>.<zone>` on its way to
+       * `_acme-challenge.<id>.<zone>` and to every address label. Answering
+       * NXDOMAIN there tells it to stop, which breaks the CA's own validation
+       * and every lookup this zone exists to serve. The oracle it leaks is
+       * "this UUIDv4 belongs to a Mac that is publishing", answerable only by
+       * somebody who already has the UUID — and knowing it buys nothing more,
+       * because the address labels are gated separately.
+       */
       return live(labels[0]) === null ? nxdomain() : noData()
     }
     if (labels.length !== 2) return nxdomain()
