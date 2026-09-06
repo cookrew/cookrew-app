@@ -22,6 +22,7 @@ export type V2Error =
   | 'legacy'
   | 'bad_username'
   | 'weak_password'
+  | 'same_password'
   | 'bad_device'
   | 'bad_credentials'
   | 'rate_limited'
@@ -47,6 +48,7 @@ const SENTENCES: Record<V2Error, string> = {
     'That name already exists from before passwords — sign in with the key that holds it and set a password.',
   bad_username: 'A username is lowercase letters, digits and dashes, up to 32 of them.',
   weak_password: 'Too easy to guess. Use 12 characters or more; a sentence works.',
+  same_password: 'That is the password you already have. Pick a different one.',
   bad_device: 'This device did not say what it is, so it cannot be attached to an account.',
   bad_credentials: 'That name and password do not go together. Try again, or use a recovery code.',
   rate_limited: 'Too many tries from here. Wait a minute, then try again.',

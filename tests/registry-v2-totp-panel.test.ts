@@ -157,7 +157,10 @@ function openMe(route: (method: string, url: string, body: Record<string, unknow
   }
 }
 
-const enrolRoutes = (confirm: (code: unknown) => Answer) => (method: string, url: string, body: Record<string, unknown>): Answer => {
+const enrolRoutes = (confirm: (code: unknown) => Answer, password?: (body: Record<string, unknown>) => Answer) => (method: string, url: string, body: Record<string, unknown>): Answer => {
+  if (url === '/v2/me/password' && method === 'POST') {
+    return password ? password(body) : { status: 401, body: { error: 'bad_credentials', message: WRONG_CURRENT } }
+  }
   if (url === '/v2/me/totp/enrol' && method === 'POST') {
     return { status: 201, body: { secret: SECRET, otpauth: OTPAUTH, qr: QR } }
   }
@@ -167,6 +170,8 @@ const enrolRoutes = (confirm: (code: unknown) => Answer) => (method: string, url
 }
 
 const BAD_CODE = 'That is not the code showing right now. Wait for the next one and type it as it appears.'
+const WRONG_CURRENT = 'That name and password do not go together. Try again, or use a recovery code.'
+const PASSWORD = 'correct horse battery staple'
 const accepted = (code: unknown): Answer =>
   code === codeNow() ? { status: 204 } : { status: 401, body: { error: 'bad_code', message: BAD_CODE } }
 
@@ -264,5 +269,116 @@ describe('the authenticator panel on /me', () => {
     expect(page.find('[data-drop-totp]')).toHaveLength(1)
     expect(page.find('[data-add-totp]')).toHaveLength(0)
     expect(page.find('[data-modules]')).toHaveLength(0)
+  })
+})
+
+/**
+ * CHANGE YOUR PASSWORD, in the page (owner's note, 2026-09-06).
+ *
+ * It never asked for the current password and never checked the new one: two
+ * `prompt()` boxes and a toast. This is the one control on /me that ends every
+ * OTHER sitting on the account, so it has to be the hardest to press by
+ * accident and the clearest about what it did.
+ */
+describe('the password panel on /me', () => {
+  const fields = (page: Page): El[] => page.find('#me-password input')
+  const primary = (page: Page): El =>
+    page.find('#me-password button').find((b) => b.textContent === 'Change password') as El
+  const type = (field: El, value: string): void => {
+    field.value = value
+    field.dispatch('input')
+  }
+
+  const openPanel = async (route: Parameters<typeof openMe>[0]): Promise<Page> => {
+    const page = openMe(route)
+    await page.settle()
+    expect(page.find('#me-password')[0].hidden).toBe(true)
+    page.press('[data-password]')
+    await page.settle()
+    return page
+  }
+
+  it('asks for the current password, the new one, and it again', async () => {
+    const page = await openPanel(enrolRoutes(accepted))
+    expect(fields(page)).toHaveLength(3)
+    expect(page.words()).toContain('Current password')
+    expect(page.words()).toContain('New password')
+    expect(page.words()).toContain('Repeat new password')
+    expect(page.find('#me-password')[0].hidden).toBe(false)
+    // Nothing was asked of the registry by opening a panel.
+    expect(page.calls).not.toContain('POST /v2/me/password')
+    expect(page.errors).toEqual([])
+  })
+
+  it('keeps the primary shut until all three are right, and says why', async () => {
+    const page = await openPanel(enrolRoutes(accepted))
+    const [current, next, again] = fields(page)
+    expect(primary(page).disabled).toBe(true)
+
+    type(current, PASSWORD)
+    type(next, 'short')
+    expect(primary(page).disabled).toBe(true)
+    expect(page.find('#me-password .chip')[1].textContent).toBe('weak')
+    expect(page.words()).toContain('Too easy to guess')
+
+    type(next, 'a much longer new password')
+    type(again, 'a much longer new passwor')
+    expect(primary(page).disabled).toBe(true)
+    expect(page.words()).toContain('These two do not match yet.')
+
+    type(again, 'a much longer new password')
+    expect(primary(page).disabled).toBe(false)
+    expect(page.words()).not.toContain('These two do not match yet.')
+    // The strength hint is the register sheet's own reading.
+    expect(page.find('#me-password .chip')[1].textContent).toBe('strong')
+  })
+
+  it('shows the registry’s sentence when the current password is wrong', async () => {
+    const page = await openPanel(enrolRoutes(accepted))
+    const [current, next, again] = fields(page)
+    type(current, 'not it at all')
+    type(next, 'a much longer new password')
+    type(again, 'a much longer new password')
+    primary(page).dispatch('click')
+    await page.settle()
+
+    expect(page.calls).toContain('POST /v2/me/password')
+    expect(page.find('.totp-said')[0].textContent).toBe(WRONG_CURRENT)
+    // Still open, with what was typed still there to correct.
+    expect(page.find('#me-password')[0].hidden).toBe(false)
+    expect(fields(page)).toHaveLength(3)
+    expect(page.errors).toEqual([])
+  })
+
+  it('says what a change did, and keeps this session', async () => {
+    const page = await openPanel(
+      enrolRoutes(accepted, (body) => (body.current === PASSWORD ? { status: 204 } : { status: 401 }))
+    )
+    const [current, next, again] = fields(page)
+    type(current, PASSWORD)
+    type(next, 'a much longer new password')
+    type(again, 'a much longer new password')
+    primary(page).dispatch('click')
+    await page.settle()
+
+    expect(page.doc.getElementById('me-password-note')?.textContent).toBe(
+      'Password changed. Every other device was signed out.'
+    )
+    expect(page.find('#me-password')[0].hidden).toBe(true)
+    // The registry keeps the caller's jti, so nothing signs this browser out
+    // and nothing reloads under it.
+    expect(page.calls).not.toContain('reload')
+    expect(page.calls).not.toContain('assign /')
+    expect(page.errors).toEqual([])
+  })
+
+  it('discards everything on cancel', async () => {
+    const page = await openPanel(enrolRoutes(accepted))
+    const cancel = page.find('#me-password button').find((b) => b.textContent === 'Cancel')
+    cancel?.dispatch('click')
+    await page.settle()
+    expect(page.find('#me-password')[0].hidden).toBe(true)
+    expect(fields(page)).toHaveLength(0)
+    expect(page.calls).not.toContain('POST /v2/me/password')
   })
 })
