@@ -50,7 +50,13 @@ export const LATENCY = {
   // the live store the sweep takes ~100 s, all of it in
   // collectReferencedAttachments reading every sidecar byte (1 GB) for
   // attachment citations — a pre-existing cost this fixture does not carry.
-  storageSweepPlan: { p50: 200, p95: 400, p98: 500 }
+  storageSweepPlan: { p50: 200, p95: 400, p98: 500 },
+  // Planning a sweep over 40 served-session sandboxes of 450 files each (the
+  // live shape: ~6 MB plugin clones per sandbox) plus 6 residue dirs, TWICE
+  // per sample (once with an open set, once blind). The cost is one stat per
+  // file to find each sandbox's newest write. 2026-09-06 under load 3.9/core:
+  // p50 108 / p95 111 / p98 112 (n=30).
+  storageSweepServed40: { p50: 250, p95: 400, p98: 500 }
 } as const
 
 export const MEMORY = {
