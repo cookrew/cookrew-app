@@ -117,6 +117,7 @@ describe('sweepStorage — reads the stores, plans, and only then unlinks', () =
     const out = sweepStorage({ roots: blind, apply: true })
 
     expect(out.remove).toEqual([])
+    expect(out.skipped).toEqual(['ledgers', 'attachments', 'sidecars'])
     expect(existsSync(path.join(roots.turns, 'live-term.jsonl'))).toBe(true)
   })
 
@@ -184,7 +185,10 @@ describe('sweepStorage — team session sidecars', () => {
     expect(readdirSync(dir)).toEqual(['a.jsonl'])
   })
 
-  it('collects the whole sidecar dir of a team whose JSON is gone (team-missing)', () => {
+  it('collects every file of a team whose JSON is gone and leaves the empty dir (team-missing)', () => {
+    // The directory itself is never removed: snapshotSessions mkdirs the dir
+    // and copies into it in two steps, and an rmdir between them would save
+    // the team without its sidecar. An empty dir is zero bytes.
     const roots = store()
     team(roots, 'crew', { name: 'Crew', sessions: { t1: 'a.jsonl' } }, [{ name: 'a.jsonl' }])
     const lost = team(roots, 'lost', null, [{ name: 'x.jsonl' }, { name: 'y.jsonl' }])
@@ -192,7 +196,7 @@ describe('sweepStorage — team session sidecars', () => {
     const out = sweepStorage({ roots, apply: true })
 
     expect(sidecarKeys(out)).toEqual([path.join('lost-sessions', 'x.jsonl'), path.join('lost-sessions', 'y.jsonl')])
-    expect(existsSync(lost)).toBe(false)
+    expect(readdirSync(lost)).toEqual([])
     expect(existsSync(path.join(roots.teams, 'crew-sessions', 'a.jsonl'))).toBe(true)
   })
 
@@ -221,20 +225,23 @@ describe('sweepStorage — team session sidecars', () => {
     expect(existsSync(path.join(roots.teams, 'cookrew-team-sessions', '1faa.jsonl'))).toBe(true)
   })
 
-  it('REFUSES to plan any sidecar when one team JSON is unreadable (unreadable-team-aborts)', () => {
-    // A half-written team could name every file in every sidecar dir. Ledgers
-    // and attachments keep their own policy; sidecars are planned as nothing.
+  it('REFUSES to plan ANY class when one team JSON is unreadable (unreadable-team-aborts)', () => {
+    // A half-written team could name every sidecar file — and every terminal
+    // id and attachment too. One store we cannot read aborts the whole sweep,
+    // and `skipped` names all three classes so the boot log can say why.
     const roots = store()
     team(roots, 'lost', null, [{ name: 'x.jsonl' }])
     team(roots, 'broken', '{"name": "Broken", "sessions": {', [{ name: 'b.jsonl' }])
     aged(path.join(roots.turns, 'dead-term.jsonl'), '{}')
+    aged(path.join(roots.attachments, 'orphan.png'), 'binary')
 
     const out = sweepStorage({ roots, apply: true })
 
     expect(collectReferencedSidecars(roots)).toBeNull()
-    expect(out.skipped).toEqual(['sidecars'])
-    expect(sidecarKeys(out)).toEqual([])
-    expect(out.remove.map((c) => c.key)).toEqual(['dead-term'])
+    expect(out.skipped).toEqual(['ledgers', 'attachments', 'sidecars'])
+    expect(out.remove).toEqual([])
+    expect(existsSync(path.join(roots.turns, 'dead-term.jsonl'))).toBe(true)
+    expect(existsSync(path.join(roots.attachments, 'orphan.png'))).toBe(true)
     expect(existsSync(path.join(roots.teams, 'lost-sessions', 'x.jsonl'))).toBe(true)
     expect(existsSync(path.join(roots.teams, 'broken-sessions', 'b.jsonl'))).toBe(true)
   })
@@ -277,7 +284,7 @@ describe('sweepStorage — team session sidecars', () => {
 
     const out = sweepStorage({ roots, apply: true })
 
-    expect(out.skipped).toEqual(['sidecars'])
+    expect(out.skipped).toEqual(['ledgers', 'attachments', 'sidecars'])
     expect(existsSync(path.join(roots.teams, 'lost-sessions', 'x.jsonl'))).toBe(true)
   })
 
@@ -292,7 +299,13 @@ describe('sweepStorage — team session sidecars', () => {
     expect(sidecarKeys(out)).toEqual([path.join('lost-sessions', 'x.jsonl')])
   })
 
-  it('a sidecar that cannot be unlinked is reported failed and its dir is left alone', () => {
+  it('a normal sweep reports no skipped class', () => {
+    const roots = store()
+    team(roots, 'lost', null, [{ name: 'x.jsonl' }])
+    expect(sweepStorage({ roots }).skipped).toEqual([])
+  })
+
+  it('a sidecar that cannot be unlinked is reported failed', () => {
     const roots = store()
     const lost = team(roots, 'lost', null, [{ name: 'x.jsonl' }])
     chmodSync(lost, 0o500)

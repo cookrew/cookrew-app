@@ -129,7 +129,7 @@ describe('team store — session sidecars follow the saved team', () => {
   // period as ledgers and attachments. This fixture is the live-machine case
   // — a team saved by the real TeamStore, its JSON removed by hand — so a
   // change to how TeamStore lays out a sidecar fails here, not in production.
-  it('reclaims a sidecar whose team file is gone, and drops the emptied dir', () => {
+  it('reclaims a sidecar whose team file is gone', () => {
     const base = root('orphan')
     const projects = sessions(base, ['s1'], 16)
     const teams = new TeamStore(path.join(base, 'teams'), projects)
@@ -147,8 +147,7 @@ describe('team store — session sidecars follow the saved team', () => {
     expect(swept.applied).toBe(true)
     expect(swept.remove.map((c) => c.key)).toEqual([path.join('crew-sessions', 'a.jsonl')])
     expect(swept.bytes).toBe(16 * 1024)
-    expect(existsSync(path.join(sidecar, 'a.jsonl'))).toBe(false)
-    expect(existsSync(sidecar)).toBe(false)
+    expect(readdirSync(sidecar)).toEqual([])
   })
 
   it('keeps every sidecar a saved team still names, whatever its age', () => {

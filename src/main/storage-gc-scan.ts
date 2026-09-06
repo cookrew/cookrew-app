@@ -1,7 +1,7 @@
-import { existsSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, type Dirent } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
-import { fileSlug } from '../shared/slug'
+import { roleSlug } from './roles'
 import { planStorageGc, type GcCandidate, type GcPlan } from './storage-gc'
 
 /**
@@ -40,11 +40,24 @@ export function defaultStorageRoots(base = path.join(homedir(), '.cookrew')): St
   }
 }
 
+/**
+ * `readdirSync` that answers empty for a directory that is gone or unreadable.
+ * `pruneSessionSidecars` removes a whole sidecar dir when a team's map empties,
+ * and a sweep that started a moment earlier must not lose every class to it.
+ */
+function safeReaddir(dir: string): Dirent[] {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+}
+
 /** Every file under `dir`, recursively. Missing directories answer empty. */
 function walk(dir: string): string[] {
   if (!existsSync(dir)) return []
   const out: string[] = []
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+  for (const entry of safeReaddir(dir)) {
     const full = path.join(dir, entry.name)
     if (entry.isDirectory()) out.push(...walk(full))
     else if (entry.isFile()) out.push(full)
@@ -108,9 +121,12 @@ export function collectReferencedAttachments(
   return referenced
 }
 
-/** The sidecar key a team resolves for one of its sessions-map values. */
+/**
+ * The sidecar key a team resolves for one of its sessions-map values — the
+ * same `roleSlug` `TeamStore.sessionsDirFor` uses, so the two cannot drift.
+ */
 const sidecarKey = (teamName: string, fileName: string): string =>
-  path.join(`${fileSlug(teamName)}${SIDECAR_SUFFIX}`, fileName)
+  path.join(`${roleSlug(teamName)}${SIDECAR_SUFFIX}`, fileName)
 
 /**
  * The sidecar keys one team JSON resolves, or null when the file cannot be
@@ -138,7 +154,7 @@ function sidecarKeysOfTeam(text: string): string[] | null {
 
 /**
  * Sidecar keys some saved team can still read — `TeamStore.sessionLines`
- * resolves `<fileSlug(team.name)>-sessions/<sessions[id]>`, and nothing else
+ * resolves `<roleSlug(team.name)>-sessions/<sessions[id]>`, and nothing else
  * ever opens a sidecar, so that relative path is what "referenced" means.
  *
  * Answers NULL when any team JSON is unreadable. The live set can only shrink
@@ -153,7 +169,13 @@ function sidecarKeysOfTeam(text: string): string[] | null {
 export function collectReferencedSidecars(roots: StorageRoots): Set<string> | null {
   const referenced = new Set<string>()
   if (!existsSync(roots.teams)) return referenced
-  for (const entry of readdirSync(roots.teams, { withFileTypes: true })) {
+  let entries: Dirent[]
+  try {
+    entries = readdirSync(roots.teams, { withFileTypes: true })
+  } catch {
+    return null
+  }
+  for (const entry of entries) {
     if (entry.isDirectory() || !entry.name.endsWith('.json')) continue
     const keys = sidecarKeysOfTeam(safeRead(path.join(roots.teams, entry.name)))
     if (keys === null) return null
@@ -182,7 +204,7 @@ const terminalIdOf = (file: string): string => path.basename(file).split('.')[0]
 /** Every file under every `teams/<slug>-sessions/`, keyed relative to teams. */
 export function sidecarCandidates(roots: StorageRoots): GcCandidate[] {
   if (!existsSync(roots.teams)) return []
-  return readdirSync(roots.teams, { withFileTypes: true })
+  return safeReaddir(roots.teams)
     .filter((entry) => entry.isDirectory() && entry.name.endsWith(SIDECAR_SUFFIX))
     .flatMap((entry) =>
       candidatesIn(path.join(roots.teams, entry.name), (file) => path.relative(roots.teams, file))
@@ -199,30 +221,17 @@ export interface SweepOptions {
 
 /** A candidate class the sweep knows how to plan. */
 export type SweepClass = 'ledgers' | 'attachments' | 'sidecars'
+const EVERY_CLASS: readonly SweepClass[] = ['ledgers', 'attachments', 'sidecars']
 
 export interface SweepResult extends GcPlan {
   applied: boolean
   failed: readonly string[]
-  /** Classes planned as NOTHING because their store could not be read. */
+  /**
+   * Classes planned as NOTHING because a store could not be read — every
+   * class, since one unreadable store (a missing canvas root, a half-written
+   * team JSON) names references for all of them. Empty on a normal sweep.
+   */
   skipped: readonly SweepClass[]
-}
-
-/** A sidecar directory emptied by the sweep has no meaning left; drop it. */
-function removeEmptiedSidecarDirs(roots: StorageRoots, removed: readonly string[]): void {
-  const teams = path.resolve(roots.teams)
-  const dirs = new Set(
-    removed
-      .filter((file) => path.resolve(path.dirname(path.dirname(file))) === teams)
-      .filter((file) => path.basename(path.dirname(file)).endsWith(SIDECAR_SUFFIX))
-      .map((file) => path.dirname(file))
-  )
-  for (const dir of dirs) {
-    try {
-      if (readdirSync(dir).length === 0) rmdirSync(dir)
-    } catch {
-      // Already gone, or someone wrote into it mid-sweep — either is fine.
-    }
-  }
 }
 
 /**
@@ -231,8 +240,15 @@ function removeEmptiedSidecarDirs(roots: StorageRoots, removed: readonly string[
  * Aborts by planning NOTHING when the workspace store is missing: an absent
  * canvas store is indistinguishable from "every terminal is dead", and that
  * reading would delete every ledger on the machine. Refusing to collect is the
- * only safe answer to a store we cannot see. The same reasoning, per class,
- * empties the sidecar candidates when any team JSON is unreadable.
+ * only safe answer to a store we cannot see. An unreadable team JSON is the
+ * same store-you-cannot-read for EVERY class — it names terminal ids and
+ * attachments as well as sidecars — so it aborts all three, and `skipped`
+ * says which classes were planned as nothing and why nothing was freed.
+ *
+ * Candidates are listed BEFORE references are read, in every class. A
+ * `TeamStore.save` landing between the two passes then adds a reference the
+ * candidate list predates (kept, harmlessly) rather than a candidate the
+ * reference set predates (which would look orphaned).
  */
 export function sweepStorage(options: SweepOptions = {}): SweepResult {
   const roots = options.roots ?? defaultStorageRoots()
@@ -242,38 +258,38 @@ export function sweepStorage(options: SweepOptions = {}): SweepResult {
     kept: { live: 0, withinGrace: 0 },
     applied: false,
     failed: [],
-    skipped: []
+    skipped: EVERY_CLASS
   }
   if (!existsSync(roots.workspaces)) return empty
 
+  const ledgers = candidatesIn(roots.turns, terminalIdOf)
   const attachments = candidatesIn(roots.attachments, (f) => path.basename(f))
+  const sidecars = sidecarCandidates(roots)
   const referencedSidecars = collectReferencedSidecars(roots)
+  if (referencedSidecars === null) return empty
+
   const plan = planStorageGc({
-    ledgers: candidatesIn(roots.turns, terminalIdOf),
+    ledgers,
     attachments,
-    sidecars: referencedSidecars === null ? [] : sidecarCandidates(roots),
+    sidecars,
     liveTerminalIds: collectLiveTerminalIds(roots),
     referencedAttachments: collectReferencedAttachments(
       roots,
       attachments.map((a) => a.key)
     ),
-    referencedSidecars: referencedSidecars ?? new Set<string>(),
+    referencedSidecars,
     now: options.now ?? Date.now(),
     graceMs: options.graceMs ?? DEFAULT_GRACE_MS
   })
-  const skipped: SweepClass[] = referencedSidecars === null ? ['sidecars'] : []
-  if (options.apply !== true) return { ...plan, applied: false, failed: [], skipped }
+  if (options.apply !== true) return { ...plan, applied: false, failed: [], skipped: [] }
 
   const failed: string[] = []
-  const removed: string[] = []
   for (const target of plan.remove) {
     try {
       rmSync(target.path, { force: true })
-      removed.push(target.path)
     } catch {
       failed.push(target.path)
     }
   }
-  removeEmptiedSidecarDirs(roots, removed)
-  return { ...plan, applied: true, failed, skipped }
+  return { ...plan, applied: true, failed, skipped: [] }
 }
