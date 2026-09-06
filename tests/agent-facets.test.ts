@@ -1,12 +1,29 @@
 import { describe, expect, it } from 'vitest'
 import {
+  EMPTY_FILTER,
   applyFilter,
   buildFacets,
+  defaultFilter,
   eventClock,
+  filterActive,
   normalizePreset,
   type AgentFilter,
   type FacetEvent,
 } from '../src/renderer/src/agent-facets'
+
+/** The Board opens on the loaded workspace (owner ruling, 2026-09-06). */
+describe('defaultFilter — the Board opens on the loaded workspace', () => {
+  it('narrows to the active workspace by id, and nothing else', () => {
+    expect(defaultFilter('ws1')).toEqual({ ...EMPTY_FILTER, workspaceIds: ['ws1'] })
+    expect(filterActive(defaultFilter('ws1'))).toBe(true)
+  })
+
+  it('has no opinion when nothing is loaded', () => {
+    expect(defaultFilter(null)).toBe(EMPTY_FILTER)
+    expect(defaultFilter(undefined)).toBe(EMPTY_FILTER)
+    expect(filterActive(EMPTY_FILTER)).toBe(false)
+  })
+})
 import type { AgentRow } from '../src/renderer/src/agent-rows'
 
 const NOW = 1_800_000_000_000
