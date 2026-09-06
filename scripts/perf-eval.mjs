@@ -226,7 +226,7 @@ function evalStorage(opts, now) {
       value: (buckets.backups ?? 0) / MB,
       unit: 'MB',
       verdict: judge((buckets.backups ?? 0) / MB, BUDGETS.storage.backupsMb),
-      note: buckets.backups ? `*.bak-* / lineage-* — ${BUCKET_POLICY.backups}` : ''
+      note: buckets.backups ? `*.bak-* / lineage-*: ${BUCKET_POLICY.backups}` : ''
     }
   ]
   // Only the two aggregates leave this function. A per-sandbox row is keyed
