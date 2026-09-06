@@ -170,5 +170,7 @@ export function mergeActivity(
   incoming: TerminalActivity
 ): TerminalActivity {
   if (incoming.mirrorless !== true || !known || known.mirrorless === true) return incoming
-  return { ...known, phase: incoming.phase, updatedAt: incoming.updatedAt }
+  // Still marked: the words are a mirror's, but the PHASE is the
+  // multiplexer's guess, and the marker is what says so.
+  return { ...known, mirrorless: true, phase: incoming.phase, updatedAt: incoming.updatedAt }
 }

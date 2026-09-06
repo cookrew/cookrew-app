@@ -1956,7 +1956,17 @@ export class TurnTracker extends EventEmitter {
    * cheap question becomes O(terminals x scrollback).
    */
   phaseOf(terminalId: string): TurnPhase | undefined {
-    return this.tracked.get(terminalId)?.phase ?? this.backendPhase.get(terminalId)?.phase
+    // TRACKED ONLY, deliberately. hasLiveWork reads this, and its working set
+    // is exactly what the backend hint emits — answering from a guess pins
+    // every workspace holding a herdr-working agent and inFlightWork never
+    // falls to zero, which is the leaked-flag failure a revert already paid
+    // for once. Cards get the hint through list(); the drain must not.
+    return this.tracked.get(terminalId)?.phase
+  }
+
+  /** The multiplexer's guess for a mirrorless terminal, asked for by name. */
+  backendPhaseFor(terminalId: string): TurnPhase | undefined {
+    return this.tracked.has(terminalId) ? undefined : this.backendPhase.get(terminalId)?.phase
   }
 
   /**
@@ -1973,16 +1983,32 @@ export class TurnTracker extends EventEmitter {
       // seen() promises no TTL on the unread mark, and demoting to a flat
       // 'idle' here would expire it from the outside.
       if (!this.tracked.has(terminalId)) {
-        this.emit('activity', this.backendActivity(terminalId, this.restingPhase(terminalId), current.agent))
+        this.announce(this.backendActivity(terminalId, this.restingPhase(terminalId), current.agent))
       }
       return
     }
-    if (current?.phase === phase) return
-    this.backendPhase.set(terminalId, { phase, agent, at: Date.now() })
+    // BOTH fields: a phase that holds while agent-ness was written wrongly
+    // (a spawn racing the store add) would latch a shell into an agent card.
+    if (current?.phase === phase && current.agent === agent) return
+    this.backendPhase.set(terminalId, { phase, agent, at: current?.phase === phase ? current.at : Date.now() })
     // A tracked terminal reports its own truth; announcing this one would
     // race the real screen for the same card.
     if (!this.tracked.has(terminalId)) {
-      this.emit('activity', this.backendActivity(terminalId, phase, agent))
+      this.announce(this.backendActivity(terminalId, phase, agent))
+    }
+  }
+
+  /**
+   * Emit without letting a listener's throw escape. This one is reached from
+   * a setInterval body that also runs the checkpoint oracle, and the chain
+   * ends at webContents.send — which throws on a torn-down window during
+   * quit. herdr-agent-status guards its own emit for exactly this reason.
+   */
+  private announce(activity: TerminalActivity): void {
+    try {
+      this.emit('activity', activity)
+    } catch (error) {
+      console.error('[turns] backend-phase listener failed:', error)
     }
   }
 
@@ -2010,7 +2036,10 @@ export class TurnTracker extends EventEmitter {
       reply: null,
       glance: null,
       title: null,
-      turnCount: this.historyCount(terminalId),
+      // The store's CACHED count: historyCount goes through liveHistory,
+      // which reads and hydrates the whole ledger — a synchronous reparse
+      // per reported agent is not what "costs nothing" means.
+      turnCount: this.store?.count(terminalId) ?? 0,
       turnStartedAt: null,
       turnStartLine: null,
       scrollRow: null,

@@ -2241,10 +2241,6 @@ const panePids = new PanePidCache((terminalId) => ptys.panePid(terminalId))
  * within ORACLE_SWEEP_MS instead of the 33 hours measured on 2026-09-05.
  */
 const oracleSweep = setInterval(() => {
-  // Retract phases herdr no longer stands behind — the silences it never
-  // sends as events. This walks the same terminalsAcross() the sweep already
-  // pays for, and every read is a map lookup.
-  syncBackendPhases()
   // A cold pane-pid lookup is a synchronous herdr child process, so at most
   // ONE per tick: a fleet that all boots at once warms up over a few sweeps
   // instead of stalling the main thread for the whole fleet in one go.
@@ -2255,6 +2251,11 @@ const oracleSweep = setInterval(() => {
     if (!panePids.isWarm(node.id) && coldLookups++ > 0) continue
     void rebindRotatedClaudeSession(node.id, 'oracle')
   }
+  // Then retract phases herdr no longer stands behind — the silences it
+  // never sends as events (feed down, a retraction to unknown, a pane that
+  // went away). LAST, so a listener that throws cannot cost the oracle its
+  // sweep; the walk is the same memoized terminalsAcross() plus map reads.
+  syncBackendPhases()
 }, ORACLE_SWEEP_MS)
 oracleSweep.unref()
 

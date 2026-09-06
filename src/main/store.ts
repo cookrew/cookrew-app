@@ -791,7 +791,16 @@ export class WorkspaceStore extends EventEmitter {
     this.parked.delete(id)
   }
 
-  /** Active workspace state from memory (fresh), inactive from disk. */
+  /**
+   * Active workspace state from memory (fresh); a parked one from disk, or
+   * from the parse held for its current file version.
+   *
+   * ALIASING: repeat callers now share ONE state object where each used to
+   * get a private parse. Every writer in this class spreads rather than
+   * mutates, and no reader of workspaceState/terminalsAcross/
+   * nodeAcrossWorkspaces edits a node in place — that is what makes this
+   * safe, and it is a contract, not an accident.
+   */
   private stateOf(id: string): WorkspaceState {
     const live = this.hydrated.get(id)
     if (live) return live.state

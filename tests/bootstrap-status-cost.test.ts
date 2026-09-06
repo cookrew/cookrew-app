@@ -56,7 +56,7 @@ describe('a cold canvas tells the truth about its agents', () => {
   it('reports the multiplexer phase for a terminal with no mirror at all', () => {
     const turns = tracker()
     turns.observeBackendPhase('t1', 'thinking')
-    expect(turns.phaseOf('t1')).toBe('thinking')
+    expect(turns.backendPhaseFor('t1')).toBe('thinking')
     const listed = listOf(turns)
     expect(listed.map((a) => a.terminalId)).toEqual(['t1'])
     expect(listed[0].phase).toBe('thinking')
@@ -69,7 +69,7 @@ describe('a cold canvas tells the truth about its agents', () => {
   it('a blocked agent asks for attention rather than reading as ready', () => {
     const turns = tracker()
     turns.observeBackendPhase('t1', 'waiting')
-    expect(turns.phaseOf('t1')).toBe('waiting')
+    expect(turns.backendPhaseFor('t1')).toBe('waiting')
   })
 
   it('the LIVE mirror always outranks the backend guess', () => {
@@ -80,6 +80,7 @@ describe('a cold canvas tells the truth about its agents', () => {
     turns.track(session as unknown as PtySession, true)
     turns.observeBackendPhase('t1', 'thinking')
     expect(turns.phaseOf('t1')).toBe('idle')
+    expect(turns.backendPhaseFor('t1')).toBeUndefined()
     expect(listOf(turns).filter((a) => a.terminalId === 't1')).toHaveLength(1)
   })
 
@@ -87,8 +88,18 @@ describe('a cold canvas tells the truth about its agents', () => {
     const turns = tracker()
     turns.observeBackendPhase('t1', 'thinking')
     turns.observeBackendPhase('t1', null)
-    expect(turns.phaseOf('t1')).toBeUndefined()
+    expect(turns.backendPhaseFor('t1')).toBeUndefined()
     expect(listOf(turns)).toEqual([])
+  })
+
+  it('phaseOf NEVER answers from the guess — the drain reads it', () => {
+    // hasLiveWork treats {thinking, waiting} as work, which is exactly what
+    // the backend hint emits. Answering here would pin every workspace
+    // holding a herdr-working agent and inFlightWork would never reach zero
+    // — the leaked-flag failure a revert already paid for once.
+    const turns = tracker()
+    turns.observeBackendPhase('t1', 'thinking')
+    expect(turns.phaseOf('t1')).toBeUndefined()
   })
 
   it('announces a phase change so the card repaints without being asked', () => {
@@ -139,7 +150,7 @@ describe('the cost of showing every agent its status', () => {
 
     for (let i = 0; i < 20; i += 1) {
       expect(turns.phaseOf(`m${i}`)).toBe('idle')
-      expect(turns.phaseOf(`b${i}`)).toBe('thinking')
+      expect(turns.backendPhaseFor(`b${i}`)).toBe('thinking')
     }
     // phaseOf is the scalar path for both kinds — mirrored or not.
     expect(sessions.reduce((sum, s) => sum + s.bufferWalks, 0)).toBe(0)
@@ -322,6 +333,8 @@ describe('a phase-only update never blanks a card', () => {
     }
     const merged = mergeActivity(rich, skeleton)
     expect(merged.phase).toBe('thinking')
+    // Still marked: the words are a mirror's, the phase is a guess.
+    expect(merged.mirrorless).toBe(true)
     expect(merged.prompt).toBe('the ask')
     expect(merged.reply).toBe('the reply')
     expect(merged.title).toBe('a title')
