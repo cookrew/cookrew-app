@@ -208,12 +208,7 @@ describe('note markdown — the render cache is bounded', () => {
     expect(held.hits).toBe(base.hits)
     expect(held.oversizedParses).toBe(base.oversizedParses)
     expect(held.illFormedParses).toBe(base.illFormedParses)
-    // Real retention is the map plus the two side slots, and every part of it
-    // is bounded: the map by the budget, each slot by four budgets.
     expect(held.bytes).toBeLessThanOrEqual(held.maxBytes)
-    expect(held.oversizedBytes).toBeLessThanOrEqual(4 * held.maxBytes)
-    expect(held.illFormedBytes).toBeLessThanOrEqual(4 * held.maxBytes)
-    expect(held.bytes + held.oversizedBytes + held.illFormedBytes).toBeLessThanOrEqual(held.maxBytes)
     expect(held.bytes).toBeGreaterThan(held.maxBytes * 0.8)
     expect(held.entries).toBeGreaterThan(20)
     expect(held.entries).toBeLessThan(held.misses - base.misses)
@@ -234,5 +229,35 @@ describe('note markdown — the render cache is bounded', () => {
     expect(renderNoteMarkdown(body(2))).toBe(evicted)
     expect(evicted).not.toBe(first)
     expect(noteMarkdownCacheStats()).toMatchObject({ hits: held.hits + 4, misses: held.misses + 2, oversizedParses: base.oversizedParses })
+  })
+
+  it('the side caches are real, and the whole module stays under one budget plus two side caps', () => {
+    // One note over the budget (2.2M chars of source, ~4.4M of HTML: 8.6 MB
+    // accounted, over 8 MiB) and one ill-formed note, so both side caches
+    // hold something and the bound they are asserted against is not vacuous.
+    const oversized = `# Oversized\n\n${'- item with **bold** and `code`\n'.repeat(70_000)}`
+    const illFormed = `${body(1)}\uD800`
+    const before = noteMarkdownCacheStats()
+    renderNoteMarkdown(oversized)
+    renderNoteMarkdown(illFormed)
+    const held = noteMarkdownCacheStats()
+    process.stdout.write(`perf note side caches: oversized=${held.oversizedBytes} illFormed=${held.illFormedBytes} cap=${held.maxSideBytes}\n`)
+    expect(held.oversizedParses).toBe(before.oversizedParses + 1)
+    expect(held.illFormedParses).toBe(before.illFormedParses + 1)
+    expect(held.oversizedBytes).toBeGreaterThan(held.maxBytes)
+    expect(held.illFormedBytes).toBeGreaterThan(0)
+    // The map is untouched by either: an oversized note evicts nothing.
+    expect(held.entries).toBe(before.entries)
+    expect(held.bytes).toBe(before.bytes)
+    // Both answer from their cache on the next render.
+    renderNoteMarkdown(oversized)
+    renderNoteMarkdown(illFormed)
+    expect(noteMarkdownCacheStats()).toMatchObject({ hits: held.hits + 2, oversizedParses: held.oversizedParses, illFormedParses: held.illFormedParses })
+    // The module's bound: map ≤ budget, each side cache ≤ its cap, the sum ≤ budget + 2 caps (40 MiB accounted at the defaults).
+    expect(held.maxSideBytes).toBe(2 * held.maxBytes)
+    expect(held.bytes).toBeLessThanOrEqual(held.maxBytes)
+    expect(held.oversizedBytes).toBeLessThanOrEqual(held.maxSideBytes)
+    expect(held.illFormedBytes).toBeLessThanOrEqual(held.maxSideBytes)
+    expect(held.bytes + held.oversizedBytes + held.illFormedBytes).toBeLessThanOrEqual(held.maxBytes + 2 * held.maxSideBytes)
   })
 })

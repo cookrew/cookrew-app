@@ -108,6 +108,14 @@ export const MEMORY = {
    * the budget is 12 so a two-byte (CJK) body that fills the whole 8 MiB
    * still passes, while a return to the entry-count bound (51 MB) or an
    * unflattened store (24 MB at 31 entries) fails outright.
+   *
+   * The map is not the whole module. Two side caches (oversized renders,
+   * ill-formed bodies) each hold up to four renders under 2x the budget, so
+   * the WORST CASE the module can retain is 8 + 16 + 16 = 40 MiB accounted
+   * (about 20 MB real for Latin-1 text) — and only with two notes over
+   * 8 MiB accounted and four ill-formed ones on one canvas. This budget
+   * gates the map alone; the side-cache test in memory.perf.ts asserts the
+   * 40 MiB bound with both caches populated.
    */
   noteRenderCacheMb: 12
 } as const
