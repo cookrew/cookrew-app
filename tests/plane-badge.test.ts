@@ -141,6 +141,30 @@ describe('at the root origin nothing changes', () => {
   })
 })
 
+describe('at the root origin nothing changes — including a trusted name', () => {
+  // A phone that opened a URL `cookrew mobile` printed is at the ROOT of a
+  // name under d.cookrew.dev, with no relay prefix and nothing to read but
+  // the hostname. Classifying that by suffix called the Wi-Fi the relay.
+  it('reads a trusted LAN name as the address it spells', async () => {
+    stubPhone(LAN)
+    const { link } = await servedAt('')
+    expect(link.currentOriginState()).toBe('LAN')
+    expect(link.currentPathBadge().word).toBe('LAN')
+  })
+
+  it('reads a trusted tailnet name as TAILNET, not as the LAN', async () => {
+    stubPhone(TAILNET)
+    const { link } = await servedAt('')
+    expect(link.currentPathBadge().word).toBe('TAILNET')
+  })
+
+  it('still calls the registry itself the relay', async () => {
+    stubPhone('https://cookrew.dev')
+    const { link } = await servedAt('')
+    expect(link.currentPathBadge().word).toBe('RELAY')
+  })
+})
+
 describe('the streams follow the plane', () => {
   it('restarts every registered connection on a switch, once', async () => {
     // A fetch composes its URL every time; a stream does not. Without this a

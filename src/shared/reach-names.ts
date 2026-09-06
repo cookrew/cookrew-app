@@ -141,6 +141,24 @@ export function trustedName(
 }
 
 /**
+ * THE MAPPING BACKWARDS, FROM A WHOLE HOSTNAME.
+ *
+ * `192-168-2-40.<id>.<zone>` -> `192.168.2.40`. Whoever holds a hostname and
+ * has to say what PATH it is (the path badge) cannot read the label alone —
+ * `192-168-2-40` on its own is a label anybody could serve — so the shape is
+ * checked too: an address label, then a device id, then a zone of at least two
+ * labels. The zone itself is deliberately NOT pinned, because a self-hosted
+ * registry certifies names under its own.
+ */
+export function addressFromTrustedName(host: string): string | null {
+  const labels = host.toLowerCase().replace(/\.$/, '').split('.')
+  // `<address>.<id>.<zone>`, and the shortest zone anyone delegates is two.
+  if (labels.length < 4) return null
+  if (!DEVICE_LABEL.test(labels[1])) return null
+  return addressFromLabel(labels[0])
+}
+
+/**
  * `https://192-168-2-40.<id>.<zone>:8643` — an ORIGIN, never a URL with a
  * token on it. The reach card carries origins and the CORS allow-list compares
  * origins; a `?token=` here would be the pairing credential travelling on a

@@ -15,6 +15,8 @@
  * PROBING no matter which host is in the address bar.
  */
 
+import { addressFromTrustedName } from './reach-names'
+
 export type PathState = 'LAN' | 'TAILNET' | 'RELAY' | 'OFFLINE' | 'PROBING'
 
 /** What the companion's transport knows about itself. */
@@ -156,6 +158,17 @@ export const classifyOrigin = (
 ): PathState => {
   const host = hostOf(origin)
   if (!host) return 'OFFLINE'
+  /**
+   * A REACH v2.1 NAME IS THE ADDRESS IT SPELLS, NOT THE ZONE IT SITS IN.
+   *
+   * `192-168-2-40.<id>.d.cookrew.dev` is the Wi-Fi, and it fell through every
+   * test below to the closing "a public name we cannot name" — so the badge
+   * said RELAY over a page whose bytes never left the house. That is the one
+   * reading the badge exists to prevent, and it is what a phone gets from
+   * every trusted URL `cookrew mobile` prints.
+   */
+  const spelled = addressFromTrustedName(host)
+  if (spelled !== null) return isTailnetHostname(spelled) ? 'TAILNET' : isLanHostname(spelled) ? 'LAN' : 'RELAY'
   const registryHost = hostOf(registryOrigin)
   if (registryHost && bareHost(host) === bareHost(registryHost)) return 'RELAY'
   if (isTailnetHostname(host)) return 'TAILNET'
