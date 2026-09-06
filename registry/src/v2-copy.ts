@@ -50,6 +50,12 @@ export type V2Error =
   | 'malformed'
   | 'method_not_allowed'
   | 'busy'
+  /**
+   * OURS, NOT THEIRS. A handler that raised owes the caller a status code all
+   * the same: without one the request hangs until Node's own timeout, and a
+   * Mac polling a certificate reads that as "still working" for five minutes.
+   */
+  | 'server_error'
 
 const SENTENCES: Record<V2Error, string> = {
   taken: 'That name is someone else’s. Try another.',
@@ -81,7 +87,8 @@ const SENTENCES: Record<V2Error, string> = {
   bad_seat: 'A seat names a username, and a receipt is one short line of text.',
   malformed: 'That request was not something this registry could read.',
   method_not_allowed: 'That address does not answer to this method.',
-  busy: 'cookrew.dev is checking more passwords than it can right now. Try again in a few seconds.'
+  busy: 'cookrew.dev is checking more passwords than it can right now. Try again in a few seconds.',
+  server_error: 'Something went wrong at cookrew.dev, not on your machine. Try again in a moment.'
 }
 
 /**

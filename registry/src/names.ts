@@ -193,7 +193,10 @@ export function createNames(options: NamesOptions): NamesFeature {
       if (!may.ok) return { ok: false, code: 429, error: 'rate_limited', retryAfter: may.retryAfter }
       const order = randomUUID()
       certs.beginOrder(deviceId, order)
-      void run(deviceId, checked.der)
+      // `.catch` as well as the try/catch inside `run`: the recovery path in
+      // there writes to the store, and a store that cannot be written must not
+      // become an unhandled rejection in a process with no route above it.
+      void run(deviceId, checked.der).catch(() => note('names: an order could not even be recorded'))
       return { ok: true, status: 'pending', order }
     }
   }

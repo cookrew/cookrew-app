@@ -1,3 +1,4 @@
+import type { ServerResponse } from 'node:http'
 import { readJsonBody } from './http'
 import { v2Error } from './v2-copy'
 import { refuse, v2Json, type Signed, type V2Context } from './v2-http'
@@ -23,12 +24,40 @@ import { refuse, v2Json, type Signed, type V2Context } from './v2-http'
  * 503 WHEN THE FLAGS ARE ABSENT, not 404: a deployment with no DNS zone has
  * not lost this route, it has not been given a zone to certify names in, and a
  * Mac that reads 404 would stop asking for ever.
+ *
+ * AND EVERY PATH OUT OF HERE ENDS THE RESPONSE. The POST half is launched with
+ * `void order(...)` — nothing awaits it, so a throw inside it is an unhandled
+ * rejection and a socket nobody ever writes to. The Mac then waits out Node's
+ * 300-second requestTimeout while the rate ledger has no idea the request
+ * happened. Both halves are wrapped: the worst outcome is a 500 with a
+ * sentence, never silence.
  */
 
 const CSR_BODY = 16 * 1024
 
 /** True when this file answered. Mounted from v2-routes' /v2/me dispatcher. */
 export function handleCertRoute(ctx: V2Context, signed: Signed, deviceId: string): boolean {
+  try {
+    return route(ctx, signed, deviceId)
+  } catch {
+    // Nothing here is worth a body: whatever raised is ours, and the caller
+    // can do nothing with it but try again.
+    fell(ctx.response)
+    return true
+  }
+}
+
+/**
+ * A 500 that is safe to call twice. `void order(...)` means the catch below
+ * can fire after the answer was already written, and writing a second head
+ * would throw again — this time out of the catch that was supposed to contain it.
+ */
+function fell(response: ServerResponse): void {
+  if (response.headersSent || response.writableEnded) return
+  refuse(response, 500, 'server_error')
+}
+
+function route(ctx: V2Context, signed: Signed, deviceId: string): boolean {
   const { method, response, v2 } = ctx
   if (method !== 'GET' && method !== 'POST') {
     refuse(response, 405, 'method_not_allowed')
@@ -66,14 +95,24 @@ export function handleCertRoute(ctx: V2Context, signed: Signed, deviceId: string
     v2Json(response, 200, { status: 'failed', reason: state.reason })
     return true
   }
-  void order(ctx, deviceId)
+  void order(ctx, deviceId).catch(() => fell(ctx.response))
   return true
 }
 
 async function order(ctx: V2Context, deviceId: string): Promise<void> {
+  try {
+    await ordering(ctx, deviceId)
+  } catch {
+    fell(ctx.response)
+  }
+}
+
+async function ordering(ctx: V2Context, deviceId: string): Promise<void> {
   const { response } = ctx
   const names = ctx.names
-  if (names === undefined) return
+  // Unreachable — `route` answered 503 already — and still not a `return`:
+  // every way out of this function has to end the response.
+  if (names === undefined) return fell(response)
   const body = await readJsonBody(ctx.request, CSR_BODY)
   if (!body.ok) {
     refuse(response, body.reason === 'too_large' ? 413 : 400, 'malformed')

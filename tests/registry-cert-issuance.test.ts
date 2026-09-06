@@ -19,7 +19,7 @@ import { createDnsServer, type DnsServer } from '../registry/src/dns-server'
 import { ACCOUNT_KEY_FILE } from '../registry/src/acme-jose'
 import { T, askUdp, buildQuery, parseAnswer } from './support/dns-probe'
 import { startFakeAcme, type FakeAcme } from './support/fake-acme'
-import { ecPair, makeCa, makeCsr, rsaPair } from './support/x509-forge'
+import { DER, ecPair, makeCa, makeCsr, rsaPair } from './support/x509-forge'
 
 /**
  * ISSUANCE, END TO END, WITH NO NETWORK AND NO STUBS.
@@ -52,7 +52,14 @@ interface Up {
 const alive: Up[] = []
 
 async function up(
-  options: { names?: boolean; refuseAll?: boolean; challengeDelayMs?: number; notAfter?: Date } = {}
+  options: {
+    names?: boolean
+    refuseAll?: boolean
+    challengeDelayMs?: number
+    notAfter?: Date
+    /** H1 — a names half that raises where the route cannot see it coming. */
+    breakNames?: boolean
+  } = {}
 ): Promise<Up> {
   const dir = mkdtempSync(path.join(tmpdir(), 'cert-issue-'))
   const v2 = createV2(dir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } })
@@ -85,6 +92,17 @@ async function up(
       },
       acme: new AcmeClient({ directory: fake.directory, dataDir: dir, pollMs: 20, deadlineMs: 15_000 })
     })
+    if (options.breakNames === true) {
+      names = {
+        ...names,
+        request: () => {
+          throw new Error('the names half fell over')
+        },
+        state: () => {
+          throw new Error('the names half fell over')
+        }
+      }
+    }
   }
   const server: Server = createRegistry({
     store: new RegistryStore(dir),
@@ -408,3 +426,78 @@ describe('who may ask, and for what', () => {
     expect(me.desktops[0].names).toBe(false)
   })
 })
+
+/**
+ * H1 — A HANDLER THAT RAISES STILL OWES SOMEBODY A STATUS CODE.
+ *
+ * The POST half of this route is launched with `void order(...)`: a rejection
+ * inside it is an unhandled rejection and a socket nobody ever writes to, so
+ * the Mac waits out Node's 300-second request timeout and the rate ledger
+ * never learns the request happened. Both halves are wrapped now, and the
+ * proof is that the answer arrives inside the test's own patience.
+ */
+describe('a route that falls over', () => {
+  it('answers 500 promptly rather than hanging the connection', async () => {
+    const site = await up({ breakNames: true })
+    const mac = await claim(site, 'drej')
+    await publish(site, mac)
+
+    const started = Date.now()
+    const posted = await Promise.race([
+      postCert(site, mac, csrFor(mac.deviceId)),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('the route never answered')), 4000))
+    ])
+    expect(posted.status).toBe(500)
+    expect(((await posted.json()) as { error: string }).error).toBe('server_error')
+    expect(Date.now() - started).toBeLessThan(4000)
+
+    // The synchronous half too — GET reads the state without an await in sight.
+    const read = await getCert(site, mac)
+    expect(read.status).toBe(500)
+    expect(((await read.json()) as { message: string }).message.length).toBeGreaterThan(0)
+  })
+
+  it('refuses a CSR whose signatureAlgorithm is an empty SEQUENCE, 400 and quickly', async () => {
+    const site = await up()
+    const mac = await claim(site, 'drej')
+    await publish(site, mac)
+    const started = Date.now()
+    const res = await postCert(site, mac, emptyAlgorithmCsr(mac.deviceId))
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toBe('bad_csr')
+    expect(Date.now() - started).toBeLessThan(4000)
+    expect(site.fake.issued()).toBe(0)
+  })
+})
+
+/** A well-formed request whose signatureAlgorithm is the two bytes `30 00`. */
+function emptyAlgorithmCsr(deviceId: string): string {
+  const der = Buffer.from(
+    csrFor(deviceId)
+      .replace(/-----[^-]+-----/g, '')
+      .replace(/\s+/g, ''),
+    'base64'
+  )
+  const read = (buf: Buffer, at: number): { whole: Buffer; content: Buffer; next: number } => {
+    const first = buf[at + 1]
+    let length = first
+    let headerEnd = at + 2
+    if ((first & 0x80) !== 0) {
+      const count = first & 0x7f
+      length = 0
+      for (let i = 0; i < count; i += 1) length = length * 256 + buf[headerEnd + i]
+      headerEnd += count
+    }
+    return {
+      whole: buf.subarray(at, headerEnd + length),
+      content: buf.subarray(headerEnd, headerEnd + length),
+      next: headerEnd + length
+    }
+  }
+  const body = read(der, 0).content
+  const info = read(body, 0)
+  const algorithm = read(body, info.next)
+  const signature = read(body, algorithm.next)
+  const rebuilt = DER.seq(info.whole, Buffer.from([0x30, 0x00]), signature.whole)
+  return `-----BEGIN CERTIFICATE REQUEST-----\n${rebuilt.toString('base64')}\n-----END CERTIFICATE REQUEST-----\n`
+}

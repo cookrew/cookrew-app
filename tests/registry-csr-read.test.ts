@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { X509Certificate } from 'node:crypto'
 import { csrDer, readCsr } from '../registry/src/csr-read'
-import { ecPair, issueLeaf, makeCa, makeCsr, rsaPair, spkiFromCsr } from './support/x509-forge'
+import { DER, ecPair, issueLeaf, makeCa, makeCsr, rsaPair, spkiFromCsr } from './support/x509-forge'
 
 /**
  * THE CSR READER, AGAINST REQUESTS BUILT BY A DIFFERENT IMPLEMENTATION.
@@ -88,5 +88,60 @@ describe('the forged CA, so the issuance test rests on something real', () => {
     expect(leaf.subjectAltName).toContain(NAME)
     // Seconds, because a UTCTime has no milliseconds in it.
     expect(Math.abs(new Date(leaf.validTo).getTime() - notAfter.getTime())).toBeLessThan(1000)
+  })
+})
+
+/**
+ * H1 — THE PARSER'S PROMISE. Its docblock says it never throws, and the route
+ * above it answers a body somebody POSTed. An element the reader reaches into
+ * without checking that anything is there is the one shape that breaks both.
+ */
+describe('a request built to break the reader', () => {
+  /** The three top-level elements of a CertificationRequest, as raw bytes. */
+  const read = (buf: Buffer, at: number): { whole: Buffer; content: Buffer; next: number } => {
+    const first = buf[at + 1]
+    let length = first
+    let headerEnd = at + 2
+    if ((first & 0x80) !== 0) {
+      const count = first & 0x7f
+      length = 0
+      for (let i = 0; i < count; i += 1) length = length * 256 + buf[headerEnd + i]
+      headerEnd += count
+    }
+    return {
+      whole: buf.subarray(at, headerEnd + length),
+      content: buf.subarray(headerEnd, headerEnd + length),
+      next: headerEnd + length
+    }
+  }
+  const split = (pem: string): Buffer[] => {
+    const body = read(Buffer.from(csrDer(pem)!), 0).content
+    const info = read(body, 0)
+    const algorithm = read(body, info.next)
+    const signature = read(body, algorithm.next)
+    return [info.whole, algorithm.whole, signature.whole]
+  }
+  const rewrap = (parts: readonly Buffer[]): string =>
+    `-----BEGIN CERTIFICATE REQUEST-----\n${DER.seq(...parts).toString('base64')}\n-----END CERTIFICATE REQUEST-----\n`
+
+  it('refuses an EMPTY signatureAlgorithm sequence rather than throwing', () => {
+    const [info, , signature] = split(makeCsr({ pair: ecPair(), names: [NAME] }))
+    // `30 00` — a well-formed SEQUENCE with nothing in it. The reader used to
+    // index [0] of that and die inside a route with a response half written.
+    const out = readCsr(rewrap([info, Buffer.from([0x30, 0x00]), signature]))
+    expect(out.ok).toBe(false)
+    if (!out.ok) expect(out.reason).toBe('unsupported signature algorithm')
+  })
+
+  it('refuses a signatureAlgorithm whose first element is not an OID', () => {
+    const [info, , signature] = split(makeCsr({ pair: ecPair(), names: [NAME] }))
+    for (const algorithm of [DER.seq(DER.int(1)), DER.seq(DER.null()), DER.seq(DER.seq())]) {
+      expect(readCsr(rewrap([info, algorithm, signature])).ok).toBe(false)
+    }
+  })
+
+  it('keeps the round trip intact when nothing was tampered with', () => {
+    const pem = makeCsr({ pair: ecPair(), names: [NAME] })
+    expect(readCsr(rewrap(split(pem))).ok).toBe(true)
   })
 })

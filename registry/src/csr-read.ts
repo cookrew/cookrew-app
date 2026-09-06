@@ -218,9 +218,14 @@ export function readCsr(pem: unknown): CsrRead {
   const dnsNames = attributes === undefined ? [] : sansOf(attributes)
   if (dnsNames === null) return bad('unreadable subject alternative names')
 
-  const algorithmParts = children(algorithm)
-  const hash = algorithmParts === null ? null : SIGNATURES[oidOf(algorithmParts[0]) ?? '']
-  if (hash === undefined || hash === null) return bad('unsupported signature algorithm')
+  // `?? []` AND a length check, because `30 00` is a legal DER SEQUENCE with
+  // nothing in it: `children` answers an empty array, not null, and indexing
+  // [0] of that hands `undefined` to a reader whose docblock promises never to
+  // throw — inside a route that has already told the caller nothing.
+  const algorithmParts = children(algorithm) ?? []
+  if (algorithmParts.length === 0) return bad('unsupported signature algorithm')
+  const hash = SIGNATURES[oidOf(algorithmParts[0]) ?? '']
+  if (hash === undefined) return bad('unsupported signature algorithm')
   try {
     const publicKey = createPublicKey({ key: Buffer.from(spki.whole), format: 'der', type: 'spki' })
     // The BIT STRING's leading byte is the unused-bit count; the rest is the
