@@ -85,7 +85,7 @@ describe('asking for it', () => {
     const inits: RequestInit[] = []
     const fetched: string[] = []
     const state = await requestLocalNetwork({
-      url: 'https://192-168-1-24.dev.d.cookrew.dev:8643',
+      url: 'https://192-168-1-24.aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.d.cookrew.dev:8643',
       fetch: (async (url: string, init: RequestInit) => {
         fetched.push(url)
         inits.push(init)
@@ -103,7 +103,7 @@ describe('asking for it', () => {
   it('still answers, and still asks only once, when the probe is refused', async () => {
     let calls = 0
     const state = await requestLocalNetwork({
-      url: 'https://192-168-1-24.dev.d.cookrew.dev:8643',
+      url: 'https://192-168-1-24.aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.d.cookrew.dev:8643',
       fetch: (async () => {
         calls += 1
         throw new TypeError('Failed to fetch')
@@ -116,7 +116,7 @@ describe('asking for it', () => {
 
   it('answers unsupported when there is nothing to ask and nothing to ask with', async () => {
     const state = await requestLocalNetwork({
-      url: 'https://192-168-1-24.dev.d.cookrew.dev:8643',
+      url: 'https://192-168-1-24.aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.d.cookrew.dev:8643',
       fetch: (async () => new Response('{}')) as unknown as typeof fetch,
       permissions: null
     })

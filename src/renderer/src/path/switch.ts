@@ -1,4 +1,4 @@
-import { directAddressSpaceInit, type AddressSpaceInit } from '../local-network'
+import { addressSpaceInitFor, type AddressSpaceInit } from '../local-network'
 import { classifyOrigin, type PathState } from '../../../shared/path-badge'
 
 /**
@@ -210,12 +210,11 @@ export const randomNonce = (random: (bytes: Uint8Array) => Uint8Array): string =
  * One `fetch` with a deadline, answering null rather than throwing.
  *
  * THE FIRST REQUEST TO THE HOUSE, and therefore the one that raises Chrome's
- * Local Network Access prompt. Every candidate this is pointed at is an
- * address on the reader's own network — that is the entire point of the race —
- * so the annotation is unconditional here rather than derived from the URL: a
- * candidate is only ever a `lan` or `tailnet` entry off the desktop's card,
- * and reading the address back out of the name to decide would be a second
- * spelling of a fact plane-switch.ts has already established.
+ * Local Network Access prompt. The annotation is derived from the URL rather
+ * than assumed, because `targetAddressSpace` is an assertion the browser then
+ * CHECKS: a tailnet candidate on 100.64/10 is public by every browser's
+ * reckoning, and claiming it local would fail the probe instead of permitting
+ * it. See addressSpaceInitFor.
  *
  * Whether the prompt should be allowed to appear AT ALL is a different
  * question, answered before the race starts (see the permission policy in
@@ -230,7 +229,7 @@ export const askHello = async (
   const timer = setTimeout(() => abort.abort(), timeoutMs)
   try {
     const response = await fetch(`${url}/api/hello?nonce=${encodeURIComponent(nonce)}`, {
-      ...directAddressSpaceInit(),
+      ...addressSpaceInitFor(url),
       signal: abort.signal,
       // No cookies and no credentials: the answer is a public fact about the
       // Mac, and sending anything else to an address that has not yet proved

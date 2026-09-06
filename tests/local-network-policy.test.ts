@@ -28,6 +28,7 @@ import type { ReachCardLite } from '../src/renderer/src/path/switch'
 
 const DEVICE = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
 const LAN = `https://192-168-1-24.${DEVICE}.d.cookrew.dev:8643`
+const CGNAT = `https://100-68-81-64.${DEVICE}.d.cookrew.dev:8643`
 const RELAY: DataPlane = { origin: '', kind: 'relay' }
 
 interface Run {
@@ -62,20 +63,47 @@ const race = async (
 }
 
 describe('the permission policy', () => {
-  it('DENIED: does not race, and does not even ask the desktop where it lives', async () => {
+  it('DENIED: probes nothing on the local network', async () => {
     const run = await race('denied')
     expect(run.outcome).toBe('refused')
     expect(run.asked).toEqual([])
-    // The card fetch is a relay request and would succeed; not making it is
-    // the point. A refusal is settled before any work is done.
-    expect(run.cards).toBe(0)
   })
 
-  it('PROMPT: does not race off a timer, because nobody is looking at the phone', async () => {
+  it('PROMPT: does not probe off a timer, because nobody is looking at the phone', async () => {
     const run = await race('prompt')
     expect(run.outcome).toBe('unasked')
     expect(run.asked).toEqual([])
-    expect(run.cards).toBe(0)
+  })
+
+  it('DENIED: still races an address the permission does not cover', async () => {
+    // 100.64/10 is CGNAT and is public by every browser's reckoning, so Local
+    // Network Access has nothing to say about it. A refusal recorded because
+    // of a LAN probe at home must not strand a phone whose Mac is only
+    // reachable over a tailnet — that would be this change causing exactly the
+    // silent death it exists to prevent.
+    const run = await race('denied', {
+      card: async (): Promise<ReachCardLite> => ({
+        deviceId: DEVICE,
+        lan: [],
+        tailnet: null,
+        trusted: [CGNAT]
+      })
+    })
+    expect(run.outcome).toBe('switched')
+    expect(run.asked).toEqual([CGNAT])
+  })
+
+  it('DENIED: races the tailnet and skips the LAN when the card offers both', async () => {
+    const run = await race('denied', {
+      card: async (): Promise<ReachCardLite> => ({
+        deviceId: DEVICE,
+        lan: [],
+        tailnet: null,
+        trusted: [LAN, CGNAT]
+      })
+    })
+    expect(run.asked).toEqual([CGNAT])
+    expect(run.outcome).toBe('switched')
   })
 
   it('PROMPT: races when a person asked for it — the explainer’s ALLOW', async () => {

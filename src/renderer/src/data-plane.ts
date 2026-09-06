@@ -29,7 +29,7 @@
  * the credential mode, not at a call site that has to remember it.
  */
 
-import { directAddressSpaceInit, type AddressSpace } from './local-network'
+import { addressSpaceInitFor, type AddressSpace } from './local-network'
 
 /** relay = same origin under the page's base; the others are absolute origins. */
 export type DataPlaneKind = 'relay' | 'lan' | 'tailnet'
@@ -123,12 +123,15 @@ export const planePath = (
  * authorises by the pairing token in an Authorization header and nothing
  * else), the request is explicitly `cors` so a misconfigured Mac fails loudly
  * at the browser rather than being read as an empty answer, and it carries
- * `targetAddressSpace: 'local'` because every direct origin is an address on
- * the reader's own network. Chrome 142 blocks it outright without that
+ * `targetAddressSpace: 'local'` WHEN the address it spells is in the local
+ * address space. Chrome 142 blocks such a request outright without the
  * annotation, and a trusted name buys no exemption — a public hostname that
  * resolves to a private address is exactly the case Local Network Access was
- * written for. Safe on every other browser: see local-network.ts on why an
- * unknown `RequestInit` member is dropped rather than raised.
+ * written for. It is left OFF a CGNAT tailnet address, which no browser
+ * reckons local: the annotation is an assertion the browser then checks, so
+ * claiming it falsely would fail the request rather than permit it. Safe on
+ * every other browser: see local-network.ts on why an unknown `RequestInit`
+ * member is dropped rather than raised.
  *
  * ON EVERY REQUEST, not once. The specification requires the address-space
  * check "for each new connection made", because a name can be re-resolved
@@ -137,4 +140,4 @@ export const planePath = (
 export const planeRequestInit = (current: DataPlane): PlaneRequestInit =>
   current.origin === ''
     ? { credentials: 'same-origin' }
-    : { mode: 'cors', credentials: 'omit', ...directAddressSpaceInit() }
+    : { mode: 'cors', credentials: 'omit', ...addressSpaceInitFor(current.origin) }

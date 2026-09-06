@@ -3,7 +3,7 @@ import { isRemoteMode } from '../api'
 import { authHeaders, authStore } from '../auth-gate'
 import { dataPlane, setDataPlane, subscribeDataPlane, type DataPlane } from '../data-plane'
 import type { LocalNetworkState } from '../local-network'
-import { localNetworkState, requestLocalNetwork } from '../local-network'
+import { isLocalOrigin, localNetworkState, requestLocalNetwork } from '../local-network'
 import { offerLocalNetwork, setLocalNetwork } from '../local-network-gate'
 import { recordAttempts, type PathAttempt } from '../path-attempts'
 import { createPathMemory, watchNetwork, type PathMemory, type PathMemoryDeps } from '../path-memory'
@@ -227,7 +227,12 @@ const readLocalNetwork = async (): Promise<LocalNetworkState> => {
  */
 const askForLocalNetwork = async (): Promise<void> => {
   const card = await fetchCard()
-  const best = card ? planeCandidates(card, dataPlane().kind)[0] : undefined
+  // The first LOCAL candidate, not simply the first: a prompt is only raised
+  // by a request the permission covers, and probing a CGNAT tailnet address
+  // would spend the press without ever showing a dialog.
+  const best = card
+    ? planeCandidates(card, dataPlane().kind).find((candidate) => isLocalOrigin(candidate.origin))
+    : undefined
   if (!best) {
     await readLocalNetwork()
     return

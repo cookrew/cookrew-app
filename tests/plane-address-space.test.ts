@@ -19,6 +19,11 @@ import { RELAY_PLANE, planeRequestInit, type DataPlane } from '../src/renderer/s
 const DEVICE = '11111111-2222-3333-4444-555555555555'
 const LAN: DataPlane = { origin: `https://192-168-2-40.${DEVICE}.d.cookrew.dev:8643`, kind: 'lan' }
 const TAILNET: DataPlane = { origin: `https://100-68-81-64.${DEVICE}.d.cookrew.dev:8643`, kind: 'tailnet' }
+const TAILNET6: DataPlane = {
+  origin: `https://fd7a-115c-a1e0-ab12--1.${DEVICE}.d.cookrew.dev:8643`,
+  kind: 'tailnet'
+}
+const BARE_LAN: DataPlane = { origin: 'https://192.168.2.40:8643', kind: 'lan' }
 
 const stubPhone = (): void => {
   ;(globalThis as unknown as { window: Record<string, unknown> }).window = {
@@ -35,13 +40,35 @@ afterEach(() => {
 })
 
 describe('the plane’s own request options', () => {
-  it('annotates a direct plane, on both networks', () => {
+  it('annotates a LAN plane', () => {
     expect(planeRequestInit(LAN)).toEqual({
       mode: 'cors',
       credentials: 'omit',
       targetAddressSpace: 'local'
     })
-    expect(planeRequestInit(TAILNET)).toEqual({
+  })
+
+  it('does NOT annotate a CGNAT tailnet address, which is not the local network', () => {
+    // THE ANNOTATION IS AN ASSERTION, NOT A REQUEST. The spec fails a request
+    // whose connection lands in a different address space from the one it
+    // claimed — that IS the rebinding defence. Tailscale hands out 100.64/10,
+    // which is not in any local range, so claiming 'local' for it would break
+    // the tailnet plane outright on Chrome 142.
+    expect(planeRequestInit(TAILNET)).toEqual({ mode: 'cors', credentials: 'omit' })
+  })
+
+  it('DOES annotate Tailscale’s ULA range, which is local by every definition', () => {
+    // fd7a:115c:a1e0::/48 sits inside fc00::/7. The address decides, not the
+    // word we happen to use for the network in the badge.
+    expect(planeRequestInit(TAILNET6)).toEqual({
+      mode: 'cors',
+      credentials: 'omit',
+      targetAddressSpace: 'local'
+    })
+  })
+
+  it('annotates a bare private address, which is what the navigating switch races', () => {
+    expect(planeRequestInit(BARE_LAN)).toEqual({
       mode: 'cors',
       credentials: 'omit',
       targetAddressSpace: 'local'
@@ -67,6 +94,20 @@ describe('the hello probe', () => {
     expect(inits).toHaveLength(1)
     expect(inits[0].targetAddressSpace).toBe('local')
     expect(inits[0].credentials).toBe('omit')
+  })
+})
+
+describe('the hello probe, on an address that is not local', () => {
+  it('is not annotated, so a CGNAT tailnet name is still probed', async () => {
+    stubPhone()
+    const inits: Record<string, unknown>[] = []
+    vi.stubGlobal('fetch', async (_url: string, init: Record<string, unknown>) => {
+      inits.push(init)
+      return new Response(JSON.stringify({ deviceId: DEVICE, nonce: 'n' }), { status: 200 })
+    })
+    const { askHello } = await import('../src/renderer/src/path/switch')
+    await askHello(TAILNET.origin, 'n')
+    expect(inits[0]).not.toHaveProperty('targetAddressSpace')
   })
 })
 

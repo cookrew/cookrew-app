@@ -111,7 +111,18 @@ describe('what the race writes down', () => {
   })
 
   it('writes an empty list when the race never started, rather than a lie', async () => {
-    const noted = await race({ permission: async () => 'denied' })
+    // Only a LAN name on the card, so a refusal leaves nothing raceable. (A
+    // CGNAT tailnet name would still be raced — the permission does not cover
+    // it; see local-network-policy.test.ts.)
+    const noted = await race({
+      permission: async () => 'denied',
+      card: async (): Promise<ReachCardLite> => ({
+        deviceId: DEVICE,
+        lan: [],
+        tailnet: null,
+        trusted: [LAN]
+      })
+    })
     expect(noted).toEqual([])
   })
 })

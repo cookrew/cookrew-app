@@ -1,6 +1,6 @@
 import { trustedNetwork, type TrustedNetwork } from '../../../shared/trusted-origin'
 import type { DataPlane, DataPlaneKind } from '../data-plane'
-import type { LocalNetworkState } from '../local-network'
+import { isLocalOrigin, type LocalNetworkState } from '../local-network'
 import { attemptName, raceTier, type PlaneAttempt } from './plane-race'
 import type { HelloReply, ReachCardLite } from './switch'
 
@@ -165,21 +165,30 @@ export const switchPlaneIfBetter = async (deps: PlaneSwitchDeps): Promise<PlaneO
   // adopted, dropped, and adopted again forever — a flap the reader sees as a
   // badge blinking between LAN and RELAY.
   if (deps.held?.() === true) return 'skipped'
-  // AFTER the cheap local answers and BEFORE any request. A phone already on
-  // the LAN, or holding off after a fallback, has no permission question to
-  // ask; a phone that has been refused must not even fetch the card, because
-  // nothing on it could be used.
+  const card = await deps.card().catch(() => null)
+  if (!card || card.deviceId.length === 0) return 'no-card'
+  const offered = planeCandidates(card, current.kind)
+  if (offered.length === 0) return 'no-trusted'
+
+  // THE PERMISSION IS ASKED AFTER THE CHEAP LOCAL ANSWERS AND SCOPED TO THE
+  // CANDIDATES IT ACTUALLY COVERS. A phone already on the LAN, or holding off
+  // after a fallback, asks nothing; and a refusal removes the LOCAL candidates
+  // only. A CGNAT tailnet address is public by every browser's reckoning, so
+  // Local Network Access has no opinion about it, and letting a refusal
+  // recorded at home kill that path would be this change causing exactly the
+  // silent death it was written to prevent.
   const permission = await deps.permission?.().catch((): LocalNetworkState => 'unsupported')
-  if (permission !== undefined && !mayRace(permission, deps.mayPrompt?.() === true)) {
+  const blocked =
+    permission !== undefined && !mayRace(permission, deps.mayPrompt?.() === true)
+  const candidates = blocked
+    ? offered.filter((candidate) => !isLocalOrigin(candidate.origin))
+    : offered
+  if (candidates.length === 0) {
     // No rows: nothing was tried, and a panel showing what the LAST race tried
     // would be describing a network the phone may no longer be on.
     deps.note?.([])
     return permission === 'denied' ? 'refused' : 'unasked'
   }
-  const card = await deps.card().catch(() => null)
-  if (!card || card.deviceId.length === 0) return 'no-card'
-  const candidates = planeCandidates(card, current.kind)
-  if (candidates.length === 0) return 'no-trusted'
 
   deps.probing?.(true)
   try {
