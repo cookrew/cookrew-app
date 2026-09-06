@@ -356,6 +356,18 @@ describe('POST /v2/me/password', () => {
     expect(wrong.status).toBe(401)
     const weak = await call('POST', '/v2/me/password', { current: PASSWORD, next: 'short' }, bearer(owner.token))
     expect(weak.status).toBe(400)
+    expect(((await weak.json()) as { error: string; message: string }).error).toBe('weak_password')
+    /**
+     * THE SAME PASSWORD IS NOT A CHANGE. Answering 204 to one would be a lie
+     * with consequences: this route ends every OTHER sitting as part of
+     * changing a password, and somebody who came here because they think a
+     * stranger has it would walk away believing that had been done.
+     */
+    const same = await call('POST', '/v2/me/password', { current: PASSWORD, next: PASSWORD }, bearer(owner.token))
+    expect(same.status).toBe(400)
+    const said = (await same.json()) as { error: string; message: string }
+    expect(said.error).toBe('same_password')
+    expect(said.message).toBe('That is the password you already have. Pick a different one.')
     const ok = await call('POST', '/v2/me/password', { current: PASSWORD, next: 'a longer new password' }, bearer(owner.token))
     expect(ok.status).toBe(204)
 

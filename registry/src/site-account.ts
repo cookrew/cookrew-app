@@ -151,12 +151,13 @@ data-device="${esc(currentDeviceId)}" data-device-name="${esc(here?.name ?? '')}
 
 <h2 style="margin-top:30px">Security</h2>
 <ul class="doors me-list" id="me-security">
-<li><span class="chip">Password</span><span><b>Your password</b><br><span class="meta">At least 12 characters. It goes only to cookrew.dev.</span></span><button class="btn sm" data-password>Change</button></li>
+<li id="me-password-row"><span class="chip">Password</span><span><b>Your password</b><br><span class="meta" id="me-password-note">At least 12 characters. It goes only to cookrew.dev.</span></span><button class="btn sm" data-password>Change</button></li>
 ${passkeyRows(factors.passkeys)}
 <li><span class="chip">Factor</span><span><b>Passkey (Touch ID / Face ID)</b><br><span class="meta" data-passkey-note>Recommended. It lives on this device and cannot be typed by anyone else.</span></span><button class="btn sm" data-add-passkey>Add</button></li>
 ${authenticatorRow(factors.totp)}
 <li><span class="chip">Rescue</span><span><b>Recovery codes</b><br><span class="meta" id="me-codes-note">${codes === 0 ? 'None saved. Each code opens the account once.' : `${codes} unused. Showing a new set replaces them.`}</span></span><button class="btn sm" data-recovery>Show</button></li>
 </ul>
+<div class="totp-panel" id="me-password" hidden></div>
 <pre class="cmd" id="me-codes" hidden></pre>
 <div class="totp-panel" id="me-totp" hidden></div>
 

@@ -550,6 +550,120 @@
     row.append(remove)
   }
 
+  /* ── /me: change the password, in the page ─────────────────────────────── */
+
+  /**
+   * The register sheet's own reading of a password, so the two agree: under
+   * twelve is weak, and length is the only thing either of them judges.
+   */
+  const strengthOf = (value) => (value.length < 12 ? 'weak' : value.length < 16 ? 'ok' : 'strong')
+
+  /** A labelled password field, in the sheet's own dress. */
+  function secretField(label, autocomplete) {
+    const row = el('label', 'acct-row')
+    row.append(el('span', null, label))
+    const field = el('input')
+    field.setAttribute('type', 'password')
+    field.setAttribute('autocomplete', autocomplete)
+    field.setAttribute('maxlength', '256')
+    const chip = el('em', 'chip')
+    chip.hidden = true
+    row.append(field, chip)
+    return { row, field, chip }
+  }
+
+  /**
+   * CHANGE YOUR PASSWORD — asking for the one you have, and checking the one
+   * you want (owner's note, 2026-09-06).
+   *
+   * It was two `prompt()` boxes: no current password on the screen at all, no
+   * strength, no repeat, and a toast at the end. A password change is the one
+   * thing on this page that ends every OTHER sitting, so it has to be the
+   * thing that is hardest to do by accident and clearest about what it did.
+   *
+   * The primary stays disabled until all three fields are right, which is the
+   * same rule the register sheet holds to — the registry judges again anyway,
+   * and its sentence is what appears when it refuses.
+   */
+  function changePassword() {
+    const panel = $('me-password')
+    if (!panel) return
+    panel.replaceChildren()
+    panel.hidden = false
+    panel.append(
+      el('p', 'meta', 'Your new password goes only to cookrew.dev. Changing it signs every other device out.')
+    )
+
+    const current = secretField('Current password', 'current-password')
+    const next = secretField('New password', 'new-password')
+    const again = secretField('Repeat new password', 'new-password')
+    panel.append(current.row, next.row, again.row)
+
+    const save = button('Change password', 'primary')
+    const cancel = button('Cancel')
+    const row = el('div', 'row')
+    row.append(save, cancel)
+    const message = el('p', 'meta totp-said')
+    message.setAttribute('role', 'status')
+    panel.append(row, message)
+
+    const close = () => {
+      panel.replaceChildren()
+      panel.hidden = true
+    }
+    cancel.addEventListener('click', close)
+
+    const mark = (chip, text, tone) => {
+      chip.textContent = text
+      chip.className = `chip${tone ? ` ${tone}` : ''}`
+      chip.hidden = text === ''
+    }
+    const judge = () => {
+      const strength = strengthOf(next.field.value)
+      mark(next.chip, next.field.value === '' ? '' : strength, strength === 'weak' ? 'no' : 'ok')
+      const matches = again.field.value !== '' && again.field.value === next.field.value
+      mark(again.chip, again.field.value === '' ? '' : matches ? 'matches' : 'no match', matches ? 'ok' : 'no')
+      if (again.field.value !== '' && !matches) message.textContent = 'These two do not match yet.'
+      else if (next.field.value !== '' && strength === 'weak') {
+        message.textContent = 'Too easy to guess. Use 12 characters or more; a sentence works.'
+      } else message.textContent = ''
+      save.disabled = !(current.field.value !== '' && strength !== 'weak' && matches)
+      return !save.disabled
+    }
+    for (const one of [current, next, again]) one.field.addEventListener('input', judge)
+    judge()
+
+    const send = async () => {
+      if (!judge()) return
+      save.disabled = true
+      const out = await api('POST', '/v2/me/password', { current: current.field.value, next: next.field.value })
+      save.disabled = false
+      if (out.status !== 204) {
+        // The registry's own sentence — a wrong current password, a weak new
+        // one, or the one they already have — under the fields it belongs to.
+        message.textContent = said(out, 'That did not go through.')
+        current.field.focus()
+        return
+      }
+      close()
+      // THIS SESSION SURVIVES: the registry keeps the caller's jti, so the
+      // browser doing the changing is the one device left standing.
+      const note = $('me-password-note')
+      if (note) note.textContent = 'Password changed. Every other device was signed out.'
+      toast('Password changed. Every other device was signed out.', 6000)
+    }
+    save.addEventListener('click', () => void send())
+    for (const one of [current, next, again]) {
+      one.field.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault()
+          void send()
+        }
+      })
+    }
+    current.field.focus()
+  }
+
   /* ── /me: D6, the approvals waiting for an answer ──────────────────────── */
 
   function approvalRow(request, refresh) {
@@ -616,11 +730,14 @@
 
   /* ── wiring ────────────────────────────────────────────────────────────── */
   document.addEventListener('click', (event) => {
-    const target = event.target.closest('[data-add-passkey],[data-add-totp],[data-drop-passkey],[data-drop-totp]')
+    const target = event.target.closest(
+      '[data-add-passkey],[data-add-totp],[data-drop-passkey],[data-drop-totp],[data-password]'
+    )
     if (!target) return
     event.preventDefault()
     if (target.dataset.addPasskey !== undefined) void addPasskey()
     else if (target.dataset.addTotp !== undefined) void addTotp()
+    else if (target.dataset.password !== undefined) changePassword()
     else if (target.dataset.dropPasskey !== undefined) {
       // Taking a factor OFF costs the password, the same as changing it: one
       // session must not be able to lower the account's floor by itself.
@@ -646,5 +763,5 @@
   fitPasskeyButton()
   watchApprovals()
 
-  window.cookrewFactors = { ladder, addPasskey, addTotp }
+  window.cookrewFactors = { ladder, addPasskey, addTotp, changePassword }
 })()
