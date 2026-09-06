@@ -1,4 +1,5 @@
 import { clientBase } from './api-base'
+import { dataPlane } from './data-plane'
 import {
   classifyOrigin,
   pathBadgeView,
@@ -59,6 +60,21 @@ export const recordLatency = (ms: number): void => {
   const next = previous === null ? Math.round(ms) : Math.round(previous * 0.7 + ms * 0.3)
   if (next === previous) return
   state = { ...state, latencyMs: next }
+  announce()
+}
+
+/**
+ * FORGET THE OLD PATH'S LATENCY. Called when the data plane moves.
+ *
+ * The number is smoothed (70% of the old reading) because one slow request on
+ * a busy Wi-Fi is not the network. That is right within a path and wrong
+ * across one: a phone that has just moved from a 400 ms relay onto a 6 ms LAN
+ * would read 280, then 200, then 140 — a dozen requests of a measurement that
+ * describes a path it is no longer on.
+ */
+export const forgetLatency = (): void => {
+  if (state.latencyMs === null) return
+  state = { ...state, latencyMs: null }
   announce()
 }
 
@@ -136,6 +152,20 @@ const registryOf = (): string | undefined => {
  */
 const relayed = (): boolean => clientBase() !== ''
 
+/**
+ * WHICH TRANSPORT IS CARRYING THE DATA PLANE, for a page under a prefix.
+ *
+ * The address bar says cookrew.dev whatever happens — that is the promise —
+ * so this is the only place a reader can learn that their phone is talking to
+ * the Mac over the Wi-Fi. Read straight off the store that composes the
+ * request URLs (data-plane.ts), because a second answer derived from anything
+ * else would eventually disagree with where the requests are actually going.
+ */
+const planeState = (): 'LAN' | 'TAILNET' | 'RELAY' => {
+  const kind = dataPlane().kind
+  return kind === 'lan' ? 'LAN' : kind === 'tailnet' ? 'TAILNET' : 'RELAY'
+}
+
 /** The badge's whole view, from this page's own origin and link state. */
 export const currentPathBadge = (): PathBadgeView =>
   pathBadgeView({
@@ -144,19 +174,23 @@ export const currentPathBadge = (): PathBadgeView =>
     latencyMs: state.latencyMs,
     probing: state.probing,
     relayed: relayed(),
+    ...(relayed() ? { plane: planeState() } : {}),
     ...(state.desktopName ? { desktopName: state.desktopName } : {}),
     ...(registryOf() ? { registryOrigin: registryOf() as string } : {})
   })
 
 /**
- * Where this page is, from where it was SERVED — the relay prefix first, then
- * the origin.
+ * Where this page's REQUESTS are going — the data plane first, then the origin.
  *
- * Deliberately not `currentPathBadge().state`: that folds in the transport, so
- * a companion mid-probe would read PROBING and the switcher would then treat
- * every path — including the one it is already on — as an improvement.
+ * Under a relay prefix the origin says nothing (it is the account's host on
+ * every path), so the plane is the answer. At the root the page origin IS the
+ * transport, exactly as before.
+ *
+ * Deliberately not `currentPathBadge().state`: that folds in the link health,
+ * so a companion mid-probe would read PROBING and the switcher would then
+ * treat every path — including the one it is already on — as an improvement.
  */
 export const currentOriginState = (): PathState =>
-  relayed() ? 'RELAY' : classifyOrigin(originOf(), registryOf())
+  relayed() ? planeState() : classifyOrigin(originOf(), registryOf())
 
 export { classifyOrigin }

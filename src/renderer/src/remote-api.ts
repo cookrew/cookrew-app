@@ -8,6 +8,8 @@ import type { CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../s
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 import type { VersionPinRecord } from '../../shared/version-pin'
 import { apiPath } from './api-base'
+import { planeFetch } from './plane-fetch'
+import { registerPlaneStream } from './plane-streams'
 import { createRawInputQueue } from './raw-input-queue'
 
 /**
@@ -58,7 +60,11 @@ async function req<T>(path: string, method = 'GET', body?: unknown): Promise<T> 
   // making anyway. A synthetic ping would measure a path nobody is using.
   const started = Date.now()
   try {
-    return parse<T>(await fetch(path, options))
+    // planeFetch, not fetch: it supplies the credential mode the current data
+    // plane needs (cookies same-origin through the relay, none at all
+    // cross-origin to the Mac) and reports the transport failures that are the
+    // only evidence a direct plane has died.
+    return parse<T>(await planeFetch(path, options))
   } finally {
     recordLatency(Date.now() - started)
   }
@@ -77,7 +83,7 @@ async function upload(name: string, body: Blob): Promise<string> {
   const token = authStore().token()
   if (token) headers.authorization = `Bearer ${token}`
   const result = await parse<{ path: string }>(
-    await fetch(apiPath(`/api/attachments?name=${encodeURIComponent(name)}`), {
+    await planeFetch(apiPath(`/api/attachments?name=${encodeURIComponent(name)}`), {
       method: 'POST',
       headers,
       body
@@ -141,7 +147,7 @@ const rawInput = createRawInputQueue((terminalId, data) =>
  */
 export async function checkAuth(candidate?: string): Promise<AuthScope> {
   const token = candidate ?? authStore().token()
-  const response = await fetch(apiPath('/api/auth/status'), {
+  const response = await planeFetch(apiPath('/api/auth/status'), {
     headers: token ? { authorization: `Bearer ${token}` } : undefined
   })
   if (!response.ok) throw new Error(`Auth check failed (HTTP ${response.status})`)
@@ -165,14 +171,24 @@ let events: ReconnectingStream | null = null
 function sharedEvents(): ReconnectingStream {
   // tokenParam, not a header: EventSource has none. Reads are gated now, so a
   // tokenless stream is a 401 the client would retry forever.
-  if (!events)
-    events = new ReconnectingStream({
+  if (!events) {
+    const stream = new ReconnectingStream({
+      // The URL is composed at every (re)connect, never captured — so this
+      // stream lands on whichever plane is carrying the session at the moment
+      // it reconnects. `?token=` still works cross-origin; EventSource needs
+      // no CORS flag, but it does need the credential in the URL.
       open: () => new EventSource(tokenParam(apiPath('/api/events'))),
       // The one place the companion learns its link is down. Without this the
       // badge would report the address bar forever, which is a memory rather
       // than a fact the moment the channel dies.
       onState: setPathLink
     })
+    events = stream
+    // A live stream does not re-read its own URL, so a plane switch has to
+    // push it. It is never torn down, so the unsubscribe is deliberately
+    // dropped rather than stored.
+    registerPlaneStream({ restart: () => stream.restart() })
+  }
   return events
 }
 
@@ -310,8 +326,10 @@ export function createRemoteApi(): CookrewApi {
         if (document.visibilityState === 'visible') stream.revive()
       }
       document.addEventListener('visibilitychange', onVisible)
+      const unregister = registerPlaneStream({ restart: () => stream.restart() })
       return () => {
         document.removeEventListener('visibilitychange', onVisible)
+        unregister()
         stream.close()
       }
     },

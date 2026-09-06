@@ -1,42 +1,71 @@
 import { apiPath, clientBase } from '../api-base'
 import { isRemoteMode } from '../api'
 import { authHeaders, authStore } from '../auth-gate'
-import { currentOriginState, setProbing } from '../path-link'
+import { dataPlane, setDataPlane, subscribeDataPlane, type DataPlane } from '../data-plane'
+import { planeFetch } from '../plane-fetch'
+import { planeHealth, type LinkHealth } from '../plane-health'
+import { followDataPlane } from '../plane-streams'
+import { currentOriginState, forgetLatency, setProbing, subscribePathLink } from '../path-link'
+import { PLANE_PROBE_EVERY_MS, switchPlaneIfBetter, type HelloClaim } from './plane-switch'
 import {
   PATH_MEMORY_PREFIX,
   askHello,
   pathRank,
   randomNonce,
   startPathSwitching,
+  startRaceLoop,
   type ReachCardLite
 } from './switch'
 
 /**
- * THE SWITCHER, PLUGGED INTO A REAL PHONE.
+ * THE SWITCHERS, PLUGGED INTO A REAL PHONE.
  *
- * switch.ts is the decision and holds no browser in it; this is the six things
- * that decision needs from an actual companion — its origin, the desktop's
- * card, a nonce, the credential, localStorage and `location.replace`. Kept
- * apart so the rule ("only better, and only after the Mac proves it is the
- * Mac") is testable without a DOM, which is where the rule can actually be got
- * wrong.
+ * switch.ts and plane-switch.ts are the decisions and hold no browser in them;
+ * this is the handful of things those decisions need from an actual companion
+ * — its plane, the desktop's card, a nonce, the credential, localStorage and
+ * either `location.replace` or the data-plane store. Kept apart so the rules
+ * ("only better, and only after the Mac proves it is the Mac") are testable
+ * without a DOM, which is where a rule can actually be got wrong.
  *
- * IT DOES NOTHING ON THE DESKTOP, and nothing on a companion that is already
- * on the LAN. There is no faster path than the one it is on, and a probe that
- * ran anyway would be 120 pointless requests an hour from a device on battery.
+ * WHICH SWITCHER RUNS IS DECIDED BY THE PREFIX, and it is the whole shape of
+ * Reach v2.1 in one branch:
+ *
+ *   AT THE ROOT the page origin IS the transport, so moving to a nearer path
+ *   means loading the app at that address. Unchanged, down to the URL it
+ *   navigates to — a phone that scanned the Mac's printed LAN link is not
+ *   affected by any of this.
+ *
+ *   UNDER THE RELAY BASE the page never leaves cookrew.dev. The data plane
+ *   moves instead, and the badge is the only thing that changes on screen.
+ *
+ * IT DOES NOTHING ON THE DESKTOP, and nothing on a companion already on the
+ * LAN. There is no faster path than the one it is on, and a probe that ran
+ * anyway would be pointless requests off a device on battery.
  */
 
-/** The desktop's own reach card, over whatever path is already working. */
+/** The desktop's own reach card, over whatever plane is already working. */
 const fetchCard = async (): Promise<ReachCardLite | null> => {
   try {
-    const response = await fetch(apiPath('/api/reach'), {
+    const response = await planeFetch(apiPath('/api/reach'), {
       headers: authHeaders(),
       cache: 'no-store'
     })
     if (!response.ok) return null
     const body = (await response.json()) as Partial<ReachCardLite>
     if (typeof body.deviceId !== 'string' || !Array.isArray(body.lan)) return null
-    return { deviceId: body.deviceId, lan: body.lan, tailnet: body.tailnet ?? null }
+    // `trusted` is Reach v2.1's addition and an OLDER MAC WILL NOT HAVE IT.
+    // Absent reads as empty, which reads as "no live switch today" — the
+    // relay keeps working and nothing announces a downgrade that is really
+    // just a desktop that has not been updated yet.
+    const trusted = Array.isArray(body.trusted)
+      ? body.trusted.filter((origin): origin is string => typeof origin === 'string')
+      : []
+    return {
+      deviceId: body.deviceId,
+      lan: body.lan,
+      tailnet: body.tailnet ?? null,
+      trusted
+    }
   } catch {
     return null
   }
@@ -57,30 +86,94 @@ const memory = (): { read: (key: string) => string | null; write: (key: string, 
 }
 
 /**
- * Start racing for a better path, or answer with a no-op teardown.
+ * ASK cookrew.dev WHETHER THAT REPLY CAME FROM MY MAC.
  *
- * Called once at boot. The guard is here rather than at the call site so
+ * The page cannot check the signature itself — the device's public key is a
+ * fact the registry holds — so it asks, over its OWN origin, with the account
+ * session cookie. Root-relative on purpose and NOT through apiPath: apiPath
+ * addresses the desktop (through the relay or directly), and this is the one
+ * request in the client that is genuinely for cookrew.dev itself.
+ *
+ * Anything but a clean `{ok:true}` is a no. A verification that cannot be
+ * completed — offline, rate limited, signed out — must leave the phone on the
+ * relay rather than on an unproven address.
+ */
+const verifyHello = async (claim: HelloClaim): Promise<boolean> => {
+  try {
+    const response = await fetch('/v2/verify-hello', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      cache: 'no-store',
+      body: JSON.stringify(claim)
+    })
+    if (!response.ok) return false
+    const body = (await response.json()) as { ok?: unknown }
+    return body.ok === true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * THE LIVE DATA-PLANE SWITCH, for a companion served under the relay base.
+ *
+ * Everything it does happens below the address bar: it races the Mac's trusted
+ * names, has the registry prove one of them, and then points the store that
+ * composes every request URL at it. The streams follow (plane-streams.ts), the
+ * badge follows (path-link.ts), the token stays where it is, and the page is
+ * not reloaded — which is the entire difference between this and the switch
+ * that put a phone on a certificate warning.
+ */
+const startPlaneSwitch = (): (() => void) => {
+  const health = planeHealth()
+  // The link store announces on EVERY change it holds — latency, probing, the
+  // desktop's name — and only the transport's own state is evidence about the
+  // plane. Without this the latency recorded by each successful request would
+  // read as "the channel is live" and quietly disarm the watchdog that is
+  // waiting to see whether a dropped stream comes back.
+  let lastLink: LinkHealth | null = null
+  const offs: (() => void)[] = [
+    followDataPlane(),
+    // The badge's latency is a measurement of the path it was taken on, and
+    // the smoothing that keeps it steady within a path makes it a lie across
+    // one. So a switch drops it and the next request re-establishes it.
+    subscribeDataPlane(forgetLatency),
+    // The push channel is the first thing to notice a plane that has died, so
+    // its state is fed to the health watchdog rather than only to the badge.
+    subscribePathLink((state) => {
+      if (state.link === lastLink) return
+      lastLink = state.link
+      health.link(state.link)
+    }),
+    startRaceLoop({
+      everyMs: PLANE_PROBE_EVERY_MS,
+      race: () =>
+        switchPlaneIfBetter({
+          plane: dataPlane,
+          card: fetchCard,
+          hello: (origin, nonce) => askHello(origin, nonce),
+          verify: verifyHello,
+          adopt: (plane: DataPlane) => setDataPlane(plane),
+          nonce: () => randomNonce((bytes) => window.crypto.getRandomValues(bytes)),
+          held: () => health.held(),
+          probing: setProbing
+        })
+    })
+  ]
+  return () => offs.forEach((off) => off())
+}
+
+/**
+ * Start switching, or answer with a no-op teardown.
+ *
+ * Called once at boot. The guards are here rather than at the call site so
  * main.tsx does not have to know what a path is.
  */
 export const startCompanionPathSwitch = (): (() => void) => {
   const noop = (): void => undefined
   if (!isRemoteMode()) return noop
-  // A COMPANION LOADED UNDER cookrew.dev NEVER LEAVES cookrew.dev.
-  //
-  // The race below ends in `location.replace(<direct URL>)`, and a page served
-  // through the relay that does that walks off the account's origin onto the
-  // Mac's own listener. Until Reach v2.1's certificates exist (R1/R2) that
-  // listener answers with a self-signed certificate, so the owner's phone
-  // landed mid-session on ERR_CERT_AUTHORITY_INVALID — an interstitial telling
-  // the reader not to trust the page, with the pairing token in the address
-  // bar. The certificate problem is the product's to solve, never the
-  // reader's.
-  //
-  // So under a relay prefix this does nothing at all. It is NOT the fix: the
-  // fix is phase C3, where the data plane (fetch base, EventSource, WebSocket)
-  // moves to a verified direct path with no navigation and no change to the
-  // address bar. The decision in switch.ts is left whole and tested for that.
-  if (clientBase() !== '') return noop
+  if (clientBase() !== '') return startPlaneSwitch()
   // Already as close as it gets. Nothing on the card can beat this origin.
   if (pathRank(currentOriginState()) >= pathRank('LAN')) return noop
   const store = memory()
