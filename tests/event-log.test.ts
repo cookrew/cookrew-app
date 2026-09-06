@@ -220,6 +220,53 @@ describe('EventLog', () => {
       expect(jsonlReadsDuring(() => log.query())).toEqual(['events.jsonl'])
     })
 
+    it('serves a rotated row with exactly the keys its line had, like the live file does', () => {
+      const { log, file } = makeLog(opts)
+      // The minimum isEvent accepts: no entityName, workspaceName, actor.
+      const bare = { type: 'note.created', entityId: 'bare', workspaceId: 'ws-a', timestamp: 1 }
+      fs.writeFileSync(rotatedOf(file, 1), JSON.stringify(bare) + '\n', 'utf8')
+      fs.writeFileSync(file, JSON.stringify(bare) + '\n', 'utf8')
+      log.query() // warms the cache: the rotated row now comes from shared strings
+      const [fromRotated, fromLive] = log.query({ type: 'note.created' })
+      expect(Object.keys(fromRotated)).toEqual(Object.keys(bare))
+      expect(fromRotated).toStrictEqual(fromLive)
+      expect(fromRotated).toStrictEqual(bare)
+    })
+
+    it('rejects a file name it cannot rotate', () => {
+      expect(() => new EventLog('/tmp/cookrew-events-no-suffix')).toThrow(/\.jsonl/)
+    })
+
+    it('does not pin a rotated file that changed between the stat and the read, and re-reads it next time', () => {
+      const { log, file } = makeLog(opts)
+      fillRotated(log, 40)
+      const target = rotatedOf(file, 2)
+      const swapped = event({ type: 'note.created', entityId: 'swapped-in', timestamp: 7 })
+      // The read sees a different file than the stat did: the swap happens
+      // inside readFileSync, after loadRotated has taken the identity.
+      const real = fs.readFileSync
+      fs.readFileSync = function swapping(this: unknown, p: Parameters<typeof fs.readFileSync>[0], ...rest: unknown[]) {
+        if (p === target) {
+          fs.readFileSync = real
+          syncBuiltinESMExports()
+          real.call(null, p, 'utf8') // the read that the stat described
+          fs.writeFileSync(target, JSON.stringify(swapped) + '\n', 'utf8')
+        }
+        return (real as (...a: unknown[]) => Buffer | string).call(this, p, ...rest)
+      } as typeof fs.readFileSync
+      syncBuiltinESMExports()
+      const seenAtSwap = log.query({ type: 'note.created' })
+      expect(seenAtSwap.map((r) => r.entityId)).toEqual(['swapped-in']) // served what was read
+      // Not pinned: the next query reads events.2.jsonl again, and a
+      // same-size rewrite (new mtime) is picked up as well.
+      expect(jsonlReadsDuring(() => log.query())).toEqual(['events.2.jsonl', 'events.jsonl'])
+      expect(jsonlReadsDuring(() => log.query())).toEqual(['events.jsonl'])
+      const rewritten = event({ type: 'note.created', entityId: 'rewrite-in', timestamp: 7 })
+      expect(JSON.stringify(rewritten).length).toBe(JSON.stringify(swapped).length)
+      fs.writeFileSync(target, JSON.stringify(rewritten) + '\n', 'utf8')
+      expect(log.query({ type: 'note.created' }).map((r) => r.entityId)).toEqual(['rewrite-in'])
+    })
+
     it('re-reads a rotated file whose size changed underneath the cache', () => {
       const { log, file } = makeLog(opts)
       fillRotated(log, 40)

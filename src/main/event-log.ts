@@ -8,8 +8,8 @@
 // rotated files, and events carry METADATA ONLY — never prompt/reply text.
 //
 // Reads: a rotated file is immutable once rotated, so its parsed rows are
-// cached and pinned to the file's identity (ino, size, mtime, birth time);
-// the live file (at most maxBytes) is read and split on every query. A
+// cached and pinned to the file's identity (ino, size, mtime); the live
+// file (at most maxBytes) is read and split on every query. A
 // limited query walks newest-first and stops at the limit, so its cost does
 // not grow with the rotated log, only with the live file. Rows served from
 // the cache are SHARED objects — callers serialise them, never mutate.
@@ -72,9 +72,10 @@ interface EventLogOptions {
 const DEFAULTS = { maxBytes: 4 * 1024 * 1024, keepFiles: 3, flushMs: 200 }
 
 /**
- * What tells one file on disk from another, rename or not. A rename keeps all
- * four; birth time is what still differs when a dropped file's inode is
- * reused by a new one of the same size in the same mtime tick.
+ * What tells one file on disk from another, rename or not: a rename keeps
+ * ino, size and mtime. Birth time is carried for diagnostics only and is NOT
+ * part of the identity — where libuv has no statx it is filled from ctime,
+ * which a rename changes, and every rotation would then drop the whole cache.
  */
 interface FileIdentity {
   ino: number
@@ -144,28 +145,32 @@ function parseLines(text: string): CookrewEvent[] {
   return events
 }
 
+const SHARED_FIELDS = ['type', 'entityId', 'entityName', 'workspaceId', 'workspaceName', 'actor'] as const
+
 /**
  * The same rows with one copy of each repeated string: types, ids and names
  * recur on nearly every line, and JSON.parse hands each line its own. Only
  * matters for the rows a cache keeps, where it roughly halves what they hold.
+ * A field is replaced only where the line had a string for it; the row's key
+ * set is exactly what JSON.parse produced, so a row read from a rotated file
+ * is indistinguishable from the same row read from the live file.
  */
 function shareStrings(events: readonly CookrewEvent[]): CookrewEvent[] {
   const seen = new Map<string, string>()
-  const one = <T extends string>(value: T): T => {
+  const one = (value: string): string => {
     const known = seen.get(value)
-    if (known !== undefined) return known as T
+    if (known !== undefined) return known
     seen.set(value, value)
     return value
   }
-  return events.map((e) => ({
-    ...e,
-    type: one(e.type),
-    entityId: one(e.entityId),
-    entityName: one(e.entityName),
-    workspaceId: one(e.workspaceId),
-    workspaceName: one(e.workspaceName),
-    actor: one(e.actor)
-  }))
+  return events.map((e) => {
+    const row: Record<string, unknown> = { ...e }
+    for (const field of SHARED_FIELDS) {
+      const value = row[field]
+      if (typeof value === 'string') row[field] = one(value)
+    }
+    return row as unknown as CookrewEvent
+  })
 }
 
 function identityOf(stat: Stats): FileIdentity {
@@ -173,7 +178,7 @@ function identityOf(stat: Stats): FileIdentity {
 }
 
 function sameFile(a: FileIdentity, b: FileIdentity): boolean {
-  return a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.birthtimeMs === b.birthtimeMs
+  return a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs
 }
 
 function isMissing(error: unknown): boolean {
@@ -233,6 +238,9 @@ export class EventLog extends EventEmitter {
     options: EventLogOptions = {}
   ) {
     super()
+    // Rotated names are made by replacing the suffix; without it every
+    // rotated name would BE the live file, and the cache would pin it.
+    if (!file.endsWith('.jsonl')) throw new Error(`EventLog file must end in .jsonl: ${file}`)
     this.opts = { ...DEFAULTS, ...options }
   }
 
