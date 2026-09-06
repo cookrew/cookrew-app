@@ -34,6 +34,25 @@ import type { WorkspaceStore } from './store'
 
 export type TraceSource = 'claude' | 'codex' | 'pi' | null
 
+/** Which parser a transcript is read with. */
+export type TraceKind = 'claude' | 'codex' | 'pi'
+
+/**
+ * ONE FILE, parsed — the seam the one-stream reader walks a lineage through
+ * (design: docs/site/one-stream-2026-09-07.html, phase T1).
+ *
+ * `bytesRead` is the offset the blocks were derived from, so a caller can key
+ * its own derived index by (file, offset) and extend it on append exactly the
+ * way this cache extends the blocks. It is published rather than re-stat'd
+ * because the two must agree: an index built from bytes the cache has not
+ * ingested would be an index of a file nobody read.
+ */
+export interface TraceDocument {
+  blocks: TraceBlock[]
+  markers: TraceBoundaryMarker[]
+  bytesRead: number
+}
+
 /** A session file + the harness's turn parser, for SessionTurnSync.watch. */
 export interface SessionWatchSpec {
   file: string
@@ -621,6 +640,31 @@ export class TraceReader {
       // No complete turn in this window. If we have now read the whole file,
       // there genuinely is none; otherwise grow and retry.
       if (size - window <= 0) return remember(null)
+    }
+  }
+
+  /**
+   * ONE FILE's parsed document — blocks, the compaction boundaries the file
+   * itself declares, and the byte offset both were derived from.
+   *
+   * Additive seam for stream.ts (one-stream T1): the lineage-wide reader
+   * walks a chain through THIS cache instead of standing up a second one.
+   * Two caches over the same transcripts would be exactly the duplication
+   * that design removes — and these files run to 119 MB, so a second copy is
+   * not an abstraction cost, it is the "out of application memory" incident
+   * TRACE_MEMO_BYTE_BUDGET already exists to prevent.
+   *
+   * Never throws: an unreadable file reads as an empty document (blocksOf
+   * logs and returns []), and the stream reports it as missing rather than
+   * failing a whole chain for one absent predecessor.
+   */
+  async documentOf(file: string, kind: TraceKind = 'claude'): Promise<TraceDocument> {
+    const blocks = await this.blocksOf(file, kind)
+    const cached = this.cache.get(file)
+    return {
+      blocks,
+      markers: cached?.compactMarkers ?? [],
+      bytesRead: cached?.bytesRead ?? 0
     }
   }
 
