@@ -30,12 +30,16 @@ export const LATENCY = {
   // (2026-08-14); p50 0.19-0.31 under load (2026-09-05).
   eventBurst30: { p50: 1, p95: 3, p98: 5 },
   // A query over a log the size the live machine carries (four 4 MB files,
-  // ~80k events). 2026-09-05 under load: p50 540-603 / p95 978 / p98 1246.
-  // This is a KNOWN cost — every query re-reads and re-parses every file
-  // (event-log.ts readAll), and the live /api/events/query answered in 780ms
-  // the same day — so the budget gates the regression, not the design.
-  // Halving it is a change worth making; re-baseline when it lands.
-  eventQueryLiveShape: { p50: 900, p95: 1500, p98: 1800 },
+  // ~95k events). Re-baselined 2026-09-06 after event-log.ts started caching
+  // the parsed rotated files (pinned to ino/size/mtime) and walking a limited
+  // query newest-first: worst of three 50-sample runs, all under a load of
+  // 6.6-15 per core, p50 5.67 / p95 16.09 / p98 21.48; the idle p50 is under
+  // 5. Before the change the same shape measured p50 66.5 / p95 113.9 / p98
+  // 151.4 IDLE (load 1.00) and p50 540-603 under load on 2026-09-05, so a
+  // return to re-parsing every file fails on time alone even at CI's x3.
+  // The structural gate beside it (one readFileSync per warm query, and it
+  // is events.jsonl) is what a fast machine cannot fake.
+  eventQueryLiveShape: { p50: 15, p95: 40, p98: 50 },
   // Serialising a 120-node canvas with 4 KB notes, the shape of the heaviest
   // live workspace. 2026-09-05 under load: p50 0.19 / p95 2.3 / p98 3.5.
   workspaceStateSerialize120: { p50: 1, p95: 5, p98: 8 },
