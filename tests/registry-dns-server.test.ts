@@ -2,7 +2,7 @@ import { connect } from 'node:net'
 import { createSocket } from 'node:dgram'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { RCODE, UDP_FLOOR } from '../registry/src/dns-wire'
-import { createDnsServer, sourceGroup, type DnsServer } from '../registry/src/dns-server'
+import { Buckets, createDnsServer, sourceGroup, type DnsServer } from '../registry/src/dns-server'
 import { createZone } from '../registry/src/dns-zone'
 import { T, askTcp, askUdp, buildQuery, parseAnswer } from './support/dns-probe'
 
@@ -340,5 +340,55 @@ describe('dual stack', () => {
     expect(sourceGroup('2001:db8:1:200::1')).not.toBe(sourceGroup('2001:db8:1:300::1'))
     // Something that is not an address at all is still its own key, not a crash.
     expect(sourceGroup('')).toBe('')
+  })
+})
+
+/**
+ * M3 — WHAT THE LIMITER COSTS WHEN IT IS THE THING BEING ATTACKED.
+ *
+ * The buckets lived in a Map that was pruned whenever it passed 4096 entries,
+ * and the prune walked every entry — on the hot path, inside the handler for a
+ * packet anyone can send. Past that many distinct sources the per-packet cost
+ * fell off a cliff, so a flood from many addresses (trivial over IPv6, where a
+ * single /64 holds eighteen quintillion of them) made every packet dearer than
+ * the last. The table is a fixed array now: no growth, no scan, no cliff.
+ */
+describe('the limiter under a flood from everywhere', () => {
+  it('costs the same per packet whether it has seen ten sources or sixty thousand', () => {
+    const clock = { at: 1_757_000_000_000 }
+    const buckets = new Buckets(50, 100, () => clock.at)
+    const sources = Array.from({ length: 60_000 }, (_, i) => `${(i >> 16) & 0xff}.${(i >> 8) & 0xff}.${i & 0xff}.0`)
+
+    // NO WARM-UP. The flood IS the growth: the cost being measured is the one
+    // paid while the table is filling with sources it has never seen, which is
+    // exactly what an attacker sends and exactly where the old cliff was.
+    const rounds = 100_000
+    const started = performance.now()
+    for (let i = 0; i < rounds; i += 1) {
+      // A million packets a second: a real flood, and the shape that made the
+      // old Map pathological — sources arrive faster than the buckets behind
+      // them refill, so the prune walked a table that never got any smaller.
+      clock.at = 1_757_000_000_000 + i / 1000
+      buckets.take(sourceGroup(sources[i % sources.length]))
+    }
+    const each = ((performance.now() - started) * 1000) / rounds
+    console.log(`M3: ${each.toFixed(3)} µs per packet across 60 000 sources`)
+    expect(each).toBeLessThan(5)
+  })
+
+  it('still refuses a source that is over its budget, however many others there are', () => {
+    const clock = { at: 1_757_000_000_000 }
+    const buckets = new Buckets(1, 2, () => clock.at)
+    for (let i = 0; i < 60_000; i += 1) {
+      clock.at += 0.01
+      buckets.take(`filler-${i}`)
+    }
+    clock.at += 10_000
+    expect(buckets.take('4.203.0.113')).toBe(true)
+    expect(buckets.take('4.203.0.113')).toBe(true)
+    expect(buckets.take('4.203.0.113')).toBe(false)
+    // And it refills on the clock rather than on a timer.
+    clock.at += 3000
+    expect(buckets.take('4.203.0.113')).toBe(true)
   })
 })
