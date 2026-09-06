@@ -1,4 +1,13 @@
-import type { LadderFactor, SecondFactorStep } from '../shared/account-v2'
+import {
+  ladderIsOver,
+  type AccountResult,
+  type ApprovalAsked,
+  type LadderFactor,
+  type SecondFactorStep,
+  type SignInAnswer,
+} from '../shared/account-v2'
+import { bodyOf, classify, plainRefusal, wireError } from './account-wire'
+import type { AccountSession } from './account-v2'
 
 /**
  * THE SECOND-FACTOR LADDER, MAIN'S HALF — and the one thing it has to hold.
@@ -157,3 +166,162 @@ export type TypedFactor = 'totp' | 'recovery'
 
 export const isTypedFactor = (value: unknown): value is TypedFactor =>
   value === 'totp' || value === 'recovery'
+
+// ── climbing, over the wire ────────────────────────────────────────────────
+
+/**
+ * WHAT A RUNG NEEDS FROM THE ACCOUNT, and nothing else.
+ *
+ * The rungs are here rather than as four more methods on `Accounts` because
+ * that class is already the longest file in main and because none of this
+ * touches the account FILE except through `land` — which is the one thing a
+ * rung must not do twice or differently. Handing over a port rather than the
+ * class also states the surface exactly: a rung reads no token, lists no
+ * device and writes nothing.
+ */
+export interface LadderPort {
+  http: (input: string, init?: RequestInit) => Promise<Response>
+  origin: string
+  now: () => number
+  /** The passwords of the sign-ins half done on this Mac. */
+  passwords: LadderPasswords
+  /** Write the session and re-derive the unlock verifier. One place, always. */
+  land: (password: string, body: Record<string, unknown>) => SignInAnswer<AccountSession>
+}
+
+/**
+ * A rung that is typed: the authenticator's six digits, or a rescue code.
+ *
+ * ONE FUNCTION FOR BOTH because the wire is the same shape — `POST
+ * /v2/sessions/:pending/{totp|recovery}` with `{code}` — and the difference is
+ * entirely copy, which belongs to the card. A wrong code comes back `bad_code`
+ * or `bad_recovery` and the ladder STAYS OPEN: the registry allows five tries
+ * on a pending, and a card that closed on the first fat-fingered digit would
+ * spend the other four on nothing.
+ */
+export async function climbTyped(
+  port: LadderPort,
+  pending: string,
+  factor: TypedFactor,
+  code: string,
+): Promise<SignInAnswer<AccountSession>> {
+  const password = port.passwords.for(pending)
+  // No password for this pending means the ladder outlived its ten minutes (or
+  // main restarted under it). Either way the honest answer is the password
+  // step — NOT a rung that could land a session this app would then be unable
+  // to unlock itself with.
+  if (password === null) return { ok: false, reason: 'expired' }
+  const answer = await climbOne(port, pending, password, () =>
+    port.http(`${port.origin}/v2/sessions/${encodeURIComponent(pending)}/${factor}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code }),
+    }),
+  )
+  // 'waiting' is the POLL's 202 and a typed rung never sends one; this narrows
+  // the shared return rather than branching on something no request from here
+  // can produce.
+  return answer === 'waiting' ? { ok: false, reason: 'unknown' } : answer
+}
+
+/**
+ * Ask the account's other devices to approve this sign-in (the D6 prompt).
+ *
+ * Answers the registry's own sentence, unchanged: it names the asking device
+ * and the address it is asking from, and this Mac is not the party that knows
+ * those. Asking twice does not raise two prompts — the registry holds one
+ * approval per pending.
+ */
+export async function askForApproval(
+  port: LadderPort,
+  pending: string,
+): Promise<AccountResult<ApprovalAsked>> {
+  if (port.passwords.for(pending) === null) return { ok: false, reason: 'expired' }
+  let response: Response
+  try {
+    response = await port.http(
+      `${port.origin}/v2/sessions/${encodeURIComponent(pending)}/approve`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' },
+    )
+  } catch {
+    return { ok: false, reason: 'offline' }
+  }
+  if (response.status !== 202) {
+    const refused = await wireError(response)
+    if (ladderIsOver(refused.reason)) port.passwords.forget(pending)
+    return { ok: false, ...refused }
+  }
+  const asked = askedFrom(await bodyOf(response))
+  return asked === null ? { ok: false, reason: 'unknown' } : { ok: true, value: asked }
+}
+
+/**
+ * WAIT FOR THE NOD — poll until the other device answers, or time runs out.
+ *
+ * Two seconds, the same interval cookrew.dev's own waiting screen uses, and
+ * BOUNDED: it stops at the pending's own expiry, so a card somebody walked
+ * away from cannot leave a request looping in main forever. Polling is not
+ * guessing and the registry does not count it against the five tries.
+ *
+ * A single long-running call rather than "ask me again in two seconds" because
+ * the thing being waited on is one event with one answer; a renderer that
+ * unmounts simply drops the promise, and the poll ends at the deadline.
+ */
+export async function waitForApproval(
+  port: LadderPort,
+  pending: string,
+  options: { everyMs?: number; forMs?: number } = {},
+): Promise<SignInAnswer<AccountSession>> {
+  const password = port.passwords.for(pending)
+  if (password === null) return { ok: false, reason: 'expired' }
+  const everyMs = options.everyMs ?? APPROVAL_POLL_MS
+  const until = port.now() + Math.min(options.forMs ?? LADDER_TTL_MS, LADDER_TTL_MS)
+  for (;;) {
+    const answer = await climbOne(
+      port,
+      pending,
+      password,
+      () => port.http(`${port.origin}/v2/sessions/${encodeURIComponent(pending)}`, { method: 'GET' }),
+      // 202 is "still waiting", which is neither a session nor a refusal.
+      202,
+    )
+    if (answer !== 'waiting') return answer
+    if (port.now() + everyMs >= until) return { ok: false, reason: 'expired' }
+    await new Promise((resolve) => setTimeout(resolve, everyMs))
+  }
+}
+
+/**
+ * One rung, sent and read: a session, a refusal, or (polling only) waiting.
+ *
+ * THE PASSWORD IS FORGOTTEN ON EVERY ENDING, success or otherwise, and that is
+ * the point of routing all three rungs through here. A ladder that ended while
+ * its password stayed in the map would be a secret kept for a conversation
+ * nobody can finish.
+ */
+async function climbOne(
+  port: LadderPort,
+  pending: string,
+  password: string,
+  send: () => Promise<Response>,
+  waitingStatus = -1,
+): Promise<SignInAnswer<AccountSession> | 'waiting'> {
+  let response: Response
+  try {
+    response = await send()
+  } catch {
+    // Not the end of the ladder: a Wi-Fi that dropped for one request is a
+    // retry, and the pending is still standing at the registry.
+    return { ok: false, reason: 'offline' }
+  }
+  if (response.status === waitingStatus) return 'waiting'
+  if (response.status === 429) return { ok: false, reason: 'rate_limited' }
+  const body = await bodyOf(response)
+  if (response.status === 201) {
+    port.passwords.forget(pending)
+    return port.land(password, body)
+  }
+  const refused = classify(response.status, body)
+  if (ladderIsOver(refused.reason)) port.passwords.forget(pending)
+  return plainRefusal(refused)
+}

@@ -18,7 +18,6 @@ import {
   RESERVED_PREFIXES,
   normaliseUsername,
   usernameProblem,
-  ladderIsOver,
   type AccountDevice,
   type AccountProfile,
   type AccountRefusal,
@@ -28,13 +27,15 @@ import {
   type UsernameCheck,
 } from '../shared/account-v2'
 import {
-  APPROVAL_POLL_MS,
-  LADDER_TTL_MS,
   LadderPasswords,
-  askedFrom,
+  askForApproval,
+  climbTyped,
   stepFrom,
+  waitForApproval,
+  type LadderPort,
   type TypedFactor,
 } from './account-ladder'
+import { bodyOf, classify, plainRefusal, wireError } from './account-wire'
 import { legacyKey, migrateAtRegistry } from './legacy-identity'
 import type { RegistryAccount } from './registry-account'
 
@@ -325,96 +326,6 @@ export interface AccountsDeps {
    * made somewhere else, which no click on this Mac would otherwise reveal.
    */
   onChange?: () => void
-}
-
-interface WireError {
-  error?: string
-  message?: string
-}
-
-const REFUSALS: Record<string, AccountRefusal> = {
-  taken: 'taken',
-  legacy: 'legacy',
-  no_passwords_yet: 'no_passwords_yet',
-  bad_username: 'bad_username',
-  weak_password: 'weak_password',
-  bad_device: 'bad_device',
-  bad_credentials: 'bad_credentials',
-  second_factor: 'second_factor',
-  last_device: 'last_device',
-  not_found: 'not_found',
-  already_seated: 'already_seated',
-  // The ladder's own vocabulary (v2-factor-copy.ts). Named here so a mistyped
-  // code arrives as 'bad_code' rather than as the catch-all — the card keeps
-  // its field open for one and sends the owner back to the password for the
-  // other, and it cannot tell them apart from 'unknown'.
-  bad_code: 'bad_code',
-  bad_recovery: 'bad_recovery',
-  passkey_refused: 'passkey_refused',
-  expired: 'expired',
-  too_many_attempts: 'too_many_attempts',
-  denied: 'denied',
-  not_offered: 'not_offered',
-  password_change_required: 'password_change_required',
-}
-
-/**
- * A refusal's body, already read, as a reason and a sentence.
- *
- * SPLIT OUT OF `wireError` because the ladder has to read the body ITSELF: a
- * 401 that says `second_factor` carries the pending id in the same JSON, and a
- * Response body can only be consumed once. Both paths classify identically
- * because both call this.
- */
-function classify(status: number, body: WireError): { reason: AccountRefusal; message?: string } {
-  if (status === 429) return { reason: 'rate_limited' }
-  // A 401 is a dead session ONLY when the registry says so (no error, or
-  // `unauthenticated`). A wrong authenticator code or a refused passkey also
-  // arrive as 401, with their own error and sentence — telling the owner
-  // "your session ended" for a mistyped code sent them to the wrong fix.
-  if (status === 401) {
-    if (typeof body.error !== 'string' || body.error === 'unauthenticated') {
-      return { reason: 'session-expired' }
-    }
-    const named: AccountRefusal = REFUSALS[body.error] ?? 'unknown'
-    return body.message ? { reason: named, message: body.message } : { reason: named }
-  }
-  const reason: AccountRefusal =
-    (typeof body.error === 'string' ? REFUSALS[body.error] : undefined) ?? 'unknown'
-  return body.message ? { reason, message: body.message } : { reason }
-}
-
-/** A JSON body, or an empty one: a refusal with no body is still a refusal. */
-async function bodyOf(response: Response): Promise<WireError & Record<string, unknown>> {
-  try {
-    return (await response.json()) as WireError & Record<string, unknown>
-  } catch {
-    return {}
-  }
-}
-
-/**
- * A refusal as the third arm of a `SignInAnswer` — everything but the step.
- *
- * `second_factor` reaching here is a step this app could not read (no pending
- * id, or no rung it knows). There is nothing a person can do about that, so it
- * is reported as an answer we could not read rather than as a ladder with no
- * rungs on it.
- */
-function plainRefusal(refused: { reason: AccountRefusal; message?: string }): {
-  ok: false
-  reason: Exclude<AccountRefusal, 'second_factor'>
-  message?: string
-} {
-  const reason = refused.reason === 'second_factor' ? 'unknown' : refused.reason
-  return { ok: false, reason, ...(refused.message ? { message: refused.message } : {}) }
-}
-
-async function wireError(
-  response: Response,
-): Promise<{ reason: AccountRefusal; message?: string }> {
-  if (response.status === 429) return { reason: 'rate_limited' }
-  return classify(response.status, await bodyOf(response))
 }
 
 /**
@@ -810,132 +721,43 @@ export class Accounts {
   }
 
   /**
-   * A rung that is typed: the authenticator's six digits, or a rescue code.
+   * WHAT A RUNG IS ALLOWED TO SEE — the port, built once.
    *
-   * ONE METHOD FOR BOTH because the wire is the same shape — `POST
-   * /v2/sessions/:pending/{totp|recovery}` with `{code}` — and the difference
-   * is entirely copy, which belongs to the card. A wrong code comes back
-   * `bad_code` or `bad_recovery` and the ladder STAYS OPEN: the registry
-   * allows five tries on a pending, and a card that closed on the first
-   * fat-fingered digit would spend the other four on nothing.
+   * The three rungs live in account-ladder.ts and are handed this rather than
+   * the account: a socket, an origin, a clock, the passwords in flight, and
+   * ONE way to write a session. They read no token, list no device and touch
+   * no file except through `land`.
    */
-  async resumeWithCode(
+  private port(): LadderPort {
+    return {
+      http: this.http,
+      origin: this.origin,
+      now: this.now,
+      passwords: this.ladder,
+      land: (password, body) => this.landSession(password, body),
+    }
+  }
+
+  /** The authenticator's six digits, or a rescue code. */
+  resumeWithCode(
     pending: string,
     factor: TypedFactor,
     code: string,
   ): Promise<SignInAnswer<AccountSession>> {
-    const password = this.ladder.for(pending)
-    // No password for this pending means the ladder outlived its ten minutes
-    // (or main restarted under it). Either way the honest answer is the
-    // password step — NOT a rung that could land a session this app would
-    // then be unable to unlock itself with.
-    if (password === null) return { ok: false, reason: 'expired' }
-    const answer = await this.climb(pending, password, () =>
-      this.http(`${this.origin}/v2/sessions/${encodeURIComponent(pending)}/${factor}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ code }),
-      }),
-    )
-    // 'waiting' is the POLL's 202 and a typed rung never sends one; this
-    // narrows the shared return rather than branching on something no request
-    // from here can produce.
-    return answer === 'waiting' ? { ok: false, reason: 'unknown' } : answer
+    return climbTyped(this.port(), pending, factor, code)
   }
 
-  /**
-   * Ask the account's other devices to approve this sign-in (the D6 prompt).
-   *
-   * Answers the registry's own sentence, unchanged: it names the asking device
-   * and the address it is asking from, and this Mac is not the party that
-   * knows those. Asking twice does not raise two prompts — the registry holds
-   * one approval per pending.
-   */
-  async resumeAsk(pending: string): Promise<AccountResult<ApprovalAsked>> {
-    if (this.ladder.for(pending) === null) return { ok: false, reason: 'expired' }
-    let response: Response
-    try {
-      response = await this.http(`${this.origin}/v2/sessions/${encodeURIComponent(pending)}/approve`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: '{}',
-      })
-    } catch {
-      return { ok: false, reason: 'offline' }
-    }
-    if (response.status !== 202) {
-      const refused = await wireError(response)
-      if (ladderIsOver(refused.reason)) this.ladder.forget(pending)
-      return { ok: false, ...refused }
-    }
-    const asked = askedFrom(await bodyOf(response))
-    return asked === null ? { ok: false, reason: 'unknown' } : { ok: true, value: asked }
+  /** Ask a device the account already trusts to approve this sign-in (D6). */
+  resumeAsk(pending: string): Promise<AccountResult<ApprovalAsked>> {
+    return askForApproval(this.port(), pending)
   }
 
-  /**
-   * WAIT FOR THE NOD — poll until the other device answers, or time runs out.
-   *
-   * Two seconds, the same interval cookrew.dev's own waiting screen uses, and
-   * BOUNDED: it stops at the pending's own expiry, so a card somebody walked
-   * away from cannot leave a request looping in main forever. Polling is not
-   * guessing and the registry does not count it against the five tries.
-   *
-   * A single long-running call rather than "ask me again in two seconds"
-   * because the thing being waited on is one event with one answer; a renderer
-   * that unmounts simply drops the promise, and the poll ends at the deadline.
-   */
-  async resumeWait(
+  /** And wait for the nod, on the two-second interval the site polls on. */
+  resumeWait(
     pending: string,
     options: { everyMs?: number; forMs?: number } = {},
   ): Promise<SignInAnswer<AccountSession>> {
-    const password = this.ladder.for(pending)
-    if (password === null) return { ok: false, reason: 'expired' }
-    const everyMs = options.everyMs ?? APPROVAL_POLL_MS
-    const until = this.now() + Math.min(options.forMs ?? LADDER_TTL_MS, LADDER_TTL_MS)
-    for (;;) {
-      const answer = await this.climb(pending, password, () =>
-        this.http(`${this.origin}/v2/sessions/${encodeURIComponent(pending)}`, { method: 'GET' }),
-        // 202 is "still waiting", which is neither a session nor a refusal.
-        202,
-      )
-      if (answer !== 'waiting') return answer
-      if (this.now() + everyMs >= until) return { ok: false, reason: 'expired' }
-      await new Promise((resolve) => setTimeout(resolve, everyMs))
-    }
-  }
-
-  /**
-   * One rung, sent and read: a session, a refusal, or (polling only) waiting.
-   *
-   * THE PASSWORD IS FORGOTTEN ON EVERY ENDING, success or otherwise, and that
-   * is the point of routing all three rungs through here. A ladder that ended
-   * while its password stayed in the map would be a secret kept for a
-   * conversation nobody can finish.
-   */
-  private async climb(
-    pending: string,
-    password: string,
-    send: () => Promise<Response>,
-    waitingStatus = -1,
-  ): Promise<SignInAnswer<AccountSession> | 'waiting'> {
-    let response: Response
-    try {
-      response = await send()
-    } catch {
-      // Not the end of the ladder: a Wi-Fi that dropped for one request is a
-      // retry, and the pending is still standing at the registry.
-      return { ok: false, reason: 'offline' }
-    }
-    if (response.status === waitingStatus) return 'waiting'
-    if (response.status === 429) return { ok: false, reason: 'rate_limited' }
-    const body = await bodyOf(response)
-    if (response.status === 201) {
-      this.ladder.forget(pending)
-      return this.landSession(password, body)
-    }
-    const refused = classify(response.status, body)
-    if (ladderIsOver(refused.reason)) this.ladder.forget(pending)
-    return plainRefusal(refused)
+    return waitForApproval(this.port(), pending, options)
   }
 
   /**
