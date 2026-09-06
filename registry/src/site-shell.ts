@@ -2,6 +2,7 @@ import type { ServerResponse } from 'node:http'
 import { ASSET_VERSION } from './assets-bundle'
 import { GITHUB_REPO, SITE_ORIGIN } from './site-content'
 import { jsonLd } from './site-seo'
+import { VOXEL_HAND_72 } from '../../src/shared/brand-hand'
 
 /**
  * THE SITE'S ONE SHELL — cookrew.dev in the app's own dress.
@@ -181,7 +182,9 @@ export function respondPage(response: ServerResponse, rendered: Page): void {
   response.end(payload)
 }
 
-const LOGO = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="20" height="20" fill="#14110a" stroke="currentColor" stroke-width="2"/><rect x="5" y="6" width="6" height="2" fill="#e9b949"/><rect x="5" y="10" width="10" height="2" fill="#e9b949"/><rect x="5" y="14" width="4" height="2" fill="#e9b949"/><rect x="11" y="14" width="2" height="2" fill="#ffd600"><animate attributeName="opacity" values="1;0;1" dur="1.1s" repeatCount="indefinite"/></rect></svg>`
+/* The mark is the voxel render of the hand, and it is the C of the word —
+   the same bytes the app's bar and the favicon draw (src/shared/brand-hand.ts). */
+const LOGO = `<img src="${VOXEL_HAND_72}" alt="" width="30" height="30">`
 
 /** The app's four fonts, from the bundle; `optional` because a font that arrives late must not shift the page — they are preloaded, so it rarely does. */
 const FONT_FACES = `
@@ -249,7 +252,7 @@ function shell(options: ShellOptions, main: string): string {
 <html lang="en"><head>${head(options)}${styles}<style>${FONT_FACES}${SITE_STYLE}${ACCOUNT_STYLE}</style>${scripts}</head>
 <body>
 <header class="hdr"><div class="wrap">
-<a class="mark" href="/">${LOGO}<span>COOK<b>REW</b></span></a>
+<a class="mark" href="/" aria-label="COOKREW">${LOGO}<span aria-hidden="true">OOK<b>REW</b></span></a>
 <span class="chip">an open-source spatial workspace for AI agents</span>
 <nav class="top">${nav}${account}</nav>
 </div></header>
@@ -281,7 +284,8 @@ a{color:inherit}
 .hdr .wrap{display:flex;align-items:center;gap:14px;min-height:56px;flex-wrap:wrap;padding-top:8px;padding-bottom:8px}
 @media (max-width:760px){.hdr .wrap>.chip{display:none}.hdr nav.top{margin-left:0;width:100%}}
 .mark{display:flex;align-items:center;gap:9px;text-decoration:none;font:700 15px var(--font-pixel);letter-spacing:.12em}
-.mark svg{width:24px;height:24px}
+.mark img{width:32px;height:32px;object-fit:contain;margin:-5px -4px -5px 0;filter:drop-shadow(2px 2px 0 var(--amber))}
+.mark span{text-shadow:2px 2px 0 var(--amber),3px 3px 0 var(--amber-deep)}
 .mark b{color:var(--amber-deep)}
 nav.top{display:flex;gap:6px;margin-left:auto;flex-wrap:wrap}
 .chip{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:uppercase;color:var(--ink);background:var(--cream-md);border:1.5px solid var(--line);padding:2px 6px;white-space:nowrap;display:inline-flex;align-items:center;gap:5px}
