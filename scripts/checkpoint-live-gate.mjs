@@ -1,11 +1,18 @@
 #!/usr/bin/env node
-// THE CHECKPOINT GATE. Three claims, printed separately, per Claude card.
+// THE CHECKPOINT GATE. Four claims, printed separately, per Claude card.
 //
 //   REACH   NO CHECKPOINT IS UNREACHABLE — every session id ever bound to the
 //           card is still in (binding ∪ lineage ∪ spill) and names a
 //           transcript that is on disk. FAIL means checkpoints the owner had
 //           can no longer be opened from the rail. This is the claim the
-//           20-entry lineage cap broke on 2026-09-06, silently.
+//           20-entry lineage cap broke on 2026-09-06, silently. An absent
+//           transcript only FAILS when something says it was ever written
+//           (checkpoint-gate-lib.mjs gathers that; transcriptEvidence judges
+//           it): the app MINTS a session id when it binds a fresh terminal,
+//           and Scout's placeholder — bound 11:34:19, replaced at 11:34:35,
+//           never written to — was being reported as sixteen seconds of lost
+//           history (2026-09-07). Ids like it are printed as `never written`,
+//           with the reason, and do not fail the run.
 //   LIVE    the card is bound to the session its pane's process reports, for
 //           cards whose pane agent can be IDENTIFIED. Anything else is
 //           UNKNOWN — see below.
@@ -51,12 +58,19 @@
 // ~/.cookrew and ~/.claude.
 
 import { execFileSync } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { resolvePaneAgent, withoutDescendantsOfPeers } from '../src/shared/pane-agent.mjs'
 import { flapVerdict, liveVerdict, marksVerdict, reachVerdict } from '../src/shared/checkpoint-gate.mjs'
-import { SPILL_DIR_NAME, parseSpill } from '../src/shared/lineage-spill-format.mjs'
+import { SPILL_DIR_NAME, unionLineage } from '../src/shared/lineage-spill-format.mjs'
+import {
+  compactionPredecessorsOf,
+  markIdentities,
+  rotationsOf,
+  spillOf,
+  streamEvidenceOf
+} from './checkpoint-gate-lib.mjs'
 
 const HOME = homedir()
 const SESSIONS = path.join(HOME, '.claude', 'sessions')
@@ -121,8 +135,32 @@ function processTable() {
   return { byTerminal, ppidOf: (pid) => parents.get(pid) ?? null }
 }
 
+/**
+ * Where claude keeps a card's transcripts — the REALPATH's slug.
+ *
+ * This gate had its own copy of the rule (`cwd.replace(/[/.]/g, '-')`, no
+ * realpath) and the copy had drifted from claude-fork.ts twice over: the app
+ * resolves the symlink first, because claude keys the directory by the path
+ * the agent process sees (macOS /tmp → /private/tmp, the R2 recover incident),
+ * and it slugs every non-alphanumeric character, not just dots and slashes.
+ * The five Playground cards live in /tmp, so the gate was looking in a
+ * directory that does not exist and reporting every one of their transcripts
+ * as absent — visible only once the evidence rule started asking whether the
+ * absent ones had ever been written, and the app's own index answered that it
+ * had read twenty-one blocks out of one of them.
+ *
+ * The .ts modules cannot be imported from a plain node script, so this is a
+ * restatement; it is kept character-for-character with claudeProjectSlug and
+ * realCwd, which are the authority.
+ */
 function projectDir(cwd) {
-  return path.join(PROJECTS, cwd.replace(/[/.]/g, '-'))
+  let real = cwd
+  try {
+    real = realpathSync(cwd)
+  } catch {
+    // A cwd that no longer exists is slugged as it was written.
+  }
+  return path.join(PROJECTS, real.replace(/[^a-zA-Z0-9-]/g, '-'))
 }
 
 function ageOf(file) {
@@ -150,113 +188,40 @@ function claudeNodes() {
   return nodes
 }
 
-/** The durable lineage record for a node — the copy that outlives the array. */
-function spillIdsOf(terminalId) {
-  try {
-    return parseSpill(readFileSync(path.join(SPILLS, `${terminalId}.json`), 'utf8'), terminalId).ids
-  } catch {
-    return []
-  }
-}
-
 /**
- * The identities a card's mark ledger holds, folded last-wins.
+ * WHAT THE GATE CAN SHOW FOR AN ID WHOSE TRANSCRIPT IS NOT ON DISK — the
+ * facts src/shared/checkpoint-gate.mjs judges, gathered per card.
  *
- * Only the KEYS are read: a mark's title is the owner's text and this gate
- * prints nothing but ids. A ledger that does not exist is not an absence of
- * marks to worry about — it is a card nobody has titled.
+ * `heldMs` is a CLOSED interval and nothing else: the spill's `boundAt` to the
+ * event log's rotation off it. An id still bound is never "held" evidence — a
+ * card can sit bound for days without ever booting, and reading its age as a
+ * hold would fail every dormant card on the canvas. A negative interval is no
+ * interval either: the durable record was introduced with a migration that
+ * stamped everything a node already carried at one instant, so an id whose
+ * rotation PREDATES its stamp was never dated at all (Forge's 699e207e:
+ * stamped 15:44:12.927Z, rotated away two hours earlier).
  */
-function markIdentities(terminalId) {
-  let text
-  try {
-    text = readFileSync(path.join(MARKS, `${terminalId}.jsonl`), 'utf8')
-  } catch {
-    return []
-  }
-  const lines = text.split('\n')
-  // A file not ending in a newline has a torn tail (marks.ts): drop it.
-  if (text.length > 0 && !text.endsWith('\n')) lines.pop()
-  const identities = new Set()
-  for (const line of lines) {
-    if (line.trim().length === 0) continue
-    try {
-      const parsed = JSON.parse(line)
-      if (typeof parsed?.identity === 'string') identities.add(parsed.identity)
-    } catch {
-      // a line this gate cannot read is a line it does not judge
+function factsGatherer({ spill, stream, predecessors, departed }) {
+  return (id) => {
+    const boundAt = Date.parse(spill.boundAt?.[id] ?? '')
+    const replacedAt = departed.get(id.slice(0, 8))
+    const dated = Number.isFinite(boundAt) && replacedAt !== undefined && replacedAt > boundAt
+    return {
+      inStreamIndex: stream?.files.has(id) === true,
+      namedByCompaction: predecessors.has(id) || stream?.predecessors.has(id) === true,
+      heldMs: dated ? replacedAt - boundAt : null
     }
   }
-  return [...identities]
 }
 
-/**
- * The identities the APP materialised for this card, or null when it has
- * materialised none yet. Null and empty are different facts: a card the app
- * has never opened has no answer, and reporting its marks as orphans would be
- * an alarm about the gate's own timing.
- */
-function streamIdentities(terminalId) {
-  let state
-  try {
-    state = JSON.parse(readFileSync(path.join(STREAM_STATE, `${terminalId}.json`), 'utf8'))
-  } catch {
-    return null
-  }
-  if (!Array.isArray(state?.index)) return null
-  return new Set(state.index.map((row) => row?.identity).filter((id) => typeof id === 'string'))
+/** An absent transcript with the sentence the pure rule wrote about it. */
+function said(absent) {
+  return `${absent.id.slice(0, 8)} (${absent.reason})`
 }
 
-/**
- * What the app itself recorded about this card's rotations.
- *
- * The event log is the INDEPENDENT witness both derived claims need: it was
- * written when the rotation happened, by the app, and it is not the structure
- * under test. It rotates (events.1.jsonl …), so its silence proves nothing —
- * only what it names is evidence.
- *
- * Two readings of the same `terminal.session-rotated` details ("<from> →
- * <to>"): the SET of 8-char ids ever bound (reach), and the ORDERED list of
- * destinations (flap — a destination that repeats is a card alternating).
- */
-function rotationsOf(nodes) {
-  const witnesses = new Map()
-  const hops = new Map()
-  for (const name of readdirSync(COOKREW).filter((n) => /^events(\.\d+)?\.jsonl$/.test(n))) {
-    let lines = []
-    try {
-      lines = readFileSync(path.join(COOKREW, name), 'utf8').split('\n')
-    } catch {
-      continue
-    }
-    for (const line of lines) {
-      if (!line.includes('session-rotated')) continue
-      let event
-      try {
-        event = JSON.parse(line)
-      } catch {
-        continue
-      }
-      if (!nodes.has(event.entityId)) continue
-      const ids = String(event.details ?? '').match(/[0-9a-f]{8}/g) ?? []
-      if (ids.length === 0) continue
-      witnesses.set(event.entityId, new Set([...(witnesses.get(event.entityId) ?? []), ...ids]))
-      hops.set(event.entityId, [
-        ...(hops.get(event.entityId) ?? []),
-        { at: Number(event.timestamp) || 0, to: ids[ids.length - 1] }
-      ])
-    }
-  }
-  // The rotated files are read after the live one, so order by the timestamp
-  // the app wrote rather than by the order the lines were gathered.
-  const destinations = new Map(
-    [...hops].map(([id, list]) => [id, [...list].sort((a, b) => a.at - b.at).map((h) => h.to)])
-  )
-  return { witnesses, destinations }
-}
-
-/** All three verdicts for one card. */
+/** All four verdicts for one card. */
 function rowFor({ workspace, node }, context) {
-  const { records, byTerminal, ppidOf, witnesses, destinations } = context
+  const { records, byTerminal, ppidOf, witnesses, destinations, departures } = context
   const holders = (byTerminal.get(node.id) ?? [])
     .map((pid) => records.get(pid))
     .filter((record) => record !== undefined)
@@ -267,17 +232,34 @@ function rowFor({ workspace, node }, context) {
   const bound = node.claudeSessionId ?? null
   const live = liveVerdict(bound, resolution)
   const dir = projectDir(node.cwd ?? '')
+  const spill = spillOf(SPILLS, node.id)
+  const lineage = node.sessionLineage ?? []
+  const hasTranscript = (id) => existsSync(path.join(dir, `${id}.jsonl`))
+  const stream = streamEvidenceOf(STREAM_STATE, node.id)
+  // Only files that ARE there can say anything about the ones that are not.
+  const readable = unionLineage(spill.ids, lineage, bound ? [bound] : [])
+    .filter(hasTranscript)
+    .map((id) => path.join(dir, `${id}.jsonl`))
   const reach = reachVerdict({
     bound,
-    lineage: node.sessionLineage ?? [],
-    spillIds: spillIdsOf(node.id),
+    lineage,
+    spillIds: spill.ids,
     everBound: [...(witnesses.get(node.id) ?? [])],
-    hasTranscript: (id) => existsSync(path.join(dir, `${id}.jsonl`))
+    hasTranscript,
+    factsFor: factsGatherer({
+      spill,
+      stream,
+      predecessors: compactionPredecessorsOf([...readable, ...(stream?.paths ?? [])]),
+      departed: departures.get(node.id) ?? new Map()
+    })
   })
   const flap = flapVerdict({ rotations: destinations.get(node.id) ?? [] })
   const marks = marksVerdict({
-    identities: markIdentities(node.id),
-    placed: streamIdentities(node.id)
+    identities: markIdentities(MARKS, node.id),
+    // Null and empty are different facts: a card the app has never opened has
+    // no answer, and reporting its marks as orphans would be an alarm about
+    // the gate's own timing.
+    placed: stream?.identities ?? null
   })
   return {
     reach: reach.verdict,
@@ -297,12 +279,8 @@ function rowFor({ workspace, node }, context) {
       live.detail,
       marks.detail,
       reach.missing.length ? `DROPPED FROM THE CHAIN: ${reach.missing.join(' ')}` : '',
-      reach.gone.length
-        ? `TRANSCRIPT GONE: ${reach.gone.map((id) => id.slice(0, 8)).join(' ')}`
-        : '',
-      reach.unwritten.length
-        ? `never written: ${reach.unwritten.map((id) => id.slice(0, 8)).join(' ')}`
-        : ''
+      reach.gone.length ? `TRANSCRIPT GONE: ${reach.gone.map(said).join(', ')}` : '',
+      reach.unwritten.length ? `never written: ${reach.unwritten.map(said).join(', ')}` : ''
     ]
       .filter(Boolean)
       .join('; ')
@@ -312,9 +290,12 @@ function rowFor({ workspace, node }, context) {
 const records = liveRecords()
 const { byTerminal, ppidOf } = processTable()
 const cards = claudeNodes()
-const { witnesses, destinations } = rotationsOf(new Set(cards.map(({ node }) => node.id)))
+const { witnesses, destinations, departures } = rotationsOf(
+  COOKREW,
+  new Set(cards.map(({ node }) => node.id))
+)
 const rows = cards.map((card) =>
-  rowFor(card, { records, byTerminal, ppidOf, witnesses, destinations })
+  rowFor(card, { records, byTerminal, ppidOf, witnesses, destinations, departures })
 )
 
 if (rows.length === 0) {
