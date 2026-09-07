@@ -15,7 +15,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { handleStreamLive } from '../src/main/stream-live'
+import { handleStreamLive, newestMarkAt, sinceParam } from '../src/main/stream-live'
 import { createStreamService } from '../src/main/stream-service'
 import { TraceReader } from '../src/main/trace'
 import { WorkspaceStore } from '../src/main/store'
@@ -71,6 +71,34 @@ function terminal(patch: Partial<TerminalNodeData>): TerminalNodeData {
   }
 }
 
+describe('?since= and the resume token', () => {
+  it('reads a finite reading, and refuses nonsense rather than replaying all', () => {
+    const at = (query: string): number | null =>
+      sinceParam(new URL(`http://x/api/terminal/t/stream/live${query}`))
+    expect(at('')).toBeNull()
+    expect(at('?since=')).toBeNull()
+    expect(at('?since=nope')).toBeNull()
+    expect(at('?since=-1')).toBeNull()
+    expect(at('?since=1757222400000')).toBe(1757222400000)
+    // `0` is a real reading and is honoured; an UNPARSEABLE one is not, so a
+    // typo cannot ask for the whole ledger by accident.
+    expect(at('?since=0')).toBe(0)
+  })
+
+  it('newestMarkAt is the ledger’s high-water reading, 0 when empty', () => {
+    expect(newestMarkAt(new Map())).toBe(0)
+    expect(
+      newestMarkAt(
+        new Map([
+          ['u1', { identity: 'u1', at: 10, title: 'a' }],
+          ['u2', { identity: 'u2', at: 40 }],
+          ['u3', { identity: 'u3', at: Number.NaN }]
+        ])
+      )
+    ).toBe(40)
+  })
+})
+
 describe('GET /stream/live', () => {
   const cleanup: Array<() => void> = []
   afterEach(() => {
@@ -111,13 +139,14 @@ describe('GET /stream/live', () => {
   /** Open the live route and collect frames until `until` is satisfied. */
   async function open(
     service: ReturnType<typeof bed>['service'],
-    options: { pollMs: number; heartbeatMs: number }
+    options: { pollMs: number; heartbeatMs: number; since?: number }
   ) {
     const server = http.createServer((request, response) => {
       handleStreamLive(request, response, 't-live', 'file', {
         stream: service,
         pollMs: options.pollMs,
-        heartbeatMs: options.heartbeatMs
+        heartbeatMs: options.heartbeatMs,
+        ...(options.since !== undefined ? { since: options.since } : {})
       })
     })
     cleanup.push(() => server.close())
@@ -228,10 +257,12 @@ describe('GET /stream/live', () => {
 
     writeMark('t-live', { identity: 'u1', title: 'ran the suite' }, { dir: marksDir })
     const titled = await live.until((f) => f.some((frame) => frame.event === 'mark'))
-    expect(titled.find((frame) => frame.event === 'mark')?.data).toEqual({
+    // `at` rides along as the resume token a reconnect echoes back as ?since=.
+    expect(titled.find((frame) => frame.event === 'mark')?.data).toMatchObject({
       identity: 'u1',
       mark: { title: 'ran the suite' }
     })
+    expect(typeof titled.find((frame) => frame.event === 'mark')?.data.at).toBe('number')
 
     writeMark('t-live', { identity: 'u1', title: null }, { dir: marksDir })
     const cleared = await live.until(
@@ -268,6 +299,68 @@ describe('GET /stream/live', () => {
     // Appended, not re-derived: a subscriber hears about each rewind once.
     await new Promise((resolve) => setTimeout(resolve, 300))
     expect(live.frames().filter((frame) => frame.event === 'rollback')).toHaveLength(1)
+  })
+
+  // NO MARK BACKLOG ON CONNECT (T5 QA, 2026-09-07). The open pass used to emit
+  // one `mark` frame per identity the ledger held — 498 frames in two seconds
+  // on the owner's busiest card, once per focused card per client, for facts
+  // /stream/open had already answered with.
+  describe('the connect backlog', () => {
+    /** A ledger with `count` titled checkpoints, written before anyone opens. */
+    const titled = (marksDir: string, count: number): void => {
+      for (let n = 1; n <= count; n += 1) {
+        writeMark('t-live', { identity: `u${n}`, title: `turn ${n}` }, { dir: marksDir })
+      }
+    }
+
+    it('sends hello and tail on connect, and NOT one frame per mark', async () => {
+      const { service, marksDir } = bed([prompt('u1', 'ask', T0)])
+      titled(marksDir, 40)
+      const live = await open(service, { pollMs: 20, heartbeatMs: 10_000 })
+      const frames = await live.until((f) => f.some((frame) => frame.event === 'tail'))
+      expect(frames.map((frame) => frame.event)).toEqual(['hello', 'tail'])
+      // …and it stays that way: a quiet ledger never produces a late backlog.
+      await new Promise((resolve) => setTimeout(resolve, 120))
+      expect(live.frames().filter((frame) => frame.event === 'mark')).toHaveLength(0)
+    })
+
+    it('hello carries marksAt — the reading a reconnect echoes back', async () => {
+      const { service, marksDir } = bed([prompt('u1', 'ask', T0)])
+      titled(marksDir, 3)
+      const live = await open(service, { pollMs: 20, heartbeatMs: 10_000 })
+      const frames = await live.until((f) => f.length > 0)
+      expect(typeof frames[0].data.marksAt).toBe('number')
+      expect(frames[0].data.marksAt as number).toBeGreaterThan(0)
+    })
+
+    it('a mark written AFTER connect still arrives, exactly once', async () => {
+      const { service, marksDir } = bed([prompt('u1', 'ask', T0)])
+      titled(marksDir, 12)
+      const live = await open(service, { pollMs: 20, heartbeatMs: 10_000 })
+      await live.until((f) => f.some((frame) => frame.event === 'tail'))
+
+      writeMark('t-live', { identity: 'u1', title: 'landed late' }, { dir: marksDir })
+      const seen = await live.until((f) => f.some((frame) => frame.event === 'mark'))
+      const marks = seen.filter((frame) => frame.event === 'mark')
+      expect(marks).toHaveLength(1)
+      expect(marks[0].data).toMatchObject({ identity: 'u1', mark: { title: 'landed late' } })
+      await new Promise((resolve) => setTimeout(resolve, 120))
+      expect(live.frames().filter((frame) => frame.event === 'mark')).toHaveLength(1)
+    })
+
+    it('?since= replays the outage’s marks and nothing older', async () => {
+      const { service, marksDir } = bed([prompt('u1', 'ask', T0)])
+      writeMark('t-live', { identity: 'u1', title: 'before' }, { dir: marksDir })
+      const cut = Date.now()
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      writeMark('t-live', { identity: 'u2', title: 'after' }, { dir: marksDir })
+
+      const live = await open(service, { pollMs: 20, heartbeatMs: 10_000, since: cut })
+      const frames = await live.until((f) => f.some((frame) => frame.event === 'mark'))
+      const marks = frames.filter((frame) => frame.event === 'mark')
+      expect(marks).toHaveLength(1)
+      expect(marks[0].data).toMatchObject({ identity: 'u2', mark: { title: 'after' } })
+    })
   })
 
   it('stops polling when the subscriber goes away', async () => {
