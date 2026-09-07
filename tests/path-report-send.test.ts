@@ -96,10 +96,46 @@ describe('one POST per race', () => {
     const tell = reporterOn(sent, clock)
     expect(await tell(report())).toBe(true)
     clock.ms = PATH_REPORT_MIN_GAP_MS - 1
-    expect(await tell(report())).toBe(false)
+    expect(await tell(report({ plane: 'LAN' }))).toBe(false)
     clock.ms = PATH_REPORT_MIN_GAP_MS
-    expect(await tell(report())).toBe(true)
+    expect(await tell(report({ plane: 'LAN' }))).toBe(true)
     expect(sent).toHaveLength(2)
+  })
+
+  it('drops a race identical to the one before it, however much later', async () => {
+    // A phone denied the local network runs the same race every minute for as
+    // long as it is on that Wi-Fi. Reporting each one would write 1,440
+    // identical lines a day to the desktop's console and fill a twenty-deep
+    // buffer with twenty copies of one fact.
+    const sent: PathReport[] = []
+    const clock = { ms: 0 }
+    const tell = reporterOn(sent, clock)
+    expect(await tell(report({ at: 1 }))).toBe(true)
+    clock.ms = 60_000
+    expect(await tell(report({ at: 2 }))).toBe(false)
+    clock.ms = 120_000
+    expect(await tell(report({ at: 3, permission: 'granted' }))).toBe(true)
+    expect(sent).toHaveLength(2)
+  })
+
+  it('offers an undelivered report again, rather than deduplicating it away', async () => {
+    // A refused post is not a report the desktop has; remembering it as one
+    // would lose the very race the owner is trying to look at.
+    const clock = { ms: 0 }
+    let refuse = true
+    const sent: PathReport[] = []
+    const tell = createPathReporter({
+      post: async (one) => {
+        if (refuse) throw new Error('503')
+        sent.push(one)
+      },
+      now: () => clock.ms
+    })
+    expect(await tell(report())).toBe(false)
+    refuse = false
+    clock.ms = 60_000
+    expect(await tell(report())).toBe(true)
+    expect(sent).toHaveLength(1)
   })
 
   it('never queues one behind a post that is hanging', async () => {

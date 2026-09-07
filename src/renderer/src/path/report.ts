@@ -16,7 +16,7 @@ import type { PathAttempt } from '../path-attempts'
  *
  * ONE POST PER RACE, AND NOT ONE MORE. A race already happens at most once a
  * minute, so the guards here are not a rate limit in the usual sense — they
- * exist because a diagnostic must never become traffic. Two of them:
+ * exist because a diagnostic must never become traffic. Three of them:
  *
  *   NOTHING WHILE ONE IS IN FLIGHT. On a phone that has just lost the LAN, the
  *   post itself can be the request that hangs; a second race arriving on the
@@ -24,6 +24,12 @@ import type { PathAttempt } from '../path-attempts'
  *
  *   A FLOOR UNDER THE GAP. Pressing ALLOW starts a race beside the timer's, and
  *   the two describe the same moment. The second is dropped.
+ *
+ *   AND THE SAME RACE, AGAIN, IS NOT NEWS. A phone whose browser has been
+ *   denied the local network runs an identical race every minute for as long as
+ *   it is on that Wi-Fi. Reporting each one would write 1,440 identical lines a
+ *   day to the desktop's console and fill a twenty-deep buffer with twenty
+ *   copies of one fact. Only the moment it CHANGES is worth a post.
  *
  * A FAILED REPORT IS NOT AN INCIDENT. It runs on the same plane that is
  * already in trouble; the whole point of it is to describe a path that does not
@@ -59,7 +65,17 @@ export interface PathReporterDeps {
 }
 
 /**
- * A reporter with its two guards, as a value.
+ * What makes one race DIFFERENT from the one before it.
+ *
+ * Everything except the clock: the same candidates ending the same way under
+ * the same permission is the same fact, however many minutes later it is
+ * observed again.
+ */
+const signatureOf = (report: PathReport): string =>
+  JSON.stringify([report.plane, report.permission, report.browser, report.attempts])
+
+/**
+ * A reporter with its three guards, as a value.
  *
  * Returns whether the report was SENT, so a test can assert "once per race"
  * rather than counting requests through a stubbed network.
@@ -71,15 +87,21 @@ export const createPathReporter = (
   const gap = deps.minGapMs ?? PATH_REPORT_MIN_GAP_MS
   let inFlight = false
   let lastAt: number | null = null
+  let lastSignature: string | null = null
 
   return async (report: PathReport): Promise<boolean> => {
     if (inFlight) return false
     const at = now()
     if (lastAt !== null && at - lastAt < gap) return false
+    const signature = signatureOf(report)
+    if (signature === lastSignature) return false
     inFlight = true
     lastAt = at
     try {
       await deps.post(report)
+      // Remembered only once it landed, so a report the desktop never received
+      // is offered again by the next race rather than deduplicated away.
+      lastSignature = signature
       return true
     } catch (error) {
       // The plane this went over is the one being complained about. Saying so
