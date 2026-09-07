@@ -389,3 +389,114 @@ describe('createStreamReader — the derived index over real files', () => {
     rmSync(path.dirname(dir), { recursive: true, force: true })
   })
 })
+
+/**
+ * REPLAY FROM THE CURSOR, NOT FROM THE START OF THE CHAIN (D6, T5 QA
+ * 2026-09-07).
+ *
+ * Every read re-walked the whole lineage — nine transcripts on the owner's
+ * busiest card — although the persisted snapshot already held every checkpoint
+ * in the eight behind the cursor. The preconditions are strict and the READER
+ * checks them, so the fast path can only ever be an optimisation of the answer
+ * the slow path would have given.
+ */
+describe('createStreamReader — resuming from the cursor', () => {
+  const lines = chainLines()
+  const files = { 's1.jsonl': lines.s1, 's2.jsonl': lines.s2, 's3.jsonl': lines.s3 }
+  const chain = [
+    { sessionId: 's1', file: 's1.jsonl' },
+    { sessionId: 's2', file: 's2.jsonl' },
+    { sessionId: 's3', file: 's3.jsonl' }
+  ]
+
+  /** A reader over the three-file chain, counting every document it reads. */
+  function counted(exists: (file: string) => boolean = () => true) {
+    const read: string[] = []
+    const documentOf = documentOver(files)
+    const reader = createStreamReader({
+      chainOf: chainOf(chain),
+      documentOf: async (file) => {
+        read.push(file)
+        return documentOf(file)
+      },
+      exists
+    })
+    return { reader, read: () => read }
+  }
+
+  const holdsAll = { cursorFile: 's3.jsonl', holds: () => true }
+
+  it('reads the cursor’s file alone when the caller holds the rest', async () => {
+    const { reader, read } = counted()
+    const result = await reader.lines('t1', holdsAll)
+    expect(read()).toEqual(['s3.jsonl'])
+    expect(result.resumed).toBe(true)
+    // Every chain member is still NAMED — a cursor is addressed against a
+    // file, and one that vanished from the answer could not be repaired.
+    expect(result.files.map((entry) => entry.file)).toEqual([
+      's1.jsonl',
+      's2.jsonl',
+      's3.jsonl'
+    ])
+    expect(result.lines.map((line) => line.entry?.identity)).toEqual(['u5'])
+  })
+
+  it('refuses when the cursor is not the chain’s newest transcript', async () => {
+    const { reader, read } = counted()
+    const result = await reader.lines('t1', { cursorFile: 's2.jsonl', holds: () => true })
+    expect(read()).toEqual(['s1.jsonl', 's2.jsonl', 's3.jsonl'])
+    expect(result.resumed).toBeUndefined()
+    expect(result.lines).toHaveLength(5)
+  })
+
+  it('refuses when a member in front of the cursor is not held', async () => {
+    const { reader, read } = counted()
+    const result = await reader.lines('t1', {
+      cursorFile: 's3.jsonl',
+      holds: (file) => file !== 's1.jsonl'
+    })
+    expect(read()).toEqual(['s1.jsonl', 's2.jsonl', 's3.jsonl'])
+    expect(result.resumed).toBeUndefined()
+  })
+
+  it('still reports a skipped member whose transcript has been deleted', async () => {
+    const { reader, read } = counted((file) => file !== 's1.jsonl')
+    const result = await reader.lines('t1', holdsAll)
+    expect(read()).toEqual(['s3.jsonl'])
+    expect(result.missing).toEqual([
+      { sessionId: 's1', file: 's1.jsonl', reason: 'no-transcript' }
+    ])
+  })
+
+  it('the tail takes its chain-wide ordinal from the materialised index', async () => {
+    const { reader, read } = counted()
+    const tail = await reader.tail('t1', {
+      resume: holdsAll,
+      ordinalOf: (identity) => (identity === 'u5' ? 5 : undefined)
+    })
+    expect(read()).toEqual(['s3.jsonl'])
+    expect(tail.block?.id).toBe('u5')
+    // A suffix walk numbers itself from 1; the index says 5, and the index is
+    // the record that saw the whole chain.
+    expect(tail.block?.ordinal).toBe(5)
+  })
+
+  it('pays for the full walk rather than publishing a half-chain number', async () => {
+    const { reader, read } = counted()
+    const tail = await reader.tail('t1', { resume: holdsAll, ordinalOf: () => undefined })
+    // The suffix is read, the index cannot place it, and the reader falls back.
+    expect(read()).toEqual(['s3.jsonl', 's1.jsonl', 's2.jsonl', 's3.jsonl'])
+    expect(tail.block?.ordinal).toBe(5)
+  })
+
+  it('a resumed tail agrees with an unresumed one, block for block', async () => {
+    const { reader } = counted()
+    const full = await reader.tail('t1')
+    const resumed = await reader.tail('t1', {
+      resume: holdsAll,
+      ordinalOf: (identity) => (identity === 'u5' ? 5 : undefined)
+    })
+    expect(resumed.block).toEqual(full.block)
+    expect(resumed.open).toBe(full.open)
+  })
+})

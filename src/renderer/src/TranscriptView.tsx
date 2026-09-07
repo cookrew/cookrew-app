@@ -184,9 +184,17 @@ export const TranscriptView = forwardRef<
 
   // The current identity space + loaded set, mirrored to refs so the scroll and
   // scrub callbacks (bound once) always read the latest without re-binding.
-  const loadedMap = new Map(blocks.map((b) => [b.index, b]))
-  const loadedSet = new Set(blocks.map((b) => b.index))
-  const spaceIds = transcriptIdentitySpace(identities, blocks)
+  //
+  // MEMOISED (D6, T5 QA 2026-09-07). These three were rebuilt on EVERY render —
+  // a Set, a Map and a sorted 1,048-element array — and the overlay re-renders
+  // on every scroll frame, every tail tick and every rail hover. They change
+  // only when the identity space or the loaded window does.
+  const loadedMap = useMemo(() => new Map(blocks.map((b) => [b.index, b])), [blocks])
+  const loadedSet = useMemo(() => new Set(blocks.map((b) => b.index)), [blocks])
+  const spaceIds = useMemo(
+    () => transcriptIdentitySpace(identities, blocks),
+    [identities, blocks]
+  )
   const loadedSetRef = useRef(loadedSet)
   loadedSetRef.current = loadedSet
   const spaceIdsRef = useRef(spaceIds)
@@ -195,6 +203,28 @@ export const TranscriptView = forwardRef<
   // and must read the CURRENT blocks, not the ones closed over at creation.
   const blocksRef = useRef(blocks)
   blocksRef.current = blocks
+
+  /**
+   * ONE ref callback PER IDENTITY, kept (D6, T5 QA 2026-09-07).
+   *
+   * The row list used to build an inline `ref={(node) => …}` per row per
+   * render, and React treats a new callback identity as a ref that changed:
+   * every render detached and reattached ALL of them — 2,096 callback
+   * invocations and 2,096 Map writes on a 1,048-row card, on a component that
+   * re-renders on every scroll frame. The closure is per identity and stable,
+   * so a re-render moves no refs at all.
+   */
+  const rowRefs = useRef<Map<number, (node: HTMLDivElement | null) => void>>(new Map())
+  const rowRef = (id: number): ((node: HTMLDivElement | null) => void) => {
+    const held = rowRefs.current.get(id)
+    if (held !== undefined) return held
+    const made = (node: HTMLDivElement | null): void => {
+      if (node) blockRefs.current.set(id, node)
+      else blockRefs.current.delete(id)
+    }
+    rowRefs.current.set(id, made)
+    return made
+  }
 
   // True while a finger is down (item 2b): a smooth scrollIntoView is canceled by
   // the touch gesture mid-flight, so jumps snap instantly while touching.
@@ -601,13 +631,32 @@ export const TranscriptView = forwardRef<
   useEffect(() => {
     const el = scrollRef.current
     if (!el || typeof ResizeObserver !== 'function') return
-    const stick = (): void => {
+    const apply = (): void => {
       // REPLAY NEVER MOVES THE VIEW. Growth the reader did not ask for may
       // re-stick the bottom; a page they scrolled to may not.
       if (!mayFireSideEffects(renderSourceRef.current)) return
       if (shouldStick(pinnedRef.current, el.scrollTop, el.scrollHeight, el.clientHeight)) {
         el.scrollTop = el.scrollHeight
       }
+    }
+    /**
+     * ONE STICK PER FRAME (D6, T5 QA 2026-09-07).
+     *
+     * Every row in the scroller is observed, so one estimate refinement —
+     * which rewrites the inline height of every PLACEHOLDER — used to call
+     * this 1,048 times, and each call reads `scrollHeight` and `clientHeight`,
+     * forcing a synchronous layout. That is the shape of the freeze the
+     * companion tab showed with the busiest card's overlay open. Coalescing to
+     * a frame keeps the behaviour (the bottom is still stuck after the batch)
+     * and costs one layout instead of a thousand.
+     */
+    let frame: number | null = null
+    const stick = (): void => {
+      if (frame !== null) return
+      frame = requestAnimationFrame(() => {
+        frame = null
+        apply()
+      })
     }
     const ro = new ResizeObserver(stick)
     for (const child of Array.from(el.children)) ro.observe(child)
@@ -624,6 +673,7 @@ export const TranscriptView = forwardRef<
     })
     mo.observe(el, { childList: true })
     return () => {
+      if (frame !== null) cancelAnimationFrame(frame)
       mo.disconnect()
       ro.disconnect()
     }
@@ -645,10 +695,7 @@ export const TranscriptView = forwardRef<
             }
             data-checkpoint={id}
             style={block ? undefined : { height: estHeight }}
-            ref={(node) => {
-              if (node) blockRefs.current.set(id, node)
-              else blockRefs.current.delete(id)
-            }}
+            ref={rowRef(id)}
           >
             {block ? (
               <>

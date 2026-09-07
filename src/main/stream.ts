@@ -111,6 +111,53 @@ export interface StreamLinesResult {
    *  addressed against a file and not against a record. */
   files: { file: string; bytesRead: number }[]
   missing: MissingStreamFile[]
+  /** The walk skipped the chain members in front of the cursor's file — see
+   *  StreamResume. Absent means every transcript in the chain was read. */
+  resumed?: true
+}
+
+/**
+ * REPLAY FROM THE CURSOR, NOT FROM THE START OF THE CHAIN (D6, T5 QA
+ * 2026-09-07).
+ *
+ * THE DEFECT. Every read re-walked the whole lineage — nine transcripts on the
+ * owner's busiest card — even though `~/.cookrew/stream/<id>.json` already held
+ * every checkpoint in the eight behind the cursor. After a restart that is
+ * hundreds of megabytes parsed to answer a question the persisted snapshot had
+ * already answered, and it is what put /stream/open past a 30 s client timeout.
+ *
+ * THE PRECONDITIONS ARE STRICT, and the reader checks them itself rather than
+ * trusting the caller, because a wrong skip renumbers a card's whole history:
+ *
+ *   1. `cursorFile` must be the chain's LAST transcript. The cursor normally
+ *      is there; when it is not, the chain has grown behind it and that case
+ *      is a rebuild (stream-authority.ts), never a splice.
+ *   2. The caller must already HOLD every chain member in front of it. A file
+ *      whose checkpoints are not in the snapshot has to be read, or its
+ *      exchanges vanish from the rail.
+ *
+ * Either failing, the walk is the full one and `resumed` is absent — so the
+ * fast path can only ever be an optimisation of an answer the slow path would
+ * have given. Skipped members are still EXISTENCE-checked, so a predecessor
+ * deleted since the last pass is still reported as missing.
+ */
+export interface StreamResume {
+  cursorFile: string
+  holds: (file: string) => boolean
+}
+
+/** What `tail` may be told about a chain it did not fully walk. */
+export interface StreamTailOptions {
+  resume?: StreamResume
+  /**
+   * The chain-wide ordinal for an identity, from the materialised index.
+   *
+   * A resumed walk numbers its own suffix from 1 — it never saw the records in
+   * front of it — so the ordinal has to come from the record that did. An
+   * identity this cannot answer falls back to the FULL walk rather than to a
+   * number derived from a partial one.
+   */
+  ordinalOf?: (identity: string) => number | undefined
 }
 
 export interface StreamBlocksRequest {
@@ -175,9 +222,9 @@ export interface StreamTailResult {
 
 export interface StreamReader {
   index(terminalId: string): Promise<StreamIndexResult>
-  lines(terminalId: string): Promise<StreamLinesResult>
+  lines(terminalId: string, resume?: StreamResume): Promise<StreamLinesResult>
   blocks(terminalId: string, request?: StreamBlocksRequest): Promise<StreamBlocksResult>
-  tail(terminalId: string): Promise<StreamTailResult>
+  tail(terminalId: string, options?: StreamTailOptions): Promise<StreamTailResult>
 }
 
 /** One chain member as loaded: its blocks, and the light entries over them. */
@@ -237,9 +284,26 @@ export function createStreamReader(deps: StreamReaderDeps): StreamReader {
     return entries
   }
 
+  /**
+   * The first chain member that must actually be READ, given a resume request.
+   *
+   * Zero — read everything — unless BOTH preconditions in StreamResume hold.
+   * The check lives here because only the reader knows the chain's order.
+   */
+  const resumeFrom = (chain: StreamChain, resume: StreamResume | undefined): number => {
+    if (resume === undefined || chain.files.length === 0) return 0
+    const at = chain.files.length - 1
+    if (chain.files[at].file !== resume.cursorFile) return 0
+    for (let before = 0; before < at; before += 1) {
+      if (!resume.holds(chain.files[before].file)) return 0
+    }
+    return at
+  }
+
   const load = async (
-    terminalId: string
-  ): Promise<{ files: LoadedFile[]; missing: MissingStreamFile[] }> => {
+    terminalId: string,
+    resume?: StreamResume
+  ): Promise<{ files: LoadedFile[]; missing: MissingStreamFile[]; resumed: boolean }> => {
     let chain: StreamChain
     try {
       chain = await deps.chainOf(terminalId)
@@ -254,12 +318,37 @@ export function createStreamReader(deps: StreamReaderDeps): StreamReader {
             file: '',
             reason: 'unreadable'
           }
-        ]
+        ],
+        resumed: false
       }
     }
     const missing = [...chain.missing]
     const files: LoadedFile[] = []
-    for (const ref of chain.files) {
+    const from = resumeFrom(chain, resume)
+    for (const [at, ref] of chain.files.entries()) {
+      if (at < from) {
+        // NOT READ. The caller holds this member's checkpoints already, and
+        // its ordinals are pinned by the snapshot they live in. It still has
+        // to EXIST, or a predecessor deleted since the last pass would be
+        // reported as present by a walk that never looked.
+        if (!exists(ref.file)) {
+          missing.push({ sessionId: ref.sessionId, file: ref.file, reason: 'no-transcript' })
+          continue
+        }
+        files.push({
+          file: ref.file,
+          sessionId: ref.sessionId,
+          blocks: [],
+          entries: [],
+          bytesRead: 0,
+          declared: ref.declared === true,
+          // No clock, so placeUndeclared leaves it exactly where the chain put
+          // it — and, because every skipped member has none, the parsed tail
+          // cannot be spliced in front of one either.
+          startedAt: null
+        })
+        continue
+      }
       let document: TraceDocument
       try {
         document = await deps.documentOf(ref.file, ref.kind)
@@ -285,14 +374,20 @@ export function createStreamReader(deps: StreamReaderDeps): StreamReader {
           : {})
       })
     }
-    return { files: placeUndeclared(files), missing }
+    return { files: placeUndeclared(files), missing, resumed: from > 0 }
   }
 
   const walkOf = async (
-    terminalId: string
-  ): Promise<{ files: LoadedFile[]; positions: StreamPosition[]; missing: MissingStreamFile[] }> => {
-    const { files, missing } = await load(terminalId)
-    return { files, positions: streamPositionsOf(files), missing }
+    terminalId: string,
+    resume?: StreamResume
+  ): Promise<{
+    files: LoadedFile[]
+    positions: StreamPosition[]
+    missing: MissingStreamFile[]
+    resumed: boolean
+  }> => {
+    const { files, missing, resumed } = await load(terminalId, resume)
+    return { files, positions: streamPositionsOf(files), missing, resumed }
   }
 
   /**
@@ -306,10 +401,16 @@ export function createStreamReader(deps: StreamReaderDeps): StreamReader {
    * position is in the NEWEST file that holds the exchange.
    */
   const positionsOf = async (
-    terminalId: string
-  ): Promise<{ files: LoadedFile[]; positions: StreamPosition[]; missing: MissingStreamFile[] }> => {
-    const { files, positions, missing } = await walkOf(terminalId)
-    return { files, positions: collapseByIdentity(positions).positions, missing }
+    terminalId: string,
+    resume?: StreamResume
+  ): Promise<{
+    files: LoadedFile[]
+    positions: StreamPosition[]
+    missing: MissingStreamFile[]
+    resumed: boolean
+  }> => {
+    const { files, positions, missing, resumed } = await walkOf(terminalId, resume)
+    return { files, positions: collapseByIdentity(positions).positions, missing, resumed }
   }
 
   const blockAt = (files: readonly LoadedFile[], position: StreamPosition): StreamBlock => {
@@ -339,12 +440,13 @@ export function createStreamReader(deps: StreamReaderDeps): StreamReader {
       return { entries: positions.map((position) => position.entry), missing }
     },
 
-    async lines(terminalId) {
+    async lines(terminalId, resume) {
       // THE RAW WALK, repeats included: the projection is the layer that
       // records which files hold an exchange, and it cannot record a copy it
       // was never shown.
-      const { files, positions, missing } = await walkOf(terminalId)
+      const { files, positions, missing, resumed } = await walkOf(terminalId, resume)
       return {
+        ...(resumed ? { resumed: true as const } : {}),
         lines: positions.map((position) => ({
           file: position.entry.file,
           byteOffset: files[position.fileAt].bytesRead,
@@ -383,10 +485,24 @@ export function createStreamReader(deps: StreamReaderDeps): StreamReader {
       return { blocks: window(0, limit), total, missing }
     },
 
-    async tail(terminalId) {
-      const { files, positions, missing } = await positionsOf(terminalId)
-      const last = positions[positions.length - 1]
+    async tail(terminalId, options = {}) {
+      let { files, positions, missing, resumed } = await positionsOf(terminalId, options.resume)
+      let last = positions[positions.length - 1]
+      // A RESUMED WALK NUMBERS ITS OWN SUFFIX FROM 1. The chain-wide ordinal
+      // comes from the materialised index; an identity it cannot answer means
+      // the two records disagree about what the tail is, and the honest
+      // response is to pay for the full walk rather than publish a number
+      // derived from half a chain.
+      const known =
+        last === undefined ? undefined : options.ordinalOf?.(last.entry.identity)
+      if (resumed && (last === undefined || known === undefined)) {
+        ;({ files, positions, missing, resumed } = await positionsOf(terminalId))
+        last = positions[positions.length - 1]
+      }
       if (last === undefined) return { block: null, open: false, missing }
+      if (resumed && known !== undefined) {
+        last = { ...last, entry: { ...last.entry, ordinal: known } }
+      }
       const block = blockAt(files, last)
       // THE SPAN IS ONLY CLAIMED WHEN IT IS THIS BLOCK'S. `tailBlockBytes`
       // describes a FILE's last block; the stream's tail is normally the same

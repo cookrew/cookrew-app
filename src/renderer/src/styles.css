@@ -5465,7 +5465,16 @@ body.cookrew-mobile .cr-dock .voice-ghost {
    2026-08-27): a 355-checkpoint session mounts 355 identity divs, and every
    estimate refinement relaid ALL of them out at DPR3 — the wedge that fed
    the iOS jetsam kill. Offscreen blocks now cost nothing to lay out or
-   paint; the intrinsic size keeps scroll geometry and scrollIntoView exact. */
+   paint; the intrinsic size keeps scroll geometry and scrollIntoView exact.
+
+   MOBILE ONLY, AND IT STAYS THAT WAY (7894903, "render heavy transcripts on
+   desktop", + the permanent guard in tests/transcript-paint-scope.test.ts).
+   Unscoped, this rule BLANKED the desktop transcript. D6 of the T5 QA
+   2026-09-07 tried to widen it for the 1,048-row card that froze the
+   companion tab and put it straight back: the desktop's share of that cost is
+   bounded in TranscriptView instead — memoised identity space, one stable ref
+   callback per row, and a stick pass coalesced to a frame — none of which
+   depends on an engine feature that has already been reverted once here. */
 body.cookrew-mobile .ctx-block,
 body.cookrew-mobile .ctx-placeholder {
   content-visibility: auto;

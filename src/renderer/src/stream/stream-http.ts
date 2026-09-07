@@ -116,10 +116,18 @@ export function createHttpStreamTransport(): StreamTransport {
  *  own EventSource retry is ~3 s; this replaces it (see subscribe). */
 const RECONNECT_MS = 3000
 
-/** The live URL, carrying the newest mark reading this client already holds. */
-export function liveUrl(terminalId: string, since: number | null): string {
+/**
+ * The live PATH, carrying the newest mark reading this client already holds.
+ *
+ * Deliberately WITHOUT the token: `tokenParam` is applied at the `new
+ * EventSource(...)` call site so tests/api-base.test.ts's sweep can see it
+ * there. A token added inside a helper is the exact blind spot that sweep
+ * exists for — and a stream opened without one is a 401 the browser retries
+ * forever while the rail simply never fills.
+ */
+export function liveHref(terminalId: string, since: number | null): string {
   const path = base(terminalId, '/live')
-  return tokenParam(since === null ? path : `${path}?since=${encodeURIComponent(String(since))}`)
+  return since === null ? path : `${path}?since=${encodeURIComponent(String(since))}`
 }
 
 /**
@@ -161,7 +169,7 @@ function subscribe(terminalId: string, handlers: StreamLiveHandlers): () => void
   const connect = (): void => {
     if (stopped) return
     try {
-      source = new EventSource(liveUrl(terminalId, since))
+      source = new EventSource(tokenParam(liveHref(terminalId, since)))
     } catch (error) {
       handlers.onState('off')
       handlers.onError(error instanceof Error ? error.message : String(error))

@@ -129,7 +129,36 @@ export const LATENCY = {
   // dominates it; the STRUCTURAL half is the real gate — one pass, one state
   // write, 1,000 rows, ordinals 1..1000 in order, zero anomalies — and no
   // machine can be quick enough to fake that.
-  streamIndex1000: { p50: 2, p95: 5, p98: 6 }
+  streamIndex1000: { p50: 2, p95: 5, p98: 6 },
+
+  // ---- One stream, D6 (T5 QA 2026-09-07): what /stream/open actually costs
+  // streamIndex1000 measures the PROJECTION with its lines already in hand —
+  // it never reads a file. /stream/open's real cost is the WALK in front of
+  // it, and that walk went unmeasured until the route exceeded a 30 s client
+  // timeout on the owner's busiest card (9 transcripts, 1,048 exchanges).
+  //
+  // COLD is the honest floor: a card opening after a restart parses every
+  // transcript in its chain, and nothing can make that free. WARM is the one
+  // the defect is about — the same card opened again, off the persisted
+  // snapshot, reading one document instead of nine.
+  //
+  // Calibrated on the 9-file / 1,048-block / 13.3 MB fixture, 2026-09-07, at
+  // load 3.8 per core — so these are already loaded-machine numbers.
+  //
+  //   BEFORE  cold p50 60.5 / p95 78.7 ms · warm p50 68.3 / p95 127.1 ms,
+  //           27 document reads for one open (nine files, three walks). The
+  //           warm path was SLOWER than the cold one: the persisted snapshot
+  //           was read, folded and then thrown at a walk that re-derived it.
+  //   AFTER   cold p50 44.9 / p95 51.1 ms · warm p50 7.4 / p95 9.9 ms,
+  //           2 document reads — one for the index walk, one for the tail's,
+  //           each touching the cursor's file alone.
+  //
+  // Budgets at ~3-4x, because at these magnitudes GC noise dominates. The
+  // STRUCTURAL half is the real gate: 1,048 rows and exactly two document
+  // reads on the warm path, which no machine can be quick enough to fake.
+  // The owner's real chain is ~30x these bytes; the ratio is what transfers.
+  streamOpenCold1048: { p50: 150, p95: 200, p98: 250 },
+  streamOpenWarm1048: { p50: 30, p95: 45, p98: 60 }
 } as const
 
 export const MEMORY = {

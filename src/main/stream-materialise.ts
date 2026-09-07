@@ -57,7 +57,7 @@ import {
 } from './stream-authority'
 import type { IdentityCollision } from '../shared/stream-replay'
 import type { MissingStreamFile } from './stream-chain'
-import type { StreamLinesResult } from './stream'
+import type { StreamLinesResult, StreamResume } from './stream'
 import type { RollbackMark, StreamState, StreamStateResult } from './stream-state'
 
 export interface MaterialisedIndex {
@@ -72,7 +72,7 @@ export interface MaterialisedIndex {
 }
 
 export interface StreamIndexStoreDeps {
-  lines: (terminalId: string) => Promise<StreamLinesResult>
+  lines: (terminalId: string, resume?: StreamResume) => Promise<StreamLinesResult>
   readState: (terminalId: string) => StreamState
   writeState: (terminalId: string, state: StreamState) => StreamStateResult
   now?: () => number
@@ -130,13 +130,18 @@ function evidenceOf(
 ): AuthorityEvidence {
   const positions = filePositions(read)
   const cursorAt = positions.get(state.cursor.file)
-  const behind = read.lines.some(
-    (line) =>
-      cursorAt !== undefined &&
-      (positions.get(line.file) ?? 0) < cursorAt &&
-      line.entry !== undefined &&
-      !snapshot.has(checkpointKey(line.entry))
-  )
+  // A RESUMED WALK CANNOT SEE BEHIND ITSELF, and does not need to: the reader
+  // only skips a prefix it was told the snapshot already holds, which is the
+  // negation of this evidence (D6, T5 QA 2026-09-07).
+  const behind =
+    read.resumed !== true &&
+    read.lines.some(
+      (line) =>
+        cursorAt !== undefined &&
+        (positions.get(line.file) ?? 0) < cursorAt &&
+        line.entry !== undefined &&
+        !snapshot.has(checkpointKey(line.entry))
+    )
   return {
     cursorFileBytes: read.files.find((entry) => entry.file === state.cursor.file)?.bytesRead ?? null,
     tailFile: read.files[read.files.length - 1]?.file ?? null,
@@ -259,9 +264,13 @@ export function createStreamIndexStore(deps: StreamIndexStoreDeps): StreamIndexS
 
   return {
     async materialise(terminalId) {
-      const read = await deps.lines(terminalId)
+      // THE STATE IS READ FIRST, so the walk can be asked to start at the
+      // cursor (D6, T5 QA 2026-09-07). The reader enforces the preconditions
+      // itself and answers with the full walk whenever they do not hold, so
+      // this can only ever be an optimisation of the same answer.
       const stored = deps.readState(terminalId)
       const before = snapshotOf(stored.index)
+      const read = await deps.lines(terminalId, resumeOf(stored, before))
       const { state: repaired, repairs } = repairStreamState(
         stored,
         evidenceOf(stored, read, before)
@@ -296,6 +305,30 @@ export function createStreamIndexStore(deps: StreamIndexStoreDeps): StreamIndexS
       }
     }
   }
+}
+
+/**
+ * What this pass may skip re-reading — the persisted snapshot, as a resume
+ * request (D6, T5 QA 2026-09-07).
+ *
+ * A card with no cursor and no rows has nothing to resume FROM, and asks for
+ * the whole chain. Everything else is decided by the reader, which is the only
+ * layer that knows the chain's order: this only says "here is where I was, and
+ * here is what I already hold". `holds` is answered from `occurrences`, which
+ * records every transcript a checkpoint was read out of — so a member whose
+ * exchanges were only ever seen as replays in a LATER file still counts as
+ * held, which is exactly what it means for the snapshot to cover it.
+ */
+function resumeOf(
+  state: StreamState,
+  snapshot: ReadonlyMap<string, ProjectedCheckpoint>
+): StreamResume | undefined {
+  if (state.cursor.file.length === 0 || snapshot.size === 0) return undefined
+  const held = new Set<string>()
+  for (const row of snapshot.values()) {
+    for (const one of row.occurrences) held.add(one.file)
+  }
+  return { cursorFile: state.cursor.file, holds: (file) => held.has(file) }
 }
 
 /** The rewind pass: a shrunk cursor file, turned into an appended fact. */
