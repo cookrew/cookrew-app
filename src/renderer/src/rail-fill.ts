@@ -1,4 +1,5 @@
-import type { CheckpointRow } from './transcript'
+import { railAnchorTop } from './transcript'
+import type { CheckpointRow } from './stream/stream-rows'
 
 /**
  * Laying the reveal across the WHOLE range, T1 at the top to LIVE at the bottom.
@@ -144,6 +145,30 @@ export function fillRows(
     .map((i) => ({ row: rows[i], fraction: i / rows.length }))
     .filter((entry) => entry.row.index !== focusedIndex)
   return [...laid, live]
+}
+
+/**
+ * F6 — THE HERE-MARKER AND THE FOCUSED ROW SIT ON THE SAME Y. ALWAYS.
+ *
+ * This gate has regressed before, and it regressed each time the same way:
+ * two places computed a `top`, they agreed for the states anybody looked at,
+ * and then a new state made them disagree by a pixel. So the two tops are
+ * produced HERE, by one function, from ONE fraction — the marker cannot drift
+ * from the tab because there is nothing for it to drift from.
+ *
+ * `focus` is null only when nothing is focused (the live tail), which is
+ * exactly when no tab is rendered. Every other state — a focused row at
+ * either end of the bar, a rolled-back row, a single-row rail — returns two
+ * identical strings, and tests/stream-f6-alignment.test.ts asserts that over
+ * every state the stream reducer can produce.
+ */
+export function railAnchors(
+  focusedFrac: number | null,
+  liveFrac: number
+): { marker: string; focus: string | null } {
+  if (focusedFrac === null) return { marker: railAnchorTop(liveFrac), focus: null }
+  const top = railAnchorTop(focusedFrac)
+  return { marker: top, focus: top }
 }
 
 /** Half a version pin's height — .cr-ckpt-pin is 13px, centred on its anchor. */
