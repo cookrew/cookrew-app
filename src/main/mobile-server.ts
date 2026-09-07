@@ -50,6 +50,7 @@ import { enrichStateWithGit, handleMobileApi, MobileApiDeps, MobileOps, type Ser
 import type { LoopHealthSnapshot } from './loop-health'
 import { holdSocketsOpen, pairingAuthorized, readJson, respondJson, tokenAccepted } from './mobile-http'
 import { handleCallRoutes, type CallEndpointDeps } from './call-endpoints'
+import { handlePathReportRoutes } from './path-report-routes'
 import { createTlsPortGate, httpsRedirectTarget } from './tls-port-gate'
 import { sendBody } from './http-compress'
 import { rendererSourceFor, staleBuildNotice } from './renderer-choice'
@@ -1191,6 +1192,26 @@ export async function handle(
   // property that made the read hole findable in the first place.
   if (request.method === 'GET' && url.pathname === '/api/browser/capabilities') {
     respondJson(response, 200, { interactive: deps.interactiveBrowserEnabled() })
+    return
+  }
+
+  /**
+   * WHAT THE PHONE FOUND WHEN IT TRIED TO REACH THIS MAC.
+   *
+   * Beside /api/reach and gated the same way — below handleMobileApi, so the
+   * POST has already been challenged for the pairing (or an admitted phone's
+   * own) token and the GET for at least the read-only one. The device is the
+   * one the BRIDGE named, never one the body claims: `bridgeDevice` was taken
+   * off the request above and cannot be set by the caller.
+   *
+   * It exists because the alternative was a photograph of a phone screen. See
+   * path-reports.ts.
+   */
+  if (
+    await handlePathReportRoutes(request, response, url, {
+      device: { deviceId: bridgeDevice?.deviceId ?? null, ...(bridgeDevice?.name ? { name: bridgeDevice.name } : {}) }
+    })
+  ) {
     return
   }
 
