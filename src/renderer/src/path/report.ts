@@ -16,7 +16,18 @@ import type { PathAttempt } from '../path-attempts'
  *
  * ONE POST PER RACE, AND NOT ONE MORE. A race already happens at most once a
  * minute, so the guards here are not a rate limit in the usual sense — they
- * exist because a diagnostic must never become traffic. Three of them:
+ * exist because a diagnostic must never become traffic. Four of them:
+ *
+ *   A RACE THAT TRIED NOTHING IS NOT A RACE. Under permission 'prompt' the
+ *   timer's race may not raise a dialog, so every local candidate is filtered
+ *   out and the switcher deliberately reports ZERO rows — the panel must not
+ *   describe a network the phone may no longer be on. Posting that told the Mac
+ *   nothing and cost the owner everything: on 2026-09-08 /api/path/reports held
+ *   two reports from Chrome 152 with an empty `attempts` array while the panel
+ *   on that browser was showing `192.168.2.40:8643 refused by the browser
+ *   before connecting — 32 ms`. The empty ones had CLAIMED THE FLOOR below, so
+ *   the ALLOW-press race that found the row landed inside the gap and was
+ *   dropped. An empty report is now refused before any other guard is touched.
  *
  *   NOTHING WHILE ONE IS IN FLIGHT. On a phone that has just lost the LAN, the
  *   post itself can be the request that hangs; a second race arriving on the
@@ -94,6 +105,9 @@ export const createPathReporter = (
   let lastSignature: string | null = null
 
   return async (report: PathReport): Promise<boolean> => {
+    // FIRST, AND WITHOUT TOUCHING ANYTHING. A report with no rows describes no
+    // race, and its only observable effect was to suppress the report that did.
+    if (report.attempts.length === 0) return false
     if (inFlight) return false
     const at = now()
     if (lastAt !== null && at - lastAt < gap) return false
