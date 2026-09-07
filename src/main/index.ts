@@ -217,7 +217,8 @@ import { DoorWatch } from './door-watch'
 import { doorNameOf, transcriptSourceFor } from './transcript-source'
 import { readJson, respondJson } from './mobile-http'
 import { deriveSlug, uniqueSlug } from './workspace-slug'
-import { hostname, networkInterfaces } from 'node:os'
+import { hostname } from 'node:os'
+import { publishedLocalAddresses } from './local-interfaces'
 import { wireServing, type Serving } from './session-serving'
 import { servedTemplateFile } from './served-persist'
 import { bootWorkspaceInPlace } from './session-boot'
@@ -920,9 +921,10 @@ function servedReach(slug: string): { address: string; transport: ServeTransport
   if (magic) {
     return { address: `https://${magic}:${MOBILE_HTTPS_PORT}/${slug}`, transport: 'tailnet' }
   }
-  const lan = Object.values(networkInterfaces())
-    .flatMap((list) => list ?? [])
-    .find((net) => net.family === 'IPv4' && !net.internal)?.address
+  // The first PUBLISHED address, not the first the OS listed: on a Mac with a
+  // container runtime the OS's first answer can be a host-only bridge, and a
+  // served door's address is a URL an owner sends to someone else.
+  const [lan] = publishedLocalAddresses()
   return { address: `http://${lan ?? '127.0.0.1'}:${MOBILE_PORT}/${slug}`, transport: 'lan' }
 }
 

@@ -3,6 +3,7 @@ import { renderMobileHelp, renderRotated } from '../src/main/mobile-cli-text'
 import { mobileEndpoints } from '../src/main/mobile-endpoints'
 import type { TailnetIdentity } from '../src/main/tailscale'
 import type { PairingHandout } from '../src/shared/account-v2'
+import { BRIDGE_ADDRESSES, REAL_ADDRESS, publishedFive } from './support/five-interfaces'
 
 const TAILNET: TailnetIdentity = {
   ips: ['100.101.102.103'],
@@ -250,6 +251,40 @@ describe('the pairing URL', () => {
       tailnet: true
     })
     expect(text).not.toContain('/relay/@')
+  })
+})
+
+/**
+ * Five addresses, four bridges (2026-09-08). `cookrew mobile` printed five URLs
+ * under "Same Wi-Fi as this Mac" and four of them were host-only networks — an
+ * owner reading that list had a one-in-five chance of picking the one that
+ * works, and no way to tell which.
+ */
+describe('the five-interface Mac, as `cookrew mobile` prints it', () => {
+  const printed = (env?: Record<string, string>): string =>
+    renderMobileHelp({
+      endpoints: mobileEndpoints({
+        addresses: publishedFive(env),
+        tailnet: null,
+        secure: true,
+        token: 'tok'
+      }),
+      secure: true,
+      uncovered: [],
+      tailnet: false
+    })
+
+  it('prints one Wi-Fi URL, not five', () => {
+    const text = printed()
+    expect(text).toContain(`https://${REAL_ADDRESS}:8643/?token=tok`)
+    for (const bridge of BRIDGE_ADDRESSES) expect(text).not.toContain(bridge)
+    const wifi = text.split('\n').filter((line) => line.includes(':8643'))
+    expect(wifi).toHaveLength(1)
+  })
+
+  it('prints all five again under COOKREW_PUBLISH_INTERFACES=all', () => {
+    const text = printed({ COOKREW_PUBLISH_INTERFACES: 'all' })
+    for (const bridge of BRIDGE_ADDRESSES) expect(text).toContain(bridge)
   })
 })
 

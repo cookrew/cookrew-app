@@ -14,9 +14,11 @@ import {
   type ReachPublisherDeps,
   type SignedReach
 } from '../src/main/reach'
+import { mobileEndpoints } from '../src/main/mobile-endpoints'
 import { canonicalJson } from '../src/shared/canonical-json'
 import { canonicalJson as registryCanonicalJson, readReach, reachHostKind } from '../registry/src/v2-reach'
 import { fakeAccount, tempBase } from './support/idv2'
+import { BRIDGE_ADDRESSES, REAL_ADDRESS, publishedFive } from './support/five-interfaces'
 
 const AT = 1_800_000_000_000
 const FP = 'a'.repeat(64)
@@ -116,6 +118,28 @@ describe('the reach card', () => {
       at: AT
     })
     expect(card.tailnet).toEqual({ url: 'https://mac.tail1.ts.net:8643', certFp: FP })
+  })
+
+  /**
+   * Five addresses, four bridges (2026-09-08). The card carried all five, the
+   * registry answered a DNS record for each, and the phone raced four host-only
+   * networks it could never reach before it got to the Wi-Fi.
+   */
+  it('carries ONE lan address for the five-interface Mac', () => {
+    const card = reachCard({
+      deviceId: 'd1',
+      endpoints: mobileEndpoints({
+        addresses: publishedFive(),
+        tailnet: null,
+        secure: true,
+        token: 'SECRET'
+      }),
+      certFp: FP,
+      relay: false,
+      at: AT
+    })
+    expect(card.lan).toEqual([{ url: `https://${REAL_ADDRESS}:8643`, certFp: FP }])
+    for (const bridge of BRIDGE_ADDRESSES) expect(JSON.stringify(card)).not.toContain(bridge)
   })
 
   it('classifies a tailnet host even when the endpoint kind does not say so', () => {

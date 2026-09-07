@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { X509Certificate } from 'node:crypto'
 import { canonicalHost, certPlan, ensureCert, missingHosts, sansOf } from '../src/main/cert'
+import { endpointCertHosts, mobileEndpoints } from '../src/main/mobile-endpoints'
+import { BRIDGE_ADDRESSES, REAL_ADDRESS, publishedFive } from './support/five-interfaces'
 
 /**
  * A cert generated before Tailscale was installed. This is the real failure:
@@ -116,6 +118,26 @@ describe('certPlan — the cert may not forget the tailnet', () => {
       ips: ['192.168.2.13'],
       dnsNames: []
     })
+  })
+
+  /**
+   * Five addresses, four bridges (2026-09-08). The bridges reached the SAN list
+   * and came and going with every container the runtime started, so the cert
+   * was reissued for a network no phone was ever sent to — and every reissue
+   * made each paired device accept a new self-signed cert again.
+   *
+   * The plan itself is UNCHANGED for the real set: same requested hosts, same
+   * tailnet retention, one fewer source of churn.
+   */
+  it('plans the same cert for the five-interface Mac as for its one real address', () => {
+    const asked = endpointCertHosts(
+      mobileEndpoints({ addresses: publishedFive(), tailnet: null, secure: true, token: null })
+    )
+    expect(asked).toEqual({ ips: [REAL_ADDRESS], dnsNames: [] })
+    const plan = certPlan(TAILNET_SANS, asked)
+    expect(plan.ips).toEqual([REAL_ADDRESS, '100.101.102.103', 'fd7a:115c:a1e0::5401:51a4'])
+    expect(plan.dnsNames).toEqual(['workbench.example-tailnet.ts.net'])
+    for (const bridge of BRIDGE_ADDRESSES) expect(plan.ips).not.toContain(bridge)
   })
 })
 

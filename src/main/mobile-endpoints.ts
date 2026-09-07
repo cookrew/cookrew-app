@@ -45,7 +45,14 @@ export interface MobileEndpoint {
 }
 
 export interface EndpointInput {
-  /** Non-internal addresses from os.networkInterfaces(). */
+  /**
+   * The addresses this Mac may publish — `local-interfaces.ts ·
+   * publishedLocalAddresses()`, which is the real interfaces only, en* first.
+   * Bare strings by the time they arrive here, so the classification below is
+   * about the ADDRESS; whether the INTERFACE was a VM bridge was decided
+   * upstream, where its name still existed (five addresses, four bridges,
+   * 2026-09-08).
+   */
   addresses: string[]
   tailnet: TailnetIdentity | null
   /** True once the HTTPS listener is up. */
