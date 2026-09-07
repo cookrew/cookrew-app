@@ -31,6 +31,32 @@ export const LOCAL_NETWORK_COPY = {
 } as const
 
 /**
+ * THE ONE CASE WHERE THE ANSWER IS "LEAVE THIS PAGE", IN WORDS.
+ *
+ * LOCAL_NETWORK_COPY above names a switch the reader can flip. On iOS Safari
+ * there is no switch: Apple never asks for the permission and never lists the
+ * site under Settings → Privacy → Local Network, so every probe from
+ * cookrew.dev times out for ever (QA 2026-09-08). "Staying on the relay, you
+ * can allow local network access in the browser's site settings" is therefore
+ * not merely unhelpful there — it sends somebody hunting for a control that
+ * does not exist, which is the same failure as the sentence it replaced.
+ *
+ * SO THE SENTENCE NAMES THE BROWSER AND THE SENTENCE ENDS IN A COLON, because
+ * the only thing after it is the one button that fixes it. The buttons are
+ * sentence case here and uppercased by .cr-btn, like every other button on
+ * this bar; the reader sees OPEN ON WI-FI.
+ */
+export const DIRECT_OFFER_COPY = {
+  why:
+    'Safari on iPhone cannot reach your Mac from this page — Apple never asks it for local-network permission. Open the Mac directly on Wi-Fi instead:',
+  lan: 'Open on Wi-Fi',
+  tailnet: 'Open on tailnet',
+  /** On the landed page, once. The old URL is gone from the bar; say it works. */
+  landed: 'Opened directly on Wi-Fi. cookrew.dev/… still works from anywhere.',
+  dismiss: 'Dismiss'
+} as const
+
+/**
  * WHAT HAPPENED TO ONE CANDIDATE, in words a reader can act on.
  *
  * Deliberately not error strings. "Failed to fetch" is the same message for a

@@ -84,6 +84,30 @@ export const TOKEN_PARAM = 'token'
 export const PAIR_PARAM = 'pair'
 
 /**
+ * `?from=relay` — the marker the OPEN ON WI-FI button writes, and the only
+ * value of `from` this client claims.
+ *
+ * It exists because the phone that pressed that button did not type this
+ * address and can no longer see the one it knows, so the landed page owes it
+ * one sentence (path/direct-offer.ts). The VALUE is checked rather than the
+ * key: `from` is a generic enough name to belong to somebody else's link, and
+ * silently rewriting a stranger's query string is not this module's business.
+ */
+export const FROM_PARAM = 'from'
+export const FROM_RELAY = 'relay'
+
+/** Did this page arrive from the relay by way of that one navigation? */
+export const landedFromRelay = (search: string): boolean => {
+  if (!search) return false
+  try {
+    return new URLSearchParams(search).get(FROM_PARAM) === FROM_RELAY
+  } catch {
+    // Runs on the boot path, before anything is on screen to report it.
+    return false
+  }
+}
+
+/**
  * A fragment, split into the router-ish prefix and its parameters.
  *
  * Both `#pair=` and `#/pair=` are accepted because both are things a human
@@ -131,14 +155,22 @@ export const stripPairFragment = (hash: string): string => {
  * Null rather than the unchanged href on purpose: the caller writes a history
  * entry with it, and replacing the state of a page that was already clean is a
  * pointless mutation of the user's history on every single boot.
+ *
+ * `from=relay` GOES WITH THE TOKEN, in the same pass, for a related reason.
+ * It is not a credential, but it is a one-time fact about how this page was
+ * reached; left in the bar it would survive every reload and turn a one-line
+ * note into a permanent banner. One scrub, one history entry, both facts gone
+ * — and the note has already read it (landed-note.ts) by the time this runs.
  */
 export const scrubPairingFromUrl = (href: string): string | null => {
   try {
     const url = new URL(href)
     const hadToken = url.searchParams.has(TOKEN_PARAM)
+    const hadFrom = url.searchParams.get(FROM_PARAM) === FROM_RELAY
     const nextHash = stripPairFragment(url.hash)
-    if (!hadToken && nextHash === url.hash) return null
+    if (!hadToken && !hadFrom && nextHash === url.hash) return null
     url.searchParams.delete(TOKEN_PARAM)
+    if (hadFrom) url.searchParams.delete(FROM_PARAM)
     url.hash = nextHash
     return url.toString()
   } catch {
