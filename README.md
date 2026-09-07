@@ -1,3 +1,5 @@
+<p align="center"><img src="resources/icon.png" width="128" alt="Cookrew — the C hand"></p>
+
 # Cookrew
 
 An open-source spatial workspace for AI agents — the desktop half of Cookrew, the multiplayer kitchen for humans & agents.

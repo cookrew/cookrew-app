@@ -15,6 +15,7 @@ import {
 } from './site-content'
 import { commitsSection, compareTable, featuresGrid } from './site-features'
 import { faqPage, organization, softwareApplication, teamList, webPage } from './site-seo'
+import { BRAND_LOCKUP_CSS, BRAND_LOCKUP_HTML } from './site-brand'
 
 /**
  * THE FRONT PAGE — one page, top to bottom (owner ruling, 2026-09-06).
@@ -201,7 +202,8 @@ export function homePage(input: HomeInput): Page {
     },
     `<div class="wrap home">
 <div class="home-body">
-<div class="hero"><div class="wrap">
+<style>${BRAND_LOCKUP_CSS}</style>
+<div class="hero">${BRAND_LOCKUP_HTML}<div class="wrap">
 <div><span class="tagline">OPEN SOURCE · ${FACTS.harnesses.slice(0, 4).join(' · ').toUpperCase()}</span>
 <h1>${esc(HEADLINE)}</h1>
 <p class="lede">${esc(ONE_LINE)} Every turn is a checkpoint. Serve a team at a cookrew.dev address and anyone can open it.</p>

@@ -97,7 +97,9 @@ export function Header({
             <CrLogoMark />
           </button>
         )}
-        <span className="cr-logo">COOKREW</span>
+        {/* THE WORDMARK IS INSIDE THE MARK NOW. The lockup spells COOKREW itself, so the text
+            only stays where the badge has replaced the mark: on the phone. */}
+        {isRemoteMode() && <span className="cr-logo">COOKREW</span>}
         {/* IDENTITY LIVES IN THE BRAND GROUP (D1), right after the wordmark and
             at the mark's own 24 px, so the group stays one line. */}
         {avatar}

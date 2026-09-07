@@ -181,7 +181,8 @@ export function respondPage(response: ServerResponse, rendered: Page): void {
   response.end(payload)
 }
 
-const LOGO = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="20" height="20" fill="#14110a" stroke="currentColor" stroke-width="2"/><rect x="5" y="6" width="6" height="2" fill="#e9b949"/><rect x="5" y="10" width="10" height="2" fill="#e9b949"/><rect x="5" y="14" width="4" height="2" fill="#e9b949"/><rect x="11" y="14" width="2" height="2" fill="#ffd600"><animate attributeName="opacity" values="1;0;1" dur="1.1s" repeatCount="indefinite"/></rect></svg>`
+/** The header mark: the brand's C hand on a dark tile, amber through the mesh's alpha. */
+const LOGO = `<span class="mark-c" aria-hidden="true"><i></i></span>`
 
 /** The app's four fonts, from the bundle; `optional` because a font that arrives late must not shift the page — they are preloaded, so it rarely does. */
 const FONT_FACES = `
@@ -281,7 +282,7 @@ a{color:inherit}
 .hdr .wrap{display:flex;align-items:center;gap:14px;min-height:56px;flex-wrap:wrap;padding-top:8px;padding-bottom:8px}
 @media (max-width:760px){.hdr .wrap>.chip{display:none}.hdr nav.top{margin-left:0;width:100%}}
 .mark{display:flex;align-items:center;gap:9px;text-decoration:none;font:700 15px var(--font-pixel);letter-spacing:.12em}
-.mark svg{width:24px;height:24px}
+.mark-c{width:26px;height:26px;border-radius:6px;background:#14110a;display:grid;place-items:center;flex:0 0 auto}.mark-c i{display:block;width:21px;height:17px;background:linear-gradient(160deg,#e9b949,#ffd77a 60%,#fff3ad);-webkit-mask:url(/assets/c-hand.png?v=${ASSET_VERSION}) center/contain no-repeat;mask:url(/assets/c-hand.png?v=${ASSET_VERSION}) center/contain no-repeat;-webkit-mask-mode:alpha;mask-mode:alpha}
 .mark b{color:var(--amber-deep)}
 nav.top{display:flex;gap:6px;margin-left:auto;flex-wrap:wrap}
 .chip{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:uppercase;color:var(--ink);background:var(--cream-md);border:1.5px solid var(--line);padding:2px 6px;white-space:nowrap;display:inline-flex;align-items:center;gap:5px}

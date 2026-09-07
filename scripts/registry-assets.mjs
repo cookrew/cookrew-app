@@ -29,7 +29,9 @@ const FILES = [
   ['jetbrains-mono.woff2', 'fonts/jetbrains-mono.woff2', 'font/woff2', 'base64'],
   ['silkscreen-400.woff2', 'fonts/silkscreen-400.woff2', 'font/woff2', 'base64'],
   ['silkscreen-700.woff2', 'fonts/silkscreen-700.woff2', 'font/woff2', 'base64'],
-  ['vt323-400.woff2', 'fonts/vt323-400.woff2', 'font/woff2', 'base64']
+  ['vt323-400.woff2', 'fonts/vt323-400.woff2', 'font/woff2', 'base64'],
+  // the brand's C hand: a mesh render with alpha; pages colour it through a CSS mask
+  ['c-hand.png', 'site/c-hand.png', 'image/png', 'base64']
 ]
 
 const entries = FILES.map(([name, file, type, encoding]) => {

@@ -145,10 +145,20 @@ body,
 }
 
 .cr-logo-mark {
-  width: 24px;
-  height: 24px;
+  height: 28px;
+  padding: 0 9px;
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  background: #14110a;
+  border-radius: 7px;
+}
+
+.cr-logo-mark img {
   display: block;
+  height: 19px;
+  width: auto;
+  -webkit-user-drag: none;
 }
 
 .cr-logo {
