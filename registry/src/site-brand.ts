@@ -34,7 +34,7 @@ export const BRAND_LOCKUP_CSS = `
 .lk .cb rect{fill:var(--c1)}.lk .cb .tt{animation:lk-tether 6s cubic-bezier(.5,0,.5,1) infinite}.lk .cb .wp{animation:lk-wport 6s cubic-bezier(.5,0,.5,1) infinite}
 .lk .cb .sig{fill:var(--pupil);stroke:var(--c1);stroke-width:1.4;offset-rotate:0deg;offset-path:path("M 46 120 C 46 176 46 176 100 176 L 150 176 C 199 176 199 176 199 91");animation:sigslow 2.6s ease-in-out infinite;opacity:0}
 .lk.static .cb{display:none}.lk.static *{animation:none !important}.lk.static .l{opacity:1}.lk.static .w{transform:translateX(2.88em)}
-
+.lk .t{top:-.076em}
 @keyframes lk-spin{to{transform:rotate(360deg)}}
 @keyframes lk-gaze{0%,6%{transform:translate(0,0)}10%,46%{transform:translate(11px,4px)}50%,62%{transform:translate(15px,0)}66%,84%{transform:translate(-3px,5px)}90%,100%{transform:translate(0,0)}}
 @keyframes lk-blink{0%,55%{transform:scaleY(0)}56%,57%{transform:scaleY(1)}58%,95%{transform:scaleY(0)}96%,97%{transform:scaleY(1)}98%,100%{transform:scaleY(0)}}
