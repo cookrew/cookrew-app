@@ -2,8 +2,9 @@
 // eyes, K R E in Silkscreen and the W drawn as an inset-outline glyph. CSS only — the site's pages
 // carry no script. Two eight-second motions take turns: the tank types and shoots, then the
 // pac-man types and eats; both run all the time and visibility alternates every eight seconds so
-// each is in phase when it shows. Generated from the design page (docs/design/coo-tank.html);
-// edit there and regenerate rather than by hand.
+// each is in phase when it shows. The eyes keep their own motion (iris spin, gaze, blink).
+// Generated from the design page (docs/design/coo-tank.html); edit there and regenerate rather
+// than by hand.
 import { ASSET_VERSION } from './assets-bundle'
 
 export const BRAND_LOCKUP_CSS = `
@@ -30,6 +31,19 @@ export const BRAND_LOCKUP_CSS = `
 .lk .cb rect{fill:var(--c1)}.lk .cb .tt{animation:lk-tether 6s cubic-bezier(.5,0,.5,1) infinite}.lk .cb .wp{animation:lk-wport 6s cubic-bezier(.5,0,.5,1) infinite}
 .lk .cb .sig{fill:var(--pupil);stroke:var(--c1);stroke-width:1.4;offset-rotate:0deg;offset-path:path("M 46 120 C 46 176 46 176 100 176 L 150 176 C 199 176 199 176 199 91");animation:sigslow 2.6s ease-in-out infinite;opacity:0}
 .lk.static .cb{display:none}.lk.static *{animation:none !important}.lk.static .l{opacity:1}.lk.static .w{transform:translateX(2.88em)}
+
+@keyframes lk-spin{to{transform:rotate(360deg)}}
+@keyframes lk-gaze{0%,6%{transform:translate(0,0)}10%,46%{transform:translate(11px,4px)}50%,62%{transform:translate(15px,0)}66%,84%{transform:translate(-3px,5px)}90%,100%{transform:translate(0,0)}}
+@keyframes lk-blink{0%,55%{transform:scaleY(0)}56%,57%{transform:scaleY(1)}58%,95%{transform:scaleY(0)}96%,97%{transform:scaleY(1)}98%,100%{transform:scaleY(0)}}
+@keyframes lk-lidline{0%,55%{opacity:0}56%,57%{opacity:1}58%,95%{opacity:0}96%,97%{opacity:1}98%,100%{opacity:0}}
+@keyframes lk-k{0%,7%{opacity:0}8%,83%{opacity:1}84%,100%{opacity:0}}
+@keyframes lk-r{0%,20%{opacity:0}21%,77%{opacity:1}78%,100%{opacity:0}}
+@keyframes lk-e{0%,33%{opacity:0}34%,71%{opacity:1}72%,100%{opacity:0}}
+@keyframes lk-w{0%,47%{opacity:0}48%,65%{opacity:1}66%,100%{opacity:0}}
+@keyframes lk-crab{0%,6%{transform:translate(0,0) scaleX(-1)}7%{transform:translate(0,-.14em) scaleX(-1)}9%{transform:translate(0,0) scaleX(-1)}13%,19%{transform:translate(.96em,0) scaleX(-1)}20%{transform:translate(.96em,-.14em) scaleX(-1)}22%{transform:translate(.96em,0) scaleX(-1)}26%,32%{transform:translate(1.92em,0) scaleX(-1)}33%{transform:translate(1.92em,-.14em) scaleX(-1)}35%{transform:translate(1.92em,0) scaleX(-1)}39%,46%{transform:translate(2.88em,0) scaleX(-1)}47%{transform:translate(2.88em,-.14em) scaleX(-1)}49%,64%{transform:translate(2.88em,0) scaleX(-1)}65%{transform:translate(2.88em,-.14em) scaleX(-1)}67%,70%{transform:translate(2.88em,0) scaleX(-1)}71%{transform:translate(1.92em,-.14em) scaleX(-1)}73%,76%{transform:translate(1.92em,0) scaleX(-1)}77%{transform:translate(.96em,-.14em) scaleX(-1)}79%,82%{transform:translate(.96em,0) scaleX(-1)}83%{transform:translate(0,-.14em) scaleX(-1)}85%,100%{transform:translate(0,0) scaleX(-1)}}
+@keyframes lk-tether{0%,7%{d:path("M 291 91 C 291 176 291 176 340 176 L 372 176 C 404 176 404 176 404 104")}8%,20%{d:path("M 291 91 C 291 176 291 176 340 176 L 468 176 C 500 176 500 176 500 104")}21%,33%{d:path("M 291 91 C 291 176 291 176 340 176 L 564 176 C 596 176 596 176 596 104")}34%,71%{d:path("M 291 91 C 291 176 291 176 340 176 L 660 176 C 692 176 692 176 692 104")}72%,77%{d:path("M 291 91 C 291 176 291 176 340 176 L 564 176 C 596 176 596 176 596 104")}78%,83%{d:path("M 291 91 C 291 176 291 176 340 176 L 468 176 C 500 176 500 176 500 104")}84%,100%{d:path("M 291 91 C 291 176 291 176 340 176 L 372 176 C 404 176 404 176 404 104")}}
+@keyframes lk-wport{0%,7%{transform:translateX(0)}8%,20%{transform:translateX(96px)}21%,33%{transform:translateX(192px)}34%,71%{transform:translateX(288px)}72%,77%{transform:translateX(192px)}78%,83%{transform:translateX(96px)}84%,100%{transform:translateX(0)}}
+@keyframes sigslow{0%{offset-distance:0%;opacity:0}8%{opacity:1}46%{offset-distance:100%;opacity:1}50%,100%{offset-distance:100%;opacity:0}}
 .lk .w .wg{position:absolute;left:.105em;top:.265em;width:.75em;height:.625em;overflow:visible;display:block;filter:drop-shadow(0 0 .1em var(--glow))}
 .lk .w .wg .body{fill:var(--screen);stroke:var(--c1);stroke-width:.19;stroke-linejoin:miter}
 .lk .w .wg .wire{fill:none;stroke:var(--c1);stroke-width:.12;opacity:.9;stroke-linejoin:miter}

@@ -27,6 +27,10 @@ describe('the brand: the amber lockup', () => {
     expect(BRAND_LOCKUP_CSS).toContain('pm-move 8s')
   })
 
+  it('the eyes move: the iris spins, the gaze wanders, the lids blink', () => {
+    for (const k of ['lk-spin', 'lk-gaze', 'lk-blink']) expect(BRAND_LOCKUP_CSS).toContain(`@keyframes ${k}`)
+  })
+
   it('the home page carries the moving lockup and still no script; the market page does not carry it', () => {
     const home = homePage(input).body
     expect(home).toContain('class="brand"')
