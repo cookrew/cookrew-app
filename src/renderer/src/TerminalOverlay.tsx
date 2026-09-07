@@ -341,6 +341,11 @@ function TerminalOverlay({
   const gotoCheckpoint = (index: number): void => {
     setSelectedIndex(index)
     setJumpToken((t) => t + 1)
+    // OPENING THE DRAWER AT A CHECKPOINT PAGES THE INDEX TO IT (D1, T5 QA
+    // 2026-09-07). The rail's index is a window, and a jump that lands on an
+    // ordinal older than the window leaves the drawer with a placeholder no
+    // page will ever fill. Bounded: it stops at the page that holds it.
+    void stream.ensureLoaded(index)
   }
   const goLive = (): void => {
     setSelectedIndex(null)
@@ -1146,6 +1151,7 @@ function TerminalOverlay({
           onGoto={gotoCheckpoint}
           onLive={goLive}
           onScrub={(fraction) => transcriptRef.current?.scrubTo(fraction)}
+          onReach={stream.reach}
         />
       </div>
       {dropReady && (

@@ -29,7 +29,10 @@ describe('the pin marker borrows the rail’s anchor, it does not invent one', (
   })
 
   it('takes its fractions from pinAnchors, not from a local formula', () => {
-    expect(RAIL).toMatch(/pinAnchors\(pins \?\? \[\], rows\)/)
+    // With the rail's SCALE, since T5 QA 2026-09-07 (D1): the index is paged,
+    // so a pin has to be placed over the whole chain rather than over the page
+    // this client holds. Still pinAnchors, still no arithmetic here.
+    expect(RAIL).toMatch(/pinAnchors\(pins \?\? \[\], rows, scale\)/)
   })
 
   it('does NOT adopt railMarkers, which still places trace ticks a row early', () => {

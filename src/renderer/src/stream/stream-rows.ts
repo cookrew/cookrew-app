@@ -121,17 +121,43 @@ export function checkpointRowTitle(row: CheckpointRow, mode: TitleMode): string 
 }
 
 /**
+ * The stream ORDINAL a scrub fraction (0..1) points at, over the WHOLE chain.
+ *
+ * `scale` is the chain's length (rail-fill.ts's railScale), not the number of
+ * rows loaded — the bar is drawn on that scale, so a drag to the middle of a
+ * 1,048-row card means T524 whether or not this client has fetched it yet
+ * (D1, T5 QA 2026-09-07).
+ */
+export function scrubOrdinal(fraction: number, scale: number): number {
+  const clamped = Math.max(0, Math.min(1, fraction))
+  return Math.max(1, Math.round(clamped * (Math.max(1, scale) - 1)) + 1)
+}
+
+/**
  * The checkpoint row a scrub fraction (0..1) points at — mapped LINEARLY over
  * the row ordinals so a mid-drag resolves to the middle checkpoint, not a
  * loaded-group edge.
+ *
+ * `scale` maps the drag over the whole chain; the row handed back is then the
+ * NEAREST one this client holds, because a page-back is on the wire and the
+ * tab must say something in the meantime. It snaps to the exact checkpoint the
+ * moment that page lands. Without a scale the old rule stands: linear over the
+ * loaded rows.
  */
 export function scrubPreviewRow(
   rows: readonly CheckpointRow[],
-  fraction: number
+  fraction: number,
+  scale?: number
 ): CheckpointRow | null {
   if (rows.length === 0) return null
   const clamped = Math.max(0, Math.min(1, fraction))
-  return rows[Math.round(clamped * (rows.length - 1))] ?? null
+  if (scale === undefined) return rows[Math.round(clamped * (rows.length - 1))] ?? null
+  const wanted = scrubOrdinal(clamped, scale)
+  let nearest = rows[0]
+  for (const row of rows) {
+    if (Math.abs(row.index - wanted) < Math.abs(nearest.index - wanted)) nearest = row
+  }
+  return nearest
 }
 
 /**

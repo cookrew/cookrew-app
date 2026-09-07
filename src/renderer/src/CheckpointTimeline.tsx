@@ -9,6 +9,7 @@ import { createHoldReveal, hasLineageSegmentsApi, railAnchorTop, railPointerFrac
 import {
   checkpointRowTitle,
   scrollFocusState,
+  scrubOrdinal,
   scrubPreviewRow,
   type CheckpointRow,
   type TraceMarkerRow
@@ -17,7 +18,7 @@ import {
  *  used here for scrub mapping. Imported rather than redeclared so the density
  *  rule and the scrub mapping cannot drift — they describe the same 16px.
  *  railAnchors: the F6 gate, as ONE function — see rail-fill.ts. */
-import { countBadgeTop, fillRows, railAnchors, RAIL_INSET } from './rail-fill'
+import { countBadgeTop, fillRows, railAnchors, railScale, RAIL_INSET } from './rail-fill'
 import { pinAnchors, pinLabel, traceFraction, type VersionPinRecord } from '../../shared/version-pin'
 
 
@@ -72,7 +73,8 @@ export function CheckpointTimeline({
   anomalyNote = null,
   onGoto,
   onLive,
-  onScrub
+  onScrub,
+  onReach
 }: {
   terminalId: string
   /** Full-range selectable checkpoints (records ∪ trace listing), ascending. */
@@ -134,6 +136,16 @@ export function CheckpointTimeline({
    * combined scroll space to this fraction (0 = oldest trace, 1 = live bottom).
    */
   onScrub?: (fraction: number) => void
+  /**
+   * "The rail just reached this stream ORDINAL" (D1, T5 QA 2026-09-07).
+   *
+   * The rail's index is PAGED, and until this existed nothing ever asked for
+   * the page above the one /stream/open answered with — so on a 1,048-row card
+   * T16…T950 were unreachable by anything but luck. The bar is drawn on the
+   * chain's scale, so a scrub knows which ordinal it is over even when that
+   * checkpoint is not loaded; saying so is what fetches it.
+   */
+  onReach?: (ordinal: number) => void
 }): React.JSX.Element | null {
   /** True while a rail scrub drag is active — drives the .dragging affordance. */
   const [scrubbing, setScrubbing] = useState(false)
@@ -351,6 +363,16 @@ export function CheckpointTimeline({
     setWakeCount((n) => n + 1)
   }
 
+  /**
+   * THE BAR'S DENOMINATOR — the whole chain, not the page loaded (D1).
+   *
+   * One value, read by the reveal, the boundary ticks, the version pins and
+   * the scrub mapping, so none of them can place a checkpoint where another
+   * one would not. `total` is /stream/open's own count; without it the newest
+   * ordinal loaded stands in, which is what a caller with no stream has.
+   */
+  const scale = railScale(rows, total)
+
   // Drag the line/marker → scrub the transcript. The line/marker stays draggable
   // even while the list is shown (it's the always-present scroll indicator).
   const onRailPointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
@@ -369,7 +391,11 @@ export function CheckpointTimeline({
     // DRAG the line/marker → scrub the transcript to the dragged checkpoint; the
     // focus (list highlight + re-centre) follows.
     onScrub(frac)
-    const row = scrubPreviewRow(rows, frac)
+    // THE PAGE-BACK TRIGGER (D1). The ordinal is named on the chain's scale,
+    // so a drag toward the top says "T340" even on a client that holds only
+    // T949 upward — and that is what puts the page for T340 on the wire.
+    onReach?.(scrubOrdinal(frac, scale))
+    const row = scrubPreviewRow(rows, frac, scale)
     setFocused(row ? { index: row.index, frac } : null)
   }
   const onRailPointerUp = (e: React.PointerEvent<HTMLDivElement>): void => {
@@ -511,12 +537,12 @@ export function CheckpointTimeline({
    * marker's own fraction — F6 is the gate that has regressed before, and the
    * safest way to keep it green is to not touch what anchors it.
    */
-  const laid = fanned ? fillRows(rows, railHeight, focused!.index) : []
+  const laid = fanned ? fillRows(rows, railHeight, focused!.index, scale) : []
   // Where the badge has to sit to clear the pins, in the same px space
   // railAnchorTop lays them in. Null = nothing reaches it, badge stays put.
   // Pure and unit-tested in rail-fill; the rail only supplies the fractions.
   const countTop = countBadgeTop(
-    pinAnchors(pins ?? [], rows).map((p) => p.frac),
+    pinAnchors(pins ?? [], rows, scale).map((p) => p.frac),
     railHeight
   )
   /**
@@ -600,7 +626,7 @@ export function CheckpointTimeline({
           // focus tab were placed by two expressions that agreed until a ledger
           // made them disagree. tests/rail-tick-parity.test.ts guarded the
           // duplication; deleting it is what the guard was waiting for.
-          const frac = traceFraction(m.afterIndex, rows)
+          const frac = traceFraction(m.afterIndex, rows, scale)
           if (frac === null) return null
           // The SEGMENT boundary (a marker naming its previous session) is a
           // TAP TARGET: it opens the earlier-sessions panel, which is where
@@ -654,7 +680,7 @@ export function CheckpointTimeline({
             The exact version is in the title even when the flag carries no
             label (R8, v100+): a truncated number would be a WRONG version, and
             a wrong version is worse than an absent one. */}
-        {pinAnchors(pins ?? [], rows).map((p) => {
+        {pinAnchors(pins ?? [], rows, scale).map((p) => {
           const label = pinLabel(p.version)
           // pinAnchors returns {version, frac} only, so the checkpoint comes
           // back from the record. `current` is the pin under the focus — the
@@ -779,9 +805,18 @@ export function CheckpointTimeline({
         </div>
       )}
 
+      {/* A GLYPH ON THE RAIL, THE SENTENCE IN ITS TOOLTIP (D3, T5 QA
+          2026-09-07). The line used to be a `left: 0; right: 0` footer INSIDE
+          the 30px rail column, so "1 LINE THE STREAM COULD NOT READ" wrapped
+          to one letter per line and printed straight down over the live dot.
+          The rail has no width for a sentence and never will; it has room for
+          one mark. Still a `status` and still not a dialog — a line the reader
+          could not parse is a fact about the transcript, not something anyone
+          can act on mid-conversation. */}
       {anomalyNote !== null && (
-        <div className="cr-ckpt-anomaly" role="status">
-          {anomalyNote}
+        <div className="cr-ckpt-anomaly" role="status" title={anomalyNote} aria-label={anomalyNote}>
+          <span aria-hidden="true">!</span>
+          <span className="cr-ckpt-anomaly-text">{anomalyNote}</span>
         </div>
       )}
 
