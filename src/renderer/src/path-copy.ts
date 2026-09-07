@@ -31,6 +31,52 @@ export const LOCAL_NETWORK_COPY = {
 } as const
 
 /**
+ * THE ONE CASE WHERE THE ANSWER IS "LEAVE THIS PAGE", IN WORDS.
+ *
+ * LOCAL_NETWORK_COPY above names a switch the reader can flip. On iOS there is
+ * no switch: the permission is never asked for and the site is never listed
+ * under Settings → Privacy → Local Network, so every probe from cookrew.dev
+ * times out for ever (QA 2026-09-08). "Staying on the relay, you can allow
+ * local network access in the browser's site settings" is therefore not merely
+ * unhelpful there — it sends somebody hunting for a control that does not
+ * exist, which is the same failure as the sentence it replaced.
+ *
+ * SO THE SENTENCE NAMES THE BROWSER AND THE SENTENCE ENDS IN A COLON, because
+ * the only thing after it is the one button that fixes it. The buttons are
+ * sentence case here and uppercased by .cr-btn, like every other button on
+ * this bar; the reader sees OPEN ON WI-FI.
+ */
+export const DIRECT_OFFER_COPY = {
+  lan: 'Open on Wi-Fi',
+  tailnet: 'Open on tailnet',
+  /** On the landed page, once. The old URL is gone from the bar; say it works. */
+  landed: 'Opened directly on Wi-Fi. cookrew.dev/… still works from anywhere.',
+  dismiss: 'Dismiss'
+} as const
+
+/** The tail both sentences share: the fix, and the colon that introduces it. */
+const OPEN_INSTEAD = 'Open the Mac directly on Wi-Fi instead:'
+
+/**
+ * WHOSE FAULT IT IS, WHICH IS A DIFFERENT ANSWER IN SAFARI.
+ *
+ * "Apple never asks it for local-network permission" is exactly right in
+ * Safari and quietly wrong in Chrome, where a reader knows perfectly well that
+ * Chrome has such a permission and would go looking for it in Chrome's own
+ * settings. On iOS it is not Chrome's to give: every browser there is WebKit,
+ * so the sentence has to name the PLATFORM. Getting that wrong sends somebody
+ * to a settings screen that cannot help them, which is the whole failure this
+ * copy exists to end.
+ *
+ * The family is a family name — `Chrome`, `Safari`, or `This browser` when
+ * nothing was recognised — never a version and never a user-agent string.
+ */
+export const directOfferWhy = (family: string): string =>
+  family === 'Safari'
+    ? `Safari on iPhone cannot reach your Mac from this page — Apple never asks it for local-network permission. ${OPEN_INSTEAD}`
+    : `${family} on iPhone cannot reach your Mac from this page — iOS never asks a browser for local-network permission. ${OPEN_INSTEAD}`
+
+/**
  * WHAT HAPPENED TO ONE CANDIDATE, in words a reader can act on.
  *
  * Deliberately not error strings. "Failed to fetch" is the same message for a

@@ -5872,6 +5872,43 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   color: var(--muted);
 }
 
+/* The note on the page the OPEN ON WI-FI button landed on. Same hanging line
+   as the ask — it is the same slot under the same badge — and it is the only
+   one of the two that ever appears on a directly-served companion. */
+.cr-path-landed-ok {
+  flex: 0 0 auto;
+}
+
+/* ---- open on Wi-Fi ----
+   INSIDE the sheet, not hanging off the bar: it is the conclusion drawn from
+   the rows underneath it, so it is stacked, in flow, and full width. Amber
+   because it is the one thing in this sheet that is a suggestion rather than a
+   fact, and the button sits on its own line so a long sentence never squeezes
+   it to two characters on a narrow phone. */
+
+.cr-path-direct {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 9px 10px;
+  background: var(--amber-soft, var(--cream-hi));
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink);
+}
+
+.cr-path-direct-why {
+  display: block;
+}
+
+.cr-path-direct-go {
+  flex: 0 0 auto;
+}
+
 .cr-path-latency {
   margin: 0 0 12px;
   font-family: var(--font-pixel);

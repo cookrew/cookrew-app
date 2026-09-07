@@ -2,8 +2,10 @@ import { apiPath, clientBase } from '../api-base'
 import { isRemoteMode } from '../api'
 import { authHeaders, authStore } from '../auth-gate'
 import { PATH_REPORT_ROUTE } from '../../../shared/path-report'
-import { currentBrowser } from '../browser-family'
+import { currentBrowser, onAppleMobile } from '../browser-family'
 import { createPathReporter, postPathReport, reportedAttempts } from './report'
+import { directNavigationOffer } from './direct-offer'
+import { setDirectOffer } from '../direct-offer-gate'
 import { dataPlane, setDataPlane, subscribeDataPlane, type DataPlane } from '../data-plane'
 import type { LocalNetworkState } from '../local-network'
 import { isLocalOrigin, localNetworkState, requestLocalNetwork } from '../local-network'
@@ -18,7 +20,8 @@ import {
   PLANE_PROBE_EVERY_MS,
   planeCandidates,
   switchPlaneIfBetter,
-  type HelloClaim
+  type HelloClaim,
+  type PlaneCandidate
 } from './plane-switch'
 import { startPlaneRecheck } from './plane-recheck'
 // The registry call it makes lives beside its own deadline (verify-hello.ts)
@@ -73,6 +76,21 @@ import {
  */
 let lastDeviceId: string | null = null
 
+/**
+ * AND WHICH TRUSTED NAMES IT PUBLISHES, for the same reason and at no cost.
+ *
+ * The direct-navigation offer needs an ORIGIN, and an attempt row deliberately
+ * holds only the address it spells — a row must never carry the label, which
+ * is a device id on a screen that gets screenshotted. So the ordered candidate
+ * list is kept beside the device id, from the same card, and the offer is
+ * matched back to it by address (path/direct-offer.ts).
+ *
+ * Ranked against the relay rather than the live plane, so the list is always
+ * the desktop's full set; whether the plane makes an offer sensible is the
+ * decision's business, not this cache's.
+ */
+let lastTrusted: readonly PlaneCandidate[] = []
+
 /** The desktop this companion is talking to, as far as the card ever said. */
 export const cardDeviceId = (): string | null => lastDeviceId
 
@@ -94,12 +112,14 @@ const fetchCard = async (): Promise<ReachCardLite | null> => {
       ? body.trusted.filter((origin): origin is string => typeof origin === 'string')
       : []
     lastDeviceId = body.deviceId
-    return {
+    const card: ReachCardLite = {
       deviceId: body.deviceId,
       lan: body.lan,
       tailnet: body.tailnet ?? null,
       trusted
     }
+    lastTrusted = planeCandidates(card, 'relay')
+    return card
   } catch {
     return null
   }
@@ -315,6 +335,24 @@ const startPlaneSwitch = (): (() => void) => {
             // stops being testable without one.
             const attempts = rows as readonly PathAttempt[]
             recordAttempts(attempts, settled)
+            // AND ASK WHETHER THIS BROWSER HAS ANY WAY LEFT. On iOS Safari the
+            // rows above can only ever say "timeout" — there is no permission
+            // to grant and no setting to find — so the sheet offers the one
+            // navigation that still works. Every guard is in the pure decision
+            // and nothing here acts on the answer: it is published, drawn as a
+            // button, and taken only by a press (DirectOfferRow.tsx).
+            setDirectOffer(
+              directNavigationOffer({
+                base: clientBase(),
+                plane: dataPlane().kind,
+                browser: currentBrowser(),
+                ios: onAppleMobile(),
+                permission: localNetworkGate(),
+                attempts,
+                candidates: lastTrusted,
+                hasToken: (authStore().token() ?? '').length > 0
+              })
+            )
             // AND TELL THE MAC. The panel answers the person holding the
             // phone; this answers the owner at the desk, who otherwise has
             // only a photograph of a phone screen to work from.

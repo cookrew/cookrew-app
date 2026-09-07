@@ -26,6 +26,16 @@
 // The switcher's own rules (only better, never sideways; prove it is the Mac)
 // are untouched and still covered by path-switch.test.ts — this is only about
 // whether the browser wiring is allowed to fire.
+//
+// THERE IS NOW EXACTLY ONE EXCEPTION AND IT IS NOT AN AUTOMATIC ONE. No
+// browser on iOS or iPadOS is ever asked for the Local Network permission —
+// they are all WebKit — so a fetch from cookrew.dev to the Mac can never
+// succeed there and the sheet offers a top-level navigation instead
+// (path/direct-offer.ts, DirectOfferRow.tsx).
+// That is a PRESS. Nothing on a timer, a race, an `online` event or a boot
+// path may navigate, which is what these tests say — so `assign` is watched
+// here beside `replace`, because the exception's method must be under the same
+// gate as the rule's.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -33,6 +43,7 @@ const DEVICE = '11111111-2222-3333-4444-555555555555'
 const RELAY_BASE = `/relay/@owner/desktop/${DEVICE}`
 
 interface Phone {
+  /** Every way this page could leave the account's origin, in one list. */
   readonly replaced: () => readonly string[]
   readonly listened: () => readonly string[]
   readonly fetched: () => number
@@ -50,7 +61,13 @@ const stubPhone = (origin: string): Phone => {
   let fetched = 0
   ;(globalThis as unknown as { window: Record<string, unknown> }).window = {
     COOKREW_MOBILE: 1,
-    location: { origin, search: '', hash: '', replace: (url: string) => replaced.push(url) },
+    location: {
+      origin,
+      search: '',
+      hash: '',
+      replace: (url: string) => replaced.push(url),
+      assign: (url: string) => replaced.push(url)
+    },
     localStorage: {
       getItem: () => null,
       setItem: () => undefined,
@@ -154,6 +171,40 @@ describe('the path badge under a relay prefix', () => {
     link.setPathLink('failed')
     expect(link.currentPathBadge().word).toBe('OFFLINE')
     link.resetPathLink()
+  })
+})
+
+describe('the one exception is a press and only a press', () => {
+  it('publishing an offer navigates nothing by itself', async () => {
+    const phone = stubPhone('https://cookrew.dev')
+    const { companion } = await servedAt(RELAY_BASE)
+    const gate = await import('../src/renderer/src/direct-offer-gate')
+    const stop = companion.startCompanionPathSwitch()
+    // The state the owner's iPhone is actually in: an offer on the table, a
+    // race that has just finished, and a phone in a pocket.
+    gate.setDirectOffer({
+      origin: `https://192-168-2-40.${DEVICE}.d.cookrew.dev:8643`,
+      kind: 'lan',
+      family: 'Safari'
+    })
+    await settle()
+    expect(phone.replaced()).toEqual([])
+    stop()
+  })
+
+  it('and the press itself uses assign, which is why assign is watched', async () => {
+    const phone = stubPhone('https://cookrew.dev')
+    await servedAt(RELAY_BASE)
+    const { openDirectly } = await import('../src/renderer/src/DirectOfferRow')
+    const origin = `https://192-168-2-40.${DEVICE}.d.cookrew.dev:8643`
+    const win = (globalThis as unknown as {
+      window: { location: { assign: (url: string) => void } }
+    }).window
+    openDirectly(
+      { origin },
+      { token: () => 'a-token-value-0000', go: (url) => win.location.assign(url) }
+    )
+    expect(phone.replaced()).toEqual([`${origin}/?token=a-token-value-0000&from=relay`])
   })
 })
 
