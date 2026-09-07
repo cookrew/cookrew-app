@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { authStore } from './auth-gate'
 import { directOffer, subscribeDirectOffer } from './direct-offer-gate'
-import { DIRECT_OFFER_COPY } from './path-copy'
+import { DIRECT_OFFER_COPY, directOfferWhy } from './path-copy'
 import { directNavigationUrl, type DirectOffer } from './path/direct-offer'
 
 /**
@@ -17,9 +17,15 @@ import { directNavigationUrl, type DirectOffer } from './path/direct-offer'
  * boot — is still forbidden from touching the address bar, and
  * companion-relay-no-jump.test.ts still asserts exactly that. The exception is
  * this handler, it fires from a press, and the reason it exists at all is in
- * the docblock of path/direct-offer.ts: iOS Safari has no local-network
- * permission to grant, so a fetch from cookrew.dev to the Mac can never
- * succeed while a navigation to the same trusted name always can.
+ * the docblock of path/direct-offer.ts: no browser on iOS or iPadOS has a
+ * local-network permission to grant, so a fetch from cookrew.dev to the Mac
+ * can never succeed while a navigation to the same trusted name always can.
+ *
+ * THE SENTENCE COMES OFF THE OFFER, not off `navigator`. Safari is told that
+ * Apple never asks it; every other browser on the phone is told that iOS
+ * never asks a browser — because blaming Chrome for something iOS does would
+ * send that reader into Chrome's settings hunting for a switch that is not
+ * there, which is the same failure this panel was written to end.
  */
 export function DirectOfferRow(): React.JSX.Element | null {
   const [offer, setOffer] = useState<DirectOffer | null>(() => directOffer())
@@ -30,7 +36,7 @@ export function DirectOfferRow(): React.JSX.Element | null {
 
   return (
     <p className="cr-path-direct" role="status">
-      <span className="cr-path-direct-why">{DIRECT_OFFER_COPY.why}</span>
+      <span className="cr-path-direct-why">{directOfferWhy(offer.family)}</span>
       <button
         type="button"
         className="cr-btn cr-path-direct-go"
@@ -69,7 +75,10 @@ const browserJump: DirectJumpDeps = {
  * never seen wrapped around a Not paired card, which is strictly worse than
  * the relay that is currently working.
  */
-export const openDirectly = (offer: DirectOffer, deps: DirectJumpDeps = browserJump): void => {
+export const openDirectly = (
+  offer: { readonly origin: string },
+  deps: DirectJumpDeps = browserJump
+): void => {
   const url = directNavigationUrl(offer, deps.token())
   if (url) deps.go(url)
 }

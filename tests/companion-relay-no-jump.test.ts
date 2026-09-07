@@ -27,10 +27,11 @@
 // are untouched and still covered by path-switch.test.ts — this is only about
 // whether the browser wiring is allowed to fire.
 //
-// THERE IS NOW EXACTLY ONE EXCEPTION AND IT IS NOT AN AUTOMATIC ONE. iOS
-// Safari never asks for the Local Network permission, so a fetch from
-// cookrew.dev to the Mac can never succeed there and the sheet offers a
-// top-level navigation instead (path/direct-offer.ts, DirectOfferRow.tsx).
+// THERE IS NOW EXACTLY ONE EXCEPTION AND IT IS NOT AN AUTOMATIC ONE. No
+// browser on iOS or iPadOS is ever asked for the Local Network permission —
+// they are all WebKit — so a fetch from cookrew.dev to the Mac can never
+// succeed there and the sheet offers a top-level navigation instead
+// (path/direct-offer.ts, DirectOfferRow.tsx).
 // That is a PRESS. Nothing on a timer, a race, an `online` event or a boot
 // path may navigate, which is what these tests say — so `assign` is watched
 // here beside `replace`, because the exception's method must be under the same
@@ -181,7 +182,11 @@ describe('the one exception is a press and only a press', () => {
     const stop = companion.startCompanionPathSwitch()
     // The state the owner's iPhone is actually in: an offer on the table, a
     // race that has just finished, and a phone in a pocket.
-    gate.setDirectOffer({ origin: `https://192-168-2-40.${DEVICE}.d.cookrew.dev:8643`, kind: 'lan' })
+    gate.setDirectOffer({
+      origin: `https://192-168-2-40.${DEVICE}.d.cookrew.dev:8643`,
+      kind: 'lan',
+      family: 'Safari'
+    })
     await settle()
     expect(phone.replaced()).toEqual([])
     stop()
@@ -196,7 +201,7 @@ describe('the one exception is a press and only a press', () => {
       window: { location: { assign: (url: string) => void } }
     }).window
     openDirectly(
-      { origin, kind: 'lan' },
+      { origin },
       { token: () => 'a-token-value-0000', go: (url) => win.location.assign(url) }
     )
     expect(phone.replaced()).toEqual([`${origin}/?token=a-token-value-0000&from=relay`])

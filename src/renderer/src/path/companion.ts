@@ -2,7 +2,7 @@ import { apiPath, clientBase } from '../api-base'
 import { isRemoteMode } from '../api'
 import { authHeaders, authStore } from '../auth-gate'
 import { PATH_REPORT_ROUTE } from '../../../shared/path-report'
-import { currentBrowser } from '../browser-family'
+import { currentBrowser, onAppleMobile } from '../browser-family'
 import { createPathReporter, postPathReport, reportedAttempts } from './report'
 import { directNavigationOffer } from './direct-offer'
 import { setDirectOffer } from '../direct-offer-gate'
@@ -346,6 +346,7 @@ const startPlaneSwitch = (): (() => void) => {
                 base: clientBase(),
                 plane: dataPlane().kind,
                 browser: currentBrowser(),
+                ios: onAppleMobile(),
                 permission: localNetworkGate(),
                 attempts,
                 candidates: lastTrusted,

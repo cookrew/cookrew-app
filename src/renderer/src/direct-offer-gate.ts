@@ -30,7 +30,13 @@ export const directOffer = (): DirectOffer | null => offer
  * send a working session on a page load for nothing.
  */
 export const setDirectOffer = (next: DirectOffer | null): void => {
-  if (offer?.origin === next?.origin && offer?.kind === next?.kind) return
+  if (
+    offer?.origin === next?.origin &&
+    offer?.kind === next?.kind &&
+    offer?.family === next?.family
+  ) {
+    return
+  }
   offer = next
   for (const listener of listeners) listener(offer)
 }

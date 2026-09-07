@@ -40,16 +40,58 @@ export const browserFamily = (userAgent: unknown): string => {
   return 'other'
 }
 
+/** `Chrome 142` → `Chrome`, for a sentence rather than a diagnosis. */
+export const familyName = (browser: string): string => {
+  const name = browser.replace(/\s+\d+$/, '')
+  // A sentence has to be about SOMETHING. 'other' is the honest answer to
+  // "which browser" and a terrible subject for a verb.
+  return name === 'other' || name.length === 0 ? 'This browser' : name
+}
+
 /**
- * The browser this page is actually running in.
+ * IS THIS iOS OR iPadOS — which is a question about WebKit, not about a brand.
  *
- * Guarded because some embedded web views throw on touching `navigator`, and
- * because a panel that explains a failure must not be able to cause one.
+ * Asked because of a second measurement. The first said Safari 26 on the
+ * owner's iPhone could not fetch the LAN; the next day the same phone did the
+ * same thing in Chrome — "Chrome 152 · local network permission not supported
+ * · 192.168.2.40 timed out 1557 ms". That is not a coincidence and not a bug in
+ * either browser: every browser shipped on iOS and iPadOS is WebKit under the
+ * App Store rules, so none of them has a local-network permission to ask for,
+ * and a page on cookrew.dev cannot reach a LAN address from any of them.
+ *
+ * TWO SIGNALS, BECAUSE ONE OF THEM IS BEING RETIRED. The platform token
+ * (`iPhone`, `iPad`, `iPod`) is the plain answer; the browser wrappers name
+ * themselves (`CriOS`, `FxiOS`, `EdgiOS`, `OPiOS`) and are checked as well
+ * because they survive a UA that has been trimmed of its platform.
+ *
+ * AN iPad IN DESKTOP MODE IS NOT DETECTED HERE, and does not need to be: it
+ * sends a Macintosh Safari user agent, and macOS Safari is offered the same
+ * navigation anyway (path/direct-offer.ts), so it lands on the right side of
+ * the guard by the other route. Touch-point sniffing to tell those two apart
+ * would be a fingerprint bought for nothing.
+ *
+ * STILL NOT A USER-AGENT STRING ON A SCREEN. This answers one bit and the bit
+ * is about a platform, not a device — nothing here is drawn, stored or sent.
  */
-export const currentBrowser = (): string => {
+export const isAppleMobile = (userAgent: unknown): boolean => {
+  const ua = typeof userAgent === 'string' ? userAgent : ''
+  if (ua.length === 0) return false
+  return /iPhone|iPad|iPod/.test(ua) || /(?:CriOS|FxiOS|EdgiOS|OPiOS)\//.test(ua)
+}
+
+/** The user agent, or an empty string wherever it cannot be touched. */
+const ambientUserAgent = (): unknown => {
   try {
-    return browserFamily((globalThis as { navigator?: { userAgent?: unknown } }).navigator?.userAgent)
+    return (globalThis as { navigator?: { userAgent?: unknown } }).navigator?.userAgent
   } catch {
-    return 'other'
+    // Some embedded web views throw on touching `navigator`, and a panel that
+    // explains a failure must not be able to cause one.
+    return ''
   }
 }
+
+/** The browser this page is actually running in. */
+export const currentBrowser = (): string => browserFamily(ambientUserAgent())
+
+/** Is this page running on iOS or iPadOS, where there is no permission at all? */
+export const onAppleMobile = (): boolean => isAppleMobile(ambientUserAgent())

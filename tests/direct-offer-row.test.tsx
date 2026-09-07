@@ -35,7 +35,7 @@ const row = async (offer: DirectOffer | null): Promise<string> => {
 
 describe('the panel', () => {
   it('says why Safari cannot do this, in one sentence', async () => {
-    const markup = await row({ origin: LAN, kind: 'lan' })
+    const markup = await row({ origin: LAN, kind: 'lan', family: 'Safari' })
     expect(markup).toContain('Safari on iPhone cannot reach your Mac from this page')
     expect(markup).toContain('Apple never asks it for local-network permission')
     expect(markup).toContain('Open the Mac directly on Wi-Fi instead:')
@@ -44,16 +44,28 @@ describe('the panel', () => {
     expect(markup).not.toContain('site settings')
   })
 
+  it('blames iOS rather than the brand in any other browser on the phone', async () => {
+    // Chrome 152 on the owner's iPhone failed identically to Safari 26, and a
+    // sentence saying "Apple never asks IT" would send that reader into
+    // Chrome's own settings looking for a switch iOS does not expose.
+    const markup = await row({ origin: LAN, kind: 'lan', family: 'Chrome' })
+    expect(markup).toContain('Chrome on iPhone cannot reach your Mac from this page')
+    expect(markup).toContain('iOS never asks a browser for local-network permission')
+    expect(markup).toContain('Open the Mac directly on Wi-Fi instead:')
+    expect(markup).not.toContain('Apple never asks it')
+    expect(markup).not.toContain('site settings')
+  })
+
   it('offers one button, worn as a button and named for the network', async () => {
-    const lan = await row({ origin: LAN, kind: 'lan' })
+    const lan = await row({ origin: LAN, kind: 'lan', family: 'Safari' })
     expect(lan).toContain(`>${DIRECT_OFFER_COPY.lan}</button>`)
     expect(lan).toContain('cr-btn')
-    const tailnet = await row({ origin: TAILNET, kind: 'tailnet' })
+    const tailnet = await row({ origin: TAILNET, kind: 'tailnet', family: 'Safari' })
     expect(tailnet).toContain(`>${DIRECT_OFFER_COPY.tailnet}</button>`)
   })
 
   it('never draws the address, the device id or a token', async () => {
-    const markup = await row({ origin: LAN, kind: 'lan' })
+    const markup = await row({ origin: LAN, kind: 'lan', family: 'Safari' })
     expect(markup).not.toContain(DEVICE)
     expect(markup).not.toContain('d.cookrew.dev')
     expect(markup).not.toContain('token')
@@ -71,7 +83,7 @@ describe('the sheet', () => {
     const attempts = await import('../src/renderer/src/path-attempts')
     const { PathSheet } = await import('../src/renderer/src/PathBadge')
     gate.resetDirectOffer()
-    gate.setDirectOffer({ origin: LAN, kind: 'lan' })
+    gate.setDirectOffer({ origin: LAN, kind: 'lan', family: 'Safari' })
     attempts.resetPathAttempts()
     attempts.recordAttempts(
       [{ name: '192.168.2.40:8643', outcome: 'timeout', ms: 1585, plane: 'LAN', chosen: false }],
@@ -139,7 +151,7 @@ describe('Chrome is untouched, and the two rows never argue', () => {
     offers.resetDirectOffer()
     gate.offerLocalNetwork(async () => undefined)
     gate.setLocalNetwork('unsupported')
-    offers.setDirectOffer({ origin: LAN, kind: 'lan' })
+    offers.setDirectOffer({ origin: LAN, kind: 'lan', family: 'Safari' })
     expect(renderToStaticMarkup(<LocalNetworkRow />)).toBe('')
     expect(renderToStaticMarkup(<DirectOfferRow />)).toContain(DIRECT_OFFER_COPY.lan)
   })
@@ -150,7 +162,7 @@ describe('the tap', () => {
     vi.resetModules()
     const { openDirectly } = await import('../src/renderer/src/DirectOfferRow')
     const went: string[] = []
-    openDirectly({ origin: LAN, kind: 'lan' }, { token: () => TOKEN, go: (url) => went.push(url) })
+    openDirectly({ origin: LAN }, { token: () => TOKEN, go: (url) => went.push(url) })
     expect(went).toEqual([`${LAN}/?token=${TOKEN}&from=relay`])
   })
 
@@ -168,7 +180,7 @@ describe('the tap', () => {
       vi.spyOn(console, level).mockImplementation((...args: unknown[]) => void said.push(...args))
     )
     try {
-      openDirectly({ origin: LAN, kind: 'lan' }, { token: () => TOKEN, go: () => undefined })
+      openDirectly({ origin: LAN }, { token: () => TOKEN, go: () => undefined })
     } finally {
       for (const spy of spies) spy.mockRestore()
     }
@@ -180,7 +192,7 @@ describe('the tap', () => {
     vi.resetModules()
     const { openDirectly } = await import('../src/renderer/src/DirectOfferRow')
     const went: string[] = []
-    openDirectly({ origin: LAN, kind: 'lan' }, { token: () => null, go: (url) => went.push(url) })
+    openDirectly({ origin: LAN }, { token: () => null, go: (url) => went.push(url) })
     expect(went).toEqual([])
   })
 })

@@ -1,4 +1,5 @@
 import { tokenParam } from '../auth-gate'
+import { familyName } from '../browser-family'
 import type { DataPlaneKind } from '../data-plane'
 import type { LocalNetworkState } from '../local-network'
 import type { PathAttempt } from '../path-attempts'
@@ -43,6 +44,13 @@ export interface DirectOffer {
   /** A trusted name off the desktop's card — never a bare IP, never a label. */
   readonly origin: string
   readonly kind: PlaneCandidate['kind']
+  /**
+   * `Safari`, `Chrome`, or `This browser` — the SUBJECT of the sentence, and
+   * the reason it is on the offer rather than read again at render time: the
+   * words and the decision have to be about the same browser, and the panel
+   * has no business asking `navigator` a second question.
+   */
+  readonly family: string
 }
 
 /**
@@ -60,6 +68,8 @@ export interface DirectOfferState {
   readonly plane: DataPlaneKind
   /** `currentBrowser()` — a family and a major version, never a full UA. */
   readonly browser: string
+  /** `onAppleMobile()` — one bit about the PLATFORM, which is the real guard. */
+  readonly ios: boolean
   readonly permission: LocalNetworkState
   /** The rows of the LAST race, exactly as the "why this path" panel has them. */
   readonly attempts: readonly PathAttempt[]
@@ -83,8 +93,26 @@ export interface DirectOfferState {
  */
 const STALLED: ReadonlySet<PathAttempt['outcome']> = new Set(['timeout', 'blocked'])
 
-/** Safari, iOS or macOS. `browserFamily` already reads every Chromium as Chrome. */
-const isSafari = (browser: string): boolean => browser === 'Safari' || browser.startsWith('Safari ')
+/**
+ * THE PLATFORM WITH NO PERMISSION TO GRANT — or Safari, wherever it runs.
+ *
+ * The first cut of this asked "is it Safari", and the owner reproduced the
+ * identical failure the next day in Chrome 152 on the same iPhone: "Chrome 152
+ * · local network permission not supported · 192.168.2.40 timed out 1557 ms".
+ * Every browser on iOS and iPadOS is WebKit by App Store rule, so the brand
+ * was never the fact — the platform was.
+ *
+ * SAFARI STAYS IN AS A SECOND ARM, not as the rule. It covers macOS Safari
+ * (harmless: the offer is only made when a probe has already stalled) and, by
+ * the same clause, an iPad in desktop mode, which sends a Macintosh user agent
+ * and cannot be told from a Mac without fingerprinting for it.
+ *
+ * DESKTOP CHROME AND FIREFOX ARE OUT, deliberately. They have a real
+ * permission or can be told about one, and a navigation offered there would
+ * train readers away from the control that actually fixes their session.
+ */
+const hasNoPermissionToGive = (browser: string, ios: boolean): boolean =>
+  ios || browser === 'Safari' || browser.startsWith('Safari ')
 
 /** LAN first, then tailnet, each keeping the order the desktop listed them in. */
 const bestFirst = (candidates: readonly PlaneCandidate[]): readonly PlaneCandidate[] => [
@@ -99,7 +127,8 @@ const bestFirst = (candidates: readonly PlaneCandidate[]): readonly PlaneCandida
  *
  *   under a relay base    at the root the page already IS the Mac
  *   still on the relay    a direct plane needs no rescuing
- *   Safari                Chrome has a permission, and its prompt is the fix
+ *   iOS/iPadOS, or Safari every browser there is WebKit and none of them has a
+ *                         permission; a desktop Chrome's prompt is the fix
  *   'unsupported'         a browser that CAN be asked must be asked instead
  *   a stored token        or the landing page is a pairing screen
  *   something stalled     and nothing answered — an answer means the ordinary
@@ -109,7 +138,7 @@ const bestFirst = (candidates: readonly PlaneCandidate[]): readonly PlaneCandida
 export const directNavigationOffer = (state: DirectOfferState): DirectOffer | null => {
   if (state.base.length === 0) return null
   if (state.plane !== 'relay') return null
-  if (!isSafari(state.browser)) return null
+  if (!hasNoPermissionToGive(state.browser, state.ios)) return null
   if (state.permission !== 'unsupported') return null
   if (!state.hasToken) return null
   if (state.attempts.some((attempt) => attempt.outcome === 'answered')) return null
@@ -124,7 +153,9 @@ export const directNavigationOffer = (state: DirectOfferState): DirectOffer | nu
   const best = bestFirst(state.candidates).find((candidate) =>
     stalled.has(attemptName(candidate.origin))
   )
-  return best ? { origin: best.origin, kind: best.kind } : null
+  return best
+    ? { origin: best.origin, kind: best.kind, family: familyName(state.browser) }
+    : null
 }
 
 /**
@@ -146,5 +177,7 @@ export const directNavigationOffer = (state: DirectOfferState): DirectOffer | nu
  * all is the only honest answer, and it means the offer and the URL cannot
  * disagree about whether there is a credential.
  */
-export const directNavigationUrl = (offer: DirectOffer, token: string | null): string | null =>
-  token ? `${tokenParam(`${offer.origin}/`, token)}&from=relay` : null
+export const directNavigationUrl = (
+  offer: { readonly origin: string },
+  token: string | null
+): string | null => (token ? `${tokenParam(`${offer.origin}/`, token)}&from=relay` : null)
