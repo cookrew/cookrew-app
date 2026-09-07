@@ -1131,6 +1131,8 @@ function TerminalOverlay({
         <CheckpointTimeline
           terminalId={node.id}
           rows={rows}
+          // The chain's length, not the page this client has fetched.
+          total={stream.total}
           pins={pins}
           markers={traceMarkers}
           titleMode={titleMode}

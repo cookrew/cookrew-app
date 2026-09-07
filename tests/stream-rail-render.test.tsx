@@ -174,3 +174,26 @@ describe('the rail draws its boundaries from the stream’s own rows', () => {
     expect(await rail({ rows: [] })).toBe('')
   })
 })
+
+// THE COUNT BADGE COUNTS THE CHAIN, NOT THE CACHE (one-stream T5).
+//
+// The rail's index is paged, so `rows` is the window this client has fetched
+// and it grows as the drawer pages: on the owner's 1,050-checkpoint card the
+// badge opened at "100 CP", became "120 CP" once the drawer prefetched the
+// oldest blocks, and read "560 CP" after a scrub. Three different numbers for
+// one unchanged conversation. `total` is the stream's own length and is what
+// the badge is asking about.
+describe('the count badge reports the whole stream, not the loaded page', () => {
+  it('shows `total` when the caller knows the chain length', async () => {
+    const markup = await rail({ total: 1050 })
+    expect(markup).toContain('cr-ckpt-count')
+    expect(markup).toContain('>1050<')
+    expect(markup).not.toContain('>3<')
+  })
+
+  it('falls back to rows.length when no total is given', async () => {
+    const markup = await rail({})
+    expect(markup).toContain('cr-ckpt-count')
+    expect(markup).toContain('>3<')
+  })
+})

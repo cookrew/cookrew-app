@@ -59,6 +59,7 @@ const IDLE_AFTER_MS = 1700
 export function CheckpointTimeline({
   terminalId,
   rows,
+  total,
   markers,
   pins,
   titleMode,
@@ -76,6 +77,17 @@ export function CheckpointTimeline({
   terminalId: string
   /** Full-range selectable checkpoints (records ∪ trace listing), ascending. */
   rows: CheckpointRow[]
+  /**
+   * Length of the WHOLE stream — NOT rows.length.
+   *
+   * The rail's index is paged (useStream.INDEX_PAGE), so rows holds the
+   * window this client has fetched, and it GROWS as the drawer pages. The
+   * badge counting rows read "120 CP" on a 1,050-checkpoint card and then
+   * "560 CP" after a scrub, which is a count of the client's cache, not of
+   * the conversation. Absent (a caller with no stream) falls back to
+   * rows.length, which is the old behaviour exactly.
+   */
+  total?: number
   /** Boundary markers (◆ compact / ⇥ clear) interleaved between rows. */
   markers?: TraceMarkerRow[]
   /**
@@ -692,7 +704,7 @@ export function CheckpointTimeline({
           className="cr-ckpt-count"
           style={countTop === null ? undefined : { top: `${Math.round(countTop)}px` }}
         >
-          <span className="n">{rows.length}</span>
+          <span className="n">{total ?? rows.length}</span>
           <span className="l">CP</span>
         </div>
         <div className="cr-ckpt-here" style={{ top: anchors.marker }} />
