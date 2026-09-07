@@ -5047,6 +5047,14 @@ body.cookrew-mobile .cookrew-minimap {
    glyphs wide — without it the label overflows its own button. This selector
    is 0-3-0, so it wins that square back regardless of source order. */
 .voice-keys .cr-btn.term-key {
+  /* The row scrolls sideways, and this says the pan can start on the
+     compositor rather than waiting on the main thread — measured, it does
+     NOT enable the pan (touch-action only ever restricts; the row scrolled
+     identically without it). pinch-zoom is kept because taking it away from
+     a key would make the page un-zoomable from the one strip a thumb rests
+     on. A pan that begins on a key sends nothing either way: the key fires
+     on release, and travel past the slop cancels it (touch-key-gesture.ts). */
+  touch-action: pan-x pinch-zoom;
   min-width: 30px;
   min-height: 30px;
   width: auto;
