@@ -46,7 +46,14 @@ describe('askHello, on the four failures', () => {
       throw new TypeError('Failed to fetch')
     })
     const result = await askHello(URL_UNDER_TEST, 'n', { now: clockAt(0, 1) })
-    expect(result).toEqual({ ok: false, kind: 'blocked', ms: 1, detail: 'TypeError: Failed to fetch' })
+    // The variants tried travel alongside the verdict (path-hello-hint.test.ts);
+    // the verdict itself is unchanged, which is what this pins.
+    expect(result).toMatchObject({
+      ok: false,
+      kind: 'blocked',
+      ms: 1,
+      detail: 'TypeError: Failed to fetch'
+    })
   })
 
   it('calls the same TypeError after 50 ms NETWORK — something was dialled', async () => {

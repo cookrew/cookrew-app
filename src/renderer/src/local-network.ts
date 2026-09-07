@@ -44,6 +44,28 @@ export interface AddressSpaceInit extends RequestInit {
   readonly targetAddressSpace?: AddressSpace
 }
 
+/**
+ * WHICH VARIANT OF THE ANNOTATION A REQUEST ACTUALLY CARRIED.
+ *
+ * THE INCIDENT: Chrome 152 behind a system proxy, measured on the owner's Mac
+ * on 2026-09-08. The LAN probe to `192-168-2-40.<id>.d.cookrew.dev:8643` with
+ * `targetAddressSpace: 'local'` failed in 32 ms with `TypeError: Failed to
+ * fetch`, the permission stayed 'prompt', and NO dialog appeared. With a proxy
+ * in front of it Chrome never learns the resolved address, so it classifies the
+ * target as PUBLIC — and the Local Network Access rule fails a request whose
+ * declared space does not match the one the connection lands in, before any
+ * prompt. Without the annotation the same request is an ordinary public →
+ * public fetch, which is allowed, and the proxy's DIRECT rule for d.cookrew.dev
+ * delivers it to the Mac.
+ *
+ * So 'local' and 'none' are not two spellings of one request: they are two
+ * different requests with different outcomes, and every layer that carries one
+ * — the probe, the plane, the attempt row, the report — has to be able to say
+ * WHICH. On a proxy-less network the hinted variant is still the one that
+ * raises the prompt, so it stays the first thing tried, always.
+ */
+export type AddressSpaceHint = 'local' | 'none'
+
 /** Everything the companion reaches directly is on the reader's own network. */
 export const DIRECT_ADDRESS_SPACE: AddressSpace = 'local'
 

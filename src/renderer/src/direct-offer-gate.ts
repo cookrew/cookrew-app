@@ -30,10 +30,14 @@ export const directOffer = (): DirectOffer | null => offer
  * send a working session on a page load for nothing.
  */
 export const setDirectOffer = (next: DirectOffer | null): void => {
+  // The reason is part of the identity: the same address offered because of a
+  // system proxy carries a different sentence from the same address offered
+  // because iOS has no permission to give (path/direct-offer.ts · proxy).
   if (
     offer?.origin === next?.origin &&
     offer?.kind === next?.kind &&
-    offer?.family === next?.family
+    offer?.family === next?.family &&
+    offer?.proxy === next?.proxy
   ) {
     return
   }

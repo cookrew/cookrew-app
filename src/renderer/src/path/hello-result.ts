@@ -1,3 +1,4 @@
+import type { AddressSpaceHint } from '../local-network'
 import type { HelloReply } from './switch'
 
 /**
@@ -44,15 +45,42 @@ import type { HelloReply } from './switch'
 /** The four ways one probe can fail, and they are four different next steps. */
 export type HelloFailureKind = 'timeout' | 'blocked' | 'network' | 'http'
 
+/** One variant's turn at the same address: what it claimed, how it died, how fast. */
+export interface HelloAttempt {
+  readonly hint: AddressSpaceHint
+  readonly kind: HelloFailureKind
+  readonly ms: number
+}
+
 /** The candidate said something, and it parsed. Whether it is the Mac is not this file's question. */
 export interface HelloAnswered {
   readonly ok: true
   readonly reply: HelloReply
+  /**
+   * WHICH VARIANT ANSWERED, and therefore the only one the session may keep
+   * using: a plane that adopts an address the hinted request cannot reach would
+   * fail every fetch after the hello succeeded (Chrome 152 behind a system
+   * proxy, 2026-09-08 — see local-network.ts · AddressSpaceHint).
+   *
+   * Absent where nothing recorded it, which reads exactly as it always did:
+   * the address decides the annotation.
+   */
+  readonly hint?: AddressSpaceHint
 }
 
 export interface HelloFailed {
   readonly ok: false
   readonly kind: HelloFailureKind
+  /**
+   * EVERY VARIANT THAT WAS TRIED, in the order they were tried.
+   *
+   * One entry is the ordinary case. Two means the hinted request was refused
+   * before it connected and the probe asked again without the annotation — and
+   * two entries both saying 'blocked' is the signature the panel turns into
+   * "refused with and without the hint", which sends a reader somewhere
+   * different from a plain refusal.
+   */
+  readonly attempts?: readonly HelloAttempt[]
   /** Present only for 'http' — the status something actually answered with. */
   readonly status?: number
   /** How long the failure took to arrive. It is the evidence for `kind`. */

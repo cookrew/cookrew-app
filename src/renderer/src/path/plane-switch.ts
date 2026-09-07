@@ -211,7 +211,16 @@ export const switchPlaneIfBetter = async (deps: PlaneSwitchDeps): Promise<PlaneO
       const result = await raceTier(tier, kind, card.deviceId, deps)
       attempts = [...attempts, ...result.attempts]
       if (!result.won) continue
-      deps.adopt({ origin: result.won, kind })
+      // THE PLANE KEEPS TALKING THE WAY THE HELLO GOT THROUGH. Chrome 152
+      // behind a system proxy refuses the annotated request in 32 ms and
+      // delivers the same one without it (2026-09-08), so a plane adopted after
+      // a fallback that went on annotating would fail every single request
+      // while the badge said LAN. See data-plane.ts · DataPlane.hint.
+      deps.adopt({
+        origin: result.won,
+        kind,
+        ...(result.answeredWith ? { hint: result.answeredWith } : {})
+      })
       await report(deps, attempts)
       return 'switched'
     }

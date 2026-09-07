@@ -126,6 +126,64 @@ describe('when the offer is made', () => {
   })
 })
 
+describe('the desktop Chrome whose prompt cannot be raised at all', () => {
+  // Chrome 152 behind a system proxy, on the owner's Mac, 2026-09-08: the
+  // annotated probe fails in 32 ms, the unannotated retry fails too, the
+  // permission stays 'prompt' and NO dialog is ever shown. A proxy hides the
+  // resolved address, so Chrome calls the target public and Local Network
+  // Access fails a request declaring 'local' before any prompt. That is a
+  // desktop Chrome with, in practice, no permission to grant — and a top-level
+  // navigation to the same trusted name still works.
+  const proxied = (over: Partial<DirectOfferState> = {}): DirectOfferState =>
+    iphone({
+      browser: 'Chrome 152',
+      ios: false,
+      permission: 'prompt',
+      attempts: [attempt({ outcome: 'blocked', ms: 32, hint: 'none' })],
+      ...over
+    })
+
+  it('is offered when every candidate was refused with AND without the hint', () => {
+    expect(directNavigationOffer(proxied())).toEqual({
+      origin: LAN,
+      kind: 'lan',
+      family: 'Chrome',
+      proxy: true
+    })
+  })
+
+  it('blames the proxy, never iOS, in the sentence it carries', () => {
+    const offer = directNavigationOffer(proxied())
+    expect(offer?.proxy).toBe(true)
+    const why = directOfferWhy(offer?.family ?? '', offer?.proxy)
+    expect(why).toContain('system proxy')
+    expect(why).not.toContain('iPhone')
+    expect(why).not.toContain('iOS')
+    expect(why).toContain('Open the Mac directly on Wi-Fi instead:')
+  })
+
+  it('is NOT offered when the refusal only happened with the hint', () => {
+    // One variant refused is an ordinary refusal, and the prompt is the fix.
+    expect(directNavigationOffer(proxied({ attempts: [attempt({ outcome: 'blocked' })] }))).toBeNull()
+  })
+
+  it('is NOT offered when one candidate merely timed out', () => {
+    // A Mac that may be asleep is not a proxy, and sending a reader to an
+    // address that did not answer is a page load for nothing.
+    const mixed = [
+      attempt({ outcome: 'blocked', hint: 'none' }),
+      attempt({ name: '100.84.1.9:8643', plane: 'TAILNET', outcome: 'timeout' })
+    ]
+    expect(directNavigationOffer(proxied({ attempts: mixed }))).toBeNull()
+  })
+
+  it('is NOT offered once the permission has actually been decided', () => {
+    for (const permission of ['granted', 'denied', 'unsupported'] as const) {
+      expect(directNavigationOffer(proxied({ permission })), permission).toBeNull()
+    }
+  })
+})
+
 describe('when it is not', () => {
   it('never for a DESKTOP Chrome, whose prompt is the real answer', () => {
     // Chrome 142 on a Mac has the permission. Offering a navigation there

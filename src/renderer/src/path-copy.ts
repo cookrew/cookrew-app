@@ -27,7 +27,19 @@ export const LOCAL_NETWORK_COPY = {
   allow: 'Allow',
   /** After a refusal — on the row, and as the badge's relay sentence. */
   denied:
-    "Staying on the relay. You can allow local network access in the browser's site settings."
+    "Staying on the relay. You can allow local network access in the browser's site settings.",
+  /**
+   * ADDED TO THE ASK WHEN THE BROWSER REFUSED BOTH WAYS.
+   *
+   * Chrome 152 behind a system proxy, 2026-09-08: the annotated request fails
+   * in 32 ms and the unannotated one fails too, the permission stays 'prompt',
+   * and no dialog is ever raised. Offering ALLOW alone there is a button with
+   * nothing behind it, so the sentence names the cause and points at the one
+   * thing that does work — the OPEN ON WI-FI button beside it, which the direct
+   * offer puts there for exactly this case (path/direct-offer.ts).
+   */
+  proxied:
+    "A system proxy may be hiding the address from the browser; open the Mac's Wi-Fi address directly instead."
 } as const
 
 /**
@@ -70,11 +82,22 @@ const OPEN_INSTEAD = 'Open the Mac directly on Wi-Fi instead:'
  *
  * The family is a family name — `Chrome`, `Safari`, or `This browser` when
  * nothing was recognised — never a version and never a user-agent string.
+ *
+ * AND THE THIRD ANSWER IS NOT A PLATFORM AT ALL. Chrome 152 on the owner's Mac
+ * behind a system proxy, 2026-09-08: the browser HAS the permission and can
+ * never raise the dialog, because the annotated request fails the address-space
+ * check before any prompt when the proxy hides the resolved address. Saying
+ * "on iPhone" to somebody sitting at a Mac would be worse than saying nothing;
+ * the sentence names the proxy, which is the thing they can actually change.
  */
-export const directOfferWhy = (family: string): string =>
-  family === 'Safari'
+export const directOfferWhy = (family: string, proxy?: boolean): string => {
+  if (proxy) {
+    return `${family} cannot reach your Mac from this page — a system proxy hides the address, so the browser refuses the request with and without the local-network hint. ${OPEN_INSTEAD}`
+  }
+  return family === 'Safari'
     ? `Safari on iPhone cannot reach your Mac from this page — Apple never asks it for local-network permission. ${OPEN_INSTEAD}`
     : `${family} on iPhone cannot reach your Mac from this page — iOS never asks a browser for local-network permission. ${OPEN_INSTEAD}`
+}
 
 /**
  * WHAT HAPPENED TO ONE CANDIDATE, in words a reader can act on.
@@ -101,6 +124,32 @@ export const ATTEMPT_COPY = {
 } as const
 
 /**
+ * THE TWO ROWS THE ADDRESS-SPACE HINT CHANGES THE MEANING OF.
+ *
+ * THE INCIDENT: Chrome 152 behind a system proxy, on the owner's Mac,
+ * 2026-09-08. The panel said `192.168.2.40:8643 refused by the browser before
+ * connecting — 32 ms` and the permission line above it said "local network not
+ * asked yet", which together read as "go and allow it". There was nothing to
+ * allow: no prompt had been raised or could be. The proxy hides the resolved
+ * address, Chrome calls the target public, and a request DECLARING 'local'
+ * fails that check before any dialog — while the identical request without the
+ * declaration is delivered.
+ *
+ * So the two rows that can only come from that world say so. An answer that
+ * arrived only unannotated names the proxy, because it is the reason the panel
+ * looks strange; a refusal that happened both ways says both ways, because it
+ * is the one refusal site settings cannot fix.
+ */
+const HINTLESS_COPY = {
+  answered: 'answered (without the local-network hint — a proxy hides the address)',
+  blocked: 'refused by the browser before connecting (with and without the hint)'
+} as const
+
+/** Only these two outcomes mean anything different for having lost the hint. */
+const tellsOnTheHint = (outcome: keyof typeof ATTEMPT_COPY): outcome is 'answered' | 'blocked' =>
+  outcome === 'answered' || outcome === 'blocked'
+
+/**
  * The one sentence per row, with the measurement folded in where it earns its
  * place.
  *
@@ -117,8 +166,13 @@ export const attemptSentence = (attempt: {
   readonly outcome: keyof typeof ATTEMPT_COPY
   readonly ms: number | null
   readonly status?: number
+  /** Set only where the variant is news — see HINTLESS_COPY and toldHint. */
+  readonly hint?: 'local' | 'none'
 }): string => {
-  const said = ATTEMPT_COPY[attempt.outcome]
+  const said =
+    attempt.hint === 'none' && tellsOnTheHint(attempt.outcome)
+      ? HINTLESS_COPY[attempt.outcome]
+      : ATTEMPT_COPY[attempt.outcome]
   // The status IS the story: 421 is the endpoint-bound hello refusing a
   // relayed challenge, 404 is somebody else's server on port 8643.
   if (attempt.outcome === 'http') return attempt.status ? `${said} ${attempt.status}` : said

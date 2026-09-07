@@ -29,7 +29,7 @@
  * the credential mode, not at a call site that has to remember it.
  */
 
-import { addressSpaceInitFor, type AddressSpace } from './local-network'
+import { addressSpaceInitFor, type AddressSpace, type AddressSpaceHint } from './local-network'
 
 /** relay = same origin under the page's base; the others are absolute origins. */
 export type DataPlaneKind = 'relay' | 'lan' | 'tailnet'
@@ -38,6 +38,19 @@ export interface DataPlane {
   /** '' for the relay — same origin, under the base. Otherwise `https://host:port`. */
   readonly origin: string
   readonly kind: DataPlaneKind
+  /**
+   * HOW THE HELLO GOT THROUGH, and therefore how everything after it must.
+   *
+   * Chrome 152 behind a system proxy (2026-09-08) refuses the annotated request
+   * in 32 ms and delivers the unannotated one, so the probe falls back
+   * (path/ask-hello.ts). A probe that fell back and a plane that went on
+   * annotating would be the worst of both worlds: a hello that proved the Mac,
+   * a badge saying LAN, and every request after it failing the same way.
+   *
+   * ABSENT MEANS "THE ADDRESS DECIDES", which is exactly what this did before
+   * the fallback existed, so nothing that leaves it unset changes behaviour.
+   */
+  readonly hint?: AddressSpaceHint
 }
 
 /**
@@ -59,9 +72,19 @@ export const dataPlane = (): DataPlane => plane
 export const setDataPlane = (next: DataPlane): void => {
   const normalized: DataPlane = {
     origin: next.kind === 'relay' ? '' : next.origin.replace(/\/+$/, ''),
-    kind: next.kind
+    kind: next.kind,
+    ...(next.hint ? { hint: next.hint } : {})
   }
-  if (normalized.origin === plane.origin && normalized.kind === plane.kind) return
+  // The variant is part of the identity: the same origin reached with and
+  // without the annotation is two different transports, and a stream that did
+  // not restart on that change would keep failing the way the probe did.
+  if (
+    normalized.origin === plane.origin &&
+    normalized.kind === plane.kind &&
+    normalized.hint === plane.hint
+  ) {
+    return
+  }
   plane = normalized
   for (const listener of listeners) listener(plane)
 }
@@ -136,8 +159,19 @@ export const planePath = (
  * ON EVERY REQUEST, not once. The specification requires the address-space
  * check "for each new connection made", because a name can be re-resolved
  * between two requests — which is the rebinding attack it exists to stop.
+ *
+ * AND THE PLANE'S OWN VARIANT OVERRULES THE ADDRESS. Chrome 152 behind a system
+ * proxy (2026-09-08) refuses the annotated request to a private address in
+ * 32 ms and delivers the same request without it; where the hello only got
+ * through that way, so must everything after it. The address still decides
+ * whenever nothing recorded a variant.
  */
+const planeAddressSpace = (
+  current: DataPlane
+): { readonly targetAddressSpace?: AddressSpace } =>
+  current.hint === 'none' ? {} : addressSpaceInitFor(current.origin)
+
 export const planeRequestInit = (current: DataPlane): PlaneRequestInit =>
   current.origin === ''
     ? { credentials: 'same-origin' }
-    : { mode: 'cors', credentials: 'omit', ...addressSpaceInitFor(current.origin) }
+    : { mode: 'cors', credentials: 'omit', ...planeAddressSpace(current) }

@@ -3,6 +3,7 @@ import { familyName } from '../browser-family'
 import type { DataPlaneKind } from '../data-plane'
 import type { LocalNetworkState } from '../local-network'
 import type { PathAttempt } from '../path-attempts'
+import { blockedBothWays } from './hint-evidence'
 import { attemptName } from './plane-race'
 import type { PlaneCandidate } from './plane-switch'
 
@@ -51,6 +52,18 @@ export interface DirectOffer {
    * has no business asking `navigator` a second question.
    */
   readonly family: string
+  /**
+   * WHY THIS OFFER EXISTS, where the answer is not iOS.
+   *
+   * Set only for the proxy case (Chrome 152 behind a system proxy, 2026-09-08):
+   * a desktop browser that HAS the permission and cannot be made to prompt for
+   * it, because the annotated request fails the address-space check before any
+   * dialog. The sentence differs completely — blaming iOS on a Mac would send
+   * that reader hunting through a settings screen that has nothing to do with
+   * it — so the reason travels with the offer rather than being guessed at
+   * render time. Absent is the original iOS case, unchanged.
+   */
+  readonly proxy?: true
 }
 
 /**
@@ -114,6 +127,25 @@ const STALLED: ReadonlySet<PathAttempt['outcome']> = new Set(['timeout', 'blocke
 const hasNoPermissionToGive = (browser: string, ios: boolean): boolean =>
   ios || browser === 'Safari' || browser.startsWith('Safari ')
 
+/**
+ * THE SECOND WAY A BROWSER CAN HAVE NO PERMISSION TO GIVE: A SYSTEM PROXY.
+ *
+ * Measured on the owner's Mac in Chrome 152 on 2026-09-08, on the real relay
+ * page. Chrome HAS the Local Network Access permission, and it can still never
+ * be raised: behind a proxy Chrome never learns the resolved address, classifies
+ * the target as public, and fails a request declaring 'local' before any dialog
+ * — 32 ms, `TypeError: Failed to fetch`, permission still 'prompt'. The probe's
+ * unannotated retry (path/ask-hello.ts) is the honest test of whether anything
+ * can get through, and when THAT is refused too there is no prompt to wait for
+ * and no site setting to change.
+ *
+ * NARROW ON PURPOSE. 'prompt' AND every candidate refused both ways: a granted
+ * or denied permission is a decision that has actually been made, and a single
+ * candidate that timed out is a Mac that may simply be asleep.
+ */
+const cannotBePrompted = (state: DirectOfferState): boolean =>
+  state.permission === 'prompt' && blockedBothWays(state.attempts)
+
 /** LAN first, then tailnet, each keeping the order the desktop listed them in. */
 const bestFirst = (candidates: readonly PlaneCandidate[]): readonly PlaneCandidate[] => [
   ...candidates.filter((candidate) => candidate.kind === 'lan'),
@@ -127,9 +159,11 @@ const bestFirst = (candidates: readonly PlaneCandidate[]): readonly PlaneCandida
  *
  *   under a relay base    at the root the page already IS the Mac
  *   still on the relay    a direct plane needs no rescuing
- *   iOS/iPadOS, or Safari every browser there is WebKit and none of them has a
- *                         permission; a desktop Chrome's prompt is the fix
- *   'unsupported'         a browser that CAN be asked must be asked instead
+ *   no permission to give either the platform has none (iOS/iPadOS, or Safari,
+ *                         with the state 'unsupported') or the browser has one
+ *                         it can never raise (a system proxy, and every
+ *                         candidate refused both ways). Any browser that CAN be
+ *                         asked must be asked instead.
  *   a stored token        or the landing page is a pairing screen
  *   something stalled     and nothing answered — an answer means the ordinary
  *                         switch is already handling this and a navigation
@@ -138,8 +172,10 @@ const bestFirst = (candidates: readonly PlaneCandidate[]): readonly PlaneCandida
 export const directNavigationOffer = (state: DirectOfferState): DirectOffer | null => {
   if (state.base.length === 0) return null
   if (state.plane !== 'relay') return null
-  if (!hasNoPermissionToGive(state.browser, state.ios)) return null
-  if (state.permission !== 'unsupported') return null
+  const platform =
+    hasNoPermissionToGive(state.browser, state.ios) && state.permission === 'unsupported'
+  const proxy = cannotBePrompted(state)
+  if (!platform && !proxy) return null
   if (!state.hasToken) return null
   if (state.attempts.some((attempt) => attempt.outcome === 'answered')) return null
   const stalled = new Set(
@@ -154,7 +190,12 @@ export const directNavigationOffer = (state: DirectOfferState): DirectOffer | nu
     stalled.has(attemptName(candidate.origin))
   )
   return best
-    ? { origin: best.origin, kind: best.kind, family: familyName(state.browser) }
+    ? {
+        origin: best.origin,
+        kind: best.kind,
+        family: familyName(state.browser),
+        ...(proxy ? { proxy: true as const } : {})
+      }
     : null
 }
 

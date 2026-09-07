@@ -57,6 +57,15 @@ export interface PathReportStore {
 const PLANES: ReadonlySet<string> = new Set(['LAN', 'TAILNET', 'RELAY'])
 const PERMISSIONS: ReadonlySet<string> = new Set(['granted', 'denied', 'prompt', 'unsupported'])
 
+/**
+ * The two address-space variants a row may be about, and nothing else.
+ *
+ * A closed vocabulary rather than `safeText`, because this one is drawn as part
+ * of a SENTENCE rather than quoted as the browser's own words: anything not on
+ * this list is dropped, exactly as an unknown plane is refused.
+ */
+const HINTS: ReadonlySet<string> = new Set(['local', 'none'])
+
 /** The bucket a report with no named device goes in, and the name it is logged as. */
 const UNNAMED_KEY = ''
 const UNNAMED_DEVICE = 'an unnamed phone'
@@ -87,11 +96,13 @@ const readAttempt = (raw: unknown): PathReportAttempt | null => {
   if (name.length === 0 || outcome.length === 0) return null
   const status = safeMs(row.status)
   const detail = safeText(row.detail)
+  const hint = typeof row.hint === 'string' && HINTS.has(row.hint) ? row.hint : null
   return {
     name,
     outcome,
     ms: safeMs(row.ms),
     ...(status !== null ? { status } : {}),
+    ...(hint !== null ? { hint: hint as 'local' | 'none' } : {}),
     ...(detail.length > 0 ? { detail } : {})
   }
 }

@@ -36,7 +36,7 @@ export function DirectOfferRow(): React.JSX.Element | null {
 
   return (
     <p className="cr-path-direct" role="status">
-      <span className="cr-path-direct-why">{directOfferWhy(offer.family)}</span>
+      <span className="cr-path-direct-why">{directOfferWhy(offer.family, offer.proxy)}</span>
       <button
         type="button"
         className="cr-btn cr-path-direct-go"
