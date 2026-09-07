@@ -1,5 +1,13 @@
 import { addressSpaceInitFor, type AddressSpaceInit } from '../local-network'
 import { classifyOrigin, type PathState } from '../../../shared/path-badge'
+import {
+  classifyHelloFailure,
+  helloHttpFailure,
+  monotonicNow,
+  type HelloResult
+} from './hello-result'
+
+export type { HelloFailureKind, HelloFailed, HelloResult } from './hello-result'
 
 /**
  * LIVE PATH SWITCHING — the phone walks in the door and the session follows.
@@ -145,8 +153,16 @@ export interface SwitchDeps {
   readonly current: () => PathState
   /** `GET /api/reach` on whatever path is already working. */
   readonly card: () => Promise<ReachCardLite | null>
-  /** `GET <candidate>/api/hello?nonce=`, with a short deadline. Null = no answer. */
-  readonly hello: (url: string, nonce: string) => Promise<HelloReply | null>
+  /**
+   * `GET <candidate>/api/hello?nonce=`, with a short deadline.
+   *
+   * It answers a VERDICT rather than a reply-or-null (hello-result.ts). This
+   * switcher only needs to know whether it may navigate, so it reads the one
+   * bit — but it takes the same shape as the data-plane switcher's, because
+   * two `hello` deps with two meanings is how one of them ends up wired to
+   * the other's caller.
+   */
+  readonly hello: (url: string, nonce: string) => Promise<HelloResult>
   /** The credential the companion already holds; it travels to the new address. */
   readonly credential: () => string | null
   readonly go: (url: string) => void
@@ -172,7 +188,10 @@ export const switchIfBetter = async (deps: SwitchDeps): Promise<SwitchOutcome> =
   try {
     for (const candidate of candidates) {
       const nonce = deps.nonce()
-      const reply = await deps.hello(candidate.url, nonce).catch(() => null)
+      const result = await deps
+        .hello(candidate.url, nonce)
+        .catch((): HelloResult => ({ ok: false, kind: 'network', ms: 0 }))
+      const reply = result.ok ? result.reply : null
       // BOTH, and both matter: the device id says it is the right Mac, the
       // echoed nonce says the answer was made just now rather than replayed.
       if (!reply || reply.deviceId !== card.deviceId || reply.nonce !== nonce) continue
@@ -219,6 +238,8 @@ export const randomNonce = (random: (bytes: Uint8Array) => Uint8Array): string =
 
 export interface AskHelloOptions {
   readonly timeoutMs?: number
+  /** A monotonic clock, injected so a failure's `ms` is a fact a test can set. */
+  readonly now?: () => number
   /**
    * ASK FOR VERSION 2, by telling the Mac which endpoint this client thinks it
    * dialled. It is a HINT and never the signed value: the Mac signs what IT
@@ -231,7 +252,7 @@ export interface AskHelloOptions {
 }
 
 /**
- * One `fetch` with a deadline, answering null rather than throwing.
+ * One `fetch` with a deadline, answering WHAT WENT WRONG rather than null.
  *
  * THE FIRST REQUEST TO THE HOUSE, and therefore the one that raises Chrome's
  * Local Network Access prompt. The annotation is derived from the URL rather
@@ -243,14 +264,29 @@ export interface AskHelloOptions {
  * Whether the prompt should be allowed to appear AT ALL is a different
  * question, answered before the race starts (see the permission policy in
  * plane-switch.ts). This function only makes the request it is asked to make.
+ *
+ * IT USED TO RETURN NULL FOR EVERYTHING — an 800 ms timeout, a TypeError
+ * thrown in 1 ms by a browser policy, a refused certificate, a 421 — and that
+ * is the whole reason the owner's panel showed four LAN candidates saying "no
+ * answer" and could not be read. The verdict is now a value; hello-result.ts
+ * holds why it is spelled the way it is.
  */
 export const askHello = async (
   url: string,
   nonce: string,
   options: AskHelloOptions = {}
-): Promise<HelloReply | null> => {
+): Promise<HelloResult> => {
+  const now = options.now ?? monotonicNow
+  const started = now()
+  const since = (): number => Math.max(0, now() - started)
   const abort = new AbortController()
-  const timer = setTimeout(() => abort.abort(), options.timeoutMs ?? HELLO_TIMEOUT_MS)
+  // Set by OUR timer and read in the catch: an abort we caused is a timeout
+  // whatever name the browser gives the exception it throws for it.
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    abort.abort()
+  }, options.timeoutMs ?? HELLO_TIMEOUT_MS)
   const asked =
     options.origin === undefined ? '' : `&origin=${encodeURIComponent(options.origin)}`
   try {
@@ -263,12 +299,18 @@ export const askHello = async (
       credentials: 'omit',
       cache: 'no-store'
     } as AddressSpaceInit)
-    if (!response.ok) return null
-    return (await response.json()) as HelloReply
-  } catch {
-    // A refused certificate, a timeout, a network that is not there. All of
-    // them mean the same thing here: not this address, not now.
-    return null
+    if (!response.ok) return helloHttpFailure(response.status, since())
+    // A body that will not parse is still an ANSWER — a captive portal's login
+    // page is the common one — so it is reported by its status rather than
+    // classified by the clock, which would call a fast portal a refusal and
+    // send the reader to their site settings for a problem that is not there.
+    const reply = await response.json().catch(() => null)
+    if (reply === null || typeof reply !== 'object') {
+      return helloHttpFailure(response.status, since(), 'the answer was not a hello')
+    }
+    return { ok: true, reply: reply as HelloReply }
+  } catch (error) {
+    return classifyHelloFailure({ error, ms: since(), timedOut })
   } finally {
     clearTimeout(timer)
   }

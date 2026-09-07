@@ -91,7 +91,7 @@ describe('a relayed answer', () => {
       plane: () => RELAY,
       card: async () => card,
       // Whatever origin is asked, the box hands back the real Mac's answer.
-      hello: async () => genuine(nonce),
+      hello: async () => ({ ok: true, reply: genuine(nonce) }),
       verify: async (_claim: HelloClaim) => {
         verified += 1
         return true
@@ -114,7 +114,7 @@ describe('a relayed answer', () => {
     const outcome = await switchPlaneIfBetter({
       plane: () => RELAY,
       card: async () => ({ ...card, trusted: [ATTACKER] }),
-      hello: async () => genuine(nonce),
+      hello: async () => ({ ok: true, reply: genuine(nonce) }),
       verify: async () => true,
       adopt: (plane) => void (adopted = plane),
       nonce: () => nonce

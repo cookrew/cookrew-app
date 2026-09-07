@@ -19,8 +19,27 @@
  * nothing about React.
  */
 
-/** The four ways one candidate can end, and they are four different stories. */
-export type AttemptOutcome = 'answered' | 'no-answer' | 'refused' | 'unverified'
+/**
+ * THE WAYS ONE CANDIDATE CAN END, and each of them is a different story.
+ *
+ * FOUR OF THESE USED TO BE ONE WORD. Until the probe learned to say why it
+ * failed (path/hello-result.ts), a timeout, a browser refusing before it
+ * connected, a certificate failure and a 421 all arrived here as 'no-answer' —
+ * which is what put four identical rows in front of the owner and left nobody,
+ * including the agent reading the screenshot, able to tell them apart.
+ *
+ * 'no-answer' is kept because a row is a stored value and the word must stay
+ * spellable; no race produces it any more.
+ */
+export type AttemptOutcome =
+  | 'answered'
+  | 'no-answer'
+  | 'refused'
+  | 'unverified'
+  | 'timeout'
+  | 'blocked'
+  | 'network'
+  | 'http'
 
 export interface PathAttempt {
   /**
@@ -31,11 +50,21 @@ export interface PathAttempt {
    */
   readonly name: string
   readonly outcome: AttemptOutcome
+  /** Present only for 'http': the status something on that port actually said. */
+  readonly status?: number
   /** The measured round trip, or null where there was nothing to measure. */
   readonly ms: number | null
   /** The plane this candidate would have become. */
   readonly plane: 'LAN' | 'TAILNET'
   readonly chosen: boolean
+  /**
+   * The browser's own words, scrubbed of anything address-shaped.
+   *
+   * A reader who has been told the kind sometimes wants the exact exception —
+   * it is the difference between filing a bug and guessing at one. It is never
+   * the sentence: the sentence is ours, in path-copy.ts.
+   */
+  readonly detail?: string
 }
 
 export interface PathAttempts {

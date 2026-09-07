@@ -79,8 +79,11 @@ const race = async (
         const who = answers[origin]
         // A version 2 answer: the Mac names the endpoint it answered at.
         return who === undefined
-          ? null
-          : { v: 2, deviceId: who, origin, issuedAtMs: NOW, nonce, sig: 'a-signature' }
+          ? { ok: false, kind: 'timeout', ms: 800 }
+          : {
+              ok: true,
+              reply: { v: 2, deviceId: who, origin, issuedAtMs: NOW, nonce, sig: 'a-signature' }
+            }
       }),
     verify:
       over.verify ??
@@ -204,10 +207,13 @@ describe('one race', () => {
 
   it('refuses a replayed answer, however right the device id is', async () => {
     const run = await race({
-      hello: async (origin, nonce) =>
-        origin === LAN
-          ? { v: 2, deviceId: DEVICE, origin, issuedAtMs: NOW, nonce: 'a-nonce-from-yesterday', sig: 'a-signature' }
-          : { v: 2, deviceId: DEVICE, origin, issuedAtMs: NOW, nonce, sig: 'a-signature' }
+      hello: async (origin, nonce) => ({
+        ok: true,
+        reply:
+          origin === LAN
+            ? { v: 2, deviceId: DEVICE, origin, issuedAtMs: NOW, nonce: 'a-nonce-from-yesterday', sig: 'a-signature' }
+            : { v: 2, deviceId: DEVICE, origin, issuedAtMs: NOW, nonce, sig: 'a-signature' }
+      })
     })
     expect(run.adopted()).toEqual({ origin: TAILNET, kind: 'tailnet' })
   })
@@ -223,7 +229,10 @@ describe('one race', () => {
 
   it('refuses an answer with no signature at all, without asking the registry', async () => {
     const run = await race({
-      hello: async (origin, nonce) => ({ v: 2, deviceId: DEVICE, origin, issuedAtMs: NOW, nonce })
+      hello: async (origin, nonce) => ({
+        ok: true,
+        reply: { v: 2, deviceId: DEVICE, origin, issuedAtMs: NOW, nonce }
+      })
     })
     expect(run.outcome()).toBe('unreachable')
     expect(run.verified()).toBe(0)

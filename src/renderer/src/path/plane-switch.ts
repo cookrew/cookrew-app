@@ -2,7 +2,8 @@ import { trustedNetwork, type TrustedNetwork } from '../../../shared/trusted-ori
 import type { DataPlane, DataPlaneKind } from '../data-plane'
 import { isLocalOrigin, type LocalNetworkState } from '../local-network'
 import { attemptName, raceTier, type PlaneAttempt } from './plane-race'
-import type { HelloReply, ReachCardLite } from './switch'
+import type { HelloResult } from './hello-result'
+import type { ReachCardLite } from './switch'
 
 /**
  * THE SWITCH THAT DOES NOT NAVIGATE.
@@ -104,8 +105,12 @@ export interface PlaneSwitchDeps {
   readonly plane: () => DataPlane
   /** `GET /api/reach` over whatever plane is already working. */
   readonly card: () => Promise<ReachCardLite | null>
-  /** `GET <origin>/api/hello?nonce=`, with a short deadline. Null = no answer. */
-  readonly hello: (origin: string, nonce: string) => Promise<HelloReply | null>
+  /**
+   * `GET <origin>/api/hello?nonce=`, with a short deadline, answering WHY it
+   * failed when it failed (hello-result.ts). The kind is what every row of
+   * the "why this path" panel is made of, and what the Mac is told.
+   */
+  readonly hello: (origin: string, nonce: string) => Promise<HelloResult>
   /** `POST /v2/verify-hello` at the registry. False on anything but a yes. */
   readonly verify: (claim: HelloClaim) => Promise<boolean>
   /** Move the plane. NEVER a navigation — that is the point of this module. */
@@ -218,30 +223,45 @@ export const switchPlaneIfBetter = async (deps: PlaneSwitchDeps): Promise<PlaneO
 }
 
 /**
- * HAND THE PANEL THE ROWS, AFTER ASKING ONE LAST QUESTION.
+ * The outcomes whose cause the permission store can settle after the fact.
  *
  * A probe blocked by Local Network Access and a probe that reached a sleeping
- * Mac arrive as the same TypeError; nothing in the response distinguishes
- * them. The permission store does: a race that ran and then finds itself
- * 'denied' was refused, and a reader told "no answer" would go and check their
- * Mac when the fix is three taps into their own site settings.
+ * Mac arrive as the same TypeError. hello-result.ts now separates them by the
+ * clock, which is a strong hint and not a fact; the permission store IS the
+ * fact, so a race that ran and then finds itself 'denied' upgrades its guesses
+ * to a refusal — and only its guesses. A timeout is not one of them: something
+ * held a socket open for the whole deadline, which a refused request cannot.
+ */
+const GUESSED_AT_A_REFUSAL: ReadonlySet<PlaneAttempt['outcome']> = new Set([
+  'blocked',
+  'no-answer'
+])
+
+/**
+ * HAND THE PANEL THE ROWS, AFTER ASKING ONE LAST QUESTION.
  *
- * Only asked when something DID go silent, and only local — no request leaves
- * the phone for this.
+ * The question is the permission, and the answer is worth the round trip
+ * because a reader told "could not connect" goes and checks their Mac when the
+ * fix is three taps into their own site settings.
+ *
+ * Only asked when something DID go quiet in a way a permission could explain,
+ * and only local — no request leaves the phone for this.
  */
 const report = async (
   deps: PlaneSwitchDeps,
   attempts: readonly PlaneAttempt[]
 ): Promise<void> => {
   if (!deps.note) return
-  const silent = attempts.some((attempt) => attempt.outcome === 'no-answer')
-  const after = silent
+  const guessed = attempts.some((attempt) => GUESSED_AT_A_REFUSAL.has(attempt.outcome))
+  const after = guessed
     ? await deps.permission?.().catch((): LocalNetworkState => 'unsupported')
     : undefined
   deps.note(
     after === 'denied'
       ? attempts.map((attempt) =>
-          attempt.outcome === 'no-answer' ? { ...attempt, outcome: 'refused' as const } : attempt
+          GUESSED_AT_A_REFUSAL.has(attempt.outcome)
+            ? { ...attempt, outcome: 'refused' as const }
+            : attempt
         )
       : attempts
   )

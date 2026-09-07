@@ -1,6 +1,12 @@
 import { readHelloReply } from '../../../shared/hello-proof'
 import { addressFromTrustedName } from '../../../shared/reach-names'
 import type { TrustedNetwork } from '../../../shared/trusted-origin'
+import {
+  classifyHelloFailure,
+  monotonicNow,
+  type HelloFailed,
+  type HelloResult
+} from './hello-result'
 import type { PlaneCandidate, PlaneSwitchDeps } from './plane-switch'
 
 /**
@@ -14,14 +20,38 @@ import type { PlaneCandidate, PlaneSwitchDeps } from './plane-switch'
  * this one is about a clock and a list.
  */
 
-/** One candidate's story, as the "why this path" panel tells it. */
+/**
+ * One candidate's story, as the "why this path" panel tells it.
+ *
+ * THE OUTCOMES GREW BECAUSE FOUR OF THEM USED TO BE ONE. Every failed probe
+ * arrived as 'no-answer' — a timeout, a browser refusing before it connected,
+ * a certificate, a 421 — and the owner's panel therefore showed four LAN
+ * candidates that could not be told apart. The four kinds come straight off
+ * the probe's own verdict (hello-result.ts) and are never inferred here.
+ *
+ * 'no-answer' stays in the union and is no longer produced by a race: the
+ * store is a shared value and older rows, and any producer that genuinely has
+ * nothing more to say, must still be spellable.
+ */
 export interface PlaneAttempt {
   /** The ADDRESS the trusted label spells — never the label, which is a device id. */
   readonly name: string
-  readonly outcome: 'answered' | 'no-answer' | 'refused' | 'unverified'
+  readonly outcome:
+    | 'answered'
+    | 'no-answer'
+    | 'refused'
+    | 'unverified'
+    | 'timeout'
+    | 'blocked'
+    | 'network'
+    | 'http'
+  /** Present only for 'http': the status something on that port actually said. */
+  readonly status?: number
   readonly ms: number | null
   readonly plane: 'LAN' | 'TAILNET'
   readonly chosen: boolean
+  /** The browser's own words about a failure, scrubbed of anything address-shaped. */
+  readonly detail?: string
 }
 
 /**
@@ -64,19 +94,34 @@ export const raceTier = async (
   deviceId: string,
   deps: PlaneSwitchDeps
 ): Promise<TierResult> => {
-  const answered = await measureTier(tier, deviceId, deps, deps.now ?? defaultNow)
+  const probes = await probeTier(tier, deviceId, deps, deps.now ?? monotonicNow)
   const plane = kind === 'lan' ? 'LAN' : 'TAILNET'
-  const rows = tier.map((candidate): PlaneAttempt => {
-    const reply = answered.find((one) => one.origin === candidate.origin)
-    return {
-      name: attemptName(candidate.origin),
-      outcome: reply ? 'answered' : 'no-answer',
-      ms: reply ? Math.round(reply.ms) : null,
-      plane,
-      chosen: false
-    }
-  })
-  return verifyInOrder(answered, rows, deviceId, deps)
+  const rows = probes.map((probe): PlaneAttempt => ({ ...rowOf(probe), plane, chosen: false }))
+  return verifyInOrder(answeredFirst(probes), rows, deviceId, deps)
+}
+
+/**
+ * One probe, as a row — the ONLY place a verdict becomes a word.
+ *
+ * A failure's own `ms` is preferred over the tier's stopwatch because it is
+ * the number the sentence quotes: "timed out (800 ms)" has to be the deadline
+ * that actually fired, not this loop's rounding of it.
+ */
+const rowOf = (probe: Probe): Omit<PlaneAttempt, 'plane' | 'chosen'> => {
+  const name = attemptName(probe.origin)
+  if (probe.kind === 'answered') return { name, outcome: 'answered', ms: Math.round(probe.ms) }
+  // It said something and what it said was not this Mac's hello: a wrong
+  // device, a nonce it did not echo, or a signature over somebody else's
+  // endpoint. That is "answered and not believed", never "no answer".
+  if (probe.kind === 'unreadable') return { name, outcome: 'unverified', ms: Math.round(probe.ms) }
+  const { failure } = probe
+  return {
+    name,
+    outcome: failure.kind,
+    ms: failure.ms,
+    ...(failure.status !== undefined ? { status: failure.status } : {}),
+    ...(failure.detail !== undefined ? { detail: failure.detail } : {})
+  }
 }
 
 /**
@@ -130,19 +175,28 @@ interface MeasuredReply {
   readonly ms: number
 }
 
-const defaultNow = (): number => {
-  try {
-    const clock = (globalThis as { performance?: { now?: () => number } }).performance
-    if (typeof clock?.now === 'function') return clock.now()
-  } catch {
-    // A web view without a performance object. Date is a worse clock and a
-    // perfectly good one for telling 6 ms from 90.
-  }
-  return Date.now()
-}
+/** One candidate's probe, before anybody decides what to call it. */
+type Probe =
+  | { readonly kind: 'answered'; readonly origin: string; readonly ms: number; readonly measured: MeasuredReply }
+  | { readonly kind: 'unreadable'; readonly origin: string; readonly ms: number }
+  | { readonly kind: 'failed'; readonly origin: string; readonly ms: number; readonly failure: HelloFailed }
 
 /**
- * PROBE ONE TIER AT ONCE, AND SORT WHAT ANSWERS BY HOW FAST IT ANSWERED.
+ * The candidates that said the right words, fastest first, order preserved.
+ *
+ * SORT IS STABLE. Two addresses that measure the same keep the card's order,
+ * because the desktop listed them in the order it prefers and an arbitrary
+ * re-shuffle on a tie is a plane that moves for no reason.
+ */
+const answeredFirst = (probes: readonly Probe[]): readonly MeasuredReply[] =>
+  probes
+    .filter((probe): probe is Extract<Probe, { kind: 'answered' }> => probe.kind === 'answered')
+    .map((probe, index) => ({ probe, index }))
+    .sort((a, b) => a.probe.ms - b.probe.ms || a.index - b.index)
+    .map(({ probe }) => probe.measured)
+
+/**
+ * PROBE ONE TIER AT ONCE, AND KEEP WHAT EACH ONE SAID.
  *
  * In parallel because the candidates within a tier are alternatives, not a
  * queue: probing them in series would make the measurement of the second
@@ -158,37 +212,41 @@ const defaultNow = (): number => {
  * the real Mac by whatever answered here. The signature would verify. The
  * endpoint would be somebody else's. See src/shared/hello-proof.ts.
  *
- * SORT IS STABLE. Two addresses that measure the same keep the card's order,
- * because the desktop listed them in the order it prefers and an arbitrary
- * re-shuffle on a tie is a plane that moves for no reason.
+ * NOTHING IS THROWN AWAY ANY MORE. This used to answer only the candidates
+ * that proved readable, and the row list was rebuilt by asking which ones were
+ * missing — which is exactly how four different failures became one word. Each
+ * candidate now comes back with what happened to it, in the tier's order.
  */
-const measureTier = async (
+const probeTier = async (
   tier: readonly PlaneCandidate[],
   deviceId: string,
   deps: PlaneSwitchDeps,
   now: () => number
-): Promise<readonly MeasuredReply[]> => {
-  const measured = await Promise.all(
-    tier.map(async (candidate): Promise<MeasuredReply | null> => {
+): Promise<readonly Probe[]> =>
+  Promise.all(
+    tier.map(async (candidate): Promise<Probe> => {
       const nonce = deps.nonce()
       const started = now()
-      const reply = await deps.hello(candidate.origin, nonce).catch(() => null)
+      const result = await deps
+        .hello(candidate.origin, nonce)
+        .catch((error): HelloResult => classifyHelloFailure({ error, ms: 0, timedOut: false }))
       const ms = Math.max(0, now() - started)
-      const read = readHelloReply(reply, { origin: candidate.origin, deviceId, nonce })
-      if (!read.ok) return null
+      const origin = candidate.origin
+      if (!result.ok) return { kind: 'failed', origin, ms: result.ms, failure: result }
+      const read = readHelloReply(result.reply, { origin, deviceId, nonce })
+      if (!read.ok) return { kind: 'unreadable', origin, ms }
       return {
-        origin: candidate.origin,
-        nonce,
-        sig: read.proof.sig,
-        signedOrigin: read.proof.origin,
-        issuedAtMs: read.proof.issuedAtMs,
-        ms
+        kind: 'answered',
+        origin,
+        ms,
+        measured: {
+          origin,
+          nonce,
+          sig: read.proof.sig,
+          signedOrigin: read.proof.origin,
+          issuedAtMs: read.proof.issuedAtMs,
+          ms
+        }
       }
     })
   )
-  return measured
-    .filter((reply): reply is MeasuredReply => reply !== null)
-    .map((reply, index) => ({ reply, index }))
-    .sort((a, b) => a.reply.ms - b.reply.ms || a.index - b.index)
-    .map(({ reply }) => reply)
-}

@@ -51,7 +51,10 @@ const race = async (
     },
     hello: async (origin, nonce) => {
       asked.push(origin)
-      return { v: 2, deviceId: DEVICE, nonce, sig: 'a-signature', origin, issuedAtMs: Date.now() }
+      return {
+        ok: true,
+        reply: { v: 2, deviceId: DEVICE, nonce, sig: 'a-signature', origin, issuedAtMs: Date.now() }
+      }
     },
     verify: async () => true,
     adopt: () => undefined,
