@@ -19,10 +19,19 @@
 //   V4  EVERY MARK'S IDENTITY RESOLVES TO A STREAM ROW (one-stream T4) —
 //       reported, never a failure, and "no stream index yet" is UNKNOWN
 //       rather than "every mark is an orphan"
+//   V5  A TRANSCRIPT IS ONLY GONE IF IT EXISTED (Scout, 2026-09-07) — an id
+//       the app minted at spawn and replaced seconds later is `never written`,
+//       and an id with any evidence of existence still FAILS
 
 import { describe, expect, it } from 'vitest'
 import { paneAgentOf, resolvePaneAgent } from '../src/shared/pane-agent.mjs'
-import { liveVerdict, marksVerdict, reachVerdict } from '../src/shared/checkpoint-gate.mjs'
+import {
+  MINT_GRACE_MS,
+  liveVerdict,
+  marksVerdict,
+  reachVerdict,
+  transcriptEvidence
+} from '../src/shared/checkpoint-gate.mjs'
 
 const BOUND = '295d5f1c-1c62-4b3f-9b0e-2c9d0f1a4b77'
 const BG = 'a78aa3e5-6f01-4a0e-9c33-0d8a1b2c3d4e'
@@ -125,10 +134,12 @@ describe('V3 — no checkpoint is unreachable', () => {
       lineage: [BG, OTHER],
       spillIds: [],
       everBound: [OTHER.slice(0, 8)], // the app watched this card rotate off it
-      hasTranscript: (id: string) => id !== OTHER
+      hasTranscript: (id: string) => id !== OTHER,
+      // …and the app's own index says it read blocks out of that file.
+      factsFor: (id: string) => ({ inStreamIndex: id === OTHER })
     })
     expect(verdict.verdict).toBe('FAIL')
-    expect(verdict.gone).toEqual([OTHER])
+    expect(verdict.gone.map((absent) => absent.id)).toEqual([OTHER])
   })
 
   it('an id nothing ever wrote is reported, not failed (a card that never booted)', () => {
@@ -143,7 +154,7 @@ describe('V3 — no checkpoint is unreachable', () => {
       hasTranscript: () => false
     })
     expect(verdict.verdict).toBe('OK')
-    expect(verdict.unwritten).toEqual([BOUND])
+    expect(verdict.unwritten.map((absent) => absent.id)).toEqual([BOUND])
     expect(verdict.gone).toEqual([])
   })
 
@@ -233,5 +244,144 @@ describe('V4 — an orphan mark is reported, never dropped and never a failure',
 
   it('accepts a plain array of placed identities as well as a Set', () => {
     expect(marksVerdict({ identities: [A], placed: [A] })).toMatchObject({ verdict: 'OK' })
+  })
+})
+
+/**
+ * V5 — A TRANSCRIPT IS ONLY GONE IF IT EXISTED (Scout, 2026-09-07).
+ *
+ * The gate printed `FAIL … Scout … TRANSCRIPT GONE: b0d36b55`. The durable
+ * record has that id bound at 11:34:19.136Z; the event log has
+ * `terminal.session-rotated b0d36b55 → b77a8949` at 11:34:35.444Z, sixteen
+ * seconds later; and no file of that name exists anywhere under ~/.claude.
+ * Cookrew MINTS a session id when it binds a fresh terminal, the process then
+ * adopts the session it really writes, and the placeholder is replaced. There
+ * were no checkpoints in those sixteen seconds to lose.
+ *
+ * The defect was in what the gate accepted as proof: a rotation event NAMING
+ * an id says the id was once BOUND, not that it was ever WRITTEN. So the
+ * failing verdict now needs positive evidence — a stream row read out of that
+ * file, a later transcript naming it as the predecessor it compacted, a turn
+ * record attributable to it, or a binding that outlived the mint grace — and
+ * an id with none of those is `never written`, reported with its reason.
+ *
+ * The invariant this must not weaken is the one exit 1 exists for: an id with
+ * ANY evidence of existence and no file on disk is still a FAIL.
+ */
+describe('V5 — TRANSCRIPT GONE requires evidence the transcript existed', () => {
+  const MINTED = 'b0d36b55-a20a-4a97-9fe0-bca2740d25ac'
+  const LIVE = 'b77a8949-5e90-43fe-911e-f4a1ccb6eb09'
+  /** Scout's exact numbers, off the spill and the event log. */
+  const MINTED_AT = Date.parse('2026-09-07T11:34:19.136Z')
+  const ROTATED_AT = Date.parse('2026-09-07T11:34:35.444Z')
+  const HELD_MS = ROTATED_AT - MINTED_AT
+
+  /** Scout's card as the gate found it: the live file there, the mint absent. */
+  const scout = (facts: Record<string, unknown> = {}): ReturnType<typeof reachVerdict> =>
+    reachVerdict({
+      bound: LIVE,
+      lineage: [MINTED],
+      spillIds: [LIVE, MINTED],
+      everBound: [MINTED.slice(0, 8), LIVE.slice(0, 8)],
+      hasTranscript: (id: string) => id === LIVE,
+      factsFor: (id: string) => (id === MINTED ? { heldMs: HELD_MS, ...facts } : {})
+    })
+
+  it("Scout's sixteen-second placeholder is never written, not gone", () => {
+    const verdict = scout()
+    expect(verdict.verdict).toBe('OK')
+    expect(verdict.gone).toEqual([])
+    expect(verdict.unwritten.map((absent) => absent.id)).toEqual([MINTED])
+  })
+
+  it('and says why, in the words the owner can check against the log', () => {
+    expect(scout().unwritten[0].reason).toBe(
+      'minted at spawn, replaced 16 s later, nothing written'
+    )
+  })
+
+  it('the rotation event alone is no longer proof the transcript existed', () => {
+    // The old rule: `everBound` names it ⇒ gone. That is what cried wolf.
+    expect(scout().unwritten[0].evidence).toBeNull()
+  })
+
+  it('a file the stream index really read, now absent, is GONE', () => {
+    const verdict = scout({ inStreamIndex: true })
+    expect(verdict.verdict).toBe('FAIL')
+    expect(verdict.gone.map((absent) => absent.id)).toEqual([MINTED])
+    expect(verdict.gone[0].evidence).toBe('stream-index')
+    expect(verdict.gone[0].reason).toContain('stream index')
+  })
+
+  it('a predecessor a later transcript compacted, now absent, is GONE', () => {
+    const verdict = scout({ namedByCompaction: true })
+    expect(verdict.verdict).toBe('FAIL')
+    expect(verdict.gone[0].evidence).toBe('compaction')
+    expect(verdict.gone[0].reason).toContain('predecessor')
+  })
+
+  it('a turn record attributable to it, now absent, is GONE', () => {
+    const verdict = scout({ inTurnStore: true })
+    expect(verdict.verdict).toBe('FAIL')
+    expect(verdict.gone[0].evidence).toBe('turn-store')
+  })
+
+  it('a binding that outlived the mint grace is itself the evidence', () => {
+    const verdict = reachVerdict({
+      bound: LIVE,
+      lineage: [MINTED],
+      spillIds: [],
+      everBound: [MINTED.slice(0, 8)],
+      hasTranscript: (id: string) => id === LIVE,
+      factsFor: () => ({ heldMs: MINT_GRACE_MS })
+    })
+    expect(verdict.verdict).toBe('FAIL')
+    expect(verdict.gone[0].evidence).toBe('held')
+    expect(verdict.gone[0].reason).toContain('5 min')
+  })
+
+  it('one millisecond inside the grace is still a mint, one out is a session', () => {
+    expect(transcriptEvidence({ heldMs: MINT_GRACE_MS - 1 }).existed).toBe(false)
+    expect(transcriptEvidence({ heldMs: MINT_GRACE_MS }).existed).toBe(true)
+  })
+
+  it('an UNDATED binding is never written, and says the binding is undated', () => {
+    // Forge, 2026-09-07: the spill learned 699e207e at the migration write, two
+    // hours AFTER the log saw it rotate away, so the interval is not measurable
+    // and the gate must say so rather than invent one.
+    const verdict = transcriptEvidence({ witnessed: true, heldMs: null })
+    expect(verdict.existed).toBe(false)
+    expect(verdict.evidence).toBeNull()
+    expect(verdict.reason).toContain('undated')
+  })
+
+  it('an id nothing ever named keeps its own reason (the dormant demo card)', () => {
+    const verdict = transcriptEvidence({})
+    expect(verdict.existed).toBe(false)
+    expect(verdict.reason).toBe('nothing written, and nothing ever named it')
+  })
+
+  it('evidence outranks a short hold — a real session can rotate in seconds', () => {
+    // A /compact of a session that had just resumed is seconds old and its
+    // transcript is real. The hold is the LAST resort, never a veto.
+    expect(transcriptEvidence({ heldMs: 1_000, inStreamIndex: true })).toMatchObject({
+      existed: true,
+      evidence: 'stream-index'
+    })
+  })
+
+  it('a card with no facts at all still reports, never fails', () => {
+    // The gate can gather no evidence for a card the app has never opened.
+    // Silence is not proof of loss, and a gate that fails on silence is the
+    // gate nobody reads.
+    const verdict = reachVerdict({
+      bound: LIVE,
+      lineage: [MINTED],
+      spillIds: [],
+      everBound: [MINTED.slice(0, 8)],
+      hasTranscript: (id: string) => id === LIVE
+    })
+    expect(verdict.verdict).toBe('OK')
+    expect(verdict.unwritten.map((absent) => absent.id)).toEqual([MINTED])
   })
 })
