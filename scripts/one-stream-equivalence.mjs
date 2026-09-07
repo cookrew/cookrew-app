@@ -21,6 +21,14 @@
 // spill's idsOf rather than reachableLineage(), because reachableLineage
 // WRITES the migration it performs.
 //
+// T2.5 ADDS THE PROJECTION'S OWN CLASSES. Every card is also materialised
+// through the stateless projection (src/shared/stream-projection.ts), so the
+// run reports what the reader SKIPPED — UnknownLine, MissingOrdinal,
+// RegressedOrdinal, ForwardGap, InvalidTimestamp, MissingFile — beside the
+// equivalence classes. The state is held IN MEMORY here: writing
+// ~/.cookrew/stream/<id>.json would be the gate modifying the thing it
+// measures, which is the same rule that makes it copy the turns ledgers.
+//
 // PRINTS NO CONVERSATION TEXT. Identities (truncated), ordinals, field names
 // and counts only — never a prompt, a reply or a title body.
 //
@@ -61,6 +69,9 @@ const { homedir, tmpdir } = await import('node:os')
 const { TurnStore } = await import('../src/main/turn-store.ts')
 const { TraceReader } = await import('../src/main/trace.ts')
 const { createStreamReader } = await import('../src/main/stream.ts')
+const { createStreamIndexStore } = await import('../src/main/stream-materialise.ts')
+const { emptyStreamState } = await import('../src/main/stream-state.ts')
+const { PROJECTION_ANOMALIES } = await import('../src/shared/stream-projection.ts')
 const { claudeStreamChain, nodeLineageIds } = await import('../src/main/stream-chain.ts')
 const { LineageSpill, defaultSpillDir } = await import('../src/main/lineage-spill.ts')
 const { readMarks } = await import('../src/main/marks.ts')
@@ -162,8 +173,17 @@ async function main() {
   if (onlyCard) ids = ids.filter((id) => id === onlyCard || id.startsWith(onlyCard))
   if (limit > 0) ids = ids.slice(0, limit)
 
-  const totals = { ok: 0, allowed: 0, failed: 0, oldRecords: 0, streamBlocks: 0, withStream: 0 }
+  const totals = {
+    ok: 0,
+    allowed: 0,
+    failed: 0,
+    oldRecords: 0,
+    streamBlocks: 0,
+    withStream: 0,
+    rolledBack: 0
+  }
   const classCounts = {}
+  const anomalyCounts = {}
   const failures = []
   const started = Date.now()
 
@@ -182,7 +202,23 @@ async function main() {
       chainOf: async () => chain,
       documentOf: (file, kind) => trace.documentOf(file, kind)
     })
-    const { entries, missing } = await stream.index(id)
+    // The materialised path, with the persisted state held in memory: the
+    // gate must not write into the owner's ~/.cookrew (see the header).
+    let held = emptyStreamState()
+    const materialised = createStreamIndexStore({
+      lines: (terminalId) => stream.lines(terminalId),
+      readState: () => held,
+      writeState: (_terminalId, next) => {
+        held = next
+        return { ok: true }
+      },
+      log: () => {}
+    })
+    const { entries, missing, anomalies, rolledBack } = await materialised.materialise(id)
+    for (const [name, count] of Object.entries(anomalies)) {
+      anomalyCounts[name] = (anomalyCounts[name] ?? 0) + count
+    }
+    totals.rolledBack += rolledBack.length
     const marks = readMarks(id)
     const streamRows = entries.map((entry) => ({
       ordinal: entry.ordinal,
@@ -207,6 +243,12 @@ async function main() {
       `${short(id)}  old=${String(records.length).padStart(4)} ` +
       `stream=${String(entries.length).padStart(4)}` +
       (missing.length > 0 ? `  missing-files=${missing.length}` : '') +
+      (rolledBack.length > 0 ? `  rolled-back=${rolledBack.length}` : '') +
+      (Object.keys(anomalies).length > 0
+        ? `  skipped=${Object.entries(anomalies)
+            .map(([name, count]) => `${name}:${count}`)
+            .join(',')}`
+        : '') +
       (node ? '' : '  (no node in any workspace)')
     if (result.ok) {
       totals.ok += 1
@@ -258,6 +300,13 @@ async function main() {
   for (const [name, count] of Object.entries(classCounts).sort((a, b) => b[1] - a[1])) {
     process.stdout.write(`  ${name}: ${count}\n`)
   }
+  // The projection's own classes, ALL of them, so a zero is stated rather
+  // than absent — an anomaly nobody printed reads as an anomaly nobody had.
+  process.stdout.write('# projection anomalies (lines the reader skipped)\n')
+  for (const name of PROJECTION_ANOMALIES) {
+    process.stdout.write(`  ${name}: ${anomalyCounts[name] ?? 0}\n`)
+  }
+  process.stdout.write(`rewinds recorded across all cards: ${totals.rolledBack}\n`)
   if (failures.length > 0) {
     process.stdout.write(`failed cards: ${failures.map(short).join(' ')}\n`)
   }

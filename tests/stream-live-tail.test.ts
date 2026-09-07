@@ -81,6 +81,7 @@ describe('GET /stream/live', () => {
   function bed(lines: string[]) {
     const base = mkdtempSync(path.join(tmpdir(), 'stream-live-'))
     const marksDir = mkdtempSync(path.join(tmpdir(), 'stream-live-marks-'))
+    const stateDir = mkdtempSync(path.join(tmpdir(), 'stream-live-state-'))
     const cwd = '/work/repo'
     const dir = path.join(base, claudeProjectSlug(cwd))
     const file = path.join(dir, '22222222-3333-4444-5555-666666666666.jsonl')
@@ -101,6 +102,7 @@ describe('GET /stream/live', () => {
       },
       chainOptions: { projectsDir: base, lineageIds: () => ['22222222-3333-4444-5555-666666666666'] },
       markOptions: { dir: marksDir },
+      stateOptions: { dir: stateDir },
       chainCoalesceMs: 0
     })
     return { file, service, marksDir, node, reads: () => reads }
@@ -241,6 +243,31 @@ describe('GET /stream/live', () => {
       identity: 'u1',
       mark: null
     })
+  })
+
+  it('emits rollback {fromOrdinal} on a /rewind, once, and never replays it', async () => {
+    // The one change a live subscriber cannot infer from the tail: the
+    // transcript gets SHORTER, so later frames simply stop mentioning the
+    // exchanges the rewind took beyond it (T2.5, panel C ②).
+    const kept = [prompt('u1', 'first ask', T0), reply('one', T0 + 1, 'end_turn')]
+    const { file, service } = bed([
+      ...kept,
+      prompt('u2', 'second ask', T0 + 2),
+      reply('two', T0 + 3, 'end_turn'),
+      prompt('u3', 'third ask', T0 + 4),
+      reply('three', T0 + 5, 'end_turn')
+    ])
+    const live = await open(service, { pollMs: 20, heartbeatMs: 10_000 })
+    await live.until((f) => f.some((frame) => frame.event === 'tail'))
+    expect(live.frames().filter((frame) => frame.event === 'rollback')).toHaveLength(0)
+
+    writeFileSync(file, `${kept.join('\n')}\n`)
+    const rolled = await live.until((f) => f.some((frame) => frame.event === 'rollback'))
+    expect(rolled.find((frame) => frame.event === 'rollback')?.data).toEqual({ fromOrdinal: 2 })
+
+    // Appended, not re-derived: a subscriber hears about each rewind once.
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(live.frames().filter((frame) => frame.event === 'rollback')).toHaveLength(1)
   })
 
   it('stops polling when the subscriber goes away', async () => {

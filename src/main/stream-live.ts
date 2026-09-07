@@ -3,6 +3,10 @@
 //   GET /api/terminal/:id/stream/live
 //     event: hello      once, on open — what this subscriber is watching
 //     event: tail       the OPEN last block, whenever the transcript grows
+//     event: rollback   {fromOrdinal} — a /rewind took checkpoints beyond the
+//                       file (T2.5). The rows stay in the index with their
+//                       marks; this tells a live rail to grey them rather
+//                       than re-fetching a list to discover they moved.
 //     event: mark       one per identity whose marks changed
 //     event: heartbeat  every 15 s, so a phone's EventSource stays convinced
 //
@@ -150,6 +154,36 @@ function tailFrameReader(
   }
 }
 
+/**
+ * Emits one `rollback` per NEW rewind.
+ *
+ * A rewind is the one change a live subscriber cannot infer from the tail: the
+ * transcript gets SHORTER, so the frames that follow simply stop mentioning
+ * the exchanges that were taken beyond it. The materialised state records each
+ * one as an appended fact (stream-materialise.ts), and this diffs that list.
+ *
+ * The open pass takes a BASELINE without emitting: a subscriber that has just
+ * fetched /stream/open already has every rollback in that answer, and
+ * replaying them would make a fresh card look like it had just been rewound.
+ */
+function rollbackPusher(
+  terminalId: string,
+  service: StreamService,
+  send: SseSend
+): (force: boolean) => Promise<void> {
+  let sent = 0
+  return async (force) => {
+    if (service.rollbacks === undefined) return
+    const marks = await service.rollbacks(terminalId)
+    if (force) {
+      sent = marks.length
+      return
+    }
+    for (const mark of marks.slice(sent)) send('rollback', { fromOrdinal: mark.fromOrdinal })
+    sent = marks.length
+  }
+}
+
 /** Emits one `mark` per identity whose folded marks differ from last pass. */
 function markPusher(
   terminalId: string,
@@ -191,6 +225,7 @@ function changeDetector(
   const statOf = deps.statOf ?? realStat
   const tailFrameOf = tailFrameReader(terminalId, source, deps)
   const pushMarks = markPusher(terminalId, service, send)
+  const pushRollbacks = rollbackPusher(terminalId, service, send)
   let lastTranscript: Stamp | null = null
   let lastLedger: Stamp | null = null
   let lastTail: TailFrame | null = null
@@ -208,6 +243,9 @@ function changeDetector(
       // UNCHANGED BYTES, NO READ. This is the bound the design asks for.
       if (!force && sameStamp(lastTranscript, transcript)) return
       lastTranscript = transcript
+      // A SHRINK is a change like any other, so this runs on exactly the
+      // passes that could have seen one — never on a quiet tick.
+      await pushRollbacks(force)
     }
     const frame = await tailFrameOf()
     if (force || !sameTail(lastTail, frame)) {

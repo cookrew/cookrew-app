@@ -86,6 +86,29 @@ export interface StreamIndexEntry {
   previousSessionId?: string
   /** The transcript this block was read from. */
   file: string
+  /**
+   * The transcript no longer holds this checkpoint's bytes — a /rewind
+   * truncated the file past it (T2.5, panel C ②).
+   *
+   * It stays in the index, at its own ordinal, with its marks: a rewind is an
+   * APPENDED fact about history, not a reason to renumber it. Blocks written
+   * after the rewind take ordinals AFTER these, because ordinals never
+   * regress (Codex ordinal.rs:16-100). Absent — not `false` — on every row
+   * that was never rewound, so the flag reads as evidence rather than noise.
+   */
+  rolledBack?: true
+  /**
+   * Later transcripts that ALSO hold this exchange, oldest first.
+   *
+   * Claude replays a prefix of the conversation into the file it rotates or
+   * resumes into — measured on the owner's busiest card: 181 of 1,046
+   * identities, every repeat spanning more than one file, 193 of 193 with an
+   * identical prompt. That is ONE exchange, so it is ONE row: at the ordinal
+   * of when it happened, with its bytes resolved from the newest file listed
+   * here, because that copy is what the next rotation carries forward. The
+   * rule is stream-replay.ts and nothing else may restate it.
+   */
+  replayedIn?: string[]
 }
 
 /** Where an index entry lives, so a window can fetch the block without
