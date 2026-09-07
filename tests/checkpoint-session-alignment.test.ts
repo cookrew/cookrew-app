@@ -4,7 +4,6 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { forkClaudeSession } from '../src/main/claude-fork'
 import { rekeyPinsByUuid } from '../src/main/pin-rekey'
-import { mergeCheckpointRows } from '../src/renderer/src/transcript'
 import { parseClaudeTrace, traceIndexOf } from '../src/shared/trace-blocks'
 import type { TurnRecord } from '../src/shared/turn'
 import { cutVersionPin, pinAnchors, type VersionPinRecord } from '../src/shared/version-pin'
@@ -125,51 +124,15 @@ describe('trace index carries the block identity to the renderer', () => {
   })
 })
 
-describe('mergeCheckpointRows joins by uuid, never across sessions by index', () => {
-  const traceIndex = [
-    { index: 1, id: 'u101', title: 'post-compact ask one' },
-    { index: 2, id: 'u102', title: 'post-compact ask two' },
-    { index: 3, id: 'u103', title: 'post-compact ask three' }
-  ]
-
-  it('a chain ledger pairs records onto the rows that ARE those turns', () => {
-    const rows = mergeCheckpointRows(chainLedger(), traceIndex)
-    expect(rows.map((r) => r.index)).toEqual([1, 2, 3])
-    // Row T2 is u102 — its record is ledger index 4, NOT ledger index 2.
-    expect(rows[1].record?.uuid).toBe('u102')
-    expect(rows[1].record?.title).toBe('title-u102')
-    // Pre-compact records (u001/u002) belong to an earlier segment: no
-    // phantom rows, no mispaired titles.
-    expect(rows.every((r) => r.record === null || r.record.uuid?.startsWith('u10'))).toBe(true)
-  })
-
-  it('rows carry the trace identity for uuid-keyed consumers (pins, role-save)', () => {
-    const rows = mergeCheckpointRows(chainLedger(), traceIndex)
-    expect(rows.map((r) => r.id)).toEqual(['u101', 'u102', 'u103'])
-  })
-
-  it('uuid-less legacy records still pair by index under the ceiling', () => {
-    const scrape: TurnRecord[] = [1, 2].map((index) => ({
-      index,
-      prompt: `p${index}`,
-      reply: '',
-      startedAt: index,
-      endedAt: index
-    }))
-    const rows = mergeCheckpointRows(scrape, traceIndex)
-    expect(rows[0].record?.prompt).toBe('p1')
-    expect(rows[1].record?.prompt).toBe('p2')
-  })
-
-  it('trace entries without ids keep the historical index merge (old servers)', () => {
-    const bare = traceIndex.map(({ index, title }) => ({ index, title }))
-    const rows = mergeCheckpointRows(chainLedger(), bare)
-    // No identity to join on: behaves as before — records ≤ ceiling pair by
-    // index (mispairing included; the server upgrade is what fixes it).
-    expect(rows).toHaveLength(3)
-    expect(rows[1].record?.uuid).toBe('u002')
-  })
-})
+// THE mergeCheckpointRows BLOCK THAT STOOD HERE IS GONE with the function
+// (one-stream T3). Every case in it existed because two derivations of the
+// same conversation had to be re-joined after the fact — a chain ledger paired
+// onto a trace listing by uuid, uuid-less legacy rows paired by index under a
+// ceiling, and a listing with no ids falling back to a merge that could
+// mispair across a compaction. There is one listing now, keyed by identity and
+// ordered by an ordinal that never restarts, so none of those cases can be
+// expressed. What replaced them: tests/stream-rows.test.ts (the projection)
+// and tests/stream-reducer.test.ts (the folding).
 
 describe('version pins anchor by checkpoint uuid', () => {
   const rows = [
