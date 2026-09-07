@@ -153,14 +153,40 @@ function claudeResultText(content: unknown): string {
 export function parseClaudeTraceDocument(lines: string[]): {
   blocks: TraceBlock[]
   markers: TraceBoundaryMarker[]
+  /**
+   * Where each block OPENED, as an index into `lines` (T5 QA 2026-09-07).
+   *
+   * The finality question is a question about ONE exchange, and answering it
+   * from a fixed 256 KB tail was wrong for exactly the turns that need it: on
+   * a tool-heavy turn the window held 19 records and reached neither the
+   * block's own prompt nor its `stop_reason: end_turn`, so a finished Claude
+   * turn read as OPEN forever. Knowing which line an exchange starts on is
+   * what lets a caller read that exchange and nothing more.
+   *
+   * A LINE INDEX, NOT A BYTE OFFSET, because this parser is pure and is
+   * handed lines, not bytes — and because measuring the bytes costs: a
+   * forward `Buffer.byteLength` prefix over a 142 MB transcript is 1.5 s
+   * (measured 2026-09-07), which is not a price every ingest can pay. The
+   * caller that owns the bytes (trace.ts) turns the LAST of these into a byte
+   * span by summing backwards over that block's own lines, which is O(one
+   * exchange).
+   *
+   * Parallel to `blocks`: `blockLines[i]` opens `blocks[i]`. A sibling
+   * collapse does NOT move the start — the exchange begins at its first
+   * submission, which is where its records begin.
+   */
+  blockLines: number[]
 } {
   const blocks: TraceBlock[] = []
+  const blockLines: number[] = []
   const markers: TraceBoundaryMarker[] = []
   let current: TraceBlock | null = null
   const assigner = new CheckpointAssigner()
   // tool_use id → its call object, for filling results (tool_use_id match).
   const pendingCalls = new Map<string, TraceToolCall>()
+  let at = -1
   for (const line of lines) {
+    at += 1
     const entry = parseLine(line) as ClaudeEntry | null
     if (entry === null || typeof entry.type !== 'string') continue
     const content = entry.message?.content
@@ -194,6 +220,7 @@ export function parseClaudeTraceDocument(lines: string[]): {
       }
       pendingCalls.clear()
       blocks.push(current)
+      blockLines.push(at)
       continue
     }
     if (!current) continue
@@ -233,7 +260,7 @@ export function parseClaudeTraceDocument(lines: string[]): {
     }
     current.endedAt = timeMs(entry.timestamp, current.endedAt)
   }
-  return { blocks, markers }
+  return { blocks, markers, blockLines }
 }
 
 /** Whole-file compatibility projection; TraceReader keeps the markers too. */

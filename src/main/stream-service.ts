@@ -234,7 +234,11 @@ export function createStreamService(deps: StreamServiceDeps): StreamService {
         return { ...tail, final: false, kind: null, total: window.total }
       }
       const kind = chain.files.find((entry) => entry.file === block.file)?.kind ?? 'claude'
-      const final = await tailIsFinal(block, block.file, kind, deps.finality ?? {})
+      // The block's OWN span, when the reader could vouch for it (D4, T5 QA
+      // 2026-09-07): the finality read opens at this exchange's first record
+      // rather than at a fixed 256 KB from EOF, which is what made a
+      // tool-heavy Claude turn read as open forever.
+      const final = await tailIsFinal(block, block.file, kind, deps.finality ?? {}, tail.tailBytes)
       // `open` follows the SETTLED rule, not just the block's own evidence:
       // a Claude turn that wrote its end_turn is over, and reporting it as
       // still live is what would keep a card spinning after the agent stopped.

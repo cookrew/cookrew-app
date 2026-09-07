@@ -51,6 +51,16 @@ export interface TraceDocument {
   blocks: TraceBlock[]
   markers: TraceBoundaryMarker[]
   bytesRead: number
+  /**
+   * How many bytes of this file the LAST block spans — from the line its
+   * opening record sits on, to EOF (T5 QA 2026-09-07).
+   *
+   * The finality read's window (stream-finality.ts). Absent for a document
+   * with no block, for a non-Claude parser, and when the span would exceed
+   * TAIL_BLOCK_SPAN_CAP — beyond that the honest answer is "unknown", which
+   * reads as OPEN rather than as a multi-megabyte read on every poll.
+   */
+  tailBlockBytes?: number
 }
 
 /** A session file + the harness's turn parser, for SessionTurnSync.watch. */
@@ -240,6 +250,9 @@ interface CacheEntry {
   lines: string[]
   blocks: TraceBlock[]
   compactMarkers: TraceBoundaryMarker[]
+  /** The last block's own byte span, computed once per ingest — see
+   *  TraceDocument.tailBlockBytes. */
+  tailBlockBytes?: number
 }
 
 export class TraceReader {
@@ -664,7 +677,8 @@ export class TraceReader {
     return {
       blocks,
       markers: cached?.compactMarkers ?? [],
-      bytesRead: cached?.bytesRead ?? 0
+      bytesRead: cached?.bytesRead ?? 0,
+      ...(cached?.tailBlockBytes !== undefined ? { tailBlockBytes: cached.tailBlockBytes } : {})
     }
   }
 
@@ -791,6 +805,9 @@ export class TraceReader {
       : kind === 'codex'
         ? parseCodexTrace(lines)
         : parsePiTrace(lines)
+    const tailBlockBytes = parsedClaude
+      ? tailBlockSpan(lines, parsedClaude.blockLines, remainder.length)
+      : undefined
     TraceReader.cappedSetSized(this.cache, file, {
       file,
       bytesRead,
@@ -798,8 +815,52 @@ export class TraceReader {
       remainder,
       lines,
       blocks,
-      compactMarkers: parsedClaude?.markers ?? []
+      compactMarkers: parsedClaude?.markers ?? [],
+      ...(tailBlockBytes !== undefined ? { tailBlockBytes } : {})
     })
     return blocks
   }
+}
+
+/**
+ * The finality read's ceiling. Past this the answer is "unknown", which reads
+ * as OPEN — the conservative direction stream-finality.ts has always taken.
+ *
+ * 8 MiB is roughly forty times the largest single exchange measured on the
+ * owner's machine and still one bounded read; a turn whose own records run
+ * longer than that is a turn nobody can settle cheaply, and freezing a card
+ * on a "still working" is far cheaper than a multi-megabyte read per poll.
+ */
+export const TAIL_BLOCK_SPAN_CAP = 8 * 1024 * 1024
+
+/**
+ * The LAST block's own byte span: its opening line, to EOF.
+ *
+ * SUMMED BACKWARDS, over one exchange's lines only. A forward prefix over the
+ * whole file would be exact for every block and costs 1.5 s on a 142 MB
+ * transcript (measured 2026-09-07) — a price every ingest would pay for an
+ * answer only the tail ever needs. This is O(the tail exchange).
+ *
+ * The sum is a LOWER-BOUND-SAFE approximation of the span: blank lines are
+ * dropped before this parser sees them (readLines pushes only non-empty
+ * lines), so a transcript with blank lines inside its last exchange yields a
+ * span slightly SHORT of the truth. stream-finality.ts adds its own backoff
+ * for that, and a window that opens mid-record simply drops its torn first
+ * line the way every window here already does.
+ */
+export function tailBlockSpan(
+  lines: readonly string[],
+  blockLines: readonly number[],
+  remainderBytes: number
+): number | undefined {
+  const from = blockLines[blockLines.length - 1]
+  if (from === undefined || from < 0 || from >= lines.length) return undefined
+  let span = remainderBytes
+  for (let at = lines.length - 1; at >= from; at -= 1) {
+    span += Buffer.byteLength(lines[at]) + 1
+    // BOUNDED: a runaway exchange stops costing arithmetic the moment it is
+    // past anything the finality read would agree to open.
+    if (span > TAIL_BLOCK_SPAN_CAP) return span
+  }
+  return span
 }

@@ -240,6 +240,59 @@ describe('GET /stream/live', () => {
     expect((last.data.block as { reply: string }).reply).toContain('all done')
   })
 
+  // D4, T5 QA 2026-09-07. A TOOL-HEAVY turn is the one that read as OPEN
+  // forever: its own prompt sits far outside any window taken from EOF, so
+  // the finality read has to open at the exchange's own first record.
+  it('flips a tool-heavy turn to final within one poll of it ending', async () => {
+    const toolTraffic = (n: number): string[] => [
+      JSON.stringify({
+        type: 'assistant',
+        timestamp: iso(T0 + 10 + n),
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: `t${n}`, name: 'Read', input: { file_path: '/x' } }],
+          stop_reason: 'tool_use'
+        }
+      }),
+      JSON.stringify({
+        type: 'user',
+        timestamp: iso(T0 + 11 + n),
+        message: {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: `t${n}`, content: 'y'.repeat(15_000) }]
+        }
+      })
+    ]
+    const opening = [prompt('u1', 'run the whole suite', T0)]
+    for (let n = 0; n < 24; n += 1) opening.push(...toolTraffic(n))
+    const { file, service } = bed(opening)
+    const live = await open(service, { pollMs: 20, heartbeatMs: 10_000 })
+    const first = await live.until((f) => f.some((frame) => frame.event === 'tail'))
+    expect((first.find((frame) => frame.event === 'tail') as Frame).data.final).toBe(false)
+
+    appendFileSync(file, `${reply('the suite is green', T0 + 400, 'end_turn')}\n`)
+    const closed = await live.until((f) =>
+      f.some((frame) => frame.event === 'tail' && frame.data.final === true)
+    )
+    const last = closed.filter((frame) => frame.event === 'tail').pop() as Frame
+    expect(last.data.final).toBe(true)
+    expect((last.data.block as { id: string }).id).toBe('u1')
+  })
+
+  it('an idle card’s last turn reads final on the very first frame', async () => {
+    const { service } = bed([
+      prompt('u1', 'first', T0),
+      reply('one', T0 + 1, 'end_turn'),
+      prompt('u2', 'second', T0 + 2),
+      reply('two', T0 + 3, 'end_turn')
+    ])
+    const live = await open(service, { pollMs: 20, heartbeatMs: 10_000 })
+    const frames = await live.until((f) => f.some((frame) => frame.event === 'tail'))
+    const tail = frames.find((frame) => frame.event === 'tail') as Frame
+    expect(tail.data.final).toBe(true)
+    expect((tail.data.block as { id: string }).id).toBe('u2')
+  })
+
   it('heartbeats on its own clock so a phone’s EventSource stays convinced', async () => {
     const { service } = bed([prompt('u1', 'ask', T0)])
     const live = await open(service, { pollMs: 5_000, heartbeatMs: 30 })

@@ -161,6 +161,16 @@ export interface StreamTailResult {
   block: StreamBlock | null
   open: boolean
   missing: MissingStreamFile[]
+  /**
+   * How many bytes of `block.file` this exchange spans, from its own opening
+   * record to EOF (T5 QA 2026-09-07 — TraceDocument.tailBlockBytes).
+   *
+   * The finality window. Absent when the reader cannot vouch for it: a
+   * non-Claude parser, or a tail block that is NOT its file's last block
+   * (a replay collapsed onto a newer copy). Absent falls back to the fixed
+   * tail window, which is what shipped before this existed.
+   */
+  tailBytes?: number
 }
 
 export interface StreamReader {
@@ -184,6 +194,8 @@ interface LoadedFile {
   declared: boolean
   /** This file's first block's clock, or null when it holds none. */
   startedAt: number | null
+  /** The byte span of this file's LAST block (TraceDocument.tailBlockBytes). */
+  tailBlockBytes?: number
 }
 
 /** The (file, byte offset) key the light index is cached under. */
@@ -267,7 +279,10 @@ export function createStreamReader(deps: StreamReaderDeps): StreamReader {
         entries: entriesOf(ref.file, document),
         bytesRead: document.bytesRead,
         declared: ref.declared === true,
-        startedAt: document.blocks[0]?.startedAt ?? null
+        startedAt: document.blocks[0]?.startedAt ?? null,
+        ...(document.tailBlockBytes !== undefined
+          ? { tailBlockBytes: document.tailBlockBytes }
+          : {})
       })
     }
     return { files: placeUndeclared(files), missing }
@@ -373,7 +388,23 @@ export function createStreamReader(deps: StreamReaderDeps): StreamReader {
       const last = positions[positions.length - 1]
       if (last === undefined) return { block: null, open: false, missing }
       const block = blockAt(files, last)
-      return { block, open: block.final !== true, missing }
+      // THE SPAN IS ONLY CLAIMED WHEN IT IS THIS BLOCK'S. `tailBlockBytes`
+      // describes a FILE's last block; the stream's tail is normally the same
+      // record, but a replay collapsed onto a newer copy can leave it
+      // elsewhere. Claiming a neighbour's span would aim the finality read at
+      // the wrong exchange, so it is simply omitted and the fixed window
+      // stands.
+      const file = files[last.fileAt]
+      const ownSpan =
+        file !== undefined &&
+        file.tailBlockBytes !== undefined &&
+        last.localAt === file.blocks.length - 1
+      return {
+        block,
+        open: block.final !== true,
+        missing,
+        ...(ownSpan ? { tailBytes: file.tailBlockBytes as number } : {})
+      }
     }
   }
 }
