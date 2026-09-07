@@ -22,6 +22,7 @@ import {
 } from '../src/main/board-index'
 import { BOARD_WINDOW_MS, BOARD_WINDOW_WIDE_MS, type BoardAgentMeta } from '../src/shared/board'
 import { TurnStore } from '../src/main/turn-store'
+import { ScrapeHistoryStore } from '../src/main/scrape-history'
 import type { TerminalActivity, TurnRecord } from '../src/shared/turn'
 
 const NOW = 1_800_000_000_000
@@ -233,34 +234,48 @@ describe('TurnStore.loadAll — the L3 ledger', () => {
     expect(new TurnStore(missing).loadAll().size).toBe(0)
   })
 
-  it('caches: a file written behind its back is NOT re-read', () => {
+  /**
+   * T4 turned the loadAll cache from write-through to STAT-VALIDATED. The old
+   * contract was "a file written behind its back is NOT re-read", which was
+   * sound while this process was the only writer of ~/.cookrew/turns. It is
+   * not any more (scrape-history.ts), so the cache re-reads exactly the
+   * entries whose file has moved — a stat each, not a parse.
+   */
+  it('re-reads only the entries whose file moved', () => {
     const dir = path.join(mkdtempSync(path.join(tmpdir(), 'turns-')), 'turns')
     mkdirSync(dir, { recursive: true })
-    writeFileSync(path.join(dir, 'a.json'), JSON.stringify([record({ index: 1 })]), 'utf8')
+    writeFileSync(path.join(dir, 'a.jsonl'), `${JSON.stringify(record({ index: 1 }))}\n`, 'utf8')
     const store = new TurnStore(dir)
     expect(store.loadAll().size).toBe(1)
-    writeFileSync(path.join(dir, 'b.json'), JSON.stringify([record({ index: 1 })]), 'utf8')
-    // Cached on purpose — 129 files / 3.7 MB must not be re-read per request.
-    expect(store.loadAll().size).toBe(1)
+    const first = store.loadAll().get('a')
+    // Unmoved: the very same array, straight out of the cache.
+    expect(store.loadAll().get('a')).toBe(first)
+
+    writeFileSync(
+      path.join(dir, 'a.jsonl'),
+      `${JSON.stringify(record({ index: 1 }))}\n${JSON.stringify(record({ index: 2 }))}\n`,
+      'utf8'
+    )
+    expect(store.loadAll().get('a')).toHaveLength(2)
   })
 
-  it('refreshes incrementally on write, so the board sees new turns', async () => {
+  it('sees a ledger the one remaining writer just extended', () => {
     const dir = path.join(mkdtempSync(path.join(tmpdir(), 'turns-')), 'turns')
     const store = new TurnStore(dir)
+    const writer = new ScrapeHistoryStore(dir, store.annotationsDir, new TurnStore(dir))
     expect(store.loadAll().size).toBe(0)
-    store.scheduleSave('t1', [record({ index: 1 })])
-    store.flushAll()
+    writer.save('t1', [record({ index: 1 })])
     expect(store.loadAll().get('t1')).toHaveLength(1)
-    store.scheduleSave('t1', [record({ index: 1 }), record({ index: 2 })])
-    store.flushAll()
+    writer.save('t1', [record({ index: 1 }), record({ index: 2 })])
     expect(store.loadAll().get('t1')).toHaveLength(2)
   })
 
-  it('drops a removed terminal from the cache', () => {
+  it('drops a removed terminal', () => {
     const dir = path.join(mkdtempSync(path.join(tmpdir(), 'turns-')), 'turns')
     const store = new TurnStore(dir)
-    store.scheduleSave('gone', [record({ index: 1 })])
-    store.flushAll()
+    new ScrapeHistoryStore(dir, store.annotationsDir, new TurnStore(dir)).save('gone', [
+      record({ index: 1 })
+    ])
     expect(store.loadAll().has('gone')).toBe(true)
     store.remove('gone')
     expect(store.loadAll().has('gone')).toBe(false)

@@ -8,7 +8,7 @@
 //   binding ∪ node lineage ∪ spill, oldest first
 //
 // exactly the union trace.ts's lineageSegments already takes — the declared
-// rotation walk (lineage-ledger.sessionChain, a FACT read out of each
+// rotation walk (session-lineage-walk.sessionChain, a FACT read out of each
 // transcript's head) in front of it the ids this app recorded that no
 // transcript declares any more. That second set is not decoration: it is what
 // survived the 2026-09-06 cap incident, where a /clear broke an edge and a
@@ -22,7 +22,7 @@
 import { existsSync } from 'node:fs'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { claudeSessionFile } from './claude-fork'
-import { sessionChain } from './lineage-ledger'
+import { sessionChain } from './session-lineage-walk'
 import { reachableLineage, type LineageBearingNode } from './lineage-spill'
 import type { TraceKind } from './trace'
 

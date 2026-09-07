@@ -24,6 +24,9 @@ import {
 import { summarizeTurn, TurnSummarizer } from './sous'
 import type { SousReadiness } from './sous-breaker'
 import type { TurnStore } from './turn-store'
+import { ScrapeHistoryStore } from './scrape-history'
+import { migrationIdentityOf } from './mark-migration'
+import type { MarkPatch } from './marks'
 import {
   RECOVERED_PROMPT_LABEL,
   TerminalActivity,
@@ -611,7 +614,46 @@ export class TurnTracker extends EventEmitter {
     private sousReady: () => SousReadiness = () => 'ready'
   ) {
     super()
+    // THE ONLY WRITER LEFT (T4). Derived from the reader rather than injected
+    // so every existing construction — `new TurnTracker(summarize, store)` —
+    // keeps persisting a scrape-owned history to the same two directories,
+    // and so the writer can read what is already there through the same
+    // parser that will read it back.
+    //
+    // THE DIRECTORIES ARE CHECKED AT RUNTIME, not just typed. Tests pass
+    // partial fakes for `store` (`{ load: () => disk } as never`), and
+    // ScrapeHistoryStore's defaults are the OWNER'S ~/.cookrew — a fake with
+    // no `dir` would have made a unit test write into the real ledger. A
+    // store that cannot say where it lives gets no writer.
+    const dir = (store as Partial<TurnStore> | null)?.dir
+    const annotations = (store as Partial<TurnStore> | null)?.annotationsDir
+    this.scrapeHistory =
+      store !== null && typeof dir === 'string' && typeof annotations === 'string'
+        ? new ScrapeHistoryStore(dir, annotations, store)
+        : null
   }
+
+  /**
+   * Durable history for 'scrape' sources ONLY (scrape-history.ts). Null when
+   * this tracker holds no store at all (tests: in-memory).
+   */
+  private scrapeHistory: ScrapeHistoryStore | null
+
+  /**
+   * WHERE A SOUS TITLE AND A SEEN-AT GO NOW (T4).
+   *
+   * They used to be two fields on a stored TurnRecord, written back into the
+   * ledger this tracker no longer writes. They are marks: the two things about
+   * a checkpoint that are NOT in the transcript, keyed by the identity the
+   * stream assigns. Wired in index.ts to StreamService.writeMark; null in a
+   * test, and in the window before the stream service exists, in which case a
+   * title still shows on the live card and simply is not durable.
+   *
+   * A property rather than a constructor argument because the stream service
+   * is composed after this tracker — and because a mark is a nicety: a tracker
+   * that cannot write one must still take turns.
+   */
+  onMark: ((terminalId: string, patch: MarkPatch) => void) | null = null
 
   /**
    * Completed turns per terminal. Kept OUTSIDE `tracked` so history survives
@@ -981,42 +1023,25 @@ export class TurnTracker extends EventEmitter {
     /**
      * THE PREMISE OF EVERY INCREMENTAL APPLY: MY COPY IS THE RECORD.
      *
-     * The branches below splice into `histories` — the tracker's in-memory
-     * buffer — and hand that buffer to the store as the whole history. That is
-     * correct exactly while the buffer still agrees with the durable ledger,
-     * and it silently is not after anything writes that ledger from outside
-     * this tracker. A lineage restore did, and this path turned a 542-record
-     * history into 23 forty-five seconds later.
+     * It used to be checked against the durable ledger — viewIsStale for a
+     * file that moved, count for a second writer inside this process — because
+     * a lineage restore wrote that ledger behind this tracker and turned a
+     * 542-record history into 23 forty-five seconds later.
      *
-     * The other premises here are already checked — positions drifted, foreign
-     * records interleaved, an emitter's tail that is not ours — and each falls
-     * back to the full reconcile rather than guessing. This is the same kind of
-     * check and gets the same answer; it was simply never asked, because the
-     * durable record was assumed rather than consulted.
+     * BOTH CHECKS ARE GONE AT T4, and the reason is that the thing they
+     * watched no longer exists. The ledger is frozen at the migration: nothing
+     * writes it for a file-backed card, and the two tools that used to
+     * (ledger-rebuild's rebuildLedgerInto, lineage-recover's renumbering
+     * restore) are deleted with it. Left in place they would have been worse
+     * than useless — the durable count stops moving while this history grows,
+     * so the guard would have been TRUE from the first turn after the
+     * migration and forced the O(history) full reconcile on every single
+     * append, forever. A stale guard that fires always is not a safety net.
      *
-     * TWO QUESTIONS, because there are two ways to be wrong and they have
-     * different answers:
-     *
-     *   - viewIsStale: did the FILE move under this process? That is the
-     *     out-of-process repair tool, and a stat answers it.
-     *   - count: does the durable ledger hold as many records as this tracker
-     *     thinks it does? That catches a writer inside this process — a repair
-     *     wired through the same store, a second tracker — which leaves the
-     *     file's identity perfectly consistent with the store's own view while
-     *     making THIS buffer wrong. O(1) from the store's maintained count.
-     *
-     * Neither is a read of the ledger, so the O(delta) path stays O(delta) in
-     * the case that is always true in steady state: nobody else wrote, both
-     * answers agree, and the delta applies.
+     * The premises that remain are the ones about this apply: positions
+     * drifted, foreign records interleaved, an emitter's tail that is not
+     * ours. Each still falls back to the full reconcile rather than guessing.
      */
-    const durableCount = this.store?.count(terminalId)
-    if (
-      this.store?.viewIsStale(terminalId) === true ||
-      (durableCount !== undefined && durableCount !== this.liveHistory(terminalId).length)
-    ) {
-      this.replaceHistory(terminalId, fullRecords(), source)
-      return
-    }
     if (delta.kind === 'reset') {
       this.replaceHistory(terminalId, fullRecords(), source)
       return
@@ -1065,10 +1090,10 @@ export class TurnTracker extends EventEmitter {
     const lastAt = previous.length - 1
     if (lastAt >= 0) previous[lastAt] = this.stampInFlight(terminalId, previous[lastAt])
     if (window.length !== expected) {
-      // The boundary dedupe dropped a phantom twin: the change is a shrink,
-      // which the delta save contract cannot express — full save path.
+      // The boundary dedupe dropped a phantom twin: a shrink. Nothing is
+      // written either way now (T4) — this branch survives only because the
+      // observers below must see the shrunk history, not the delta's shape.
       this.snapshots.delete(terminalId)
-      this.store?.scheduleSave(terminalId, previous)
       this.afterCommit(terminalId, previous)
       return
     }
@@ -1081,7 +1106,11 @@ export class TurnTracker extends EventEmitter {
    */
   private commitReconciled(terminalId: string, records: TurnRecord[]): void {
     this.setHistory(terminalId, records)
-    this.store?.scheduleSave(terminalId, records)
+    // NOTHING IS WRITTEN HERE ANY MORE (T4). This is the SESSION-FILE
+    // reconcile: every record landing through it was derived from a transcript
+    // that is still on disk, and the stream derives the same rows from the
+    // same bytes. The second copy this used to save is what made a compact
+    // renumber 400 checkpoints out of reach.
     this.afterCommit(terminalId, records)
   }
 
@@ -1112,10 +1141,12 @@ export class TurnTracker extends EventEmitter {
    * person to profile this seam will find afterCommit on the write path and
    * reasonably assume everything below it succeeded.
    */
-  private commitDelta(terminalId: string, changed: TurnRecord[]): void {
+  private commitDelta(terminalId: string, _changed: TurnRecord[]): void {
     const records = this.liveHistory(terminalId)
     this.snapshots.delete(terminalId)
-    this.store?.scheduleDelta(terminalId, records, changed)
+    // The delta save is gone with the full one (T4) — same reason, same path.
+    // The parameter stays because every caller names its change, and a caller
+    // that stops naming it is a caller that has stopped knowing what changed.
     this.afterCommit(terminalId, records)
   }
 
@@ -1309,7 +1340,8 @@ export class TurnTracker extends EventEmitter {
       if (live.uuid !== next.record.uuid || live.prompt !== next.record.prompt) return
       const updated = current.map((r) => (r.index === next.record.index ? { ...r, title } : r))
       this.setHistory(next.terminalId, updated)
-      this.store?.scheduleSave(next.terminalId, updated)
+      this.mark(next.terminalId, next.record, { title })
+      this.persistScrape(next.terminalId, updated)
       const t = this.tracked.get(next.terminalId)
       if (t) this.push(t)
     } finally {
@@ -1370,9 +1402,11 @@ export class TurnTracker extends EventEmitter {
     const history = this.liveHistory(terminalId)
     const last = history[history.length - 1]
     if (!last || last.seenAt !== undefined) return
-    const updated = [...history.slice(0, -1), { ...last, seenAt: Date.now() }]
+    const seenAt = Date.now()
+    const updated = [...history.slice(0, -1), { ...last, seenAt }]
     this.setHistory(terminalId, updated)
-    this.store?.scheduleSave(terminalId, updated)
+    this.mark(terminalId, last, { seenAt })
+    this.persistScrape(terminalId, updated)
   }
 
   /**
@@ -1862,11 +1896,46 @@ export class TurnTracker extends EventEmitter {
     return this.fileBacked.has(terminalId)
   }
 
+  /**
+   * Persist a SCRAPE-OWNED history, and refuse to persist any other kind (T4).
+   *
+   * The one guard that makes turn-store.ts a reader. A file-backed card's
+   * history is derived from its transcript by the stream, so writing a second
+   * copy of it here is what the whole phase removes; a scrape card has no
+   * transcript and this is the only record it will ever have.
+   *
+   * Never throws and never reports: losing a scrape line must cost the line,
+   * not the turn that produced it (scrape-history.ts logs the failure).
+   */
+  private persistScrape(terminalId: string, records: readonly TurnRecord[]): void {
+    if (this.writesFromFile(terminalId)) return
+    this.scrapeHistory?.save(terminalId, records)
+  }
+
+  /**
+   * Attach a mark to the checkpoint a record IS — the durable home of a Sous
+   * title and an acknowledge-on-view marker since T4.
+   *
+   * Keyed by the identity the STREAM assigns (mark-migration.migrationIdentityOf
+   * — the record's uuid, or the derived prompt digest), which is the same key
+   * the migration used, so a title written today and a title carried across
+   * from the old store land on the same row.
+   */
+  private mark(terminalId: string, record: TurnRecord, patch: Omit<MarkPatch, 'identity'>): void {
+    if (this.onMark === null) return
+    try {
+      this.onMark(terminalId, { identity: migrationIdentityOf(record), ...patch })
+    } catch (error) {
+      console.error(`[turns] mark write for ${terminalId} failed:`, error)
+    }
+  }
+
   /** Forget a removed terminal's turns (node deletion, not detach). */
   clearHistory(terminalId: string): void {
     this.histories.delete(terminalId)
     this.snapshots.delete(terminalId)
     this.store?.remove(terminalId)
+    this.scrapeHistory?.forget(terminalId)
     this.fileBacked.delete(terminalId)
     this.deliveredPrompt.delete(terminalId)
     this.scrapeEmitted.delete(terminalId)
@@ -1880,9 +1949,20 @@ export class TurnTracker extends EventEmitter {
     }
   }
 
-  /** Write out pending history saves now (app quit). */
+  /**
+   * Write out pending history saves now (app quit).
+   *
+   * A NO-OP SINCE T4, and kept as one rather than deleted: nothing is
+   * buffered any more. The old store debounced every save by 300ms, so quit,
+   * the fatal-handler flush and the before-quit drain all had to reach in and
+   * land them; scrape-history.ts writes synchronously on the turn that
+   * produced the record, so there is never anything outstanding to flush.
+   * The method stays because "flush before you die" is a habit worth keeping
+   * a home for, and because removing it would make three exit paths read as
+   * if they had forgotten something.
+   */
   flushHistories(): void {
-    this.store?.flushAll()
+    // Intentionally empty — see above.
   }
 
   track(session: PtySession, agent: boolean): void {
@@ -2091,10 +2171,19 @@ export class TurnTracker extends EventEmitter {
       reply: null,
       glance: null,
       title: null,
-      // The store's CACHED count: historyCount goes through liveHistory,
-      // which reads and hydrates the whole ledger — a synchronous reparse
-      // per reported agent is not what "costs nothing" means.
-      turnCount: this.store?.count(terminalId) ?? 0,
+      // This tracker's own count when it holds one; otherwise the store's
+      // cached count. historyCount goes through liveHistory, which reads and
+      // hydrates a whole ledger — a synchronous reparse per reported agent is
+      // not what "costs nothing" means, so a terminal this process has never
+      // loaded is answered from the file's cached line count instead.
+      //
+      // T4, STATED: for a file-backed card that ledger stopped growing at the
+      // migration, so a card that is detached AND has never been tracked in
+      // this process reports the count it had then. It corrects itself the
+      // moment the card is attached (the reconcile fills `histories`). The
+      // live number belongs to the stream now; wiring the stream's index
+      // length in here is T5's, with the retirement of the old store.
+      turnCount: this.histories.get(terminalId)?.length ?? this.store?.count(terminalId) ?? 0,
       turnStartedAt: null,
       turnStartLine: null,
       scrollRow: null,
@@ -2820,7 +2909,11 @@ export class TurnTracker extends EventEmitter {
     const newRecord = appended[appended.length - 1]
     const deduped = dedupePhantomEchoes(appended)
     this.setHistory(id, deduped)
-    this.store?.scheduleSave(id, deduped)
+    // THE ONE SURVIVING CONVERSATION WRITE (T4). Reached only past the
+    // writesFromFile return above, so it is a scrape-source card by
+    // construction — the harness has no session file and this is the only
+    // record its history will ever have.
+    this.persistScrape(id, deduped)
     const survived = deduped.some((r) => r.index === newRecord.index)
     if (t.turnStartedAt > 0) {
       const recordIndex = survived ? newRecord.index : deduped[deduped.length - 1]?.index
@@ -2895,7 +2988,8 @@ export class TurnTracker extends EventEmitter {
       const titled = { ...history[at], title }
       history[at] = titled
       this.snapshots.delete(id)
-      this.store?.scheduleDelta(id, history, [titled])
+      this.mark(id, titled, { title })
+      this.persistScrape(id, history)
     }
     // Only retitle the live card if no new turn started while summarizing.
     if (this.tracked.get(id) === t && t.titleGen === gen && t.phase === 'replied') {

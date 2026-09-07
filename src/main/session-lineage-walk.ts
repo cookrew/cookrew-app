@@ -11,20 +11,29 @@ import {
 } from './claude-rotation'
 
 /**
- * A checkpoint history that spans compacts.
+ * WHICH FILES ARE ONE AGENT'S CONVERSATION — the chain walk, and nothing else.
+ *
+ * Until T4 this module was `lineage-ledger.ts` and had two halves. The LEDGER
+ * half — refuseRenumber, and the offline renumbering restore in
+ * lineage-recover.ts that consulted it — is deleted with the store it
+ * renumbered: an ordinal is the block's position in the whole stream now
+ * (stream.ts), so there is nothing left to renumber and nothing left to refuse.
+ * The WALK is what survived, because it answers the one question the stream
+ * cannot answer for itself: which transcripts, in which order, ARE this card's
+ * conversation. stream-chain.ts and trace.ts both stand on it.
  *
  * THE BUG THIS EXISTS FOR. A compact ends one session file and starts another.
- * The ledger is built from the CURRENT file alone, so at every compact the
- * numbering restarts at 1 and everything before it stops being addressable —
+ * The old ledger was built from the CURRENT file alone, so at every compact the
+ * numbering restarted at 1 and everything before it stopped being addressable —
  * the owner lost 400+ checkpoints that way and reported them as destroyed.
  *
- * They were never destroyed. ledger-rebuild.ts says it plainly: the transcripts
- * ARE the conversation and the ledger is an index over them. The transcripts
- * are intact, they are large (one chain measured 119 MB + 91 + 91 + 71), and
- * every compact writes a machine-readable join — a `compact_boundary` record
- * whose `logicalParentUuid` points into the predecessor, followed by a summary
- * carrying the predecessor's id. claude-rotation.ts has understood that shape
- * all along. Nothing joined it to the ledger: a grep for resolveRotationChain,
+ * They were never destroyed. The transcripts ARE the conversation and the
+ * ledger was an index over them. The transcripts are intact, they are large
+ * (one chain measured 119 MB + 91 + 91 + 71), and every compact writes a
+ * machine-readable join — a `compact_boundary` record whose `logicalParentUuid`
+ * points into the predecessor, followed by a summary carrying the
+ * predecessor's id. claude-rotation.ts has understood that shape all along.
+ * Nothing joined it to the ledger: a grep for resolveRotationChain,
  * predecessor or lineage across turn-store, turn-tracker and ledger-rebuild
  * returned zero. The data was not lost, only unindexed.
  *
@@ -206,41 +215,6 @@ export async function sessionChain(
 /** Why the most recent walk stopped, when it stopped at an inferred join. */
 let lastRefusals: JoinRefusal[] = []
 export const walkRefusals = (): readonly JoinRefusal[] => lastRefusals
-
-/**
- * Why a node may not be renumbered right now.
- *
- * VERSION PINS ARE STILL INDEX-KEYED (src/shared/version-pin.ts, `atIndex`,
- * resolved through rows.findIndex(r => r.index === atIndex) and persisted by
- * pin-store.ts). Renumbering a node that carries one would move every pin onto
- * a different checkpoint, silently — the same wrong-not-orphaned failure the
- * annotation re-key exists to stop, in data owned by the marketplace lane.
- *
- * So this REFUSES, explicitly and with a reason a person can act on. No node
- * carries a pin today, which is exactly why the check has to be written now:
- * the first one that does will arrive long after this commit, and nobody will
- * be watching for it then.
- */
-export interface RenumberRefusal {
-  terminalId: string
-  reason: 'version-pins-are-index-keyed'
-  detail: string
-}
-
-export function refuseRenumber(
-  terminalId: string,
-  pinCount: number
-): RenumberRefusal | null {
-  if (pinCount <= 0) return null
-  return {
-    terminalId,
-    reason: 'version-pins-are-index-keyed',
-    detail:
-      `${terminalId} carries ${pinCount} version pin(s), which are keyed by checkpoint ` +
-      'index (version-pin.ts atIndex). Renumbering would move them onto different ' +
-      'checkpoints without any error. Re-key pins by checkpoint uuid first, then re-run.'
-  }
-}
 
 /** True when this directory holds a transcript for `sessionId`. */
 export function hasTranscript(

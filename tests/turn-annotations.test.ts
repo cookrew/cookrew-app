@@ -20,6 +20,7 @@ import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { TurnStore } from '../src/main/turn-store'
+import { ScrapeHistoryStore } from '../src/main/scrape-history'
 import { ANNOTATION_LOG_COMPACT_MIN_OPS, AnnotationStore } from '../src/main/turn-annotations'
 import {
   hasAnnotation,
@@ -61,9 +62,11 @@ const rec = (index: number, over: Partial<TurnRecord> = {}): TurnRecord => ({
   ...over,
 })
 
+// T4: turn-store.ts is a reader. Fixtures go down through the one writer
+// left, over the SAME two directories, so the split it performs is the split
+// the reader reads back.
 const save = (records: TurnRecord[], id = 't1'): void => {
-  store.scheduleSave(id, records)
-  store.flushAll()
+  new ScrapeHistoryStore(dir, annDir, new TurnStore(dir, annDir)).save(id, records)
 }
 
 const conversationText = (id = 't1'): string =>
@@ -270,11 +273,13 @@ describe('TurnStore — files written before the split', () => {
     expect(new TurnStore(dir).load('old')).toEqual(records)
   })
 
-  it('carries a legacy .json array’s annotations across the migration', () => {
+  it('reads a legacy .json array’s inline annotations, every time', () => {
     const records = [rec(1), rec(2, { title: 'recap', seenAt: 999 })]
     writeFileSync(path.join(dir, 'leg.json'), JSON.stringify(records), 'utf8')
-    // First read migrates to lines; the SECOND is the one that would expose a
-    // migration that stripped annotations without saving them.
+    // T4: no migration. The old store converted this to lines on first read
+    // and renamed the original; a READER converts nothing, and this is the
+    // only copy of a history that predates the lines format. So both reads
+    // answer from the array itself, annotations still inline.
     expect(store.load('leg')).toEqual(records)
     expect(new TurnStore(dir).load('leg')).toEqual(records)
   })

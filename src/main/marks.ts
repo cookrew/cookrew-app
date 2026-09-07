@@ -274,6 +274,36 @@ export function readMarks(terminalId: string, options: MarkOptions = {}): Map<st
 }
 
 /**
+ * Carry a card's marks onto a NEW terminal id (T4).
+ *
+ * A cut-and-paste re-ids a terminal, and marks are keyed by terminal id. The
+ * conversation does not need moving — a file-backed card's history is derived
+ * from a transcript the paste leaves exactly where it was — but a title and a
+ * seen-at are the two things about a checkpoint that are NOT derivable, so
+ * they have to travel with the card or they are simply gone.
+ *
+ * Written as PATCHES through the same writer, never as a file copy: the target
+ * may already have marks of its own, and last-wins per identity is the only
+ * merge rule this ledger has.
+ */
+export function copyMarks(
+  fromId: string,
+  toId: string,
+  options: MarkOptions = {}
+): { copied: number; failed: number } {
+  let copied = 0
+  let failed = 0
+  for (const mark of readMarks(fromId, options).values()) {
+    const { identity, at: _at, ...fields } = mark
+    if (Object.keys(fields).length === 0) continue
+    const result = writeMark(toId, { identity, ...fields }, options)
+    if (result.ok) copied += 1
+    else failed += 1
+  }
+  return { copied, failed }
+}
+
+/**
  * Record one change. Throws MarkRefused for a patch that must never be
  * written; returns a result for anything the disk did, because a failed title
  * must not take a turn down with it (the mistake PR #65 already made once).

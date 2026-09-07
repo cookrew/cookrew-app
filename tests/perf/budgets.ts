@@ -109,7 +109,27 @@ export const LATENCY = {
   // file twice per tick; now the observing tick reads nothing and the
   // release tick reads each once. 2026-09-06, worst of three runs: p50 0.00 /
   // p95 0.01 / p98 0.07. Structural: observing 0, releasing 10, after 0.
-  drainTick10ParkedSingle: { p50: 1, p95: 1, p98: 2 }
+  drainTick10ParkedSingle: { p50: 1, p95: 1, p98: 2 },
+  // ---- One stream, T4 (2026-09-07): the index the fold used to serve ----
+  // Materialising a 1,000-block chain through the stateless projection —
+  // stream-materialise.ts over stream-projection.ts, the read that produces
+  // the rail. This is the gate that REPLACES the five turn-store fold suites
+  // deleted with the writer: there is no fold left to measure, and this is
+  // the work the rail actually costs now.
+  //
+  // WRITING IT FOUND AN O(n^2). The replay loop called applyChangeSet — which
+  // copies the whole snapshot — once per LINE, over a map it privately owned.
+  // Measured 2026-09-07 before the fix: 250 blocks 1.45 ms, 500 5.94, 1,000
+  // 24.2, 2,000 97.3, 4,000 407.3 — the per-block cost doubling at every step.
+  // After applyChangeSetInto: 0.09 / 0.16 / 0.30 / 0.48 / 0.82 ms, flat to
+  // slightly sublinear per block. The owner's busiest chain is 1,232 blocks.
+  //
+  // Calibrated after the fix, 30 samples at load 0.34: p50 0.43 / p95 1.29 /
+  // p98 1.50. Budget at ~4x, because the number is small enough that GC noise
+  // dominates it; the STRUCTURAL half is the real gate — one pass, one state
+  // write, 1,000 rows, ordinals 1..1000 in order, zero anomalies — and no
+  // machine can be quick enough to fake that.
+  streamIndex1000: { p50: 2, p95: 5, p98: 6 }
 } as const
 
 export const MEMORY = {

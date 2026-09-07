@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -910,11 +910,23 @@ describe('TurnTracker history source (step 4: narrow the scrape)', () => {
     tracker.disposeAll()
   })
 
-  it('still persists the read marker and titles for a file-backed terminal', async () => {
+  /**
+   * T4: a file-backed terminal's read marker is a MARK, not a ledger field.
+   *
+   * This test used to assert the seen-at back out of ~/.cookrew/turns. There
+   * is no writer there for a file-backed card any more — the record is derived
+   * from a transcript the stream reads — so the acknowledge goes where the
+   * design puts it: an append to the marks ledger, keyed by the identity the
+   * stream assigns. The ledger file stays untouched, and that is asserted too,
+   * because "stopped writing it" is the whole claim of this phase.
+   */
+  it('records the read marker as a MARK, and writes nothing to the old ledger', async () => {
     vi.useFakeTimers()
     const dir = path.join(mkdtempSync(path.join(tmpdir(), 'cookrew-filebacked-')), 'turns')
     const store = new TurnStore(dir)
     const tracker = new TurnTracker(async () => null, store)
+    const marks: { terminalId: string; patch: Record<string, unknown> }[] = []
+    tracker.onMark = (terminalId, patch) => marks.push({ terminalId, patch: { ...patch } })
     const session = new FakeSession()
     tracker.track(session as unknown as PtySession, true)
     tracker.replaceHistory('term-1', [
@@ -925,9 +937,32 @@ describe('TurnTracker history source (step 4: narrow the scrape)', () => {
     await completeTurn(tracker, session)
     tracker.seen('term-1')
     tracker.flushHistories()
-    const persisted = new TurnStore(dir).load('term-1')
-    expect(persisted).toHaveLength(1)
-    expect(persisted[0].seenAt).toBeTypeOf('number')
+
+    const seenMarks = marks.filter((mark) => mark.patch.seenAt !== undefined)
+    expect(seenMarks).toHaveLength(1)
+    expect(seenMarks[0].terminalId).toBe('term-1')
+    expect(seenMarks[0].patch.identity).toBe('u1')
+    expect(seenMarks[0].patch.seenAt).toBeTypeOf('number')
+    // The old ledger was never written: nothing derived from a transcript is
+    // copied beside it any more.
+    expect(existsSync(path.join(dir, 'term-1.jsonl'))).toBe(false)
+    // …and the tracker's own history still carries the marker for the live UI.
+    expect(tracker.history('term-1').at(-1)?.seenAt).toBeTypeOf('number')
+    tracker.disposeAll()
+  })
+
+  it('a SCRAPE-source terminal still persists its history — its only record', async () => {
+    vi.useFakeTimers()
+    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'cookrew-scrape-')), 'turns')
+    const store = new TurnStore(dir)
+    const tracker = new TurnTracker(async () => null, store)
+    const session = new FakeSession()
+    tracker.track(session as unknown as PtySession, true)
+    // No setHistorySource call: 'scrape' is the default, and the default is
+    // what a harness with no session file stays on.
+
+    await completeTurn(tracker, session)
+    expect(new TurnStore(dir).load('term-1')).toHaveLength(1)
     tracker.disposeAll()
   })
 })

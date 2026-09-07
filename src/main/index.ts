@@ -193,7 +193,7 @@ import {
   type StreamCursorRequest,
   type StreamIpcDeps
 } from './stream-ipc'
-import type { MarkPatch } from './marks'
+import { copyMarks, type MarkPatch } from './marks'
 import { LatestFileWatcher } from './latest-watch'
 import { SessionTurnSync } from './session-sync'
 import { RoleStore } from './roles'
@@ -1456,6 +1456,22 @@ const streamService = createStreamService({
   documentOf: (file, kind) => traces.documentOf(file, kind),
   fileOf: (node) => traces.watchSpec(node.id)?.file ?? null
 })
+
+/**
+ * WHERE A SOUS TITLE AND AN ACKNOWLEDGE-ON-VIEW GO NOW (one-stream T4).
+ *
+ * Until T4 the tracker wrote them back into ~/.cookrew/turns as two fields on
+ * a stored record. That store is a reader now, so the two facts that are NOT
+ * in the transcript take the route the design gives them: a mark, keyed by the
+ * identity the stream assigns, through the one writer this design has. Wired
+ * here rather than passed to the constructor because the tracker is composed
+ * before the stream service is — and because a mark is a nicety: a tracker
+ * that cannot write one must still take turns.
+ */
+turns.onMark = (terminalId, patch) => {
+  const result = streamService.writeMark(terminalId, patch)
+  if (!result.ok) console.error(`mark write for ${terminalId}: ${result.error ?? 'failed'}`)
+}
 
 /** What the desktop's stream door reads through — the SAME service the HTTP
  *  routes use, and the same door/scrape provider the old routes use. */
@@ -3348,7 +3364,16 @@ function teamForkDeps(): Parameters<typeof forkTeam>[0] {
  */
 function carrySessionToPastedCard(from: TerminalNodeData, to: TerminalNodeData): void {
   const history = turnStore.load(from.id)
-  if (history.length > 0) turnStore.scheduleSave(to.id, history)
+  // T4: the LEDGER copy is gone with the writer — a file-backed card's history
+  // is derived from a transcript the paste does not move, so the new id reads
+  // the same stream the old one did. What DOES have to move is the marks: they
+  // are keyed by terminal id, and a title the owner wrote is not derivable from
+  // anything. Without this a cut-and-paste silently strips every Sous title off
+  // the card, which is exactly the loss this phase exists to prevent.
+  const marks = copyMarks(from.id, to.id)
+  if (marks.failed > 0) {
+    console.error(`Pasted card ${to.id}: ${marks.failed} mark(s) could not be carried across`)
+  }
   carrySessionToCwd({
     node: from,
     fromCwd: from.cwd,
@@ -4464,7 +4489,7 @@ app.whenReady().then(() => {
   }, 30_000)
 
   // Re-key legacy version pins by checkpoint uuid (pin-rekey.ts — the re-key
-  // lineage-ledger's refuseRenumber demands). A pin cut before atUuid existed
+  // refuseRenumber demanded before T4 deleted it). A pin cut before atUuid existed
   // is anchored by index alone, and a /compact renumbers that index out from
   // under it; the durable ledger still holds the uuid for the turn the pin
   // was cut at, so backfill it once per boot. Deferred like the storage sweep
@@ -4997,9 +5022,9 @@ app.on('before-quit', (event) => {
   turns.flushHistories()
   turns.disposeAll()
   ptys.disposeAll()
-  // The bounded drain: asks, then every tracked herdr child, then in-flight
-  // folds with their directory debts — no CLI process and no unproven rename
-  // outlives the app (Sol r11).
+  // The bounded drain: asks, then every tracked herdr child. The fold drain
+  // that used to close this list went with the fold (T4) — nothing writes the
+  // turn ledger any more, so there is no unproven rename left to outlive us.
   void cancelAllAsks()
     .catch(() => undefined)
     .then(() => {
@@ -5008,8 +5033,6 @@ app.on('before-quit', (event) => {
         ? mux.cancelAllHerdrOperations(4000)
         : undefined
     })
-    .catch(() => undefined)
-    .then(() => turnStore.drainFolds(2000))
     .catch(() => undefined)
     .then(() => browserManager.shutdown())
     .catch((error) => console.error('Headless browser shutdown failed:', error))

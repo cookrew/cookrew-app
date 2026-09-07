@@ -13,7 +13,7 @@
 //
 //   · the 400+ checkpoints that went unaddressable at a compaction, because
 //     each file numbered its own T1..Tn and the stored ledger renumbered
-//     across the boundary after the fact (lineage-ledger.ts, ledger-rebuild.ts);
+//     across the boundary after the fact (session-lineage-walk.ts, ledger-rebuild.ts);
 //   · the 2026-09-06 cap that would have dropped a session id — and with it a
 //     whole transcript — off the only list that could reach it;
 //   · the phantom rail rows the renderer "clamps around" when a stored record

@@ -6,6 +6,10 @@ import { EventLog, type CookrewEvent } from '../../src/main/event-log'
 import { WorkspaceStore } from '../../src/main/store'
 import { TeamStore, copyTeam } from '../../src/main/teams'
 import type { CanvasNode } from '../../src/shared/model'
+import { performance } from 'node:perf_hooks'
+import { createStreamIndexStore } from '../../src/main/stream-materialise'
+import { emptyStreamState } from '../../src/main/stream-state'
+import type { StreamLine } from '../../src/shared/stream-projection'
 import { LATENCY, STORAGE } from './budgets'
 import { expectEvery, expectTail, measure, removeRoot, tempRoot, timed } from './perf-harness'
 
@@ -427,5 +431,119 @@ describe('workspace switch — flush one, load one, emit', () => {
     } finally {
       removeRoot(root)
     }
+  })
+})
+
+/**
+ * ONE STREAM, T4: the read that replaced the fold.
+ *
+ * The five turn-store fold suites are deleted with the writer they measured —
+ * there is no overlay to compact and no rewrite to bound. What the rail costs
+ * now is materialising the chain's index: stream-materialise.ts driving the
+ * stateless per-line projection, once, in order.
+ *
+ * The shape this defends is O(blocks). A projection that consulted the
+ * accumulated index per line — the obvious way to write it — is O(blocks²),
+ * and at the owner's real 1,232-block Conductor chain that is the difference
+ * between a rail that opens and one that hangs. So the structural assertion
+ * is the load-bearing half: one pass over 1,000 lines, one state write, every
+ * ordinal in order and none repeated. No machine can be fast enough to fake
+ * that.
+ *
+ * A REPLAY OF THE SAME LINES IS FREE, and that is asserted too (T2.5's
+ * idempotence claim, in the currency that matters): re-materialising an
+ * unchanged chain writes no state at all.
+ */
+describe('stream index — a 1,000-block chain materialises in one pass', () => {
+  const BLOCKS = 1000
+
+  const chainLines = (count: number): StreamLine[] =>
+    Array.from({ length: count }, (_, at) => ({
+      file: `/chain/s${Math.floor(at / 400) + 1}.jsonl`,
+      byteOffset: at * 512,
+      at: 1_700_000_000_000 + at * 1000,
+      ordinal: at + 1,
+      ordinalInFile: (at % 400) + 1,
+      entry: {
+        identity: `u-${at + 1}`,
+        startedAt: 1_700_000_000_000 + at * 1000,
+        endedAt: 1_700_000_000_500 + at * 1000,
+        promptHead: `ask ${at + 1}`.padEnd(80, ' '),
+        compacted: at % 400 === 0 && at > 0,
+        file: `/chain/s${Math.floor(at / 400) + 1}.jsonl`
+      }
+    }))
+
+  /** The chain the cursor is addressed against — three transcripts, each read
+   *  to its end. Without it every pass reads as "the chain changed". */
+  const chainFiles = (): { file: string; bytesRead: number }[] =>
+    Array.from({ length: Math.ceil(BLOCKS / 400) }, (_, at) => ({
+      file: `/chain/s${at + 1}.jsonl`,
+      bytesRead: BLOCKS * 512
+    }))
+
+  it('1,000 blocks: one projection pass, one state write, ordinals in order', async () => {
+    const lines = chainLines(BLOCKS)
+    const measured = await measure('stream index 1000 blocks', async () => {
+      // A COLD index every sample: the point is the first materialisation,
+      // which is what a card opening after a restart pays.
+      let held = emptyStreamState()
+      let writes = 0
+      let passes = 0
+      const store = createStreamIndexStore({
+        lines: async () => {
+          passes += 1
+          return { lines, files: chainFiles(), missing: [] }
+        },
+        readState: () => held,
+        writeState: (_id, next) => {
+          writes += 1
+          held = next
+          return { ok: true }
+        },
+        log: () => undefined
+      })
+      const started = performance.now()
+      const index = await store.materialise('term-1')
+      const elapsed = performance.now() - started
+      const ordinals = index.entries.map((entry) => entry.ordinal)
+      return {
+        elapsed,
+        structural: {
+          passes,
+          writes,
+          rows: index.entries.length,
+          ordered: ordinals.every((ordinal, at) => ordinal === at + 1),
+          anomalies: Object.values(index.anomalies).reduce((sum, n) => sum + n, 0)
+        }
+      }
+    })
+    expectTail(measured, LATENCY.streamIndex1000)
+    expectEvery(measured, 'passes', 1)
+    expectEvery(measured, 'writes', 1)
+    expectEvery(measured, 'rows', BLOCKS)
+    expectEvery(measured, 'ordered', true)
+    expectEvery(measured, 'anomalies', 0)
+  })
+
+  it('re-materialising an unchanged chain writes nothing', async () => {
+    const lines = chainLines(BLOCKS)
+    let held = emptyStreamState()
+    let writes = 0
+    const store = createStreamIndexStore({
+      lines: async () => ({ lines, files: chainFiles(), missing: [] }),
+      readState: () => held,
+      writeState: (_id, next) => {
+        writes += 1
+        held = next
+        return { ok: true }
+      },
+      log: () => undefined
+    })
+    await store.materialise('term-1')
+    expect(writes).toBe(1)
+    const again = await store.materialise('term-1')
+    expect(writes).toBe(1) // the suffix replay changed nothing
+    expect(again.entries).toHaveLength(BLOCKS)
   })
 })

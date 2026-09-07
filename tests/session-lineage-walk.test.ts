@@ -1,10 +1,13 @@
-// Walking a checkpoint history back across compacts.
+// Walking a session lineage back across compacts.
 //
-// The ledger is built from the current session file alone, so every compact
-// restarts the numbering at 1 and the conversation before it stops being
-// addressable. The join was always machine-readable — a compact_boundary whose
-// summary names the predecessor — and claude-rotation.ts already parses it.
-// Nothing consumed it. These hold the walk that now does.
+// The old ledger was built from the current session file alone, so every
+// compact restarted the numbering at 1 and the conversation before it stopped
+// being addressable. The join was always machine-readable — a compact_boundary
+// whose summary names the predecessor — and claude-rotation.ts already parses
+// it. Nothing consumed it. These hold the walk that now does, and that
+// stream-chain.ts stands on: T4 deleted the ledger half of this module
+// (refuseRenumber and the renumbering restore it guarded, with their tests),
+// and the WALK is what an ordinal-free design still needs.
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -15,9 +18,8 @@ import { ROTATION_HEAD_LINES } from '../src/main/claude-rotation'
 import {
   MAX_LINEAGE_DEPTH,
   overlapPredecessor,
-  refuseRenumber,
   sessionChain
-} from '../src/main/lineage-ledger'
+} from '../src/main/session-lineage-walk'
 
 const CWD = '/w/proj'
 let root: string
@@ -148,22 +150,6 @@ describe('sessionChain — walking back across compacts', () => {
 
   it('returns nothing when the session itself has no transcript', async () => {
     expect(await sessionChain(CWD, id(9), { projectsDir: root })).toEqual([])
-  })
-})
-
-describe('refuseRenumber — version pins are still index-keyed', () => {
-  it('permits a node that carries no pins', () => {
-    expect(refuseRenumber('term-1', 0)).toBeNull()
-  })
-
-  it('REFUSES a node that carries pins, with a reason a person can act on', () => {
-    // Explicit, not incidental. No node carries a pin today, which is exactly
-    // why this is written now: the first one will arrive long after this
-    // commit and nobody will be watching for it.
-    const refusal = refuseRenumber('term-1', 3)
-    expect(refusal?.reason).toBe('version-pins-are-index-keyed')
-    expect(refusal?.detail).toContain('3 version pin')
-    expect(refusal?.detail).toContain('Re-key pins by checkpoint uuid first')
   })
 })
 
