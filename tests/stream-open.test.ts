@@ -55,6 +55,8 @@ interface Fixture {
   rolledBackFrom?: number
   anomalies?: Record<string, number>
   rollbacks?: RollbackMark[]
+  /** ordinals whose exchange a later transcript also holds. */
+  replayedFrom?: number
 }
 
 function service(options: Fixture): StreamService {
@@ -70,6 +72,9 @@ function service(options: Fixture): StreamService {
     file: source.file,
     ...(options.rolledBackFrom !== undefined && source.ordinal >= options.rolledBackFrom
       ? { rolledBack: true as const }
+      : {}),
+    ...(options.replayedFrom !== undefined && source.ordinal <= options.replayedFrom
+      ? { replayedIn: ['/tmp/s2.jsonl'] }
       : {})
   })
   return {
@@ -238,6 +243,36 @@ describe('/stream/open and the paged /stream/index', () => {
     expect((await get(port, '/api/terminal/t1/stream/index?limit=3')).body.anomalies).toEqual(
       anomalies
     )
+  })
+
+  it('never repeats an identity, and pages a DEDUPED index exhaustively', async () => {
+    const port = await start({ stream: service({ count: 60, marksDir, replayedFrom: 20 }) })
+    const opened = await get(port, '/api/terminal/t1/stream/open?limit=25')
+    const seen: string[] = opened.body.index.map((row: { identity: string }) => row.identity)
+    let cursor: string | null = opened.body.backwardsCursor
+    while (cursor !== null) {
+      const page: { body: { checkpoints: { identity: string }[]; backwardsCursor: string | null } } =
+        await get(port, `/api/terminal/t1/stream/index?before=${cursor}&limit=25`)
+      seen.unshift(...page.body.checkpoints.map((row) => row.identity))
+      cursor = page.body.backwardsCursor
+    }
+    expect(seen).toHaveLength(60)
+    expect(new Set(seen).size).toBe(60)
+    expect(opened.body.total).toBe(60)
+  })
+
+  it('a replayed exchange says which later transcripts also hold it', async () => {
+    const port = await start({ stream: service({ count: 5, marksDir, replayedFrom: 2 }) })
+    const rows = (await get(port, '/api/terminal/t1/stream/open')).body.index as {
+      replayedIn?: string[]
+    }[]
+    expect(rows.map((row) => row.replayedIn)).toEqual([
+      ['/tmp/s2.jsonl'],
+      ['/tmp/s2.jsonl'],
+      undefined,
+      undefined,
+      undefined
+    ])
   })
 
   it('404s /stream/open for a terminal that does not exist', async () => {

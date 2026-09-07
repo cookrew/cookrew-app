@@ -153,6 +153,22 @@ function rollbacksOf(raw: unknown): RollbackMark[] {
   })
 }
 
+/** Every transcript that holds an exchange. A row written before this field
+ *  existed reads as "only the file it was last seen in", which is exactly
+ *  what the next replay will extend. */
+function occurrencesOf(raw: unknown, file: unknown): { file: string; byteOffset?: number }[] {
+  const fallback = typeof file === 'string' && file.length > 0 ? [{ file }] : []
+  if (!Array.isArray(raw)) return fallback
+  const parsed = raw.flatMap((entry) => {
+    if (typeof entry !== 'object' || entry === null) return []
+    const record = entry as Record<string, unknown>
+    if (typeof record.file !== 'string' || record.file.length === 0) return []
+    const byteOffset = finite(record.byteOffset)
+    return [{ file: record.file, ...(byteOffset !== null ? { byteOffset } : {}) }]
+  })
+  return parsed.length > 0 ? parsed : fallback
+}
+
 /** One persisted row, or nothing. A row that will not parse is DROPPED rather
  *  than repaired into a guess: the transcript still holds it, and the next
  *  replay re-materialises it from the file that is authoritative for it. */
@@ -174,6 +190,10 @@ function checkpointOf(raw: unknown): ProjectedCheckpoint | null {
     file: typeof record.file === 'string' ? record.file : '',
     firstAt: finite(record.firstAt) ?? startedAt,
     latestAt: finite(record.latestAt) ?? endedAt,
+    occurrences: occurrencesOf(record.occurrences, record.file),
+    ...(Array.isArray(record.replayedIn)
+      ? { replayedIn: record.replayedIn.filter((one): one is string => typeof one === 'string') }
+      : {}),
     ...(typeof record.previousSessionId === 'string'
       ? { previousSessionId: record.previousSessionId }
       : {}),

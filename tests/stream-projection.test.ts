@@ -122,6 +122,7 @@ describe('projectLine', () => {
       expect([...PROJECTION_ANOMALIES].sort()).toEqual(
         [
           'ForwardGap',
+          'IdentityCollision',
           'InvalidTimestamp',
           'MissingFile',
           'MissingOrdinal',
@@ -144,7 +145,7 @@ describe('applyChangeSet — the upsert guard', () => {
       entry: { ...line(1, 'u1').entry!, endedAt: T0 + 90_000, promptHead: 'prompt 1' }
     }
     const again = applyChangeSet(inserted, projectLine({ ...grown, ordinal: 1 }, { lastOrdinal: 0 }))
-    const row = again.get(checkpointKey({ file: '/tmp/s1.jsonl', identity: 'u1' })) as ProjectedCheckpoint
+    const row = again.get(checkpointKey({ identity: 'u1' })) as ProjectedCheckpoint
     expect(row.ordinal).toBe(1)
     expect(row.firstAt).toBe(T0 + 1000)
     expect(row.latestAt).toBe(T0 + 90_000)
@@ -157,7 +158,7 @@ describe('applyChangeSet — the upsert guard', () => {
       inserted,
       projectLine({ ...line(1, 'u1'), at: T0 - 5000 }, { lastOrdinal: 0 })
     )
-    const key = checkpointKey({ file: '/tmp/s1.jsonl', identity: 'u1' })
+    const key = checkpointKey({ identity: 'u1' })
     expect((stale.get(key) as ProjectedCheckpoint).latestAt).toBe(T0 + 1000)
   })
 
@@ -188,30 +189,85 @@ describe('applyChangeSet — the upsert guard', () => {
   })
 })
 
-describe('the snapshot key is (file, identity)', () => {
-  it('keeps a CROSS-FILE repeat as two rows — Claude replays a prefix on rotation', () => {
-    // Measured on the owner's busiest card: 1,239 blocks, 1,046 distinct
-    // identities, every repeat spanning more than one file. Folding them would
-    // change what the rail shows; that decision is T3's, with the numbers.
-    const inFirst = projectLine(line(1, 'u1'), { lastOrdinal: 0 })
-    const replayed = line(2, 'u1', {
-      file: '/tmp/s2.jsonl',
-      entry: { ...line(2, 'u1').entry!, file: '/tmp/s2.jsonl' }
-    })
-    const snapshot = applyChangeSet(
-      applyChangeSet(new Map(), inFirst),
-      projectLine(replayed, { lastOrdinal: 1 })
-    )
-    expect(snapshot.size).toBe(2)
-    expect([...snapshot.values()].map((row) => [row.file, row.ordinal])).toEqual([
-      ['/tmp/s1.jsonl', 1],
-      ['/tmp/s2.jsonl', 2]
-    ])
+describe('a repeated identity — the replay fold', () => {
+  const inS1 = projectLine(line(1, 'u1'), { lastOrdinal: 0 })
+  const held = applyChangeSet(new Map(), inS1).get('u1') as ProjectedCheckpoint
+
+  const replayed = (over: Partial<StreamLine> = {}): StreamLine => ({
+    ...line(9, 'u1'),
+    file: '/tmp/s2.jsonl',
+    ordinalInFile: 3,
+    entry: { ...line(9, 'u1').entry!, file: '/tmp/s2.jsonl', promptHead: 'prompt 1' },
+    ...over
   })
 
-  it('a repeat WITHIN one file upserts — that is what replaying a suffix is', () => {
-    const once = applyChangeSet(new Map(), projectLine(line(1, 'u1'), { lastOrdinal: 0 }))
-    expect(applyChangeSet(once, projectLine(line(1, 'u1'), { lastOrdinal: 0 })).size).toBe(1)
+  it('a CROSS-FILE repeat with the same prompt is ONE row, at the first ordinal', () => {
+    // Measured: 1,239 blocks, 1,046 identities, 181 repeats, every one
+    // spanning files, 193/193 with the same prompt. One exchange, one row.
+    const change = projectLine(replayed(), { lastOrdinal: 8, existing: held })
+    expect(change.anomalies).toEqual([])
+    expect(change.upserts).toHaveLength(1)
+    const row = change.upserts[0]
+    expect(row.ordinal).toBe(1)
+    expect(row.firstAt).toBe(held.firstAt)
+    // …and its BYTES now come from the newest file that holds it, because
+    // that copy is what the next rotation carries forward.
+    expect(row.file).toBe('/tmp/s2.jsonl')
+    expect(row.occurrences).toEqual([
+      { file: '/tmp/s1.jsonl', byteOffset: 100 },
+      { file: '/tmp/s2.jsonl', byteOffset: 900 }
+    ])
+    expect(row.replayedIn).toEqual(['/tmp/s2.jsonl'])
+    expect(change.replayed).toEqual({ file: '/tmp/s2.jsonl', ordinalInFile: 3 })
+    // the cursor's bytes advance; its ordinal does not
+    expect(change.cursor).toEqual({ file: '/tmp/s2.jsonl', byteOffset: 900, ordinal: 1 })
+  })
+
+  it('folding twice adds the file once — a suffix replay is still a no-op', () => {
+    const once = applyChangeSet(
+      new Map(),
+      projectLine(replayed(), { lastOrdinal: 8, existing: held })
+    ).get('u1') as ProjectedCheckpoint
+    const twice = applyChangeSet(
+      new Map(),
+      projectLine(replayed(), { lastOrdinal: 8, existing: once })
+    ).get('u1') as ProjectedCheckpoint
+    expect(twice.occurrences).toEqual(once.occurrences)
+    expect(twice.ordinal).toBe(1)
+  })
+
+  it('a repeat in a file already held is a re-read, not a replay', () => {
+    const change = projectLine(
+      { ...line(1, 'u1'), at: T0 + 90_000 },
+      { lastOrdinal: 0, existing: held }
+    )
+    expect(change.replayed).toBeUndefined()
+    expect(change.upserts[0].occurrences).toEqual([{ file: '/tmp/s1.jsonl', byteOffset: 100 }])
+    expect(change.upserts[0].latestAt).toBe(T0 + 90_000)
+  })
+
+  it('a DIFFERENT prompt under the same uuid is IdentityCollision — skipped', () => {
+    const change = projectLine(
+      replayed({
+        entry: {
+          ...line(9, 'u1').entry!,
+          file: '/tmp/s2.jsonl',
+          promptHead: 'a completely different ask'
+        }
+      }),
+      { lastOrdinal: 8, existing: held }
+    )
+    expect(change.anomalies).toEqual(['IdentityCollision'])
+    expect(change.upserts).toEqual([])
+    expect(change.cursor).toBeUndefined()
+  })
+
+  it('never raises an ordinal anomaly for a repeat — a replay is not a regression', () => {
+    // Before the fold, every one of the owner's 193 cross-file replays read
+    // as RegressedOrdinal. That was the artefact, not the evidence.
+    for (const lastOrdinal of [0, 8, 1000]) {
+      expect(projectLine(replayed(), { lastOrdinal, existing: held }).anomalies).toEqual([])
+    }
   })
 })
 

@@ -76,13 +76,39 @@ export function markFieldsOf(mark: StreamMarkFields | undefined): StreamMarkFiel
   return Object.keys(fields).length > 0 ? fields : undefined
 }
 
-/** One /stream/index row: the stream entry with its marks grouped under it. */
+/**
+ * One /stream/index row: the stream entry with its marks grouped under it.
+ *
+ * FIELDS ARE PICKED, NOT SPREAD. The materialised rows carry the projection's
+ * own bookkeeping — `firstAt`, `latestAt`, `occurrences` — which is how the
+ * derived index knows what it has done and is nobody else's business. A
+ * spread would ship all of it to every client on every rail read and make it
+ * contract by accident. `replayedIn` DOES travel, because a client that shows
+ * one exchange has a right to know which transcripts hold it.
+ */
 export function streamIndexRowOf(
   entry: StreamIndexEntry,
   mark: StreamMarkFields | undefined
 ): StreamIndexRow {
   const marks = markFieldsOf(mark)
-  return marks === undefined ? { ...entry } : { ...entry, marks }
+  return {
+    identity: entry.identity,
+    ordinal: entry.ordinal,
+    startedAt: entry.startedAt,
+    endedAt: entry.endedAt,
+    promptHead: entry.promptHead,
+    compacted: entry.compacted,
+    file: entry.file,
+    ...(entry.compaction !== undefined ? { compaction: entry.compaction } : {}),
+    ...(entry.previousSessionId !== undefined
+      ? { previousSessionId: entry.previousSessionId }
+      : {}),
+    ...(entry.rolledBack === true ? { rolledBack: true as const } : {}),
+    ...(entry.replayedIn !== undefined && entry.replayedIn.length > 0
+      ? { replayedIn: entry.replayedIn }
+      : {}),
+    ...(marks !== undefined ? { marks } : {})
+  }
 }
 
 /**

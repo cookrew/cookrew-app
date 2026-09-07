@@ -26,6 +26,7 @@ function row(ordinal: number, over: Record<string, unknown> = {}) {
     file: '/tmp/s1.jsonl',
     firstAt: T0,
     latestAt: T0 + 100,
+    occurrences: [{ file: '/tmp/s1.jsonl' }],
     ...over
   }
 }

@@ -40,7 +40,8 @@ function state(over: Partial<StreamState> = {}): StreamState {
         compacted: false,
         file: '/tmp/s1.jsonl',
         firstAt: T0,
-        latestAt: T0 + 500
+        latestAt: T0 + 500,
+        occurrences: [{ file: '/tmp/s1.jsonl', byteOffset: 4096 }]
       }
     ],
     ...over
@@ -117,7 +118,10 @@ describe('readStreamState', () => {
         cursor: { file: 'f', byteOffset: 1, ordinal: 2 },
         anomalies: { UnknownLine: 1, NotAClass: 4 },
         rolledBack: [{ fromOrdinal: 2, at: T0 }, { nope: true }],
-        index: [{ identity: '', ordinal: 1 }, { identity: 'u2', ordinal: 2, startedAt: 1, endedAt: 2 }]
+        index: [
+          { identity: '', ordinal: 1 },
+          { identity: 'u2', ordinal: 2, startedAt: 1, endedAt: 2, file: 'f' }
+        ]
       })
     )
     expect(parsed.index.map((row) => row.identity)).toEqual(['u2'])

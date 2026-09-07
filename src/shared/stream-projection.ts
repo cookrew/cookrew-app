@@ -46,26 +46,23 @@
 // exists to end that. The ordinal never regresses; the record never vanishes;
 // the disagreement is counted.
 //
-// WHAT A CHECKPOINT IS KEYED BY, AND WHY IT IS NOT THE IDENTITY ALONE.
+// WHAT A CHECKPOINT IS KEYED BY: THE IDENTITY, AND ONLY THE IDENTITY.
 // Measured on the owner's busiest card (2026-09-07): 1,239 blocks carry only
-// 1,046 distinct identities — 181 of them appear two or three times, and
-// EVERY repeat spans more than one file. Claude replays a prefix of the
+// 1,046 distinct identities — 181 repeats, every one spanning more than one
+// file, 193 of 193 with the same prompt. Claude replays a prefix of the
 // conversation into the transcript it rotates or resumes into, so the same
-// message uuid is genuinely on disk at two chain positions.
-//
-// So the snapshot is keyed by (file, identity), not identity. Re-reading a
-// file the reader has already seen still upserts — which is all "replay a
-// suffix twice" needs — while a cross-file repeat keeps the two rows and the
-// two ordinals T1/T2 already gave it. Folding them would be a visible change
-// to what the rail shows, decided inside a storage phase, on a question the
-// evidence does not settle: the old ledger orders those repeats by their LAST
-// occurrence and this reader orders by their first, and only one of those can
-// be right. That belongs to T3 with the measurement in hand, not here.
+// exchange is genuinely on disk twice. It is still ONE exchange, so it is one
+// row: the projection folds the repeat onto the row that is already there,
+// keeping its ordinal (when it happened) and following its `file` to the
+// newest copy (what the next rotation carries forward). `occurrences` records
+// every file that holds it. The rule itself is stream-replay.ts, shared with
+// the walk so the two readers cannot disagree about what a replay is.
 //
 // PURE BY CONSTRUCTION: no I/O, no clock (a line carries its own `at`), no
 // mutation of anything it is handed.
 
 import type { StreamIndexEntry } from './stream-index'
+import { replayVerdictOf } from './stream-replay'
 
 /** Every way a line can be un-projectable. Counted per terminal, surfaced on
  *  /stream/index — an anomaly is evidence, not an alarm. */
@@ -76,6 +73,7 @@ export type ProjectionAnomaly =
   | 'ForwardGap'
   | 'InvalidTimestamp'
   | 'MissingFile'
+  | 'IdentityCollision'
 
 export const PROJECTION_ANOMALIES: readonly ProjectionAnomaly[] = [
   'UnknownLine',
@@ -83,7 +81,8 @@ export const PROJECTION_ANOMALIES: readonly ProjectionAnomaly[] = [
   'RegressedOrdinal',
   'ForwardGap',
   'InvalidTimestamp',
-  'MissingFile'
+  'MissingFile',
+  'IdentityCollision'
 ]
 
 /** Counts by class. A class with nothing to report is ABSENT, never zero —
@@ -123,6 +122,9 @@ export interface StreamLine {
   ordinal?: number
   /** The parsed checkpoint. Absent = UnknownLine. */
   entry?: Omit<StreamIndexEntry, 'ordinal'>
+  /** The record's position inside its own file's blocks — what a replay note
+   *  carries so the exchange can be fetched from the copy that holds it. */
+  ordinalInFile?: number
 }
 
 /**
@@ -138,12 +140,24 @@ export interface ProjectedCheckpoint extends StreamIndexEntry {
   firstAt: number
   /** When it was last re-snapshotted. Updated on every projection. */
   latestAt: number
+  /** Every transcript that holds this exchange, oldest first. The first is
+   *  where it happened; the last is where it is now read from. */
+  occurrences: { file: string; byteOffset?: number }[]
 }
 
 /** What the projection knows about everything BEFORE this line: one number. */
 export interface ProjectionState {
   /** The ordinal of the last record projected, 0 before any. */
   lastOrdinal: number
+  /**
+   * The row this line's identity ALREADY has, when it has one.
+   *
+   * Supplied by the caller rather than looked up, so the function stays a
+   * pure `(line, state) -> ChangeSet` with no store behind it — the same
+   * shape as Codex's project_rollout_line, which pushes its own conflict
+   * rule down into the storage layer's upsert guard.
+   */
+  existing?: ProjectedCheckpoint
 }
 
 /** One line's whole effect. */
@@ -154,6 +168,9 @@ export interface ChangeSet {
    *  skipped, because a cursor past a record we did not materialise is
    *  exactly the lie Codex's single-transaction advance exists to prevent. */
   cursor?: StreamCursor
+  /** This line was a REPLAY of a row already held: no new ordinal, no new
+   *  row, one more file that can serve the exchange. */
+  replayed?: { file: string; ordinalInFile: number }
 }
 
 export const EMPTY_CHANGE_SET: ChangeSet = Object.freeze({ upserts: [], anomalies: [] })
@@ -192,6 +209,13 @@ export function projectLine(line: StreamLine, state: ProjectionState): ChangeSet
   if (!usableTime(line.at) || !usableTime(entry.startedAt) || !usableTime(entry.endedAt)) {
     return skipped('InvalidTimestamp')
   }
+  const cursorOf = (ordinal: number): StreamCursor => ({
+    file: line.file,
+    byteOffset: offsetOf(line.byteOffset),
+    ordinal
+  })
+  if (state.existing !== undefined) return refold(line, entry, state.existing, cursorOf)
+
   const expected = state.lastOrdinal + 1
   const regressed = candidate < expected
   const anomalies: ProjectionAnomaly[] = regressed
@@ -204,9 +228,64 @@ export function projectLine(line: StreamLine, state: ProjectionState): ChangeSet
   // the one thing this coordinate space promises never happens.
   const ordinal = regressed ? expected : candidate
   return {
-    upserts: [{ ...entry, ordinal, firstAt: line.at, latestAt: line.at }],
+    upserts: [
+      {
+        ...entry,
+        ordinal,
+        firstAt: line.at,
+        latestAt: line.at,
+        occurrences: [{ file: line.file, byteOffset: offsetOf(line.byteOffset) }]
+      }
+    ],
     anomalies,
-    cursor: { file: line.file, byteOffset: offsetOf(line.byteOffset), ordinal }
+    cursor: cursorOf(ordinal)
+  }
+}
+
+/**
+ * A record whose identity is already held: a replay, a re-read, or a collision.
+ *
+ * NO ORDINAL IS ASSIGNED HERE and no anomaly is raised for the ordinal, which
+ * is the whole point — before this existed, every one of the owner's 193
+ * cross-file replays read as a RegressedOrdinal and the rail drew the exchange
+ * twice. A replay is not a disagreement about numbering; it is the same
+ * exchange, seen again, in the file that will carry it forward.
+ */
+function refold(
+  line: StreamLine,
+  entry: Omit<StreamIndexEntry, 'ordinal'>,
+  existing: ProjectedCheckpoint,
+  cursorOf: (ordinal: number) => StreamCursor
+): ChangeSet {
+  const verdict = replayVerdictOf(
+    { promptHead: existing.promptHead, files: existing.occurrences.map((one) => one.file) },
+    { file: line.file, promptHead: entry.promptHead }
+  )
+  if (verdict === 'collision') return skipped('IdentityCollision')
+  const replay = verdict === 'replay'
+  const occurrences = replay
+    ? [...existing.occurrences, { file: line.file, byteOffset: offsetOf(line.byteOffset) }]
+    : existing.occurrences
+  const row: ProjectedCheckpoint = {
+    ...existing,
+    // The snapshot follows the newest copy; the ordinal and firstAt do not
+    // (the upsert guard holds them, and this holds them too so the change set
+    // is honest on its own).
+    endedAt: Math.max(existing.endedAt, entry.endedAt),
+    file: line.file,
+    latestAt: Math.max(existing.latestAt, line.at),
+    occurrences,
+    ...(occurrences.length > 1
+      ? { replayedIn: occurrences.slice(1).map((one) => one.file) }
+      : {})
+  }
+  return {
+    upserts: [row],
+    anomalies: [],
+    cursor: cursorOf(existing.ordinal),
+    ...(replay
+      ? { replayed: { file: line.file, ordinalInFile: line.ordinalInFile ?? 0 } }
+      : {})
   }
 }
 
@@ -237,10 +316,10 @@ export function applyChangeSet(
   return next
 }
 
-/** A checkpoint's key in the snapshot: (file, identity). See the header for
- *  the 181 cross-file repeats that make the file half load-bearing. */
-export function checkpointKey(row: { file: string; identity: string }): string {
-  return `${row.file}\u0000${row.identity}`
+/** A checkpoint's key in the snapshot. THE IDENTITY, and only the identity:
+ *  one exchange is one row, however many transcripts replay it. */
+export function checkpointKey(row: { identity: string }): string {
+  return row.identity
 }
 
 function upsert(
@@ -255,6 +334,12 @@ function upsert(
     latestAt: Math.max(existing.latestAt, incoming.latestAt),
     ...(existing.rolledBack === true ? { rolledBack: true as const } : {})
   }
+}
+
+/** Every file that can serve an exchange, oldest first — the first is where
+ *  it happened, the last is where it is read from now. */
+export function filesHolding(row: ProjectedCheckpoint): string[] {
+  return row.occurrences.map((one) => one.file)
 }
 
 /**

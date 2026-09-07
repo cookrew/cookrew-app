@@ -55,6 +55,7 @@ import {
   type AuthorityEvidence,
   type StreamRepair
 } from './stream-authority'
+import type { IdentityCollision } from '../shared/stream-replay'
 import type { MissingStreamFile } from './stream-chain'
 import type { StreamLinesResult } from './stream'
 import type { RollbackMark, StreamState, StreamStateResult } from './stream-state'
@@ -172,6 +173,9 @@ interface Replay {
   cursor: StreamCursor
   anomalies: AnomalyCounts
   dirty: boolean
+  /** uuids a later transcript reused for a DIFFERENT exchange. Skipped, and
+   *  named in a log line — a silently merged row would describe two of them. */
+  collisions: IdentityCollision[]
 }
 
 /**
@@ -187,6 +191,7 @@ function replay(state: StreamState, read: StreamLinesResult, seed: Replay): Repl
   const positions = filePositions(read)
   const cursorAt = positions.get(state.cursor.file) ?? -1
   let { snapshot, anomalies, dirty } = seed
+  const collisions: IdentityCollision[] = []
   let cursor = seed.cursor
   let lastOrdinal = 0
   let highWater = state.cursor.ordinal
@@ -200,10 +205,16 @@ function replay(state: StreamState, read: StreamLinesResult, seed: Replay): Repl
     const candidate = isNew ? highWater + 1 : seen.ordinal
     const change = projectLine(
       { ...line, ordinal: candidate },
-      { lastOrdinal: isNew ? Math.max(lastOrdinal, highWater) : lastOrdinal }
+      {
+        lastOrdinal: isNew ? Math.max(lastOrdinal, highWater) : lastOrdinal,
+        ...(seen !== undefined ? { existing: seen } : {})
+      }
     )
     anomalies = countAnomalies(anomalies, change.anomalies)
     dirty = dirty || change.anomalies.length > 0
+    if (change.anomalies.includes('IdentityCollision') && line.entry !== undefined) {
+      collisions.push({ identity: line.entry.identity, file: line.file })
+    }
     for (const upsert of change.upserts) {
       const key = checkpointKey(upsert)
       const before = snapshot.get(key)
@@ -211,11 +222,14 @@ function replay(state: StreamState, read: StreamLinesResult, seed: Replay): Repl
       dirty = dirty || !sameCheckpoint(before, snapshot.get(key) as ProjectedCheckpoint)
     }
     if (change.cursor === undefined) continue
-    lastOrdinal = change.cursor.ordinal
+    // A REPLAY does not move the numbering: it is the same exchange seen
+    // again in the file that will carry it forward, so the cursor's BYTES
+    // advance and its ordinal does not.
+    lastOrdinal = Math.max(lastOrdinal, change.cursor.ordinal)
     highWater = Math.max(highWater, change.cursor.ordinal)
     cursor = { file: change.cursor.file, byteOffset: change.cursor.byteOffset, ordinal: highWater }
   }
-  return { snapshot, cursor: { ...cursor, ordinal: highWater }, anomalies, dirty }
+  return { snapshot, cursor: { ...cursor, ordinal: highWater }, anomalies, dirty, collisions }
 }
 
 /**
@@ -253,8 +267,10 @@ export function createStreamIndexStore(deps: StreamIndexStoreDeps): StreamIndexS
         snapshot: rewound.snapshot,
         cursor: repaired.cursor,
         anomalies: repaired.anomalies,
-        dirty: repairs.length > 0 || rewound.appended !== null
+        dirty: repairs.length > 0 || rewound.appended !== null,
+        collisions: []
       })
+      logCollisions(terminalId, result.collisions, log)
       const next: StreamState = {
         ...repaired,
         cursor: result.cursor,
@@ -290,6 +306,27 @@ function rollbackOf(
   const fromOrdinal = rolledBackFrom(snapshot, read.lines, state.cursor.file)
   if (fromOrdinal === null) return { snapshot, appended: null }
   return { snapshot: markRolledBack(snapshot, fromOrdinal), appended: { fromOrdinal, at } }
+}
+
+/**
+ * ONE LINE PER COLLISION, in the same greppable shape as a read-repair.
+ *
+ * Not a repair: nothing is wrong with the derived record, and nothing about
+ * it can be fixed. Two different exchanges are wearing one uuid on disk, and
+ * the only honest answer is to keep the first, skip the second, and say so.
+ */
+function logCollisions(
+  terminalId: string,
+  collisions: readonly IdentityCollision[],
+  log: ((message: string) => void) | undefined
+): void {
+  const write = log ?? ((message: string) => console.error(message))
+  for (const collision of collisions) {
+    write(
+      `stream identity collision: ${terminalId} ${collision.identity} reused in ` +
+        `${collision.file.slice(collision.file.lastIndexOf('/') + 1)} for a different prompt — skipped`
+    )
+  }
 }
 
 /** The persisted rows, back as the keyed snapshot the projection folds onto. */

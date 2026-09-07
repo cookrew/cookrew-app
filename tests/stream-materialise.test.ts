@@ -305,6 +305,88 @@ describe('materialise — anomalies are counted and skipped', () => {
   })
 })
 
+describe('materialise — a replayed prefix is one exchange', () => {
+  /** file 2 replays file 1's first `n` exchanges, then continues. */
+  const replayChain = (n: number, extra: number): StreamLine[] => {
+    const first = [1, 2, 3, 4].map((k) => line(k))
+    const second = [
+      ...first.slice(0, n).map((one, at) => ({
+        ...one,
+        file: S2,
+        byteOffset: (at + 1) * 100,
+        entry: { ...one.entry!, file: S2 }
+      })),
+      ...Array.from({ length: extra }, (_, at) => {
+        const base = line(at + 5, S2)
+        return { ...base, entry: { ...base.entry!, identity: `v${at + 1}`, file: S2 } }
+      })
+    ]
+    return [...first, ...second]
+  }
+
+  it('draws each exchange once, keeps the first ordinal, continues the count', async () => {
+    let lines = [1, 2, 3, 4].map((k) => line(k))
+    const index = store(() => read(lines))
+    await index.materialise('term-1')
+
+    lines = replayChain(2, 2)
+    const rotated = await index.materialise('term-1')
+    expect(rotated.entries.map((row) => [row.identity, row.ordinal])).toEqual([
+      ['u1', 1],
+      ['u2', 2],
+      ['u3', 3],
+      ['u4', 4],
+      ['v1', 5],
+      ['v2', 6]
+    ])
+    expect(rotated.anomalies).toEqual({})
+  })
+
+  it('a replayed exchange is read from the NEWEST file that holds it', async () => {
+    const index = store(() => read(replayChain(2, 1)))
+    const materialised = await index.materialise('term-1')
+    const replayed = materialised.entries[0]
+    expect(replayed.identity).toBe('u1')
+    expect(replayed.ordinal).toBe(1)
+    expect(replayed.file).toBe(S2)
+    expect(replayed.replayedIn).toEqual([S2])
+    expect(replayed.occurrences.map((one) => one.file)).toEqual([S1, S2])
+    // an exchange that was never replayed says nothing
+    expect(materialised.entries[2].replayedIn).toBeUndefined()
+  })
+
+  it('re-materialising the same rotation is a no-op', async () => {
+    const lines = replayChain(2, 2)
+    const index = store(() => read(lines))
+    const once = await index.materialise('term-1')
+    const twice = await index.materialise('term-1')
+    expect(twice.entries).toEqual(once.entries)
+    expect(twice.cursor).toEqual(once.cursor)
+  })
+
+  it('a uuid reused for a DIFFERENT exchange is counted, skipped and named', async () => {
+    const first = [1, 2].map((k) => line(k))
+    const collided = {
+      ...line(1, S2),
+      byteOffset: 100,
+      entry: { ...line(1, S2).entry!, identity: 'u1', file: S2, promptHead: 'a different ask' }
+    }
+    const index = store(() => read([...first, collided]))
+    const materialised = await index.materialise('term-1')
+    expect(materialised.anomalies).toEqual({ IdentityCollision: 1 })
+    // the row still describes the FIRST exchange
+    expect(materialised.entries.map((row) => [row.identity, row.promptHead])).toEqual([
+      ['u1', 'prompt 1'],
+      ['u2', 'prompt 2']
+    ])
+    expect(materialised.entries[0].file).toBe(S1)
+    expect(logged.filter((message) => message.startsWith('stream identity collision:'))).toHaveLength(
+      1
+    )
+    expect(logged.find((message) => message.includes('identity collision'))).toContain('s2.jsonl')
+  })
+})
+
 describe('materialise — read-repair', () => {
   it('a cursor naming a file the chain no longer holds is moved to the tail', async () => {
     writeStreamState(
@@ -332,7 +414,8 @@ describe('materialise — read-repair', () => {
           compacted: false,
           file: S1,
           firstAt: T0,
-          latestAt: T0 + 1
+          latestAt: T0 + 1,
+          occurrences: [{ file: S1 }]
         },
         {
           identity: 'u2',
@@ -343,7 +426,8 @@ describe('materialise — read-repair', () => {
           compacted: false,
           file: S1,
           firstAt: T0,
-          latestAt: T0 + 1
+          latestAt: T0 + 1,
+          occurrences: [{ file: S1 }]
         }
       ]
     }

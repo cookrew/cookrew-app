@@ -44,6 +44,8 @@ import {
 } from '../shared/stream-index'
 import type { TraceBlock } from '../shared/trace-blocks'
 import type { AnomalyCounts, StreamLine } from '../shared/stream-projection'
+import { collapseByIdentity } from '../shared/stream-replay'
+import { placeUndeclared } from './stream-placement'
 import { evictOverBudget, type TraceDocument, type TraceKind } from './trace'
 import type { MissingStreamFile, StreamChain } from './stream-chain'
 import type { RollbackMark } from './stream-state'
@@ -178,6 +180,10 @@ interface LoadedFile {
    *  so a derived index can be keyed by (file, offset) and a cursor can
    *  address it. */
   bytesRead: number
+  /** The rotation walk named this file (stream-chain.ts). */
+  declared: boolean
+  /** This file's first block's clock, or null when it holds none. */
+  startedAt: number | null
 }
 
 /** The (file, byte offset) key the light index is cached under. */
@@ -259,17 +265,36 @@ export function createStreamReader(deps: StreamReaderDeps): StreamReader {
         sessionId: ref.sessionId,
         blocks: document.blocks,
         entries: entriesOf(ref.file, document),
-        bytesRead: document.bytesRead
+        bytesRead: document.bytesRead,
+        declared: ref.declared === true,
+        startedAt: document.blocks[0]?.startedAt ?? null
       })
     }
-    return { files, missing }
+    return { files: placeUndeclared(files), missing }
   }
 
-  const positionsOf = async (
+  const walkOf = async (
     terminalId: string
   ): Promise<{ files: LoadedFile[]; positions: StreamPosition[]; missing: MissingStreamFile[] }> => {
     const { files, missing } = await load(terminalId)
     return { files, positions: streamPositionsOf(files), missing }
+  }
+
+  /**
+   * The walk with each exchange drawn ONCE (stream-replay.ts).
+   *
+   * Every read a caller renders goes through this; only `lines()` sees the
+   * raw walk, because the projection has to be shown the repeat in order to
+   * record which files hold it. Collapsing here rather than in the routes is
+   * what makes `total`, the rail and the block cursors agree by construction:
+   * `/stream?after=<identity>` resolves to exactly one position, and that
+   * position is in the NEWEST file that holds the exchange.
+   */
+  const positionsOf = async (
+    terminalId: string
+  ): Promise<{ files: LoadedFile[]; positions: StreamPosition[]; missing: MissingStreamFile[] }> => {
+    const { files, positions, missing } = await walkOf(terminalId)
+    return { files, positions: collapseByIdentity(positions).positions, missing }
   }
 
   const blockAt = (files: readonly LoadedFile[], position: StreamPosition): StreamBlock => {
@@ -300,7 +325,10 @@ export function createStreamReader(deps: StreamReaderDeps): StreamReader {
     },
 
     async lines(terminalId) {
-      const { files, positions, missing } = await positionsOf(terminalId)
+      // THE RAW WALK, repeats included: the projection is the layer that
+      // records which files hold an exchange, and it cannot record a copy it
+      // was never shown.
+      const { files, positions, missing } = await walkOf(terminalId)
       return {
         lines: positions.map((position) => ({
           file: position.entry.file,
@@ -311,6 +339,7 @@ export function createStreamReader(deps: StreamReaderDeps): StreamReader {
           // "latest" the upsert guard is meant to follow.
           at: position.entry.endedAt,
           ordinal: position.entry.ordinal,
+          ordinalInFile: position.localAt,
           entry: position.entry
         })),
         files: files.map((file) => ({ file: file.file, bytesRead: file.bytesRead })),

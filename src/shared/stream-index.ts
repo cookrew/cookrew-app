@@ -97,6 +97,18 @@ export interface StreamIndexEntry {
    * that was never rewound, so the flag reads as evidence rather than noise.
    */
   rolledBack?: true
+  /**
+   * Later transcripts that ALSO hold this exchange, oldest first.
+   *
+   * Claude replays a prefix of the conversation into the file it rotates or
+   * resumes into — measured on the owner's busiest card: 181 of 1,046
+   * identities, every repeat spanning more than one file, 193 of 193 with an
+   * identical prompt. That is ONE exchange, so it is ONE row: at the ordinal
+   * of when it happened, with its bytes resolved from the newest file listed
+   * here, because that copy is what the next rotation carries forward. The
+   * rule is stream-replay.ts and nothing else may restate it.
+   */
+  replayedIn?: string[]
 }
 
 /** Where an index entry lives, so a window can fetch the block without
