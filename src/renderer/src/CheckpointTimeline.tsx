@@ -2,9 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { cookrew } from './api'
 import { CrIcon } from './icons'
 import { type TitleMode } from './checkpoint-sync'
-import { hasRoleFromCheckpoint, saveRoleFromCheckpoint } from './role-checkpoint'
+import { hasRoleFromCheckpoint } from './role-checkpoint'
 import { LineagePanel } from './LineagePanel'
 import { CheckpointRowView } from './CheckpointRowView'
+import { SaveRoleInline } from './SaveRoleInline'
 import { createHoldReveal, hasLineageSegmentsApi, railAnchorTop, railPointerFraction } from './transcript'
 import {
   checkpointRowTitle,
@@ -18,8 +19,15 @@ import {
  *  used here for scrub mapping. Imported rather than redeclared so the density
  *  rule and the scrub mapping cannot drift — they describe the same 16px.
  *  railAnchors: the F6 gate, as ONE function — see rail-fill.ts. */
-import { countBadgeTop, fillRows, railAnchors, railScale, RAIL_INSET } from './rail-fill'
+import { countBadgeTop, fillRows, railAnchors, railFraction, railScale, RAIL_INSET } from './rail-fill'
 import { pinAnchors, pinLabel, traceFraction, type VersionPinRecord } from '../../shared/version-pin'
+import {
+  focusPinned,
+  initialFocusState,
+  nextFocus,
+  type FocusState,
+  type RailFocus
+} from './stream/focus-policy'
 
 
 /** Px of pointer travel before a press on the rail becomes a scrub, not a tap. */
@@ -49,9 +57,15 @@ const IDLE_AFTER_MS = 1700
  *    title while scrolling/scrubbing.
  *  - CLICK / TAP the rail → the full-range list opens: every row laid at its own
  *    fraction of T1→newest along the bar, LIVE at fraction 1, and the focused
- *    row pinned separately on the marker's line.
+ *    row pinned separately on the marker's line. The tap SELECTS the checkpoint
+ *    under it and PINS that focus for a dwell (stream/focus-policy.ts), so the
+ *    list is still there when the finger comes back to press something — and a
+ *    live agent's own output cannot scroll it away in the meantime.
  *  - In the list: tap/click a row → jump; press-and-HOLD a row/tab (~2s) → its
- *    SAVE ROLE / FORK actions.
+ *    SAVE ROLE / FORK actions. On the PINNED focus row those actions are
+ *    already showing: the hold is a shortcut, not the only door (D2, canvas QA
+ *    2026-09-07 — with one pointer, holding the fan open and pressing a row are
+ *    the same finger).
  *
  * Rows span the WHOLE trace (unified-scroll item 3): identities below the record
  * cap render trace-only (fork works, role-save needs the record). Fresco owns the
@@ -149,8 +163,29 @@ export function CheckpointTimeline({
 }): React.JSX.Element | null {
   /** True while a rail scrub drag is active — drives the .dragging affordance. */
   const [scrubbing, setScrubbing] = useState(false)
-  /** The FOCUSED checkpoint (scroll/scrub) the list highlights + centres on. */
-  const [focused, setFocused] = useState<{ index: number; frac: number } | null>(null)
+  /**
+   * THE FOCUSED CHECKPOINT, AND WHO CHOSE IT (D2, canvas QA 2026-09-07).
+   *
+   * Was a bare `focused` set from the transcript's scroll, which meant the
+   * transcript could always take it back — including from a user who had just
+   * set it, which is why the row actions were unreachable with one finger. The
+   * policy in stream/focus-policy.ts decides between the two owners; this holds
+   * its state and nothing else.
+   *
+   * SEEDED FROM THE SCROLL, not left null: the scroll-derived focus was
+   * previously computed in an effect, so the first paint of a card already
+   * scrolled to a checkpoint had no tag at all until a second render.
+   */
+  const [focusState, setFocusState] = useState<FocusState>(() =>
+    nextFocus(initialFocusState, {
+      kind: 'scroll',
+      focus: seedFocus(rows, activeIndex ?? null, markerFrac),
+      at: Date.now()
+    })
+  )
+  const focused = focusState.focus
+  /** Bumped when a dwell expires, so the fan re-evaluates without a scroll. */
+  const [dwellTick, setDwellTick] = useState(0)
   /** The row whose SAVE ROLE / FORK actions are revealed (held ~2s). */
   const [acting, setActing] = useState<number | null>(null)
   const [savingIndex, setSavingIndex] = useState<number | null>(null)
@@ -197,12 +232,31 @@ export function CheckpointTimeline({
   // in markerFrac) from the identity in view — not while scrubbing (the scrub
   // sets it directly). Null at the live tail → the tab hides. The fraction is the
   // ONE position source of truth for both the here-marker and the tab.
+  //
+  // The scroll no longer WINS by default: the policy refuses it while the user's
+  // own pick is pinned, and falls back to that pick on a card whose transcript
+  // is too short to ever scroll. `dwellTick` is in the deps so the moment a
+  // dwell expires this re-runs and the transcript takes over again.
   useEffect(() => {
     if (scrubbing) return
-    const { focusedIndex } = scrollFocusState(rows, activeIndex ?? null)
-    setFocused(focusedIndex !== null ? { index: focusedIndex, frac: markerFrac ?? 1 } : null)
+    setFocusState((state) =>
+      nextFocus(state, {
+        kind: 'scroll',
+        focus: seedFocus(rows, activeIndex ?? null, markerFrac),
+        at: Date.now()
+      })
+    )
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeIndex, markerFrac, scrubbing])
+  }, [activeIndex, markerFrac, scrubbing, dwellTick])
+
+  // The dwell has to END on its own, or a pin on a card that never scrolls
+  // again would hold the fan open forever. One timer, re-armed per pin.
+  useEffect(() => {
+    const remaining = focusState.pinnedUntil - Date.now()
+    if (remaining <= 0) return
+    const timer = setTimeout(() => setDwellTick((n) => n + 1), remaining)
+    return () => clearTimeout(timer)
+  }, [focusState.pinnedUntil])
 
   // F1 — IDLE FADE. Any change of focus or scrub position is "movement", so the
   // timer restarts here and the tag comes back; 1.7s of stillness fades it out.
@@ -373,40 +427,95 @@ export function CheckpointTimeline({
    */
   const scale = railScale(rows, total)
 
+  /**
+   * Point at a place on the bar → the checkpoint there, with its fraction.
+   * One expression for the drag and the tap, so the two can never disagree
+   * about which checkpoint a given Y names.
+   */
+  const railTarget = (clientY: number): { frac: number; focus: RailFocus | null } | null => {
+    const bar = miniRef.current
+    if (!bar) return null
+    const rect = bar.getBoundingClientRect()
+    const frac = railPointerFraction(clientY, rect.top, rect.height, RAIL_INSET)
+    const row = scrubPreviewRow(rows, frac, scale)
+    return { frac, focus: row ? { index: row.index, frac } : null }
+  }
+
+  /** Move the transcript there, and ask for the page that holds it. THE
+   *  PAGE-BACK TRIGGER (D1): the ordinal is named on the chain's scale, so a
+   *  drag toward the top says "T340" even on a client that holds only T949
+   *  upward — and that is what puts the page for T340 on the wire. */
+  const seekTo = (frac: number): void => {
+    onScrub?.(frac)
+    onReach?.(scrubOrdinal(frac, scale))
+  }
+
   // Drag the line/marker → scrub the transcript. The line/marker stays draggable
   // even while the list is shown (it's the always-present scroll indicator).
+  //
+  // The press is taken even without an `onScrub` (D2): a TAP selects, and that
+  // is worth doing on a rail that cannot scrub the transcript too.
   const onRailPointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
-    if (!onScrub) return
     scrub.current = { startY: e.clientY, moved: false }
     setScrubbing(true)
     e.currentTarget.setPointerCapture(e.pointerId)
   }
   const onRailPointerMove = (e: React.PointerEvent<HTMLDivElement>): void => {
-    if (!onScrub || !miniRef.current) return
     if (!e.currentTarget.hasPointerCapture?.(e.pointerId)) return
     if (!scrub.current.moved && Math.abs(e.clientY - scrub.current.startY) < SCRUB_THRESHOLD) return
+    const target = railTarget(e.clientY)
+    if (target === null) return
     scrub.current.moved = true
-    const rect = miniRef.current.getBoundingClientRect()
-    const frac = railPointerFraction(e.clientY, rect.top, rect.height, RAIL_INSET)
     // DRAG the line/marker → scrub the transcript to the dragged checkpoint; the
     // focus (list highlight + re-centre) follows.
-    onScrub(frac)
-    // THE PAGE-BACK TRIGGER (D1). The ordinal is named on the chain's scale,
-    // so a drag toward the top says "T340" even on a client that holds only
-    // T949 upward — and that is what puts the page for T340 on the wire.
-    onReach?.(scrubOrdinal(frac, scale))
-    const row = scrubPreviewRow(rows, frac, scale)
-    setFocused(row ? { index: row.index, frac } : null)
+    seekTo(target.frac)
+    setFocusState((state) => nextFocus(state, { kind: 'scrub', focus: target.focus, at: Date.now() }))
   }
+  /**
+   * A press that TRAVELLED was a scrub — the lift starts its dwell, which is
+   * what makes the fan survive the finger leaving the glass (D2: with one
+   * pointer there is no way to hold the scrub AND press a row).
+   *
+   * A press that stayed put is a TAP, and a tap SELECTS: it seeks the
+   * transcript to the nearest checkpoint and pins that focus. The docblock at
+   * the top of this file has always said a tap opens the full-range list; until
+   * now nothing here did it.
+   */
   const onRailPointerUp = (e: React.PointerEvent<HTMLDivElement>): void => {
+    const dragged = scrub.current.moved
     setScrubbing(false)
     scrub.current.moved = false
     if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId)
     }
+    if (dragged) {
+      setFocusState((state) => nextFocus(state, { kind: 'release', at: Date.now() }))
+      return
+    }
+    const target = railTarget(e.clientY)
+    if (target === null) return
+    seekTo(target.frac)
+    setFocusState((state) => nextFocus(state, { kind: 'tap', focus: target.focus, at: Date.now() }))
+  }
+  /** A cancelled press is not a selection — release what a drag had, and let a
+   *  never-started tap fall through without moving the transcript. */
+  const onRailPointerCancel = (e: React.PointerEvent<HTMLDivElement>): void => {
+    const dragged = scrub.current.moved
+    setScrubbing(false)
+    scrub.current.moved = false
+    if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    }
+    if (dragged) setFocusState((state) => nextFocus(state, { kind: 'release', at: Date.now() }))
   }
 
   const here = focused?.index ?? null
+  /**
+   * Is the focus the USER'S right now (D2)? Read at render time on purpose —
+   * the dwell is a wall-clock window, and the timer above re-renders when it
+   * closes, so this is never stale by more than a frame.
+   */
+  const pinned = focusPinned(focusState, Date.now())
   /**
    * The marker's own fraction, used ONLY when nothing is focused.
    *
@@ -499,6 +608,21 @@ export function CheckpointTimeline({
         </div>
       ))
 
+  /**
+   * Selecting a row is a PICK, not a scroll (D2). Without the re-pin the jump
+   * would arrive as a scroll event and be refused by the dwell the tap that
+   * opened this fan had just armed — the tag would sit on the old checkpoint
+   * while the transcript showed the new one.
+   */
+  const selectRow = (row: CheckpointRow): void =>
+    setFocusState((state) =>
+      nextFocus(state, {
+        kind: 'tap',
+        focus: { index: row.index, frac: railFraction(row.index, scale) },
+        at: Date.now()
+      })
+    )
+
   // One row of the extended tab and one row of the fan are the SAME element
   // (CheckpointRowView) — see its docblock: two near-identical JSX blocks is
   // how the focused row drifts off the marker, which is what F6 catches.
@@ -510,7 +634,9 @@ export function CheckpointTimeline({
         row={row}
         label={rowLabel(row)}
         active={isActive}
-        acting={acting === row.index}
+        // THE THIRD DOOR (D2c): a PINNED focus row shows its actions with no
+        // 1500ms hold at all. The hold is a shortcut now, not the only way in.
+        acting={acting === row.index || (isActive && pinned)}
         loading={loadingIndex === row.index}
         titleShift={titleShift}
         {...(isActive ? { titleRef } : {})}
@@ -518,15 +644,25 @@ export function CheckpointTimeline({
         {...(style !== undefined ? { style } : {})}
         onPressStart={() => startHold(row.index)}
         onPressEnd={endHold}
-        onSelect={() => onTap(() => onGoto(row.index))}
+        onSelect={() =>
+          onTap(() => {
+            selectRow(row)
+            onGoto(row.index)
+          })
+        }
       />
     )
   }
 
   const focusedRow = focused ? (rows.find((r) => r.index === focused.index) ?? null) : null
   // TWO ZONES: scrolling the transcript shows the SINGLE tag (focused row only);
-  // scrolling/dragging the rail (scrubbing) FANS the full list around it.
-  const fanned = scrubbing && focused !== null && focusedRow !== null
+  // scrolling/dragging the rail FANS the full list around it.
+  //
+  // `pinned` is why the fan survives the lift (D2). It used to be `scrubbing`
+  // alone, so the fan existed only while a pointer was held down on the rail —
+  // and the finger holding it open was the finger that would have pressed ROLE,
+  // FORK or ⟲ REWIND. The dwell keeps it mounted regardless of live output.
+  const fanned = focused !== null && focusedRow !== null && (scrubbing || pinned)
   /**
    * F3 — the reveal is the FULL range, laid along the bar: T1 at the top, the
    * newest at the bottom, as many rows between as fit without overlapping. The
@@ -581,7 +717,13 @@ export function CheckpointTimeline({
    */
   // …and never while the earlier-sessions panel is open: it is a modal-ish
   // reading surface, and fading it mid-read is the touch bug all over again.
-  const showIdle = idle && acting === null && !scrubbing && !lineageOpen
+  //
+  // …and NEVER while the user's own pick is pinned (D2). The dwell is 8000 and
+  // the idle timer is 1700, so without this the fan a tap had just opened would
+  // fade to opacity 0 AND pointer-events: none a second and a half later —
+  // revealed, unreadable, untappable, which is the exact touch bug above with a
+  // different trigger.
+  const showIdle = idle && acting === null && !scrubbing && !lineageOpen && !pinned
 
   return (
     <div
@@ -608,7 +750,7 @@ export function CheckpointTimeline({
         onPointerDown={onRailPointerDown}
         onPointerMove={onRailPointerMove}
         onPointerUp={onRailPointerUp}
-        onPointerCancel={onRailPointerUp}
+        onPointerCancel={onRailPointerCancel}
       >
         <div className="cr-ckpt-line" />
         {/* Boundary ticks ON the rail line — compact/clear/rewind positions visible
@@ -758,7 +900,14 @@ export function CheckpointTimeline({
                 aria-label={ended ? 'Ended' : 'Live'}
                 style={{ top: railAnchorTop(entry.fraction) }}
                 onMouseDown={(e) => e.preventDefault()}
-                onClick={() => onTap(() => onLive())}
+                onClick={() =>
+                  onTap(() => {
+                    // The way OUT of a pinned focus, and always obeyed — on a
+                    // short card nothing else would ever clear it (D2).
+                    setFocusState((state) => nextFocus(state, { kind: 'live', at: Date.now() }))
+                    onLive()
+                  })
+                }
               >
                 <span className="cr-ckpt-row-label">
                   <span className="cr-ckpt-row-idx">{ended ? 'ENDED' : 'LIVE'}</span>
@@ -855,58 +1004,23 @@ function tickLabel(m: TraceMarkerRow): string {
   return `session cleared here${reach || ' — earlier endpoints via lineage'}`
 }
 
+/**
+ * The scroll-derived focus, in the shape the focus policy's `scroll` event
+ * wants. One expression, used by the lazy seed AND by the effect, so a card's
+ * first paint and its next one cannot disagree about where the transcript is.
+ */
+function seedFocus(
+  rows: readonly CheckpointRow[],
+  activeIndex: number | null,
+  markerFrac: number | undefined
+): RailFocus | null {
+  const { focusedIndex } = scrollFocusState(rows, activeIndex)
+  return focusedIndex === null ? null : { index: focusedIndex, frac: markerFrac ?? 1 }
+}
+
 /** 999600 → "999.6k", 11200000 → "11.2M" — compact marker compression readout. */
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
   return String(n)
-}
-
-function SaveRoleInline({
-  terminalId,
-  checkpoint,
-  expectedUuid,
-  onDone
-}: {
-  terminalId: string
-  checkpoint: number
-  /** The row's trace identity — guards the numeric-checkpoint ledger lookup
-   *  against the post-compact index divergence (see role-checkpoint.ts). */
-  expectedUuid?: string
-  onDone: () => void
-}): React.JSX.Element {
-  const [name, setName] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const submit = (): void => {
-    const trimmed = name.trim()
-    if (!trimmed || busy) return
-    setBusy(true)
-    setError(null)
-    void saveRoleFromCheckpoint({ terminalId, checkpoint, expectedUuid, name: trimmed })
-      .then(() => onDone())
-      .catch((cause: unknown) => {
-        setError(cause instanceof Error ? cause.message : String(cause))
-        setBusy(false)
-      })
-  }
-  return (
-    <div className="cr-ckpt-saverole">
-      <input
-        className="tf-input"
-        placeholder="role name"
-        value={name}
-        autoFocus
-        onChange={(e) => setName(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') submit()
-          if (e.key === 'Escape') onDone()
-        }}
-      />
-      <button className="cr-btn sm" disabled={busy || !name.trim()} onClick={submit}>
-        {busy ? '…' : 'SAVE'}
-      </button>
-      {error && <span className="cr-ckpt-rewind-error">{error}</span>}
-    </div>
-  )
 }

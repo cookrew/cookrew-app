@@ -37,6 +37,19 @@ export const CARD_ZOOM_MS = 280
  */
 export const CARD_FIT_PADDING = 0
 
+/**
+ * The OVERVIEW fit — zoom out to the whole board. Its own duration and its own
+ * padding, both named here rather than repeated at the three call sites that
+ * want them (workspace load, ⤢ CANVAS, zoom-back fallback), because D1 (canvas
+ * QA 2026-09-07) turned those three into one helper and three copies of `450`
+ * and `0.1` is how they drift apart again.
+ *
+ * The padding is NOT CARD_FIT_PADDING: framing the whole board edge to edge
+ * puts the outermost cards against the stage border with nothing to grab.
+ */
+export const OVERVIEW_FIT_MS = 450
+export const OVERVIEW_FIT_PADDING = 0.1
+
 /** Zoom at which card type reaches its designed size and stops growing. */
 export const NATURAL_ZOOM = 0.95
 
