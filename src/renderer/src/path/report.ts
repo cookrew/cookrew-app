@@ -52,6 +52,10 @@ export const reportedAttempts = (
     outcome: attempt.outcome,
     ms: attempt.ms,
     ...(attempt.status !== undefined ? { status: attempt.status } : {}),
+    // The variant travels because it is half the diagnosis: the same word
+    // 'blocked' means a permission to grant or a proxy in the way depending on
+    // it (Chrome 152, 2026-09-08), and the owner reads these over curl.
+    ...(attempt.hint !== undefined ? { hint: attempt.hint } : {}),
     ...(attempt.detail !== undefined ? { detail: attempt.detail } : {})
   }))
 

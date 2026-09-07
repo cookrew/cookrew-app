@@ -65,6 +65,17 @@ export interface PathAttempt {
    * the sentence: the sentence is ours, in path-copy.ts.
    */
   readonly detail?: string
+  /**
+   * WHICH ADDRESS-SPACE VARIANT THE VERDICT IS ABOUT, where it is news.
+   *
+   * 'none' on an answer means the probe only got through after dropping the
+   * local-network annotation; 'none' on 'blocked' means the browser refused it
+   * with AND without one. Both are the signature of a system proxy hiding the
+   * address from Chrome (152, 2026-09-08), and both change what a reader should
+   * do next. Spelled here rather than imported so this store keeps importing
+   * nothing; the source of the word is local-network.ts · AddressSpaceHint.
+   */
+  readonly hint?: 'local' | 'none'
 }
 
 export interface PathAttempts {

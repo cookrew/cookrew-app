@@ -101,6 +101,32 @@ export const ATTEMPT_COPY = {
 } as const
 
 /**
+ * THE TWO ROWS THE ADDRESS-SPACE HINT CHANGES THE MEANING OF.
+ *
+ * THE INCIDENT: Chrome 152 behind a system proxy, on the owner's Mac,
+ * 2026-09-08. The panel said `192.168.2.40:8643 refused by the browser before
+ * connecting — 32 ms` and the permission line above it said "local network not
+ * asked yet", which together read as "go and allow it". There was nothing to
+ * allow: no prompt had been raised or could be. The proxy hides the resolved
+ * address, Chrome calls the target public, and a request DECLARING 'local'
+ * fails that check before any dialog — while the identical request without the
+ * declaration is delivered.
+ *
+ * So the two rows that can only come from that world say so. An answer that
+ * arrived only unannotated names the proxy, because it is the reason the panel
+ * looks strange; a refusal that happened both ways says both ways, because it
+ * is the one refusal site settings cannot fix.
+ */
+const HINTLESS_COPY = {
+  answered: 'answered (without the local-network hint — a proxy hides the address)',
+  blocked: 'refused by the browser before connecting (with and without the hint)'
+} as const
+
+/** Only these two outcomes mean anything different for having lost the hint. */
+const tellsOnTheHint = (outcome: keyof typeof ATTEMPT_COPY): outcome is 'answered' | 'blocked' =>
+  outcome === 'answered' || outcome === 'blocked'
+
+/**
  * The one sentence per row, with the measurement folded in where it earns its
  * place.
  *
@@ -117,8 +143,13 @@ export const attemptSentence = (attempt: {
   readonly outcome: keyof typeof ATTEMPT_COPY
   readonly ms: number | null
   readonly status?: number
+  /** Set only where the variant is news — see HINTLESS_COPY and toldHint. */
+  readonly hint?: 'local' | 'none'
 }): string => {
-  const said = ATTEMPT_COPY[attempt.outcome]
+  const said =
+    attempt.hint === 'none' && tellsOnTheHint(attempt.outcome)
+      ? HINTLESS_COPY[attempt.outcome]
+      : ATTEMPT_COPY[attempt.outcome]
   // The status IS the story: 421 is the endpoint-bound hello refusing a
   // relayed challenge, 404 is somebody else's server on port 8643.
   if (attempt.outcome === 'http') return attempt.status ? `${said} ${attempt.status}` : said

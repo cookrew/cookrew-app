@@ -68,6 +68,16 @@ export interface PathReportAttempt {
   readonly ms: number | null
   /** The browser's own words, already scrubbed of anything address-shaped. */
   readonly detail?: string
+  /**
+   * The address-space variant the verdict is about, where it is news.
+   *
+   * 'none' on an answer means the probe only got through after dropping the
+   * local-network annotation; 'none' on 'blocked' means the browser refused it
+   * both ways. That is the difference between "allow this in site settings" and
+   * "a system proxy is hiding the address" (Chrome 152, 2026-09-08), and the
+   * owner reading `curl /api/path/reports` needs it as much as the panel does.
+   */
+  readonly hint?: 'local' | 'none'
 }
 
 export interface PathReport {
