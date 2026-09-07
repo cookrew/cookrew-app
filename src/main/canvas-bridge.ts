@@ -1,5 +1,6 @@
 import http from 'node:http'
 import { decodeFrame, encodeFrame, type RelayFrame } from '../shared/relay-frame'
+import { bodiless } from './http-compress'
 
 /**
  * FRAMES BACK INTO REQUESTS — the desktop end of the canvas relay.
@@ -189,10 +190,26 @@ export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
    */
   const answer = (id: string, exchange: Exchange): void => {
     const seal = exchange.sealed === undefined ? {} : { sealed: exchange.sealed }
+    let ended = false
+    const end = (): void => {
+      if (ended) return
+      ended = true
+      calls.delete(id)
+      send({ t: 'end', id })
+    }
     const call = dial(
       { method: exchange.method, path: exchange.path, headers: exchange.headers },
       (response) => {
         send({ t: 'head', id, status: response.status, headers: response.headers, ...seal })
+        // A 1xx, 204 or 304 IS its head. The exchange ends here rather than on
+        // the socket's `end`, because whether that ever fires depends on which
+        // Node is reading and on what the answer said about a body it does not
+        // have — measured 2026-09-08 as every beacon holding a relay exchange
+        // for 120 s until sixteen of them shut the door (`too_many_exchanges`).
+        if (bodiless(response.status)) {
+          end()
+          return
+        }
         response.onData((chunk) => {
           // ≤ 384 KB of RAW bytes per frame: a single read off a fast local
           // socket can be larger, and one oversized frame is refused by the
@@ -206,19 +223,21 @@ export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
             })
           }
         })
-        response.onEnd(() => {
-          calls.delete(id)
-          send({ t: 'end', id })
-        })
+        response.onEnd(end)
       },
       (error) => {
+        // An exchange that already ended has nothing left to abort: the socket
+        // behind a bodiless answer may still report its own late trouble.
+        if (ended) return
         // The companion failing is OURS, and it must not take the line with
         // it: one bad request would otherwise drop every other exchange.
         log(`canvas bridge: ${exchange.method} ${exchange.path} failed: ${error.message}`)
         abort(id, 'companion-failed')
       }
     )
-    calls.set(id, call)
+    // A dialer that answers synchronously has ended before the call is on the
+    // books; a call that is over is not in flight.
+    if (!ended) calls.set(id, call)
     if (exchange.bytes > 0) call.write(Buffer.concat(exchange.body as Buffer[]))
     call.end()
   }

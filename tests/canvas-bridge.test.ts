@@ -342,6 +342,59 @@ describe('the frame ceiling', () => {
   })
 })
 
+describe('an answer with no body', () => {
+  /**
+   * MEASURED on the relay, 2026-09-08. The companion answered every phone
+   * beacon 204 with `content-length: 2`, and Electron's Node 20 http client
+   * then never emitted `end` — it was waiting for two bytes that a 204 does
+   * not carry. Each beacon held a relay exchange until the 120 s idle deadline;
+   * sixteen of them hit the per-desktop cap and the shell died with
+   * `too_many_exchanges`. The dialer here reproduces exactly that: a 204 head
+   * and no `end`, ever. The bridge must close the exchange on the head alone.
+   */
+  it('ends the exchange on the head of a 204, without waiting for a body', async () => {
+    const late: { end: (() => void) | null } = { end: null }
+    const neverEnds: BridgeDialer = (_input, onResponse) => {
+      onResponse({
+        status: 204,
+        headers: { 'content-length': '2', 'content-type': 'application/json' },
+        onData: () => undefined,
+        onEnd: (listener) => void (late.end = listener)
+      })
+      return { write: () => undefined, end: () => undefined, destroy: () => undefined }
+    }
+    const bridge = standUp({ dial: neverEnds })
+    bridge.frame({
+      t: 'open',
+      id: 'b',
+      method: 'POST',
+      path: '/api/beacon',
+      headers: { 'content-type': 'application/json' }
+    })
+    bridge.frame({ t: 'body', id: 'b', data: Buffer.from('{"t":1}').toString('base64'), done: true })
+    await until(() => ended(bridge.of('b')), 'the bodiless answer to end', 500)
+    expect(bridge.of('b').map((frame) => frame.t)).toEqual(['head', 'end'])
+    expect(bridge.open()).toBe(0)
+    // A late `end` from the socket, should the parser ever deliver one, is
+    // not a second end frame.
+    late.end?.()
+    expect(bridge.of('b').filter((frame) => frame.t === 'end').length).toBe(1)
+  })
+
+  it('treats 304 and 1xx the same way', async () => {
+    for (const status of [304, 101]) {
+      const stuck: BridgeDialer = (_input, onResponse) => {
+        onResponse({ status, headers: {}, onData: () => undefined, onEnd: () => undefined })
+        return { write: () => undefined, end: () => undefined, destroy: () => undefined }
+      }
+      const bridge = standUp({ dial: stuck })
+      bridge.frame({ t: 'open', id: 'n', method: 'GET', path: '/x', headers: {} })
+      bridge.frame({ t: 'body', id: 'n', data: '', done: true })
+      await until(() => ended(bridge.of('n')), `a ${status} to end`, 500)
+    }
+  })
+})
+
 describe('the reserved seal', () => {
   it('is carried onto the answer, unread', async () => {
     const bridge = standUp()
