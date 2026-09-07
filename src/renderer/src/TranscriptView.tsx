@@ -222,9 +222,21 @@ export const TranscriptView = forwardRef<
       if (node) blockRefs.current.set(id, node)
       else blockRefs.current.delete(id)
     }
+    // WRITTEN DURING RENDER, deliberately and safely: the map is private to
+    // this component, the value for an id is derived only from the id, and a
+    // double render therefore produces the identical closure. The same bend
+    // applyChangeSetInto documents, for the same reason.
     rowRefs.current.set(id, made)
     return made
   }
+  // …and PRUNED, so a card that pages a long history back does not retain a
+  // closure per ordinal it has ever drawn (review, T5 QA 2026-09-07).
+  useEffect(() => {
+    const alive = new Set(spaceIds)
+    for (const id of rowRefs.current.keys()) {
+      if (!alive.has(id)) rowRefs.current.delete(id)
+    }
+  }, [spaceIds])
 
   // True while a finger is down (item 2b): a smooth scrollIntoView is canceled by
   // the touch gesture mid-flight, so jumps snap instantly while touching.
@@ -631,10 +643,10 @@ export const TranscriptView = forwardRef<
   useEffect(() => {
     const el = scrollRef.current
     if (!el || typeof ResizeObserver !== 'function') return
-    const apply = (): void => {
+    const apply = (source: StreamWindow['render']): void => {
       // REPLAY NEVER MOVES THE VIEW. Growth the reader did not ask for may
       // re-stick the bottom; a page they scrolled to may not.
-      if (!mayFireSideEffects(renderSourceRef.current)) return
+      if (!mayFireSideEffects(source)) return
       if (shouldStick(pinnedRef.current, el.scrollTop, el.scrollHeight, el.clientHeight)) {
         el.scrollTop = el.scrollHeight
       }
@@ -653,9 +665,14 @@ export const TranscriptView = forwardRef<
     let frame: number | null = null
     const stick = (): void => {
       if (frame !== null) return
+      // THE VERDICT IS TAKEN NOW, not at frame time. Deferring the read of
+      // renderSourceRef would let a live tail landing in the same frame turn a
+      // REPLAY's resize into a live stick — scrolling the reader to the bottom
+      // out from under the page they asked for (review, T5 QA 2026-09-07).
+      const source = renderSourceRef.current
       frame = requestAnimationFrame(() => {
         frame = null
-        apply()
+        apply(source)
       })
     }
     const ro = new ResizeObserver(stick)

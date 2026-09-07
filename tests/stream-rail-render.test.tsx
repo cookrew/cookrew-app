@@ -151,11 +151,13 @@ describe('the anomaly mark — one glyph on the rail, never a modal', () => {
   // D3, T5 QA 2026-09-07. The line was a `left: 0; right: 0` footer inside the
   // 30px rail column and printed one letter per line, straight down over the
   // live dot. The rail carries a mark; the sentence carries in the tooltip.
-  it('puts the SENTENCE in the tooltip and the accessible name', async () => {
+  it('puts the SENTENCE in the tooltip, and leaves it as the live region’s content', async () => {
     const note = '1 line the stream could not read'
     const markup = await rail({ anomalyNote: note })
     expect(markup).toContain(`title="${note}"`)
-    expect(markup).toContain(`aria-label="${note}"`)
+    // A role=status is announced by its CONTENT; an aria-label would override
+    // the name computation and announce an empty live region.
+    expect(markup).not.toContain(`aria-label="${note}"`)
   })
 
   it('draws ONE glyph in the column, not the sentence', async () => {
@@ -183,10 +185,12 @@ describe('the anomaly mark — one glyph on the rail, never a modal', () => {
       css.indexOf('.cr-ckpt-anomaly {'),
       css.indexOf('}', css.indexOf('.cr-ckpt-anomaly {'))
     )
-    // Bounded to a glyph, and clear of the live dot (bottom: 14px, 9px tall).
+    // Bounded to a glyph, and UNDER the drag track (.cr-ckpt-line stops at
+    // bottom: 16px) and the live dot (bottom: 14px), because it is a hover
+    // target and would otherwise swallow a scrub press.
     expect(mark).toContain('width: 13px')
     expect(mark).not.toContain('left: 0')
-    expect(mark).toContain('bottom: 29px')
+    expect(mark).toContain('bottom: 1px')
   })
 
   it('is a status, not a dialog — nothing to dismiss and nothing to block on', async () => {

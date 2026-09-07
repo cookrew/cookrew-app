@@ -32,18 +32,25 @@ import type { TraceBlock } from '../src/renderer/src/transcript'
 const ROWS = 1048
 
 /**
- * The budget, stated.
+ * The budget, stated — and stated in two parts, because a wall clock alone is
+ * not a gate on a machine that runs 500 test files in a worker pool. The same
+ * render measured 25 ms alone and 2,309 ms beside a typecheck.
  *
- * A static render of 1,048 placeholder rows on this machine measures ~25 ms;
- * 250 ms is an order of magnitude of headroom for a loaded CI box, and it is
- * still ten times under the frame budget a person would call a freeze. What
- * this really defends is the SHAPE — a render that reintroduced a per-row
- * Set/sort or a per-row measurement would not be near this number.
+ * THE SHAPE is the real assertion: 1,048 rows may cost no more than SLOPE
+ * times what 128 rows cost, on the same machine, in the same run. A render
+ * that reintroduced a per-row Set/sort or a per-row measurement is quadratic
+ * and cannot fit under it however fast the box is. Eight-fold rows for at most
+ * twelve-fold time leaves room for the fixed cost 128 rows also pay.
+ *
+ * THE CEILING is the second half: a person calls it a freeze somewhere around
+ * a second, so an absolute failure still trips even if the ratio holds.
  */
-const RENDER_BUDGET_MS = 250
-/** The identity space is rebuilt when the loaded window changes; 1,048 of
- *  them, forty times over, must stay well inside one frame. */
-const SPACE_BUDGET_MS = 100
+const RENDER_SLOPE = 12
+const RENDER_CEILING_MS = 2000
+/** Same reasoning as RENDER_SLOPE: 8x the rows for a Set-plus-sort is ~9.6x
+ *  the work; 16x leaves room for load and for the fixed cost the small size
+ *  also pays. Quadratic would be ~64x. */
+const SPACE_SLOPE = 16
 
 const block = (index: number): TraceBlock => ({
   index,
@@ -104,24 +111,38 @@ async function renderRows(count: number): Promise<{ markup: string; ms: number }
 }
 
 describe('the overlay with 1,048 rows', () => {
-  it(`renders every identity inside ${RENDER_BUDGET_MS}ms`, async () => {
-    // Warm the module graph and the JIT, then measure the render alone.
+  it('costs LINEARLY in the rows, and never a freeze', async () => {
+    // Warm the module graph and the JIT, then measure both sizes back to back
+    // so machine load lands on each of them equally.
     await renderRows(8)
+    const small = await renderRows(128)
     const { markup, ms } = await renderRows(ROWS)
     expect(markup.match(/data-checkpoint="/g) ?? []).toHaveLength(ROWS)
     expect(markup).toContain('data-checkpoint="1"')
     expect(markup).toContain(`data-checkpoint="${ROWS}"`)
-    expect(ms).toBeLessThan(RENDER_BUDGET_MS)
+    // 8.2x the rows for at most 12x the time — quadratic would be ~67x.
+    expect(ms).toBeLessThan(Math.max(small.ms, 1) * RENDER_SLOPE)
+    expect(ms).toBeLessThan(RENDER_CEILING_MS)
   })
 
   it('the identity space is linear in the rows, not quadratic', async () => {
-    const identities = Array.from({ length: ROWS }, (_, at) => at + 1)
-    const loaded = Array.from({ length: 60 }, (_, at) => block(ROWS - 60 + at))
-    const started = performance.now()
-    for (let n = 0; n < 40; n += 1) transcriptIdentitySpace(identities, loaded)
-    const ms = performance.now() - started
-    expect(transcriptIdentitySpace(identities, loaded)).toHaveLength(ROWS)
-    expect(ms).toBeLessThan(SPACE_BUDGET_MS)
+    const spaceMs = (count: number): number => {
+      const identities = Array.from({ length: count }, (_, at) => at + 1)
+      const loaded = Array.from({ length: 60 }, (_, at) => block(Math.max(1, count - 60 + at)))
+      const started = performance.now()
+      for (let n = 0; n < 40; n += 1) transcriptIdentitySpace(identities, loaded)
+      return performance.now() - started
+    }
+    spaceMs(128) // warm
+    const small = spaceMs(131)
+    const big = spaceMs(ROWS)
+    expect(
+      transcriptIdentitySpace(
+        Array.from({ length: ROWS }, (_, at) => at + 1),
+        []
+      )
+    ).toHaveLength(ROWS)
+    expect(big).toBeLessThan(Math.max(small, 0.5) * SPACE_SLOPE)
   })
 })
 

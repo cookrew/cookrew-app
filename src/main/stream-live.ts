@@ -22,7 +22,7 @@
 // otherwise never hear about a title written during the outage. `hello`
 // carries `marksAt` — the newest mark timestamp the ledger holds at connect —
 // and every `mark` frame carries its own `at`; a client echoes the newest it
-// has seen back as `?since=` and receives exactly the marks written after it.
+// has seen back as `?since=` and receives the marks written at or after it.
 // A mark CLEARED during an outage is not replayed (a cleared mark leaves no
 // fields to send), which is why a reconnect that also re-opens is still the
 // complete answer; `since` is the cheap path, never the authoritative one.
@@ -77,9 +77,11 @@ export interface StreamLiveDeps {
   statOf?: (file: string) => Promise<{ size: number; mtimeMs: number } | null>
   now?: () => number
   /**
-   * Replay marks written STRICTLY AFTER this epoch-ms reading on connect, and
-   * nothing else. Absent (the fresh-subscriber case) replays nothing at all —
-   * see the header. Off the wire as `?since=`.
+   * Replay marks written AT OR AFTER this epoch-ms reading on connect, and
+   * nothing else. Inclusive on purpose: two marks can share a millisecond, and
+   * one duplicate frame is cheaper than a title that never arrives. Absent
+   * (the fresh-subscriber case) replays nothing at all — see the header. Off
+   * the wire as `?since=`.
    */
   since?: number
 }
@@ -256,7 +258,10 @@ function markPusher(
     const next = foldMarks(service.marks(terminalId))
     for (const [identity, folded] of next) {
       const wanted = force
-        ? since !== null && folded.at > since
+        // INCLUSIVE. Two marks written in the same millisecond and a client
+        // holding one of them: a strict `>` would never replay the sibling.
+        // One duplicate frame is the cheaper mistake (review, T5 QA).
+        ? since !== null && folded.at >= since
         : !sameMark(last.get(identity)?.fields, folded.fields)
       if (wanted) send('mark', { identity, mark: folded.fields, at: folded.at })
     }

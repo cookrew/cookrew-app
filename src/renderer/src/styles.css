@@ -4360,9 +4360,14 @@ body.cookrew-mobile .cookrew-minimap {
 .cr-ckpt-anomaly {
   position: absolute;
   right: 8px;
-  bottom: 29px;
+  /* BELOW THE TRACK. It is a hover target (the sentence is its tooltip), so it
+     eats pointer-downs where it sits — and .cr-ckpt-mini owns the whole 30px
+     column for the scrub drag. .cr-ckpt-line runs top:16px→bottom:16px and the
+     live dot sits at bottom:14px; this is under both, in the strip the drag
+     already clamps to fraction 1. */
+  bottom: 1px;
   width: 13px;
-  height: 13px;
+  height: 12px;
   display: flex;
   align-items: center;
   justify-content: center;

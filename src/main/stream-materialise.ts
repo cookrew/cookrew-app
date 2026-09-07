@@ -131,8 +131,9 @@ function evidenceOf(
   const positions = filePositions(read)
   const cursorAt = positions.get(state.cursor.file)
   // A RESUMED WALK CANNOT SEE BEHIND ITSELF, and does not need to: the reader
-  // only skips a prefix it was told the snapshot already holds, which is the
-  // negation of this evidence (D6, T5 QA 2026-09-07).
+  // skips a member only when the snapshot covers it TO ITS CURRENT LAST BYTE
+  // (StreamResume), which is the negation of this evidence — a predecessor
+  // that grew, or one that is new, refuses the fast path and is walked.
   const behind =
     read.resumed !== true &&
     read.lines.some(
@@ -314,21 +315,31 @@ export function createStreamIndexStore(deps: StreamIndexStoreDeps): StreamIndexS
  * A card with no cursor and no rows has nothing to resume FROM, and asks for
  * the whole chain. Everything else is decided by the reader, which is the only
  * layer that knows the chain's order: this only says "here is where I was, and
- * here is what I already hold". `holds` is answered from `occurrences`, which
- * records every transcript a checkpoint was read out of — so a member whose
- * exchanges were only ever seen as replays in a LATER file still counts as
- * held, which is exactly what it means for the snapshot to cover it.
+ * here is how far into each transcript my rows go".
+ *
+ * COVERAGE IS IN BYTES, not in "I have seen this file" (review, T5 QA
+ * 2026-09-07). `occurrences[].byteOffset` is the prefix of a transcript the
+ * reader had ingested when a checkpoint out of it was projected — the file's
+ * own size at that pass — so the HIGHEST of them is how far this snapshot
+ * reaches into it. A predecessor that has grown since (a `claude --resume`
+ * into an earlier session appends to a non-tail chain member) then reads as
+ * uncovered and the whole chain is walked; asking only whether the file was
+ * known would have skipped those exchanges permanently.
  */
 function resumeOf(
   state: StreamState,
   snapshot: ReadonlyMap<string, ProjectedCheckpoint>
 ): StreamResume | undefined {
   if (state.cursor.file.length === 0 || snapshot.size === 0) return undefined
-  const held = new Set<string>()
+  const covered = new Map<string, number>()
   for (const row of snapshot.values()) {
-    for (const one of row.occurrences) held.add(one.file)
+    for (const one of row.occurrences) {
+      const bytes = one.byteOffset ?? 0
+      const held = covered.get(one.file)
+      if (held === undefined || bytes > held) covered.set(one.file, bytes)
+    }
   }
-  return { cursorFile: state.cursor.file, holds: (file) => held.has(file) }
+  return { cursorFile: state.cursor.file, coveredBytes: (file) => covered.get(file) }
 }
 
 /** The rewind pass: a shrunk cursor file, turned into an appended fact. */

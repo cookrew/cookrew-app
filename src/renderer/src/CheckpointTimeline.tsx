@@ -813,8 +813,11 @@ export function CheckpointTimeline({
           one mark. Still a `status` and still not a dialog — a line the reader
           could not parse is a fact about the transcript, not something anyone
           can act on mid-conversation. */}
+      {/* NO aria-label: a live region is announced by its CONTENT, and a label
+          would override the name computation and announce nothing. The
+          visually-clipped span IS the content; the glyph is decoration. */}
       {anomalyNote !== null && (
-        <div className="cr-ckpt-anomaly" role="status" title={anomalyNote} aria-label={anomalyNote}>
+        <div className="cr-ckpt-anomaly" role="status" title={anomalyNote}>
           <span aria-hidden="true">!</span>
           <span className="cr-ckpt-anomaly-text">{anomalyNote}</span>
         </div>

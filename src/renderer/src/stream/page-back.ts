@@ -123,16 +123,28 @@ export function createPageBackRunner(port: PageBackPort): PageBackRunner {
   const pageBack = (): Promise<void> => {
     if (running !== null) return running
     if (port.state().atOldest) return Promise.resolve()
-    const run = (async (): Promise<void> => {
-      try {
-        await port.fetch()
-      } finally {
-        // Cleared INSIDE the body, so it is already null when an awaiting
-        // caller resumes — otherwise ensureLoaded's next step would coalesce
-        // onto the page that just finished and never advance.
-        running = null
-      }
-    })()
+    let run: Promise<void>
+    try {
+      // Promise.resolve(...) BEFORE the flag is set, and the `finally` chained
+      // onto it rather than wrapped around it: an async IIFE runs
+      // synchronously to its first await, so a port that threw synchronously
+      // would clear the flag and then have it re-assigned to an
+      // already-rejected promise — the rail would never page again (review,
+      // T5 QA 2026-09-07).
+      run = Promise.resolve(port.fetch())
+        .finally(() => {
+          running = null
+        })
+        // Swallowed so `void pageBack()` from a pointer event can never become
+        // an unhandled rejection, and so a coalescing caller is handed a
+        // promise it can await; the port owns reporting the failure as data.
+        .catch(() => undefined)
+    } catch {
+      // A port that throws before it returns a promise costs this page and
+      // nothing else.
+      running = null
+      return Promise.resolve()
+    }
     running = run
     return run
   }

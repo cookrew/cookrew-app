@@ -162,38 +162,84 @@ export async function streamChainOf(
 export const CHAIN_COALESCE_MS = 250
 
 /**
+ * How many terminals a coalescer remembers.
+ *
+ * It holds a RESOLVED answer per id, and `materialiseOf`'s answer is a whole
+ * materialised index — 1,048 rows on the owner's busiest card. In a main
+ * process that runs for days, an unbounded map keyed by every card ever looked
+ * at is monotonic growth (review, T5 QA 2026-09-07). Oldest-first eviction;
+ * insertion order is recency because a re-run deletes and re-sets.
+ */
+const COALESCE_CAP = 32
+
+/**
  * A per-terminal answer, reused for `ttl` — a COALESCER, not a cache.
  *
  * A failure is never remembered: the next call re-runs rather than serving a
  * quarter second of a wrong answer.
+ *
+ * AN IN-FLIGHT ANSWER IS SHARED WHATEVER THE CLOCK SAYS. The window is keyed
+ * on when a pass STARTED, and a cold materialisation of a real chain runs
+ * longer than the window; two passes would then read the state file, both
+ * write it, and the second would have built its resume request from the
+ * snapshot the first was replacing. So an entry that has not settled is
+ * single-flight, and only a settled one expires.
  */
 function coalesce<T>(
   run: (terminalId: string) => Promise<T>,
   clock: () => number,
   ttl: number
 ): (terminalId: string) => Promise<T> {
-  const cache = new Map<string, { at: number; value: Promise<T> }>()
+  interface Entry {
+    at: number
+    settled: boolean
+    value: Promise<T>
+  }
+  const cache = new Map<string, Entry>()
   return async (terminalId) => {
     const cached = cache.get(terminalId)
     const at = clock()
-    if (cached !== undefined && at - cached.at < ttl) return cached.value
-    const value = run(terminalId).catch((error: unknown) => {
-      cache.delete(terminalId)
-      throw error
-    })
-    cache.set(terminalId, { at, value })
-    return value
+    if (cached !== undefined && (!cached.settled || at - cached.at < ttl)) return cached.value
+    const entry: Entry = {
+      at,
+      settled: false,
+      value: run(terminalId).catch((error: unknown) => {
+        cache.delete(terminalId)
+        throw error
+      })
+    }
+    void entry.value.then(
+      () => {
+        entry.settled = true
+      },
+      () => {
+        entry.settled = true
+      }
+    )
+    cache.delete(terminalId)
+    cache.set(terminalId, entry)
+    while (cache.size > COALESCE_CAP) {
+      const oldest = cache.keys().next()
+      if (oldest.done === true) break
+      cache.delete(oldest.value)
+    }
+    return entry.value
   }
 }
 
-/** Every transcript the materialised index has a checkpoint out of — what a
- *  resume request means by "I already hold this one" (D6). */
-function filesHeld(entries: readonly ProjectedCheckpoint[]): Set<string> {
-  const held = new Set<string>()
+/** How far into each transcript the materialised index reaches — the byte
+ *  coverage a resume request is judged on (D6, and the review that made it
+ *  bytes rather than acquaintance). Mirrors stream-materialise's resumeOf. */
+function bytesCovered(entries: readonly ProjectedCheckpoint[]): Map<string, number> {
+  const covered = new Map<string, number>()
   for (const row of entries) {
-    for (const one of row.occurrences) held.add(one.file)
+    for (const one of row.occurrences) {
+      const bytes = one.byteOffset ?? 0
+      const held = covered.get(one.file)
+      if (held === undefined || bytes > held) covered.set(one.file, bytes)
+    }
   }
-  return held
+  return covered
 }
 
 /** The coalescing chain resolver — see CHAIN_COALESCE_MS. */
@@ -268,12 +314,17 @@ export function createStreamService(deps: StreamServiceDeps): StreamService {
       const index = await materialiseOf(terminalId)
       const total = index.entries.length
       const ordinals = new Map(index.entries.map((row) => [row.identity, row.ordinal]))
-      const held = filesHeld(index.entries)
+      const covered = bytesCovered(index.entries)
       const [chain, tail] = await Promise.all([
         chaining,
         reader.tail(terminalId, {
           ...(index.cursor.file.length > 0 && index.entries.length > 0
-            ? { resume: { cursorFile: index.cursor.file, holds: (file) => held.has(file) } }
+            ? {
+                resume: {
+                  cursorFile: index.cursor.file,
+                  coveredBytes: (file) => covered.get(file)
+                }
+              }
             : {}),
           ordinalOf: (identity) => ordinals.get(identity)
         })

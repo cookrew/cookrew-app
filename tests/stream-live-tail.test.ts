@@ -404,7 +404,11 @@ describe('GET /stream/live', () => {
     it('?since= replays the outage’s marks and nothing older', async () => {
       const { service, marksDir } = bed([prompt('u1', 'ask', T0)])
       writeMark('t-live', { identity: 'u1', title: 'before' }, { dir: marksDir })
-      const cut = Date.now()
+      // A clear millisecond either side of the cut: `since` is INCLUSIVE (two
+      // marks can share a millisecond and one duplicate frame beats a title
+      // that never arrives), so a same-ms `before` would legitimately replay.
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      const cut = Date.now() + 1
       await new Promise((resolve) => setTimeout(resolve, 5))
       writeMark('t-live', { identity: 'u2', title: 'after' }, { dir: marksDir })
 

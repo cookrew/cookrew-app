@@ -33,7 +33,7 @@
 // predecessor was deleted still shows every checkpoint it can still reach —
 // the opposite of the failure that made 400 checkpoints look destroyed.
 
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import {
   fileEntriesOf,
   streamPositionsOf,
@@ -64,6 +64,9 @@ export interface StreamReaderDeps {
   documentOf: (file: string, kind: TraceKind) => Promise<TraceDocument>
   /** Injected for tests; production is fs.existsSync. */
   exists?: (file: string) => boolean
+  /** A file's size in bytes, or null when it is not there. Injected for the
+   *  same reason; production is fs.statSync. */
+  sizeOf?: (file: string) => number | null
 }
 
 /** A block with its place in the whole stream. The TraceBlock fields are
@@ -132,18 +135,34 @@ export interface StreamLinesResult {
  *   1. `cursorFile` must be the chain's LAST transcript. The cursor normally
  *      is there; when it is not, the chain has grown behind it and that case
  *      is a rebuild (stream-authority.ts), never a splice.
- *   2. The caller must already HOLD every chain member in front of it. A file
- *      whose checkpoints are not in the snapshot has to be read, or its
- *      exchanges vanish from the rail.
+ *   2. Every chain member in front of it must be COVERED TO ITS CURRENT END —
+ *      the caller names how many of its bytes the snapshot was built from, and
+ *      the reader compares that against the file's size now.
+ *   3. The snapshot must already hold a checkpoint out of `cursorFile`. A
+ *      resumed walk cannot run placeUndeclared over members it did not read,
+ *      so it keeps the chain's own order for them — and the single fact that
+ *      could differ from a full walk's placement is the ⇥ pointer on the
+ *      cursor file's FIRST block. If that block is already a row, the
+ *      projection's refold keeps the pointer the last full walk decided and
+ *      derives nothing; if it is not, this pass would have to invent it.
  *
- * Either failing, the walk is the full one and `resumed` is absent — so the
- * fast path can only ever be an optimisation of an answer the slow path would
- * have given. Skipped members are still EXISTENCE-checked, so a predecessor
+ * WHY COVERAGE AND NOT ACQUAINTANCE (review, T5 QA 2026-09-07). The first cut
+ * asked only "does the snapshot hold a checkpoint out of this file", which is
+ * true of a predecessor that has GROWN since — `claude --resume` into an
+ * earlier session appends to a non-tail chain member — and those new exchanges
+ * would then never be read, on this pass or any later one, because the same
+ * fast path is taken every time. Bytes are the only honest answer.
+ *
+ * Any of the three failing, the walk is the full one and `resumed` is absent —
+ * so the fast path can only ever be an optimisation of an answer the slow path
+ * would have given. Skipped members are still SIZE-checked, so a predecessor
  * deleted since the last pass is still reported as missing.
  */
 export interface StreamResume {
   cursorFile: string
-  holds: (file: string) => boolean
+  /** Bytes of `file` the caller's snapshot was built from, or undefined when
+   *  it holds nothing out of that file at all. */
+  coveredBytes: (file: string) => number | undefined
 }
 
 /** What `tail` may be told about a chain it did not fully walk. */
@@ -253,6 +272,17 @@ interface IndexMemo {
 
 export function createStreamReader(deps: StreamReaderDeps): StreamReader {
   const exists = deps.exists ?? existsSync
+  /** A file's size, never throwing: unreadable is "not there", which refuses
+   *  the fast path rather than trusting a coverage claim we cannot check. */
+  const sizeOf =
+    deps.sizeOf ??
+    ((file: string): number | null => {
+      try {
+        return statSync(file).size
+      } catch {
+        return null
+      }
+    })
   const memo = new Map<string, IndexMemo>()
 
   /**
@@ -294,8 +324,22 @@ export function createStreamReader(deps: StreamReaderDeps): StreamReader {
     if (resume === undefined || chain.files.length === 0) return 0
     const at = chain.files.length - 1
     if (chain.files[at].file !== resume.cursorFile) return 0
+    // THE CURSOR'S OWN FILE MUST ALREADY BE IN THE SNAPSHOT. A resumed walk
+    // orders the prefix by the chain rather than by placeUndeclared (a member
+    // it did not read has no clock to place it by), so the one fact it could
+    // derive differently is the ⇥ pointer on the cursor file's FIRST block —
+    // `files[fileAt - 1].sessionId`. When the snapshot already holds that
+    // block, the projection's refold keeps the pointer the last full walk
+    // decided and re-derives nothing; when it does not, there is a placement
+    // this pass cannot reproduce, and the honest answer is the full walk.
+    if (resume.coveredBytes(resume.cursorFile) === undefined) return 0
     for (let before = 0; before < at; before += 1) {
-      if (!resume.holds(chain.files[before].file)) return 0
+      const member = chain.files[before]
+      const covered = resume.coveredBytes(member.file)
+      const size = sizeOf(member.file)
+      // Gone is not "covered": the loop below reports it as missing, and the
+      // snapshot keeps its rows. Grown past what we read IS a reason to walk.
+      if (covered === undefined || (size !== null && size > covered)) return 0
     }
     return at
   }
@@ -331,7 +375,7 @@ export function createStreamReader(deps: StreamReaderDeps): StreamReader {
         // its ordinals are pinned by the snapshot they live in. It still has
         // to EXIST, or a predecessor deleted since the last pass would be
         // reported as present by a walk that never looked.
-        if (!exists(ref.file)) {
+        if (sizeOf(ref.file) === null) {
           missing.push({ sessionId: ref.sessionId, file: ref.file, reason: 'no-transcript' })
           continue
         }
@@ -500,7 +544,15 @@ export function createStreamReader(deps: StreamReaderDeps): StreamReader {
         last = positions[positions.length - 1]
       }
       if (last === undefined) return { block: null, open: false, missing }
-      if (resumed && known !== undefined) {
+      // THE ORDINAL AND `total` MUST COME FROM ONE RECORD (review, T5 QA
+      // 2026-09-07). stream-service takes `total` from the materialised index
+      // on BOTH paths, and the walk's own numbering is not that space — it is
+      // contiguous over the blocks still on disk, while the index keeps
+      // rolled-back rows at their own ordinals. Publishing the walk's number
+      // beside the index's count put a rewound card's newest checkpoint at
+      // 78% of the rail; so whenever the index can place this identity, its
+      // number wins, resumed or not.
+      if (known !== undefined) {
         last = { ...last, entry: { ...last.entry, ordinal: known } }
       }
       const block = blockAt(files, last)

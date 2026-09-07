@@ -186,10 +186,17 @@ export function useStream(
           total: stateRef.current.total
         }),
         fetch: async () => {
+          const forCard = terminalId
           const cursor = stateRef.current.backwardsCursor
           if (cursor === null) return
           try {
-            const page = await transport.index(terminalId, { before: cursor, limit: INDEX_PAGE })
+            const page = await transport.index(forCard, { before: cursor, limit: INDEX_PAGE })
+            // THE CARD MAY HAVE CHANGED UNDER US (review, T5 QA 2026-09-07).
+            // A scrub has a page on the wire per drag, and switching terminals
+            // dispatches `reset` for the NEW card — a late page for the old
+            // one would merge foreign rows into its rail and hand it a
+            // backwards cursor pointing into the wrong transcript.
+            if (stateRef.current.terminalId !== forCard) return
             dispatch({
               kind: 'index',
               checkpoints: page.checkpoints,
@@ -200,7 +207,9 @@ export function useStream(
             // A failed page is DATA. A rail that throws is a rail that renders
             // nothing, and the cursor is left where it was so the next reach
             // asks for the same page rather than skipping it.
-            dispatch({ kind: 'error', error: messageOf(error) })
+            if (stateRef.current.terminalId === forCard) {
+              dispatch({ kind: 'error', error: messageOf(error) })
+            }
           }
         }
       }),
