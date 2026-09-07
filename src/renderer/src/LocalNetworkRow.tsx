@@ -6,6 +6,8 @@ import {
   localNetworkOffered,
   subscribeLocalNetwork
 } from './local-network-gate'
+import { localNetworkAskRow } from './path/hint-evidence'
+import { pathAttempts, subscribePathAttempts, type PathAttempts } from './path-attempts'
 import type { LocalNetworkState } from './local-network'
 
 /**
@@ -27,10 +29,16 @@ import type { LocalNetworkState } from './local-network'
  * AFTER A REFUSAL IT KEEPS TALKING, WITHOUT A BUTTON. The browser will not
  * re-prompt for a site the reader refused, so a second ALLOW would do nothing
  * at all — worse than saying where the switch actually lives.
+ *
+ * AND 'prompt' NO LONGER MEANS "ASK" ON ITS OWN. Chrome 152 behind a system
+ * proxy (2026-09-08) leaves the permission at 'prompt' for ever while raising
+ * no dialog at all, so the LAST RACE decides whether an ask is honest: the rule
+ * is in path/hint-evidence.ts, and this component only draws its answer.
  */
 export function LocalNetworkRow(): React.JSX.Element | null {
   const [state, setState] = useState<LocalNetworkState>(() => localNetworkGate())
   const [offered, setOffered] = useState(() => localNetworkOffered())
+  const [race, setRace] = useState<PathAttempts>(() => pathAttempts())
   const [asking, setAsking] = useState(false)
 
   useEffect(
@@ -41,21 +49,22 @@ export function LocalNetworkRow(): React.JSX.Element | null {
       }),
     []
   )
+  useEffect(() => subscribePathAttempts(setRace), [])
 
-  if (state === 'denied') {
+  const row = localNetworkAskRow({ permission: state, offered, attempts: race.attempts })
+
+  if (row.kind === 'hidden') return null
+  if (row.kind === 'denied') {
     return (
       <p className="cr-path-ask cr-path-ask-denied" role="status">
-        {LOCAL_NETWORK_COPY.denied}
+        {row.sentence}
       </p>
     )
   }
-  // Nothing to ask (granted, or a browser that never prompts), or nowhere yet
-  // to point the ask. Both render nothing rather than a disabled control.
-  if (state !== 'prompt' || !offered) return null
 
   return (
     <p className="cr-path-ask" role="status">
-      <span className="cr-path-ask-text">{LOCAL_NETWORK_COPY.ask}</span>
+      <span className="cr-path-ask-text">{row.sentence}</span>
       <button
         type="button"
         className="cr-btn cr-path-ask-allow"

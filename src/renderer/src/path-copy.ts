@@ -27,7 +27,19 @@ export const LOCAL_NETWORK_COPY = {
   allow: 'Allow',
   /** After a refusal — on the row, and as the badge's relay sentence. */
   denied:
-    "Staying on the relay. You can allow local network access in the browser's site settings."
+    "Staying on the relay. You can allow local network access in the browser's site settings.",
+  /**
+   * ADDED TO THE ASK WHEN THE BROWSER REFUSED BOTH WAYS.
+   *
+   * Chrome 152 behind a system proxy, 2026-09-08: the annotated request fails
+   * in 32 ms and the unannotated one fails too, the permission stays 'prompt',
+   * and no dialog is ever raised. Offering ALLOW alone there is a button with
+   * nothing behind it, so the sentence names the cause and points at the one
+   * thing that does work — the OPEN ON WI-FI button beside it, which the direct
+   * offer puts there for exactly this case (path/direct-offer.ts).
+   */
+  proxied:
+    "A system proxy may be hiding the address from the browser; open the Mac's Wi-Fi address directly instead."
 } as const
 
 /**
@@ -70,11 +82,22 @@ const OPEN_INSTEAD = 'Open the Mac directly on Wi-Fi instead:'
  *
  * The family is a family name — `Chrome`, `Safari`, or `This browser` when
  * nothing was recognised — never a version and never a user-agent string.
+ *
+ * AND THE THIRD ANSWER IS NOT A PLATFORM AT ALL. Chrome 152 on the owner's Mac
+ * behind a system proxy, 2026-09-08: the browser HAS the permission and can
+ * never raise the dialog, because the annotated request fails the address-space
+ * check before any prompt when the proxy hides the resolved address. Saying
+ * "on iPhone" to somebody sitting at a Mac would be worse than saying nothing;
+ * the sentence names the proxy, which is the thing they can actually change.
  */
-export const directOfferWhy = (family: string): string =>
-  family === 'Safari'
+export const directOfferWhy = (family: string, proxy?: boolean): string => {
+  if (proxy) {
+    return `${family} cannot reach your Mac from this page — a system proxy hides the address, so the browser refuses the request with and without the local-network hint. ${OPEN_INSTEAD}`
+  }
+  return family === 'Safari'
     ? `Safari on iPhone cannot reach your Mac from this page — Apple never asks it for local-network permission. ${OPEN_INSTEAD}`
     : `${family} on iPhone cannot reach your Mac from this page — iOS never asks a browser for local-network permission. ${OPEN_INSTEAD}`
+}
 
 /**
  * WHAT HAPPENED TO ONE CANDIDATE, in words a reader can act on.
