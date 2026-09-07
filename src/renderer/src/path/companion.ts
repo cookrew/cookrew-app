@@ -1,10 +1,13 @@
 import { apiPath, clientBase } from '../api-base'
 import { isRemoteMode } from '../api'
 import { authHeaders, authStore } from '../auth-gate'
+import { PATH_REPORT_ROUTE } from '../../../shared/path-report'
+import { currentBrowser } from '../browser-family'
+import { createPathReporter, postPathReport, reportedAttempts } from './report'
 import { dataPlane, setDataPlane, subscribeDataPlane, type DataPlane } from '../data-plane'
 import type { LocalNetworkState } from '../local-network'
 import { isLocalOrigin, localNetworkState, requestLocalNetwork } from '../local-network'
-import { offerLocalNetwork, setLocalNetwork } from '../local-network-gate'
+import { localNetworkGate, offerLocalNetwork, setLocalNetwork } from '../local-network-gate'
 import { recordAttempts, type PathAttempt } from '../path-attempts'
 import { createPathMemory, watchNetwork, type PathMemory, type PathMemoryDeps } from '../path-memory'
 import { planeFetch } from '../plane-fetch'
@@ -257,6 +260,30 @@ const askForLocalNetwork = async (): Promise<void> => {
   setLocalNetwork(await requestLocalNetwork({ url: best.origin }))
 }
 
+/** The word the badge, the store and the report all use for where this ended up. */
+const settledPlane = (): 'LAN' | 'TAILNET' | 'RELAY' => {
+  const kind = dataPlane().kind
+  return kind === 'lan' ? 'LAN' : kind === 'tailnet' ? 'TAILNET' : 'RELAY'
+}
+
+/**
+ * ONE REPORT PER RACE, TO THE MAC, OVER WHATEVER PLANE IS WORKING.
+ *
+ * Built once at start rather than per race, because the one-at-a-time guards
+ * live inside it (path/report.ts) and a reporter rebuilt every minute would
+ * have nothing to remember. `apiPath` scopes it to this workspace session and
+ * points it at the current plane — relay or direct — like every other request
+ * the companion makes; there is no second transport for diagnostics.
+ */
+const tellTheDesktop = createPathReporter({
+  post: (report) =>
+    postPathReport(report, {
+      url: apiPath(PATH_REPORT_ROUTE),
+      headers: authHeaders(),
+      fetch: planeFetch
+    })
+})
+
 const startPlaneSwitch = (): (() => void) => {
   const health = planeHealth()
   // Set by the loop at start; the ONE-AT-A-TIME guard stays the loop's, so a
@@ -330,14 +357,24 @@ const startPlaneSwitch = (): (() => void) => {
           nonce: () => randomNonce((bytes) => window.crypto.getRandomValues(bytes)),
           held: () => health.held(),
           probing: setProbing,
-          note: (rows) =>
-            recordAttempts(
-              // The two shapes are the same fact and are kept apart on
-              // purpose: plane-switch.ts must not import a renderer store, or
-              // the rule stops being testable without one.
-              rows as readonly PathAttempt[],
-              dataPlane().kind === 'lan' ? 'LAN' : dataPlane().kind === 'tailnet' ? 'TAILNET' : 'RELAY'
-            ),
+          note: (rows) => {
+            const settled = settledPlane()
+            // The two shapes are the same fact and are kept apart on purpose:
+            // plane-switch.ts must not import a renderer store, or the rule
+            // stops being testable without one.
+            const attempts = rows as readonly PathAttempt[]
+            recordAttempts(attempts, settled)
+            // AND TELL THE MAC. The panel answers the person holding the
+            // phone; this answers the owner at the desk, who otherwise has
+            // only a photograph of a phone screen to work from.
+            void tellTheDesktop({
+              at: Date.now(),
+              plane: settled,
+              permission: localNetworkGate(),
+              browser: currentBrowser(),
+              attempts: reportedAttempts(attempts)
+            })
+          },
           permission: readLocalNetwork,
           mayPrompt: () => {
             const may = pressed
