@@ -31,6 +31,18 @@ export interface StreamFile {
   sessionId: string
   file: string
   kind: TraceKind
+  /**
+   * The rotation walk DECLARED this file — some transcript's head names it,
+   * so its place in the chain is a fact read off disk.
+   *
+   * Absent means the opposite: a recorded id no transcript declares any more,
+   * placed here by judgement rather than evidence. stream.ts uses the flag to
+   * put those back in time by their own blocks' clock instead of leaving them
+   * at the front (see placeUndeclared there, and the incident in its
+   * docblock). Nothing else reads it, and the ORDER this function returns is
+   * unchanged.
+   */
+  declared?: true
 }
 
 /** A member of the chain that could not be read. Reported, never thrown. */
@@ -98,9 +110,15 @@ export async function claudeStreamChain(
 
   const files: StreamFile[] = []
   const missing: MissingStreamFile[] = []
+  const declaredFiles = new Set(walked.map((step) => step.file))
   for (const step of [...recorded, ...walked]) {
     if (existsSync(step.file)) {
-      files.push({ sessionId: step.sessionId, file: step.file, kind: 'claude' })
+      files.push({
+        sessionId: step.sessionId,
+        file: step.file,
+        kind: 'claude',
+        ...(declaredFiles.has(step.file) ? { declared: true as const } : {})
+      })
     } else {
       missing.push({ sessionId: step.sessionId, file: step.file, reason: 'no-transcript' })
     }
