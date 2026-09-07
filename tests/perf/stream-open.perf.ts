@@ -160,7 +160,7 @@ function terminal(cwd: string, claudeSessionId: string): TerminalNodeData {
  * The count is the structural gate: a warm open that walks the chain reads
  * nine documents, and one that replays from the cursor reads the tail alone.
  */
-function serviceOver(bed: ReturnType<typeof chainOnDisk>) {
+function serviceOver(bed: ReturnType<typeof chainOnDisk>, options: { stateDir?: string } = {}) {
   const store = new WorkspaceStore(path.join(bed.root, `ws-${Math.random().toString(36).slice(2)}`))
   const node = store.addNode(
     terminal(bed.cwd, bed.ids[bed.ids.length - 1])
@@ -175,9 +175,14 @@ function serviceOver(bed: ReturnType<typeof chainOnDisk>) {
     },
     chainOptions: { projectsDir: bed.projects, lineageIds: () => [...bed.ids] },
     markOptions: { dir: bed.marksDir },
-    stateOptions: { dir: bed.stateDir }
+    stateOptions: { dir: options.stateDir ?? bed.stateDir }
   })
   return { service, reads: () => reads }
+}
+
+/** A state directory nobody has written to — "no persisted snapshot". */
+function coldState(bed: ReturnType<typeof chainOnDisk>): string {
+  return path.join(bed.root, `state-${Math.random().toString(36).slice(2)}`)
 }
 
 /** The work /stream/open performs: the rail's rows and the settled tail. */
@@ -193,25 +198,21 @@ describe('/stream/open — a 9-file, 1,048-block chain', () => {
   const bed = chainOnDisk()
 
   it('COLD: no persisted state, no parsed documents — the honest floor', async () => {
-    const measured = await measure(
-      'stream open cold (9 files, 1048 blocks)',
-      async () => {
-        // A FRESH service every sample: new trace cache, new state dir, so
-        // this is what a card opening after a restart actually pays.
-        const fresh = chainOnDisk()
-        const { service, reads } = serviceOver(fresh)
-        const started = performance.now()
-        const answer = await openOnce(service)
-        const elapsed = performance.now() - started
-        return {
-          elapsed,
-          structural: { rows: answer.rows, total: answer.total, final: answer.final, reads: reads() }
-        }
-      },
-      // Cold samples build a whole chain on disk each time; five is enough to
-      // see the tail and keeps the suite inside its own timeout.
-      5
-    )
+    const measured = await measure('stream open cold (9 files, 1048 blocks)', async () => {
+      // A FRESH service and a FRESH state directory every sample: no parsed
+      // documents and no persisted snapshot, which is what a card opening
+      // after a restart pays. The transcripts themselves are the SAME files —
+      // rewriting 13 MB per sample made the number a measurement of the disk
+      // rather than of the reader (observed p95 swinging 46 → 678 ms).
+      const { service, reads } = serviceOver(bed, { stateDir: coldState(bed) })
+      const started = performance.now()
+      const answer = await openOnce(service)
+      const elapsed = performance.now() - started
+      return {
+        elapsed,
+        structural: { rows: answer.rows, total: answer.total, final: answer.final, reads: reads() }
+      }
+    })
     expectTail(measured, LATENCY.streamOpenCold1048)
     expectEvery(measured, 'rows', BLOCKS)
     expectEvery(measured, 'total', BLOCKS)
@@ -246,10 +247,10 @@ describe('/stream/open — a 9-file, 1,048-block chain', () => {
   })
 
   it('a warm open agrees with a cold one, row for row', async () => {
-    const fresh = chainOnDisk()
-    const cold = serviceOver(fresh)
+    const stateDir = coldState(bed)
+    const cold = serviceOver(bed, { stateDir })
     const first = await cold.service.checkpoints('busiest')
-    const warm = serviceOver(fresh)
+    const warm = serviceOver(bed, { stateDir })
     const second = await warm.service.checkpoints('busiest')
     expect(second.checkpoints.map((row) => row.ordinal)).toEqual(
       first.checkpoints.map((row) => row.ordinal)
