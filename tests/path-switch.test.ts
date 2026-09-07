@@ -6,6 +6,7 @@ import {
   randomNonce,
   startPathSwitching,
   switchIfBetter,
+  type HelloResult,
   type ReachCardLite,
   type SwitchDeps,
   type SwitchOutcome
@@ -22,6 +23,12 @@ import {
  */
 
 const DEVICE = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+/**
+ * A candidate that says nothing. The navigating switch reads only the one bit
+ * — did it answer — so which failure kind stands in here does not matter to
+ * it; the kinds are the panel's business (path/hello-result.ts).
+ */
+const SILENT: HelloResult = { ok: false, kind: 'timeout', ms: 800 }
 const LAN = 'https://192.168.1.24:8643'
 const LAN2 = 'https://10.0.0.9:8643'
 const TAILNET = 'https://100.68.81.64:8643'
@@ -60,7 +67,7 @@ const race = async (
       (async (url, nonce) => {
         asked.push(url)
         const who = answers[url]
-        return who === undefined ? null : { deviceId: who, nonce }
+        return who === undefined ? SILENT : { ok: true, reply: { deviceId: who, nonce } }
       }),
     credential: over.credential ?? ((): string => 'the-pairing-token'),
     go: over.go ?? ((url) => void (went = url)),
@@ -152,7 +159,10 @@ describe('one race', () => {
 
   it('refuses a replayed answer, however right the device id is', async () => {
     const run = await race({
-      hello: async (url) => (url === LAN ? { deviceId: DEVICE, nonce: 'a-nonce-from-yesterday' } : null)
+      hello: async (url) =>
+        url === LAN
+          ? { ok: true, reply: { deviceId: DEVICE, nonce: 'a-nonce-from-yesterday' } }
+          : SILENT
     })
     expect(run.outcome()).toBe('unreachable')
     expect(run.went()).toBe(null)
@@ -218,7 +228,7 @@ describe('the loop', () => {
           races += 1
           return null
         },
-        hello: async () => null,
+        hello: async () => SILENT,
         credential: () => 't',
         go: () => undefined,
         nonce: () => 'n'
@@ -260,7 +270,7 @@ describe('the loop', () => {
             races += 1
             gate.release = () => resolve(null)
           }),
-        hello: async () => null,
+        hello: async () => SILENT,
         credential: () => 't',
         go: () => undefined,
         nonce: () => 'n'

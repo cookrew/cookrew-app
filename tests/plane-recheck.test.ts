@@ -10,7 +10,7 @@ import {
 } from '../src/renderer/src/path/plane-recheck'
 import { createPlaneHealth } from '../src/renderer/src/plane-health'
 import type { DataPlane } from '../src/renderer/src/data-plane'
-import type { HelloReply } from '../src/renderer/src/path/switch'
+import type { HelloReply, HelloResult } from '../src/renderer/src/path/switch'
 
 /**
  * A PLANE PROVES ITSELF AGAIN, OR IT LOSES THE SESSION.
@@ -39,7 +39,7 @@ const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve,
 
 const mac = generateKeyPairSync('ed25519')
 
-const answer = (nonce: string, origin = ORIGIN): HelloReply => ({
+const helloReply = (nonce: string, origin = ORIGIN): HelloReply => ({
   v: 2,
   deviceId: DEVICE,
   origin,
@@ -51,6 +51,18 @@ const answer = (nonce: string, origin = ORIGIN): HelloReply => ({
     mac.privateKey
   ).toString('base64url')
 })
+
+/** The reply as the VERDICT askHello now answers with (path/hello-result.ts). */
+const answer = (nonce: string, origin = ORIGIN): HelloResult => ({
+  ok: true,
+  reply: helloReply(nonce, origin)
+})
+
+/**
+ * A probe that did not answer. The KIND is deliberately not read by this
+ * module: silence is silence, and it is never evidence about identity.
+ */
+const silence: HelloResult = { ok: false, kind: 'network', ms: 4 }
 
 interface Run {
   readonly outcome: RecheckOutcome
@@ -124,11 +136,14 @@ describe('one re-check', () => {
 
   it('condemns a plane answering as another device, or with version 1', async () => {
     const stranger = await check({
-      hello: async (_o, nonce) => ({ ...answer(nonce), deviceId: 'somebody-else' })
+      hello: async (_o, nonce) => ({
+        ok: true,
+        reply: { ...helloReply(nonce), deviceId: 'somebody-else' }
+      })
     })
     expect(stranger.condemned).toBe(1)
     const old = await check({
-      hello: async (_o, nonce) => ({ deviceId: DEVICE, nonce, sig: 'x' })
+      hello: async (_o, nonce) => ({ ok: true, reply: { deviceId: DEVICE, nonce, sig: 'x' } })
     })
     expect(old.condemned).toBe(1)
   })
@@ -140,7 +155,7 @@ describe('one re-check', () => {
   })
 
   it("does NOT condemn on silence — that is the transport counter's business", async () => {
-    const run = await check({ hello: async () => null })
+    const run = await check({ hello: async () => silence })
     expect(run.outcome).toBe('unreachable')
     expect(run.condemned).toBe(0)
     // Fed to the same counter every other failed request goes to.

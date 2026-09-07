@@ -1,10 +1,13 @@
 import { apiPath, clientBase } from '../api-base'
 import { isRemoteMode } from '../api'
 import { authHeaders, authStore } from '../auth-gate'
+import { PATH_REPORT_ROUTE } from '../../../shared/path-report'
+import { currentBrowser } from '../browser-family'
+import { createPathReporter, postPathReport, reportedAttempts } from './report'
 import { dataPlane, setDataPlane, subscribeDataPlane, type DataPlane } from '../data-plane'
 import type { LocalNetworkState } from '../local-network'
 import { isLocalOrigin, localNetworkState, requestLocalNetwork } from '../local-network'
-import { offerLocalNetwork, setLocalNetwork } from '../local-network-gate'
+import { localNetworkGate, offerLocalNetwork, setLocalNetwork } from '../local-network-gate'
 import { recordAttempts, type PathAttempt } from '../path-attempts'
 import { createPathMemory, watchNetwork, type PathMemory, type PathMemoryDeps } from '../path-memory'
 import { planeFetch } from '../plane-fetch'
@@ -18,6 +21,10 @@ import {
   type HelloClaim
 } from './plane-switch'
 import { startPlaneRecheck } from './plane-recheck'
+// The registry call it makes lives beside its own deadline (verify-hello.ts)
+// and is re-exported here, where every caller has always imported it from.
+export { VERIFY_TIMEOUT_MS, verifyHello } from './verify-hello'
+import { verifyHello } from './verify-hello'
 import {
   PATH_MEMORY_PREFIX,
   askHello,
@@ -159,59 +166,6 @@ const listen = (event: string, listener: () => void): (() => void) => {
 }
 
 /**
- * A DEADLINE, BECAUSE THIS RUNS ON A TIMER NOBODY IS WATCHING.
- *
- * `askHello` has had one from the start; this request did not, and the two sit
- * in the same race. Measured on a real phone-width Chrome: the relay's own
- * long-lived streams filled the browser's six connections to the registry's
- * origin, this POST never got a socket, and `switchPlaneIfBetter` sat in an
- * await that could not end — so `probing(false)` never ran, the badge stuck on
- * PROBING for ever, the plane never moved, and every minute the timer started
- * another request that also hung and also held a socket, until the companion's
- * own traffic to cookrew.dev died with it.
- *
- * Longer than HELLO_TIMEOUT_MS on purpose: a hello is one hop across the room
- * and this is a round trip to the registry. Long enough for a slow one, short
- * enough that a stall costs a race rather than the session.
- */
-export const VERIFY_TIMEOUT_MS = 4000
-
-/**
- * ASK cookrew.dev WHETHER THAT REPLY CAME FROM MY MAC.
- *
- * The page cannot check the signature itself — the device's public key is a
- * fact the registry holds — so it asks, over its OWN origin, with the account
- * session cookie. Root-relative on purpose and NOT through apiPath: apiPath
- * addresses the desktop (through the relay or directly), and this is the one
- * request in the client that is genuinely for cookrew.dev itself.
- *
- * Anything but a clean `{ok:true}` is a no. A verification that cannot be
- * completed — offline, rate limited, signed out — must leave the phone on the
- * relay rather than on an unproven address.
- */
-export const verifyHello = async (claim: HelloClaim, timeoutMs = VERIFY_TIMEOUT_MS): Promise<boolean> => {
-  const abort = new AbortController()
-  const timer = setTimeout(() => abort.abort(), timeoutMs)
-  try {
-    const response = await fetch('/v2/verify-hello', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'content-type': 'application/json' },
-      cache: 'no-store',
-      signal: abort.signal,
-      body: JSON.stringify(claim)
-    })
-    if (!response.ok) return false
-    const body = (await response.json()) as { ok?: unknown }
-    return body.ok === true
-  } catch {
-    return false
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
-/**
  * THE LIVE DATA-PLANE SWITCH, for a companion served under the relay base.
  *
  * Everything it does happens below the address bar: it races the Mac's trusted
@@ -256,6 +210,30 @@ const askForLocalNetwork = async (): Promise<void> => {
   }
   setLocalNetwork(await requestLocalNetwork({ url: best.origin }))
 }
+
+/** The word the badge, the store and the report all use for where this ended up. */
+const settledPlane = (): 'LAN' | 'TAILNET' | 'RELAY' => {
+  const kind = dataPlane().kind
+  return kind === 'lan' ? 'LAN' : kind === 'tailnet' ? 'TAILNET' : 'RELAY'
+}
+
+/**
+ * ONE REPORT PER RACE, TO THE MAC, OVER WHATEVER PLANE IS WORKING.
+ *
+ * Built once at start rather than per race, because the one-at-a-time guards
+ * live inside it (path/report.ts) and a reporter rebuilt every minute would
+ * have nothing to remember. `apiPath` scopes it to this workspace session and
+ * points it at the current plane — relay or direct — like every other request
+ * the companion makes; there is no second transport for diagnostics.
+ */
+const tellTheDesktop = createPathReporter({
+  post: (report) =>
+    postPathReport(report, {
+      url: apiPath(PATH_REPORT_ROUTE),
+      headers: authHeaders(),
+      fetch: planeFetch
+    })
+})
 
 const startPlaneSwitch = (): (() => void) => {
   const health = planeHealth()
@@ -330,14 +308,24 @@ const startPlaneSwitch = (): (() => void) => {
           nonce: () => randomNonce((bytes) => window.crypto.getRandomValues(bytes)),
           held: () => health.held(),
           probing: setProbing,
-          note: (rows) =>
-            recordAttempts(
-              // The two shapes are the same fact and are kept apart on
-              // purpose: plane-switch.ts must not import a renderer store, or
-              // the rule stops being testable without one.
-              rows as readonly PathAttempt[],
-              dataPlane().kind === 'lan' ? 'LAN' : dataPlane().kind === 'tailnet' ? 'TAILNET' : 'RELAY'
-            ),
+          note: (rows) => {
+            const settled = settledPlane()
+            // The two shapes are the same fact and are kept apart on purpose:
+            // plane-switch.ts must not import a renderer store, or the rule
+            // stops being testable without one.
+            const attempts = rows as readonly PathAttempt[]
+            recordAttempts(attempts, settled)
+            // AND TELL THE MAC. The panel answers the person holding the
+            // phone; this answers the owner at the desk, who otherwise has
+            // only a photograph of a phone screen to work from.
+            void tellTheDesktop({
+              at: Date.now(),
+              plane: settled,
+              permission: localNetworkGate(),
+              browser: currentBrowser(),
+              attempts: reportedAttempts(attempts)
+            })
+          },
           permission: readLocalNetwork,
           mayPrompt: () => {
             const may = pressed

@@ -1,7 +1,7 @@
 import { readHelloReply } from '../../../shared/hello-proof'
 import type { DataPlane } from '../data-plane'
+import type { HelloResult } from './hello-result'
 import type { HelloClaim } from './plane-switch'
-import type { HelloReply } from './switch'
 
 /**
  * VERIFIED ONCE IS NOT VERIFIED.
@@ -69,8 +69,14 @@ export interface PlaneRecheckDeps {
   readonly plane: () => DataPlane
   /** The desktop this plane was adopted for. Null = nothing to compare against. */
   readonly deviceId: () => string | null
-  /** `GET <origin>/api/hello?nonce=&origin=`, with a short deadline. */
-  readonly hello: (origin: string, nonce: string) => Promise<HelloReply | null>
+  /**
+   * `GET <origin>/api/hello?nonce=&origin=`, with a short deadline.
+   *
+   * Same verdict shape as the switcher's (hello-result.ts). Nothing here
+   * branches on the KIND, and deliberately: silence is silence whatever caused
+   * it, and the rule below is that silence is never evidence about identity.
+   */
+  readonly hello: (origin: string, nonce: string) => Promise<HelloResult>
   /** `POST /v2/verify-hello` at the registry. False on anything but a yes. */
   readonly verify: (claim: HelloClaim) => Promise<boolean>
   readonly nonce: () => string
@@ -88,13 +94,15 @@ export const recheckPlane = async (deps: PlaneRecheckDeps): Promise<RecheckOutco
   if (plane.kind === 'relay' || plane.origin === '' || deviceId === null) return 'skipped'
 
   const nonce = deps.nonce()
-  const reply = await deps.hello(plane.origin, nonce).catch(() => null)
-  if (reply === null) {
+  const result = await deps
+    .hello(plane.origin, nonce)
+    .catch((): HelloResult => ({ ok: false, kind: 'network', ms: 0 }))
+  if (!result.ok) {
     // Silence is not evidence about identity. The transport counter decides.
     deps.health.note(false)
     return 'unreachable'
   }
-  const read = readHelloReply(reply, { origin: plane.origin, deviceId, nonce })
+  const read = readHelloReply(result.reply, { origin: plane.origin, deviceId, nonce })
   if (!read.ok) {
     deps.log?.(`plane recheck: ${plane.origin} answered ${read.reason}`)
     deps.health.condemn()

@@ -75,10 +75,15 @@ const race = async (
     hello: async (origin, nonce) => {
       asked.push(origin)
       const cost = costs[origin]
-      if (cost === undefined) return null
+      // A candidate with no cost is one that never answers: the verdict shape
+      // askHello gives a timeout, rather than the old undifferentiated null.
+      if (cost === undefined) return { ok: false, kind: 'timeout', ms: 800 }
       await ticks(cost)
       clock = cost
-      return { v: 2, deviceId: DEVICE, nonce, sig: `sig:${origin}`, origin, issuedAtMs: Date.now() }
+      return {
+        ok: true,
+        reply: { v: 2, deviceId: DEVICE, nonce, sig: `sig:${origin}`, origin, issuedAtMs: Date.now() }
+      }
     },
     verify: async (claim) => {
       verified.push(claim.sig)
@@ -124,10 +129,16 @@ describe('ordering within a tier', () => {
     const run = await race({ [BRIDGE]: 90, [WIFI]: 6 }, {
       hello: async (origin, nonce) =>
         origin === WIFI
-          ? { v: 2, deviceId: DEVICE, nonce, sig: 'sig:refused', origin, issuedAtMs: Date.now() }
+          ? {
+              ok: true,
+              reply: { v: 2, deviceId: DEVICE, nonce, sig: 'sig:refused', origin, issuedAtMs: Date.now() }
+            }
           : origin === BRIDGE
-            ? { v: 2, deviceId: DEVICE, nonce, sig: `sig:${origin}`, origin, issuedAtMs: Date.now() }
-            : null,
+            ? {
+                ok: true,
+                reply: { v: 2, deviceId: DEVICE, nonce, sig: `sig:${origin}`, origin, issuedAtMs: Date.now() }
+              }
+            : { ok: false, kind: 'timeout', ms: 800 },
       verify: async (claim) => claim.sig !== 'sig:refused'
     })
     expect(run.adopted).toEqual({ origin: BRIDGE, kind: 'lan' })

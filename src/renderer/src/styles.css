@@ -5848,6 +5848,16 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   cursor: pointer;
 }
 
+/* The condition every row below ran under: which browser, and what it says
+   about the local network. Four rows reading "refused before connecting" mean
+   one thing under a denied Chrome permission and something else under a Safari
+   that has no such permission at all. */
+.cr-path-why-env {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
 .cr-path-why-list {
   list-style: none;
   margin: 8px 0 0;
@@ -5860,6 +5870,16 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   gap: 8px;
   padding: 3px 0;
   border-top: 1px solid var(--line);
+  /* The browser's own words go on their own line under the sentence, rather
+     than squeezing the address and the plane out of a phone-width row. */
+  flex-wrap: wrap;
+}
+
+.cr-path-why-detail {
+  flex: 1 0 100%;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 10px;
+  opacity: 0.75;
 }
 
 .cr-path-why-name {

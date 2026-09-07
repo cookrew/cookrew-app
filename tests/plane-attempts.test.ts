@@ -43,7 +43,12 @@ const race = async (
       trusted: [LAN, TAILNET]
     }),
     hello: async (origin, nonce) =>
-      answers[origin] ? { v: 2, deviceId: DEVICE, nonce, sig: 'a-signature', origin, issuedAtMs: Date.now() } : null,
+      answers[origin]
+        ? {
+            ok: true,
+            reply: { v: 2, deviceId: DEVICE, nonce, sig: 'a-signature', origin, issuedAtMs: Date.now() }
+          }
+        : { ok: false, kind: 'blocked', ms: 1, detail: 'TypeError: Failed to fetch' },
     verify: async () => true,
     adopt: () => undefined,
     nonce: () => 'a-nonce',
@@ -69,11 +74,16 @@ describe('what the race writes down', () => {
     expect(noted[0].chosen).toBe(true)
   })
 
-  it('records a silent candidate as no answer, with no time', async () => {
+  it('records a silent candidate BY THE REASON IT WAS SILENT, with its time', async () => {
+    // This is the row the owner saw four of. It used to read 'no-answer' for
+    // every failure there is; it now carries the probe's own verdict — here a
+    // TypeError back in a millisecond, which is a browser refusing before it
+    // connected — and the browser's own words with it.
     const noted = await race({ answers: { [TAILNET]: true } })
     const lan = noted.find((row) => row.name.startsWith('192.168'))
-    expect(lan?.outcome).toBe('no-answer')
-    expect(lan?.ms).toBe(null)
+    expect(lan?.outcome).toBe('blocked')
+    expect(lan?.ms).toBe(1)
+    expect(lan?.detail).toBe('TypeError: Failed to fetch')
     expect(lan?.chosen).toBe(false)
   })
 
@@ -105,9 +115,12 @@ describe('what the race writes down', () => {
     expect(noted.map((row) => row.outcome)).toEqual(['refused', 'refused'])
   })
 
-  it('leaves a plain silence alone when the permission is fine', async () => {
+  it("leaves the probe's own verdict alone when the permission is fine", async () => {
+    // The upgrade to 'refused' is the permission store settling a GUESS. With
+    // the permission granted there is nothing to settle, and overwriting the
+    // kind would throw away the only diagnosis the panel has.
     const noted = await race({ answers: {}, permission: async () => 'granted' })
-    expect(noted.map((row) => row.outcome)).toEqual(['no-answer', 'no-answer'])
+    expect(noted.map((row) => row.outcome)).toEqual(['blocked', 'blocked'])
   })
 
   it('writes an empty list when the race never started, rather than a lie', async () => {
