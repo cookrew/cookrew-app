@@ -7,16 +7,57 @@ export interface LiveVerdict {
   detail: string
 }
 
+/** What may prove a transcript once existed, strongest first. */
+export type TranscriptEvidence = 'stream-index' | 'compaction' | 'turn-store' | 'held'
+
+/** Facts the caller gathered about ONE absent session id. All optional: a
+ *  fact nobody could gather is not a fact against the id. */
+export interface TranscriptFacts {
+  /** The persisted stream index lists blocks read out of that file. */
+  inStreamIndex?: boolean
+  /** A later transcript declares it as the predecessor it compacted. */
+  namedByCompaction?: boolean
+  /** The old turn store holds records attributable to it. */
+  inTurnStore?: boolean
+  /** Milliseconds from the binding to the rotation that replaced it, or null
+   *  when the interval cannot be dated. Never an open-ended age. */
+  heldMs?: number | null
+  /** The event log saw a rotation naming it — never evidence on its own. */
+  witnessed?: boolean
+}
+
+export interface TranscriptEvidenceVerdict {
+  existed: boolean
+  evidence: TranscriptEvidence | null
+  /** The gate's sentence for this id, printed as-is. */
+  reason: string
+}
+
+/** How long a binding must have lasted before its absence is a loss. */
+export declare const MINT_GRACE_MS: number
+
+export declare function transcriptEvidence(
+  facts?: TranscriptFacts,
+  graceMs?: number
+): TranscriptEvidenceVerdict
+
+/** An absent transcript, and what the gate concluded about it. */
+export interface AbsentTranscript {
+  id: string
+  evidence: TranscriptEvidence | null
+  reason: string
+}
+
 export interface ReachVerdict {
   verdict: 'OK' | 'FAIL'
   /** binding ∪ lineage ∪ spill, oldest first — what can still be reached. */
   chain: string[]
   /** Previously-bound ids (8-char witnesses) the chain no longer contains. */
   missing: string[]
-  /** Chain ids that were really used and whose transcript is gone — a FAIL. */
-  gone: string[]
-  /** Chain ids nothing ever wrote (a card that never booted) — reported only. */
-  unwritten: string[]
+  /** Chain ids something proves were written and whose transcript is gone. */
+  gone: AbsentTranscript[]
+  /** Chain ids nothing proves were ever written — reported, never a failure. */
+  unwritten: AbsentTranscript[]
 }
 
 export declare function liveVerdict(
@@ -46,6 +87,9 @@ export declare function reachVerdict(input: {
   spillIds: readonly string[]
   everBound: readonly string[]
   hasTranscript: (id: string) => boolean
+  /** What the caller could gather about an id whose transcript is absent.
+   *  Omitted means nothing was gathered, which claims nothing. */
+  factsFor?: (id: string) => TranscriptFacts
 }): ReachVerdict
 
 export interface MarksVerdict {
