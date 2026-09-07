@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { cookrew, isRemoteMode } from './api'
+import { DirectLandedNote } from './DirectLandedNote'
+import { DirectOfferRow } from './DirectOfferRow'
 import { LocalNetworkRow } from './LocalNetworkRow'
 import { PathWhy } from './PathWhy'
 import { currentPathBadge, subscribePathLink } from './path-link'
@@ -48,6 +50,9 @@ export function PathBadge({ onRefresh }: { onRefresh: () => void }): React.JSX.E
           permission nobody grants. It renders nothing in three of the four
           states, so on most phones the bar is exactly as it was. */}
       <LocalNetworkRow />
+      {/* The other side of the same journey: this one renders on the page the
+          OPEN ON WI-FI button landed on, once, and only there. */}
+      <DirectLandedNote />
       {open && <PathSheet view={view} onClose={() => setOpen(false)} />}
     </>
   )
@@ -80,6 +85,11 @@ export function PathSheet({
         <p className="cr-path-latency">
           {view.latencyMs === null ? 'Latency not measured yet.' : `${view.latencyMs} ms round trip`}
         </p>
+        {/* THE CONCLUSION, ABOVE THE EVIDENCE. On a browser with no local
+            network permission to grant, the rows below can only ever say the
+            same thing for ever, so the fix goes first. Absent in every other
+            browser (DirectOfferRow.tsx). */}
+        <DirectOfferRow />
         {/* The evidence behind the word above it. Closed, and absent entirely
             until a race has happened — on a desktop-served companion there is
             nothing to explain. */}
