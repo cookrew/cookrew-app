@@ -49,7 +49,14 @@ import {
   useThumbsSnapshot
 } from './activity-thumb-store'
 import { reconcileFlowNodes } from './flow-nodes'
-import { CARD_FIT_PADDING, CARD_ZOOM_MS, cardZoomMode } from './nodes/card-zoom'
+import {
+  CARD_FIT_PADDING,
+  CARD_ZOOM_MS,
+  cardZoomMode,
+  OVERVIEW_FIT_MS,
+  OVERVIEW_FIT_PADDING
+} from './nodes/card-zoom'
+import { nodesZoomBounds, nodeZoomBounds, reportMissingZoomTarget } from './nodes/zoom-target'
 import { useBrowserEngine } from './browser-engine'
 import { ErrorBoundary } from './ErrorBoundary'
 import { ReauthOverlay } from './ReauthOverlay'
@@ -383,6 +390,27 @@ function Canvas(): React.JSX.Element {
     }
   }, [resync])
 
+  /**
+   * FRAME THE WHOLE BOARD — the one overview fit, and NOT `reactFlow.fitView`.
+   *
+   * D1, canvas QA 2026-09-07. fitView queues itself behind `nodesInitialized`,
+   * which `onlyRenderVisibleElements` holds false whenever a card is off
+   * screen (see zoomToNode). From the overview every card is on screen, so the
+   * fit happens to work there and the defect looked like a zoom-to-CARD bug —
+   * but the same call from a zoomed-in state (⤢ CANVAS with no saved viewport,
+   * a workspace switch) is inert, and the fit it left QUEUED is what fires
+   * later on an unrelated node update and lands on the previously tapped card.
+   * fitBounds calls panZoom directly and cannot be deferred.
+   */
+  const fitAll = useCallback(
+    (duration: number): void => {
+      const bounds = nodesZoomBounds(reactFlow.getNodes())
+      if (bounds === null) return
+      void reactFlow.fitBounds(bounds, { duration, padding: OVERVIEW_FIT_PADDING })
+    },
+    [reactFlow]
+  )
+
   // Fire the armed fit, one frame after the incoming nodes are committed —
   // React Flow measures a node on layout, and fitting before that measurement
   // frames the cards at a stale size.
@@ -398,10 +426,10 @@ function Canvas(): React.JSX.Element {
       // renders a LIGHT mini tile when zoomed out (TerminalNode/NoteNode/
       // BrowserNode mini paths: no markdown, no decoded thumbnails), so 90 tiles
       // at the overview no longer OOM iOS Safari.
-      void reactFlow.fitView({ duration: 450, padding: 0.1 })
+      fitAll(OVERVIEW_FIT_MS)
     })
     return () => cancelAnimationFrame(frame)
-  }, [nodes, reactFlow])
+  }, [nodes, fitAll])
 
   useEffect(() => {
     void cookrew()
@@ -629,6 +657,29 @@ function Canvas(): React.JSX.Element {
   // for the full renderer (see zoom-lod.ts).
   const zoomToNode = useCallback(
     (id: string, rect?: { x: number; y: number; width: number; height: number }) => {
+      // WHERE ARE WE GOING — resolved FIRST, because a zoom that cannot land
+      // must change nothing at all (not the return point, not the deliberate
+      // flag, not the zoomed id).
+      //
+      // A just-created node may not be in the React Flow store yet (its
+      // workspace broadcast is still in flight), so callers that know the
+      // node's rect pass it; everything else resolves the card's own bounds
+      // out of the store.
+      //
+      // ALWAYS fitBounds, NEVER fitView({nodes}) — D1, canvas QA 2026-09-07.
+      // fitView does not move the viewport itself: it queues the fit behind
+      // `nodesInitialized`, which `onlyRenderVisibleElements` holds false
+      // forever on a zoomed-in canvas because off-screen cards are never
+      // measured. The queued fit is dropped, its promise never settles (so no
+      // arrival, so no full view), and a stale one can later land on the card
+      // tapped before this one. fitBounds calls panZoom directly. See
+      // nodes/zoom-target.ts for the whole trace.
+      const bounds = rect ?? nodeZoomBounds(reactFlow.getInternalNode(id))
+      if (bounds === null) {
+        // Never silently do nothing — that WAS the defect.
+        reportMissingZoomTarget(id)
+        return
+      }
       // Save the return point only when not already mid-zoom: a second click
       // (or a click after a reload that landed already zoomed, with a terminal
       // overlay covering the stage) must NOT persist a zoomed viewport as the
@@ -643,9 +694,6 @@ function Canvas(): React.JSX.Element {
       // one passively on the phone.
       deliberateOpenRef.current = true
       zoomedNodeIdRef.current = id
-      // A just-created node may not be in the React Flow store yet (its
-      // workspace broadcast is still in flight) — fitView can't find it, so
-      // callers that know the node's rect pass it for a fitBounds instead.
       // CARD_FIT_PADDING is 0 on purpose — the grid has no gutter, so any
       // padding here frames the neighbouring card too.
       const options = { duration: CARD_ZOOM_MS, padding: CARD_FIT_PADDING }
@@ -655,10 +703,7 @@ function Canvas(): React.JSX.Element {
       // end event to offer. Taking it here is what stops a tapped card sitting
       // as a thumbnail for an extra beat after it has visibly arrived.
       setArrivedId(null)
-      const arrival = rect
-        ? reactFlow.fitBounds(rect, options)
-        : reactFlow.fitView({ nodes: [{ id }], ...options })
-      void arrival.then(() => {
+      void reactFlow.fitBounds(bounds, options).then(() => {
         // Guard against a stale arrival: tapping a second card mid-animation
         // must not hand the full view back to the first one.
         if (zoomedNodeIdRef.current === id) setArrivedId(id)
@@ -675,14 +720,15 @@ function Canvas(): React.JSX.Element {
     // Back to the overview: the LOD must not re-open the card we are leaving.
     deliberateOpenRef.current = false
     // Restoring a saved viewport that equals the current one wouldn't move the
-    // canvas — we'd stay zoomed (the loop). Fall back to fitView so Back always
-    // escapes to the overview.
+    // canvas — we'd stay zoomed (the loop). Fall back to the overview fit so
+    // Back always escapes. That fallback fires from a ZOOMED-IN viewport, which
+    // is precisely where fitView was inert (D1) — hence fitAll, not fitView.
     if (previous && !sameViewport(previous, reactFlow.getViewport())) {
-      void reactFlow.setViewport(previous, { duration: 450 })
+      void reactFlow.setViewport(previous, { duration: OVERVIEW_FIT_MS })
     } else {
-      void reactFlow.fitView({ duration: 450, padding: 0.1 })
+      fitAll(OVERVIEW_FIT_MS)
     }
-  }, [reactFlow])
+  }, [reactFlow, fitAll])
 
   const requestClose = useCallback((nodeId: string) => setClosingId(nodeId), [])
 
