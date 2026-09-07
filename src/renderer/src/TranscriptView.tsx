@@ -13,7 +13,6 @@ import { MarkdownText } from './MarkdownText'
 import {
   coalescingSingleFlight,
   evictTrace,
-  fetchTracePage,
   fractionOfIdentity,
   identityAtFraction,
   isAtBottom,
@@ -23,10 +22,11 @@ import {
   pruneToTotal,
   refineEstimate,
   type TraceAnchor,
-  type TracePage,
   type TraceBlock,
   wheelGoesToTranscript
 } from './transcript'
+import { mayFireSideEffects } from './stream/stream-view'
+import type { StreamPager, StreamWindow } from './stream/stream-pager'
 
 /** Blocks fetched per lazy page, and the cap of FULL blocks kept in memory. */
 const WINDOW = 20
@@ -84,7 +84,14 @@ export const TranscriptView = forwardRef<
   TranscriptHandle,
   {
     terminalId: string
-    /** Total completed checkpoints (activity.turnCount) — the growth signal. */
+    /**
+     * THE ONE STREAM'S PAGER. Every window is named by an identity and comes
+     * back in stream coordinates (stream-pager.ts). The view keeps thinking
+     * in ordinals — its geometry, its placeholders and the rail's fractions
+     * are all laid out in them — and never learns that a transcript is a file.
+     */
+    pager: StreamPager
+    /** Length of the whole stream — the growth signal. */
     total: number
     /**
      * Full ordered checkpoint identity list (Forge's trace index) — defines the
@@ -128,6 +135,7 @@ export const TranscriptView = forwardRef<
 >(function TranscriptView(
   {
     terminalId,
+    pager,
     total,
     identities,
     titleMode,
@@ -147,6 +155,8 @@ export const TranscriptView = forwardRef<
   ref
 ): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
+  /** Where the last ingested window came from — see stream-view.ts. */
+  const renderSourceRef = useRef<StreamWindow['render']>('live')
   const liveRef = useRef<HTMLDivElement>(null)
   const blockRefs = useRef<Map<number, HTMLDivElement>>(new Map())
   const [blocks, setBlocks] = useState<TraceBlock[]>([])
@@ -236,7 +246,14 @@ export const TranscriptView = forwardRef<
   // Merge a page in, then evict FULL blocks to the cap around the identity in
   // view. Evicted identities revert to cheap placeholders, so the identity space
   // stays continuous while full-block memory stays bounded.
-  const ingest = useCallback((page: { blocks: TraceBlock[]; total: number }): void => {
+  const ingest = useCallback((page: StreamWindow): void => {
+    // ONE RENDERING PATH, TWO SOURCES (panel C). The blocks, the view model
+    // and the markup are identical whether this window is the live tail or a
+    // page somebody scrolled to; the flag gates SIDE EFFECTS only, and the
+    // one this view has is the autoscroll pin below. A replay page that stuck
+    // the reader back to the bottom is precisely the "jump reverted itself"
+    // failure, arriving by a different route.
+    renderSourceRef.current = page.render
     // Capture the anchor (the jump target, else the identity in view) so the
     // post-commit layout effect can hold it steady while placeholders above swap
     // to real heights (WARNING). Skip when pinned — autoscroll owns the bottom.
@@ -260,14 +277,31 @@ export const TranscriptView = forwardRef<
     })
   }, [])
 
+  /**
+   * ONE WINDOW, NAMED BY AN IDENTITY.
+   *
+   * The anchors are still written as ordinals here — the whole view is laid
+   * out in them — but the pager resolves each to the identity it asks by, so
+   * a /compact can no longer make a window mean a different turn than the one
+   * that was clicked. `aroundIndex` is the only REPLAY shape: it is the
+   * window somebody scrolled or jumped to. Growth (`afterIndex`) and the tail
+   * are live.
+   */
   const fetchWindow = useCallback(
-    async (req: 'tail' | TraceAnchor): Promise<TracePage> => {
-      const request = req === 'tail' ? { limit: WINDOW } : { limit: WINDOW, ...req }
-      const page = await fetchTracePage(terminalId, request)
+    async (req: 'tail' | TraceAnchor): Promise<StreamWindow> => {
+      const limit = req !== 'tail' && req.limit !== undefined ? req.limit : WINDOW
+      const page =
+        req === 'tail'
+          ? await pager.tail(limit)
+          : req.aroundIndex !== undefined
+            ? await pager.around(req.aroundIndex, limit)
+            : req.afterIndex !== undefined
+              ? await pager.after(req.afterIndex, limit)
+              : await pager.tail(limit)
       ingest(page)
       return page
     },
-    [terminalId, ingest]
+    [pager, ingest]
   )
 
   // Lazy fill: fetch the window around an unloaded identity (replaces the old
@@ -479,6 +513,8 @@ export const TranscriptView = forwardRef<
       if (enteringLive || explicit) {
         anchorIndexRef.current = Number.MAX_SAFE_INTEGER
         pinnedRef.current = true
+        // Back at the tail: the view is live again, so the pin may act.
+        renderSourceRef.current = 'live'
         void fetchWindow('tail')
       }
       if (pinnedRef.current && scrollRef.current) {
@@ -566,6 +602,9 @@ export const TranscriptView = forwardRef<
     const el = scrollRef.current
     if (!el || typeof ResizeObserver !== 'function') return
     const stick = (): void => {
+      // REPLAY NEVER MOVES THE VIEW. Growth the reader did not ask for may
+      // re-stick the bottom; a page they scrolled to may not.
+      if (!mayFireSideEffects(renderSourceRef.current)) return
       if (shouldStick(pinnedRef.current, el.scrollTop, el.scrollHeight, el.clientHeight)) {
         el.scrollTop = el.scrollHeight
       }

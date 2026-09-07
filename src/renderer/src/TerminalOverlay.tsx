@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import type { IClipboardProvider } from '@xterm/addon-clipboard'
@@ -12,21 +12,14 @@ import type { TerminalActivity, TurnPhase } from '../../shared/turn'
 import type { LodLayout, ScreenRect } from './zoom-lod'
 import { useCanvasUi } from './canvas-ui'
 import { cookrew, isRemoteMode } from './api'
-import { subscribeLatestChanged } from './latest-changed-bus'
 import { doorStateSentence, type DoorTranscriptState } from '../../shared/door-transcript-state'
 import { CheckpointTimeline } from './CheckpointTimeline'
 import { TranscriptView, type ActiveBlock, type TranscriptHandle } from './TranscriptView'
-import {
-  fetchTraceIndex,
-  fetchTraceMarkers,
-  mergeCheckpointRows,
-  mergeTraceIndex,
-  tailClipRows,
-  traceRowLabel,
-  type TraceIndexEntry,
-  type TraceMarkerRow
-} from './transcript'
-import { checkpointTitle, useTitleMode } from './checkpoint-sync'
+import { tailClipRows } from './transcript'
+import { checkpointRowTitle } from './stream/stream-rows'
+import { streamPagerOf } from './stream/stream-pager'
+import { useStream } from './stream/use-stream'
+import { useTitleMode } from './checkpoint-sync'
 import { attachFilesToTerminal, pasteClipboardImages } from './AttachButton'
 import { handleTerminalPaste } from './terminal-paste'
 import { terminalKeyIntent } from './terminal-key-intent'
@@ -174,123 +167,38 @@ function TerminalOverlay({
 
   const [titleMode, toggleTitleMode] = useTitleMode()
 
-  // FULL-TRACE SELECTION (item 3): the fan/timeline spans the WHOLE trace range
-  // — Forge's cheap identity listing, without the full prompt/reply ledger — so
-  // every traced checkpoint is selectable while bodies stay in trace windows.
-  const [traceIndex, setTraceIndex] = useState<TraceIndexEntry[]>([])
-  const [traceIndexReady, setTraceIndexReady] = useState(false)
-  const [traceMarkers, setTraceMarkers] = useState<TraceMarkerRow[]>([])
-  useEffect(() => {
-    if (!metadataReady) return
-    let alive = true
-    setTraceIndexReady(false)
-    void fetchTraceIndex(node.id)
-      .then((list) => {
-        if (alive) {
-          setTraceIndex(list)
-          setTraceIndexReady(true)
-        }
-      })
-      .catch((error) => {
-        // Absent bridge already warned once inside fetchTraceIndex; a present
-        // bridge that REJECTS is a different failure — surface it, don't swallow.
-        console.error('listTraceIndex failed:', error)
-      })
-    void fetchTraceMarkers(node.id)
-      .then((list) => {
-        if (alive) setTraceMarkers(list)
-      })
-      .catch((error) => console.error('listTraceMarkers failed:', error))
-    return () => {
-      alive = false
-    }
-  }, [
-    node.id,
-    node.claudeSessionId,
-    node.codexSessionRef,
-    node.opencodeSessionId,
-    node.piSessionId,
-    node.sessionLineage?.join('\0'),
-    metadataReady
-  ])
-
-  const traceCeiling = traceIndex[traceIndex.length - 1]?.index ?? 0
-  const signaledTurns = activity?.turnCount ?? 0
-  useEffect(() => {
-    if (!traceIndexReady) return
-    if (signaledTurns <= traceCeiling) return
-    let alive = true
-    let retry: number | null = null
-    const readDelta = (attempt: number): void => {
-      void fetchTraceIndex(node.id, { afterIndex: traceCeiling })
-        .then((delta) => {
-          if (!alive) return
-          if (delta.length > 0) {
-            setTraceIndex((current) => mergeTraceIndex(current, delta))
-          } else if (signaledTurns > traceCeiling && attempt < 2) {
-            retry = window.setTimeout(() => readDelta(attempt + 1), 120 * (attempt + 1))
-          }
-        })
-        .catch((error) => console.error('listTraceIndex delta failed:', error))
-    }
-    readDelta(0)
-    return () => {
-      alive = false
-      if (retry !== null) window.clearTimeout(retry)
-    }
-  }, [node.id, signaledTurns, traceCeiling, traceIndexReady])
-
-  // THE SAME NUDGE THE CARD GETS, heard in the overlay: the file watch (local)
-  // or the door poll (remote) says "the record changed", and the rail re-reads
-  // the delta at once — instead of waiting for the PTY scrape to decide a turn
-  // ended, which on a remote card is the only other signal there is (P3).
-  const [nudge, setNudge] = useState(0)
-  useEffect(() => {
-    const api = cookrew()
-    if (!api.watchLatest || !api.onLatestChanged) return
-    void api.watchLatest(node.id)
-    const off = subscribeLatestChanged(node.id, () => setNudge((n) => n + 1))
-    return () => {
-      off()
-      void api.unwatchLatest?.(node.id)
-    }
-  }, [node.id])
-  // A nudge that lands before the first listing is ready is not lost: it is
-  // read the moment the listing is — on an ended session it may be the last.
-  const missedNudge = useRef(false)
-  useEffect(() => {
-    if (nudge === 0) return
-    if (!traceIndexReady) {
-      missedNudge.current = true
-      return
-    }
-    missedNudge.current = false
-    let alive = true
-    void fetchTraceIndex(node.id, { afterIndex: traceCeiling })
-      .then((delta) => {
-        if (alive && delta.length > 0) setTraceIndex((current) => mergeTraceIndex(current, delta))
-      })
-      .catch((error) => console.error('listTraceIndex nudge failed:', error))
-    void fetchTraceMarkers(node.id)
-      .then((list) => {
-        if (alive) setTraceMarkers(list)
-      })
-      .catch((error) => console.error('listTraceMarkers nudge failed:', error))
-    return () => {
-      alive = false
-    }
-    // The ceiling is read at nudge time on purpose: a nudge means "read past
-    // whatever you have now", and re-running on every ceiling change would
-    // re-read the delta the nudge itself just merged.
+  /**
+   * THE ONE STREAM. Rail, drawer, pager and preview all read this — the
+   * design's own line for T3. What it replaces, on this component alone: a
+   * full /trace/index read, a /trace/markers read, a delta re-read keyed on
+   * the PTY's turn count, a second delta on the file-watch nudge, and a
+   * mergeCheckpointRows join over a ledger that was already being passed in
+   * empty. Five reads and a join, for one listing.
+   *
+   * The boundary markers are DERIVED from the rows (markersOfIndex) rather
+   * than fetched: a compaction is a fact the stream carries on the row after
+   * it, so the second fetch had nothing left to tell us.
+   */
+  const stream = useStream(node.id)
+  const rows = stream.rows
+  const traceMarkers = stream.markers
+  // The drawer's windows, named by identity (stream-pager.ts). Rebuilt when
+  // the index moves, because that is what resolves an ordinal to a cursor.
+  // Memoised on the pieces the pager READS, not on the handle: `stream` is a
+  // fresh object every render, so keying on it would hand the drawer a new
+  // pager per frame — and the pager is what the drawer's coalescing
+  // single-flight is built from, so a rapid second far-jump would be dropped.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const pager = useMemo(
+    () => streamPagerOf(stream),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nudge, node.id])
-  useEffect(() => {
-    if (traceIndexReady && missedNudge.current) setNudge((n) => n + 1)
-  }, [traceIndexReady])
+    [stream.index, stream.total, stream.blocksAround, stream.blocksAfter]
+  )
 
   // WHY the rail is empty or stale, for a remote card — a named state from
-  // the door, rendered as a sentence in the session strip (P10). Re-read on
-  // every nudge: a state change is part of the door poll's fingerprint.
+  // the door, rendered as a sentence in the session strip (P10). Re-read
+  // whenever the stream moves: a state change is part of the door poll's
+  // fingerprint, and the stream's own length is that fingerprint now.
   const [doorState, setDoorState] = useState<DoorTranscriptState | null>(null)
   useEffect(() => {
     if (!remote) return
@@ -305,7 +213,10 @@ function TerminalOverlay({
     return () => {
       alive = false
     }
-  }, [remote, node.id, nudge, traceIndexReady])
+    // The stream's own length is the change signal now: it moves whenever the
+    // record grows, which is the same fingerprint the door poll reported and
+    // one fewer subscription to keep in step.
+  }, [remote, node.id, stream.total, stream.opened])
   // A refused attach says so where the strip already speaks, then clears.
   const [attachRefusal, setAttachRefusal] = useState<string | null>(null)
   const refusalTimer = useRef<number | null>(null)
@@ -355,8 +266,6 @@ function TerminalOverlay({
       alive = false
     }
   }, [node.id, pinRefresh, metadataReady])
-
-  const rows = mergeCheckpointRows([], traceIndex)
 
   const transcriptRef = useRef<TranscriptHandle>(null)
   const translation = useCheckpointTranslation()
@@ -446,13 +355,14 @@ function TerminalOverlay({
     if (active.index === selectedIndex) return
     setSelectedIndex(active.index)
   }
-  const selectedRow = selectedIndex !== null ? (rows.find((r) => r.index === selectedIndex) ?? null) : null
+  const selectedRow =
+    selectedIndex !== null ? (rows.find((r) => r.index === selectedIndex) ?? null) : null
+  // ONE TITLE RULE, from the mark. checkpointRowTitle is the same function the
+  // rail's rows use, so the ask line and the rail can no longer disagree about
+  // what a checkpoint is called — they did, whenever the ledger held a title
+  // the trace listing did not.
   const selectedTitle =
-    selectedIndex === null
-      ? ''
-      : selectedRow?.record
-        ? checkpointTitle(selectedRow.record, titleMode)
-        : traceRowLabel(selectedIndex, selectedRow?.traceTitle ?? '')
+    selectedRow === null ? '' : checkpointRowTitle(selectedRow, titleMode)
 
   const keepFocus = (e: React.MouseEvent): void => e.preventDefault()
 
@@ -1082,7 +992,7 @@ function TerminalOverlay({
         </div>
       )}
       {(selectedIndex !== null || activity?.prompt) && (
-        <div className="popout-ask" title={selectedRow?.record?.prompt ?? selectedTitle ?? activity?.prompt ?? ''}>
+        <div className="popout-ask" title={selectedRow?.promptHead ?? selectedTitle ?? activity?.prompt ?? ''}>
           <span className="popout-ask-label">
             {/* Identity, not array position: T-number matches transcript + rail. */}
             {selectedIndex === null ? 'YOU ❯' : `CHECKPOINT T${selectedIndex} ❯`}
@@ -1188,7 +1098,11 @@ function TerminalOverlay({
         <TranscriptView
           ref={transcriptRef}
           terminalId={node.id}
-          total={activity?.turnCount ?? 0}
+          pager={pager}
+          // The STREAM's length, not the PTY's turn count: the scrape counts
+          // what it saw on a screen and the stream counts what is in the
+          // record, and a compaction is exactly where they disagree.
+          total={stream.total}
           titleMode={titleMode}
           translation={translation.showing}
           identities={rows.map((r) => r.index)}
@@ -1226,6 +1140,7 @@ function TerminalOverlay({
           allowActions={!remote}
           lineageReach={!remote}
           ended={doorState?.kind === 'ended'}
+          anomalyNote={stream.anomalyNote}
           onGoto={gotoCheckpoint}
           onLive={goLive}
           onScrub={(fraction) => transcriptRef.current?.scrubTo(fraction)}

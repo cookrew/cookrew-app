@@ -184,6 +184,16 @@ import { purgeRegenerableProfileData, reapOrphanPartitions } from './browser-sto
 
 import { TraceReader, type SessionWatchSpec } from './trace'
 import { createStreamService } from './stream-service'
+import {
+  streamBlocks,
+  streamIndex,
+  streamMarks,
+  streamOpen,
+  streamTail,
+  type StreamCursorRequest,
+  type StreamIpcDeps
+} from './stream-ipc'
+import type { MarkPatch } from './marks'
 import { LatestFileWatcher } from './latest-watch'
 import { SessionTurnSync } from './session-sync'
 import { RoleStore } from './roles'
@@ -1446,6 +1456,13 @@ const streamService = createStreamService({
   documentOf: (file, kind) => traces.documentOf(file, kind),
   fileOf: (node) => traces.watchSpec(node.id)?.file ?? null
 })
+
+/** What the desktop's stream door reads through — the SAME service the HTTP
+ *  routes use, and the same door/scrape provider the old routes use. */
+const streamIpcDeps: StreamIpcDeps = {
+  stream: streamService,
+  turnHistory: (terminalId) => turnHistoryFor(terminalId)
+}
 
 /**
  * THE RECORD BEHIND A CARD comes from one of three places (transcript-source):
@@ -5529,6 +5546,37 @@ function registerIpc(handlers: RestoreHandlers): void {
   })
   // A remote card's rail says WHY it is empty or stale, in a sentence (P10).
   ipcMain.handle('trace:status', (_e, terminalId: string) => transcriptStatusFor(terminalId))
+
+  // ONE STREAM, THE DESKTOP'S DOOR (one-stream T3). T2 put the stream behind
+  // HTTP, which is the wire the COMPANION has; this renderer has no origin to
+  // fetch, so without these five reads "the renderer reads one stream" would
+  // be true of the phone and false of the Mac. Same StreamService, same
+  // projections (stream-ipc.ts) — nothing is re-derived for this door.
+  //
+  // There is no live channel here on purpose: the file watch behind
+  // trace:latest-watch already says "this card's record changed", and the
+  // bridge transport rides it to re-read the tail and the marks. One watcher,
+  // not two.
+  ipcMain.handle('stream:open', (_e, terminalId: string) => streamOpen(terminalId, streamIpcDeps))
+  ipcMain.handle('stream:index', (_e, terminalId: string, request?: unknown) =>
+    streamIndex(terminalId, (request ?? {}) as StreamCursorRequest, streamIpcDeps)
+  )
+  ipcMain.handle('stream:blocks', (_e, terminalId: string, request?: unknown) =>
+    streamBlocks(terminalId, (request ?? {}) as StreamCursorRequest, streamIpcDeps)
+  )
+  ipcMain.handle('stream:tail', (_e, terminalId: string) => streamTail(terminalId, streamIpcDeps))
+  ipcMain.handle('stream:marks', (_e, terminalId: string) => streamMarks(terminalId, streamIpcDeps))
+  // THE ONLY WRITE IN THIS DESIGN. marks.ts owns the refusal (a patch carrying
+  // conversation text, or a key outside the mark's own five, throws) and the
+  // result is handed back as data rather than as a rejected invoke, so the
+  // renderer can say WHICH key was refused.
+  ipcMain.handle('stream:mark', (_e, terminalId: string, patch: unknown) => {
+    try {
+      return streamService.writeMark(terminalId, patch as MarkPatch)
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
   // Observability event log: filtered history + counts + agent roster.
   ipcMain.handle('events:query', (_e, query) => events.query(query ?? {}))
   ipcMain.handle('events:count', (_e, query) => events.count(query ?? {}))

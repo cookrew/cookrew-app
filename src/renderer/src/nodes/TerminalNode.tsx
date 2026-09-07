@@ -9,7 +9,7 @@ import { CrIcon } from '../icons'
 import { cardTypeScale, cardZoomMode } from './card-zoom'
 import { TurnView } from './TurnView'
 import { turnViewOf, checkpointViewModel, isEmptyTurnView } from '../turn-view-model'
-import { useLatestCheckpoint } from '../use-latest-checkpoint'
+import { useStreamTail } from '../stream/use-stream-tails'
 import { PastTurnView, TurnPagerBar, useTurnPaging } from './TurnPager'
 import type { TerminalNodeData } from '../../../shared/model'
 import type { TerminalActivity } from '../../../shared/turn'
@@ -51,7 +51,7 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
   // than the one this path exists to fix.
   const liveEmpty = isEmptyTurnView(liveModel) || activity?.mirrorless === true
   const wantCheckpoint = agent && mode !== 'mini' && liveEmpty && !paging.viewing
-  const checkpoint = useLatestCheckpoint(node.id, wantCheckpoint)
+  const checkpoint = useStreamTail(node.id, wantCheckpoint)
   const checkpointBody = wantCheckpoint ? checkpointViewModel(checkpoint) : null
   // Both, when both are known: the checkpoint's words with the live verb over
   // them, so a working agent reads WORKING and still shows what it last did.

@@ -2,48 +2,31 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   activeBlockForScroll,
   coalescingSingleFlight,
+  createHoldReveal,
   evictTrace,
-  isAtBottom,
   firstUnloadedInView,
   fractionOfIdentity,
   identityAtFraction,
+  isAtBottom,
   jumpScrollBehavior,
-  checkpointRowTitle,
-  createHoldReveal,
-  focusedCheckpoint,
-  fanLayout,
-  mergeCheckpointRows,
-  mergeTraceIndex,
   mergeTrace,
-  neighborWindow,
-  railAnchorTop,
-  scrollFocusState,
-  scrubPreviewRow,
   pruneToTotal,
+  railAnchorTop,
   railPointerFraction,
   refineEstimate,
   tailClipRows,
-  wheelGoesToTranscript,
-  traceRowLabel,
   warnAbsentBridge,
+  wheelGoesToTranscript,
   type TraceBlock
 } from '../src/renderer/src/transcript'
-import type { TurnRecord } from '../src/shared/turn'
 
-describe('mergeTraceIndex (incremental live listing)', () => {
-  it('appends cursor pages by identity and lets newer metadata win', () => {
-    expect(
-      mergeTraceIndex(
-        [{ index: 1, title: 'one' }, { index: 2, title: 'old' }],
-        [{ index: 2, title: 'two' }, { index: 3, title: 'three' }]
-      )
-    ).toEqual([
-      { index: 1, title: 'one' },
-      { index: 2, title: 'two' },
-      { index: 3, title: 'three' }
-    ])
-  })
-})
+// The row-shaped blocks that stood here — mergeCheckpointRows, mergeTraceIndex,
+// the scrub-preview title, traceRowLabel, focusedCheckpoint, scrollFocusState,
+// neighborWindow and fanLayout — moved with their subjects (one-stream T3).
+// The projection lives in stream/stream-rows.ts and is tested in
+// tests/stream-rows.test.ts; the merge is gone entirely, because there is one
+// listing to project and nothing left to join it to.
+
 // Identity-keyed blocks (integration round 2): pos is GONE — TraceBlock.index
 // (1-based, from the trace parsers) is both identity and layout ordinal.
 const block = (index: number, over: Partial<TraceBlock> = {}): TraceBlock => ({
@@ -132,97 +115,6 @@ describe('pruneToTotal (MEDIUM 4 rewind shrink)', () => {
   })
 })
 
-describe('mergeCheckpointRows (item 3: full trace range selectable)', () => {
-  // Deep-history fixture: record store capped to T8..T105; the trace reaches T1.
-  const record = (index: number): TurnRecord => ({
-    index,
-    prompt: `prompt ${index}`,
-    reply: `reply ${index}`,
-    startedAt: 0,
-    endedAt: 1
-  })
-  const records = Array.from({ length: 98 }, (_, i) => record(i + 8)) // T8..T105
-  const traceIndex = Array.from({ length: 105 }, (_, i) => ({ index: i + 1, title: `t${i + 1}` }))
-
-  it('spans the WHOLE trace range, not just the capped records', () => {
-    const rows = mergeCheckpointRows(records, traceIndex)
-    expect(rows[0].index).toBe(1) // T1 present though the record store starts at T8
-    expect(rows[rows.length - 1].index).toBe(105)
-    expect(rows).toHaveLength(105)
-  })
-  it('marks sub-cap identities trace-only, cap identities record-backed', () => {
-    const rows = mergeCheckpointRows(records, traceIndex)
-    const t1 = rows.find((r) => r.index === 1)!
-    const t60 = rows.find((r) => r.index === 60)!
-    expect(t1.record).toBeNull()
-    expect(t1.traceTitle).toBe('t1')
-    expect(t60.record).not.toBeNull()
-  })
-  it('falls back to records alone when the trace listing is absent', () => {
-    const rows = mergeCheckpointRows(records, [])
-    expect(rows).toHaveLength(98)
-    expect(rows.every((r) => r.record !== null)).toBe(true)
-  })
-  it('clamps phantom record rows beyond the trace ceiling (root dependency)', () => {
-    // Interim coordinate mismatch: records number to T40 while the trace ceils
-    // at T38 → the two extra record rows are phantoms that map to no block.
-    const recs = Array.from({ length: 40 }, (_, i) => record(i + 1)) // T1..T40
-    const idx = Array.from({ length: 38 }, (_, i) => ({ index: i + 1, title: `t${i + 1}` })) // T1..T38
-    const rows = mergeCheckpointRows(recs, idx)
-    expect(rows[rows.length - 1].index).toBe(38) // rail ceiling == trace ceiling
-    expect(rows.find((r) => r.index === 39)).toBeUndefined()
-    expect(rows.find((r) => r.index === 40)).toBeUndefined()
-  })
-})
-
-describe('scrub-preview title (bug 1 redo: titles visible while scrubbing)', () => {
-  const record = (index: number, title?: string): TurnRecord => ({
-    index,
-    prompt: `prompt ${index}`,
-    reply: `reply ${index}`,
-    ...(title ? { title } : {}),
-    startedAt: 0,
-    endedAt: 1
-  })
-  // Sparse rows: T1 trace-only (no record), T2..T4 record-backed with titles.
-  const rows = mergeCheckpointRows(
-    [record(2, 'wired the parser'), record(3, 'fixed the seam'), record(4, 'shipped it')],
-    [
-      { index: 1, title: 't1 snippet' },
-      { index: 2, title: '' },
-      { index: 3, title: '' },
-      { index: 4, title: '' }
-    ]
-  )
-
-  describe('scrubPreviewRow (fraction/position → row)', () => {
-    it('maps the ends and the middle of the drag to a row', () => {
-      expect(scrubPreviewRow(rows, 0)?.index).toBe(1)
-      expect(scrubPreviewRow(rows, 1)?.index).toBe(4)
-      expect(scrubPreviewRow(rows, 0.5)?.index).toBe(3) // rounds to list middle
-    })
-    it('clamps an over-drag and is null for no rows', () => {
-      expect(scrubPreviewRow(rows, 1.5)?.index).toBe(4)
-      expect(scrubPreviewRow([], 0.5)).toBeNull()
-    })
-  })
-
-  describe('checkpointRowTitle (row → title)', () => {
-    it('uses the record title in conclusion mode', () => {
-      const t3 = scrubPreviewRow(rows, 0.5)! // T3
-      expect(checkpointRowTitle(t3, 'conclusion')).toBe('fixed the seam')
-    })
-    it('uses the precise prompt in precise mode', () => {
-      const t3 = scrubPreviewRow(rows, 0.5)!
-      expect(checkpointRowTitle(t3, 'precise')).toBe('prompt 3')
-    })
-    it('falls back to the trace snippet / T<n> for a trace-only row', () => {
-      const t1 = scrubPreviewRow(rows, 0)! // trace-only
-      expect(checkpointRowTitle(t1, 'conclusion')).toBe('t1 snippet')
-    })
-  })
-})
-
 describe('activeBlockForScroll (scroll → checkpoint block)', () => {
   const tops = [
     { index: 1, top: 0 },
@@ -290,16 +182,6 @@ describe('jumpScrollBehavior (item 2b: touch cancels smooth mid-flight)', () => 
   })
   it('is smooth only for a nearby mouse-driven target', () => {
     expect(jumpScrollBehavior({ landed: false, coarsePointer: false, touchActive: false })).toBe('smooth')
-  })
-})
-
-describe('traceRowLabel (item 2c: never blank before the index lands)', () => {
-  it('falls back to the T<n> identity when the trace title is empty', () => {
-    expect(traceRowLabel(5, '')).toBe('T5')
-    expect(traceRowLabel(5, '   ')).toBe('T5')
-  })
-  it('uses the trace title when present', () => {
-    expect(traceRowLabel(5, 'wired the parser')).toBe('wired the parser')
   })
 })
 
@@ -431,26 +313,6 @@ describe('coalescingSingleFlight (HIGH: rapid second far-jump not starved)', () 
   })
 })
 
-describe('focusedCheckpoint (v3 State A: single-tab tracks the focused chapter)', () => {
-  const rows = mergeCheckpointRows(
-    [],
-    [
-      { index: 7, title: 'seven' },
-      { index: 8, title: 'eight' },
-      { index: 9, title: 'nine' }
-    ]
-  )
-  it('returns the row for the active identity in view', () => {
-    expect(focusedCheckpoint(rows, 8)?.index).toBe(8)
-  })
-  it('is null at the live tail (no checkpoint focused)', () => {
-    expect(focusedCheckpoint(rows, null)).toBeNull()
-  })
-  it('is null for an identity not among the rows', () => {
-    expect(focusedCheckpoint(rows, 999)).toBeNull()
-  })
-})
-
 describe('createHoldReveal (v3: hold a tab/row to reveal its actions)', () => {
   afterEach(() => vi.useRealTimers())
 
@@ -486,46 +348,6 @@ describe('createHoldReveal (v3: hold a tab/row to reveal its actions)', () => {
   })
 })
 
-describe('scrollFocusState (scroll-driven list: focus → highlight, show/hide)', () => {
-  const rows = mergeCheckpointRows(
-    [],
-    [
-      { index: 7, title: 'seven' },
-      { index: 8, title: 'eight' },
-      { index: 9, title: 'nine' }
-    ]
-  )
-  it('scrolled onto a checkpoint → highlight it and show the list', () => {
-    expect(scrollFocusState(rows, 8)).toEqual({ focusedIndex: 8, listShown: true })
-  })
-  it('at the live tail (no focus) → hide the list', () => {
-    expect(scrollFocusState(rows, null)).toEqual({ focusedIndex: null, listShown: false })
-  })
-  it('an identity not among the rows → no focus, no list', () => {
-    expect(scrollFocusState(rows, 999)).toEqual({ focusedIndex: null, listShown: false })
-  })
-})
-
-describe('neighborWindow (extended tab: focused centred, neighbors up + down)', () => {
-  const rows = mergeCheckpointRows(
-    [],
-    Array.from({ length: 20 }, (_, i) => ({ index: i + 1, title: `t${i + 1}` })) // T1..T20
-  )
-  it('centres the focused row with `radius` neighbors each side', () => {
-    expect(neighborWindow(rows, 10, 3).map((r) => r.index)).toEqual([7, 8, 9, 10, 11, 12, 13])
-  })
-  it('clamps at the start (fewer above)', () => {
-    expect(neighborWindow(rows, 2, 3).map((r) => r.index)).toEqual([1, 2, 3, 4, 5])
-  })
-  it('clamps at the end (fewer below)', () => {
-    expect(neighborWindow(rows, 19, 3).map((r) => r.index)).toEqual([16, 17, 18, 19, 20])
-  })
-  it('is empty with no focus or an unknown identity', () => {
-    expect(neighborWindow(rows, null, 3)).toEqual([])
-    expect(neighborWindow(rows, 999, 3)).toEqual([])
-  })
-})
-
 describe('railAnchorTop (marker-Y == focused-row-Y invariant)', () => {
   it('is the SAME position for a fraction — marker and focused row share it', () => {
     // The here-marker and the focused tab/row both call this with focused.frac,
@@ -536,47 +358,6 @@ describe('railAnchorTop (marker-Y == focused-row-Y invariant)', () => {
   it('clamps a boundary fraction (still resolves on the line)', () => {
     expect(railAnchorTop(-0.3)).toBe('calc(16px + 0 * (100% - 32px))')
     expect(railAnchorTop(1.4)).toBe(railAnchorTop(1))
-  })
-})
-
-describe('fanLayout (focus anchored, neighbors fan up/down; clip keeps alignment)', () => {
-  const rows = mergeCheckpointRows(
-    [],
-    Array.from({ length: 20 }, (_, i) => ({ index: i + 1, title: `t${i + 1}` }))
-  )
-  it('splits a centred window into equal above + focused + below', () => {
-    const w = neighborWindow(rows, 10, 3) // [7..13]
-    const { above, focused, below } = fanLayout(w, 10)
-    expect(above.map((r) => r.index)).toEqual([7, 8, 9])
-    expect(focused?.index).toBe(10)
-    expect(below.map((r) => r.index)).toEqual([11, 12, 13])
-  })
-  it('boundary near the TOP: fewer above, focus STILL the anchor (alignment first)', () => {
-    const w = neighborWindow(rows, 2, 3) // [1..5], clamped at the start
-    const { above, focused, below } = fanLayout(w, 2)
-    expect(above.map((r) => r.index)).toEqual([1]) // only one above — clipped, not re-centred
-    expect(focused?.index).toBe(2) // focus stays the anchor at its true fraction
-    expect(below.map((r) => r.index)).toEqual([3, 4, 5])
-  })
-  it('boundary near the BOTTOM: fewer below, focus still the anchor', () => {
-    const w = neighborWindow(rows, 19, 3) // [16..20]
-    const { above, focused, below } = fanLayout(w, 19)
-    expect(above.map((r) => r.index)).toEqual([16, 17, 18])
-    expect(focused?.index).toBe(19)
-    expect(below.map((r) => r.index)).toEqual([20])
-  })
-  it('HIGH-1: ASYMMETRIC window (above=1, below=4) → focus is the SOLE anchor', () => {
-    // Marker near the top: only ONE neighbor above but four below. The focus is
-    // still returned as exactly one anchor row (never re-centered into the
-    // container middle), so the CSS pins it on the marker Y — not offset by the
-    // asymmetry.
-    const w = neighborWindow(rows, 2, 4) // radius 4, clamped at the start → [1..6]
-    const { above, focused, below } = fanLayout(w, 2)
-    expect(above).toHaveLength(1) // one above
-    expect(below).toHaveLength(4) // four below — asymmetric
-    expect(focused?.index).toBe(2) // the anchor is the focus, unchanged
-    // the anchor is a SINGLE row (not the geometric middle of the 6-row window)
-    expect(above.length + 1 + below.length).toBe(w.length)
   })
 })
 

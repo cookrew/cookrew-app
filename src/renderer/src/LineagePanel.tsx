@@ -3,9 +3,9 @@ import { cookrew } from './api'
 import { CrIcon } from './icons'
 import {
   fetchLineageSegments,
-  traceRowLabel,
   type LineageSegmentRow
 } from './transcript'
+import { traceRowLabel } from './stream/stream-rows'
 
 /**
  * EARLIER SESSIONS panel — the lineage expansion the boundary tick opens.

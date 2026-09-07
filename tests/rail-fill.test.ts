@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { capacityFor, fillRows, isLive, RAIL_INSET, ROW_HEIGHT, sampleIndices, countBadgeTop, PIN_HALF_H, COUNT_GAP } from '../src/renderer/src/rail-fill'
-import type { CheckpointRow } from '../src/renderer/src/transcript'
+import type { CheckpointRow } from '../src/renderer/src/stream/stream-rows'
 
 /**
  * F3, measured on a live agent before this existed: 25 rows, T23…T47 out of
@@ -10,8 +10,17 @@ import type { CheckpointRow } from '../src/renderer/src/transcript'
  * twice (a second copy a pixel off the marker is exactly what F6 catches).
  */
 
+/** The rail only ever reads `index` off a row; the rest is what the stream's
+ *  projection carries (stream-rows.ts), stated in full so a shape change here
+ *  fails loudly rather than being cast away. */
 const rowsOf = (n: number): CheckpointRow[] =>
-  Array.from({ length: n }, (_, i) => ({ index: i + 1, record: null }) as unknown as CheckpointRow)
+  Array.from({ length: n }, (_, i) => ({
+    index: i + 1,
+    id: `u${i + 1}`,
+    promptHead: `prompt ${i + 1}`,
+    compacted: false,
+    rolledBack: false
+  }))
 
 describe('capacityFor', () => {
   it('counts the USABLE span, not the full bar height', () => {
