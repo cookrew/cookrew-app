@@ -28,7 +28,9 @@ describe('the brand: the amber lockup', () => {
   })
 
   it('the eyes move: the iris spins, the gaze wanders, the lids blink', () => {
-    for (const k of ['lk-spin', 'lk-gaze', 'lk-blink']) expect(BRAND_LOCKUP_CSS).toContain(`@keyframes ${k}`)
+    for (const k of ['lk-spin', 'brand-gaze', 'brand-blink']) expect(BRAND_LOCKUP_CSS).toContain(`@keyframes ${k}`)
+    // the gaze rides the hand's eight-second cycle, not a six-second wander of its own
+    expect(BRAND_LOCKUP_CSS).toContain('.brand .lk .pupil{animation:brand-gaze 8s')
   })
 
   it('the home page carries the moving lockup and still no script; the market page does not carry it', () => {
