@@ -308,12 +308,35 @@ export function applyChangeSet(
   snapshot: ReadonlyMap<string, ProjectedCheckpoint>,
   change: ChangeSet
 ): Map<string, ProjectedCheckpoint> {
-  const next = new Map(snapshot)
+  return applyChangeSetInto(new Map(snapshot), change)
+}
+
+/**
+ * The same upsert, INTO a map the caller already owns.
+ *
+ * WHY THIS EXISTS (one-stream T4, 2026-09-07). applyChangeSet copies the whole
+ * snapshot per call, which is right for a caller holding a shared map and
+ * quadratic for the one caller that does not: stream-materialise's replay
+ * loop runs one change set PER LINE over its own private accumulator, so a
+ * 1,000-block chain performed 1,000 copies of a growing map. Measured before
+ * this seam existed: 250 blocks 1.45ms, 500 5.94, 1,000 24.2, 2,000 97.3,
+ * 4,000 407.3 — a clean doubling of the per-block cost at every step, which
+ * is the signature of an O(n²) hiding inside an immutable-looking loop.
+ *
+ * The map handed in MUST be private to the caller for the whole pass. That is
+ * the same bend of the immutability rule turn-tracker's `histories` documents,
+ * and it is safe for the same reason: nothing outside the loop can observe it,
+ * and every VALUE in it is still replaced rather than mutated.
+ */
+export function applyChangeSetInto(
+  snapshot: Map<string, ProjectedCheckpoint>,
+  change: ChangeSet
+): Map<string, ProjectedCheckpoint> {
   for (const incoming of change.upserts) {
     const key = checkpointKey(incoming)
-    next.set(key, upsert(next.get(key), incoming))
+    snapshot.set(key, upsert(snapshot.get(key), incoming))
   }
-  return next
+  return snapshot
 }
 
 /** A checkpoint's key in the snapshot. THE IDENTITY, and only the identity:

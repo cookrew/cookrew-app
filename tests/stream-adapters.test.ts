@@ -543,8 +543,8 @@ function bedFor(
 }
 
 describe('streamAdaptersEnabled', () => {
-  it('is ON by default in this release — the flag is an escape hatch', () => {
-    expect(streamAdaptersEnabled({})).toBe(false)
+  it('is ON by default in this release — the flag is an escape hatch (T4)', () => {
+    expect(streamAdaptersEnabled({})).toBe(true)
     expect(streamAdaptersEnabled({ COOKREW_STREAM_ADAPTERS: '1' })).toBe(true)
     expect(streamAdaptersEnabled({ COOKREW_STREAM_ADAPTERS: 'on' })).toBe(true)
   })
@@ -553,6 +553,14 @@ describe('streamAdaptersEnabled', () => {
     for (const value of ['0', 'off', 'OFF', 'false', 'no', ' 0 ']) {
       expect(streamAdaptersEnabled({ COOKREW_STREAM_ADAPTERS: value }), value).toBe(false)
     }
-    expect(streamAdaptersEnabled({ COOKREW_STREAM_ADAPTERS: 'offf' })).toBe(false)
+    // The asymmetry is the point: an unreadable value fails towards the state
+    // this release intends, never quietly back to the store T4 froze.
+    expect(streamAdaptersEnabled({ COOKREW_STREAM_ADAPTERS: 'offf' })).toBe(true)
+    expect(streamAdaptersEnabled({ COOKREW_STREAM_ADAPTERS: 'flase' })).toBe(true)
+    expect(streamAdaptersEnabled({ COOKREW_STREAM_ADAPTERS: '' })).toBe(true)
+  })
+
+  it('COOKREW_STREAM_ADAPTERS=0 is the documented rollback path', () => {
+    expect(streamAdaptersEnabled({ COOKREW_STREAM_ADAPTERS: '0' })).toBe(false)
   })
 })

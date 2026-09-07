@@ -11,6 +11,8 @@ import {
 } from '../src/shared/session-turns'
 import { TurnTracker } from '../src/main/turn-tracker'
 import { TurnStore } from '../src/main/turn-store'
+import { ScrapeHistoryStore } from '../src/main/scrape-history'
+import type { MarkPatch } from '../src/main/marks'
 import type { TurnRecord } from '../src/shared/turn'
 
 function user(content: string, ts: string): string {
@@ -489,19 +491,23 @@ describe('TurnTracker.replaceHistory', () => {
     expect(tracker.history('term-1')[0].title).toBeUndefined()
   })
 
-  // The RESTART path, end-to-end with a real on-disk TurnStore: titles were
+  // The RESTART path, end-to-end with a real on-disk ledger: titles were
   // persisted last session; a fresh tracker re-derives history from the
-  // session file and must merge the persisted titles back in and re-persist
-  // them — otherwise "titles everywhere" regresses to sparse on every restart.
-  it('preserves persisted titles across a simulated restart and re-persists them', () => {
+  // session file and must merge the persisted titles back in — otherwise
+  // "titles everywhere" regresses to sparse on every restart.
+  //
+  // T4: the tracker no longer RE-PERSISTS the merged result — a file-backed
+  // card's history is derived from a transcript and turn-store.ts is a reader.
+  // The carry-over itself is unchanged and is what this holds; where a NEW
+  // title goes now is a mark (turn-tracker's onMark, asserted below).
+  it('preserves persisted titles across a simulated restart', () => {
     const dir = path.join(mkdtempSync(path.join(tmpdir(), 'cookrew-restart-')), 'turns')
-    // Last session's turn-store: titled records (legacy — no uuid yet).
+    // Last session's ledger: titled records (legacy — no uuid yet).
     const before = new TurnStore(dir)
-    before.scheduleSave('term-1', [
+    new ScrapeHistoryStore(dir, before.annotationsDir, new TurnStore(dir)).save('term-1', [
       { index: 1, prompt: 'commit and push', reply: 'done', title: 'Commit and push', startedAt: 1, endedAt: 2 },
       { index: 2, prompt: 'run the tests', reply: 'green', title: 'Running the tests', startedAt: 3, endedAt: 4 }
     ])
-    before.flushAll()
 
     // Restart: brand-new tracker + store over the same dir (in-memory lost).
     const restarted = new TurnTracker(async () => null, new TurnStore(dir))
@@ -514,13 +520,55 @@ describe('TurnTracker.replaceHistory', () => {
       'Commit and push',
       'Running the tests'
     ])
+    expect(restarted.history('term-1').map((r) => r.uuid)).toEqual(['u-1', 'u-2'])
+  })
 
-    // The merged (titled + uuid) result must be persisted, so a later restart
-    // matches by uuid with no further migration needed.
-    restarted.flushHistories()
-    const persisted = new TurnStore(dir).load('term-1')
-    expect(persisted.map((r) => r.title)).toEqual(['Commit and push', 'Running the tests'])
-    expect(persisted.map((r) => r.uuid)).toEqual(['u-1', 'u-2'])
+  /**
+   * WHERE A SOUS TITLE AND A SEEN-AT LAND NOW (T4).
+   *
+   * They used to be written back into ~/.cookrew/turns as two fields on a
+   * stored record. They are marks: keyed by the identity the STREAM assigns,
+   * which is the record's uuid, or the derived prompt digest for a record
+   * that predates uuids. Same key the migration used, so a title written
+   * today and one carried across from the old store land on the same row.
+   */
+  it('writes an acknowledge-on-view as a MARK, keyed by the stream identity', () => {
+    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'cookrew-marks-')), 'turns')
+    const tracker = new TurnTracker(async () => null, new TurnStore(dir))
+    const marks: { terminalId: string; patch: MarkPatch }[] = []
+    tracker.onMark = (terminalId, patch) => marks.push({ terminalId, patch })
+
+    tracker.replaceHistory('term-1', [
+      { index: 1, prompt: 'a', reply: 'r', uuid: 'u-1', startedAt: 1, endedAt: 2 }
+    ])
+    // seen() needs a tracked terminal in 'replied'; drive the private path the
+    // overlay mount reaches, which is what the acknowledge actually calls.
+    ;(tracker as unknown as { markLastRecordSeen: (id: string) => void }).markLastRecordSeen(
+      'term-1'
+    )
+
+    expect(marks).toHaveLength(1)
+    expect(marks[0].terminalId).toBe('term-1')
+    expect(marks[0].patch.identity).toBe('u-1')
+    expect(typeof marks[0].patch.seenAt).toBe('number')
+    // NEVER conversation text — MarkPatch cannot even name a prompt or a
+    // reply, and marks.ts refuses one by key if a caller finds a way.
+    expect(Object.keys(marks[0].patch).sort()).toEqual(['identity', 'seenAt'])
+  })
+
+  it('marks a legacy record with NO uuid by the derived digest', () => {
+    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'cookrew-marks-')), 'turns')
+    const tracker = new TurnTracker(async () => null, new TurnStore(dir))
+    const marks: MarkPatch[] = []
+    tracker.onMark = (_id, patch) => marks.push(patch)
+
+    tracker.replaceHistory('term-1', [
+      { index: 1, prompt: 'legacy', reply: 'r', startedAt: 1, endedAt: 2 }
+    ])
+    ;(tracker as unknown as { markLastRecordSeen: (id: string) => void }).markLastRecordSeen(
+      'term-1'
+    )
+    expect(marks[0].identity).toMatch(/^claude-1-[0-9a-f]{8}$/)
   })
 
   // Historical records whose title was already wiped from disk by the buggy

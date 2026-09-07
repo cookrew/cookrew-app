@@ -38,7 +38,7 @@
 // repaired here with a log line before a single line is replayed.
 
 import {
-  applyChangeSet,
+  applyChangeSetInto,
   checkpointsInOrder,
   checkpointKey,
   countAnomalies,
@@ -190,7 +190,13 @@ interface Replay {
 function replay(state: StreamState, read: StreamLinesResult, seed: Replay): Replay {
   const positions = filePositions(read)
   const cursorAt = positions.get(state.cursor.file) ?? -1
-  let { snapshot, anomalies, dirty } = seed
+  // PRIVATE FOR THE WHOLE PASS (T4). `seed.snapshot` is built fresh by
+  // rollbackOf/snapshotOf and handed here alone, so this loop owns it and may
+  // upsert INTO it — see applyChangeSetInto for the measurement that made
+  // that worth saying: copying the map per line made a 1,000-block chain
+  // O(n²) (24 ms) and a 4,000-block one 407 ms.
+  const snapshot = seed.snapshot
+  let { anomalies, dirty } = seed
   const collisions: IdentityCollision[] = []
   let cursor = seed.cursor
   let lastOrdinal = 0
@@ -218,7 +224,7 @@ function replay(state: StreamState, read: StreamLinesResult, seed: Replay): Repl
     for (const upsert of change.upserts) {
       const key = checkpointKey(upsert)
       const before = snapshot.get(key)
-      snapshot = applyChangeSet(snapshot, { upserts: [upsert], anomalies: [] })
+      applyChangeSetInto(snapshot, { upserts: [upsert], anomalies: [] })
       dirty = dirty || !sameCheckpoint(before, snapshot.get(key) as ProjectedCheckpoint)
     }
     if (change.cursor === undefined) continue

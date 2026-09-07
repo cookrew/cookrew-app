@@ -14,6 +14,24 @@
 //           a failure: a flap is a wrong rail and a noisy history, not a lost
 //           checkpoint (2026-09-06, Conductor: 295d5f1c <-> a78aa3e5 x8, the
 //           spawn-time adoption defect claude-session-adoption.ts ends).
+//   MARKS   every mark's identity resolves to a row in the card's stream —
+//           the one-stream design's own line: "The reachability gate from
+//           yesterday stays and gains one line: every mark's identity
+//           resolves to a block in the stream. An orphan mark is reported,
+//           never dropped." REPORTED, never a failure, for the same reason
+//           FLAP is: an orphan mark is a title with nowhere to sit, not a
+//           lost checkpoint, and the mark is still on disk for the day its
+//           transcript comes back.
+//
+// WHERE THE MARKS LINE GETS ITS ANSWER, and why it is not a parse. Resolving
+// an identity properly means walking the chain and materialising the index,
+// which is the app's job and would make this gate read 400 MB of transcript
+// per card. It does not have to: the app already writes what it materialised
+// to ~/.cookrew/stream/<id>.json (the shared cursor, T2.5), whose `index`
+// carries one identity per row. So the gate reads the app's OWN answer — the
+// same read-the-record-rather-than-re-derive-it rule the LIVE half follows —
+// and a card whose state has not been written yet says so ("not materialised")
+// instead of claiming every one of its marks is an orphan.
 //
 //   npm run gate:checkpoints            (exit 1 on any FAIL or MISMATCH)
 //
@@ -37,7 +55,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { resolvePaneAgent, withoutDescendantsOfPeers } from '../src/shared/pane-agent.mjs'
-import { flapVerdict, liveVerdict, reachVerdict } from '../src/shared/checkpoint-gate.mjs'
+import { flapVerdict, liveVerdict, marksVerdict, reachVerdict } from '../src/shared/checkpoint-gate.mjs'
 import { SPILL_DIR_NAME, parseSpill } from '../src/shared/lineage-spill-format.mjs'
 
 const HOME = homedir()
@@ -46,6 +64,8 @@ const PROJECTS = path.join(HOME, '.claude', 'projects')
 const COOKREW = path.join(HOME, '.cookrew')
 const WORKSPACES = path.join(COOKREW, 'workspaces')
 const SPILLS = path.join(COOKREW, SPILL_DIR_NAME)
+const MARKS = path.join(COOKREW, 'marks')
+const STREAM_STATE = path.join(COOKREW, 'stream')
 const CLAUDE_COMMAND = /^claude(\s|$)/
 
 function alive(pid) {
@@ -140,6 +160,53 @@ function spillIdsOf(terminalId) {
 }
 
 /**
+ * The identities a card's mark ledger holds, folded last-wins.
+ *
+ * Only the KEYS are read: a mark's title is the owner's text and this gate
+ * prints nothing but ids. A ledger that does not exist is not an absence of
+ * marks to worry about — it is a card nobody has titled.
+ */
+function markIdentities(terminalId) {
+  let text
+  try {
+    text = readFileSync(path.join(MARKS, `${terminalId}.jsonl`), 'utf8')
+  } catch {
+    return []
+  }
+  const lines = text.split('\n')
+  // A file not ending in a newline has a torn tail (marks.ts): drop it.
+  if (text.length > 0 && !text.endsWith('\n')) lines.pop()
+  const identities = new Set()
+  for (const line of lines) {
+    if (line.trim().length === 0) continue
+    try {
+      const parsed = JSON.parse(line)
+      if (typeof parsed?.identity === 'string') identities.add(parsed.identity)
+    } catch {
+      // a line this gate cannot read is a line it does not judge
+    }
+  }
+  return [...identities]
+}
+
+/**
+ * The identities the APP materialised for this card, or null when it has
+ * materialised none yet. Null and empty are different facts: a card the app
+ * has never opened has no answer, and reporting its marks as orphans would be
+ * an alarm about the gate's own timing.
+ */
+function streamIdentities(terminalId) {
+  let state
+  try {
+    state = JSON.parse(readFileSync(path.join(STREAM_STATE, `${terminalId}.json`), 'utf8'))
+  } catch {
+    return null
+  }
+  if (!Array.isArray(state?.index)) return null
+  return new Set(state.index.map((row) => row?.identity).filter((id) => typeof id === 'string'))
+}
+
+/**
  * What the app itself recorded about this card's rotations.
  *
  * The event log is the INDEPENDENT witness both derived claims need: it was
@@ -208,10 +275,19 @@ function rowFor({ workspace, node }, context) {
     hasTranscript: (id) => existsSync(path.join(dir, `${id}.jsonl`))
   })
   const flap = flapVerdict({ rotations: destinations.get(node.id) ?? [] })
+  const marks = marksVerdict({
+    identities: markIdentities(node.id),
+    placed: streamIdentities(node.id)
+  })
   return {
     reach: reach.verdict,
     live: live.verdict,
     flap: flap.verdict === 'FLAP' ? flap.ids.join('/') : '',
+    marks:
+      marks.orphans.length > 0 ? `${marks.orphans.length}/${marks.marks}` : String(marks.marks),
+    marksVerdict: marks.verdict,
+    orphanMarks: marks.orphans.length,
+    markCount: marks.marks,
     workspace,
     card: node.name ?? node.id.slice(0, 8),
     bound: bound ? `${bound.slice(0, 8)} (${ageOf(path.join(dir, `${bound}.jsonl`))})` : '—',
@@ -219,6 +295,7 @@ function rowFor({ workspace, node }, context) {
     pane: resolution.agent ? String(resolution.agent.pid) : '—',
     detail: [
       live.detail,
+      marks.detail,
       reach.missing.length ? `DROPPED FROM THE CHAIN: ${reach.missing.join(' ')}` : '',
       reach.gone.length
         ? `TRANSCRIPT GONE: ${reach.gone.map((id) => id.slice(0, 8)).join(' ')}`
@@ -245,7 +322,7 @@ if (rows.length === 0) {
   process.exit(0)
 }
 
-const columns = ['reach', 'live', 'workspace', 'card', 'bound', 'chain', 'pane', 'detail']
+const columns = ['reach', 'live', 'marks', 'workspace', 'card', 'bound', 'chain', 'pane', 'detail']
 const width = (key) => Math.max(key.length, ...rows.map((r) => String(r[key]).length))
 const line = (row) => columns.map((c) => String(row[c]).padEnd(width(c))).join('  ').trimEnd()
 console.log(line(Object.fromEntries(columns.map((c) => [c, c]))))
@@ -268,6 +345,22 @@ console.log(
     '(reported, never a failure)' +
     (flapping.length === 0 ? '' : `: ${flapping.map((r) => `${r.card} ${r.flap}`).join(', ')}`)
 )
+// ONE STREAM T4: reported, never a failure. A mark whose identity reaches no
+// row is evidence a transcript moved, and the mark is still on disk.
+const withOrphans = rows.filter((r) => r.orphanMarks > 0)
+const undecidableMarks = rows.filter((r) => r.marksVerdict === 'UNKNOWN')
+console.log(
+  `MARKS  ${rows.reduce((sum, r) => sum + r.markCount - r.orphanMarks, 0)} of ` +
+    `${rows.reduce((sum, r) => sum + r.markCount, 0)} mark(s) resolve to a stream row ` +
+    '(reported, never a failure)' +
+    (withOrphans.length === 0
+      ? ''
+      : `: ${withOrphans.map((r) => `${r.card} ${r.orphanMarks}`).join(', ')}`) +
+    (undecidableMarks.length === 0
+      ? ''
+      : ` — ${undecidableMarks.length} card(s) undecidable (no stream index written yet)`)
+)
+
 const failed = unreachable.length + mismatched.length
 console.log(
   failed === 0

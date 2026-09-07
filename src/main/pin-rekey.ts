@@ -1,4 +1,4 @@
-// THE RE-KEY refuseRenumber HAS BEEN DEMANDING (lineage-ledger.ts): a ledger
+// THE RE-KEY refuseRenumber HAS BEEN DEMANDING (session-lineage-walk.ts): a ledger
 // renumber is refused while any pin is keyed only by checkpoint INDEX,
 // because renumbering moves every index out from under those pins — "Re-key
 // pins by checkpoint uuid first, then re-run." This is that re-key. For each

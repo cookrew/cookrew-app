@@ -1,25 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { TurnRecord } from '../../shared/turn'
 import { cookrew } from './api'
 import { CrIcon } from './icons'
 import { type TitleMode } from './checkpoint-sync'
 import { hasRoleFromCheckpoint, saveRoleFromCheckpoint } from './role-checkpoint'
 import { LineagePanel } from './LineagePanel'
+import { CheckpointRowView } from './CheckpointRowView'
+import { createHoldReveal, hasLineageSegmentsApi, railAnchorTop, railPointerFraction } from './transcript'
 import {
   checkpointRowTitle,
-  createHoldReveal,
-  hasLineageSegmentsApi,
-  railAnchorTop,
-  railPointerFraction,
   scrollFocusState,
   scrubPreviewRow,
   type CheckpointRow,
   type TraceMarkerRow
-} from './transcript'
+} from './stream/stream-rows'
 /** RAIL_INSET: the marker inset (matches .cr-ckpt-here top: calc(16px + …)),
  *  used here for scrub mapping. Imported rather than redeclared so the density
- *  rule and the scrub mapping cannot drift — they describe the same 16px. */
-import { countBadgeTop, fillRows, RAIL_INSET } from './rail-fill'
+ *  rule and the scrub mapping cannot drift — they describe the same 16px.
+ *  railAnchors: the F6 gate, as ONE function — see rail-fill.ts. */
+import { countBadgeTop, fillRows, railAnchors, RAIL_INSET } from './rail-fill'
 import { pinAnchors, pinLabel, traceFraction, type VersionPinRecord } from '../../shared/version-pin'
 
 
@@ -70,6 +68,7 @@ export function CheckpointTimeline({
   allowActions = true,
   lineageReach = true,
   ended = false,
+  anomalyNote = null,
   onGoto,
   onLive,
   onScrub
@@ -107,6 +106,13 @@ export function CheckpointTimeline({
    * P10(c) exists to catch.
    */
   ended?: boolean
+  /**
+   * ONE QUIET LINE, NEVER A MODAL. How many lines the stream could not read,
+   * already phrased (stream-rows anomalyLine). A dialog over the rail would
+   * interrupt reading to report something nobody can act on from here; saying
+   * nothing is how a silently shorter history reads as destroyed history.
+   */
+  anomalyNote?: string | null
   /** Select a checkpoint by IDENTITY (works for trace-only sub-cap rows too). */
   onGoto: (index: number) => void
   /** Return to the live tail. */
@@ -232,7 +238,7 @@ export function CheckpointTimeline({
   // checkpoints arrive), the same ordinal now names a DIFFERENT checkpoint,
   // so the two-tap "SURE?" would fire on a row the user never armed. Disarm
   // (and drop any surfaced refusal) on any rows-identity change.
-  const rowsSignature = rows.map((r) => `${r.index}:${r.record?.uuid ?? ''}`).join('|')
+  const rowsSignature = rows.map((r) => `${r.index}:${r.id}`).join('|')
   useEffect(() => {
     setRewindArmed(null)
     setRewindError(null)
@@ -395,7 +401,7 @@ export function CheckpointTimeline({
         {savingIndex === index ? (
           <SaveRoleInline
             terminalId={terminalId}
-            checkpoint={row.record ?? row.index}
+            checkpoint={row.index}
             expectedUuid={row.id}
             onDone={closeActions}
           />
@@ -455,60 +461,27 @@ export function CheckpointTimeline({
         </div>
       ))
 
-  // One row of the extended tab — the same `.cr-ckpt-row` markup, tap → jump,
-  // hold → actions. The focused row is `.active` and sits AT the marker.
+  // One row of the extended tab and one row of the fan are the SAME element
+  // (CheckpointRowView) — see its docblock: two near-identical JSX blocks is
+  // how the focused row drifts off the marker, which is what F6 catches.
   const renderRow = (row: CheckpointRow, style?: React.CSSProperties): React.JSX.Element => {
     const isActive = row.index === here
-    const isActing = acting === row.index
-    const isLoading = loadingIndex === row.index
     return (
-      <div
+      <CheckpointRowView
         key={row.index}
-        role="listitem"
-        className={`cr-ckpt-row${isActive ? ' active' : ''}${isActing ? ' acting' : ''}${
-          isLoading ? ' loading' : ''
-        }`}
-        style={style}
-        aria-label={`Checkpoint ${row.index}`}
-        aria-busy={isLoading || undefined}
-        onMouseDown={(e) => e.preventDefault()}
-        onPointerDown={() => startHold(row.index)}
-        onPointerUp={endHold}
-        onPointerLeave={endHold}
-        onPointerCancel={endHold}
-        onClick={() => onTap(() => onGoto(row.index))}
-      >
-        {rowActions(row, row.index)}
-        <span className="cr-ckpt-row-label">
-          <span className="cr-ckpt-row-idx">T{row.index}</span>
-          {/* F5b two-element marquee: the OUTER span clips, the INNER moves.
-              One element cannot do both — the clip is what makes the overflow
-              measurable in the first place. Only the focused row marquees;
-              the rest keep their ellipsis. */}
-          <span
-            className="cr-ckpt-row-title"
-            ref={isActive ? titleRef : undefined}
-            style={
-              isActive && titleShift > 0
-                ? ({ ['--marquee-shift']: `${-titleShift}px` } as React.CSSProperties)
-                : undefined
-            }
-          >
-            <span
-              className={`cr-ckpt-title-text${isActive && titleShift > 0 ? ' marquee' : ''}`}
-            >
-              {isLoading ? 'loading…' : rowLabel(row)}
-            </span>
-          </span>
-        </span>
-        <span className="cr-ckpt-dot">
-          <i />
-        </span>
-        <span
-          className="cr-ckpt-prog"
-          style={isActive ? ({ ['--p']: 100 } as React.CSSProperties) : undefined}
-        />
-      </div>
+        row={row}
+        label={rowLabel(row)}
+        active={isActive}
+        acting={acting === row.index}
+        loading={loadingIndex === row.index}
+        titleShift={titleShift}
+        {...(isActive ? { titleRef } : {})}
+        actions={rowActions(row, row.index)}
+        {...(style !== undefined ? { style } : {})}
+        onPressStart={() => startHold(row.index)}
+        onPressEnd={endHold}
+        onSelect={() => onTap(() => onGoto(row.index))}
+      />
     )
   }
 
@@ -544,7 +517,14 @@ export function CheckpointTimeline({
   // ONE position source (refinement 1): the marker AND the focused tab/row use
   // the SAME fraction → same Y. At the live tail (no focus) the marker rides its
   // own live fraction.
-  const anchorFrac = focused ? focused.frac : hereFrac
+  //
+  // ONE FUNCTION LAYS BOTH (F6). The marker and the focused tab used to be
+  // given a `top` by two expressions that agreed until a new state made them
+  // disagree by a pixel — the regression the owner has flagged twice. There
+  // is one call now and the two tops are the same string by construction;
+  // tests/stream-f6-alignment.test.ts proves it over every state the stream
+  // reducer can produce, including a rolled-back row and a compaction.
+  const anchors = railAnchors(focused ? focused.frac : null, hereFrac)
 
   /**
    * Fade only when the rail is genuinely unattended.
@@ -715,7 +695,7 @@ export function CheckpointTimeline({
           <span className="n">{rows.length}</span>
           <span className="l">CP</span>
         </div>
-        <div className="cr-ckpt-here" style={{ top: railAnchorTop(anchorFrac) }} />
+        <div className="cr-ckpt-here" style={{ top: anchors.marker }} />
         <div
           className={`cr-ckpt-livedot${ended ? ' ended' : ''}`}
           title={ended ? 'session ended' : undefined}
@@ -757,10 +737,10 @@ export function CheckpointTimeline({
         </div>
       )}
 
-      {focused && focusedRow && (
+      {focused && focusedRow && anchors.focus !== null && (
         <div
           className="cr-ckpt-scrub-preview"
-          style={{ top: railAnchorTop(focused.frac) }}
+          style={{ top: anchors.focus }}
           role="list"
           aria-label="Checkpoints"
         >
@@ -784,6 +764,12 @@ export function CheckpointTimeline({
             */}
             {boundaryRows(focusedRow.index)}
           </div>
+        </div>
+      )}
+
+      {anomalyNote !== null && (
+        <div className="cr-ckpt-anomaly" role="status">
+          {anomalyNote}
         </div>
       )}
 
@@ -833,7 +819,7 @@ function SaveRoleInline({
   onDone
 }: {
   terminalId: string
-  checkpoint: TurnRecord | number
+  checkpoint: number
   /** The row's trace identity — guards the numeric-checkpoint ledger lookup
    *  against the post-compact index divergence (see role-checkpoint.ts). */
   expectedUuid?: string

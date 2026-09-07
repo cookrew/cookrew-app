@@ -23,7 +23,7 @@ import {
 import { SAFE_SUB } from '../src/main/served-callers'
 import { doorNameOf, transcriptSourceFor } from '../src/main/transcript-source'
 import { cardAffordances } from '../src/renderer/src/card-affordances'
-import { mergeCheckpointRows } from '../src/renderer/src/transcript'
+import { rowsOfIndex } from '../src/renderer/src/stream/stream-rows'
 import { doorStateSentence } from '../src/shared/door-transcript-state'
 import type { TerminalNodeData } from '../src/shared/model'
 import type { TurnRecord } from '../src/shared/turn'
@@ -129,7 +129,20 @@ describe('P7 index-identity', () => {
       { signIn: async () => 'tok', fetcher }
     )
     const listing = await door.traceIndex()
-    const rows = mergeCheckpointRows([], listing)
+    // The rail's rows, from ONE listing (one-stream T3). This used to be a
+    // merge of the door's listing with an empty ledger; the claim is the same
+    // and the join is gone: a door card's rows are its own positions.
+    const rows = rowsOfIndex(
+      listing.map((entry) => ({
+        identity: entry.id ?? String(entry.index),
+        ordinal: entry.index,
+        startedAt: 0,
+        endedAt: 0,
+        promptHead: entry.title,
+        compacted: false,
+        file: ''
+      }))
+    )
     expect(rows.map((r) => r.index)).toEqual([3, 4, 7, 9])
     expect(rows.map((r) => r.id)).toEqual(['u3', 'u4', 'u7', 'u9'])
     expect(rows).toHaveLength(history.length)

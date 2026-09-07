@@ -1,7 +1,6 @@
 import { cookrew } from './api'
-import { checkpointTitle, type TitleMode } from './checkpoint-sync'
 import type { TraceBlock } from '../../shared/trace-blocks'
-import type { TurnPhase, TurnRecord } from '../../shared/turn'
+import type { TurnPhase } from '../../shared/turn'
 
 export type { TraceBlock } from '../../shared/trace-blocks'
 
@@ -13,30 +12,13 @@ export type { TraceBlock } from '../../shared/trace-blocks'
  * so identity doubles as the layout ordinal. Array positions appear nowhere.
  */
 
-export interface TracePage {
-  blocks: TraceBlock[]
-  total: number
-  source: 'claude' | 'codex' | 'pi' | null
-}
-
-export interface TraceAnchor {
-  beforeIndex?: number
-  afterIndex?: number
-  aroundIndex?: number
-  limit?: number
-}
-
-interface TraceBridge {
-  listTrace?: (terminalId: string, request?: TraceAnchor) => Promise<TracePage>
-}
-
 /**
  * LOUD ABSENT-BRIDGE RULE (warnMock convention): a feature-detected bridge
- * method that is missing at CALL time silently degrades a real build — an empty
- * transcript / no checkpoints that looks like "no history" rather than "not
- * wired". Log ONCE per method with its name (this is the third silent-absent
- * incident) so it's visible in the console instead of vanishing. Exported so the
- * once-guard is unit-tested.
+ * method that is missing at CALL time silently degrades a real build — an
+ * empty transcript / no checkpoints that looks like "no history" rather than
+ * "not wired". Log ONCE per method with its name (this was the third silent-
+ * absent incident) so it is visible in the console instead of vanishing.
+ * Exported so the once-guard is unit-tested.
  */
 const warnedAbsentBridges = new Set<string>()
 export function warnAbsentBridge(method: string): void {
@@ -44,27 +26,15 @@ export function warnAbsentBridge(method: string): void {
   warnedAbsentBridges.add(method)
   console.error(
     `[cookrew] bridge method \`${method}\` is absent — feature-detected call degraded ` +
-      'to empty. Not wired in this build (or running in demo).',
+      'to empty. Not wired in this build (or running in demo).'
   )
 }
 
-/** True once the trace API is present (absent in the demo). */
-export function hasTraceApi(): boolean {
-  return typeof (cookrew() as unknown as TraceBridge).listTrace === 'function'
-}
-
-/**
- * Fetch a trace window. listTrace is the ONLY path (review BLOCK 1 — no
- * fetch-all fallback); anchors are block identities (review BLOCK 2). Empty
- * when the API is absent — and LOUD about it (absent-bridge rule).
- */
-export async function fetchTracePage(terminalId: string, request: TraceAnchor): Promise<TracePage> {
-  const fn = (cookrew() as unknown as TraceBridge).listTrace
-  if (!fn) {
-    warnAbsentBridge('listTrace')
-    return { blocks: [], total: 0, source: null }
-  }
-  return fn(terminalId, request)
+export interface TraceAnchor {
+  beforeIndex?: number
+  afterIndex?: number
+  aroundIndex?: number
+  limit?: number
 }
 
 /**
@@ -80,41 +50,6 @@ export function mergeTrace(
   for (const b of loaded) byIndex.set(b.index, b)
   for (const b of incoming) byIndex.set(b.index, b)
   return [...byIndex.values()].sort((a, b) => a.index - b.index)
-}
-
-/**
- * Once per session. The clamp firing used to be the normal case; after
- * unified identity it means records and trace blocks have drifted apart again,
- * which is worth seeing rather than silently absorbing.
- */
-let warnedClamped = false
-function warnClamped(dropped: number, ceiling: number): void {
-  if (warnedClamped) return
-  warnedClamped = true
-  console.warn(
-    `[rail] ${dropped} record row(s) numbered past the trace ceiling (T${ceiling}) and were ` +
-      `dropped. Expected zero since unified identity — either the session file is still ` +
-      `flushing, or record and trace indices have diverged again.`,
-  )
-}
-
-/**
- * Once per session, same discipline as warnClamped: a record whose uuid the
- * current trace does not hold belongs to an EARLIER session segment (the
- * ledger continues across a /compact; the trace shows only the current file).
- * Leaving it off the rail is correct — pairing it by index would name a
- * different turn — but the volume is worth seeing: a large count means the
- * rail shows a short tail of a much longer chain.
- */
-let warnedSegment = false
-function warnEarlierSegment(dropped: number): void {
-  if (warnedSegment) return
-  warnedSegment = true
-  console.warn(
-    `[rail] ${dropped} ledger record(s) carry uuids from an earlier session segment ` +
-      `(pre-compact / pre-clear) and were left off the rail — the trace lists only the ` +
-      `current file's turns, and an index pairing would attach them to the wrong rows.`,
-  )
 }
 
 /**
@@ -159,73 +94,6 @@ export interface TraceIndexEntry {
    * remote server; consumers then fall back to index pairing.
    */
   id?: string
-}
-
-interface TraceIndexBridge {
-  listTraceIndex?: (
-    terminalId: string,
-    request?: { afterIndex?: number }
-  ) => Promise<TraceIndexEntry[]>
-}
-
-/** True once Forge's cheap identity-range/title listing is present. */
-export function hasTraceIndexApi(): boolean {
-  return typeof (cookrew() as unknown as TraceIndexBridge).listTraceIndex === 'function'
-}
-
-/**
- * The full trace's checkpoint identities + titles (item 3). Cheap listing so
- * the timeline can span the WHOLE trace (floor..ceiling), not just the capped
- * record store. Empty when the API is absent — the timeline then falls back to
- * the records alone (today's behavior). Coordinated with Forge as listTraceIndex.
- */
-export async function fetchTraceIndex(
-  terminalId: string,
-  request: { afterIndex?: number } = {}
-): Promise<TraceIndexEntry[]> {
-  const fn = (cookrew() as unknown as TraceIndexBridge).listTraceIndex
-  if (!fn) {
-    warnAbsentBridge('listTraceIndex')
-    return []
-  }
-  return fn(terminalId, request)
-}
-
-/** Merge a full or cursor page by checkpoint identity; incoming wins. */
-export function mergeTraceIndex(
-  current: readonly TraceIndexEntry[],
-  incoming: readonly TraceIndexEntry[]
-): TraceIndexEntry[] {
-  const byIndex = new Map(current.map((entry) => [entry.index, entry]))
-  for (const entry of incoming) byIndex.set(entry.index, entry)
-  return [...byIndex.values()].sort((a, b) => a.index - b.index)
-}
-
-/** Boundary marker as the rail renders it (mirrors TraceBoundaryMarker). */
-export interface TraceMarkerRow {
-  kind: 'compact' | 'clear' | 'rewind'
-  afterIndex: number
-  preTokens?: number
-  postTokens?: number
-  previousSessionId?: string
-  toIndex?: number
-}
-
-interface TraceMarkersBridge {
-  listTraceMarkers?: (terminalId: string) => Promise<TraceMarkerRow[]>
-}
-
-/**
- * Boundary markers for the rail (◆ compact / ⇥ clear), empty when the bridge
- * predates the endpoint — same absent-bridge discipline as fetchTraceIndex.
- */
-export async function fetchTraceMarkers(terminalId: string): Promise<TraceMarkerRow[]> {
-  const fn = (cookrew() as unknown as TraceMarkersBridge).listTraceMarkers
-  if (!fn) {
-    warnAbsentBridge('listTraceMarkers')
-    return []
-  }
-  return fn(terminalId)
 }
 
 /**
@@ -277,15 +145,6 @@ export function jumpScrollBehavior(opts: {
   touchActive: boolean
 }): 'auto' | 'smooth' {
   return opts.landed || opts.coarsePointer || opts.touchActive ? 'auto' : 'smooth'
-}
-
-/**
- * Display label for a trace-only checkpoint row (item 2c): its trace title when
- * present, else the T<n> identity — NEVER blank, even before Forge's index (or
- * its titles) lands. Pure — unit-tested.
- */
-export function traceRowLabel(index: number, traceTitle: string): string {
-  return traceTitle.trim() || `T${index}`
 }
 
 // ---- identity-space virtualization (scroll-model rebuild) ----
@@ -382,189 +241,6 @@ export function refineEstimate(prev: number, measured: readonly number[]): numbe
   return usable.reduce((a, b) => a + b, 0) / usable.length
 }
 
-/** A selectable checkpoint row: full record when in the cap, else trace-only. */
-export interface CheckpointRow {
-  index: number
-  /**
-   * The row's trace identity (the block's message uuid) when the listing
-   * carries one. This is what uuid-keyed consumers (version pins, role-save)
-   * anchor on — the index is a display ordinal that a /compact renumbers.
-   */
-  id?: string
-  /** Full record when within the (capped) record store; null for trace-only. */
-  record: TurnRecord | null
-  /** Fallback label for trace-only rows (a trace prompt snippet / title). */
-  traceTitle: string
-}
-
-/**
- * Merge the capped record store with the full trace listing so EVERY traced
- * checkpoint is a selectable row (item 3): records supply full data (title,
- * fork, role-save) where present; identities below the record cap (e.g. T1..T7
- * when the store starts at T8) render trace-only from the listing. Union by
- * IDENTITY, ascending; records win.
- *
- * THE CLAMP. Records that number BEYOND the trace ceiling (record-40 vs
- * trace-38) are phantom rail rows: they map to no trace block, so they carry
- * mispaired titles and dead clicks. The rail is clamped to the trace ceiling
- * and record-only rows past it are dropped. With no listing we cannot know the
- * ceiling, so records are kept as-is.
- *
- * The unified-identity contract has landed, and on real data the clamp no
- * longer fires: across 40 real Claude sessions (4,499 rail rows) zero records
- * numbered past the ceiling. It is deliberately NOT deleted. Two reasons.
- *
- * One, it still guards a live window: a turn the tracker has just recorded can
- * legitimately lead the session file by the time it takes that file to flush,
- * so a record CAN sit one ahead of the trace for a moment. Dropping the row is
- * the right call — a checkpoint you cannot open is worse than one that appears
- * a beat later.
- *
- * Two, scrape-only harnesses have no trace at all, so the ceiling is Infinity
- * and this is already a no-op for them.
- *
- * What changed is that a firing clamp is now a SIGNAL rather than routine. It
- * warns once per session, because silently masking a coordinate divergence is
- * exactly how the original bug survived long enough to need a clamp.
- * Pure apart from that warning — unit-tested.
- *
- * THE UUID JOIN (checkpoint-session-alignment). Index pairing has a failure
- * the clamp cannot catch: a /compact rotates the session file, the trace
- * restarts at T1, and the ledger deliberately CONTINUES its numbering — so
- * ledger record 2 and trace row T2 can be entirely different turns, both
- * comfortably under the ceiling. The trace listing is therefore the BACKBONE
- * (its rows ARE the file the user is looking at, carrying each block's uuid
- * as `id`), and whenever the listing carries ids, a record's uuid decides
- * which row it attaches to: match → that row (record wins on data, the row
- * keeps its trace index); a uuid the trace does not hold → the record belongs
- * to an earlier session segment and is left off the rail (warned once, never
- * mispaired); no uuid at all (legacy scrape records) → the old index pairing
- * with its ceiling clamp. A listing with NO ids (older remote server, legacy
- * fixtures) keeps the historical index merge unchanged.
- */
-export function mergeCheckpointRows(
-  records: readonly TurnRecord[],
-  traceIndex: readonly TraceIndexEntry[],
-): CheckpointRow[] {
-  const byIndex = new Map<number, CheckpointRow>()
-  const ceiling =
-    traceIndex.length > 0
-      ? traceIndex.reduce((max, e) => Math.max(max, e.index), -Infinity)
-      : Infinity
-  for (const entry of traceIndex) {
-    byIndex.set(entry.index, {
-      index: entry.index,
-      ...(entry.id !== undefined ? { id: entry.id } : {}),
-      record: null,
-      traceTitle: entry.title,
-    })
-  }
-  // uuid → the trace row that IS that turn. Non-empty only when the listing
-  // carries ids; empty keeps every record on the historical index path.
-  const rowIndexById = new Map<string, number>()
-  for (const entry of traceIndex) {
-    if (entry.id !== undefined) rowIndexById.set(entry.id, entry.index)
-  }
-  let dropped = 0
-  let droppedSegment = 0
-  for (const record of records) {
-    if (rowIndexById.size > 0 && record.uuid !== undefined) {
-      const at = rowIndexById.get(record.uuid)
-      if (at === undefined) {
-        droppedSegment++
-        continue // an earlier session segment's turn — no row of this file is it
-      }
-      const prior = byIndex.get(at)
-      byIndex.set(at, {
-        index: at,
-        ...(prior?.id !== undefined ? { id: prior.id } : {}),
-        record,
-        traceTitle: prior?.traceTitle ?? '',
-      })
-      continue
-    }
-    if (record.index > ceiling) {
-      dropped++
-      continue // phantom record beyond the trace ceiling
-    }
-    const prior = byIndex.get(record.index)
-    byIndex.set(record.index, {
-      index: record.index,
-      ...(prior?.id !== undefined ? { id: prior.id } : {}),
-      record,
-      traceTitle: prior?.traceTitle ?? '',
-    })
-  }
-  if (dropped > 0) warnClamped(dropped, ceiling)
-  if (droppedSegment > 0) warnEarlierSegment(droppedSegment)
-  return [...byIndex.values()].sort((a, b) => a.index - b.index)
-}
-
-/**
- * The display title for a checkpoint row: the record's mode-aware title
- * (conclusion / precise prompt) when loaded, else the trace snippet, else the
- * T<n> identity — never blank. The single source the fan rows AND the mobile
- * scrub-preview label share. Pure — unit-tested.
- */
-export function checkpointRowTitle(row: CheckpointRow, titleMode: TitleMode): string {
-  return row.record
-    ? checkpointTitle(row.record, titleMode)
-    : traceRowLabel(row.index, row.traceTitle)
-}
-
-/**
- * The checkpoint row a scrub fraction (0..1) points at — mapped LINEARLY over
- * the row identities so a mid-drag resolves to the middle checkpoint, not a
- * loaded-group edge. Drives the mobile scrub-preview so the CURRENT title shows
- * at the thumb while dragging (the touch equivalent of desktop hover-reveal).
- * Null for an empty list. Pure — unit-tested.
- */
-export function scrubPreviewRow(
-  rows: readonly CheckpointRow[],
-  fraction: number,
-): CheckpointRow | null {
-  const id = identityAtFraction(
-    rows.map((r) => r.index),
-    fraction,
-  )
-  if (id === null) return null
-  return rows.find((r) => r.index === id) ?? null
-}
-
-/**
- * Scroll → focus → highlight (scroll-driven list, desktop == mobile): from the
- * identity in view, the FOCUSED checkpoint to highlight, plus whether the list
- * is shown at all (hidden at the live tail, shown once scrolled onto a
- * checkpoint). Driven purely by scroll/focus — no click-to-open. Pure — tested.
- */
-export function scrollFocusState(
-  rows: readonly CheckpointRow[],
-  activeIndex: number | null,
-): { focusedIndex: number | null; listShown: boolean } {
-  const row = focusedCheckpoint(rows, activeIndex)
-  return { focusedIndex: row?.index ?? null, listShown: row !== null }
-}
-
-/**
- * The window of rows for the EXTENDED tab (v3 correction): the focused row plus
- * `radius` neighbors ABOVE and BELOW, clamped at the list ends. The tab is
- * positioned at the focused row's PRECISE identity fraction (the here-marker
- * position), so the focused row sits AT the marker with neighbors up/down — the
- * "full list" IS the grown single tab, sharing one position source of truth (no
- * separate list, no scroll-to-centre that would lose the precise spot). Pure —
- * unit-tested.
- */
-export function neighborWindow(
-  rows: readonly CheckpointRow[],
-  focusedIndex: number | null,
-  radius: number,
-): CheckpointRow[] {
-  if (focusedIndex === null) return []
-  const at = rows.findIndex((r) => r.index === focusedIndex)
-  if (at < 0) return []
-  return rows.slice(Math.max(0, at - radius), Math.min(rows.length, at + radius + 1))
-}
-
 /**
  * The `top` for a rail-anchored element at a scroll FRACTION (0..1) — the ONE
  * position source shared by the here-marker AND the focused tab/row, so they
@@ -575,40 +251,6 @@ export function neighborWindow(
 export function railAnchorTop(fraction: number): string {
   const f = Math.max(0, Math.min(1, fraction))
   return `calc(16px + ${f} * (100% - 32px))`
-}
-
-/**
- * Split a window into the FOCUSED row (the anchor, always kept at the marker Y)
- * and its neighbors ABOVE and BELOW — the fan fans up/down around the anchored
- * focus. Near a boundary the window is already clamped (fewer above OR below),
- * so alignment stays FIRST and the fan simply clips (refinement 2): the focused
- * row never moves off the marker to force centering. Pure — unit-tested.
- */
-export function fanLayout(
-  windowRows: readonly CheckpointRow[],
-  focusedIndex: number,
-): { above: CheckpointRow[]; focused: CheckpointRow | null; below: CheckpointRow[] } {
-  const at = windowRows.findIndex((r) => r.index === focusedIndex)
-  if (at < 0) return { above: [], focused: null, below: [] }
-  return {
-    above: windowRows.slice(0, at),
-    focused: windowRows[at],
-    below: windowRows.slice(at + 1),
-  }
-}
-
-/**
- * The checkpoint currently in FOCUS (mobile v3 State A): the row for the active
- * identity in view, or null when at the live tail / no match. Drives the
- * single-checkpoint tab that tracks the focused chapter as you scroll (the tab
- * shows this row; the mini here-marker rides its fraction). Pure — unit-tested.
- */
-export function focusedCheckpoint(
-  rows: readonly CheckpointRow[],
-  activeIndex: number | null,
-): CheckpointRow | null {
-  if (activeIndex === null) return null
-  return rows.find((r) => r.index === activeIndex) ?? null
 }
 
 export interface HoldReveal {

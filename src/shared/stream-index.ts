@@ -6,7 +6,7 @@
 //     session file and starts another, and every derivation restarted its
 //     numbering at 1 in the new file. The owner's history before the compact
 //     stopped being addressable — reported as destroyed, when in truth the
-//     transcripts were on disk and merely unindexed (lineage-ledger.ts says
+//     transcripts were on disk and merely unindexed (session-lineage-walk.ts says
 //     so at length). The ledger and its rebuild existed to renumber ACROSS
 //     that boundary after the fact. The ordinal here replaces all of it: it
 //     is the block's position in the WHOLE chain, assigned while walking,

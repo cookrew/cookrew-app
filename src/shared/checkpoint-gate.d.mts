@@ -47,3 +47,23 @@ export declare function reachVerdict(input: {
   everBound: readonly string[]
   hasTranscript: (id: string) => boolean
 }): ReachVerdict
+
+export interface MarksVerdict {
+  /** OK = every mark reaches a row. UNKNOWN = no stream index written yet.
+   *  ORPHANS = at least one mark's identity is on no row. Never a failure. */
+  verdict: 'OK' | 'UNKNOWN' | 'ORPHANS'
+  /** Distinct identities the card's mark ledger holds. */
+  marks: number
+  /** The identities that reached no row, in ledger order. */
+  orphans: string[]
+  /** The gate's own sentence, empty when there is nothing to say. */
+  detail: string
+}
+
+export declare function marksVerdict(input: {
+  /** Identities from ~/.cookrew/marks/<id>.jsonl, folded last-wins. */
+  identities: readonly string[]
+  /** Identities the stream materialised, or null when it has materialised
+   *  none — "no answer" and "no rows" are different facts. */
+  placed: ReadonlySet<string> | readonly string[] | null
+}): MarksVerdict

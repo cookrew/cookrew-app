@@ -10,7 +10,7 @@ import { EXPORT_ERROR, fill } from './grant-copy'
 import { NoteRow } from './NoteRow'
 import { BrowserRow } from './BrowserRow'
 import { buildAgentRows, checkpointWanted, type AgentRow as Row } from './agent-rows'
-import { useLatestCheckpoints } from './use-latest-checkpoints'
+import { useStreamTails } from './stream/use-stream-tails'
 import { advanceClock, type ActivityClock } from './activity-clock'
 import { searchAgents } from './agent-search'
 import type { TurnMatch } from '../../shared/turn-search'
@@ -165,7 +165,7 @@ export function RosterPanel({
   // (trace-perf T1) and so does its row here, or the Board says QUIET about
   // a crew the canvas shows mid-sentence.
   const idle = useMemo(() => checkpointWanted(roster, activities), [roster, activities])
-  const checkpoints = useLatestCheckpoints(idle)
+  const checkpoints = useStreamTails(idle)
   const all = useMemo(
     () => buildAgentRows({ roster, activities, checkpoints, now, changedAt }),
     [roster, activities, checkpoints, now, changedAt],

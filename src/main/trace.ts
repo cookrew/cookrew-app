@@ -22,7 +22,7 @@ import {
   traceIndexOf
 } from '../shared/trace-blocks'
 import { claudeSessionFile } from './claude-fork'
-import { sessionChain } from './lineage-ledger'
+import { sessionChain } from './session-lineage-walk'
 import { reachableLineage } from './lineage-spill'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { isCodexCommand, validCodexSessionRef } from './codex-bind'
@@ -349,7 +349,7 @@ export class TraceReader {
    * checkpoints an auto-compact rotation moved out of the current file.
    *
    * Derived from the transcripts' own declared predecessor edges
-   * (lineage-ledger.sessionChain), never from `node.sessionLineage` alone:
+   * (session-lineage-walk.sessionChain), never from `node.sessionLineage` alone:
    * the array records what the app happened to witness, while every rotation
    * durably names its predecessor in the successor's head. A session nothing
    * declares is honestly absent — a shorter true history beats a guessed one.
