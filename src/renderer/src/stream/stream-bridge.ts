@@ -31,7 +31,7 @@ interface StreamBridge {
   streamOpen?: StreamTransport['open']
   streamIndex?: StreamTransport['index']
   streamBlocks?: StreamTransport['blocks']
-  streamMark?: StreamTransport['mark']
+  streamMark?: (terminalId: string, patch: unknown) => Promise<{ ok: boolean; error?: string }>
   streamTail?: (terminalId: string) => Promise<StreamTail>
   streamMarks?: (terminalId: string) => Promise<Record<string, StreamMarks>>
   watchLatest?: (terminalId: string) => Promise<void> | void
@@ -55,9 +55,16 @@ export function createBridgeStreamTransport(): StreamTransport {
     open: bridge.streamOpen,
     index: bridge.streamIndex ?? (() => Promise.resolve({ checkpoints: [] })),
     blocks: bridge.streamBlocks,
-    mark:
-      bridge.streamMark ??
-      (() => Promise.reject(new Error('this build cannot write a checkpoint mark'))),
+    mark: async (terminalId, patch) => {
+      const write = bridge.streamMark
+      if (write === undefined) throw new Error('this build cannot write a checkpoint mark')
+      // A REFUSAL IS DATA, and it has to be raised. marks.ts refuses a patch
+      // carrying conversation text or a key outside the mark's own five, and
+      // an invoke that resolved with {ok:false} would let the optimistic row
+      // stand for a write the ledger never made.
+      const result = await write(terminalId, patch)
+      if (result?.ok === false) throw new Error(result.error ?? 'the mark was refused')
+    },
     live: (terminalId, handlers) => {
       let closed = false
       let lastMarks: Record<string, StreamMarks> = {}

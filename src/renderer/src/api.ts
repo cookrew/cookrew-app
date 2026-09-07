@@ -348,7 +348,31 @@ export interface CookrewApi {
   ) => Promise<RestoreResult>;
   /** Undo the last endpoint restore (rebind to the pre-restore session). */
   undoRestore?: (id: string) => Promise<RestoreResult>;
-  /** Completed turns of a terminal (oldest first) for the card pager. */
+  /**
+   * ONE STREAM (design: docs/site/one-stream-2026-09-07.html, T3). The rail,
+   * the drawer, the pager and the card preview all read these — see
+   * stream/use-stream.ts, which is the only consumer. Optional because the
+   * companion answers them over HTTP instead and the demo answers neither;
+   * a surface with no stream says so rather than rendering an empty rail,
+   * which is the "this agent has no history" confusion this design removes.
+   *
+   * Typed as `unknown` payloads on purpose: the wire shapes are declared once
+   * in stream/stream-types.ts, and re-declaring them here would be a second
+   * copy of a contract to keep in step.
+   */
+  streamOpen?: (terminalId: string) => Promise<unknown>;
+  streamIndex?: (terminalId: string, request?: unknown) => Promise<unknown>;
+  streamBlocks?: (terminalId: string, request?: unknown) => Promise<unknown>;
+  streamTail?: (terminalId: string) => Promise<unknown>;
+  streamMarks?: (terminalId: string) => Promise<unknown>;
+  /** The ONLY write in this design: one mark against one checkpoint identity. */
+  streamMark?: (terminalId: string, patch: unknown) => Promise<unknown>;
+  /**
+   * @deprecated One stream, T3 — the rail and the drawer no longer read this.
+   * Kept for one release for the surfaces that still page a stored ledger
+   * (TurnPager, TeamTurnChooser, CardMenu's checkpoint picker, role-checkpoint
+   * and the fork affordance probe). T4 narrows the store; this goes with it.
+   */
   listTurns: (terminalId: string) => Promise<TurnRecord[]>;
   /**
    * Checkpoint search across EVERY agent's turn ledger, run in main. Returns
@@ -361,6 +385,7 @@ export interface CookrewApi {
    * bodies. Optional — demo lacks it; the transcript feature-detects.
    * blockIndex of turns[i] = response.offset + i (see the contract note).
    */
+  /** @deprecated One stream, T3 — replaced by the stream reads above. */
   listTurnsPage?: (
     terminalId: string,
     request?: {
@@ -375,6 +400,7 @@ export interface CookrewApi {
    * TraceBlock windows read directly from the agent's own session file
    * (Claude/Pi jsonl or Codex rollout). Optional — feature-detect.
    */
+  /** @deprecated One stream, T3 — replaced by the stream reads above. */
   listTrace?: (
     terminalId: string,
     request?: {
@@ -396,6 +422,7 @@ export interface CookrewApi {
    * record store starts at T8). Optional — feature-detected via
    * hasTraceIndexApi(); the timeline falls back to records alone when absent.
    */
+  /** @deprecated One stream, T3 — replaced by the stream reads above. */
   listTraceIndex?: (
     terminalId: string,
     request?: { afterIndex?: number },
@@ -405,6 +432,7 @@ export interface CookrewApi {
    * (lineage segment boundary). Optional — feature-detect; the rail simply
    * renders no markers when absent.
    */
+  /** @deprecated One stream, T3 — replaced by the stream reads above. */
   listTraceMarkers?: (
     terminalId: string,
   ) => Promise<TraceBoundaryMarker[]>;
@@ -430,6 +458,7 @@ export interface CookrewApi {
    * unzoomed agent card show its last turn without spawning a mirror. Optional
    * — feature-detect; the card falls back to "Ready" when absent.
    */
+  /** @deprecated One stream, T3 — replaced by the stream reads above. */
   latestCheckpoint?: (
     terminalId: string,
   ) => Promise<{ prompt: string; reply: string; title?: string } | null>;

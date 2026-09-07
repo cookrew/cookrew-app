@@ -296,6 +296,20 @@ const api = {
     ipcRenderer.invoke('trace:index', terminalId, request),
   listTraceMarkers: (terminalId: string) => ipcRenderer.invoke('trace:markers', terminalId),
   listLineageSegments: (terminalId: string) => ipcRenderer.invoke('trace:lineage', terminalId),
+  // ONE STREAM (T3). The five reads and the one write the rail, the drawer
+  // and the pager use — the desktop's door onto the same StreamService the
+  // HTTP routes serve. There is no live channel here: the file watch behind
+  // trace:latest-watch already says "this card's record changed", and the
+  // bridge transport rides it rather than opening a second watcher.
+  streamOpen: (terminalId: string) => ipcRenderer.invoke('stream:open', terminalId),
+  streamIndex: (terminalId: string, request?: unknown) =>
+    ipcRenderer.invoke('stream:index', terminalId, request),
+  streamBlocks: (terminalId: string, request?: unknown) =>
+    ipcRenderer.invoke('stream:blocks', terminalId, request),
+  streamTail: (terminalId: string) => ipcRenderer.invoke('stream:tail', terminalId),
+  streamMarks: (terminalId: string) => ipcRenderer.invoke('stream:marks', terminalId),
+  streamMark: (terminalId: string, patch: unknown) =>
+    ipcRenderer.invoke('stream:mark', terminalId, patch),
   // T1: the latest checkpoint for a visible card, no PTY. Returns
   // {prompt, reply, title?} | null.
   latestCheckpoint: (terminalId: string) =>
