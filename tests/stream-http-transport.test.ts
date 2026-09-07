@@ -1,14 +1,10 @@
 // THE STREAM'S HTTP TRANSPORT, AND THE OPEN FALLBACK (one-stream T3).
 //
-// T2.5 is landing `/stream/open` in parallel with this phase, so the hook has
-// to work against a server that has it AND against one that does not. The
-// fallback is a single branch and it is tested as one, because the thing it
-// prevents — a rail that renders nothing on a dev build and reads as "this
-// agent has no history" — is precisely the confusion this whole design exists
-// to remove.
-//
-// The fallback is also a SEPARATE COMMIT on this branch. When T2.5 lands, the
-// branch's last commit deletes it and this describe block goes with it.
+// The five routes, and the one distinction that matters throughout: an ABSENT
+// ROUTE IS NOT AN EMPTY HISTORY. A 404 comes back as its own type so a caller
+// can tell "this build does not serve that" from "this agent has nothing" —
+// the confusion that made 400 checkpoints look destroyed when they were
+// merely unindexed.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -93,48 +89,14 @@ describe('open — one round trip when the server has the route', () => {
   })
 })
 
-describe('open — the fallback for a server that predates T2.5', () => {
-  beforeEach(() => {
-    answer = (url) =>
-      url.endsWith('/stream/open')
-        ? { status: 404, body: { error: 'not found' } }
-        : { status: 200, body: INDEX_ANSWER }
-  })
-
-  it('falls back to the full /stream/index rather than showing an empty rail', async () => {
-    const { createHttpStreamTransport } = await load()
-    const open = await createHttpStreamTransport().open('t1')
-    expect(calls.map((c) => c.url)).toEqual([
-      '/api/terminal/t1/stream/open',
-      '/api/terminal/t1/stream/index'
-    ])
-    expect(open.index.map((r) => r.ordinal)).toEqual([1])
-    expect(open.source).toBe('file')
-  })
-
-  it('has no tail of its own — the live subscription’s first frame supplies it', async () => {
-    const { createHttpStreamTransport } = await load()
-    expect((await createHttpStreamTransport().open('t1')).tail).toBeNull()
-  })
-
-  it('a full listing has nothing older, so there is no backwards cursor', async () => {
-    const { createHttpStreamTransport } = await load()
-    expect((await createHttpStreamTransport().open('t1')).backwardsCursor).toBeNull()
-  })
-
-  it('counts missing files and orphan marks as anomalies instead of dropping them', async () => {
-    const { createHttpStreamTransport } = await load()
-    const open = await createHttpStreamTransport().open('t1')
-    expect(open.anomalies).toEqual({ missingFile: 1, orphanMark: 2 })
-  })
-
-  it('a 404 on the FALLBACK is a real failure and propagates', async () => {
+describe('an absent route is not an empty history', () => {
+  it('a 404 comes back as its own type, never as a card with no checkpoints', async () => {
     answer = () => ({ status: 404, body: { error: 'no such terminal' } })
     const { createHttpStreamTransport, StreamRouteAbsent } = await load()
     await expect(createHttpStreamTransport().open('t1')).rejects.toBeInstanceOf(StreamRouteAbsent)
   })
 
-  it('a 500 on the open is NOT swallowed — only an absent route is', async () => {
+  it('a 500 is a failure and says what it was', async () => {
     answer = () => ({ status: 500, body: { error: 'the reader fell over' } })
     const { createHttpStreamTransport } = await load()
     await expect(createHttpStreamTransport().open('t1')).rejects.toThrow('the reader fell over')
@@ -183,26 +145,18 @@ describe('the tail alone, for a card preview or a board row', () => {
     expect(tail?.marks?.title).toBe('fixed the seam')
   })
 
-  it('falls back to the deprecated /latest on a server with no open', async () => {
-    answer = (url) =>
-      url.endsWith('/stream/open')
-        ? { status: 404, body: { error: 'not found' } }
-        : { status: 200, body: { prompt: 'p', reply: 'r', title: 'from sous' } }
-    const { createHttpStreamTransport } = await load()
-    const tail = await createHttpStreamTransport().tail('t1')
-    expect(calls.map((c) => c.url)).toEqual([
-      '/api/terminal/t1/stream/open',
-      '/api/terminal/t1/latest'
-    ])
-    expect(tail?.block?.prompt).toBe('p')
-    expect(tail?.marks?.title).toBe('from sous')
-  })
-
   it('a card with no turn yet is null, not an empty preview', async () => {
-    answer = (url) =>
-      url.endsWith('/stream/open')
-        ? { status: 404, body: { error: 'not found' } }
-        : { status: 200, body: null }
+    answer = () => ({
+      status: 200,
+      body: {
+        index: [],
+        tail: null,
+        backwardsCursor: null,
+        source: 'file',
+        anomalies: {},
+        rolledBack: []
+      }
+    })
     const { createHttpStreamTransport } = await load()
     expect(await createHttpStreamTransport().tail('t1')).toBeNull()
   })

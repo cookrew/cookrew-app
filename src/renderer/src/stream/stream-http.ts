@@ -22,13 +22,13 @@ import type {
   StreamIndexPage,
   StreamMarks,
   StreamOpen,
-  StreamTail,
-  TranscriptSource
+  StreamTail
 } from './stream-types'
 import type { StreamLiveHandlers, StreamTransport } from './stream-transport'
 
-/** Thrown for a route this build's server does not serve — the one failure
- *  the open fallback is allowed to swallow. Everything else propagates. */
+/** Thrown for a route this build's server does not serve. Its own type so a
+ *  caller can tell "this build has no such route" from "this card has no
+ *  history" — the distinction the whole design exists to keep visible. */
 export class StreamRouteAbsent extends Error {
   constructor(path: string) {
     super(`no stream route at ${path}`)
@@ -74,114 +74,24 @@ function query(cursor: StreamCursor): string {
 const base = (terminalId: string, leaf = ''): string =>
   apiPath(`/api/terminal/${encodeURIComponent(terminalId)}/stream${leaf}`)
 
-/** What today's `/stream/index` answers, before T2.5's pagination. */
-interface LegacyIndexAnswer {
-  checkpoints: StreamIndexPage['checkpoints']
-  missing?: unknown[]
-  orphanMarks?: unknown[]
-  source: TranscriptSource
-  nextCursor?: string | null
-  backwardsCursor?: string | null
-  total?: number
-}
-
-/**
- * ONE OPEN, and — until T2.5 lands — a fallback for a server that has none.
- *
- * <<< FALLBACK: /stream/open, removable in one commit. Everything between
- * this marker and its twin exists only so this branch runs against a dev
- * build whose server predates T2.5. It is a separate commit deliberately. >>>
- */
+/** ONE OPEN — the whole first paint in one round trip. */
 async function open(terminalId: string): Promise<StreamOpen> {
-  try {
-    return await readJson<StreamOpen>(base(terminalId, '/open'))
-  } catch (error) {
-    if (!(error instanceof StreamRouteAbsent)) throw error
-    return openFromIndex(terminalId)
-  }
+  return readJson<StreamOpen>(base(terminalId, '/open'))
 }
 
-/**
- * The open, rebuilt from the routes that exist on dev today.
- *
- * The full index is one read (it is the light projection — a head per row,
- * never a body), the tail arrives as the live subscription's first frame, and
- * there is nothing older than a full listing, so the backwards cursor is
- * null. `missing` and `orphanMarks` are counted as anomalies rather than
- * dropped: they are the same "something moved" evidence T2.5 will classify.
- */
-async function openFromIndex(terminalId: string): Promise<StreamOpen> {
-  const answer = await readJson<LegacyIndexAnswer>(base(terminalId, '/index'))
-  const anomalies: Record<string, number> = {}
-  if ((answer.missing?.length ?? 0) > 0) anomalies.missingFile = answer.missing!.length
-  if ((answer.orphanMarks?.length ?? 0) > 0) anomalies.orphanMark = answer.orphanMarks!.length
-  return {
-    index: answer.checkpoints ?? [],
-    tail: null,
-    backwardsCursor: answer.backwardsCursor ?? null,
-    source: answer.source,
-    anomalies,
-    rolledBack: []
-  }
-}
 /**
  * The TAIL alone, for a card preview or a board row.
  *
  * `/stream/open` already carries it, and taking the tail out of that answer
- * costs one read; there is no cheaper route today. That is why the fallback
- * below matters more here than anywhere else: a board of idle agents on a
- * pre-T2.5 server would otherwise pull a full index page per agent per poll.
+ * costs one read — a board of twenty idle agents draws twenty one-line
+ * previews without pulling twenty index pages of its own.
  */
 async function tail(terminalId: string): Promise<StreamTail | null> {
-  try {
-    const open = await readJson<StreamOpen>(base(terminalId, '/open'))
-    const newest = open.index[open.index.length - 1]
-    const marks = newest?.identity === open.tail?.block?.id ? newest?.marks : undefined
-    return open.tail === null ? null : { ...open.tail, ...(marks !== undefined ? { marks } : {}) }
-  } catch (error) {
-    if (!(error instanceof StreamRouteAbsent)) throw error
-    return tailFromLatest(terminalId)
-  }
+  const answer = await readJson<StreamOpen>(base(terminalId, '/open'))
+  const newest = answer.index[answer.index.length - 1]
+  const marks = newest?.identity === answer.tail?.block?.id ? newest?.marks : undefined
+  return answer.tail === null ? null : { ...answer.tail, ...(marks !== undefined ? { marks } : {}) }
 }
-
-/**
- * The tail from the DEPRECATED /latest route, for a server without an open.
- *
- * It is the one place this branch reaches back to a route T3 is retiring, and
- * it is deliberate: the alternative on a pre-T2.5 build is a full index page
- * per idle agent per poll on the board, which is a real cost regression for a
- * one-line preview. /latest is a bounded tail read (~1 ms) and answers exactly
- * this question.
- *
- * It carries no ordinal and no chain length, so both are reported as unknown
- * rather than guessed — a preview needs the words, not the position.
- */
-async function tailFromLatest(terminalId: string): Promise<StreamTail | null> {
-  const latest = await readJson<{ prompt: string; reply: string; title?: string } | null>(
-    apiPath(`/api/terminal/${encodeURIComponent(terminalId)}/latest`)
-  )
-  if (latest === null || latest === undefined) return null
-  return {
-    block: {
-      id: '',
-      index: 0,
-      ordinal: 0,
-      prompt: latest.prompt,
-      reply: latest.reply,
-      activity: [],
-      startedAt: 0,
-      endedAt: 0,
-      compacted: false,
-      file: '',
-      sessionId: ''
-    },
-    final: true,
-    ordinal: null,
-    total: 0,
-    ...(latest.title !== undefined ? { marks: { title: latest.title } } : {})
-  }
-}
-/** <<< END FALLBACK >>> */
 
 export function createHttpStreamTransport(): StreamTransport {
   return {
