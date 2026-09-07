@@ -1005,14 +1005,14 @@ export class TurnTracker extends EventEmitter {
    * history (positions drifted, foreign records interleaved) falls back to
    * the full reconcile rather than guessing.
    *
-   * O(delta) END TO END (Sol r5 P1): both incremental kinds MUTATE the
-   * tracker-private buffer in place — the untouched prefix is never copied
-   * (see `histories` for why that bend of the immutability rule is safe) —
-   * and hand TurnStore.scheduleDelta the exact changed records, so the
-   * annotation pass folds in only those and the JSONL write appends (or
-   * replaces just the last line) instead of visiting every record. The one
-   * incremental shape that cannot name its change — the boundary dedupe
-   * actually dropping a phantom twin, a shrink — takes the full save path.
+   * O(delta) IN THE BUFFER (Sol r5 P1, narrowed by one-stream T4): both
+   * incremental kinds MUTATE the tracker-private buffer in place — the
+   * untouched prefix is never copied (see `histories` for why that bend of
+   * the immutability rule is safe). The other half of that sentence used to
+   * be "and hand TurnStore.scheduleDelta the exact changed records"; there is
+   * no delta save, and no save, because a record landing here was derived
+   * from a transcript that is still on disk. What remains O(delta) is the
+   * work this process actually does per turn.
    */
   applyHistoryDelta(
     terminalId: string,
@@ -1117,29 +1117,15 @@ export class TurnTracker extends EventEmitter {
   /**
    * The delta landing: the tracker-private buffer was already mutated in
    * place (the whole point — no prefix copy), so this only invalidates the
-   * point-in-time snapshot, hands the store the same buffer plus the NAMES of
-   * the changed records, and runs the shared observers.
-   */
-  /**
-   * AFTERCOMMIT RUNS BEFORE THE WRITE IS DURABLE, and can now outlive it.
+   * point-in-time snapshot and runs the shared observers.
    *
-   * scheduleDelta queues a debounced write; afterCommit publishes immediately.
-   * That gap has always existed — an observer learns about a turn ~300ms before
-   * the bytes land — and was harmless while every queued write eventually
-   * landed. It no longer is: TurnStore.flush may REFUSE a write whose premise
-   * went stale between here and the flush (see the choke point there), so the
-   * activity push can describe a turn that never reached disk.
-   *
-   * Left as it is, deliberately. Publishing after the flush would put the UI
-   * behind the debounce for every turn to make a rare case tidy, and the case
-   * self-heals: the next reconcile finds the premise broken, takes the full
-   * path, merges against the durable ledger and writes. The cost is a turn that
-   * appears, and then appears again correctly numbered. The alternative — the
-   * write that refusal prevents — is every record the writer could not see.
-   *
-   * Named here because this is where the two facts meet, and because the next
-   * person to profile this seam will find afterCommit on the write path and
-   * reasonably assume everything below it succeeded.
+   * THE PUBLISH-BEFORE-DURABLE GAP CLOSED WITH THE WRITER (T4). This is where
+   * the note about afterCommit running ahead of a debounced write used to be:
+   * scheduleDelta queued the bytes for ~300ms and could then REFUSE them on a
+   * stale premise, so an activity push could describe a turn that never
+   * reached disk. Nothing is queued and nothing is refused now — the record
+   * this publishes was derived from a transcript that was on disk before this
+   * function was called.
    */
   private commitDelta(terminalId: string, _changed: TurnRecord[]): void {
     const records = this.liveHistory(terminalId)
@@ -2961,15 +2947,17 @@ export class TurnTracker extends EventEmitter {
    * back-fill the freshly appended TurnRecord. This is what gives short
    * turns (which end before any mid-turn refresh fires) their title.
    *
-   * INDEXED DELTA, not a whole-history map/full-save (Sol r6, r5 P1's
-   * evidence): a title is an annotation-only change to ONE record. Locate it,
-   * replace just that slot in the tracker-private buffer (the sanctioned
-   * in-place bend — see `histories`), and hand the store exactly the changed
-   * record via scheduleDelta: the annotation pass folds in one record and the
-   * conversation flush writes nothing, because a title never alters a
-   * conversation line. The record is normally the tail; when a newer turn
-   * landed while Sous summarized, the flush's own tail check simply falls
-   * back to the safe full write — correctness never rides on position.
+   * ONE RECORD, ONE MARK (Sol r6's indexed delta, become T4's mark). A title
+   * is an annotation-only change to ONE record: locate it, replace just that
+   * slot in the tracker-private buffer (the sanctioned in-place bend — see
+   * `histories`), and write ONE mark on that record's stream identity. A
+   * scrape-source card additionally re-persists its history, because the
+   * ledger is the only record it has; a file-backed one writes no
+   * conversation at all, which is the whole of T4.
+   *
+   * The record is normally the tail; when a newer turn landed while Sous
+   * summarized, lastPositionOfIndex finds it anyway — correctness never rides
+   * on position.
    */
   private async finalizeTitle(t: TrackedTerminal, recordIndex: number): Promise<void> {
     // Breaker open or busy: the record stays untitled and the pump owns it.

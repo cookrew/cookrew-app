@@ -24,15 +24,11 @@
 // its history persisted — that is scrape-history.ts, one small append-only
 // writer with one job, never reached for a 'file' or 'door' card.
 //
-// IT STILL READS OVERLAYS. The ledgers ON DISK were written by the old writer
-// and are full of them:
-//
-//   {"__tail":true,"supersedes":<index>,<…the record's own fields…>}
-//
-// meaning "the newest version of checkpoint <index> is this line". Last-wins
-// per index. Deleting the parser with the writer would have blanked the tail
-// of every ledger the rollback path reads — which is the one job this module
-// still has.
+// IT STILL READS OVERLAYS. The ledgers ON DISK are full of the old writer's
+// `{"__tail":true,"supersedes":<index>,…}` lines, meaning "the newest version
+// of checkpoint <index> is this one". Last-wins per index. Deleting the parser
+// with the writer would have blanked the tail of every ledger the rollback
+// path reads — which is the one job this module still has.
 //
 // EVERY CACHE IS STAT-VALIDATED, and that is a change. The old caches were
 // write-through: this process was the only writer, so what it had written was
