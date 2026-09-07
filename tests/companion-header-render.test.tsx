@@ -63,17 +63,17 @@ describe('the companion bar', () => {
     stubPhone()
     const group = brandGroup(bar())
     expect(group).toContain('cr-path')
-    expect(group.indexOf('cr-hand-mark')).toBeLessThan(group.indexOf('cr-brand-motion'))
-    expect(group.indexOf('cr-brand-motion')).toBeLessThan(group.indexOf('cr-path'))
+    expect(group.indexOf('cr-hand-mark')).toBeLessThan(group.indexOf('cr-logo-mark'))
+    expect(group.indexOf('cr-logo-mark')).toBeLessThan(group.indexOf('cr-path'))
     // no text twin of the wordmark — the lockup spells it
     expect(group).not.toContain('cr-logo"')
   })
 
-  it('wears the C hand alone in remote mode — the lockup stays on the desktop, the badge refreshes', () => {
+  it('carries both marks in remote mode — the hand for portrait, the still lockup for landscape — and the badge refreshes', () => {
     stubPhone()
     const html = bar()
     expect(html).toContain('cr-hand-mark')
-    expect(html).not.toContain('cr-logo-mark')
+    expect(html).toContain('cr-logo-mark')
     expect(html).not.toContain('Refresh the canvas')
   })
 

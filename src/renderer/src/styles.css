@@ -172,6 +172,21 @@ body,
   -webkit-user-drag: none;
 }
 
+/* THE PHONE BAR: the hand alone in portrait, the still lockup once landscape has the room. */
+body.cookrew-mobile .cr-logo-mark {
+  display: none;
+}
+
+@media (min-width: 700px) {
+  body.cookrew-mobile .cr-logo-mark {
+    display: flex;
+  }
+
+  body.cookrew-mobile .cr-hand-mark {
+    display: none;
+  }
+}
+
 .cr-logo {
   font-family: var(--font-pixel);
   font-weight: 700;
