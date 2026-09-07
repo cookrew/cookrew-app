@@ -4,7 +4,7 @@ import type net from 'node:net'
 import type { Duplex } from 'node:stream'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { networkInterfaces } from 'node:os'
+import { publishedLocalAddresses } from './local-interfaces'
 import { MOBILE_PORT, MOBILE_HTTPS_PORT } from './mobile-ports'
 import {
   nodeIdOfRoute,
@@ -481,14 +481,17 @@ function listenWithRetry(server: net.Server, port: number): void {
   bind()
 }
 
+/**
+ * The LAN addresses worth handing a phone — real interfaces only, en* first.
+ *
+ * This used to be every non-internal IPv4 the OS reported, which on a Mac with
+ * a container runtime is the Wi-Fi plus four host-only bridges (five addresses,
+ * four bridges, 2026-09-08). Filtering HERE rather than downstream is what
+ * makes the endpoint list, the reach card, the trusted names and the cert SANs
+ * agree: they all derive from this one answer.
+ */
 function localAddresses(): string[] {
-  const ips: string[] = []
-  for (const list of Object.values(networkInterfaces())) {
-    for (const net of list ?? []) {
-      if (net.family === 'IPv4' && !net.internal) ips.push(net.address)
-    }
-  }
-  return ips
+  return publishedLocalAddresses()
 }
 
 /**
