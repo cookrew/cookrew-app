@@ -105,17 +105,41 @@ function ordered(rows: readonly StreamCheckpoint[]): StreamCheckpoint[] {
 export function mergeIndex(
   current: readonly StreamCheckpoint[],
   incoming: readonly StreamCheckpoint[]
-): StreamCheckpoint[] {
+): readonly StreamCheckpoint[] {
   const byIdentity = new Map<string, StreamCheckpoint>()
   for (const row of current) byIdentity.set(row.identity, row)
+  let changed = false
   for (const row of incoming) {
     const prior = byIdentity.get(row.identity)
-    byIdentity.set(
-      row.identity,
+    const next =
       prior?.marks !== undefined && row.marks === undefined ? { ...row, marks: prior.marks } : row
-    )
+    if (prior === undefined || !sameRow(prior, next)) changed = true
+    byIdentity.set(row.identity, next)
   }
+  // A LIVE TAIL TICKS FOREVER, and a merge that always returned a new array
+  // would give the rail a new identity every second: the rows re-project, the
+  // pager rebuilds, and the drawer's coalescing single-flight is thrown away
+  // mid-fetch. So an unchanged merge is the SAME array, and every memo
+  // downstream is allowed to mean what it says.
+  // Nothing new and nothing different: `current` is already ordered, so it IS
+  // the answer. (A new identity always sets `changed`, so the map cannot have
+  // grown without the flag.)
+  if (!changed) return current
   return ordered([...byIdentity.values()])
+}
+
+/** Two rows are the same when nothing the rail draws from them differs. */
+function sameRow(a: StreamCheckpoint, b: StreamCheckpoint): boolean {
+  return (
+    a.identity === b.identity &&
+    a.ordinal === b.ordinal &&
+    a.startedAt === b.startedAt &&
+    a.endedAt === b.endedAt &&
+    a.promptHead === b.promptHead &&
+    a.compacted === b.compacted &&
+    a.rolledBack === b.rolledBack &&
+    JSON.stringify(a.marks ?? null) === JSON.stringify(b.marks ?? null)
+  )
 }
 
 /**
@@ -177,14 +201,14 @@ function cached(
 function markRolledBack(
   rows: readonly StreamCheckpoint[],
   fromOrdinal: number
-): StreamCheckpoint[] {
+): readonly StreamCheckpoint[] {
   let changed = false
   const next = rows.map((row) => {
     if (row.ordinal < fromOrdinal || row.rolledBack === true) return row
     changed = true
     return { ...row, rolledBack: true as const }
   })
-  return changed ? next : [...rows]
+  return changed ? next : rows
 }
 
 /** Patch exactly one row's marks. `null` clears them. */
@@ -192,7 +216,7 @@ function patchMark(
   rows: readonly StreamCheckpoint[],
   identity: string,
   mark: StreamMarks | null
-): StreamCheckpoint[] {
+): readonly StreamCheckpoint[] {
   let changed = false
   const next = rows.map((row) => {
     if (row.identity !== identity) return row
@@ -203,7 +227,7 @@ function patchMark(
     }
     return { ...row, marks: mark }
   })
-  return changed ? next : [...rows]
+  return changed ? next : rows
 }
 
 /** The tail's row folded into the index: patched in place, or appended. */

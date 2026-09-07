@@ -298,3 +298,37 @@ describe('rowOfBlock — the rail row a live tail implies', () => {
     expect(rowOfBlock(block(1, { prompt: long }), undefined).promptHead).toHaveLength(120)
   })
 })
+
+describe('a quiet tick costs nothing downstream', () => {
+  it('an unchanged merge returns the SAME array, so the memos below mean something', () => {
+    const state = opened()
+    const again = streamReducer(state, {
+      kind: 'tail',
+      tail: { block: block(3), final: true, ordinal: 3, total: 3 }
+    })
+    // A live tail ticks forever. If every tick handed the rail a new index
+    // array, the rows would re-project, the pager would rebuild, and the
+    // drawer's coalescing single-flight would be thrown away mid-fetch.
+    expect(again.index).toBe(state.index)
+  })
+
+  it('a mark for nobody, and a rollback already recorded, leave the rows alone', () => {
+    const state = opened()
+    expect(streamReducer(state, { kind: 'mark', identity: 'nope', mark: {} }).index).toBe(
+      state.index
+    )
+    const rolled = streamReducer(state, { kind: 'rollback', fromOrdinal: 2, at: 1 })
+    expect(streamReducer(rolled, { kind: 'rollback', fromOrdinal: 2, at: 1 }).index).toBe(
+      rolled.index
+    )
+  })
+
+  it('a real change still produces a new array', () => {
+    const state = opened()
+    const grown = streamReducer(state, {
+      kind: 'tail',
+      tail: { block: block(4), final: false, ordinal: 4, total: 4 }
+    })
+    expect(grown.index).not.toBe(state.index)
+  })
+})

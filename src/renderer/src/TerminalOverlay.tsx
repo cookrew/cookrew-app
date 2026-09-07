@@ -184,7 +184,16 @@ function TerminalOverlay({
   const traceMarkers = stream.markers
   // The drawer's windows, named by identity (stream-pager.ts). Rebuilt when
   // the index moves, because that is what resolves an ordinal to a cursor.
-  const pager = useMemo(() => streamPagerOf(stream), [stream.index, stream.total, stream])
+  // Memoised on the pieces the pager READS, not on the handle: `stream` is a
+  // fresh object every render, so keying on it would hand the drawer a new
+  // pager per frame — and the pager is what the drawer's coalescing
+  // single-flight is built from, so a rapid second far-jump would be dropped.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const pager = useMemo(
+    () => streamPagerOf(stream),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [stream.index, stream.total, stream.blocksAround, stream.blocksAfter]
+  )
 
   // WHY the rail is empty or stale, for a remote card — a named state from
   // the door, rendered as a sentence in the session strip (P10). Re-read
