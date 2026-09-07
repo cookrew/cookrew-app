@@ -1,6 +1,7 @@
 import { readHelloReply } from '../../../shared/hello-proof'
 import { addressFromTrustedName } from '../../../shared/reach-names'
 import type { TrustedNetwork } from '../../../shared/trusted-origin'
+import { isLocalOrigin, type AddressSpaceHint } from '../local-network'
 import {
   classifyHelloFailure,
   monotonicNow,
@@ -52,6 +53,16 @@ export interface PlaneAttempt {
   readonly chosen: boolean
   /** The browser's own words about a failure, scrubbed of anything address-shaped. */
   readonly detail?: string
+  /**
+   * THE ADDRESS-SPACE VARIANT, where it changes what the row means.
+   *
+   * 'none' on an answer means the probe only got through after dropping the
+   * local-network annotation; 'none' on a 'blocked' row means it was refused
+   * with AND without it. Both are the proxy signature (Chrome 152, 2026-09-08),
+   * and both send a reader somewhere different from the plain sentence. Absent
+   * everywhere it would say nothing — see toldHint.
+   */
+  readonly hint?: AddressSpaceHint
 }
 
 /**
@@ -78,6 +89,13 @@ export const attemptName = (origin: string): string => {
 /** What one tier's race produced: the winner if there was one, and the story. */
 interface TierResult {
   readonly won: string | null
+  /**
+   * THE VARIANT THE WINNER'S HELLO ACTUALLY ANSWERED ON, so the plane can keep
+   * talking the way that worked (Chrome 152 behind a system proxy, 2026-09-08 —
+   * see local-network.ts · AddressSpaceHint). Undefined where the probe
+   * recorded none, which leaves the address to decide as it always did.
+   */
+  readonly answeredWith?: AddressSpaceHint
   readonly attempts: readonly PlaneAttempt[]
 }
 
@@ -109,16 +127,20 @@ export const raceTier = async (
  */
 const rowOf = (probe: Probe): Omit<PlaneAttempt, 'plane' | 'chosen'> => {
   const name = attemptName(probe.origin)
-  if (probe.kind === 'answered') return { name, outcome: 'answered', ms: Math.round(probe.ms) }
   // It said something and what it said was not this Mac's hello: a wrong
   // device, a nonce it did not echo, or a signature over somebody else's
   // endpoint. That is "answered and not believed", never "no answer".
   if (probe.kind === 'unreadable') return { name, outcome: 'unverified', ms: Math.round(probe.ms) }
+  const hint = probe.hint ? { hint: probe.hint } : {}
+  if (probe.kind === 'answered') {
+    return { name, outcome: 'answered', ms: Math.round(probe.ms), ...hint }
+  }
   const { failure } = probe
   return {
     name,
     outcome: failure.kind,
     ms: failure.ms,
+    ...hint,
     ...(failure.status !== undefined ? { status: failure.status } : {}),
     ...(failure.detail !== undefined ? { detail: failure.detail } : {})
   }
@@ -160,7 +182,11 @@ const verifyInOrder = async (
       : row
   )
   return proved
-    ? { won: attempt.origin, attempts }
+    ? {
+        won: attempt.origin,
+        ...(attempt.answeredWith ? { answeredWith: attempt.answeredWith } : {}),
+        attempts
+      }
     : verifyInOrder(rest, attempts, deviceId, deps)
 }
 
@@ -173,13 +199,50 @@ interface MeasuredReply {
   readonly signedOrigin: string
   readonly issuedAtMs: number
   readonly ms: number
+  /** The address-space variant this answer came back on. See TierResult. */
+  readonly answeredWith?: AddressSpaceHint
 }
 
-/** One candidate's probe, before anybody decides what to call it. */
+/**
+ * One candidate's probe, before anybody decides what to call it.
+ *
+ * `hint` is the ROW's version of the variant and is not `measured.answeredWith`:
+ * the plane needs to know how it got through every time, and a reader only
+ * needs telling when the answer is news. See toldHint.
+ */
 type Probe =
-  | { readonly kind: 'answered'; readonly origin: string; readonly ms: number; readonly measured: MeasuredReply }
+  | {
+      readonly kind: 'answered'
+      readonly origin: string
+      readonly ms: number
+      readonly measured: MeasuredReply
+      readonly hint?: AddressSpaceHint
+    }
   | { readonly kind: 'unreadable'; readonly origin: string; readonly ms: number }
-  | { readonly kind: 'failed'; readonly origin: string; readonly ms: number; readonly failure: HelloFailed }
+  | {
+      readonly kind: 'failed'
+      readonly origin: string
+      readonly ms: number
+      readonly failure: HelloFailed
+      readonly hint?: AddressSpaceHint
+    }
+
+/**
+ * THE VARIANT, ONLY WHERE IT IS NEWS TO A READER.
+ *
+ * A candidate no browser ever annotates — a CGNAT tailnet address is public by
+ * every reckoning — answers 'none' every single time, and a row saying
+ * "answered without the local-network hint" there would invent a proxy that is
+ * not in the story. So the word is recorded only for a LOCAL address, where
+ * 'none' means the probe genuinely fell back, and only for a failure that was
+ * refused BOTH ways, which is the signature of the proxy case (Chrome 152,
+ * 2026-09-08).
+ */
+const toldHint = (origin: string, result: HelloResult): AddressSpaceHint | undefined => {
+  if (!isLocalOrigin(origin)) return undefined
+  if (result.ok) return result.hint
+  return (result.attempts?.length ?? 0) > 1 ? 'none' : undefined
+}
 
 /**
  * The candidates that said the right words, fastest first, order preserved.
@@ -232,20 +295,24 @@ const probeTier = async (
         .catch((error): HelloResult => classifyHelloFailure({ error, ms: 0, timedOut: false }))
       const ms = Math.max(0, now() - started)
       const origin = candidate.origin
-      if (!result.ok) return { kind: 'failed', origin, ms: result.ms, failure: result }
+      const told = toldHint(origin, result)
+      const hint = told ? { hint: told } : {}
+      if (!result.ok) return { kind: 'failed', origin, ms: result.ms, failure: result, ...hint }
       const read = readHelloReply(result.reply, { origin, deviceId, nonce })
       if (!read.ok) return { kind: 'unreadable', origin, ms }
       return {
         kind: 'answered',
         origin,
         ms,
+        ...hint,
         measured: {
           origin,
           nonce,
           sig: read.proof.sig,
           signedOrigin: read.proof.origin,
           issuedAtMs: read.proof.issuedAtMs,
-          ms
+          ms,
+          ...(result.hint ? { answeredWith: result.hint } : {})
         }
       }
     })
