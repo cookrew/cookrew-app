@@ -54,13 +54,10 @@ export interface PlaneAttempt {
   /** The browser's own words about a failure, scrubbed of anything address-shaped. */
   readonly detail?: string
   /**
-   * THE ADDRESS-SPACE VARIANT, where it changes what the row means.
-   *
-   * 'none' on an answer means the probe only got through after dropping the
-   * local-network annotation; 'none' on a 'blocked' row means it was refused
-   * with AND without it. Both are the proxy signature (Chrome 152, 2026-09-08),
-   * and both send a reader somewhere different from the plain sentence. Absent
-   * everywhere it would say nothing — see toldHint.
+   * THE ADDRESS-SPACE VARIANT, where it changes what the row means: 'none' on
+   * an answer is a probe that only got through unannotated, 'none' on 'blocked'
+   * is a refusal with AND without. Both are the proxy signature (Chrome 152,
+   * 2026-09-08) and send a reader elsewhere; absent where it would say nothing.
    */
   readonly hint?: AddressSpaceHint
 }
@@ -85,15 +82,13 @@ export const attemptName = (origin: string): string => {
   }
 }
 
-
 /** What one tier's race produced: the winner if there was one, and the story. */
 interface TierResult {
   readonly won: string | null
   /**
-   * THE VARIANT THE WINNER'S HELLO ACTUALLY ANSWERED ON, so the plane can keep
-   * talking the way that worked (Chrome 152 behind a system proxy, 2026-09-08 —
-   * see local-network.ts · AddressSpaceHint). Undefined where the probe
-   * recorded none, which leaves the address to decide as it always did.
+   * THE VARIANT THE WINNER'S HELLO ANSWERED ON, so the plane can keep talking
+   * the way that worked (Chrome 152 behind a proxy, 2026-09-08 — local-network.ts
+   * · AddressSpaceHint). Undefined leaves the address to decide, as it always did.
    */
   readonly answeredWith?: AddressSpaceHint
   readonly attempts: readonly PlaneAttempt[]
@@ -132,9 +127,7 @@ const rowOf = (probe: Probe): Omit<PlaneAttempt, 'plane' | 'chosen'> => {
   // endpoint. That is "answered and not believed", never "no answer".
   if (probe.kind === 'unreadable') return { name, outcome: 'unverified', ms: Math.round(probe.ms) }
   const hint = probe.hint ? { hint: probe.hint } : {}
-  if (probe.kind === 'answered') {
-    return { name, outcome: 'answered', ms: Math.round(probe.ms), ...hint }
-  }
+  if (probe.kind === 'answered') return { name, outcome: 'answered', ms: Math.round(probe.ms), ...hint }
   const { failure } = probe
   return {
     name,
@@ -206,37 +199,24 @@ interface MeasuredReply {
 /**
  * One candidate's probe, before anybody decides what to call it.
  *
- * `hint` is the ROW's version of the variant and is not `measured.answeredWith`:
- * the plane needs to know how it got through every time, and a reader only
- * needs telling when the answer is news. See toldHint.
+ * `hint` is the ROW's version of the variant and is NOT `measured.answeredWith`:
+ * the plane needs to know how it got through every time, a reader only needs
+ * telling when it is news. See toldHint.
  */
 type Probe =
-  | {
-      readonly kind: 'answered'
-      readonly origin: string
-      readonly ms: number
-      readonly measured: MeasuredReply
-      readonly hint?: AddressSpaceHint
-    }
+  | { readonly kind: 'answered'; readonly origin: string; readonly ms: number; readonly measured: MeasuredReply; readonly hint?: AddressSpaceHint }
   | { readonly kind: 'unreadable'; readonly origin: string; readonly ms: number }
-  | {
-      readonly kind: 'failed'
-      readonly origin: string
-      readonly ms: number
-      readonly failure: HelloFailed
-      readonly hint?: AddressSpaceHint
-    }
+  | { readonly kind: 'failed'; readonly origin: string; readonly ms: number; readonly failure: HelloFailed; readonly hint?: AddressSpaceHint }
 
 /**
  * THE VARIANT, ONLY WHERE IT IS NEWS TO A READER.
  *
  * A candidate no browser ever annotates — a CGNAT tailnet address is public by
- * every reckoning — answers 'none' every single time, and a row saying
- * "answered without the local-network hint" there would invent a proxy that is
- * not in the story. So the word is recorded only for a LOCAL address, where
- * 'none' means the probe genuinely fell back, and only for a failure that was
- * refused BOTH ways, which is the signature of the proxy case (Chrome 152,
- * 2026-09-08).
+ * every reckoning — answers 'none' every time, and a row saying "answered
+ * without the local-network hint" there would invent a proxy that is not in the
+ * story. So the word is recorded only for a LOCAL address, where 'none' means
+ * the probe fell back, and for a failure only when BOTH variants were refused —
+ * the signature of the proxy case (Chrome 152, 2026-09-08).
  */
 const toldHint = (origin: string, result: HelloResult): AddressSpaceHint | undefined => {
   if (!isLocalOrigin(origin)) return undefined
