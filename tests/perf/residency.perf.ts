@@ -221,7 +221,7 @@ function idleSampler(listingMs: number) {
 function boardReader(sampler: ReturnType<typeof createProbeSampler>) {
   const board = boardSourcesFrom({
     store: { focusedId: 'ws' },
-    turns: { list: () => [] },
+    turns: { listVerified: () => [] },
     turnStore: { loadAll: () => new Map() },
     agents: { list: () => [] },
     probe: () => {
