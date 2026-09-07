@@ -86,6 +86,17 @@ export interface StreamIndexEntry {
   previousSessionId?: string
   /** The transcript this block was read from. */
   file: string
+  /**
+   * The transcript no longer holds this checkpoint's bytes — a /rewind
+   * truncated the file past it (T2.5, panel C ②).
+   *
+   * It stays in the index, at its own ordinal, with its marks: a rewind is an
+   * APPENDED fact about history, not a reason to renumber it. Blocks written
+   * after the rewind take ordinals AFTER these, because ordinals never
+   * regress (Codex ordinal.rs:16-100). Absent — not `false` — on every row
+   * that was never rewound, so the flag reads as evidence rather than noise.
+   */
+  rolledBack?: true
 }
 
 /** Where an index entry lives, so a window can fetch the block without
