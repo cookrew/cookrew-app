@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import type { IClipboardProvider } from '@xterm/addon-clipboard'
@@ -17,6 +17,7 @@ import { CheckpointTimeline } from './CheckpointTimeline'
 import { TranscriptView, type ActiveBlock, type TranscriptHandle } from './TranscriptView'
 import { tailClipRows } from './transcript'
 import { checkpointRowTitle } from './stream/stream-rows'
+import { streamPagerOf } from './stream/stream-pager'
 import { useStream } from './stream/use-stream'
 import { useTitleMode } from './checkpoint-sync'
 import { attachFilesToTerminal, pasteClipboardImages } from './AttachButton'
@@ -181,6 +182,9 @@ function TerminalOverlay({
   const stream = useStream(node.id)
   const rows = stream.rows
   const traceMarkers = stream.markers
+  // The drawer's windows, named by identity (stream-pager.ts). Rebuilt when
+  // the index moves, because that is what resolves an ordinal to a cursor.
+  const pager = useMemo(() => streamPagerOf(stream), [stream.index, stream.total, stream])
 
   // WHY the rail is empty or stale, for a remote card — a named state from
   // the door, rendered as a sentence in the session strip (P10). Re-read
@@ -1085,7 +1089,11 @@ function TerminalOverlay({
         <TranscriptView
           ref={transcriptRef}
           terminalId={node.id}
-          total={activity?.turnCount ?? 0}
+          pager={pager}
+          // The STREAM's length, not the PTY's turn count: the scrape counts
+          // what it saw on a screen and the stream counts what is in the
+          // record, and a compaction is exactly where they disagree.
+          total={stream.total}
           titleMode={titleMode}
           translation={translation.showing}
           identities={rows.map((r) => r.index)}
