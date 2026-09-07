@@ -59,22 +59,43 @@ import { pageTraceBlocks, type TraceBoundaryMarker } from '../shared/trace-block
 import type { StreamService } from './stream-service'
 import type { StreamBlock } from './stream'
 
+/** The only four words that turn the stream off. Everything else — including
+ *  a typo — leaves it ON, because the default is now ON and a mistyped
+ *  variable must not silently restore the old store. */
+const OFF_WORDS = /^(0|off|false|no)$/i
+
 /**
- * Is the stream answering the old routes?
+ * Is the stream answering the old routes? YES, unless told otherwise.
  *
- * OFF until T4 lands the marks migration. With the adapters on, `/turns`
- * takes titles from the marks ledger — which holds nothing until the 8,137
- * Sous titles in the old store are carried across — so every title on every
- * rail would vanish the moment this shipped, and the ordinal would jump on
- * every card that has ever compacted (Conductor: 486 → 1,232) before anyone
- * has looked at the rail with the new numbering. Both are the intended end
- * state; neither is something to discover by surprise. T4 flips the default
- * to on and this becomes the escape hatch the design describes.
+ * ON BY DEFAULT SINCE T4 (2026-09-07). Until T4 this returned false when
+ * unset, and the reason was concrete: `/turns` takes titles from the marks
+ * ledger, which held nothing, so every title on every rail would have
+ * vanished the moment it shipped. scripts/one-stream-migrate-marks.mjs
+ * --write carries the old store's titles, seen-ats, anchors, pins and forks
+ * across, and with that done the flag flips.
+ *
+ * THE ROLLBACK PATH, written here because this is where somebody will look
+ * for it at 2am:
+ *
+ *   COOKREW_STREAM_ADAPTERS=0   (or off / false / no)
+ *
+ * set in the app's environment and restarted. The five old routes then answer
+ * from turn-store.ts again, which is still on disk and still read — T4 made it
+ * read-only, not absent, exactly so a regression is a flag flip rather than a
+ * restore. What a rollback costs is every turn that landed while the flag was
+ * on: the old store stopped being written at T4, so its ledgers are frozen at
+ * the migration and a rolled-back rail is short by however long the flag was
+ * up. Marks written in that window survive and re-appear on the flip forward.
+ *
+ * The four off-words are matched after a trim and case-insensitively; a typo
+ * ('offf', 'flase') leaves the stream ON. That asymmetry is deliberate: an
+ * unreadable value should fail towards the state this release intends, not
+ * towards the one it is retiring.
  */
 export function streamAdaptersEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = env.COOKREW_STREAM_ADAPTERS
-  if (raw === undefined) return false
-  return /^(1|on|true|yes)$/i.test(raw.trim())
+  if (raw === undefined) return true
+  return !OFF_WORDS.test(raw.trim())
 }
 
 export interface StreamAdapterDeps {
