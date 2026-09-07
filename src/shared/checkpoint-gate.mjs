@@ -18,6 +18,13 @@
 // sessions. See flapVerdict below for why a repeated rotation destination is
 // always wrong, and why it must never fail the run.
 //
+// MARKS (one-stream T4, 2026-09-07, reported only). Every mark's identity
+// resolves to a row in the card's stream — the design's own added line:
+// "An orphan mark is reported, never dropped." A mark is a Sous title, a
+// seen-at, a pin, a rail anchor or a fork reference, and an orphan one is a
+// title with nowhere to sit, never a lost checkpoint. It must not fail the
+// run for the same reason FLAP must not.
+//
 // Pure verdicts over facts the caller gathered, so both halves are testable
 // without a machine in a particular state (tests/checkpoint-gate-verdict).
 
@@ -108,6 +115,40 @@ export function flapVerdict({ rotations, window = FLAP_WINDOW }) {
     verdict: repeated.length > 0 ? 'FLAP' : 'OK',
     ids: dedupe(repeated),
     rotations: recent.length
+  }
+}
+
+/**
+ * The marks half. `placed` is the set of identities the stream materialised
+ * for this card, or NULL when it has materialised none — and those are
+ * different facts. A card the app has never opened has no answer to give, and
+ * calling all of its marks orphans would be an alarm about the gate's own
+ * timing rather than about the data.
+ *
+ * Pure, so the three states — nothing to check, undecidable, orphans — can be
+ * asserted without a ~/.cookrew in a particular state.
+ */
+export function marksVerdict({ identities, placed }) {
+  const held = dedupe(identities ?? [])
+  if (held.length === 0) return { verdict: 'OK', marks: 0, orphans: [], detail: '' }
+  if (placed === null || placed === undefined) {
+    return {
+      verdict: 'UNKNOWN',
+      marks: held.length,
+      orphans: [],
+      detail: `${held.length} mark(s), stream index not materialised yet — undecidable`
+    }
+  }
+  const reachable = placed instanceof Set ? placed : new Set(placed)
+  const orphans = held.filter((identity) => !reachable.has(identity))
+  if (orphans.length === 0) return { verdict: 'OK', marks: held.length, orphans: [], detail: '' }
+  return {
+    verdict: 'ORPHANS',
+    marks: held.length,
+    orphans,
+    detail:
+      `ORPHAN MARKS: ${orphans.length}/${held.length} resolve to no stream row ` +
+      `(${orphans.slice(0, 4).map(short).join(' ')}${orphans.length > 4 ? ' …' : ''})`
   }
 }
 

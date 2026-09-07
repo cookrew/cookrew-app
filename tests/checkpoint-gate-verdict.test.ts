@@ -16,10 +16,13 @@
 //   V2  what cannot be determined is UNKNOWN, never MISMATCH
 //   V3  NO CHECKPOINT IS UNREACHABLE: every id ever bound to a card is in
 //       (binding ∪ lineage ∪ spill), and names a transcript that is there
+//   V4  EVERY MARK'S IDENTITY RESOLVES TO A STREAM ROW (one-stream T4) —
+//       reported, never a failure, and "no stream index yet" is UNKNOWN
+//       rather than "every mark is an orphan"
 
 import { describe, expect, it } from 'vitest'
 import { paneAgentOf, resolvePaneAgent } from '../src/shared/pane-agent.mjs'
-import { liveVerdict, reachVerdict } from '../src/shared/checkpoint-gate.mjs'
+import { liveVerdict, marksVerdict, reachVerdict } from '../src/shared/checkpoint-gate.mjs'
 
 const BOUND = '295d5f1c-1c62-4b3f-9b0e-2c9d0f1a4b77'
 const BG = 'a78aa3e5-6f01-4a0e-9c33-0d8a1b2c3d4e'
@@ -162,5 +165,73 @@ describe('V3 — no checkpoint is unreachable', () => {
     expect(
       reachVerdict({ bound: null, lineage: [], spillIds: [], everBound: [], hasTranscript })
     ).toMatchObject({ verdict: 'OK', chain: [] })
+  })
+})
+
+/**
+ * V4 — THE MARKS LINE (one-stream T4, 2026-09-07).
+ *
+ * The design added exactly one claim to this gate: "every mark's identity
+ * resolves to a block in the stream. An orphan mark is reported, never
+ * dropped." Three states, and the middle one is the whole reason this is a
+ * pure function rather than a grep: a card the app has not materialised yet
+ * has NO ANSWER, and calling all of its marks orphans would be an alarm about
+ * the gate's own timing.
+ */
+describe('V4 — an orphan mark is reported, never dropped and never a failure', () => {
+  const A = 'u-aaaaaaaa-1111'
+  const B = 'u-bbbbbbbb-2222'
+
+  it('says nothing when a card has no marks at all', () => {
+    expect(marksVerdict({ identities: [], placed: new Set([A]) })).toMatchObject({
+      verdict: 'OK',
+      marks: 0,
+      orphans: [],
+      detail: ''
+    })
+  })
+
+  it('OK when every mark sits on a row', () => {
+    expect(marksVerdict({ identities: [A, B], placed: new Set([A, B, 'u-c']) })).toMatchObject({
+      verdict: 'OK',
+      marks: 2,
+      orphans: []
+    })
+  })
+
+  it('names the orphans, and says how many of how many', () => {
+    const verdict = marksVerdict({ identities: [A, B], placed: new Set([A]) })
+    expect(verdict.verdict).toBe('ORPHANS')
+    expect(verdict.orphans).toEqual([B])
+    expect(verdict.detail).toContain('1/2')
+    expect(verdict.detail).toContain(B.slice(0, 8))
+  })
+
+  it('UNKNOWN — not "all orphans" — when the stream index has not been written', () => {
+    // The difference that matters: a card the app has never opened. Reporting
+    // its every title as unreachable is how a gate teaches people to ignore it.
+    const verdict = marksVerdict({ identities: [A, B], placed: null })
+    expect(verdict.verdict).toBe('UNKNOWN')
+    expect(verdict.orphans).toEqual([])
+    expect(verdict.detail).toContain('not materialised yet')
+  })
+
+  it('an EMPTY index is an answer, and its answer is that nothing is placed', () => {
+    // Distinct from null: the app materialised this card and found no rows,
+    // which is a real finding about a chain with no readable transcript.
+    const verdict = marksVerdict({ identities: [A], placed: new Set() })
+    expect(verdict.verdict).toBe('ORPHANS')
+    expect(verdict.orphans).toEqual([A])
+  })
+
+  it('counts an identity once however many mark lines carried it', () => {
+    expect(marksVerdict({ identities: [A, A, A], placed: new Set([A]) })).toMatchObject({
+      verdict: 'OK',
+      marks: 1
+    })
+  })
+
+  it('accepts a plain array of placed identities as well as a Set', () => {
+    expect(marksVerdict({ identities: [A], placed: [A] })).toMatchObject({ verdict: 'OK' })
   })
 })
