@@ -4346,23 +4346,52 @@ body.cookrew-mobile .cookrew-minimap {
   pointer-events: none;
 }
 
-/* THE ANOMALY LINE. One quiet sentence in the rail's footer, never a modal:
-   a line the reader could not parse is a fact about the transcript, not
-   something a person can fix mid-conversation. Saying nothing at all is what
-   made a silently shorter history read as a destroyed one. */
+/* THE ANOMALY MARK. A line the reader could not parse is a fact about the
+   transcript, not something a person can fix mid-conversation — so it is said,
+   quietly, and never as a modal. Saying nothing at all is what made a silently
+   shorter history read as a destroyed one.
+
+   ONE GLYPH, NOT A SENTENCE (D3, T5 QA 2026-09-07). This was `left: 0;
+   right: 0; bottom: 2px` INSIDE the 30px rail column, so the sentence wrapped
+   to one letter per line and printed vertically over the live dot. The rail is
+   30px wide and always will be; the sentence lives in the tooltip and in the
+   accessible name, and the rail carries the one mark it has room for — parked
+   above the live dot rather than on top of it. */
 .cr-ckpt-anomaly {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 2px;
+  right: 8px;
+  bottom: 29px;
+  width: 13px;
+  height: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  box-sizing: border-box;
+  border: 1px solid var(--amber);
+  background: var(--phos-bg);
   font-family: var(--font-pixel);
-  font-size: 6.5px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--dim);
-  text-align: center;
-  pointer-events: none;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--amber);
+  opacity: 0.75;
+  cursor: help;
   user-select: none;
+}
+
+.cr-ckpt-anomaly:hover {
+  opacity: 1;
+}
+
+/* The sentence itself: read by a screen reader and by the tooltip, never laid
+   out in the 30px column that could not hold it. */
+.cr-ckpt-anomaly-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  white-space: nowrap;
+  clip-path: inset(50%);
 }
 
 /* Boundary ticks ON the rail line (at-first-sight positions): ◆ compact is a

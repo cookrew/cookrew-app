@@ -11,6 +11,8 @@
 // vi.resetModules + dynamic import for the module-scope globals api-base and
 // auth-gate read once at load.
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { rowsOfIndex } from '../src/renderer/src/stream/stream-rows'
@@ -139,11 +141,52 @@ describe('the title comes from the mark (item 5)', () => {
   })
 })
 
-describe('the anomaly line — one quiet line in the footer, never a modal', () => {
+describe('the anomaly mark — one glyph on the rail, never a modal', () => {
   it('renders the sentence the hook already phrased', async () => {
     const markup = await rail({ anomalyNote: '3 lines the stream could not read' })
     expect(markup).toContain('cr-ckpt-anomaly')
     expect(markup).toContain('3 lines the stream could not read')
+  })
+
+  // D3, T5 QA 2026-09-07. The line was a `left: 0; right: 0` footer inside the
+  // 30px rail column and printed one letter per line, straight down over the
+  // live dot. The rail carries a mark; the sentence carries in the tooltip.
+  it('puts the SENTENCE in the tooltip and the accessible name', async () => {
+    const note = '1 line the stream could not read'
+    const markup = await rail({ anomalyNote: note })
+    expect(markup).toContain(`title="${note}"`)
+    expect(markup).toContain(`aria-label="${note}"`)
+  })
+
+  it('draws ONE glyph in the column, not the sentence', async () => {
+    const markup = await rail({ anomalyNote: '1 line the stream could not read' })
+    const open = markup.indexOf('class="cr-ckpt-anomaly"')
+    const node = markup.slice(open, markup.indexOf('</div>', open))
+    // The only text laid out in the rail column is the mark itself; the
+    // sentence is inside the visually-hidden span.
+    expect(node).toContain('>!<')
+    expect(node).toContain('cr-ckpt-anomaly-text')
+  })
+
+  it('the sentence is hidden from layout, so the 30px column cannot wrap it', async () => {
+    const css = readFileSync(
+      join(__dirname, '../src/renderer/src/styles.css'),
+      'utf8'
+    )
+    const block = css.slice(
+      css.indexOf('.cr-ckpt-anomaly-text {'),
+      css.indexOf('}', css.indexOf('.cr-ckpt-anomaly-text {'))
+    )
+    expect(block).toContain('clip-path: inset(50%)')
+    expect(block).toContain('white-space: nowrap')
+    const mark = css.slice(
+      css.indexOf('.cr-ckpt-anomaly {'),
+      css.indexOf('}', css.indexOf('.cr-ckpt-anomaly {'))
+    )
+    // Bounded to a glyph, and clear of the live dot (bottom: 14px, 9px tall).
+    expect(mark).toContain('width: 13px')
+    expect(mark).not.toContain('left: 0')
+    expect(mark).toContain('bottom: 29px')
   })
 
   it('is a status, not a dialog — nothing to dismiss and nothing to block on', async () => {
