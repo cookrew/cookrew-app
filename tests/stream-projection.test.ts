@@ -14,6 +14,7 @@ import {
   EMPTY_CHANGE_SET,
   PROJECTION_ANOMALIES,
   applyChangeSet,
+  checkpointKey,
   countAnomalies,
   markRolledBack,
   projectLine,
@@ -143,7 +144,7 @@ describe('applyChangeSet — the upsert guard', () => {
       entry: { ...line(1, 'u1').entry!, endedAt: T0 + 90_000, promptHead: 'prompt 1' }
     }
     const again = applyChangeSet(inserted, projectLine({ ...grown, ordinal: 1 }, { lastOrdinal: 0 }))
-    const row = again.get('u1') as ProjectedCheckpoint
+    const row = again.get(checkpointKey({ file: '/tmp/s1.jsonl', identity: 'u1' })) as ProjectedCheckpoint
     expect(row.ordinal).toBe(1)
     expect(row.firstAt).toBe(T0 + 1000)
     expect(row.latestAt).toBe(T0 + 90_000)
@@ -156,7 +157,8 @@ describe('applyChangeSet — the upsert guard', () => {
       inserted,
       projectLine({ ...line(1, 'u1'), at: T0 - 5000 }, { lastOrdinal: 0 })
     )
-    expect((stale.get('u1') as ProjectedCheckpoint).latestAt).toBe(T0 + 1000)
+    const key = checkpointKey({ file: '/tmp/s1.jsonl', identity: 'u1' })
+    expect((stale.get(key) as ProjectedCheckpoint).latestAt).toBe(T0 + 1000)
   })
 
   it('replaying the same suffix twice is a no-op', () => {
@@ -183,6 +185,33 @@ describe('applyChangeSet — the upsert guard', () => {
     const before = applyChangeSet(new Map(), first)
     applyChangeSet(before, projectLine(line(2, 'u2'), { lastOrdinal: 1 }))
     expect(before.size).toBe(1)
+  })
+})
+
+describe('the snapshot key is (file, identity)', () => {
+  it('keeps a CROSS-FILE repeat as two rows — Claude replays a prefix on rotation', () => {
+    // Measured on the owner's busiest card: 1,239 blocks, 1,046 distinct
+    // identities, every repeat spanning more than one file. Folding them would
+    // change what the rail shows; that decision is T3's, with the numbers.
+    const inFirst = projectLine(line(1, 'u1'), { lastOrdinal: 0 })
+    const replayed = line(2, 'u1', {
+      file: '/tmp/s2.jsonl',
+      entry: { ...line(2, 'u1').entry!, file: '/tmp/s2.jsonl' }
+    })
+    const snapshot = applyChangeSet(
+      applyChangeSet(new Map(), inFirst),
+      projectLine(replayed, { lastOrdinal: 1 })
+    )
+    expect(snapshot.size).toBe(2)
+    expect([...snapshot.values()].map((row) => [row.file, row.ordinal])).toEqual([
+      ['/tmp/s1.jsonl', 1],
+      ['/tmp/s2.jsonl', 2]
+    ])
+  })
+
+  it('a repeat WITHIN one file upserts — that is what replaying a suffix is', () => {
+    const once = applyChangeSet(new Map(), projectLine(line(1, 'u1'), { lastOrdinal: 0 }))
+    expect(applyChangeSet(once, projectLine(line(1, 'u1'), { lastOrdinal: 0 })).size).toBe(1)
   })
 })
 

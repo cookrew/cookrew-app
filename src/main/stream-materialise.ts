@@ -40,6 +40,7 @@
 import {
   applyChangeSet,
   checkpointsInOrder,
+  checkpointKey,
   countAnomalies,
   markRolledBack,
   projectLine,
@@ -133,7 +134,7 @@ function evidenceOf(
       cursorAt !== undefined &&
       (positions.get(line.file) ?? 0) < cursorAt &&
       line.entry !== undefined &&
-      !snapshot.has(line.entry.identity)
+      !snapshot.has(checkpointKey(line.entry))
   )
   return {
     cursorFileBytes: read.files.find((entry) => entry.file === state.cursor.file)?.bytesRead ?? null,
@@ -154,11 +155,13 @@ function rolledBackFrom(
   file: string
 ): number | null {
   const alive = new Set(
-    lines.filter((line) => line.file === file).map((line) => line.entry?.identity)
+    lines
+      .filter((line) => line.file === file && line.entry !== undefined)
+      .map((line) => checkpointKey(line.entry as { file: string; identity: string }))
   )
   let lowest: number | null = null
   for (const row of snapshot.values()) {
-    if (row.file !== file || row.rolledBack === true || alive.has(row.identity)) continue
+    if (row.file !== file || row.rolledBack === true || alive.has(checkpointKey(row))) continue
     if (lowest === null || row.ordinal < lowest) lowest = row.ordinal
   }
   return lowest
@@ -188,7 +191,7 @@ function replay(state: StreamState, read: StreamLinesResult, seed: Replay): Repl
   let lastOrdinal = 0
   let highWater = state.cursor.ordinal
   for (const line of read.lines) {
-    const seen = line.entry === undefined ? undefined : snapshot.get(line.entry.identity)
+    const seen = line.entry === undefined ? undefined : snapshot.get(checkpointKey(line.entry))
     if ((positions.get(line.file) ?? 0) < cursorAt && seen !== undefined) {
       lastOrdinal = Math.max(lastOrdinal, seen.ordinal)
       continue
@@ -202,9 +205,10 @@ function replay(state: StreamState, read: StreamLinesResult, seed: Replay): Repl
     anomalies = countAnomalies(anomalies, change.anomalies)
     dirty = dirty || change.anomalies.length > 0
     for (const upsert of change.upserts) {
-      const before = snapshot.get(upsert.identity)
+      const key = checkpointKey(upsert)
+      const before = snapshot.get(key)
       snapshot = applyChangeSet(snapshot, { upserts: [upsert], anomalies: [] })
-      dirty = dirty || !sameCheckpoint(before, snapshot.get(upsert.identity) as ProjectedCheckpoint)
+      dirty = dirty || !sameCheckpoint(before, snapshot.get(key) as ProjectedCheckpoint)
     }
     if (change.cursor === undefined) continue
     lastOrdinal = change.cursor.ordinal
@@ -237,7 +241,7 @@ export function createStreamIndexStore(deps: StreamIndexStoreDeps): StreamIndexS
     async materialise(terminalId) {
       const read = await deps.lines(terminalId)
       const stored = deps.readState(terminalId)
-      const before = new Map(stored.index.map((row) => [row.identity, row]))
+      const before = snapshotOf(stored.index)
       const { state: repaired, repairs } = repairStreamState(
         stored,
         evidenceOf(stored, read, before)
@@ -279,13 +283,18 @@ function rollbackOf(
   repairs: readonly StreamRepair[],
   at: number
 ): { snapshot: Map<string, ProjectedCheckpoint>; appended: RollbackMark | null } {
-  const snapshot = new Map(state.index.map((row) => [row.identity, row]))
+  const snapshot = snapshotOf(state.index)
   if (!repairs.some((repair) => repair.kind === 'cursor-beyond-eof')) {
     return { snapshot, appended: null }
   }
   const fromOrdinal = rolledBackFrom(snapshot, read.lines, state.cursor.file)
   if (fromOrdinal === null) return { snapshot, appended: null }
   return { snapshot: markRolledBack(snapshot, fromOrdinal), appended: { fromOrdinal, at } }
+}
+
+/** The persisted rows, back as the keyed snapshot the projection folds onto. */
+function snapshotOf(index: readonly ProjectedCheckpoint[]): Map<string, ProjectedCheckpoint> {
+  return new Map(index.map((row) => [checkpointKey(row), row]))
 }
 
 function changed(stored: StreamState, next: StreamState, dirty: boolean): boolean {

@@ -46,6 +46,22 @@
 // exists to end that. The ordinal never regresses; the record never vanishes;
 // the disagreement is counted.
 //
+// WHAT A CHECKPOINT IS KEYED BY, AND WHY IT IS NOT THE IDENTITY ALONE.
+// Measured on the owner's busiest card (2026-09-07): 1,239 blocks carry only
+// 1,046 distinct identities — 181 of them appear two or three times, and
+// EVERY repeat spans more than one file. Claude replays a prefix of the
+// conversation into the transcript it rotates or resumes into, so the same
+// message uuid is genuinely on disk at two chain positions.
+//
+// So the snapshot is keyed by (file, identity), not identity. Re-reading a
+// file the reader has already seen still upserts — which is all "replay a
+// suffix twice" needs — while a cross-file repeat keeps the two rows and the
+// two ordinals T1/T2 already gave it. Folding them would be a visible change
+// to what the rail shows, decided inside a storage phase, on a question the
+// evidence does not settle: the old ledger orders those repeats by their LAST
+// occurrence and this reader orders by their first, and only one of those can
+// be right. That belongs to T3 with the measurement in hand, not here.
+//
 // PURE BY CONSTRUCTION: no I/O, no clock (a line carries its own `at`), no
 // mutation of anything it is handed.
 
@@ -215,9 +231,16 @@ export function applyChangeSet(
 ): Map<string, ProjectedCheckpoint> {
   const next = new Map(snapshot)
   for (const incoming of change.upserts) {
-    next.set(incoming.identity, upsert(next.get(incoming.identity), incoming))
+    const key = checkpointKey(incoming)
+    next.set(key, upsert(next.get(key), incoming))
   }
   return next
+}
+
+/** A checkpoint's key in the snapshot: (file, identity). See the header for
+ *  the 181 cross-file repeats that make the file half load-bearing. */
+export function checkpointKey(row: { file: string; identity: string }): string {
+  return `${row.file}\u0000${row.identity}`
 }
 
 function upsert(
