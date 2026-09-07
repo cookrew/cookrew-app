@@ -96,6 +96,55 @@ describe('the sheet', () => {
   })
 })
 
+describe('Chrome is untouched, and the two rows never argue', () => {
+  it('still gets the explainer and ALLOW while the browser will prompt', async () => {
+    vi.resetModules()
+    const gate = await import('../src/renderer/src/local-network-gate')
+    const offers = await import('../src/renderer/src/direct-offer-gate')
+    const { LocalNetworkRow } = await import('../src/renderer/src/LocalNetworkRow')
+    const { DirectOfferRow } = await import('../src/renderer/src/DirectOfferRow')
+    gate.resetLocalNetworkGate()
+    offers.resetDirectOffer()
+    gate.offerLocalNetwork(async () => undefined)
+    gate.setLocalNetwork('prompt')
+    // The decision refuses a browser that can be asked, so there is no offer
+    // to publish here — and the ask is exactly what it was.
+    expect(renderToStaticMarkup(<LocalNetworkRow />)).toContain('>Allow</button>')
+    expect(renderToStaticMarkup(<DirectOfferRow />)).toBe('')
+  })
+
+  it('still gets the refusal sentence after a denial', async () => {
+    vi.resetModules()
+    const gate = await import('../src/renderer/src/local-network-gate')
+    const offers = await import('../src/renderer/src/direct-offer-gate')
+    const { LocalNetworkRow } = await import('../src/renderer/src/LocalNetworkRow')
+    const { DirectOfferRow } = await import('../src/renderer/src/DirectOfferRow')
+    gate.resetLocalNetworkGate()
+    offers.resetDirectOffer()
+    gate.offerLocalNetwork(async () => undefined)
+    gate.setLocalNetwork('denied')
+    expect(renderToStaticMarkup(<LocalNetworkRow />)).toContain('Staying on the relay.')
+    expect(renderToStaticMarkup(<DirectOfferRow />)).toBe('')
+  })
+
+  it('shows only the offer where there is no permission to talk about', async () => {
+    // iOS Safari: 'unsupported' already renders no ask at all, so the sheet
+    // never holds two contradictory suggestions at once.
+    vi.resetModules()
+    const gate = await import('../src/renderer/src/local-network-gate')
+    const offers = await import('../src/renderer/src/direct-offer-gate')
+    const { LocalNetworkRow } = await import('../src/renderer/src/LocalNetworkRow')
+    const { DirectOfferRow } = await import('../src/renderer/src/DirectOfferRow')
+    gate.resetLocalNetworkGate()
+    offers.resetDirectOffer()
+    gate.offerLocalNetwork(async () => undefined)
+    gate.setLocalNetwork('unsupported')
+    offers.setDirectOffer({ origin: LAN, kind: 'lan' })
+    expect(renderToStaticMarkup(<LocalNetworkRow />)).toBe('')
+    expect(renderToStaticMarkup(<DirectOfferRow />)).toContain(DIRECT_OFFER_COPY.lan)
+  })
+})
+
 describe('the tap', () => {
   it('navigates to the trusted name with this desktop’s token, and says where from', async () => {
     vi.resetModules()
