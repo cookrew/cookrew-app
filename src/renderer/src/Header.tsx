@@ -1,5 +1,5 @@
 import { isDemoMode, isRemoteMode } from './api'
-import { CrLogoMark } from './CrLogoMark'
+import { CrHandMark, CrLogoMark } from './CrLogoMark'
 import { CompanionAvatar, PathBadge } from './PathBadge'
 import { CrIcon } from './icons'
 import { StatusCoin } from './nodes/AgentAvatar'
@@ -79,13 +79,16 @@ export function Header({
   return (
     <header className="cr-header">
       <div className="cr-header-brand">
-        {/* ON THE PHONE THE BADGE IS THE MARK (M3). It replaces the hand rather
-            than joining it: the group holds one 24 px thing at phone width,
-            and the two do the same job — the mark was the always-visible "ask
-            again" and the badge is the always-visible "this is how I am
-            asking, and it still works". Tapping it still refreshes. */}
+        {/* ON THE PHONE THE C HAND BRANDS THE BAR AND THE BADGE DOES THE WORK. The
+            lockup is too wide for one line at phone width, so the hand stands
+            alone as the mark and the path badge beside it is the always-visible
+            "this is how I am asking, and it still works". Tapping the badge
+            refreshes; the hand is a mark, not a control. */}
         {isRemoteMode() ? (
-          <PathBadge onRefresh={onResync} />
+          <>
+            <CrHandMark />
+            <PathBadge onRefresh={onResync} />
+          </>
         ) : (
           <button
             type="button"

@@ -59,16 +59,18 @@ beforeEach(() => resetPathLink())
 afterEach(() => resetPathLink())
 
 describe('the companion bar', () => {
-  it('puts the path badge in the brand group, where the hand mark was', () => {
+  it('puts the path badge in the brand group, right after the C hand', () => {
     stubPhone()
     const group = brandGroup(bar())
     expect(group).toContain('cr-path')
+    expect(group.indexOf('cr-hand-mark')).toBeLessThan(group.indexOf('cr-path'))
     expect(group.indexOf('cr-path')).toBeLessThan(group.indexOf('cr-logo'))
   })
 
-  it('DROPS THE HAND MARK in remote mode — the badge replaces it', () => {
+  it('wears the C hand alone in remote mode — the lockup stays on the desktop, the badge refreshes', () => {
     stubPhone()
     const html = bar()
+    expect(html).toContain('cr-hand-mark')
     expect(html).not.toContain('cr-logo-mark')
     expect(html).not.toContain('Refresh the canvas')
   })

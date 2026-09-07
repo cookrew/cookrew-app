@@ -158,6 +158,20 @@ body,
   -webkit-user-drag: none;
 }
 
+.cr-hand-mark {
+  height: 28px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+}
+
+.cr-hand-mark img {
+  display: block;
+  height: 26px;
+  width: auto;
+  -webkit-user-drag: none;
+}
+
 .cr-logo {
   font-family: var(--font-pixel);
   font-weight: 700;
@@ -3675,8 +3689,22 @@ body.cookrew-mobile .cr-header .cr-kicker {
   white-space: nowrap;
 }
 
+/* THE WORKSPACE CHIP IS A STUB ON THE PHONE. The bar has one line and the
+   name was walking off its right edge; the icon says which workspace, the
+   name keeps a few letters, the caret goes. The menu still has the full names. */
+body.cookrew-mobile .cr-ws-current {
+  padding: 3px 6px;
+  gap: 5px;
+  min-width: 0;
+}
+
 body.cookrew-mobile .cr-ws-name {
-  max-width: 90px;
+  max-width: 54px;
+  font-size: 9px;
+}
+
+body.cookrew-mobile .cr-ws-caret {
+  display: none;
 }
 
 body.cookrew-mobile .cr-ws-menu {
