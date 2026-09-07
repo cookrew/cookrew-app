@@ -113,6 +113,7 @@ describe('the five old routes, answered off the one reader', () => {
   function bed(lines: string[], options: { annotations?: boolean } = {}): Bed {
     const base = mkdtempSync(path.join(tmpdir(), 'adapters-'))
     const marksDir = mkdtempSync(path.join(tmpdir(), 'adapters-marks-'))
+    const stateDir = mkdtempSync(path.join(tmpdir(), 'adapters-state-'))
     const cwd = '/work/repo'
     const dir = path.join(base, claudeProjectSlug(cwd))
     mkdirSync(dir, { recursive: true })
@@ -159,6 +160,7 @@ describe('the five old routes, answered off the one reader', () => {
       documentOf: (target, kind) => traces.documentOf(target, kind),
       chainOptions: { projectsDir: base, lineageIds: () => ['11111111-2222-3333-4444-555555555555'] },
       markOptions: { dir: marksDir },
+      stateOptions: { dir: stateDir },
       chainCoalesceMs: 0
     })
 
@@ -299,6 +301,7 @@ describe('the five old routes, answered off the one reader', () => {
         nodeOf: () => node,
         documentOf: (target, kind) => traces.documentOf(target, kind),
         chainOptions: { projectsDir: base, lineageIds: () => [] },
+        stateOptions: { dir: mkdtempSync(path.join(tmpdir(), 'adapters-none-state-')) },
         chainCoalesceMs: 0
       })
     } as unknown as MobileApiDeps
@@ -340,6 +343,7 @@ describe('the differences the adapters do NOT hide', () => {
   function twoFileBed(): { get: (route: string, mode: 'stream' | 'old') => Promise<unknown> } {
     const base = mkdtempSync(path.join(tmpdir(), 'adapters-two-'))
     const marksDir = mkdtempSync(path.join(tmpdir(), 'adapters-two-marks-'))
+    const stateDir = mkdtempSync(path.join(tmpdir(), 'adapters-two-state-'))
     const cwd = '/work/repo'
     const dir = path.join(base, claudeProjectSlug(cwd))
     mkdirSync(dir, { recursive: true })
@@ -361,6 +365,7 @@ describe('the differences the adapters do NOT hide', () => {
       documentOf: (target, kind) => traces.documentOf(target, kind),
       chainOptions: { projectsDir: base, lineageIds: () => [SID_A, SID_B] },
       markOptions: { dir: marksDir },
+      stateOptions: { dir: stateDir },
       chainCoalesceMs: 0
     })
     const deps = (mode: 'stream' | 'old') =>
@@ -457,6 +462,7 @@ describe('the differences the adapters do NOT hide', () => {
 
   it('DIFFERENCE 3 — /latest gains a title the old file path could never carry', async () => {
     const marksDir = mkdtempSync(path.join(tmpdir(), 'adapters-latest-marks-'))
+    const stateDir = mkdtempSync(path.join(tmpdir(), 'adapters-latest-state-'))
     const fixture = bedFor([prompt('u1', 'ask', T0), reply('done', T0 + 1, 'end_turn')], cleanup, {
       marksDir
     })
@@ -480,6 +486,7 @@ function bedFor(
   const sid = 'cccccccc-1111-2222-3333-444444444444'
   const base = mkdtempSync(path.join(tmpdir(), 'adapters-one-'))
   const marksDir = options.marksDir ?? mkdtempSync(path.join(tmpdir(), 'adapters-one-marks-'))
+  const stateDir = mkdtempSync(path.join(tmpdir(), 'adapters-one-state-'))
   const cwd = '/work/repo'
   const dir = path.join(base, claudeProjectSlug(cwd))
   mkdirSync(dir, { recursive: true })
@@ -492,6 +499,7 @@ function bedFor(
     documentOf: (target, kind) => traces.documentOf(target, kind),
     chainOptions: { projectsDir: base, lineageIds: () => [sid] },
     markOptions: { dir: marksDir },
+    stateOptions: { dir: stateDir },
     chainCoalesceMs: 0
   })
   const ports = new Map<string, Promise<number>>()

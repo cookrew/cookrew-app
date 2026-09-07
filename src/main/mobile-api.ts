@@ -844,12 +844,14 @@ export async function handleMobileApi(
 
   // ---- ONE STREAM (T2) ----
   //
-  // THE THREE NEW ROUTES, beside the old ones rather than instead of them:
-  // /stream/index (the rail), /stream (a window of blocks by identity),
-  // /stream/live (the open tail over SSE) and PUT /stream/marks (the only
-  // write). They sit below the auth gates above and are covered by them —
-  // the read gate for the GETs, the C1 pairing gate for the PUT — because a
-  // second, differently-worded gate is how one of them ends up weaker.
+  // THE NEW ROUTES, beside the old ones rather than instead of them:
+  // /stream/open (T2.5 — the rail's first page, the tail and the backwards
+  // cursor in ONE read), /stream/index (the rail, paged), /stream (a window
+  // of blocks by identity), /stream/live (the open tail over SSE) and PUT
+  // /stream/marks (the only write). They sit below the auth gates above and
+  // are covered by them — the GET gate reaches every new leaf by path, so
+  // adding one never adds a hole — the C1 pairing gate covers the PUT,
+  // because a second, differently-worded gate is how one ends up weaker.
   if (await handleStreamRoutes(request, response, url, deps)) return true;
   // THE FIVE OLD ROUTES, AS ADAPTERS over that same reader. Returns false —
   // and the original handlers below run untouched — when the flag is off,

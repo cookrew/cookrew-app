@@ -20,6 +20,8 @@ import type { Mark, MarkOptions } from './marks'
 import { readMarks } from './marks'
 import type { StreamIndexResult } from './stream'
 import type { MissingStreamFile } from './stream-chain'
+import type { RollbackMark } from './stream-state'
+import type { AnomalyCounts } from '../shared/stream-projection'
 import type { StreamIndexEntry } from '../shared/stream-index'
 
 /** A rail row: where the block is, plus everything attached to it. */
@@ -41,6 +43,13 @@ export interface CheckpointsResult {
    * together, and neither is ever silently discarded.
    */
   orphanMarks: string[]
+  /**
+   * What the projection skipped, by class, and every rewind this card has
+   * taken (T2.5). Optional because the raw reader has no persisted state to
+   * count into — a service composed without one still answers the rail.
+   */
+  anomalies?: AnomalyCounts
+  rolledBack?: RollbackMark[]
 }
 
 export interface StreamMarksDeps {
@@ -74,7 +83,7 @@ export function createCheckpointReader(deps: StreamMarksDeps): CheckpointReader 
     deps.marksOf ?? ((terminalId: string) => readMarks(terminalId, deps.markOptions ?? {}))
   return {
     async checkpoints(terminalId) {
-      const { entries, missing } = await deps.index(terminalId)
+      const { entries, missing, anomalies, rolledBack } = await deps.index(terminalId)
       let marks: Map<string, Mark>
       try {
         marks = marksOf(terminalId)
@@ -91,7 +100,13 @@ export function createCheckpointReader(deps: StreamMarksDeps): CheckpointReader 
         return attach(entry, mark)
       })
       const orphanMarks = [...marks.keys()].filter((identity) => !placed.has(identity))
-      return { checkpoints, missing, orphanMarks }
+      return {
+        checkpoints,
+        missing,
+        orphanMarks,
+        ...(anomalies !== undefined ? { anomalies } : {}),
+        ...(rolledBack !== undefined ? { rolledBack } : {})
+      }
     }
   }
 }

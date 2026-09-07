@@ -43,6 +43,13 @@ import {
   type MarkPatch,
   type MarkResult
 } from './marks'
+import { createStreamIndexStore, type MaterialisedIndex } from './stream-materialise'
+import {
+  readStreamState,
+  writeStreamState,
+  type RollbackMark,
+  type StreamStateOptions
+} from './stream-state'
 import { tailIsFinal, type FinalityDeps } from './stream-finality'
 import { transcriptSourceFor, type TranscriptSource } from './transcript-source'
 import type { TraceDocument, TraceKind } from './trace'
@@ -84,6 +91,15 @@ export interface StreamService {
   /** Checkpoint ordinals this card was rewound TO (node.restoreStack) — the
    *  ⟲ markers /trace/markers has always carried. */
   rewindPoints(terminalId: string): number[]
+  /**
+   * The materialised index behind `checkpoints` (T2.5). OPTIONAL so a test
+   * double — or a service composed without a state directory — is still a
+   * StreamService; every caller must be able to answer without it.
+   */
+  materialised?(terminalId: string): Promise<MaterialisedIndex>
+  /** Every /rewind this card has taken, appended, oldest first. The live
+   *  route diffs this to emit its `rollback` event. */
+  rollbacks?(terminalId: string): Promise<RollbackMark[]>
 }
 
 export interface StreamServiceDeps {
@@ -96,6 +112,9 @@ export interface StreamServiceDeps {
   fileOf?: (node: TerminalNodeData) => string | null
   chainOptions?: ChainOptions
   markOptions?: MarkOptions
+  /** Where ~/.cookrew/stream/<id>.json lives, and the clock a rollback mark
+   *  is stamped with. */
+  stateOptions?: StreamStateOptions
   finality?: FinalityDeps
   exists?: (file: string) => boolean
   /** Test seams. */
@@ -172,8 +191,19 @@ export function createStreamService(deps: StreamServiceDeps): StreamService {
     ...(deps.exists ? { exists: deps.exists } : {})
   }
   const reader = createStreamReader(readerDeps)
+  // THE RAIL READS THE MATERIALISED INDEX, not the raw walk. The two agree on
+  // every card that has never been rewound; where they differ, only this one
+  // can say that a /rewind took checkpoints beyond the file and that the
+  // blocks after it continue the count rather than reusing it (T2.5).
+  const stateOptions = deps.stateOptions ?? {}
+  const indexStore = createStreamIndexStore({
+    lines: (terminalId) => reader.lines(terminalId),
+    readState: (terminalId) => readStreamState(terminalId, stateOptions),
+    writeState: (terminalId, state) => writeStreamState(terminalId, state, stateOptions),
+    ...(deps.now ? { now: deps.now } : {})
+  })
   const checkpointReader = createCheckpointReader({
-    index: (terminalId) => reader.index(terminalId),
+    index: (terminalId) => indexStore.materialise(terminalId),
     marksOf: (terminalId) => readMarks(terminalId, deps.markOptions ?? {}),
     ...(deps.markOptions ? { markOptions: deps.markOptions } : {})
   })
@@ -185,6 +215,10 @@ export function createStreamService(deps: StreamServiceDeps): StreamService {
     },
     chain: chainOf,
     checkpoints: (terminalId) => checkpointReader.checkpoints(terminalId),
+    materialised: (terminalId) => indexStore.materialise(terminalId),
+    async rollbacks(terminalId) {
+      return (await indexStore.materialise(terminalId)).rolledBack
+    },
     blocks: (terminalId, request) => reader.blocks(terminalId, request),
     async tailState(terminalId) {
       // The chain is primed BEFORE the reader runs, so the reader's own

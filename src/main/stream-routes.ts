@@ -1,6 +1,8 @@
 // ONE API (design: docs/site/one-stream-2026-09-07.html, phase T2).
 //
-//   GET /api/terminal/:id/stream/index   the rail — positions + marks
+//   GET /api/terminal/:id/stream/open    the whole opening move, in one read
+//                                        (T2.5 — stream-index-routes.ts)
+//   GET /api/terminal/:id/stream/index   the rail — positions + marks, PAGED
 //   GET /api/terminal/:id/stream?after=  a WINDOW of blocks, by identity
 //   GET /api/terminal/:id/stream/blocks  the same, with no cursor (see the
 //                                        path-collision note below)
@@ -28,13 +30,8 @@
 import type http from 'node:http'
 import { readJson, respondJson } from './mobile-http'
 import { MarkRefused, type Mark, type MarkPatch } from './marks'
-import {
-  blockOfRecord,
-  entryOfRecordBlock,
-  markFieldsOf,
-  streamIndexRowOf,
-  type StreamMarkFields
-} from '../shared/stream-turns'
+import { blockOfRecord, markFieldsOf, type StreamMarkFields } from '../shared/stream-turns'
+import { serveStreamIndex, serveStreamOpen } from './stream-index-routes'
 import type { StreamService } from './stream-service'
 import type { StreamBlock } from './stream'
 import type { TurnRecord } from '../shared/turn'
@@ -88,45 +85,6 @@ function cursor(raw: string | null): string | undefined {
  *  See the collision note in handleStreamRoutes — this is the discriminator. */
 export function hasWindowCursor(url: URL): boolean {
   return ['after', 'before', 'limit'].some((key) => url.searchParams.has(key))
-}
-
-/**
- * GET /stream/index — the rail, in one read.
- *
- * `missing` and `orphanMarks` ride along DELIBERATELY. A chain member with no
- * transcript, and a mark whose identity the stream cannot place, are both
- * evidence that something moved; swallowing either is precisely how history
- * looked destroyed when it was merely unindexed.
- */
-async function serveIndex(
-  response: http.ServerResponse,
-  terminalId: string,
-  source: TranscriptSource,
-  deps: StreamRouteDeps
-): Promise<void> {
-  const service = deps.stream as StreamService
-  if (source === 'file') {
-    const { checkpoints, missing, orphanMarks } = await service.checkpoints(terminalId)
-    const marks = service.marks(terminalId)
-    respondJson(response, 200, {
-      checkpoints: checkpoints.map((entry) => streamIndexRowOf(entry, marks.get(entry.identity))),
-      missing,
-      orphanMarks,
-      source
-    })
-    return
-  }
-  const blocks = (await deps.turnHistory?.(terminalId) ?? []).map(blockOfRecord)
-  const marks = service.marks(terminalId)
-  const placed = new Set(blocks.map((block) => block.id))
-  respondJson(response, 200, {
-    checkpoints: blocks.map((block) =>
-      streamIndexRowOf(entryOfRecordBlock(block), marks.get(block.id))
-    ),
-    missing: [],
-    orphanMarks: [...marks.keys()].filter((identity) => !placed.has(identity)),
-    source
-  })
 }
 
 /** GET /stream?after=&before=&limit= — a window, never the whole chain. */
@@ -298,7 +256,7 @@ export async function handleStreamRoutes(
   deps: StreamRouteDeps
 ): Promise<boolean> {
   const match = url.pathname.match(
-    /^\/api\/terminal\/([^/]+)\/stream(\/blocks|\/index|\/live|\/marks)?$/
+    /^\/api\/terminal\/([^/]+)\/stream(\/blocks|\/index|\/live|\/marks|\/open)?$/
   )
   if (match === null) return false
   const [, rawId, leaf] = match
@@ -335,7 +293,11 @@ export async function handleStreamRoutes(
       return true
     }
     if (leaf === '/index') {
-      await serveIndex(response, terminalId, source, deps)
+      await serveStreamIndex(response, url, terminalId, source, deps)
+      return true
+    }
+    if (leaf === '/open') {
+      await serveStreamOpen(response, url, terminalId, source, deps)
       return true
     }
     if (leaf === '/live') {
