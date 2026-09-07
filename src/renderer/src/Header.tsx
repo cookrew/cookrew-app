@@ -1,5 +1,5 @@
 import { isDemoMode, isRemoteMode } from './api'
-import { CrHandMark, CrLogoMark } from './CrLogoMark'
+import { CrBrandMotion, CrHandMark, CrLogoMark } from './CrLogoMark'
 import { CompanionAvatar, PathBadge } from './PathBadge'
 import { CrIcon } from './icons'
 import { StatusCoin } from './nodes/AgentAvatar'
@@ -80,13 +80,15 @@ export function Header({
     <header className="cr-header">
       <div className="cr-header-brand">
         {/* ON THE PHONE THE C HAND BRANDS THE BAR AND THE BADGE DOES THE WORK. The
-            lockup is too wide for one line at phone width, so the hand stands
-            alone as the mark and the path badge beside it is the always-visible
-            "this is how I am asking, and it still works". Tapping the badge
-            refreshes; the hand is a mark, not a control. */}
+            lockup is too wide for one line in portrait, so the hand stands alone
+            as the mark; in landscape (700 px up) brand-motion.css swaps in the
+            moving lockup. The path badge beside it is the always-visible "this
+            is how I am asking, and it still works" and tapping it refreshes;
+            the marks are marks, not controls. */}
         {isRemoteMode() ? (
           <>
             <CrHandMark />
+            <CrBrandMotion />
             <PathBadge onRefresh={onResync} />
           </>
         ) : (
@@ -100,9 +102,8 @@ export function Header({
             <CrLogoMark />
           </button>
         )}
-        {/* THE WORDMARK IS INSIDE THE MARK NOW. The lockup spells COOKREW itself, so the text
-            only stays where the badge has replaced the mark: on the phone. */}
-        {isRemoteMode() && <span className="cr-logo">COOKREW</span>}
+        {/* THE WORDMARK IS INSIDE THE MARK NOW, on every surface: the desktop shows the still
+            lockup, the phone the hand or (in landscape) the moving lockup. No text twin. */}
         {/* IDENTITY LIVES IN THE BRAND GROUP (D1), right after the wordmark and
             at the mark's own 24 px, so the group stays one line. */}
         {avatar}
