@@ -159,6 +159,55 @@ describe('the block window always carries a cursor', () => {
   })
 })
 
+describe('the tail alone, for a card preview or a board row', () => {
+  it('takes the tail out of /stream/open, with its own mark', async () => {
+    answer = () => ({
+      status: 200,
+      body: {
+        index: [{ ...INDEX_ANSWER.checkpoints[0], marks: { title: 'fixed the seam' } }],
+        tail: {
+          block: { id: 'u1', index: 1, ordinal: 1, prompt: 'p', reply: 'r', activity: [] },
+          final: true,
+          ordinal: 1,
+          total: 1
+        },
+        backwardsCursor: null,
+        source: 'file',
+        anomalies: {},
+        rolledBack: []
+      }
+    })
+    const { createHttpStreamTransport } = await load()
+    const tail = await createHttpStreamTransport().tail('t1')
+    expect(tail?.block?.reply).toBe('r')
+    expect(tail?.marks?.title).toBe('fixed the seam')
+  })
+
+  it('falls back to the deprecated /latest on a server with no open', async () => {
+    answer = (url) =>
+      url.endsWith('/stream/open')
+        ? { status: 404, body: { error: 'not found' } }
+        : { status: 200, body: { prompt: 'p', reply: 'r', title: 'from sous' } }
+    const { createHttpStreamTransport } = await load()
+    const tail = await createHttpStreamTransport().tail('t1')
+    expect(calls.map((c) => c.url)).toEqual([
+      '/api/terminal/t1/stream/open',
+      '/api/terminal/t1/latest'
+    ])
+    expect(tail?.block?.prompt).toBe('p')
+    expect(tail?.marks?.title).toBe('from sous')
+  })
+
+  it('a card with no turn yet is null, not an empty preview', async () => {
+    answer = (url) =>
+      url.endsWith('/stream/open')
+        ? { status: 404, body: { error: 'not found' } }
+        : { status: 200, body: null }
+    const { createHttpStreamTransport } = await load()
+    expect(await createHttpStreamTransport().tail('t1')).toBeNull()
+  })
+})
+
 describe('a mark is the only write', () => {
   it('PUTs the patch to /stream/marks', async () => {
     answer = () => ({ status: 200, body: { ok: true } })

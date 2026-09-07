@@ -38,6 +38,13 @@ export interface StreamTransport {
   index: (terminalId: string, cursor: StreamCursor) => Promise<StreamIndexPage>
   /** A window of FULL blocks, by identity — never the whole chain. */
   blocks: (terminalId: string, cursor: StreamCursor) => Promise<StreamBlockPage>
+  /**
+   * The tail ALONE, for a surface that wants the last turn and nothing else:
+   * the card preview and the board's rows. It is a separate read rather than
+   * an open because a board of twenty idle agents must not pull twenty
+   * index pages to draw twenty one-line previews.
+   */
+  tail: (terminalId: string) => Promise<StreamTail | null>
   /** The only write in this design. */
   mark: (terminalId: string, patch: MarkPatch) => Promise<void>
   /** Subscribe; the returned function unsubscribes and must be idempotent. */
@@ -59,6 +66,7 @@ export function createAbsentStreamTransport(reason: string): StreamTransport {
     open: refuse,
     index: refuse,
     blocks: refuse,
+    tail: refuse,
     mark: refuse,
     live: (_terminalId, handlers) => {
       handlers.onState('off')

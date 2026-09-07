@@ -55,6 +55,7 @@ export function createBridgeStreamTransport(): StreamTransport {
     open: bridge.streamOpen,
     index: bridge.streamIndex ?? (() => Promise.resolve({ checkpoints: [] })),
     blocks: bridge.streamBlocks,
+    tail: async (terminalId) => (await bridge.streamTail?.(terminalId)) ?? null,
     mark: async (terminalId, patch) => {
       const write = bridge.streamMark
       if (write === undefined) throw new Error('this build cannot write a checkpoint mark')

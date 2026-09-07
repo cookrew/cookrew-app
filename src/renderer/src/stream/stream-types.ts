@@ -64,6 +64,16 @@ export interface StreamTail {
   final: boolean
   ordinal: number | null
   total: number
+  /**
+   * The tail's own marks, on the ONE-SHOT tail read only.
+   *
+   * A card preview shows the Sous title, and a title is a mark — so a tail
+   * fetched for a preview has to carry it or the preview would need a second
+   * read to find out what the turn is called. The live `tail` event does not
+   * set this: on a subscription the `mark` event is what carries a title, and
+   * two sources for one fact is the drift this design exists to remove.
+   */
+  marks?: StreamMarks
 }
 
 /** Where a card's record comes from. 'file' walks a transcript; 'door' and

@@ -124,6 +124,63 @@ async function openFromIndex(terminalId: string): Promise<StreamOpen> {
     rolledBack: []
   }
 }
+/**
+ * The TAIL alone, for a card preview or a board row.
+ *
+ * `/stream/open` already carries it, and taking the tail out of that answer
+ * costs one read; there is no cheaper route today. That is why the fallback
+ * below matters more here than anywhere else: a board of idle agents on a
+ * pre-T2.5 server would otherwise pull a full index page per agent per poll.
+ */
+async function tail(terminalId: string): Promise<StreamTail | null> {
+  try {
+    const open = await readJson<StreamOpen>(base(terminalId, '/open'))
+    const newest = open.index[open.index.length - 1]
+    const marks = newest?.identity === open.tail?.block?.id ? newest?.marks : undefined
+    return open.tail === null ? null : { ...open.tail, ...(marks !== undefined ? { marks } : {}) }
+  } catch (error) {
+    if (!(error instanceof StreamRouteAbsent)) throw error
+    return tailFromLatest(terminalId)
+  }
+}
+
+/**
+ * The tail from the DEPRECATED /latest route, for a server without an open.
+ *
+ * It is the one place this branch reaches back to a route T3 is retiring, and
+ * it is deliberate: the alternative on a pre-T2.5 build is a full index page
+ * per idle agent per poll on the board, which is a real cost regression for a
+ * one-line preview. /latest is a bounded tail read (~1 ms) and answers exactly
+ * this question.
+ *
+ * It carries no ordinal and no chain length, so both are reported as unknown
+ * rather than guessed — a preview needs the words, not the position.
+ */
+async function tailFromLatest(terminalId: string): Promise<StreamTail | null> {
+  const latest = await readJson<{ prompt: string; reply: string; title?: string } | null>(
+    apiPath(`/api/terminal/${encodeURIComponent(terminalId)}/latest`)
+  )
+  if (latest === null || latest === undefined) return null
+  return {
+    block: {
+      id: '',
+      index: 0,
+      ordinal: 0,
+      prompt: latest.prompt,
+      reply: latest.reply,
+      activity: [],
+      startedAt: 0,
+      endedAt: 0,
+      compacted: false,
+      file: '',
+      sessionId: ''
+    },
+    final: true,
+    ordinal: null,
+    total: 0,
+    ...(latest.title !== undefined ? { marks: { title: latest.title } } : {})
+  }
+}
 /** <<< END FALLBACK >>> */
 
 export function createHttpStreamTransport(): StreamTransport {
@@ -133,6 +190,7 @@ export function createHttpStreamTransport(): StreamTransport {
       readJson<StreamIndexPage>(`${base(terminalId, '/index')}?${query(cursor)}`),
     blocks: (terminalId, cursor) =>
       readJson<StreamBlockPage>(`${base(terminalId)}?${query(cursor)}`),
+    tail,
     mark: async (terminalId, patch: MarkPatch) => {
       await readJson<unknown>(base(terminalId, '/marks'), {
         method: 'PUT',
