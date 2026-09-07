@@ -69,6 +69,12 @@ export function createBridgeStreamTransport(): StreamTransport {
     live: (terminalId, handlers) => {
       let closed = false
       let lastMarks: Record<string, StreamMarks> = {}
+      /** The first pass takes a BASELINE and emits nothing (T5 QA
+       *  2026-09-07): the marks it would replay are already on the rows
+       *  /stream/open answered with, and on the owner's busiest card that
+       *  backlog was ~500 pushes per focused card. The HTTP transport's
+       *  connect follows the same rule — see stream-live.ts. */
+      let seeded = false
       const readTail = async (): Promise<void> => {
         const tail = await bridge.streamTail?.(terminalId)
         if (!closed && tail !== undefined) handlers.onTail(tail)
@@ -76,6 +82,11 @@ export function createBridgeStreamTransport(): StreamTransport {
       const readMarks = async (): Promise<void> => {
         const next = await bridge.streamMarks?.(terminalId)
         if (closed || next === undefined) return
+        if (!seeded) {
+          seeded = true
+          lastMarks = next
+          return
+        }
         for (const [identity, mark] of Object.entries(next)) {
           if (JSON.stringify(lastMarks[identity] ?? null) !== JSON.stringify(mark)) {
             handlers.onMark(identity, mark)

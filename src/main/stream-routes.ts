@@ -36,7 +36,7 @@ import type { StreamService } from './stream-service'
 import type { StreamBlock } from './stream'
 import type { TurnRecord } from '../shared/turn'
 import type { TranscriptSource } from './transcript-source'
-import { handleStreamLive } from './stream-live'
+import { handleStreamLive, sinceParam } from './stream-live'
 
 /** Cap on ONE window. /stream returns FULL prompt/reply bodies, so an
  *  unbounded page would ship a whole history to draw one screen — the same
@@ -301,7 +301,13 @@ export async function handleStreamRoutes(
       return true
     }
     if (leaf === '/live') {
-      handleStreamLive(request, response, terminalId, source, deps)
+      // A NEW deps object, never a mutation: `deps` is the API's own, shared
+      // by every request, and `since` belongs to this subscription alone.
+      const since = sinceParam(url)
+      handleStreamLive(request, response, terminalId, source, {
+        ...deps,
+        ...(since !== null ? { since } : {})
+      })
       return true
     }
     await serveWindow(response, url, terminalId, source, deps)

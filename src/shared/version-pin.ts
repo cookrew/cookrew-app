@@ -124,11 +124,33 @@ export interface RailRow {
  * worse than an absent one applies to position too, and a V1 shown against T5
  * because the ledger starts at T5 is a wrong version.
  */
-export function pinFraction(atIndex: number, rows: readonly RailRow[]): number | null {
+export function pinFraction(
+  atIndex: number,
+  rows: readonly RailRow[],
+  scale?: number
+): number | null {
   if (rows.length === 0) return null
   const at = rows.findIndex((r) => r.index === atIndex)
   if (at < 0) return null
-  return at / rows.length
+  return positionOf(at, rows, scale)
+}
+
+/**
+ * A drawn row's place along the bar (D1, T5 QA 2026-09-07).
+ *
+ * WITHOUT a scale this is `arrayPosition / rows.length` — what every caller
+ * here has always produced, kept byte-identical so the pin, tick and marker
+ * gates argue about the same numbers they always did.
+ *
+ * WITH one it is the row's ORDINAL over the WHOLE chain, which is what a rail
+ * whose index is PAGED needs: `rows` is then the newest hundred of a 1,048-row
+ * card, and dividing by its length would draw T949 at the top of the bar. The
+ * scale comes from rail-fill.ts's railScale, so the pins, the boundary ticks
+ * and the reveal cannot disagree about where a checkpoint is.
+ */
+function positionOf(at: number, rows: readonly RailRow[], scale?: number): number {
+  if (scale === undefined) return at / rows.length
+  return Math.max(0, Math.min(1, (rows[at].index - 1) / Math.max(1, scale)))
 }
 
 /**
@@ -141,12 +163,16 @@ export function pinFraction(atIndex: number, rows: readonly RailRow[]): number |
  * Only a legacy pin with no uuid keeps the `atIndex` lookup. `pinFraction`
  * above keeps its exported signature for index-space callers.
  */
-export function pinRowFraction(pin: VersionPinRecord, rows: readonly RailRow[]): number | null {
+export function pinRowFraction(
+  pin: VersionPinRecord,
+  rows: readonly RailRow[],
+  scale?: number
+): number | null {
   if (pin.atUuid !== undefined) {
     const at = rows.findIndex((r) => r.id === pin.atUuid)
-    return at < 0 ? null : at / rows.length
+    return at < 0 ? null : positionOf(at, rows, scale)
   }
-  return pinFraction(pin.atIndex, rows)
+  return pinFraction(pin.atIndex, rows, scale)
 }
 
 /**
@@ -178,21 +204,30 @@ export function pinRowFraction(pin: VersionPinRecord, rows: readonly RailRow[]):
  * above: the row before position 0 is position −1, and (−1 + 1) / n = 0 —
  * the top edge, which this boundary has an exact claim to.
  */
-export function traceFraction(afterIndex: number, rows: readonly RailRow[]): number | null {
+export function traceFraction(
+  afterIndex: number,
+  rows: readonly RailRow[],
+  scale?: number
+): number | null {
   if (rows.length === 0) return null
   if (afterIndex === 0) return 0
   const at = rows.findIndex((r) => r.index === afterIndex)
   if (at < 0) return null
-  return (at + 1) / rows.length
+  // The edge BELOW the row, in whichever space the caller asked for. On the
+  // chain's scale that is the next ordinal's own slot, which is the same
+  // virtual-slot arithmetic as `(at + 1) / rows.length` (D1, T5 QA).
+  if (scale === undefined) return (at + 1) / rows.length
+  return Math.max(0, Math.min(1, rows[at].index / Math.max(1, scale)))
 }
 
 export function pinAnchors(
   records: readonly VersionPinRecord[],
-  rows: readonly RailRow[]
+  rows: readonly RailRow[],
+  scale?: number
 ): VersionPinAnchor[] {
   const out: VersionPinAnchor[] = []
   for (const r of [...records].sort((a, b) => a.version - b.version)) {
-    const frac = pinRowFraction(r, rows)
+    const frac = pinRowFraction(r, rows, scale)
     if (frac !== null) out.push({ version: r.version, frac })
   }
   return out

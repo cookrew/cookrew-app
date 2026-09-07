@@ -112,23 +112,45 @@ export function createHttpStreamTransport(): StreamTransport {
   }
 }
 
+/** How long a dropped subscription waits before it re-opens. The browser's
+ *  own EventSource retry is ~3 s; this replaces it (see subscribe). */
+const RECONNECT_MS = 3000
+
+/**
+ * The live PATH, carrying the newest mark reading this client already holds.
+ *
+ * Deliberately WITHOUT the token: `tokenParam` is applied at the `new
+ * EventSource(...)` call site so tests/api-base.test.ts's sweep can see it
+ * there. A token added inside a helper is the exact blind spot that sweep
+ * exists for — and a stream opened without one is a 401 the browser retries
+ * forever while the rail simply never fills.
+ */
+export function liveHref(terminalId: string, since: number | null): string {
+  const path = base(terminalId, '/live')
+  return since === null ? path : `${path}?since=${encodeURIComponent(String(since))}`
+}
+
 /**
  * The live subscription, over SSE.
  *
- * `hello` is the proof the link is up; the browser's own EventSource retries
- * a dropped connection, and the state it reports is what the rail shows as
- * 'reconnecting'. `rollback` is listened for even though T2.5 is what emits
- * it — a handler that arrives with the event is one fewer coordinated deploy.
+ * `hello` is the proof the link is up. RECONNECTION IS OURS, not the browser's
+ * (T5 QA, 2026-09-07): a native EventSource retry re-opens the SAME url, so a
+ * subscriber that dropped for a second used to be handed the whole mark ledger
+ * again — 498 frames on the owner's busiest card. Re-opening ourselves lets the
+ * next connect carry `?since=<the newest mark reading we hold>`, which is the
+ * outage's own delta and nothing else. `hello.marksAt` seeds that reading and
+ * every `mark` frame advances it.
+ *
+ * `rollback` is listened for even though T2.5 is what emits it — a handler
+ * that arrives with the event is one fewer coordinated deploy.
  */
 function subscribe(terminalId: string, handlers: StreamLiveHandlers): () => void {
   let source: EventSource | null = null
-  try {
-    source = new EventSource(tokenParam(base(terminalId, '/live')))
-  } catch (error) {
-    handlers.onState('off')
-    handlers.onError(error instanceof Error ? error.message : String(error))
-    return () => undefined
-  }
+  let retry: ReturnType<typeof setTimeout> | null = null
+  let stopped = false
+  /** The newest mark reading this client holds — the resume token. */
+  let since: number | null = null
+
   const parse = <T,>(event: MessageEvent, use: (value: T) => void): void => {
     try {
       use(JSON.parse(event.data) as T)
@@ -139,22 +161,62 @@ function subscribe(terminalId: string, handlers: StreamLiveHandlers): () => void
       handlers.onError(error instanceof Error ? error.message : String(error))
     }
   }
-  source.addEventListener('hello', () => handlers.onState('connected'))
-  source.addEventListener('tail', (event) =>
-    parse<StreamTail>(event as MessageEvent, handlers.onTail)
-  )
-  source.addEventListener('mark', (event) =>
-    parse<{ identity: string; mark: StreamMarks | null }>(event as MessageEvent, (frame) =>
-      handlers.onMark(frame.identity, frame.mark)
+
+  const advance = (at: number | undefined): void => {
+    if (typeof at === 'number' && Number.isFinite(at) && (since === null || at > since)) since = at
+  }
+
+  const connect = (): void => {
+    if (stopped) return
+    try {
+      source = new EventSource(tokenParam(liveHref(terminalId, since)))
+    } catch (error) {
+      handlers.onState('off')
+      handlers.onError(error instanceof Error ? error.message : String(error))
+      return
+    }
+    source.addEventListener('hello', (event) =>
+      parse<{ marksAt?: number }>(event as MessageEvent, (frame) => {
+        advance(frame.marksAt)
+        handlers.onState('connected')
+      })
     )
-  )
-  source.addEventListener('rollback', (event) =>
-    parse<{ fromOrdinal: number; at?: number }>(event as MessageEvent, (frame) =>
-      handlers.onRollback(frame.fromOrdinal, frame.at ?? Date.now())
+    source.addEventListener('tail', (event) =>
+      parse<StreamTail>(event as MessageEvent, handlers.onTail)
     )
-  )
-  source.onerror = (): void => handlers.onState('reconnecting')
+    source.addEventListener('mark', (event) =>
+      parse<{ identity: string; mark: StreamMarks | null; at?: number }>(
+        event as MessageEvent,
+        (frame) => {
+          advance(frame.at)
+          handlers.onMark(frame.identity, frame.mark)
+        }
+      )
+    )
+    source.addEventListener('rollback', (event) =>
+      parse<{ fromOrdinal: number; at?: number }>(event as MessageEvent, (frame) =>
+        handlers.onRollback(frame.fromOrdinal, frame.at ?? Date.now())
+      )
+    )
+    source.onerror = (): void => {
+      if (stopped) return
+      handlers.onState('reconnecting')
+      source?.close()
+      source = null
+      if (retry === null) {
+        retry = setTimeout(() => {
+          retry = null
+          connect()
+        }, RECONNECT_MS)
+      }
+    }
+  }
+
+  connect()
   return () => {
+    if (stopped) return
+    stopped = true
+    if (retry !== null) clearTimeout(retry)
     source?.close()
     handlers.onState('off')
   }

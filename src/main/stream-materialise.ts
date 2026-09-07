@@ -57,7 +57,7 @@ import {
 } from './stream-authority'
 import type { IdentityCollision } from '../shared/stream-replay'
 import type { MissingStreamFile } from './stream-chain'
-import type { StreamLinesResult } from './stream'
+import type { StreamLinesResult, StreamResume } from './stream'
 import type { RollbackMark, StreamState, StreamStateResult } from './stream-state'
 
 export interface MaterialisedIndex {
@@ -72,7 +72,7 @@ export interface MaterialisedIndex {
 }
 
 export interface StreamIndexStoreDeps {
-  lines: (terminalId: string) => Promise<StreamLinesResult>
+  lines: (terminalId: string, resume?: StreamResume) => Promise<StreamLinesResult>
   readState: (terminalId: string) => StreamState
   writeState: (terminalId: string, state: StreamState) => StreamStateResult
   now?: () => number
@@ -130,13 +130,19 @@ function evidenceOf(
 ): AuthorityEvidence {
   const positions = filePositions(read)
   const cursorAt = positions.get(state.cursor.file)
-  const behind = read.lines.some(
-    (line) =>
-      cursorAt !== undefined &&
-      (positions.get(line.file) ?? 0) < cursorAt &&
-      line.entry !== undefined &&
-      !snapshot.has(checkpointKey(line.entry))
-  )
+  // A RESUMED WALK CANNOT SEE BEHIND ITSELF, and does not need to: the reader
+  // skips a member only when the snapshot covers it TO ITS CURRENT LAST BYTE
+  // (StreamResume), which is the negation of this evidence — a predecessor
+  // that grew, or one that is new, refuses the fast path and is walked.
+  const behind =
+    read.resumed !== true &&
+    read.lines.some(
+      (line) =>
+        cursorAt !== undefined &&
+        (positions.get(line.file) ?? 0) < cursorAt &&
+        line.entry !== undefined &&
+        !snapshot.has(checkpointKey(line.entry))
+    )
   return {
     cursorFileBytes: read.files.find((entry) => entry.file === state.cursor.file)?.bytesRead ?? null,
     tailFile: read.files[read.files.length - 1]?.file ?? null,
@@ -259,9 +265,13 @@ export function createStreamIndexStore(deps: StreamIndexStoreDeps): StreamIndexS
 
   return {
     async materialise(terminalId) {
-      const read = await deps.lines(terminalId)
+      // THE STATE IS READ FIRST, so the walk can be asked to start at the
+      // cursor (D6, T5 QA 2026-09-07). The reader enforces the preconditions
+      // itself and answers with the full walk whenever they do not hold, so
+      // this can only ever be an optimisation of the same answer.
       const stored = deps.readState(terminalId)
       const before = snapshotOf(stored.index)
+      const read = await deps.lines(terminalId, resumeOf(stored, before))
       const { state: repaired, repairs } = repairStreamState(
         stored,
         evidenceOf(stored, read, before)
@@ -296,6 +306,40 @@ export function createStreamIndexStore(deps: StreamIndexStoreDeps): StreamIndexS
       }
     }
   }
+}
+
+/**
+ * What this pass may skip re-reading — the persisted snapshot, as a resume
+ * request (D6, T5 QA 2026-09-07).
+ *
+ * A card with no cursor and no rows has nothing to resume FROM, and asks for
+ * the whole chain. Everything else is decided by the reader, which is the only
+ * layer that knows the chain's order: this only says "here is where I was, and
+ * here is how far into each transcript my rows go".
+ *
+ * COVERAGE IS IN BYTES, not in "I have seen this file" (review, T5 QA
+ * 2026-09-07). `occurrences[].byteOffset` is the prefix of a transcript the
+ * reader had ingested when a checkpoint out of it was projected — the file's
+ * own size at that pass — so the HIGHEST of them is how far this snapshot
+ * reaches into it. A predecessor that has grown since (a `claude --resume`
+ * into an earlier session appends to a non-tail chain member) then reads as
+ * uncovered and the whole chain is walked; asking only whether the file was
+ * known would have skipped those exchanges permanently.
+ */
+function resumeOf(
+  state: StreamState,
+  snapshot: ReadonlyMap<string, ProjectedCheckpoint>
+): StreamResume | undefined {
+  if (state.cursor.file.length === 0 || snapshot.size === 0) return undefined
+  const covered = new Map<string, number>()
+  for (const row of snapshot.values()) {
+    for (const one of row.occurrences) {
+      const bytes = one.byteOffset ?? 0
+      const held = covered.get(one.file)
+      if (held === undefined || bytes > held) covered.set(one.file, bytes)
+    }
+  }
+  return { cursorFile: state.cursor.file, coveredBytes: (file) => covered.get(file) }
 }
 
 /** The rewind pass: a shrunk cursor file, turned into an appended fact. */

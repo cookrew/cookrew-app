@@ -37,6 +37,7 @@ import {
   type CheckpointRow,
   type TraceMarkerRow
 } from './stream-rows'
+import { createPageBackRunner, oldestOrdinal } from './page-back'
 import type { StreamTransport } from './stream-transport'
 import type {
   LiveState,
@@ -71,8 +72,24 @@ export interface StreamHandle {
   blocksAround: (identity: string, limit?: number) => Promise<StreamBlockPage>
   /** The window that FOLLOWS `identity`; null starts at the stream's oldest. */
   blocksAfter: (identity: string | null, limit?: number) => Promise<StreamBlockPage>
-  /** One more page of index rows, older than what is loaded. */
+  /** One more page of index rows, older than what is loaded. Coalesces: a
+   *  second call while one page is on the wire waits for that page. */
   pageBack: () => Promise<void>
+  /**
+   * "A surface just reached this ordinal." The page-back TRIGGER (D1, T5 QA
+   * 2026-09-07): within PAGE_BACK_THRESHOLD rows of the oldest row loaded it
+   * puts exactly one page on the wire, and `atOldest` stops it. Fire it as
+   * often as you like — a scrub does, per pointer event.
+   */
+  reach: (ordinal: number) => void
+  /**
+   * Page backwards until `ordinal` is loaded, or the chain's oldest is.
+   *
+   * What a drawer opened at a checkpoint this client never indexed needs.
+   * Bounded twice: it stops at the page that CONTAINS the ordinal, and again
+   * at maxPageBackSteps if a server hands back a cursor that never advances.
+   */
+  ensureLoaded: (ordinal: number) => Promise<void>
   /** True once there is nothing older to page to. */
   atOldest: boolean
   markSeen: (identity: string) => void
@@ -153,21 +170,58 @@ export function useStream(
     }
   }, [terminalId, transport])
 
-  const pageBack = useCallback(async (): Promise<void> => {
-    const cursor = stateRef.current.backwardsCursor
-    if (cursor === null) return
-    try {
-      const page = await transport.index(terminalId, { before: cursor, limit: INDEX_PAGE })
-      dispatch({
-        kind: 'index',
-        checkpoints: page.checkpoints,
-        backwardsCursor: page.backwardsCursor ?? null,
-        ...(page.total !== undefined ? { total: page.total } : {})
-      })
-    } catch (error) {
-      dispatch({ kind: 'error', error: messageOf(error) })
-    }
-  }, [terminalId, transport])
+  /**
+   * THE PAGING ENGINE (D1, T5 QA 2026-09-07) — the order of decisions lives in
+   * page-back.ts, which has no React in it, so the trigger can be driven by a
+   * test that mounts nothing. All this contributes is a fresh read of the
+   * reducer's state and one transport call.
+   */
+  const runner = useMemo(
+    () =>
+      createPageBackRunner({
+        pageSize: INDEX_PAGE,
+        state: () => ({
+          oldestLoaded: oldestOrdinal(stateRef.current.index),
+          atOldest: stateRef.current.backwardsCursor === null,
+          total: stateRef.current.total
+        }),
+        fetch: async () => {
+          const forCard = terminalId
+          const cursor = stateRef.current.backwardsCursor
+          if (cursor === null) return
+          try {
+            const page = await transport.index(forCard, { before: cursor, limit: INDEX_PAGE })
+            // THE CARD MAY HAVE CHANGED UNDER US (review, T5 QA 2026-09-07).
+            // A scrub has a page on the wire per drag, and switching terminals
+            // dispatches `reset` for the NEW card — a late page for the old
+            // one would merge foreign rows into its rail and hand it a
+            // backwards cursor pointing into the wrong transcript.
+            if (stateRef.current.terminalId !== forCard) return
+            dispatch({
+              kind: 'index',
+              checkpoints: page.checkpoints,
+              backwardsCursor: page.backwardsCursor ?? null,
+              ...(page.total !== undefined ? { total: page.total } : {})
+            })
+          } catch (error) {
+            // A failed page is DATA. A rail that throws is a rail that renders
+            // nothing, and the cursor is left where it was so the next reach
+            // asks for the same page rather than skipping it.
+            if (stateRef.current.terminalId === forCard) {
+              dispatch({ kind: 'error', error: messageOf(error) })
+            }
+          }
+        }
+      }),
+    [terminalId, transport]
+  )
+
+  const pageBack = useCallback((): Promise<void> => runner.pageBack(), [runner])
+  const reach = useCallback((ordinal: number): void => runner.reach(ordinal), [runner])
+  const ensureLoaded = useCallback(
+    (ordinal: number): Promise<void> => runner.ensureLoaded(ordinal),
+    [runner]
+  )
 
   const fetchBlocks = useCallback(
     async (after: string | null, limit: number): Promise<StreamBlockPage> => {
@@ -254,6 +308,8 @@ export function useStream(
     blocksAround,
     blocksAfter,
     pageBack,
+    reach,
+    ensureLoaded,
     atOldest: state.backwardsCursor === null,
     markSeen,
     setTitle,

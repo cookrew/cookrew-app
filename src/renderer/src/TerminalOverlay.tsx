@@ -338,9 +338,19 @@ function TerminalOverlay({
   // re-run the jump.
   const [jumpToken, setJumpToken] = useState(0)
 
+  /** The transcript's identity space, MEMOISED (review, T5 QA 2026-09-07): a
+   *  fresh array literal per render defeated TranscriptView's own memo of the
+   *  1,048-element sorted space it derives from it. */
+  const identities = useMemo(() => rows.map((r) => r.index), [rows])
+
   const gotoCheckpoint = (index: number): void => {
     setSelectedIndex(index)
     setJumpToken((t) => t + 1)
+    // OPENING THE DRAWER AT A CHECKPOINT PAGES THE INDEX TO IT (D1, T5 QA
+    // 2026-09-07). The rail's index is a window, and a jump that lands on an
+    // ordinal older than the window leaves the drawer with a placeholder no
+    // page will ever fill. Bounded: it stops at the page that holds it.
+    void stream.ensureLoaded(index)
   }
   const goLive = (): void => {
     setSelectedIndex(null)
@@ -1105,7 +1115,7 @@ function TerminalOverlay({
           total={stream.total}
           titleMode={titleMode}
           translation={translation.showing}
-          identities={rows.map((r) => r.index)}
+          identities={identities}
           selectedIndex={selectedIndex}
           jumpToken={jumpToken}
           clipRows={clipRows}
@@ -1131,6 +1141,8 @@ function TerminalOverlay({
         <CheckpointTimeline
           terminalId={node.id}
           rows={rows}
+          // The chain's length, not the page this client has fetched.
+          total={stream.total}
           pins={pins}
           markers={traceMarkers}
           titleMode={titleMode}
@@ -1144,6 +1156,7 @@ function TerminalOverlay({
           onGoto={gotoCheckpoint}
           onLive={goLive}
           onScrub={(fraction) => transcriptRef.current?.scrubTo(fraction)}
+          onReach={stream.reach}
         />
       </div>
       {dropReady && (

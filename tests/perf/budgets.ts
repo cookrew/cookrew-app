@@ -129,7 +129,44 @@ export const LATENCY = {
   // dominates it; the STRUCTURAL half is the real gate — one pass, one state
   // write, 1,000 rows, ordinals 1..1000 in order, zero anomalies — and no
   // machine can be quick enough to fake that.
-  streamIndex1000: { p50: 2, p95: 5, p98: 6 }
+  streamIndex1000: { p50: 2, p95: 5, p98: 6 },
+
+  // ---- One stream, D6 (T5 QA 2026-09-07): what /stream/open actually costs
+  // streamIndex1000 measures the PROJECTION with its lines already in hand —
+  // it never reads a file. /stream/open's real cost is the WALK in front of
+  // it, and that walk went unmeasured until the route exceeded a 30 s client
+  // timeout on the owner's busiest card (9 transcripts, 1,048 exchanges).
+  //
+  // COLD is the honest floor: a card opening after a restart parses every
+  // transcript in its chain, and nothing can make that free. WARM is the one
+  // the defect is about — the same card opened again, off the persisted
+  // snapshot, reading one document instead of nine.
+  //
+  // THE FIX, on the 9-file / 1,048-block / 13.3 MB fixture, 2026-09-07, both
+  // sides on the same harness:
+  //
+  //   BEFORE  cold p50 60.5 / p95 78.7 ms · warm p50 68.3 / p95 127.1 ms,
+  //           27 document reads for one open (nine files, three walks). The
+  //           warm path was SLOWER than the cold one: the persisted snapshot
+  //           was read, folded and then thrown at a walk that re-derived it.
+  //   AFTER   cold p50 44.9 / p95 51.1 ms · warm p50 7.4 / p95 9.9 ms,
+  //           2 document reads — one for the index walk, one for the tail's,
+  //           each touching the cursor's file alone.
+  //
+  // WARM IS THE TIGHT GATE; COLD IS A CEILING, and the asymmetry is honest.
+  // Worst of four strict runs, 30 samples, load ~1.5: warm p50 14 / p95 40 /
+  // p98 55 — budgeted at the file's own ≥2x rule. Cold ran p50 53-77 with a
+  // p98 between 83 and 731 and a max of 1,024: each sample parses 13 MB into
+  // its own reader cache, so the tail is the ALLOCATOR's, not this change's,
+  // and a tight budget there would flap rather than catch anything. It is
+  // still gated, at the order of magnitude a real regression would cross.
+  //
+  // The STRUCTURAL half is the real gate: 1,048 rows and exactly two document
+  // reads on the warm path, which no machine can be quick enough to fake. The
+  // owner's real chain is ~30x these bytes; the ratio is what transfers, not
+  // the milliseconds.
+  streamOpenCold1048: { p50: 500, p95: 2000, p98: 2500 },
+  streamOpenWarm1048: { p50: 30, p95: 80, p98: 120 }
 } as const
 
 export const MEMORY = {
