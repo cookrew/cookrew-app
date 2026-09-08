@@ -12,7 +12,8 @@ import {
   agentStatus,
   statusFeed,
   type HerdrStatus,
-  type StatusObservation
+  type StatusObservation,
+  type StatusRetraction
 } from './herdr-agent-status'
 import { resolveRotationChain, rotationCommitVerdict } from './claude-rotation'
 import { BootLatency, shouldTimeBoot, type BootSample } from './boot-latency'
@@ -44,6 +45,7 @@ import {
   PROBE_INTERVAL_MS,
   tmuxProbeDeps
 } from './board-index'
+import { createBoardHolds } from './board-hold'
 import { createLoopHealth } from './loop-health'
 import { loadOrCreateReadOnlyToken } from './readonly-token'
 import { loadOrCreatePairingToken } from './pairing-token'
@@ -1395,7 +1397,8 @@ async function attachServedLine(conductorId: string): Promise<LinePtyView | null
 const loopHealth = createLoopHealth({
   residency: () => ({ store: store.resident().length, registry: sessions.residentCount() }),
   // The Sous breaker, so a loaded machine's silent titles are explained.
-  sous: () => sousBreakerState()
+  sous: () => sousBreakerState(),
+  probe: () => boardProbe.stats()
 })
 
 const boardProbe = createProbeSampler(
@@ -1406,20 +1409,28 @@ const boardProbe = createProbeSampler(
   PROBE_INTERVAL_MS,
   { observe: (ms) => loopHealth.observe('boardProbe', ms) }
 )
-/** Board sources incl. L2; probing restarts lazily whenever the board is read. */
+/**
+ * Board sources incl. L2. A one-shot read TOUCHES the probe (at most one
+ * pass, never the timer); a consumer that stays — the SSE ?board=1 stream,
+ * the desktop panel's board:subscribe — holds it open through
+ * probeSubscribe and is pushed through probeOnChange. The probe's cadence
+ * is events first (see the invalidations wired below), a backed-off pass
+ * as the fallback.
+ */
 function boardSources(): ReturnType<typeof boardSourcesFrom> {
   return boardSourcesFrom({
     store,
     turns,
     turnStore,
     agents,
-    probe: () => {
-      boardProbe.start()
-      return boardProbe.phases()
-    },
-    probeWarm: () => boardProbe.warm()
+    probe: () => boardProbe.touch(),
+    probeWarm: () => boardProbe.warm(),
+    probeSubscribe: () => boardProbe.subscribe(),
+    probeOnChange: (listener) => boardProbe.onChange(listener)
   })
 }
+// A turn boundary is a phase change for one terminal: recompute it, no listing.
+turns.on('turn', ({ terminalId }: { terminalId: string }) => void boardProbe.invalidate(terminalId))
 const events = new EventLog()
 const recoverable = new RecoverableStore()
 // Snapshot every killed terminal (node + position + session refs + edges)
@@ -1691,6 +1702,14 @@ statusFeed()?.on('status', ({ sessionName, status }: StatusObservation) => {
   if (!terminalId) return
   lazyTerminals.observeStatus(terminalId, status)
   turns.observeBackendPhase(terminalId, backendPhaseOf(status), isAgentTerminal(terminalId))
+  // herdr's push IS the board's phase for this pane: fold it in at once.
+  void boardProbe.invalidate(terminalId)
+})
+// herdr withdrawing a state is a change too: the pane is pixels-only again,
+// and without this it would wait for the fallback pass at whatever rung.
+statusFeed()?.on('retracted', ({ sessionName }: StatusRetraction) => {
+  const terminalId = terminalIdForSessionName(sessionName)
+  if (terminalId) void boardProbe.invalidate(terminalId)
 })
 
 /**
@@ -3049,6 +3068,7 @@ function residentBrowsers(): BrowserNodeData[] {
 function bootTerminal(t: TerminalNodeData): void {
   spawnTracked(t)
   deliverPendingInject(t)
+  void boardProbe.invalidate(t.id) // attached now: L1 owns it, the probe's row goes
 }
 
 /** Open the local mirror for a zoomed transcript, never for canvas startup. */
@@ -3065,6 +3085,7 @@ function detachTerminalMirror(terminalId: string): void {
   sessionSync.release(terminalId)
   turns.untrack(terminalId)
   ptys.detach(terminalId)
+  void boardProbe.invalidate(terminalId) // detached now: the probe's to watch
 }
 
 function addNode(node: CanvasNode): CanvasNode {
@@ -5614,6 +5635,12 @@ function registerIpc(handlers: RestoreHandlers): void {
       boardWindowMs(typeof window === 'string' ? window : null)
     )
   )
+  // A desktop board panel that stays open: hold the probe, push on change,
+  // release on the last unsubscribe, the page going, or the renderer going
+  // (src/main/board-hold.ts owns the rules and has the units).
+  const boardHolds = createBoardHolds({ sources: boardSources, turns, store })
+  ipcMain.handle('board:subscribe', (event) => boardHolds.subscribe(event.sender))
+  ipcMain.handle('board:unsubscribe', (event) => boardHolds.unsubscribe(event.sender))
   ipcMain.handle('agent:recover', (_e, id: string) => recoverAgent(id))
   // Endpoint restore channels live alongside the executor (M10).
   registerRestoreIpc(ipcMain.handle.bind(ipcMain), handlers)

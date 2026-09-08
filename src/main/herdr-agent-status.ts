@@ -30,6 +30,11 @@ import { execFileSync } from 'node:child_process'
 
 export type HerdrStatus = 'idle' | 'working' | 'blocked' | 'done'
 
+/** What the feed announces on 'retracted': herdr withdrew its state for this session. */
+export interface StatusRetraction {
+  sessionName: string
+}
+
 /** What the feed announces on 'status': herdr has a state for this session. */
 export interface StatusObservation {
   sessionName: string
@@ -191,6 +196,16 @@ export class HerdrStatusFeed extends EventEmitter {
       this.emit('status', { sessionName, status } satisfies StatusObservation)
     } catch (error) {
       console.error('[herdr-status] status listener failed:', error)
+    }
+  }
+
+  /** herdr withdrew a state: forget it, and say so — a retraction is news too. */
+  private retract(sessionName: string): void {
+    this.status.delete(sessionName)
+    try {
+      this.emit('retracted', { sessionName } satisfies StatusRetraction)
+    } catch (error) {
+      console.error('[herdr-status] retraction listener failed:', error)
     }
   }
 
@@ -386,7 +401,7 @@ export class HerdrStatusFeed extends EventEmitter {
         if (label) {
           // unknown ERASES: herdr retracting a state must not leave the old
           // one behind, or a stale `working` blocks turn finalization forever.
-          if (update.status === 'unknown') this.status.delete(label)
+          if (update.status === 'unknown') this.retract(label)
           else this.record(label, update.status)
         }
       }

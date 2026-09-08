@@ -24,6 +24,7 @@
 import { monitorEventLoopDelay, performance, type EventLoopUtilization } from 'node:perf_hooks'
 import { latencyStats } from '../shared/stats'
 import type { SousBreakerState } from './sous-breaker'
+import type { ProbeStats } from './board-index'
 
 /** Window length; the read route reports the last COMPLETE window first. */
 export const LOOP_WINDOW_MS = 60_000
@@ -78,11 +79,14 @@ export interface LoopHealthSnapshot {
   residency: Record<string, number>
   /** The Sous circuit breaker (sous-breaker.ts), or null when not wired. */
   sous?: SousBreakerState | null
+  /** The board probe's cadence: subscribers, current rung, passes and listings per minute. */
+  probe?: ProbeStats
 }
 
 export interface LoopHealthDeps {
   residency?: () => Record<string, number>
   sous?: () => SousBreakerState
+  probe?: () => ProbeStats
   now?: () => number
   windowMs?: number
   keep?: number
@@ -209,7 +213,8 @@ export function createLoopHealth(deps: LoopHealthDeps = {}): LoopHealth {
         },
         loops,
         residency: deps.residency?.() ?? {},
-        sous: deps.sous?.() ?? null
+        sous: deps.sous?.() ?? null,
+        ...(deps.probe ? { probe: deps.probe() } : {})
       }
       memo = { at: now(), snapshot }
       return snapshot

@@ -261,7 +261,22 @@ export function loopFromHealth(body) {
     max: window.max,
     elu: typeof window.elu === 'number' ? window.elu : null,
     loops,
-    residency: body.residency ?? {}
+    residency: body.residency ?? {},
+    // The board probe's cadence, when the build reports it: listings are
+    // one herdr child each, so listings per minute IS the board's cost.
+    probe:
+      body.probe && typeof body.probe.listingsLastMinute === 'number'
+        ? {
+            subscribers: body.probe.subscribers ?? 0,
+            intervalMs: body.probe.intervalMs ?? null,
+            passesPerMinute: body.probe.passesLastMinute ?? 0,
+            listingsPerMinute: body.probe.listingsLastMinute,
+            readsPerMinute: body.probe.readsLastMinute ?? 0,
+            // Every listing and every pane read is one herdr child.
+            childrenPerMinute: body.probe.listingsLastMinute + (body.probe.readsLastMinute ?? 0),
+            invalidationsPerMinute: body.probe.invalidationsLastMinute ?? 0
+          }
+        : null
   }
 }
 

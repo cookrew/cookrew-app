@@ -350,6 +350,17 @@ const api = {
   countEvents: (query: unknown) => ipcRenderer.invoke('events:count', query),
   listAgents: () => ipcRenderer.invoke('agents:list'),
   listBoard: (window?: string) => ipcRenderer.invoke('board:list', window),
+  // A board panel that stays open: the probe runs while at least one of
+  // these holds, and every change arrives pushed instead of polled.
+  subscribeBoard: (cb: (board: unknown) => void) => {
+    const listener = (_e: unknown, board: unknown): void => cb(board)
+    ipcRenderer.on('board:update', listener)
+    void ipcRenderer.invoke('board:subscribe')
+    return () => {
+      ipcRenderer.removeListener('board:update', listener)
+      void ipcRenderer.invoke('board:unsubscribe')
+    }
+  },
   recoverAgent: (id: string) => ipcRenderer.invoke('agent:recover', id),
   restoreCheckpoint: (id: string, checkpointIndex: number, targetSessionId?: string) =>
     ipcRenderer.invoke('agent:restore-checkpoint', id, checkpointIndex, targetSessionId),

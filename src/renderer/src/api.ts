@@ -332,6 +332,12 @@ export interface CookrewApi {
    */
   listBoard?: (window?: string) => Promise<BoardSnapshotLike>;
   /**
+   * A board that stays open: hold the probe and be pushed on every change.
+   * Returns the release; the last release stops the probe. Optional —
+   * feature-detect, and fall back to listBoard.
+   */
+  subscribeBoard?: (cb: (board: BoardSnapshotLike) => void) => () => void;
+  /**
    * Recover an inactive teammate as it was (agent-recover feature): re-add
    * the node bound to its session and resume. Optional — feature-detect.
    */

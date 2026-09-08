@@ -58,6 +58,13 @@ export interface BoardSources {
    * board without it answers from whatever probe() holds.
    */
   probeWarm?: () => Promise<unknown>
+  /**
+   * Hold the probe open while a consumer exists (the SSE ?board=1 stream, a
+   * desktop panel). The last release stops the periodic pass. Optional.
+   */
+  probeSubscribe?: () => () => void
+  /** The probe changed a phase — push the board. Returns the unlisten. */
+  probeOnChange?: (listener: () => void) => () => void
   /** Injectable clock so windowing is testable. */
   now?: () => number
 }
@@ -99,6 +106,8 @@ export interface BoardRuntime {
   agents: { list: () => readonly BoardAgentMeta[] }
   probe?: () => Map<string, BoardPhase>
   probeWarm?: () => Promise<unknown>
+  probeSubscribe?: () => () => void
+  probeOnChange?: (listener: () => void) => () => void
 }
 
 /**
@@ -127,7 +136,9 @@ export function boardSourcesFrom(runtime: BoardRuntime): BoardSources {
         active: entry.active
       })),
     ...(runtime.probe ? { probe: runtime.probe } : {}),
-    ...(runtime.probeWarm ? { probeWarm: runtime.probeWarm } : {})
+    ...(runtime.probeWarm ? { probeWarm: runtime.probeWarm } : {}),
+    ...(runtime.probeSubscribe ? { probeSubscribe: runtime.probeSubscribe } : {}),
+    ...(runtime.probeOnChange ? { probeOnChange: runtime.probeOnChange } : {})
   }
 }
 
@@ -351,11 +362,29 @@ export function probeOnce(
   return probeDetached(deps, detachedTerminals(deps, live))
 }
 
+/** What the sampler has been doing lately — read by /api/health. */
+export interface ProbeStats {
+  /** Board consumers holding the sampler open (SSE ?board=1 streams, desktop panels). */
+  subscribers: number
+  /** The current rung of the backoff ladder, ms — PROBE_INTERVAL_MS after any change. */
+  intervalMs: number
+  /** Whole-fleet passes in the last minute. */
+  passesLastMinute: number
+  /** Inventory listings (one child each) in the last minute. */
+  listingsLastMinute: number
+  /** Pane reads (one child each) in the last minute — passes and per-event recomputes alike. */
+  readsLastMinute: number
+  /** Per-terminal recomputes from events in the last minute. */
+  invalidationsLastMinute: number
+  everCompleted: boolean
+  /** Held open by at least one subscriber. */
+  running: boolean
+}
+
 export interface ProbeSampler {
   /** Latest sampled phases — what BoardSources.probe hands to mergeBoard. */
   phases: () => Map<string, BoardPhase>
-  /** Begin periodic sampling (idempotent). */
-  start: () => void
+  /** Release EVERY subscriber and stop the timer (tests, shutdown). */
   stop: () => void
   /** Run one SYNCHRONOUS pass now; returns the fresh map (tests, sync backends). */
   sampleNow: () => Map<string, BoardPhase>
@@ -365,7 +394,16 @@ export interface ProbeSampler {
    */
   sampleAsync: () => Promise<Map<string, BoardPhase>>
   /**
-   * start(), then the phases — at once once ANY pass has completed, or once
+   * A ONE-SHOT read's touch: with no subscriber, at most one pass (only when
+   * nothing is in flight and the last pass is older than the CURRENT rung —
+   * idle reads back off exactly like the tick), never the timer. With a
+   * subscriber the subscription owns the cadence and a read touches
+   * nothing: every pushed frame rebuilds the board, and a rebuild that
+   * re-armed a listing made the ladder decorative. Returns the phases.
+   */
+  touch: () => Map<string, BoardPhase>
+  /**
+   * touch(), then the phases — at once once ANY pass has completed, or once
    * the very first pass lands. What a board READ awaits, bounded by the
    * caller: the first frame ever is not an empty one, and no later read
    * waits on a pass. Completion, not emptiness, is the key: an all-attached
@@ -373,11 +411,35 @@ export interface ProbeSampler {
    * every idle board read wait on a live listing.
    */
   warm: () => Promise<Map<string, BoardPhase>>
+  /**
+   * Hold the sampler open. The periodic pass runs only while at least one
+   * subscriber exists; the last one leaving stops the timer even with the
+   * whole fleet detached. Returns the release.
+   */
+  subscribe: () => () => void
+  /**
+   * An event about ONE terminal (a herdr status push, a turn boundary, an
+   * attach or detach): recompute that terminal alone and merge it, without
+   * a listing. Any event also resets the backoff ladder to its first rung.
+   */
+  invalidate: (terminalId: string) => Promise<void>
+  /** Fires with the new map whenever a pass or an invalidation changed it. */
+  onChange: (listener: (phases: Map<string, BoardPhase>) => void) => () => void
+  stats: () => ProbeStats
   readonly running: boolean
 }
 
 /** A pass may run at most this many intervals before it reports partial. */
 export const PROBE_PASS_DEADLINE_TICKS = 10
+
+/**
+ * The fallback tick's backoff ladder. While a pass changes nothing the
+ * sampler climbs a rung per pass; a pass that changed something, or any
+ * event, drops it back to the first rung. The first rung is
+ * PROBE_INTERVAL_MS, so a board that is actually changing samples exactly as
+ * it always did.
+ */
+export const PROBE_BACKOFF_MS: readonly number[] = [PROBE_INTERVAL_MS, 10_000, 30_000, 60_000]
 
 export interface ProbeSamplerOptions {
   /**
@@ -388,37 +450,95 @@ export interface ProbeSamplerOptions {
    * did and not for whatever else the loop was busy with meanwhile.
    */
   observe?: (ms: number) => void
+  /** The ladder, first rung first. Tests shrink it; production uses PROBE_BACKOFF_MS. */
+  backoffMs?: readonly number[]
+  now?: () => number
+}
+
+/** Two phase maps say the same thing. */
+export function samePhases(a: ReadonlyMap<string, BoardPhase>, b: ReadonlyMap<string, BoardPhase>): boolean {
+  if (a.size !== b.size) return false
+  for (const [id, phase] of a) if (b.get(id) !== phase) return false
+  return true
 }
 
 /**
- * Periodic single-flight sampler. Self-stopping: a pass that finds nothing
- * detached parks the timer, so an idle machine pays nothing. Callers restart
- * it when the board is next requested.
+ * Single-flight sampler whose LIFETIME is its subscribers and whose CADENCE
+ * is events first, a backed-off tick as the fallback.
  *
- * The tick reads the inventory ONCE and derives both the phases and the
- * "anything detached?" decision from it. With async reads available the tick
- * awaits them, and the single-flight latch spans the whole awaited pass: a
- * pass longer than the interval means the next interval is skipped, never
+ * Lifetime: the periodic pass runs only while a board consumer holds a
+ * subscription. A one-shot read (GET /api/board, the board:list IPC) touches
+ * the sampler for at most one pass and never starts the timer. So a fleet
+ * with forty detached panes and no board open costs nothing.
+ *
+ * Cadence: the events the app already sees — a herdr status push, a turn
+ * boundary, an attach or a detach — recompute ONE terminal through
+ * invalidate(), with no listing. The whole-fleet pass remains for the panes
+ * with no push source (herdr calls them 'unknown'; pixels are their only
+ * signal), on the PROBE_BACKOFF_MS ladder: the first rung while passes keep
+ * finding changes, climbing to a minute while nothing moves, dropped back by
+ * any event.
+ *
+ * The tick reads the inventory ONCE and derives the detached set from it.
+ * With async reads available the pass is awaited, and the single-flight
+ * latch spans the whole pass: a tick landing mid-pass is skipped, never
  * stacked. A read while a pass is in flight answers with the previous pass —
- * the same "last known" degrade the board already documents — unless there
- * is no previous pass at all, in which case warm() lets it wait.
+ * unless there is no previous pass at all, in which case warm() lets it
+ * wait.
  */
 export function createProbeSampler(
-  deps: ProbeDeps,
+  rawDeps: ProbeDeps,
   intervalMs: number = PROBE_INTERVAL_MS,
   options: ProbeSamplerOptions = {}
 ): ProbeSampler {
+  const now = options.now ?? (() => Date.now())
+  const ladder = options.backoffMs && options.backoffMs.length > 0 ? options.backoffMs : [intervalMs, ...PROBE_BACKOFF_MS.slice(1)]
   let latest = new Map<string, BoardPhase>()
-  let timer: ReturnType<typeof setInterval> | null = null
+  let timer: ReturnType<typeof setTimeout> | null = null
   let inFlight = false
   let lastSampleAt = 0
-  /** Whether the last pass found anything to look at — the self-stop input. */
-  let lastDetached = 0
+  /** The live pane set of the last listing — what an invalidation checks a pane against. */
+  let lastLive: ReadonlySet<string> = new Set()
   /** The async pass in flight, so a read before the first completion can await it. */
   let pending: Promise<Map<string, BoardPhase>> | null = null
   /** Any pass has run to its end (fresh, partial or failed) — after that, no read waits. */
   let everCompleted = false
-  const usesAsync = typeof deps.listSessionsAsync === 'function'
+  let subscribers = 0
+  /** Bumped by stop(): a release token minted before it is void, not a debit against a newer hold. */
+  let epoch = 0
+  let rung = 0
+  const listeners = new Set<(phases: Map<string, BoardPhase>) => void>()
+  const usesAsync = typeof rawDeps.listSessionsAsync === 'function'
+  // Every pane read is a child too — passes and per-event recomputes alike —
+  // so the reads seam counts them for stats(); the rest of the bag is the caller's.
+  const deps: ProbeDeps = {
+    ...rawDeps,
+    capturePane: (session) => {
+      note('reads')
+      return rawDeps.capturePane(session)
+    },
+    ...(rawDeps.capturePaneAsync
+      ? {
+          capturePaneAsync: (session: string) => {
+            note('reads')
+            return rawDeps.capturePaneAsync!(session)
+          }
+        }
+      : {})
+  }
+
+  // Bounded event journals for stats(): timestamps of the last minute.
+  const MINUTE = 60_000
+  const journal = { passes: [] as number[], listings: [] as number[], reads: [] as number[], invalidations: [] as number[] }
+  const note = (kind: keyof typeof journal): void => {
+    const list = journal[kind]
+    list.push(now())
+    if (list.length > 2000) list.splice(0, list.length - 2000)
+  }
+  const lastMinute = (kind: keyof typeof journal): number => {
+    const since = now() - MINUTE
+    return journal[kind].filter((t) => t >= since).length
+  }
 
   const observe = (ms: number): void => {
     try {
@@ -428,16 +548,35 @@ export function createProbeSampler(
     }
   }
 
+  const announce = (): void => {
+    for (const listener of listeners) {
+      try {
+        listener(latest)
+      } catch (error) {
+        console.error('Board probe listener failed:', error)
+      }
+    }
+  }
+
+  /** Install the pass's map; say so if it differs; climb or drop the ladder. */
+  const adopt = (next: Map<string, BoardPhase>): void => {
+    const changed = !samePhases(latest, next)
+    latest = next
+    rung = changed ? 0 : Math.min(rung + 1, ladder.length - 1)
+    if (changed) announce()
+  }
+
   const sampleNow = (): Map<string, BoardPhase> => {
     if (inFlight) return latest // single-flight: never stack scans
     inFlight = true
-    lastSampleAt = Date.now()
-    lastDetached = 0 // a pass that throws must not park or hold on the last one's verdict
+    lastSampleAt = now()
+    note('passes')
     const started = performance.now()
     try {
-      const detached = detachedTerminals(deps, new Set(deps.listSessions()))
-      lastDetached = detached.length
-      latest = probeDetached(deps, detached)
+      note('listings')
+      const live = new Set(deps.listSessions())
+      lastLive = live
+      adopt(probeDetached(deps, detachedTerminals(deps, live)))
     } catch (error) {
       console.error('Board probe failed:', error)
     } finally {
@@ -449,30 +588,29 @@ export function createProbeSampler(
   }
 
   const runAsyncPass = async (): Promise<Map<string, BoardPhase>> => {
-    const deadline = Date.now() + intervalMs * PROBE_PASS_DEADLINE_TICKS
+    const deadline = now() + intervalMs * PROBE_PASS_DEADLINE_TICKS
     let heldMs = 0
     // The open synchronous segment, or null while an await is in flight —
     // so a rejection thrown INTO the finally from an await bills nothing for
-    // the off-thread wait it interrupted. (An 801 ms listing failure was
-    // once reported as an 801 ms main-thread hold, on the failure mode this
-    // module now uses on purpose.)
+    // the off-thread wait it interrupted.
     let segment: number | null = performance.now()
     const close = (): void => {
       if (segment !== null) heldMs += performance.now() - segment
       segment = null
     }
     try {
+      note('listings')
       const listing = deps.listSessionsAsync!()
       close()
       const live = new Set(await listing)
       segment = performance.now()
+      lastLive = live
       const detached = detachedTerminals(deps, live)
-      lastDetached = detached.length
       close()
       const pass = await runDetachedPass(deps, detached, { deadline })
       segment = performance.now()
       heldMs += pass.heldMs
-      latest = mergePartialPass(latest, pass, detached)
+      adopt(mergePartialPass(latest, pass, detached))
     } catch (error) {
       console.error('Board probe failed:', error)
     } finally {
@@ -489,63 +627,150 @@ export function createProbeSampler(
     if (!usesAsync) return Promise.resolve(sampleNow())
     if (inFlight) return pending ?? Promise.resolve(latest)
     inFlight = true
-    lastSampleAt = Date.now()
-    lastDetached = 0
+    lastSampleAt = now()
+    note('passes')
     pending = runAsyncPass()
     return pending
   }
 
-  const settle = (): void => {
-    // Nothing detached → stop burning a timer until someone asks again.
-    if (latest.size === 0 && lastDetached === 0) sampler.stop()
+  const clearTimer = (): void => {
+    if (timer) clearTimeout(timer)
+    timer = null
+  }
+
+  /** Arm the next fallback pass at the current rung — only while subscribed. */
+  const schedule = (): void => {
+    clearTimer()
+    if (subscribers === 0) return
+    timer = setTimeout(tick, ladder[rung])
+    if (typeof timer === 'object' && timer !== null && 'unref' in timer) {
+      ;(timer as { unref: () => void }).unref()
+    }
   }
 
   const tick = (): void => {
-    // A tick that lands while a pass is still in flight is simply skipped —
-    // it must not settle either, or an empty `latest` would park the sampler
-    // on a verdict no pass has reached yet.
-    if (inFlight) return
-    if (usesAsync) {
-      void sampleAsync().then(settle)
+    timer = null
+    // A tick landing mid-pass is skipped, never stacked; the pass in flight
+    // re-arms the ladder when it lands.
+    if (inFlight) {
+      schedule()
       return
     }
-    sampleNow()
-    settle()
+    if (!usesAsync) {
+      sampleNow()
+      schedule()
+      return
+    }
+    void sampleAsync().then(schedule)
+  }
+
+  /**
+   * One terminal's phase from what the app already knows — no listing.
+   * `undefined` = no opinion (leave the map alone); `null` = no phase (the
+   * row goes). The DECISION is made here and the map is touched by the
+   * caller AFTER any await: a pass can land while a pane read is in flight,
+   * and a copy of `latest` taken before the wait would erase what that pass
+   * discovered about every other terminal.
+   */
+  const decide = async (terminalId: string): Promise<BoardPhase | null | undefined> => {
+    if (deps.isAttached(terminalId)) return null // L1 owns it now
+    const session = deps.sessionNameFor(terminalId)
+    const asked = phaseFromAsked(deps.askedStatus?.(terminalId) ?? null)
+    if (asked !== null) return asked === undefined ? null : asked
+    // Pixels only: one read of this pane, if the last listing saw it. A pane
+    // the last listing did not see is the next pass's to find.
+    if (!lastLive.has(session)) return undefined
+    const chunk = deps.capturePaneAsync ? await deps.capturePaneAsync(session) : deps.capturePane(session)
+    return phaseFromPane(deps, chunk) ?? null
   }
 
   const sampler: ProbeSampler = {
     phases: () => latest,
     sampleNow,
     sampleAsync,
+    touch: () => {
+      if (subscribers <= 0 && !inFlight && now() - lastSampleAt >= ladder[rung]) void sampleAsync()
+      return latest
+    },
     warm: () => {
-      sampler.start()
-      // Only a read BEFORE THE FIRST COMPLETED PASS waits. A pass outlasts
-      // the interval on a big detached fleet, so "a pass is running" is the
-      // usual state, and an all-attached fleet's map is empty for good —
-      // waiting on either from every read would hand back what the lane
-      // saved (measured: 800-900 ms per idle board read on a 900 ms listing).
+      sampler.touch()
       if (everCompleted) return Promise.resolve(latest)
       return pending ?? Promise.resolve(latest)
     },
-    start: (): void => {
-      if (timer) return
-      if (Date.now() - lastSampleAt >= intervalMs) {
-        if (usesAsync) void sampleAsync().then(settle)
-        else sampleNow()
-      }
-      timer = setInterval(tick, intervalMs)
-      if (typeof timer === 'object' && timer !== null && 'unref' in timer) {
-        ;(timer as { unref: () => void }).unref()
+    subscribe: () => {
+      subscribers += 1
+      if (subscribers === 1) begin()
+      const minted = epoch
+      let released = false
+      return () => {
+        if (released) return
+        released = true
+        if (minted !== epoch) return // stop() already released this one
+        release()
       }
     },
+    invalidate: async (terminalId) => {
+      note('invalidations')
+      try {
+        const phase = await decide(terminalId)
+        if (phase === undefined) return
+        // The map as it stands NOW, after the wait — one key changes.
+        if (latest.get(terminalId) === (phase ?? undefined)) return
+        const next = new Map(latest)
+        if (phase === null) next.delete(terminalId)
+        else next.set(terminalId, phase)
+        latest = next
+        // Only a change drops the ladder: herdr announces every observation
+        // and a reconnect replays every pane, none of which is news.
+        rung = 0
+        if (timer) schedule()
+        announce()
+      } catch (error) {
+        console.error('Board probe invalidation failed:', error)
+      }
+    },
+    onChange: (listener) => {
+      listeners.add(listener)
+      return () => void listeners.delete(listener)
+    },
+    stats: () => ({
+      subscribers,
+      intervalMs: ladder[rung],
+      passesLastMinute: lastMinute('passes'),
+      listingsLastMinute: lastMinute('listings'),
+      readsLastMinute: lastMinute('reads'),
+      invalidationsLastMinute: lastMinute('invalidations'),
+      everCompleted,
+      running: subscribers > 0
+    }),
     stop: (): void => {
-      if (!timer) return
-      clearInterval(timer)
-      timer = null
+      epoch += 1
+      while (subscribers > 0) release()
     },
     get running(): boolean {
-      return timer !== null
+      return subscribers > 0
     }
+  }
+
+  /** The first subscriber arrived: a pass now if the last is stale, then the ladder. */
+  function begin(): void {
+    if (timer) return
+    if (now() - lastSampleAt < ladder[rung]) {
+      schedule()
+      return
+    }
+    if (!usesAsync) {
+      sampleNow()
+      schedule()
+      return
+    }
+    void sampleAsync().then(schedule)
+  }
+
+  /** One subscriber left. Clamped at zero: a release can never owe a negative hold. */
+  function release(): void {
+    subscribers = Math.max(0, subscribers - 1)
+    if (subscribers <= 0) clearTimer()
   }
   return sampler
 }
