@@ -156,8 +156,9 @@ export const NODE_ROUTES: RegExp[] = [
   // closed, so this is honesty rather than a hole; /cwd stays 501 under a slug
   // until moveTerminalCwd takes a workspace id. A seat needs to type, not to
   // move house. (Tinker review, 2026-08-22.)
-  // Browser card picture.
-  /^\/api\/browser\/[^/]+\/thumb$/
+  // Browser card picture, and the batch of them a phone asks for by viewport.
+  /^\/api\/browser\/[^/]+\/thumb$/,
+  /^\/api\/browser\/thumbs$/
 ]
 
 export const SCOPE_AWARE: RegExp[] = [

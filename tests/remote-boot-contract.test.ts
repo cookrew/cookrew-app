@@ -158,8 +158,10 @@ describe('remote-api at boot', () => {
   })
 
   it('shares a GET in flight, and a later GET is a fresh request', async () => {
-    let release: (() => void) | null = null
-    const gate = new Promise<void>((resolve) => (release = resolve))
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
     const fetchMock = vi.fn(async () => {
       await gate
       return jsonResponse(200, { id: 'w1', name: 'Boot', nodes: [] })
@@ -170,7 +172,7 @@ describe('remote-api at boot', () => {
     const calls = fetchMock.mock.calls.length
     const both = Promise.all([api.getWorkspace(), api.getWorkspace()])
     expect(fetchMock.mock.calls.length - calls).toBe(1)
-    release?.()
+    release()
     const [a, b] = await both
     expect(a).toBe(b)
     await api.getWorkspace()

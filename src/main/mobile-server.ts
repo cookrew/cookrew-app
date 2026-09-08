@@ -54,6 +54,7 @@ import { handlePathReportRoutes } from './path-report-routes'
 import { createTlsPortGate, httpsRedirectTarget } from './tls-port-gate'
 import { sendBody } from './http-compress'
 import { rendererSourceFor, staleBuildNotice } from './renderer-choice'
+import { batchFrames, parseBatchIds, parseKnownVersions } from './browser-thumb-batch'
 import { fetchRendererDevResource, rendererDevPathAllowed } from './renderer-dev-proxy'
 import { isViteHmrUpgrade, proxyViteHmrUpgrade } from './hmr-proxy'
 import { handleIdentityRoutes, type MobileIdentityDeps } from './mobile-identity-routes'
@@ -1345,6 +1346,25 @@ export async function handle(
       cols: session.cols,
       rows: session.rows
     })
+    return
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/browser/thumbs') {
+    // Many pictures in one exchange, and only the ones that changed — see
+    // browser-thumb-batch.ts. The heartbeat is still sent per id, because
+    // asking is what makes a headless frame exist.
+    const ids = parseBatchIds(url.searchParams.get('ids'))
+    await Promise.all(ids.map((id) => deps.browserThumbRequested?.(id)))
+    const frames = batchFrames(ids, parseKnownVersions(url.searchParams.get('known')), (id) =>
+      deps.browserThumb(id)
+    )
+    sendBody(
+      response,
+      200,
+      { 'content-type': 'application/json', 'cache-control': 'no-store' },
+      Buffer.from(JSON.stringify({ frames })),
+      request.headers['accept-encoding']
+    )
     return
   }
 
