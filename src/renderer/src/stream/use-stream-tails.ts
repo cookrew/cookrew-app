@@ -25,6 +25,8 @@ import type { LatestCheckpoint } from '../turn-view-model'
 /** With a push, the poll is only the backstop. Without one it IS freshness. */
 const PUSH_BACKSTOP_MS = 10_000
 const POLL_ONLY_MS = 3000
+/** Longer than the overview fit's first frame, shorter than a person notices. */
+export const FIRST_READ_DELAY_MS = 200
 
 interface WatchBridge {
   watchLatest?: (terminalId: string) => Promise<void> | void
@@ -74,7 +76,13 @@ export function useStreamTail(terminalId: string, active: boolean): LatestCheckp
         // last good one until the next tick succeeds.
       }
     }
-    void read()
+    // A BEAT before the first read. A card mounts at whatever zoom the canvas
+    // holds, and on a booting phone that is zoom 1 for one frame before the
+    // overview fit drops every card to a mini tile and this effect is torn
+    // down. Reading at once spent one exchange per card on an answer nobody
+    // drew (perf lane L7); a card that survives the beat is one that is
+    // actually being looked at.
+    const first = window.setTimeout(() => void read(), FIRST_READ_DELAY_MS)
 
     const push = hasLatestPush()
     let offPush: (() => void) | undefined
@@ -90,6 +98,7 @@ export function useStreamTail(terminalId: string, active: boolean): LatestCheckp
 
     return () => {
       cancelled = true
+      window.clearTimeout(first)
       window.clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisible)
       offPush?.()

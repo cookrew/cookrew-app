@@ -59,7 +59,29 @@ async function parse<T>(response: Response, options: ParseOptions = {}): Promise
   return (text ? JSON.parse(text) : undefined) as T
 }
 
+/**
+ * GETs IN FLIGHT, shared. Two components asking the same URL in the same tick
+ * used to make two requests: App and EventToast both pulled /api/workspace at
+ * boot (228 KB compressed, twice), App and WorkspaceSwitcher both listed the
+ * workspaces. Over the relay each is an exchange. While a GET is unanswered a
+ * second identical GET joins it — the answer both would have got — and the
+ * entry is dropped the moment it settles, so nothing here ever serves a stale
+ * body and a retry after a failure is a fresh request. Perf lane L7.
+ */
+const inFlightGets = new Map<string, Promise<unknown>>()
+
 async function req<T>(path: string, method = 'GET', body?: unknown, parseOptions: ParseOptions = {}): Promise<T> {
+  if (method !== 'GET' || body !== undefined) return reqOnce<T>(path, method, body, parseOptions)
+  const shared = inFlightGets.get(path)
+  if (shared) return shared as Promise<T>
+  const own = reqOnce<T>(path, method, undefined, parseOptions).finally(() => {
+    if (inFlightGets.get(path) === own) inFlightGets.delete(path)
+  })
+  inFlightGets.set(path, own)
+  return own
+}
+
+async function reqOnce<T>(path: string, method: string, body: unknown, parseOptions: ParseOptions): Promise<T> {
   const options: RequestInit = { method }
   const headers: Record<string, string> = {}
   const token = authStore().token()
@@ -185,6 +207,8 @@ export async function checkAuth(candidate?: string): Promise<AuthScope> {
  * whatever it last drew, which after a reload is nothing at all.
  */
 let events: ReconnectingStream | null = null
+/** Whether the shared stream has connected before. See `open` below. */
+let streamOpenedOnce = false
 
 function sharedEvents(): ReconnectingStream {
   // tokenParam, not a header: EventSource has none. Reads are gated now, so a
@@ -195,7 +219,17 @@ function sharedEvents(): ReconnectingStream {
       // stream lands on whichever plane is carrying the session at the moment
       // it reconnects. `?token=` still works cross-origin; EventSource needs
       // no CORS flag, but it does need the credential in the URL.
-      open: () => new EventSource(tokenParam(apiPath('/api/events'))),
+      open: () => {
+        // THE FIRST CONNECT SAYS IT IS BOOTING FROM THE PULL. The stream
+        // used to open with a full workspace snapshot — the same document
+        // loadWorkspace was fetching at that very moment, a second 228 KB
+        // through the relay. `boot=pull` asks the companion to skip that one
+        // frame. Reconnects never say it: a stream that dropped is exactly
+        // the case where the snapshot is how the client heals (L7).
+        const first = !streamOpenedOnce
+        streamOpenedOnce = true
+        return new EventSource(tokenParam(apiPath(first ? '/api/events?boot=pull' : '/api/events')))
+      },
       // The one place the companion learns its link is down. Without this the
       // badge would report the address bar forever, which is a memory rather
       // than a fact the moment the channel dies.

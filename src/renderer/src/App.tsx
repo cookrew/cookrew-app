@@ -42,7 +42,13 @@ import {
 } from './browser-thumb-policy'
 import { retry } from './retry'
 import { CanvasUiContext, ToolId } from './canvas-ui'
-import { activityStore, thumbStore, useActivity, useActivityPhaseCount } from './activity-thumb-store'
+import {
+  activityStore,
+  thumbStore,
+  useActivity,
+  useActivityPhaseCount,
+  markActivitySeeded
+} from './activity-thumb-store'
 import { reconcileFlowEdges, reconcileFlowNodes } from './flow-nodes'
 import {
   CARD_FIT_PADDING,
@@ -443,6 +449,9 @@ function Canvas(): React.JSX.Element {
       // missing seed, never an unhandled rejection — live events still fill
       // the store.
       .catch(() => undefined)
+      // Either way the cards may now decide whether they are idle; before
+      // this they must not read their tails (use-stream-tails, L7).
+      .finally(markActivitySeeded)
     return cookrew().onTerminalActivity((activity) => {
       activityStore.set(activity.terminalId, mergeActivity(activityStore.get(activity.terminalId), activity))
     })
