@@ -1353,7 +1353,12 @@ export async function handle(
     // Many pictures in one exchange, and only the ones that changed — see
     // browser-thumb-batch.ts. The heartbeat is still sent per id, because
     // asking is what makes a headless frame exist.
-    const ids = parseBatchIds(url.searchParams.get('ids'))
+    // ONLY THIS CANVAS'S BROWSER CARDS. The ids arrive on the query, so the
+    // slug layer's node-membership check never sees them; a client scoped to
+    // one workspace must not be able to read another's pictures by naming
+    // their ids. Anything else asked for answers as "no frame".
+    const browsers = new Set(scopedState().nodes.filter((node) => node.kind === 'browser').map((node) => node.id))
+    const ids = parseBatchIds(url.searchParams.get('ids')).filter((id) => browsers.has(id))
     await Promise.all(ids.map((id) => deps.browserThumbRequested?.(id)))
     const frames = batchFrames(ids, parseKnownVersions(url.searchParams.get('known')), (id) =>
       deps.browserThumb(id)
