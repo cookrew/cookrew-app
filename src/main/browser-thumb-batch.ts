@@ -18,8 +18,8 @@
  * lives in the payload, which is the only place a relay cannot strip it.
  */
 
-/** Ids one batch may name. The viewport rarely holds more than a dozen. */
-export const THUMB_BATCH_MAX = 24
+import { THUMB_BATCH_MAX } from '../shared/thumb-batch'
+export { THUMB_BATCH_MAX }
 
 export interface ThumbLookup {
   readonly data: Buffer
@@ -67,14 +67,16 @@ export function batchFrames(
 }
 
 /**
- * Only the browser cards of the canvas the client is scoped to. The ids ride
- * the query, so the slug layer's node-membership check never sees them; this
- * is that check, for this route. Anything else is simply not asked for.
+ * A lookup that answers only for the browser cards of the canvas the client
+ * is scoped to. The ids ride the query, so the slug layer's node-membership
+ * check never sees them; this is that check, for this route. An id outside
+ * the canvas is answered as "no frame" — never dropped, or the phone would
+ * see no answer at all for it and ask again every tick forever.
  */
-export function scopeBatchIds(
-  ids: readonly string[],
-  nodes: ReadonlyArray<{ readonly id: string; readonly kind: string }>
-): string[] {
+export function scopedThumbLookup(
+  nodes: ReadonlyArray<{ readonly id: string; readonly kind: string }>,
+  lookup: (id: string) => ThumbLookup | undefined
+): (id: string) => ThumbLookup | undefined {
   const browsers = new Set(nodes.filter((node) => node.kind === 'browser').map((node) => node.id))
-  return ids.filter((id) => browsers.has(id))
+  return (id) => (browsers.has(id) ? lookup(id) : undefined)
 }

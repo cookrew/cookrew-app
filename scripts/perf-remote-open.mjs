@@ -34,6 +34,12 @@
  * `--latency` adds a fixed round-trip to every request through Chrome's own
  * network emulation — a stand-in for the relay's ~200 ms per exchange when
  * the relay itself cannot be reached.
+ *
+ * `--zoom N` sends N pinch notches into the HEADLESS page after first card —
+ * this script's own Chrome, never the owner's app — so the browser cards
+ * leave the mini tile and the thumb poll runs; it is how "what keeps
+ * requesting afterwards" is observed. Without it the page is loaded and
+ * only watched.
  */
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
@@ -295,9 +301,24 @@ export async function recordOpen(opts) {
     cdp.close()
     return { url: url.replace(/token=[^&]+/, 'token=…'), summary: summarise({ requests: closed, navStart, marks, settleS: opts.settleS }), latencyMs: opts.latencyMs }
   } finally {
-    if (!opts.keepBrowser) chrome.child.kill('SIGKILL')
+    // Ask the browser to close before killing it: a persistent (signed-in)
+    // profile killed mid-write reopens with "didn't shut down correctly".
+    if (!opts.keepBrowser) await closeChrome(chrome)
     if (ownProfile) rmSync(profile, { recursive: true, force: true })
   }
+}
+
+async function closeChrome(chrome) {
+  try {
+    const browser = await connectCdp(chrome.browserWs, { connectTimeoutMs: 2_000, commandTimeoutMs: 2_000 })
+    await browser.send('Browser.close').catch(() => undefined)
+    browser.close()
+  } catch {
+    // Not reachable any more; the kill below is what is left.
+  }
+  const gone = Date.now() + 3_000
+  while (chrome.child.exitCode === null && Date.now() < gone) await sleep(50)
+  if (chrome.child.exitCode === null) chrome.child.kill('SIGKILL')
 }
 
 const fmtKb = (bytes) => `${(bytes / 1024).toFixed(0)} KB`

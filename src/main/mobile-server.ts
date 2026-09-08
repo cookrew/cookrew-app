@@ -54,7 +54,7 @@ import { handlePathReportRoutes } from './path-report-routes'
 import { createTlsPortGate, httpsRedirectTarget } from './tls-port-gate'
 import { sendBody } from './http-compress'
 import { rendererSourceFor, staleBuildNotice } from './renderer-choice'
-import { batchFrames, parseBatchIds, parseKnownVersions, scopeBatchIds } from './browser-thumb-batch'
+import { batchFrames, parseBatchIds, parseKnownVersions, scopedThumbLookup } from './browser-thumb-batch'
 import { fetchRendererDevResource, rendererDevPathAllowed } from './renderer-dev-proxy'
 import { isViteHmrUpgrade, proxyViteHmrUpgrade } from './hmr-proxy'
 import { handleIdentityRoutes, type MobileIdentityDeps } from './mobile-identity-routes'
@@ -1357,11 +1357,11 @@ export async function handle(
     // slug layer's node-membership check never sees them; a client scoped to
     // one workspace must not be able to read another's pictures by naming
     // their ids. Anything else asked for answers as "no frame".
-    const ids = scopeBatchIds(parseBatchIds(url.searchParams.get('ids')), scopedState().nodes)
-    await Promise.all(ids.map((id) => deps.browserThumbRequested?.(id)))
-    const frames = batchFrames(ids, parseKnownVersions(url.searchParams.get('known')), (id) =>
-      deps.browserThumb(id)
-    )
+    const ids = parseBatchIds(url.searchParams.get('ids'))
+    const lookup = scopedThumbLookup(scopedState().nodes, (id) => deps.browserThumb(id))
+    // The heartbeat only for cards this canvas owns; every asked id is answered.
+    await Promise.all(ids.map((id) => (lookup(id) === undefined ? undefined : deps.browserThumbRequested?.(id))))
+    const frames = batchFrames(ids, parseKnownVersions(url.searchParams.get('known')), lookup)
     sendBody(
       response,
       200,

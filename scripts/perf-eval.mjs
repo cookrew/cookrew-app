@@ -44,8 +44,9 @@
  *            with 200 ms added to every request as the relay stand-in, and
  *            once over cookrew.dev when ~/.cookrew/qa/chrome-courier holds a
  *            profile signed in there. Requests, bytes, waterfall depth, first
- *            paint, first card, interactive, and what keeps requesting after.
- *            Never drives the owner's live UI beyond a page load.
+ *            paint, first card, interactive, and what keeps requesting after
+ *            (the headless page is pinched in so the thumb poll runs — it is
+ *            this eval's own Chrome, never the owner's live UI).
  *
  * History lives in ~/.cookrew/perf-history/*.jsonl. `npm run perf:install`
  * schedules this hourly through launchd; see scripts/perf-eval-install.mjs.

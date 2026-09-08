@@ -86,8 +86,8 @@ export function recordThumbSuccess(backoffs: ThumbBackoffs, id: string): ThumbBa
 // The batch poll (perf lane L7): what to ask for, and what an answer means.
 // ---------------------------------------------------------------------------
 
-/** Ids one batch may name — the same ceiling the companion enforces. */
-export const THUMB_BATCH_MAX = 24
+import { THUMB_BATCH_MAX } from '../../shared/thumb-batch'
+export { THUMB_BATCH_MAX }
 
 export interface ThumbCandidate {
   readonly id: string

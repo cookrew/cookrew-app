@@ -103,6 +103,25 @@ const mobileServer = (): Server =>
       response.write('first')
       return
     }
+    if (url.pathname.endsWith('/assets-with-cookie.js')) {
+      // An asset answer that also sets a cookie: per reader, so never kept.
+      response.writeHead(200, {
+        'content-type': 'text/javascript',
+        'cache-control': 'public, max-age=31536000, immutable',
+        'set-cookie': 'cr_companion=abc; Path=/'
+      })
+      response.end('export const y = 2')
+      return
+    }
+    if (url.pathname.endsWith('/assets-with-vary.js')) {
+      response.writeHead(200, {
+        'content-type': 'text/javascript',
+        'cache-control': 'public, max-age=31536000, immutable',
+        vary: 'accept-encoding, origin'
+      })
+      response.end('export const z = 3')
+      return
+    }
     if (url.pathname.startsWith('/assets/')) {
       // A hash-named bundle asset: the companion says it can be kept forever.
       response.writeHead(200, {
@@ -634,16 +653,39 @@ describe('a phone of the account, reaching its own canvas', () => {
     expect(body.headers['accept-encoding']).toBe('br, gzip')
   })
 
-  it('keeps the desktop’s immutable cache-control on a hash-named asset, and only there', async () => {
+  it('keeps an immutable hash-named asset cacheable — privately — and nothing else', async () => {
     const asset = await fetch(`${site.origin}${prefix()}/assets/index-abc123.js`, { headers: asPhone() })
     expect(asset.status).toBe(200)
-    expect(asset.headers.get('cache-control')).toBe('public, max-age=31536000, immutable')
+    // `public` is rewritten: the phone's own cache is the win, and a shared
+    // cache on a session-gated prefix would be an existence oracle.
+    expect(asset.headers.get('cache-control')).toBe('private, max-age=31536000, immutable')
+    expect(asset.headers.get('vary')).toBe('accept-encoding')
     await asset.arrayBuffer()
     const api = await fetch(`${site.origin}${prefix()}/immutable-api`, { headers: asPhone() })
     expect(api.headers.get('cache-control')).toBe('private, no-store')
     await api.arrayBuffer()
     const { res } = await echo('/api/workspaces', { headers: asPhone() })
     expect(res.headers.get('cache-control')).toBe('private, no-store')
+  })
+
+  it('decides by the path, never by a query that happens to say assets/', async () => {
+    const api = await fetch(`${site.origin}${prefix()}/immutable-api?next=/assets/x`, { headers: asPhone() })
+    expect(api.headers.get('cache-control')).toBe('private, no-store')
+    await api.arrayBuffer()
+  })
+
+  it('keeps the desktop’s vary when it already names accept-encoding — the origin half is the CORS gate’s', async () => {
+    const asset = await fetch(`${site.origin}${prefix()}/assets/assets-with-vary.js`, { headers: asPhone() })
+    expect(asset.headers.get('cache-control')).toBe('private, max-age=31536000, immutable')
+    expect(asset.headers.get('vary')).toBe('accept-encoding, origin')
+    await asset.arrayBuffer()
+  })
+
+  it('never keeps an asset answer that sets a cookie', async () => {
+    const asset = await fetch(`${site.origin}${prefix()}/assets/assets-with-cookie.js`, { headers: asPhone() })
+    expect(asset.headers.get('cache-control')).toBe('private, no-store')
+    expect(asset.headers.get('set-cookie')).toContain(`Path=${prefix()}/`)
+    await asset.arrayBuffer()
   })
 
   it('carries bytes that are not text, unmangled', async () => {

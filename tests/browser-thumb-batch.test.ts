@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { batchFrames, parseBatchIds, parseKnownVersions, scopeBatchIds, THUMB_BATCH_MAX } from '../src/main/browser-thumb-batch'
+import { batchFrames, parseBatchIds, parseKnownVersions, scopedThumbLookup, THUMB_BATCH_MAX } from '../src/main/browser-thumb-batch'
 import {
   applyThumbBatch,
   knownVersions,
@@ -45,13 +45,19 @@ describe('the companion half — batchFrames', () => {
 })
 
 describe('the companion half — scope', () => {
-  it('keeps only the browser cards of the canvas the client is scoped to', () => {
+  it('answers no-frame for an id outside the canvas, and never drops it', () => {
     const nodes = [
       { id: 'b1', kind: 'browser' },
       { id: 't1', kind: 'terminal' }
     ]
+    const frame = { data: Buffer.from('x'), type: 'image/jpeg', at: 1 }
+    const lookup = scopedThumbLookup(nodes, () => frame)
     // b9 is another workspace's browser; t1 is this canvas but not a browser.
-    expect(scopeBatchIds(['b1', 'b9', 't1'], nodes)).toEqual(['b1'])
+    expect(batchFrames(['b1', 'b9', 't1'], {}, lookup)).toEqual([
+      { id: 'b1', at: 1, type: 'image/jpeg', data: Buffer.from('x').toString('base64') },
+      { id: 'b9', at: null },
+      { id: 't1', at: null }
+    ])
   })
 })
 

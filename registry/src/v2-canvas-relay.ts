@@ -1013,16 +1013,46 @@ function answerHeaders(
   // EXCEPT the bundle's own hash-named assets. The desktop marks those
   // `public, max-age=31536000, immutable` (mobile-server.ts serveRendererAsset)
   // because their name IS their content, and PRIVATE spread over that made a
-  // phone re-download two megabytes of JavaScript on every open. That header
-  // is kept, and only that one: the index, every API answer and every stream
-  // stay private and uncached, exactly as before. (Perf lane L7.)
-  const desktopCache = headers['cache-control'] ?? headers['Cache-Control']
-  // `/assets/…` at the root, or `/<slug>/assets/…` for a client served under
-  // a workspace scope: the same hashed files either way.
-  const immutable =
-    /(^|\/)assets\//.test(at.path) && typeof desktopCache === 'string' && /\bimmutable\b/.test(desktopCache)
+  // phone re-download two megabytes of JavaScript on every open. Those keep
+  // a cache header — reshaped by immutableAssetCache below — and nothing
+  // else does: the index, every API answer and every stream stay private and
+  // uncached, exactly as before. (Perf lane L7.)
   const kept: Record<string, string | string[]> = { ...out, ...PRIVATE, 'x-accel-buffering': 'no' }
-  // A public body whose encoding follows the request must say so, or a
-  // shared cache hands one reader's brotli to a reader who asked for gzip.
-  return immutable ? { ...kept, 'cache-control': desktopCache, vary: 'accept-encoding' } : kept
+  const asset = immutableAssetCache(headers, at.path)
+  return asset === null ? kept : { ...kept, ...asset }
+}
+
+/**
+ * THE ONE CACHE HEADER THAT SURVIVES, and only in this shape.
+ *
+ *   - The PATH decides, never the query: `at.path` carries the search
+ *     string, and `?next=/assets/x` on any route is a caller's to write.
+ *   - `private`, never `public`, whatever the desktop said. The win is the
+ *     phone's OWN cache; `public` on a session-gated prefix would let a
+ *     shared cache serve a cached 200 to an unauthenticated requester — an
+ *     existence oracle for a device id, which relayStatus refuses to leak.
+ *   - Never with a Set-Cookie: a cookie is per reader, a cached body is not.
+ *   - The desktop's `vary` is kept when it already names accept-encoding
+ *     (it says `accept-encoding, origin` — the origin half is the CORS
+ *     gate's, http-compress.ts), and written as `accept-encoding` when it
+ *     does not name it at all; a body whose encoding follows the request
+ *     must say so.
+ */
+export function immutableAssetCache(
+  headers: Record<string, string>,
+  path: string
+): Record<string, string> | null {
+  const pathname = path.split('?')[0]
+  if (!/(^|\/)assets\//.test(pathname)) return null
+  const lower = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]))
+  const cache = lower['cache-control']
+  if (typeof cache !== 'string' || !/\bimmutable\b/.test(cache)) return null
+  if (typeof lower['set-cookie'] === 'string' && lower['set-cookie'].length > 0) return null
+  const privately = cache
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0 && part.toLowerCase() !== 'public' && part.toLowerCase() !== 'private')
+  const vary = lower.vary
+  const varies = typeof vary === 'string' && /\baccept-encoding\b/i.test(vary) ? vary : 'accept-encoding'
+  return { 'cache-control': ['private', ...privately].join(', '), vary: varies }
 }

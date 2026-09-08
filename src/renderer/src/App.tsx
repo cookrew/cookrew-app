@@ -954,8 +954,10 @@ function Canvas(): React.JSX.Element {
           kind: n.type ?? '',
           x: n.position.x,
           y: n.position.y,
-          width: n.measured?.width ?? n.width ?? 0,
-          height: n.measured?.height ?? n.height ?? 0
+          // Unmeasured on the first tick: fall back to the card's own size,
+          // or a zero-width card would miss the viewport it is plainly in.
+          width: n.measured?.width ?? n.width ?? (n.data as { node?: { size?: { width: number } } }).node?.size?.width ?? 0,
+          height: n.measured?.height ?? n.height ?? (n.data as { node?: { size?: { height: number } } }).node?.size?.height ?? 0
         })),
         { left: topLeft.x, top: topLeft.y, right: bottomRight.x, bottom: bottomRight.y }
       )
@@ -990,15 +992,19 @@ function Canvas(): React.JSX.Element {
           for (const frame of outcome.changed) {
             // A blob URL, as before: the browser holds the decoded bytes, not a
             // base64 string in the store, which is what the phone's memory
-            // ceiling cares about. One bad frame is that frame's problem.
-            try {
-              const bytes = Uint8Array.from(atob(frame.data), (c) => c.charCodeAt(0))
-              const old = thumbStore.get(frame.id)
-              if (old?.startsWith('blob:')) URL.revokeObjectURL(old)
-              thumbStore.set(frame.id, URL.createObjectURL(new Blob([bytes], { type: frame.type })))
-            } catch {
-              thumbBackoffsRef.current = recordThumbFailure(thumbBackoffsRef.current, frame.id, Date.now())
-            }
+            // ceiling cares about. Decoded NATIVELY through a data: fetch
+            // rather than a per-byte JS loop on the phone's main thread; one
+            // bad frame is that frame's problem.
+            void fetch(`data:${frame.type};base64,${frame.data}`)
+              .then((decoded) => decoded.blob())
+              .then((blob) => {
+                const old = thumbStore.get(frame.id)
+                if (old?.startsWith('blob:')) URL.revokeObjectURL(old)
+                thumbStore.set(frame.id, URL.createObjectURL(blob))
+              })
+              .catch(() => {
+                thumbBackoffsRef.current = recordThumbFailure(thumbBackoffsRef.current, frame.id, Date.now())
+              })
           }
         })
         .catch(failAll)

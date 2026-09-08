@@ -42,14 +42,15 @@ export function isActivitySeeded(): boolean {
   return activitySeeded
 }
 
+const subscribeSeed = (cb: () => void): (() => void) => {
+  seedListeners.add(cb)
+  return () => seedListeners.delete(cb)
+}
+const readSeed = (): boolean => activitySeeded
+
 export function useActivitySeeded(): boolean {
-  return useSyncExternalStore(
-    (cb) => {
-      seedListeners.add(cb)
-      return () => seedListeners.delete(cb)
-    },
-    () => activitySeeded
-  )
+  // Module-level functions, so a re-render never resubscribes.
+  return useSyncExternalStore(subscribeSeed, readSeed)
 }
 
 /** One terminal's latest activity. Re-renders only when THIS id changes. */

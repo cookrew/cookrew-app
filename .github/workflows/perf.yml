@@ -12,7 +12,8 @@ on:
     paths:
       - 'tests/perf/**'
       - 'vitest.perf.config.ts'
-      - 'scripts/perf-eval*.mjs'
+      - 'scripts/perf-*.mjs'
+      - 'src/renderer/**'
       - '.github/workflows/perf.yml'
 
 concurrency:
@@ -40,6 +41,9 @@ jobs:
       # The remote-open gate serves the BUILT renderer to a headless Chrome
       # (tests/perf/remote-open.perf.ts); without out/renderer it skips.
       - name: Build the renderer
+        # A build failure must not silence the other gates: without a build
+        # the remote-open gate skips, loudly.
+        continue-on-error: true
         run: npm run build
 
       - name: Perf gates
