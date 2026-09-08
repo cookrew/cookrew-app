@@ -219,6 +219,23 @@ export const MEMORY = {
   noteRenderCacheMb: 12
 } as const
 
+export const RENDER = {
+  /**
+   * React commits per frame of a real pan gesture on the seeded demo canvas
+   * (tests/perf/fixtures/render-census), counted through the React DevTools
+   * hook shim in scripts/perf-dom-probe.mjs. Measured 2026-09-06 on the live
+   * 170-node workspace after perf lane L6: 2.3-2.7 — ReactFlow's own
+   * transform commit plus the LOD arbiter's settle. Before the lane it was
+   * 2.4-2.6 as well: the count of commits never was the problem, WHAT each
+   * commit rendered was. That is the structural assertion beside this:
+   * ZERO card wrappers rendered by a pan that moves no card off the stage,
+   * and zero renders of the app shell. The legacy fixture in the same file
+   * (App's wiring before the lane) renders every card on every frame, so
+   * the gate is known to see the trap it guards.
+   */
+  commitsPerPanFrameMax: 4
+} as const
+
 export const STORAGE = {
   /** Live event-log shape: what event-log.ts DEFAULTS to. */
   eventLog: { maxBytes: 4 * 1024 * 1024, keepFiles: 3 }

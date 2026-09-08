@@ -81,7 +81,7 @@ export const BrowserLayer = memo(function BrowserLayer({
   // SHARED arbitration with terminal overlays (Magpie E2: a per-kind hook
   // let a browser view stack over the zoomed terminal and steal every tap).
   const { activeIds, rects, primaryId } = lod
-  const renderedBrowsers = browserHostsToRender(browsers, isRemoteMode(), primaryId)
+  const renderedBrowsers = browserHostsToRender(browsers, isRemoteMode(), primaryId, interactiveBrowser)
   return (
     <>
       {renderedBrowsers.map((p) => (

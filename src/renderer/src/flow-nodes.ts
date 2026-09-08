@@ -1,5 +1,5 @@
-import type { Node } from '@xyflow/react'
-import type { CanvasNode } from '../../shared/model'
+import type { Edge, Node } from '@xyflow/react'
+import type { CanvasNode, Connection } from '../../shared/model'
 import { DRAG_HANDLE_SELECTOR } from './nodes/drag-surface'
 
 /**
@@ -80,4 +80,42 @@ export function reconcileFlowNodes(
     const flow = toFlowNode(node)
     return isSelected ? { ...flow, selected: true } : flow
   })
+}
+
+/** Build one ReactFlow edge from a canvas connection. */
+export function toFlowEdge(c: Connection): Edge {
+  return { id: c.id, source: c.a, target: c.b, type: 'cable' }
+}
+
+/**
+ * Does this edge still say what the connection says? Pinned to the type: the
+ * rest-destructure fails to compile the day Connection grows a field this
+ * compare does not look at.
+ */
+function sameConnection(edge: Edge, c: Connection): boolean {
+  const { id, a, b, ...rest } = c
+  const exhaustive: Record<string, never> = rest
+  void exhaustive
+  return edge.id === id && edge.source === a && edge.target === b
+}
+
+/**
+ * The same identity discipline for edges. A connection that still joins the
+ * same two nodes keeps its previous edge object; the ARRAY is reused too when
+ * nothing changed, so a broadcast that touched no cable hands ReactFlow the
+ * very same edges and no EdgeWrapper re-renders.
+ */
+export function reconcileFlowEdges(prev: Edge[], connections: readonly Connection[]): Edge[] {
+  const prevById = new Map(prev.map((e) => [e.id, e]))
+  let unchanged = prev.length === connections.length
+  const next = connections.map((c, i) => {
+    const existing = prevById.get(c.id)
+    if (existing && sameConnection(existing, c)) {
+      if (prev[i] !== existing) unchanged = false
+      return existing
+    }
+    unchanged = false
+    return toFlowEdge(c)
+  })
+  return unchanged ? prev : next
 }

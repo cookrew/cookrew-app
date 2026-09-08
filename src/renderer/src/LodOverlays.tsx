@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, type MutableRefObject } from 'react'
 import type { BrowserNodeData, TerminalNodeData } from '../../shared/model'
-import type { TerminalActivity } from '../../shared/turn'
 import { isRemoteMode } from './api'
 import { useLodLayout } from './zoom-lod'
 import { TerminalOverlayLayer } from './TerminalOverlay'
@@ -42,7 +41,6 @@ import { BrowserLayer, type InteractiveBrowserCapability } from './BrowserLayer'
 interface LodOverlaysProps {
   terminals: TerminalNodeData[]
   browsers: BrowserNodeData[]
-  activities: Record<string, TerminalActivity>
   /**
    * Refs, not values, on purpose: zoomToNode sets them and starts the
    * animation without a Canvas render, and this component reads them fresh on
@@ -66,7 +64,6 @@ interface LodOverlaysProps {
 export function LodOverlays({
   terminals,
   browsers,
-  activities,
   deliberateOpen,
   focused,
   arrivedId,
@@ -128,7 +125,6 @@ export function LodOverlays({
     <>
       <TerminalOverlayLayer
         terminals={terminals}
-        activities={activities}
         lod={lod}
         onPrimaryChange={onPrimaryTerminalChange}
       />

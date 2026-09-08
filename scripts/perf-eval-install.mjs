@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url'
 
 const LABEL = 'dev.cookrew.perf-eval'
 const INTERVAL_SECONDS = 3600
-const SCRIPTS = ['perf-eval.mjs', 'perf-eval-lib.mjs', 'perf-budgets.mjs']
+const SCRIPTS = ['perf-eval.mjs', 'perf-eval-lib.mjs', 'perf-budgets.mjs', 'perf-dom-probe.mjs']
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const cookrew = path.join(homedir(), '.cookrew')

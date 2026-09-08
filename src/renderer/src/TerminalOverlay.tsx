@@ -10,6 +10,7 @@ import type { TerminalNodeData } from '../../shared/model'
 import type { VersionPinRecord } from '../../shared/version-pin'
 import type { TerminalActivity, TurnPhase } from '../../shared/turn'
 import type { LodLayout, ScreenRect } from './zoom-lod'
+import { useActivity } from './activity-thumb-store'
 import { useCanvasUi } from './canvas-ui'
 import { cookrew, isRemoteMode } from './api'
 import { doorStateSentence, type DoorTranscriptState } from '../../shared/door-transcript-state'
@@ -63,12 +64,10 @@ function languageName(code: string | null): string {
  */
 export const TerminalOverlayLayer = memo(function TerminalOverlayLayer({
   terminals,
-  activities,
   lod,
   onPrimaryChange
 }: {
   terminals: TerminalNodeData[]
-  activities: Record<string, TerminalActivity>
   /** SHARED overlay arbitration (App-owned, spans terminals + browsers). */
   lod: LodLayout
   /** Reports the zoomed-in terminal (most-covered active) — null on canvas. */
@@ -87,11 +86,17 @@ export const TerminalOverlayLayer = memo(function TerminalOverlayLayer({
       {terminals
         .filter((t) => activeIds.has(t.id) && rects[t.id])
         .map((t) => (
-          <TerminalOverlay key={t.id} node={t} activity={activities[t.id]} rect={rects[t.id]} />
+          <TerminalOverlayFor key={t.id} node={t} rect={rects[t.id]} />
         ))}
     </>
   )
 })
+
+/** The overlay with ITS card's activity — a per-id subscription, not App's map. */
+function TerminalOverlayFor({ node, rect }: { node: TerminalNodeData; rect: ScreenRect }): React.JSX.Element {
+  const activity = useActivity(node.id)
+  return <TerminalOverlay node={node} activity={activity} rect={rect} />
+}
 
 function clip(text: string, max: number): string {
   const flat = text.replace(/\s+/g, ' ').trim()
