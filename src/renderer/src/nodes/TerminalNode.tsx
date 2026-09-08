@@ -14,7 +14,7 @@ import { PastTurnView, TurnPagerBar, useTurnPaging } from './TurnPager'
 import type { TerminalNodeData } from '../../../shared/model'
 import type { TerminalActivity } from '../../../shared/turn'
 import { useCanvasUi } from '../canvas-ui'
-import { useActivity } from '../activity-thumb-store'
+import { useActivity, useActivitySeeded } from '../activity-thumb-store'
 
 /**
  * Summary card for a terminal. No xterm and no PTY attach here — the live
@@ -50,7 +50,10 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
   // its cards' last ask-and-reply for a single verb, which is a worse card
   // than the one this path exists to fix.
   const liveEmpty = isEmptyTurnView(liveModel) || activity?.mirrorless === true
-  const wantCheckpoint = agent && mode !== 'mini' && liveEmpty && !paging.viewing
+  // Not before the activity snapshot has landed: a card that reads its tail
+  // while "idle" is still a guess pays an exchange it will discard (L7).
+  const seeded = useActivitySeeded()
+  const wantCheckpoint = agent && seeded && mode !== 'mini' && liveEmpty && !paging.viewing
   const checkpoint = useStreamTail(node.id, wantCheckpoint)
   const checkpointBody = wantCheckpoint ? checkpointViewModel(checkpoint) : null
   // Both, when both are known: the checkpoint's words with the live verb over
@@ -147,7 +150,7 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
         {/* A git chip on a card about somebody ELSE's process would show the
             caller's own directory — a lie. The cwd of an imported card is at
             the author's app; nothing here is on a branch. */}
-        {!node.servedSession && <GitChip dir={node.cwd} />}
+        {!node.servedSession && <GitChip dir={node.cwd} git={node.git} />}
         {phase === 'idle' && activity && (
           <span className="vi-chip dim">{agoLabel(activity.updatedAt)}</span>
         )}
