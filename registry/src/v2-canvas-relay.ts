@@ -115,7 +115,28 @@ export const BODY_BUDGET = 64 * 1024 * 1024
  * `x-forwarded-for` and the reader's IP are all things the desktop has no
  * business learning from a relay.
  */
-const REQUEST_HEADERS = new Set(['content-type', 'accept', 'last-event-id', 'authorization'])
+const REQUEST_HEADERS = new Set([
+  'content-type',
+  'accept',
+  'accept-encoding',
+  'last-event-id',
+  'authorization',
+  'if-none-match'
+])
+
+/**
+ * `accept-encoding` CROSSES, and it was the largest thing this path got wrong.
+ *
+ * The desktop compresses what it can (http-compress.ts: the 2 MB bundle is
+ * 434 KB as brotli, a 653 KB workspace 228 KB) — but only when the request
+ * says the reader can decode it. Stripped here, the request said nothing,
+ * the desktop answered identity, and every relayed byte crossed uncompressed
+ * and then base64 (+33%) in the frames: a remote open carried ~4 MB where the
+ * LAN carried 1.2 MB. The header names the READER's decoders, which is the
+ * reader's business to state and nobody's to learn; `content-encoding` was
+ * already coming back, since it is not hop-by-hop. `if-none-match` crosses
+ * for the same reason: a validator the reader holds. (Perf lane L7.)
+ */
 
 /**
  * `authorization` CROSSES, and the reason it now does is the whole shape of
@@ -988,5 +1009,16 @@ function answerHeaders(
   }
   // A canvas is one reader's, and an SSE stream must not be held by a proxy
   // until it ends — which for the line is never.
-  return { ...out, ...PRIVATE, 'x-accel-buffering': 'no' }
+  //
+  // EXCEPT the bundle's own hash-named assets. The desktop marks those
+  // `public, max-age=31536000, immutable` (mobile-server.ts serveRendererAsset)
+  // because their name IS their content, and PRIVATE spread over that made a
+  // phone re-download two megabytes of JavaScript on every open. That header
+  // is kept, and only that one: the index, every API answer and every stream
+  // stay private and uncached, exactly as before. (Perf lane L7.)
+  const desktopCache = headers['cache-control'] ?? headers['Cache-Control']
+  const immutable =
+    at.path.startsWith('/assets/') && typeof desktopCache === 'string' && /\bimmutable\b/.test(desktopCache)
+  const kept: Record<string, string | string[]> = { ...out, ...PRIVATE, 'x-accel-buffering': 'no' }
+  return immutable ? { ...kept, 'cache-control': desktopCache } : kept
 }

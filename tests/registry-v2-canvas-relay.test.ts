@@ -103,6 +103,21 @@ const mobileServer = (): Server =>
       response.write('first')
       return
     }
+    if (url.pathname.startsWith('/assets/')) {
+      // A hash-named bundle asset: the companion says it can be kept forever.
+      response.writeHead(200, {
+        'content-type': 'text/javascript',
+        'cache-control': 'public, max-age=31536000, immutable'
+      })
+      response.end('export const x = 1')
+      return
+    }
+    if (url.pathname === '/immutable-api') {
+      // An API answer that CLAIMS immutability is not under /assets/: private.
+      response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'public, immutable' })
+      response.end('{}')
+      return
+    }
     if (url.pathname === '/bytes') {
       response.writeHead(200, { 'content-type': 'application/octet-stream' })
       response.end(Buffer.from([0, 1, 2, 250, 251, 252, 253, 254, 255]))
@@ -614,6 +629,23 @@ describe('a phone of the account, reaching its own canvas', () => {
     await res.text()
   })
 
+  it('carries the reader’s accept-encoding, so the desktop may compress its answer', async () => {
+    const { body } = await echo('/api/workspace', { headers: asPhone({ 'accept-encoding': 'br, gzip' }) })
+    expect(body.headers['accept-encoding']).toBe('br, gzip')
+  })
+
+  it('keeps the desktop’s immutable cache-control on a hash-named asset, and only there', async () => {
+    const asset = await fetch(`${site.origin}${prefix()}/assets/index-abc123.js`, { headers: asPhone() })
+    expect(asset.status).toBe(200)
+    expect(asset.headers.get('cache-control')).toBe('public, max-age=31536000, immutable')
+    await asset.arrayBuffer()
+    const api = await fetch(`${site.origin}${prefix()}/immutable-api`, { headers: asPhone() })
+    expect(api.headers.get('cache-control')).toBe('private, no-store')
+    await api.arrayBuffer()
+    const { res } = await echo('/api/workspaces', { headers: asPhone() })
+    expect(res.headers.get('cache-control')).toBe('private, no-store')
+  })
+
   it('carries bytes that are not text, unmangled', async () => {
     const res = await fetch(`${site.origin}${prefix()}/bytes`, { headers: asPhone() })
     expect(res.status).toBe(200)
@@ -920,6 +952,8 @@ describe('the header and cookie rules, by themselves', () => {
         accept: '*/*',
         'last-event-id': '7',
         'x-cr-run': 'abc',
+        'accept-encoding': 'br, gzip',
+        'if-none-match': '"v7"',
         'x-forwarded-proto': 'https',
         'x-real-ip': '203.0.113.9',
         host: 'cookrew.dev',
@@ -934,6 +968,8 @@ describe('the header and cookie rules, by themselves', () => {
       accept: '*/*',
       'last-event-id': '7',
       'x-cr-run': 'abc',
+      'accept-encoding': 'br, gzip',
+      'if-none-match': '"v7"',
       authorization: 'Bearer the-companion-token'
     })
   })
