@@ -83,12 +83,22 @@ describe('the companion event stream at boot', () => {
     expect(text).toContain('event: workspaces\n')
   })
 
-  it('skips the opening snapshot when the client is booting from the pull', async () => {
+  it('skips the opening snapshot ONCE for a boot nonce — a reconnect on the same URL heals', async () => {
     const port = await start()
-    const text = await openStream(port, '?boot=pull')
-    expect(text).not.toContain('event: workspace\n')
+    const first = await openStream(port, '?boot=nonce-abc-123')
+    expect(first).not.toContain('event: workspace\n')
     // The list still opens the stream: a kilobyte, and the switcher's truth.
-    expect(text).toContain('event: workspaces\n')
+    expect(first).toContain('event: workspaces\n')
+    // EventSource re-dials the SAME URL when the browser reconnects by
+    // itself; the nonce is spent, so this one carries the snapshot.
+    const again = await openStream(port, '?boot=nonce-abc-123')
+    expect(again).toContain('event: workspace\n')
+  })
+
+  it('treats an empty or oversized nonce as no nonce', async () => {
+    const port = await start()
+    expect(await openStream(port, '?boot=')).toContain('event: workspace\n')
+    expect(await openStream(port, `?boot=${'x'.repeat(65)}`)).toContain('event: workspace\n')
   })
 })
 
@@ -179,6 +189,24 @@ describe('remote-api at boot', () => {
     expect(fetchMock.mock.calls.length - calls).toBe(2)
   })
 
+  it('forgets a GET after a write, so a re-read never answers from before it', async () => {
+    let reads = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: { method?: string }) => {
+        if (String(url).includes('/api/workspace') && (init?.method ?? 'GET') === 'GET') reads += 1
+        return jsonResponse(200, { reads })
+      })
+    )
+    const { createRemoteApi } = await import('../src/renderer/src/remote-api')
+    const api = createRemoteApi()
+    const before = api.getWorkspace()
+    void api.updateNode('n1', { name: 'x' })
+    const after = api.getWorkspace()
+    expect(await before).not.toBe(await after)
+    expect(reads).toBe(2)
+  })
+
   it('does not share a failed GET with a retry after it', async () => {
     let workspaceCalls = 0
     vi.stubGlobal(
@@ -194,13 +222,13 @@ describe('remote-api at boot', () => {
     await expect(api.getWorkspace()).resolves.toEqual({ ok: true })
   })
 
-  it('says boot=pull on the first stream connect only', async () => {
+  it('says boot=<nonce> on the first stream connect only', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, {})))
     const { createRemoteApi } = await import('../src/renderer/src/remote-api')
     const api = createRemoteApi()
     api.onWorkspaceState(() => undefined)
     expect(FakeEventSource.urls).toHaveLength(1)
-    expect(FakeEventSource.urls[0]).toContain('/api/events?boot=pull')
+    expect(FakeEventSource.urls[0]).toMatch(/\/api\/events\?boot=[a-z0-9-]{8,36}&/)
     expect(FakeEventSource.urls[0]).toContain('token=')
     // The link drops and the stream reconnects after its backoff: plainly,
     // so the snapshot heals the client.
@@ -212,7 +240,7 @@ describe('remote-api at boot', () => {
       vi.useRealTimers()
     }
     expect(FakeEventSource.urls.length).toBeGreaterThanOrEqual(2)
-    for (const url of FakeEventSource.urls.slice(1)) expect(url).not.toContain('boot=pull')
+    for (const url of FakeEventSource.urls.slice(1)) expect(url).not.toContain('boot=')
   })
 })
 
@@ -226,5 +254,30 @@ describe('the activity seed flag', () => {
     expect(store.isActivitySeeded()).toBe(true)
     store.markActivitySeeded()
     expect(store.isActivitySeeded()).toBe(true)
+  })
+})
+
+describe('git rides the push by carrying the pull', () => {
+  it('keeps a terminal’s git when the pushed node says nothing, and only then', async () => {
+    const { carryGit } = await import('../src/renderer/src/workspace-git-carry')
+    const git = { isRepo: true, root: '/r', branch: 'main', dirty: false, ahead: 0, behind: 0 } as never
+    const terminal = (id: string, extra: Record<string, unknown> = {}) =>
+      ({ kind: 'terminal', id, name: id, preset: 'Claude', command: '', cwd: '/r', orch: false, role: null, position: { x: 0, y: 0 }, size: { width: 1, height: 1 }, ...extra }) as never
+    const previous = { name: 'w', dir: '/r', dirs: ['/r'], connections: [], nodes: [terminal('a', { git }), terminal('moved', { git })] }
+    const pushed = { name: 'w', dir: '/r', dirs: ['/r'], connections: [], nodes: [terminal('a'), terminal('b'), terminal('moved', { cwd: '/elsewhere' })] }
+    const out = carryGit(previous, pushed)
+    const byId = Object.fromEntries(out.nodes.map((n) => [n.id, n as { git?: unknown }]))
+    expect(byId.a.git).toBe(git)
+    expect(byId.b.git).toBeUndefined()
+    // A terminal that changed directory must not wear the old directory's branch.
+    expect(byId.moved.git).toBeUndefined()
+    expect(pushed.nodes[0]).not.toHaveProperty('git')
+  })
+
+  it('returns the push untouched when there is nothing to carry', async () => {
+    const { carryGit } = await import('../src/renderer/src/workspace-git-carry')
+    const pushed = { name: 'w', dir: '/r', dirs: ['/r'], connections: [], nodes: [] }
+    expect(carryGit(null, pushed)).toBe(pushed)
+    expect(carryGit({ ...pushed }, pushed)).toBe(pushed)
   })
 })

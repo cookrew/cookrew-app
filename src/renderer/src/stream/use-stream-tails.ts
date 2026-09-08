@@ -17,7 +17,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { hasLatestPush, subscribeLatestChanged } from '../latest-changed-bus'
-import { cookrew } from '../api'
+import { cookrew, isRemoteMode } from '../api'
 import { pickStreamTransport } from './use-stream'
 import type { StreamTransport } from './stream-transport'
 import type { LatestCheckpoint } from '../turn-view-model'
@@ -82,7 +82,7 @@ export function useStreamTail(terminalId: string, active: boolean): LatestCheckp
     // down. Reading at once spent one exchange per card on an answer nobody
     // drew (perf lane L7); a card that survives the beat is one that is
     // actually being looked at.
-    const first = window.setTimeout(() => void read(), FIRST_READ_DELAY_MS)
+    const first = window.setTimeout(() => void read(), isRemoteMode() ? FIRST_READ_DELAY_MS : 0)
 
     const push = hasLatestPush()
     let offPush: (() => void) | undefined

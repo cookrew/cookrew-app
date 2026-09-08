@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { batchFrames, parseBatchIds, parseKnownVersions, THUMB_BATCH_MAX } from '../src/main/browser-thumb-batch'
+import { batchFrames, parseBatchIds, parseKnownVersions, scopeBatchIds, THUMB_BATCH_MAX } from '../src/main/browser-thumb-batch'
 import {
   applyThumbBatch,
   knownVersions,
@@ -41,6 +41,17 @@ describe('the companion half — batchFrames', () => {
     expect(parseBatchIds(many)).toHaveLength(THUMB_BATCH_MAX)
     expect(parseBatchIds('a,a,,b')).toEqual(['a', 'b'])
     expect(parseBatchIds(null)).toEqual([])
+  })
+})
+
+describe('the companion half — scope', () => {
+  it('keeps only the browser cards of the canvas the client is scoped to', () => {
+    const nodes = [
+      { id: 'b1', kind: 'browser' },
+      { id: 't1', kind: 'terminal' }
+    ]
+    // b9 is another workspace's browser; t1 is this canvas but not a browser.
+    expect(scopeBatchIds(['b1', 'b9', 't1'], nodes)).toEqual(['b1'])
   })
 })
 

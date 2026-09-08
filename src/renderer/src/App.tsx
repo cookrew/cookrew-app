@@ -52,9 +52,11 @@ import {
   thumbStore,
   useActivity,
   useActivityPhaseCount,
+  ACTIVITY_SEED_DEADLINE_MS,
   markActivitySeeded
 } from './activity-thumb-store'
 import { reconcileFlowEdges, reconcileFlowNodes } from './flow-nodes'
+import { carryGit } from './workspace-git-carry'
 import {
   CARD_FIT_PADDING,
   CARD_ZOOM_MS,
@@ -366,7 +368,11 @@ function Canvas(): React.JSX.Element {
 
   useEffect(() => {
     void loadWorkspace()
-    return cookrew().onWorkspaceState((state) => {
+    return cookrew().onWorkspaceState((pushed) => {
+      // The push carries the raw canvas; only the pull embeds each terminal's
+      // git state. Carry what the previous state held, or every card would
+      // lose its chip on the first change and fetch it back one by one (L7).
+      const state = carryGit(workspaceRef.current, pushed)
       setWorkspace(state)
       // Selection must SURVIVE the rebuild (reconcileFlowNodes carries no
       // `selected` of its own), so it is re-applied from the previous nodes —
@@ -458,9 +464,17 @@ function Canvas(): React.JSX.Element {
       // Either way the cards may now decide whether they are idle; before
       // this they must not read their tails (use-stream-tails, L7).
       .finally(markActivitySeeded)
-    return cookrew().onTerminalActivity((activity) => {
+    // A snapshot that hangs must not hold every card's preview forever: past
+    // this the seed is declared and the cards fall back to how they behaved
+    // before the gate existed.
+    const seedDeadline = setTimeout(markActivitySeeded, ACTIVITY_SEED_DEADLINE_MS)
+    const off = cookrew().onTerminalActivity((activity) => {
       activityStore.set(activity.terminalId, mergeActivity(activityStore.get(activity.terminalId), activity))
     })
+    return () => {
+      clearTimeout(seedDeadline)
+      off()
+    }
   }, [])
 
   // ⌘W from the main process, resolved against the latest layer state.
@@ -976,11 +990,15 @@ function Canvas(): React.JSX.Element {
           for (const frame of outcome.changed) {
             // A blob URL, as before: the browser holds the decoded bytes, not a
             // base64 string in the store, which is what the phone's memory
-            // ceiling cares about.
-            const bytes = Uint8Array.from(atob(frame.data), (c) => c.charCodeAt(0))
-            const old = thumbStore.get(frame.id)
-            if (old?.startsWith('blob:')) URL.revokeObjectURL(old)
-            thumbStore.set(frame.id, URL.createObjectURL(new Blob([bytes], { type: frame.type })))
+            // ceiling cares about. One bad frame is that frame's problem.
+            try {
+              const bytes = Uint8Array.from(atob(frame.data), (c) => c.charCodeAt(0))
+              const old = thumbStore.get(frame.id)
+              if (old?.startsWith('blob:')) URL.revokeObjectURL(old)
+              thumbStore.set(frame.id, URL.createObjectURL(new Blob([bytes], { type: frame.type })))
+            } catch {
+              thumbBackoffsRef.current = recordThumbFailure(thumbBackoffsRef.current, frame.id, Date.now())
+            }
           }
         })
         .catch(failAll)

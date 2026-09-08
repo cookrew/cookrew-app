@@ -65,3 +65,16 @@ export function batchFrames(
     return { id, at: thumb.at, type: thumb.type, data: thumb.data.toString('base64') }
   })
 }
+
+/**
+ * Only the browser cards of the canvas the client is scoped to. The ids ride
+ * the query, so the slug layer's node-membership check never sees them; this
+ * is that check, for this route. Anything else is simply not asked for.
+ */
+export function scopeBatchIds(
+  ids: readonly string[],
+  nodes: ReadonlyArray<{ readonly id: string; readonly kind: string }>
+): string[] {
+  const browsers = new Set(nodes.filter((node) => node.kind === 'browser').map((node) => node.id))
+  return ids.filter((id) => browsers.has(id))
+}

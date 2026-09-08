@@ -127,7 +127,7 @@ export function viewportBrowserIds(nodes: readonly ThumbCandidate[], view: FlowR
 /** `known=` for the ids being asked: only those with a version in hand. */
 export function knownVersions(versions: Readonly<Record<string, number>>, ids: readonly string[]): string {
   return ids
-    .filter((id) => id in versions)
+    .filter((id) => Object.prototype.hasOwnProperty.call(versions, id))
     .map((id) => `${id}:${versions[id]}`)
     .join(',')
 }

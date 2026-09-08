@@ -1,0 +1,11 @@
+The fonts in this directory are redistributed under the SIL Open Font License,
+Version 1.1 (https://openfontlicense.org). Each notice below travels with its
+font, as the license requires.
+
+Inter — Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter)
+JetBrains Mono — Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
+Silkscreen — Copyright 2001 The Silkscreen Project Authors (https://github.com/googlefonts/silkscreen)
+VT323 — Copyright 2011 The VT323 Project Authors (https://github.com/phoikoi/VT323)
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is available with a FAQ at: https://openfontlicense.org

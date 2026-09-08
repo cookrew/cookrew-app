@@ -21,6 +21,9 @@ export const thumbStore = new KeyedStore<string>()
  * so a refused snapshot degrades to the old behaviour rather than to cards
  * that never show a preview.
  */
+/** How long a card waits for the activity snapshot before it stops waiting. */
+export const ACTIVITY_SEED_DEADLINE_MS = 3_000
+
 let activitySeeded = false
 const seedListeners = new Set<() => void>()
 

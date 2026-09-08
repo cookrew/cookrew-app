@@ -126,7 +126,7 @@ describe.skipIf(!ready)('the remote canvas boot asks for each thing once', () =>
   it('opens the event stream once, booting from the pull', () => {
     const streams = boot().filter((p) => p.startsWith('/api/events'))
     expect(streams).toHaveLength(1)
-    expect(streams[0]).toContain('boot=pull')
+    expect(streams[0]).toMatch(/[?&]boot=[a-z0-9-]{8,}/)
   })
 
   it('asks for no git state the payload already carried', () => {

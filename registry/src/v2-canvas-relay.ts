@@ -1017,8 +1017,12 @@ function answerHeaders(
   // is kept, and only that one: the index, every API answer and every stream
   // stay private and uncached, exactly as before. (Perf lane L7.)
   const desktopCache = headers['cache-control'] ?? headers['Cache-Control']
+  // `/assets/…` at the root, or `/<slug>/assets/…` for a client served under
+  // a workspace scope: the same hashed files either way.
   const immutable =
-    at.path.startsWith('/assets/') && typeof desktopCache === 'string' && /\bimmutable\b/.test(desktopCache)
+    /(^|\/)assets\//.test(at.path) && typeof desktopCache === 'string' && /\bimmutable\b/.test(desktopCache)
   const kept: Record<string, string | string[]> = { ...out, ...PRIVATE, 'x-accel-buffering': 'no' }
-  return immutable ? { ...kept, 'cache-control': desktopCache } : kept
+  // A public body whose encoding follows the request must say so, or a
+  // shared cache hands one reader's brotli to a reader who asked for gzip.
+  return immutable ? { ...kept, 'cache-control': desktopCache, vary: 'accept-encoding' } : kept
 }

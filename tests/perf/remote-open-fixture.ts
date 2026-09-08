@@ -140,7 +140,8 @@ export async function startFixtureCompanion(): Promise<FixtureCompanion> {
     if (p === '/api/events') {
       response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
       response.write(':ok\n\n')
-      if (url.searchParams.get('boot') !== 'pull') {
+      // A boot nonce skips the opening snapshot (the companion spends it once).
+      if (!url.searchParams.get('boot')) {
         response.write(`event: workspace\ndata: ${JSON.stringify(state)}\n\n`)
       }
       response.write(`event: workspaces\ndata: ${JSON.stringify(workspaces)}\n\n`)

@@ -70,14 +70,28 @@ async function parse<T>(response: Response, options: ParseOptions = {}): Promise
  */
 const inFlightGets = new Map<string, Promise<unknown>>()
 
+/**
+ * How long a GET may be joined. A request that hangs — a dead relay holding
+ * the socket — must not pin its key for the browser's whole socket timeout,
+ * or the resync re-pull would join the hang instead of asking afresh.
+ */
+const SHARE_GET_MS = 10_000
+
 async function req<T>(path: string, method = 'GET', body?: unknown, parseOptions: ParseOptions = {}): Promise<T> {
-  if (method !== 'GET' || body !== undefined) return reqOnce<T>(path, method, body, parseOptions)
+  if (method !== 'GET' || body !== undefined) {
+    // A write may change what any GET in flight would answer; nobody asking
+    // after it may be handed the answer from before it.
+    inFlightGets.clear()
+    return reqOnce<T>(path, method, body, parseOptions)
+  }
   const shared = inFlightGets.get(path)
   if (shared) return shared as Promise<T>
-  const own = reqOnce<T>(path, method, undefined, parseOptions).finally(() => {
+  const forget = (): void => {
     if (inFlightGets.get(path) === own) inFlightGets.delete(path)
-  })
+  }
+  const own = reqOnce<T>(path, method, undefined, parseOptions).finally(forget)
   inFlightGets.set(path, own)
+  setTimeout(forget, SHARE_GET_MS)
   return own
 }
 
@@ -210,6 +224,12 @@ let events: ReconnectingStream | null = null
 /** Whether the shared stream has connected before. See `open` below. */
 let streamOpenedOnce = false
 
+/** One per page load: what the companion spends to skip one snapshot. */
+function bootNonce(): string {
+  const random = globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)
+  return random.replace(/[^a-z0-9-]/gi, '').slice(0, 36)
+}
+
 function sharedEvents(): ReconnectingStream {
   // tokenParam, not a header: EventSource has none. Reads are gated now, so a
   // tokenless stream is a 401 the client would retry forever.
@@ -223,12 +243,14 @@ function sharedEvents(): ReconnectingStream {
         // THE FIRST CONNECT SAYS IT IS BOOTING FROM THE PULL. The stream
         // used to open with a full workspace snapshot — the same document
         // loadWorkspace was fetching at that very moment, a second 228 KB
-        // through the relay. `boot=pull` asks the companion to skip that one
-        // frame. Reconnects never say it: a stream that dropped is exactly
-        // the case where the snapshot is how the client heals (L7).
+        // through the relay. `boot=<nonce>` asks the companion to skip that
+        // one frame, and the companion spends the nonce on first sight: a
+        // browser that reconnects BY ITSELF re-dials this same URL, and that
+        // reconnect — like every one this stream makes without the nonce —
+        // gets the snapshot, which is how a dropped stream heals (L7).
         const first = !streamOpenedOnce
         streamOpenedOnce = true
-        return new EventSource(tokenParam(apiPath(first ? '/api/events?boot=pull' : '/api/events')))
+        return new EventSource(tokenParam(apiPath(first ? `/api/events?boot=${bootNonce()}` : '/api/events')))
       },
       // The one place the companion learns its link is down. Without this the
       // badge would report the address bar forever, which is a memory rather
