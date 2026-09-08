@@ -37,6 +37,11 @@ jobs:
 
       - run: npm ci
 
+      # The remote-open gate serves the BUILT renderer to a headless Chrome
+      # (tests/perf/remote-open.perf.ts); without out/renderer it skips.
+      - name: Build the renderer
+        run: npm run build
+
       - name: Perf gates
         env:
           # A shared runner is slower and noisier than the idle Apple Silicon
