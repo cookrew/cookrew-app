@@ -41,7 +41,7 @@ export interface SousBreakerState {
   trips: number
   /** Calls answered null without a request. */
   refused: number
-  /** Requests admitted. */
+  /** Requests that reached Sous: admitted, less any struck by a rethrow. */
   requests: number
   /** Redacted and clamped: never a URL, never a credential. */
   lastFailure: string | null
@@ -74,17 +74,21 @@ export function redactReason(reason: string): string {
   return reason
     .replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, '<url>')
     .replace(/\/\/[^@\s/]+@/g, '//<redacted>@')
-    .replace(HOST_PORT, (match, host: string) => (SOURCE_FILE.test(host) ? match : '<host>'))
+    .replace(HOST_PORT, (match, host: string | undefined) =>
+      host !== undefined && SOURCE_FILE.test(host) ? match : '<host>'
+    )
     .slice(0, REASON_MAX_CHARS)
 }
 
 /**
- * A bare host:port — an IPv4, localhost, or a dotted name — with a port of
- * two to five digits. A clock time has no dotted host and a file:line
- * ends in a source extension, so neither is eaten.
+ * A bare host:port — an IPv4, an IPv6 (bracketed or as Node prints it,
+ * `::1:11434`), localhost, or a dotted name — with a port of two to five
+ * digits. A clock time has no dotted host and a file:line ends in a source
+ * or config extension, so neither is eaten.
  */
-const HOST_PORT = /\b((?:\d{1,3}\.){3}\d{1,3}|localhost|[a-z0-9-]+(?:\.[a-z0-9-]+)+):\d{2,5}\b/gi
-const SOURCE_FILE = /\.(?:[cm]?[jt]sx?|py|go|rs|java|rb)$/i
+const HOST_PORT =
+  /(?:\[[0-9a-f:.]+\]:\d{2,5}\b|(?<![0-9a-f:])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{1,4}:\d{2,5}\b|\b((?:\d{1,3}\.){3}\d{1,3}|localhost|[a-z0-9-]+(?:\.[a-z0-9-]+)+):\d{2,5}\b)/gi
+const SOURCE_FILE = /\.(?:[cm]?[jt]sx?|py|go|rs|java|rb|json|ya?ml|toml|log|txt|md)$/i
 
 /** The libuv / undici codes that mean the server, not this program. */
 const NETWORK_CODES = new Set([

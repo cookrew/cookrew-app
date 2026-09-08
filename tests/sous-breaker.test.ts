@@ -261,6 +261,12 @@ describe('Sous circuit breaker', () => {
     expect(redactReason('at 12:30 the probe failed')).toBe('at 12:30 the probe failed')
     expect(redactReason('thrown at sous.ts:83 and index.mjs:4470')).toBe('thrown at sous.ts:83 and index.mjs:4470')
     expect(redactReason('retry:120 later')).toBe('retry:120 later')
+    expect(redactReason('connect ECONNREFUSED ::1:11434')).toBe('connect ECONNREFUSED <host>')
+    expect(redactReason('connect ECONNREFUSED [::1]:11434')).toBe('connect ECONNREFUSED <host>')
+    expect(redactReason('at fe80::1ff:fe23:4567:890a:11434 refused')).toBe('at <host> refused')
+    expect(redactReason('bad key in config.json:14, see notes.yaml:3 and app.log:120')).toBe(
+      'bad key in config.json:14, see notes.yaml:3 and app.log:120'
+    )
   })
 
   it('a rethrow during the half-open probe gives the probe back and strikes the request', async () => {
