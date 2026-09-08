@@ -21,7 +21,7 @@ import {
  */
 
 /** A CDP page that answers every call the measurement makes, and nothing real. */
-function fakePage(): { page: CdpPage; calls: string[] } {
+function fakePage({ panePoint = null }: { panePoint?: { x: number; y: number } | null } = {}): { page: CdpPage; calls: string[] } {
   const calls: string[] = []
   const census = {
     total: 1200,
@@ -55,7 +55,8 @@ function fakePage(): { page: CdpPage; calls: string[] } {
       calls.push(`evaluate:${expression.slice(0, 40)}`)
       if (expression === CENSUS) return census as T
       if (expression === FIBER_CENSUS) return { fibers: 100, components: { NodeWrapper: 30 } } as T
-      if (expression === PANE_POINT) return null as T
+      if (expression === PANE_POINT) return panePoint as T
+      if (expression.includes('.cr-viewseg button')) return true as T
       if (expression.includes(".react-flow__node').length")) return 30 as T
       if (expression.includes('__crRenderCensus.stop')) return { commits: 0, renders: {}, cards: [] } as T
       return 1 as T
@@ -95,6 +96,41 @@ describe('perf-dom-probe: the measurement body runs against a fake page', () => 
     // And the report renders it without throwing.
     expect(renderReport(result as never)).toContain('phone 390x844 at rest')
   }, 20_000)
+
+  it('walks the gesture branch too: a pan, a zoom, an idle window and the board opened and closed', async () => {
+    const { page, calls } = fakePage({ panePoint: { x: 100, y: 200 } })
+    const result = (await measureCompanion(
+      { port: 0 },
+      {
+        viewport: 'desktop',
+        size: { width: 1440, height: 900, mobile: false },
+        url: 'http://127.0.0.1:1/#pair=nothing',
+        apiPort: 1,
+        token: 'nothing',
+        frames: 2,
+        gestures: true,
+        serve: null,
+        served: null,
+        settleMs: 0
+      },
+      () => Promise.resolve(page)
+    )) as {
+      idle: { frames: number }
+      pan: { frames: number; commits: number }
+      zoom: { frames: number }
+      board: { open: { dom: { total: number } }; closed: { dom: { total: number } } } | undefined
+    }
+    // Out and back: 2 frames each way.
+    expect(result.pan.frames).toBe(4)
+    expect(result.zoom.frames).toBe(4)
+    expect(result.idle.frames).toBeGreaterThan(0)
+    expect(result.board?.open.dom.total).toBe(1200)
+    expect(result.board?.closed.dom.total).toBe(1200)
+    // Real input went through CDP, and the board was collected before it was measured closed.
+    expect(calls.filter((c) => c === 'Input.dispatchMouseEvent').length).toBeGreaterThanOrEqual(10)
+    expect(calls).toContain('HeapProfiler.collectGarbage')
+    expect(renderReport(result as never)).toContain('board closed (after GC)')
+  }, 30_000)
 
   it('recordFrames reads the census the shim returns, cards included', async () => {
     const { page } = fakePage()
