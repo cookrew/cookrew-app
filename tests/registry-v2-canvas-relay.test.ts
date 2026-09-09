@@ -113,6 +113,15 @@ const mobileServer = (): Server =>
       response.end('export const y = 2')
       return
     }
+    if (url.pathname.endsWith('/assets-origin-only.js')) {
+      response.writeHead(200, {
+        'content-type': 'text/javascript',
+        'cache-control': 'public, max-age=31536000, immutable',
+        vary: 'origin'
+      })
+      response.end('export const w = 4')
+      return
+    }
     if (url.pathname.endsWith('/assets-with-vary.js')) {
       response.writeHead(200, {
         'content-type': 'text/javascript',
@@ -122,7 +131,7 @@ const mobileServer = (): Server =>
       response.end('export const z = 3')
       return
     }
-    if (url.pathname.startsWith('/assets/')) {
+    if (url.pathname.startsWith('/assets/') || url.pathname.startsWith('/nested/assets/')) {
       // A hash-named bundle asset: the companion says it can be kept forever.
       response.writeHead(200, {
         'content-type': 'text/javascript',
@@ -678,6 +687,18 @@ describe('a phone of the account, reaching its own canvas', () => {
     const asset = await fetch(`${site.origin}${prefix()}/assets/assets-with-vary.js`, { headers: asPhone() })
     expect(asset.headers.get('cache-control')).toBe('private, max-age=31536000, immutable')
     expect(asset.headers.get('vary')).toBe('accept-encoding, origin')
+    await asset.arrayBuffer()
+  })
+
+  it('adds accept-encoding to a vary that lacks it, dropping nothing', async () => {
+    const asset = await fetch(`${site.origin}${prefix()}/assets/assets-origin-only.js`, { headers: asPhone() })
+    expect(asset.headers.get('vary')).toBe('origin, accept-encoding')
+    await asset.arrayBuffer()
+  })
+
+  it('keeps nothing for an assets directory that is not at the root', async () => {
+    const asset = await fetch(`${site.origin}${prefix()}/nested/assets/index-abc123.js`, { headers: asPhone() })
+    expect(asset.headers.get('cache-control')).toBe('private, no-store')
     await asset.arrayBuffer()
   })
 

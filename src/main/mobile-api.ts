@@ -336,13 +336,16 @@ async function probeWarmed(board: BoardSources): Promise<void> {
 
 /**
  * Boot nonces already honoured, so a stream that reconnects on its own with
- * the same URL is answered with the snapshot it now needs. Forgotten by AGE,
- * never by count: a count would let the 257th page load un-spend the first
- * one's nonce while its stream is still alive. A day is longer than any
- * stream a phone holds open.
+ * the same URL is answered with the snapshot it now needs. Forgotten by AGE
+ * first — a small count would let the 257th page load un-spend the first
+ * one's nonce while its stream is still alive, and a day is longer than any
+ * stream a phone holds open — with a large ceiling under it so nobody can
+ * make this grow without bound.
  */
 const spentBootNonces = new Map<string, number>();
 const BOOT_NONCE_TTL_MS = 24 * 60 * 60 * 1000;
+/** And a ceiling under the TTL, so a caller minting nonces cannot grow this without bound. */
+const BOOT_NONCES_MAX = 4096;
 
 /** True the FIRST time this nonce is seen — the one connect that skips the snapshot. */
 export function spendBootNonce(nonce: string | null, now = Date.now()): boolean {
@@ -352,6 +355,11 @@ export function spendBootNonce(nonce: string | null, now = Date.now()): boolean 
   }
   if (spentBootNonces.has(nonce)) return false;
   spentBootNonces.set(nonce, now);
+  while (spentBootNonces.size > BOOT_NONCES_MAX) {
+    const oldest = spentBootNonces.keys().next().value;
+    if (oldest === undefined) break;
+    spentBootNonces.delete(oldest);
+  }
   return true;
 }
 

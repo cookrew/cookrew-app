@@ -14,6 +14,8 @@ on:
       - 'vitest.perf.config.ts'
       - 'scripts/perf-*.mjs'
       - 'src/renderer/**'
+      - 'src/main/**'
+      - 'registry/**'
       - '.github/workflows/perf.yml'
 
 concurrency:

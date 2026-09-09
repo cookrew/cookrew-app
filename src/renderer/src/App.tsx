@@ -57,6 +57,7 @@ import {
 } from './activity-thumb-store'
 import { reconcileFlowEdges, reconcileFlowNodes } from './flow-nodes'
 import { carryGit } from './workspace-git-carry'
+import { decodeBase64 } from './base64'
 import {
   CARD_FIT_PADDING,
   CARD_ZOOM_MS,
@@ -992,19 +993,17 @@ function Canvas(): React.JSX.Element {
           for (const frame of outcome.changed) {
             // A blob URL, as before: the browser holds the decoded bytes, not a
             // base64 string in the store, which is what the phone's memory
-            // ceiling cares about. Decoded NATIVELY through a data: fetch
-            // rather than a per-byte JS loop on the phone's main thread; one
-            // bad frame is that frame's problem.
-            void fetch(`data:${frame.type};base64,${frame.data}`)
-              .then((decoded) => decoded.blob())
-              .then((blob) => {
-                const old = thumbStore.get(frame.id)
-                if (old?.startsWith('blob:')) URL.revokeObjectURL(old)
-                thumbStore.set(frame.id, URL.createObjectURL(blob))
-              })
-              .catch(() => {
-                thumbBackoffsRef.current = recordThumbFailure(thumbBackoffsRef.current, frame.id, Date.now())
-              })
+            // ceiling cares about. Decoded HERE, synchronously and in order —
+            // a data: fetch was tried and the renderer CSP (connect-src) blocks
+            // it, so every frame failed silently; and async decodes landed out
+            // of order. One bad frame is that frame's problem.
+            try {
+              const old = thumbStore.get(frame.id)
+              if (old?.startsWith('blob:')) URL.revokeObjectURL(old)
+              thumbStore.set(frame.id, URL.createObjectURL(new Blob([decodeBase64(frame.data)], { type: frame.type })))
+            } catch {
+              thumbBackoffsRef.current = recordThumbFailure(thumbBackoffsRef.current, frame.id, Date.now())
+            }
           }
         })
         .catch(failAll)

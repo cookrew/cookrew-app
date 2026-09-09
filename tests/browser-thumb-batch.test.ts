@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { batchFrames, parseBatchIds, parseKnownVersions, scopedThumbLookup, THUMB_BATCH_MAX } from '../src/main/browser-thumb-batch'
+import { batchFrames, parseBatchIds, parseKnownVersions, scopedBrowserIds, scopedThumbLookup, THUMB_BATCH_MAX } from '../src/main/browser-thumb-batch'
 import {
   applyThumbBatch,
   knownVersions,
@@ -45,19 +45,30 @@ describe('the companion half — batchFrames', () => {
 })
 
 describe('the companion half — scope', () => {
+  const nodes = [
+    { id: 'b1', kind: 'browser' },
+    { id: 'b2', kind: 'browser' },
+    { id: 't1', kind: 'terminal' }
+  ]
+
   it('answers no-frame for an id outside the canvas, and never drops it', () => {
-    const nodes = [
-      { id: 'b1', kind: 'browser' },
-      { id: 't1', kind: 'terminal' }
-    ]
     const frame = { data: Buffer.from('x'), type: 'image/jpeg', at: 1 }
-    const lookup = scopedThumbLookup(nodes, () => frame)
+    const lookup = scopedThumbLookup(scopedBrowserIds(nodes), () => frame)
     // b9 is another workspace's browser; t1 is this canvas but not a browser.
     expect(batchFrames(['b1', 'b9', 't1'], {}, lookup)).toEqual([
       { id: 'b1', at: 1, type: 'image/jpeg', data: Buffer.from('x').toString('base64') },
       { id: 'b9', at: null },
       { id: 't1', at: null }
     ])
+  })
+
+  it('a card of this canvas with no frame yet is still a member — it is asked, and answers no-frame', () => {
+    const browsers = scopedBrowserIds(nodes)
+    // The route heartbeats by membership, so b2 (no frame) is asked; b9 is not.
+    expect([...['b1', 'b2', 'b9'].filter((id) => browsers.has(id))]).toEqual(['b1', 'b2'])
+    const frames = new Map([['b1', { data: Buffer.from('x'), type: 'image/jpeg', at: 1 }]])
+    const lookup = scopedThumbLookup(browsers, (id) => frames.get(id))
+    expect(batchFrames(['b2'], {}, lookup)).toEqual([{ id: 'b2', at: null }])
   })
 })
 

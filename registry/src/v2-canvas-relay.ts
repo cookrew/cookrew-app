@@ -1025,25 +1025,26 @@ function answerHeaders(
 /**
  * THE ONE CACHE HEADER THAT SURVIVES, and only in this shape.
  *
- *   - The PATH decides, never the query: `at.path` carries the search
- *     string, and `?next=/assets/x` on any route is a caller's to write.
+ *   - The PATH decides, anchored at `/assets/`, never the query: `at.path`
+ *     carries the search string, and `?next=/assets/x` on any route is a
+ *     caller's to write. (A relayed canvas is served at its root.)
  *   - `private`, never `public`, whatever the desktop said. The win is the
  *     phone's OWN cache; `public` on a session-gated prefix would let a
  *     shared cache serve a cached 200 to an unauthenticated requester — an
  *     existence oracle for a device id, which relayStatus refuses to leak.
  *   - Never with a Set-Cookie: a cookie is per reader, a cached body is not.
- *   - The desktop's `vary` is kept when it already names accept-encoding
- *     (it says `accept-encoding, origin` — the origin half is the CORS
- *     gate's, http-compress.ts), and written as `accept-encoding` when it
- *     does not name it at all; a body whose encoding follows the request
- *     must say so.
+ *   - The desktop's `vary` is kept, and accept-encoding is ADDED to it when
+ *     it is missing (it usually says `accept-encoding, origin` — the origin
+ *     half is the CORS gate's, http-compress.ts); a body whose encoding
+ *     follows the request must say so, and nothing the desktop varied on
+ *     may be dropped.
  */
 export function immutableAssetCache(
   headers: Record<string, string>,
   path: string
 ): Record<string, string> | null {
   const pathname = path.split('?')[0]
-  if (!/(^|\/)assets\//.test(pathname)) return null
+  if (!pathname.startsWith('/assets/')) return null
   const lower = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]))
   const cache = lower['cache-control']
   if (typeof cache !== 'string' || !/\bimmutable\b/.test(cache)) return null
@@ -1052,7 +1053,8 @@ export function immutableAssetCache(
     .split(',')
     .map((part) => part.trim())
     .filter((part) => part.length > 0 && part.toLowerCase() !== 'public' && part.toLowerCase() !== 'private')
-  const vary = lower.vary
-  const varies = typeof vary === 'string' && /\baccept-encoding\b/i.test(vary) ? vary : 'accept-encoding'
+  const vary = typeof lower.vary === 'string' ? lower.vary.trim() : ''
+  const varies =
+    vary.length === 0 ? 'accept-encoding' : /\baccept-encoding\b/i.test(vary) ? vary : `${vary}, accept-encoding`
   return { 'cache-control': ['private', ...privately].join(', '), vary: varies }
 }

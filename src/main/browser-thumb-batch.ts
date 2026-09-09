@@ -66,17 +66,28 @@ export function batchFrames(
   })
 }
 
+/** The browser cards of one canvas: what a batch may ask about at all. */
+export function scopedBrowserIds(
+  nodes: ReadonlyArray<{ readonly id: string; readonly kind: string }>
+): ReadonlySet<string> {
+  return new Set(nodes.filter((node) => node.kind === 'browser').map((node) => node.id))
+}
+
 /**
  * A lookup that answers only for the browser cards of the canvas the client
  * is scoped to. The ids ride the query, so the slug layer's node-membership
  * check never sees them; this is that check, for this route. An id outside
  * the canvas is answered as "no frame" — never dropped, or the phone would
  * see no answer at all for it and ask again every tick forever.
+ *
+ * MEMBERSHIP, not frame presence, is what gates the heartbeat the route
+ * sends beside this: under the headless runtime the heartbeat IS the
+ * producer, so a card with no frame yet is exactly the one that must be
+ * asked.
  */
 export function scopedThumbLookup(
-  nodes: ReadonlyArray<{ readonly id: string; readonly kind: string }>,
+  browsers: ReadonlySet<string>,
   lookup: (id: string) => ThumbLookup | undefined
 ): (id: string) => ThumbLookup | undefined {
-  const browsers = new Set(nodes.filter((node) => node.kind === 'browser').map((node) => node.id))
   return (id) => (browsers.has(id) ? lookup(id) : undefined)
 }
