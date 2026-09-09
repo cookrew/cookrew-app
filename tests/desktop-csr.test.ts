@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { createPublicKey, verify } from 'node:crypto'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -23,7 +23,14 @@ const MAC = '3f2b9c14-7a55-4d2e-9d0f-1c8e6b4a7f30'
 const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-csr-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
-const openssl = (args: string[]): string => execFileSync('openssl', args, { encoding: 'utf8' })
+// stdout AND stderr: OpenSSL 3 (the ubuntu runner) prints `-verify`'s
+// "Certificate request self-signature verify OK" on stderr, LibreSSL (macOS)
+// on stdout — reading one stream made the two verify cases red on Linux only.
+const openssl = (args: string[]): string => {
+  const run = spawnSync('openssl', args, { encoding: 'utf8' })
+  if (run.status !== 0) throw new Error(`openssl ${args[0]} exited ${run.status}: ${run.stderr}`)
+  return `${run.stdout}${run.stderr}`
+}
 
 const writeCsr = (name: string, text: string): string => {
   const file = path.join(dir, name)
