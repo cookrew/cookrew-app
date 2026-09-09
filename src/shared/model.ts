@@ -82,6 +82,15 @@ export interface TerminalNodeData {
    * process; this is the receipt, not the key.
    */
   servedSession?: ServedSessionFacts | null
+  /**
+   * The cwd's git state, EMBEDDED by the companion's /api/workspace
+   * (mobile-api enrichStateWithGit) so a phone card never asks for it again.
+   * Absent on the desktop IPC path, where GitChip still fetches per card;
+   * null when the companion looked and found no repo. Perf lane L7: thirty
+   * per-card /api/git calls were the whole gap between a 1.9 s and an 8.7 s
+   * remote open.
+   */
+  git?: GitInfo | null
   /** Set when this agent was forked from another agent's turn. */
   forkOf?: ForkOrigin | null
   /**

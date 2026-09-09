@@ -115,7 +115,28 @@ export const BODY_BUDGET = 64 * 1024 * 1024
  * `x-forwarded-for` and the reader's IP are all things the desktop has no
  * business learning from a relay.
  */
-const REQUEST_HEADERS = new Set(['content-type', 'accept', 'last-event-id', 'authorization'])
+const REQUEST_HEADERS = new Set([
+  'content-type',
+  'accept',
+  'accept-encoding',
+  'last-event-id',
+  'authorization',
+  'if-none-match'
+])
+
+/**
+ * `accept-encoding` CROSSES, and it was the largest thing this path got wrong.
+ *
+ * The desktop compresses what it can (http-compress.ts: the 2 MB bundle is
+ * 434 KB as brotli, a 653 KB workspace 228 KB) — but only when the request
+ * says the reader can decode it. Stripped here, the request said nothing,
+ * the desktop answered identity, and every relayed byte crossed uncompressed
+ * and then base64 (+33%) in the frames: a remote open carried ~4 MB where the
+ * LAN carried 1.2 MB. The header names the READER's decoders, which is the
+ * reader's business to state and nobody's to learn; `content-encoding` was
+ * already coming back, since it is not hop-by-hop. `if-none-match` crosses
+ * for the same reason: a validator the reader holds. (Perf lane L7.)
+ */
 
 /**
  * `authorization` CROSSES, and the reason it now does is the whole shape of
@@ -988,5 +1009,52 @@ function answerHeaders(
   }
   // A canvas is one reader's, and an SSE stream must not be held by a proxy
   // until it ends — which for the line is never.
-  return { ...out, ...PRIVATE, 'x-accel-buffering': 'no' }
+  //
+  // EXCEPT the bundle's own hash-named assets. The desktop marks those
+  // `public, max-age=31536000, immutable` (mobile-server.ts serveRendererAsset)
+  // because their name IS their content, and PRIVATE spread over that made a
+  // phone re-download two megabytes of JavaScript on every open. Those keep
+  // a cache header — reshaped by immutableAssetCache below — and nothing
+  // else does: the index, every API answer and every stream stay private and
+  // uncached, exactly as before. (Perf lane L7.)
+  const kept: Record<string, string | string[]> = { ...out, ...PRIVATE, 'x-accel-buffering': 'no' }
+  const asset = immutableAssetCache(headers, at.path)
+  return asset === null ? kept : { ...kept, ...asset }
+}
+
+/**
+ * THE ONE CACHE HEADER THAT SURVIVES, and only in this shape.
+ *
+ *   - The PATH decides, anchored at `/assets/`, never the query: `at.path`
+ *     carries the search string, and `?next=/assets/x` on any route is a
+ *     caller's to write. (A relayed canvas is served at its root.)
+ *   - `private`, never `public`, whatever the desktop said. The win is the
+ *     phone's OWN cache; `public` on a session-gated prefix would let a
+ *     shared cache serve a cached 200 to an unauthenticated requester — an
+ *     existence oracle for a device id, which relayStatus refuses to leak.
+ *   - Never with a Set-Cookie: a cookie is per reader, a cached body is not.
+ *   - The desktop's `vary` is kept, and accept-encoding is ADDED to it when
+ *     it is missing (it usually says `accept-encoding, origin` — the origin
+ *     half is the CORS gate's, http-compress.ts); a body whose encoding
+ *     follows the request must say so, and nothing the desktop varied on
+ *     may be dropped.
+ */
+export function immutableAssetCache(
+  headers: Record<string, string>,
+  path: string
+): Record<string, string> | null {
+  const pathname = path.split('?')[0]
+  if (!pathname.startsWith('/assets/')) return null
+  const lower = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]))
+  const cache = lower['cache-control']
+  if (typeof cache !== 'string' || !/\bimmutable\b/.test(cache)) return null
+  if (typeof lower['set-cookie'] === 'string' && lower['set-cookie'].length > 0) return null
+  const privately = cache
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0 && part.toLowerCase() !== 'public' && part.toLowerCase() !== 'private')
+  const vary = typeof lower.vary === 'string' ? lower.vary.trim() : ''
+  const varies =
+    vary.length === 0 ? 'accept-encoding' : /\baccept-encoding\b/i.test(vary) ? vary : `${vary}, accept-encoding`
+  return { 'cache-control': ['private', ...privately].join(', '), vary: varies }
 }

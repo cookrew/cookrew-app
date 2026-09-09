@@ -334,6 +334,35 @@ async function probeWarmed(board: BoardSources): Promise<void> {
   }
 }
 
+/**
+ * Boot nonces already honoured, so a stream that reconnects on its own with
+ * the same URL is answered with the snapshot it now needs. Forgotten by AGE
+ * first — a small count would let the 257th page load un-spend the first
+ * one's nonce while its stream is still alive, and a day is longer than any
+ * stream a phone holds open — with a large ceiling under it so nobody can
+ * make this grow without bound.
+ */
+const spentBootNonces = new Map<string, number>();
+const BOOT_NONCE_TTL_MS = 24 * 60 * 60 * 1000;
+/** And a ceiling under the TTL, so a caller minting nonces cannot grow this without bound. */
+const BOOT_NONCES_MAX = 4096;
+
+/** True the FIRST time this nonce is seen — the one connect that skips the snapshot. */
+export function spendBootNonce(nonce: string | null, now = Date.now()): boolean {
+  if (nonce === null || nonce.length === 0 || nonce.length > 64) return false;
+  for (const [spent, at] of spentBootNonces) {
+    if (now - at > BOOT_NONCE_TTL_MS) spentBootNonces.delete(spent);
+  }
+  if (spentBootNonces.has(nonce)) return false;
+  spentBootNonces.set(nonce, now);
+  while (spentBootNonces.size > BOOT_NONCES_MAX) {
+    const oldest = spentBootNonces.keys().next().value;
+    if (oldest === undefined) break;
+    spentBootNonces.delete(oldest);
+  }
+  return true;
+}
+
 export async function handleMobileApi(
   request: http.IncomingMessage,
   response: http.ServerResponse,
@@ -1173,7 +1202,15 @@ export async function handleMobileApi(
 
   if (method === "GET" && p === "/api/events") {
     const send = startSse(response);
-    send("workspace", scopedState());
+    // The opening workspace snapshot is skipped ONCE per boot: the client
+    // says `?boot=<nonce>` (remote-api sharedEvents) because it is fetching
+    // /api/workspace at this very moment, and the same document twice is the
+    // largest thing a relayed boot carries. The nonce is spent on first
+    // sight — EventSource re-dials the SAME URL when the browser reconnects
+    // by itself, and that reconnect must get the snapshot, which is how a
+    // dropped stream heals. The workspace LIST still opens every stream: a
+    // kilobyte, and the switcher's source of truth (perf lane L7).
+    if (!spendBootNonce(url.searchParams.get("boot"))) send("workspace", scopedState());
     send("workspaces", ops.listWorkspaces());
     // Sous's zoom / zoom-back, so the phone and the TV follow the owner's
     // voice. A scoped stream only hears about its own canvas.

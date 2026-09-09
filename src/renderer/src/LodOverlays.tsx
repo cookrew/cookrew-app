@@ -1,8 +1,19 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, type MutableRefObject } from 'react'
+import { Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, type MutableRefObject } from 'react'
 import type { BrowserNodeData, TerminalNodeData } from '../../shared/model'
 import { isRemoteMode } from './api'
 import { useLodLayout } from './zoom-lod'
-import { TerminalOverlayLayer } from './TerminalOverlay'
+/**
+ * THE TERMINAL OVERLAY IS A CHUNK OF ITS OWN. It carries xterm and its addons
+ * (WebGL, fit, clipboard, serialize) — a third of the bundle for a surface a
+ * phone reaches only by zooming into a terminal. Through the relay every byte
+ * of the boot crosses two hops, so it is fetched the first time a terminal is
+ * actually zoomed, and not at all on a canvas that is only looked at (perf
+ * lane L7). The layer is mounted only while some terminal is active; before
+ * that the primary is reported as null directly.
+ */
+const TerminalOverlayLayer = lazy(() =>
+  import('./TerminalOverlay').then((m) => ({ default: m.TerminalOverlayLayer }))
+)
 import { BrowserLayer, type InteractiveBrowserCapability } from './BrowserLayer'
 
 /**
@@ -121,13 +132,21 @@ export function LodOverlays({
     }
   }, [lod.primaryId, arrivedId, onArrivalConsumed])
 
+  const anyTerminalActive = terminals.some((t) => lod.activeIds.has(t.id) && lod.rects[t.id])
+  useEffect(() => {
+    if (!anyTerminalActive) onPrimaryTerminalChange?.(null)
+  }, [anyTerminalActive, onPrimaryTerminalChange])
   return (
     <>
-      <TerminalOverlayLayer
-        terminals={terminals}
-        lod={lod}
-        onPrimaryChange={onPrimaryTerminalChange}
-      />
+      {anyTerminalActive && (
+        <Suspense fallback={null}>
+          <TerminalOverlayLayer
+            terminals={terminals}
+            lod={lod}
+            onPrimaryChange={onPrimaryTerminalChange}
+          />
+        </Suspense>
+      )}
       <BrowserLayer
         browsers={browsers}
         lod={lod}

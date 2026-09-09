@@ -103,6 +103,49 @@ const mobileServer = (): Server =>
       response.write('first')
       return
     }
+    if (url.pathname.endsWith('/assets-with-cookie.js')) {
+      // An asset answer that also sets a cookie: per reader, so never kept.
+      response.writeHead(200, {
+        'content-type': 'text/javascript',
+        'cache-control': 'public, max-age=31536000, immutable',
+        'set-cookie': 'cr_companion=abc; Path=/'
+      })
+      response.end('export const y = 2')
+      return
+    }
+    if (url.pathname.endsWith('/assets-origin-only.js')) {
+      response.writeHead(200, {
+        'content-type': 'text/javascript',
+        'cache-control': 'public, max-age=31536000, immutable',
+        vary: 'origin'
+      })
+      response.end('export const w = 4')
+      return
+    }
+    if (url.pathname.endsWith('/assets-with-vary.js')) {
+      response.writeHead(200, {
+        'content-type': 'text/javascript',
+        'cache-control': 'public, max-age=31536000, immutable',
+        vary: 'accept-encoding, origin'
+      })
+      response.end('export const z = 3')
+      return
+    }
+    if (url.pathname.startsWith('/assets/') || url.pathname.startsWith('/nested/assets/')) {
+      // A hash-named bundle asset: the companion says it can be kept forever.
+      response.writeHead(200, {
+        'content-type': 'text/javascript',
+        'cache-control': 'public, max-age=31536000, immutable'
+      })
+      response.end('export const x = 1')
+      return
+    }
+    if (url.pathname === '/immutable-api') {
+      // An API answer that CLAIMS immutability is not under /assets/: private.
+      response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'public, immutable' })
+      response.end('{}')
+      return
+    }
     if (url.pathname === '/bytes') {
       response.writeHead(200, { 'content-type': 'application/octet-stream' })
       response.end(Buffer.from([0, 1, 2, 250, 251, 252, 253, 254, 255]))
@@ -614,6 +657,58 @@ describe('a phone of the account, reaching its own canvas', () => {
     await res.text()
   })
 
+  it('carries the reader’s accept-encoding, so the desktop may compress its answer', async () => {
+    const { body } = await echo('/api/workspace', { headers: asPhone({ 'accept-encoding': 'br, gzip' }) })
+    expect(body.headers['accept-encoding']).toBe('br, gzip')
+  })
+
+  it('keeps an immutable hash-named asset cacheable — privately — and nothing else', async () => {
+    const asset = await fetch(`${site.origin}${prefix()}/assets/index-abc123.js`, { headers: asPhone() })
+    expect(asset.status).toBe(200)
+    // `public` is rewritten: the phone's own cache is the win, and a shared
+    // cache on a session-gated prefix would be an existence oracle.
+    expect(asset.headers.get('cache-control')).toBe('private, max-age=31536000, immutable')
+    expect(asset.headers.get('vary')).toBe('accept-encoding')
+    await asset.arrayBuffer()
+    const api = await fetch(`${site.origin}${prefix()}/immutable-api`, { headers: asPhone() })
+    expect(api.headers.get('cache-control')).toBe('private, no-store')
+    await api.arrayBuffer()
+    const { res } = await echo('/api/workspaces', { headers: asPhone() })
+    expect(res.headers.get('cache-control')).toBe('private, no-store')
+  })
+
+  it('decides by the path, never by a query that happens to say assets/', async () => {
+    const api = await fetch(`${site.origin}${prefix()}/immutable-api?next=/assets/x`, { headers: asPhone() })
+    expect(api.headers.get('cache-control')).toBe('private, no-store')
+    await api.arrayBuffer()
+  })
+
+  it('keeps the desktop’s vary when it already names accept-encoding — the origin half is the CORS gate’s', async () => {
+    const asset = await fetch(`${site.origin}${prefix()}/assets/assets-with-vary.js`, { headers: asPhone() })
+    expect(asset.headers.get('cache-control')).toBe('private, max-age=31536000, immutable')
+    expect(asset.headers.get('vary')).toBe('accept-encoding, origin')
+    await asset.arrayBuffer()
+  })
+
+  it('adds accept-encoding to a vary that lacks it, dropping nothing', async () => {
+    const asset = await fetch(`${site.origin}${prefix()}/assets/assets-origin-only.js`, { headers: asPhone() })
+    expect(asset.headers.get('vary')).toBe('origin, accept-encoding')
+    await asset.arrayBuffer()
+  })
+
+  it('keeps nothing for an assets directory that is not at the root', async () => {
+    const asset = await fetch(`${site.origin}${prefix()}/nested/assets/index-abc123.js`, { headers: asPhone() })
+    expect(asset.headers.get('cache-control')).toBe('private, no-store')
+    await asset.arrayBuffer()
+  })
+
+  it('never keeps an asset answer that sets a cookie', async () => {
+    const asset = await fetch(`${site.origin}${prefix()}/assets/assets-with-cookie.js`, { headers: asPhone() })
+    expect(asset.headers.get('cache-control')).toBe('private, no-store')
+    expect(asset.headers.get('set-cookie')).toContain(`Path=${prefix()}/`)
+    await asset.arrayBuffer()
+  })
+
   it('carries bytes that are not text, unmangled', async () => {
     const res = await fetch(`${site.origin}${prefix()}/bytes`, { headers: asPhone() })
     expect(res.status).toBe(200)
@@ -920,6 +1015,8 @@ describe('the header and cookie rules, by themselves', () => {
         accept: '*/*',
         'last-event-id': '7',
         'x-cr-run': 'abc',
+        'accept-encoding': 'br, gzip',
+        'if-none-match': '"v7"',
         'x-forwarded-proto': 'https',
         'x-real-ip': '203.0.113.9',
         host: 'cookrew.dev',
@@ -934,6 +1031,8 @@ describe('the header and cookie rules, by themselves', () => {
       accept: '*/*',
       'last-event-id': '7',
       'x-cr-run': 'abc',
+      'accept-encoding': 'br, gzip',
+      'if-none-match': '"v7"',
       authorization: 'Bearer the-companion-token'
     })
   })

@@ -192,6 +192,11 @@ export const SCOPE_AWARE: RegExp[] = [
   /^\/api\/beacon$/,
   /^\/api\/git(?:\?.*)?$/,
   /^\/api\/browser\/capabilities$/,
+  // The batch of pictures a phone asks for by viewport. Global by shape (the
+  // ids ride the query, not the path), so the membership check NODE_ROUTES
+  // gives a node-addressed path cannot run here: the route itself keeps only
+  // the ids of browser cards in the workspace the client is scoped to.
+  /^\/api\/browser\/thumbs$/,
   // Translation carries its own subject: the text to translate is in the
   // request body and the answer depends on nothing a workspace holds, so
   // every scope answers it identically. Being absent here did not make it
