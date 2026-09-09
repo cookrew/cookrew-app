@@ -24,13 +24,7 @@ import { useTitleMode } from './checkpoint-sync'
 import { attachFilesToTerminal, pasteClipboardImages } from './AttachButton'
 import { handleTerminalPaste } from './terminal-paste'
 import { terminalKeyIntent } from './terminal-key-intent'
-import {
-  PRESS_HOLD_MS,
-  pasteFromClipboard,
-  pastePress,
-  type PastePressResult,
-  type PastePressState
-} from './terminal-clipboard'
+import { pasteFromClipboard } from './terminal-clipboard'
 import { registerTerminalPaste } from './terminal-paste-bus'
 import { attachImeBridge } from './ime-input-bridge'
 import { CrIcon } from './icons'
@@ -285,22 +279,15 @@ function TerminalOverlay({
   /**
    * PHONE PASTE. iOS offers its Paste callout only on a long-pressed
    * editable, and xterm's editable is a hidden zero-size textarea — so the
-   * phone gets a long press on the live pane and a paste key in the dock's
-   * control row instead (terminal-clipboard.ts). Both end here, because the
-   * xterm is what must do the pasting: it wraps the text in bracketed-paste
-   * markers when the TUI has that mode on, and without them an agent's
-   * prompt reads every newline in a pasted block as a submit.
+   * phone pastes from the PASTE key in the dock's control row
+   * (terminal-clipboard.ts). It ends here, because the xterm is what must do
+   * the pasting: it wraps the text in bracketed-paste markers when the TUI
+   * has that mode on, and without them an agent's prompt reads every newline
+   * in a pasted block as a submit.
    */
   const termRef = useRef<Terminal | null>(null)
-  /** A beat of feedback under the header ("Pasted", "Nothing to paste"). */
+  /** A beat of feedback under the header: pasted, empty, or unreadable. */
   const [clipNote, setClipNote] = useState<string | null>(null)
-  /**
-   * The paste FIELD: where navigator.clipboard cannot be read (plain-http
-   * LAN, or the owner declined iOS's prompt), a visible textarea the user can
-   * long-press. Its `paste` event carries the text with no permission at all.
-   */
-  const [pasteField, setPasteField] = useState(false)
-  const pasteFieldRef = useRef<HTMLTextAreaElement>(null)
   const noteTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const note = (text: string): void => {
     if (noteTimer.current) clearTimeout(noteTimer.current)
@@ -310,12 +297,9 @@ function TerminalOverlay({
   useEffect(() => () => {
     if (noteTimer.current) clearTimeout(noteTimer.current)
   }, [])
-  useEffect(() => {
-    if (pasteField) pasteFieldRef.current?.focus()
-  }, [pasteField])
   /**
-   * ONE paste request, however it was asked for. Guarded on purpose: iOS's
-   * paste prompt can sit unanswered for seconds, and a second press
+   * The paste itself, asked for by the dock's PASTE key. Guarded on purpose:
+   * iOS's paste prompt can sit unanswered for seconds, and a second tap
    * meanwhile must not queue a second read behind it.
    *
    * NOTHING may be awaited before pasteFromClipboard — the read has to run
@@ -330,127 +314,20 @@ function TerminalOverlay({
       .then((outcome) => {
         if (outcome === 'pasted') note('Pasted')
         else if (outcome === 'empty') note('Nothing to paste')
-        else setPasteField(true)
+        // Said out loud rather than swallowed: a companion served over plain
+        // LAN http is not a secure context, so there is no clipboard to read
+        // there at all, and a key that does nothing silently reads as broken.
+        else note('Clipboard blocked here')
       })
       .finally(() => {
         pastingRef.current = false
       })
   }
-  /** Latest requestPaste, for listeners and the bus that outlive a render. */
+  /** Latest requestPaste — the bus registration outlives a render. */
   const requestPasteRef = useRef(requestPaste)
   requestPasteRef.current = requestPaste
   // The dock's paste key asks by terminal id — see terminal-paste-bus.ts.
   useEffect(() => registerTerminalPaste(node.id, () => requestPasteRef.current()), [node.id])
-  /**
-   * LONG PRESS ON THE LIVE PANE — pointer events, touch pointers only.
-   *
-   * NOT touch events. Measured on the device (scratchpad/paste-qa): over a
-   * live pane `touchstart` arrives and `touchend` never does, because a touch
-   * event keeps the node it started on even after that node is gone, and
-   * xterm's DOM renderer replaces its rows on every repaint. Pointer events
-   * retarget to the nearest connected ancestor, so the release always lands
-   * here. `pointerType` keeps a mouse out of it: a click held still on a
-   * desktop terminal must never paste.
-   *
-   * Capture phase, so nothing downstream can hide the gesture, and passive:
-   * the scroll bridge below owns preventDefault.
-   *
-   * The armed state is written straight to the element rather than held in
-   * React — a re-render here re-renders the whole transcript, and this fires
-   * mid-gesture.
-   */
-  useEffect(() => {
-    const pane = containerRef.current
-    if (!pane) return
-    let state: PastePressState = { kind: 'idle' }
-    /** The finger this gesture belongs to; a stranger's events are ignored. */
-    let owner: number | null = null
-    let timer: ReturnType<typeof setTimeout> | null = null
-    const clearHold = (): void => {
-      if (timer !== null) clearTimeout(timer)
-      timer = null
-    }
-    const apply = (result: PastePressResult): void => {
-      state = result.state
-      if (result.arm) pane.setAttribute('data-paste-armed', '')
-      if (result.disarm) pane.removeAttribute('data-paste-armed')
-      if (result.paste) requestPasteRef.current()
-    }
-    const onDown = (event: PointerEvent): void => {
-      if (event.pointerType !== 'touch') return
-      clearHold()
-      // A second finger refuses the gesture without becoming its owner, so
-      // the first finger's release still resolves to "no paste".
-      apply(
-        pastePress(state, {
-          type: 'down',
-          x: event.clientX,
-          y: event.clientY,
-          primary: event.isPrimary
-        })
-      )
-      if (!event.isPrimary || state.kind !== 'holding') return
-      owner = event.pointerId
-      timer = setTimeout(() => {
-        timer = null
-        apply(pastePress(state, { type: 'hold' }))
-      }, PRESS_HOLD_MS)
-    }
-    const onMove = (event: PointerEvent): void => {
-      if (event.pointerType !== 'touch' || event.pointerId !== owner) return
-      apply(pastePress(state, { type: 'move', x: event.clientX, y: event.clientY }))
-      if (state.kind !== 'holding') clearHold()
-    }
-    const onUp = (event: PointerEvent): void => {
-      if (event.pointerType !== 'touch' || event.pointerId !== owner) return
-      owner = null
-      clearHold()
-      apply(pastePress(state, { type: 'up' }))
-    }
-    const onCancel = (event: PointerEvent): void => {
-      if (event.pointerType !== 'touch' || event.pointerId !== owner) return
-      owner = null
-      clearHold()
-      apply(pastePress(state, { type: 'cancel' }))
-    }
-    // iOS offers Look Up / Translate over any long-pressed text, and xterm's
-    // rows are text. Swallowed only while a press is in flight, so a desktop
-    // right-click over the terminal is left alone.
-    const onContextMenu = (event: Event): void => {
-      if (state.kind !== 'idle') event.preventDefault()
-    }
-    const listening = { capture: true, passive: true } as const
-    pane.addEventListener('pointerdown', onDown, listening)
-    pane.addEventListener('pointermove', onMove, listening)
-    pane.addEventListener('pointerup', onUp, listening)
-    pane.addEventListener('pointercancel', onCancel, listening)
-    pane.addEventListener('contextmenu', onContextMenu, true)
-    return () => {
-      clearHold()
-      pane.removeAttribute('data-paste-armed')
-      pane.removeEventListener('pointerdown', onDown, true)
-      pane.removeEventListener('pointermove', onMove, true)
-      pane.removeEventListener('pointerup', onUp, true)
-      pane.removeEventListener('pointercancel', onCancel, true)
-      pane.removeEventListener('contextmenu', onContextMenu, true)
-    }
-  }, [])
-  const onPasteFieldPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>): void => {
-    const term = termRef.current
-    const text = event.clipboardData.getData('text')
-    // Never let the field's own text reach the DOM: it is a decoy editable,
-    // and what it is for is the event, not the value.
-    event.preventDefault()
-    setPasteField(false)
-    if (!term) return
-    if (text.length === 0) {
-      note('Nothing to paste')
-      return
-    }
-    // xterm, not the PTY directly: it adds the bracketed-paste markers.
-    term.paste(text)
-    note('Pasted')
-  }
   const [activeBlock, setActiveBlock] = useState<ActiveBlock>({ index: null, frac: 1 })
   // A checkpoint whose trace block is still fetching for a jump — the rail/fan
   // shows it loading so a far click gives instant feedback (item 4).
@@ -1082,25 +959,6 @@ function TerminalOverlay({
       {clipNote !== null && (
         <div className="popout-clip-note" role="status">
           {clipNote}
-        </div>
-      )}
-      {pasteField && (
-        <div className="popout-paste-field">
-          <textarea
-            ref={pasteFieldRef}
-            className="popout-paste-input"
-            aria-label="Paste here"
-            placeholder="Long-press here, then Paste"
-            rows={1}
-            onPaste={onPasteFieldPaste}
-          />
-          <button
-            className="cr-btn sm"
-            type="button"
-            onClick={() => setPasteField(false)}
-          >
-            CANCEL
-          </button>
         </div>
       )}
       {(selectedIndex !== null || activity?.prompt) && (
