@@ -342,19 +342,29 @@ function TerminalOverlay({
   // The dock's paste key asks by terminal id — see terminal-paste-bus.ts.
   useEffect(() => registerTerminalPaste(node.id, () => requestPasteRef.current()), [node.id])
   /**
-   * LONG PRESS ON THE LIVE PANE. Touch events only, so a mouse held still on
-   * a desktop terminal can never paste by accident. Capture phase, because
-   * this must see the touch whatever xterm does with it afterwards, and
-   * PASSIVE, because the scroll bridge below owns preventDefault.
+   * LONG PRESS ON THE LIVE PANE — pointer events, touch pointers only.
+   *
+   * NOT touch events. Measured on the device (scratchpad/paste-qa): over a
+   * live pane `touchstart` arrives and `touchend` never does, because a touch
+   * event keeps the node it started on even after that node is gone, and
+   * xterm's DOM renderer replaces its rows on every repaint. Pointer events
+   * retarget to the nearest connected ancestor, so the release always lands
+   * here. `pointerType` keeps a mouse out of it: a click held still on a
+   * desktop terminal must never paste.
+   *
+   * Capture phase, so nothing downstream can hide the gesture, and passive:
+   * the scroll bridge below owns preventDefault.
    *
    * The armed state is written straight to the element rather than held in
-   * React: a re-render here re-renders the whole transcript, and this fires
+   * React — a re-render here re-renders the whole transcript, and this fires
    * mid-gesture.
    */
   useEffect(() => {
     const pane = containerRef.current
     if (!pane) return
     let state: PastePressState = { kind: 'idle' }
+    /** The finger this gesture belongs to; a stranger's events are ignored. */
+    let owner: number | null = null
     let timer: ReturnType<typeof setTimeout> | null = null
     const clearHold = (): void => {
       if (timer !== null) clearTimeout(timer)
@@ -366,34 +376,40 @@ function TerminalOverlay({
       if (result.disarm) pane.removeAttribute('data-paste-armed')
       if (result.paste) requestPasteRef.current()
     }
-    const onStart = (event: TouchEvent): void => {
+    const onDown = (event: PointerEvent): void => {
+      if (event.pointerType !== 'touch') return
       clearHold()
-      const touch = event.touches[0]
+      // A second finger refuses the gesture without becoming its owner, so
+      // the first finger's release still resolves to "no paste".
       apply(
         pastePress(state, {
           type: 'down',
-          x: touch?.clientX ?? 0,
-          y: touch?.clientY ?? 0,
-          touches: event.touches.length
+          x: event.clientX,
+          y: event.clientY,
+          primary: event.isPrimary
         })
       )
-      if (state.kind !== 'holding') return
+      if (!event.isPrimary || state.kind !== 'holding') return
+      owner = event.pointerId
       timer = setTimeout(() => {
         timer = null
         apply(pastePress(state, { type: 'hold' }))
       }, PRESS_HOLD_MS)
     }
-    const onMove = (event: TouchEvent): void => {
-      const touch = event.touches[0]
-      if (!touch) return
-      apply(pastePress(state, { type: 'move', x: touch.clientX, y: touch.clientY }))
+    const onMove = (event: PointerEvent): void => {
+      if (event.pointerType !== 'touch' || event.pointerId !== owner) return
+      apply(pastePress(state, { type: 'move', x: event.clientX, y: event.clientY }))
       if (state.kind !== 'holding') clearHold()
     }
-    const onEnd = (): void => {
+    const onUp = (event: PointerEvent): void => {
+      if (event.pointerType !== 'touch' || event.pointerId !== owner) return
+      owner = null
       clearHold()
       apply(pastePress(state, { type: 'up' }))
     }
-    const onCancel = (): void => {
+    const onCancel = (event: PointerEvent): void => {
+      if (event.pointerType !== 'touch' || event.pointerId !== owner) return
+      owner = null
       clearHold()
       apply(pastePress(state, { type: 'cancel' }))
     }
@@ -404,30 +420,35 @@ function TerminalOverlay({
       if (state.kind !== 'idle') event.preventDefault()
     }
     const listening = { capture: true, passive: true } as const
-    pane.addEventListener('touchstart', onStart, listening)
-    pane.addEventListener('touchmove', onMove, listening)
-    pane.addEventListener('touchend', onEnd, listening)
-    pane.addEventListener('touchcancel', onCancel, listening)
+    pane.addEventListener('pointerdown', onDown, listening)
+    pane.addEventListener('pointermove', onMove, listening)
+    pane.addEventListener('pointerup', onUp, listening)
+    pane.addEventListener('pointercancel', onCancel, listening)
     pane.addEventListener('contextmenu', onContextMenu, true)
     return () => {
       clearHold()
       pane.removeAttribute('data-paste-armed')
-      pane.removeEventListener('touchstart', onStart, true)
-      pane.removeEventListener('touchmove', onMove, true)
-      pane.removeEventListener('touchend', onEnd, true)
-      pane.removeEventListener('touchcancel', onCancel, true)
+      pane.removeEventListener('pointerdown', onDown, true)
+      pane.removeEventListener('pointermove', onMove, true)
+      pane.removeEventListener('pointerup', onUp, true)
+      pane.removeEventListener('pointercancel', onCancel, true)
       pane.removeEventListener('contextmenu', onContextMenu, true)
     }
   }, [])
   const onPasteFieldPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>): void => {
+    const term = termRef.current
     const text = event.clipboardData.getData('text')
+    // Never let the field's own text reach the DOM: it is a decoy editable,
+    // and what it is for is the event, not the value.
     event.preventDefault()
     setPasteField(false)
+    if (!term) return
     if (text.length === 0) {
       note('Nothing to paste')
       return
     }
-    termRef.current?.paste(text)
+    // xterm, not the PTY directly: it adds the bracketed-paste markers.
+    term.paste(text)
     note('Pasted')
   }
   const [activeBlock, setActiveBlock] = useState<ActiveBlock>({ index: null, frac: 1 })

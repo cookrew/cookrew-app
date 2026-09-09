@@ -13,8 +13,18 @@
  * real user gesture, and a `setTimeout` callback is not one — the transient
  * activation is already gone by the time a hold timer fires, so a read from
  * there is refused outright. The hold timer therefore only ARMS the gesture
- * (the pane says so); the read happens in the touchend handler, which is a
- * gesture the OS honours.
+ * (the pane says so); the read happens on release, which is a gesture the OS
+ * honours.
+ *
+ * WHY POINTER EVENTS AND NOT TOUCH EVENTS. Measured on the phone companion
+ * (scratchpad/paste-qa): over a live pane, `touchstart` arrives and
+ * `touchend` NEVER DOES. A touch event keeps the target it started on even
+ * after that node leaves the document, and xterm's DOM renderer replaces the
+ * row elements on every repaint — so the release is dispatched to a detached
+ * <span> and propagates to nothing. Pointer events retarget to the nearest
+ * connected ancestor, which is why the same press delivers `pointerup`
+ * faithfully. `pointerType` also keeps this a touch-only gesture: a mouse
+ * held still on a desktop terminal must never paste.
  */
 
 export type PasteOutcome = 'pasted' | 'empty' | 'unavailable'
@@ -59,7 +69,8 @@ export type PastePressState =
   | { kind: 'refused' }
 
 export type PastePressEvent =
-  | { type: 'down'; x: number; y: number; touches: number }
+  /** `primary` is the pointer-events sense: false means a second finger. */
+  | { type: 'down'; x: number; y: number; primary: boolean }
   | { type: 'move'; x: number; y: number }
   /** The hold timer elapsed with the finger still down. */
   | { type: 'hold' }
@@ -110,7 +121,7 @@ export function pastePress(
       // A press that begins with company is a scroll or a pinch. Note this
       // also fires when a SECOND finger joins a matured hold, which is why
       // it refuses rather than starting a fresh one.
-      if (event.touches !== 1) return refuse()
+      if (!event.primary) return refuse()
       return settle({ kind: 'holding', x: event.x, y: event.y, armed: false })
     case 'move': {
       if (state.kind !== 'holding') return settle(state)

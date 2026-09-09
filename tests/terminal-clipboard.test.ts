@@ -45,7 +45,7 @@ describe('pasteFromClipboard — three answers, one paste at most', () => {
 
 const IDLE: PastePressState = { kind: 'idle' }
 const holding = (armed = false): PastePressState => ({ kind: 'holding', x: 100, y: 200, armed })
-const down = (touches = 1): Parameters<typeof pastePress>[1] => ({ type: 'down', x: 100, y: 200, touches })
+const down = (primary = true): Parameters<typeof pastePress>[1] => ({ type: 'down', x: 100, y: 200, primary })
 
 describe('pastePress — a hold on the live pane, judged on release', () => {
   it('pastes when a still finger matures and lifts', () => {
@@ -83,8 +83,8 @@ describe('pastePress — a hold on the live pane, judged on release', () => {
   })
 
   it('refuses a second finger, and refuses one that joins a matured hold', () => {
-    expect(pastePress(IDLE, down(2)).state).toEqual({ kind: 'refused' })
-    const joined = pastePress(holding(true), down(2))
+    expect(pastePress(IDLE, down(false)).state).toEqual({ kind: 'refused' })
+    const joined = pastePress(holding(true), down(false))
     expect(joined.state).toEqual({ kind: 'refused' })
     expect(joined.disarm).toBe(true)
     expect(pastePress(joined.state, { type: 'up' }).paste).toBe(false)
