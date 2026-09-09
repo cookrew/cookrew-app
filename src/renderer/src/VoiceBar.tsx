@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { TerminalActivity } from '../../shared/turn'
 import { cookrew } from './api'
 import { AttachButton } from './AttachButton'
-import { CrIcon } from './icons'
+import { CrIcon, type CrIconName } from './icons'
+import { requestTerminalPaste } from './terminal-paste-bus'
 import { keyGesture, type KeyGestureState } from './touch-key-gesture'
 
 /**
@@ -35,13 +36,42 @@ function speak(text: string): void {
 
 const SPEAK_PREF_KEY = 'cookrew-speak-replies'
 
-/** Control keys the touch keyboard cannot send, as raw PTY sequences. */
-const TERM_KEYS: Array<{ label: string; seq: string; title: string; repeat: boolean }> = [
-  { label: '←', seq: '\x1b[D', title: 'Arrow left', repeat: true },
-  { label: '↓', seq: '\x1b[B', title: 'Arrow down', repeat: true },
-  { label: '↑', seq: '\x1b[A', title: 'Arrow up', repeat: true },
-  { label: '→', seq: '\x1b[C', title: 'Arrow right', repeat: true },
-  { label: 'ESC', seq: '\x1b', title: 'Escape', repeat: false }
+/**
+ * What a tap on one of these does: send a PTY sequence, or ask the zoomed
+ * terminal for a clipboard paste (terminal-paste-bus.ts).
+ */
+type TermKeyAction = { kind: 'seq'; seq: string } | { kind: 'paste' }
+
+interface TermKey {
+  label: string
+  title: string
+  /** Hold-to-repeat. Never for Escape, never for paste. */
+  repeat: boolean
+  action: TermKeyAction
+  /** Drawn instead of the label — the paste key has no glyph of its own. */
+  icon?: CrIconName
+}
+
+/**
+ * Control keys the touch keyboard cannot send — plus PASTE, which is not a
+ * key at all. The phone has no other door to the clipboard (iOS shows its
+ * callout only on a long-pressed editable, and xterm's is hidden), and this
+ * row is already where the thumb is. It sits between → and Escape by the
+ * owner's placement.
+ */
+const TERM_KEYS: TermKey[] = [
+  { label: '←', title: 'Arrow left', repeat: true, action: { kind: 'seq', seq: '\x1b[D' } },
+  { label: '↓', title: 'Arrow down', repeat: true, action: { kind: 'seq', seq: '\x1b[B' } },
+  { label: '↑', title: 'Arrow up', repeat: true, action: { kind: 'seq', seq: '\x1b[A' } },
+  { label: '→', title: 'Arrow right', repeat: true, action: { kind: 'seq', seq: '\x1b[C' } },
+  {
+    label: 'PASTE',
+    title: 'Paste from the clipboard',
+    repeat: false,
+    action: { kind: 'paste' },
+    icon: 'clipboard'
+  },
+  { label: 'ESC', title: 'Escape', repeat: false, action: { kind: 'seq', seq: '\x1b' } }
 ]
 
 /** Hold-to-repeat cadence: a pause before the first repeat, then ~14/s. */
@@ -49,10 +79,11 @@ const REPEAT_DELAY_MS = 450
 const REPEAT_RATE_MS = 70
 
 /**
- * Arrow cluster + Esc beside the send button, phone companion only (coarse
- * pointer / narrow viewport via CSS): agent TUI menus (approval dialogs,
- * /model pickers, message history) are undrivable from a touch keyboard
- * without them. pointerdown is swallowed and the buttons are unfocusable,
+ * Arrow cluster + paste + Esc beside the send button, phone companion only
+ * (coarse pointer / narrow viewport via CSS): agent TUI menus (approval
+ * dialogs, /model pickers, message history) are undrivable from a touch
+ * keyboard without the arrows, and the clipboard is unreachable without the
+ * paste key. pointerdown is swallowed and the buttons are unfocusable,
  * so a tap never dismisses the software keyboard or steals focus.
  *
  * A TAP, NOT A TOUCH (see touch-key-gesture.ts): the key lands on RELEASE,
@@ -103,17 +134,20 @@ function TermKeys({ terminalId }: { terminalId: string }): React.JSX.Element {
     }
   }, [abandon])
 
-  const drive = (
-    key: (typeof TERM_KEYS)[number],
-    event: Parameters<typeof keyGesture>[1]
-  ): void => {
+  const drive = (key: TermKey, event: Parameters<typeof keyGesture>[1]): void => {
     const result = keyGesture(gestureRef.current, event)
     gestureRef.current = result.state
     if (result.stopRepeat) stopRepeat()
-    if (result.fire) cookrew().ptyInput(terminalId, key.seq)
-    if (result.startRepeat) {
+    // The paste asks SYNCHRONOUSLY, inside this pointerup: iOS grants a
+    // clipboard read only in a real gesture (terminal-paste-bus.ts).
+    if (result.fire) {
+      if (key.action.kind === 'paste') requestTerminalPaste(terminalId)
+      else cookrew().ptyInput(terminalId, key.action.seq)
+    }
+    if (result.startRepeat && key.action.kind === 'seq') {
+      const seq = key.action.seq
       timersRef.current.interval = window.setInterval(
-        () => cookrew().ptyInput(terminalId, key.seq),
+        () => cookrew().ptyInput(terminalId, seq),
         REPEAT_RATE_MS
       )
     }
@@ -131,10 +165,11 @@ function TermKeys({ terminalId }: { terminalId: string }): React.JSX.Element {
     <div className="voice-keys">
       {TERM_KEYS.map((key) => (
         <button
-          key={key.label}
-          className="cr-btn sm term-key"
+          key={key.title}
+          className={`cr-btn sm term-key${key.icon ? ' term-key-icon' : ''}`}
           tabIndex={-1}
           title={key.title}
+          aria-label={key.title}
           onPointerDown={(e) => {
             // Still swallowed: a press must not dismiss the software keyboard
             // or steal focus from the xterm. It just no longer SENDS.
@@ -156,7 +191,7 @@ function TermKeys({ terminalId }: { terminalId: string }): React.JSX.Element {
           onPointerCancel={(e) => drive(key, { type: 'cancel', pointerId: e.pointerId })}
           onContextMenu={(e) => e.preventDefault()}
         >
-          {key.label}
+          {key.icon ? <CrIcon name={key.icon} /> : key.label}
         </button>
       ))}
     </div>

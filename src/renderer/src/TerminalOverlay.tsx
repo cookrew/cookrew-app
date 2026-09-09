@@ -24,7 +24,14 @@ import { useTitleMode } from './checkpoint-sync'
 import { attachFilesToTerminal, pasteClipboardImages } from './AttachButton'
 import { handleTerminalPaste } from './terminal-paste'
 import { terminalKeyIntent } from './terminal-key-intent'
-import { pasteFromClipboard, screenText } from './terminal-clipboard'
+import {
+  PRESS_HOLD_MS,
+  pasteFromClipboard,
+  pastePress,
+  type PastePressResult,
+  type PastePressState
+} from './terminal-clipboard'
+import { registerTerminalPaste } from './terminal-paste-bus'
 import { attachImeBridge } from './ime-input-bridge'
 import { CrIcon } from './icons'
 import { TranslateButton } from './TranslateButton'
@@ -276,14 +283,16 @@ function TerminalOverlay({
   const translation = useCheckpointTranslation()
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
   /**
-   * PHONE CLIPBOARD. The zoomed terminal on a phone can neither be selected
-   * (xterm selects by mouse drag; the touch bridge owns the finger) nor
-   * long-pressed for iOS's Paste callout (xterm's editable is a hidden
-   * zero-size textarea). Two header buttons stand in — see
-   * terminal-clipboard.ts. `termRef` is the live xterm those buttons act on.
+   * PHONE PASTE. iOS offers its Paste callout only on a long-pressed
+   * editable, and xterm's editable is a hidden zero-size textarea — so the
+   * phone gets a long press on the live pane and a paste key in the dock's
+   * control row instead (terminal-clipboard.ts). Both end here, because the
+   * xterm is what must do the pasting: it wraps the text in bracketed-paste
+   * markers when the TUI has that mode on, and without them an agent's
+   * prompt reads every newline in a pasted block as a submit.
    */
   const termRef = useRef<Terminal | null>(null)
-  /** A beat of feedback under the buttons ("Copied", "Nothing to paste"). */
+  /** A beat of feedback under the header ("Pasted", "Nothing to paste"). */
   const [clipNote, setClipNote] = useState<string | null>(null)
   /**
    * The paste FIELD: where navigator.clipboard cannot be read (plain-http
@@ -304,25 +313,112 @@ function TerminalOverlay({
   useEffect(() => {
     if (pasteField) pasteFieldRef.current?.focus()
   }, [pasteField])
-  const copyScreen = (): void => {
+  /**
+   * ONE paste request, however it was asked for. Guarded on purpose: iOS's
+   * paste prompt can sit unanswered for seconds, and a second press
+   * meanwhile must not queue a second read behind it.
+   *
+   * NOTHING may be awaited before pasteFromClipboard — the read has to run
+   * inside the gesture that asked, or iOS refuses it.
+   */
+  const pastingRef = useRef(false)
+  const requestPaste = (): void => {
     const term = termRef.current
-    if (!term) return
-    const text = screenText(term.buffer.active, term.rows)
-    if (text.length === 0) {
-      note('Nothing on screen to copy')
-      return
+    if (!term || pastingRef.current) return
+    pastingRef.current = true
+    void pasteFromClipboard(readClipboardText, (text) => term.paste(text))
+      .then((outcome) => {
+        if (outcome === 'pasted') note('Pasted')
+        else if (outcome === 'empty') note('Nothing to paste')
+        else setPasteField(true)
+      })
+      .finally(() => {
+        pastingRef.current = false
+      })
+  }
+  /** Latest requestPaste, for listeners and the bus that outlive a render. */
+  const requestPasteRef = useRef(requestPaste)
+  requestPasteRef.current = requestPaste
+  // The dock's paste key asks by terminal id — see terminal-paste-bus.ts.
+  useEffect(() => registerTerminalPaste(node.id, () => requestPasteRef.current()), [node.id])
+  /**
+   * LONG PRESS ON THE LIVE PANE. Touch events only, so a mouse held still on
+   * a desktop terminal can never paste by accident. Capture phase, because
+   * this must see the touch whatever xterm does with it afterwards, and
+   * PASSIVE, because the scroll bridge below owns preventDefault.
+   *
+   * The armed state is written straight to the element rather than held in
+   * React: a re-render here re-renders the whole transcript, and this fires
+   * mid-gesture.
+   */
+  useEffect(() => {
+    const pane = containerRef.current
+    if (!pane) return
+    let state: PastePressState = { kind: 'idle' }
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const clearHold = (): void => {
+      if (timer !== null) clearTimeout(timer)
+      timer = null
     }
-    void writeClipboardText(text).then((ok) => note(ok ? 'Copied the screen' : 'Copy failed'))
-  }
-  const pasteClipboard = (): void => {
-    const term = termRef.current
-    if (!term) return
-    void pasteFromClipboard(readClipboardText, (text) => term.paste(text)).then((outcome) => {
-      if (outcome === 'pasted') note('Pasted')
-      else if (outcome === 'empty') note('Nothing to paste')
-      else setPasteField(true)
-    })
-  }
+    const apply = (result: PastePressResult): void => {
+      state = result.state
+      if (result.arm) pane.setAttribute('data-paste-armed', '')
+      if (result.disarm) pane.removeAttribute('data-paste-armed')
+      if (result.paste) requestPasteRef.current()
+    }
+    const onStart = (event: TouchEvent): void => {
+      clearHold()
+      const touch = event.touches[0]
+      apply(
+        pastePress(state, {
+          type: 'down',
+          x: touch?.clientX ?? 0,
+          y: touch?.clientY ?? 0,
+          touches: event.touches.length
+        })
+      )
+      if (state.kind !== 'holding') return
+      timer = setTimeout(() => {
+        timer = null
+        apply(pastePress(state, { type: 'hold' }))
+      }, PRESS_HOLD_MS)
+    }
+    const onMove = (event: TouchEvent): void => {
+      const touch = event.touches[0]
+      if (!touch) return
+      apply(pastePress(state, { type: 'move', x: touch.clientX, y: touch.clientY }))
+      if (state.kind !== 'holding') clearHold()
+    }
+    const onEnd = (): void => {
+      clearHold()
+      apply(pastePress(state, { type: 'up' }))
+    }
+    const onCancel = (): void => {
+      clearHold()
+      apply(pastePress(state, { type: 'cancel' }))
+    }
+    // iOS offers Look Up / Translate over any long-pressed text, and xterm's
+    // rows are text. Swallowed only while a press is in flight, so a desktop
+    // right-click over the terminal is left alone.
+    const onContextMenu = (event: Event): void => {
+      if (state.kind !== 'idle') event.preventDefault()
+    }
+    const listening = { capture: true, passive: true } as const
+    pane.addEventListener('touchstart', onStart, listening)
+    pane.addEventListener('touchmove', onMove, listening)
+    pane.addEventListener('touchend', onEnd, listening)
+    pane.addEventListener('touchcancel', onCancel, listening)
+    pane.addEventListener('contextmenu', onContextMenu, true)
+    return () => {
+      clearHold()
+      pane.removeAttribute('data-paste-armed')
+      pane.removeEventListener('touchstart', onStart, true)
+      pane.removeEventListener('touchmove', onMove, true)
+      pane.removeEventListener('touchend', onEnd, true)
+      pane.removeEventListener('touchcancel', onCancel, true)
+      pane.removeEventListener('contextmenu', onContextMenu, true)
+    }
+  }, [])
   const onPasteFieldPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>): void => {
     const text = event.clipboardData.getData('text')
     event.preventDefault()
@@ -944,26 +1040,6 @@ function TerminalOverlay({
           {/* The "fork from a past checkpoint" button is deprecated — fork is now
               available per-checkpoint in the timeline (State A hold + State B
               rows), so the standalone header button is redundant. */}
-          {isRemoteMode() && (
-            <>
-              <button
-                className="cr-btn sm icon popout-copy"
-                title="Copy the screen"
-                aria-label="Copy the terminal screen"
-                onClick={copyScreen}
-              >
-                <CrIcon name="copy" />
-              </button>
-              <button
-                className="cr-btn sm icon popout-paste"
-                title="Paste from the clipboard"
-                aria-label="Paste into the terminal"
-                onClick={pasteClipboard}
-              >
-                <CrIcon name="clipboard" />
-              </button>
-            </>
-          )}
           <button
             className="cr-btn sm icon popout-close"
             title="Back to canvas (Esc)"

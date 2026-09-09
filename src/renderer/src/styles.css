@@ -2606,9 +2606,9 @@ a.card-close {
   gap: 6px;
 }
 
-/* Phone clipboard (terminal-clipboard.ts): a beat of feedback under the
-   header, and the fallback paste field — a real editable the finger can
-   long-press, which xterm's hidden textarea is not. */
+/* Phone paste (terminal-clipboard.ts): a beat of feedback under the header,
+   and the fallback paste field — a real editable the finger can long-press,
+   which xterm's hidden textarea is not. */
 .popout-clip-note {
   padding: 4px 12px;
   font-size: 11px;
@@ -2691,6 +2691,17 @@ a.card-close {
   min-height: 0;
   background: var(--phos-bg);
   padding: 8px 0 8px 10px;
+  /* Long press here PASTES (terminal-clipboard.ts), and iOS would rather
+     offer Look Up / Translate — it does that over any long-pressed text, and
+     xterm's rows are text. This property is touch-only, so desktop
+     ⌥+drag selection and ⌘C are untouched; `user-select` would take those. */
+  -webkit-touch-callout: none;
+}
+
+/* The press has matured: released now, it pastes. Said on the pane itself,
+   where the finger is — the outcome note is up at the header. */
+.popout-terminal[data-paste-armed] {
+  box-shadow: inset 0 0 0 2px var(--amber);
 }
 
 /* ---- voice composer (terminal full view, desktop + phone) ---- */
@@ -5086,6 +5097,15 @@ body.cookrew-mobile .cookrew-minimap {
    the phone rule below pins .voice-bar .cr-btn to a square, and ESC is three
    glyphs wide — without it the label overflows its own button. This selector
    is 0-3-0, so it wins that square back regardless of source order. */
+/* PASTE is the one key in this row drawn as an icon, so it needs the glyph
+   centred in the same square the labelled keys fill with text. */
+.voice-keys .cr-btn.term-key.term-key-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
 .voice-keys .cr-btn.term-key {
   /* The row scrolls sideways, and this says the pan can start on the
      compositor rather than waiting on the main thread — measured, it does

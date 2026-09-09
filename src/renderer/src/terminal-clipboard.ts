@@ -1,54 +1,36 @@
 /**
- * Copy and paste for a terminal that cannot be selected or long-pressed.
+ * How a phone reaches the terminal's clipboard.
  *
- * On the phone the zoomed terminal has neither of the desktop's clipboard
- * doors. Selection: xterm selects with mouse events, and the touch bridge
- * (TerminalOverlay) owns the finger for scrolling, so there is no drag to
- * select with. Paste: iOS shows its Paste callout only on a long-pressed
- * editable, and xterm's editable is a zero-size hidden textarea nobody can
- * long-press. So the overlay grows two buttons, and this is the logic behind
- * them — pure, so a test can see it.
+ * There is no native door. iOS shows its Paste callout only on a long-pressed
+ * EDITABLE, and xterm's editable is a hidden zero-size textarea nobody can
+ * long-press; the visible rows are painted cells. So the phone gets two
+ * deliberate ways in, both of which end in the same request:
+ *
+ *   - a long press on the live pane, where the agent's prompt line sits;
+ *   - a paste key in the dock's control row, beside the arrows.
+ *
+ * WHY A PRESS IS JUDGED ON RELEASE. iOS grants a clipboard read only inside a
+ * real user gesture, and a `setTimeout` callback is not one — the transient
+ * activation is already gone by the time a hold timer fires, so a read from
+ * there is refused outright. The hold timer therefore only ARMS the gesture
+ * (the pane says so); the read happens in the touchend handler, which is a
+ * gesture the OS honours.
  */
-
-export interface ScreenLine {
-  translateToString(trimRight: boolean): string
-}
-
-/** The slice of xterm's IBuffer this reads. */
-export interface ScreenBuffer {
-  /** First buffer row visible on screen. */
-  viewportY: number
-  length: number
-  getLine(index: number): ScreenLine | undefined
-}
-
-/**
- * The text on screen right now: the visible rows, each trimmed on the right,
- * with trailing empty rows dropped. What the eye sees is what gets copied —
- * not the 600-line scrollback, which the paged transcript above already
- * carries with structure.
- */
-export function screenText(buffer: ScreenBuffer, rows: number): string {
-  const lines: string[] = []
-  const end = Math.min(buffer.length, buffer.viewportY + rows)
-  for (let i = buffer.viewportY; i < end; i += 1) {
-    lines.push(buffer.getLine(i)?.translateToString(true) ?? '')
-  }
-  while (lines.length > 0 && lines[lines.length - 1].length === 0) lines.pop()
-  return lines.join('\n')
-}
 
 export type PasteOutcome = 'pasted' | 'empty' | 'unavailable'
 
 /**
  * Paste the system clipboard into the terminal, if the page may read it.
  *
- *   pasted       text went to the PTY
+ *   pasted       text went to the terminal
  *   empty        the clipboard could be read and held no text
  *   unavailable  the clipboard cannot be read here (plain-http LAN, or the
- *                user declined iOS's paste prompt) — the caller opens the
+ *                owner dismissed iOS's paste prompt) — the caller opens the
  *                paste field, whose `paste` EVENT carries the text without
  *                any clipboard permission at all
+ *
+ * `read` is called synchronously so the caller's user activation still stands
+ * when navigator.clipboard.readText() runs. Do not await anything before it.
  */
 export async function pasteFromClipboard(
   read: () => Promise<string | null>,
@@ -59,4 +41,90 @@ export async function pasteFromClipboard(
   if (text.length === 0) return 'empty'
   paste(text)
   return 'pasted'
+}
+
+/** Finger travel that still counts as standing still (CSS px). */
+export const PRESS_SLOP_PX = 10
+
+/**
+ * How long the finger must stay put. The same 550ms as the canvas card's
+ * long-press (App.tsx), so one hold duration means "menu" everywhere.
+ */
+export const PRESS_HOLD_MS = 550
+
+export type PastePressState =
+  | { kind: 'idle' }
+  | { kind: 'holding'; x: number; y: number; armed: boolean }
+  /** This touch can no longer become a paste, whatever it does next. */
+  | { kind: 'refused' }
+
+export type PastePressEvent =
+  | { type: 'down'; x: number; y: number; touches: number }
+  | { type: 'move'; x: number; y: number }
+  /** The hold timer elapsed with the finger still down. */
+  | { type: 'hold' }
+  | { type: 'up' }
+  | { type: 'cancel' }
+
+export interface PastePressResult {
+  state: PastePressState
+  /** Show that the press has matured — the pane outlines itself. */
+  arm: boolean
+  /** Ask for the clipboard NOW, inside this gesture. */
+  paste: boolean
+  /** Take the outline back off. */
+  disarm: boolean
+}
+
+/**
+ * One touch on the live pane, reduced to what the overlay must do about it.
+ * Pure, so the rules are readable without a device:
+ *
+ *   still, past the delay, then release  → paste
+ *   moved past the slop                  → nothing (it was a scroll)
+ *   released before the delay            → nothing (it was a tap; xterm's)
+ *   a second finger, ever                → nothing (a pinch or a two-finger
+ *                                          scroll is not a paste)
+ */
+export function pastePress(
+  state: PastePressState,
+  event: PastePressEvent,
+  slopPx = PRESS_SLOP_PX
+): PastePressResult {
+  const armed = state.kind === 'holding' && state.armed
+  const settle = (next: PastePressState): PastePressResult => ({
+    state: next,
+    arm: false,
+    paste: false,
+    disarm: false
+  })
+  const refuse = (): PastePressResult => ({
+    state: { kind: 'refused' },
+    arm: false,
+    paste: false,
+    disarm: armed
+  })
+
+  switch (event.type) {
+    case 'down':
+      // A press that begins with company is a scroll or a pinch. Note this
+      // also fires when a SECOND finger joins a matured hold, which is why
+      // it refuses rather than starting a fresh one.
+      if (event.touches !== 1) return refuse()
+      return settle({ kind: 'holding', x: event.x, y: event.y, armed: false })
+    case 'move': {
+      if (state.kind !== 'holding') return settle(state)
+      const travelled = Math.hypot(event.x - state.x, event.y - state.y)
+      if (travelled <= slopPx) return settle(state)
+      return refuse()
+    }
+    case 'hold':
+      if (state.kind !== 'holding' || state.armed) return settle(state)
+      return { state: { ...state, armed: true }, arm: true, paste: false, disarm: false }
+    case 'up':
+      // The read lands HERE, in the gesture the OS honours.
+      return { state: { kind: 'idle' }, arm: false, paste: armed, disarm: armed }
+    case 'cancel':
+      return { state: { kind: 'idle' }, arm: false, paste: false, disarm: armed }
+  }
 }
