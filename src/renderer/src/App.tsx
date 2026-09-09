@@ -998,9 +998,13 @@ function Canvas(): React.JSX.Element {
             // it, so every frame failed silently; and async decodes landed out
             // of order. One bad frame is that frame's problem.
             try {
+              // DECODE FIRST. Revoking the old URL before a decode that can
+              // throw left a revoked blob: URL in the store — a card showing
+              // nothing until the next changed frame.
+              const next = URL.createObjectURL(new Blob([decodeBase64(frame.data)], { type: frame.type }))
               const old = thumbStore.get(frame.id)
               if (old?.startsWith('blob:')) URL.revokeObjectURL(old)
-              thumbStore.set(frame.id, URL.createObjectURL(new Blob([decodeBase64(frame.data)], { type: frame.type })))
+              thumbStore.set(frame.id, next)
             } catch {
               thumbBackoffsRef.current = recordThumbFailure(thumbBackoffsRef.current, frame.id, Date.now())
             }
