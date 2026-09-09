@@ -5,6 +5,7 @@ import { PATH_REPORT_ROUTE } from '../../../shared/path-report'
 import { currentBrowser, onAppleMobile } from '../browser-family'
 import { createPathReporter, postPathReport, reportedAttempts } from './report'
 import { directNavigationOffer } from './direct-offer'
+import { landingReport, navigationTiming } from './landing'
 import { setDirectOffer } from '../direct-offer-gate'
 import { dataPlane, setDataPlane, subscribeDataPlane, type DataPlane } from '../data-plane'
 import type { LocalNetworkState } from '../local-network'
@@ -255,6 +256,30 @@ const tellTheDesktop = createPathReporter({
     })
 })
 
+/**
+ * The landed page's one report, on the plane it landed on.
+ *
+ * Posted directly rather than through `tellTheDesktop`: the reporter's floor
+ * and one-at-a-time guards are about races, and a landing is not a race — it
+ * happens once, at boot, before any race could.
+ */
+const reportLanding = async (): Promise<void> => {
+  const report = landingReport({
+    timing: navigationTiming(),
+    host: window.location.host,
+    plane: settledPlane(),
+    browser: currentBrowser(),
+    permission: localNetworkGate(),
+    now: Date.now()
+  })
+  if (!report) return
+  await postPathReport(report, {
+    url: apiPath(PATH_REPORT_ROUTE),
+    headers: authHeaders(),
+    fetch: planeFetch
+  }).catch(() => undefined)
+}
+
 const startPlaneSwitch = (): (() => void) => {
   const health = planeHealth()
   // Set by the loop at start; the ONE-AT-A-TIME guard stays the loop's, so a
@@ -386,6 +411,11 @@ export const startCompanionPathSwitch = (): (() => void) => {
   const noop = (): void => undefined
   if (!isRemoteMode()) return noop
   if (clientBase() !== '') return startPlaneSwitch()
+  // A page the relay's button opened tells the Mac how long the trip took and
+  // where the time went (path/landing.ts). Once, straight away, and never a
+  // reason to delay anything else: the report is the whole point of the
+  // button working, and a Mac that refuses it loses nothing.
+  void reportLanding()
   // Already as close as it gets. Nothing on the card can beat this origin.
   if (pathRank(currentOriginState()) >= pathRank('LAN')) return noop
   const store = memory()
