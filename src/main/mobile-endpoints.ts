@@ -11,6 +11,8 @@
 
 import { isTailnetAddress, type CertHosts, type TailnetIdentity } from './tailscale'
 import { MOBILE_PORT, MOBILE_HTTPS_PORT } from './mobile-ports'
+import { reachSlots } from './reach-slots'
+import { trustedName } from '../shared/reach-names'
 
 export type EndpointKind = 'tailscale' | 'lan' | 'other' | 'loopback'
 
@@ -25,16 +27,44 @@ export interface MobileEndpoint {
   host: string
   /** One line telling the user when this address is the right one. */
   label: string
+  /**
+   * REACH v2.1 — the same address spelled as a name a browser TRUSTS:
+   * `https://192-168-2-40.<id>.d.cookrew.dev:8643/?token=…`.
+   *
+   * Present only when THREE things hold at once: a certificate is actually
+   * held, the address can be a label (a MagicDNS name cannot, and resolves
+   * elsewhere anyway), and the address is one the REACH CARD carries — because
+   * the registry's zone answers those and NXDOMAIN for everything else. A Mac
+   * with two tailnet addresses publishes one; the other keeps its bare
+   * spelling rather than a name nothing resolves.
+   *
+   * Absent means the bare address is still the only spelling there is, exactly
+   * as before names existed.
+   */
+  trustedUrl?: string
 }
 
 export interface EndpointInput {
-  /** Non-internal addresses from os.networkInterfaces(). */
+  /**
+   * The addresses this Mac may publish — `local-interfaces.ts ·
+   * publishedLocalAddresses()`, which is the real interfaces only, en* first.
+   * Bare strings by the time they arrive here, so the classification below is
+   * about the ADDRESS; whether the INTERFACE was a VM bridge was decided
+   * upstream, where its name still existed (five addresses, four bridges,
+   * 2026-09-08).
+   */
   addresses: string[]
   tailnet: TailnetIdentity | null
   /** True once the HTTPS listener is up. */
   secure: boolean
   /** Pairing token to embed, when the server has one. */
   token: string | null
+  /**
+   * The device id and zone to spell trusted names with — supplied ONLY when a
+   * valid certificate is held for them. Absent = no name is printed, which is
+   * the state of a Mac with no account, no internet, or a failed order.
+   */
+  trusted?: { deviceId: string; zone: string } | null
 }
 
 const LABELS: Record<EndpointKind, string> = {
@@ -120,7 +150,61 @@ export function mobileEndpoints(input: EndpointInput): MobileEndpoint[] {
   for (const address of rest.other) add(address, 'other')
 
   if (endpoints.length === 0) add('localhost', 'loopback')
-  return endpoints
+  return named(endpoints, input, scheme, port, query)
+}
+
+/**
+ * THE TRUSTED NAMES, ON EXACTLY THE ADDRESSES THE CARD CARRIES.
+ *
+ * Only over HTTPS: the trusted name exists to make the certificate match, and
+ * a name on a plaintext URL would be a promise about a listener that has no
+ * certificate at all. And only on the card's own slots: the zone answers those
+ * and nothing else, so a name spelled for anything else is a URL that fails to
+ * resolve — printed, in the old code, under the sentence that promised no
+ * warning.
+ */
+function named(
+  endpoints: readonly MobileEndpoint[],
+  input: EndpointInput,
+  scheme: string,
+  port: number,
+  query: string
+): MobileEndpoint[] {
+  const trusted = input.trusted
+  if (!input.secure || !trusted) return [...endpoints]
+  const slots = reachSlots(endpoints)
+  const carried = new Set<MobileEndpoint>([
+    ...slots.lan,
+    ...(slots.tailnet === null ? [] : [slots.tailnet])
+  ])
+  return endpoints.map((endpoint) => {
+    if (!carried.has(endpoint)) return endpoint
+    const name = trustedName(endpoint.host, trusted.deviceId, trusted.zone)
+    return name === null ? endpoint : { ...endpoint, trustedUrl: `${scheme}://${name}:${port}${query}` }
+  })
+}
+
+/**
+ * The origins a browser will trust for this Mac — the `trusted` list on the
+ * reach publish, `/api/reach.trusted`, and what `cookrew mobile` may print
+ * under the "real certificate" sentence.
+ *
+ * Derived from the endpoints rather than computed a second way, so it cannot
+ * drift from the card: an entry here is a name only because `mobileEndpoints`
+ * put it on an address the card carries.
+ */
+export function trustedOriginsOf(endpoints: readonly MobileEndpoint[]): string[] {
+  const seen = new Set<string>()
+  for (const endpoint of endpoints) {
+    if (endpoint.kind === 'loopback' || endpoint.trustedUrl === undefined) continue
+    try {
+      const url = new URL(endpoint.trustedUrl)
+      seen.add(`${url.protocol}//${url.host}`)
+    } catch {
+      // Unspellable is not trusted.
+    }
+  }
+  return [...seen]
 }
 
 /** IPv4 dotted-quad or IPv6 literal; anything else is a name. */

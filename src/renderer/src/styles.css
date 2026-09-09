@@ -1,6 +1,52 @@
 /* Cookrew-beta inspired arcade theme: cream chrome, hard bevel shadows,
    square corners, phosphor CRT screens for terminal summaries. */
 
+/* THE FONTS ARE OURS, SERVED FROM THIS ORIGIN.
+   They came from fonts.googleapis.com: a render-blocking third-party
+   stylesheet the phone waited 0.8-1.3 s on before its first paint, then four
+   more third-party requests for the files — through the relay the only
+   third party on the page, and on a fake-ip proxy each one a TLS handshake.
+   The registry already ships these same five woff2 files (94 KB) for the
+   site; the renderer bundles them as hashed assets, so the LAN caches them
+   forever and nothing off this origin is on the boot's critical path.
+   `swap`, not `optional`: a card must not draw in a fallback and then never
+   correct itself on a slow link. (Perf lane L7, 2026-09-08.) */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('./fonts/inter.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('./fonts/jetbrains-mono.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Silkscreen';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/silkscreen-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Silkscreen';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./fonts/silkscreen-700.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'VT323';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/vt323-400.woff2') format('woff2');
+}
+
 :root {
   --cream: #faf8f4;
   --cream-hi: #fffef5;
@@ -52,6 +98,17 @@
 
 * {
   box-sizing: border-box;
+}
+
+/* iOS Safari "text autosizing" inflates nowrap inline-block text runs it
+   judges too small for a wide block — with no regard for the font-size the
+   sheet asked for. On the phone it blew the checkpoint rail's 12.5px titles
+   up to headline size while the 8px T-tags beside them stayed put (IMG_3251,
+   2026-09-05). 100%, not none: `none` also disables the user's own
+   accessibility text scaling on some engines, which is not ours to take. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 html,
@@ -118,6 +175,8 @@ body,
   border-bottom: 2px solid var(--line);
   -webkit-app-region: drag;
   z-index: 50;
+  /* The local-network ask hangs off the bottom edge of this bar. */
+  position: relative;
 }
 
 .cr-header button,
@@ -132,10 +191,46 @@ body,
 }
 
 .cr-logo-mark {
-  width: 24px;
-  height: 24px;
+  height: 28px;
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+}
+
+.cr-logo-mark img {
   display: block;
+  height: 22px;
+  width: auto;
+  -webkit-user-drag: none;
+}
+
+.cr-hand-mark {
+  height: 28px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+}
+
+.cr-hand-mark img {
+  display: block;
+  height: 26px;
+  width: auto;
+  -webkit-user-drag: none;
+}
+
+/* THE PHONE BAR: the hand alone in portrait, the still lockup once landscape has the room. */
+body.cookrew-mobile .cr-logo-mark {
+  display: none;
+}
+
+@media (min-width: 700px) {
+  body.cookrew-mobile .cr-logo-mark {
+    display: flex;
+  }
+
+  body.cookrew-mobile .cr-hand-mark {
+    display: none;
+  }
 }
 
 .cr-logo {
@@ -657,9 +752,9 @@ a.cr-btn {
   align-items: center;
   gap: 6px;
   /* The row WRAPS on desktop: with enough presets + saved teams the tail —
-     which is exactly where the CREWS family and + ADD BY LINK live — used to
-     run off the screen edge with no scroll, making the import entry
-     undiscoverable. The dock grows upward instead; chips stay tappable. */
+     which is exactly where + IMPORT lives — used to run off the screen edge
+     with no scroll, making the import entry undiscoverable. The dock grows
+     upward instead; chips stay tappable. */
   flex-wrap: wrap;
   min-width: 0;
   max-height: 30vh;
@@ -690,12 +785,17 @@ a.cr-btn {
 
 /* ---- selection bar (Figma model: selected elements grow actions) ---- */
 
-/* Floats over the canvas just above the dock, centered. */
+/* Floats over the canvas just above the dock, centered — by auto margins,
+   NEVER by transform: the payment sheet renders inside this bar with a
+   position: fixed scrim, and a transform here becomes its containing block,
+   gluing the "viewport-covering" scrim to the bar instead of the screen. */
 .cr-selbar {
   position: absolute;
   bottom: 14px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
+  margin-inline: auto;
+  width: fit-content;
   z-index: 20;
   display: flex;
   align-items: center;
@@ -706,6 +806,20 @@ a.cr-btn {
   border: 2px solid var(--line);
   box-shadow: 3px 3px 0 var(--line);
   animation: cr-fadein 160ms ease-out;
+}
+
+/* The in-flow controls, boxed as their own row: narrow screens put the
+   sideways scroll HERE, never on .cr-selbar itself. The bar is the containing
+   block of the popovers floated above it (.cr-selbar-share, .cr-selbar-tray,
+   the served receipt) — overflow on the bar clips them all, which is exactly
+   how the share sheet vanished on phones. This row must stay UNPOSITIONED:
+   give it position/transform and it becomes the popovers' containing block,
+   and its narrow-screen overflow clips them all over again. */
+.cr-selbar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 
 .cr-selbar-count {
@@ -1045,27 +1159,42 @@ a.cr-btn {
   outline-style: solid;
 }
 
-/* Narrow screens: the bar hugs the width and scrolls sideways rather than
-   overflowing the stage (same strip treatment as the dock rows). */
+/* Narrow screens: the bar hugs the width and its ROW scrolls sideways rather
+   than overflowing the stage (same strip treatment as the dock rows). The
+   overflow must not sit on .cr-selbar — see .cr-selbar-row. */
 @media (max-width: 700px) {
   .cr-selbar {
     bottom: 10px;
     gap: 8px;
+  }
+  .cr-selbar-row {
+    gap: 8px;
     overflow-x: auto;
     scrollbar-width: none;
+    /* The bar's padding used to give focus rings their slack; the scroll box
+       (overflow-y computes to auto here) would eat it — carve it back. */
+    padding-block: 2px;
+    margin-block: -2px;
   }
-  .cr-selbar::-webkit-scrollbar {
+  .cr-selbar-row::-webkit-scrollbar {
     display: none;
   }
-  .cr-selbar > * {
+  .cr-selbar-row > * {
     flex: 0 0 auto;
   }
   .cr-selbar-name {
     width: 110px;
   }
+  /* A refusal must be readable, not an ellipsis whose full text hides behind
+     a hover title no finger can reach — wrap it, up to three lines. */
   .cr-selbar-flash,
   .cr-selbar-error {
-    max-width: 40vw;
+    max-width: 60vw;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
 }
 
@@ -1732,102 +1861,6 @@ a.cr-btn {
 .ctx-live .popout-terminal {
   flex: 1;
   min-height: 0;
-}
-
-.ctx-live.served {
-  flex-grow: 1;
-}
-
-/* Placed crews keep crew-line as transport, never as pixels. The streamed
-   remote trace stays in ctx-blocks; this is only the LIVE status + composer. */
-.served-live-turn {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 14px 16px 12px;
-  color: var(--phos);
-}
-
-.served-live-prompt,
-.served-live-reply {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-
-.served-live-prompt {
-  color: var(--phos-glow);
-}
-
-.served-live-prompt::before {
-  content: '❯ ';
-  color: var(--amber);
-}
-
-.served-live-state {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--vi-done);
-  font-family: var(--font-pixel);
-  font-size: 8px;
-}
-
-.served-live-dot {
-  width: 7px;
-  height: 7px;
-  background: currentColor;
-  border-radius: 50%;
-}
-
-.served-live-state.busy .served-live-dot {
-  animation: vi-pulse 1.2s ease-in-out infinite;
-}
-
-.served-live-input {
-  flex: 1;
-  width: 100%;
-  min-height: 72px;
-  resize: none;
-  border: 1px solid var(--phos-dim);
-  border-radius: 2px;
-  background: rgba(0, 0, 0, 0.22);
-  color: var(--phos-glow);
-  padding: 9px 10px;
-  font: 12px/1.45 var(--font-mono);
-  outline: none;
-}
-
-.served-live-input:focus {
-  border-color: var(--amber);
-}
-
-.served-live-send {
-  width: 36px;
-  height: 32px;
-}
-
-.served-live-compose-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  margin-top: auto;
-}
-
-.cr-ckpt-warming-label {
-  position: absolute;
-  right: 14px;
-  bottom: 10px;
-  width: max-content;
-  color: var(--vi-waiting);
-  font-family: var(--font-pixel);
-  font-size: 7px;
-  pointer-events: none;
-  transform: rotate(-90deg);
-  transform-origin: right bottom;
 }
 
 .turn {
@@ -2617,6 +2650,41 @@ a.card-close {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* Phone clipboard (terminal-clipboard.ts): a beat of feedback under the
+   header, and the fallback paste field — a real editable the finger can
+   long-press, which xterm's hidden textarea is not. */
+.popout-clip-note {
+  padding: 4px 12px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-soft, #6b6257);
+  background: var(--cream, #f4efe4);
+  border-bottom: 1px solid var(--line);
+}
+
+.popout-paste-field {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  background: var(--cream, #f4efe4);
+  border-bottom: 1px solid var(--line);
+}
+
+.popout-paste-input {
+  flex: 1;
+  min-height: 36px;
+  resize: none;
+  font: inherit;
+  font-size: 16px; /* 16px: below this iOS auto-zooms the page on focus */
+  padding: 6px 8px;
+  border: 2px solid var(--line);
+  border-radius: 4px;
+  background: var(--cream-hi);
+  color: inherit;
 }
 
 /* ✕ next to ⤢ CANVAS: closes the card and kills its session (⌘W twin). */
@@ -3682,8 +3750,22 @@ body.cookrew-mobile .cr-header .cr-kicker {
   white-space: nowrap;
 }
 
+/* THE WORKSPACE CHIP IS A STUB ON THE PHONE. The bar has one line and the
+   name was walking off its right edge; the icon says which workspace, the
+   name keeps a few letters, the caret goes. The menu still has the full names. */
+body.cookrew-mobile .cr-ws-current {
+  padding: 3px 6px;
+  gap: 5px;
+  min-width: 0;
+}
+
 body.cookrew-mobile .cr-ws-name {
-  max-width: 90px;
+  max-width: 54px;
+  font-size: 9px;
+}
+
+body.cookrew-mobile .cr-ws-caret {
+  display: none;
 }
 
 body.cookrew-mobile .cr-ws-menu {
@@ -4043,6 +4125,17 @@ body.cookrew-mobile .cookrew-minimap {
   animation: cr-ckpt-pulse 1.6s ease-in-out infinite;
 }
 
+/* The session behind the rail is over. Still, not pulsing, not green — a dot
+   that keeps glowing after the door said 402 is a lie (remote-card P10c). */
+.cr-ckpt-livedot.ended {
+  background: var(--dim);
+  animation: none;
+}
+.cr-ckpt-row.live.ended .cr-ckpt-dot i {
+  background: var(--dim);
+  animation: none;
+}
+
 @keyframes cr-ckpt-pulse {
   0%,
   100% {
@@ -4309,6 +4402,99 @@ body.cookrew-mobile .cookrew-minimap {
   border-color: var(--amber);
 }
 
+/* A ROLLED-BACK CHECKPOINT (one-stream v2 ②). A /rewind makes the file
+   shorter; the stream records that as an APPENDED note rather than deleting
+   the positions, so the row is still here, still tappable, and merely says
+   what happened to it. Dimmed — not hidden, not struck through: a struck row
+   reads as "deleted", and the whole point is that it is not.
+   pointer-events stays default so a rolled-back row is still SELECTABLE. */
+.cr-ckpt-row.rolled-back {
+  opacity: 0.55;
+}
+
+.cr-ckpt-row.rolled-back.active {
+  opacity: 0.85;
+}
+
+.cr-ckpt-rolled {
+  margin-right: 4px;
+  color: var(--amber);
+  font-size: 10px;
+  line-height: 1;
+}
+
+/* A COMPACTION, on the row after it: a thin rule and one word. The bar's own
+   ◆ tick carries the same fact at a glance; this is what it says up close. */
+.cr-ckpt-compacted {
+  position: absolute;
+  top: -1px;
+  left: 6px;
+  right: 6px;
+  font-family: var(--font-pixel);
+  font-size: 6.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--amber);
+  border-top: 1px solid var(--amber);
+  padding-top: 1px;
+  opacity: 0.75;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* THE ANOMALY MARK. A line the reader could not parse is a fact about the
+   transcript, not something a person can fix mid-conversation — so it is said,
+   quietly, and never as a modal. Saying nothing at all is what made a silently
+   shorter history read as a destroyed one.
+
+   ONE GLYPH, NOT A SENTENCE (D3, T5 QA 2026-09-07). This was `left: 0;
+   right: 0; bottom: 2px` INSIDE the 30px rail column, so the sentence wrapped
+   to one letter per line and printed vertically over the live dot. The rail is
+   30px wide and always will be; the sentence lives in the tooltip and in the
+   accessible name, and the rail carries the one mark it has room for — parked
+   above the live dot rather than on top of it. */
+.cr-ckpt-anomaly {
+  position: absolute;
+  right: 8px;
+  /* BELOW THE TRACK. It is a hover target (the sentence is its tooltip), so it
+     eats pointer-downs where it sits — and .cr-ckpt-mini owns the whole 30px
+     column for the scrub drag. .cr-ckpt-line runs top:16px→bottom:16px and the
+     live dot sits at bottom:14px; this is under both, in the strip the drag
+     already clamps to fraction 1. */
+  bottom: 1px;
+  width: 13px;
+  height: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  box-sizing: border-box;
+  border: 1px solid var(--amber);
+  background: var(--phos-bg);
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  line-height: 1;
+  color: var(--amber);
+  opacity: 0.75;
+  cursor: help;
+  user-select: none;
+}
+
+.cr-ckpt-anomaly:hover {
+  opacity: 1;
+}
+
+/* The sentence itself: read by a screen reader and by the tooltip, never laid
+   out in the 30px column that could not hold it. */
+.cr-ckpt-anomaly-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
 /* Boundary ticks ON the rail line (at-first-sight positions): ◆ compact is a
    small amber diamond hugging the line, ⇥ clear a brighter wider break bar.
    Same anchor math as the here-marker (railAnchorTop) so ticks sit exactly on
@@ -4345,6 +4531,171 @@ body.cookrew-mobile .cookrew-minimap {
   background: var(--amber);
   box-shadow: 0 0 5px var(--amber);
   opacity: 0.95;
+}
+
+/* The SEGMENT boundary tick is a tap target (it opens the earlier-sessions
+   panel), so it reads as one: full opacity, a ring, and a pointer. The ring is
+   what separates "information" from "control" at 8px — same rule that gives
+   the version pins their hard edge. */
+.cr-ckpt-tick.lineage {
+  cursor: pointer;
+  opacity: 1;
+  box-shadow:
+    0 0 0 2px rgba(184, 119, 10, 0.35),
+    0 0 6px var(--amber);
+}
+
+.cr-ckpt-tick.lineage:hover {
+  box-shadow:
+    0 0 0 3px rgba(184, 119, 10, 0.55),
+    0 0 8px var(--amber);
+}
+
+/* ---- LINEAGE REACH: the earlier-sessions panel -----------------------------
+   Where the checkpoints an auto-compact rotation (or /clear) moved out of the
+   current file live now. A floating panel beside the rail — the identity list
+   and its fraction math never learn it exists. */
+.cr-lineage-panel {
+  position: absolute;
+  top: 8px;
+  right: 32px;
+  width: 336px;
+  max-width: calc(100vw - 48px);
+  max-height: min(72vh, 560px);
+  display: flex;
+  flex-direction: column;
+  z-index: 7; /* above the fan (4), the focused tag (5) and the count (6) */
+  background: var(--vi-panel);
+  border: 1px solid var(--vi-line);
+  border-radius: 10px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--vi-text);
+}
+
+.cr-lineage-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--vi-line);
+}
+
+.cr-lineage-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  font-size: 11px;
+}
+
+.cr-lineage-total {
+  font-weight: 400;
+  letter-spacing: normal;
+  color: var(--vi-dim);
+  font-size: 11px;
+}
+
+.cr-lineage-close {
+  background: none;
+  border: none;
+  color: var(--vi-dim);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+
+.cr-lineage-close:hover {
+  color: var(--vi-text);
+}
+
+.cr-lineage-refusal {
+  padding: 6px 10px;
+  color: var(--vi-wait);
+  border-bottom: 1px solid var(--vi-line);
+}
+
+.cr-lineage-empty {
+  padding: 14px 10px;
+  color: var(--vi-dim);
+}
+
+.cr-lineage-segment {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.cr-lineage-seghead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--vi-line);
+  color: var(--vi-text);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.cr-lineage-seghead:hover,
+.cr-lineage-seghead.open {
+  background: var(--vi-panel-focus);
+}
+
+.cr-lineage-sig {
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--amber);
+}
+
+.cr-lineage-count {
+  color: var(--vi-dim);
+  font-size: 11px;
+}
+
+.cr-lineage-rows {
+  overflow-y: auto;
+  min-height: 0;
+  /* Each expanded segment scrolls ITSELF, so a 265-checkpoint predecessor
+     never pushes the other segment headers (or the footer) out of the panel. */
+  max-height: min(44vh, 340px);
+  border-bottom: 1px solid var(--vi-line);
+}
+
+.cr-lineage-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+}
+
+.cr-lineage-row:hover {
+  background: var(--vi-panel-focus);
+}
+
+.cr-lineage-row-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--vi-text);
+}
+
+.cr-lineage-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  color: var(--vi-dim);
+  font-size: 10.5px;
 }
 
 /* --- VERSION PINS: the rail's THIRD marker class (marketplace §10, R8/R18) ---
@@ -4782,6 +5133,14 @@ body.cookrew-mobile .cookrew-minimap {
    glyphs wide — without it the label overflows its own button. This selector
    is 0-3-0, so it wins that square back regardless of source order. */
 .voice-keys .cr-btn.term-key {
+  /* The row scrolls sideways, and this says the pan can start on the
+     compositor rather than waiting on the main thread — measured, it does
+     NOT enable the pan (touch-action only ever restricts; the row scrolled
+     identically without it). pinch-zoom is kept because taking it away from
+     a key would make the page un-zoomable from the one strip a thumb rests
+     on. A pan that begins on a key sends nothing either way: the key fires
+     on release, and travel past the slop cancels it (touch-key-gesture.ts). */
+  touch-action: pan-x pinch-zoom;
   min-width: 30px;
   min-height: 30px;
   width: auto;
@@ -5079,28 +5438,83 @@ body.cookrew-mobile .cr-dock .voice-ghost {
 .ctx-block-reply[data-translated] {
   border-left: 2px solid var(--amber-deep);
   padding-left: 8px;
-/* ── CREWS: the dock's fourth chip family (R30 import side) ──
-   Someone else's team, reached through its orch. Violet marks "not yours". */
-.cr-chip.crew-chip { border-color: var(--violet); }
-.cr-chip.crew-chip.locked { border-style: dashed; }
-.cr-chip.crew-chip.ended { opacity: 0.45; border-style: dashed; cursor: default; }
-.crew-chip-dot {
-  width: 7px; height: 7px; border-radius: 50%;
-  background: var(--violet); display: inline-block; margin-right: 5px;
 }
-.crew-chip-price {
-  font-size: 7px; margin-left: 5px; padding: 0 3px;
-  background: var(--amber-soft); border: 1px solid var(--line); color: var(--ink);
+
+/* ── A PLACED ORCH CARD'S SESSION LINE ──
+   The facts of an admission, kept quiet: one dim strip under the header, in
+   the terminal's own voice rather than the canvas's. It must read as a note
+   about the card, never as a control on it — so no border box, no hover, and
+   it is out of the tab order. */
+.popout-session {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 12px 6px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--cream-md);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.45;
 }
-.cr-chip.crew-add { border-style: dashed; border-color: var(--dim); color: var(--muted); }
-/* The add sheet's preview of a crew's public face. */
-.acs-face {
+.popout-session .k {
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.07em;
+  color: var(--dim);
+}
+.popout-session .sep { color: var(--line-soft); }
+/* A sentence about the record — why the rail is empty or stale, or why a
+   drop did nothing. Same voice as the strip, not an alert. */
+.popout-session .popout-session-note { color: var(--ink); }
+
+/* ── THE DOCK ROW'S FAMILIES ──
+   A quiet caption before each run of chips. It is a label, not a control:
+   no border, no hover, and it never takes a click — the chips are the row's
+   only targets. `flex-basis:100%` would break the row; these sit inline so a
+   short family costs one label's width, not a whole line. */
+.cr-dock-family {
+  align-self: center;
+  padding: 0 2px 0 6px;
+  color: var(--dim);
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  user-select: none;
+}
+.cr-dock-family:first-child { padding-left: 0; }
+/* The two acts that are always available, parked at the end so saving a team
+   never moves them. `margin-left:auto` pushes them to the row's far edge when
+   there is room, and they wrap together when there is not. */
+.cr-dock-tail {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding-left: 10px;
+  border-left: 1px solid var(--line-soft);
+}
+/* A saved team is not a harness: placing it opens a whole session. Violet
+   marks "not a plain agent", the same way the rail marks a version pin. */
+.cr-chip.team-chip { border-color: var(--violet); }
+
+/* ── IMPORT A SERVED TEAM: the import side's one entry ── */
+.cr-chip.import-served {
+  border-style: dashed;
+  border-color: var(--amber);
+  color: var(--ink);
+  font-weight: 600;
+}
+/* The import sheet's preview of a team's public face. */
+.isv-face {
   border: 1.5px solid var(--line-soft); background: var(--cr-panel, transparent);
   padding: 9px 11px; margin-top: 10px; display: flex; flex-direction: column; gap: 4px;
 }
-.acs-row { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 11.5px; }
-.acs-name { font-weight: 600; }
-.acs-dim { color: var(--cr-dim, #a8a29e); font-size: 10.5px; }
+.isv-row { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 11.5px; }
+.isv-name { font-weight: 600; }
+.isv-dim { color: var(--cr-dim, #a8a29e); font-size: 10.5px; }
 
 /* Share-on-save inside the selection bar's naming step: the bar is a row, so
    the section lifts into a popover above it rather than stretching it. */
@@ -5112,10 +5526,9 @@ body.cookrew-mobile .cr-dock .voice-ghost {
   max-height: 60vh;
   overflow: auto;
   padding: 10px 12px;
-  background: var(--cr-panel, #1c1a16);
-  border: 1.5px solid var(--cr-line-hard, #4c463a);
-  border-radius: 8px;
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 3px 3px 0 var(--line);
   z-index: 40;
 }
 
@@ -5126,7 +5539,6 @@ body.cookrew-mobile .cr-dock .voice-ghost {
   gap: 6px;
   background: var(--cream-hi);
   border: 2px solid var(--violet);
-  border-radius: 0;
   box-shadow: 3px 3px 0 var(--line);
 }
 .cr-selbar-served .sos-note {
@@ -5162,7 +5574,16 @@ body.cookrew-mobile .cr-dock .voice-ghost {
    2026-08-27): a 355-checkpoint session mounts 355 identity divs, and every
    estimate refinement relaid ALL of them out at DPR3 — the wedge that fed
    the iOS jetsam kill. Offscreen blocks now cost nothing to lay out or
-   paint; the intrinsic size keeps scroll geometry and scrollIntoView exact. */
+   paint; the intrinsic size keeps scroll geometry and scrollIntoView exact.
+
+   MOBILE ONLY, AND IT STAYS THAT WAY (7894903, "render heavy transcripts on
+   desktop", + the permanent guard in tests/transcript-paint-scope.test.ts).
+   Unscoped, this rule BLANKED the desktop transcript. D6 of the T5 QA
+   2026-09-07 tried to widen it for the 1,048-row card that froze the
+   companion tab and put it straight back: the desktop's share of that cost is
+   bounded in TranscriptView instead — memoised identity space, one stable ref
+   callback per row, and a stick pass coalesced to a frame — none of which
+   depends on an engine feature that has already been reverted once here. */
 body.cookrew-mobile .ctx-block,
 body.cookrew-mobile .ctx-placeholder {
   content-visibility: auto;
@@ -5180,4 +5601,845 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   /* The .react-flow CONTAINER keeps its size — the overlay's rect and the
      LOD pane measurements read it — while every heavy inner layer drops. */
   display: none;
+}
+
+/* ---- identity v2: the account surface (D1–D5) ----
+   The avatar lives in the header's brand group and must not change the bar's
+   height, so it is the mark's own 24 px. Everything else here rides the gs-*
+   sheet primitives (grant-surface.css) — this file adds only what identity
+   itself needs, under one prefix. */
+
+.cr-acct-avatar {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  background: var(--amber);
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+  cursor: pointer;
+  overflow: visible;
+}
+
+/* NOBODY YET. Dashed reads as a slot waiting to be filled; it never pulses
+   and never nags, because everything here works without an account. */
+.cr-acct-none {
+  border-style: dashed;
+  background: transparent;
+  color: var(--muted);
+}
+
+.cr-acct-face {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+
+/* The same rose badge the BOARD button wears for attention, offset onto the
+   avatar's shoulder. Two badge styles for "something needs you" would make
+   neither mean anything. */
+.cr-acct-badge {
+  position: absolute;
+  top: -6px;
+  right: -8px;
+}
+
+/* The sheets' larger avatar: the profile head and the lock card. */
+.cr-acct-big {
+  width: 44px;
+  height: 44px;
+  font-size: 15px;
+  cursor: default;
+}
+
+.cr-acct-sheet .cr-acct-who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* A field and its verdict on one line — the reason is always beside it. */
+.cr-acct-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cr-acct-tag {
+  flex: 0 0 auto;
+  min-width: 62px;
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* The verdict greens are the spec's `.hint.ok` (#1f7a4d): the arcade --hp
+   is a fill colour, and as 8 px text on cream it is 2.2:1. */
+.cr-acct-good { color: #1f7a4d; }
+.cr-acct-bad { color: var(--rose); }
+.cr-acct-dim { color: var(--muted); }
+
+/* D4's tabs, as the spec draws them: a rule under the row, and the open tab
+   is ink with an amber underline — not an amber fill, which would make five
+   primaries out of a navigation. */
+.cr-acct-tabs {
+  display: flex;
+  margin: 16px 0 4px;
+  border-bottom: 2px solid var(--line);
+}
+
+.cr-acct-tab {
+  flex: 0 1 auto;
+  border: none;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+  background: none;
+  padding: 6px 8px;
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cr-acct-tab[aria-selected='true'] {
+  color: var(--ink);
+  border-bottom-color: var(--amber);
+}
+
+.cr-acct-pane { margin-top: 14px; }
+
+.cr-acct-card { margin-top: 6px; }
+
+/* The card's caption is the spec's `.cap`: pixel, uppercase, with the aside
+   in mono and lower case so it reads as a note on the title, not more title. */
+.cr-acct-cardhead {
+  margin: 0 0 10px;
+  font-family: var(--font-pixel);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+.cr-acct-cardhead .gs-dim {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
+}
+
+.cr-acct-secrows,
+.cr-acct-devices,
+.cr-acct-workspaces {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* The spec's `.list`: a soft rule between rows, the kind in mono, the label
+   in body type, the state as a badge. --cr-line was the grant surface's
+   dark-theme rule and drew near-black hairlines on cream. */
+.cr-acct-secrow,
+.cr-acct-device {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.cr-acct-kind {
+  flex: 0 0 auto;
+  min-width: 58px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.cr-acct-seclabel {
+  flex: 1 1 auto;
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--ink);
+}
+
+/* The state is the spec's `.badge`: a small hard-edged box, never coloured
+   text, so THIS DEVICE, NOT SAVED and ACTIVE all read as the same kind of
+   fact. */
+.cr-acct-secstate {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1.5px solid var(--line);
+  background: var(--cream-hi);
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.cr-acct-workspaces li {
+  padding: 6px 0;
+  font-size: 13px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.cr-acct-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+/* Shown once, in the spec's `.term`: the one phosphor box on a cream sheet,
+   because these are read off the screen like a terminal and a code in body
+   type on cream is a code someone mis-copies. Monospaced for the same reason. */
+.cr-acct-codes {
+  list-style: none;
+  margin: 0;
+  padding: 10px 12px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 18px;
+  background: var(--phos-bg);
+  border: 2px solid var(--line);
+  color: var(--phos);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+/* THE LOCK COVERS EVERYTHING, including the sheets — z-index above .gs-scrim
+   (60), because a lock drawn under a dialog is not a lock. The veil is the
+   house ink, not black, and heavier than a sheet's: a lock that leaves the
+   canvas readable through it is not hiding anything. */
+.cr-acct-lock {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(45, 42, 32, 0.86);
+}
+
+.cr-acct-lockcard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: min(340px, 90vw);
+  padding: 26px 24px;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 4px 4px 0 var(--line);
+  text-align: center;
+}
+
+.cr-acct-lockcard h2 {
+  margin: 0;
+  font-family: var(--font-pixel);
+  font-size: 14px;
+  letter-spacing: 0.06em;
+}
+
+/* ---- the path badge (identity v2, M3) ----
+   Top-left of the companion bar, in the hand mark's slot. Same box as the
+   CANVAS ⇄ BOARD switch on purpose: it is the same kind of thing, a small
+   hard-edged control that says which of a few states you are in, and the two
+   sit within a few pixels of each other on a phone. 24 px tall to match the
+   mark it replaces, so nothing else in the bar moves. */
+
+.cr-path {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  height: 24px;
+  padding: 0 8px;
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  background: var(--cream-hi);
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cr-path-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--muted);
+}
+
+/* The colours are the badge's whole vocabulary: green is direct and local,
+   blue is direct and elsewhere, amber is somebody else's wire, grey is not
+   reachable. Nothing here is decorative. */
+.cr-path-lan .cr-path-dot { background: var(--green, #3f8f4f); }
+.cr-path-tailnet .cr-path-dot { background: var(--blue, #3a6ea5); }
+.cr-path-relay .cr-path-dot { background: var(--amber); }
+.cr-path-offline .cr-path-dot { background: var(--muted); }
+
+/* Probing pulses, which is the one animation on this bar: a still grey dot
+   and a still probing dot would be the same picture, and they mean opposite
+   things about whether to wait. */
+.cr-path-probing .cr-path-dot {
+  background: var(--muted);
+  animation: cr-path-pulse 1.2s ease-in-out infinite;
+}
+
+.cr-path-offline {
+  color: var(--muted);
+}
+
+@keyframes cr-path-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cr-path-probing .cr-path-dot { animation: none; }
+}
+
+/* ---- the local-network ask ----
+   One line hanging under the header, anchored to the badge's own edge. It is
+   OUT OF FLOW on purpose: the header is a single 24 px row on a phone and a
+   second line inside it would push the canvas down every time a browser
+   decided to ask about the local network. Cream, hard-edged and 2 px lined,
+   like every other thing on this bar that wants an answer. */
+
+.cr-path-ask {
+  position: absolute;
+  top: 100%;
+  left: 8px;
+  right: 8px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 7px 9px;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--ink);
+}
+
+.cr-path-ask-text {
+  flex: 1 1 auto;
+}
+
+.cr-path-ask-allow {
+  flex: 0 0 auto;
+}
+
+/* The refusal is a statement, not a control: no button, muted, and it stays
+   until the phone finds a network where the question is asked again. */
+.cr-path-ask-denied {
+  color: var(--muted);
+}
+
+/* The note on the page the OPEN ON WI-FI button landed on. Same hanging line
+   as the ask — it is the same slot under the same badge — and it is the only
+   one of the two that ever appears on a directly-served companion. */
+.cr-path-landed-ok {
+  flex: 0 0 auto;
+}
+
+/* ---- open on Wi-Fi ----
+   INSIDE the sheet, not hanging off the bar: it is the conclusion drawn from
+   the rows underneath it, so it is stacked, in flow, and full width. Amber
+   because it is the one thing in this sheet that is a suggestion rather than a
+   fact, and the button sits on its own line so a long sentence never squeezes
+   it to two characters on a narrow phone. */
+
+.cr-path-direct {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 9px 10px;
+  background: var(--amber-soft, var(--cream-hi));
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink);
+}
+
+.cr-path-direct-why {
+  display: block;
+}
+
+.cr-path-direct-go {
+  flex: 0 0 auto;
+}
+
+.cr-path-latency {
+  margin: 0 0 12px;
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+/* ---- why this path ----
+   Reference material inside the badge sheet: closed by default, monospaced
+   addresses so two of them line up, and one row per candidate. The winning
+   row is the only one with any weight, because the panel's whole job is to
+   answer "why THIS one". */
+
+.cr-path-why {
+  margin: 0 0 12px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.cr-path-why-head {
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+/* The condition every row below ran under: which browser, and what it says
+   about the local network. Four rows reading "refused before connecting" mean
+   one thing under a denied Chrome permission and something else under a Safari
+   that has no such permission at all. */
+.cr-path-why-env {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.cr-path-why-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.cr-path-why-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  border-top: 1px solid var(--line);
+  /* The browser's own words go on their own line under the sentence, rather
+     than squeezing the address and the plane out of a phone-width row. */
+  flex-wrap: wrap;
+}
+
+.cr-path-why-detail {
+  flex: 1 0 100%;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 10px;
+  opacity: 0.75;
+}
+
+.cr-path-why-name {
+  flex: 0 0 auto;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  color: var(--ink);
+}
+
+.cr-path-why-what {
+  flex: 1 1 auto;
+}
+
+.cr-path-why-plane {
+  flex: 0 0 auto;
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+}
+
+.cr-path-why-chosen {
+  color: var(--ink);
+}
+
+.cr-path-why-chosen .cr-path-why-plane {
+  color: var(--green, #3f8f4f);
+}
+
+.cr-path-switch {
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+/* ---- admitted phones in the Devices tab ---- */
+.cr-acct-devices .cr-acct-local {
+  border-left: 2px solid var(--amber);
+}
+
+.cr-acct-devices-heading {
+  margin: 14px 0 6px;
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ---- pair a phone popout (identity v2, M1) ---- */
+.cr-pair-qr {
+  display: block;
+  width: min(220px, 60vw);
+  height: auto;
+  margin: 4px auto 12px;
+  image-rendering: pixelated;
+  /* The quiet zone lives INSIDE the svg now, in white and in module units, so
+     this is a frame and not a load-bearing part of the symbol. */
+  background: #ffffff;
+  border: 2px solid var(--line);
+}
+
+.cr-pair-key {
+  font-family: var(--font-pixel);
+  font-size: 22px;
+  letter-spacing: 0.22em;
+  text-align: center;
+  margin: 0 0 4px;
+  color: var(--ink);
+}
+
+.cr-pair-renews,
+.cr-pair-desktop {
+  margin: 0 0 8px;
+  text-align: center;
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+/* THE BRACE ABOVE IS LOAD-BEARING. 0ad80cfb pasted the D7 block inside this
+   rule, which the browser read as one unclosed block running to the end of
+   the file: every rule below — the approval card, the must-change card, the
+   lock select, the seat rows, the TOTP secret — was dead on dev while the
+   file looked fine to a reader. tests/account-cream.test.tsx parses this file
+   and fails on the next unclosed block. */
+
+/* ── D7 · callers at a served door ──────────────────────────────────────
+   The only place another person appears on the owner's canvas. Sized off
+   the card's inverse-zoom var so a face reads the same at 30% as at 100%,
+   like every other chip in the head. */
+.cr-callers {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  position: relative;
+}
+
+.cr-caller {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  border-radius: 50%;
+  background: hsl(var(--caller-hue, 40) 46% 44%);
+  color: #fff;
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+.cr-caller-more {
+  background: var(--cream-lo);
+  color: var(--muted);
+  cursor: default;
+}
+
+/* The house popover — cream, the 2 px line, the hard shadow — on a card that
+   is itself cream. It wore the grant surface's dark panel before, which no
+   one saw: this rule was inside the unclosed block above. */
+.cr-caller-menu {
+  position: absolute;
+  top: 22px;
+  right: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 220px;
+  padding: 10px;
+  border: 2px solid var(--line);
+  background: var(--cream-hi);
+  color: var(--ink);
+  box-shadow: 3px 3px 0 var(--line);
+}
+
+.cr-caller-why { font-size: 12px; line-height: 1.4; }
+
+/* The grant field in Seats & Teams: a username, and nothing else fits. The
+   same field as every other on the sheet (.cr-sheet .gs-input), sized down. */
+.cr-acct-grant-name {
+  width: 160px;
+  padding: 4px 6px;
+  border: 1.5px solid var(--line);
+  background: var(--cream);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.cr-acct-grant-name:focus {
+  border-color: var(--amber-deep);
+  outline: none;
+}
+
+.cr-acct-seats {
+  flex: 1 0 100%;
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0 0 0 58px;
+}
+
+.cr-acct-seat {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 12.5px;
+}
+
+/* A row whose action is phase 4 must not read like the live ones. Muted text
+   and a DASHED badge — the same "not filled in yet" the empty avatar wears —
+   so nobody spends a click finding out the button does nothing. */
+.cr-acct-coming .cr-acct-kind,
+.cr-acct-coming .cr-acct-seclabel {
+  color: var(--dim);
+}
+
+.cr-acct-coming button {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.cr-acct-soon {
+  padding: 1px 6px;
+  border: 1px dashed var(--line-soft);
+  border-radius: 9px;
+  color: var(--dim);
+}
+
+/* The idle delay is a closed list, so it is a select, sized like the row's
+   other controls rather than like a form field. */
+.cr-acct-select {
+  flex: 0 0 auto;
+  border: 2px solid var(--line);
+  background: var(--cream-hi);
+  color: var(--ink);
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+/* ---- identity v2, phase 4: the approval card (D6) and the factor ladder ----
+   The request card sits at the top of the profile sheet and has to read as a
+   claim about the world, not as a control panel: the sentence is the biggest
+   thing in it and the three answers sit under it in the order the design
+   weights them. */
+
+/* The spec's `.note` (D6): amber-soft with the deep-amber edge. A claim about
+   the world, drawn like the notes the design uses for one — not a rose box,
+   which would be the app deciding the answer is DENY before the owner reads
+   the sentence. */
+.cr-acct-request {
+  background: var(--amber-soft);
+  border-left: 4px solid var(--amber-deep);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.cr-acct-asklead {
+  margin: 0 0 4px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--ink);
+}
+
+.cr-acct-askdetail {
+  margin: 0;
+  font-size: 12px;
+}
+
+.cr-acct-askfoot {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* The passkey row's fallback, when this build has no platform authenticator. */
+.cr-acct-elsewhere .cr-acct-seclabel {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.cr-acct-mustchange {
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 3px 3px 0 var(--line);
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+
+/* BLACK ON WHITE IN BOTH THEMES: this one is read by a camera, not by a
+   person, and a themed QR is a QR that does not scan. */
+.cr-acct-qr {
+  display: block;
+  width: min(200px, 60vw);
+  height: auto;
+  margin: 12px auto 6px;
+  background: #ffffff;
+  border: 2px solid var(--line);
+}
+
+/* The same secret as the QR, for the phone that cannot scan this screen. */
+.cr-acct-secret {
+  margin: 0 0 10px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  text-align: center;
+  word-break: break-all;
+}
+
+/* Taking a factor off costs the password (registry: removeFactor), so the row
+   opens a field rather than firing a DELETE that comes back refused. It wraps:
+   a label, an input and two answers do not fit a row at sheet width. */
+.cr-acct-removefactor {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cr-acct-removefactor .gs-label {
+  flex: 1 0 100%;
+  margin: 0;
+}
+
+.cr-acct-removefactor .gs-input {
+  flex: 1 1 160px;
+}
+
+/* THE SESSION ENDED. Rose-edged, above whatever tab is open, because nothing
+   under it can succeed until it is answered — and it carries its own field, so
+   the sentence is never on screen without somewhere to reply to it. */
+.cr-acct-resume {
+  margin: 12px 0 4px;
+  padding: 12px 14px;
+  border: 2px solid var(--rose);
+  background: var(--cream-md);
+}
+
+/* (0,3,0): team-fork.css's `.cr-sheet .gs-consequence` loads after this file
+   and would take the tie. */
+.cr-sheet .cr-acct-resume .gs-consequence {
+  margin: 0 0 8px;
+}
+
+/* ONE MORE STEP, inside the same rose-edged card. The rungs sit under the
+   registry's sentence rather than replacing it: the person is still answering
+   "your session ended", and a card that swapped its whole contents would read
+   as a second, unrelated demand. */
+.cr-acct-ladder .gs-label {
+  margin-top: 8px;
+}
+
+/* The other ways in, on one line under the field. They are ghosts, not
+   primaries: there is exactly one recommended rung on screen at a time and it
+   is the one with the field open. */
+.cr-acct-ladder-ways {
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+/* Sous, heard and answering — one pill at the top of the stage (SousPill).
+   Above every layer including a zoomed terminal, because the words are what
+   the owner is looking for while they hold the key. */
+.sous-pill {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(70vw, 720px);
+  padding: 8px 14px;
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  box-shadow: 4px 4px 0 var(--ink);
+  pointer-events: none;
+}
+.sous-pill .cr-icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+.sous-pill.listening .cr-icon {
+  color: var(--danger, #c0392b);
+  animation: sous-pulse 1.1s ease-in-out infinite;
+}
+.sous-pill.refused {
+  border-style: dashed;
+}
+.sous-pill-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@keyframes sous-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
 }

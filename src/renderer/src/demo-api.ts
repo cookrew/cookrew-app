@@ -17,6 +17,30 @@ import type { CookrewApi } from './api'
 
 const DEMO_PROMPT = '\x1b[32m➜\x1b[0m \x1b[36mdemo\x1b[0m $ '
 
+/**
+ * Extra terminal cards for the zoom-latency harness (scratchpad/zoom-latency):
+ * `?demoCards=60` lays 60 more cards on the real grid pitch so a click-to-live
+ * measurement runs against a canvas the size of the owner's, not three nodes.
+ * Absent from the URL, this is empty and the demo is unchanged.
+ */
+function benchCards(): CanvasNode[] {
+  if (typeof location === 'undefined') return []
+  const count = Number(new URLSearchParams(location.search).get('demoCards') ?? 0)
+  if (!Number.isFinite(count) || count <= 0) return []
+  return Array.from({ length: Math.min(count, 400) }, (_, i) => ({
+    kind: 'terminal',
+    id: `demo-bench-${i}`,
+    name: `Bench ${i}`,
+    preset: 'Shell',
+    command: '',
+    cwd: '~',
+    orch: false,
+    role: null,
+    position: { x: 340 + (i % 8) * 600, y: 560 + Math.floor(i / 8) * 560 },
+    size: { width: 560, height: 560 }
+  }))
+}
+
 function demoWorkspace(): WorkspaceState {
   const conductor: CanvasNode = {
     kind: 'terminal',
@@ -53,7 +77,7 @@ function demoWorkspace(): WorkspaceState {
     name: 'Cookrew Demo',
     dir: '~',
     dirs: ['~'],
-    nodes: [conductor, note, browser],
+    nodes: [conductor, note, browser, ...benchCards()],
     connections: [
       { id: 'demo-c1', a: 'demo-conductor', b: 'demo-note' },
       { id: 'demo-c2', a: 'demo-conductor', b: 'demo-browser' }
@@ -203,14 +227,6 @@ export function createDemoApi(): CookrewApi {
       broadcast({ ...state, connections: state.connections.filter((c) => c.id !== connId) })
       return Promise.resolve()
     },
-    // The demo backend has no ~/.cookrew to install into, so the marketplace
-    // chip family is simply empty here — the dock renders exactly as it did
-    // before presets existed.
-    listInstalledPresets: () => Promise.resolve([]),
-    placeInstalledPreset: () => Promise.resolve(),
-    uninstallPreset: () => Promise.resolve(),
-    markPresetRotationSeen: () => Promise.resolve(),
-    trustPresetAuthorKey: () => Promise.resolve(),
     listPins: () => Promise.resolve([]),
     listPresets: () =>
       Promise.resolve([
@@ -325,10 +341,20 @@ export function createDemoApi(): CookrewApi {
     onBrowserOpenTab: () => () => undefined,
     onBrowserPhoneViewing: () => () => undefined,
     onCmdW: () => () => undefined,
+    // No Sous in the demo: nothing to drive, so every sentence is `none`.
+    sousCommand: () => Promise.resolve({ intent: 'none' as const, spoken: '' }),
+    onUiCommand: () => () => undefined,
+    listenAvailable: () => Promise.resolve(false),
+    listenStart: () => Promise.resolve(false),
+    listenStop: () => Promise.resolve(),
+    onListenEvent: () => () => undefined,
+    // No OS hands this surface a link: the phone and the demo are reached by
+    // one, never launched by one.
+    onDeepLink: () => () => undefined,
 
-    // R30 serving + the dock's crews. Owner-desktop surfaces: this transport
-    // cannot mount them, and a stub that pretended to succeed would publish
-    // nothing while telling the user it had. It refuses, visibly.
+    // R30 serving. Owner-desktop surfaces: this transport cannot mount them,
+    // and a stub that pretended to succeed would publish nothing while telling
+    // the user it had. It refuses, visibly.
     servingServe: async () => ({ ok: false as const, reason: 'desktop-only' }),
     servingStop: async () => ({ ok: false }),
     servingPaymentStatus: async () => ({ x402: { ready: false }, stripe: { ready: false } }),
@@ -337,11 +363,14 @@ export function createDemoApi(): CookrewApi {
     servingList: async () => [],
     servingSessions: async () => [],
     servingEnd: async () => ({ stopped: 0 }),
-    crewList: async () => [],
-    crewAdd: async () => ({ ok: false as const, reason: 'desktop-only' }),
-    crewRemove: async () => ({ ok: false }),
-    crewUnlock: async () => ({ ok: false as const, reason: 'desktop-only' }),
-    crewPlace: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    serveInspect: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    // Same refusal as inspect: importing a served team places a terminal, and
+    // a phone has none to place.
+    serveBrowse: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    serveImport: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    serveGate: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    serveCheckout: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    serveSettle: async () => ({ ok: false as const, reason: 'desktop-only' }),
     quitApp: () => undefined
   }
   return api

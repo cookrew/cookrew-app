@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseSessionTurns } from '../src/shared/session-turns'
 import { parseClaudeTrace } from '../src/shared/trace-blocks'
-import { mergeCheckpointRows } from '../src/renderer/src/transcript'
 import type { TurnRecord } from '../src/shared/turn'
 
 // ROOT-CAUSE HIGH: trace-block.index and TurnRecord.index were two independent
@@ -70,38 +69,8 @@ describe('unified checkpoint identity (parseSessionTurns ≡ parseClaudeTrace)',
   })
 })
 
-describe('mergeCheckpointRows over the divergence shapes', () => {
-  const traceIndex = [1, 2, 3, 4, 5].map((index) => ({ index, title: `T${index}` }))
-
-  it('capped agent (Conductor -18 class): sub-cap identities render trace-only, real numbers', () => {
-    // Record store starts at T3 (older dropped); trace still spans T1..T5.
-    const records: TurnRecord[] = [3, 4, 5].map((index) => ({
-      index,
-      prompt: `p${index}`,
-      reply: `r${index}`,
-      uuid: `u${index}`,
-      startedAt: index,
-      endedAt: index
-    }))
-    const rows = mergeCheckpointRows(records, traceIndex)
-    expect(rows.map((r) => r.index)).toEqual([1, 2, 3, 4, 5])
-    // T1, T2 are trace-only (no record) but carry REAL identities + titles.
-    expect(rows[0]).toMatchObject({ index: 1, record: null, traceTitle: 'T1' })
-    expect(rows[2].record?.uuid).toBe('u3') // paired to the RIGHT record
-    expect(rows[4].record?.uuid).toBe('u5')
-  })
-
-  it('aligned agent (Tinker class): every record pairs its own trace row, no phantoms', () => {
-    const records: TurnRecord[] = [1, 2, 3, 4, 5].map((index) => ({
-      index,
-      prompt: `p${index}`,
-      reply: '',
-      uuid: `u${index}`,
-      startedAt: index,
-      endedAt: index
-    }))
-    const rows = mergeCheckpointRows(records, traceIndex)
-    expect(rows).toHaveLength(5) // no rows past the ceiling
-    expect(rows.every((r) => r.record !== null)).toBe(true)
-  })
-})
+// The mergeCheckpointRows block that stood here is gone with the function
+// (one-stream T3). It asserted that a capped record store and a trace listing
+// could be joined without phantom rows; there is one listing and one
+// coordinate now, so the divergence it guarded against cannot be expressed.
+// What survives is above: the two derivations agree on identity and ceiling.

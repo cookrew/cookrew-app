@@ -1,0 +1,280 @@
+import type http from 'node:http'
+import { startSse } from './mobile-http'
+import type { ServedTemplate } from './session-served'
+import type { ServedResponse } from './served-endpoints'
+
+/**
+ * THE CALLER'S LINE — the orch's real terminal, served over the same door.
+ *
+ * A caller who imported a served team holds ONE card: the orch of the session
+ * workspace minted for them at the author's app. This module is that card's
+ * transport — the same PTY-direct experience a LOCAL import gets from
+ * orch-mirror.mjs, behind the served gate instead of the pairing token:
+ *
+ *   GET  /line         admission ladder (401 → 429 → 402) → mint or reuse →
+ *                      SSE: hello (geometry), data (faithful ANSI), exit.
+ *                      Opening the line IS session admission: the 402 fires
+ *                      here, at session start only (R5), never mid-stream.
+ *   POST /line/raw     real keystrokes into the caller's OWN orch. Requires an
+ *                      already-open session — raw input never mints.
+ *   POST /line/resize  the viewer's geometry, so frames serialize at its size.
+ *
+ * The caller never names a terminal, session, or workspace id: every route
+ * resolves the conductor from the verified Bearer subject alone, exactly like
+ * the transcript reads. What confines the keystrokes is the session sandbox
+ * (Seatbelt profile + env scrub) the mint installed — the caller is typing
+ * into the agent TUI of a workspace that exists only for them, and the
+ * no-orch serve refusal guarantees that TUI is an agent, not a bare shell.
+ */
+
+/** The slice of a PtySession the line needs; structural so tests stub it. */
+export interface LinePtyView {
+  geometry(): unknown
+  replayFrame(): string
+  resize(cols: number, rows: number): void
+  on(event: string, listener: (payload: string) => void): unknown
+  removeListener(event: string, listener: (payload: string) => void): unknown
+}
+
+export interface ServedLineDeps {
+  /**
+   * The FULL admission ladder (served-endpoints.gateCaller), pre-bound —
+   * identity, budget, and the money. Only /line uses it: opening the line IS
+   * session admission.
+   */
+  gate(
+    headers: Record<string, string | undefined>
+  ): Promise<{ ok: true; claims: { sub: string } } | { ok: false; response: ServedResponse }>
+  /**
+   * Identity ONLY (served-endpoints.identifyCaller), pre-bound — for the input
+   * routes. They must never reach the money rung: a keystroke against a
+   * session that was never opened would otherwise SETTLE a presented payment
+   * and then 404, charging a caller for nothing (the open-session check is the
+   * real proof, and raw input never mints).
+   */
+  identify(
+    headers: Record<string, string | undefined>
+  ): { ok: true; claims: { sub: string } } | { ok: false; response: ServedResponse }
+  admit(serviceId: string, sub: string): Promise<{ sessionId: string; created: boolean }>
+  conductorFor(sessionId: string): string | null
+  /** The open session's conductor, or null — resolved from the subject only. */
+  openConductorFor(serviceId: string, sub: string): string | null
+  /**
+   * Has this caller HAD a session here that is now over? Then a line with no
+   * open session is not a first visit but the aftermath of an end — the
+   * owner's, or their own — and it must not quietly become a new session.
+   * Optional: a door that cannot remember answers as if it were a first visit.
+   */
+  hadSession?(serviceId: string, sub: string): boolean
+  /** Boot the conductor's PTY mirror and wait (bounded) for residency. */
+  attach(conductorId: string): Promise<LinePtyView | null>
+  /** The mirror IF it is already up — never boots, never waits. */
+  resident(conductorId: string): LinePtyView | null
+  /** Keystrokes through THE submit primitive — classified, never raw-splatted. */
+  write(conductorId: string, data: string): Promise<{ ok: boolean; reason?: string }>
+}
+
+/** A single /raw body is a burst of keystrokes, not a file upload. */
+const MAX_RAW_BYTES = 8192
+
+/**
+ * The caller's stated intent for the line: `new` means "start another
+ * session", the only value with meaning. Sent by the card after a person
+ * pressed Enter on the "session ended" sentence — never by a reconnect loop.
+ */
+export const SESSION_INTENT_HEADER = 'x-cookrew-session'
+
+/**
+ * ONE LIVE LINE PER CALLER. A viewer is 3 listeners on a shared PtySession
+ * plus a full frame replay, and a client whose reconnect ladder misfires
+ * would otherwise stack them without bound — the caller then sees every byte
+ * twice and the session leaks listeners. A new line detaches the caller's
+ * previous one, which is also what they meant by opening it.
+ */
+const liveLines = new Map<string, () => void>()
+
+const writeJson = (
+  response: http.ServerResponse,
+  status: number,
+  body: unknown,
+  headers?: Record<string, string>
+): void => {
+  for (const [key, value] of Object.entries(headers ?? {})) response.setHeader(key, value)
+  response.writeHead(status, { 'content-type': 'application/json' })
+  response.end(JSON.stringify(body))
+}
+
+/**
+ * Handle one request against the line surface. Returns false for a path this
+ * surface does not own; true when the response was written (streams included).
+ */
+export async function handleServedLineRoute(
+  deps: ServedLineDeps,
+  template: ServedTemplate,
+  method: string,
+  pathname: string,
+  input: {
+    headers: Record<string, string | undefined>
+    body: unknown
+    request: http.IncomingMessage
+    response: http.ServerResponse
+  }
+): Promise<boolean> {
+  const { response } = input
+
+  if (method === 'GET' && pathname === '/line') {
+    const gate = await deps.gate(input.headers)
+    if (!gate.ok) {
+      writeJson(response, gate.response.status, gate.response.body, gate.response.headers)
+      return true
+    }
+    // AN ENDED SESSION IS NOT A NEW ONE. Opening the line is admission, and
+    // for a free door admission is a mint — so a card that kept knocking after
+    // its session was ended at the door minted a fresh workspace every time
+    // (drej · 4, drej · 5, …) and nobody had asked for one. When the caller has
+    // had a session here and has none open, the line says so and stops, unless
+    // the caller says outright that a new one is what they want.
+    if (
+      deps.openConductorFor(template.serviceId, gate.claims.sub) === null &&
+      deps.hadSession?.(template.serviceId, gate.claims.sub) === true &&
+      input.headers[SESSION_INTENT_HEADER] !== 'new'
+    ) {
+      writeJson(response, 410, {
+        reason: 'ended',
+        error: 'this session ended at the door — say so to start a new one'
+      })
+      return true
+    }
+    // The gate has already SETTLED any payment by this point. A mint that
+    // throws here (fork failure, a grant spent between the check and now) must
+    // therefore not surface as a bare 500: the caller has paid, and a generic
+    // crash both hides that and leaks the owner's paths through error.message.
+    let admitted: { sessionId: string; created: boolean }
+    try {
+      admitted = await deps.admit(template.serviceId, gate.claims.sub)
+    } catch (error) {
+      console.error('served line: admit failed after the gate passed:', error)
+      writeJson(response, 503, {
+        reason: 'mint-failed',
+        error: 'the door could not open a session — nothing was started; contact its owner'
+      })
+      return true
+    }
+    const { sessionId, created } = admitted
+    const conductorId = deps.conductorFor(sessionId)
+    if (conductorId === null) {
+      writeJson(response, 503, { error: 'the crew is not answering — try again shortly' })
+      return true
+    }
+    const view = await deps.attach(conductorId)
+    if (view === null) {
+      writeJson(response, 503, { error: 'the line could not come up — try again shortly' })
+      return true
+    }
+    // Bound once, non-null: detach below is hoisted, and a hoisted function
+    // reads the DECLARED type of what it closes over.
+    const live: LinePtyView = view
+    // Geometry and the first frame come off a live PtySession, which can throw
+    // on a session disposed between attach and here. It must not reach the
+    // server's top-level catch: the SSE head would already be out, and
+    // answering JSON on a sent head throws again inside the handler.
+    let hello: object
+    let frame: string
+    try {
+      hello = live.geometry() as object
+      frame = live.replayFrame()
+    } catch {
+      writeJson(response, 503, { error: 'the line could not come up — try again shortly' })
+      return true
+    }
+    const lineKey = `${template.serviceId} ${gate.claims.sub}`
+    liveLines.get(lineKey)?.()
+
+    const send = startSse(response)
+    // Geometry first, then the frame — a frame applied before the client knows
+    // the mirror's size gets re-wrapped and absolute deltas land in the wrong
+    // cells (the same ordering the phone stream learned the hard way).
+    send('hello', { ...hello, sessionId, created })
+    send('data', frame)
+    const onData = (data: string): void => send('data', data)
+    const onReplay = (repaint: string): void => send('data', repaint)
+    // The orch died: say so, then END the stream. Leaving it open parks the
+    // caller on a corpse with no reconnect — their client's ladder can only
+    // act on a closed line.
+    const onExit = (): void => {
+      send('exit', {})
+      detach()
+      response.end()
+    }
+    live.on('data', onData)
+    live.on('replay', onReplay)
+    live.on('exit', onExit)
+    // Both sides: an aborted fetch closes the request, a dying socket closes
+    // the response first. detach() is idempotent, so whichever fires wins.
+    let detached = false
+    function detach(): void {
+      if (detached) return
+      detached = true
+      live.removeListener('data', onData)
+      live.removeListener('replay', onReplay)
+      live.removeListener('exit', onExit)
+      if (liveLines.get(lineKey) === supersede) liveLines.delete(lineKey)
+    }
+    const supersede = (): void => {
+      detach()
+      response.end()
+    }
+    liveLines.set(lineKey, supersede)
+    input.request.on('close', detach)
+    response.on('close', detach)
+    return true
+  }
+
+  if (method === 'POST' && (pathname === '/line/raw' || pathname === '/line/resize')) {
+    // Identity only — see ServedLineDeps.identify for why the money rung is
+    // deliberately out of reach here.
+    const gate = deps.identify(input.headers)
+    if (!gate.ok) {
+      writeJson(response, gate.response.status, gate.response.body, gate.response.headers)
+      return true
+    }
+    // No mint on input: a keystroke against a session that was never opened is
+    // the same absence a transcript read reports — 404, not a fresh charge.
+    const conductorId = deps.openConductorFor(template.serviceId, gate.claims.sub)
+    if (conductorId === null) {
+      writeJson(response, 404, {})
+      return true
+    }
+    const body = (input.body ?? {}) as Record<string, unknown>
+    if (pathname === '/line/resize') {
+      const cols = Number(body.cols)
+      const rows = Number(body.rows)
+      if (Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) {
+        // Resident-only: a resize is a hint about a viewer that is already
+        // watching. Booting a mirror for one would block a window-drag storm
+        // behind a 2s poll each, and the /line open does the booting anyway.
+        deps.resident(conductorId)?.resize(Math.min(cols, 500), Math.min(rows, 300))
+      }
+      writeJson(response, 200, { ok: true })
+      return true
+    }
+    const data = typeof body.data === 'string' ? body.data : ''
+    if (data.length === 0) {
+      writeJson(response, 200, { ok: true })
+      return true
+    }
+    if (Buffer.byteLength(data, 'utf8') > MAX_RAW_BYTES) {
+      writeJson(response, 413, { error: 'keystroke burst too large' })
+      return true
+    }
+    const verdict = await deps.write(conductorId, data)
+    if (!verdict.ok) {
+      writeJson(response, 409, { error: verdict.reason ?? 'refused' })
+      return true
+    }
+    writeJson(response, 200, { ok: true })
+    return true
+  }
+
+  return false
+}

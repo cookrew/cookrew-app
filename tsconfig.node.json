@@ -2,6 +2,9 @@
   "compilerOptions": {
     "jsx": "react-jsx",
     "target": "ES2022",
+    // ES2024 is for TYPES: a bare ES2024 call (String.prototype.isWellFormed) typechecks
+    // here but crashes Chrome < 111 — the living-room TV box. Feature-detect at the call site.
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
@@ -15,5 +18,8 @@
   // tests/ now includes a renderer component test (grant-panel-render.test.tsx).
   // The same automatic JSX runtime the app build and vitest use, so a component
   // is typechecked exactly as it is compiled.
-  "include": ["src/main/**/*", "src/preload/**/*", "src/shared/**/*", "electron.vite.config.ts", "tests/**/*", "registry/**/*"]
+  "include": ["src/main/**/*", "src/preload/**/*", "src/shared/**/*", "electron.vite.config.ts", "tests/**/*", "registry/**/*"],
+  // The render-census fixture is BROWSER code (it mounts the renderer's App);
+  // it is typechecked by tsconfig.web.json, where <webview> is declared.
+  "exclude": ["tests/perf/fixtures/**"]
 }

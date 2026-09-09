@@ -9,8 +9,8 @@ import {
   DEFAULT_TERMINAL_SIZE,
   TerminalNodeData
 } from '../shared/model'
+import { BLANK_BROWSER_PAGE, isChromiumErrorPage } from '../shared/browser-navigation'
 import { DEFAULT_ORCH_PRESET } from './presets'
-import { crewLineCommand, parseCrewLineCommand } from './crew-line-command'
 
 /**
  * Upgrades persisted nodes saved by older builds to the current shape:
@@ -30,18 +30,63 @@ export function upgradeNode(node: CanvasNode): CanvasNode {
     upgraded = { ...(node as unknown as BrowserNodeData), kind: 'browser' }
   }
   upgraded = upgradeGeometry(upgraded)
+  if (upgraded.kind === 'browser') return upgradeBrowserErrorPages(upgraded)
   if (upgraded.kind !== 'terminal') return upgraded
-  return upgradeCrewLineCommand(
+  return upgradeCrewLineCard(
     upgradeLegacyOrchMirrorCommand(upgradeConductorSeed(upgradeMaestroField(upgraded)))
   )
 }
 
-function upgradeCrewLineCommand(node: TerminalNodeData): TerminalNodeData {
-  const parsed = parseCrewLineCommand(node.command)
-  if (!parsed) return node
-  const command = crewLineCommand(parsed.script, parsed.target)
-  if (node.servedTranscript && command === node.command) return node
-  return { ...node, command, servedTranscript: parsed.target }
+/**
+ * Older webview builds persisted Chromium's private navigation-failure page as
+ * the user's address. Loading the workspace then explicitly loaded that URL
+ * again, which macOS tried to hand to an application. The attempted address is
+ * no longer recoverable once both copies were overwritten, so repair to a
+ * neutral blank tab and let the user navigate deliberately.
+ */
+function upgradeBrowserErrorPages(node: BrowserNodeData): BrowserNodeData {
+  let tabsChanged = false
+  const tabs = node.tabs?.map((tab) => {
+    if (!isChromiumErrorPage(tab.url)) return tab
+    tabsChanged = true
+    return { ...tab, url: BLANK_BROWSER_PAGE, title: '' }
+  })
+  const active = tabs?.find((tab) => tab.id === node.activeTabId) ?? tabs?.[0]
+  const url = isChromiumErrorPage(node.url)
+    ? (active?.url ?? BLANK_BROWSER_PAGE)
+    : node.url
+  if (!tabsChanged && url === node.url) return node
+  return { ...node, url, ...(tabs ? { tabs } : {}) }
+}
+
+/**
+ * A card placed by the retired crew import lane is NEUTRALIZED, not rewired.
+ *
+ * The temptation was to rebuild it as an orch-line card from the origin, slug
+ * and script path in its persisted command. Every one of those is data the
+ * REMOTE DOOR supplied (the old lane took the face's name verbatim and never
+ * validated the link beyond a parse), and rebuilding a command out of it would
+ * execute attacker-influenced strings at app start, with no user action — a
+ * worse position than the lane we are reverting. The script path is the
+ * sharpest edge: `/tmp/x/crew-line.mjs` would have become `/tmp/x/orch-line.mjs`
+ * and been run by node.
+ *
+ * So the card becomes an ordinary inert shell that keeps its name. Its door is
+ * reachable again in one deliberate act — + IMPORT, which validates the
+ * address and the face before anything is built. The stale `servedTranscript`
+ * key goes in every case: the field left the model with the lane.
+ */
+function upgradeCrewLineCard(node: TerminalNodeData): TerminalNodeData {
+  const persisted = node as TerminalNodeData & { servedTranscript?: unknown }
+  const stripped =
+    'servedTranscript' in persisted
+      ? (({ servedTranscript, ...rest }): TerminalNodeData => {
+          void servedTranscript
+          return rest as TerminalNodeData
+        })(persisted)
+      : node
+  if (!/[\\/]crew-line\.mjs["']?\s/.test(stripped.command)) return stripped
+  return { ...stripped, preset: 'Shell', command: '' }
 }
 
 const LEGACY_ORCH_MIRROR_COMMAND =

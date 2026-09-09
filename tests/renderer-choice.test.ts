@@ -37,6 +37,17 @@ describe('rendererSourceFor', () => {
     expect(rendererSourceFor({ ...BOTH, remoteAddress: '100.12.0.1' })).toBe('built')
   })
 
+  it('gives a relayed phone the build, however loopback its socket looks', () => {
+    // The canvas bridge dials this server from 127.0.0.1 on behalf of the most
+    // remote client there is. Vite's live graph is 159 requests and six levels
+    // of waterfall — the exact payload shape a relay cannot carry.
+    expect(rendererSourceFor({ ...BOTH, remoteAddress: '127.0.0.1', viaRelay: true })).toBe('built')
+    // And an explicit ask still wins, because that is a person debugging.
+    expect(
+      rendererSourceFor({ ...BOTH, remoteAddress: '127.0.0.1', viaRelay: true, requested: 'dev' })
+    ).toBe('dev')
+  })
+
   it('keeps loopback on the live module graph — the desktop QA/edit loop', () => {
     expect(rendererSourceFor({ ...BOTH, remoteAddress: '::ffff:127.0.0.1' })).toBe('dev')
     expect(rendererSourceFor({ ...BOTH, remoteAddress: '::1' })).toBe('dev')

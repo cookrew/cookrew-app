@@ -261,6 +261,16 @@ export class SessionInstantiator {
     return { stopped }
   }
 
+  /**
+   * Has this account ever had a session here — open or ended? The ordinal
+   * ledger already remembers every mint (closed ordinals are never reused),
+   * so this is the same memory read for a different question: whether a line
+   * with no open session is a first visit or the aftermath of an end.
+   */
+  hadSession(serviceId: string, accountId: string): boolean {
+    return (this.usedOrdinals.get(pairKey(serviceId, accountId)) ?? []).length > 0
+  }
+
   /** The OPEN sessions, for the owner's Sessions table (Fresco reads these). */
   sessions(): readonly SessionRecord[] {
     return [...this.openById.values()]

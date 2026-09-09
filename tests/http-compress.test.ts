@@ -84,7 +84,11 @@ describe('sendBody', () => {
   it('declares vary so a cache cannot hand gzip to a client without it', () => {
     const { response, captured } = stubResponse()
     sendBody(response, 200, { 'content-type': 'text/javascript' }, BIG_JS, 'gzip')
-    expect(captured.headers.vary).toBe('accept-encoding')
+    // `origin` rides with it since reach v2.1: `writeHead` REPLACES a header
+    // that `setHeader` put there, so a bare `accept-encoding` here would drop
+    // the CORS gate's own `vary` and a cache could hand one origin's
+    // `access-control-allow-origin` to another.
+    expect(captured.headers.vary).toBe('accept-encoding, origin')
   })
 
   it('sends plain bytes when the client did not offer gzip', () => {
@@ -117,6 +121,31 @@ describe('sendBody', () => {
         Buffer.concat(captured.chunks).length
       )
     }
+  })
+
+  /**
+   * MEASURED on the relay, 2026-09-08: a 204 that said `content-length: 2`
+   * left Electron's Node 20 http client waiting for two bytes that never come,
+   * so every phone beacon held a relay exchange until the 120 s idle deadline,
+   * sixteen of them filled the per-desktop cap, and the companion shell died
+   * with `too_many_exchanges`. A bodiless status carries no body headers.
+   */
+  it('sends a 204 with no body, no content-length and no content-type', () => {
+    for (const status of [204, 304]) {
+      const { response, captured } = stubResponse()
+      sendBody(response, status, { 'content-type': 'application/json' }, Buffer.from('{}'), 'gzip')
+      expect(captured.status).toBe(status)
+      expect(captured.chunks).toEqual([])
+      expect(captured.headers['content-length']).toBeUndefined()
+      expect(captured.headers['content-type']).toBeUndefined()
+      expect(captured.headers['content-encoding']).toBeUndefined()
+    }
+  })
+
+  it('keeps the caller’s other headers on a bodiless answer', () => {
+    const { response, captured } = stubResponse()
+    sendBody(response, 204, { 'content-type': 'application/json', vary: 'origin' }, Buffer.alloc(0), undefined)
+    expect(captured.headers.vary).toBe('origin')
   })
 
   it('preserves the caller’s status and headers', () => {

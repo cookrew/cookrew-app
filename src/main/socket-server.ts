@@ -17,7 +17,9 @@ import {
   WorkspaceList,
   WorkspaceMeta
 } from '../shared/model'
+import { resolveCallerTerminalId } from '../shared/caller-identity'
 import { WorkspaceStore, WorkspaceNodeHit } from './store'
+import type { PairingHandout } from '../shared/account-v2'
 import type { MobileEndpoint } from './mobile-endpoints'
 import { renderMobileHelp, renderRotated } from './mobile-cli-text'
 import { readProxyConfig, tailnetProxyGaps } from './proxy-bypass'
@@ -34,6 +36,8 @@ import {
 import { PRESETS } from './presets'
 import { RoutineScheduler, parseInterval } from './routines'
 import type { VoiceEngine } from './voice'
+import type { SousCommandInput, SousCommandResult } from './sous-control'
+import type { Surface as SousSurface } from '../shared/sous-intent'
 import type { TurnTracker } from './turn-tracker'
 import type { DispatchService } from './dispatch'
 
@@ -64,6 +68,8 @@ export interface SocketServerDeps {
   /** Debug helper: inject real input events into the app window. */
   injectInput: (args: string[]) => Promise<string>
   voice: VoiceEngine
+  /** Sous driving the canvas from a sentence — `cookrew sous "…"` is its CLI door. */
+  sous: SousDoor
   /** LAN URLs of the mobile companion server. */
   mobileUrls: () => string[]
   /** The same endpoints, classified (tailnet / LAN) and ordered. */
@@ -72,6 +78,12 @@ export interface SocketServerDeps {
   uncoveredCertHosts: () => string[]
   /** Revoke the pairing token; every paired device must re-pair. */
   rotatePairingToken: () => string
+  /**
+   * The one URL to scan (pairing-handout.ts). Read at print time, never
+   * cached: it carries the live pairing token, and `--rotate` changes it in
+   * the same command that prints it.
+   */
+  pairingHandout: () => PairingHandout | null
   /** LAN URLs of the TV wall (HTTP, wall-token bearing). */
   /** Workspace registry + switching (switching rebuilds PTYs). */
   listWorkspaces: () => WorkspaceList
@@ -233,6 +245,8 @@ async function dispatch(request: CliRequest, deps: SocketServerDeps): Promise<st
       return cmdRoutine(request, deps)
     case 'voice':
       return cmdVoice(request, deps)
+    case 'sous':
+      return cmdSous(request, deps)
     case 'mobile':
       return cmdMobile(request, deps)
     case 'workspace':
@@ -263,7 +277,25 @@ function self(request: CliRequest, deps: SocketServerDeps): TerminalNodeData {
   if (!request.terminalId && typeof request.flags.as === 'string') {
     return resolveSelfByName(request.flags.as, deps.store, deps.agents)
   }
-  return resolveSelf(request.terminalId, deps.store, deps.agents)
+  // A pane's exported COOKREW_TERMINAL_ID is right for that pane's own agent
+  // and wrong for one the harness spawned in the background under it, which
+  // inherits the environment wholesale. The session→node binding is the fact
+  // that travels with the agent, so it outranks the env when the two disagree.
+  // Optional-call for the same reason `nodeAcrossWorkspaces?.()` is below: a
+  // fake store in a test need not implement the global walk, and an identity
+  // repair that cannot see the bindings simply does not repair.
+  const identity = resolveCallerTerminalId({
+    envTerminalId: request.terminalId,
+    sessionId: request.sessionId ?? null,
+    terminals: deps.store.terminalsAcross?.() ?? []
+  })
+  if (identity.repairedFrom !== null) {
+    console.error(
+      `cli identity repaired: env claimed ${identity.repairedFrom}, ` +
+        `session binds to ${identity.terminalId}`
+    )
+  }
+  return resolveSelf(identity.terminalId, deps.store, deps.agents)
 }
 
 /**
@@ -497,7 +529,14 @@ export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): P
       })
       if (error) throw new Error(error)
     }
-    return deps.browserCommand(request.args, request.terminalId)
+    // me.id, NOT request.terminalId. The raw id is the env the caller's process
+    // INHERITED — for an agent the harness spawned in the background that is
+    // the host pane, in another workspace entirely. self() is what repairs it
+    // (ac57f2b), and the guard three lines up already trusts the repair. Handing
+    // the raw id onward meant create()'s `store.node(terminalId)` missed, so the
+    // card was anchored nowhere, owned no edge, and announced itself as "not
+    // connected" — the caller's own browser, disowned by its caller.
+    return deps.browserCommand(request.args, me.id)
   }
 
   // Fast path (this runs per snapshot/click/type): an in-memory scan of the
@@ -521,7 +560,9 @@ export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): P
       : null
     if (error) throw new Error(error)
   }
-  return deps.browserCommand(request.args, request.terminalId)
+  // Same repair for every other subcommand. These do not anchor a node, but the
+  // id still names who is driving, and one identity per command beats two.
+  return deps.browserCommand(request.args, me.id)
 }
 
 function workspaceName(deps: SocketServerDeps, id: string): string {
@@ -689,7 +730,10 @@ async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<stri
  */
 function cmdStatus(request: CliRequest, deps: SocketServerDeps): string {
   const [name] = request.args
-  const activities = deps.turns.list()
+  // NEVER herdr: this command's whole contract is the tracker's verified
+  // busy/idle, because the per-pane detector flaps (measured stuck at idle
+  // under a live spinner). A skeleton is that detector wearing an activity.
+  const activities = deps.turns.listVerified()
   const rows = name
     ? activities.filter(
         (entry) =>
@@ -1005,6 +1049,32 @@ async function cmdVoice(request: CliRequest, deps: SocketServerDeps): Promise<st
   }
 }
 
+/**
+ * The mic-less door: the same controller the ⌘-hold, the phone and the
+ * speaker reach, driven by a typed sentence. The answer is the controller's
+ * own JSON so a driver can assert on the intent and the spoken reply.
+ */
+async function cmdSous(request: CliRequest, deps: SocketServerDeps): Promise<string> {
+  const text = request.args.join(' ').trim()
+  if (!text) {
+    throw new Error('Usage: cookrew sous "what you would say" [--surface canvas|zoom|phone|home|cli]')
+  }
+  const surface = String(request.flags.surface ?? 'cli')
+  if (!SOUS_SURFACES.has(surface)) {
+    throw new Error(`Unknown surface '${surface}'. One of: ${[...SOUS_SURFACES].join(', ')}`)
+  }
+  const focusedAgentId = request.flags.focused ? String(request.flags.focused) : null
+  const result = await deps.sous.handle({ text, surface: surface as SousSurface, callerId: 'cli', focusedAgentId })
+  return JSON.stringify(result)
+}
+
+const SOUS_SURFACES: ReadonlySet<string> = new Set(['canvas', 'zoom', 'phone', 'home', 'cli'])
+
+/** The one method of the controller a door needs; tests fake it in one line. */
+export interface SousDoor {
+  handle: (input: SousCommandInput) => Promise<SousCommandResult>
+}
+
 async function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const [sub, name] = request.args
   if (sub === 'list' || sub === undefined) {
@@ -1110,7 +1180,8 @@ export function cmdMobile(request: CliRequest, deps: SocketServerDeps): string {
   // burning a leaked token would believe it was dead while it stayed live.
   if (request.flags.rotate === true) {
     deps.rotatePairingToken()
-    return renderRotated(deps.mobileEndpoints())
+    // AFTER the rotation, so the URL carries the token that now works.
+    return renderRotated(deps.mobileEndpoints(), deps.pairingHandout())
   }
   const endpoints = deps.mobileEndpoints()
   const tailnetHosts = endpoints
@@ -1118,6 +1189,7 @@ export function cmdMobile(request: CliRequest, deps: SocketServerDeps): string {
     .map((endpoint) => endpoint.host)
   return renderMobileHelp({
     endpoints,
+    pairing: deps.pairingHandout(),
     secure: endpoints.some((endpoint) => endpoint.url.startsWith('https')),
     uncovered: deps.uncoveredCertHosts(),
     tailnet: endpoints.some((endpoint) => endpoint.kind === 'tailscale'),
@@ -1297,7 +1369,9 @@ Usage:
   cookrew voice on|off|status                   Spoken replies when an ask completes (macOS say)
   cookrew voice list | set "Name" | rate 200    Pick the voice that talks back, set speed
   cookrew voice say "text"                      Speak now
-  cookrew mobile                                Print (and QR) the phone companion URL — dictation + spoken replies
+  cookrew sous "sentence" [--surface S]        What Sous would do with that sentence, and does it:
+                                                switch / ask / create / connect / rename / back (zh or en)
+  cookrew mobile                               Print (and QR) the phone companion URL — dictation + spoken replies
   cookrew workspace list                        List workspaces (* = active)
   cookrew workspace create "Name" --dir PATH [--team "Template"]   (Orch) New workspace (optionally from a saved team template) + switch
   cookrew team list                             List saved team templates (name, agents, saved date)

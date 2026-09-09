@@ -71,6 +71,40 @@ describe('Stripe USD terms', () => {
 })
 
 describe('Checkout creation', () => {
+  /**
+   * THE SECOND PRESS OF PAY.
+   *
+   * Stripe refuses a repeated idempotency key whose body changed at all. The
+   * body carried `now + TTL`, which moves every call, so the same buyer's
+   * SECOND attempt was answered `idempotency_error` — surfacing at the door
+   * as "card payment is not available right now", for a whole day, on a rail
+   * that was working perfectly. Verified against the live test-mode API.
+   *
+   * So: identical body and identical key inside one quote window; a new
+   * window is a new quote and may mint a new session.
+   */
+  it('a retry inside the same quote window is byte-identical, key included', async () => {
+    const calls: Array<{ headers: Readonly<Record<string, string>>; form: URLSearchParams }> = []
+    const post: StripePost = async (_url, request) => {
+      calls.push({ headers: request.headers, form: new URLSearchParams(request.body) })
+      return { ok: true, status: 200, json: { id: SESSION, url: 'https://checkout.stripe.com/c/pay/test' } }
+    }
+    const input = { priceUsd: '2.50', serviceId: 'svc-1', sub: 'ana', slug: 'crew-one' }
+    await stripeCreateCheckout({ config: CONFIG, post, now: () => 1_000_000 }, input)
+    // 90 seconds later, same window.
+    await stripeCreateCheckout({ config: CONFIG, post, now: () => 1_090_000 }, input)
+
+    expect(calls).toHaveLength(2)
+    expect(calls[1].form.toString()).toBe(calls[0].form.toString())
+    expect(calls[1].headers['idempotency-key']).toBe(calls[0].headers['idempotency-key'])
+
+    // A LATER window is a different quote: new key, and a body that agrees
+    // with it. now = 1000s → window 0; 3_000_000ms = 3000s → window 1.
+    await stripeCreateCheckout({ config: CONFIG, post, now: () => 3_000_000 }, input)
+    expect(calls[2].headers['idempotency-key']).not.toBe(calls[0].headers['idempotency-key'])
+    expect(calls[2].form.get('expires_at')).not.toBe(calls[0].form.get('expires_at'))
+  })
+
   it('posts a 30-minute, form-encoded Checkout with bound metadata', async () => {
     let call: { url: string; headers: Readonly<Record<string, string>>; form: URLSearchParams } | null = null
     const post: StripePost = async (url, request) => {
@@ -97,7 +131,9 @@ describe('Checkout creation', () => {
       // shipped desktop app; keyed by the caller's INTENT, so a retry after a
       // timeout replays the first session instead of charging twice.
       'stripe-version': '2025-08-27.basil',
-      'idempotency-key': 'checkout:svc-1:ana:250'
+      // The quote WINDOW is part of the key because it is part of the body:
+      // now=1_000_000ms → 1000s → window 0 at a 30-minute TTL.
+      'idempotency-key': 'checkout:svc-1:ana:250:0'
     })
     // Tax is computed by Stripe, never by us: the AI-service tax code, an
     // address to locate the buyer, and a tax ID so a cross-border B2B sale can
@@ -117,7 +153,9 @@ describe('Checkout creation', () => {
       'line_items[0][price_data][unit_amount]': '250',
       'line_items[0][price_data][product_data][name]': 'One session with the crew-one crew',
       'line_items[0][quantity]': '1',
-      expires_at: '2800',
+      // Quantised to the TTL window, not now+TTL — see the retry test below.
+      // Always ≥ 30 minutes out, which is Stripe's own floor.
+      expires_at: '3600',
       'metadata[serviceId]': 'svc-1',
       'metadata[sub]': 'ana',
       'metadata[slug]': 'crew-one',

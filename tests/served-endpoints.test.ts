@@ -11,7 +11,7 @@ import path from 'node:path'
 import { afterEach } from 'vitest'
 import type { TurnRecord } from '../src/shared/turn'
 import type { TraceBlock } from '../src/shared/trace-blocks'
-import { SERVED_TRANSCRIPT_PATHS } from '../src/shared/served-transcript'
+import { SERVED_SESSION_END_PATH, SERVED_TRANSCRIPT_PATHS } from '../src/shared/served-transcript'
 import { MKT_GATE } from '../src/shared/marketplace-copy'
 
 /**
@@ -58,6 +58,7 @@ let base = ''
 let issuer: CallCredentialService
 let callers: ServedCallers
 let sessions: Map<string, { sessionId: string; workspaceId: string }>
+let ended: string[]
 let asked: string[]
 let settled: string[]
 let turnHistory: Map<string, TurnRecord[]>
@@ -73,6 +74,7 @@ beforeEach(() => {
   issuer = new CallCredentialService({ base })
   callers = new ServedCallers()
   sessions = new Map()
+  ended = []
   asked = []
   settled = []
   turnHistory = new Map()
@@ -90,6 +92,13 @@ beforeEach(() => {
       return { ...made, created: true }
     },
     hasOpenSession: (serviceId, sub) => sessions.has(`${serviceId}/${sub}`),
+    endSession: (serviceId, sub) => {
+      const key = `${serviceId}/${sub}`
+      if (!sessions.has(key)) return false
+      ended.push(key)
+      sessions.delete(key)
+      return true
+    },
     // Lent nothing, so nothing to exceed — the default every crew served
     // before grants existed still gets.
     grantBudget: { allowsNewSession: () => true },
@@ -409,6 +418,64 @@ describe("the caller's own transcript surface", () => {
     expect(transcriptReads).toContain(
       'trace:orch-ana-1:{"aroundIndex":2,"limit":5}'
     )
+  })
+})
+
+describe('the caller ends their own session', () => {
+  it('needs the caller bearer, ends exactly that caller’s session, and destroys what was minted', async () => {
+    const missing = await handleServedRoute(deps, FREE, 'POST', SERVED_SESSION_END_PATH, { headers: {}, body: null })
+    expect(missing!.status).toBe(401)
+
+    const ana = await signIn(FREE, 'ana')
+    const bob = await signIn(FREE, 'bob')
+    // No session yet: nothing to end, and the answer is the same ambiguous 404.
+    const none = await handleServedRoute(deps, FREE, 'POST', SERVED_SESSION_END_PATH, { headers: { authorization: `Bearer ${ana}` }, body: null })
+    expect(none!.status).toBe(404)
+
+    await ask(FREE, { authorization: `Bearer ${ana}` }, 'open ana')
+    await ask(FREE, { authorization: `Bearer ${bob}` }, 'open bob')
+    const done = await handleServedRoute(deps, FREE, 'POST', SERVED_SESSION_END_PATH, { headers: { authorization: `Bearer ${ana}` }, body: null })
+    expect(done!.status).toBe(200)
+    expect(done!.body).toEqual({ ended: true })
+    // Ana's, and only Ana's.
+    expect(ended).toEqual([`${FREE.serviceId}/ana`])
+    expect(deps.hasOpenSession(FREE.serviceId, 'bob')).toBe(true)
+    // Gone: the transcript is a 404 now, and ending again is too.
+    expect((await get(FREE, '/turns', { authorization: `Bearer ${ana}` }))!.status).toBe(404)
+    expect((await handleServedRoute(deps, FREE, 'POST', SERVED_SESSION_END_PATH, { headers: { authorization: `Bearer ${ana}` }, body: null }))!.status).toBe(404)
+  })
+})
+
+describe('the transcript is never a second seat (remote-card parity Q5)', () => {
+  it('a paid door charges at session start and NEVER for reading the record', async () => {
+    const token = await signIn(PAID)
+    const auth = { authorization: `Bearer ${token}` }
+    // Before any session: the record does not exist, and the answer is the
+    // deliberately ambiguous 404 — not a quote. Reading cannot open a seat.
+    for (const pathname of Object.values(SERVED_TRANSCRIPT_PATHS)) {
+      const before = await get(PAID, pathname, auth)
+      expect(before!.status, pathname).toBe(404)
+    }
+    expect(settled).toEqual([])
+    // The one 402 there is: at the ask that opens the session.
+    const quoted = await ask(PAID, auth)
+    expect(quoted!.status).toBe(402)
+    const opened = await ask(PAID, { ...auth, 'x-payment': 'tx-abc' })
+    expect(opened!.status).toBe(200)
+    expect(settled).toEqual(['tx-abc'])
+    turnHistory.set('orch-ana-1', [record(1)])
+    traceHistory.set('orch-ana-1', [block(1)])
+    // Every transcript read on the open session: 200, no x-payment asked for,
+    // nothing settled a second time — however many times the rail polls.
+    for (let poll = 0; poll < 3; poll += 1) {
+      for (const pathname of Object.values(SERVED_TRANSCRIPT_PATHS)) {
+        const read = await get(PAID, pathname, auth)
+        expect(read!.status, pathname).toBe(200)
+        expect(read!.headers?.['www-authenticate'], pathname).toBeUndefined()
+      }
+    }
+    expect(settled).toEqual(['tx-abc'])
+    expect(asked).toHaveLength(1)
   })
 })
 

@@ -8,6 +8,12 @@
 //   COOKREW_SOUS_MODEL        model name       (default qwen2.5:1.5b)
 
 import { buildTitlePrompt, sanitizeTitle, TitleInput } from '../shared/sous'
+import {
+  createSousBreaker,
+  type SousAttempt,
+  type SousBreakerState,
+  type SousReadiness
+} from './sous-breaker'
 import { SOUS_BASE_URL, SOUS_DISABLED, SOUS_KEEP_ALIVE, SOUS_MODEL } from './sous-config'
 
 const BASE_URL = SOUS_BASE_URL
@@ -28,10 +34,14 @@ const COLD_TIMEOUT_MS = 30_000
  * title (covered by COLD_TIMEOUT_MS). Override with COOKREW_SOUS_KEEPALIVE.
  */
 const KEEP_ALIVE = SOUS_KEEP_ALIVE
-/** After a failed request, stop trying for this long (server likely down). */
-const DOWN_COOLDOWN_MS = 60_000
 
-let downUntil = 0
+/**
+ * Every request goes through the breaker (sous-breaker.ts): a server that
+ * is down or too slow to answer inside the budget costs a bounded number of
+ * probes on a widening schedule, not a request per tick, and explains itself
+ * once when the breaker opens rather than once per attempt.
+ */
+const breaker = createSousBreaker()
 let warmed = false
 
 export type TurnSummarizer = (input: TitleInput) => Promise<string | null>
@@ -41,39 +51,57 @@ interface OllamaGenerateResponse {
 }
 
 /**
+ * Would a title request be attempted right now? Callers skip their work
+ * when not: 'open' means the breaker is holding requests back for a window,
+ * 'busy' that both in-flight slots are taken and a moment later may do.
+ */
+export function sousReadiness(): SousReadiness {
+  return DISABLED ? 'open' : breaker.readiness()
+}
+
+/** The breaker, read-only, for GET /api/health. */
+export function sousBreakerState(): SousBreakerState {
+  return breaker.state()
+}
+
+async function requestTitle(prompt: string): Promise<SousAttempt<string | null>> {
+  const res = await fetch(`${BASE_URL}/api/generate`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    signal: AbortSignal.timeout(warmed ? REQUEST_TIMEOUT_MS : COLD_TIMEOUT_MS),
+    body: JSON.stringify({
+      model: MODEL,
+      prompt,
+      stream: false,
+      keep_alive: KEEP_ALIVE,
+      options: { temperature: 0.2, num_predict: 32 }
+    })
+  })
+  // 404 = model not pulled; other statuses = server-side trouble. Either way
+  // it is a failure the breaker counts.
+  if (!res.ok) return { ok: false, reason: `Ollama returned ${res.status} for model ${MODEL}` }
+  let body: OllamaGenerateResponse
+  try {
+    body = (await res.json()) as OllamaGenerateResponse
+  } catch {
+    // A 200 whose body is not JSON — a proxy in front of Ollama serving its
+    // HTML error page, say — is the server misbehaving, and counts like any
+    // other failure rather than rethrowing as a bug of ours.
+    return { ok: false, reason: `Ollama answered ${res.status} with an unreadable body` }
+  }
+  warmed = true
+  return { ok: true, value: sanitizeTitle(body.response ?? '') }
+}
+
+/**
  * Ask the local model to title the turn. Returns null on any failure —
- * missing server, missing model, timeout, unusable output — and backs off
- * for a cooldown after network errors so a machine without Ollama never
- * sees a request per poll.
+ * missing server, missing model, timeout, unusable output — and null at once,
+ * without a request, while the breaker is open.
  */
 export async function summarizeTurn(input: TitleInput): Promise<string | null> {
-  if (DISABLED || Date.now() < downUntil) return null
-  try {
-    const res = await fetch(`${BASE_URL}/api/generate`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      signal: AbortSignal.timeout(warmed ? REQUEST_TIMEOUT_MS : COLD_TIMEOUT_MS),
-      body: JSON.stringify({
-        model: MODEL,
-        prompt: buildTitlePrompt(input),
-        stream: false,
-        keep_alive: KEEP_ALIVE,
-        options: { temperature: 0.2, num_predict: 32 }
-      })
-    })
-    if (!res.ok) {
-      // 404 = model not pulled; other statuses = server-side trouble. Either
-      // way, back off instead of retrying every refresh tick.
-      console.error(`Sous: Ollama returned ${res.status} for model ${MODEL}`)
-      downUntil = Date.now() + DOWN_COOLDOWN_MS
-      return null
-    }
-    const body = (await res.json()) as OllamaGenerateResponse
-    warmed = true
-    return sanitizeTitle(body.response ?? '')
-  } catch (error) {
-    console.error('Sous: summarize request failed:', error)
-    downUntil = Date.now() + DOWN_COOLDOWN_MS
-    return null
-  }
+  if (DISABLED) return null
+  // Built before the guard: a bug in the prompt is ours, not a Sous failure,
+  // and must not be counted by the breaker or blamed on the server.
+  const prompt = buildTitlePrompt(input)
+  return breaker.guard(() => requestTitle(prompt))
 }

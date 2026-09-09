@@ -4,6 +4,13 @@ import {
   servedPaymentRailsLabel
 } from '../../shared/marketplace-copy'
 import type { ServedPaymentRail } from '../../shared/served-payment-rails'
+import {
+  SUMMARY_MAX,
+  TAGS_MAX,
+  parseTagInput,
+  summaryLooksGood,
+  tagsLookGood
+} from '../../shared/served-face-shape'
 
 /**
  * SHARE ON SAVE — the one publish entry (owner ruling, 2026-08-26).
@@ -45,9 +52,10 @@ export function saveButtonLabel(access: ShareAccess, busy: boolean): string {
  * meets later: a silent save that 503s a stranger is a failure the owner never
  * sees and the caller cannot explain.
  *
- * `door` is null when nothing in the selection is flagged as the orch. A
- * private save is unaffected — `just-me` publishes nothing, so it needs no
- * door.
+ * `door` is the first agent terminal in the selection — the leader (owner
+ * ruling, 2026-09-05: no orch node needed) — and null only when the selection
+ * holds no terminal at all. A private save is unaffected — `just-me`
+ * publishes nothing, so it needs no door.
  */
 export function canSubmitShare(
   access: ShareAccess,
@@ -58,6 +66,16 @@ export function canSubmitShare(
   if (access === 'just-me') return true
   if (door === null) return false
   return access !== 'paid' || (priceLooksGood(priceUsd) && paymentRails.length > 0)
+}
+
+/**
+ * The face's words, as typed. A private save carries none, so they cannot
+ * block it; a public one is refused HERE for the same shapes main refuses
+ * (served-face.ts), so the button and the sentence arrive together.
+ */
+export function faceWordsLookGood(access: ShareAccess, summary: string, tagsRaw: string): boolean {
+  if (access === 'just-me') return true
+  return summaryLooksGood(summary) && tagsLookGood(parseTagInput(tagsRaw))
 }
 
 /**
@@ -78,6 +96,9 @@ export function serveRefusalText(reason: string | undefined): string {
   if (reason === 'grant-unusable') return MKT_SERVE['mkt.serve.refused.grant-unusable']
   if (reason === 'no-payment-rail') return MKT_SERVE['mkt.serve.payment.required']
   if (reason === 'no-template') return 'that template is no longer on this machine.'
+  if (reason === 'bad-summary') return `a summary is one line of at most ${SUMMARY_MAX} characters.`
+  if (reason === 'bad-tags') return `tags are at most ${TAGS_MAX} lowercase words, letters, digits and dashes.`
+  if (reason === 'desktop-only') return MKT_SERVE['mkt.serve.refused.desktop-only']
   return reason
 }
 
@@ -86,13 +107,20 @@ export function ShareOnSave({
   priceUsd,
   paymentRails,
   door,
+  summary,
+  tagsRaw,
   onAccess,
   onPrice,
+  onSummary,
+  onTags,
   onConfigurePayments
 }: {
   access: ShareAccess
   priceUsd: string
   paymentRails: readonly ServedPaymentRail[]
+  /** The face's words, as typed — a sentence and a comma-separated tag list. */
+  summary: string
+  tagsRaw: string
   /**
    * The orch's name — the one door a caller ever reaches — or null when the
    * selection flags no orch. Null is a refusal, never a placeholder: this used
@@ -103,8 +131,13 @@ export function ShareOnSave({
   door: string | null
   onAccess: (next: ShareAccess) => void
   onPrice: (next: string) => void
+  onSummary: (next: string) => void
+  onTags: (next: string) => void
   onConfigurePayments: () => void
 }): React.JSX.Element {
+  const tags = parseTagInput(tagsRaw)
+  const summaryBad = !summaryLooksGood(summary)
+  const tagsBad = !tagsLookGood(tags)
   const option = (
     value: ShareAccess,
     title: string,
@@ -164,6 +197,45 @@ export function ShareOnSave({
           )}
           {priceUsd.length > 0 && !priceLooksGood(priceUsd) && (
             <span className="sos-bad">a price has to be a number above zero</span>
+          )}
+        </div>
+      )}
+
+      {/*
+        THE FACE'S WORDS, only once a public option is picked: what the
+        listing says and what it is found by. Optional both — an owner who
+        writes nothing lists a team with a title and a door, and that is a
+        complete listing.
+      */}
+      {access !== 'just-me' && (
+        <div className="sos-words">
+          <input
+            className="tf-input sos-summary-input"
+            value={summary}
+            maxLength={SUMMARY_MAX + 1}
+            spellCheck={false}
+            placeholder="One line on what this team does"
+            aria-label="Summary"
+            aria-invalid={summaryBad}
+            onChange={(e) => onSummary(e.target.value)}
+          />
+          <span className={`sos-count${summaryBad ? ' sos-bad' : ''}`}>
+            {summary.trim().length}/{SUMMARY_MAX}
+          </span>
+          <input
+            className="tf-input sos-tags-input"
+            value={tagsRaw}
+            spellCheck={false}
+            autoComplete="off"
+            placeholder="tags, comma separated"
+            aria-label="Tags"
+            aria-invalid={tagsBad}
+            onChange={(e) => onTags(e.target.value)}
+          />
+          {tagsBad && (
+            <span className="sos-bad">
+              up to {TAGS_MAX} tags — lowercase letters, digits and dashes, each once
+            </span>
           )}
         </div>
       )}

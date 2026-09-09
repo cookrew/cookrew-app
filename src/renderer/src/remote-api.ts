@@ -1,10 +1,17 @@
 import { AuthError, authStore, tokenParam, type AuthScope } from './auth-gate'
-import { ReconnectingStream } from './live-stream'
+import { ReconnectingStream, attachTerminalStream } from './live-stream'
+import { recordLatency, setDesktopName, setPathLink, setRegistryOrigin } from './path-link'
+import type { CompanionAccount } from '../../main/companion-account'
+import type { AccountStatus } from '../../shared/account-v2'
 import type { BoardSnapshotLike, CookrewApi } from './api'
 import type { CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
+import type { UiCommandEvent } from '../../shared/sous-ui'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 import type { VersionPinRecord } from '../../shared/version-pin'
 import { apiPath } from './api-base'
+import { planeFetch } from './plane-fetch'
+import { registerPlaneStream } from './plane-streams'
+import { createRawInputQueue } from './raw-input-queue'
 
 /**
  * CookrewApi over HTTP + Server-Sent-Events, used when the renderer bundle is
@@ -21,8 +28,20 @@ import { apiPath } from './api-base'
  * lifts it into storage and strips it from the address bar. Mutating routes
  * require it as a bearer header; read-only GETs/SSE stay open.
  */
+/**
+ * A write the VIEW makes on its own — a resize on open, marking a turn seen —
+ * as opposed to one the person made. On a read-only device (the TV wall) the
+ * first kind is refused too, and must not raise the re-pair screen: nobody
+ * asked to write, and a screen without a pointer cannot dismiss it. Measured
+ * 2026-09-06 — Sous zoomed the TV into a terminal and the resize's 401 put
+ * "Read-only device" over the whole wall.
+ */
+interface ParseOptions {
+  passive?: boolean
+}
+
 /** Turn a server answer into a value, or into the right kind of failure. */
-async function parse<T>(response: Response): Promise<T> {
+async function parse<T>(response: Response, options: ParseOptions = {}): Promise<T> {
   if (!response.ok) {
     const detail = await response.json().catch(() => ({ error: String(response.status) }))
     const message = (detail as { error?: string }).error ?? `HTTP ${response.status}`
@@ -31,7 +50,7 @@ async function parse<T>(response: Response): Promise<T> {
       // see. Raise it as its own type so it reaches the re-pair screen
       // instead of being counted as a generic network hiccup.
       const failure = new AuthError(message, /read-only/i.test(message) ? 'read-only' : 'none')
-      authStore().report(failure)
+      if (!(options.passive && failure.scope === 'read-only')) authStore().report(failure)
       throw failure
     }
     throw new Error(message)
@@ -40,7 +59,43 @@ async function parse<T>(response: Response): Promise<T> {
   return (text ? JSON.parse(text) : undefined) as T
 }
 
-async function req<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+/**
+ * GETs IN FLIGHT, shared. Two components asking the same URL in the same tick
+ * used to make two requests: App and EventToast both pulled /api/workspace at
+ * boot (228 KB compressed, twice), App and WorkspaceSwitcher both listed the
+ * workspaces. Over the relay each is an exchange. While a GET is unanswered a
+ * second identical GET joins it — the answer both would have got — and the
+ * entry is dropped the moment it settles, so nothing here ever serves a stale
+ * body and a retry after a failure is a fresh request. Perf lane L7.
+ */
+const inFlightGets = new Map<string, Promise<unknown>>()
+
+/**
+ * How long a GET may be joined. A request that hangs — a dead relay holding
+ * the socket — must not pin its key for the browser's whole socket timeout,
+ * or the resync re-pull would join the hang instead of asking afresh.
+ */
+const SHARE_GET_MS = 10_000
+
+async function req<T>(path: string, method = 'GET', body?: unknown, parseOptions: ParseOptions = {}): Promise<T> {
+  if (method !== 'GET' || body !== undefined) {
+    // A write may change what any GET in flight would answer; nobody asking
+    // after it may be handed the answer from before it.
+    inFlightGets.clear()
+    return reqOnce<T>(path, method, body, parseOptions)
+  }
+  const shared = inFlightGets.get(path)
+  if (shared) return shared as Promise<T>
+  const forget = (): void => {
+    if (inFlightGets.get(path) === own) inFlightGets.delete(path)
+  }
+  const own = reqOnce<T>(path, method, undefined, parseOptions).finally(forget)
+  inFlightGets.set(path, own)
+  setTimeout(forget, SHARE_GET_MS)
+  return own
+}
+
+async function reqOnce<T>(path: string, method: string, body: unknown, parseOptions: ParseOptions): Promise<T> {
   const options: RequestInit = { method }
   const headers: Record<string, string> = {}
   const token = authStore().token()
@@ -50,7 +105,18 @@ async function req<T>(path: string, method = 'GET', body?: unknown): Promise<T> 
     options.body = JSON.stringify(body)
   }
   if (Object.keys(headers).length > 0) options.headers = headers
-  return parse<T>(await fetch(path, options))
+  // The path badge's latency is the round trip of a request the companion was
+  // making anyway. A synthetic ping would measure a path nobody is using.
+  const started = Date.now()
+  try {
+    // planeFetch, not fetch: it supplies the credential mode the current data
+    // plane needs (cookies same-origin through the relay, none at all
+    // cross-origin to the Mac) and reports the transport failures that are the
+    // only evidence a direct plane has died.
+    return parse<T>(await planeFetch(path, options), parseOptions)
+  } finally {
+    recordLatency(Date.now() - started)
+  }
 }
 
 /**
@@ -66,7 +132,7 @@ async function upload(name: string, body: Blob): Promise<string> {
   const token = authStore().token()
   if (token) headers.authorization = `Bearer ${token}`
   const result = await parse<{ path: string }>(
-    await fetch(apiPath(`/api/attachments?name=${encodeURIComponent(name)}`), {
+    await planeFetch(apiPath(`/api/attachments?name=${encodeURIComponent(name)}`), {
       method: 'POST',
       headers,
       body
@@ -114,6 +180,20 @@ function post(path: string, body: unknown): void {
   void req(path, 'POST', body).catch(() => undefined)
 }
 
+/** The view's own housekeeping writes: refused quietly on a read-only device. */
+function passivePost(path: string, body: unknown): void {
+  void req(path, 'POST', body, { passive: true }).catch(() => undefined)
+}
+
+/**
+ * Keystrokes for the terminal, ordered and coalesced (raw-input-queue.ts).
+ * req() has already reported any auth failure to the store by the time the
+ * queue swallows the rejection — same contract as post() above.
+ */
+const rawInput = createRawInputQueue((terminalId, data) =>
+  req(apiPath(`/api/terminal/${terminalId}/raw`), 'POST', { data })
+)
+
 /**
  * Ask the server what the current credential is worth. Used to verify a
  * pasted token during re-pairing, and on boot so an unpaired phone says so
@@ -121,7 +201,7 @@ function post(path: string, body: unknown): void {
  */
 export async function checkAuth(candidate?: string): Promise<AuthScope> {
   const token = candidate ?? authStore().token()
-  const response = await fetch(apiPath('/api/auth/status'), {
+  const response = await planeFetch(apiPath('/api/auth/status'), {
     headers: token ? { authorization: `Bearer ${token}` } : undefined
   })
   if (!response.ok) throw new Error(`Auth check failed (HTTP ${response.status})`)
@@ -141,14 +221,48 @@ export async function checkAuth(candidate?: string): Promise<AuthScope> {
  * whatever it last drew, which after a reload is nothing at all.
  */
 let events: ReconnectingStream | null = null
+/** Whether the shared stream has connected before. See `open` below. */
+let streamOpenedOnce = false
+
+/** One per page load: what the companion spends to skip one snapshot. */
+function bootNonce(): string {
+  const random = globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)
+  return random.replace(/[^a-z0-9-]/gi, '').slice(0, 36)
+}
 
 function sharedEvents(): ReconnectingStream {
   // tokenParam, not a header: EventSource has none. Reads are gated now, so a
   // tokenless stream is a 401 the client would retry forever.
-  if (!events)
-    events = new ReconnectingStream({
-      open: () => new EventSource(tokenParam(apiPath('/api/events')))
+  if (!events) {
+    const stream = new ReconnectingStream({
+      // The URL is composed at every (re)connect, never captured — so this
+      // stream lands on whichever plane is carrying the session at the moment
+      // it reconnects. `?token=` still works cross-origin; EventSource needs
+      // no CORS flag, but it does need the credential in the URL.
+      open: () => {
+        // THE FIRST CONNECT SAYS IT IS BOOTING FROM THE PULL. The stream
+        // used to open with a full workspace snapshot — the same document
+        // loadWorkspace was fetching at that very moment, a second 228 KB
+        // through the relay. `boot=<nonce>` asks the companion to skip that
+        // one frame, and the companion spends the nonce on first sight: a
+        // browser that reconnects BY ITSELF re-dials this same URL, and that
+        // reconnect — like every one this stream makes without the nonce —
+        // gets the snapshot, which is how a dropped stream heals (L7).
+        const first = !streamOpenedOnce
+        streamOpenedOnce = true
+        return new EventSource(tokenParam(apiPath(first ? `/api/events?boot=${bootNonce()}` : '/api/events')))
+      },
+      // The one place the companion learns its link is down. Without this the
+      // badge would report the address bar forever, which is a memory rather
+      // than a fact the moment the channel dies.
+      onState: setPathLink
     })
+    events = stream
+    // A live stream does not re-read its own URL, so a plane switch has to
+    // push it. It is never torn down, so the unsubscribe is deliberately
+    // dropped rather than stored.
+    registerPlaneStream({ restart: () => stream.restart() })
+  }
   return events
 }
 
@@ -185,6 +299,21 @@ export function parseOnce<T>(e: MessageEvent): T {
   const parsed = JSON.parse(e.data) as T
   parsedEvents.set(e, parsed)
   return parsed
+}
+
+const SOUS_CALLER_KEY = 'cookrew-sous-caller'
+
+/** A stable id for this browser install, minted once. */
+function sousCallerId(): string {
+  try {
+    const existing = localStorage.getItem(SOUS_CALLER_KEY)
+    if (existing) return existing
+    const minted = `phone-${Math.random().toString(36).slice(2, 10)}`
+    localStorage.setItem(SOUS_CALLER_KEY, minted)
+    return minted
+  } catch {
+    return 'phone'
+  }
 }
 
 function subscribe<T>(event: string, cb: (data: T) => void): () => void {
@@ -237,17 +366,6 @@ export function createRemoteApi(): CookrewApi {
     connectNodes: (a, b) => req(apiPath('/api/connections'), 'POST', { a, b }),
     disconnect: (connId) => req(apiPath(`/api/connections/${connId}`), 'DELETE'),
     listPresets: () => req(apiPath('/api/presets')),
-    // The phone's marketplace surface is the canvas BROWSER card (R1), not a
-    // native chip row — and installing is a desktop act, since the store lives
-    // on the machine that runs the agents. Empty and inert here until the
-    // companion has a reason to differ.
-    listInstalledPresets: () => Promise.resolve([]),
-    placeInstalledPreset: () => Promise.resolve(),
-    uninstallPreset: () => Promise.resolve(),
-    // Trusting a signing key is a decision about the machine that holds the
-    // store, so the phone does not get to make it either.
-    markPresetRotationSeen: () => Promise.resolve(),
-    trustPresetAuthorKey: () => Promise.resolve(),
     // The rail's third marker class travels to the phone now — same store the
     // desktop reads, over the scoped route, so the two rails cannot disagree.
     listPins: (terminalId) => req<VersionPinRecord[]>(apiPath(`/api/terminal/${terminalId}/pins`)),
@@ -267,27 +385,42 @@ export function createRemoteApi(): CookrewApi {
       upload(name, new Blob([new Uint8Array(bytes).slice().buffer])),
     pickFiles: () => Promise.resolve([]),
 
-    ptyInput: (terminalId, data) => post(apiPath(`/api/terminal/${terminalId}/raw`), { data }),
+    // Ordered and coalesced — see raw-input-queue.ts: one request in flight
+    // per terminal, later bytes ride the next request as a single batch.
+    // Parallel per-keystroke fetches could land REORDERED, and each paid its
+    // own headers and round trip on the link where round trips are scarce.
+    ptyInput: rawInput,
     ptyJump: (terminalId, text) => post(apiPath(`/api/terminal/${terminalId}/jump`), { text }),
     // Same contract as the desktop's IPC call: never rejects, the failure
     // reason comes back as data so the reader is told what to fix.
     translateHost: () => req(apiPath('/api/translate/host')),
     translateCheckpoint: (text, language) =>
       req(apiPath('/api/translate'), 'POST', { text, language }),
-    turnSeen: (terminalId) => post(apiPath(`/api/terminal/${terminalId}/seen`), {}),
+    turnSeen: (terminalId) => passivePost(apiPath(`/api/terminal/${terminalId}/seen`), {}),
     ptyResize: (terminalId, cols, rows) =>
-      post(apiPath(`/api/terminal/${terminalId}/resize`), { cols, rows }),
+      passivePost(apiPath(`/api/terminal/${terminalId}/resize`), { cols, rows }),
     ptyAttach: (terminalId, onData, onHello) => {
-      const stream = new EventSource(tokenParam(apiPath(`/api/terminal/${terminalId}/stream`)))
-      const listener = (e: MessageEvent): void => onData(JSON.parse(e.data) as string)
-      // The server sends this before the first frame; sizing the xterm from it
-      // is what keeps a 45x24 phone from re-wrapping a frame serialized at the
-      // pane's 100x30 and then misplacing every absolute-addressed delta.
-      const helloListener = (e: MessageEvent): void =>
-        onHello?.(JSON.parse(e.data) as { cols: number; rows: number })
-      stream.addEventListener('hello', helloListener)
-      stream.addEventListener('data', listener)
-      return () => stream.close()
+      // Healing, not hoping — see attachTerminalStream for why a bare
+      // EventSource left the live pane black on the first open of an idle
+      // card. iOS also reaps a backgrounded page's connections and leaves the
+      // corpse in CONNECTING, which the backoff deliberately leaves alone —
+      // so a foreground return revives the link the way the canvas stream's
+      // resync does.
+      const stream = attachTerminalStream(
+        { open: () => new EventSource(tokenParam(apiPath(`/api/terminal/${terminalId}/stream`))) },
+        onData,
+        onHello
+      )
+      const onVisible = (): void => {
+        if (document.visibilityState === 'visible') stream.revive()
+      }
+      document.addEventListener('visibilitychange', onVisible)
+      const unregister = registerPlaneStream({ restart: () => stream.restart() })
+      return () => {
+        document.removeEventListener('visibilitychange', onVisible)
+        unregister()
+        stream.close()
+      }
     },
 
     listActivity: () => req<TerminalActivity[]>(apiPath('/api/activity')),
@@ -322,8 +455,11 @@ export function createRemoteApi(): CookrewApi {
         apiPath(`/api/board${window ? `?window=${encodeURIComponent(window)}` : ''}`)
       ),
     recoverAgent: (id) => req(apiPath(`/api/agents/${id}/recover`), 'POST'),
-    restoreCheckpoint: (id, checkpointIndex) =>
-      req(apiPath(`/api/agents/${id}/restore`), 'POST', { checkpointIndex }),
+    restoreCheckpoint: (id, checkpointIndex, targetSessionId) =>
+      req(apiPath(`/api/agents/${id}/restore`), 'POST', {
+        checkpointIndex,
+        ...(targetSessionId !== undefined ? { targetSessionId } : {})
+      }),
     undoRestore: (id) => req(apiPath(`/api/agents/${id}/restore/undo`), 'POST'),
     listTurns: (terminalId) => req<TurnRecord[]>(apiPath(`/api/terminal/${terminalId}/turns`)),
     // Checkpoint search is desktop-only for now: the phone has no /api route
@@ -379,14 +515,72 @@ export function createRemoteApi(): CookrewApi {
       return result.interactive
     },
     browserStreamToken: () => Promise.resolve(null),
+    /**
+     * THE OWNER'S ACCOUNT, READ-ONLY, OVER HTTP.
+     *
+     * This surface had no `accountStatus` at all, so the companion's avatar
+     * feature-detected to nothing and drew a dashed "?" forever. The phone is
+     * an attached device of the same account (P6) and may see the same public
+     * face the desktop shows; /api/account is that face and nothing else.
+     *
+     * The answer also seeds the path sheet — the desktop's name, so it stops
+     * calling itself "This desktop", and the registry origin, so "Switch
+     * desktop" points where this Mac's account actually lives.
+     */
+    accountStatus: async () => {
+      const face = await req<CompanionAccount>(apiPath('/api/account'))
+      setDesktopName(face.desktopName)
+      setRegistryOrigin(face.registryOrigin)
+      // The fields the phone has no business knowing are stated as their
+      // "nothing to report" value rather than guessed at: the lock, the
+      // request queue and the recovery codes are all the DESKTOP's business,
+      // and a companion that claimed to know them would be inventing them.
+      const status: AccountStatus = {
+        username: face.username,
+        displayName: face.displayName,
+        avatar: face.avatar,
+        locked: false,
+        lockAfterMs: 0,
+        requests: 0,
+        // Which registry the DESKTOP is pointed at is the desktop's business
+        // and the desktop's screen; a phone reading the companion cannot know
+        // it and must not guess.
+        registryMismatch: null,
+        envUsername: null,
+        sessionExpired: false,
+        workspacesReachable: true,
+        recoveryCodesSavedAt: null,
+        recoveryCodesLeft: 0,
+        // A name from before passwords is the desktop's to migrate, not the phone's.
+        legacy: null
+      }
+      return status
+    },
     reconnect: () => sharedEvents().revive(),
     onBrowserOpenTab: () => () => undefined,
     onBrowserPhoneViewing: () => () => undefined,
     onCmdW: () => () => undefined,
+    // Sous from the phone: the sentence goes over the API, the zoom comes
+    // back on the shared events stream like everything else the canvas does.
+    // This phone, not "a phone": the id keeps Sous's pending question ours.
+    // focusedAgentId is deliberately not sent — a network door names agents
+    // by name only (see SousCommandInput).
+    sousCommand: (text, ctx) =>
+      req(apiPath('/api/sous/command'), 'POST', { text, surface: ctx.surface, callerId: sousCallerId() }),
+    onUiCommand: (cb) => subscribe<UiCommandEvent>('ui', cb),
+    // The phone hears through its own browser (VoiceBar); the Mac's ear is
+    // the desktop's alone.
+    listenAvailable: () => Promise.resolve(false),
+    listenStart: () => Promise.resolve(false),
+    listenStop: () => Promise.resolve(),
+    onListenEvent: () => () => undefined,
+    // No OS hands this surface a link: the phone and the demo are reached by
+    // one, never launched by one.
+    onDeepLink: () => () => undefined,
 
-    // R30 serving + the dock's crews. Owner-desktop surfaces: this transport
-    // cannot mount them, and a stub that pretended to succeed would publish
-    // nothing while telling the user it had. It refuses, visibly.
+    // R30 serving. Owner-desktop surfaces: this transport cannot mount them,
+    // and a stub that pretended to succeed would publish nothing while telling
+    // the user it had. It refuses, visibly.
     servingServe: async () => ({ ok: false as const, reason: 'desktop-only' }),
     servingStop: async () => ({ ok: false }),
     servingPaymentStatus: async () => ({ x402: { ready: false }, stripe: { ready: false } }),
@@ -395,11 +589,28 @@ export function createRemoteApi(): CookrewApi {
     servingList: async () => [],
     servingSessions: async () => [],
     servingEnd: async () => ({ stopped: 0 }),
-    crewList: async () => [],
-    crewAdd: async () => ({ ok: false as const, reason: 'desktop-only' }),
-    crewRemove: async () => ({ ok: false }),
-    crewUnlock: async () => ({ ok: false as const, reason: 'desktop-only' }),
-    crewPlace: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    // IMPORTING A SERVED TEAM FROM THE PHONE. These used to refuse with
+    // "desktop-only" on the reasoning that a phone has no terminal to place —
+    // but the card is placed and spawned at the desktop this phone is a view
+    // of, exactly as placing a preset from here already works. The desktop
+    // does the work; the phone asks for it over the same API as everything
+    // else. Every Bearer and key stays at the desktop.
+    serveInspect: (link) => req(apiPath('/api/serve/inspect'), 'POST', { link }),
+    serveBrowse: (link) => req(apiPath('/api/serve/browse'), 'POST', { link }),
+    serveImport: (link, position, paid) =>
+      req(apiPath('/api/serve/import'), 'POST', { link, position, paid }),
+    serveGate: (link) => req(apiPath('/api/serve/gate'), 'POST', { link }),
+    serveCheckout: async (link) => {
+      const checkout = await req<
+        { ok: true; session: string; url: string } | { ok: false; reason: string; detail?: string }
+      >(apiPath('/api/serve/checkout'), 'POST', { link })
+      // The hosted page opens HERE, on the phone — the desktop must not raise
+      // a browser on a machine the person is not sitting at.
+      if (checkout.ok) window.open(checkout.url, '_blank', 'noopener')
+      return checkout
+    },
+    serveSettle: (link, rail, session) =>
+      req(apiPath('/api/serve/settle'), 'POST', { link, rail, session }),
     quitApp: () => undefined
   }
 }

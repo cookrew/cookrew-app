@@ -192,7 +192,26 @@ interface TrackerInternals {
   scrapeEmitted: Map<string, { uuid?: string }[]>
 }
 
-describe('O(delta) through persistence (Sol r5 P1)', () => {
+/**
+ * O(delta) IN THE TRACKER (Sol r5 P1, narrowed by one-stream T4).
+ *
+ * The four tests that used to open this block measured the delta through
+ * PERSISTENCE: "the file gains one line, no rewrite", "the sidecar snapshot is
+ * byte-identical", "a tail finalization appends ONE overlay line", "repeated
+ * tail updates append O(changed) bytes each". Every one of them is deleted,
+ * because the thing they measured is: turn-store.ts has no writer, and a
+ * file-backed card's history is derived from a transcript rather than saved
+ * beside it. There is no delta save, no tail overlay and no fold to be
+ * O(delta) about.
+ *
+ * WHAT COVERS THE BEHAVIOUR NOW. The reader's side of the overlay contract —
+ * a pre-T4 ledger full of them must still read back last-wins — is
+ * tests/turn-store.test.ts. The one remaining write path's append-rather-than-
+ * rewrite discipline is tests/scrape-history.test.ts. And the reason the delta
+ * path exists at all — the untouched prefix is never copied — is the two tests
+ * that remain here, which were always the load-bearing ones.
+ */
+describe('O(delta) in the tracker-private buffer (Sol r5 P1)', () => {
   let dir: string
   beforeEach(() => {
     dir = mkdtempSync(path.join(tmpdir(), 'cookrew-delta-gate-'))
@@ -203,169 +222,6 @@ describe('O(delta) through persistence (Sol r5 P1)', () => {
   })
 
   const HISTORY = 300
-
-  /** A 300-turn, fully-titled, flushed history — the gate's baseline. */
-  function seeded(): { store: TurnStore; tracker: TurnTracker } {
-    const store = new TurnStore(path.join(dir, 'turns'))
-    const tracker = new TurnTracker(async () => null, store)
-    const base = Array.from({ length: HISTORY }, (_, i) =>
-      record({
-        index: i + 1,
-        uuid: `u${i + 1}`,
-        prompt: `ask ${i + 1}`,
-        reply: `reply ${i + 1}`,
-        title: `title ${i + 1}`,
-        final: true
-      })
-    )
-    tracker.replaceHistory('term-1', base)
-    store.flushAll()
-    return { store, tracker }
-  }
-
-  const turnsFile = (): string => path.join(dir, 'turns', 'term-1.jsonl')
-  const sidecarFile = (): string => path.join(dir, 'checkpoint-annotations', 'term-1.json')
-  const sidecarLog = (): string => path.join(dir, 'checkpoint-annotations', 'term-1.log.jsonl')
-  /** What the sidecar reads back as across a restart: snapshot + op log. */
-  const sidecarState = (): Map<number, unknown> =>
-    new AnnotationStore(path.join(dir, 'checkpoint-annotations')).load('term-1')
-
-  it('300-turn history + 1 appended turn: annotation pass visits the delta, file gains one line, no rewrite', () => {
-    const { store, tracker } = seeded()
-    const internals = store as unknown as StoreInternals
-    const annSave = vi.spyOn(internals.annotations, 'save')
-    const annUpdate = vi.spyOn(internals.annotations, 'update')
-    const writeAll = vi.spyOn(internals, 'writeAll')
-    const bytesBefore = readFileSync(turnsFile(), 'utf8')
-    const sidecarBefore = readFileSync(sidecarFile(), 'utf8')
-
-    tracker.applyHistoryDelta(
-      'term-1',
-      {
-        kind: 'append',
-        records: [record({ index: 301, uuid: 'u301', prompt: 'ask 301', reply: 'reply 301', title: 'title 301', final: true })]
-      },
-      noFull
-    )
-    store.flushAll()
-
-    // The annotation pass never rebuilt from all 300 records — it folded in
-    // only the delta window (the boundary record plus the landed one).
-    expect(annSave).not.toHaveBeenCalled()
-    expect(annUpdate).toHaveBeenCalledTimes(1)
-    expect(annUpdate.mock.calls[0][1].length).toBeLessThanOrEqual(2)
-    // The conversation write was an append of exactly one line: the original
-    // bytes are untouched and no full rewrite happened.
-    expect(writeAll).not.toHaveBeenCalled()
-    const bytesAfter = readFileSync(turnsFile(), 'utf8')
-    expect(bytesAfter.startsWith(bytesBefore)).toBe(true)
-    expect(bytesAfter.trim().split('\n')).toHaveLength(HISTORY + 1)
-    // The sidecar gained the appended turn's title as ONE op-log line; the
-    // snapshot — the complete-map serialization Sol r6 P1 charged per update —
-    // is byte-identical, and a fresh store replays snapshot + log back whole.
-    expect(readFileSync(sidecarFile(), 'utf8')).toBe(sidecarBefore)
-    expect(readFileSync(sidecarLog(), 'utf8').trim().split('\n')).toHaveLength(1)
-    const sidecar = sidecarState()
-    expect(sidecar.get(301)).toEqual({ title: 'title 301' })
-    expect(sidecar.size).toBe(HISTORY + 1)
-    // Snapshot envelope (Sol r7 P1): the map sits under `annotations`,
-    // beside the epoch that keys log replay.
-    expect(JSON.parse(sidecarBefore)).toMatchObject({
-      annotations: { '1': { title: 'title 1' } },
-    })
-    // And it all reads back whole.
-    expect(tracker.history('term-1')).toHaveLength(HISTORY + 1)
-    tracker.disposeAll()
-  })
-
-  it('an appended turn with NO annotation leaves the sidecar bytes completely untouched', () => {
-    const { store, tracker } = seeded()
-    const sidecarBefore = readFileSync(sidecarFile(), 'utf8')
-    tracker.applyHistoryDelta(
-      'term-1',
-      { kind: 'append', records: [record({ index: 301, uuid: 'u301', prompt: 'ask 301', reply: 'reply 301', final: true })] },
-      noFull
-    )
-    store.flushAll()
-    expect(readFileSync(sidecarFile(), 'utf8')).toBe(sidecarBefore)
-    expect(existsSync(sidecarLog())).toBe(false)
-    tracker.disposeAll()
-  })
-
-  // Sol r7 P1 adaptation: the tail update is an appended OVERLAY line now,
-  // not an atomic whole-file rewrite — stronger observable: EVERY previous
-  // byte is untouched, the write is one superseding line, no writeAll.
-  it('a tail finalization appends ONE overlay line — never a full-history rewrite', () => {
-    const { store, tracker } = seeded()
-    const internals = store as unknown as StoreInternals
-    const writeAll = vi.spyOn(internals, 'writeAll')
-    const before = readFileSync(turnsFile(), 'utf8')
-
-    tracker.applyHistoryDelta(
-      'term-1',
-      {
-        kind: 'tail',
-        record: record({ index: HISTORY, uuid: `u${HISTORY}`, prompt: `ask ${HISTORY}`, reply: 'grew a longer reply', final: true })
-      },
-      noFull
-    )
-    store.flushAll()
-
-    expect(writeAll).not.toHaveBeenCalled()
-    const after = readFileSync(turnsFile(), 'utf8')
-    // The whole previous file is byte-identical; one overlay line follows it.
-    expect(after.startsWith(before)).toBe(true)
-    const lines = after.trim().split('\n')
-    expect(lines).toHaveLength(HISTORY + 1)
-    expect(lines[lines.length - 1].startsWith(`{"__tail":true,"supersedes":${HISTORY},`)).toBe(true)
-    expect(lines[lines.length - 1]).toContain('grew a longer reply')
-    // Logically the record was replaced, not duplicated…
-    expect(store.count('term-1')).toBe(HISTORY)
-    expect(store.load('term-1')[HISTORY - 1].reply).toBe('grew a longer reply')
-    // …and the replaced tail still carried its title across (annotation intact).
-    expect(tracker.history('term-1')[HISTORY - 1].title).toBe(`title ${HISTORY}`)
-    tracker.disposeAll()
-  })
-
-  // Sol r7 P1 gate extension: REPEATED tail updates against a large ledger
-  // cost O(changed) bytes each — the file only ever GROWS by one overlay line
-  // per update (nothing before the append point is rewritten), and the
-  // growth is bounded by the changed record's own size, not the history's.
-  it('repeated tail updates append O(changed) bytes each; prior bytes never move', () => {
-    const { store, tracker } = seeded()
-    const internals = store as unknown as StoreInternals
-    const writeAll = vi.spyOn(internals, 'writeAll')
-    let before = readFileSync(turnsFile(), 'utf8')
-
-    for (let round = 1; round <= 10; round += 1) {
-      const reply = `growing reply ${'x'.repeat(round * 10)}`
-      tracker.applyHistoryDelta(
-        'term-1',
-        {
-          kind: 'tail',
-          record: record({ index: HISTORY, uuid: `u${HISTORY}`, prompt: `ask ${HISTORY}`, reply, final: round === 10 })
-        },
-        noFull
-      )
-      store.flushAll()
-      const after = readFileSync(turnsFile(), 'utf8')
-      // Append-only: the previous file is a byte prefix of the new one…
-      expect(after.startsWith(before)).toBe(true)
-      // …and the delta is ONE overlay line — record-sized, not history-sized.
-      const grew = after.slice(before.length)
-      expect(grew.trim().split('\n')).toHaveLength(1)
-      expect(grew.length).toBeLessThan(reply.length + 400)
-      before = after
-    }
-
-    expect(writeAll).not.toHaveBeenCalled()
-    // Ten physical overlays, still one logical tail — and it reads back last-wins.
-    expect(store.count('term-1')).toBe(HISTORY)
-    const replayed = new TurnStore(path.join(dir, 'turns')).load('term-1')
-    expect(replayed).toHaveLength(HISTORY)
-    expect(replayed[HISTORY - 1].reply).toBe(`growing reply ${'x'.repeat(100)}`)
-    tracker.disposeAll()
-  })
 
   it('the tracker-private buffer is appended IN PLACE — the prefix is never copied', () => {
     const { tracker } = fixture()

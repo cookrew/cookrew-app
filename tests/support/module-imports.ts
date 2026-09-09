@@ -148,9 +148,19 @@ export function parseImportEdges(rawSource: string): ImportEdge[] {
     })
   }
 
-  const deferred = /\b(?:import|require)\s*\(\s*(?:(['"])([^'"]+)\1)?/g
+  // A method CALLED import is not the import operator: `serve.import(link)`
+  // and `serveOps.import(...)` are the served-team importer, and the word
+  // boundary alone let the `.` before them through — two false BLOCKs that
+  // kept the grant sweep red on dev from 2026-09-05 (Atlas, ci/green-gates).
+  // The operator can only follow a non-identifier, non-member character.
+  const deferred = /(?<![\w$.])(?:import|require)\s*\(\s*(?:(['"])([^'"]+)\1)?/g
   for (const m of source.matchAll(deferred)) {
     const literal = m[2]
+    // A method DECLARED as import is not the operator either: an interface's
+    // `import(link: string, …): Promise<unknown>` or a class's `import(link) {`.
+    // The operator's call is followed by an expression continuation; a
+    // declaration's parameter list is followed by a return type or a body.
+    if (literal === undefined && isDeclaration(source, m.index ?? 0)) continue
     edges.push({
       specifier: literal ?? null,
       line: lineOf(source, m.index ?? 0),
@@ -162,6 +172,25 @@ export function parseImportEdges(rawSource: string): ImportEdge[] {
   }
 
   return edges
+}
+
+/** After the `(` at `start`'s match: is the matching `)` followed by `:` or `{`? */
+function isDeclaration(source: string, start: number): boolean {
+  const open = source.indexOf('(', start)
+  if (open < 0) return false
+  let depth = 0
+  for (let i = open; i < source.length; i += 1) {
+    const ch = source[i]
+    if (ch === '(') depth += 1
+    else if (ch === ')') {
+      depth -= 1
+      if (depth === 0) {
+        const next = source.slice(i + 1).match(/^\s*(\S)/)?.[1]
+        return next === ':' || next === '{'
+      }
+    }
+  }
+  return false
 }
 
 const EXTENSIONS = ['', '.ts', '.tsx', '.mts', '/index.ts', '/index.tsx']

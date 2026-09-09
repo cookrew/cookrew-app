@@ -1,0 +1,357 @@
+// THE ONE READER, AS THE ROUTES SEE IT (one-stream T2).
+//
+// T1 built the pieces: stream-chain.ts decides WHICH files are the stream,
+// stream.ts reads them as one, marks.ts stores the only thing that is not in
+// them, stream-marks.ts performs the single join. This module composes those
+// four into the one object the HTTP layer depends on, so that:
+//
+//   · mobile-api.ts gains ONE dep, not five, and the routes stay testable
+//     against a hand-built service with no disk under it;
+//   · the composition — which chain a non-Claude harness has, where the marks
+//     ledger lives, how a tail's finality is settled — is decided once, here,
+//     instead of once per route.
+//
+// WHAT IS NOT HERE. 'door' and 'scrape' cards. They have no transcript this
+// process can read (a door's record lives at someone else's app; a scrape
+// card's record is the PTY and nothing else), so `sourceOf` reports them and
+// the routes answer them from the SAME providers the old routes use. That is
+// the design's own line: "for a harness with no file ('scrape' in
+// transcript-source.ts) the PTY tracker still provides it — that is the one
+// place scraping remains."
+
+import { existsSync } from 'node:fs'
+import { isClaudeCommand } from '../shared/claude-fork'
+import { isCodexCommand } from './codex-bind'
+import { isPiCommand } from './pi-bind'
+import { restorePointIndex } from '../shared/model'
+import type { TerminalNodeData } from '../shared/model'
+import { claudeStreamChain, type ChainOptions, type StreamChain } from './stream-chain'
+import {
+  createStreamReader,
+  type StreamBlocksRequest,
+  type StreamBlocksResult,
+  type StreamReaderDeps,
+  type StreamTailResult
+} from './stream'
+import { createCheckpointReader, type CheckpointsResult } from './stream-marks'
+import {
+  markFileFor,
+  readMarks,
+  writeMark,
+  type Mark,
+  type MarkOptions,
+  type MarkPatch,
+  type MarkResult
+} from './marks'
+import { createStreamIndexStore, type MaterialisedIndex } from './stream-materialise'
+import type { ProjectedCheckpoint } from '../shared/stream-projection'
+import {
+  readStreamState,
+  writeStreamState,
+  type RollbackMark,
+  type StreamStateOptions
+} from './stream-state'
+import { tailIsFinal, type FinalityDeps } from './stream-finality'
+import { transcriptSourceFor, type TranscriptSource } from './transcript-source'
+import type { TraceDocument, TraceKind } from './trace'
+
+/** The tail, with the finality question answered. */
+export interface StreamTailState extends StreamTailResult {
+  /**
+   * The settled rule (stream-finality.ts). Note it is NOT simply `!open`:
+   * `open` is the raw block evidence T1 could see, `final` is that plus
+   * Claude's end-of-turn marker read from the tail. A tail with neither is
+   * open-and-not-final; there is no third state.
+   */
+  final: boolean
+  /** Which parser the tail file is read with; null for an empty stream. */
+  kind: TraceKind | null
+  /** Length of the whole stream, so a live subscriber can size the rail. */
+  total: number
+}
+
+/** The HTTP layer's whole view of the stream. */
+export interface StreamService {
+  /** Where this card's record comes from, or null when no such terminal is
+   *  known — the 404 the new routes answer with. */
+  sourceOf(terminalId: string): TranscriptSource | null
+  /** Which transcripts ARE this card's stream (the live route stats the tail
+   *  of this; the /trace adapter reads its kind off it). */
+  chain(terminalId: string): Promise<StreamChain>
+  /** The one join: positions + what is attached to them. */
+  checkpoints(terminalId: string): Promise<CheckpointsResult>
+  /** A window of blocks, by identity, never the whole chain. */
+  blocks(terminalId: string, request?: StreamBlocksRequest): Promise<StreamBlocksResult>
+  /** The stream's last block with the settled finality rule applied. */
+  tailState(terminalId: string): Promise<StreamTailState>
+  marks(terminalId: string): Map<string, Mark>
+  writeMark(terminalId: string, patch: MarkPatch): MarkResult
+  /** The ledger's path, so the live route can watch it. Null for an id that
+   *  cannot safely name a file. */
+  marksFile(terminalId: string): string | null
+  /** Checkpoint ordinals this card was rewound TO (node.restoreStack) — the
+   *  ⟲ markers /trace/markers has always carried. */
+  rewindPoints(terminalId: string): number[]
+  /**
+   * The materialised index behind `checkpoints` (T2.5). OPTIONAL so a test
+   * double — or a service composed without a state directory — is still a
+   * StreamService; every caller must be able to answer without it.
+   */
+  materialised?(terminalId: string): Promise<MaterialisedIndex>
+  /** Every /rewind this card has taken, appended, oldest first. The live
+   *  route diffs this to emit its `rollback` event. */
+  rollbacks?(terminalId: string): Promise<RollbackMark[]>
+}
+
+export interface StreamServiceDeps {
+  /** The node behind a terminal id, across workspaces. Null = unknown card. */
+  nodeOf: (terminalId: string) => TerminalNodeData | null
+  /** One file's parsed document, through trace.ts's windowed cache. */
+  documentOf: (file: string, kind: TraceKind) => Promise<TraceDocument>
+  /** The harness's own session file for a non-Claude card (TraceReader
+   *  .watchSpec). Injected because the registry owns that resolution. */
+  fileOf?: (node: TerminalNodeData) => string | null
+  chainOptions?: ChainOptions
+  markOptions?: MarkOptions
+  /** Where ~/.cookrew/stream/<id>.json lives, and the clock a rollback mark
+   *  is stamped with. */
+  stateOptions?: StreamStateOptions
+  finality?: FinalityDeps
+  exists?: (file: string) => boolean
+  /** Test seams. */
+  now?: () => number
+  chainCoalesceMs?: number
+}
+
+/**
+ * Which files are a card's stream, for every harness.
+ *
+ * Claude walks a lineage (stream-chain.ts). Codex and Pi rotate nothing —
+ * one rollout is one stream — so their chain is the single file the registry
+ * resolves, present or honestly missing. Anything else has no file-derived
+ * stream at all, which `sourceOf` has already reported as 'scrape'.
+ */
+export async function streamChainOf(
+  node: TerminalNodeData,
+  deps: StreamServiceDeps
+): Promise<StreamChain> {
+  if (isClaudeCommand(node.command)) return claudeStreamChain(node, deps.chainOptions ?? {})
+  const kind: TraceKind | null = isCodexCommand(node.command)
+    ? 'codex'
+    : isPiCommand(node.command)
+      ? 'pi'
+      : null
+  const file = kind === null ? null : (deps.fileOf?.(node) ?? null)
+  if (kind === null || file === null) return { files: [], missing: [] }
+  const exists = deps.exists ?? existsSync
+  return exists(file)
+    ? { files: [{ sessionId: node.id, file, kind }], missing: [] }
+    : { files: [], missing: [{ sessionId: node.id, file, reason: 'no-transcript' }] }
+}
+
+/**
+ * How long one resolved chain is reused.
+ *
+ * NOT a cache — a COALESCER. One request touches the chain several times (the
+ * reader resolves it, the adapter reads the tail file's kind off it, the live
+ * pass stats its tail), and for Claude each resolution is a rotation walk that
+ * reads the head of every file in the lineage. A quarter second folds those
+ * into one walk while staying far below the rail's own tick, so a rebind is
+ * visible on the very next refresh rather than being pinned by a memo.
+ */
+export const CHAIN_COALESCE_MS = 250
+
+/**
+ * How many terminals a coalescer remembers.
+ *
+ * It holds a RESOLVED answer per id, and `materialiseOf`'s answer is a whole
+ * materialised index — 1,048 rows on the owner's busiest card. In a main
+ * process that runs for days, an unbounded map keyed by every card ever looked
+ * at is monotonic growth (review, T5 QA 2026-09-07). Oldest-first eviction;
+ * insertion order is recency because a re-run deletes and re-sets.
+ */
+const COALESCE_CAP = 32
+
+/**
+ * A per-terminal answer, reused for `ttl` — a COALESCER, not a cache.
+ *
+ * A failure is never remembered: the next call re-runs rather than serving a
+ * quarter second of a wrong answer.
+ *
+ * AN IN-FLIGHT ANSWER IS SHARED WHATEVER THE CLOCK SAYS. The window is keyed
+ * on when a pass STARTED, and a cold materialisation of a real chain runs
+ * longer than the window; two passes would then read the state file, both
+ * write it, and the second would have built its resume request from the
+ * snapshot the first was replacing. So an entry that has not settled is
+ * single-flight, and only a settled one expires.
+ */
+function coalesce<T>(
+  run: (terminalId: string) => Promise<T>,
+  clock: () => number,
+  ttl: number
+): (terminalId: string) => Promise<T> {
+  interface Entry {
+    at: number
+    settled: boolean
+    value: Promise<T>
+  }
+  const cache = new Map<string, Entry>()
+  return async (terminalId) => {
+    const cached = cache.get(terminalId)
+    const at = clock()
+    if (cached !== undefined && (!cached.settled || at - cached.at < ttl)) return cached.value
+    const entry: Entry = {
+      at,
+      settled: false,
+      value: run(terminalId).catch((error: unknown) => {
+        cache.delete(terminalId)
+        throw error
+      })
+    }
+    void entry.value.then(
+      () => {
+        entry.settled = true
+      },
+      () => {
+        entry.settled = true
+      }
+    )
+    cache.delete(terminalId)
+    cache.set(terminalId, entry)
+    while (cache.size > COALESCE_CAP) {
+      const oldest = cache.keys().next()
+      if (oldest.done === true) break
+      cache.delete(oldest.value)
+    }
+    return entry.value
+  }
+}
+
+/** How far into each transcript the materialised index reaches — the byte
+ *  coverage a resume request is judged on (D6, and the review that made it
+ *  bytes rather than acquaintance). Mirrors stream-materialise's resumeOf. */
+function bytesCovered(entries: readonly ProjectedCheckpoint[]): Map<string, number> {
+  const covered = new Map<string, number>()
+  for (const row of entries) {
+    for (const one of row.occurrences) {
+      const bytes = one.byteOffset ?? 0
+      const held = covered.get(one.file)
+      if (held === undefined || bytes > held) covered.set(one.file, bytes)
+    }
+  }
+  return covered
+}
+
+/** The coalescing chain resolver — see CHAIN_COALESCE_MS. */
+function chainResolver(deps: StreamServiceDeps): (terminalId: string) => Promise<StreamChain> {
+  const resolve = coalesce(
+    async (terminalId: string): Promise<StreamChain> => {
+      const node = deps.nodeOf(terminalId)
+      if (node === null) return { files: [], missing: [] }
+      return streamChainOf(node, deps)
+    },
+    deps.now ?? Date.now,
+    deps.chainCoalesceMs ?? CHAIN_COALESCE_MS
+  )
+  return resolve
+}
+
+export function createStreamService(deps: StreamServiceDeps): StreamService {
+  const chainOf = chainResolver(deps)
+
+  const readerDeps: StreamReaderDeps = {
+    chainOf,
+    documentOf: deps.documentOf,
+    ...(deps.exists ? { exists: deps.exists } : {})
+  }
+  const reader = createStreamReader(readerDeps)
+  // THE RAIL READS THE MATERIALISED INDEX, not the raw walk. The two agree on
+  // every card that has never been rewound; where they differ, only this one
+  // can say that a /rewind took checkpoints beyond the file and that the
+  // blocks after it continue the count rather than reusing it (T2.5).
+  const stateOptions = deps.stateOptions ?? {}
+  const indexStore = createStreamIndexStore({
+    lines: (terminalId, resume) => reader.lines(terminalId, resume),
+    readState: (terminalId) => readStreamState(terminalId, stateOptions),
+    writeState: (terminalId, state) => writeStreamState(terminalId, state, stateOptions),
+    ...(deps.now ? { now: deps.now } : {})
+  })
+  // ONE MATERIALISATION PER REQUEST. /stream/open asks for the rail AND the
+  // tail, and each used to drive its own pass — two walks, two state writes
+  // and two projections of the same 1,048 rows for one round trip (D6, T5 QA
+  // 2026-09-07). The same coalescing window the chain resolver uses, for the
+  // same reason: a rebind is visible on the very next refresh rather than
+  // being pinned by a memo.
+  const materialiseOf = coalesce(
+    (terminalId: string) => indexStore.materialise(terminalId),
+    deps.now ?? Date.now,
+    deps.chainCoalesceMs ?? CHAIN_COALESCE_MS
+  )
+  const checkpointReader = createCheckpointReader({
+    index: materialiseOf,
+    marksOf: (terminalId) => readMarks(terminalId, deps.markOptions ?? {}),
+    ...(deps.markOptions ? { markOptions: deps.markOptions } : {})
+  })
+
+  return {
+    sourceOf(terminalId) {
+      const node = deps.nodeOf(terminalId)
+      return node === null ? null : transcriptSourceFor(node)
+    },
+    chain: chainOf,
+    checkpoints: (terminalId) => checkpointReader.checkpoints(terminalId),
+    materialised: materialiseOf,
+    async rollbacks(terminalId) {
+      return (await materialiseOf(terminalId)).rolledBack
+    },
+    blocks: (terminalId, request) => reader.blocks(terminalId, request),
+    async tailState(terminalId) {
+      // THE MATERIALISED INDEX ANSWERS THE NUMBERS (D6). `total` used to come
+      // from a second whole-chain walk asked for one block, and the tail's
+      // ordinal from a third; both are facts the index already holds, and
+      // taking them from it lets the tail be resolved out of ONE transcript.
+      const chaining = chainOf(terminalId)
+      const index = await materialiseOf(terminalId)
+      const total = index.entries.length
+      const ordinals = new Map(index.entries.map((row) => [row.identity, row.ordinal]))
+      const covered = bytesCovered(index.entries)
+      const [chain, tail] = await Promise.all([
+        chaining,
+        reader.tail(terminalId, {
+          ...(index.cursor.file.length > 0 && index.entries.length > 0
+            ? {
+                resume: {
+                  cursorFile: index.cursor.file,
+                  coveredBytes: (file) => covered.get(file)
+                }
+              }
+            : {}),
+          ordinalOf: (identity) => ordinals.get(identity)
+        })
+      ])
+      const block = tail.block
+      if (block === null) {
+        return { ...tail, final: false, kind: null, total }
+      }
+      const kind = chain.files.find((entry) => entry.file === block.file)?.kind ?? 'claude'
+      // The block's OWN span, when the reader could vouch for it (D4, T5 QA
+      // 2026-09-07): the finality read opens at this exchange's first record
+      // rather than at a fixed 256 KB from EOF, which is what made a
+      // tool-heavy Claude turn read as open forever.
+      const final = await tailIsFinal(block, block.file, kind, deps.finality ?? {}, tail.tailBytes)
+      // `open` follows the SETTLED rule, not just the block's own evidence:
+      // a Claude turn that wrote its end_turn is over, and reporting it as
+      // still live is what would keep a card spinning after the agent stopped.
+      return { ...tail, open: !final, final, kind, total }
+    },
+    marks: (terminalId) => readMarks(terminalId, deps.markOptions ?? {}),
+    writeMark: (terminalId, patch) => writeMark(terminalId, patch, deps.markOptions ?? {}),
+    marksFile: (terminalId) => markFileFor(terminalId, deps.markOptions ?? {}),
+    rewindPoints(terminalId) {
+      const node = deps.nodeOf(terminalId)
+      return (node?.restoreStack ?? [])
+        .map((point) => restorePointIndex(point))
+        .filter((index) => index > 0)
+    }
+  }
+}

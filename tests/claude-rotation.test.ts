@@ -91,6 +91,8 @@ interface FakeFile {
   sessionId: string
   head: string[]
   mtimeMs?: number
+  /** The file's last lines — where claude writes `continued-in`. */
+  tail?: string[]
 }
 
 /**
@@ -110,9 +112,14 @@ function fakeFs(files: readonly FakeFile[]): RotationFs {
           size: 100
         }))
       ),
-    readHead: (file) => later(heads.get(path.basename(file, '.jsonl')) ?? [])
+    readHead: (file) => later(heads.get(path.basename(file, '.jsonl')) ?? []),
+    readTail: (file) =>
+      later(files.find((f) => f.sessionId === path.basename(file, '.jsonl'))?.tail ?? [])
   }
 }
+
+const continuedIn = (from: string, to: string): string =>
+  JSON.stringify({ type: 'continued-in', timestamp: '2026-09-02T13:36:34.438Z', sessionId: from, continuedInSessionId: to })
 
 function later<T>(value: T): Promise<T> {
   return new Promise((resolve) => setTimeout(() => resolve(value), 0))
@@ -193,6 +200,55 @@ describe('rotationEdgeOf — the successor states its predecessor', () => {
 
   it('reports nothing for an ordinary conversation head', () => {
     expect(rotationEdgeOf(plainHead(NEW))).toBeNull()
+  })
+})
+
+describe('resolveRotationChain — claude’s own continued-in marker', () => {
+  /**
+   * THE SHAPE THAT LOST 74 MINUTES (Conductor, 2026-09-02): the continuation
+   * file was created at the morning compaction with a head that names
+   * nothing, so it was neither newer than the bound file nor a declared
+   * successor. The only statement of the switch is the marker claude wrote at
+   * the tail of the OLD file — and a recover that ignored it resumed a
+   * conversation that had ended at 21:36.
+   */
+  it('follows the marker to a successor the heuristics cannot see', async () => {
+    const chain = await resolveRotationChain({
+      cwd: CWD,
+      sessionId: OLD,
+      fs: fakeFs([
+        { sessionId: OLD, head: plainHead(OLD), mtimeMs: 5000, tail: [continuedIn(OLD, NEW)] },
+        // Older than the stale file, plain head: invisible to the scan below.
+        { sessionId: NEW, head: plainHead(NEW), mtimeMs: 1000 }
+      ])
+    })
+    expect(chain).toEqual([NEW])
+  })
+
+  it('follows a chain of markers, and stops at a successor that is not on disk', async () => {
+    const chain = await resolveRotationChain({
+      cwd: CWD,
+      sessionId: OLD,
+      fs: fakeFs([
+        { sessionId: OLD, head: plainHead(OLD), mtimeMs: 5000, tail: [continuedIn(OLD, NEW)] },
+        { sessionId: NEW, head: plainHead(NEW), mtimeMs: 1000, tail: [continuedIn(NEW, THIRD)] },
+        { sessionId: THIRD, head: plainHead(THIRD), mtimeMs: 1000, tail: [continuedIn(THIRD, 'dddddddd-1111-4222-8333-444444444444')] }
+      ])
+    })
+    expect(chain).toEqual([NEW, THIRD])
+  })
+
+  it('refuses a marker that names a session another node owns', async () => {
+    const chain = await resolveRotationChain({
+      cwd: CWD,
+      sessionId: OLD,
+      claimed: new Set([NEW]),
+      fs: fakeFs([
+        { sessionId: OLD, head: plainHead(OLD), tail: [continuedIn(OLD, NEW)] },
+        { sessionId: NEW, head: plainHead(NEW) }
+      ])
+    })
+    expect(chain).toBeNull()
   })
 })
 

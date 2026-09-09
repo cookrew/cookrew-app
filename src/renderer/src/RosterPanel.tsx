@@ -9,7 +9,8 @@ import { exportStateOf, useGrantRoster } from './grant-state'
 import { EXPORT_ERROR, fill } from './grant-copy'
 import { NoteRow } from './NoteRow'
 import { BrowserRow } from './BrowserRow'
-import { buildAgentRows, type AgentRow as Row } from './agent-rows'
+import { buildAgentRows, checkpointWanted, type AgentRow as Row } from './agent-rows'
+import { useStreamTails } from './stream/use-stream-tails'
 import { advanceClock, type ActivityClock } from './activity-clock'
 import { searchAgents } from './agent-search'
 import type { TurnMatch } from '../../shared/turn-search'
@@ -17,7 +18,9 @@ import {
   EMPTY_FILTER,
   applyFilter,
   buildFacets,
+  defaultFilter,
   eventClock,
+  filterActive,
   type AgentFacets,
   type AgentFilter,
   type FacetEvent,
@@ -126,7 +129,10 @@ export function RosterPanel({
       })
     })
   const [forkOpen, setForkOpen] = useState(false)
-  const [filter, setFilter] = useState<AgentFilter>(EMPTY_FILTER)
+  // Opens on the loaded workspace, and follows a switch; clearing the chip is
+  // the way to the whole crew (agent-facets.ts: defaultFilter).
+  const [filter, setFilter] = useState<AgentFilter>(() => defaultFilter(activeWorkspaceId))
+  useEffect(() => setFilter(defaultFilter(activeWorkspaceId)), [activeWorkspaceId])
   /**
    * The facet tags only surface while the search field holds focus — the
    * board's default face is the roster, not the filter chrome. Focus is
@@ -154,9 +160,15 @@ export function RosterPanel({
     () => ({ ...eventClock(events), ...clock.current }),
     [events, clock.current],
   )
+  // THE SAME SOURCE AS THE CARD. An agent the tracker has nothing on since
+  // the restart still has its last turn on file; the canvas card tails it
+  // (trace-perf T1) and so does its row here, or the Board says QUIET about
+  // a crew the canvas shows mid-sentence.
+  const idle = useMemo(() => checkpointWanted(roster, activities), [roster, activities])
+  const checkpoints = useStreamTails(idle)
   const all = useMemo(
-    () => buildAgentRows({ roster, activities, now, changedAt }),
-    [roster, activities, now, changedAt],
+    () => buildAgentRows({ roster, activities, checkpoints, now, changedAt }),
+    [roster, activities, checkpoints, now, changedAt],
   )
   // Facet TAGS speak for the CURRENT workspace only — a wall of every
   // workspace's presets/roles was noise; the list itself stays global.
@@ -534,9 +546,13 @@ export function RosterPanel({
 
         {/* Facets from the registry + event log — structured narrowing, which
             is what these records can answer well. Conversation text is NOT
-            here: the event log carries none by design. Shown only while the
-            search field is hot. */}
-        {searchHot && <FacetBar facets={facets} filter={filter} onChange={setFilter} />}
+            here: the event log carries none by design. The full row shows
+            while the search field is hot; at rest, only the chips that are
+            ON — a list narrowed by something you cannot see is a list that
+            looks short for no reason. */}
+        {(searchHot || filterActive(filter)) && (
+          <FacetBar facets={facets} filter={filter} atRest={!searchHot} onChange={setFilter} />
+        )}
 
         {roster.length === 0 && elements.length === 0 ? (
           <div className="tf-role-note">No agents yet.</div>
@@ -640,23 +656,32 @@ export function RosterPanel({
 function FacetBar({
   facets,
   filter,
+  atRest = false,
   onChange,
 }: {
   facets: AgentFacets
   filter: AgentFilter
+  /** Only the chips that are on, plus CLEAR — the row's face when the search is not hot. */
+  atRest?: boolean
   onChange: (next: AgentFilter) => void
 }): React.JSX.Element | null {
-  const groups: {
-    key: keyof AgentFilter
-    items: { value: string; count: number; id?: string }[]
-  }[] = [
+  const on = (key: keyof AgentFilter, value: string): boolean =>
+    (filter[key] as string[]).includes(value)
+  type Group = { key: keyof AgentFilter; items: { value: string; count: number; id?: string }[] }
+  const every: Group[] = [
     { key: 'states', items: facets.states },
     { key: 'presets', items: facets.presets },
     { key: 'roles', items: facets.roles },
     { key: 'workspaceIds', items: facets.workspaces },
   ]
+  const groups: Group[] = every.map((group) =>
+    atRest
+      ? { ...group, items: group.items.filter((item) => on(group.key, item.id ?? item.value)) }
+      : group,
+  )
   const active = groups.some((g) => filter[g.key].length > 0)
-  if (facets.presets.length + facets.roles.length + facets.workspaces.length === 0) return null
+  if (!atRest && facets.presets.length + facets.roles.length + facets.workspaces.length === 0)
+    return null
 
   const toggle = (key: keyof AgentFilter, value: string): void => {
     const current = filter[key] as string[]
@@ -675,11 +700,11 @@ function FacetBar({
         group.items.map((item) => {
           // Workspaces filter by id but read as their name.
           const value = item.id ?? item.value
-          const on = (filter[group.key] as string[]).includes(value)
+          const lit = on(group.key, value)
           return (
             <button
               key={`${group.key}:${value}`}
-              className={`cr-chip clickable${on ? ' amber' : ''}`}
+              className={`cr-chip clickable${lit ? ' amber' : ''}`}
               title={`${item.value} · ${item.count}`}
               onClick={() => toggle(group.key, value)}
             >

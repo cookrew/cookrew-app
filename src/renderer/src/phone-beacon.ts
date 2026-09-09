@@ -7,6 +7,7 @@
  * last beacon before a crash is the autopsy nobody else can take.
  */
 import { apiPath } from './api-base'
+import { planeFetch } from './plane-fetch'
 import { authHeaders } from './auth-gate'
 import { isRemoteMode } from './api'
 
@@ -91,7 +92,7 @@ function vitals(): Record<string, unknown> {
 export function markStage(stage: string): void {
   if (!isRemoteMode()) return
   try {
-    void fetch(apiPath('/api/beacon'), {
+    void planeFetch(apiPath('/api/beacon'), {
       method: 'POST',
       headers: { ...authHeaders(), 'content-type': 'application/json' },
       body: JSON.stringify({ stage, t: Date.now() }),
@@ -108,7 +109,7 @@ export function startPhoneBeacon(): void {
   installTaps()
   const send = (): void => {
     try {
-      void fetch(apiPath('/api/beacon'), {
+      void planeFetch(apiPath('/api/beacon'), {
         method: 'POST',
         headers: { ...authHeaders(), 'content-type': 'application/json' },
         body: JSON.stringify(vitals()),

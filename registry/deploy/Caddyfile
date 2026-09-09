@@ -1,0 +1,38 @@
+# TLS and nothing else.
+#
+# The relay carries long-lived streams in BOTH directions: a door holds a GET
+# open for hours and pushes answers up a POST body that never ends. Anything
+# in front of it that buffers, caches or times out idle connections turns a
+# live terminal into a transcript, or a working door into one that vanishes.
+#
+# So this proxies and gets out of the way. It does not buffer, and it does not
+# impose a read timeout — the app's own 25-second heartbeat is what keeps a
+# quiet connection alive, and it is the only keepalive in the system.
+#
+# Deliberately NOT behind a CDN. Cloudflare's proxy may buffer a streaming
+# request body, which is exactly what a door's uplink is; the DNS record for
+# this host must be grey-cloud (DNS only). Put the marketing site behind the
+# orange cloud instead — it is a different hostname's problem.
+
+cookrew.dev {
+	encode zstd gzip
+
+	# No compression on the relay: a compressor holds bytes back waiting for a
+	# block to fill, which is a buffer wearing another name.
+	@relay path /v1/relay/*
+	route @relay {
+		reverse_proxy 127.0.0.1:8791 {
+			flush_interval -1
+			transport http {
+				# A door's connection is meant to last. Nothing here may decide
+				# it has been quiet too long.
+				read_timeout 0
+				write_timeout 0
+			}
+		}
+	}
+
+	reverse_proxy 127.0.0.1:8791 {
+		flush_interval -1
+	}
+}

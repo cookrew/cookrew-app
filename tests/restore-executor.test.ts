@@ -111,7 +111,14 @@ describe('registerRestoreIpc (M10: restore IPC block lives beside the executor)'
       'agent:undo-restore'
     ])
     await registered.get('agent:restore-checkpoint')!(null, 't1', 3)
-    expect(handlers.restoreCheckpoint).toHaveBeenCalledWith('t1', 3)
+    expect(handlers.restoreCheckpoint).toHaveBeenCalledWith('t1', 3, undefined)
+    // A targeted rewind carries the segment the index is counted in.
+    await registered.get('agent:restore-checkpoint')!(null, 't1', 2, 'aa000000-0000-4000-8000-000000000006')
+    expect(handlers.restoreCheckpoint).toHaveBeenCalledWith(
+      't1',
+      2,
+      'aa000000-0000-4000-8000-000000000006'
+    )
     await registered.get('agent:undo-restore')!(null, 't1')
     expect(handlers.undoRestore).toHaveBeenCalledWith('t1')
   })

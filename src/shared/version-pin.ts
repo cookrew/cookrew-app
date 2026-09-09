@@ -61,6 +61,18 @@ export interface VersionPinRecord {
    */
   atIndex: number
   /**
+   * The checkpoint's MESSAGE UUID — the identity that survives compaction
+   * renumbering (checkpoint-session-alignment). A /compact rotates the
+   * session file and the rail renumbers from T1 while the ledger's indices
+   * continue, so `atIndex` alone can come to name a different turn than the
+   * one the pin was cut at. The uuid cannot: both the trace and the ledger
+   * carry it for the same turn. When present it is THE anchor; `atIndex`
+   * remains the display/legacy key. Absent on pins cut before this field
+   * existed — the startup re-key (main/pin-rekey.ts) backfills what the
+   * ledger can still resolve.
+   */
+  atUuid?: string
+  /**
    * tmux history_size at cut time. Kept because it is what a JUMP needs — it
    * is NOT the rail anchor. Anchoring on it was the v1 bug: line space and
    * render space have different denominators and drift apart.
@@ -82,6 +94,12 @@ export interface VersionPinAnchor {
 /** A row as the rail actually lays it out — identity plus array order. */
 export interface RailRow {
   index: number
+  /**
+   * The row's trace identity (its block's message uuid), when known. Pins
+   * with an `atUuid` anchor on THIS, not on `index` — the index is a display
+   * ordinal that a /compact renumbers out from under a stored pin.
+   */
+  id?: string
 }
 
 /**
@@ -106,11 +124,55 @@ export interface RailRow {
  * worse than an absent one applies to position too, and a V1 shown against T5
  * because the ledger starts at T5 is a wrong version.
  */
-export function pinFraction(atIndex: number, rows: readonly RailRow[]): number | null {
+export function pinFraction(
+  atIndex: number,
+  rows: readonly RailRow[],
+  scale?: number
+): number | null {
   if (rows.length === 0) return null
   const at = rows.findIndex((r) => r.index === atIndex)
   if (at < 0) return null
-  return at / rows.length
+  return positionOf(at, rows, scale)
+}
+
+/**
+ * A drawn row's place along the bar (D1, T5 QA 2026-09-07).
+ *
+ * WITHOUT a scale this is `arrayPosition / rows.length` — what every caller
+ * here has always produced, kept byte-identical so the pin, tick and marker
+ * gates argue about the same numbers they always did.
+ *
+ * WITH one it is the row's ORDINAL over the WHOLE chain, which is what a rail
+ * whose index is PAGED needs: `rows` is then the newest hundred of a 1,048-row
+ * card, and dividing by its length would draw T949 at the top of the bar. The
+ * scale comes from rail-fill.ts's railScale, so the pins, the boundary ticks
+ * and the reveal cannot disagree about where a checkpoint is.
+ */
+function positionOf(at: number, rows: readonly RailRow[], scale?: number): number {
+  if (scale === undefined) return at / rows.length
+  return Math.max(0, Math.min(1, (rows[at].index - 1) / Math.max(1, scale)))
+}
+
+/**
+ * A PIN's row fraction, uuid-first (checkpoint-session-alignment). A pin that
+ * carries `atUuid` anchors on the row whose `id` is that uuid and on nothing
+ * else — when no drawn row holds it, the pin is OMITTED, never index-fallback:
+ * after a /compact the same `atIndex` exists on the renumbered rail but names
+ * a DIFFERENT turn, so falling back would draw the pin on a row it was never
+ * cut at (R8: a wrong version is worse than an absent one, position included).
+ * Only a legacy pin with no uuid keeps the `atIndex` lookup. `pinFraction`
+ * above keeps its exported signature for index-space callers.
+ */
+export function pinRowFraction(
+  pin: VersionPinRecord,
+  rows: readonly RailRow[],
+  scale?: number
+): number | null {
+  if (pin.atUuid !== undefined) {
+    const at = rows.findIndex((r) => r.id === pin.atUuid)
+    return at < 0 ? null : positionOf(at, rows, scale)
+  }
+  return pinFraction(pin.atIndex, rows, scale)
 }
 
 /**
@@ -133,21 +195,39 @@ export function pinFraction(atIndex: number, rows: readonly RailRow[]): number |
  * for that case; this is the render-space equivalent, not a new rule.
  *
  * Null when the checkpoint is not drawn — omitted, never guessed (R17).
+ *
+ * EXCEPT afterIndex 0, which is not a sparse-row omission: it is the ROOT
+ * boundary, "before the first checkpoint" — a rotation/clear-born file's own
+ * segment edge. No row carries index 0, so the old rule silently dropped it
+ * and the rail never showed the one marker that leads anywhere (the lineage
+ * reach into the earlier sessions). Same virtual-slot arithmetic as the `+ 1`
+ * above: the row before position 0 is position −1, and (−1 + 1) / n = 0 —
+ * the top edge, which this boundary has an exact claim to.
  */
-export function traceFraction(afterIndex: number, rows: readonly RailRow[]): number | null {
+export function traceFraction(
+  afterIndex: number,
+  rows: readonly RailRow[],
+  scale?: number
+): number | null {
   if (rows.length === 0) return null
+  if (afterIndex === 0) return 0
   const at = rows.findIndex((r) => r.index === afterIndex)
   if (at < 0) return null
-  return (at + 1) / rows.length
+  // The edge BELOW the row, in whichever space the caller asked for. On the
+  // chain's scale that is the next ordinal's own slot, which is the same
+  // virtual-slot arithmetic as `(at + 1) / rows.length` (D1, T5 QA).
+  if (scale === undefined) return (at + 1) / rows.length
+  return Math.max(0, Math.min(1, rows[at].index / Math.max(1, scale)))
 }
 
 export function pinAnchors(
   records: readonly VersionPinRecord[],
-  rows: readonly RailRow[]
+  rows: readonly RailRow[],
+  scale?: number
 ): VersionPinAnchor[] {
   const out: VersionPinAnchor[] = []
   for (const r of [...records].sort((a, b) => a.version - b.version)) {
-    const frac = pinFraction(r.atIndex, rows)
+    const frac = pinRowFraction(r, rows, scale)
     if (frac !== null) out.push({ version: r.version, frac })
   }
   return out
@@ -181,6 +261,9 @@ export function nextVersion(records: readonly VersionPinRecord[]): number {
 export interface CutOptions {
   /** The checkpoint identity being pinned — what the pin MEANS. */
   atIndex: number
+  /** The checkpoint's message uuid — the compaction-proof anchor (see
+   *  VersionPinRecord.atUuid). Omitted when the cutter has no uuid to give. */
+  atUuid?: string
   /** Transcript coordinate for jumps; not the rail anchor (R17). */
   scrollLine: number
   cutAt: number
@@ -203,6 +286,7 @@ export function cutVersionPin(
   return {
     version: nextVersion(records),
     atIndex: options.atIndex,
+    ...(options.atUuid !== undefined ? { atUuid: options.atUuid } : {}),
     scrollLine: options.scrollLine,
     cutAt: options.cutAt,
     ...(options.manifestId !== undefined ? { manifestId: options.manifestId } : {}),
@@ -216,6 +300,9 @@ export interface TeamCutMember {
   pins: readonly VersionPinRecord[]
   /** The checkpoint identity this member is pinned at. */
   atIndex: number
+  /** That checkpoint's message uuid — the compaction-proof anchor (see
+   *  VersionPinRecord.atUuid). Omitted when the member has none to give. */
+  atUuid?: string
   /** This member's own transcript point at the moment of the cut. */
   scrollLine: number
 }
@@ -253,6 +340,7 @@ export function cutTeamVersion(
       pin: {
         version,
         atIndex: m.atIndex,
+        ...(m.atUuid !== undefined ? { atUuid: m.atUuid } : {}),
         scrollLine: m.scrollLine,
         cutAt: options.cutAt,
         ...(options.manifestId !== undefined ? { manifestId: options.manifestId } : {}),
@@ -361,7 +449,7 @@ export function railMarkers(input: RailMarkerInput): RailMarker[] {
     out.push({ class: 'trace', frac, kind: m.kind, afterIndex: m.afterIndex })
   }
   for (const p of input.pins) {
-    const frac = pinFraction(p.atIndex, rows)
+    const frac = pinRowFraction(p, rows)
     if (frac === null) continue
     const label = pinLabel(p.version)
     out.push({

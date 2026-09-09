@@ -1,6 +1,14 @@
 import { EventEmitter } from 'node:events'
 import { promises as fs } from 'node:fs'
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -19,6 +27,8 @@ import {
 } from '../shared/model'
 import { addDir, removeDir, setPrimary } from '../shared/workspace-dirs'
 import { slugFor } from './workspace-slug'
+import { recordLineageIds } from './lineage-spill'
+import { lineageIdsOf } from './session-lineage'
 import type { CookrewEvent, EventActor } from './event-log'
 import { upgradeNode } from './node-upgrades'
 import type { RecoverableSnapshot } from './recoverable'
@@ -49,6 +59,9 @@ function isDuration(value: number | undefined): value is number {
 
 // All persistence paths derive from a base dir so tests can run a store
 // against a temp directory instead of the real ~/.cookrew.
+/** Parked workspace states held parsed; a canvas has a handful, not a fleet. */
+const PARKED_STATE_CAP = 32
+
 const registryFile = (base: string): string => path.join(base, 'registry.json')
 const workspacesDir = (base: string): string => path.join(base, 'workspaces')
 const legacyWorkspaceFile = (base: string): string => path.join(base, 'workspace.json')
@@ -160,7 +173,8 @@ export class WorkspaceStore extends EventEmitter {
     return this.registry.workspaces.map((w) => w.slug).filter((s): s is string => !!s)
   }
 
-  private isResident(id: string): boolean {
+  /** Whether the store is holding this workspace in memory. A read, never a promise to keep it. */
+  isResident(id: string): boolean {
     return this.hydrated.has(id)
   }
 
@@ -261,6 +275,7 @@ export class WorkspaceStore extends EventEmitter {
     }
     this.registry = { ...this.registry, workspaces: [...this.registry.workspaces, meta] }
     // Seed an empty canvas file so the switch loads cleanly.
+    this.forgetParked(meta.id)
     saveWorkspaceState(this.baseDir, meta.id, { name: meta.name, dir, dirs: [dir], nodes: [], connections: [] })
     saveRegistry(this.baseDir, this.registry)
     this.emit('workspaces', this.list())
@@ -296,6 +311,7 @@ export class WorkspaceStore extends EventEmitter {
       slug: slugFor({ name: finalName }, this.takenSlugs())
     }
     this.registry = { ...this.registry, workspaces: [...this.registry.workspaces, meta] }
+    this.forgetParked(meta.id)
     saveWorkspaceState(this.baseDir, meta.id, { name: finalName, dir: primary, dirs: finalDirs, nodes, connections })
     try {
       const notesDir = path.join(workspacesDir(this.baseDir), meta.id, 'notes')
@@ -448,6 +464,7 @@ export class WorkspaceStore extends EventEmitter {
     } else {
       // Not held in memory: patch its on-disk state directly.
       const state = loadWorkspaceState(this.baseDir, id)
+      this.forgetParked(id)
       saveWorkspaceState(this.baseDir, id, { ...state, dir: primary, dirs })
     }
     saveRegistry(this.baseDir, this.registry)
@@ -527,6 +544,7 @@ export class WorkspaceStore extends EventEmitter {
     if (session.saveTimer) clearTimeout(session.saveTimer)
     session.saveTimer = setTimeout(() => {
       session.saveTimer = null
+      this.forgetParked(workspaceId)
       saveWorkspaceState(this.baseDir, workspaceId, session.state)
     }, 300)
   }
@@ -536,6 +554,7 @@ export class WorkspaceStore extends EventEmitter {
       clearTimeout(session.saveTimer)
       session.saveTimer = null
     }
+    this.forgetParked(workspaceId)
     saveWorkspaceState(this.baseDir, workspaceId, session.state)
   }
 
@@ -750,9 +769,68 @@ export class WorkspaceStore extends EventEmitter {
   // in note cross-workspace-orch-fix-dec). Renderers drop edges whose far
   // endpoint is not on the local canvas; the store resolves them here.
 
-  /** Active workspace state from memory (fresh), inactive from disk. */
+  /**
+   * Parked workspaces, parsed once per version of their file.
+   *
+   * stateOf is the floor under every cross-workspace question, and those are
+   * asked constantly: terminalsAcross twice during boot and again on every
+   * oracle sweep, nodeAcrossWorkspaces inside TraceReader.watchSpec — so once
+   * per card per checkpoint poll, per watch re-arm. Each of those used to
+   * read AND JSON.parse every parked workspace.json, synchronously, on the
+   * Electron main thread. The stamp is the file's own identity, so a write
+   * by anyone (this process or another instance) invalidates it; a hit costs
+   * one statSync instead of a read plus a parse.
+   */
+  private parked = new Map<string, { stamp: string; state: WorkspaceState }>()
+
+  /**
+   * Forget a parked parse. saveWorkspaceState writes in place, so the inode
+   * never changes and the stamp rests on size+mtime — sound on APFS (measured:
+   * 200 same-size rewrites, zero stamp collisions) but a same-length patch on
+   * a coarse-granularity mount could read stale for a tick. Dropping the entry
+   * at the write removes the question.
+   */
+  private forgetParked(id: string): void {
+    this.parked.delete(id)
+  }
+
+  /**
+   * Active workspace state from memory (fresh); a parked one from disk, or
+   * from the parse held for its current file version.
+   *
+   * ALIASING: repeat callers now share ONE state object where each used to
+   * get a private parse. Every writer in this class spreads rather than
+   * mutates, and no reader of workspaceState/terminalsAcross/
+   * nodeAcrossWorkspaces edits a node in place — that is what makes this
+   * safe, and it is a contract, not an accident.
+   */
   private stateOf(id: string): WorkspaceState {
-    return this.hydrated.get(id)?.state ?? loadWorkspaceState(this.baseDir, id)
+    const live = this.hydrated.get(id)
+    if (live) return live.state
+    const file = workspaceFile(this.baseDir, id)
+    let stamp: string | null = null
+    try {
+      const info = statSync(file)
+      stamp = `${info.size}:${info.mtimeMs}:${info.ino}`
+    } catch {
+      // No file (or an unreadable one): fall through uncached, exactly as
+      // before — loadWorkspaceState owns that story and its default.
+    }
+    if (stamp !== null) {
+      const hit = this.parked.get(id)
+      if (hit && hit.stamp === stamp) return hit.state
+    }
+    const state = loadWorkspaceState(this.baseDir, id)
+    if (stamp !== null) {
+      this.parked.delete(id) // re-insert last: Map order is the LRU order
+      this.parked.set(id, { stamp, state })
+      while (this.parked.size > PARKED_STATE_CAP) {
+        const oldest = this.parked.keys().next()
+        if (oldest.done === true) break
+        this.parked.delete(oldest.value)
+      }
+    }
+    return state
   }
 
   /** Read-only state of ANY workspace (active from memory, inactive from disk). */
@@ -826,6 +904,7 @@ export class WorkspaceStore extends EventEmitter {
       return
     }
     const next = fn(this.stateOf(id))
+    this.forgetParked(id)
     saveWorkspaceState(this.baseDir, id, next)
     // The scoped change signal must NOT depend on residency. A workspace
     // patched while nobody holds it in memory has still changed, and a phone
@@ -1108,7 +1187,27 @@ export class WorkspaceStore extends EventEmitter {
     if (!updated) return this.updateNodeAcrossWorkspacesUnsafe(id, patch)
     this.mutate({ ...this.focusedState, nodes })
     if (updated.kind === 'note') void this.persistNoteFile(updated)
+    this.spillLineage(updated, patch)
     return updated
+  }
+
+  /**
+   * THE SINGLE WRITER for the durable lineage.
+   *
+   * Every path that binds or rebinds a Claude session lands here — spawn
+   * resolve, rotation commit, restore, fork adoption — so the durable record
+   * is written once, in one place, instead of at each call site that
+   * remembers to. 2026-09-06: the lineage lived only in the node payload and
+   * was capped at 20; the card at the cap was one rebind away from an
+   * unreachable transcript, and every future writer that forgets to spill
+   * would reopen that hole. A patch that changes nothing appends nothing
+   * (mergeSpill is idempotent), and a failed write is reported by the spill,
+   * never thrown into a rebind.
+   */
+  private spillLineage(updated: CanvasNode, patch: Partial<CanvasNode>): void {
+    if (updated.kind !== 'terminal') return
+    if (!('claudeSessionId' in patch) && !('sessionLineage' in patch)) return
+    recordLineageIds(updated.id, lineageIdsOf(updated as TerminalNodeData))
   }
 
   /**
@@ -1132,6 +1231,7 @@ export class WorkspaceStore extends EventEmitter {
         return updated
       })
     }))
+    if (updated) this.spillLineage(updated, patch)
     return updated
   }
 

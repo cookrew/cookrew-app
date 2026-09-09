@@ -272,9 +272,11 @@ describe('traceIndexOf (cheap identity+title listing for the fan)', () => {
       block(1, 'fix the phone layout\nwith details below'),
       block(2, '   \n  second ask after blank line')
     ])
+    // `id` rides along (checkpoint-session-alignment): the block identity is
+    // the join key that survives compaction renumbering downstream.
     expect(entries).toEqual([
-      { index: 1, title: 'fix the phone layout' },
-      { index: 2, title: 'second ask after blank line' }
+      { index: 1, id: 'u1', title: 'fix the phone layout' },
+      { index: 2, id: 'u2', title: 'second ask after blank line' }
     ])
   })
 

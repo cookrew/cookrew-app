@@ -1,4 +1,5 @@
-import type { CheckpointRow } from './transcript'
+import { railAnchorTop } from './transcript'
+import type { CheckpointRow } from './stream/stream-rows'
 
 /**
  * Laying the reveal across the WHOLE range, T1 at the top to LIVE at the bottom.
@@ -44,6 +45,39 @@ export const ROW_HEIGHT = 34
  * RAIL_INSET`, not the full height.
  */
 export const RAIL_INSET = 16
+
+/**
+ * THE BAR'S DENOMINATOR: the WHOLE chain, not the page this client fetched
+ * (D1, T5 QA 2026-09-07).
+ *
+ * Every fraction here used to be `arrayPosition / rows.length`, and `rows` is
+ * the index page /stream/open answered with — the newest 100 of a 1,048-row
+ * card. So the bar drew those hundred spread from T1 to LIVE while the count
+ * badge, which already read `total`, said 1048: the rail claimed a range it
+ * did not have and a scrub to the top landed on T949.
+ *
+ * The scale is the chain's length, and a row's place on the bar is its own
+ * ORDINAL within it. Rows this client has not fetched are simply not drawn —
+ * an honest gap, and the trigger that fills it (useStream.reach) is what makes
+ * it temporary. Never below the newest ordinal loaded: a `total` that lags a
+ * live append must not push the newest row past LIVE.
+ */
+export function railScale(rows: readonly CheckpointRow[], total?: number): number {
+  const newest = rows[rows.length - 1]?.index ?? 0
+  return Math.max(1, total ?? 0, newest, rows.length)
+}
+
+/**
+ * Where one ordinal sits along the bar, 0 (T1) … 1 (the tail).
+ *
+ * `(index - 1) / scale` and not `index / scale`, because T1 anchors the top
+ * and the newest checkpoint sits one slot short of LIVE — which is exactly
+ * what `arrayPosition / rows.length` produced when everything was loaded, so
+ * a fully-paged rail is laid out byte-for-byte as it was before this existed.
+ */
+export function railFraction(index: number, scale: number): number {
+  return Math.max(0, Math.min(1, (index - 1) / Math.max(1, scale)))
+}
 
 /**
  * How many rows the bar can show at once.
@@ -100,7 +134,8 @@ export function sampleIndices(length: number, count: number): number[] {
 export function fillRows(
   rows: readonly CheckpointRow[],
   barHeight: number,
-  focusedIndex: number | null
+  focusedIndex: number | null,
+  total?: number
 ): FilledRow[] {
   if (rows.length === 0) return []
   const usable = Math.max(1, barHeight - 2 * RAIL_INSET)
@@ -110,12 +145,19 @@ export function fillRows(
   // no-checkpoint case: index 0 sits at fraction 0, a whole span away from
   // LIVE, so "the newest allowed index is 0" means one row, not none.
   if (usable < ROW_HEIGHT) return [live]
+  const scale = railScale(rows, total)
+  const fracAt = (at: number): number => railFraction(rows[at].index, scale)
   // The highest fraction a checkpoint may take and still clear LIVE by a row.
   const ceiling = 1 - ROW_HEIGHT / usable
-  // …and the newest index that lands at or below it, since fraction = at / n.
-  const lastIndex = Math.max(0, Math.floor(ceiling * rows.length))
+  // …and the newest LOADED row that lands at or below it. Walked rather than
+  // computed from rows.length: with the chain's scale a page of the newest
+  // hundred can be entirely inside the tail's own row height, and then the
+  // honest answer is LIVE alone until a page-back lands.
+  let lastIndex = -1
+  for (let at = 0; at < rows.length && fracAt(at) <= ceiling; at += 1) lastIndex = at
+  if (lastIndex < 0) return [live]
 
-  const span = lastIndex / rows.length
+  const span = fracAt(lastIndex)
   // LIVE consumes a slot, and the checkpoints only get the span below it.
   const room = Math.max(2, Math.floor((span * usable) / ROW_HEIGHT) + 1)
   const budget = Math.min(room, Math.max(2, capacityFor(barHeight) - 1))
@@ -133,7 +175,7 @@ export function fillRows(
   const picked = ((): number[] => {
     for (let count = budget; count >= 1; count--) {
       const candidate = sampleIndices(lastIndex + 1, count)
-      const tops = [...candidate.map((i) => (i / rows.length) * usable), usable]
+      const tops = [...candidate.map((i) => fracAt(i) * usable), usable]
       const tight = tops.slice(1).some((top, k) => top - tops[k] < ROW_HEIGHT)
       if (!tight) return candidate
     }
@@ -141,9 +183,33 @@ export function fillRows(
   })()
 
   const laid = picked
-    .map((i) => ({ row: rows[i], fraction: i / rows.length }))
+    .map((i) => ({ row: rows[i], fraction: fracAt(i) }))
     .filter((entry) => entry.row.index !== focusedIndex)
   return [...laid, live]
+}
+
+/**
+ * F6 — THE HERE-MARKER AND THE FOCUSED ROW SIT ON THE SAME Y. ALWAYS.
+ *
+ * This gate has regressed before, and it regressed each time the same way:
+ * two places computed a `top`, they agreed for the states anybody looked at,
+ * and then a new state made them disagree by a pixel. So the two tops are
+ * produced HERE, by one function, from ONE fraction — the marker cannot drift
+ * from the tab because there is nothing for it to drift from.
+ *
+ * `focus` is null only when nothing is focused (the live tail), which is
+ * exactly when no tab is rendered. Every other state — a focused row at
+ * either end of the bar, a rolled-back row, a single-row rail — returns two
+ * identical strings, and tests/stream-f6-alignment.test.ts asserts that over
+ * every state the stream reducer can produce.
+ */
+export function railAnchors(
+  focusedFrac: number | null,
+  liveFrac: number
+): { marker: string; focus: string | null } {
+  if (focusedFrac === null) return { marker: railAnchorTop(liveFrac), focus: null }
+  const top = railAnchorTop(focusedFrac)
+  return { marker: top, focus: top }
 }
 
 /** Half a version pin's height — .cr-ckpt-pin is 13px, centred on its anchor. */

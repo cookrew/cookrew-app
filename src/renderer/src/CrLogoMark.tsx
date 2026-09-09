@@ -1,64 +1,23 @@
-/** Cookrew logo mark: baby hand flashing a two-finger "yes", contour traced
-    from the original photo — index raking up-left, tall middle finger, curled
-    ring + tucked thumb on the right, chubby forearm exiting the frame.
-    Same language as the wordmark: ink outline, cream body, hard amber shadow. */
-export const HAND_PATH =
-  'M 16.7 1.2 C 17.8 1.2 18.4 1.8 18.5 2.7 C 18.9 5.3 19.0 8.5 19.2 10.6 ' +
-  'C 19.3 11.0 19.5 11.0 19.7 10.7 C 20.0 10.1 20.5 9.5 21.1 9.6 C 21.7 9.7 22.0 10.3 22.2 10.7 ' +
-  'C 22.9 10.1 24.0 9.7 25.0 10.2 C 26.3 11.0 27.3 12.4 27.4 13.8 C 27.5 14.9 27.3 15.8 27.0 16.6 ' +
-  'C 26.7 17.5 26.3 18.1 25.9 18.7 C 25.4 19.6 24.6 21.6 24.2 23.3 C 24.6 24.4 24.8 25.6 24.6 26.8 ' +
-  'C 24.3 29.0 23.6 31.0 23.3 33 L 8.7 33 C 8.9 31.0 9.0 28.6 9.6 27.0 C 9.8 25.9 10.1 24.6 10.8 23.8 ' +
-  'C 10.4 22.3 9.3 20.6 8.9 19.2 C 8.5 17.6 7.5 14.9 6.8 13.5 C 6.0 11.9 5.0 9.5 4.4 7.8 ' +
-  'C 4.0 6.6 4.2 5.6 5.1 5.1 C 6.0 4.6 7.0 4.8 7.3 5.8 C 8.2 7.7 11.0 10.2 13.0 11.2 ' +
-  'C 13.4 11.5 13.5 11.9 13.7 11.9 C 13.9 11.9 14.2 11.6 14.4 11.1 C 14.8 9.8 14.9 5.2 15.0 2.9 ' +
-  'C 15.1 1.7 15.7 1.2 16.7 1.2 Z'
+import { BRAND_LOCKUP_PNG } from './brand-lockup-png'
+import { C_HAND_INK_PNG } from './brand-c-hand-png'
 
-const KNUCKLE_DIMPLES =
-  'M 13.5 14.4 q 0.6 0.55 1.2 0.5 M 16.5 15.2 q 0.6 0.55 1.2 0.5 M 19.4 16.1 q 0.6 0.55 1.2 0.5'
-
-const WRIST_CREASE = 'M 14.0 23.6 Q 17.8 22.9 22.6 23.4'
-
+/** The Cookrew mark in the header: the static brand lockup — the C hand, the two lens eyes and
+    KREW — drawn in ink straight on the cream, no chip. The moving version (the tank and the
+    pac-man taking turns) lives on cookrew.dev; the app keeps the still. */
 export function CrLogoMark(): React.JSX.Element {
   return (
-    <svg
-      className="cr-logo-mark"
-      viewBox="0 0 32 32"
-      role="img"
-      aria-label="Cookrew logo: baby hand saying yes"
-    >
-      <defs>
-        <path id="cr-logo-hand" d={HAND_PATH} />
-      </defs>
-      <use
-        href="#cr-logo-hand"
-        transform="translate(2 2)"
-        fill="var(--amber)"
-        stroke="var(--amber)"
-        strokeWidth="3"
-        strokeLinejoin="round"
-      />
-      <use
-        href="#cr-logo-hand"
-        fill="var(--ink)"
-        stroke="var(--ink)"
-        strokeWidth="3"
-        strokeLinejoin="round"
-      />
-      <use href="#cr-logo-hand" fill="var(--cream-hi)" />
-      <path
-        d={KNUCKLE_DIMPLES}
-        fill="none"
-        stroke="var(--ink)"
-        strokeWidth="0.85"
-        strokeLinecap="round"
-      />
-      <path
-        d={WRIST_CREASE}
-        fill="none"
-        stroke="var(--ink)"
-        strokeWidth="1.1"
-        strokeLinecap="round"
-      />
-    </svg>
+    <span className="cr-logo-mark" role="img" aria-label="Cookrew">
+      <img src={BRAND_LOCKUP_PNG} alt="" draggable={false} />
+    </span>
+  )
+}
+
+/** The C hand on its own: the phone bar's mark in portrait. The bar is one line, so the lockup
+    gives way to the hand until landscape has the room (styles.css swaps them at 700 px). */
+export function CrHandMark(): React.JSX.Element {
+  return (
+    <span className="cr-hand-mark" role="img" aria-label="Cookrew">
+      <img src={C_HAND_INK_PNG} alt="" draggable={false} />
+    </span>
   )
 }

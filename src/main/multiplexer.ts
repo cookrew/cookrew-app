@@ -217,6 +217,16 @@ export interface Multiplexer {
    */
   ensureSession(spec: AttachSpec): void
 
+  /**
+   * Prepare an existing session for a fresh attach after its client dropped.
+   *
+   * Optional because tmux/direct attach failures are ordinary process exits.
+   * A backend with a separate server can use this to re-check that server and
+   * restore any runtime-only attachment metadata before a replacement client
+   * is spawned. It must remain idempotent: the pane may still be healthy.
+   */
+  recoverAttach?(spec: AttachSpec): void
+
   attachSpawn(spec: AttachSpec): AttachSpawn
 
   /** Optional scope for sharing a backend's global session snapshot. */
@@ -225,6 +235,16 @@ export interface Multiplexer {
 
   /** Full scrollback as text, or null when the session is gone. */
   capture(name: string): string | null
+
+  /**
+   * The inventory and a pane read OFF the main thread, for callers that run
+   * on a timer (the board probe). Optional: only a backend with an async
+   * runner can answer; the probe falls back to the synchronous reads above.
+   * The herdr host has both; a listing it takes also refreshes the cached
+   * admission inventory, so the read that follows resolves its pane.
+   */
+  listSessionsAsync?(): Promise<string[]>
+  captureAsync?(name: string): Promise<string | null>
 
   /**
    * The same read, but reaching back `lines` rows into scrollback.

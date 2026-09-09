@@ -45,9 +45,87 @@ export function sessionsRootOf(base: string): string {
  * breaks the agent in a way that reads as our bug. The rest are directories
  * whose entire purpose is secrets.
  */
-export function ownerSecretPaths(base: string, home: string = homedir()): readonly string[] {
+/**
+ * The owner's BROWSING identity — the three stores a browser card's login can
+ * live in.
+ *
+ * Three and not one, because a profile is split across two roots and a second
+ * mechanism entirely: Chrome keeps a user-data-dir under Application Support
+ * and its cache half under Caches (macOS), and the canvas webview keeps its own
+ * Electron partition. Retiring a card used to clean only the first, which is
+ * how 103 orphaned partitions and 110 orphaned cache directories accumulated —
+ * the same three-way split matters here for the opposite reason: a deny list
+ * that knows one of them leaves the other two readable.
+ *
+ * Denied at the profile roots rather than at the app-support directory, which
+ * would take the app's own settings with it. What is being protected is the
+ * owner's logged-in sessions for every site they have opened on the canvas.
+ */
+export function browserStatePaths(home: string, appDir: string): readonly string[] {
+  return [
+    path.join(home, 'Library', 'Application Support', appDir, 'interactive-browser'),
+    path.join(home, 'Library', 'Application Support', appDir, 'Partitions'),
+    path.join(home, 'Library', 'Caches', appDir, 'interactive-browser')
+  ]
+}
+
+/**
+ * The Electron DEFAULT session's storage — the app's own origin state.
+ *
+ * Ruled 2026-08-30 (P2 residual). This state does not live in a profile
+ * directory: Electron writes the default session's Cookies, Local Storage and
+ * IndexedDB DIRECTLY under the app-support dir, beside settings a harness
+ * legitimately reads — which is exactly why the tree-level deny was declined
+ * (see the note below ownerSecretPaths) and why these are FILE-LEVEL entries.
+ * Today it holds only what the app's own UI persists, but "only app data" is
+ * a fact about today: the moment a pairing or auth token lands in the default
+ * session, a served agent could read it under the blanket file-read* allow.
+ * Deny the entries by name; the parent stays readable.
+ *
+ * The list is the entries the default session was OBSERVED writing on a live
+ * install (2026-08-30), not a guess at Chromium's schema. A new entry Electron
+ * starts writing is a patch here — same caveat as the top of this file: this
+ * is a denylist, treat additions as patches, not as the mechanism.
+ */
+export function defaultSessionStatePaths(home: string, appDir: string): readonly string[] {
+  const app = path.join(home, 'Library', 'Application Support', appDir)
+  return [
+    'Cookies',
+    'Cookies-journal',
+    'Local Storage',
+    'IndexedDB',
+    'Session Storage',
+    'SharedStorage',
+    'SharedStorage-wal',
+    'Trust Tokens',
+    'Trust Tokens-journal',
+    'Network Persistent State',
+    'WebStorage',
+    'blob_storage'
+  ].map((entry) => path.join(app, entry))
+}
+
+/**
+ * The app-support directory name. Lowercase on disk while the product name is
+ * capitalised, which is exactly the mismatch that would make a hand-written
+ * path silently deny nothing — so callers pass what they observe.
+ */
+export const DEFAULT_APP_DIR = 'cookrew'
+
+export function ownerSecretPaths(
+  base: string,
+  home: string = homedir(),
+  appDir: string = DEFAULT_APP_DIR
+): readonly string[] {
   const at = (...parts: string[]): string => path.join(home, ...parts)
   return [
+    // The owner's browsing identity: Default/Cookies for every card they ever
+    // logged into. `file-read*` is allowed across the disk, so without these a
+    // served agent reads every site session the owner holds, lent nothing.
+    ...browserStatePaths(home, appDir),
+    // …and the app's OWN origin state, entry by entry (the default session
+    // writes it beside the settings, so the tree cannot be taken).
+    ...defaultSessionStatePaths(home, appDir),
     // The one the ruling names by hand.
     at('.claude', '.credentials.json'),
     at('.claude.json'),

@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exportable / importable agents — architecture &amp; plan</title>
+<style>
+  :root{--bg:#faf8f4;--fg:#2d2a20;--dim:#6b6455;--rule:#e2dccf;--card:#fffdf9;--accent:#b4531a;--good:#2f6b3a;--bad:#9b2c2c;--amber:#d97706;--violet:#7c5cff;--code:#f2ede3;}
+  @media (prefers-color-scheme: dark){:root{--bg:#17150f;--fg:#ece6d8;--dim:#9a917f;--rule:#322d22;--card:#1e1b14;--accent:#e08a4a;--good:#7fbc8c;--bad:#e08585;--amber:#e3ad4e;--violet:#b9a6ef;--code:#241f17;}}
+  :root[data-theme="dark"]{--bg:#17150f;--fg:#ece6d8;--dim:#9a917f;--rule:#322d22;--card:#1e1b14;--accent:#e08a4a;--good:#7fbc8c;--bad:#e08585;--amber:#e3ad4e;--violet:#b9a6ef;--code:#241f17;}
+  :root[data-theme="light"]{--bg:#faf8f4;--fg:#2d2a20;--dim:#6b6455;--rule:#e2dccf;--card:#fffdf9;--accent:#b4531a;--good:#2f6b3a;--bad:#9b2c2c;--amber:#d97706;--violet:#7c5cff;--code:#f2ede3;}
+  *{box-sizing:border-box}
+  body{margin:0;padding:34px 22px 80px;background:var(--bg);color:var(--fg);font:15.5px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  main{max-width:1020px;margin:0 auto}
+  h1{font-size:24px;margin:0 0 4px}
+  .sub{color:var(--dim);font-size:14px;margin:0 0 22px}
+  h2{font-size:14px;text-transform:uppercase;letter-spacing:.07em;color:var(--accent);margin:36px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--rule)}
+  code{background:var(--code);padding:1px 5px;border-radius:4px;font:12.5px/1.5 ui-monospace,"SF Mono",Menlo,monospace}
+  table{border-collapse:collapse;width:100%;margin:10px 0;font-size:13.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--rule);vertical-align:top}
+  th{color:var(--dim);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em}
+  .st{font-weight:700;white-space:nowrap;font-size:12px}
+  .s-reuse{color:var(--good)} .s-add{color:var(--amber)} .s-del{color:var(--bad)}
+  .card{background:var(--card);border:1px solid var(--rule);border-radius:9px;padding:13px 16px;margin:13px 0}
+  .card.rule{border-left:3px solid var(--accent)}
+  .theme{position:fixed;top:12px;right:12px;font:11px ui-monospace,monospace;background:var(--card);border:1px solid var(--rule);border-radius:5px;padding:5px 9px;cursor:pointer;color:var(--fg)}
+  .foot{margin-top:36px;padding-top:14px;border-top:1px solid var(--rule);color:var(--dim);font-size:13px}
+  svg{display:block;max-width:100%;height:auto;margin:8px auto}
+</style>
+</head>
+<body>
+<button class="theme" onclick="var r=document.documentElement,d=(r.dataset.theme||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'));r.dataset.theme=d==='dark'?'light':'dark'">theme</button>
+<main>
+  <h1>Exportable / importable agents — architecture &amp; plan</h1>
+  <p class="sub">Owner ruling 2026-08-26: one publish entry (team save) · one import entry (the agent selector) · the orch is the interface. <b>Verdict: reuse the backend; two small additive changes; nothing rewritten.</b></p>
+
+  <h2>The two-sided flow, on the machinery that exists</h2>
+  <svg viewBox="0 0 980 300" role="img" aria-label="owner lane: save, serve, address; caller lane: chip, gate, session, orch card; shared substrate below">
+    <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker></defs>
+    <g font-family="ui-monospace,Menlo,monospace" font-size="11.5" color="currentColor">
+      <!-- lanes -->
+      <text x="12" y="28" fill="var(--accent)" font-size="10" letter-spacing="1">OWNER</text>
+      <text x="12" y="128" fill="var(--accent)" font-size="10" letter-spacing="1">CALLER</text>
+      <text x="12" y="228" fill="var(--accent)" font-size="10" letter-spacing="1">SHARED SUBSTRATE (ships today)</text>
+      <g stroke="currentColor" stroke-width="1.2" opacity="0.5" marker-end="url(#a)" fill="none">
+        <line x1="168" y1="52" x2="196" y2="52"/><line x1="356" y1="52" x2="384" y2="52"/><line x1="560" y1="52" x2="588" y2="52"/>
+        <line x1="188" y1="152" x2="216" y2="152"/><line x1="356" y1="152" x2="384" y2="152"/><line x1="560" y1="152" x2="588" y2="152"/><line x1="768" y1="152" x2="796" y2="152"/>
+        <line x1="700" y1="66" x2="700" y2="136" stroke-dasharray="4 3"/>
+      </g>
+      <g fill="none" stroke="currentColor" stroke-width="1.2">
+        <rect x="40" y="34" width="128" height="36" rx="6"/>
+        <rect x="196" y="34" width="160" height="36" rx="6" stroke="var(--amber)"/>
+        <rect x="384" y="34" width="176" height="36" rx="6"/>
+        <rect x="588" y="34" width="224" height="36" rx="6" stroke="var(--violet)"/>
+        <rect x="40" y="134" width="148" height="36" rx="6"/>
+        <rect x="216" y="134" width="140" height="36" rx="6" stroke="var(--amber)"/>
+        <rect x="384" y="134" width="176" height="36" rx="6" stroke="var(--good)"/>
+        <rect x="588" y="134" width="180" height="36" rx="6"/>
+        <rect x="796" y="134" width="150" height="36" rx="6" stroke="var(--violet)"/>
+        <rect x="40" y="240" width="906" height="40" rx="8" stroke-dasharray="6 4" opacity="0.6"/>
+      </g>
+      <g fill="currentColor" text-anchor="middle">
+        <text x="104" y="56">save team</text>
+        <text x="276" y="56" fill="var(--amber)">share option</text>
+        <text x="472" y="56">ServedTemplates</text>
+        <text x="700" y="56" fill="var(--violet)">address · sessions · END</text>
+        <text x="114" y="156">chip in the dock</text>
+        <text x="286" y="156" fill="var(--amber)">Gate Sheet 401·402</text>
+        <text x="472" y="156" fill="var(--good)">admit() → mint session</text>
+        <text x="678" y="156">route → Conductor</text>
+        <text x="871" y="156" fill="var(--violet)">orch card, placed</text>
+      </g>
+      <g fill="currentColor" font-size="10" opacity="0.7" text-anchor="middle">
+        <text x="493" y="266">decideGate · CallCredentialService + ceremony · SessionInstantiator + sandbox/env · TeamStore + pins (S1c) · registry payment rails + dev facilitator · importTemplateAsSession</text>
+      </g>
+    </g>
+  </svg>
+
+  <h2>Reuse map — what each beat runs on</h2>
+  <table>
+    <tr><th>Beat</th><th>Backend</th><th>Status</th></tr>
+    <tr><td>Save team → share option</td><td><code>TeamStore.save</code> → <code>serving:serve</code> IPC (merged)</td><td class="st s-reuse">REUSE</td></tr>
+    <tr><td>Access + price on a served team</td><td><code>ServedTemplate</code> gains <code>access:'just-me'|'account'|'paid'</code> + <code>price?</code></td><td class="st s-add">ADD (one field)</td></tr>
+    <tr><td>Caller identity (401)</td><td><code>decideGate</code> + <code>CallCredentialService</code> + ceremony/TOFU</td><td class="st s-reuse">REUSE</td></tr>
+    <tr><td>Pay per session (402)</td><td>the gate's <b>reserved 402 slot</b>, taken at <code>admit()</code> — session START, so R5 ("never mid-conversation") holds. Terms shape + dev facilitator from the registry</td><td class="st s-add">ADD (bind the slot)</td></tr>
+    <tr><td>Session per caller, sandboxed, orch-routed</td><td>the instantiator lane (mint/reuse/END, Seatbelt, env scrub, ConductorRoute)</td><td class="st s-reuse">REUSE</td></tr>
+    <tr><td>Importer places one orch card</td><td><code>importTemplateAsSession</code> + orch-mirror proxy terminal</td><td class="st s-reuse">REUSE</td></tr>
+    <tr><td>The dock chip + gate-on-click</td><td><code>preset-chip.ts</code> — <code>chipAction: 'place' | 'gate'</code> already models a locked chip</td><td class="st s-reuse">REUSE (new chip family)</td></tr>
+    <tr><td>Per-agent export UX</td><td><code>AgentExportStore</code> demoted to enforcement substrate (minted orch registered in it); UI entries deleted</td><td class="st s-del">DEMOTE</td></tr>
+    <tr><td>Per-conversation fork for served teams</td><td>bypassed — the session IS the isolation; fork stays for direct lines only</td><td class="st s-del">BYPASS</td></tr>
+  </table>
+
+  <div class="card rule">
+    <b>The one genuine architecture decision:</b> money is <b>per-session at admission</b>. Not per-call metering (R12 can layer on later), not download entitlement (that stays Door A / the registry). It is the only 402 the serve path ever answers, and it fires before a conversation exists — which is exactly why R5 stays true.
+  </div>
+
+  <h2>Plan — slices in build order</h2>
+  <table>
+    <tr><th>#</th><th>Slice</th><th>Contents</th><th>Verify</th></tr>
+    <tr><td>1</td><td><b>Access model</b> (backend, additive)</td><td><code>ServedTemplate.access/price</code>, serve-IPC validation, copy fix <code>mkt.serve.who.free.sub</code></td><td>unit + copy tests</td></tr>
+    <tr><td>2</td><td><b>Export UI</b></td><td>share section in the save sheet (states A/B), primary renames, retire WHO CAN CALL + ExportToggle</td><td>render tests + app-shot drive</td></tr>
+    <tr><td>3</td><td><b>Served-team card + shelf</b></td><td>state C (address, sessions, END, STOP) fed by <code>serving:list</code> + instantiator; shelf chip <code>TAKING CALLS · n</code></td><td>render tests + app-shot</td></tr>
+    <tr><td>4</td><td><b>Import UI</b></td><td>remote-crew chip family in the dock, ADD BY LINK, armed placement → orch card (reuses <code>templateImport</code> shape)</td><td>render tests + app-shot</td></tr>
+    <tr><td>5</td><td><b>The gate wire</b></td><td>mount the Gate Sheet on a locked chip's click; 402-at-admission (terms from price, dev facilitator); mint-after-auth at the listener; register minted orch (<code>exportAgent</code>+<code>enrol</code>)</td><td>unit + wire tests</td></tr>
+    <tr><td>6</td><td><b>E2E acceptance</b></td><td>serve on instance A → add by link on instance B → sign in → pay (dev facilitator) → place orch card → ask → answer lands; END cuts mid-call</td><td>the real app, both sides — the product-surface bar: done when tappable</td></tr>
+  </table>
+
+  <div class="card">
+    <b>Dependency shape:</b> 1 → 2/3/4 are parallel (different files) → 5 joins them → 6 proves it. Slices 2–4 are per the two LGTM'd design docs (<i>Share-on-save</i>, <i>Import via agent selector</i>); nothing in 1–5 needs new architecture.
+  </div>
+
+  <div class="foot">
+    Cookrew · architecture note for the one-publish-entry ruling · backend at <code>origin/dev 1d311cf</code> · companion designs: <code>share-on-save-design.html</code> (LGTM), <code>import-selector-design.html</code> · gate: <code>shared/gate.ts</code> · instantiator: <code>session-instantiator*.ts</code> · chips: <code>shared/preset-chip.ts</code>.
+  </div>
+</main>
+</body>
+</html>

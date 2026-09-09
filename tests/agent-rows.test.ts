@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildAgentRows } from '../src/renderer/src/agent-rows'
+import { buildAgentRows, checkpointWanted } from '../src/renderer/src/agent-rows'
 import type { AgentRegistryEntry } from '../src/renderer/src/agent-registry'
 import type { TerminalActivity } from '../src/shared/turn'
 
@@ -170,6 +170,83 @@ describe('buildAgentRows — the 228 collapse', () => {
     })
     expect(out.live.map((r) => r.id)).toEqual(['t1'])
     expect(out.live[0].phase).toBe('offline')
+  })
+})
+
+/**
+ * THE BOARD READS WHAT THE CARD READS (trace-perf T1). After a restart the
+ * tracker has nothing on an agent that has not spoken since, but its last turn
+ * is on file and the canvas card shows it. A board that read only the tracker
+ * folded seventeen agents into QUIET under two WORKING rows while every card
+ * on the canvas was mid-sentence — the owner's screenshot, 2026-09-06.
+ */
+describe('buildAgentRows — the latest checkpoint stands in for a silent tracker', () => {
+  const cp = { prompt: 'greeting to other 2 pi agents', reply: 'Greeting Ember and Quill.' }
+
+  it('puts an agent with a checkpoint and no activity on the timeline as DONE', () => {
+    const out = buildAgentRows({
+      roster: [entry({ id: 'pilot' })],
+      activities: {},
+      checkpoints: { pilot: cp },
+      now: NOW,
+    })
+    expect(out.quiet).toHaveLength(0)
+    expect(out.live[0].phase).toBe('done')
+    expect(out.live[0].turn?.ask).toBe('greeting to other 2 pi agents')
+    expect(out.live[0].turn?.latest).toEqual({ text: 'Greeting Ember and Quill.', tone: 'done' })
+  })
+
+  it('does the same for an idle activity with nothing in it', () => {
+    const out = buildAgentRows({
+      roster: [entry()],
+      activities: { t1: activity({ phase: 'idle', prompt: null, reply: null, title: null }) },
+      checkpoints: { t1: cp },
+      now: NOW,
+    })
+    expect(out.live.map((r) => r.id)).toEqual(['t1'])
+    expect(out.live[0].phase).toBe('done')
+  })
+
+  it('lets the live tracker win the moment it has anything', () => {
+    const out = buildAgentRows({
+      roster: [entry()],
+      activities: { t1: activity({ phase: 'thinking', prompt: 'now' }) },
+      checkpoints: { t1: cp },
+      now: NOW,
+    })
+    expect(out.live[0].phase).toBe('working')
+    expect(out.live[0].turn?.ask).toBe('now')
+  })
+
+  it('keeps an agent quiet when its file has no turn either', () => {
+    const out = buildAgentRows({
+      roster: [entry({ id: 'never' })],
+      activities: {},
+      checkpoints: { never: null },
+      now: NOW,
+    })
+    expect(out.quiet.map((r) => r.id)).toEqual(['never'])
+    expect(out.quiet[0].phase).toBe('quiet')
+  })
+
+  it('reports an inactive agent as offline even with a checkpoint', () => {
+    const out = buildAgentRows({
+      roster: [entry({ active: false })],
+      activities: {},
+      checkpoints: { t1: cp },
+      now: NOW,
+    })
+    expect(out.live[0].phase).toBe('offline')
+  })
+
+  it('asks the file only about active agents the tracker is silent on', () => {
+    const roster = [
+      entry({ id: 'silent' }),
+      entry({ id: 'talking' }),
+      entry({ id: 'elsewhere', active: false }),
+    ]
+    const wanted = checkpointWanted(roster, { talking: activity({ terminalId: 'talking' }) })
+    expect(wanted).toEqual(['silent'])
   })
 })
 

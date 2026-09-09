@@ -14,7 +14,7 @@
 // what the companion must never be. A tailnet is a private mesh; the public
 // net stays out of reach by construction.
 
-import { execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 
 /** Tailscale's own view of THIS machine, reduced to what the phone needs. */
@@ -134,12 +134,37 @@ export interface TailnetProbe {
   exists: (cli: string) => boolean
 }
 
-function defaultProbe(): TailnetProbe {
+/** Async counterpart used by Electron's main process. */
+export interface AsyncTailnetProbe {
+  /** Run the CLI without holding the caller's event loop. */
+  run: (cli: string) => Promise<string>
+  /** Existence test for a CLI path. */
+  exists: (cli: string) => boolean
+}
+
+function defaultAsyncProbe(): AsyncTailnetProbe {
   return {
     exists: (cli) => existsSync(cli),
-    // Short timeout: a wedged tailscaled must not stall app startup.
-    run: (cli) => execFileSync(cli, ['status', '--json'], { encoding: 'utf8', timeout: 2000 })
+    run: (cli) =>
+      new Promise((resolve, reject) => {
+        const child = execFile(
+          cli,
+          ['status', '--json'],
+          { encoding: 'utf8', timeout: 2000, killSignal: 'SIGKILL' },
+          (error, stdout) => {
+            if (error) reject(error)
+            else resolve(typeof stdout === 'string' ? stdout : String(stdout))
+          }
+        )
+        // A status refresh must never keep Cookrew alive during shutdown.
+        child.unref?.()
+      })
   }
+}
+
+function tailnetCliCandidates(): string[] {
+  const override = process.env.COOKREW_TAILSCALE_CLI
+  return [...new Set(override ? [override, ...CLI_CANDIDATES] : CLI_CANDIDATES)]
 }
 
 /**
@@ -147,16 +172,37 @@ function defaultProbe(): TailnetProbe {
  * stopped, or unreadable. Never throws — no tailnet is the ordinary case and
  * must degrade to "LAN only", not to a failed startup.
  */
-export function readTailnet(probe: TailnetProbe = defaultProbe()): TailnetIdentity | null {
-  const override = process.env.COOKREW_TAILSCALE_CLI
-  const candidates = override ? [override, ...CLI_CANDIDATES] : CLI_CANDIDATES
-  for (const cli of candidates) {
+export function readTailnet(probe: TailnetProbe): TailnetIdentity | null {
+  for (const cli of tailnetCliCandidates()) {
     if (!probe.exists(cli)) continue
     try {
       return parseTailscaleStatus(probe.run(cli))
     } catch {
       // Installed but unhappy (daemon down, permissions) — try the next path
       // and otherwise fall through to "no tailnet".
+    }
+  }
+  return null
+}
+
+/**
+ * Non-blocking Tailscale discovery for Electron's main process.
+ *
+ * `tailscale status` normally returns quickly, but a reconnecting or wedged
+ * daemon can consume its full timeout. Running a synchronous probe from the
+ * certificate timer froze BrowserWindow event delivery long enough for macOS
+ * to show the spinning wait cursor. The sync parser seam above requires an
+ * injected runner; all real CLI discovery goes through this async form.
+ */
+export async function readTailnetAsync(
+  probe: AsyncTailnetProbe = defaultAsyncProbe()
+): Promise<TailnetIdentity | null> {
+  for (const cli of tailnetCliCandidates()) {
+    if (!probe.exists(cli)) continue
+    try {
+      return parseTailscaleStatus(await probe.run(cli))
+    } catch {
+      // Installed but unavailable: try another installation, then degrade to LAN.
     }
   }
   return null

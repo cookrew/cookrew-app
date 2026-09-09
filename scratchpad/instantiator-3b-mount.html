@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Instantiator 3b — the mount recipe &amp; the two net-new seams</title>
+<style>
+  :root{--bg:#faf8f4;--fg:#2d2a20;--dim:#6b6455;--rule:#e2dccf;--card:#fffdf9;--accent:#b4531a;--good:#2f6b3a;--bad:#9b2c2c;--amber:#d97706;--violet:#7c5cff;--code:#f2ede3;}
+  @media (prefers-color-scheme: dark){:root{--bg:#17150f;--fg:#ece6d8;--dim:#9a917f;--rule:#322d22;--card:#1e1b14;--accent:#e08a4a;--good:#7fbc8c;--bad:#e08585;--amber:#e3ad4e;--violet:#b9a6ef;--code:#241f17;}}
+  :root[data-theme="dark"]{--bg:#17150f;--fg:#ece6d8;--dim:#9a917f;--rule:#322d22;--card:#1e1b14;--accent:#e08a4a;--good:#7fbc8c;--bad:#e08585;--amber:#e3ad4e;--violet:#b9a6ef;--code:#241f17;}
+  :root[data-theme="light"]{--bg:#faf8f4;--fg:#2d2a20;--dim:#6b6455;--rule:#e2dccf;--card:#fffdf9;--accent:#b4531a;--good:#2f6b3a;--bad:#9b2c2c;--amber:#d97706;--violet:#7c5cff;--code:#f2ede3;}
+  *{box-sizing:border-box}
+  body{margin:0;padding:36px 22px 80px;background:var(--bg);color:var(--fg);font:16px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  main{max-width:960px;margin:0 auto}
+  h1{font-size:24px;margin:0 0 4px}
+  .sub{color:var(--dim);font-size:14px;margin:0 0 26px}
+  h2{font-size:14px;text-transform:uppercase;letter-spacing:.07em;color:var(--accent);margin:36px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--rule)}
+  code{background:var(--code);padding:1px 5px;border-radius:4px;font:12.5px/1.5 ui-monospace,"SF Mono",Menlo,monospace}
+  table{border-collapse:collapse;width:100%;margin:10px 0;font-size:13.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--rule);vertical-align:top}
+  th{color:var(--dim);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em}
+  .st{font-weight:700;white-space:nowrap;font-size:12px}
+  .s-done{color:var(--good)} .s-block{color:var(--bad)} .s-build{color:var(--amber)}
+  .card{background:var(--card);border:1px solid var(--rule);border-radius:9px;padding:14px 17px;margin:14px 0}
+  .card.block{border-left:3px solid var(--bad)}
+  .card h3{margin:0 0 6px;font-size:15px}
+  .card.block h3{color:var(--bad)}
+  .theme{position:fixed;top:12px;right:12px;font:11px ui-monospace,monospace;background:var(--card);border:1px solid var(--rule);border-radius:5px;padding:5px 9px;cursor:pointer;color:var(--fg)}
+  .foot{margin-top:38px;padding-top:14px;border-top:1px solid var(--rule);color:var(--dim);font-size:13px}
+  ol{padding-left:20px} ol li{margin:7px 0}
+</style>
+</head>
+<body>
+<button class="theme" onclick="var r=document.documentElement,d=(r.dataset.theme||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'));r.dataset.theme=d==='dark'?'light':'dark'">theme</button>
+<main>
+  <h1>Instantiator 3b — the mount recipe <span style="color:var(--violet);font-size:13px">R30</span></h1>
+  <p class="sub">What the app-side mount needs, from a full read of the wiring sites. Two pieces were <b>net-new core seams</b>, not wiring — <b>both are now built and tested</b>; what remains is the mechanical wire at named sites plus app verification. Written so the next pass (in the running app) is a recipe, not a search.</p>
+
+  <div class="card" style="border-left:3px solid var(--good)">
+    <h3 style="color:var(--good)">✅ MERGED TO dev — <code>origin/dev 1d311cf</code></h3>
+    <p>The whole Instantiator stack (slices 1–3 + S1c + both seams + the app-side wire) is on <b>dev</b>. The merge conflicted only in <code>index.ts</code>, resolved as clean unions (kept dev's <code>entryAgentOf</code> / <code>MOBILE_HTTPS_PORT</code> / <code>template:import</code> beside the serving imports + IPC). <b>tsc clean · full suite green: 4251 passed, 0 failed.</b> Done in a throwaway worktree — the main tree serving the app was never touched.</p>
+  </div>
+
+  <div class="card" style="border-left:3px solid var(--good)">
+    <h3 style="color:var(--good)">Both seams built AND wired into the app (tsc-green)</h3>
+    <p>The two seams (<code>session-boot.ts</code>, <code>session-spawn.ts</code>) are built, and now wired: <code>session-serving.ts</code> assembles the whole subsystem (<code>wireServing</code>), <code>index.ts</code> constructs it, a served fork boots in place and each served terminal spawns confined+scrubbed via <code>servedConfinement</code>, <code>pty.ts</code> gained an opt-in <code>served</code> option (owner terminals byte-unchanged — 164 pty tests confirm), and owner-only <code>serving:serve/stop</code> IPC lands. <b>tsc clean; full suite green</b> (the one red is the known load-sensitive fold-async perf flake, passes in isolation).</p>
+    <p style="margin-bottom:0"><b>Remaining — app-verified, deliberately not faked:</b> ① call <code>resolveInboundCall</code> from the listener, which must sit <b>post-auth inside <code>handleCallRoutes</code></b> (accountId = the verified credential <code>sub</code>); ② herdr's server-owned pane needs the Seatbelt wrap at <code>ensureSession</code> (direct/tmux are wrapped at the attach already); ③ the pin resolver + per-service granted-keys are M1 placeholders. None can be exercised without serving a real slug in the running app.</p>
+  </div>
+
+  <h2>The two seams — built</h2>
+  <div class="card" style="border-left:3px solid var(--good)">
+    <h3 style="color:var(--good)">① boot-in-place — SEAM BUILT ✓ (<code>session-boot.ts</code>, 5 tests)</h3>
+    <p>The full read of the spawn path settled the open question: the PTY spawn reads <b>no focus</b> (<code>PtyManager.spawn</code> takes a terminal id, command, cwd, owning-workspace id — nothing consults <code>focusedId</code>). So booting a workspace in place is a <b>plan + loop</b>, not a store change: <code>bootWorkspaceInPlace</code> selects the addressed workspace's terminal nodes and calls an injected <code>boot</code> per node — no switch, no detach, so the owner's canvas never moves. index.ts wires this as <code>forkTeam</code>'s <code>bootTerminals</code>. <b>One app-side nit:</b> the card lookup at <code>spawnTracked</code> (<code>index.ts:667</code>) uses focused-scoped <code>store.node</code> — swap to <code>store.nodeAcrossWorkspaces</code> so a non-focused herdr card keeps its metadata (cosmetic).</p>
+  </div>
+  <div class="card" style="border-left:3px solid var(--good)">
+    <h3 style="color:var(--good)">② scrubbed-env-at-spawn — SEAM BUILT ✓ (<code>session-spawn.ts</code>, 6 tests)</h3>
+    <p><code>servedSpawn(raw, ctx)</code> composes slice 1's two confinements into the one transform a served terminal's spawn passes through: wrap the command under the Seatbelt profile (<code>sandbox-exec -f</code>, sibling-deny so sessions are mutually invisible) AND replace the environment with the scrubbed one (HOME→sandbox, allowlist, only lent keys — the owner's <code>ANTHROPIC_API_KEY</code> is gone unless granted). Pure but for one injected profile write, landing inside the sandbox so END removes it. <b>Remaining:</b> call it from PtyManager's <code>ensureSession</code> for a served workspace's terminals — the integration point, app-verified.</p>
+  </div>
+
+  <h2>Built this pass (buildable + tested, 7 tests)</h2>
+  <table>
+    <tr><th>Piece</th><th>What</th><th>Status</th></tr>
+    <tr><td><code>makeEntryTerminalLookup</code></td><td>the scoped conductor lookup — reads the ADDRESSED workspace's own nodes (<code>store.workspaceState(id).nodes</code>), finds <code>kind==='terminal' &amp;&amp; orch</code>. <code>entryAgentOf</code> did not exist; <code>activeOrch()</code> reads the focused canvas (wrong).</td><td class="st s-done">done</td></tr>
+    <tr><td><code>rmSandbox</code></td><td>the <code>rm -rf</code> remover the Minter rollback + Ender cleanup share; absence is not an error; follows symlinked ancestors.</td><td class="st s-done">done</td></tr>
+    <tr><td><code>bootWorkspaceInPlace</code></td><td>boot-in-place seam — selects a workspace's terminals, boots each via injected <code>boot</code>, no switch/detach (<code>session-boot.ts</code>).</td><td class="st s-done">done</td></tr>
+    <tr><td><code>servedSpawn</code></td><td>env-at-spawn seam — Seatbelt wrap + scrubbed env in one transform (<code>session-spawn.ts</code>).</td><td class="st s-done">done</td></tr>
+  </table>
+
+  <h2>The mount, step by step (exact sites)</h2>
+  <ol>
+    <li><b>Construct the base + remover.</b> <code>base = path.join(homedir(), '.cookrew')</code> (the tree inlines this 5×; consider a constant). <code>remover = rmSandbox</code>.</li>
+    <li><b>Build the ForkEngine</b> — now unblocked. Wrap <code>forkTeam(teamForkDeps'(), {fromSavedTeam: templateId, dirs:[dir], worktree:true})</code> where <code>teamForkDeps'.bootTerminals = (id) =&gt; bootWorkspaceInPlace({nodesOf, boot: bootTerminal}, id)</code> (seam ①), and <code>bootTerminal</code>'s spawn routes served terminals through <code>servedSpawn</code> (seam ②) — threaded as new <code>env</code>/<code>profilePath</code> options on <code>PtyManager.spawn</code> → the <code>ensureSession</code>/<code>attachSpawn</code> wrap point (herdr: <code>ensureSession</code>; tmux: <code>attachSpawn</code>'s <code>sh -c bootScript</code>). <code>.id</code> is the workspace id. <span style="color:var(--good)">App-verified wire.</span></li>
+    <li><b>Construct the seams:</b> <code>makeTemplateSource(svc→templateId, teams, pinResolver)</code> (pinResolver reads the latest team pin's <code>{version, pinId}</code> — S1c), <code>makeMinter({base, engine, ownerEnv: process.env, grantedKeysOf, remover})</code>, <code>makeConductorRoute(makeEntryTerminalLookup({nodesOf: id=>store.workspaceState(id).nodes}))</code>, <code>makeEnder({base, cutter: callsInFlight, remover})</code>. Then <code>new SessionInstantiator(instantiatorDeps({...}))</code> and a <code>new ServedTemplates()</code>.</li>
+    <li><b>Owner IPC:</b> <code>serve(serviceId, templateId, slug)</code> / <code>stop(serviceId)</code> — owner-only, never on the listener (the grant-surface rule). On serve, guard a slug a live workspace already holds (<code>store.bySlug</code>) — the availability shadow documented in <code>session-served.ts</code>.</li>
+    <li><b>The trigger,</b> at <code>mobile-server.ts:624</code>: when <code>store.bySlug(slug)</code> misses, <code>resolveCallScope(slug, {liveWorkspaceId, servedBySlug})</code>. A <code>serve</code> result mints via <code>admit(serviceId, accountId)</code> — but <code>accountId</code> is the verified credential <code>sub</code>, known only <b>inside</b> <code>handleCallRoutes</code> after the ceremony. So admission sits after auth, not at the raw path split: the service (not the minted workspace) is what the caller enrols against and what the gate authorizes; the mint + route happen post-auth.</li>
+    <li><b>Register the minted export</b> so the gate returns <code>'identified'</code>: <code>agentExports.exportAgent({workspaceId: mintedId, nodeId: orchTerminalId, visibility:'identified', callers:[sub]})</code> AND ensure the caller is <code>enrol</code>led. Two calls by doctrine, never one.</li>
+    <li><b>Route:</b> <code>conductorFor(sessionId)</code> → the orch terminal; the existing gate mount at <code>mobile-server.ts:679</code> works unchanged once <code>scope</code> is the minted workspace id.</li>
+    <li><b>END</b> is already wired through the Ender: <code>callsInFlight.cancelWhere</code> + <code>rmSandbox</code>.</li>
+  </ol>
+
+  <div class="foot">
+    Cookrew · Instantiator R30 · slices 1–3 + S1c + both seams + the app-side wire · <b>MERGED to <code>origin/dev 1d311cf</code></b> · composition root <code>session-serving.ts</code> · tsc clean, full suite green (4251 passed). What's left is app-verified only: mint-after-auth at the listener, herdr's <code>ensureSession</code> Seatbelt wrap, and swapping the M1 pin/grant placeholders.
+  </div>
+</main>
+</body>
+</html>

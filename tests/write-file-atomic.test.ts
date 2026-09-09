@@ -18,7 +18,6 @@ import {
   renameLanded,
   writeFileAtomic,
 } from '../src/main/turn-annotations'
-import { TurnStore } from '../src/main/turn-store'
 import type { TurnRecord } from '../src/shared/turn'
 
 const inject = vi.hoisted(() => ({
@@ -255,90 +254,10 @@ describe.skipIf(process.platform === 'win32')('AnnotationStore under dir-fsync f
   })
 })
 
-/**
- * Sol r9 P1: a TurnStore rename that LANDED with a failed directory fsync
- * used to be declared successful one flush later — the advanced written tail
- * made the retry a no-op, pending/dirty cleared, and a crash could still
- * lose the whole renamed ledger. The durability debt is now tracked apart
- * from the logical tail: every flush retries the parent-directory fsync
- * until it lands, only then may the retained work clear, and a repeat
- * failure says PERSISTENT STORAGE FAULT out loud.
- */
-// Windows: directory fsync is a POSIX durability primitive not available on NTFS — macOS/Linux CI covers it.
-describe.skipIf(process.platform === 'win32')('TurnStore post-rename durability DEBT — the retry must fsync, not declare (Sol r9)', () => {
-  const rec = (index: number): TurnRecord => ({
-    index,
-    prompt: `ask ${index}`,
-    reply: `reply ${index}`,
-    startedAt: index * 10,
-    endedAt: index * 10 + 5,
-  })
-
-  it('rename lands, dir-fsync EIO: retries fsync every flush, escalates the repeat, clears only on success', () => {
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const turnsDir = path.join(dir, 'turns')
-    const store = new TurnStore(turnsDir, path.join(dir, 'checkpoint-annotations'))
-    const ledger = path.join(turnsDir, 't1.jsonl')
-    const faults = (): number =>
-      spy.mock.calls.filter((call) => String(call[0]).includes('PERSISTENT STORAGE FAULT')).length
-
-    // The first-ever flush is a full atomic rewrite whose rename LANDS while
-    // the directory fsync fails: the records are published, not durable.
-    inject.dirFsyncError = eio()
-    store.scheduleSave('t1', [rec(1), rec(2)])
-    store.flushAll()
-    expect(readFileSync(ledger, 'utf8').trim().split('\n')).toHaveLength(2)
-    expect(faults()).toBe(0) // one failure could be transient
-
-    // Retry #1, fault still standing: the flush ACTUALLY re-attempts the
-    // directory fsync (the spy counts real attempts on a directory fd), does
-    // NOT re-append the lines the file already carries, does not clear —
-    // and the repeat failure escalates loudly.
-    const before = inject.dirFsyncs
-    store.flushAll()
-    expect(inject.dirFsyncs).toBe(before + 1)
-    expect(readFileSync(ledger, 'utf8').trim().split('\n')).toHaveLength(2)
-    expect(faults()).toBe(1)
-
-    // Fault repaired: the next flush lands the fsync and only THEN succeeds.
-    inject.dirFsyncError = null
-    const beforeSuccess = inject.dirFsyncs
-    store.flushAll()
-    expect(inject.dirFsyncs).toBe(beforeSuccess + 1)
-    expect(readFileSync(ledger, 'utf8').trim().split('\n')).toHaveLength(2)
-
-    // Cleared as success: nothing is retained, so nothing retries — no
-    // further flush touches the directory again.
-    store.flushAll()
-    expect(inject.dirFsyncs).toBe(beforeSuccess + 1)
-    expect(new TurnStore(turnsDir, path.join(dir, 'checkpoint-annotations')).load('t1')).toHaveLength(2)
-    spy.mockRestore()
-  })
-
-  it('an append after the debt still settles the debt before the flush may clear', () => {
-    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const turnsDir = path.join(dir, 'turns')
-    const store = new TurnStore(turnsDir, path.join(dir, 'checkpoint-annotations'))
-    const ledger = path.join(turnsDir, 't1.jsonl')
-
-    inject.dirFsyncError = eio()
-    store.scheduleSave('t1', [rec(1)])
-    store.flushAll() // rename landed, entry unproven, debt recorded
-
-    // History grows while the debt stands: the retry appends the new record
-    // (the tail was truthful) but STILL fails on the directory fsync, so the
-    // work is retained again rather than declared saved.
-    store.scheduleSave('t1', [rec(1), rec(2)])
-    store.flushAll()
-    expect(readFileSync(ledger, 'utf8').trim().split('\n')).toHaveLength(2)
-
-    inject.dirFsyncError = null
-    const before = inject.dirFsyncs
-    store.flushAll()
-    expect(inject.dirFsyncs).toBe(before + 1) // the settle, at last
-    expect(readFileSync(ledger, 'utf8').trim().split('\n')).toHaveLength(2)
-    store.flushAll()
-    expect(inject.dirFsyncs).toBe(before + 1) // cleared — nothing retries
-    quiet.mockRestore()
-  })
-})
+// T4 DELETED the third describe here — "TurnStore post-rename durability DEBT".
+// It held the directory-fsync debt machinery: a rename that landed with a
+// failed dir-fsync had to be retried by every later flush and escalated on a
+// repeat. There is no later flush and no debt because there is no writer:
+// turn-store.ts is a reader now (one-stream T4), and the one write left —
+// scrape-history.ts — goes through the very writeFileAtomic the two describes
+// above still hold to its short-write and dir-fsync contract.

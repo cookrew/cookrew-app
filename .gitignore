@@ -17,3 +17,7 @@ registry/data/
 # Probe scripts, QA drivers and one-off harnesses — useful locally,
 # noise in history. Kept on disk, out of the repo.
 scratchpad/
+registry/assets/site/raw/
+
+# Perf gate measurements (tests/perf, COOKREW_PERF_REPORT) — CI uploads them as artifacts.
+perf-results/

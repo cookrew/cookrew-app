@@ -37,8 +37,20 @@ import type {
   RestoreResult,
 } from "../shared/model";
 import { readBytes, readJson, respondJson, startSse, pairingAuthorized } from "./mobile-http";
+import type { StreamService } from "./stream-service";
+import { handleStreamRoutes } from "./stream-routes";
+import { handleStreamAdapters } from "./stream-adapters";
+import type { LoopHealthSnapshot } from "./loop-health";
 import { ownerSubmit } from "./ask";
 import { MAX_ATTACHMENT_BYTES } from "./attachments";
+import type { SousDoor } from "./socket-server";
+import type { Surface as SousSurface } from "../shared/sous-intent";
+import type { UiCommandEvent } from "../shared/sous-ui";
+import type { EventEmitter } from "node:events";
+
+const SOUS_SURFACES: ReadonlySet<string> = new Set(["canvas", "zoom", "phone", "home", "cli"]);
+/** A spoken sentence; anything longer is a document and has other routes. */
+const SOUS_MAX_TEXT = 2000;
 
 /**
  * Workspace operations shared with the renderer IPC handlers — the mobile
@@ -95,6 +107,20 @@ export interface MobileOps {
   roleDelete: (name: string) => boolean;
 }
 
+/** The caller's side of importing a served team; index.ts builds it once. */
+export interface ServeOps {
+  inspect(link: string): Promise<unknown>;
+  browse(link: string): Promise<unknown>;
+  gate(link: string): Promise<unknown>;
+  checkout(link: string): Promise<unknown>;
+  settle(link: string, rail: "x402" | "stripe", session?: string): Promise<unknown>;
+  import(
+    link: string,
+    position?: { x: number; y: number },
+    paid?: { price: string; asset: string; rail: "x402" | "stripe" },
+  ): Promise<unknown>;
+}
+
 export interface MobileApiDeps {
   store: WorkspaceStore;
   /**
@@ -130,19 +156,54 @@ export interface MobileApiDeps {
   events: EventLog;
   /** Durable agent roster cache (~/.cookrew/agents.json). */
   agents: AgentRegistry;
+  /**
+   * Sous's door for the phone and for voice-gateway (POST /api/sous/command),
+   * and the bus its zoom/zoom-back commands ride to every /api/events
+   * subscriber as `ui`. Optional so a test server without a voice has none.
+   */
+  sous?: SousDoor;
+  uiBus?: EventEmitter;
   /** Recover an inactive teammate as it was (agent-recover feature). */
   recoverAgent: (id: string) => RecoverResult;
-  /** Endpoint restore: rewind an agent to a checkpoint (+ undo). */
-  restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>;
+  /** Endpoint restore: rewind an agent to a checkpoint (+ undo). The optional
+   *  target names an EARLIER lineage segment the index is counted in. */
+  restoreCheckpoint: (
+    id: string,
+    checkpointIndex: number,
+    targetSessionId?: string,
+  ) => Promise<RestoreResult>;
   undoRestore: (id: string) => Promise<RestoreResult>;
   /** Trace-sourced context reader (identity-keyed windows over agent files). */
   traces: Pick<TraceReader, 'index' | 'boundaryMarkers' | 'page'>;
+  /**
+   * THE ONE READER (one-stream T2, docs/site/one-stream-2026-09-07.html).
+   *
+   * Serves /stream, /stream/index, /stream/live and PUT /stream/marks, and —
+   * behind COOKREW_STREAM_ADAPTERS, on by default in this release — answers
+   * /turns, /latest and the three /trace routes off the same read. Optional
+   * so this module serves before it is wired: absent means the three new
+   * routes answer 503 (loud, not an invented empty history) and the five old
+   * ones keep answering exactly as they did.
+   */
+  stream?: StreamService;
   /**
    * Activity Board data plane (cross-workspace task view). Optional so this
    * module compiles and serves before the collectors are wired in index.ts;
    * absent = /api/board answers 503 rather than pretending the board is empty.
    */
   board?: BoardSources;
+  /**
+   * The main thread's own pulse (loop-health.ts): event-loop delay, ELU and
+   * per-loop tick durations. Read-only; absent = /api/health answers 503 so
+   * a missing wire-up is loud rather than a fabricated all-clear.
+   */
+  health?: () => LoopHealthSnapshot;
+  /**
+   * Importing a served team FROM THE PHONE — the desktop's own operations,
+   * reached over this API. Absent = the six /api/serve routes answer 503
+   * rather than pretending; the phone bridge then reports the refusal.
+   */
+  serve?: ServeOps;
   /**
    * READ-ONLY scope token (persisted as ~/.cookrew/wall-token). Authorizes the
    * SAME routes as pairingToken but for GET only — there is no separate
@@ -161,6 +222,8 @@ export interface MobileApiDeps {
    * unauthenticated (loopback-only embedders, tests).
    */
   pairingToken?: string;
+  /** Does this bearer belong to a phone this Mac still admits? */
+  companionToken?: (candidate: string) => boolean;
   /**
    * Attach-free dispatch engine (v4 §3). Optional so this module compiles and
    * serves before it is wired; absent = the two dispatch routes answer 503
@@ -253,6 +316,53 @@ export async function acquireViewWhenReady(
   return false;
 }
 
+/** How long a board read waits for the probe's in-flight pass. */
+const PROBE_WARM_MS = 1500;
+
+/** The probe's pass, or the timer, whichever lands first. Never throws. */
+async function probeWarmed(board: BoardSources): Promise<void> {
+  if (!board.probeWarm) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const bound = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, PROBE_WARM_MS);
+    timer.unref?.();
+  });
+  try {
+    await Promise.race([board.probeWarm().catch(() => undefined), bound]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Boot nonces already honoured, so a stream that reconnects on its own with
+ * the same URL is answered with the snapshot it now needs. Forgotten by AGE
+ * first — a small count would let the 257th page load un-spend the first
+ * one's nonce while its stream is still alive, and a day is longer than any
+ * stream a phone holds open — with a large ceiling under it so nobody can
+ * make this grow without bound.
+ */
+const spentBootNonces = new Map<string, number>();
+const BOOT_NONCE_TTL_MS = 24 * 60 * 60 * 1000;
+/** And a ceiling under the TTL, so a caller minting nonces cannot grow this without bound. */
+const BOOT_NONCES_MAX = 4096;
+
+/** True the FIRST time this nonce is seen — the one connect that skips the snapshot. */
+export function spendBootNonce(nonce: string | null, now = Date.now()): boolean {
+  if (nonce === null || nonce.length === 0 || nonce.length > 64) return false;
+  for (const [spent, at] of spentBootNonces) {
+    if (now - at > BOOT_NONCE_TTL_MS) spentBootNonces.delete(spent);
+  }
+  if (spentBootNonces.has(nonce)) return false;
+  spentBootNonces.set(nonce, now);
+  while (spentBootNonces.size > BOOT_NONCES_MAX) {
+    const oldest = spentBootNonces.keys().next().value;
+    if (oldest === undefined) break;
+    spentBootNonces.delete(oldest);
+  }
+  return true;
+}
+
 export async function handleMobileApi(
   request: http.IncomingMessage,
   response: http.ServerResponse,
@@ -277,8 +387,13 @@ export async function handleMobileApi(
   // Two SCOPES over one set of routes (there is no second, degraded API):
   //   pairing   → read + write
   //   read-only → GET only; any other method is refused even with a valid token
+  // The global pairing token, OR this phone's own companion token. Both are
+  // "pairing" scope: an admitted phone is a paired phone, and the per-device
+  // credential exists so forgetting one device ends that device's access
+  // rather than nobody's.
   const hasPairing =
-    !!deps.pairingToken && pairingAuthorized(request, url, deps.pairingToken);
+    !!deps.pairingToken &&
+    pairingAuthorized(request, url, deps.pairingToken, deps.companionToken);
   const hasReadOnly =
     !!deps.wallToken && pairingAuthorized(request, url, deps.wallToken);
   /** Cleared for a read: either scope. */
@@ -359,6 +474,17 @@ export async function handleMobileApi(
     );
     return true;
   }
+  // The main process reading its own event loop. Behind the /api GET gate
+  // above like every other read; the payload is timings and counts, never a
+  // token or a path.
+  if (method === "GET" && p === "/api/health") {
+    if (!deps.health) {
+      respondJson(response, 503, { error: "health not wired" });
+      return true;
+    }
+    respondJson(response, 200, deps.health());
+    return true;
+  }
   if (method === "GET" && p === "/api/presets") {
     respondJson(response, 200, presets);
     return true;
@@ -399,6 +525,11 @@ export async function handleMobileApi(
       respondJson(response, 503, { error: "board index not wired" });
       return true;
     }
+    // The probe samples off the main thread now, so the first read after it
+    // parked would otherwise paint the map from before the park. Wait for
+    // the pass it just kicked — bounded, so a slow backend costs a moment,
+    // never the request.
+    await probeWarmed(deps.board);
     respondJson(
       response,
       200,
@@ -491,6 +622,52 @@ export async function handleMobileApi(
       200,
       await ops.gitInfo(url.searchParams.get("dir") ?? ""),
     );
+    return true;
+  }
+
+  // ---- importing a served team, from the phone ----
+  // Six verbs, one shape: POST with a JSON body, the link in it. Positions and
+  // payment receipts are validated to their shape here; everything about the
+  // door — the sign-in, the 402, the placement — is the same code the desktop
+  // sheet drives, and it runs at the desktop.
+  if (method === "POST" && p.startsWith("/api/serve/")) {
+    const verb = p.slice("/api/serve/".length);
+    if (!["inspect", "browse", "gate", "checkout", "settle", "import"].includes(verb)) {
+      return false;
+    }
+    if (!deps.serve) {
+      respondJson(response, 503, { ok: false, reason: "not-wired" });
+      return true;
+    }
+    const body = await readJson<{
+      link?: unknown;
+      position?: unknown;
+      paid?: unknown;
+      rail?: unknown;
+      session?: unknown;
+    }>(request);
+    if (typeof body.link !== "string" || body.link.length === 0 || body.link.length > 2048) {
+      respondJson(response, 400, { ok: false, reason: "bad-address" });
+      return true;
+    }
+    const link = body.link;
+    const position = servePosition(body.position);
+    const paid = servePaid(body.paid);
+    const rail = body.rail === "x402" || body.rail === "stripe" ? body.rail : null;
+    const session = typeof body.session === "string" ? body.session : undefined;
+    let answer: unknown;
+    if (verb === "inspect") answer = await deps.serve.inspect(link);
+    else if (verb === "browse") answer = await deps.serve.browse(link);
+    else if (verb === "gate") answer = await deps.serve.gate(link);
+    else if (verb === "checkout") answer = await deps.serve.checkout(link);
+    else if (verb === "settle") {
+      if (rail === null) {
+        respondJson(response, 400, { ok: false, reason: "bad-rail" });
+        return true;
+      }
+      answer = await deps.serve.settle(link, rail, session);
+    } else answer = await deps.serve.import(link, position, paid);
+    respondJson(response, 200, answer);
     return true;
   }
 
@@ -693,6 +870,25 @@ export async function handleMobileApi(
     }
     return true;
   }
+
+  // ---- ONE STREAM (T2) ----
+  //
+  // THE NEW ROUTES, beside the old ones rather than instead of them:
+  // /stream/open (T2.5 — the rail's first page, the tail and the backwards
+  // cursor in ONE read), /stream/index (the rail, paged), /stream (a window
+  // of blocks by identity), /stream/live (the open tail over SSE) and PUT
+  // /stream/marks (the only write). They sit below the auth gates above and
+  // are covered by them — the GET gate reaches every new leaf by path, so
+  // adding one never adds a hole — the C1 pairing gate covers the PUT,
+  // because a second, differently-worded gate is how one ends up weaker.
+  if (await handleStreamRoutes(request, response, url, deps)) return true;
+  // THE FIVE OLD ROUTES, AS ADAPTERS over that same reader. Returns false —
+  // and the original handlers below run untouched — when the flag is off,
+  // when the reader is not wired, or for a card whose record is not a
+  // transcript this process can walk (a door's lives at the author's app, a
+  // scrape card's is the PTY). "A regression is a flag flip, not a restore"
+  // is only true because the fallback is the ORIGINAL code, not a rewrite.
+  if (await handleStreamAdapters(request, response, url, deps)) return true;
 
   const traceIndexMatch = p.match(/^\/api\/terminal\/([^/]+)\/trace\/index$/);
   if (traceIndexMatch && method === "GET") {
@@ -964,10 +1160,65 @@ export async function handleMobileApi(
     }
   }
 
+  // Sous, spoken to from a phone or a speaker. POST, so the read-only wall
+  // token is refused exactly as for every other mutating route; the sentence
+  // is the whole request, the controller's answer is the whole response —
+  // `spoken` is what the surface says back, `needs: 'prompt'` means Sous
+  // asked a question and the next sentence from the same surface answers it.
+  if (method === "POST" && p === "/api/sous/command") {
+    if (!deps.sous) {
+      respondJson(response, 503, { error: "Sous is not listening on this desktop" });
+      return true;
+    }
+    const body = await readJson<{ text?: string; surface?: string; callerId?: string }>(request);
+    const text = (body.text ?? "").trim();
+    if (!text) {
+      respondJson(response, 400, { error: "Missing text" });
+      return true;
+    }
+    if (text.length > SOUS_MAX_TEXT) {
+      respondJson(response, 400, { error: `Text longer than ${SOUS_MAX_TEXT} characters is not a sentence` });
+      return true;
+    }
+    // A wrong or missing surface is refused, not folded into the phone's
+    // bucket: a gateway that forgot to say 'home' would otherwise share the
+    // phone's pending question.
+    if (!SOUS_SURFACES.has(body.surface ?? "")) {
+      respondJson(response, 400, { error: `surface must be one of ${[...SOUS_SURFACES].join(", ")}` });
+      return true;
+    }
+    // WHO is speaking: the caller's own id when it sends one (the speaker's
+    // room, the phone's install), else the address it came from. Never the
+    // token — one token is every phone. And no focusedAgentId from the body:
+    // a network door may not name an agent by id, only by name.
+    const callerId =
+      typeof body.callerId === "string" && body.callerId.trim() !== ""
+        ? body.callerId.trim().slice(0, 64)
+        : (request.socket.remoteAddress ?? "unknown");
+    const result = await deps.sous.handle({ text, surface: body.surface as SousSurface, callerId });
+    respondJson(response, 200, result);
+    return true;
+  }
+
   if (method === "GET" && p === "/api/events") {
     const send = startSse(response);
-    send("workspace", scopedState());
+    // The opening workspace snapshot is skipped ONCE per boot: the client
+    // says `?boot=<nonce>` (remote-api sharedEvents) because it is fetching
+    // /api/workspace at this very moment, and the same document twice is the
+    // largest thing a relayed boot carries. The nonce is spent on first
+    // sight — EventSource re-dials the SAME URL when the browser reconnects
+    // by itself, and that reconnect must get the snapshot, which is how a
+    // dropped stream heals. The workspace LIST still opens every stream: a
+    // kilobyte, and the switcher's source of truth (perf lane L7).
+    if (!spendBootNonce(url.searchParams.get("boot"))) send("workspace", scopedState());
     send("workspaces", ops.listWorkspaces());
+    // Sous's zoom / zoom-back, so the phone and the TV follow the owner's
+    // voice. A scoped stream only hears about its own canvas.
+    const onUi = (event: UiCommandEvent): void => {
+      if (scope === null || event.workspaceId === scope) send("ui", event);
+    };
+    deps.uiBus?.on("command", onUi);
+    request.on("close", () => deps.uiBus?.removeListener("command", onUi));
     // Activities are keyed by terminal id across every workspace, so a scoped
     // stream filters them or it leaks other canvases' agents into this one.
     const inScopedCanvas = (terminalId: string): boolean =>
@@ -1005,12 +1256,29 @@ export async function handleMobileApi(
     // Same data as /api/board, so the same gate: an unauthenticated
     // subscriber still gets workspace/activity/event (existing behaviour,
     // untouched) but never the board stream.
-    const board = !deps.pairingToken || canRead ? deps.board : undefined;
+    // The board stream is OPT-IN (?board=1): a stream that takes it is a
+    // board CONSUMER, holds the probe open for its lifetime, and is pushed
+    // on every change. Nothing renders the frame today, so the default
+    // stream no longer carries a whole-fleet recompute per signal per phone.
+    const wantsBoard = url.searchParams.get("board") === "1";
+    const board = wantsBoard && (!deps.pairingToken || canRead) ? deps.board : undefined;
     const boardNotifier = board
       ? createBoardNotifier(() => send("board", buildBoard(board)))
       : null;
     const onBoardSignal = (): void => boardNotifier?.schedule();
-    if (board) send("board", buildBoard(board));
+    const releaseProbe = board?.probeSubscribe?.() ?? null;
+    const offProbeChange = board?.probeOnChange?.(onBoardSignal) ?? null;
+    if (board) {
+      const sentProbe = board.probe?.();
+      send("board", buildBoard(board));
+      // A first frame before the probe's FIRST pass has landed carries no
+      // L2 phases; when that pass lands the map object changes, and the
+      // board is pushed again. Once any pass has completed probeWarm answers
+      // at once with the same map, and nothing extra is pushed.
+      void board.probeWarm?.().then((fresh) => {
+        if (fresh !== sentProbe) onBoardSignal();
+      }, () => undefined);
+    }
     if (scope === null) store.on("change", onChange);
     else store.on("workspace-change", onScopedChange);
     store.on("workspaces", onWorkspaces);
@@ -1035,6 +1303,8 @@ export async function handleMobileApi(
         store.removeListener("change", onBoardSignal);
         store.removeListener("workspaces", onBoardSignal);
       }
+      offProbeChange?.();
+      releaseProbe?.(); // the last board consumer leaving stops the probe
     });
     return true;
   }
@@ -1055,14 +1325,19 @@ export async function handleMobileApi(
   // ENDPOINT RESTORE: rewind an agent in place to any checkpoint (+ undo).
   const restoreMatch = p.match(/^\/api\/agents\/([^/]+)\/restore$/);
   if (restoreMatch && method === "POST") {
-    const body = await readJson<{ checkpointIndex?: number }>(request);
+    const body = await readJson<{ checkpointIndex?: number; targetSessionId?: string }>(request);
     const index = Number(body.checkpointIndex);
     if (!Number.isInteger(index) || index < 1) {
       respondJson(response, 400, { error: "checkpointIndex must be a positive integer" });
       return true;
     }
+    // Lineage reach: the segment the index is counted in. Accepted here from
+    // day one so a phone client sending it can never be silently rewound in
+    // the WRONG segment by a server that dropped the field; the executor
+    // validates the shape and refuses malformed ids.
+    const target = typeof body.targetSessionId === "string" ? body.targetSessionId : undefined;
     try {
-      respondJson(response, 200, await deps.restoreCheckpoint(restoreMatch[1], index));
+      respondJson(response, 200, await deps.restoreCheckpoint(restoreMatch[1], index, target));
     } catch (error) {
       respondJson(response, 400, {
         error: error instanceof Error ? error.message : String(error),
@@ -1174,4 +1449,24 @@ function parseEventQuery(params: URLSearchParams): EventQuery {
     until: num("until"),
     limit: num("limit"),
   };
+}
+
+/** A canvas position off the wire, or nothing — never a NaN the canvas cannot place. */
+function servePosition(value: unknown): { x: number; y: number } | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const at = value as { x?: unknown; y?: unknown };
+  return Number.isFinite(at.x) && Number.isFinite(at.y)
+    ? { x: at.x as number, y: at.y as number }
+    : undefined;
+}
+
+/** The receipt the gate sheet took, in its exact shape, or nothing. */
+function servePaid(
+  value: unknown,
+): { price: string; asset: string; rail: "x402" | "stripe" } | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const paid = value as { price?: unknown; asset?: unknown; rail?: unknown };
+  if (typeof paid.price !== "string" || typeof paid.asset !== "string") return undefined;
+  if (paid.rail !== "x402" && paid.rail !== "stripe") return undefined;
+  return { price: paid.price.slice(0, 32), asset: paid.asset.slice(0, 16), rail: paid.rail };
 }

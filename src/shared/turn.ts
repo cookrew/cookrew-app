@@ -25,6 +25,18 @@ export interface TerminalActivity {
   terminalId: string
   /** True when the terminal runs an agent preset (non-empty command). */
   agent: boolean
+  /**
+   * PHASE ONLY, from the multiplexer — no local mirror stood behind this.
+   *
+   * A cold canvas has no PTY attached to anything, so the only thing known
+   * about an agent is what herdr says it is doing. That is worth showing on a
+   * card and worth nothing to a caller that needs a verified fact: `cookrew
+   * status` refuses to answer from herdr on purpose, the board ranks a live
+   * tail above a detector, and the clipboard/restore guards would rather read
+   * a detached agent as not-working than block on a flapping detector. Absent
+   * on every activity derived from a real screen.
+   */
+  mirrorless?: true
   phase: TurnPhase
   /** Prompt that started the current turn, best-effort echo of typed input. */
   prompt: string | null

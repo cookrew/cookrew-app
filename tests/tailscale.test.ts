@@ -3,7 +3,8 @@ import {
   isTailnetAddress,
   isTailnetHost,
   parseTailscaleStatus,
-  readTailnet
+  readTailnet,
+  readTailnetAsync
 } from '../src/main/tailscale'
 
 /**
@@ -136,6 +137,36 @@ describe('readTailnet', () => {
       exists: () => true
     })
     expect(tailnet).toBeNull()
+  })
+})
+
+describe('readTailnetAsync', () => {
+  it('does not settle until the background CLI result arrives', async () => {
+    let answer!: (value: string) => void
+    const pending = new Promise<string>((resolve) => {
+      answer = resolve
+    })
+    let settled = false
+    const result = readTailnetAsync({ run: () => pending, exists: () => true }).then((value) => {
+      settled = true
+      return value
+    })
+
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    answer(STATUS)
+    await expect(result).resolves.toMatchObject({
+      magicDnsName: 'workbench.example-tailnet.ts.net'
+    })
+  })
+
+  it('degrades to no tailnet when an async probe rejects', async () => {
+    await expect(
+      readTailnetAsync({
+        run: () => Promise.reject(new Error('tailscaled not running')),
+        exists: () => true
+      })
+    ).resolves.toBeNull()
   })
 })
 

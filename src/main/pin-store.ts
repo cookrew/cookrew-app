@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { writeFileAtomic } from './turn-annotations'
@@ -85,5 +85,33 @@ export class PinStore {
   /** The version a new cut against this terminal would take. */
   next(terminalId: string): number {
     return nextVersion(this.list(terminalId))
+  }
+
+  /**
+   * Every terminal id that has a pin file on disk — the startup uuid re-key's
+   * walk (pin-rekey.ts). Only valid ids come back: a stray file in the pins
+   * dir is not a terminal, and returning its name would hand a non-id to
+   * callers that treat the value as one.
+   */
+  listIds(): string[] {
+    if (!existsSync(this.root)) return []
+    return readdirSync(this.root)
+      .filter((f) => f.endsWith('.json'))
+      .map((f) => f.slice(0, -'.json'.length))
+      .filter((id) => isTerminalId(id))
+  }
+
+  /**
+   * Replace a terminal's pins wholesale. Exists for the startup uuid re-key,
+   * which rewrites every record of a file at once — routing that through
+   * add() would be defeated by its idempotence-by-version (the re-keyed
+   * record shares its version with the one on disk). Same atomic write as
+   * add(), so a crash mid-replace leaves the old file, never a torn one.
+   */
+  replace(terminalId: string, pins: readonly VersionPinRecord[]): void {
+    const file = this.fileFor(terminalId)
+    if (file === null) throw new Error('refusing to write pins against a non-id')
+    mkdirSync(this.root, { recursive: true })
+    writeFileAtomic(file, JSON.stringify(pins, null, 2))
   }
 }

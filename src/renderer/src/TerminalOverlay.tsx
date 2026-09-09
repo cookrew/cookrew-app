@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import type { IClipboardProvider } from '@xterm/addon-clipboard'
@@ -10,30 +10,27 @@ import type { TerminalNodeData } from '../../shared/model'
 import type { VersionPinRecord } from '../../shared/version-pin'
 import type { TerminalActivity, TurnPhase } from '../../shared/turn'
 import type { LodLayout, ScreenRect } from './zoom-lod'
+import { useActivity } from './activity-thumb-store'
 import { useCanvasUi } from './canvas-ui'
 import { cookrew, isRemoteMode } from './api'
+import { doorStateSentence, type DoorTranscriptState } from '../../shared/door-transcript-state'
 import { CheckpointTimeline } from './CheckpointTimeline'
 import { TranscriptView, type ActiveBlock, type TranscriptHandle } from './TranscriptView'
-import {
-  fetchTraceIndex,
-  fetchTraceMarkers,
-  mergeCheckpointRows,
-  mergeTraceIndex,
-  tailClipRows,
-  traceRowLabel,
-  type TraceIndexEntry,
-  type TraceMarkerRow
-} from './transcript'
-import { checkpointTitle, useTitleMode } from './checkpoint-sync'
+import { tailClipRows } from './transcript'
+import { checkpointRowTitle } from './stream/stream-rows'
+import { streamPagerOf } from './stream/stream-pager'
+import { useStream } from './stream/use-stream'
+import { useTitleMode } from './checkpoint-sync'
 import { attachFilesToTerminal, pasteClipboardImages } from './AttachButton'
 import { handleTerminalPaste } from './terminal-paste'
 import { terminalKeyIntent } from './terminal-key-intent'
+import { pasteFromClipboard, screenText } from './terminal-clipboard'
+import { attachImeBridge } from './ime-input-bridge'
 import { CrIcon } from './icons'
 import { TranslateButton } from './TranslateButton'
 import { languageByCode } from '../../shared/translate'
 import { useCheckpointTranslation } from './use-checkpoint-translation'
 import { StatusCoin } from './nodes/AgentAvatar'
-import { ServedCrewLive } from './ServedCrewLive'
 
 const PHOSPHOR_THEME = {
   background: '#14110A',
@@ -60,14 +57,17 @@ function languageName(code: string | null): string {
   return languageByCode(code)?.name ?? code
 }
 
-export function TerminalOverlayLayer({
+/**
+ * Memoised: the host (LodOverlays) re-renders on every viewport frame, and
+ * this layer only has work to do when the arbitration result changes — which
+ * useLodLayout guarantees by handing back the same `lod` object until it does.
+ */
+export const TerminalOverlayLayer = memo(function TerminalOverlayLayer({
   terminals,
-  activities,
   lod,
   onPrimaryChange
 }: {
   terminals: TerminalNodeData[]
-  activities: Record<string, TerminalActivity>
   /** SHARED overlay arbitration (App-owned, spans terminals + browsers). */
   lod: LodLayout
   /** Reports the zoomed-in terminal (most-covered active) — null on canvas. */
@@ -86,10 +86,16 @@ export function TerminalOverlayLayer({
       {terminals
         .filter((t) => activeIds.has(t.id) && rects[t.id])
         .map((t) => (
-          <TerminalOverlay key={t.id} node={t} activity={activities[t.id]} rect={rects[t.id]} />
+          <TerminalOverlayFor key={t.id} node={t} rect={rects[t.id]} />
         ))}
     </>
   )
+})
+
+/** The overlay with ITS card's activity — a per-id subscription, not App's map. */
+function TerminalOverlayFor({ node, rect }: { node: TerminalNodeData; rect: ScreenRect }): React.JSX.Element {
+  const activity = useActivity(node.id)
+  return <TerminalOverlay node={node} activity={activity} rect={rect} />
 }
 
 function clip(text: string, max: number): string {
@@ -98,6 +104,25 @@ function clip(text: string, max: number): string {
 }
 
 /** The header line carries the agent's live status, not its name. */
+/**
+ * When a served session was admitted, said the way a person would.
+ *
+ * "today 09:14" while it is today, then the date — a bare timestamp on a
+ * three-day-old session reads as if it just happened.
+ */
+function openedLabel(at: number): string {
+  const when = new Date(at)
+  const time = when.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  const today = new Date()
+  const sameDay =
+    when.getFullYear() === today.getFullYear() &&
+    when.getMonth() === today.getMonth() &&
+    when.getDate() === today.getDate()
+  return sameDay
+    ? `today ${time}`
+    : `${when.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${time}`
+}
+
 const PHASE_CHIP: Record<TurnPhase, { label: string; cls: string }> = {
   idle: { label: 'READY', cls: '' },
   thinking: { label: 'WORKING', cls: ' busy' },
@@ -115,11 +140,27 @@ function TerminalOverlay({
   rect: ScreenRect
 }): React.JSX.Element {
   const { zoomBack, requestClose } = useCanvasUi()
-  const remoteCrew = node.servedTranscript != null
   const phase = activity?.phase ?? 'idle'
-  const [tailReady, setTailReady] = useState(remoteCrew)
-  const metadataReady = remoteCrew || tailReady
+  const [tailReady, setTailReady] = useState(false)
+  const metadataReady = tailReady
+  /**
+   * AN IMPORTED CARD: a line into a session at someone else's app. Same rail,
+   * same pager, same preview — its record is read from the door — but nothing
+   * here may rewrite that record (no fork, rewind, role, attach), so those are
+   * absent rather than rendered dead (remote-card parity §3, P11).
+   */
+  const remote = node.servedSession != null
   const containerRef = useRef<HTMLDivElement>(null)
+  /**
+   * The live layer's scroll position is TMUX's, not xterm's. The mirror
+   * replays the current frame only; the scrollback lives in the pane, and a
+   * wheel over the terminal drives tmux copy-mode through the mouse
+   * sequences tmux turned on. The tracker reports where that is (scrollRow =
+   * lines above the bottom, scrollBase = history size) with every activity
+   * push; read through a ref so the wheel handler sees the newest reading.
+   */
+  const activityRef = useRef(activity)
+  activityRef.current = activity
   // Drag-in attachments: dragenter/leave bubble from every child of the
   // overlay, so a plain boolean would flicker — count enters vs leaves.
   const [dropReady, setDropReady] = useState(false)
@@ -131,85 +172,78 @@ function TerminalOverlay({
 
   const [titleMode, toggleTitleMode] = useTitleMode()
 
-  // FULL-TRACE SELECTION (item 3): the fan/timeline spans the WHOLE trace range
-  // — Forge's cheap identity listing, without the full prompt/reply ledger — so
-  // every traced checkpoint is selectable while bodies stay in trace windows.
-  const [traceIndex, setTraceIndex] = useState<TraceIndexEntry[]>([])
-  const [traceIndexReady, setTraceIndexReady] = useState(false)
-  const [traceMarkers, setTraceMarkers] = useState<TraceMarkerRow[]>([])
-  const [traceRefresh, setTraceRefresh] = useState(0)
+  /**
+   * THE ONE STREAM. Rail, drawer, pager and preview all read this — the
+   * design's own line for T3. What it replaces, on this component alone: a
+   * full /trace/index read, a /trace/markers read, a delta re-read keyed on
+   * the PTY's turn count, a second delta on the file-watch nudge, and a
+   * mergeCheckpointRows join over a ledger that was already being passed in
+   * empty. Five reads and a join, for one listing.
+   *
+   * The boundary markers are DERIVED from the rows (markersOfIndex) rather
+   * than fetched: a compaction is a fact the stream carries on the row after
+   * it, so the second fetch had nothing left to tell us.
+   */
+  const stream = useStream(node.id)
+  const rows = stream.rows
+  const traceMarkers = stream.markers
+  // The drawer's windows, named by identity (stream-pager.ts). Rebuilt when
+  // the index moves, because that is what resolves an ordinal to a cursor.
+  // Memoised on the pieces the pager READS, not on the handle: `stream` is a
+  // fresh object every render, so keying on it would hand the drawer a new
+  // pager per frame — and the pager is what the drawer's coalescing
+  // single-flight is built from, so a rapid second far-jump would be dropped.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const pager = useMemo(
+    () => streamPagerOf(stream),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [stream.index, stream.total, stream.blocksAround, stream.blocksAfter]
+  )
+
+  // WHY the rail is empty or stale, for a remote card — a named state from
+  // the door, rendered as a sentence in the session strip (P10). Re-read
+  // whenever the stream moves: a state change is part of the door poll's
+  // fingerprint, and the stream's own length is that fingerprint now.
+  const [doorState, setDoorState] = useState<DoorTranscriptState | null>(null)
   useEffect(() => {
-    if (!metadataReady) return
+    if (!remote) return
+    const read = cookrew().traceStatus
+    if (!read) return
     let alive = true
-    setTraceIndexReady(false)
-    void fetchTraceIndex(node.id)
-      .then((list) => {
-        if (alive) {
-          setTraceIndex(list)
-          setTraceIndexReady(true)
-        }
+    void read(node.id)
+      .then((state) => {
+        if (alive) setDoorState(state)
       })
-      .catch((error) => {
-        // Absent bridge already warned once inside fetchTraceIndex; a present
-        // bridge that REJECTS is a different failure — surface it, don't swallow.
-        console.error('listTraceIndex failed:', error)
-      })
-    void fetchTraceMarkers(node.id)
-      .then((list) => {
-        if (alive) setTraceMarkers(list)
-      })
-      .catch((error) => console.error('listTraceMarkers failed:', error))
+      .catch(() => undefined)
     return () => {
       alive = false
     }
-  }, [
-    node.id,
-    node.claudeSessionId,
-    node.codexSessionRef,
-    node.opencodeSessionId,
-    node.piSessionId,
-    node.sessionLineage?.join('\0'),
-    node.servedTranscript?.origin,
-    node.servedTranscript?.slug,
-    metadataReady
-  ])
-
-  const traceCeiling = traceIndex[traceIndex.length - 1]?.index ?? 0
-  const signaledTurns = activity?.turnCount ?? 0
-  useEffect(() => {
-    if (!traceIndexReady) return
-    if (!remoteCrew && signaledTurns <= traceCeiling) return
-    if (remoteCrew && traceRefresh === 0 && signaledTurns <= traceCeiling) return
-    let alive = true
-    let retry: number | null = null
-    const readDelta = (attempt: number): void => {
-      void fetchTraceIndex(node.id, { afterIndex: traceCeiling })
-        .then((delta) => {
-          if (!alive) return
-          if (delta.length > 0) {
-            setTraceIndex((current) => mergeTraceIndex(current, delta))
-          } else if (signaledTurns > traceCeiling && attempt < 2) {
-            retry = window.setTimeout(() => readDelta(attempt + 1), 120 * (attempt + 1))
-          }
-        })
-        .catch((error) => console.error('listTraceIndex delta failed:', error))
-    }
-    readDelta(0)
-    return () => {
-      alive = false
-      if (retry !== null) window.clearTimeout(retry)
-    }
-  }, [node.id, remoteCrew, signaledTurns, traceCeiling, traceIndexReady, traceRefresh])
-
-  // A served trace grows while /ask is still waiting, before the local
-  // crew-line process can complete its own turn counter. Refresh that SAME
-  // capability on a bounded cadence so the existing TranscriptView streams it.
-  useEffect(() => {
-    if (!remoteCrew || (phase !== 'thinking' && phase !== 'waiting')) return
-    setTraceRefresh((value) => value + 1)
-    const timer = window.setInterval(() => setTraceRefresh((value) => value + 1), 800)
-    return () => window.clearInterval(timer)
-  }, [remoteCrew, phase, node.id])
+    // The stream's own length is the change signal now: it moves whenever the
+    // record grows, which is the same fingerprint the door poll reported and
+    // one fewer subscription to keep in step.
+  }, [remote, node.id, stream.total, stream.opened])
+  // A refused attach says so where the strip already speaks, then clears.
+  const [attachRefusal, setAttachRefusal] = useState<string | null>(null)
+  const refusalTimer = useRef<number | null>(null)
+  const refuseAttach = (): void => {
+    setAttachRefusal(
+      `Attachments stay on this machine — this team runs at @${node.servedSession?.slug ?? '?'}.`
+    )
+    if (refusalTimer.current !== null) window.clearTimeout(refusalTimer.current)
+    refusalTimer.current = window.setTimeout(() => {
+      refusalTimer.current = null
+      setAttachRefusal(null)
+    }, 5000)
+  }
+  useEffect(
+    () => () => {
+      if (refusalTimer.current !== null) window.clearTimeout(refusalTimer.current)
+    },
+    []
+  )
+  const doorSentence = remote
+    ? (attachRefusal ?? doorStateSentence(doorState, node.servedSession?.slug ?? '?'))
+    : null
 
   // VERSION PINS on the rail. Fetched here and passed to the timeline, which
   // otherwise received nothing — so a saved template's pin was cut in the main
@@ -226,10 +260,6 @@ function TerminalOverlay({
   }, [])
   useEffect(() => {
     if (!metadataReady) return
-    if (remoteCrew) {
-      setPins([])
-      return
-    }
     let alive = true
     void cookrew()
       .listPins(node.id)
@@ -240,14 +270,70 @@ function TerminalOverlay({
     return () => {
       alive = false
     }
-  }, [node.id, pinRefresh, remoteCrew, metadataReady])
-
-  const rows = mergeCheckpointRows([], traceIndex)
-  const remoteTotal = remoteCrew ? (traceIndex[traceIndex.length - 1]?.index ?? 0) : 0
+  }, [node.id, pinRefresh, metadataReady])
 
   const transcriptRef = useRef<TranscriptHandle>(null)
   const translation = useCheckpointTranslation()
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
+  /**
+   * PHONE CLIPBOARD. The zoomed terminal on a phone can neither be selected
+   * (xterm selects by mouse drag; the touch bridge owns the finger) nor
+   * long-pressed for iOS's Paste callout (xterm's editable is a hidden
+   * zero-size textarea). Two header buttons stand in — see
+   * terminal-clipboard.ts. `termRef` is the live xterm those buttons act on.
+   */
+  const termRef = useRef<Terminal | null>(null)
+  /** A beat of feedback under the buttons ("Copied", "Nothing to paste"). */
+  const [clipNote, setClipNote] = useState<string | null>(null)
+  /**
+   * The paste FIELD: where navigator.clipboard cannot be read (plain-http
+   * LAN, or the owner declined iOS's prompt), a visible textarea the user can
+   * long-press. Its `paste` event carries the text with no permission at all.
+   */
+  const [pasteField, setPasteField] = useState(false)
+  const pasteFieldRef = useRef<HTMLTextAreaElement>(null)
+  const noteTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const note = (text: string): void => {
+    if (noteTimer.current) clearTimeout(noteTimer.current)
+    setClipNote(text)
+    noteTimer.current = setTimeout(() => setClipNote(null), 1600)
+  }
+  useEffect(() => () => {
+    if (noteTimer.current) clearTimeout(noteTimer.current)
+  }, [])
+  useEffect(() => {
+    if (pasteField) pasteFieldRef.current?.focus()
+  }, [pasteField])
+  const copyScreen = (): void => {
+    const term = termRef.current
+    if (!term) return
+    const text = screenText(term.buffer.active, term.rows)
+    if (text.length === 0) {
+      note('Nothing on screen to copy')
+      return
+    }
+    void writeClipboardText(text).then((ok) => note(ok ? 'Copied the screen' : 'Copy failed'))
+  }
+  const pasteClipboard = (): void => {
+    const term = termRef.current
+    if (!term) return
+    void pasteFromClipboard(readClipboardText, (text) => term.paste(text)).then((outcome) => {
+      if (outcome === 'pasted') note('Pasted')
+      else if (outcome === 'empty') note('Nothing to paste')
+      else setPasteField(true)
+    })
+  }
+  const onPasteFieldPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>): void => {
+    const text = event.clipboardData.getData('text')
+    event.preventDefault()
+    setPasteField(false)
+    if (text.length === 0) {
+      note('Nothing to paste')
+      return
+    }
+    termRef.current?.paste(text)
+    note('Pasted')
+  }
   const [activeBlock, setActiveBlock] = useState<ActiveBlock>({ index: null, frac: 1 })
   // A checkpoint whose trace block is still fetching for a jump — the rail/fan
   // shows it loading so a far click gives instant feedback (item 4).
@@ -257,9 +343,19 @@ function TerminalOverlay({
   // re-run the jump.
   const [jumpToken, setJumpToken] = useState(0)
 
+  /** The transcript's identity space, MEMOISED (review, T5 QA 2026-09-07): a
+   *  fresh array literal per render defeated TranscriptView's own memo of the
+   *  1,048-element sorted space it derives from it. */
+  const identities = useMemo(() => rows.map((r) => r.index), [rows])
+
   const gotoCheckpoint = (index: number): void => {
     setSelectedIndex(index)
     setJumpToken((t) => t + 1)
+    // OPENING THE DRAWER AT A CHECKPOINT PAGES THE INDEX TO IT (D1, T5 QA
+    // 2026-09-07). The rail's index is a window, and a jump that lands on an
+    // ordinal older than the window leaves the drawer with a placeholder no
+    // page will ever fill. Bounded: it stops at the page that holds it.
+    void stream.ensureLoaded(index)
   }
   const goLive = (): void => {
     setSelectedIndex(null)
@@ -274,26 +370,19 @@ function TerminalOverlay({
     if (active.index === selectedIndex) return
     setSelectedIndex(active.index)
   }
-  const selectedRow = selectedIndex !== null ? (rows.find((r) => r.index === selectedIndex) ?? null) : null
+  const selectedRow =
+    selectedIndex !== null ? (rows.find((r) => r.index === selectedIndex) ?? null) : null
+  // ONE TITLE RULE, from the mark. checkpointRowTitle is the same function the
+  // rail's rows use, so the ask line and the rail can no longer disagree about
+  // what a checkpoint is called — they did, whenever the ledger held a title
+  // the trace listing did not.
   const selectedTitle =
-    selectedIndex === null
-      ? ''
-      : selectedRow?.record
-        ? checkpointTitle(selectedRow.record, titleMode)
-        : traceRowLabel(selectedIndex, selectedRow?.traceTitle ?? '')
+    selectedRow === null ? '' : checkpointRowTitle(selectedRow, titleMode)
 
   const keepFocus = (e: React.MouseEvent): void => e.preventDefault()
 
-  // Remote cards still need the PTY lifecycle: on cold start, attach is what
-  // acquires/boots crew-line. Its bytes are transport only and are deliberately
-  // discarded; the rendered body comes from the caller-scoped trace capability.
+  // Owner ruling 2026-08-30: the zoomed view is PTY-DIRECT for every card.
   useEffect(() => {
-    if (!remoteCrew) return
-    return cookrew().ptyAttach(node.id, () => undefined)
-  }, [node.id, remoteCrew])
-
-  useEffect(() => {
-    if (remoteCrew) return
     const container = containerRef.current
     if (!container) return
 
@@ -375,15 +464,23 @@ function TerminalOverlay({
       handleTerminalPaste(event, {
         pasteText: (text) => term.paste(text),
         pasteImages: (images) =>
-          void pasteClipboardImages(node.id, images).catch((error) =>
-            console.error('Image paste failed:', error)
-          )
+          remote
+            ? refuseAttach()
+            : void pasteClipboardImages(node.id, images).catch((error) =>
+                console.error('Image paste failed:', error)
+              )
       })
     }
     container.addEventListener('paste', onPaste, true)
 
     let disposed = false
-    const cleanups: Array<() => void> = [() => term.dispose()]
+    termRef.current = term
+    const cleanups: Array<() => void> = [
+      () => {
+        termRef.current = null
+        term.dispose()
+      }
+    ]
     cleanups.push(() => {
       if (copyTimer) clearTimeout(copyTimer)
       selectionSub.dispose()
@@ -393,7 +490,22 @@ function TerminalOverlay({
     // xterm measures cell width once at open(). If the webfont swaps in
     // afterwards, rendered glyph width no longer matches the measured cell
     // and every row drifts — so the font must be resolved before open().
-    const fontReady = document.fonts.load('13px "JetBrains Mono"').catch(() => undefined)
+    // Resolved, or GIVEN UP ON: the font file comes from Google's CDN, and a
+    // phone whose cached stylesheet names the face but whose woff2 fetch
+    // hangs (tailnet up, internet down) leaves fonts.load() pending forever
+    // (pending, not rejected — the catch never fires), which held term.open
+    // AND ptyAttach hostage: a black live pane with no error anywhere. Past
+    // the budget the fallback mono opens the terminal. ACCEPTED trade: with
+    // display=swap the real face can still land later and drift the grid
+    // until the next fit — a drifted terminal beats no terminal.
+    let fontTimer: ReturnType<typeof setTimeout> | undefined
+    const fontReady = Promise.race([
+      document.fonts.load('13px "JetBrains Mono"').catch(() => undefined),
+      new Promise((resolve) => {
+        fontTimer = setTimeout(resolve, 1500)
+      })
+    ])
+    cleanups.push(() => clearTimeout(fontTimer))
 
     void fontReady.then(() => {
       if (disposed) return
@@ -480,12 +592,44 @@ function TerminalOverlay({
       // Remote only: desktop WebKit shapes these fine.
       const detoxify = (raw: string): string =>
         isRemoteMode() ? raw.replace(/[\u23E9-\u23FA]/g, (m) => `${m}\uFE0E`) : raw
+      /** SIGWINCH: make the TUI repaint its real screen at this size. */
+      let settleTimer: ReturnType<typeof setTimeout> | null = null
+      let lastKickAt = 0
+      const repaintKick = (): void => {
+        if (disposed || term.cols < 21) return
+        lastKickAt = Date.now()
+        cookrew().ptyResize(node.id, term.cols - 1, term.rows)
+        if (settleTimer) clearTimeout(settleTimer)
+        settleTimer = setTimeout(() => {
+          if (!disposed) cookrew().ptyResize(node.id, term.cols, term.rows)
+        }, 60)
+      }
+      /**
+       * A RE-hello is a reconnect, and a reconnect may have found a mirror
+       * that was rebuilt while the link was down — whose replay frame is an
+       * empty screen an idle agent never repaints (the phone's black live
+       * pane). The mount kick below cannot help: nothing remounted. So kick
+       * again on a later hello — COALESCED, because every kick resizes the
+       * SHARED mirror and repaints it for every other viewer too, and a
+       * flapping link reconnects several times a second.
+       */
+      let helloSeen = false
+      let rekickTimer: ReturnType<typeof setTimeout> | null = null
+      cleanups.push(() => {
+        if (settleTimer) clearTimeout(settleTimer)
+        if (rekickTimer) clearTimeout(rekickTimer)
+      })
       const detach = cookrew().ptyAttach(
         node.id,
         (chunk) => term.write(detoxify(chunk)),
         ({ cols, rows }) => {
           if (disposed || cols <= 0 || rows <= 0) return
           term.resize(cols, rows)
+          if (helloSeen && Date.now() - lastKickAt > 2000) {
+            if (rekickTimer) clearTimeout(rekickTimer)
+            rekickTimer = setTimeout(repaintKick, 120)
+          }
+          helloSeen = true
           if (document.visibilityState !== 'visible' || !document.hasFocus()) return
           if (reassertTimer) clearTimeout(reassertTimer)
           reassertTimer = setTimeout(() => {
@@ -504,7 +648,25 @@ function TerminalOverlay({
       cleanups.push(() => {
         if (reassertTimer) clearTimeout(reassertTimer)
       })
-      const inputSub = term.onData((input) => cookrew().ptyInput(node.id, input))
+      // Counts every emit so the IME bridge can tell whether xterm already
+      // claimed an input event — see ime-input-bridge.ts for why iOS needs one.
+      // Count AND a short log of what was sent: the bridge needs the text to
+      // recognise a letter xterm emitted just before the input event it is
+      // deciding about (a count cannot see that — see withoutWhatXtermJustSent).
+      let xtermDataCount = 0
+      let xtermRecent: { at: number; text: string }[] = []
+      const inputSub = term.onData((input) => {
+        xtermDataCount += 1
+        xtermRecent = [...xtermRecent.slice(-15), { at: Date.now(), text: input }]
+        cookrew().ptyInput(node.id, input)
+      })
+      cleanups.push(
+        attachImeBridge(
+          container,
+          () => ({ count: xtermDataCount, log: xtermRecent }),
+          (text) => cookrew().ptyInput(node.id, text)
+        )
+      )
       // Focus pops the software keyboard AND (with a small-font textarea)
       // iOS's page auto-zoom — on a phone that fired the zoom/resize loop the
       // moment the overlay opened. Desktop keeps instant focus; the phone
@@ -521,13 +683,7 @@ function TerminalOverlay({
       // internal screen state — incremental redraws (ink/Claude Code) then
       // land on a wrong baseline and scatter. A double resize (SIGWINCH)
       // forces the app to repaint its real screen at the overlay size.
-      const kickTimer = setTimeout(() => {
-        if (disposed || term.cols < 21) return
-        cookrew().ptyResize(node.id, term.cols - 1, term.rows)
-        setTimeout(() => {
-          if (!disposed) cookrew().ptyResize(node.id, term.cols, term.rows)
-        }, 60)
-      }, 200)
+      const kickTimer = setTimeout(repaintKick, 200)
       cleanups.push(() => clearTimeout(kickTimer))
 
       // Touch scrolling: tmux runs with `mouse on`, so xterm sits in
@@ -668,12 +824,12 @@ function TerminalOverlay({
       // dispose in reverse: detach stream/observers before killing the term
       for (const cleanup of cleanups.reverse()) cleanup()
     }
-  }, [node.id, remoteCrew])
+  }, [node.id])
 
   // Live-tail-only clip (unified-scroll item 1): when the turn is at rest, keep
   // only Forge's tail boundary in the live layer; the trace owns older
   // scrollback. Null (no clip) while a turn runs or when no boundary was found.
-  const clipRows = remoteCrew ? null : tailClipRows(phase, activity?.tailLines ?? null)
+  const clipRows = tailClipRows(phase, activity?.tailLines ?? null)
 
   // Acknowledge-on-view: a mounted overlay means the user is LOOKING at this
   // terminal (desktop zoom / phone popout), so a completed turn is read the
@@ -693,6 +849,10 @@ function TerminalOverlay({
     e.preventDefault()
     dragDepth.current = 0
     setDropReady(false)
+    if (remote) {
+      refuseAttach()
+      return
+    }
     void attachFilesToTerminal(node.id, Array.from(e.dataTransfer.files)).catch((error) =>
       console.error('Attachment drop failed:', error)
     )
@@ -728,7 +888,6 @@ function TerminalOverlay({
           {node.name}
         </span>
         {node.orch && <span className="cr-chip amber">ORCH</span>}
-        {remoteCrew && <span className="cr-chip">CREW</span>}
         <span className={`cr-chip${PHASE_CHIP[phase].cls}`}>{PHASE_CHIP[phase].label}</span>
         <div className="popout-actions">
           <TranslateButton
@@ -785,6 +944,26 @@ function TerminalOverlay({
           {/* The "fork from a past checkpoint" button is deprecated — fork is now
               available per-checkpoint in the timeline (State A hold + State B
               rows), so the standalone header button is redundant. */}
+          {isRemoteMode() && (
+            <>
+              <button
+                className="cr-btn sm icon popout-copy"
+                title="Copy the screen"
+                aria-label="Copy the terminal screen"
+                onClick={copyScreen}
+              >
+                <CrIcon name="copy" />
+              </button>
+              <button
+                className="cr-btn sm icon popout-paste"
+                title="Paste from the clipboard"
+                aria-label="Paste into the terminal"
+                onClick={pasteClipboard}
+              >
+                <CrIcon name="clipboard" />
+              </button>
+            </>
+          )}
           <button
             className="cr-btn sm icon popout-close"
             title="Back to canvas (Esc)"
@@ -803,8 +982,32 @@ function TerminalOverlay({
           </button>
         </div>
       </div>
+      {clipNote !== null && (
+        <div className="popout-clip-note" role="status">
+          {clipNote}
+        </div>
+      )}
+      {pasteField && (
+        <div className="popout-paste-field">
+          <textarea
+            ref={pasteFieldRef}
+            className="popout-paste-input"
+            aria-label="Paste here"
+            placeholder="Long-press here, then Paste"
+            rows={1}
+            onPaste={onPasteFieldPaste}
+          />
+          <button
+            className="cr-btn sm"
+            type="button"
+            onClick={() => setPasteField(false)}
+          >
+            CANCEL
+          </button>
+        </div>
+      )}
       {(selectedIndex !== null || activity?.prompt) && (
-        <div className="popout-ask" title={selectedRow?.record?.prompt ?? selectedTitle ?? activity?.prompt ?? ''}>
+        <div className="popout-ask" title={selectedRow?.promptHead ?? selectedTitle ?? activity?.prompt ?? ''}>
           <span className="popout-ask-label">
             {/* Identity, not array position: T-number matches transcript + rail. */}
             {selectedIndex === null ? 'YOU ❯' : `CHECKPOINT T${selectedIndex} ❯`}
@@ -879,59 +1082,93 @@ function TerminalOverlay({
           )}
         </div>
       )}
+      {/* WHAT THIS CARD IS ON. A placed orch card is a line into a session at
+          someone else's app, bought once at admission; without this the caller
+          is told nothing after the money moves — not what they got, not whose
+          machine it runs on. One dim line, not a badge: it answers a question
+          people ask occasionally, and must not compete with the agent. */}
+      {node.servedSession && (
+        <div className="popout-session" role="note">
+          <span className="k">THIS SESSION</span>
+          <span>opened {openedLabel(node.servedSession.openedAt)}</span>
+          <span className="sep">·</span>
+          <span>
+            {node.servedSession.paid
+              ? `paid ${node.servedSession.paid.price} ${node.servedSession.paid.asset} once, at the start`
+              : 'free — this team charges nothing'}
+          </span>
+          <span className="sep">·</span>
+          <span>runs at @{node.servedSession.slug}</span>
+          {doorSentence && (
+            <>
+              <span className="sep">·</span>
+              <span className="popout-session-note" role="status">
+                {doorSentence}
+              </span>
+            </>
+          )}
+        </div>
+      )}
       <div className="popout-terminal-wrap">
         <TranscriptView
           ref={transcriptRef}
           terminalId={node.id}
-          total={remoteCrew ? remoteTotal : (activity?.turnCount ?? 0)}
+          pager={pager}
+          // The STREAM's length, not the PTY's turn count: the scrape counts
+          // what it saw on a screen and the stream counts what is in the
+          // record, and a compaction is exactly where they disagree.
+          total={stream.total}
           titleMode={titleMode}
           translation={translation.showing}
-          identities={rows.map((r) => r.index)}
+          identities={identities}
           selectedIndex={selectedIndex}
           jumpToken={jumpToken}
           clipRows={clipRows}
+          atRest={phase === 'idle' || phase === 'replied'}
+          liveEdges={() => {
+            const row = activityRef.current?.scrollRow ?? null
+            const base = activityRef.current?.scrollBase ?? null
+            return {
+              // Not in copy-mode (null) is the bottom; copy-mode at history
+              // size is the top — every line the pane remembers is on screen.
+              atTop: row !== null && base !== null && row >= base,
+              atBottom: row === null || row === 0
+            }
+          }}
           onActiveBlockChange={onActiveBlockChange}
           onPending={setPendingIndex}
           onTailLoaded={() => setTailReady(true)}
-          refreshToken={remoteCrew ? traceRefresh : 0}
-          liveClassName={remoteCrew ? 'served' : undefined}
-        >
-          {remoteCrew ? (
-            <ServedCrewLive
-              terminalId={node.id}
-              activity={activity}
-              hasTranscript={rows.length > 0}
-            />
-          ) : (
-            <div ref={containerRef} className="popout-terminal" />
-          )}
+          refreshToken={0}
+>
+          {/* PTY-direct for every card (owner ruling 2026-08-30). */}
+          <div ref={containerRef} className="popout-terminal" />
         </TranscriptView>
         <CheckpointTimeline
           terminalId={node.id}
           rows={rows}
+          // The chain's length, not the page this client has fetched.
+          total={stream.total}
           pins={pins}
           markers={traceMarkers}
           titleMode={titleMode}
           activeIndex={activeBlock.index}
           loadingIndex={pendingIndex}
           markerFrac={activeBlock.frac}
-          waitingLabel={
-            remoteCrew &&
-            (phase === 'thinking' || phase === 'waiting') &&
-            rows.length === 0
-              ? 'LIVE · LINE WARMING'
-              : null
-          }
-          allowActions={!remoteCrew}
+          allowActions={!remote}
+          lineageReach={!remote}
+          ended={doorState?.kind === 'ended'}
+          anomalyNote={stream.anomalyNote}
           onGoto={gotoCheckpoint}
           onLive={goLive}
           onScrub={(fraction) => transcriptRef.current?.scrubTo(fraction)}
+          onReach={stream.reach}
         />
       </div>
       {dropReady && (
         <div className="attach-drop-hint">
           <span>
-            <CrIcon name="attach" /> DROP TO ATTACH
+            <CrIcon name="attach" />{' '}
+            {remote ? 'ATTACHMENTS STAY HERE — THIS TEAM RUNS ELSEWHERE' : 'DROP TO ATTACH'}
           </span>
         </div>
       )}

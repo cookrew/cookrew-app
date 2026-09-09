@@ -22,6 +22,8 @@ import {
   traceIndexOf
 } from '../shared/trace-blocks'
 import { claudeSessionFile } from './claude-fork'
+import { sessionChain } from './session-lineage-walk'
+import { reachableLineage } from './lineage-spill'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { isCodexCommand, validCodexSessionRef } from './codex-bind'
 import { harnessFor , type TurnFinality } from './harness'
@@ -31,6 +33,35 @@ import type { TurnRecord } from '../shared/turn'
 import type { WorkspaceStore } from './store'
 
 export type TraceSource = 'claude' | 'codex' | 'pi' | null
+
+/** Which parser a transcript is read with. */
+export type TraceKind = 'claude' | 'codex' | 'pi'
+
+/**
+ * ONE FILE, parsed — the seam the one-stream reader walks a lineage through
+ * (design: docs/site/one-stream-2026-09-07.html, phase T1).
+ *
+ * `bytesRead` is the offset the blocks were derived from, so a caller can key
+ * its own derived index by (file, offset) and extend it on append exactly the
+ * way this cache extends the blocks. It is published rather than re-stat'd
+ * because the two must agree: an index built from bytes the cache has not
+ * ingested would be an index of a file nobody read.
+ */
+export interface TraceDocument {
+  blocks: TraceBlock[]
+  markers: TraceBoundaryMarker[]
+  bytesRead: number
+  /**
+   * How many bytes of this file the LAST block spans — from the line its
+   * opening record sits on, to EOF (T5 QA 2026-09-07).
+   *
+   * The finality read's window (stream-finality.ts). Absent for a document
+   * with no block, for a non-Claude parser, and when the span would exceed
+   * TAIL_BLOCK_SPAN_CAP — beyond that the honest answer is "unknown", which
+   * reads as OPEN rather than as a multi-megabyte read on every poll.
+   */
+  tailBlockBytes?: number
+}
 
 /** A session file + the harness's turn parser, for SessionTurnSync.watch. */
 export interface SessionWatchSpec {
@@ -61,11 +92,118 @@ const READ_CHUNK_BYTES = 256 * 1024
 /** M8: cap on per-file memoized trace state (block cache + segmentMemo). */
 const TRACE_FILE_MEMO_CAP = 128
 
-/** Async chunked read of [start, start+length) — never the whole file at once. */
-async function readWindow(file: string, start: number, length: number): Promise<Buffer> {
+/**
+ * M8b: byte budget across cached files. A CacheEntry retains the parsed
+ * LINES of the whole file (the parsers re-run over them on every append —
+ * incremental I/O, not incremental parse), so its heap cost scales with FILE
+ * bytes — and session files run to 90MB. A count cap alone let a reader who
+ * browsed a dozen heavyweight transcripts pin gigabytes that nothing
+ * released: the "application memory" exhaustion. bytesRead is the honest
+ * proxy for what an entry retains.
+ */
+const TRACE_MEMO_BYTE_BUDGET = 256 * 1024 * 1024
+/**
+ * The newest entries always survive the budget. NOTE the honest bound: this
+ * floor is unconditional, so worst-case retention is
+ * max(TRACE_MEMO_BYTE_BUDGET, keepNewest × largest file) of FILE bytes —
+ * and heap is a multiple of that (the lines plus the blocks derived from
+ * them). Measured on this machine the eight largest session files are 736MB
+ * TOGETHER, so a floor of 8 quietly licensed a gigabyte the budget could not
+ * touch. Three is the floor now: the residency pin, not this number, is what
+ * keeps a polled file from being evicted underneath the poll.
+ * The budget binds in the typical case; the floor exists because evicting a
+ * live polled file would turn every rail tick into a full re-read of the
+ * biggest file on the machine, the exact O(n²) this cache prevents.
+ */
+const TRACE_MEMO_KEEP_NEWEST = 3
+/**
+ * The anti-thrash guard. Round-robin polling is precisely anti-LRU: with a
+ * polled set over budget, reading f0 evicts f1..fk — the files the SAME
+ * tick is about to poll — and every poll becomes a full re-read (measured
+ * in review: 20×30MB files, 100 full reads in 5 ticks, zero cache hits).
+ * An entry touched within this window is not an eviction candidate; the
+ * budget goes soft (an overrun) instead of converting into main-process
+ * stalls, and browsed-then-abandoned transcripts still age out.
+ *
+ * Kept ABOVE the slowest poll that depends on it — PUSH_BACKSTOP_MS in
+ * use-latest-checkpoint.ts is 10s, and a pin equal to the poll expires the
+ * instant before the poll needs it. Move one, move the other.
+ */
+const TRACE_MEMO_MIN_RESIDENCY_MS = 15_000
+
+export interface MemoEvictionPolicy {
+  maxCount: number
+  maxBytes: number
+  keepNewest: number
+}
+
+/**
+ * Evict oldest-first (Map insertion order is the recency order — setters
+ * refresh by delete+set) until the map fits both the count cap and the byte
+ * budget, but never below keepNewest entries and never past a pinned entry:
+ * order IS recency, so a pinned oldest means everything newer is pinned
+ * harder — stop and accept the overrun. Pure — unit-tested.
+ */
+export function evictOverBudget<V>(
+  map: Map<string, V>,
+  sizeOf: (value: V) => number,
+  policy: MemoEvictionPolicy,
+  pinned?: (value: V) => boolean
+): void {
+  let total = 0
+  for (const value of map.values()) total += sizeOf(value)
+  while (
+    (map.size > policy.maxCount || total > policy.maxBytes) &&
+    map.size > policy.keepNewest
+  ) {
+    const oldest = map.keys().next()
+    if (oldest.done === true) break
+    const value = map.get(oldest.value) as V
+    if (pinned?.(value) === true) break
+    total -= sizeOf(value)
+    map.delete(oldest.value)
+  }
+}
+
+/**
+ * Read [start, start+length) and hand over COMPLETE LINES as they arrive,
+ * returning the trailing partial line as bytes.
+ *
+ * The window used to be materialised whole and then split: for a 90MB
+ * session file that is the file as chunks, again as one concatenated Buffer,
+ * again concatenated with the carry, again as one ~90MB string, and finally
+ * as the split array — four copies alive at once. Measured on a 90MB file:
+ * a 509MB peak becomes 307MB, and on this machine's 120MB worst case 651MB
+ * becomes 362MB, for ONE cold read, several of which run while a canvas warms up. That is
+ * the spike that ends in "your system has run out of application memory",
+ * and it is spent before a single byte is retained.
+ *
+ * Chunk-at-a-time costs one 256KB buffer plus the carry, whatever the file's
+ * size. The carry stays BYTES so a multibyte character never tears across a
+ * chunk boundary — the property the old single toString() got for free (0x0A
+ * cannot occur inside a UTF-8 multibyte sequence, so cutting at a newline
+ * never cuts a character). The returned remainder is safe to RETAIN: it is a
+ * fresh exact-size copy, never a subarray that would pin its 256KB parent
+ * inside a long-lived cache entry. A zero-length window returns the seed
+ * untouched, which is a no-op by the same no-newline-in-a-remainder invariant.
+ */
+async function readLines(
+  file: string,
+  start: number,
+  length: number,
+  seed: Buffer,
+  push: (line: string) => void
+): Promise<Buffer> {
   const handle = await open(file, 'r')
   try {
-    const chunks: Buffer[] = []
+    // The carry is a LIST, and only the chunk is searched. Concatenating the
+    // accumulated carry per chunk is O(line²): measured, one unbroken 80MB
+    // line cost 3.1GB and 10s — a worse spike than the one this function
+    // exists to remove. Searching the chunk alone is sound because a carry
+    // never contains 0x0A (it is by definition the bytes AFTER a newline),
+    // so the last newline of carry+chunk is always the chunk's own.
+    let carry: Buffer[] = seed.length > 0 ? [seed] : []
+    let carryBytes = seed.length
     let position = start
     let remaining = length
     while (remaining > 0) {
@@ -73,11 +211,29 @@ async function readWindow(file: string, start: number, length: number): Promise<
       const buffer = Buffer.alloc(size)
       const { bytesRead } = await handle.read(buffer, 0, size, position)
       if (bytesRead === 0) break
-      chunks.push(buffer.subarray(0, bytesRead))
       position += bytesRead
       remaining -= bytesRead
+      const chunk = buffer.subarray(0, bytesRead)
+      const lastNewline = chunk.lastIndexOf(0x0a)
+      if (lastNewline === -1) {
+        // The whole chunk is carry; holding it pins nothing extra.
+        carry.push(chunk)
+        carryBytes += bytesRead
+        continue
+      }
+      const head = chunk.subarray(0, lastNewline + 1)
+      const complete =
+        carryBytes > 0 ? Buffer.concat([...carry, head], carryBytes + head.length) : head
+      for (const line of complete.toString('utf8').split('\n')) {
+        if (line.length > 0) push(line)
+      }
+      // COPIED, never a subarray: a retained tail that pointed into its
+      // 256KB parent would pin the whole chunk inside a cache entry.
+      const tail = chunk.subarray(lastNewline + 1)
+      carry = tail.length > 0 ? [Buffer.from(tail)] : []
+      carryBytes = tail.length
     }
-    return Buffer.concat(chunks)
+    return Buffer.concat(carry, carryBytes)
   } finally {
     await handle.close()
   }
@@ -87,11 +243,16 @@ interface CacheEntry {
   file: string
   /** Bytes consumed from the file (complete + partial lines). */
   bytesRead: number
+  /** Last read or ingest — the min-residency eviction pin reads this. */
+  touchedAt: number
   /** Trailing partial line, kept as BYTES so multibyte chars never tear. */
   remainder: Buffer
   lines: string[]
   blocks: TraceBlock[]
   compactMarkers: TraceBoundaryMarker[]
+  /** The last block's own byte span, computed once per ingest — see
+   *  TraceDocument.tailBlockBytes. */
+  tailBlockBytes?: number
 }
 
 export class TraceReader {
@@ -146,7 +307,11 @@ export class TraceReader {
     const blocks = await this.blocksOf(file, kind)
     const memo = this.indexCache.get(terminalId)
     const entries = memo && memo.blocks === blocks ? memo.entries : traceIndexOf(blocks)
-    if (!memo || memo.blocks !== blocks) this.indexCache.set(terminalId, { blocks, entries })
+    // cappedSet, not a bare set: this map held blocks for every terminal
+    // ever indexed and was the one memo M8 forgot to bound.
+    if (!memo || memo.blocks !== blocks) {
+      TraceReader.cappedSet(this.indexCache, terminalId, { blocks, entries })
+    }
     const afterIndex = request.afterIndex
     return afterIndex === undefined ? entries : entries.filter((entry) => entry.index > afterIndex)
   }
@@ -156,8 +321,17 @@ export class TraceReader {
    * file. The rail, rewind picker, and executor all operate in this coordinate
    * space. Pre-clear / pre-rewind endpoints are exposed via a separate lineage
    * expansion (not mixed into the main timeline) so indices never drift.
+   *
+   * `includeLineage` is that expansion's supply side, OPT-IN because segments
+   * share index numbers (every file counts its own T1..Tn): the union is only
+   * safe for a caller that disambiguates by sessionId, which today is the
+   * restore executor resolving a rewind INTO an earlier segment. Earlier
+   * segments come first (oldest first), each ref tagged with its segment.
    */
-  async checkpointRefs(terminalId: string): Promise<{ index: number; id: string; sessionId?: string }[]> {
+  async checkpointRefs(
+    terminalId: string,
+    options: { includeLineage?: boolean } = {}
+  ): Promise<{ index: number; id: string; sessionId?: string }[]> {
     const hit = this.store.nodeAcrossWorkspaces(terminalId)
     if (!hit || hit.node.kind !== 'terminal') return []
     const node = hit.node
@@ -168,7 +342,86 @@ export class TraceReader {
     if (!file) return []
     const kind = claude ? 'claude' : codex ? 'codex' : 'pi'
     const blocks = await this.blocksOf(file, kind)
-    return blocks.map((b) => ({ index: b.index, id: b.id, sessionId: node.claudeSessionId ?? undefined }))
+    const current = blocks.map((b) => ({
+      index: b.index,
+      id: b.id,
+      sessionId: node.claudeSessionId ?? undefined
+    }))
+    if (options.includeLineage !== true || !claude) return current
+    const segments = await this.lineageSegments(terminalId)
+    const earlier = segments.flatMap((segment) =>
+      segment.entries.flatMap((entry) =>
+        entry.id ? [{ index: entry.index, id: entry.id, sessionId: segment.sessionId }] : []
+      )
+    )
+    return [...earlier, ...current]
+  }
+
+  /**
+   * The EARLIER segments of this node's session chain, oldest first — the
+   * checkpoints an auto-compact rotation moved out of the current file.
+   *
+   * Derived from the transcripts' own declared predecessor edges
+   * (session-lineage-walk.sessionChain), never from `node.sessionLineage` alone:
+   * the array records what the app happened to witness, while every rotation
+   * durably names its predecessor in the successor's head. A session nothing
+   * declares is honestly absent — a shorter true history beats a guessed one.
+   *
+   * Each segment stays in its OWN T1..Tn coordinate space (mixing lineage
+   * files into one numbering produced offset drift — see boundaryMarkers).
+   * Reached on demand (an expansion tap, a cross-segment rewind), so a
+   * many-MB predecessor is parsed only when someone actually looks, then
+   * cached like any other file.
+   */
+  async lineageSegments(
+    terminalId: string
+  ): Promise<{ sessionId: string; count: number; entries: TraceIndexEntry[] }[]> {
+    const hit = this.store.nodeAcrossWorkspaces(terminalId)
+    if (!hit || hit.node.kind !== 'terminal') return []
+    const node = hit.node
+    if (!isClaudeCommand(node.command) || !node.claudeSessionId) return []
+    const chain = await sessionChain(node.cwd, node.claudeSessionId, {
+      projectsDir: this.options.projectsDir
+    })
+    const earlier = [
+      // RECORDED ids the transcripts no longer declare, oldest first. A
+      // declared edge is a fact and stays the primary source — but an id THIS
+      // APP wrote down when it bound the session is a fact too, and it is the
+      // only thing left when a /clear broke the edge or (2026-09-06) the old
+      // 20-entry cap sliced the head off the chain. Node lineage ∪ spill, and
+      // only ones whose transcript is actually on disk: an id with no file is
+      // honestly absent rather than an empty segment nobody can open.
+      ...this.recordedSegments(node, chain.map((step) => step.sessionId)),
+      ...chain
+    ].filter((step) => step.sessionId !== node.claudeSessionId)
+    const segments: { sessionId: string; count: number; entries: TraceIndexEntry[] }[] = []
+    for (const step of earlier) {
+      const blocks = await this.blocksOf(step.file, 'claude')
+      segments.push({
+        sessionId: step.sessionId,
+        count: blocks.length,
+        entries: traceIndexOf(blocks)
+      })
+    }
+    return segments
+  }
+
+  /**
+   * Segments for ids this app recorded but no transcript declares — the
+   * safety net under lineageSegments. Kept tiny and synchronous: an existsSync
+   * per recorded id, only for ids the walk did not already produce.
+   */
+  private recordedSegments(
+    node: TerminalNodeData,
+    walked: readonly string[]
+  ): { sessionId: string; file: string }[] {
+    return reachableLineage(node.id, node)
+      .filter((sessionId) => !walked.includes(sessionId))
+      .map((sessionId) => ({
+        sessionId,
+        file: claudeSessionFile(node.cwd, sessionId, this.options.projectsDir)
+      }))
+      .filter((step) => existsSync(step.file))
   }
 
   /**
@@ -193,9 +446,14 @@ export class TraceReader {
       markers.push(...seg.markers)
     }
 
-    // 2) clear marker at the root of the current session file if it was born
-    // from a /clear (the lineage has a predecessor AND the current file's
-    // first checkpoint is T1, i.e. it started fresh rather than by restore).
+    // 2) the SEGMENT BOUNDARY at the root of the current session file, when a
+    // lineage predecessor exists and the file started fresh (first checkpoint
+    // is T1, i.e. not a restore copy resuming mid-history). Two shapes:
+    //  - a rotation-born file already carries claude's own ◆ compact at the
+    //    root (step 1 parsed it) — attach the lineage pointer to THAT marker
+    //    instead of standing a duplicate ⇥ clear beside it;
+    //  - a /clear-born file has nothing in-file, so the ⇥ clear is emitted
+    //    here as before.
     const currentSid = node.claudeSessionId
     const lineage = node.sessionLineage ?? []
     if (currentSid && lineage.length > 0) {
@@ -205,7 +463,15 @@ export class TraceReader {
         const firstCurrentIndex = seg.refs[0]?.index ?? 1
         if (firstCurrentIndex === 1) {
           const previousSid = lineage[lineage.length - 1]
-          markers.push({ kind: 'clear', afterIndex: 0, previousSessionId: previousSid })
+          const rootCompactAt = markers.findIndex(
+            (m) => m.kind === 'compact' && m.afterIndex === 0
+          )
+          if (rootCompactAt >= 0) {
+            // New object, never a mutation: seg.markers are shared cache state.
+            markers[rootCompactAt] = { ...markers[rootCompactAt], previousSessionId: previousSid }
+          } else {
+            markers.push({ kind: 'clear', afterIndex: 0, previousSessionId: previousSid })
+          }
         }
       }
     }
@@ -234,19 +500,36 @@ export class TraceReader {
    *  repeat calls within one poll are cache hits. */
   private segmentMemo = new Map<string, { blocks: TraceBlock[]; refs: { index: number; id: string }[]; markers: TraceBoundaryMarker[] }>()
 
-  /** M8: both per-file maps (block cache + segmentMemo) are insertion-order
-   *  capped — otherwise they grew one entry per session file for the whole
-   *  process lifetime. FIFO suffices: a polled LIVE file is re-touched
-   *  constantly so it never reaches the eviction tail; an evicted file just
-   *  re-reads fully once on next access, then goes incremental again. */
+  /** M8: the per-file memo maps are insertion-order capped — otherwise they
+   *  grew one entry per session file for the whole process lifetime. An
+   *  evicted file just re-reads fully once on next access, then goes
+   *  incremental again. */
   private static cappedSet<V>(map: Map<string, V>, key: string, value: V): void {
     if (map.has(key)) map.delete(key) // refresh recency
     map.set(key, value)
-    while (map.size > TRACE_FILE_MEMO_CAP) {
-      const oldest = map.keys().next().value
-      if (oldest === undefined) break
-      map.delete(oldest)
-    }
+    evictOverBudget(map, () => 0, {
+      maxCount: TRACE_FILE_MEMO_CAP,
+      maxBytes: Infinity,
+      keepNewest: 1
+    })
+  }
+
+  /** M8b: the BLOCK cache is additionally byte-budgeted — see
+   *  TRACE_MEMO_BYTE_BUDGET — with the min-residency pin against poll
+   *  round-robins (see TRACE_MEMO_MIN_RESIDENCY_MS). */
+  private static cappedSetSized(map: Map<string, CacheEntry>, key: string, value: CacheEntry): void {
+    if (map.has(key)) map.delete(key) // refresh recency
+    map.set(key, value)
+    evictOverBudget(
+      map,
+      (entry) => entry.bytesRead,
+      {
+        maxCount: TRACE_FILE_MEMO_CAP,
+        maxBytes: TRACE_MEMO_BYTE_BUDGET,
+        keepNewest: TRACE_MEMO_KEEP_NEWEST
+      },
+      (entry) => Date.now() - entry.touchedAt < TRACE_MEMO_MIN_RESIDENCY_MS
+    )
   }
 
   /**
@@ -326,7 +609,9 @@ export class TraceReader {
     const remember = (
       value: { prompt: string; reply: string; title?: string } | null
     ): { prompt: string; reply: string; title?: string } | null => {
-      this.latestCache.set(terminalId, { file: spec.file, size, mtimeMs, value })
+      // cappedSet: a turn's prompt+reply can run hundreds of KB, keyed by
+      // every terminal ever polled — the OTHER map M8 forgot.
+      TraceReader.cappedSet(this.latestCache, terminalId, { file: spec.file, size, mtimeMs, value })
       return value
     }
     // Escalate the window until it holds a COMPLETE turn. A turn only parses
@@ -368,6 +653,32 @@ export class TraceReader {
       // No complete turn in this window. If we have now read the whole file,
       // there genuinely is none; otherwise grow and retry.
       if (size - window <= 0) return remember(null)
+    }
+  }
+
+  /**
+   * ONE FILE's parsed document — blocks, the compaction boundaries the file
+   * itself declares, and the byte offset both were derived from.
+   *
+   * Additive seam for stream.ts (one-stream T1): the lineage-wide reader
+   * walks a chain through THIS cache instead of standing up a second one.
+   * Two caches over the same transcripts would be exactly the duplication
+   * that design removes — and these files run to 119 MB, so a second copy is
+   * not an abstraction cost, it is the "out of application memory" incident
+   * TRACE_MEMO_BYTE_BUDGET already exists to prevent.
+   *
+   * Never throws: an unreadable file reads as an empty document (blocksOf
+   * logs and returns []), and the stream reports it as missing rather than
+   * failing a whole chain for one absent predecessor.
+   */
+  async documentOf(file: string, kind: TraceKind = 'claude'): Promise<TraceDocument> {
+    const blocks = await this.blocksOf(file, kind)
+    const cached = this.cache.get(file)
+    return {
+      blocks,
+      markers: cached?.compactMarkers ?? [],
+      bytesRead: cached?.bytesRead ?? 0,
+      ...(cached?.tailBlockBytes !== undefined ? { tailBlockBytes: cached.tailBlockBytes } : {})
     }
   }
 
@@ -447,62 +758,109 @@ export class TraceReader {
       const info = await stat(file)
       const cached = this.cache.get(file)
       if (cached && info.size === cached.bytesRead) {
-        return cached.blocks // unchanged: zero I/O
+        // Unchanged: zero I/O — but still a TOUCH. The old FIFO only
+        // refreshed recency on growth, so an idle-but-viewed file aged
+        // toward the eviction tail exactly as if nobody was looking at it.
+        const touched = { ...cached, touchedAt: Date.now() }
+        this.cache.delete(file)
+        this.cache.set(file, touched)
+        return touched.blocks
       }
       if (cached && info.size > cached.bytesRead) {
         // Append-only growth: read ONLY the new bytes.
-        const appended = await readWindow(file, cached.bytesRead, info.size - cached.bytesRead)
-        return this.ingest(file, kind, cached, appended, info.size)
+        const lines = [...cached.lines]
+        const remainder = await readLines(
+          file,
+          cached.bytesRead,
+          info.size - cached.bytesRead,
+          cached.remainder,
+          (line) => lines.push(line)
+        )
+        return this.ingest(file, kind, lines, remainder, info.size)
       }
-      // First read or a shrink (/rewind truncation): reload.
-      const whole = await readWindow(file, 0, info.size)
-      const fresh: CacheEntry = {
-        file,
-        bytesRead: 0,
-        remainder: Buffer.alloc(0),
-        lines: [],
-        blocks: [],
-        compactMarkers: []
-      }
-      return this.ingest(file, kind, fresh, whole, info.size)
+      // First read or a shrink (/rewind truncation): reload — streamed, so a
+      // 90MB session file is never four copies of itself in flight.
+      const lines: string[] = []
+      const remainder = await readLines(file, 0, info.size, Buffer.alloc(0), (line) =>
+        lines.push(line)
+      )
+      return this.ingest(file, kind, lines, remainder, info.size)
     } catch (error) {
       console.error('Trace read failed:', error)
       return []
     }
   }
 
-  /** Fold new bytes into the cache: complete lines parse, the tail waits. */
+  /** Parse the lines the reader gathered and cache them; the tail waits. */
   private ingest(
     file: string,
     kind: 'claude' | 'codex' | 'pi',
-    entry: CacheEntry,
-    incoming: Buffer,
+    lines: string[],
+    remainder: Buffer,
     bytesRead: number
   ): TraceBlock[] {
-    const pending = Buffer.concat([entry.remainder, incoming])
-    const lastNewline = pending.lastIndexOf(0x0a)
-    const complete = lastNewline === -1 ? Buffer.alloc(0) : pending.subarray(0, lastNewline + 1)
-    const remainder = lastNewline === -1 ? pending : pending.subarray(lastNewline + 1)
-    const lines = [...entry.lines]
-    if (complete.length > 0) {
-      for (const line of complete.toString('utf8').split('\n')) {
-        if (line.length > 0) lines.push(line)
-      }
-    }
     const parsedClaude = kind === 'claude' ? parseClaudeTraceDocument(lines) : null
     const blocks = parsedClaude
       ? parsedClaude.blocks
       : kind === 'codex'
         ? parseCodexTrace(lines)
         : parsePiTrace(lines)
-    TraceReader.cappedSet(this.cache, file, {
+    const tailBlockBytes = parsedClaude
+      ? tailBlockSpan(lines, parsedClaude.blockLines, remainder.length)
+      : undefined
+    TraceReader.cappedSetSized(this.cache, file, {
       file,
       bytesRead,
-      remainder: Buffer.from(remainder),
+      touchedAt: Date.now(),
+      remainder,
       lines,
       blocks,
-      compactMarkers: parsedClaude?.markers ?? []
+      compactMarkers: parsedClaude?.markers ?? [],
+      ...(tailBlockBytes !== undefined ? { tailBlockBytes } : {})
     })
     return blocks
   }
+}
+
+/**
+ * The finality read's ceiling. Past this the answer is "unknown", which reads
+ * as OPEN — the conservative direction stream-finality.ts has always taken.
+ *
+ * 8 MiB is roughly forty times the largest single exchange measured on the
+ * owner's machine and still one bounded read; a turn whose own records run
+ * longer than that is a turn nobody can settle cheaply, and freezing a card
+ * on a "still working" is far cheaper than a multi-megabyte read per poll.
+ */
+export const TAIL_BLOCK_SPAN_CAP = 8 * 1024 * 1024
+
+/**
+ * The LAST block's own byte span: its opening line, to EOF.
+ *
+ * SUMMED BACKWARDS, over one exchange's lines only. A forward prefix over the
+ * whole file would be exact for every block and costs 1.5 s on a 142 MB
+ * transcript (measured 2026-09-07) — a price every ingest would pay for an
+ * answer only the tail ever needs. This is O(the tail exchange).
+ *
+ * The sum is a LOWER-BOUND-SAFE approximation of the span: blank lines are
+ * dropped before this parser sees them (readLines pushes only non-empty
+ * lines), so a transcript with blank lines inside its last exchange yields a
+ * span slightly SHORT of the truth. stream-finality.ts adds its own backoff
+ * for that, and a window that opens mid-record simply drops its torn first
+ * line the way every window here already does.
+ */
+export function tailBlockSpan(
+  lines: readonly string[],
+  blockLines: readonly number[],
+  remainderBytes: number
+): number | undefined {
+  const from = blockLines[blockLines.length - 1]
+  if (from === undefined || from < 0 || from >= lines.length) return undefined
+  let span = remainderBytes
+  for (let at = lines.length - 1; at >= from; at -= 1) {
+    span += Buffer.byteLength(lines[at]) + 1
+    // BOUNDED: a runaway exchange stops costing arithmetic the moment it is
+    // past anything the finality read would agree to open.
+    if (span > TAIL_BLOCK_SPAN_CAP) return span
+  }
+  return span
 }

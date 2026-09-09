@@ -13,7 +13,7 @@
 
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { API_BASE, apiPath, clientSlug } from '../src/renderer/src/api-base'
 
 const RENDERER = path.join(__dirname, '..', 'src', 'renderer', 'src')
@@ -22,12 +22,13 @@ const RENDERER = path.join(__dirname, '..', 'src', 'renderer', 'src')
  * Files whose /api URLs are DELIBERATELY unslugged, listed here rather than
  * hidden behind a regex hole so the exemption is reviewed like anything else.
  *
- * browser-stream.ts builds the interactive-browser WebSocket from the PAGE
- * ORIGIN, and the stream is addressed by browser NODE ID, which is globally
- * unique — it is not a canvas read, so there is no workspace for it to be
- * wrong about. Verifying that live from a slugged page is on the post-merge
- * list; if it turns out the stream does need a scope, this line is where that
- * decision gets made rather than a place the sweep silently never looked.
+ * browser-stream.ts is where the stream's ROOT-ABSOLUTE path is spelled out
+ * (`streamPath`), for a caller to scope. That is the point of the exemption
+ * and the whole of it: the caller — useBrowserStream — now wraps it in
+ * apiPath, which is asserted below rather than assumed. Phase C3 is what
+ * forced the question the old exemption deferred: a socket built from the page
+ * origin by hand was harmless while the page origin WAS the transport, and is
+ * a silent bug the moment the data plane can move without the address bar.
  */
 const EXEMPT = new Set(['browser-stream.ts'])
 
@@ -52,6 +53,61 @@ describe('apiPath at the unslugged root', () => {
     expect(API_BASE).toBe('')
     expect(apiPath('/api/state')).toBe('/api/state')
     expect(apiPath('/api/terminal/t1/input')).toBe('/api/terminal/t1/input')
+  })
+})
+
+describe('apiPath under a relay prefix', () => {
+  /**
+   * The globals are read ONCE at module load, deliberately — so a test that
+   * wants a different client has to load a different module instance. That is
+   * the same reason the app cannot be re-pointed at another workspace (or
+   * another desktop) by mutating a global after boot.
+   */
+  const clientServedAt = async (
+    injected: Record<string, unknown>
+  ): Promise<typeof import('../src/renderer/src/api-base')> => {
+    Object.assign(globalThis, injected)
+    vi.resetModules()
+    return import('../src/renderer/src/api-base')
+  }
+
+  afterEach(() => {
+    delete (globalThis as { COOKREW_BASE?: unknown }).COOKREW_BASE
+    delete (globalThis as { COOKREW_SLUG?: unknown }).COOKREW_SLUG
+    vi.resetModules()
+  })
+
+  const BASE = '/relay/@owner/desktop/11111111-2222-3333-4444-555555555555'
+
+  it('prefixes every request with the base the page was served under', async () => {
+    // Pressing OPEN on /me lands the companion here. Without the prefix its
+    // `/api/state` leaves the relay path and hits cookrew.dev's own routes —
+    // the page renders and then talks to the registry instead of the Mac.
+    const api = await clientServedAt({ COOKREW_BASE: BASE, COOKREW_SLUG: '' })
+    expect(api.clientBase()).toBe(BASE)
+    expect(api.API_BASE).toBe(BASE)
+    expect(api.apiPath('/api/state')).toBe(`${BASE}/api/state`)
+    expect(api.apiPath('/api/events')).toBe(`${BASE}/api/events`)
+  })
+
+  it('composes with the slug rather than replacing it', async () => {
+    // Two different questions — where the app is served from, and which
+    // workspace it is for. A relayed client under a slug needs both, and
+    // preferring one would silently answer for the focused canvas.
+    const api = await clientServedAt({ COOKREW_BASE: BASE, COOKREW_SLUG: 'playground' })
+    expect(api.API_BASE).toBe(`${BASE}/playground`)
+    expect(api.apiPath('/api/state')).toBe(`${BASE}/playground/api/state`)
+  })
+
+  it('tolerates a trailing slash on the injected base', async () => {
+    const api = await clientServedAt({ COOKREW_BASE: `${BASE}/` })
+    expect(api.apiPath('/api/state')).toBe(`${BASE}/api/state`)
+  })
+
+  it('is the identity again for a companion served at the root', async () => {
+    const api = await clientServedAt({ COOKREW_BASE: '', COOKREW_SLUG: '' })
+    expect(api.API_BASE).toBe('')
+    expect(api.apiPath('/api/state')).toBe('/api/state')
   })
 })
 
@@ -125,6 +181,50 @@ describe('the streams are covered too', () => {
       })
     }
     expect(violations).toEqual([])
+  })
+
+  it('the browser socket is scoped and follows the data plane', () => {
+    // The one long-lived connection that is not an EventSource, and the one
+    // that was building its own URL. It must compose through apiPath like
+    // everything else, or a phone that switched onto the LAN would keep
+    // streaming its browser frames through cookrew.dev.
+    const source = readFileSync(path.join(RENDERER, 'useBrowserStream.ts'), 'utf8')
+    expect(source).toContain('apiPath(streamPath(')
+    // The desktop keeps its own route to the loopback companion server: it is
+    // loaded from file:// or Vite and has no page origin to compose against.
+    expect(source).toContain('DESKTOP_STREAM_ORIGIN')
+  })
+
+  it('every scoped fetch goes through planeFetch', () => {
+    // planeFetch supplies the credential mode the current plane needs —
+    // cookies same-origin through the relay, none at all cross-origin to the
+    // Mac — and reports the transport failures that are the only evidence a
+    // direct plane has died. Both are invisible when missed: the first 401s
+    // every request, the second strands a phone on a dead path forever.
+    //
+    // The probes are deliberately NOT on this list and cannot be: askHello
+    // talks to an address that has not yet proved it is the Mac, and the
+    // registry's verify call is the one request in the client that is for
+    // cookrew.dev itself. Neither is on the data plane.
+    const violations: string[] = []
+    for (const file of sourceFiles(RENDERER)) {
+      const code = stripComments(readFileSync(file, 'utf8'))
+      code.split('\n').forEach((line, index) => {
+        if (!/(?:^|[^A-Za-z])fetch\(\s*apiPath\(/.test(line)) return
+        if (/planeFetch\(/.test(line)) return
+        violations.push(`${path.relative(RENDERER, file)}:${index + 1}: ${line.trim()}`)
+      })
+    }
+    expect(violations).toEqual([])
+  })
+
+  it('the planeFetch sweep can actually see a violation', () => {
+    // Same discipline as the sweeps above: a conformance test that cannot
+    // fail is decoration.
+    const detector = /(?:^|[^A-Za-z])fetch\(\s*apiPath\(/
+    expect(detector.test(`await fetch(apiPath('/api/state'))`)).toBe(true)
+    expect(detector.test(`void fetch(apiPath('/api/beacon'), {`)).toBe(true)
+    expect(detector.test(`await planeFetch(apiPath('/api/state'))`)).toBe(false)
   })
 
   it('the token sweep can actually see a violation', () => {

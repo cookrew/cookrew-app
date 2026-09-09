@@ -78,6 +78,26 @@ export function browserRenderMode(opts: {
   return 'legacy-webview'
 }
 
+export interface BrowserCapability {
+  enabled: boolean
+  desktopToken: string | null
+}
+
+/**
+ * Adopt a re-resolved capability, preserving object identity on a same
+ * answer. Consumers narrow to scalars, so identity buys skipping an App
+ * re-render across a full canvas at the moment a phone wakes — not a
+ * remount, which never happens either way. Pure — unit-tested.
+ */
+export function nextCapability(
+  prev: BrowserCapability | null,
+  next: BrowserCapability
+): BrowserCapability {
+  return prev && prev.enabled === next.enabled && prev.desktopToken === next.desktopToken
+    ? prev
+    : next
+}
+
 /** Clamp a requested viewport dimension to the server's accepted range (rounded). */
 export function clampViewport(px: number): number {
   if (!Number.isFinite(px) || px <= 0) return VIEWPORT_MIN
@@ -109,8 +129,46 @@ export function viewportControlMsg(
 }
 
 /**
- * The WS URL for a browser's stream, derived from the page origin (ws/wss) with
+ * The stream's ROOT-ABSOLUTE path, ready to be scoped like every other request.
+ *
+ * Split out from streamUrl so the companion's socket can go through apiPath and
+ * therefore follow the data plane (data-plane.ts). It was the one long-lived
+ * connection built from the page origin by hand — which was harmless while the
+ * page origin WAS the transport, and is a silent bug the moment the data plane
+ * can move without the address bar.
+ */
+export function streamPath(
+  browserId: string,
+  w: number,
+  h: number,
+  desktopToken?: string | null
+): string {
+  const token = desktopToken ? `&desktopToken=${encodeURIComponent(desktopToken)}` : ''
+  const q = `w=${clampViewport(w)}&h=${clampViewport(h)}${token}`
+  return `/api/browser/${encodeURIComponent(browserId)}/stream?${q}`
+}
+
+/**
+ * ws/wss for a request URL that apiPath has already scoped.
+ *
+ * Two shapes arrive, one per plane. A DIRECT plane hands over an absolute
+ * `https://…` URL and the scheme is simply upgraded — the socket must go to
+ * the Mac, not to the origin the page happens to be served from. A RELAY plane
+ * hands over a root-absolute path, which is completed with the page's own
+ * origin exactly as before.
+ */
+export function socketUrl(pageOrigin: string, scopedUrl: string): string {
+  if (/^https:\/\//i.test(scopedUrl)) return `wss://${scopedUrl.slice(8)}`
+  if (/^http:\/\//i.test(scopedUrl)) return `ws://${scopedUrl.slice(7)}`
+  const scheme = pageOrigin.startsWith('https') ? 'wss' : 'ws'
+  return `${scheme}://${pageOrigin.replace(/^https?:\/\//, '')}${scopedUrl}`
+}
+
+/**
+ * The WS URL for a browser's stream, derived from an origin (ws/wss) with
  * the requested screencast size as `w`/`h` query params (Forge's contract).
+ * The desktop's route to the loopback companion server; the phone composes its
+ * own through apiPath so the socket follows the data plane.
  */
 export function streamUrl(
   origin: string,
@@ -119,11 +177,7 @@ export function streamUrl(
   h: number,
   desktopToken?: string | null
 ): string {
-  const scheme = origin.startsWith('https') ? 'wss' : 'ws'
-  const host = origin.replace(/^https?:\/\//, '')
-  const token = desktopToken ? `&desktopToken=${encodeURIComponent(desktopToken)}` : ''
-  const q = `w=${clampViewport(w)}&h=${clampViewport(h)}${token}`
-  return `${scheme}://${host}/api/browser/${encodeURIComponent(browserId)}/stream?${q}`
+  return socketUrl(origin, streamPath(browserId, w, h, desktopToken))
 }
 
 /**

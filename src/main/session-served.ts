@@ -54,6 +54,13 @@ export interface ServedTemplate {
    * so `serve` refuses both shapes rather than normalising them.
    */
   priceUsd?: string
+  /**
+   * THE FACE'S WORDS — the owner's one-line summary (≤160 chars) and up to
+   * five tags, validated at the IPC (served-face.ts) and carried verbatim to
+   * the registry. Absent is absent: an owner who wrote nothing has no summary.
+   */
+  summary?: string
+  tags?: readonly string[]
 }
 
 /** A well-formed price: digits with an optional 1–2 decimal places, > 0. */

@@ -58,7 +58,11 @@ describe('MED-2 — the rail tick and traceFraction are one formula', () => {
    */
   it('the renderer calls the shared anchor instead of keeping a copy', () => {
     const normalised = source.replace(/\s+/g, ' ')
-    expect(normalised).toContain('traceFraction(m.afterIndex, rows)')
+    // The call now carries the rail's SCALE as well (D1, T5 QA 2026-09-07):
+    // the index is paged, so a tick has to be placed over the whole chain and
+    // not over the hundred rows this client fetched. Still one call, still no
+    // local formula — which is all this proxy ever asserted.
+    expect(normalised).toContain('traceFraction(m.afterIndex, rows, scale)')
     expect(normalised).not.toContain('const frac = (at + 1) / rows.length')
   })
 

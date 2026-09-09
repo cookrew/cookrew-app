@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { entryAgentOf, orchAgentOf, type TeamSnapshot } from '../src/main/teams'
+import { entryAgentOf, leaderOf, orchAgentOf, withLeader, type TeamSnapshot } from '../src/main/teams'
 import type { CanvasNode } from '../src/shared/model'
 
 const term = (name: string, orch = false): CanvasNode =>
@@ -75,5 +75,49 @@ describe('orchAgentOf — a SERVED crew has an orch or it has no door', () => {
   it('does not mistake an orch-flagged NON-terminal for a door', () => {
     const browser = { kind: 'browser', id: 'b1', name: 'Docs', orch: true } as unknown as CanvasNode
     expect(orchAgentOf(snap([browser]))).toBeNull()
+  })
+})
+
+/**
+ * THE LEADER (owner ruling, 2026-09-05): the first agent terminal the owner
+ * SELECTED leads the exported team — no orch node needed. TeamStore.save
+ * stamps the leader as the snapshot's one orch, so orchAgentOf above keeps
+ * answering the door without a second field, and every no-orch refusal
+ * becomes a no-terminal refusal.
+ */
+describe('leaderOf / withLeader — the first selected terminal leads', () => {
+  const nodes = [term('Scout'), term('Conductor', true), term('Editor')]
+
+  it('is the first terminal in SELECTION order, not canvas order, not the orch', () => {
+    expect(leaderOf(nodes, ['t-Editor', 't-Conductor', 't-Scout'])?.name).toBe('Editor')
+    expect(leaderOf(nodes, ['t-Scout', 't-Conductor'])?.name).toBe('Scout')
+  })
+
+  it('skips selected non-terminals and ids that are not in the team', () => {
+    const browser = { kind: 'browser', id: 'b1', name: 'Docs' } as unknown as CanvasNode
+    expect(leaderOf([browser, ...nodes], ['b1', 'gone', 't-Editor'])?.name).toBe('Editor')
+  })
+
+  it('without a selection order keeps the workspace orch, else the first terminal', () => {
+    expect(leaderOf(nodes, [])?.name).toBe('Conductor')
+    expect(leaderOf([term('Scout'), term('Editor')], [])?.name).toBe('Scout')
+    expect(leaderOf([], ['t-Scout'])).toBeNull()
+  })
+
+  it('stamps the leader as the one orch on NEW node objects', () => {
+    const stamped = withLeader(nodes, 't-Editor')
+    expect(stamped.map((n) => [n.name, (n as { orch?: boolean }).orch])).toEqual([
+      ['Scout', false],
+      ['Conductor', false],
+      ['Editor', true]
+    ])
+    // The live workspace's own orch is untouched.
+    expect((nodes[1] as { orch?: boolean }).orch).toBe(true)
+    expect(stamped[1]).not.toBe(nodes[1])
+    expect(orchAgentOf(snap(stamped))).toBe('Editor')
+  })
+
+  it('with no leader leaves the nodes as they are', () => {
+    expect(withLeader(nodes, null).map((n) => (n as { orch?: boolean }).orch)).toEqual([false, true, false])
   })
 })

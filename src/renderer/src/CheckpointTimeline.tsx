@@ -1,24 +1,33 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { TurnRecord } from '../../shared/turn'
 import { cookrew } from './api'
 import { CrIcon } from './icons'
 import { type TitleMode } from './checkpoint-sync'
-import { hasRoleFromCheckpoint, saveRoleFromCheckpoint } from './role-checkpoint'
+import { hasRoleFromCheckpoint } from './role-checkpoint'
+import { LineagePanel } from './LineagePanel'
+import { CheckpointRowView } from './CheckpointRowView'
+import { SaveRoleInline } from './SaveRoleInline'
+import { createHoldReveal, hasLineageSegmentsApi, railAnchorTop, railPointerFraction } from './transcript'
 import {
   checkpointRowTitle,
-  createHoldReveal,
-  railAnchorTop,
-  railPointerFraction,
   scrollFocusState,
+  scrubOrdinal,
   scrubPreviewRow,
   type CheckpointRow,
   type TraceMarkerRow
-} from './transcript'
+} from './stream/stream-rows'
 /** RAIL_INSET: the marker inset (matches .cr-ckpt-here top: calc(16px + …)),
  *  used here for scrub mapping. Imported rather than redeclared so the density
- *  rule and the scrub mapping cannot drift — they describe the same 16px. */
-import { countBadgeTop, fillRows, RAIL_INSET } from './rail-fill'
+ *  rule and the scrub mapping cannot drift — they describe the same 16px.
+ *  railAnchors: the F6 gate, as ONE function — see rail-fill.ts. */
+import { countBadgeTop, fillRows, railAnchors, railFraction, railScale, RAIL_INSET } from './rail-fill'
 import { pinAnchors, pinLabel, traceFraction, type VersionPinRecord } from '../../shared/version-pin'
+import {
+  focusPinned,
+  initialFocusState,
+  nextFocus,
+  type FocusState,
+  type RailFocus
+} from './stream/focus-policy'
 
 
 /** Px of pointer travel before a press on the rail becomes a scrub, not a tap. */
@@ -48,9 +57,15 @@ const IDLE_AFTER_MS = 1700
  *    title while scrolling/scrubbing.
  *  - CLICK / TAP the rail → the full-range list opens: every row laid at its own
  *    fraction of T1→newest along the bar, LIVE at fraction 1, and the focused
- *    row pinned separately on the marker's line.
+ *    row pinned separately on the marker's line. The tap SELECTS the checkpoint
+ *    under it and PINS that focus for a dwell (stream/focus-policy.ts), so the
+ *    list is still there when the finger comes back to press something — and a
+ *    live agent's own output cannot scroll it away in the meantime.
  *  - In the list: tap/click a row → jump; press-and-HOLD a row/tab (~2s) → its
- *    SAVE ROLE / FORK actions.
+ *    SAVE ROLE / FORK actions. On the PINNED focus row those actions are
+ *    already showing: the hold is a shortcut, not the only door (D2, canvas QA
+ *    2026-09-07 — with one pointer, holding the fan open and pressing a row are
+ *    the same finger).
  *
  * Rows span the WHOLE trace (unified-scroll item 3): identities below the record
  * cap render trace-only (fork works, role-save needs the record). Fresco owns the
@@ -59,21 +74,36 @@ const IDLE_AFTER_MS = 1700
 export function CheckpointTimeline({
   terminalId,
   rows,
+  total,
   markers,
   pins,
   titleMode,
   activeIndex,
   loadingIndex,
   markerFrac,
-  waitingLabel,
   allowActions = true,
+  lineageReach = true,
+  ended = false,
+  anomalyNote = null,
   onGoto,
   onLive,
-  onScrub
+  onScrub,
+  onReach
 }: {
   terminalId: string
   /** Full-range selectable checkpoints (records ∪ trace listing), ascending. */
   rows: CheckpointRow[]
+  /**
+   * Length of the WHOLE stream — NOT rows.length.
+   *
+   * The rail's index is paged (useStream.INDEX_PAGE), so rows holds the
+   * window this client has fetched, and it GROWS as the drawer pages. The
+   * badge counting rows read "120 CP" on a 1,050-checkpoint card and then
+   * "560 CP" after a scrub, which is a count of the client's cache, not of
+   * the conversation. Absent (a caller with no stream) falls back to
+   * rows.length, which is the old behaviour exactly.
+   */
+  total?: number
   /** Boundary markers (◆ compact / ⇥ clear) interleaved between rows. */
   markers?: TraceMarkerRow[]
   /**
@@ -89,10 +119,28 @@ export function CheckpointTimeline({
   loadingIndex?: number | null
   /** Exact marker fraction (true position over the combined trace+tail extent). */
   markerFrac?: number
-  /** Honest LIVE state before a remote session has written its first trace row. */
-  waitingLabel?: string | null
-  /** Remote caller transcripts are readable but cannot mutate the owner's session. */
+  /** Guards the mutating rail actions (rewind); read-only embedders opt out. */
   allowActions?: boolean
+  /**
+   * May a segment boundary open the earlier-sessions panel? False for a card
+   * whose earlier session files live at someone else's app: the ◆ marker
+   * still renders (it is a fact about the record), it just is not a button
+   * that opens an empty panel (remote-card parity §3).
+   */
+  lineageReach?: boolean
+  /**
+   * The session behind this rail is OVER — nothing new will arrive. The tail
+   * reads ENDED, not LIVE: a live dot that outlives the session is the lie
+   * P10(c) exists to catch.
+   */
+  ended?: boolean
+  /**
+   * ONE QUIET LINE, NEVER A MODAL. How many lines the stream could not read,
+   * already phrased (stream-rows anomalyLine). A dialog over the rail would
+   * interrupt reading to report something nobody can act on from here; saying
+   * nothing is how a silently shorter history reads as destroyed history.
+   */
+  anomalyNote?: string | null
   /** Select a checkpoint by IDENTITY (works for trace-only sub-cap rows too). */
   onGoto: (index: number) => void
   /** Return to the live tail. */
@@ -102,11 +150,42 @@ export function CheckpointTimeline({
    * combined scroll space to this fraction (0 = oldest trace, 1 = live bottom).
    */
   onScrub?: (fraction: number) => void
+  /**
+   * "The rail just reached this stream ORDINAL" (D1, T5 QA 2026-09-07).
+   *
+   * The rail's index is PAGED, and until this existed nothing ever asked for
+   * the page above the one /stream/open answered with — so on a 1,048-row card
+   * T16…T950 were unreachable by anything but luck. The bar is drawn on the
+   * chain's scale, so a scrub knows which ordinal it is over even when that
+   * checkpoint is not loaded; saying so is what fetches it.
+   */
+  onReach?: (ordinal: number) => void
 }): React.JSX.Element | null {
   /** True while a rail scrub drag is active — drives the .dragging affordance. */
   const [scrubbing, setScrubbing] = useState(false)
-  /** The FOCUSED checkpoint (scroll/scrub) the list highlights + centres on. */
-  const [focused, setFocused] = useState<{ index: number; frac: number } | null>(null)
+  /**
+   * THE FOCUSED CHECKPOINT, AND WHO CHOSE IT (D2, canvas QA 2026-09-07).
+   *
+   * Was a bare `focused` set from the transcript's scroll, which meant the
+   * transcript could always take it back — including from a user who had just
+   * set it, which is why the row actions were unreachable with one finger. The
+   * policy in stream/focus-policy.ts decides between the two owners; this holds
+   * its state and nothing else.
+   *
+   * SEEDED FROM THE SCROLL, not left null: the scroll-derived focus was
+   * previously computed in an effect, so the first paint of a card already
+   * scrolled to a checkpoint had no tag at all until a second render.
+   */
+  const [focusState, setFocusState] = useState<FocusState>(() =>
+    nextFocus(initialFocusState, {
+      kind: 'scroll',
+      focus: seedFocus(rows, activeIndex ?? null, markerFrac),
+      at: Date.now()
+    })
+  )
+  const focused = focusState.focus
+  /** Bumped when a dwell expires, so the fan re-evaluates without a scroll. */
+  const [dwellTick, setDwellTick] = useState(0)
   /** The row whose SAVE ROLE / FORK actions are revealed (held ~2s). */
   const [acting, setActing] = useState<number | null>(null)
   const [savingIndex, setSavingIndex] = useState<number | null>(null)
@@ -118,6 +197,8 @@ export function CheckpointTimeline({
   /** M3: a refused rewind, surfaced INLINE on the row (never window.alert — a
    * native modal freezes the whole Electron UI). Scoped by row index. */
   const [rewindError, setRewindError] = useState<{ index: number; reason: string } | null>(null)
+  /** Earlier-sessions panel (lineage reach) — opened from the segment-boundary tick. */
+  const [lineageOpen, setLineageOpen] = useState(false)
   /** F1: true once movement has stopped for IDLE_AFTER_MS. The tag stays
    *  MOUNTED and fades via CSS — unmounting it pops, which is the thing the
    *  gate distinguishes. Cleared by any scroll, scrub or approach. */
@@ -151,12 +232,31 @@ export function CheckpointTimeline({
   // in markerFrac) from the identity in view — not while scrubbing (the scrub
   // sets it directly). Null at the live tail → the tab hides. The fraction is the
   // ONE position source of truth for both the here-marker and the tab.
+  //
+  // The scroll no longer WINS by default: the policy refuses it while the user's
+  // own pick is pinned, and falls back to that pick on a card whose transcript
+  // is too short to ever scroll. `dwellTick` is in the deps so the moment a
+  // dwell expires this re-runs and the transcript takes over again.
   useEffect(() => {
     if (scrubbing) return
-    const { focusedIndex } = scrollFocusState(rows, activeIndex ?? null)
-    setFocused(focusedIndex !== null ? { index: focusedIndex, frac: markerFrac ?? 1 } : null)
+    setFocusState((state) =>
+      nextFocus(state, {
+        kind: 'scroll',
+        focus: seedFocus(rows, activeIndex ?? null, markerFrac),
+        at: Date.now()
+      })
+    )
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeIndex, markerFrac, scrubbing])
+  }, [activeIndex, markerFrac, scrubbing, dwellTick])
+
+  // The dwell has to END on its own, or a pin on a card that never scrolls
+  // again would hold the fan open forever. One timer, re-armed per pin.
+  useEffect(() => {
+    const remaining = focusState.pinnedUntil - Date.now()
+    if (remaining <= 0) return
+    const timer = setTimeout(() => setDwellTick((n) => n + 1), remaining)
+    return () => clearTimeout(timer)
+  }, [focusState.pinnedUntil])
 
   // F1 — IDLE FADE. Any change of focus or scrub position is "movement", so the
   // timer restarts here and the tag comes back; 1.7s of stillness fades it out.
@@ -216,7 +316,7 @@ export function CheckpointTimeline({
   // checkpoints arrive), the same ordinal now names a DIFFERENT checkpoint,
   // so the two-tap "SURE?" would fire on a row the user never armed. Disarm
   // (and drop any surfaced refusal) on any rows-identity change.
-  const rowsSignature = rows.map((r) => `${r.index}:${r.record?.uuid ?? ''}`).join('|')
+  const rowsSignature = rows.map((r) => `${r.index}:${r.id}`).join('|')
   useEffect(() => {
     setRewindArmed(null)
     setRewindError(null)
@@ -241,18 +341,7 @@ export function CheckpointTimeline({
     return () => clearTimeout(timeout)
   }, [rewindError])
 
-  if (rows.length === 0) {
-    if (!waitingLabel) return null
-    return (
-      <div className="cr-ckpt-rail warming" role="status" aria-label={waitingLabel}>
-        <div className="cr-ckpt-mini">
-          <div className="cr-ckpt-line" />
-          <div className="cr-ckpt-livedot" />
-          <span className="cr-ckpt-warming-label">{waitingLabel}</span>
-        </div>
-      </div>
-    )
-  }
+  if (rows.length === 0) return null
 
   const closeActions = (): void => {
     setActing(null)
@@ -328,36 +417,105 @@ export function CheckpointTimeline({
     setWakeCount((n) => n + 1)
   }
 
+  /**
+   * THE BAR'S DENOMINATOR — the whole chain, not the page loaded (D1).
+   *
+   * One value, read by the reveal, the boundary ticks, the version pins and
+   * the scrub mapping, so none of them can place a checkpoint where another
+   * one would not. `total` is /stream/open's own count; without it the newest
+   * ordinal loaded stands in, which is what a caller with no stream has.
+   */
+  const scale = railScale(rows, total)
+
+  /**
+   * Point at a place on the bar → the checkpoint there, with its fraction.
+   * One expression for the drag and the tap, so the two can never disagree
+   * about which checkpoint a given Y names.
+   */
+  const railTarget = (clientY: number): { frac: number; focus: RailFocus | null } | null => {
+    const bar = miniRef.current
+    if (!bar) return null
+    const rect = bar.getBoundingClientRect()
+    const frac = railPointerFraction(clientY, rect.top, rect.height, RAIL_INSET)
+    const row = scrubPreviewRow(rows, frac, scale)
+    return { frac, focus: row ? { index: row.index, frac } : null }
+  }
+
+  /** Move the transcript there, and ask for the page that holds it. THE
+   *  PAGE-BACK TRIGGER (D1): the ordinal is named on the chain's scale, so a
+   *  drag toward the top says "T340" even on a client that holds only T949
+   *  upward — and that is what puts the page for T340 on the wire. */
+  const seekTo = (frac: number): void => {
+    onScrub?.(frac)
+    onReach?.(scrubOrdinal(frac, scale))
+  }
+
   // Drag the line/marker → scrub the transcript. The line/marker stays draggable
   // even while the list is shown (it's the always-present scroll indicator).
+  //
+  // The press is taken even without an `onScrub` (D2): a TAP selects, and that
+  // is worth doing on a rail that cannot scrub the transcript too.
   const onRailPointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
-    if (!onScrub) return
     scrub.current = { startY: e.clientY, moved: false }
     setScrubbing(true)
     e.currentTarget.setPointerCapture(e.pointerId)
   }
   const onRailPointerMove = (e: React.PointerEvent<HTMLDivElement>): void => {
-    if (!onScrub || !miniRef.current) return
     if (!e.currentTarget.hasPointerCapture?.(e.pointerId)) return
     if (!scrub.current.moved && Math.abs(e.clientY - scrub.current.startY) < SCRUB_THRESHOLD) return
+    const target = railTarget(e.clientY)
+    if (target === null) return
     scrub.current.moved = true
-    const rect = miniRef.current.getBoundingClientRect()
-    const frac = railPointerFraction(e.clientY, rect.top, rect.height, RAIL_INSET)
     // DRAG the line/marker → scrub the transcript to the dragged checkpoint; the
     // focus (list highlight + re-centre) follows.
-    onScrub(frac)
-    const row = scrubPreviewRow(rows, frac)
-    setFocused(row ? { index: row.index, frac } : null)
+    seekTo(target.frac)
+    setFocusState((state) => nextFocus(state, { kind: 'scrub', focus: target.focus, at: Date.now() }))
   }
+  /**
+   * A press that TRAVELLED was a scrub — the lift starts its dwell, which is
+   * what makes the fan survive the finger leaving the glass (D2: with one
+   * pointer there is no way to hold the scrub AND press a row).
+   *
+   * A press that stayed put is a TAP, and a tap SELECTS: it seeks the
+   * transcript to the nearest checkpoint and pins that focus. The docblock at
+   * the top of this file has always said a tap opens the full-range list; until
+   * now nothing here did it.
+   */
   const onRailPointerUp = (e: React.PointerEvent<HTMLDivElement>): void => {
+    const dragged = scrub.current.moved
     setScrubbing(false)
     scrub.current.moved = false
     if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId)
     }
+    if (dragged) {
+      setFocusState((state) => nextFocus(state, { kind: 'release', at: Date.now() }))
+      return
+    }
+    const target = railTarget(e.clientY)
+    if (target === null) return
+    seekTo(target.frac)
+    setFocusState((state) => nextFocus(state, { kind: 'tap', focus: target.focus, at: Date.now() }))
+  }
+  /** A cancelled press is not a selection — release what a drag had, and let a
+   *  never-started tap fall through without moving the transcript. */
+  const onRailPointerCancel = (e: React.PointerEvent<HTMLDivElement>): void => {
+    const dragged = scrub.current.moved
+    setScrubbing(false)
+    scrub.current.moved = false
+    if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    }
+    if (dragged) setFocusState((state) => nextFocus(state, { kind: 'release', at: Date.now() }))
   }
 
   const here = focused?.index ?? null
+  /**
+   * Is the focus the USER'S right now (D2)? Read at render time on purpose —
+   * the dwell is a wall-clock window, and the timer above re-renders when it
+   * closes, so this is never stale by more than a frame.
+   */
+  const pinned = focusPinned(focusState, Date.now())
   /**
    * The marker's own fraction, used ONLY when nothing is focused.
    *
@@ -390,7 +548,8 @@ export function CheckpointTimeline({
         {savingIndex === index ? (
           <SaveRoleInline
             terminalId={terminalId}
-            checkpoint={row.record ?? row.index}
+            checkpoint={row.index}
+            expectedUuid={row.id}
             onDone={closeActions}
           />
         ) : (
@@ -449,67 +608,61 @@ export function CheckpointTimeline({
         </div>
       ))
 
-  // One row of the extended tab — the same `.cr-ckpt-row` markup, tap → jump,
-  // hold → actions. The focused row is `.active` and sits AT the marker.
+  /**
+   * Selecting a row is a PICK, not a scroll (D2). Without the re-pin the jump
+   * would arrive as a scroll event and be refused by the dwell the tap that
+   * opened this fan had just armed — the tag would sit on the old checkpoint
+   * while the transcript showed the new one.
+   */
+  const selectRow = (row: CheckpointRow): void =>
+    setFocusState((state) =>
+      nextFocus(state, {
+        kind: 'tap',
+        focus: { index: row.index, frac: railFraction(row.index, scale) },
+        at: Date.now()
+      })
+    )
+
+  // One row of the extended tab and one row of the fan are the SAME element
+  // (CheckpointRowView) — see its docblock: two near-identical JSX blocks is
+  // how the focused row drifts off the marker, which is what F6 catches.
   const renderRow = (row: CheckpointRow, style?: React.CSSProperties): React.JSX.Element => {
     const isActive = row.index === here
-    const isActing = acting === row.index
-    const isLoading = loadingIndex === row.index
     return (
-      <div
+      <CheckpointRowView
         key={row.index}
-        role="listitem"
-        className={`cr-ckpt-row${isActive ? ' active' : ''}${isActing ? ' acting' : ''}${
-          isLoading ? ' loading' : ''
-        }`}
-        style={style}
-        aria-label={`Checkpoint ${row.index}`}
-        aria-busy={isLoading || undefined}
-        onMouseDown={(e) => e.preventDefault()}
-        onPointerDown={() => startHold(row.index)}
-        onPointerUp={endHold}
-        onPointerLeave={endHold}
-        onPointerCancel={endHold}
-        onClick={() => onTap(() => onGoto(row.index))}
-      >
-        {rowActions(row, row.index)}
-        <span className="cr-ckpt-row-label">
-          <span className="cr-ckpt-row-idx">T{row.index}</span>
-          {/* F5b two-element marquee: the OUTER span clips, the INNER moves.
-              One element cannot do both — the clip is what makes the overflow
-              measurable in the first place. Only the focused row marquees;
-              the rest keep their ellipsis. */}
-          <span
-            className="cr-ckpt-row-title"
-            ref={isActive ? titleRef : undefined}
-            style={
-              isActive && titleShift > 0
-                ? ({ ['--marquee-shift']: `${-titleShift}px` } as React.CSSProperties)
-                : undefined
-            }
-          >
-            <span
-              className={`cr-ckpt-title-text${isActive && titleShift > 0 ? ' marquee' : ''}`}
-            >
-              {isLoading ? 'loading…' : rowLabel(row)}
-            </span>
-          </span>
-        </span>
-        <span className="cr-ckpt-dot">
-          <i />
-        </span>
-        <span
-          className="cr-ckpt-prog"
-          style={isActive ? ({ ['--p']: 100 } as React.CSSProperties) : undefined}
-        />
-      </div>
+        row={row}
+        label={rowLabel(row)}
+        active={isActive}
+        // THE THIRD DOOR (D2c): a PINNED focus row shows its actions with no
+        // 1500ms hold at all. The hold is a shortcut now, not the only way in.
+        acting={acting === row.index || (isActive && pinned)}
+        loading={loadingIndex === row.index}
+        titleShift={titleShift}
+        {...(isActive ? { titleRef } : {})}
+        actions={rowActions(row, row.index)}
+        {...(style !== undefined ? { style } : {})}
+        onPressStart={() => startHold(row.index)}
+        onPressEnd={endHold}
+        onSelect={() =>
+          onTap(() => {
+            selectRow(row)
+            onGoto(row.index)
+          })
+        }
+      />
     )
   }
 
   const focusedRow = focused ? (rows.find((r) => r.index === focused.index) ?? null) : null
   // TWO ZONES: scrolling the transcript shows the SINGLE tag (focused row only);
-  // scrolling/dragging the rail (scrubbing) FANS the full list around it.
-  const fanned = scrubbing && focused !== null && focusedRow !== null
+  // scrolling/dragging the rail FANS the full list around it.
+  //
+  // `pinned` is why the fan survives the lift (D2). It used to be `scrubbing`
+  // alone, so the fan existed only while a pointer was held down on the rail —
+  // and the finger holding it open was the finger that would have pressed ROLE,
+  // FORK or ⟲ REWIND. The dwell keeps it mounted regardless of live output.
+  const fanned = focused !== null && focusedRow !== null && (scrubbing || pinned)
   /**
    * F3 — the reveal is the FULL range, laid along the bar: T1 at the top, the
    * newest at the bottom, as many rows between as fit without overlapping. The
@@ -520,12 +673,12 @@ export function CheckpointTimeline({
    * marker's own fraction — F6 is the gate that has regressed before, and the
    * safest way to keep it green is to not touch what anchors it.
    */
-  const laid = fanned ? fillRows(rows, railHeight, focused!.index) : []
+  const laid = fanned ? fillRows(rows, railHeight, focused!.index, scale) : []
   // Where the badge has to sit to clear the pins, in the same px space
   // railAnchorTop lays them in. Null = nothing reaches it, badge stays put.
   // Pure and unit-tested in rail-fill; the rail only supplies the fractions.
   const countTop = countBadgeTop(
-    pinAnchors(pins ?? [], rows).map((p) => p.frac),
+    pinAnchors(pins ?? [], rows, scale).map((p) => p.frac),
     railHeight
   )
   /**
@@ -538,7 +691,14 @@ export function CheckpointTimeline({
   // ONE position source (refinement 1): the marker AND the focused tab/row use
   // the SAME fraction → same Y. At the live tail (no focus) the marker rides its
   // own live fraction.
-  const anchorFrac = focused ? focused.frac : hereFrac
+  //
+  // ONE FUNCTION LAYS BOTH (F6). The marker and the focused tab used to be
+  // given a `top` by two expressions that agreed until a new state made them
+  // disagree by a pixel — the regression the owner has flagged twice. There
+  // is one call now and the two tops are the same string by construction;
+  // tests/stream-f6-alignment.test.ts proves it over every state the stream
+  // reducer can produce, including a rolled-back row and a compaction.
+  const anchors = railAnchors(focused ? focused.frac : null, hereFrac)
 
   /**
    * Fade only when the rail is genuinely unattended.
@@ -555,7 +715,15 @@ export function CheckpointTimeline({
    *
    * So: never while a row's actions are open, never mid-scrub.
    */
-  const showIdle = idle && acting === null && !scrubbing
+  // …and never while the earlier-sessions panel is open: it is a modal-ish
+  // reading surface, and fading it mid-read is the touch bug all over again.
+  //
+  // …and NEVER while the user's own pick is pinned (D2). The dwell is 8000 and
+  // the idle timer is 1700, so without this the fan a tap had just opened would
+  // fade to opacity 0 AND pointer-events: none a second and a half later —
+  // revealed, unreadable, untappable, which is the exact touch bug above with a
+  // different trigger.
+  const showIdle = idle && acting === null && !scrubbing && !lineageOpen && !pinned
 
   return (
     <div
@@ -582,7 +750,7 @@ export function CheckpointTimeline({
         onPointerDown={onRailPointerDown}
         onPointerMove={onRailPointerMove}
         onPointerUp={onRailPointerUp}
-        onPointerCancel={onRailPointerUp}
+        onPointerCancel={onRailPointerCancel}
       >
         <div className="cr-ckpt-line" />
         {/* Boundary ticks ON the rail line — compact/clear/rewind positions visible
@@ -600,20 +768,38 @@ export function CheckpointTimeline({
           // focus tab were placed by two expressions that agreed until a ledger
           // made them disagree. tests/rail-tick-parity.test.ts guarded the
           // duplication; deleting it is what the guard was waiting for.
-          const frac = traceFraction(m.afterIndex, rows)
+          const frac = traceFraction(m.afterIndex, rows, scale)
           if (frac === null) return null
+          // The SEGMENT boundary (a marker naming its previous session) is a
+          // TAP TARGET: it opens the earlier-sessions panel, which is where
+          // the checkpoints an auto-compact moved out of this file now live.
+          // Same pointer discipline as the version pins below: stop the
+          // press before .cr-ckpt-mini captures it, or the click never fires.
+          const reachable =
+            lineageReach && m.previousSessionId !== undefined && hasLineageSegmentsApi()
           return (
             <div
               key={`tick-${m.kind}-${m.afterIndex}-${i}`}
-              className={`cr-ckpt-tick ${m.kind}`}
+              className={`cr-ckpt-tick ${m.kind}${reachable ? ' lineage' : ''}`}
               style={{ top: railAnchorTop(frac) }}
               // MED-4 says the bar ticks CARRY the boundaries that no longer
               // render inline. That is only true for a screen reader if they
               // announce themselves, so they take the separator role and the
               // same wording as the divider they replaced.
-              role="separator"
+              role={reachable ? 'button' : 'separator'}
               title={tickLabel(m)}
               aria-label={tickLabel(m)}
+              {...(reachable
+                ? {
+                    onPointerDown: (e: React.PointerEvent) => e.stopPropagation(),
+                    onClick: (e: React.MouseEvent) => {
+                      e.stopPropagation()
+                      setActing(null)
+                      setSavingIndex(null)
+                      setLineageOpen(true)
+                    }
+                  }
+                : {})}
             />
           )
         })}
@@ -636,7 +822,7 @@ export function CheckpointTimeline({
             The exact version is in the title even when the flag carries no
             label (R8, v100+): a truncated number would be a WRONG version, and
             a wrong version is worse than an absent one. */}
-        {pinAnchors(pins ?? [], rows).map((p) => {
+        {pinAnchors(pins ?? [], rows, scale).map((p) => {
           const label = pinLabel(p.version)
           // pinAnchors returns {version, frac} only, so the checkpoint comes
           // back from the record. `current` is the pin under the focus — the
@@ -686,11 +872,14 @@ export function CheckpointTimeline({
           className="cr-ckpt-count"
           style={countTop === null ? undefined : { top: `${Math.round(countTop)}px` }}
         >
-          <span className="n">{rows.length}</span>
+          <span className="n">{total ?? rows.length}</span>
           <span className="l">CP</span>
         </div>
-        <div className="cr-ckpt-here" style={{ top: railAnchorTop(anchorFrac) }} />
-        <div className="cr-ckpt-livedot" />
+        <div className="cr-ckpt-here" style={{ top: anchors.marker }} />
+        <div
+          className={`cr-ckpt-livedot${ended ? ' ended' : ''}`}
+          title={ended ? 'session ended' : undefined}
+        />
       </div>
 
       {/* F3 — the full-range reveal, laid ALONG the bar. Every row sits at its
@@ -706,16 +895,23 @@ export function CheckpointTimeline({
                  newest checkpoint on a full bar, and covered it. */
               <div
                 key="live"
-                className={`cr-ckpt-row live${here === null ? ' active' : ''}`}
+                className={`cr-ckpt-row live${ended ? ' ended' : ''}${here === null ? ' active' : ''}`}
                 role="listitem"
-                aria-label="Live"
+                aria-label={ended ? 'Ended' : 'Live'}
                 style={{ top: railAnchorTop(entry.fraction) }}
                 onMouseDown={(e) => e.preventDefault()}
-                onClick={() => onTap(() => onLive())}
+                onClick={() =>
+                  onTap(() => {
+                    // The way OUT of a pinned focus, and always obeyed — on a
+                    // short card nothing else would ever clear it (D2).
+                    setFocusState((state) => nextFocus(state, { kind: 'live', at: Date.now() }))
+                    onLive()
+                  })
+                }
               >
                 <span className="cr-ckpt-row-label">
-                  <span className="cr-ckpt-row-idx">LIVE</span>
-                  <span className="cr-ckpt-row-title">running now</span>
+                  <span className="cr-ckpt-row-idx">{ended ? 'ENDED' : 'LIVE'}</span>
+                  <span className="cr-ckpt-row-title">{ended ? 'session ended' : 'running now'}</span>
                 </span>
                 <span className="cr-ckpt-dot">
                   <i />
@@ -728,10 +924,10 @@ export function CheckpointTimeline({
         </div>
       )}
 
-      {focused && focusedRow && (
+      {focused && focusedRow && anchors.focus !== null && (
         <div
           className="cr-ckpt-scrub-preview"
-          style={{ top: railAnchorTop(focused.frac) }}
+          style={{ top: anchors.focus }}
           role="list"
           aria-label="Checkpoints"
         >
@@ -757,22 +953,69 @@ export function CheckpointTimeline({
           </div>
         </div>
       )}
+
+      {/* A GLYPH ON THE RAIL, THE SENTENCE IN ITS TOOLTIP (D3, T5 QA
+          2026-09-07). The line used to be a `left: 0; right: 0` footer INSIDE
+          the 30px rail column, so "1 LINE THE STREAM COULD NOT READ" wrapped
+          to one letter per line and printed straight down over the live dot.
+          The rail has no width for a sentence and never will; it has room for
+          one mark. Still a `status` and still not a dialog — a line the reader
+          could not parse is a fact about the transcript, not something anyone
+          can act on mid-conversation. */}
+      {/* NO aria-label: a live region is announced by its CONTENT, and a label
+          would override the name computation and announce nothing. The
+          visually-clipped span IS the content; the glyph is decoration. */}
+      {anomalyNote !== null && (
+        <div className="cr-ckpt-anomaly" role="status" title={anomalyNote}>
+          <span aria-hidden="true">!</span>
+          <span className="cr-ckpt-anomaly-text">{anomalyNote}</span>
+        </div>
+      )}
+
+      {/* LINEAGE REACH: the earlier sessions an auto-compact/clear moved out
+          of the current file — opened from the segment-boundary tick. A
+          floating panel like the fan, so the identity list, its fractions and
+          the F6 anchor math are untouched by however many segments exist. */}
+      {lineageOpen && (
+        <LineagePanel
+          terminalId={terminalId}
+          allowActions={allowActions}
+          onClose={() => setLineageOpen(false)}
+        />
+      )}
     </div>
   )
 }
 
 /** What a boundary tick says — as a tooltip AND to a screen reader, one string
- *  so the two can never drift. Same wording the inline divider used. */
+ *  so the two can never drift. Same wording the inline divider used. A marker
+ *  carrying previousSessionId is the SEGMENT boundary — tapping it opens the
+ *  earlier sessions, and the label has to say so or nobody ever taps. */
 function tickLabel(m: TraceMarkerRow): string {
+  const reach = m.previousSessionId !== undefined ? ' — tap for earlier checkpoints' : ''
   if (m.kind === 'compact') {
     const size =
       m.preTokens !== undefined && m.postTokens !== undefined
         ? ` · ${fmtTokens(m.preTokens)} → ${fmtTokens(m.postTokens)}`
         : ''
-    return `compact here${size}`
+    return `compact here${size}${reach}`
   }
   if (m.kind === 'rewind') return `rewound to T${m.toIndex} here`
-  return 'session cleared here — earlier endpoints via lineage'
+  return `session cleared here${reach || ' — earlier endpoints via lineage'}`
+}
+
+/**
+ * The scroll-derived focus, in the shape the focus policy's `scroll` event
+ * wants. One expression, used by the lazy seed AND by the effect, so a card's
+ * first paint and its next one cannot disagree about where the transcript is.
+ */
+function seedFocus(
+  rows: readonly CheckpointRow[],
+  activeIndex: number | null,
+  markerFrac: number | undefined
+): RailFocus | null {
+  const { focusedIndex } = scrollFocusState(rows, activeIndex)
+  return focusedIndex === null ? null : { index: focusedIndex, frac: markerFrac ?? 1 }
 }
 
 /** 999600 → "999.6k", 11200000 → "11.2M" — compact marker compression readout. */
@@ -780,49 +1023,4 @@ function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
   return String(n)
-}
-
-function SaveRoleInline({
-  terminalId,
-  checkpoint,
-  onDone
-}: {
-  terminalId: string
-  checkpoint: TurnRecord | number
-  onDone: () => void
-}): React.JSX.Element {
-  const [name, setName] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const submit = (): void => {
-    const trimmed = name.trim()
-    if (!trimmed || busy) return
-    setBusy(true)
-    setError(null)
-    void saveRoleFromCheckpoint({ terminalId, checkpoint, name: trimmed })
-      .then(() => onDone())
-      .catch((cause: unknown) => {
-        setError(cause instanceof Error ? cause.message : String(cause))
-        setBusy(false)
-      })
-  }
-  return (
-    <div className="cr-ckpt-saverole">
-      <input
-        className="tf-input"
-        placeholder="role name"
-        value={name}
-        autoFocus
-        onChange={(e) => setName(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') submit()
-          if (e.key === 'Escape') onDone()
-        }}
-      />
-      <button className="cr-btn sm" disabled={busy || !name.trim()} onClick={submit}>
-        {busy ? '…' : 'SAVE'}
-      </button>
-      {error && <span className="cr-ckpt-rewind-error">{error}</span>}
-    </div>
-  )
 }

@@ -42,6 +42,8 @@ export interface SessionHolder {
   sessionId: string
   /** 'bg' for a background agent/spare, 'interactive' for a real terminal. */
   kind: string
+  /** The process's working directory as it recorded it; null when absent. */
+  cwd?: string | null
 }
 
 export interface LiveSessionFs {
@@ -97,9 +99,18 @@ export function liveSessionHolders(
     try {
       const record: unknown = JSON.parse(fs.read(path.join(sessionsDir, name)))
       if (!record || typeof record !== 'object') continue
-      const { sessionId, kind } = record as { sessionId?: unknown; kind?: unknown }
+      const { sessionId, kind, cwd } = record as {
+        sessionId?: unknown
+        kind?: unknown
+        cwd?: unknown
+      }
       if (typeof sessionId !== 'string' || sessionId.length === 0) continue
-      holders.push({ pid, sessionId, kind: typeof kind === 'string' ? kind : 'unknown' })
+      holders.push({
+        pid,
+        sessionId,
+        kind: typeof kind === 'string' ? kind : 'unknown',
+        cwd: typeof cwd === 'string' && cwd.length > 0 ? cwd : null
+      })
     } catch {
       // Unparseable or vanished mid-read — treat as no claim.
     }

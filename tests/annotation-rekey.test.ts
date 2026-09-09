@@ -253,9 +253,13 @@ describe('CRITICAL-1: the reconcile aligns against the durable ledger', () => {
  * produce the same array — the degenerate case. So the fixture here is the real
  * shape: 613 on disk, the newest transcript's 16 arriving, anchored at 597.
  *
- * LENGTH IS ASSERTED FIRST AND ON BOTH SIDES OF THE SEAM — the tracker's
- * history and what the store was actually handed — because the ledger is only
- * as durable as the save, and it was the save that destroyed the records.
+ * LENGTH IS ASSERTED FIRST, because the numbering assertions are worthless
+ * without it.
+ *
+ * T4 dropped the SECOND half of each assertion — "and what the store was
+ * actually handed". There is no save: a reconciled record is derived from a
+ * transcript the stream reads for itself, and turn-store.ts is a reader. The
+ * merge is what still has to hold, and it holds in the tracker's history.
  */
 describe('CRITICAL-1: the reconcile MERGES with the ledger, it does not replace it', () => {
   const rec = (index: number, uuid: string): TurnRecord =>
@@ -268,17 +272,14 @@ describe('CRITICAL-1: the reconcile MERGES with the ledger, it does not replace 
 
   const trackerOver = async (disk: TurnRecord[]) => {
     const { TurnTracker } = await import('../src/main/turn-tracker')
-    const saved: TurnRecord[][] = []
-    const store = {
-      load: () => disk,
-      scheduleSave: (_id: string, records: TurnRecord[]) => saved.push(records),
-      scheduleDelta: () => undefined,
-      flushAll: () => undefined
-    }
+    // A reader, and nothing else: T4 left TurnStore with no write surface,
+    // and a fake that cannot say where it lives gets no writer either (see
+    // TurnTracker's constructor — a fake with no `dir` once meant the real
+    // ~/.cookrew).
+    const store = { load: () => disk }
     const tracker = new TurnTracker(async () => null, store as never)
     return {
       tracker,
-      saved,
       history: () =>
         (tracker as unknown as { histories: Map<string, TurnRecord[]> }).histories.get('t1'),
       primeMemory: (records: TurnRecord[]) =>
@@ -296,7 +297,6 @@ describe('CRITICAL-1: the reconcile MERGES with the ledger, it does not replace 
 
     // THE LENGTH, FIRST. Everything below is worthless if this is 16.
     expect(t.history()).toHaveLength(613)
-    expect(t.saved.at(-1)).toHaveLength(613)
   })
 
   it('keeps the 597 records the incoming run cannot speak for, unrenumbered', async () => {
@@ -327,7 +327,6 @@ describe('CRITICAL-1: the reconcile MERGES with the ledger, it does not replace 
     t.tracker.replaceHistory('t1', rewound)
 
     expect(t.history()).toHaveLength(12)
-    expect(t.saved.at(-1)).toHaveLength(12)
   })
 
   it('replaces wholesale when the ledger has never seen the incoming head', async () => {
@@ -345,132 +344,116 @@ describe('CRITICAL-1: the reconcile MERGES with the ledger, it does not replace 
 })
 
 /**
- * THE INCIDENT, END TO END, THROUGH A REAL TurnStore — Atlas's round-2 probe,
- * adopted verbatim as the regression test C1 never had.
+ * CRITICAL-1, AGAINST A REAL LEDGER ON DISK — the incident, replayed.
  *
- * The describes above use a hand-rolled store, and that is exactly how this bug
- * survived a round: a fake answers whatever its author expected to be asked. The
- * first attempt at the perf half passed all of them and still lost 597 records
- * here, because the real store was asked "did anyone write behind your back?"
- * about a restore that had been written THROUGH it — a question that is sound,
- * and the wrong one. Only a real file, written the way the recovery tool writes
- * it, could say so.
+ * The unit tests above hand the tracker a fake `load`. The incident had a real
+ * file behind it, and the failure hid in exactly the seam a fake cannot show:
+ * a load served from memory answering with the pre-restore ledger.
  *
- * So this replays the incident with nothing faked: a running tracker holding 16
- * live turns, a 613-record restore saved to the ledger behind it, and then the
- * next reconcile of the bound session file, which holds only the newest 16
- * numbered from 1. The assertion is on the DISK, after a flush, because it was
- * the save that destroyed the records.
+ * WHAT T4 CHANGED HERE, stated rather than quietly dropped. The original three
+ * tests asserted the LEDGER after the reconcile, "because it was the save that
+ * destroyed the records". There is no save: nothing writes ~/.cookrew/turns
+ * for a file-backed card any more (turn-store.ts is a reader), so the disk
+ * cannot be the assertion. What still has to hold — and does — is that the
+ * tracker MERGES the incoming run onto the durable ledger it reads rather than
+ * replacing it, across a reconcile and across a compact. That is asserted on
+ * the tracker's history, which is the thing the rest of the app reads.
+ *
+ * The restore is written with ScrapeHistoryStore, the one writer left, because
+ * a real file is still the point.
  */
-describe('CRITICAL-1: the incident, replayed against a real store', () => {
+describe('CRITICAL-1: the incident, replayed against a real ledger', () => {
   const rec = (index: number, uuid: string): TurnRecord =>
     ({ index, uuid, prompt: `p${index}`, reply: 'r', startedAt: index, endedAt: index + 1 })
 
-  it('restore 613 to disk while the app holds 16, then the live reconcile', async () => {
-    const { TurnTracker } = await import('../src/main/turn-tracker')
+  const restored = (): TurnRecord[] =>
+    Array.from({ length: 613 }, (_, at) => rec(at + 1, `u-${at + 1}`))
+  const liveRun = (): TurnRecord[] =>
+    Array.from({ length: 16 }, (_, at) => rec(at + 1, `u-${598 + at}`))
+
+  const onDisk = async (): Promise<{
+    store: InstanceType<typeof import('../src/main/turn-store').TurnStore>
+    write: (records: TurnRecord[]) => void
+  }> => {
     const { TurnStore } = await import('../src/main/turn-store')
-    const store = new TurnStore(path.join(dir, 'turns'))
+    const { ScrapeHistoryStore } = await import('../src/main/scrape-history')
+    const turns = path.join(dir, 'turns')
+    const store = new TurnStore(turns)
+    const writer = new ScrapeHistoryStore(turns, store.annotationsDir, new TurnStore(turns))
+    return { store, write: (records) => void writer.save('t1', records) }
+  }
+
+  it('a 613-record ledger on disk survives a reconcile of the newest 16', async () => {
+    const { TurnTracker } = await import('../src/main/turn-tracker')
+    const { store, write } = await onDisk()
     const tracker = new TurnTracker(undefined, store)
 
-    // The running app: 16 live turns, in memory and on disk.
-    const live = Array.from({ length: 16 }, (_, at) => rec(at + 1, `u-${598 + at}`))
-    tracker.replaceHistory('t1', live)
-    store.flushAll()
-
-    // THE RESTORE, as the recovery tool does it: 613 written to the ledger
-    // behind the running tracker's back.
-    const restored = Array.from({ length: 613 }, (_, at) => rec(at + 1, `u-${at + 1}`))
-    store.scheduleSave('t1', restored)
-    store.flushAll()
+    // THE RESTORE, as a repair tool does it: 613 in the ledger, and this
+    // tracker has never read them.
+    write(restored())
     expect(store.load('t1')).toHaveLength(613)
 
-    // The very next turn: the tracker reconciles the BOUND session file, which
-    // holds only the last 16 turns, numbered 1..16.
-    tracker.replaceHistory('t1', live)
-    store.flushAll()
+    // The very next turn: the bound transcript holds only the last 16,
+    // numbered 1..16.
+    tracker.replaceHistory('t1', liveRun())
 
-    const disk = store.load('t1')
-    expect(disk).toHaveLength(613)
-    expect(disk[0].index).toBe(1)
-    expect(disk[disk.length - 1].index).toBe(613)
+    const history = tracker.history('t1')
+    expect(history).toHaveLength(613)
+    expect(history[0].index).toBe(1)
+    expect(history[history.length - 1].index).toBe(613)
     // The live run kept its identity and landed on its true indices.
-    expect(disk.slice(597).map((r) => r.uuid)).toEqual(live.map((r) => r.uuid))
+    expect(history.slice(597).map((r) => r.uuid)).toEqual(liveRun().map((r) => r.uuid))
   })
 
   /**
-   * THE SAME INCIDENT, RESTORED FROM OUTSIDE THIS PROCESS.
+   * THE RESTORE WRITTEN FROM OUTSIDE THIS PROCESS.
    *
-   * The test above restores THROUGH the store the tracker is using, which is
-   * the in-process shape. A repair script run from a terminal is the other
-   * shape, and it is the one that hides: nothing in this process observes the
-   * write, so a load served from memory would answer with the pre-restore
-   * ledger and be believed. That is the failure mode a cache in front of
-   * load() can introduce, so it is pinned rather than argued — the second
-   * store here stands in for the other process.
+   * Nothing here observes the write, so a load served from memory would answer
+   * with the pre-restore ledger and be believed. That is the failure a cache
+   * in front of load() introduces, and T4 made every cache in TurnStore
+   * stat-validated precisely because this process is no longer the only writer.
    */
   it('sees a restore written by ANOTHER process, not just one made through it', async () => {
     const { TurnTracker } = await import('../src/main/turn-tracker')
-    const { TurnStore } = await import('../src/main/turn-store')
-    const turns = path.join(dir, 'turns')
-    const store = new TurnStore(turns)
+    const { store, write } = await onDisk()
     const tracker = new TurnTracker(undefined, store)
 
-    const live = Array.from({ length: 16 }, (_, at) => rec(at + 1, `u-${598 + at}`))
-    tracker.replaceHistory('t1', live)
-    store.flushAll()
+    write(liveRun())
     expect(store.load('t1')).toHaveLength(16) // and now cached in this store
 
     // The repair tool, running elsewhere, rewrites the ledger file.
-    const elsewhere = new TurnStore(turns)
-    elsewhere.scheduleSave('t1', Array.from({ length: 613 }, (_, at) => rec(at + 1, `u-${at + 1}`)))
-    elsewhere.flushAll()
+    write(restored())
 
-    tracker.replaceHistory('t1', live)
-    store.flushAll()
-
-    expect(store.load('t1')).toHaveLength(613)
+    tracker.replaceHistory('t1', liveRun())
+    expect(tracker.history('t1')).toHaveLength(613)
   })
 
   /**
-   * THE WHOLE SCENARIO THE OWNER IS ABOUT TO LIVE THROUGH, in order.
-   *
-   * The two halves of this fix answer different questions and it is their
-   * COMPOSITION that has to hold: restore 613, keep taking turns (the merge),
+   * THE WHOLE SCENARIO, in order: restore 613, keep taking turns (the merge),
    * then compact (the rotation licence). Either half alone still ends with the
    * history gone — the merge survives reconciles and dies at the next compact,
-   * the licence survives a compact but not the reconcile before it. He
-   * compacts often, so the sequence below is the real acceptance test and not
-   * a contrived one.
+   * the licence survives a compact but not the reconcile before it.
    */
   it('survives a restore, then live turns, then a COMPACT', async () => {
     const { TurnTracker } = await import('../src/main/turn-tracker')
-    const { TurnStore } = await import('../src/main/turn-store')
-    const store = new TurnStore(path.join(dir, 'turns'))
+    const { store, write } = await onDisk()
     const tracker = new TurnTracker(undefined, store)
 
-    const live = Array.from({ length: 16 }, (_, at) => rec(at + 1, `u-${598 + at}`))
-    tracker.replaceHistory('t1', live, { sessionFile: '/before.jsonl' })
-    store.flushAll()
+    write(restored())
 
-    // 1. The repair tool restores the full lineage.
-    store.scheduleSave('t1', Array.from({ length: 613 }, (_, at) => rec(at + 1, `u-${at + 1}`)))
-    store.flushAll()
+    // 1. A live turn reconciles the bound transcript — the merge holds it.
+    tracker.replaceHistory('t1', liveRun(), { sessionFile: '/before.jsonl' })
+    expect(tracker.history('t1')).toHaveLength(613)
 
-    // 2. A live turn reconciles the bound transcript — the merge holds it.
-    tracker.replaceHistory('t1', live, { sessionFile: '/before.jsonl' })
-    store.flushAll()
-    expect(store.load('t1')).toHaveLength(613)
-
-    // 3. THE COMPACT. A fresh transcript, sharing no turn with anything before
+    // 2. THE COMPACT. A fresh transcript, sharing no turn with anything before
     //    it, reached through the proven rotation.
     tracker.declareRotation('t1', '/after.jsonl')
     tracker.replaceHistory('t1', [rec(1, 'u-post-compact')], { sessionFile: '/after.jsonl' })
-    store.flushAll()
 
-    const disk = store.load('t1')
-    expect(disk).toHaveLength(614)
-    expect(disk[disk.length - 1]).toMatchObject({ index: 614, uuid: 'u-post-compact' })
-    expect(disk.slice(0, 613).map((r) => r.uuid)).toEqual(
+    const history = tracker.history('t1')
+    expect(history).toHaveLength(614)
+    expect(history[history.length - 1]).toMatchObject({ index: 614, uuid: 'u-post-compact' })
+    expect(history.slice(0, 613).map((r) => r.uuid)).toEqual(
       Array.from({ length: 613 }, (_, at) => `u-${at + 1}`)
     )
   })

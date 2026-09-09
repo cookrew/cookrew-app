@@ -1,5 +1,6 @@
 import { isDemoMode, isRemoteMode } from './api'
-import { CrLogoMark } from './CrLogoMark'
+import { CrHandMark, CrLogoMark } from './CrLogoMark'
+import { CompanionAvatar, PathBadge } from './PathBadge'
 import { CrIcon } from './icons'
 import { StatusCoin } from './nodes/AgentAvatar'
 import { WorkspaceSwitcher } from './WorkspaceSwitcher'
@@ -20,6 +21,13 @@ interface HeaderProps {
   onActivity: () => void
   /** Re-pull the canvas and re-establish the push channel (the brand mark). */
   onResync: () => void
+  /**
+   * The account avatar (identity v2, D1), or null where there is no account
+   * surface — the phone companion and the demo tab feature-detect to nothing.
+   * Passed in rather than rendered here so the header stays a bar and the
+   * identity state lives in src/renderer/src/account.
+   */
+  avatar?: React.ReactNode
 }
 
 /**
@@ -65,31 +73,49 @@ export function Header({
   view,
   onViewChange,
   onActivity,
-  onResync
+  onResync,
+  avatar
 }: HeaderProps): React.JSX.Element {
   return (
     <header className="cr-header">
       <div className="cr-header-brand">
-        <button
-          type="button"
-          style={RESYNC_BUTTON}
-          title="Refresh — pull the canvas from the desktop again"
-          aria-label="Refresh the canvas"
-          onClick={onResync}
-        >
-          <CrLogoMark />
-        </button>
-        <span className="cr-logo">COOKREW</span>
+        {/* ON THE PHONE THE C HAND BRANDS THE BAR AND THE BADGE DOES THE WORK. The
+            lockup is too wide for one line in portrait, so the hand stands alone
+            as the mark; in landscape (700 px up) styles.css swaps in the still
+            lockup. The path badge beside it is the always-visible "this
+            is how I am asking, and it still works" and tapping it refreshes;
+            the marks are marks, not controls. */}
+        {isRemoteMode() ? (
+          <>
+            <CrHandMark />
+            <CrLogoMark />
+            <PathBadge onRefresh={onResync} />
+          </>
+        ) : (
+          <button
+            type="button"
+            style={RESYNC_BUTTON}
+            title="Refresh — pull the canvas from the desktop again"
+            aria-label="Refresh the canvas"
+            onClick={onResync}
+          >
+            <CrLogoMark />
+          </button>
+        )}
+        {/* THE WORDMARK IS INSIDE THE MARK NOW, on every surface: the still lockup on the
+            desktop and in landscape on the phone, the hand alone in portrait. No text twin. */}
+        {/* IDENTITY LIVES IN THE BRAND GROUP (D1), right after the wordmark and
+            at the mark's own 24 px, so the group stays one line. */}
+        {avatar}
         {isDemoMode() && (
           <span className="cr-chip violet icon" title="Demo data">
             <CrIcon name="demo" />
           </span>
         )}
-        {isRemoteMode() && (
-          <span className="cr-mode-icon" title="Mobile companion">
-            <CrIcon name="mobile" />
-          </span>
-        )}
+        {/* The violet handset's slot becomes the avatar (M3). It was only ever
+            a mode marker with no action; the badge beside it now says the mode
+            more usefully, and the account is worth the pixels. */}
+        {isRemoteMode() && <CompanionAvatar />}
       </div>
 
       <div className="cr-viewseg" role="group" aria-label="View">

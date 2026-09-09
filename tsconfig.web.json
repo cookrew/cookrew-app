@@ -9,8 +9,10 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    // ES2024 is for TYPES: a bare ES2024 call (String.prototype.isWellFormed) typechecks
+    // here but crashes Chrome < 111 — the living-room TV box. Feature-detect at the call site.
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "noEmit": true
   },
-  "include": ["src/renderer/**/*", "src/shared/**/*", "src/preload/index.d.ts"]
+  "include": ["src/renderer/**/*", "src/shared/**/*", "src/preload/index.d.ts", "tests/perf/fixtures/**/*"]
 }

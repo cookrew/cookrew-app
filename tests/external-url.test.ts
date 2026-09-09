@@ -20,6 +20,7 @@ describe('isWebUrl', () => {
     expect(isWebUrl('notion://page/abc')).toBe(false)
     expect(isWebUrl('javascript:alert(1)')).toBe(false)
     expect(isWebUrl('about:blank')).toBe(false)
+    expect(isWebUrl('chrome-error://chromewebdata/')).toBe(false)
   })
 
   it('refuses scheme-smuggling lookalikes', () => {
@@ -54,6 +55,7 @@ describe('canonicalWebUrl — what actually gets opened', () => {
   it('is null exactly where isWebUrl refuses', () => {
     expect(canonicalWebUrl('file:///etc/hosts')).toBeNull()
     expect(canonicalWebUrl('about:blank')).toBeNull()
+    expect(canonicalWebUrl('chrome-error://chromewebdata/')).toBeNull()
     expect(canonicalWebUrl('')).toBeNull()
   })
 })

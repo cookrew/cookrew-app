@@ -13,18 +13,20 @@ import { MarkdownText } from './MarkdownText'
 import {
   coalescingSingleFlight,
   evictTrace,
-  fetchTracePage,
   fractionOfIdentity,
   identityAtFraction,
   isAtBottom,
+  shouldStick,
   jumpScrollBehavior,
   mergeTrace,
   pruneToTotal,
   refineEstimate,
   type TraceAnchor,
-  type TracePage,
-  type TraceBlock
+  type TraceBlock,
+  wheelGoesToTranscript
 } from './transcript'
+import { mayFireSideEffects } from './stream/stream-view'
+import type { StreamPager, StreamWindow } from './stream/stream-pager'
 
 /** Blocks fetched per lazy page, and the cap of FULL blocks kept in memory. */
 const WINDOW = 20
@@ -82,7 +84,14 @@ export const TranscriptView = forwardRef<
   TranscriptHandle,
   {
     terminalId: string
-    /** Total completed checkpoints (activity.turnCount) — the growth signal. */
+    /**
+     * THE ONE STREAM'S PAGER. Every window is named by an identity and comes
+     * back in stream coordinates (stream-pager.ts). The view keeps thinking
+     * in ordinals — its geometry, its placeholders and the rail's fractions
+     * are all laid out in them — and never learns that a transcript is a file.
+     */
+    pager: StreamPager
+    /** Length of the whole stream — the growth signal. */
     total: number
     /**
      * Full ordered checkpoint identity list (Forge's trace index) — defines the
@@ -96,6 +105,18 @@ export const TranscriptView = forwardRef<
     jumpToken: number
     /** Live-tail clip (unified-scroll item 1): rows of the idle TUI tail, or null. */
     clipRows: number | null
+    /**
+     * The turn is at rest (idle / replied): a wheel over the live layer moves
+     * through the combined space whether or not a clip was found. See
+     * wheelGoesToTranscript for why the clip alone was not enough.
+     */
+    atRest?: boolean
+    /**
+     * Where the live terminal's viewport is in its own scrollback. The wheel
+     * over the live layer scrolls THAT first and hands off to the transcript
+     * only at its edges (wheelGoesToTranscript).
+     */
+    liveEdges?: () => { atTop: boolean; atBottom: boolean }
     /** Reports the identity in view (+ marker fraction) for the timeline. */
     onActiveBlockChange?: (active: ActiveBlock) => void
     /** Reports a checkpoint whose content is FETCHING for a jump, null once filled. */
@@ -114,12 +135,15 @@ export const TranscriptView = forwardRef<
 >(function TranscriptView(
   {
     terminalId,
+    pager,
     total,
     identities,
     titleMode,
     selectedIndex,
     jumpToken,
     clipRows,
+    atRest = false,
+    liveEdges,
     onActiveBlockChange,
     onPending,
     onTailLoaded,
@@ -131,6 +155,8 @@ export const TranscriptView = forwardRef<
   ref
 ): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
+  /** Where the last ingested window came from — see stream-view.ts. */
+  const renderSourceRef = useRef<StreamWindow['render']>('live')
   const liveRef = useRef<HTMLDivElement>(null)
   const blockRefs = useRef<Map<number, HTMLDivElement>>(new Map())
   const [blocks, setBlocks] = useState<TraceBlock[]>([])
@@ -140,6 +166,10 @@ export const TranscriptView = forwardRef<
   const pinnedRef = useRef(true)
   const clipRef = useRef(clipRows)
   clipRef.current = clipRows
+  const restRef = useRef(atRest)
+  restRef.current = atRest
+  const liveEdgesRef = useRef(liveEdges)
+  liveEdgesRef.current = liveEdges
   // Eviction anchor (the identity in view) so the cap keeps the visible window.
   const anchorIndexRef = useRef<number>(Number.MAX_SAFE_INTEGER)
   // The identity currently at the viewport top — tells a genuine jump from a
@@ -154,9 +184,17 @@ export const TranscriptView = forwardRef<
 
   // The current identity space + loaded set, mirrored to refs so the scroll and
   // scrub callbacks (bound once) always read the latest without re-binding.
-  const loadedMap = new Map(blocks.map((b) => [b.index, b]))
-  const loadedSet = new Set(blocks.map((b) => b.index))
-  const spaceIds = transcriptIdentitySpace(identities, blocks)
+  //
+  // MEMOISED (D6, T5 QA 2026-09-07). These three were rebuilt on EVERY render —
+  // a Set, a Map and a sorted 1,048-element array — and the overlay re-renders
+  // on every scroll frame, every tail tick and every rail hover. They change
+  // only when the identity space or the loaded window does.
+  const loadedMap = useMemo(() => new Map(blocks.map((b) => [b.index, b])), [blocks])
+  const loadedSet = useMemo(() => new Set(blocks.map((b) => b.index)), [blocks])
+  const spaceIds = useMemo(
+    () => transcriptIdentitySpace(identities, blocks),
+    [identities, blocks]
+  )
   const loadedSetRef = useRef(loadedSet)
   loadedSetRef.current = loadedSet
   const spaceIdsRef = useRef(spaceIds)
@@ -165,6 +203,40 @@ export const TranscriptView = forwardRef<
   // and must read the CURRENT blocks, not the ones closed over at creation.
   const blocksRef = useRef(blocks)
   blocksRef.current = blocks
+
+  /**
+   * ONE ref callback PER IDENTITY, kept (D6, T5 QA 2026-09-07).
+   *
+   * The row list used to build an inline `ref={(node) => …}` per row per
+   * render, and React treats a new callback identity as a ref that changed:
+   * every render detached and reattached ALL of them — 2,096 callback
+   * invocations and 2,096 Map writes on a 1,048-row card, on a component that
+   * re-renders on every scroll frame. The closure is per identity and stable,
+   * so a re-render moves no refs at all.
+   */
+  const rowRefs = useRef<Map<number, (node: HTMLDivElement | null) => void>>(new Map())
+  const rowRef = (id: number): ((node: HTMLDivElement | null) => void) => {
+    const held = rowRefs.current.get(id)
+    if (held !== undefined) return held
+    const made = (node: HTMLDivElement | null): void => {
+      if (node) blockRefs.current.set(id, node)
+      else blockRefs.current.delete(id)
+    }
+    // WRITTEN DURING RENDER, deliberately and safely: the map is private to
+    // this component, the value for an id is derived only from the id, and a
+    // double render therefore produces the identical closure. The same bend
+    // applyChangeSetInto documents, for the same reason.
+    rowRefs.current.set(id, made)
+    return made
+  }
+  // …and PRUNED, so a card that pages a long history back does not retain a
+  // closure per ordinal it has ever drawn (review, T5 QA 2026-09-07).
+  useEffect(() => {
+    const alive = new Set(spaceIds)
+    for (const id of rowRefs.current.keys()) {
+      if (!alive.has(id)) rowRefs.current.delete(id)
+    }
+  }, [spaceIds])
 
   // True while a finger is down (item 2b): a smooth scrollIntoView is canceled by
   // the touch gesture mid-flight, so jumps snap instantly while touching.
@@ -196,12 +268,18 @@ export const TranscriptView = forwardRef<
     const scroller = scrollRef.current
     if (!live || !scroller) return
     const onWheel = (e: WheelEvent): void => {
-      if (clipRef.current === null) return
-      if (e.deltaY < 0 && scroller.scrollTop > 0) {
-        e.preventDefault()
-        e.stopPropagation()
-        scroller.scrollTop += e.deltaY
-      }
+      const takes = wheelGoesToTranscript({
+        atRest: restRef.current,
+        clipped: clipRef.current !== null,
+        deltaY: e.deltaY,
+        scrollTop: scroller.scrollTop,
+        atBottom: isAtBottom(scroller.scrollTop, scroller.scrollHeight, scroller.clientHeight),
+        live: liveEdgesRef.current?.()
+      })
+      if (!takes) return
+      e.preventDefault()
+      e.stopPropagation()
+      scroller.scrollTop += e.deltaY
     }
     live.addEventListener('wheel', onWheel, { capture: true, passive: false })
     return () => live.removeEventListener('wheel', onWheel, { capture: true } as EventListenerOptions)
@@ -210,7 +288,14 @@ export const TranscriptView = forwardRef<
   // Merge a page in, then evict FULL blocks to the cap around the identity in
   // view. Evicted identities revert to cheap placeholders, so the identity space
   // stays continuous while full-block memory stays bounded.
-  const ingest = useCallback((page: { blocks: TraceBlock[]; total: number }): void => {
+  const ingest = useCallback((page: StreamWindow): void => {
+    // ONE RENDERING PATH, TWO SOURCES (panel C). The blocks, the view model
+    // and the markup are identical whether this window is the live tail or a
+    // page somebody scrolled to; the flag gates SIDE EFFECTS only, and the
+    // one this view has is the autoscroll pin below. A replay page that stuck
+    // the reader back to the bottom is precisely the "jump reverted itself"
+    // failure, arriving by a different route.
+    renderSourceRef.current = page.render
     // Capture the anchor (the jump target, else the identity in view) so the
     // post-commit layout effect can hold it steady while placeholders above swap
     // to real heights (WARNING). Skip when pinned — autoscroll owns the bottom.
@@ -234,14 +319,31 @@ export const TranscriptView = forwardRef<
     })
   }, [])
 
+  /**
+   * ONE WINDOW, NAMED BY AN IDENTITY.
+   *
+   * The anchors are still written as ordinals here — the whole view is laid
+   * out in them — but the pager resolves each to the identity it asks by, so
+   * a /compact can no longer make a window mean a different turn than the one
+   * that was clicked. `aroundIndex` is the only REPLAY shape: it is the
+   * window somebody scrolled or jumped to. Growth (`afterIndex`) and the tail
+   * are live.
+   */
   const fetchWindow = useCallback(
-    async (req: 'tail' | TraceAnchor): Promise<TracePage> => {
-      const request = req === 'tail' ? { limit: WINDOW } : { limit: WINDOW, ...req }
-      const page = await fetchTracePage(terminalId, request)
+    async (req: 'tail' | TraceAnchor): Promise<StreamWindow> => {
+      const limit = req !== 'tail' && req.limit !== undefined ? req.limit : WINDOW
+      const page =
+        req === 'tail'
+          ? await pager.tail(limit)
+          : req.aroundIndex !== undefined
+            ? await pager.around(req.aroundIndex, limit)
+            : req.afterIndex !== undefined
+              ? await pager.after(req.afterIndex, limit)
+              : await pager.tail(limit)
       ingest(page)
       return page
     },
-    [terminalId, ingest]
+    [pager, ingest]
   )
 
   // Lazy fill: fetch the window around an unloaded identity (replaces the old
@@ -406,6 +508,13 @@ export const TranscriptView = forwardRef<
   const scrollToTarget = useCallback((index: number, behavior: 'auto' | 'smooth'): boolean => {
     const node = blockRefs.current.get(index)
     if (!node) return false
+    // The pin is dropped AT the jump, not one frame later in onScroll's rAF:
+    // the pin-keeper's MutationObserver stick() is a microtask and its
+    // ResizeObserver stick() beats the scroll event, so a stale-true pin
+    // would re-write scrollTop to the bottom and eat this jump (measured —
+    // the tap silently reverted to the live tail). onScroll re-derives the
+    // truth a frame later, so a jump that lands at the bottom re-pins.
+    pinnedRef.current = false
     node.scrollIntoView({ block: 'start', behavior })
     return true
   }, [])
@@ -446,6 +555,8 @@ export const TranscriptView = forwardRef<
       if (enteringLive || explicit) {
         anchorIndexRef.current = Number.MAX_SAFE_INTEGER
         pinnedRef.current = true
+        // Back at the tail: the view is live again, so the pin may act.
+        renderSourceRef.current = 'live'
         void fetchWindow('tail')
       }
       if (pinnedRef.current && scrollRef.current) {
@@ -519,6 +630,72 @@ export const TranscriptView = forwardRef<
     if (el && pinnedRef.current) el.scrollTop = el.scrollHeight
   }, [blocks, total, estHeight])
 
+  // The pin, ENFORCED. The effect above fires only when React knows the
+  // content changed; on the phone the scroller grows behind React's back —
+  // a content-visibility block renders and its 88px intrinsic estimate
+  // becomes hundreds of real ones, the live seam grows as the xterm fit
+  // settles, the trace index inserts placeholders above the viewport.
+  // Chromium's scroll anchoring absorbed all of that on desktop; WebKit
+  // implements none of it, so an open on the phone landed mid-history with
+  // the pin still notionally set. While pinned, any child that resizes or
+  // mounts re-sticks the bottom; the moment the reader scrolls away,
+  // onScroll drops the pin and this goes quiet.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || typeof ResizeObserver !== 'function') return
+    const apply = (source: StreamWindow['render']): void => {
+      // REPLAY NEVER MOVES THE VIEW. Growth the reader did not ask for may
+      // re-stick the bottom; a page they scrolled to may not.
+      if (!mayFireSideEffects(source)) return
+      if (shouldStick(pinnedRef.current, el.scrollTop, el.scrollHeight, el.clientHeight)) {
+        el.scrollTop = el.scrollHeight
+      }
+    }
+    /**
+     * ONE STICK PER FRAME (D6, T5 QA 2026-09-07).
+     *
+     * Every row in the scroller is observed, so one estimate refinement —
+     * which rewrites the inline height of every PLACEHOLDER — used to call
+     * this 1,048 times, and each call reads `scrollHeight` and `clientHeight`,
+     * forcing a synchronous layout. That is the shape of the freeze the
+     * companion tab showed with the busiest card's overlay open. Coalescing to
+     * a frame keeps the behaviour (the bottom is still stuck after the batch)
+     * and costs one layout instead of a thousand.
+     */
+    let frame: number | null = null
+    const stick = (): void => {
+      if (frame !== null) return
+      // THE VERDICT IS TAKEN NOW, not at frame time. Deferring the read of
+      // renderSourceRef would let a live tail landing in the same frame turn a
+      // REPLAY's resize into a live stick — scrolling the reader to the bottom
+      // out from under the page they asked for (review, T5 QA 2026-09-07).
+      const source = renderSourceRef.current
+      frame = requestAnimationFrame(() => {
+        frame = null
+        apply(source)
+      })
+    }
+    const ro = new ResizeObserver(stick)
+    for (const child of Array.from(el.children)) ro.observe(child)
+    const mo = new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of Array.from(record.addedNodes)) {
+          if (node instanceof Element) ro.observe(node)
+        }
+        for (const node of Array.from(record.removedNodes)) {
+          if (node instanceof Element) ro.unobserve(node)
+        }
+      }
+      stick()
+    })
+    mo.observe(el, { childList: true })
+    return () => {
+      if (frame !== null) cancelAnimationFrame(frame)
+      mo.disconnect()
+      ro.disconnect()
+    }
+  }, [])
+
   return (
     <div className="ctx-transcript" ref={scrollRef} onScroll={onScroll}>
       {spaceIds.map((id) => {
@@ -535,10 +712,7 @@ export const TranscriptView = forwardRef<
             }
             data-checkpoint={id}
             style={block ? undefined : { height: estHeight }}
-            ref={(node) => {
-              if (node) blockRefs.current.set(id, node)
-              else blockRefs.current.delete(id)
-            }}
+            ref={rowRef(id)}
           >
             {block ? (
               <>

@@ -85,7 +85,9 @@ describe('startSse', () => {
     const send = await connected
 
     expect(stream.headers['content-encoding']).toBe('gzip')
-    expect(stream.headers.vary).toBe('accept-encoding')
+    // `origin` too: the stream's allow-origin header varies per caller now
+    // that the companion at cookrew.dev reads it cross-origin.
+    expect(stream.headers.vary).toBe('accept-encoding, origin')
 
     send('activity', { terminalId: 'a', phase: 'working' })
     // THE regression this guards: without Z_SYNC_FLUSH after every event the

@@ -11,10 +11,11 @@ import {
   type ShareAccess
 } from '../src/renderer/src/ShareOnSave'
 import { ServedTeamCard, type ServedTeam } from '../src/renderer/src/ServedTeamCard'
-import { AddCrewSheet } from '../src/renderer/src/AddCrewSheet'
+import { ImportServedSheet } from '../src/renderer/src/ImportServedSheet'
 import { renderServedCrewFace, type CrewFace } from '../src/main/served-endpoints'
 import type { ServedPaymentRail } from '../src/shared/served-payment-rails'
 import { EMPTY_SERVED_PAYMENT_STATUS } from '../src/shared/served-payment-config'
+import { MKT_SERVE } from '../src/shared/marketplace-copy'
 import { PaymentSettingsSheet } from '../src/renderer/src/PaymentSettingsSheet'
 
 /**
@@ -41,8 +42,12 @@ const paint = (
       priceUsd={priceUsd}
       paymentRails={paymentRails}
       door="Conductor"
+      summary=""
+      tagsRaw=""
       onAccess={noop}
       onPrice={noop}
+      onSummary={noop}
+      onTags={noop}
       onConfigurePayments={noop}
     />
   )
@@ -138,6 +143,141 @@ describe('serve refusal copy', () => {
     expect(text).toContain('Match the grant to the orch')
     expect(text).toContain('endpoint’s request template')
   })
+
+  it('sends the phone owner to the desktop instead of showing the raw token', () => {
+    // The remote transport refuses servingServe with `desktop-only` (publish is
+    // owner-IPC only, the grant-surface rule). That word reached the bar as-is.
+    const text = serveRefusalText('desktop-only')
+    expect(text).not.toBe('desktop-only')
+    expect(text).toContain('desktop')
+  })
+})
+
+describe('the share popover survives a phone-width bar', () => {
+  /**
+   * The user saved a team on the phone and the share chooser never appeared:
+   * under ≤700px the bar became a scroll container (overflow-x: auto), and a
+   * scroll container clips the absolutely positioned popovers it contains —
+   * the share sheet, the clipboard tray, the address receipt. The scroll must
+   * live on a NON-positioned inner row instead: absolute children escape the
+   * overflow of an ancestor that is not their containing block.
+   */
+  it('keeps every popover a direct child of the positioned bar, outside the row', () => {
+    const bar = src('SelectionBar.tsx')
+    expect(bar).toContain('className="cr-selbar-row"')
+    const row = bar.indexOf('className="cr-selbar-row"')
+    for (const popover of [
+      'cr-selbar-share cr-selbar-served',
+      'className="cr-selbar-tray"'
+    ]) {
+      expect(bar.indexOf(popover), popover).toBeLessThan(row)
+    }
+    // The share sheet sits at the bar's own indent (6 spaces), one level
+    // above row content — nesting it back inside the row would deepen this.
+    expect(bar).toMatch(/\n {6}\{naming && \(\n {8}<div className="cr-selbar-share">/)
+  })
+
+  it('narrow screens scroll the row, never the bar the popovers hang from', () => {
+    const css = readFileSync(
+      path.join(__dirname, '..', 'src/renderer/src', 'styles.css'),
+      'utf8'
+    )
+    // The base rule must stay overflow-free too — clipping there brings the
+    // bug back at EVERY width, not just phones.
+    const base = css.indexOf('\n.cr-selbar {')
+    expect(base).toBeGreaterThan(-1)
+    expect(css.slice(base, css.indexOf('}', base))).not.toContain('overflow')
+    const start = css.indexOf('Narrow screens: the bar hugs the width')
+    expect(start).toBeGreaterThan(-1)
+    const end = css.indexOf('}\n\n/* ----', start)
+    expect(end).toBeGreaterThan(-1)
+    const block = css.slice(start, end)
+    expect(block).toMatch(/\.cr-selbar-row[^{]*\{[^}]*overflow-x:\s*auto/)
+    expect(block).not.toMatch(/\.cr-selbar\s*\{[^}]*overflow/)
+  })
+})
+
+describe('the save-flow overlays wear the house dress', () => {
+  /**
+   * The payment sheet and the served-team card reuse the grant surface's gs-*
+   * skeleton, whose --cr-* tokens are defined nowhere in this app — every
+   * surface wearing them fell back to a foreign dark theme, with the app's
+   * own ink invisible on it (the phone screenshot: a near-black sheet whose
+   * headings could not be read). cr-sheet re-dresses the skeleton in house
+   * materials; these pin the class to the two sheets and the tokens to the
+   * treatment.
+   */
+  const css = (): string =>
+    readFileSync(path.join(__dirname, '..', 'src/renderer/src', 'team-fork.css'), 'utf8')
+
+  it('both sheets carry the cr-sheet treatment', () => {
+    const paymentHtml = renderToStaticMarkup(
+      <PaymentSettingsSheet status={EMPTY_SERVED_PAYMENT_STATUS} onStatus={noop} onClose={noop} />
+    )
+    expect(paymentHtml).toContain('cr-sheet')
+    const servedHtml = renderToStaticMarkup(
+      <ServedTeamCard
+        team={{
+          serviceId: 'svc',
+          templateId: 'Crew',
+          slug: 'crew',
+          access: 'account',
+          address: 'http://192.168.1.20:8639/crew',
+          transport: 'lan',
+          paymentRails: []
+        }}
+        door="Conductor"
+        paymentStatus={EMPTY_SERVED_PAYMENT_STATUS}
+        onConfigurePayments={noop}
+        onStopped={noop}
+        onClose={noop}
+      />
+    )
+    expect(servedHtml).toContain('cr-sheet')
+    const importHtml = renderToStaticMarkup(<ImportServedSheet onClose={noop} onImported={noop} />)
+    expect(importHtml).toContain('cr-sheet')
+  })
+
+  it('the treatment speaks house tokens, not the undefined dark ones', () => {
+    const sheet = css()
+    const start = sheet.indexOf('.cr-sheet.gs-sheet {')
+    expect(start).toBeGreaterThan(-1)
+    const block = sheet.slice(start, sheet.indexOf('}', start))
+    expect(block).toContain('var(--cream-hi)')
+    expect(block).toContain('var(--ink)')
+    expect(block).not.toContain('--cr-panel')
+  })
+
+  it('the share popover container is cream, no longer the foreign dark panel', () => {
+    const styles = readFileSync(
+      path.join(__dirname, '..', 'src/renderer/src', 'styles.css'),
+      'utf8'
+    )
+    const start = styles.indexOf('.cr-selbar-share {')
+    expect(start).toBeGreaterThan(-1)
+    const block = styles.slice(start, styles.indexOf('}', start))
+    expect(block).toContain('background: var(--cream-hi)')
+    expect(block).toContain('border: 2px solid var(--line)')
+    expect(block).toContain('box-shadow: 3px 3px 0 var(--line)')
+    expect(block).not.toContain('--cr-panel')
+  })
+
+  it('the bar carries no transform — a fixed scrim inside would anchor to it', () => {
+    // position: fixed resolves against a transformed ancestor, not the
+    // viewport. The payment sheet renders INSIDE the bar; a transform here
+    // glued its scrim to the bar instead of covering the screen.
+    const styles = readFileSync(
+      path.join(__dirname, '..', 'src/renderer/src', 'styles.css'),
+      'utf8'
+    )
+    const base = styles.indexOf('\n.cr-selbar {')
+    expect(base).toBeGreaterThan(-1)
+    const bar = styles.slice(base, styles.indexOf('}', base))
+    expect(bar).not.toContain('transform')
+    // …and pin the replacement centering, so deleting it outright fails too.
+    expect(bar).toContain('margin-inline: auto')
+    expect(bar).toContain('width: fit-content')
+  })
 })
 
 describe('Ways to get paid — the missing paid-door affordance', () => {
@@ -197,6 +337,7 @@ describe('ServedTeamCard — who is on, on the thing you published', () => {
     access: 'paid',
     priceUsd: '2.50',
     paymentRails: ['x402', 'stripe'],
+    transport: 'lan' as const,
     address: 'http://192.168.1.20:8639/research-crew'
   }
 
@@ -263,16 +404,18 @@ describe('ServedTeamCard — who is on, on the thing you published', () => {
   })
 })
 
-describe('AddCrewSheet — adding is free and inert', () => {
+describe('ImportServedSheet — one address, one orch card', () => {
   it('paints, and asks only for the address', () => {
-    const html = renderToStaticMarkup(<AddCrewSheet onClose={noop} onAdded={noop} />)
-    expect(html).toContain('Add a crew')
-    expect(html).toContain('ADD TO DOCK')
+    const html = renderToStaticMarkup(<ImportServedSheet onClose={noop} onImported={noop} />)
+    expect(html).toContain('Import a team')
+    expect(html).toContain('LOOK UP')
     expect(html).toContain('Paste the address')
   })
 
   it('the primary is disabled until something is pasted', () => {
-    expect(renderToStaticMarkup(<AddCrewSheet onClose={noop} onAdded={noop} />)).toContain('disabled')
+    expect(renderToStaticMarkup(<ImportServedSheet onClose={noop} onImported={noop} />)).toContain(
+      'disabled'
+    )
   })
 })
 
@@ -300,20 +443,21 @@ describe('served caller face — the page tells a caller what they can actually 
     expect(html).not.toContain('2.50 USD to start')
   })
 
-  it('an account face sends the caller through ADD BY LINK with a copy-ready address', () => {
+  it('an account face sends the caller through + IMPORT with a copy-ready address', () => {
     const html = renderServedCrewFace(face('account', []), false)
-    expect(html).toContain('+ ADD BY LINK')
+    expect(html).toContain('+ IMPORT')
     expect(html).toContain('http://192.168.1.20:8639/research-crew')
-    expect(html).toContain('The crew card signs you in when you start.')
+    expect(html).toContain('signs you in when it starts')
+    expect(html).toContain('Conductor')
     expect(html).not.toContain('one tap')
   })
 
-  it('a paid face with live rails explains that ADD BY LINK walks through payment', () => {
+  it('a paid face with live rails explains that the card asks for payment at start', () => {
     const html = renderServedCrewFace(face('paid', ['x402']), false)
     expect(html).toContain('2.50 USD to start')
     expect(html).toContain('Pay with USDC on Base')
-    expect(html).toContain('+ ADD BY LINK')
-    expect(html).toContain('walks you through sign-in and payment')
+    expect(html).toContain('+ IMPORT')
+    expect(html).toContain('takes the payment once, before anything is placed')
   })
 })
 
@@ -367,9 +511,89 @@ describe('the retirements are real, not merely unmounted', () => {
     expect(row).not.toContain("from './ExportToggle'")
   })
 
-  it('the dock offers crews and a way to add one', () => {
+  it('no crew chip family survives in the dock — the one entry is + IMPORT', () => {
     const dock = src('Dock.tsx')
-    expect(dock).toContain('crew-chip')
-    expect(dock).toContain('+ ADD BY LINK')
+    expect(dock).not.toContain('crew-chip')
+    expect(dock).not.toContain('+ ADD BY LINK')
+    expect(dock).toContain('+ IMPORT')
+  })
+})
+
+describe('the card says who can open the link it just gave you', () => {
+  /**
+   * The address was handed out with no indication of how far it carries, so a
+   * person could copy a 192.168 link and send it to another city. Reach is a
+   * fact ABOUT the link, and the moment it matters is the moment it is copied.
+   */
+  const served = (transport: ServedTeam['transport']): ServedTeam => ({
+    serviceId: 'svc-research-crew',
+    templateId: 'Research Crew',
+    slug: 'research-crew',
+    access: 'account',
+    address: 'http://192.168.1.20:8639/research-crew',
+    transport,
+    paymentRails: []
+  })
+
+  const render = (transport: ServedTeam['transport']): string =>
+    renderToStaticMarkup(
+      <ServedTeamCard
+        team={served(transport)}
+        door="Conductor"
+        paymentStatus={EMPTY_SERVED_PAYMENT_STATUS}
+        onConfigurePayments={noop}
+        onStopped={noop}
+        onClose={noop}
+      />
+    )
+
+  it('a private door says so, and says what would widen it', () => {
+    const html = render('lan')
+    expect(html).toContain('Only people on this network can open it.')
+    expect(html).toContain('turn on Tailscale')
+  })
+
+  it('a tailnet door names the tailnet, not the network', () => {
+    const html = render('tailnet')
+    expect(html).toContain('Only people on your tailnet can open it.')
+    expect(html).not.toContain('Only people on this network')
+  })
+
+  it('a door anyone can reach needs no explanation beside it', () => {
+    const html = render('relay')
+    expect(html).toContain('Anyone with the link can open it.')
+    expect(html).not.toContain('turn on Tailscale')
+  })
+
+  it('a relayed door hands out a name, and nothing about this machine', () => {
+    // What a person copies and sends. It must be openable by whoever they send
+    // it to, and it must not carry their home network's address to get there.
+    const html = renderToStaticMarkup(
+      <ServedTeamCard
+        team={{
+          ...served('relay'),
+          slug: 'cookrew-alpha',
+          address: 'https://cookrew.dev/@drej/cookrew-alpha'
+        }}
+        door="Pilot"
+        paymentStatus={EMPTY_SERVED_PAYMENT_STATUS}
+        onConfigurePayments={noop}
+        onStopped={noop}
+        onClose={noop}
+      />
+    )
+    expect(html).toContain('https://cookrew.dev/@drej/cookrew-alpha')
+    expect(html).toContain('Anyone with the link can open it.')
+    expect(html).not.toContain('192.168')
+    expect(html).not.toContain('8639')
+  })
+
+  it('reach is about reaching, never about being let in', () => {
+    // The gate — sign-in, price, the owner's lending limit — is a different
+    // sentence in a different place; this line must not imply entitlement.
+    for (const transport of ['lan', 'tailnet', 'public', 'relay'] as const) {
+      const line = MKT_SERVE[`mkt.serve.reach.${transport}` as const]
+      expect(line, transport).not.toMatch(/free|pay|paid|price|sign in|account/i)
+    }
   })
 })

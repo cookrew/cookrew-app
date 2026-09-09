@@ -1,0 +1,370 @@
+import { useCallback, useEffect, useState } from 'react'
+import { LOCK_CHOICES } from '../../../shared/account-v2'
+import type { FactorsView } from '../../../shared/account-approvals'
+import { cookrew } from '../api'
+import {
+  ACCOUNT_COPY,
+  lockRowLabel,
+  mustChangeBanner,
+  refusalSentence,
+  removeFactorPrompt,
+  rescueState,
+  type FactorRow,
+} from './account-store'
+import { FactorRows, RemoveFactorRow, Row } from './FactorRows'
+import { DOING, problemSentence, refusedSentence } from './problem'
+import { NewPasswordCard } from './NewPasswordCard'
+import { TotpSheet } from './TotpSheet'
+import {
+  cannotMakePasskey,
+  fromCredential,
+  hasPlatformAuthenticator,
+  toCreationOptions,
+} from './webauthn'
+import '../grant-surface.css'
+
+/**
+ * THE SECURITY CARD (D3) — shown once right after claiming, and again from
+ * Profile → Security. Every row is live now.
+ *
+ * PASSKEY FIRST, by the ruling: it is the recommended factor and the one a
+ * person already knows how to use. The row is RECOMMENDED only while there is
+ * none — a card that keeps recommending something already done stops being
+ * read. Phase 4 retires the two COMING rows: nothing on this card is inert any
+ * more, so nothing on it has to apologise for itself.
+ *
+ * WHEN THIS ELECTRON CANNOT MAKE A PASSKEY, THE ROW SAYS SO. A desktop build
+ * without a platform authenticator refuses `navigator.credentials.create`, and
+ * the honest answer is the one the design writes: add it in a browser, where
+ * it works, and it lands on the same account. What this must never do is
+ * report a factor that does not exist — the whole value of the row is that the
+ * owner can trust what it says about their way back in.
+ *
+ * THE LOCK IS REACHABLE, not just configurable. Setting a delay and having no
+ * way to lock now is a lock you can only meet by walking away from the desk.
+ */
+
+/** Nobody dismisses the codes by reflex: the primary waits five seconds. */
+const CODES_SETTLE_MS = 5_000
+/** What a passkey made here is called, as the Devices tab lists it (D4). */
+const THIS_MAC_PASSKEY = 'Touch ID on this Mac'
+
+export function SecurityCard({
+  username,
+  lockAfterMs,
+  recoveryCodesSavedAt,
+  recoveryCodesLeft = null,
+  sessionExpired = false,
+  problem = null,
+  onLockAfterMs,
+  onLockNow,
+  onCodesSaved,
+}: {
+  username: string
+  lockAfterMs: number
+  recoveryCodesSavedAt: number | null
+  recoveryCodesLeft?: number | null
+  /**
+   * cookrew.dev has thrown this Mac's session away. The card stops reading
+   * factors it will only be refused, and the caller shows the resume field.
+   */
+  sessionExpired?: boolean
+  /** A failure from the actions the parent owns (the lock, the codes file). */
+  problem?: string | null
+  onLockAfterMs: (ms: number) => void
+  onLockNow: () => void
+  onCodesSaved: () => void
+}): React.JSX.Element {
+  const [codes, setCodes] = useState<readonly string[] | null>(null)
+  const [factors, setFactors] = useState<FactorsView | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [settled, setSettled] = useState(false)
+  const [totp, setTotp] = useState(false)
+  /** This build refused to make a passkey; the row offers the browser. */
+  const [elsewhere, setElsewhere] = useState(false)
+  /** The factor a REMOVE was pressed on, waiting for the password. */
+  const [removing, setRemoving] = useState<FactorRow | null>(null)
+  const [current, setCurrent] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const readFactors = useCallback(() => {
+    const call = cookrew().accountFactors
+    // BACK OFF WHILE THE SESSION IS DEAD. /v2/me answers 401 until the owner
+    // resumes, and a row that redraws its error on every mount is noise on top
+    // of the one sentence that can actually be acted on.
+    if (!call || sessionExpired) return
+    void call()
+      .then((result) => {
+        if (result.ok) setFactors(result.value)
+        else setError(refusedSentence(DOING.FACTORS, result, username))
+      })
+      .catch((err: unknown) => setError(problemSentence(DOING.FACTORS, err)))
+  }, [username, sessionExpired])
+
+  useEffect(readFactors, [readFactors])
+
+  // ASK BEFORE OFFERING. This build may have no Touch ID to give (see
+  // webauthn.ts), and a row that says so up front beats a row that says it
+  // after the owner has cancelled a dialog about a security key.
+  useEffect(() => {
+    void hasPlatformAuthenticator().then((yes) => {
+      if (!yes) setElsewhere(true)
+    })
+  }, [])
+
+  useEffect(() => {
+    if (codes === null) return
+    setSettled(false)
+    const timer = window.setTimeout(() => setSettled(true), CODES_SETTLE_MS)
+    return () => window.clearTimeout(timer)
+  }, [codes])
+
+  const show = (): void => {
+    const call = cookrew().accountRecoveryCodes
+    if (!call) return
+    setError(null)
+    void call()
+      .then((result) => {
+        if (result.ok) setCodes(result.value)
+        else setError(refusalSentence(result.reason, result.message, username))
+      })
+      .catch((err: unknown) => setError(problemSentence(DOING.CODES, err)))
+  }
+
+  /** SAVE AS FILE. Main owns the dialog and the codes; this only asks. */
+  const saveAsFile = (): void => {
+    const call = cookrew().accountSaveRecoveryCodes
+    if (!call) return
+    setError(null)
+    void call()
+      .then((result) => {
+        if (result.ok) {
+          onCodesSaved()
+          setCodes(null)
+          return
+        }
+        // Cancelling a save dialog is a decision, not a failure to report.
+        if (result.reason !== 'cancelled') setError('Could not write that file. Try another place.')
+      })
+      .catch((err: unknown) => setError(problemSentence(DOING.SAVE_CODES, err)))
+  }
+
+  const putAway = (): void => {
+    onCodesSaved()
+    setCodes(null)
+  }
+
+  /**
+   * Ask the registry for options, ask the browser for a credential, and file
+   * what came back — in that order, and only what came back.
+   */
+  const addPasskey = async (): Promise<void> => {
+    const api = cookrew()
+    if (!api.accountPasskeyOptions || !api.accountPasskeyAdd || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      const options = await api.accountPasskeyOptions()
+      if (!options.ok) {
+        setError(refusalSentence(options.reason, options.message, username))
+        return
+      }
+      let credential: PublicKeyCredential | null = null
+      try {
+        credential = (await navigator.credentials?.create({
+          publicKey: toCreationOptions(options.value),
+        })) as PublicKeyCredential | null
+      } catch (err: unknown) {
+        // NOT A FAILURE MESSAGE: the row changes to the sentence that says
+        // where this does work (D3), and no passkey is filed.
+        if (cannotMakePasskey(err)) {
+          setElsewhere(true)
+          return
+        }
+        throw err
+      }
+      if (credential === null) {
+        setElsewhere(true)
+        return
+      }
+      const filed = await api.accountPasskeyAdd({
+        name: THIS_MAC_PASSKEY,
+        credential: fromCredential(credential),
+      })
+      if (!filed.ok) setError(refusalSentence(filed.reason, filed.message, username))
+      else readFactors()
+    } catch {
+      setError('This Mac could not make a passkey. Try it in a browser instead.')
+      setElsewhere(true)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /**
+   * REMOVING A FACTOR COSTS THE PASSWORD, and the card asks for it here.
+   *
+   * The registry gates both removals on the current password — taking off the
+   * thing that protects a password must not be cheaper than changing it — so
+   * the row opens a field rather than firing a DELETE that would come back
+   * refused. Its refusal is shown in the registry's own words.
+   */
+  const removeFactor = (): void => {
+    const row = removing
+    if (row === null || current.length === 0 || busy) return
+    const api = cookrew()
+    const promise =
+      row.factor === 'totp'
+        ? api.accountTotpRemove?.(current)
+        : api.accountPasskeyRemove?.(row.id, current)
+    if (!promise) return
+    setBusy(true)
+    setError(null)
+    void promise
+      .then((result) => {
+        setBusy(false)
+        if (!result.ok) {
+          setError(refusalSentence(result.reason, result.message, username))
+          return
+        }
+        // The password leaves the component the moment it has been spent.
+        setCurrent('')
+        setRemoving(null)
+        readFactors()
+      })
+      .catch((err: unknown) => {
+        setBusy(false)
+        setError(problemSentence(DOING.REMOVE_FACTOR, err))
+      })
+  }
+
+  if (codes !== null) {
+    return (
+      <section className="cr-acct-card" aria-label="Recovery codes">
+        <h3 className="cr-acct-cardhead">
+          Recovery codes <span className="gs-dim">{ACCOUNT_COPY.CODES_EACH}</span>
+        </h3>
+        {/* Rendered, never logged. A console.log of these is the account. */}
+        <ul className="cr-acct-codes">
+          {codes.map((code) => (
+            <li key={code}>{code}</li>
+          ))}
+        </ul>
+        {error && (
+          <p className="gs-paste-error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="gs-sheet-foot">
+          <button
+            className="gs-ghost"
+            onClick={() => void navigator.clipboard?.writeText(codes.join('\n'))}
+          >
+            COPY
+          </button>
+          <button className="gs-ghost" onClick={saveAsFile}>
+            SAVE AS FILE
+          </button>
+          <button className="gs-primary" disabled={!settled} onClick={putAway}>
+            I SAVED THEM
+          </button>
+        </div>
+      </section>
+    )
+  }
+
+  const rescue = rescueState(recoveryCodesSavedAt, recoveryCodesLeft)
+  const banner = mustChangeBanner(factors)
+  return (
+    <section className="cr-acct-card" aria-label="Security">
+      {banner !== null && <NewPasswordCard username={username} onDone={readFactors} />}
+      <h3 className="cr-acct-cardhead">
+        @{username} is yours <span className="gs-dim">protect it</span>
+      </h3>
+      <ul className="cr-acct-secrows">
+        <FactorRows
+          factors={factors}
+          busy={busy}
+          elsewhere={elsewhere}
+          onAdd={(row) =>
+            row.factor === 'totp' ? setTotp(true) : void addPasskey().catch(() => undefined)
+          }
+          onRemove={(row) => {
+            setCurrent('')
+            setError(null)
+            setRemoving(row)
+          }}
+          onOpenBrowser={(url) => void cookrew().openExternal?.(url)}
+        />
+        {removing !== null && (
+          <RemoveFactorRow
+            row={removing}
+            current={current}
+            busy={busy}
+            onCurrent={setCurrent}
+            onConfirm={removeFactor}
+            onCancel={() => {
+              setCurrent('')
+              setRemoving(null)
+            }}
+          />
+        )}
+        <Row
+          kind="RESCUE"
+          label="Save your recovery codes"
+          state={rescue.label}
+          saved={rescue.saved}
+          action={
+            <button className="gs-primary" onClick={show}>
+              {rescue.saved ? 'SHOW NEW' : 'SHOW'}
+            </button>
+          }
+        />
+        <Row
+          kind="LOCK"
+          label={lockRowLabel(lockAfterMs)}
+          action={
+            <select
+              className="cr-acct-select"
+              aria-label="Lock after idle"
+              value={String(lockAfterMs)}
+              onChange={(e) => onLockAfterMs(Number(e.target.value))}
+            >
+              {LOCK_CHOICES.map((choice) => (
+                <option key={choice.ms} value={String(choice.ms)}>
+                  {choice.label}
+                </option>
+              ))}
+            </select>
+          }
+        />
+        <Row
+          kind="LOCK"
+          label="Lock this Mac now"
+          action={
+            <button className="gs-ghost" onClick={onLockNow}>
+              LOCK NOW
+            </button>
+          }
+        />
+      </ul>
+      {(error ?? problem) && (
+        <p className="gs-paste-error" role="alert">
+          {error ?? problem}
+        </p>
+      )}
+      <p className="gs-foot-note">{ACCOUNT_COPY.LOCK_NOW_WHY}</p>
+      <p className="gs-foot-note">{ACCOUNT_COPY.SECURITY_WHY}</p>
+      {totp && (
+        <TotpSheet
+          username={username}
+          onClose={() => setTotp(false)}
+          onActive={() => {
+            setTotp(false)
+            readFactors()
+          }}
+        />
+      )}
+    </section>
+  )
+}

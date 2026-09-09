@@ -1,5 +1,12 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
+let deepLinkSubscriber: ((link: unknown) => void) | null = null
+let heldDeepLinks: readonly unknown[] = []
+ipcRenderer.on('app:deep-link', (_e, link: unknown) => {
+  if (deepLinkSubscriber) deepLinkSubscriber(link)
+  else heldDeepLinks = [...heldDeepLinks, link]
+})
+
 const api = {
   getWorkspace: () => ipcRenderer.invoke('workspace:get'),
   // The owner's grant surface. Main refuses any sender that is not the owner
@@ -25,6 +32,126 @@ const api = {
   grantRestore: (workspaceId: string, sub: string) =>
     ipcRenderer.invoke('grant:restore', workspaceId, sub),
   grantList: (workspaceId: string) => ipcRenderer.invoke('grant:list', workspaceId),
+
+  // ── the owner's account (identity v2, phase 1) ──
+  //
+  // Every one of these is refused by main unless the sender IS the owner
+  // window's top frame (account-ipc.ts, isOwnerSender), so exposing them here
+  // does not hand a claim or a recovery code to a browser card. The renderer
+  // FEATURE-DETECTS them: the phone bridge and the demo api have none of this,
+  // and the avatar simply does not appear there in this phase.
+  accountStatus: () => ipcRenderer.invoke('account:status'),
+  /** Presence ping for the idle lock. Throttled by the renderer, not here. */
+  accountActivity: () => ipcRenderer.invoke('account:activity'),
+  accountCheck: (username: string) => ipcRenderer.invoke('account:check', username),
+  accountClaim: (input: { username: string; password: string; name?: string }) =>
+    ipcRenderer.invoke('account:claim', input),
+  /** Phase 6: a password for the name this Mac already holds a key for. The
+   *  name is main's to know, so this takes only the password. */
+  accountMigrate: (input: { password: string; name?: string }) =>
+    ipcRenderer.invoke('account:migrate', input),
+  accountLock: () => ipcRenderer.invoke('account:lock'),
+  /** Also renews a session that died, since the password is in hand once. */
+  accountUnlock: (password: string) => ipcRenderer.invoke('account:unlock', password),
+  /**
+   * The session ended: trade the password for a new one.
+   *
+   * It may answer a LADDER instead — `{reason:'second_factor', step}` — and
+   * the three calls under it climb it. They carry a pending id and a typed
+   * code, never the password: main holds that for the length of the ladder, so
+   * the renderer is not the custodian of a secret across a ten-minute poll.
+   */
+  accountResume: (password: string) => ipcRenderer.invoke('account:resume', password),
+  accountResumeCode: (input: { pending: string; factor: 'totp' | 'recovery'; code: string }) =>
+    ipcRenderer.invoke('account:resumeCode', input),
+  /** Ask the account's other devices to approve this sign-in (D6). */
+  accountResumeAsk: (pending: string) => ipcRenderer.invoke('account:resumeAsk', pending),
+  /** And wait for the nod. One long call; the card drops it if it closes. */
+  accountResumeWait: (pending: string) => ipcRenderer.invoke('account:resumeWait', pending),
+  accountProfile: () => ipcRenderer.invoke('account:profile'),
+  accountDevices: () => ipcRenderer.invoke('account:devices'),
+  accountRevoke: (deviceId: string) => ipcRenderer.invoke('account:revoke', deviceId),
+  accountRecoveryCodes: () => ipcRenderer.invoke('account:recoveryCodes'),
+  /** SAVE AS FILE. Takes nothing: main writes the batch IT minted, never the
+   *  renderer's copy, so this cannot be talked into writing chosen bytes. */
+  accountSaveRecoveryCodes: () => ipcRenderer.invoke('account:saveRecoveryCodes'),
+  /** I SAVED THEM — recorded locally so the RESCUE row stops saying NOT SAVED. */
+  accountCodesSaved: () => ipcRenderer.invoke('account:codesSaved'),
+  accountSetLock: (ms: number) => ipcRenderer.invoke('account:setLock', ms),
+  accountSetProfile: (patch: { displayName?: string; avatar?: string | null }) =>
+    ipcRenderer.invoke('account:setProfile', patch),
+  accountWorkspacesReachable: (on: boolean) =>
+    ipcRenderer.invoke('account:workspacesReachable', on),
+  // ── pairing a phone through cookrew.dev (identity v2, phase 2) ──
+  //
+  // The key is a live credential for two minutes, which is exactly why it goes
+  // through the same owner-only gate as a recovery code: a page that could
+  // read it could pair itself to this Mac.
+  accountPairingUrl: () => ipcRenderer.invoke('account:pairingUrl'),
+  accountAdmittedDevices: () => ipcRenderer.invoke('account:admittedDevices'),
+  accountForgetAdmitted: (deviceId: string) =>
+    ipcRenderer.invoke('account:forgetAdmitted', deviceId),
+
+  // ── phase 4: the approval prompt (D6) and the factor ladder (D3) ──
+  //
+  // Same guard, same reasoning: these can approve a device onto the account,
+  // sign every other device out, and add a way in. Owner window's top frame
+  // or nothing.
+  accountApprovals: () => ipcRenderer.invoke('account:approvals'),
+  accountDecide: (input: { id: string; decision: 'approve' | 'deny' | 'not-me' }) =>
+    ipcRenderer.invoke('account:decide', input),
+  accountSetPassword: (input: { current: string; next: string }) =>
+    ipcRenderer.invoke('account:setPassword', input),
+  accountFactors: () => ipcRenderer.invoke('account:factors'),
+  /** The secret and its QR, for the moment the sheet draws them. */
+  accountTotpEnrol: () => ipcRenderer.invoke('account:totpEnrol'),
+  accountTotpConfirm: (code: string) => ipcRenderer.invoke('account:totpConfirm', code),
+  /** Both removals carry the password: the registry gates them on it. */
+  accountTotpRemove: (current: string) => ipcRenderer.invoke('account:totpRemove', current),
+  accountPasskeys: () => ipcRenderer.invoke('account:passkeys'),
+  accountPasskeyOptions: () => ipcRenderer.invoke('account:passkeyOptions'),
+  accountPasskeyAdd: (input: { name: string; credential: Record<string, unknown> }) =>
+    ipcRenderer.invoke('account:passkeyAdd', input),
+  accountPasskeyRemove: (id: string, current: string) =>
+    ipcRenderer.invoke('account:passkeyRemove', id, current),
+  /**
+   * The queue changed, or a notification was clicked (then with the request's
+   * id, so the sheet opens on the one the owner was told about).
+   */
+  onAccountRequests: (cb: (requestId: string | null) => void) => {
+    const listener = (_e: unknown, requestId: string | null): void => cb(requestId)
+    ipcRenderer.on('account:requests', listener)
+    return () => ipcRenderer.removeListener('account:requests', listener)
+  },
+  // ── seats & teams (identity v2, phase 5) ──
+  accountSeats: () => ipcRenderer.invoke('account:seats'),
+  accountTeamSeats: (slug: string) => ipcRenderer.invoke('account:teamSeats', slug),
+  accountGrantSeat: (input: { slug: string; username: string }) =>
+    ipcRenderer.invoke('account:grantSeat', input),
+  accountEndSeat: (input: { slug: string; id: string }) =>
+    ipcRenderer.invoke('account:endSeat', input),
+  /** Who is at this desktop's served doors right now (D7's avatars). */
+  onServingCallers: (cb: (rows: unknown) => void) => {
+    const listener = (_e: unknown, rows: unknown): void => cb(rows)
+    ipcRenderer.on('serving:callers', listener)
+    return () => ipcRenderer.removeListener('serving:callers', listener)
+  },
+  servingCallers: () => ipcRenderer.invoke('serving:callers'),
+  /** Main locked or unlocked the owner's view; the overlay follows this. */
+  /**
+   * The account file changed in main — most importantly, a session cookrew.dev
+   * refused. The surface re-reads the status and opens its password prompt.
+   */
+  onAccountChanged: (cb: () => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('account:changed', listener)
+    return () => ipcRenderer.removeListener('account:changed', listener)
+  },
+  onAccountLocked: (cb: (locked: boolean) => void) => {
+    const listener = (_e: unknown, locked: boolean): void => cb(locked)
+    ipcRenderer.on('account:locked', listener)
+    return () => ipcRenderer.removeListener('account:locked', listener)
+  },
   onWorkspaceState: (cb: (state: unknown) => void) => {
     const listener = (_e: unknown, state: unknown): void => cb(state)
     ipcRenderer.on('workspace:state', listener)
@@ -37,19 +164,6 @@ const api = {
   disconnect: (connId: string) => ipcRenderer.invoke('node:disconnect', connId),
   listPresets: () => ipcRenderer.invoke('preset:list'),
   createTerminal: (opts: unknown) => ipcRenderer.invoke('terminal:create', opts),
-  // NOT `preset:list` — that is the HARNESS preset list, a different shape.
-  // Aliasing them made listInstalledPresets return {name, command}[], which
-  // the chip model reads as `members.length` and crashes the dock on.
-  listInstalledPresets: () => ipcRenderer.invoke('preset:installed:list'),
-  placeInstalledPreset: (id: string, position: unknown, orch: boolean) =>
-    ipcRenderer.invoke('preset:installed:place', id, position, orch),
-  uninstallPreset: (id: string) => ipcRenderer.invoke('preset:installed:uninstall', id),
-  // R20: dismissing the rotation sheet and accepting the new key are two
-  // different decisions, so they are two channels. Collapsing them would make
-  // "I have read this" mean "I trust this".
-  markPresetRotationSeen: (id: string) => ipcRenderer.invoke('preset:installed:rotation:seen', id),
-  trustPresetAuthorKey: (id: string, newKeyId: string) =>
-    ipcRenderer.invoke('preset:installed:rotation:trust', id, newKeyId),
   listPins: (terminalId: string) => ipcRenderer.invoke('pins:list', terminalId),
 
   /** Translate a checkpoint body with Sous. Never rejects; see main. */
@@ -64,8 +178,13 @@ const api = {
     ipcRenderer.invoke('template:import', team, position),
 
   // ── R30 share-on-save (export side) ──
-  servingServe: (input: { templateId: string; access: 'account' | 'paid'; priceUsd?: string }) =>
-    ipcRenderer.invoke('serving:serve', input),
+  servingServe: (input: {
+    templateId: string
+    access: 'account' | 'paid'
+    priceUsd?: string
+    summary?: string
+    tags?: readonly string[]
+  }) => ipcRenderer.invoke('serving:serve', input),
   servingStop: (serviceId: string) => ipcRenderer.invoke('serving:stop', serviceId),
   servingPaymentStatus: () => ipcRenderer.invoke('serving:payment-status'),
   servingSetPayTo: (payTo: string) => ipcRenderer.invoke('serving:payment-pay-to', payTo),
@@ -77,13 +196,19 @@ const api = {
   servingSessions: () => ipcRenderer.invoke('serving:sessions'),
   servingEnd: (sessionId: string) => ipcRenderer.invoke('serving:end', sessionId),
 
-  // ── the dock's crews (import side) ──
-  crewList: () => ipcRenderer.invoke('crew:list'),
-  crewAdd: (link: string) => ipcRenderer.invoke('crew:add', link),
-  crewRemove: (id: string) => ipcRenderer.invoke('crew:remove', id),
-  crewUnlock: (id: string, payRef: string) => ipcRenderer.invoke('crew:unlock', id, payRef),
-  crewPlace: (id: string, position?: { x: number; y: number }) =>
-    ipcRenderer.invoke('crew:place', id, position),
+  // ── import a served team (caller side) ──
+  serveInspect: (link: string) => ipcRenderer.invoke('serve:inspect', link),
+  serveBrowse: (link: string) => ipcRenderer.invoke('serve:browse', link),
+  serveGate: (link: string) => ipcRenderer.invoke('serve:gate', link),
+  serveCheckout: (link: string) => ipcRenderer.invoke('serve:checkout', link),
+  serveSettle: (link: string, rail: 'x402' | 'stripe', session?: string) =>
+    ipcRenderer.invoke('serve:settle', link, rail, session),
+  serveImport: (
+    link: string,
+    position?: { x: number; y: number },
+    paid?: { price: string; asset: string; rail: 'x402' | 'stripe' }
+  ) => ipcRenderer.invoke('serve:import', link, position, paid),
+
   switchWorkspace: (id: string) => ipcRenderer.invoke('workspace:switch', id),
   renameWorkspace: (id: string, name: string) =>
     ipcRenderer.invoke('workspace:rename', id, name),
@@ -170,6 +295,21 @@ const api = {
   listTraceIndex: (terminalId: string, request?: unknown) =>
     ipcRenderer.invoke('trace:index', terminalId, request),
   listTraceMarkers: (terminalId: string) => ipcRenderer.invoke('trace:markers', terminalId),
+  listLineageSegments: (terminalId: string) => ipcRenderer.invoke('trace:lineage', terminalId),
+  // ONE STREAM (T3). The five reads and the one write the rail, the drawer
+  // and the pager use — the desktop's door onto the same StreamService the
+  // HTTP routes serve. There is no live channel here: the file watch behind
+  // trace:latest-watch already says "this card's record changed", and the
+  // bridge transport rides it rather than opening a second watcher.
+  streamOpen: (terminalId: string) => ipcRenderer.invoke('stream:open', terminalId),
+  streamIndex: (terminalId: string, request?: unknown) =>
+    ipcRenderer.invoke('stream:index', terminalId, request),
+  streamBlocks: (terminalId: string, request?: unknown) =>
+    ipcRenderer.invoke('stream:blocks', terminalId, request),
+  streamTail: (terminalId: string) => ipcRenderer.invoke('stream:tail', terminalId),
+  streamMarks: (terminalId: string) => ipcRenderer.invoke('stream:marks', terminalId),
+  streamMark: (terminalId: string, patch: unknown) =>
+    ipcRenderer.invoke('stream:mark', terminalId, patch),
   // T1: the latest checkpoint for a visible card, no PTY. Returns
   // {prompt, reply, title?} | null.
   latestCheckpoint: (terminalId: string) =>
@@ -180,6 +320,8 @@ const api = {
     } | null>,
   // T4 push: subscribe/unsubscribe a card's file watch, and listen for the
   // "your checkpoint changed" nudge (payload = terminalId).
+  // Why a remote card's record is empty or stale — null for every local card.
+  traceStatus: (terminalId: string) => ipcRenderer.invoke('trace:status', terminalId),
   watchLatest: (terminalId: string) => ipcRenderer.invoke('trace:latest-watch', terminalId),
   unwatchLatest: (terminalId: string) => ipcRenderer.invoke('trace:latest-unwatch', terminalId),
   onLatestChanged: (cb: (terminalId: string) => void) => {
@@ -208,9 +350,20 @@ const api = {
   countEvents: (query: unknown) => ipcRenderer.invoke('events:count', query),
   listAgents: () => ipcRenderer.invoke('agents:list'),
   listBoard: (window?: string) => ipcRenderer.invoke('board:list', window),
+  // A board panel that stays open: the probe runs while at least one of
+  // these holds, and every change arrives pushed instead of polled.
+  subscribeBoard: (cb: (board: unknown) => void) => {
+    const listener = (_e: unknown, board: unknown): void => cb(board)
+    ipcRenderer.on('board:update', listener)
+    void ipcRenderer.invoke('board:subscribe')
+    return () => {
+      ipcRenderer.removeListener('board:update', listener)
+      void ipcRenderer.invoke('board:unsubscribe')
+    }
+  },
   recoverAgent: (id: string) => ipcRenderer.invoke('agent:recover', id),
-  restoreCheckpoint: (id: string, checkpointIndex: number) =>
-    ipcRenderer.invoke('agent:restore-checkpoint', id, checkpointIndex),
+  restoreCheckpoint: (id: string, checkpointIndex: number, targetSessionId?: string) =>
+    ipcRenderer.invoke('agent:restore-checkpoint', id, checkpointIndex, targetSessionId),
   undoRestore: (id: string) => ipcRenderer.invoke('agent:undo-restore', id),
   saveRole: (input: unknown) => ipcRenderer.invoke('role:save', input),
   onTerminalActivity: (cb: (activity: unknown) => void) => {
@@ -236,7 +389,38 @@ const api = {
     ipcRenderer.on('app:cmd-w', listener)
     return () => ipcRenderer.removeListener('app:cmd-w', listener)
   },
+  // Sous driving the canvas: a sentence up, zoom / zoom-back down.
+  sousCommand: (text: string, ctx: { surface: string; focusedAgentId?: string | null; alternates?: string[] }) =>
+    ipcRenderer.invoke('sous:command', text, ctx),
+  onUiCommand: (cb: (event: unknown) => void) => {
+    const listener = (_e: unknown, event: unknown): void => cb(event)
+    ipcRenderer.on('ui:command', listener)
+    return () => ipcRenderer.removeListener('ui:command', listener)
+  },
+  // Hold ⌘ to talk: main runs the on-device recognizer and streams what it hears.
+  listenAvailable: () => ipcRenderer.invoke('listen:available'),
+  listenStart: () => ipcRenderer.invoke('listen:start'),
+  listenStop: () => ipcRenderer.invoke('listen:stop'),
+  onListenEvent: (cb: (event: unknown) => void) => {
+    const listener = (_e: unknown, event: unknown): void => cb(event)
+    ipcRenderer.on('listen:event', listener)
+    return () => ipcRenderer.removeListener('listen:event', listener)
+  },
   quitApp: () => ipcRenderer.send('app:quit'),
+  // A `cookrew://` link, already parsed by main (src/main/deep-link.ts) —
+  // the renderer only ever sees one of the three verbs, never a raw URL.
+  // Held here until App subscribes: main sends on did-finish-load, and React's
+  // effects can run a beat after that, so a link the app was LAUNCHED with
+  // would otherwise land on nobody.
+  onDeepLink: (cb: (link: unknown) => void) => {
+    deepLinkSubscriber = cb
+    const held = heldDeepLinks
+    heldDeepLinks = []
+    held.forEach(cb)
+    return () => {
+      if (deepLinkSubscriber === cb) deepLinkSubscriber = null
+    }
+  },
   onBrowserOpenTab: (cb: (req: { webContentsId: number; url: string }) => void) => {
     const listener = (_e: unknown, req: { webContentsId: number; url: string }): void => cb(req)
     ipcRenderer.on('browser:open-tab', listener)

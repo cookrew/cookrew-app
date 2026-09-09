@@ -1,4 +1,4 @@
-import { mkdirSync, realpathSync } from 'node:fs'
+import { mkdirSync, realpathSync, utimesSync } from 'node:fs'
 import path from 'node:path'
 
 /**
@@ -93,6 +93,22 @@ export function sessionSegment(serviceId: string, sessionId: string): string {
 export function sandboxRoot(base: string, serviceId: string, sessionId: string): string {
   const dir = path.join(serviceRoot(base, serviceId), sessionSegment(serviceId, sessionId))
   mkdirSync(dir, { recursive: true })
+  // A mint is a write, and it must LOOK like one: `mkdir -p` on a directory
+  // that already exists (ordinals restart at 1 with the app, so a returning
+  // account lands on last run's path) touches nothing, and the storage sweep
+  // reads a sandbox's age from its newest write. Without this line a sweep in
+  // flight could measure the old directory, miss the session the instantiator
+  // has not registered yet, and remove a booting crew's HOME
+  // (storage-gc-served.ts writtenSincePlan is the other half).
+  // Cosmetic for the mint itself: a refresh that fails (a read-only mount,
+  // a directory that vanished under us) must never fail the session.
+  try {
+    const now = new Date()
+    utimesSync(dir, now, now)
+  } catch {
+    // The sweep's other half (writtenSincePlan) still sees the harness's own
+    // writes; only the mkdir-only window loses its marker.
+  }
   return realpathSync(dir)
 }
 
@@ -152,6 +168,14 @@ export interface ProfileInput {
    * owner's refresh token. See owner-secrets.ts for why it is a denylist.
    */
   secretPaths: readonly string[]
+  /**
+   * The app's CLI control-plane socket (PtyManager.socketPath), denied so a
+   * served agent cannot drive the owner's canvas. The env keys that name it
+   * are already withheld from served panes (pty.ts) — this is the second lock,
+   * because the path is also written to ~/.cookrew/socket and a determined
+   * process could simply read it there.
+   */
+  controlSocketPath?: string
 }
 
 /**
@@ -204,6 +228,16 @@ export function seatbeltProfile(input: ProfileInput): string {
     ...input.secretPaths.map(
       (secret) => `(deny file-read* (subpath ${quote(secret)}) (literal ${quote(secret)}))`
     ),
+    // The CLI socket. `(allow network*)` above covers unix-domain connects, so
+    // without this a served agent that learned the path could speak to the
+    // app's command socket — which takes orders with no credential and accepts
+    // `--as <any agent>`. Denying the connect closes that from the other side.
+    ...(input.controlSocketPath
+      ? [
+          `(deny network-outbound (literal ${quote(input.controlSocketPath)}))`,
+          `(deny file-read* file-write* (literal ${quote(input.controlSocketPath)}))`
+        ]
+      : []),
     // TRAVERSAL. Found by running it: denying the service root outright made a
     // session unable to reach its OWN sandbox — `cd` into it failed with "Not a
     // directory", because reaching a child means traversing the parent. The

@@ -13,6 +13,8 @@ import type { TurnPhase } from '../../shared/turn'
  *   terminal  ends a live session, but the roster can RECOVER it
  *   note      the text exists nowhere else — the only truly lossy one
  *   browser   closes N tabs, cheap to reopen
+ *   served    ends a session on SOMEONE ELSE's machine, which nothing here
+ *             can recover — and on a paid door, one that was bought
  *
  * `danger` is reserved for the cases where something is lost or interrupted,
  * so the loud styling still means something when it appears.
@@ -69,6 +71,26 @@ export function closePrompt(
       consequence: `${count} ${count === 1 ? 'tab' : 'tabs'} will close. Pages can be opened again.`,
       confirmLabel: 'Close browser',
       danger: false,
+    }
+  }
+
+  // A PLACED ORCH CARD IS NOT A LOCAL AGENT, and closing it is not recoverable
+  // from the roster — the session lives at the author's app, and re-importing
+  // admits a NEW one. On a paid door that is a purchase, so the prompt quotes
+  // what was actually paid (kept at admission, never re-derived) and wears
+  // `danger`. Placed before the ordinary terminal answer, which would
+  // otherwise promise a recovery that does not exist here.
+  if (node.servedSession) {
+    const { paid, slug } = node.servedSession
+    return {
+      title: 'End this session?',
+      subject: node.name,
+      consequence: paid
+        ? `You paid ${paid.price} ${paid.asset} for it. Starting again later is a new session at the same price. Files it made stay on @${slug}'s machine, not yours.`
+        : `Starting again opens a new one. Its owner lends this door a limited number, so a new session may not be available.`,
+      confirmLabel: 'End session',
+      // Money is the line: a free session costs a seat, a paid one costs money.
+      danger: paid !== undefined
     }
   }
 

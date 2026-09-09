@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { CanvasNode, NoteNodeData, TerminalNodeData, WorkspaceState } from '../../shared/model'
 import type { TurnRecord } from '../../shared/turn'
 import { cookrew, isDemoMode, isRemoteMode } from './api'
+import { cardAffordances } from './card-affordances'
 import { hasRoleFromCheckpoint, saveRoleFromCheckpoint } from './role-checkpoint'
 import { CrIcon } from './icons'
 
@@ -71,9 +72,10 @@ export function CardMenu({
 
   const terminal = node.kind === 'terminal' ? (node as TerminalNodeData) : null
   const api = cookrew()
-  const canCheckpoints = terminal !== null && typeof api.listTurns === 'function'
-  const canRole =
-    canCheckpoints && hasRoleFromCheckpoint() && (terminal?.command.trim() ?? '') !== ''
+  const can = cardAffordances(node, {
+    listTurns: typeof api.listTurns === 'function',
+    roleFromCheckpoint: hasRoleFromCheckpoint()
+  })
 
   const go = (next: Mode) => (): void => setMode(next)
 
@@ -107,17 +109,18 @@ export function CardMenu({
           <button className="cr-cardmenu-item" onClick={go('rename')}>
             RENAME <span className="cr-cardmenu-sub">{node.name}</span>
           </button>
-          {canRole && (
+          {can.role && (
             <button className="cr-cardmenu-item" onClick={go('role')}>
               SAVE ROLE <span className="cr-cardmenu-sub">from a checkpoint</span>
             </button>
           )}
-          {canCheckpoints && (
+          {can.fork && (
             <button className="cr-cardmenu-item" onClick={go('fork')}>
               FORK <span className="cr-cardmenu-sub">from a checkpoint</span>
             </button>
           )}
-          {terminal && (
+          {/* `terminal &&` only narrows the type; `can.workdir` already implies it. */}
+          {can.workdir && terminal && (
             <button className="cr-cardmenu-item" onClick={go('workdir')}>
               WORKDIR <span className="cr-cardmenu-sub">{shortDir(terminal.cwd)}</span>
             </button>

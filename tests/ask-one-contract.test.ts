@@ -161,7 +161,7 @@ describe('replyText — an empty reply stops meaning four things', () => {
 })
 
 describe('terminalDeliveryDeps — the shared seam', () => {
-  const turns = { list: () => [{ terminalId: 't1', turnCount: 7 }] }
+  const turns = { listVerified: () => [{ terminalId: 't1', turnCount: 7 }] }
 
   it('reads the turn count for a tracked terminal', () => {
     expect(terminalDeliveryDeps(turns, () => undefined).turnCountOf('t1')).toBe(7)

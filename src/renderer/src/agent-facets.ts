@@ -51,6 +51,25 @@ export const EMPTY_FILTER: AgentFilter = {
 }
 
 /**
+ * THE BOARD OPENS ON THE LOADED WORKSPACE (owner ruling, 2026-09-06). The
+ * roster is global so a switch never hides the crew, but the default face
+ * is the crew you are looking at on the canvas — the other 640 are one
+ * CLEAR away, not the first thing on screen. No workspace loaded → no
+ * opinion, which is the empty filter.
+ */
+export function defaultFilter(activeWorkspaceId: string | null | undefined): AgentFilter {
+  return activeWorkspaceId ? { ...EMPTY_FILTER, workspaceIds: [activeWorkspaceId] } : EMPTY_FILTER
+}
+
+/** Any chip on at all — what decides whether the facet row shows at rest. */
+export function filterActive(filter: AgentFilter): boolean {
+  return (
+    filter.presets.length + filter.roles.length + filter.workspaceIds.length + filter.states.length >
+    0
+  )
+}
+
+/**
  * The registry records the same harness under two spellings — this machine has
  * 154 "Claude Code" alongside 10 "claude", and 41 "Codex" alongside 3 "codex",
  * depending on which build spawned the agent. Unnormalised, the facet row shows

@@ -154,3 +154,23 @@ export function turnViewOf(activity: TerminalActivity | undefined): TurnViewMode
     tail: null,
   }
 }
+
+/**
+ * Fold an incoming activity into what a card already knows.
+ *
+ * A MIRRORLESS activity carries a phase and deliberately nothing else — the
+ * multiplexer knows what an agent is doing, not what it said. Letting it
+ * replace a richer entry is how zooming out of a card (which detaches the
+ * mirror, leaving the card on the canvas) would blank its prompt, its reply
+ * and its unread mark on the next herdr tick. So it updates the phase and
+ * keeps the words; a real activity, derived from a screen, replaces whole.
+ */
+export function mergeActivity(
+  known: TerminalActivity | undefined,
+  incoming: TerminalActivity
+): TerminalActivity {
+  if (incoming.mirrorless !== true || !known || known.mirrorless === true) return incoming
+  // Still marked: the words are a mirror's, but the PHASE is the
+  // multiplexer's guess, and the marker is what says so.
+  return { ...known, mirrorless: true, phase: incoming.phase, updatedAt: incoming.updatedAt }
+}

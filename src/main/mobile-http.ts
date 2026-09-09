@@ -44,20 +44,54 @@ export function respondJson(
  * cannot set headers. Compared constant-time; a missing/short candidate
  * never matches.
  */
-export function pairingAuthorized(
+/** The credential this request is presenting, header first, then the query. */
+export function presentedToken(
   request: Pick<http.IncomingMessage, 'headers'>,
-  url: URL,
-  token: string
-): boolean {
+  url: URL
+): string | null {
   const header = request.headers.authorization
   const bearer = typeof header === 'string' && header.startsWith('Bearer ')
     ? header.slice('Bearer '.length)
     : null
-  const candidate = bearer ?? url.searchParams.get('token')
+  return bearer ?? url.searchParams.get('token')
+}
+
+/**
+ * Is this request carrying the pairing credential?
+ *
+ * `extra` is the SECOND door: each admitted phone now holds its own companion
+ * token rather than a copy of the one global one. Both are checked here so
+ * every route that was gated stays gated by the same call — a per-device token
+ * that only worked on some routes would be a phone that half works, which is
+ * harder to diagnose than one that does not work at all.
+ */
+export function pairingAuthorized(
+  request: Pick<http.IncomingMessage, 'headers'>,
+  url: URL,
+  token: string,
+  extra?: (candidate: string) => boolean
+): boolean {
+  return tokenAccepted(presentedToken(request, url), token, extra)
+}
+
+/**
+ * The same comparison, for a caller that already holds the credential.
+ *
+ * The WebSocket upgrade is the one: it carries `?token=` on the handshake URL
+ * (a browser cannot set a header on `new WebSocket`), and it needs the same
+ * answer this gate gives every ordinary route — one rule, compared one way,
+ * constant-time, so a socket cannot be authenticated more loosely than a GET.
+ */
+export function tokenAccepted(
+  candidate: string | null,
+  token: string,
+  extra?: (candidate: string) => boolean
+): boolean {
   if (!candidate) return false
   const a = Buffer.from(candidate)
   const b = Buffer.from(token)
-  return a.length === b.length && timingSafeEqual(a, b)
+  if (a.length === b.length && timingSafeEqual(a, b)) return true
+  return extra?.(candidate) ?? false
 }
 
 export function readBody(request: http.IncomingMessage, limit = 1_000_000): Promise<string> {
@@ -149,7 +183,9 @@ export function startSse(response: http.ServerResponse): SseSend {
     'content-type': 'text/event-stream',
     'cache-control': 'no-store',
     connection: 'keep-alive',
-    ...(compressed ? { 'content-encoding': 'gzip', vary: 'accept-encoding' } : {})
+    // `origin` beside `accept-encoding`: `writeHead` replaces what the CORS
+    // gate set, and a stream whose allow-origin varies must say so.
+    ...(compressed ? { 'content-encoding': 'gzip', vary: 'accept-encoding, origin' } : {})
   })
 
   const gzip = compressed ? createGzip() : null
@@ -196,4 +232,21 @@ export function startSse(response: http.ServerResponse): SseSend {
     }
     write(`event: ${event}\ndata: ${payload}\n\n`)
   }
+}
+
+/**
+ * Hold keep-alive sockets open long enough to span a reader's pause.
+ *
+ * Node's 5s default is tuned for servers behind a fronting proxy; this one
+ * has none, and its client TYPES INTERMITTENTLY. Every pause longer than the
+ * window closed the connection, so the next keystroke paid a fresh TCP+TLS
+ * handshake — over a relayed tailnet (round trips 300ms–2.5s) that is the
+ * difference between an echo and a stall, and it read as "the terminal is
+ * laggy" when the pty itself answered instantly. headersTimeout stays above
+ * keepAliveTimeout: Node documents an ECONNRESET race for reused sockets
+ * torn down between those two clocks.
+ */
+export function holdSocketsOpen(server: http.Server): void {
+  server.keepAliveTimeout = 75_000
+  server.headersTimeout = 80_000
 }

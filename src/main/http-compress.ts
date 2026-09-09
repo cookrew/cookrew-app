@@ -124,10 +124,42 @@ export interface SendOptions {
 }
 
 /**
+ * A status that carries no body by definition: 1xx, 204 and 304 (RFC 9110
+ * §6.4.1). Exported so the relay bridge can apply the same rule to an answer
+ * it forwards.
+ */
+export const bodiless = (status: number): boolean => status < 200 || status === 204 || status === 304
+
+/**
+ * The headers a bodiless answer may NOT carry.
+ *
+ * MEASURED on the relay, 2026-09-08: a 204 that said `content-length: 2` left
+ * Electron's Node 20 http client waiting for two bytes that never come, so
+ * every phone beacon held a relay exchange until the 120 s idle deadline,
+ * sixteen of them filled the per-desktop cap, and the companion shell died
+ * with `too_many_exchanges`. Newer Node skips the body of a 204 whatever the
+ * headers say; the fix is not to depend on which one is reading.
+ */
+const withoutBodyHeaders = (headers: Record<string, string>): Record<string, string> =>
+  Object.fromEntries(
+    Object.entries(headers).filter(
+      ([name]) => !['content-length', 'content-type', 'content-encoding'].includes(name.toLowerCase())
+    )
+  )
+
+/**
  * Send a body, compressed when that helps and the client asked for it.
  *
+ * A bodiless status (see `bodiless`) is sent with no body and no body headers,
+ * whatever `body` the caller passed — `respondJson(response, 204, {})` is a
+ * 204, not two bytes of JSON.
+ *
  * `vary: accept-encoding` is not optional: without it a cache that saw one
- * client's brotli copy will hand it to a client that cannot decode it.
+ * client's brotli copy will hand it to a client that cannot decode it. `origin`
+ * rides with it for the same reason and one level up: the CORS gate
+ * (companion-cors.ts) writes an `access-control-allow-origin` that differs per
+ * caller, and `writeHead` REPLACES a header that `setHeader` put there — so a
+ * bare `vary: accept-encoding` here would silently drop the gate's half.
  */
 export function sendBody(
   response: http.ServerResponse,
@@ -137,6 +169,11 @@ export function sendBody(
   acceptEncoding: string | string[] | undefined,
   options: SendOptions = {}
 ): void {
+  if (bodiless(status)) {
+    response.writeHead(status, withoutBodyHeaders(headers))
+    response.end()
+    return
+  }
   const contentType = headers['content-type'] ?? ''
   const worth = body.length >= MIN_COMPRESS_BYTES && compressible(contentType)
   const encoding = worth ? negotiateEncoding(acceptEncoding) : null
@@ -151,7 +188,7 @@ export function sendBody(
   response.writeHead(status, {
     ...headers,
     'content-encoding': encoding,
-    vary: 'accept-encoding',
+    vary: 'accept-encoding, origin',
     'content-length': String(out.length)
   })
   response.end(out)

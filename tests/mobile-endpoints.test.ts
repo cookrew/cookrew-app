@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { classifyHost, endpointCertHosts, mobileEndpoints } from '../src/main/mobile-endpoints'
 import type { TailnetIdentity } from '../src/main/tailscale'
+import { BRIDGE_ADDRESSES, REAL_ADDRESS, publishedFive } from './support/five-interfaces'
 
 const TAILNET: TailnetIdentity = {
   ips: ['100.101.102.103', 'fd7a:115c:a1e0::1234:5678'],
@@ -136,6 +137,43 @@ describe('mobileEndpoints', () => {
   })
 })
 
+describe('the five-interface Mac, end to end', () => {
+  it('prints ONE LAN URL where it used to print five', () => {
+    const lan = mobileEndpoints({
+      addresses: publishedFive(),
+      tailnet: null,
+      secure: true,
+      token: 'tok'
+    }).filter((endpoint) => endpoint.kind === 'lan')
+    expect(lan.map((endpoint) => endpoint.host)).toEqual([REAL_ADDRESS])
+  })
+
+  it('names none of the bridges, so none becomes a DNS record or a probe', () => {
+    const urls = mobileEndpoints({
+      addresses: publishedFive(),
+      tailnet: null,
+      secure: true,
+      token: null,
+      trusted: { deviceId: 'device-abcdef01', zone: 'd.cookrew.dev' }
+    }).flatMap((endpoint) => [endpoint.url, endpoint.trustedUrl ?? ''])
+    for (const bridge of BRIDGE_ADDRESSES) {
+      expect(urls.join(' ')).not.toContain(bridge)
+      expect(urls.join(' ')).not.toContain(bridge.replaceAll('.', '-'))
+    }
+    expect(urls.join(' ')).toContain('192-168-2-40.device-abcdef01.d.cookrew.dev')
+  })
+
+  it('publishes all five again under COOKREW_PUBLISH_INTERFACES=all', () => {
+    const hosts = mobileEndpoints({
+      addresses: publishedFive({ COOKREW_PUBLISH_INTERFACES: 'all' }),
+      tailnet: null,
+      secure: true,
+      token: null
+    }).map((endpoint) => endpoint.host)
+    expect(hosts).toEqual([REAL_ADDRESS, ...BRIDGE_ADDRESSES])
+  })
+})
+
 describe('endpointCertHosts — the cert covers exactly what we advertise', () => {
   it('carries every advertised host, split into IPs and DNS names', () => {
     const hosts = endpointCertHosts(
@@ -158,6 +196,25 @@ describe('endpointCertHosts — the cert covers exactly what we advertise', () =
     )
     expect(hosts.ips).not.toContain('198.18.0.1')
     expect(hosts.ips).not.toContain('169.254.1.6')
+  })
+
+  /**
+   * Five addresses, four bridges (2026-09-08). The bridges each became a SAN,
+   * and they come and go with every container the runtime starts — so each
+   * appearance reissued the certificate and every paired phone had to accept a
+   * new self-signed one again.
+   */
+  it('leaves the four bridges out of the cert entirely', () => {
+    const hosts = endpointCertHosts(
+      mobileEndpoints({
+        addresses: publishedFive(),
+        tailnet: TAILNET,
+        secure: true,
+        token: null
+      })
+    )
+    expect(hosts.ips).toContain(REAL_ADDRESS)
+    for (const bridge of BRIDGE_ADDRESSES) expect(hosts.ips).not.toContain(bridge)
   })
 
   it('asks for nothing when only the loopback fallback is advertised', () => {

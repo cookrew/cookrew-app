@@ -3,17 +3,18 @@ import { NodeHandles } from './NodeHandles'
 import { CardPick } from './CardPick'
 import { CardClose } from './CardClose'
 import { AgentAvatar, StatusCoin } from './AgentAvatar'
+import { CardCallerAvatars } from './CallerAvatars'
 import { GitChip } from '../GitChip'
 import { CrIcon } from '../icons'
 import { cardTypeScale, cardZoomMode } from './card-zoom'
 import { TurnView } from './TurnView'
 import { turnViewOf, checkpointViewModel, isEmptyTurnView } from '../turn-view-model'
-import { useLatestCheckpoint } from '../use-latest-checkpoint'
+import { useStreamTail } from '../stream/use-stream-tails'
 import { PastTurnView, TurnPagerBar, useTurnPaging } from './TurnPager'
 import type { TerminalNodeData } from '../../../shared/model'
 import type { TerminalActivity } from '../../../shared/turn'
 import { useCanvasUi } from '../canvas-ui'
-import { useActivity } from '../activity-thumb-store'
+import { useActivity, useActivitySeeded } from '../activity-thumb-store'
 
 /**
  * Summary card for a terminal. No xterm and no PTY attach here — the live
@@ -36,19 +37,31 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
   // Per-id subscription: this card re-renders only when ITS activity changes,
   // not on every other terminal's stream (the canvas-wide re-render fix).
   const activity = useActivity(node.id)
-  const remoteCrew = node.servedTranscript != null
-  const agent = remoteCrew || (activity?.agent ?? node.preset !== 'Shell')
+  const agent = activity?.agent ?? node.preset !== 'Shell'
   const phase = activity?.phase ?? 'idle'
-  const paging = useTurnPaging(node.id, activity?.turnCount ?? 0, { forkable: !remoteCrew })
+  const paging = useTurnPaging(node.id, activity?.turnCount ?? 0, { forkable: true })
 
   // Trace-perf T1: when the live tracker has nothing to show (no PTY, never
   // zoomed), the card renders its LATEST checkpoint from a tail read instead of
   // "Ready" — no mirror. The rich live view wins the moment activity flows.
   const liveModel = turnViewOf(activity)
-  const liveEmpty = isEmptyTurnView(liveModel)
-  const wantCheckpoint = agent && mode !== 'mini' && liveEmpty && !paging.viewing
-  const checkpoint = useLatestCheckpoint(node.id, wantCheckpoint)
-  const checkpointModel = wantCheckpoint ? checkpointViewModel(checkpoint) : null
+  // A MIRRORLESS activity is a phase and nothing else, so it counts as empty
+  // however loudly it says "Working…": otherwise a cold canvas would trade
+  // its cards' last ask-and-reply for a single verb, which is a worse card
+  // than the one this path exists to fix.
+  const liveEmpty = isEmptyTurnView(liveModel) || activity?.mirrorless === true
+  // Not before the activity snapshot has landed: a card that reads its tail
+  // while "idle" is still a guess pays an exchange it will discard (L7).
+  const seeded = useActivitySeeded()
+  const wantCheckpoint = agent && seeded && mode !== 'mini' && liveEmpty && !paging.viewing
+  const checkpoint = useStreamTail(node.id, wantCheckpoint)
+  const checkpointBody = wantCheckpoint ? checkpointViewModel(checkpoint) : null
+  // Both, when both are known: the checkpoint's words with the live verb over
+  // them, so a working agent reads WORKING and still shows what it last did.
+  const checkpointModel =
+    checkpointBody && activity?.mirrorless === true && liveModel.latest
+      ? { ...checkpointBody, latest: liveModel.latest }
+      : checkpointBody
 
   // The picked highlight belongs to the clipboard toggle — a pick survives
   // the toggle being off (the board keeps it too) but never SHOWS then.
@@ -124,7 +137,7 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
         <div className="vi-title" title={node.name}>
           {node.name}
         </div>
-        <span className="vi-chip tan">{remoteCrew ? 'Crew' : node.preset}</span>
+        <span className="vi-chip tan">{node.preset}</span>
         {node.orch && <span className="vi-chip">Orch</span>}
         {node.forkOf && (
           <span
@@ -134,10 +147,16 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
             <CrIcon name="fork" /> T{node.forkOf.turnIndex}
           </span>
         )}
-        <GitChip dir={node.cwd} />
+        {/* A git chip on a card about somebody ELSE's process would show the
+            caller's own directory — a lie. The cwd of an imported card is at
+            the author's app; nothing here is on a branch. */}
+        {!node.servedSession && <GitChip dir={node.cwd} git={node.git} />}
         {phase === 'idle' && activity && (
           <span className="vi-chip dim">{agoLabel(activity.updatedAt)}</span>
         )}
+        {/* D7: the people at this door, at the head's right end. Renders
+            nothing at all unless this card IS a served team's orch. */}
+        <CardCallerAvatars card={{ id: node.id, name: node.name, orch: node.orch }} />
         <CardClose nodeId={node.id} dark />
       </div>
       <div className="card-body vi-card-body nodrag nowheel" onClick={open}>

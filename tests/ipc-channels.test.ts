@@ -39,10 +39,30 @@ function mainSources(): string[] {
     .map((f) => readFileSync(path.join(dir, f), 'utf8'))
 }
 
+/**
+ * A THIRD FORM: a declared channel table.
+ *
+ * The account surface (account-ipc.ts) registers its channels by iterating a
+ * `const ACCOUNT_CHANNELS = [...] as const` and handing each to a `register`
+ * the call site supplies — which is what applies the owner-only guard to all
+ * of them by construction instead of twelve times by hand. No channel name is
+ * ever spelled next to `ipcMain.handle`, so the two scrapes above see none of
+ * them and would call every one of their preload methods an orphan.
+ *
+ * Reading the table is not a loophole: the module's own test asserts that
+ * `registerAccountIpc` registers exactly this set and nothing else, so the
+ * array IS the registration.
+ */
+const declaredTables = (src: string): string[] =>
+  [...src.matchAll(/const\s+\w*_CHANNELS\s*=\s*\[([\s\S]*?)\]\s*as const/g)].flatMap((m) =>
+    matchAll(m[1], /['"]([^'"]+)['"]/g)
+  )
+
 const handled = (): string[] =>
   mainSources().flatMap((src) => [
     ...matchAll(src, /ipcMain\.handle\(\s*['"]([^'"]+)['"]/g),
-    ...matchAll(src, /(?<!\.)\bhandle\(\s*['"]([^'"]+)['"]/g)
+    ...matchAll(src, /(?<!\.)\bhandle\(\s*['"]([^'"]+)['"]/g),
+    ...declaredTables(src)
   ])
 
 const invoked = (): string[] => matchAll(preloadSrc, /ipcRenderer\.invoke\(\s*['"]([^'"]+)['"]/g)
@@ -76,33 +96,21 @@ describe('every preload invoke has a main handler', () => {
   })
 })
 
-describe('the harness and marketplace preset lists stay separate channels', () => {
+describe('the harness preset list keeps its own channel', () => {
   it('keeps preset:list for harness presets only', () => {
     expect(handled().filter((c) => c === 'preset:list')).toHaveLength(1)
   })
 
-  it('gives installed marketplace presets their own namespace', () => {
-    for (const channel of [
-      'preset:installed:list',
-      'preset:installed:place',
-      'preset:installed:uninstall',
-      // R20's two decisions, deliberately separate: reading the rotation sheet
-      // is not accepting the key it describes.
-      'preset:installed:rotation:seen',
-      'preset:installed:rotation:trust'
-    ]) {
-      expect(handled()).toContain(channel)
-    }
-  })
-
-  it('does not let the preload point two methods at one channel', () => {
-    // The specific aliasing bug: listPresets and listInstalledPresets both
-    // invoked preset:list, so the marketplace method returned harness rows.
+  // The installed-marketplace namespace (preset:installed:*) was removed with
+  // the lane it served — the store it read had no way to install anything and
+  // the three chips on it were a QA fixture on disk. What this now guards is
+  // that nothing reintroduces a SECOND meaning for preset:list: the aliasing
+  // bug it was written for made one method return the other list's rows.
+  it('never points two preload methods at preset:list', () => {
     const listChannels = matchAll(
       preloadSrc,
-      /(?:listPresets|listInstalledPresets):\s*\(\)\s*=>\s*ipcRenderer\.invoke\(\s*['"]([^'"]+)['"]/g
+      /(\w+):\s*\(\)\s*=>\s*ipcRenderer\.invoke\(\s*['"]preset:list['"]/g
     )
-    expect(listChannels).toHaveLength(2)
-    expect(new Set(listChannels).size).toBe(2)
+    expect(listChannels).toHaveLength(1)
   })
 })

@@ -206,6 +206,19 @@ describe('the pin is resolved once, at mint', () => {
   })
 })
 
+describe('hadSession — the door remembers a caller who has been here', () => {
+  it('is false before any session, true once one was minted, and stays true after it ends', async () => {
+    expect(inst.hadSession('svc', 'ana')).toBe(false)
+    const ana = await inst.admit('svc', 'ana')
+    expect(inst.hadSession('svc', 'ana')).toBe(true)
+    inst.end(ana.session.identity.sessionId)
+    // The line reads this to tell "first visit" from "the aftermath of an end".
+    expect(inst.hadSession('svc', 'ana')).toBe(true)
+    // Per account: a stranger is still a first visit.
+    expect(inst.hadSession('svc', 'bob')).toBe(false)
+  })
+})
+
 describe('ordinals are never reused, because END destroys sandboxes', () => {
   it('bumps past an ended session rather than resurrecting its path', async () => {
     const ana1 = await inst.admit('svc', 'ana')

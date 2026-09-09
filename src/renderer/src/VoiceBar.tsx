@@ -3,6 +3,7 @@ import type { TerminalActivity } from '../../shared/turn'
 import { cookrew } from './api'
 import { AttachButton } from './AttachButton'
 import { CrIcon } from './icons'
+import { keyGesture, type KeyGestureState } from './touch-key-gesture'
 
 /**
  * Voice composer for the terminal full view (desktop overlay AND phone):
@@ -54,9 +55,17 @@ const REPEAT_RATE_MS = 70
  * without them. pointerdown is swallowed and the buttons are unfocusable,
  * so a tap never dismisses the software keyboard or steals focus.
  *
- * HOLD-TO-REPEAT: the key fires on pointerdown (not click, so there is no
- * dead-time before the first move) and the arrows keep firing while held —
- * paging a long scrollback or a deep menu one tap per row is unusable.
+ * A TAP, NOT A TOUCH (see touch-key-gesture.ts): the key lands on RELEASE,
+ * so a thumb that meets this row on its way somewhere else can slide off and
+ * send nothing. Firing on pointerdown made that impossible, and this row is
+ * at the bottom edge where a hand rests AND scrolls sideways — so reaching
+ * for → sent ESC on the way often enough to be reported. Holding still past
+ * the delay fires and then repeats: paging a long scrollback or a deep menu
+ * one tap per row is unusable.
+ *
+ * No onPointerLeave: with the pointer captured, leaving the button no longer
+ * fires a boundary event, and the slop supersedes it — a finger that travels
+ * off the key has already cancelled the gesture by distance.
  * Esc stays single-shot: a repeated Escape cancels past the menu you meant
  * to leave. contextmenu is swallowed so an iOS/Android long-press never
  * pops the callout over the cluster.
@@ -77,24 +86,45 @@ function TermKeys({ terminalId }: { terminalId: string }): React.JSX.Element {
 
   // A held key must die with the view (unmount) and with window blur — an
   // alert()/tab-switch mid-hold never delivers the pointerup that stops it.
-  useEffect(() => {
-    window.addEventListener('blur', stopRepeat)
-    return () => {
-      window.removeEventListener('blur', stopRepeat)
-      stopRepeat()
-    }
+  /** One gesture at a time: a second finger on another key is not a chord —
+   *  enforced in the reducer by pointer ownership, not merely intended. */
+  const gestureRef = useRef<KeyGestureState>({ kind: 'idle' })
+
+  const abandon = useCallback((): void => {
+    gestureRef.current = { kind: 'idle' }
+    stopRepeat()
   }, [stopRepeat])
 
-  const press = (key: (typeof TERM_KEYS)[number]): void => {
-    cookrew().ptyInput(terminalId, key.seq)
-    if (!key.repeat) return
-    stopRepeat()
-    timersRef.current.delay = window.setTimeout(() => {
+  useEffect(() => {
+    window.addEventListener('blur', abandon)
+    return () => {
+      window.removeEventListener('blur', abandon)
+      abandon()
+    }
+  }, [abandon])
+
+  const drive = (
+    key: (typeof TERM_KEYS)[number],
+    event: Parameters<typeof keyGesture>[1]
+  ): void => {
+    const result = keyGesture(gestureRef.current, event)
+    gestureRef.current = result.state
+    if (result.stopRepeat) stopRepeat()
+    if (result.fire) cookrew().ptyInput(terminalId, key.seq)
+    if (result.startRepeat) {
       timersRef.current.interval = window.setInterval(
         () => cookrew().ptyInput(terminalId, key.seq),
         REPEAT_RATE_MS
       )
-    }, REPEAT_DELAY_MS)
+    }
+    // Arm the hold ONLY for keys that repeat; Escape can never mature into
+    // one, so a leaned-on Escape stays a single Escape.
+    if (event.type === 'down' && key.repeat) {
+      timersRef.current.delay = window.setTimeout(
+        () => drive(key, { type: 'hold', pointerId: event.pointerId }),
+        REPEAT_DELAY_MS
+      )
+    }
   }
 
   return (
@@ -106,12 +136,24 @@ function TermKeys({ terminalId }: { terminalId: string }): React.JSX.Element {
           tabIndex={-1}
           title={key.title}
           onPointerDown={(e) => {
+            // Still swallowed: a press must not dismiss the software keyboard
+            // or steal focus from the xterm. It just no longer SENDS.
             e.preventDefault()
-            press(key)
+            // The gesture first: capture is an optimisation for mouse/pen
+            // (touch captures implicitly), and setPointerCapture throws on an
+            // inactive pointer — a throw here must not eat the keypress.
+            drive(key, { type: 'down', pointerId: e.pointerId, x: e.clientX, y: e.clientY })
+            try {
+              e.currentTarget.setPointerCapture?.(e.pointerId)
+            } catch {
+              // Pointer already gone; the gesture stands on its own.
+            }
           }}
-          onPointerUp={stopRepeat}
-          onPointerLeave={stopRepeat}
-          onPointerCancel={stopRepeat}
+          onPointerMove={(e) =>
+            drive(key, { type: 'move', pointerId: e.pointerId, x: e.clientX, y: e.clientY })
+          }
+          onPointerUp={(e) => drive(key, { type: 'up', pointerId: e.pointerId })}
+          onPointerCancel={(e) => drive(key, { type: 'cancel', pointerId: e.pointerId })}
           onContextMenu={(e) => e.preventDefault()}
         >
           {key.label}
@@ -123,10 +165,13 @@ function TermKeys({ terminalId }: { terminalId: string }): React.JSX.Element {
 
 export function VoiceBar({
   terminalId,
-  activity
+  activity,
+  remote = false
 }: {
   terminalId: string
   activity: TerminalActivity | undefined
+  /** The terminal is a line into a session elsewhere: nothing here attaches. */
+  remote?: boolean
 }): React.JSX.Element {
   const [text, setText] = useState('')
   const [listening, setListening] = useState(false)
@@ -196,7 +241,7 @@ export function VoiceBar({
 
   return (
     <div className="voice-bar nodrag">
-      <AttachButton terminalId={terminalId} />
+      {!remote && <AttachButton terminalId={terminalId} />}
       {hasRecognition && (
         <button
           className={`cr-btn sm voice-mic${listening ? ' listening' : ''}`}

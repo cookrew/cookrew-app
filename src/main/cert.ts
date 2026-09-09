@@ -60,7 +60,7 @@ export function missingHosts(sans: string[], hosts: CertHosts): string[] {
  * -----------------------------------------------
  * Tailscale is a launch agent; it is routinely still Stopped when Cookrew
  * starts, and it can be stopped for a whole session (a conflicting TUN proxy
- * will do it). While it is down `readTailnet()` answers null, so the requested
+ * will do it). While it is down `readTailnetAsync()` answers null, so the requested
  * host set is LAN-only. That alone was harmless — until anything else made the
  * cert regenerate: joining a different Wi-Fi, a VM bringing up a bridge. The
  * reissue then wrote a cert with NO tailnet SAN, and the tailnet URL — the one

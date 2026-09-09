@@ -65,6 +65,7 @@ function gate(settle: ServedEndpointDeps['settle']): {
         return { workspaceId: 'ws-1', sessionId: 'session-1', created: true }
       },
       hasOpenSession: () => false,
+      endSession: () => false,
       conductorFor: () => 'orch-1',
       ask: async () => 'crew answer',
       sessionForCaller: () => null,

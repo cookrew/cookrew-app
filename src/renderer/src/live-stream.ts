@@ -31,6 +31,13 @@ export const STREAM_CLOSED = 2
 
 export interface ReconnectingStreamDeps {
   open: () => EventStreamLike
+  /**
+   * Told whenever the link's state changes, so something outside can SHOW it.
+   * This stream used to keep its health entirely to itself — `alive` was read
+   * nowhere — which is why the phone could sit on a dead channel with nothing
+   * on screen saying so.
+   */
+  onState?: (state: 'live' | 'reconnecting' | 'failed') => void
   /** Timer injection, so the backoff is testable without waiting it out. */
   schedule?: (run: () => void, ms: number) => unknown
   cancel?: (handle: unknown) => void
@@ -66,10 +73,16 @@ export class ReconnectingStream {
     // A browser that is retrying by itself (CONNECTING) is left alone —
     // racing it would open a second stream for the same client.
     this.onError = () => {
-      if (this.source && this.source.readyState === STREAM_CLOSED) this.reconnect()
+      if (this.source && this.source.readyState === STREAM_CLOSED) {
+        // Down and coming back is PROBING; down and out of patience is
+        // OFFLINE. The line between them is the backoff running to its end.
+        this.deps.onState?.(this.retry >= this.backoff.length ? 'failed' : 'reconnecting')
+        this.reconnect()
+      }
     }
     this.onOpen = () => {
       this.retry = 0
+      this.deps.onState?.('live')
     }
   }
 
@@ -99,6 +112,22 @@ export class ReconnectingStream {
    */
   revive(): void {
     if (this.closed || this.alive) return
+    this.retry = 0
+    this.connect()
+  }
+
+  /**
+   * Reconnect WHETHER OR NOT the link is down — the data plane moved and this
+   * connection is on the old one (plane-streams.ts).
+   *
+   * The opposite of `revive`, and deliberately its own method rather than a
+   * flag: reviving is about a channel that failed, and restarting is about a
+   * healthy channel that is now pointed at the wrong place. Collapsing the two
+   * would mean either dropping live streams on every foreground return or
+   * leaving the canvas fed through the relay after a switch onto the LAN.
+   */
+  restart(): void {
+    if (this.closed) return
     this.retry = 0
     this.connect()
   }
@@ -150,5 +179,48 @@ export class ReconnectingStream {
       this.timer = null
       if (!this.closed) this.connect()
     }, wait)
+  }
+}
+
+/**
+ * A terminal's live stream, healing. The desktop preload retries a cold
+ * pty:attach with backoff because ignoring the miss "left the live pane BLACK
+ * forever"; this transport's version of that miss is an HTTP 404 on the
+ * stream URL while the mirror boots — FATAL to a bare EventSource (a non-2xx
+ * never browser-retries) — so the first open of an idle card stayed black
+ * until a second open found the mirror the first one had booted. Every
+ * (re)connect replays hello + a fresh CLEAR_SCREEN-prefixed frame, so the
+ * eventual attach paints whole. Unlike the preload's 8 tries, this retries
+ * for as long as the overlay is open: the phone's link genuinely flaps
+ * (tailnet, backgrounding) and a capped stream would go silent exactly when
+ * it matters. The server's `exit` event ends it — a session that is GONE is
+ * not a session to keep dialling.
+ */
+export interface TerminalStreamHandle {
+  close(): void
+  /** Reconnect NOW if the link is down — foreground return, network back. */
+  revive(): void
+  /** Reopen on the current data plane, live or not. See plane-streams.ts. */
+  restart(): void
+}
+
+export const TERMINAL_STREAM_BACKOFF = [400, 800, 1500, 3000, 5000] as const
+
+export function attachTerminalStream(
+  deps: ReconnectingStreamDeps,
+  onData: (chunk: string) => void,
+  onHello?: (size: { cols: number; rows: number }) => void
+): TerminalStreamHandle {
+  const stream = new ReconnectingStream({ backoffMs: TERMINAL_STREAM_BACKOFF, ...deps })
+  // hello arrives before the first frame; sizing the xterm from it is what
+  // keeps a 45x24 phone from re-wrapping a frame serialized at the pane's
+  // 100x30 and then misplacing every absolute-addressed delta.
+  stream.on('hello', (e) => onHello?.(JSON.parse(e.data as string) as { cols: number; rows: number }))
+  stream.on('data', (e) => onData(JSON.parse(e.data as string) as string))
+  stream.on('exit', () => stream.close())
+  return {
+    close: () => stream.close(),
+    revive: () => stream.revive(),
+    restart: () => stream.restart()
   }
 }

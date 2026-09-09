@@ -133,6 +133,36 @@ export function orchAgentOf(snapshot: TeamSnapshot): string | null {
   return (named ?? orchs[0]).name
 }
 
+type TerminalNode = Extract<CanvasNode, { kind: 'terminal' }>
+
+/**
+ * The leader of a team about to be saved: the FIRST terminal in the owner's
+ * selection order, when a selection was made. `selection` is the ids as the
+ * renderer collected them — a Set kept in click order — so "first selected"
+ * is literal. Without a selection (whole-workspace save) there is no order to
+ * honour, so the workspace orch leads, else the first terminal on the canvas.
+ * Null only when the team has no terminal at all.
+ */
+export function leaderOf(nodes: readonly CanvasNode[], selection: readonly string[]): TerminalNode | null {
+  const terminals = nodes.filter((n): n is TerminalNode => n.kind === 'terminal')
+  if (terminals.length === 0) return null
+  for (const id of selection) {
+    const picked = terminals.find((t) => t.id === id)
+    if (picked) return picked
+  }
+  return terminals.find((t) => t.orch) ?? terminals[0]
+}
+
+/**
+ * The nodes as the snapshot stores them: the leader is the one orch-flagged
+ * terminal, every other terminal is not. New objects — the live nodes are the
+ * workspace's own and a save must never demote the owner's real orch.
+ */
+export function withLeader(nodes: readonly CanvasNode[], leaderId: string | null): CanvasNode[] {
+  if (leaderId === null) return [...nodes]
+  return nodes.map((n) => (n.kind === 'terminal' ? { ...n, orch: n.id === leaderId } : n))
+}
+
 function isSnapshot(value: unknown): value is TeamSnapshot {
   const s = value as TeamSnapshot
   return (
@@ -206,24 +236,26 @@ export class TeamStore {
     const teamName = (name ?? state.name).trim()
     if (teamName.length === 0) throw new Error('Team name must not be empty')
     const sessions = this.snapshotSessions(teamName, state)
-    // The entry orchestrator, captured at save so the template records its own
-    // door: the orch-flagged terminal, else the first. A caller imports through
-    // this one agent.
-    const entryTerminal =
-      state.nodes.find((n) => n.kind === 'terminal' && n.orch) ??
-      state.nodes.find((n) => n.kind === 'terminal')
+    // THE LEADER, captured at save so the template records its own door. The
+    // first agent terminal the owner SELECTED leads the exported team (owner
+    // ruling, 2026-09-05: no orch node needed) — the snapshot carries the
+    // leader as its one orch-flagged terminal, so every reader of `orch`
+    // (serving door, grant preflight, relay face, the importer placing the
+    // card) agrees without a second field. A whole-workspace save has no
+    // selection order and keeps the workspace orch, else the first terminal.
+    const leader = leaderOf(state.nodes, nodeIds ?? [])
     const snapshot: TeamSnapshot = {
       name: teamName,
       savedAt: Date.now(),
       dir: state.dir,
       dirs: state.dirs,
-      nodes: state.nodes,
+      nodes: withLeader(state.nodes, leader?.id ?? null),
       connections: state.connections,
       turns: Object.fromEntries(
         state.nodes.filter((n) => n.kind === 'terminal').map((t) => [t.id, turnsOf(t.id)])
       ),
       ...(Object.keys(sessions).length > 0 ? { sessions } : {}),
-      ...(entryTerminal ? { entryAgent: entryTerminal.name } : {})
+      ...(leader ? { entryAgent: leader.name } : {})
     }
     mkdirSync(this.dir, { recursive: true })
     writeFileSync(this.fileFor(teamName), JSON.stringify(snapshot, null, 2), 'utf8')
@@ -302,10 +334,19 @@ export class TeamStore {
     for (const f of readdirSync(this.dir).filter((f) => f.endsWith('.json'))) {
       const file = path.join(this.dir, f)
       const snap = this.read(file)
-      if (!snap || snap.entryAgent) continue
+      if (!snap) continue
+      // A team saved before leaders existed may carry terminals and no orch:
+      // it could be imported but never served. Its entry agent becomes the
+      // leader, stamped the way a fresh save stamps it, so the door opens.
+      const leaderless =
+        snap.nodes.some((n) => n.kind === 'terminal') &&
+        !snap.nodes.some((n) => n.kind === 'terminal' && n.orch === true)
+      if (snap.entryAgent && !leaderless) continue
       const entry = entryAgentOf(snap)
       if (!entry) continue
-      writeFileSync(file, JSON.stringify({ ...snap, entryAgent: entry }, null, 2), 'utf8')
+      const leaderId = snap.nodes.find((n) => n.kind === 'terminal' && n.name === entry)?.id ?? null
+      const nodes = leaderless ? withLeader(snap.nodes, leaderId) : snap.nodes
+      writeFileSync(file, JSON.stringify({ ...snap, nodes, entryAgent: entry }, null, 2), 'utf8')
       migrated++
     }
     return migrated
