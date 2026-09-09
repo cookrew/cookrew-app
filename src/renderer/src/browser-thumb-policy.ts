@@ -167,6 +167,11 @@ export function applyThumbBatch(
       continue
     }
     nextBackoffs = recordThumbSuccess(nextBackoffs, frame.id)
+    // The 5 s poll has no in-flight guard, so two answers can land out of
+    // order: the version only ever moves forward, and bytes older than what
+    // is already held are not handed back to be drawn over a newer frame.
+    const held = nextVersions[frame.id]
+    if (held !== undefined && frame.at < held) continue
     nextVersions = { ...nextVersions, [frame.id]: frame.at }
     if (frame.data !== undefined && frame.type !== undefined) {
       changed.push({ id: frame.id, type: frame.type, data: frame.data })
