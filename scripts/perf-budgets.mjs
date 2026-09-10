@@ -67,6 +67,21 @@ export const BUDGETS = {
       '/api/board': { p95: { warn: 2000, fail: 6000 } },
       '/api/events/query?limit=200': { p95: { warn: 800, fail: 2000 } }
     }
+  },
+  // The remote canvas boot (perf lane L7, --remote): a headless Chrome opens
+  // the built bundle the way a phone does. The LAN run adds 200 ms to every
+  // request as the relay stand-in; the relay run is real when a signed-in QA
+  // profile exists. Measured 2026-09-08 on the owner's 176-node canvas at
+  // +200 ms: BEFORE boot 75 requests / 8 third-party / interactive 8658 ms;
+  // AFTER 17 / 0 / 1287 ms. Requests are the budget that no fast machine
+  // fakes; the clock warns before it fails.
+  remote: {
+    bootRequests: { warn: 24, fail: 40 },
+    thirdPartyRequests: { fail: 0 },
+    interactiveMs: { warn: 3000, fail: 6000 },
+    firstCardMs: { warn: 2000, fail: 4000 },
+    /** Requests a minute while the canvas just sits open, zoomed in. */
+    afterwardsPerMinute: { warn: 30, fail: 60 }
   }
 }
 

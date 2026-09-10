@@ -81,3 +81,96 @@ export function recordThumbSuccess(backoffs: ThumbBackoffs, id: string): ThumbBa
   const { [id]: _gone, ...rest } = backoffs
   return rest
 }
+
+// ---------------------------------------------------------------------------
+// The batch poll (perf lane L7): what to ask for, and what an answer means.
+// ---------------------------------------------------------------------------
+
+import { THUMB_BATCH_MAX } from '../../shared/thumb-batch'
+export { THUMB_BATCH_MAX }
+
+export interface ThumbCandidate {
+  readonly id: string
+  readonly kind: string
+  readonly x: number
+  readonly y: number
+  readonly width: number
+  readonly height: number
+}
+
+/** A rectangle in flow coordinates: what the screen currently shows. */
+export interface FlowRect {
+  readonly left: number
+  readonly top: number
+  readonly right: number
+  readonly bottom: number
+}
+
+/**
+ * The browser cards the screen can see. A picture nobody can see is a picture
+ * nobody should pay an exchange for; the poll used to walk every browser card
+ * on the canvas, eight a tick, wherever the viewport was.
+ */
+export function viewportBrowserIds(nodes: readonly ThumbCandidate[], view: FlowRect): string[] {
+  return nodes
+    .filter(
+      (n) =>
+        n.kind === 'browser' &&
+        n.x < view.right &&
+        n.x + n.width > view.left &&
+        n.y < view.bottom &&
+        n.y + n.height > view.top
+    )
+    .map((n) => n.id)
+}
+
+/** `known=` for the ids being asked: only those with a version in hand. */
+export function knownVersions(versions: Readonly<Record<string, number>>, ids: readonly string[]): string {
+  return ids
+    .filter((id) => Object.prototype.hasOwnProperty.call(versions, id))
+    .map((id) => `${id}:${versions[id]}`)
+    .join(',')
+}
+
+export interface ThumbBatchFrame {
+  readonly id: string
+  readonly at: number | null
+  readonly type?: string
+  readonly data?: string
+}
+
+export interface ThumbBatchOutcome {
+  readonly backoffs: ThumbBackoffs
+  readonly versions: Readonly<Record<string, number>>
+  /** Frames whose bytes arrived — the store should decode these. */
+  readonly changed: ReadonlyArray<{ id: string; type: string; data: string }>
+}
+
+/**
+ * Fold one batch answer into the poll's bookkeeping. A frame that is not there
+ * yet counts as a failure for that id (its backoff grows); an unchanged one
+ * ends the backoff and keeps the version; a changed one does both and is
+ * handed back to be decoded. Immutable.
+ */
+export function applyThumbBatch(
+  frames: readonly ThumbBatchFrame[],
+  backoffs: ThumbBackoffs,
+  versions: Readonly<Record<string, number>>,
+  now: number
+): ThumbBatchOutcome {
+  let nextBackoffs = backoffs
+  let nextVersions = versions
+  const changed: Array<{ id: string; type: string; data: string }> = []
+  for (const frame of frames) {
+    if (frame.at === null) {
+      nextBackoffs = recordThumbFailure(nextBackoffs, frame.id, now)
+      continue
+    }
+    nextBackoffs = recordThumbSuccess(nextBackoffs, frame.id)
+    nextVersions = { ...nextVersions, [frame.id]: frame.at }
+    if (frame.data !== undefined && frame.type !== undefined) {
+      changed.push({ id: frame.id, type: frame.type, data: frame.data })
+    }
+  }
+  return { backoffs: nextBackoffs, versions: nextVersions, changed }
+}

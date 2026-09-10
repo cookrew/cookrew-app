@@ -1,6 +1,52 @@
 /* Cookrew-beta inspired arcade theme: cream chrome, hard bevel shadows,
    square corners, phosphor CRT screens for terminal summaries. */
 
+/* THE FONTS ARE OURS, SERVED FROM THIS ORIGIN.
+   They came from fonts.googleapis.com: a render-blocking third-party
+   stylesheet the phone waited 0.8-1.3 s on before its first paint, then four
+   more third-party requests for the files — through the relay the only
+   third party on the page, and on a fake-ip proxy each one a TLS handshake.
+   The registry already ships these same five woff2 files (94 KB) for the
+   site; the renderer bundles them as hashed assets, so the LAN caches them
+   forever and nothing off this origin is on the boot's critical path.
+   `swap`, not `optional`: a card must not draw in a fallback and then never
+   correct itself on a slow link. (Perf lane L7, 2026-09-08.) */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('./fonts/inter.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('./fonts/jetbrains-mono.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Silkscreen';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/silkscreen-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Silkscreen';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./fonts/silkscreen-700.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'VT323';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/vt323-400.woff2') format('woff2');
+}
+
 :root {
   --cream: #faf8f4;
   --cream-hi: #fffef5;

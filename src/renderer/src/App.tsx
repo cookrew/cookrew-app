@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Background,
   BackgroundVariant,
@@ -38,12 +38,26 @@ import {
   shouldPollThumbs,
   shouldSnapshotLocally,
   thumbPollList,
+  THUMB_BATCH_MAX,
+  applyThumbBatch,
+  knownVersions,
+  viewportBrowserIds,
+  type ThumbBatchFrame,
   type ThumbBackoffs
 } from './browser-thumb-policy'
 import { retry } from './retry'
 import { CanvasUiContext, ToolId } from './canvas-ui'
-import { activityStore, thumbStore, useActivity, useActivityPhaseCount } from './activity-thumb-store'
+import {
+  activityStore,
+  thumbStore,
+  useActivity,
+  useActivityPhaseCount,
+  ACTIVITY_SEED_DEADLINE_MS,
+  markActivitySeeded
+} from './activity-thumb-store'
 import { reconcileFlowEdges, reconcileFlowNodes } from './flow-nodes'
+import { carryGit } from './workspace-git-carry'
+import { decodeBase64 } from './base64'
 import {
   CARD_FIT_PADDING,
   CARD_ZOOM_MS,
@@ -58,8 +72,9 @@ import { ReauthOverlay } from './ReauthOverlay'
 import { snapCardChanges, MOUSE_SNAP_PX, TOUCH_SNAP_PX, SnapGuide } from './card-snap'
 import { SnapGuides } from './SnapGuides'
 import { EventToastLayer } from './EventToast'
-import { RosterPanel } from './RosterPanel'
-import { MetricsPanel } from './MetricsPanel'
+// Opened by a tap, never at boot: each panel is its own chunk (perf lane L7).
+const RosterPanel = lazy(() => import('./RosterPanel').then((m) => ({ default: m.RosterPanel })))
+const MetricsPanel = lazy(() => import('./MetricsPanel').then((m) => ({ default: m.MetricsPanel })))
 import { GateSheet } from './GateSheet'
 import { ImportServedSheet } from './ImportServedSheet'
 import { useAccountSurface } from './account/AccountSurface'
@@ -354,7 +369,11 @@ function Canvas(): React.JSX.Element {
 
   useEffect(() => {
     void loadWorkspace()
-    return cookrew().onWorkspaceState((state) => {
+    return cookrew().onWorkspaceState((pushed) => {
+      // The push carries the raw canvas; only the pull embeds each terminal's
+      // git state. Carry what the previous state held, or every card would
+      // lose its chip on the first change and fetch it back one by one (L7).
+      const state = carryGit(workspaceRef.current, pushed)
       setWorkspace(state)
       // Selection must SURVIVE the rebuild (reconcileFlowNodes carries no
       // `selected` of its own), so it is re-applied from the previous nodes —
@@ -443,9 +462,20 @@ function Canvas(): React.JSX.Element {
       // missing seed, never an unhandled rejection — live events still fill
       // the store.
       .catch(() => undefined)
-    return cookrew().onTerminalActivity((activity) => {
+      // Either way the cards may now decide whether they are idle; before
+      // this they must not read their tails (use-stream-tails, L7).
+      .finally(markActivitySeeded)
+    // A snapshot that hangs must not hold every card's preview forever: past
+    // this the seed is declared and the cards fall back to how they behaved
+    // before the gate existed.
+    const seedDeadline = setTimeout(markActivitySeeded, ACTIVITY_SEED_DEADLINE_MS)
+    const off = cookrew().onTerminalActivity((activity) => {
       activityStore.set(activity.terminalId, mergeActivity(activityStore.get(activity.terminalId), activity))
     })
+    return () => {
+      clearTimeout(seedDeadline)
+      off()
+    }
   }, [])
 
   // ⌘W from the main process, resolved against the latest layer state.
@@ -898,6 +928,8 @@ function Canvas(): React.JSX.Element {
   workspaceRef.current = workspace
   // Lives in a ref: backoff bookkeeping must not re-render the canvas.
   const thumbBackoffsRef = useRef<ThumbBackoffs>({})
+  /** id → the `at` of the frame the store holds, so an unchanged one costs no bytes. */
+  const thumbVersionsRef = useRef<Readonly<Record<string, number>>>({})
   useEffect(() => {
     if (!shouldPollThumbs({ remote: isRemoteMode(), interactive: interactiveBrowser })) return
     const tick = (): void => {
@@ -907,51 +939,74 @@ function Canvas(): React.JSX.Element {
       // into a WebContent OOM. Skip the whole poll at mini; it resumes when a
       // card is zoomed in enough to actually show a picture.
       if (document.hidden || cardZoomMode(reactFlow.getZoom()) === 'mini') return
-      const browserIds = (workspaceRef.current?.nodes ?? [])
-        .filter((n) => n.kind === 'browser')
-        .map((n) => n.id)
+      // ONLY WHAT THE SCREEN SHOWS, IN ONE EXCHANGE, ONLY WHEN CHANGED. The
+      // poll used to walk every browser card on the canvas eight at a time,
+      // one request each with ?v= so nothing could ever be cached — through
+      // the relay ~96 exchanges a minute for pictures that mostly had not
+      // changed (perf lane L7, 2026-09-08). Now: the browser cards inside
+      // the viewport, one GET /api/browser/thumbs, and the version of each
+      // frame already held rides along so an unchanged one answers with a
+      // number and no bytes.
+      const topLeft = reactFlow.screenToFlowPosition({ x: 0, y: 0 })
+      const bottomRight = reactFlow.screenToFlowPosition({ x: window.innerWidth, y: window.innerHeight })
+      const visible = viewportBrowserIds(
+        reactFlow.getNodes().map((n) => ({
+          id: n.id,
+          kind: n.type ?? '',
+          x: n.position.x,
+          y: n.position.y,
+          // Unmeasured on the first tick: fall back to the card's own size,
+          // or a zero-width card would miss the viewport it is plainly in.
+          width: n.measured?.width ?? n.width ?? (n.data as { node?: { size?: { width: number } } }).node?.size?.width ?? 0,
+          height: n.measured?.height ?? n.height ?? (n.data as { node?: { size?: { height: number } } }).node?.size?.height ?? 0
+        })),
+        { left: topLeft.x, top: topLeft.y, right: bottomRight.x, bottom: bottomRight.y }
+      )
       // Per-id failure backoff — the desktop's capture-storm lesson, applied to
       // the polling side. After an app restart NO engine is booted, so 40+
-      // cards 404 at once; re-asking them all every 5s was a sustained TLS
-      // storm on the phone (owner's Web Inspector, 2026-08-27).
+      // cards have no frame at once; re-asking them all every 5s was a
+      // sustained storm (owner's Web Inspector, 2026-08-27).
       const now = Date.now()
-      // Cap the sweep: a fresh boot knows nothing, and this canvas holds 60+
-      // browser cards — an uncapped first tick was a 60-request TLS burst on
-      // every reload of a crash-looping phone. Eight per tick; the backoff
-      // retires dead ones, so live thumbs still fill within a few ticks.
-      for (const id of thumbPollList(browserIds, thumbBackoffsRef.current, now).slice(0, 8)) {
-        // A HEADER, not ?token=. This is an ordinary fetch and can set one, so
-        // the token stays out of the URL — see tokenParam, which exists only
-        // for the two EventSources that genuinely cannot.
-        void planeFetch(apiPath(`/api/browser/${id}/thumb?v=${now}`), {
-          headers: authHeaders()
-        })
-          .then((r) => {
-            if (!r.ok) {
-              thumbBackoffsRef.current = recordThumbFailure(
-                thumbBackoffsRef.current,
-                id,
-                Date.now()
-              )
-              return null
-            }
-            thumbBackoffsRef.current = recordThumbSuccess(thumbBackoffsRef.current, id)
-            return r.blob()
-          })
-          .then((blob) => {
-            if (!blob) return
-            const old = thumbStore.get(id)
-            if (old?.startsWith('blob:')) URL.revokeObjectURL(old)
-            thumbStore.set(id, URL.createObjectURL(blob))
-          })
-          .catch(() => {
-            thumbBackoffsRef.current = recordThumbFailure(
-              thumbBackoffsRef.current,
-              id,
-              Date.now()
-            )
-          })
+      const ids = thumbPollList(visible, thumbBackoffsRef.current, now).slice(0, THUMB_BATCH_MAX)
+      if (ids.length === 0) return
+      const params = new URLSearchParams({ ids: ids.join(',') })
+      const known = knownVersions(thumbVersionsRef.current, ids)
+      if (known.length > 0) params.set('known', known)
+      const failAll = (): void => {
+        for (const id of ids) {
+          thumbBackoffsRef.current = recordThumbFailure(thumbBackoffsRef.current, id, Date.now())
+        }
       }
+      // A HEADER, not ?token=. This is an ordinary fetch and can set one, so
+      // the token stays out of the URL — see tokenParam, which exists only
+      // for the two EventSources that genuinely cannot.
+      void planeFetch(apiPath(`/api/browser/thumbs?${params.toString()}`), { headers: authHeaders() })
+        .then((r) => (r.ok ? (r.json() as Promise<{ frames: ThumbBatchFrame[] }>) : null))
+        .then((body) => {
+          if (!body) {
+            failAll()
+            return
+          }
+          const outcome = applyThumbBatch(body.frames, thumbBackoffsRef.current, thumbVersionsRef.current, Date.now())
+          thumbBackoffsRef.current = outcome.backoffs
+          thumbVersionsRef.current = outcome.versions
+          for (const frame of outcome.changed) {
+            // A blob URL, as before: the browser holds the decoded bytes, not a
+            // base64 string in the store, which is what the phone's memory
+            // ceiling cares about. Decoded HERE, synchronously and in order —
+            // a data: fetch was tried and the renderer CSP (connect-src) blocks
+            // it, so every frame failed silently; and async decodes landed out
+            // of order. One bad frame is that frame's problem.
+            try {
+              const old = thumbStore.get(frame.id)
+              if (old?.startsWith('blob:')) URL.revokeObjectURL(old)
+              thumbStore.set(frame.id, URL.createObjectURL(new Blob([decodeBase64(frame.data)], { type: frame.type })))
+            } catch {
+              thumbBackoffsRef.current = recordThumbFailure(thumbBackoffsRef.current, frame.id, Date.now())
+            }
+          }
+        })
+        .catch(failAll)
     }
     tick()
     const timer = setInterval(tick, 5000)
@@ -1343,6 +1398,7 @@ function Canvas(): React.JSX.Element {
               the save sheet's share section — and who-is-on lives on the
               served team itself. */}
           {view === 'agents' && (
+            <Suspense fallback={null}>
             <RosterPanel
               workspace={workspace}
               activeWorkspaceId={activeWsId}
@@ -1360,6 +1416,7 @@ function Canvas(): React.JSX.Element {
               variant="view"
               onClose={() => setView('canvas')}
             />
+            </Suspense>
           )}
           {/* The clipboard's action bar: copy / cut / save / paste on the
               picked cards (cables included). Present the whole time the
@@ -1447,7 +1504,11 @@ function Canvas(): React.JSX.Element {
           isPhoneViewing={isPhoneViewing}
           interactiveCapability={interactiveCapability}
         />
-        {metricsOpen && <MetricsPanel onClose={() => setMetricsOpen(false)} />}
+        {metricsOpen && (
+          <Suspense fallback={null}>
+            <MetricsPanel onClose={() => setMetricsOpen(false)} />
+          </Suspense>
+        )}
         {importServedOpen && (
           <ImportServedSheet
             /* A second link while the sheet is open is a new question: remount

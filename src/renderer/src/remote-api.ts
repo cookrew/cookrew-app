@@ -59,7 +59,43 @@ async function parse<T>(response: Response, options: ParseOptions = {}): Promise
   return (text ? JSON.parse(text) : undefined) as T
 }
 
+/**
+ * GETs IN FLIGHT, shared. Two components asking the same URL in the same tick
+ * used to make two requests: App and EventToast both pulled /api/workspace at
+ * boot (228 KB compressed, twice), App and WorkspaceSwitcher both listed the
+ * workspaces. Over the relay each is an exchange. While a GET is unanswered a
+ * second identical GET joins it — the answer both would have got — and the
+ * entry is dropped the moment it settles, so nothing here ever serves a stale
+ * body and a retry after a failure is a fresh request. Perf lane L7.
+ */
+const inFlightGets = new Map<string, Promise<unknown>>()
+
+/**
+ * How long a GET may be joined. A request that hangs — a dead relay holding
+ * the socket — must not pin its key for the browser's whole socket timeout,
+ * or the resync re-pull would join the hang instead of asking afresh.
+ */
+const SHARE_GET_MS = 10_000
+
 async function req<T>(path: string, method = 'GET', body?: unknown, parseOptions: ParseOptions = {}): Promise<T> {
+  if (method !== 'GET' || body !== undefined) {
+    // A write may change what any GET in flight would answer; nobody asking
+    // after it may be handed the answer from before it.
+    inFlightGets.clear()
+    return reqOnce<T>(path, method, body, parseOptions)
+  }
+  const shared = inFlightGets.get(path)
+  if (shared) return shared as Promise<T>
+  const forget = (): void => {
+    if (inFlightGets.get(path) === own) inFlightGets.delete(path)
+  }
+  const own = reqOnce<T>(path, method, undefined, parseOptions).finally(forget)
+  inFlightGets.set(path, own)
+  setTimeout(forget, SHARE_GET_MS)
+  return own
+}
+
+async function reqOnce<T>(path: string, method: string, body: unknown, parseOptions: ParseOptions): Promise<T> {
   const options: RequestInit = { method }
   const headers: Record<string, string> = {}
   const token = authStore().token()
@@ -185,6 +221,14 @@ export async function checkAuth(candidate?: string): Promise<AuthScope> {
  * whatever it last drew, which after a reload is nothing at all.
  */
 let events: ReconnectingStream | null = null
+/** Whether the shared stream has connected before. See `open` below. */
+let streamOpenedOnce = false
+
+/** One per page load: what the companion spends to skip one snapshot. */
+function bootNonce(): string {
+  const random = globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)
+  return random.replace(/[^a-z0-9-]/gi, '').slice(0, 36)
+}
 
 function sharedEvents(): ReconnectingStream {
   // tokenParam, not a header: EventSource has none. Reads are gated now, so a
@@ -195,7 +239,19 @@ function sharedEvents(): ReconnectingStream {
       // stream lands on whichever plane is carrying the session at the moment
       // it reconnects. `?token=` still works cross-origin; EventSource needs
       // no CORS flag, but it does need the credential in the URL.
-      open: () => new EventSource(tokenParam(apiPath('/api/events'))),
+      open: () => {
+        // THE FIRST CONNECT SAYS IT IS BOOTING FROM THE PULL. The stream
+        // used to open with a full workspace snapshot — the same document
+        // loadWorkspace was fetching at that very moment, a second 228 KB
+        // through the relay. `boot=<nonce>` asks the companion to skip that
+        // one frame, and the companion spends the nonce on first sight: a
+        // browser that reconnects BY ITSELF re-dials this same URL, and that
+        // reconnect — like every one this stream makes without the nonce —
+        // gets the snapshot, which is how a dropped stream heals (L7).
+        const first = !streamOpenedOnce
+        streamOpenedOnce = true
+        return new EventSource(tokenParam(apiPath(first ? `/api/events?boot=${bootNonce()}` : '/api/events')))
+      },
       // The one place the companion learns its link is down. Without this the
       // badge would report the address bar forever, which is a memory rather
       // than a fact the moment the channel dies.

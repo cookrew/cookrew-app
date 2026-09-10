@@ -8,6 +8,7 @@
  *   node scripts/perf-eval.mjs --json     # the same, as one JSON document
  *   node scripts/perf-eval.mjs --no-probe # skip the HTTP latency probe
  *   node scripts/perf-eval.mjs --dom      # add the headless-Chrome DOM probe
+ *   node scripts/perf-eval.mjs --remote   # + the remote canvas boot (opens a headless Chrome)
  *
  * Four sections, each honest about its instrument:
  *
@@ -37,6 +38,15 @@
  *            and one that must not fail on a build the app has not restarted
  *            into yet — leaves it out. Skipped, and says so, without Chrome
  *            or a running app.
+ *
+ *   REMOTE   opt-in (--remote). A headless Chrome opens the built bundle the
+ *            way a phone does (scripts/perf-remote-open.mjs): once on the LAN
+ *            with 200 ms added to every request as the relay stand-in, and
+ *            once over cookrew.dev when ~/.cookrew/qa/chrome-courier holds a
+ *            profile signed in there. Requests, bytes, waterfall depth, first
+ *            paint, first card, interactive, and what keeps requesting after
+ *            (the headless page is pinched in so the thumb poll runs — it is
+ *            this eval's own Chrome, never the owner's live UI).
  *
  * History lives in ~/.cookrew/perf-history/*.jsonl. `npm run perf:install`
  * schedules this hourly through launchd; see scripts/perf-eval-install.mjs.
@@ -91,7 +101,10 @@ function parseArgs(argv) {
     base,
     history: value('--history', path.join(base, 'perf-history')),
     samples: Math.max(3, Math.min(100, Number(value('--samples', 12)) || 12)),
-    port: Number(value('--port', 8639)) || 8639
+    port: Number(value('--port', 8639)) || 8639,
+    remote: flag('--remote'),
+    remoteProfile: value('--remote-profile', path.join(base, 'qa', 'chrome-courier')),
+    remoteLatency: Number(value('--remote-latency', 200)) || 0
   }
 }
 
@@ -578,6 +591,86 @@ async function evalDom(opts, now) {
 }
 
 // ---------------------------------------------------------------------------
+// REMOTE OPEN (opt-in)
+// ---------------------------------------------------------------------------
+
+/** A Chrome profile that has signed in somewhere has a Default/ directory. */
+const profileSignedIn = (dir) => existsSync(path.join(dir, 'Default'))
+
+function remoteChecks(label, report, load) {
+  const s = report.summary
+  const capped = (verdict) => (load > LOADED_PER_CORE && verdict === 'fail' ? 'warn' : verdict)
+  const shaped = (verdict) => (load > LOADED_PER_CORE && verdict !== 'ok' ? ` (load ${load.toFixed(1)}/core — capped at WARN)` : '')
+  const clock = (name, value, budget, note = '') => {
+    const verdict = judge(value, budget)
+    return { name: `${label} ${name}`, value, unit: 'ms', verdict: capped(verdict), note: `${note}${shaped(verdict)}` }
+  }
+  return [
+    {
+      name: `${label} boot requests`,
+      value: s.boot.requests,
+      unit: '',
+      verdict: judge(s.boot.requests, BUDGETS.remote.bootRequests),
+      note: `${fmtMb(s.boot.bytes)} depth ${s.boot.depth} · ${s.boot.shapes.slice(0, 4).map((r) => `${r.count}× ${r.shape}`).join(', ')}`
+    },
+    {
+      name: `${label} third-party requests`,
+      value: s.thirdParty.requests,
+      unit: '',
+      verdict: judge(s.thirdParty.requests, BUDGETS.remote.thirdPartyRequests),
+      note: s.thirdParty.hosts.join(', ')
+    },
+    clock('first card', s.firstCardMs, BUDGETS.remote.firstCardMs, `first paint ${s.firstPaintMs ?? '—'} ms`),
+    clock('interactive', s.interactiveMs, BUDGETS.remote.interactiveMs),
+    {
+      name: `${label} afterwards`,
+      value: s.afterwards.perMinute,
+      unit: 'req/min',
+      verdict: judge(s.afterwards.perMinute, BUDGETS.remote.afterwardsPerMinute),
+      note: s.afterwards.shapes.slice(0, 3).map((r) => `${r.count}× ${r.shape}`).join(', ')
+    }
+  ]
+}
+
+async function evalRemote(opts, now) {
+  if (!opts.remote) return null
+  const load = loadPerCore()
+  const checks = []
+  const runs = {}
+  let recordOpen
+  try {
+    ;({ recordOpen } = await import('./perf-remote-open.mjs'))
+  } catch (error) {
+    return { runs, checks: [{ name: 'remote', value: null, unit: '', verdict: 'ok', note: `recorder unavailable: ${error.message}` }], verdict: 'ok' }
+  }
+  const attempt = async (label, run) => {
+    try {
+      const report = await run()
+      runs[label] = { url: report.url, latencyMs: report.latencyMs, ...report.summary }
+      checks.push(...remoteChecks(label, report, load))
+    } catch (error) {
+      checks.push({ name: label, value: null, unit: '', verdict: 'ok', note: `not measured: ${error.message}` })
+    }
+  }
+  if (readToken(opts.base)) {
+    await attempt('lan+rtt', () =>
+      recordOpen({ target: 'lan', url: null, profile: null, base: opts.base, port: opts.port, latencyMs: opts.remoteLatency, settleS: 12, zoom: 6, json: true, keepBrowser: false, dev: false, why: null })
+    )
+  } else {
+    checks.push({ name: 'lan+rtt', value: null, unit: '', verdict: 'ok', note: 'no pairing token — skipped' })
+  }
+  if (profileSignedIn(opts.remoteProfile)) {
+    await attempt('relay', () =>
+      recordOpen({ target: 'relay', url: null, profile: opts.remoteProfile, base: opts.base, port: opts.port, latencyMs: 0, settleS: 15, zoom: 6, json: true, keepBrowser: false, dev: false, why: null })
+    )
+  } else {
+    checks.push({ name: 'relay', value: null, unit: '', verdict: 'ok', note: `no signed-in profile at ${opts.remoteProfile} — skipped` })
+  }
+  appendHistory(opts.history, 'remote', { t: now, loadPerCore: load, runs })
+  return { runs, loadPerCore: load, checks, verdict: worstOf(checks.map((c) => c.verdict)) }
+}
+
+// ---------------------------------------------------------------------------
 // Run.
 // ---------------------------------------------------------------------------
 
@@ -624,8 +717,9 @@ async function runLocked(opts) {
   const memory = await evalMemory(opts, now)
   const latency = await evalLatency(opts, now)
   const dom = await evalDom(opts, now)
-  const verdict = worstOf([storage.verdict, memory.verdict, latency.verdict, dom.verdict])
-  const report = { at: new Date(now).toISOString(), verdict, storage, memory, latency, dom }
+  const remote = await evalRemote(opts, now)
+  const verdict = worstOf([storage.verdict, memory.verdict, latency.verdict, dom.verdict, ...(remote ? [remote.verdict] : [])])
+  const report = { at: new Date(now).toISOString(), verdict, storage, memory, latency, dom, ...(remote ? { remote } : {}) }
   mkdirSync(opts.history, { recursive: true })
   writeFileSync(path.join(opts.history, 'last-report.json'), JSON.stringify(report, null, 2))
   if (opts.json) {
@@ -641,6 +735,7 @@ async function runLocked(opts) {
         renderSection('MEMORY', memory),
         '',
         renderSection('LATENCY', latency),
+        ...(remote ? ['', renderSection('REMOTE OPEN', remote)] : []),
         '',
         renderSection('DOM', dom),
         '',

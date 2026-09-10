@@ -11,6 +11,48 @@ import type { TerminalActivity, TurnPhase } from '../../shared/turn'
 export const activityStore = new KeyedStore<TerminalActivity>()
 export const thumbStore = new KeyedStore<string>()
 
+/**
+ * HAS THE ACTIVITY SNAPSHOT LANDED? Until it has, a card cannot tell "idle,
+ * show my last turn" from "the answer is still on its way" — and it used to
+ * guess idle: every terminal card on a booting phone read its stream tail,
+ * then the snapshot arrived and threw the answer away. Twenty-three
+ * exchanges through the relay for nothing (perf lane L7, measured
+ * 2026-09-08). Flipped once by App when the snapshot resolves OR is refused,
+ * so a refused snapshot degrades to the old behaviour rather than to cards
+ * that never show a preview.
+ */
+/** How long a card waits for the activity snapshot before it stops waiting. */
+export const ACTIVITY_SEED_DEADLINE_MS = 3_000
+
+let activitySeeded = false
+const seedListeners = new Set<() => void>()
+
+export function markActivitySeeded(): void {
+  if (activitySeeded) return
+  activitySeeded = true
+  for (const listener of seedListeners) listener()
+}
+
+/** Test seam: a fresh module state between cases. */
+export function resetActivitySeededForTests(): void {
+  activitySeeded = false
+}
+
+export function isActivitySeeded(): boolean {
+  return activitySeeded
+}
+
+const subscribeSeed = (cb: () => void): (() => void) => {
+  seedListeners.add(cb)
+  return () => seedListeners.delete(cb)
+}
+const readSeed = (): boolean => activitySeeded
+
+export function useActivitySeeded(): boolean {
+  // Module-level functions, so a re-render never resubscribes.
+  return useSyncExternalStore(subscribeSeed, readSeed)
+}
+
 /** One terminal's latest activity. Re-renders only when THIS id changes. */
 export function useActivity(id: string): TerminalActivity | undefined {
   // Keyed on the id: a fresh subscribe function per render would make React

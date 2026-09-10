@@ -169,6 +169,35 @@ export const LATENCY = {
   streamOpenWarm1048: { p50: 30, p95: 80, p98: 120 }
 } as const
 
+/**
+ * ---- L7 Courier (perf/courier, 2026-09-08): the remote canvas boot ----
+ *
+ * What a phone's boot ASKS FOR, counted at a fixture companion serving the
+ * built renderer to a headless Chrome (tests/perf/remote-open.perf.ts). All
+ * structural — a request count is the one thing a fast machine cannot fake,
+ * and through the relay every request is an exchange of ~0.2 s.
+ *
+ * Measured 2026-09-08 on the owner's canvas (32 terminals / 51 notes / 93
+ * browsers) over the LAN with 200 ms added per request: BEFORE the boot was
+ * 75 requests before interactive — /api/workspace twice, /api/git thirty
+ * times (one per card, though the payload carried it), 23 stream tails read
+ * and discarded, 8 third-party font requests — and interactive came at
+ * 8658 ms. AFTER: 17 requests, none third-party, interactive 1287 ms. The
+ * budget below leaves room for the handful of small lists the boot still
+ * makes (auth, account, workspaces, presets, roles, teams, activity,
+ * capabilities) and for one asset chunk more; today's code fails it on four
+ * counts at once.
+ */
+export const REMOTE_OPEN = {
+  /** Requests until first card plus the two seconds after, streams excluded. */
+  maxBootRequests: 24,
+  maxWorkspaceFetches: 1,
+  maxWorkspaceListFetches: 1,
+  maxGitFetches: 0,
+  maxTailReadsAtBoot: 0,
+  maxThirdPartyRequests: 0
+} as const
+
 export const MEMORY = {
   /** EventLog append/flush/query cycles must retain nothing between them. */
   eventLogCyclesMb: 4,

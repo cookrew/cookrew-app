@@ -54,6 +54,7 @@ import { handlePathReportRoutes } from './path-report-routes'
 import { createTlsPortGate, httpsRedirectTarget } from './tls-port-gate'
 import { sendBody } from './http-compress'
 import { rendererSourceFor, staleBuildNotice } from './renderer-choice'
+import { batchFrames, parseBatchIds, parseKnownVersions, scopedBrowserIds, scopedThumbLookup } from './browser-thumb-batch'
 import { fetchRendererDevResource, rendererDevPathAllowed } from './renderer-dev-proxy'
 import { isViteHmrUpgrade, proxyViteHmrUpgrade } from './hmr-proxy'
 import { handleIdentityRoutes, type MobileIdentityDeps } from './mobile-identity-routes'
@@ -1345,6 +1346,35 @@ export async function handle(
       cols: session.cols,
       rows: session.rows
     })
+    return
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/browser/thumbs') {
+    // Many pictures in one exchange, and only the ones that changed — see
+    // browser-thumb-batch.ts. The heartbeat is still sent per id, because
+    // asking is what makes a headless frame exist.
+    // ONLY THIS CANVAS'S BROWSER CARDS. The ids arrive on the query, so the
+    // slug layer's node-membership check never sees them; a client scoped to
+    // one workspace must not be able to read another's pictures by naming
+    // their ids. Anything else asked for answers as "no frame".
+    const ids = parseBatchIds(url.searchParams.get('ids'))
+    const browsers = scopedBrowserIds(scopedState().nodes)
+    // The heartbeat for every card THIS canvas owns, frame or no frame yet —
+    // under the headless runtime asking is what makes the picture exist.
+    // Every asked id is answered; one outside the canvas answers no-frame.
+    await Promise.all(ids.map((id) => (browsers.has(id) ? deps.browserThumbRequested?.(id) : undefined)))
+    const frames = batchFrames(
+      ids,
+      parseKnownVersions(url.searchParams.get('known')),
+      scopedThumbLookup(browsers, (id) => deps.browserThumb(id))
+    )
+    sendBody(
+      response,
+      200,
+      { 'content-type': 'application/json', 'cache-control': 'no-store' },
+      Buffer.from(JSON.stringify({ frames })),
+      request.headers['accept-encoding']
+    )
     return
   }
 
