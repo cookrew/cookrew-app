@@ -314,6 +314,11 @@ export class HerdrStatusFeed extends EventEmitter {
       this.scheduleReconnect()
       return
     }
+    // The LABELS have to be in place before the first byte can arrive: an
+    // event names a pane, and a pane whose label this feed has not seen is
+    // dropped as "not ours". The status half of this seed is provisional and
+    // is replaced below, once the subscription is on the wire.
+    this.seed(panes)
     this.replaceSocket(socket)
     this.buffer = ''
 
@@ -360,15 +365,20 @@ export class HerdrStatusFeed extends EventEmitter {
       return
     }
     // SUBSCRIBE FIRST, SNAPSHOT SECOND. herdr 0.9.0 stopped replaying retained
-    // history into a new subscription: a pane that changed between the list
-    // above and the subscribe would now be a change nobody heard about, and
-    // the cache would hold its OLD state until the next transition. So the
-    // seed is a second list, taken once the subscription is on the wire — a
-    // 10 ms fork, measured against 56 panes. An event that was already in
-    // flight can still land after this seed; it is at least as new as the
-    // list it overwrites, and the next transition corrects either way.
+    // history into a new subscription — "API clients should subscribe before
+    // taking their initial snapshot to avoid missing changes" — so a pane that
+    // changed between the list above and this write is a change nobody hears
+    // about, and the cache would hold its OLD state until the next transition.
+    // The authoritative seed is therefore a second list, taken once the
+    // subscription is on the wire: a 10 ms fork, measured against 56 panes.
+    //
+    // NOTHING IS LOST TO THE OVERWRITE. `listPanes` is synchronous, so no
+    // 'data' callback can run while it is out; an event this feed has already
+    // ingested was sent before the snapshot was taken, and the snapshot is the
+    // newer of the two. An event still in flight lands after the seed and wins,
+    // which is the right way round.
     const fresh = this.listPanes()
-    this.seed(fresh.length > 0 ? fresh : panes)
+    if (fresh.length > 0) this.seed(fresh)
   }
 
   /**

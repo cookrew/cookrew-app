@@ -433,6 +433,35 @@ describe('seeding — the blind spot events alone leave', () => {
     feed.stop()
   })
 
+  it('knows the pane labels before the subscription can deliver anything', () => {
+    // The labels have to be seeded BEFORE the subscribe write, or an event
+    // arriving in that window names a pane the feed has never heard of and is
+    // dropped as "not ours". The second list is empty here so nothing can
+    // overwrite the event, which is the point: only the early label seed can
+    // explain the recorded state.
+    const socket = fakeSocket()
+    let lists = 0
+    const feed = new HerdrStatusFeed({
+      session: 'cookrew',
+      configPath: '/c',
+      listPanes: () => {
+        lists += 1
+        return lists === 1 ? [{ paneId: 'w1:p1', label: 'a', status: 'idle' }] : []
+      },
+      resolveSocketPath: () => '/tmp/h.sock',
+      connect: () => ({
+        ...socket,
+        write(line: string) {
+          socket.write(line)
+          socket.emit(EVENT('w1:p1', 'blocked') + '\n')
+        }
+      })
+    })
+    feed.start()
+    expect(feed.statusFor('a')).toBe('blocked')
+    feed.stop()
+  })
+
   it('lets a later event override the seed', () => {
     const socket = fakeSocket()
     const feed = new HerdrStatusFeed({
