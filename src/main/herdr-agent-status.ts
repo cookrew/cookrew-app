@@ -314,7 +314,6 @@ export class HerdrStatusFeed extends EventEmitter {
       this.scheduleReconnect()
       return
     }
-    this.seed(panes)
     this.replaceSocket(socket)
     this.buffer = ''
 
@@ -358,7 +357,18 @@ export class HerdrStatusFeed extends EventEmitter {
     } catch {
       disconnected()
       this.closeSocket(socket)
+      return
     }
+    // SUBSCRIBE FIRST, SNAPSHOT SECOND. herdr 0.9.0 stopped replaying retained
+    // history into a new subscription: a pane that changed between the list
+    // above and the subscribe would now be a change nobody heard about, and
+    // the cache would hold its OLD state until the next transition. So the
+    // seed is a second list, taken once the subscription is on the wire — a
+    // 10 ms fork, measured against 56 panes. An event that was already in
+    // flight can still land after this seed; it is at least as new as the
+    // list it overwrites, and the next transition corrects either way.
+    const fresh = this.listPanes()
+    this.seed(fresh.length > 0 ? fresh : panes)
   }
 
   /**

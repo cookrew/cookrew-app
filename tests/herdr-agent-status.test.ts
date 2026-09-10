@@ -400,6 +400,39 @@ describe('seeding — the blind spot events alone leave', () => {
     feed.stop()
   })
 
+  it('seeds from a snapshot taken AFTER the subscription is written (herdr 0.9.0)', () => {
+    // herdr 0.9.0: "New lifecycle event subscriptions now start with live
+    // events rather than replaying retained history. API clients should
+    // subscribe before taking their initial snapshot to avoid missing
+    // changes." A pane that turned `working` between the list and the
+    // subscribe used to be covered by the replay; now only a second list,
+    // taken once the subscription is on the wire, can see it.
+    const socket = fakeSocket()
+    const order: string[] = []
+    let lists = 0
+    const feed = new HerdrStatusFeed({
+      session: 'cookrew',
+      configPath: '/c',
+      listPanes: () => {
+        lists += 1
+        order.push(`list${lists}`)
+        return [{ paneId: 'w1:p1', label: 'a', status: lists === 1 ? 'idle' : 'working' }]
+      },
+      resolveSocketPath: () => '/tmp/h.sock',
+      connect: () => ({
+        ...socket,
+        write(line: string) {
+          order.push('subscribe')
+          socket.write(line)
+        }
+      })
+    })
+    feed.start()
+    expect(order).toEqual(['list1', 'subscribe', 'list2'])
+    expect(feed.statusFor('a')).toBe('working')
+    feed.stop()
+  })
+
   it('lets a later event override the seed', () => {
     const socket = fakeSocket()
     const feed = new HerdrStatusFeed({
