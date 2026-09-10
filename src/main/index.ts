@@ -8,6 +8,7 @@ import { WorkspaceStore } from './store'
 import { PtyManager, multiplexer, sessionNameFor } from './pty'
 import type { PtySession } from './pty'
 import type { PaneCardInfo } from './multiplexer'
+import { paneCardFor, reportAllPaneBindings, type BindableTerminal } from './pane-bindings'
 import {
   agentStatus,
   statusFeed,
@@ -1919,19 +1920,42 @@ const BIND_RETRY_TAIL_MS = 60_000
  * backends with their own chrome implement the binding (multiplexer.ts),
  * so this is a no-op under tmux/direct.
  */
-function paneCard(t: {
-  id: string
-  name: string
-  role: string | null
-  preset: string
-  cwd: string
-}): PaneCardInfo {
-  return {
-    terminalId: t.id,
-    title: t.name,
-    agent: t.role ?? t.preset,
-    workspace: store.focusedState.name,
-    cwd: t.cwd
+function paneCard(t: BindableTerminal): PaneCardInfo {
+  // The card's OWN workspace, not the focused one — a terminal being re-bound
+  // may live on a canvas nobody is looking at (pane-bindings.ts).
+  const owner = store.ownerOf(t.id)
+  return paneCardFor(t, owner ? workspaceName(owner) : store.focusedState.name)
+}
+
+/**
+ * Every pane wears its card again.
+ *
+ * ensureSession re-reports the binding for terminals it ATTACHES, which is the
+ * resident workspaces only; a herdr server that was replaced under the fleet
+ * (a `herdr update --handoff`, a restart) drops the metadata for all the rest,
+ * and they stay nameless in herdr's chrome until each card is opened. Measured
+ * across the 0.8.2 -> 0.9.0 handoff: 33 named panes before, 5 after.
+ *
+ * Display-only and best-effort: it must never be able to fail a boot.
+ */
+function reportPaneBindings(): void {
+  const mux = multiplexer()
+  const report = mux?.reportPaneCard
+  if (!mux || !report) return
+  try {
+    reportAllPaneBindings({
+      terminals: () => store.terminalsAcross(),
+      workspaceOf: (id) => {
+        const owner = store.ownerOf(id)
+        return owner ? workspaceName(owner) : ''
+      },
+      sessionName: (id) => sessionNameFor(id),
+      report: (name, card) => report.call(mux, name, card),
+      beginBatch: () => mux.beginAttachBatch?.(),
+      endBatch: () => mux.endAttachBatch?.()
+    })
+  } catch (error) {
+    console.error('Could not re-assert pane card bindings:', error)
   }
 }
 
@@ -4954,6 +4978,10 @@ app.whenReady().then(() => {
   // a settled semantic zoom acquires the local PTY mirror on demand. Working
   // agents are observed through their session files without opening mirrors.
   reportWorkspaceBinding()
+  // ...and the pane half, for EVERY workspace's terminals rather than the
+  // resident ones ensureSession will reattach. A herdr server replaced under
+  // the fleet keeps the panes and forgets what they were called.
+  reportPaneBindings()
 
   // File this Mac's workspaces under the account, by NAME AND ID only (P1).
   // Best effort and never awaited: a registry that is down must not delay a
