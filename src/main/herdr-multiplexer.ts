@@ -103,8 +103,17 @@ import type {
   ScrollState
 } from './multiplexer'
 
-/** Wire protocol this module was written against (`herdr api schema`). */
-export const HERDR_PROTOCOL = 19
+/**
+ * Wire protocol this module was written against (`herdr api schema`).
+ *
+ * 22 is herdr 0.9.0. Diffed against 20 (0.8.2) on 2026-09-10: every request,
+ * response and event this module uses is unchanged; the release added
+ * pane.scroll/selection/copy, command.invoke, integration.list and a
+ * `WorkspaceCloseParams` (close_group) that Cookrew never sends. The one
+ * behavioural change that mattered — subscriptions no longer replay retained
+ * history — is handled in herdr-agent-status.ts (subscribe, then snapshot).
+ */
+export const HERDR_PROTOCOL = 22
 
 // Kept on this module's public surface for existing callers and tests. The
 // implementation is shared with the production host backend below.
