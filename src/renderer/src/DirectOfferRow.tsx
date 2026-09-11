@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { authStore } from './auth-gate'
 import { directOffer, subscribeDirectOffer } from './direct-offer-gate'
+import { retryPath } from './path-retry-gate'
 import { DIRECT_OFFER_COPY, directOfferWhy } from './path-copy'
 import { directNavigationUrl, type DirectOffer } from './path/direct-offer'
 
@@ -21,29 +22,69 @@ import { directNavigationUrl, type DirectOffer } from './path/direct-offer'
  * local-network permission to grant, so a fetch from cookrew.dev to the Mac
  * can never succeed while a navigation to the same trusted name always can.
  *
- * THE SENTENCE COMES OFF THE OFFER, not off `navigator`. Safari is told that
- * Apple never asks it; every other browser on the phone is told that iOS
- * never asks a browser — because blaming Chrome for something iOS does would
- * send that reader into Chrome's settings hunting for a switch that is not
- * there, which is the same failure this panel was written to end.
+ * TWO BUTTONS, IN THE ORDER THE SENTENCE NAMES THEM. TRY AGAIN re-runs the
+ * race the switcher already owns (path-retry-gate.ts) and is the cheaper of
+ * the two answers: a Mac that was asleep, a card that lagged a network hop, a
+ * Wi-Fi that had just changed under the phone — all of those answer on the
+ * next pass and none of them needs a page load. Leaving the page is the
+ * second answer because it is the irreversible-looking one.
+ *
+ * THE PRESS WAITS, AND SAYS SO. A race is up to a second of probes; a button
+ * that went back to its resting state immediately would read as a button that
+ * did nothing, which is the failure this whole panel exists to end. It also
+ * gives up waiting after RETRY_SAFETY_MS, because a switcher that was torn
+ * down mid-press would otherwise leave TRYING… on the screen for ever.
  */
+/** How long TRY AGAIN waits for a race that may never report back. */
+export const RETRY_SAFETY_MS = 6000
+
 export function DirectOfferRow(): React.JSX.Element | null {
   const [offer, setOffer] = useState<DirectOffer | null>(() => directOffer())
+  const [trying, setTrying] = useState(false)
+  const giveUp = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => subscribeDirectOffer(setOffer), [])
+  useEffect(
+    () => () => {
+      if (giveUp.current) clearTimeout(giveUp.current)
+    },
+    []
+  )
 
   if (!offer) return null
+
+  const tryAgain = (): void => {
+    if (trying) return
+    setTrying(true)
+    const settle = (): void => {
+      if (giveUp.current) clearTimeout(giveUp.current)
+      giveUp.current = null
+      setTrying(false)
+    }
+    giveUp.current = setTimeout(settle, RETRY_SAFETY_MS)
+    void retryPath().then(settle, settle)
+  }
 
   return (
     <p className="cr-path-direct" role="status">
       <span className="cr-path-direct-why">{directOfferWhy(offer.family, offer.proxy)}</span>
-      <button
-        type="button"
-        className="cr-btn cr-path-direct-go"
-        onClick={() => openDirectly(offer)}
-      >
-        {offer.kind === 'lan' ? DIRECT_OFFER_COPY.lan : DIRECT_OFFER_COPY.tailnet}
-      </button>
+      <span className="cr-path-direct-acts">
+        <button
+          type="button"
+          className="cr-btn cr-path-direct-retry"
+          disabled={trying}
+          onClick={tryAgain}
+        >
+          {trying ? DIRECT_OFFER_COPY.retrying : DIRECT_OFFER_COPY.retry}
+        </button>
+        <button
+          type="button"
+          className="cr-btn cr-path-direct-go"
+          onClick={() => openDirectly(offer)}
+        >
+          {offer.kind === 'lan' ? DIRECT_OFFER_COPY.lan : DIRECT_OFFER_COPY.tailnet}
+        </button>
+      </span>
     </p>
   )
 }

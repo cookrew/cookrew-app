@@ -5989,6 +5989,20 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   flex: 0 0 auto;
 }
 
+/* TRY AGAIN and OPEN ON WI-FI, in the order the sentence names them. They
+   wrap rather than shrink: on a narrow phone two full-width taps beat two
+   half-width ones. */
+.cr-path-direct-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.cr-path-direct-retry[disabled] {
+  opacity: 0.6;
+}
+
 .cr-path-latency {
   margin: 0 0 12px;
   font-family: var(--font-pixel);
