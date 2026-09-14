@@ -7,9 +7,16 @@ import {
   createCanvasBridge,
   flattenHeaders,
   loopbackDialer,
+  withAcceptEncoding,
+  DEFAULT_ACCEPT_ENCODING,
   type BridgeDialer
 } from '../src/main/canvas-bridge'
 import { decodeFrame, encodeFrame, type RelayFrame } from '../src/shared/relay-frame'
+import { sendBody } from '../src/main/http-compress'
+import { brotliDecompressSync, gunzipSync } from 'node:zlib'
+
+/** A script big enough to be worth compressing, and repetitive enough to shrink. */
+const BIG_SCRIPT = 'export const line = "the same words over and over";\n'.repeat(400)
 
 /**
  * IDENTITY v2, PHASE 3 — FRAMES BACK INTO REQUESTS.
@@ -35,6 +42,18 @@ const companion = (): Server =>
         clearInterval(beat)
         closedStreams += 1
       })
+      return
+    }
+    if (url.pathname === '/big.js') {
+      // Served the way the companion serves its bundle: through sendBody,
+      // which compresses only when the request offered an encoding.
+      sendBody(
+        response,
+        200,
+        { 'content-type': 'text/javascript' },
+        Buffer.from(BIG_SCRIPT),
+        request.headers['accept-encoding']
+      )
       return
     }
     if (url.pathname === '/bytes') {
@@ -170,6 +189,47 @@ describe('one relayed exchange', () => {
     // Without the marker a relayed phone is served Vite's live module graph —
     // 159 requests over a link that cannot carry them.
     expect(echo.headers[RELAY_MARKER]).toBe('1')
+  })
+
+  it('offers brotli and gzip for a reader whose offer the relay dropped, and the answer comes back encoded', async () => {
+    const bridge = standUp()
+    bridge.frame({ t: 'open', id: 'enc1', method: 'GET', path: '/big.js', headers: {} })
+    bridge.frame({ t: 'body', id: 'enc1', data: '', done: true })
+    await until(() => ended(bridge.of('enc1')), 'the exchange')
+    const head = bridge.of('enc1').find((frame) => frame.t === 'head')
+    expect(head && head.t === 'head' ? head.headers['content-encoding'] : null).toBe('br')
+    const body = bodyOf(bridge.of('enc1'))
+    expect(body.length).toBeLessThan(BIG_SCRIPT.length / 10)
+    expect(brotliDecompressSync(body).toString('utf8')).toBe(BIG_SCRIPT)
+  })
+
+  it('never overrides an offer the reader sent — identity stays identity, gzip stays gzip', async () => {
+    const bridge = standUp()
+    bridge.frame({ t: 'open', id: 'enc2', method: 'GET', path: '/big.js', headers: { 'accept-encoding': 'identity' } })
+    bridge.frame({ t: 'body', id: 'enc2', data: '', done: true })
+    await until(() => ended(bridge.of('enc2')), 'the exchange')
+    const plain = bridge.of('enc2').find((frame) => frame.t === 'head')
+    expect(plain && plain.t === 'head' ? plain.headers['content-encoding'] : null).toBeUndefined()
+    expect(bodyOf(bridge.of('enc2')).toString('utf8')).toBe(BIG_SCRIPT)
+
+    bridge.frame({ t: 'open', id: 'enc3', method: 'GET', path: '/big.js', headers: { 'Accept-Encoding': 'gzip' } })
+    bridge.frame({ t: 'body', id: 'enc3', data: '', done: true })
+    await until(() => ended(bridge.of('enc3')), 'the exchange')
+    const zipped = bridge.of('enc3').find((frame) => frame.t === 'head')
+    expect(zipped && zipped.t === 'head' ? zipped.headers['content-encoding'] : null).toBe('gzip')
+    expect(gunzipSync(bodyOf(bridge.of('enc3'))).toString('utf8')).toBe(BIG_SCRIPT)
+  })
+
+  it('tells the companion the default offer, and only when none arrived', async () => {
+    expect(withAcceptEncoding({})).toEqual({ 'accept-encoding': DEFAULT_ACCEPT_ENCODING })
+    expect(withAcceptEncoding({ 'accept-encoding': 'identity' })).toEqual({ 'accept-encoding': 'identity' })
+    expect(withAcceptEncoding({ 'Accept-Encoding': 'gzip' })).toEqual({ 'Accept-Encoding': 'gzip' })
+    const bridge = standUp()
+    bridge.frame({ t: 'open', id: 'enc4', method: 'GET', path: '/echo', headers: {} })
+    bridge.frame({ t: 'body', id: 'enc4', data: '', done: true })
+    await until(() => ended(bridge.of('enc4')), 'the exchange')
+    const echo = JSON.parse(bodyOf(bridge.of('enc4')).toString('utf8')) as { headers: Record<string, string> }
+    expect(echo.headers['accept-encoding']).toBe(DEFAULT_ACCEPT_ENCODING)
   })
 
   it('passes the relay base through to the companion unchanged', async () => {
