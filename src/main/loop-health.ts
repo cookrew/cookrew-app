@@ -25,6 +25,7 @@ import { monitorEventLoopDelay, performance, type EventLoopUtilization } from 'n
 import { latencyStats } from '../shared/stats'
 import type { SousBreakerState } from './sous-breaker'
 import type { ProbeStats } from './board-index'
+import type { CanvasLineStats } from './canvas-link'
 
 /** Window length; the read route reports the last COMPLETE window first. */
 export const LOOP_WINDOW_MS = 60_000
@@ -81,12 +82,15 @@ export interface LoopHealthSnapshot {
   sous?: SousBreakerState | null
   /** The board probe's cadence: subscribers, current rung, passes and listings per minute. */
   probe?: ProbeStats
+  /** The desktop's line at cookrew.dev: lifetimes and endings by reason. */
+  canvasLine?: CanvasLineStats
 }
 
 export interface LoopHealthDeps {
   residency?: () => Record<string, number>
   sous?: () => SousBreakerState
   probe?: () => ProbeStats
+  canvasLine?: () => CanvasLineStats
   now?: () => number
   windowMs?: number
   keep?: number
@@ -214,7 +218,8 @@ export function createLoopHealth(deps: LoopHealthDeps = {}): LoopHealth {
         loops,
         residency: deps.residency?.() ?? {},
         sous: deps.sous?.() ?? null,
-        ...(deps.probe ? { probe: deps.probe() } : {})
+        ...(deps.probe ? { probe: deps.probe() } : {}),
+        ...(deps.canvasLine ? { canvasLine: deps.canvasLine() } : {})
       }
       memo = { at: now(), snapshot }
       return snapshot

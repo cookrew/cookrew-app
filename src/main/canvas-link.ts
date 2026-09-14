@@ -42,6 +42,8 @@ import { decodeFrame, encodeFrame } from '../shared/relay-frame'
 /** Frames from the relay, as lines. */
 export interface LinkDownlink {
   onLine(listener: (line: string) => void): void
+  /** The registry's heartbeat — an empty line — arrived. Bytes, not a frame. */
+  onBeat?(listener: () => void): void
   onEnd(listener: (why: string) => void): void
   close(): void
 }
@@ -51,6 +53,76 @@ export interface LinkUplink {
   write(line: string): void
   onEnd(listener: (why: string) => void): void
   close(): void
+  /** Can a frame still be written — the request neither ended nor destroyed? */
+  writable?(): boolean
+  /** Bytes written and not yet handed to the network — a flow that stopped draining shows here. */
+  pendingBytes?(): number
+}
+
+/**
+ * Why a line ended, as a small closed vocabulary the health route can count.
+ * The raw `why` keeps the detail; this is what a rate is measured against.
+ */
+export type LineEndReason =
+  | 'quiet'
+  | 'registry-closed'
+  | 'uplink-closed'
+  | 'refused'
+  | 'name-taken'
+  | 'withdrew'
+  | 'off'
+  | 'hangup'
+  | 'reset'
+  | 'tls'
+  | 'unreachable'
+  | 'other'
+
+export const lineEndReason = (why: string): LineEndReason => {
+  if (why.includes('went quiet')) return 'quiet'
+  if (why.includes('closed the line')) return 'registry-closed'
+  if (why.includes('closed the uplink')) return 'uplink-closed'
+  if (why.includes('refused the')) return 'refused'
+  if (why.includes('would not serve this name')) return 'name-taken'
+  if (why.includes('desktop withdrew')) return 'withdrew'
+  if (why.includes('reachability is off')) return 'off'
+  if (why.includes('socket hang up')) return 'hangup'
+  if (why.includes('ECONNRESET')) return 'reset'
+  if (/BAD_DECRYPT|OPENSSL|TLS|ssl|certificate/i.test(why)) return 'tls'
+  if (/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH/.test(why)) return 'unreachable'
+  return 'other'
+}
+
+/** What a line looked like — at a read, or at the moment it ended. */
+export interface LineMoment {
+  /** Since the downlink was opened. */
+  ageMs: number
+  /** Since `ready`, or null for a dial that never got there. */
+  heldForMs: number | null
+  /** Since the last frame arrived down (ping or otherwise). */
+  sinceLastFrameMs: number | null
+  /** Since the last heartbeat byte arrived down. */
+  sinceLastBeatMs: number | null
+  framesDown: number
+  pongsUp: number
+  uplinkWritable: boolean | null
+  uplinkPendingBytes: number | null
+}
+
+export interface CanvasLineStats {
+  held: boolean
+  name: string | null
+  /** The line open right now, or null. */
+  current: LineMoment | null
+  /** Since start(): lines that reached `ready`, lines that ended, and why. */
+  lines: {
+    held: number
+    ended: number
+    lost: Partial<Record<LineEndReason, number>>
+    /** Dials that ended before `ready`, by reason. */
+    failed: Partial<Record<LineEndReason, number>>
+  }
+  /** The last ending, with the numbers that say what the line looked like then. */
+  last: (LineMoment & { at: number; reason: LineEndReason; why: string }) | null
 }
 
 /**
@@ -90,6 +162,8 @@ export interface CanvasLink {
   readonly onDrop: (listener: () => void) => () => void
   /** The account or the reachability toggle changed — reconsider now. */
   readonly refresh: () => void
+  /** Lifetimes, last-frame ages and uplink state — for /api/health and the eval. */
+  readonly stats: () => CanvasLineStats
 }
 
 export interface CanvasLinkDeps {
@@ -146,6 +220,7 @@ const defaultSchedule = (fn: () => void, ms: number): (() => void) => {
 export const httpTransport = (): LinkTransport => ({
   down: (url, token) => {
     const lines: ((line: string) => void)[] = []
+    const beats: (() => void)[] = []
     const ends: ((why: string) => void)[] = []
     let over = false
     const finish = (why: string): void => {
@@ -172,8 +247,10 @@ export const httpTransport = (): LinkTransport => ({
             const line = buffer.slice(0, at)
             buffer = buffer.slice(at + 1)
             at = buffer.indexOf('\n')
-            // The heartbeat is an empty line and needs no place in the protocol.
+            // The heartbeat is an empty line and needs no place in the protocol —
+            // but it IS a byte that crossed the line, which the quiet diagnosis wants.
             if (line.length > 0) lines.forEach((listener) => listener(line))
+            else beats.forEach((listener) => listener())
           }
         })
         response.on('end', () => finish('the registry closed the line'))
@@ -184,6 +261,7 @@ export const httpTransport = (): LinkTransport => ({
     request.end()
     return {
       onLine: (listener) => void lines.push(listener),
+      onBeat: (listener) => void beats.push(listener),
       onEnd: (listener) => void ends.push(listener),
       close: () => {
         request.destroy()
@@ -227,7 +305,11 @@ export const httpTransport = (): LinkTransport => ({
       close: () => {
         request.destroy()
         finish('closed')
-      }
+      },
+      writable: () => !request.writableEnded && !request.destroyed && request.writable,
+      // The request's own buffer plus the socket's: a pong written into a flow
+      // the network stopped draining sits in one of the two.
+      pendingBytes: () => request.writableLength + (request.socket?.writableLength ?? 0)
     }
   }
 })
@@ -254,6 +336,37 @@ export const createCanvasLink = (deps: CanvasLinkDeps): CanvasLink => {
   let queued: readonly string[] = []
   let cancelRetry: (() => void) | null = null
   let cancelQuiet: (() => void) | null = null
+  const now = deps.now ?? ((): number => Date.now())
+
+  // THE INSTRUMENT. Every line's timings, so an ending can be read as a
+  // number: how long it lived, how long since the last frame and the last
+  // heartbeat byte when it ended, and whether the uplink was still writable
+  // then. "The registry went quiet" was a message; this is what it means.
+  let openedAt: number | null = null
+  let readyAt: number | null = null
+  let lastFrameAt: number | null = null
+  let lastBeatAt: number | null = null
+  let framesDown = 0
+  let pongsUp = 0
+  const counts: CanvasLineStats['lines'] = { held: 0, ended: 0, lost: {}, failed: {} }
+  let last: CanvasLineStats['last'] = null
+
+  const moment = (at: number): LineMoment => ({
+    ageMs: openedAt === null ? 0 : at - openedAt,
+    heldForMs: readyAt === null ? null : at - readyAt,
+    sinceLastFrameMs: lastFrameAt === null ? null : at - lastFrameAt,
+    sinceLastBeatMs: lastBeatAt === null ? null : at - lastBeatAt,
+    framesDown,
+    pongsUp,
+    uplinkWritable: up?.writable?.() ?? null,
+    uplinkPendingBytes: up?.pendingBytes?.() ?? null
+  })
+
+  const secs = (ms: number | null): string => (ms === null ? '—' : `${(ms / 1000).toFixed(1)}s`)
+  const describe = (m: LineMoment): string =>
+    `lived ${secs(m.ageMs)} (held ${secs(m.heldForMs)}) · last frame ${secs(m.sinceLastFrameMs)} ago · ` +
+    `last beat ${secs(m.sinceLastBeatMs)} ago · ${m.framesDown} down / ${m.pongsUp} pongs up · ` +
+    `uplink writable=${m.uplinkWritable ?? '—'} pending=${m.uplinkPendingBytes ?? '—'}B`
 
   const setHeld = (next: boolean): void => {
     if (holding === next) return
@@ -275,6 +388,11 @@ export const createCanvasLink = (deps: CanvasLinkDeps): CanvasLink => {
   const end = (why: string): void => {
     const had = down !== null || up !== null || holding
     clearQuiet()
+    // Read the numbers BEFORE the halves are closed: closing the uplink
+    // would answer "writable=false" for every ending and say nothing.
+    const at = now()
+    const reason = lineEndReason(why)
+    const snapshot = had ? { ...moment(at), at, reason, why } : null
     const closingDown = down
     const closingUp = up
     down = null
@@ -283,10 +401,20 @@ export const createCanvasLink = (deps: CanvasLinkDeps): CanvasLink => {
     confirmed = null
     closingUp?.close()
     closingDown?.close()
-    if (had) {
-      log(`canvas link: the line ended (${why})`)
+    if (had && snapshot) {
+      last = snapshot
+      counts.ended += 1
+      const bucket = readyAt === null ? counts.failed : counts.lost
+      bucket[reason] = (bucket[reason] ?? 0) + 1
+      log(`canvas link: the line ended (${why}) · reason=${reason} · ${describe(snapshot)}`)
       dropListeners.forEach((listener) => listener())
     }
+    openedAt = null
+    readyAt = null
+    lastFrameAt = null
+    lastBeatAt = null
+    framesDown = 0
+    pongsUp = 0
     setHeld(false)
     if (running) retry()
   }
@@ -331,15 +459,23 @@ export const createCanvasLink = (deps: CanvasLinkDeps): CanvasLink => {
     const url = linkUrl(deps.origin(), credential.deviceId)
     const opened = transport.down(url, credential.token)
     down = opened
+    openedAt = now()
     armQuiet()
+    opened.onBeat?.(() => {
+      if (down === opened) lastBeatAt = now()
+    })
     opened.onLine((line) => {
       if (down !== opened) return
       armQuiet()
+      lastFrameAt = now()
+      framesDown += 1
       const frame = decodeFrame(line)
       if (!frame) return
       if (frame.t === 'ready') {
         confirmed = frame.name
         attempt = 0
+        readyAt = now()
+        counts.held += 1
         openUplink(credential, url)
         setHeld(true)
         log(`canvas link: holding ${frame.name}`)
@@ -348,6 +484,7 @@ export const createCanvasLink = (deps: CanvasLinkDeps): CanvasLink => {
       if (frame.t === 'ping') {
         // THE PULSE, answered on the uplink: the pong is the registry's only
         // proof that this desktop's answers still arrive.
+        pongsUp += 1
         send(encodeFrame({ t: 'pong', at: frame.at }))
         return
       }
@@ -388,6 +525,13 @@ export const createCanvasLink = (deps: CanvasLinkDeps): CanvasLink => {
     },
     held: () => holding,
     name: () => confirmed,
+    stats: () => ({
+      held: holding,
+      name: confirmed,
+      current: down === null ? null : moment(now()),
+      lines: { held: counts.held, ended: counts.ended, lost: { ...counts.lost }, failed: { ...counts.failed } },
+      last
+    }),
     send,
     onFrame: (listener) => {
       frameListeners.add(listener)

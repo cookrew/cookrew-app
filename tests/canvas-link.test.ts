@@ -357,3 +357,94 @@ describe('dialling the line', () => {
     await until(() => !relay!.holding(DEVICE), 'the relay to let the name go')
   })
 })
+
+describe('the instrument — every ending is a number', () => {
+  let relay: FakeRelay | null = null
+  let link: CanvasLink | null = null
+  afterEach(async () => {
+    link?.stop()
+    link = null
+    await relay?.close()
+    relay = null
+  })
+
+  it('reads the line — lifetime, last frame, last beat, uplink state — and counts endings by reason', async () => {
+    relay = await fakeRelay()
+    const clock = fakeSchedule()
+    const logged: string[] = []
+    let t = 1_800_000_000_000
+    link = createCanvasLink({
+      origin: () => relay!.origin,
+      credential: () => ({ token: 'session-secret-XYZ', deviceId: DEVICE }),
+      schedule: clock.schedule,
+      now: () => t,
+      quietMs: 1,
+      log: (m) => logged.push(m)
+    })
+    expect(link.stats()).toEqual({ held: false, name: null, current: null, lines: { held: 0, ended: 0, lost: {}, failed: {} }, last: null })
+    link.start()
+    await until(() => link!.held(), 'held')
+    t += 40_000
+    relay.push(DEVICE, encodeFrame({ t: 'ping', at: 1 }))
+    await until(() => relay!.up().some((line) => line.includes('"pong"')), 'a pong')
+    relay.push(DEVICE, '') // the registry's heartbeat: an empty line
+    await until(() => link!.stats().current?.sinceLastBeatMs === 0, 'the beat')
+    t += 5_000
+    const open = link.stats()
+    expect(open.held).toBe(true)
+    expect(open.lines.held).toBe(1)
+    expect(open.current).toMatchObject({ ageMs: 45_000, heldForMs: 45_000, sinceLastFrameMs: 5_000, sinceLastBeatMs: 5_000, pongsUp: 1, uplinkWritable: true })
+    expect(open.current?.framesDown).toBeGreaterThanOrEqual(2) // ready + ping
+    expect(open.current?.uplinkPendingBytes).toBeGreaterThanOrEqual(0)
+
+    t += 70_000
+    clock.fireAll() // the quiet watchdog: three missed pings
+    const ended = link.stats()
+    expect(ended.held).toBe(false)
+    expect(ended.current).toBeNull()
+    expect(ended.lines).toEqual({ held: 1, ended: 1, lost: { quiet: 1 }, failed: {} })
+    expect(ended.last).toMatchObject({ reason: 'quiet', ageMs: 115_000, heldForMs: 115_000, sinceLastFrameMs: 75_000, uplinkWritable: true })
+    const line = logged.find((m) => m.includes('the line ended'))
+    expect(line).toMatch(/reason=quiet · lived 115\.0s \(held 115\.0s\) · last frame 75\.0s ago · last beat 75\.0s ago · \d+ down \/ 1 pongs up · uplink writable=true pending=\d+B/)
+    expect(logged.join('\n')).not.toContain('session-secret-XYZ')
+  })
+
+  it('a dial that never reached ready is a failure, not a lost line', async () => {
+    relay = await fakeRelay()
+    relay.refuseNext(true)
+    const clock = fakeSchedule()
+    link = createCanvasLink({
+      origin: () => relay!.origin,
+      credential: () => ({ token: 't', deviceId: DEVICE }),
+      schedule: clock.schedule
+    })
+    link.start()
+    await until(() => link!.stats().lines.ended === 1, 'the refusal')
+    expect(link.stats().lines).toEqual({ held: 0, ended: 1, lost: {}, failed: { 'name-taken': 1 } })
+    expect(link.stats().last?.reason).toBe('name-taken')
+  })
+
+  it('a line whose frames stop is ended and redialled within one backoff of the quiet budget', async () => {
+    relay = await fakeRelay()
+    const clock = fakeSchedule()
+    link = createCanvasLink({
+      origin: () => relay!.origin,
+      credential: () => ({ token: 't', deviceId: DEVICE }),
+      schedule: clock.schedule,
+      quietMs: 1,
+      random: () => 0
+    })
+    link.start()
+    await until(() => link!.held(), 'held')
+    expect(relay.opens()).toBe(1)
+    clock.fireAll() // quiet fires: the line is ended …
+    expect(link.held()).toBe(false)
+    expect(clock.pending()).toEqual([BACKOFF_MIN_MS / 2]) // … and exactly one redial is scheduled, one backoff away
+    clock.fireAll()
+    await until(() => link!.held(), 'held again')
+    expect(relay.opens()).toBe(2)
+    expect(link.stats().lines.held).toBe(2)
+    // One line at a time: the redial did not double-hold the name.
+    expect(relay.holding(DEVICE)).toBe(true)
+  })
+})

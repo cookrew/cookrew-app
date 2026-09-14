@@ -1399,7 +1399,8 @@ const loopHealth = createLoopHealth({
   residency: () => ({ store: store.resident().length, registry: sessions.residentCount() }),
   // The Sous breaker, so a loaded machine's silent titles are explained.
   sous: () => sousBreakerState(),
-  probe: () => boardProbe.stats()
+  probe: () => boardProbe.stats(),
+  canvasLine: () => canvasLink.stats()
 })
 
 const boardProbe = createProbeSampler(
