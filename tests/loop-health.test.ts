@@ -94,3 +94,27 @@ describe('loop health', () => {
     expect(s.loop.current.elu).toBeGreaterThan(0)
   })
 })
+
+describe('the canvas line rides on the snapshot', () => {
+  it('reports the line stats the caller hands it, and nothing when unwired', () => {
+    const line = {
+      held: true,
+      name: '@drej/desktop/x',
+      current: null,
+      lines: { held: 3, ended: 2, lost: { quiet: 2 }, failed: {} },
+      last: null
+    }
+    const wired = createLoopHealth({ canvasLine: () => line })
+    try {
+      expect(wired.snapshot().canvasLine).toEqual(line)
+    } finally {
+      wired.stop()
+    }
+    const bare = createLoopHealth()
+    try {
+      expect(bare.snapshot().canvasLine).toBeUndefined()
+    } finally {
+      bare.stop()
+    }
+  })
+})
