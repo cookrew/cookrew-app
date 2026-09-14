@@ -115,6 +115,42 @@ export const flattenHeaders = (headers: http.IncomingHttpHeaders): Record<string
   return out
 }
 
+/**
+ * What the bridge offers the companion when the caller's own offer did not
+ * arrive. Brotli first, as every browser that can reach cookrew.dev decodes
+ * it; gzip beside it so the companion's own negotiation has a second choice.
+ */
+export const DEFAULT_ACCEPT_ENCODING = 'br, gzip'
+
+/**
+ * ACCEPT-ENCODING, DEFAULTED WHEN THE RELAY DROPPED IT.
+ *
+ * The registry deployed today forwards an allow-list of request headers and
+ * accept-encoding is not on it (v2-canvas-relay.ts REQUEST_HEADERS as of
+ * 28cb47c) — but it passes content-encoding on the ANSWER untouched. So the
+ * companion, seeing no offer, answered every relayed request as identity:
+ * the 1.33 MB index chunk, the 277 KB stylesheet and the 653 KB workspace
+ * crossed uncompressed and then base64 in the frames — 2.14 MB on a link
+ * measured at 135-184 KB/s from this Mac to the registry — when the same
+ * boot is 0.52 MB compressed. Perf lane L7, 2026-09-14.
+ *
+ * The only client on this line is a browser, and every browser that can
+ * reach cookrew.dev decodes brotli and gzip. So when no offer arrived, the
+ * bridge offers both on the reader's behalf. The companion's own compressor
+ * (http-compress.ts) still decides WHAT is worth compressing: text, svg,
+ * javascript, json, xml, wasm, manifest — never fonts or images — and only
+ * above its size floor; SSE takes the stream path and never passes through
+ * sendBody; the registry drops content-length as hop-by-hop, so there is no
+ * length to mismatch; packCached keeps the brotli pass to once per app run.
+ *
+ * An offer the caller DID send is never touched, `identity` included: once
+ * the registry forwards the real header, this default never applies.
+ */
+export const withAcceptEncoding = (headers: Record<string, string>): Record<string, string> => {
+  const has = Object.keys(headers).some((name) => name.toLowerCase() === 'accept-encoding')
+  return has ? headers : { ...headers, 'accept-encoding': DEFAULT_ACCEPT_ENCODING }
+}
+
 /** The default: the companion's own plaintext listener, on loopback. */
 export const loopbackDialer =
   (port: number, host: string = BRIDGE_HOST): BridgeDialer =>
@@ -126,7 +162,7 @@ export const loopbackDialer =
         method: input.method,
         path: input.path,
         headers: {
-          ...input.headers,
+          ...withAcceptEncoding(input.headers),
           // The server builds its URL from this, so it must be present and
           // parseable — and it must be OURS, never whatever a caller sent.
           host: `${host}:${port}`,
