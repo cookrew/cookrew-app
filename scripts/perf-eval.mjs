@@ -64,6 +64,8 @@ import {
   fmtMs,
   judge,
   latencyFromEvents,
+  lineFromHealth,
+  lineLossPerHour,
   loopFromHealth,
   orphanSidecars,
   parsePsTable,
@@ -284,7 +286,8 @@ async function evalMemory(opts, now) {
   const health = processes.length ? await probeHealth(opts) : { loop: null, note: '' }
   for (const p of processes) {
     const loop = p.role === 'main' && health.loop ? { loop: health.loop } : {}
-    appendHistory(opts.history, 'memory', { t: now, ...p, ...loop })
+    const line = p.role === 'main' && health.line ? { line: health.line } : {}
+    appendHistory(opts.history, 'memory', { t: now, ...p, ...loop, ...line })
   }
   const recent = readHistory(opts.history, 'memory', now - 3 * HOUR)
   const load = loadPerCore()
@@ -296,6 +299,7 @@ async function evalMemory(opts, now) {
     if (p.role === 'main') {
       checks.push(loopCheck(p, health, load, capped))
       checks.push(boardCheck(p, health))
+      checks.push(lineCheck(p, health, recent, now))
     }
     const line = recent.filter((r) => r.pid === p.pid).map((r) => ({ t: r.t, value: r.rssMb }))
     const slope = slopePerHour(line)
@@ -318,20 +322,49 @@ async function evalMemory(opts, now) {
  * not a slow app.
  */
 async function probeHealth(opts) {
-  if (!opts.probe) return { loop: null, note: 'probe skipped' }
+  if (!opts.probe) return { loop: null, line: null, note: 'probe skipped' }
   const token = readToken(opts.base)
-  if (!token) return { loop: null, note: 'no pairing token' }
+  if (!token) return { loop: null, line: null, note: 'no pairing token' }
   try {
     const res = await fetch(`http://127.0.0.1:${opts.port}/api/health`, {
       headers: { authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
     })
-    if (res.status === 404) return { loop: null, note: 'no /api/health in this build' }
-    if (res.status !== 200) return { loop: null, note: `health answered ${res.status}` }
-    const loop = loopFromHealth(await res.json())
-    return loop ? { loop, note: '' } : { loop: null, note: 'health body unrecognised' }
+    if (res.status === 404) return { loop: null, line: null, note: 'no /api/health in this build' }
+    if (res.status !== 200) return { loop: null, line: null, note: `health answered ${res.status}` }
+    const body = await res.json()
+    const loop = loopFromHealth(body)
+    const line = lineFromHealth(body)
+    return loop ? { loop, line, note: '' } : { loop: null, line: null, note: 'health body unrecognised' }
   } catch {
-    return { loop: null, note: 'app not answering' }
+    return { loop: null, line: null, note: 'app not answering' }
+  }
+}
+
+/**
+ * The desktop's line at cookrew.dev: lost per hour since the previous row
+ * of the same process, and what the last ending looked like.
+ */
+function lineCheck(p, health, recent, now) {
+  const name = `main canvas line lost/h (pid ${p.pid})`
+  const line = health.line
+  if (!line) return { name, value: null, unit: '', verdict: 'ok', note: health.loop ? 'no canvasLine in this build' : health.note }
+  const previous = recent.filter((r) => r.pid === p.pid && r.line && r.t < now).sort((a, b) => b.t - a.t)[0]
+  const rate = previous ? lineLossPerHour(previous.line, line, now - previous.t) : null
+  const lostDelta = previous ? line.ended - previous.line.ended : line.ended
+  const reasons = Object.entries(line.lost).map(([k, v]) => `${k} ${v}`).join(', ')
+  const state = line.held
+    ? `held ${fmtMs(line.heldForMs)} · last frame ${fmtMs(line.sinceLastFrameMs)} ago`
+    : 'NOT held'
+  return {
+    name,
+    value: rate,
+    unit: '/h',
+    verdict: judge(rate, BUDGETS.memory.canvasLineLostPerHour),
+    note:
+      `${state} · ${lostDelta} lost since ${previous ? 'last row' : 'boot'} · since boot: ${line.ended} ended ` +
+      `(${reasons || 'none'}), ${line.linesHeld} held · last: ${line.lastReason ?? '—'} after ${fmtMs(line.lastLifetimeMs)}` +
+      `${rate === null ? ' (rate needs a previous row)' : ''}`
   }
 }
 
