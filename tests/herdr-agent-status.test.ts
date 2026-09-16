@@ -400,6 +400,111 @@ describe('seeding — the blind spot events alone leave', () => {
     feed.stop()
   })
 
+  it('seeds from a snapshot taken AFTER the subscription is written (herdr 0.9.0)', () => {
+    // herdr 0.9.0: "New lifecycle event subscriptions now start with live
+    // events rather than replaying retained history. API clients should
+    // subscribe before taking their initial snapshot to avoid missing
+    // changes." A pane that turned `working` between the list and the
+    // subscribe used to be covered by the replay; now only a second list,
+    // taken once the subscription is on the wire, can see it.
+    const socket = fakeSocket()
+    const order: string[] = []
+    let lists = 0
+    const feed = new HerdrStatusFeed({
+      session: 'cookrew',
+      configPath: '/c',
+      listPanes: () => {
+        lists += 1
+        order.push(`list${lists}`)
+        return [{ paneId: 'w1:p1', label: 'a', status: lists === 1 ? 'idle' : 'working' }]
+      },
+      resolveSocketPath: () => '/tmp/h.sock',
+      connect: () => ({
+        ...socket,
+        write(line: string) {
+          order.push('subscribe')
+          socket.write(line)
+        }
+      })
+    })
+    feed.start()
+    expect(order).toEqual(['list1', 'subscribe', 'list2'])
+    expect(feed.statusFor('a')).toBe('working')
+    feed.stop()
+  })
+
+  it('knows the pane labels before the subscription can deliver anything', () => {
+    // The labels have to be seeded BEFORE the subscribe write, or an event
+    // arriving in that window names a pane the feed has never heard of and is
+    // dropped as "not ours" — silently, with nothing announced to the boot
+    // timer that is waiting for exactly that first observation.
+    const socket = fakeSocket()
+    const seen: string[] = []
+    const feed = new HerdrStatusFeed({
+      session: 'cookrew',
+      configPath: '/c',
+      listPanes: () => [{ paneId: 'w1:p1', label: 'a', status: 'idle' }],
+      resolveSocketPath: () => '/tmp/h.sock',
+      connect: () => ({
+        ...socket,
+        write(line: string) {
+          socket.write(line)
+          socket.emit(EVENT('w1:p1', 'blocked') + '\n')
+        }
+      })
+    })
+    feed.on('status', (o: { sessionName: string; status: string }) =>
+      seen.push(`${o.sessionName}:${o.status}`)
+    )
+    feed.start()
+    expect(seen).toContain('a:blocked')
+    feed.stop()
+  })
+
+  it('announces each pane ONCE across the split seed', () => {
+    // The seed runs on both sides of the subscribe — labels first, status
+    // after — and `record` announces every known-state observation. Announcing
+    // the same pane twice would fire terminal.booted's boot timer twice.
+    const socket = fakeSocket()
+    const seen: string[] = []
+    const feed = new HerdrStatusFeed({
+      session: 'cookrew',
+      configPath: '/c',
+      listPanes: () => [
+        { paneId: 'w1:p1', label: 'a', status: 'idle' },
+        { paneId: 'w1:p2', label: 'b', status: 'working' }
+      ],
+      resolveSocketPath: () => '/tmp/h.sock',
+      connect: () => socket
+    })
+    feed.on('status', (o: { sessionName: string; status: string }) =>
+      seen.push(`${o.sessionName}:${o.status}`)
+    )
+    feed.start()
+    expect(seen).toEqual(['a:idle', 'b:working'])
+    feed.stop()
+  })
+
+  it('keeps the first list’s states when the post-subscribe snapshot comes back empty', () => {
+    // A listing that fails or races a server restart must not blank the cache:
+    // the pre-subscribe list is the older answer, but it is an answer.
+    const socket = fakeSocket()
+    let lists = 0
+    const feed = new HerdrStatusFeed({
+      session: 'cookrew',
+      configPath: '/c',
+      listPanes: () => {
+        lists += 1
+        return lists === 1 ? [{ paneId: 'w1:p1', label: 'a', status: 'working' }] : []
+      },
+      resolveSocketPath: () => '/tmp/h.sock',
+      connect: () => socket
+    })
+    feed.start()
+    expect(feed.statusFor('a')).toBe('working')
+    feed.stop()
+  })
+
   it('lets a later event override the seed', () => {
     const socket = fakeSocket()
     const feed = new HerdrStatusFeed({

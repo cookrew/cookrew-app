@@ -7,6 +7,7 @@ import { createPathReporter, postPathReport, reportedAttempts } from './report'
 import { directNavigationOffer } from './direct-offer'
 import { landingReport, navigationTiming } from './landing'
 import { setDirectOffer } from '../direct-offer-gate'
+import { offerPathRetry } from '../path-retry-gate'
 import { dataPlane, setDataPlane, subscribeDataPlane, type DataPlane } from '../data-plane'
 import type { LocalNetworkState } from '../local-network'
 import { isLocalOrigin, localNetworkState, requestLocalNetwork } from '../local-network'
@@ -289,6 +290,19 @@ const startPlaneSwitch = (): (() => void) => {
   // Every other race — the timer, `online`, a tab coming back — must never
   // raise a dialog at a phone nobody is looking at.
   let pressed = false
+  /**
+   * WHO IS WAITING FOR A RACE TO FINISH — the TRY AGAIN presses, and nothing
+   * else. They are resolved rather than counted because a press that arrives
+   * while a race is already in flight must wait for THAT race: the loop's
+   * one-at-a-time guard means `raceNow()` starts nothing in that case, and a
+   * button that stopped saying TRYING… without a result would be lying.
+   */
+  let waitingForRace: Array<() => void> = []
+  const raceSettled = (): void => {
+    const waiting = waitingForRace
+    waitingForRace = []
+    for (const resolve of waiting) resolve()
+  }
   // The link store announces on EVERY change it holds — latency, probing, the
   // desktop's name — and only the transport's own state is evidence about the
   // plane. Without this the latency recorded by each successful request would
@@ -330,6 +344,16 @@ const startPlaneSwitch = (): (() => void) => {
       // far end is still the Mac before the session keeps using it.
       if (reconnected) recheck.now()
     }),
+    // TRY AGAIN on the sheet: the same race, asked for by a person rather than
+    // a timer. No `pressed` — a retry must not spend the one permission
+    // prompt a reader will ever be shown; that is the ALLOW button's job.
+    offerPathRetry(
+      () =>
+        new Promise<void>((resolve) => {
+          waitingForRace.push(resolve)
+          raceNow()
+        })
+    ),
     offerLocalNetwork(async () => {
       await askForLocalNetwork()
       // Whatever the browser decided, look again immediately — a grant that
@@ -342,6 +366,8 @@ const startPlaneSwitch = (): (() => void) => {
       everyMs: PLANE_PROBE_EVERY_MS,
       ready: (run) => void (raceNow = run),
       race: () =>
+        // `finally` rather than `then`: a race that threw still ended, and a
+        // TRY AGAIN press waiting on it must be released either way.
         switchPlaneIfBetter({
           plane: dataPlane,
           card: fetchCard,
@@ -395,7 +421,7 @@ const startPlaneSwitch = (): (() => void) => {
             pressed = false
             return may
           }
-        })
+        }).finally(raceSettled)
     })
   ]
   return () => offs.forEach((off) => off())

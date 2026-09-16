@@ -32,7 +32,6 @@ export type CrIconName =
   | 'translate'
   | 'external'
   | 'clipboard'
-  | 'copy'
   /** Gated marketplace preset: the chip's lock badge (§8). */
   | 'lock'
 
@@ -103,13 +102,6 @@ const ICONS: Record<CrIconName, React.JSX.Element> = {
       <rect x="3.4" y="3.2" width="9.2" height="10.4" />
       <path d="M6 3.2 V1.8 H10 V3.2" />
       <path d="M5.6 7 H10.4 M5.6 9.6 H8.6" />
-    </g>
-  ),
-  // Two offset sheets: the universal "copy" on the same 16-grid.
-  copy: (
-    <g {...STROKE} strokeWidth={1.8} strokeLinecap="square">
-      <rect x="5.4" y="5.4" width="8.4" height="8.4" />
-      <path d="M10.6 5.4 V2.2 H2.2 V10.6 H5.4" />
     </g>
   ),
   // Padlock on the same 16-grid as the rest: square body, square shackle. It

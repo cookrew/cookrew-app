@@ -1,5 +1,6 @@
 import type { ServerResponse } from 'node:http'
 import { ASSET_VERSION } from './assets-bundle'
+import { BRAND_MARK_SVG } from './site-brand'
 import { GITHUB_REPO, SITE_ORIGIN } from './site-content'
 import { jsonLd } from './site-seo'
 
@@ -181,8 +182,8 @@ export function respondPage(response: ServerResponse, rendered: Page): void {
   response.end(payload)
 }
 
-/** The header mark: the brand's C hand on a dark tile, amber through the mesh's alpha. */
-const LOGO = `<span class="mark-c" aria-hidden="true"><i></i></span>`
+/** The header mark: the glove and its glasses. */
+const LOGO = BRAND_MARK_SVG
 
 /** The app's four fonts, from the bundle; `optional` because a font that arrives late must not shift the page — they are preloaded, so it rarely does. */
 const FONT_FACES = `
@@ -282,7 +283,7 @@ a{color:inherit}
 .hdr .wrap{display:flex;align-items:center;gap:14px;min-height:56px;flex-wrap:wrap;padding-top:8px;padding-bottom:8px}
 @media (max-width:760px){.hdr .wrap>.chip{display:none}.hdr nav.top{margin-left:0;width:100%}}
 .mark{display:flex;align-items:center;gap:9px;text-decoration:none;font:700 15px var(--font-pixel);letter-spacing:.12em}
-.mark-c{width:26px;height:26px;border-radius:6px;background:#14110a;display:grid;place-items:center;flex:0 0 auto}.mark-c i{display:block;width:21px;height:17px;background:linear-gradient(160deg,#e9b949,#ffd77a 60%,#fff3ad);-webkit-mask:url(/assets/c-hand.png?v=${ASSET_VERSION}) center/contain no-repeat;mask:url(/assets/c-hand.png?v=${ASSET_VERSION}) center/contain no-repeat;-webkit-mask-mode:alpha;mask-mode:alpha}
+.mark-coo{width:40px;height:28px;display:block;flex:0 0 auto;overflow:visible}
 .mark b{color:var(--amber-deep)}
 nav.top{display:flex;gap:6px;margin-left:auto;flex-wrap:wrap}
 .chip{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:uppercase;color:var(--ink);background:var(--cream-md);border:1.5px solid var(--line);padding:2px 6px;white-space:nowrap;display:inline-flex;align-items:center;gap:5px}

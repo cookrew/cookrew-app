@@ -34,31 +34,29 @@ const row = async (offer: DirectOffer | null): Promise<string> => {
 }
 
 describe('the panel', () => {
-  it('says why Safari cannot do this, in one sentence', async () => {
+  it('says what was measured, not a cause read off the user agent', async () => {
     const markup = await row({ origin: LAN, kind: 'lan', family: 'Safari' })
-    expect(markup).toContain('Safari on iPhone cannot reach your Mac from this page')
-    expect(markup).toContain('Apple never asks it for local-network permission')
-    expect(markup).toContain('Open the Mac directly on Wi-Fi instead:')
-    // Never the site-settings sentence: there is no such setting on iOS, and
-    // sending somebody to look for one is the failure this replaces.
+    expect(markup).toContain('That Mac did not answer in time.')
+    expect(markup).toContain('Try again, or open it directly:')
+    // Never the site-settings sentence: there is no such setting on iOS. And
+    // never the platform verdict either — the rows under this say "timed out"
+    // and the permission line above them is where a cause belongs.
     expect(markup).not.toContain('site settings')
+    expect(markup).not.toContain('Apple never asks')
   })
 
-  it('blames iOS rather than the brand in any other browser on the phone', async () => {
-    // Chrome 152 on the owner's iPhone failed identically to Safari 26, and a
-    // sentence saying "Apple never asks IT" would send that reader into
-    // Chrome's own settings looking for a switch iOS does not expose.
-    const markup = await row({ origin: LAN, kind: 'lan', family: 'Chrome' })
-    expect(markup).toContain('Chrome on iPhone cannot reach your Mac from this page')
-    expect(markup).toContain('iOS never asks a browser for local-network permission')
-    expect(markup).toContain('Open the Mac directly on Wi-Fi instead:')
-    expect(markup).not.toContain('Apple never asks it')
-    expect(markup).not.toContain('site settings')
+  it('says the same thing whichever browser the phone is running', async () => {
+    const safari = await row({ origin: LAN, kind: 'lan', family: 'Safari' })
+    const chrome = await row({ origin: LAN, kind: 'lan', family: 'Chrome' })
+    expect(chrome).toBe(safari)
   })
 
-  it('offers one button, worn as a button and named for the network', async () => {
+  it('offers TRY AGAIN first, then the navigation named for the network', async () => {
     const lan = await row({ origin: LAN, kind: 'lan', family: 'Safari' })
+    expect(lan).toContain(`>${DIRECT_OFFER_COPY.retry}</button>`)
     expect(lan).toContain(`>${DIRECT_OFFER_COPY.lan}</button>`)
+    // The order the sentence names them in: race again before leaving the page.
+    expect(lan.indexOf(DIRECT_OFFER_COPY.retry)).toBeLessThan(lan.indexOf(DIRECT_OFFER_COPY.lan))
     expect(lan).toContain('cr-btn')
     const tailnet = await row({ origin: TAILNET, kind: 'tailnet', family: 'Safari' })
     expect(tailnet).toContain(`>${DIRECT_OFFER_COPY.tailnet}</button>`)
@@ -104,7 +102,7 @@ describe('the sheet', () => {
       />
     )
     expect(markup).toContain(DIRECT_OFFER_COPY.lan)
-    expect(markup.indexOf('Open the Mac directly')).toBeLessThan(markup.indexOf('Why this path'))
+    expect(markup.indexOf('did not answer in time')).toBeLessThan(markup.indexOf('Why this path'))
   })
 })
 

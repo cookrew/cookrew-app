@@ -314,7 +314,11 @@ export class HerdrStatusFeed extends EventEmitter {
       this.scheduleReconnect()
       return
     }
-    this.seed(panes)
+    // The LABELS have to be in place before the first byte can arrive: an
+    // event names a pane, and a pane whose label this feed has not seen is
+    // dropped as "not ours". Only the labels — the STATUS seed waits until the
+    // subscription is on the wire, so each pane is announced exactly once.
+    this.seedLabels(panes)
     this.replaceSocket(socket)
     this.buffer = ''
 
@@ -358,7 +362,23 @@ export class HerdrStatusFeed extends EventEmitter {
     } catch {
       disconnected()
       this.closeSocket(socket)
+      return
     }
+    // SUBSCRIBE FIRST, SNAPSHOT SECOND. herdr 0.9.0 stopped replaying retained
+    // history into a new subscription — "API clients should subscribe before
+    // taking their initial snapshot to avoid missing changes" — so a pane that
+    // changed between the list above and this write is a change nobody hears
+    // about, and the cache would hold its OLD state until the next transition.
+    // The authoritative seed is therefore a second list, taken once the
+    // subscription is on the wire: a 10 ms fork, measured against 56 panes.
+    //
+    // NOTHING IS LOST TO THE OVERWRITE. `listPanes` is synchronous, so no
+    // 'data' callback can run while it is out; an event this feed has already
+    // ingested was sent before the snapshot was taken, and the snapshot is the
+    // newer of the two. An event still in flight lands after the seed and wins,
+    // which is the right way round.
+    const fresh = this.listPanes()
+    this.seed(fresh.length > 0 ? fresh : panes)
   }
 
   /**
@@ -367,11 +387,24 @@ export class HerdrStatusFeed extends EventEmitter {
    * so boot timers retain the existing "observation arrived" contract.
    */
   private seed(panes: FeedPane[]): void {
-    this.labels = new Map(panes.map((pane) => [pane.paneId, pane.label]))
-    this.status.clear()
+    this.seedLabels(panes)
     for (const pane of panes) {
       if (pane.status) this.record(pane.label, pane.status)
     }
+  }
+
+  /**
+   * The INVENTORY half of a seed: which pane wears which session name.
+   *
+   * Split out so connect() can put the labels in place before the subscription
+   * can deliver anything, WITHOUT announcing a state twice. `record` emits on
+   * every known-state observation — the boot timer treats the first one as the
+   * agent becoming reachable — so a seed that ran on both sides of the
+   * subscribe would announce each pane twice and fire that timer twice.
+   */
+  private seedLabels(panes: FeedPane[]): void {
+    this.labels = new Map(panes.map((pane) => [pane.paneId, pane.label]))
+    this.status.clear()
   }
 
   /** End the prior socket after removing its authority over this feed. */

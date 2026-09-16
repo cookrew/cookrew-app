@@ -294,24 +294,43 @@ describe('which user agents are on the platform with no permission', () => {
 })
 
 describe('the sentence the offer carries', () => {
-  it('blames Apple by name in Safari, which is where the fact was found', () => {
+  it('states the MEASUREMENT, and names the two things left to do', () => {
+    // The rows under this sentence say "timed out". The sentence used to say
+    // why — off the user agent, not off the evidence — so it now says what
+    // was measured and leaves the cause to the permission line above the rows
+    // (owner's wording, 2026-09-11).
     expect(directOfferWhy('Safari')).toBe(
-      'Safari on iPhone cannot reach your Mac from this page — Apple never asks it for local-network permission. Open the Mac directly on Wi-Fi instead:'
+      'That Mac did not answer in time. Try again, or open it directly:'
     )
   })
 
-  it('blames iOS in any other browser, because the brand is not the cause', () => {
-    expect(directOfferWhy('Chrome')).toBe(
-      'Chrome on iPhone cannot reach your Mac from this page — iOS never asks a browser for local-network permission. Open the Mac directly on Wi-Fi instead:'
-    )
-    expect(directOfferWhy('Firefox')).toContain('Firefox on iPhone cannot reach your Mac')
-    expect(directOfferWhy('Firefox')).toContain('iOS never asks a browser')
-  })
-
-  it('never sends anybody to site settings, which do not exist here', () => {
-    for (const family of ['Safari', 'Chrome', 'This browser']) {
-      expect(directOfferWhy(family)).not.toContain('site settings')
+  it('says the same thing in every browser on the phone', () => {
+    // A timeout is a timeout. Naming the platform here sent a reader to a
+    // settings screen for a cause this panel had not established.
+    for (const family of ['Safari', 'Chrome', 'Firefox', 'This browser']) {
+      expect(directOfferWhy(family)).toBe(directOfferWhy('Safari'))
     }
+  })
+
+  it('claims no cause it did not measure', () => {
+    for (const family of ['Safari', 'Chrome', 'This browser']) {
+      const why = directOfferWhy(family)
+      // Never site settings: there is no such setting on iOS.
+      expect(why).not.toContain('site settings')
+      // And never the platform verdict, which came off the user agent.
+      expect(why).not.toContain('Apple never asks')
+      expect(why).not.toContain('local-network permission')
+    }
+  })
+
+  it('KEEPS the proxy sentence, because that one was measured', () => {
+    // Chrome 152 behind a system proxy: a refusal recorded with AND without
+    // the address-space hint is a fact about that browser, not an inference,
+    // and "did not answer in time" would send that reader to look at the Mac.
+    const why = directOfferWhy('Chrome', true)
+    expect(why).toContain('system proxy')
+    expect(why).toContain('Open the Mac directly on Wi-Fi instead:')
+    expect(why).not.toContain('did not answer in time')
   })
 })
 

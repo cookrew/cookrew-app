@@ -61,42 +61,50 @@ export const LOCAL_NETWORK_COPY = {
 export const DIRECT_OFFER_COPY = {
   lan: 'Open on Wi-Fi',
   tailnet: 'Open on tailnet',
+  /** Re-run the race, for the case where the Mac was merely slow or asleep. */
+  retry: 'Try again',
+  /** While the probes are out. The press has to look like it did something. */
+  retrying: 'Trying…',
   /** On the landed page, once. The old URL is gone from the bar; say it works. */
   landed: 'Opened directly on Wi-Fi. cookrew.dev/… still works from anywhere.',
   dismiss: 'Dismiss'
 } as const
 
-/** The tail both sentences share: the fix, and the colon that introduces it. */
+/** The proxy sentence's tail: the fix, and the colon that introduces it. */
 const OPEN_INSTEAD = 'Open the Mac directly on Wi-Fi instead:'
 
 /**
- * WHOSE FAULT IT IS, WHICH IS A DIFFERENT ANSWER IN SAFARI.
+ * WHAT THE PANEL SAYS ABOUT A PATH THAT DID NOT OPEN.
  *
- * "Apple never asks it for local-network permission" is exactly right in
- * Safari and quietly wrong in Chrome, where a reader knows perfectly well that
- * Chrome has such a permission and would go looking for it in Chrome's own
- * settings. On iOS it is not Chrome's to give: every browser there is WebKit,
- * so the sentence has to name the PLATFORM. Getting that wrong sends somebody
- * to a settings screen that cannot help them, which is the whole failure this
- * copy exists to end.
+ * IT SAYS WHAT WAS MEASURED, AND THE MEASUREMENT IS A TIMEOUT. The sentence
+ * used to name the cause — "Apple never asks it for local-network permission"
+ * — and that cause was read off the USER AGENT while the rows underneath it
+ * said "timed out". Both can be true at once and only one of them was
+ * established by this panel's own evidence, so the headline now states the
+ * measurement and the platform fact stays where it belongs: on the permission
+ * line above the rows, which is where a reader goes for a cause (owner's
+ * wording, 2026-09-11).
+ *
+ * AND IT NAMES THE TWO THINGS LEFT TO DO, in the order the buttons sit in:
+ * race again, because a Mac that was asleep or a card that lagged a network
+ * hop will answer on the next pass; or leave the page for the Mac's own
+ * trusted name, which is the one path a browser with no local-network
+ * permission can still take (path/direct-offer.ts).
+ *
+ * THE PROXY SENTENCE STAYS, because it is not an inference. Chrome 152 behind
+ * a system proxy, 2026-09-08: the panel MEASURED a refusal with and without
+ * the address-space hint, which is a fact about that browser and that proxy
+ * and is the one refusal site settings cannot fix. A reader sitting at a Mac
+ * told "did not answer in time" would go and look at the Mac.
  *
  * The family is a family name — `Chrome`, `Safari`, or `This browser` when
  * nothing was recognised — never a version and never a user-agent string.
- *
- * AND THE THIRD ANSWER IS NOT A PLATFORM AT ALL. Chrome 152 on the owner's Mac
- * behind a system proxy, 2026-09-08: the browser HAS the permission and can
- * never raise the dialog, because the annotated request fails the address-space
- * check before any prompt when the proxy hides the resolved address. Saying
- * "on iPhone" to somebody sitting at a Mac would be worse than saying nothing;
- * the sentence names the proxy, which is the thing they can actually change.
  */
 export const directOfferWhy = (family: string, proxy?: boolean): string => {
   if (proxy) {
     return `${family} cannot reach your Mac from this page — a system proxy hides the address, so the browser refuses the request with and without the local-network hint. ${OPEN_INSTEAD}`
   }
-  return family === 'Safari'
-    ? `Safari on iPhone cannot reach your Mac from this page — Apple never asks it for local-network permission. ${OPEN_INSTEAD}`
-    : `${family} on iPhone cannot reach your Mac from this page — iOS never asks a browser for local-network permission. ${OPEN_INSTEAD}`
+  return 'That Mac did not answer in time. Try again, or open it directly:'
 }
 
 /**

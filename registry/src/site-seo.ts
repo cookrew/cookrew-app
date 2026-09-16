@@ -1,7 +1,6 @@
 import type { ListedDoor } from './site'
 import type { Release } from './releases'
 import { DEFINITION, FACTS, FEATURES, GITHUB_REPO, SITE_NAME, SITE_ORIGIN, type Faq } from './site-content'
-import { ASSETS } from './assets-bundle'
 
 /**
  * WHAT A MACHINE READS — structured data and the crawl files.
@@ -179,9 +178,7 @@ export function sitemapXml(allDoors: readonly ListedDoor[]): string {
 }
 
 /** The pixel mark: a phosphor screen with three lines and a blinking cursor. */
-/** The favicon: the brand's C hand on a dark rounded tile. The mesh render is cyan; a colour
-    matrix turns its green channel into amber so one bitmap serves every colouring. */
-export const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><filter id="amber" color-interpolation-filters="sRGB"><feColorMatrix values="0 1 0 0 0  0 .8 0 0 0  0 .31 0 0 0  0 0 0 1 0"/></filter></defs><rect width="64" height="64" rx="14" fill="#14110a"/><image href="data:image/png;base64,${ASSETS['c-hand.png'].body}" x="9" y="12" width="46" height="38" filter="url(#amber)"/></svg>`
+export { FAVICON_SVG } from './site-brand'
 
 export function webManifest(): string {
   return JSON.stringify({
