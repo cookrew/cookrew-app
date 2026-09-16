@@ -316,9 +316,9 @@ export class HerdrStatusFeed extends EventEmitter {
     }
     // The LABELS have to be in place before the first byte can arrive: an
     // event names a pane, and a pane whose label this feed has not seen is
-    // dropped as "not ours". The status half of this seed is provisional and
-    // is replaced below, once the subscription is on the wire.
-    this.seed(panes)
+    // dropped as "not ours". Only the labels — the STATUS seed waits until the
+    // subscription is on the wire, so each pane is announced exactly once.
+    this.seedLabels(panes)
     this.replaceSocket(socket)
     this.buffer = ''
 
@@ -378,7 +378,7 @@ export class HerdrStatusFeed extends EventEmitter {
     // newer of the two. An event still in flight lands after the seed and wins,
     // which is the right way round.
     const fresh = this.listPanes()
-    if (fresh.length > 0) this.seed(fresh)
+    this.seed(fresh.length > 0 ? fresh : panes)
   }
 
   /**
@@ -387,11 +387,24 @@ export class HerdrStatusFeed extends EventEmitter {
    * so boot timers retain the existing "observation arrived" contract.
    */
   private seed(panes: FeedPane[]): void {
-    this.labels = new Map(panes.map((pane) => [pane.paneId, pane.label]))
-    this.status.clear()
+    this.seedLabels(panes)
     for (const pane of panes) {
       if (pane.status) this.record(pane.label, pane.status)
     }
+  }
+
+  /**
+   * The INVENTORY half of a seed: which pane wears which session name.
+   *
+   * Split out so connect() can put the labels in place before the subscription
+   * can deliver anything, WITHOUT announcing a state twice. `record` emits on
+   * every known-state observation — the boot timer treats the first one as the
+   * agent becoming reachable — so a seed that ran on both sides of the
+   * subscribe would announce each pane twice and fire that timer twice.
+   */
+  private seedLabels(panes: FeedPane[]): void {
+    this.labels = new Map(panes.map((pane) => [pane.paneId, pane.label]))
+    this.status.clear()
   }
 
   /** End the prior socket after removing its authority over this feed. */
