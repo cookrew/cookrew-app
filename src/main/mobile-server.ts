@@ -713,12 +713,23 @@ export function companionTokenAccepted(
  * module (companion-gate.ts) for the HTTP routes, the WebSocket and the
  * bridge sighting alike.
  */
-function companionGate(presented: string | null, perDevice: (candidate: string) => boolean): boolean {
-  if (activePairingToken === null) return false
+function companionGate(
+  presented: string | null,
+  perDevice: (candidate: string) => boolean,
+  /**
+   * The Mac's root token. Defaults to the running server's, and is passed
+   * explicitly by the request path because `handle` is a legitimate entry
+   * point on its own: a caller that supplies `deps.pairingToken` without
+   * having started a server must not be refused for a singleton it never
+   * primed. The wall token one field below already reads this way.
+   */
+  root: string | null = activePairingToken
+): boolean {
+  if (root === null) return false
   return companionAccepted({
     route: 'other',
     presented,
-    rootToken: activePairingToken,
+    rootToken: root,
     perDevice,
     rootEverywhere
   })
@@ -1234,7 +1245,11 @@ export async function handle(
     // to know a gate exists at all; whether THIS credential opens it is asked
     // here, so the root-only-on-admission rule cannot be re-derived there.
     companionGate: (presented: string | null) =>
-      companionGate(presented, (candidate) => deps.identity?.admitted.accepts(candidate) ?? false),
+      companionGate(
+        presented,
+        (candidate) => deps.identity?.admitted.accepts(candidate) ?? false,
+        activePairingToken ?? deps.pairingToken ?? null
+      ),
     wallToken: activeWallToken ?? deps.wallToken
   }
   recordBridgeDevice(request, url, deps, bridgeDevice)
