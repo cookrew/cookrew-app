@@ -181,6 +181,8 @@ export const MKT_AUTH = {
   /** G3, the one door where no account is involved at all. */
   'mkt.auth.direct': V3_COPY['g3.direct'],
   'mkt.auth.action': 'SIGN IN',
+  /** G3's primary. A key is offered, not signed in with; the verb says so. */
+  'mkt.auth.action.direct': 'CONNECT',
   'mkt.auth.newaccount': 'No account yet? Take a username here and this device becomes its first.',
   'mkt.auth.dismiss': 'Not now',
   /** The 90-second challenge died while the sheet sat open. Not a cancel. */
@@ -284,8 +286,35 @@ export const MKT_INSTALL_PRICE = {
     'Sign in with your Cookrew account to download this — one tap, no password.'
 } as const
 
+/**
+ * A design cell that is two sentences — a headline and its why — kept in
+ * account-copy.ts as ONE string, because that is how the copy table writes it
+ * and one source is the whole point of V3-07. The band draws it as `said` and
+ * `why`, so it is cut once here at the first sentence boundary. Placeholders
+ * never contain the boundary, so the cut lands the same before and after fill.
+ */
+function headlineAndWhy(cell: string): { title: string; body: string } {
+  const cut = cell.indexOf('. ')
+  return cut === -1
+    ? { title: cell, body: '' }
+    : { title: cell.slice(0, cut + 1), body: cell.slice(cut + 2) }
+}
+
+const NO_SEAT = headlineAndWhy(V3_COPY['g2.no-seat'])
+const BUDGET = headlineAndWhy(V3_COPY['g2.budget'])
+
 /** 403 — six reasons, six next actions. One word for all of them was the bug. */
 export const MKT_DENIED_REASONS = {
+  /**
+   * G2 — the registry's seat rung, the one 403 that stays on the rail. Both
+   * people are named: the person refused (the usual cause is being signed in
+   * as somebody else) and the person who can say yes. Cut 1 offers BUY only;
+   * ASK becomes a request in the owner's queue when V3-11 lands.
+   */
+  'mkt.denied.no_seat.title': NO_SEAT.title,
+  'mkt.denied.no_seat.body': NO_SEAT.body,
+  'mkt.denied.no_seat.action': 'BUY A SEAT · {price}',
+
   'mkt.denied.seat_limit.title': 'No seat available',
   'mkt.denied.seat_limit.body':
     'All {n} seats on this licence are in use: {deviceList}. Manage them on {author}’s page.',
@@ -328,11 +357,16 @@ export const MKT_DENIED_REASONS = {
    * the one move that is yours.
    */
 
-  /** 429 — the OWNER's lent budget, not the caller's payment. Nothing to buy. */
+  /**
+   * 429 — the OWNER's lent budget, not the caller's payment. Nothing to buy.
+   * G2: the sheet retries on its own in fifteen minutes, and the sentence says
+   * so — otherwise the person sits refreshing something already waiting for
+   * them. The button does the same thing now, so it is labelled with it; the
+   * old ASK ITS OWNER went nowhere.
+   */
   'mkt.denied.budget.title': 'This team is out of sessions',
-  'mkt.denied.budget.body':
-    'Its owner lends it a fixed number and they are used up. Nothing was charged — a payment now would buy a session that cannot start.',
-  'mkt.denied.budget.action': 'ASK ITS OWNER',
+  'mkt.denied.budget.body': `Its owner lends it a fixed number and they are used up. Nothing was charged — a payment now would buy a session that cannot start. ${BUDGET.body}`,
+  'mkt.denied.budget.action': 'TRY AGAIN',
 
   /** 503 — a paid door with no working rail. Refusing to quote, not to serve. */
   'mkt.denied.payment_unavailable.title': "This team can't take payment right now",
@@ -508,28 +542,14 @@ export function blockedCopy(
  * The rule, and `identityVocabularyLeaks()` below enforces it: an account
  * string never mentions words, fingerprints or reading aloud; a six-word string
  * never mentions accounts or signing in. They may not appear in one sheet.
+ *
+ * IDENTITY v3 (G3, G5) TOOK THE SIX WORDS OUT OF THIS MODULE. The ceremony's
+ * strings (MKT_ENROL) left with the call door they dressed: no surface mounted
+ * it, and the unlisted door it stood for is now the DIRECT walk, where this
+ * Mac's own key identifies it and nobody reads anything to anybody. The wall
+ * stays, as a function, so a ceremony sentence cannot quietly come back in
+ * account clothing.
  */
-
-/** The six-word ceremony. LAN, human-to-human. No account vocabulary, ever. */
-export const MKT_ENROL = {
-  'mkt.enrol.title': 'Read these to each other',
-  'mkt.enrol.body':
-    'You should both see the same six words. Same words means the same key. Different words means stop — you are not enrolling the key you think you are.',
-  'mkt.enrol.channel': 'Say them out loud on a call, not over this connection.',
-  /** The owner's act: the label states the claim the click makes. */
-  'mkt.enrol.action.owner': 'I COMPARED THESE · ENROL',
-  /** The caller's act. Different verb, because they enrol nobody. */
-  'mkt.enrol.action.caller': 'I READ THESE ALOUD · CONNECT',
-  'mkt.enrol.dismiss': 'Cancel',
-  /** The one wrong paste that is a security event rather than a typo. */
-  'mkt.enrol.paste.private':
-    "That's a private key — don't share it. Cookrew hasn't stored it. Ask them for their public key, and if it went over a channel someone else can read, they should replace the pair.",
-  'mkt.enrol.paste.notakey': "That doesn't look like a public key.",
-  'mkt.enrol.paste.wrongtype': "That's a {type} key. Cookrew callers use ed25519.",
-  'mkt.enrol.paste.malformed':
-    'That key is incomplete — it may have been cut off when copied.',
-  'mkt.enrol.paste.duplicate': 'You already enrolled this key as {name}.'
-} as const
 
 /** Saving to the account (R31). Private is the load-bearing word. */
 export const MKT_SAVE = {

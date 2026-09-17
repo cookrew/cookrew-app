@@ -22,14 +22,21 @@
  * (door, step id, state). A string baked in here would freeze the wording and
  * make Magpie's fixtures assert copy instead of behaviour.
  *
- * TWO DOORS, ONE WALK.
- *   • install (Door A) — buy/download a copy: identify → [pay] → open. The pay
- *     step is ALWAYS present; when the preset is free it is a `skip` (dashed),
- *     because a sheet that hid it would be lying about what it did not ask.
- *   • call (Door B) — a live line: identify → open. There is no pay slot at all,
- *     by R5 — a call answers 200/403 only and never takes money inline; seat
- *     credit is prepaid at install, so the wallet never interrupts a
- *     conversation and so the rail must not draw a step that cannot occur.
+ * TWO DOORS, ONE WALK (identity v3, G1–G3).
+ *   • install — a team the directory LISTS: identify → seat → [pay] → open.
+ *     Identity is the Cookrew account; the seat is the registry's 403 rung
+ *     (a paid team admits seated accounts only); the pay step is the door's
+ *     402 at session start. Seat and pay are ALWAYS present on this door: when
+ *     the team is free they are `skip` (dashed), because a sheet that hid them
+ *     would be lying about what it did not ask.
+ *   • direct — a door the directory does NOT list (a Mac on this Wi-Fi, an
+ *     unpublished team): identify → [pay] → open. Identity is this Mac's own
+ *     caller key and nothing follows you elsewhere, so there is no seat slot
+ *     at all — no registry is involved and none could seat anybody. The pay
+ *     slot stays: a dialled paid door still charges at its own 402.
+ *
+ * The old `call` door (the six-word ceremony) is gone with the ceremony: it had
+ * no mount in the renderer and nobody could walk it.
  */
 
 /**
@@ -39,11 +46,18 @@
  */
 export const CREDIT_DENIAL = 'balance_empty'
 
-/** Which door the caller came through — it decides the shape of the walk. */
-export type GateDoor = 'install' | 'call'
+/**
+ * The registry's seat rung, as a denial reason. Unlike every other 403 it is a
+ * PLACE ON THE RAIL: the walk lights the seat step rather than leaving the
+ * rail, because the person is one purchase (or one grant) from continuing.
+ */
+export const SEAT_DENIAL = 'no_seat'
 
-/** The three step slots, in the gate's own order. */
-export type StepId = 'identify' | 'pay' | 'open'
+/** Which door the caller came through — it decides the shape of the walk. */
+export type GateDoor = 'install' | 'direct'
+
+/** The four step slots, in the gate's own order. */
+export type StepId = 'identify' | 'seat' | 'pay' | 'open'
 
 /**
  * A step's state on the rail. `skip` is the load-bearing one: a step that never
@@ -59,9 +73,10 @@ export type StepState = 'done' | 'now' | 'todo' | 'skip'
  * one-line receipt); a `todo` or `skip` step is a tick with no band, so the
  * sheet gets SHORTER as you succeed and never previews a step you have not
  * reached. `403-credit` is the one 403 that wears amber, not rose — a
- * balance you can top up, per R11.
+ * balance you can top up, per R11. `403-seat` is the seat rung, amber too:
+ * a seat is a thing to buy, not a stop.
  */
-export type BandVariant = '401' | '402' | '403' | '403-credit' | 'open'
+export type BandVariant = '401' | '402' | '403' | '403-credit' | '403-seat' | 'open'
 
 export interface WalkStep {
   id: StepId
@@ -80,9 +95,8 @@ export interface WalkTerms {
 }
 
 /**
- * The pricing the install door carries in. `null` means free — the pay step
- * still appears, as a `skip`. `call` door pricing is prepaid credit, not an
- * inline charge, so it is never passed here.
+ * The pricing the door carries in. `null` means free — the pay step (and, on
+ * the install door, the seat step) still appears, as a `skip`.
  */
 export interface WalkPricing {
   model: 'one-time' | 'per-call'
@@ -105,7 +119,7 @@ export type GatePhase =
 export interface GateScene {
   door: GateDoor
   phase: GatePhase
-  /** Present on the install door; null when free. Absent on the call door. */
+  /** The door's price; null when free. */
   pricing?: WalkPricing | null
   /** The version you leave with — the violet pin mark. e.g. 'V4'. */
   pin?: string | null
@@ -114,7 +128,8 @@ export interface GateScene {
 /**
  * The render model. A happy-path scene is a `walk` (the rail); a refusal is its
  * own kind because the design draws it as bands without a rail — a 403 is not a
- * place on the journey, it is the journey stopping.
+ * place on the journey, it is the journey stopping. The seat rung is the one
+ * exception, and it comes back as a `walk` with the seat step live.
  */
 export type GateWalk =
   | { kind: 'walk'; door: GateDoor; steps: WalkStep[]; pin: string | null }
@@ -122,12 +137,34 @@ export type GateWalk =
   | { kind: 'gone' }
   | { kind: 'error'; status: number }
 
-/** Does this door carry a pay slot at all? Only the install door can charge. */
-function hasPaySlot(door: GateDoor): boolean {
-  return door === 'install'
+/**
+ * WHICH DOOR — the one decision the install path and the direct path split on.
+ *
+ * Listed means the address is a published name (`@handle/team`) AND the
+ * directory resolved it (GET /v1/doors/@handle/team answered with a door
+ * record). Both halves matter: a dialled address has no name for a registry
+ * to know, and a name the directory does not answer for is not a team anyone
+ * can be seated at. Everything else is DIRECT — this Mac's own key, no
+ * account, no seat.
+ *
+ * Pure, so the desktop sheet and the phone's gate verb cannot disagree about
+ * which walk an address takes.
+ */
+export function gateDoorFor(
+  target: { door?: string | null },
+  directory: { listed: boolean } | null
+): GateDoor {
+  return typeof target.door === 'string' && target.door.length > 0 && directory?.listed === true
+    ? 'install'
+    : 'direct'
 }
 
-/** Is the pay step a real step here, or a dashed one? Free presets skip it. */
+/** The slots a door carries, in the gate's own order. */
+function stepOrder(door: GateDoor): StepId[] {
+  return door === 'install' ? ['identify', 'seat', 'pay', 'open'] : ['identify', 'pay', 'open']
+}
+
+/** Is the pay step a real step here, or a dashed one? Free doors skip it. */
 function payIsSkipped(pricing: WalkPricing | null | undefined): boolean {
   return pricing === null || pricing === undefined
 }
@@ -142,6 +179,8 @@ function bandFor(id: StepId, state: StepState): BandVariant | null {
   switch (id) {
     case 'identify':
       return '401'
+    case 'seat':
+      return '403-seat'
     case 'pay':
       return '402'
     case 'open':
@@ -150,16 +189,20 @@ function bandFor(id: StepId, state: StepState): BandVariant | null {
 }
 
 /**
- * The state of each step on the happy path, given which step is live. The
- * identify step is `done` once we are past it; the pay step is `skip` when free
- * regardless of where we are; the open step is `now` only when served.
+ * The state of each step on the happy path, given which step is live. A step
+ * before the live one is `done`; the seat and pay steps are `skip` when the
+ * door is free regardless of where we are — a free team demands neither, and
+ * the registry's seat rung admits without a seat there; the open step is
+ * `now` only when served.
  */
 function walkSteps(door: GateDoor, live: StepId, pricing: WalkPricing | null | undefined): WalkStep[] {
-  const order: StepId[] = hasPaySlot(door) ? ['identify', 'pay', 'open'] : ['identify', 'open']
+  const order = stepOrder(door)
   const liveIndex = order.indexOf(live)
 
   return order.map((id, index): WalkStep => {
-    if (id === 'pay' && payIsSkipped(pricing)) {
+    // The live step is never dashed: if the gate is asking, it was demanded,
+    // whatever the price line said.
+    if ((id === 'pay' || id === 'seat') && payIsSkipped(pricing) && index !== liveIndex) {
       return { id, state: 'skip', band: null }
     }
     const state: StepState = index < liveIndex ? 'done' : index === liveIndex ? 'now' : 'todo'
@@ -169,7 +212,8 @@ function walkSteps(door: GateDoor, live: StepId, pricing: WalkPricing | null | u
 
 /**
  * Derive the sheet's render model from one scene. Total over the phase: every
- * phase maps to exactly one model, and a refusal is never a rail step.
+ * phase maps to exactly one model, and a refusal is never a rail step — except
+ * the seat rung, which is the rail's own third slot lighting up.
  */
 export function gateWalk(scene: GateScene): GateWalk {
   const { door, phase, pricing = null, pin = null } = scene
@@ -179,20 +223,18 @@ export function gateWalk(scene: GateScene): GateWalk {
       return { kind: 'walk', door, steps: walkSteps(door, 'identify', pricing), pin }
 
     case 'pay':
-      // A pay phase on a door with no pay slot is a contradiction the gate
-      // cannot produce (R5), so it collapses to identify rather than inventing
-      // a step the rail has no room for.
-      return {
-        kind: 'walk',
-        door,
-        steps: walkSteps(door, hasPaySlot(door) ? 'pay' : 'identify', pricing),
-        pin
-      }
+      return { kind: 'walk', door, steps: walkSteps(door, 'pay', pricing), pin }
 
     case 'open':
       return { kind: 'walk', door, steps: walkSteps(door, 'open', pricing), pin }
 
     case 'denied':
+      // The seat rung is answered on the rail, but only where a seat can exist.
+      // A direct door has no registry to seat anyone, so `no_seat` from one is
+      // a refusal like any other rather than a slot the rail has no room for.
+      if (phase.reason === SEAT_DENIAL && door === 'install') {
+        return { kind: 'walk', door, steps: walkSteps(door, 'seat', pricing), pin }
+      }
       return {
         kind: 'denied',
         reason: phase.reason,
@@ -212,7 +254,7 @@ export function gateWalk(scene: GateScene): GateWalk {
  * Bridge the download client's per-response `GateStep` (preset-download.ts) to a
  * scene phase, so a caller that already loops the gate can feed the sheet in one
  * call. The step kinds map one-to-one; `ready` is the served state, `enrol` is
- * the identify state (the enrolment ceremony IS proving identity on Door B).
+ * the identify state (proving identity, whichever door).
  */
 export function phaseFromGateStep(
   step: { kind: string; reason?: string; retryable?: boolean; status?: number }
