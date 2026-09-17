@@ -9,6 +9,7 @@ import {
   type CallerKey
 } from './caller-identity'
 import type { PaymentRequirements } from './x402-rail'
+import { teamPath } from './door-seats'
 
 /**
  * THE CALLER'S SIDE OF THE GATE — what the import sheet asks a door.
@@ -33,6 +34,8 @@ export interface ServeTargetRef {
 
 /** What the door is saying, in the gate sheet's vocabulary. */
 export type AdmissionPhase =
+  /** Nobody is signed in on this Mac, so a listed door cannot be asked yet. */
+  | { kind: 'identify' }
   | { kind: 'open' }
   | { kind: 'pay'; rails: AdmissionRail[] }
   | { kind: 'denied'; reason: string; retryable: boolean }
@@ -87,8 +90,16 @@ async function api(
 }
 
 /**
- * Sign in and return the Bearer. The token stays in the main process: the
- * renderer drives the sheet, it never holds the credential.
+ * THE DIRECT WALK's sign-in — this Mac's own key, and return the Bearer. The
+ * token stays in the main process: the renderer drives the sheet, it never
+ * holds the credential.
+ *
+ * IDENTITY v3 (G1, G3): this is offered at UNLISTED doors only — a Mac on this
+ * Wi-Fi, an unpublished team. A door the directory lists is entered with the
+ * account (`admitWithAccount` below), because a seat is bought and granted by
+ * username and a key-holder sub can never be the person the seat names.
+ * index.ts decides which by `gateDoorFor`; this function does not know and
+ * must not guess.
  */
 /** Where this device keeps its keys. Injectable so a test needs no homedir. */
 export interface CallerKeyStore {
@@ -286,4 +297,144 @@ export async function startStripeCheckout(
 /** The `X-PAYMENT` a settled Checkout session is presented as. */
 export function stripePaymentHeader(session: string): string {
   return Buffer.from(JSON.stringify({ rail: 'stripe', session })).toString('base64')
+}
+
+/**
+ * ── THE INSTALL WALK: the account at a listed door (identity v3, G1) ─────────
+ *
+ * What the web's line.js already does, done here for the desktop: ask
+ * cookrew.dev for a CALL TOKEN with this Mac's session, present it at the door
+ * as `{v2Token}`, and read the ladder — 401 (no account here) → 403 (no seat
+ * at a paid team) → the door's 402 at session start → open.
+ *
+ * The seat follows the ACCOUNT, so the token names the person: the door seats
+ * `acct-<username>`, the same sub the web seated, and a session bought on the
+ * web is the session this Mac opens. That is the whole reason the caller key
+ * is not offered here.
+ */
+
+/** The account, as this module needs it — the one authed call, and who. */
+export interface AccountForDoors {
+  /** This Mac's session on cookrew.dev, spent on one path. Mirrors Accounts. */
+  authedResponse(
+    pathname: string,
+    init?: { method?: string; body?: string }
+  ): Promise<{ ok: true; response: Response } | { ok: false; reason: string }>
+  /** Who is signed in on this Mac, or null. */
+  account(): { username: string } | null
+}
+
+/** What cookrew.dev said when asked for the door's word. */
+export type CallTokenAnswer =
+  | { kind: 'token'; token: string; account: string; seat: string | null }
+  /** No account on this Mac, or its session is not live: the person must sign in first. */
+  | { kind: 'identify' }
+  /** The account is real and holds no seat at this paid team. */
+  | { kind: 'no_seat' }
+  /** cookrew.dev could not be reached. */
+  | { kind: 'offline' }
+  | { kind: 'refused'; status: number }
+
+/**
+ * POST /v2/teams/@owner/team/call-token — 201 with the seat that admits us, 403
+ * no_seat for a paid team the account is not seated at. A refusal from the
+ * session itself (no account, expired, 401) is `identify`: the next step is
+ * the account sheet, not a retry.
+ */
+export async function mintCallToken(
+  account: AccountForDoors,
+  team: string
+): Promise<CallTokenAnswer> {
+  const sent = await account.authedResponse(`${teamPath(team)}/call-token`, {
+    method: 'POST',
+    body: '{}'
+  })
+  if (!sent.ok) {
+    return sent.reason === 'offline' ? { kind: 'offline' } : { kind: 'identify' }
+  }
+  const { response } = sent
+  let body: unknown = null
+  try {
+    body = await response.json()
+  } catch {
+    body = null
+  }
+  const answer = body as { token?: unknown; account?: unknown; seat?: unknown; error?: unknown } | null
+  if (response.status === 201 && typeof answer?.token === 'string' && typeof answer.account === 'string') {
+    return {
+      kind: 'token',
+      token: answer.token,
+      account: answer.account,
+      seat: typeof answer.seat === 'string' ? answer.seat : null
+    }
+  }
+  if (response.status === 401) return { kind: 'identify' }
+  if (response.status === 403 && answer?.error === 'no_seat') return { kind: 'no_seat' }
+  return { kind: 'refused', status: response.status }
+}
+
+/** The whole install-walk answer: the phase, and the door Bearer when admitted. */
+export interface AccountAdmission {
+  phase: AdmissionPhase
+  /** The door's Bearer, held by main; null unless the door admitted us. */
+  token: string | null
+  /** The username the token names, when the registry answered. */
+  account: string | null
+  seat: string | null
+}
+
+/**
+ * Walk a listed door as the account. Every refusal is a phase the sheet can
+ * paint; only a door that admitted us hands back a Bearer.
+ */
+export async function admitWithAccount(
+  target: ServeTargetRef,
+  team: string,
+  account: AccountForDoors
+): Promise<AccountAdmission> {
+  const username = account.account()?.username ?? null
+  const minted = await mintCallToken(account, team)
+  switch (minted.kind) {
+    case 'identify':
+      return { phase: { kind: 'identify' }, token: null, account: username, seat: null }
+    case 'offline':
+      return { phase: { kind: 'error', status: 0 }, token: null, account: username, seat: null }
+    case 'refused':
+      return { phase: { kind: 'error', status: minted.status }, token: null, account: username, seat: null }
+    case 'no_seat':
+      return {
+        phase: { kind: 'denied', reason: 'no_seat', retryable: false },
+        token: null,
+        account: username,
+        seat: null
+      }
+    case 'token':
+      break
+  }
+
+  // The token is the whole body — a token beside a key is two claims about
+  // who is knocking, and the door refuses both (served-endpoints v2Assert).
+  const asserted = await api(target, '/api/call/assert', { body: { v2Token: minted.token } })
+  const said = asserted.body as { token?: unknown; reason?: unknown } | null
+  if (asserted.status === 200 && typeof said?.token === 'string') {
+    return {
+      phase: await openAdmission(target, said.token),
+      token: said.token,
+      account: minted.account,
+      seat: minted.seat
+    }
+  }
+  if (asserted.status === 403) {
+    // The door's own seat rung — it re-reads the token's seat claim rather
+    // than trusting that we checked.
+    return {
+      phase: { kind: 'denied', reason: typeof said?.reason === 'string' ? said.reason : 'no_seat', retryable: false },
+      token: null,
+      account: minted.account,
+      seat: minted.seat
+    }
+  }
+  // 401 here is a door whose app predates accounts (no v2 verifier wired), or
+  // one the registry does not know: nothing this Mac can do about either.
+  return { phase: { kind: 'error', status: asserted.status }, token: null, account: minted.account, seat: minted.seat }
 }

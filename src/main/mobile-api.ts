@@ -629,7 +629,10 @@ export async function handleMobileApi(
   // Six verbs, one shape: POST with a JSON body, the link in it. Positions and
   // payment receipts are validated to their shape here; everything about the
   // door — the sign-in, the 402, the placement — is the same code the desktop
-  // sheet drives, and it runs at the desktop.
+  // sheet drives, and it runs at the desktop. That includes WHICH WALK: the
+  // gate verb is serveOps.gate, whose listed/unlisted decision (gateDoorFor)
+  // enters a listed team as the account and an unlisted door with the key, so
+  // the phone cannot be seated as a different person than the desktop.
   if (method === "POST" && p.startsWith("/api/serve/")) {
     const verb = p.slice("/api/serve/".length);
     if (!["inspect", "browse", "gate", "checkout", "settle", "import"].includes(verb)) {
