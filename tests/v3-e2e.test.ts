@@ -17,6 +17,8 @@ import {
   writeAdmittedDevices
 } from '../src/main/admitted-devices'
 import { createV2CallTokenVerifier, v2KeysOverHttp } from '../src/main/v2-call-token'
+import { mintCallToken } from '../src/main/served-admission'
+import { MKT_DENIED_REASONS } from '../src/shared/marketplace-copy'
 
 /**
  * IDENTITY v3 — THE ONE CHAIN, END TO END.
@@ -330,10 +332,78 @@ describe('the seat spine steps 8 and 10 ride on', () => {
     expect(after.body.error).toBe('no_seat')
   }, SLOW)
 
-  it.todo(
-    'step 8 — the desktop gate meets 401, spends the seated call token, and the door opens with no second payment (V3-04)'
-  )
-  it.todo(
-    'step 10 — the desktop gate shows the gate.no_seat band when the ended seat is refused (V3-04)'
-  )
+  /**
+   * The desktop's own gate, driven without Electron: `mintCallToken` is the
+   * seam V3-04 put between the import walk and cookrew.dev, and `Accounts` is
+   * the AccountForDoors it is handed in the app. Everything below the seam —
+   * /api/call/assert at the door itself — needs a served app to knock on and
+   * is the real-UI pass's business; what cut 1 has to prove is that a seat
+   * bought on the web is spent here, and that ending it is felt at once.
+   */
+  it('step 8 — a guest with a web-bought seat is admitted on the desktop, with no second payment', async () => {
+    const guest = machine('Guest Desktop')
+    expect(await guest.accounts.claim({ username: 'mira', password: PASSWORD })).toMatchObject({
+      ok: true
+    })
+    const team = `@${OWNER}/${PAID_TEAM.name}`
+
+    // Before the purchase the gate says no_seat — not `pay`, not `identify`.
+    expect(await mintCallToken(guest.accounts, team)).toMatchObject({ kind: 'no_seat' })
+
+    // The web purchase, as the door reports it (step 7's output).
+    const settled = await call(
+      'POST',
+      teamRoute('seats/settle'),
+      { username: 'mira', by: 'stripe', receipt: 'stripe test receipt' },
+      sessionToken(ownerMac.base)
+    )
+    expect(settled.status).toBe(201)
+
+    // The same guest, on the desktop: a token naming the seat they already
+    // bought. NO payment rung is reached — the seat is the payment.
+    const minted = await mintCallToken(guest.accounts, team)
+    expect(minted.kind).toBe('token')
+    if (minted.kind !== 'token') return
+    expect(minted.account).toBe('mira')
+    expect(typeof minted.seat).toBe('string')
+    expect(minted.seat).not.toBeNull()
+  }, SLOW)
+
+  it('step 10 — the owner ends the seat and the next call token is refused in the gate.no_seat band', async () => {
+    const guest = machine('Ended Guest')
+    expect(await guest.accounts.claim({ username: 'bo', password: PASSWORD })).toMatchObject({
+      ok: true
+    })
+    const team = `@${OWNER}/${PAID_TEAM.name}`
+    const ownerToken = sessionToken(ownerMac.base)
+    expect(
+      (
+        await call(
+          'POST',
+          teamRoute('seats/settle'),
+          { username: 'bo', by: 'stripe', receipt: 'stripe test receipt' },
+          ownerToken
+        )
+      ).status
+    ).toBe(201)
+    const seated = await mintCallToken(guest.accounts, team)
+    expect(seated.kind).toBe('token')
+    if (seated.kind !== 'token') return
+
+    // The owner ends it.
+    const ended = await call(
+      'DELETE',
+      teamRoute(`seats/${seated.seat as string}`),
+      undefined,
+      ownerToken
+    )
+    expect(ended.status).toBe(204)
+
+    // The very next token is refused, and the gate has a band for exactly
+    // this refusal rather than a bare 403 — the sentence the sheet paints.
+    expect(await mintCallToken(guest.accounts, team)).toMatchObject({ kind: 'no_seat' })
+    expect(MKT_DENIED_REASONS['mkt.denied.no_seat.title'].length).toBeGreaterThan(0)
+    // Both people are named in it: the one refused and the one who can say yes.
+    expect(MKT_DENIED_REASONS['mkt.denied.no_seat.body']).toContain('{owner}')
+  }, SLOW)
 })
