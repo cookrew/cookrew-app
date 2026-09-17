@@ -79,6 +79,14 @@ export interface AccountIpcDeps {
   /** Republish the reach card — the reachability toggle's other half. */
   publishReach?: (reason: string) => void
   /**
+   * THIS MAC LEFT THE ACCOUNT (v3, D12): withdraw the doors it serves and let
+   * go of the relay line. Called AFTER the registry has removed the device
+   * and the file is gone — a door withdrawn ahead of a refusal would be a
+   * sign-out that failed and still took the team offline. The canvas is not
+   * this hook's business and must stay exactly as it is.
+   */
+  signedOut?: () => Promise<void> | void
+  /**
    * Keep the owner's display name and avatar where the mobile server can
    * reach them. The profile is a network read; the phone's avatar must not be.
    */
@@ -147,6 +155,9 @@ export const ACCOUNT_CHANNELS = [
   'account:profile',
   'account:devices',
   'account:revoke',
+  // v3 (D12): this device leaves the account. Password first, at cookrew.dev;
+  // the device removed there; the file removed here; the doors withdrawn.
+  'account:signOut',
   'account:recoveryCodes',
   'account:saveRecoveryCodes',
   'account:codesSaved',
@@ -371,6 +382,45 @@ async function resumeWait(
  * as one signed in with a password alone — which is the failure that started
  * this: an owner who got past the ladder would still have had a dark Mac.
  */
+/**
+ * REVOKE ANOTHER DEVICE — behind the password (v3, D12).
+ *
+ * The registry does not ask for the password on the DELETE; this Mac does,
+ * because a revoke is the one thing on the Devices tab that acts on somebody
+ * else's key, and a sheet left open on an unlocked Mac must not be enough to
+ * do it. The step-up is the same `resume` sign-out uses, so the two verbs on
+ * the tab cost the same proof.
+ */
+async function revoke(deps: AccountIpcDeps, input: unknown): Promise<AccountResult<void>> {
+  const record = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>
+  const deviceId = asString(record.deviceId)
+  if (deviceId.length === 0) return { ok: false, reason: 'bad_device' }
+  const proven = await deps.accounts.stepUp(asString(record.password))
+  if (!proven.ok) return proven
+  return deps.accounts.revokeDevice(deviceId)
+}
+
+/**
+ * SIGN OUT ON THIS MAC (v3, D12). The account class does the ordered part —
+ * password, registry, file — and this does what main owns afterwards: the
+ * request queue stops polling (there is no session to poll with), the doors
+ * come down, and the status handed back is the one an empty avatar draws.
+ */
+async function signOut(deps: AccountIpcDeps, password: string): Promise<AccountResult<AccountStatus>> {
+  const result = await deps.accounts.signOutThisMac(password)
+  if (!result.ok) return result
+  deps.approvals.stop()
+  try {
+    await deps.signedOut?.()
+  } catch (error) {
+    // The account is already gone from this Mac and from the registry; a door
+    // that would not come down is logged, not turned into a refusal of a
+    // sign-out that has already happened.
+    console.error('after sign-out:', error)
+  }
+  return { ok: true, value: accountStatus(deps) }
+}
+
 function signedIn(deps: AccountIpcDeps): AccountStatus {
   // cookrew.dev has just asked for the password and, where the account wants
   // one, a second factor. That is more than the idle lock asks for.
@@ -549,8 +599,9 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     },
     'account:devices': (): Promise<AccountResult<readonly AccountDevice[]>> =>
       deps.accounts.devices(),
-    'account:revoke': (id: unknown): Promise<AccountResult<void>> =>
-      deps.accounts.revokeDevice(asString(id)),
+    'account:revoke': (input: unknown): Promise<AccountResult<void>> => revoke(deps, input),
+    'account:signOut': (password: unknown): Promise<AccountResult<AccountStatus>> =>
+      signOut(deps, asString(password)),
     'account:recoveryCodes': (): Promise<AccountResult<readonly string[]>> =>
       attempt('New recovery codes could not be made', () => deps.accounts.recoveryCodes()),
     /**
