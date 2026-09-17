@@ -93,6 +93,10 @@
     if (!dialog) return
     const form = dialog.querySelector('#account-form') ?? dialog
     const step = input.step
+    // W4: the asked screen's sentence, from the one copy table by way of the
+    // dialog site-shell.ts rendered. Never written out again here.
+    const ASKED_LEDE =
+      dialog.dataset.askedLede ?? 'Approve this sign-in there. It shows this browser and where it is asking from.'
     let stop = null
     const done = () => {
       if (stop) clearInterval(stop)
@@ -265,7 +269,29 @@
       const line = el('p', 'meta')
       const back = button('Try another way')
       back.addEventListener('click', () => list())
-      show([head, line, back], 'Approve this sign-in there. It shows this browser and where it is asking from.')
+      /**
+       * W4 · THE NUMBER, LARGE, AND ONLY HERE.
+       *
+       * It arrived on this browser's own 401 (v2-factor-routes.ts) and it is
+       * never on the owner's approvals list — that asymmetry is the whole
+       * mechanism. Approving is now a thing that needs the ASKING screen in
+       * view, so nagging somebody from across the internet cannot be waited
+       * out: they would have to be looking at this page to answer.
+       *
+       * Absent only against a registry from before number matching; the rung
+       * still works there, so the number is drawn when there is one rather
+       * than an empty box that reads as a bug.
+       */
+      const shown = [head]
+      if (step.match) {
+        const number = el('p', 'acct-match', step.match)
+        number.setAttribute('role', 'status')
+        // Read out as digits, not as a quantity: "four seven", not "forty-seven".
+        number.setAttribute('aria-label', String(step.match).split('').join(' '))
+        shown.push(number)
+      }
+      shown.push(line, back)
+      show(shown, ASKED_LEDE)
       const tick = () => {
         line.textContent = `Waiting for an approval. Expires in ${clock(until - Date.now())}.`
       }
@@ -668,6 +694,9 @@
 
   function approvalRow(request, refresh) {
     const row = el('li')
+    // The question over the number field, rendered onto the list by
+    // site-account.ts so it comes from the one copy table.
+    const JOIN_ROW = $('me-approvals')?.dataset.joinRow ?? 'What number is on that device?'
     row.append(el('span', 'chip', 'Request'))
     const middle = el('span')
     // The sentence quotes the name the asking device gave itself (see
@@ -682,10 +711,35 @@
         `Started ${clock(Math.max(0, Date.now() - request.at))} ago · ${request.address} · expires in ${clock(request.expiresAt - Date.now())}`
       )
     )
+    /**
+     * W5 · THE NUMBER FIELD, ON APPROVE AND ON NOTHING ELSE.
+     *
+     * APPROVE is the only answer that widens what the account can be opened
+     * from, so it is the only one that has to prove the owner can see the
+     * asking device's screen. DENY and NOT ME need no number by design
+     * (v2-pending.ts): an alarm that is harder to raise than a mistake is an
+     * alarm people stop raising.
+     *
+     * The field is drawn for every request kind because the queue is
+     * approvals today; a kind that never needs a number will say so when the
+     * unified /v2/me/requests lands (V3-11) and this reads `request.kind`.
+     */
+    const number = el('input')
+    number.className = 'acct-code acct-match-field'
+    number.setAttribute('inputmode', 'numeric')
+    number.setAttribute('maxlength', '2')
+    number.setAttribute('aria-label', JOIN_ROW)
+    number.placeholder = '47'
+    middle.append(document.createElement('br'))
+    const ask = el('span', 'meta', JOIN_ROW)
+    middle.append(ask, number)
     row.append(middle)
     const answer = async (decision, question) => {
       if (question && !confirm(question)) return
-      const out = await api('POST', `/v2/me/approvals/${encodeURIComponent(request.id)}`, { decision })
+      // The number goes ONLY with approve: sending it with a denial would
+      // spend a try on an answer that never needed one.
+      const body = decision === 'approve' ? { decision, match: number.value.trim() } : { decision }
+      const out = await api('POST', `/v2/me/approvals/${encodeURIComponent(request.id)}`, body)
       if (out.status !== 204) return toast(said(out, 'That request could not be answered.'), 6000)
       if (decision === 'not-me') {
         toast('Every other device is signed out. Change your password now.', 8000)
@@ -712,20 +766,65 @@
   function watchApprovals() {
     const list = $('me-approvals')
     if (!list) return
+    const section = $('me-requests')
     const draw = async () => {
       const out = await api('GET', '/v2/me/approvals')
       if (out.status !== 200 || !Array.isArray(out.body)) return
       list.replaceChildren()
-      if (out.body.length === 0) {
-        const none = el('li')
-        none.append(el('span', 'meta', 'No device is asking to sign in. Requests appear here for ten minutes.'))
-        list.append(none)
-        return
-      }
+      /**
+       * W5 · AN EMPTY QUEUE IS NO SECTION AT ALL.
+       *
+       * It used to say "No device is asking to sign in" — a heading, a
+       * paragraph and a row to tell somebody that nothing has happened. On a
+       * page whose job is to be answered, the resting state is silence; the
+       * section appears when there is something in it and goes away again
+       * when the last row is answered.
+       */
+      if (section) section.hidden = out.body.length === 0
       for (const request of out.body) list.append(approvalRow(request, draw))
     }
     void draw()
     setInterval(draw, 5000)
+  }
+
+  /**
+   * W5 · ADD A MAC · ADD A PHONE — one join code, shown once.
+   *
+   * STEP-UP, because minting is the act that widens what the account can be
+   * opened from: the registry asks for the password again (v2-join.ts) and so
+   * this asks the reader for it. `prompt` is deliberate and not a placeholder
+   * — the CSP forbids an inline script, this page has no password field of
+   * its own outside the change-password panel, and a second panel built to
+   * collect one secret and immediately forget it is more surface, not less.
+   *
+   * THE CODE IS SHOWN AND NEVER STORED. It lives in the registry's memory for
+   * ten minutes; here it is text in a panel that the next navigation drops.
+   */
+  function wireAddDevice() {
+    const panel = $('me-join-code')
+    if (!panel) return
+    const lede = panel.dataset.addLede ?? ''
+    for (const trigger of document.querySelectorAll('[data-add-device]')) {
+      trigger.addEventListener('click', async () => {
+        const current = prompt('Type your password to add a device.')
+        if (current === null || current === '') return
+        const out = await api('POST', '/v2/me/join-codes', { current })
+        if (out.status !== 201) return toast(said(out, 'That code could not be minted.'), 6000)
+        panel.replaceChildren()
+        panel.hidden = false
+        panel.append(el('p', 'meta', lede))
+        panel.append(el('p', 'acct-join-code', out.body.code))
+        const until = el('p', 'meta')
+        until.textContent = `Expires in ${clock(out.body.expiresAt - Date.now())}.`
+        panel.append(until)
+        const hide = button('Done')
+        hide.addEventListener('click', () => {
+          panel.hidden = true
+          panel.replaceChildren()
+        })
+        panel.append(hide)
+      })
+    }
   }
 
   /* ── wiring ────────────────────────────────────────────────────────────── */
@@ -762,6 +861,7 @@
   }
   fitPasskeyButton()
   watchApprovals()
+  wireAddDevice()
 
   window.cookrewFactors = { ladder, addPasskey, addTotp, changePassword }
 })()

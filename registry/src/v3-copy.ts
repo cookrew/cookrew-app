@@ -27,6 +27,17 @@ export const WEB_V3_COPY = {
     'Sign in with your Cookrew account — @username and your password, or a code from your phone. Seats and sessions follow the account.',
   'g2.no-seat':
     '@{handle} has no seat at @{owner}/{team}. Ask @{owner} for one, or buy one — either way it follows you.',
+  'w4.join-offer': 'Have a code from another device?',
+  'w4.join-lede':
+    'Type the code from a device already on your account. No password is asked for here — the code is the permission.',
+  'w4.asked': 'Asked. On your other device, type the number below to let this browser in.',
+  'w4.join-refused':
+    'That code did not work. Ask the device you minted it on for a fresh one — a code works once, for ten minutes.',
+  'w5.join-row': 'What number is on that device?',
+  'w5.add-lede':
+    'On the new device open cookrew.dev, choose “Join with a code”, and type this. It works once, for ten minutes.',
+  'w5.requests-footer':
+    'A device asking to sign in as @{handle}. APPROVE needs the number showing on it; deny does nothing else; NOT ME signs every other device out and locks the password until you change it.',
   'w6.asked':
     "This page seats you the moment they say yes. You can close it; the seat is yours, not this tab's."
 } as const
