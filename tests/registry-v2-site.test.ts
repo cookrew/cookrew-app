@@ -129,7 +129,9 @@ describe('/me', () => {
     expect(res.headers.get('cache-control')).toBe('private, no-store')
     const body = await res.text()
     expect(body).toContain('data-signin')
-    expect(body).toContain('A seat is yours, not a browser')
+    // The lede is the shared one now (V3-07): /me stopped writing its own
+    // copy of a sentence the desktop and the companion also say.
+    expect(body).toContain('Sign in — or create an account.')
     expect(body).toContain('noindex')
   })
 
