@@ -71,7 +71,13 @@ export function ResumeLadder({
   onOver,
 }: {
   step: SecondFactorStep
-  /** The registry's own sentence for this step, when it sent one. */
+  /**
+   * THE SENTENCE OVER THE RUNGS, FROM THE CALLER. Two doors reach this card
+   * and they are not the same event: a resume says the session ended
+   * (ResumeSession), a first join says the name is on another device and
+   * this Mac is asking in (`joinLede`). Neither sentence lives in this file,
+   * so the card cannot say the wrong one to the wrong door.
+   */
   lede: string
   onSignedIn: (status: AccountStatus) => void
   /** The ladder is finished and the password step is the way back. */
@@ -152,7 +158,10 @@ export function ResumeLadder({
         }
         setRung('approve')
         setAsked(true)
-        setSaid(ACCOUNT_COPY.LADDER_ASKED)
+        // Nothing is pushed to the phone: the request sits on cookrew.dev
+        // until somebody opens it there or on another Mac, so the sentence
+        // names where to look rather than promising a ring.
+        setSaid(ACCOUNT_COPY.LADDER_ASKED_HONEST)
         // The wait is one long call rather than a timer here: main polls on
         // the two-second interval cookrew.dev's own waiting screen uses, and
         // this side simply drops the promise if the card closes.

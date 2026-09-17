@@ -5849,6 +5849,12 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   letter-spacing: 0.06em;
 }
 
+/* D13: the lock's one line about who is waiting — a sentence, not a control. */
+.cr-acct-lock-waiting {
+  color: var(--amber-deep);
+  font-weight: 600;
+}
+
 /* ---- the path badge (identity v2, M3) ----
    Top-left of the companion bar, in the hand mark's slot. Same box as the
    CANVAS ⇄ BOARD switch on purpose: it is the same kind of thing, a small
