@@ -11,6 +11,8 @@ import type { LegacyIdentity } from './v2-migrate-routes'
 import type { DoorRecord } from './doors'
 import type { NamesFeature } from './names'
 import { createHelloBurn, helloBurnTtlMs, type HelloBurn } from './hello-nonces'
+import { V2Requests } from './v2-requests'
+import { V2Events } from './v2-events'
 import { HELLO_SKEW_MS } from './hello-verify'
 
 /**
@@ -88,6 +90,10 @@ export interface V2Identity {
   trustedProxies: readonly string[]
   /** Phase 4: passkeys, authenticators, pending sign-ins and approvals. */
   factors: FactorState
+  /** Identity v3: the one queue — seat and reach requests over three stores. */
+  requests: V2Requests
+  /** Identity v3: account:changed, the roster's own feed. */
+  events: V2Events
   /**
    * The canonical public origin, when the deployment knows it. WebAuthn
    * compares an assertion's origin and rpId against a string; null means
@@ -147,6 +153,8 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
     helloNonces: createHelloBurn(helloBurnTtlMs(HELLO_SKEW_MS)),
     trustedProxies: options.trustedProxies ?? [],
     factors: createFactorState(base, { now: options.now }),
+    requests: new V2Requests(options.now),
+    events: new V2Events(options.now),
     origin: options.origin ?? null
   }
 }

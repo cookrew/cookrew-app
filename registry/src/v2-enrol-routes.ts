@@ -200,6 +200,10 @@ async function answerApproval(ctx: V2Context, username: string, id: string, keep
     // beside the one just slammed; this one is kept only so its own poll can
     // say "denied" rather than "expired".
     ctx.v2.factors.pending.closeAllFor(username, answered.approval.pending)
+    // §06: "not me" empties the queue — every seat and reach request the
+    // account is party to goes with the alarm — and every device is told.
+    ctx.v2.requests.emptyFor(username)
+    ctx.v2.events.append(username, { kind: 'not-me' })
   }
   noContent(ctx.response)
 }

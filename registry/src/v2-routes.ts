@@ -14,6 +14,13 @@ import {
 } from './v2-http'
 import { handleCertRoute } from './v2-cert-routes'
 import { handleSeatRoute, mySeats } from './v2-seat-routes'
+import {
+  decideRequest,
+  getRequest,
+  listEvents,
+  listRequests,
+  openReachRequest
+} from './v2-requests'
 import { handleMigrateRoute, legacyHolds, refuseIfLegacy } from './v2-migrate-routes'
 import type { V2Account, V2Desktop } from './v2-accounts'
 import { readReach } from './v2-reach'
@@ -52,6 +59,8 @@ export {
 
 /** Bodies: an account or a session is small; a profile carries a picture. */
 const SMALL_BODY = 16 * 1024
+/** A request id and a device id are both UUIDs on these routes. */
+const REQUEST_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const PROFILE_BODY = 192 * 1024
 
 // ── the router ───────────────────────────────────────────────────────────
@@ -466,17 +475,68 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     mySeats(ctx, signed)
     return
   }
+
+  // ── the one queue (identity v3, R1/R2) ─────────────────────────────────
+  //
+  // GET /v2/me/requests is the VIEW over join (approvals), seat and reach; the
+  // seat and reach stores are new, the join rows are read live so nothing is
+  // stored twice. The bodies of these live in v2-requests.ts; here are the
+  // mount points, kept small so V3-10's join-code routes merge beside them.
+  if (rest.length === 1 && rest[0] === 'requests' && method === 'GET') {
+    listRequests(ctx, signed)
+    return
+  }
+  if (rest.length === 1 && rest[0] === 'events' && method === 'GET') {
+    const since = Number(new URL(ctx.request.url ?? '', 'http://x').searchParams.get('since') ?? '0')
+    listEvents(ctx, signed, since)
+    return
+  }
+  if (rest.length === 2 && rest[0] === 'requests' && method === 'GET') {
+    const id = (ctx.decode(rest[1]) ?? '').toLowerCase()
+    if (!REQUEST_UUID.test(id)) {
+      refuse(response, 404, 'not_found')
+      return
+    }
+    getRequest(ctx, signed, id)
+    return
+  }
+  if (rest.length === 2 && rest[0] === 'requests' && method === 'POST') {
+    const id = (ctx.decode(rest[1]) ?? '').toLowerCase()
+    if (!REQUEST_UUID.test(id)) {
+      refuse(response, 404, 'not_found')
+      return
+    }
+    await decideRequest(ctx, signed, id)
+    return
+  }
+  if (rest.length === 3 && rest[0] === 'desktops' && rest[2] === 'reach-requests' && method === 'POST') {
+    const target = (ctx.decode(rest[1]) ?? '').toLowerCase()
+    if (!REQUEST_UUID.test(target)) {
+      refuse(response, 404, 'not_found')
+      return
+    }
+    openReachRequest(ctx, signed, target)
+    return
+  }
   if (rest.length === 1 && rest[0] === 'devices' && method === 'GET') {
     v2Json(response, 200, { devices: meBody(account, claims.dev).devices })
     return
   }
   if (rest.length === 2 && rest[0] === 'devices' && method === 'DELETE') {
     const id = (ctx.decode(rest[1]) ?? '').toLowerCase()
+    // The name, read BEFORE the revoke removes it, so the roster event can
+    // quote which device left.
+    const goneName = account.devices.find((d) => d.id === id)?.name
     const out = v2.accounts.revokeDevice(account.username, id)
     if (!out.ok) {
       refuse(response, out.reason === 'last_device' ? 409 : 404, out.reason)
       return
     }
+    // §06: revoking a device voids its pending requests, and every device is
+    // told. The reach requests it made or was aimed at cannot be answered any
+    // more, so they go now rather than expiring quietly.
+    v2.requests.voidDevice(id)
+    v2.events.append(account.username, { kind: 'revoked', ...(goneName === undefined ? {} : { device: goneName }) })
     // Revoking the device in your hand is allowed, and it ends this session —
     // so the browser is handed an empty cookie rather than one that no longer
     // opens anything.
