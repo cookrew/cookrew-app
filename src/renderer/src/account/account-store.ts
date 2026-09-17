@@ -1,3 +1,4 @@
+import { V3_COPY, accountCopy } from '../../../shared/account-copy'
 import {
   LOCK_CHOICES,
   MIN_PASSWORD,
@@ -44,9 +45,13 @@ import {
  * the screen.
  */
 export const ACCOUNT_COPY = {
-  /** D1 hover, no account. */
-  NO_ACCOUNT:
-    'Claim a username — serve teams and reach this Mac from anywhere. Everything here works without one.',
+  /**
+   * D1 hover, no account — now from the one source (V3-07).
+   *
+   * v2 said "Claim a username", which described our database. v3 says the two
+   * things a person is deciding between, and that neither is required.
+   */
+  NO_ACCOUNT: V3_COPY['avatar.no-account'],
   /** D2, under the password field. */
   PASSWORD_RULE:
     'At least 12 characters. It unlocks Cookrew on this Mac and claims your name on another device. It goes only to cookrew.dev.',
@@ -159,14 +164,29 @@ export function legacyTakenSentence(username: string): string {
   return `@${normaliseUsername(username)} already exists from before passwords — sign in with the key that holds it and set a password.`
 }
 
-/** "@anvz is someone else's. Try another." — the table, with the name in it. */
+/**
+ * A name that exists, said on the CREATE side.
+ *
+ * v2 answered "@anvz is someone else's. Try another." — which is true, useless,
+ * and wrong about what the person wants: on their own name they are one field
+ * away from being signed in, not in need of a different name. v3 hands them the
+ * other door (D9 crossing).
+ */
 export function takenSentence(username: string): string {
-  return `@${normaliseUsername(username)} is someone else's. Try another.`
+  return accountCopy('d9.crossing.taken', { handle: normaliseUsername(username) })
 }
 
-/** The revoke confirmation, with the device named. */
+/**
+ * The revoke confirmation — the sentence IS the security contract.
+ *
+ * v2 promised less than the system does: it said the device keeps working on
+ * this Wi-Fi until re-paired, while revoking actually drops LAN admission on
+ * every Mac within a minute. Under-promising is the worse direction for a
+ * security control, because someone revoking a lost phone was being told it
+ * still held their keyboard.
+ */
 export function revokeSentence(deviceName: string): string {
-  return `The ${deviceName} stops opening this account within a minute. It keeps working on this Wi-Fi until re-paired.`
+  return accountCopy('d12.revoke', { device: deviceName })
 }
 
 /** "Not it. 4 tries left before a 1-minute pause." */
@@ -232,7 +252,13 @@ export function refusalSentence(reason: AccountRefusal, message?: string, userna
     case 'password_change_required':
       return 'Somebody said a sign-in was not them, so this password is locked out until you change it. Change it on a device you are still signed in on.'
     case 'last_device':
-      return 'This is the last device on the account, so it cannot be revoked.'
+      // Not "the button is disabled" but what would be lost, and the step
+      // that makes the button work. The named sentence when this refusal
+      // carries a username, the unnamed one when it was raised before the
+      // account was known.
+      return username
+        ? accountCopy('d12.last-device', { handle: normaliseUsername(username) })
+        : accountCopy('d12.last-device.unnamed')
     case 'no_account':
       return 'There is no account on this Mac yet.'
     case 'bad_device':
