@@ -581,6 +581,17 @@ export interface CookrewApi {
     password: string;
     name?: string;
   }) => Promise<AccountResult<AccountStatus>>;
+  /**
+   * v3: the second Mac — sign in to an account this Mac has never held. Main
+   * mints the device key; the answer is a session, the ladder (the same
+   * `accountResume*` rungs finish it), or a refusal with the registry's own
+   * sentence. `accountClaim` above stays the marker for "owner surface".
+   */
+  accountSignIn?: (input: {
+    username: string;
+    password: string;
+    name?: string;
+  }) => Promise<SignInAnswer<AccountStatus>>;
   /** Phase 6: set a password on the handle this Mac held before them. */
   accountMigrate?: (input: {
     password: string;

@@ -62,6 +62,13 @@ const api = {
    * the renderer is not the custodian of a secret across a ten-minute poll.
    */
   accountResume: (password: string) => ipcRenderer.invoke('account:resume', password),
+  /**
+   * v3: the second Mac. A name and a password for an account this Mac has
+   * never held; a fresh device key is minted in main. Answers the same ladder
+   * as `accountResume`, and the same three rungs finish it.
+   */
+  accountSignIn: (input: { username: string; password: string; name?: string }) =>
+    ipcRenderer.invoke('account:signIn', input),
   accountResumeCode: (input: { pending: string; factor: 'totp' | 'recovery'; code: string }) =>
     ipcRenderer.invoke('account:resumeCode', input),
   /** Ask the account's other devices to approve this sign-in (D6). */
