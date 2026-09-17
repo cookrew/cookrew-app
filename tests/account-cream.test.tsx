@@ -22,7 +22,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { AccountStatus } from '../src/shared/account-v2'
 import type { FactorsView } from '../src/shared/account-approvals'
-import { ClaimSheet } from '../src/renderer/src/account/ClaimSheet'
+import { AccountSheet } from '../src/renderer/src/account/AccountSheet'
 import { FactorRows } from '../src/renderer/src/account/FactorRows'
 import { LockScreen } from '../src/renderer/src/account/LockScreen'
 import { PairPhoneSheet } from '../src/renderer/src/account/PairPhoneSheet'
@@ -111,10 +111,14 @@ describe('the stylesheets parse — an unclosed block is a failed test, not dead
 })
 
 describe('every account panel wears cr-sheet, on the panel and not only on the scrim', () => {
-  it('the claim sheet, both halves', () => {
-    for (const legacy of [null, { handle: 'drej' }]) {
+  it('the account sheet, all three states', () => {
+    for (const [initial, legacy] of [
+      ['signin', null],
+      ['register', null],
+      ['signin', { handle: 'drej' }],
+    ] as const) {
       const html = renderToStaticMarkup(
-        <ClaimSheet onClose={() => undefined} onClaimed={() => undefined} legacy={legacy} />,
+        <AccountSheet initial={initial} onClose={() => undefined} onDone={() => undefined} legacy={legacy} />,
       )
       expect(panels(html)).toHaveLength(1)
       expect(panels(html)[0]).toContain('cr-sheet')

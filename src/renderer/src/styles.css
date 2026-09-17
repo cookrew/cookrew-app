@@ -5707,6 +5707,26 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
 
 .cr-acct-pane { margin-top: 14px; }
 
+/* D9: the state's one sentence, between the tabs and the first field. */
+.cr-acct-sheet .cr-acct-lede { margin: 14px 0 12px; }
+
+/* D8: ONE ORDINARY CARD, OVER THE CANVAS AND NOT OVER THE APP. No scrim and
+   no focus trap: it sits where a fresh canvas has nothing else, under the
+   header, and everything behind it keeps working. The sheets it opens draw
+   above it; once it is closed it never comes back. */
+.cr-acct-firstrun {
+  position: absolute;
+  top: 72px;
+  left: 24px;
+  /* Above the terminal overlays a fresh canvas zooms into (the seeded
+     Conductor), below every sheet's scrim (60): a card nobody can press is
+     the first thing a new install would show. */
+  z-index: 55;
+}
+.cr-acct-firstrun .gs-sheet-head h2.cr-acct-cardhead { margin: 0; font-size: 11px; }
+.cr-acct-firstrun-join { margin-top: 12px; }
+.cr-acct-firstrun-foot { flex-wrap: wrap; justify-content: flex-start; }
+
 .cr-acct-card { margin-top: 6px; }
 
 /* The card's caption is the spec's `.cap`: pixel, uppercase, with the aside
@@ -5847,6 +5867,12 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   font-family: var(--font-pixel);
   font-size: 14px;
   letter-spacing: 0.06em;
+}
+
+/* D13: the lock's one line about who is waiting — a sentence, not a control. */
+.cr-acct-lock-waiting {
+  color: var(--amber-deep);
+  font-weight: 600;
 }
 
 /* ---- the path badge (identity v2, M3) ----
