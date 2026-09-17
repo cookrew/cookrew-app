@@ -1,7 +1,12 @@
 import type { AccountFile } from './account-v2'
-import { signWithDevice } from './account-v2'
+import { deviceIdFor, signWithDevice, verifyWithDevice } from './account-v2'
 import { allowedOrigin, CORS_MAX_AGE } from './companion-cors'
-import { helloMessageV2, normaliseOrigin, type HelloV2Body } from '../shared/hello-proof'
+import {
+  HELLO_SKEW_MS,
+  helloMessageV2,
+  normaliseOrigin,
+  type HelloV2Body
+} from '../shared/hello-proof'
 
 /**
  * "ARE YOU THE MAC I THINK YOU ARE?"
@@ -209,4 +214,132 @@ export const helloAnswerV2 = (input: HelloV2Request): HelloAnswerV2 => {
       )
     }
   }
+}
+
+// ── admission: the phone proves ITS key, and the root token becomes its own ──
+
+/**
+ * "I AM THE DEVICE THIS KEY NAMES, AND I AM TALKING TO YOU" (v3, V3-21).
+ *
+ * The hello above is the Mac proving itself to the phone. Admission is the
+ * other direction, and it exists because on the LAN a request carries no
+ * identity: the relay stamps a device id on what it forwards (relay-device.ts)
+ * and strips whatever the caller wrote, so a direct request has nothing to
+ * refuse BY. The phone therefore proves a key — the same shape, the same
+ * three refusals — and the Mac mints a token for THAT key and no other.
+ *
+ * The signature covers `cookrew-admit/1 <deviceId> <origin> <issuedAtMs>
+ * <nonce>`, where `origin` is the address the request ARRIVED at, checked
+ * against the names this Mac published, exactly as the version 2 hello does
+ * in the other direction. Bound to the origin so a proof captured on one Mac
+ * cannot be replayed to admit the same phone on another; bound to a
+ * timestamp so a captured one is spendable for two minutes and not for ever.
+ *
+ * THE DEVICE ID IS THE KEY'S THUMBPRINT (account-v2.ts · deviceIdFor), so a
+ * caller cannot present somebody else's id with its own key: the id is
+ * recomputed from the JWK it sent and must match. What this does NOT prove
+ * is that the id is on the ACCOUNT — the root token is what says this phone
+ * may be admitted at all, as it always has, and the registry's revoked list
+ * (prune) is what ends an account device's admission afterwards.
+ */
+export const ADMIT_CONTEXT = 'cookrew-admit/1'
+
+export const admitMessage = (
+  deviceId: string,
+  origin: string,
+  issuedAtMs: number,
+  nonce: string
+): string => `${ADMIT_CONTEXT} ${deviceId} ${origin} ${issuedAtMs} ${nonce}`
+
+/** The body `POST /api/admit` takes from a phone on the LAN. */
+export interface AdmitBody {
+  readonly deviceId: string
+  /** What the Devices sheet calls it. Optional; cut to a safe name on write. */
+  readonly name?: string
+  /** The phone's Ed25519 public key. Never stored: only its thumbprint is. */
+  readonly jwk: Record<string, unknown>
+  readonly nonce: string
+  readonly issuedAtMs: number
+  readonly sig: string
+}
+
+export type AdmissionReading =
+  | { readonly ok: true; readonly deviceId: string; readonly name?: string }
+  | { readonly ok: false; readonly status: 400 | 401 | 421; readonly error: string }
+
+export interface AdmissionInput {
+  readonly body: unknown
+  /** Where the request arrived, or null when the Host is not one of ours. */
+  readonly arrived: string | null
+  /** The device the RELAY named, when the request came down the bridge. */
+  readonly bridged: { readonly deviceId: string; readonly name?: string } | null
+  readonly now: number
+}
+
+const DEVICE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+const looksLikeJwk = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' &&
+  value !== null &&
+  (value as Record<string, unknown>).kty === 'OKP' &&
+  (value as Record<string, unknown>).crv === 'Ed25519' &&
+  typeof (value as Record<string, unknown>).x === 'string'
+
+/**
+ * Read an admission, two ways.
+ *
+ * DOWN THE BRIDGE the registry has already authenticated the phone and named
+ * it in the stamp; the body may name the same device or nothing, and no
+ * signature is asked for — the bridge is loopback-only and marker-checked
+ * (relay-device.ts), which is the trust the whole relay path already rests
+ * on. A body that names a DIFFERENT device than the stamp is refused: one
+ * request, one identity.
+ *
+ * ON THE LAN there is no stamp, so the body is the whole proof.
+ */
+export const readAdmission = (input: AdmissionInput): AdmissionReading => {
+  const body = (typeof input.body === 'object' && input.body !== null ? input.body : {}) as Record<
+    string,
+    unknown
+  >
+  if (input.bridged !== null) {
+    if (typeof body.deviceId === 'string' && body.deviceId !== input.bridged.deviceId) {
+      return { ok: false, status: 401, error: 'the relay names a different device' }
+    }
+    const name = typeof body.name === 'string' ? body.name : input.bridged.name
+    return { ok: true, deviceId: input.bridged.deviceId, ...(name ? { name } : {}) }
+  }
+  const deviceId = body.deviceId
+  if (typeof deviceId !== 'string' || !DEVICE_ID.test(deviceId)) {
+    return { ok: false, status: 400, error: 'deviceId must be a device id' }
+  }
+  if (!looksLikeJwk(body.jwk)) {
+    return { ok: false, status: 400, error: 'jwk must be an Ed25519 public key' }
+  }
+  if (typeof body.nonce !== 'string' || !nonceAcceptable(body.nonce)) {
+    return { ok: false, status: 400, error: 'nonce must be 16 to 64 base64url bytes' }
+  }
+  if (typeof body.issuedAtMs !== 'number' || !Number.isFinite(body.issuedAtMs)) {
+    return { ok: false, status: 400, error: 'issuedAtMs must be a number' }
+  }
+  if (typeof body.sig !== 'string' || body.sig.length === 0) {
+    return { ok: false, status: 400, error: 'sig is required' }
+  }
+  if (input.arrived === null) {
+    return { ok: false, status: 421, error: 'this is not a name this desktop published' }
+  }
+  if (Math.abs(input.now - body.issuedAtMs) > HELLO_SKEW_MS) {
+    return { ok: false, status: 401, error: 'this proof is too old or too far ahead' }
+  }
+  // The id is not taken from the caller; it is recomputed from the key the
+  // caller proved it holds, and the two must agree.
+  if (deviceIdFor(body.jwk) !== deviceId) {
+    return { ok: false, status: 401, error: 'deviceId is not the thumbprint of jwk' }
+  }
+  const message = admitMessage(deviceId, input.arrived, body.issuedAtMs, body.nonce)
+  if (!verifyWithDevice(body.jwk, message, body.sig)) {
+    return { ok: false, status: 401, error: 'the signature does not open for this key and address' }
+  }
+  const name = typeof body.name === 'string' ? body.name : undefined
+  return { ok: true, deviceId, ...(name ? { name } : {}) }
 }

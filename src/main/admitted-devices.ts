@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
@@ -28,13 +28,17 @@ import path from 'node:path'
  * 0600 and temp-and-rename for the same reason the account file is: a torn
  * write here is a Mac that stops opening for a phone the owner is holding.
  *
- * PER-DEVICE TOKENS ARE NO LONGER MINTED, AND ARE STILL HONOURED. The v2
- * admission ceremony handed each admitted phone 24 random bytes of its own and
- * stored the SHA-256 here; reach v2.1 has ONE credential and no ceremony to
- * mint a second one in. The hashes already on disk keep working — mobile-api's
- * second door still accepts them — because deleting them would unpair every
- * phone that paired the old way, in an upgrade, to tidy up a field. FORGET
- * still removes the row and the hash with it.
+ * PER-DEVICE TOKENS ARE MINTED AGAIN (v3, V3-21), and this time they are the
+ * point. The v2 ceremony handed each admitted phone 24 random bytes of its
+ * own and stored the SHA-256 here; reach v2.1 retired the ceremony and kept
+ * the door open for the hashes already on disk. The row was a ledger and the
+ * root pairing token was the only credential — which is exactly why pruning
+ * a revoked phone's row ended nothing. `admit` is the producer the door was
+ * missing: the admission route (mobile-identity-routes.ts) calls it once a
+ * phone has bootstrapped with the root token and proved its device key, and
+ * from then on the phone opens this Mac with its own token, whose hash lives
+ * on its own row. FORGET and prune remove the row — and with it, now, the
+ * credential.
  */
 
 export type AdmittedDevice = {
@@ -83,6 +87,19 @@ export type AdmittedDeviceStore = {
    * to the writer and another to the reader is worse than no boolean.
    */
   readonly forget: (deviceId: string) => boolean
+  /**
+   * ADMIT: mint this phone its own token and write the hash on its row.
+   *
+   * Answers the token ONCE, to the caller that will hand it to the phone; the
+   * file never sees it. Admitting a phone that is already admitted ROTATES
+   * its token — the old hash is replaced, so a bootstrap repeated from a
+   * second browser on the same phone does not leave two live credentials for
+   * one device, and the row keeps its first `admittedAt`.
+   */
+  readonly admit: (device: { deviceId: string; name?: string }) => {
+    device: AdmittedDevice
+    token: string
+  }
   /**
    * Forget every admitted phone whose device id the registry has revoked.
    *
@@ -161,6 +178,14 @@ export const SIGHTING_REFRESH_MS = 60_000
 export const hashToken = (token: string): string =>
   createHash('sha256').update(token, 'utf8').digest('hex')
 
+/**
+ * The shape a per-device token has: 24 random bytes, base64url, 32 chars —
+ * the same width as the root pairing token (pairing-token.ts), so the
+ * companion's `isPairingToken` shape check (pairing-scope.ts) takes it and
+ * nothing on the wire can tell the two apart by length.
+ */
+export const mintCompanionToken = (): string => randomBytes(24).toString('base64url')
+
 export type AdmittedDeviceStoreDeps = {
   readonly base?: string
   readonly now?: () => number
@@ -213,6 +238,26 @@ export const createAdmittedDeviceStore = (
           device.tokenHash.length === candidate.length &&
           timingSafeEqual(Buffer.from(device.tokenHash), Buffer.from(candidate))
       )
+    },
+    admit: ({ deviceId, name }) => {
+      const at = now()
+      const existing = load()
+      const previous = existing.find((device) => device.deviceId === deviceId)
+      const token = mintCompanionToken()
+      const admitted: AdmittedDevice = {
+        deviceId,
+        ...((name ?? previous?.name) ? { name: name ?? previous?.name } : {}),
+        admittedAt: previous?.admittedAt ?? at,
+        lastSeenAt: at,
+        tokenHash: hashToken(token)
+      }
+      // Written BEFORE the token is answered: a token handed out ahead of a
+      // write that then failed would be a credential this Mac never agreed to.
+      writeAdmittedDevices(
+        [...existing.filter((device) => device.deviceId !== deviceId), admitted],
+        deps.base
+      )
+      return { device: admitted, token }
     },
     forget: (deviceId) => {
       const existing = load()
