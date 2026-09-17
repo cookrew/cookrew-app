@@ -111,6 +111,22 @@ function seatBar(input: TeamInput, door: ListedDoor, address: string): string {
 <p class="row" style="margin:0"><button class="btn primary lg" data-seat-open>Open the line</button></p>${room}</section>`
   }
 
+  /**
+   * W6 · ASK IS STILL A COPIED LINK, AND THAT IS ON PURPOSE FOR NOW.
+   *
+   * TODO (V3-13 → V3-11): when Forge publishes the seat-requests contract,
+   * this second button becomes ASK @{handle} — POST to seat-requests, and the
+   * bar moves to its asked state, polling GET …/seat until the owner taps
+   * SEAT THEM on their queue. The sentence for that state is already in the
+   * copy table as `w6.asked` and is drawn below.
+   *
+   * It is NOT stubbed against a guessed route. A button that files a request
+   * nothing receives is worse than a link somebody can paste into a message
+   * that a person will actually read: the first fails silently and teaches
+   * the asker to wait for nothing. The design says as much — "if R1 is
+   * refused, this button stays COPY LINK TO ASK exactly as today" — so the
+   * fallback is a shipped state, not a placeholder.
+   */
   const ask = `${esc(`${input.origin}/@${door.handle}/${door.name}?ask=${input.account}`)}`
   return `<section class="card seat" id="seatbar" data-team="${esc(address)}">
 <h2>You are @${esc(input.account)} · no seat here yet</h2>

@@ -133,9 +133,27 @@ export function mePage(
 <button class="btn" data-edit-name>Edit</button>
 <button class="btn" data-signout>Sign out</button></div>
 
+<!-- W5 · REQUESTS SITS ABOVE DEVICES, and the whole section hides itself when
+     the queue is empty. It is above because it is the only part of this page
+     that is WAITING for the reader: devices and security are things to look
+     at, a request is a thing to answer. factors.js unhides it the moment the
+     poll returns a row and hides it again when the last one is answered, so
+     a person with nothing waiting is not given a heading that says so. -->
+<section id="me-requests" hidden>
+<h2 style="margin-top:30px">Requests</h2>
+<p class="meta">${esc(webCopy('w5.requests-footer', { handle: account.username }))}</p>
+<ul class="doors me-list" id="me-approvals" data-join-row="${esc(webCopy('w5.join-row'))}"></ul>
+</section>
+
 <h2 style="margin-top:30px">Devices</h2>
 <p class="meta">Every device attached to @${esc(account.username)}. ${esc(webCopy('d12.revoke', { device: 'device' }))} ${esc(webCopy('d12.last-device', { handle: account.username }))}</p>
 <ul class="doors me-list" id="me-devices">${devices}</ul>
+<!-- W5 · the two ADD buttons. Both mint the same join code; the words differ
+     because what a person is holding differs, and "add a phone" is the
+     sentence somebody standing with a phone is looking for. -->
+<p class="row"><button class="btn" data-add-device="desktop">Add a Mac</button>
+<button class="btn" data-add-device="phone">Add a phone</button></p>
+<div class="totp-panel" id="me-join-code" data-add-lede="${esc(webCopy('w5.add-lede'))}" hidden></div>
 
 <h2 style="margin-top:30px">Security</h2>
 <ul class="doors me-list" id="me-security">
@@ -148,10 +166,6 @@ ${authenticatorRow(factors.totp)}
 <div class="totp-panel" id="me-password" hidden></div>
 <pre class="cmd" id="me-codes" hidden></pre>
 <div class="totp-panel" id="me-totp" hidden></div>
-
-<h2 style="margin-top:30px">Requests</h2>
-<p class="meta">A device asking to sign in as @${esc(account.username)}. Approve attaches it and names it in Devices; deny does nothing else; “not me” signs every other device out and locks the password until you change it.</p>
-<ul class="doors me-list" id="me-approvals"></ul>
 
 ${desktopsSection(account.username, account.desktops)}
 </div>`

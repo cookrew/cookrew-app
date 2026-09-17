@@ -949,7 +949,20 @@ describe('the approving device must type the number the asking device shows', ()
     // number would hand it to anyone holding the owner's session, which is
     // the one thing the rung is protecting against.
     expect(Object.keys(list[0])).not.toContain('match')
-    expect(JSON.stringify(list[0])).not.toContain(step.match)
+    /**
+     * FIELD BY FIELD, not `JSON.stringify(...).not.toContain(match)`.
+     *
+     * That spelling flaked about one run in four, and not for any reason to
+     * do with the number: an approval carries two 13-digit epochs, so a given
+     * two-digit string lands inside `at` or `expiresAt` by coincidence
+     * roughly a quarter of the time. The rule being protected is that no
+     * field the owner's client can read IS the number — which is what this
+     * asserts, without a timestamp being able to fail it.
+     */
+    for (const [key, value] of Object.entries(list[0])) {
+      expect(String(value), `approvals[0].${key}`).not.toBe(step.match)
+    }
+    expect(list[0].sentence).not.toContain(step.match)
     expect(list[0].id).toBe(approval)
   })
 

@@ -52,6 +52,15 @@ const badges = (): string =>
 export const relayPrefix = (username: string, deviceId: string): string =>
   `/relay/@${encodeURIComponent(username)}/desktop/${encodeURIComponent(deviceId)}/`
 
+/**
+ * TODO (V3-13 → V3-18): W5 wants the DOORS this Mac serves on its row, under
+ * the workspaces. `V2Desktop` carries no `doors[]` yet — V3-18 adds it, with
+ * the save-time conflict and TAKE OVER that make ownership of a door mean
+ * something — so this row lists workspaces alone and gains a second line
+ * there. Nothing is drawn for it here: an empty "Doors" label on every row
+ * would read as a Mac serving nothing rather than as a field that does not
+ * exist yet.
+ */
 function desktopRow(username: string, desktop: V2Desktop): string {
   const workspaces =
     desktop.workspaces.length === 0
