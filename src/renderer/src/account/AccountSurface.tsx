@@ -2,7 +2,10 @@ import { useCallback, useEffect, useState } from 'react'
 import type { AccountStatus } from '../../../shared/account-v2'
 import { cookrew } from '../api'
 import { AccountAvatar } from './Avatar'
-import { ClaimSheet } from './ClaimSheet'
+import { AccountSheet } from './AccountSheet'
+import { FirstRunCard } from './FirstRunCard'
+import { firstRunView, type FirstRunAction } from './account-store'
+import { dismissFirstRun, firstRunDismissed } from './first-run'
 import { LockScreen } from './LockScreen'
 import { ProfileSheet, type ProfileTab } from './ProfileSheet'
 import { ResumeSession } from './ResumeSession'
@@ -47,7 +50,16 @@ export function useAccountSurface(): AccountSurface {
    */
   const supported = typeof cookrew().accountClaim === 'function'
   const [status, setStatus] = useState<AccountStatus | null>(null)
-  const [sheet, setSheet] = useState<'none' | 'claim' | 'profile' | 'security'>('none')
+  const [sheet, setSheet] = useState<'none' | 'account' | 'profile' | 'security'>('none')
+  /** Which tab the account sheet opens on: SIGN IN unless a button chose CREATE. */
+  const [initialTab, setInitialTab] = useState<'signin' | 'register'>('signin')
+  /**
+   * D8: how many workspaces this Mac has, or null until the list has been
+   * read. A fresh install has one (seeded); the card waits for the number
+   * rather than guessing, so it never flashes at an owner on launch.
+   */
+  const [workspaceCount, setWorkspaceCount] = useState<number | null>(null)
+  const [dismissed, setDismissed] = useState(() => firstRunDismissed())
   const [tab, setTab] = useState<ProfileTab>('PROFILE')
   /** The request a system notification was clicked for (D6). */
   const [focusRequest, setFocusRequest] = useState<string | null>(null)
@@ -75,6 +87,19 @@ export function useAccountSurface(): AccountSurface {
       offChanged?.()
     }
   }, [supported, refresh])
+
+  // D8 needs one fact the account does not carry: whether this Mac has a
+  // workspace of the person's own. The list is the store's, pushed on change.
+  useEffect(() => {
+    if (!supported) return
+    const count = (list: { workspaces: readonly unknown[] }): void =>
+      setWorkspaceCount(list.workspaces.length)
+    void cookrew()
+      .listWorkspaces()
+      .then(count)
+      .catch(() => undefined)
+    return cookrew().onWorkspaceList(count)
+  }, [supported])
 
   // A DEVICE IS ASKING (D6). The queue changed, or the owner clicked the
   // system notification — in which case main names the request and the sheet
@@ -116,27 +141,47 @@ export function useAccountSurface(): AccountSurface {
 
   if (!supported) return { avatar: null, overlays: null }
 
+  /** The avatar's door: the profile once there is a name, else SIGN IN (D9). */
   const open = (): void => {
     if (status?.username) {
       setTab('PROFILE')
       setSheet('profile')
     } else {
-      setSheet('claim')
+      setInitialTab('signin')
+      setSheet('account')
     }
   }
 
+  /** The first-run card's buttons: two open the sheet on a tab, one closes for good. */
+  const firstRun = (action: FirstRunAction): void => {
+    if (action === 'dismiss') {
+      dismissFirstRun()
+      setDismissed(true)
+      return
+    }
+    setInitialTab(action)
+    setSheet('account')
+  }
+  const firstRunCard = firstRunView({ status, workspaceCount, dismissed })
+
   const overlays = (
     <>
-      {sheet === 'claim' && (
-        <ClaimSheet
-          // PHASE 6: a Mac that already serves under a handle is not claiming
-          // a name, it is setting a password on the one it has.
+      {/* D8: one card, on a fresh Mac only. Drawn under the sheets, and it
+          takes nothing over — the avatar keeps the same door forever. */}
+      {firstRunCard && <FirstRunCard view={firstRunCard} onAction={firstRun} />}
+      {sheet === 'account' && (
+        <AccountSheet
+          initial={initialTab}
+          // PHASE 6: a Mac that already serves under a handle is not choosing
+          // a door, it is setting a password on the name it has.
           legacy={status?.legacy ?? null}
           onClose={() => setSheet('none')}
-          onClaimed={(next) => {
+          onDone={(next, via) => {
             setStatus(next)
-            // D3 is shown ONCE, right after the claim.
-            setSheet('security')
+            // D3 is shown ONCE, right after a name is CREATED here. A sign-in
+            // on a second Mac joins an account whose security card was shown
+            // on the first, so it lands on the canvas and nothing else.
+            setSheet(via === 'signin' ? 'none' : 'security')
           }}
         />
       )}

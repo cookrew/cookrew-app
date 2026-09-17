@@ -98,14 +98,15 @@ describe('the claim sheet decides, and always says why (D2)', () => {
   })
 
   it('names the act on the button', () => {
-    expect(fields({ username: '@drej', check: 'free' }).primary).toBe('CLAIM @DREJ')
-    expect(fields().primary).toBe('CLAIM')
+    expect(fields({ username: '@drej', check: 'free' }).primary).toBe('CREATE @DREJ')
+    expect(fields().primary).toBe('CREATE')
   })
 
   it('refuses a taken name in the copy table’s words', () => {
     const view = fields({ username: 'anvz', check: 'taken' })
     expect(view.username.tone).toBe('bad')
-    expect(view.username.note).toBe("@anvz is someone else's. Try another.")
+    // D9: a name that exists is the other door, not a dead end.
+    expect(view.username.note).toBe('@anvz already exists — sign in with your password.')
     expect(view.canClaim).toBe(false)
   })
 
@@ -329,7 +330,7 @@ describe('the lock screen knows who is waiting (D13)', () => {
 describe('the revoke confirmation names the device and its consequence', () => {
   it('is one sentence, in the table’s words', () => {
     expect(revokeSentence('iPhone')).toBe(
-      'The iPhone stops opening this account within a minute. It keeps working on this Wi-Fi until re-paired.',
+      "The iPhone stops opening this account within a minute — here, at every door, and on every Mac's Wi-Fi. Anything it asked for is dropped.",
     )
   })
 })
