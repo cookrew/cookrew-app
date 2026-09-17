@@ -6,6 +6,7 @@ import { Limiter, callerAddress } from './v2-limiter'
 import { passwordGate } from './v2-hash-gate'
 import { createFactorState, type FactorState } from './v2-factor-state'
 import { JoinCodes } from './v2-join-codes'
+import { createRenewNonces, type RenewNonces } from './v2-renew'
 import { v2Error, type V2Error } from './v2-copy'
 import type { LegacyIdentity } from './v2-migrate-routes'
 import type { DoorRecord } from './doors'
@@ -76,7 +77,11 @@ export interface V2Identity {
     join: Limiter
     /** Minting one, per account — an hour's window, not a minute's. */
     joinCodes: Limiter
+    /** Renewing a session, per DEVICE — see v2-renew for why not per address. */
+    renew: Limiter
   }
+  /** Nonces handed out for a renewal signature: single-use, two minutes. */
+  renewNonces: RenewNonces
   /** Live join codes: one per account, ten minutes, in memory. */
   joinCodes: JoinCodes
   /**
@@ -106,6 +111,7 @@ export interface V2Options {
     helloPerMinute?: number
     joinPerMinute?: number
     joinCodesPerHour?: number
+    renewPerMinute?: number
   }
   trustedProxies?: readonly string[]
   now?: () => number
@@ -141,9 +147,11 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
       // AN HOUR, not a minute. Minting is a deliberate act a person does a
       // handful of times in a life; the window that catches a device quietly
       // keeping a supply of live codes is a long one, not a fast one.
-      joinCodes: new Limiter(options.limits?.joinCodesPerHour ?? 6, 60 * 60_000, options.now)
+      joinCodes: new Limiter(options.limits?.joinCodesPerHour ?? 6, 60 * 60_000, options.now),
+      renew: new Limiter(options.limits?.renewPerMinute ?? 5, 60_000, options.now)
     },
     joinCodes: new JoinCodes(options.now),
+    renewNonces: createRenewNonces(options.now),
     helloNonces: createHelloBurn(helloBurnTtlMs(HELLO_SKEW_MS)),
     trustedProxies: options.trustedProxies ?? [],
     factors: createFactorState(base, { now: options.now }),

@@ -1,6 +1,7 @@
 import { readJsonBody } from './http'
 import { asking, cookie, refuse, signedIn, v2Json, type V2Context } from './v2-http'
 import { factorError } from './v2-factor-copy'
+import { stepUpHeld } from './v2-step-up'
 
 /** The same ceiling the other /v2/me writes read a body under. */
 const SMALL_BODY = 16 * 1024
@@ -14,10 +15,11 @@ const SMALL_BODY = 16 * 1024
 /**
  * POST /v2/me/join-codes — mint one, on a device that is already trusted.
  *
- * STEP-UP, because this is the act that adds a machine to the account. The
- * password is asked for again exactly as it is before removing a factor: the
- * session alone is not enough for anything that widens what the account can
- * be opened from.
+ * STEP-UP, because this is the act that adds a machine to the account: the
+ * session alone is not enough for anything that widens what the account can be
+ * opened from. Which proof is asked for is v2-step-up's to decide — the ladder
+ * when the account holds something stronger than its password, the password
+ * when it does not.
  */
 async function mintJoinCode(ctx: V2Context, username: string): Promise<void> {
   const body = await readJsonBody(ctx.request, SMALL_BODY)
@@ -25,14 +27,9 @@ async function mintJoinCode(ctx: V2Context, username: string): Promise<void> {
     refuse(ctx.response, body.reason === 'too_large' ? 413 : 400, 'malformed')
     return
   }
-  if (typeof body.value.current !== 'string' || body.value.current === '') {
-    v2Json(ctx.response, 403, factorError('password_required'))
-    return
-  }
-  if (!(await ctx.v2.accounts.verifyPassword(username, body.value.current))) {
-    refuse(ctx.response, 401, 'bad_credentials')
-    return
-  }
+  // The step-up itself lives in one place (v2-step-up.ts) because this is one
+  // of seven acts that need it, and seven copies of a security boundary drift.
+  if (!(await stepUpHeld(ctx, username, 'mint-join-code', body.value))) return
   /**
    * SIX AN HOUR, PER ACCOUNT. A join code is a bearer that attaches a machine,
    * and a signed-in device that can mint them without a ceiling is a way to

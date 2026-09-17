@@ -520,6 +520,40 @@ export class V2Accounts {
     return session
   }
 
+  /**
+   * The account and device this id belongs to, or null.
+   *
+   * A device id names exactly one account, which is why renewal needs no
+   * username on the wire: asking the caller to also name it would be one more
+   * thing to get wrong and nothing more to prove.
+   */
+  deviceOwner(deviceId: string): { username: string; device: V2Device } | null {
+    for (const account of this.accounts) {
+      const device = account.devices.find((d) => d.id === deviceId)
+      if (device) return { username: account.username, device }
+    }
+    return null
+  }
+
+  /**
+   * Every OTHER session this device holds, closed.
+   *
+   * A renewal replaces rather than adds: a month of renewals must not be a
+   * month of accumulating bearer tokens, each one still good. Which sessions
+   * belonged to the device is a fact the registry already holds, so it is not
+   * asked of the caller — a client that forgot to name its old jti would
+   * otherwise leave it live, and a client that named somebody else's would be
+   * closing a session that is not its own.
+   */
+  closeOtherSessionsForDevice(username: string, deviceId: string, keepJti: string): number {
+    const account = this.get(username)
+    if (!account) return 0
+    const kept = account.sessions.filter((s) => s.dev !== deviceId || s.jti === keepJti)
+    const closed = account.sessions.length - kept.length
+    if (closed > 0) this.replace({ ...account, sessions: kept })
+    return closed
+  }
+
   isLiveSession(username: string, jti: string): boolean {
     return this.get(username)?.sessions.some((s) => s.jti === jti) ?? false
   }
