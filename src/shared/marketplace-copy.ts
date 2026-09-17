@@ -1,3 +1,4 @@
+import { V3_COPY, fillCopy } from './account-copy'
 import type { ServedPaymentRail } from './served-payment-rails'
 
 /**
@@ -73,13 +74,9 @@ export function unknownDenialCopy(remedy: string | undefined): {
  * buyer meeting `{author} changed signing keys` on a security sheet is worse
  * than a crash a test catches.
  */
-export function fillCopy(template: string, vars: Readonly<Record<string, string | number>>): string {
-  return template.replace(/\{(\w+)\}/g, (_match, name: string) => {
-    const value = vars[name]
-    if (value === undefined) throw new Error(`marketplace copy: no value for {${name}}`)
-    return String(value)
-  })
-}
+/** Re-exported: the implementation moved to account-copy.ts so the dependency
+ *  between the two tables runs one way. Existing imports keep working. */
+export { fillCopy }
 
 /**
  * How a key id is shown to a person. Full ed25519 key ids are 43 base64url
@@ -158,28 +155,40 @@ export function authorLabel(handle: string): string {
  * to meet. It appears in the sub-line where a person looks for reassurance
  * about typing a password, and nowhere else.
  *
- * The one thing still banned here is "password", because there still is not
- * one; and "unlock", because it hides whether money moves.
+ * V3-07 REWRITES THE BAN. There IS a password now — identity v3 gave the
+ * account one, and it goes to cookrew.dev only. So "password" is not banned
+ * here any more; saying there is none was the accurate sentence for exactly as
+ * long as it was true, and it stopped being true. What stays banned is
+ * "unlock", because it hides whether money moves, and — per the v3 copy rules
+ * — "error", "invalid" and any status number, which are our words for our
+ * machinery rather than sentences a person can act on.
+ *
+ * The identify sentence itself now lives in shared/account-copy.ts as
+ * 'g1.identify': the gate sheet and the account cards must say the same thing
+ * about the same account, and two files is how they stop.
  */
 export const MKT_AUTH = {
   'mkt.auth.title': 'Sign in with your Cookrew account',
-  'mkt.auth.body':
-    'This preset asks who you are before it downloads. Signing in takes one tap — your account uses a passkey, so there is no password to remember.',
+  /** V3-07: the one identify sentence, from shared/account-copy.ts. */
+  'mkt.auth.body': V3_COPY['g1.identify'],
   'mkt.auth.why': 'Authors can see how many people installed a preset, never who you are.',
-  'mkt.auth.method': 'Use the passkey on this device',
+  'mkt.auth.method': 'Use your username and password',
   'mkt.auth.method.alt': 'or scan with your phone',
-  'mkt.auth.custody': 'Cookrew stores no password and never sees your key.',
+  /** v3: the password exists and goes to cookrew.dev only (architecture §1). */
+  'mkt.auth.custody': 'Your password goes to cookrew.dev and nowhere else.',
   'mkt.auth.notwallet':
     "Your account isn't a wallet — paying comes later, and only if a preset costs.",
+  /** G3, the one door where no account is involved at all. */
+  'mkt.auth.direct': V3_COPY['g3.direct'],
   'mkt.auth.action': 'SIGN IN',
-  'mkt.auth.newaccount': 'No account yet? Signing in makes one — it takes the same tap.',
+  'mkt.auth.newaccount': 'No account yet? Take a username here and this device becomes its first.',
   'mkt.auth.dismiss': 'Not now',
   /** The 90-second challenge died while the sheet sat open. Not a cancel. */
   'mkt.auth.expired': 'That request timed out. Try again.',
   'mkt.auth.cancelled': 'Passkey cancelled.',
-  'mkt.auth.unsupported.title': "This browser can't sign you in",
+  'mkt.auth.unsupported.title': 'This browser cannot make a passkey',
   'mkt.auth.unsupported.body':
-    "It can't make a passkey, which is how Cookrew accounts sign in. Use your phone instead.",
+    'Sign in with your username and password instead, or use a code from your phone.',
   'mkt.auth.unsupported.action': 'SCAN WITH PHONE'
 } as const
 
