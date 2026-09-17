@@ -1,4 +1,5 @@
 import { randomInt, randomUUID } from 'node:crypto'
+import type { StepUpAct } from '../../src/shared/step-up'
 
 /**
  * IDENTITY v2 — A SIGN-IN THAT IS HALF DONE.
@@ -105,6 +106,21 @@ export interface Pending {
   /** Wrong numbers so far. The third ends the sign-in. */
   matchMisses: number
   approval: Approval | null
+  /**
+   * THE ACT THIS PENDING AUTHORISES, when it is not a sign-in.
+   *
+   * A step-up climbs the same ladder a new device climbs — same rungs, same
+   * wire shape, same screens — but it must end somewhere else. A sign-in ends
+   * in a session; a step-up ends in PERMISSION to do one thing, on a session
+   * the caller already holds. Minting a second session for somebody who is
+   * already signed in would be a strange prize for proving who they are, and
+   * a device attached as a side effect of changing a password would be worse.
+   *
+   * Absent means a sign-in, which is what every pending was before this.
+   */
+  act?: StepUpAct
+  /** A rung was climbed on an act-pending: the act may now happen, once. */
+  authorised: boolean
 }
 
 /** What answering an approval came to. */
@@ -120,6 +136,8 @@ export interface OpenInput {
   kind: string
   address: string
   next: readonly Factor[]
+  /** Set for a step-up: the one act this pending will authorise. */
+  act?: StepUpAct
 }
 
 /**
@@ -163,7 +181,9 @@ export class PendingSignIns {
       attempts: 0,
       match: mintMatch(),
       matchMisses: 0,
-      approval: null
+      approval: null,
+      ...(input.act === undefined ? {} : { act: input.act }),
+      authorised: false
     }
     // Bounded by count as well as by time — this account's own oldest first,
     // so the pressure of a busy account is felt only by that account.
@@ -217,6 +237,35 @@ export class PendingSignIns {
 
   close(id: string): void {
     this.pendings.delete(id)
+  }
+
+  /**
+   * A rung was climbed on an act-pending. Nothing is minted; the pending is
+   * marked, and the caller repeats the request it was refused.
+   */
+  authorise(id: string): boolean {
+    const held = this.get(id)
+    if (held === null || held.act === undefined) return false
+    this.pendings.set(id, { ...held, authorised: true })
+    return true
+  }
+
+  /**
+   * Spend an authorisation: is this pending a live, climbed step-up for THIS
+   * person and THIS act?
+   *
+   * ONCE, AND FOR ONE ACT. Spending closes the pending, so a proof cannot be
+   * replayed into a second sensitive act — proving who you are to mint a join
+   * code must not also, quietly, be permission to revoke somebody's device.
+   * The act is compared rather than assumed for the same reason.
+   */
+  spendAuthorised(username: string, act: StepUpAct, id: unknown): boolean {
+    if (typeof id !== 'string' || id === '') return false
+    const held = this.get(id)
+    if (held === null) return false
+    if (!held.authorised || held.act !== act || held.username !== username) return false
+    this.pendings.delete(id)
+    return true
   }
 
   /**
