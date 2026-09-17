@@ -36,7 +36,7 @@ import type {
   RecoverResult,
   RestoreResult,
 } from "../shared/model";
-import { readBytes, readJson, respondJson, startSse, pairingAuthorized } from "./mobile-http";
+import { readBytes, readJson, respondJson, startSse, pairingAuthorized, presentedToken } from "./mobile-http";
 import type { StreamService } from "./stream-service";
 import { handleStreamRoutes } from "./stream-routes";
 import { handleStreamAdapters } from "./stream-adapters";
@@ -225,6 +225,14 @@ export interface MobileApiDeps {
   /** Does this bearer belong to a phone this Mac still admits? */
   companionToken?: (candidate: string) => boolean;
   /**
+   * v3 (V3-21): THE decision about a presented credential, when the server
+   * supplies one. It supersedes the pairingToken/companionToken comparison
+   * below for the pairing scope, so that "the root token opens the admission
+   * route and nothing else" is decided in companion-gate.ts and nowhere
+   * here. Absent (an embedder, a test), the old comparison stands.
+   */
+  companionGate?: (presented: string | null) => boolean;
+  /**
    * Attach-free dispatch engine (v4 §3). Optional so this module compiles and
    * serves before it is wired; absent = the two dispatch routes answer 503
    * rather than a silent 404 on a route the catalog advertises.
@@ -393,7 +401,9 @@ export async function handleMobileApi(
   // rather than nobody's.
   const hasPairing =
     !!deps.pairingToken &&
-    pairingAuthorized(request, url, deps.pairingToken, deps.companionToken);
+    (deps.companionGate
+      ? deps.companionGate(presentedToken(request, url))
+      : pairingAuthorized(request, url, deps.pairingToken, deps.companionToken));
   const hasReadOnly =
     !!deps.wallToken && pairingAuthorized(request, url, deps.wallToken);
   /** Cleared for a read: either scope. */

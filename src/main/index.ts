@@ -4796,6 +4796,10 @@ app.whenReady().then(() => {
   for (const template of serving.served.list()) void joinRelayFor(template)
 
   startMobileServer({
+    // v3 (V3-21): strict per-device tokens on the LAN. Off until the companion
+    // side bootstraps (V3-14); flip with COOKREW_LAN_TOKEN_STRICT=1 to QA the
+    // Mac half against a companion that already sends the admission.
+    perDeviceOnly: () => process.env.COOKREW_LAN_TOKEN_STRICT === '1',
     servedSlug: handleServedSlug,
     store,
     // Sous's door for the phone and for voice-gateway; `ui` events for both.
