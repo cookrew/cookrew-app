@@ -106,7 +106,9 @@ describe('the claim sheet decides, and always says why (D2)', () => {
   it('refuses a taken name in the copy table’s words', () => {
     const view = fields({ username: 'anvz', check: 'taken' })
     expect(view.username.tone).toBe('bad')
-    expect(view.username.note).toBe("@anvz is someone else's. Try another.")
+    // V3 sends a taken name to the sign-in door instead of to another name:
+    // the second Mac's whole path begins with the handle already existing.
+    expect(view.username.note).toBe('@anvz already exists — sign in with your password.')
     expect(view.canClaim).toBe(false)
   })
 
@@ -343,8 +345,10 @@ describe('the sign-out confirmation says what leaves, what stays, what goes quie
 
 describe('the revoke confirmation names the device and its consequence', () => {
   it('is one sentence, in the table’s words', () => {
+    // The Wi-Fi caveat is gone because the thing it admitted to is fixed:
+    // a revoked device now loses LAN admission on every Mac too (V3-05).
     expect(revokeSentence('iPhone')).toBe(
-      'The iPhone stops opening this account within a minute. It keeps working on this Wi-Fi until re-paired.',
+      "The iPhone stops opening this account within a minute — here, at every door, and on every Mac's Wi-Fi. Anything it asked for is dropped.",
     )
   })
 })
