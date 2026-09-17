@@ -222,7 +222,7 @@ describe('a Mac whose session ended, with an authenticator on the account', () =
       const decided = await fetch(`${origin}/v2/me/approvals/${asked.value.approval}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${held}` },
-        body: JSON.stringify({ decision: 'approve' }),
+        body: JSON.stringify({ decision: 'approve', match: step.step.match }),
       })
       expect(decided.status).toBe(204)
       expect(await waiting).toMatchObject({ ok: true })
