@@ -646,6 +646,12 @@ const accounts = new Accounts({
     if (mainWindow && !mainWindow.webContents.isDestroyed()) {
       mainWindow.webContents.send('account:changed')
     }
+    // A REVOKE IS AN ACCOUNT CHANGE, and the phone it cut off may be sitting on
+    // this Wi-Fi right now. Cut 1's event carries no payload, so this cannot
+    // know WHICH device changed; it asks the registry who is revoked and lets
+    // the answer decide. That is what makes the withdrawal prompt instead of
+    // waiting out the sweep below.
+    sweepRevocations()
     // REACH v2.1 — A CLAIM IS THE MOMENT A CERTIFICATE BECOMES POSSIBLE.
     // `ensure` was only ever called at boot and hourly, so a Mac that claimed
     // its account after starting served self-signed for up to an hour and
@@ -906,8 +912,52 @@ const registryTokens = RELAY_ORIGIN
  * which body arrives decides which is asked (served-endpoints.handleServedRoute).
  */
 const v2CallTokens = RELAY_ORIGIN
-  ? createV2CallTokenVerifier({ keys: v2KeysOverHttp(RELAY_ORIGIN) })
+  ? createV2CallTokenVerifier({
+      keys: v2KeysOverHttp(RELAY_ORIGIN),
+      // ONE FETCH, TWO READERS. The list is fetched for the doors; it is also
+      // the only thing that can tell this Mac that a phone it opens for on the
+      // LAN was cut off at the registry. A second poll of the same route would
+      // be a second answer, and the two would drift.
+      onRevoked: (revoked) => {
+        for (const device of admittedDevices.prune(revoked)) {
+          // One line per phone, named. "Withdrew 1 admission" would leave the
+          // owner with no idea which phone in their hand just stopped working.
+          console.error(
+            `Admission withdrawn: ${device.name ?? device.deviceId} was revoked at the registry`
+          )
+        }
+      }
+    })
   : null
+
+/**
+ * REVOCATION REACHES THIS MAC'S LAN ADMISSION.
+ *
+ * "Revoking a device kills its session now, its door tokens within the token
+ * TTL, and its LAN admission on every Mac within a minute" — the security
+ * model's fifth line. The first two were already true and the third was not: a
+ * revoked phone went on opening this Mac over Wi-Fi until somebody pressed
+ * FORGET here, which is why the copy had to admit as much.
+ *
+ * It hangs on a clock because there is nothing else to hang it on. A phone
+ * that was cut off does not announce itself, and the door verifier asks the
+ * registry anything only when a stranger calls a served crew — a Mac serving
+ * nobody would never have asked at all. A minute is the number the security
+ * model promises, so it is the number here.
+ *
+ * A function declaration rather than a const because `accounts`' onChange is
+ * written above the verifier and calls it; it runs only after a write to the
+ * account file, long after module scope has finished.
+ */
+const REVOCATION_SWEEP_MS = 60_000
+function sweepRevocations(): void {
+  if (!v2CallTokens) return
+  // Nothing admitted is nothing to withdraw, and a Mac with no phone paired to
+  // it should not be asking the registry a question it has no use for.
+  if (admittedDevices.list().length === 0) return
+  void v2CallTokens.refresh()
+}
+setInterval(sweepRevocations, REVOCATION_SWEEP_MS).unref()
 /** Who has signed in at each served door — the memory behind D7's avatars. */
 const doorCallers = new DoorCallers()
 /** The owner's seat routes at cookrew.dev, spoken with the owner's session. */
