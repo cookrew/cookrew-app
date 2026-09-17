@@ -82,3 +82,62 @@ describe('forgetting an admitted phone answers the question that was asked', () 
     }
   })
 })
+
+describe('pruning the phones the registry has revoked', () => {
+  let temp: { base: string; clean: () => void }
+  beforeEach(() => (temp = tempBase()))
+  afterEach(() => temp.clean())
+
+  it('forgets every admitted phone the list names, and says which ones', () => {
+    const store = createAdmittedDeviceStore({ base: temp.base })
+    store.record({ deviceId: 'cut', name: 'Old phone' })
+    store.record({ deviceId: 'kept' })
+
+    const forgotten = store.prune(['cut'])
+
+    expect(forgotten.map((device) => device.deviceId)).toEqual(['cut'])
+    // The row comes back so the caller can name the phone in its notice; a
+    // count would leave the owner reading "1 device" with no idea which.
+    expect(forgotten[0].name).toBe('Old phone')
+    expect(store.has('cut')).toBe(false)
+    expect(store.has('kept')).toBe(true)
+  })
+
+  it('AN EMPTY LIST FORGETS NOBODY, and does not even open the file to write', () => {
+    // A malformed revoked list reads as empty (v2-call-token.ts), so "the
+    // registry told us nothing" arrives here as []. Reading that as "forget
+    // everyone" would unpair every phone on one bad deploy of the registry.
+    const store = createAdmittedDeviceStore({ base: temp.base })
+    store.record({ deviceId: 'kept' })
+    chmodSync(temp.base, 0o500)
+    try {
+      expect(store.prune([])).toEqual([])
+    } finally {
+      chmodSync(temp.base, 0o700)
+    }
+    expect(store.has('kept')).toBe(true)
+  })
+
+  it('passes a session id through inert — it is a filter on OUR ids', () => {
+    // /v2/keys lists revoked SESSIONS beside revoked devices. A session id
+    // matches no deviceId, so it must simply find nothing.
+    const store = createAdmittedDeviceStore({ base: temp.base })
+    store.record({ deviceId: 'phone' })
+    expect(store.prune(['some-session-jti', 'another'])).toEqual([])
+    expect(store.has('phone')).toBe(true)
+  })
+
+  it('names nothing when the file would not take the change — the phone IS still admitted', () => {
+    const store = createAdmittedDeviceStore({ base: temp.base })
+    store.record({ deviceId: PHONE })
+    chmodSync(temp.base, 0o500)
+    try {
+      // Same honesty as forget(): if the row survives, the caller must not be
+      // told it was withdrawn, or the notice claims an access that still works.
+      expect(store.prune([PHONE])).toEqual([])
+      expect(store.has(PHONE)).toBe(true)
+    } finally {
+      chmodSync(temp.base, 0o700)
+    }
+  })
+})
