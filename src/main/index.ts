@@ -255,6 +255,7 @@ import {
   startStripeCheckout,
   stripePaymentHeader
 } from './served-admission'
+import { doorBearer, type DoorBearerPort } from './door-bearer'
 import { gateDoorFor } from '../shared/gate-walk'
 import { buildX402Payment, deviceWallet } from './x402-caller'
 import { servedTurnReply } from './served-turn-reply'
@@ -1561,6 +1562,15 @@ const streamIpcDeps: StreamIpcDeps = {
  * (The R30 crew lane once threaded a remote client through seven seams and a
  * second card type; the owner reverted it. This is one seam and no new card.)
  */
+/**
+ * The port the two post-import calls are asked through. `accounts` is this
+ * Mac's session on cookrew.dev; the key store is the door's own file.
+ */
+const doorPort: DoorBearerPort = {
+  admit: (target, team) => admitWithAccount(target, team, accounts),
+  withKey: (target) => signInToDoor(target)
+}
+
 const doorTranscripts = new Map<string, Promise<DoorTranscript | null>>()
 
 function doorTranscriptFor(terminalId: string): Promise<DoorTranscript | null> {
@@ -1580,7 +1590,7 @@ function doorTranscriptFor(terminalId: string): Promise<DoorTranscript | null> {
     const target = name
       ? { origin: `http://127.0.0.1:${(await relayProxy()).port}`, slug: name }
       : { origin: facts.origin, slug: facts.slug }
-    return new DoorTranscript(target, { signIn: (at) => signInToDoor(at) })
+    return new DoorTranscript(target, { signIn: (at) => doorBearer(doorPort, at, name) })
   })().catch((error) => {
     console.error(`door transcript for ${terminalId}: ${String(error)}`)
     // NEVER the local file. A door card whose door cannot be reached is a
@@ -1610,7 +1620,7 @@ async function endSessionAtDoor(node: TerminalNodeData): Promise<void> {
     const target = name
       ? { origin: `http://127.0.0.1:${(await relayProxy()).port}`, slug: name }
       : { origin: facts.origin, slug: facts.slug }
-    const token = await signInToDoor(target)
+    const token = await doorBearer(doorPort, target, name)
     const res = await fetch(`${target.origin}/${target.slug}${SERVED_SESSION_END_PATH}`, {
       method: 'POST',
       redirect: 'manual',
