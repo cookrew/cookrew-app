@@ -13,9 +13,11 @@ import {
   migrateView,
   registerView,
   signInView,
+  triesFor,
   type ClaimFields,
   type Landing,
   type SheetState,
+  type TriesSpent,
 } from './account-store'
 import { LegacyPane, RegisterPane, SignInPane } from './SheetPanes'
 import { ResumeLadder } from './ResumeLadder'
@@ -79,8 +81,12 @@ export function AccountSheet({
   const [error, setError] = useState<string | null>(null)
   /** The sentence a crossing left under the name, and the name it is about. */
   const [crossed, setCrossed] = useState<{ sentence: string; name: string } | null>(null)
-  /** Wrong passwords on the sign-in side, counted against the registry's minute. */
-  const [wrongTries, setWrongTries] = useState(0)
+  /**
+   * Wrong passwords on the sign-in side, counted against the registry's
+   * minute — and the name they were spent on. `triesFor` in the store decides
+   * which count applies; this only holds its answer.
+   */
+  const [wrongTries, setWrongTries] = useState<TriesSpent>({ name: '', count: 0 })
   /** The ladder cookrew.dev opened (D10), or null while the password is the question. */
   const [ladder, setLadder] = useState<{ step: SecondFactorStep; lede: string } | null>(null)
   const field = useRef<HTMLInputElement>(null)
@@ -163,10 +169,18 @@ export function AccountSheet({
         // A refused password is the one moment the sign-in side asks HEAD:
         // "wrong password" and "no such account" are two different doors.
         const refused = result.reason === 'bad_credentials' || result.reason === 'session-expired'
-        const tries = refused ? wrongTries + 1 : wrongTries
+        const tries = triesFor(wrongTries, name, refused)
         setWrongTries(tries)
         const check = refused ? await availability(name) : null
-        land(crossingFor({ state: 'signin', username: name, refusal: result, check, wrongTries: tries }))
+        land(
+          crossingFor({
+            state: 'signin',
+            username: name,
+            refusal: result,
+            check,
+            wrongTries: tries.count,
+          }),
+        )
       })
       .catch((err: unknown) => setError(problemSentence(DOING.SIGN_IN, err)))
       .finally(() => setBusy(false))

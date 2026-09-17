@@ -587,6 +587,29 @@ export function registerView(fields: ClaimFields, crossed: string | null = null)
 export const SIGNIN_TRIES_PER_MINUTE = 5
 export const SIGNIN_PAUSE_MS = 60_000
 
+/** Wrong passwords spent so far, and the name they were spent on. */
+export interface TriesSpent {
+  name: string
+  count: number
+}
+
+/**
+ * The count that applies after an answer — WHICH IS PER NAME.
+ *
+ * The registry's budget belongs to the account, not to the sheet, so a tally
+ * carried across a change of name makes the sentence lie in the mean
+ * direction: mistype once on @foo, cross to @bar, and the sheet would say "3
+ * tries left" where cookrew.dev still allows four. A number offered to
+ * someone as a fact has to be one, so a new name starts at zero.
+ *
+ * `refused` is whether THIS answer was a refused password; anything else (a
+ * pause, a ladder, a network problem) leaves the tally where it was.
+ */
+export function triesFor(held: TriesSpent, name: string, refused: boolean): TriesSpent {
+  const spent = held.name === name ? held.count : 0
+  return { name, count: refused ? spent + 1 : spent }
+}
+
 /**
  * Where a refusal lands the sheet.
  *

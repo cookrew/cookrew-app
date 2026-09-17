@@ -30,7 +30,12 @@ export function AccountAvatar({
   onOpen: () => void
 }): React.JSX.Element {
   const view = avatarView(status)
-  const label = view.state === 'none' ? 'Claim a username' : `Account ${view.title}`
+  // THE ACCESSIBLE NAME IS THE DOOR THIS OPENS, and D9 moved that door. It
+  // said "Claim a username" while the click now lands on SIGN IN, which told
+  // a screen-reader user one thing and a sighted one another. The hover
+  // sentence beside it (`title`) is the copy table's; this is the short name
+  // of the destination, which no sentence in the table spells.
+  const label = view.state === 'none' ? 'Sign in or create an account' : `Account ${view.title}`
   return (
     <button
       type="button"

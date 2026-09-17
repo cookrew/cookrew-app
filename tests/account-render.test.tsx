@@ -100,12 +100,12 @@ describe('the avatar joins the brand group, after the wordmark (D1)', () => {
 })
 
 describe('the avatar, in three states', () => {
-  it('NO ACCOUNT is a dashed circle with the hover sentence', () => {
+  it('NO ACCOUNT is a dashed circle with the hover sentence, named for the door it opens', () => {
     const html = renderToStaticMarkup(
       <AccountAvatar status={status({ username: null })} onOpen={() => undefined} />,
     )
     expect(html).toContain('cr-acct-none')
-    expect(html).toContain('Claim a username')
+    expect(html).toContain('Sign in or create an account')
     expect(html).toContain(ACCOUNT_COPY.NO_ACCOUNT.slice(0, 40))
     expect(html).not.toContain('cr-viewseg-badge')
   })

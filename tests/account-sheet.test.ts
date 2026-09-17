@@ -18,6 +18,7 @@ import {
   joinLede,
   registerView,
   signInView,
+  triesFor,
 } from '../src/renderer/src/account/account-store'
 
 const STRONG = 'correct-horse-battery'
@@ -178,6 +179,36 @@ describe('the three crossings — a wrong tab is never a dead end (D9)', () => {
     expect(
       crossingFor({ state: 'signin', username: 'drej', refusal: { reason: 'rate_limited' } }),
     ).toEqual({ kind: 'stay', sentence: 'Too many tries. Wait 60 seconds and try again.' })
+  })
+
+  it('counts the tries against the NAME, so a crossing does not spend another name’s budget', () => {
+    // The registry's budget is per account. A tally carried across a change of
+    // name would have the sheet say "3 tries left" where cookrew.dev still
+    // allows four — a number offered as a fact, that is not one.
+    const first = triesFor({ name: '', count: 0 }, 'nosuchperson', true)
+    expect(first).toEqual({ name: 'nosuchperson', count: 1 })
+
+    const afterCrossing = triesFor(first, 'drej', true)
+    expect(afterCrossing).toEqual({ name: 'drej', count: 1 })
+    expect(
+      crossingFor({
+        state: 'signin',
+        username: 'drej',
+        refusal: { reason: 'bad_credentials' },
+        check: 'taken',
+        wrongTries: afterCrossing.count,
+      }),
+    ).toEqual({ kind: 'stay', sentence: 'Not it. 4 tries left before a 1-minute pause.' })
+
+    // Staying on the name keeps counting it down.
+    expect(triesFor(afterCrossing, 'drej', true)).toEqual({ name: 'drej', count: 2 })
+  })
+
+  it('only a refused password spends a try — a pause or a ladder does not', () => {
+    const held = { name: 'drej', count: 2 }
+    expect(triesFor(held, 'drej', false)).toEqual({ name: 'drej', count: 2 })
+    // …and an unrelated name that was never refused still starts clean.
+    expect(triesFor(held, 'someone', false)).toEqual({ name: 'someone', count: 0 })
   })
 
   it('SIGN IN on a device the account has not seen → the ladder, with the join lede (D10)', () => {
