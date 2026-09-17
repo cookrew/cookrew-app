@@ -350,6 +350,54 @@ describe('the lock screen knows who is waiting (D13)', () => {
   })
 })
 
+describe('the Devices tab knows which Mac it is on (v3, D12)', () => {
+  const devices = [
+    { id: 'dev-here', kind: 'desktop' as const, name: 'MacBook Pro · drej-mbp', addedAt: 1, lastSeenAt: Date.now(), current: true },
+    { id: 'dev-there', kind: 'desktop' as const, name: 'Mac Studio · studio', addedAt: 1, lastSeenAt: Date.now(), current: false },
+    { id: 'dev-phone', kind: 'phone' as const, name: 'iPhone', addedAt: 1, lastSeenAt: Date.now(), current: false },
+  ]
+  const html = renderToStaticMarkup(
+    <ProfileSheet
+      status={status()}
+      initialTab="DEVICES"
+      initialProfile={{ username: 'drej', displayName: '', avatar: null, claimedAt: 1, devices, desktops: [] }}
+      onClose={() => undefined}
+      onStatus={() => undefined}
+    />,
+  )
+
+  it('marks this Mac, and gives it the one verb that is its own', () => {
+    expect(html).toContain('THIS MAC')
+    expect(html).not.toContain('THIS DEVICE')
+    expect(html.match(/SIGN OUT ON THIS MAC/g)?.length).toBe(1)
+  })
+
+  it('offers REVOKE on every other device and never on this one', () => {
+    // Two other devices, two REVOKE buttons — and the confirmation's own
+    // REVOKE is not on screen until a row is opened.
+    expect(html.match(/>REVOKE</g)?.length).toBe(2)
+  })
+
+  it('shows the names as "<model> · <host>", distinguishable at a glance', () => {
+    expect(html).toContain('MacBook Pro · drej-mbp')
+    expect(html).toContain('Mac Studio · studio')
+  })
+
+  it('renders ADD A MAC and ADD A PHONE disabled, saying when they come, with no handler', () => {
+    for (const verb of ['ADD A MAC', 'ADD A PHONE']) {
+      const button = html.match(new RegExp(`<button[^>]*>${verb}</button>`))?.[0]
+      expect(button, verb).toBeDefined()
+      expect(button).toContain('disabled=""')
+      expect(button).toContain('title="Coming in cut 2"')
+    }
+  })
+
+  it('asks for nothing until a verb is pressed', () => {
+    expect(html).not.toContain('type="password"')
+    expect(html).not.toContain('Everything on the canvas stays')
+  })
+})
+
 describe('the profile sheet (D4)', () => {
   const sheet = (over: Partial<React.ComponentProps<typeof ProfileSheet>> = {}): string =>
     renderToStaticMarkup(

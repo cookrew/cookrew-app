@@ -213,6 +213,22 @@ export function revokeSentence(deviceName: string): string {
   return accountCopy('d12.revoke', { device: deviceName })
 }
 
+/**
+ * D12: what SIGN OUT ON THIS MAC does, said before it is done — what leaves
+ * (this Mac), what stays (the canvas), what goes quiet (the doors).
+ */
+export function signOutSentence(username: string): string {
+  return accountCopy('d12.sign-out', { handle: normaliseUsername(username) })
+}
+
+/**
+ * The two verbs cut 2 adds to the Devices tab (V3-10, V3-12). Rendered now,
+ * disabled, so the tab already has the shape it will keep — a button that
+ * appears later is a feature nobody can find; one that says when it comes is
+ * a promise.
+ */
+export const COMING_IN_CUT_2 = 'Coming in cut 2'
+
 /** "Not it. 4 tries left before a 1-minute pause." */
 export function wrongPasswordSentence(triesLeft: number): string {
   return `Not it. ${triesLeft} ${triesLeft === 1 ? 'try' : 'tries'} left before a 1-minute pause.`

@@ -25,6 +25,7 @@ import {
   refusalSentence,
   rescueState,
   revokeSentence,
+  signOutSentence,
   takenSentence,
   wrongPasswordSentence,
 } from '../src/renderer/src/account/account-store'
@@ -323,6 +324,20 @@ describe('the lock screen knows who is waiting (D13)', () => {
     const note = lockNote({ ok: false, reason: 'wrong', triesLeft: 2 }, { count: 1, names: ['Mac Studio'] })
     expect(note.line).toBe('Not it. 2 tries left before a 1-minute pause.')
     expect(note.waiting).toBe('Mac Studio is waiting to join — unlock to answer.')
+  })
+})
+
+describe('the sign-out confirmation says what leaves, what stays, what goes quiet (D12)', () => {
+  it('is the table’s sentence, with the handle in it', () => {
+    expect(signOutSentence('@drej')).toBe(
+      'This Mac leaves @drej. Everything on the canvas stays. The doors it serves go offline until it signs in again.',
+    )
+  })
+
+  it('the last device is refused in the table’s words, named when the handle is known', () => {
+    expect(refusalSentence('last_device', undefined, 'drej')).toBe(
+      'This is the last device on @drej — add another first, or the account has no way back in.',
+    )
   })
 })
 

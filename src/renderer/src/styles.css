@@ -5782,6 +5782,30 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   white-space: nowrap;
 }
 
+/* D12: THIS MAC, said in the house amber rather than as one more grey state. */
+.cr-acct-thismac {
+  color: var(--amber-deep);
+  font-weight: 600;
+}
+
+/* D12: the step-up under a row — the sentence, the password, the two verbs. */
+.cr-acct-stepup {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 6px;
+}
+
+/* D12: the two verbs cut 2 adds, disabled until their lanes land. */
+.cr-acct-add {
+  margin-top: 10px;
+}
+.cr-acct-add button[disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .cr-acct-workspaces li {
   padding: 6px 0;
   font-size: 13px;

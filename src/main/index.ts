@@ -115,6 +115,7 @@ import { createCanvasLink } from './canvas-link'
 import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
 import { IdleLock } from './lock'
 import { registerAccountIpc } from './account-ipc'
+import { localDeviceName } from './device-name'
 import { Approvals } from './approvals'
 import {
   DoorCallers,
@@ -220,7 +221,6 @@ import { DoorWatch } from './door-watch'
 import { doorNameOf, transcriptSourceFor } from './transcript-source'
 import { readJson, respondJson } from './mobile-http'
 import { deriveSlug, uniqueSlug } from './workspace-slug'
-import { hostname } from 'node:os'
 import { publishedLocalAddresses } from './local-interfaces'
 import { wireServing, type Serving } from './session-serving'
 import { servedTemplateFile } from './served-persist'
@@ -638,7 +638,10 @@ const ENV_HANDLE = process.env.COOKREW_HANDLE ?? ''
  * than throws. Nothing here is on the serving path.
  */
 const accounts = new Accounts({
-  deviceName: hostname(),
+  // "<model> · <host>" (v3, D12): two Macs of one model are told apart by
+  // host, and a name already on the account gets a counter — decided here,
+  // never at the registry, which files what it is sent.
+  deviceName: localDeviceName(),
   // THE ACCOUNT CHANGED WITHOUT A CLICK ON THIS MAC. A password changed on the
   // web ends this session; nothing local would ever notice. Pushing the status
   // is what turns that into a password prompt the owner can actually answer.
@@ -5248,6 +5251,19 @@ function registerIpc(handlers: RestoreHandlers): void {
       // change whether there is a line to hold at all.
       canvasLink.refresh()
       void reachPublisher?.republish(reason).catch(() => undefined)
+    },
+    // SIGN OUT ON THIS MAC (v3, D12): the doors this Mac serves come down —
+    // each one stopped here and delisted at the registry, exactly as the
+    // SERVING panel's own STOP does — and the relay line is let go. The
+    // canvas link re-reads the account and finds none to hold a line for.
+    // Workspaces, cards and terminals are not touched.
+    signedOut: async () => {
+      for (const template of serving.served.list()) {
+        serving.stop(template.serviceId)
+        await relayServing?.withdraw(template.slug).catch(() => undefined)
+      }
+      relayServing?.closeAll()
+      canvasLink.refresh()
     },
     // SAVE AS FILE. The dialog lives here because account-ipc.ts must stay
     // free of Electron; the CODES come from main's own memory, never from the

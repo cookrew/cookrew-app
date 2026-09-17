@@ -77,7 +77,10 @@ const api = {
   accountResumeWait: (pending: string) => ipcRenderer.invoke('account:resumeWait', pending),
   accountProfile: () => ipcRenderer.invoke('account:profile'),
   accountDevices: () => ipcRenderer.invoke('account:devices'),
-  accountRevoke: (deviceId: string) => ipcRenderer.invoke('account:revoke', deviceId),
+  // v3 (D12): both verbs on the Devices tab step up for the password.
+  accountRevoke: (input: { deviceId: string; password: string }) =>
+    ipcRenderer.invoke('account:revoke', input),
+  accountSignOut: (password: string) => ipcRenderer.invoke('account:signOut', password),
   accountRecoveryCodes: () => ipcRenderer.invoke('account:recoveryCodes'),
   /** SAVE AS FILE. Takes nothing: main writes the batch IT minted, never the
    *  renderer's copy, so this cannot be talked into writing chosen bytes. */

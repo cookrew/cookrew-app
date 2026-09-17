@@ -29,6 +29,7 @@ export const DOING = {
   PROFILE: 'Your account could not be read from cookrew.dev',
   DEVICES: 'The devices on your account could not be read',
   REVOKE: 'That device could not be revoked',
+  SIGN_OUT: 'This Mac could not sign out',
   FORGET: 'That phone could not be forgotten',
   DISPLAY_NAME: 'That name could not be saved',
   FACTORS: 'Your security settings could not be read',
