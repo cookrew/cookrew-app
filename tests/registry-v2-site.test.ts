@@ -12,6 +12,8 @@ import { DoorStore } from '../registry/src/doors'
 import { StarStore } from '../registry/src/stars'
 import { createV2 } from '../registry/src/v2-routes'
 import { ASSETS } from '../registry/src/assets-bundle'
+import { WEB_V3_COPY } from '../registry/src/v3-copy'
+import { esc } from '../registry/src/site-shell'
 
 /**
  * IDENTITY v2 ON THE SITE — the sheet's markup, the CSP that keeps it inert,
@@ -129,9 +131,10 @@ describe('/me', () => {
     expect(res.headers.get('cache-control')).toBe('private, no-store')
     const body = await res.text()
     expect(body).toContain('data-signin')
-    // The lede is the shared one now (V3-07): /me stopped writing its own
-    // copy of a sentence the desktop and the companion also say.
-    expect(body).toContain('Sign in — or create an account.')
+    // The lede is the shared D1 sentence (v3), not a line written here: the
+    // same words the avatar hovers on the Mac. Asserted BY THE TABLE so the
+    // day it is reworded this test moves with it instead of failing.
+    expect(body).toContain(esc(WEB_V3_COPY['avatar.no-account']))
     expect(body).toContain('noindex')
   })
 

@@ -79,6 +79,6 @@ describe('the brand group holds exactly one avatar', () => {
     desktopWindow()
     const html = renderToStaticMarkup(<Bar />)
     expect(avatars(html)).toBe(1)
-    expect(html).toContain('Claim a username')
+    expect(html).toContain('Sign in or create an account')
   })
 })

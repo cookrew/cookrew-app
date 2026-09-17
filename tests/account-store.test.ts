@@ -99,15 +99,14 @@ describe('the claim sheet decides, and always says why (D2)', () => {
   })
 
   it('names the act on the button', () => {
-    expect(fields({ username: '@drej', check: 'free' }).primary).toBe('CLAIM @DREJ')
-    expect(fields().primary).toBe('CLAIM')
+    expect(fields({ username: '@drej', check: 'free' }).primary).toBe('CREATE @DREJ')
+    expect(fields().primary).toBe('CREATE')
   })
 
   it('refuses a taken name in the copy table’s words', () => {
     const view = fields({ username: 'anvz', check: 'taken' })
     expect(view.username.tone).toBe('bad')
-    // V3 sends a taken name to the sign-in door instead of to another name:
-    // the second Mac's whole path begins with the handle already existing.
+    // D9: a name that exists is the other door, not a dead end.
     expect(view.username.note).toBe('@anvz already exists — sign in with your password.')
     expect(view.canClaim).toBe(false)
   })
