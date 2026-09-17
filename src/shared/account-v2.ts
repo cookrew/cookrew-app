@@ -287,6 +287,16 @@ export interface SecondFactorStep {
   next: readonly LadderFactor[]
   /** When the registry drops it. The card counts down against this. */
   expiresAt: number
+  /**
+   * The two digits THIS device must show, so the device being asked to
+   * approve can type them. Carried here and not rendered here: the card is
+   * V3-12's, and a field the parse threw away could not be drawn later.
+   *
+   * Optional because a step must survive a registry that sent none. Absent is
+   * a sign-in that cannot be approved, which is a thing to SHOW rather than a
+   * reason to discard the whole step and answer "bad credentials".
+   */
+  match?: string
 }
 
 /**
