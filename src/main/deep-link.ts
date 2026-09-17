@@ -78,6 +78,36 @@ function fromRegistryPage(url: URL): DeepLink | null {
   return address === null ? null : { verb: 'import', address }
 }
 
+/**
+ * A JOIN CODE, as the registry prints it: two blocks of four from the
+ * recovery-code alphabet (no 0/O, no 1/I/L), dashed. Read from a fragment a
+ * person may have retyped, so the dash and the case are forgiven here — the
+ * registry forgives them too — and the canonical spelling is what travels.
+ */
+const JOIN_CODE = /^([2-9A-HJ-NP-Z]{4})-?([2-9A-HJ-NP-Z]{4})$/
+
+/** `XXXX-XXXX` from whatever a fragment carried, or null. */
+export function normaliseJoinCode(raw: string): string | null {
+  const match = JOIN_CODE.exec(raw.trim().toUpperCase().replace(/\s+/g, ''))
+  return match === null ? null : `${match[1]}-${match[2]}`
+}
+
+/**
+ * `cookrew://join#<code>` — the ONE shape that may carry a fragment.
+ *
+ * Every other link is refused for having one, and stays refused: a fragment
+ * is the part of a URL that never reaches a server, which is exactly why the
+ * join code lives there and exactly why nothing else may. The path and the
+ * query must be empty; a link that says `join/something#code` is asking for
+ * a behaviour this app does not have.
+ */
+function fromJoin(url: URL): DeepLink | null {
+  if (url.username || url.password || url.search.length > 0) return null
+  if (url.pathname !== '' && url.pathname !== '/') return null
+  const code = normaliseJoinCode(decodeURIComponent(url.hash.replace(/^#/, '')))
+  return code === null ? null : { verb: 'join', code }
+}
+
 /** Parse one link, or null. Never throws, never rewrites. */
 export function parseDeepLink(raw: string): DeepLink | null {
   const trimmed = raw.trim()
@@ -88,6 +118,7 @@ export function parseDeepLink(raw: string): DeepLink | null {
   } catch {
     return null
   }
+  if (url.protocol === `${DEEP_LINK_SCHEME}:` && url.hostname === 'join') return fromJoin(url)
   if (url.username || url.password || url.hash) return null
   if (url.protocol === `${DEEP_LINK_SCHEME}:`) return fromScheme(url)
   if (url.protocol === 'https:') return fromRegistryPage(url)

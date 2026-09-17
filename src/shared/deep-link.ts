@@ -12,6 +12,13 @@ export type DeepLink =
   | { verb: 'import'; address: string; session?: 'new' }
   | { verb: 'install'; presetId: string }
   | { verb: 'serve'; address: string }
+  /**
+   * `cookrew://join#<code>` (v3, D8): a join code minted on a device the
+   * account already trusts. The code rides the FRAGMENT so that the https
+   * page that hands the link over (cookrew.dev/join) never sees it on the
+   * wire; it is normalised to the `XXXX-XXXX` form the registry prints.
+   */
+  | { verb: 'join'; code: string }
 
 /** The main → renderer channel a parsed link travels on. */
 export const DEEP_LINK_CHANNEL = 'app:deep-link'
