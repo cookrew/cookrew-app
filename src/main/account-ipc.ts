@@ -131,6 +131,10 @@ export const ACCOUNT_CHANNELS = [
   'account:lock',
   'account:unlock',
   'account:resume',
+  // v3: the second Mac — a name typed in, a fresh device key minted here. It
+  // may answer the same ladder `account:resume` does, and the three rungs
+  // below finish it unchanged.
+  'account:signIn',
   // ── the second-factor ladder, on the way back in ──
   //
   // The password step is `account:resume`; these three are the rungs after a
@@ -290,6 +294,30 @@ async function resume(
   password: string,
 ): Promise<SignInAnswer<AccountStatus>> {
   const result = await deps.accounts.resume(password)
+  return result.ok ? { ok: true, value: signedIn(deps) } : result
+}
+
+/**
+ * THE SECOND MAC: sign in with the password to an account this Mac has never
+ * held (v3, D9 · D10). Same wrapper as `resume`: a landed session is the same
+ * work to unblock — lock proven, approvals listening, reach published — and
+ * a ladder is handed up as-is for the same three rungs to climb.
+ *
+ * Shape is checked here and nothing more: an empty name is refused without a
+ * socket, but the password is not measured — it is an existing account's,
+ * and only cookrew.dev knows whether it is right.
+ */
+async function signIn(
+  deps: AccountIpcDeps,
+  input: unknown,
+): Promise<SignInAnswer<AccountStatus>> {
+  const fields = asRecord(input)
+  const name = fields.name === undefined ? undefined : asString(fields.name)
+  const result = await deps.accounts.signIn({
+    username: asString(fields.username),
+    password: asString(fields.password),
+    ...(name ? { name } : {}),
+  })
   return result.ok ? { ok: true, value: signedIn(deps) } : result
 }
 
@@ -504,6 +532,7 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     'account:lock': () => settled(deps, 'This Mac could not be locked', () => deps.lock.lock()),
     'account:unlock': (password: unknown) => unlock(deps, asString(password)),
     'account:resume': (password: unknown) => resume(deps, asString(password)),
+    'account:signIn': (input: unknown) => signIn(deps, input),
     'account:resumeCode': (input: unknown) => resumeCode(deps, input),
     'account:resumeAsk': (pending: unknown): Promise<AccountResult<ApprovalAsked>> =>
       deps.accounts.resumeAsk(asString(pending)),
