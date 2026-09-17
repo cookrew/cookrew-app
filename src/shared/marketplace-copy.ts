@@ -293,7 +293,7 @@ export const MKT_INSTALL_PRICE = {
  * `why`, so it is cut once here at the first sentence boundary. Placeholders
  * never contain the boundary, so the cut lands the same before and after fill.
  */
-function headlineAndWhy(cell: string): { title: string; body: string } {
+export function headlineAndWhy(cell: string): { title: string; body: string } {
   const cut = cell.indexOf('. ')
   return cut === -1
     ? { title: cell, body: '' }
@@ -559,7 +559,6 @@ export const MKT_SAVE = {
   'mkt.save.error': "Couldn't save that — nothing was stored and nothing was published."
 } as const
 
-export type MktEnrolId = keyof typeof MKT_ENROL
 export type MktSaveId = keyof typeof MKT_SAVE
 
 /** Account vocabulary — the public door. */
@@ -1051,36 +1050,37 @@ export function accessLabel(n: number): string {
 
 /**
  * THE GATE SHEET's own receipts and step labels (R28). The deck already owns
- * the FORM strings for each moment — MKT_AUTH asks identity, MKT_PAY asks money,
- * MKT_ENROL runs the ceremony. What the one sheet added is the COLLAPSED line: a
- * step you have cleared becomes a one-line receipt, and those short lines had no
- * home until the sheet existed. They live here so the sheet reads no prose of
- * its own.
+ * the FORM strings for each moment — MKT_AUTH asks identity, MKT_PAY asks money.
+ * What the one sheet added is the COLLAPSED line: a step you have cleared
+ * becomes a one-line receipt, and those short lines had no home until the sheet
+ * existed. They live here so the sheet reads no prose of its own.
  *
- * The two doors keep separate strings so the R31 wall holds by construction: the
- * install receipt speaks accounts, the call receipt speaks the ceremony, and
- * because they are different ids no sheet can render both.
+ * The two doors keep separate strings: the install receipt speaks accounts and
+ * seats, the DIRECT receipt speaks this Mac's key and nothing that follows you
+ * — and because they are different ids no sheet can render both.
  */
 export const MKT_GATE = {
   /** Cleared identity, install door — account vocabulary only. */
   'mkt.gate.identify.install.done': "You're signed in.",
   'mkt.gate.identify.install.why': 'Your Cookrew account, on this device.',
-  /** Cleared identity, call door — ceremony vocabulary only. */
-  'mkt.gate.identify.call.done': 'You compared the words.',
-  'mkt.gate.identify.call.why':
-    'Same words, same key — enrolled out loud, never over this connection.',
+  /** Cleared seat rung, install door — a paid team the account is seated at. */
+  'mkt.gate.seat.done': 'You have a seat here.',
+  'mkt.gate.seat.why': 'A seat is per account and follows you to any device.',
+  /** Cleared identity, DIRECT door — this Mac's key, no account anywhere. */
+  'mkt.gate.identify.direct.done': "Connected with this Mac's key.",
+  'mkt.gate.identify.direct.why': 'No account was involved; nothing follows you elsewhere.',
   /** Served, install door — the copy is placed. */
   'mkt.gate.open.install.title': 'Yours. Placing it on your canvas…',
   'mkt.gate.open.install.why': 'Their originals are untouched — your copy runs against a fork.',
-  /** Served, call door — the line is up. */
-  'mkt.gate.open.call.title': 'Connected.',
-  'mkt.gate.open.call.why': 'Calls run against a fork — their original is never touched.',
+  /** Served, DIRECT door — the line is up. */
+  'mkt.gate.open.direct.title': 'Connected.',
+  'mkt.gate.open.direct.why': 'Calls run against a fork — their original is never touched.',
   /** Acknowledge the served state and close — the copy is already placed. */
   'mkt.gate.open.action': 'DONE',
   /** The pin you leave with — the violet mark, said in words. */
   'mkt.gate.pin': 'Pinned to your rail',
   'mkt.gate.pin.why': 'Update from the chip when a new version ships — never pushed, always offered.',
-  /** Door B's honest wait — a first reply is slow while the line warms. */
+  /** The direct door's honest wait — a first reply is slow while the line warms. */
   'mkt.gate.warming':
     'First reply can take a moment while the line warms — the card says so; it never just spins.',
   /** No quote existed, so no payment could have been sent or checked. */
@@ -1120,7 +1120,6 @@ export const MKT_ALL = {
   ...MKT_DENIED_REASONS,
   ...MKT_BLOCKED,
   ...MKT_EXPORT,
-  ...MKT_ENROL,
   ...MKT_SAVE,
   ...MKT_TEMPLATE,
   ...MKT_SERVE,

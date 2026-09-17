@@ -232,6 +232,7 @@ import { serviceGrants } from './service-grants-store'
 import { requestHarnessCompletion, servedGrantPreflight } from './served-grant-preflight'
 import { servedSessionProvisioner } from './served-onboarding'
 import {
+  doorOwnerOf,
   gateCaller,
   handleServedRoute,
   identifyCaller,
@@ -248,11 +249,13 @@ import {
   type ServeTarget
 } from './import-session'
 import {
+  admitWithAccount,
   openAdmission,
   signInToDoor,
   startStripeCheckout,
   stripePaymentHeader
 } from './served-admission'
+import { gateDoorFor } from '../shared/gate-walk'
 import { buildX402Payment, deviceWallet } from './x402-caller'
 import { servedTurnReply } from './served-turn-reply'
 import { handleServedPayRoute } from './served-pay-route'
@@ -3605,6 +3608,19 @@ const serveOps = {
       return { ok: false as const, reason: 'unreachable' as const }
     }
   },
+  /**
+   * THE GATE — which walk, and what the door said (identity v3, G1/G3).
+   *
+   * One decision splits it, `gateDoorFor`: a LISTED team (a published name the
+   * directory answers for) is entered as the ACCOUNT — cookrew.dev mints a
+   * call token for this Mac's session and the door seats `acct-<username>`,
+   * the same person the web seated, so a seat bought there admits here with
+   * no second payment. With no account on this Mac the answer is the
+   * `identify` phase and the sheet opens the account sheet in place. The
+   * caller key is offered at UNLISTED doors only — the DIRECT walk — because
+   * a key-holder sub can never be the person a seat names. The phone's gate
+   * verb (mobile-api /api/serve/gate) runs this same function.
+   */
   gate: async (link: string) => {
     const target = parseServeAddress(link)
     if (!target) return { ok: false as const, reason: 'bad-address' as const }
@@ -3612,10 +3628,29 @@ const serveOps = {
       const reached = await reachable(target)
       if (!reached) return { ok: false as const, reason: 'sign-in' as const, detail: 'not serving' }
       const at = reached.at
-      const token = await signInToDoor(at)
-      callerTokens.set(targetKey(target), token)
-      const phase = await openAdmission(at, token)
-      return { ok: true as const, phase, wallet: deviceWallet() }
+      const door = gateDoorFor(target, reached)
+      if (door === 'direct') {
+        const token = await signInToDoor(at)
+        callerTokens.set(targetKey(target), token)
+        const phase = await openAdmission(at, token)
+        return { ok: true as const, door, phase, wallet: deviceWallet() }
+      }
+      const team = target.door as string
+      const admitted = await admitWithAccount(at, team, accounts)
+      if (admitted.token !== null) callerTokens.set(targetKey(target), admitted.token)
+      return {
+        ok: true as const,
+        door,
+        phase: admitted.phase,
+        wallet: deviceWallet(),
+        // The facts the sheet's sentences name: the team, who can say yes,
+        // and who this Mac is (the usual cause of a no_seat is being signed
+        // in as somebody else).
+        team,
+        owner: doorOwnerOf(team),
+        account: admitted.account,
+        seat: admitted.seat
+      }
     } catch (error) {
       return {
         ok: false as const,

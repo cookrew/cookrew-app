@@ -8,6 +8,7 @@ import { ProfileSheet, type ProfileTab } from './ProfileSheet'
 import { ResumeSession } from './ResumeSession'
 import { SecurityCard } from './SecurityCard'
 import { securityActions } from './security-actions'
+import { onAccountSheetRequest } from './open-request'
 
 /**
  * THE ACCOUNT SURFACE, assembled — one hook, so App gains three lines.
@@ -114,16 +115,25 @@ export function useAccountSurface(): AccountSurface {
     }
   }, [supported])
 
-  if (!supported) return { avatar: null, overlays: null }
-
-  const open = (): void => {
+  // THE ONE WAY IN, shared by the avatar and by anyone who asks (G1: the
+  // gate sheet's identify step opens this in place). A signed-in account
+  // lands on its profile; no account lands on the claim sheet, which V3-02
+  // grows into the three-state sheet — this is its one entry either way.
+  const open = useCallback((): void => {
     if (status?.username) {
       setTab('PROFILE')
       setSheet('profile')
     } else {
       setSheet('claim')
     }
-  }
+  }, [status?.username])
+
+  useEffect(() => {
+    if (!supported) return
+    return onAccountSheetRequest(open)
+  }, [supported, open])
+
+  if (!supported) return { avatar: null, overlays: null }
 
   const overlays = (
     <>
