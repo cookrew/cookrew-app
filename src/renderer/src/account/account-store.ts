@@ -105,7 +105,23 @@ export const ACCOUNT_COPY = {
   LADDER_RECOVERY_HINT: 'One of the codes you saved. Each opens the account exactly once.',
   /** The approve rung, before and after it is pressed. */
   LADDER_ASK: 'Ask my other device',
-  LADDER_ASKED: 'Asked. Approve it on your phone or another Mac.',
+  /**
+   * D10, AFTER ASKING — HONEST ABOUT THE PHONE.
+   *
+   * "Approve it on your phone" promised a push that does not exist: nothing
+   * rings, nothing lights up, and the owner stood there waiting for a phone
+   * that had not been told. The sentence now says where the request can be
+   * FOUND, which is the only thing that is true.
+   */
+  LADDER_ASKED_HONEST: 'Asked. Open cookrew.dev on your phone, or look at your other Mac.',
+  /**
+   * D10, THE JOIN LEDE — the tail of the sentence; `joinLede` puts the name
+   * in front of it. A first join is not an expired session, and a card that
+   * said "Your session ended" to a Mac that never had one would be lying
+   * about what happened. The ladder takes this from its caller, never from
+   * its own body, so the two doors can say two different true things.
+   */
+  LADDER_JOIN_LEDE: 'is already on another device. Prove it is you and this Mac joins.',
   /**
    * The ladder is over and the password step is the way back.
    *
@@ -116,6 +132,14 @@ export const ACCOUNT_COPY = {
   LADDER_OVER: 'That sign-in was dropped. Type your password again.',
   /** D5. */
   LOCKED_WHY: 'Locked while you were away. Your agents kept working.',
+  /**
+   * D13, THE LOCK KNOWS WHO IS WAITING — the tail; `lockWaitingSentence`
+   * puts the device, or the count, in front of it. The idle lock is the
+   * moment a request is most likely to arrive, because the owner is at the
+   * other machine; a lock that hid the request would be the one screen that
+   * could not say the most useful thing it knows.
+   */
+  LOCK_WAITING: 'is waiting to join — unlock to answer.',
   /** The registry is not answering. */
   REGISTRY_DOWN:
     'cookrew.dev did not answer, so this name cannot be checked yet. Nothing local stops.',
@@ -458,7 +482,47 @@ export function migrateView(
   }
 }
 
-/** The lock screen's line under the avatar, whatever just happened. */
+/** D10: the sentence over a first join's ladder, with the name in front. */
+export function joinLede(username: string): string {
+  return `@${username} ${ACCOUNT_COPY.LADDER_JOIN_LEDE}`
+}
+
+/**
+ * WHO IS WAITING UNDER THE LOCK (D13).
+ *
+ * `count` is `AccountStatus.requests` and is always known; `names` are the
+ * device names of those requests IF the lock screen has been able to read the
+ * list, else empty. The two are separate on purpose: the count arrives with
+ * the status push, the names take a second call, and a lock that said nothing
+ * until the names came would be quiet exactly when it was first asked.
+ */
+export interface LockWaiting {
+  count: number
+  names: readonly string[]
+}
+
+export const NOBODY_WAITING: LockWaiting = { count: 0, names: [] }
+
+/** The D13 toast line, or null when there is nothing to answer. */
+export function lockWaitingSentence(waiting: LockWaiting): string | null {
+  if (waiting.count <= 0) return null
+  if (waiting.count === 1) {
+    const who = waiting.names[0] ?? 'A device'
+    return `${who} ${ACCOUNT_COPY.LOCK_WAITING}`
+  }
+  // Several: the count is the news, and a list of names on a locked screen
+  // would be a longer sentence about something nobody can act on from here.
+  return `${waiting.count} devices are waiting to join — unlock to answer.`
+}
+
+/** What the lock screen says: the line under the avatar, and who is waiting. */
+export interface LockNote {
+  line: string
+  /** D13: the request toast, or null. Beside the line, never instead of it. */
+  waiting: string | null
+}
+
+/** The lock screen's lines, whatever just happened and whoever is waiting. */
 export function lockNote(
   outcome:
     | null
@@ -466,7 +530,12 @@ export function lockNote(
     | { ok: false; reason: 'wrong'; triesLeft: number }
     | { ok: false; reason: 'paused'; pausedForMs: number }
     | { ok: false; reason: 'no-account' },
-): string {
+  waiting: LockWaiting = NOBODY_WAITING,
+): LockNote {
+  return { line: lockLine(outcome), waiting: lockWaitingSentence(waiting) }
+}
+
+function lockLine(outcome: Parameters<typeof lockNote>[0]): string {
   if (outcome === null || outcome.ok) return ACCOUNT_COPY.LOCKED_WHY
   if (outcome.reason === 'wrong') return wrongPasswordSentence(outcome.triesLeft)
   if (outcome.reason === 'paused') return pausedSentence(outcome.pausedForMs)
