@@ -177,7 +177,23 @@ export function useAccountSurface(): AccountSurface {
         />
       )}
       {/* LAST, and over everything: a lock drawn under a sheet is not a lock. */}
-      {status?.locked && status.username && <LockScreen status={status} onUnlocked={refresh} />}
+      {status?.locked && status.username && (
+        <LockScreen
+          status={status}
+          onUnlocked={(waiting) => {
+            refresh()
+            // D13: the lock said a device was waiting; unlocking lands on it.
+            // The same destination the notification and the rose badge lead
+            // to — the profile sheet, whose approval card sits above every
+            // tab — so the person who unlocked to answer is not then asked
+            // to find the question.
+            if ((waiting ?? 0) > 0) {
+              setTab('PROFILE')
+              setSheet('profile')
+            }
+          }}
+        />
+      )}
     </>
   )
 

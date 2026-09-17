@@ -314,6 +314,40 @@ describe('the lock screen (D5)', () => {
     expect(html).toContain('cr-acct-lock')
     expect(html).toContain('aria-modal="true"')
   })
+
+  it('says nothing about requests when nobody is waiting', () => {
+    expect(html).not.toContain('waiting to join')
+  })
+})
+
+describe('the lock screen knows who is waiting (D13)', () => {
+  // The count rides the status and is on screen at once; the names take a
+  // read the server renderer never makes, so the sentence here is the
+  // count-only one — which is exactly what the first paint shows.
+  const one = renderToStaticMarkup(
+    <LockScreen status={status({ locked: true, requests: 1 })} onUnlocked={() => undefined} />,
+  )
+  const three = renderToStaticMarkup(
+    <LockScreen status={status({ locked: true, requests: 3 })} onUnlocked={() => undefined} />,
+  )
+
+  it('says a device is waiting, beside the reason it is locked', () => {
+    expect(one).toContain('Locked while you were away. Your agents kept working.')
+    expect(one).toContain('A device is waiting to join — unlock to answer.')
+    expect(one).toContain('cr-acct-lock-waiting')
+  })
+
+  it('counts several', () => {
+    expect(three).toContain('3 devices are waiting to join — unlock to answer.')
+  })
+
+  it('offers nothing to approve from under the lock', () => {
+    for (const html of [one, three]) {
+      expect(html).not.toContain('APPROVE')
+      expect(html).not.toContain('NOT ME')
+      expect(html.match(/<button/g)?.length).toBe(1) // UNLOCK, and only UNLOCK
+    }
+  })
 })
 
 describe('the profile sheet (D4)', () => {
