@@ -12,6 +12,8 @@ import {
   profileKey,
   refusalSentence,
   revokeSentence,
+  signOutSentence,
+  COMING_IN_CUT_2,
 } from './account-store'
 import { ApprovalCard } from './ApprovalCard'
 import { DOING, problemSentence } from './problem'
@@ -69,6 +71,7 @@ export function ProfileSheet({
   status,
   initialTab = 'PROFILE',
   focusRequestId = null,
+  initialProfile = null,
   onClose,
   onStatus,
 }: {
@@ -76,6 +79,12 @@ export function ProfileSheet({
   initialTab?: ProfileTab
   /** The request a notification was clicked for; its card is shown first. */
   focusRequestId?: string | null
+  /**
+   * The profile to open on, before /v2/me has answered. The surface never
+   * passes one; a static render of the Devices tab (which has no effects to
+   * fetch with) does, so the rows can be pinned in a test.
+   */
+  initialProfile?: AccountProfile | null
   onClose: () => void
   onStatus: (next: AccountStatus) => void
 }): React.JSX.Element {
@@ -83,9 +92,17 @@ export function ProfileSheet({
   /** THIS MAC'S workspaces, read from the store the canvas already uses —
    *  names and ids, which is all that ever leaves the desktop (P1). */
   const [workspaces, setWorkspaces] = useState<readonly WorkspaceMeta[]>([])
-  const [profile, setProfile] = useState<AccountProfile | null>(null)
+  const [profile, setProfile] = useState<AccountProfile | null>(initialProfile)
   const [error, setError] = useState<string | null>(null)
+  /**
+   * The row whose verb was pressed and is waiting for the password: a device
+   * id for REVOKE, 'self' for SIGN OUT ON THIS MAC. One at a time — two open
+   * confirmations would be two password fields for one act.
+   */
   const [confirming, setConfirming] = useState<string | null>(null)
+  /** The step-up password. Spent the moment the act is done, either way. */
+  const [stepUp, setStepUp] = useState('')
+  const [acting, setActing] = useState(false)
   const [admitted, setAdmitted] = useState<readonly AdmittedPhone[]>([])
   const [pairing, setPairing] = useState(false)
   /** The devices waiting for an answer (D6) — main's polled queue. */
@@ -161,21 +178,67 @@ export function ProfileSheet({
       .catch((err: unknown) => setError(problemSentence(DOING.FORGET, err)))
   }
 
+  /** Both verbs end the same way: the field is emptied, the row closes. */
+  const settled = (): void => {
+    setActing(false)
+    setStepUp('')
+    setConfirming(null)
+  }
+
+  /**
+   * REVOKE, behind the password (D12). The DELETE goes only after cookrew.dev
+   * has taken the password again; a refusal is said in the registry's words,
+   * with the field still open, so a fat-fingered password is one more try and
+   * not a closed row.
+   */
   const revoke = (id: string): void => {
     const call = cookrew().accountRevoke
-    if (!call) return
-    setConfirming(null)
-    void call(id)
+    if (!call || acting || stepUp.length === 0) return
+    setActing(true)
+    setError(null)
+    void call({ deviceId: id, password: stepUp })
       .then((result) => {
         if (!result.ok) {
+          setActing(false)
           setError(refusalSentence(result.reason, result.message, username))
           return
         }
+        settled()
         setProfile((prior) =>
           prior ? { ...prior, devices: prior.devices.filter((d) => d.id !== id) } : prior,
         )
       })
-      .catch((err: unknown) => setError(problemSentence(DOING.REVOKE, err)))
+      .catch((err: unknown) => {
+        setActing(false)
+        setError(problemSentence(DOING.REVOKE, err))
+      })
+  }
+
+  /**
+   * SIGN OUT ON THIS MAC (D12). On success the status handed back has no
+   * username, and the surface that owns this sheet closes it — there is no
+   * account left to draw a profile of. The last device is refused with the
+   * sentence that says what would be lost; the row stays open on it.
+   */
+  const signOut = (): void => {
+    const call = cookrew().accountSignOut
+    if (!call || acting || stepUp.length === 0) return
+    setActing(true)
+    setError(null)
+    void call(stepUp)
+      .then((result) => {
+        if (!result.ok) {
+          setActing(false)
+          setError(refusalSentence(result.reason, result.message, username))
+          return
+        }
+        settled()
+        onStatus(result.value)
+      })
+      .catch((err: unknown) => {
+        setActing(false)
+        setError(problemSentence(DOING.SIGN_OUT, err))
+      })
   }
 
   /**
@@ -320,36 +383,104 @@ export function ProfileSheet({
               PAIR A PHONE
             </button>
             <ul className="cr-acct-devices">
-              {(profile?.devices ?? []).map((device) => (
-                <li key={device.id} className="cr-acct-device">
-                  <span className="cr-acct-kind">{KIND_LABEL[device.kind] ?? 'DEVICE'}</span>
-                  <span className="cr-acct-seclabel">{deviceName(device.name)}</span>
-                  {device.current ? (
-                    <span className="cr-acct-secstate">THIS DEVICE</span>
-                  ) : (
-                    <>
-                      <span className="cr-acct-secstate">
-                        LAST SEEN {ago(device.lastSeenAt, now)}
-                      </span>
-                      <button className="gs-revoke" onClick={() => setConfirming(device.id)}>
-                        REVOKE
-                      </button>
-                    </>
-                  )}
-                  {confirming === device.id && (
-                    <p className="gs-consequence">
-                      {revokeSentence(deviceName(device.name))}{' '}
-                      <button className="gs-revoke" onClick={() => revoke(device.id)}>
-                        REVOKE IT
-                      </button>
-                    </p>
-                  )}
-                </li>
-              ))}
+              {(profile?.devices ?? []).map((device) => {
+                // THIS MAC has one verb and the others have the other. The
+                // confirmation is the same shape for both: the sentence that
+                // says everything the act does, the password, and a way to
+                // keep things as they are.
+                const key = device.current ? 'self' : device.id
+                const open = confirming === key
+                return (
+                  <li key={device.id} className="cr-acct-device">
+                    <span className="cr-acct-kind">{KIND_LABEL[device.kind] ?? 'DEVICE'}</span>
+                    <span className="cr-acct-seclabel">{deviceName(device.name)}</span>
+                    {device.current ? (
+                      <>
+                        <span className="cr-acct-secstate cr-acct-thismac">THIS MAC</span>
+                        <button
+                          className="gs-revoke"
+                          disabled={acting}
+                          onClick={() => {
+                            setStepUp('')
+                            setConfirming(open ? null : 'self')
+                          }}
+                        >
+                          SIGN OUT ON THIS MAC
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="cr-acct-secstate">
+                          LAST SEEN {ago(device.lastSeenAt, now)}
+                        </span>
+                        <button
+                          className="gs-revoke"
+                          disabled={acting}
+                          onClick={() => {
+                            setStepUp('')
+                            setConfirming(open ? null : device.id)
+                          }}
+                        >
+                          REVOKE
+                        </button>
+                      </>
+                    )}
+                    {open && (
+                      <div className="cr-acct-stepup">
+                        <p className="gs-consequence">
+                          {device.current
+                            ? signOutSentence(username)
+                            : revokeSentence(deviceName(device.name))}
+                        </p>
+                        {/* THE PASSWORD, HERE. Both verbs step up (D12): a
+                            sheet left open on an unlocked Mac is not enough
+                            to sign it out or to take another device's key. */}
+                        <div className="cr-acct-row">
+                          <input
+                            type="password"
+                            className="gs-input"
+                            aria-label="Password"
+                            placeholder="password"
+                            autoComplete="current-password"
+                            value={stepUp}
+                            onChange={(e) => setStepUp(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') device.current ? signOut() : revoke(device.id)
+                              if (e.key === 'Escape') settled()
+                            }}
+                          />
+                          <button
+                            className="gs-revoke"
+                            disabled={acting || stepUp.length === 0}
+                            onClick={() => (device.current ? signOut() : revoke(device.id))}
+                          >
+                            {device.current ? 'SIGN OUT' : 'REVOKE'}
+                          </button>
+                          <button className="gs-ghost" disabled={acting} onClick={settled}>
+                            KEEP
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </li>
+                )
+              })}
               {profile !== null && profile.devices.length === 0 && (
                 <li className="gs-dim">No devices listed yet.</li>
               )}
             </ul>
+            {/* THE TWO VERBS CUT 2 ADDS (V3-10 ADD A MAC, V3-12 ADD A PHONE).
+                Disabled, with the reason on hover, and with NO handler: a
+                button that looked live and did nothing would be the exact
+                thing this tab exists to stop people guessing about. */}
+            <div className="cr-acct-row cr-acct-add">
+              <button className="gs-ghost" disabled title={COMING_IN_CUT_2} aria-disabled="true">
+                ADD A MAC
+              </button>
+              <button className="gs-ghost" disabled title={COMING_IN_CUT_2} aria-disabled="true">
+                ADD A PHONE
+              </button>
+            </div>
             {/* ADMITTED PHONES ARE A DIFFERENT KIND OF FACT and get their own
                 heading rather than being mixed in. The list above is the
                 ACCOUNT's devices, known to cookrew.dev and revocable there;

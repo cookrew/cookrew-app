@@ -11,12 +11,13 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import type { AccountStatus } from '../src/shared/account-v2'
 import { Header } from '../src/renderer/src/Header'
 import { AccountAvatar } from '../src/renderer/src/account/Avatar'
-import { ClaimSheet } from '../src/renderer/src/account/ClaimSheet'
+import { AccountSheet } from '../src/renderer/src/account/AccountSheet'
+import { FirstRunCard } from '../src/renderer/src/account/FirstRunCard'
 import { LockScreen } from '../src/renderer/src/account/LockScreen'
 import { SecurityCard } from '../src/renderer/src/account/SecurityCard'
 import { ProfileSheet } from '../src/renderer/src/account/ProfileSheet'
 import { ResumeSession } from '../src/renderer/src/account/ResumeSession'
-import { ACCOUNT_COPY } from '../src/renderer/src/account/account-store'
+import { ACCOUNT_COPY, firstRunView } from '../src/renderer/src/account/account-store'
 
 /**
  * The Electron bridge, as the surface feature-detects it. Set on globalThis
@@ -99,12 +100,12 @@ describe('the avatar joins the brand group, after the wordmark (D1)', () => {
 })
 
 describe('the avatar, in three states', () => {
-  it('NO ACCOUNT is a dashed circle with the hover sentence', () => {
+  it('NO ACCOUNT is a dashed circle with the hover sentence, named for the door it opens', () => {
     const html = renderToStaticMarkup(
       <AccountAvatar status={status({ username: null })} onOpen={() => undefined} />,
     )
     expect(html).toContain('cr-acct-none')
-    expect(html).toContain('Claim a username')
+    expect(html).toContain('Sign in or create an account')
     expect(html).toContain(ACCOUNT_COPY.NO_ACCOUNT.slice(0, 40))
     expect(html).not.toContain('cr-viewseg-badge')
   })
@@ -138,19 +139,27 @@ describe('the avatar, in three states', () => {
   })
 })
 
-describe('the claim sheet paints, and refuses in sentences (D2)', () => {
+describe('the account sheet opens on SIGN IN, and paints the create side under a tab (D9)', () => {
   const html = renderToStaticMarkup(
-    <ClaimSheet onClose={() => undefined} onClaimed={() => undefined} />,
+    <AccountSheet onClose={() => undefined} onDone={() => undefined} />,
   )
 
-  it('asks for the name, then the thing that protects it', () => {
-    expect(html.indexOf('Username')).toBeLessThan(html.indexOf('Password'))
-    expect(html).toContain('type="password"')
+  it('SIGN IN is the default tab, CREATE ACCOUNT the other', () => {
+    expect(html).toMatch(/role="tab" aria-selected="true"[^>]*>SIGN IN</)
+    expect(html).toMatch(/role="tab" aria-selected="false"[^>]*>CREATE ACCOUNT</)
+    expect(html).toContain(ACCOUNT_COPY.SIGNIN_USERNAME_HINT)
+    expect(html).toContain('CONTINUE')
   })
 
-  it('states the password rule beside the field', () => {
-    expect(html).toContain('At least 12 characters')
-    expect(html).toContain('only to cookrew.dev')
+  it('labels the field "Username" — not "Username or email"', () => {
+    expect(html).toContain('>Username<')
+    expect(html).not.toContain('Username or email')
+  })
+
+  it('asks for the name, then the password, and measures nothing on the sign-in side', () => {
+    expect(html.indexOf('Username')).toBeLessThan(html.indexOf('Password'))
+    expect((html.match(/type="password"/g) ?? []).length).toBe(1)
+    expect(html).not.toContain('At least 12 characters')
   })
 
   it('starts with the primary DOWN', () => {
@@ -161,6 +170,17 @@ describe('the claim sheet paints, and refuses in sentences (D2)', () => {
     expect(html).toContain('NOT NOW')
     expect(html).toContain(ACCOUNT_COPY.NOT_NOW)
   })
+
+  it('the create side is D2: the rule beside the password, and the repeat', () => {
+    const create = renderToStaticMarkup(
+      <AccountSheet initial="register" onClose={() => undefined} onDone={() => undefined} />,
+    )
+    expect(create).toMatch(/role="tab" aria-selected="true"[^>]*>CREATE ACCOUNT</)
+    expect(create).toContain('At least 12 characters')
+    expect(create).toContain('only to cookrew.dev')
+    expect((create.match(/type="password"/g) ?? []).length).toBe(2)
+    expect(create).toContain('>CREATE<')
+  })
 })
 
 /**
@@ -170,26 +190,27 @@ describe('the claim sheet paints, and refuses in sentences (D2)', () => {
  * doors are published under. What the sheet must show is that nothing is at
  * stake here — the name is already theirs, and only the password is missing.
  */
-describe('the claim sheet, for a handle from before passwords', () => {
+describe('the account sheet, for a handle from before passwords', () => {
   const crossing = renderToStaticMarkup(
-    <ClaimSheet onClose={() => undefined} onClaimed={() => undefined} legacy={{ handle: 'drej' }} />,
+    <AccountSheet onClose={() => undefined} onDone={() => undefined} legacy={{ handle: 'drej' }} />,
   )
 
   it('says the name is already yours, in the copy table’s words', () => {
     expect(crossing).toContain('You are @drej here already — set a password to keep it.')
   })
 
-  it('does not offer the name as something to type', () => {
+  it('does not offer the name as something to type, and offers no tabs', () => {
     expect(crossing).toContain('readonly=""')
     expect(crossing).toContain('@drej')
     expect(crossing).not.toContain('placeholder="@drej"')
+    expect(crossing).not.toContain('role="tab"')
   })
 
   it('is the password half of D2 — the rule, the confirmation, and nothing else', () => {
     expect(crossing).toContain('At least 12 characters')
     expect((crossing.match(/type="password"/g) ?? []).length).toBe(2)
     expect(crossing).toContain('SET A PASSWORD')
-    expect(crossing).not.toContain('CLAIM')
+    expect(crossing).not.toContain('CREATE')
   })
 
   it('starts with the primary DOWN, like every other sheet here', () => {
@@ -199,6 +220,29 @@ describe('the claim sheet, for a handle from before passwords', () => {
   it('says what NOT NOW keeps for a Mac that is serving', () => {
     expect(crossing).toContain(ACCOUNT_COPY.LEGACY_KEEP_SERVING)
     expect(crossing).toContain('serving under the name it has')
+  })
+})
+
+describe('the first-run card paints as a card, not a wall (D8)', () => {
+  const view = firstRunView({
+    status: status({ username: null }),
+    workspaceCount: 1,
+    dismissed: false,
+  })
+  const html = view === null ? '' : renderToStaticMarkup(<FirstRunCard view={view} onAction={() => undefined} />)
+
+  it('has no scrim and no dialog role: the canvas behind it keeps working', () => {
+    expect(html).not.toContain('gs-scrim')
+    expect(html).not.toContain('aria-modal')
+    expect(html).toContain('cr-acct-firstrun')
+  })
+
+  it('offers the three buttons and a close, and no JOIN in cut 1', () => {
+    expect(html).toContain('SIGN IN WITH PASSWORD')
+    expect(html).toContain('CREATE AN ACCOUNT')
+    expect(html).toContain('NOT NOW')
+    expect(html).toContain('aria-label="Close"')
+    expect(html).not.toContain('>JOIN<')
   })
 })
 
@@ -313,6 +357,88 @@ describe('the lock screen (D5)', () => {
   it('covers the canvas as its own layer, not as a sheet', () => {
     expect(html).toContain('cr-acct-lock')
     expect(html).toContain('aria-modal="true"')
+  })
+
+  it('says nothing about requests when nobody is waiting', () => {
+    expect(html).not.toContain('waiting to join')
+  })
+})
+
+describe('the lock screen knows who is waiting (D13)', () => {
+  // The count rides the status and is on screen at once; the names take a
+  // read the server renderer never makes, so the sentence here is the
+  // count-only one — which is exactly what the first paint shows.
+  const one = renderToStaticMarkup(
+    <LockScreen status={status({ locked: true, requests: 1 })} onUnlocked={() => undefined} />,
+  )
+  const three = renderToStaticMarkup(
+    <LockScreen status={status({ locked: true, requests: 3 })} onUnlocked={() => undefined} />,
+  )
+
+  it('says a device is waiting, beside the reason it is locked', () => {
+    expect(one).toContain('Locked while you were away. Your agents kept working.')
+    expect(one).toContain('A device is waiting to join — unlock to answer.')
+    expect(one).toContain('cr-acct-lock-waiting')
+  })
+
+  it('counts several', () => {
+    expect(three).toContain('3 devices are waiting to join — unlock to answer.')
+  })
+
+  it('offers nothing to approve from under the lock', () => {
+    for (const html of [one, three]) {
+      expect(html).not.toContain('APPROVE')
+      expect(html).not.toContain('NOT ME')
+      expect(html.match(/<button/g)?.length).toBe(1) // UNLOCK, and only UNLOCK
+    }
+  })
+})
+
+describe('the Devices tab knows which Mac it is on (v3, D12)', () => {
+  const devices = [
+    { id: 'dev-here', kind: 'desktop' as const, name: 'MacBook Pro · drej-mbp', addedAt: 1, lastSeenAt: Date.now(), current: true },
+    { id: 'dev-there', kind: 'desktop' as const, name: 'Mac Studio · studio', addedAt: 1, lastSeenAt: Date.now(), current: false },
+    { id: 'dev-phone', kind: 'phone' as const, name: 'iPhone', addedAt: 1, lastSeenAt: Date.now(), current: false },
+  ]
+  const html = renderToStaticMarkup(
+    <ProfileSheet
+      status={status()}
+      initialTab="DEVICES"
+      initialProfile={{ username: 'drej', displayName: '', avatar: null, claimedAt: 1, devices, desktops: [] }}
+      onClose={() => undefined}
+      onStatus={() => undefined}
+    />,
+  )
+
+  it('marks this Mac, and gives it the one verb that is its own', () => {
+    expect(html).toContain('THIS MAC')
+    expect(html).not.toContain('THIS DEVICE')
+    expect(html.match(/SIGN OUT ON THIS MAC/g)?.length).toBe(1)
+  })
+
+  it('offers REVOKE on every other device and never on this one', () => {
+    // Two other devices, two REVOKE buttons — and the confirmation's own
+    // REVOKE is not on screen until a row is opened.
+    expect(html.match(/>REVOKE</g)?.length).toBe(2)
+  })
+
+  it('shows the names as "<model> · <host>", distinguishable at a glance', () => {
+    expect(html).toContain('MacBook Pro · drej-mbp')
+    expect(html).toContain('Mac Studio · studio')
+  })
+
+  it('renders ADD A MAC and ADD A PHONE disabled, saying when they come, with no handler', () => {
+    for (const verb of ['ADD A MAC', 'ADD A PHONE']) {
+      const button = html.match(new RegExp(`<button[^>]*>${verb}</button>`))?.[0]
+      expect(button, verb).toBeDefined()
+      expect(button).toContain('disabled=""')
+      expect(button).toContain('title="Coming in cut 2"')
+    }
+  })
+
+  it('asks for nothing until a verb is pressed', () => {
+    expect(html).not.toContain('type="password"')
+    expect(html).not.toContain('Everything on the canvas stays')
   })
 })
 

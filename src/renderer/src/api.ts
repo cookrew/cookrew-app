@@ -117,6 +117,8 @@ export type ServeRail =
 
 /** What a door is saying, in the gate sheet's vocabulary. */
 export type ServePhase =
+  /** No account on this Mac: a listed door cannot be asked until there is one. */
+  | { kind: 'identify' }
   | { kind: 'open' }
   | { kind: 'pay'; rails: ServeRail[] }
   | { kind: 'denied'; reason: string; retryable: boolean }
@@ -224,11 +226,28 @@ export interface CookrewApi {
       }
     | { ok: false; reason: string }
   >;
-  /** Sign in to the door and ask what it wants. The Bearer stays in main. */
+  /**
+   * Ask the door what it wants. The Bearer stays in main. `door` says which
+   * walk main took: `install` (a listed team, entered as the account — the
+   * team, its owner and this Mac's account come with it) or `direct` (an
+   * unlisted door, this Mac's own key).
+   */
   serveGate: (
     link: string,
   ) => Promise<
-    | { ok: true; phase: ServePhase; wallet: { address: string } | null }
+    | {
+        ok: true;
+        door: 'install' | 'direct';
+        phase: ServePhase;
+        wallet: { address: string } | null;
+        /** The published `@owner/team`, on the install walk. */
+        team?: string;
+        /** The owner's handle, no `@`, on the install walk. */
+        owner?: string;
+        /** The username this Mac is signed in as, when known. */
+        account?: string | null;
+        seat?: string | null;
+      }
     | { ok: false; reason: string; detail?: string }
   >;
   /** Start a card payment: opens hosted Checkout in the real browser. */
@@ -581,6 +600,17 @@ export interface CookrewApi {
     password: string;
     name?: string;
   }) => Promise<AccountResult<AccountStatus>>;
+  /**
+   * v3: the second Mac — sign in to an account this Mac has never held. Main
+   * mints the device key; the answer is a session, the ladder (the same
+   * `accountResume*` rungs finish it), or a refusal with the registry's own
+   * sentence. `accountClaim` above stays the marker for "owner surface".
+   */
+  accountSignIn?: (input: {
+    username: string;
+    password: string;
+    name?: string;
+  }) => Promise<SignInAnswer<AccountStatus>>;
   /** Phase 6: set a password on the handle this Mac held before them. */
   accountMigrate?: (input: {
     password: string;
@@ -603,7 +633,13 @@ export interface CookrewApi {
   accountResumeWait?: (pending: string) => Promise<SignInAnswer<AccountStatus>>;
   accountProfile?: () => Promise<AccountResult<AccountProfile>>;
   accountDevices?: () => Promise<AccountResult<readonly AccountDevice[]>>;
-  accountRevoke?: (deviceId: string) => Promise<AccountResult<void>>;
+  /** v3 (D12): REVOKE steps up for the password; the registry gets the DELETE only after it. */
+  accountRevoke?: (input: { deviceId: string; password: string }) => Promise<AccountResult<void>>;
+  /**
+   * v3 (D12): this Mac leaves the account. Answers the status an empty
+   * avatar draws; refused with `last_device` on a one-device account.
+   */
+  accountSignOut?: (password: string) => Promise<AccountResult<AccountStatus>>;
   accountRecoveryCodes?: () => Promise<AccountResult<readonly string[]>>;
   accountSaveRecoveryCodes?: () => Promise<{
     ok: boolean;

@@ -542,10 +542,19 @@ function authorizeCaller(
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null
   const claims = token === null ? null : deps.issuer.verifyToken(token)
   if (claims === null) {
+    // THE CHALLENGE HALF IS THE DIRECT WALK's (identity v3, clean start). A
+    // door the directory lists is entered with an account token minted at
+    // cookrew.dev, and a nonce beside that realm would be an invitation to
+    // the key ceremony this door no longer offers there. An unlisted door
+    // (no published name) keeps it: the key is the only way in.
+    const listed = (deps.doorName?.(template) ?? null) !== null
+    const realm = `Cookrew realm="${template.slug}"`
     return {
       ok: false,
       response: json(401, {}, {
-        'www-authenticate': `Cookrew realm="${template.slug}", challenge=${deps.issuer.challenge(template.serviceId)}`
+        'www-authenticate': listed
+          ? realm
+          : `${realm}, challenge=${deps.issuer.challenge(template.serviceId)}`
       })
     }
   }

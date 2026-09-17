@@ -15,8 +15,15 @@ import path from 'node:path'
  * It is deliberately NOT the account's device list. The registry knows which
  * devices belong to @drej; this file knows which of them THIS Mac has agreed to
  * open for. FORGET here is local — the phone stays attached to the account and
- * simply has to be admitted again. Revoking at the registry is a different,
- * heavier act and belongs on a different button.
+ * simply has to be admitted again.
+ *
+ * REVOKING AT THE REGISTRY NOW REACHES IT. It is still the heavier act and
+ * still a different button, but a revoked phone must stop opening this Mac on
+ * its own Wi-Fi too — until it did not, and the copy had to admit as much
+ * ("keeps working on this Wi-Fi until re-paired"). The revoked list published
+ * beside the door key at /v2/keys is handed to `prune`, so admission here ends
+ * within a minute of the revoke rather than lasting until somebody happened to
+ * press FORGET on this particular Mac.
  *
  * 0600 and temp-and-rename for the same reason the account file is: a torn
  * write here is a Mac that stops opening for a phone the owner is holding.
@@ -76,6 +83,24 @@ export type AdmittedDeviceStore = {
    * to the writer and another to the reader is worse than no boolean.
    */
   readonly forget: (deviceId: string) => boolean
+  /**
+   * Forget every admitted phone whose device id the registry has revoked.
+   *
+   * Answers WHAT IT FORGOT, so the caller can name each phone in its notice. A
+   * count would leave the owner reading "1 device" with no idea which one just
+   * stopped working on their Wi-Fi.
+   *
+   * AN EMPTY LIST FORGETS NOBODY, and is the case worth writing down. A
+   * revoked list this Mac could not parse reads as empty rather than as a
+   * refusal to serve (v2-call-token.ts), so "the registry told us nothing"
+   * arrives here as []; reading that as "forget everyone" would unpair every
+   * phone on the account from one bad deploy of the registry.
+   *
+   * The list names revoked SESSIONS beside revoked devices. A session id
+   * matches no deviceId and passes through inert: this filters OUR ids against
+   * theirs and never tries to decide which kind a given id is.
+   */
+  readonly prune: (revoked: readonly string[]) => AdmittedDevice[]
 }
 
 export const admittedDevicesFile = (base?: string): string =>
@@ -202,6 +227,28 @@ export const createAdmittedDeviceStore = (
         // phone IS still admitted and the row must stay on screen.
         console.error('Could not forget an admitted device:', error)
         return false
+      }
+    },
+    prune: (revoked) => {
+      // Before the read, not after: nothing to revoke must cost nothing at
+      // all, because this runs on a timer whether or not anything happened.
+      if (revoked.length === 0) return []
+      const cut = new Set(revoked)
+      const existing = load()
+      const forgotten = existing.filter((device) => cut.has(device.deviceId))
+      if (forgotten.length === 0) return []
+      try {
+        writeAdmittedDevices(
+          existing.filter((device) => !cut.has(device.deviceId)),
+          deps.base
+        )
+        return forgotten
+      } catch (error) {
+        // The same honesty as forget's one false. The rows survived, so the
+        // phones ARE still admitted, and naming them here would announce an
+        // access that still works.
+        console.error('Could not forget revoked devices:', error)
+        return []
       }
     }
   }

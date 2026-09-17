@@ -1,3 +1,4 @@
+import { webCopy } from './v3-copy'
 import { day, esc, page, type Page } from './site-shell'
 import { desktopsSection } from './site-reach'
 import type { V2Account, V2Device } from './v2-accounts'
@@ -102,7 +103,7 @@ export function mePage(
         scripts: ['device-id.js', 'site.js']
       },
       `<div class="wrap" style="padding-top:44px"><h1>Your account</h1>
-<p class="lede">A seat is yours, not a browser's. Sign in so it follows you.</p>
+<p class="lede">${esc(webCopy('avatar.no-account'))}</p>
 <p class="row"><button class="btn primary lg" data-signin>Sign in or register</button><a class="btn lg" href="/market">Marketplace</a></p></div>`
     )
   }
@@ -133,7 +134,7 @@ export function mePage(
 <button class="btn" data-signout>Sign out</button></div>
 
 <h2 style="margin-top:30px">Devices</h2>
-<p class="meta">Every device attached to @${esc(account.username)}. Revoking one stops it opening this account within a minute; it keeps working on its own Wi-Fi until it is paired again. The last device cannot be revoked.</p>
+<p class="meta">Every device attached to @${esc(account.username)}. ${esc(webCopy('d12.revoke', { device: 'device' }))} ${esc(webCopy('d12.last-device', { handle: account.username }))}</p>
 <ul class="doors me-list" id="me-devices">${devices}</ul>
 
 <h2 style="margin-top:30px">Security</h2>

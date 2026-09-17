@@ -134,11 +134,14 @@
   color: var(--rose);
   border-color: var(--rose);
 }
-/* A 403 the buyer can act on wears amber, not rose: stop vs a thing to do. */
-.gate-403.empty-credit {
+/* A 403 the buyer can act on wears amber, not rose: stop vs a thing to do.
+   The seat rung is the same shape — a seat is bought, not refused. */
+.gate-403.empty-credit,
+.gate-403.seat {
   background: var(--amber-soft);
 }
-.gate-403.empty-credit .glyph {
+.gate-403.empty-credit .glyph,
+.gate-403.seat .glyph {
   color: var(--amber-deep);
   border-color: var(--line);
 }

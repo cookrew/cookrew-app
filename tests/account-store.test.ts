@@ -15,6 +15,7 @@ import {
   factorRows,
   initialsOf,
   lockLabel,
+  joinLede,
   lockNote,
   lockRowLabel,
   mustChangeBanner,
@@ -24,6 +25,7 @@ import {
   refusalSentence,
   rescueState,
   revokeSentence,
+  signOutSentence,
   takenSentence,
   wrongPasswordSentence,
 } from '../src/renderer/src/account/account-store'
@@ -97,14 +99,15 @@ describe('the claim sheet decides, and always says why (D2)', () => {
   })
 
   it('names the act on the button', () => {
-    expect(fields({ username: '@drej', check: 'free' }).primary).toBe('CLAIM @DREJ')
-    expect(fields().primary).toBe('CLAIM')
+    expect(fields({ username: '@drej', check: 'free' }).primary).toBe('CREATE @DREJ')
+    expect(fields().primary).toBe('CREATE')
   })
 
   it('refuses a taken name in the copy table’s words', () => {
     const view = fields({ username: 'anvz', check: 'taken' })
     expect(view.username.tone).toBe('bad')
-    expect(view.username.note).toBe("@anvz is someone else's. Try another.")
+    // D9: a name that exists is the other door, not a dead end.
+    expect(view.username.note).toBe('@anvz already exists — sign in with your password.')
     expect(view.canClaim).toBe(false)
   })
 
@@ -257,25 +260,94 @@ describe('refusals arrive as sentences', () => {
 
 describe('the lock screen’s line (D5)', () => {
   it('opens with why it is locked and what kept running', () => {
-    expect(lockNote(null)).toBe('Locked while you were away. Your agents kept working.')
+    expect(lockNote(null).line).toBe('Locked while you were away. Your agents kept working.')
   })
 
   it('counts the tries down in the design’s words', () => {
-    expect(lockNote({ ok: false, reason: 'wrong', triesLeft: 4 })).toBe(
+    expect(lockNote({ ok: false, reason: 'wrong', triesLeft: 4 }).line).toBe(
       'Not it. 4 tries left before a 1-minute pause.',
     )
     expect(wrongPasswordSentence(1)).toBe('Not it. 1 try left before a 1-minute pause.')
   })
 
   it('says how long the pause has left', () => {
-    expect(lockNote({ ok: false, reason: 'paused', pausedForMs: 60_000 })).toContain('60 seconds')
+    expect(lockNote({ ok: false, reason: 'paused', pausedForMs: 60_000 }).line).toContain('60 seconds')
+  })
+})
+
+describe('the ladder’s lede belongs to the door, not the card (D10)', () => {
+  it('a first join says the name is elsewhere and this Mac is asking in', () => {
+    expect(joinLede('drej')).toBe(
+      '@drej is already on another device. Prove it is you and this Mac joins.',
+    )
+  })
+
+  it('a resume keeps saying the session ended', () => {
+    expect(ACCOUNT_COPY.SESSION_ENDED).toMatch(/^Your session ended/)
+  })
+
+  it('after asking, it says where the request can be found — no push exists', () => {
+    expect(ACCOUNT_COPY.LADDER_ASKED_HONEST).toBe(
+      'Asked. Open cookrew.dev on your phone, or look at your other Mac.',
+    )
+    expect(ACCOUNT_COPY.LADDER_ASKED_HONEST).not.toMatch(/approve/i)
+  })
+})
+
+describe('the lock screen knows who is waiting (D13)', () => {
+  it('says nothing about requests when nobody is waiting', () => {
+    expect(lockNote(null).waiting).toBeNull()
+    expect(lockNote(null, { count: 0, names: [] }).waiting).toBeNull()
+  })
+
+  it('names the one device that is waiting, in the table’s words', () => {
+    expect(lockNote(null, { count: 1, names: ['Mac Studio'] }).waiting).toBe(
+      'Mac Studio is waiting to join — unlock to answer.',
+    )
+  })
+
+  it('still says a device is waiting when its name has not arrived', () => {
+    expect(lockNote(null, { count: 1, names: [] }).waiting).toBe(
+      'A device is waiting to join — unlock to answer.',
+    )
+  })
+
+  it('counts several, whether or not their names are known', () => {
+    expect(lockNote(null, { count: 3, names: ['Mac Studio', 'iPhone'] }).waiting).toBe(
+      '3 devices are waiting to join — unlock to answer.',
+    )
+    expect(lockNote(null, { count: 2, names: [] }).waiting).toBe(
+      '2 devices are waiting to join — unlock to answer.',
+    )
+  })
+
+  it('keeps the waiting line beside a wrong-password line, never instead of it', () => {
+    const note = lockNote({ ok: false, reason: 'wrong', triesLeft: 2 }, { count: 1, names: ['Mac Studio'] })
+    expect(note.line).toBe('Not it. 2 tries left before a 1-minute pause.')
+    expect(note.waiting).toBe('Mac Studio is waiting to join — unlock to answer.')
+  })
+})
+
+describe('the sign-out confirmation says what leaves, what stays, what goes quiet (D12)', () => {
+  it('is the table’s sentence, with the handle in it', () => {
+    expect(signOutSentence('@drej')).toBe(
+      'This Mac leaves @drej. Everything on the canvas stays. The doors it serves go offline until it signs in again.',
+    )
+  })
+
+  it('the last device is refused in the table’s words, named when the handle is known', () => {
+    expect(refusalSentence('last_device', undefined, 'drej')).toBe(
+      'This is the last device on @drej — add another first, or the account has no way back in.',
+    )
   })
 })
 
 describe('the revoke confirmation names the device and its consequence', () => {
   it('is one sentence, in the table’s words', () => {
+    // The Wi-Fi caveat is gone because the thing it admitted to is fixed:
+    // a revoked device now loses LAN admission on every Mac too (V3-05).
     expect(revokeSentence('iPhone')).toBe(
-      'The iPhone stops opening this account within a minute. It keeps working on this Wi-Fi until re-paired.',
+      "The iPhone stops opening this account within a minute — here, at every door, and on every Mac's Wi-Fi. Anything it asked for is dropped.",
     )
   })
 })

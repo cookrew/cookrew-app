@@ -76,30 +76,53 @@ describe('GateSheet — state B: free install dashes the pay step', () => {
   })
 })
 
-describe('GateSheet — state C: first call lights identify only, with the six words', () => {
+describe('GateSheet — state C: the DIRECT door (unlisted) says no account is involved', () => {
   const html = paint(
-    { words: ['corgi', 'lantern', 'fifty', 'maple', 'orbit', 'true'], bannerLine: '@drej granted you this line' },
-    { door: 'call', phase: { kind: 'identify' }, pin: 'V1' }
+    { bannerLine: 'on this Wi-Fi' },
+    { door: 'direct', phase: { kind: 'identify' }, pin: 'V1' }
   )
 
-  it('has no pay slot at all — a call never charges inline', () => {
-    expect(html).not.toContain('gate-402')
-    expect(html).not.toContain('gk-tick skip') // not skipped — simply absent
+  it('has no seat slot at all — no registry, so nobody can be seated', () => {
+    expect(html).not.toContain('gate-403')
+    // Three ticks: identify, pay (dashed, nothing quoted), open.
+    expect(html.match(/gk-tick /g)).toHaveLength(3)
   })
 
-  it('shows all six words for the read-aloud comparison', () => {
-    for (const w of ['corgi', 'lantern', 'fifty', 'maple', 'orbit', 'true']) {
-      expect(html).toContain(w)
-    }
-  })
-
-  it("uses the ceremony's verb, and warns the first reply is slow", () => {
-    expect(html).toMatch(/I READ THESE ALOUD/)
+  it('names the key and what does not follow you, with CONNECT as the verb', () => {
+    expect(html).toContain('Direct connection · no account needed')
+    expect(html).toMatch(/nothing follows you elsewhere/)
+    expect(html).toMatch(/>CONNECT</)
     expect(html).toMatch(/never just spins/)
   })
 
-  it('speaks the ceremony vocabulary and never the account vocabulary (R31)', () => {
-    expect(html.toLowerCase()).not.toMatch(/\bsign in\b|\baccount\b/)
+  it('never reads the six words or asks anyone to read aloud (G5)', () => {
+    expect(html.toLowerCase()).not.toMatch(/six words|read these|out loud|aloud/)
+  })
+})
+
+describe('GateSheet — state C2: the install door, signed in, no seat (G2)', () => {
+  const vars = { presetName: 'Research Crew', author: '@mira', handle: 'jkim', owner: 'mira', team: 'research-crew', price: '$4' }
+  const html = paint(
+    { deniedVars: vars, bannerLine: 'You are @jkim' },
+    { pricing: PRICED, phase: { kind: 'denied', reason: 'no_seat', retryable: false } }
+  )
+
+  it('stays on the rail: identify cleared, the seat step live in amber', () => {
+    expect(html).toContain('gk-rail')
+    expect(html).toContain('gk-tick done')
+    expect(html).toContain('gate-403 seat')
+  })
+
+  it('renders the no_seat band in the door’s own words, never the unknown fallback', () => {
+    expect(html).toContain('@jkim has no seat at @mira/research-crew')
+    expect(html).toMatch(/either way it follows you/)
+    expect(html).not.toContain("doesn&#x27;t cover this preset")
+    expect(html).not.toContain("couldn&#x27;t complete that")
+  })
+
+  it('offers BUY with the price as the one forward action — ASK waits for V3-11', () => {
+    expect(html).toMatch(/BUY A SEAT · \$4/)
+    expect(html).not.toMatch(/ASK @/)
   })
 })
 

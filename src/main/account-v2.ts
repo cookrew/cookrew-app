@@ -328,6 +328,12 @@ export interface AccountsDeps {
   onChange?: () => void
 }
 
+/** The session a 201 carries — `{token, exp}` at the top of the body — or null when it does not. */
+function sessionFrom(body: Record<string, unknown>): AccountSession | null {
+  if (typeof body.token !== 'string' || typeof body.exp !== 'number') return null
+  return { token: body.token, exp: body.exp }
+}
+
 /**
  * The account, as the rest of main uses it.
  *
@@ -342,6 +348,17 @@ export class Accounts {
   private readonly origin: string
   private readonly deviceName: string
   private cached: AccountFile | null
+  /**
+   * A sign-in that stopped at the ladder: the name and the key minted for
+   * it, waiting for the rung that lands. Held here, never on the bridge, and
+   * only ever one — see `signIn`.
+   */
+  private signingIn: {
+    username: string
+    deviceId: string
+    name: string
+    keys: { privateKeyJwk: Record<string, unknown>; publicKeyJwk: Record<string, unknown> }
+  } | null = null
   /** The last minted batch, in memory only — never written, never logged. */
   private freshCodes: readonly string[] | null = null
   /** Said once per run: a poll refused every tick must not be a log flood. */
@@ -556,6 +573,109 @@ export class Accounts {
   }
 
   /**
+   * SIGN IN ON A MAC THAT HAS NO ACCOUNT YET — the second Mac (v3, D9 · D10).
+   *
+   * The universal path: username and password, a device key minted here and
+   * offered as a NEW device. It is `resume` with the name as an argument and
+   * a fresh key instead of the one on disk; and it is `claim` in what it
+   * writes — 201 lands through `saveClaimed`, so the file this Mac gets is
+   * the same file a claim writes, verifier and all, because the password is
+   * in hand.
+   *
+   * REFUSED LOCALLY ONLY FOR SHAPE. An empty or malformed name never reaches
+   * the wire; a short password does — this is an existing account, and the
+   * twelve-character floor is a rule for NEW passwords, not for the one the
+   * owner set years ago. The registry is the judge of whether it is right.
+   *
+   * A device the account has not seen answers 401 second_factor, and the
+   * ladder that follows is the resume ladder unchanged: the password is put
+   * away under the pending id, and the rung that lands (resumeWithCode /
+   * resumeWait) writes the file through `landSession`, which knows a sign-in
+   * is in flight and has the minted key to file it with.
+   */
+  async signIn(input: {
+    username: string
+    password: string
+    name?: string
+  }): Promise<SignInAnswer<AccountFile>> {
+    const held = this.cached
+    if (held !== null) {
+      return { ok: false, reason: 'taken', message: `This Mac is already @${held.username}.` }
+    }
+    const username = normaliseUsername(input.username)
+    if (username === '' || usernameProblem(username) !== 'ok') {
+      return { ok: false, reason: 'bad_username' }
+    }
+
+    const { privateKeyJwk, publicKeyJwk } = mintDeviceKey()
+    const deviceId = deviceIdFor(publicKeyJwk)
+    const name = input.name?.trim() || this.deviceName
+    const minted = { username, deviceId, name, keys: { privateKeyJwk, publicKeyJwk } }
+    // A sign-in that begins forgets the one before it: two ladders on one
+    // Mac would be two keys, and only one of them could ever be the file.
+    this.signingIn = null
+    let response: Response
+    try {
+      response = await this.http(`${this.origin}/v2/sessions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          username,
+          password: input.password,
+          device: { id: deviceId, kind: 'desktop', name, jwk: publicKeyJwk },
+        }),
+      })
+    } catch {
+      return { ok: false, reason: 'offline' }
+    }
+    if (response.status === 429) return { ok: false, reason: 'rate_limited' }
+    const body = await bodyOf(response)
+    if (response.status !== 201) {
+      if (response.status === 401 && body.error === 'second_factor') {
+        const step = stepFrom(body)
+        if (step !== null) {
+          // Exactly as resume does: the password is put away here, keyed by
+          // the pending, and the minted key waits with it for the rung that
+          // lands. Neither crosses the bridge again.
+          this.ladder.remember(step.pending, input.password)
+          this.signingIn = minted
+          return {
+            ok: false,
+            reason: 'second_factor',
+            step,
+            ...(typeof body.message === 'string' ? { message: body.message } : {}),
+          }
+        }
+      }
+      const refused = classify(response.status, body)
+      // The surface keeps its password prompt open on 'session-expired'; a
+      // wrong password here is that same prompt again, with the sentence.
+      return refused.reason === 'bad_credentials'
+        ? {
+            ok: false,
+            reason: 'session-expired',
+            ...(refused.message ? { message: refused.message } : {}),
+          }
+        : plainRefusal(refused)
+    }
+    const session = sessionFrom(body)
+    if (session === null) return { ok: false, reason: 'unknown' }
+    return {
+      ok: true,
+      value: this.saveClaimed({
+        // The registry names what it filed; ours is derived from the key it
+        // was sent, so the two agree — but its answer is the record.
+        username: typeof body.username === 'string' ? body.username : username,
+        deviceId: typeof body.deviceId === 'string' ? body.deviceId : deviceId,
+        name,
+        password: input.password,
+        keys: minted.keys,
+        session,
+      }),
+    }
+  }
+
+  /**
    * THE FILE A NAME LEAVES BEHIND, written in ONE place.
    *
    * A username reaches this Mac two ways now — claimed fresh, or migrated
@@ -745,12 +865,27 @@ export class Accounts {
    * the account's, so it becomes what unlocks the app too.
    */
   private landSession(password: string, body: Record<string, unknown>): SignInAnswer<AccountSession> {
+    const session = sessionFrom(body)
     const account = this.cached
-    if (!account) return { ok: false, reason: 'no_account' }
-    if (typeof body.token !== 'string' || typeof body.exp !== 'number') {
-      return { ok: false, reason: 'unknown' }
+    if (!account) {
+      // No file yet: this rung ends a SIGN-IN (the second Mac), not a resume.
+      // The key minted at the password step is filed now, through the same
+      // writer a claim uses, so the account this Mac gets is the same account.
+      const minted = this.signingIn
+      if (!minted) return { ok: false, reason: 'no_account' }
+      if (session === null) return { ok: false, reason: 'unknown' }
+      this.signingIn = null
+      this.saveClaimed({
+        username: typeof body.username === 'string' ? body.username : minted.username,
+        deviceId: typeof body.deviceId === 'string' ? body.deviceId : minted.deviceId,
+        name: minted.name,
+        password,
+        keys: minted.keys,
+        session,
+      })
+      return { ok: true, value: session }
     }
-    const session = { token: body.token, exp: body.exp }
+    if (session === null) return { ok: false, reason: 'unknown' }
     this.save({ ...account, session, unlock: unlockVerifierFor(password) })
     return { ok: true, value: session }
   }
@@ -890,6 +1025,84 @@ export class Accounts {
       method: 'DELETE',
       parse: false,
     })
+  }
+
+  /**
+   * STEP UP: prove the password before something irreversible (v3, D12).
+   *
+   * It is `resume` — the password offered to cookrew.dev under this device's
+   * key — and not the local verifier, because the verifier can be stale: a
+   * password changed on the web leaves it holding the old one, and a step-up
+   * that trusted it would let the OLD password sign this Mac out. The
+   * registry is the judge; a fresh session is the receipt, and it is exactly
+   * the session the act that follows is made under.
+   *
+   * A ladder is refused here rather than climbed. This device is attached,
+   * so cookrew.dev does not normally raise one; if it does, the right thing is
+   * the resume card and not a sign-out that starts with a six-digit code.
+   */
+  async stepUp(password: string): Promise<AccountResult<void>> {
+    const proven = await this.resume(password)
+    if (proven.ok) return { ok: true, value: undefined }
+    if (proven.reason === 'second_factor') {
+      return {
+        ok: false,
+        reason: 'bad_credentials',
+        ...(proven.message ? { message: proven.message } : {}),
+      }
+    }
+    return plainRefusal(proven)
+  }
+
+  /**
+   * SIGN OUT ON THIS MAC (v3, D12) — this device leaves the account.
+   *
+   * THE ORDER IS THE SAFETY. The password first, at the registry; then the
+   * device is removed THERE (DELETE /v2/me/devices/<this device>); only once
+   * cookrew.dev has said 204 is the file removed HERE. A file deleted ahead
+   * of the registry would be a Mac that has forgotten an account which still
+   * counts it as a device — the account's own list would name a machine that
+   * can no longer prove it is that machine.
+   *
+   * THE LAST DEVICE MAY NOT LEAVE. The registry refuses it (409 last_device)
+   * and so does this, in the surface's own sentence: an account with no
+   * device is an account nobody can prove, and the fix is to add one first.
+   * Nothing local changes on that refusal.
+   *
+   * THE CANVAS IS NOT TOUCHED. Everything here is about the account file;
+   * the doors this Mac serves are withdrawn by the caller (account-ipc.ts ·
+   * `signedOut`), which owns the serving state this class knows nothing of.
+   */
+  async signOutThisMac(password: string): Promise<AccountResult<void>> {
+    const account = this.cached
+    if (!account) return { ok: false, reason: 'no_account' }
+    const proven = await this.stepUp(password)
+    if (!proven.ok) return proven
+    const removed = await this.revokeDevice(account.deviceId)
+    if (!removed.ok) return removed
+    this.forget()
+    return { ok: true, value: undefined }
+  }
+
+  /**
+   * The account is gone from this Mac. The file, the cache, and every
+   * secret this class holds in memory — a half-climbed ladder, fresh codes —
+   * go with it; a listener is told once, after the file is really gone.
+   */
+  private forget(): void {
+    try {
+      rmSync(accountFilePath(this.base), { force: true })
+    } catch (error) {
+      console.error('account file could not be removed:', error)
+    }
+    this.cached = null
+    this.signingIn = null
+    this.freshCodes = null
+    try {
+      this.changed?.()
+    } catch (error) {
+      console.error('account change listener failed:', error)
+    }
   }
 
   /**

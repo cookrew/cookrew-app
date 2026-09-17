@@ -75,29 +75,29 @@ describe('every protocol moment has words', () => {
     }
   })
 
-  it('never says unlock or password — the two still banned after R31', () => {
-    // R31 made "account" and "sign in" TRUE, so they are no longer banned: the
-    // ban existed because they promised a thing that did not exist, and the
-    // ruling created the thing. "Unlock" stays banned (it hides whether money
-    // moves) and "password" stays banned (there still is not one, outside the
-    // strings that exist to say so).
-    const saysNoPassword = /no password|never sees your key|stores no password/i
+  it('never says unlock, an error, or a status number (V3-07 rewrites the password ban)', () => {
+    // The password ban was accurate for exactly as long as it was true. Identity
+    // v3 gave the account a password that goes to cookrew.dev only, so saying
+    // "there is no password" became the false sentence and the ban came off.
+    // What replaced it is the v3 copy rule: no string says "error", "invalid",
+    // or a status number, because those are our words for our machinery rather
+    // than sentences a person can act on. "Unlock" stays banned — it hides
+    // whether money moves.
     for (const [id, value] of Object.entries(MKT_ALL)) {
       expect(value.toLowerCase(), id).not.toMatch(/\bunlock\b/)
-      if (!saysNoPassword.test(value)) {
-        expect(value.toLowerCase(), id).not.toMatch(/\bpassword\b/)
-      }
+      expect(value.toLowerCase(), id).not.toMatch(/\berrors?\b/)
+      expect(value.toLowerCase(), id).not.toMatch(/\binvalid\b/)
     }
   })
-
   it('MKT_ALL carries every group — a group added but not wired makes the leak test vacuous', async () => {
-    // This exists because it already happened: MKT_ENROL and MKT_SAVE were
-    // written, the spread into MKT_ALL silently failed to apply, and the leak
-    // assertion below passed over strings it was never given. A coverage check
-    // is the only thing that catches a test passing for the wrong reason.
+    // This exists because it already happened: the (since retired) MKT_ENROL
+    // and MKT_SAVE were written, the spread into MKT_ALL silently failed to
+    // apply, and the leak assertion below passed over strings it was never
+    // given. A coverage check is the only thing that catches a test passing
+    // for the wrong reason.
     const mod = await import('../src/shared/marketplace-copy')
     const groups = [mod.MKT_AUTH, mod.MKT_PAY, mod.MKT_DENIED_REASONS, mod.MKT_BLOCKED,
-                    mod.MKT_EXPORT, mod.MKT_ENROL, mod.MKT_SAVE, mod.MKT_INSTALL_PRICE,
+                    mod.MKT_EXPORT, mod.MKT_SAVE, mod.MKT_INSTALL_PRICE,
                     mod.MKT_TEMPLATE, mod.MKT_SERVE, mod.MKT_SESSIONS, mod.MKT_SVC,
                     mod.MKT_CHIP, mod.MKT_GATE]
     for (const group of groups) {
@@ -116,11 +116,12 @@ describe('every protocol moment has words', () => {
     expect(identityVocabularyLeaks(MKT_ALL)).toEqual([])
   })
 
-  it('the enrolment ceremony never mentions an account', async () => {
-    const { MKT_ENROL } = await import('../src/shared/marketplace-copy')
-    for (const [id, value] of Object.entries(MKT_ENROL)) {
-      expect(value.toLowerCase(), id).not.toMatch(/\baccount\b|\bsign in\b/)
-    }
+  it('the six-word ceremony is gone from the deck (identity v3, G5)', async () => {
+    // The call door had no mount; its strings left with it. A ceremony id
+    // coming back would mean a surface is dressing a key in read-aloud words.
+    const mod = await import('../src/shared/marketplace-copy')
+    expect('MKT_ENROL' in mod).toBe(false)
+    expect(Object.keys(MKT_ALL).filter((id) => id.startsWith('mkt.enrol.'))).toEqual([])
   })
 
   it('the account door never shows a fingerprint', async () => {

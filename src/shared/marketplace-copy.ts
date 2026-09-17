@@ -1,3 +1,4 @@
+import { V3_COPY, fillCopy } from './account-copy'
 import type { ServedPaymentRail } from './served-payment-rails'
 
 /**
@@ -73,13 +74,9 @@ export function unknownDenialCopy(remedy: string | undefined): {
  * buyer meeting `{author} changed signing keys` on a security sheet is worse
  * than a crash a test catches.
  */
-export function fillCopy(template: string, vars: Readonly<Record<string, string | number>>): string {
-  return template.replace(/\{(\w+)\}/g, (_match, name: string) => {
-    const value = vars[name]
-    if (value === undefined) throw new Error(`marketplace copy: no value for {${name}}`)
-    return String(value)
-  })
-}
+/** Re-exported: the implementation moved to account-copy.ts so the dependency
+ *  between the two tables runs one way. Existing imports keep working. */
+export { fillCopy }
 
 /**
  * How a key id is shown to a person. Full ed25519 key ids are 43 base64url
@@ -158,28 +155,42 @@ export function authorLabel(handle: string): string {
  * to meet. It appears in the sub-line where a person looks for reassurance
  * about typing a password, and nowhere else.
  *
- * The one thing still banned here is "password", because there still is not
- * one; and "unlock", because it hides whether money moves.
+ * V3-07 REWRITES THE BAN. There IS a password now — identity v3 gave the
+ * account one, and it goes to cookrew.dev only. So "password" is not banned
+ * here any more; saying there is none was the accurate sentence for exactly as
+ * long as it was true, and it stopped being true. What stays banned is
+ * "unlock", because it hides whether money moves, and — per the v3 copy rules
+ * — "error", "invalid" and any status number, which are our words for our
+ * machinery rather than sentences a person can act on.
+ *
+ * The identify sentence itself now lives in shared/account-copy.ts as
+ * 'g1.identify': the gate sheet and the account cards must say the same thing
+ * about the same account, and two files is how they stop.
  */
 export const MKT_AUTH = {
   'mkt.auth.title': 'Sign in with your Cookrew account',
-  'mkt.auth.body':
-    'This preset asks who you are before it downloads. Signing in takes one tap — your account uses a passkey, so there is no password to remember.',
+  /** V3-07: the one identify sentence, from shared/account-copy.ts. */
+  'mkt.auth.body': V3_COPY['g1.identify'],
   'mkt.auth.why': 'Authors can see how many people installed a preset, never who you are.',
-  'mkt.auth.method': 'Use the passkey on this device',
+  'mkt.auth.method': 'Use your username and password',
   'mkt.auth.method.alt': 'or scan with your phone',
-  'mkt.auth.custody': 'Cookrew stores no password and never sees your key.',
+  /** v3: the password exists and goes to cookrew.dev only (architecture §1). */
+  'mkt.auth.custody': 'Your password goes to cookrew.dev and nowhere else.',
   'mkt.auth.notwallet':
     "Your account isn't a wallet — paying comes later, and only if a preset costs.",
+  /** G3, the one door where no account is involved at all. */
+  'mkt.auth.direct': V3_COPY['g3.direct'],
   'mkt.auth.action': 'SIGN IN',
-  'mkt.auth.newaccount': 'No account yet? Signing in makes one — it takes the same tap.',
+  /** G3's primary. A key is offered, not signed in with; the verb says so. */
+  'mkt.auth.action.direct': 'CONNECT',
+  'mkt.auth.newaccount': 'No account yet? Take a username here and this device becomes its first.',
   'mkt.auth.dismiss': 'Not now',
   /** The 90-second challenge died while the sheet sat open. Not a cancel. */
   'mkt.auth.expired': 'That request timed out. Try again.',
   'mkt.auth.cancelled': 'Passkey cancelled.',
-  'mkt.auth.unsupported.title': "This browser can't sign you in",
+  'mkt.auth.unsupported.title': 'This browser cannot make a passkey',
   'mkt.auth.unsupported.body':
-    "It can't make a passkey, which is how Cookrew accounts sign in. Use your phone instead.",
+    'Sign in with your username and password instead, or use a code from your phone.',
   'mkt.auth.unsupported.action': 'SCAN WITH PHONE'
 } as const
 
@@ -275,8 +286,35 @@ export const MKT_INSTALL_PRICE = {
     'Sign in with your Cookrew account to download this — one tap, no password.'
 } as const
 
+/**
+ * A design cell that is two sentences — a headline and its why — kept in
+ * account-copy.ts as ONE string, because that is how the copy table writes it
+ * and one source is the whole point of V3-07. The band draws it as `said` and
+ * `why`, so it is cut once here at the first sentence boundary. Placeholders
+ * never contain the boundary, so the cut lands the same before and after fill.
+ */
+export function headlineAndWhy(cell: string): { title: string; body: string } {
+  const cut = cell.indexOf('. ')
+  return cut === -1
+    ? { title: cell, body: '' }
+    : { title: cell.slice(0, cut + 1), body: cell.slice(cut + 2) }
+}
+
+const NO_SEAT = headlineAndWhy(V3_COPY['g2.no-seat'])
+const BUDGET = headlineAndWhy(V3_COPY['g2.budget'])
+
 /** 403 — six reasons, six next actions. One word for all of them was the bug. */
 export const MKT_DENIED_REASONS = {
+  /**
+   * G2 — the registry's seat rung, the one 403 that stays on the rail. Both
+   * people are named: the person refused (the usual cause is being signed in
+   * as somebody else) and the person who can say yes. Cut 1 offers BUY only;
+   * ASK becomes a request in the owner's queue when V3-11 lands.
+   */
+  'mkt.denied.no_seat.title': NO_SEAT.title,
+  'mkt.denied.no_seat.body': NO_SEAT.body,
+  'mkt.denied.no_seat.action': 'BUY A SEAT · {price}',
+
   'mkt.denied.seat_limit.title': 'No seat available',
   'mkt.denied.seat_limit.body':
     'All {n} seats on this licence are in use: {deviceList}. Manage them on {author}’s page.',
@@ -319,11 +357,16 @@ export const MKT_DENIED_REASONS = {
    * the one move that is yours.
    */
 
-  /** 429 — the OWNER's lent budget, not the caller's payment. Nothing to buy. */
+  /**
+   * 429 — the OWNER's lent budget, not the caller's payment. Nothing to buy.
+   * G2: the sheet retries on its own in fifteen minutes, and the sentence says
+   * so — otherwise the person sits refreshing something already waiting for
+   * them. The button does the same thing now, so it is labelled with it; the
+   * old ASK ITS OWNER went nowhere.
+   */
   'mkt.denied.budget.title': 'This team is out of sessions',
-  'mkt.denied.budget.body':
-    'Its owner lends it a fixed number and they are used up. Nothing was charged — a payment now would buy a session that cannot start.',
-  'mkt.denied.budget.action': 'ASK ITS OWNER',
+  'mkt.denied.budget.body': `Its owner lends it a fixed number and they are used up. Nothing was charged — a payment now would buy a session that cannot start. ${BUDGET.body}`,
+  'mkt.denied.budget.action': 'TRY AGAIN',
 
   /** 503 — a paid door with no working rail. Refusing to quote, not to serve. */
   'mkt.denied.payment_unavailable.title': "This team can't take payment right now",
@@ -499,28 +542,14 @@ export function blockedCopy(
  * The rule, and `identityVocabularyLeaks()` below enforces it: an account
  * string never mentions words, fingerprints or reading aloud; a six-word string
  * never mentions accounts or signing in. They may not appear in one sheet.
+ *
+ * IDENTITY v3 (G3, G5) TOOK THE SIX WORDS OUT OF THIS MODULE. The ceremony's
+ * strings (MKT_ENROL) left with the call door they dressed: no surface mounted
+ * it, and the unlisted door it stood for is now the DIRECT walk, where this
+ * Mac's own key identifies it and nobody reads anything to anybody. The wall
+ * stays, as a function, so a ceremony sentence cannot quietly come back in
+ * account clothing.
  */
-
-/** The six-word ceremony. LAN, human-to-human. No account vocabulary, ever. */
-export const MKT_ENROL = {
-  'mkt.enrol.title': 'Read these to each other',
-  'mkt.enrol.body':
-    'You should both see the same six words. Same words means the same key. Different words means stop — you are not enrolling the key you think you are.',
-  'mkt.enrol.channel': 'Say them out loud on a call, not over this connection.',
-  /** The owner's act: the label states the claim the click makes. */
-  'mkt.enrol.action.owner': 'I COMPARED THESE · ENROL',
-  /** The caller's act. Different verb, because they enrol nobody. */
-  'mkt.enrol.action.caller': 'I READ THESE ALOUD · CONNECT',
-  'mkt.enrol.dismiss': 'Cancel',
-  /** The one wrong paste that is a security event rather than a typo. */
-  'mkt.enrol.paste.private':
-    "That's a private key — don't share it. Cookrew hasn't stored it. Ask them for their public key, and if it went over a channel someone else can read, they should replace the pair.",
-  'mkt.enrol.paste.notakey': "That doesn't look like a public key.",
-  'mkt.enrol.paste.wrongtype': "That's a {type} key. Cookrew callers use ed25519.",
-  'mkt.enrol.paste.malformed':
-    'That key is incomplete — it may have been cut off when copied.',
-  'mkt.enrol.paste.duplicate': 'You already enrolled this key as {name}.'
-} as const
 
 /** Saving to the account (R31). Private is the load-bearing word. */
 export const MKT_SAVE = {
@@ -530,7 +559,6 @@ export const MKT_SAVE = {
   'mkt.save.error': "Couldn't save that — nothing was stored and nothing was published."
 } as const
 
-export type MktEnrolId = keyof typeof MKT_ENROL
 export type MktSaveId = keyof typeof MKT_SAVE
 
 /** Account vocabulary — the public door. */
@@ -1022,36 +1050,37 @@ export function accessLabel(n: number): string {
 
 /**
  * THE GATE SHEET's own receipts and step labels (R28). The deck already owns
- * the FORM strings for each moment — MKT_AUTH asks identity, MKT_PAY asks money,
- * MKT_ENROL runs the ceremony. What the one sheet added is the COLLAPSED line: a
- * step you have cleared becomes a one-line receipt, and those short lines had no
- * home until the sheet existed. They live here so the sheet reads no prose of
- * its own.
+ * the FORM strings for each moment — MKT_AUTH asks identity, MKT_PAY asks money.
+ * What the one sheet added is the COLLAPSED line: a step you have cleared
+ * becomes a one-line receipt, and those short lines had no home until the sheet
+ * existed. They live here so the sheet reads no prose of its own.
  *
- * The two doors keep separate strings so the R31 wall holds by construction: the
- * install receipt speaks accounts, the call receipt speaks the ceremony, and
- * because they are different ids no sheet can render both.
+ * The two doors keep separate strings: the install receipt speaks accounts and
+ * seats, the DIRECT receipt speaks this Mac's key and nothing that follows you
+ * — and because they are different ids no sheet can render both.
  */
 export const MKT_GATE = {
   /** Cleared identity, install door — account vocabulary only. */
   'mkt.gate.identify.install.done': "You're signed in.",
   'mkt.gate.identify.install.why': 'Your Cookrew account, on this device.',
-  /** Cleared identity, call door — ceremony vocabulary only. */
-  'mkt.gate.identify.call.done': 'You compared the words.',
-  'mkt.gate.identify.call.why':
-    'Same words, same key — enrolled out loud, never over this connection.',
+  /** Cleared seat rung, install door — a paid team the account is seated at. */
+  'mkt.gate.seat.done': 'You have a seat here.',
+  'mkt.gate.seat.why': 'A seat is per account and follows you to any device.',
+  /** Cleared identity, DIRECT door — this Mac's key, no account anywhere. */
+  'mkt.gate.identify.direct.done': "Connected with this Mac's key.",
+  'mkt.gate.identify.direct.why': 'No account was involved; nothing follows you elsewhere.',
   /** Served, install door — the copy is placed. */
   'mkt.gate.open.install.title': 'Yours. Placing it on your canvas…',
   'mkt.gate.open.install.why': 'Their originals are untouched — your copy runs against a fork.',
-  /** Served, call door — the line is up. */
-  'mkt.gate.open.call.title': 'Connected.',
-  'mkt.gate.open.call.why': 'Calls run against a fork — their original is never touched.',
+  /** Served, DIRECT door — the line is up. */
+  'mkt.gate.open.direct.title': 'Connected.',
+  'mkt.gate.open.direct.why': 'Calls run against a fork — their original is never touched.',
   /** Acknowledge the served state and close — the copy is already placed. */
   'mkt.gate.open.action': 'DONE',
   /** The pin you leave with — the violet mark, said in words. */
   'mkt.gate.pin': 'Pinned to your rail',
   'mkt.gate.pin.why': 'Update from the chip when a new version ships — never pushed, always offered.',
-  /** Door B's honest wait — a first reply is slow while the line warms. */
+  /** The direct door's honest wait — a first reply is slow while the line warms. */
   'mkt.gate.warming':
     'First reply can take a moment while the line warms — the card says so; it never just spins.',
   /** No quote existed, so no payment could have been sent or checked. */
@@ -1091,7 +1120,6 @@ export const MKT_ALL = {
   ...MKT_DENIED_REASONS,
   ...MKT_BLOCKED,
   ...MKT_EXPORT,
-  ...MKT_ENROL,
   ...MKT_SAVE,
   ...MKT_TEMPLATE,
   ...MKT_SERVE,

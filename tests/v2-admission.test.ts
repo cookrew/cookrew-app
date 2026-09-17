@@ -240,14 +240,24 @@ describe('v2 admission — the assert, the 403 and the legacy paths', () => {
     expect(res!.status).toBe(401)
   })
 
-  it('keeps the 401 realm exactly as it was — the challenge rides on it', async () => {
+  it('a LISTED door answers 401 with the realm alone — no challenge= invites the key (v3)', async () => {
     const res = await handleServedRoute(deps, FREE, 'GET', '/turns', {
       headers: {},
       body: null
     })
     expect(res!.status).toBe(401)
+    expect(res!.headers?.['www-authenticate']).toBe(`Cookrew realm="${FREE.slug}"`)
+  })
+
+  it('an UNLISTED door keeps the challenge half — the key is the only way in there', async () => {
+    const lan: ServedTemplate = { ...FREE, slug: 'lan-only', serviceId: 'svc-lan' }
+    const res = await handleServedRoute(deps, lan, 'GET', '/turns', {
+      headers: {},
+      body: null
+    })
+    expect(res!.status).toBe(401)
     expect(res!.headers?.['www-authenticate']).toMatch(
-      new RegExp(`^Cookrew realm="${FREE.slug}", challenge=`)
+      /^Cookrew realm="lan-only", challenge=[A-Za-z0-9_-]+$/
     )
   })
 
