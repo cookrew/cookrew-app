@@ -1028,6 +1028,84 @@ export class Accounts {
   }
 
   /**
+   * STEP UP: prove the password before something irreversible (v3, D12).
+   *
+   * It is `resume` — the password offered to cookrew.dev under this device's
+   * key — and not the local verifier, because the verifier can be stale: a
+   * password changed on the web leaves it holding the old one, and a step-up
+   * that trusted it would let the OLD password sign this Mac out. The
+   * registry is the judge; a fresh session is the receipt, and it is exactly
+   * the session the act that follows is made under.
+   *
+   * A ladder is refused here rather than climbed. This device is attached,
+   * so cookrew.dev does not normally raise one; if it does, the right thing is
+   * the resume card and not a sign-out that starts with a six-digit code.
+   */
+  async stepUp(password: string): Promise<AccountResult<void>> {
+    const proven = await this.resume(password)
+    if (proven.ok) return { ok: true, value: undefined }
+    if (proven.reason === 'second_factor') {
+      return {
+        ok: false,
+        reason: 'bad_credentials',
+        ...(proven.message ? { message: proven.message } : {}),
+      }
+    }
+    return plainRefusal(proven)
+  }
+
+  /**
+   * SIGN OUT ON THIS MAC (v3, D12) — this device leaves the account.
+   *
+   * THE ORDER IS THE SAFETY. The password first, at the registry; then the
+   * device is removed THERE (DELETE /v2/me/devices/<this device>); only once
+   * cookrew.dev has said 204 is the file removed HERE. A file deleted ahead
+   * of the registry would be a Mac that has forgotten an account which still
+   * counts it as a device — the account's own list would name a machine that
+   * can no longer prove it is that machine.
+   *
+   * THE LAST DEVICE MAY NOT LEAVE. The registry refuses it (409 last_device)
+   * and so does this, in the surface's own sentence: an account with no
+   * device is an account nobody can prove, and the fix is to add one first.
+   * Nothing local changes on that refusal.
+   *
+   * THE CANVAS IS NOT TOUCHED. Everything here is about the account file;
+   * the doors this Mac serves are withdrawn by the caller (account-ipc.ts ·
+   * `signedOut`), which owns the serving state this class knows nothing of.
+   */
+  async signOutThisMac(password: string): Promise<AccountResult<void>> {
+    const account = this.cached
+    if (!account) return { ok: false, reason: 'no_account' }
+    const proven = await this.stepUp(password)
+    if (!proven.ok) return proven
+    const removed = await this.revokeDevice(account.deviceId)
+    if (!removed.ok) return removed
+    this.forget()
+    return { ok: true, value: undefined }
+  }
+
+  /**
+   * The account is gone from this Mac. The file, the cache, and every
+   * secret this class holds in memory — a half-climbed ladder, fresh codes —
+   * go with it; a listener is told once, after the file is really gone.
+   */
+  private forget(): void {
+    try {
+      rmSync(accountFilePath(this.base), { force: true })
+    } catch (error) {
+      console.error('account file could not be removed:', error)
+    }
+    this.cached = null
+    this.signingIn = null
+    this.freshCodes = null
+    try {
+      this.changed?.()
+    } catch (error) {
+      console.error('account change listener failed:', error)
+    }
+  }
+
+  /**
    * Eight codes, shown once (D3). Never logged, here or anywhere.
    *
    * The batch is held IN MEMORY so SAVE AS FILE can write it without the

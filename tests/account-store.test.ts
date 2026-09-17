@@ -24,6 +24,7 @@ import {
   refusalSentence,
   rescueState,
   revokeSentence,
+  signOutSentence,
   takenSentence,
   wrongPasswordSentence,
 } from '../src/renderer/src/account/account-store'
@@ -269,6 +270,20 @@ describe('the lock screen’s line (D5)', () => {
 
   it('says how long the pause has left', () => {
     expect(lockNote({ ok: false, reason: 'paused', pausedForMs: 60_000 })).toContain('60 seconds')
+  })
+})
+
+describe('the sign-out confirmation says what leaves, what stays, what goes quiet (D12)', () => {
+  it('is the table’s sentence, with the handle in it', () => {
+    expect(signOutSentence('@drej')).toBe(
+      'This Mac leaves @drej. Everything on the canvas stays. The doors it serves go offline until it signs in again.',
+    )
+  })
+
+  it('the last device is refused in the table’s words, named when the handle is known', () => {
+    expect(refusalSentence('last_device', undefined, 'drej')).toBe(
+      'This is the last device on @drej — add another first, or the account has no way back in.',
+    )
   })
 })
 
