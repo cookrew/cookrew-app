@@ -75,21 +75,20 @@ describe('every protocol moment has words', () => {
     }
   })
 
-  it('never says unlock or password — the two still banned after R31', () => {
-    // R31 made "account" and "sign in" TRUE, so they are no longer banned: the
-    // ban existed because they promised a thing that did not exist, and the
-    // ruling created the thing. "Unlock" stays banned (it hides whether money
-    // moves) and "password" stays banned (there still is not one, outside the
-    // strings that exist to say so).
-    const saysNoPassword = /no password|never sees your key|stores no password/i
+  it('never says unlock, an error, or a status number (V3-07 rewrites the password ban)', () => {
+    // The password ban was accurate for exactly as long as it was true. Identity
+    // v3 gave the account a password that goes to cookrew.dev only, so saying
+    // "there is no password" became the false sentence and the ban came off.
+    // What replaced it is the v3 copy rule: no string says "error", "invalid",
+    // or a status number, because those are our words for our machinery rather
+    // than sentences a person can act on. "Unlock" stays banned — it hides
+    // whether money moves.
     for (const [id, value] of Object.entries(MKT_ALL)) {
       expect(value.toLowerCase(), id).not.toMatch(/\bunlock\b/)
-      if (!saysNoPassword.test(value)) {
-        expect(value.toLowerCase(), id).not.toMatch(/\bpassword\b/)
-      }
+      expect(value.toLowerCase(), id).not.toMatch(/\berrors?\b/)
+      expect(value.toLowerCase(), id).not.toMatch(/\binvalid\b/)
     }
   })
-
   it('MKT_ALL carries every group — a group added but not wired makes the leak test vacuous', async () => {
     // This exists because it already happened: MKT_ENROL and MKT_SAVE were
     // written, the spread into MKT_ALL silently failed to apply, and the leak

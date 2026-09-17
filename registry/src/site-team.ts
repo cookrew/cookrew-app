@@ -1,3 +1,4 @@
+import { webCopy } from './v3-copy'
 import type { ListedDoor } from './site'
 import { priceChip } from './site-home'
 import { day, esc, page, type Page } from './site-shell'
@@ -116,7 +117,7 @@ function seatBar(input: TeamInput, door: ListedDoor, address: string): string {
 <p class="lede" style="margin:0 0 10px">Buy one, or ask @${esc(door.handle)} for one. A seat is yours, not this browser’s.</p>
 <p class="row" style="margin:0"><button class="btn primary lg" data-seat-buy>Buy a seat · $${esc(price)}</button>
 <button class="btn lg" data-seat-ask="${ask}">Copy link to ask @${esc(door.handle)}</button></p>
-<p class="meta" style="margin:10px 0 0">No queue: the link is this page with your username on it. @${esc(door.handle)} grants the seat by username, and it is here the next time you open this page.</p>
+<p class="meta" style="margin:10px 0 0">${esc(webCopy('w6.asked'))}</p>
 <code class="cmd" id="seat-ask-link" hidden>${ask}</code></section>`
 }
 
