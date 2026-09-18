@@ -169,12 +169,16 @@ describe('the neutral acts are marked, the destructive ones are not', () => {
         onStatus={() => undefined}
       />,
     )
-    // D12 gave the ceremony its own verb at the foot of the tab, where the
-    // other way in sits beside it. A ghost is neutral by construction, so the
-    // rose-with-an-override that PAIR A PHONE wore is not needed to say so.
+    // Both verbs are ghosts — neutral by construction, so neither needs the
+    // rose-with-an-override that PAIR A PHONE wears.
     expect(html).toContain('<button class="gs-ghost">ADD A PHONE</button>')
     expect(html).not.toContain('gs-revoke">ADD A PHONE')
-    expect(html).not.toContain('PAIR A PHONE')
+    // PAIR A PHONE stands beside them again after integration: V3-10's ADD A
+    // PHONE mints a JOIN code — the account ceremony — which is not the
+    // pairing URL that admits a phone at THIS Mac on Wi-Fi. Two ceremonies,
+    // two ways in, and the destructive ink is still only on the one act that
+    // hands something over.
+    expect(html).toContain('class="gs-revoke cr-acct-act">PAIR A PHONE')
     const enrolled: FactorsView = {
       totp: true,
       passkeys: [{ id: 'pk-1', name: 'Touch ID on this Mac', addedAt: 1_757_116_800_000 }],

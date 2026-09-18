@@ -210,7 +210,13 @@ describe('POST /v2/teams/@o/t/seat-requests (R1)', () => {
     const throwaway = newDevice()
     const throwawayToken = await attach('drej', throwaway, drejToken, 'phone')
     expect(throwawayToken.length).toBeGreaterThan(0)
-    expect((await call('DELETE', `/v2/me/devices/${throwaway.id}`, undefined, as(drejToken))).status).toBe(204)
+    // Revoking another device is on the step-up list (C1), so the password is
+    // proved again here. The threshold in front of the event is not the thing
+    // this test measures — the feed underneath it is.
+    expect(
+      (await call('DELETE', `/v2/me/devices/${throwaway.id}`, { current: PASSWORD }, as(drejToken)))
+        .status
+    ).toBe(204)
     const before = await bodyOf<{ events: { kind: string }[] }>(
       await call('GET', '/v2/me/events?since=0', undefined, as(drejToken))
     )
