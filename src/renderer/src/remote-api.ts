@@ -542,6 +542,10 @@ export function createRemoteApi(): CookrewApi {
         locked: false,
         lockAfterMs: 0,
         requests: 0,
+        // The offline lock is a DESKTOP fact: a phone holds no verifier and
+        // has none to be missing, so there is nothing here that could be
+        // pending.
+        passwordPending: false,
         // Which registry the DESKTOP is pointed at is the desktop's business
         // and the desktop's screen; a phone reading the companion cannot know
         // it and must not guess.

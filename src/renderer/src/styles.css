@@ -5725,6 +5725,34 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
 }
 .cr-acct-firstrun .gs-sheet-head h2.cr-acct-cardhead { margin: 0; font-size: 11px; }
 .cr-acct-firstrun-join { margin-top: 12px; }
+
+/* D8: the code the card is about to spend — read, not typed, so it is set
+   in the pixel face at a size a person can check against another screen. */
+.cr-acct-joincode {
+  margin: 10px 0 0;
+  font-family: var(--font-pixel);
+  font-size: 18px;
+  letter-spacing: 0.18em;
+  text-align: center;
+}
+
+/* D12: the minted code, its QR and the link, under ADD A MAC. */
+.cr-acct-addmac {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+.cr-acct-addmac .cr-acct-qr {
+  width: 168px;
+  align-self: center;
+}
+.cr-acct-addlink {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  word-break: break-all;
+  color: var(--ink-soft);
+}
 .cr-acct-firstrun-foot { flex-wrap: wrap; justify-content: flex-start; }
 
 .cr-acct-card { margin-top: 6px; }

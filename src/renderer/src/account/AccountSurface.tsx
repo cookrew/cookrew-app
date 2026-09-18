@@ -1,17 +1,18 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AccountStatus } from '../../../shared/account-v2'
 import { cookrew } from '../api'
 import { AccountAvatar } from './Avatar'
 import { AccountSheet } from './AccountSheet'
 import { FirstRunCard } from './FirstRunCard'
 import { firstRunView, type FirstRunAction } from './account-store'
+import { JoinCard } from './JoinCard'
 import { dismissFirstRun, firstRunDismissed } from './first-run'
 import { LockScreen } from './LockScreen'
 import { ProfileSheet, type ProfileTab } from './ProfileSheet'
 import { ResumeSession } from './ResumeSession'
 import { SecurityCard } from './SecurityCard'
 import { securityActions } from './security-actions'
-import { onAccountSheetRequest } from './open-request'
+import { onAccountSheetRequest, onJoinRequest } from './open-request'
 
 /**
  * THE ACCOUNT SURFACE, assembled — one hook, so App gains three lines.
@@ -61,11 +62,21 @@ export function useAccountSurface(): AccountSurface {
    */
   const [workspaceCount, setWorkspaceCount] = useState<number | null>(null)
   const [dismissed, setDismissed] = useState(() => firstRunDismissed())
+  /**
+   * D8: the code a deep link brought, or one typed into the first-run card,
+   * waiting for the person to press JOIN. Null the rest of the time — nothing
+   * is spent by a card appearing.
+   */
+  const [joining, setJoining] = useState<string | null>(null)
   const [tab, setTab] = useState<ProfileTab>('PROFILE')
   /** The request a system notification was clicked for (D6). */
   const [focusRequest, setFocusRequest] = useState<string | null>(null)
   /** A failure from the D3 card's own actions, said on the card. */
   const [problem, setProblem] = useState<string | null>(null)
+
+  /** The latest status, for listeners that must not be re-subscribed per change. */
+  const statusRef = useRef(status)
+  statusRef.current = status
 
   const refresh = useCallback(() => {
     const call = cookrew().accountStatus
@@ -159,6 +170,19 @@ export function useAccountSurface(): AccountSurface {
     return onAccountSheetRequest(open)
   }, [supported, open])
 
+  // D8: `cookrew://join#<code>`, routed here by App — the bridge holds one
+  // deep-link subscriber and App is it. The card is offered, never acted on:
+  // a link that attached this Mac on arrival would be a link anybody could
+  // send. A Mac that already has an account ignores it; joining twice is not
+  // a thing, and the sheet would be a question with no true answer.
+  useEffect(() => {
+    if (!supported) return
+    return onJoinRequest((code) => {
+      if (statusRef.current?.username) return
+      setJoining(code)
+    })
+  }, [supported])
+
   if (!supported) return { avatar: null, overlays: null }
 
   /** The first-run card's buttons: two open the sheet on a tab, one closes for good. */
@@ -177,7 +201,26 @@ export function useAccountSurface(): AccountSurface {
     <>
       {/* D8: one card, on a fresh Mac only. Drawn under the sheets, and it
           takes nothing over — the avatar keeps the same door forever. */}
-      {firstRunCard && <FirstRunCard view={firstRunCard} onAction={firstRun} />}
+      {firstRunCard && joining === null && (
+        <FirstRunCard view={firstRunCard} onAction={firstRun} onJoin={setJoining} />
+      )}
+      {/* D8: the one card that spends a code — typed here or deep-linked.
+          It replaces the first-run card rather than sitting over it: they
+          are the same question, asked twice. */}
+      {joining !== null && status?.username == null && (
+        <JoinCard
+          code={joining}
+          onDismiss={() => setJoining(null)}
+          onJoined={(next) => {
+            setJoining(null)
+            setStatus(next)
+            // The card is done with; a Mac that has joined is a Mac with an
+            // account, and the first-run card's own rule already hides it.
+            dismissFirstRun()
+            setDismissed(true)
+          }}
+        />
+      )}
       {sheet === 'account' && (
         <AccountSheet
           initial={initialTab}

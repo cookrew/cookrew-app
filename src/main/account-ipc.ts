@@ -1,5 +1,6 @@
 import type { AdmittedDevice } from './admitted-devices'
 import type {
+  AccountRefusal,
   AccountStatus,
   AccountResult,
   ApprovalAsked,
@@ -143,6 +144,13 @@ export const ACCOUNT_CHANNELS = [
   // may answer the same ladder `account:resume` does, and the three rungs
   // below finish it unchanged.
   'account:signIn',
+  // v3 (D8 · D12): the OTHER way onto an account — a code minted on a device
+  // that is already trusted, spent once here. `join` takes the code; the
+  // password is never typed on this machine. `joinCode` is the minting side,
+  // and steps up for the password because it widens what the account opens
+  // from.
+  'account:join',
+  'account:joinCode',
   // ── the second-factor ladder, on the way back in ──
   //
   // The password step is `account:resume`; these three are the rungs after a
@@ -259,6 +267,9 @@ export function accountStatus(deps: AccountIpcDeps): AccountStatus {
     recoveryCodesSavedAt: account?.recoveryCodesSavedAt ?? null,
     recoveryCodesLeft: null,
     sessionExpired: account !== null && !deps.accounts.sessionLive(),
+    // D8: this Mac joined by a code and has not met the password yet, so the
+    // lock screen asks for it once and says why.
+    passwordPending: deps.accounts.passwordPending(),
     // Non-null only when account.json names one registry and this process is
     // talking to another — the state in which a 401 means nothing at all.
     registryMismatch: account === null ? null : deps.accounts.registryMismatch(),
@@ -275,15 +286,91 @@ export function accountStatus(deps: AccountIpcDeps): AccountStatus {
  * types it. Adding a second channel for the same secret would mean two places
  * that take a password instead of one.
  */
-async function unlock(
-  deps: AccountIpcDeps,
-  password: string,
-): Promise<UnlockOutcome & { sessionRenewed?: boolean }> {
+async function unlock(deps: AccountIpcDeps, password: string): Promise<UnlockAnswer> {
+  if (deps.accounts.passwordPending()) return firstUnlock(deps, password)
   const outcome = deps.lock.unlock(password)
   if (!outcome.ok) return outcome
   if (deps.accounts.account() === null || deps.accounts.sessionLive()) return outcome
   const renewed = await deps.accounts.resume(password)
   return { ...outcome, sessionRenewed: renewed.ok }
+}
+
+/**
+ * WHAT THE LOCK CHANNEL ANSWERS — the lock's own outcomes, and one more.
+ *
+ * `IdleLock` answers about a password it checked itself. On the first lock of
+ * a code-joined Mac there is nothing to check against and cookrew.dev is
+ * asked instead (`firstUnlock`), so the channel can now also fail for a
+ * reason that is not about the password at all. That arm carries the
+ * registry's own refusal rather than a sentence: main does not write the
+ * renderer's words, and the lock screen already maps a refusal to one.
+ */
+export type UnlockAnswer =
+  | (UnlockOutcome & { sessionRenewed?: boolean })
+  | { ok: false; reason: 'unproven'; refusal: AccountRefusal; message?: string }
+
+/**
+ * THE FIRST LOCK ON A MAC THAT JOINED BY A CODE (v3, D8).
+ *
+ * There is no verifier to check against: nothing was typed here, so nothing
+ * could be derived (account-v2.ts · saveClaimed). cookrew.dev is the only
+ * party that can say whether this is the password, and `resume` asks it —
+ * landing a fresh session and, through `landSession`, WRITING THE VERIFIER.
+ * From the next lock on this is an ordinary offline unlock and this function
+ * is never reached again. That is the whole of "zero password on the new
+ * machine until trust exists".
+ *
+ * THE LOCAL LOCK STILL COUNTS THE TRIES. It is asked FIRST, where it answers
+ * `paused` if the pause is running and otherwise spends one try and says
+ * `wrong` (its verify cannot succeed — there is nothing to verify against).
+ * Only then is the registry asked, and a YES calls `proven()`, which clears
+ * the count. So the five-tries-then-a-minute rule is one rule wherever the
+ * password is checked, and a stolen laptop is no cheaper to guess at.
+ *
+ * A REFUSAL THAT IS NOT A WRONG PASSWORD IS NOT REPORTED AS ONE. A dead
+ * socket, a rate limit, a ladder — none of them is the owner getting it
+ * wrong, and "Not it. 4 tries left" would send them to change what they are
+ * typing. Those come back as `unproven`, carrying the registry's own reason
+ * for the screen to say.
+ */
+async function firstUnlock(deps: AccountIpcDeps, password: string): Promise<UnlockAnswer> {
+  const local = deps.lock.unlock(password)
+  // `ok` is unreachable while there is no verifier, and is passed through
+  // rather than asserted away: if that ever changes, the lock has opened and
+  // this must not be the code that argues about it.
+  if (local.ok || local.reason === 'paused') return local
+  const proven = await deps.accounts.resume(password)
+  if (proven.ok) {
+    deps.lock.proven()
+    return { ok: true, sessionRenewed: true }
+  }
+  if (proven.reason === 'bad_credentials' || proven.reason === 'session-expired') return local
+  return {
+    ok: false,
+    reason: 'unproven',
+    refusal: proven.reason,
+    ...(proven.ok === false && 'message' in proven && proven.message
+      ? { message: proven.message }
+      : {}),
+  }
+}
+
+/**
+ * JOIN THIS MAC TO AN ACCOUNT WITH A CODE (v3, D8).
+ *
+ * Same wrapper as `signIn`: a landed session is the same work to unblock —
+ * the lock proven, the approvals listening, the desktop filed with its
+ * reach card — and the renderer is answered with the STATUS, never the file,
+ * which holds a private key.
+ */
+async function join(deps: AccountIpcDeps, input: unknown): Promise<AccountResult<AccountStatus>> {
+  const fields = asRecord(input)
+  const name = fields.name === undefined ? undefined : asString(fields.name)
+  const result = await deps.accounts.join({
+    code: asString(fields.code),
+    ...(name ? { name } : {}),
+  })
+  return result.ok ? { ok: true, value: signedIn(deps) } : result
 }
 
 /**
@@ -583,6 +670,11 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     'account:unlock': (password: unknown) => unlock(deps, asString(password)),
     'account:resume': (password: unknown) => resume(deps, asString(password)),
     'account:signIn': (input: unknown) => signIn(deps, input),
+    'account:join': (input: unknown) => join(deps, input),
+    // The minting side (D12). The password rides the call because the
+    // registry asks for it again on this route; it is spent at once and
+    // nothing here keeps it.
+    'account:joinCode': (current: unknown) => deps.accounts.mintJoinCode(asString(current)),
     'account:resumeCode': (input: unknown) => resumeCode(deps, input),
     'account:resumeAsk': (pending: unknown): Promise<AccountResult<ApprovalAsked>> =>
       deps.accounts.resumeAsk(asString(pending)),

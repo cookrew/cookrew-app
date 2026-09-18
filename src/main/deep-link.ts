@@ -1,5 +1,6 @@
 import { COOKREW_REGISTRY, parseServeAddress } from './import-session'
 import type { DeepLink } from '../shared/deep-link'
+import { normaliseJoinCode } from '../shared/join-code'
 
 export type { DeepLink } from '../shared/deep-link'
 
@@ -76,20 +77,6 @@ function fromRegistryPage(url: URL): DeepLink | null {
   const first = segments[0].startsWith('@') ? segments[0] : `@${segments[0]}`
   const address = publishedName([first, segments[1]])
   return address === null ? null : { verb: 'import', address }
-}
-
-/**
- * A JOIN CODE, as the registry prints it: two blocks of four from the
- * recovery-code alphabet (no 0/O, no 1/I/L), dashed. Read from a fragment a
- * person may have retyped, so the dash and the case are forgiven here — the
- * registry forgives them too — and the canonical spelling is what travels.
- */
-const JOIN_CODE = /^([2-9A-HJ-NP-Z]{4})-?([2-9A-HJ-NP-Z]{4})$/
-
-/** `XXXX-XXXX` from whatever a fragment carried, or null. */
-export function normaliseJoinCode(raw: string): string | null {
-  const match = JOIN_CODE.exec(raw.trim().toUpperCase().replace(/\s+/g, ''))
-  return match === null ? null : `${match[1]}-${match[2]}`
 }
 
 /**

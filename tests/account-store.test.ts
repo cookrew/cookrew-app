@@ -45,6 +45,7 @@ const BASE: AccountStatus = {
   envUsername: null,
   legacy: null,
   sessionExpired: false,
+  passwordPending: false,
   registryMismatch: null,
   workspacesReachable: true,
   recoveryCodesSavedAt: null,

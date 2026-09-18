@@ -89,7 +89,9 @@ export function LockScreen({
 
   const username = status.username ?? ''
   const waiting: LockWaiting = { count: status.requests, names }
-  const note = lockNote(outcome, waiting)
+  // D8: a Mac that joined by a code is meeting its password for the first
+  // time here, and the opening line has to say why it is being asked at all.
+  const note = lockNote(outcome, waiting, status.passwordPending)
   return (
     <div className="cr-acct-lock" role="dialog" aria-modal="true" aria-label="Cookrew is locked">
       {/* cr-sheet re-dresses the gs-* field and primary inside the card in the

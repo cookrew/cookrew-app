@@ -34,6 +34,7 @@ import type {
 import type {
   AccountDevice,
   AccountProfile,
+  AccountRefusal,
   AccountResult,
   AccountStatus,
   AdmittedPhone,
@@ -64,7 +65,14 @@ export type UnlockAnswer =
   | { ok: true; sessionRenewed?: boolean }
   | { ok: false; reason: "wrong"; triesLeft: number }
   | { ok: false; reason: "paused"; pausedForMs: number }
-  | { ok: false; reason: "no-account" };
+  | { ok: false; reason: "no-account" }
+  /**
+   * v3 (D8): the first lock of a Mac that joined by a code. There is no local
+   * verifier yet, so cookrew.dev is asked — and this arm is what comes back
+   * when the answer was not about the password at all (a dead socket, a rate
+   * limit). It carries the registry's refusal; the lock screen says it.
+   */
+  | { ok: false; reason: "unproven"; refusal: AccountRefusal; message?: string };
 
 
 /**
@@ -606,6 +614,18 @@ export interface CookrewApi {
    * `accountResume*` rungs finish it), or a refusal with the registry's own
    * sentence. `accountClaim` above stays the marker for "owner surface".
    */
+  /**
+   * v3 (D8): join an account with a code. Nothing about the password is
+   * typed here — the code was minted on a device that is already trusted.
+   */
+  accountJoin?: (input: {
+    code: string;
+    name?: string;
+  }) => Promise<AccountResult<AccountStatus>>;
+  /** v3 (D12): mint a code for the next machine. Steps up for the password. */
+  accountJoinCode?: (
+    current: string,
+  ) => Promise<AccountResult<{ code: string; expiresAt: number; url: string }>>;
   accountSignIn?: (input: {
     username: string;
     password: string;
