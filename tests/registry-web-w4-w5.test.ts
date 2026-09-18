@@ -151,10 +151,52 @@ describe('W4 · the number, on the asking side', () => {
   })
 
   it('is never on the owner’s approvals list — that asymmetry is the mechanism', async () => {
-    const list = await (await get('/v2/me/approvals', signedIn())).json()
-    for (const request of list as Record<string, unknown>[]) {
+    // THE ASK RUNG HAS TO BE DRIVEN FIRST. This assertion used to loop over a
+    // list nobody had put anything in: an Approval is minted only by
+    // POST /v2/sessions/:pending/approve, which this suite never called, so
+    // the body executed zero times and the rule it guards was unguarded
+    // (V3-20c/H7). The length assertion below is the guard against that
+    // returning — an empty list can no longer pass as a clean one.
+    const asked = await fetch(`${origin}/v2/sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        username: 'drej',
+        password: PASSWORD,
+        device: device('A third browser')
+      })
+    })
+    expect(asked.status).toBe(401)
+    const step = (await asked.json()) as { pending: string; match: string }
+    expect(step.match).toMatch(/^\d{2}$/)
+
+    const rung = await fetch(`${origin}/v2/sessions/${step.pending}/approve`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}'
+    })
+    expect(rung.status).toBe(202)
+
+    const list = (await (await get('/v2/me/approvals', signedIn())).json()) as Record<
+      string,
+      unknown
+    >[]
+    expect(list.length).toBeGreaterThan(0)
+    for (const request of list) {
       expect(Object.keys(request)).not.toContain('match')
     }
+    // And not under another name, or inside a sentence: the digits must not
+    // reach the approver's screen by any field at all.
+    expect(JSON.stringify(list)).not.toContain(`"${step.match}"`)
+    expect(Object.keys(list[0]).sort()).toEqual([
+      'address',
+      'at',
+      'deviceName',
+      'expiresAt',
+      'id',
+      'kind',
+      'sentence'
+    ])
   })
 })
 
