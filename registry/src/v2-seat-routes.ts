@@ -2,6 +2,7 @@ import { readJsonBody } from './http'
 import { noContent, refuse, signedIn, v2Json, type Signed, type V2Context } from './v2-http'
 import { teamAddress, type V2Seat } from './v2-seats'
 import type { DoorRecord } from './doors'
+import { openSeatRequest } from './v2-requests'
 
 /**
  * IDENTITY v2 — THE SEAT ROUTES.
@@ -103,6 +104,16 @@ function team(ctx: V2Context, rawHandle: string, rawName: string, tail: string[]
   if (tail.length === 1 && tail[0] === 'seat' && method === 'GET') return mySeat(ctx, asked)
   if (tail.length === 1 && tail[0] === 'seated' && method === 'GET') return seated(ctx, asked)
   if (tail.length === 1 && tail[0] === 'call-token' && method === 'POST') return callToken(ctx, asked)
+  // R1: a guest asks the owner for a seat. It lands in the owner's one queue
+  // (GET /v2/me/requests) and the guest keeps polling GET …/seat as before.
+  if (tail.length === 1 && tail[0] === 'seat-requests' && method === 'POST') {
+    if (asked.signed === null) {
+      refuse(response, 401, 'unauthenticated', address, { 'www-authenticate': `Cookrew realm="${address}"` })
+      return
+    }
+    openSeatRequest(ctx, asked.signed, door)
+    return
+  }
   if (tail.length === 1 && tail[0] === 'seats' && method === 'GET') return listSeats(ctx, asked)
   if (tail.length === 1 && tail[0] === 'seats' && method === 'POST') {
     void grantSeat(ctx, asked)
