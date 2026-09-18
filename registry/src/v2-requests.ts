@@ -105,13 +105,24 @@ export class V2Requests {
    * A guest asks for a seat. ONE LIVE PER (team, account): asking twice does
    * not stack two rows on the owner's prompt, it returns the one already
    * waiting — so a guest refreshing the page cannot bury the owner's queue.
+   *
+   * `opened` SAYS WHETHER ANYTHING HAPPENED, and it is the whole point of the
+   * return shape (H5). The caller announces an arrival on the owner's
+   * account:changed feed, and that feed's tail is bounded — so a repeat ask
+   * that opened no row must not be announced as one. A request that did not
+   * open a row is not a thing that happened.
    */
-  openSeat(input: { team: string; owner: string; account: string; address: string }): SeatRequest {
+  openSeat(input: {
+    team: string
+    owner: string
+    account: string
+    address: string
+  }): { request: SeatRequest; opened: boolean } {
     this.sweep()
     const existing = [...this.seats.values()].find(
       (r) => r.team === input.team && r.account === input.account && r.state === 'pending'
     )
-    if (existing) return existing
+    if (existing) return { request: existing, opened: false }
     const at = this.now()
     const request: SeatRequest = {
       id: newRequestId(),
@@ -126,7 +137,7 @@ export class V2Requests {
     }
     this.capFor(request.owner)
     this.seats.set(request.id, request)
-    return request
+    return { request, opened: true }
   }
 
   /** The pending seat requests an owner should be answering. */
@@ -139,7 +150,15 @@ export class V2Requests {
 
   // ── reach requests (R2) ───────────────────────────────────────────────────
 
-  /** A device asks to reach one Mac. Lands in that Mac's queue only. */
+  /**
+   * A device asks to reach one Mac. Lands in that Mac's queue only.
+   *
+   * ONE LIVE PER (asking device, Mac), for the same two reasons the seat side
+   * has one: a phone that asks twice means one thing and should appear once on
+   * that Mac's prompt, and the arrival is announced on a bounded feed. A
+   * DECLINED ask does not dedupe — the state is no longer pending — so asking
+   * again after a NOT NOW is a new question, which is what it is.
+   */
   openReach(input: {
     account: string
     desktopDeviceId: string
@@ -147,8 +166,15 @@ export class V2Requests {
     askingDeviceName: string
     askKey: Record<string, string>
     address: string
-  }): ReachRequest {
+  }): { request: ReachRequest; opened: boolean } {
     this.sweep()
+    const existing = [...this.reaches.values()].find(
+      (r) =>
+        r.askingDeviceId === input.askingDeviceId &&
+        r.desktopDeviceId === input.desktopDeviceId &&
+        r.state === 'pending'
+    )
+    if (existing) return { request: existing, opened: false }
     const at = this.now()
     const request: ReachRequest = {
       id: newRequestId(),
@@ -165,7 +191,7 @@ export class V2Requests {
     }
     this.capFor(request.account)
     this.reaches.set(request.id, request)
-    return request
+    return { request, opened: true }
   }
 
   /** The pending reach requests one Mac should be answering — its own only. */
@@ -468,6 +494,17 @@ export async function decideRequest(ctx: V2Context, signed: Signed, id: string):
  * The owner learns through their queue and an account:changed of kind
  * `request`; the guest waits on GET …/seat as before. Mounted from the seat
  * routes, which have already resolved the door and the signed-in caller.
+ *
+ * LIMITED, LIKE EVERY SIBLING THAT WRITES (H5). A guest who never gets a seat
+ * could otherwise ask without bound, and each ask reached the owner's feed. An
+ * hour's window rather than a minute's, for the same reason minting a join
+ * code has one: asking for a seat is a deliberate act a person does a handful
+ * of times, and the window that catches somebody doing it in a loop is a long
+ * one rather than a fast one. A REPEAT ASK COUNTS against the bucket even
+ * though it opens no row — the route did the work either way, and a client
+ * hammering a no-op is a client that should be told to stop. It loses nothing
+ * by being refused: it already has its pending request, and the answer it is
+ * waiting for arrives on GET …/seat.
  */
 export function openSeatRequest(
   ctx: V2Context,
@@ -476,13 +513,24 @@ export function openSeatRequest(
 ): void {
   const team = teamAddress(door.handle, door.name)
   const owner = door.handle.replace(/^@/, '').toLowerCase()
-  const request = ctx.v2.requests.openSeat({
+  // Keyed by the ASKER, not by their address: the route already demands a
+  // signed-in account, so the account is the thing doing the asking, and one
+  // that moved between networks would otherwise earn a fresh bucket for free.
+  if (!ctx.v2.limits.requests.take(`seat-request|${signed.account.username}`)) {
+    refuse(ctx.response, 429, 'rate_limited', undefined, { 'retry-after': '3600' })
+    return
+  }
+  const { request, opened } = ctx.v2.requests.openSeat({
     team,
     owner,
     account: signed.account.username,
     address: signed.account.username
   })
-  ctx.v2.events.append(owner, { kind: 'request', address: team })
+  // ONLY AN ARRIVAL IS ANNOUNCED. The queue has held one row per (team,
+  // account) from the start; announcing every ask meant a stranger who never
+  // got a seat could still push the owner's revokes and joins off the end of a
+  // bounded feed — the one channel this design has for telling them.
+  if (opened) ctx.v2.events.append(owner, { kind: 'request', address: team })
   v2Json(ctx.response, 201, {
     id: request.id,
     kind: 'seat',
@@ -510,7 +558,15 @@ export function openReachRequest(ctx: V2Context, signed: Signed, targetDeviceId:
     refuse(ctx.response, 400, 'malformed')
     return
   }
-  const request = ctx.v2.requests.openReach({
+  // The same bucket as a seat ask, under its own key. This route only takes a
+  // device of the account, so the threat is narrower — but a route that writes
+  // to a bounded feed is a route with a limiter, and consistency here is what
+  // stops the next one being written without one.
+  if (!ctx.v2.limits.requests.take(`reach-request|${signed.claims.dev}`)) {
+    refuse(ctx.response, 429, 'rate_limited', undefined, { 'retry-after': '3600' })
+    return
+  }
+  const { request, opened } = ctx.v2.requests.openReach({
     account: signed.account.username,
     desktopDeviceId: targetDeviceId,
     askingDeviceId: signed.claims.dev,
@@ -518,7 +574,7 @@ export function openReachRequest(ctx: V2Context, signed: Signed, targetDeviceId:
     askKey: signed.device.jwk,
     address: signed.device.name
   })
-  ctx.v2.events.append(signed.account.username, { kind: 'request', device: target.name })
+  if (opened) ctx.v2.events.append(signed.account.username, { kind: 'request', device: target.name })
   v2Json(ctx.response, 201, {
     id: request.id,
     kind: 'reach',

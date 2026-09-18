@@ -81,6 +81,12 @@ export interface V2Identity {
     joinCodes: Limiter
     /** Renewing a session, per DEVICE — see v2-renew for why not per address. */
     renew: Limiter
+    /**
+     * Asking for a seat, per ACCOUNT; asking to reach a Mac, per DEVICE. One
+     * bucket, two keys — both write to a bounded account:changed feed, and a
+     * route that can be asked without bound is a way to flush it (H5).
+     */
+    requests: Limiter
   }
   /** Nonces handed out for a renewal signature: single-use, two minutes. */
   renewNonces: RenewNonces
@@ -118,6 +124,8 @@ export interface V2Options {
     joinPerMinute?: number
     joinCodesPerHour?: number
     renewPerMinute?: number
+    /** Seat and reach asks, per asker. Lowered by a test to reach the cap. */
+    requestsPerHour?: number
   }
   trustedProxies?: readonly string[]
   now?: () => number
@@ -154,6 +162,10 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
       // handful of times in a life; the window that catches a device quietly
       // keeping a supply of live codes is a long one, not a fast one.
       joinCodes: new Limiter(options.limits?.joinCodesPerHour ?? 6, 60 * 60_000, options.now),
+      // TWENTY AN HOUR. A person asking for seats at twenty teams in one hour
+      // is not a person, and a guest who reloads a team page a few times is
+      // nowhere near it.
+      requests: new Limiter(options.limits?.requestsPerHour ?? 20, 60 * 60_000, options.now),
       renew: new Limiter(options.limits?.renewPerMinute ?? 5, 60_000, options.now)
     },
     joinCodes: new JoinCodes(options.now),
