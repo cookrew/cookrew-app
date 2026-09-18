@@ -185,17 +185,24 @@ export function legacySentence(handle: string): string {
 }
 
 /**
- * D4, phase 6 — the environment still names something, and it is ignored.
+ * D4, phase 6 — the environment still names something, and the account wins.
  *
- * The old sentence said serving kept the environment's handle "until a later
- * phase". This is that phase: the account decides, and a person reading two
- * names on one screen is owed the one that is true.
+ * IT NO LONGER SAYS WHAT THIS MAC SERVES AS (F5). The sentence used to read
+ * "COOKREW_HANDLE names @drej; this Mac serves as @magpie", and the second
+ * clause is the one that could be false: the serving handle is resolved ONCE
+ * at boot (relayHandle, main), so a Mac that started local-only and signed in
+ * afterwards is still publishing its doors under the environment's name or its
+ * old key's. This sheet cannot see that, and a sentence asserting a fact it
+ * cannot check is a lie whichever way the facts happen to fall.
+ *
+ * What is left is what this surface does know, which is also the phase-6
+ * ruling it exists to state: the account is the name.
  */
 export function envIgnoredSentence(env: string, username: string): string {
-  return (
-    `COOKREW_HANDLE names @${normaliseUsername(env)}; this Mac serves as @${normaliseUsername(username)}. ` +
-    'The environment is a development override now, not a name.'
-  )
+  return accountCopy('d4.env-override', {
+    env: normaliseUsername(env),
+    handle: normaliseUsername(username),
+  })
 }
 
 /** The 409 a stranger gets for a name that is waiting for its password. */
@@ -576,6 +583,14 @@ export function signInView(fields: SignInFields, crossed: string | null = null):
 
 export interface RegisterView extends ClaimView {
   lede: string
+  /**
+   * F2 · the name is somebody's, so the primary crosses instead of creating.
+   * `canClaim` stays false — this name cannot be created — and `canGo` is what
+   * the button reads, because "may be pressed" and "will create an account"
+   * stopped being the same question.
+   */
+  crossesToSignIn: boolean
+  canGo: boolean
 }
 
 /**
@@ -590,7 +605,40 @@ export function registerView(fields: ClaimFields, crossed: string | null = null)
   const view = claimView(fields)
   const username: FieldView =
     crossed !== null && fields.check === 'free' ? { ...view.username, note: crossed } : view.username
-  return { ...view, username, lede: V3_COPY['d9.create.lede'] }
+  const name = normaliseUsername(fields.username)
+  /**
+   * F2 · A TAKEN NAME MAKES THE PRIMARY THE WAY OUT.
+   *
+   * The sheet used to show "@magpie already exists — sign in with your
+   * password." beside a DISABLED CREATE, and nothing on the card could act on
+   * it: the sentence named a door and the sheet offered no handle. D9 says a
+   * wrong tab is never a dead end, and that was one.
+   *
+   * IT IS NOT CROSSED WHILE SOMEBODY TYPES. The availability check settles on
+   * whatever is in the field, so a person typing "magpie" who pauses on "mag"
+   * would have the tab pulled out from under them mid-name. Both directions
+   * cross on the PRIMARY PRESS — which is already true of SIGN IN → CREATE,
+   * where the 401 comes back from a pressed CONTINUE — so this is the same
+   * rule, not a second one.
+   *
+   * THE PASSWORD IS NOT REQUIRED TO CROSS. Whoever typed a taken name has not
+   * typed THEIR password yet; the one on screen belongs to an account that
+   * already exists, and asking for twelve characters they are about to lose is
+   * a toll on the way to the door they want. The shape of the name still has
+   * to be one the registry could have issued: "already taken" is not a thing a
+   * name that could never exist can be.
+   */
+  const crossesToSignIn = fields.check === 'taken' && isValidUsername(name)
+  return {
+    ...view,
+    username,
+    lede: V3_COPY['d9.create.lede'],
+    crossesToSignIn,
+    primary: crossesToSignIn
+      ? accountCopy('d9.crossing.taken-primary', { handle: name.toUpperCase() })
+      : view.primary,
+    canGo: crossesToSignIn || view.canClaim,
+  }
 }
 
 /**
@@ -922,13 +970,51 @@ export function removeFactorPrompt(row: FactorRow): string {
 /**
  * WHAT MAKES THE DEVICES TAB RE-READ ITSELF.
  *
- * The username, and the number of devices still waiting. An approval attaches
- * a device at the registry, so the moment that count drops is the moment the
- * list on screen is out of date — and a tab that only refreshes when the
- * sheet is closed and reopened tells an owner their approval did nothing.
+ * The username, the number of devices still waiting, AND THE TAB IN FRONT OF
+ * THE READER.
+ *
+ * The count alone was the original rule, and its reasoning — "an approval
+ * attaches a device, so the moment that count drops is the moment the list is
+ * stale" — is right about the cause and one beat early about the timing.
+ * Answering an approval only marks it approved AT THE REGISTRY. The asking
+ * Mac attaches itself when it next polls its own pending, a second or two
+ * later. So the re-read fired while the registry still held one device,
+ * correctly read one device, and then had nothing left to fire on: the count
+ * was already zero and stayed zero. A real-interface pass found exactly that —
+ * the list caught up only when the whole sheet was closed and reopened.
+ *
+ * The tab closes it deterministically. Opening DEVICES is the moment somebody
+ * wants the list to be true, it costs one small read, and it does not race
+ * another machine — which anything keyed on the count alone necessarily does.
  */
-export function profileKey(status: { username: string | null; requests: number }): string {
-  return `${status.username ?? ''}#${status.requests}`
+export function profileKey(
+  status: { username: string | null; requests: number },
+  tab: string,
+): string {
+  return `${status.username ?? ''}#${status.requests}#${tab}`
+}
+
+/**
+ * WHICH PHONE VERB THE DEVICES TAB OFFERS — exactly one (F3).
+ *
+ * A real-interface pass found an enabled PAIR A PHONE directly above a
+ * disabled ADD A PHONE marked "Coming in cut 2". To a reader those are one
+ * promise made twice with one copy greyed out, which reads as a broken screen.
+ *
+ * THE TWO ARE GENUINELY DIFFERENT and that is why both were drawn. PAIR A
+ * PHONE admits a phone to THIS Mac over the LAN, with the token this Mac
+ * prints; ADD A PHONE mints a join code and makes the phone a device on the
+ * ACCOUNT, which then reaches every Mac through cookrew.dev. But this tab
+ * lives inside a sheet that only opens once there IS an account — so wherever
+ * both work, the account one is the answer, and the LAN one is what M5's own
+ * copy already calls the door for "a Mac with no account".
+ *
+ * The verb is therefore a fact about the build, not a preference: offer the
+ * account door when this app can mint a code, and the LAN door when it cannot,
+ * so no version of this screen ever shows two ways to do one thing.
+ */
+export function phoneVerb(input: { canMintJoinCode: boolean }): 'pair' | 'add' {
+  return input.canMintJoinCode ? 'add' : 'pair'
 }
 
 /**

@@ -48,6 +48,35 @@ export const V3_COPY = {
    * them the other door instead of telling them to think of another name.
    */
   'd9.crossing.taken': '@{handle} already exists — sign in with your password.',
+  /**
+   * D9, the label on the way out of a taken name (V3-UI1 · F2).
+   *
+   * A real-interface pass found CREATE showing "@magpie already exists — sign
+   * in with your password." beside a DISABLED primary, with nothing anywhere
+   * to press: the sentence named the way out and the sheet offered no way to
+   * take it. The button becomes the crossing, and says so — a primary that
+   * still read CREATE and then signed somebody in would be worse than the
+   * dead end it replaced.
+   */
+  'd9.crossing.taken-primary': 'SIGN IN AS @{handle}',
+  /**
+   * D4 · THE ENVIRONMENT STILL NAMES SOMETHING, AND THE ACCOUNT WINS
+   * (V3-UI1 · F5).
+   *
+   * The old sentence read "COOKREW_HANDLE names @drej; this Mac serves as
+   * @magpie." A real-interface pass read that on a profile showing @magpie and
+   * called it a contradiction — and the second clause is in fact the untrue
+   * one, for a reason the screen could not see: the serving handle is resolved
+   * ONCE at boot (relayHandle, main), so a Mac that started local-only and
+   * signed in afterwards is still serving under whatever the environment or
+   * its old key said. The sheet cannot know that, so it no longer claims it.
+   *
+   * What is left is what this surface does know and the phase-6 ruling it is
+   * here to state: the account is the name, and COOKREW_HANDLE is a
+   * development override.
+   */
+  'd4.env-override':
+    'COOKREW_HANDLE names @{env}. Your account is @{handle}, and the account is the name — the environment is a development override.',
   /** D9, typing a free name while on SIGN IN. The mirror of the above. */
   'd9.crossing.unknown': 'There is no @{handle} yet — take it now.',
 

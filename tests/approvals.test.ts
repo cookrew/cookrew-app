@@ -248,3 +248,136 @@ describe('the decision', () => {
     expect(h.calls).toHaveLength(0)
   })
 })
+
+/**
+ * THE POLL HAS TO FOLLOW THE ACCOUNT (V3-UI1 · F1).
+ *
+ * The queue was started once, at module load, under `if (accounts.account())`
+ * — so a Mac that BOOTED WITHOUT AN ACCOUNT and then had one created or
+ * signed in during that session never started polling at all. The only other
+ * thing that calls `refresh()` is window focus, which means: a person sitting
+ * on their canvas with the window already focused got no notification and no
+ * badge when a second Mac asked to join, because nothing ever asked
+ * cookrew.dev. The approve rung is the only rung an account without a second
+ * factor has, so that is the whole ladder, unopenable, on the first run of the
+ * product.
+ *
+ * `follow()` is the rule: poll exactly when there is an account to poll for.
+ */
+describe('the poll follows the account, not the moment the app started', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('starts polling when an account appears after boot', async () => {
+    let signedIn = false
+    const calls: string[] = []
+    const approvals = new Approvals({
+      accounts: {
+        call: <T,>(path: string) => {
+          calls.push(path)
+          return Promise.resolve({ ok: true, value: [] as unknown as T })
+        },
+        account: () => (signedIn ? { username: 'magpie' } : null),
+        sessionLive: () => true,
+      },
+      notify: () => undefined,
+      now: () => NOW,
+    })
+
+    // Boot with no account: following changes nothing, and nothing is asked.
+    approvals.follow()
+    await vi.advanceTimersByTimeAsync(APPROVAL_POLL_MS * 3)
+    expect(calls).toHaveLength(0)
+
+    // The person creates an account in this session.
+    signedIn = true
+    approvals.follow()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls.length).toBeGreaterThan(0)
+
+    const asked = calls.length
+    await vi.advanceTimersByTimeAsync(APPROVAL_POLL_MS)
+    expect(calls.length).toBeGreaterThan(asked)
+  })
+
+  it('stops when the account goes away, and the badge goes with it', async () => {
+    let signedIn = true
+    let changed = 0
+    const calls: string[] = []
+    const approvals = new Approvals({
+      accounts: {
+        call: <T,>(path: string) => {
+          calls.push(path)
+          return Promise.resolve({ ok: true, value: [] as unknown as T })
+        },
+        account: () => (signedIn ? { username: 'magpie' } : null),
+        sessionLive: () => true,
+      },
+      notify: () => undefined,
+      onChange: () => void (changed += 1),
+      now: () => NOW,
+    })
+    approvals.follow()
+    await vi.advanceTimersByTimeAsync(APPROVAL_POLL_MS)
+    const asked = calls.length
+    expect(asked).toBeGreaterThan(0)
+
+    signedIn = false
+    approvals.follow()
+    await vi.advanceTimersByTimeAsync(APPROVAL_POLL_MS * 3)
+    // A signed-out Mac asks cookrew.dev nothing at all.
+    expect(calls.length).toBe(asked)
+    expect(approvals.count).toBe(0)
+  })
+
+  it('is idempotent — following twice does not double the cadence', async () => {
+    const calls: string[] = []
+    const approvals = new Approvals({
+      accounts: {
+        call: <T,>(path: string) => {
+          calls.push(path)
+          return Promise.resolve({ ok: true, value: [] as unknown as T })
+        },
+        account: () => ({ username: 'magpie' }),
+        sessionLive: () => true,
+      },
+      notify: () => undefined,
+      now: () => NOW,
+    })
+    approvals.follow()
+    approvals.follow()
+    approvals.follow()
+    await vi.advanceTimersByTimeAsync(0)
+    const first = calls.length
+    await vi.advanceTimersByTimeAsync(APPROVAL_POLL_MS)
+    // One interval, one ask — three follows must not become three timers.
+    expect(calls.length).toBe(first + 1)
+  })
+
+  it('announces a request that arrives while nobody touches the window', async () => {
+    // THE POINT OF THE TIMER. Focus is the other trigger, and a person already
+    // looking at their canvas generates no focus event — so if the toast only
+    // came from focus, the common case ("I am at my Mac and I just pressed
+    // sign in on my phone") would be the one case with no toast at all.
+    const notes: { title: string; body: string }[] = []
+    let waiting: ApprovalRequest[] = []
+    const approvals = new Approvals({
+      accounts: {
+        call: <T,>() => Promise.resolve({ ok: true, value: waiting as unknown as T }),
+        account: () => ({ username: 'magpie' }),
+        sessionLive: () => true,
+      },
+      notify: (note) => void notes.push({ title: note.title, body: note.body }),
+      now: () => NOW,
+    })
+    approvals.follow()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(notes).toHaveLength(0)
+
+    waiting = [request()]
+    await vi.advanceTimersByTimeAsync(APPROVAL_POLL_MS)
+    expect(notes).toHaveLength(1)
+    expect(notes[0].body).toContain('Chrome on macOS in Sydney')
+    expect(approvals.count).toBe(1)
+  })
+})

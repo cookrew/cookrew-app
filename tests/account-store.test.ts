@@ -6,6 +6,8 @@
 
 import { describe, expect, it } from 'vitest'
 import type { AccountStatus } from '../src/shared/account-v2'
+import { V3_COPY } from '../src/shared/account-copy'
+import type { ClaimFields } from '../src/renderer/src/account/account-store'
 import {
   ACCOUNT_COPY,
   approvalView,
@@ -20,7 +22,11 @@ import {
   lockRowLabel,
   mustChangeBanner,
   passkeyElsewhere,
+  envIgnoredSentence,
+  phoneVerb,
   profileKey,
+  registerView,
+  crossingFor,
   removeFactorPrompt,
   refusalSentence,
   rescueState,
@@ -515,23 +521,227 @@ describe('taking a factor off', () => {
 })
 
 describe('what makes the DEVICES tab re-read itself', () => {
+  // The tab is part of the key now (F4); these three are about the other half
+  // of it, so they hold the tab still and vary what they are about.
   it('changes when a waiting request is answered', () => {
     // Approving attaches the device at the registry; the count dropping is
     // the moment the list on screen went stale.
-    expect(profileKey({ username: 'drej', requests: 1 })).not.toBe(
-      profileKey({ username: 'drej', requests: 0 }),
+    expect(profileKey({ username: 'drej', requests: 1 }, 'DEVICES')).not.toBe(
+      profileKey({ username: 'drej', requests: 0 }, 'DEVICES'),
     )
   })
 
   it('is stable while nothing has happened, so the sheet does not thrash', () => {
-    expect(profileKey({ username: 'drej', requests: 0 })).toBe(
-      profileKey({ username: 'drej', requests: 0 }),
+    expect(profileKey({ username: 'drej', requests: 0 }, 'DEVICES')).toBe(
+      profileKey({ username: 'drej', requests: 0 }, 'DEVICES'),
     )
   })
 
   it('changes with the account, so a claim redraws the tab', () => {
-    expect(profileKey({ username: null, requests: 0 })).not.toBe(
-      profileKey({ username: 'drej', requests: 0 }),
+    expect(profileKey({ username: null, requests: 0 }, 'DEVICES')).not.toBe(
+      profileKey({ username: 'drej', requests: 0 }, 'DEVICES'),
     )
+  })
+})
+
+/**
+ * F2 · A TAKEN NAME ON THE CREATE SIDE HAS TO BE PRESSABLE (V3-UI1).
+ *
+ * The real-interface pass found the sheet showing USERNAME · TAKEN and the
+ * sentence "@magpie already exists — sign in with your password." beside a
+ * DISABLED primary and a plain <p> with nothing to click. The other half of
+ * the crossing (SIGN IN → CREATE) already works, so the sheet could cross one
+ * way and not the other — and the way it could not is the one D9 draws first.
+ *
+ * The fix is not to cross while somebody types: the availability check settles
+ * on whatever is in the field, so a person typing "magpie" who pauses on "mag"
+ * would have the tab pulled out from under them. Both directions cross on the
+ * PRIMARY PRESS, and this makes the primary exist to be pressed.
+ */
+describe('the CREATE side offers the way out it names (F2)', () => {
+  const taken = (over: Partial<ClaimFields> = {}): ClaimFields => ({
+    username: 'magpie',
+    check: 'taken',
+    password: 'correct horse battery staple',
+    confirm: 'correct horse battery staple',
+    ...over,
+  })
+
+  it('turns the primary into the crossing rather than disabling it', () => {
+    const view = registerView(taken())
+    expect(view.crossesToSignIn).toBe(true)
+    expect(view.primary).toBe('SIGN IN AS @MAGPIE')
+    // canClaim stays false — this name cannot be created, and that is the fact
+    // the button is now honest about instead of being switched off for.
+    expect(view.canClaim).toBe(false)
+    expect(view.canGo).toBe(true)
+  })
+
+  it('says it in the same words the sentence under the field uses', () => {
+    const view = registerView(taken())
+    expect(view.username.tag).toBe('taken')
+    expect(view.username.note).toBe('@magpie already exists — sign in with your password.')
+    expect(view.primary).toContain('MAGPIE')
+  })
+
+  it('needs no password to cross — the one on screen is for an account that exists', () => {
+    // Somebody who typed a taken name has not typed THEIR password yet; making
+    // them fill twelve characters they are about to lose is a toll on the way
+    // to the door they actually want.
+    const view = registerView(taken({ password: '', confirm: '' }))
+    expect(view.crossesToSignIn).toBe(true)
+    expect(view.canGo).toBe(true)
+  })
+
+  it('does not cross on a name that is merely unknown, or still being checked', () => {
+    for (const check of ['checking', 'unknown', 'invalid', 'free'] as const) {
+      const view = registerView(taken({ check }))
+      expect(view.crossesToSignIn, check).toBe(false)
+    }
+    // A free name goes back to being a name to create.
+    expect(registerView(taken({ check: 'free' })).primary).toBe('CREATE @MAGPIE')
+  })
+
+  it('refuses to cross on a name that could never be anyone’s', () => {
+    // A shape the registry would not have issued cannot be "already taken";
+    // crossing there would send somebody to sign in as a name that cannot be.
+    const view = registerView(taken({ username: 'Not A Name!' }))
+    expect(view.crossesToSignIn).toBe(false)
+    expect(view.canGo).toBe(false)
+  })
+
+  it('lands where the 409 lands — one crossing, two ways of reaching it', () => {
+    // The button must produce the same landing a taken-on-POST does, or the
+    // sheet would have two ideas of what crossing means.
+    const landing = crossingFor({ state: 'register', username: 'magpie', refusal: { reason: 'taken' } })
+    expect(landing).toEqual({
+      kind: 'cross',
+      to: 'signin',
+      sentence: '@magpie already exists — sign in with your password.',
+    })
+  })
+})
+
+/**
+ * F4 · THE DEVICES TAB WAS STALE UNTIL THE SHEET WAS FULLY REOPENED (V3-UI1).
+ *
+ * The real-interface pass approved a join on Mac A and watched the Devices
+ * list keep showing one row; switching tabs inside the open sheet did not
+ * refresh it, and only closing and reopening the whole sheet did.
+ *
+ * The key was `username#requests`, and its comment reasoned that "the moment
+ * that count drops is the moment the list is stale". The count is the right
+ * signal for something happening and the WRONG MOMENT for this: answering an
+ * approval only marks it approved at the registry. The asking Mac attaches
+ * itself when IT next polls its pending, a second or two later — so the
+ * re-read fired one beat early, correctly read a list that still had one
+ * device in it, and then had no reason to fire again, because the count was
+ * already zero and stayed zero.
+ *
+ * So the tab is part of the key too: opening DEVICES re-reads. That is
+ * deterministic, where anything keyed on the count alone is a race with
+ * another machine.
+ */
+describe('what makes the devices list re-read (F4)', () => {
+  it('still re-reads when a request is answered', () => {
+    expect(profileKey({ username: 'magpie', requests: 1 }, 'DEVICES')).not.toBe(
+      profileKey({ username: 'magpie', requests: 0 }, 'DEVICES'),
+    )
+  })
+
+  it('re-reads when the DEVICES tab is opened, without closing the sheet', () => {
+    // The observed failure: the count is already 0 by the time the far Mac
+    // attaches, so nothing keyed on it alone will ever fire again.
+    const before = profileKey({ username: 'magpie', requests: 0 }, 'PROFILE')
+    const after = profileKey({ username: 'magpie', requests: 0 }, 'DEVICES')
+    expect(after).not.toBe(before)
+  })
+
+  it('is stable while nothing changes, so the tab does not re-read on every render', () => {
+    const once = profileKey({ username: 'magpie', requests: 0 }, 'DEVICES')
+    const twice = profileKey({ username: 'magpie', requests: 0 }, 'DEVICES')
+    expect(twice).toBe(once)
+  })
+
+  it('changes with the account, so one person’s list never shows another’s', () => {
+    expect(profileKey({ username: 'magpie', requests: 0 }, 'DEVICES')).not.toBe(
+      profileKey({ username: 'drej', requests: 0 }, 'DEVICES'),
+    )
+  })
+})
+
+/**
+ * F5 · THE ENV SENTENCE MUST NOT CONTRADICT THE ACCOUNT ON SCREEN (V3-UI1).
+ *
+ * It read "COOKREW_HANDLE names @drej; this Mac serves as @magpie." on a
+ * profile showing @magpie. The second clause is the untrue one, and the screen
+ * had no way to know: the serving handle is resolved ONCE at boot, so a Mac
+ * that started local-only and signed in afterwards is still serving under the
+ * environment's name. A sentence that asserts what it cannot see is a lie
+ * whichever way the facts fall, so it says only what this surface knows.
+ */
+describe('the environment override sentence (F5)', () => {
+  it('names the account as the name, and the environment as an override', () => {
+    const said = envIgnoredSentence('drej', 'magpie')
+    expect(said).toContain('@drej')
+    expect(said).toContain('@magpie')
+    expect(said).toContain('development override')
+  })
+
+  it('does not claim what this Mac serves as — the sheet cannot know it', () => {
+    // Resolved at boot from an account that did not exist yet; see the copy
+    // table's note. Claiming it here made the one contradiction on the screen.
+    expect(envIgnoredSentence('drej', 'magpie')).not.toContain('serves as')
+    expect(envIgnoredSentence('drej', 'magpie')).not.toContain('serves')
+  })
+
+  it('strips a leading @, so no name is ever drawn as @@drej', () => {
+    // `normaliseUsername` trims and drops the @ and deliberately does NOT
+    // lowercase — that is the registry's rule at the point a name is claimed,
+    // not this helper's, and changing it here would change it everywhere.
+    expect(envIgnoredSentence('@drej', '@magpie')).toBe(envIgnoredSentence('drej', 'magpie'))
+    expect(envIgnoredSentence('@drej', '@magpie')).not.toContain('@@')
+  })
+
+  it('comes from the one copy table, like every other sentence here', () => {
+    expect(envIgnoredSentence('drej', 'magpie')).toBe(
+      V3_COPY['d4.env-override'].replace('{env}', 'drej').replace('{handle}', 'magpie'),
+    )
+  })
+})
+
+/**
+ * F3 · ONE PHONE VERB ON THE DEVICES TAB (V3-UI1).
+ *
+ * The real-interface pass found an enabled PAIR A PHONE sitting directly above
+ * a disabled ADD A PHONE marked "Coming in cut 2". To a reader those are the
+ * same promise twice, one of them greyed out — which reads as a broken screen
+ * rather than as two different mechanisms.
+ *
+ * They ARE different: PAIR A PHONE admits a phone to THIS Mac over the LAN
+ * with the token this Mac prints; ADD A PHONE mints a join code and makes the
+ * phone a device on the ACCOUNT, reaching every Mac through cookrew.dev. But
+ * this tab only exists inside a sheet that only opens once there is an
+ * account — so where both work, the account one is the true answer, and where
+ * joining is not available yet the LAN one is the only answer.
+ *
+ * So the tab offers exactly one, and which one is a fact about the build.
+ */
+describe('which phone verb the Devices tab offers (F3)', () => {
+  it('offers ADD A PHONE once this build can mint a join code', () => {
+    expect(phoneVerb({ canMintJoinCode: true })).toBe('add')
+  })
+
+  it('offers PAIR A PHONE while it cannot — the only door that works', () => {
+    // On a build without the join IPC, a disabled ADD A PHONE beside a live
+    // PAIR A PHONE is the contradiction; the LAN door is simply the answer.
+    expect(phoneVerb({ canMintJoinCode: false })).toBe('pair')
+  })
+
+  it('never offers both, which is the whole finding', () => {
+    for (const canMintJoinCode of [true, false]) {
+      const verb = phoneVerb({ canMintJoinCode })
+      expect(['pair', 'add']).toContain(verb)
+    }
   })
 })

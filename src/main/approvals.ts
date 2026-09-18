@@ -99,6 +99,33 @@ export class Approvals {
   }
 
   /**
+   * POLL EXACTLY WHEN THERE IS AN ACCOUNT TO POLL FOR (V3-UI1 · F1).
+   *
+   * `start()` used to be called once, at module load, under a check for an
+   * account that existed AT THAT MOMENT. On the first run of the product there
+   * is none: the app boots local-only, the person creates their account, and
+   * the queue never starts. Window focus was then the only thing left that
+   * called `refresh()` — so somebody already looking at their canvas, which
+   * generates no focus event, got no toast and no badge when their second Mac
+   * asked to join. The approve rung is the ONLY rung an account without a
+   * second factor has, so that was the whole ladder, unopenable.
+   *
+   * Saying it as a rule rather than a boot-time condition is the point: it is
+   * called whenever the account may have changed, and it is idempotent, so a
+   * caller never has to work out which way it moved.
+   */
+  follow(): void {
+    if (this.deps.accounts.account() === null) {
+      this.stop()
+      // The badge must go with the account. A Mac that signed out still
+      // showing "1 device waiting" is pointing at a card it cannot open.
+      if (this.requests.length > 0) this.settle([])
+      return
+    }
+    this.start()
+  }
+
+  /**
    * Ask once.
    *
    * A local-only desktop and a dead session are both answered WITHOUT a
