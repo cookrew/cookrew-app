@@ -327,3 +327,89 @@ describe('an admitted phone may admit ITSELF and nobody else (H1)', () => {
     expect(readAdmittedDevices(temp.base)).toHaveLength(2)
   })
 })
+
+/* ── (a) the credential does not travel in the URL ─────────────────────── */
+
+describe('the admission token goes in a header, never in the query', () => {
+  const account = fakeAccount()
+  let temp: { base: string; clean: () => void }
+  beforeEach(() => (temp = tempBase()))
+  afterEach(() => temp.clean())
+
+  const deps = (): MobileIdentityDeps => ({
+    account: () => account,
+    registryOrigin: () => REGISTRY,
+    admitted: createAdmittedDeviceStore({ base: temp.base }),
+    selfOrigins: () => [MAC_ORIGIN],
+    now: () => NOW,
+    pairingToken: () => ROOT,
+  })
+
+  const call = async (body: unknown, bearer: string | null, query: string, d: MobileIdentityDeps) => {
+    const { written, response } = recorder()
+    await handleIdentityRoutes(
+      post(body, bearer),
+      response,
+      new URL(`${MAC_ORIGIN}/api/admit${query}`),
+      d,
+    )
+    return {
+      status: written.status,
+      body: written.body ? (JSON.parse(written.body) as Record<string, unknown>) : {},
+    }
+  }
+
+  /**
+   * WHY THIS ROUTE MAY NOT TAKE `?token=`.
+   *
+   * The query form exists in this codebase for exactly one reason, and the
+   * reason is written down at auth-gate.ts · tokenParam: `EventSource` cannot
+   * set a header, so the two streams that are EventSources carry the token in
+   * the URL and nothing else does. A POST can set a header. So the only thing
+   * a query token buys here is the places a URL goes that a header does not —
+   * a server log, a `Referer`, a screenshot of an address bar, a shell
+   * history — and what it carries is the credential that admits a device to
+   * this Mac.
+   *
+   * REFUSED, NOT IGNORED. By the time this server sees it the token has
+   * already been written wherever this request was logged; serving the call
+   * anyway would mint a fresh credential off one that must now be treated as
+   * exposed, and would leave the client author believing the shape is
+   * supported.
+   */
+  it('refuses the root token in the query, and mints nothing', async () => {
+    const d = deps()
+    const out = await call(phone('iPhone').proof(), null, `?token=${ROOT}`, d)
+    expect(out.status).toBe(400)
+    expect(String(out.body.error)).toMatch(/header/i)
+    expect(readAdmittedDevices(temp.base)).toHaveLength(0)
+  })
+
+  it('refuses a per-device token in the query too — the same leak, a smaller key', async () => {
+    const d = deps()
+    const real = phone('iPhone')
+    const held = (await call(real.proof(), ROOT, '', d)).body.token as string
+    const out = await call(real.proof(), null, `?token=${held}`, d)
+    expect(out.status).toBe(400)
+    // The row it already had is untouched: a refused re-mint must not rotate
+    // the token the phone is still using.
+    expect(d.admitted.accepts(held)).toBe(true)
+  })
+
+  it('refuses even when a good header is there too — the URL has already leaked', async () => {
+    const d = deps()
+    const out = await call(phone('iPhone').proof(), ROOT, `?token=${ROOT}`, d)
+    expect(out.status).toBe(400)
+    expect(readAdmittedDevices(temp.base)).toHaveLength(0)
+  })
+
+  it('refuses an EMPTY query token as well — the shape is what is wrong', async () => {
+    const d = deps()
+    expect((await call(phone('iPhone').proof(), ROOT, '?token=', d)).status).toBe(400)
+  })
+
+  it('still takes the header, which is the one way in', async () => {
+    const d = deps()
+    expect((await call(phone('iPhone').proof(), ROOT, '', d)).status).toBe(200)
+  })
+})

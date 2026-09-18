@@ -4,7 +4,7 @@ import type { AccountFile } from './account-v2'
 import type { AdmittedDeviceStore } from './admitted-devices'
 import { companionCredential } from './companion-gate'
 import { helloAnswer, helloAnswerV2, helloCorsHeaders, readAdmission } from './device-hello'
-import { presentedToken, readJson, respondJson } from './mobile-http'
+import { bearerToken, readJson, respondJson } from './mobile-http'
 import { safeDeviceName, type RelayDevice } from './relay-device'
 import { publishedRequestOrigin } from '../shared/hello-proof'
 
@@ -188,9 +188,31 @@ const admit = async (
     respondJson(response, 404, { error: 'no account on this desktop' })
     return true
   }
+  /**
+   * THE CREDENTIAL DOES NOT TRAVEL IN THE URL, and a request that tried is
+   * refused rather than served off its header.
+   *
+   * `?token=` exists in this codebase for one reason — `EventSource` cannot
+   * set a header — and this is a POST, which can. What a query token buys
+   * here is only the places a URL goes that a header does not: a server log,
+   * a `Referer`, a screenshot of an address bar. By the time this server sees
+   * one it has already been written down there, so minting a fresh credential
+   * off it would be minting off a secret that must now be treated as exposed
+   * — and answering 200 would tell a client author the shape is supported.
+   *
+   * 400, not 401: the complaint is about the request, not about who sent it,
+   * and a 401 would send a working client to re-pair over a shape problem
+   * that re-pairing does not change.
+   */
+  if (url.searchParams.has('token')) {
+    respondJson(response, 400, {
+      error: 'Send the token in the Authorization header. A token in the URL is a token in the log.'
+    })
+    return true
+  }
   const opened = companionCredential({
     route: 'admission',
-    presented: presentedToken(request, url),
+    presented: bearerToken(request),
     rootToken: deps.pairingToken?.() ?? null,
     perDevice: deps.admitted.deviceFor,
     rootEverywhere: false
