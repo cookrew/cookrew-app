@@ -271,3 +271,95 @@ describe('POST /v2/join — the new machine types the code and nothing else', ()
     }
   })
 })
+
+/* ── "not me" and the join door ─────────────────────────────────────────────── */
+
+/**
+ * THE ALARM, AND WHICH DOORS IT ACTUALLY CLOSES.
+ *
+ * "Not me" is the break-glass: it signs every other device out and locks the
+ * password until it is changed. The redeem side honours it, and V3-20c/H8
+ * found that rule asserted in a commit message and exercised by nothing —
+ * no test in this file touched mustChangePassword at all.
+ *
+ * The alarm is raised here through the REAL ceremony rather than by poking the
+ * factor store, because what is being proved is what the product does when the
+ * owner presses the button, not what a setter does when a test calls it.
+ */
+describe('"not me" and the join door', () => {
+  const NEXT_PASSWORD = 'a completely different long password'
+
+  /** Ask from a stranger's browser, climb to the approval, and press NOT ME. */
+  async function raiseAlarm(username: string, token: string): Promise<void> {
+    const laddered = await call('POST', '/v2/sessions', {
+      username,
+      password: PASSWORD,
+      device: device('browser', 'A stranger')
+    })
+    expect(laddered.status).toBe(401)
+    const asked = await bodyOf<{ pending: string }>(laddered)
+    const rung = await call('POST', `/v2/sessions/${asked.pending}/approve`)
+    expect(rung.status).toBe(202)
+    const { approval } = await bodyOf<{ approval: string }>(rung)
+    const pressed = await call(
+      'POST',
+      `/v2/me/approvals/${approval}`,
+      { decision: 'not-me' },
+      bearer(token)
+    )
+    expect(pressed.status).toBe(204)
+  }
+
+  it('LOCKS REDEEMING — and the code is spent even though it was refused', async () => {
+    const owner = await claim()
+    const code = await mintCode(owner.token)
+    await raiseAlarm(owner.username, owner.token)
+
+    const refused = await call('POST', '/v2/join', { code, device: device('desktop', 'Mac Studio') })
+    expect(refused.status).toBe(403)
+    expect((await bodyOf<{ error: string }>(refused)).error).toBe('password_change_required')
+
+    // Clear the alarm the way the product does — the password change is what
+    // "not me" was waiting for.
+    const changed = await call(
+      'POST',
+      '/v2/me/password',
+      { current: PASSWORD, next: NEXT_PASSWORD },
+      bearer(owner.token)
+    )
+    expect(changed.status).toBe(204)
+
+    // THE CODE IS GONE. It was spent before the alarm was examined, so the
+    // refusal cost it: the owner mints another. That ordering is deliberate —
+    // a code that survived a refusal would be a code a wrong device may retry.
+    const after = await call('POST', '/v2/join', { code, device: device('desktop', 'Mac Studio') })
+    expect(after.status).toBe(401)
+  })
+
+  it('does NOT lock minting — PINNED DEFECT, belongs to H3 (V3-16 stepUpHeld)', async () => {
+    // THIS ASSERTION PINS A BREAK, NOT AN INTENTION. The shared step-up gate
+    // (registry/src/v2-step-up.ts stepUpHeld) has no mustChangePassword check
+    // on either of its paths, so the door that ATTACHES MACHINES still opens
+    // with a password the account has been told is locked out. Every other
+    // password-verifying route honours the alarm: sign-in, the rung, redeem
+    // above, and recovery.
+    //
+    // The fix belongs inside stepUpHeld so that every act inherits it, which
+    // makes it V3-16's and Atlas's rather than this lane's. WHEN IT LANDS THIS
+    // TEST FAILS with "expected 201 to be 403" — that is the handoff working.
+    // Flip the expectation to 403 and rename the test then.
+    const owner = await claim()
+    await raiseAlarm(owner.username, owner.token)
+
+    const minted = await call(
+      'POST',
+      '/v2/me/join-codes',
+      { current: PASSWORD },
+      bearer(owner.token)
+    )
+    expect(minted.status).toBe(201)
+    expect((await bodyOf<{ code: string }>(minted)).code).toMatch(
+      /^[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}$/
+    )
+  })
+})
