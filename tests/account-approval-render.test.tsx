@@ -10,7 +10,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ApprovalRequest, FactorsView } from '../src/shared/account-approvals'
-import { ApprovalCard } from '../src/renderer/src/account/ApprovalCard'
+import { ApprovalCard, ApprovalRow } from '../src/renderer/src/account/ApprovalCard'
 import { FactorRows, RemoveFactorRow } from '../src/renderer/src/account/FactorRows'
 import { NewPasswordCard } from '../src/renderer/src/account/NewPasswordCard'
 import { QrCode } from '../src/renderer/src/account/QrCode'
@@ -107,6 +107,60 @@ describe('the approval card (D6)', () => {
     expect(html).toContain('cr-acct-request')
     expect(html).not.toContain('gs-scrim')
     expect(html).not.toContain('aria-modal')
+  })
+})
+
+// V3-20c/H6: the button was clickable and wrong. It posted no number, so the
+// registry refused it and spent one of three tries doing so — three taps
+// deleted the owner's own pending sign-in, and the sentence that came back
+// told them to type two digits into a card that had no field.
+describe('the number APPROVE waits for, on the card (D11)', () => {
+  const row = (match: string): string =>
+    renderToStaticMarkup(
+      <ApprovalRow
+        request={request()}
+        username="drej"
+        hasSecondFactor={false}
+        now={NOW}
+        match={match}
+        onMatch={() => undefined}
+        onStatus={() => undefined}
+      />,
+    )
+
+  it('asks the table’s question, with a field to answer it in', () => {
+    const html = row('')
+    expect(html).toContain('What number is on that Mac?')
+    expect(html).toContain('cr-acct-matchfield')
+    // Case-insensitive: HTML attribute names are, and which casing the static
+    // renderer emits is React's business rather than this card's.
+    expect(html).toMatch(/inputmode="numeric"/i)
+    expect(html).toMatch(/maxlength="2"/i)
+  })
+
+  it('keeps APPROVE down until two digits are there, then lets it up', () => {
+    expect(row('')).toMatch(/class="gs-primary" disabled=""/)
+    expect(row('4')).toMatch(/class="gs-primary" disabled=""/)
+    expect(row('47')).not.toMatch(/class="gs-primary" disabled=""/)
+    expect(row('47')).toContain('value="47"')
+  })
+
+  it('leaves DENY and NOT ME one tap, with or without a number', () => {
+    // Refusing a stranger must never be slower than admitting one.
+    for (const typed of ['', '47']) {
+      const html = row(typed)
+      expect(html).toMatch(/class="gs-revoke"[^>]*>DENY/)
+      expect(html).not.toMatch(/class="gs-revoke" disabled=""[^>]*>DENY/)
+      expect(html).not.toMatch(/class="gs-ghost" disabled=""/)
+    }
+  })
+
+  it('shows the field on every waiting row, each with its own id', () => {
+    const two = card([request(), request({ id: 'req-2', deviceName: 'iPhone in Tokyo' })])
+    expect(two).toContain('cr-acct-match-req-1')
+    expect(two).toContain('cr-acct-match-req-2')
+    // Both start empty and both start dead: one row's digits are not another's.
+    expect(two.match(/class="gs-primary" disabled=""/g)).toHaveLength(2)
   })
 })
 

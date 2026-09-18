@@ -673,7 +673,13 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
       const record = asRecord(input)
       const decision = record.decision
       if (!isDecision(decision)) return { ok: false, reason: 'unknown' }
-      const result = await deps.approvals.decide(asString(record.id), decision)
+      // The number rides along for an approve only; asString gives '' for a
+      // renderer that sent none, which decide() reads as "no number".
+      const result = await deps.approvals.decide(
+        asString(record.id),
+        decision,
+        asString(record.match),
+      )
       if (!result.ok) return result
       return { ok: true, value: accountStatus(deps) }
     },

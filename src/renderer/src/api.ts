@@ -686,6 +686,8 @@ export interface CookrewApi {
   accountDecide?: (input: {
     id: string;
     decision: ApprovalDecision;
+    /** The two digits the asking device shows (V3-09); approve only. */
+    match?: string;
   }) => Promise<AccountResult<AccountStatus>>;
   accountSetPassword?: (input: {
     current: string;

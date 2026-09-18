@@ -163,10 +163,22 @@ describe('the phase 4 handlers', () => {
     const answer = (await accountHandlers(shared)['account:decide']({
       id: 'req-1',
       decision: 'approve',
+      match: '47',
     })) as { ok: true; value: { requests: number } }
-    expect(shared.approvals.decide).toHaveBeenCalledWith('req-1', 'approve')
+    // The number the asking device shows rides through the channel (V3-09);
+    // the registry refuses an approve without it and spends a try refusing.
+    expect(shared.approvals.decide).toHaveBeenCalledWith('req-1', 'approve', '47')
     expect(answer.ok).toBe(true)
     expect(answer.value.requests).toBe(0)
+  })
+
+  it('passes an empty number through rather than inventing one', async () => {
+    // A renderer that sends no match must reach decide() as "no number", so
+    // the body stays the bare decision the registry has always read.
+    const shared = deps()
+    vi.spyOn(shared.approvals, 'decide').mockResolvedValue({ ok: true, value: undefined })
+    await accountHandlers(shared)['account:decide']({ id: 'req-1', decision: 'deny' })
+    expect(shared.approvals.decide).toHaveBeenCalledWith('req-1', 'deny', '')
   })
 
   it('REFUSES a decision it does not recognise, rather than guessing one', async () => {

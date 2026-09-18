@@ -108,8 +108,12 @@ const api = {
   // sign every other device out, and add a way in. Owner window's top frame
   // or nothing.
   accountApprovals: () => ipcRenderer.invoke('account:approvals'),
-  accountDecide: (input: { id: string; decision: 'approve' | 'deny' | 'not-me' }) =>
-    ipcRenderer.invoke('account:decide', input),
+  accountDecide: (input: {
+    id: string
+    decision: 'approve' | 'deny' | 'not-me'
+    /** The number the asking device shows; an approve is refused without it. */
+    match?: string
+  }) => ipcRenderer.invoke('account:decide', input),
   accountSetPassword: (input: { current: string; next: string }) =>
     ipcRenderer.invoke('account:setPassword', input),
   accountFactors: () => ipcRenderer.invoke('account:factors'),

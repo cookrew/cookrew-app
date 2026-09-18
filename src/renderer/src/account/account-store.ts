@@ -830,6 +830,47 @@ export function approvalView(
   }
 }
 
+/** How many digits the registry's number is — randomInt(10, 100), so two. */
+const MATCH_DIGITS = 2
+
+/**
+ * THE NUMBER ON THE OTHER SCREEN, and whether APPROVE may fire yet.
+ *
+ * APPROVE IS DEAD UNTIL THE FIELD IS FILLED, and that is a safety rule rather
+ * than a nicety: the registry spends one of three tries on every approve it
+ * receives, and voids the pending on the third. A button that posts without
+ * the number is not merely useless — three taps delete the owner's own
+ * waiting sign-in, which is what shipped before this gate existed.
+ *
+ * DENY AND NOT ME ARE NOT GATED. Neither carries a number, neither spends a
+ * try, and both stay one tap: refusing a stranger must never be the slower
+ * answer than admitting one.
+ *
+ * Anything that is not a digit is dropped rather than refused, so a stray
+ * keystroke cannot cost a try; the field simply does not fill.
+ */
+export interface MatchGate {
+  /** What the owner has typed, digits only, never longer than the number. */
+  typed: string
+  /** The two digits to send, or null while the field is short. */
+  value: string | null
+  /** APPROVE is disabled until this is true. */
+  canApprove: boolean
+  /** The question above the field, in the table's words. */
+  label: string
+}
+
+export function matchGate(typed: string): MatchGate {
+  const digits = typed.replace(/\D/g, '').slice(0, MATCH_DIGITS)
+  const full = digits.length === MATCH_DIGITS
+  return {
+    typed: digits,
+    value: full ? digits : null,
+    canApprove: full,
+    label: accountCopy('d11.join-row'),
+  }
+}
+
 /** One row of the security card's factor ladder (D3). */
 export interface FactorRow {
   /** A stable key, and what the row acts on when it is a REMOVE. */
