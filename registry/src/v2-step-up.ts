@@ -1,5 +1,5 @@
 import { readJsonBody } from './http'
-import { refuse, v2Json, type V2Context } from './v2-http'
+import { refuse, v2Json, type Signed, type V2Context } from './v2-http'
 import { factorError } from './v2-factor-copy'
 import { factorsFor } from './v2-factor-routes'
 import { asking } from './v2-http'
@@ -32,6 +32,34 @@ import { STEP_UP_SENTENCE, type StepUpAct } from '../../src/shared/step-up'
  * caller has at least one device, so counting it would send every account down
  * the ladder and leave the password path dead code — a branch that is never
  * taken is a branch nobody notices breaking.
+ *
+ * AND THE ASKER IS NOT ONE OF THE DEVICES IT MAY ASK (C1).
+ *
+ * The gate shipped with a hole that every piece of it pointed at and none of
+ * it owned. `factorsFor` offers `approve` whenever the account has ANY device;
+ * the refusal hands the asker the two digits; `answerApproval` never asked who
+ * answered. All three are right for a SIGN-IN, where the asking device is not
+ * attached and therefore cannot hold a session at all. For a step-up the asker
+ * IS attached — so a caller holding one stolen session asked for step-up, was
+ * told the number in the refusal, approved its own request, and minted a join
+ * code that attaches a machine for ever. The threshold was crossable by the
+ * exact session it exists to stop.
+ *
+ * Two rules, and each is a complete answer on its own:
+ *
+ *   A RUNG NOBODY ELSE CAN ANSWER IS NOT OFFERED. With one device on the
+ *   account, "ask my other device" has no other device; offering it is
+ *   offering the caller a conversation with itself. So `approve` survives only
+ *   when the account holds a device that is not the asker's.
+ *
+ *   AND THE NUMBER GOES ONLY WHERE IT IS FOR. The two digits exist for the
+ *   approve rung and for nothing else; no rung, no number. Where the rung IS
+ *   offered the digits still travel, because that is the ceremony — read off
+ *   this screen, typed on the other — and the pending now records who asked,
+ *   so the asker is refused by name at the answering end.
+ *
+ * Belt and braces on purpose. Either rule alone closes today's attack; both
+ * together mean a future change to `factorsFor` cannot quietly reopen it.
  */
 
 /** A body already read by the caller, or the caller may let this read it. */
@@ -65,10 +93,14 @@ export function hasStepUpFactor(ctx: V2Context, username: string): boolean {
  */
 export async function stepUpHeld(
   ctx: V2Context,
-  username: string,
+  signed: Signed,
   act: StepUpAct,
   body: StepUpBody
 ): Promise<boolean> {
+  // FROM THE SESSION, never from a parameter. A gate that took the name it was
+  // to check as an argument could be asked to check the wrong one, and the
+  // caller it must answer about is always the caller holding the request.
+  const username = signed.account.username
   const account = ctx.v2.accounts.get(username)
   if (account === null) {
     refuse(ctx.response, 401, 'unauthenticated')
@@ -90,7 +122,14 @@ export async function stepUpHeld(
   // A rung already climbed for THIS act, spent here and never again.
   if (ctx.v2.factors.pending.spendAuthorised(username, act, body.stepUp)) return true
 
-  const next = factorsFor(ctx.v2, account)
+  /**
+   * The ladder this account can climb, minus the rung the asker would be
+   * answering on its own. `hasStepUpFactor` has already said there is a
+   * passkey, an authenticator or a rescue code, so what is left is never
+   * empty — the fail-closed branch below stays unreachable, and stays.
+   */
+  const elsewhere = account.devices.some((d) => d.id !== signed.claims.dev)
+  const next = factorsFor(ctx.v2, account).filter((factor) => factor !== 'approve' || elsewhere)
   if (next.length === 0) {
     // Cannot happen — hasStepUpFactor said there is one — and it FAILS CLOSED
     // if it ever does. A gate's default branch must not be "let them through".
@@ -109,7 +148,9 @@ export async function stepUpHeld(
     kind: 'account',
     address: asking(ctx),
     next,
-    act
+    act,
+    // Who asked, so the answering end can refuse them by name.
+    opener: { jti: signed.claims.jti, device: signed.claims.dev }
   })
   v2Json(ctx.response, 401, {
     error: 'step_up',
@@ -118,10 +159,14 @@ export async function stepUpHeld(
     next,
     pending: pending.id,
     expiresAt: pending.expiresAt,
-    // The same two digits a sign-in shows, for the same reason: the approve
-    // rung is on this ladder too, and nagging an owner into tapping APPROVE
-    // works just as well when the prize is a join code.
-    match: pending.match
+    /**
+     * ONLY WITH THE RUNG IT BELONGS TO. The digits are the approve rung's
+     * whole mechanism — read off this screen, typed on the other one — and
+     * they mean nothing to a passkey, an authenticator or a rescue code. Sent
+     * unconditionally they were a number handed to a caller that could answer
+     * it, which is how the threshold came to be self-crossable.
+     */
+    ...(next.includes('approve') ? { match: pending.match } : {})
   })
   return false
 }
@@ -129,7 +174,7 @@ export async function stepUpHeld(
 /** Read a body and step up in one go, for routes that need nothing else. */
 export async function readAndStepUp(
   ctx: V2Context,
-  username: string,
+  signed: Signed,
   act: StepUpAct
 ): Promise<{ ok: true; body: Record<string, unknown> } | { ok: false }> {
   const body = await readJsonBody(ctx.request, SMALL_BODY)
@@ -137,6 +182,6 @@ export async function readAndStepUp(
     refuse(ctx.response, body.reason === 'too_large' ? 413 : 400, 'malformed')
     return { ok: false }
   }
-  if (!(await stepUpHeld(ctx, username, act, body.value as StepUpBody))) return { ok: false }
+  if (!(await stepUpHeld(ctx, signed, act, body.value as StepUpBody))) return { ok: false }
   return { ok: true, body: body.value }
 }

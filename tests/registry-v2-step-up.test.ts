@@ -85,11 +85,33 @@ const bearer = (token: string): Record<string, string> => ({ authorization: `Bea
 const bodyOf = async <T>(res: Response): Promise<T> => (await res.json()) as T
 
 let minted = 0
-async function claim(): Promise<{ username: string; token: string }> {
+async function claim(): Promise<{ username: string; token: string; deviceId: string }> {
   const username = `stepper${++minted}`
-  const res = await call('POST', '/v2/accounts', { username, password: PASSWORD, device: device() })
+  const one = device()
+  const res = await call('POST', '/v2/accounts', { username, password: PASSWORD, device: one })
   expect(res.status).toBe(201)
-  return { username, token: (await bodyOf<{ session: { token: string } }>(res)).session.token }
+  return {
+    username,
+    token: (await bodyOf<{ session: { token: string } }>(res)).session.token,
+    deviceId: one.id
+  }
+}
+
+/**
+ * A SECOND MAC ON THE ACCOUNT — by join code, and BEFORE any factor exists.
+ *
+ * Order matters: once the account holds a factor, minting a code is itself a
+ * step-up, and a helper that had to climb the ladder to set up a test about
+ * the ladder would be testing itself.
+ */
+async function secondDevice(owner: { token: string }): Promise<{ token: string; deviceId: string }> {
+  const minting = await call('POST', '/v2/me/join-codes', { current: PASSWORD }, bearer(owner.token))
+  expect(minting.status).toBe(201)
+  const { code } = await bodyOf<{ code: string }>(minting)
+  const two = device('Mac Studio')
+  const joined = await call('POST', '/v2/join', { code, device: two })
+  expect(joined.status).toBe(201)
+  return { token: (await bodyOf<{ token: string }>(joined)).token, deviceId: two.id }
 }
 
 const codeFor = (secret: string, shift = 0): string =>
@@ -195,18 +217,29 @@ describe('minting a join code on an account that holds a factor', () => {
       next: string[]
       pending: string
       expiresAt: number
-      match: string
+      match?: string
     }>(asked)
     expect(out.error).toBe('step_up')
     expect(out.act).toBe('mint-join-code')
     expect(out.message).toContain('adding a machine')
     // The ladder's shape, so both clients climb it with the code they already
-    // have — including the number, because the approve rung is on this ladder
-    // too and nagging works just as well when the prize is a join code.
+    // have.
     expect(out.next).toContain('totp')
     expect(out.pending).toMatch(/^[0-9a-f-]{36}$/)
-    expect(out.match).toMatch(/^[1-9][0-9]$/)
     expect(out.expiresAt).toBeGreaterThan(Date.now())
+    /**
+     * AND NOT THE NUMBER — this assertion used to require it (C1).
+     *
+     * The reasoning it carried was a sign-in's: "the approve rung is on this
+     * ladder too, and nagging works just as well when the prize is a join
+     * code". Both halves were false here. This account has one device, so
+     * there is nobody else to nag — and the caller being handed the digits is
+     * the caller that would have typed them back. The rung is not offered and
+     * the number does not travel; the two-device case is proven in the C1
+     * block below, where both come back because a second screen exists.
+     */
+    expect(out.next).not.toContain('approve')
+    expect(out.match).toBeUndefined()
   })
 
   it('a rung PROVES and mints nothing, and the retry gets the code', async () => {
@@ -259,5 +292,150 @@ describe('minting on an account with no factor', () => {
     expect((await bodyOf<{ error: string }>(bare)).error).toBe('password_required')
     expect((await call('POST', '/v2/me/join-codes', { current: 'wrong' }, bearer(owner.token))).status).toBe(401)
     expect((await call('POST', '/v2/me/join-codes', { current: PASSWORD }, bearer(owner.token))).status).toBe(201)
+  })
+})
+
+/* ── C1 · the threshold must not be crossable by the session it stops ─────── */
+
+/**
+ * THE ATTACK, AS THE REVIEW RAN IT.
+ *
+ * The commit that built this gate says it in one line: "a stolen session is a
+ * month of quiet access, so the password becomes a threshold". A threshold one
+ * session can step over alone is not a threshold — it is a form.
+ *
+ * Three things had to be true at once for it to be crossable, and each of them
+ * looked right on its own:
+ *
+ *   `factorsFor` offers `approve` whenever the account has ANY device, which is
+ *     correct for a SIGN-IN, where the asking device is not attached yet and so
+ *     cannot possibly answer;
+ *   the 401 hands the asker the two digits, which is correct for a SIGN-IN,
+ *     where the digits exist to be read off the asking screen and typed on
+ *     another one;
+ *   `answerApproval` never checks WHO answered, which is invisible for a
+ *     SIGN-IN, because the only sessions that could answer belong to devices
+ *     already on the account.
+ *
+ * For a step-up every one of those premises is inverted: the asker IS attached,
+ * the asker holds a session, and the asker is handed the number. So the same
+ * ladder that is sound at the front door is self-answering behind it.
+ */
+describe('C1 · crossing your own threshold', () => {
+  it('ONE DEVICE CANNOT APPROVE ITS OWN STEP-UP — the whole attack, end to end', async () => {
+    // Everything a thief has: one session bearer on an account that holds a
+    // factor. No password, no second device, no access to any screen.
+    const stolen = await claim()
+    await addTotp(stolen.token)
+
+    // 1 · ask for the thing the threshold protects.
+    const asked = await call('POST', '/v2/me/join-codes', {}, bearer(stolen.token))
+    expect(asked.status).toBe(401)
+    const refusal = await bodyOf<{ error: string; next: string[]; pending: string; match?: string }>(asked)
+    expect(refusal.error).toBe('step_up')
+
+    // The rung a lone device could answer is NOT OFFERED. With one device on
+    // the account, "ask my other device" has no other device to ask.
+    expect(refusal.next).not.toContain('approve')
+    // And the digits do not travel to a caller that could answer them. They
+    // exist for the approve rung; no rung, no number.
+    expect(refusal.match).toBeUndefined()
+
+    // 2 · ask the account's own devices anyway — the rung is closed.
+    const ringing = await call('POST', `/v2/sessions/${refusal.pending}/approve`, {})
+    expect(ringing.status).toBe(400)
+
+    // 3 · and even holding an approval id, answering with the asking session is
+    // refused. Belt and braces on purpose: the two halves of this fix guard
+    // each other, and a future ladder change must trip one of them.
+    const approvals = await bodyOf<readonly { id: string }[]>(
+      await call('GET', '/v2/me/approvals', undefined, bearer(stolen.token))
+    )
+    expect(approvals).toHaveLength(0)
+
+    // 4 · nothing was authorised, so the act is still refused.
+    expect((await call('GET', `/v2/sessions/${refusal.pending}`, undefined)).status).toBe(202)
+    const again = await call('POST', '/v2/me/join-codes', { stepUp: refusal.pending }, bearer(stolen.token))
+    expect(again.status).toBe(401)
+    // No join code was minted. A code attaches a machine permanently, which is
+    // the prize this whole ceremony exists to stand in front of.
+    expect(await again.text()).not.toMatch(/[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}/)
+  })
+
+  it('TWO DEVICES: the rung comes back, and the asker still cannot answer it', async () => {
+    // With a real second screen, "ask my other device" is a real factor again —
+    // and it must be answerable only from the other one.
+    const owner = await claim()
+    const other = await secondDevice(owner)
+    await addTotp(owner.token)
+
+    const asked = await call('POST', '/v2/me/join-codes', {}, bearer(owner.token))
+    expect(asked.status).toBe(401)
+    const refusal = await bodyOf<{ next: string[]; pending: string; match: string }>(asked)
+    expect(refusal.next).toContain('approve')
+    // The number rides again, because there is now a second screen to type it on.
+    expect(refusal.match).toMatch(/^[1-9][0-9]$/)
+
+    const ringing = await call('POST', `/v2/sessions/${refusal.pending}/approve`, {})
+    expect(ringing.status).toBe(202)
+    const { approval } = await bodyOf<{ approval: string }>(ringing)
+
+    // THE ASKING SESSION, with the right number, is refused.
+    const itself = await call(
+      'POST',
+      `/v2/me/approvals/${approval}`,
+      { decision: 'approve', match: refusal.match },
+      bearer(owner.token)
+    )
+    expect(itself.status).toBe(403)
+    // And it is not counted as a wrong number — the owner's three tries are
+    // not spent by a client that answered from the wrong place.
+    expect(await itself.text()).not.toContain('triesLeft')
+
+    // THE OTHER DEVICE, same number, is taken.
+    const elsewhere = await call(
+      'POST',
+      `/v2/me/approvals/${approval}`,
+      { decision: 'approve', match: refusal.match },
+      bearer(other.token)
+    )
+    expect(elsewhere.status).toBe(204)
+    expect((await call('GET', `/v2/sessions/${refusal.pending}`, undefined)).status).toBe(204)
+    expect(
+      (await call('POST', '/v2/me/join-codes', { stepUp: refusal.pending }, bearer(owner.token))).status
+    ).toBe(201)
+  })
+
+  it('leaves the SIGN-IN ladder exactly as it was — the asker there is not attached', async () => {
+    // The ceremony at the front door was never broken: a device that has not
+    // been attached holds no session, so it can neither reach the approvals
+    // route nor be the session that answers. Pinned so a fix aimed at step-up
+    // cannot quietly narrow the ladder a new Mac has to climb.
+    const owner = await claim()
+    await addTotp(owner.token)
+    const stranger = device('Mac mini')
+    const signing = await call('POST', '/v2/sessions', {
+      username: owner.username,
+      password: PASSWORD,
+      device: stranger
+    })
+    expect(signing.status).toBe(401)
+    const ladder = await bodyOf<{ next: string[]; pending: string; match: string }>(signing)
+    expect(ladder.next).toContain('approve')
+    expect(ladder.match).toMatch(/^[1-9][0-9]$/)
+    // And the account's own device answers it, as it always could.
+    const ringing = await call('POST', `/v2/sessions/${ladder.pending}/approve`, {})
+    expect(ringing.status).toBe(202)
+    const { approval } = await bodyOf<{ approval: string }>(ringing)
+    expect(
+      (
+        await call(
+          'POST',
+          `/v2/me/approvals/${approval}`,
+          { decision: 'approve', match: ladder.match },
+          bearer(owner.token)
+        )
+      ).status
+    ).toBe(204)
   })
 })

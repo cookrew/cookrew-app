@@ -1,5 +1,5 @@
 import { readJsonBody } from './http'
-import { asking, cookie, refuse, signedIn, v2Json, type V2Context } from './v2-http'
+import { asking, cookie, refuse, signedIn, v2Json, type Signed, type V2Context } from './v2-http'
 import { factorError } from './v2-factor-copy'
 import { stepUpHeld } from './v2-step-up'
 
@@ -21,7 +21,8 @@ const SMALL_BODY = 16 * 1024
  * when the account holds something stronger than its password, the password
  * when it does not.
  */
-async function mintJoinCode(ctx: V2Context, username: string): Promise<void> {
+async function mintJoinCode(ctx: V2Context, signed: Signed): Promise<void> {
+  const username = signed.account.username
   const body = await readJsonBody(ctx.request, SMALL_BODY)
   if (!body.ok) {
     refuse(ctx.response, body.reason === 'too_large' ? 413 : 400, 'malformed')
@@ -29,7 +30,7 @@ async function mintJoinCode(ctx: V2Context, username: string): Promise<void> {
   }
   // The step-up itself lives in one place (v2-step-up.ts) because this is one
   // of seven acts that need it, and seven copies of a security boundary drift.
-  if (!(await stepUpHeld(ctx, username, 'mint-join-code', body.value))) return
+  if (!(await stepUpHeld(ctx, signed, 'mint-join-code', body.value))) return
   /**
    * SIX AN HOUR, PER ACCOUNT. A join code is a bearer that attaches a machine,
    * and a signed-in device that can mint them without a ceiling is a way to
@@ -123,7 +124,7 @@ export function handleJoinRoute(ctx: V2Context, rest: readonly string[]): boolea
       refuse(ctx.response, 401, 'unauthenticated')
       return true
     }
-    void mintJoinCode(ctx, signed.account.username)
+    void mintJoinCode(ctx, signed)
     return true
   }
   return false

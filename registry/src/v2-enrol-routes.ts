@@ -57,7 +57,13 @@ export function handleMeFactorRoute(ctx: V2Context, rest: string[]): boolean {
     return true
   }
   if (rest.length === 2 && rest[0] === 'approvals' && method === 'POST') {
-    void answerApproval(ctx, who, (ctx.decode(rest[1]) ?? '').toLowerCase(), signed.claims.jti)
+    // WHO is answering, not just which sitting to keep: a step-up's asker is
+    // already signed in, so the ceremony has to be able to tell it apart from
+    // the other device it is supposed to be asking (C1).
+    void answerApproval(ctx, who, (ctx.decode(rest[1]) ?? '').toLowerCase(), {
+      jti: signed.claims.jti,
+      device: signed.claims.dev
+    })
     return true
   }
   if (rest.length === 2 && rest[0] === 'totp' && rest[1] === 'enrol' && method === 'POST') {
@@ -166,7 +172,12 @@ const DECISIONS: readonly Decision[] = ['approve', 'deny', 'not-me']
  * signing yourself out of the device you just used reads as a failure — and
  * the password is locked out until it is changed.
  */
-async function answerApproval(ctx: V2Context, username: string, id: string, keepJti: string): Promise<void> {
+async function answerApproval(
+  ctx: V2Context,
+  username: string,
+  id: string,
+  by: { jti: string; device: string }
+): Promise<void> {
   const body = await readJsonBody(ctx.request, SMALL_BODY)
   if (!body.ok) {
     refuse(ctx.response, body.reason === 'too_large' ? 413 : 400, 'malformed')
@@ -177,8 +188,18 @@ async function answerApproval(ctx: V2Context, username: string, id: string, keep
     refuseFactor(ctx.response, 400, 'bad_decision')
     return
   }
-  const answered = ctx.v2.factors.pending.decide(username, id, decision as Decision, body.value.match)
+  const answered = ctx.v2.factors.pending.decide(username, id, decision as Decision, body.value.match, by)
   if (!answered.ok) {
+    if (answered.reason === 'self_approval') {
+      /**
+       * NOT a 400 with a try spent, and not a 404. The request is real, the
+       * number may well have been right, and the person is one screen away
+       * from finishing — so it is 403 with the sentence that says which
+       * screen. Answering 404 would teach a client to retry the same way.
+       */
+      refuseFactor(ctx.response, 403, 'self_approval')
+      return
+    }
     if (answered.reason === 'bad_match') {
       /**
        * THE COUNT IS ON THE WIRE, the number never is. The owner has to decide
@@ -193,7 +214,7 @@ async function answerApproval(ctx: V2Context, username: string, id: string, keep
     return
   }
   if (decision === 'not-me') {
-    ctx.v2.accounts.endOtherSessions(username, keepJti)
+    ctx.v2.accounts.endOtherSessions(username, by.jti)
     ctx.v2.factors.store.setMustChangePassword(username, true)
     // Every OTHER sign-in in flight goes with it. A password-verified pending
     // that survives the alarm is the same stranger walking through the door
