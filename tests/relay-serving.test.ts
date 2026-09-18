@@ -217,6 +217,40 @@ describe('serve here, import there', () => {
     expect(again.publicKey).toBe(first.publicKey)
     rmSync(path.join(homedir(), '.cookrew', 'serve-keys', `${slug}.json`), { force: true })
   })
+
+  /**
+   * WHAT NAME ARE THE DOORS ACTUALLY UNDER (V3-FIX-SERVING-ID).
+   *
+   * Serving identity was resolved once at module load, so a Mac that claimed
+   * an account after booting kept its doors listed under the old name. The fix
+   * compares what cookrew.dev is holding against what this Mac can now prove —
+   * and "what cookrew.dev is holding" has to come from the held doors
+   * themselves, not from a value the process remembered, because after the
+   * move those two are precisely the things that disagree.
+   */
+  it('reports the handle its doors are listed under, and nothing before they are', async () => {
+    const { origin } = await registry()
+    const app = await appListener(() => undefined)
+    const serving = createRelayServing({ origin, loopbackPort: () => app.port })
+    shut.push(() => serving.closeAll())
+
+    // Nothing served yet: this Mac is under no name at all.
+    expect(serving.servingHandle()).toBe('')
+
+    const served = await serving.serve({
+      slug: TEAM,
+      team: TEAM,
+      handle: HANDLE,
+      face: { title: 'COOKREW Alpha', door: 'Pilot', agents: 1, access: 'account', rails: [] }
+    })
+    expect(served.ok).toBe(true)
+    expect(serving.servingHandle()).toBe(HANDLE)
+
+    // And withdrawing the last door leaves it under no name again, so a Mac
+    // that moved every door reads as "nothing to move" the next time round.
+    await serving.withdraw(TEAM)
+    expect(serving.servingHandle()).toBe('')
+  })
 })
 
 /** A request in the shape orch-line.mjs makes them. */
