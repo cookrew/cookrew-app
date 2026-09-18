@@ -177,6 +177,9 @@ describe('GET /api/hello over the wire', () => {
     account: () => account,
     registryOrigin: () => REGISTRY,
     admitted: createAdmittedDeviceStore({ base: temp.base }),
+    // /api/hello spends no admissions; the dep is required so the one
+    // route that does cannot inherit an absent ceiling.
+    admitLimiter: { take: () => true },
     selfOrigins: () => [ORIGIN],
     now: () => NOW,
     ...over

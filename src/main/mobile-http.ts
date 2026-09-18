@@ -44,16 +44,29 @@ export function respondJson(
  * cannot set headers. Compared constant-time; a missing/short candidate
  * never matches.
  */
+/**
+ * The Authorization bearer, and nothing else.
+ *
+ * Split out from `presentedToken` because the query half is an EXCEPTION with
+ * one reason — `EventSource` cannot set a header (auth-gate.ts · tokenParam)
+ * — and a route that can set one has no business inheriting it. A token in a
+ * URL is a token in the server log, the `Referer`, the address bar of a
+ * screenshot and the shell history; the two shapes are not interchangeable
+ * and the reader is the honest place to say so.
+ */
+export function bearerToken(request: Pick<http.IncomingMessage, 'headers'>): string | null {
+  const header = request.headers.authorization
+  return typeof header === 'string' && header.startsWith('Bearer ')
+    ? header.slice('Bearer '.length)
+    : null
+}
+
 /** The credential this request is presenting, header first, then the query. */
 export function presentedToken(
   request: Pick<http.IncomingMessage, 'headers'>,
   url: URL
 ): string | null {
-  const header = request.headers.authorization
-  const bearer = typeof header === 'string' && header.startsWith('Bearer ')
-    ? header.slice('Bearer '.length)
-    : null
-  return bearer ?? url.searchParams.get('token')
+  return bearerToken(request) ?? url.searchParams.get('token')
 }
 
 /**

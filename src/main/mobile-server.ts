@@ -51,6 +51,7 @@ import type { LoopHealthSnapshot } from './loop-health'
 import { holdSocketsOpen, presentedToken, readJson, respondJson } from './mobile-http'
 import { companionAccepted } from './companion-gate'
 import { COMPANION_BOOTSTRAPS } from '../shared/lan-token-mode'
+import { FixedWindowLimiter } from '../shared/fixed-window-limiter'
 import { handleCallRoutes, type CallEndpointDeps } from './call-endpoints'
 import { handlePathReportRoutes } from './path-report-routes'
 import { createTlsPortGate, httpsRedirectTarget } from './tls-port-gate'
@@ -59,7 +60,11 @@ import { rendererSourceFor, staleBuildNotice } from './renderer-choice'
 import { batchFrames, parseBatchIds, parseKnownVersions, scopedBrowserIds, scopedThumbLookup } from './browser-thumb-batch'
 import { fetchRendererDevResource, rendererDevPathAllowed } from './renderer-dev-proxy'
 import { isViteHmrUpgrade, proxyViteHmrUpgrade } from './hmr-proxy'
-import { handleIdentityRoutes, type MobileIdentityDeps } from './mobile-identity-routes'
+import {
+  ADMIT_PER_MINUTE,
+  handleIdentityRoutes,
+  type MobileIdentityDeps
+} from './mobile-identity-routes'
 import { companionAccount } from './companion-account'
 import { RELAY_BASE_HEADER, RELAY_MARKER, relayBaseOf } from './relay-base'
 import { takeRelayDevice, type RelayDevice } from './relay-device'
@@ -117,6 +122,13 @@ let activeWallToken: string | null = null
  * switch that is the only way to reach the secure path is not.
  */
 let rootEverywhere = !COMPANION_BOOTSTRAPS
+
+/**
+ * HOW OFTEN ONE CREDENTIAL MAY ADMIT A DEVICE (mobile-identity-routes.ts).
+ * Module scope because a per-request limiter bounds nothing, and per process
+ * because a restart forgiving everyone is the right trade for a burst bound.
+ */
+const admitLimiter = new FixedWindowLimiter(ADMIT_PER_MINUTE)
 
 /** SAN list of the cert actually in use; empty until HTTPS starts. */
 let certSans: string[] = []
@@ -200,7 +212,15 @@ export interface MobileServerDeps {
    * the route does not exist and nothing is recorded, which is exactly the
    * state of a desktop that has not claimed a username.
    */
-  identity?: MobileIdentityDeps
+  /**
+   * The identity routes' own deps, MINUS the three this server owns and
+   * supplies per request: the origins it answers on, the running root token,
+   * and the admission ceiling. index.ts knows about none of the three — it
+   * would have to be told about listeners it deliberately knows nothing
+   * about, a singleton it does not hold, and a burst bound whose lifetime is
+   * this process rather than that module.
+   */
+  identity?: Omit<MobileIdentityDeps, 'selfOrigins' | 'pairingToken' | 'admitLimiter'>
   /**
    * Whether workspace sessions are multi-instance. Gates slug routing: off,
    * /<slug>/... is not a route and every path keeps its existing meaning.
@@ -740,7 +760,23 @@ function companionGate(
    * having started a server must not be refused for a singleton it never
    * primed. The wall token one field below already reads this way.
    */
-  root: string | null = activePairingToken
+  root: string | null = activePairingToken,
+  /**
+   * WHETHER THE ROOT STILL OPENS THIS ROUTE, for THIS request.
+   *
+   * Same argument as the token above, and the same defect it fixes: the mode
+   * was a module `let` that only `startMobileServer` could set, so the world
+   * where the root has been demoted was unreachable through `handle` and had
+   * no route-level coverage at all — which is why every revocation assertion
+   * in this lane was against the store or the pure gate (V3-05's review, and
+   * the cut-2 review after it).
+   *
+   * It cannot be used to LOOSEN anything: the request path passes
+   * `perDeviceOnlyFor`, which answers the deps' own function and otherwise
+   * the mode the server was started in. Omitting the field gets you the
+   * server's mode, never the open door.
+   */
+  everywhere: boolean = rootEverywhere
 ): boolean {
   if (root === null) return false
   return companionAccepted({
@@ -748,8 +784,16 @@ function companionGate(
     presented,
     rootToken: root,
     perDevice,
-    rootEverywhere
+    rootEverywhere: everywhere
   })
+}
+
+/**
+ * Strict for THIS request: what the deps say, else the mode the server was
+ * started in. Never looser than the server — see `companionGate` above.
+ */
+function perDeviceOnlyFor(deps: MobileServerDeps): boolean {
+  return deps.perDeviceOnly?.() ?? !rootEverywhere
 }
 
 /** The credential a paired phone holds; null before the server starts. */
@@ -1045,7 +1089,14 @@ function recordBridgeDevice(
   if (!device || !admitted) return
   // The same gate as every route: in strict mode a root token names nothing
   // here either, because a sighting is a fact about an AUTHORISED request.
-  if (!companionGate(presentedToken(request, url), (candidate) => admitted.deviceFor(candidate)))
+  if (
+    !companionGate(
+      presentedToken(request, url),
+      (candidate) => admitted.deviceFor(candidate),
+      activePairingToken ?? deps.pairingToken ?? null,
+      !perDeviceOnlyFor(deps)
+    )
+  )
     return
   try {
     admitted.record(device)
@@ -1221,7 +1272,9 @@ export async function handle(
          * direct-handle caller could use the root on every ordinary route and
          * not on the one route this module says it may open.
          */
-        pairingToken: () => activePairingToken ?? deps.pairingToken ?? null
+        pairingToken: () => activePairingToken ?? deps.pairingToken ?? null,
+        // Per process, because that is the lifetime of the burst it bounds.
+        admitLimiter
       },
       bridgeDevice
     )
@@ -1274,7 +1327,8 @@ export async function handle(
       companionGate(
         presented,
         (candidate) => deps.identity?.admitted.deviceFor(candidate) ?? null,
-        activePairingToken ?? deps.pairingToken ?? null
+        activePairingToken ?? deps.pairingToken ?? null,
+        !perDeviceOnlyFor(deps)
       ),
     wallToken: activeWallToken ?? deps.wallToken
   }

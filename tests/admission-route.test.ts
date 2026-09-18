@@ -7,7 +7,14 @@ import type http from 'node:http'
 import { randomBytes } from 'node:crypto'
 import { Readable } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createAdmittedDeviceStore, readAdmittedDevices } from '../src/main/admitted-devices'
+import {
+  createAdmittedDeviceStore,
+  readAdmittedDevices,
+  writeAdmittedDevices,
+  ADMITTED_MAX,
+} from '../src/main/admitted-devices'
+import { FixedWindowLimiter } from '../src/shared/fixed-window-limiter'
+import { ADMIT_PER_MINUTE } from '../src/main/mobile-identity-routes'
 import { deviceIdFor, mintDeviceKey, signWithDevice } from '../src/main/account-v2'
 import { companionAccepted } from '../src/main/companion-gate'
 import { admitMessage, readAdmission } from '../src/main/device-hello'
@@ -137,6 +144,9 @@ describe('POST /api/admit over the wire', () => {
     selfOrigins: () => [MAC_ORIGIN],
     now: () => NOW,
     pairingToken: () => ROOT,
+    // These suites are not about the ceiling, and a required dep means they
+    // have to say so rather than inherit an absent one.
+    admitLimiter: { take: () => true },
     ...over,
   })
 
@@ -242,6 +252,9 @@ describe('an admitted phone may admit ITSELF and nobody else (H1)', () => {
     selfOrigins: () => [MAC_ORIGIN],
     now: () => NOW,
     pairingToken: () => ROOT,
+    // These suites are not about the ceiling, and a required dep means they
+    // have to say so rather than inherit an absent one.
+    admitLimiter: { take: () => true },
     ...over,
   })
 
@@ -325,5 +338,217 @@ describe('an admitted phone may admit ITSELF and nobody else (H1)', () => {
     const admitted = await admit(second.proof(), ROOT, d)
     expect(admitted.status).toBe(200)
     expect(readAdmittedDevices(temp.base)).toHaveLength(2)
+  })
+})
+
+/* ── (a) the credential does not travel in the URL ─────────────────────── */
+
+describe('the admission token goes in a header, never in the query', () => {
+  const account = fakeAccount()
+  let temp: { base: string; clean: () => void }
+  beforeEach(() => (temp = tempBase()))
+  afterEach(() => temp.clean())
+
+  const deps = (): MobileIdentityDeps => ({
+    account: () => account,
+    registryOrigin: () => REGISTRY,
+    admitted: createAdmittedDeviceStore({ base: temp.base }),
+    selfOrigins: () => [MAC_ORIGIN],
+    now: () => NOW,
+    pairingToken: () => ROOT,
+    admitLimiter: { take: () => true },
+  })
+
+  const call = async (body: unknown, bearer: string | null, query: string, d: MobileIdentityDeps) => {
+    const { written, response } = recorder()
+    await handleIdentityRoutes(
+      post(body, bearer),
+      response,
+      new URL(`${MAC_ORIGIN}/api/admit${query}`),
+      d,
+    )
+    return {
+      status: written.status,
+      body: written.body ? (JSON.parse(written.body) as Record<string, unknown>) : {},
+    }
+  }
+
+  /**
+   * WHY THIS ROUTE MAY NOT TAKE `?token=`.
+   *
+   * The query form exists in this codebase for exactly one reason, and the
+   * reason is written down at auth-gate.ts · tokenParam: `EventSource` cannot
+   * set a header, so the two streams that are EventSources carry the token in
+   * the URL and nothing else does. A POST can set a header. So the only thing
+   * a query token buys here is the places a URL goes that a header does not —
+   * a server log, a `Referer`, a screenshot of an address bar, a shell
+   * history — and what it carries is the credential that admits a device to
+   * this Mac.
+   *
+   * REFUSED, NOT IGNORED. By the time this server sees it the token has
+   * already been written wherever this request was logged; serving the call
+   * anyway would mint a fresh credential off one that must now be treated as
+   * exposed, and would leave the client author believing the shape is
+   * supported.
+   */
+  it('refuses the root token in the query, and mints nothing', async () => {
+    const d = deps()
+    const out = await call(phone('iPhone').proof(), null, `?token=${ROOT}`, d)
+    expect(out.status).toBe(400)
+    expect(String(out.body.error)).toMatch(/header/i)
+    expect(readAdmittedDevices(temp.base)).toHaveLength(0)
+  })
+
+  it('refuses a per-device token in the query too — the same leak, a smaller key', async () => {
+    const d = deps()
+    const real = phone('iPhone')
+    const held = (await call(real.proof(), ROOT, '', d)).body.token as string
+    const out = await call(real.proof(), null, `?token=${held}`, d)
+    expect(out.status).toBe(400)
+    // The row it already had is untouched: a refused re-mint must not rotate
+    // the token the phone is still using.
+    expect(d.admitted.accepts(held)).toBe(true)
+  })
+
+  it('refuses even when a good header is there too — the URL has already leaked', async () => {
+    const d = deps()
+    const out = await call(phone('iPhone').proof(), ROOT, `?token=${ROOT}`, d)
+    expect(out.status).toBe(400)
+    expect(readAdmittedDevices(temp.base)).toHaveLength(0)
+  })
+
+  it('refuses an EMPTY query token as well — the shape is what is wrong', async () => {
+    const d = deps()
+    expect((await call(phone('iPhone').proof(), ROOT, '?token=', d)).status).toBe(400)
+  })
+
+  it('still takes the header, which is the one way in', async () => {
+    const d = deps()
+    expect((await call(phone('iPhone').proof(), ROOT, '', d)).status).toBe(200)
+  })
+})
+
+/* ── (b) a ceiling and a cap ───────────────────────────────────────────── */
+
+describe('admission is bounded — in rate and in number', () => {
+  const account = fakeAccount()
+  let temp: { base: string; clean: () => void }
+  let clock = NOW
+  beforeEach(() => {
+    temp = tempBase()
+    clock = NOW
+  })
+  afterEach(() => temp.clean())
+
+  const deps = (over: Partial<MobileIdentityDeps> = {}): MobileIdentityDeps => ({
+    account: () => account,
+    registryOrigin: () => REGISTRY,
+    admitted: createAdmittedDeviceStore({ base: temp.base, now: () => clock }),
+    selfOrigins: () => [MAC_ORIGIN],
+    now: () => clock,
+    pairingToken: () => ROOT,
+    // The limiter is a REQUIRED dep, on the same argument mobile-api makes
+    // for the pairing token: a bound a caller can switch off by forgetting a
+    // field is a bound that will be forgotten. The test owns the clock.
+    admitLimiter: new FixedWindowLimiter(ADMIT_PER_MINUTE, 60_000, () => clock),
+    ...over,
+  })
+
+  const admit = async (body: unknown, bearer: string | null, d: MobileIdentityDeps) => {
+    const { written, response } = recorder()
+    await handleIdentityRoutes(post(body, bearer), response, new URL(`${MAC_ORIGIN}/api/admit`), d)
+    return {
+      status: written.status,
+      body: written.body ? (JSON.parse(written.body) as Record<string, unknown>) : {},
+    }
+  }
+
+  /**
+   * WHY A CEILING AT ALL, now that a device can only re-mint its OWN token
+   * (H1). Two harms survive that fix and neither needs a ghost: a root-token
+   * holder can add rows without end, and any admitted phone can rotate its
+   * own credential in a loop — every rotation a temp-and-rename of a 0600
+   * file, and every rotation invalidating the token the phone is holding.
+   * Six a minute is far above a person bootstrapping a phone and far below a
+   * loop.
+   */
+  it('refuses a seventh admission in the same minute, and mints nothing for it', async () => {
+    const d = deps()
+    for (let n = 0; n < ADMIT_PER_MINUTE; n += 1) {
+      expect((await admit(phone(`Phone ${n}`).proof(), ROOT, d)).status).toBe(200)
+    }
+    const over = await admit(phone('One too many').proof(), ROOT, d)
+    expect(over.status).toBe(429)
+    expect(readAdmittedDevices(temp.base)).toHaveLength(ADMIT_PER_MINUTE)
+  })
+
+  it('forgives after the window, because the bound is a burst and not a punishment', async () => {
+    const d = deps()
+    for (let n = 0; n < ADMIT_PER_MINUTE; n += 1) await admit(phone(`Phone ${n}`).proof(), ROOT, d)
+    expect((await admit(phone('Blocked').proof(), ROOT, d)).status).toBe(429)
+    clock += 61_000
+    expect((await admit(phone('Later').proof(), ROOT, d)).status).toBe(200)
+  })
+
+  it('counts a phone’s own re-mints against ITS budget, not everybody’s', async () => {
+    const d = deps()
+    const a = phone('iPhone')
+    const b = phone('iPad')
+    const heldA = (await admit(a.proof(), ROOT, d)).body.token as string
+    const heldB = (await admit(b.proof(), ROOT, d)).body.token as string
+    // A spends its own ceiling rotating itself. Each success hands back a new
+    // token and kills the last, so the loop carries the newest one forward —
+    // which is what a looping client would do, and the only way to keep
+    // spending the same budget rather than 401ing on a stale credential.
+    let token = heldA
+    let last = 200
+    for (let n = 0; n < ADMIT_PER_MINUTE + 2 && last === 200; n += 1) {
+      const answer = await admit(a.proof(), token, d)
+      last = answer.status
+      if (answer.status === 200) token = answer.body.token as string
+    }
+    expect(last).toBe(429)
+    // B is untouched: one phone's loop must not lock another phone out.
+    expect((await admit(b.proof(), heldB, d)).status).toBe(200)
+  })
+
+  /**
+   * THE CAP REFUSES RATHER THAN EVICTS. Evicting the oldest row would
+   * silently un-admit a phone the owner is holding, which is the one thing
+   * this ledger must never do on its own — FORGET is a button with a person
+   * behind it.
+   */
+  it('refuses a NEW device once the ledger is full, and names the way to make room', async () => {
+    const d = deps({
+      admitLimiter: new FixedWindowLimiter(10_000, 60_000, () => clock),
+    })
+    const seeded = Array.from({ length: ADMITTED_MAX }, (_, n) => ({
+      deviceId: `11111111-1111-8111-8111-${String(n).padStart(12, '0')}`,
+      admittedAt: clock,
+      lastSeenAt: clock,
+    }))
+    writeAdmittedDevices(seeded, temp.base)
+    const out = await admit(phone('One more').proof(), ROOT, d)
+    expect(out.status).toBe(403)
+    expect(String(out.body.error)).toMatch(/forget/i)
+    expect(readAdmittedDevices(temp.base)).toHaveLength(ADMITTED_MAX)
+  })
+
+  it('still lets a phone ALREADY in the ledger re-mint at the cap — it replaces a row', async () => {
+    const d = deps({
+      admitLimiter: new FixedWindowLimiter(10_000, 60_000, () => clock),
+    })
+    const real = phone('iPhone')
+    const held = (await admit(real.proof(), ROOT, d)).body.token as string
+    const filler = Array.from({ length: ADMITTED_MAX - 1 }, (_, n) => ({
+      deviceId: `11111111-1111-8111-8111-${String(n).padStart(12, '0')}`,
+      admittedAt: clock,
+      lastSeenAt: clock,
+    }))
+    writeAdmittedDevices([...readAdmittedDevices(temp.base), ...filler], temp.base)
+    expect(readAdmittedDevices(temp.base)).toHaveLength(ADMITTED_MAX)
+    const again = await admit(real.proof(), held, d)
+    expect(again.status).toBe(200)
+    expect(readAdmittedDevices(temp.base)).toHaveLength(ADMITTED_MAX)
   })
 })

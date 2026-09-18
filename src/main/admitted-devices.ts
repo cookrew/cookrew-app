@@ -129,6 +129,23 @@ export type AdmittedDeviceStore = {
   readonly prune: (revoked: readonly string[]) => AdmittedDevice[]
 }
 
+/**
+ * HOW MANY PHONES THIS MAC WILL HOLD OPEN FOR.
+ *
+ * A bound on a file that a credential can grow. It is NOT a defence against
+ * whoever holds the root pairing token — that credential opens every route
+ * today, so somebody holding it has this Mac already — it is a bound on
+ * growth: a loop, a stuck client, a script left running. Thirty-two is far
+ * above the number of phones and iPads a person actually admits and far
+ * below anything that makes this file worth reading twice.
+ *
+ * THE CAP REFUSES; IT NEVER EVICTS. Dropping the oldest row to make space
+ * would silently un-admit a phone the owner is holding, and this ledger must
+ * never withdraw an admission on its own — FORGET is a button with a person
+ * behind it, and the revoked sweep is the registry's word, not a guess.
+ */
+export const ADMITTED_MAX = 32
+
 export const admittedDevicesFile = (base?: string): string =>
   path.join(base ?? path.join(homedir(), '.cookrew'), 'admitted-devices.json')
 
