@@ -50,6 +50,7 @@ import { enrichStateWithGit, handleMobileApi, MobileApiDeps, MobileOps, type Ser
 import type { LoopHealthSnapshot } from './loop-health'
 import { holdSocketsOpen, presentedToken, readJson, respondJson } from './mobile-http'
 import { companionAccepted } from './companion-gate'
+import { COMPANION_BOOTSTRAPS } from '../shared/lan-token-mode'
 import { handleCallRoutes, type CallEndpointDeps } from './call-endpoints'
 import { handlePathReportRoutes } from './path-report-routes'
 import { createTlsPortGate, httpsRedirectTarget } from './tls-port-gate'
@@ -102,13 +103,20 @@ let activePairingToken: string | null = null
  */
 let activeWallToken: string | null = null
 /**
- * DOES THE ROOT TOKEN STILL OPEN EVERY ROUTE (v3, V3-21)?
+ * DOES THE ROOT TOKEN STILL OPEN EVERY ROUTE (v3, V3-21 · H2)?
  *
- * True until every companion has bootstrapped its own token (V3-14). The
- * decision itself is companion-gate.ts; this is only which mode the running
- * server is in, set once at start from `deps.perDeviceOnly`.
+ * THE DEFAULT IS THE BUILD'S OWN FACT, not an environment variable. It was
+ * `true` here and lowered only by `COOKREW_LAN_TOKEN_STRICT`, a string set in
+ * no config and no running environment — so the demotion was off in every
+ * build that shipped while the product's copy told the owner it was on. The
+ * answer now comes from shared/lan-token-mode.ts, which the revoke SENTENCE
+ * reads too, so the two cannot disagree again (tests/lan-revoke-contract).
+ *
+ * `deps.perDeviceOnly` survives as an override for QA and for a test that
+ * wants the strict world before the build has it. An override is honest; a
+ * switch that is the only way to reach the secure path is not.
  */
-let rootEverywhere = true
+let rootEverywhere = !COMPANION_BOOTSTRAPS
 
 /** SAN list of the cert actually in use; empty until HTTPS starts. */
 let certSans: string[] = []
@@ -229,11 +237,13 @@ export interface MobileServerDeps {
   /** Override the pairing token (tests); a fresh one is minted per run. */
   pairingToken?: string
   /**
-   * STRICT MODE (v3, V3-21): the root pairing token opens the admission
-   * route and nothing else; every other route wants a per-device token. Off
-   * by default — see companion-gate.ts for why the root is still honoured
-   * everywhere until the companion side (V3-14) bootstraps — and read once at
-   * start, like the tokens.
+   * STRICT MODE (v3, V3-21 · H2) — an OVERRIDE, not the switch.
+   *
+   * The root pairing token opens the admission route and nothing else; every
+   * other route wants a per-device token. The default is the build's own
+   * answer (shared/lan-token-mode.ts · COMPANION_BOOTSTRAPS); this exists so
+   * QA and a test can have the strict world before the build does. Read once
+   * at start, like the tokens.
    */
   perDeviceOnly?: () => boolean
   /**
@@ -280,7 +290,7 @@ export function startMobileServer(deps: MobileServerDeps): void {
   // every path at once.
   activePairingToken = deps.pairingToken ?? loadOrCreatePairingToken()
   activeWallToken = deps.wallToken ?? randomUUID()
-  rootEverywhere = !(deps.perDeviceOnly?.() ?? false)
+  rootEverywhere = !(deps.perDeviceOnly?.() ?? COMPANION_BOOTSTRAPS)
   nameCert = deps.nameCert ?? null
 
   const requestHandler = (request: http.IncomingMessage, response: http.ServerResponse): void => {
@@ -694,14 +704,21 @@ export function activeCertFingerprint(): string | null {
  */
 export function companionTokenAccepted(
   credential: string | null,
-  extra?: (candidate: string) => boolean
+  /**
+   * The per-device door — `admitted-devices.deviceFor`, which NAMES the
+   * phone rather than nodding at it. This route does not need the name; it
+   * takes the naming shape anyway so there is exactly ONE per-device reader
+   * in the codebase. Two shapes is how the admission route came to be handed
+   * a yes with no who, and to take the who from the request body instead (H1).
+   */
+  extra?: (candidate: string) => string | null
 ): boolean {
   if (activePairingToken === null) return false
   return companionAccepted({
     route: 'other',
     presented: credential,
     rootToken: activePairingToken,
-    perDevice: extra ?? (() => false),
+    perDevice: extra ?? (() => null),
     rootEverywhere
   })
 }
@@ -715,7 +732,7 @@ export function companionTokenAccepted(
  */
 function companionGate(
   presented: string | null,
-  perDevice: (candidate: string) => boolean,
+  perDevice: (candidate: string) => string | null,
   /**
    * The Mac's root token. Defaults to the running server's, and is passed
    * explicitly by the request path because `handle` is a legitimate entry
@@ -1028,7 +1045,8 @@ function recordBridgeDevice(
   if (!device || !admitted) return
   // The same gate as every route: in strict mode a root token names nothing
   // here either, because a sighting is a fact about an AUTHORISED request.
-  if (!companionGate(presentedToken(request, url), (candidate) => admitted.accepts(candidate))) return
+  if (!companionGate(presentedToken(request, url), (candidate) => admitted.deviceFor(candidate)))
+    return
   try {
     admitted.record(device)
   } catch (error) {
@@ -1193,9 +1211,17 @@ export async function handle(
       deps.identity && {
         ...deps.identity,
         selfOrigins: mobileSelfOrigins,
-        // The admission route is the one place the root token opens on its
-        // own (v3, V3-21); it reads the RUNNING token, which rotates.
-        pairingToken: () => activePairingToken
+        /**
+         * The admission route is the one place the root token opens on its
+         * own (v3, V3-21). It reads the RUNNING token first, because that is
+         * the one a rotation updates — and falls back to the injected one, so
+         * a caller that drives `handle` without starting a server is not
+         * refused for a singleton it never primed. The 'other' gate one block
+         * down already reads this way; the two disagreeing meant a
+         * direct-handle caller could use the root on every ordinary route and
+         * not on the one route this module says it may open.
+         */
+        pairingToken: () => activePairingToken ?? deps.pairingToken ?? null
       },
       bridgeDevice
     )
@@ -1247,7 +1273,7 @@ export async function handle(
     companionGate: (presented: string | null) =>
       companionGate(
         presented,
-        (candidate) => deps.identity?.admitted.accepts(candidate) ?? false,
+        (candidate) => deps.identity?.admitted.deviceFor(candidate) ?? null,
         activePairingToken ?? deps.pairingToken ?? null
       ),
     wallToken: activeWallToken ?? deps.wallToken

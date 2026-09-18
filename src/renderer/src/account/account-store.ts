@@ -1,4 +1,5 @@
 import { V3_COPY, accountCopy } from '../../../shared/account-copy'
+import { lanRevokeEnds } from '../../../shared/lan-token-mode'
 import {
   LOCK_CHOICES,
   MIN_PASSWORD,
@@ -225,7 +226,13 @@ export function takenSentence(username: string): string {
  * still held their keyboard.
  */
 export function revokeSentence(deviceName: string): string {
-  return accountCopy('d12.revoke', { device: deviceName })
+  // WHICH SENTENCE IS TRUE HERE is the same fact the gate decides on, read
+  // from the same module (H2): while the root pairing token still opens every
+  // route, revoking does NOT end a phone's access on this Wi-Fi, and the
+  // sentence that says it does is the one that stops somebody rotating.
+  return accountCopy(lanRevokeEnds() ? 'd12.revoke' : 'd12.revoke.lan-pending', {
+    device: deviceName,
+  })
 }
 
 /**

@@ -77,6 +77,15 @@ export type AdmittedDeviceStore = {
    */
   readonly accepts: (token: string) => boolean
   /**
+   * WHICH phone holds this token, or null.
+   *
+   * `accepts` answers whether a credential opens the Mac; this answers WHO it
+   * opens it as, which is a different question and the one the admission
+   * route needs. Nothing else may mint in a device's name, so the gate has to
+   * be able to say the name (companion-gate.ts · CompanionCredential).
+   */
+  readonly deviceFor: (token: string) => string | null
+  /**
    * Drop the admission. TRUE means the phone is not admitted any more — which
    * is the question the caller is actually asking, and which an already-absent
    * phone also answers yes to.
@@ -191,6 +200,27 @@ export type AdmittedDeviceStoreDeps = {
   readonly now?: () => number
 }
 
+/**
+ * The row whose token this is, or null — the one comparison, written once.
+ *
+ * Compared as fixed-length hex digests, so it is constant time in the value
+ * AND says nothing about how long the token was. `accepts` and `deviceFor`
+ * are the same question asked at two widths; two loops would be two chances
+ * for one of them to be the loose one.
+ */
+const holderOf = (devices: readonly AdmittedDevice[], token: string): AdmittedDevice | null => {
+  if (typeof token !== 'string' || token.length === 0) return null
+  const candidate = hashToken(token)
+  return (
+    devices.find(
+      (device) =>
+        typeof device.tokenHash === 'string' &&
+        device.tokenHash.length === candidate.length &&
+        timingSafeEqual(Buffer.from(device.tokenHash), Buffer.from(candidate))
+    ) ?? null
+  )
+}
+
 export const createAdmittedDeviceStore = (
   deps: AdmittedDeviceStoreDeps = {}
 ): AdmittedDeviceStore => {
@@ -227,18 +257,8 @@ export const createAdmittedDeviceStore = (
       )
       return seen
     },
-    accepts: (token) => {
-      if (typeof token !== 'string' || token.length === 0) return false
-      const candidate = hashToken(token)
-      // Compared as fixed-length hex digests, so the comparison is constant
-      // time in the value AND says nothing about how long the token was.
-      return load().some(
-        (device) =>
-          typeof device.tokenHash === 'string' &&
-          device.tokenHash.length === candidate.length &&
-          timingSafeEqual(Buffer.from(device.tokenHash), Buffer.from(candidate))
-      )
-    },
+    accepts: (token) => holderOf(load(), token) !== null,
+    deviceFor: (token) => holderOf(load(), token)?.deviceId ?? null,
     admit: ({ deviceId, name }) => {
       const at = now()
       const existing = load()
