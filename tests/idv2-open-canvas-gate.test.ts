@@ -191,13 +191,13 @@ beforeAll(async () => {
     })
   })
   expect(attached.status).toBe(401)
-  const asked = (await attached.json()) as { pending: string }
+  const asked = (await attached.json()) as { pending: string; match: string }
   const request = await fetch(`${site.origin}/v2/sessions/${asked.pending}/approve`, { method: 'POST' })
   const { approval } = (await request.json()) as { approval: string }
   const decided = await fetch(`${site.origin}/v2/me/approvals/${approval}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${desktopToken}` },
-    body: JSON.stringify({ decision: 'approve' })
+    body: JSON.stringify({ decision: 'approve', match: asked.match })
   })
   expect(decided.status).toBe(204)
   const done = await fetch(`${site.origin}/v2/sessions/${asked.pending}`)

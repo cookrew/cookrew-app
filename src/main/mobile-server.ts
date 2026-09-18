@@ -48,7 +48,8 @@ import { ASK_HTTP_STATUS, ASK_REMEDY } from '../shared/ask-outcome'
 import { ensureCert, missingHosts, sansOf } from './cert'
 import { enrichStateWithGit, handleMobileApi, MobileApiDeps, MobileOps, type ServeOps } from './mobile-api'
 import type { LoopHealthSnapshot } from './loop-health'
-import { holdSocketsOpen, pairingAuthorized, readJson, respondJson, tokenAccepted } from './mobile-http'
+import { holdSocketsOpen, presentedToken, readJson, respondJson } from './mobile-http'
+import { companionAccepted } from './companion-gate'
 import { handleCallRoutes, type CallEndpointDeps } from './call-endpoints'
 import { handlePathReportRoutes } from './path-report-routes'
 import { createTlsPortGate, httpsRedirectTarget } from './tls-port-gate'
@@ -100,6 +101,14 @@ let activePairingToken: string | null = null
  * injects one (`deps.wallToken`).
  */
 let activeWallToken: string | null = null
+/**
+ * DOES THE ROOT TOKEN STILL OPEN EVERY ROUTE (v3, V3-21)?
+ *
+ * True until every companion has bootstrapped its own token (V3-14). The
+ * decision itself is companion-gate.ts; this is only which mode the running
+ * server is in, set once at start from `deps.perDeviceOnly`.
+ */
+let rootEverywhere = true
 
 /** SAN list of the cert actually in use; empty until HTTPS starts. */
 let certSans: string[] = []
@@ -220,6 +229,14 @@ export interface MobileServerDeps {
   /** Override the pairing token (tests); a fresh one is minted per run. */
   pairingToken?: string
   /**
+   * STRICT MODE (v3, V3-21): the root pairing token opens the admission
+   * route and nothing else; every other route wants a per-device token. Off
+   * by default — see companion-gate.ts for why the root is still honoured
+   * everywhere until the companion side (V3-14) bootstraps — and read once at
+   * start, like the tokens.
+   */
+  perDeviceOnly?: () => boolean
+  /**
    * WebSocket 'upgrade' handler for the interactive-browser stream
    * (/api/browser/:id/stream). Attached to both the HTTP and HTTPS servers so
    * phones get ws:// on localhost and wss:// on the LAN.
@@ -263,6 +280,7 @@ export function startMobileServer(deps: MobileServerDeps): void {
   // every path at once.
   activePairingToken = deps.pairingToken ?? loadOrCreatePairingToken()
   activeWallToken = deps.wallToken ?? randomUUID()
+  rootEverywhere = !(deps.perDeviceOnly?.() ?? false)
   nameCert = deps.nameCert ?? null
 
   const requestHandler = (request: http.IncomingMessage, response: http.ServerResponse): void => {
@@ -679,7 +697,31 @@ export function companionTokenAccepted(
   extra?: (candidate: string) => boolean
 ): boolean {
   if (activePairingToken === null) return false
-  return tokenAccepted(credential, activePairingToken, extra)
+  return companionAccepted({
+    route: 'other',
+    presented: credential,
+    rootToken: activePairingToken,
+    perDevice: extra ?? (() => false),
+    rootEverywhere
+  })
+}
+
+/**
+ * THE ONE GATE, for the HTTP routes: what the C1 choke point in mobile-api
+ * asks. Handed to it as a function so the decision — root only on admission,
+ * per-device everywhere, and the migration flag — is made in exactly one
+ * module (companion-gate.ts) for the HTTP routes, the WebSocket and the
+ * bridge sighting alike.
+ */
+function companionGate(presented: string | null, perDevice: (candidate: string) => boolean): boolean {
+  if (activePairingToken === null) return false
+  return companionAccepted({
+    route: 'other',
+    presented,
+    rootToken: activePairingToken,
+    perDevice,
+    rootEverywhere
+  })
 }
 
 /** The credential a paired phone holds; null before the server starts. */
@@ -969,12 +1011,13 @@ function recordBridgeDevice(
   request: http.IncomingMessage,
   url: URL,
   deps: MobileServerDeps,
-  device: RelayDevice | null,
-  token: string | undefined
+  device: RelayDevice | null
 ): void {
   const admitted = deps.identity?.admitted
-  if (!device || !admitted || !token) return
-  if (!pairingAuthorized(request, url, token, (candidate) => admitted.accepts(candidate))) return
+  if (!device || !admitted) return
+  // The same gate as every route: in strict mode a root token names nothing
+  // here either, because a sighting is a fact about an AUTHORISED request.
+  if (!companionGate(presentedToken(request, url), (candidate) => admitted.accepts(candidate))) return
   try {
     admitted.record(device)
   } catch (error) {
@@ -1136,7 +1179,14 @@ export async function handle(
       // The origins are the SERVER's, not the account's, so they are threaded
       // in here rather than asked of index.ts — which would have to learn
       // about listeners it deliberately knows nothing about.
-      deps.identity && { ...deps.identity, selfOrigins: mobileSelfOrigins }
+      deps.identity && {
+        ...deps.identity,
+        selfOrigins: mobileSelfOrigins,
+        // The admission route is the one place the root token opens on its
+        // own (v3, V3-21); it reads the RUNNING token, which rotates.
+        pairingToken: () => activePairingToken
+      },
+      bridgeDevice
     )
   ) {
     return
@@ -1180,9 +1230,14 @@ export async function handle(
     // the same gate as the global one, so a per-device credential is not a
     // phone that half works.
     companionToken: (candidate: string) => deps.identity?.admitted.accepts(candidate) ?? false,
+    // v3 (V3-21): the decision, not the tokens. mobile-api keeps `pairingToken`
+    // to know a gate exists at all; whether THIS credential opens it is asked
+    // here, so the root-only-on-admission rule cannot be re-derived there.
+    companionGate: (presented: string | null) =>
+      companionGate(presented, (candidate) => deps.identity?.admitted.accepts(candidate) ?? false),
     wallToken: activeWallToken ?? deps.wallToken
   }
-  recordBridgeDevice(request, url, deps, bridgeDevice, authed.pairingToken)
+  recordBridgeDevice(request, url, deps, bridgeDevice)
   if (await handleMobileApi(request, response, url, authed as MobileApiDeps)) return
 
   // MOVED BELOW THE DELEGATION, and that is the whole change to it.

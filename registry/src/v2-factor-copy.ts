@@ -25,6 +25,7 @@ export type FactorError =
   | 'too_many_attempts'
   | 'no_approval'
   | 'bad_decision'
+  | 'bad_match'
   | 'totp_not_started'
   | 'totp_active'
   | 'passkey_limit'
@@ -46,6 +47,8 @@ const SENTENCES: Record<FactorError, string> = {
   too_many_attempts: 'Too many tries on this sign-in. Start again.',
   no_approval: 'There is no such request — it may already have been answered.',
   bad_decision: 'A request is approved, denied, or “not me”.',
+  bad_match:
+    'That is not the number showing on the device signing in. Look at its screen and type the two digits.',
   totp_not_started: 'Ask for a secret first, then confirm it with a code from the app.',
   totp_active: 'This account already has an authenticator. Remove it before adding another.',
   passkey_limit: 'That is as many passkeys as one account holds. Remove one before adding another.',

@@ -143,7 +143,11 @@ export async function signInWithLadder(ctx: V2Context, body: Record<string, unkn
     message: factorSentence('second_factor'),
     next,
     pending: pending.id,
-    expiresAt: pending.expiresAt
+    expiresAt: pending.expiresAt,
+    // THE NUMBER GOES TO THE DEVICE THAT IS SIGNING IN, and only here. This
+    // answer is the asking device's own; the owner's approvals list is built
+    // from Approvals, which do not carry it at all.
+    match: pending.match
   })
 }
 
