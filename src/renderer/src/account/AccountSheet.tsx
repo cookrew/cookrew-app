@@ -188,6 +188,20 @@ export function AccountSheet({
 
   const create = (): void => {
     const view = registerView(fields, crossing)
+    /**
+     * F2 · THE TAKEN NAME CROSSES ON THIS PRESS, and never reaches the wire.
+     *
+     * It lands through `crossingFor` with the same `taken` refusal a 409 from
+     * POST /v2/accounts produces, so there is ONE crossing with two ways of
+     * reaching it — the live check here, and the race where the check said
+     * free and the registry disagreed. A second code path would be a second
+     * idea of what crossing means.
+     */
+    if (view.crossesToSignIn) {
+      if (busy) return
+      land(crossingFor({ state: 'register', username: name, refusal: { reason: 'taken' } }))
+      return
+    }
     if (busy || !view.canClaim) return
     const asked = cookrew().accountClaim?.({ username: name, password: fields.password })
     if (!asked) return
@@ -353,7 +367,10 @@ function paneFor(state: SheetState): {
       }
     case 'register':
       return {
-        canGo: (fields, crossing) => registerView(fields, crossing).canClaim,
+        // `canGo`, not `canClaim`: on a taken name the primary is the way out
+        // rather than a create, and "may be pressed" stopped meaning "will
+        // create an account" (F2).
+        canGo: (fields, crossing) => registerView(fields, crossing).canGo,
         primary: (fields, crossing) => registerView(fields, crossing).primary,
       }
     case 'legacy':

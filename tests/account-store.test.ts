@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { AccountStatus } from '../src/shared/account-v2'
+import type { ClaimFields } from '../src/renderer/src/account/account-store'
 import {
   ACCOUNT_COPY,
   approvalView,
@@ -21,6 +22,8 @@ import {
   mustChangeBanner,
   passkeyElsewhere,
   profileKey,
+  registerView,
+  crossingFor,
   removeFactorPrompt,
   refusalSentence,
   rescueState,
@@ -533,5 +536,83 @@ describe('what makes the DEVICES tab re-read itself', () => {
     expect(profileKey({ username: null, requests: 0 })).not.toBe(
       profileKey({ username: 'drej', requests: 0 }),
     )
+  })
+})
+
+/**
+ * F2 · A TAKEN NAME ON THE CREATE SIDE HAS TO BE PRESSABLE (V3-UI1).
+ *
+ * The real-interface pass found the sheet showing USERNAME · TAKEN and the
+ * sentence "@magpie already exists — sign in with your password." beside a
+ * DISABLED primary and a plain <p> with nothing to click. The other half of
+ * the crossing (SIGN IN → CREATE) already works, so the sheet could cross one
+ * way and not the other — and the way it could not is the one D9 draws first.
+ *
+ * The fix is not to cross while somebody types: the availability check settles
+ * on whatever is in the field, so a person typing "magpie" who pauses on "mag"
+ * would have the tab pulled out from under them. Both directions cross on the
+ * PRIMARY PRESS, and this makes the primary exist to be pressed.
+ */
+describe('the CREATE side offers the way out it names (F2)', () => {
+  const taken = (over: Partial<ClaimFields> = {}): ClaimFields => ({
+    username: 'magpie',
+    check: 'taken',
+    password: 'correct horse battery staple',
+    confirm: 'correct horse battery staple',
+    ...over,
+  })
+
+  it('turns the primary into the crossing rather than disabling it', () => {
+    const view = registerView(taken())
+    expect(view.crossesToSignIn).toBe(true)
+    expect(view.primary).toBe('SIGN IN AS @MAGPIE')
+    // canClaim stays false — this name cannot be created, and that is the fact
+    // the button is now honest about instead of being switched off for.
+    expect(view.canClaim).toBe(false)
+    expect(view.canGo).toBe(true)
+  })
+
+  it('says it in the same words the sentence under the field uses', () => {
+    const view = registerView(taken())
+    expect(view.username.tag).toBe('taken')
+    expect(view.username.note).toBe('@magpie already exists — sign in with your password.')
+    expect(view.primary).toContain('MAGPIE')
+  })
+
+  it('needs no password to cross — the one on screen is for an account that exists', () => {
+    // Somebody who typed a taken name has not typed THEIR password yet; making
+    // them fill twelve characters they are about to lose is a toll on the way
+    // to the door they actually want.
+    const view = registerView(taken({ password: '', confirm: '' }))
+    expect(view.crossesToSignIn).toBe(true)
+    expect(view.canGo).toBe(true)
+  })
+
+  it('does not cross on a name that is merely unknown, or still being checked', () => {
+    for (const check of ['checking', 'unknown', 'invalid', 'free'] as const) {
+      const view = registerView(taken({ check }))
+      expect(view.crossesToSignIn, check).toBe(false)
+    }
+    // A free name goes back to being a name to create.
+    expect(registerView(taken({ check: 'free' })).primary).toBe('CREATE @MAGPIE')
+  })
+
+  it('refuses to cross on a name that could never be anyone’s', () => {
+    // A shape the registry would not have issued cannot be "already taken";
+    // crossing there would send somebody to sign in as a name that cannot be.
+    const view = registerView(taken({ username: 'Not A Name!' }))
+    expect(view.crossesToSignIn).toBe(false)
+    expect(view.canGo).toBe(false)
+  })
+
+  it('lands where the 409 lands — one crossing, two ways of reaching it', () => {
+    // The button must produce the same landing a taken-on-POST does, or the
+    // sheet would have two ideas of what crossing means.
+    const landing = crossingFor({ state: 'register', username: 'magpie', refusal: { reason: 'taken' } })
+    expect(landing).toEqual({
+      kind: 'cross',
+      to: 'signin',
+      sentence: '@magpie already exists — sign in with your password.',
+    })
   })
 })

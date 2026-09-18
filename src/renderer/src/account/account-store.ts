@@ -576,6 +576,14 @@ export function signInView(fields: SignInFields, crossed: string | null = null):
 
 export interface RegisterView extends ClaimView {
   lede: string
+  /**
+   * F2 · the name is somebody's, so the primary crosses instead of creating.
+   * `canClaim` stays false — this name cannot be created — and `canGo` is what
+   * the button reads, because "may be pressed" and "will create an account"
+   * stopped being the same question.
+   */
+  crossesToSignIn: boolean
+  canGo: boolean
 }
 
 /**
@@ -590,7 +598,40 @@ export function registerView(fields: ClaimFields, crossed: string | null = null)
   const view = claimView(fields)
   const username: FieldView =
     crossed !== null && fields.check === 'free' ? { ...view.username, note: crossed } : view.username
-  return { ...view, username, lede: V3_COPY['d9.create.lede'] }
+  const name = normaliseUsername(fields.username)
+  /**
+   * F2 · A TAKEN NAME MAKES THE PRIMARY THE WAY OUT.
+   *
+   * The sheet used to show "@magpie already exists — sign in with your
+   * password." beside a DISABLED CREATE, and nothing on the card could act on
+   * it: the sentence named a door and the sheet offered no handle. D9 says a
+   * wrong tab is never a dead end, and that was one.
+   *
+   * IT IS NOT CROSSED WHILE SOMEBODY TYPES. The availability check settles on
+   * whatever is in the field, so a person typing "magpie" who pauses on "mag"
+   * would have the tab pulled out from under them mid-name. Both directions
+   * cross on the PRIMARY PRESS — which is already true of SIGN IN → CREATE,
+   * where the 401 comes back from a pressed CONTINUE — so this is the same
+   * rule, not a second one.
+   *
+   * THE PASSWORD IS NOT REQUIRED TO CROSS. Whoever typed a taken name has not
+   * typed THEIR password yet; the one on screen belongs to an account that
+   * already exists, and asking for twelve characters they are about to lose is
+   * a toll on the way to the door they want. The shape of the name still has
+   * to be one the registry could have issued: "already taken" is not a thing a
+   * name that could never exist can be.
+   */
+  const crossesToSignIn = fields.check === 'taken' && isValidUsername(name)
+  return {
+    ...view,
+    username,
+    lede: V3_COPY['d9.create.lede'],
+    crossesToSignIn,
+    primary: crossesToSignIn
+      ? accountCopy('d9.crossing.taken-primary', { handle: name.toUpperCase() })
+      : view.primary,
+    canGo: crossesToSignIn || view.canClaim,
+  }
 }
 
 /**
