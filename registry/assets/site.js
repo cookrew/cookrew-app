@@ -403,6 +403,53 @@
   }
 
   /**
+   * THE DEVICE KEY IS P-256, AND IT IS THE ONE PLACE THIS FILE DOES NOT PREFER
+   * Ed25519 (M5).
+   *
+   * A Mac that says ALLOW seals the pairing URL to this device's own key
+   * (registry/src/v2-device-seal.ts) and cookrew.dev carries it without being
+   * able to read it. Opening it is a Diffie-Hellman, and that is what decides
+   * the curve here:
+   *
+   *   Ed25519 CANNOT do DH in WebCrypto. The seal's Node half maps the signing
+   *   seed onto its X25519 twin, which needs the PRIVATE SEED — and this key is
+   *   non-extractable on purpose, so the seed is exactly what a browser does
+   *   not have. Making it extractable to win a decryption would put the
+   *   device's identity within reach of any script that ever runs here, to
+   *   avoid changing a curve.
+   *
+   *   P-256 does ECDH directly, and WebCrypto will do it with a key it cannot
+   *   export.
+   *
+   * ONE KEY PAIR, IMPORTED TWICE. A CryptoKey carries one algorithm, and this
+   * device needs both verbs: ECDSA to sign (what /v2/sessions/renew will ask
+   * for) and ECDH to open a seal. So the pair is generated extractable, its
+   * private half is imported once as each — both NON-EXTRACTABLE — and the
+   * exportable original is dropped before this function returns. The private
+   * material exists in one local for the length of one mint and is persisted
+   * in no form at all.
+   *
+   * The public JWK is `{kty:'EC', crv:'P-256', x, y}` either way, which is what
+   * the account stores and what the device id is the thumbprint of — so
+   * nothing outside this function can tell which verb the key was minted for.
+   */
+  async function mintDeviceKey() {
+    const pair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits'])
+    const priv = await crypto.subtle.exportKey('jwk', pair.privateKey)
+    const full = await crypto.subtle.exportKey('jwk', pair.publicKey)
+    // Rebuilt member by member: an exported JWK carries `key_ops` and `ext`,
+    // and importing those back with different usages is refused.
+    const seed = { kty: priv.kty, crv: priv.crv, x: priv.x, y: priv.y, d: priv.d }
+    const sign = await crypto.subtle.importKey('jwk', seed, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign'])
+    const derive = await crypto.subtle.importKey('jwk', seed, { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits'])
+    return {
+      jwk: { kty: full.kty, crv: full.crv, x: full.x, y: full.y },
+      pair: { privateKey: sign, publicKey: pair.publicKey },
+      seal: derive
+    }
+  }
+
+  /**
    * This browser's device: a non-extractable key minted once, and an id
    * DERIVED FROM IT rather than a fresh uuid.
    *
@@ -415,11 +462,9 @@
   async function deviceIdentity() {
     const held = await loadDevice()
     if (held) return held
-    const key = await mintKey()
-    const full = await crypto.subtle.exportKey('jwk', key.pair.publicKey)
-    const jwk = key.alg === 'Ed25519' ? { kty: full.kty, crv: full.crv, x: full.x } : { kty: full.kty, crv: full.crv, x: full.x, y: full.y }
-    const id = await globalThis.cookrewDeviceId.deviceIdFrom(jwk)
-    const device = { id, kind: deviceKind(), name: deviceName(), jwk, pair: key.pair }
+    const key = await mintDeviceKey()
+    const id = await globalThis.cookrewDeviceId.deviceIdFrom(key.jwk)
+    const device = { id, kind: deviceKind(), name: deviceName(), jwk: key.jwk, pair: key.pair, seal: key.seal }
     await saveDevice(device)
     return device
   }
@@ -859,26 +904,99 @@
     }
 
     /**
-     * COPY THE ASK LINK. navigator.clipboard is absent over plain http and on
-     * an older browser, so the link is put on the page instead of being lost:
-     * a person can always copy what they can see.
+     * W6 · ASK IS A REQUEST (R1), not a link on the clipboard.
+     *
+     * It lands in the owner's one queue and reaches every device they have.
+     * The bar then WAITS: it stops offering to ask again — a second request
+     * for the same seat is the same request — and polls for the seat itself,
+     * because the answer is given somewhere else entirely and this page has
+     * no other way to hear it.
      */
-    const copyAsk = async (link) => {
-      try {
-        await navigator.clipboard.writeText(link)
-        toast('Link copied. Send it to the owner; it names you.')
-      } catch {
-        const shown = $('seat-ask-link')
-        if (shown) {
-          shown.hidden = false
-          shown.textContent = link
-          const range = document.createRange()
-          range.selectNodeContents(shown)
-          getSelection()?.removeAllRanges()
-          getSelection()?.addRange(range)
+    const asked = (owner) => {
+      const head = $('seat-head')
+      const lede = $('seat-lede')
+      const note = $('seat-ask-note')
+      const button = seatbar.querySelector('[data-seat-ask]')
+      const buy = $('seat-buy')
+      // The sentence arrives whole, with the owner's name already in it: the
+      // server knows the handle, and a script gluing "@" onto a half-sentence
+      // is how "Asked @ @drej" happens.
+      if (head) head.textContent = seatbar.dataset.askedHead ?? `Asked @${owner}`
+      // The lede's job is done — the note under the buttons says what waiting
+      // means, and two sentences about the same wait is one too many.
+      if (lede) lede.hidden = true
+      if (note) note.hidden = false
+      if (button) button.hidden = true
+      // Buying is still open while the ask is out: the design's asked state
+      // keeps it, because somebody in a hurry should not have to withdraw
+      // anything to pay.
+      if (buy) buy.textContent = `${buy.textContent} instead`
+      watchSeat()
+    }
+
+    /**
+     * THE SEAT IS GRANTED SOMEWHERE ELSE, so this asks until it appears.
+     *
+     * Once a minute would be a page that seats somebody a minute after they
+     * were let in, while they are looking at it; every second would be a poll
+     * left running on a tab nobody closed. Five seconds, and only while the
+     * tab is in front — a backgrounded page is not being waited on.
+     */
+    let watching = null
+    const watchSeat = () => {
+      if (watching !== null) return
+      const tick = async () => {
+        if (document.hidden) return
+        const out = await v2('GET', `/v2/teams/${team}/seat`)
+        if (out.status === 200 && out.body?.seat) {
+          clearInterval(watching)
+          location.reload()
         }
-        toast('This browser would not take the clipboard — the link is on the page, ready to copy.', 6000)
       }
+      watching = setInterval(tick, 5000)
+      void tick()
+    }
+
+    /**
+     * A RELOAD MUST NOT OFFER TO ASK AGAIN.
+     *
+     * The registry has no "my outstanding requests" view for the asker — the
+     * queue belongs to the owner — so the fact that THIS browser already asked
+     * is remembered here, per team, for the length of the tab. It is not a
+     * credential and not a claim about the request's state: the seat itself is
+     * the only thing believed, and it is read from the registry on every tick.
+     * sessionStorage rather than local, because "I asked a minute ago" stops
+     * being useful the moment the window is gone.
+     */
+    const ASKED_KEY = `cr_asked:${team}`
+    const rememberAsked = () => {
+      try {
+        sessionStorage.setItem(ASKED_KEY, '1')
+      } catch {
+        // A refused store means the bar offers to ask again after a reload,
+        // and the second ask answers 409 and lands in the same place.
+      }
+    }
+    const wasAsked = () => {
+      try {
+        return sessionStorage.getItem(ASKED_KEY) === '1'
+      } catch {
+        return false
+      }
+    }
+
+    const askForSeat = async () => {
+      const owner = seatbar.dataset.owner ?? ''
+      const out = await v2('POST', `/v2/teams/${team}/seat-requests`)
+      // 409 is not a refusal to act on: the owner already has this request,
+      // and the honest answer is the same waiting state with a line saying so.
+      if (out.status === 201 || out.status === 409) {
+        if (out.status === 409) toast(seatbar.dataset.alreadyAsked?.replace('{handle}', owner) ?? '', 6000)
+        rememberAsked()
+        asked(owner)
+        return
+      }
+      toast(out.body?.message ?? 'That request did not reach @' + owner + '. Try again in a moment.', 6000)
     }
 
     const seatCall = (method, path, body) =>
@@ -891,7 +1009,7 @@
       const el = event.target.closest('[data-seat-ask],[data-seat-buy],[data-seat-open],[data-seat-grant],[data-seat-end]')
       if (!el) return
       event.preventDefault()
-      if (el.dataset.seatAsk !== undefined) void copyAsk(el.dataset.seatAsk)
+      if (el.dataset.seatAsk !== undefined) void askForSeat()
       else if (el.dataset.seatBuy !== undefined || el.dataset.seatOpen !== undefined) pressTheLine()
       else if (el.dataset.seatGrant !== undefined) {
         const username = ($('seat-username')?.value ?? '').trim().toLowerCase().replace(/^@/, '')
@@ -902,11 +1020,73 @@
         void seatCall('DELETE', `/seats/${encodeURIComponent(el.dataset.seatEnd)}`)
       }
     })
+    // The bar comes back waiting, not offering.
+    if (wasAsked() && seatbar.querySelector('[data-seat-ask]')) asked(seatbar.dataset.owner ?? '')
+
     $('seat-username')?.addEventListener('keydown', (event) => {
       if (event.key !== 'Enter') return
       event.preventDefault()
       seatbar.querySelector('[data-seat-grant]')?.click()
     })
+  }
+
+  /* ── M4: /join — a code from the fragment, spent once ──────────────────── */
+
+  /**
+   * THE FRAGMENT IS THE CREDENTIAL, so it is read once and scrubbed.
+   *
+   * A code left in the address bar is in every screenshot, every share sheet,
+   * every reload and every `document.referrer` — the same rule the companion
+   * keeps for a pairing token (src/renderer/src/pairing-scope.ts). It is taken
+   * out with `replaceState` before anything is drawn, and the only copy left
+   * is the one in this closure.
+   */
+  const joinCard = $('join-card')
+  if (joinCard) {
+    const raw = location.hash ?? ''
+    const hash = raw.startsWith('#') ? raw.slice(1) : raw
+    const code = /^[A-Z0-9]{4}-?[A-Z0-9]{4}$/i.test(hash.trim()) ? hash.trim() : null
+    // Scrubbing is best-effort: a context without a history stack still gets
+    // to spend its code, and the one thing that must never happen here is a
+    // throw on the boot path with nothing yet on screen to report it.
+    try {
+      if (raw) globalThis.history?.replaceState(null, '', location.pathname + location.search)
+    } catch {
+      // Nothing to do: the code is already out of `raw` and into this closure.
+    }
+    const go = $('join-go')
+    const message = $('join-message')
+    const say = (text) => {
+      if (message) message.textContent = text
+    }
+    if (code === null) {
+      const none = $('join-none')
+      if (none) none.hidden = false
+    } else if (go) {
+      go.hidden = false
+      go.addEventListener('click', () => {
+        go.disabled = true
+        say('Joining…')
+        void (async () => {
+          try {
+            const device = devicePayload(await deviceIdentity())
+            const out = await v2('POST', '/v2/join', { code, device })
+            if (out.status === 201) return location.assign('/me')
+            // The 401 from /v2/join is `bad_credentials` — a sentence about a
+            // name and a password, neither of which was typed on this page.
+            say(
+              out.status === 401
+                ? ($('account-sheet')?.dataset.joinRefused ?? 'That code did not work.')
+                : (out.body?.message ?? 'That code did not work.')
+            )
+          } catch {
+            say('This device could not reach cookrew.dev.')
+          } finally {
+            go.disabled = false
+          }
+        })()
+      })
+    }
   }
 
   /** Who the header should name: a v2 session first, then the v1 key. */
@@ -954,6 +1134,14 @@
     handle: async () => (await loadAccount())?.handle ?? null,
     /** This browser as a device — what a passwordless passkey sign-in attaches. */
     device: async () => devicePayload(await deviceIdentity()),
+    /**
+     * The ECDH half of the device key, for opening what a Mac sealed to it
+     * (M5). A CryptoKey and never key MATERIAL: it is non-extractable, so
+     * handing it out lets reach.js decrypt one envelope and lets nobody
+     * export the identity of this device — which is the whole reason the key
+     * is minted the way it is.
+     */
+    sealKey: async () => (await deviceIdentity()).seal ?? null,
     signIn: signInFlow,
     /** The v2 sheet — a username and a password. What the header opens. */
     account: openAccountSheet,

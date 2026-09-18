@@ -1,3 +1,4 @@
+import { V3_COPY } from '../src/shared/account-copy'
 import { describe, expect, it, vi } from 'vitest'
 import {
   AuthError,
@@ -317,11 +318,17 @@ describe('tokenFromInput — the three things the Not paired card accepts', () =
 })
 
 describe('the Not paired copy', () => {
-  it('sends the reader to the Mac, by both routes', () => {
+  it('sends the reader to the Mac, by all three routes, best first (M5)', () => {
     expect(REAUTH_COPY.title).toBe('Not paired')
-    expect(REAUTH_COPY.unpaired).toBe(
-      "Scan the QR on the Mac's avatar → Pair a phone, or paste what `cookrew mobile` printed."
-    )
+    // The sentence is the copy table's, so the phone and the Mac cannot drift.
+    expect(REAUTH_COPY.unpaired).toBe(V3_COPY['m5.unpaired'])
+    // The tap is named FIRST: it is the door that needs no scan and no paste.
+    const text = REAUTH_COPY.unpaired
+    expect(text.indexOf('USE WI-FI')).toBeLessThan(text.indexOf('scan the QR'))
+    // …and the two old doors are still both here, because an account-less Mac
+    // has no other way to let a phone in.
+    expect(text).toContain('Pair a phone')
+    expect(text).toContain('`cookrew mobile`')
     expect(reauthMessage('none')).toBe(REAUTH_COPY.unpaired)
     expect(REAUTH_COPY.label).toBe('Pairing URL or token')
     expect(REAUTH_COPY.pair).toBe('Pair')

@@ -27,6 +27,19 @@ export const WEB_V3_COPY = {
     'Sign in with your Cookrew account — @username and your password, or a code from your phone. Seats and sessions follow the account.',
   'g2.no-seat':
     '@{handle} has no seat at @{owner}/{team}. Ask @{owner} for one, or buy one — either way it follows you.',
+  'm5.asked':
+    'Tap ALLOW on that Mac. Until then this phone reaches it through cookrew.dev, which already works.',
+  'm5.allowed': '{device} let this phone in on Wi-Fi. No prompt next time.',
+  'm5.declined': '{device} said no. OPEN still reaches it through cookrew.dev.',
+  'm5.no-account':
+    'A Mac with no account keeps today’s door: scan its QR, or paste what `cookrew mobile` printed.',
+  'm5.no-seal':
+    'This browser joined before Wi-Fi sharing and cannot receive the token. OPEN works; to use Wi-Fi, add this browser again.',
+  'm4.join-lede':
+    'A code from one of your devices. Joining makes this one a device on the same account — no password is typed here.',
+  'm4.join-instead': 'Sign in with your password instead',
+  'm4.no-code':
+    'This link carries no code. Open Devices on a Mac you already use, choose ADD A PHONE, and scan the picture it shows.',
   'w4.join-offer': 'Have a code from another device?',
   'w4.join-lede':
     'Type the code from a device already on your account. No password is asked for here — the code is the permission.',
@@ -36,8 +49,13 @@ export const WEB_V3_COPY = {
   'w5.join-row': 'What number is on that device?',
   'w5.add-lede':
     'On the new device open cookrew.dev, choose “Join with a code”, and type this. It works once, for ten minutes.',
+  'w5.reach-elsewhere': '{device} asked to reach that Mac on Wi-Fi. Answer it on the Mac itself.',
   'w5.requests-footer':
-    'A device asking to sign in as @{handle}. APPROVE needs the number showing on it; deny does nothing else; NOT ME signs every other device out and locks the password until you change it.',
+    'A device asking to sign in as @{handle}, or somebody asking for a seat. APPROVE needs the number showing on that device; SEAT THEM grants by username; NOT ME signs every other device out and locks the password until you change it.',
+  'w6.no-seat':
+    'Buy one, or ask @{handle} — they see the request on every device, and you are seated the moment they say yes.',
+  'w6.asked-head': 'Asked @{handle}',
+  'w6.already-asked': '@{handle} already has your request. It is still waiting.',
   'w6.asked':
     "This page seats you the moment they say yes. You can close it; the seat is yours, not this tab's."
 } as const

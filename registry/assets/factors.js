@@ -692,48 +692,44 @@
 
   /* ── /me: D6, the approvals waiting for an answer ──────────────────────── */
 
-  function approvalRow(request, refresh) {
-    const row = el('li')
-    // The question over the number field, rendered onto the list by
-    // site-account.ts so it comes from the one copy table.
-    const JOIN_ROW = $('me-approvals')?.dataset.joinRow ?? 'What number is on that device?'
-    row.append(el('span', 'chip', 'Request'))
+  /** When the row was opened, and when it stops being answerable. */
+  const timing = (request) =>
+    `Started ${clock(Math.max(0, Date.now() - request.at))} ago · ${request.address} · expires in ${clock(request.expiresAt - Date.now())}`
+
+  /**
+   * M6 · A JOIN ROW — a device asking to sign in, and the number that proves
+   * the owner can see its screen.
+   *
+   * THE NUMBER FIELD IS THE PRIMARY CONTROL, not a detail beside the buttons.
+   * On a phone it is the one thing the person has to do; APPROVE is the easy
+   * part. So the field comes first in the DOM (the phone stacks it above the
+   * buttons) and it takes the focus of the row.
+   *
+   * APPROVE IS THE ONLY ANSWER THAT NEEDS IT. Approving widens what the
+   * account can be opened from; DENY and NOT ME narrow it, and by design they
+   * need no number (v2-pending.ts) — an alarm harder to raise than a mistake
+   * is an alarm people stop raising.
+   */
+  function joinRow(request, refresh, copy) {
+    const row = el('li', 'req req-join')
+    row.append(el('span', 'chip', 'Join'))
     const middle = el('span')
     // The sentence quotes the name the asking device gave itself (see
     // v2-pending.ts). textContent all the way down: that name is a stranger's
     // string, and this is the prompt where the owner decides.
-    middle.append(el('b', null, request.sentence ?? 'A device wants to sign in as you.'))
+    middle.append(el('b', null, request.sentence ?? `“${request.device}” wants to sign in as you.`))
     middle.append(document.createElement('br'))
-    middle.append(
-      el(
-        'span',
-        'meta',
-        `Started ${clock(Math.max(0, Date.now() - request.at))} ago · ${request.address} · expires in ${clock(request.expiresAt - Date.now())}`
-      )
-    )
-    /**
-     * W5 · THE NUMBER FIELD, ON APPROVE AND ON NOTHING ELSE.
-     *
-     * APPROVE is the only answer that widens what the account can be opened
-     * from, so it is the only one that has to prove the owner can see the
-     * asking device's screen. DENY and NOT ME need no number by design
-     * (v2-pending.ts): an alarm that is harder to raise than a mistake is an
-     * alarm people stop raising.
-     *
-     * The field is drawn for every request kind because the queue is
-     * approvals today; a kind that never needs a number will say so when the
-     * unified /v2/me/requests lands (V3-11) and this reads `request.kind`.
-     */
+    middle.append(el('span', 'meta', timing(request)))
     const number = el('input')
     number.className = 'acct-code acct-match-field'
     number.setAttribute('inputmode', 'numeric')
     number.setAttribute('maxlength', '2')
-    number.setAttribute('aria-label', JOIN_ROW)
+    number.setAttribute('aria-label', copy.join)
     number.placeholder = '47'
     middle.append(document.createElement('br'))
-    const ask = el('span', 'meta', JOIN_ROW)
-    middle.append(ask, number)
+    middle.append(el('span', 'meta', copy.join), number)
     row.append(middle)
+
     const answer = async (decision, question) => {
       if (question && !confirm(question)) return
       // The number goes ONLY with approve: sending it with a denial would
@@ -759,16 +755,103 @@
         'This signs every other device out and locks the password until you change it. Was this not you?'
       )
     )
-    row.append(yes, no, never)
+    // Enter on the number is APPROVE: the field and the button are one act.
+    number.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return
+      event.preventDefault()
+      void answer('approve')
+    })
+    /**
+     * THE THREE ANSWERS IN ONE WRAPPER, so the row can become a column.
+     *
+     * `ul.doors li` is a three-column grid, which auto-places five children
+     * into two ragged rows — the number ended up BESIDE a button instead of
+     * above them, which at phone width is the wrong thing under the thumb.
+     * With the answers in one element the row is chip · sentence+number ·
+     * answers, and a media query can stack those three without touching the
+     * order anything is read in.
+     */
+    const answers = el('span', 'req-actions')
+    answers.append(yes, no, never)
+    row.append(answers)
     return row
   }
 
-  function watchApprovals() {
+  /**
+   * M6 · A SEAT ROW — somebody asking to be let into a team (R1).
+   *
+   * NO NUMBER HERE, and the absence is the design. A seat is not a device: it
+   * grants a person the line at one team and attaches nothing to the account,
+   * so there is no asking screen to read digits off and nothing to prove
+   * beyond the owner's own intent.
+   */
+  function seatRow(request, refresh, copy) {
+    const row = el('li', 'req req-seat')
+    row.append(el('span', 'chip', 'Seat'))
+    const middle = el('span')
+    middle.append(el('b', null, copy.seat.replace('{handle}', request.account).replace('{team}', request.team)))
+    middle.append(document.createElement('br'))
+    middle.append(el('span', 'meta', timing(request)))
+    row.append(middle)
+    const answer = async (decision) => {
+      const out = await api('POST', `/v2/me/requests/${encodeURIComponent(request.id)}`, { decision })
+      if (out.status !== 204) return toast(said(out, 'That request could not be answered.'), 6000)
+      refresh()
+    }
+    const yes = button('Seat them', 'primary')
+    yes.addEventListener('click', () => void answer('approve'))
+    const no = button('Decline')
+    no.addEventListener('click', () => void answer('decline'))
+    const answers = el('span', 'req-actions')
+    answers.append(yes, no)
+    row.append(answers)
+    return row
+  }
+
+  /**
+   * M6 · A REACH ROW — a phone asking one Mac for its keyboard on Wi-Fi.
+   *
+   * IT IS DRAWN AND IT CANNOT BE ANSWERED HERE, which is the honest shape.
+   * Allowing carries the pairing URL already sealed to the asking device, and
+   * only the Mac being asked for holds that token — the registry cannot mint
+   * it and this browser must never see it. The registry only ever hands a
+   * reach row to the Mac it names (v2-requests.ts · reachesForDesktop), so
+   * this branch is reached by nothing in a browser today; it exists so that a
+   * row of a kind this view does not own reads as "answer it there" rather
+   * than falling through to a blank line.
+   */
+  function reachRow(request, copy) {
+    const row = el('li', 'req req-reach')
+    row.append(el('span', 'chip', 'Wi-Fi'))
+    const middle = el('span')
+    middle.append(el('b', null, copy.wifi.replace('{device}', request.device)))
+    middle.append(document.createElement('br'))
+    middle.append(el('span', 'meta', timing(request)))
+    row.append(middle)
+    return row
+  }
+
+  /**
+   * M6 · THE ONE QUEUE — join, seat and reach in the order they arrived.
+   *
+   * GET /v2/me/requests replaces GET /v2/me/approvals here. The approvals
+   * route still exists and is still where a JOIN is answered (the
+   * number-matching rung lives there); what changed is that this view is no
+   * longer a list of one kind. A person with a device knocking and a guest
+   * asking for a seat had to find those in two places, and the second place
+   * did not exist on the web at all.
+   */
+  function watchRequests() {
     const list = $('me-approvals')
     if (!list) return
     const section = $('me-requests')
+    const copy = {
+      join: list.dataset.joinRow ?? 'What number is on that device?',
+      seat: list.dataset.seatRow ?? '@{handle} asks for a seat at {team}.',
+      wifi: list.dataset.wifiRow ?? '{device} asked to reach that Mac on Wi-Fi. Answer it on the Mac itself.'
+    }
     const draw = async () => {
-      const out = await api('GET', '/v2/me/approvals')
+      const out = await api('GET', '/v2/me/requests')
       if (out.status !== 200 || !Array.isArray(out.body)) return
       list.replaceChildren()
       /**
@@ -781,7 +864,11 @@
        * when the last row is answered.
        */
       if (section) section.hidden = out.body.length === 0
-      for (const request of out.body) list.append(approvalRow(request, draw))
+      for (const request of out.body) {
+        if (request.kind === 'seat') list.append(seatRow(request, draw, copy))
+        else if (request.kind === 'reach') list.append(reachRow(request, copy))
+        else list.append(joinRow(request, draw, copy))
+      }
     }
     void draw()
     setInterval(draw, 5000)
@@ -813,6 +900,20 @@
         panel.replaceChildren()
         panel.hidden = false
         panel.append(el('p', 'meta', lede))
+        /**
+         * M4 · THE PICTURE FIRST, for the device that is holding a camera.
+         *
+         * ADD A PHONE is answered by pointing a phone at this screen, so the
+         * QR is the primary thing on the panel and the typed code is the
+         * fallback under it — for a second Mac, which has no camera pointed
+         * anywhere, and for a phone standing in front of a screen too far to
+         * focus on. Both encode the same one-shot code.
+         */
+        const picture = qrSvg(Array.isArray(out.body.qr) ? out.body.qr : [])
+        if (picture) {
+          picture.setAttribute('aria-label', 'Scan this with the other device’s camera')
+          panel.append(picture)
+        }
         panel.append(el('p', 'acct-join-code', out.body.code))
         const until = el('p', 'meta')
         until.textContent = `Expires in ${clock(out.body.expiresAt - Date.now())}.`
@@ -860,7 +961,7 @@
     }
   }
   fitPasskeyButton()
-  watchApprovals()
+  watchRequests()
   wireAddDevice()
 
   window.cookrewFactors = { ladder, addPasskey, addTotp, changePassword }

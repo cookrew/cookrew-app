@@ -193,9 +193,11 @@ describe('W5 · /me — requests above devices, and the two ADD buttons', () => 
   it('describes the queue it actually has, naming no button that is not there', async () => {
     const body = await (await get('/me', signedIn())).text()
     expect(body).toContain(esc(webCopy('w5.requests-footer', { handle: 'drej' })))
-    // D11's footer names ALLOW and SEAT THEM. They arrive with the unified
-    // queue (V3-11); until then the page must not promise them.
-    expect(body).not.toContain('SEAT THEM')
+    // SEAT THEM arrived with the unified queue (V3-11/V3-14) and the footer
+    // names it now. ALLOW has NOT arrived and the footer still must not
+    // promise it: a reach row is only ever handed to the Mac it names, so a
+    // browser has no ALLOW to press.
+    expect(body).toContain('SEAT THEM')
     expect(body).not.toContain('ALLOW gives')
   })
 

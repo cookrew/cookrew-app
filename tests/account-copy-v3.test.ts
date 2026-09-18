@@ -104,7 +104,12 @@ describe('no surface carries a sentence the source already owns', () => {
   it('keeps the QR sentence for account-less Macs', () => {
     // Explicitly retained: a Mac with no account still pairs by QR, and v3
     // deleting that sentence would leave it with no way in at all.
-    expect(REAUTH_COPY.unpaired).toContain('Scan the QR')
+    // M5 put the one-tap door in front of it, so the QR is no longer the first
+    // words of the sentence — but both old doors are still named, which is what
+    // an account-less Mac depends on.
+    expect(REAUTH_COPY.unpaired.toLowerCase()).toContain('scan the qr')
+    expect(REAUTH_COPY.unpaired).toContain('Pair a phone')
+    expect(REAUTH_COPY.unpaired).toContain('`cookrew mobile`')
   })
 })
 

@@ -86,7 +86,10 @@ function mount(hash: string, signedIn: boolean): Mounted {
     return made
   }
   // The crew builder belongs to /start; absent here, or the script builds it.
-  const missing = new Set(['crew-builder'])
+  // Pages the sheet is tested on carry neither the crew builder nor the join
+  // card; the stub answers every other id, so an element that is absent in the
+  // real page has to be named absent here.
+  const missing = new Set(['crew-builder', 'join-card'])
   const assigned: string[] = []
   const listeners = new Map<string, (event: unknown) => void>()
 

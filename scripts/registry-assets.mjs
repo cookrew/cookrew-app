@@ -21,6 +21,7 @@ const FILES = [
   ['addon-fit.js', 'vendor/addon-fit.js.txt', 'text/javascript; charset=utf-8'],
   ['device-id.js', 'device-id.js', 'text/javascript; charset=utf-8'],
   ['site.js', 'site.js', 'text/javascript; charset=utf-8'],
+  ['device-seal.js', 'device-seal.js', 'text/javascript; charset=utf-8'],
   ['reach.js', 'reach.js', 'text/javascript; charset=utf-8'],
   ['factors.js', 'factors.js', 'text/javascript; charset=utf-8'],
   ['seal.js', 'seal.js', 'text/javascript; charset=utf-8'],
