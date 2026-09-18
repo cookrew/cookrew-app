@@ -139,11 +139,11 @@ async function joinWithApproval(owner: Claimed, joining: ReturnType<typeof devic
     device: joining
   })
   if (first.status !== 401) return first
-  const { pending } = (await first.json()) as { pending: string }
+  const { pending, match } = (await first.json()) as { pending: string; match: string }
   const asked = await call('POST', `/v2/sessions/${pending}/approve`)
   const { approval } = (await asked.json()) as { approval: string }
   expect(
-    (await call('POST', `/v2/me/approvals/${approval}`, { decision: 'approve' }, bearer(owner.token))).status
+    (await call('POST', `/v2/me/approvals/${approval}`, { decision: 'approve', match }, bearer(owner.token))).status
   ).toBe(204)
   return call('GET', `/v2/sessions/${pending}`)
 }

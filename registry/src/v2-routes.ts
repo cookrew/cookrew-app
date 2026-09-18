@@ -24,6 +24,8 @@ import { v2Error, type V2Error } from './v2-copy'
 import { factorError } from './v2-factor-copy'
 import { createFactorState, type FactorState } from './v2-factor-state'
 import { handleFactorRoute, signInWithLadder } from './v2-factor-routes'
+import { handleJoinRoute } from './v2-join'
+import { handleRenewRoute } from './v2-renew'
 
 /**
  * IDENTITY v2 — THE ACCOUNT ROUTES.
@@ -70,6 +72,12 @@ export function handleV2Route(ctx: V2Context): boolean {
   // under /v2/sessions/… and /v2/me/… , and `/v2/me` below would swallow the
   // second half of them. It answers false for every path it does not own.
   if (handleFactorRoute(ctx)) return true
+  // Joining by code, for the same reason and in the same place: `/v2/me`
+  // below would swallow `/v2/me/join-codes`.
+  if (handleJoinRoute(ctx, rest)) return true
+  // Renewal sits beside the ladder for the same reason: `/v2/sessions/:id`
+  // below would read `renew` as a pending's uuid and answer 404 for it.
+  if (handleRenewRoute(ctx, rest)) return true
 
   if (rest.length === 1 && rest[0] === 'keys' && method === 'GET') {
     v2Json(response, 200, { jwk: ctx.v2.tokens.publicKeyJwk(), revoked: ctx.v2.accounts.revokedIds() })

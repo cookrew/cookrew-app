@@ -3,6 +3,7 @@ import { callerAddress } from './v2-limiter'
 import { v2Error, type V2Error } from './v2-copy'
 import { factorError, type FactorError } from './v2-factor-copy'
 import { SESSION_COOKIE, type V2Context } from './v2-routes'
+import type { Pending } from './v2-pending'
 import { SESSION_TTL_MS } from './v2-tokens'
 
 /**
@@ -112,6 +113,29 @@ export function deviceShape(input: unknown): { id: string; kind: string; name: s
  * opened for it, and the browser is handed an HttpOnly cookie while the app
  * is handed the same token in the body.
  */
+/**
+ * A RUNG WAS CLIMBED. What that is worth depends on what the pending is for.
+ *
+ * A sign-in ends in a session. A STEP-UP ends in permission: the caller is
+ * already signed in, so minting them a second session would be a strange prize
+ * for proving who they are, and attaching a device as a side effect of
+ * changing a password would be worse. So the act-pending is marked and
+ * answered 204, and the caller repeats the request it was refused.
+ *
+ * One function because the four rungs must not each decide this. They used to
+ * call completeSignIn directly, and a fifth rung added later would have
+ * inherited the sign-in ending by default — which is the wrong default for
+ * everything on the step-up list.
+ */
+export function finishRung(ctx: V2Context, pending: Pending, id: string): void {
+  if (pending.act !== undefined) {
+    ctx.v2.factors.pending.authorise(id)
+    noContent(ctx.response)
+    return
+  }
+  if (completeSignIn(ctx, pending.username, pending.device)) ctx.v2.factors.pending.close(id)
+}
+
 export function completeSignIn(ctx: V2Context, username: string, device: unknown): boolean {
   const { v2, response } = ctx
   const attached = v2.accounts.attachDevice(username, device)
