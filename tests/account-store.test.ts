@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { AccountStatus } from '../src/shared/account-v2'
+import { V3_COPY } from '../src/shared/account-copy'
 import type { ClaimFields } from '../src/renderer/src/account/account-store'
 import {
   ACCOUNT_COPY,
@@ -21,6 +22,7 @@ import {
   lockRowLabel,
   mustChangeBanner,
   passkeyElsewhere,
+  envIgnoredSentence,
   profileKey,
   registerView,
   crossingFor,
@@ -661,6 +663,46 @@ describe('what makes the devices list re-read (F4)', () => {
   it('changes with the account, so one person’s list never shows another’s', () => {
     expect(profileKey({ username: 'magpie', requests: 0 }, 'DEVICES')).not.toBe(
       profileKey({ username: 'drej', requests: 0 }, 'DEVICES'),
+    )
+  })
+})
+
+/**
+ * F5 · THE ENV SENTENCE MUST NOT CONTRADICT THE ACCOUNT ON SCREEN (V3-UI1).
+ *
+ * It read "COOKREW_HANDLE names @drej; this Mac serves as @magpie." on a
+ * profile showing @magpie. The second clause is the untrue one, and the screen
+ * had no way to know: the serving handle is resolved ONCE at boot, so a Mac
+ * that started local-only and signed in afterwards is still serving under the
+ * environment's name. A sentence that asserts what it cannot see is a lie
+ * whichever way the facts fall, so it says only what this surface knows.
+ */
+describe('the environment override sentence (F5)', () => {
+  it('names the account as the name, and the environment as an override', () => {
+    const said = envIgnoredSentence('drej', 'magpie')
+    expect(said).toContain('@drej')
+    expect(said).toContain('@magpie')
+    expect(said).toContain('development override')
+  })
+
+  it('does not claim what this Mac serves as — the sheet cannot know it', () => {
+    // Resolved at boot from an account that did not exist yet; see the copy
+    // table's note. Claiming it here made the one contradiction on the screen.
+    expect(envIgnoredSentence('drej', 'magpie')).not.toContain('serves as')
+    expect(envIgnoredSentence('drej', 'magpie')).not.toContain('serves')
+  })
+
+  it('strips a leading @, so no name is ever drawn as @@drej', () => {
+    // `normaliseUsername` trims and drops the @ and deliberately does NOT
+    // lowercase — that is the registry's rule at the point a name is claimed,
+    // not this helper's, and changing it here would change it everywhere.
+    expect(envIgnoredSentence('@drej', '@magpie')).toBe(envIgnoredSentence('drej', 'magpie'))
+    expect(envIgnoredSentence('@drej', '@magpie')).not.toContain('@@')
+  })
+
+  it('comes from the one copy table, like every other sentence here', () => {
+    expect(envIgnoredSentence('drej', 'magpie')).toBe(
+      V3_COPY['d4.env-override'].replace('{env}', 'drej').replace('{handle}', 'magpie'),
     )
   })
 })

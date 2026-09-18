@@ -185,17 +185,24 @@ export function legacySentence(handle: string): string {
 }
 
 /**
- * D4, phase 6 — the environment still names something, and it is ignored.
+ * D4, phase 6 — the environment still names something, and the account wins.
  *
- * The old sentence said serving kept the environment's handle "until a later
- * phase". This is that phase: the account decides, and a person reading two
- * names on one screen is owed the one that is true.
+ * IT NO LONGER SAYS WHAT THIS MAC SERVES AS (F5). The sentence used to read
+ * "COOKREW_HANDLE names @drej; this Mac serves as @magpie", and the second
+ * clause is the one that could be false: the serving handle is resolved ONCE
+ * at boot (relayHandle, main), so a Mac that started local-only and signed in
+ * afterwards is still publishing its doors under the environment's name or its
+ * old key's. This sheet cannot see that, and a sentence asserting a fact it
+ * cannot check is a lie whichever way the facts happen to fall.
+ *
+ * What is left is what this surface does know, which is also the phase-6
+ * ruling it exists to state: the account is the name.
  */
 export function envIgnoredSentence(env: string, username: string): string {
-  return (
-    `COOKREW_HANDLE names @${normaliseUsername(env)}; this Mac serves as @${normaliseUsername(username)}. ` +
-    'The environment is a development override now, not a name.'
-  )
+  return accountCopy('d4.env-override', {
+    env: normaliseUsername(env),
+    handle: normaliseUsername(username),
+  })
 }
 
 /** The 409 a stranger gets for a name that is waiting for its password. */
