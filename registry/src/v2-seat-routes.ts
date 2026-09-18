@@ -1,6 +1,7 @@
 import { readJsonBody } from './http'
 import { noContent, refuse, signedIn, v2Json, type Signed, type V2Context } from './v2-http'
 import { teamAddress, type V2Seat } from './v2-seats'
+import { readAndStepUp } from './v2-step-up'
 import type { DoorRecord } from './doors'
 import { openSeatRequest } from './v2-requests'
 
@@ -124,7 +125,7 @@ function team(ctx: V2Context, rawHandle: string, rawName: string, tail: string[]
     return
   }
   if (tail.length === 2 && tail[0] === 'seats' && method === 'DELETE') {
-    endSeat(ctx, asked, ctx.decode(tail[1]) ?? '')
+    void endSeat(ctx, asked, ctx.decode(tail[1]) ?? '')
     return
   }
   refuse(response, 404, 'not_found')
@@ -261,8 +262,25 @@ async function settleSeat(ctx: V2Context, asked: Asked): Promise<void> {
 }
 
 /** End a seat. The holder's call tokens stop being minted from this moment. */
-function endSeat(ctx: V2Context, asked: Asked, id: string): void {
+async function endSeat(ctx: V2Context, asked: Asked, id: string): Promise<void> {
+  /**
+   * OWNERSHIP FIRST, THEN THE STEP-UP.
+   *
+   * The order is the refusal a person gets. Asking a stranger to prove who
+   * they are before telling them the seat is not theirs to end would both be
+   * the wrong sentence and answer a question they should not be able to ask —
+   * whether that seat exists at all.
+   */
   if (!ownerOnly(ctx, asked)) return
+  /**
+   * "End another's seat" is on the step-up list: it takes something from
+   * somebody else, which is the shape every act on that list shares.
+   */
+  if (asked.signed === null || asked.signed === undefined) {
+    refuse(ctx.response, 401, 'unauthenticated')
+    return
+  }
+  if (!(await readAndStepUp(ctx, asked.signed, 'end-seat')).ok) return
   const out = ctx.v2.seats.end(asked.team, id)
   if (!out.ok) {
     refuse(ctx.response, 404, 'not_found')

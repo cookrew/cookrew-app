@@ -1020,9 +1020,20 @@ export class Accounts {
   }
 
   /** The last device cannot be revoked — the registry answers 409 last_device. */
-  revokeDevice(id: string): Promise<AccountResult<void>> {
+  /**
+   * TAKE A DEVICE OFF THE ACCOUNT — and the password goes WITH the request.
+   *
+   * It used to be a bare DELETE. This Mac asked for the password first and
+   * proved it at cookrew.dev (`stepUp`), then sent a request carrying nothing
+   * but the session — so the check lived entirely on this side of the wire,
+   * and a caller that simply did not perform it was not refused. The registry
+   * asks now (V3-FIX-C1 · H4), and it is the same password the sheet has
+   * already collected, so nothing new is asked of the person.
+   */
+  revokeDevice(id: string, password: string): Promise<AccountResult<void>> {
     return this.authed<void>(`/v2/me/devices/${encodeURIComponent(id)}`, {
       method: 'DELETE',
+      body: JSON.stringify({ current: password }),
       parse: false,
     })
   }
@@ -1078,7 +1089,9 @@ export class Accounts {
     if (!account) return { ok: false, reason: 'no_account' }
     const proven = await this.stepUp(password)
     if (!proven.ok) return proven
-    const removed = await this.revokeDevice(account.deviceId)
+    // The same password goes with the act — signing this Mac out is a revoke,
+    // and the registry asks for it now (V3-FIX-C1 · H4).
+    const removed = await this.revokeDevice(account.deviceId, password)
     if (!removed.ok) return removed
     this.forget()
     return { ok: true, value: undefined }

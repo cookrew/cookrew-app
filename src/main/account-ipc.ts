@@ -395,9 +395,13 @@ async function revoke(deps: AccountIpcDeps, input: unknown): Promise<AccountResu
   const record = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>
   const deviceId = asString(record.deviceId)
   if (deviceId.length === 0) return { ok: false, reason: 'bad_device' }
-  const proven = await deps.accounts.stepUp(asString(record.password))
+  const password = asString(record.password)
+  const proven = await deps.accounts.stepUp(password)
   if (!proven.ok) return proven
-  return deps.accounts.revokeDevice(deviceId)
+  // The same password, carried to the registry with the act. The step-up above
+  // stays: it fails early, in the sheet's own words, and it is what makes the
+  // fresh session the act is then made under.
+  return deps.accounts.revokeDevice(deviceId, password)
 }
 
 /**

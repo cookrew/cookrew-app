@@ -14,7 +14,7 @@ import { StarStore } from '../registry/src/stars'
 import { createV2 } from '../registry/src/v2-routes'
 import { base32Decode, totpAt, TOTP_STEP_MS } from '../registry/src/v2-totp'
 import { PendingSignIns } from '../registry/src/v2-pending'
-import { STEP_UP_ACTS, isStepUpAct } from '../src/shared/step-up'
+import { STEP_UP_ACTS, STEP_UP_ENFORCEMENT, isStepUpAct } from '../src/shared/step-up'
 
 /**
  * PROVE IT IS YOU, AGAIN.
@@ -204,11 +204,11 @@ describe('what a climbed rung is worth', () => {
 /* ── the gate, over the wire ───────────────────────────────────────────────── */
 
 describe('minting a join code on an account that holds a factor', () => {
-  it('ASKS ON THE LADDER, not for the password — the password is the weaker of the two', async () => {
+  it('OFFERS THE LADDER when the caller brings nothing — and still takes a password', async () => {
     const owner = await claim()
     await addTotp(owner.token)
 
-    const asked = await call('POST', '/v2/me/join-codes', { current: PASSWORD }, bearer(owner.token))
+    const asked = await call('POST', '/v2/me/join-codes', {}, bearer(owner.token))
     expect(asked.status).toBe(401)
     const out = await bodyOf<{
       error: string
@@ -240,6 +240,27 @@ describe('minting a join code on an account that holds a factor', () => {
      */
     expect(out.next).not.toContain('approve')
     expect(out.match).toBeUndefined()
+
+    /**
+     * AND THE PASSWORD IS STILL PROOF — this assertion used to require a 401.
+     *
+     * V3-16 took the password only from accounts with no factor: "asking for
+     * the password would be asking for the weaker of the two". That is an
+     * argument about preference. The threat here is a stolen session, and the
+     * password is exactly what the holder of one does not have — while the
+     * one case where that stops being true, somebody else knowing it, is the
+     * not-me alarm, which closes this door above. Rung-only was also not
+     * reachable: no client can climb a step-up, so it made the act impossible
+     * for any account holding so much as a sheet of rescue codes. The full
+     * reasoning, and the case it gives up, are in v2-step-up.ts.
+     */
+    expect(
+      (await call('POST', '/v2/me/join-codes', { current: PASSWORD }, bearer(owner.token))).status
+    ).toBe(201)
+    // A wrong one is a wrong password, not an invitation to climb instead.
+    expect(
+      (await call('POST', '/v2/me/join-codes', { current: 'not it' }, bearer(owner.token))).status
+    ).toBe(401)
   })
 
   it('a rung PROVES and mints nothing, and the retry gets the code', async () => {
@@ -359,7 +380,11 @@ describe('C1 · crossing your own threshold', () => {
     expect(again.status).toBe(401)
     // No join code was minted. A code attaches a machine permanently, which is
     // the prize this whole ceremony exists to stand in front of.
-    expect(await again.text()).not.toMatch(/[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}/)
+    //
+    // THE EXACT KEY, not a pattern over the whole body: a shape like
+    // XXXX-XXXX also describes two groups of a uuid's digits, so the needle
+    // would have flaked against the pending id it is printed beside.
+    expect(await bodyOf<{ code?: string }>(again)).not.toHaveProperty('code')
   })
 
   it('TWO DEVICES: the rung comes back, and the asker still cannot answer it', async () => {
@@ -468,7 +493,14 @@ async function raiseAlarm(owner: { username: string; token: string }): Promise<v
   const ringing = await call('POST', `/v2/sessions/${pending}/approve`, {})
   expect(ringing.status).toBe(202)
   const { approval } = await bodyOf<{ approval: string }>(ringing)
-  const alarm = await call('POST', `/v2/me/approvals/${approval}`, { decision: 'not-me' }, bearer(owner.token))
+  // The password rides along: "not me" is on the step-up list, so raising the
+  // alarm is itself an act that asks who you are (H4).
+  const alarm = await call(
+    'POST',
+    `/v2/me/approvals/${approval}`,
+    { decision: 'not-me', current: PASSWORD },
+    bearer(owner.token)
+  )
   expect(alarm.status).toBe(204)
 }
 
@@ -487,9 +519,12 @@ describe('H3 · the step-up gate and the not-me alarm', () => {
   })
 
   it('REFUSES THE LADDER PATH too — the alarm is about the account, not one proof', async () => {
+    // The alarm first, then the factor: raising it is itself a step-up act, and
+    // a helper that had to climb a ladder to set up a test about the ladder
+    // would be testing itself.
     const owner = await claim()
-    await addTotp(owner.token)
     await raiseAlarm(owner)
+    await addTotp(owner.token)
     const after = await call('POST', '/v2/me/join-codes', {}, bearer(owner.token))
     expect(after.status).toBe(403)
     const said = await after.text()
@@ -530,5 +565,174 @@ describe('H3 · the step-up gate and the not-me alarm', () => {
     const joining = await call('POST', '/v2/join', { code, device: device('Mac mini') })
     expect(joining.status).toBe(403)
     expect((await bodyOf<{ error: string }>(joining)).error).toBe('password_change_required')
+  })
+})
+
+/* ── H4 · the list must not claim what the code does not give ────────────── */
+
+/**
+ * SEVEN ACTS WERE DECLARED AND ONE WAS GUARDED.
+ *
+ * `src/shared/step-up.ts` names the acts that ask again, and the commit that
+ * added it says "the registry enforces it". It enforced one. The two a thief
+ * most wants were bearer-only: revoking somebody else's device, and pressing
+ * the alarm that signs every other device out and locks the password.
+ *
+ * A shared constant claiming a guarantee the code does not give is worse than
+ * no constant, because it is the thing the next reader trusts instead of
+ * reading the routes. So the acts are wired, and the ones that are enforced
+ * some other way say which way — and this block drives every one of them over
+ * HTTP, so the map cannot drift from the routes without going red.
+ */
+describe('H4 · every act the list names', () => {
+  it('REVOKE-DEVICE is not a bearer-only act', async () => {
+    const owner = await claim()
+    const other = await secondDevice(owner)
+
+    // A bearer alone used to be enough to detach somebody else's machine.
+    const bare = await call('DELETE', `/v2/me/devices/${other.deviceId}`, undefined, bearer(owner.token))
+    expect(bare.status).toBe(403)
+    expect((await bodyOf<{ error: string }>(bare)).error).toBe('password_required')
+    // The device is still on the account.
+    const still = await bodyOf<{ devices: readonly { id: string }[] }>(
+      await call('GET', '/v2/me', undefined, bearer(owner.token))
+    )
+    expect(still.devices.map((d) => d.id)).toContain(other.deviceId)
+
+    // A wrong password is refused, and the right one goes through.
+    expect(
+      (await call('DELETE', `/v2/me/devices/${other.deviceId}`, { current: 'not it' }, bearer(owner.token))).status
+    ).toBe(401)
+    expect(
+      (await call('DELETE', `/v2/me/devices/${other.deviceId}`, { current: PASSWORD }, bearer(owner.token))).status
+    ).toBe(204)
+  })
+
+  it('NOT-ME is not a bearer-only act — the alarm is a thief’s denial of service', async () => {
+    // Pressing it signs every other device out and locks the password until it
+    // changes. Held by a stranger's session that is what it does to the owner.
+    const owner = await claim()
+    const signing = await call('POST', '/v2/sessions', {
+      username: owner.username,
+      password: PASSWORD,
+      device: device('A stranger’s Mac')
+    })
+    const { pending } = await bodyOf<{ pending: string }>(signing)
+    const { approval } = await bodyOf<{ approval: string }>(
+      await call('POST', `/v2/sessions/${pending}/approve`, {})
+    )
+
+    const bare = await call('POST', `/v2/me/approvals/${approval}`, { decision: 'not-me' }, bearer(owner.token))
+    expect(bare.status).toBe(403)
+    expect((await bodyOf<{ error: string }>(bare)).error).toBe('password_required')
+    // Nothing happened: the password is not locked and the session still works.
+    expect((await call('GET', '/v2/me', undefined, bearer(owner.token))).status).toBe(200)
+    expect(
+      (await call('POST', '/v2/me/join-codes', { current: PASSWORD }, bearer(owner.token))).status
+    ).toBe(201)
+
+    // With the password it is one more field, not one more screen.
+    expect(
+      (
+        await call(
+          'POST',
+          `/v2/me/approvals/${approval}`,
+          { decision: 'not-me', current: PASSWORD },
+          bearer(owner.token)
+        )
+      ).status
+    ).toBe(204)
+  })
+
+  it('APPROVE and DENY stay one tap — an alarm harder to raise than a mistake', async () => {
+    // Only the alarm is on the list. Making the two ordinary answers ask for a
+    // password would be asking for one on every sign-in the owner approves.
+    const owner = await claim()
+    const signing = await call('POST', '/v2/sessions', {
+      username: owner.username,
+      password: PASSWORD,
+      device: device('Mac mini')
+    })
+    const ladder = await bodyOf<{ pending: string; match: string }>(signing)
+    const { approval } = await bodyOf<{ approval: string }>(
+      await call('POST', `/v2/sessions/${ladder.pending}/approve`, {})
+    )
+    expect(
+      (await call('POST', `/v2/me/approvals/${approval}`, { decision: 'deny' }, bearer(owner.token))).status
+    ).toBe(204)
+  })
+
+  it('REMOVE-FACTOR honours the alarm — a stranger must not weaken what is left', async () => {
+    // It asks for the password on its own route, which is a step-up in
+    // substance. What it did not do was hear the alarm: with the password
+    // disowned, a stranger could take the owner's authenticator off and leave
+    // the password they hold as the only thing between them and the account.
+    // Alarm first, factor second — for the same reason as the H3 ladder test:
+    // pressing NOT ME is itself a step-up act now, so an account that already
+    // held a factor would have to climb it to set this up.
+    const owner = await claim()
+    await raiseAlarm(owner)
+    const secret = await addTotp(owner.token)
+    expect(secret.length).toBeGreaterThan(0)
+    const removing = await call('DELETE', '/v2/me/totp', { current: PASSWORD }, bearer(owner.token))
+    expect(removing.status).toBe(403)
+    expect((await bodyOf<{ error: string }>(removing)).error).toBe('password_change_required')
+  })
+})
+
+/**
+ * THE MAP AND THE ROUTES, HELD TOGETHER.
+ *
+ * `STEP_UP_ENFORCEMENT` is a promise about seven routes, and a promise in a
+ * shared constant is the thing the next reader trusts instead of reading them.
+ * So every act it calls `gate` or `password` is driven here with a bearer and
+ * nothing else, and every one of them has to refuse.
+ */
+describe('H4 · the enforcement map is not a claim, it is a test', () => {
+  it('covers every act, with no act enforced by hope', () => {
+    expect(Object.keys(STEP_UP_ENFORCEMENT).sort()).toEqual([...STEP_UP_ACTS].sort())
+    // Exactly one act has no registry route in this cut, and it is named.
+    expect(STEP_UP_ACTS.filter((act) => STEP_UP_ENFORCEMENT[act] === 'none')).toEqual(['take-over-door'])
+  })
+
+  it('every gated and password-guarded act refuses a bearer on its own', async () => {
+    const owner = await claim()
+    const other = await secondDevice(owner)
+    const signing = await call('POST', '/v2/sessions', {
+      username: owner.username,
+      password: PASSWORD,
+      device: device('Mac mini')
+    })
+    const { pending } = await bodyOf<{ pending: string }>(signing)
+    const { approval } = await bodyOf<{ approval: string }>(
+      await call('POST', `/v2/sessions/${pending}/approve`, {})
+    )
+
+    /** The route each act happens at, with nothing but the session on it. */
+    const bareCall: Record<string, () => Promise<Response>> = {
+      'change-password': () => call('POST', '/v2/me/password', {}, bearer(owner.token)),
+      'remove-factor': () => call('DELETE', '/v2/me/totp', {}, bearer(owner.token)),
+      'revoke-device': () => call('DELETE', `/v2/me/devices/${other.deviceId}`, undefined, bearer(owner.token)),
+      'mint-join-code': () => call('POST', '/v2/me/join-codes', {}, bearer(owner.token)),
+      'end-seat': () =>
+        call('DELETE', `/v2/teams/@${owner.username}/alpha/seats/${randomUUID()}`, undefined, bearer(owner.token)),
+      'not-me': () => call('POST', `/v2/me/approvals/${approval}`, { decision: 'not-me' }, bearer(owner.token))
+    }
+
+    for (const act of STEP_UP_ACTS) {
+      if (STEP_UP_ENFORCEMENT[act] === 'none') continue
+      const res = await bareCall[act]()
+      // NEVER a success. Which refusal differs by act — a missing password is
+      // 403, a seat at a team nobody serves is a 404 before the gate is even
+      // reached — but a bearer alone must never be enough to do the thing.
+      expect(res.status, `${act} answered ${res.status} to a bearer alone`).toBeGreaterThanOrEqual(400)
+      expect(res.status, act).toBeLessThan(500)
+    }
+    // And the account is untouched: still two devices, no alarm raised.
+    const after = await bodyOf<{ devices: readonly { id: string }[]; factors: { mustChangePassword: boolean } }>(
+      await call('GET', '/v2/me', undefined, bearer(owner.token))
+    )
+    expect(after.devices).toHaveLength(2)
+    expect(after.factors.mustChangePassword).toBe(false)
   })
 })

@@ -15,17 +15,36 @@ import { STEP_UP_SENTENCE, type StepUpAct } from '../../src/shared/step-up'
  * and everything that widens what the account opens from, or takes something
  * from another device, asks again.
  *
- * TWO PATHS, AND WHICH ONE IS NOT A PREFERENCE.
+ * WHAT COUNTS AS PROOF — and one revision to V3-16's answer, argued.
  *
- *   The account HAS A FACTOR — a passkey, an authenticator, rescue codes. Then
- *   the strongest thing it can prove with is not the password, and asking for
- *   the password instead would be asking for the weaker of the two. It climbs
- *   THE SAME LADDER a new device climbs: same rungs, same wire shape, same
- *   screens on both clients. The only difference is where it ends, and that
+ *   A RUNG ALREADY CLIMBED for this act, spent once. The strongest proof, and
+ *   the one the refusal offers first: same rungs as the sign-in ladder, same
+ *   wire shape, same screens. The only difference is where it ends, and that
  *   difference lives in one place (finishRung).
  *
- *   The account has NO factor. Then the password is all there is, and it is
- *   asked for inline exactly as `removeFactor` has always asked for it.
+ *   OR THE CURRENT PASSWORD, whether or not the account holds a factor. V3-16
+ *   took the password only from accounts with no factor, on the argument that
+ *   "asking for the password would be asking for the weaker of the two". That
+ *   argument is about PREFERENCE; a threshold is about SUFFICIENCY, and two
+ *   facts decide it:
+ *
+ *     the threat this gate was built for is a STOLEN SESSION, and the password
+ *     is precisely what the holder of a stolen session does not have. The one
+ *     case where that stops being true — somebody else knows the password — is
+ *     the not-me alarm, and the alarm closes this door above;
+ *
+ *     rung-only is not reachable today. Neither client can climb a step-up, so
+ *     rung-only does not produce a stronger product: it produces an act that
+ *     cannot be performed at all by any account holding so much as a sheet of
+ *     rescue codes. An act nobody can perform is not a threshold that holds —
+ *     it is a threshold somebody deletes.
+ *
+ *   THE HONEST COST, so that whoever tightens this can weigh it: against an
+ *   attacker who has BOTH a phished password AND a stolen session, rung-only
+ *   would hold and this does not. That attacker cannot simply sign in — a new
+ *   device meets the ladder — so the case is real rather than theoretical.
+ *   When a client can climb a step-up (V3-12/13), narrowing this to rungs for
+ *   accounts that hold a factor is one condition and one test.
  *
  * `approve` is deliberately not counted as "has a factor" for choosing the
  * path, though it IS offered as a rung once the ladder starts. Every signed-in
@@ -134,11 +153,15 @@ export async function stepUpHeld(
     return false
   }
 
-  if (!hasStepUpFactor(ctx, username)) {
-    if (typeof body.current !== 'string' || body.current === '') {
-      v2Json(ctx.response, 403, factorError('password_required'))
-      return false
-    }
+  // A rung already climbed for THIS act, spent here and never again.
+  if (ctx.v2.factors.pending.spendAuthorised(username, act, body.stepUp)) return true
+
+  /**
+   * THE PASSWORD, WHEN ONE WAS BROUGHT. Judged on what the caller offered: a
+   * caller that sends a password has asked to be judged on it, so a wrong one
+   * is a wrong password rather than an invitation to climb a ladder instead.
+   */
+  if (typeof body.current === 'string' && body.current !== '') {
     if (!(await ctx.v2.accounts.verifyPassword(username, body.current))) {
       refuse(ctx.response, 401, 'bad_credentials')
       return false
@@ -146,8 +169,10 @@ export async function stepUpHeld(
     return true
   }
 
-  // A rung already climbed for THIS act, spent here and never again.
-  if (ctx.v2.factors.pending.spendAuthorised(username, act, body.stepUp)) return true
+  if (!hasStepUpFactor(ctx, username)) {
+    v2Json(ctx.response, 403, factorError('password_required'))
+    return false
+  }
 
   /**
    * The ladder this account can climb, minus the rung the asker would be
@@ -205,10 +230,22 @@ export async function readAndStepUp(
   act: StepUpAct
 ): Promise<{ ok: true; body: Record<string, unknown> } | { ok: false }> {
   const body = await readJsonBody(ctx.request, SMALL_BODY)
-  if (!body.ok) {
-    refuse(ctx.response, body.reason === 'too_large' ? 413 : 400, 'malformed')
+  /**
+   * A BODY THAT IS NOT THERE IS NOT AN ERROR HERE — it is a request with no
+   * proof in it, which is exactly what this gate exists to answer.
+   *
+   * Most of these acts used to be a bare DELETE with no body at all, so the
+   * commonest way to meet the gate is to bring nothing; "malformed" would be
+   * our word for our machinery in the one place a person most needs a next
+   * step. The act does not happen either way — `stepUpHeld` refuses an empty
+   * proof — and the refusal says which proof is missing. Only `too_large`
+   * keeps its own status, because that one really is about the bytes.
+   */
+  if (!body.ok && body.reason === 'too_large') {
+    refuse(ctx.response, 413, 'malformed')
     return { ok: false }
   }
-  if (!(await stepUpHeld(ctx, signed, act, body.value as StepUpBody))) return { ok: false }
-  return { ok: true, body: body.value }
+  const value = body.ok ? body.value : {}
+  if (!(await stepUpHeld(ctx, signed, act, value as StepUpBody))) return { ok: false }
+  return { ok: true, body: value }
 }

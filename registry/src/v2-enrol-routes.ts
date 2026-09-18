@@ -5,7 +5,8 @@ import { factorError } from './v2-factor-copy'
 import { parseRegistration } from './v2-passkeys'
 import { qrRows } from './v2-qr'
 import type { Decision } from './v2-pending'
-import { signedIn, type V2Context } from './v2-routes'
+import { signedIn, type Signed, type V2Context } from './v2-routes'
+import { stepUpHeld } from './v2-step-up'
 
 /**
  * IDENTITY v2, PHASE 4 — ADDING A FACTOR, AND ANSWERING FOR ONE.
@@ -60,10 +61,7 @@ export function handleMeFactorRoute(ctx: V2Context, rest: string[]): boolean {
     // WHO is answering, not just which sitting to keep: a step-up's asker is
     // already signed in, so the ceremony has to be able to tell it apart from
     // the other device it is supposed to be asking (C1).
-    void answerApproval(ctx, who, (ctx.decode(rest[1]) ?? '').toLowerCase(), {
-      jti: signed.claims.jti,
-      device: signed.claims.dev
-    })
+    void answerApproval(ctx, signed, (ctx.decode(rest[1]) ?? '').toLowerCase())
     return true
   }
   if (rest.length === 2 && rest[0] === 'totp' && rest[1] === 'enrol' && method === 'POST') {
@@ -121,6 +119,21 @@ async function removeFactor(ctx: V2Context, username: string, remove: () => bool
     refuse(ctx.response, body.reason === 'too_large' ? 413 : 400, 'malformed')
     return
   }
+  /**
+   * THE ALARM CLOSES THIS ONE TOO.
+   *
+   * This route asks for the password on its own, which is a step-up in
+   * substance — but it never heard "not me". With the password disowned, the
+   * stranger holding it could take the owner's authenticator off the account
+   * and leave the password they already have as the only thing in the way.
+   * Kept here rather than moved behind `stepUpHeld` because a client that can
+   * climb a step-up ladder does not exist yet, and a route that asks for a
+   * password today must not become one that asks for a screen nobody has.
+   */
+  if (ctx.v2.factors.store.mustChangePassword(username)) {
+    refuseFactor(ctx.response, 403, 'password_change_required')
+    return
+  }
   if (typeof body.value.current !== 'string' || body.value.current === '') {
     refuseFactor(ctx.response, 403, 'password_required')
     return
@@ -172,12 +185,12 @@ const DECISIONS: readonly Decision[] = ['approve', 'deny', 'not-me']
  * signing yourself out of the device you just used reads as a failure — and
  * the password is locked out until it is changed.
  */
-async function answerApproval(
-  ctx: V2Context,
-  username: string,
-  id: string,
-  by: { jti: string; device: string }
-): Promise<void> {
+async function answerApproval(ctx: V2Context, signed: Signed, id: string): Promise<void> {
+  const username = signed.account.username
+  // WHO is answering, not just which sitting to keep: a step-up's asker is
+  // already signed in, so the ceremony has to be able to tell it apart from
+  // the other device it is supposed to be asking (C1).
+  const by = { jti: signed.claims.jti, device: signed.claims.dev }
   const body = await readJsonBody(ctx.request, SMALL_BODY)
   if (!body.ok) {
     refuse(ctx.response, body.reason === 'too_large' ? 413 : 400, 'malformed')
@@ -188,6 +201,20 @@ async function answerApproval(
     refuseFactor(ctx.response, 400, 'bad_decision')
     return
   }
+  /**
+   * "NOT ME" ASKS AGAIN; APPROVE AND DENY DO NOT.
+   *
+   * The alarm signs every other device out and locks the password until it is
+   * changed. Held by a stolen session that is a denial of service against the
+   * owner, performed with nothing but a bearer — so it is on the step-up list,
+   * and until now the list said so and the route did not.
+   *
+   * The two ordinary answers stay one tap, and that is not an oversight. A
+   * person reaching for DENY is answering a prompt about somebody else's
+   * request; asking for a password every time would put a password on every
+   * sign-in the owner approves, which is how a prompt becomes a reflex.
+   */
+  if (decision === 'not-me' && !(await stepUpHeld(ctx, signed, 'not-me', body.value))) return
   const answered = ctx.v2.factors.pending.decide(username, id, decision as Decision, body.value.match, by)
   if (!answered.ok) {
     if (answered.reason === 'self_approval') {

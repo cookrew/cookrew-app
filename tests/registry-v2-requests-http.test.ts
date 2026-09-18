@@ -284,7 +284,7 @@ describe('the revocation table (§06)', () => {
     let mac = await bodyOf<{ id: string; kind: string }[]>(await call('GET', '/v2/me/requests', undefined, as(drejToken)))
     expect(mac.some((r) => r.id === asked.id)).toBe(true)
     // Revoke the asking phone.
-    expect((await call('DELETE', `/v2/me/devices/${phone.id}`, undefined, as(drejToken))).status).toBe(204)
+    expect((await call('DELETE', `/v2/me/devices/${phone.id}`, { current: PASSWORD }, as(drejToken))).status).toBe(204)
     // Its request is gone from the Mac's queue.
     mac = await bodyOf<{ id: string; kind: string }[]>(await call('GET', '/v2/me/requests', undefined, as(drejToken)))
     expect(mac.some((r) => r.id === asked.id)).toBe(false)
@@ -315,7 +315,10 @@ describe('the revocation table (§06)', () => {
     const asked = await bodyOf<{ pending: string }>(laddered)
     const req = await call('POST', `/v2/sessions/${asked.pending}/approve`)
     const { approval } = await bodyOf<{ approval: string }>(req)
-    expect((await call('POST', `/v2/me/approvals/${approval}`, { decision: 'not-me' }, as(token))).status).toBe(204)
+    expect(
+      (await call('POST', `/v2/me/approvals/${approval}`, { decision: 'not-me', current: PASSWORD }, as(token)))
+        .status
+    ).toBe(204)
     // The queue rae was party to is empty — both as owner-of-nothing and as asker.
     const drejQueue = await bodyOf<{ kind: string; account?: string }[]>(
       await call('GET', '/v2/me/requests', undefined, as(drejToken))

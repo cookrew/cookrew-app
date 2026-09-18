@@ -240,6 +240,19 @@ export type AccountRefusal =
   | 'denied'
   | 'not_offered'
   | 'password_change_required'
+  /**
+   * THE STEP-UP GATE'S OWN TWO (V3-FIX-C1 · H4).
+   *
+   * 'password_required' is an act that asks again — the password was not sent,
+   * or was sent empty — and 'step_up' is the same gate on an account that
+   * holds a factor, where the answer is a rung rather than a password. Named
+   * rather than left to the catch-all because 'unknown' renders "cookrew.dev
+   * answered something this app could not read. Nothing was changed.", which
+   * is false in a way a person acts on: nothing was changed, but there IS a
+   * next step and it is not "try again".
+   */
+  | 'password_required'
+  | 'step_up'
   | 'offline'
   // Seats (phase 5). A seat operation refuses for reasons an account one
   // cannot, and they are two different things to say to a person: 'not_found'
