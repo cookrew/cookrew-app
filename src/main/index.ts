@@ -259,6 +259,7 @@ import {
   stripePaymentHeader
 } from './served-admission'
 import { doorBearer, type DoorBearerPort } from './door-bearer'
+import { expiryWarningDue } from '../shared/session-renew'
 import { gateDoorFor } from '../shared/gate-walk'
 import { buildX402Payment, deviceWallet } from './x402-caller'
 import { servedTurnReply } from './served-turn-reply'
@@ -1084,6 +1085,52 @@ function sweepRevocations(): void {
   void v2CallTokens.refresh()
 }
 setInterval(sweepRevocations, REVOCATION_SWEEP_MS).unref()
+
+/**
+ * THE SESSION RENEWS ITSELF, AND SAYS SO WHEN IT CANNOT (v3, V3-17).
+ *
+ * A session lives thirty days, and until V3-16 the thirtieth day took every
+ * door this Mac publishes offline — "no-relay" until a person happened to be
+ * at the keyboard to retype a password. The marketplace's availability should
+ * not be bounded by somebody's memory, so the Mac signs a registry nonce with
+ * the device key that attached it in the first place.
+ *
+ * DAILY, NOT HOURLY. `renewDue` opens a whole week, so a day is six retries of
+ * slack before anyone needs to be told; asking more often would only mean more
+ * ways to be rate-limited on the day it matters.
+ *
+ * AND THE WARNING IS THE OTHER HALF. Renewal that keeps failing is the one
+ * case a person must hear about BEFORE the doors go down, on every device they
+ * have, naming the Mac that has to be opened. Twice a day is enough for a
+ * two-day window and few enough that it is not noise.
+ */
+const RENEW_CHECK_MS = 24 * 60 * 60 * 1000
+/** Boot is the likeliest moment for a Mac that was asleep through its week. */
+const RENEW_AT_BOOT_MS = 30_000
+let saidExpiring = 0
+
+async function renewSessionIfDue(): Promise<void> {
+  try {
+    await accounts.renew()
+  } catch (error) {
+    console.error('Could not renew this Mac\'s session:', error)
+  }
+  const account = accounts.account()
+  if (!account || !expiryWarningDue(account.session, Date.now(), accounts.renewFailing())) return
+  // Said at most twice a day. A warning repeated on every tick is a warning
+  // the owner learns to dismiss, which is the one thing this must not become.
+  if (Date.now() - saidExpiring < RENEW_CHECK_MS / 2) return
+  saidExpiring = Date.now()
+  const day = new Date(account.session?.exp ?? Date.now()).toLocaleDateString(undefined, { weekday: 'long' })
+  const sentence = `@${account.username}'s doors go offline on ${day} unless ${account.name} renews — open Cookrew there once.`
+  console.error(`[cookrew] ${sentence}`)
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send('account:expiring', sentence)
+  }
+}
+
+setTimeout(() => void renewSessionIfDue(), RENEW_AT_BOOT_MS).unref()
+setInterval(() => void renewSessionIfDue(), RENEW_CHECK_MS).unref()
 /** Who has signed in at each served door — the memory behind D7's avatars. */
 const doorCallers = new DoorCallers()
 /** The owner's seat routes at cookrew.dev, spoken with the owner's session. */
