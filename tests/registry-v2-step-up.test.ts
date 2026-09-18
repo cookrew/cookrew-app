@@ -439,3 +439,96 @@ describe('C1 · crossing your own threshold', () => {
     ).toBe(204)
   })
 })
+
+/* ── H3 · the alarm closes this door too ─────────────────────────────────── */
+
+/**
+ * "NOT ME" IS THE LOUDEST THING A PERSON CAN SAY ABOUT THIS ACCOUNT.
+ *
+ * It means: a stranger has my password. Every other sitting ends, every pending
+ * sign-in is dropped, the queue is emptied, and the password is locked out
+ * until it is changed. Sign-in honours it, the rung honours it, join-redeem
+ * honours it, recovery honours it — and the gate built so that seven copies of
+ * a boundary could not drift was the copy that drifted.
+ *
+ * It belongs INSIDE the gate rather than at each call site, for the reason the
+ * gate exists: an act wired in tomorrow inherits the alarm without anyone
+ * remembering to add it.
+ */
+
+/** Raise the alarm the way a person does: disown a real sign-in request. */
+async function raiseAlarm(owner: { username: string; token: string }): Promise<void> {
+  const signing = await call('POST', '/v2/sessions', {
+    username: owner.username,
+    password: PASSWORD,
+    device: device('A stranger’s Mac')
+  })
+  expect(signing.status).toBe(401)
+  const { pending } = await bodyOf<{ pending: string }>(signing)
+  const ringing = await call('POST', `/v2/sessions/${pending}/approve`, {})
+  expect(ringing.status).toBe(202)
+  const { approval } = await bodyOf<{ approval: string }>(ringing)
+  const alarm = await call('POST', `/v2/me/approvals/${approval}`, { decision: 'not-me' }, bearer(owner.token))
+  expect(alarm.status).toBe(204)
+}
+
+describe('H3 · the step-up gate and the not-me alarm', () => {
+  it('REFUSES THE PASSWORD PATH once the alarm is raised', async () => {
+    // The password is exactly what the owner said a stranger has. Taking it as
+    // proof afterwards is taking the stranger's word for who they are.
+    const owner = await claim()
+    expect((await call('POST', '/v2/me/join-codes', { current: PASSWORD }, bearer(owner.token))).status).toBe(201)
+
+    await raiseAlarm(owner)
+
+    const after = await call('POST', '/v2/me/join-codes', { current: PASSWORD }, bearer(owner.token))
+    expect(after.status).toBe(403)
+    expect((await bodyOf<{ error: string }>(after)).error).toBe('password_change_required')
+  })
+
+  it('REFUSES THE LADDER PATH too — the alarm is about the account, not one proof', async () => {
+    const owner = await claim()
+    await addTotp(owner.token)
+    await raiseAlarm(owner)
+    const after = await call('POST', '/v2/me/join-codes', {}, bearer(owner.token))
+    expect(after.status).toBe(403)
+    const said = await after.text()
+    expect(JSON.parse(said).error).toBe('password_change_required')
+    // And no pending was opened for a ladder nobody may climb.
+    expect(said).not.toContain('pending')
+  })
+
+  it('does not strand the owner — changing the password opens it again', async () => {
+    // The way out has to stay outside this gate, or the alarm would lock the
+    // account out of the one act that clears it. POST /v2/me/password asks for
+    // the current password on its own and is deliberately not behind step-up.
+    const owner = await claim()
+    await raiseAlarm(owner)
+    expect((await call('POST', '/v2/me/join-codes', { current: PASSWORD }, bearer(owner.token))).status).toBe(403)
+
+    const changed = await call(
+      'POST',
+      '/v2/me/password',
+      { current: PASSWORD, next: 'a different long password' },
+      bearer(owner.token)
+    )
+    expect(changed.status).toBe(204)
+    expect(
+      (await call('POST', '/v2/me/join-codes', { current: 'a different long password' }, bearer(owner.token))).status
+    ).toBe(201)
+  })
+
+  it('and the redeem side of the same rule holds — its sibling, untested until now', async () => {
+    // H8: v2-join.ts's alarm check was asserted in a commit message and
+    // exercised by nothing. An untested pair is how one of them breaks, which
+    // is exactly what happened to the mint side above.
+    const owner = await claim()
+    const { code } = await bodyOf<{ code: string }>(
+      await call('POST', '/v2/me/join-codes', { current: PASSWORD }, bearer(owner.token))
+    )
+    await raiseAlarm(owner)
+    const joining = await call('POST', '/v2/join', { code, device: device('Mac mini') })
+    expect(joining.status).toBe(403)
+    expect((await bodyOf<{ error: string }>(joining)).error).toBe('password_change_required')
+  })
+})

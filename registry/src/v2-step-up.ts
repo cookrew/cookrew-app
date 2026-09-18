@@ -107,6 +107,33 @@ export async function stepUpHeld(
     return false
   }
 
+  /**
+   * "NOT ME" CLOSES THIS DOOR TOO — before either path, so both inherit it.
+   *
+   * The alarm means one thing: a stranger has this password. Sign-in honours
+   * it, the rung honours it, join-redeem honours it and recovery honours it;
+   * this gate was built precisely so that seven copies of a boundary could not
+   * drift, and it was the copy that drifted — a locked account still minted a
+   * live join code to whoever typed the disowned password.
+   *
+   * INSIDE THE GATE RATHER THAN AT EACH CALL SITE, which is the whole argument
+   * for having a gate: an act wired in tomorrow gets the alarm without anybody
+   * remembering to add it.
+   *
+   * IT REFUSES THE LADDER AS WELL AS THE PASSWORD, even though a passkey is
+   * something the stranger does not have. A step-up is permission to widen
+   * what the account opens from, and an account whose owner has just said it
+   * is compromised should not be widening. The owner is not stranded: they
+   * still hold the sitting they pressed the alarm from, and POST
+   * /v2/me/password is deliberately NOT behind this gate — it is the one act
+   * that clears the alarm, and putting it behind the alarm would be a lock
+   * with its key inside.
+   */
+  if (ctx.v2.factors.store.mustChangePassword(username)) {
+    v2Json(ctx.response, 403, factorError('password_change_required'))
+    return false
+  }
+
   if (!hasStepUpFactor(ctx, username)) {
     if (typeof body.current !== 'string' || body.current === '') {
       v2Json(ctx.response, 403, factorError('password_required'))
