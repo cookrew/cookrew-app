@@ -223,6 +223,22 @@ const api = {
   servingSetStripeSecret: (secret: string) =>
     ipcRenderer.invoke('serving:payment-stripe', secret),
   servingList: () => ipcRenderer.invoke('serving:list'),
+  /**
+   * D14 · a door of this Mac moved to another of the account's (V3-18). The
+   * list is asked for on mount and pushed on every move, because a window that
+   * was closed when it happened must still find the sentence waiting.
+   */
+  servingMoved: (): Promise<readonly { slug: string; team: string; by: string; at: number }[]> =>
+    ipcRenderer.invoke('serving:moved'),
+  onServingMoved: (listener: (door: { slug: string; team: string; by: string }) => void) => {
+    const on = (_e: unknown, door: { slug: string; team: string; by: string }): void => listener(door)
+    ipcRenderer.on('serving:moved', on)
+    return () => ipcRenderer.removeListener('serving:moved', on)
+  },
+  /** TAKE IT BACK — dial the same door again, superseding whoever holds it. */
+  servingTakeBack: (slug: string) => ipcRenderer.invoke('serving:take-back', slug),
+  /** Let the sentence go without taking the door back. */
+  servingMovedClear: (slug: string) => ipcRenderer.invoke('serving:moved-clear', slug),
   servingSessions: () => ipcRenderer.invoke('serving:sessions'),
   servingEnd: (sessionId: string) => ipcRenderer.invoke('serving:end', sessionId),
 

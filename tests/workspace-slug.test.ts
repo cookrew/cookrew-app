@@ -5,7 +5,7 @@
 // the only thing a paired device has.
 
 import { describe, expect, it } from 'vitest'
-import { deriveSlug, uniqueSlug, slugFor } from '../src/main/workspace-slug'
+import { deriveSlug, uniqueSlug, slugFor } from '../src/shared/workspace-slug'
 
 describe('deriveSlug', () => {
   it('lowercases and hyphenates ordinary names', () => {

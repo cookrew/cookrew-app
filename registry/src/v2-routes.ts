@@ -365,6 +365,13 @@ export function desktopBody(desktop: V2Desktop, names = false): Record<string, u
     deviceId: desktop.deviceId,
     name: desktop.name,
     workspaces: desktop.workspaces,
+    /**
+     * THE DOORS THIS MAC HOLDS (V3-18). Always an array, never absent: the
+     * save sheet asks "who else holds this slug" on every save, and a client
+     * that had to treat a missing field as "none" would read an older
+     * registry's silence as an answer.
+     */
+    doors: desktop.doors ?? [],
     reach: desktop.reach ?? null,
     /**
      * REACH v2.1. Does a trusted name exist for this Mac right now?
@@ -627,11 +634,24 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     const out = v2.accounts.putDesktop(account.username, deviceId, {
       name: body.value.name,
       workspaces: body.value.workspaces,
+      ...(body.value.doors === undefined ? {} : { doors: body.value.doors }),
       ...(reach === undefined ? {} : { reach })
     })
     if (!out.ok) {
       refuse(response, out.reason === 'not_found' ? 404 : 400, out.reason)
       return
+    }
+    /**
+     * A DOOR THAT CHANGED HANDS IS TOLD TO EVERY DEVICE (V3-18 · A4).
+     *
+     * The Mac that lost it learns from this feed that it stopped serving — it
+     * may have been asleep when the relay superseded its line, and "my team is
+     * offline and I do not know why" is the failure this whole lane exists to
+     * end. The device named is the one that TOOK it, because that is the
+     * sentence: "alpha moved to Mac Studio".
+     */
+    for (const _gone of out.moved) {
+      v2.events.append(account.username, { kind: 'door-moved', device: signed.device.name })
     }
     noContent(response)
     return

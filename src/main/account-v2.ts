@@ -1300,6 +1300,7 @@ export class Accounts {
     workspaces: readonly { id: string; name: string }[],
     reach?: { reach: unknown; sig: string },
     trusted?: readonly string[],
+    doors?: readonly string[],
   ): Promise<AccountResult<void>> {
     const account = this.cached
     if (!account) return { ok: false, reason: 'no_account' }
@@ -1315,6 +1316,17 @@ export class Accounts {
         // with reachability off must not overwrite yesterday's card with an
         // empty one, it must leave the registry with nothing new to say.
         ...(reach ? { reach: reach.reach, sig: reach.sig } : {}),
+        /**
+         * THE DOORS THIS MAC HOLDS (V3-18) — a CLAIM, not a description.
+         *
+         * `@drej/alpha` names a team of the account and is served by one of
+         * its Macs; filing the list here is how the registry knows which, so
+         * the next Mac to save the same slug is told before the relay refuses
+         * it. Omitted rather than emptied when the caller has nothing to say,
+         * for the same reason `reach` is: a PUT about a renamed workspace must
+         * not hand every door back to nobody.
+         */
+        ...(doors === undefined ? {} : { doors: [...doors] }),
         // REACH v2.1 — the origins a browser will trust for this Mac, OUTSIDE
         // the signed card. `reach` is signed over exactly the members the
         // registry's reader names (registry/src/v2-reach.ts · `cardOf`), so a

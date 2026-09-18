@@ -12,10 +12,14 @@ import {
   ShareOnSave,
   canSubmitShare,
   faceWordsLookGood,
+  heldVerdict,
   saveButtonLabel,
   serveRefusalText,
+  type HeldChoice,
   type ShareAccess
 } from './ShareOnSave'
+import { doorHeldElsewhere, type DoorHolder } from '../../shared/door-ownership'
+import { deriveSlug } from '../../shared/workspace-slug'
 import { parseTagInput } from '../../shared/served-face-shape'
 import { TeamGraphThumb } from './TeamGraphThumb'
 import { PaymentSettingsSheet } from './PaymentSettingsSheet'
@@ -66,6 +70,16 @@ export function SelectionBar({
   // SHARE ON SAVE (owner ruling 2026-08-26): the share question lives where the
   // team is NAMED — this is THE publish entry, not a parallel admin panel.
   const [access, setAccess] = useState<ShareAccess>('just-me')
+  /**
+   * D14 · ONE NAME, ONE HOLDER (V3-18). The account's other desktops and which
+   * doors they hold, fetched when the sheet opens — so the conflict is found
+   * at the moment of the act rather than by a dial that fails in silence.
+   */
+  const [desktops, setDesktops] = useState<
+    readonly { deviceId: string; name: string; doors?: readonly { team: string; since: number }[] }[]
+  >([])
+  const [myDeviceId, setMyDeviceId] = useState<string | null>(null)
+  const [heldChoice, setHeldChoice] = useState<HeldChoice>('keep')
   const [priceUsd, setPriceUsd] = useState('')
   // The face's words — optional, bounded, refused before the button (ShareOnSave).
   const [faceSummary, setFaceSummary] = useState('')
@@ -133,6 +147,32 @@ export function SelectionBar({
       .catch(() => undefined)
   }, [])
   useEffect(refreshServing, [refreshServing])
+
+  /**
+   * WHO ELSE HOLDS A DOOR NAME — read when the sheet opens, and only then.
+   *
+   * Once per naming rather than per keystroke: the answer is a list of the
+   * account's Macs, the slug is matched against it locally, and a lookup per
+   * character typed would be a request per character typed. A Mac with no
+   * account gets an empty list and no conflict, which is the truth — there is
+   * no other machine to have taken a name from.
+   */
+  useEffect(() => {
+    if (!naming) return
+    const profile = cookrew().accountProfile
+    if (profile === undefined) return
+    let alive2 = true
+    void profile()
+      .then((result) => {
+        if (!alive2 || !result.ok) return
+        setDesktops(result.value.desktops)
+        setMyDeviceId(result.value.devices.find((d) => d.current)?.id ?? null)
+      })
+      .catch(() => undefined)
+    return () => {
+      alive2 = false
+    }
+  }, [naming])
 
   /** Every clip update ALSO lifts to App (paste ghosts live up there). */
   const updateClip = (status: TeamClipStatus | null): void => {
@@ -269,9 +309,29 @@ export function SelectionBar({
     [...picked]
       .map((id) => workspace.nodes.find((n) => n.id === id))
       .find((n) => n?.kind === 'terminal')?.name ?? null
+  /**
+   * THE NAME THIS SAVE WILL PUBLISH UNDER, and who already holds it (D14).
+   *
+   * The slug is derived the same way main derives it (shared/workspace-slug),
+   * so the sheet warns about the name the door will actually take. `held` is
+   * null on a Mac with no account, for a private save, and — most of the time
+   * — because nobody else is serving that team.
+   */
+  const teamSlug = deriveSlug(name.trim() || workspace.name)
+  const held: DoorHolder | null =
+    access === 'just-me' ? null : doorHeldElsewhere(desktops, teamSlug, myDeviceId)
+  const heldSays = heldVerdict(held, heldChoice)
+  /**
+   * WHAT THIS SAVE ACTUALLY DOES. KEEP THEIRS makes it a private save — the
+   * button says SAVE rather than SAVE · START SERVING, and nothing publishes.
+   * One value, read by the label and by the handler, so the two cannot
+   * disagree about whether a door is about to open.
+   */
+  const effectiveAccess: ShareAccess = heldSays === 'save-only' ? 'just-me' : access
   const submittable =
     canSubmitShare(access, priceUsd, orchName, paymentRails) &&
-    faceWordsLookGood(access, faceSummary, tagsRaw)
+    faceWordsLookGood(access, faceSummary, tagsRaw) &&
+    heldSays !== 'rename-first'
   const canClip = cookrew().teamClipSet !== undefined
 
   const showFlash = (text: string): void => {
@@ -383,12 +443,14 @@ export function SelectionBar({
       .then(async (meta) => {
         if (!alive.current) return
         // Saving names the thing; the same breath decides who may call it.
-        if (access !== 'just-me') {
+        if (effectiveAccess !== 'just-me') {
           const tags = parseTagInput(tagsRaw)
           const served = await cookrew().servingServe({
             templateId: meta.name,
-            access,
-            ...(access === 'paid' ? { priceUsd: priceUsd.trim() } : {}),
+            // The EFFECTIVE answer, not the radio's: KEEP THEIRS has already
+            // turned this into a private save, and nothing reaches here.
+            access: effectiveAccess,
+            ...(effectiveAccess === 'paid' ? { priceUsd: priceUsd.trim() } : {}),
             ...(faceSummary.trim().length > 0 ? { summary: faceSummary.trim() } : {}),
             ...(tags.length > 0 ? { tags } : {})
           })
@@ -411,10 +473,15 @@ export function SelectionBar({
         setName('')
         setFaceSummary('')
         setTagsRaw('')
+        // Back to KEEP THEIRS. An answer about the LAST name must not still be
+        // standing for the next one — a take-over carried over from a sheet
+        // that is already closed would move somebody's door on a save nobody
+        // asked it of.
+        setHeldChoice('keep')
         setArmed(false)
         // A private save flashes; a serving save gets the ADDRESS CARD instead —
         // the address is the deliverable, and it must outlive a 3-second flash.
-        if (access === 'just-me') showFlash(`saved template “${meta.name}”`)
+        if (effectiveAccess === 'just-me') showFlash(`saved template “${meta.name}”`)
         // The save cut a version pin on each saved agent (main process). Tell
         // any open rail to re-fetch so the marker appears NOW, not on the next
         // turn — otherwise a save reads as if it did nothing.
@@ -429,6 +496,7 @@ export function SelectionBar({
     setName('')
     setFaceSummary('')
     setTagsRaw('')
+    setHeldChoice('keep')
     setArmed(false)
   }
 
@@ -589,7 +657,7 @@ export function SelectionBar({
               }
               onClick={runSave}
             >
-              {armed && clash ? 'SAVE AGAIN?' : saveButtonLabel(access, busy === 'save')}
+              {armed && clash ? 'SAVE AGAIN?' : saveButtonLabel(effectiveAccess, busy === 'save')}
             </button>
           </>
         ) : (
@@ -684,6 +752,10 @@ export function SelectionBar({
             door={orchName}
             summary={faceSummary}
             tagsRaw={tagsRaw}
+            team={teamSlug}
+            held={held}
+            heldChoice={heldChoice}
+            onHeldChoice={setHeldChoice}
             onAccess={setAccess}
             onPrice={setPriceUsd}
             onSummary={setFaceSummary}

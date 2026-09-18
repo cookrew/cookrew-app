@@ -73,6 +73,7 @@ import { ReauthOverlay } from './ReauthOverlay'
 import { snapCardChanges, MOUSE_SNAP_PX, TOUCH_SNAP_PX, SnapGuide } from './card-snap'
 import { SnapGuides } from './SnapGuides'
 import { EventToastLayer } from './EventToast'
+import { DoorMovedNotice } from './DoorMovedNotice'
 // Opened by a tap, never at boot: each panel is its own chunk (perf lane L7).
 const RosterPanel = lazy(() => import('./RosterPanel').then((m) => ({ default: m.RosterPanel })))
 const MetricsPanel = lazy(() => import('./MetricsPanel').then((m) => ({ default: m.MetricsPanel })))
@@ -1559,6 +1560,8 @@ function Canvas(): React.JSX.Element {
           />
         )}
         <EventToastLayer />
+        {/* D14 · a door this Mac was serving moved to another of the account's. */}
+        <DoorMovedNotice />
         <SousPill listening={ptt.listening} partial={ptt.partial} reply={sousReply} />
         {/* Identity: the sheets and the lock. Mounted here, after everything
             else, so the lock screen is drawn over the canvas it covers. */}

@@ -37,6 +37,14 @@ export interface AccountDesktop {
   deviceId: string
   name: string
   workspaces: readonly { id: string; name: string }[]
+  /**
+   * THE DOORS THIS MAC HOLDS, and since when (V3-18). One name, one holder:
+   * the save sheet reads these to say "alpha is served by MacBook Pro since
+   * Tue" before the relay can refuse the dial in silence. Optional because a
+   * registry that predates the rule answers without it, and treating its
+   * silence as "nobody holds anything" would be reading an absence as a fact.
+   */
+  doors?: readonly { team: string; since: number }[]
 }
 
 /** The registry's answer to GET /v2/me. Directory facts, never content (P1). */

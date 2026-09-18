@@ -67,6 +67,20 @@ export type RelayFrame =
   /** Given up on. `reason` is for logs; it never reaches a rendered sheet. */
   | { t: 'abort'; id: StreamId; reason: string }
   /**
+   * THIS NAME NOW BELONGS TO ANOTHER MACHINE OF THE SAME ACCOUNT (V3-18).
+   *
+   * Sent to the door being replaced, once, immediately before its line ends.
+   * It is the only frame that carries a sentence's worth of meaning, and it
+   * exists because the alternative is worse: a door whose line simply ended
+   * cannot tell "the network dropped me" from "I was replaced", so it redials
+   * — and two Macs of one account take a door from each other for ever.
+   *
+   * `by` is the replacing machine's name, for "alpha moved to Mac Studio".
+   * The relay never invents it: it comes from the ticket that claimed the
+   * name, which already proved this handle.
+   */
+  | { t: 'superseded'; by: string }
+  /**
    * THE PULSE. Relay → door on the downlink every heartbeat; door → relay on
    * the uplink in answer. A door's two halves are long-lived streams through
    * proxies that drop one side without telling the other: a downlink that
@@ -156,6 +170,12 @@ export function decodeFrame(raw: string): RelayFrame | null {
     case 'abort':
       return id && typeof frame.reason === 'string'
         ? { t: 'abort', id: frame.id as string, reason: frame.reason.slice(0, 200) }
+        : null
+    case 'superseded':
+      // Bounded like `abort`'s reason: it is rendered, and a machine name is
+      // chosen by whoever holds the handle rather than by us.
+      return typeof frame.by === 'string' && frame.by.length > 0
+        ? { t: 'superseded', by: frame.by.slice(0, 64) }
         : null
     case 'ping':
       return typeof frame.at === 'number' && Number.isFinite(frame.at) ? { t: 'ping', at: frame.at } : null
