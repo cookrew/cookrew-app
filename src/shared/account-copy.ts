@@ -68,6 +68,26 @@ export const V3_COPY = {
     '{device} wants to reach this Mac on Wi-Fi. ALLOW gives it the keyboard until you revoke.',
   /** D11, someone asking for a seat. Replaces "Copy link to ask @owner". */
   'd11.seat-row': '@{handle} asks for a seat at {team}.',
+  /**
+   * D11, the join row's own lead, above the number field. The device names
+   * ITSELF here — the sentence quotes what a stranger's machine calls itself,
+   * so it reads as a claim being made rather than as our description of it.
+   */
+  'd11.join-lead': '{device} wants to join @{handle}',
+  /** D11 over-state, a device that is on the account now. */
+  'd11.join-done': '{device} joined @{handle}',
+  /** D11 over-state, a phone that has this Mac's keyboard until it is revoked. */
+  'd11.wifi-done': '{device} can reach this Mac on Wi-Fi',
+  /** D11 over-state, a guest who is in the room. */
+  'd11.seat-done': '@{handle} is seated at {team}',
+  /**
+   * D11, a sign-in somebody disowned. It names WHERE it was answered, because
+   * the owner reading this a day later needs to know which of their devices
+   * they were holding when they said no.
+   */
+  'd11.denied': 'A sign-in as @{handle} was denied on {device}',
+  /** D11, an empty queue. The ordinary state, and it says what would land here. */
+  'd11.empty': 'Nothing is waiting. Devices asking to join, phones asking for Wi-Fi and guests asking for a seat all land here.',
   /** D11, what each button in the queue actually does — including NOT ME. */
   'd11.footer':
     "APPROVE needs the number. ALLOW gives the phone this Mac's keyboard until you revoke it. SEAT THEM grants by username. NOT ME signs every other device out and locks the password until you change it.",

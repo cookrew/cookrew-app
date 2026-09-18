@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { registryMismatchSentence } from '../../../shared/account-v2'
 import type { AccountProfile, AccountStatus, AdmittedPhone } from '../../../shared/account-v2'
-import type { ApprovalRequest } from '../../../shared/account-approvals'
 import type { WorkspaceMeta } from '../../../shared/model'
 import { cookrew } from '../api'
 import {
@@ -15,7 +14,8 @@ import {
   signOutSentence,
   COMING_IN_CUT_2,
 } from './account-store'
-import { ApprovalCard } from './ApprovalCard'
+import { AddMacSheet } from './AddMacSheet'
+import { RequestsTab } from './RequestsTab'
 import { DOING, problemSentence } from './problem'
 import { PairPhoneSheet } from './PairPhoneSheet'
 import { ResumeSession } from './ResumeSession'
@@ -43,6 +43,9 @@ import '../grant-surface.css'
 export const PROFILE_TABS = [
   'PROFILE',
   'DEVICES',
+  // D11: the one queue, where D6's pinned card used to be. It sits beside
+  // DEVICES because that is what most of its rows are about.
+  'REQUESTS',
   'SECURITY',
   'WORKSPACES',
   'SEATS & TEAMS',
@@ -105,23 +108,13 @@ export function ProfileSheet({
   const [acting, setActing] = useState(false)
   const [admitted, setAdmitted] = useState<readonly AdmittedPhone[]>([])
   const [pairing, setPairing] = useState(false)
-  /** The devices waiting for an answer (D6) — main's polled queue. */
-  const [requests, setRequests] = useState<readonly ApprovalRequest[]>([])
+  /** ADD A MAC (D12): the join code, in its own small sheet. */
+  const [addingMac, setAddingMac] = useState(false)
   /** The display name while it is being edited; null when it is not. */
   const [editing, setEditing] = useState<string | null>(null)
   /** A failure from the security card's own actions (lock, codes file). */
   const [problem, setProblem] = useState<string | null>(null)
   const username = status.username ?? ''
-
-  // Re-read whenever the count changes, so approving on the card and the
-  // badge in the bar cannot disagree about what is still waiting.
-  useEffect(() => {
-    const call = cookrew().accountApprovals
-    if (!call || status.sessionExpired) return
-    void call()
-      .then(setRequests)
-      .catch(() => undefined)
-  }, [status.requests, status.sessionExpired])
 
   useEffect(() => {
     void cookrew()
@@ -268,6 +261,9 @@ export function ProfileSheet({
   }
 
   const now = Date.now()
+  /** Can this build mint a join code? The channel is the marker, as the whole
+   *  account surface is feature-detected on `accountClaim`. */
+  const canAddMac = typeof cookrew().accountJoinCode === 'function'
   return (
     <div
       className="gs-scrim cr-sheet"
@@ -328,16 +324,6 @@ export function ProfileSheet({
           </p>
         )}
 
-        {/* THE REQUEST COMES FIRST, above every tab: a person who clicked
-            the notification or the rose badge is here for this and nothing
-            else, and it must not be behind a tab they have to find. */}
-        <ApprovalCard
-          requests={requests}
-          username={username}
-          focusId={focusRequestId}
-          onStatus={onStatus}
-        />
-
         {tab === 'PROFILE' && (
           <section className="cr-acct-pane" aria-label="Profile">
             {editing === null ? (
@@ -379,9 +365,6 @@ export function ProfileSheet({
 
         {tab === 'DEVICES' && (
           <section className="cr-acct-pane" aria-label="Devices">
-            <button className="gs-revoke cr-acct-act" onClick={() => setPairing(true)}>
-              PAIR A PHONE
-            </button>
             <ul className="cr-acct-devices">
               {(profile?.devices ?? []).map((device) => {
                 // THIS MAC has one verb and the others have the other. The
@@ -469,15 +452,22 @@ export function ProfileSheet({
                 <li className="gs-dim">No devices listed yet.</li>
               )}
             </ul>
-            {/* THE TWO VERBS CUT 2 ADDS (V3-10 ADD A MAC, V3-12 ADD A PHONE).
-                Disabled, with the reason on hover, and with NO handler: a
-                button that looked live and did nothing would be the exact
-                thing this tab exists to stop people guessing about. */}
+            {/* THE TWO WAYS IN (D12). ADD A PHONE is the pairing popout this
+                Mac already draws; ADD A MAC mints a join code at cookrew.dev.
+                The code's channel belongs to the join-codes lane, so the
+                button is FEATURE-DETECTED rather than always live: a build
+                without it says why on hover instead of failing when pressed,
+                and it lights up on its own the day the channel lands. */}
             <div className="cr-acct-row cr-acct-add">
-              <button className="gs-ghost" disabled title={COMING_IN_CUT_2} aria-disabled="true">
+              <button
+                className="gs-ghost"
+                disabled={!canAddMac}
+                {...(canAddMac ? {} : { title: COMING_IN_CUT_2, 'aria-disabled': 'true' as const })}
+                onClick={() => setAddingMac(true)}
+              >
                 ADD A MAC
               </button>
-              <button className="gs-ghost" disabled title={COMING_IN_CUT_2} aria-disabled="true">
+              <button className="gs-ghost" onClick={() => setPairing(true)}>
                 ADD A PHONE
               </button>
             </div>
@@ -511,7 +501,21 @@ export function ProfileSheet({
               </>
             )}
             {pairing && <PairPhoneSheet onClose={() => setPairing(false)} />}
+            {addingMac && <AddMacSheet onClose={() => setAddingMac(false)} />}
           </section>
+        )}
+
+        {/* D11 — three kinds of row, one card. A person who clicked the
+            notification or the rose badge lands HERE: AccountSurface opens the
+            sheet on this tab, so the destination is the same whichever led
+            them. */}
+        {tab === 'REQUESTS' && (
+          <RequestsTab
+            username={username}
+            refreshKey={status.requests}
+            focusId={focusRequestId}
+            onStatus={onStatus}
+          />
         )}
 
         {tab === 'SECURITY' && (

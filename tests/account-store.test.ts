@@ -8,7 +8,6 @@ import { describe, expect, it } from 'vitest'
 import type { AccountStatus } from '../src/shared/account-v2'
 import {
   ACCOUNT_COPY,
-  approvalView,
   avatarView,
   claimView,
   deviceName,
@@ -399,27 +398,7 @@ describe('the rose badge now has a producer (D1)', () => {
   })
 })
 
-describe('the request card, word for word (D6)', () => {
-  it('is the design sentence, split into its two lines', () => {
-    const view = approvalView(request(), { username: 'drej', hasSecondFactor: false, now: NOW })
-    expect(view.lead).toBe('Chrome on macOS in Sydney wants to sign in as @drej.')
-    expect(view.detail).toBe(
-      'Started 12 seconds ago · 203.0.113.9 · no second factor on the account yet.',
-    )
-  })
-
-  it('says what NOT ME does before it is done', () => {
-    const view = approvalView(request(), { username: 'drej', hasSecondFactor: false, now: NOW })
-    expect(view.confirm).toBe(
-      'Every other device signs out and you will set a new password.',
-    )
-  })
-
-  it('drops the factor clause rather than inventing a reassuring one', () => {
-    const view = approvalView(request(), { username: 'drej', hasSecondFactor: true, now: NOW })
-    expect(view.detail).toBe('Started 12 seconds ago · 203.0.113.9.')
-  })
-
+describe('how long a device has been asking — the clock D11 kept from D6', () => {
   it('counts in the units a person reads: seconds, then minutes, then hours', () => {
     expect(startedAgo(1_000)).toBe('1 second')
     expect(startedAgo(12_000)).toBe('12 seconds')

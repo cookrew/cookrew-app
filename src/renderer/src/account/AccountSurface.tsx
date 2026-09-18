@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { AccountStatus } from '../../../shared/account-v2'
 import { cookrew } from '../api'
 import { AccountAvatar } from './Avatar'
+import { AccountToasts } from './AccountToasts'
 import { AccountSheet } from './AccountSheet'
 import { FirstRunCard } from './FirstRunCard'
 import { firstRunView, type FirstRunAction } from './account-store'
@@ -112,6 +113,10 @@ export function useAccountSurface(): AccountSurface {
       refresh()
       if (requestId === null) return
       setFocusRequest(requestId)
+      // ON THE QUEUE, not on the profile. A person who clicked the
+      // notification is here for one row and nothing else; landing them a tab
+      // away from it is the same as not opening anything.
+      setTab('REQUESTS')
       setSheet('profile')
     })
     return off
@@ -175,6 +180,10 @@ export function useAccountSurface(): AccountSurface {
 
   const overlays = (
     <>
+      {/* account:changed, said in the window the owner is already in. It
+          answers nothing and steals no click: the queue is where an account
+          event is acted on. */}
+      <AccountToasts />
       {/* D8: one card, on a fresh Mac only. Drawn under the sheets, and it
           takes nothing over — the avatar keeps the same door forever. */}
       {firstRunCard && <FirstRunCard view={firstRunCard} onAction={firstRun} />}
@@ -238,11 +247,10 @@ export function useAccountSurface(): AccountSurface {
             refresh()
             // D13: the lock said a device was waiting; unlocking lands on it.
             // The same destination the notification and the rose badge lead
-            // to — the profile sheet, whose approval card sits above every
-            // tab — so the person who unlocked to answer is not then asked
-            // to find the question.
+            // to — the one queue (D11) — so the person who unlocked to answer
+            // is not then asked to find the question.
             if ((waiting ?? 0) > 0) {
-              setTab('PROFILE')
+              setTab('REQUESTS')
               setSheet('profile')
             }
           }}

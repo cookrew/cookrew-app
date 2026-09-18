@@ -13,9 +13,6 @@ import {
 } from '../../../shared/account-v2'
 import {
   APPROVAL_COPY,
-  approvalDetail,
-  approvalLead,
-  type ApprovalRequest,
   type FactorsView,
 } from '../../../shared/account-approvals'
 
@@ -802,32 +799,6 @@ function lockLine(outcome: Parameters<typeof lockNote>[0]): string {
   if (outcome.reason === 'wrong') return wrongPasswordSentence(outcome.triesLeft)
   if (outcome.reason === 'paused') return pausedSentence(outcome.pausedForMs)
   return 'There is no account on this Mac to unlock.'
-}
-
-/**
- * THE APPROVAL CARD (D6), decided.
- *
- * The two lines come from the SHARED sentence builders, which is the whole
- * point of them living in shared/: main says the same words in the system
- * notification, and a person who acts on the toast and a person who acts on
- * the card must be acting on the same claim about who is asking.
- */
-export interface ApprovalView {
-  lead: string
-  detail: string
-  /** What NOT ME does, said before it is done. */
-  confirm: string
-}
-
-export function approvalView(
-  request: ApprovalRequest,
-  input: { username: string; hasSecondFactor: boolean; now: number },
-): ApprovalView {
-  return {
-    lead: approvalLead(request, input.username),
-    detail: approvalDetail(request, input),
-    confirm: APPROVAL_COPY.NOT_ME_CONFIRM,
-  }
 }
 
 /** One row of the security card's factor ladder (D3). */

@@ -427,12 +427,42 @@ describe('the Devices tab knows which Mac it is on (v3, D12)', () => {
     expect(html).toContain('Mac Studio · studio')
   })
 
-  it('renders ADD A MAC and ADD A PHONE disabled, saying when they come, with no handler', () => {
-    for (const verb of ['ADD A MAC', 'ADD A PHONE']) {
-      const button = html.match(new RegExp(`<button[^>]*>${verb}</button>`))?.[0]
-      expect(button, verb).toBeDefined()
-      expect(button).toContain('disabled=""')
-      expect(button).toContain('title="Coming in cut 2"')
+  it('makes ADD A PHONE live — the pairing popout this Mac already draws (D12)', () => {
+    const phone = html.match(/<button[^>]*>ADD A PHONE<\/button>/)?.[0]
+    expect(phone).toBeDefined()
+    expect(phone).not.toContain('disabled')
+    // The old PAIR A PHONE at the top of the tab went with it: two buttons
+    // for one ceremony is two places to find out it exists.
+    expect(html).not.toContain('PAIR A PHONE')
+  })
+
+  it('says why ADD A MAC is not live on a build with no join-code channel', () => {
+    // FEATURE-DETECTED, not hard-coded: a button that looked live and did
+    // nothing is the exact thing this tab exists to stop people guessing
+    // about, and it lights up on its own the day the channel lands.
+    const mac = html.match(/<button[^>]*>ADD A MAC<\/button>/)?.[0]
+    expect(mac).toBeDefined()
+    expect(mac).toContain('disabled=""')
+    expect(mac).toContain('title="Coming in cut 2"')
+  })
+
+  it('offers ADD A MAC the moment the bridge can mint a code', () => {
+    const bridge = (globalThis as unknown as { window: { cookrew: Record<string, unknown> } }).window
+    bridge.cookrew.accountJoinCode = async () => ({ ok: true, value: { code: '7KQ4M2XB', expiresAt: 0 } })
+    try {
+      const live = renderToStaticMarkup(
+        <ProfileSheet
+          status={status()}
+          initialTab="DEVICES"
+          initialProfile={{ username: 'drej', displayName: '', avatar: null, claimedAt: 1, devices, desktops: [] }}
+          onClose={() => undefined}
+          onStatus={() => undefined}
+        />,
+      )
+      const mac = live.match(/<button[^>]*>ADD A MAC<\/button>/)?.[0]
+      expect(mac).not.toContain('disabled')
+    } finally {
+      delete bridge.cookrew.accountJoinCode
     }
   })
 

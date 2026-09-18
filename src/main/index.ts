@@ -109,6 +109,7 @@ import { Accounts, DEFAULT_LOCK_AFTER_MS, registryOrigin } from './account-v2'
 import { relayHandle } from './legacy-identity'
 import { createAdmittedDeviceStore } from './admitted-devices'
 import { pairingHandout } from './pairing-handout'
+import { pairingUrl } from '../shared/pairing-url'
 import type { PairingHandout } from '../shared/account-v2'
 import { createReachPublisher, type ReachPublisher } from './reach'
 import { createCanvasLink } from './canvas-link'
@@ -116,7 +117,7 @@ import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
 import { IdleLock } from './lock'
 import { registerAccountIpc } from './account-ipc'
 import { localDeviceName } from './device-name'
-import { Approvals } from './approvals'
+import { Requests, answeredStoreIn } from './requests'
 import {
   DoorCallers,
   DoorSeats,
@@ -858,22 +859,49 @@ setInterval(() => {
  * is the same place the badge leads: one destination, so a person who saw the
  * toast and a person who saw the badge end up looking at the same card.
  */
-const approvals = new Approvals({
+const requests = new Requests({
   accounts,
-  hasSecondFactor: () => accountHasFactor,
-  notify: ({ title, body, request }) => {
+  notify: ({ title, body, requestId }) => {
     const note = new Notification({ title, body })
     note.on('click', () => {
       if (!mainWindow || mainWindow.webContents.isDestroyed()) return
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()
-      mainWindow.webContents.send('account:requests', request.id)
+      mainWindow.webContents.send('account:requests', requestId)
     })
     note.show()
   },
   onChange: () => {
     if (mainWindow && !mainWindow.webContents.isDestroyed()) {
       mainWindow.webContents.send('account:requests', null)
+    }
+  },
+  // THE TOAST'S HALF. A system notification is for the person who is not
+  // looking at Cookrew; a toast is for the one who is, and an account that
+  // changed under them deserves to be said in the window they are in rather
+  // than only in a corner of the screen they may have permissions turned off
+  // for.
+  onEvent: (event, sentence) => {
+    if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+      mainWindow.webContents.send('account:event', { ...event, sentence })
+    }
+  },
+  answered: answeredStoreIn(),
+  // ALLOW's own half (R2): this phone gets a token of its own, and the URL
+  // that carries it is sealed to the key the request arrived with. The root
+  // pairing credential never leaves this process for a device that asked
+  // through the queue.
+  reach: {
+    admit: (device) => admittedDevices.admit(device),
+    pairingUrlFor: (token) => {
+      const account = accounts.account()
+      if (!account) return null
+      return pairingUrl({
+        registryOrigin: registryOrigin(),
+        username: account.username,
+        deviceId: account.deviceId,
+        pairingToken: token
+      })
     }
   }
 })
@@ -901,7 +929,7 @@ const readFactors = (): void => {
 if (accounts.account()) {
   readFactors()
   setInterval(readFactors, FACTOR_CACHE_MS).unref()
-  approvals.start()
+  requests.start()
 }
 
 /**
@@ -4467,7 +4495,7 @@ function createWindow(): void {
   mainWindow.on('focus', () => ownerLock.focus())
   // And it is the moment the owner can actually answer a waiting device, so
   // the queue is re-read then rather than waiting out the poll (D6).
-  mainWindow.on('focus', () => void approvals.refresh())
+  mainWindow.on('focus', () => void requests.refresh())
 
   if (process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -5283,7 +5311,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   registerAccountIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), {
     accounts,
     lock: ownerLock,
-    approvals,
+    requests,
     factors,
     envUsername: ENV_HANDLE || null,
     // Phase 6: a Mac that already serves under a handle opens the claim sheet

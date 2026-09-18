@@ -14,7 +14,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Accounts, loadAccount, writeAccount } from '../src/main/account-v2'
 import { accountStatus } from '../src/main/account-ipc'
 import { IdleLock } from '../src/main/lock'
-import { Approvals } from '../src/main/approvals'
+import { Requests } from '../src/main/requests'
 import { registryMismatchSentence } from '../src/shared/account-v2'
 import { fakeAccount, tempBase } from './support/idv2'
 
@@ -116,7 +116,7 @@ describe('a 401 unauthenticated ends the session, and it is written down', () =>
       envUsername: null,
       workspaces: () => [],
       saveCodes: () => Promise.resolve({ ok: false }),
-      approvals: { count: 0 },
+      requests: { count: 0 },
       factors: null,
     } as unknown as Parameters<typeof accountStatus>[0]
     expect(accountStatus(deps).sessionExpired).toBe(false)
@@ -172,18 +172,18 @@ describe('nothing keeps hammering a session cookrew.dev threw away', () => {
   it('empties the approval badge instead of polling for it', async () => {
     const base = claimed()
     const { it, urls } = accountsAt(base, [UNAUTHENTICATED])
-    const approvals = new Approvals({
+    const requests = new Requests({
       accounts: it,
       notify: () => undefined,
       pollMs: 10_000,
     })
     await it.profile()
-    await approvals.refresh()
-    await approvals.refresh()
+    await requests.refresh()
+    await requests.refresh()
     // Only the profile call ever left; the badge is a request the owner can no
     // longer act on, so it goes to zero rather than being asked about.
     expect(urls).toHaveLength(1)
-    expect(approvals.count).toBe(0)
+    expect(requests.count).toBe(0)
   })
 })
 
@@ -344,7 +344,7 @@ describe('a 401 from another registry is not this session ending', () => {
       envUsername: null,
       workspaces: () => [],
       saveCodes: () => Promise.resolve({ ok: false }),
-      approvals: { count: 0 },
+      requests: { count: 0 },
       factors: null,
     } as unknown as Parameters<typeof accountStatus>[0]
     const mismatch = accountStatus(deps).registryMismatch
@@ -363,7 +363,7 @@ describe('a 401 from another registry is not this session ending', () => {
       envUsername: null,
       workspaces: () => [],
       saveCodes: () => Promise.resolve({ ok: false }),
-      approvals: { count: 0 },
+      requests: { count: 0 },
       factors: null,
     } as unknown as Parameters<typeof accountStatus>[0]
     expect(accountStatus(deps).registryMismatch).toBeNull()

@@ -108,8 +108,11 @@ const api = {
   // sign every other device out, and add a way in. Owner window's top frame
   // or nothing.
   accountApprovals: () => ipcRenderer.invoke('account:approvals'),
-  accountDecide: (input: { id: string; decision: 'approve' | 'deny' | 'not-me' }) =>
-    ipcRenderer.invoke('account:decide', input),
+  /** The one queue (D11): what is waiting, and what is over. */
+  accountRequests: () => ipcRenderer.invoke('account:requests'),
+  /** Answer one row. The verb is the button's own id; the number rides along. */
+  accountDecideRequest: (input: { id: string; action: string; match?: string }) =>
+    ipcRenderer.invoke('account:decideRequest', input),
   accountSetPassword: (input: { current: string; next: string }) =>
     ipcRenderer.invoke('account:setPassword', input),
   accountFactors: () => ipcRenderer.invoke('account:factors'),
@@ -132,6 +135,18 @@ const api = {
     const listener = (_e: unknown, requestId: string | null): void => cb(requestId)
     ipcRenderer.on('account:requests', listener)
     return () => ipcRenderer.removeListener('account:requests', listener)
+  },
+  /**
+   * SOMETHING HAPPENED TO THE ACCOUNT (account:changed) — a device joined, one
+   * was revoked, the password changed, a door moved, somebody pressed "not
+   * me". Pushed with its sentence already written by the one view model, so
+   * the toast and the system notification cannot word it differently.
+   */
+  onAccountEvent: (cb: (event: { kind: string; device?: string; at: number; sentence: string }) => void) => {
+    const listener = (_e: unknown, event: { kind: string; device?: string; at: number; sentence: string }): void =>
+      cb(event)
+    ipcRenderer.on('account:event', listener)
+    return () => ipcRenderer.removeListener('account:event', listener)
   },
   // ── seats & teams (identity v2, phase 5) ──
   accountSeats: () => ipcRenderer.invoke('account:seats'),

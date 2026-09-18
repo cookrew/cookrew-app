@@ -159,7 +159,7 @@ describe('every account panel wears cr-sheet, on the panel and not only on the s
 })
 
 describe('the neutral acts are marked, the destructive ones are not', () => {
-  it('PAIR A PHONE is an act in the neutral ink; REVOKE and REMOVE stay rose', () => {
+  it('ADD A PHONE is an act in the neutral ink; REVOKE and REMOVE stay rose', () => {
     const html = renderToStaticMarkup(
       <ProfileSheet
         status={STATUS}
@@ -168,7 +168,12 @@ describe('the neutral acts are marked, the destructive ones are not', () => {
         onStatus={() => undefined}
       />,
     )
-    expect(html).toContain('class="gs-revoke cr-acct-act">PAIR A PHONE')
+    // D12 gave the ceremony its own verb at the foot of the tab, where the
+    // other way in sits beside it. A ghost is neutral by construction, so the
+    // rose-with-an-override that PAIR A PHONE wore is not needed to say so.
+    expect(html).toContain('<button class="gs-ghost">ADD A PHONE</button>')
+    expect(html).not.toContain('gs-revoke">ADD A PHONE')
+    expect(html).not.toContain('PAIR A PHONE')
     const enrolled: FactorsView = {
       totp: true,
       passkeys: [{ id: 'pk-1', name: 'Touch ID on this Mac', addedAt: 1_757_116_800_000 }],
@@ -184,6 +189,8 @@ describe('the neutral acts are marked, the destructive ones are not', () => {
       />,
     )
     expect(rows).toContain('class="gs-revoke">REMOVE')
+    // The marker itself is still in use (the seats tab's own neutral acts);
+    // what matters here is that a destructive row never borrows it.
     expect(rows).not.toContain('cr-acct-act')
   })
 })
