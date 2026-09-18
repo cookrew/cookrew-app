@@ -185,6 +185,76 @@ describe('POST /v2/teams/@o/t/seat-requests (R1)', () => {
     expect(owner2.some((r) => r.kind === 'seat')).toBe(false)
   })
 
+  /**
+   * A STRANGER MUST NOT BE ABLE TO FLUSH THE OWNER'S FEED (H5).
+   *
+   * account:changed is the ONLY channel this design has for telling an owner
+   * that something happened to their account — there is no email. Its tail is
+   * bounded, so anything that can be appended at will is a way to push the
+   * owner's real security events out of it: a device joining, a revoke, a
+   * password change. That is a feed which stops working at exactly the moment
+   * it matters, which is while somebody is attacking the account.
+   *
+   * Two halves, and the flood needs both to be closed:
+   *   · the event follows the DEDUPE — one row per (team, account) already,
+   *     and a request that opened no row is not a thing that happened;
+   *   · the route is LIMITED, like every other route that writes.
+   * And the tail itself now reserves room, so even a distributed ask cannot
+   * evict what the owner has to see.
+   */
+  it('a stranger’s flood leaves the owner’s earlier events still readable', async () => {
+    const flooder = newDevice()
+    const flooderToken = await claim('flood', flooder)
+
+    // The owner's real security events, from before the flood.
+    const throwaway = newDevice()
+    const throwawayToken = await attach('drej', throwaway, drejToken, 'phone')
+    expect(throwawayToken.length).toBeGreaterThan(0)
+    expect((await call('DELETE', `/v2/me/devices/${throwaway.id}`, undefined, as(drejToken))).status).toBe(204)
+    const before = await bodyOf<{ events: { kind: string }[] }>(
+      await call('GET', '/v2/me/events?since=0', undefined, as(drejToken))
+    )
+    const revokedBefore = before.events.filter((e) => e.kind === 'revoked').length
+    const askedBefore = before.events.filter((e) => e.kind === 'request').length
+    expect(revokedBefore).toBeGreaterThan(0)
+
+    // 120 asks from one account that never gets a seat.
+    let created = 0
+    let limited = 0
+    const ids = new Set<string>()
+    for (let i = 0; i < 120; i += 1) {
+      const res = await call('POST', '/v2/teams/@drej/alpha/seat-requests', {}, as(flooderToken))
+      if (res.status === 429) {
+        limited += 1
+        continue
+      }
+      expect(res.status).toBe(201)
+      created += 1
+      ids.add((await bodyOf<{ id: string }>(res)).id)
+    }
+
+    // The queue was always right: one row for one asker at one team.
+    const queue = await bodyOf<{ kind: string; account?: string }[]>(
+      await call('GET', '/v2/me/requests', undefined, as(drejToken))
+    )
+    expect(queue.filter((r) => r.kind === 'seat' && r.account === 'flood')).toHaveLength(1)
+    expect(ids.size).toBe(1)
+    // The route stops answering long before 120, like every sibling that writes.
+    expect(limited).toBeGreaterThan(0)
+    expect(created).toBeLessThan(120)
+
+    // THE FEED IS THE POINT. One arrival is one event, and the owner's own
+    // security events are all still there to be read.
+    const after = await bodyOf<{ events: { kind: string; address?: string }[] }>(
+      await call('GET', '/v2/me/events?since=0', undefined, as(drejToken))
+    )
+    expect(after.events.filter((e) => e.kind === 'revoked')).toHaveLength(revokedBefore)
+    // EXACTLY ONE, whatever the limiter let through: the queue held one row
+    // for this asker, so one thing happened. Counted as a difference so it
+    // pins the dedupe on its own rather than on how many asks were refused.
+    expect(after.events.filter((e) => e.kind === 'request').length).toBe(askedBefore + 1)
+  })
+
   it('only the team owner may answer a seat request', async () => {
     const asked = await bodyOf<{ id: string }>(
       await call('POST', '/v2/teams/@drej/alpha/seat-requests', {}, as(miraToken))
