@@ -3,6 +3,7 @@ import type { V2Account } from './v2-accounts'
 import {
   asking,
   completeSignIn,
+  finishRung,
   deviceShape,
   json,
   refuse,
@@ -143,7 +144,11 @@ export async function signInWithLadder(ctx: V2Context, body: Record<string, unkn
     message: factorSentence('second_factor'),
     next,
     pending: pending.id,
-    expiresAt: pending.expiresAt
+    expiresAt: pending.expiresAt,
+    // THE NUMBER GOES TO THE DEVICE THAT IS SIGNING IN, and only here. This
+    // answer is the asking device's own; the owner's approvals list is built
+    // from Approvals, which do not carry it at all.
+    match: pending.match
   })
 }
 
@@ -252,7 +257,7 @@ async function totpStep(ctx: V2Context, id: string): Promise<void> {
     refuseFactor(ctx.response, 401, 'bad_code')
     return
   }
-  if (completeSignIn(ctx, pending.username, pending.device)) ctx.v2.factors.pending.close(id)
+  finishRung(ctx, pending, id)
 }
 
 async function recoveryStep(ctx: V2Context, id: string): Promise<void> {
@@ -269,7 +274,7 @@ async function recoveryStep(ctx: V2Context, id: string): Promise<void> {
     refuseFactor(ctx.response, 401, 'bad_recovery')
     return
   }
-  if (completeSignIn(ctx, pending.username, pending.device)) ctx.v2.factors.pending.close(id)
+  finishRung(ctx, pending, id)
 }
 
 /** The options a browser needs to ask its authenticator for an assertion. */
@@ -356,7 +361,7 @@ async function pendingPasskey(ctx: V2Context, id: string): Promise<void> {
     return
   }
   if (!checkAssertion(ctx, `pending|${id}`, credential, found)) return
-  if (completeSignIn(ctx, pending.username, pending.device)) ctx.v2.factors.pending.close(id)
+  finishRung(ctx, pending, id)
 }
 
 /**
@@ -446,7 +451,7 @@ function pollPending(ctx: V2Context, id: string): void {
     refuseFactor(ctx.response, 410, 'denied')
     return
   }
-  if (completeSignIn(ctx, pending.username, pending.device)) ctx.v2.factors.pending.close(id)
+  finishRung(ctx, pending, id)
 }
 
 // ── passwordless: the W1 sheet's first button ─────────────────────────────
