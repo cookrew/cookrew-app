@@ -427,13 +427,22 @@ describe('the Devices tab knows which Mac it is on (v3, D12)', () => {
     expect(html).toContain('Mac Studio · studio')
   })
 
-  it('renders ADD A MAC and ADD A PHONE disabled, saying when they come, with no handler', () => {
-    for (const verb of ['ADD A MAC', 'ADD A PHONE']) {
-      const button = html.match(new RegExp(`<button[^>]*>${verb}</button>`))?.[0]
-      expect(button, verb).toBeDefined()
-      expect(button).toContain('disabled=""')
-      expect(button).toContain('title="Coming in cut 2"')
-    }
+  it('renders ADD A MAC disabled, saying when it comes, with no handler', () => {
+    // Nothing else on this tab adds a Mac, so a disabled button naming the
+    // reason is a signpost rather than a guess.
+    const button = html.match(/<button[^>]*>ADD A MAC<\/button>/)?.[0]
+    expect(button).toBeDefined()
+    expect(button).toContain('disabled=""')
+    expect(button).toContain('title="Coming in cut 2"')
+  })
+
+  it('offers ONE phone verb, and it is the one that works here (F3)', () => {
+    // A real-interface pass found an enabled PAIR A PHONE directly above a
+    // disabled ADD A PHONE: one promise made twice with a copy greyed out,
+    // which reads as a broken screen. On a build with no join-code mint the
+    // LAN door is simply the answer, so the greyed twin is not drawn.
+    expect(html).toContain('PAIR A PHONE')
+    expect(html).not.toContain('ADD A PHONE')
   })
 
   it('asks for nothing until a verb is pressed', () => {

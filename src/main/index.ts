@@ -667,6 +667,11 @@ const accounts = new Accounts({
     // the chain it already has), so saying it on every account write costs a
     // function call and closes the gap.
     void nameCertificate.ensure('the account changed').catch(() => undefined)
+    // AND THE SAME GAP, FOR THE APPROVAL QUEUE (V3-UI1 · F1). The comment
+    // above is about a certificate that only ever ran at boot; the queue had
+    // the identical shape, and on the first run of the product it meant the
+    // only rung a factorless account has was never announced at all.
+    followAccount()
   }
 })
 
@@ -898,11 +903,41 @@ const readFactors = (): void => {
     })
     .catch(() => undefined)
 }
-if (accounts.account()) {
-  readFactors()
-  setInterval(readFactors, FACTOR_CACHE_MS).unref()
-  approvals.start()
+/**
+ * THE QUEUE AND THE FACTOR CACHE FOLLOW THE ACCOUNT (V3-UI1 · F1).
+ *
+ * Both of these used to be set up once, here, under `if (accounts.account())`
+ * — and on the FIRST RUN of the product there is no account at that moment.
+ * The person creates one a minute later and neither ever starts: no approval
+ * poll, so no toast and no rose badge when their second Mac asks to join, and
+ * a factor cache stuck at its boot-time default. Window focus was the only
+ * other thing calling refresh, which is exactly the event a person already
+ * looking at their canvas does not generate.
+ *
+ * Called at boot AND from `accounts.onChange`, so signing in, joining and
+ * signing out all land in the right state. `follow` is idempotent and the
+ * interval is guarded, so neither caller has to know which way it moved.
+ */
+let factorPoll: ReturnType<typeof setInterval> | null = null
+const followAccount = (): void => {
+  approvals.follow()
+  if (accounts.account()) {
+    if (factorPoll === null) {
+      readFactors()
+      factorPoll = setInterval(readFactors, FACTOR_CACHE_MS)
+      factorPoll.unref()
+    }
+    return
+  }
+  if (factorPoll !== null) {
+    clearInterval(factorPoll)
+    factorPoll = null
+  }
+  // A Mac with no account has no factors; leaving the last answer behind would
+  // have D6's sentence describe an account that is not signed in here.
+  accountHasFactor = false
 }
+followAccount()
 
 /**
  * Sign-in with a cookrew.dev token needs the registry's public key, and only
