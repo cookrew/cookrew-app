@@ -37,6 +37,7 @@ import {
 } from './account-ladder'
 import { bodyOf, classify, plainRefusal, wireError } from './account-wire'
 import { legacyKey, migrateAtRegistry } from './legacy-identity'
+import { renewDue, renewMessage } from '../shared/session-renew'
 import type { RegistryAccount } from './registry-account'
 
 export { DEFAULT_LOCK_AFTER_MS }
@@ -361,6 +362,8 @@ export class Accounts {
   } | null = null
   /** The last minted batch, in memory only — never written, never logged. */
   private freshCodes: readonly string[] | null = null
+  /** The last renewal failure, so the daily timer says each reason once. */
+  private renewProblem: string | null = null
   /** Said once per run: a poll refused every tick must not be a log flood. */
   private saidMismatch = false
   private readonly legacy: () => RegistryAccount | null
@@ -778,6 +781,78 @@ export class Accounts {
     if (session === null || session === undefined) return false
     if (session.endedAt !== undefined) return false
     return session.exp - SESSION_SKEW_MS > this.now()
+  }
+
+  /**
+   * RENEW ON THE DEVICE KEY — no password, and no weaker for it (v3, V3-17).
+   *
+   * The key is already the credential that attached this device; a signature
+   * from it proves the same thing the password proved once, and the registry
+   * refuses it the moment the device is revoked (v2-renew.ts). What this buys
+   * is the serving side: before it, every door this Mac publishes went down on
+   * the thirtieth day unless a person happened to be at the keyboard.
+   *
+   * A SESSION THE REGISTRY ALREADY ENDED IS NOT RENEWED. `renewDue` refuses it
+   * and this never asks — otherwise "not me", which works by ending sessions,
+   * could be undone by the very key it was trying to cut off.
+   *
+   * Answers whether the session moved. Every failure is false and says why in
+   * one line, because this runs on a timer and a timer that logs a paragraph
+   * a day is a log nobody reads.
+   */
+  async renew(): Promise<boolean> {
+    const account = this.cached
+    if (!account) return false
+    if (!renewDue(account.session, this.now())) return false
+
+    let nonce: string
+    try {
+      const asked = await this.http(`${this.origin}/v2/sessions/renew-nonce`, { method: 'GET' })
+      if (asked.status !== 200) return this.renewFailed(`the registry would not issue a nonce (${asked.status})`)
+      const body = (await asked.json()) as { nonce?: unknown }
+      if (typeof body.nonce !== 'string' || body.nonce === '') {
+        return this.renewFailed('the registry issued no nonce')
+      }
+      nonce = body.nonce
+    } catch {
+      return this.renewFailed('cookrew.dev could not be reached')
+    }
+
+    try {
+      const message = renewMessage(account.username, account.deviceId, nonce)
+      const sent = await this.http(`${this.origin}/v2/sessions/renew`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ device: account.deviceId, nonce, sig: signWithDevice(account, message) })
+      })
+      if (sent.status !== 201) return this.renewFailed(`the registry refused the renewal (${sent.status})`)
+      const body = (await sent.json()) as { token?: unknown; exp?: unknown }
+      if (typeof body.token !== 'string' || typeof body.exp !== 'number') {
+        return this.renewFailed('the registry answered a renewal this app could not read')
+      }
+      // THE VERIFIER IS NOT TOUCHED. No password was proved here, so the
+      // offline unlock stays exactly what it was; a renewal is about the
+      // bearer this Mac carries, never about who may open the app.
+      this.save({ ...account, session: { token: body.token, exp: body.exp } })
+      this.renewProblem = null
+      return true
+    } catch {
+      return this.renewFailed('cookrew.dev could not be reached')
+    }
+  }
+
+  /** Said ONCE per distinct reason: a daily timer must not become a log flood. */
+  private renewFailed(why: string): false {
+    if (this.renewProblem !== why) {
+      this.renewProblem = why
+      console.error(`[cookrew] could not renew this Mac's session: ${why}`)
+    }
+    return false
+  }
+
+  /** Is renewal currently failing? What the expiry warning is gated on. */
+  renewFailing(): boolean {
+    return this.renewProblem !== null
   }
 
   /**
