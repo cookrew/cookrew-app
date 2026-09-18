@@ -4393,7 +4393,7 @@ const browserCast = createBrowserCast({
   // The TV wall's read-only token is deliberately NOT accepted: this socket
   // carries pointer and key INPUT, so admitting a read-only credential here
   // would hand it a write it does not have anywhere else.
-  paired: (credential) => companionTokenAccepted(credential, (one) => admittedDevices.accepts(one))
+  paired: (credential) => companionTokenAccepted(credential, (one) => admittedDevices.deviceFor(one))
 })
 
 const headlessBrowserCommands = new HeadlessBrowserCommandEngine({

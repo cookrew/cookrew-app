@@ -694,14 +694,21 @@ export function activeCertFingerprint(): string | null {
  */
 export function companionTokenAccepted(
   credential: string | null,
-  extra?: (candidate: string) => boolean
+  /**
+   * The per-device door — `admitted-devices.deviceFor`, which NAMES the
+   * phone rather than nodding at it. This route does not need the name; it
+   * takes the naming shape anyway so there is exactly ONE per-device reader
+   * in the codebase. Two shapes is how the admission route came to be handed
+   * a yes with no who, and to take the who from the request body instead (H1).
+   */
+  extra?: (candidate: string) => string | null
 ): boolean {
   if (activePairingToken === null) return false
   return companionAccepted({
     route: 'other',
     presented: credential,
     rootToken: activePairingToken,
-    perDevice: extra ?? (() => false),
+    perDevice: extra ?? (() => null),
     rootEverywhere
   })
 }
@@ -715,7 +722,7 @@ export function companionTokenAccepted(
  */
 function companionGate(
   presented: string | null,
-  perDevice: (candidate: string) => boolean,
+  perDevice: (candidate: string) => string | null,
   /**
    * The Mac's root token. Defaults to the running server's, and is passed
    * explicitly by the request path because `handle` is a legitimate entry
@@ -1028,7 +1035,8 @@ function recordBridgeDevice(
   if (!device || !admitted) return
   // The same gate as every route: in strict mode a root token names nothing
   // here either, because a sighting is a fact about an AUTHORISED request.
-  if (!companionGate(presentedToken(request, url), (candidate) => admitted.accepts(candidate))) return
+  if (!companionGate(presentedToken(request, url), (candidate) => admitted.deviceFor(candidate)))
+    return
   try {
     admitted.record(device)
   } catch (error) {
@@ -1247,7 +1255,7 @@ export async function handle(
     companionGate: (presented: string | null) =>
       companionGate(
         presented,
-        (candidate) => deps.identity?.admitted.accepts(candidate) ?? false,
+        (candidate) => deps.identity?.admitted.deviceFor(candidate) ?? null,
         activePairingToken ?? deps.pairingToken ?? null
       ),
     wallToken: activeWallToken ?? deps.wallToken

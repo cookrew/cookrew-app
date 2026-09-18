@@ -168,7 +168,7 @@ describe('POST /api/admit over the wire', () => {
     const d = deps()
     const { body } = await admit(phone().proof(), ROOT, d)
     const strict = (presented: string) =>
-      companionAccepted({ route: 'other', presented, rootToken: ROOT, perDevice: d.admitted.accepts, rootEverywhere: false })
+      companionAccepted({ route: 'other', presented, rootToken: ROOT, perDevice: d.admitted.deviceFor, rootEverywhere: false })
     expect(strict(body.token as string)).toBe(true)
     expect(strict(ROOT)).toBe(false)
   })
@@ -224,5 +224,106 @@ describe('POST /api/admit over the wire', () => {
     d.admitted.prune([aId])
     expect(d.admitted.accepts(a)).toBe(false)
     expect(d.admitted.accepts(b)).toBe(true)
+  })
+})
+
+/* ── H1: the ghost admission ───────────────────────────────────────────── */
+
+describe('an admitted phone may admit ITSELF and nobody else (H1)', () => {
+  const account = fakeAccount()
+  let temp: { base: string; clean: () => void }
+  beforeEach(() => (temp = tempBase()))
+  afterEach(() => temp.clean())
+
+  const deps = (over: Partial<MobileIdentityDeps> = {}): MobileIdentityDeps => ({
+    account: () => account,
+    registryOrigin: () => REGISTRY,
+    admitted: createAdmittedDeviceStore({ base: temp.base }),
+    selfOrigins: () => [MAC_ORIGIN],
+    now: () => NOW,
+    pairingToken: () => ROOT,
+    ...over,
+  })
+
+  const admit = async (body: unknown, bearer: string | null, d: MobileIdentityDeps) => {
+    const { written, response } = recorder()
+    await handleIdentityRoutes(post(body, bearer), response, new URL(`${MAC_ORIGIN}/api/admit`), d)
+    return {
+      status: written.status,
+      body: written.body ? (JSON.parse(written.body) as Record<string, unknown>) : {},
+    }
+  }
+
+  /**
+   * THE ATTACK, AS THE REVIEW REPRODUCED IT.
+   *
+   * The credential says WHICH phone is asking; the body says which device the
+   * token is for. Nothing bound them, so a phone the owner admitted once could
+   * mint a second credential for a key it invented — an id the account and the
+   * registry have never seen, which therefore never appears in the revoked
+   * list, which therefore survives `prune` for ever. Revoking the phone the
+   * owner knows about does not touch the one it made.
+   *
+   * The fix is a sentence long: the opener is the device, so the body may not
+   * name another. Admitting a NEW device stays the root token's job, which is
+   * the one credential the owner can rotate.
+   */
+  it('refuses a device token that asks for a token in another device’s name', async () => {
+    const d = deps()
+    const real = phone('iPhone')
+    const bootstrapped = await admit(real.proof(), ROOT, d)
+    expect(bootstrapped.status).toBe(200)
+    const held = bootstrapped.body.token as string
+
+    // The ghost: a key this Mac has never seen, proved perfectly — the proof
+    // is not what is wrong with it.
+    const ghost = phone('Ghost')
+    const attack = await admit(ghost.proof(), held, d)
+
+    expect(attack.status).toBe(403)
+    expect(readAdmittedDevices(temp.base).map((row) => row.deviceId)).toEqual([real.deviceId])
+    expect(d.admitted.accepts(attack.body.token as string)).toBe(false)
+  })
+
+  it('leaves the ghost unreachable by the owner’s revoke — the reason it matters', async () => {
+    const d = deps()
+    const real = phone('iPhone')
+    const held = (await admit(real.proof(), ROOT, d)).body.token as string
+    const ghost = phone('Ghost')
+    const attack = await admit(ghost.proof(), held, d)
+    const ghostToken = attack.body.token as string
+
+    // What the owner can do: revoke the phone they know about. The registry
+    // publishes THAT id; `prune` forgets the rows it names.
+    d.admitted.prune([real.deviceId])
+    expect(d.admitted.accepts(held)).toBe(false)
+
+    // The ghost's id was never on the account, so no revoke can ever name it.
+    // Before the fix this token still opened the Mac; after it, it was never
+    // minted at all.
+    expect(typeof ghostToken).not.toBe('string')
+    expect(d.admitted.accepts(String(ghostToken))).toBe(false)
+    expect(readAdmittedDevices(temp.base)).toHaveLength(0)
+  })
+
+  it('still lets a phone re-mint its OWN token, which is how a cleared browser recovers', async () => {
+    const d = deps()
+    const real = phone('iPhone')
+    const first = (await admit(real.proof(), ROOT, d)).body.token as string
+    const again = await admit(real.proof(), first, d)
+    expect(again.status).toBe(200)
+    expect(d.admitted.accepts(again.body.token as string)).toBe(true)
+    expect(d.admitted.accepts(first)).toBe(false)
+    expect(readAdmittedDevices(temp.base)).toHaveLength(1)
+  })
+
+  it('leaves the ROOT token the one way a NEW device is admitted', async () => {
+    const d = deps()
+    const first = phone('iPhone')
+    await admit(first.proof(), ROOT, d)
+    const second = phone('iPad')
+    const admitted = await admit(second.proof(), ROOT, d)
+    expect(admitted.status).toBe(200)
+    expect(readAdmittedDevices(temp.base)).toHaveLength(2)
   })
 })

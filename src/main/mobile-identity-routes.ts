@@ -192,7 +192,7 @@ const admit = async (
     route: 'admission',
     presented: presentedToken(request, url),
     rootToken: deps.pairingToken?.() ?? null,
-    perDevice: deps.admitted.accepts,
+    perDevice: deps.admitted.deviceFor,
     rootEverywhere: false
   })
   if (opened === null) {
@@ -222,6 +222,31 @@ const admit = async (
     respondJson(response, reading.status, { error: reading.error })
     return true
   }
+  /**
+   * THE CREDENTIAL THAT OPENED THE DOOR IS THE DEVICE THIS MINTS FOR (H1).
+   *
+   * A device token says who is asking. The body says which device the token
+   * is to be minted for. Nothing bound them, so an admitted phone could sign
+   * a perfect proof for a key it had just made and walk away with a second
+   * credential under an id the account has never held — and an id the account
+   * has never held is an id no revoke can ever name, so `prune` could not
+   * reach it and the ghost outlived the phone it came from.
+   *
+   * So a device may re-mint its OWN token and nothing else. Admitting a NEW
+   * device stays the root token's job, which is the one credential the owner
+   * can rotate — and the one they are told about.
+   *
+   * 403 rather than 401: the credential is good, and what it asked for is not
+   * its to ask. Saying 401 would send a phone to re-pair over a refusal that
+   * re-pairing does not change.
+   */
+  if (opened.kind === 'device' && reading.deviceId !== opened.deviceId) {
+    deps.log?.('refused an admission for a device other than the one that asked')
+    respondJson(response, 403, {
+      error: 'This device may take a new token for itself, not for another device.'
+    })
+    return true
+  }
   const name = safeDeviceName(reading.name)
   let minted: ReturnType<AdmittedDeviceStore['admit']>
   try {
@@ -233,7 +258,7 @@ const admit = async (
     respondJson(response, 503, { error: 'this Mac could not record the admission' })
     return true
   }
-  deps.log?.(`admitted ${minted.device.name ?? minted.device.deviceId} (${opened} token)`)
+  deps.log?.(`admitted ${minted.device.name ?? minted.device.deviceId} (${opened.kind} token)`)
   respondJson(response, 200, {
     deviceId: minted.device.deviceId,
     ...(minted.device.name ? { name: minted.device.name } : {}),

@@ -16,12 +16,12 @@ const PHONE_A = 'aaaaaaaa-1111-8222-8333-444444444444'
 const PHONE_B = 'bbbbbbbb-1111-8222-8333-444444444444'
 
 describe('the root token is a bootstrap credential', () => {
-  const never = (): boolean => false
+  const never = (): string | null => null
 
   it('opens the admission route, and nothing else, in strict mode', () => {
     expect(
       companionCredential({ route: 'admission', presented: ROOT, rootToken: ROOT, perDevice: never, rootEverywhere: false }),
-    ).toBe('root')
+    ).toEqual({ kind: 'root' })
     expect(
       companionCredential({ route: 'other', presented: ROOT, rootToken: ROOT, perDevice: never, rootEverywhere: false }),
     ).toBeNull()
@@ -30,7 +30,7 @@ describe('the root token is a bootstrap credential', () => {
   it('still opens every route while the companion has not bootstrapped (rootEverywhere)', () => {
     expect(
       companionCredential({ route: 'other', presented: ROOT, rootToken: ROOT, perDevice: never, rootEverywhere: true }),
-    ).toBe('root')
+    ).toEqual({ kind: 'root' })
   })
 
   it('refuses a near miss, an empty credential and a server with no token yet', () => {
@@ -56,8 +56,8 @@ describe('a per-device token opens everything, and only for its phone', () => {
     for (const route of ['admission', 'other'] as const) {
       for (const rootEverywhere of [true, false]) {
         expect(
-          companionCredential({ route, presented: token, rootToken: ROOT, perDevice: store.accepts, rootEverywhere }),
-        ).toBe('device')
+          companionCredential({ route, presented: token, rootToken: ROOT, perDevice: store.deviceFor, rootEverywhere }),
+        ).toEqual({ kind: 'device', deviceId: PHONE_A })
       }
     }
   })
@@ -67,7 +67,7 @@ describe('a per-device token opens everything, and only for its phone', () => {
     const a = store.admit({ deviceId: PHONE_A, name: 'iPhone' }).token
     const b = store.admit({ deviceId: PHONE_B, name: 'iPad' }).token
     const gate = (presented: string): boolean =>
-      companionAccepted({ route: 'other', presented, rootToken: ROOT, perDevice: store.accepts, rootEverywhere: false })
+      companionAccepted({ route: 'other', presented, rootToken: ROOT, perDevice: store.deviceFor, rootEverywhere: false })
     expect(gate(a)).toBe(true)
     expect(gate(b)).toBe(true)
     // What V3-05 does within a minute of a revoke at the registry.
@@ -82,7 +82,7 @@ describe('a per-device token opens everything, and only for its phone', () => {
     const a = store.admit({ deviceId: PHONE_A }).token
     expect(store.forget(PHONE_A)).toBe(true)
     expect(
-      companionAccepted({ route: 'other', presented: a, rootToken: ROOT, perDevice: store.accepts, rootEverywhere: true }),
+      companionAccepted({ route: 'other', presented: a, rootToken: ROOT, perDevice: store.deviceFor, rootEverywhere: true }),
     ).toBe(false)
   })
 
@@ -93,15 +93,15 @@ describe('a per-device token opens everything, and only for its phone', () => {
     // The admitted phone: still in, on the new root, in either mode.
     for (const rootEverywhere of [true, false]) {
       expect(
-        companionAccepted({ route: 'other', presented: a, rootToken: rotated, perDevice: store.accepts, rootEverywhere }),
+        companionAccepted({ route: 'other', presented: a, rootToken: rotated, perDevice: store.deviceFor, rootEverywhere }),
       ).toBe(true)
     }
     // A phone still holding the OLD root: out, as rotation has always meant.
     expect(
-      companionAccepted({ route: 'other', presented: ROOT, rootToken: rotated, perDevice: store.accepts, rootEverywhere: true }),
+      companionAccepted({ route: 'other', presented: ROOT, rootToken: rotated, perDevice: store.deviceFor, rootEverywhere: true }),
     ).toBe(false)
     expect(
-      companionAccepted({ route: 'admission', presented: ROOT, rootToken: rotated, perDevice: store.accepts, rootEverywhere: true }),
+      companionAccepted({ route: 'admission', presented: ROOT, rootToken: rotated, perDevice: store.deviceFor, rootEverywhere: true }),
     ).toBe(false)
   })
 })

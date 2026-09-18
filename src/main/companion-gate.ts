@@ -45,14 +45,33 @@ export interface CompanionGateInput {
   readonly presented: string | null
   /** The Mac's root pairing token; null before the server has minted one. */
   readonly rootToken: string | null
-  /** The per-device door: admitted-devices.accepts. */
-  readonly perDevice: (candidate: string) => boolean
+  /**
+   * The per-device door: `admitted-devices.deviceFor` — the device this
+   * credential belongs to, or null.
+   *
+   * IT NAMES THE DEVICE RATHER THAN ANSWERING YES (H1). A boolean says a
+   * phone may come in and not WHICH phone came in, and the admission route
+   * then took the device id from the request BODY — so an admitted phone
+   * could mint a second credential for a key it invented, under an id no
+   * revoke could ever name. The opener has a name here, and the route makes
+   * the body match it.
+   */
+  readonly perDevice: (candidate: string) => string | null
   /** Compatibility: the root token still opens every route. See above. */
   readonly rootEverywhere: boolean
 }
 
-/** What opened the door, or null for a refusal. Never the token itself. */
-export type CompanionCredential = 'root' | 'device' | null
+/**
+ * What opened the door, or null for a refusal. Never the token itself.
+ *
+ * The device arm CARRIES ITS DEVICE. Everything that mints in a device's name
+ * has to be able to say whose name it is minting in, and a caller that has to
+ * look the id up a second way is a caller that can look up a different one.
+ */
+export type CompanionCredential =
+  | { readonly kind: 'root' }
+  | { readonly kind: 'device'; readonly deviceId: string }
+  | null
 
 const sameToken = (candidate: string, token: string): boolean => {
   const a = Buffer.from(candidate)
@@ -67,9 +86,10 @@ export const companionCredential = (input: CompanionGateInput): CompanionCredent
   // one string, and the per-device door reads a file. Neither result depends
   // on the order: a per-device token is never equal to the root.
   if (rootToken !== null && sameToken(presented, rootToken)) {
-    return input.route === 'admission' || input.rootEverywhere ? 'root' : null
+    return input.route === 'admission' || input.rootEverywhere ? { kind: 'root' } : null
   }
-  return input.perDevice(presented) ? 'device' : null
+  const deviceId = input.perDevice(presented)
+  return deviceId === null ? null : { kind: 'device', deviceId }
 }
 
 /** The yes/no the gates actually ask. */
