@@ -760,7 +760,23 @@ function companionGate(
    * having started a server must not be refused for a singleton it never
    * primed. The wall token one field below already reads this way.
    */
-  root: string | null = activePairingToken
+  root: string | null = activePairingToken,
+  /**
+   * WHETHER THE ROOT STILL OPENS THIS ROUTE, for THIS request.
+   *
+   * Same argument as the token above, and the same defect it fixes: the mode
+   * was a module `let` that only `startMobileServer` could set, so the world
+   * where the root has been demoted was unreachable through `handle` and had
+   * no route-level coverage at all — which is why every revocation assertion
+   * in this lane was against the store or the pure gate (V3-05's review, and
+   * the cut-2 review after it).
+   *
+   * It cannot be used to LOOSEN anything: the request path passes
+   * `perDeviceOnlyFor`, which answers the deps' own function and otherwise
+   * the mode the server was started in. Omitting the field gets you the
+   * server's mode, never the open door.
+   */
+  everywhere: boolean = rootEverywhere
 ): boolean {
   if (root === null) return false
   return companionAccepted({
@@ -768,8 +784,16 @@ function companionGate(
     presented,
     rootToken: root,
     perDevice,
-    rootEverywhere
+    rootEverywhere: everywhere
   })
+}
+
+/**
+ * Strict for THIS request: what the deps say, else the mode the server was
+ * started in. Never looser than the server — see `companionGate` above.
+ */
+function perDeviceOnlyFor(deps: MobileServerDeps): boolean {
+  return deps.perDeviceOnly?.() ?? !rootEverywhere
 }
 
 /** The credential a paired phone holds; null before the server starts. */
@@ -1065,7 +1089,14 @@ function recordBridgeDevice(
   if (!device || !admitted) return
   // The same gate as every route: in strict mode a root token names nothing
   // here either, because a sighting is a fact about an AUTHORISED request.
-  if (!companionGate(presentedToken(request, url), (candidate) => admitted.deviceFor(candidate)))
+  if (
+    !companionGate(
+      presentedToken(request, url),
+      (candidate) => admitted.deviceFor(candidate),
+      activePairingToken ?? deps.pairingToken ?? null,
+      !perDeviceOnlyFor(deps)
+    )
+  )
     return
   try {
     admitted.record(device)
@@ -1296,7 +1327,8 @@ export async function handle(
       companionGate(
         presented,
         (candidate) => deps.identity?.admitted.deviceFor(candidate) ?? null,
-        activePairingToken ?? deps.pairingToken ?? null
+        activePairingToken ?? deps.pairingToken ?? null,
+        !perDeviceOnlyFor(deps)
       ),
     wallToken: activeWallToken ?? deps.wallToken
   }
