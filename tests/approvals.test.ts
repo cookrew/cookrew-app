@@ -204,11 +204,11 @@ describe('the decision', () => {
     await h.approvals.refresh()
     h.calls.length = 0
 
-    const result = await h.approvals.decide('req-1', 'approve')
+    const result = await h.approvals.decide('req-1', 'approve', '47')
     expect(result).toEqual({ ok: true, value: undefined })
     expect(h.calls[0].path).toBe('/v2/me/approvals/req-1')
     expect(h.calls[0].init?.method).toBe('POST')
-    expect(h.calls[0].init?.body).toBe('{"decision":"approve"}')
+    expect(h.calls[0].init?.body).toBe('{"decision":"approve","match":"47"}')
     expect(h.calls[0].init?.parse).toBe(false)
     // The queue is RE-READ, not edited locally: "not me" cancels every other
     // waiting request too, so the registry's list is the only true one.
@@ -220,6 +220,34 @@ describe('the decision', () => {
     h.setAnswer(() => ({ ok: true, value: [] }))
     await h.approvals.decide('req-9', 'not-me')
     expect(h.calls[0].init?.body).toBe('{"decision":"not-me"}')
+  })
+
+  // V3-09 gave the approve rung a number and V3-20c/H6 found nothing sending
+  // it: the desktop posted {decision} alone, so every tap was a miss and the
+  // third deleted the owner's own pending sign-in.
+  it('sends the number with an approve, and only with an approve', async () => {
+    const h = harness()
+    h.setAnswer(() => ({ ok: true, value: [] }))
+    await h.approvals.decide('req-1', 'approve', '31')
+    expect(h.calls[0].init?.body).toBe('{"decision":"approve","match":"31"}')
+
+    // Deny and not-me need no number and must never carry one — a body with a
+    // match on a deny would be a second shape for the registry to read.
+    h.calls.length = 0
+    await h.approvals.decide('req-1', 'deny', '31')
+    expect(h.calls[0].init?.body).toBe('{"decision":"deny"}')
+    h.calls.length = 0
+    await h.approvals.decide('req-1', 'not-me', '31')
+    expect(h.calls[0].init?.body).toBe('{"decision":"not-me"}')
+  })
+
+  it('sends an approve with no number as the bare decision, not as match ""', async () => {
+    // The gate in the card stops this from happening; if a caller gets past
+    // it the registry must see the same body it always refused, not a new one.
+    const h = harness()
+    h.setAnswer(() => ({ ok: true, value: [] }))
+    await h.approvals.decide('req-1', 'approve', '')
+    expect(h.calls[0].init?.body).toBe('{"decision":"approve"}')
   })
 
   it('escapes an id rather than pasting it into the path', async () => {

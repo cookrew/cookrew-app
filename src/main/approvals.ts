@@ -131,11 +131,25 @@ export class Approvals {
    * locally, because "not me" changes more than this one row: it ends every
    * other session, which cancels every other waiting request too.
    */
-  async decide(id: string, decision: ApprovalDecision): Promise<AccountResult<void>> {
+  async decide(
+    id: string,
+    decision: ApprovalDecision,
+    /**
+     * The number the asking device is showing, for an approve (V3-09).
+     * The registry refuses an approve without it and spends one of three
+     * tries doing so, so a caller that cannot read the number must not send
+     * one; deny and not-me carry nothing and need nothing.
+     */
+    match?: string,
+  ): Promise<AccountResult<void>> {
     if (id.length === 0) return { ok: false, reason: 'unknown' }
+    const body =
+      decision === 'approve' && match !== undefined && match !== ''
+        ? { decision, match }
+        : { decision }
     const result = await this.deps.accounts.call<void>(
       `/v2/me/approvals/${encodeURIComponent(id)}`,
-      { method: 'POST', body: JSON.stringify({ decision }), parse: false },
+      { method: 'POST', body: JSON.stringify(body), parse: false },
     )
     if (!result.ok) return result
     await this.refresh()

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { AccountStatus } from '../../../shared/account-v2'
 import type { ApprovalDecision, ApprovalRequest } from '../../../shared/account-approvals'
 import { cookrew } from '../api'
-import { approvalView, refusalSentence } from './account-store'
+import { approvalView, matchGate, refusalSentence } from './account-store'
 import { DOING, problemSentence } from './problem'
 import '../grant-surface.css'
 
@@ -29,34 +29,55 @@ import '../grant-surface.css'
 /** The sentence ticks in seconds, so it is re-read once a second. */
 const TICK_MS = 1_000
 
-function Card({
+export function ApprovalRow({
   request,
   username,
   hasSecondFactor,
   now,
+  match,
+  onMatch,
   onStatus,
 }: {
   request: ApprovalRequest
   username: string
   hasSecondFactor: boolean
   now: number
+  /** The digits typed so far. Owned by the card, so one row cannot read another's. */
+  match: string
+  onMatch: (value: string) => void
   onStatus: (next: AccountStatus) => void
 }): React.JSX.Element {
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const view = approvalView(request, { username, hasSecondFactor, now })
+  const gate = matchGate(match)
 
   const decide = (decision: ApprovalDecision): void => {
     const call = cookrew().accountDecide
     if (!call || busy) return
+    // Only APPROVE carries the number, and only APPROVE waits for it. The
+    // registry reads `match` on an approve and ignores it otherwise.
+    if (decision === 'approve' && gate.value === null) return
     setBusy(true)
     setError(null)
-    void call({ id: request.id, decision })
+    void call({
+      id: request.id,
+      decision,
+      ...(decision === 'approve' && gate.value !== null ? { match: gate.value } : {}),
+    })
       .then((result) => {
         setBusy(false)
-        if (result.ok) onStatus(result.value)
-        else setError(refusalSentence(result.reason, result.message, username))
+        if (result.ok) {
+          onStatus(result.value)
+          return
+        }
+        // A REFUSED NUMBER EMPTIES THE FIELD. The registry spends a try on
+        // every approve and voids the pending on the third, so the next
+        // attempt has to be a fresh reading of the other screen rather than a
+        // second tap on the same wrong digits.
+        onMatch('')
+        setError(refusalSentence(result.reason, result.message, username))
       })
       .catch((err: unknown) => {
         setBusy(false)
@@ -73,8 +94,25 @@ function Card({
           {error}
         </p>
       )}
+      <label className="gs-label" htmlFor={`cr-acct-match-${request.id}`}>
+        {gate.label}
+      </label>
+      <input
+        id={`cr-acct-match-${request.id}`}
+        className="gs-input cr-acct-matchfield"
+        inputMode="numeric"
+        autoComplete="off"
+        maxLength={2}
+        value={gate.typed}
+        onChange={(e) => onMatch(e.target.value)}
+        onKeyDown={(e) => e.key === 'Enter' && decide('approve')}
+      />
       <div className="gs-sheet-foot cr-acct-askfoot">
-        <button className="gs-primary" disabled={busy} onClick={() => decide('approve')}>
+        <button
+          className="gs-primary"
+          disabled={busy || !gate.canApprove}
+          onClick={() => decide('approve')}
+        >
           APPROVE
         </button>
         <button className="gs-revoke" disabled={busy} onClick={() => decide('deny')}>
@@ -114,6 +152,9 @@ export function ApprovalCard({
   now?: number
 }): React.JSX.Element | null {
   const [tick, setTick] = useState(now ?? Date.now())
+  // Per request id, so two cards waiting at once cannot answer with each
+  // other's number — and so a row that is answered takes its digits with it.
+  const [matches, setMatches] = useState<Record<string, string>>({})
 
   useEffect(() => {
     if (now !== undefined || requests.length === 0) return
@@ -130,12 +171,14 @@ export function ApprovalCard({
   return (
     <>
       {ordered.map((request) => (
-        <Card
+        <ApprovalRow
           key={request.id}
           request={request}
           username={username}
           hasSecondFactor={hasSecondFactor}
           now={now ?? tick}
+          match={matches[request.id] ?? ''}
+          onMatch={(value) => setMatches((prior) => ({ ...prior, [request.id]: value }))}
           onStatus={onStatus}
         />
       ))}
