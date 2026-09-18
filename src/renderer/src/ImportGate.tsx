@@ -2,26 +2,40 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { cookrew, type ServeFacePreview, type ServePhase, type ServeRail } from './api'
 import { GateSheet, type PayFault, type WalletChoice } from './GateSheet'
 import type { GatePhase } from '../../shared/gate-walk'
+import type { CanvasNode } from '../../shared/model'
 import { MKT_PAY, fillCopy } from '../../shared/marketplace-copy'
+import { requestAccountSheet } from './account/open-request'
+import {
+  BUDGET_RETRY_MS,
+  deniedVarsFor,
+  remedyFor,
+  walkPricing,
+  type GateFacts
+} from './import-gate-remedy'
 
 /**
- * THE PAID IMPORT, through the one Gate Sheet.
+ * THE IMPORT, through the one Gate Sheet.
  *
- * A served team that charges is met the same way every other gated thing in
- * Cookrew is met: identify → pay → open, painted by `gateWalk`. This component
- * is the ceremony the sheet deliberately does not host — it asks the door what
- * it wants, offers the rails the door actually advertises, carries out the
+ * A served team is met the same way every other gated thing in Cookrew is met:
+ * identify → seat → pay → open, painted by `gateWalk`. This component is the
+ * ceremony the sheet deliberately does not host — it asks the door what it
+ * wants, offers the rails the door actually advertises, carries out the
  * payment on the chosen one, and re-renders the sheet with what came back.
  *
- * WHICH DOOR. The walk is the INSTALL door, not the call door. R5 says a call
- * never takes money inline, and it does not: the 402 fires at session START,
- * which is this moment — acquiring the session — and never again inside the
- * conversation that follows. The card placed at the end opens its line into a
- * session already paid for, which is why it never meets money.
+ * WHICH DOOR — main decides (identity v3, G1/G3). A LISTED team is entered as
+ * the account: with no account on this Mac the door answers `identify`, the
+ * SIGN IN primary opens the account sheet IN PLACE, and the gate re-runs
+ * itself when the account changes — the sheet never closes to sign in. An
+ * unlisted door is the DIRECT walk, this Mac's own key, and says so.
  *
  * WHERE THE MONEY IS HANDLED. Not here. The renderer names a door and a rail;
  * the main process holds the Bearer, signs the transfer authorization with the
  * wallet this device provisioned, and talks to Stripe. A key never crosses IPC.
+ *
+ * EVERY REFUSAL GOES SOMEWHERE (G2/G4). A 403's button used to close the sheet
+ * while naming a destination. Now `remedyFor` says what it does — the team's
+ * page in a browser card, or asking again — and a 429 asks again on its own
+ * in fifteen minutes, as its sentence promises.
  */
 
 const POLL_MS = 3000
@@ -38,6 +52,8 @@ function remaining(expiry: number, now: number): string | null {
 
 const shortAddress = (address: string): string =>
   `${address.slice(0, 6)}…${address.slice(-4)}`
+
+const NO_FACTS: GateFacts = { door: 'install', team: null, owner: null, account: null }
 
 export function ImportGate({
   link,
@@ -56,6 +72,7 @@ export function ImportGate({
   onDismiss: () => void
 }): React.JSX.Element {
   const [phase, setPhase] = useState<ServePhase | null>(null)
+  const [facts, setFacts] = useState<GateFacts>(NO_FACTS)
   const [wallet, setWallet] = useState<{ address: string } | null>(null)
   const [railId, setRailId] = useState<string | null>(null)
   const [busy, setBusy] = useState(true)
@@ -68,19 +85,27 @@ export function ImportGate({
     rail: 'x402' | 'stripe'
   } | null>(null)
   const polling = useRef<number | null>(null)
+  const alive = useRef(true)
 
-  // Ask the door what it wants. This signs in as the account the card will
+  // Ask the door what it wants. Main signs in as the account the card will
   // use, so the session paid for here is the session it opens later.
-  useEffect(() => {
-    let alive = true
+  const runGate = useCallback((): void => {
+    setBusy(true)
+    setFault(null)
     void cookrew()
       .serveGate(link)
       .then((result) => {
-        if (!alive) return
+        if (!alive.current) return
         setBusy(false)
         if (result.ok) {
           setPhase(result.phase)
           setWallet(result.wallet)
+          setFacts({
+            door: result.door,
+            team: result.team ?? null,
+            owner: result.owner ?? null,
+            account: result.account ?? null
+          })
         } else {
           setPhase({ kind: 'error', status: 0 })
           setFault({
@@ -91,16 +116,39 @@ export function ImportGate({
         }
       })
       .catch(() => {
-        if (alive) {
+        if (alive.current) {
           setBusy(false)
           setPhase({ kind: 'error', status: 0 })
         }
       })
+  }, [link])
+
+  useEffect(() => {
+    alive.current = true
+    runGate()
     return () => {
-      alive = false
+      alive.current = false
       if (polling.current !== null) window.clearInterval(polling.current)
     }
-  }, [link])
+  }, [runGate])
+
+  // THE WALK RESUMES ON ITS OWN. The person signed in — here, in the header,
+  // on the lock screen; main says the account changed — and a listed door is
+  // asked again without the sheet ever having closed.
+  useEffect(() => {
+    const off = cookrew().onAccountChanged?.(() => {
+      if (facts.door === 'install') runGate()
+    })
+    return off
+  }, [facts.door, runGate])
+
+  // A 429 is the owner's lending limit, which passes with time. The sentence
+  // says the sheet will try again in fifteen minutes, so it does.
+  useEffect(() => {
+    if (phase?.kind !== 'denied' || phase.reason !== 'budget') return
+    const timer = window.setTimeout(runGate, BUDGET_RETRY_MS)
+    return () => window.clearTimeout(timer)
+  }, [phase, runGate])
 
   // The quote's own clock. The sheet only quotes what it is given, so the
   // countdown is ticked here.
@@ -180,7 +228,7 @@ export function ImportGate({
           .catch(() => undefined)
       }, POLL_MS)
     },
-    [link, applyPhase]
+    [link, applyPhase, selected]
   )
 
   const pay = useCallback((): void => {
@@ -236,9 +284,45 @@ export function ImportGate({
       .catch(() => setBusy(false))
   }, [selected, link, wallet, waitForCard, applyPhase])
 
+  /**
+   * The identify step's primary. On the install walk it opens the account
+   * sheet over this one; the walk resumes through `onAccountChanged`. On the
+   * direct walk main already offered the key, so CONNECT is asking again.
+   */
+  const identify = useCallback((): void => {
+    if (facts.door === 'direct' || !requestAccountSheet()) runGate()
+  }, [facts.door, runGate])
+
+  /** A refusal's one forward action — it goes where its label says. */
+  const remedy = useCallback(
+    (reason: string): void => {
+      const act = remedyFor(reason, facts.team)
+      if (act.kind === 'retry') {
+        runGate()
+        return
+      }
+      // The team's page, on the canvas beside this sheet rather than in a
+      // browser the person then has to find their way back from.
+      const card: CanvasNode = {
+        kind: 'browser',
+        id: crypto.randomUUID(),
+        name: 'Browser',
+        url: act.url,
+        position: { x: 160, y: 120 },
+        size: { width: 720, height: 560 }
+      }
+      void cookrew()
+        .addNode(card)
+        .catch(() => undefined)
+    },
+    [facts.team, runGate]
+  )
+
   const gatePhase: GatePhase = (() => {
     if (phase === null) return { kind: 'identify' }
     switch (phase.kind) {
+      case 'identify':
+        return { kind: 'identify' }
       case 'open':
         return { kind: 'open' }
       case 'pay':
@@ -256,43 +340,32 @@ export function ImportGate({
     }
   })()
 
+  const pricing = walkPricing(face, selected)
   const priceLine =
     selected !== null
       ? `${selected.price} ${selected.asset} · ${fillCopy(MKT_PAY['mkt.pay.destination'], {
-          author: `@${face.slug}`
+          author: `@${facts.owner ?? face.slug}`
         })}`
       : null
+  // Who this Mac is at the door, once known — the usual cause of a refusal
+  // is being signed in as somebody else, so the banner says who.
+  const bannerLine = priceLine ?? (facts.account ? `You are @${facts.account}` : null)
 
   return (
     <GateSheet
-      scene={{
-        door: 'install',
-        phase: gatePhase,
-        pricing:
-          selected === null
-            ? null
-            : {
-                model: 'one-time',
-                terms: {
-                  price: selected.price,
-                  asset: selected.asset,
-                  chain: selected.chain,
-                  author: `@${face.slug}`,
-                  expiry: selected.expiry
-                }
-              }
-      }}
+      scene={{ door: facts.door, phase: gatePhase, pricing }}
       title={face.name}
       version={`V${face.version}`}
       agentCount={face.agents}
-      bannerLine={priceLine}
+      bannerLine={bannerLine}
       wallets={wallets}
       selectedWallet={selected?.rail ?? null}
       quoteRemaining={selected ? remaining(selected.expiry, now) : null}
       busy={busy}
       fault={fault}
-      deniedVars={{ presetName: face.name, author: `@${face.slug}` }}
+      deniedVars={deniedVarsFor(face, facts)}
       onDismiss={onDismiss}
+      onIdentify={identify}
       onSelectWallet={(id) => {
         setRailId(id)
         setFault(null)
@@ -302,7 +375,7 @@ export function ImportGate({
       // because a session was already running is not a purchase, and a card
       // that claimed one would be inventing a receipt.
       onServe={() => onOpen(settledOn ?? undefined)}
-      onRemedy={onDismiss}
+      onRemedy={remedy}
     />
   )
 }

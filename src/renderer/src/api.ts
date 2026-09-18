@@ -117,6 +117,8 @@ export type ServeRail =
 
 /** What a door is saying, in the gate sheet's vocabulary. */
 export type ServePhase =
+  /** No account on this Mac: a listed door cannot be asked until there is one. */
+  | { kind: 'identify' }
   | { kind: 'open' }
   | { kind: 'pay'; rails: ServeRail[] }
   | { kind: 'denied'; reason: string; retryable: boolean }
@@ -224,11 +226,28 @@ export interface CookrewApi {
       }
     | { ok: false; reason: string }
   >;
-  /** Sign in to the door and ask what it wants. The Bearer stays in main. */
+  /**
+   * Ask the door what it wants. The Bearer stays in main. `door` says which
+   * walk main took: `install` (a listed team, entered as the account — the
+   * team, its owner and this Mac's account come with it) or `direct` (an
+   * unlisted door, this Mac's own key).
+   */
   serveGate: (
     link: string,
   ) => Promise<
-    | { ok: true; phase: ServePhase; wallet: { address: string } | null }
+    | {
+        ok: true;
+        door: 'install' | 'direct';
+        phase: ServePhase;
+        wallet: { address: string } | null;
+        /** The published `@owner/team`, on the install walk. */
+        team?: string;
+        /** The owner's handle, no `@`, on the install walk. */
+        owner?: string;
+        /** The username this Mac is signed in as, when known. */
+        account?: string | null;
+        seat?: string | null;
+      }
     | { ok: false; reason: string; detail?: string }
   >;
   /** Start a card payment: opens hosted Checkout in the real browser. */

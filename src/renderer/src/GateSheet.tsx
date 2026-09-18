@@ -5,25 +5,31 @@ import {
   type WalkPricing,
   type WalkStep
 } from '../../shared/gate-walk'
-import { MKT_AUTH, MKT_ENROL, MKT_GATE, MKT_PAY, fillCopy } from '../../shared/marketplace-copy'
-import { deniedBand, identifyBand, openBand, payBand, type BandCopy } from './gate-sheet-copy'
+import { MKT_AUTH, MKT_GATE, MKT_PAY, fillCopy } from '../../shared/marketplace-copy'
+import {
+  deniedBand,
+  identifyBand,
+  openBand,
+  payBand,
+  seatBand,
+  type BandCopy
+} from './gate-sheet-copy'
 import './gate-sheet.css'
 
 /**
- * THE GATE SHEET (R28) — one surface answers the gate: 401 identify · 402 pay ·
- * open. It renders `gateWalk(scene)` and nothing else, so what the user sees is
- * a picture of `decideGate`'s order: a step the gate never demands is a dashed
- * tick, never hidden, and a cleared step collapses to a receipt band so the
- * sheet gets shorter as it succeeds.
+ * THE GATE SHEET (R28) — one surface answers the gate: 401 identify · 403 seat ·
+ * 402 pay · open. It renders `gateWalk(scene)` and nothing else, so what the
+ * user sees is a picture of `decideGate`'s order: a step the gate never demands
+ * is a dashed tick, never hidden, and a cleared step collapses to a receipt band
+ * so the sheet gets shorter as it succeeds.
  *
- * WHAT THIS COMPONENT DOES NOT DO. It mounts no ceremony. The passkey, the
- * wallet transfer and the six-word enrolment happen in their own machinery
- * (Forge's payment client, the accounts service, the grant surface); this sheet
- * calls back to them and paints their result. Keeping the ceremonies out is
- * what lets the sheet be a pure projection of the gate, testable without a
- * wallet, a passkey or a network.
+ * WHAT THIS COMPONENT DOES NOT DO. It mounts no ceremony. The account sheet,
+ * the wallet transfer and the browser card a refusal opens happen in their own
+ * machinery; this sheet calls back to them and paints their result. Keeping the
+ * ceremonies out is what lets the sheet be a pure projection of the gate,
+ * testable without an account, a wallet or a network.
  *
- * THE PRIMARY IS A POINTER ACT. Enrolment and payment are the two irreversible
+ * THE PRIMARY IS A POINTER ACT. Signing in and paying are the irreversible
  * moments, so — as the grant sheet already rules — the primary is never focused
  * on open and Enter never fires it. Escape closes; nothing else commits.
  */
@@ -50,10 +56,8 @@ export interface GateSheetProps {
   version?: string | null
   /** Head chip — agent count, when known. */
   agentCount?: number | null
-  /** The amber banner line: a price line (install) or a grant line (call). */
+  /** The amber banner line: a price line, or who this Mac is signed in as. */
   bannerLine?: string | null
-  /** The six words, for the call door's live identify step. */
-  words?: readonly string[] | null
   /** Wallets discovered on this device, for the pay step. */
   wallets?: readonly WalletChoice[]
   selectedWallet?: string | null
@@ -63,16 +67,19 @@ export interface GateSheetProps {
   fault?: PayFault | null
   /** Where a 403 points the buyer (author page, top-up, seat purchase). */
   deniedRemedy?: string
-  /** The facts a refusal's copy needs — presetName, amount, seat counts, etc. */
+  /**
+   * The facts a refusal's copy needs — presetName, author, and for the seat
+   * rung the two people it names (handle, owner), the team and the price.
+   */
   deniedVars?: Readonly<Record<string, string | number>>
   onDismiss: () => void
-  /** Sign in (install) or "I read these aloud · connect" (call). */
+  /** Sign in (install: opens the account sheet in place) or connect (direct). */
   onIdentify?: () => void
   onSelectWallet?: (id: string) => void
   onPay?: () => void
   /** Acknowledge the served state — DONE. */
   onServe?: () => void
-  /** The one forward action on a 403. */
+  /** The one forward action on a 403 — including the seat rung's BUY. */
   onRemedy?: (reason: string) => void
 }
 
@@ -81,6 +88,8 @@ function bandClass(step: WalkStep): string {
   switch (step.band) {
     case '401':
       return 'gate-401'
+    case '403-seat':
+      return 'gate-403 seat'
     case '402':
       return 'gate-402'
     case 'open':
@@ -91,11 +100,18 @@ function bandClass(step: WalkStep): string {
 }
 
 /** Resolve one step's band copy from the door and its cleared/live state. */
-function stepBand(step: WalkStep, door: GateScene['door'], pricing: WalkPricing | null): BandCopy | null {
+function stepBand(
+  step: WalkStep,
+  door: GateScene['door'],
+  pricing: WalkPricing | null,
+  deniedVars: Readonly<Record<string, string | number>>
+): BandCopy | null {
   if (step.band === null) return null
   switch (step.id) {
     case 'identify':
       return identifyBand(door, step.state === 'done')
+    case 'seat':
+      return seatBand(step.state === 'done', deniedVars)
     case 'pay':
       return pricing ? payBand(pricing) : null
     case 'open':
@@ -111,20 +127,6 @@ function Band({ variant, copy }: { variant: string; copy: BandCopy }): React.JSX
         <div className="said">{copy.said}</div>
         <div className="why">{copy.why}</div>
       </div>
-    </div>
-  )
-}
-
-/** The six words, large, because two humans read them aloud (R-enrol). */
-function SixWords({ words }: { words: readonly string[] }): React.JSX.Element {
-  return (
-    <div className="gk-sec">
-      <div className="gk-six">
-        {words.map((w, i) => (
-          <span key={`${w}-${i}`}>{w}</span>
-        ))}
-      </div>
-      <p className="gk-fine">{MKT_ENROL['mkt.enrol.body']}</p>
     </div>
   )
 }
@@ -216,9 +218,15 @@ function primaryFor(
   if (!active) return null
   switch (active.id) {
     case 'identify':
-      return door === 'call'
-        ? { label: MKT_ENROL['mkt.enrol.action.caller'], onClick: props.onIdentify }
+      return door === 'direct'
+        ? { label: MKT_AUTH['mkt.auth.action.direct'], onClick: props.onIdentify }
         : { label: MKT_AUTH['mkt.auth.action'], onClick: props.onIdentify }
+    case 'seat':
+      // Cut 1: BUY only. ASK joins as a request in the owner's queue (V3-11).
+      return {
+        label: seatBand(false, props.deniedVars ?? {}).action,
+        onClick: props.onRemedy ? () => props.onRemedy?.('no_seat') : undefined
+      }
     case 'pay':
       return pricing
         ? {
@@ -243,7 +251,6 @@ export function GateSheet(props: GateSheetProps): React.JSX.Element {
     version = null,
     agentCount = null,
     bannerLine = null,
-    words = null,
     wallets = [],
     selectedWallet = null,
     quoteRemaining = null,
@@ -314,9 +321,10 @@ export function GateSheet(props: GateSheetProps): React.JSX.Element {
         <button
           type="button"
           className={`cr-btn ${walk.band === '403-credit' ? 'primary' : ''}`}
+          disabled={busy}
           onClick={() => onRemedy?.(walk.reason)}
         >
-          {band.action}
+          {busy ? '…' : band.action}
         </button>
       </footer>
     )
@@ -362,11 +370,10 @@ export function GateSheet(props: GateSheetProps): React.JSX.Element {
       </div>
       <div className="gk-main">
         {steps.map((s) => {
-          const copy = stepBand(s, door, pricing)
+          const copy = stepBand(s, door, pricing, deniedVars)
           return copy ? <Band key={s.id} variant={bandClass(s)} copy={copy} /> : null
         })}
 
-        {active?.id === 'identify' && door === 'call' && words && <SixWords words={words} />}
         {active?.id === 'identify' && door === 'install' && (
           <p className="tf-hint">{MKT_AUTH['mkt.auth.custody']}</p>
         )}
@@ -387,7 +394,7 @@ export function GateSheet(props: GateSheetProps): React.JSX.Element {
             <div className="r2">{MKT_GATE['mkt.gate.pin.why']}</div>
           </div>
         )}
-        {door === 'call' && active?.id === 'identify' && (
+        {door === 'direct' && active?.id === 'identify' && (
           <p className="gk-fine">{MKT_GATE['mkt.gate.warming']}</p>
         )}
         {fault && <FaultStrip fault={fault} />}

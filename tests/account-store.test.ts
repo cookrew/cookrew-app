@@ -344,6 +344,8 @@ describe('the sign-out confirmation says what leaves, what stays, what goes quie
 
 describe('the revoke confirmation names the device and its consequence', () => {
   it('is one sentence, in the table’s words', () => {
+    // The Wi-Fi caveat is gone because the thing it admitted to is fixed:
+    // a revoked device now loses LAN admission on every Mac too (V3-05).
     expect(revokeSentence('iPhone')).toBe(
       "The iPhone stops opening this account within a minute — here, at every door, and on every Mac's Wi-Fi. Anything it asked for is dropped.",
     )

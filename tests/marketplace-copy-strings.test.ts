@@ -90,13 +90,14 @@ describe('every protocol moment has words', () => {
     }
   })
   it('MKT_ALL carries every group — a group added but not wired makes the leak test vacuous', async () => {
-    // This exists because it already happened: MKT_ENROL and MKT_SAVE were
-    // written, the spread into MKT_ALL silently failed to apply, and the leak
-    // assertion below passed over strings it was never given. A coverage check
-    // is the only thing that catches a test passing for the wrong reason.
+    // This exists because it already happened: the (since retired) MKT_ENROL
+    // and MKT_SAVE were written, the spread into MKT_ALL silently failed to
+    // apply, and the leak assertion below passed over strings it was never
+    // given. A coverage check is the only thing that catches a test passing
+    // for the wrong reason.
     const mod = await import('../src/shared/marketplace-copy')
     const groups = [mod.MKT_AUTH, mod.MKT_PAY, mod.MKT_DENIED_REASONS, mod.MKT_BLOCKED,
-                    mod.MKT_EXPORT, mod.MKT_ENROL, mod.MKT_SAVE, mod.MKT_INSTALL_PRICE,
+                    mod.MKT_EXPORT, mod.MKT_SAVE, mod.MKT_INSTALL_PRICE,
                     mod.MKT_TEMPLATE, mod.MKT_SERVE, mod.MKT_SESSIONS, mod.MKT_SVC,
                     mod.MKT_CHIP, mod.MKT_GATE]
     for (const group of groups) {
@@ -115,11 +116,12 @@ describe('every protocol moment has words', () => {
     expect(identityVocabularyLeaks(MKT_ALL)).toEqual([])
   })
 
-  it('the enrolment ceremony never mentions an account', async () => {
-    const { MKT_ENROL } = await import('../src/shared/marketplace-copy')
-    for (const [id, value] of Object.entries(MKT_ENROL)) {
-      expect(value.toLowerCase(), id).not.toMatch(/\baccount\b|\bsign in\b/)
-    }
+  it('the six-word ceremony is gone from the deck (identity v3, G5)', async () => {
+    // The call door had no mount; its strings left with it. A ceremony id
+    // coming back would mean a surface is dressing a key in read-aloud words.
+    const mod = await import('../src/shared/marketplace-copy')
+    expect('MKT_ENROL' in mod).toBe(false)
+    expect(Object.keys(MKT_ALL).filter((id) => id.startsWith('mkt.enrol.'))).toEqual([])
   })
 
   it('the account door never shows a fingerprint', async () => {

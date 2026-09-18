@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  gateDoorFor,
   gateWalk,
   phaseFromGateStep,
   type GateScene,
@@ -35,62 +36,115 @@ const scene = (over: Partial<GateScene>): GateScene => ({
   ...over
 })
 
-describe('gateWalk — the install door (buy a copy)', () => {
-  it('walks identify → pay → open when the preset is priced', () => {
+describe('gateWalk — the install door (a listed team, the account)', () => {
+  it('walks identify → seat → pay → open when the team is priced', () => {
     const walk = gateWalk(scene({ pricing: PRICED, phase: { kind: 'pay' }, pin: 'V4' }))
     expect(walk.kind).toBe('walk')
     if (walk.kind !== 'walk') return
-    expect(walk.steps.map((s) => s.id)).toEqual(['identify', 'pay', 'open'])
+    expect(walk.steps.map((s) => s.id)).toEqual(['identify', 'seat', 'pay', 'open'])
     expect(stateOf(walk.steps, 'identify')?.state).toBe('done')
+    // The 402 is past the seat rung by construction: the registry seated us
+    // before the door quoted, so the seat is cleared, not skipped.
+    expect(stateOf(walk.steps, 'seat')?.state).toBe('done')
+    expect(stateOf(walk.steps, 'seat')?.band).toBe('403-seat')
     expect(stateOf(walk.steps, 'pay')?.state).toBe('now')
     expect(stateOf(walk.steps, 'open')?.state).toBe('todo')
     expect(walk.pin).toBe('V4')
   })
 
-  it('DASHES the pay step for a free preset — it never hides what it did not ask', () => {
+  it('DASHES the seat and pay steps for a free team — it never hides what it did not ask', () => {
     const walk = gateWalk(scene({ pricing: null, phase: { kind: 'open' }, pin: 'V2' }))
     if (walk.kind !== 'walk') throw new Error('expected walk')
-    // The step is still THERE — the rail always has three slots on this door —
-    // but skipped, not cleared. This is the difference the ruling is about.
+    // The steps are still THERE — the rail always has four slots on this door
+    // — but skipped, not cleared. This is the difference the ruling is about.
+    expect(stateOf(walk.steps, 'seat')?.state).toBe('skip')
+    expect(stateOf(walk.steps, 'seat')?.band).toBeNull()
     expect(stateOf(walk.steps, 'pay')?.state).toBe('skip')
     expect(stateOf(walk.steps, 'pay')?.band).toBeNull()
     expect(stateOf(walk.steps, 'identify')?.state).toBe('done')
     expect(stateOf(walk.steps, 'open')?.state).toBe('now')
   })
 
-  it('a skipped pay step is never painted as done, at any phase', () => {
+  it('a skipped step is never painted as done, at any phase', () => {
     for (const kind of ['identify', 'open'] as const) {
       const walk = gateWalk(scene({ pricing: null, phase: { kind } }))
       if (walk.kind !== 'walk') throw new Error('expected walk')
+      expect(stateOf(walk.steps, 'seat')?.state).toBe('skip')
       expect(stateOf(walk.steps, 'pay')?.state).toBe('skip')
     }
   })
+
+  it('lights the seat step on a 403 no_seat — the one refusal that stays on the rail', () => {
+    const walk = gateWalk(
+      scene({ pricing: PRICED, phase: { kind: 'denied', reason: 'no_seat', retryable: false } })
+    )
+    expect(walk.kind).toBe('walk')
+    if (walk.kind !== 'walk') return
+    expect(stateOf(walk.steps, 'identify')?.state).toBe('done')
+    expect(stateOf(walk.steps, 'seat')?.state).toBe('now')
+    expect(stateOf(walk.steps, 'seat')?.band).toBe('403-seat')
+    expect(stateOf(walk.steps, 'pay')?.state).toBe('todo')
+    expect(stateOf(walk.steps, 'open')?.state).toBe('todo')
+  })
+
+  it('the live step is never dashed, even when no price line was carried in', () => {
+    const walk = gateWalk(
+      scene({ pricing: null, phase: { kind: 'denied', reason: 'no_seat', retryable: false } })
+    )
+    if (walk.kind !== 'walk') throw new Error('expected walk')
+    expect(stateOf(walk.steps, 'seat')?.state).toBe('now')
+  })
 })
 
-describe('gateWalk — the call door (a live line)', () => {
-  it('has NO pay slot at all — R5, a call never charges inline', () => {
-    const walk = gateWalk({ door: 'call', phase: { kind: 'identify' }, pin: 'V1' })
+describe('gateWalk — the DIRECT door (unlisted, this Mac’s own key)', () => {
+  it('has NO seat slot at all — no registry is involved, so nobody can be seated', () => {
+    const walk = gateWalk({ door: 'direct', phase: { kind: 'identify' }, pin: 'V1' })
     if (walk.kind !== 'walk') throw new Error('expected walk')
-    expect(walk.steps.map((s) => s.id)).toEqual(['identify', 'open'])
-    expect(stateOf(walk.steps, 'pay')).toBeUndefined()
+    expect(walk.steps.map((s) => s.id)).toEqual(['identify', 'pay', 'open'])
+    expect(stateOf(walk.steps, 'seat')).toBeUndefined()
   })
 
   it('lights identify only on first contact; open waits', () => {
-    const walk = gateWalk({ door: 'call', phase: { kind: 'identify' } })
+    const walk = gateWalk({ door: 'direct', phase: { kind: 'identify' } })
     if (walk.kind !== 'walk') throw new Error('expected walk')
     expect(stateOf(walk.steps, 'identify')?.state).toBe('now')
     expect(stateOf(walk.steps, 'identify')?.band).toBe('401')
+    expect(stateOf(walk.steps, 'pay')?.state).toBe('skip')
     expect(stateOf(walk.steps, 'open')?.state).toBe('todo')
     expect(stateOf(walk.steps, 'open')?.band).toBeNull()
   })
 
-  it('collapses an impossible pay phase to identify rather than inventing a step', () => {
-    // The gate cannot answer 402 on the call door; if a caller somehow feeds one
-    // in, the rail must not grow a slot it has no room for.
-    const walk = gateWalk({ door: 'call', phase: { kind: 'pay' } })
+  it('keeps the pay slot — a dialled paid door still charges at its own 402', () => {
+    const walk = gateWalk({ door: 'direct', phase: { kind: 'pay' }, pricing: PRICED })
     if (walk.kind !== 'walk') throw new Error('expected walk')
-    expect(walk.steps.map((s) => s.id)).toEqual(['identify', 'open'])
-    expect(stateOf(walk.steps, 'identify')?.state).toBe('now')
+    expect(stateOf(walk.steps, 'identify')?.state).toBe('done')
+    expect(stateOf(walk.steps, 'pay')?.state).toBe('now')
+    expect(stateOf(walk.steps, 'pay')?.band).toBe('402')
+  })
+
+  it('treats no_seat as a plain refusal — the rail has no seat slot to light', () => {
+    const walk = gateWalk({
+      door: 'direct',
+      phase: { kind: 'denied', reason: 'no_seat', retryable: false }
+    })
+    expect(walk).toEqual({ kind: 'denied', reason: 'no_seat', retryable: false, band: '403' })
+  })
+})
+
+describe('gateDoorFor — listed or not is the whole decision', () => {
+  it('a published name the directory answers for takes the install walk', () => {
+    expect(gateDoorFor({ door: '@drej/alpha' }, { listed: true })).toBe('install')
+  })
+
+  it('a dialled address is DIRECT — there is no name for a registry to know', () => {
+    expect(gateDoorFor({}, { listed: false })).toBe('direct')
+    expect(gateDoorFor({ door: undefined }, { listed: true })).toBe('direct')
+    expect(gateDoorFor({ door: '' }, { listed: true })).toBe('direct')
+  })
+
+  it('a name the directory does not answer for is DIRECT, never install', () => {
+    expect(gateDoorFor({ door: '@drej/alpha' }, { listed: false })).toBe('direct')
+    expect(gateDoorFor({ door: '@drej/alpha' }, null)).toBe('direct')
   })
 })
 
@@ -99,6 +153,7 @@ describe('gateWalk — bands appear only for now/done (shorter as you succeed)',
     const walk = gateWalk(scene({ pricing: PRICED, phase: { kind: 'identify' } }))
     if (walk.kind !== 'walk') throw new Error('expected walk')
     expect(stateOf(walk.steps, 'identify')?.band).toBe('401')
+    expect(stateOf(walk.steps, 'seat')?.band).toBeNull()
     expect(stateOf(walk.steps, 'pay')?.band).toBeNull()
     expect(stateOf(walk.steps, 'open')?.band).toBeNull()
   })
