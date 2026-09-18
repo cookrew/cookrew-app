@@ -760,7 +760,11 @@
   function openAccountSheet() {
     const dialog = accountSheet()
     if (!dialog) {
-      void signInFlow()
+      // A document page carries no sheet. It used to fall through to the v1
+      // enrolment modal, which is the one thing the marketplace must not offer
+      // any more: a key enrolled under a bare handle can never be the person a
+      // seat names (v3, G1). So the answer is where the sheet lives.
+      toast('Open cookrew.dev/me to sign in.', 5000)
       return
     }
     if (dialog.open) return
@@ -954,8 +958,16 @@
     handle: async () => (await loadAccount())?.handle ?? null,
     /** This browser as a device — what a passwordless passkey sign-in attaches. */
     device: async () => devicePayload(await deviceIdentity()),
-    signIn: signInFlow,
-    /** The v2 sheet — a username and a password. What the header opens. */
+    /**
+     * A USERNAME AND A PASSWORD, AND NOTHING ELSE (v3, G1).
+     *
+     * `signIn` used to be the v1 enrolment flow, and the line called it when a
+     * reader was not signed in — so the marketplace's own door could still be
+     * answered by a key this browser minted under a bare handle. Both names
+     * point at the account sheet now; the enrolment flow keeps only the one
+     * caller it was written for (stars), which is not a door and not a seat.
+     */
+    signIn: openAccountSheet,
     account: openAccountSheet,
     toast,
     doorKey
