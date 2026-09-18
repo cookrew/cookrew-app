@@ -14,9 +14,6 @@ import {
 } from '../../../shared/account-v2'
 import {
   APPROVAL_COPY,
-  approvalDetail,
-  approvalLead,
-  type ApprovalRequest,
   type FactorsView,
 } from '../../../shared/account-approvals'
 
@@ -884,6 +881,7 @@ function lockLine(outcome: LockOutcome, passwordPending: boolean): string {
   return 'There is no account on this Mac to unlock.'
 }
 
+
 /** D12: what a freshly minted code is FOR, in the words of the kind asked for. */
 export function addDeviceSentence(kind: 'mac' | 'phone'): string {
   return kind === 'mac' ? accountCopy('d12.add-a-mac') : ACCOUNT_COPY.ADD_A_PHONE
@@ -918,73 +916,6 @@ export function joinRefusalSentence(reason: AccountRefusal, message?: string): s
     return ACCOUNT_COPY.JOIN_CODE_SPENT
   }
   return refusalSentence(reason, message)
-}
-
-/**
- * THE APPROVAL CARD (D6), decided.
- *
- * The two lines come from the SHARED sentence builders, which is the whole
- * point of them living in shared/: main says the same words in the system
- * notification, and a person who acts on the toast and a person who acts on
- * the card must be acting on the same claim about who is asking.
- */
-export interface ApprovalView {
-  lead: string
-  detail: string
-  /** What NOT ME does, said before it is done. */
-  confirm: string
-}
-
-export function approvalView(
-  request: ApprovalRequest,
-  input: { username: string; hasSecondFactor: boolean; now: number },
-): ApprovalView {
-  return {
-    lead: approvalLead(request, input.username),
-    detail: approvalDetail(request, input),
-    confirm: APPROVAL_COPY.NOT_ME_CONFIRM,
-  }
-}
-
-/** How many digits the registry's number is — randomInt(10, 100), so two. */
-const MATCH_DIGITS = 2
-
-/**
- * THE NUMBER ON THE OTHER SCREEN, and whether APPROVE may fire yet.
- *
- * APPROVE IS DEAD UNTIL THE FIELD IS FILLED, and that is a safety rule rather
- * than a nicety: the registry spends one of three tries on every approve it
- * receives, and voids the pending on the third. A button that posts without
- * the number is not merely useless — three taps delete the owner's own
- * waiting sign-in, which is what shipped before this gate existed.
- *
- * DENY AND NOT ME ARE NOT GATED. Neither carries a number, neither spends a
- * try, and both stay one tap: refusing a stranger must never be the slower
- * answer than admitting one.
- *
- * Anything that is not a digit is dropped rather than refused, so a stray
- * keystroke cannot cost a try; the field simply does not fill.
- */
-export interface MatchGate {
-  /** What the owner has typed, digits only, never longer than the number. */
-  typed: string
-  /** The two digits to send, or null while the field is short. */
-  value: string | null
-  /** APPROVE is disabled until this is true. */
-  canApprove: boolean
-  /** The question above the field, in the table's words. */
-  label: string
-}
-
-export function matchGate(typed: string): MatchGate {
-  const digits = typed.replace(/\D/g, '').slice(0, MATCH_DIGITS)
-  const full = digits.length === MATCH_DIGITS
-  return {
-    typed: digits,
-    value: full ? digits : null,
-    canApprove: full,
-    label: accountCopy('d11.join-row'),
-  }
 }
 
 /** One row of the security card's factor ladder (D3). */

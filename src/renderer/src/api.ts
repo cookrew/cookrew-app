@@ -1,4 +1,5 @@
 import type { DeepLink } from '../../shared/deep-link'
+import type { AnsweredRow, QueueRow, RowAction } from '../../shared/account-requests'
 import type { TranslateResult } from '../../shared/translate'
 import type { Surface as SousSurface } from '../../shared/sous-intent'
 import type { SousCommandResult } from '../../main/sous-control'
@@ -703,12 +704,25 @@ export interface CookrewApi {
   // badge are drawing the same queue. A decision answers with the STATUS, so
   // the badge is right the instant the button is released.
   accountApprovals?: () => Promise<readonly ApprovalRequest[]>;
-  accountDecide?: (input: {
+  /** The one queue (D11): what is waiting, and what is over. */
+  accountRequests?: () => Promise<{
+    pending: readonly QueueRow[];
+    answered: readonly AnsweredRow[];
+  }>;
+  /**
+   * Answer one row. The verb is the button's own id, so the card and main
+   * cannot disagree about what a press meant; `match` is the two digits the
+   * asking device shows and rides only with APPROVE.
+   */
+  accountDecideRequest?: (input: {
     id: string;
-    decision: ApprovalDecision;
-    /** The two digits the asking device shows (V3-09); approve only. */
+    action: RowAction['id'];
     match?: string;
-  }) => Promise<AccountResult<AccountStatus>>;
+  }) => Promise<
+    | { ok: true; value: AccountStatus }
+    /** `triesLeft` rides only on `bad_match`, which is the test for it. */
+    | { ok: false; reason: string; message?: string; triesLeft?: number }
+  >;
   accountSetPassword?: (input: {
     current: string;
     next: string;
@@ -725,6 +739,10 @@ export interface CookrewApi {
   }) => Promise<AccountResult<PasskeySummary>>;
   accountPasskeyRemove?: (id: string, current: string) => Promise<AccountResult<void>>;
   onAccountRequests?: (cb: (requestId: string | null) => void) => () => void;
+  /** account:changed, with its sentence already written (D11 · A4). */
+  onAccountEvent?: (
+    cb: (event: { kind: string; device?: string; at: number; sentence: string }) => void,
+  ) => () => void;
   /**
    * Re-establish the push channel if it has died. Remote clients only: a
    * desktop renderer talks to main over IPC, which cannot go down while the

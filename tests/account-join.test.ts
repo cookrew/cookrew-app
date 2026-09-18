@@ -27,7 +27,7 @@ import { StarStore } from '../registry/src/stars'
 import { createV2 } from '../registry/src/v2-routes'
 import { Accounts, DEFAULT_LOCK_AFTER_MS, loadAccount, writeAccount } from '../src/main/account-v2'
 import { accountHandlers, type AccountIpcDeps } from '../src/main/account-ipc'
-import { Approvals } from '../src/main/approvals'
+import { Requests } from '../src/main/requests'
 import { Factors } from '../src/main/factors'
 import { IdleLock } from '../src/main/lock'
 import { parseDeepLink } from '../src/main/deep-link'
@@ -263,7 +263,7 @@ describe('joining and first-unlocking against the real registry', () => {
   const deps = (accounts: Accounts, lock: IdleLock): AccountIpcDeps => ({
     accounts,
     lock,
-    approvals: new Approvals({ accounts, notify: () => undefined }),
+    requests: new Requests({ accounts, notify: () => undefined }),
     factors: new Factors({ accounts, registry: origin }),
     envUsername: null,
     workspaces: () => [],

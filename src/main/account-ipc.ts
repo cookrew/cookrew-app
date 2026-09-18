@@ -19,7 +19,8 @@ import type {
 } from '../shared/account-approvals'
 import type { SeatFace, SeatsSurface } from '../shared/seats'
 import type { Accounts } from './account-v2'
-import type { Approvals } from './approvals'
+import type { DecideOutcome, Requests } from './requests'
+import type { AnsweredRow, QueueRow, RowAction } from '../shared/account-requests'
 import { seatsSurface, teamForSlug, type DoorSeats, type ServedTeamRef } from './door-seats'
 import type { Factors } from './factors'
 import type { IdleLock, UnlockOutcome } from './lock'
@@ -46,8 +47,12 @@ import type { IdleLock, UnlockOutcome } from './lock'
 export interface AccountIpcDeps {
   accounts: Accounts
   lock: IdleLock
-  /** The waiting sign-in requests (D6) — the producer of `status.requests`. */
-  approvals: Approvals
+  /**
+   * THE ONE QUEUE (D11) — sign-ins, phones asking for Wi-Fi, guests asking for
+   * a seat. The producer of `status.requests`, which is now a count of all
+   * three rather than of sign-ins alone.
+   */
+  requests: Requests
   /** The second-factor ladder (D3): passkeys, the authenticator app. */
   factors: Factors
   /** COOKREW_HANDLE, when serving was pointed at a name by the environment. */
@@ -175,9 +180,10 @@ export const ACCOUNT_CHANNELS = [
   'account:pairingUrl',
   'account:admittedDevices',
   'account:forgetAdmitted',
-  // ── phase 4: the approval prompt (D6) and the factor ladder (D3) ──
+  // ── the one queue (D11) and the factor ladder (D3) ──
   'account:approvals',
-  'account:decide',
+  'account:requests',
+  'account:decideRequest',
   'account:setPassword',
   'account:factors',
   'account:totpEnrol',
@@ -201,9 +207,30 @@ const asString = (value: unknown): string => (typeof value === 'string' ? value 
 const asRecord = (value: unknown): Record<string, unknown> =>
   typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
 
-/** Three words and no fourth: an unknown decision is refused, never guessed. */
-const isDecision = (value: unknown): value is ApprovalDecision =>
-  value === 'approve' || value === 'deny' || value === 'not-me'
+/**
+ * Seven verbs and no eighth: a button this build has never heard of is
+ * refused, never guessed at. They are the row actions' own ids (D11), so what
+ * arrives here is exactly what was pressed.
+ */
+const ROW_ACTIONS: readonly RowAction['id'][] = [
+  'approve',
+  'deny',
+  'not-me',
+  'allow',
+  'not-now',
+  'seat-them',
+  'decline',
+]
+const isRowAction = (value: unknown): value is RowAction['id'] =>
+  typeof value === 'string' && (ROW_ACTIONS as readonly string[]).includes(value)
+
+/**
+ * What answering a row came to, as the card reads it: the fresh status on
+ * success, and on a wrong number the count of tries left.
+ */
+export type RequestDecided =
+  | { ok: true; value: AccountStatus }
+  | Exclude<DecideOutcome, { ok: true }>
 
 /**
  * A CHANNEL THAT WRITES TO THIS MAC ANSWERS A SENTENCE, NEVER A REJECTION.
@@ -259,7 +286,7 @@ export function accountStatus(deps: AccountIpcDeps): AccountStatus {
     // THE PRODUCER, at last (phase 4): the polled queue of devices asking to
     // sign in. The seam phase 1 left is now live, and the avatar's rose badge
     // and the profile sheet's card read this one number.
-    requests: deps.approvals.count,
+    requests: deps.requests.count,
     envUsername: deps.envUsername,
     // Only until the crossing: once account.json exists this is null, and the
     // sheet is an ordinary claim sheet again.
@@ -496,7 +523,7 @@ async function revoke(deps: AccountIpcDeps, input: unknown): Promise<AccountResu
 async function signOut(deps: AccountIpcDeps, password: string): Promise<AccountResult<AccountStatus>> {
   const result = await deps.accounts.signOutThisMac(password)
   if (!result.ok) return result
-  deps.approvals.stop()
+  deps.requests.stop()
   try {
     await deps.signedOut?.()
   } catch (error) {
@@ -512,7 +539,7 @@ function signedIn(deps: AccountIpcDeps): AccountStatus {
   // cookrew.dev has just asked for the password and, where the account wants
   // one, a second factor. That is more than the idle lock asks for.
   deps.lock.proven()
-  deps.approvals.start()
+  deps.requests.start()
   // The reach publisher refreshes the canvas link and files the desktop with
   // its addresses; without one wired, the plain registration still happens so
   // the Workspaces tab is not empty until the next boot.
@@ -548,7 +575,7 @@ async function claim(deps: AccountIpcDeps, input: unknown): Promise<AccountResul
   // account is already on disk, so a Mac that claims its name while running
   // never heard the first device ask to sign in — the phone waited out its
   // whole expiry against a badge that could not appear until a restart.
-  deps.approvals.start()
+  deps.requests.start()
   return { ok: true, value: accountStatus(deps) }
 }
 
@@ -575,7 +602,7 @@ async function migrate(
   if (!result.ok) return result
   deps.lock.setLockAfterMs(result.value.lockAfterMs)
   void deps.accounts.registerDesktop(deps.workspaces()).catch(() => undefined)
-  deps.approvals.start()
+  deps.requests.start()
   return { ok: true, value: accountStatus(deps) }
 }
 
@@ -757,21 +784,41 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     // The list is the POLL'S list, not a fresh call: the queue is refreshed on
     // a timer and on window focus, so a sheet that opened a socket of its own
     // would just be a third clock disagreeing with the other two.
-    'account:approvals': (): readonly ApprovalRequest[] => deps.approvals.list(),
-    // A DECISION ANSWERS WITH THE STATUS, so the badge is right the instant
-    // the button is released — the alternative is a card that vanishes while
-    // the avatar still wears a 1 until the next poll.
-    'account:decide': async (input: unknown): Promise<AccountResult<AccountStatus>> => {
+    /**
+     * THE DEVICES WAITING TO JOIN, in the shape the lock screen reads (D13).
+     * A seat request is not a device at the door, so it has no name worth
+     * showing from under a lock — the queue's own channel is next door.
+     */
+    'account:approvals': (): readonly ApprovalRequest[] => deps.requests.joinRequests(),
+    /**
+     * THE ONE QUEUE (D11): what is waiting and what is over. Both halves in
+     * one answer, because the card draws them as one list and two channels
+     * would be two clocks disagreeing about which rows exist.
+     *
+     * The list is the POLL'S list, not a fresh call: the queue is refreshed on
+     * a timer and on window focus.
+     */
+    'account:requests': (): { pending: readonly QueueRow[]; answered: readonly AnsweredRow[] } => ({
+      pending: deps.requests.list(),
+      answered: deps.requests.history(),
+    }),
+    /**
+     * ANSWER ONE ROW. The verb is the BUTTON's own id, so the card and main
+     * cannot disagree about what a press meant.
+     *
+     * IT ANSWERS WITH THE STATUS, so the badge is right the instant the button
+     * is released — the alternative is a row that vanishes while the avatar
+     * still wears a 1 until the next poll. A wrong number is the one refusal
+     * that carries a count, and it is passed through rather than flattened:
+     * "wrong" with no idea how much rope is left is the sentence people retype
+     * into until there is none.
+     */
+    'account:decideRequest': async (input: unknown): Promise<RequestDecided> => {
       const record = asRecord(input)
-      const decision = record.decision
-      if (!isDecision(decision)) return { ok: false, reason: 'unknown' }
-      // The number rides along for an approve only; asString gives '' for a
-      // renderer that sent none, which decide() reads as "no number".
-      const result = await deps.approvals.decide(
-        asString(record.id),
-        decision,
-        asString(record.match),
-      )
+      const action = record.action
+      if (!isRowAction(action)) return { ok: false, reason: 'unknown' }
+      const match = typeof record.match === 'string' ? record.match : undefined
+      const result = await deps.requests.decide(asString(record.id), action, match)
       if (!result.ok) return result
       return { ok: true, value: accountStatus(deps) }
     },

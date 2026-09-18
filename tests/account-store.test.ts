@@ -8,7 +8,6 @@ import { describe, expect, it } from 'vitest'
 import type { AccountStatus } from '../src/shared/account-v2'
 import {
   ACCOUNT_COPY,
-  approvalView,
   avatarView,
   claimView,
   deviceName,
@@ -18,7 +17,6 @@ import {
   joinLede,
   lockNote,
   lockRowLabel,
-  matchGate,
   mustChangeBanner,
   passkeyElsewhere,
   profileKey,
@@ -414,71 +412,13 @@ describe('the rose badge now has a producer (D1)', () => {
   })
 })
 
-describe('the request card, word for word (D6)', () => {
-  it('is the design sentence, split into its two lines', () => {
-    const view = approvalView(request(), { username: 'drej', hasSecondFactor: false, now: NOW })
-    expect(view.lead).toBe('Chrome on macOS in Sydney wants to sign in as @drej.')
-    expect(view.detail).toBe(
-      'Started 12 seconds ago · 203.0.113.9 · no second factor on the account yet.',
-    )
-  })
-
-  it('says what NOT ME does before it is done', () => {
-    const view = approvalView(request(), { username: 'drej', hasSecondFactor: false, now: NOW })
-    expect(view.confirm).toBe(
-      'Every other device signs out and you will set a new password.',
-    )
-  })
-
-  it('drops the factor clause rather than inventing a reassuring one', () => {
-    const view = approvalView(request(), { username: 'drej', hasSecondFactor: true, now: NOW })
-    expect(view.detail).toBe('Started 12 seconds ago · 203.0.113.9.')
-  })
-
+describe('how long a device has been asking — the clock D11 kept from D6', () => {
   it('counts in the units a person reads: seconds, then minutes, then hours', () => {
     expect(startedAgo(1_000)).toBe('1 second')
     expect(startedAgo(12_000)).toBe('12 seconds')
     expect(startedAgo(89_000)).toBe('89 seconds')
     expect(startedAgo(120_000)).toBe('2 minutes')
     expect(startedAgo(7_200_000)).toBe('2 hours')
-  })
-})
-
-// V3-09 made the number mandatory; V3-20c/H6 found APPROVE posting without it,
-// so every tap was a miss and the third deleted the owner's own pending
-// sign-in. The gate is what makes the button honest, and the rule it enforces
-// is arithmetic rather than taste: two digits or nothing happens.
-describe('the number APPROVE waits for (D11)', () => {
-  it('asks the table’s question, whatever has been typed', () => {
-    expect(matchGate('').label).toBe('What number is on that Mac?')
-    expect(matchGate('47').label).toBe('What number is on that Mac?')
-  })
-
-  it('holds APPROVE down until both digits are there', () => {
-    expect(matchGate('')).toMatchObject({ typed: '', value: null, canApprove: false })
-    expect(matchGate('4')).toMatchObject({ typed: '4', value: null, canApprove: false })
-    expect(matchGate('47')).toMatchObject({ typed: '47', value: '47', canApprove: true })
-  })
-
-  it('drops anything that is not a digit rather than spending a try on it', () => {
-    // A stray letter or a space must not fill the field, and must not reach
-    // the registry: an approve is refused AND costs one of three tries.
-    expect(matchGate('4a')).toMatchObject({ typed: '4', canApprove: false })
-    expect(matchGate(' 4 7 ')).toMatchObject({ typed: '47', value: '47', canApprove: true })
-    expect(matchGate('ab')).toMatchObject({ typed: '', value: null, canApprove: false })
-    expect(matchGate('-1')).toMatchObject({ typed: '1', canApprove: false })
-  })
-
-  it('takes the first two digits and no more, so a fat finger cannot overrun', () => {
-    expect(matchGate('471')).toMatchObject({ typed: '47', value: '47' })
-    expect(matchGate('4711')).toMatchObject({ typed: '47', value: '47' })
-  })
-
-  it('passes a leading zero through rather than second-guessing the screen', () => {
-    // The registry mints 10–99, so '07' cannot be right — but the owner types
-    // what the other screen shows, and inventing a refusal here would argue
-    // with them about what they are looking at.
-    expect(matchGate('07')).toMatchObject({ typed: '07', value: '07', canApprove: true })
   })
 })
 

@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { registryMismatchSentence } from '../../../shared/account-v2'
 import type { AccountProfile, AccountStatus, AdmittedPhone } from '../../../shared/account-v2'
-import type { ApprovalRequest } from '../../../shared/account-approvals'
 import type { WorkspaceMeta } from '../../../shared/model'
 import { cookrew } from '../api'
 import {
@@ -18,7 +17,7 @@ import {
 } from './account-store'
 import { QrCode } from './QrCode'
 import { qrMatrix } from '../../../shared/qr'
-import { ApprovalCard } from './ApprovalCard'
+import { RequestsTab } from './RequestsTab'
 import { DOING, problemSentence } from './problem'
 import { PairPhoneSheet } from './PairPhoneSheet'
 import { ResumeSession } from './ResumeSession'
@@ -46,6 +45,9 @@ import '../grant-surface.css'
 export const PROFILE_TABS = [
   'PROFILE',
   'DEVICES',
+  // D11: the one queue, where D6's pinned card used to be. It sits beside
+  // DEVICES because that is what most of its rows are about.
+  'REQUESTS',
   'SECURITY',
   'WORKSPACES',
   'SEATS & TEAMS',
@@ -118,23 +120,11 @@ export function ProfileSheet({
   )
   const [admitted, setAdmitted] = useState<readonly AdmittedPhone[]>([])
   const [pairing, setPairing] = useState(false)
-  /** The devices waiting for an answer (D6) — main's polled queue. */
-  const [requests, setRequests] = useState<readonly ApprovalRequest[]>([])
   /** The display name while it is being edited; null when it is not. */
   const [editing, setEditing] = useState<string | null>(null)
   /** A failure from the security card's own actions (lock, codes file). */
   const [problem, setProblem] = useState<string | null>(null)
   const username = status.username ?? ''
-
-  // Re-read whenever the count changes, so approving on the card and the
-  // badge in the bar cannot disagree about what is still waiting.
-  useEffect(() => {
-    const call = cookrew().accountApprovals
-    if (!call || status.sessionExpired) return
-    void call()
-      .then(setRequests)
-      .catch(() => undefined)
-  }, [status.requests, status.sessionExpired])
 
   useEffect(() => {
     void cookrew()
@@ -378,16 +368,6 @@ export function ProfileSheet({
           </p>
         )}
 
-        {/* THE REQUEST COMES FIRST, above every tab: a person who clicked
-            the notification or the rose badge is here for this and nothing
-            else, and it must not be behind a tab they have to find. */}
-        <ApprovalCard
-          requests={requests}
-          username={username}
-          focusId={focusRequestId}
-          onStatus={onStatus}
-        />
-
         {tab === 'PROFILE' && (
           <section className="cr-acct-pane" aria-label="Profile">
             {editing === null ? (
@@ -429,6 +409,13 @@ export function ProfileSheet({
 
         {tab === 'DEVICES' && (
           <section className="cr-acct-pane" aria-label="Devices">
+            {/* RESTORED IN INTEGRATION, and by the lane that took it away.
+                V3-12 dropped this button because its own ADD A PHONE reached
+                the same popout; V3-10's app half then made ADD A PHONE mint a
+                JOIN code — the account ceremony (M4) — which is a different
+                thing from the pairing URL that admits a phone at THIS Mac on
+                Wi-Fi. Two ceremonies, so two ways in, until the two lanes that
+                own them agree on one. */}
             <button className="gs-revoke cr-acct-act" onClick={() => setPairing(true)}>
               PAIR A PHONE
             </button>
@@ -629,6 +616,19 @@ export function ProfileSheet({
             )}
             {pairing && <PairPhoneSheet onClose={() => setPairing(false)} />}
           </section>
+        )}
+
+        {/* D11 — three kinds of row, one card. A person who clicked the
+            notification or the rose badge lands HERE: AccountSurface opens the
+            sheet on this tab, so the destination is the same whichever led
+            them. */}
+        {tab === 'REQUESTS' && (
+          <RequestsTab
+            username={username}
+            refreshKey={status.requests}
+            focusId={focusRequestId}
+            onStatus={onStatus}
+          />
         )}
 
         {tab === 'SECURITY' && (

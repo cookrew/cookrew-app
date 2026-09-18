@@ -23,7 +23,7 @@ import {
 } from '../src/main/account-ipc'
 import { IdleLock } from '../src/main/lock'
 import { Accounts, DEFAULT_LOCK_AFTER_MS } from '../src/main/account-v2'
-import { Approvals } from '../src/main/approvals'
+import { Requests } from '../src/main/requests'
 import { Factors } from '../src/main/factors'
 
 const OWNER = { id: 'owner-webcontents' }
@@ -40,7 +40,7 @@ function deps(over: Partial<AccountIpcDeps> = {}): AccountIpcDeps {
     accounts,
     lock: new IdleLock({ lockAfterMs: DEFAULT_LOCK_AFTER_MS, verify: () => false }),
     // Never started: a poll on a test's clock is a socket nobody asked for.
-    approvals: new Approvals({ accounts, notify: () => undefined }),
+    requests: new Requests({ accounts, notify: () => undefined }),
     factors: new Factors({ accounts, registry: 'https://registry.test' }),
     envUsername: null,
     workspaces: () => [],
@@ -95,7 +95,8 @@ describe('every account channel is registered, once, through the owner guard', (
     // or enrol a factor they never saw.
     for (const channel of [
       'account:approvals',
-      'account:decide',
+      'account:requests',
+      'account:decideRequest',
       'account:setPassword',
       'account:factors',
       'account:totpEnrol',
@@ -151,50 +152,51 @@ describe('the status the owner window is given', () => {
 })
 
 describe('the phase 4 handlers', () => {
-  it('the status carries the live count of waiting devices, not a zero', () => {
+  it('the status carries the live count of everything waiting, not a zero', () => {
     const shared = deps()
-    vi.spyOn(shared.approvals, 'count', 'get').mockReturnValue(2)
+    vi.spyOn(shared.requests, 'count', 'get').mockReturnValue(2)
     expect(accountStatus(shared).requests).toBe(2)
   })
 
-  it('a decision answers with the STATUS, so the badge is right at once', async () => {
+  it('an answer carries the STATUS, so the badge is right at once', async () => {
     const shared = deps()
-    vi.spyOn(shared.approvals, 'decide').mockResolvedValue({ ok: true, value: undefined })
-    const answer = (await accountHandlers(shared)['account:decide']({
+    vi.spyOn(shared.requests, 'decide').mockResolvedValue({ ok: true })
+    const answer = (await accountHandlers(shared)['account:decideRequest']({
       id: 'req-1',
-      decision: 'approve',
-      match: '47',
+      action: 'approve',
+      match: '42',
     })) as { ok: true; value: { requests: number } }
-    // The number the asking device shows rides through the channel (V3-09);
-    // the registry refuses an approve without it and spends a try refusing.
-    expect(shared.approvals.decide).toHaveBeenCalledWith('req-1', 'approve', '47')
+    // The number travels with the press: the rung is worth nothing if the
+    // channel can approve without one.
+    expect(shared.requests.decide).toHaveBeenCalledWith('req-1', 'approve', '42')
     expect(answer.ok).toBe(true)
     expect(answer.value.requests).toBe(0)
   })
 
-  it('passes an empty number through rather than inventing one', async () => {
-    // A renderer that sends no match must reach decide() as "no number", so
-    // the body stays the bare decision the registry has always read.
+  it('REFUSES a verb it does not recognise, rather than guessing one', async () => {
     const shared = deps()
-    vi.spyOn(shared.approvals, 'decide').mockResolvedValue({ ok: true, value: undefined })
-    await accountHandlers(shared)['account:decide']({ id: 'req-1', decision: 'deny' })
-    expect(shared.approvals.decide).toHaveBeenCalledWith('req-1', 'deny', '')
-  })
-
-  it('REFUSES a decision it does not recognise, rather than guessing one', async () => {
-    const shared = deps()
-    const decide = vi.spyOn(shared.approvals, 'decide')
-    for (const decision of ['approve!', '', null, { decision: 'deny' }]) {
+    const decide = vi.spyOn(shared.requests, 'decide')
+    for (const action of ['approve!', '', null, { action: 'deny' }, 'seat']) {
       await expect(
-        accountHandlers(shared)['account:decide']({ id: 'req-1', decision }),
+        accountHandlers(shared)['account:decideRequest']({ id: 'req-1', action }),
       ).resolves.toMatchObject({ ok: false })
     }
     expect(decide).not.toHaveBeenCalled()
   })
 
+  it('answers the one queue with both halves, so the card draws one list', () => {
+    const shared = deps()
+    vi.spyOn(shared.requests, 'list').mockReturnValue([])
+    vi.spyOn(shared.requests, 'history').mockReturnValue([])
+    expect(accountHandlers(shared)['account:requests'](undefined)).toEqual({
+      pending: [],
+      answered: [],
+    })
+  })
+
   it('coerces junk on every phase 4 channel instead of throwing at the bridge', async () => {
     const handlers = accountHandlers(deps())
-    await expect(handlers['account:decide'](null)).resolves.toMatchObject({ ok: false })
+    await expect(handlers['account:decideRequest'](null)).resolves.toMatchObject({ ok: false })
     await expect(handlers['account:totpConfirm'](undefined)).resolves.toMatchObject({ ok: false })
     await expect(handlers['account:passkeyAdd'](7)).resolves.toMatchObject({ ok: false })
     await expect(handlers['account:passkeyRemove'](null)).resolves.toMatchObject({ ok: false })
@@ -312,13 +314,13 @@ describe('the handlers', () => {
       value: { lockAfterMs: DEFAULT_LOCK_AFTER_MS } as never,
     })
     vi.spyOn(shared.accounts, 'registerDesktop').mockResolvedValue({ ok: true, value: undefined })
-    const started = vi.spyOn(shared.approvals, 'start')
+    const started = vi.spyOn(shared.requests, 'start')
     await accountHandlers(shared)['account:claim']({
       username: 'drej',
       password: 'a-long-enough-password',
     })
     expect(started).toHaveBeenCalled()
-    shared.approvals.stop()
+    shared.requests.stop()
   })
 
   it('SAVE AS FILE takes no arguments — main writes the batch IT minted', async () => {
