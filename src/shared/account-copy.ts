@@ -87,6 +87,24 @@ export const V3_COPY = {
    */
   'd12.revoke':
     "The {device} stops opening this account within a minute — here, at every door, and on every Mac's Wi-Fi. Anything it asked for is dropped.",
+  /**
+   * THE SAME MOMENT, WHILE THE MECHANISM IS NOT THERE YET (H2).
+   *
+   * The sentence above is the contract, and it was being said in builds that
+   * did not keep it: the root pairing token still opened every route, so a
+   * revoked phone still had this Mac's keyboard on this Wi-Fi. Which of the
+   * two is shown is decided by the one fact both the gate and the copy read
+   * (shared/lan-token-mode.ts), so the promise cannot outrun the mechanism a
+   * second time.
+   *
+   * It names ROTATION rather than FORGET deliberately. Forgetting removes the
+   * admitted row, and while the root opens everything the row is not the
+   * credential the phone is using — so FORGET here would be a second sentence
+   * that does not do what it says. `cookrew mobile --rotate` ends it, at the
+   * cost the pairing sheet already names: every phone re-pairs.
+   */
+  'd12.revoke.lan-pending':
+    'The {device} stops opening this account within a minute — here and at every door. On this Mac it keeps working on this Wi-Fi until you run `cookrew mobile --rotate`, which re-pairs every phone.',
   /** D12 sign out. What leaves, what stays, and what goes quiet. */
   'd12.sign-out':
     'This Mac leaves @{handle}. Everything on the canvas stays. The doors it serves go offline until it signs in again.',

@@ -29,6 +29,7 @@ import {
   takenSentence,
   wrongPasswordSentence,
 } from '../src/renderer/src/account/account-store'
+import { lanRevokeEnds } from '../src/shared/lan-token-mode'
 import { startedAgo, type ApprovalRequest } from '../src/shared/account-approvals'
 
 const STRONG = 'correct-horse-battery'
@@ -343,11 +344,23 @@ describe('the sign-out confirmation says what leaves, what stays, what goes quie
 })
 
 describe('the revoke confirmation names the device and its consequence', () => {
-  it('is one sentence, in the table’s words', () => {
-    // The Wi-Fi caveat is gone because the thing it admitted to is fixed:
-    // a revoked device now loses LAN admission on every Mac too (V3-05).
-    expect(revokeSentence('iPhone')).toBe(
-      "The iPhone stops opening this account within a minute — here, at every door, and on every Mac's Wi-Fi. Anything it asked for is dropped.",
+  it('is one sentence, in the table’s words for the mode this build is in', () => {
+    /**
+     * THIS TEST USED TO ASSERT THE UNHEDGED SENTENCE, and its comment said
+     * "the Wi-Fi caveat is gone because the thing it admitted to is fixed".
+     * It was not fixed in any build that shipped: the root pairing token
+     * still opened every route, so a revoked phone still had this Mac's
+     * keyboard on this Wi-Fi (H2). Which sentence is true is now one fact
+     * both the gate and the copy read — shared/lan-token-mode.ts — and
+     * tests/lan-revoke-contract.test.ts is what stops them drifting again.
+     * Asserted here through the same constant, so this file says what the
+     * build says rather than pinning one of the two worlds.
+     */
+    const said = revokeSentence('iPhone')
+    expect(said).toBe(
+      lanRevokeEnds()
+        ? "The iPhone stops opening this account within a minute — here, at every door, and on every Mac's Wi-Fi. Anything it asked for is dropped."
+        : 'The iPhone stops opening this account within a minute — here and at every door. On this Mac it keeps working on this Wi-Fi until you run `cookrew mobile --rotate`, which re-pairs every phone.',
     )
   })
 })

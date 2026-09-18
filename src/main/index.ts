@@ -116,6 +116,7 @@ import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
 import { IdleLock } from './lock'
 import { registerAccountIpc } from './account-ipc'
 import { localDeviceName } from './device-name'
+import { COMPANION_BOOTSTRAPS } from '../shared/lan-token-mode'
 import { Approvals } from './approvals'
 import {
   DoorCallers,
@@ -4844,10 +4845,18 @@ app.whenReady().then(() => {
   for (const template of serving.served.list()) void joinRelayFor(template)
 
   startMobileServer({
-    // v3 (V3-21): strict per-device tokens on the LAN. Off until the companion
-    // side bootstraps (V3-14); flip with COOKREW_LAN_TOKEN_STRICT=1 to QA the
-    // Mac half against a companion that already sends the admission.
-    perDeviceOnly: () => process.env.COOKREW_LAN_TOKEN_STRICT === '1',
+    /**
+     * v3 (V3-21 · H2): an OVERRIDE for QA, never the switch.
+     *
+     * The default lives with the build (shared/lan-token-mode.ts) because it
+     * is a fact about the companion bundle this Mac serves, and because the
+     * revoke sentence has to read the same fact. Setting this to 1 gives the
+     * strict world early — the root opens the admission route and nothing
+     * else — for QA against a companion that already sends the admission.
+     * Unset, the build decides, which is what "shipping" means.
+     */
+    perDeviceOnly: () =>
+      process.env.COOKREW_LAN_TOKEN_STRICT === '1' ? true : COMPANION_BOOTSTRAPS,
     servedSlug: handleServedSlug,
     store,
     // Sous's door for the phone and for voice-gateway; `ui` events for both.
