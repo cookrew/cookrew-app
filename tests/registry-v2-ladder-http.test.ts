@@ -470,7 +470,14 @@ describe('“not me”', () => {
     const theirs = await askForStep(owner, device('browser', 'Chrome on Windows'))
     const { approval } = await bodyOf<{ approval: string }>(await call('POST', `/v2/sessions/${theirs.pending}/approve`))
     expect(
-      (await call('POST', `/v2/me/approvals/${approval}`, { decision: 'not-me' }, bearer(owner.token))).status
+      (
+        await call(
+          'POST',
+          `/v2/me/approvals/${approval}`,
+          { decision: 'not-me', current: PASSWORD },
+          bearer(owner.token)
+        )
+      ).status
     ).toBe(204)
 
     // The request is dead.
@@ -532,7 +539,14 @@ describe('an answered request closes every door, not just its own', () => {
     const theirs = await askForStep(owner, device('browser', 'Chrome on Windows'))
     const { approval } = await bodyOf<{ approval: string }>(await call('POST', `/v2/sessions/${theirs.pending}/approve`))
     expect(
-      (await call('POST', `/v2/me/approvals/${approval}`, { decision: 'not-me' }, bearer(owner.token))).status
+      (
+        await call(
+          'POST',
+          `/v2/me/approvals/${approval}`,
+          { decision: 'not-me', current: PASSWORD },
+          bearer(owner.token)
+        )
+      ).status
     ).toBe(204)
 
     // The disowned one is unclimbable by its other rungs …
@@ -1070,8 +1084,19 @@ describe('the approving device must type the number the asking device shows', ()
     const alarmed = await claim()
     const two = await askForStep(alarmed)
     const second = await askApproval(two.pending)
+    // NO NUMBER, which is what this test is about — and the password, which is
+    // what "not me" being on the step-up list asks for (V3-FIX-C1 · H4). The
+    // two are different costs: the number needs the OTHER screen, and needing
+    // it to raise an alarm is what would make the alarm harder than a mistake.
     expect(
-      (await call('POST', `/v2/me/approvals/${second}`, { decision: 'not-me' }, bearer(alarmed.token))).status
+      (
+        await call(
+          'POST',
+          `/v2/me/approvals/${second}`,
+          { decision: 'not-me', current: PASSWORD },
+          bearer(alarmed.token)
+        )
+      ).status
     ).toBe(204)
   })
 })

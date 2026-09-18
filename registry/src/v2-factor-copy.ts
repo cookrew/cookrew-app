@@ -26,6 +26,7 @@ export type FactorError =
   | 'no_approval'
   | 'bad_decision'
   | 'bad_match'
+  | 'self_approval'
   | 'step_up'
   | 'totp_not_started'
   | 'totp_active'
@@ -49,6 +50,8 @@ const SENTENCES: Record<FactorError, string> = {
   no_approval: 'There is no such request — it may already have been answered.',
   bad_decision: 'A request is approved, denied, or “not me”.',
   step_up: 'One more step. Prove it is you before this happens.',
+  self_approval:
+    'Approve this on your other device — this one is the device that asked.',
   bad_match:
     'That is not the number showing on the device signing in. Look at its screen and type the two digits.',
   totp_not_started: 'Ask for a secret first, then confirm it with a code from the app.',

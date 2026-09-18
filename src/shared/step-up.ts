@@ -15,6 +15,11 @@
  * heard of an act simply never prompts, and the only sign is a 401 nobody
  * expected. So the list lives here and all three import it.
  *
+ * TODAY IT HAS ONE READER, and that is a gap rather than a claim: neither
+ * client can climb a step-up ladder yet, so an account holding a passkey or an
+ * authenticator meets a 401 nothing on screen knows how to answer. Which acts
+ * that bites is written down below, per act, rather than left to be discovered.
+ *
  * The registry imports this file directly — registry/src already reaches into
  * src/shared for the relay frame, for the same reason: a wire contract with
  * two definitions has two meanings.
@@ -47,6 +52,56 @@ export const STEP_UP_ACTS: readonly StepUpAct[] = [
 
 export const isStepUpAct = (value: unknown): value is StepUpAct =>
   typeof value === 'string' && (STEP_UP_ACTS as readonly string[]).includes(value)
+
+/**
+ * HOW EACH ACT'S THRESHOLD IS ACTUALLY HELD, and why this exists.
+ *
+ * The list above shipped with a commit saying "the registry enforces it". The
+ * registry enforced ONE of the seven; revoking another device and pressing the
+ * not-me alarm — the two a thief most wants — were open to a bearer token
+ * alone. A shared constant that claims a guarantee the code does not give is
+ * worse than no constant, because it is the thing the next reader trusts
+ * INSTEAD of reading the routes.
+ *
+ * So the claim is written down per act, in the only three shapes there are:
+ *
+ *   `gate`     — the shared gate (registry/src/v2-step-up.ts). The ladder when
+ *                the account holds something stronger than its password, the
+ *                password when it does not, and the not-me alarm closes both.
+ *   `password` — the act's own route asks for the current password inline and
+ *                refuses the alarm, which is a step-up in substance. Kept
+ *                separate because moving them behind the gate would mean
+ *                asking for a ladder no client can climb yet, and because
+ *                changing the password is the one act that CLEARS the alarm:
+ *                behind the gate it would be a lock with its key inside.
+ *   `none`     — no registry route exists for this act in this cut.
+ *
+ * The registry's own test suite drives every act in this table over HTTP, so a
+ * route that loses its threshold cannot leave this file still claiming one.
+ */
+export type StepUpEnforcement = 'gate' | 'password' | 'none'
+
+export const STEP_UP_ENFORCEMENT: Record<StepUpAct, StepUpEnforcement> = {
+  /** POST /v2/me/password — and the only way out of a raised alarm. */
+  'change-password': 'password',
+  /** DELETE /v2/me/totp · /v2/me/passkeys/:id. */
+  'remove-factor': 'password',
+  /** DELETE /v2/me/devices/:id. */
+  'revoke-device': 'gate',
+  /** POST /v2/me/join-codes. */
+  'mint-join-code': 'gate',
+  /**
+   * Taking a door over from another Mac of the account. It happens at the
+   * relay's hub against a ticket, not at a /v2 route, and the lane that builds
+   * it (V3-18) is not in this cut. Nothing here enforces it because there is
+   * nothing here to enforce.
+   */
+  'take-over-door': 'none',
+  /** DELETE /v2/teams/@owner/team/seats/:id. */
+  'end-seat': 'gate',
+  /** POST /v2/me/approvals/:id with {decision:'not-me'}. */
+  'not-me': 'gate'
+}
 
 /**
  * What each act is called where a person can see it.

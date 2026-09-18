@@ -347,7 +347,14 @@ describe('POST /v2/teams/@o/t/call-token — the word the door verifies', () => 
     }
     const lin = seats.seats.find((s) => s.account === 'lin')
     if (!lin) throw new Error('lin has no seat')
-    const ended = await call('DELETE', `/v2/teams/@drej/alpha/seats/${lin.id}`, undefined, as(people.drej))
+    // With the password: ending somebody else's seat asks the owner to prove
+    // it is them (V3-FIX-C1 · H4).
+    const ended = await call(
+      'DELETE',
+      `/v2/teams/@drej/alpha/seats/${lin.id}`,
+      { current: PASSWORD },
+      as(people.drej)
+    )
     expect(ended.status).toBe(204)
     const after = await call('POST', '/v2/teams/@drej/alpha/call-token', {}, as(people.lin))
     expect(after.status).toBe(403)
@@ -366,8 +373,48 @@ describe('DELETE /v2/teams/@o/t/seats/:id — ending one', () => {
   })
 
   it('answers 404 for a seat that is not there', async () => {
-    const res = await call('DELETE', `/v2/teams/@drej/alpha/seats/${randomUUID()}`, undefined, as(people.drej))
+    const res = await call(
+      'DELETE',
+      `/v2/teams/@drej/alpha/seats/${randomUUID()}`,
+      { current: PASSWORD },
+      as(people.drej)
+    )
     expect(res.status).toBe(404)
+  })
+
+  /**
+   * ENDING SOMEBODY ELSE'S SEAT IS ON THE STEP-UP LIST (V3-FIX-C1 · H4).
+   *
+   * It takes something from another person, which is the shape every act on
+   * that list shares — and it was a bearer-only act, so a stolen session could
+   * empty an owner's team of everybody in it.
+   */
+  it('asks the owner to prove it is them, and refuses a bearer on its own', async () => {
+    const mine = (await (await call('GET', '/v2/teams/@drej/alpha/seat', undefined, as(people.mira))).json()) as {
+      seat: { id: string }
+    }
+    const bare = await call('DELETE', `/v2/teams/@drej/alpha/seats/${mine.seat.id}`, undefined, as(people.drej))
+    expect(bare.status).toBe(403)
+    expect(((await bare.json()) as { error: string }).error).toBe('password_required')
+    // The seat is still held.
+    expect((await call('GET', '/v2/teams/@drej/alpha/seat', undefined, as(people.mira))).status).toBe(200)
+
+    const ended = await call(
+      'DELETE',
+      `/v2/teams/@drej/alpha/seats/${mine.seat.id}`,
+      { current: PASSWORD },
+      as(people.drej)
+    )
+    expect(ended.status).toBe(204)
+  })
+
+  it('tells a stranger it is not theirs BEFORE asking them for a password', async () => {
+    // The order is the refusal a person gets: "prove who you are" about a seat
+    // they could not end anyway both says the wrong thing and answers a
+    // question they should not be able to ask — whether that seat exists.
+    const res = await call('DELETE', `/v2/teams/@drej/alpha/seats/${randomUUID()}`, undefined, as(people.mira))
+    expect(res.status).toBe(403)
+    expect(((await res.json()) as { error: string }).error).toBe('not_owner')
   })
 })
 

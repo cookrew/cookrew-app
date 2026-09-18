@@ -121,6 +121,18 @@ export interface Pending {
   act?: StepUpAct
   /** A rung was climbed on an act-pending: the act may now happen, once. */
   authorised: boolean
+  /**
+   * WHO OPENED THIS, when the opener was already signed in.
+   *
+   * A SIGN-IN HAS NO OPENER and that is the whole difference. The device at
+   * the front door is not attached yet, so it holds no session, so it cannot
+   * reach the route that answers approvals — the ceremony is safe there by
+   * arrangement rather than by a check. A STEP-UP inverts every part of that:
+   * the asker is attached, holds a session, and is handed the two digits. The
+   * same ladder that is sound in front of the door is self-answering behind
+   * it, so behind it the asker has to be named and refused by name.
+   */
+  opener?: { jti: string; device: string }
 }
 
 /** What answering an approval came to. */
@@ -128,6 +140,8 @@ export type DecideResult =
   | { ok: true; approval: Approval }
   | { ok: false; reason: 'no_approval' }
   | { ok: false; reason: 'bad_match'; triesLeft: number }
+  /** The session that asked tried to answer itself. See `Pending.opener`. */
+  | { ok: false; reason: 'self_approval' }
 
 export interface OpenInput {
   username: string
@@ -138,6 +152,8 @@ export interface OpenInput {
   next: readonly Factor[]
   /** Set for a step-up: the one act this pending will authorise. */
   act?: StepUpAct
+  /** Set for a step-up: the session and device asking. It may not answer. */
+  opener?: { jti: string; device: string }
 }
 
 /**
@@ -183,6 +199,7 @@ export class PendingSignIns {
       matchMisses: 0,
       approval: null,
       ...(input.act === undefined ? {} : { act: input.act }),
+      ...(input.opener === undefined ? {} : { opener: input.opener }),
       authorised: false
     }
     // Bounded by count as well as by time — this account's own oldest first,
@@ -349,7 +366,13 @@ export class PendingSignIns {
    * one that was already decided. Saying "the number was right, but too late"
    * would tell whoever asked something about a request that is not theirs.
    */
-  decide(username: string, approvalId: unknown, decision: Decision, match?: unknown): DecideResult {
+  decide(
+    username: string,
+    approvalId: unknown,
+    decision: Decision,
+    match?: unknown,
+    by?: { jti: string; device: string }
+  ): DecideResult {
     if (typeof approvalId !== 'string' || approvalId === '') return { ok: false, reason: 'no_approval' }
     for (const pending of this.pendings.values()) {
       const approval = pending.approval
@@ -357,6 +380,30 @@ export class PendingSignIns {
       if (approval.username !== username) return { ok: false, reason: 'no_approval' }
       if (this.now() >= pending.expiresAt) return { ok: false, reason: 'no_approval' }
       if (approval.decision !== null) return { ok: false, reason: 'no_approval' }
+      /**
+       * THE ONE THAT ASKED MAY NOT BE THE ONE THAT SAYS YES.
+       *
+       * Only APPROVE is refused this way. Approve is the decision that GRANTS,
+       * and it is the only one worth stealing; denying your own request costs
+       * the asker their own pending and nobody else anything.
+       *
+       * BOTH HALVES OF "WHO", because a session and a device are not the same
+       * thing and either alone leaves a case. The jti is the literal rule —
+       * this sitting may not answer itself — and the device is the ceremony's
+       * meaning: "ask my OTHER device" is a promise about a second screen, and
+       * a second sitting on the same Mac is not one.
+       *
+       * ANSWERED BEFORE THE NUMBER IS CHECKED, so a client answering from the
+       * wrong place does not spend one of the owner's three tries. The honest
+       * limit: this stops ONE stolen session, which is the threat the gate was
+       * built for. Two sessions on two devices of one account is an account
+       * already lost, and no ladder on this ceremony can help there.
+       */
+      if (decision === 'approve' && pending.opener !== undefined && by !== undefined) {
+        if (by.jti === pending.opener.jti || by.device === pending.opener.device) {
+          return { ok: false, reason: 'self_approval' }
+        }
+      }
       if (decision === 'approve' && (typeof match !== 'string' || match !== pending.match)) {
         // A MISSING NUMBER IS A WRONG NUMBER. A client that cannot send one is
         // not a client that may approve without one; letting it through would

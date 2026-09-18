@@ -145,7 +145,7 @@ describe('phase 1 — claim, unlock, profile, devices', () => {
     expect(devices.ok).toBe(true)
     if (devices.ok) {
       const only = devices.value[0]
-      const refused = await app.revokeDevice(only.id)
+      const refused = await app.revokeDevice(only.id, PASSWORD)
       expect(refused.ok).toBe(false)
       if (!refused.ok) expect(refused.reason).toBe('last_device')
     }
@@ -203,7 +203,7 @@ describe('phase 1 — claim, unlock, profile, devices', () => {
     // And the first Mac can revoke it, since it is no longer the last device.
     if (devices.ok) {
       const mini = devices.value.find((d) => d.name === 'Mac mini')
-      const revoked = await first.revokeDevice(mini!.id)
+      const revoked = await first.revokeDevice(mini!.id, PASSWORD)
       expect(revoked.ok).toBe(true)
     }
     rmSync(otherHome, { recursive: true, force: true })

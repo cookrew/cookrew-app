@@ -256,7 +256,7 @@ describe('step 11 — Mac A revokes the phone', () => {
     expect(await verifier.refresh()).toBe(true)
     expect(admitted.has(phoneId as string)).toBe(true)
 
-    const revoked = await macA.accounts.revokeDevice(phoneId as string)
+    const revoked = await macA.accounts.revokeDevice(phoneId as string, PASSWORD)
     expect(revoked.ok).toBe(true)
 
     const startedAt = Date.now()
@@ -324,7 +324,8 @@ describe('the seat spine steps 8 and 10 ride on', () => {
     const seatId = seated.body.seat as string
 
     // Step 10: the owner ends it, and the very next token is refused.
-    const ended = await call('DELETE', teamRoute(`seats/${seatId}`), undefined, ownerToken)
+    // Ending somebody else's seat is on the step-up list (V3-FIX-C1 · H4).
+    const ended = await call('DELETE', teamRoute(`seats/${seatId}`), { current: PASSWORD }, ownerToken)
     // 204: the seat is gone and there is nothing to say about it.
     expect(ended.status).toBe(204)
     const after = await call('POST', teamRoute('call-token'), {}, guestToken)
@@ -390,11 +391,12 @@ describe('the seat spine steps 8 and 10 ride on', () => {
     expect(seated.kind).toBe('token')
     if (seated.kind !== 'token') return
 
-    // The owner ends it.
+    // The owner ends it — with the password, because taking something from
+    // somebody else is on the step-up list (V3-FIX-C1 · H4).
     const ended = await call(
       'DELETE',
       teamRoute(`seats/${seated.seat as string}`),
-      undefined,
+      { current: PASSWORD },
       ownerToken
     )
     expect(ended.status).toBe(204)

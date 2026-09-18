@@ -33,6 +33,7 @@ import { createFactorState, type FactorState } from './v2-factor-state'
 import { handleFactorRoute, signInWithLadder } from './v2-factor-routes'
 import { handleJoinRoute } from './v2-join'
 import { handleRenewRoute } from './v2-renew'
+import { readAndStepUp } from './v2-step-up'
 
 /**
  * IDENTITY v2 — THE ACCOUNT ROUTES.
@@ -535,6 +536,16 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
   }
   if (rest.length === 2 && rest[0] === 'devices' && method === 'DELETE') {
     const id = (ctx.decode(rest[1]) ?? '').toLowerCase()
+    /**
+     * STEP UP FIRST — taking another device off the account is on the list.
+     *
+     * It was a bearer-only act, which made a stolen session enough to detach
+     * the owner's own machines: the thief keeps the one sitting they hold and
+     * the owner is left with whatever the last-device rule spares them. The
+     * desktop already asked for the password before calling this, but it asked
+     * ITSELF — a check on the client is a check a caller can skip.
+     */
+    if (!(await readAndStepUp(ctx, signed, 'revoke-device')).ok) return
     // The name, read BEFORE the revoke removes it, so the roster event can
     // quote which device left.
     const goneName = account.devices.find((d) => d.id === id)?.name
