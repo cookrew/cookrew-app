@@ -86,9 +86,61 @@ export const ACCOUNT_COPY = {
   /** D8, what an account is for — and that nothing here waits on one. */
   FIRST_RUN_LEDE:
     'Serve teams, reach this Mac from your phone, take your seats with you. Nothing local needs it.',
-  /** D8, the join half. Drawn by nobody until cut 2 ships JOIN. */
+  /** D8, the join half — live in cut 2 (V3-10). */
   FIRST_RUN_JOIN_ASK: 'Have Cookrew on another device?',
   FIRST_RUN_JOIN_HOW: 'On your phone or other Mac: avatar → Devices → ADD A MAC.',
+  /**
+   * D8, THE CARD A DEEP LINK OPENS — and what it may honestly say.
+   *
+   * The design's mock heads this card "JOIN @DREJ ON THIS MAC?" and says the
+   * code came "from iPhone, minted 2 minutes ago". None of those three facts
+   * is on this Mac: `cookrew://join#<code>` carries eight characters and
+   * nothing else, and the account's name arrives only in the registry's 201
+   * — deliberately, since the mint and the redeem answer a stranger the same
+   * 401 whatever they guessed. So the card names what it can prove (a code
+   * arrived, from a device that is already signed in) and asks for the rest.
+   * The handle appears the moment it is a fact: on the avatar, after the join.
+   */
+  JOIN_TITLE: 'Join your Cookrew account on this Mac?',
+  JOIN_LEDE:
+    'This code was minted on a device you are already signed in on. This Mac becomes a device on the account; nothing on the canvas changes.',
+  /** Under the buttons: what pressing JOIN spends, before it is pressed. */
+  JOIN_ONCE: 'A code works once, for ten minutes. Every device is told when this Mac joins.',
+  JOIN_GO: 'JOIN',
+  /**
+   * The one refusal this card has its own sentence for.
+   *
+   * The registry answers a spent, expired or invented code with the same 401
+   * `bad_credentials` it answers a wrong password with — on purpose, so a
+   * guesser learns nothing from either. Here that reason can only mean the
+   * code, and `refusalSentence` would say "Your session ended", which is
+   * about a session this Mac has never had. The next step is not to retype
+   * it: a code is one-shot, so the next step is another code.
+   */
+  JOIN_CODE_SPENT:
+    'That code has been used or has expired. Codes work once — mint another on the device you are signed in on: avatar → Devices → ADD A MAC.',
+  /** D8, the first-run field beside the two buttons. */
+  JOIN_FIELD_LABEL: 'Code from your other device',
+  /**
+   * D12/M4, ADD A PHONE. The Mac's half of joining a phone is the same code
+   * — a phone scans rather than types, so the sentence names the QR and not
+   * the eight characters, and says the same two facts about its life.
+   */
+  ADD_A_PHONE:
+    'Scan this with the phone. It works once, for ten minutes. Every device will be told when the phone joins.',
+  /** D12, over the step-up field, before a code exists. */
+  ADD_STEP_UP: 'Type your password to make a code. Adding a machine always asks.',
+  /**
+   * D8/D5, THE FIRST LOCK OF A CODE-JOINED MAC.
+   *
+   * Nothing was typed here when this Mac joined, so there is no offline
+   * verifier and this is the one lock that needs cookrew.dev. Said in place
+   * of "Locked while you were away": it is not the ordinary lock, and the
+   * sentence has to explain both why a password is being asked for on a
+   * machine that never asked before and why it will not be again.
+   */
+  LOCK_FIRST_PASSWORD:
+    'This Mac joined with a code. Type your password once — cookrew.dev checks it, and after that this Mac unlocks on its own.',
   /** D3, under the three factor rows. */
   SECURITY_WHY:
     'Without a second factor, signing in on a new device needs your approval on this Mac. With one, it does not.',
@@ -243,13 +295,6 @@ export function signOutSentence(username: string): string {
   return accountCopy('d12.sign-out', { handle: normaliseUsername(username) })
 }
 
-/**
- * The two verbs cut 2 adds to the Devices tab (V3-10, V3-12). Rendered now,
- * disabled, so the tab already has the shape it will keep — a button that
- * appears later is a feature nobody can find; one that says when it comes is
- * a promise.
- */
-export const COMING_IN_CUT_2 = 'Coming in cut 2'
 
 /** "Not it. 4 tries left before a 1-minute pause." */
 export function wrongPasswordSentence(triesLeft: number): string {
@@ -703,17 +748,18 @@ export type FirstRunAction = 'signin' | 'register' | 'dismiss'
 export interface FirstRunView {
   title: string
   lede: string
-  /** The join half — null until the cut that ships JOIN. */
-  join: { ask: string; how: string } | null
+  /** The join half — a question, a field and how to get a code (D8). */
+  join: { ask: string; how: string; label: string; go: string } | null
   buttons: readonly { action: FirstRunAction; label: string }[]
 }
 
 /**
- * JOIN ships in cut 2 (V3-10). Until then the whole join half of the card is
- * absent rather than disabled: a greyed button with no way to make it work
- * is a card asking a question it cannot answer.
+ * JOIN ships in cut 2, and this is that cut (V3-10). It was false while the
+ * half had no destination — a greyed button with no way to make it work is a
+ * card asking a question it cannot answer — and the constant stays as the one
+ * place that decides, rather than the truth being spread across a component.
  */
-const FIRST_RUN_JOIN_SHIPS = false
+const FIRST_RUN_JOIN_SHIPS = true
 
 export interface FirstRunInput {
   status: AccountStatus | null
@@ -741,7 +787,12 @@ export function firstRunView(input: FirstRunInput): FirstRunView | null {
     title: ACCOUNT_COPY.FIRST_RUN_TITLE,
     lede: ACCOUNT_COPY.FIRST_RUN_LEDE,
     join: FIRST_RUN_JOIN_SHIPS
-      ? { ask: ACCOUNT_COPY.FIRST_RUN_JOIN_ASK, how: ACCOUNT_COPY.FIRST_RUN_JOIN_HOW }
+      ? {
+          ask: ACCOUNT_COPY.FIRST_RUN_JOIN_ASK,
+          how: ACCOUNT_COPY.FIRST_RUN_JOIN_HOW,
+          label: ACCOUNT_COPY.JOIN_FIELD_LABEL,
+          go: ACCOUNT_COPY.JOIN_GO,
+        }
       : null,
     buttons: [
       { action: 'signin', label: 'SIGN IN WITH PASSWORD' },
@@ -791,24 +842,82 @@ export interface LockNote {
   waiting: string | null
 }
 
-/** The lock screen's lines, whatever just happened and whoever is waiting. */
+/** Everything the lock channel can answer with — api.ts · UnlockAnswer. */
+export type LockOutcome =
+  | null
+  | { ok: true }
+  | { ok: false; reason: 'wrong'; triesLeft: number }
+  | { ok: false; reason: 'paused'; pausedForMs: number }
+  | { ok: false; reason: 'no-account' }
+  | { ok: false; reason: 'unproven'; refusal: AccountRefusal; message?: string }
+
+/**
+ * The lock screen's lines, whatever just happened and whoever is waiting.
+ *
+ * `passwordPending` (D8) changes the OPENING line and nothing else: a Mac
+ * that joined by a code is being asked for its password for the first time,
+ * and the ordinary "Locked while you were away" would not explain why. Every
+ * refusal after that reads the same as anywhere else — a wrong password is a
+ * wrong password on either kind of Mac.
+ */
 export function lockNote(
-  outcome:
-    | null
-    | { ok: true }
-    | { ok: false; reason: 'wrong'; triesLeft: number }
-    | { ok: false; reason: 'paused'; pausedForMs: number }
-    | { ok: false; reason: 'no-account' },
+  outcome: LockOutcome,
   waiting: LockWaiting = NOBODY_WAITING,
+  passwordPending = false,
 ): LockNote {
-  return { line: lockLine(outcome), waiting: lockWaitingSentence(waiting) }
+  return {
+    line: lockLine(outcome, passwordPending),
+    waiting: lockWaitingSentence(waiting),
+  }
 }
 
-function lockLine(outcome: Parameters<typeof lockNote>[0]): string {
-  if (outcome === null || outcome.ok) return ACCOUNT_COPY.LOCKED_WHY
+function lockLine(outcome: LockOutcome, passwordPending: boolean): string {
+  if (outcome === null || outcome.ok) {
+    return passwordPending ? ACCOUNT_COPY.LOCK_FIRST_PASSWORD : ACCOUNT_COPY.LOCKED_WHY
+  }
   if (outcome.reason === 'wrong') return wrongPasswordSentence(outcome.triesLeft)
   if (outcome.reason === 'paused') return pausedSentence(outcome.pausedForMs)
+  // D8: cookrew.dev was asked and the answer was not about the password —
+  // the registry's own reason, never "not it", which would send the owner to
+  // change what they are typing.
+  if (outcome.reason === 'unproven') return refusalSentence(outcome.refusal, outcome.message)
   return 'There is no account on this Mac to unlock.'
+}
+
+/** D12: what a freshly minted code is FOR, in the words of the kind asked for. */
+export function addDeviceSentence(kind: 'mac' | 'phone'): string {
+  return kind === 'mac' ? accountCopy('d12.add-a-mac') : ACCOUNT_COPY.ADD_A_PHONE
+}
+
+/**
+ * When a code dies, as a clock rather than a countdown.
+ *
+ * No ticking second: the sentence beside it already says "ten minutes", and a
+ * per-second timer in a sheet is a re-render a minute's worth of times for a
+ * fact that does not change — the same argument PairPhoneSheet makes for
+ * having no clock at all. A wall time is what a person compares against the
+ * clock they are already looking at.
+ */
+export function codeExpirySentence(expiresAt: number, now = Date.now()): string {
+  if (expiresAt <= now) return 'That code has expired. Make another.'
+  const at = new Date(expiresAt)
+  const hh = String(at.getHours()).padStart(2, '0')
+  const mm = String(at.getMinutes()).padStart(2, '0')
+  return `Good until ${hh}:${mm}.`
+}
+
+/**
+ * WHY A JOIN WAS REFUSED, in words that name the next step (D8).
+ *
+ * One refusal is re-read here and the rest are the house's: `bad_credentials`
+ * on this route can only be the code, and the shared sentence for it is about
+ * a session. See ACCOUNT_COPY.JOIN_CODE_SPENT.
+ */
+export function joinRefusalSentence(reason: AccountRefusal, message?: string): string {
+  if (reason === 'bad_credentials' || reason === 'session-expired') {
+    return ACCOUNT_COPY.JOIN_CODE_SPENT
+  }
+  return refusalSentence(reason, message)
 }
 
 /**

@@ -116,7 +116,13 @@ export interface AccountFile {
   /** The origin the account was claimed at; a key must not follow the owner. */
   registry: string
   session: AccountSession | null
-  unlock: UnlockVerifier
+  /**
+   * NULL ON A MAC THAT JOINED BY A CODE and has not yet seen the password
+   * (v3, D8). The first idle lock asks it once, `resume` proves it at
+   * cookrew.dev, and `landSession` writes the verifier. Until then the local
+   * lock has nothing to check against and says so (`passwordPending`).
+   */
+  unlock: UnlockVerifier | null
   lockAfterMs: number
   claimedAt: number
   /** May cookrew.dev offer this Mac's workspaces to the account's phones? */
@@ -247,8 +253,10 @@ function looksLikeAccount(value: unknown): value is AccountFile {
     typeof record.deviceId === 'string' &&
     typeof record.privateKeyJwk === 'object' &&
     record.privateKeyJwk !== null &&
-    typeof record.unlock === 'object' &&
-    record.unlock !== null
+    // `unlock` may be null: a code-joined Mac has no verifier until its
+    // first lock. Absent altogether is still not an account file.
+    'unlock' in record &&
+    (record.unlock === null || typeof record.unlock === 'object')
   )
 }
 
@@ -676,6 +684,91 @@ export class Accounts {
   }
 
   /**
+   * JOIN BY A CODE — the second Mac, with nothing typed on it but the code
+   * (v3, D8 · the security model's third line).
+   *
+   * A password alone never attaches a device. The authority is on the side
+   * that is already trusted: a signed-in device minted this code under
+   * step-up, and this Mac spends it — POST /v2/join {code, device} — with a
+   * device key minted here and offered as a NEW device. 201 lands through
+   * `saveClaimed` exactly as a sign-in does, with ONE difference: no unlock
+   * verifier, because no password was typed here and none may be derived.
+   * The first idle lock asks it once (account-ipc.ts · unlock) and `resume`
+   * writes the verifier through `landSession`.
+   *
+   * THE CODE IS DEAD WHATEVER HAPPENS NEXT. The registry spends it before it
+   * looks at the device, so a refusal here is never "try again with the same
+   * code" — the surface says so (JOIN_CODE_SPENT) and offers ADD A MAC on the
+   * other device. The file is written only on 201.
+   */
+  async join(input: { code: string; name?: string }): Promise<AccountResult<AccountFile>> {
+    const held = this.cached
+    if (held !== null) {
+      return { ok: false, reason: 'taken', message: `This Mac is already @${held.username}.` }
+    }
+    const code = input.code.trim()
+    if (code.length === 0) return { ok: false, reason: 'bad_credentials' }
+
+    const { privateKeyJwk, publicKeyJwk } = mintDeviceKey()
+    const deviceId = deviceIdFor(publicKeyJwk)
+    const name = input.name?.trim() || this.deviceName
+    let response: Response
+    try {
+      response = await this.http(`${this.origin}/v2/join`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          code,
+          device: { id: deviceId, kind: 'desktop', name, jwk: publicKeyJwk },
+        }),
+      })
+    } catch {
+      return { ok: false, reason: 'offline' }
+    }
+    if (response.status === 429) return { ok: false, reason: 'rate_limited' }
+    const body = await bodyOf(response)
+    if (response.status !== 201) return plainRefusal(classify(response.status, body))
+    const session = sessionFrom(body)
+    if (session === null) return { ok: false, reason: 'unknown' }
+    return {
+      ok: true,
+      value: this.saveClaimed({
+        // The code named the account; the registry says which. Ours would
+        // be a guess, and there is nothing here to guess from.
+        username: typeof body.username === 'string' ? body.username : '',
+        deviceId: typeof body.deviceId === 'string' ? body.deviceId : deviceId,
+        name,
+        password: null,
+        keys: { privateKeyJwk, publicKeyJwk },
+        session,
+      }),
+    }
+  }
+
+  /**
+   * MINT A JOIN CODE for another Mac (v3, D12 · ADD A MAC), under step-up.
+   *
+   * The password rides in the body because the registry asks for it again on
+   * this route — a session alone must not widen what the account opens from.
+   * The answer is the code, when it dies, and the link the site's /join page
+   * turns into `cookrew://join#<code>`.
+   */
+  async mintJoinCode(
+    current: string,
+  ): Promise<AccountResult<{ code: string; expiresAt: number; url: string }>> {
+    const result = await this.authed<{ code?: unknown; expiresAt?: unknown }>('/v2/me/join-codes', {
+      method: 'POST',
+      body: JSON.stringify({ current }),
+    })
+    if (!result.ok) return result
+    const { code, expiresAt } = result.value
+    if (typeof code !== 'string' || typeof expiresAt !== 'number') {
+      return { ok: false, reason: 'unknown' }
+    }
+    return { ok: true, value: { code, expiresAt, url: `${this.origin}/join#${code}` } }
+  }
+
+  /**
    * THE FILE A NAME LEAVES BEHIND, written in ONE place.
    *
    * A username reaches this Mac two ways now — claimed fresh, or migrated
@@ -688,7 +781,12 @@ export class Accounts {
     username: string
     deviceId: string
     name: string
-    password: string
+    /**
+     * The password, when it was in hand — a claim, a sign-in, a migration.
+     * NULL for a join by code (v3, D8): nothing was typed on this Mac, so
+     * nothing can be derived, and the file says so rather than pretending.
+     */
+    password: string | null
     keys: { privateKeyJwk: Record<string, unknown>; publicKeyJwk: Record<string, unknown> }
     session: AccountSession | null
   }): AccountFile {
@@ -701,7 +799,7 @@ export class Accounts {
       publicKeyJwk: input.keys.publicKeyJwk,
       registry: this.origin,
       session: input.session,
-      unlock: unlockVerifierFor(input.password),
+      unlock: input.password === null ? null : unlockVerifierFor(input.password),
       lockAfterMs: DEFAULT_LOCK_AFTER_MS,
       claimedAt: this.now(),
       workspacesReachable: true,
@@ -761,8 +859,20 @@ export class Accounts {
   /** Does this password unlock the app? Offline, and the only use of it. */
   verifyUnlock(password: string): boolean {
     const account = this.cached
-    if (!account) return false
+    // No verifier is NOT a match: a code-joined Mac has nothing to check
+    // against offline, and "nothing to check" must never read as "correct".
+    if (!account || account.unlock === null) return false
     return matchesUnlock(account.unlock, password)
+  }
+
+  /**
+   * Has this Mac joined by a code and not yet seen the password (v3, D8)?
+   * The lock screen says so, and the unlock channel goes to the registry
+   * instead of the (absent) local verifier while it is true.
+   */
+  passwordPending(): boolean {
+    const account = this.cached
+    return account !== null && account.unlock === null
   }
 
   /**

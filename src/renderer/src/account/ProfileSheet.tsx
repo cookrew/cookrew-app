@@ -13,8 +13,11 @@ import {
   refusalSentence,
   revokeSentence,
   signOutSentence,
-  COMING_IN_CUT_2,
+  addDeviceSentence,
+  codeExpirySentence,
 } from './account-store'
+import { QrCode } from './QrCode'
+import { qrMatrix } from '../../../shared/qr'
 import { ApprovalCard } from './ApprovalCard'
 import { DOING, problemSentence } from './problem'
 import { PairPhoneSheet } from './PairPhoneSheet'
@@ -103,6 +106,16 @@ export function ProfileSheet({
   /** The step-up password. Spent the moment the act is done, either way. */
   const [stepUp, setStepUp] = useState('')
   const [acting, setActing] = useState(false)
+  /**
+   * D12: which machine the owner pressed ADD for, while its password is
+   * being typed and after the code exists. One at a time, like the step-up
+   * on the rows above: two codes on screen would be two live codes, and the
+   * registry keeps one.
+   */
+  const [adding, setAdding] = useState<'mac' | 'phone' | null>(null)
+  const [minted, setMinted] = useState<{ code: string; expiresAt: number; url: string } | null>(
+    null,
+  )
   const [admitted, setAdmitted] = useState<readonly AdmittedPhone[]>([])
   const [pairing, setPairing] = useState(false)
   /** The devices waiting for an answer (D6) — main's polled queue. */
@@ -176,6 +189,43 @@ export function ProfileSheet({
         else setError('That phone could not be forgotten. Try again.')
       })
       .catch((err: unknown) => setError(problemSentence(DOING.FORGET, err)))
+  }
+
+  /**
+   * ADD A MAC / ADD A PHONE (D12) — the code is minted under step-up.
+   *
+   * The registry asks for the password again on this route and so does this
+   * sheet: minting a join code widens what the account can be opened from,
+   * which is the definition of a step-up act. The password is spent at once
+   * and never kept; the code that comes back is one-shot and ten minutes old
+   * at most, which the sentence beside it says.
+   */
+  const mintCode = (): void => {
+    const call = cookrew().accountJoinCode
+    if (!call || acting || stepUp.length === 0 || adding === null) return
+    setActing(true)
+    setError(null)
+    void call(stepUp)
+      .then((result) => {
+        setActing(false)
+        setStepUp('')
+        if (!result.ok) {
+          setError(refusalSentence(result.reason, result.message, username))
+          return
+        }
+        setMinted(result.value)
+      })
+      .catch((err: unknown) => {
+        setActing(false)
+        setError(problemSentence(DOING.JOIN_CODE, err))
+      })
+  }
+
+  /** Close the ADD panel, whichever half of it is on screen. */
+  const closeAdd = (): void => {
+    setAdding(null)
+    setMinted(null)
+    setStepUp('')
   }
 
   /** Both verbs end the same way: the field is emptied, the row closes. */
@@ -469,18 +519,85 @@ export function ProfileSheet({
                 <li className="gs-dim">No devices listed yet.</li>
               )}
             </ul>
-            {/* THE TWO VERBS CUT 2 ADDS (V3-10 ADD A MAC, V3-12 ADD A PHONE).
-                Disabled, with the reason on hover, and with NO handler: a
-                button that looked live and did nothing would be the exact
-                thing this tab exists to stop people guessing about. */}
+            {/* THE TWO VERBS THAT ADD A MACHINE (D12 · V3-10). Both mint the
+                SAME kind of code — one live per account — and differ only in
+                what a person does with it: a Mac types the eight characters,
+                a phone scans the link. So the ceremony is one panel and the
+                sentence is the thing that changes. */}
             <div className="cr-acct-row cr-acct-add">
-              <button className="gs-ghost" disabled title={COMING_IN_CUT_2} aria-disabled="true">
+              <button
+                className="gs-ghost"
+                disabled={acting}
+                onClick={() => {
+                  closeAdd()
+                  setAdding(adding === 'mac' ? null : 'mac')
+                }}
+              >
                 ADD A MAC
               </button>
-              <button className="gs-ghost" disabled title={COMING_IN_CUT_2} aria-disabled="true">
+              <button
+                className="gs-ghost"
+                disabled={acting}
+                onClick={() => {
+                  closeAdd()
+                  setAdding(adding === 'phone' ? null : 'phone')
+                }}
+              >
                 ADD A PHONE
               </button>
             </div>
+            {adding !== null && (
+              <div className="cr-acct-addmac">
+                {minted === null ? (
+                  <>
+                    <p className="gs-consequence">{ACCOUNT_COPY.ADD_STEP_UP}</p>
+                    <div className="cr-acct-row">
+                      <input
+                        type="password"
+                        className="gs-input"
+                        aria-label="Password"
+                        placeholder="password"
+                        autoComplete="current-password"
+                        value={stepUp}
+                        onChange={(e) => setStepUp(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') mintCode()
+                          if (e.key === 'Escape') closeAdd()
+                        }}
+                      />
+                      <button
+                        className="gs-primary"
+                        disabled={acting || stepUp.length === 0}
+                        onClick={mintCode}
+                      >
+                        MAKE A CODE
+                      </button>
+                      <button className="gs-ghost" disabled={acting} onClick={closeAdd}>
+                        CANCEL
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="gs-consequence">{addDeviceSentence(adding)}</p>
+                    <p className="cr-acct-joincode">{minted.code}</p>
+                    {/* THE QR IS THE LINK, NOT THE CODE. A camera that reads
+                        eight characters has nowhere to put them; the link
+                        opens cookrew.dev/join, which hands the code to the
+                        app through `cookrew://join#…` — the fragment, so the
+                        code never reaches the site's server. */}
+                    <QrCode rows={qrRows(minted.url)} label={addDeviceSentence(adding)} />
+                    <p className="cr-acct-addlink">{minted.url}</p>
+                    <p className="gs-hint">{codeExpirySentence(minted.expiresAt)}</p>
+                    <div className="cr-acct-row">
+                      <button className="gs-ghost" onClick={closeAdd}>
+                        DONE
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
             {/* ADMITTED PHONES ARE A DIFFERENT KIND OF FACT and get their own
                 heading rather than being mixed in. The list above is the
                 ACCOUNT's devices, known to cookrew.dev and revocable there;
@@ -550,4 +667,17 @@ export function ProfileSheet({
       </div>
     </div>
   )
+}
+
+/**
+ * The QR's modules as the rows QrCode draws, or none.
+ *
+ * The encoder is shared (shared/qr.ts) and the picture is the component's;
+ * this is the one line between them, kept here rather than widening QrCode's
+ * contract — the authenticator sheet feeds it rows main encoded, and two
+ * shapes for one prop would be a component with an opinion about who called.
+ */
+function qrRows(text: string): readonly string[] {
+  const modules = qrMatrix(text)
+  return modules === null ? [] : modules.map((row) => row.map((on) => (on ? '1' : '0')).join(''))
 }

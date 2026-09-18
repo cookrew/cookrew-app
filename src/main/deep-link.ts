@@ -1,5 +1,6 @@
 import { COOKREW_REGISTRY, parseServeAddress } from './import-session'
 import type { DeepLink } from '../shared/deep-link'
+import { normaliseJoinCode } from '../shared/join-code'
 
 export type { DeepLink } from '../shared/deep-link'
 
@@ -78,6 +79,22 @@ function fromRegistryPage(url: URL): DeepLink | null {
   return address === null ? null : { verb: 'import', address }
 }
 
+/**
+ * `cookrew://join#<code>` — the ONE shape that may carry a fragment.
+ *
+ * Every other link is refused for having one, and stays refused: a fragment
+ * is the part of a URL that never reaches a server, which is exactly why the
+ * join code lives there and exactly why nothing else may. The path and the
+ * query must be empty; a link that says `join/something#code` is asking for
+ * a behaviour this app does not have.
+ */
+function fromJoin(url: URL): DeepLink | null {
+  if (url.username || url.password || url.search.length > 0) return null
+  if (url.pathname !== '' && url.pathname !== '/') return null
+  const code = normaliseJoinCode(decodeURIComponent(url.hash.replace(/^#/, '')))
+  return code === null ? null : { verb: 'join', code }
+}
+
 /** Parse one link, or null. Never throws, never rewrites. */
 export function parseDeepLink(raw: string): DeepLink | null {
   const trimmed = raw.trim()
@@ -88,6 +105,7 @@ export function parseDeepLink(raw: string): DeepLink | null {
   } catch {
     return null
   }
+  if (url.protocol === `${DEEP_LINK_SCHEME}:` && url.hostname === 'join') return fromJoin(url)
   if (url.username || url.password || url.hash) return null
   if (url.protocol === `${DEEP_LINK_SCHEME}:`) return fromScheme(url)
   if (url.protocol === 'https:') return fromRegistryPage(url)

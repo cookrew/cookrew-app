@@ -37,3 +37,30 @@ export function requestAccountSheet(): boolean {
   for (const listener of listeners) listener()
   return listeners.size > 0
 }
+
+/**
+ * "A JOIN CODE ARRIVED" — the same seam, for the other thing that opens a
+ * card from outside (v3, D8).
+ *
+ * `cookrew://join#<code>` is parsed in main and delivered on the one deep-link
+ * channel App already holds — the bridge keeps a SINGLE subscriber slot, so a
+ * second listener in the account surface would silently replace App's and the
+ * import links would stop arriving. App routes the verb here instead, which
+ * costs one line there and keeps every deep link parsed in exactly one place.
+ */
+type JoinListener = (code: string) => void
+
+const joinListeners = new Set<JoinListener>()
+
+export function onJoinRequest(listener: JoinListener): () => void {
+  joinListeners.add(listener)
+  return () => {
+    joinListeners.delete(listener)
+  }
+}
+
+/** Ask the mounted surface to offer this code. False when nothing listens. */
+export function requestJoin(code: string): boolean {
+  for (const listener of joinListeners) listener(code)
+  return joinListeners.size > 0
+}

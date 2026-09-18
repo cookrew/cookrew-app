@@ -13,6 +13,7 @@ import { Header } from '../src/renderer/src/Header'
 import { AccountAvatar } from '../src/renderer/src/account/Avatar'
 import { AccountSheet } from '../src/renderer/src/account/AccountSheet'
 import { FirstRunCard } from '../src/renderer/src/account/FirstRunCard'
+import { JoinCard } from '../src/renderer/src/account/JoinCard'
 import { LockScreen } from '../src/renderer/src/account/LockScreen'
 import { SecurityCard } from '../src/renderer/src/account/SecurityCard'
 import { ProfileSheet } from '../src/renderer/src/account/ProfileSheet'
@@ -48,6 +49,7 @@ const BASE: AccountStatus = {
   envUsername: null,
   legacy: null,
   sessionExpired: false,
+  passwordPending: false,
   registryMismatch: null,
   workspacesReachable: true,
   recoveryCodesSavedAt: null,
@@ -427,13 +429,22 @@ describe('the Devices tab knows which Mac it is on (v3, D12)', () => {
     expect(html).toContain('Mac Studio · studio')
   })
 
-  it('renders ADD A MAC and ADD A PHONE disabled, saying when they come, with no handler', () => {
+  it('renders ADD A MAC and ADD A PHONE live now that cut 2 ships them (V3-10)', () => {
     for (const verb of ['ADD A MAC', 'ADD A PHONE']) {
       const button = html.match(new RegExp(`<button[^>]*>${verb}</button>`))?.[0]
       expect(button, verb).toBeDefined()
-      expect(button).toContain('disabled=""')
-      expect(button).toContain('title="Coming in cut 2"')
+      // They were disabled with "Coming in cut 2" while there was no route
+      // behind them. There is one now, so the placeholder is gone with it.
+      expect(button).not.toContain('disabled=""')
+      expect(button).not.toContain('Coming in cut 2')
     }
+    expect(html).not.toContain('Coming in cut 2')
+  })
+
+  it('mints nothing until ADD is pressed — the panel is closed on open', () => {
+    expect(html).not.toContain('Type your password to make a code')
+    expect(html).not.toContain('MAKE A CODE')
+    expect(html).not.toContain('cr-acct-addmac')
   })
 
   it('asks for nothing until a verb is pressed', () => {
@@ -535,5 +546,62 @@ describe('a session cookrew.dev threw away is answerable on screen', () => {
     // The guarantee that makes the invariant hold: the sentence lives in
     // ResumeSession and nowhere else, so no card can print it on its own.
     expect(saysSessionEnded(card({ sessionExpired: true }))).toBe(false)
+  })
+})
+
+describe('the card a join code opens (v3, D8)', () => {
+  const html = renderToStaticMarkup(
+    <JoinCard code="7KQ4-M2XB" onJoined={() => undefined} onDismiss={() => undefined} />,
+  )
+
+  it('asks, shows the code it is about to spend, and offers both answers', () => {
+    expect(html).toContain(ACCOUNT_COPY.JOIN_TITLE)
+    expect(html).toContain(ACCOUNT_COPY.JOIN_LEDE)
+    expect(html).toContain('7KQ4-M2XB')
+    expect(html).toContain('>JOIN</button>')
+    expect(html).toContain('>NOT NOW</button>')
+    expect(html).toContain(ACCOUNT_COPY.JOIN_ONCE)
+  })
+
+  it('does not name a handle it cannot know yet', () => {
+    // The link carries eight characters. The account's name arrives in the
+    // registry's 201 — the mock's "JOIN @DREJ ON THIS MAC?" would be this
+    // Mac inventing one.
+    expect(html).not.toContain('@')
+  })
+
+  it('spends nothing by being on screen — the code has to be pressed', () => {
+    // A static render runs the component body. If it reached for the bridge,
+    // this would have thrown on a window without one.
+    expect(html).toContain('cr-acct-joincode')
+  })
+})
+
+describe('the first-run card’s JOIN half (v3, D8)', () => {
+  // A fresh Mac: no account, and only the seeded workspace.
+  const view = firstRunView({
+    status: status({ username: null }),
+    workspaceCount: 1,
+    dismissed: false,
+  })
+
+  it('draws a field and a JOIN when there is somewhere for a code to go', () => {
+    if (view === null) throw new Error('the first-run card should be placed here')
+    const html = renderToStaticMarkup(
+      <FirstRunCard view={view} onAction={() => undefined} onJoin={() => undefined} />,
+    )
+    expect(html).toContain(ACCOUNT_COPY.FIRST_RUN_JOIN_ASK)
+    expect(html).toContain(ACCOUNT_COPY.FIRST_RUN_JOIN_HOW)
+    expect(html).toContain('placeholder="7KQ4-M2XB"')
+    // Empty is not a code, so the button starts refused rather than sending
+    // nothing to the registry.
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>JOIN<\/button>/)
+  })
+
+  it('draws no field at all when there is nowhere for a code to go', () => {
+    if (view === null) throw new Error('the first-run card should be placed here')
+    const html = renderToStaticMarkup(<FirstRunCard view={view} onAction={() => undefined} />)
+    expect(html).not.toContain(ACCOUNT_COPY.FIRST_RUN_JOIN_ASK)
+    expect(html).not.toContain('placeholder="7KQ4-M2XB"')
   })
 })

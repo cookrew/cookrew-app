@@ -67,6 +67,11 @@ const api = {
    * never held; a fresh device key is minted in main. Answers the same ladder
    * as `accountResume`, and the same three rungs finish it.
    */
+  // v3 (D8 · D12): join with a code minted where the trust already is, and
+  // mint one for the next machine.
+  accountJoin: (input: { code: string; name?: string }) =>
+    ipcRenderer.invoke('account:join', input),
+  accountJoinCode: (current: string) => ipcRenderer.invoke('account:joinCode', current),
   accountSignIn: (input: { username: string; password: string; name?: string }) =>
     ipcRenderer.invoke('account:signIn', input),
   accountResumeCode: (input: { pending: string; factor: 'totp' | 'recovery'; code: string }) =>

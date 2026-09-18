@@ -86,6 +86,16 @@ export interface AccountStatus {
   /** The session died of old age; the next authed action needs the password. */
   sessionExpired: boolean
   /**
+   * THIS MAC JOINED BY A CODE AND HAS NOT SEEN THE PASSWORD YET (v3, D8).
+   *
+   * A code-joined Mac writes account.json with NO offline unlock verifier —
+   * zero password on the new machine until trust exists. True until the
+   * first idle lock, where the lock screen asks the password once, cookrew.dev
+   * proves it, and the verifier is written. The lock screen reads this to say
+   * so, and the unlock channel reads it to know the local check cannot run.
+   */
+  passwordPending: boolean
+  /**
    * THE APP IS POINTED AT A REGISTRY THIS ACCOUNT WAS NOT CLAIMED AT.
    *
    * Null in the ordinary case. Non-null means every authed call is going to a

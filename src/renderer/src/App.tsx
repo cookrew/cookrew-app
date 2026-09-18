@@ -1,4 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { requestJoin } from './account/open-request'
 import {
   Background,
   BackgroundVariant,
@@ -499,6 +500,14 @@ function Canvas(): React.JSX.Element {
           // the app does have is the import sheet, so the link opens that.
           setImportPrefill(null)
           setImportServedOpen(true)
+          return
+        }
+        if (link.verb === 'join') {
+          // D8: the account surface owns the card that spends a code. It is
+          // asked rather than rendered here, because the bridge holds one
+          // deep-link subscriber and this component is it.
+          requestJoin(link.code)
+          return
         }
         // 'serve' would open the share sheet for a saved template; that sheet
         // exists only on a selection today, so the link is set aside.
