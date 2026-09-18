@@ -137,6 +137,8 @@ beforeAll(async () => {
   const identity: MobileIdentityDeps = {
     account: () => account,
     registryOrigin: () => site.origin,
+    // This suite drives the gate, not the admission ceiling.
+    admitLimiter: { take: () => true },
     admitted
   }
   desktop = await listen(

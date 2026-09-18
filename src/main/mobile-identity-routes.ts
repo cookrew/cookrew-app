@@ -4,7 +4,9 @@ import type { AccountFile } from './account-v2'
 import type { AdmittedDeviceStore } from './admitted-devices'
 import { companionCredential } from './companion-gate'
 import { helloAnswer, helloAnswerV2, helloCorsHeaders, readAdmission } from './device-hello'
+import { ADMITTED_MAX } from './admitted-devices'
 import { bearerToken, readJson, respondJson } from './mobile-http'
+import type { RateCeiling } from '../shared/fixed-window-limiter'
 import { safeDeviceName, type RelayDevice } from './relay-device'
 import { publishedRequestOrigin } from '../shared/hello-proof'
 
@@ -24,6 +26,23 @@ import { publishedRequestOrigin } from '../shared/hello-proof'
  * token never opens a transcript directly again — once the companion side
  * bootstraps (V3-14); until then companion-gate's `rootEverywhere` keeps
  * paired phones working.
+ *
+ * THERE IS NO CONSENT PROMPT HERE, AND THAT IS DELIBERATE (b). Consent for
+ * admitting a device is expressed twice already, in the two places a device
+ * can arrive from, and a third would be a prompt that can disagree with them:
+ *
+ *   ON THIS WI-FI the consent is physical. The root pairing token is on a QR
+ *   the owner shows, or in a URL `cookrew mobile` prints on their own screen;
+ *   holding it means somebody with the Mac in front of them handed it over.
+ *   A dialog on top of that asks the owner to confirm a thing they just did.
+ *
+ *   FROM ANYWHERE ELSE the consent is the ALLOW row — the reach request the
+ *   registry queues and the owner answers on the Mac (V3-11's route, V3-12's
+ *   card). That ceremony exists, it is the one the design draws (D11/M5), and
+ *   it is where a device the owner has NOT met asks for this Mac's keyboard.
+ *
+ * So this route is the mechanism both of those end in, not a third door, and
+ * the ceiling below is what a mechanism gets instead of a prompt.
  *
  *   ANSWER  200 { deviceId, name?, token, desktopId }
  *           token is 24 random bytes base64url — the same width as the root,
@@ -59,6 +78,12 @@ import { publishedRequestOrigin } from '../shared/hello-proof'
  * absent, or `account()` answering null, leaves it silent.
  */
 
+/**
+ * Admissions one credential may make in a minute. Far above a person
+ * bootstrapping a phone, far below a loop. See `admit` for the argument.
+ */
+export const ADMIT_PER_MINUTE = 6
+
 export interface MobileIdentityDeps {
   readonly account: () => AccountFile | null
   readonly registryOrigin: () => string
@@ -88,6 +113,14 @@ export interface MobileIdentityDeps {
    * the running server is the one that counts. Null before it is minted.
    */
   readonly pairingToken?: () => string | null
+  /**
+   * HOW OFTEN ONE CREDENTIAL MAY ADMIT. Required, not optional, on the
+   * argument mobile-api makes for the pairing token: a bound a caller can
+   * switch off by forgetting a field is a bound that gets forgotten. An
+   * embedder that wants no ceiling has to say so out loud by passing one that
+   * always answers true.
+   */
+  readonly admitLimiter: RateCeiling
 }
 
 export const handleIdentityRoutes = async (
@@ -266,6 +299,55 @@ const admit = async (
     deps.log?.('refused an admission for a device other than the one that asked')
     respondJson(response, 403, {
       error: 'This device may take a new token for itself, not for another device.'
+    })
+    return true
+  }
+  /**
+   * A CEILING PER CREDENTIAL (b).
+   *
+   * H1 closed the ghost, so an admitted phone can now only re-mint its OWN
+   * token — but two harms survive that and neither needs a ghost: a
+   * root-token holder can add rows without end, and any admitted phone can
+   * rotate its own credential in a loop, every rotation a temp-and-rename of
+   * a 0600 file and every rotation invalidating the token the phone is
+   * holding. Six a minute is far above a person bootstrapping a phone and far
+   * below a loop.
+   *
+   * KEYED ON THE CREDENTIAL, not on the address. One phone's loop must not
+   * lock another phone out, and on the LAN the address is a router. Every
+   * root-opened admission shares one budget, which is right: they are all the
+   * same credential.
+   *
+   * COUNTED AFTER THE PROOF, so a caller cannot spend somebody else's budget
+   * by sending rubbish in their name — the proof is what says which name this
+   * is. That costs one signature verification per refused call, which is the
+   * cheap half of this route; the ledger write is the expensive half and it
+   * is what the ceiling protects.
+   */
+  const budget = opened.kind === 'device' ? `device|${opened.deviceId}` : 'root'
+  if (!deps.admitLimiter.take(budget)) {
+    deps.log?.('refused an admission over the rate ceiling')
+    respondJson(response, 429, {
+      error: 'Too many admissions just now. Try again in a minute.'
+    })
+    return true
+  }
+  /**
+   * AND A CAP ON THE LEDGER ITSELF (b).
+   *
+   * Only for a device this Mac does not already hold: re-minting REPLACES a
+   * row and cannot grow the file, so refusing it at the cap would lock a
+   * phone that is already admitted out of recovering its own token. The
+   * sentence names FORGET because that is the control on the same screen and
+   * the only thing that makes room.
+   */
+  if (
+    !deps.admitted.has(reading.deviceId) &&
+    deps.admitted.list().length >= ADMITTED_MAX
+  ) {
+    deps.log?.('refused an admission: this Mac is holding as many devices as it will')
+    respondJson(response, 403, {
+      error: `This Mac is open for ${ADMITTED_MAX} devices already. Forget one in Devices to make room.`
     })
     return true
   }

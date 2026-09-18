@@ -51,6 +51,7 @@ import type { LoopHealthSnapshot } from './loop-health'
 import { holdSocketsOpen, presentedToken, readJson, respondJson } from './mobile-http'
 import { companionAccepted } from './companion-gate'
 import { COMPANION_BOOTSTRAPS } from '../shared/lan-token-mode'
+import { FixedWindowLimiter } from '../shared/fixed-window-limiter'
 import { handleCallRoutes, type CallEndpointDeps } from './call-endpoints'
 import { handlePathReportRoutes } from './path-report-routes'
 import { createTlsPortGate, httpsRedirectTarget } from './tls-port-gate'
@@ -59,7 +60,11 @@ import { rendererSourceFor, staleBuildNotice } from './renderer-choice'
 import { batchFrames, parseBatchIds, parseKnownVersions, scopedBrowserIds, scopedThumbLookup } from './browser-thumb-batch'
 import { fetchRendererDevResource, rendererDevPathAllowed } from './renderer-dev-proxy'
 import { isViteHmrUpgrade, proxyViteHmrUpgrade } from './hmr-proxy'
-import { handleIdentityRoutes, type MobileIdentityDeps } from './mobile-identity-routes'
+import {
+  ADMIT_PER_MINUTE,
+  handleIdentityRoutes,
+  type MobileIdentityDeps
+} from './mobile-identity-routes'
 import { companionAccount } from './companion-account'
 import { RELAY_BASE_HEADER, RELAY_MARKER, relayBaseOf } from './relay-base'
 import { takeRelayDevice, type RelayDevice } from './relay-device'
@@ -117,6 +122,13 @@ let activeWallToken: string | null = null
  * switch that is the only way to reach the secure path is not.
  */
 let rootEverywhere = !COMPANION_BOOTSTRAPS
+
+/**
+ * HOW OFTEN ONE CREDENTIAL MAY ADMIT A DEVICE (mobile-identity-routes.ts).
+ * Module scope because a per-request limiter bounds nothing, and per process
+ * because a restart forgiving everyone is the right trade for a burst bound.
+ */
+const admitLimiter = new FixedWindowLimiter(ADMIT_PER_MINUTE)
 
 /** SAN list of the cert actually in use; empty until HTTPS starts. */
 let certSans: string[] = []
@@ -200,7 +212,15 @@ export interface MobileServerDeps {
    * the route does not exist and nothing is recorded, which is exactly the
    * state of a desktop that has not claimed a username.
    */
-  identity?: MobileIdentityDeps
+  /**
+   * The identity routes' own deps, MINUS the three this server owns and
+   * supplies per request: the origins it answers on, the running root token,
+   * and the admission ceiling. index.ts knows about none of the three — it
+   * would have to be told about listeners it deliberately knows nothing
+   * about, a singleton it does not hold, and a burst bound whose lifetime is
+   * this process rather than that module.
+   */
+  identity?: Omit<MobileIdentityDeps, 'selfOrigins' | 'pairingToken' | 'admitLimiter'>
   /**
    * Whether workspace sessions are multi-instance. Gates slug routing: off,
    * /<slug>/... is not a route and every path keeps its existing meaning.
@@ -1221,7 +1241,9 @@ export async function handle(
          * direct-handle caller could use the root on every ordinary route and
          * not on the one route this module says it may open.
          */
-        pairingToken: () => activePairingToken ?? deps.pairingToken ?? null
+        pairingToken: () => activePairingToken ?? deps.pairingToken ?? null,
+        // Per process, because that is the lifetime of the burst it bounds.
+        admitLimiter
       },
       bridgeDevice
     )
