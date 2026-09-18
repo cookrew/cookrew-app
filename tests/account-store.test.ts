@@ -521,23 +521,25 @@ describe('taking a factor off', () => {
 })
 
 describe('what makes the DEVICES tab re-read itself', () => {
+  // The tab is part of the key now (F4); these three are about the other half
+  // of it, so they hold the tab still and vary what they are about.
   it('changes when a waiting request is answered', () => {
     // Approving attaches the device at the registry; the count dropping is
     // the moment the list on screen went stale.
-    expect(profileKey({ username: 'drej', requests: 1 })).not.toBe(
-      profileKey({ username: 'drej', requests: 0 }),
+    expect(profileKey({ username: 'drej', requests: 1 }, 'DEVICES')).not.toBe(
+      profileKey({ username: 'drej', requests: 0 }, 'DEVICES'),
     )
   })
 
   it('is stable while nothing has happened, so the sheet does not thrash', () => {
-    expect(profileKey({ username: 'drej', requests: 0 })).toBe(
-      profileKey({ username: 'drej', requests: 0 }),
+    expect(profileKey({ username: 'drej', requests: 0 }, 'DEVICES')).toBe(
+      profileKey({ username: 'drej', requests: 0 }, 'DEVICES'),
     )
   })
 
   it('changes with the account, so a claim redraws the tab', () => {
-    expect(profileKey({ username: null, requests: 0 })).not.toBe(
-      profileKey({ username: 'drej', requests: 0 }),
+    expect(profileKey({ username: null, requests: 0 }, 'DEVICES')).not.toBe(
+      profileKey({ username: 'drej', requests: 0 }, 'DEVICES'),
     )
   })
 })
