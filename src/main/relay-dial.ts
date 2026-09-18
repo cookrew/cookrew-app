@@ -35,6 +35,17 @@ export interface RelayDial {
    * uplink ended the serving silently and permanently.
    */
   onEnded(listener: (why: string) => void): void
+  /**
+   * ANOTHER MAC OF THIS ACCOUNT TOOK THE NAME (V3-18).
+   *
+   * Fired before `onEnded`, and it is the difference between a door that stops
+   * and a door that fights. Every other ending here means "try again" — a
+   * proxy's idle timeout, wifi, a relay restart — so serving redials on all of
+   * them. This one means the name is somebody else's now, and redialling would
+   * take it straight back: two Macs of one account passing a door between them
+   * for as long as both stay running.
+   */
+  onSuperseded(listener: (by: string) => void): void
   close(): void
 }
 
@@ -80,6 +91,7 @@ export function dialRelay(options: RelayDialOptions): RelayDial {
   ready.catch(() => undefined)
 
   const endedListeners: ((why: string) => void)[] = []
+  const supersededListeners: ((by: string) => void)[] = []
   /** When the relay last said anything on the downlink; 0 until `ready`. */
   let lastHeard = 0
   const quietMs = options.quietMs ?? QUIET_MS
@@ -144,6 +156,14 @@ export function dialRelay(options: RelayDialOptions): RelayDial {
           shutDown(`the relay would not serve this name (${frame.reason})`)
           continue
         }
+        // Said BEFORE the line ends, because after it there is nothing to say
+        // it on — and told to the listeners before shutDown runs, so serving
+        // has already learned not to redial by the time `onEnded` fires.
+        if (frame?.t === 'superseded') {
+          supersededListeners.forEach((l) => l(frame.by))
+          shutDown(`another machine took this name (${frame.by})`)
+          continue
+        }
         listeners.forEach((l) => l(line))
       }
     })
@@ -202,6 +222,7 @@ export function dialRelay(options: RelayDialOptions): RelayDial {
     socket,
     ready,
     onEnded: (listener) => endedListeners.push(listener),
+    onSuperseded: (listener) => supersededListeners.push(listener),
     close: () => shutDown('the door withdrew')
   }
 }

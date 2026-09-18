@@ -192,10 +192,41 @@ export function createRegistry(deps: RegistryDeps): Server {
   const relay: RelayHttp | null = deps.relay
     ? createRelayHttp({
         identity: deps.identity,
+        /**
+         * ONE IDENTITY, FROM THE SIGN-IN DOOR TO THE SERVED DOOR (V3-18).
+         *
+         * A door's handle was provable only with the v1 registry key, which
+         * each machine mints for itself — so the SECOND Mac of an account
+         * enrolled a different key under the same credential id, was refused
+         * `credential_exists`, and could never serve. Two Macs of one account
+         * and one team slug was unreachable a layer above the hub. A signed-in
+         * account username is the same claim and a narrower credential.
+         */
+        ...(deps.v2 === undefined
+          ? {}
+          : {
+              accountOf: (request: IncomingMessage): string | null =>
+                signedIn(request, deps.v2!)?.account.username ?? null
+            }),
         log: deps.note,
         onAnswer: (name, method, path, status) => {
           if (status >= 400) return
           deps.pulse?.door(name, method === 'GET' && status === 200 && (path === '/line' || path.startsWith('/line?')) ? 'line' : 'call')
+        },
+        /**
+         * A DOOR CHANGED HANDS AT THE HUB (V3-18).
+         *
+         * The relay is where the name is actually held, so this is the moment
+         * the move is TRUE — before the new holder gets round to filing its
+         * desktop record, and whether or not it ever does. The directory is
+         * brought into line here and the account's feed is told once; a Mac
+         * that later PUTs the same claim moves nothing and says nothing, which
+         * is what keeps one move from being announced twice.
+         */
+        onDoorMoved: ({ handle, team, deviceId, by }) => {
+          const moved = deps.v2?.accounts.moveDoor(handle, team, deviceId)
+          if (moved?.ok !== true || moved.from === null) return
+          deps.v2?.events.append(handle, { kind: 'door-moved', device: by })
         }
       })
     : null

@@ -213,6 +213,7 @@ import {
 import http from 'node:http'
 import { MOBILE_HTTPS_PORT, MOBILE_PORT } from './mobile-ports'
 import { createRelayServing } from './relay-serving'
+import { doorMovedSentence } from '../shared/door-ownership'
 import { startRelayProxy, type RelayProxy } from './relay-proxy'
 import { importedDoors, rememberDoor, resolveDoor } from './relay-doorbook'
 import { SERVED_SESSION_END_PATH } from '../shared/served-transcript'
@@ -220,7 +221,7 @@ import { DoorTranscript } from './door-transcript'
 import { DoorWatch } from './door-watch'
 import { doorNameOf, transcriptSourceFor } from './transcript-source'
 import { readJson, respondJson } from './mobile-http'
-import { deriveSlug, uniqueSlug } from './workspace-slug'
+import { deriveSlug, uniqueSlug } from '../shared/workspace-slug'
 import { publishedLocalAddresses } from './local-interfaces'
 import { wireServing, type Serving } from './session-serving'
 import { servedTemplateFile } from './served-persist'
@@ -698,9 +699,98 @@ const relayServing =
     ? createRelayServing({
         origin: RELAY_ORIGIN,
         loopbackPort: () => MOBILE_PORT,
+        /**
+         * WHICH MAC IS DIALLING (V3-18). Read per dial rather than captured,
+         * because signing in or out changes the answer and a door dialled
+         * before the account existed must name this Mac on its next redial.
+         * Null on a Mac with no account, and then the relay keeps refusing a
+         * name already held — there is no other Mac to have taken it from.
+         */
+        who: () => {
+          const account = accounts.account()
+          if (account === null) return null
+          return {
+            deviceId: account.deviceId,
+            name: account.name,
+            // The session, when this Mac holds a live one. It is what lets the
+            // SECOND Mac of an account serve at all — the v1 registry key it
+            // would otherwise prove the handle with cannot be enrolled twice.
+            ...(account.session === null ? {} : { session: account.session.token })
+          }
+        },
+        /**
+         * ANOTHER MAC OF THIS ACCOUNT TOOK ONE OF OUR DOORS (D14 · moved).
+         *
+         * By the time this runs, serving here has already stopped — that
+         * decision is made in relay-serving, where the alternative was two
+         * Macs taking the name from each other for ever. All that is left is
+         * to say so, in the same breath on the canvas and in the system tray,
+         * and to leave TAKE IT BACK where the person is looking.
+         */
+        onMoved: (door) => {
+          doorsMovedHere = [
+            ...doorsMovedHere.filter((held) => held.slug !== door.slug),
+            { slug: door.slug, team: door.team, by: door.by, at: Date.now() }
+          ]
+          // The registry's own record of who holds what, brought into line the
+          // moment this Mac knows — it no longer serves this name.
+          publishDoorClaims()
+          const sentence = doorMovedSentence(door.team, door.by)
+          if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+            mainWindow.webContents.send('serving:moved', { slug: door.slug, team: door.team, by: door.by })
+          }
+          showNotification(sentence)
+          console.error(`[cookrew] ${sentence}`)
+        },
         log: (message) => console.error(message)
       })
     : null
+
+/**
+ * THE DOORS THIS MAC LOST WHILE IT WAS RUNNING (V3-18).
+ *
+ * Held here rather than only pushed at the renderer because the window may be
+ * closed, minimised or reloading when a door moves, and a notice that existed
+ * only as an event would be one the owner never sees. Cleared by taking the
+ * door back or by serving it again.
+ */
+let doorsMovedHere: readonly { slug: string; team: string; by: string; at: number }[] = []
+
+/**
+ * THE SLUGS THIS MAC IS HOLDING AT THE RELAY — its claims, not its listings.
+ *
+ * Only a door actually on the relay holds a `@handle/team` name, so a team
+ * served on the LAN alone claims nothing: there is no name for a second Mac
+ * to collide with, and filing one would make a save sheet warn about a
+ * conflict that cannot happen.
+ */
+function relayedSlugs(): readonly string[] {
+  if (!relayServing) return []
+  return serving.served
+    .list()
+    .map((template) => template.slug)
+    .filter((slug) => relayServing.addressFor(slug) !== null)
+}
+
+/**
+ * FILE THIS MAC'S DOOR CLAIMS — one name, one holder (V3-18 · A3).
+ *
+ * The registry keeps the claims on the desktop record, so the NEXT Mac to save
+ * the same slug is told who holds it before the relay ever refuses the dial.
+ * Best effort and silent: a claim that did not file costs a save sheet its
+ * warning, and a door that works is worth more than a warning that does not.
+ */
+function publishDoorClaims(): void {
+  if (accounts.account() === null) return
+  void accounts
+    .registerDesktop(
+      store.list().workspaces.map((w) => ({ id: w.id, name: w.name })),
+      undefined,
+      undefined,
+      relayedSlugs()
+    )
+    .catch(() => undefined)
+}
 
 /**
  * IDENTITY V2.1 — one credential, and the reach card.
@@ -4842,6 +4932,9 @@ app.whenReady().then(() => {
   // THE OWNER'S END OF THE RELAY, for every team still being served. The
   // templates came back from disk; their doors have to be dialled again.
   for (const template of serving.served.list()) void joinRelayFor(template)
+  // After the boot dials, not with them: a claim filed before the relay
+  // answered would name doors this Mac may turn out not to be holding.
+  setTimeout(publishDoorClaims, 5_000).unref?.()
 
   startMobileServer({
     servedSlug: handleServedSlug,
@@ -5479,13 +5572,45 @@ function registerIpc(handlers: RestoreHandlers): void {
       // the team IS being served on this network either way, so a relay that
       // could not be joined narrows the reach rather than undoing the act.
       await joinRelayFor(template)
+      // Serving this slug again is the answer to "it moved" — drop the notice
+      // rather than leaving a sentence on screen about a door that is back.
+      doorsMovedHere = doorsMovedHere.filter((held) => held.slug !== slug)
+      publishDoorClaims()
       return { ok: true as const, serviceId, slug, address: servedAddress(slug) }
     }
   )
   ipcMain.handle('serving:stop', async (_e, serviceId: string) => {
     const stopping = serving.served.list().find((t) => t.serviceId === serviceId)
     serving.stop(serviceId)
-    if (stopping) await relayServing?.withdraw(stopping.slug)
+    if (stopping) {
+      await relayServing?.withdraw(stopping.slug)
+      doorsMovedHere = doorsMovedHere.filter((held) => held.slug !== stopping.slug)
+    }
+    publishDoorClaims()
+    return { ok: true as const }
+  })
+  /** The doors this Mac lost to another of the account's, still unanswered. */
+  ipcMain.handle('serving:moved', () => doorsMovedHere)
+  /**
+   * TAKE IT BACK — the second half of the D14 moved card.
+   *
+   * It dials the same door with the same face, which supersedes the Mac that
+   * took it exactly as that Mac superseded this one. Deliberately symmetric:
+   * the rule is one holder, not first-come, and an owner pressing this on the
+   * machine in front of them is the most explicit statement of which one they
+   * mean there is.
+   */
+  ipcMain.handle('serving:take-back', async (_e, slug: unknown) => {
+    if (typeof slug !== 'string' || !relayServing) return { ok: false as const, reason: 'never-served' as const }
+    const back = await relayServing.takeBack(slug)
+    if (!back.ok) return back
+    doorsMovedHere = doorsMovedHere.filter((held) => held.slug !== slug)
+    publishDoorClaims()
+    return back
+  })
+  /** Dismiss the notice without taking the door back — KEEP THEIRS, after the fact. */
+  ipcMain.handle('serving:moved-clear', (_e, slug: unknown) => {
+    doorsMovedHere = doorsMovedHere.filter((held) => held.slug !== slug)
     return { ok: true as const }
   })
   ipcMain.handle('serving:payment-status', () => configuredServedPaymentStatus())

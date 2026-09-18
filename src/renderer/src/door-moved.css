@@ -1,0 +1,91 @@
+/* D14 · a door of this Mac moved to another of the account's (V3-18).
+
+   Sits UNDER the transient toast stack rather than in it: those age out after
+   five seconds, and this one is a question that stays until it is answered.
+   Same width and the same card treatment so the two read as one column. */
+.door-moved {
+  position: fixed;
+  top: 60px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 119;
+  pointer-events: none;
+}
+.door-moved-card {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 300px;
+  max-width: calc(100vw - 32px);
+  padding: 10px 12px;
+  background: var(--cream-hi);
+  border: 2px solid var(--amber);
+  box-shadow: 4px 4px 0 var(--amber-deep);
+}
+.door-moved-g {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid var(--line);
+  border-radius: 50%;
+  background: var(--amber-soft);
+  font-size: 11px;
+}
+.door-moved-body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+.door-moved-s {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink);
+  line-height: 1.45;
+}
+.door-moved-bad {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--rose);
+  line-height: 1.45;
+}
+.door-moved-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.door-moved-b {
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream-hi);
+  color: var(--ink);
+  padding: 4px 8px;
+  font: 700 10px var(--font-mono);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.door-moved-b.primary {
+  border-color: var(--line);
+  background: var(--amber);
+}
+.door-moved-b:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* The phone-width canvas puts the stack across the top instead of beside it,
+   the same way the toasts do. */
+@media (max-width: 700px) {
+  .door-moved {
+    left: 8px;
+    right: 8px;
+    top: 52px;
+  }
+  .door-moved-card {
+    width: auto;
+  }
+}

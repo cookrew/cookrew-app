@@ -179,6 +179,21 @@ export interface CookrewApi {
       paymentRails: readonly ServedPaymentRail[];
     }[]
   >;
+  /**
+   * D14 · the doors this Mac lost to another of the account's (V3-18). Asked
+   * for on mount and pushed on every move, so a window that was shut when it
+   * happened still finds the sentence waiting.
+   */
+  servingMoved?: () => Promise<readonly { slug: string; team: string; by: string; at: number }[]>;
+  onServingMoved?: (
+    listener: (door: { slug: string; team: string; by: string }) => void,
+  ) => () => void;
+  /** TAKE IT BACK — dial the same door again, superseding whoever holds it. */
+  servingTakeBack?: (
+    slug: string,
+  ) => Promise<{ ok: true; address: string; name: string } | { ok: false; reason: string }>;
+  /** Let the sentence go without taking the door back. */
+  servingMovedClear?: (slug: string) => Promise<{ ok: boolean }>;
   servingSessions: () => Promise<
     readonly {
       sessionId: string;
