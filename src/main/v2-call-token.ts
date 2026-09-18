@@ -1,4 +1,5 @@
 import { createPublicKey, verify } from 'node:crypto'
+import { registryOrigin } from './registry-origin'
 
 /**
  * A v2 CALL TOKEN AT THE DOOR — the identity-v2 sign-in, verified offline.
@@ -89,9 +90,14 @@ export const V2_AUDIENCE =
 /** How long fetched material is trusted before it is asked for again. */
 export const V2_KEY_TTL_MS = 60 * 60 * 1000
 
-/** The registry this door verifies against. Overridable for a test deployment. */
+/**
+ * The registry this door verifies against. Overridable for a test deployment.
+ *
+ * One reading, in registry-origin.ts: a door that trusted a different registry
+ * from the one the account signs in at would refuse every honest caller.
+ */
 export function v2RegistryOrigin(): string {
-  return process.env.COOKREW_REGISTRY || 'https://cookrew.dev'
+  return registryOrigin()
 }
 
 function isEd25519Jwk(value: unknown): value is Record<string, unknown> {

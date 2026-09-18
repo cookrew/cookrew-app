@@ -12,6 +12,7 @@ import {
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
+import { registryOrigin } from './registry-origin'
 import {
   DEFAULT_LOCK_AFTER_MS,
   MIN_PASSWORD,
@@ -76,10 +77,14 @@ export function accountFilePath(base?: string): string {
   return path.join(base ?? path.join(homedir(), '.cookrew'), 'account.json')
 }
 
-/** The registry this app talks to. Overridable for a test deployment. */
-export function registryOrigin(): string {
-  return process.env.COOKREW_REGISTRY || 'https://cookrew.dev'
-}
+/**
+ * The registry this app talks to. Overridable for a test deployment.
+ *
+ * Re-exported rather than read here: one setting, one reading (see
+ * registry-origin.ts for what a second copy of it cost). The name stays
+ * exported from this module because half the app already asks it here.
+ */
+export { registryOrigin }
 
 /** A session token and the moment it stops being one, in epoch ms. */
 export interface AccountSession {

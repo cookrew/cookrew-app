@@ -14,6 +14,7 @@
 // index.ts. Kept pure so the plan is testable with no app, no network, no pty.
 
 import type { CanvasNode, ServedSessionFacts, TerminalNodeData } from '../shared/model'
+import { registryOrigin } from './registry-origin'
 
 /** Where a team is served — the origin and slug from the author's address. */
 export interface ServeTarget {
@@ -35,13 +36,23 @@ export interface ServeTarget {
 }
 
 /**
- * Where a bare `@handle/team` is assumed to live.
+ * Where a bare `@handle/team` is assumed to live: THE REGISTRY THIS APP IS
+ * POINTED AT, not the one it shipped pointing at.
  *
- * A name with no origin is not ambiguous in practice — it came from the one
- * registry the product ships pointing at — but it IS a default, so it is
- * written down once here instead of being spelled out at each call site.
+ * A name with no origin is not ambiguous in practice — it came from whichever
+ * registry this app talks to — but it IS a default, so it is read from one
+ * place rather than spelled out at each call site.
+ *
+ * IT USED TO BE A COMPILE-TIME CONSTANT, and that is a defect with a history.
+ * Everything else in the app resolves its registry from configuration
+ * (account-v2's registryOrigin, honouring COOKREW_REGISTRY); this file alone
+ * pinned production, so an app pointed at a local registry still resolved
+ * published names AT cookrew.dev — a QA instance's lookup left the machine,
+ * and the same shape one file over had posted invented passwords at
+ * production. An isolated instance must be isolated in every direction, and
+ * a self-hosted registry must be able to answer for its own names.
  */
-export const COOKREW_REGISTRY = 'https://cookrew.dev'
+export const cookrewRegistry = (): string => registryOrigin()
 
 const DOOR_NAME = /^@([a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?)\/([a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)$/
 
@@ -68,7 +79,10 @@ export interface ImportFace {
  * `host:port/slug` an owner reads aloud. Refuses credentials, query, hash and
  * anything that is not exactly one slug deep — the address IS the whole claim.
  */
-export function parseServeAddress(link: string): ServeTarget | null {
+export function parseServeAddress(
+  link: string,
+  registry: string = cookrewRegistry()
+): ServeTarget | null {
   const trimmed = link.trim()
   if (trimmed.length === 0) return null
   // A bare published name, which is what an owner says out loud and what the
@@ -79,7 +93,7 @@ export function parseServeAddress(link: string): ServeTarget | null {
     // harmless: `@DREJ/alpha` parses as a URL with empty credentials and a host
     // called DREJ, so a malformed NAME would quietly become an ADDRESS and the
     // app would open a socket to whatever answers there.
-    return bare ? { origin: COOKREW_REGISTRY, slug: bare[2], door: trimmed } : null
+    return bare ? { origin: registry, slug: bare[2], door: trimmed } : null
   }
 
   const candidate = /^https?:\/\//.test(trimmed) ? trimmed : `http://${trimmed}`
@@ -98,7 +112,7 @@ export function parseServeAddress(link: string): ServeTarget | null {
     // socket to whatever answers there.
     if (segments.length === 2) {
       const first = decodeURIComponent(segments[0])
-      const known = url.origin === COOKREW_REGISTRY
+      const known = url.origin === registry
       if (!first.startsWith('@') && !known) return null
       const name = `${first.startsWith('@') ? first : `@${first}`}/${decodeURIComponent(segments[1])}`
       const parsed = DOOR_NAME.exec(name)
@@ -111,7 +125,7 @@ export function parseServeAddress(link: string): ServeTarget | null {
     // registry is not that — it is a directory. Without this, cookrew.dev/drej
     // read as both an owner and a door, and which one you got depended on the
     // order the sheet happened to try them in.
-    if (url.origin === COOKREW_REGISTRY) return null
+    if (url.origin === registry) return null
     const slug = segments[0]
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return null
     return { origin: url.origin, slug }
@@ -139,19 +153,22 @@ const HANDLE_ONLY = /^@?([a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?)$/
  * a team's slug — so a bare handle must carry its @, and a link is only read
  * as an account on a registry we know.
  */
-export function parseAccountAddress(link: string): AccountTarget | null {
+export function parseAccountAddress(
+  link: string,
+  registry: string = cookrewRegistry()
+): AccountTarget | null {
   const trimmed = link.trim()
   if (trimmed.length === 0) return null
   if (trimmed.startsWith('@')) {
     const bare = HANDLE_ONLY.exec(trimmed)
-    return bare ? { origin: COOKREW_REGISTRY, handle: bare[1] } : null
+    return bare ? { origin: registry, handle: bare[1] } : null
   }
   const candidate = /^https?:\/\//.test(trimmed) ? trimmed : `https://${trimmed}`
   try {
     const url = new URL(candidate)
     if (!['http:', 'https:'].includes(url.protocol)) return null
     if (url.username || url.password || url.search || url.hash) return null
-    if (url.origin !== COOKREW_REGISTRY) return null
+    if (url.origin !== registry) return null
     const segments = url.pathname.split('/').filter((part) => part.length > 0)
     if (segments.length !== 1) return null
     const parsed = HANDLE_ONLY.exec(decodeURIComponent(segments[0]))
