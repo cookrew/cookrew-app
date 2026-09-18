@@ -963,13 +963,28 @@ export function removeFactorPrompt(row: FactorRow): string {
 /**
  * WHAT MAKES THE DEVICES TAB RE-READ ITSELF.
  *
- * The username, and the number of devices still waiting. An approval attaches
- * a device at the registry, so the moment that count drops is the moment the
- * list on screen is out of date — and a tab that only refreshes when the
- * sheet is closed and reopened tells an owner their approval did nothing.
+ * The username, the number of devices still waiting, AND THE TAB IN FRONT OF
+ * THE READER.
+ *
+ * The count alone was the original rule, and its reasoning — "an approval
+ * attaches a device, so the moment that count drops is the moment the list is
+ * stale" — is right about the cause and one beat early about the timing.
+ * Answering an approval only marks it approved AT THE REGISTRY. The asking
+ * Mac attaches itself when it next polls its own pending, a second or two
+ * later. So the re-read fired while the registry still held one device,
+ * correctly read one device, and then had nothing left to fire on: the count
+ * was already zero and stayed zero. A real-interface pass found exactly that —
+ * the list caught up only when the whole sheet was closed and reopened.
+ *
+ * The tab closes it deterministically. Opening DEVICES is the moment somebody
+ * wants the list to be true, it costs one small read, and it does not race
+ * another machine — which anything keyed on the count alone necessarily does.
  */
-export function profileKey(status: { username: string | null; requests: number }): string {
-  return `${status.username ?? ''}#${status.requests}`
+export function profileKey(
+  status: { username: string | null; requests: number },
+  tab: string,
+): string {
+  return `${status.username ?? ''}#${status.requests}#${tab}`
 }
 
 /**

@@ -616,3 +616,51 @@ describe('the CREATE side offers the way out it names (F2)', () => {
     })
   })
 })
+
+/**
+ * F4 · THE DEVICES TAB WAS STALE UNTIL THE SHEET WAS FULLY REOPENED (V3-UI1).
+ *
+ * The real-interface pass approved a join on Mac A and watched the Devices
+ * list keep showing one row; switching tabs inside the open sheet did not
+ * refresh it, and only closing and reopening the whole sheet did.
+ *
+ * The key was `username#requests`, and its comment reasoned that "the moment
+ * that count drops is the moment the list is stale". The count is the right
+ * signal for something happening and the WRONG MOMENT for this: answering an
+ * approval only marks it approved at the registry. The asking Mac attaches
+ * itself when IT next polls its pending, a second or two later — so the
+ * re-read fired one beat early, correctly read a list that still had one
+ * device in it, and then had no reason to fire again, because the count was
+ * already zero and stayed zero.
+ *
+ * So the tab is part of the key too: opening DEVICES re-reads. That is
+ * deterministic, where anything keyed on the count alone is a race with
+ * another machine.
+ */
+describe('what makes the devices list re-read (F4)', () => {
+  it('still re-reads when a request is answered', () => {
+    expect(profileKey({ username: 'magpie', requests: 1 }, 'DEVICES')).not.toBe(
+      profileKey({ username: 'magpie', requests: 0 }, 'DEVICES'),
+    )
+  })
+
+  it('re-reads when the DEVICES tab is opened, without closing the sheet', () => {
+    // The observed failure: the count is already 0 by the time the far Mac
+    // attaches, so nothing keyed on it alone will ever fire again.
+    const before = profileKey({ username: 'magpie', requests: 0 }, 'PROFILE')
+    const after = profileKey({ username: 'magpie', requests: 0 }, 'DEVICES')
+    expect(after).not.toBe(before)
+  })
+
+  it('is stable while nothing changes, so the tab does not re-read on every render', () => {
+    const once = profileKey({ username: 'magpie', requests: 0 }, 'DEVICES')
+    const twice = profileKey({ username: 'magpie', requests: 0 }, 'DEVICES')
+    expect(twice).toBe(once)
+  })
+
+  it('changes with the account, so one person’s list never shows another’s', () => {
+    expect(profileKey({ username: 'magpie', requests: 0 }, 'DEVICES')).not.toBe(
+      profileKey({ username: 'drej', requests: 0 }, 'DEVICES'),
+    )
+  })
+})

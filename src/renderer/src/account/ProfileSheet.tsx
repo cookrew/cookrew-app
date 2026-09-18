@@ -130,11 +130,12 @@ export function ProfileSheet({
       .catch(() => undefined)
   }, [])
 
-  // RE-READ WHEN A REQUEST IS ANSWERED, not only when the sheet is opened.
+  // RE-READ WHEN A REQUEST IS ANSWERED, AND WHENEVER A TAB IS OPENED — not
+  // only when the sheet is opened (F4).
   // Approving attaches the device at the registry, so the moment the waiting
   // count drops is the moment this list is stale — and a DEVICES tab that
   // only catches up on the next open reads as an approval that did nothing.
-  const key = profileKey(status)
+  const key = profileKey(status, tab)
   useEffect(() => {
     const call = cookrew().accountProfile
     // BACK OFF WHILE THE SESSION IS DEAD. Every read would spend a request to
