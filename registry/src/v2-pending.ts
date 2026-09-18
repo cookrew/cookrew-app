@@ -1,4 +1,5 @@
-import { randomUUID } from 'node:crypto'
+import { randomInt, randomUUID } from 'node:crypto'
+import type { StepUpAct } from '../../src/shared/step-up'
 
 /**
  * IDENTITY v2 — A SIGN-IN THAT IS HALF DONE.
@@ -28,6 +29,29 @@ export const FACTOR_ORDER: readonly Factor[] = ['passkey', 'totp', 'approve', 'r
 export const PENDING_TTL_MS = 10 * 60 * 1000
 /** Five tries on one pending, then it is gone and the password is typed again. */
 export const PENDING_ATTEMPTS = 5
+/**
+ * Three goes at the two digits, and the sign-in is over.
+ *
+ * Ninety values is a small number on purpose — a person has to read it off one
+ * screen and type it on another — and three tries is what keeps ninety honest.
+ * It is counted PER PENDING, not per account or per address: the thing being
+ * guessed belongs to one sign-in, and a limiter keyed on anything wider would
+ * let one stranger's guessing end somebody else's.
+ */
+export const MATCH_TRIES = 3
+
+/**
+ * TWO DIGITS, 10–99, from the system's random source.
+ *
+ * Not derived from the pending id, the device, the account or the clock. A
+ * number that can be computed from what the asker already holds is not a
+ * second channel, it is decoration — and the whole point of the rung is that
+ * approving requires SEEING the screen of the machine that is signing in.
+ *
+ * No leading zero, so there is one shape to show and one to compare; nobody
+ * reads "07" off a screen as a different number from "7".
+ */
+const mintMatch = (): string => String(randomInt(10, 100))
 /** More pending sign-ins than a busy hour has; a stranger cannot spend it. */
 const PENDING_MAX = 1000
 /**
@@ -71,8 +95,39 @@ export interface Pending {
   expiresAt: number
   next: readonly Factor[]
   attempts: number
+  /**
+   * The two digits the ASKING device is shown and the approving device must
+   * type. It lives on the pending and never on the Approval, which is what
+   * makes it structurally impossible for the owner's approvals list to carry
+   * it — the list is built from Approvals, and an attacker holding the
+   * owner's session is exactly who must not be handed the number.
+   */
+  match: string
+  /** Wrong numbers so far. The third ends the sign-in. */
+  matchMisses: number
   approval: Approval | null
+  /**
+   * THE ACT THIS PENDING AUTHORISES, when it is not a sign-in.
+   *
+   * A step-up climbs the same ladder a new device climbs — same rungs, same
+   * wire shape, same screens — but it must end somewhere else. A sign-in ends
+   * in a session; a step-up ends in PERMISSION to do one thing, on a session
+   * the caller already holds. Minting a second session for somebody who is
+   * already signed in would be a strange prize for proving who they are, and
+   * a device attached as a side effect of changing a password would be worse.
+   *
+   * Absent means a sign-in, which is what every pending was before this.
+   */
+  act?: StepUpAct
+  /** A rung was climbed on an act-pending: the act may now happen, once. */
+  authorised: boolean
 }
+
+/** What answering an approval came to. */
+export type DecideResult =
+  | { ok: true; approval: Approval }
+  | { ok: false; reason: 'no_approval' }
+  | { ok: false; reason: 'bad_match'; triesLeft: number }
 
 export interface OpenInput {
   username: string
@@ -81,6 +136,8 @@ export interface OpenInput {
   kind: string
   address: string
   next: readonly Factor[]
+  /** Set for a step-up: the one act this pending will authorise. */
+  act?: StepUpAct
 }
 
 /**
@@ -122,7 +179,11 @@ export class PendingSignIns {
       expiresAt: at + this.ttlMs,
       next: input.next,
       attempts: 0,
-      approval: null
+      match: mintMatch(),
+      matchMisses: 0,
+      approval: null,
+      ...(input.act === undefined ? {} : { act: input.act }),
+      authorised: false
     }
     // Bounded by count as well as by time — this account's own oldest first,
     // so the pressure of a busy account is felt only by that account.
@@ -176,6 +237,35 @@ export class PendingSignIns {
 
   close(id: string): void {
     this.pendings.delete(id)
+  }
+
+  /**
+   * A rung was climbed on an act-pending. Nothing is minted; the pending is
+   * marked, and the caller repeats the request it was refused.
+   */
+  authorise(id: string): boolean {
+    const held = this.get(id)
+    if (held === null || held.act === undefined) return false
+    this.pendings.set(id, { ...held, authorised: true })
+    return true
+  }
+
+  /**
+   * Spend an authorisation: is this pending a live, climbed step-up for THIS
+   * person and THIS act?
+   *
+   * ONCE, AND FOR ONE ACT. Spending closes the pending, so a proof cannot be
+   * replayed into a second sensitive act — proving who you are to mint a join
+   * code must not also, quietly, be permission to revoke somebody's device.
+   * The act is compared rather than assumed for the same reason.
+   */
+  spendAuthorised(username: string, act: StepUpAct, id: unknown): boolean {
+    if (typeof id !== 'string' || id === '') return false
+    const held = this.get(id)
+    if (held === null) return false
+    if (!held.authorised || held.act !== act || held.username !== username) return false
+    this.pendings.delete(id)
+    return true
   }
 
   /**
@@ -240,20 +330,51 @@ export class PendingSignIns {
       .slice(0, APPROVALS_SHOWN)
   }
 
-  /** Answer one, on behalf of the account it belongs to. */
-  decide(username: string, approvalId: unknown, decision: Decision): Approval | null {
-    if (typeof approvalId !== 'string' || approvalId === '') return null
+  /**
+   * Answer one, on behalf of the account it belongs to.
+   *
+   * APPROVE CARRIES THE NUMBER; DENY AND "NOT ME" DO NOT. Whoever holds the
+   * password can press "ask my other device" until the owner is tired enough
+   * or clumsy enough to tap APPROVE — the shape of the 2022 Uber breach, and
+   * why number matching stopped being optional elsewhere in 2023. Requiring
+   * the digits makes seeing the asking device's screen a hard condition, so
+   * nagging from somewhere else cannot be outlasted.
+   *
+   * The two safe answers stay one tap. A person reaching for "not me" is
+   * already alarmed, and an alarm that is harder to raise than a mistake is
+   * an alarm people stop raising — which is how an account ends up quietly
+   * denied over and over instead of locked down once.
+   *
+   * Every refusal that is not a bad number answers `no_approval`, including
+   * one that was already decided. Saying "the number was right, but too late"
+   * would tell whoever asked something about a request that is not theirs.
+   */
+  decide(username: string, approvalId: unknown, decision: Decision, match?: unknown): DecideResult {
+    if (typeof approvalId !== 'string' || approvalId === '') return { ok: false, reason: 'no_approval' }
     for (const pending of this.pendings.values()) {
       const approval = pending.approval
       if (approval === null || approval.id !== approvalId) continue
-      if (approval.username !== username) return null
-      if (this.now() >= pending.expiresAt) return null
-      if (approval.decision !== null) return null
+      if (approval.username !== username) return { ok: false, reason: 'no_approval' }
+      if (this.now() >= pending.expiresAt) return { ok: false, reason: 'no_approval' }
+      if (approval.decision !== null) return { ok: false, reason: 'no_approval' }
+      if (decision === 'approve' && (typeof match !== 'string' || match !== pending.match)) {
+        // A MISSING NUMBER IS A WRONG NUMBER. A client that cannot send one is
+        // not a client that may approve without one; letting it through would
+        // be the toggle this rule does not have.
+        const misses = pending.matchMisses + 1
+        const triesLeft = Math.max(0, MATCH_TRIES - misses)
+        // The last miss ENDS the sign-in rather than merely refusing it. The
+        // person at the keyboard can always type their password again; the
+        // stranger who was nagging cannot start the count over.
+        if (triesLeft === 0) this.pendings.delete(pending.id)
+        else this.pendings.set(pending.id, { ...pending, matchMisses: misses })
+        return { ok: false, reason: 'bad_match', triesLeft }
+      }
       const answered: Approval = { ...approval, decision }
       this.pendings.set(pending.id, { ...pending, approval: answered })
-      return answered
+      return { ok: true, approval: answered }
     }
-    return null
+    return { ok: false, reason: 'no_approval' }
   }
 
   private sweep(at: number): void {
