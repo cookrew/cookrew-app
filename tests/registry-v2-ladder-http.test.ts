@@ -144,12 +144,19 @@ async function addPasskey(owner: Owner, pair: Pair, credentialId = randomBytes(2
 async function askForStep(
   owner: Owner,
   d: ReturnType<typeof device> = device()
-): Promise<{ pending: string; next: string[]; expiresAt: number; message: string }> {
+): Promise<{ pending: string; next: string[]; expiresAt: number; message: string; match: string }> {
   const res = await call('POST', '/v2/sessions', { username: owner.username, password: PASSWORD, device: d })
   expect(res.status).toBe(401)
   expect(res.headers.get('cache-control')).toBe('private, no-store')
   expect(res.headers.get('set-cookie')).toBeNull()
-  const out = await bodyOf<{ error: string; next: string[]; pending: string; expiresAt: number; message: string }>(res)
+  const out = await bodyOf<{
+    error: string
+    next: string[]
+    pending: string
+    expiresAt: number
+    message: string
+    match: string
+  }>(res)
   expect(out.error).toBe('second_factor')
   return out
 }
@@ -386,7 +393,8 @@ describe('approve on a trusted device', () => {
     )
 
     expect(
-      (await call('POST', `/v2/me/approvals/${approval}`, { decision: 'approve' }, bearer(owner.token))).status
+      (await call('POST', `/v2/me/approvals/${approval}`, { decision: 'approve', match: step.match }, bearer(owner.token)))
+        .status
     ).toBe(204)
 
     // The waiting browser collects its own session; the Mac never held it.
@@ -901,5 +909,165 @@ describe('every phase 4 answer', () => {
         expect(body.message).toMatch(/[.!]$/)
       }
     }
+  })
+})
+
+/* ── number matching on the approve rung (R3) ──────────────────────────────── */
+
+/**
+ * WHOEVER HAS THE PASSWORD CAN NAG. That is the whole attack: press "ask my
+ * other device" until the owner is tired enough, or clumsy enough, to tap
+ * APPROVE — the 2022 Uber shape, and why Microsoft made number matching
+ * mandatory in 2023. NOT ME is expensive (every other device signed out, the
+ * password locked), so a tired person reaches for DENY or for nothing at all
+ * rather than the alarm.
+ *
+ * The number turns "can see the screen of the machine signing in" into a hard
+ * condition. A stranger nagging from another continent cannot satisfy it,
+ * however many prompts they raise.
+ */
+describe('the approving device must type the number the asking device shows', () => {
+  const approve = (owner: Owner, approval: string, match: unknown): Promise<Response> =>
+    call('POST', `/v2/me/approvals/${approval}`, { decision: 'approve', match }, bearer(owner.token))
+
+  const askApproval = async (pending: string): Promise<string> =>
+    (await bodyOf<{ approval: string }>(await call('POST', `/v2/sessions/${pending}/approve`))).approval
+
+  it('shows two digits to the ASKING device, and never in the owner’s list', async () => {
+    const owner = await claim()
+    const step = await askForStep(owner)
+    // Two digits, 10–99: a leading zero would be a third shape to render and
+    // to compare, and nobody reads "07" off a screen as different from "7".
+    expect(step.match).toMatch(/^[1-9][0-9]$/)
+
+    const approval = await askApproval(step.pending)
+    const list = await bodyOf<Record<string, unknown>[]>(
+      await call('GET', '/v2/me/approvals', undefined, bearer(owner.token))
+    )
+    expect(list).toHaveLength(1)
+    // THE LIST IS WHERE THE ATTACKER WOULD LOOK. A prompt that carried the
+    // number would hand it to anyone holding the owner's session, which is
+    // the one thing the rung is protecting against.
+    expect(Object.keys(list[0])).not.toContain('match')
+    /**
+     * FIELD BY FIELD, not `JSON.stringify(...).not.toContain(match)`.
+     *
+     * That spelling flaked about one run in four, and not for any reason to
+     * do with the number: an approval carries two 13-digit epochs, so a given
+     * two-digit string lands inside `at` or `expiresAt` by coincidence
+     * roughly a quarter of the time. The rule being protected is that no
+     * field the owner's client can read IS the number — which is what this
+     * asserts, without a timestamp being able to fail it.
+     */
+    for (const [key, value] of Object.entries(list[0])) {
+      expect(String(value), `approvals[0].${key}`).not.toBe(step.match)
+    }
+    expect(list[0].sentence).not.toContain(step.match)
+    expect(list[0].id).toBe(approval)
+  })
+
+  it('is minted per sign-in, not derived from anything the asker controls', async () => {
+    const owner = await claim()
+    const seen = new Set<string>()
+    for (let i = 0; i < 12; i += 1) {
+      const step = await askForStep(owner)
+      expect(step.match).toMatch(/^[1-9][0-9]$/)
+      seen.add(step.match)
+    }
+    // Twelve draws from ninety landing on one value is a 1-in-90^11 event; a
+    // constant, or anything derived from the account or the device, is not.
+    expect(seen.size).toBeGreaterThan(1)
+  })
+
+  it('the right number attaches the device', async () => {
+    const owner = await claim()
+    const joining = device('browser', 'Chrome on macOS')
+    const step = await askForStep(owner, joining)
+    const approval = await askApproval(step.pending)
+
+    expect((await approve(owner, approval, step.match)).status).toBe(204)
+
+    const done = await call('GET', `/v2/sessions/${step.pending}`)
+    expect(done.status).toBe(201)
+    expect((await bodyOf<{ deviceId: string }>(done)).deviceId).toBe(joining.id)
+  })
+
+  it('a wrong number is refused with a sentence and a count, and the sign-in survives', async () => {
+    const owner = await claim()
+    const step = await askForStep(owner)
+    const approval = await askApproval(step.pending)
+    const wrong = step.match === '42' ? '43' : '42'
+
+    const refused = await approve(owner, approval, wrong)
+    expect(refused.status).toBe(400)
+    const out = await bodyOf<{ error: string; message: string; triesLeft: number }>(refused)
+    expect(out.error).toBe('bad_match')
+    expect(out.message.length).toBeGreaterThan(0)
+    // The owner mistyped; the person signing in is still standing there. Two
+    // tries left is a fact they can act on, which is why it is on the wire.
+    expect(out.triesLeft).toBe(2)
+    expect(JSON.stringify(out)).not.toContain(step.match)
+
+    // Still waiting, and still answerable with the right number.
+    expect((await call('GET', `/v2/sessions/${step.pending}`)).status).toBe(202)
+    expect((await approve(owner, approval, step.match)).status).toBe(204)
+  })
+
+  it('THE THIRD WRONG NUMBER VOIDS THE SIGN-IN — nagging cannot be outlasted', async () => {
+    const owner = await claim()
+    const step = await askForStep(owner)
+    const approval = await askApproval(step.pending)
+    const wrong = step.match === '42' ? '43' : '42'
+
+    expect((await bodyOf<{ triesLeft: number }>(await approve(owner, approval, wrong))).triesLeft).toBe(2)
+    expect((await bodyOf<{ triesLeft: number }>(await approve(owner, approval, wrong))).triesLeft).toBe(1)
+    const third = await approve(owner, approval, wrong)
+    expect(third.status).toBe(400)
+    expect((await bodyOf<{ error: string; triesLeft: number }>(third)).triesLeft).toBe(0)
+
+    // Gone, not merely refused: the waiting browser is told to start again.
+    const after = await call('GET', `/v2/sessions/${step.pending}`)
+    expect(after.status).toBe(410)
+    expect((await bodyOf<{ error: string }>(after)).error).toBe('expired')
+    // And the right number cannot revive it.
+    expect((await approve(owner, approval, step.match)).status).toBe(404)
+  })
+
+  it('refuses a missing or malformed number the same way — it must fail closed', async () => {
+    // A client that cannot send the number is not a client that may approve
+    // without one. Answering "no number" with a pass would be the toggle the
+    // ruling says does not exist.
+    //
+    // A FRESH SIGN-IN PER SHAPE, because a wrong shape spends a try exactly
+    // as a wrong number does; reusing one pending would void it on the third
+    // and test the counter instead of the shape.
+    const owner = await claim()
+    for (const bad of [undefined, '', '7', '100', 7, null, '4x']) {
+      const step = await askForStep(owner)
+      const approval = await askApproval(step.pending)
+      const res = await approve(owner, approval, bad)
+      expect(res.status).toBe(400)
+      const out = await bodyOf<{ error: string; triesLeft: number }>(res)
+      expect(out.error).toBe('bad_match')
+      // It cost a try, like any other wrong answer.
+      expect(out.triesLeft).toBe(2)
+    }
+  })
+
+  it('DENY and NOT ME need no number — an alarm must never be harder than a mistake', async () => {
+    const denied = await claim()
+    const one = await askForStep(denied)
+    const first = await askApproval(one.pending)
+    expect(
+      (await call('POST', `/v2/me/approvals/${first}`, { decision: 'deny' }, bearer(denied.token))).status
+    ).toBe(204)
+    expect((await call('GET', `/v2/sessions/${one.pending}`)).status).toBe(410)
+
+    const alarmed = await claim()
+    const two = await askForStep(alarmed)
+    const second = await askApproval(two.pending)
+    expect(
+      (await call('POST', `/v2/me/approvals/${second}`, { decision: 'not-me' }, bearer(alarmed.token))).status
+    ).toBe(204)
   })
 })

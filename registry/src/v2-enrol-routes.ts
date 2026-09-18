@@ -1,6 +1,7 @@
 import { readJsonBody } from './http'
 import { passwordGate } from './v2-hash-gate'
 import { json, noContent, refuse, refuseFactor, relyingParty, spendChallenge } from './v2-factor-http'
+import { factorError } from './v2-factor-copy'
 import { parseRegistration } from './v2-passkeys'
 import { qrRows } from './v2-qr'
 import type { Decision } from './v2-pending'
@@ -176,8 +177,18 @@ async function answerApproval(ctx: V2Context, username: string, id: string, keep
     refuseFactor(ctx.response, 400, 'bad_decision')
     return
   }
-  const answered = ctx.v2.factors.pending.decide(username, id, decision as Decision)
-  if (answered === null) {
+  const answered = ctx.v2.factors.pending.decide(username, id, decision as Decision, body.value.match)
+  if (!answered.ok) {
+    if (answered.reason === 'bad_match') {
+      /**
+       * THE COUNT IS ON THE WIRE, the number never is. The owner has to decide
+       * whether to look at the other screen again or tell the person to start
+       * over, and "wrong" with no idea how much rope is left is the sentence
+       * people retype into until there is none.
+       */
+      json(ctx.response, 400, { ...factorError('bad_match'), triesLeft: answered.triesLeft })
+      return
+    }
     refuseFactor(ctx.response, 404, 'no_approval')
     return
   }
@@ -188,7 +199,11 @@ async function answerApproval(ctx: V2Context, username: string, id: string, keep
     // that survives the alarm is the same stranger walking through the door
     // beside the one just slammed; this one is kept only so its own poll can
     // say "denied" rather than "expired".
-    ctx.v2.factors.pending.closeAllFor(username, answered.pending)
+    ctx.v2.factors.pending.closeAllFor(username, answered.approval.pending)
+    // §06: "not me" empties the queue — every seat and reach request the
+    // account is party to goes with the alarm — and every device is told.
+    ctx.v2.requests.emptyFor(username)
+    ctx.v2.events.append(username, { kind: 'not-me' })
   }
   noContent(ctx.response)
 }

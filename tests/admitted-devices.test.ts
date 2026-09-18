@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   admittedDevicesFile,
   createAdmittedDeviceStore,
+  hashToken,
   readAdmittedDevices
 } from '../src/main/admitted-devices'
 import { tempBase } from './support/idv2'
@@ -139,5 +140,43 @@ describe('pruning the phones the registry has revoked', () => {
     } finally {
       chmodSync(temp.base, 0o700)
     }
+  })
+})
+
+describe('admitting a phone mints its own token (v3, V3-21)', () => {
+  let temp: { base: string; clean: () => void }
+  beforeEach(() => (temp = tempBase()))
+  afterEach(() => temp.clean())
+
+  it('answers the token once and writes only the hash', () => {
+    const store = createAdmittedDeviceStore({ base: temp.base })
+    const { device, token } = store.admit({ deviceId: 'p1', name: 'iPhone' })
+    expect(token.length).toBe(32)
+    expect(device.tokenHash).toBe(hashToken(token))
+    expect(JSON.stringify(readAdmittedDevices(temp.base))).not.toContain(token)
+    expect(store.accepts(token)).toBe(true)
+  })
+
+  it('admitting again rotates the token and keeps the first admittedAt', () => {
+    let at = 1_000
+    const store = createAdmittedDeviceStore({ base: temp.base, now: () => at })
+    const first = store.admit({ deviceId: 'p1', name: 'iPhone' })
+    at = 2_000
+    const second = store.admit({ deviceId: 'p1' })
+    expect(readAdmittedDevices(temp.base)).toHaveLength(1)
+    expect(second.device.admittedAt).toBe(1_000)
+    expect(second.device.lastSeenAt).toBe(2_000)
+    expect(second.device.name).toBe('iPhone')
+    expect(store.accepts(first.token)).toBe(false)
+    expect(store.accepts(second.token)).toBe(true)
+  })
+
+  it('a sighting still mints nothing, and does not disturb a minted hash', () => {
+    const store = createAdmittedDeviceStore({ base: temp.base })
+    const { token } = store.admit({ deviceId: 'p1' })
+    store.record({ deviceId: 'p1', name: 'iPhone' })
+    store.record({ deviceId: 'p2', name: 'iPad' })
+    expect(store.accepts(token)).toBe(true)
+    expect(store.list().find((d) => d.deviceId === 'p2')?.tokenHash).toBeUndefined()
   })
 })

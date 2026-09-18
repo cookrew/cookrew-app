@@ -160,6 +160,53 @@ export const V3_COPY = {
   'g3.direct':
     "Direct connection · no account needed. This door is not listed at cookrew.dev. This Mac's own key identifies you to it; nothing follows you elsewhere.",
 
+  /**
+   * W4 · W5 — THE WEB SAYS "BROWSER" WHERE THE DESKTOP SAYS "MAC".
+   *
+   * These four are the D10/D11 sentences rewritten for the side that is a tab
+   * and not an application. They are separate keys rather than placeholders in
+   * the desktop ones because the difference is not a noun to substitute: on
+   * the Mac the asking device IS the thing the person is standing at, and on
+   * the web it is one of many tabs they may close. A sentence that hedged
+   * ("this device") to serve both would be vaguer on both.
+   */
+  /** W4, the line under the tabs. The other half of "sign in or create". */
+  'w4.join-offer': 'Have a code from another device?',
+  /** W4, the join panel. Says what is NOT asked for, which is the whole point. */
+  'w4.join-lede':
+    'Type the code from a device already on your account. No password is asked for here — the code is the permission.',
+  /** W4 after asking, the number rung. The number is HERE and typed THERE. */
+  'w4.asked': 'Asked. On your other device, type the number below to let this browser in.',
+  /**
+   * W4, a code that did not work.
+   *
+   * NOT the registry's own 401 sentence. /v2/join answers `bad_credentials`
+   * on purpose — a wrong code and a code for an account nobody has must be
+   * one answer — but that sentence reads "That name and password do not go
+   * together", and this sheet has asked for neither. Passing it through named
+   * two fields that were not on screen. The refusal a person can act on is
+   * the one about the thing they typed.
+   */
+  'w4.join-refused':
+    'That code did not work. Ask the device you minted it on for a fresh one — a code works once, for ten minutes.',
+  /** W5, the question over the approver's number field (D11's, for any device). */
+  'w5.join-row': 'What number is on that device?',
+  /** W5, the two ADD buttons. Where the code is typed, and how long it lives. */
+  'w5.add-lede':
+    'On the new device open cookrew.dev, choose “Join with a code”, and type this. It works once, for ten minutes.',
+  /**
+   * W5, under the Requests heading — the web's queue while it is still only
+   * sign-ins.
+   *
+   * NOT `d11.footer`, and that is the point. D11 names ALLOW and SEAT THEM,
+   * which the unified queue (V3-11) will put on this page and which are not
+   * on it yet. A footer describing buttons a reader cannot see teaches them
+   * to stop reading footers. This one swaps for d11.footer the day the other
+   * two kinds arrive here.
+   */
+  'w5.requests-footer':
+    'A device asking to sign in as @{handle}. APPROVE needs the number showing on it; deny does nothing else; NOT ME signs every other device out and locks the password until you change it.',
+
   /** W6, the web team page after asking. The seat outlives the tab. */
   'w6.asked':
     "This page seats you the moment they say yes. You can close it; the seat is yours, not this tab's."

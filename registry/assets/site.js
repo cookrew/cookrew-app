@@ -468,6 +468,9 @@
     dialog.dataset.wired = '1'
     let mode = 'signin'
     let checking = 0
+    // Rendered into the dialog by site-shell.ts, from the one copy table.
+    const JOIN_LEDE = dialog.dataset.joinLede ?? ''
+    const JOIN_REFUSED = dialog.dataset.joinRefused ?? 'That code did not work.'
 
     const setMode = (next) => {
       mode = next
@@ -482,20 +485,45 @@
       $('acct-password').disabled = false
       $('acct-confirm').disabled = false
       $('acct-submit').disabled = false
-      $('acct-confirm-row').hidden = next === 'signin'
+      $('acct-confirm-row').hidden = next === 'signin' || next === 'join'
       $('acct-username').readOnly = next === 'legacy'
       $('acct-password').setAttribute('autocomplete', next === 'signin' ? 'current-password' : 'new-password')
+      /**
+       * W4 · JOIN IS THE MODE WITH NOTHING TO TYPE BUT THE CODE.
+       *
+       * The username and password rows go away rather than sitting there
+       * disabled, because the whole promise of joining by code is that this
+       * browser is never asked for the password — and a password field on
+       * screen, greyed or not, is the thing a person reaches for. The two
+       * tabs stay visible above: the way back is the same way back.
+       */
+      $('acct-username-row').hidden = next === 'join'
+      $('acct-password-row').hidden = next === 'join'
+      $('acct-code-row').hidden = next !== 'join'
+      $('acct-foot').hidden = next === 'join'
+      $('acct-join-offer').hidden = next === 'join'
+      $('acct-join-back').hidden = next !== 'join'
       $('acct-submit').textContent =
-        next === 'register' ? 'Create account' : next === 'legacy' ? 'Set a password' : 'Continue'
+        next === 'register'
+          ? 'Create account'
+          : next === 'legacy'
+            ? 'Set a password'
+            : next === 'join'
+              ? 'Join'
+              : 'Continue'
       $('acct-lede').textContent =
         next === 'register'
           ? 'This browser becomes your first device. A username and a password — the site never asks for an email.'
           : next === 'legacy'
             ? `Set a password for @${$('acct-username').value.trim().toLowerCase()}. This browser holds the key that owns it.`
-            : 'A username and a password. The site never asks for an email.'
+            : next === 'join'
+              ? JOIN_LEDE
+              : 'A username and a password. The site never asks for an email.'
       note('')
       chip('acct-username-note', '')
       chip('acct-confirm-note', '')
+      chip('acct-code-note', '')
+      if (next === 'join') $('acct-code').focus()
     }
 
     /**
@@ -578,6 +606,15 @@
       if (tab) {
         event.preventDefault()
         setMode(tab.dataset.acctTab)
+        return
+      }
+      // W4: the join link and the way back out of it. A separate attribute
+      // from the tabs because these two are not tabs — putting aria-selected
+      // on them would announce a tablist with four tabs and two of them lies.
+      const jump = event.target.closest('[data-acct-mode]')
+      if (jump) {
+        event.preventDefault()
+        setMode(jump.dataset.acctMode)
       }
     })
     $('acct-submit').addEventListener('click', (event) => {
@@ -585,7 +622,49 @@
       void submit()
     })
 
+    /**
+     * W4 · JOIN — the code is the whole of what this browser says.
+     *
+     * No username: the code names the account, which is why a wrong code and
+     * an unknown one answer the same 401 (v2-join.ts). The device is minted
+     * exactly as it is for a sign-in, so what attaches here is the same kind
+     * of device that would attach after a password and a rung.
+     */
+    async function join() {
+      const field = $('acct-code')
+      if (!field) return
+      const code = field.value.trim()
+      if (code.length < 8) return note('A join code is eight characters, in two blocks of four.')
+      $('acct-submit').disabled = true
+      note('Joining…')
+      try {
+        const device = devicePayload(await deviceIdentity())
+        const out = await v2('POST', '/v2/join', { code, device })
+        if (out.status === 201) {
+          dialog.close()
+          location.assign('/me')
+          return
+        }
+        /**
+         * THE 401 IS OURS TO WORD, and every other refusal is the
+         * registry's. /v2/join answers `bad_credentials` for a wrong code and
+         * for a code naming an account nobody has — one answer on purpose —
+         * but its sentence says "that name and password do not go together",
+         * and this sheet asked for neither. A rate limit or a locked account
+         * does say something true and actionable, so those come through as
+         * they are.
+         */
+        note(out.status === 401 ? JOIN_REFUSED : (out.body?.message ?? JOIN_REFUSED))
+      } catch (error) {
+        note('This browser could not reach cookrew.dev. Nothing local stops.')
+      } finally {
+        const button = $('acct-submit')
+        if (button) button.disabled = false
+      }
+    }
+
     async function submit() {
+      if (mode === 'join') return join()
       const field = $('acct-username')
       const secret = $('acct-password')
       if (!field || !secret) return
