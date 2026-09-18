@@ -112,29 +112,34 @@ function seatBar(input: TeamInput, door: ListedDoor, address: string): string {
   }
 
   /**
-   * W6 · ASK IS STILL A COPIED LINK, AND THAT IS ON PURPOSE FOR NOW.
+   * W6 · ASK IS A REQUEST (R1) — it files, it does not copy.
    *
-   * TODO (V3-13 → V3-11): when Forge publishes the seat-requests contract,
-   * this second button becomes ASK @{handle} — POST to seat-requests, and the
-   * bar moves to its asked state, polling GET …/seat until the owner taps
-   * SEAT THEM on their queue. The sentence for that state is already in the
-   * copy table as `w6.asked` and is drawn below.
+   * The button used to put a link on the clipboard, which left the asker with
+   * an errand: find the owner somewhere else and send it to them. The request
+   * goes to the owner's one queue instead and reaches every device they have,
+   * so the sentence names that rather than describing a paste.
    *
-   * It is NOT stubbed against a guessed route. A button that files a request
-   * nothing receives is worse than a link somebody can paste into a message
-   * that a person will actually read: the first fails silently and teaches
-   * the asker to wait for nothing. The design says as much — "if R1 is
-   * refused, this button stays COPY LINK TO ASK exactly as today" — so the
-   * fallback is a shipped state, not a placeholder.
+   * BOTH STATES SHIP IN THE MARKUP and site.js unhides one. The CSP forbids an
+   * inline script, so a bar assembled at load is a bar nobody can read in
+   * view-source; and the asked state is reachable on a RELOAD — this page
+   * polls GET …/seat, and somebody who closed the tab and came back must find
+   * the bar already waiting rather than a button that would file a second
+   * request.
+   *
+   * THERE IS NO WITHDRAW, and it is left out rather than faked. The design's
+   * asked state offers one, but no route retracts a seat request — a button
+   * that stopped this tab polling while the request sat in the owner's queue
+   * would be a lie told to the only person who believed it. It arrives with
+   * the route (see the report).
    */
-  const ask = `${esc(`${input.origin}/@${door.handle}/${door.name}?ask=${input.account}`)}`
-  return `<section class="card seat" id="seatbar" data-team="${esc(address)}">
-<h2>You are @${esc(input.account)} · no seat here yet</h2>
-<p class="lede" style="margin:0 0 10px">Buy one, or ask @${esc(door.handle)} for one. A seat is yours, not this browser’s.</p>
-<p class="row" style="margin:0"><button class="btn primary lg" data-seat-buy>Buy a seat · $${esc(price)}</button>
-<button class="btn lg" data-seat-ask="${ask}">Copy link to ask @${esc(door.handle)}</button></p>
-<p class="meta" style="margin:10px 0 0">${esc(webCopy('w6.asked'))}</p>
-<code class="cmd" id="seat-ask-link" hidden>${ask}</code></section>`
+  return `<section class="card seat" id="seatbar" data-team="${esc(address)}" data-owner="${esc(door.handle)}"
+  data-asked-head="${esc(webCopy('w6.asked-head', { handle: door.handle }))}"
+  data-already-asked="${esc(webCopy('w6.already-asked', { handle: '{handle}' }))}">
+<h2 id="seat-head">You are @${esc(input.account)} · no seat here yet</h2>
+<p class="lede" style="margin:0 0 10px" id="seat-lede">${esc(webCopy('w6.no-seat', { handle: door.handle }))}</p>
+<p class="row" style="margin:0"><button class="btn primary lg" data-seat-buy id="seat-buy">Buy a seat · $${esc(price)}</button>
+<button class="btn lg" data-seat-ask>Ask @${esc(door.handle)}</button></p>
+<p class="meta" style="margin:10px 0 0" id="seat-ask-note" hidden>${esc(webCopy('w6.asked'))}</p></section>`
 }
 
 export function teamPage(input: TeamInput): Page {

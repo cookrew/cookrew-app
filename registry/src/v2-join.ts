@@ -1,4 +1,6 @@
 import { readJsonBody } from './http'
+import { qrRows } from './v2-qr'
+import { relyingParty } from './v2-factor-http'
 import { asking, cookie, refuse, signedIn, v2Json, type V2Context } from './v2-http'
 import { factorError } from './v2-factor-copy'
 import { stepUpHeld } from './v2-step-up'
@@ -41,7 +43,24 @@ async function mintJoinCode(ctx: V2Context, username: string): Promise<void> {
     return
   }
   const minted = ctx.v2.joinCodes.mint(username)
-  v2Json(ctx.response, 201, { code: minted.code, expiresAt: minted.expiresAt })
+  /**
+   * THE CODE, THE LINK AND THE PICTURE — one answer, because they are one
+   * secret in three shapes and a screen that shows all three fits every way a
+   * person moves it: a phone camera, a message to another machine, or fingers.
+   *
+   * THE CODE IS IN THE FRAGMENT (`/join#CODE`). A fragment is never put on the
+   * wire, so a scanned link does not hand the code to this registry's access
+   * log, to any proxy in front of it, or to `document.referrer` on the page it
+   * lands on — and the page that reads it is ours. The architecture names this
+   * URL; it is built here so the QR and the link cannot disagree about it.
+   *
+   * The QR is rendered HERE for the same reason the authenticator's is
+   * (v2-qr.ts): the CSP forbids an inline script and no encoder ships in the
+   * browser bundle, so the matrix travels with the secret it encodes, on an
+   * answer that is already private and never cached.
+   */
+  const url = `${relyingParty(ctx).origin}/join#${minted.code}`
+  v2Json(ctx.response, 201, { code: minted.code, url, qr: qrRows(url), expiresAt: minted.expiresAt })
 }
 
 /**

@@ -518,6 +518,31 @@ li.desktop .chip.ok{background:var(--hp);color:#14110a}
    the question and the field are one sentence. */
 .acct-match-field{flex:0 0 4.5em;margin-left:8px;text-align:center;letter-spacing:.2em}
 ul.me-list li .btn.sm+.btn.sm{margin-left:6px}
+/* M5: the row's own line — why it is waiting, or what the Mac answered. */
+.reach-note{flex-basis:100%;margin:6px 0 0}
+/*
+ * M6 · THE REQUESTS QUEUE AT PHONE WIDTH.
+ *
+ * The phone is where a join is most often answered — somebody is holding the
+ * Mac that is asking — so the row stops being a line with controls at its end
+ * and becomes a card: the sentence, then the number, then the answers. THE
+ * NUMBER FIELD IS THE PRIMARY CONTROL here and it is sized like one; a 4.5em
+ * box at the end of a wrapped row is the hardest thing on the screen to hit
+ * and the only thing that must be hit first.
+ */
+.req-actions{display:flex;gap:6px;align-items:center}
+@media (max-width:700px){
+  /* ONE COLUMN, in reading order: what is being asked, the number, the answers.
+     A me-list row is a THREE-COLUMN GRID, so this collapses the template
+     rather than fighting it with flex rules the element never sees — five
+     children in three columns auto-placed the number beside a button, which
+     at phone width is the wrong thing under the thumb. */
+  ul.me-list li.req{grid-template-columns:1fr;gap:8px}
+  ul.me-list li.req .acct-match-field{display:block;width:100%;box-sizing:border-box;margin:8px 0 0;font-size:30px;padding:12px;letter-spacing:.3em}
+  ul.me-list li.req .req-actions{width:100%}
+  ul.me-list li.req .req-actions .btn{flex:1 1 0;justify-content:center}
+  ul.me-list li.req .btn.sm+.btn.sm{margin-left:0}
+}
 /* the authenticator's scan-then-verify panel on /me */
 .totp-panel{border:2px solid var(--line);background:var(--cream-hi);padding:14px;margin:10px 0;max-width:420px}
 .totp-panel svg{display:block;margin:8px 0;border:2px solid var(--line);background:#fff}

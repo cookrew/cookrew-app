@@ -7,6 +7,7 @@ import { featurePage } from './site-features'
 import { FAVICON_SVG, robotsTxt, sitemapXml, webManifest } from './site-seo'
 import { FEATURES, llmsText } from './site-content'
 import { notFoundPage, respondPage } from './site-shell'
+import { joinPage } from './site-account'
 import type { ListedDoor } from './site'
 import type { Pulse } from './pulse'
 
@@ -62,6 +63,14 @@ export function handleSiteRoute(ctx: SiteRouteContext): boolean {
     }
     ctx.pulse?.page(`/features/${slug}`)
     respondPage(response, rendered)
+    return true
+  }
+  /**
+   * M4 · /join — where a join-code QR points. The code rides in the fragment,
+   * so every reader gets the same page and this route never sees a secret.
+   */
+  if (parts.length === 1 && parts[0] === 'join') {
+    respondPage(response, joinPage())
     return true
   }
   if (parts.length === 2 && parts[0] === 'assets') {

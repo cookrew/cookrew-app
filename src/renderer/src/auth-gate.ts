@@ -145,8 +145,15 @@ export const REAUTH_COPY = {
   joinWhere: V3_COPY['d10.asked.honest'],
   joinMismatch: V3_COPY['d10.mismatch'],
   readOnlyTitle: 'Read-only device',
-  unpaired:
-    "Scan the QR on the Mac's avatar → Pair a phone, or paste what `cookrew mobile` printed.",
+  /**
+   * M5. The QR and the paste stay — an account-less Mac has no other way to
+   * let a phone in, and this card is still the only pairing surface. What is
+   * added is the door that did not exist when this sentence was written: a Mac
+   * on an account is asked with one tap on /me and answered on the Mac, so the
+   * reader is pointed there FIRST and at the old ceremony only if that is not
+   * their situation.
+   */
+  unpaired: V3_COPY['m5.unpaired'],
   readOnly:
     'This device is paired read-only. Open the pairing URL from the desktop to make changes.',
   label: 'Pairing URL or token',

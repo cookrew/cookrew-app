@@ -124,7 +124,9 @@ export function mePage(
       kind: 'app',
       cache: 0,
       noindex: true,
-      scripts: ['device-id.js', 'site.js', 'reach.js']
+      // device-seal.js before reach.js: M5's answer arrives sealed to this
+      // device, and the opener has to be on the page by the time it lands.
+      scripts: ['device-id.js', 'site.js', 'device-seal.js', 'reach.js']
     },
     `<div class="wrap" style="padding-top:44px" id="me" data-username="${esc(account.username)}">
 <div class="me-head">${face}<div><h1 style="margin:0">@${esc(account.username)}</h1>
@@ -142,7 +144,9 @@ export function mePage(
 <section id="me-requests" hidden>
 <h2 style="margin-top:30px">Requests</h2>
 <p class="meta">${esc(webCopy('w5.requests-footer', { handle: account.username }))}</p>
-<ul class="doors me-list" id="me-approvals" data-join-row="${esc(webCopy('w5.join-row'))}"></ul>
+<ul class="doors me-list" id="me-approvals" data-join-row="${esc(webCopy('w5.join-row'))}"
+ data-seat-row="${esc(webCopy('d11.seat-row', { handle: '{handle}', team: '{team}' }))}"
+ data-wifi-row="${esc(webCopy('w5.reach-elsewhere', { device: '{device}' }))}"></ul>
 </section>
 
 <h2 style="margin-top:30px">Devices</h2>
@@ -169,5 +173,45 @@ ${authenticatorRow(factors.totp)}
 
 ${desktopsSection(account.username, account.desktops)}
 </div>`
+  )
+}
+
+/**
+ * M4 · /join — the page a join-code QR points a phone at.
+ *
+ * THE CODE IS IN THE FRAGMENT AND NEVER REACHES THIS FUNCTION. That is the
+ * point of putting it there: the server renders one page for every code, so
+ * there is nothing here to log, nothing to correlate, and no way for this
+ * route to become an oracle for which codes exist. The script reads the
+ * fragment, scrubs it out of the address bar, and spends it on one button.
+ *
+ * IT DOES NOT NAME THE ACCOUNT, and the design's mock does. Naming it would
+ * need a "what account is this code for" route, and that route is a checker:
+ * somebody guessing codes would learn which guesses were live without ever
+ * spending one. The account's name is on the other side of the button —
+ * POST /v2/join answers with it — so the cost of not showing it first is one
+ * screen, and the cost of showing it is a way to hunt for live codes.
+ *
+ * NO SESSION IS NEEDED. A phone arriving here has no account yet; that is the
+ * whole situation. The page is an app page because it needs the script, and
+ * the account sheet travels with it so "sign in with your password instead"
+ * is one tap rather than another address.
+ */
+export function joinPage(): Page {
+  return page(
+    {
+      title: 'Join an account — Cookrew',
+      kind: 'app',
+      cache: 0,
+      noindex: true,
+      scripts: ['device-id.js', 'site.js']
+    },
+    `<div class="wrap" style="padding-top:44px" id="join-card">
+<h1>Join on this device</h1>
+<p class="lede" id="join-lede">${esc(webCopy('m4.join-lede'))}</p>
+<p class="meta" id="join-message" role="status"></p>
+<p class="row"><button class="btn primary lg" id="join-go" hidden>Join</button>
+<button class="btn lg" data-signin>${esc(webCopy('m4.join-instead'))}</button></p>
+<p class="meta" id="join-none" hidden>${esc(webCopy('m4.no-code'))}</p></div>`
   )
 }
