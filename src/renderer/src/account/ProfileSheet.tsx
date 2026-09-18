@@ -9,6 +9,7 @@ import {
   deviceName,
   envIgnoredSentence,
   initialsOf,
+  phoneVerb,
   profileKey,
   refusalSentence,
   revokeSentence,
@@ -136,6 +137,12 @@ export function ProfileSheet({
   // count drops is the moment this list is stale — and a DEVICES tab that
   // only catches up on the next open reads as an approval that did nothing.
   const key = profileKey(status, tab)
+  // F3: which phone door this build has. `accountJoinCode` is the join-code
+  // mint (V3-10app); without it the LAN pairing sheet is the only way in.
+  // Asked with `in` rather than by naming the member: `accountJoinCode` is
+  // declared on the bridge by the lane that adds it (V3-10app), and this must
+  // compile — and answer honestly — on a build where it does not exist yet.
+  const phone = phoneVerb({ canMintJoinCode: 'accountJoinCode' in cookrew() })
   useEffect(() => {
     const call = cookrew().accountProfile
     // BACK OFF WHILE THE SESSION IS DEAD. Every read would spend a request to
@@ -380,9 +387,14 @@ export function ProfileSheet({
 
         {tab === 'DEVICES' && (
           <section className="cr-acct-pane" aria-label="Devices">
-            <button className="gs-revoke cr-acct-act" onClick={() => setPairing(true)}>
-              PAIR A PHONE
-            </button>
+            {/* ONE PHONE VERB, NEVER TWO (F3). `phoneVerb` decides which door
+                this build actually has; see account-store.ts for why the LAN
+                one and the account one are not interchangeable. */}
+            {phone === 'pair' && (
+              <button className="gs-revoke cr-acct-act" onClick={() => setPairing(true)}>
+                PAIR A PHONE
+              </button>
+            )}
             <ul className="cr-acct-devices">
               {(profile?.devices ?? []).map((device) => {
                 // THIS MAC has one verb and the others have the other. The
@@ -470,17 +482,21 @@ export function ProfileSheet({
                 <li className="gs-dim">No devices listed yet.</li>
               )}
             </ul>
-            {/* THE TWO VERBS CUT 2 ADDS (V3-10 ADD A MAC, V3-12 ADD A PHONE).
-                Disabled, with the reason on hover, and with NO handler: a
-                button that looked live and did nothing would be the exact
-                thing this tab exists to stop people guessing about. */}
+            {/* ADD A MAC IS STILL A SIGNPOST while cut 2 is unlanded: nothing
+                else on this tab adds a Mac, so a disabled button with the
+                reason on hover tells a reader where it will be rather than
+                leaving them to guess. ADD A PHONE is NOT drawn beside it —
+                PAIR A PHONE above already does that job on this build, and a
+                greyed twin of a live button is what F3 found. */}
             <div className="cr-acct-row cr-acct-add">
               <button className="gs-ghost" disabled title={COMING_IN_CUT_2} aria-disabled="true">
                 ADD A MAC
               </button>
-              <button className="gs-ghost" disabled title={COMING_IN_CUT_2} aria-disabled="true">
-                ADD A PHONE
-              </button>
+              {phone === 'add' && (
+                <button className="gs-ghost" disabled title={COMING_IN_CUT_2} aria-disabled="true">
+                  ADD A PHONE
+                </button>
+              )}
             </div>
             {/* ADMITTED PHONES ARE A DIFFERENT KIND OF FACT and get their own
                 heading rather than being mixed in. The list above is the

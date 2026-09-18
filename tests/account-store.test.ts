@@ -23,6 +23,7 @@ import {
   mustChangeBanner,
   passkeyElsewhere,
   envIgnoredSentence,
+  phoneVerb,
   profileKey,
   registerView,
   crossingFor,
@@ -704,5 +705,41 @@ describe('the environment override sentence (F5)', () => {
     expect(envIgnoredSentence('drej', 'magpie')).toBe(
       V3_COPY['d4.env-override'].replace('{env}', 'drej').replace('{handle}', 'magpie'),
     )
+  })
+})
+
+/**
+ * F3 · ONE PHONE VERB ON THE DEVICES TAB (V3-UI1).
+ *
+ * The real-interface pass found an enabled PAIR A PHONE sitting directly above
+ * a disabled ADD A PHONE marked "Coming in cut 2". To a reader those are the
+ * same promise twice, one of them greyed out — which reads as a broken screen
+ * rather than as two different mechanisms.
+ *
+ * They ARE different: PAIR A PHONE admits a phone to THIS Mac over the LAN
+ * with the token this Mac prints; ADD A PHONE mints a join code and makes the
+ * phone a device on the ACCOUNT, reaching every Mac through cookrew.dev. But
+ * this tab only exists inside a sheet that only opens once there is an
+ * account — so where both work, the account one is the true answer, and where
+ * joining is not available yet the LAN one is the only answer.
+ *
+ * So the tab offers exactly one, and which one is a fact about the build.
+ */
+describe('which phone verb the Devices tab offers (F3)', () => {
+  it('offers ADD A PHONE once this build can mint a join code', () => {
+    expect(phoneVerb({ canMintJoinCode: true })).toBe('add')
+  })
+
+  it('offers PAIR A PHONE while it cannot — the only door that works', () => {
+    // On a build without the join IPC, a disabled ADD A PHONE beside a live
+    // PAIR A PHONE is the contradiction; the LAN door is simply the answer.
+    expect(phoneVerb({ canMintJoinCode: false })).toBe('pair')
+  })
+
+  it('never offers both, which is the whole finding', () => {
+    for (const canMintJoinCode of [true, false]) {
+      const verb = phoneVerb({ canMintJoinCode })
+      expect(['pair', 'add']).toContain(verb)
+    }
   })
 })

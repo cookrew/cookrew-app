@@ -995,6 +995,29 @@ export function profileKey(
 }
 
 /**
+ * WHICH PHONE VERB THE DEVICES TAB OFFERS — exactly one (F3).
+ *
+ * A real-interface pass found an enabled PAIR A PHONE directly above a
+ * disabled ADD A PHONE marked "Coming in cut 2". To a reader those are one
+ * promise made twice with one copy greyed out, which reads as a broken screen.
+ *
+ * THE TWO ARE GENUINELY DIFFERENT and that is why both were drawn. PAIR A
+ * PHONE admits a phone to THIS Mac over the LAN, with the token this Mac
+ * prints; ADD A PHONE mints a join code and makes the phone a device on the
+ * ACCOUNT, which then reaches every Mac through cookrew.dev. But this tab
+ * lives inside a sheet that only opens once there IS an account — so wherever
+ * both work, the account one is the answer, and the LAN one is what M5's own
+ * copy already calls the door for "a Mac with no account".
+ *
+ * The verb is therefore a fact about the build, not a preference: offer the
+ * account door when this app can mint a code, and the LAN door when it cannot,
+ * so no version of this screen ever shows two ways to do one thing.
+ */
+export function phoneVerb(input: { canMintJoinCode: boolean }): 'pair' | 'add' {
+  return input.canMintJoinCode ? 'add' : 'pair'
+}
+
+/**
  * What the passkey row says when THIS Electron cannot make one.
  *
  * Not an apology and not a dead end: a passkey added in a browser is a
