@@ -3911,7 +3911,23 @@ function relayProxy(): Promise<RelayProxy> {
       log: (message) => console.error(message),
       // A card placed months ago starts with nothing in memory. This is how it
       // finds its door again without being imported a second time.
-      resolve: resolveDoor
+      resolve: resolveDoor,
+      /**
+       * THE CARD'S OWN LINE, ON THE ACCOUNT (v3-04c). The third caller of a
+       * listed door is `orch-line.mjs`, in the card's PTY — a separate process
+       * that cannot mint a call token because minting needs this Mac's
+       * cookrew.dev session. So it asks here, and the answer comes from the
+       * SAME `doorBearer` the transcript and END use: one function, one rule
+       * about listed versus direct, one caller at the door.
+       *
+       * The target is the proxy's own loopback end, which is where a listed
+       * door is always reached — exactly as `doorTranscriptFor` addresses it.
+       */
+      bearer: async (name) => {
+        const port = (await relayProxy()).port
+        return doorBearer(doorPort, { origin: `http://127.0.0.1:${port}`, slug: name }, name)
+      },
+      account: () => accounts.account()?.username ?? null
     }).then((proxy) => {
       callerProxy = proxy
       return proxy

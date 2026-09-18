@@ -55,6 +55,24 @@ if (process.argv[2] === '--print-sub') {
  * is not running, which is worth saying plainly rather than as a refused
  * connection.
  */
+/**
+ * THE ONE APP→CARD CHANNEL: where the relay proxy is, and the secret that
+ * opens its one route with authority behind it.
+ *
+ * READ EVERY TIME, never cached. The port changes with every app restart and
+ * the secret is minted per run, so a card holding either from an hour ago is a
+ * card that stopped working without saying so. The file is 0600 in the
+ * owner's ~/.cookrew, which is the same guard `account.json` keeps beside it.
+ */
+const proxyLink = () => {
+  try {
+    const held = JSON.parse(readFileSync(path.join(homedir(), '.cookrew', 'relay-proxy.json'), 'utf8'))
+    return held?.port ? { origin: `http://127.0.0.1:${held.port}`, token: held.token ?? null } : null
+  } catch {
+    return null
+  }
+}
+
 const door = arg('door')
 let origin = arg('origin')
 let slug = arg('slug')
@@ -71,14 +89,7 @@ if (door) {
   // held, and read as "the team went away" until somebody re-opened it.
   // And at start it WAITS: this process is spawned while the app is still
   // bringing the proxy up, and exiting then left a dead pane behind.
-  const proxyOrigin = () => {
-    try {
-      const port = JSON.parse(readFileSync(path.join(homedir(), '.cookrew', 'relay-proxy.json'), 'utf8')).port
-      return port ? `http://127.0.0.1:${port}` : null
-    } catch {
-      return null
-    }
-  }
+  const proxyOrigin = () => proxyLink()?.origin ?? null
   let found = proxyOrigin()
   if (!found) {
     process.stdout.write('\x1b[2mCookrew is starting — waiting for the relay…\x1b[0m\r\n')
@@ -241,7 +252,79 @@ function request(method, pathname, { headers = {}, body } = {}) {
   })
 }
 
-async function signIn() {
+/**
+ * ASK THE APP WHO THIS CARD IS AT ITS DOOR — the listed walk (v3-04c).
+ *
+ * The app does the whole thing: mint a call token with this Mac's cookrew.dev
+ * session, present it at the door, hand back the door's own Bearer. This card
+ * never sees the account's token, and the app applies the one rule about
+ * listed-versus-direct for all three callers of a door (src/main/door-bearer).
+ *
+ * THE SECRET AND THE PORT ARE RE-READ HERE, on every sign-in, so an app that
+ * restarted between one line and the next is picked up without the card being
+ * re-opened — the same reason the port was never put in the stored command.
+ */
+async function askTheApp() {
+  const link = proxyLink()
+  if (!link) throw new Error('Cookrew is not running, so this team cannot be reached right now.')
+  if (!link.token) {
+    // An app that is running but has no account cannot mint anything for a
+    // listed door. Said plainly: the answer is to sign in, not to retry.
+    throw new Error(`sign in to Cookrew on this Mac to open ${slug}`)
+  }
+  const answer = await new Promise((resolve) => {
+    const data = Buffer.from(JSON.stringify({ door: slug }))
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port: new URL(link.origin).port,
+        path: '/bearer',
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${link.token}`,
+          'content-type': 'application/json',
+          'content-length': data.length
+        }
+      },
+      (res) => {
+        let buf = ''
+        res.setEncoding('utf8')
+        res.on('data', (chunk) => (buf += chunk))
+        res.on('end', () => {
+          let parsed = null
+          try {
+            parsed = JSON.parse(buf)
+          } catch {
+            parsed = null
+          }
+          resolve({ status: res.statusCode ?? 0, body: parsed })
+        })
+      }
+    )
+    req.on('error', () => resolve({ status: 0, body: null }))
+    req.setTimeout(30_000, () => req.destroy(new Error('timeout')))
+    req.write(data)
+    req.end()
+  })
+  if (answer.status === 200 && answer.body?.token) {
+    // The account this Mac is signed in as, so the card says who it opened as
+    // rather than the local username it used to sign in with.
+    if (answer.body.account) account = `@${answer.body.account}`
+    return answer.body.token
+  }
+  if (answer.status === 403 && answer.body?.message) throw new Error(answer.body.message)
+  if (answer.status === 0) throw new Error('Cookrew stopped answering — retrying')
+  throw new Error(`Cookrew would not open ${slug} for this card (${answer.status})`)
+}
+
+/**
+ * THE DIRECT WALK — this Mac's own key, at a door with no published name.
+ *
+ * Kept, and only here: an unlisted door (a Mac on this Wi-Fi, an unpublished
+ * team) has nothing for cookrew.dev to mint a token against, so the key IS the
+ * identity. Nothing follows the caller elsewhere, which is the point of it.
+ */
+async function signInWithKey() {
   const face = await request('GET', '/crew')
   const serviceId = face.body?.serviceId ?? ''
   if (!serviceId) throw new Error('this door did not say who it is')
@@ -279,7 +362,23 @@ async function signIn() {
   return token
 }
 
+/**
+ * ONE DOOR, ONE CALLER.
+ *
+ * A card that was given a door NAME was imported from the directory, so the
+ * account is who it is there — and the key ceremony is not offered as a
+ * fallback. Falling back is what produced the two-callers bug the other two
+ * callers were fixed for: a card that quietly becomes somebody else opens a
+ * second session on the owner's lending budget, and at a paid door it cannot
+ * be admitted by the seat at all.
+ */
+function signIn() {
+  return door ? askTheApp() : signInWithKey()
+}
+
 let token = ''
+/** Who the card opened as. The account at a listed door; this Mac's sub otherwise. */
+let account = sub
 let closed = false
 let lineUp = false
 /** The door said the session ended; the next knock waits for Enter. */
@@ -594,7 +693,7 @@ process.stdout.on('resize', () => {
 async function main() {
   process.stdout.write(dim(`── line → ${label} · ${origin}/${slug}`))
   token = await signIn()
-  process.stdout.write(dim(`✓ signed in as ${sub} — opening the line…`))
+  process.stdout.write(dim(`✓ signed in as ${account} — opening the line…`))
   connectLine()
 }
 
