@@ -10,7 +10,6 @@ import { V3_COPY } from '../src/shared/account-copy'
 import type { ClaimFields } from '../src/renderer/src/account/account-store'
 import {
   ACCOUNT_COPY,
-  approvalView,
   avatarView,
   claimView,
   deviceName,
@@ -35,6 +34,7 @@ import {
   takenSentence,
   wrongPasswordSentence,
 } from '../src/renderer/src/account/account-store'
+import { lanRevokeEnds } from '../src/shared/lan-token-mode'
 import { startedAgo, type ApprovalRequest } from '../src/shared/account-approvals'
 
 const STRONG = 'correct-horse-battery'
@@ -51,6 +51,7 @@ const BASE: AccountStatus = {
   envUsername: null,
   legacy: null,
   sessionExpired: false,
+  passwordPending: false,
   registryMismatch: null,
   workspacesReachable: true,
   recoveryCodesSavedAt: null,
@@ -349,11 +350,23 @@ describe('the sign-out confirmation says what leaves, what stays, what goes quie
 })
 
 describe('the revoke confirmation names the device and its consequence', () => {
-  it('is one sentence, in the table’s words', () => {
-    // The Wi-Fi caveat is gone because the thing it admitted to is fixed:
-    // a revoked device now loses LAN admission on every Mac too (V3-05).
-    expect(revokeSentence('iPhone')).toBe(
-      "The iPhone stops opening this account within a minute — here, at every door, and on every Mac's Wi-Fi. Anything it asked for is dropped.",
+  it('is one sentence, in the table’s words for the mode this build is in', () => {
+    /**
+     * THIS TEST USED TO ASSERT THE UNHEDGED SENTENCE, and its comment said
+     * "the Wi-Fi caveat is gone because the thing it admitted to is fixed".
+     * It was not fixed in any build that shipped: the root pairing token
+     * still opened every route, so a revoked phone still had this Mac's
+     * keyboard on this Wi-Fi (H2). Which sentence is true is now one fact
+     * both the gate and the copy read — shared/lan-token-mode.ts — and
+     * tests/lan-revoke-contract.test.ts is what stops them drifting again.
+     * Asserted here through the same constant, so this file says what the
+     * build says rather than pinning one of the two worlds.
+     */
+    const said = revokeSentence('iPhone')
+    expect(said).toBe(
+      lanRevokeEnds()
+        ? "The iPhone stops opening this account within a minute — here, at every door, and on every Mac's Wi-Fi. Anything it asked for is dropped."
+        : 'The iPhone stops opening this account within a minute — here and at every door. On this Mac it keeps working on this Wi-Fi until you run `cookrew mobile --rotate`, which re-pairs every phone.',
     )
   })
 })
@@ -405,27 +418,7 @@ describe('the rose badge now has a producer (D1)', () => {
   })
 })
 
-describe('the request card, word for word (D6)', () => {
-  it('is the design sentence, split into its two lines', () => {
-    const view = approvalView(request(), { username: 'drej', hasSecondFactor: false, now: NOW })
-    expect(view.lead).toBe('Chrome on macOS in Sydney wants to sign in as @drej.')
-    expect(view.detail).toBe(
-      'Started 12 seconds ago · 203.0.113.9 · no second factor on the account yet.',
-    )
-  })
-
-  it('says what NOT ME does before it is done', () => {
-    const view = approvalView(request(), { username: 'drej', hasSecondFactor: false, now: NOW })
-    expect(view.confirm).toBe(
-      'Every other device signs out and you will set a new password.',
-    )
-  })
-
-  it('drops the factor clause rather than inventing a reassuring one', () => {
-    const view = approvalView(request(), { username: 'drej', hasSecondFactor: true, now: NOW })
-    expect(view.detail).toBe('Started 12 seconds ago · 203.0.113.9.')
-  })
-
+describe('how long a device has been asking — the clock D11 kept from D6', () => {
   it('counts in the units a person reads: seconds, then minutes, then hours', () => {
     expect(startedAgo(1_000)).toBe('1 second')
     expect(startedAgo(12_000)).toBe('12 seconds')

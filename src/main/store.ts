@@ -26,7 +26,7 @@ import {
   uniqueName
 } from '../shared/model'
 import { addDir, removeDir, setPrimary } from '../shared/workspace-dirs'
-import { slugFor } from './workspace-slug'
+import { slugFor } from '../shared/workspace-slug'
 import { recordLineageIds } from './lineage-spill'
 import { lineageIdsOf } from './session-lineage'
 import type { CookrewEvent, EventActor } from './event-log'

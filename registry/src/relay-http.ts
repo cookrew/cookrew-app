@@ -49,11 +49,53 @@ export interface RelayHttp {
 
 interface Ticket {
   name: string
+  /** The handle the assertion proved, and the team under it. */
+  handle: string
+  team: string
+  /**
+   * WHICH MACHINE IS CLAIMING, as it described itself — its device id and its
+   * name (V3-18). Both absent for a door that did not say, and that absence is
+   * meaningful: a claim from a machine with no name cannot take a name over,
+   * because there would be no way to tell a second Mac from the same one
+   * reconnecting and nothing to put in "alpha moved to ___".
+   *
+   * NOT A CREDENTIAL, and it does not need to be. The assertion above already
+   * proved this handle, and a key that can prove @drej can park on any door
+   * name of @drej's — so naming which of @drej's Macs is holding it adds no
+   * reach to anybody who did not already have all of it.
+   */
+  deviceId?: string
+  as?: string
   expiresAt: number
 }
 
+/** A device id is a key thumbprint; a machine name is what a person typed. */
+const DEVICE_ID = /^[a-z0-9_-]{1,128}$/i
+const MACHINE_NAME_MAX = 64
+
 export function createRelayHttp(deps: {
   identity?: IdentityService
+  /**
+   * WHO IS SIGNED IN ON THIS REQUEST, as an account username — or null.
+   *
+   * THE SECOND MAC COULD NOT SERVE AT ALL WITHOUT THIS (V3-18). A door proves
+   * its handle with the v1 registry key, which is a file each machine mints
+   * for itself; the second Mac of one account therefore enrols a DIFFERENT key
+   * under the same credential id, is answered `credential_exists`, and never
+   * reaches the relay. "Two Macs of one account and one team slug" was
+   * unreachable one layer above the hub that was blamed for it.
+   *
+   * A v2 session is the same claim, made better: the door name is
+   * `@<username>/<team>` and a username is exactly what a session proves. It
+   * is also narrower than the key it stands in for — scoped, revocable and
+   * expiring, where the key is a file on disk with no lock. And the two
+   * namespaces cannot disagree: `/v2/accounts` refuses a name a v1 credential
+   * holds (409 legacy), and the migration route is the one way to cross.
+   *
+   * Strictly additive. The assertion path below is untouched, so every door
+   * serving today goes on doing exactly what it does.
+   */
+  accountOf?: (request: IncomingMessage) => string | null
   now?: () => number
   log?: (message: string) => void
   /** How often a door is pinged on its downlink. */
@@ -66,6 +108,13 @@ export function createRelayHttp(deps: {
    * to a served name, only the door decides whether it was a line.
    */
   onAnswer?: (name: string, method: string, path: string, status: number) => void
+  /**
+   * A DOOR CHANGED HANDS — one Mac of an account took a name from another
+   * (V3-18). Fired only when the holder actually changed, never when a machine
+   * reclaims its own name after a drop, so the account's feed records moves
+   * and not reconnections.
+   */
+  onDoorMoved?: (move: { handle: string; team: string; deviceId: string; by: string }) => void
 }): RelayHttp {
   const now = deps.now ?? ((): number => Date.now())
   const log = deps.log ?? ((): void => undefined)
@@ -122,11 +171,18 @@ export function createRelayHttp(deps: {
       json(response, 400, { error: 'malformed' })
       return
     }
-    const input = body.value as { assertion?: unknown; name?: unknown }
+    const input = body.value as { assertion?: unknown; name?: unknown; as?: unknown; deviceId?: unknown }
     const name = typeof input.name === 'string' ? input.name : ''
     const parsed = NAME.exec(name)
     if (!parsed) {
       json(response, 400, { error: 'bad_name' })
+      return
+    }
+    // Signed in as the handle this name belongs to → nothing more to prove.
+    // Asked BEFORE the challenge, so a Mac holding a session never starts a
+    // ceremony it does not need.
+    if (deps.accountOf?.(request) === parsed[1]) {
+      grant(response, name, parsed[1], parsed[2], input)
       return
     }
     // No assertion → a challenge, which is the same ladder every other gated
@@ -148,9 +204,32 @@ export function createRelayHttp(deps: {
       json(response, 403, { error: 'not_yours' })
       return
     }
+    grant(response, name, parsed[1], parsed[2], input)
+  }
+
+  /** Mint and answer. Both proofs above end here, and they end identically. */
+  const grant = (
+    response: ServerResponse,
+    name: string,
+    handle: string,
+    team: string,
+    input: { as?: unknown; deviceId?: unknown }
+  ): void => {
     sweep()
     const ticket = randomBytes(32).toString('base64url')
-    tickets.set(ticket, { name, expiresAt: now() + TICKET_TTL_MS })
+    // A machine that describes itself badly is recorded as not having said —
+    // it loses the ability to take a name over and keeps everything else,
+    // which is a smaller consequence than refusing a door over a label.
+    const as = typeof input.as === 'string' ? input.as.trim().slice(0, MACHINE_NAME_MAX) : ''
+    const deviceId = typeof input.deviceId === 'string' ? input.deviceId : ''
+    const named = as.length > 0 && DEVICE_ID.test(deviceId)
+    tickets.set(ticket, {
+      name,
+      handle,
+      team,
+      ...(named ? { as, deviceId: deviceId.toLowerCase() } : {}),
+      expiresAt: now() + TICKET_TTL_MS
+    })
     json(response, 200, { ticket, name, expiresIn: TICKET_TTL_MS })
   }
 
@@ -185,13 +264,55 @@ export function createRelayHttp(deps: {
         if (!response.writableEnded) response.end()
       }
     }
-    const opened = hub.openDoor(ticket.name, socket)
+    /**
+     * MAY THIS CLAIM REPLACE THE ONE HOLDING THE NAME? (V3-18)
+     *
+     * Decided here rather than in the hub, because this is where identity is
+     * known and the hub must stay a thing that carries frames. Two conditions,
+     * and both are about being able to tell one machine from another:
+     *
+     *   the name is held at all — otherwise there is nothing to replace;
+     *   THIS claim named itself. A ticket already proves the handle, so every
+     *     claim on `@drej/alpha` is @drej's; what a nameless claim cannot prove
+     *     is WHICH of @drej's Macs it is, and without that "reconnecting" and
+     *     "a second machine" are the same request. Refusing it keeps today's
+     *     behaviour for every door that has not been taught to say.
+     *
+     * A machine reclaiming its own name is silent (`by: null`): its wifi came
+     * back, and nothing moved.
+     */
+    const heldBy = hub.holderOf(ticket.name)
+    const claiming = hub.has(ticket.name)
+    const moving = claiming && ticket.as !== undefined && heldBy !== ticket.deviceId
+    /**
+     * THE OLD LINE IS LET GO BEFORE THE NEW ONE IS TAKEN.
+     *
+     * Superseding closes the replaced downlink, and that downlink's own close
+     * handler releases whatever `live` says holds this name — which, until
+     * this line runs, is still the machine being replaced. Releasing first
+     * makes its `holds()` guard answer false, so the door we are about to open
+     * cannot be torn down by the teardown of the one it replaced.
+     */
+    if (claiming && ticket.as !== undefined) live.release(ticket.name)
+    const opened = hub.openDoor(ticket.name, socket, {
+      ...(ticket.deviceId === undefined ? {} : { holder: ticket.deviceId }),
+      ...(claiming && ticket.as !== undefined ? { supersede: { by: moving ? ticket.as : null } } : {})
+    })
     if (!opened.ok) {
       // A name already held. Said plainly in the stream rather than as a status,
       // because the head is already out.
       write(encodeFrame({ t: 'abort', id: 'x', reason: opened.reason }))
       response.end()
       return
+    }
+    if (moving && ticket.deviceId !== undefined && ticket.as !== undefined) {
+      log(`relay: ${ticket.name} moved to ${ticket.as}`)
+      deps.onDoorMoved?.({
+        handle: ticket.handle,
+        team: ticket.team,
+        deviceId: ticket.deviceId,
+        by: ticket.as
+      })
     }
     // The door has until the first deadline to answer its first ping; a door
     // that never opens an uplink at all is dropped by the same rule.

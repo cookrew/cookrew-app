@@ -126,7 +126,7 @@ const FACTORS: readonly LadderFactor[] = ['passkey', 'totp', 'approve', 'recover
  */
 export function stepFrom(body: unknown): SecondFactorStep | null {
   if (typeof body !== 'object' || body === null) return null
-  const held = body as { pending?: unknown; next?: unknown; expiresAt?: unknown }
+  const held = body as { pending?: unknown; next?: unknown; expiresAt?: unknown; match?: unknown }
   if (typeof held.pending !== 'string' || held.pending === '') return null
   const next = Array.isArray(held.next)
     ? held.next.filter((name): name is LadderFactor => FACTORS.includes(name as LadderFactor))
@@ -138,6 +138,9 @@ export function stepFrom(body: unknown): SecondFactorStep | null {
     // A registry that sent no expiry still gets a countdown, from the TTL the
     // contract states — a card with no clock on it cannot say "start again".
     expiresAt: typeof held.expiresAt === 'number' ? held.expiresAt : Date.now() + LADDER_TTL_MS,
+    // Two digits or nothing. A malformed number is not shown as if it were
+    // one: the card says the sign-in cannot be approved, which is true.
+    ...(typeof held.match === 'string' && /^[1-9][0-9]$/.test(held.match) ? { match: held.match } : {}),
   }
 }
 

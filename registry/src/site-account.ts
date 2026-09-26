@@ -124,7 +124,9 @@ export function mePage(
       kind: 'app',
       cache: 0,
       noindex: true,
-      scripts: ['device-id.js', 'site.js', 'reach.js']
+      // device-seal.js before reach.js: M5's answer arrives sealed to this
+      // device, and the opener has to be on the page by the time it lands.
+      scripts: ['device-id.js', 'site.js', 'device-seal.js', 'reach.js']
     },
     `<div class="wrap" style="padding-top:44px" id="me" data-username="${esc(account.username)}">
 <div class="me-head">${face}<div><h1 style="margin:0">@${esc(account.username)}</h1>
@@ -133,9 +135,29 @@ export function mePage(
 <button class="btn" data-edit-name>Edit</button>
 <button class="btn" data-signout>Sign out</button></div>
 
+<!-- W5 · REQUESTS SITS ABOVE DEVICES, and the whole section hides itself when
+     the queue is empty. It is above because it is the only part of this page
+     that is WAITING for the reader: devices and security are things to look
+     at, a request is a thing to answer. factors.js unhides it the moment the
+     poll returns a row and hides it again when the last one is answered, so
+     a person with nothing waiting is not given a heading that says so. -->
+<section id="me-requests" hidden>
+<h2 style="margin-top:30px">Requests</h2>
+<p class="meta">${esc(webCopy('w5.requests-footer', { handle: account.username }))}</p>
+<ul class="doors me-list" id="me-approvals" data-join-row="${esc(webCopy('w5.join-row'))}"
+ data-seat-row="${esc(webCopy('d11.seat-row', { handle: '{handle}', team: '{team}' }))}"
+ data-wifi-row="${esc(webCopy('w5.reach-elsewhere', { device: '{device}' }))}"></ul>
+</section>
+
 <h2 style="margin-top:30px">Devices</h2>
 <p class="meta">Every device attached to @${esc(account.username)}. ${esc(webCopy('d12.revoke', { device: 'device' }))} ${esc(webCopy('d12.last-device', { handle: account.username }))}</p>
 <ul class="doors me-list" id="me-devices">${devices}</ul>
+<!-- W5 · the two ADD buttons. Both mint the same join code; the words differ
+     because what a person is holding differs, and "add a phone" is the
+     sentence somebody standing with a phone is looking for. -->
+<p class="row"><button class="btn" data-add-device="desktop">Add a Mac</button>
+<button class="btn" data-add-device="phone">Add a phone</button></p>
+<div class="totp-panel" id="me-join-code" data-add-lede="${esc(webCopy('w5.add-lede'))}" hidden></div>
 
 <h2 style="margin-top:30px">Security</h2>
 <ul class="doors me-list" id="me-security">
@@ -149,11 +171,47 @@ ${authenticatorRow(factors.totp)}
 <pre class="cmd" id="me-codes" hidden></pre>
 <div class="totp-panel" id="me-totp" hidden></div>
 
-<h2 style="margin-top:30px">Requests</h2>
-<p class="meta">A device asking to sign in as @${esc(account.username)}. Approve attaches it and names it in Devices; deny does nothing else; “not me” signs every other device out and locks the password until you change it.</p>
-<ul class="doors me-list" id="me-approvals"></ul>
-
 ${desktopsSection(account.username, account.desktops)}
 </div>`
+  )
+}
+
+/**
+ * M4 · /join — the page a join-code QR points a phone at.
+ *
+ * THE CODE IS IN THE FRAGMENT AND NEVER REACHES THIS FUNCTION. That is the
+ * point of putting it there: the server renders one page for every code, so
+ * there is nothing here to log, nothing to correlate, and no way for this
+ * route to become an oracle for which codes exist. The script reads the
+ * fragment, scrubs it out of the address bar, and spends it on one button.
+ *
+ * IT DOES NOT NAME THE ACCOUNT, and the design's mock does. Naming it would
+ * need a "what account is this code for" route, and that route is a checker:
+ * somebody guessing codes would learn which guesses were live without ever
+ * spending one. The account's name is on the other side of the button —
+ * POST /v2/join answers with it — so the cost of not showing it first is one
+ * screen, and the cost of showing it is a way to hunt for live codes.
+ *
+ * NO SESSION IS NEEDED. A phone arriving here has no account yet; that is the
+ * whole situation. The page is an app page because it needs the script, and
+ * the account sheet travels with it so "sign in with your password instead"
+ * is one tap rather than another address.
+ */
+export function joinPage(): Page {
+  return page(
+    {
+      title: 'Join an account — Cookrew',
+      kind: 'app',
+      cache: 0,
+      noindex: true,
+      scripts: ['device-id.js', 'site.js']
+    },
+    `<div class="wrap" style="padding-top:44px" id="join-card">
+<h1>Join on this device</h1>
+<p class="lede" id="join-lede">${esc(webCopy('m4.join-lede'))}</p>
+<p class="meta" id="join-message" role="status"></p>
+<p class="row"><button class="btn primary lg" id="join-go" hidden>Join</button>
+<button class="btn lg" data-signin>${esc(webCopy('m4.join-instead'))}</button></p>
+<p class="meta" id="join-none" hidden>${esc(webCopy('m4.no-code'))}</p></div>`
   )
 }

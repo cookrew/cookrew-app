@@ -187,13 +187,15 @@
   /* ── sign-in at the door, with the registry's word ─────────────────────── */
 
   /**
-   * THE v2 WORD FOR THIS DOOR — a call token naming the seat that admits us.
+   * THE WORD FOR THIS DOOR — a call token naming the seat that admits us.
    *
-   * Asked for FIRST, because a seat belongs to the account a person signed in
-   * with and follows them to any device. 401 means there is no v2 session in
-   * this browser, and the older key-based path below still works for the
-   * accounts that only have that; 403 means the account is real and has no
-   * seat here, which is the page's sentence and not a thing to retry.
+   * The ONLY credential the marketplace presents (v3, G1). A seat belongs to
+   * the account a person signed in with and follows them to any device they
+   * sign in on; a browser key could never be the person a seat names, which is
+   * why the v1 enrolment ceremony is gone from this path entirely. 401 means
+   * nobody is signed in here and the answer is the account sheet, not another
+   * credential; 403 means the account is real and has no seat at this team,
+   * which is the page's sentence and not a thing to retry.
    */
   async function v2CallToken() {
     let res
@@ -218,33 +220,34 @@
     throw new LineError('refused', body?.message ?? `cookrew.dev would not mint a token for this door (${res.status})`)
   }
 
+  /**
+   * SIGN IN AS THE ACCOUNT, AND AS NOTHING ELSE (v3, G1).
+   *
+   * There used to be three ways to be somebody at a door: the v2 call token,
+   * a v1 registry token, and a key this browser enrolled under a bare handle.
+   * The desktop was cut down to one in V3-04 and this is the same cut for the
+   * web, for the same reason — a key-holder sub can never be the person a seat
+   * names, so a browser that enrolled its way in could be charged twice for a
+   * seat it already owns, and the room would list a stranger.
+   *
+   * No account here is `identify`, not another credential: the answer is the
+   * sign-in sheet, which this throws for the page to open. A door too old to
+   * verify a cookrew.dev token says so plainly rather than being met with a
+   * ceremony that would seat the wrong caller.
+   */
   async function signIn() {
-    const acct = account()
-    if (!acct) throw new LineError('account', 'the account script did not load')
     const seated = await v2CallToken()
-    const handleName = seated?.account ?? (await acct.handle())
-    if (!handleName) throw new LineError('account', 'sign in to cookrew.dev first')
-    const registryToken = seated?.token ?? (await acct.token('call', door))
+    if (!seated) throw new LineError('account', 'sign in to cookrew.dev first')
     const JSON_HEADERS = { 'content-type': 'application/json' }
-    let res = await exchange('POST', '/api/call/assert', JSON_HEADERS, JSON.stringify({ registryToken }))
+    const res = await exchange('POST', '/api/call/assert', JSON_HEADERS, JSON.stringify({ v2Token: seated.token }))
     if (res.status === 401) {
-      // A door whose app predates registry tokens still takes the ceremony
-      // orch-line.mjs performs: sign its challenge with this account's own key.
-      const key = await acct.doorKey()
-      if (!key) throw new LineError('refused', "the door does not take cookrew.dev accounts yet — the owner's app needs updating")
-      const face = jsonOf((await exchange('GET', '/crew', {}, '')).body)
-      const serviceId = face?.serviceId
-      if (typeof serviceId !== 'string' || !serviceId) throw new LineError('refused', 'this door did not say who it is')
-      const challenge = jsonOf((await exchange('POST', '/api/call/challenge', JSON_HEADERS, '{}')).body)?.challenge
-      if (typeof challenge !== 'string') throw new LineError('refused', 'no challenge — is the team still serving?')
-      const signature = await key.sign(`cookrew-call/1\n${serviceId}\n${key.sub}\n${challenge}`)
-      res = await exchange('POST', '/api/call/assert', JSON_HEADERS, JSON.stringify({ sub: key.sub, challenge, signature, jwk: key.jwk }))
+      throw new LineError('refused', "this door does not take cookrew.dev accounts yet — the owner's app needs updating")
     }
-    if (res.status !== 200) throw new LineError('refused', `the door refused this account (${res.status}) — this name may belong to another key there`)
+    if (res.status !== 200) throw new LineError('refused', `the door refused this account (${res.status})`)
     const body = jsonOf(res.body)
     if (!body?.token) throw new LineError('refused', 'the door minted no token')
     doorToken = body.token
-    return handleName
+    return seated.account
   }
   const auth = () => ({ authorization: `Bearer ${doorToken}`, ...(payment ? { 'x-payment': payment } : {}) })
 
@@ -565,9 +568,14 @@
     if (!relayed) return toast('This door is not on the relay; open it in Cookrew.')
     reconnects = 0
     const acct = account()
-    if (!(await acct?.handle())) {
-      toast('Sign in to cookrew.dev first — the door lends to accounts.')
-      return acct?.signIn()
+    // WHO IS READING IS AN ACCOUNT QUESTION (v3, G1). The old check asked
+    // whether this browser had ENROLLED a handle, which a person could satisfy
+    // without ever having an account — and then be charged for a seat their
+    // account already holds. The door's own word decides now, and its absence
+    // opens the sign-in sheet rather than a ceremony.
+    if (!(await v2CallToken().catch(() => null))) {
+      toast('Sign in to cookrew.dev first — a seat is yours, not this browser’s.')
+      return acct?.account?.()
     }
     closed = false
     gate(null)

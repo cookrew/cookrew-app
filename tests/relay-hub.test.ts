@@ -185,3 +185,106 @@ describe('nobody is left hanging', () => {
     expect(door.got.length).toBe(doorFrames)
   })
 })
+
+/**
+ * TAKING A NAME OVER — V3-18, and the refusal above is still the default.
+ *
+ * Two Macs of one account cloned from the same repo save the same team and
+ * derive the same slug, so the second one met `name-taken` and simply never
+ * opened. The hub is still not the place that decides who may replace whom —
+ * it holds no credential of either side — so the decision arrives as a flag
+ * from the side that knows, and what is tested here is what the hub does with
+ * it: tell the machine being replaced, take nobody's callers down silently,
+ * and rebind the name.
+ */
+describe('a door takes a name over', () => {
+  it('still refuses when nobody said it may', () => {
+    const hub = new RelayHub()
+    hub.openDoor(NAME, sock(), { holder: 'mac-1' })
+    expect(hub.openDoor(NAME, sock(), { holder: 'mac-2' })).toEqual({
+      ok: false,
+      reason: 'name-taken'
+    })
+  })
+
+  it('TELLS THE OLD DOOR, by name, before ending its line', () => {
+    const hub = new RelayHub()
+    const first = sock()
+    const second = sock()
+    hub.openDoor(NAME, first, { holder: 'mac-1' })
+    expect(hub.openDoor(NAME, second, { holder: 'mac-2', supersede: { by: 'Mac Studio' } }).ok).toBe(
+      true
+    )
+    // The sentence the old Mac shows is built from this frame. Without it a
+    // replaced door cannot tell being taken over from a dropped network — so
+    // it redials, and two Macs pass the name between them for ever.
+    expect(first.got.at(-1)).toEqual({ t: 'superseded', by: 'Mac Studio' })
+    expect(first.closed).toBe(true)
+    expect(second.got).toEqual([{ t: 'ready', name: NAME }])
+    expect(hub.holderOf(NAME)).toBe('mac-2')
+  })
+
+  it('says nothing when the same machine is reclaiming its own name', () => {
+    // Its wifi came back. Nothing moved, and "alpha moved to MacBook Pro" on
+    // MacBook Pro would be a lie on somebody's screen.
+    const hub = new RelayHub()
+    const first = sock()
+    const again = sock()
+    hub.openDoor(NAME, first, { holder: 'mac-1' })
+    expect(hub.openDoor(NAME, again, { holder: 'mac-1', supersede: { by: null } }).ok).toBe(true)
+    expect(first.got.some((f) => f.t === 'superseded')).toBe(false)
+    expect(first.closed).toBe(true)
+    expect(hub.holderOf(NAME)).toBe('mac-1')
+  })
+
+  it('does not leave the old door’s callers hanging on a socket about to close', () => {
+    const hub = new RelayHub()
+    const first = sock()
+    const caller = sock()
+    hub.openDoor(NAME, first, { holder: 'mac-1' })
+    const opened = hub.openStream(NAME, caller, req)
+    expect(opened.ok).toBe(true)
+    hub.openDoor(NAME, sock(), { holder: 'mac-2', supersede: { by: 'Mac Studio' } })
+    expect(caller.got.at(-1)).toMatchObject({ t: 'abort', reason: 'door-gone' })
+    expect(caller.closed).toBe(true)
+  })
+
+  it('serves the NEW door from then on, and never the replaced one', () => {
+    const hub = new RelayHub()
+    const first = sock()
+    const second = sock()
+    hub.openDoor(NAME, first, { holder: 'mac-1' })
+    hub.openDoor(NAME, second, { holder: 'mac-2', supersede: { by: 'Mac Studio' } })
+    const before = first.got.length
+    const caller = sock()
+    const opened = hub.openStream(NAME, caller, req)
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+    expect(second.got.at(-1)).toMatchObject({ t: 'open', id: opened.id, path: '/crew' })
+    expect(first.got.length).toBe(before)
+    // And the replaced door answering the stream it never had is routed nowhere.
+    hub.fromDoor(NAME, encodeFrame({ t: 'head', id: opened.id, status: 200, headers: {} }))
+    expect(caller.got.filter((f) => f.t === 'head')).toHaveLength(1)
+  })
+
+  it('refuses a bad name even when told to supersede', () => {
+    const hub = new RelayHub()
+    expect(hub.openDoor('@drej/Alpha', sock(), { supersede: { by: 'Mac Studio' } })).toEqual({
+      ok: false,
+      reason: 'bad-name'
+    })
+  })
+
+  it('does not route a `superseded` a door sends back up', () => {
+    // It is something the RELAY says. A door echoing one belongs to no stream
+    // and must not be forwarded to anybody.
+    const hub = new RelayHub()
+    const door = sock()
+    const caller = sock()
+    hub.openDoor(NAME, door)
+    hub.openStream(NAME, caller, req)
+    const before = caller.got.length
+    hub.fromDoor(NAME, encodeFrame({ t: 'superseded', by: 'Mac Studio' }))
+    expect(caller.got.length).toBe(before)
+  })
+})

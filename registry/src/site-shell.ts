@@ -3,6 +3,7 @@ import { ASSET_VERSION } from './assets-bundle'
 import { BRAND_MARK_SVG } from './site-brand'
 import { GITHUB_REPO, SITE_ORIGIN } from './site-content'
 import { jsonLd } from './site-seo'
+import { webCopy } from './v3-copy'
 
 /**
  * THE SITE'S ONE SHELL — cookrew.dev in the app's own dress.
@@ -46,19 +47,31 @@ export const SITE_FONTS = '/assets/'
 export { GITHUB_REPO, SITE_ORIGIN } from './site-content'
 
 /** W1 — one sheet, two tabs. Register is sign-in plus a confirmation. */
-export const ACCOUNT_SHEET = `<dialog id="account-sheet" class="card acct" aria-label="Your cookrew.dev account">
+/**
+ * W4 · THE JOIN LEDE TRAVELS AS DATA, not as a second copy inside site.js.
+ *
+ * The CSP forbids an inline script, and the assets are plain JS that cannot
+ * import from v3-copy.ts — so a sentence the script needs either comes down
+ * in the markup or gets written out again by hand. Written again is the drift
+ * the one copy table exists to stop, so it comes down here and the script
+ * reads it off the element.
+ */
+export const ACCOUNT_SHEET = `<dialog id="account-sheet" class="card acct" aria-label="Your cookrew.dev account" data-join-lede="${esc(webCopy('w4.join-lede'))}" data-asked-lede="${esc(webCopy('w4.asked'))}" data-join-refused="${esc(webCopy('w4.join-refused'))}">
 <form method="dialog" id="account-form">
 <div class="acct-tabs" role="tablist">
 <button class="btn sm primary" type="button" role="tab" aria-selected="true" data-acct-tab="signin">Sign in</button>
 <button class="btn sm" type="button" role="tab" aria-selected="false" data-acct-tab="register">Register</button>
 </div>
 <p class="meta" id="acct-lede">A username and a password. The site never asks for an email.</p>
-<label class="acct-row"><span>Username</span>
+<label class="acct-row" id="acct-username-row"><span>Username</span>
 <input id="acct-username" name="username" autocomplete="username" spellcheck="false" maxlength="32" placeholder="mira">
 <em class="chip" id="acct-username-note" hidden></em></label>
-<label class="acct-row"><span>Password</span>
+<label class="acct-row" id="acct-password-row"><span>Password</span>
 <input id="acct-password" name="password" type="password" autocomplete="current-password" maxlength="256">
 <em class="chip" id="acct-password-note" hidden></em></label>
+<label class="acct-row" id="acct-code-row" hidden><span>Code</span>
+<input id="acct-code" name="code" autocomplete="one-time-code" spellcheck="false" maxlength="9" placeholder="K7M2-P9XR">
+<em class="chip" id="acct-code-note" hidden></em></label>
 <label class="acct-row" id="acct-confirm-row" hidden><span>Confirm</span>
 <input id="acct-confirm" name="confirm" type="password" autocomplete="new-password" maxlength="256">
 <em class="chip" id="acct-confirm-note" hidden></em></label>
@@ -68,6 +81,10 @@ export const ACCOUNT_SHEET = `<dialog id="account-sheet" class="card acct" aria-
 <button class="btn" value="cancel" formnovalidate>Cancel</button>
 </div>
 <p class="meta" id="acct-foot">Forgot it? Any of your devices can let you in; or a recovery code.</p>
+<p class="meta" id="acct-join-offer">${esc(webCopy('w4.join-offer'))}
+<button class="btn sm" type="button" data-acct-mode="join">Join with a code</button></p>
+<p class="meta" id="acct-join-back" hidden>
+<button class="btn sm" type="button" data-acct-mode="signin">Use a username and password instead</button></p>
 </form>
 </dialog>`
 
@@ -491,7 +508,41 @@ li.desktop .chip.ok{background:var(--hp);color:#14110a}
 .acct-code{font:16px var(--font-mono);letter-spacing:.12em;padding:9px 11px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink);outline:none;flex:1;min-width:0}
 .acct-code:focus{background:var(--amber-soft)}
 .acct-asked{font:700 12px var(--font-pixel);letter-spacing:.06em;text-transform:uppercase;margin:2px 0 6px}
+/* W4: the two digits the other device has to be looking at. Large because it
+   is read off this screen and typed on another one, across a room. */
+.acct-match{font:700 44px var(--font-mono);letter-spacing:.14em;margin:4px 0 8px;color:var(--ink)}
+/* W5: the same, for a join code read onto a machine that has nothing typed
+   on it but this. Selectable, because the two devices may be one desk apart. */
+.acct-join-code{font:700 28px var(--font-mono);letter-spacing:.14em;margin:6px 0;user-select:all;color:var(--ink)}
+/* W5: the number the approver types, inline in the row rather than below it —
+   the question and the field are one sentence. */
+.acct-match-field{flex:0 0 4.5em;margin-left:8px;text-align:center;letter-spacing:.2em}
 ul.me-list li .btn.sm+.btn.sm{margin-left:6px}
+/* M5: the row's own line — why it is waiting, or what the Mac answered. */
+.reach-note{flex-basis:100%;margin:6px 0 0}
+/*
+ * M6 · THE REQUESTS QUEUE AT PHONE WIDTH.
+ *
+ * The phone is where a join is most often answered — somebody is holding the
+ * Mac that is asking — so the row stops being a line with controls at its end
+ * and becomes a card: the sentence, then the number, then the answers. THE
+ * NUMBER FIELD IS THE PRIMARY CONTROL here and it is sized like one; a 4.5em
+ * box at the end of a wrapped row is the hardest thing on the screen to hit
+ * and the only thing that must be hit first.
+ */
+.req-actions{display:flex;gap:6px;align-items:center}
+@media (max-width:700px){
+  /* ONE COLUMN, in reading order: what is being asked, the number, the answers.
+     A me-list row is a THREE-COLUMN GRID, so this collapses the template
+     rather than fighting it with flex rules the element never sees — five
+     children in three columns auto-placed the number beside a button, which
+     at phone width is the wrong thing under the thumb. */
+  ul.me-list li.req{grid-template-columns:1fr;gap:8px}
+  ul.me-list li.req .acct-match-field{display:block;width:100%;box-sizing:border-box;margin:8px 0 0;font-size:30px;padding:12px;letter-spacing:.3em}
+  ul.me-list li.req .req-actions{width:100%}
+  ul.me-list li.req .req-actions .btn{flex:1 1 0;justify-content:center}
+  ul.me-list li.req .btn.sm+.btn.sm{margin-left:0}
+}
 /* the authenticator's scan-then-verify panel on /me */
 .totp-panel{border:2px solid var(--line);background:var(--cream-hi);padding:14px;margin:10px 0;max-width:420px}
 .totp-panel svg{display:block;margin:8px 0;border:2px solid var(--line);background:#fff}

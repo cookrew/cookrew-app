@@ -716,6 +716,29 @@
 }
 .sos-door-s { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-soft); line-height: 1.45; }
 .sos-note { font-family: var(--font-body); font-size: 11px; color: var(--muted); }
+/* D14 · a name another Mac of this account already holds. Amber, not rose:
+   nothing is wrong, and all three answers are ordinary. */
+.sos-held {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px 10px;
+  border: 1.5px solid var(--amber);
+  background: var(--amber-soft);
+}
+.sos-held-s { font-family: var(--font-mono); font-size: 11px; color: var(--ink); line-height: 1.45; }
+.sos-held-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.sos-held-b {
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream-hi);
+  color: var(--ink);
+  padding: 4px 8px;
+  font: 700 10px var(--font-mono);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.sos-held-b.sel { border-color: var(--line); background: var(--amber); }
+.sos-held-n { font-family: var(--font-mono); font-size: 10px; color: var(--ink-soft); line-height: 1.45; }
 /* The payoff: an address you can hand to someone. */
 .sos-live {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;

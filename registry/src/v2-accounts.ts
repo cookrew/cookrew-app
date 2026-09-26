@@ -13,6 +13,13 @@ import {
   type Hashed
 } from './v2-secrets'
 import type { V2Reach } from './v2-reach'
+import {
+  DOORS_MAX,
+  doorHolderOf,
+  doorsAfterMove,
+  isTeamSlug,
+  type DoorClaim
+} from '../../src/shared/door-ownership'
 
 /**
  * IDENTITY v2 — THE ACCOUNT STORE.
@@ -83,10 +90,27 @@ export interface V2Workspace {
   name: string
 }
 
+/** A door this desktop holds, and since when. Re-exported for the routes. */
+export type V2Door = DoorClaim
+
 export interface V2Desktop {
   deviceId: string
   name: string
   workspaces: readonly V2Workspace[]
+  /**
+   * THE DOORS THIS MACHINE HOLDS — one name, one holder (V3-18).
+   *
+   * `@drej/alpha` names a team of the ACCOUNT and is served by exactly one of
+   * its Macs. Keeping the claim here rather than in a list of its own is what
+   * makes the rule checkable in one read: a save sheet asks "does another
+   * desktop of mine already hold this slug?" before the relay can refuse it,
+   * and the answer is on the /v2/me body every client already fetches.
+   *
+   * OPTIONAL BECAUSE FILES ARE OLDER THAN CODE. Every desktop written before
+   * this lane has none, and a required field would make this store read them
+   * as malformed — see `revoked` on the account for the same reason.
+   */
+  doors?: readonly V2Door[]
   /**
    * WHERE THIS MACHINE CAN BE FOUND, as it signed it. Absent until the
    * desktop has published one, and readable only by the account's own devices
@@ -128,6 +152,29 @@ interface Persisted {
   version: 2
   accounts: V2Account[]
 }
+
+/** A door that changed hands, and the machine it was taken from. */
+export interface DoorMove {
+  team: string
+  from: string
+  fromName: string
+}
+
+/**
+ * The one-holder rule over a whole desktop list. One line, so that every
+ * caller in this file moves a door the same way; the rule itself is in
+ * src/shared/door-ownership.ts, where the app reads it too.
+ */
+const move = (
+  desktops: readonly V2Desktop[],
+  team: string,
+  toDeviceId: string | null,
+  at: number
+): readonly V2Desktop[] =>
+  desktops.map((desktop) => {
+    const doors = doorsAfterMove(desktop, team, toDeviceId, at)
+    return doors === null ? desktop : { ...desktop, doors }
+  })
 
 export type CreateRefusal = 'taken' | 'bad_username' | 'weak_password' | 'bad_device'
 export type Refused<R extends string> = { ok: false; reason: R }
@@ -520,6 +567,40 @@ export class V2Accounts {
     return session
   }
 
+  /**
+   * The account and device this id belongs to, or null.
+   *
+   * A device id names exactly one account, which is why renewal needs no
+   * username on the wire: asking the caller to also name it would be one more
+   * thing to get wrong and nothing more to prove.
+   */
+  deviceOwner(deviceId: string): { username: string; device: V2Device } | null {
+    for (const account of this.accounts) {
+      const device = account.devices.find((d) => d.id === deviceId)
+      if (device) return { username: account.username, device }
+    }
+    return null
+  }
+
+  /**
+   * Every OTHER session this device holds, closed.
+   *
+   * A renewal replaces rather than adds: a month of renewals must not be a
+   * month of accumulating bearer tokens, each one still good. Which sessions
+   * belonged to the device is a fact the registry already holds, so it is not
+   * asked of the caller — a client that forgot to name its old jti would
+   * otherwise leave it live, and a client that named somebody else's would be
+   * closing a session that is not its own.
+   */
+  closeOtherSessionsForDevice(username: string, deviceId: string, keepJti: string): number {
+    const account = this.get(username)
+    if (!account) return 0
+    const kept = account.sessions.filter((s) => s.dev !== deviceId || s.jti === keepJti)
+    const closed = account.sessions.length - kept.length
+    if (closed > 0) this.replace({ ...account, sessions: kept })
+    return closed
+  }
+
   isLiveSession(username: string, jti: string): boolean {
     return this.get(username)?.sessions.some((s) => s.jti === jti) ?? false
   }
@@ -644,8 +725,8 @@ export class V2Accounts {
   putDesktop(
     username: string,
     deviceId: string,
-    input: { name: unknown; workspaces: unknown; reach?: V2Reach | null }
-  ): { ok: true } | Refused<'not_found' | 'bad_desktop'> {
+    input: { name: unknown; workspaces: unknown; doors?: unknown; reach?: V2Reach | null }
+  ): { ok: true; moved: readonly DoorMove[] } | Refused<'not_found' | 'bad_desktop'> {
     const account = this.get(username)
     if (!account) return { ok: false, reason: 'not_found' }
     const device = account.devices.find((d) => d.id === deviceId)
@@ -667,19 +748,112 @@ export class V2Accounts {
       }
       workspaces.push({ id, name: label })
     }
+    /**
+     * THE DOORS IT IS SERVING, and they are claims rather than descriptions.
+     *
+     * Absent keeps what is stored — the same rule as `reach`, for the same
+     * reason: a desktop renaming a workspace has not stopped serving, and a
+     * PUT that quietly emptied the list would hand every one of its doors back
+     * to nobody. An EMPTY ARRAY is a statement and does release them.
+     */
+    let doors: string[] | null = null
+    if (input.doors !== undefined) {
+      if (!Array.isArray(input.doors) || input.doors.length > DOORS_MAX) {
+        return { ok: false, reason: 'bad_desktop' }
+      }
+      for (const team of input.doors as unknown[]) {
+        if (!isTeamSlug(team)) return { ok: false, reason: 'bad_desktop' }
+      }
+      doors = [...new Set(input.doors as string[])]
+    }
     // A PUT with no reach keeps the one already stored: a desktop that is
     // only renaming a workspace has not forgotten where it lives, and making
     // it re-sign a card to say so would mean the address disappears whenever
     // the two writes are not made together.
     const held = account.desktops.find((d) => d.deviceId === deviceId) ?? null
     const reach = input.reach === undefined ? (held?.reach ?? null) : input.reach
-    const desktop: V2Desktop = { deviceId, name, workspaces, reach, updatedAt: this.now() }
+    const desktop: V2Desktop = {
+      deviceId,
+      name,
+      workspaces,
+      ...(held?.doors === undefined ? {} : { doors: held.doors }),
+      reach,
+      updatedAt: this.now()
+    }
     const known = held !== null
-    this.replace({
-      ...account,
-      desktops: known ? account.desktops.map((d) => (d.deviceId === deviceId ? desktop : d)) : [...account.desktops, desktop]
-    })
-    return { ok: true }
+    const listed: readonly V2Desktop[] = known
+      ? account.desktops.map((d) => (d.deviceId === deviceId ? desktop : d))
+      : [...account.desktops, desktop]
+    if (doors === null) {
+      this.replace({ ...account, desktops: listed })
+      return { ok: true, moved: [] }
+    }
+    const { desktops, moved } = this.applyDoors(listed, deviceId, doors)
+    this.replace({ ...account, desktops })
+    return { ok: true, moved }
+  }
+
+  /**
+   * ONE NAME, ONE HOLDER — applied to a whole list at once.
+   *
+   * Each named team is taken off every OTHER desktop and given to this one,
+   * keeping the `since` it already had; anything this desktop used to hold and
+   * no longer names is released. `since` is minted here and never accepted
+   * from a caller: the sentence says "served by MacBook Pro since Tue", and a
+   * Mac with a wrong clock would otherwise print a wrong day on another Mac's
+   * screen.
+   */
+  private applyDoors(
+    desktops: readonly V2Desktop[],
+    deviceId: string,
+    teams: readonly string[]
+  ): { desktops: readonly V2Desktop[]; moved: readonly DoorMove[] } {
+    const at = this.now()
+    const moved: DoorMove[] = []
+    let next = desktops
+    for (const team of teams) {
+      const before = doorHolderOf(next, team)
+      if (before !== null && before.deviceId !== deviceId) {
+        moved.push({ team, from: before.deviceId, fromName: before.name })
+      }
+      next = move(next, team, deviceId, at)
+    }
+    // What this desktop used to hold and did not name again. Dropped from it
+    // alone — a door another Mac holds is not this PUT's to release.
+    const dropped = (next.find((d) => d.deviceId === deviceId)?.doors ?? []).filter(
+      (door) => !teams.includes(door.team)
+    )
+    for (const door of dropped) next = move(next, door.team, null, at)
+    return { desktops: next, moved }
+  }
+
+  /**
+   * MOVE ONE DOOR, from wherever it is to this machine — what the relay calls
+   * when a Mac takes a name over at the hub rather than at a save sheet.
+   *
+   * `toDeviceId` of null releases the claim without giving it to anybody: the
+   * door moved to a machine this account has not filed a desktop record for,
+   * and saying "nobody holds it" is truer than leaving it on the Mac that just
+   * stopped serving it.
+   */
+  moveDoor(
+    username: string,
+    team: string,
+    toDeviceId: string | null
+  ): { ok: true; from: V2Desktop | null } | Refused<'not_found' | 'bad_desktop'> {
+    const account = this.get(username)
+    if (!account) return { ok: false, reason: 'not_found' }
+    if (!isTeamSlug(team)) return { ok: false, reason: 'bad_desktop' }
+    const from = doorHolderOf(account.desktops, team)
+    if (from?.deviceId === toDeviceId) return { ok: true, from: null }
+    this.replace({ ...account, desktops: move(account.desktops, team, toDeviceId, this.now()) })
+    return { ok: true, from }
+  }
+
+  /** Which desktop of this account holds `team` right now, if any. */
+  doorHolder(username: string, team: string): V2Desktop | null {
+    const account = this.get(username)
+    return account === null ? null : doorHolderOf(account.desktops, team)
   }
 
   /**

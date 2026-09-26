@@ -67,6 +67,11 @@ const api = {
    * never held; a fresh device key is minted in main. Answers the same ladder
    * as `accountResume`, and the same three rungs finish it.
    */
+  // v3 (D8 · D12): join with a code minted where the trust already is, and
+  // mint one for the next machine.
+  accountJoin: (input: { code: string; name?: string }) =>
+    ipcRenderer.invoke('account:join', input),
+  accountJoinCode: (current: string) => ipcRenderer.invoke('account:joinCode', current),
   accountSignIn: (input: { username: string; password: string; name?: string }) =>
     ipcRenderer.invoke('account:signIn', input),
   accountResumeCode: (input: { pending: string; factor: 'totp' | 'recovery'; code: string }) =>
@@ -108,8 +113,11 @@ const api = {
   // sign every other device out, and add a way in. Owner window's top frame
   // or nothing.
   accountApprovals: () => ipcRenderer.invoke('account:approvals'),
-  accountDecide: (input: { id: string; decision: 'approve' | 'deny' | 'not-me' }) =>
-    ipcRenderer.invoke('account:decide', input),
+  /** The one queue (D11): what is waiting, and what is over. */
+  accountRequests: () => ipcRenderer.invoke('account:requests'),
+  /** Answer one row. The verb is the button's own id; the number rides along. */
+  accountDecideRequest: (input: { id: string; action: string; match?: string }) =>
+    ipcRenderer.invoke('account:decideRequest', input),
   accountSetPassword: (input: { current: string; next: string }) =>
     ipcRenderer.invoke('account:setPassword', input),
   accountFactors: () => ipcRenderer.invoke('account:factors'),
@@ -132,6 +140,18 @@ const api = {
     const listener = (_e: unknown, requestId: string | null): void => cb(requestId)
     ipcRenderer.on('account:requests', listener)
     return () => ipcRenderer.removeListener('account:requests', listener)
+  },
+  /**
+   * SOMETHING HAPPENED TO THE ACCOUNT (account:changed) — a device joined, one
+   * was revoked, the password changed, a door moved, somebody pressed "not
+   * me". Pushed with its sentence already written by the one view model, so
+   * the toast and the system notification cannot word it differently.
+   */
+  onAccountEvent: (cb: (event: { kind: string; device?: string; at: number; sentence: string }) => void) => {
+    const listener = (_e: unknown, event: { kind: string; device?: string; at: number; sentence: string }): void =>
+      cb(event)
+    ipcRenderer.on('account:event', listener)
+    return () => ipcRenderer.removeListener('account:event', listener)
   },
   // ── seats & teams (identity v2, phase 5) ──
   accountSeats: () => ipcRenderer.invoke('account:seats'),
@@ -203,6 +223,22 @@ const api = {
   servingSetStripeSecret: (secret: string) =>
     ipcRenderer.invoke('serving:payment-stripe', secret),
   servingList: () => ipcRenderer.invoke('serving:list'),
+  /**
+   * D14 · a door of this Mac moved to another of the account's (V3-18). The
+   * list is asked for on mount and pushed on every move, because a window that
+   * was closed when it happened must still find the sentence waiting.
+   */
+  servingMoved: (): Promise<readonly { slug: string; team: string; by: string; at: number }[]> =>
+    ipcRenderer.invoke('serving:moved'),
+  onServingMoved: (listener: (door: { slug: string; team: string; by: string }) => void) => {
+    const on = (_e: unknown, door: { slug: string; team: string; by: string }): void => listener(door)
+    ipcRenderer.on('serving:moved', on)
+    return () => ipcRenderer.removeListener('serving:moved', on)
+  },
+  /** TAKE IT BACK — dial the same door again, superseding whoever holds it. */
+  servingTakeBack: (slug: string) => ipcRenderer.invoke('serving:take-back', slug),
+  /** Let the sentence go without taking the door back. */
+  servingMovedClear: (slug: string) => ipcRenderer.invoke('serving:moved-clear', slug),
   servingSessions: () => ipcRenderer.invoke('serving:sessions'),
   servingEnd: (sessionId: string) => ipcRenderer.invoke('serving:end', sessionId),
 

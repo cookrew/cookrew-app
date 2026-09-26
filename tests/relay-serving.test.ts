@@ -219,6 +219,105 @@ describe('serve here, import there', () => {
   })
 })
 
+/**
+ * TWO MACS OF ONE ACCOUNT, AND THE DOOR BETWEEN THEM (V3-18 · D14).
+ *
+ * The rule is one name, one holder, and the dangerous half is what the LOSING
+ * Mac does next. Serving is an intent that outlives a dropped line, so every
+ * ending here redials — which, for a door another machine has just taken,
+ * would take it straight back. Two Macs would then pass a door between each
+ * other for as long as both stayed running, and the owner would watch a URL
+ * flicker between two canvases with no way to stop it.
+ *
+ * So `superseded` is the one ending that does not redial, and these tests are
+ * about exactly that: the Mac that lost the door stops, says so once, and
+ * comes back only when a person presses TAKE IT BACK.
+ */
+describe('two Macs of one account, one team slug', () => {
+  interface Moved {
+    slug: string
+    team: string
+    name: string
+    by: string
+  }
+
+  const mac = (
+    origin: string,
+    port: number,
+    who: { deviceId: string; name: string }
+  ): { serving: ReturnType<typeof createRelayServing>; moved: Moved[] } => {
+    const moved: Moved[] = []
+    const serving = createRelayServing({
+      origin,
+      loopbackPort: () => port,
+      who: () => who,
+      onMoved: (door) => moved.push(door)
+    })
+    shut.push(() => serving.closeAll())
+    return { serving, moved }
+  }
+
+  const face = {
+    title: 'COOKREW Alpha',
+    door: 'Pilot',
+    agents: 3,
+    access: 'account' as const,
+    rails: [] as readonly ('x402' | 'stripe')[]
+  }
+  const serve = (serving: ReturnType<typeof createRelayServing>): Promise<unknown> =>
+    serving.serve({ slug: TEAM, team: TEAM, handle: HANDLE, face })
+
+  it('STOPS SERVING when the other Mac takes it, and does not take it back on its own', async () => {
+    const { origin } = await registry()
+    const app = await appListener(() => undefined)
+    const first = mac(origin, app.port, { deviceId: 'mac-1', name: 'MacBook Pro' })
+    const second = mac(origin, app.port, { deviceId: 'mac-2', name: 'Mac Studio' })
+
+    expect(await serve(first.serving)).toMatchObject({ ok: true, name: NAME })
+    expect(await serve(second.serving)).toMatchObject({ ok: true, name: NAME })
+
+    await until(() => first.moved.length > 0, 'the first Mac to be told')
+    expect(first.moved[0]).toMatchObject({ slug: TEAM, team: TEAM, by: 'Mac Studio' })
+    // It stopped: nothing on this Mac claims to be serving that name any more.
+    expect(first.serving.addressFor(TEAM)).toBeNull()
+
+    // THE PING-PONG, which is what the redial would have started. Well past
+    // the first backoff step; if the losing Mac dialled again it would have
+    // superseded the winner, and the winner would have been told.
+    await new Promise((r) => setTimeout(r, 1800))
+    expect(second.moved).toEqual([])
+    expect(first.moved).toHaveLength(1)
+    expect(second.serving.addressFor(TEAM)).not.toBeNull()
+  })
+
+  it('TAKES IT BACK when a person says so, and the other Mac is told in turn', async () => {
+    const { origin } = await registry()
+    const app = await appListener(() => undefined)
+    const first = mac(origin, app.port, { deviceId: 'mac-1', name: 'MacBook Pro' })
+    const second = mac(origin, app.port, { deviceId: 'mac-2', name: 'Mac Studio' })
+    await serve(first.serving)
+    await serve(second.serving)
+    await until(() => first.moved.length > 0, 'the first Mac to be told')
+
+    // Symmetric on purpose: the rule is one holder, not first-come, and a
+    // person pressing this on the machine in front of them is the most
+    // explicit statement of which one they mean there is.
+    const back = await first.serving.takeBack(TEAM)
+    expect(back).toMatchObject({ ok: true, name: NAME })
+    await until(() => second.moved.length > 0, 'the second Mac to be told')
+    expect(second.moved[0]).toMatchObject({ slug: TEAM, by: 'MacBook Pro' })
+    expect(first.serving.addressFor(TEAM)).not.toBeNull()
+    expect(second.serving.addressFor(TEAM)).toBeNull()
+  })
+
+  it('has nothing to take back on a Mac that never served it', async () => {
+    const { origin } = await registry()
+    const app = await appListener(() => undefined)
+    const stranger = mac(origin, app.port, { deviceId: 'mac-3', name: 'Mac mini' })
+    expect(await stranger.serving.takeBack(TEAM)).toEqual({ ok: false, reason: 'never-served' })
+  })
+})
+
 /** A request in the shape orch-line.mjs makes them. */
 function card(
   port: number,

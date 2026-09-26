@@ -93,6 +93,10 @@
     if (!dialog) return
     const form = dialog.querySelector('#account-form') ?? dialog
     const step = input.step
+    // W4: the asked screen's sentence, from the one copy table by way of the
+    // dialog site-shell.ts rendered. Never written out again here.
+    const ASKED_LEDE =
+      dialog.dataset.askedLede ?? 'Approve this sign-in there. It shows this browser and where it is asking from.'
     let stop = null
     const done = () => {
       if (stop) clearInterval(stop)
@@ -265,7 +269,29 @@
       const line = el('p', 'meta')
       const back = button('Try another way')
       back.addEventListener('click', () => list())
-      show([head, line, back], 'Approve this sign-in there. It shows this browser and where it is asking from.')
+      /**
+       * W4 · THE NUMBER, LARGE, AND ONLY HERE.
+       *
+       * It arrived on this browser's own 401 (v2-factor-routes.ts) and it is
+       * never on the owner's approvals list — that asymmetry is the whole
+       * mechanism. Approving is now a thing that needs the ASKING screen in
+       * view, so nagging somebody from across the internet cannot be waited
+       * out: they would have to be looking at this page to answer.
+       *
+       * Absent only against a registry from before number matching; the rung
+       * still works there, so the number is drawn when there is one rather
+       * than an empty box that reads as a bug.
+       */
+      const shown = [head]
+      if (step.match) {
+        const number = el('p', 'acct-match', step.match)
+        number.setAttribute('role', 'status')
+        // Read out as digits, not as a quantity: "four seven", not "forty-seven".
+        number.setAttribute('aria-label', String(step.match).split('').join(' '))
+        shown.push(number)
+      }
+      shown.push(line, back)
+      show(shown, ASKED_LEDE)
       const tick = () => {
         line.textContent = `Waiting for an approval. Expires in ${clock(until - Date.now())}.`
       }
@@ -666,26 +692,50 @@
 
   /* ── /me: D6, the approvals waiting for an answer ──────────────────────── */
 
-  function approvalRow(request, refresh) {
-    const row = el('li')
-    row.append(el('span', 'chip', 'Request'))
+  /** When the row was opened, and when it stops being answerable. */
+  const timing = (request) =>
+    `Started ${clock(Math.max(0, Date.now() - request.at))} ago · ${request.address} · expires in ${clock(request.expiresAt - Date.now())}`
+
+  /**
+   * M6 · A JOIN ROW — a device asking to sign in, and the number that proves
+   * the owner can see its screen.
+   *
+   * THE NUMBER FIELD IS THE PRIMARY CONTROL, not a detail beside the buttons.
+   * On a phone it is the one thing the person has to do; APPROVE is the easy
+   * part. So the field comes first in the DOM (the phone stacks it above the
+   * buttons) and it takes the focus of the row.
+   *
+   * APPROVE IS THE ONLY ANSWER THAT NEEDS IT. Approving widens what the
+   * account can be opened from; DENY and NOT ME narrow it, and by design they
+   * need no number (v2-pending.ts) — an alarm harder to raise than a mistake
+   * is an alarm people stop raising.
+   */
+  function joinRow(request, refresh, copy) {
+    const row = el('li', 'req req-join')
+    row.append(el('span', 'chip', 'Join'))
     const middle = el('span')
     // The sentence quotes the name the asking device gave itself (see
     // v2-pending.ts). textContent all the way down: that name is a stranger's
     // string, and this is the prompt where the owner decides.
-    middle.append(el('b', null, request.sentence ?? 'A device wants to sign in as you.'))
+    middle.append(el('b', null, request.sentence ?? `“${request.device}” wants to sign in as you.`))
     middle.append(document.createElement('br'))
-    middle.append(
-      el(
-        'span',
-        'meta',
-        `Started ${clock(Math.max(0, Date.now() - request.at))} ago · ${request.address} · expires in ${clock(request.expiresAt - Date.now())}`
-      )
-    )
+    middle.append(el('span', 'meta', timing(request)))
+    const number = el('input')
+    number.className = 'acct-code acct-match-field'
+    number.setAttribute('inputmode', 'numeric')
+    number.setAttribute('maxlength', '2')
+    number.setAttribute('aria-label', copy.join)
+    number.placeholder = '47'
+    middle.append(document.createElement('br'))
+    middle.append(el('span', 'meta', copy.join), number)
     row.append(middle)
+
     const answer = async (decision, question) => {
       if (question && !confirm(question)) return
-      const out = await api('POST', `/v2/me/approvals/${encodeURIComponent(request.id)}`, { decision })
+      // The number goes ONLY with approve: sending it with a denial would
+      // spend a try on an answer that never needed one.
+      const body = decision === 'approve' ? { decision, match: number.value.trim() } : { decision }
+      const out = await api('POST', `/v2/me/approvals/${encodeURIComponent(request.id)}`, body)
       if (out.status !== 204) return toast(said(out, 'That request could not be answered.'), 6000)
       if (decision === 'not-me') {
         toast('Every other device is signed out. Change your password now.', 8000)
@@ -705,27 +755,177 @@
         'This signs every other device out and locks the password until you change it. Was this not you?'
       )
     )
-    row.append(yes, no, never)
+    // Enter on the number is APPROVE: the field and the button are one act.
+    number.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return
+      event.preventDefault()
+      void answer('approve')
+    })
+    /**
+     * THE THREE ANSWERS IN ONE WRAPPER, so the row can become a column.
+     *
+     * `ul.doors li` is a three-column grid, which auto-places five children
+     * into two ragged rows — the number ended up BESIDE a button instead of
+     * above them, which at phone width is the wrong thing under the thumb.
+     * With the answers in one element the row is chip · sentence+number ·
+     * answers, and a media query can stack those three without touching the
+     * order anything is read in.
+     */
+    const answers = el('span', 'req-actions')
+    answers.append(yes, no, never)
+    row.append(answers)
     return row
   }
 
-  function watchApprovals() {
+  /**
+   * M6 · A SEAT ROW — somebody asking to be let into a team (R1).
+   *
+   * NO NUMBER HERE, and the absence is the design. A seat is not a device: it
+   * grants a person the line at one team and attaches nothing to the account,
+   * so there is no asking screen to read digits off and nothing to prove
+   * beyond the owner's own intent.
+   */
+  function seatRow(request, refresh, copy) {
+    const row = el('li', 'req req-seat')
+    row.append(el('span', 'chip', 'Seat'))
+    const middle = el('span')
+    middle.append(el('b', null, copy.seat.replace('{handle}', request.account).replace('{team}', request.team)))
+    middle.append(document.createElement('br'))
+    middle.append(el('span', 'meta', timing(request)))
+    row.append(middle)
+    const answer = async (decision) => {
+      const out = await api('POST', `/v2/me/requests/${encodeURIComponent(request.id)}`, { decision })
+      if (out.status !== 204) return toast(said(out, 'That request could not be answered.'), 6000)
+      refresh()
+    }
+    const yes = button('Seat them', 'primary')
+    yes.addEventListener('click', () => void answer('approve'))
+    const no = button('Decline')
+    no.addEventListener('click', () => void answer('decline'))
+    const answers = el('span', 'req-actions')
+    answers.append(yes, no)
+    row.append(answers)
+    return row
+  }
+
+  /**
+   * M6 · A REACH ROW — a phone asking one Mac for its keyboard on Wi-Fi.
+   *
+   * IT IS DRAWN AND IT CANNOT BE ANSWERED HERE, which is the honest shape.
+   * Allowing carries the pairing URL already sealed to the asking device, and
+   * only the Mac being asked for holds that token — the registry cannot mint
+   * it and this browser must never see it. The registry only ever hands a
+   * reach row to the Mac it names (v2-requests.ts · reachesForDesktop), so
+   * this branch is reached by nothing in a browser today; it exists so that a
+   * row of a kind this view does not own reads as "answer it there" rather
+   * than falling through to a blank line.
+   */
+  function reachRow(request, copy) {
+    const row = el('li', 'req req-reach')
+    row.append(el('span', 'chip', 'Wi-Fi'))
+    const middle = el('span')
+    middle.append(el('b', null, copy.wifi.replace('{device}', request.device)))
+    middle.append(document.createElement('br'))
+    middle.append(el('span', 'meta', timing(request)))
+    row.append(middle)
+    return row
+  }
+
+  /**
+   * M6 · THE ONE QUEUE — join, seat and reach in the order they arrived.
+   *
+   * GET /v2/me/requests replaces GET /v2/me/approvals here. The approvals
+   * route still exists and is still where a JOIN is answered (the
+   * number-matching rung lives there); what changed is that this view is no
+   * longer a list of one kind. A person with a device knocking and a guest
+   * asking for a seat had to find those in two places, and the second place
+   * did not exist on the web at all.
+   */
+  function watchRequests() {
     const list = $('me-approvals')
     if (!list) return
+    const section = $('me-requests')
+    const copy = {
+      join: list.dataset.joinRow ?? 'What number is on that device?',
+      seat: list.dataset.seatRow ?? '@{handle} asks for a seat at {team}.',
+      wifi: list.dataset.wifiRow ?? '{device} asked to reach that Mac on Wi-Fi. Answer it on the Mac itself.'
+    }
     const draw = async () => {
-      const out = await api('GET', '/v2/me/approvals')
+      const out = await api('GET', '/v2/me/requests')
       if (out.status !== 200 || !Array.isArray(out.body)) return
       list.replaceChildren()
-      if (out.body.length === 0) {
-        const none = el('li')
-        none.append(el('span', 'meta', 'No device is asking to sign in. Requests appear here for ten minutes.'))
-        list.append(none)
-        return
+      /**
+       * W5 · AN EMPTY QUEUE IS NO SECTION AT ALL.
+       *
+       * It used to say "No device is asking to sign in" — a heading, a
+       * paragraph and a row to tell somebody that nothing has happened. On a
+       * page whose job is to be answered, the resting state is silence; the
+       * section appears when there is something in it and goes away again
+       * when the last row is answered.
+       */
+      if (section) section.hidden = out.body.length === 0
+      for (const request of out.body) {
+        if (request.kind === 'seat') list.append(seatRow(request, draw, copy))
+        else if (request.kind === 'reach') list.append(reachRow(request, copy))
+        else list.append(joinRow(request, draw, copy))
       }
-      for (const request of out.body) list.append(approvalRow(request, draw))
     }
     void draw()
     setInterval(draw, 5000)
+  }
+
+  /**
+   * W5 · ADD A MAC · ADD A PHONE — one join code, shown once.
+   *
+   * STEP-UP, because minting is the act that widens what the account can be
+   * opened from: the registry asks for the password again (v2-join.ts) and so
+   * this asks the reader for it. `prompt` is deliberate and not a placeholder
+   * — the CSP forbids an inline script, this page has no password field of
+   * its own outside the change-password panel, and a second panel built to
+   * collect one secret and immediately forget it is more surface, not less.
+   *
+   * THE CODE IS SHOWN AND NEVER STORED. It lives in the registry's memory for
+   * ten minutes; here it is text in a panel that the next navigation drops.
+   */
+  function wireAddDevice() {
+    const panel = $('me-join-code')
+    if (!panel) return
+    const lede = panel.dataset.addLede ?? ''
+    for (const trigger of document.querySelectorAll('[data-add-device]')) {
+      trigger.addEventListener('click', async () => {
+        const current = prompt('Type your password to add a device.')
+        if (current === null || current === '') return
+        const out = await api('POST', '/v2/me/join-codes', { current })
+        if (out.status !== 201) return toast(said(out, 'That code could not be minted.'), 6000)
+        panel.replaceChildren()
+        panel.hidden = false
+        panel.append(el('p', 'meta', lede))
+        /**
+         * M4 · THE PICTURE FIRST, for the device that is holding a camera.
+         *
+         * ADD A PHONE is answered by pointing a phone at this screen, so the
+         * QR is the primary thing on the panel and the typed code is the
+         * fallback under it — for a second Mac, which has no camera pointed
+         * anywhere, and for a phone standing in front of a screen too far to
+         * focus on. Both encode the same one-shot code.
+         */
+        const picture = qrSvg(Array.isArray(out.body.qr) ? out.body.qr : [])
+        if (picture) {
+          picture.setAttribute('aria-label', 'Scan this with the other device’s camera')
+          panel.append(picture)
+        }
+        panel.append(el('p', 'acct-join-code', out.body.code))
+        const until = el('p', 'meta')
+        until.textContent = `Expires in ${clock(out.body.expiresAt - Date.now())}.`
+        panel.append(until)
+        const hide = button('Done')
+        hide.addEventListener('click', () => {
+          panel.hidden = true
+          panel.replaceChildren()
+        })
+        panel.append(hide)
+      })
+    }
   }
 
   /* ── wiring ────────────────────────────────────────────────────────────── */
@@ -761,7 +961,8 @@
     }
   }
   fitPasskeyButton()
-  watchApprovals()
+  watchRequests()
+  wireAddDevice()
 
   window.cookrewFactors = { ladder, addPasskey, addTotp, changePassword }
 })()

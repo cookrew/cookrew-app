@@ -44,6 +44,8 @@ export const DOING = {
   PASSWORD: 'Your password could not be changed',
   RESUME: 'Your session could not be started again',
   SIGN_IN: 'This Mac could not sign in',
+  JOIN: 'This Mac could not join the account',
+  JOIN_CODE: 'A code for the other machine could not be made',
   DECIDE: 'That answer did not reach cookrew.dev',
   SEATS: 'The seats on your account could not be read',
   SEAT: 'That seat could not be changed',

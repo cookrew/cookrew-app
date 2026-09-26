@@ -97,6 +97,26 @@ export const V3_COPY = {
     '{device} wants to reach this Mac on Wi-Fi. ALLOW gives it the keyboard until you revoke.',
   /** D11, someone asking for a seat. Replaces "Copy link to ask @owner". */
   'd11.seat-row': '@{handle} asks for a seat at {team}.',
+  /**
+   * D11, the join row's own lead, above the number field. The device names
+   * ITSELF here — the sentence quotes what a stranger's machine calls itself,
+   * so it reads as a claim being made rather than as our description of it.
+   */
+  'd11.join-lead': '{device} wants to join @{handle}',
+  /** D11 over-state, a device that is on the account now. */
+  'd11.join-done': '{device} joined @{handle}',
+  /** D11 over-state, a phone that has this Mac's keyboard until it is revoked. */
+  'd11.wifi-done': '{device} can reach this Mac on Wi-Fi',
+  /** D11 over-state, a guest who is in the room. */
+  'd11.seat-done': '@{handle} is seated at {team}',
+  /**
+   * D11, a sign-in somebody disowned. It names WHERE it was answered, because
+   * the owner reading this a day later needs to know which of their devices
+   * they were holding when they said no.
+   */
+  'd11.denied': 'A sign-in as @{handle} was denied on {device}',
+  /** D11, an empty queue. The ordinary state, and it says what would land here. */
+  'd11.empty': 'Nothing is waiting. Devices asking to join, phones asking for Wi-Fi and guests asking for a seat all land here.',
   /** D11, what each button in the queue actually does — including NOT ME. */
   'd11.footer':
     "APPROVE needs the number. ALLOW gives the phone this Mac's keyboard until you revoke it. SEAT THEM grants by username. NOT ME signs every other device out and locks the password until you change it.",
@@ -116,6 +136,24 @@ export const V3_COPY = {
    */
   'd12.revoke':
     "The {device} stops opening this account within a minute — here, at every door, and on every Mac's Wi-Fi. Anything it asked for is dropped.",
+  /**
+   * THE SAME MOMENT, WHILE THE MECHANISM IS NOT THERE YET (H2).
+   *
+   * The sentence above is the contract, and it was being said in builds that
+   * did not keep it: the root pairing token still opened every route, so a
+   * revoked phone still had this Mac's keyboard on this Wi-Fi. Which of the
+   * two is shown is decided by the one fact both the gate and the copy read
+   * (shared/lan-token-mode.ts), so the promise cannot outrun the mechanism a
+   * second time.
+   *
+   * It names ROTATION rather than FORGET deliberately. Forgetting removes the
+   * admitted row, and while the root opens everything the row is not the
+   * credential the phone is using — so FORGET here would be a second sentence
+   * that does not do what it says. `cookrew mobile --rotate` ends it, at the
+   * cost the pairing sheet already names: every phone re-pairs.
+   */
+  'd12.revoke.lan-pending':
+    'The {device} stops opening this account within a minute — here and at every door. On this Mac it keeps working on this Wi-Fi until you run `cookrew mobile --rotate`, which re-pairs every phone.',
   /** D12 sign out. What leaves, what stays, and what goes quiet. */
   'd12.sign-out':
     'This Mac leaves @{handle}. Everything on the canvas stays. The doors it serves go offline until it signs in again.',
@@ -157,6 +195,44 @@ export const V3_COPY = {
     'Tap ALLOW on that Mac. Until then this phone reaches it through cookrew.dev, which already works.',
   /** M5, allowed. */
   'm5.allowed': '{device} let this phone in on Wi-Fi. No prompt next time.',
+  /**
+   * M5, the Mac said no. A decline is not an error and not a dead end: OPEN
+   * still works, because the relay was never the fallback — it is the path
+   * this page was already using.
+   */
+  'm5.declined': '{device} said no. OPEN still reaches it through cookrew.dev.',
+  /**
+   * M5, the door that has nothing to do with accounts.
+   *
+   * A Mac nobody has signed in on cannot be asked for anything — there is no
+   * account to carry the request. That Mac keeps the ceremony it always had,
+   * and the sentence names BOTH ways in rather than only the camera: a phone
+   * standing in front of the screen it would scan is the one case where a
+   * scan is impossible.
+   */
+  'm5.no-account':
+    'A Mac with no account keeps today’s door: scan its QR, or paste what `cookrew mobile` printed.',
+  /**
+   * M5, a browser whose device key cannot receive a sealed token.
+   *
+   * Sealing is a Diffie-Hellman against this device's own key, and a key minted
+   * before M5 is an Ed25519 signing key a browser cannot derive from. Rather
+   * than a silent failure the row says which door is still open.
+   */
+  /**
+   * M5, the companion's Not paired card — all the ways in, best first.
+   *
+   * The card used to name two doors, both of them the old one: scan the Mac's
+   * QR, or paste what the terminal printed. Both still work and both are still
+   * here, because a Mac nobody has signed in on has no other way to let a
+   * phone in. But a Mac that IS on an account now has a better door — one tap
+   * on /me, answered on the Mac — and a card that did not mention it would
+   * send every reader to the ceremony they were trying to escape.
+   */
+  'm5.unpaired':
+    'If this Mac is on your account, open cookrew.dev/me and tap USE WI-FI on its row — you answer on the Mac, with no scan. Otherwise scan the QR on the Mac’s avatar → Pair a phone, or paste what `cookrew mobile` printed.',
+  'm5.no-seal':
+    'This browser joined before Wi-Fi sharing and cannot receive the token. OPEN works; to use Wi-Fi, add this browser again.',
 
   /**
    * G1 identify — replaces the passkey sentence.
@@ -189,6 +265,89 @@ export const V3_COPY = {
   'g3.direct':
     "Direct connection · no account needed. This door is not listed at cookrew.dev. This Mac's own key identifies you to it; nothing follows you elsewhere.",
 
+  /**
+   * W4 · W5 — THE WEB SAYS "BROWSER" WHERE THE DESKTOP SAYS "MAC".
+   *
+   * These four are the D10/D11 sentences rewritten for the side that is a tab
+   * and not an application. They are separate keys rather than placeholders in
+   * the desktop ones because the difference is not a noun to substitute: on
+   * the Mac the asking device IS the thing the person is standing at, and on
+   * the web it is one of many tabs they may close. A sentence that hedged
+   * ("this device") to serve both would be vaguer on both.
+   */
+  /**
+   * M4, the page a join QR lands on. It says what is about to happen and what
+   * is NOT being asked for, because the whole promise of a code is that the
+   * password is never typed on a machine the account has not met.
+   */
+  'm4.join-lede':
+    'A code from one of your devices. Joining makes this one a device on the same account — no password is typed here.',
+  /** M4, the other door, for somebody who has a password and no code. */
+  'm4.join-instead': 'Sign in with your password instead',
+  /** M4, arrived with no code in the fragment — a bare /join, or a stripped link. */
+  'm4.no-code':
+    'This link carries no code. Open Devices on a Mac you already use, choose ADD A PHONE, and scan the picture it shows.',
+  /** W4, the line under the tabs. The other half of "sign in or create". */
+  'w4.join-offer': 'Have a code from another device?',
+  /** W4, the join panel. Says what is NOT asked for, which is the whole point. */
+  'w4.join-lede':
+    'Type the code from a device already on your account. No password is asked for here — the code is the permission.',
+  /** W4 after asking, the number rung. The number is HERE and typed THERE. */
+  'w4.asked': 'Asked. On your other device, type the number below to let this browser in.',
+  /**
+   * W4, a code that did not work.
+   *
+   * NOT the registry's own 401 sentence. /v2/join answers `bad_credentials`
+   * on purpose — a wrong code and a code for an account nobody has must be
+   * one answer — but that sentence reads "That name and password do not go
+   * together", and this sheet has asked for neither. Passing it through named
+   * two fields that were not on screen. The refusal a person can act on is
+   * the one about the thing they typed.
+   */
+  'w4.join-refused':
+    'That code did not work. Ask the device you minted it on for a fresh one — a code works once, for ten minutes.',
+  /** W5, the question over the approver's number field (D11's, for any device). */
+  'w5.join-row': 'What number is on that device?',
+  /**
+   * M6, a reach row seen somewhere that cannot answer it.
+   *
+   * NOT `d11.wifi-row`, which says "ALLOW gives it the keyboard until you
+   * revoke" — that sentence describes a button, and this view has none.
+   * Allowing carries the pairing URL already sealed to the asking device and
+   * only the Mac being asked for holds that token, so the one useful thing to
+   * say here is where the answer lives.
+   */
+  'w5.reach-elsewhere': '{device} asked to reach that Mac on Wi-Fi. Answer it on the Mac itself.',
+  /** W5, the two ADD buttons. Where the code is typed, and how long it lives. */
+  'w5.add-lede':
+    'On the new device open cookrew.dev, choose “Join with a code”, and type this. It works once, for ten minutes.',
+  /**
+   * W5, under the Requests heading — the web's queue while it is still only
+   * sign-ins.
+   *
+   * NOT `d11.footer`, and that is the point. D11 names ALLOW and SEAT THEM,
+   * which the unified queue (V3-11) will put on this page and which are not
+   * on it yet. A footer describing buttons a reader cannot see teaches them
+   * to stop reading footers. This one swaps for d11.footer the day the other
+   * two kinds arrive here.
+   */
+  'w5.requests-footer':
+    'A device asking to sign in as @{handle}, or somebody asking for a seat. APPROVE needs the number showing on that device; SEAT THEM grants by username; NOT ME signs every other device out and locks the password until you change it.',
+
+  /**
+   * W6, the team page with no seat yet — and the reason to prefer asking.
+   *
+   * It names WHERE the ask lands ("on every device") because the old button
+   * copied a link: the reader's model was "I now have to go and find them".
+   * The request finds them instead, and the sentence has to say so or the
+   * button looks like the same errand with fewer steps.
+   */
+  'w6.no-seat':
+    'Buy one, or ask @{handle} — they see the request on every device, and you are seated the moment they say yes.',
+  /** W6, the ask was filed and the bar is waiting. */
+  'w6.asked-head': 'Asked @{handle}',
+  /** W6, the same ask arriving twice. Not an error: the first one still stands. */
+  'w6.already-asked': '@{handle} already has your request. It is still waiting.',
   /** W6, the web team page after asking. The seat outlives the tab. */
   'w6.asked':
     "This page seats you the moment they say yes. You can close it; the seat is yours, not this tab's."

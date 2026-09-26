@@ -112,8 +112,13 @@ describe('the desktop index', () => {
     expect(accounts.desktopFor(id)?.name).toBe('MacBook Pro')
 
     const before = accounts.desktopsChangedAt()
+    // `moved` is V3-18's: a PUT can take a door name off another Mac of the
+    // same account, and the caller is told which ones moved so the old holder
+    // can be told too. Nothing moved here, and an empty list is the honest
+    // shape rather than an absent field a reader has to test for.
     expect(accounts.putDesktop('person3', id, { name: 'Studio', workspaces: [{ id: 'w', name: 'Work' }] })).toEqual({
-      ok: true
+      ok: true,
+      moved: []
     })
     expect(accounts.desktopFor(id)?.name).toBe('Studio')
     expect(accounts.desktopFor(id)?.workspaces).toHaveLength(1)

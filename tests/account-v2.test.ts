@@ -404,7 +404,7 @@ describe('what a desktop registers, and what it never does', () => {
 
   it('refuses to revoke the last device, with the registry’s reason', async () => {
     const { it } = await live(scratch(), [{ status: 409, body: { error: 'last_device' } }])
-    expect(await it.revokeDevice('d1')).toMatchObject({ ok: false, reason: 'last_device' })
+    expect(await it.revokeDevice('d1', PASSWORD)).toMatchObject({ ok: false, reason: 'last_device' })
   })
 
   it('re-derives the local verifier only after cookrew.dev accepted the change', async () => {

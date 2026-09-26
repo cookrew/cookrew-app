@@ -19,7 +19,7 @@ import {
   NODE_ROUTES,
   SCOPE_AWARE
 } from '../src/main/mobile-slug-route'
-import { RESERVED_SLUGS, deriveSlug } from '../src/main/workspace-slug'
+import { RESERVED_SLUGS, deriveSlug } from '../src/shared/workspace-slug'
 
 describe('splitSlugRoute', () => {
   it('leaves an unslugged api path exactly as it found it', () => {

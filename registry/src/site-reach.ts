@@ -1,4 +1,5 @@
 import { esc } from './site-shell'
+import { webCopy } from './v3-copy'
 import type { V2Desktop } from './v2-accounts'
 
 /**
@@ -30,11 +31,22 @@ import type { V2Desktop } from './v2-accounts'
  * Opening a Mac from cookrew.dev never leaves cookrew.dev.
  */
 
-/** The three the script switches between, in the order the row draws them. */
+/**
+ * The badges the script switches between, in the order the row draws them.
+ *
+ * LAN IS A DIFFERENT AXIS FROM THE OTHER THREE and it still shares the slot,
+ * on purpose. PROBING · ONLINE · OFFLINE answer "is cookrew.dev holding this
+ * Mac's line"; LAN answers "and this device can also reach it directly". They
+ * share the slot because a reader is asking one question — how does this page
+ * get to that Mac — and two badges side by side would make them hunt for which
+ * one is the answer. LAN outranks ONLINE when both are true: it is the better
+ * path and the one the race will pick.
+ */
 const BADGES: readonly [state: string, label: string, tone: string][] = [
   ['probing', '◌ PROBING', 'busy'],
   ['online', '● ONLINE', 'ok'],
-  ['offline', '○ OFFLINE', '']
+  ['offline', '○ OFFLINE', ''],
+  ['lan', '⚡ LAN', 'ok']
 ]
 
 const badges = (): string =>
@@ -52,17 +64,42 @@ const badges = (): string =>
 export const relayPrefix = (username: string, deviceId: string): string =>
   `/relay/@${encodeURIComponent(username)}/desktop/${encodeURIComponent(deviceId)}/`
 
+/**
+ * TODO (V3-13 → V3-18): W5 wants the DOORS this Mac serves on its row, under
+ * the workspaces. `V2Desktop` carries no `doors[]` yet — V3-18 adds it, with
+ * the save-time conflict and TAKE OVER that make ownership of a door mean
+ * something — so this row lists workspaces alone and gains a second line
+ * there. Nothing is drawn for it here: an empty "Doors" label on every row
+ * would read as a Mac serving nothing rather than as a field that does not
+ * exist yet.
+ */
 function desktopRow(username: string, desktop: V2Desktop): string {
   const workspaces =
     desktop.workspaces.length === 0
       ? 'No workspaces registered yet'
       : desktop.workspaces.map((w) => esc(w.name)).join(' · ')
   const id = esc(desktop.deviceId)
-  return `<li class="desktop" data-desktop="${id}">
+  /**
+   * USE WI-FI (M5) — one tap that asks the Mac, and never a scan.
+   *
+   * It ships in the markup with its three states already here (ask · asked ·
+   * allowed) because the CSP forbids an inline script: a control assembled at
+   * load is a control nobody can read in view-source and nobody can test
+   * without a browser. reach.js only unhides the one that is true.
+   *
+   * WI-FI OK IS NOT A BUTTON. Once this device holds that Mac's token there is
+   * nothing left to ask for, and a button that does nothing is a button people
+   * press twice.
+   */
+  return `<li class="desktop" data-desktop="${id}" data-name="${esc(desktop.name)}">
 <span class="chip">Mac</span>
 <span><b>${esc(desktop.name)}</b><br><span class="meta">${workspaces}</span></span>
 <span class="reach-actions">${badges()}
-<a class="btn sm primary" href="${esc(relayPrefix(username, desktop.deviceId))}">OPEN</a></span></li>`
+<a class="btn sm primary" href="${esc(relayPrefix(username, desktop.deviceId))}">OPEN</a>
+<button class="btn sm" data-reach="${id}">USE WI-FI</button>
+<button class="btn sm" data-reach-cancel="${id}" hidden>CANCEL</button>
+<span class="chip ok" data-reach-ok hidden>WI-FI OK</span></span>
+<p class="meta reach-note" data-reach-note hidden></p></li>`
 }
 
 /**
@@ -76,6 +113,10 @@ export function desktopsSection(username: string, desktops: readonly V2Desktop[]
       ? `<li><span class="meta">No desktop has registered its workspaces yet. Claim this username in the app and they appear here.</span></li>`
       : desktops.map((desktop) => desktopRow(username, desktop)).join('')
   return `<h2 style="margin-top:30px">Desktops</h2>
-<p class="meta">Names and workspaces only — cookrew.dev never holds what is on a canvas. ONLINE means that Mac is holding its line at cookrew.dev right now, so OPEN reaches it; opening one stays here, on cookrew.dev. A phone is paired on the phone, with the token the Mac prints.</p>
-<ul class="doors me-list" id="me-desktops">${rows}</ul>`
+<p class="meta">Names and workspaces only — cookrew.dev never holds what is on a canvas. ONLINE means that Mac is holding its line at cookrew.dev right now, so OPEN reaches it; opening one stays here, on cookrew.dev. USE WI-FI asks that Mac once for its keyboard on this network; ${esc(webCopy('m5.no-account'))}</p>
+<ul class="doors me-list" id="me-desktops"
+  data-asked="${esc(webCopy('m5.asked'))}"
+  data-allowed="${esc(webCopy('m5.allowed', { device: '{device}' }))}"
+  data-declined="${esc(webCopy('m5.declined', { device: '{device}' }))}"
+  data-no-seal="${esc(webCopy('m5.no-seal'))}">${rows}</ul>`
 }

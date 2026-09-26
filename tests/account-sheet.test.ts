@@ -33,6 +33,7 @@ const BASE: AccountStatus = {
   envUsername: null,
   legacy: null,
   sessionExpired: false,
+  passwordPending: false,
   registryMismatch: null,
   workspacesReachable: true,
   recoveryCodesSavedAt: null,
@@ -247,7 +248,7 @@ describe('the first-run card (D8) — once, and only on a fresh install', () => 
     expect(view?.lede).toBe(ACCOUNT_COPY.FIRST_RUN_LEDE)
   })
 
-  it('offers SIGN IN WITH PASSWORD · CREATE AN ACCOUNT · NOT NOW, in that order, and no JOIN in cut 1', () => {
+  it('offers SIGN IN WITH PASSWORD · CREATE AN ACCOUNT · NOT NOW, in that order', () => {
     const view = firstRunView(fresh)
     expect(view?.buttons.map((b) => b.label)).toEqual([
       'SIGN IN WITH PASSWORD',
@@ -255,7 +256,21 @@ describe('the first-run card (D8) — once, and only on a fresh install', () => 
       'NOT NOW',
     ])
     expect(view?.buttons.map((b) => b.action)).toEqual(['signin', 'register', 'dismiss'])
-    expect(view?.join).toBeNull()
+  })
+
+  it('carries the JOIN half now that cut 2 ships it (V3-10)', () => {
+    // It was null while there was nowhere for a code to go; the constant in
+    // the store is still the one place that decides.
+    const view = firstRunView(fresh)
+    expect(view?.join).toEqual({
+      ask: ACCOUNT_COPY.FIRST_RUN_JOIN_ASK,
+      how: ACCOUNT_COPY.FIRST_RUN_JOIN_HOW,
+      label: ACCOUNT_COPY.JOIN_FIELD_LABEL,
+      go: ACCOUNT_COPY.JOIN_GO,
+    })
+    // The half says where a code comes from, which is the question a person
+    // standing at a blank Mac actually has.
+    expect(view?.join?.how).toContain('ADD A MAC')
   })
 
   it('is not placed once it was closed, or once anything exists here', () => {

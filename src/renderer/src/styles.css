@@ -5725,6 +5725,34 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
 }
 .cr-acct-firstrun .gs-sheet-head h2.cr-acct-cardhead { margin: 0; font-size: 11px; }
 .cr-acct-firstrun-join { margin-top: 12px; }
+
+/* D8: the code the card is about to spend — read, not typed, so it is set
+   in the pixel face at a size a person can check against another screen. */
+.cr-acct-joincode {
+  margin: 10px 0 0;
+  font-family: var(--font-pixel);
+  font-size: 18px;
+  letter-spacing: 0.18em;
+  text-align: center;
+}
+
+/* D12: the minted code, its QR and the link, under ADD A MAC. */
+.cr-acct-addmac {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+.cr-acct-addmac .cr-acct-qr {
+  width: 168px;
+  align-self: center;
+}
+.cr-acct-addlink {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  word-break: break-all;
+  color: var(--ink-soft);
+}
 .cr-acct-firstrun-foot { flex-wrap: wrap; justify-content: flex-start; }
 
 .cr-acct-card { margin-top: 6px; }
@@ -6339,6 +6367,89 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   border-left: 4px solid var(--amber-deep);
   padding: 10px 12px;
   margin-bottom: 12px;
+}
+
+/* ── D11, the one queue ──────────────────────────────────────────────────
+   A WAITING ROW WEARS THE NOTE'S AMBER EDGE; a finished one does not. That
+   is the whole visual difference and it is the load-bearing one: the list
+   exists to be answered, so what is still a question has to be findable in it
+   at a glance, and this week's receipts must not compete for the same look. */
+.cr-acct-request-row {
+  padding: 10px 12px;
+  border-left: 4px solid var(--amber-deep);
+  background: var(--amber-soft);
+}
+
+/* A row with a chip is over. The neutral ground says so before any word is
+   read. */
+.cr-acct-request-row:has(.cr-acct-over) {
+  background: transparent;
+  border-left-color: var(--line-soft);
+}
+
+.cr-acct-over {
+  color: var(--muted);
+}
+
+/* The two digits, sized for two digits. A wide field invites a code. */
+.cr-acct-match {
+  flex: 0 0 auto;
+  width: 5.5em;
+  text-align: center;
+  font-family: var(--font-mono);
+  letter-spacing: 0.18em;
+}
+
+/* A refusal belongs to its row and takes the whole width under it, so it is
+   never read as belonging to the row below. */
+.cr-acct-rownote {
+  flex: 1 0 100%;
+  margin: 6px 0 0;
+}
+
+/* The join code (D12), read aloud from one screen and typed on another. */
+.cr-acct-joincode {
+  display: block;
+  margin: 10px 0 0;
+  font-family: var(--font-mono);
+  font-size: 22px;
+  letter-spacing: 0.22em;
+  text-align: center;
+}
+
+/* ── account:changed, in the window ──────────────────────────────────────
+   Bottom-left, under the avatar it is about, and NEVER over the canvas'
+   centre: this answers nothing and must not sit where a person is working.
+   `pointer-events: none` is the promise in CSS — a toast that could swallow a
+   click would be a modal by another name. */
+.cr-acct-toasts {
+  position: fixed;
+  left: 14px;
+  bottom: 14px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 340px;
+  pointer-events: none;
+}
+
+.cr-acct-toast {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 3px 3px 0 var(--line);
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--ink);
+}
+
+/* The two that are not news but consequences wear the rose edge. */
+.cr-acct-toast[data-kind='revoked'],
+.cr-acct-toast[data-kind='not-me'] {
+  border-left: 4px solid var(--rose);
 }
 
 .cr-acct-asklead {

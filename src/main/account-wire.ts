@@ -46,6 +46,11 @@ export const REFUSALS: Record<string, AccountRefusal> = {
   denied: 'denied',
   not_offered: 'not_offered',
   password_change_required: 'password_change_required',
+  // The step-up gate's two (V3-FIX-C1). Without these the acts behind it
+  // refuse as 'unknown', whose sentence says nothing was changed and nothing
+  // can be done — only the first half of which is true.
+  password_required: 'password_required',
+  step_up: 'step_up',
 }
 
 /**

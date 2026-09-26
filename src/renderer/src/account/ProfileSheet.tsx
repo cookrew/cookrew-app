@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { registryMismatchSentence } from '../../../shared/account-v2'
 import type { AccountProfile, AccountStatus, AdmittedPhone } from '../../../shared/account-v2'
-import type { ApprovalRequest } from '../../../shared/account-approvals'
 import type { WorkspaceMeta } from '../../../shared/model'
 import { cookrew } from '../api'
 import {
@@ -9,14 +8,16 @@ import {
   deviceName,
   envIgnoredSentence,
   initialsOf,
-  phoneVerb,
   profileKey,
   refusalSentence,
   revokeSentence,
   signOutSentence,
-  COMING_IN_CUT_2,
+  addDeviceSentence,
+  codeExpirySentence,
 } from './account-store'
-import { ApprovalCard } from './ApprovalCard'
+import { QrCode } from './QrCode'
+import { qrMatrix } from '../../../shared/qr'
+import { RequestsTab } from './RequestsTab'
 import { DOING, problemSentence } from './problem'
 import { PairPhoneSheet } from './PairPhoneSheet'
 import { ResumeSession } from './ResumeSession'
@@ -44,6 +45,9 @@ import '../grant-surface.css'
 export const PROFILE_TABS = [
   'PROFILE',
   'DEVICES',
+  // D11: the one queue, where D6's pinned card used to be. It sits beside
+  // DEVICES because that is what most of its rows are about.
+  'REQUESTS',
   'SECURITY',
   'WORKSPACES',
   'SEATS & TEAMS',
@@ -104,25 +108,23 @@ export function ProfileSheet({
   /** The step-up password. Spent the moment the act is done, either way. */
   const [stepUp, setStepUp] = useState('')
   const [acting, setActing] = useState(false)
+  /**
+   * D12: which machine the owner pressed ADD for, while its password is
+   * being typed and after the code exists. One at a time, like the step-up
+   * on the rows above: two codes on screen would be two live codes, and the
+   * registry keeps one.
+   */
+  const [adding, setAdding] = useState<'mac' | 'phone' | null>(null)
+  const [minted, setMinted] = useState<{ code: string; expiresAt: number; url: string } | null>(
+    null,
+  )
   const [admitted, setAdmitted] = useState<readonly AdmittedPhone[]>([])
   const [pairing, setPairing] = useState(false)
-  /** The devices waiting for an answer (D6) — main's polled queue. */
-  const [requests, setRequests] = useState<readonly ApprovalRequest[]>([])
   /** The display name while it is being edited; null when it is not. */
   const [editing, setEditing] = useState<string | null>(null)
   /** A failure from the security card's own actions (lock, codes file). */
   const [problem, setProblem] = useState<string | null>(null)
   const username = status.username ?? ''
-
-  // Re-read whenever the count changes, so approving on the card and the
-  // badge in the bar cannot disagree about what is still waiting.
-  useEffect(() => {
-    const call = cookrew().accountApprovals
-    if (!call || status.sessionExpired) return
-    void call()
-      .then(setRequests)
-      .catch(() => undefined)
-  }, [status.requests, status.sessionExpired])
 
   useEffect(() => {
     void cookrew()
@@ -131,18 +133,17 @@ export function ProfileSheet({
       .catch(() => undefined)
   }, [])
 
-  // RE-READ WHEN A REQUEST IS ANSWERED, AND WHENEVER A TAB IS OPENED — not
-  // only when the sheet is opened (F4).
+  // RE-READ WHEN A REQUEST IS ANSWERED, not only when the sheet is opened.
   // Approving attaches the device at the registry, so the moment the waiting
   // count drops is the moment this list is stale — and a DEVICES tab that
   // only catches up on the next open reads as an approval that did nothing.
+  // THE TAB IS PART OF THE KEY (V3-UI1 · F4). Keyed on the waiting count
+  // alone, the re-read raced the other machine and lost: answering an approval
+  // only marks it approved at the registry, and the asking Mac attaches itself
+  // a second or two later — so the read fired while the registry still held
+  // one device, and by the time the second appeared the count was already zero
+  // with nothing left to fire on. Opening DEVICES is deterministic.
   const key = profileKey(status, tab)
-  // F3: which phone door this build has. `accountJoinCode` is the join-code
-  // mint (V3-10app); without it the LAN pairing sheet is the only way in.
-  // Asked with `in` rather than by naming the member: `accountJoinCode` is
-  // declared on the bridge by the lane that adds it (V3-10app), and this must
-  // compile — and answer honestly — on a build where it does not exist yet.
-  const phone = phoneVerb({ canMintJoinCode: 'accountJoinCode' in cookrew() })
   useEffect(() => {
     const call = cookrew().accountProfile
     // BACK OFF WHILE THE SESSION IS DEAD. Every read would spend a request to
@@ -184,6 +185,43 @@ export function ProfileSheet({
         else setError('That phone could not be forgotten. Try again.')
       })
       .catch((err: unknown) => setError(problemSentence(DOING.FORGET, err)))
+  }
+
+  /**
+   * ADD A MAC / ADD A PHONE (D12) — the code is minted under step-up.
+   *
+   * The registry asks for the password again on this route and so does this
+   * sheet: minting a join code widens what the account can be opened from,
+   * which is the definition of a step-up act. The password is spent at once
+   * and never kept; the code that comes back is one-shot and ten minutes old
+   * at most, which the sentence beside it says.
+   */
+  const mintCode = (): void => {
+    const call = cookrew().accountJoinCode
+    if (!call || acting || stepUp.length === 0 || adding === null) return
+    setActing(true)
+    setError(null)
+    void call(stepUp)
+      .then((result) => {
+        setActing(false)
+        setStepUp('')
+        if (!result.ok) {
+          setError(refusalSentence(result.reason, result.message, username))
+          return
+        }
+        setMinted(result.value)
+      })
+      .catch((err: unknown) => {
+        setActing(false)
+        setError(problemSentence(DOING.JOIN_CODE, err))
+      })
+  }
+
+  /** Close the ADD panel, whichever half of it is on screen. */
+  const closeAdd = (): void => {
+    setAdding(null)
+    setMinted(null)
+    setStepUp('')
   }
 
   /** Both verbs end the same way: the field is emptied, the row closes. */
@@ -336,16 +374,6 @@ export function ProfileSheet({
           </p>
         )}
 
-        {/* THE REQUEST COMES FIRST, above every tab: a person who clicked
-            the notification or the rose badge is here for this and nothing
-            else, and it must not be behind a tab they have to find. */}
-        <ApprovalCard
-          requests={requests}
-          username={username}
-          focusId={focusRequestId}
-          onStatus={onStatus}
-        />
-
         {tab === 'PROFILE' && (
           <section className="cr-acct-pane" aria-label="Profile">
             {editing === null ? (
@@ -387,14 +415,16 @@ export function ProfileSheet({
 
         {tab === 'DEVICES' && (
           <section className="cr-acct-pane" aria-label="Devices">
-            {/* ONE PHONE VERB, NEVER TWO (F3). `phoneVerb` decides which door
-                this build actually has; see account-store.ts for why the LAN
-                one and the account one are not interchangeable. */}
-            {phone === 'pair' && (
-              <button className="gs-revoke cr-acct-act" onClick={() => setPairing(true)}>
-                PAIR A PHONE
-              </button>
-            )}
+            {/* RESTORED IN INTEGRATION, and by the lane that took it away.
+                V3-12 dropped this button because its own ADD A PHONE reached
+                the same popout; V3-10's app half then made ADD A PHONE mint a
+                JOIN code — the account ceremony (M4) — which is a different
+                thing from the pairing URL that admits a phone at THIS Mac on
+                Wi-Fi. Two ceremonies, so two ways in, until the two lanes that
+                own them agree on one. */}
+            <button className="gs-revoke cr-acct-act" onClick={() => setPairing(true)}>
+              PAIR A PHONE
+            </button>
             <ul className="cr-acct-devices">
               {(profile?.devices ?? []).map((device) => {
                 // THIS MAC has one verb and the others have the other. The
@@ -482,22 +512,85 @@ export function ProfileSheet({
                 <li className="gs-dim">No devices listed yet.</li>
               )}
             </ul>
-            {/* ADD A MAC IS STILL A SIGNPOST while cut 2 is unlanded: nothing
-                else on this tab adds a Mac, so a disabled button with the
-                reason on hover tells a reader where it will be rather than
-                leaving them to guess. ADD A PHONE is NOT drawn beside it —
-                PAIR A PHONE above already does that job on this build, and a
-                greyed twin of a live button is what F3 found. */}
+            {/* THE TWO VERBS THAT ADD A MACHINE (D12 · V3-10). Both mint the
+                SAME kind of code — one live per account — and differ only in
+                what a person does with it: a Mac types the eight characters,
+                a phone scans the link. So the ceremony is one panel and the
+                sentence is the thing that changes. */}
             <div className="cr-acct-row cr-acct-add">
-              <button className="gs-ghost" disabled title={COMING_IN_CUT_2} aria-disabled="true">
+              <button
+                className="gs-ghost"
+                disabled={acting}
+                onClick={() => {
+                  closeAdd()
+                  setAdding(adding === 'mac' ? null : 'mac')
+                }}
+              >
                 ADD A MAC
               </button>
-              {phone === 'add' && (
-                <button className="gs-ghost" disabled title={COMING_IN_CUT_2} aria-disabled="true">
-                  ADD A PHONE
-                </button>
-              )}
+              <button
+                className="gs-ghost"
+                disabled={acting}
+                onClick={() => {
+                  closeAdd()
+                  setAdding(adding === 'phone' ? null : 'phone')
+                }}
+              >
+                ADD A PHONE
+              </button>
             </div>
+            {adding !== null && (
+              <div className="cr-acct-addmac">
+                {minted === null ? (
+                  <>
+                    <p className="gs-consequence">{ACCOUNT_COPY.ADD_STEP_UP}</p>
+                    <div className="cr-acct-row">
+                      <input
+                        type="password"
+                        className="gs-input"
+                        aria-label="Password"
+                        placeholder="password"
+                        autoComplete="current-password"
+                        value={stepUp}
+                        onChange={(e) => setStepUp(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') mintCode()
+                          if (e.key === 'Escape') closeAdd()
+                        }}
+                      />
+                      <button
+                        className="gs-primary"
+                        disabled={acting || stepUp.length === 0}
+                        onClick={mintCode}
+                      >
+                        MAKE A CODE
+                      </button>
+                      <button className="gs-ghost" disabled={acting} onClick={closeAdd}>
+                        CANCEL
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="gs-consequence">{addDeviceSentence(adding)}</p>
+                    <p className="cr-acct-joincode">{minted.code}</p>
+                    {/* THE QR IS THE LINK, NOT THE CODE. A camera that reads
+                        eight characters has nowhere to put them; the link
+                        opens cookrew.dev/join, which hands the code to the
+                        app through `cookrew://join#…` — the fragment, so the
+                        code never reaches the site's server. */}
+                    <QrCode rows={qrRows(minted.url)} label={addDeviceSentence(adding)} />
+                    <p className="cr-acct-addlink">{minted.url}</p>
+                    <p className="gs-hint">{codeExpirySentence(minted.expiresAt)}</p>
+                    <div className="cr-acct-row">
+                      <button className="gs-ghost" onClick={closeAdd}>
+                        DONE
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
             {/* ADMITTED PHONES ARE A DIFFERENT KIND OF FACT and get their own
                 heading rather than being mixed in. The list above is the
                 ACCOUNT's devices, known to cookrew.dev and revocable there;
@@ -529,6 +622,19 @@ export function ProfileSheet({
             )}
             {pairing && <PairPhoneSheet onClose={() => setPairing(false)} />}
           </section>
+        )}
+
+        {/* D11 — three kinds of row, one card. A person who clicked the
+            notification or the rose badge lands HERE: AccountSurface opens the
+            sheet on this tab, so the destination is the same whichever led
+            them. */}
+        {tab === 'REQUESTS' && (
+          <RequestsTab
+            username={username}
+            refreshKey={status.requests}
+            focusId={focusRequestId}
+            onStatus={onStatus}
+          />
         )}
 
         {tab === 'SECURITY' && (
@@ -567,4 +673,17 @@ export function ProfileSheet({
       </div>
     </div>
   )
+}
+
+/**
+ * The QR's modules as the rows QrCode draws, or none.
+ *
+ * The encoder is shared (shared/qr.ts) and the picture is the component's;
+ * this is the one line between them, kept here rather than widening QrCode's
+ * contract — the authenticator sheet feeds it rows main encoded, and two
+ * shapes for one prop would be a component with an opinion about who called.
+ */
+function qrRows(text: string): readonly string[] {
+  const modules = qrMatrix(text)
+  return modules === null ? [] : modules.map((row) => row.map((on) => (on ? '1' : '0')).join(''))
 }
