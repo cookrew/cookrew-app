@@ -38,6 +38,16 @@ export interface RelayServing {
   takeBack(slug: string): Promise<{ ok: true; address: string; name: string } | { ok: false; reason: JoinRefusal | 'not-listed' | 'never-served' }>
   /** Stop relaying it, and delist it. The seal key is kept. */
   withdraw(slug: string): Promise<void>
+  /**
+   * The handle the doors on the relay are actually listed under, or '' when
+   * none are.
+   *
+   * READ FROM THE HELD DOORS, not from whatever the process last decided. The
+   * question this answers is "what does cookrew.dev have", and after the
+   * serving identity moves those two are exactly the things that disagree —
+   * so answering from a remembered decision would be answering with the bug.
+   */
+  servingHandle(): string
   closeAll(): void
 }
 
@@ -155,6 +165,14 @@ export function createRelayServing(options: {
     addressFor: (slug) => {
       const door = held.get(slug)
       return door ? { address: door.address, name: door.name } : null
+    },
+
+    servingHandle: () => {
+      // Every door goes up under one handle, so the first still-held one is
+      // the answer. Withdrawn entries are removed from the map, so a door on
+      // its way down never speaks for the rest.
+      for (const door of held.values()) if (!door.withdrawn) return door.handle
+      return ''
     },
 
     async serve(input) {

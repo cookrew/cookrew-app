@@ -107,6 +107,7 @@ import { AgentExportStore } from './agent-export'
 import { OwnerGrant, isOwnerSender } from './owner-grant'
 import { Accounts, DEFAULT_LOCK_AFTER_MS, registryOrigin } from './account-v2'
 import { relayHandle } from './legacy-identity'
+import { republishDoors, servingChange } from './serving-identity'
 import { createAdmittedDeviceStore } from './admitted-devices'
 import { pairingHandout } from './pairing-handout'
 import { pairingUrl } from '../shared/pairing-url'
@@ -676,14 +677,18 @@ const accounts = new Accounts({
     // the identical shape, and on the first run of the product it meant the
     // only rung a factorless account has was never announced at all.
     followAccount()
+    // AND THE DOORS (V3-FIX-SERVING-ID). Same trigger, same reason: the name
+    // this Mac serves under is decided by the account, so it moves when the
+    // account does — not when the process happened to start.
+    followServingIdentity()
   }
 })
 
 /** The handle the key in ~/.cookrew/registry holds, if this Mac ever served. */
-const LEGACY_HANDLE = accounts.legacyHandle()
+const legacyHandleNow = (): string | null => accounts.legacyHandle()
 
 /**
- * WHICH NAME THIS MAC SERVES UNDER (identity v2, phase 6).
+ * WHICH NAME THIS MAC SERVES UNDER (identity v2, phase 6) — ASKED EACH TIME.
  *
  * THE ENVIRONMENT IS RETIRED AS IDENTITY. The account decides, then the key
  * this Mac already holds — which wins over a disagreeing account because a v1
@@ -692,19 +697,45 @@ const LEGACY_HANDLE = accounts.legacyHandle()
  * the dial rather than rename the door. COOKREW_HANDLE decides only on a
  * machine that has neither, and is told what it is. The whole table is a pure
  * function (legacy-identity.ts) with a test per row.
+ *
+ * IT USED TO BE A `const`, AND THAT WAS THE BUG. Resolved once at module load,
+ * a Mac that booted local-only and then claimed an account kept publishing its
+ * doors under the environment's name or its old key's: the screen said
+ * @magpie, cookrew.dev listed @drej/team, and a seat bought against
+ * @magpie/team could not admit anyone there. Same shape as the certificate
+ * `ensure` pass and the approval queue below — a fact that changes after boot,
+ * read from the order the module happened to run in.
  */
-const RELAY_IDENTITY = relayHandle({
-  account: accounts.account()?.username ?? null,
-  legacy: LEGACY_HANDLE,
-  env: ENV_HANDLE
-})
-const RELAY_HANDLE = RELAY_IDENTITY.handle
-// ONCE, at boot: a fact about how this process resolved its own name.
-if (RELAY_IDENTITY.note !== null) console.error(RELAY_IDENTITY.note)
+const servingHandleNow = (): string =>
+  relayHandle({
+    account: accounts.account()?.username ?? null,
+    legacy: legacyHandleNow(),
+    env: ENV_HANDLE
+  }).handle
 
-const relayServing =
-  RELAY_ORIGIN && RELAY_HANDLE
-    ? createRelayServing({
+// ONCE, at boot: a fact about how this process resolved its own name.
+{
+  const atBoot = relayHandle({
+    account: accounts.account()?.username ?? null,
+    legacy: legacyHandleNow(),
+    env: ENV_HANDLE
+  })
+  if (atBoot.note !== null) console.error(atBoot.note)
+}
+
+/**
+ * CREATED WHENEVER THERE IS A RELAY, not only when this Mac already had a name
+ * for it (V3-SERVING-ID).
+ *
+ * The condition was `RELAY_ORIGIN && RELAY_HANDLE`, which on a first run — no
+ * account, no key, no COOKREW_HANDLE — left this null for the life of the
+ * process. The person then claimed an account and could not serve anything at
+ * all until they restarted, with nothing on screen saying why. Serving needs a
+ * handle at the moment a door goes up, which is where it is checked; `who`
+ * below is read per dial for the same reason.
+ */
+const relayServing = RELAY_ORIGIN
+  ? createRelayServing({
         origin: RELAY_ORIGIN,
         loopbackPort: () => MOBILE_PORT,
         /**
@@ -1057,7 +1088,94 @@ const followAccount = (): void => {
   // have D6's sentence describe an account that is not signed in here.
   accountHasFactor = false
 }
+
+/**
+ * THE DOORS FOLLOW THE ACCOUNT TOO.
+ *
+ * Re-resolve the serving name and, if the doors on the relay are listed under
+ * one that is no longer this Mac's, take them down and put them back under the
+ * new one.
+ *
+ * IMMEDIATELY, AND ONLY WHEN THE NAME ACTUALLY MOVED. `accounts.onChange`
+ * fires on every account write — a display name, a renewed session, a revoked
+ * device — so the guard is not the event, it is `servingChange.republish`,
+ * which compares what cookrew.dev is holding against what this Mac can now
+ * prove. In the ordinary case that is a string compare and nothing happens.
+ *
+ * Immediately, because the window in between is the defect: a door listed
+ * under a name the account cannot prove cannot honour a seat bought against
+ * the account, and every minute of it is a person paying for a seat that does
+ * not admit them. A debounce would buy nothing — the move happens once, when a
+ * Mac gets an account — and "on the next serve" could be never, since serving
+ * survives restarts and nobody re-serves a door that is already up.
+ *
+ * IT DOES COST SOMETHING and the cost is stated: republishing re-dials the
+ * relay and MOVES THE ADDRESS, because the address is built from the handle.
+ * Links to the old address stop resolving. That is the right trade exactly
+ * once, because the link that still worked was a link to a door that refuses
+ * the person the seat was bought for.
+ *
+ * One at a time, and failures are logged rather than thrown: this runs beside
+ * the canvas, and a registry that is down must leave the Mac as it was.
+ */
+let republishing = false
+const followServingIdentity = (): void => {
+  if (!relayServing || republishing) return
+  const change = servingChange({
+    serving: relayServing.servingHandle(),
+    account: accounts.account()?.username ?? null,
+    legacy: legacyHandleNow(),
+    env: ENV_HANDLE
+  })
+  if (!change.changed) return
+  if (change.note !== null) console.error(change.note)
+  if (!change.republish) {
+    if (change.handle === '' && relayServing.servingHandle() !== '') {
+      // Said, never done: withdrawing somebody's doors because they signed out
+      // of a sheet would disconnect the callers those doors are carrying.
+      console.error(
+        `[cookrew] nothing names this Mac now, so its doors stay listed as @${relayServing.servingHandle()} — stop serving them to take them down.`
+      )
+    }
+    return
+  }
+  const was = relayServing.servingHandle()
+  console.error(`[cookrew] doors move from @${was} to @${change.handle}: re-listing them now.`)
+  republishing = true
+  void republishDoors({
+    slugs: () => serving.served.list().map((template) => template.slug),
+    withdraw: (slug) => relayServing.withdraw(slug),
+    serve: async (slug) => {
+      const template = serving.served.bySlug(slug)
+      // A door withdrawn and then not served again is a door LOST, so neither
+      // of these is allowed to pass quietly. `joinRelayFor` reports its own
+      // refusals and returns either way, so the door's presence on the relay
+      // is what is checked — the summary below has to be able to count.
+      if (!template) throw new Error('it is no longer served here')
+      await joinRelayFor(template)
+      if (relayServing.addressFor(slug) === null) throw new Error('it did not go back up')
+    },
+    log: (message) => console.error(message)
+  })
+    .then(({ moved, failed }) => {
+      console.error(
+        `[cookrew] ${moved} door(s) now listed as @${change.handle}` +
+          (failed.length === 0 ? '' : `; ${failed.join(', ')} could not be moved and stay as they were`)
+      )
+    })
+    .finally(() => {
+      republishing = false
+      // ASK ONCE MORE. A move that arrived while this one was running was
+      // dropped by the guard above; re-reading is a string compare that ends
+      // immediately in every case but the one where it was needed.
+      followServingIdentity()
+    })
+}
+
 followAccount()
+// NOT CALLED AT BOOT. Nothing is on the relay yet, so there is nothing to move
+// — and the name this process resolved has already been said once, above.
+// Every door that goes up from here reads the handle at the moment it goes up.
 
 /**
  * Sign-in with a cookrew.dev token needs the registry's public key, and only
@@ -1203,11 +1321,20 @@ function servedAddress(slug: string): string {
  */
 async function joinRelayFor(template: ServedTemplate): Promise<void> {
   if (!relayServing) return
+  // ASKED NOW, not at module load. A Mac that claimed its account after
+  // booting serves under the account from this point on; one that has no name
+  // at all does not go up nameless — the door stays local and says so, rather
+  // than being listed somewhere nobody can look it up.
+  const handle = servingHandleNow()
+  if (handle === '') {
+    console.error(`serving ${template.slug}: no account or key names this Mac, so it is not on the relay`)
+    return
+  }
   const snapshot = teams.load(template.templateId)
   const joined = await relayServing.serve({
     slug: template.slug,
     team: template.slug,
-    handle: RELAY_HANDLE,
+    handle,
     face: {
       title: snapshot?.name ?? template.templateId,
       door: (snapshot ? orchAgentOf(snapshot) : null) ?? '',
@@ -5516,7 +5643,7 @@ function registerIpc(handlers: RestoreHandlers): void {
     envUsername: ENV_HANDLE || null,
     // Phase 6: a Mac that already serves under a handle opens the claim sheet
     // on a password, not on a name. Read at boot, and null once it has crossed.
-    legacy: LEGACY_HANDLE === null ? null : { handle: LEGACY_HANDLE },
+    legacy: legacyHandleNow() === null ? null : { handle: legacyHandleNow() as string },
     workspaces: () => store.list().workspaces.map((w) => ({ id: w.id, name: w.name })),
     pairingHandout: currentPairingHandout,
     admitted: {
