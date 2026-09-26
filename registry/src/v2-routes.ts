@@ -14,6 +14,13 @@ import {
 } from './v2-http'
 import { handleCertRoute } from './v2-cert-routes'
 import { handleSeatRoute, mySeats } from './v2-seat-routes'
+import {
+  decideRequest,
+  getRequest,
+  listEvents,
+  listRequests,
+  openReachRequest
+} from './v2-requests'
 import { handleMigrateRoute, legacyHolds, refuseIfLegacy } from './v2-migrate-routes'
 import type { V2Account, V2Desktop } from './v2-accounts'
 import { readReach } from './v2-reach'
@@ -24,6 +31,9 @@ import { v2Error, type V2Error } from './v2-copy'
 import { factorError } from './v2-factor-copy'
 import { createFactorState, type FactorState } from './v2-factor-state'
 import { handleFactorRoute, signInWithLadder } from './v2-factor-routes'
+import { handleJoinRoute } from './v2-join'
+import { handleRenewRoute } from './v2-renew'
+import { readAndStepUp } from './v2-step-up'
 
 /**
  * IDENTITY v2 — THE ACCOUNT ROUTES.
@@ -51,6 +61,8 @@ export {
 
 /** Bodies: an account or a session is small; a profile carries a picture. */
 const SMALL_BODY = 16 * 1024
+/** A request id and a device id are both UUIDs on these routes. */
+const REQUEST_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const PROFILE_BODY = 192 * 1024
 
 // ── the router ───────────────────────────────────────────────────────────
@@ -70,6 +82,12 @@ export function handleV2Route(ctx: V2Context): boolean {
   // under /v2/sessions/… and /v2/me/… , and `/v2/me` below would swallow the
   // second half of them. It answers false for every path it does not own.
   if (handleFactorRoute(ctx)) return true
+  // Joining by code, for the same reason and in the same place: `/v2/me`
+  // below would swallow `/v2/me/join-codes`.
+  if (handleJoinRoute(ctx, rest)) return true
+  // Renewal sits beside the ladder for the same reason: `/v2/sessions/:id`
+  // below would read `renew` as a pending's uuid and answer 404 for it.
+  if (handleRenewRoute(ctx, rest)) return true
 
   if (rest.length === 1 && rest[0] === 'keys' && method === 'GET') {
     v2Json(response, 200, { jwk: ctx.v2.tokens.publicKeyJwk(), revoked: ctx.v2.accounts.revokedIds() })
@@ -348,6 +366,13 @@ export function desktopBody(desktop: V2Desktop, names = false): Record<string, u
     deviceId: desktop.deviceId,
     name: desktop.name,
     workspaces: desktop.workspaces,
+    /**
+     * THE DOORS THIS MAC HOLDS (V3-18). Always an array, never absent: the
+     * save sheet asks "who else holds this slug" on every save, and a client
+     * that had to treat a missing field as "none" would read an older
+     * registry's silence as an answer.
+     */
+    doors: desktop.doors ?? [],
     reach: desktop.reach ?? null,
     /**
      * REACH v2.1. Does a trusted name exist for this Mac right now?
@@ -462,17 +487,78 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     mySeats(ctx, signed)
     return
   }
+
+  // ── the one queue (identity v3, R1/R2) ─────────────────────────────────
+  //
+  // GET /v2/me/requests is the VIEW over join (approvals), seat and reach; the
+  // seat and reach stores are new, the join rows are read live so nothing is
+  // stored twice. The bodies of these live in v2-requests.ts; here are the
+  // mount points, kept small so V3-10's join-code routes merge beside them.
+  if (rest.length === 1 && rest[0] === 'requests' && method === 'GET') {
+    listRequests(ctx, signed)
+    return
+  }
+  if (rest.length === 1 && rest[0] === 'events' && method === 'GET') {
+    const since = Number(new URL(ctx.request.url ?? '', 'http://x').searchParams.get('since') ?? '0')
+    listEvents(ctx, signed, since)
+    return
+  }
+  if (rest.length === 2 && rest[0] === 'requests' && method === 'GET') {
+    const id = (ctx.decode(rest[1]) ?? '').toLowerCase()
+    if (!REQUEST_UUID.test(id)) {
+      refuse(response, 404, 'not_found')
+      return
+    }
+    getRequest(ctx, signed, id)
+    return
+  }
+  if (rest.length === 2 && rest[0] === 'requests' && method === 'POST') {
+    const id = (ctx.decode(rest[1]) ?? '').toLowerCase()
+    if (!REQUEST_UUID.test(id)) {
+      refuse(response, 404, 'not_found')
+      return
+    }
+    await decideRequest(ctx, signed, id)
+    return
+  }
+  if (rest.length === 3 && rest[0] === 'desktops' && rest[2] === 'reach-requests' && method === 'POST') {
+    const target = (ctx.decode(rest[1]) ?? '').toLowerCase()
+    if (!REQUEST_UUID.test(target)) {
+      refuse(response, 404, 'not_found')
+      return
+    }
+    openReachRequest(ctx, signed, target)
+    return
+  }
   if (rest.length === 1 && rest[0] === 'devices' && method === 'GET') {
     v2Json(response, 200, { devices: meBody(account, claims.dev).devices })
     return
   }
   if (rest.length === 2 && rest[0] === 'devices' && method === 'DELETE') {
     const id = (ctx.decode(rest[1]) ?? '').toLowerCase()
+    /**
+     * STEP UP FIRST — taking another device off the account is on the list.
+     *
+     * It was a bearer-only act, which made a stolen session enough to detach
+     * the owner's own machines: the thief keeps the one sitting they hold and
+     * the owner is left with whatever the last-device rule spares them. The
+     * desktop already asked for the password before calling this, but it asked
+     * ITSELF — a check on the client is a check a caller can skip.
+     */
+    if (!(await readAndStepUp(ctx, signed, 'revoke-device')).ok) return
+    // The name, read BEFORE the revoke removes it, so the roster event can
+    // quote which device left.
+    const goneName = account.devices.find((d) => d.id === id)?.name
     const out = v2.accounts.revokeDevice(account.username, id)
     if (!out.ok) {
       refuse(response, out.reason === 'last_device' ? 409 : 404, out.reason)
       return
     }
+    // §06: revoking a device voids its pending requests, and every device is
+    // told. The reach requests it made or was aimed at cannot be answered any
+    // more, so they go now rather than expiring quietly.
+    v2.requests.voidDevice(id)
+    v2.events.append(account.username, { kind: 'revoked', ...(goneName === undefined ? {} : { device: goneName }) })
     // Revoking the device in your hand is allowed, and it ends this session —
     // so the browser is handed an empty cookie rather than one that no longer
     // opens anything.
@@ -559,11 +645,24 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     const out = v2.accounts.putDesktop(account.username, deviceId, {
       name: body.value.name,
       workspaces: body.value.workspaces,
+      ...(body.value.doors === undefined ? {} : { doors: body.value.doors }),
       ...(reach === undefined ? {} : { reach })
     })
     if (!out.ok) {
       refuse(response, out.reason === 'not_found' ? 404 : 400, out.reason)
       return
+    }
+    /**
+     * A DOOR THAT CHANGED HANDS IS TOLD TO EVERY DEVICE (V3-18 · A4).
+     *
+     * The Mac that lost it learns from this feed that it stopped serving — it
+     * may have been asleep when the relay superseded its line, and "my team is
+     * offline and I do not know why" is the failure this whole lane exists to
+     * end. The device named is the one that TOOK it, because that is the
+     * sentence: "alpha moved to Mac Studio".
+     */
+    for (const _gone of out.moved) {
+      v2.events.append(account.username, { kind: 'door-moved', device: signed.device.name })
     }
     noContent(response)
     return

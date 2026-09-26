@@ -1,5 +1,6 @@
 import type { AdmittedDevice } from './admitted-devices'
 import type {
+  AccountRefusal,
   AccountStatus,
   AccountResult,
   ApprovalAsked,
@@ -18,7 +19,8 @@ import type {
 } from '../shared/account-approvals'
 import type { SeatFace, SeatsSurface } from '../shared/seats'
 import type { Accounts } from './account-v2'
-import type { Approvals } from './approvals'
+import type { DecideOutcome, Requests } from './requests'
+import type { AnsweredRow, QueueRow, RowAction } from '../shared/account-requests'
 import { seatsSurface, teamForSlug, type DoorSeats, type ServedTeamRef } from './door-seats'
 import type { Factors } from './factors'
 import type { IdleLock, UnlockOutcome } from './lock'
@@ -45,8 +47,12 @@ import type { IdleLock, UnlockOutcome } from './lock'
 export interface AccountIpcDeps {
   accounts: Accounts
   lock: IdleLock
-  /** The waiting sign-in requests (D6) — the producer of `status.requests`. */
-  approvals: Approvals
+  /**
+   * THE ONE QUEUE (D11) — sign-ins, phones asking for Wi-Fi, guests asking for
+   * a seat. The producer of `status.requests`, which is now a count of all
+   * three rather than of sign-ins alone.
+   */
+  requests: Requests
   /** The second-factor ladder (D3): passkeys, the authenticator app. */
   factors: Factors
   /** COOKREW_HANDLE, when serving was pointed at a name by the environment. */
@@ -78,6 +84,14 @@ export interface AccountIpcDeps {
   }
   /** Republish the reach card — the reachability toggle's other half. */
   publishReach?: (reason: string) => void
+  /**
+   * THIS MAC LEFT THE ACCOUNT (v3, D12): withdraw the doors it serves and let
+   * go of the relay line. Called AFTER the registry has removed the device
+   * and the file is gone — a door withdrawn ahead of a refusal would be a
+   * sign-out that failed and still took the team offline. The canvas is not
+   * this hook's business and must stay exactly as it is.
+   */
+  signedOut?: () => Promise<void> | void
   /**
    * Keep the owner's display name and avatar where the mobile server can
    * reach them. The profile is a network read; the phone's avatar must not be.
@@ -131,6 +145,17 @@ export const ACCOUNT_CHANNELS = [
   'account:lock',
   'account:unlock',
   'account:resume',
+  // v3: the second Mac — a name typed in, a fresh device key minted here. It
+  // may answer the same ladder `account:resume` does, and the three rungs
+  // below finish it unchanged.
+  'account:signIn',
+  // v3 (D8 · D12): the OTHER way onto an account — a code minted on a device
+  // that is already trusted, spent once here. `join` takes the code; the
+  // password is never typed on this machine. `joinCode` is the minting side,
+  // and steps up for the password because it widens what the account opens
+  // from.
+  'account:join',
+  'account:joinCode',
   // ── the second-factor ladder, on the way back in ──
   //
   // The password step is `account:resume`; these three are the rungs after a
@@ -143,6 +168,9 @@ export const ACCOUNT_CHANNELS = [
   'account:profile',
   'account:devices',
   'account:revoke',
+  // v3 (D12): this device leaves the account. Password first, at cookrew.dev;
+  // the device removed there; the file removed here; the doors withdrawn.
+  'account:signOut',
   'account:recoveryCodes',
   'account:saveRecoveryCodes',
   'account:codesSaved',
@@ -152,9 +180,10 @@ export const ACCOUNT_CHANNELS = [
   'account:pairingUrl',
   'account:admittedDevices',
   'account:forgetAdmitted',
-  // ── phase 4: the approval prompt (D6) and the factor ladder (D3) ──
+  // ── the one queue (D11) and the factor ladder (D3) ──
   'account:approvals',
-  'account:decide',
+  'account:requests',
+  'account:decideRequest',
   'account:setPassword',
   'account:factors',
   'account:totpEnrol',
@@ -178,9 +207,30 @@ const asString = (value: unknown): string => (typeof value === 'string' ? value 
 const asRecord = (value: unknown): Record<string, unknown> =>
   typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
 
-/** Three words and no fourth: an unknown decision is refused, never guessed. */
-const isDecision = (value: unknown): value is ApprovalDecision =>
-  value === 'approve' || value === 'deny' || value === 'not-me'
+/**
+ * Seven verbs and no eighth: a button this build has never heard of is
+ * refused, never guessed at. They are the row actions' own ids (D11), so what
+ * arrives here is exactly what was pressed.
+ */
+const ROW_ACTIONS: readonly RowAction['id'][] = [
+  'approve',
+  'deny',
+  'not-me',
+  'allow',
+  'not-now',
+  'seat-them',
+  'decline',
+]
+const isRowAction = (value: unknown): value is RowAction['id'] =>
+  typeof value === 'string' && (ROW_ACTIONS as readonly string[]).includes(value)
+
+/**
+ * What answering a row came to, as the card reads it: the fresh status on
+ * success, and on a wrong number the count of tries left.
+ */
+export type RequestDecided =
+  | { ok: true; value: AccountStatus }
+  | Exclude<DecideOutcome, { ok: true }>
 
 /**
  * A CHANNEL THAT WRITES TO THIS MAC ANSWERS A SENTENCE, NEVER A REJECTION.
@@ -236,7 +286,7 @@ export function accountStatus(deps: AccountIpcDeps): AccountStatus {
     // THE PRODUCER, at last (phase 4): the polled queue of devices asking to
     // sign in. The seam phase 1 left is now live, and the avatar's rose badge
     // and the profile sheet's card read this one number.
-    requests: deps.approvals.count,
+    requests: deps.requests.count,
     envUsername: deps.envUsername,
     // Only until the crossing: once account.json exists this is null, and the
     // sheet is an ordinary claim sheet again.
@@ -244,6 +294,9 @@ export function accountStatus(deps: AccountIpcDeps): AccountStatus {
     recoveryCodesSavedAt: account?.recoveryCodesSavedAt ?? null,
     recoveryCodesLeft: null,
     sessionExpired: account !== null && !deps.accounts.sessionLive(),
+    // D8: this Mac joined by a code and has not met the password yet, so the
+    // lock screen asks for it once and says why.
+    passwordPending: deps.accounts.passwordPending(),
     // Non-null only when account.json names one registry and this process is
     // talking to another — the state in which a 401 means nothing at all.
     registryMismatch: account === null ? null : deps.accounts.registryMismatch(),
@@ -260,15 +313,91 @@ export function accountStatus(deps: AccountIpcDeps): AccountStatus {
  * types it. Adding a second channel for the same secret would mean two places
  * that take a password instead of one.
  */
-async function unlock(
-  deps: AccountIpcDeps,
-  password: string,
-): Promise<UnlockOutcome & { sessionRenewed?: boolean }> {
+async function unlock(deps: AccountIpcDeps, password: string): Promise<UnlockAnswer> {
+  if (deps.accounts.passwordPending()) return firstUnlock(deps, password)
   const outcome = deps.lock.unlock(password)
   if (!outcome.ok) return outcome
   if (deps.accounts.account() === null || deps.accounts.sessionLive()) return outcome
   const renewed = await deps.accounts.resume(password)
   return { ...outcome, sessionRenewed: renewed.ok }
+}
+
+/**
+ * WHAT THE LOCK CHANNEL ANSWERS — the lock's own outcomes, and one more.
+ *
+ * `IdleLock` answers about a password it checked itself. On the first lock of
+ * a code-joined Mac there is nothing to check against and cookrew.dev is
+ * asked instead (`firstUnlock`), so the channel can now also fail for a
+ * reason that is not about the password at all. That arm carries the
+ * registry's own refusal rather than a sentence: main does not write the
+ * renderer's words, and the lock screen already maps a refusal to one.
+ */
+export type UnlockAnswer =
+  | (UnlockOutcome & { sessionRenewed?: boolean })
+  | { ok: false; reason: 'unproven'; refusal: AccountRefusal; message?: string }
+
+/**
+ * THE FIRST LOCK ON A MAC THAT JOINED BY A CODE (v3, D8).
+ *
+ * There is no verifier to check against: nothing was typed here, so nothing
+ * could be derived (account-v2.ts · saveClaimed). cookrew.dev is the only
+ * party that can say whether this is the password, and `resume` asks it —
+ * landing a fresh session and, through `landSession`, WRITING THE VERIFIER.
+ * From the next lock on this is an ordinary offline unlock and this function
+ * is never reached again. That is the whole of "zero password on the new
+ * machine until trust exists".
+ *
+ * THE LOCAL LOCK STILL COUNTS THE TRIES. It is asked FIRST, where it answers
+ * `paused` if the pause is running and otherwise spends one try and says
+ * `wrong` (its verify cannot succeed — there is nothing to verify against).
+ * Only then is the registry asked, and a YES calls `proven()`, which clears
+ * the count. So the five-tries-then-a-minute rule is one rule wherever the
+ * password is checked, and a stolen laptop is no cheaper to guess at.
+ *
+ * A REFUSAL THAT IS NOT A WRONG PASSWORD IS NOT REPORTED AS ONE. A dead
+ * socket, a rate limit, a ladder — none of them is the owner getting it
+ * wrong, and "Not it. 4 tries left" would send them to change what they are
+ * typing. Those come back as `unproven`, carrying the registry's own reason
+ * for the screen to say.
+ */
+async function firstUnlock(deps: AccountIpcDeps, password: string): Promise<UnlockAnswer> {
+  const local = deps.lock.unlock(password)
+  // `ok` is unreachable while there is no verifier, and is passed through
+  // rather than asserted away: if that ever changes, the lock has opened and
+  // this must not be the code that argues about it.
+  if (local.ok || local.reason === 'paused') return local
+  const proven = await deps.accounts.resume(password)
+  if (proven.ok) {
+    deps.lock.proven()
+    return { ok: true, sessionRenewed: true }
+  }
+  if (proven.reason === 'bad_credentials' || proven.reason === 'session-expired') return local
+  return {
+    ok: false,
+    reason: 'unproven',
+    refusal: proven.reason,
+    ...(proven.ok === false && 'message' in proven && proven.message
+      ? { message: proven.message }
+      : {}),
+  }
+}
+
+/**
+ * JOIN THIS MAC TO AN ACCOUNT WITH A CODE (v3, D8).
+ *
+ * Same wrapper as `signIn`: a landed session is the same work to unblock —
+ * the lock proven, the approvals listening, the desktop filed with its
+ * reach card — and the renderer is answered with the STATUS, never the file,
+ * which holds a private key.
+ */
+async function join(deps: AccountIpcDeps, input: unknown): Promise<AccountResult<AccountStatus>> {
+  const fields = asRecord(input)
+  const name = fields.name === undefined ? undefined : asString(fields.name)
+  const result = await deps.accounts.join({
+    code: asString(fields.code),
+    ...(name ? { name } : {}),
+  })
+  return result.ok ? { ok: true, value: signedIn(deps) } : result
 }
 
 /**
@@ -290,6 +419,30 @@ async function resume(
   password: string,
 ): Promise<SignInAnswer<AccountStatus>> {
   const result = await deps.accounts.resume(password)
+  return result.ok ? { ok: true, value: signedIn(deps) } : result
+}
+
+/**
+ * THE SECOND MAC: sign in with the password to an account this Mac has never
+ * held (v3, D9 · D10). Same wrapper as `resume`: a landed session is the same
+ * work to unblock — lock proven, approvals listening, reach published — and
+ * a ladder is handed up as-is for the same three rungs to climb.
+ *
+ * Shape is checked here and nothing more: an empty name is refused without a
+ * socket, but the password is not measured — it is an existing account's,
+ * and only cookrew.dev knows whether it is right.
+ */
+async function signIn(
+  deps: AccountIpcDeps,
+  input: unknown,
+): Promise<SignInAnswer<AccountStatus>> {
+  const fields = asRecord(input)
+  const name = fields.name === undefined ? undefined : asString(fields.name)
+  const result = await deps.accounts.signIn({
+    username: asString(fields.username),
+    password: asString(fields.password),
+    ...(name ? { name } : {}),
+  })
   return result.ok ? { ok: true, value: signedIn(deps) } : result
 }
 
@@ -343,11 +496,54 @@ async function resumeWait(
  * as one signed in with a password alone — which is the failure that started
  * this: an owner who got past the ladder would still have had a dark Mac.
  */
+/**
+ * REVOKE ANOTHER DEVICE — behind the password (v3, D12).
+ *
+ * The registry does not ask for the password on the DELETE; this Mac does,
+ * because a revoke is the one thing on the Devices tab that acts on somebody
+ * else's key, and a sheet left open on an unlocked Mac must not be enough to
+ * do it. The step-up is the same `resume` sign-out uses, so the two verbs on
+ * the tab cost the same proof.
+ */
+async function revoke(deps: AccountIpcDeps, input: unknown): Promise<AccountResult<void>> {
+  const record = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>
+  const deviceId = asString(record.deviceId)
+  if (deviceId.length === 0) return { ok: false, reason: 'bad_device' }
+  const password = asString(record.password)
+  const proven = await deps.accounts.stepUp(password)
+  if (!proven.ok) return proven
+  // The same password, carried to the registry with the act. The step-up above
+  // stays: it fails early, in the sheet's own words, and it is what makes the
+  // fresh session the act is then made under.
+  return deps.accounts.revokeDevice(deviceId, password)
+}
+
+/**
+ * SIGN OUT ON THIS MAC (v3, D12). The account class does the ordered part —
+ * password, registry, file — and this does what main owns afterwards: the
+ * request queue stops polling (there is no session to poll with), the doors
+ * come down, and the status handed back is the one an empty avatar draws.
+ */
+async function signOut(deps: AccountIpcDeps, password: string): Promise<AccountResult<AccountStatus>> {
+  const result = await deps.accounts.signOutThisMac(password)
+  if (!result.ok) return result
+  deps.requests.stop()
+  try {
+    await deps.signedOut?.()
+  } catch (error) {
+    // The account is already gone from this Mac and from the registry; a door
+    // that would not come down is logged, not turned into a refusal of a
+    // sign-out that has already happened.
+    console.error('after sign-out:', error)
+  }
+  return { ok: true, value: accountStatus(deps) }
+}
+
 function signedIn(deps: AccountIpcDeps): AccountStatus {
   // cookrew.dev has just asked for the password and, where the account wants
   // one, a second factor. That is more than the idle lock asks for.
   deps.lock.proven()
-  deps.approvals.start()
+  deps.requests.start()
   // The reach publisher refreshes the canvas link and files the desktop with
   // its addresses; without one wired, the plain registration still happens so
   // the Workspaces tab is not empty until the next boot.
@@ -383,7 +579,7 @@ async function claim(deps: AccountIpcDeps, input: unknown): Promise<AccountResul
   // account is already on disk, so a Mac that claims its name while running
   // never heard the first device ask to sign in — the phone waited out its
   // whole expiry against a badge that could not appear until a restart.
-  deps.approvals.start()
+  deps.requests.start()
   return { ok: true, value: accountStatus(deps) }
 }
 
@@ -410,7 +606,7 @@ async function migrate(
   if (!result.ok) return result
   deps.lock.setLockAfterMs(result.value.lockAfterMs)
   void deps.accounts.registerDesktop(deps.workspaces()).catch(() => undefined)
-  deps.approvals.start()
+  deps.requests.start()
   return { ok: true, value: accountStatus(deps) }
 }
 
@@ -504,6 +700,12 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     'account:lock': () => settled(deps, 'This Mac could not be locked', () => deps.lock.lock()),
     'account:unlock': (password: unknown) => unlock(deps, asString(password)),
     'account:resume': (password: unknown) => resume(deps, asString(password)),
+    'account:signIn': (input: unknown) => signIn(deps, input),
+    'account:join': (input: unknown) => join(deps, input),
+    // The minting side (D12). The password rides the call because the
+    // registry asks for it again on this route; it is spent at once and
+    // nothing here keeps it.
+    'account:joinCode': (current: unknown) => deps.accounts.mintJoinCode(asString(current)),
     'account:resumeCode': (input: unknown) => resumeCode(deps, input),
     'account:resumeAsk': (pending: unknown): Promise<AccountResult<ApprovalAsked>> =>
       deps.accounts.resumeAsk(asString(pending)),
@@ -520,8 +722,9 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     },
     'account:devices': (): Promise<AccountResult<readonly AccountDevice[]>> =>
       deps.accounts.devices(),
-    'account:revoke': (id: unknown): Promise<AccountResult<void>> =>
-      deps.accounts.revokeDevice(asString(id)),
+    'account:revoke': (input: unknown): Promise<AccountResult<void>> => revoke(deps, input),
+    'account:signOut': (password: unknown): Promise<AccountResult<AccountStatus>> =>
+      signOut(deps, asString(password)),
     'account:recoveryCodes': (): Promise<AccountResult<readonly string[]>> =>
       attempt('New recovery codes could not be made', () => deps.accounts.recoveryCodes()),
     /**
@@ -585,15 +788,41 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     // The list is the POLL'S list, not a fresh call: the queue is refreshed on
     // a timer and on window focus, so a sheet that opened a socket of its own
     // would just be a third clock disagreeing with the other two.
-    'account:approvals': (): readonly ApprovalRequest[] => deps.approvals.list(),
-    // A DECISION ANSWERS WITH THE STATUS, so the badge is right the instant
-    // the button is released — the alternative is a card that vanishes while
-    // the avatar still wears a 1 until the next poll.
-    'account:decide': async (input: unknown): Promise<AccountResult<AccountStatus>> => {
+    /**
+     * THE DEVICES WAITING TO JOIN, in the shape the lock screen reads (D13).
+     * A seat request is not a device at the door, so it has no name worth
+     * showing from under a lock — the queue's own channel is next door.
+     */
+    'account:approvals': (): readonly ApprovalRequest[] => deps.requests.joinRequests(),
+    /**
+     * THE ONE QUEUE (D11): what is waiting and what is over. Both halves in
+     * one answer, because the card draws them as one list and two channels
+     * would be two clocks disagreeing about which rows exist.
+     *
+     * The list is the POLL'S list, not a fresh call: the queue is refreshed on
+     * a timer and on window focus.
+     */
+    'account:requests': (): { pending: readonly QueueRow[]; answered: readonly AnsweredRow[] } => ({
+      pending: deps.requests.list(),
+      answered: deps.requests.history(),
+    }),
+    /**
+     * ANSWER ONE ROW. The verb is the BUTTON's own id, so the card and main
+     * cannot disagree about what a press meant.
+     *
+     * IT ANSWERS WITH THE STATUS, so the badge is right the instant the button
+     * is released — the alternative is a row that vanishes while the avatar
+     * still wears a 1 until the next poll. A wrong number is the one refusal
+     * that carries a count, and it is passed through rather than flattened:
+     * "wrong" with no idea how much rope is left is the sentence people retype
+     * into until there is none.
+     */
+    'account:decideRequest': async (input: unknown): Promise<RequestDecided> => {
       const record = asRecord(input)
-      const decision = record.decision
-      if (!isDecision(decision)) return { ok: false, reason: 'unknown' }
-      const result = await deps.approvals.decide(asString(record.id), decision)
+      const action = record.action
+      if (!isRowAction(action)) return { ok: false, reason: 'unknown' }
+      const match = typeof record.match === 'string' ? record.match : undefined
+      const result = await deps.requests.decide(asString(record.id), action, match)
       if (!result.ok) return result
       return { ok: true, value: accountStatus(deps) }
     },

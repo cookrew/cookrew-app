@@ -198,3 +198,116 @@ describe('the cached key, and the one refetch', () => {
     expect(await verifier.verify(mintCall(), 'cookrew-alpha')).toBeNull()
   })
 })
+
+/**
+ * THE REVOKED LIST HAS A SECOND READER (V3-05).
+ *
+ * `/v2/keys` publishes the revocation list for the DOORS, and the same list is
+ * the only thing that can tell this Mac a phone it admits on the LAN has been
+ * cut off at the registry. Rather than fetch it twice, the verifier hands what
+ * it already fetched to whoever is listening — which is why every case below
+ * is about WHEN the consumer hears, never about what it does with it.
+ */
+describe('the revoked list reaches a second reader', () => {
+  function source(materials: (V2KeyMaterial | null)[]): { keys: V2KeySource; calls: () => number } {
+    let n = 0
+    return {
+      keys: {
+        fetch: async () => {
+          const value = materials[Math.min(n, materials.length - 1)]
+          n += 1
+          return value
+        }
+      },
+      calls: () => n
+    }
+  }
+
+  it('tells the reader the list on a successful fetch', async () => {
+    const { material, mintCall } = keypair()
+    const told: readonly string[][] = []
+    const heard: string[][] = told as string[][]
+    const { keys } = source([{ ...material, revoked: ['gone-phone'] }])
+    const verifier = createV2CallTokenVerifier({
+      keys,
+      now: () => NOW,
+      onRevoked: (revoked) => heard.push([...revoked])
+    })
+    await verifier.verify(mintCall(), AUD)
+    expect(heard).toEqual([['gone-phone']])
+  })
+
+  it('SAYS NOTHING WHEN THE FETCH FAILS — silence must never read as "revoke nobody"', async () => {
+    // A registry that cannot be reached tells this Mac nothing at all. The
+    // reader forgets phones, so being handed [] here would be handed a reason
+    // to keep every admission that a revoked phone is still using.
+    const heard: string[][] = []
+    const { keys } = source([null])
+    const verifier = createV2CallTokenVerifier({
+      keys,
+      now: () => NOW,
+      onRevoked: (revoked) => heard.push([...revoked])
+    })
+    await verifier.verify('not-a-token', AUD)
+    expect(heard).toEqual([])
+  })
+
+  it('does not repeat itself while the cached answer is still good', async () => {
+    const { material, mintCall } = keypair()
+    const heard: string[][] = []
+    const { keys } = source([{ ...material, revoked: ['gone-phone'] }])
+    const verifier = createV2CallTokenVerifier({
+      keys,
+      now: () => NOW,
+      onRevoked: (revoked) => heard.push([...revoked])
+    })
+    await verifier.verify(mintCall(), AUD)
+    await verifier.verify(mintCall(), AUD)
+    expect(heard).toHaveLength(1)
+  })
+
+  it('refresh() asks now, whatever the cache says, and answers whether it got an answer', async () => {
+    const { material } = keypair()
+    const heard: string[][] = []
+    const { keys, calls } = source([
+      { ...material, revoked: [] },
+      { ...material, revoked: ['gone-phone'] }
+    ])
+    const verifier = createV2CallTokenVerifier({
+      keys,
+      now: () => NOW,
+      onRevoked: (revoked) => heard.push([...revoked])
+    })
+    expect(await verifier.refresh()).toBe(true)
+    expect(await verifier.refresh()).toBe(true)
+    expect(calls()).toBe(2)
+    expect(heard).toEqual([[], ['gone-phone']])
+  })
+
+  it('refresh() answers false when the registry cannot be reached, and tells nobody', async () => {
+    const heard: string[][] = []
+    const { keys } = source([null])
+    const verifier = createV2CallTokenVerifier({
+      keys,
+      now: () => NOW,
+      onRevoked: (revoked) => heard.push([...revoked])
+    })
+    expect(await verifier.refresh()).toBe(false)
+    expect(heard).toEqual([])
+  })
+
+  it('a reader that throws does not take the door down with it', async () => {
+    // The door's job is to answer the caller in front of it. A consumer that
+    // cannot write its own file is its own problem.
+    const { material, mintCall } = keypair()
+    const { keys } = source([material])
+    const verifier = createV2CallTokenVerifier({
+      keys,
+      now: () => NOW,
+      onRevoked: () => {
+        throw new Error('the admitted file would not take the change')
+      }
+    })
+    expect(await verifier.verify(mintCall(), AUD)).not.toBeNull()
+  })
+})

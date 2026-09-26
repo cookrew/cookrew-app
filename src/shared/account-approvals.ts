@@ -102,35 +102,12 @@ export function startedAgo(elapsedMs: number): string {
   return plural(Math.round(minutes / 60), 'hour')
 }
 
-/** "Chrome on macOS in Sydney wants to sign in as @drej." */
-export function approvalLead(request: ApprovalRequest, username: string): string {
-  return `${request.deviceName} wants to sign in as @${username}.`
-}
-
 /**
- * "Started 12 seconds ago · 203.0.113.9 · no second factor on the account yet."
+ * THE D6 SENTENCE BUILDERS ARE GONE WITH D6's CARD.
  *
- * The third clause is dropped, not reworded, when the account HAS a factor:
- * the design only writes the no-factor case, and inventing a reassuring
- * sentence for the other one would be putting words in the owner's mouth on
- * the screen where being exactly right matters most.
+ * D11 replaced the pinned approval card with the one queue, and a queue row
+ * reads its lead from the copy table rather than from a builder here
+ * (shared/account-requests.ts). `startedAgo` stayed: every row in that queue
+ * still ends with how long it has been asking, and the units a person reads
+ * them in were the one thing worth keeping.
  */
-export function approvalDetail(
-  request: ApprovalRequest,
-  input: { hasSecondFactor: boolean; now: number },
-): string {
-  const clauses = [
-    `Started ${startedAgo(input.now - request.at)} ago`,
-    request.address,
-    ...(input.hasSecondFactor ? [] : [APPROVAL_COPY.NO_FACTOR]),
-  ]
-  return `${clauses.join(' · ')}.`
-}
-
-/** The whole D6 sentence on one line — the notification's body. */
-export function approvalSentence(
-  request: ApprovalRequest,
-  input: { username: string; hasSecondFactor: boolean; now: number },
-): string {
-  return `${approvalLead(request, input.username)} ${approvalDetail(request, input)}`
-}

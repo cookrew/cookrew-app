@@ -209,6 +209,9 @@ export class RelayCaller {
     const frame = decodeFrame(raw)
     if (!frame || frame.t === 'ready' || frame.t === 'open' || frame.t === 'body') return
     if (frame.t === 'ping' || frame.t === 'pong') return
+    // `superseded` is said to a DOOR losing its name; a caller has no name to
+    // lose, so one arriving here belongs to no exchange and is not routed.
+    if (frame.t === 'superseded') return
     const entry = this.pending.get(frame.id)
     if (!entry) return
 

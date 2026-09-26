@@ -11,6 +11,7 @@ import {
   summaryLooksGood,
   tagsLookGood
 } from '../../shared/served-face-shape'
+import { doorHeldSentence, type DoorHolder } from '../../shared/door-ownership'
 
 /**
  * SHARE ON SAVE — the one publish entry (owner ruling, 2026-08-26).
@@ -102,6 +103,40 @@ export function serveRefusalText(reason: string | undefined): string {
   return reason
 }
 
+/**
+ * WHAT THE OWNER DECIDED ABOUT A NAME ANOTHER MAC HOLDS (D14 · held).
+ *
+ * `keep` is the default and the only one that publishes nothing here: the
+ * other Mac goes on serving and this save stays private, which is the answer
+ * that cannot cost anybody a door by being picked without reading.
+ */
+export type HeldChoice = 'keep' | 'take-over' | 'rename'
+
+/** What the owner's answer to a held name means for the button. */
+export type HeldVerdict = 'clear' | 'save-only' | 'rename-first'
+
+/**
+ * WHAT HAPPENS WHEN SAVE IS PRESSED, given a name another Mac holds.
+ *
+ * A conflict is not a refusal; it is a question with three ordinary answers.
+ *
+ *   TAKE OVER HERE → `clear`. The save serves, the relay moves the name, and
+ *     the other Mac is told. The URL is unchanged either way — it points at
+ *     the holder, the way a number points at whichever handset has the SIM.
+ *   KEEP THEIRS → `save-only`. The team is saved and NOTHING is published:
+ *     starting to serve is exactly what the owner just declined, and doing it
+ *     anyway is the quiet-consequence bug this sheet exists to avoid.
+ *   RENAME → `rename-first`. The save waits for a different name, because
+ *     "rename" with the name unchanged would be a takeover nobody asked for.
+ *     Refused HERE, at the moment of the act, beside the sentence saying why.
+ */
+export function heldVerdict(held: DoorHolder | null, choice: HeldChoice): HeldVerdict {
+  if (held === null) return 'clear'
+  if (choice === 'keep') return 'save-only'
+  if (choice === 'rename') return 'rename-first'
+  return 'clear'
+}
+
 export function ShareOnSave({
   access,
   priceUsd,
@@ -109,6 +144,10 @@ export function ShareOnSave({
   door,
   summary,
   tagsRaw,
+  team,
+  held,
+  heldChoice,
+  onHeldChoice,
   onAccess,
   onPrice,
   onSummary,
@@ -129,6 +168,18 @@ export function ShareOnSave({
    * exist.
    */
   door: string | null
+  /** The url-safe name this save will publish under — `@handle/<team>`. */
+  team: string
+  /**
+   * ANOTHER MAC OF THIS ACCOUNT ALREADY HOLDS THAT NAME, or null.
+   *
+   * Asked and answered HERE, at the moment of the act, rather than at the dial
+   * — the relay's refusal is correct and completely silent, so the team saved,
+   * the door never opened, and nobody was told why (relay-hub.ts, `name-taken`).
+   */
+  held: DoorHolder | null
+  heldChoice: HeldChoice
+  onHeldChoice: (next: HeldChoice) => void
   onAccess: (next: ShareAccess) => void
   onPrice: (next: string) => void
   onSummary: (next: string) => void
@@ -237,6 +288,53 @@ export function ShareOnSave({
               up to {TAGS_MAX} tags — lowercase letters, digits and dashes, each once
             </span>
           )}
+        </div>
+      )}
+
+      {/*
+        A NAME ANOTHER MAC ALREADY HOLDS (D14 · held).
+        Above the door fact and the refusal, because it is the thing that
+        decides what this save does: which of the two machines answers the URL
+        the owner already handed out. All three answers are ordinary — nothing
+        here is disabled, and the URL @handle/team is unchanged whichever is
+        pressed. It points at the holder, the way a number points at the SIM.
+      */}
+      {access !== 'just-me' && held !== null && (
+        <div className="sos-held" role="alert">
+          <span className="sos-held-s">{doorHeldSentence(team, held)}</span>
+          <div className="sos-held-row">
+            <button
+              type="button"
+              className={`sos-held-b${heldChoice === 'take-over' ? ' sel' : ''}`}
+              aria-pressed={heldChoice === 'take-over'}
+              onClick={() => onHeldChoice('take-over')}
+            >
+              TAKE OVER HERE
+            </button>
+            <button
+              type="button"
+              className={`sos-held-b${heldChoice === 'rename' ? ' sel' : ''}`}
+              aria-pressed={heldChoice === 'rename'}
+              onClick={() => onHeldChoice('rename')}
+            >
+              RENAME
+            </button>
+            <button
+              type="button"
+              className={`sos-held-b${heldChoice === 'keep' ? ' sel' : ''}`}
+              aria-pressed={heldChoice === 'keep'}
+              onClick={() => onHeldChoice('keep')}
+            >
+              KEEP THEIRS
+            </button>
+          </div>
+          <span className="sos-held-n">
+            {heldChoice === 'take-over'
+              ? `${held.name} stops serving it and is told. The link does not change.`
+              : heldChoice === 'rename'
+                ? 'Give the team another name above, and both doors stay open.'
+                : `${held.name} goes on serving it. This save stays on this Mac.`}
+          </span>
         </div>
       )}
 

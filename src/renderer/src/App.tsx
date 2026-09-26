@@ -1,4 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { requestJoin } from './account/open-request'
 import {
   Background,
   BackgroundVariant,
@@ -72,6 +73,7 @@ import { ReauthOverlay } from './ReauthOverlay'
 import { snapCardChanges, MOUSE_SNAP_PX, TOUCH_SNAP_PX, SnapGuide } from './card-snap'
 import { SnapGuides } from './SnapGuides'
 import { EventToastLayer } from './EventToast'
+import { DoorMovedNotice } from './DoorMovedNotice'
 // Opened by a tap, never at boot: each panel is its own chunk (perf lane L7).
 const RosterPanel = lazy(() => import('./RosterPanel').then((m) => ({ default: m.RosterPanel })))
 const MetricsPanel = lazy(() => import('./MetricsPanel').then((m) => ({ default: m.MetricsPanel })))
@@ -499,6 +501,14 @@ function Canvas(): React.JSX.Element {
           // the app does have is the import sheet, so the link opens that.
           setImportPrefill(null)
           setImportServedOpen(true)
+          return
+        }
+        if (link.verb === 'join') {
+          // D8: the account surface owns the card that spends a code. It is
+          // asked rather than rendered here, because the bridge holds one
+          // deep-link subscriber and this component is it.
+          requestJoin(link.code)
+          return
         }
         // 'serve' would open the share sheet for a saved template; that sheet
         // exists only on a selection today, so the link is set aside.
@@ -1550,6 +1560,8 @@ function Canvas(): React.JSX.Element {
           />
         )}
         <EventToastLayer />
+        {/* D14 · a door this Mac was serving moved to another of the account's. */}
+        <DoorMovedNotice />
         <SousPill listening={ptt.listening} partial={ptt.partial} reply={sousReply} />
         {/* Identity: the sheets and the lock. Mounted here, after everything
             else, so the lock screen is drawn over the canvas it covers. */}

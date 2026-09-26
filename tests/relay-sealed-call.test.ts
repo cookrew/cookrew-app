@@ -110,7 +110,8 @@ function wire(
         )
         return
       }
-      if (frame.t !== 'ready' && frame.t !== 'ping' && frame.t !== 'pong') hub.fromCaller(frame.id, callerAtHub, data)
+      if (frame.t === 'ready' || frame.t === 'ping' || frame.t === 'pong' || frame.t === 'superseded') return
+      hub.fromCaller(frame.id, callerAtHub, data)
     },
     close: () => callerClosed.forEach((c) => c()),
     onMessage: (listener) => toCaller.push(listener),

@@ -3,9 +3,9 @@
  *
  * The rail model (shared/gate-walk.ts) says WHICH band each step paints; this
  * says WHAT it reads, entirely from the deck (shared/marketplace-copy.ts). It is
- * pure and door-aware, and the R31 wall lives in the door split: the install
- * door's identify band reads account strings, the call door's reads ceremony
- * strings, and because a sheet is one door they can never appear together.
+ * pure and door-aware: the install door's identify band reads account strings
+ * (the one identify sentence, V3-07), the DIRECT door's reads the key sentence
+ * (G3), and because a sheet is one door they can never appear together.
  *
  * A `now` step shows its prompt; a `done` step shows its collapsed receipt. That
  * distinction is the whole reason the sheet gets shorter as you succeed.
@@ -13,14 +13,19 @@
 
 import {
   MKT_AUTH,
-  MKT_ENROL,
   MKT_GATE,
   MKT_PAY,
   denialCopy,
   fillCopy,
+  headlineAndWhy,
   purchaseModelLine
 } from '../../shared/marketplace-copy'
-import { CREDIT_DENIAL, type GateDoor, type WalkPricing } from '../../shared/gate-walk'
+import {
+  CREDIT_DENIAL,
+  SEAT_DENIAL,
+  type GateDoor,
+  type WalkPricing
+} from '../../shared/gate-walk'
 
 /** What a gate-band renders: a glyph, the headline, and its one-line why. */
 export interface BandCopy {
@@ -34,24 +39,23 @@ export interface DeniedCopy extends BandCopy {
   action: string
 }
 
+/** The direct sentence is one cell; the band draws it as headline and why. */
+const DIRECT = headlineAndWhy(MKT_AUTH['mkt.auth.direct'])
+
 /**
  * The identity band. `done` collapses to the receipt; otherwise it is the
  * prompt. Each door reads only its own vocabulary — the account door never
- * shows the ceremony, the ceremony never shows the account.
+ * speaks of this Mac's key, the direct door never of an account.
  */
 export function identifyBand(door: GateDoor, done: boolean): BandCopy {
-  if (door === 'call') {
+  if (door === 'direct') {
     return done
       ? {
           glyph: '✓',
-          said: MKT_GATE['mkt.gate.identify.call.done'],
-          why: MKT_GATE['mkt.gate.identify.call.why']
+          said: MKT_GATE['mkt.gate.identify.direct.done'],
+          why: MKT_GATE['mkt.gate.identify.direct.why']
         }
-      : {
-          glyph: '🔑',
-          said: MKT_ENROL['mkt.enrol.title'],
-          why: MKT_ENROL['mkt.enrol.channel']
-        }
+      : { glyph: '⇄', said: DIRECT.title, why: DIRECT.body }
   }
   return done
     ? {
@@ -62,13 +66,35 @@ export function identifyBand(door: GateDoor, done: boolean): BandCopy {
     : {
         glyph: '🔑',
         said: MKT_AUTH['mkt.auth.title'],
-        why: MKT_AUTH['mkt.auth.method']
+        why: MKT_AUTH['mkt.auth.body']
       }
 }
 
 /**
- * The payment band. Only the install door ever reaches it. The why is THE
- * sentence — where the money lands and that Cookrew takes none of it.
+ * The seat band — the registry's rung, install door only. `done` is the
+ * receipt; `now` is the door's own no_seat sentence, which names the person
+ * refused and the person who can say yes, with BUY as its one action (cut 1).
+ */
+export function seatBand(
+  done: boolean,
+  vars: Readonly<Record<string, string | number>> = {}
+): DeniedCopy {
+  if (done) {
+    return {
+      glyph: '✓',
+      said: MKT_GATE['mkt.gate.seat.done'],
+      why: MKT_GATE['mkt.gate.seat.why'],
+      action: ''
+    }
+  }
+  const { title, body, action } = denialCopy(SEAT_DENIAL, undefined, vars)
+  return { glyph: '◔', said: title, why: body, action }
+}
+
+/**
+ * The payment band. Both doors can reach it — a dialled paid door charges
+ * too. The why is THE sentence — where the money lands and that Cookrew takes
+ * none of it.
  */
 export function payBand(pricing: WalkPricing): BandCopy {
   const priceLike = {
@@ -85,11 +111,11 @@ export function payBand(pricing: WalkPricing): BandCopy {
 
 /** The served band. Door decides whether it speaks of a canvas or a line. */
 export function openBand(door: GateDoor): BandCopy {
-  return door === 'call'
+  return door === 'direct'
     ? {
         glyph: '▶',
-        said: MKT_GATE['mkt.gate.open.call.title'],
-        why: MKT_GATE['mkt.gate.open.call.why']
+        said: MKT_GATE['mkt.gate.open.direct.title'],
+        why: MKT_GATE['mkt.gate.open.direct.why']
       }
     : {
         glyph: '▶',

@@ -47,6 +47,9 @@ describe('GET /api/hello over the wire', () => {
     registryOrigin: () => REGISTRY,
     admitted: createAdmittedDeviceStore({ base: temp.base }),
     now: () => NOW,
+    // /api/hello spends no admissions; the dep is required so the one
+    // route that does cannot inherit an absent ceiling.
+    admitLimiter: { take: () => true },
     ...over
   })
   beforeEach(() => (temp = tempBase()))
@@ -201,7 +204,10 @@ describe('a ?open= link is not a ceremony any more', () => {
     account: () => account,
     registryOrigin: () => REGISTRY,
     admitted: createAdmittedDeviceStore({ base: temp.base, now: () => NOW }),
-    now: () => NOW
+    now: () => NOW,
+    // /api/hello spends no admissions; the dep is required so the one
+    // route that does cannot inherit an absent ceiling.
+    admitLimiter: { take: () => true },
   })
 
   beforeEach(() => (temp = tempBase()))

@@ -44,6 +44,29 @@ export interface HubDoor {
   socket: HubSocket
   /** Caller streams currently riding this door. */
   streams: Set<StreamId>
+  /**
+   * WHO IS HOLDING IT, as an opaque tag chosen by whoever called `openDoor`.
+   *
+   * The hub does not know what it means and never compares it to a credential
+   * — that would make this a second gate with its own rules, which is the one
+   * thing this class may not become. It exists so the caller, which DOES know,
+   * can ask "is the machine holding this name the same one asking?" before it
+   * decides whether to supersede.
+   */
+  holder?: string
+}
+
+/** Told to the hub by the side that knows who is asking. See `openDoor`. */
+export interface Supersede {
+  /**
+   * The replacing machine's name, as the frame carries it to the old door —
+   * or NULL when the same machine is reclaiming its own name after a drop.
+   *
+   * The distinction is the difference between a fact and a lie on somebody's
+   * screen. A move must say "alpha moved to Mac Studio"; a laptop whose wifi
+   * came back must say nothing at all, because nothing moved.
+   */
+  by: string | null
 }
 
 /**
@@ -87,6 +110,11 @@ export class RelayHub {
     private readonly accepts: (name: string) => boolean = isDoorName
   ) {}
 
+  /** The opaque tag the current holder of this name was opened with. */
+  holderOf(name: string): string | null {
+    return this.doors.get(name)?.holder ?? null
+  }
+
   /**
    * A door arrives and claims its name.
    *
@@ -95,11 +123,45 @@ export class RelayHub {
    * traffic meant for it. The rightful owner reconnecting after a drop is the
    * same shape as that theft, so the door must drop its old connection first —
    * and it does, since a laptop that lost the line has no old connection.
+   *
+   * THAT REFUSAL IS STILL THE DEFAULT, and `supersede` is the one way past it
+   * (V3-18). Two Macs of one account cloned from the same repo save the same
+   * team and derive the same slug, so the second one met `name-taken` and
+   * simply never opened — right on security, silent as a product. The caller
+   * decides whether this claim may replace the one holding the name, because
+   * the caller is where identity is known; the hub only carries it out, which
+   * keeps every question of who-may-serve on the other side of this file.
+   *
+   * WHAT REPLACING COSTS, and why it is spelled out rather than implied: the
+   * old door is TOLD (`superseded`), its callers are aborted rather than left
+   * hanging on a socket about to close, and only then is the name rebound. A
+   * takeover that skipped the frame would leave the replaced machine unable to
+   * tell this from a dropped network — so it would redial, and two Macs would
+   * take the name from each other for ever.
    */
-  openDoor(name: string, socket: HubSocket): { ok: true; door: HubDoor } | { ok: false; reason: HubRefusal } {
+  openDoor(
+    name: string,
+    socket: HubSocket,
+    options: { holder?: string; supersede?: Supersede } = {}
+  ): { ok: true; door: HubDoor } | { ok: false; reason: HubRefusal } {
     if (!this.accepts(name)) return { ok: false, reason: 'bad-name' }
-    if (this.doors.has(name)) return { ok: false, reason: 'name-taken' }
-    const door: HubDoor = { name, socket, streams: new Set() }
+    const held = this.doors.get(name)
+    if (held !== undefined) {
+      if (options.supersede === undefined) return { ok: false, reason: 'name-taken' }
+      // Said before anything is torn down: after the close there is no line
+      // left to say it on, and this sentence is the whole reason the replaced
+      // machine stops instead of fighting for the name.
+      const { by } = options.supersede
+      if (by !== null) held.socket.send(encodeFrame({ t: 'superseded', by }))
+      this.closeDoor(name)
+      held.socket.close()
+    }
+    const door: HubDoor = {
+      name,
+      socket,
+      streams: new Set(),
+      ...(options.holder === undefined ? {} : { holder: options.holder })
+    }
     this.doors.set(name, door)
     socket.send(encodeFrame({ t: 'ready', name }))
     return { ok: true, door }
@@ -179,7 +241,19 @@ export class RelayHub {
   /** A frame from the DOOR, forwarded to the one caller waiting on that id. */
   fromDoor(name: string, raw: string): void {
     const frame = decodeFrame(raw)
-    if (!frame || frame.t === 'ready' || frame.t === 'open' || frame.t === 'ping' || frame.t === 'pong') return
+    // `superseded` joins the frames that belong to the door itself rather than
+    // to any stream: it is something the RELAY says, so a door sending one
+    // back up is not routed anywhere.
+    if (
+      !frame ||
+      frame.t === 'ready' ||
+      frame.t === 'open' ||
+      frame.t === 'ping' ||
+      frame.t === 'pong' ||
+      frame.t === 'superseded'
+    ) {
+      return
+    }
     const entry = this.callers.get(frame.id)
     // A door answering a stream it was never given is not routed anywhere.
     if (!entry || entry.door !== name) return

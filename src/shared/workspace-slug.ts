@@ -10,6 +10,13 @@
  *
  * Names are user text, so nothing here may throw: every input yields SOME
  * usable path segment, including one made entirely of emoji.
+ *
+ * SHARED RATHER THAN main's (V3-18). The save sheet has to know the slug a
+ * team will publish under BEFORE it is saved, to ask whether another Mac of
+ * the account already holds that door name. A second copy of this function in
+ * the renderer would be a second answer to "what will this be called", and the
+ * disagreement would show up as a warning about the wrong name — or none at
+ * all. Nothing here touches the filesystem, so the move costs nothing.
  */
 
 /** Longest slug we mint. Long enough to stay readable, short enough to type. */

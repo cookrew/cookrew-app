@@ -1,3 +1,4 @@
+import { V3_COPY, accountCopy } from '../../shared/account-copy'
 // Pairing credential + what happens when it stops working.
 //
 // THE FAILURE THIS REPLACES
@@ -131,9 +132,28 @@ export function tokenFromInput(raw: string): string | null {
  */
 export const REAUTH_COPY = {
   title: 'Not paired',
+  /**
+   * V3-07. The account-less Mac still pairs by QR — `unpaired` below is kept
+   * verbatim for exactly that Mac. What is new is the OTHER reason this card
+   * appears: a Mac whose account lives on another device, which does not want
+   * a QR at all, it wants to prove it is you (D10).
+   */
+  /** A FUNCTION, not a constant: this sentence names the account, and a
+   *  template rendered raw would put "@{handle}" on screen. */
+  joinLede: (handle: string): string => accountCopy('d10.join.lede', { handle }),
+  joinAsked: V3_COPY['d10.asked'],
+  joinWhere: V3_COPY['d10.asked.honest'],
+  joinMismatch: V3_COPY['d10.mismatch'],
   readOnlyTitle: 'Read-only device',
-  unpaired:
-    "Scan the QR on the Mac's avatar → Pair a phone, or paste what `cookrew mobile` printed.",
+  /**
+   * M5. The QR and the paste stay — an account-less Mac has no other way to
+   * let a phone in, and this card is still the only pairing surface. What is
+   * added is the door that did not exist when this sentence was written: a Mac
+   * on an account is asked with one tap on /me and answered on the Mac, so the
+   * reader is pointed there FIRST and at the old ceremony only if that is not
+   * their situation.
+   */
+  unpaired: V3_COPY['m5.unpaired'],
   readOnly:
     'This device is paired read-only. Open the pairing URL from the desktop to make changes.',
   label: 'Pairing URL or token',

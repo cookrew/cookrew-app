@@ -5,11 +5,15 @@ import { SESSION_TTL_MS, V2Tokens, type V2Claims } from './v2-tokens'
 import { Limiter, callerAddress } from './v2-limiter'
 import { passwordGate } from './v2-hash-gate'
 import { createFactorState, type FactorState } from './v2-factor-state'
+import { JoinCodes } from './v2-join-codes'
+import { createRenewNonces, type RenewNonces } from './v2-renew'
 import { v2Error, type V2Error } from './v2-copy'
 import type { LegacyIdentity } from './v2-migrate-routes'
 import type { DoorRecord } from './doors'
 import type { NamesFeature } from './names'
 import { createHelloBurn, helloBurnTtlMs, type HelloBurn } from './hello-nonces'
+import { V2Requests } from './v2-requests'
+import { V2Events } from './v2-events'
 import { HELLO_SKEW_MS } from './hello-verify'
 
 /**
@@ -66,7 +70,28 @@ export interface V2Identity {
   seats: V2Seats
   /** Per-IP on claiming, per username+IP on signing in. The contract's numbers. */
   /** Per-IP on claiming, per username+IP on signing in, loose on lookups. */
-  limits: { accounts: Limiter; sessions: Limiter; lookups: Limiter; hello: Limiter }
+  limits: {
+    accounts: Limiter
+    sessions: Limiter
+    lookups: Limiter
+    hello: Limiter
+    /** Redeeming a join code, per address. */
+    join: Limiter
+    /** Minting one, per account — an hour's window, not a minute's. */
+    joinCodes: Limiter
+    /** Renewing a session, per DEVICE — see v2-renew for why not per address. */
+    renew: Limiter
+    /**
+     * Asking for a seat, per ACCOUNT; asking to reach a Mac, per DEVICE. One
+     * bucket, two keys — both write to a bounded account:changed feed, and a
+     * route that can be asked without bound is a way to flush it (H5).
+     */
+    requests: Limiter
+  }
+  /** Nonces handed out for a renewal signature: single-use, two minutes. */
+  renewNonces: RenewNonces
+  /** Live join codes: one per account, ten minutes, in memory. */
+  joinCodes: JoinCodes
   /**
    * Hello nonces already spent. In memory and only for the freshness window —
    * see hello-nonces.ts for why outliving the window would protect nothing.
@@ -76,6 +101,10 @@ export interface V2Identity {
   trustedProxies: readonly string[]
   /** Phase 4: passkeys, authenticators, pending sign-ins and approvals. */
   factors: FactorState
+  /** Identity v3: the one queue — seat and reach requests over three stores. */
+  requests: V2Requests
+  /** Identity v3: account:changed, the roster's own feed. */
+  events: V2Events
   /**
    * The canonical public origin, when the deployment knows it. WebAuthn
    * compares an assertion's origin and rpId against a string; null means
@@ -92,6 +121,11 @@ export interface V2Options {
     sessionsPerMinute: number
     lookupsPerMinute?: number
     helloPerMinute?: number
+    joinPerMinute?: number
+    joinCodesPerHour?: number
+    renewPerMinute?: number
+    /** Seat and reach asks, per asker. Lowered by a test to reach the cap. */
+    requestsPerHour?: number
   }
   trustedProxies?: readonly string[]
   now?: () => number
@@ -122,11 +156,25 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
       // A light one: the /me page checks a hello per candidate address per
       // desktop; sixty a minute leaves that alone and still caps a client
       // asking the registry to verify signatures for sport.
-      hello: new Limiter(options.limits?.helloPerMinute ?? 60, 60_000, options.now)
+      hello: new Limiter(options.limits?.helloPerMinute ?? 60, 60_000, options.now),
+      join: new Limiter(options.limits?.joinPerMinute ?? 5, 60_000, options.now),
+      // AN HOUR, not a minute. Minting is a deliberate act a person does a
+      // handful of times in a life; the window that catches a device quietly
+      // keeping a supply of live codes is a long one, not a fast one.
+      joinCodes: new Limiter(options.limits?.joinCodesPerHour ?? 6, 60 * 60_000, options.now),
+      // TWENTY AN HOUR. A person asking for seats at twenty teams in one hour
+      // is not a person, and a guest who reloads a team page a few times is
+      // nowhere near it.
+      requests: new Limiter(options.limits?.requestsPerHour ?? 20, 60 * 60_000, options.now),
+      renew: new Limiter(options.limits?.renewPerMinute ?? 5, 60_000, options.now)
     },
+    joinCodes: new JoinCodes(options.now),
+    renewNonces: createRenewNonces(options.now),
     helloNonces: createHelloBurn(helloBurnTtlMs(HELLO_SKEW_MS)),
     trustedProxies: options.trustedProxies ?? [],
     factors: createFactorState(base, { now: options.now }),
+    requests: new V2Requests(options.now),
+    events: new V2Events(options.now),
     origin: options.origin ?? null
   }
 }

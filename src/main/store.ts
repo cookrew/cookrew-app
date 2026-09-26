@@ -26,7 +26,7 @@ import {
   uniqueName
 } from '../shared/model'
 import { addDir, removeDir, setPrimary } from '../shared/workspace-dirs'
-import { slugFor } from './workspace-slug'
+import { slugFor } from '../shared/workspace-slug'
 import { recordLineageIds } from './lineage-spill'
 import { lineageIdsOf } from './session-lineage'
 import type { CookrewEvent, EventActor } from './event-log'
@@ -1125,19 +1125,37 @@ export class WorkspaceStore extends EventEmitter {
 
   // ---- mutations ----
 
-  addNode(node: CanvasNode): CanvasNode {
+  /**
+   * Place a node, in a NAMED workspace rather than whichever one is on screen.
+   *
+   * The default is the focused workspace, which is right for everything the
+   * canvas itself does: a person dragging a card out means the canvas they are
+   * looking at. It is WRONG for anything acting on behalf of a node — a CLI
+   * call from an agent's terminal, most of all. The owner switched to
+   * Playground to do something else and every card an agent made from a
+   * Cookrew Dev terminal landed there, connected by an edge that reached
+   * across two workspaces; reads and writes by name then resolved to whichever
+   * copy the caller happened to find, which reads as a store that accepts a
+   * write and forgets it.
+   *
+   * So a caller that knows whose canvas it is acting on says so, and the
+   * uniqueness check, the file on disk and the event all follow the node
+   * instead of the window.
+   */
+  addNode(node: CanvasNode, workspaceId: string = this.focused): CanvasNode {
+    const state = this.stateOf(workspaceId)
     const upgraded = upgradeNode(node)
     const named: CanvasNode = {
       ...upgraded,
-      name: uniqueName(upgraded.name, this.focusedState.nodes.map((n) => n.name))
+      name: uniqueName(upgraded.name, state.nodes.map((n) => n.name))
     }
-    this.mutate({ ...this.focusedState, nodes: [...this.focusedState.nodes, named] })
-    if (named.kind === 'note') void this.persistNoteFile(named)
+    this.mutateIn(workspaceId, { ...state, nodes: [...state.nodes, named] })
+    if (named.kind === 'note') void this.persistNoteFile(named, workspaceId)
     this.emitOp(
       this.createdType(named.kind),
       named.id,
       named.name,
-      this.focused,
+      workspaceId,
       named.kind === 'terminal' ? (named as TerminalNodeData).preset : undefined
     )
     return named
@@ -1272,24 +1290,31 @@ export class WorkspaceStore extends EventEmitter {
 
   // ---- notes ----
 
-  createNote(partial: Omit<NoteNodeData, 'kind' | 'id' | 'name'>): NoteNodeData {
+  createNote(
+    partial: Omit<NoteNodeData, 'kind' | 'id' | 'name'>,
+    workspaceId: string = this.focused
+  ): NoteNodeData {
     const name = uniqueName(
       noteNameFromContent(partial.content),
-      this.focusedState.nodes.map((n) => n.name)
+      this.stateOf(workspaceId).nodes.map((n) => n.name)
     )
     const note: NoteNodeData = { kind: 'note', id: randomUUID(), name, ...partial }
-    return this.addNode(note) as NoteNodeData
+    return this.addNode(note, workspaceId) as NoteNodeData
   }
 
   /** Write note content; renames the note when it has no custom name. */
   writeNote(id: string, content: string): NoteNodeData | undefined {
     const note = this.node(id)
     if (!note || note.kind !== 'note') return undefined
+    // AGAINST ITS OWN CANVAS, not the one on screen. A note written from an
+    // agent's terminal while the owner is looking elsewhere would otherwise be
+    // renamed to avoid collisions it does not have, and keep one it does.
+    const siblings = this.stateOf(this.ownerOf(id) ?? this.focused).nodes
     const name = note.customName
       ? note.name
       : uniqueName(
           noteNameFromContent(content),
-          this.focusedState.nodes.filter((n) => n.id !== id).map((n) => n.name)
+          siblings.filter((n) => n.id !== id).map((n) => n.name)
         )
     return this.updateNode(id, { content, name }) as NoteNodeData
   }

@@ -1,9 +1,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { randomBytes } from 'node:crypto'
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { RelayCaller } from './relay-caller'
 import { reachOverHttp } from './relay-reach'
+import { cardBearerAnswer, isCardBearerRequest } from './card-bearer'
 
 /**
  * THE CALLER'S END OF THE RELAY, as a door on loopback.
@@ -15,12 +17,21 @@ import { reachOverHttp } from './relay-reach'
  * matching the other. So the card is left exactly as it is, and the relay is
  * put behind an address it already understands.
  *
- * IT ADDS NO AUTHORITY, which is the whole reason it may sit unauthenticated
- * on loopback. It holds no token and no private key: every request carries the
- * card's OWN Authorization, minted by the card's own ed25519 key in a file only
- * this user can read, and the door decides. A local process that found this
- * port would gain nothing it could not already get by reaching cookrew.dev
- * directly — the door is public; being admitted is not.
+ * THE CARRYING HALF ADDS NO AUTHORITY, which is why it needs no credential of
+ * its own: a proxied request carries the CARD's Authorization and the door
+ * decides. A local process that found this port would gain nothing it could
+ * not already get by reaching cookrew.dev directly — the door is public; being
+ * admitted is not.
+ *
+ * ONE ROUTE IS DIFFERENT AND IS GUARDED (v3-04c, card-bearer.ts). `POST
+ * /bearer` mints this account's credential for a named door, because the card
+ * cannot: minting needs the Mac's cookrew.dev session, and that session is the
+ * whole account. So that one route holds authority, and it is closed with a
+ * secret written beside the port in the same 0600 file — which is the same
+ * boundary as the rest of ~/.cookrew. A reader of that file could already read
+ * `account.json` beside it and hold the session itself, so the route grants
+ * strictly less than its own guard already costs to pass. It cannot collide
+ * with a proxied path: every door name begins with `@`.
  *
  * The plaintext leg is loopback only. Everything that leaves the machine is
  * sealed, by the same code the app uses everywhere else.
@@ -92,14 +103,65 @@ export function startRelayProxy(
      * be too.
      */
     resolve?: (name: string) => Promise<ProxiedDoor | null>
+    /**
+     * THE WHOLE SIGN-IN FOR ONE DOOR, as the app does it for its own two
+     * callers (`doorBearer`). Absent on a proxy with no account behind it,
+     * where the route answers every ask with the same refusal it gives a
+     * caller that holds no secret — there is nothing here to mint with.
+     */
+    bearer?: (door: string) => Promise<string>
+    /** Who this Mac is signed in as, so the card can say it. */
+    account?: () => string | null
   } = {}
 ): Promise<RelayProxy> {
   const log = options.log ?? ((): void => undefined)
+  /**
+   * MINTED PER RUN, not persisted. There is nothing to carry across a restart:
+   * the card re-reads this file whenever it signs in, precisely so a new port
+   * and a new secret are picked up together.
+   */
+  const secret = randomBytes(24).toString('base64url')
   const doors = new Map<string, { key: string; origin: string; caller: RelayCaller }>()
   /** Lookups in flight, so ten cards starting at once make one request. */
   const finding = new Map<string, Promise<void>>()
 
   const server = createServer((request, response) => {
+    // THE ONE ROUTE THAT IS NOT A PROXIED CALL, answered before `read` — it
+    // names no door in its path, so `read` would 404 it.
+    const method = request.method ?? 'GET'
+    const pathname = new URL(request.url ?? '/', 'http://proxy.local').pathname
+    if (isCardBearerRequest(method, pathname)) {
+      void (async () => {
+        const raw = await collect(request)
+        let parsed: unknown = null
+        try {
+          parsed = raw === null ? null : JSON.parse(raw)
+        } catch {
+          parsed = null
+        }
+        const answer = await cardBearerAnswer(
+          {
+            secret: () => (options.bearer ? secret : null),
+            bearer: options.bearer ?? (() => Promise.reject(new Error('this Mac is not serving cards'))),
+            account: options.account ?? ((): string | null => null)
+          },
+          {
+            method,
+            path: pathname,
+            ...(typeof request.headers.authorization === 'string'
+              ? { authorization: request.headers.authorization }
+              : {}),
+            ...(typeof request.headers.origin === 'string'
+              ? { origin: request.headers.origin }
+              : {}),
+            body: parsed
+          }
+        )
+        response.writeHead(answer.status, { 'content-type': 'application/json' })
+        response.end(JSON.stringify(answer.body))
+      })()
+      return
+    }
     const asked = read(request)
     if (!asked) {
       response.writeHead(404).end()
@@ -170,7 +232,7 @@ export function startRelayProxy(
       const address = server.address()
       proxy.port = typeof address === 'object' && address ? address.port : 0
       proxy.address = typeof address === 'object' && address ? address.address : ''
-      writePort(proxy.port)
+      writePort(proxy.port, options.bearer ? secret : null)
       log(`relay proxy on 127.0.0.1:${proxy.port}`)
       settle(proxy)
     })
@@ -279,10 +341,23 @@ function collect(request: IncomingMessage): Promise<string | null> {
   })
 }
 
-function writePort(port: number): void {
+/**
+ * Where the card looks, and what it finds: the port, and the secret that opens
+ * the one route with authority behind it.
+ *
+ * 0600 IS THE GUARD, and it is the same one `account.json` and the pairing
+ * token keep in this directory. `mode` on writeFileSync applies at creation
+ * only, so an existing file is chmod'd unconditionally — a file left
+ * world-readable by an older build must not go on being read.
+ */
+function writePort(port: number, secret: string | null): void {
   const file = proxyPortFile()
   mkdirSync(path.dirname(file), { recursive: true })
-  writeFileSync(file, JSON.stringify({ port }, null, 2), { mode: 0o600 })
+  writeFileSync(
+    file,
+    JSON.stringify({ port, ...(secret === null ? {} : { token: secret }) }, null, 2),
+    { mode: 0o600 }
+  )
   chmodSync(file, 0o600)
 }
 

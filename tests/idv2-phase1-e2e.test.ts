@@ -145,7 +145,7 @@ describe('phase 1 — claim, unlock, profile, devices', () => {
     expect(devices.ok).toBe(true)
     if (devices.ok) {
       const only = devices.value[0]
-      const refused = await app.revokeDevice(only.id)
+      const refused = await app.revokeDevice(only.id, PASSWORD)
       expect(refused.ok).toBe(false)
       if (!refused.ok) expect(refused.reason).toBe('last_device')
     }
@@ -181,7 +181,7 @@ describe('phase 1 — claim, unlock, profile, devices', () => {
      * prompt is phase 4's app half.
      */
     expect(signIn.status).toBe(401)
-    const asked = (await signIn.json()) as { error: string; next: string[]; pending: string }
+    const asked = (await signIn.json()) as { error: string; next: string[]; pending: string; match: string }
     expect(asked.error).toBe('second_factor')
     expect(asked.next).toEqual(['approve'])
     const request = await fetch(`${origin}/v2/sessions/${asked.pending}/approve`, { method: 'POST' })
@@ -191,7 +191,7 @@ describe('phase 1 — claim, unlock, profile, devices', () => {
     const decided = await fetch(`${origin}/v2/me/approvals/${approval}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${onFirstMac}` },
-      body: JSON.stringify({ decision: 'approve' })
+      body: JSON.stringify({ decision: 'approve', match: asked.match })
     })
     expect(decided.status).toBe(204)
     // The waiting Mac collects its own session from its own poll.
@@ -203,7 +203,7 @@ describe('phase 1 — claim, unlock, profile, devices', () => {
     // And the first Mac can revoke it, since it is no longer the last device.
     if (devices.ok) {
       const mini = devices.value.find((d) => d.name === 'Mac mini')
-      const revoked = await first.revokeDevice(mini!.id)
+      const revoked = await first.revokeDevice(mini!.id, PASSWORD)
       expect(revoked.ok).toBe(true)
     }
     rmSync(otherHome, { recursive: true, force: true })

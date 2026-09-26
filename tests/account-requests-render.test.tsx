@@ -1,16 +1,17 @@
-// THE APPROVAL CARD AND THE FACTOR LADDER, PAINTED (D6, D3).
+// THE ONE QUEUE AND THE FACTOR LADDER, PAINTED (D11, D3).
 //
-// The markup IS the picture, so the picture can be asserted: the request card
-// says the design's sentence and offers three answers with the right weight,
-// "not me" refuses to fire without a second press, and the security rows read
-// differently for an account with nothing enrolled and one with a passkey and
-// an authenticator — the two states that make a promise about how the owner
-// gets back in.
+// The markup IS the picture, so the picture can be asserted: the queue draws a
+// row per kind with the buttons that kind has, APPROVE is DEAD until the two
+// digits are typed, a finished row wears its chip and offers nothing, and the
+// security rows read differently for an account with nothing enrolled and one
+// with a passkey and an authenticator — the two states that make a promise
+// about how the owner gets back in.
 
 import { beforeEach, describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { ApprovalRequest, FactorsView } from '../src/shared/account-approvals'
-import { ApprovalCard } from '../src/renderer/src/account/ApprovalCard'
+import type { FactorsView } from '../src/shared/account-approvals'
+import type { AnsweredRow, QueueRow } from '../src/shared/account-requests'
+import { RequestsTab } from '../src/renderer/src/account/RequestsTab'
 import { FactorRows, RemoveFactorRow } from '../src/renderer/src/account/FactorRows'
 import { NewPasswordCard } from '../src/renderer/src/account/NewPasswordCard'
 import { QrCode } from '../src/renderer/src/account/QrCode'
@@ -20,7 +21,8 @@ import { TotpSheet } from '../src/renderer/src/account/TotpSheet'
 function stubBridge(): void {
   ;(globalThis as unknown as { window: Record<string, unknown> }).window = {
     cookrew: {
-      accountDecide: async () => ({ ok: true, value: {} }),
+      accountRequests: async () => ({ pending: [], answered: [] }),
+      accountDecideRequest: async () => ({ ok: true, value: {} }),
       accountFactors: async () => ({ ok: false, reason: 'offline' }),
       accountTotpEnrol: async () => ({ ok: false, reason: 'offline' }),
       accountSetPassword: async () => ({ ok: true, value: undefined }),
@@ -36,13 +38,14 @@ beforeEach(stubBridge)
 
 const NOW = 1_757_000_000_000
 
-const request = (over: Partial<ApprovalRequest> = {}): ApprovalRequest => ({
+const pending = (over: Partial<QueueRow> = {}): QueueRow => ({
   id: 'req-1',
-  deviceName: 'Chrome on macOS in Sydney',
-  kind: 'browser',
+  kind: 'join',
+  device: 'Mac Studio',
   address: '203.0.113.9',
   at: NOW - 12_000,
   expiresAt: NOW + 120_000,
+  state: 'pending',
   ...over,
 })
 
@@ -54,57 +57,99 @@ const factors = (over: Partial<FactorsView> = {}): FactorsView => ({
   ...over,
 })
 
-const card = (requests: readonly ApprovalRequest[], focusId: string | null = null): string =>
+const queue = (
+  rows: readonly QueueRow[],
+  answered: readonly AnsweredRow[] = [],
+  focusId: string | null = null,
+): string =>
   renderToStaticMarkup(
-    <ApprovalCard
-      requests={requests}
+    <RequestsTab
       username="drej"
+      refreshKey={0}
       focusId={focusId}
       onStatus={() => undefined}
+      initial={{ pending: rows, answered }}
       now={NOW}
     />,
   )
 
-describe('the approval card (D6)', () => {
-  const html = card([request()])
+describe('the one queue (D11)', () => {
+  const html = queue([
+    pending(),
+    pending({ id: 'reach-1', kind: 'reach', device: 'iPhone', askKey: { kty: 'OKP' } }),
+    pending({ id: 'seat-1', kind: 'seat', account: 'jkim', team: '@drej/alpha', device: undefined }),
+  ])
 
-  it('says the design sentence, in two lines', () => {
-    expect(html).toContain('Chrome on macOS in Sydney wants to sign in as @drej.')
-    expect(html).toContain(
-      'Started 12 seconds ago · 203.0.113.9 · no second factor on the account yet.',
-    )
+  it('draws one row per kind, each with the buttons that kind has', () => {
+    expect(html).toContain('Mac Studio wants to join @drej')
+    expect(html).toContain('iPhone wants to reach this Mac on Wi-Fi.')
+    expect(html).toContain('@jkim asks for a seat at @drej/alpha.')
+    for (const label of ['>APPROVE<', '>DENY<', '>NOT ME<', '>ALLOW<', '>NOT NOW<', '>SEAT THEM<', '>DECLINE<']) {
+      expect(html, label).toContain(label)
+    }
   })
 
-  it('offers three answers, weighted: approve, deny, and a ghost', () => {
-    expect(html).toContain('>APPROVE<')
-    expect(html).toContain('>DENY<')
-    expect(html).toContain('NOT ME — LOCK ACCOUNT')
-    expect(html.indexOf('APPROVE')).toBeLessThan(html.indexOf('NOT ME'))
-    expect(html).toMatch(/class="gs-primary"[^>]*>APPROVE/)
+  it('asks the join row for the number, and NOWHERE else', () => {
+    expect(html).toContain('What number is on that Mac?')
+    expect(html.match(/What number is on that Mac\?/g)?.length).toBe(2) // label + placeholder
+    expect(html.match(/cr-acct-match/g)).toHaveLength(1)
+  })
+
+  it('leaves APPROVE DEAD until the two digits are typed', () => {
+    // The rung is worth nothing if the button can be pressed without reading
+    // the other machine's screen, so it ships disabled and the field beside it
+    // is the reason it will not move.
+    expect(html).toMatch(/class="gs-primary"[^>]*disabled[^>]*>APPROVE/)
+    // ALLOW and SEAT THEM are one press: they need no number.
+    expect(html).toMatch(/class="gs-primary"[^>]*>ALLOW/)
+    expect(html).not.toMatch(/class="gs-primary"[^>]*disabled[^>]*>ALLOW/)
+  })
+
+  it('weights the three answers to a sign-in: approve, deny, then the alarm', () => {
+    expect(html.indexOf('APPROVE')).toBeLessThan(html.indexOf('>DENY<'))
+    expect(html.indexOf('>DENY<')).toBeLessThan(html.indexOf('>NOT ME<'))
     expect(html).toMatch(/class="gs-ghost"[^>]*>NOT ME/)
   })
 
-  it('does NOT put the consequence sentence on screen until NOT ME is pressed', () => {
-    // It has to be one press away, not one press: this signs every other
-    // device out of the account.
-    expect(html).not.toContain('Every other device signs out')
+  it('says what each button does, under the list', () => {
+    expect(html).toContain('ALLOW gives the phone this Mac')
+    expect(html).toContain('NOT ME signs every other device out')
   })
 
-  it('is nothing at all when nothing is waiting', () => {
-    expect(card([])).toBe('')
-  })
-
-  it('shows the request a notification named FIRST', () => {
-    const html2 = card(
-      [request(), request({ id: 'req-2', deviceName: 'iPhone in Tokyo' })],
-      'req-2',
+  it('draws a finished row with its chip and nothing to press', () => {
+    const over = queue(
+      [],
+      [
+        { id: 'a1', kind: 'join', outcome: 'joined', subject: 'Mac Studio', at: NOW - 120_000 },
+        { id: 'a2', kind: 'reach', outcome: 'allowed', subject: 'iPhone', at: NOW - 240_000 },
+        { id: 'a3', kind: 'seat', outcome: 'seated', subject: 'jkim', team: '@drej/alpha', at: NOW - 360_000 },
+        { id: 'a4', kind: 'join', outcome: 'denied', subject: 'iPhone', at: NOW - 600_000 },
+      ],
     )
-    expect(html2.indexOf('iPhone in Tokyo')).toBeLessThan(html2.indexOf('Chrome on macOS'))
-    expect(html2.match(/>APPROVE</g)).toHaveLength(2)
+    expect(over).toContain('Mac Studio joined @drej')
+    expect(over).toContain('>DONE<')
+    expect(over).toContain('>LAN<')
+    expect(over).toContain('>SEATED<')
+    expect(over).toContain('A sign-in as @drej was denied on iPhone')
+    expect(over).toContain('>NOT ME<')
+    // A receipt offers nothing: the moment is past.
+    expect(over).not.toContain('>APPROVE<')
+    expect(over).not.toContain('>ALLOW<')
   })
 
-  it('is a card in the sheet, never a modal over the canvas', () => {
-    expect(html).toContain('cr-acct-request')
+  it('says what would land here rather than drawing an empty box', () => {
+    const empty = queue([])
+    expect(empty).toContain('Nothing is waiting.')
+    expect(empty).not.toContain('<ul')
+  })
+
+  it('shows the row a notification named FIRST', () => {
+    const html2 = queue([pending(), pending({ id: 'req-2', device: 'iPhone' })], [], 'req-2')
+    expect(html2.indexOf('iPhone wants to join')).toBeLessThan(html2.indexOf('Mac Studio wants to join'))
+  })
+
+  it('is a tab in the sheet, never a modal over the canvas', () => {
+    expect(html).toContain('cr-acct-request-row')
     expect(html).not.toContain('gs-scrim')
     expect(html).not.toContain('aria-modal')
   })

@@ -22,7 +22,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { AccountStatus } from '../src/shared/account-v2'
 import type { FactorsView } from '../src/shared/account-approvals'
-import { ClaimSheet } from '../src/renderer/src/account/ClaimSheet'
+import { AccountSheet } from '../src/renderer/src/account/AccountSheet'
 import { FactorRows } from '../src/renderer/src/account/FactorRows'
 import { LockScreen } from '../src/renderer/src/account/LockScreen'
 import { PairPhoneSheet } from '../src/renderer/src/account/PairPhoneSheet'
@@ -58,6 +58,7 @@ const STATUS: AccountStatus = {
   envUsername: null,
   legacy: null,
   sessionExpired: false,
+  passwordPending: false,
   registryMismatch: null,
   workspacesReachable: true,
   recoveryCodesSavedAt: null,
@@ -111,10 +112,14 @@ describe('the stylesheets parse — an unclosed block is a failed test, not dead
 })
 
 describe('every account panel wears cr-sheet, on the panel and not only on the scrim', () => {
-  it('the claim sheet, both halves', () => {
-    for (const legacy of [null, { handle: 'drej' }]) {
+  it('the account sheet, all three states', () => {
+    for (const [initial, legacy] of [
+      ['signin', null],
+      ['register', null],
+      ['signin', { handle: 'drej' }],
+    ] as const) {
       const html = renderToStaticMarkup(
-        <ClaimSheet onClose={() => undefined} onClaimed={() => undefined} legacy={legacy} />,
+        <AccountSheet initial={initial} onClose={() => undefined} onDone={() => undefined} legacy={legacy} />,
       )
       expect(panels(html)).toHaveLength(1)
       expect(panels(html)[0]).toContain('cr-sheet')
@@ -155,7 +160,7 @@ describe('every account panel wears cr-sheet, on the panel and not only on the s
 })
 
 describe('the neutral acts are marked, the destructive ones are not', () => {
-  it('PAIR A PHONE is an act in the neutral ink; REVOKE and REMOVE stay rose', () => {
+  it('ADD A PHONE is an act in the neutral ink; REVOKE and REMOVE stay rose', () => {
     const html = renderToStaticMarkup(
       <ProfileSheet
         status={STATUS}
@@ -164,6 +169,15 @@ describe('the neutral acts are marked, the destructive ones are not', () => {
         onStatus={() => undefined}
       />,
     )
+    // Both verbs are ghosts — neutral by construction, so neither needs the
+    // rose-with-an-override that PAIR A PHONE wears.
+    expect(html).toContain('<button class="gs-ghost">ADD A PHONE</button>')
+    expect(html).not.toContain('gs-revoke">ADD A PHONE')
+    // PAIR A PHONE stands beside them again after integration: V3-10's ADD A
+    // PHONE mints a JOIN code — the account ceremony — which is not the
+    // pairing URL that admits a phone at THIS Mac on Wi-Fi. Two ceremonies,
+    // two ways in, and the destructive ink is still only on the one act that
+    // hands something over.
     expect(html).toContain('class="gs-revoke cr-acct-act">PAIR A PHONE')
     const enrolled: FactorsView = {
       totp: true,
@@ -180,6 +194,8 @@ describe('the neutral acts are marked, the destructive ones are not', () => {
       />,
     )
     expect(rows).toContain('class="gs-revoke">REMOVE')
+    // The marker itself is still in use (the seats tab's own neutral acts);
+    // what matters here is that a destructive row never borrows it.
     expect(rows).not.toContain('cr-acct-act')
   })
 })

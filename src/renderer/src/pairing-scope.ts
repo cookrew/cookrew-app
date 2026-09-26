@@ -43,7 +43,29 @@ export const isPairingToken = (value: string): boolean => PAIRING_TOKEN_SHAPE.te
  */
 export const ROOT_TOKEN_KEY = 'cookrew-pairing-token'
 
-/** `cr_token:<desktop id>` — one Mac, one key, under the shared origin. */
+/**
+ * `cr_token:<desktop id>` — one Mac, one key, under the shared origin.
+ *
+ * TODO(V3-14): THE SEAM FOR THE PER-DEVICE TOKEN. The Mac half (V3-21) is in
+ * place: the token stored here is about to stop being the root pairing token
+ * and become this phone's own. The companion bootstraps ONCE per Mac —
+ *
+ *   POST <plane>/api/admit
+ *     Authorization: Bearer <root token>          (or a per-device token, to re-mint)
+ *     { deviceId, name?, jwk, nonce, issuedAtMs, sig }
+ *       sig = Ed25519( "cookrew-admit/1 <deviceId> <origin> <issuedAtMs> <nonce>" )
+ *       origin = the Mac origin this request is sent to, as the Mac published it
+ *       nonce  = 16..64 random bytes, base64url; issuedAtMs within ±120 s
+ *       deviceId = the key's thumbprint (account-v2.ts · deviceIdFor)
+ *     → 200 { deviceId, name?, token, desktopId }
+ *   Down the relay the stamp names the device and the body may be {} —
+ *   the registry has already authenticated the phone.
+ *
+ * — and stores `token` under this key in place of the root; a 401 on any
+ * other route with a root token in hand means "bootstrap, then retry". Until
+ * the companion does this, the Mac keeps honouring the root everywhere
+ * (companion-gate.ts · rootEverywhere).
+ */
 export const DESKTOP_TOKEN_PREFIX = 'cr_token:'
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'

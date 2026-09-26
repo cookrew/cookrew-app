@@ -12,6 +12,7 @@ import {
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
+import { registryOrigin } from './registry-origin'
 import {
   DEFAULT_LOCK_AFTER_MS,
   MIN_PASSWORD,
@@ -37,6 +38,7 @@ import {
 } from './account-ladder'
 import { bodyOf, classify, plainRefusal, wireError } from './account-wire'
 import { legacyKey, migrateAtRegistry } from './legacy-identity'
+import { renewDue, renewMessage } from '../shared/session-renew'
 import type { RegistryAccount } from './registry-account'
 
 export { DEFAULT_LOCK_AFTER_MS }
@@ -76,10 +78,14 @@ export function accountFilePath(base?: string): string {
   return path.join(base ?? path.join(homedir(), '.cookrew'), 'account.json')
 }
 
-/** The registry this app talks to. Overridable for a test deployment. */
-export function registryOrigin(): string {
-  return process.env.COOKREW_REGISTRY || 'https://cookrew.dev'
-}
+/**
+ * The registry this app talks to. Overridable for a test deployment.
+ *
+ * Re-exported rather than read here: one setting, one reading (see
+ * registry-origin.ts for what a second copy of it cost). The name stays
+ * exported from this module because half the app already asks it here.
+ */
+export { registryOrigin }
 
 /** A session token and the moment it stops being one, in epoch ms. */
 export interface AccountSession {
@@ -116,7 +122,13 @@ export interface AccountFile {
   /** The origin the account was claimed at; a key must not follow the owner. */
   registry: string
   session: AccountSession | null
-  unlock: UnlockVerifier
+  /**
+   * NULL ON A MAC THAT JOINED BY A CODE and has not yet seen the password
+   * (v3, D8). The first idle lock asks it once, `resume` proves it at
+   * cookrew.dev, and `landSession` writes the verifier. Until then the local
+   * lock has nothing to check against and says so (`passwordPending`).
+   */
+  unlock: UnlockVerifier | null
   lockAfterMs: number
   claimedAt: number
   /** May cookrew.dev offer this Mac's workspaces to the account's phones? */
@@ -247,8 +259,10 @@ function looksLikeAccount(value: unknown): value is AccountFile {
     typeof record.deviceId === 'string' &&
     typeof record.privateKeyJwk === 'object' &&
     record.privateKeyJwk !== null &&
-    typeof record.unlock === 'object' &&
-    record.unlock !== null
+    // `unlock` may be null: a code-joined Mac has no verifier until its
+    // first lock. Absent altogether is still not an account file.
+    'unlock' in record &&
+    (record.unlock === null || typeof record.unlock === 'object')
   )
 }
 
@@ -328,6 +342,12 @@ export interface AccountsDeps {
   onChange?: () => void
 }
 
+/** The session a 201 carries — `{token, exp}` at the top of the body — or null when it does not. */
+function sessionFrom(body: Record<string, unknown>): AccountSession | null {
+  if (typeof body.token !== 'string' || typeof body.exp !== 'number') return null
+  return { token: body.token, exp: body.exp }
+}
+
 /**
  * The account, as the rest of main uses it.
  *
@@ -342,8 +362,21 @@ export class Accounts {
   private readonly origin: string
   private readonly deviceName: string
   private cached: AccountFile | null
+  /**
+   * A sign-in that stopped at the ladder: the name and the key minted for
+   * it, waiting for the rung that lands. Held here, never on the bridge, and
+   * only ever one — see `signIn`.
+   */
+  private signingIn: {
+    username: string
+    deviceId: string
+    name: string
+    keys: { privateKeyJwk: Record<string, unknown>; publicKeyJwk: Record<string, unknown> }
+  } | null = null
   /** The last minted batch, in memory only — never written, never logged. */
   private freshCodes: readonly string[] | null = null
+  /** The last renewal failure, so the daily timer says each reason once. */
+  private renewProblem: string | null = null
   /** Said once per run: a poll refused every tick must not be a log flood. */
   private saidMismatch = false
   private readonly legacy: () => RegistryAccount | null
@@ -556,6 +589,194 @@ export class Accounts {
   }
 
   /**
+   * SIGN IN ON A MAC THAT HAS NO ACCOUNT YET — the second Mac (v3, D9 · D10).
+   *
+   * The universal path: username and password, a device key minted here and
+   * offered as a NEW device. It is `resume` with the name as an argument and
+   * a fresh key instead of the one on disk; and it is `claim` in what it
+   * writes — 201 lands through `saveClaimed`, so the file this Mac gets is
+   * the same file a claim writes, verifier and all, because the password is
+   * in hand.
+   *
+   * REFUSED LOCALLY ONLY FOR SHAPE. An empty or malformed name never reaches
+   * the wire; a short password does — this is an existing account, and the
+   * twelve-character floor is a rule for NEW passwords, not for the one the
+   * owner set years ago. The registry is the judge of whether it is right.
+   *
+   * A device the account has not seen answers 401 second_factor, and the
+   * ladder that follows is the resume ladder unchanged: the password is put
+   * away under the pending id, and the rung that lands (resumeWithCode /
+   * resumeWait) writes the file through `landSession`, which knows a sign-in
+   * is in flight and has the minted key to file it with.
+   */
+  async signIn(input: {
+    username: string
+    password: string
+    name?: string
+  }): Promise<SignInAnswer<AccountFile>> {
+    const held = this.cached
+    if (held !== null) {
+      return { ok: false, reason: 'taken', message: `This Mac is already @${held.username}.` }
+    }
+    const username = normaliseUsername(input.username)
+    if (username === '' || usernameProblem(username) !== 'ok') {
+      return { ok: false, reason: 'bad_username' }
+    }
+
+    const { privateKeyJwk, publicKeyJwk } = mintDeviceKey()
+    const deviceId = deviceIdFor(publicKeyJwk)
+    const name = input.name?.trim() || this.deviceName
+    const minted = { username, deviceId, name, keys: { privateKeyJwk, publicKeyJwk } }
+    // A sign-in that begins forgets the one before it: two ladders on one
+    // Mac would be two keys, and only one of them could ever be the file.
+    this.signingIn = null
+    let response: Response
+    try {
+      response = await this.http(`${this.origin}/v2/sessions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          username,
+          password: input.password,
+          device: { id: deviceId, kind: 'desktop', name, jwk: publicKeyJwk },
+        }),
+      })
+    } catch {
+      return { ok: false, reason: 'offline' }
+    }
+    if (response.status === 429) return { ok: false, reason: 'rate_limited' }
+    const body = await bodyOf(response)
+    if (response.status !== 201) {
+      if (response.status === 401 && body.error === 'second_factor') {
+        const step = stepFrom(body)
+        if (step !== null) {
+          // Exactly as resume does: the password is put away here, keyed by
+          // the pending, and the minted key waits with it for the rung that
+          // lands. Neither crosses the bridge again.
+          this.ladder.remember(step.pending, input.password)
+          this.signingIn = minted
+          return {
+            ok: false,
+            reason: 'second_factor',
+            step,
+            ...(typeof body.message === 'string' ? { message: body.message } : {}),
+          }
+        }
+      }
+      const refused = classify(response.status, body)
+      // The surface keeps its password prompt open on 'session-expired'; a
+      // wrong password here is that same prompt again, with the sentence.
+      return refused.reason === 'bad_credentials'
+        ? {
+            ok: false,
+            reason: 'session-expired',
+            ...(refused.message ? { message: refused.message } : {}),
+          }
+        : plainRefusal(refused)
+    }
+    const session = sessionFrom(body)
+    if (session === null) return { ok: false, reason: 'unknown' }
+    return {
+      ok: true,
+      value: this.saveClaimed({
+        // The registry names what it filed; ours is derived from the key it
+        // was sent, so the two agree — but its answer is the record.
+        username: typeof body.username === 'string' ? body.username : username,
+        deviceId: typeof body.deviceId === 'string' ? body.deviceId : deviceId,
+        name,
+        password: input.password,
+        keys: minted.keys,
+        session,
+      }),
+    }
+  }
+
+  /**
+   * JOIN BY A CODE — the second Mac, with nothing typed on it but the code
+   * (v3, D8 · the security model's third line).
+   *
+   * A password alone never attaches a device. The authority is on the side
+   * that is already trusted: a signed-in device minted this code under
+   * step-up, and this Mac spends it — POST /v2/join {code, device} — with a
+   * device key minted here and offered as a NEW device. 201 lands through
+   * `saveClaimed` exactly as a sign-in does, with ONE difference: no unlock
+   * verifier, because no password was typed here and none may be derived.
+   * The first idle lock asks it once (account-ipc.ts · unlock) and `resume`
+   * writes the verifier through `landSession`.
+   *
+   * THE CODE IS DEAD WHATEVER HAPPENS NEXT. The registry spends it before it
+   * looks at the device, so a refusal here is never "try again with the same
+   * code" — the surface says so (JOIN_CODE_SPENT) and offers ADD A MAC on the
+   * other device. The file is written only on 201.
+   */
+  async join(input: { code: string; name?: string }): Promise<AccountResult<AccountFile>> {
+    const held = this.cached
+    if (held !== null) {
+      return { ok: false, reason: 'taken', message: `This Mac is already @${held.username}.` }
+    }
+    const code = input.code.trim()
+    if (code.length === 0) return { ok: false, reason: 'bad_credentials' }
+
+    const { privateKeyJwk, publicKeyJwk } = mintDeviceKey()
+    const deviceId = deviceIdFor(publicKeyJwk)
+    const name = input.name?.trim() || this.deviceName
+    let response: Response
+    try {
+      response = await this.http(`${this.origin}/v2/join`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          code,
+          device: { id: deviceId, kind: 'desktop', name, jwk: publicKeyJwk },
+        }),
+      })
+    } catch {
+      return { ok: false, reason: 'offline' }
+    }
+    if (response.status === 429) return { ok: false, reason: 'rate_limited' }
+    const body = await bodyOf(response)
+    if (response.status !== 201) return plainRefusal(classify(response.status, body))
+    const session = sessionFrom(body)
+    if (session === null) return { ok: false, reason: 'unknown' }
+    return {
+      ok: true,
+      value: this.saveClaimed({
+        // The code named the account; the registry says which. Ours would
+        // be a guess, and there is nothing here to guess from.
+        username: typeof body.username === 'string' ? body.username : '',
+        deviceId: typeof body.deviceId === 'string' ? body.deviceId : deviceId,
+        name,
+        password: null,
+        keys: { privateKeyJwk, publicKeyJwk },
+        session,
+      }),
+    }
+  }
+
+  /**
+   * MINT A JOIN CODE for another Mac (v3, D12 · ADD A MAC), under step-up.
+   *
+   * The password rides in the body because the registry asks for it again on
+   * this route — a session alone must not widen what the account opens from.
+   * The answer is the code, when it dies, and the link the site's /join page
+   * turns into `cookrew://join#<code>`.
+   */
+  async mintJoinCode(
+    current: string,
+  ): Promise<AccountResult<{ code: string; expiresAt: number; url: string }>> {
+    const result = await this.authed<{ code?: unknown; expiresAt?: unknown }>('/v2/me/join-codes', {
+      method: 'POST',
+      body: JSON.stringify({ current }),
+    })
+    if (!result.ok) return result
+    const { code, expiresAt } = result.value
+    if (typeof code !== 'string' || typeof expiresAt !== 'number') {
+      return { ok: false, reason: 'unknown' }
+    }
+    return { ok: true, value: { code, expiresAt, url: `${this.origin}/join#${code}` } }
+  }
+
+  /**
    * THE FILE A NAME LEAVES BEHIND, written in ONE place.
    *
    * A username reaches this Mac two ways now — claimed fresh, or migrated
@@ -568,7 +789,12 @@ export class Accounts {
     username: string
     deviceId: string
     name: string
-    password: string
+    /**
+     * The password, when it was in hand — a claim, a sign-in, a migration.
+     * NULL for a join by code (v3, D8): nothing was typed on this Mac, so
+     * nothing can be derived, and the file says so rather than pretending.
+     */
+    password: string | null
     keys: { privateKeyJwk: Record<string, unknown>; publicKeyJwk: Record<string, unknown> }
     session: AccountSession | null
   }): AccountFile {
@@ -581,7 +807,7 @@ export class Accounts {
       publicKeyJwk: input.keys.publicKeyJwk,
       registry: this.origin,
       session: input.session,
-      unlock: unlockVerifierFor(input.password),
+      unlock: input.password === null ? null : unlockVerifierFor(input.password),
       lockAfterMs: DEFAULT_LOCK_AFTER_MS,
       claimedAt: this.now(),
       workspacesReachable: true,
@@ -641,8 +867,20 @@ export class Accounts {
   /** Does this password unlock the app? Offline, and the only use of it. */
   verifyUnlock(password: string): boolean {
     const account = this.cached
-    if (!account) return false
+    // No verifier is NOT a match: a code-joined Mac has nothing to check
+    // against offline, and "nothing to check" must never read as "correct".
+    if (!account || account.unlock === null) return false
     return matchesUnlock(account.unlock, password)
+  }
+
+  /**
+   * Has this Mac joined by a code and not yet seen the password (v3, D8)?
+   * The lock screen says so, and the unlock channel goes to the registry
+   * instead of the (absent) local verifier while it is true.
+   */
+  passwordPending(): boolean {
+    const account = this.cached
+    return account !== null && account.unlock === null
   }
 
   /**
@@ -658,6 +896,78 @@ export class Accounts {
     if (session === null || session === undefined) return false
     if (session.endedAt !== undefined) return false
     return session.exp - SESSION_SKEW_MS > this.now()
+  }
+
+  /**
+   * RENEW ON THE DEVICE KEY — no password, and no weaker for it (v3, V3-17).
+   *
+   * The key is already the credential that attached this device; a signature
+   * from it proves the same thing the password proved once, and the registry
+   * refuses it the moment the device is revoked (v2-renew.ts). What this buys
+   * is the serving side: before it, every door this Mac publishes went down on
+   * the thirtieth day unless a person happened to be at the keyboard.
+   *
+   * A SESSION THE REGISTRY ALREADY ENDED IS NOT RENEWED. `renewDue` refuses it
+   * and this never asks — otherwise "not me", which works by ending sessions,
+   * could be undone by the very key it was trying to cut off.
+   *
+   * Answers whether the session moved. Every failure is false and says why in
+   * one line, because this runs on a timer and a timer that logs a paragraph
+   * a day is a log nobody reads.
+   */
+  async renew(): Promise<boolean> {
+    const account = this.cached
+    if (!account) return false
+    if (!renewDue(account.session, this.now())) return false
+
+    let nonce: string
+    try {
+      const asked = await this.http(`${this.origin}/v2/sessions/renew-nonce`, { method: 'GET' })
+      if (asked.status !== 200) return this.renewFailed(`the registry would not issue a nonce (${asked.status})`)
+      const body = (await asked.json()) as { nonce?: unknown }
+      if (typeof body.nonce !== 'string' || body.nonce === '') {
+        return this.renewFailed('the registry issued no nonce')
+      }
+      nonce = body.nonce
+    } catch {
+      return this.renewFailed('cookrew.dev could not be reached')
+    }
+
+    try {
+      const message = renewMessage(account.username, account.deviceId, nonce)
+      const sent = await this.http(`${this.origin}/v2/sessions/renew`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ device: account.deviceId, nonce, sig: signWithDevice(account, message) })
+      })
+      if (sent.status !== 201) return this.renewFailed(`the registry refused the renewal (${sent.status})`)
+      const body = (await sent.json()) as { token?: unknown; exp?: unknown }
+      if (typeof body.token !== 'string' || typeof body.exp !== 'number') {
+        return this.renewFailed('the registry answered a renewal this app could not read')
+      }
+      // THE VERIFIER IS NOT TOUCHED. No password was proved here, so the
+      // offline unlock stays exactly what it was; a renewal is about the
+      // bearer this Mac carries, never about who may open the app.
+      this.save({ ...account, session: { token: body.token, exp: body.exp } })
+      this.renewProblem = null
+      return true
+    } catch {
+      return this.renewFailed('cookrew.dev could not be reached')
+    }
+  }
+
+  /** Said ONCE per distinct reason: a daily timer must not become a log flood. */
+  private renewFailed(why: string): false {
+    if (this.renewProblem !== why) {
+      this.renewProblem = why
+      console.error(`[cookrew] could not renew this Mac's session: ${why}`)
+    }
+    return false
+  }
+
+  /** Is renewal currently failing? What the expiry warning is gated on. */
+  renewFailing(): boolean {
+    return this.renewProblem !== null
   }
 
   /**
@@ -745,12 +1055,27 @@ export class Accounts {
    * the account's, so it becomes what unlocks the app too.
    */
   private landSession(password: string, body: Record<string, unknown>): SignInAnswer<AccountSession> {
+    const session = sessionFrom(body)
     const account = this.cached
-    if (!account) return { ok: false, reason: 'no_account' }
-    if (typeof body.token !== 'string' || typeof body.exp !== 'number') {
-      return { ok: false, reason: 'unknown' }
+    if (!account) {
+      // No file yet: this rung ends a SIGN-IN (the second Mac), not a resume.
+      // The key minted at the password step is filed now, through the same
+      // writer a claim uses, so the account this Mac gets is the same account.
+      const minted = this.signingIn
+      if (!minted) return { ok: false, reason: 'no_account' }
+      if (session === null) return { ok: false, reason: 'unknown' }
+      this.signingIn = null
+      this.saveClaimed({
+        username: typeof body.username === 'string' ? body.username : minted.username,
+        deviceId: typeof body.deviceId === 'string' ? body.deviceId : minted.deviceId,
+        name: minted.name,
+        password,
+        keys: minted.keys,
+        session,
+      })
+      return { ok: true, value: session }
     }
-    const session = { token: body.token, exp: body.exp }
+    if (session === null) return { ok: false, reason: 'unknown' }
     this.save({ ...account, session, unlock: unlockVerifierFor(password) })
     return { ok: true, value: session }
   }
@@ -885,11 +1210,102 @@ export class Accounts {
   }
 
   /** The last device cannot be revoked — the registry answers 409 last_device. */
-  revokeDevice(id: string): Promise<AccountResult<void>> {
+  /**
+   * TAKE A DEVICE OFF THE ACCOUNT — and the password goes WITH the request.
+   *
+   * It used to be a bare DELETE. This Mac asked for the password first and
+   * proved it at cookrew.dev (`stepUp`), then sent a request carrying nothing
+   * but the session — so the check lived entirely on this side of the wire,
+   * and a caller that simply did not perform it was not refused. The registry
+   * asks now (V3-FIX-C1 · H4), and it is the same password the sheet has
+   * already collected, so nothing new is asked of the person.
+   */
+  revokeDevice(id: string, password: string): Promise<AccountResult<void>> {
     return this.authed<void>(`/v2/me/devices/${encodeURIComponent(id)}`, {
       method: 'DELETE',
+      body: JSON.stringify({ current: password }),
       parse: false,
     })
+  }
+
+  /**
+   * STEP UP: prove the password before something irreversible (v3, D12).
+   *
+   * It is `resume` — the password offered to cookrew.dev under this device's
+   * key — and not the local verifier, because the verifier can be stale: a
+   * password changed on the web leaves it holding the old one, and a step-up
+   * that trusted it would let the OLD password sign this Mac out. The
+   * registry is the judge; a fresh session is the receipt, and it is exactly
+   * the session the act that follows is made under.
+   *
+   * A ladder is refused here rather than climbed. This device is attached,
+   * so cookrew.dev does not normally raise one; if it does, the right thing is
+   * the resume card and not a sign-out that starts with a six-digit code.
+   */
+  async stepUp(password: string): Promise<AccountResult<void>> {
+    const proven = await this.resume(password)
+    if (proven.ok) return { ok: true, value: undefined }
+    if (proven.reason === 'second_factor') {
+      return {
+        ok: false,
+        reason: 'bad_credentials',
+        ...(proven.message ? { message: proven.message } : {}),
+      }
+    }
+    return plainRefusal(proven)
+  }
+
+  /**
+   * SIGN OUT ON THIS MAC (v3, D12) — this device leaves the account.
+   *
+   * THE ORDER IS THE SAFETY. The password first, at the registry; then the
+   * device is removed THERE (DELETE /v2/me/devices/<this device>); only once
+   * cookrew.dev has said 204 is the file removed HERE. A file deleted ahead
+   * of the registry would be a Mac that has forgotten an account which still
+   * counts it as a device — the account's own list would name a machine that
+   * can no longer prove it is that machine.
+   *
+   * THE LAST DEVICE MAY NOT LEAVE. The registry refuses it (409 last_device)
+   * and so does this, in the surface's own sentence: an account with no
+   * device is an account nobody can prove, and the fix is to add one first.
+   * Nothing local changes on that refusal.
+   *
+   * THE CANVAS IS NOT TOUCHED. Everything here is about the account file;
+   * the doors this Mac serves are withdrawn by the caller (account-ipc.ts ·
+   * `signedOut`), which owns the serving state this class knows nothing of.
+   */
+  async signOutThisMac(password: string): Promise<AccountResult<void>> {
+    const account = this.cached
+    if (!account) return { ok: false, reason: 'no_account' }
+    const proven = await this.stepUp(password)
+    if (!proven.ok) return proven
+    // The same password goes with the act — signing this Mac out is a revoke,
+    // and the registry asks for it now (V3-FIX-C1 · H4).
+    const removed = await this.revokeDevice(account.deviceId, password)
+    if (!removed.ok) return removed
+    this.forget()
+    return { ok: true, value: undefined }
+  }
+
+  /**
+   * The account is gone from this Mac. The file, the cache, and every
+   * secret this class holds in memory — a half-climbed ladder, fresh codes —
+   * go with it; a listener is told once, after the file is really gone.
+   */
+  private forget(): void {
+    try {
+      rmSync(accountFilePath(this.base), { force: true })
+    } catch (error) {
+      console.error('account file could not be removed:', error)
+    }
+    this.cached = null
+    this.signingIn = null
+    this.freshCodes = null
+    try {
+      this.changed?.()
+    } catch (error) {
+      console.error('account change listener failed:', error)
+    }
   }
 
   /**
@@ -977,6 +1393,7 @@ export class Accounts {
     workspaces: readonly { id: string; name: string }[],
     reach?: { reach: unknown; sig: string },
     trusted?: readonly string[],
+    doors?: readonly string[],
   ): Promise<AccountResult<void>> {
     const account = this.cached
     if (!account) return { ok: false, reason: 'no_account' }
@@ -992,6 +1409,17 @@ export class Accounts {
         // with reachability off must not overwrite yesterday's card with an
         // empty one, it must leave the registry with nothing new to say.
         ...(reach ? { reach: reach.reach, sig: reach.sig } : {}),
+        /**
+         * THE DOORS THIS MAC HOLDS (V3-18) — a CLAIM, not a description.
+         *
+         * `@drej/alpha` names a team of the account and is served by one of
+         * its Macs; filing the list here is how the registry knows which, so
+         * the next Mac to save the same slug is told before the relay refuses
+         * it. Omitted rather than emptied when the caller has nothing to say,
+         * for the same reason `reach` is: a PUT about a renamed workspace must
+         * not hand every door back to nobody.
+         */
+        ...(doors === undefined ? {} : { doors: [...doors] }),
         // REACH v2.1 — the origins a browser will trust for this Mac, OUTSIDE
         // the signed card. `reach` is signed over exactly the members the
         // registry's reader names (registry/src/v2-reach.ts · `cardOf`), so a

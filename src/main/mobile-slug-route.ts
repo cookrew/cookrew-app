@@ -23,7 +23,7 @@ const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 
 // One list, shared with the minting side — see workspace-slug.ts for why
 // `src` and `node_modules` are on it.
-import { RESERVED_SLUGS } from './workspace-slug'
+import { RESERVED_SLUGS } from '../shared/workspace-slug'
 
 export interface SlugRoute {
   /** Workspace scope, or null for the unslugged (focused-session) routes. */

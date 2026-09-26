@@ -139,11 +139,11 @@ async function joinWithApproval(owner: Claimed, joining: ReturnType<typeof devic
     device: joining
   })
   if (first.status !== 401) return first
-  const { pending } = (await first.json()) as { pending: string }
+  const { pending, match } = (await first.json()) as { pending: string; match: string }
   const asked = await call('POST', `/v2/sessions/${pending}/approve`)
   const { approval } = (await asked.json()) as { approval: string }
   expect(
-    (await call('POST', `/v2/me/approvals/${approval}`, { decision: 'approve' }, bearer(owner.token))).status
+    (await call('POST', `/v2/me/approvals/${approval}`, { decision: 'approve', match }, bearer(owner.token))).status
   ).toBe(204)
   return call('GET', `/v2/sessions/${pending}`)
 }
@@ -255,7 +255,7 @@ describe('GET /v2/keys — what a door verifies with', () => {
     const owner = await claim()
     const phone = device('phone', 'iPhone')
     await joinWithApproval(owner, phone)
-    await call('DELETE', `/v2/me/devices/${phone.id}`, undefined, bearer(owner.token))
+    await call('DELETE', `/v2/me/devices/${phone.id}`, { current: PASSWORD }, bearer(owner.token))
 
     const res = await call('GET', '/v2/keys')
     expect(res.status).toBe(200)
@@ -326,13 +326,13 @@ describe('devices', () => {
     }
     expect(listed.devices.map((d) => d.id).sort()).toEqual([owner.deviceId, phone.id].sort())
 
-    expect((await call('DELETE', `/v2/me/devices/${phone.id}`, undefined, bearer(owner.token))).status).toBe(204)
-    const last = await call('DELETE', `/v2/me/devices/${owner.deviceId}`, undefined, bearer(owner.token))
+    expect((await call('DELETE', `/v2/me/devices/${phone.id}`, { current: PASSWORD }, bearer(owner.token))).status).toBe(204)
+    const last = await call('DELETE', `/v2/me/devices/${owner.deviceId}`, { current: PASSWORD }, bearer(owner.token))
     expect(last.status).toBe(409)
     const body = (await last.json()) as { error: string; message: string }
     expect(body.error).toBe('last_device')
     expect(body.message).toContain('last device')
-    expect((await call('DELETE', `/v2/me/devices/${randomUUID()}`, undefined, bearer(owner.token))).status).toBe(404)
+    expect((await call('DELETE', `/v2/me/devices/${randomUUID()}`, { current: PASSWORD }, bearer(owner.token))).status).toBe(404)
   })
 
   it('lets a device revoke ITSELF, which ends that session on the spot', async () => {
@@ -340,7 +340,7 @@ describe('devices', () => {
     const phone = device('phone', 'iPhone')
     const signedIn = (await (await joinWithApproval(owner, phone)).json()) as { token: string }
 
-    const gone = await call('DELETE', `/v2/me/devices/${phone.id}`, undefined, bearer(signedIn.token))
+    const gone = await call('DELETE', `/v2/me/devices/${phone.id}`, { current: PASSWORD }, bearer(signedIn.token))
     expect(gone.status).toBe(204)
     expect(gone.headers.get('set-cookie')).toContain('Max-Age=0')
     expect((await call('GET', '/v2/me', undefined, bearer(signedIn.token))).status).toBe(401)

@@ -5,11 +5,14 @@ import path from 'node:path'
 import {
   ShareOnSave,
   canSubmitShare,
+  heldVerdict,
   priceLooksGood,
   saveButtonLabel,
   serveRefusalText,
+  type HeldChoice,
   type ShareAccess
 } from '../src/renderer/src/ShareOnSave'
+import { doorHeldSentence, type DoorHolder } from '../src/shared/door-ownership'
 import { ServedTeamCard, type ServedTeam } from '../src/renderer/src/ServedTeamCard'
 import { ImportServedSheet } from '../src/renderer/src/ImportServedSheet'
 import { renderServedCrewFace, type CrewFace } from '../src/main/served-endpoints'
@@ -34,7 +37,9 @@ const src = (file: string): string =>
 const paint = (
   access: ShareAccess,
   priceUsd = '',
-  paymentRails: readonly ServedPaymentRail[] = ['x402', 'stripe']
+  paymentRails: readonly ServedPaymentRail[] = ['x402', 'stripe'],
+  held: DoorHolder | null = null,
+  heldChoice: HeldChoice = 'keep'
 ): string =>
   renderToStaticMarkup(
     <ShareOnSave
@@ -44,6 +49,10 @@ const paint = (
       door="Conductor"
       summary=""
       tagsRaw=""
+      team="alpha"
+      held={held}
+      heldChoice={heldChoice}
+      onHeldChoice={noop}
       onAccess={noop}
       onPrice={noop}
       onSummary={noop}
@@ -473,7 +482,10 @@ describe('a serving save SHOWS the address it minted', () => {
 
   it('a serving save does not bury the address under a transient flash', () => {
     const bar = src('SelectionBar.tsx')
-    expect(bar).toMatch(/if \(access === 'just-me'\) showFlash/)
+    // `effectiveAccess`, not `access`: a save whose door name another Mac holds
+    // can be turned into a private one by KEEP THEIRS (V3-18), and the flash
+    // has to follow what the save actually did.
+    expect(bar).toMatch(/if \(effectiveAccess === 'just-me'\) showFlash/)
   })
 })
 
@@ -595,5 +607,63 @@ describe('the card says who can open the link it just gave you', () => {
       const line = MKT_SERVE[`mkt.serve.reach.${transport}` as const]
       expect(line, transport).not.toMatch(/free|pay|paid|price|sign in|account/i)
     }
+  })
+})
+
+/**
+ * D14 · A NAME ANOTHER MAC OF THIS ACCOUNT ALREADY HOLDS (V3-18).
+ *
+ * The question is asked HERE, in the save sheet, and not by the dial that
+ * would otherwise fail in silence — so what these pin is that the sentence and
+ * all three answers are actually painted, and that they appear at the moment
+ * they are about something: a private save publishes nothing, so it can
+ * collide with nothing.
+ */
+describe('ShareOnSave — one name, one holder', () => {
+  const held = { deviceId: 'mac-1', name: 'MacBook Pro', since: Date.now() }
+
+  it('says which Mac holds it, since when, and what the rule is', () => {
+    const html = paint('account', '', ['x402'], held)
+    expect(html).toContain('alpha is served by MacBook Pro since today')
+    expect(html).toContain('A door has one holder.')
+    // Three ordinary answers. Nothing is disabled and nothing is a code.
+    expect(html).toContain('TAKE OVER HERE')
+    expect(html).toContain('RENAME')
+    expect(html).toContain('KEEP THEIRS')
+    // The SENTENCE, not the markup — `aria-invalid` is an attribute, and the
+    // rule is about what a person reads.
+    expect(doorHeldSentence('alpha', held)).not.toMatch(/name-taken|error|invalid|409/i)
+  })
+
+  it('says nothing at all when nobody else holds it', () => {
+    expect(paint('account', '', ['x402'], null)).not.toContain('A door has one holder.')
+  })
+
+  it('is silent on a private save — it publishes nothing to collide with', () => {
+    // `held` is computed as null for `just-me` upstream; this pins that the
+    // card does not paint for a save that opens no door either way.
+    expect(paint('just-me', '', ['x402'], null)).not.toContain('A door has one holder.')
+  })
+
+  it('says what the chosen answer will do, in the owner’s words', () => {
+    expect(paint('account', '', ['x402'], held, 'take-over')).toContain(
+      'MacBook Pro stops serving it and is told. The link does not change.'
+    )
+    expect(paint('account', '', ['x402'], held, 'keep')).toContain(
+      'MacBook Pro goes on serving it. This save stays on this Mac.'
+    )
+    expect(paint('account', '', ['x402'], held, 'rename')).toContain(
+      'Give the team another name above, and both doors stay open.'
+    )
+  })
+
+  it('renames the primary to SAVE when the answer is to keep theirs', () => {
+    // The button must not say START SERVING for a save that has just been told
+    // not to — the quiet-consequence bug this sheet exists to avoid, in
+    // reverse.
+    expect(saveButtonLabel(heldVerdict(held, 'keep') === 'save-only' ? 'just-me' : 'account', false)).toBe('SAVE')
+    expect(saveButtonLabel(heldVerdict(held, 'take-over') === 'save-only' ? 'just-me' : 'account', false)).toBe(
+      'SAVE · START SERVING'
+    )
   })
 })

@@ -6,27 +6,35 @@
 
 import { describe, expect, it } from 'vitest'
 import type { AccountStatus } from '../src/shared/account-v2'
+import { V3_COPY } from '../src/shared/account-copy'
+import type { ClaimFields } from '../src/renderer/src/account/account-store'
 import {
   ACCOUNT_COPY,
-  approvalView,
   avatarView,
   claimView,
   deviceName,
   factorRows,
   initialsOf,
   lockLabel,
+  joinLede,
   lockNote,
   lockRowLabel,
   mustChangeBanner,
   passkeyElsewhere,
+  envIgnoredSentence,
+  phoneVerb,
   profileKey,
+  registerView,
+  crossingFor,
   removeFactorPrompt,
   refusalSentence,
   rescueState,
   revokeSentence,
+  signOutSentence,
   takenSentence,
   wrongPasswordSentence,
 } from '../src/renderer/src/account/account-store'
+import { lanRevokeEnds } from '../src/shared/lan-token-mode'
 import { startedAgo, type ApprovalRequest } from '../src/shared/account-approvals'
 
 const STRONG = 'correct-horse-battery'
@@ -43,6 +51,7 @@ const BASE: AccountStatus = {
   envUsername: null,
   legacy: null,
   sessionExpired: false,
+  passwordPending: false,
   registryMismatch: null,
   workspacesReachable: true,
   recoveryCodesSavedAt: null,
@@ -97,14 +106,15 @@ describe('the claim sheet decides, and always says why (D2)', () => {
   })
 
   it('names the act on the button', () => {
-    expect(fields({ username: '@drej', check: 'free' }).primary).toBe('CLAIM @DREJ')
-    expect(fields().primary).toBe('CLAIM')
+    expect(fields({ username: '@drej', check: 'free' }).primary).toBe('CREATE @DREJ')
+    expect(fields().primary).toBe('CREATE')
   })
 
   it('refuses a taken name in the copy table’s words', () => {
     const view = fields({ username: 'anvz', check: 'taken' })
     expect(view.username.tone).toBe('bad')
-    expect(view.username.note).toBe("@anvz is someone else's. Try another.")
+    // D9: a name that exists is the other door, not a dead end.
+    expect(view.username.note).toBe('@anvz already exists — sign in with your password.')
     expect(view.canClaim).toBe(false)
   })
 
@@ -257,25 +267,106 @@ describe('refusals arrive as sentences', () => {
 
 describe('the lock screen’s line (D5)', () => {
   it('opens with why it is locked and what kept running', () => {
-    expect(lockNote(null)).toBe('Locked while you were away. Your agents kept working.')
+    expect(lockNote(null).line).toBe('Locked while you were away. Your agents kept working.')
   })
 
   it('counts the tries down in the design’s words', () => {
-    expect(lockNote({ ok: false, reason: 'wrong', triesLeft: 4 })).toBe(
+    expect(lockNote({ ok: false, reason: 'wrong', triesLeft: 4 }).line).toBe(
       'Not it. 4 tries left before a 1-minute pause.',
     )
     expect(wrongPasswordSentence(1)).toBe('Not it. 1 try left before a 1-minute pause.')
   })
 
   it('says how long the pause has left', () => {
-    expect(lockNote({ ok: false, reason: 'paused', pausedForMs: 60_000 })).toContain('60 seconds')
+    expect(lockNote({ ok: false, reason: 'paused', pausedForMs: 60_000 }).line).toContain('60 seconds')
+  })
+})
+
+describe('the ladder’s lede belongs to the door, not the card (D10)', () => {
+  it('a first join says the name is elsewhere and this Mac is asking in', () => {
+    expect(joinLede('drej')).toBe(
+      '@drej is already on another device. Prove it is you and this Mac joins.',
+    )
+  })
+
+  it('a resume keeps saying the session ended', () => {
+    expect(ACCOUNT_COPY.SESSION_ENDED).toMatch(/^Your session ended/)
+  })
+
+  it('after asking, it says where the request can be found — no push exists', () => {
+    expect(ACCOUNT_COPY.LADDER_ASKED_HONEST).toBe(
+      'Asked. Open cookrew.dev on your phone, or look at your other Mac.',
+    )
+    expect(ACCOUNT_COPY.LADDER_ASKED_HONEST).not.toMatch(/approve/i)
+  })
+})
+
+describe('the lock screen knows who is waiting (D13)', () => {
+  it('says nothing about requests when nobody is waiting', () => {
+    expect(lockNote(null).waiting).toBeNull()
+    expect(lockNote(null, { count: 0, names: [] }).waiting).toBeNull()
+  })
+
+  it('names the one device that is waiting, in the table’s words', () => {
+    expect(lockNote(null, { count: 1, names: ['Mac Studio'] }).waiting).toBe(
+      'Mac Studio is waiting to join — unlock to answer.',
+    )
+  })
+
+  it('still says a device is waiting when its name has not arrived', () => {
+    expect(lockNote(null, { count: 1, names: [] }).waiting).toBe(
+      'A device is waiting to join — unlock to answer.',
+    )
+  })
+
+  it('counts several, whether or not their names are known', () => {
+    expect(lockNote(null, { count: 3, names: ['Mac Studio', 'iPhone'] }).waiting).toBe(
+      '3 devices are waiting to join — unlock to answer.',
+    )
+    expect(lockNote(null, { count: 2, names: [] }).waiting).toBe(
+      '2 devices are waiting to join — unlock to answer.',
+    )
+  })
+
+  it('keeps the waiting line beside a wrong-password line, never instead of it', () => {
+    const note = lockNote({ ok: false, reason: 'wrong', triesLeft: 2 }, { count: 1, names: ['Mac Studio'] })
+    expect(note.line).toBe('Not it. 2 tries left before a 1-minute pause.')
+    expect(note.waiting).toBe('Mac Studio is waiting to join — unlock to answer.')
+  })
+})
+
+describe('the sign-out confirmation says what leaves, what stays, what goes quiet (D12)', () => {
+  it('is the table’s sentence, with the handle in it', () => {
+    expect(signOutSentence('@drej')).toBe(
+      'This Mac leaves @drej. Everything on the canvas stays. The doors it serves go offline until it signs in again.',
+    )
+  })
+
+  it('the last device is refused in the table’s words, named when the handle is known', () => {
+    expect(refusalSentence('last_device', undefined, 'drej')).toBe(
+      'This is the last device on @drej — add another first, or the account has no way back in.',
+    )
   })
 })
 
 describe('the revoke confirmation names the device and its consequence', () => {
-  it('is one sentence, in the table’s words', () => {
-    expect(revokeSentence('iPhone')).toBe(
-      'The iPhone stops opening this account within a minute. It keeps working on this Wi-Fi until re-paired.',
+  it('is one sentence, in the table’s words for the mode this build is in', () => {
+    /**
+     * THIS TEST USED TO ASSERT THE UNHEDGED SENTENCE, and its comment said
+     * "the Wi-Fi caveat is gone because the thing it admitted to is fixed".
+     * It was not fixed in any build that shipped: the root pairing token
+     * still opened every route, so a revoked phone still had this Mac's
+     * keyboard on this Wi-Fi (H2). Which sentence is true is now one fact
+     * both the gate and the copy read — shared/lan-token-mode.ts — and
+     * tests/lan-revoke-contract.test.ts is what stops them drifting again.
+     * Asserted here through the same constant, so this file says what the
+     * build says rather than pinning one of the two worlds.
+     */
+    const said = revokeSentence('iPhone')
+    expect(said).toBe(
+      lanRevokeEnds()
+        ? "The iPhone stops opening this account within a minute — here, at every door, and on every Mac's Wi-Fi. Anything it asked for is dropped."
+        : 'The iPhone stops opening this account within a minute — here and at every door. On this Mac it keeps working on this Wi-Fi until you run `cookrew mobile --rotate`, which re-pairs every phone.',
     )
   })
 })
@@ -327,27 +418,7 @@ describe('the rose badge now has a producer (D1)', () => {
   })
 })
 
-describe('the request card, word for word (D6)', () => {
-  it('is the design sentence, split into its two lines', () => {
-    const view = approvalView(request(), { username: 'drej', hasSecondFactor: false, now: NOW })
-    expect(view.lead).toBe('Chrome on macOS in Sydney wants to sign in as @drej.')
-    expect(view.detail).toBe(
-      'Started 12 seconds ago · 203.0.113.9 · no second factor on the account yet.',
-    )
-  })
-
-  it('says what NOT ME does before it is done', () => {
-    const view = approvalView(request(), { username: 'drej', hasSecondFactor: false, now: NOW })
-    expect(view.confirm).toBe(
-      'Every other device signs out and you will set a new password.',
-    )
-  })
-
-  it('drops the factor clause rather than inventing a reassuring one', () => {
-    const view = approvalView(request(), { username: 'drej', hasSecondFactor: true, now: NOW })
-    expect(view.detail).toBe('Started 12 seconds ago · 203.0.113.9.')
-  })
-
+describe('how long a device has been asking — the clock D11 kept from D6', () => {
   it('counts in the units a person reads: seconds, then minutes, then hours', () => {
     expect(startedAgo(1_000)).toBe('1 second')
     expect(startedAgo(12_000)).toBe('12 seconds')
@@ -443,23 +514,227 @@ describe('taking a factor off', () => {
 })
 
 describe('what makes the DEVICES tab re-read itself', () => {
+  // The tab is part of the key now (F4); these three are about the other half
+  // of it, so they hold the tab still and vary what they are about.
   it('changes when a waiting request is answered', () => {
     // Approving attaches the device at the registry; the count dropping is
     // the moment the list on screen went stale.
-    expect(profileKey({ username: 'drej', requests: 1 })).not.toBe(
-      profileKey({ username: 'drej', requests: 0 }),
+    expect(profileKey({ username: 'drej', requests: 1 }, 'DEVICES')).not.toBe(
+      profileKey({ username: 'drej', requests: 0 }, 'DEVICES'),
     )
   })
 
   it('is stable while nothing has happened, so the sheet does not thrash', () => {
-    expect(profileKey({ username: 'drej', requests: 0 })).toBe(
-      profileKey({ username: 'drej', requests: 0 }),
+    expect(profileKey({ username: 'drej', requests: 0 }, 'DEVICES')).toBe(
+      profileKey({ username: 'drej', requests: 0 }, 'DEVICES'),
     )
   })
 
   it('changes with the account, so a claim redraws the tab', () => {
-    expect(profileKey({ username: null, requests: 0 })).not.toBe(
-      profileKey({ username: 'drej', requests: 0 }),
+    expect(profileKey({ username: null, requests: 0 }, 'DEVICES')).not.toBe(
+      profileKey({ username: 'drej', requests: 0 }, 'DEVICES'),
     )
+  })
+})
+
+/**
+ * F2 · A TAKEN NAME ON THE CREATE SIDE HAS TO BE PRESSABLE (V3-UI1).
+ *
+ * The real-interface pass found the sheet showing USERNAME · TAKEN and the
+ * sentence "@magpie already exists — sign in with your password." beside a
+ * DISABLED primary and a plain <p> with nothing to click. The other half of
+ * the crossing (SIGN IN → CREATE) already works, so the sheet could cross one
+ * way and not the other — and the way it could not is the one D9 draws first.
+ *
+ * The fix is not to cross while somebody types: the availability check settles
+ * on whatever is in the field, so a person typing "magpie" who pauses on "mag"
+ * would have the tab pulled out from under them. Both directions cross on the
+ * PRIMARY PRESS, and this makes the primary exist to be pressed.
+ */
+describe('the CREATE side offers the way out it names (F2)', () => {
+  const taken = (over: Partial<ClaimFields> = {}): ClaimFields => ({
+    username: 'magpie',
+    check: 'taken',
+    password: 'correct horse battery staple',
+    confirm: 'correct horse battery staple',
+    ...over,
+  })
+
+  it('turns the primary into the crossing rather than disabling it', () => {
+    const view = registerView(taken())
+    expect(view.crossesToSignIn).toBe(true)
+    expect(view.primary).toBe('SIGN IN AS @MAGPIE')
+    // canClaim stays false — this name cannot be created, and that is the fact
+    // the button is now honest about instead of being switched off for.
+    expect(view.canClaim).toBe(false)
+    expect(view.canGo).toBe(true)
+  })
+
+  it('says it in the same words the sentence under the field uses', () => {
+    const view = registerView(taken())
+    expect(view.username.tag).toBe('taken')
+    expect(view.username.note).toBe('@magpie already exists — sign in with your password.')
+    expect(view.primary).toContain('MAGPIE')
+  })
+
+  it('needs no password to cross — the one on screen is for an account that exists', () => {
+    // Somebody who typed a taken name has not typed THEIR password yet; making
+    // them fill twelve characters they are about to lose is a toll on the way
+    // to the door they actually want.
+    const view = registerView(taken({ password: '', confirm: '' }))
+    expect(view.crossesToSignIn).toBe(true)
+    expect(view.canGo).toBe(true)
+  })
+
+  it('does not cross on a name that is merely unknown, or still being checked', () => {
+    for (const check of ['checking', 'unknown', 'invalid', 'free'] as const) {
+      const view = registerView(taken({ check }))
+      expect(view.crossesToSignIn, check).toBe(false)
+    }
+    // A free name goes back to being a name to create.
+    expect(registerView(taken({ check: 'free' })).primary).toBe('CREATE @MAGPIE')
+  })
+
+  it('refuses to cross on a name that could never be anyone’s', () => {
+    // A shape the registry would not have issued cannot be "already taken";
+    // crossing there would send somebody to sign in as a name that cannot be.
+    const view = registerView(taken({ username: 'Not A Name!' }))
+    expect(view.crossesToSignIn).toBe(false)
+    expect(view.canGo).toBe(false)
+  })
+
+  it('lands where the 409 lands — one crossing, two ways of reaching it', () => {
+    // The button must produce the same landing a taken-on-POST does, or the
+    // sheet would have two ideas of what crossing means.
+    const landing = crossingFor({ state: 'register', username: 'magpie', refusal: { reason: 'taken' } })
+    expect(landing).toEqual({
+      kind: 'cross',
+      to: 'signin',
+      sentence: '@magpie already exists — sign in with your password.',
+    })
+  })
+})
+
+/**
+ * F4 · THE DEVICES TAB WAS STALE UNTIL THE SHEET WAS FULLY REOPENED (V3-UI1).
+ *
+ * The real-interface pass approved a join on Mac A and watched the Devices
+ * list keep showing one row; switching tabs inside the open sheet did not
+ * refresh it, and only closing and reopening the whole sheet did.
+ *
+ * The key was `username#requests`, and its comment reasoned that "the moment
+ * that count drops is the moment the list is stale". The count is the right
+ * signal for something happening and the WRONG MOMENT for this: answering an
+ * approval only marks it approved at the registry. The asking Mac attaches
+ * itself when IT next polls its pending, a second or two later — so the
+ * re-read fired one beat early, correctly read a list that still had one
+ * device in it, and then had no reason to fire again, because the count was
+ * already zero and stayed zero.
+ *
+ * So the tab is part of the key too: opening DEVICES re-reads. That is
+ * deterministic, where anything keyed on the count alone is a race with
+ * another machine.
+ */
+describe('what makes the devices list re-read (F4)', () => {
+  it('still re-reads when a request is answered', () => {
+    expect(profileKey({ username: 'magpie', requests: 1 }, 'DEVICES')).not.toBe(
+      profileKey({ username: 'magpie', requests: 0 }, 'DEVICES'),
+    )
+  })
+
+  it('re-reads when the DEVICES tab is opened, without closing the sheet', () => {
+    // The observed failure: the count is already 0 by the time the far Mac
+    // attaches, so nothing keyed on it alone will ever fire again.
+    const before = profileKey({ username: 'magpie', requests: 0 }, 'PROFILE')
+    const after = profileKey({ username: 'magpie', requests: 0 }, 'DEVICES')
+    expect(after).not.toBe(before)
+  })
+
+  it('is stable while nothing changes, so the tab does not re-read on every render', () => {
+    const once = profileKey({ username: 'magpie', requests: 0 }, 'DEVICES')
+    const twice = profileKey({ username: 'magpie', requests: 0 }, 'DEVICES')
+    expect(twice).toBe(once)
+  })
+
+  it('changes with the account, so one person’s list never shows another’s', () => {
+    expect(profileKey({ username: 'magpie', requests: 0 }, 'DEVICES')).not.toBe(
+      profileKey({ username: 'drej', requests: 0 }, 'DEVICES'),
+    )
+  })
+})
+
+/**
+ * F5 · THE ENV SENTENCE MUST NOT CONTRADICT THE ACCOUNT ON SCREEN (V3-UI1).
+ *
+ * It read "COOKREW_HANDLE names @drej; this Mac serves as @magpie." on a
+ * profile showing @magpie. The second clause is the untrue one, and the screen
+ * had no way to know: the serving handle is resolved ONCE at boot, so a Mac
+ * that started local-only and signed in afterwards is still serving under the
+ * environment's name. A sentence that asserts what it cannot see is a lie
+ * whichever way the facts fall, so it says only what this surface knows.
+ */
+describe('the environment override sentence (F5)', () => {
+  it('names the account as the name, and the environment as an override', () => {
+    const said = envIgnoredSentence('drej', 'magpie')
+    expect(said).toContain('@drej')
+    expect(said).toContain('@magpie')
+    expect(said).toContain('development override')
+  })
+
+  it('does not claim what this Mac serves as — the sheet cannot know it', () => {
+    // Resolved at boot from an account that did not exist yet; see the copy
+    // table's note. Claiming it here made the one contradiction on the screen.
+    expect(envIgnoredSentence('drej', 'magpie')).not.toContain('serves as')
+    expect(envIgnoredSentence('drej', 'magpie')).not.toContain('serves')
+  })
+
+  it('strips a leading @, so no name is ever drawn as @@drej', () => {
+    // `normaliseUsername` trims and drops the @ and deliberately does NOT
+    // lowercase — that is the registry's rule at the point a name is claimed,
+    // not this helper's, and changing it here would change it everywhere.
+    expect(envIgnoredSentence('@drej', '@magpie')).toBe(envIgnoredSentence('drej', 'magpie'))
+    expect(envIgnoredSentence('@drej', '@magpie')).not.toContain('@@')
+  })
+
+  it('comes from the one copy table, like every other sentence here', () => {
+    expect(envIgnoredSentence('drej', 'magpie')).toBe(
+      V3_COPY['d4.env-override'].replace('{env}', 'drej').replace('{handle}', 'magpie'),
+    )
+  })
+})
+
+/**
+ * F3 · ONE PHONE VERB ON THE DEVICES TAB (V3-UI1).
+ *
+ * The real-interface pass found an enabled PAIR A PHONE sitting directly above
+ * a disabled ADD A PHONE marked "Coming in cut 2". To a reader those are the
+ * same promise twice, one of them greyed out — which reads as a broken screen
+ * rather than as two different mechanisms.
+ *
+ * They ARE different: PAIR A PHONE admits a phone to THIS Mac over the LAN
+ * with the token this Mac prints; ADD A PHONE mints a join code and makes the
+ * phone a device on the ACCOUNT, reaching every Mac through cookrew.dev. But
+ * this tab only exists inside a sheet that only opens once there is an
+ * account — so where both work, the account one is the true answer, and where
+ * joining is not available yet the LAN one is the only answer.
+ *
+ * So the tab offers exactly one, and which one is a fact about the build.
+ */
+describe('which phone verb the Devices tab offers (F3)', () => {
+  it('offers ADD A PHONE once this build can mint a join code', () => {
+    expect(phoneVerb({ canMintJoinCode: true })).toBe('add')
+  })
+
+  it('offers PAIR A PHONE while it cannot — the only door that works', () => {
+    // On a build without the join IPC, a disabled ADD A PHONE beside a live
+    // PAIR A PHONE is the contradiction; the LAN door is simply the answer.
+    expect(phoneVerb({ canMintJoinCode: false })).toBe('pair')
+  })
+
+  it('never offers both, which is the whole finding', () => {
+    for (const canMintJoinCode of [true, false]) {
+      const verb = phoneVerb({ canMintJoinCode })
+      expect(['pair', 'add']).toContain(verb)
+    }
   })
 })

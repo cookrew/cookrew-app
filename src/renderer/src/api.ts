@@ -1,4 +1,5 @@
 import type { DeepLink } from '../../shared/deep-link'
+import type { AnsweredRow, QueueRow, RowAction } from '../../shared/account-requests'
 import type { TranslateResult } from '../../shared/translate'
 import type { Surface as SousSurface } from '../../shared/sous-intent'
 import type { SousCommandResult } from '../../main/sous-control'
@@ -34,6 +35,7 @@ import type {
 import type {
   AccountDevice,
   AccountProfile,
+  AccountRefusal,
   AccountResult,
   AccountStatus,
   AdmittedPhone,
@@ -64,7 +66,14 @@ export type UnlockAnswer =
   | { ok: true; sessionRenewed?: boolean }
   | { ok: false; reason: "wrong"; triesLeft: number }
   | { ok: false; reason: "paused"; pausedForMs: number }
-  | { ok: false; reason: "no-account" };
+  | { ok: false; reason: "no-account" }
+  /**
+   * v3 (D8): the first lock of a Mac that joined by a code. There is no local
+   * verifier yet, so cookrew.dev is asked — and this arm is what comes back
+   * when the answer was not about the password at all (a dead socket, a rate
+   * limit). It carries the registry's refusal; the lock screen says it.
+   */
+  | { ok: false; reason: "unproven"; refusal: AccountRefusal; message?: string };
 
 
 /**
@@ -117,6 +126,8 @@ export type ServeRail =
 
 /** What a door is saying, in the gate sheet's vocabulary. */
 export type ServePhase =
+  /** No account on this Mac: a listed door cannot be asked until there is one. */
+  | { kind: 'identify' }
   | { kind: 'open' }
   | { kind: 'pay'; rails: ServeRail[] }
   | { kind: 'denied'; reason: string; retryable: boolean }
@@ -177,6 +188,21 @@ export interface CookrewApi {
       paymentRails: readonly ServedPaymentRail[];
     }[]
   >;
+  /**
+   * D14 · the doors this Mac lost to another of the account's (V3-18). Asked
+   * for on mount and pushed on every move, so a window that was shut when it
+   * happened still finds the sentence waiting.
+   */
+  servingMoved?: () => Promise<readonly { slug: string; team: string; by: string; at: number }[]>;
+  onServingMoved?: (
+    listener: (door: { slug: string; team: string; by: string }) => void,
+  ) => () => void;
+  /** TAKE IT BACK — dial the same door again, superseding whoever holds it. */
+  servingTakeBack?: (
+    slug: string,
+  ) => Promise<{ ok: true; address: string; name: string } | { ok: false; reason: string }>;
+  /** Let the sentence go without taking the door back. */
+  servingMovedClear?: (slug: string) => Promise<{ ok: boolean }>;
   servingSessions: () => Promise<
     readonly {
       sessionId: string;
@@ -224,11 +250,28 @@ export interface CookrewApi {
       }
     | { ok: false; reason: string }
   >;
-  /** Sign in to the door and ask what it wants. The Bearer stays in main. */
+  /**
+   * Ask the door what it wants. The Bearer stays in main. `door` says which
+   * walk main took: `install` (a listed team, entered as the account — the
+   * team, its owner and this Mac's account come with it) or `direct` (an
+   * unlisted door, this Mac's own key).
+   */
   serveGate: (
     link: string,
   ) => Promise<
-    | { ok: true; phase: ServePhase; wallet: { address: string } | null }
+    | {
+        ok: true;
+        door: 'install' | 'direct';
+        phase: ServePhase;
+        wallet: { address: string } | null;
+        /** The published `@owner/team`, on the install walk. */
+        team?: string;
+        /** The owner's handle, no `@`, on the install walk. */
+        owner?: string;
+        /** The username this Mac is signed in as, when known. */
+        account?: string | null;
+        seat?: string | null;
+      }
     | { ok: false; reason: string; detail?: string }
   >;
   /** Start a card payment: opens hosted Checkout in the real browser. */
@@ -581,6 +624,29 @@ export interface CookrewApi {
     password: string;
     name?: string;
   }) => Promise<AccountResult<AccountStatus>>;
+  /**
+   * v3: the second Mac — sign in to an account this Mac has never held. Main
+   * mints the device key; the answer is a session, the ladder (the same
+   * `accountResume*` rungs finish it), or a refusal with the registry's own
+   * sentence. `accountClaim` above stays the marker for "owner surface".
+   */
+  /**
+   * v3 (D8): join an account with a code. Nothing about the password is
+   * typed here — the code was minted on a device that is already trusted.
+   */
+  accountJoin?: (input: {
+    code: string;
+    name?: string;
+  }) => Promise<AccountResult<AccountStatus>>;
+  /** v3 (D12): mint a code for the next machine. Steps up for the password. */
+  accountJoinCode?: (
+    current: string,
+  ) => Promise<AccountResult<{ code: string; expiresAt: number; url: string }>>;
+  accountSignIn?: (input: {
+    username: string;
+    password: string;
+    name?: string;
+  }) => Promise<SignInAnswer<AccountStatus>>;
   /** Phase 6: set a password on the handle this Mac held before them. */
   accountMigrate?: (input: {
     password: string;
@@ -603,7 +669,13 @@ export interface CookrewApi {
   accountResumeWait?: (pending: string) => Promise<SignInAnswer<AccountStatus>>;
   accountProfile?: () => Promise<AccountResult<AccountProfile>>;
   accountDevices?: () => Promise<AccountResult<readonly AccountDevice[]>>;
-  accountRevoke?: (deviceId: string) => Promise<AccountResult<void>>;
+  /** v3 (D12): REVOKE steps up for the password; the registry gets the DELETE only after it. */
+  accountRevoke?: (input: { deviceId: string; password: string }) => Promise<AccountResult<void>>;
+  /**
+   * v3 (D12): this Mac leaves the account. Answers the status an empty
+   * avatar draws; refused with `last_device` on a one-device account.
+   */
+  accountSignOut?: (password: string) => Promise<AccountResult<AccountStatus>>;
   accountRecoveryCodes?: () => Promise<AccountResult<readonly string[]>>;
   accountSaveRecoveryCodes?: () => Promise<{
     ok: boolean;
@@ -647,10 +719,25 @@ export interface CookrewApi {
   // badge are drawing the same queue. A decision answers with the STATUS, so
   // the badge is right the instant the button is released.
   accountApprovals?: () => Promise<readonly ApprovalRequest[]>;
-  accountDecide?: (input: {
+  /** The one queue (D11): what is waiting, and what is over. */
+  accountRequests?: () => Promise<{
+    pending: readonly QueueRow[];
+    answered: readonly AnsweredRow[];
+  }>;
+  /**
+   * Answer one row. The verb is the button's own id, so the card and main
+   * cannot disagree about what a press meant; `match` is the two digits the
+   * asking device shows and rides only with APPROVE.
+   */
+  accountDecideRequest?: (input: {
     id: string;
-    decision: ApprovalDecision;
-  }) => Promise<AccountResult<AccountStatus>>;
+    action: RowAction['id'];
+    match?: string;
+  }) => Promise<
+    | { ok: true; value: AccountStatus }
+    /** `triesLeft` rides only on `bad_match`, which is the test for it. */
+    | { ok: false; reason: string; message?: string; triesLeft?: number }
+  >;
   accountSetPassword?: (input: {
     current: string;
     next: string;
@@ -667,6 +754,10 @@ export interface CookrewApi {
   }) => Promise<AccountResult<PasskeySummary>>;
   accountPasskeyRemove?: (id: string, current: string) => Promise<AccountResult<void>>;
   onAccountRequests?: (cb: (requestId: string | null) => void) => () => void;
+  /** account:changed, with its sentence already written (D11 · A4). */
+  onAccountEvent?: (
+    cb: (event: { kind: string; device?: string; at: number; sentence: string }) => void,
+  ) => () => void;
   /**
    * Re-establish the push channel if it has died. Remote clients only: a
    * desktop renderer talks to main over IPC, which cannot go down while the

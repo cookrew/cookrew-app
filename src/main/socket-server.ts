@@ -827,19 +827,27 @@ function cmdCheck(request: CliRequest, deps: SocketServerDeps): string {
   return session.viewportText()
 }
 
-function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
+export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
   const [sub, ...rest] = request.args
   const me = self(request, deps)
   switch (sub) {
     case 'create': {
       const content = rest[0] ?? ''
-      const note = deps.store.createNote({
-        customName: null,
-        content,
-        locked: false,
-        position: { x: me.position.x - DEFAULT_NOTE_SIZE.width - 60, y: me.position.y },
-        size: DEFAULT_NOTE_SIZE
-      })
+      // THE CALLER'S CANVAS, NEVER THE ONE ON SCREEN. A note is made beside
+      // the terminal that asked for it, and that terminal belongs to exactly
+      // one workspace; using the focused one put every agent's card on
+      // whichever canvas the owner happened to be looking at, joined by an
+      // edge that spanned two workspaces.
+      const note = deps.store.createNote(
+        {
+          customName: null,
+          content,
+          locked: false,
+          position: { x: me.position.x - DEFAULT_NOTE_SIZE.width - 60, y: me.position.y },
+          size: DEFAULT_NOTE_SIZE
+        },
+        deps.store.ownerOf(me.id)
+      )
       deps.store.connectAcross(me.id, note.id)
       return `Created note "${note.name}"`
     }

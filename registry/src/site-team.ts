@@ -1,3 +1,4 @@
+import { webCopy } from './v3-copy'
 import type { ListedDoor } from './site'
 import { priceChip } from './site-home'
 import { day, esc, page, type Page } from './site-shell'
@@ -110,14 +111,35 @@ function seatBar(input: TeamInput, door: ListedDoor, address: string): string {
 <p class="row" style="margin:0"><button class="btn primary lg" data-seat-open>Open the line</button></p>${room}</section>`
   }
 
-  const ask = `${esc(`${input.origin}/@${door.handle}/${door.name}?ask=${input.account}`)}`
-  return `<section class="card seat" id="seatbar" data-team="${esc(address)}">
-<h2>You are @${esc(input.account)} · no seat here yet</h2>
-<p class="lede" style="margin:0 0 10px">Buy one, or ask @${esc(door.handle)} for one. A seat is yours, not this browser’s.</p>
-<p class="row" style="margin:0"><button class="btn primary lg" data-seat-buy>Buy a seat · $${esc(price)}</button>
-<button class="btn lg" data-seat-ask="${ask}">Copy link to ask @${esc(door.handle)}</button></p>
-<p class="meta" style="margin:10px 0 0">No queue: the link is this page with your username on it. @${esc(door.handle)} grants the seat by username, and it is here the next time you open this page.</p>
-<code class="cmd" id="seat-ask-link" hidden>${ask}</code></section>`
+  /**
+   * W6 · ASK IS A REQUEST (R1) — it files, it does not copy.
+   *
+   * The button used to put a link on the clipboard, which left the asker with
+   * an errand: find the owner somewhere else and send it to them. The request
+   * goes to the owner's one queue instead and reaches every device they have,
+   * so the sentence names that rather than describing a paste.
+   *
+   * BOTH STATES SHIP IN THE MARKUP and site.js unhides one. The CSP forbids an
+   * inline script, so a bar assembled at load is a bar nobody can read in
+   * view-source; and the asked state is reachable on a RELOAD — this page
+   * polls GET …/seat, and somebody who closed the tab and came back must find
+   * the bar already waiting rather than a button that would file a second
+   * request.
+   *
+   * THERE IS NO WITHDRAW, and it is left out rather than faked. The design's
+   * asked state offers one, but no route retracts a seat request — a button
+   * that stopped this tab polling while the request sat in the owner's queue
+   * would be a lie told to the only person who believed it. It arrives with
+   * the route (see the report).
+   */
+  return `<section class="card seat" id="seatbar" data-team="${esc(address)}" data-owner="${esc(door.handle)}"
+  data-asked-head="${esc(webCopy('w6.asked-head', { handle: door.handle }))}"
+  data-already-asked="${esc(webCopy('w6.already-asked', { handle: '{handle}' }))}">
+<h2 id="seat-head">You are @${esc(input.account)} · no seat here yet</h2>
+<p class="lede" style="margin:0 0 10px" id="seat-lede">${esc(webCopy('w6.no-seat', { handle: door.handle }))}</p>
+<p class="row" style="margin:0"><button class="btn primary lg" data-seat-buy id="seat-buy">Buy a seat · $${esc(price)}</button>
+<button class="btn lg" data-seat-ask>Ask @${esc(door.handle)}</button></p>
+<p class="meta" style="margin:10px 0 0" id="seat-ask-note" hidden>${esc(webCopy('w6.asked'))}</p></section>`
 }
 
 export function teamPage(input: TeamInput): Page {

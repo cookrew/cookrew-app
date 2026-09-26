@@ -107,15 +107,19 @@ import { AgentExportStore } from './agent-export'
 import { OwnerGrant, isOwnerSender } from './owner-grant'
 import { Accounts, DEFAULT_LOCK_AFTER_MS, registryOrigin } from './account-v2'
 import { relayHandle } from './legacy-identity'
+import { republishDoors, servingChange } from './serving-identity'
 import { createAdmittedDeviceStore } from './admitted-devices'
 import { pairingHandout } from './pairing-handout'
+import { pairingUrl } from '../shared/pairing-url'
 import type { PairingHandout } from '../shared/account-v2'
 import { createReachPublisher, type ReachPublisher } from './reach'
 import { createCanvasLink } from './canvas-link'
 import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
 import { IdleLock } from './lock'
 import { registerAccountIpc } from './account-ipc'
-import { Approvals } from './approvals'
+import { localDeviceName } from './device-name'
+import { COMPANION_BOOTSTRAPS } from '../shared/lan-token-mode'
+import { Requests, answeredStoreIn } from './requests'
 import {
   DoorCallers,
   DoorSeats,
@@ -212,6 +216,7 @@ import {
 import http from 'node:http'
 import { MOBILE_HTTPS_PORT, MOBILE_PORT } from './mobile-ports'
 import { createRelayServing } from './relay-serving'
+import { doorMovedSentence } from '../shared/door-ownership'
 import { startRelayProxy, type RelayProxy } from './relay-proxy'
 import { importedDoors, rememberDoor, resolveDoor } from './relay-doorbook'
 import { SERVED_SESSION_END_PATH } from '../shared/served-transcript'
@@ -219,8 +224,7 @@ import { DoorTranscript } from './door-transcript'
 import { DoorWatch } from './door-watch'
 import { doorNameOf, transcriptSourceFor } from './transcript-source'
 import { readJson, respondJson } from './mobile-http'
-import { deriveSlug, uniqueSlug } from './workspace-slug'
-import { hostname } from 'node:os'
+import { deriveSlug, uniqueSlug } from '../shared/workspace-slug'
 import { publishedLocalAddresses } from './local-interfaces'
 import { wireServing, type Serving } from './session-serving'
 import { servedTemplateFile } from './served-persist'
@@ -232,6 +236,7 @@ import { serviceGrants } from './service-grants-store'
 import { requestHarnessCompletion, servedGrantPreflight } from './served-grant-preflight'
 import { servedSessionProvisioner } from './served-onboarding'
 import {
+  doorOwnerOf,
   gateCaller,
   handleServedRoute,
   identifyCaller,
@@ -248,11 +253,15 @@ import {
   type ServeTarget
 } from './import-session'
 import {
+  admitWithAccount,
   openAdmission,
   signInToDoor,
   startStripeCheckout,
   stripePaymentHeader
 } from './served-admission'
+import { doorBearer, type DoorBearerPort } from './door-bearer'
+import { expiryWarningDue } from '../shared/session-renew'
+import { gateDoorFor } from '../shared/gate-walk'
 import { buildX402Payment, deviceWallet } from './x402-caller'
 import { servedTurnReply } from './served-turn-reply'
 import { handleServedPayRoute } from './served-pay-route'
@@ -638,7 +647,10 @@ const ENV_HANDLE = process.env.COOKREW_HANDLE ?? ''
  * than throws. Nothing here is on the serving path.
  */
 const accounts = new Accounts({
-  deviceName: hostname(),
+  // "<model> · <host>" (v3, D12): two Macs of one model are told apart by
+  // host, and a name already on the account gets a counter — decided here,
+  // never at the registry, which files what it is sent.
+  deviceName: localDeviceName(),
   // THE ACCOUNT CHANGED WITHOUT A CLICK ON THIS MAC. A password changed on the
   // web ends this session; nothing local would ever notice. Pushing the status
   // is what turns that into a password prompt the owner can actually answer.
@@ -646,6 +658,12 @@ const accounts = new Accounts({
     if (mainWindow && !mainWindow.webContents.isDestroyed()) {
       mainWindow.webContents.send('account:changed')
     }
+    // A REVOKE IS AN ACCOUNT CHANGE, and the phone it cut off may be sitting on
+    // this Wi-Fi right now. Cut 1's event carries no payload, so this cannot
+    // know WHICH device changed; it asks the registry who is revoked and lets
+    // the answer decide. That is what makes the withdrawal prompt instead of
+    // waiting out the sweep below.
+    sweepRevocations()
     // REACH v2.1 — A CLAIM IS THE MOMENT A CERTIFICATE BECOMES POSSIBLE.
     // `ensure` was only ever called at boot and hourly, so a Mac that claimed
     // its account after starting served self-signed for up to an hour and
@@ -654,14 +672,23 @@ const accounts = new Accounts({
     // the chain it already has), so saying it on every account write costs a
     // function call and closes the gap.
     void nameCertificate.ensure('the account changed').catch(() => undefined)
+    // AND THE SAME GAP, FOR THE APPROVAL QUEUE (V3-UI1 · F1). The comment
+    // above is about a certificate that only ever ran at boot; the queue had
+    // the identical shape, and on the first run of the product it meant the
+    // only rung a factorless account has was never announced at all.
+    followAccount()
+    // AND THE DOORS (V3-FIX-SERVING-ID). Same trigger, same reason: the name
+    // this Mac serves under is decided by the account, so it moves when the
+    // account does — not when the process happened to start.
+    followServingIdentity()
   }
 })
 
 /** The handle the key in ~/.cookrew/registry holds, if this Mac ever served. */
-const LEGACY_HANDLE = accounts.legacyHandle()
+const legacyHandleNow = (): string | null => accounts.legacyHandle()
 
 /**
- * WHICH NAME THIS MAC SERVES UNDER (identity v2, phase 6).
+ * WHICH NAME THIS MAC SERVES UNDER (identity v2, phase 6) — ASKED EACH TIME.
  *
  * THE ENVIRONMENT IS RETIRED AS IDENTITY. The account decides, then the key
  * this Mac already holds — which wins over a disagreeing account because a v1
@@ -670,24 +697,139 @@ const LEGACY_HANDLE = accounts.legacyHandle()
  * the dial rather than rename the door. COOKREW_HANDLE decides only on a
  * machine that has neither, and is told what it is. The whole table is a pure
  * function (legacy-identity.ts) with a test per row.
+ *
+ * IT USED TO BE A `const`, AND THAT WAS THE BUG. Resolved once at module load,
+ * a Mac that booted local-only and then claimed an account kept publishing its
+ * doors under the environment's name or its old key's: the screen said
+ * @magpie, cookrew.dev listed @drej/team, and a seat bought against
+ * @magpie/team could not admit anyone there. Same shape as the certificate
+ * `ensure` pass and the approval queue below — a fact that changes after boot,
+ * read from the order the module happened to run in.
  */
-const RELAY_IDENTITY = relayHandle({
-  account: accounts.account()?.username ?? null,
-  legacy: LEGACY_HANDLE,
-  env: ENV_HANDLE
-})
-const RELAY_HANDLE = RELAY_IDENTITY.handle
-// ONCE, at boot: a fact about how this process resolved its own name.
-if (RELAY_IDENTITY.note !== null) console.error(RELAY_IDENTITY.note)
+const servingHandleNow = (): string =>
+  relayHandle({
+    account: accounts.account()?.username ?? null,
+    legacy: legacyHandleNow(),
+    env: ENV_HANDLE
+  }).handle
 
-const relayServing =
-  RELAY_ORIGIN && RELAY_HANDLE
-    ? createRelayServing({
+// ONCE, at boot: a fact about how this process resolved its own name.
+{
+  const atBoot = relayHandle({
+    account: accounts.account()?.username ?? null,
+    legacy: legacyHandleNow(),
+    env: ENV_HANDLE
+  })
+  if (atBoot.note !== null) console.error(atBoot.note)
+}
+
+/**
+ * CREATED WHENEVER THERE IS A RELAY, not only when this Mac already had a name
+ * for it (V3-SERVING-ID).
+ *
+ * The condition was `RELAY_ORIGIN && RELAY_HANDLE`, which on a first run — no
+ * account, no key, no COOKREW_HANDLE — left this null for the life of the
+ * process. The person then claimed an account and could not serve anything at
+ * all until they restarted, with nothing on screen saying why. Serving needs a
+ * handle at the moment a door goes up, which is where it is checked; `who`
+ * below is read per dial for the same reason.
+ */
+const relayServing = RELAY_ORIGIN
+  ? createRelayServing({
         origin: RELAY_ORIGIN,
         loopbackPort: () => MOBILE_PORT,
+        /**
+         * WHICH MAC IS DIALLING (V3-18). Read per dial rather than captured,
+         * because signing in or out changes the answer and a door dialled
+         * before the account existed must name this Mac on its next redial.
+         * Null on a Mac with no account, and then the relay keeps refusing a
+         * name already held — there is no other Mac to have taken it from.
+         */
+        who: () => {
+          const account = accounts.account()
+          if (account === null) return null
+          return {
+            deviceId: account.deviceId,
+            name: account.name,
+            // The session, when this Mac holds a live one. It is what lets the
+            // SECOND Mac of an account serve at all — the v1 registry key it
+            // would otherwise prove the handle with cannot be enrolled twice.
+            ...(account.session === null ? {} : { session: account.session.token })
+          }
+        },
+        /**
+         * ANOTHER MAC OF THIS ACCOUNT TOOK ONE OF OUR DOORS (D14 · moved).
+         *
+         * By the time this runs, serving here has already stopped — that
+         * decision is made in relay-serving, where the alternative was two
+         * Macs taking the name from each other for ever. All that is left is
+         * to say so, in the same breath on the canvas and in the system tray,
+         * and to leave TAKE IT BACK where the person is looking.
+         */
+        onMoved: (door) => {
+          doorsMovedHere = [
+            ...doorsMovedHere.filter((held) => held.slug !== door.slug),
+            { slug: door.slug, team: door.team, by: door.by, at: Date.now() }
+          ]
+          // The registry's own record of who holds what, brought into line the
+          // moment this Mac knows — it no longer serves this name.
+          publishDoorClaims()
+          const sentence = doorMovedSentence(door.team, door.by)
+          if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+            mainWindow.webContents.send('serving:moved', { slug: door.slug, team: door.team, by: door.by })
+          }
+          showNotification(sentence)
+          console.error(`[cookrew] ${sentence}`)
+        },
         log: (message) => console.error(message)
       })
     : null
+
+/**
+ * THE DOORS THIS MAC LOST WHILE IT WAS RUNNING (V3-18).
+ *
+ * Held here rather than only pushed at the renderer because the window may be
+ * closed, minimised or reloading when a door moves, and a notice that existed
+ * only as an event would be one the owner never sees. Cleared by taking the
+ * door back or by serving it again.
+ */
+let doorsMovedHere: readonly { slug: string; team: string; by: string; at: number }[] = []
+
+/**
+ * THE SLUGS THIS MAC IS HOLDING AT THE RELAY — its claims, not its listings.
+ *
+ * Only a door actually on the relay holds a `@handle/team` name, so a team
+ * served on the LAN alone claims nothing: there is no name for a second Mac
+ * to collide with, and filing one would make a save sheet warn about a
+ * conflict that cannot happen.
+ */
+function relayedSlugs(): readonly string[] {
+  if (!relayServing) return []
+  return serving.served
+    .list()
+    .map((template) => template.slug)
+    .filter((slug) => relayServing.addressFor(slug) !== null)
+}
+
+/**
+ * FILE THIS MAC'S DOOR CLAIMS — one name, one holder (V3-18 · A3).
+ *
+ * The registry keeps the claims on the desktop record, so the NEXT Mac to save
+ * the same slug is told who holds it before the relay ever refuses the dial.
+ * Best effort and silent: a claim that did not file costs a save sheet its
+ * warning, and a door that works is worth more than a warning that does not.
+ */
+function publishDoorClaims(): void {
+  if (accounts.account() === null) return
+  void accounts
+    .registerDesktop(
+      store.list().workspaces.map((w) => ({ id: w.id, name: w.name })),
+      undefined,
+      undefined,
+      relayedSlugs()
+    )
+    .catch(() => undefined)
+}
 
 /**
  * IDENTITY V2.1 — one credential, and the reach card.
@@ -845,22 +987,49 @@ setInterval(() => {
  * is the same place the badge leads: one destination, so a person who saw the
  * toast and a person who saw the badge end up looking at the same card.
  */
-const approvals = new Approvals({
+const requests = new Requests({
   accounts,
-  hasSecondFactor: () => accountHasFactor,
-  notify: ({ title, body, request }) => {
+  notify: ({ title, body, requestId }) => {
     const note = new Notification({ title, body })
     note.on('click', () => {
       if (!mainWindow || mainWindow.webContents.isDestroyed()) return
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()
-      mainWindow.webContents.send('account:requests', request.id)
+      mainWindow.webContents.send('account:requests', requestId)
     })
     note.show()
   },
   onChange: () => {
     if (mainWindow && !mainWindow.webContents.isDestroyed()) {
       mainWindow.webContents.send('account:requests', null)
+    }
+  },
+  // THE TOAST'S HALF. A system notification is for the person who is not
+  // looking at Cookrew; a toast is for the one who is, and an account that
+  // changed under them deserves to be said in the window they are in rather
+  // than only in a corner of the screen they may have permissions turned off
+  // for.
+  onEvent: (event, sentence) => {
+    if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+      mainWindow.webContents.send('account:event', { ...event, sentence })
+    }
+  },
+  answered: answeredStoreIn(),
+  // ALLOW's own half (R2): this phone gets a token of its own, and the URL
+  // that carries it is sealed to the key the request arrived with. The root
+  // pairing credential never leaves this process for a device that asked
+  // through the queue.
+  reach: {
+    admit: (device) => admittedDevices.admit(device),
+    pairingUrlFor: (token) => {
+      const account = accounts.account()
+      if (!account) return null
+      return pairingUrl({
+        registryOrigin: registryOrigin(),
+        username: account.username,
+        deviceId: account.deviceId,
+        pairingToken: token
+      })
     }
   }
 })
@@ -885,11 +1054,128 @@ const readFactors = (): void => {
     })
     .catch(() => undefined)
 }
-if (accounts.account()) {
-  readFactors()
-  setInterval(readFactors, FACTOR_CACHE_MS).unref()
-  approvals.start()
+/**
+ * THE QUEUE AND THE FACTOR CACHE FOLLOW THE ACCOUNT (V3-UI1 · F1).
+ *
+ * Both of these used to be set up once, here, under `if (accounts.account())`
+ * — and on the FIRST RUN of the product there is no account at that moment.
+ * The person creates one a minute later and neither ever starts: no approval
+ * poll, so no toast and no rose badge when their second Mac asks to join, and
+ * a factor cache stuck at its boot-time default. Window focus was the only
+ * other thing calling refresh, which is exactly the event a person already
+ * looking at their canvas does not generate.
+ *
+ * Called at boot AND from `accounts.onChange`, so signing in, joining and
+ * signing out all land in the right state. `follow` is idempotent and the
+ * interval is guarded, so neither caller has to know which way it moved.
+ */
+let factorPoll: ReturnType<typeof setInterval> | null = null
+const followAccount = (): void => {
+  requests.follow()
+  if (accounts.account()) {
+    if (factorPoll === null) {
+      readFactors()
+      factorPoll = setInterval(readFactors, FACTOR_CACHE_MS)
+      factorPoll.unref()
+    }
+    return
+  }
+  if (factorPoll !== null) {
+    clearInterval(factorPoll)
+    factorPoll = null
+  }
+  // A Mac with no account has no factors; leaving the last answer behind would
+  // have D6's sentence describe an account that is not signed in here.
+  accountHasFactor = false
 }
+
+/**
+ * THE DOORS FOLLOW THE ACCOUNT TOO.
+ *
+ * Re-resolve the serving name and, if the doors on the relay are listed under
+ * one that is no longer this Mac's, take them down and put them back under the
+ * new one.
+ *
+ * IMMEDIATELY, AND ONLY WHEN THE NAME ACTUALLY MOVED. `accounts.onChange`
+ * fires on every account write — a display name, a renewed session, a revoked
+ * device — so the guard is not the event, it is `servingChange.republish`,
+ * which compares what cookrew.dev is holding against what this Mac can now
+ * prove. In the ordinary case that is a string compare and nothing happens.
+ *
+ * Immediately, because the window in between is the defect: a door listed
+ * under a name the account cannot prove cannot honour a seat bought against
+ * the account, and every minute of it is a person paying for a seat that does
+ * not admit them. A debounce would buy nothing — the move happens once, when a
+ * Mac gets an account — and "on the next serve" could be never, since serving
+ * survives restarts and nobody re-serves a door that is already up.
+ *
+ * IT DOES COST SOMETHING and the cost is stated: republishing re-dials the
+ * relay and MOVES THE ADDRESS, because the address is built from the handle.
+ * Links to the old address stop resolving. That is the right trade exactly
+ * once, because the link that still worked was a link to a door that refuses
+ * the person the seat was bought for.
+ *
+ * One at a time, and failures are logged rather than thrown: this runs beside
+ * the canvas, and a registry that is down must leave the Mac as it was.
+ */
+let republishing = false
+const followServingIdentity = (): void => {
+  if (!relayServing || republishing) return
+  const change = servingChange({
+    serving: relayServing.servingHandle(),
+    account: accounts.account()?.username ?? null,
+    legacy: legacyHandleNow(),
+    env: ENV_HANDLE
+  })
+  if (!change.changed) return
+  if (change.note !== null) console.error(change.note)
+  if (!change.republish) {
+    if (change.handle === '' && relayServing.servingHandle() !== '') {
+      // Said, never done: withdrawing somebody's doors because they signed out
+      // of a sheet would disconnect the callers those doors are carrying.
+      console.error(
+        `[cookrew] nothing names this Mac now, so its doors stay listed as @${relayServing.servingHandle()} — stop serving them to take them down.`
+      )
+    }
+    return
+  }
+  const was = relayServing.servingHandle()
+  console.error(`[cookrew] doors move from @${was} to @${change.handle}: re-listing them now.`)
+  republishing = true
+  void republishDoors({
+    slugs: () => serving.served.list().map((template) => template.slug),
+    withdraw: (slug) => relayServing.withdraw(slug),
+    serve: async (slug) => {
+      const template = serving.served.bySlug(slug)
+      // A door withdrawn and then not served again is a door LOST, so neither
+      // of these is allowed to pass quietly. `joinRelayFor` reports its own
+      // refusals and returns either way, so the door's presence on the relay
+      // is what is checked — the summary below has to be able to count.
+      if (!template) throw new Error('it is no longer served here')
+      await joinRelayFor(template)
+      if (relayServing.addressFor(slug) === null) throw new Error('it did not go back up')
+    },
+    log: (message) => console.error(message)
+  })
+    .then(({ moved, failed }) => {
+      console.error(
+        `[cookrew] ${moved} door(s) now listed as @${change.handle}` +
+          (failed.length === 0 ? '' : `; ${failed.join(', ')} could not be moved and stay as they were`)
+      )
+    })
+    .finally(() => {
+      republishing = false
+      // ASK ONCE MORE. A move that arrived while this one was running was
+      // dropped by the guard above; re-reading is a string compare that ends
+      // immediately in every case but the one where it was needed.
+      followServingIdentity()
+    })
+}
+
+followAccount()
+// NOT CALLED AT BOOT. Nothing is on the relay yet, so there is nothing to move
+// — and the name this process resolved has already been said once, above.
+// Every door that goes up from here reads the handle at the moment it goes up.
 
 /**
  * Sign-in with a cookrew.dev token needs the registry's public key, and only
@@ -906,8 +1192,98 @@ const registryTokens = RELAY_ORIGIN
  * which body arrives decides which is asked (served-endpoints.handleServedRoute).
  */
 const v2CallTokens = RELAY_ORIGIN
-  ? createV2CallTokenVerifier({ keys: v2KeysOverHttp(RELAY_ORIGIN) })
+  ? createV2CallTokenVerifier({
+      keys: v2KeysOverHttp(RELAY_ORIGIN),
+      // ONE FETCH, TWO READERS. The list is fetched for the doors; it is also
+      // the only thing that can tell this Mac that a phone it opens for on the
+      // LAN was cut off at the registry. A second poll of the same route would
+      // be a second answer, and the two would drift.
+      onRevoked: (revoked) => {
+        for (const device of admittedDevices.prune(revoked)) {
+          // One line per phone, named. "Withdrew 1 admission" would leave the
+          // owner with no idea which phone in their hand just stopped working.
+          console.error(
+            `Admission withdrawn: ${device.name ?? device.deviceId} was revoked at the registry`
+          )
+        }
+      }
+    })
   : null
+
+/**
+ * REVOCATION REACHES THIS MAC'S LAN ADMISSION.
+ *
+ * "Revoking a device kills its session now, its door tokens within the token
+ * TTL, and its LAN admission on every Mac within a minute" — the security
+ * model's fifth line. The first two were already true and the third was not: a
+ * revoked phone went on opening this Mac over Wi-Fi until somebody pressed
+ * FORGET here, which is why the copy had to admit as much.
+ *
+ * It hangs on a clock because there is nothing else to hang it on. A phone
+ * that was cut off does not announce itself, and the door verifier asks the
+ * registry anything only when a stranger calls a served crew — a Mac serving
+ * nobody would never have asked at all. A minute is the number the security
+ * model promises, so it is the number here.
+ *
+ * A function declaration rather than a const because `accounts`' onChange is
+ * written above the verifier and calls it; it runs only after a write to the
+ * account file, long after module scope has finished.
+ */
+const REVOCATION_SWEEP_MS = 60_000
+function sweepRevocations(): void {
+  if (!v2CallTokens) return
+  // Nothing admitted is nothing to withdraw, and a Mac with no phone paired to
+  // it should not be asking the registry a question it has no use for.
+  if (admittedDevices.list().length === 0) return
+  void v2CallTokens.refresh()
+}
+setInterval(sweepRevocations, REVOCATION_SWEEP_MS).unref()
+
+/**
+ * THE SESSION RENEWS ITSELF, AND SAYS SO WHEN IT CANNOT (v3, V3-17).
+ *
+ * A session lives thirty days, and until V3-16 the thirtieth day took every
+ * door this Mac publishes offline — "no-relay" until a person happened to be
+ * at the keyboard to retype a password. The marketplace's availability should
+ * not be bounded by somebody's memory, so the Mac signs a registry nonce with
+ * the device key that attached it in the first place.
+ *
+ * DAILY, NOT HOURLY. `renewDue` opens a whole week, so a day is six retries of
+ * slack before anyone needs to be told; asking more often would only mean more
+ * ways to be rate-limited on the day it matters.
+ *
+ * AND THE WARNING IS THE OTHER HALF. Renewal that keeps failing is the one
+ * case a person must hear about BEFORE the doors go down, on every device they
+ * have, naming the Mac that has to be opened. Twice a day is enough for a
+ * two-day window and few enough that it is not noise.
+ */
+const RENEW_CHECK_MS = 24 * 60 * 60 * 1000
+/** Boot is the likeliest moment for a Mac that was asleep through its week. */
+const RENEW_AT_BOOT_MS = 30_000
+let saidExpiring = 0
+
+async function renewSessionIfDue(): Promise<void> {
+  try {
+    await accounts.renew()
+  } catch (error) {
+    console.error('Could not renew this Mac\'s session:', error)
+  }
+  const account = accounts.account()
+  if (!account || !expiryWarningDue(account.session, Date.now(), accounts.renewFailing())) return
+  // Said at most twice a day. A warning repeated on every tick is a warning
+  // the owner learns to dismiss, which is the one thing this must not become.
+  if (Date.now() - saidExpiring < RENEW_CHECK_MS / 2) return
+  saidExpiring = Date.now()
+  const day = new Date(account.session?.exp ?? Date.now()).toLocaleDateString(undefined, { weekday: 'long' })
+  const sentence = `@${account.username}'s doors go offline on ${day} unless ${account.name} renews — open Cookrew there once.`
+  console.error(`[cookrew] ${sentence}`)
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send('account:expiring', sentence)
+  }
+}
+
+setTimeout(() => void renewSessionIfDue(), RENEW_AT_BOOT_MS).unref()
+setInterval(() => void renewSessionIfDue(), RENEW_CHECK_MS).unref()
 /** Who has signed in at each served door — the memory behind D7's avatars. */
 const doorCallers = new DoorCallers()
 /** The owner's seat routes at cookrew.dev, spoken with the owner's session. */
@@ -945,11 +1321,20 @@ function servedAddress(slug: string): string {
  */
 async function joinRelayFor(template: ServedTemplate): Promise<void> {
   if (!relayServing) return
+  // ASKED NOW, not at module load. A Mac that claimed its account after
+  // booting serves under the account from this point on; one that has no name
+  // at all does not go up nameless — the door stays local and says so, rather
+  // than being listed somewhere nobody can look it up.
+  const handle = servingHandleNow()
+  if (handle === '') {
+    console.error(`serving ${template.slug}: no account or key names this Mac, so it is not on the relay`)
+    return
+  }
   const snapshot = teams.load(template.templateId)
   const joined = await relayServing.serve({
     slug: template.slug,
     team: template.slug,
-    handle: RELAY_HANDLE,
+    handle,
     face: {
       title: snapshot?.name ?? template.templateId,
       door: (snapshot ? orchAgentOf(snapshot) : null) ?? '',
@@ -1505,6 +1890,15 @@ const streamIpcDeps: StreamIpcDeps = {
  * (The R30 crew lane once threaded a remote client through seven seams and a
  * second card type; the owner reverted it. This is one seam and no new card.)
  */
+/**
+ * The port the two post-import calls are asked through. `accounts` is this
+ * Mac's session on cookrew.dev; the key store is the door's own file.
+ */
+const doorPort: DoorBearerPort = {
+  admit: (target, team) => admitWithAccount(target, team, accounts),
+  withKey: (target) => signInToDoor(target)
+}
+
 const doorTranscripts = new Map<string, Promise<DoorTranscript | null>>()
 
 function doorTranscriptFor(terminalId: string): Promise<DoorTranscript | null> {
@@ -1524,7 +1918,7 @@ function doorTranscriptFor(terminalId: string): Promise<DoorTranscript | null> {
     const target = name
       ? { origin: `http://127.0.0.1:${(await relayProxy()).port}`, slug: name }
       : { origin: facts.origin, slug: facts.slug }
-    return new DoorTranscript(target, { signIn: (at) => signInToDoor(at) })
+    return new DoorTranscript(target, { signIn: (at) => doorBearer(doorPort, at, name) })
   })().catch((error) => {
     console.error(`door transcript for ${terminalId}: ${String(error)}`)
     // NEVER the local file. A door card whose door cannot be reached is a
@@ -1554,7 +1948,7 @@ async function endSessionAtDoor(node: TerminalNodeData): Promise<void> {
     const target = name
       ? { origin: `http://127.0.0.1:${(await relayProxy()).port}`, slug: name }
       : { origin: facts.origin, slug: facts.slug }
-    const token = await signInToDoor(target)
+    const token = await doorBearer(doorPort, target, name)
     const res = await fetch(`${target.origin}/${target.slug}${SERVED_SESSION_END_PATH}`, {
       method: 'POST',
       redirect: 'manual',
@@ -3605,6 +3999,19 @@ const serveOps = {
       return { ok: false as const, reason: 'unreachable' as const }
     }
   },
+  /**
+   * THE GATE — which walk, and what the door said (identity v3, G1/G3).
+   *
+   * One decision splits it, `gateDoorFor`: a LISTED team (a published name the
+   * directory answers for) is entered as the ACCOUNT — cookrew.dev mints a
+   * call token for this Mac's session and the door seats `acct-<username>`,
+   * the same person the web seated, so a seat bought there admits here with
+   * no second payment. With no account on this Mac the answer is the
+   * `identify` phase and the sheet opens the account sheet in place. The
+   * caller key is offered at UNLISTED doors only — the DIRECT walk — because
+   * a key-holder sub can never be the person a seat names. The phone's gate
+   * verb (mobile-api /api/serve/gate) runs this same function.
+   */
   gate: async (link: string) => {
     const target = parseServeAddress(link)
     if (!target) return { ok: false as const, reason: 'bad-address' as const }
@@ -3612,10 +4019,29 @@ const serveOps = {
       const reached = await reachable(target)
       if (!reached) return { ok: false as const, reason: 'sign-in' as const, detail: 'not serving' }
       const at = reached.at
-      const token = await signInToDoor(at)
-      callerTokens.set(targetKey(target), token)
-      const phase = await openAdmission(at, token)
-      return { ok: true as const, phase, wallet: deviceWallet() }
+      const door = gateDoorFor(target, reached)
+      if (door === 'direct') {
+        const token = await signInToDoor(at)
+        callerTokens.set(targetKey(target), token)
+        const phase = await openAdmission(at, token)
+        return { ok: true as const, door, phase, wallet: deviceWallet() }
+      }
+      const team = target.door as string
+      const admitted = await admitWithAccount(at, team, accounts)
+      if (admitted.token !== null) callerTokens.set(targetKey(target), admitted.token)
+      return {
+        ok: true as const,
+        door,
+        phase: admitted.phase,
+        wallet: deviceWallet(),
+        // The facts the sheet's sentences name: the team, who can say yes,
+        // and who this Mac is (the usual cause of a no_seat is being signed
+        // in as somebody else).
+        team,
+        owner: doorOwnerOf(team),
+        account: admitted.account,
+        seat: admitted.seat
+      }
     } catch (error) {
       return {
         ok: false as const,
@@ -3813,7 +4239,23 @@ function relayProxy(): Promise<RelayProxy> {
       log: (message) => console.error(message),
       // A card placed months ago starts with nothing in memory. This is how it
       // finds its door again without being imported a second time.
-      resolve: resolveDoor
+      resolve: resolveDoor,
+      /**
+       * THE CARD'S OWN LINE, ON THE ACCOUNT (v3-04c). The third caller of a
+       * listed door is `orch-line.mjs`, in the card's PTY — a separate process
+       * that cannot mint a call token because minting needs this Mac's
+       * cookrew.dev session. So it asks here, and the answer comes from the
+       * SAME `doorBearer` the transcript and END use: one function, one rule
+       * about listed versus direct, one caller at the door.
+       *
+       * The target is the proxy's own loopback end, which is where a listed
+       * door is always reached — exactly as `doorTranscriptFor` addresses it.
+       */
+      bearer: async (name) => {
+        const port = (await relayProxy()).port
+        return doorBearer(doorPort, { origin: `http://127.0.0.1:${port}`, slug: name }, name)
+      },
+      account: () => accounts.account()?.username ?? null
     }).then((proxy) => {
       callerProxy = proxy
       return proxy
@@ -4295,7 +4737,7 @@ const browserCast = createBrowserCast({
   // The TV wall's read-only token is deliberately NOT accepted: this socket
   // carries pointer and key INPUT, so admitting a read-only credential here
   // would hand it a write it does not have anywhere else.
-  paired: (credential) => companionTokenAccepted(credential, (one) => admittedDevices.accepts(one))
+  paired: (credential) => companionTokenAccepted(credential, (one) => admittedDevices.deviceFor(one))
 })
 
 const headlessBrowserCommands = new HeadlessBrowserCommandEngine({
@@ -4369,7 +4811,7 @@ function createWindow(): void {
   mainWindow.on('focus', () => ownerLock.focus())
   // And it is the moment the owner can actually answer a waiting device, so
   // the queue is re-read then rather than waiting out the poll (D6).
-  mainWindow.on('focus', () => void approvals.refresh())
+  mainWindow.on('focus', () => void requests.refresh())
 
   if (process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -4744,8 +5186,23 @@ app.whenReady().then(() => {
   // THE OWNER'S END OF THE RELAY, for every team still being served. The
   // templates came back from disk; their doors have to be dialled again.
   for (const template of serving.served.list()) void joinRelayFor(template)
+  // After the boot dials, not with them: a claim filed before the relay
+  // answered would name doors this Mac may turn out not to be holding.
+  setTimeout(publishDoorClaims, 5_000).unref?.()
 
   startMobileServer({
+    /**
+     * v3 (V3-21 · H2): an OVERRIDE for QA, never the switch.
+     *
+     * The default lives with the build (shared/lan-token-mode.ts) because it
+     * is a fact about the companion bundle this Mac serves, and because the
+     * revoke sentence has to read the same fact. Setting this to 1 gives the
+     * strict world early — the root opens the admission route and nothing
+     * else — for QA against a companion that already sends the admission.
+     * Unset, the build decides, which is what "shipping" means.
+     */
+    perDeviceOnly: () =>
+      process.env.COOKREW_LAN_TOKEN_STRICT === '1' ? true : COMPANION_BOOTSTRAPS,
     servedSlug: handleServedSlug,
     store,
     // Sous's door for the phone and for voice-gateway; `ui` events for both.
@@ -5181,12 +5638,12 @@ function registerIpc(handlers: RestoreHandlers): void {
   registerAccountIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), {
     accounts,
     lock: ownerLock,
-    approvals,
+    requests,
     factors,
     envUsername: ENV_HANDLE || null,
     // Phase 6: a Mac that already serves under a handle opens the claim sheet
     // on a password, not on a name. Read at boot, and null once it has crossed.
-    legacy: LEGACY_HANDLE === null ? null : { handle: LEGACY_HANDLE },
+    legacy: legacyHandleNow() === null ? null : { handle: legacyHandleNow() as string },
     workspaces: () => store.list().workspaces.map((w) => ({ id: w.id, name: w.name })),
     pairingHandout: currentPairingHandout,
     admitted: {
@@ -5198,6 +5655,19 @@ function registerIpc(handlers: RestoreHandlers): void {
       // change whether there is a line to hold at all.
       canvasLink.refresh()
       void reachPublisher?.republish(reason).catch(() => undefined)
+    },
+    // SIGN OUT ON THIS MAC (v3, D12): the doors this Mac serves come down —
+    // each one stopped here and delisted at the registry, exactly as the
+    // SERVING panel's own STOP does — and the relay line is let go. The
+    // canvas link re-reads the account and finds none to hold a line for.
+    // Workspaces, cards and terminals are not touched.
+    signedOut: async () => {
+      for (const template of serving.served.list()) {
+        serving.stop(template.serviceId)
+        await relayServing?.withdraw(template.slug).catch(() => undefined)
+      }
+      relayServing?.closeAll()
+      canvasLink.refresh()
     },
     // SAVE AS FILE. The dialog lives here because account-ipc.ts must stay
     // free of Electron; the CODES come from main's own memory, never from the
@@ -5368,13 +5838,45 @@ function registerIpc(handlers: RestoreHandlers): void {
       // the team IS being served on this network either way, so a relay that
       // could not be joined narrows the reach rather than undoing the act.
       await joinRelayFor(template)
+      // Serving this slug again is the answer to "it moved" — drop the notice
+      // rather than leaving a sentence on screen about a door that is back.
+      doorsMovedHere = doorsMovedHere.filter((held) => held.slug !== slug)
+      publishDoorClaims()
       return { ok: true as const, serviceId, slug, address: servedAddress(slug) }
     }
   )
   ipcMain.handle('serving:stop', async (_e, serviceId: string) => {
     const stopping = serving.served.list().find((t) => t.serviceId === serviceId)
     serving.stop(serviceId)
-    if (stopping) await relayServing?.withdraw(stopping.slug)
+    if (stopping) {
+      await relayServing?.withdraw(stopping.slug)
+      doorsMovedHere = doorsMovedHere.filter((held) => held.slug !== stopping.slug)
+    }
+    publishDoorClaims()
+    return { ok: true as const }
+  })
+  /** The doors this Mac lost to another of the account's, still unanswered. */
+  ipcMain.handle('serving:moved', () => doorsMovedHere)
+  /**
+   * TAKE IT BACK — the second half of the D14 moved card.
+   *
+   * It dials the same door with the same face, which supersedes the Mac that
+   * took it exactly as that Mac superseded this one. Deliberately symmetric:
+   * the rule is one holder, not first-come, and an owner pressing this on the
+   * machine in front of them is the most explicit statement of which one they
+   * mean there is.
+   */
+  ipcMain.handle('serving:take-back', async (_e, slug: unknown) => {
+    if (typeof slug !== 'string' || !relayServing) return { ok: false as const, reason: 'never-served' as const }
+    const back = await relayServing.takeBack(slug)
+    if (!back.ok) return back
+    doorsMovedHere = doorsMovedHere.filter((held) => held.slug !== slug)
+    publishDoorClaims()
+    return back
+  })
+  /** Dismiss the notice without taking the door back — KEEP THEIRS, after the fact. */
+  ipcMain.handle('serving:moved-clear', (_e, slug: unknown) => {
+    doorsMovedHere = doorsMovedHere.filter((held) => held.slug !== slug)
     return { ok: true as const }
   })
   ipcMain.handle('serving:payment-status', () => configuredServedPaymentStatus())

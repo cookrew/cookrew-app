@@ -1,4 +1,5 @@
 import { createPublicKey, verify } from 'node:crypto'
+import { registryOrigin } from './registry-origin'
 
 /**
  * A v2 CALL TOKEN AT THE DOOR — the identity-v2 sign-in, verified offline.
@@ -69,6 +70,16 @@ export interface V2KeySource {
 export interface V2CallTokenVerifier {
   /** The caller, or null. `aud` is THIS door's published name. */
   verify(token: string, aud: string): Promise<V2CallIdentity | null>
+  /**
+   * Ask the registry now, whatever the cache says, and answer whether it gave
+   * anything. TRUE means the revoked list below is current as of this moment;
+   * FALSE means the registry could not be reached and nothing was learned.
+   *
+   * It exists because the OTHER reader of the revoked list is not a door and
+   * has no traffic of its own: admission on the LAN has to be withdrawn on a
+   * clock, not when a stranger next happens to call a served crew.
+   */
+  refresh(): Promise<boolean>
 }
 
 /** A cookrew.dev username — the only sub a v2 call token may carry. */
@@ -79,9 +90,14 @@ export const V2_AUDIENCE =
 /** How long fetched material is trusted before it is asked for again. */
 export const V2_KEY_TTL_MS = 60 * 60 * 1000
 
-/** The registry this door verifies against. Overridable for a test deployment. */
+/**
+ * The registry this door verifies against. Overridable for a test deployment.
+ *
+ * One reading, in registry-origin.ts: a door that trusted a different registry
+ * from the one the account signs in at would refuse every honest caller.
+ */
 export function v2RegistryOrigin(): string {
-  return process.env.COOKREW_REGISTRY || 'https://cookrew.dev'
+  return registryOrigin()
 }
 
 function isEd25519Jwk(value: unknown): value is Record<string, unknown> {
@@ -200,16 +216,44 @@ export function createV2CallTokenVerifier(options: {
   keys: V2KeySource
   now?: () => number
   ttlMs?: number
+  /**
+   * Handed the revoked list every time a fetch SUCCEEDS, and never otherwise.
+   *
+   * The list is fetched for the doors; it is also the only thing that can tell
+   * a Mac that a phone it opens for on its own Wi-Fi was cut off at the
+   * registry. One fetch, two readers — a second poll of the same route would
+   * be a second answer to drift out of step with this one.
+   */
+  onRevoked?: (revoked: readonly string[]) => void
 }): V2CallTokenVerifier {
   const now = options.now ?? ((): number => Date.now())
   const ttl = options.ttlMs ?? V2_KEY_TTL_MS
   let cached: { material: V2KeyMaterial; at: number } | null = null
+
+  /**
+   * A reader that throws is its own problem. The door's job is to answer the
+   * caller standing in front of it, and a Mac that cannot write its admitted
+   * file must not also stop verifying tokens.
+   */
+  const tell = (revoked: readonly string[]): void => {
+    if (!options.onRevoked) return
+    try {
+      options.onRevoked(revoked)
+    } catch (error) {
+      console.error('The revoked list reached nobody:', error)
+    }
+  }
 
   const material = async (force: boolean): Promise<V2KeyMaterial | null> => {
     if (!force && cached !== null && now() - cached.at < ttl) return cached.material
     try {
       const fetched = await options.keys.fetch()
       cached = fetched === null ? null : { material: fetched, at: now() }
+      // ONLY ON A REAL ANSWER. A registry that could not be reached has said
+      // nothing, and silence must not reach a consumer that FORGETS things:
+      // handing it [] would be handing it "revoke nobody", which is a claim
+      // the registry never made.
+      if (fetched !== null) tell(fetched.revoked)
       return fetched
     } catch {
       cached = null
@@ -233,6 +277,7 @@ export function createV2CallTokenVerifier(options: {
       const current = stale ? await material(true) : first
       if (current === null) return null
       return verifyV2CallToken(token, current, aud, now())
-    }
+    },
+    refresh: async () => (await material(true)) !== null
   }
 }

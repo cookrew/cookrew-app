@@ -68,6 +68,9 @@ const helloAt = async (
     account: () => account,
     registryOrigin: () => 'https://cookrew.dev',
     admitted: createAdmittedDeviceStore({ base: home }),
+    // /api/hello spends no admissions; the dep is required so the one
+    // route that does cannot inherit an absent ceiling.
+    admitLimiter: { take: () => true },
     selfOrigins: () => [...published]
   })
   return { status: written.status, body: written.body === '' ? {} : JSON.parse(written.body) }

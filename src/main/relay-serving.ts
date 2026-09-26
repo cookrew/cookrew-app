@@ -29,8 +29,25 @@ export interface RelayServing {
   addressFor(slug: string): { address: string; name: string } | null
   /** Start relaying this team. Idempotent per slug. */
   serve(input: ServeThroughRelay): Promise<{ ok: true; address: string; name: string } | { ok: false; reason: JoinRefusal | 'not-listed' }>
+  /**
+   * TAKE A MOVED DOOR BACK — the second half of "alpha moved to Mac Studio"
+   * (V3-18). It is `serve` with the input this slug was last served under, so
+   * the owner does not have to reopen a save sheet to undo one tap on another
+   * machine. Null when this Mac never served that slug in this run.
+   */
+  takeBack(slug: string): Promise<{ ok: true; address: string; name: string } | { ok: false; reason: JoinRefusal | 'not-listed' | 'never-served' }>
   /** Stop relaying it, and delist it. The seal key is kept. */
   withdraw(slug: string): Promise<void>
+  /**
+   * The handle the doors on the relay are actually listed under, or '' when
+   * none are.
+   *
+   * READ FROM THE HELD DOORS, not from whatever the process last decided. The
+   * question this answers is "what does cookrew.dev have", and after the
+   * serving identity moves those two are exactly the things that disagree —
+   * so answering from a remembered decision would be answering with the bug.
+   */
+  servingHandle(): string
   closeAll(): void
 }
 
@@ -114,15 +131,48 @@ export function createRelayServing(options: {
   origin: string
   /** The app's own plain-HTTP listener, which already serves every door. */
   loopbackPort: () => number
+  /**
+   * WHICH MAC THIS IS, when it is on an account (V3-18). Read per dial rather
+   * than captured once: signing in or out changes the answer, and a door
+   * dialled before the sign-in must name this Mac on its next redial.
+   */
+  who?: () => { deviceId: string; name: string } | null
+  /**
+   * A DOOR OF THIS MAC MOVED TO ANOTHER OF THE ACCOUNT'S. Called once, after
+   * this Mac has already stopped serving it — the surface's job is to say so
+   * and offer it back, never to decide whether serving continues.
+   */
+  onMoved?: (door: { slug: string; team: string; name: string; by: string }) => void
   log?: (message: string) => void
 }): RelayServing {
   const log = options.log ?? ((): void => undefined)
   const held = new Map<string, Held>()
+  /**
+   * WHAT EACH SLUG WAS LAST SERVED WITH, kept after the door comes down.
+   *
+   * TAKE IT BACK has to dial the same door with the same face, and by the time
+   * it is pressed `held` no longer has the entry — being superseded removes
+   * it, which is the point. This is the only copy of the input that survives
+   * that, and it is a description of a team, never a credential.
+   */
+  const served = new Map<string, ServeThroughRelay>()
 
-  return {
+  // Named rather than returned inline: `takeBack` is `serve` with a remembered
+  // input, and reaching it through `this` would break the moment a caller
+  // destructured the object — which is how a helper that looks pure turns out
+  // not to be.
+  const api: RelayServing = {
     addressFor: (slug) => {
       const door = held.get(slug)
       return door ? { address: door.address, name: door.name } : null
+    },
+
+    servingHandle: () => {
+      // Every door goes up under one handle, so the first still-held one is
+      // the answer. Withdrawn entries are removed from the map, so a door on
+      // its way down never speaks for the rest.
+      for (const door of held.values()) if (!door.withdrawn) return door.handle
+      return ''
     },
 
     async serve(input) {
@@ -130,13 +180,18 @@ export function createRelayServing(options: {
       if (existing) return { ok: true, address: existing.address, name: existing.name }
 
       const keys = sealKeyFor(input.slug)
+      const me = options.who?.() ?? null
       const joined = await joinRelay({
         origin: options.origin,
         handle: input.handle,
         team: input.team,
+        ...(me === null ? {} : { as: me }),
         log
       })
       if (!joined.ok) return { ok: false, reason: joined.reason }
+      // Remembered on the way in, so TAKE IT BACK has the same door to dial
+      // even after being superseded has cleared everything else.
+      served.set(input.slug, input)
 
       const address = `${new URL(options.origin).origin}/${joined.name}`
       const attach = (dial: RelayDial): (() => void) =>
@@ -178,7 +233,14 @@ export function createRelayServing(options: {
         const wait = REDIAL_MS[Math.min(attempt, REDIAL_MS.length - 1)]
         setTimeout(() => {
           if (entry.withdrawn || held.get(input.slug) !== entry) return
-          void joinRelay({ origin: options.origin, handle: input.handle, team: input.team, log })
+          const mine = options.who?.() ?? null
+          void joinRelay({
+            origin: options.origin,
+            handle: input.handle,
+            team: input.team,
+            ...(mine === null ? {} : { as: mine }),
+            log
+          })
             .then((again) => {
               if (entry.withdrawn || held.get(input.slug) !== entry) {
                 if (again.ok) again.dial.close()
@@ -191,13 +253,41 @@ export function createRelayServing(options: {
               }
               entry.dial = again.dial
               entry.detach = attach(again.dial)
-              again.dial.onEnded(() => redial(0))
+              again.dial.onSuperseded(moved)
+              again.dial.onEnded(() => {
+                if (entry.withdrawn) return
+                redial(0)
+              })
               log(`relay: ${joined.name} is back`)
             })
             .catch(() => redial(attempt + 1))
         }, wait).unref?.()
       }
+      /**
+       * SUPERSEDED IS THE ONE ENDING THAT DOES NOT REDIAL.
+       *
+       * Every other reason a line ends is somebody's network, and serving is
+       * an INTENT that outlives all of them — so the default is to dial again.
+       * This one is not a fault: another Mac of the account holds the name
+       * now, and dialling again would take it straight back off them. Two Macs
+       * would then pass the door between each other for as long as both stay
+       * running, and the owner would watch a URL flicker between two machines
+       * with no way to stop it.
+       *
+       * So the intent ends HERE, on this Mac, and the person is told and
+       * offered it back. Marked withdrawn before the ending arrives, which is
+       * what makes the redial below return without doing anything.
+       */
+      const moved = (by: string): void => {
+        entry.withdrawn = true
+        held.delete(input.slug)
+        entry.detach()
+        log(`relay: ${joined.name} moved to ${by} — this Mac stopped serving it`)
+        options.onMoved?.({ slug: input.slug, team: input.team, name: joined.name, by })
+      }
+      joined.dial.onSuperseded(moved)
       joined.dial.onEnded((why) => {
+        if (entry.withdrawn) return
         log(`relay: ${joined.name} dropped (${why}) — dialling again`)
         redial(0)
       })
@@ -206,7 +296,17 @@ export function createRelayServing(options: {
       return { ok: true, address, name: joined.name }
     },
 
+    async takeBack(slug) {
+      const input = served.get(slug)
+      // Never served here, so there is nothing to take back. A door this Mac
+      // has not held is not this Mac's to claim by pressing a button on a
+      // sentence about somebody else's.
+      if (!input) return { ok: false, reason: 'never-served' }
+      return api.serve(input)
+    },
+
     async withdraw(slug) {
+      served.delete(slug)
       const door = held.get(slug)
       if (!door) return
       door.withdrawn = true
@@ -225,6 +325,7 @@ export function createRelayServing(options: {
       held.clear()
     }
   }
+  return api
 }
 
 /**

@@ -37,6 +37,14 @@ export interface AccountDesktop {
   deviceId: string
   name: string
   workspaces: readonly { id: string; name: string }[]
+  /**
+   * THE DOORS THIS MAC HOLDS, and since when (V3-18). One name, one holder:
+   * the save sheet reads these to say "alpha is served by MacBook Pro since
+   * Tue" before the relay can refuse the dial in silence. Optional because a
+   * registry that predates the rule answers without it, and treating its
+   * silence as "nobody holds anything" would be reading an absence as a fact.
+   */
+  doors?: readonly { team: string; since: number }[]
 }
 
 /** The registry's answer to GET /v2/me. Directory facts, never content (P1). */
@@ -85,6 +93,16 @@ export interface AccountStatus {
   legacy: { handle: string } | null
   /** The session died of old age; the next authed action needs the password. */
   sessionExpired: boolean
+  /**
+   * THIS MAC JOINED BY A CODE AND HAS NOT SEEN THE PASSWORD YET (v3, D8).
+   *
+   * A code-joined Mac writes account.json with NO offline unlock verifier —
+   * zero password on the new machine until trust exists. True until the
+   * first idle lock, where the lock screen asks the password once, cookrew.dev
+   * proves it, and the verifier is written. The lock screen reads this to say
+   * so, and the unlock channel reads it to know the local check cannot run.
+   */
+  passwordPending: boolean
   /**
    * THE APP IS POINTED AT A REGISTRY THIS ACCOUNT WAS NOT CLAIMED AT.
    *
@@ -240,6 +258,19 @@ export type AccountRefusal =
   | 'denied'
   | 'not_offered'
   | 'password_change_required'
+  /**
+   * THE STEP-UP GATE'S OWN TWO (V3-FIX-C1 · H4).
+   *
+   * 'password_required' is an act that asks again — the password was not sent,
+   * or was sent empty — and 'step_up' is the same gate on an account that
+   * holds a factor, where the answer is a rung rather than a password. Named
+   * rather than left to the catch-all because 'unknown' renders "cookrew.dev
+   * answered something this app could not read. Nothing was changed.", which
+   * is false in a way a person acts on: nothing was changed, but there IS a
+   * next step and it is not "try again".
+   */
+  | 'password_required'
+  | 'step_up'
   | 'offline'
   // Seats (phase 5). A seat operation refuses for reasons an account one
   // cannot, and they are two different things to say to a person: 'not_found'
@@ -287,6 +318,16 @@ export interface SecondFactorStep {
   next: readonly LadderFactor[]
   /** When the registry drops it. The card counts down against this. */
   expiresAt: number
+  /**
+   * The two digits THIS device must show, so the device being asked to
+   * approve can type them. Carried here and not rendered here: the card is
+   * V3-12's, and a field the parse threw away could not be drawn later.
+   *
+   * Optional because a step must survive a registry that sent none. Absent is
+   * a sign-in that cannot be approved, which is a thing to SHOW rather than a
+   * reason to discard the whole step and answer "bad credentials".
+   */
+  match?: string
 }
 
 /**
