@@ -301,10 +301,13 @@ describe('"not me" and the join door', () => {
     const rung = await call('POST', `/v2/sessions/${asked.pending}/approve`)
     expect(rung.status).toBe(202)
     const { approval } = await bodyOf<{ approval: string }>(rung)
+    // NOT ME NOW STEPS UP (V3-16 H4): it is one of the two acts a thief most
+    // wants, so a bearer alone no longer reaches it. The alarm is raised the
+    // way a person raises it — by proving they are the owner first.
     const pressed = await call(
       'POST',
       `/v2/me/approvals/${approval}`,
-      { decision: 'not-me' },
+      { decision: 'not-me', current: PASSWORD },
       bearer(token)
     )
     expect(pressed.status).toBe(204)
@@ -336,18 +339,18 @@ describe('"not me" and the join door', () => {
     expect(after.status).toBe(401)
   })
 
-  it('does NOT lock minting — PINNED DEFECT, belongs to H3 (V3-16 stepUpHeld)', async () => {
-    // THIS ASSERTION PINS A BREAK, NOT AN INTENTION. The shared step-up gate
-    // (registry/src/v2-step-up.ts stepUpHeld) has no mustChangePassword check
-    // on either of its paths, so the door that ATTACHES MACHINES still opens
-    // with a password the account has been told is locked out. Every other
-    // password-verifying route honours the alarm: sign-in, the rung, redeem
-    // above, and recovery.
+  it('LOCKS MINTING TOO — the alarm reaches the door that attaches machines', async () => {
+    // THIS TEST ONCE PINNED A BREAK. The shared step-up gate had no
+    // mustChangePassword check on either path, so the door that ATTACHES
+    // MACHINES still opened with a password the account had been told was
+    // locked out — while sign-in, the rung, redeem and recovery all honoured
+    // the alarm. It was filed as H3 against V3-16 with the handoff written
+    // here: "when it lands this test fails with expected 201 to be 403".
     //
-    // The fix belongs inside stepUpHeld so that every act inherits it, which
-    // makes it V3-16's and Atlas's rather than this lane's. WHEN IT LANDS THIS
-    // TEST FAILS with "expected 201 to be 403" — that is the handoff working.
-    // Flip the expectation to 403 and rename the test then.
+    // It landed. The fix is inside stepUpHeld, so every act the list names
+    // inherits the alarm rather than each one remembering it — which is why
+    // this now reads as the rule it always should have been: a password a
+    // stranger is known to hold opens nothing, least of all a join code.
     const owner = await claim()
     await raiseAlarm(owner.username, owner.token)
 
@@ -357,9 +360,7 @@ describe('"not me" and the join door', () => {
       { current: PASSWORD },
       bearer(owner.token)
     )
-    expect(minted.status).toBe(201)
-    expect((await bodyOf<{ code: string }>(minted)).code).toMatch(
-      /^[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}$/
-    )
+    expect(minted.status).toBe(403)
+    expect((await bodyOf<{ error: string }>(minted)).error).toBe('password_change_required')
   })
 })

@@ -237,7 +237,12 @@ describe('step 12 — the session renews with nobody typing', () => {
     // THE DOOR, as a door sees it: the app's own verifier, reading the
     // registry's published key and revoked list over HTTP. A token minted for
     // this team now is what a caller would be holding when the renewal lands.
-    const verifier = createV2CallTokenVerifier({ keys: v2KeysOverHttp(origin) })
+    // ON THE SHARED CLOCK, like everything else here. Left on the wall clock
+    // this passed on the day it was written and expired by itself a week
+    // later: the token is minted at `clock` and a real-time verifier reads an
+    // `exp` that is already in the past. A test that goes red with the
+    // calendar rather than with the code is worse than no test.
+    const verifier = createV2CallTokenVerifier({ keys: v2KeysOverHttp(origin), now })
     const minted = await call(
       'POST',
       `/v2/teams/@${OWNER}/${TEAM.name}/call-token`,
@@ -297,13 +302,28 @@ describe('step 12 — the session renews with nobody typing', () => {
     expect(mineAfter[0]).not.toBe(mineBefore[0])
     observed.oldJtiStillPublished = v2.accounts.revokedFor(OWNER).includes(mineBefore[0])
 
-    // THE DOOR NEVER DROPPED. The same caller token, verified again by a
-    // FRESH verifier — so the key and the revoked list are re-fetched from the
-    // registry as it stands after the turnover, not read from a warm cache.
-    const afterDoor = await createV2CallTokenVerifier({ keys: v2KeysOverHttp(origin) }).verify(
-      callToken,
-      aud
+    // THE DOOR NEVER DROPPED — asked the way a caller would actually ask it.
+    //
+    // This once re-verified the SAME call token across the six-day jump, which
+    // could only ever go shut: a call token lives ten minutes by design, so
+    // the assertion was measuring the TTL and calling it the door. What the
+    // renewal must not break is a caller's ability to be admitted afterwards,
+    // so the token is minted again on the far side, and verified by a FRESH
+    // verifier — the key and the revoked list re-fetched from the registry as
+    // it stands after the turnover, never from a warm cache.
+    const reminted = await call(
+      'POST',
+      `/v2/teams/@${OWNER}/${TEAM.name}/call-token`,
+      { audience: aud },
+      sessionToken(macA.base)
     )
+    observed.callTokenAfterStatus = reminted.status
+    const afterToken = typeof reminted.body.token === 'string' ? reminted.body.token : null
+    if (afterToken === null) throw new Error(`no call token after renew: ${JSON.stringify(reminted.body)}`)
+    const afterDoor = await createV2CallTokenVerifier({
+      keys: v2KeysOverHttp(origin),
+      now
+    }).verify(afterToken, aud)
     observed.doorAfterRenew = afterDoor === null ? 'shut' : `open as @${afterDoor.username}`
     expect(observed.doorAfterRenew).toBe(observed.doorBeforeRenew)
 
@@ -341,10 +361,14 @@ describe('step 12 — the session renews with nobody typing', () => {
     // The phone is taken back from Mac A, and then tries to buy itself a
     // fresh month with the key that was just cut off.
     const phoneId = deviceIdOf(phone.base)
+    // REVOKE STEPS UP (V3-16 H4). It was bearer-only, which made a stolen
+    // session enough to detach the owner's own machines; the password is the
+    // threshold now, and it is checked at the route rather than by whichever
+    // client remembered to ask.
     const revoked = await call(
       'DELETE',
       `/v2/me/devices/${encodeURIComponent(phoneId)}`,
-      undefined,
+      { current: PASSWORD },
       sessionToken(macA.base)
     )
     observed.revokeStatus = revoked.status
@@ -512,10 +536,11 @@ describe('step 13 — not me', () => {
 
     const sittingsBefore = sittings()
     observed.sittingsBeforeNotMe = sittingsBefore.length
+    // AND SO DOES NOT ME — the other act a thief most wants (V3-16 H4).
     const pressed = await call(
       'POST',
       `/v2/me/approvals/${encodeURIComponent(approvalId)}`,
-      { decision: 'not-me' },
+      { decision: 'not-me', current: PASSWORD },
       sessionToken(macB.base)
     )
     observed.notMeStatus = pressed.status
@@ -615,28 +640,34 @@ describe('step 13 — not me', () => {
 /* ── the take-over (V3-18) ─────────────────────────────────────────────── */
 
 describe('take-over — one name, one holder (V3-18)', () => {
-  it('records what the registry does TODAY with two Macs publishing one team name', async () => {
-    // The baseline the lane has to change. Both Macs of one account publish a
-    // desktop whose workspace carries the same team name; nothing at the
-    // registry says which of them HOLDS the door @drej/alpha, so the second
-    // one is filed beside the first without a word.
+  it('the registry now says WHICH Mac holds a team name (V3-18)', async () => {
+    // THIS ONCE RECORDED THE ABSENCE. Both Macs of one account publish a
+    // desktop whose workspace carries the same team name, and nothing at the
+    // registry said which of them HELD @drej/alpha — the second was filed
+    // beside the first without a word, and the hub's name-taken refusal was
+    // the first anybody heard of it. The baseline was written to fail the day
+    // the lane landed, and V3-18 landed: a desktop now carries `doors`, so
+    // there is somewhere for one holder to be named.
     const me = await call('GET', '/v2/me', undefined, sessionToken(macB.base))
-    const desktops = (me.body.desktops ?? []) as { deviceId: string; workspaces: { name: string }[] }[]
+    const desktops = (me.body.desktops ?? []) as {
+      deviceId: string
+      workspaces: { name: string }[]
+      doors?: { team: string; since: number }[]
+    }[]
     observed.desktopsPublishingTeam = desktops.filter((d) =>
       d.workspaces.some((w) => w.name === TEAM.name)
     ).length
     expect(me.status).toBe(200)
-    // One today, because only Mac B has published. The point of the number is
-    // that the registry has no opinion about a second one.
-    observed.doorHolderField = 'absent'
-    expect(desktops.every((d) => !('doors' in d))).toBe(true)
+    observed.doorHolderField = desktops.every((d) => 'doors' in d) ? 'present' : 'absent'
+    expect(observed.doorHolderField).toBe('present')
   }, SLOW)
 
-  // WAITING ON V3-18 (feat/v3-18-door-ownership carried no work of its own at
-  // 09:46 on 2026-09-18 — only merges of 11 and 16). The harness above stands
-  // the two Macs up and holds the registry object; these are the three
-  // assertions the scenario needs, named so the lane can fill them in rather
-  // than invent a shape.
+  // STILL OPEN, and named rather than quietly dropped. V3-18 shipped the
+  // holder field, the hub's supersede and the save-time conflict, with its own
+  // unit cover (relay-hub, relay-serving, one-entry-render) and the shared
+  // rules in src/shared/door-ownership.ts — doorHeldElsewhere, doorsAfterMove,
+  // doorHeldSentence, doorMovedSentence. What is missing is this end-to-end
+  // scenario driven through two real Macs, which is what these three want.
   it.todo('the second Mac sees the conflict rather than a silent name-taken')
   it.todo('TAKE OVER moves @drej/alpha to the second Mac, under step-up')
   it.todo('the first holder is told — a `superseded` event on its own feed')

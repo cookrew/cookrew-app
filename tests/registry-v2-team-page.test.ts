@@ -126,14 +126,19 @@ describe('signed out (401)', () => {
 })
 
 describe('signed in, no seat (403)', () => {
-  it('offers the price and a copyable link that asks the owner', async () => {
+  it('offers the price and a way to ask the owner', async () => {
     const body = await read('/@drej/alpha', token.stranger)
     expect(body).toContain('You are @stranger')
     expect(body).toContain('Buy a seat · $1')
-    expect(body).toContain('Copy link to ask @drej')
-    expect(body).toContain('https://cookrew.dev/@drej/alpha?ask=stranger')
-    // No queue: the link is the whole mechanism.
-    expect(body).not.toContain('Request a seat')
+    // V3-11/W6 (ruling R1) REPLACED THE COPYABLE LINK WITH A REQUEST. The
+    // link asked a person to carry their own request to the owner by some
+    // other app; the request lands in the owner's queue beside a device
+    // asking to join, and is answered on any device they hold. The old
+    // assertion pinned "no queue: the link is the whole mechanism", which is
+    // the sentence that ruling reverses.
+    expect(body).toContain('Ask @drej')
+    expect(body).not.toContain('Copy link to ask @drej')
+    // Still no room list for somebody who is not in it.
     expect(body).not.toContain('seated here')
   })
 })

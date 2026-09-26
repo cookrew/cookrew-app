@@ -118,10 +118,17 @@ describe('the DESKTOPS section', () => {
     expect(html).toContain('PROBING')
   })
 
-  it('names the three badges the script switches between, and no more', async () => {
+  it('names the four badges the script switches between, and no more', async () => {
     const { html } = await mePage()
-    for (const badge of ['PROBING', 'ONLINE', 'OFFLINE']) expect(html).toContain(badge)
-    for (const gone of ['LAN', 'TAILNET', 'RELAY', 'NEEDS PAIRING']) expect(html).not.toContain(gone)
+    // LAN JOINED THEM IN V3-14 (M5) and shares the same slot deliberately:
+    // PROBING · ONLINE · OFFLINE answer "is cookrew.dev holding this Mac's
+    // line", LAN answers "and this device can reach it directly". One slot,
+    // because a reader is asking one question — how does this page get to
+    // that Mac — and two badges side by side make them hunt for the answer.
+    for (const badge of ['PROBING', 'ONLINE', 'OFFLINE', 'LAN']) expect(html).toContain(badge)
+    // TAILNET and RELAY never came back: the page does not probe, so it must
+    // not name a path it cannot see. NEEDS PAIRING went with the ceremony.
+    for (const gone of ['TAILNET', 'RELAY', 'NEEDS PAIRING']) expect(html).not.toContain(gone)
   })
 
   /**
@@ -154,12 +161,15 @@ describe('the DESKTOPS section', () => {
     }
   })
 
-  it('says nothing about a Mac but its name, its workspaces and where it lives here', async () => {
+  it('still carries no ADDRESS for a Mac — only its name, its workspaces and a way to ask', async () => {
     const { html } = await mePage()
-    // The addresses the Mac published are its own directory fact; the page no
-    // longer probes them, so it no longer carries them either. They come back
-    // in phase C3, as names a browser will trust.
-    expect(html).not.toContain('data-reach="')
+    // THE RULE THAT HOLDS: the addresses a Mac published are its own fact and
+    // this page does not probe, so it must not carry them. What V3-14 added is
+    // not an address — `data-reach` is the desktop's id on a button that ASKS
+    // that Mac for its keyboard, answered by a tap over there. The credential
+    // still never reaches this page.
+    expect(html).toContain('data-reach="')
+    expect(html).toContain('USE WI-FI')
     expect(html).not.toContain('192.168.1.24')
     expect(html).not.toContain('mac.tail1234.ts.net')
   })
