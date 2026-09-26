@@ -44,9 +44,12 @@ function harness(startingIn: string | null = 'w-here') {
   let active = startingIn
   let refuse: Error | null = null
   let framed = 0
+  /** The cards on the canvas right now, whatever the roster claims. */
+  const onCanvas = new Set<string>()
 
   const jump = createJumpController<Card>({
     activeWorkspaceId: () => active,
+    hasNode: (nodeId) => onCanvas.has(nodeId),
     switchWorkspace: (id) => {
       switched.push(id)
       return refuse ? Promise.reject(refuse) : Promise.resolve()
@@ -75,8 +78,12 @@ function harness(startingIn: string | null = 'w-here') {
     /** The switch lands: the store's new activeId, then its new canvas. */
     landsOn: (id: string, nodes: readonly Card[]): void => {
       active = id
+      onCanvas.clear()
+      for (const node of nodes) onCanvas.add(node.id)
       jump.sawNodes(nodes)
     },
+    /** Put a card on the canvas without a switch — a roster row that is here. */
+    alreadyHere: (id: string): void => void onCanvas.add(id),
     refuseSwitch: (why: string): void => void (refuse = new Error(why)),
     /** Fire whatever give-up timer is still armed, as the browser would. */
     runWait: (): void => {
@@ -100,6 +107,19 @@ describe('a row on the canvas that is already loaded', () => {
     // there is what every card tap has always done.
     expect(h.carried).toEqual([null])
     expect(h.jump.travelling()).toBe(false)
+  })
+
+  it('zooms a card that IS on this canvas, whatever workspace the row claims', () => {
+    // The roster is a claim made when it was read, and the flow store is the
+    // truth. The demo bridge labels every row `active`, a real roster can be a
+    // switch behind, and either way switching to a workspace whose card is
+    // already in front of us would be a round trip to the same place — or, for
+    // an id that does not resolve, a refusal where a zoom was owed.
+    const h = harness('w-here')
+    h.alreadyHere('agent-1')
+    h.jump.to('active', 'agent-1')
+    expect(h.switched).toEqual([])
+    expect(h.arrived).toEqual(['agent-1'])
   })
 
   it('zooms when the active workspace is not known yet, rather than travelling', () => {

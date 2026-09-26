@@ -40,6 +40,11 @@ export interface JumpMiss {
 export interface JumpDeps<N extends JumpNode> {
   /** The canvas on screen right now, or null before the first list lands. */
   readonly activeWorkspaceId: () => string | null
+  /**
+   * Is this card on the canvas already? The flow store is the truth and the
+   * row's workspace id is only a claim, made whenever its roster was read.
+   */
+  readonly hasNode: (nodeId: string) => boolean
   readonly switchWorkspace: (workspaceId: string) => Promise<unknown>
   /**
    * Fly the viewport to the card. The node comes with it when the jump landed
@@ -116,7 +121,13 @@ export function createJumpController<N extends JumpNode>(deps: JumpDeps<N>): Jum
     // existed, a card that is here opens, and one that is not reports its own
     // miss. Guessing at a switch on no evidence could yank the owner off the
     // canvas they are looking at.
-    if (active === null || active === workspaceId) {
+    //
+    // And a card that is DEMONSTRABLY here is here, whatever the row says: a
+    // roster can be a switch behind, and the demo bridge labels every row
+    // `active` because it builds them from the loaded canvas. Switching on a
+    // claim the canvas contradicts is a round trip to the same place at best,
+    // and at worst a refusal where a zoom was owed.
+    if (active === null || active === workspaceId || deps.hasNode(nodeId)) {
       deps.arrive(nodeId, null)
       return
     }

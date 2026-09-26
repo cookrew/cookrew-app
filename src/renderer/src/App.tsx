@@ -823,6 +823,7 @@ function Canvas(): React.JSX.Element {
     () =>
       createJumpController<Node>({
         activeWorkspaceId: () => knownWsIdRef.current,
+        hasNode: (nodeId) => reactFlow.getNode(nodeId) !== undefined,
         switchWorkspace: (workspaceId) => cookrew().switchWorkspace(workspaceId),
         arrive: (nodeId, node) => {
           // A landed jump brings its node: the canvas was handed to us this
@@ -839,7 +840,7 @@ function Canvas(): React.JSX.Element {
         },
         report: reportJumpMiss
       }),
-    [zoomToNode, fitAll]
+    [zoomToNode, fitAll, reactFlow]
   )
   jumpRef.current = jump
 
