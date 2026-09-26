@@ -66,7 +66,17 @@ import {
   OVERVIEW_FIT_MS,
   OVERVIEW_FIT_PADDING
 } from './nodes/card-zoom'
-import { nodesZoomBounds, nodeZoomBounds, reportMissingZoomTarget } from './nodes/zoom-target'
+import {
+  nodesZoomBounds,
+  nodeZoomBounds,
+  reportMissingZoomTarget,
+  savesReturnViewport
+} from './nodes/zoom-target'
+import {
+  createJumpController,
+  reportJumpMiss,
+  type JumpController
+} from './cross-workspace-jump'
 import { useBrowserEngine } from './browser-engine'
 import { ErrorBoundary } from './ErrorBoundary'
 import { ReauthOverlay } from './ReauthOverlay'
@@ -267,6 +277,15 @@ function Canvas(): React.JSX.Element {
    * React chooses to batch the two updates into.
    */
   const fitPendingRef = useRef(false)
+  /**
+   * The board's cross-workspace tap. A ref because the arrival fit declared
+   * just below reads it, while the controller itself is built much further
+   * down, where the zoom it needs exists. A jump is what ASKED for the switch,
+   * so the fit that switch would have done is the jump's to spend: it has a
+   * better destination than the overview, and hands the fit back if its card
+   * never arrives.
+   */
+  const jumpRef = useRef<JumpController<Node> | null>(null)
   const knownWsIdRef = useRef<string | null>(null)
   const reactFlow = useReactFlow()
   const { screenToFlowPosition } = reactFlow
@@ -435,6 +454,10 @@ function Canvas(): React.JSX.Element {
   useEffect(() => {
     if (!fitPendingRef.current) return
     fitPendingRef.current = false
+    // A jump asked for this switch and owes the owner one particular card, so
+    // the overview is not where they are going. Spending the fit here would
+    // frame the whole board for a beat and then throw the viewport across it.
+    if (jumpRef.current?.travelling() === true) return
     // An empty workspace has nothing to frame; fitView would be a no-op that
     // still costs an animation, so leave the viewport where it is.
     if (nodes.length === 0) return
@@ -699,7 +722,16 @@ function Canvas(): React.JSX.Element {
   // fills the stage; crossing the coverage threshold swaps its thumbnail
   // for the full renderer (see zoom-lod.ts).
   const zoomToNode = useCallback(
-    (id: string, rect?: { x: number; y: number; width: number; height: number }) => {
+    (
+      id: string,
+      rect?: { x: number; y: number; width: number; height: number },
+      /**
+       * The canvas under this zoom is not the one the viewport was framing: a
+       * board row from another workspace, landing on a canvas that arrived a
+       * moment ago. See savesReturnViewport — it decides what Back means here.
+       */
+      freshCanvas = false
+    ) => {
       // WHERE ARE WE GOING — resolved FIRST, because a zoom that cannot land
       // must change nothing at all (not the return point, not the deliberate
       // flag, not the zoomed id).
@@ -723,13 +755,16 @@ function Canvas(): React.JSX.Element {
         reportMissingZoomTarget(id)
         return
       }
-      // Save the return point only when not already mid-zoom: a second click
-      // (or a click after a reload that landed already zoomed, with a terminal
-      // overlay covering the stage) must NOT persist a zoomed viewport as the
-      // "back" target — that makes ⤢/ESC restore another zoomed state, an
-      // inescapable loop (Magpie E2). Leaving it null falls Back back to
-      // fitView instead.
-      if (!prevViewportRef.current && !zoomedTerminalIdRef.current) {
+      // Where Back goes, and the three reasons it may go nowhere — all of
+      // them in nodes/zoom-target.ts, where they can be read one at a time.
+      // Leaving the return point empty falls Back to the overview instead.
+      if (
+        savesReturnViewport({
+          saved: prevViewportRef.current,
+          overlayOpen: zoomedTerminalIdRef.current !== null,
+          freshCanvas
+        })
+      ) {
         prevViewportRef.current = reactFlow.getViewport()
       }
       // A deliberate tap: from here the LOD may open the card's full view (see
@@ -772,6 +807,50 @@ function Canvas(): React.JSX.Element {
       fitAll(OVERVIEW_FIT_MS)
     }
   }, [reactFlow, fitAll])
+
+  /**
+   * THE BOARD'S CROSS-WORKSPACE TAP. The board lists every agent on the
+   * machine; the canvas holds one workspace at a time. A row from anywhere
+   * else needs a switch before there is a card to fly to, and the switch
+   * arrives as a broadcast the tap cannot await — so the intent waits here
+   * (cross-workspace-jump.ts) and lands when the canvas carrying the card
+   * shows up.
+   *
+   * Built once and steered through refs: `zoomToNode` and `fitAll` are stable
+   * callbacks, and rebuilding the controller would drop a jump in flight.
+   */
+  const jump = useMemo(
+    () =>
+      createJumpController<Node>({
+        activeWorkspaceId: () => knownWsIdRef.current,
+        switchWorkspace: (workspaceId) => cookrew().switchWorkspace(workspaceId),
+        arrive: (nodeId, node) => {
+          // A landed jump brings its node: the canvas was handed to us this
+          // instant, and the card's own declared box needs no measurement —
+          // which is what the flow store would still be waiting on. It is also
+          // what says this canvas is a fresh one, so the viewport we came in
+          // with is not a place Back can return to.
+          zoomToNode(nodeId, nodeZoomBounds(node) ?? undefined, node !== null)
+        },
+        frameAll: () => fitAll(OVERVIEW_FIT_MS),
+        schedule: (run, ms) => {
+          const timer = window.setTimeout(run, ms)
+          return () => window.clearTimeout(timer)
+        },
+        report: reportJumpMiss
+      }),
+    [zoomToNode, fitAll]
+  )
+  jumpRef.current = jump
+
+  // The incoming canvas, offered to the jump. Declared after the fit above so
+  // it runs after it: the fit stands down for a jump in flight, and then this
+  // is what lands it — one commit, one viewport move.
+  useEffect(() => jump.sawNodes(nodes), [nodes, jump])
+
+  // Dropping the canvas must drop the travel with it: a zoom that fires into
+  // an unmounted tree is the kind of thing that outlives its own reason.
+  useEffect(() => () => jump.cancel(), [jump])
 
   const requestClose = useCallback((nodeId: string) => setClosingId(nodeId), [])
 
@@ -1049,12 +1128,23 @@ function Canvas(): React.JSX.Element {
       clipping,
       interactiveBrowser,
       zoomToNode,
+      jumpToNode: jump.to,
       zoomBack,
       requestClose,
       picked,
       togglePick
     }),
-    [tool, clipping, interactiveBrowser, zoomToNode, zoomBack, requestClose, picked, togglePick]
+    [
+      tool,
+      clipping,
+      interactiveBrowser,
+      zoomToNode,
+      jump,
+      zoomBack,
+      requestClose,
+      picked,
+      togglePick
+    ]
   )
 
   // Every change batch routes through the edge snapper: while a card is

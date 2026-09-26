@@ -31,6 +31,13 @@ export interface CanvasUi {
   /** Fixed-at-launch browser ownership; null while capability is unresolved. */
   interactiveBrowser: boolean | null
   zoomToNode: (id: string) => void
+  /**
+   * Go to a card that may not be on this canvas at all — the board lists every
+   * workspace, so a row it opens can need a workspace switch first. Same
+   * workspace, same instant zoom; anywhere else, the switch is asked for and
+   * the zoom waits for the incoming canvas (cross-workspace-jump.ts).
+   */
+  jumpToNode: (workspaceId: string, nodeId: string) => void
   zoomBack: () => void
   /**
    * Ask to close a card. Every ✕ goes through here rather than calling
@@ -49,6 +56,7 @@ export const CanvasUiContext = createContext<CanvasUi>({
   clipping: false,
   interactiveBrowser: null,
   zoomToNode: () => undefined,
+  jumpToNode: () => undefined,
   zoomBack: () => undefined,
   requestClose: () => undefined,
   picked: new Set<string>(),
