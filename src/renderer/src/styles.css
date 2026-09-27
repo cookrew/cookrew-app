@@ -3492,19 +3492,48 @@ a.card-close {
   overflow: hidden;
 }
 
+/* The NAME yields, not the dials. A four-line name would otherwise push the
+   tag out of an overflow:hidden column, and which agent it is stays legible
+   from the avatar and the card's position — what it runs on does not. */
+.vi-mini-text .vi-mini-name {
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
 /* NOT a chip. At 0.1 zoom a chip's border and radius resolve to sub-pixel and
    read as grit, so the dials are a plain dim line under the name — the counter
    scale keeps them legible, one notch smaller than the name so the tile still
    says WHICH agent first and what it runs on second. */
 .vi-mini-dial {
   font-family: var(--font-mono);
+  /* One notch under the name: the tile says WHICH agent first and what it runs
+     on second. Measured at 0.1 zoom the box is ~253 card-px wide, which is
+     about five glyphs at the name's 13px — hence the stack below rather than a
+     longer line. */
   font-size: calc(10px * var(--z, 1));
-  line-height: 1.2;
+  line-height: 1.15;
   color: var(--vi-dim);
-  white-space: nowrap;
+  /* The two parts on their own lines (DialTag stack). A single line needed
+     402px in that 253px box and clipped on EVERY tile, taking the effort with
+     it — the half of the tag you cannot reconstruct from the card's own
+     avatar. Stacked, a long model id clips alone and the effort always shows. */
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+.vi-mini-dial .dial-model,
+.vi-mini-dial .dial-effort {
   overflow: hidden;
   text-overflow: ellipsis;
-  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* The effort is the shorter word and the one that changes most; keeping it a
+   shade dimmer than the model stops the tile reading as two equal facts. */
+.vi-mini-dial .dial-effort {
+  opacity: 0.75;
 }
 
 .vi-mini-name {

@@ -27,6 +27,7 @@ import {
   tuneValueOk,
   tuningTag,
   tuningTitle,
+  tuningWords,
   type AgentTuning,
   type AgentTuningState,
   type TuneAsk
@@ -262,6 +263,19 @@ describe('the tag every card view wears', () => {
     // from a rail saying `opus` is two answers to one question.
     expect(tuningTag(tuning())).toBe('opus max')
     expect(tuningTitle(tuning())).toBe('claude-opus-5 · effort max')
+  })
+
+  it('hands the two parts out separately for the narrow surfaces', () => {
+    expect(tuningWords(tuning())).toEqual({ model: 'opus', effort: 'max' })
+    expect(tuningWords({ model: 'gpt-6-astra', effort: 'high', at: T0 })).toEqual({
+      model: 'gpt-6-astra',
+      effort: 'high'
+    })
+    expect(tuningWords(null)).toEqual({ model: null, effort: null })
+    // The one-line tag is COMPOSED from them, so the two can never disagree
+    // about how a model is abbreviated.
+    const words = tuningWords(tuning())
+    expect(tuningTag(tuning())).toBe(`${words.model} ${words.effort}`)
   })
 
   it('is null when nothing is recorded, so no chip is drawn', () => {

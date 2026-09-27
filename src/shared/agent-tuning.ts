@@ -332,10 +332,32 @@ export interface TuneRailView {
  * stays in the title on both. Null means nothing has been recorded — and the
  * caller draws no tag, because a blank chip is a claim too.
  */
+export interface TuningWords {
+  /** The model as the tag shows it — its alias when it has one. */
+  model: string | null
+  effort: string | null
+}
+
+/**
+ * The tag's two parts, separately.
+ *
+ * A mini tile is about five characters wide at overview zoom — measured, the
+ * one-line tag needed 402px in a 253px box and EVERY tile clipped it, which
+ * cost the effort entirely. So the narrow surfaces stack the two parts on
+ * their own lines rather than leaving it to where a wrap happens to land: a
+ * long model id then clips alone, and the effort is always on screen.
+ */
+export function tuningWords(tuning: AgentTuning | null): TuningWords {
+  if (tuning === null) return { model: null, effort: null }
+  return {
+    model: tuning.model === null ? null : (modelAliasOf(tuning.model) ?? tuning.model),
+    effort: tuning.effort === null || tuning.effort.length === 0 ? null : tuning.effort
+  }
+}
+
 export function tuningTag(tuning: AgentTuning | null): string | null {
-  if (tuning === null) return null
-  const model = tuning.model === null ? null : (modelAliasOf(tuning.model) ?? tuning.model)
-  const words = [model, tuning.effort].filter((w): w is string => w !== null && w.length > 0)
+  const { model, effort } = tuningWords(tuning)
+  const words = [model, effort].filter((w): w is string => w !== null && w.length > 0)
   return words.length > 0 ? words.join(' ') : null
 }
 
