@@ -7,6 +7,8 @@
 // what the agent is running on.
 
 import { afterEach, describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { DialTag } from '../src/renderer/src/nodes/DialTag'
 import { tuningStore } from '../src/renderer/src/tuning-store'
@@ -51,5 +53,58 @@ describe('the dial tag', () => {
     expect(renderToStaticMarkup(<DialTag id="forge" className="cr-chip dial" />)).toContain(
       'class="cr-chip dial"'
     )
+  })
+})
+
+/**
+ * EVERY CARD VIEW, and the one that was missed.
+ *
+ * The first cut left the mini tile out, reasoning that it names no harness so a
+ * tag had nothing to sit beside. True, and beside the point: the board sits at
+ * OVERVIEW zoom — measured live, 32 of 32 cards were `.vi-card.mini` at scale
+ * 0.1 — so the feature was invisible in the view that is usually on screen.
+ *
+ * Source-level because a terminal card's branches need React Flow context to
+ * render, and because the defect is a MISSING branch: no fixture can fail on a
+ * view nobody wrote. Slicing on the branch guards is admittedly brittle; the
+ * guards are asserted first so a rename fails loudly here instead of silently
+ * passing a sliced-to-nothing string.
+ */
+describe('every card view carries the tag', () => {
+  const source = readFileSync(
+    path.join(__dirname, '..', 'src/renderer/src/nodes/TerminalNode.tsx'),
+    'utf8'
+  )
+  const MINI = "if (mode === 'mini')"
+  const SHELL = 'if (!agent)'
+
+  it('has the three branches these slices assume', () => {
+    expect(source).toContain(MINI)
+    expect(source).toContain(SHELL)
+    expect(source.indexOf(MINI)).toBeLessThan(source.indexOf(SHELL))
+  })
+
+  it('draws it in the mini tile — the overview, where the whole board lives', () => {
+    const mini = source.slice(source.indexOf(MINI), source.indexOf(SHELL))
+    expect(mini).toContain('<DialTag')
+  })
+
+  it('draws it in the shell card and the full agent card', () => {
+    // Two top-level `return (` follow the !agent guard: the shell card's own,
+    // then the agent card's. Split on the second so each slice is one branch.
+    const rest = source.slice(source.indexOf(SHELL))
+    const shellReturn = rest.indexOf('return (')
+    const agentReturn = rest.indexOf('return (', shellReturn + 1)
+    expect(shellReturn, 'shell branch has no return').toBeGreaterThan(-1)
+    expect(agentReturn, 'agent branch has no return').toBeGreaterThan(shellReturn)
+    expect(rest.slice(shellReturn, agentReturn), 'shell card lost its tag').toContain('<DialTag')
+    expect(rest.slice(agentReturn), 'agent card lost its tag').toContain('<DialTag')
+  })
+
+  it('draws it in the roster row and the zoomed header', () => {
+    const read = (file: string): string =>
+      readFileSync(path.join(__dirname, '..', 'src/renderer/src', file), 'utf8')
+    expect(read('AgentRow.tsx'), 'roster row lost its tag').toContain('<DialTag')
+    expect(read('TerminalOverlay.tsx'), 'zoomed header lost its tag').toContain('<DialTag')
   })
 })
