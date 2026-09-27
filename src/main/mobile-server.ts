@@ -158,6 +158,10 @@ export interface MobileServerDeps {
   traces: Pick<TraceReader, 'index' | 'boundaryMarkers' | 'page' | 'latestCheckpoint'>
   /** Capability-routed history for local terminals and placed crews. */
   turnHistory?: (terminalId: string) => Promise<TurnRecord[]>
+  /** THE DIALS (agent-tuning) — passed straight through; absent = the three
+   *  tuning routes simply do not match and the phone draws no tags. */
+  tuning?: MobileApiDeps['tuning']
+  tuningBus?: MobileApiDeps['tuningBus']
   /** The one stream (T2) — passed straight through to handleMobileApi, which
    *  serves /stream* from it and, behind COOKREW_STREAM_ADAPTERS, the five
    *  old routes as well. Absent = the new routes 503, the old ones unchanged. */

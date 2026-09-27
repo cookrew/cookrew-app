@@ -336,9 +336,15 @@ export interface CookrewApi {
   ptyInput: (terminalId: string, data: string) => void;
   /**
    * THE DIALS (shared/agent-tuning): what the agent's last reply ran at, and
-   * turning one. OPTIONAL on purpose — a phone talking to someone else's app
-   * has no business typing slash commands into their pane, so the remote api
-   * simply does not carry these and the rail feature-detects its way out.
+   * turning one.
+   *
+   * BOTH REAL TRANSPORTS CARRY THESE — the Electron bridge over IPC and the
+   * remote (phone) api over /api/tuning + /api/terminal/:id/tune. Optional on
+   * the type only so the demo api and any bridge older than this feature go
+   * without: the rail and the tag then draw nothing instead of throwing. It is
+   * NOT a statement that the phone should not have them. The phone is the
+   * owner's own canvas in their own hand; a card that is a line into someone
+   * ELSE's session is a different thing and the rail refuses that separately.
    */
   terminalTuning?: (terminalId: string) => Promise<AgentTuningState>;
   /**

@@ -47,8 +47,9 @@ export function useAgentTuning(input: {
 
   const read = useCallback(() => {
     const ask = cookrew().terminalTuning
-    // Feature-detected, not assumed: the remote (phone) api carries no dials
-    // on purpose, and a bridge from before this feature carries none either.
+    // Feature-detected, not assumed. Both real transports implement this —
+    // IPC on the desktop, /api/terminal/:id/tuning on the phone — so the
+    // absent case is the demo api and any bridge older than the feature.
     if (!ask) {
       setState(null)
       return

@@ -3,6 +3,7 @@ import { ReconnectingStream, attachTerminalStream } from './live-stream'
 import { recordLatency, setDesktopName, setPathLink, setRegistryOrigin } from './path-link'
 import type { CompanionAccount } from '../../main/companion-account'
 import type { AccountStatus } from '../../shared/account-v2'
+import type { AgentTuning, AgentTuningState } from '../../shared/agent-tuning'
 import type { BoardSnapshotLike, CookrewApi } from './api'
 import type { CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
 import type { UiCommandEvent } from '../../shared/sous-ui'
@@ -425,6 +426,27 @@ export function createRemoteApi(): CookrewApi {
 
     listActivity: () => req<TerminalActivity[]>(apiPath('/api/activity')),
     onTerminalActivity: (cb) => subscribe<TerminalActivity>('activity', cb),
+
+    // THE DIALS (shared/agent-tuning). The phone gets the readout AND the
+    // control, because this surface is the owner's own canvas in their own
+    // hand: a companion that showed you an agent burning max effort and would
+    // not let you turn it down is a worse companion than one that showed
+    // nothing. The genuinely-someone-else's-session case is separate and is
+    // refused by the rail itself (TerminalNodeData.servedSession).
+    //
+    // One fleet-wide GET for every card's tag, then the same change-gated push
+    // the desktop renderer gets — so nothing here polls.
+    listTuning: () => req<Record<string, AgentTuning>>(apiPath('/api/tuning')),
+    onTerminalTuning: (cb) =>
+      subscribe<{ terminalId: string; tuning: AgentTuning }>('tuning', cb),
+    terminalTuning: (terminalId) =>
+      req<AgentTuningState>(apiPath(`/api/terminal/${terminalId}/tuning`)),
+    tuneTerminal: (terminalId, knob, value) =>
+      req<{ ok: true } | { ok: false; reason: string }>(
+        apiPath(`/api/terminal/${terminalId}/tune`),
+        'POST',
+        { knob, value }
+      ),
     // Observability event log (observability-event-log-spec): the shared SSE
     // stream carries 'event'; queries/roster are plain GETs.
     onEvent: (cb) => subscribe('event', cb),
