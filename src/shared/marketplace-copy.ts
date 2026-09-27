@@ -633,9 +633,12 @@ export const MKT_SERVE = {
   'mkt.serve.who.paid': 'Anyone who pays',
   'mkt.serve.who.paid.sub':
     'Set a price. Callers pay you directly — Cookrew never holds the money and takes nothing.',
-  'mkt.serve.price.unit': 'USD · per session',
-  'mkt.serve.price.label': 'Price in USD per session',
-  'mkt.serve.price.paid': '{price} USD · per session · {rails}',
+  // A SEAT, not a session (ruled copy G1: "charges {price} a seat"). The
+  // door charges once, at its 402, and the seat it settles follows the buyer
+  // to any device; the owner ends the seat to make the next call pay again.
+  'mkt.serve.price.unit': 'USD · a seat',
+  'mkt.serve.price.label': 'Price in USD, a seat',
+  'mkt.serve.price.paid': '{price} USD · a seat · {rails}',
   'mkt.serve.price.free': 'free · sign in to start',
   'mkt.serve.rails.live': 'Offers {rails}',
   'mkt.serve.rails.none': 'No payment rail is configured yet.',

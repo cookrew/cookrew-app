@@ -167,7 +167,7 @@ describe('the header knows who is reading, on every kind of page', () => {
     const body = page({ title: 't', kind: 'document', account: 'drej' }, '<p>x</p>').body
     expect(body).toContain('href="/me"')
     expect(body).toContain('@drej')
-    expect(body).not.toContain('🔑 Sign in')
+    expect(body).not.toMatch(/ Sign in<\/(?:a|button)>/)
     expect(body).not.toMatch(/<script(?! type="application\/ld\+json")/i)
   })
 
@@ -178,8 +178,8 @@ describe('the header knows who is reading, on every kind of page', () => {
   })
 
   it('a stranger is offered sign in, as before', () => {
-    expect(page({ title: 't', kind: 'document' }, '<p>x</p>').body).toContain('🔑 Sign in')
-    expect(page({ title: 't', kind: 'app', account: null }, '<p>x</p>').body).toContain('🔑 Sign in')
+    expect(page({ title: 't', kind: 'document' }, '<p>x</p>').body).toMatch(/ Sign in<\/a>/)
+    expect(page({ title: 't', kind: 'app', account: null }, '<p>x</p>').body).toMatch(/ Sign in<\/button>/)
   })
 
   it('the front page for a signed-in reader is theirs — private, never shared from a cache', () => {
@@ -188,7 +188,7 @@ describe('the header knows who is reading, on every kind of page', () => {
     expect(mine.body).toContain('@drej')
     expect(mine.headers['cache-control']).toBe('private, no-store')
     const anyone = homePage(input)
-    expect(anyone.body).toContain('🔑 Sign in')
+    expect(anyone.body).toMatch(/ Sign in<\/a>/)
     expect(anyone.headers['cache-control']).toMatch(/^public/)
   })
 })
