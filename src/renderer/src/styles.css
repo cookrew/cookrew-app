@@ -3569,22 +3569,39 @@ a.card-close {
 }
 
 /* ---- workspace switcher (header) ---- */
+/*
+ * ONE CHIP, TWO DEPTHS.
+ *
+ * The name opens the screen wall and the caret opens the list, but they are
+ * one control and have to look like it. So THE BORDER BELONGS TO THE
+ * CONTAINER: giving each half its own put two 1.5px edges against each other,
+ * which drew a heavy double seam and two sets of corners — it read as two
+ * chips shoved together. Inside, the halves are borderless and share one
+ * background; a hairline in `--line-soft` is the only thing between them,
+ * enough to say "two targets" and not enough to break the silhouette.
+ */
 .cr-ws {
   position: relative;
   display: flex;
-  align-items: baseline;
-  gap: 10px;
+  align-items: stretch;
   min-width: 0;
+  background: var(--cream-md);
+  border: 1.5px solid var(--line);
+  border-radius: 3px;
 }
 .cr-ws-current {
   display: flex;
   align-items: center;
   gap: 7px;
-  background: var(--cream-md);
-  border: 1.5px solid var(--line);
-  border-radius: 3px;
+  background: transparent;
+  border: none;
+  /* Rounded to sit INSIDE the container's 3px, so the hover fill follows the
+     chip's corners. Not `overflow:hidden` on the parent — the dropdown is
+     absolutely positioned inside it and would be clipped away entirely. */
+  border-radius: 2px 0 0 2px;
   padding: 3px 8px;
   cursor: pointer;
+  min-width: 0;
 }
 .cr-ws-current:hover {
   background: var(--amber-soft);
@@ -3597,23 +3614,24 @@ a.card-close {
   font-family: var(--font-pixel);
   font-size: 8px;
   color: var(--muted);
+  display: flex;
+  align-items: center;
 }
-/* The caret is its own button now: the NAME opens the screen wall, the caret
-   opens the list. Same chip to look at, two destinations — so it wears the
-   name's border on its left edge only, and never reads as a gap. */
 .cr-ws-caret-btn {
   display: flex;
   align-items: center;
-  background: var(--cream-md);
-  border: 1.5px solid var(--line);
-  border-left: none;
-  border-radius: 0 3px 3px 0;
-  margin-left: -10px;
-  padding: 4px 6px;
+  background: transparent;
+  border: none;
+  border-left: 1px solid var(--line-soft);
+  border-radius: 0 2px 2px 0;
+  padding: 0 6px;
   cursor: pointer;
 }
 .cr-ws-caret-btn:hover { background: var(--amber-soft) }
-.cr-ws-current { border-radius: 3px 0 0 3px }
+/* Open, the list is the thing being looked at — so the caret holds the
+   highlight for as long as it is showing, rather than snapping back the
+   moment the pointer leaves. */
+.cr-ws-caret-btn[aria-expanded='true'] { background: var(--amber-soft) }
 .cr-ws-name {
   max-width: 200px;
   white-space: nowrap;

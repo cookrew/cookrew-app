@@ -157,6 +157,49 @@ describe('an ask against the record', () => {
   })
 })
 
+describe('reading a model that is not a claude alias', () => {
+  it('ticks the offered row for a bare recorded id', () => {
+    // A pi card offers `qwen-local/qwen3.8-27b-q8` and its replies record
+    // `qwen3.8-27b-q8`. Alias-only matching returned null, so the dial listed
+    // four models and claimed none of them was the one running.
+    const choices = ['ifunk/k3', 'qwen-local/qwen3.8-27b-q8']
+    const running = { model: 'qwen3.8-27b-q8', effort: null, at: T0 }
+    expect(dialReading('model', running, choices)).toBe('qwen-local/qwen3.8-27b-q8')
+  })
+
+  it('prefers an EXACT offered value over the suffix match', () => {
+    const choices = ['ifunk/k3', 'k3']
+    expect(dialReading('model', { model: 'k3', effort: null, at: T0 }, choices)).toBe('k3')
+  })
+
+  it('still falls back to the claude alias when no choices are given', () => {
+    expect(dialReading('model', tuning())).toBe('opus')
+  })
+
+  it('settles a pi model ask against the offered ref', () => {
+    const choices = ['qwen-local/qwen3.8-27b-q8']
+    const asked = { knob: 'model' as const, value: 'qwen-local/qwen3.8-27b-q8', at: T0 }
+    const running = { model: 'qwen3.8-27b-q8', effort: null, at: T0 + 1 }
+    expect(askOutcome(asked, running, ['model', 'effort'], choices)).toBe('settled')
+  })
+
+  it('ticks exactly one row on a pi dial', () => {
+    const view = tuneRailView({
+      state: state({
+        harness: 'pi',
+        tuning: { model: 'qwen3.8-27b-q8', effort: 'off', at: T0 },
+        choices: { model: ['ifunk/k3', 'qwen-local/qwen3.8-27b-q8'], effort: ['off'] }
+      }),
+      phase: 'idle',
+      remote: false
+    })
+    const rows = view!.dials[0].rows
+    expect(rows.filter((r) => r.state === 'current').map((r) => r.value)).toEqual([
+      'qwen-local/qwen3.8-27b-q8'
+    ])
+  })
+})
+
 describe('a knob the harness never writes down', () => {
   it('reports the ask as SENT and uncheckable, not pending forever', () => {
     // Pi accepts a thinking level and records none. 'pending' would be a

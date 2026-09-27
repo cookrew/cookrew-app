@@ -13,11 +13,18 @@
 // agent is unreachable. So the model dial offers only what pi's own catalogs
 // list (pi-catalog.ts), which makes a miss impossible rather than unlikely.
 //
-// READS: pi stamps each assistant message with the model that produced it
-// (`message.model`) and NEVER records the thinking level. So `records` names
-// the model alone, and a level ask reports as 'unrecorded' — sent, and
-// checkable only in the pane. Pretending otherwise would mean a rail that
-// waits forever for a confirmation that is never written.
+// READS: pi records MORE than it first appeared. Besides stamping each
+// assistant message with the model that produced it, it writes a record the
+// instant either dial moves:
+//
+//   {"type":"model_change","provider":"ifunk","modelId":"k3"}
+//   {"type":"thinking_level_change","thinkingLevel":"off"}
+//
+// So BOTH knobs are confirmable — an earlier reading of this file said the
+// thinking level was never recorded, which was simply wrong — and both read
+// back immediately rather than waiting for the next reply. A `model_change`
+// reports the PROVIDER-QUALIFIED ref, which is exactly the string `/model`
+// accepts and the rows offer.
 
 import {
   piModelFor,
@@ -31,6 +38,9 @@ import type { AgentTuning, HarnessTuning } from '../shared/agent-tuning'
 interface PiRecord {
   type?: unknown
   timestamp?: unknown
+  provider?: unknown
+  modelId?: unknown
+  thinkingLevel?: unknown
   message?: { role?: unknown; model?: unknown; timestamp?: unknown } | unknown
 }
 
@@ -38,9 +48,22 @@ interface PiRecord {
 export function piTuningWith(options: PiCatalogOptions = {}): HarnessTuning {
   return {
     knobs: ['model', 'effort'],
-    // The model is written onto every reply; the thinking level is written
-    // nowhere. Only the first can settle an ask.
-    records: ['model'],
+    // Both, via the change records above.
+    records: ['model', 'effort'],
+
+    /**
+     * Deeper windows than the default, for the same reason codex needs them
+     * and a different cause. Pi writes `thinking_level_change` when the level
+     * MOVES — which for a session nobody has retuned means once, at the very
+     * start. Measured across this machine's pi sessions: the level record sat
+     * 512 KB to 3.5 MB back in files of the same size, so every pi card but
+     * the smallest read its effort as unknown.
+     *
+     * The model is unaffected either way (every assistant message carries it);
+     * this is what makes the OTHER dial readable. Paid once per file: the
+     * cache then follows the appended bytes alone.
+     */
+    tailSteps: [64 * 1024, 512 * 1024, 4 * 1024 * 1024],
 
     values: (knob, current) => {
       const models = piModels(options)
@@ -76,6 +99,26 @@ export const piTuning: HarnessTuning = piTuningWith()
 function piRead(record: unknown): AgentTuning | null {
   if (typeof record !== 'object' || record === null) return null
   const entry = record as PiRecord
+  const stampOf = (): number | null => {
+    const parsed = typeof entry.timestamp === 'string' ? Date.parse(entry.timestamp) : NaN
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  // THE CHANGE RECORDS: pi's own acknowledgment, written the moment a dial
+  // moves, so the readout does not wait for the next reply. Each names one
+  // dial and the scanner merges it over the other.
+  if (entry.type === 'model_change') {
+    const { provider, modelId } = entry as { provider?: unknown; modelId?: unknown }
+    if (typeof modelId !== 'string' || modelId.length === 0) return null
+    // Provider-qualified, because that is the string /model accepts and the
+    // rows offer — an unqualified id would tick no row.
+    const model = typeof provider === 'string' && provider.length > 0 ? `${provider}/${modelId}` : modelId
+    return { model, effort: null, at: stampOf() }
+  }
+  if (entry.type === 'thinking_level_change') {
+    const level = (entry as { thinkingLevel?: unknown }).thinkingLevel
+    if (typeof level !== 'string' || level.length === 0) return null
+    return { model: null, effort: level, at: stampOf() }
+  }
   if (entry.type !== 'message') return null
   const message = entry.message
   if (typeof message !== 'object' || message === null) return null

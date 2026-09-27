@@ -16,6 +16,7 @@ import {
   TuningCache,
   applyTuning,
   readTuning,
+  scanSessionFile,
   subjectOf,
   tuningStateOf,
   type TuneDeps
@@ -24,7 +25,7 @@ import { claudeProjectDir } from '../src/main/claude-fork'
 import { claudeTuning } from '../src/main/claude-tuning'
 import { codexTuning } from '../src/main/codex-tuning'
 import { piTuning, piTuningWith } from '../src/main/pi-tuning'
-import { tuningTag, type HarnessTuning } from '../src/shared/agent-tuning'
+import { askOutcome, modelAliasOf, tuningTag, type HarnessTuning } from '../src/shared/agent-tuning'
 import type { TerminalNodeData } from '../src/shared/model'
 
 const SESSION = '11111111-2222-4333-8444-555555555555'
@@ -199,11 +200,46 @@ describe('pi records a model and no effort, and says exactly that', () => {
     expect(piTuning.read({ type: 'session', message: { role: 'assistant', model: 'k3' } })).toBeNull()
   })
 
-  it('sets BOTH dials, and can confirm only the model', () => {
-    // Pi writes the model onto every reply and the thinking level nowhere, so
-    // a level ask is reported as sent-and-uncheckable rather than pending.
+  it('sets BOTH dials and confirms BOTH — it records more than it looks', () => {
     expect(piTuning.knobs).toEqual(['model', 'effort'])
-    expect(piTuning.records).toEqual(['model'])
+    expect(piTuning.records).toEqual(['model', 'effort'])
+  })
+
+  it('reads its change records, so a dial reads back without waiting for a reply', () => {
+    // Verified against a real ~/.cookrew/pi-sessions file: pi writes one of
+    // these the instant either dial moves.
+    expect(
+      piTuning.read({
+        type: 'model_change',
+        timestamp: '2026-08-12T17:20:35.398Z',
+        provider: 'ifunk',
+        modelId: 'k3'
+      })
+    ).toEqual({ model: 'ifunk/k3', effort: null, at: Date.parse('2026-08-12T17:20:35.398Z') })
+    expect(
+      piTuning.read({
+        type: 'thinking_level_change',
+        timestamp: '2026-08-12T17:20:35.399Z',
+        thinkingLevel: 'off'
+      })
+    ).toEqual({ model: null, effort: 'off', at: Date.parse('2026-08-12T17:20:35.399Z') })
+  })
+
+  it('looks deep enough to find a level written at session start', () => {
+    // Pi writes thinking_level_change only when the level MOVES, so for an
+    // unretuned session that is once, at the very beginning. Measured on this
+    // machine: 512 KB to 3.5 MB back, so the default window read every pi
+    // card's effort as unknown.
+    expect(piTuning.tailSteps?.at(-1) ?? 0).toBeGreaterThanOrEqual(4 * 1024 * 1024)
+    expect(piTuning.tailSteps?.[0] ?? Infinity).toBeLessThanOrEqual(64 * 1024)
+  })
+
+  it('qualifies a changed model by provider, because that is what the rows offer', () => {
+    // An unqualified id would tick no row: the choices are `provider/id`.
+    const changed = piTuning.read({
+      type: 'model_change', timestamp: '2026-08-12T17:20:35.398Z', provider: 'qwen-local', modelId: 'qwen3.8-27b-q8'
+    })
+    expect(changed?.model).toBe('qwen-local/qwen3.8-27b-q8')
   })
 
   it('offers only models pi itself lists — a miss would open a picker', () => {
@@ -241,6 +277,102 @@ describe('pi records a model and no effort, and says exactly that', () => {
     const tuning = piTuningWith({ agentDir: mkdtempSync(path.join(tmpdir(), 'pi-empty-')) })
     expect(tuning.values?.('model', null)).toEqual([])
     expect(tuning.line('model', 'ifunk/k3')).toBeNull()
+  })
+})
+
+/** The pair claude writes when a slash command runs, verbatim in shape. */
+function commandResult(stdout: string, at: string): string {
+  return JSON.stringify({
+    type: 'user',
+    timestamp: at,
+    sessionId: SESSION,
+    message: { role: 'user', content: `<local-command-stdout>${stdout}</local-command-stdout>` }
+  })
+}
+
+describe('claude acknowledges a dial turn in the record, and that is the readout', () => {
+  it('reads the model out of the command result, not the next reply', () => {
+    // The complaint this fixes: the pane said "Set model to Fable 5.1" while
+    // the rail still read `opus`, because an idle agent may not reply for
+    // minutes. The acknowledgment is written the moment the command runs.
+    const record = JSON.parse(
+      commandResult('Set model to `Fable 5.1` and saved as your default for new sessions',
+        '2026-09-27T06:12:27.788Z')
+    )
+    expect(claudeTuning.read(record)).toEqual({
+      model: 'Fable 5.1',
+      effort: null,
+      at: Date.parse('2026-09-27T06:12:27.788Z')
+    })
+  })
+
+  it('reads either effort wording — saved as default, or this session only', () => {
+    const saved = JSON.parse(commandResult(
+      'Set effort level to high (saved as your default for new sessions): Comprehensive',
+      '2026-09-27T06:12:08.817Z'))
+    const once = JSON.parse(commandResult(
+      'Set effort level to max (this session only): Maximum capability', '2026-09-27T06:12:41.280Z'))
+    expect(claudeTuning.read(saved)?.effort).toBe('high')
+    expect(claudeTuning.read(once)?.effort).toBe('max')
+  })
+
+  it('ignores a command that did NOT set anything, so a refusal stays visible', () => {
+    // A rejected pick prints an error instead of "Set model to", which is
+    // what keeps the refused state detectable rather than papered over.
+    expect(claudeTuning.read(JSON.parse(commandResult('Reset model to the workspace default', '2026-09-27T06:00:00.000Z')))).toBeNull()
+    expect(claudeTuning.read(JSON.parse(commandResult("Unknown model 'nope'", '2026-09-27T06:00:00.000Z')))).toBeNull()
+    expect(claudeTuning.read(JSON.parse(JSON.stringify({
+      type: 'user', timestamp: '2026-09-27T06:00:00.000Z',
+      message: { role: 'user', content: 'please set the model to fable' }
+    })))).toBeNull()
+  })
+
+  it('maps the DISPLAY name the acknowledgment uses onto the offered alias', () => {
+    // The reply records `claude-fable-5-1`; the acknowledgment says
+    // "Fable 5.1". Both have to tick the same row.
+    expect(modelAliasOf('Fable 5.1')).toBe('fable')
+    expect(modelAliasOf('Opus 5')).toBe('opus')
+    expect(modelAliasOf('Haiku 4.5')).toBe('haiku')
+  })
+
+  it('takes the model from the acknowledgment WITHOUT blanking the effort', () => {
+    // A /model result names no effort. Replacing wholesale would wipe a
+    // perfectly well-known one on every model change.
+    const projectsDir = projectsWith([
+      reply('claude-opus-5', 'max', '2026-09-27T03:00:00.000Z'),
+      commandResult('Set model to `Fable 5.1` and saved as your default for new sessions',
+        '2026-09-27T04:00:00.000Z')
+    ])
+    expect(readTuning(subjectOf(node()), { projectsDir })).toEqual({
+      model: 'Fable 5.1',
+      effort: 'max',
+      at: Date.parse('2026-09-27T04:00:00.000Z')
+    })
+  })
+
+  it('settles the ask immediately instead of waiting for a reply', () => {
+    const at = Date.parse('2026-09-27T04:00:00.000Z')
+    const projectsDir = projectsWith([
+      reply('claude-opus-5', 'max', '2026-09-27T03:00:00.000Z'),
+      commandResult('Set model to `Fable 5.1` and saved as your default', '2026-09-27T04:00:00.000Z')
+    ])
+    const tuning = readTuning(subjectOf(node()), { projectsDir })
+    const ask = { knob: 'model' as const, value: 'fable', at: at - 1000 }
+    expect(askOutcome(ask, tuning)).toBe('settled')
+  })
+
+  it('merges through the APPEND path too, not only a cold read', () => {
+    const projectsDir = projectsWith([reply('claude-opus-5', 'max', '2026-09-27T03:00:00.000Z')])
+    const cache = new TuningCache()
+    const subject = subjectOf(node())
+    expect(cache.of(subject, { projectsDir })).toEqual({
+      model: 'claude-opus-5', effort: 'max', at: Date.parse('2026-09-27T03:00:00.000Z')
+    })
+    const file = path.join(claudeProjectDir(CWD, projectsDir), `${SESSION}.jsonl`)
+    appendFileSync(file, `\n${commandResult('Set model to `Fable 5.1` and saved', '2026-09-27T04:00:00.000Z')}`)
+    expect(cache.of(subject, { projectsDir })).toEqual({
+      model: 'Fable 5.1', effort: 'max', at: Date.parse('2026-09-27T04:00:00.000Z')
+    })
   })
 })
 
@@ -296,6 +428,42 @@ describe('the readout for a whole canvas', () => {
     const second = cache.of(subject, { projectsDir })
     expect(second).not.toBe(first)
     expect(second?.model).toBe('claude-sonnet-5')
+  })
+
+  it('keeps widening until every RECORDED dial is filled, not until one is', () => {
+    // The bug this pins: the first window contained a reply (every window
+    // does), so the scan stopped with the model found and the effort still
+    // missing — which on pi, whose level record sits at the START of the
+    // session, meant every card read its effort as unknown.
+    const levelFirst: HarnessTuning = {
+      knobs: [],
+      records: ['model', 'effort'],
+      tailSteps: [1024, 4 * 1024 * 1024],
+      line: () => null,
+      read: (r) => {
+        const rec = r as { effort?: unknown; message?: { model?: unknown } }
+        if (typeof rec.effort === 'string') return { model: null, effort: rec.effort, at: 1 }
+        const m = rec.message?.model
+        return typeof m === 'string' ? { model: m, effort: null, at: 2 } : null
+      }
+    }
+    const projectsDir = mkdtempSync(path.join(tmpdir(), 'widen-'))
+    const dir = claudeProjectDir(CWD, projectsDir)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      path.join(dir, `${SESSION}.jsonl`),
+      [
+        JSON.stringify({ effort: 'off' }),
+        JSON.stringify({ type: 'user', pad: 'p'.repeat(40_000) }),
+        JSON.stringify({ message: { model: 'qwen3.8-27b-q8' } })
+      ].join('\n')
+    )
+    const file = path.join(dir, `${SESSION}.jsonl`)
+    expect(scanSessionFile(file, levelFirst)).toEqual({
+      model: 'qwen3.8-27b-q8',
+      effort: 'off',
+      at: 2
+    })
   })
 
   it('reaches past a turn too long for the first window', () => {

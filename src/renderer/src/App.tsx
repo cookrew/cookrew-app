@@ -297,7 +297,26 @@ function Canvas(): React.JSX.Element {
     []
   )
 
+  /**
+   * THE CHIP TOGGLES, AND IT NEVER PHOTOGRAPHS ITS OWN WALL.
+   *
+   * Clicking the chip a second time is the natural way to dismiss the wall,
+   * and without this guard that click ran a fresh capture WITH THE WALL ON
+   * SCREEN — so the workspace's snapshot became a picture of the switcher,
+   * and the next open showed a wall inside a wall. Found by using it, not by
+   * a test: nothing about the code reads wrong, it is purely a question of
+   * what is painted at the moment the compositor is asked for a frame.
+   */
+  const wallOpenRef = useRef(false)
+  useEffect(() => {
+    wallOpenRef.current = wallOpen
+  }, [wallOpen])
+
   const openWall = useCallback(async () => {
+    if (wallOpenRef.current) {
+      setWallOpen(false)
+      return
+    }
     const stage = stageRef.current?.getBoundingClientRect() ?? null
     setWallStage(stage)
     // PHOTOGRAPH THE CANVAS FIRST. Opening the wall is the moment this
