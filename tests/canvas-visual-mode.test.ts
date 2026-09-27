@@ -22,20 +22,21 @@ const appSource = readFileSync(
 )
 
 describe('canvas visual modes', () => {
-  it('cycles through all four states, the harness right after all', () => {
-    // The harness sits next to `all` so one tap from the default shows the
-    // same cables tidied, and one more hides them — the reduced rungs keep
-    // their order behind it.
-    expect(nextCanvasVisualMode('all')).toBe('harness')
+  it('starts on the harness and cycles through all four states', () => {
+    // Tidy cables are the default, not a mode to find: a fresh canvas opens on
+    // the harness, one tap hides the cables, one more shows agents only, and
+    // the raw `all` view is last on the ladder for auditing the wiring.
     expect(nextCanvasVisualMode('harness')).toBe('no-cables')
     expect(nextCanvasVisualMode('no-cables')).toBe('agents')
     expect(nextCanvasVisualMode('agents')).toBe('all')
+    expect(nextCanvasVisualMode('all')).toBe('harness')
   })
 
-  it('falls back to all for an unknown persisted value', () => {
-    expect(canvasVisualModeOf('stale')).toBe('all')
-    expect(canvasVisualModeOf(null)).toBe('all')
-    expect(canvasVisualModeOf('harness')).toBe('harness')
+  it('falls back to the harness for nothing stored or an unknown value, and honours a stored choice', () => {
+    expect(canvasVisualModeOf(null)).toBe('harness')
+    expect(canvasVisualModeOf('stale')).toBe('harness')
+    expect(canvasVisualModeOf('all')).toBe('all')
+    expect(canvasVisualModeOf('no-cables')).toBe('no-cables')
   })
 
   it('keeps every preset terminal in agents-only, including Shell', () => {
