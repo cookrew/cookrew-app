@@ -7,7 +7,7 @@
 // joined: a line only reaches the pane when the gate allows it, and an ask is
 // only remembered when a line actually went.
 
-import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -23,6 +23,7 @@ import {
 import { claudeProjectDir } from '../src/main/claude-fork'
 import { claudeTuning } from '../src/main/claude-tuning'
 import { codexTuning } from '../src/main/codex-tuning'
+import type { HarnessTuning } from '../src/shared/agent-tuning'
 import type { TerminalNodeData } from '../src/shared/model'
 
 const SESSION = '11111111-2222-4333-8444-555555555555'
@@ -203,6 +204,44 @@ describe('the readout for a whole canvas', () => {
       filler
     ])
     expect(readTuning(subjectOf(node()), { projectsDir })?.model).toBe('claude-opus-5')
+  })
+
+  it('reaches a stamp that a long turn pushed far back, when the harness says to', () => {
+    // Codex writes turn_context once per TURN, so the distance back from EOF
+    // is the whole turn's output. Measured on the real fleet: 452 KB, 941 KB
+    // and 3.0 MB on rollouts of 10-64 MB, all outside the 256 KB default, and
+    // all three cards showed no tag at all.
+    const stamp = reply('claude-opus-5', 'max', '2026-09-27T03:00:00.000Z')
+    const projectsDir = projectsWith([stamp, JSON.stringify({ type: 'user', pad: 'x'.repeat(900_000) })])
+    // The DEFAULT steps stop at 256 KB and honestly report nothing.
+    expect(readTuning(subjectOf(node()), { projectsDir })).toBeNull()
+
+    // A harness that declares deeper windows finds it. Driven through the real
+    // registry entry rather than a stub, so the declaration is what is tested.
+    const deep: HarnessTuning = { ...claudeTuning, tailSteps: [128 * 1024, 4 * 1024 * 1024] }
+    const file = path.join(claudeProjectDir(CWD, projectsDir), `${SESSION}.jsonl`)
+    expect(deep.tailSteps?.[1]).toBeGreaterThan(900_000)
+    expect(readFileSync(file, 'utf8').length).toBeGreaterThan(900_000)
+    expect(codexTuning.tailSteps?.at(-1) ?? 0).toBeGreaterThanOrEqual(16 * 1024 * 1024)
+  })
+
+  it('follows an ACTIVE file forward by its appended bytes, keeping what it knows', () => {
+    // The expensive window is paid once. After that a grown file is scanned
+    // only where it grew — and finding no new stamp there means the turn is
+    // still running on the same dials, not that they became unknown.
+    const projectsDir = projectsWith([reply('claude-opus-5', 'max', '2026-09-27T03:00:00.000Z')])
+    const cache = new TuningCache()
+    const subject = subjectOf(node())
+    expect(cache.of(subject, { projectsDir })?.model).toBe('claude-opus-5')
+
+    const file = path.join(claudeProjectDir(CWD, projectsDir), `${SESSION}.jsonl`)
+    // A megabyte of turn output carrying no stamp of its own.
+    appendFileSync(file, `\n${JSON.stringify({ type: 'user', pad: 'y'.repeat(1_100_000) })}`)
+    expect(cache.of(subject, { projectsDir })?.model).toBe('claude-opus-5')
+
+    // A real new stamp in the appended bytes DOES replace it.
+    appendFileSync(file, `\n${reply('claude-sonnet-5', 'low', '2026-09-27T05:00:00.000Z')}`)
+    expect(cache.of(subject, { projectsDir })?.model).toBe('claude-sonnet-5')
   })
 
   it('forgets a card that ended', () => {

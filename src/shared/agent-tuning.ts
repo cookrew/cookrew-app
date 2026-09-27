@@ -161,6 +161,13 @@ export interface HarnessTuning {
   /** The dials carried by ONE parsed session-file record; null when it has none. */
   read: (record: unknown) => AgentTuning | null
   /**
+   * How far back a COLD read should look, in escalating byte windows. Default
+   * suits a harness that stamps every reply; a harness that stamps once per
+   * TURN must declare larger ones, because the distance from the end of the
+   * file is then the whole turn's output rather than one record.
+   */
+  tailSteps?: readonly number[]
+  /**
    * One sentence about what turning a dial ALSO does, shown at the moment of
    * picking. Declared by the harness because it is the harness's own
    * behaviour, and stated because this rail turns something that used to take
