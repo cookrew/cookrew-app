@@ -10,24 +10,24 @@ export const SEQUENCES: Readonly<Record<string, readonly Step[]>> = {
   "board": [
     {
       "file": "seq-board-1.jpg",
-      "title": "Opened the Board view",
-      "caption": "Switched from Canvas to Board and captured the flat list of every agent, note, and browser across the workspace with live status and DONE timers.",
+      "title": "The Board, one row per agent",
+      "caption": "Switched the header from Canvas to Board on the Cookrew Dev workspace: one row per agent with its harness, role and workspace chips, the prompt it was last given, the reply it made, and how long ago it finished.",
       "width": 1400,
-      "height": 878
+      "height": 875
     },
     {
       "file": "seq-board-2.jpg",
-      "title": "Applied a facet chip",
-      "caption": "Focused the Board search field to reveal the facet bar and clicked the Claude Code chip, narrowing the roster to that harness with a CLEAR control now showing.",
+      "title": "A facet chip narrows the roster",
+      "caption": "Focused the Board's search field so the facet bar appeared, and clicked CLAUDE CODE: the roster narrowed to the ten agents on that harness, the chip lit, and CLEAR appeared at the head of the bar.",
       "width": 1400,
-      "height": 878
+      "height": 875
     },
     {
       "file": "seq-board-3.jpg",
-      "title": "Searched to narrow rows",
-      "caption": "Typed \"checkpoint\" into the Board search box and captured the result count (47 of 649) with only matching agents and notes left in the list.",
+      "title": "Searched the checkpoints",
+      "caption": "Typed checkpoint into the Board's search: eight agents of twenty answered, each row carrying the checkpoint the hit landed in — T9, T103, T1039 — with the words around it, read from the agents' own transcripts.",
       "width": 1400,
-      "height": 878
+      "height": 875
     }
   ],
   "canvas": [
@@ -56,24 +56,24 @@ export const SEQUENCES: Readonly<Record<string, readonly Step[]>> = {
   "checkpoints": [
     {
       "file": "seq-checkpoints-1.jpg",
-      "title": "Conductor card zoomed in",
-      "caption": "Zoomed into the Conductor card by a real click on its body and captured its title, live transcript, and the checkpoint rail reading LIVE with 361 checkpoints.",
+      "title": "The Conductor card open on its rail",
+      "caption": "Clicked the Conductor card open: its latest reply above the LIVE line, the rail on the right counting 1126 checkpoints over the session's whole chain, the partner tabs of the harness on the card's edge.",
       "width": 1400,
-      "height": 878
+      "height": 875
     },
     {
       "file": "seq-checkpoints-2.jpg",
       "title": "Mid-scrub on the rail",
-      "caption": "Pressed and dragged the checkpoint rail's handle upward to fan out the full checkpoint list, landing on checkpoint T7 with its transcript block shown on the left.",
+      "caption": "Pressed the Velvet rail at its live end and dragged upward: the list of 138 checkpoints fanned out with the title Sous gave each, the focus riding the drag, and the transcript on the left following it.",
       "width": 1400,
-      "height": 878
+      "height": 875
     },
     {
       "file": "seq-checkpoints-3.jpg",
-      "title": "Fork control revealed on a row",
-      "caption": "Held a press on checkpoint row T13 in the fanned rail list long enough to reveal its ROLE, FORK, and REWIND action buttons without clicking any of them.",
+      "title": "Fork revealed on a row",
+      "caption": "Held a press on the T89 row in the fanned list until its action surfaced: FORK, which starts a new agent from that checkpoint, without clicking it.",
       "width": 1400,
-      "height": 878
+      "height": 875
     }
   ],
   "cli": [
@@ -88,68 +88,68 @@ export const SEQUENCES: Readonly<Record<string, readonly Step[]>> = {
   "harnesses": [
     {
       "file": "seq-harnesses-1.jpg",
-      "title": "Harness dock with Shell selected",
-      "caption": "Opened the terminal dock tray at the bottom of the canvas showing the agent harness picker (Shell highlighted) and the list of saved team presets.",
+      "title": "The harness picker with Shell selected",
+      "caption": "Pressed TERMINAL in the dock over the harness canvas and chose SHELL: the picker row shows the five harnesses with Shell lit, then the saved teams, then + IMPORT A TEAM.",
       "width": 1400,
-      "height": 878
+      "height": 875
     },
     {
       "file": "seq-harnesses-2.jpg",
-      "title": "Harness dock with Claude Code selected",
-      "caption": "Selected Claude Code in the same harness dock tray, showing the agent picker's active state switch from Shell to Claude Code alongside the saved team presets.",
+      "title": "Claude Code selected",
+      "caption": "Chose CLAUDE CODE in the same picker: the lit chip moved from Shell to Claude Code; a click on the canvas would now place an agent on that harness.",
       "width": 1400,
-      "height": 878
+      "height": 875
     },
     {
       "file": "seq-harnesses-3.jpg",
-      "title": "Import a team dialog opened",
-      "caption": "Clicked \"+ Import a team\" in the dock tray and captured the resulting dialog with its placeholder example address and Cancel/Look up controls.",
+      "title": "Import a team, opened",
+      "caption": "Pressed + IMPORT A TEAM: the sheet opened over the canvas with its address field, an example address as the placeholder, and CANCEL and LOOK UP under it.",
       "width": 1400,
-      "height": 878
+      "height": 875
     }
   ],
   "marketplace": [
     {
       "file": "seq-marketplace-1.jpg",
-      "title": "Import team preview for cookrew-alpha",
-      "caption": "Pasted the cookrew.dev/@drej/cookrew-alpha address into the Import a Team dialog and captured the resolved COOKREW Alpha preview with its free-tier description and Import button.",
+      "title": "An address pasted in",
+      "caption": "Pasted cookrew.dev/@drej/cookrew-alpha into the Import a team sheet — the address a served team is published at.",
       "width": 1400,
-      "height": 878
+      "height": 875
     },
     {
       "file": "seq-marketplace-2.jpg",
-      "title": "Look up pressed on alpha team",
-      "caption": "Reopened the Import a Team dialog, typed the cookrew.dev/@drej/cookrew-alpha URL, and pressed LOOK UP to show the same COOKREW Alpha preview card without placing it.",
+      "title": "The door's face, looked up",
+      "caption": "Pressed LOOK UP: the sheet read the door's face from cookrew.dev — COOKREW Alpha, Pilot answering for 3 agents, a priced seat — and offered the import button.",
       "width": 1400,
-      "height": 878
+      "height": 875
     }
   ],
   "mobile": [
     {
       "file": "seq-mobile-1.jpg",
-      "title": "Phone companion canvas",
-      "caption": "Loaded the paired phone companion in a 500px-wide headless browser and captured its canvas view with agent cards and the minimap in the corner.",
+      "title": "The canvas at phone width",
+      "caption": "Rendered the same fixture at 500 px with touch emulation, the layout the phone companion uses: Velvet between its notes and the browser card below, the harness cables between them, the dock along the bottom.",
       "width": 700,
       "height": 1400
     },
     {
       "file": "seq-mobile-2.jpg",
-      "title": "Card opened on the phone",
-      "caption": "Tapped the Tinker card on the phone companion and captured its full-screen transcript view with the checkpoint rail's diamond markers visible on the right edge.",
+      "title": "A card opened on the phone",
+      "caption": "Tapped the Velvet card: it took the screen with its transcript, the rail on the right counting 138, and the notes it is wired to peeking above and below.",
       "width": 700,
       "height": 1400
     },
     {
       "file": "seq-mobile-3.jpg",
-      "title": "Board view on the phone",
-      "caption": "Tapped the Board icon in the phone companion's header and captured the same flat agent/note list, resized to the narrow phone viewport.",
+      "title": "The Board on the phone",
+      "caption": "Tapped BOARD in the phone header: the same roster, one row per agent with its last turn, in the narrow layout.",
       "width": 700,
       "height": 1400
     },
     {
       "file": "seq-mobile-4.jpg",
-      "title": "Dock and preset picker on phone",
-      "caption": "Tapped the terminal tool icon in the phone companion's bottom dock and captured the open agent/preset picker with its \"pick a preset\" instruction bar.",
+      "title": "The dock picker on the phone",
+      "caption": "Tapped TERMINAL in the phone dock: the harness picker opened above it with the five harness chips and the saved teams.",
       "width": 700,
       "height": 1400
     }
@@ -157,10 +157,10 @@ export const SEQUENCES: Readonly<Record<string, readonly Step[]>> = {
   "workspaces": [
     {
       "file": "seq-workspaces-1.jpg",
-      "title": "Workspace switcher opened",
-      "caption": "Clicked the workspace pill in the header and captured the open dropdown listing every workspace with Cookrew Dev checked as the active one, without switching.",
+      "title": "The workspace wall",
+      "caption": "Pressed the workspace pill: the wall of workspaces slid in as tilted screens, Cookrew Dev picked in front with a snapshot of this canvas and its directory, the others behind it, and OPEN, DIRECTORIES, REMOVE and HISTORY under them.",
       "width": 1400,
-      "height": 878
+      "height": 875
     }
   ]
 }
