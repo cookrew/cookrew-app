@@ -100,7 +100,7 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
               the name was already using. */}
           <div className="vi-mini-text">
             <span className="vi-mini-name">{node.name}</span>
-            <DialTag id={node.id} className="vi-mini-dial" />
+            <DialTag id={node.id} className="vi-mini-dial" stack />
           </div>
         </div>
       </div>

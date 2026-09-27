@@ -45,6 +45,27 @@ describe('the dial tag', () => {
     expect(renderToStaticMarkup(<DialTag id="blank" />)).toBe('')
   })
 
+  it('stacks the two parts for a surface too narrow for one line', () => {
+    // Measured on the live board: the one-line tag needed 402px in a 253px
+    // box and clipped on all 23 tiles, which cost the EFFORT every time —
+    // the half you cannot reconstruct from the card's avatar or position.
+    seed('forge', { model: 'claude-opus-5', effort: 'max', at: T0 })
+    const html = renderToStaticMarkup(<DialTag id="forge" className="vi-mini-dial" stack />)
+    expect(html).toContain('<span class="dial-model">opus</span>')
+    expect(html).toContain('<span class="dial-effort">max</span>')
+    // Two clippable boxes, so a long model id clips ALONE.
+    expect(html).not.toContain('opus max')
+  })
+
+  it('stacks whichever half it has, and still draws nothing with neither', () => {
+    seed('half', { model: 'gpt-6-astra', effort: null, at: T0 })
+    const one = renderToStaticMarkup(<DialTag id="half" stack />)
+    expect(one).toContain('gpt-6-astra')
+    expect(one).not.toContain('dial-effort')
+    seed('none', { model: null, effort: null, at: null })
+    expect(renderToStaticMarkup(<DialTag id="none" stack />)).toBe('')
+  })
+
   it('takes each surface’s own chip class so it inherits that geometry', () => {
     seed('forge', { model: 'claude-opus-5', effort: 'max', at: T0 })
     // The canvas card's chips are .vi-chip; the roster and the zoomed header
