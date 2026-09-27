@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useState } from 'react'
 import { ViewportPortal, useStore, useStoreApi, type Edge, type Node } from '@xyflow/react'
 import { geometryKey, routeCables, type CableLink, type CableRect } from './cable-route'
-import { harnessView, stageOf, viewportKey, type ViewTab } from './cable-view'
+import { TAB_H, TAB_W, harnessView, stageOf, tabLayout, viewportKey } from './cable-view'
 
 /**
  * THE HARNESS LAYER — every cable on the canvas, drawn as one wiring diagram.
@@ -35,15 +35,6 @@ import { harnessView, stageOf, viewportKey, type ViewTab } from './cable-view'
 
 /** A drag re-keys geometry every frame; route once it has been still this long. */
 const SETTLE_MS = 120
-/** How many far-partner tabs a card wears before the rest fold into a count. */
-const TABS_PER_CARD = 6
-const TAB_W = 132
-const TAB_H = 34
-/**
- * A tab straddles its own card's border — half in, half out. Placed wholly
- * outside, it lands on the neighbour in an 80 px gutter.
- */
-const TAB_OVERHANG = TAB_W / 2
 const INK = '#2D2A20'
 const HOT = '#D97706'
 
@@ -57,52 +48,6 @@ function rectOf(node: Node): CableRect | null {
 
 /** Screen-pixel width of a trunk from how many cables share it. */
 const trunkWidth = (count: number): number => 1.3 + Math.log2(count) * 0.9
-
-interface Chip {
-  card: string
-  x: number
-  y: number
-  label: string
-  more: boolean
-  hot: boolean
-}
-
-/** A far partner becomes a tab on the side of the card that faces it. */
-function chipsFor(tabs: readonly ViewTab[], rects: ReadonlyMap<string, CableRect>, names: ReadonlyMap<string, string>): Chip[] {
-  const perCard = new Map<string, { partner: string; right: boolean; hot: boolean }[]>()
-  for (const t of tabs) {
-    const me = rects.get(t.card)
-    const other = rects.get(t.partner)
-    if (!me || !other) continue
-    const right = other.x + other.width / 2 > me.x + me.width / 2
-    const list = perCard.get(t.card)
-    const entry = { partner: t.partner, right, hot: t.hot }
-    if (list) list.push(entry)
-    else perCard.set(t.card, [entry])
-  }
-  const chips: Chip[] = []
-  for (const [card, partners] of perCard) {
-    const r = rects.get(card)
-    if (!r) continue
-    const tabX = (right: boolean): number => (right ? r.x + r.width - TAB_OVERHANG : r.x - TAB_OVERHANG)
-    const shown = partners.slice(0, partners.length > TABS_PER_CARD ? TABS_PER_CARD - 1 : TABS_PER_CARD)
-    shown.forEach((p, i) => {
-      chips.push({ card, x: tabX(p.right), y: r.y + 8 + i * (TAB_H + 6), label: names.get(p.partner) ?? '', more: false, hot: p.hot })
-    })
-    if (shown.length < partners.length) {
-      const right = shown.filter((p) => p.right).length * 2 >= shown.length
-      chips.push({
-        card,
-        x: tabX(right),
-        y: r.y + 8 + shown.length * (TAB_H + 6),
-        label: `+${partners.length - shown.length}`,
-        more: true,
-        hot: false
-      })
-    }
-  }
-  return chips
-}
 
 /** The id of the card under the pointer, read off the flow's own DOM — never lifted into App. */
 function useHoveredCard(): string | null {
@@ -162,6 +107,12 @@ function CableHarnessComponent({ nodes, edges }: Props): React.JSX.Element | nul
     }
     return out
   }, [nodes])
+  /**
+   * Each card's place in the workspace's node list — the order they were
+   * created in, since the store appends. It is the only recency signal a card
+   * carries today, and it is what puts the newest tab at the top of a stack.
+   */
+  const order = useMemo(() => new Map(nodes.map((n, i) => [n.id, i])), [nodes])
   const rectById = useMemo(() => new Map(rects.map((r) => [r.id, r])), [rects])
 
   // ---- clock one: geometry → routes, after the drag settles
@@ -186,7 +137,13 @@ function CableHarnessComponent({ nodes, edges }: Props): React.JSX.Element | nul
   }, [vkey, store]) // eslint-disable-line react-hooks/exhaustive-deps
   const hovered = useHoveredCard()
   const view = useMemo(() => harnessView(harness, rects, links, stage, hovered), [harness, rects, links, stage, hovered])
-  const chips = useMemo(() => chipsFor(view.tabs, rectById, names), [view.tabs, rectById, names])
+  // Cards whose fold has been clicked open. Kept here rather than in App: it
+  // is this layer's own affordance and nothing else reads it.
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set())
+  const chips = useMemo(
+    () => tabLayout(view.tabs, rectById, names, order, expanded),
+    [view.tabs, rectById, names, order, expanded]
+  )
 
   if (view.trunks.length === 0 && chips.length === 0) return null
   const dimmed = hovered !== null
@@ -228,17 +185,42 @@ function CableHarnessComponent({ nodes, edges }: Props): React.JSX.Element | nul
             />
           ))}
         </g>
-        <g fontFamily="ui-monospace, monospace" fontSize={17}>
-          {chips.map((c, i) => (
-            <g key={`${c.card}:${i}`} opacity={dimmed && !c.hot ? 0.35 : 1}>
-              <rect x={c.x} y={c.y} width={TAB_W} height={TAB_H} rx={6} fill="#FAF7EF" stroke={c.hot ? HOT : INK} strokeWidth={c.hot ? 2.5 : 1.5} />
-              <text x={c.x + 10} y={c.y + 24} fill={c.more ? '#6B6355' : '#211E17'} fontWeight={c.more ? 700 : 500}>
-                {c.label.slice(0, 13)}
-              </text>
-            </g>
-          ))}
-        </g>
       </svg>
+      {/*
+        Tabs are real elements, not SVG. A 1 x 1 svg with overflow:visible
+        paints outside its box but does not hit-test there, so a fold drawn as
+        <rect> could never be clicked. As divs they get a true target, the
+        canvas's own type rendering, and they ride the viewport transform like
+        the paste ghosts do.
+      */}
+      {chips.map((c, i) => (
+        <div
+          key={`${c.card}:${c.partner ?? 'fold'}:${i}`}
+          className={`cr-harness-tab${c.more ? ' fold' : ''}${c.hot ? ' hot' : ''}`}
+          style={{
+            transform: `translate(${c.x}px, ${c.y}px)`,
+            width: TAB_W,
+            height: TAB_H,
+            opacity: dimmed && !c.hot ? 0.35 : 1,
+            pointerEvents: c.more ? 'auto' : 'none'
+          }}
+          // Only the fold takes a click; a naming tab is a sign, not a control.
+          onClick={
+            c.more
+              ? () =>
+                  setExpanded((prev) => {
+                    const next = new Set(prev)
+                    if (next.has(c.card)) next.delete(c.card)
+                    else next.add(c.card)
+                    return next
+                  })
+              : undefined
+          }
+          title={c.more ? undefined : c.label}
+        >
+          {c.label}
+        </div>
+      ))}
     </ViewportPortal>
   )
 }

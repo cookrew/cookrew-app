@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { routeCables, type CableLink, type CableRect } from '../src/renderer/src/cable-route'
-import { harnessView, viewportKey, type Stage } from '../src/renderer/src/cable-view'
+import { TAB_H, TAB_W, harnessView, tabLayout, viewportKey, type Stage } from '../src/renderer/src/cable-view'
 
 /**
  * WHAT OF THE HARNESS IS DRAWN AT THIS VIEWPORT.
@@ -98,5 +98,50 @@ describe('the viewport key', () => {
     expect(viewportKey([0, 0, 1.3], 1600, 1000)).toBe(k)
     expect(viewportKey([0, 0, 1.5], 1600, 1000)).not.toBe(k)
     expect(viewportKey([0, 0, 0.6], 1600, 1000)).not.toBe(k)
+  })
+})
+
+describe('the tabs beside a card', () => {
+  // Three partners off stage. `order` is the card's place in the workspace's
+  // node list, which is creation order — so a higher index is newer.
+  const rects = [card('hub', 0, 0), card('old', 9000, 0), card('mid', 9000, 700), card('new', 9000, 1400)]
+  const names = new Map([['old', 'first-note'], ['mid', 'second-note'], ['new', 'third-note']])
+  const order = new Map([['hub', 0], ['old', 1], ['mid', 2], ['new', 3]])
+  const tabs = [
+    { card: 'hub', partner: 'old', hot: false },
+    { card: 'hub', partner: 'mid', hot: false },
+    { card: 'hub', partner: 'new', hot: false }
+  ]
+
+  it('shows the newest partner first, whatever order the cables arrived in', () => {
+    const laid = tabLayout(tabs, new Map(rects.map((r) => [r.id, r])), names, order, new Set(), 3)
+    expect(laid.map((c) => c.label)).toEqual(['third-note', 'second-note', 'first-note'])
+  })
+
+  it('folds the rest into a +N that says how many are hidden', () => {
+    const laid = tabLayout(tabs, new Map(rects.map((r) => [r.id, r])), names, order, new Set(), 2)
+    // One shown, then the fold — never a "+1" hiding a single tab that would
+    // have fitted in the fold's own slot.
+    expect(laid.map((c) => c.label)).toEqual(['third-note', '+2'])
+    expect(laid[1].more).toBe(true)
+    expect(laid[1].card).toBe('hub')
+  })
+
+  it('shows every partner once the card is expanded, and offers a way back', () => {
+    const laid = tabLayout(tabs, new Map(rects.map((r) => [r.id, r])), names, order, new Set(['hub']), 2)
+    expect(laid.map((c) => c.label)).toEqual(['third-note', 'second-note', 'first-note', 'less'])
+    expect(laid[3].more).toBe(true)
+  })
+
+  it('stacks the tabs down the card and straddles the border it faces', () => {
+    const byId = new Map(rects.map((r) => [r.id, r]))
+    const laid = tabLayout(tabs, byId, names, order, new Set(), 3)
+    const hub = byId.get('hub')!
+    // Partners are to the right, so the tabs hang off the right border.
+    expect(laid.every((c) => c.x > hub.x + hub.width - TAB_W && c.x < hub.x + hub.width)).toBe(true)
+    // And they descend without overlapping.
+    const ys = laid.map((c) => c.y)
+    expect(ys).toEqual([...ys].sort((a, b) => a - b))
+    expect(ys[1] - ys[0]).toBeGreaterThanOrEqual(TAB_H)
   })
 })

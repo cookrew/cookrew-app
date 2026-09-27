@@ -47,6 +47,30 @@ export interface ViewTab {
   hot: boolean
 }
 
+/** One tab as laid out beside its card. */
+export interface Tab {
+  card: string
+  /** The partner this names; null on the fold. */
+  partner: string | null
+  x: number
+  y: number
+  label: string
+  /** The fold: `+N` when collapsed, `less` when expanded. Clicking it toggles the card. */
+  more: boolean
+  hot: boolean
+}
+
+export const TAB_W = 132
+export const TAB_H = 34
+/** How many partners a card shows before the rest fold into a count. */
+export const TABS_PER_CARD = 6
+/**
+ * A tab straddles its own card's border — half in, half out. Placed wholly
+ * outside it lands on the neighbour in an 80 px gutter.
+ */
+const TAB_OVERHANG = TAB_W / 2
+const TAB_GAP = 6
+
 export interface HarnessView {
   trunks: readonly ViewTrunk[]
   stubs: readonly Stub[]
@@ -122,4 +146,66 @@ export function harnessView(
   }
   const stubs = harness.stubs.filter((s) => drawn.has(s.link))
   return { trunks, stubs, tabs, hot }
+}
+
+/**
+ * Lay a card's far partners out as tabs down the border they face.
+ *
+ * NEWEST FIRST. `order` is each card's index in the workspace's node list,
+ * which is the order they were created in — so the tab at the top of the
+ * stack names the thing that appeared most recently, which is the one a
+ * glance is usually about. Ties keep their arrival order, so the layout is
+ * stable.
+ *
+ * A card with more partners than fit shows `limit - 1` of them and a fold
+ * saying how many are hidden; `expanded` holds the cards whose fold has been
+ * clicked, and those show every partner and a `less` to put them back.
+ */
+export function tabLayout(
+  tabs: readonly ViewTab[],
+  rects: ReadonlyMap<string, CableRect>,
+  names: ReadonlyMap<string, string>,
+  order: ReadonlyMap<string, number>,
+  expanded: ReadonlySet<string>,
+  limit: number = TABS_PER_CARD
+): Tab[] {
+  const perCard = new Map<string, { partner: string; right: boolean; hot: boolean; at: number }[]>()
+  tabs.forEach((t, arrival) => {
+    const me = rects.get(t.card)
+    const other = rects.get(t.partner)
+    if (!me || !other) return
+    const right = other.x + other.width / 2 > me.x + me.width / 2
+    const entry = { partner: t.partner, right, hot: t.hot, at: (order.get(t.partner) ?? -1) * 1e6 - arrival }
+    const list = perCard.get(t.card)
+    if (list) list.push(entry)
+    else perCard.set(t.card, [entry])
+  })
+
+  const out: Tab[] = []
+  for (const [card, partners] of perCard) {
+    const r = rects.get(card)
+    if (!r) continue
+    partners.sort((a, b) => b.at - a.at)
+    const open = expanded.has(card)
+    // One hidden partner would occupy the fold's own slot, so never fold one.
+    const shown = open || partners.length <= limit ? partners : partners.slice(0, limit - 1)
+    const tabX = (right: boolean): number => (right ? r.x + r.width - TAB_OVERHANG : r.x - TAB_OVERHANG)
+    const slotY = (i: number): number => r.y + 8 + i * (TAB_H + TAB_GAP)
+    shown.forEach((p, i) => {
+      out.push({ card, partner: p.partner, x: tabX(p.right), y: slotY(i), label: names.get(p.partner) ?? '', more: false, hot: p.hot })
+    })
+    if (shown.length < partners.length || open) {
+      const right = shown.filter((p) => p.right).length * 2 >= shown.length
+      out.push({
+        card,
+        partner: null,
+        x: tabX(right),
+        y: slotY(shown.length),
+        label: open ? 'less' : `+${partners.length - shown.length}`,
+        more: true,
+        hot: false
+      })
+    }
+  }
+  return out
 }
