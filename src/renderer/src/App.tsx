@@ -513,9 +513,10 @@ function Canvas(): React.JSX.Element {
   }, [])
 
   // WHAT EACH AGENT IS RUNNING ON (tuning-store). One snapshot for the whole
-  // fleet, then a push per card when — and only when — its dials change.
-  // Feature-detected: the remote (phone) api carries neither, and a card
-  // without a readout simply wears no tag.
+  // fleet, then a push per card when — and only when — its dials change. The
+  // phone runs this same effect over its own transport (/api/tuning + the
+  // stream's `tuning` frame); feature-detected so a bridge without either
+  // leaves every card wearing no tag rather than throwing.
   useEffect(() => {
     const snapshot = cookrew().listTuning
     if (snapshot) {

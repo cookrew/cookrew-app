@@ -459,6 +459,8 @@ const tuneAsks = new TuneAsks()
 const tuningCache = new TuningCache()
 /** What each card was last TOLD, so an unchanged readout sends nothing. */
 const tuningAnnounced = new Map<string, string>()
+/** The same change-gated announcement the renderer gets, for phone streams. */
+const tuningBus = new EventEmitter()
 /**
  * The internet gate's two stores (§9 · ④). The issuer signs this instance's
  * call credentials — owner-as-issuer, so nothing here reaches the registry —
@@ -3694,6 +3696,47 @@ function retireTerminal(id: string, why: string): void {
 }
 
 /**
+ * The node store and the PTY table, as the two functions agent-tuning wants.
+ *
+ * Module scope because THREE callers need the identical object — the desktop's
+ * two IPC handlers and the phone's three routes. A second copy built at the
+ * mobile call site is how the two surfaces would come to disagree about which
+ * cache they read and whose asks they remember.
+ */
+function tuneDeps(): TuneDeps {
+  return {
+    node: (id) => {
+      const node = store.node(id)
+      return node?.kind === 'terminal' ? node : null
+    },
+    write: (id, data) => ptys.get(id)?.write(data),
+    asks: tuneAsks,
+    cache: tuningCache
+  }
+}
+
+/**
+ * EVERY agent the fleet knows, not only the open workspace: the roster spans
+ * workspaces that are not loaded, and a card there wears the same tag. The
+ * durable registry holds exactly what a readout needs (command, cwd, session
+ * ref), so nothing has to be resident to be readable. Ids with nothing
+ * recorded are ABSENT rather than null — a card with no reading draws no tag.
+ */
+function tuningFleet(): Record<string, AgentTuning> {
+  const rows: Record<string, AgentTuning> = {}
+  for (const entry of agents.list()) {
+    const tuning = tuningCache.of({
+      id: entry.id,
+      command: entry.command,
+      cwd: entry.cwd,
+      sessionRef: entry.sessionRef
+    })
+    if (tuning !== null) rows[entry.id] = tuning
+  }
+  return rows
+}
+
+/**
  * Tell the renderer this card's dials CHANGED, and only then.
  *
  * Activity fires several times a second while a turn runs; the model an agent
@@ -3708,7 +3751,11 @@ function announceTuning(terminalId: string): void {
   const stamp = `${tuning.model ?? ''}|${tuning.effort ?? ''}`
   if (tuningAnnounced.get(terminalId) === stamp) return
   tuningAnnounced.set(terminalId, stamp)
-  mainWindow?.webContents.send('terminal:tuning', { terminalId, tuning })
+  const row = { terminalId, tuning }
+  mainWindow?.webContents.send('terminal:tuning', row)
+  // The phone is the owner's own surface and gets the same frame, filtered to
+  // its own canvas by the stream (mobile-api onTuning).
+  tuningBus.emit('tuning', row)
 }
 
 async function removeNode(id: string): Promise<void> {
@@ -5246,6 +5293,15 @@ app.whenReady().then(() => {
     // Sous's door for the phone and for voice-gateway; `ui` events for both.
     sous,
     uiBus,
+    // THE DIALS on the phone — the same reads and the same write the desktop
+    // does, through the same deps, so the two surfaces cannot drift.
+    tuning: {
+      state: (terminalId) => tuningStateOf(tuneDeps(), terminalId),
+      fleet: tuningFleet,
+      turn: (terminalId, knob, value) =>
+        applyTuning(tuneDeps(), terminalId, knob as TuneKnob, value)
+    },
+    tuningBus,
     // Serves the CA-issued chain by SNI for this Mac's names, keeps the
     // self-signed one as the default, and spells the printed URLs.
     nameCert: nameCertificate,
@@ -6046,15 +6102,6 @@ function registerIpc(handlers: RestoreHandlers): void {
   // record did not state: the readout comes off the harness's own session
   // file, and turning a dial is one line typed through the ordinary input
   // gate, not a privileged side channel.
-  const tuneDeps = (): TuneDeps => ({
-    node: (id) => {
-      const node = store.node(id)
-      return node?.kind === 'terminal' ? node : null
-    },
-    write: (id, data) => ptys.get(id)?.write(data),
-    asks: tuneAsks,
-    cache: tuningCache
-  })
   ipcMain.handle('terminal:tuning', (_e, terminalId: string) =>
     tuningStateOf(tuneDeps(), terminalId)
   )
@@ -6065,19 +6112,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   // workspaces that are not loaded, and a card there wears the same tag. The
   // durable registry holds exactly what a readout needs (command, cwd, session
   // ref), so nothing has to be resident to be readable.
-  ipcMain.handle('tuning:list', () => {
-    const rows: Record<string, AgentTuning> = {}
-    for (const entry of agents.list()) {
-      const tuning = tuningCache.of({
-        id: entry.id,
-        command: entry.command,
-        cwd: entry.cwd,
-        sessionRef: entry.sessionRef
-      })
-      if (tuning !== null) rows[entry.id] = tuning
-    }
-    return rows
-  })
+  ipcMain.handle('tuning:list', () => tuningFleet())
   ipcMain.handle('git:info', (_e, dir: string) => gitCache.info(dir))
   ipcMain.handle('dir:pick', async () => {
     if (!mainWindow) return null

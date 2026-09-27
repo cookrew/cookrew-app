@@ -9,6 +9,7 @@ import type { DispatchService } from "./dispatch";
 import type { EventLog, CookrewEvent, EventQuery } from "./event-log";
 import { pageTurns, type TurnRecord } from "../shared/turn";
 import type { VersionPinRecord } from "../shared/version-pin";
+import type { AgentTuning, AgentTuningState } from "../shared/agent-tuning";
 import { TRANSLATE_MAX_CHARS } from "../shared/translate";
 import { translateBody } from "./sous-translate";
 import { remoteSousHost } from "./sous-remote-config";
@@ -163,6 +164,26 @@ export interface MobileApiDeps {
    */
   sous?: SousDoor;
   uiBus?: EventEmitter;
+  /**
+   * THE DIALS (shared/agent-tuning) — model and effort, read and turned.
+   *
+   * The phone gets BOTH halves, not just the readout. This surface is the
+   * owner's own canvas reached from their own hand; the case where a card is
+   * a line into somebody else's app is a different thing entirely and is
+   * already refused by the rail itself (TerminalNodeData.servedSession).
+   * Withholding the control here would mean the companion could show you an
+   * agent burning max effort and not let you turn it down.
+   *
+   * Optional so a test server that wires no dials still serves everything
+   * else; `tuningBus` carries the same change-gated announcement the desktop
+   * renderer gets, so a phone never polls for it.
+   */
+  tuning?: {
+    state: (terminalId: string) => AgentTuningState;
+    fleet: () => Record<string, AgentTuning>;
+    turn: (terminalId: string, knob: string, value: string) => { ok: boolean; reason?: string };
+  };
+  tuningBus?: EventEmitter;
   /** Recover an inactive teammate as it was (agent-recover feature). */
   recoverAgent: (id: string) => RecoverResult;
   /** Endpoint restore: rewind an agent to a checkpoint (+ undo). The optional
@@ -501,6 +522,31 @@ export async function handleMobileApi(
   }
   if (method === "GET" && p === "/api/activity") {
     respondJson(response, 200, turns.list());
+    return true;
+  }
+  // THE DIALS. One fleet-wide read for every card's tag, one per-card read for
+  // the zoomed rail, one write to turn a knob. The blanket gates above already
+  // cover these: the GETs need `canRead`, the POST needs pairing.
+  if (method === "GET" && p === "/api/tuning" && deps.tuning) {
+    respondJson(response, 200, deps.tuning.fleet());
+    return true;
+  }
+  const tuningMatch = p.match(/^\/api\/terminal\/([^/]+)\/tuning$/);
+  if (tuningMatch && method === "GET" && deps.tuning) {
+    respondJson(response, 200, deps.tuning.state(tuningMatch[1]));
+    return true;
+  }
+  const tuneMatch = p.match(/^\/api\/terminal\/([^/]+)\/tune$/);
+  if (tuneMatch && method === "POST" && deps.tuning) {
+    const body = await readJson<{ knob?: string; value?: string }>(request);
+    if (typeof body.knob !== "string" || typeof body.value !== "string") {
+      respondJson(response, 400, { ok: false, reason: "knob and value are required" });
+      return true;
+    }
+    // Every validation that matters lives in applyTuning — the knob name and
+    // the value both end up inside a line typed into a live pane, and a second
+    // copy of those checks here is a second thing to keep in step.
+    respondJson(response, 200, deps.tuning.turn(tuneMatch[1], body.knob, body.value));
     return true;
   }
   // The phone's BLACK BOX (phone-beacon.ts): self-reported page vitals,
@@ -1236,6 +1282,13 @@ export async function handleMobileApi(
     // stream filters them or it leaks other canvases' agents into this one.
     const inScopedCanvas = (terminalId: string): boolean =>
       scope === null || scopedState().nodes.some((node) => node.id === terminalId);
+    // A card's dials changed. Already change-gated by the announcer, so this
+    // is one small frame per actual change rather than one per tracker tick.
+    const onTuning = (row: { terminalId: string; tuning: unknown }): void => {
+      if (inScopedCanvas(row.terminalId)) send("tuning", row);
+    };
+    deps.tuningBus?.on("tuning", onTuning);
+    request.on("close", () => deps.tuningBus?.removeListener("tuning", onTuning));
     for (const activity of turns.list()) {
       if (inScopedCanvas((activity as { terminalId: string }).terminalId)) {
         send("activity", activity);
