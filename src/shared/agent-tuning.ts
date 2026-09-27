@@ -137,6 +137,14 @@ export interface AgentTuningState {
   asks: TuneAsk[]
   /** The harness's own caveat about picking (HarnessTuning.caveat). */
   caveat: string | null
+  /**
+   * Per-knob values, when this harness does not use the shared defaults.
+   * Computed in main because the source is on disk (pi reads its own model
+   * catalogs), and the renderer has no disk.
+   */
+  choices?: Partial<Record<TuneKnob, readonly string[]>>
+  /** Knobs whose asks can be CONFIRMED from the record (HarnessTuning.records). */
+  records: TuneKnob[]
 }
 
 /**
@@ -160,6 +168,29 @@ export interface HarnessTuning {
   line: (knob: TuneKnob, value: string) => string | null
   /** The dials carried by ONE parsed session-file record; null when it has none. */
   read: (record: unknown) => AgentTuning | null
+  /**
+   * The values THIS harness will accept, when they are not a constant.
+   *
+   * Claude's are fixed aliases. Pi's are whatever its own catalogs on disk
+   * list, and its thinking levels depend on the model currently loaded — so a
+   * hard-coded list would be wrong on both counts, and being wrong is not
+   * cosmetic there: pi answers an unknown MODEL by opening a picker that
+   * swallows every subsequent keystroke. Offering only values the harness
+   * itself lists is what keeps a click from stranding a pane in a modal.
+   *
+   * Returning null means "use the shared default".
+   */
+  values?: (knob: TuneKnob, current: AgentTuning | null) => readonly string[] | null
+  /**
+   * The knobs this harness WRITES BACK onto its own records, and therefore
+   * the ones an ask can be confirmed against. Defaults to `knobs`.
+   *
+   * Pi is the reason this exists: it stamps the model on every reply and
+   * never records the thinking level at all. A level can still be set — the
+   * command is safe and fails safely — but nothing on disk will ever agree
+   * that it took, so the rail must say that rather than wait forever.
+   */
+  records?: readonly TuneKnob[]
   /**
    * How far back a COLD read should look, in escalating byte windows. Default
    * suits a harness that stamps every reply; a harness that stamps once per
@@ -193,8 +224,22 @@ export const TUNE_COPY = {
   busy: 'mid-turn — the dials wait for the reply',
   /** A line into a session at someone else's app: their dials, not ours. */
   remote: 'this session runs elsewhere',
-  /** The harness is known but has no dials we can turn by typing one line. */
-  noDials: (harness: string): string => `${harness} sets this in its own picker`,
+  /**
+   * Sent, and unverifiable HERE — this harness does not write the value onto
+   * its records. Says where the truth is instead of pretending to hold it.
+   */
+  unrecorded: 'sent · this agent does not record it, so the pane is the readout',
+  /**
+   * The harness is known but cannot be turned by typing one line.
+   *
+   * Codex is the case this exists for, and the reason is worth the words:
+   * `/model <anything>` is not a command there — codex sends it to the model
+   * as a PROMPT (verified in a PTY: it started a turn and made an API call).
+   * So a button here would not fail, it would inject junk into the
+   * conversation and spend a turn. Its picker is the only safe way in.
+   */
+  noDials: (harness: string): string =>
+    `${harness} changes this in its own picker — type /model in the pane`,
 } as const
 
 /**
@@ -243,9 +288,21 @@ export function tuneLine(knob: TuneKnob, value: string): string {
  * 'pending'  — no reply has been recorded since the ask, so nothing is known.
  * 'refused'  — a reply landed after the ask and still reads the old value.
  */
-export type AskOutcome = 'settled' | 'pending' | 'refused'
+/**
+ * 'unrecorded' is the third thing that can be true of an ask, and it is a
+ * property of the HARNESS rather than of time: pi accepts a thinking level and
+ * never writes one down, so 'pending' would be a promise that never resolves
+ * and 'refused' would be an accusation nothing supports. The honest report is
+ * that it was sent and that nothing here can check it.
+ */
+export type AskOutcome = 'settled' | 'pending' | 'refused' | 'unrecorded'
 
-export function askOutcome(ask: TuneAsk, tuning: AgentTuning | null): AskOutcome {
+export function askOutcome(
+  ask: TuneAsk,
+  tuning: AgentTuning | null,
+  records: readonly TuneKnob[] = TUNE_KNOBS
+): AskOutcome {
+  if (!records.includes(ask.knob)) return 'unrecorded'
   const reading = dialReading(ask.knob, tuning)
   if (reading === ask.value) return 'settled'
   // No record at all, or a record older than the ask: the harness has not had
@@ -258,12 +315,13 @@ export function askOutcome(ask: TuneAsk, tuning: AgentTuning | null): AskOutcome
 export function liveAsk(
   knob: TuneKnob,
   asks: readonly TuneAsk[],
-  tuning: AgentTuning | null
+  tuning: AgentTuning | null,
+  records: readonly TuneKnob[] = TUNE_KNOBS
 ): { ask: TuneAsk; outcome: Exclude<AskOutcome, 'settled'> } | null {
   for (let i = asks.length - 1; i >= 0; i -= 1) {
     const ask = asks[i]
     if (ask.knob !== knob) continue
-    const outcome = askOutcome(ask, tuning)
+    const outcome = askOutcome(ask, tuning, records)
     return outcome === 'settled' ? null : { ask, outcome }
   }
   return null
@@ -418,11 +476,18 @@ function dialView(knob: TuneKnob, state: AgentTuningState): TuneDial {
   const tuning = state.tuning
   const reading = knob === 'model' ? (tuning?.model ?? null) : (tuning?.effort ?? null)
   const current = dialReading(knob, tuning)
-  const live = liveAsk(knob, state.asks, tuning)
-  const rows = tuneValues(knob).map<TuneRow>((value) => ({
+  const live = liveAsk(knob, state.asks, tuning, state.records)
+  // The harness's OWN values when it has them: pi's models come from its
+  // catalogs on disk, and offering anything else opens a picker that eats
+  // keystrokes (see HarnessTuning.values).
+  const values = state.choices?.[knob] ?? tuneValues(knob)
+  const rows = values.map<TuneRow>((value) => ({
     value,
     state: value === live?.ask.value ? 'asked' : value === current ? 'current' : 'plain',
   }))
+  // A knob nobody writes down has no reading to show and no row to tick — the
+  // rail says where the truth is instead of leaving a blank that reads as zero.
+  const unrecorded = !state.records.includes(knob)
   return {
     knob,
     label: copy.label,
@@ -436,9 +501,13 @@ function dialView(knob: TuneKnob, state: AgentTuningState): TuneDial {
       live !== null
         ? live.outcome === 'pending'
           ? TUNE_COPY.pending
-          : TUNE_COPY.refused
-        : reading === null
-          ? TUNE_COPY.unread
-          : null,
+          : live.outcome === 'unrecorded'
+            ? TUNE_COPY.unrecorded
+            : TUNE_COPY.refused
+        : unrecorded
+          ? TUNE_COPY.unrecorded
+          : reading === null
+            ? TUNE_COPY.unread
+            : null,
   }
 }

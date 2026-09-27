@@ -23,7 +23,7 @@ import {
 import { claudeProjectDir } from '../src/main/claude-fork'
 import { claudeTuning } from '../src/main/claude-tuning'
 import { codexTuning } from '../src/main/codex-tuning'
-import { piTuning } from '../src/main/pi-tuning'
+import { piTuning, piTuningWith } from '../src/main/pi-tuning'
 import { tuningTag, type HarnessTuning } from '../src/shared/agent-tuning'
 import type { TerminalNodeData } from '../src/shared/model'
 
@@ -142,6 +142,31 @@ describe('codex writes its dials at the START of every turn', () => {
   })
 })
 
+/** A pi agent dir holding the two catalogs pi itself reads. */
+function piCatalogFixture(): string {
+  const dir = mkdtempSync(path.join(tmpdir(), 'pi-catalog-'))
+  writeFileSync(
+    path.join(dir, 'models.json'),
+    JSON.stringify({
+      providers: {
+        ifunk: { baseUrl: 'https://x', apiKey: '!secret-command', models: [{ id: 'k3', name: 'Kimi K3' }] },
+        'qwen-local': { baseUrl: 'https://y', models: [{ id: 'qwen3.8-27b-q8' }] }
+      }
+    })
+  )
+  writeFileSync(
+    path.join(dir, 'models-store.json'),
+    JSON.stringify({
+      ifunk: {
+        models: [
+          { id: 'k3', reasoning: true, thinkingLevelMap: { off: null, xhigh: 'xhigh' } }
+        ]
+      }
+    })
+  )
+  return dir
+}
+
 describe('pi records a model and no effort, and says exactly that', () => {
   it('reads the model off an assistant message', () => {
     // Verified against a real ~/.cookrew/pi-sessions file.
@@ -174,9 +199,48 @@ describe('pi records a model and no effort, and says exactly that', () => {
     expect(piTuning.read({ type: 'session', message: { role: 'assistant', model: 'k3' } })).toBeNull()
   })
 
-  it('offers no button, because pi has no one-line model command', () => {
-    expect(piTuning.knobs).toEqual([])
-    expect(piTuning.line('model', 'opus')).toBeNull()
+  it('sets BOTH dials, and can confirm only the model', () => {
+    // Pi writes the model onto every reply and the thinking level nowhere, so
+    // a level ask is reported as sent-and-uncheckable rather than pending.
+    expect(piTuning.knobs).toEqual(['model', 'effort'])
+    expect(piTuning.records).toEqual(['model'])
+  })
+
+  it('offers only models pi itself lists — a miss would open a picker', () => {
+    // Driving a real pi: an unlisted model opens a selector that swallows
+    // every keystroke after it, so the card looks healthy and the agent is
+    // unreachable. The catalog is what makes a miss impossible.
+    const agentDir = piCatalogFixture()
+    const tuning = piTuningWith({ agentDir })
+    expect(tuning.values?.('model', null)).toEqual(['ifunk/k3', 'qwen-local/qwen3.8-27b-q8'])
+    expect(tuning.line('model', 'ifunk/k3')).toBe('/model ifunk/k3')
+    expect(tuning.line('model', 'k3')).toBeNull()
+    expect(tuning.line('model', 'not-a-model')).toBeNull()
+  })
+
+  it('offers the thinking levels THIS model actually supports', () => {
+    // Pi's own rule: no reasoning flag means the only level is `off` — which
+    // is exactly what a real pi answered for qwen3.8-27b-q8.
+    const agentDir = piCatalogFixture()
+    const tuning = piTuningWith({ agentDir })
+    const onQwen = { model: 'qwen3.8-27b-q8', effort: null, at: 1 }
+    expect(tuning.values?.('effort', onQwen)).toEqual(['off'])
+    const onK3 = { model: 'k3', effort: null, at: 1 }
+    // k3 carries reasoning with xhigh/max mapped and `off` suppressed.
+    expect(tuning.values?.('effort', onK3)).toEqual(['minimal', 'low', 'medium', 'high', 'xhigh'])
+  })
+
+  it('spells the effort dial /thinking, not /effort', () => {
+    // The knob name is NOT the command here, which is why composing the line
+    // belongs to the harness instead of a shared `/${knob}` template.
+    expect(piTuningWith({ agentDir: piCatalogFixture() }).line('effort', 'off')).toBe('/thinking off')
+  })
+
+  it('offers nothing at all when the catalog cannot be read', () => {
+    // Never "any string will do": that is the modal-picker case again.
+    const tuning = piTuningWith({ agentDir: mkdtempSync(path.join(tmpdir(), 'pi-empty-')) })
+    expect(tuning.values?.('model', null)).toEqual([])
+    expect(tuning.line('model', 'ifunk/k3')).toBeNull()
   })
 })
 
@@ -385,7 +449,8 @@ describe('the state the rail is handed', () => {
         at: Date.parse('2026-09-27T03:00:00.000Z')
       },
       asks: [{ knob: 'effort', value: 'low', at: Date.parse('2026-09-27T04:00:00.000Z') }],
-      caveat: 'this also becomes the default every new agent boots on'
+      caveat: 'this also becomes the default every new agent boots on',
+      records: ['model', 'effort']
     })
   })
 
@@ -395,6 +460,7 @@ describe('the state the rail is handed', () => {
     expect(tuningStateOf(shell, 'term-1')).toEqual({
       harness: null,
       knobs: [],
+      records: [],
       tuning: null,
       asks: [],
       caveat: null
