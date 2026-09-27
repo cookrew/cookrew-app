@@ -199,11 +199,37 @@ describe('pi records a model and no effort, and says exactly that', () => {
     expect(piTuning.read({ type: 'session', message: { role: 'assistant', model: 'k3' } })).toBeNull()
   })
 
-  it('sets BOTH dials, and can confirm only the model', () => {
-    // Pi writes the model onto every reply and the thinking level nowhere, so
-    // a level ask is reported as sent-and-uncheckable rather than pending.
+  it('sets BOTH dials and confirms BOTH — it records more than it looks', () => {
     expect(piTuning.knobs).toEqual(['model', 'effort'])
-    expect(piTuning.records).toEqual(['model'])
+    expect(piTuning.records).toEqual(['model', 'effort'])
+  })
+
+  it('reads its change records, so a dial reads back without waiting for a reply', () => {
+    // Verified against a real ~/.cookrew/pi-sessions file: pi writes one of
+    // these the instant either dial moves.
+    expect(
+      piTuning.read({
+        type: 'model_change',
+        timestamp: '2026-08-12T17:20:35.398Z',
+        provider: 'ifunk',
+        modelId: 'k3'
+      })
+    ).toEqual({ model: 'ifunk/k3', effort: null, at: Date.parse('2026-08-12T17:20:35.398Z') })
+    expect(
+      piTuning.read({
+        type: 'thinking_level_change',
+        timestamp: '2026-08-12T17:20:35.399Z',
+        thinkingLevel: 'off'
+      })
+    ).toEqual({ model: null, effort: 'off', at: Date.parse('2026-08-12T17:20:35.399Z') })
+  })
+
+  it('qualifies a changed model by provider, because that is what the rows offer', () => {
+    // An unqualified id would tick no row: the choices are `provider/id`.
+    const changed = piTuning.read({
+      type: 'model_change', timestamp: '2026-08-12T17:20:35.398Z', provider: 'qwen-local', modelId: 'qwen3.8-27b-q8'
+    })
+    expect(changed?.model).toBe('qwen-local/qwen3.8-27b-q8')
   })
 
   it('offers only models pi itself lists — a miss would open a picker', () => {
