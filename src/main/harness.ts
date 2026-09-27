@@ -14,6 +14,7 @@ import { claudeWatchFile } from './claude-fork'
 import { claudeTuning } from './claude-tuning'
 import { codexWatchFile, sessionIdFromRolloutPath } from './codex-bind'
 import { codexTuning } from './codex-tuning'
+import { piTuning } from './pi-tuning'
 import {
   isPiCommand,
   piNodeSessionDir,
@@ -255,7 +256,10 @@ const PI: Harness = {
   // 'length' are not completion and stay non-final).
   turnFinality: 'native',
   parseTurns: parsePiTurns,
-  watchFile: piWatchFile
+  watchFile: piWatchFile,
+  // READ ONLY, and model only: pi stamps each assistant message with its
+  // model and records no effort — see pi-tuning.
+  tuning: piTuning
 }
 
 /** Every registered harness. Conformance: tests/harness-conformance.test.ts. */
