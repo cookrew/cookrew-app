@@ -304,7 +304,45 @@ export function createStreamService(deps: StreamServiceDeps): StreamService {
     async rollbacks(terminalId) {
       return (await materialiseOf(terminalId)).rolledBack
     },
-    blocks: (terminalId, request) => reader.blocks(terminalId, request),
+    async blocks(terminalId, request) {
+      // THE MATERIALISED INDEX ANSWERS THE NUMBERS (D6) — the same rule
+      // tailState follows two functions below, and it belongs here even more
+      // than it does there. The drawer ADDRESSES blocks by ordinal: its
+      // placeholders, its jumps and the rail's rows are all laid out in the
+      // index's numbering, and a window published in the walk's numbering is
+      // not merely misplaced, it is unreachable. Every position the index
+      // numbers above the walk's length can never be filled, and every block
+      // that does arrive lands on another turn's row.
+      //
+      // The two records agree while the chain still holds everything the
+      // index has ever seen. They come apart when it does not — a rotation
+      // aged out of the lineage, a rewind the index keeps at its own ordinals
+      // — and then the walk is a SUFFIX of the index, contiguous from 1.
+      // Measured on the owner's card: 1122 index entries against a 680-block
+      // walk, a constant gap of 442, with every walked block placeable by the
+      // index. Renumbering from it is exact, not a guess.
+      const [index, page] = await Promise.all([
+        materialiseOf(terminalId),
+        reader.blocks(terminalId, request)
+      ])
+      // An index with nothing in it has nothing to say about numbering, and
+      // taking `total: 0` from it would have the drawer prune away the very
+      // window this call just delivered. The walk's own answer stands.
+      if (index.entries.length === 0) return page
+      const ordinals = new Map(index.entries.map((row) => [row.identity, row.ordinal]))
+      return {
+        ...page,
+        total: index.entries.length,
+        blocks: page.blocks.map((block) => {
+          const known = ordinals.get(block.id)
+          // Unplaceable means the index has not seen this identity yet — a
+          // block written between materialising and walking. Its own number
+          // stands, exactly as tailState lets the walk's number stand for a
+          // tail the index cannot place; the next materialise places it.
+          return known === undefined ? block : { ...block, ordinal: known }
+        })
+      }
+    },
     async tailState(terminalId) {
       // THE MATERIALISED INDEX ANSWERS THE NUMBERS (D6). `total` used to come
       // from a second whole-chain walk asked for one block, and the tail's

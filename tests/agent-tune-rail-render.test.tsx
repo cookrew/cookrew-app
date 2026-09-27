@@ -27,12 +27,14 @@ function view(input: {
   asks?: TuneAsk[]
   harness?: string
   knobs?: ('model' | 'effort')[]
+  records?: ('model' | 'effort')[]
   phase?: 'idle' | 'thinking'
   remote?: boolean
 }): TuneRailView {
   const state: AgentTuningState = {
     harness: input.harness ?? 'claude',
     knobs: input.knobs ?? ['model', 'effort'],
+    records: input.records ?? input.knobs ?? ['model', 'effort'],
     tuning: input.tuning ?? null,
     asks: input.asks ?? [],
     caveat: (input.knobs ?? ['model', 'effort']).length > 0 ? CAVEAT : null
