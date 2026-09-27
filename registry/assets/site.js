@@ -1026,6 +1026,10 @@
     })
     // The bar comes back waiting, not offering.
     if (wasAsked() && seatbar.querySelector('[data-seat-ask]')) asked(seatbar.dataset.owner ?? '')
+    // The line (line.js) lends on these: a paid line asks the bar to watch
+    // for the seat the owner's app is about to settle, so the page turns
+    // SEATED without anyone pressing reload.
+    window.cookrewSeatbar = { watchSeat, ask: askForSeat }
 
     $('seat-username')?.addEventListener('keydown', (event) => {
       if (event.key !== 'Enter') return

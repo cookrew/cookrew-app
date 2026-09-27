@@ -104,7 +104,10 @@ function team(ctx: V2Context, rawHandle: string, rawName: string, tail: string[]
 
   if (tail.length === 1 && tail[0] === 'seat' && method === 'GET') return mySeat(ctx, asked)
   if (tail.length === 1 && tail[0] === 'seated' && method === 'GET') return seated(ctx, asked)
-  if (tail.length === 1 && tail[0] === 'call-token' && method === 'POST') return callToken(ctx, asked)
+  if (tail.length === 1 && tail[0] === 'call-token' && method === 'POST') {
+    void callToken(ctx, asked)
+    return
+  }
   // R1: a guest asks the owner for a seat. It lands in the owner's one queue
   // (GET /v2/me/requests) and the guest keeps polling GET …/seat as before.
   if (tail.length === 1 && tail[0] === 'seat-requests' && method === 'POST') {
@@ -168,13 +171,24 @@ function seated(ctx: V2Context, asked: Asked): void {
  * A team whose access is `account` charges nothing and needs no seat, but it
  * still needs an account: one must register to use a served agent (P7 and the
  * architecture note's second user rule). Signing in IS the gate there.
+ *
+ * THE PURCHASE PATH. A seat is bought at the door's 402, with the owner's own
+ * keys, and reported back here as `bought` — this route never takes money. But
+ * a signed-in stranger could not reach that 402: this route refused them, and
+ * the door's seat rung refused them again. "Buy a seat" was a dead button on
+ * every surface, and the desktop's remedy comment said so. An explicit
+ * `intent: 'buy'` now mints a token with NO seat claim — enough to reach the
+ * door and be quoted, and nothing the door opens a line on until the 402 is
+ * paid. Without the intent the answer is still the sentence naming both ways
+ * in, so a tap that meant "open" is never quietly turned into a purchase.
  */
-function callToken(ctx: V2Context, asked: Asked): void {
+async function callToken(ctx: V2Context, asked: Asked): Promise<void> {
   const signed = asked.signed
   if (signed === null) return
   const seat = ctx.v2.seats.activeFor(asked.team, signed.account.username)
   const admitted = asked.owner || asked.door.access !== 'paid' || seat !== null
-  if (!admitted) {
+  const buying = !admitted && (await intendsToBuy(ctx))
+  if (!admitted && !buying) {
     refuse(ctx.response, 403, 'no_seat', asked.door.handle)
     return
   }
@@ -191,8 +205,17 @@ function callToken(ctx: V2Context, asked: Asked): void {
     exp: minted.exp,
     seat: seat?.id ?? null,
     aud: asked.team,
-    account: signed.account.username
+    account: signed.account.username,
+    // Said out loud, so the caller's own UI can tell "you are admitted" from
+    // "you may go and pay" without inspecting the token.
+    ...(buying ? { purpose: 'buy' as const } : {})
   })
+}
+
+/** `{ intent: 'buy' }` and nothing else means it; an empty body means open. */
+async function intendsToBuy(ctx: V2Context): Promise<boolean> {
+  const body = await readJsonBody(ctx.request, SEAT_BODY)
+  return body.ok && typeof body.value === 'object' && body.value !== null && (body.value as { intent?: unknown }).intent === 'buy'
 }
 
 // ── what the owner does ──────────────────────────────────────────────────

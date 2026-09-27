@@ -152,6 +152,21 @@ describe('what it refuses to spend', () => {
     expect((html.match(/cr-wsw-mirror/g) ?? []).length).toBe(1)
   })
 
+  it('puts NO layer over the screens, so a tap reaches one (mobile)', () => {
+    // The drag used to be its own absolutely-positioned surface. `.cr-wsw-track`
+    // carries `transform-style:preserve-3d`, which establishes a stacking
+    // context — so the screens' z-indexes are LOCAL to it and the track sits at
+    // `auto`. One layer at z-index 1 therefore covered every screen, and
+    // tapping one did nothing on any platform. The drag lives on the root now.
+    const html = wall()
+    expect(html).not.toContain('cr-wsw-swipe')
+    // The screens are the only things between the wash and the reader.
+    const layers = (html.match(/class="cr-wsw-[a-z]+"/g) ?? []).filter(
+      (c) => !c.includes('track') && !c.includes('wash') && !c.includes('hud')
+    )
+    expect(layers.length).toBeGreaterThan(0)
+  })
+
   it('lets a screen past the visible depth swallow no clicks', () => {
     const many = Array.from({ length: 9 }, (_, i) => ({ ...WS[0], id: `x${i}`, name: `WS ${i}` }))
     const html = renderToStaticMarkup(

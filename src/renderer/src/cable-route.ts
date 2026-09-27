@@ -10,6 +10,14 @@
  * cables that leave one agent going the same way are one trunk until they
  * part. Same information, a quarter of the ink, and the structure visible.
  *
+ * BUNDLING IS A PREFERENCE, NOT AN ACCIDENT. Routing each cable on its own
+ * gives shared runs only where two shortest paths happen to coincide; two
+ * cables of equal cost a cell apart stay two parallel wires. So a step along a
+ * grid edge that already carries a cable is discounted (`bundlePull`), and a
+ * later cable is drawn onto a trunk an earlier one laid — which is what makes
+ * a harness a harness. Cables are routed in input order; the order is stable,
+ * so the result is.
+ *
  * A cable longer than `farPx` is not routed at all: at any zoom where you can
  * read the card, its partner is off the stage, so a line carries nothing a
  * name at each end does not carry better. The caller draws those as chips.
@@ -40,9 +48,15 @@ export interface RouteOptions {
   farPx?: number
   /** Extra cost of changing heading, in cells — what keeps a route from staircasing. */
   turnPenalty?: number
+  /**
+   * How much of a step's cost is forgiven when the grid edge already carries a
+   * cable, 0..1. Zero routes every cable alone; higher pulls later cables onto
+   * existing trunks harder. Kept below 1 so a step always costs something.
+   */
+  bundlePull?: number
 }
 
-/** One drawn run of the harness: a grid edge and every cable that shares it. */
+/** One drawn run of the harness: a straight run of grid edges and every cable that shares it. */
 export interface Trunk {
   x1: number
   y1: number
@@ -76,7 +90,7 @@ export interface Harness {
   cell: number
 }
 
-const DEFAULTS: Required<RouteOptions> = { cell: 110, farPx: 1500, turnPenalty: 4 }
+const DEFAULTS: Required<RouteOptions> = { cell: 110, farPx: 1500, turnPenalty: 4, bundlePull: 0.35 }
 
 /**
  * A string that changes exactly when the routing input changes: every card's
@@ -228,23 +242,53 @@ class Heap {
   }
 }
 
+/** One number for an undirected grid edge, lower cell first. */
+const edgeId = (g: Grid, c1: number, c2: number): number =>
+  Math.min(c1, c2) * g.cols * g.rows + Math.max(c1, c2)
+
 /**
- * A* over (cell, heading) with a turn penalty. The Manhattan heuristic is
- * admissible because a step costs at least 1, so the first time the goal is
- * popped is the cheapest way there. Returns the cells of the route, or null.
+ * Which grid edges already carry a cable, as two flat arrays indexed by the
+ * lower cell: `h[c]` is the edge from c to its right neighbour, `v[c]` to the
+ * one below. A typed-array read per expansion instead of a Set lookup — the
+ * router asks this question tens of thousands of times per cable.
+ */
+interface Used {
+  h: Uint8Array
+  v: Uint8Array
+}
+const isUsed = (g: Grid, used: Used, c1: number, c2: number): boolean => {
+  const lo = Math.min(c1, c2)
+  return (c2 - c1 === 1 || c1 - c2 === 1 ? used.h[lo] : used.v[lo]) === 1
+}
+const markUsed = (g: Grid, used: Used, c1: number, c2: number): void => {
+  const lo = Math.min(c1, c2)
+  if (c2 - c1 === 1 || c1 - c2 === 1) used.h[lo] = 1
+  else used.v[lo] = 1
+}
+
+/**
+ * A* over (cell, heading) with a turn penalty and a pull toward edges that
+ * already carry a cable. The Manhattan heuristic is scaled by the cheapest
+ * possible step so it stays admissible with the discount: the first time the
+ * goal is popped is the cheapest way there. Returns the cells of the route,
+ * or null.
  */
 function route(
   g: Grid,
   from: { x: number; y: number },
   to: { x: number; y: number },
-  turnPenalty: number
+  turnPenalty: number,
+  pull: number,
+  used: Used
 ): number[] | null {
   const states = g.cols * g.rows * 4
   const dist = new Float64Array(states).fill(Infinity)
   const prev = new Int32Array(states).fill(-1)
   const goal = to.y * g.cols + to.x
   const heap = new Heap()
-  const h = (c: number): number => Math.abs((c % g.cols) - to.x) + Math.abs(Math.floor(c / g.cols) - to.y)
+  const cheapest = 1 - pull
+  const h = (c: number): number =>
+    cheapest * (Math.abs((c % g.cols) - to.x) + Math.abs(Math.floor(c / g.cols) - to.y))
   const start = from.y * g.cols + from.x
   for (let d = 0; d < 4; d += 1) {
     dist[start * 4 + d] = 0
@@ -269,7 +313,8 @@ function route(
       const nc = ny * g.cols + nx
       if (g.blocked[nc] && nc !== goal) continue
       const nk = nc * 4 + nd
-      const cost = d + 1 + (nd === heading ? 0 : turnPenalty)
+      const step = isUsed(g, used, c, nc) ? cheapest : 1
+      const cost = d + step + (nd === heading ? 0 : turnPenalty)
       if (cost < dist[nk]) {
         dist[nk] = cost
         prev[nk] = k
@@ -288,12 +333,71 @@ function boundaryPoint(r: CableRect, p: { x: number; y: number }): { x: number; 
   }
 }
 
+interface Run {
+  lo: number
+  hi: number
+  links: string[]
+}
+
+/**
+ * Straight runs of grid edges carrying the SAME cables become one trunk. A
+ * 65-cable trunk twenty cells long is one line, not twenty — one element to
+ * draw, one thing for a hover to light, and no seams between cells.
+ */
+function mergeRuns(g: Grid, runs: readonly Run[]): Trunk[] {
+  const centre = (c: number): { x: number; y: number } => ({
+    x: g.originX + ((c % g.cols) + 0.5) * g.cell,
+    y: g.originY + (Math.floor(c / g.cols) + 0.5) * g.cell
+  })
+  // Group by (which cables, which axis), then walk each group in cell order
+  // and extend the open trunk while the next edge continues it.
+  const groups = new Map<string, Run[]>()
+  for (const run of runs) {
+    const horizontal = run.hi - run.lo === 1
+    const key = `${horizontal ? 'h' : 'v'}|${[...run.links].sort().join(',')}`
+    const list = groups.get(key)
+    if (list) list.push(run)
+    else groups.set(key, [run])
+  }
+  const trunks: Trunk[] = []
+  for (const [key, list] of groups) {
+    const horizontal = key.startsWith('h')
+    list.sort((a, b) => a.lo - b.lo)
+    let open: { start: number; end: number; links: string[] } | null = null
+    const close = (): void => {
+      if (!open) return
+      const p = centre(open.start)
+      const q = centre(open.end)
+      trunks.push({ x1: p.x, y1: p.y, x2: q.x, y2: q.y, count: open.links.length, links: open.links })
+      open = null
+    }
+    for (const run of list) {
+      const continues =
+        open !== null &&
+        open.end === run.lo &&
+        (horizontal
+          ? Math.floor(run.lo / g.cols) === Math.floor(open.start / g.cols)
+          : run.lo % g.cols === open.start % g.cols)
+      if (continues && open) open.end = run.hi
+      else {
+        close()
+        open = { start: run.lo, end: run.hi, links: run.links }
+      }
+    }
+    close()
+  }
+  // Sorted, so two identical boards produce byte-identical harnesses whatever
+  // order the links arrived in.
+  return trunks.sort((a, b) => a.y1 - b.y1 || a.x1 - b.x1 || a.y2 - b.y2 || a.x2 - b.x2)
+}
+
 export function routeCables(
   rects: readonly CableRect[],
   links: readonly CableLink[],
   options: RouteOptions = {}
 ): Harness {
   const opts = { ...DEFAULTS, ...options }
+  const pull = Math.min(0.9, Math.max(0, opts.bundlePull))
   const byId = new Map(rects.map((r) => [r.id, r]))
   const g = gridFor(rects, opts.cell)
   const cellCentre = (c: number): { x: number; y: number } => ({
@@ -304,8 +408,8 @@ export function routeCables(
   const far: FarLink[] = []
   const unrouted: string[] = []
   const stubs: Stub[] = []
-  // grid edge (lower cell id first) → the links that run along it
-  const runs = new Map<string, string[]>()
+  const runs = new Map<number, Run>()
+  const used: Used = { h: new Uint8Array(g.cols * g.rows), v: new Uint8Array(g.cols * g.rows) }
 
   for (const link of links) {
     const A = byId.get(link.a)
@@ -324,18 +428,17 @@ export function routeCables(
       unrouted.push(link.id)
       continue
     }
-    const cells = route(g, pa, pb, opts.turnPenalty)
+    const cells = route(g, pa, pb, opts.turnPenalty, pull, used)
     if (cells === null) {
       unrouted.push(link.id)
       continue
     }
     for (let i = 0; i + 1 < cells.length; i += 1) {
-      const lo = Math.min(cells[i], cells[i + 1])
-      const hi = Math.max(cells[i], cells[i + 1])
-      const key = `${lo}-${hi}`
-      const list = runs.get(key)
-      if (list) list.push(link.id)
-      else runs.set(key, [link.id])
+      const id = edgeId(g, cells[i], cells[i + 1])
+      markUsed(g, used, cells[i], cells[i + 1])
+      const run = runs.get(id)
+      if (run) run.links.push(link.id)
+      else runs.set(id, { lo: Math.min(cells[i], cells[i + 1]), hi: Math.max(cells[i], cells[i + 1]), links: [link.id] })
     }
     const first = cellCentre(cells[0])
     const last = cellCentre(cells[cells.length - 1])
@@ -343,16 +446,5 @@ export function routeCables(
     stubs.push({ link: link.id, card: link.b, from: boundaryPoint(B, last), to: last })
   }
 
-  const trunks: Trunk[] = []
-  for (const [key, list] of runs) {
-    const [lo, hi] = key.split('-').map(Number)
-    const p = cellCentre(lo)
-    const q = cellCentre(hi)
-    trunks.push({ x1: p.x, y1: p.y, x2: q.x, y2: q.y, count: list.length, links: list })
-  }
-  // Sorted, so two identical boards produce byte-identical harnesses whatever
-  // order the links arrived in.
-  trunks.sort((a, b) => a.y1 - b.y1 || a.x1 - b.x1 || a.y2 - b.y2 || a.x2 - b.x2)
-
-  return { trunks, stubs, far, unrouted, cell: opts.cell }
+  return { trunks: mergeRuns(g, [...runs.values()]), stubs, far, unrouted, cell: opts.cell }
 }

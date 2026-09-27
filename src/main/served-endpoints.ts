@@ -120,6 +120,14 @@ export interface ServedEndpointDeps {
   /** Does this account hold an OPEN session? Open = already paid for. */
   hasOpenSession(serviceId: string, sub: string): boolean
   /**
+   * IS THIS CALLER ENTITLED WITHOUT PAYING — the seat their sign-in named, or
+   * the fact that they own the door. A seat is the entitlement (G1: the price
+   * is "a seat"), granted by the owner or bought once at the 402, and it is
+   * not charged again per session. Absent means the door records nothing and
+   * every new session is quoted, which is exactly what it did before seats.
+   */
+  entitled?(serviceId: string, sub: string): boolean
+  /**
    * END the caller's open session and DESTROY what was minted for it — the
    * workspace on the owner's canvas, its terminals, its sandbox. The caller
    * said "end this session"; a workspace that outlives that is a stranger's
@@ -398,6 +406,8 @@ export interface V2Seated {
    * the team's real seat list, where the answer actually lives.
    */
   seat: string | null
+  /** The owner of the door, who is entitled at their own team by no seat at all. */
+  owner?: boolean
 }
 
 /** One settled payment at this door, named by who made it. */
@@ -489,15 +499,15 @@ async function v2Assert(
 
   const owner = doorOwnerOf(name)
   const isOwner = owner !== '' && verified.username === owner
-  if (template.access === 'paid' && !isOwner && verified.seat === null) {
-    // The one refusal with a voice, because it is the one a person can act on
-    // without leaving the page. It names them (the usual cause is being signed
-    // in as somebody else) and it names who can say yes.
-    return json(403, {
-      reason: 'no_seat',
-      error: noSeatSentence(verified.username, owner)
-    })
-  }
+  // NO SEAT IS NOT A REFUSAL HERE ANY MORE. The 402 is where a seat is bought
+  // — with the owner's own keys, reported back to cookrew.dev as `bought` —
+  // and this rung used to refuse an unseated token before it could get there.
+  // With the registry refusing to mint one in the first place, "Buy a seat"
+  // was a dead button on every surface. An unseated caller is admitted as far
+  // as the money rung and no further: the Bearer minted here opens nothing
+  // until gateCaller has been paid, and the sign-in is recorded UNSEATED so
+  // that rung knows to quote them (the sentence, noSeatSentence, is now the
+  // surfaces' to show beside the two ways in).
 
   const sub = `${ACCOUNT_SUB_PREFIX}${verified.username}`
   deps.onV2Seated?.({
@@ -505,7 +515,8 @@ async function v2Assert(
     sub,
     username: verified.username,
     dev: verified.dev,
-    seat: verified.seat
+    seat: verified.seat,
+    ...(isOwner ? { owner: true } : {})
   })
   return json(200, {
     ok: true,
@@ -677,8 +688,15 @@ export async function gateCaller(
     }
   }
 
-  // ── the 402, at session START only ──
-  if (template.access === 'paid' && !deps.hasOpenSession(serviceId, claims.sub)) {
+  // ── the 402, at session START only — and only for somebody with no seat ──
+  //
+  // A SEAT IS THE ENTITLEMENT. This rung was written before seats existed and
+  // charged every new session; with seats it charged a guest the owner had
+  // GRANTED, and charged a buyer again the next time they came — not what "a
+  // seat that follows you to any device" means. What the door recorded at
+  // sign-in (the token's seat claim, or that this is the owner) settles it.
+  const entitled = deps.entitled?.(serviceId, claims.sub) === true
+  if (template.access === 'paid' && !entitled && !deps.hasOpenSession(serviceId, claims.sub)) {
     const payment = headers['x-payment']
     if (payment === undefined || payment.length === 0) {
       const terms = deps.paymentTerms(template)

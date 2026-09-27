@@ -11,6 +11,7 @@
 
 .cr-wsw {
   position: fixed;
+  touch-action: pan-y;
   z-index: 900;
   overflow: hidden;
   perspective-origin: 50% 43%;

@@ -197,14 +197,20 @@
    * credential; 403 means the account is real and has no seat at this team,
    * which is the page's sentence and not a thing to retry.
    */
-  async function v2CallToken() {
+  /**
+   * `buy` is a DELIBERATE CLICK, never a default. Without it a signed-in
+   * person with no seat is told so and offered both ways in; with it the
+   * registry mints a token with no seat claim — enough to reach the door and
+   * meet its 402, which is where a seat is actually bought.
+   */
+  async function v2CallToken(buy = false) {
     let res
     try {
       res = await fetch(`/v2/teams/${door}/call-token`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
-        body: '{}'
+        body: JSON.stringify(buy ? { intent: 'buy' } : {})
       })
     } catch {
       return null
@@ -217,6 +223,10 @@
       body = null
     }
     if (res.status === 201 && body?.token) return body
+    // 403 is a person who IS signed in and holds no seat. It is its own kind
+    // so the page can say that — the registry's sentence names the owner and
+    // the two ways to a seat — instead of treating it like an absence.
+    if (res.status === 403) throw new LineError('no-seat', body?.message ?? `you hold no seat at ${door}`)
     throw new LineError('refused', body?.message ?? `cookrew.dev would not mint a token for this door (${res.status})`)
   }
 
@@ -235,8 +245,8 @@
    * verify a cookrew.dev token says so plainly rather than being met with a
    * ceremony that would seat the wrong caller.
    */
-  async function signIn() {
-    const seated = await v2CallToken()
+  async function signIn(buy = false) {
+    const seated = await v2CallToken(buy)
     if (!seated) throw new LineError('account', 'sign in to cookrew.dev first')
     const JSON_HEADERS = { 'content-type': 'application/json' }
     const res = await exchange('POST', '/api/call/assert', JSON_HEADERS, JSON.stringify({ v2Token: seated.token }))
@@ -273,6 +283,9 @@
             everUp = true
             reconnects = 0
             gate(null)
+            // A paid line means the seat is settled at cookrew.dev a moment
+            // later, by the owner's app. The seat bar watches for it.
+            if (payment) window.cookrewSeatbar?.watchSeat?.()
             $('btn-end').hidden = false
             $('prompt').disabled = false
             $('send').disabled = false
@@ -426,8 +439,8 @@
     if (wallet) {
       actions.push(button('USDC · wallet', false, () => toast('Wallet payment is not wired on the web yet — open this team in Cookrew to pay with USDC.', 6000)))
     }
-    setPhase('PAY', `This team charges ${price} USD per session, once, at the start.`)
-    gate('This team charges per session', `${price} USD, charged once when the session starts — never per question. An open session is never interrupted for money.`, actions.length > 0 ? actions : [button('Open in Cookrew to pay', true, () => (location.href = `cookrew://import/${door}`))])
+    setPhase('PAY', `This team charges ${price} USD a seat, once.`)
+    gate('A seat costs', `${price} USD, once — the seat is yours after that and follows you to any device. Never per question, and an open session is never interrupted for money.`, actions.length > 0 ? actions : [button('Open in Cookrew to pay', true, () => (location.href = `cookrew://import/${door}`))])
   }
 
   /* ── keystrokes, geometry, the rail ────────────────────────────────────── */
@@ -564,16 +577,47 @@
     $('bar-led').classList.add('off')
     railLive(false)
   }
-  async function open() {
+  /** The two ways to a seat, as the 403 offers them: buy here, or ask the owner. */
+  const seatActions = (price) => [
+    button(`Buy a seat · $${price}`, true, () => void open({ buy: true })),
+    button(`Ask @${handle}`, false, () => {
+      // The ask belongs to the seat bar (site.js): it files the request, then
+      // waits for the seat and reloads when it lands.
+      const ask = document.querySelector('[data-seat-ask]')
+      if (ask) ask.click()
+      else toast(`Ask @${handle} for a seat from their page.`, 5000)
+    })
+  ]
+  async function open(options = {}) {
     if (!relayed) return toast('This door is not on the relay; open it in Cookrew.')
     reconnects = 0
     const acct = account()
+    const buy = options.buy === true
     // WHO IS READING IS AN ACCOUNT QUESTION (v3, G1). The old check asked
     // whether this browser had ENROLLED a handle, which a person could satisfy
     // without ever having an account — and then be charged for a seat their
-    // account already holds. The door's own word decides now, and its absence
-    // opens the sign-in sheet rather than a ceremony.
-    if (!(await v2CallToken().catch(() => null))) {
+    // account already holds. The registry's own word decides now.
+    //
+    // AND ITS TWO REFUSALS ARE TWO DIFFERENT SENTENCES. 401 is "nobody is
+    // signed in here" and the sign-in sheet is the answer. 403 is "you are,
+    // and you hold no seat" — a person told to sign in when they already had
+    // is the confusion the whole page was redesigned to remove.
+    let seated
+    try {
+      seated = await v2CallToken(buy)
+    } catch (error) {
+      const message = error instanceof LineError ? error.message : String(error)
+      note(`✕ ${message}`)
+      if (error instanceof LineError && error.kind === 'no-seat') {
+        setPhase('NO SEAT', message)
+        gate('A seat first', message, seatActions(root.dataset.price))
+      } else {
+        setPhase('REFUSED', message)
+        gate('cookrew.dev refused', message, [button('Try again', true, () => void open())])
+      }
+      return
+    }
+    if (!seated) {
       toast('Sign in to cookrew.dev first — a seat is yours, not this browser’s.')
       return acct?.account?.()
     }
@@ -582,8 +626,8 @@
     term.clear()
     note(`cookrew.dev · web line · sealed to ${door}'s key, carried by the relay, decrypted only at the owner's machine.`)
     try {
-      const who = await signIn()
-      note(`signed in as @${who} · asking for a line`)
+      const who = await signIn(buy)
+      note(buy ? `signed in as @${who} · going to the door to buy a seat` : `signed in as @${who} · asking for a line`)
     } catch (error) {
       note(`✕ ${error.message}`)
       setPhase('SIGNED OUT', error.message)

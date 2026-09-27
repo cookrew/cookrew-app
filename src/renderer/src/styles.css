@@ -6564,3 +6564,44 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
     opacity: 0.35;
   }
 }
+
+/* The harness's tabs: a card's far partners, named on the border they face.
+   Real elements rather than SVG, so the fold has a true click target — see
+   CableHarness.tsx. Positioned in flow coordinates inside the viewport
+   portal, so they pan and zoom with the canvas like the paste ghosts do. */
+.cr-harness-tab {
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  padding: 0 9px;
+  border: 1.5px solid var(--ink);
+  border-radius: 6px;
+  background: var(--cream-hi);
+  color: var(--ink);
+  font-family: ui-monospace, monospace;
+  font-size: 17px;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cr-harness-tab.fold {
+  background: var(--cream-lo, #efe9da);
+  color: var(--ink-soft, #6b6355);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.cr-harness-tab.fold:hover {
+  border-color: var(--amber-deep);
+  color: var(--amber-deep);
+}
+
+.cr-harness-tab.hot {
+  border-color: var(--amber-deep);
+  border-width: 2.5px;
+}

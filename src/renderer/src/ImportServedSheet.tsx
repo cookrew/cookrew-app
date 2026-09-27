@@ -271,7 +271,7 @@ export function ImportServedSheet({
             <div className="isv-row isv-dim">
               <span>
                 {preview.access === 'paid'
-                  ? `${preview.priceUsd} USD · per session — the next step shows the terms`
+                  ? `${preview.priceUsd} USD · a seat — the next step shows the terms`
                   : 'Free — the card signs you in when it boots'}
               </span>
             </div>

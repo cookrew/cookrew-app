@@ -82,7 +82,7 @@ describe('ShareOnSave — the share question inside the save sheet', () => {
 
   it('asks for a price only on the paid door, per SESSION', () => {
     expect(paint('account')).not.toContain('per session')
-    expect(paint('paid', '2.50')).toContain('USD · per session')
+    expect(paint('paid', '2.50')).toContain('USD · a seat')
   })
 
   it('names only the payment rails the door will actually offer', () => {
@@ -378,7 +378,7 @@ describe('ServedTeamCard — who is on, on the thing you published', () => {
       />
     )
     expect(html).toContain('Callers land on Conductor')
-    expect(html).toContain('2.50 USD · per session · USDC · card')
+    expect(html).toContain('2.50 USD · a seat · USDC · card')
   })
 
   it('offers STOP SERVING and reassures the owner they can carry on', () => {

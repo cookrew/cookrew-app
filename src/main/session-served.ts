@@ -46,7 +46,7 @@ export interface ServedTemplate {
   templateId: string
   /** The public slug callers address. Unique in the workspace-slug namespace. */
   slug: string
-  /** The door: sign in (free) or sign in + pay per session. */
+  /** The door: sign in (free) or sign in + buy a seat once at its 402. */
   access: ServeAccess
   /**
    * USDC per SESSION, as a decimal string ('2.50'). Present iff `access` is

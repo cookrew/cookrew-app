@@ -85,7 +85,7 @@ export function webPage(input: { path: string; name: string; description: string
   }
 }
 
-/** A served team as a Product with one Offer: the price is per session, the seller is its author. */
+/** A served team as a Product with one Offer: the price buys a seat, the seller is its author. */
 export function teamProduct(door: ListedDoor, stars: number): Record<string, unknown> {
   const url = `${SITE_ORIGIN}/${door.handle}/${door.name}`
   return {

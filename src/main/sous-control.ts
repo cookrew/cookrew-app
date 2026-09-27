@@ -22,6 +22,7 @@ import {
   type SousIntent,
   type Surface
 } from '../shared/sous-intent'
+import { rankHearings, vocabularyOf } from '../shared/sous-hearing'
 import type { UiCommand } from '../shared/sous-ui'
 
 export interface SousControlDeps {
@@ -144,14 +145,25 @@ export class SousController {
     // Another ear may have heard the names right. Only a COMMAND is worth
     // switching for, and only when the primary came up empty-handed: `none`,
     // or a name nobody on the roster has. A prompt stays the primary's words.
+    //
+    // WHICH ear, though, was decided by the order they were SPAWNED in: the
+    // loop kept the first command-shaped hypothesis, including one that had
+    // only got as far as "which Conductor?" — so the owner was asked a
+    // question the ear beside it had already answered. Two ears race on one
+    // microphone and their order is an accident of process startup; it must
+    // not decide which agent gets the sentence.
+    //
+    // So the ears are ordered by how much of the CANVAS each one named
+    // (sous-hearing.ts) and read in two passes: one that settled outright
+    // beats one that is merely command-shaped.
     if (!isCommandThatResolved(parsed)) {
-      for (const alternate of input.alternates ?? []) {
-        const other = parseUtterance(alternate, ctx, roster, now)
-        if (isCommandThatResolved(other)) {
-          parsed = other
-          break
-        }
-      }
+      const heard = rankHearings(input.alternates ?? [], vocabularyOf(roster))
+      const tried = heard.map((alternate) => parseUtterance(alternate, ctx, roster, now))
+      const settled = tried.find(
+        (other) => other.ok && other.intent.kind !== 'none' && other.intent.kind !== 'prompt'
+      )
+      const better = settled ?? tried.find(isCommandThatResolved)
+      if (better !== undefined) parsed = better
     }
     if (!parsed.ok) {
       return {

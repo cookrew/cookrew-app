@@ -129,3 +129,38 @@ describe('stability', () => {
     expect(ms, `routed ${links.length} cables in ${ms.toFixed(0)} ms`).toBeLessThan(1500)
   })
 })
+
+describe('bundling is a preference, not an accident', () => {
+  it('pulls a later cable onto a trunk an earlier one already laid', () => {
+    // Two cards stacked on the left, a hub far to the right. Routed alone, each
+    // cable takes its own row to the hub: two parallel wires, nothing shared.
+    // With the pull, the second cable pays two turns to join the first's run
+    // and rides it most of the way — which is what makes a harness a harness
+    // rather than parallel wires. The corridor is long on purpose: the
+    // discount has to outweigh the detour, and on a short run it should not.
+    const rects = [card('a', 0, 0), card('b', 0, 1200), card('hub', 9000, 500)]
+    const links = [link('a', 'hub'), link('b', 'hub')]
+    const alone = routeCables(rects, links, { farPx: 99_999, bundlePull: 0 })
+    const pulled = routeCables(rects, links, { farPx: 99_999 })
+    const length = (t: { x1: number; y1: number; x2: number; y2: number }): number => Math.hypot(t.x2 - t.x1, t.y2 - t.y1)
+    const sharedLength = (h: ReturnType<typeof routeCables>): number =>
+      h.trunks.filter((t) => t.count >= 2).reduce((s, t) => s + length(t), 0)
+    const ink = (h: ReturnType<typeof routeCables>): number => h.trunks.reduce((s, t) => s + length(t), 0)
+    expect(sharedLength(alone)).toBe(0)
+    expect(sharedLength(pulled)).toBeGreaterThan(5000)
+    // Sharing is not just prettier, it is less ink: one run instead of two.
+    expect(ink(pulled)).toBeLessThan(ink(alone) * 0.7)
+    expect(pulled.unrouted).toEqual([])
+  })
+
+  it('draws a straight shared run as ONE trunk, not one per grid cell', () => {
+    // A clear corridor between two cards: the run is a single line, so the
+    // layer draws one element and a hover lights one thing.
+    const rects = [card('a', 0, 0), card('b', 3000, 0)]
+    const harness = routeCables(rects, [link('a', 'b')], { farPx: 6000 })
+    expect(harness.unrouted).toEqual([])
+    const horizontal = harness.trunks.filter((t) => t.y1 === t.y2)
+    expect(horizontal.length, `horizontal trunks: ${JSON.stringify(horizontal)}`).toBe(1)
+    expect(Math.abs(horizontal[0].x2 - horizontal[0].x1)).toBeGreaterThan(1000)
+  })
+})
