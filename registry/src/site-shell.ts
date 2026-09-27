@@ -91,7 +91,7 @@ export const ACCOUNT_SHEET = `<dialog id="account-sheet" class="card acct" aria-
 export type PageKind = 'document' | 'app'
 
 const CSP: Record<PageKind, string> = {
-  document: `default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; manifest-src 'self'; img-src 'self' ${SITE_FRAMES} data:; script-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'`,
+  document: `default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; manifest-src 'self'; img-src 'self' ${SITE_FRAMES} data:; media-src ${SITE_FRAMES}; script-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'`,
   app: `default-src 'none'; style-src 'self' 'unsafe-inline'; font-src 'self'; manifest-src 'self'; img-src 'self' ${SITE_FRAMES} data:; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`
 }
 
@@ -214,8 +214,8 @@ const LOGO = BRAND_MARK_SVG
 const FONT_FACES = `
 @font-face{font-family:'Inter';font-style:normal;font-weight:400 700;font-display:optional;src:url(${SITE_FONTS}inter.woff2?v=${ASSET_VERSION}) format('woff2')}
 @font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400 700;font-display:optional;src:url(${SITE_FONTS}jetbrains-mono.woff2?v=${ASSET_VERSION}) format('woff2')}
-@font-face{font-family:'Silkscreen';font-style:normal;font-weight:400;font-display:optional;src:url(${SITE_FONTS}silkscreen-400.woff2?v=${ASSET_VERSION}) format('woff2')}
-@font-face{font-family:'Silkscreen';font-style:normal;font-weight:700;font-display:optional;src:url(${SITE_FONTS}silkscreen-700.woff2?v=${ASSET_VERSION}) format('woff2')}
+@font-face{font-family:'Silkscreen';font-style:normal;font-weight:400;font-display:swap;src:url(${SITE_FONTS}silkscreen-400.woff2?v=${ASSET_VERSION}) format('woff2')}
+@font-face{font-family:'Silkscreen';font-style:normal;font-weight:700;font-display:swap;src:url(${SITE_FONTS}silkscreen-700.woff2?v=${ASSET_VERSION}) format('woff2')}
 @font-face{font-family:'VT323';font-style:normal;font-weight:400;font-display:optional;src:url(${SITE_FONTS}vt323-400.woff2?v=${ASSET_VERSION}) format('woff2')}`
 const PRECONNECT = `<link rel="preconnect" href="https://raw.githubusercontent.com" crossorigin><link rel="preload" as="font" type="font/woff2" href="${SITE_FONTS}inter.woff2?v=${ASSET_VERSION}" crossorigin><link rel="preload" as="font" type="font/woff2" href="${SITE_FONTS}silkscreen-700.woff2?v=${ASSET_VERSION}" crossorigin>`
 
@@ -273,8 +273,8 @@ function shell(options: ShellOptions, main: string): string {
         ? `<button class="btn sm" id="signin" data-signin="me">@${esc(who)}</button>`
         : `<a class="btn sm" href="/me">@${esc(who)}</a>`
       : options.kind === 'app'
-        ? `<button class="btn sm" id="signin" data-signin>🔑 Sign in</button>`
-        : `<a class="btn sm" href="/market#account">🔑 Sign in</a>`
+        ? `<button class="btn sm" id="signin" data-signin>${icon('key')} Sign in</button>`
+        : `<a class="btn sm" href="/market#account">${icon('key')} Sign in</a>`
   // The ladder's screens travel with the account sheet: every page that
   // carries site.js is a page a second factor can be asked on.
   const scripts = (options.kind === 'app' ? options.scripts ?? [] : [])
@@ -300,6 +300,26 @@ ${main}
 <div class="toast" id="toast" hidden></div>
 ${options.kind === 'app' ? ACCOUNT_SHEET : ''}
 </body></html>`
+}
+
+
+/**
+ * THE ICONS. One family, drawn here: 12 px on a 16-unit grid, a 1.8 stroke in the button's own
+ * colour, round caps. Buttons used to carry Unicode glyphs (⬇ ◳ ▶) and one colour emoji (🔑); those
+ * rendered in whatever font the reader happened to have, at four different weights. A button's
+ * icon should be as certain as its border.
+ */
+const ICONS: Readonly<Record<string, string>> = {
+  download: '<path d="M8 2v8M4.5 6.5 8 10l3.5-3.5M3 13h10"/>',
+  market: '<path d="M2.5 6.5h11l-1 6.5h-9zM4 6.5 5.5 3h5L12 6.5M6 9.5h4"/>',
+  play: '<path d="M4.5 3.2v9.6L12.5 8z"/>',
+  key: '<circle cx="5.5" cy="8" r="3"/><path d="M8.5 8h5M11.5 8v2.5M13.5 8v1.8"/>',
+  canvas: '<rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M6.5 6.5v7"/>',
+  mac: '<rect x="2" y="3" width="12" height="8" rx="1.5"/><path d="M5 13.5h6M8 11v2.5"/>',
+  arrow: '<path d="M3 8h10M9 4l4 4-4 4"/>'
+}
+export function icon(name: keyof typeof ICONS): string {
+  return `<svg class="ic" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[name]}</svg>`
 }
 
 /** One stylesheet for every document; a second would drift from the first. */
@@ -329,6 +349,8 @@ nav.top{display:flex;gap:6px;margin-left:auto;flex-wrap:wrap}
 .btn{font:9.5px var(--font-pixel);letter-spacing:.08em;text-transform:uppercase;color:#2d2a20;background:var(--cream-hi);border:2px solid var(--line);box-shadow:2px 2px 0 var(--line);padding:7px 11px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;text-decoration:none;user-select:none}
 @media (prefers-color-scheme:dark){.btn{color:var(--ink)}.btn.primary{color:#2d2a20}}
 .btn:hover{background:var(--amber-soft)}.btn:active{transform:translate(2px,2px);box-shadow:none}
+.btn .ic{flex:0 0 auto;margin:-1px 0}.btn.sm .ic{width:10px;height:10px}.btn.lg .ic{width:13px;height:13px}
+.dock .ico .ic{width:16px;height:16px;stroke-width:1.6}
 .btn.primary{background:var(--amber)}.btn.lg{font-size:11px;padding:11px 16px;box-shadow:3px 3px 0 var(--line)}
 .btn.sm{padding:3px 8px;font-size:8.5px;box-shadow:none}.btn[disabled]{opacity:.35;pointer-events:none}
 .btn.danger{background:var(--rose);color:#fffef5}
@@ -364,7 +386,8 @@ code,.mono{font-family:var(--font-mono);font-size:.88em}
 .crt::before{content:'';position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(to bottom,rgba(255,255,255,.03) 0,rgba(255,255,255,.03) 1px,transparent 1px,transparent 3px)}
 /* recorded frame */
 figure.shot{margin:0;border:2px solid var(--line);box-shadow:6px 6px 0 var(--line);background:var(--phos-bg);overflow:hidden}
-figure.shot img{display:block;width:100%;height:auto}
+figure.shot img,figure.shot video{display:block;width:100%;height:auto}
+figure.shot video{aspect-ratio:1400/874;background:var(--phos-bg)}
 figure.shot figcaption{font-size:13px;color:var(--muted);padding:9px 12px;background:var(--cream-hi);border-top:2px solid var(--line);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 figure.shot .rec{font:8.5px var(--font-pixel);letter-spacing:.08em;text-transform:uppercase;background:var(--hp);color:#14110a;border:1.5px solid var(--line);padding:2px 6px}
 figure.shot.missing{min-height:220px;display:grid;place-items:center;color:var(--phos-dim);font:18px var(--font-screen)}
@@ -460,6 +483,12 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
 .toc a{display:block;padding:6px 12px;font:700 9.5px var(--font-pixel);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);text-decoration:none}
 .toc a:hover{background:var(--amber-soft);color:var(--ink)}
 .toc li.sub a{font:500 12.5px var(--font-body);letter-spacing:0;text-transform:none;color:var(--muted);padding:3px 12px 3px 22px}
+/* the rail's two destinations, pinned above the section list. Declared before
+   the breakpoint below on purpose: it hides them at equal specificity, so
+   source order is what decides. */
+.toc .jump{display:grid;gap:6px;margin:0 0 12px}
+.toc .jump a{border:2px solid var(--line);box-shadow:2px 2px 0 var(--line);background:var(--cream-hi);text-align:center}
+.toc .jump a.primary{background:var(--amber)}
 @media (max-width:1000px){
   .home{grid-template-columns:1fr}
   .toc{position:static;order:-1;padding:14px 0 0}
@@ -482,7 +511,7 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
 .hero .lede{margin-bottom:16px;font-size:clamp(16px,1.4vw,18px);max-width:46ch}
 .hero .row#download{gap:8px}
 .hero .row#download .btn.lg{padding:11px 13px}
-.hero .tagline{margin-bottom:12px}
+.hero .tagline{margin-bottom:12px;font-size:9px;letter-spacing:.1em;white-space:nowrap}
 /* THE DOCK — the strip under the hero. Three cells, the app's own chrome: a
    lamp, what it is, and the one number that says whether it is worth a click.
    It is the second thing on the page so the marketplace is never a scroll. */
@@ -496,10 +525,6 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
 .dock .d{font-size:13px;color:var(--muted);display:block;line-height:1.35}
 .dock .ico{font:16px var(--font-screen);background:var(--phos-bg);color:var(--phos);border:2px solid var(--line);width:34px;height:34px;display:grid;place-items:center;flex:0 0 auto}
 @media (max-width:760px){.dock{grid-template-columns:1fr}.dock a{border-right:none;border-bottom:2px solid var(--line)}.dock a:last-child{border-bottom:none}}
-/* the rail's two destinations, pinned above the section list */
-.toc .jump{display:grid;gap:6px;margin:0 0 12px}
-.toc .jump a{border:2px solid var(--line);box-shadow:2px 2px 0 var(--line);background:var(--cream-hi);text-align:center}
-.toc .jump a.primary{background:var(--amber)}
 .mkt-h{display:flex;align-items:center;gap:10px;font-size:17px;margin:22px 0 4px}
 .tagline{display:inline-block;background:var(--amber);color:#2d2a20;font:700 9.5px var(--font-pixel);letter-spacing:.14em;padding:4px 10px;border:2px solid var(--line);transform:rotate(-1deg);margin-bottom:18px}
 .faq details{border:2px solid var(--line);background:var(--cream-hi);margin:8px 0;box-shadow:3px 3px 0 var(--line)}

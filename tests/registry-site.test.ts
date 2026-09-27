@@ -281,7 +281,10 @@ describe('the front page', () => {
 
   it('shows the recorded cases, from the repository, with what was actually done', () => {
     const page = home([])
-    expect(page.body).toContain('raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/qa-canvas.jpg')
+    // the hero is the promo now — the shipped App on the Dev board, ten seconds, from the repository like every frame
+    expect(page.body).toContain('raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/promo.mp4')
+    expect(page.body).toContain('<video autoplay muted loop playsinline')
+    expect(page.headers['content-security-policy']).toContain('media-src https://raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/')
     expect(page.body).toContain('● REC')
     expect(page.headers['content-security-policy']).toContain("img-src 'self' https://raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/")
     expect(page.headers['content-security-policy']).not.toContain('googleapis')
@@ -301,10 +304,9 @@ describe('the front page', () => {
     expect(page.body).toContain('Ship Crew')
     expect(page.body).toContain('href="/install/sha256:' + 'a'.repeat(64) + '"')
     expect(page.body).toContain('width="1400" height="875"')
-    expect(page.body).toContain('qa-canvas-800.jpg 800w')
-    expect(page.body).toContain('rel="preload" as="image" href="https://raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/qa-canvas-800.jpg"')
+    expect(page.body).toContain('rel="preload" as="image" href="https://raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/promo-poster.jpg"')
     expect(page.headers['content-security-policy']).toContain("manifest-src 'self'")
-    expect(page.body).toContain('fetchpriority="high"')
+    expect(page.body).toContain('poster="https://raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/promo-poster.jpg"')
   })
 
   /**

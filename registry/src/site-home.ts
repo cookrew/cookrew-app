@@ -2,7 +2,8 @@ import type { ListedDoor } from './site'
 import type { PresetSummary } from './store'
 import type { Commit } from './github-commits'
 import { FRAMES, frameImg, frameUrl, type Frame } from './site-frames'
-import { GITHUB_REPO, esc, page, type Page } from './site-shell'
+import { SITE_FRAMES } from './site-shell'
+import { GITHUB_REPO, esc, icon, page, type Page } from './site-shell'
 import { RELEASES_PAGE, pickAsset, type Release } from './releases'
 import type { DoorPulse } from './pulse'
 import {
@@ -121,10 +122,10 @@ function heroButtons(release: Release | null, live: ListedDoor | null): string {
   const win = release ? pickAsset(release, 'windows') : null
   const date = release?.publishedAt ? release.publishedAt.slice(0, 10) : ''
   const open = live
-    ? `<a class="btn primary lg" href="/${esc(live.handle)}/${esc(live.name)}">▶ Open a live canvas</a>`
+    ? `<a class="btn primary lg" href="/${esc(live.handle)}/${esc(live.name)}">${icon('play')} Open a live canvas</a>`
     : ''
-  const dl = `<a class="btn ${live ? '' : 'primary '}lg" href="${mac ? esc(mac.url) : '/download'}">⬇ Download for Mac</a>`
-  const market = `<a class="btn lg" href="/market">◳ Marketplace</a>`
+  const dl = `<a class="btn ${live ? '' : 'primary '}lg" href="${mac ? esc(mac.url) : '/download'}">${icon('download')} Download for Mac</a>`
+  const market = `<a class="btn lg" href="/market">${icon('market')} Marketplace</a>`
   return `<p class="row" id="download">${open}${dl}${market}</p>
 <p class="meta">${release ? `v${esc(release.version)}${date ? ` · ${esc(date)}` : ''}` : `<a href="${RELEASES_PAGE}">latest release</a>`} · ${FACTS.license} · Apple Silicon${win ? ` · <a href="${esc(win.url)}">Windows preview</a>` : ', Windows preview'} · Node 20+ · <a href="${GITHUB_REPO}" target="_blank" rel="noopener">Source ↗</a></p>`
 }
@@ -147,10 +148,25 @@ function dock(input: HomeInput): string {
       ? 'Nobody is serving a team yet — serve yours'
       : `${paid.length > 0 ? `${paid.length} to rent · ` : ''}${input.doors.length} listed · ${serving} taking calls now`
   return `<nav class="dock" aria-label="Where to go first">
-<a href="/features/ai-agents-on-one-canvas"><span class="ico">▦</span><span><span class="t">See the canvas</span><span class="d">Terminals, notes and browsers on one board, wired together.</span></span></a>
-<a href="/me#desktops"><span class="ico">⌘</span><span><span class="t">Your machines</span><span class="d">Open a canvas on a Mac of yours, in this browser.</span></span></a>
-<a href="/market"><span class="ico">◳</span><span><span class="t">Marketplace →</span><span class="d">${esc(market)}</span></span></a>
+<a href="/features/ai-agents-on-one-canvas"><span class="ico">${icon('canvas')}</span><span><span class="t">See the canvas</span><span class="d">Terminals, notes and browsers on one board, wired together.</span></span></a>
+<a href="/me#desktops"><span class="ico">${icon('mac')}</span><span><span class="t">Your machines</span><span class="d">Open a canvas on a Mac of yours, in this browser.</span></span></a>
+<a href="/market"><span class="ico">${icon('market')}</span><span><span class="t">Marketplace</span><span class="d">${esc(market)}</span></span></a>
 </nav>`
+}
+
+/**
+ * THE PROMO — ten seconds, muted, looping, in the hero where the still frame was.
+ *
+ * It is the product, not a render: the shipped App on a geometry dump of the Cookrew Dev board,
+ * driven with real input in a headless Chrome (docs/shoot-fixture, the shoot script in the job
+ * dir) — the board zooms to the crew, a card is dragged and the harness re-routes, a card opens.
+ * The file lives with the frames on GitHub; the registry bundle has no room for a megabyte. No
+ * script: <video autoplay muted loop playsinline> needs none, and a reader whose browser refuses
+ * autoplay sees the poster, which is the still frame this replaced.
+ */
+function promo(): string {
+  const poster = `${SITE_FRAMES}promo-poster.jpg`
+  return `<figure class="shot promo"><video autoplay muted loop playsinline preload="metadata" poster="${esc(poster)}" width="1400" height="874" aria-label="Ten seconds of Cookrew: the board, a card dragged and the harness re-routing, a card opening"><source src="${SITE_FRAMES}promo.mp4" type="video/mp4"></video><figcaption><span class="rec">● REC</span>Ten seconds of the real app on the Cookrew Dev board: the harness view zooms to the crew, Velvet is dragged and its cables re-route, the Conductor card opens. <a href="/features/ai-agents-on-one-canvas">The canvas, frame by frame →</a></figcaption></figure>`
 }
 
 /** GET STARTED: the two steps, the crew builder, and the two questions people ask first. */
@@ -205,7 +221,7 @@ function catalog(release: Release | null): string {
     ['#built', 'What landed on dev', true]
   ]
   return `<aside class="toc" aria-label="On this page">
-<div class="jump"><a class="btn sm primary" href="${mac ? esc(mac.url) : '/download'}">⬇ Get the app</a><a class="btn sm" href="/market">◳ Marketplace</a></div>
+<div class="jump"><a class="btn sm primary" href="${mac ? esc(mac.url) : '/download'}">${icon('download')} Get the app</a><a class="btn sm" href="/market">${icon('market')} Marketplace</a></div>
 <p class="kicker"><span class="no">ON THIS PAGE</span></p><ol>${items
     .map(([href, label, sub]) => `<li${sub ? ' class="sub"' : ''}><a href="${href}">${esc(label)}</a></li>`)
     .join('')}</ol></aside>`
@@ -242,7 +258,7 @@ function marketSection(input: HomeInput): string {
 <p class="lede" style="font-size:16px">A served team stays on its author’s machine; you get a sandboxed session of your own, in this browser or in the app.</p>
 ${input.doors.length === 0 ? `<p class="empty">Nobody is serving a team here yet.</p>` : ''}${rent}${open}
 ${presets.length > 0 ? `<h3 class="mkt-h" style="margin-top:26px">Presets to download<span class="chip">signed team files</span></h3><div class="teams">${presets.join('')}</div>` : ''}
-<p class="row" style="margin-top:18px"><a class="btn primary lg" href="/market">Explore the marketplace →</a><a class="btn lg" href="/me#desktops">Your own machines →</a></p>
+<p class="row" style="margin-top:18px"><a class="btn primary lg" href="/market">Explore the marketplace ${icon('arrow')}</a><a class="btn lg" href="/me#desktops">${icon('mac')} Your own machines</a></p>
 </div></section>`
 }
 
@@ -256,7 +272,7 @@ export function homePage(input: HomeInput): Page {
       ...(input.account ? { account: input.account, cache: 0 } : {}),
       description: DESCRIPTION,
       path: '/',
-      preload: [`${frameUrl(FRAMES.canvas).replace(/\.jpg$/, '-800.jpg')}`],
+      preload: [`${SITE_FRAMES}promo-poster.jpg`],
       jsonLd: [
         organization(),
         softwareApplication(input.release),
@@ -279,7 +295,7 @@ export function homePage(input: HomeInput): Page {
 <h1>${esc(HEADLINE)}</h1>
 <p class="lede">${esc(ONE_LINE)} Every turn is a checkpoint.</p>
 ${heroButtons(input.release, live)}</div>
-<div><a href="/features/ai-agents-on-one-canvas" style="text-decoration:none;display:block">${figure(FRAMES.canvas, { eager: true })}</a></div>
+<div>${promo()}</div>
 </div></div>
 
 <div class="wrap" style="padding:0;margin-top:-2px">${dock(input)}</div>
