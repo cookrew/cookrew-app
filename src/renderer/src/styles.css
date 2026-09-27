@@ -3478,6 +3478,35 @@ a.card-close {
   animation: none;
 }
 
+/* Name over dials, in the space the name alone used to hold. It takes over
+   .vi-mini-name's flex-item role (flex + min-width:0), so the name keeps
+   wrapping INSIDE the row rather than widening it — see that rule's own note
+   on why min-width:0 is load-bearing there. */
+.vi-mini-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: calc(1px * var(--z, 1));
+  overflow: hidden;
+}
+
+/* NOT a chip. At 0.1 zoom a chip's border and radius resolve to sub-pixel and
+   read as grit, so the dials are a plain dim line under the name — the counter
+   scale keeps them legible, one notch smaller than the name so the tile still
+   says WHICH agent first and what it runs on second. */
+.vi-mini-dial {
+  font-family: var(--font-mono);
+  font-size: calc(10px * var(--z, 1));
+  line-height: 1.2;
+  color: var(--vi-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 0 auto;
+}
+
 .vi-mini-name {
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif;
   font-size: calc(13px * var(--z, 1));

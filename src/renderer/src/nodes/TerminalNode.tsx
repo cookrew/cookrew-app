@@ -91,7 +91,17 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
         <CardPick id={node.id} />
         <div className="vi-mini node-header">
           <StatusCoin phase={phase} preset={node.preset} />
-          <span className="vi-mini-name">{node.name}</span>
+          {/* THE TILE IS THE CARD, most of the time.
+              This view was left out of the first cut on the reasoning that it
+              names no harness, so a tag had nothing to sit beside. True, and
+              beside the point: the board sits at overview zoom, where EVERY
+              card is a tile — so "on every card view" was invisible in the one
+              view that is usually on screen. Name and dials stack in the space
+              the name was already using. */}
+          <div className="vi-mini-text">
+            <span className="vi-mini-name">{node.name}</span>
+            <DialTag id={node.id} className="vi-mini-dial" />
+          </div>
         </div>
       </div>
     )
