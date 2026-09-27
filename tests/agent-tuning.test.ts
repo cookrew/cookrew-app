@@ -39,6 +39,7 @@ function state(over: Partial<AgentTuningState> = {}): AgentTuningState {
   return {
     harness: 'claude',
     knobs: ['model', 'effort'],
+    records: ['model', 'effort'],
     tuning: null,
     asks: [],
     caveat: null,
@@ -153,6 +154,64 @@ describe('an ask against the record', () => {
   it('goes quiet once the newest ask settles, even with older ones behind it', () => {
     const asks = [ask({ value: 'haiku', at: T0 }), ask({ value: 'opus', at: T0 + 1 })]
     expect(liveAsk('model', asks, tuning({ at: T0 + 2 }))).toBeNull()
+  })
+})
+
+describe('a knob the harness never writes down', () => {
+  it('reports the ask as SENT and uncheckable, not pending forever', () => {
+    // Pi accepts a thinking level and records none. 'pending' would be a
+    // promise that never resolves; 'refused' would be an accusation nothing
+    // supports. Both would be lies with different shapes.
+    const asks = [ask({ knob: 'effort', value: 'high', at: T0 })]
+    expect(askOutcome(asks[0], tuning({ at: T0 + 5000 }), ['model'])).toBe('unrecorded')
+    expect(liveAsk('effort', asks, tuning({ at: T0 + 5000 }), ['model'])?.outcome).toBe('unrecorded')
+  })
+
+  it('still settles and refuses normally for a knob that IS written down', () => {
+    const asks = [ask({ value: 'opus', at: T0 })]
+    expect(askOutcome(asks[0], tuning(), ['model'])).toBe('settled')
+    expect(askOutcome(ask({ value: 'haiku', at: T0 }), tuning({ at: T0 + 1 }), ['model'])).toBe('refused')
+  })
+
+  it('says so on the dial even before anything is asked', () => {
+    const view = tuneRailView({
+      state: state({ tuning: tuning(), records: ['model'] }),
+      phase: 'idle',
+      remote: false
+    })
+    const effort = view!.dials.find((d) => d.knob === 'effort')
+    expect(effort?.note).toBe(TUNE_COPY.unrecorded)
+    // The model dial is unaffected — it is recorded.
+    expect(view!.dials.find((d) => d.knob === 'model')?.note).toBeNull()
+  })
+})
+
+describe('a harness that names its own values', () => {
+  it('draws the harness\u2019s rows, not the shared defaults', () => {
+    // Pi's models come from its catalogs; offering anything else opens a
+    // picker that swallows the pane's input.
+    const view = tuneRailView({
+      state: state({
+        harness: 'pi',
+        tuning: { model: 'qwen3.8-27b-q8', effort: null, at: T0 },
+        records: ['model'],
+        choices: { model: ['ifunk/k3', 'qwen-local/qwen3.8-27b-q8'], effort: ['off'] }
+      }),
+      phase: 'idle',
+      remote: false
+    })
+    expect(view!.dials[0].rows.map((r) => r.value)).toEqual([
+      'ifunk/k3',
+      'qwen-local/qwen3.8-27b-q8'
+    ])
+    expect(view!.dials[1].rows.map((r) => r.value)).toEqual(['off'])
+    // No claude alias leaked in.
+    expect(view!.dials[0].rows.some((r) => r.value === 'opus')).toBe(false)
+  })
+
+  it('falls back to the shared values when a harness names none', () => {
+    const view = tuneRailView({ state: state({ tuning: tuning() }), phase: 'idle', remote: false })
+    expect(view!.dials[0].rows.map((r) => r.value)).toEqual([...MODEL_ALIASES])
   })
 })
 
