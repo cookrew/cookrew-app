@@ -1602,10 +1602,7 @@ async function handleServedSlug(
       },
       // The money rung asks what the sign-in said: a seat, or the owner. A
       // caller nobody recorded (a key-based one) is quoted, as before.
-      entitled: (serviceId, sub) => {
-        const known = doorCallers.get(serviceId, sub)
-        return known !== null && (known.seat !== null || known.owner === true)
-      },
+      entitled: (serviceId, sub) => doorCallers.entitled(serviceId, sub),
       // The money moved. Report it to cookrew.dev as a bought seat, through
       // the queue that survives the registry being down (seat-settle.ts).
       onPaid: (payment) => {
@@ -1617,6 +1614,9 @@ async function handleServedSlug(
         // A key-based caller has no account for a seat to land on, and a door
         // with no published name has no team for one to be at. Both are
         // ordinary states, not failures — the caller is still admitted.
+        // The door itself learns it first: the buyer's token still says no
+        // seat, and their next session must not meet the 402 again.
+        doorCallers.bought(payment.serviceId, payment.sub)
         if (team === null || username === null || username.length === 0) return
         void seatSettles
           .record({ team, username, by: payment.by, receipt: payment.receipt })
