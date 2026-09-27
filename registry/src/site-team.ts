@@ -3,6 +3,7 @@ import type { ListedDoor } from './site'
 import { priceChip } from './site-home'
 import { day, esc, page, type Page } from './site-shell'
 import { breadcrumbs, organization, teamProduct, webPage } from './site-seo'
+import { lineFace, standingOf, type Standing } from './site-standing'
 import type { V2Seat } from './v2-seats'
 
 /**
@@ -57,14 +58,14 @@ export interface TeamInput {
  * The BUY and OPEN buttons do not invent a ceremony — they press the line's
  * own entry below, which is where the door's 402 and its session already live.
  */
-function seatBar(input: TeamInput, door: ListedDoor, address: string): string {
-  const owner = input.owner === true
+function seatBar(input: TeamInput, door: ListedDoor, address: string, standing: Standing): string {
+  const owner = standing.kind === 'owner'
   const seat = input.seat ?? null
   const seated = input.seated ?? []
   const paid = door.access === 'paid'
   const price = door.priceUsd ?? ''
 
-  if (input.account === null) {
+  if (standing.kind === 'stranger' || input.account === null) {
     return `<section class="card seat" id="seatbar" data-team="${esc(`@${door.handle}/${door.name}`)}">
 <h2>Open this team</h2>
 <p class="lede" style="margin:0 0 10px">A seat is yours, not a browser’s. Sign in so it follows you.</p>
@@ -95,8 +96,15 @@ function seatBar(input: TeamInput, door: ListedDoor, address: string): string {
             })
             .join('')
     const asked = input.ask ?? ''
+    // THE OWNER OPENS FIRST. This bar used to offer an owner nothing but the
+    // grant form, while the line below told them to sign in — so they typed
+    // their own name into the form and granted themselves a seat at a team
+    // the registry admits them to without one. The line is the first thing an
+    // owner is offered; the room and the form follow.
     return `<section class="card seat" id="seatbar" data-team="${esc(address)}" data-owner="1">
 <h2>Your team · ${seated.length} seated</h2>
+<p class="lede" style="margin:0 0 10px">Your own team — the line is yours, with no seat and no charge.</p>
+<p class="row" style="margin:0 0 14px"><button class="btn primary lg" data-seat-open>Open the line</button></p>
 <p class="meta" style="margin:0 0 10px">A seat is per account and follows the person to any device they sign in on. Ending one stops their next call at the door.</p>
 <div class="row" id="seat-grant"><input id="seat-username" value="${esc(asked)}" placeholder="username" autocomplete="off" spellcheck="false" maxlength="32">
 <button class="btn primary" data-seat-grant>Grant a seat</button></div>
@@ -163,12 +171,25 @@ answer the same, so the directory cannot be used to enumerate what is here.</p><
       ? `<ul class="rails">${door.rails.map((rail) => `<li>${rail === 'x402' ? 'USDC · wallet' : 'card'}</li>`).join('')}</ul>`
       : ''
   const relayed = door.transport === 'relay' && typeof door.sealKey === 'string'
+  // WHO IS READING, decided once. The seat bar, the line's chip, the strip and
+  // the gate all render from this, so none of them can contradict another —
+  // which is precisely what they used to do (site-standing.ts).
+  const standing = standingOf(input, door)
+  const line = lineFace(standing, {
+    name,
+    orch: door.door,
+    handle: door.handle,
+    live: !off,
+    relayed,
+    price: door.priceUsd ?? ''
+  })
 
   return page(
     {
       title: `${door.title} — @${door.handle} · Cookrew`,
       kind: 'app',
       active: 'market',
+      account: input.account,
       scripts: ['xterm.js', 'addon-fit.js', 'device-id.js', 'site.js', 'seal.js', 'line.js'],
       styles: ['xterm.css'],
       cache: 0,
@@ -192,16 +213,16 @@ answer the same, so the directory cannot be used to enumerate what is here.</p><
 <div class="addr" style="width:min(420px,88vw)"><span id="addr">${esc(address)}</span><button class="btn sm" data-copy="${esc(address)}">copy</button></div>
 </div></div>
 
-${seatBar(input, door, name)}
+${seatBar(input, door, name, standing)}
 <div class="tp">
 <div>
 <p class="kicker"><span class="no">LINE</span>this team’s own terminal, bound to cookrew.dev</p>
 <div class="overlay" id="overlay">
-<div class="bar"><span class="led${off ? ' off' : ''}" id="bar-led"></span><span class="name">${esc(door.door)}</span><span class="chip violet">ORCH · THE DOOR</span><span class="chip" id="phase">${off ? 'OFFLINE' : 'SIGNED OUT'}</span><span class="sp"></span><button class="btn sm" id="btn-new" hidden>⏎ start a new session</button><button class="btn sm danger" id="btn-end" hidden>End session</button><a class="btn sm" href="#how">how it works</a></div>
-<div class="strip" id="strip"><span id="strip-opened">not opened</span><span class="sep">·</span><span>${door.access === 'paid' && door.priceUsd ? `${esc(door.priceUsd)} USD per session` : 'free — this team charges nothing'}</span><span class="sep">·</span><span>runs at ${esc(name)}</span><span class="sep">·</span><span class="state" id="state">${off ? `Nobody is serving ${esc(name)} right now.` : relayed ? 'Sign in to open your own session at the door.' : 'This door is not on the relay; open it in the app.'}</span></div>
+<div class="bar"><span class="led${off ? ' off' : ''}" id="bar-led"></span><span class="name">${esc(door.door)}</span><span class="chip violet">ORCH · THE DOOR</span><span class="chip" id="phase">${esc(line.phase)}</span><span class="sp"></span><button class="btn sm" id="btn-new" hidden>⏎ start a new session</button><button class="btn sm danger" id="btn-end" hidden>End session</button><a class="btn sm" href="#how">how it works</a></div>
+<div class="strip" id="strip"><span id="strip-opened">not opened</span><span class="sep">·</span><span>${door.access === 'paid' && door.priceUsd ? `${esc(door.priceUsd)} USD per session` : 'free — this team charges nothing'}</span><span class="sep">·</span><span>runs at ${esc(name)}</span><span class="sep">·</span><span class="state" id="state">${esc(line.state)}</span></div>
 <div class="term">
 <div class="out" id="term"></div>
-<div class="gate" id="gate"><div class="card"><h3 id="gate-h">Open a session</h3><p id="gate-p">Sign in with your cookrew.dev account. The door mints a sandboxed workspace for you on the author’s machine, and this terminal becomes its orchestrator’s PTY — the same one a placed card gets.</p><p class="row" style="justify-content:center" id="gate-actions"><button class="btn primary" id="btn-open"${off || !relayed ? ' disabled' : ''}>🔑 Sign in &amp; open</button></p></div></div>
+<div class="gate" id="gate"><div class="card"><h3 id="gate-h">${esc(line.gate.title)}</h3><p id="gate-p">${esc(line.gate.text)}</p><p class="row" style="justify-content:center" id="gate-actions"><button class="btn primary" id="btn-open"${line.gate.disabled ? ' disabled' : ''}>${esc(line.gate.button)}</button></p></div></div>
 <div class="in"><input id="prompt" placeholder="type to ${esc(door.door)} — Enter sends; keystrokes go raw to the PTY" disabled autocomplete="off"><button class="btn sm primary" id="send" disabled>Send</button></div>
 </div>
 <div class="rail"><div class="rh"><span>Checkpoints</span><span id="rail-n">0</span></div><ol id="rail"><li class="live ended" id="rail-tail"><span class="n">—</span><span class="t"><span class="dot"></span>no session</span></li></ol></div>

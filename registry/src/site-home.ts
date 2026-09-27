@@ -51,6 +51,12 @@ export interface HomeInput {
   linesToday: number
   /** The latest commits on dev, for the PROOF section; null when GitHub has not answered. */
   commits?: readonly Commit[] | null
+  /**
+   * The signed-in reader, when the request carried one. The header names them;
+   * the page is then theirs and is never shared from a cache. A document page
+   * cannot learn this any other way — it runs no script, by design.
+   */
+  account?: string | null
 }
 
 /** The definition's first sentence: enough to quote, short enough to read. */
@@ -247,6 +253,7 @@ export function homePage(input: HomeInput): Page {
       title: 'Cookrew — run a team of AI coding agents on one canvas, or open someone’s',
       kind: 'document',
       active: 'home',
+      ...(input.account ? { account: input.account, cache: 0 } : {}),
       description: DESCRIPTION,
       path: '/',
       preload: [`${frameUrl(FRAMES.canvas).replace(/\.jpg$/, '-800.jpg')}`],
