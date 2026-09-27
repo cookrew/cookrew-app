@@ -849,6 +849,10 @@ export function createRegistry(deps: RegistryDeps): Server {
 
       if (parts.length === 0) {
         deps.pulse?.page('/')
+        // The front page is a document and can never ask who is reading; the
+        // request already said. With an account the page is that person's and
+        // is served private (site-home decides the cache from the field).
+        const reader = accountOf(request)
         // The release and the commits are two GitHub reads; neither may hold
         // the page, and either missing renders as "not answered yet".
         void Promise.all([
@@ -865,7 +869,8 @@ export function createRegistry(deps: RegistryDeps): Server {
                 commits,
                 stars: starsOf,
                 pulse: pulseOf,
-                linesToday: deps.pulse?.linesToday() ?? 0
+                linesToday: deps.pulse?.linesToday() ?? 0,
+                account: reader
               })
             )
           })

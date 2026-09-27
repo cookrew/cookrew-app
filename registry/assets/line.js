@@ -217,6 +217,10 @@
       body = null
     }
     if (res.status === 201 && body?.token) return body
+    // 403 is a person who IS signed in and holds no seat. It is its own kind
+    // so the page can say that — the registry's sentence names the owner and
+    // the two ways to a seat — instead of treating it like an absence.
+    if (res.status === 403) throw new LineError('no-seat', body?.message ?? `you hold no seat at ${door}`)
     throw new LineError('refused', body?.message ?? `cookrew.dev would not mint a token for this door (${res.status})`)
   }
 
@@ -571,9 +575,28 @@
     // WHO IS READING IS AN ACCOUNT QUESTION (v3, G1). The old check asked
     // whether this browser had ENROLLED a handle, which a person could satisfy
     // without ever having an account — and then be charged for a seat their
-    // account already holds. The door's own word decides now, and its absence
-    // opens the sign-in sheet rather than a ceremony.
-    if (!(await v2CallToken().catch(() => null))) {
+    // account already holds. The registry's own word decides now.
+    //
+    // AND ITS TWO REFUSALS ARE TWO DIFFERENT SENTENCES. 401 is "nobody is
+    // signed in here" and the sign-in sheet is the answer. 403 is "you are,
+    // and you hold no seat" — a person told to sign in when they already had
+    // is the confusion the whole page was redesigned to remove.
+    let seated
+    try {
+      seated = await v2CallToken()
+    } catch (error) {
+      const message = error instanceof LineError ? error.message : String(error)
+      note(`✕ ${message}`)
+      if (error instanceof LineError && error.kind === 'no-seat') {
+        setPhase('NO SEAT', message)
+        gate('A seat first', message, [button('Try again', true, () => void open())])
+      } else {
+        setPhase('REFUSED', message)
+        gate('cookrew.dev refused', message, [button('Try again', true, () => void open())])
+      }
+      return
+    }
+    if (!seated) {
       toast('Sign in to cookrew.dev first — a seat is yours, not this browser’s.')
       return acct?.account?.()
     }
