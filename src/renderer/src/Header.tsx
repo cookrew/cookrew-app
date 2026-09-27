@@ -21,6 +21,8 @@ interface HeaderProps {
   onActivity: () => void
   /** Opens the screen wall (WorkspaceWall.tsx). */
   onWall?: () => void
+  /** Photograph the canvas before leaving it, so the wall has a picture. */
+  onBeforeSwitch?: () => Promise<void>
   /** Re-pull the canvas and re-establish the push channel (the brand mark). */
   onResync: () => void
   /**
@@ -76,6 +78,7 @@ export function Header({
   onViewChange,
   onActivity,
   onWall,
+  onBeforeSwitch,
   onResync,
   avatar
 }: HeaderProps): React.JSX.Element {
@@ -161,6 +164,7 @@ export function Header({
         fallbackDir={dir}
         onActivity={onActivity}
         onWall={onWall}
+        onBeforeSwitch={onBeforeSwitch}
       />
     </header>
   )
