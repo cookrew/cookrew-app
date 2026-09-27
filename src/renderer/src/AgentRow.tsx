@@ -46,6 +46,7 @@ export function AgentRow({
   now,
   selected,
   recovering,
+  opening = false,
   canRecover,
   hit = null,
   selectable = false,
@@ -62,6 +63,12 @@ export function AgentRow({
   now: number
   selected: boolean
   recovering: boolean
+  /**
+   * This row's card lives in another workspace and we are on the way there.
+   * The switch is quick bookkeeping but the canvas behind it is not, so the
+   * row says what it is doing rather than letting the board look deaf.
+   */
+  opening?: boolean
   canRecover: boolean
   /** Checkpoint that matched the search, when the hit was in history. */
   hit?: TurnMatch | null
@@ -89,7 +96,7 @@ export function AgentRow({
     <div
       className={`ags-row${selected ? ' selected' : ''}${row.active ? '' : ' inactive'}${
         selectable ? ' selectable' : ''
-      }`}
+      }${opening ? ' opening' : ''}`}
       aria-pressed={selectable ? selected : undefined}
       data-phase={row.phase}
       role="button"
@@ -122,7 +129,9 @@ export function AgentRow({
           <span className="cr-chip">{row.preset}</span>
           {row.orch && <span className="cr-chip amber">ORCH</span>}
           {row.role && <span className="cr-chip">{row.role}</span>}
-          <span className="cr-chip violet">{row.workspaceName}</span>
+          <span className="cr-chip violet">
+            {opening ? `OPENING ${row.workspaceName}…` : row.workspaceName}
+          </span>
           {!row.active && <span className="cr-chip">INACTIVE</span>}
         </span>
 

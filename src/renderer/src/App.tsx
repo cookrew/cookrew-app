@@ -333,11 +333,19 @@ function Canvas(): React.JSX.Element {
     knownWsIdRef.current = id
     setActiveWsId(id)
     if (previous === null || previous === id) return
-    fitPendingRef.current = true
-    // The outgoing canvas is gone, so the saved "back" viewport and the zoomed
-    // node both point at cards that no longer exist; ⤢ / ESC must fall back to
-    // the overview rather than restore a dead frame.
+    // The outgoing canvas is gone either way, so the saved "back" viewport
+    // points at cards that no longer exist; ⤢ / ESC must fall back to the
+    // overview rather than restore a dead frame.
     prevViewportRef.current = null
+    // WHOSE SWITCH IS THIS. A jump asked for this one and is arriving at a
+    // CARD, not at a workspace — so none of the resets below are right for it,
+    // and the store's two broadcasts give no order to lean on: when the nodes
+    // beat the id here, the jump has ALREADY zoomed and these lines would undo
+    // it. No arrival, so no full view; no deliberate flag, so the phone's LOD
+    // refuses to open the card; and an armed fit left over for the next node
+    // change to spend on the overview.
+    if (jumpRef.current?.claims(id) === true) return
+    fitPendingRef.current = true
     zoomedNodeIdRef.current = null
     // …and so do the auto-open credentials. Left armed, the switch's fitView
     // settling would passively mount whatever card crosses the coverage floor
@@ -833,7 +841,15 @@ function Canvas(): React.JSX.Element {
           // with is not a place Back can return to.
           zoomToNode(nodeId, nodeZoomBounds(node) ?? undefined, node !== null)
         },
-        frameAll: () => fitAll(OVERVIEW_FIT_MS),
+        handBack: () => {
+          // The jump is over and no card is opening, so give the switch the
+          // arrival it was denied when the jump claimed it: nothing is zoomed,
+          // nothing may auto-open, and the board gets framed.
+          zoomedNodeIdRef.current = null
+          deliberateOpenRef.current = false
+          setArrivedId(null)
+          fitAll(OVERVIEW_FIT_MS)
+        },
         schedule: (run, ms) => {
           const timer = window.setTimeout(run, ms)
           return () => window.clearTimeout(timer)

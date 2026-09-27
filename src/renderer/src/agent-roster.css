@@ -1335,6 +1335,27 @@
   border-left-color: transparent;
 }
 
+/* On the way to another workspace. The row holds its place and breathes —
+   the board stays open until the card is framed, so this is the only thing
+   on screen saying the tap was heard. */
+.ags-row.opening {
+  background: var(--amber-soft);
+  border-left-color: var(--amber-deep);
+  animation: ags-row-opening 900ms ease-in-out infinite;
+}
+
+@keyframes ags-row-opening {
+  50% {
+    opacity: 0.62;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ags-row.opening {
+    animation: none;
+  }
+}
+
 .ags-row.inactive:hover {
   opacity: 1;
 }

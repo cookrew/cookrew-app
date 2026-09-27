@@ -1,4 +1,5 @@
 import { createContext, useContext } from 'react'
+import type { JumpOutcome } from './cross-workspace-jump'
 
 /**
  * There is no dedicated MOVE tool: the resting hand pans, drags cards and
@@ -36,8 +37,12 @@ export interface CanvasUi {
    * workspace, so a row it opens can need a workspace switch first. Same
    * workspace, same instant zoom; anywhere else, the switch is asked for and
    * the zoom waits for the incoming canvas (cross-workspace-jump.ts).
+   *
+   * Answers when the tap is over, so the surface that made it can hold itself
+   * open and say which row it is opening instead of closing over a canvas that
+   * has not changed yet — and can say so out loud when the card never comes.
    */
-  jumpToNode: (workspaceId: string, nodeId: string) => void
+  jumpToNode: (workspaceId: string, nodeId: string) => Promise<JumpOutcome>
   zoomBack: () => void
   /**
    * Ask to close a card. Every ✕ goes through here rather than calling
@@ -56,7 +61,8 @@ export const CanvasUiContext = createContext<CanvasUi>({
   clipping: false,
   interactiveBrowser: null,
   zoomToNode: () => undefined,
-  jumpToNode: () => undefined,
+  // No canvas behind this context, so a jump cannot have landed.
+  jumpToNode: () => Promise.resolve('missed' as const),
   zoomBack: () => undefined,
   requestClose: () => undefined,
   picked: new Set<string>(),
