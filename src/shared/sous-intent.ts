@@ -10,6 +10,8 @@
 // never guessed — ambiguity asks back with the choices — and free text has
 // exactly one sink, the PTY of an agent the owner named, as a prompt.
 
+import { nearestName } from './sous-hearing'
+
 export type Surface = 'canvas' | 'zoom' | 'phone' | 'home' | 'cli'
 
 export interface RosterAgent {
@@ -126,9 +128,18 @@ const normalize = (value: string): string =>
     .trim()
 
 /**
- * exact → alias → unique prefix; two prefix hits are an ambiguity, not a
- * choice made for the owner. Normalized so "claude-code", "Claude Code" and
- * "claude_code" are one name — ASR never spells punctuation the same way twice.
+ * exact → alias → unique prefix → unambiguous near miss; two hits at any tier
+ * are an ambiguity, not a choice made for the owner. Normalized so
+ * "claude-code", "Claude Code" and "claude_code" are one name — ASR never
+ * spells punctuation the same way twice.
+ *
+ * The NEAR tier is last on purpose. Every tier above it is a fact about what
+ * was said; this one is a judgement about what was meant, and it may only be
+ * consulted when the facts have run out. It exists because the alternative was
+ * the owner hand-writing an alias into ~/.cookrew/sous.json for every way a
+ * recognizer can mangle a name — one per locale, per mangling, forever. See
+ * sous-hearing.ts for how far "near" is allowed to reach and why it refuses a
+ * tie.
  */
 export function resolveName<T extends Named>(said: string, pool: ReadonlyArray<T>): NameHit<T> {
   const wanted = normalize(said)
@@ -142,6 +153,8 @@ export function resolveName<T extends Named>(said: string, pool: ReadonlyArray<T
   const prefix = pool.filter((p) => normalize(p.name).startsWith(wanted))
   if (prefix.length === 1) return { hit: prefix[0] }
   if (prefix.length > 1) return { ambiguous: prefix }
+  const near = nearestName(said, pool)
+  if (near !== null) return { hit: near }
   return { miss: true }
 }
 
