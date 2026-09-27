@@ -270,10 +270,28 @@ export function modelAliasOf(model: string): ModelAlias | null {
  * unmappable is not "none of the rows", it is "a model we do not offer", which
  * the view states separately.
  */
-export function dialReading(knob: TuneKnob, tuning: AgentTuning | null): string | null {
+export function dialReading(
+  knob: TuneKnob,
+  tuning: AgentTuning | null,
+  choices?: readonly string[]
+): string | null {
   if (tuning === null) return null
   if (knob === 'effort') return tuning.effort
-  return tuning.model === null ? null : modelAliasOf(tuning.model)
+  if (tuning.model === null) return null
+  // AGAINST THE OFFERED VALUES FIRST, and only then against claude's aliases.
+  //
+  // Aliases are a claude idea. A pi card offers `qwen-local/qwen3.8-27b-q8`
+  // and its records say `qwen3.8-27b-q8`, so an alias-only reading returned
+  // null and NO row ticked on any pi card — the dial listed four models and
+  // claimed none of them was the one running. The suffix match is what joins
+  // a bare recorded id to the provider-qualified ref the harness accepts.
+  if (choices !== undefined) {
+    const exact = choices.find((choice) => choice === tuning.model)
+    if (exact !== undefined) return exact
+    const qualified = choices.find((choice) => choice.endsWith(`/${tuning.model}`))
+    if (qualified !== undefined) return qualified
+  }
+  return modelAliasOf(tuning.model)
 }
 
 /** The exact line typed into the pane. Callers must check tuneValueOk first. */
@@ -300,10 +318,11 @@ export type AskOutcome = 'settled' | 'pending' | 'refused' | 'unrecorded'
 export function askOutcome(
   ask: TuneAsk,
   tuning: AgentTuning | null,
-  records: readonly TuneKnob[] = TUNE_KNOBS
+  records: readonly TuneKnob[] = TUNE_KNOBS,
+  choices?: readonly string[]
 ): AskOutcome {
   if (!records.includes(ask.knob)) return 'unrecorded'
-  const reading = dialReading(ask.knob, tuning)
+  const reading = dialReading(ask.knob, tuning, choices)
   if (reading === ask.value) return 'settled'
   // No record at all, or a record older than the ask: the harness has not had
   // a chance to answer, so "did it take?" has no answer yet either.
@@ -316,12 +335,13 @@ export function liveAsk(
   knob: TuneKnob,
   asks: readonly TuneAsk[],
   tuning: AgentTuning | null,
-  records: readonly TuneKnob[] = TUNE_KNOBS
+  records: readonly TuneKnob[] = TUNE_KNOBS,
+  choices?: readonly string[]
 ): { ask: TuneAsk; outcome: Exclude<AskOutcome, 'settled'> } | null {
   for (let i = asks.length - 1; i >= 0; i -= 1) {
     const ask = asks[i]
     if (ask.knob !== knob) continue
-    const outcome = askOutcome(ask, tuning, records)
+    const outcome = askOutcome(ask, tuning, records, choices)
     return outcome === 'settled' ? null : { ask, outcome }
   }
   return null
@@ -415,6 +435,8 @@ export interface TuningWords {
 export function tuningWords(tuning: AgentTuning | null): TuningWords {
   if (tuning === null) return { model: null, effort: null }
   return {
+    // The tag stays alias-or-verbatim: a provider-qualified ref is the thing
+    // you PICK, not the thing a 46px tile can say.
     model: tuning.model === null ? null : (modelAliasOf(tuning.model) ?? tuning.model),
     effort: tuning.effort === null || tuning.effort.length === 0 ? null : tuning.effort
   }
@@ -475,12 +497,12 @@ function dialView(knob: TuneKnob, state: AgentTuningState): TuneDial {
   const copy = TUNE_COPY[knob]
   const tuning = state.tuning
   const reading = knob === 'model' ? (tuning?.model ?? null) : (tuning?.effort ?? null)
-  const current = dialReading(knob, tuning)
-  const live = liveAsk(knob, state.asks, tuning, state.records)
   // The harness's OWN values when it has them: pi's models come from its
   // catalogs on disk, and offering anything else opens a picker that eats
   // keystrokes (see HarnessTuning.values).
   const values = state.choices?.[knob] ?? tuneValues(knob)
+  const current = dialReading(knob, tuning, values)
+  const live = liveAsk(knob, state.asks, tuning, state.records, values)
   const rows = values.map<TuneRow>((value) => ({
     value,
     state: value === live?.ask.value ? 'asked' : value === current ? 'current' : 'plain',
