@@ -76,6 +76,8 @@ export interface MobileOps {
   }) => CanvasNode;
   forkTerminal: (sourceId: string, turnIndex?: number) => TerminalNodeData;
   listWorkspaces: () => WorkspaceList;
+  /** Each workspace's canvas snapshot, as data URLs (the screen wall). */
+  workspaceShots?: () => Record<string, { src: string; at: number }>;
   createWorkspace: (
     name: string,
     dir: string,
@@ -604,6 +606,19 @@ export async function handleMobileApi(
 
   if (method === "GET" && p === "/api/workspaces") {
     respondJson(response, 200, ops.listWorkspaces());
+    return true;
+  }
+  /**
+   * The screen wall's pictures, for the phone.
+   *
+   * READ-ONLY FROM HERE. The phone does not ask the Mac to photograph itself:
+   * the Mac's window may be showing something else entirely, and a capture
+   * triggered from another device would put whatever is on that screen into a
+   * workspace's snapshot. The phone shows the pictures the Mac has already
+   * taken, and says "no snapshot yet" for the rest — which is the truth.
+   */
+  if (method === "GET" && p === "/api/workspaces/shots") {
+    respondJson(response, 200, ops.workspaceShots ? ops.workspaceShots() : {});
     return true;
   }
   if (method === "POST" && p === "/api/workspaces") {

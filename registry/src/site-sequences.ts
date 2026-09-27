@@ -34,23 +34,23 @@ export const SEQUENCES: Readonly<Record<string, readonly Step[]>> = {
     {
       "file": "seq-canvas-1.jpg",
       "title": "Wide canvas overview",
-      "caption": "Captured a zoomed-out view of the full canvas showing dozens of terminal cards, sticky notes, and browser cards connected by dashed relationship lines.",
+      "caption": "Framed a wide slice of the Cookrew Dev board in the harness view: two rows of agent cards, their notes stacked under them, and the browsers below, with the cables routed as shared trunks along the gutters instead of a line per link.",
       "width": 1400,
-      "height": 878
+      "height": 875
     },
     {
       "file": "seq-canvas-2.jpg",
       "title": "Medium zoom on the canvas",
-      "caption": "Captured a medium-zoom pass over the canvas where the Conductor card, nearby sticky notes, and an open browser card become individually readable.",
+      "caption": "Framed the Conductor row at 0.39 zoom: Fresco, Velvet, Conductor and Solosea with their notes and browsers, the harness trunks running between the columns and a tab on each card naming the partner that sits off-screen.",
       "width": 1400,
-      "height": 878
+      "height": 875
     },
     {
       "file": "seq-canvas-3.jpg",
       "title": "Close zoom on canvas cards",
-      "caption": "Captured a close-in view of the Conductor terminal card, its LIVE checkpoint rail, and adjacent sticky notes and a browser card at full legible size.",
+      "caption": "Wheeled in on the Conductor card until the far-partner tabs read — Marketplace, Forge, Magpie, Fresco and +71 more — while the trunks to the notes above stayed one shared run each.",
       "width": 1400,
-      "height": 878
+      "height": 874
     }
   ],
   "checkpoints": [
@@ -63,8 +63,24 @@ export const SEQUENCES: Readonly<Record<string, readonly Step[]>> = {
     },
     {
       "file": "seq-checkpoints-2.jpg",
+      "title": "Mid-scrub on the rail",
+      "caption": "Pressed and dragged the checkpoint rail's handle upward to fan out the full checkpoint list, landing on checkpoint T7 with its transcript block shown on the left.",
+      "width": 1400,
+      "height": 878
+    },
+    {
+      "file": "seq-checkpoints-3.jpg",
       "title": "Fork control revealed on a row",
       "caption": "Held a press on checkpoint row T13 in the fanned rail list long enough to reveal its ROLE, FORK, and REWIND action buttons without clicking any of them.",
+      "width": 1400,
+      "height": 878
+    }
+  ],
+  "cli": [
+    {
+      "file": "seq-cli-1.jpg",
+      "title": "Ran cookrew list in a Shell card",
+      "caption": "Typed \"cookrew list\" into an existing Shell preset card's live PTY and captured the terminal's response after the command was submitted.",
       "width": 1400,
       "height": 878
     }

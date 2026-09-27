@@ -72,6 +72,8 @@ export function WorkspaceWall({
   const [leaving, setLeaving] = useState<string | null>(null)
   const trackRef = useRef<HTMLDivElement>(null)
   const drag = useRef<{ x: number; pick: number } | null>(null)
+  /** Did the gesture that is ending move? A tap must not be read as a swipe. */
+  const dragged = useRef(false)
 
   const view = useMemo(
     () =>
@@ -165,6 +167,40 @@ export function WorkspaceWall({
   return (
     <div
       className={`cr-wsw${leaving ? ' cr-wsw-leaving' : ''}`}
+      /**
+       * THE DRAG LIVES ON THE ROOT, not on a surface of its own.
+       *
+       * It WAS its own absolutely-positioned layer at `z-index:1`, and that
+       * layer covered every screen: `.cr-wsw-track` carries
+       * `transform-style:preserve-3d`, which establishes a stacking context,
+       * so the screens' z-indexes are LOCAL to it and the track itself sits at
+       * `auto`. One layer at 1 therefore painted over all of them, and tapping
+       * a screen did nothing — on the phone AND on the desktop, where it went
+       * unnoticed because the chip and the keyboard both worked.
+       *
+       * On the root the pointer reaches the screens first and their own
+       * handlers run; a drag is recognised by MOVEMENT instead of by owning a
+       * layer, and a tap that never moved is left alone to become a click.
+       */
+      onPointerDown={(e) => {
+        drag.current = { x: e.clientX, pick }
+      }}
+      onPointerMove={(e) => {
+        const from = drag.current
+        if (!from) return
+        const step = Math.max(90, tier.stepA * 0.7)
+        const moved = Math.round((from.x - e.clientX) / step)
+        if (moved !== 0) dragged.current = true
+        const next = Math.max(0, Math.min(count - 1, from.pick + moved))
+        if (next !== pick) setPick(next)
+      }}
+      onPointerUp={() => {
+        drag.current = null
+        // Cleared after the click that follows this release has had its turn.
+        window.setTimeout(() => {
+          dragged.current = false
+        }, 0)
+      }}
       style={{
         perspective: `${tier.perspective}px`,
         ...(stage
@@ -177,7 +213,12 @@ export function WorkspaceWall({
     >
       {/* Lights down. A cream canvas only reads as a LIT SCREEN in a dark
           room; without this the wall is a stack of paper again. */}
-      <div className="cr-wsw-wash" onClick={onClose} />
+      <div
+        className="cr-wsw-wash"
+        onClick={() => {
+          if (!dragged.current) onClose()
+        }}
+      />
       <div className="cr-wsw-track" ref={trackRef}>
         {view.screens.map((screen) => (
           <div
@@ -195,7 +236,13 @@ export function WorkspaceWall({
               // must not swallow a click meant for the one in front of it.
               pointerEvents: screen.opacity === 0 ? 'none' : 'auto',
             }}
-            onClick={() => (screen.picked ? enter(screen.id) : setPick(view.screens.indexOf(screen)))}
+            onClick={() => {
+              // A swipe ends over some screen; entering it would turn every
+              // pan into a workspace switch.
+              if (dragged.current) return
+              if (screen.picked) enter(screen.id)
+              else setPick(view.screens.indexOf(screen))
+            }}
           >
             <div className="cr-wsw-bezel">
               <div className="cr-wsw-glass">
@@ -231,25 +278,6 @@ export function WorkspaceWall({
       <p className="cr-wsw-hud">
         <kbd>←</kbd> <kbd>→</kbd> PICK · <kbd>ENTER</kbd> OPEN · <kbd>ESC</kbd> CANCEL
       </p>
-      {/* Dragging the wall is the trackpad's way of doing the same thing. */}
-      <div
-        className="cr-wsw-swipe"
-        onPointerDown={(e) => {
-          drag.current = { x: e.clientX, pick }
-          e.currentTarget.setPointerCapture(e.pointerId)
-        }}
-        onPointerMove={(e) => {
-          const from = drag.current
-          if (!from) return
-          const step = Math.max(90, tier.stepA * 0.7)
-          const moved = Math.round((from.x - e.clientX) / step)
-          const next = Math.max(0, Math.min(count - 1, from.pick + moved))
-          if (next !== pick) setPick(next)
-        }}
-        onPointerUp={() => {
-          drag.current = null
-        }}
-      />
     </div>
   )
 }

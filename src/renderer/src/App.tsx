@@ -312,6 +312,20 @@ function Canvas(): React.JSX.Element {
     wallOpenRef.current = wallOpen
   }, [wallOpen])
 
+  /**
+   * Photograph the canvas as it stands. Both doors out of a workspace use it —
+   * the wall and the dropdown — so a picture accumulates however somebody
+   * leaves, not only when they happen to open the wall.
+   */
+  const snapNow = useCallback(async () => {
+    if (wallOpenRef.current) return
+    const stage = stageRef.current?.getBoundingClientRect()
+    if (!stage) return
+    await cookrew()
+      .snapWorkspace({ x: stage.left, y: stage.top, width: stage.width, height: stage.height })
+      .catch(() => false)
+  }, [])
+
   const openWall = useCallback(async () => {
     if (wallOpenRef.current) {
       setWallOpen(false)
@@ -322,11 +336,7 @@ function Canvas(): React.JSX.Element {
     // PHOTOGRAPH THE CANVAS FIRST. Opening the wall is the moment this
     // workspace stops being looked at, and it is still on screen right now —
     // so its own screen in the wall is current rather than a memory.
-    if (stage) {
-      await cookrew()
-        .snapWorkspace({ x: stage.left, y: stage.top, width: stage.width, height: stage.height })
-        .catch(() => false)
-    }
+    await snapNow()
     const [list, shots] = await Promise.all([
       cookrew().listWorkspaces().catch(() => null),
       cookrew().workspaceShots().catch(() => ({}))
@@ -337,7 +347,7 @@ function Canvas(): React.JSX.Element {
     }
     setWallShots(shots)
     setWallOpen(true)
-  }, [])
+  }, [snapNow])
   /**
    * A workspace switch replaces every node while the viewport still frames the
    * OUTGOING canvas — so the incoming workspace opens somewhere off in empty
@@ -1514,6 +1524,7 @@ function Canvas(): React.JSX.Element {
           onViewChange={setView}
           onActivity={() => setMetricsOpen(true)}
           onWall={() => void openWall()}
+          onBeforeSwitch={snapNow}
           onResync={resync}
           avatar={account.avatar}
         />

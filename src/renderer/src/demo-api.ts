@@ -91,6 +91,9 @@ const DEMO_RESPONSES: Record<string, string> = {
   about: 'Cookrew — open-source spatial workspace for AI agents. Electron + React Flow + xterm.js + node-pty.\r\nThis browser demo simulates the shell; the desktop app runs real PTYs.'
 }
 
+/** Connections minted so far — the tie-breaker that keeps demo ids unique within a millisecond. */
+let demoConnections = 0
+
 export function createDemoApi(): CookrewApi {
   // In-memory workspace registry so the demo can switch canvases too.
   const metas: WorkspaceMeta[] = [
@@ -225,7 +228,11 @@ export function createDemoApi(): CookrewApi {
       return Promise.resolve()
     },
     connectNodes: (a, b) => {
-      const conn: Connection = { id: `demo-${Date.now()}`, a, b }
+      // A clock alone is not an id: a fixture that seeds a board wires hundreds
+      // of cables inside one millisecond, and duplicate ids collide in every
+      // consumer keyed on them — React keys included, which made a harness
+      // layer grow on each re-render (harness-preview, 2026-09-27).
+      const conn: Connection = { id: `demo-${Date.now()}-${++demoConnections}`, a, b }
       broadcast({ ...state, connections: [...state.connections, conn] })
       return Promise.resolve(conn)
     },
