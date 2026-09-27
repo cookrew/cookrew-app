@@ -21,16 +21,33 @@ import type { TerminalNodeData } from '../shared/model'
 import { harnessFor, type HarnessWatchOptions } from './harness'
 
 /**
- * How much of the tail to read, in two steps.
+ * How far back a COLD read looks, in escalating steps.
  *
- * The dials live on the LAST record that carries them, so a session file of
- * tens of megabytes would otherwise be a multi-megabyte parse to learn two
- * words. 32 KB reaches back past a few ordinary turns and is what nearly every
- * card costs; 256 KB is the retry for a turn whose tool transcript is long.
- * Missing at 256 KB reads as "nothing recorded", which is the honest answer
- * and not a wrong one.
+ * The default suits a harness that stamps every reply: the dials are on the
+ * last record, 32 KB reaches past a few ordinary turns, and 256 KB is the
+ * retry for a turn with a long tool transcript.
+ *
+ * It does NOT suit a harness that stamps once per TURN. Codex writes its
+ * `turn_context` when a turn STARTS, so the distance from EOF is the whole
+ * turn's output — measured on this fleet, three live codex agents had their
+ * last one 452 KB, 941 KB and 3.0 MB back in rollouts of 10-64 MB, and all
+ * three showed no tag at all. So a harness may declare its own steps
+ * (HarnessTuning.tailSteps) and codex declares much larger ones.
+ *
+ * The escalation is only ever paid ONCE per file: after a cold read the cache
+ * below follows the file forward by its appended bytes alone.
  */
 const TAIL_STEPS = [32 * 1024, 256 * 1024] as const
+
+/**
+ * How far back a WARM read looks past the last byte it already scanned.
+ *
+ * A record can straddle the boundary between what was read and what was
+ * appended since, so the window starts slightly before the old end. One record
+ * is far smaller than this; the overlap is cheap insurance against splitting
+ * the very record we are looking for.
+ */
+const APPEND_OVERLAP = 64 * 1024
 
 /** Dial turns remembered per terminal — enough to cover both knobs, twice. */
 const ASKS_KEPT = 4
@@ -93,29 +110,54 @@ export function readTuning(
 }
 
 function scanTail(file: string, tuning: HarnessTuning): AgentTuning | null {
-  for (const step of TAIL_STEPS) {
+  for (const step of tuning.tailSteps ?? TAIL_STEPS) {
     const { lines, from } = tailLines(file, step)
-    // Newest first: the dials are whatever the most recent record says, and a
-    // forward scan would hand back the settings the session STARTED on.
-    for (let i = lines.length - 1; i >= 0; i -= 1) {
-      const line = lines[i]
-      if (line.length === 0) continue
-      let record: unknown
-      try {
-        record = JSON.parse(line)
-      } catch {
-        // A torn final line (the harness is mid-append) or the partial first
-        // line of the window. Neither is an error; the next line back is fine.
-        continue
-      }
-      const found = tuning.read(record)
-      if (found !== null) return found
-    }
+    const found = newestIn(lines, tuning)
+    if (found !== null) return found
     // The window already reached byte 0 — a larger step would read the same
     // bytes again and find the same nothing.
     if (from === 0) break
   }
   return null
+}
+
+/** The newest dial-bearing record in these lines, scanning backwards. */
+function newestIn(lines: readonly string[], tuning: HarnessTuning): AgentTuning | null {
+  // Newest first: the dials are whatever the most recent record says, and a
+  // forward scan would hand back the settings the session STARTED on.
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i]
+    if (line.length === 0) continue
+    let record: unknown
+    try {
+      record = JSON.parse(line)
+    } catch {
+      // A torn final line (the harness is mid-append) or the partial first
+      // line of the window. Neither is an error; the next line back is fine.
+      continue
+    }
+    const found = tuning.read(record)
+    if (found !== null) return found
+  }
+  return null
+}
+
+/** The newest record carrying dials in [from, EOF), or null if there is none. */
+function scanWindow(file: string, tuning: HarnessTuning, from: number): AgentTuning | null {
+  let fd: number | null = null
+  try {
+    const size = statSync(file).size
+    if (size <= from) return null
+    const buffer = Buffer.allocUnsafe(size - from)
+    fd = openSync(file, 'r')
+    const read = readSync(fd, buffer, 0, size - from, from)
+    const lines = buffer.subarray(0, read).toString('utf8').split('\n')
+    return newestIn(from > 0 ? lines.slice(1) : lines, tuning)
+  } catch {
+    return null
+  } finally {
+    if (fd !== null) closeSync(fd)
+  }
 }
 
 /** The last `window` bytes of a file as lines, minus the partial one in front. */
@@ -179,7 +221,22 @@ export class TuningCache {
     ) {
       return prior.tuning
     }
-    const tuning = scanTail(file, harness.tuning)
+    // THE FILE ONLY GROWS, SO FOLLOW IT FORWARD.
+    //
+    // A session file that has grown can only have gained records at the end,
+    // so a warm read scans the APPENDED bytes and nothing else. That is what
+    // keeps an active agent cheap: without it, a codex card mid-turn would
+    // re-escalate through megabytes on every single append.
+    //
+    // Finding nothing in the new bytes is NOT "unknown" — it means no new
+    // stamp has been written, so the reading we already have is still what the
+    // agent is running on. Only a NEWER record replaces it. (Same reasoning
+    // the harness registry's own rollout notes give for a byte-offset cursor.)
+    const grew = prior !== undefined && prior.file === file && stamp.size >= prior.size
+    const tuning = grew
+      ? (scanWindow(file, harness.tuning, Math.max(0, prior.size - APPEND_OVERLAP)) ??
+        prior.tuning)
+      : scanTail(file, harness.tuning)
     this.held.set(subject.id, { file, ...stamp, tuning })
     return tuning
   }

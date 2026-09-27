@@ -26,6 +26,19 @@ export const codexTuning: HarnessTuning = {
   knobs: [],
   line: () => null,
 
+  /**
+   * MUCH larger windows than the default, because `turn_context` is written
+   * once per TURN rather than once per reply: the distance back from the end
+   * of the file is the whole turn's output, not one record. Measured on this
+   * fleet, three live codex agents had their last one 452 KB, 941 KB and
+   * 3.0 MB back in rollouts of 10-64 MB — every one of them outside the
+   * default 256 KB, so every one of them showed no tag at all.
+   *
+   * The cost is paid at most once per file: after a cold read the cache
+   * follows the file forward by its appended bytes alone.
+   */
+  tailSteps: [128 * 1024, 2 * 1024 * 1024, 16 * 1024 * 1024],
+
   read: (record) => {
     if (typeof record !== 'object' || record === null) return null
     const entry = record as CodexRecord
