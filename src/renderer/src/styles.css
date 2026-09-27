@@ -6605,3 +6605,43 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   border-color: var(--amber-deep);
   border-width: 2.5px;
 }
+
+/* ---- lanes (LanePane.tsx, TerminalNode LaneChip) ----
+   A worktree per agent and landing as a product action. The chip says the
+   git situation the card is in without asking git; the pane is the menu page. */
+.vi-chip.cr-lane-chip { background: #2a2620; color: #cfc7b4; border-color: #4a4436 }
+.vi-chip.cr-lane-chip.warn { background: #4a3a10; color: var(--amber); border-color: var(--amber-deep) }
+.vi-chip.cr-lane-chip.bad { background: #4a1a12; color: #ffb0a0; border-color: #b04a36 }
+.cr-lane-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink);
+}
+.cr-lane-branch { font-weight: 700 }
+.cr-lane-arrow { color: var(--muted) }
+.cr-lane-fact {
+  padding: 1px 6px;
+  border: 1.5px solid var(--line-soft);
+  border-radius: 3px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.cr-lane-fact.warn { border-color: var(--amber-deep); color: var(--ink) }
+.cr-lane-fact.bad { border-color: #b04a36; color: #8a2a1a }
+.cr-lane-actions { display: flex; flex-wrap: wrap; gap: 6px }
+.cr-lane-auto { font-family: var(--font-mono); font-size: 11px; display: flex; align-items: center; gap: 6px }
+.cr-lane-answer {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  padding: 6px 8px;
+  border-radius: 3px;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream);
+}
+.cr-lane-answer.ok { border-color: #6bbe58 }
+.cr-lane-answer.bad { border-color: #b04a36 }

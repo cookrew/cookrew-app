@@ -5,7 +5,9 @@ import type { CompanionAccount } from '../../main/companion-account'
 import type { AccountStatus } from '../../shared/account-v2'
 import type { AgentTuning, AgentTuningState } from '../../shared/agent-tuning'
 import type { BoardSnapshotLike, CookrewApi } from './api'
-import type { CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
+import type {
+  LaneInfo,
+  LandResult, CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
 import type { UiCommandEvent } from '../../shared/sous-ui'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 import type { VersionPinRecord } from '../../shared/version-pin'
@@ -359,6 +361,12 @@ export function createRemoteApi(): CookrewApi {
     // No native picker on the phone — the UI collects a path via text input.
     pickDir: () => Promise.resolve(null),
     gitInfo: (dir) => req<GitInfo>(apiPath(`/api/git?dir=${encodeURIComponent(dir)}`), 'GET'),
+    // Lanes: LAND from the phone is the desktop's own operation over HTTP.
+    laneList: (dir) => req<LaneInfo[]>(apiPath(`/api/lanes?dir=${encodeURIComponent(dir)}`), 'GET'),
+    laneOpen: (nodeId, name) => req<CanvasNode>(apiPath('/api/lanes/open'), 'POST', { nodeId, name }),
+    laneLand: (nodeId, opts) => req<LandResult>(apiPath('/api/lanes/land'), 'POST', { nodeId, ...(opts ?? {}) }),
+    laneClose: (nodeId, force) => req<CanvasNode>(apiPath('/api/lanes/close'), 'POST', { nodeId, force: force ?? false }),
+    laneAuto: (nodeId, on) => req<CanvasNode>(apiPath('/api/lanes/auto'), 'POST', { nodeId, on }),
     onWorkspaceList: (cb) => subscribe<WorkspaceList>('workspaces', cb),
 
     addNode: (node) => req(apiPath('/api/nodes'), 'POST', node),
