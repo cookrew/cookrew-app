@@ -67,6 +67,14 @@ function commit(dir: string, file: string, text: string, msg = `edit ${file}`): 
   sh(dir, ['commit', '-m', msg])
 }
 
+/** A package.json in a lane, with only what the gate reads: scripts. */
+function scripts(lane: string, entries: Record<string, string> | null): void {
+  const file = path.join(lane, 'package.json')
+  writeFileSync(file, entries === null ? '{ "name": "r", "version": "0.0.0" }\n' : JSON.stringify({ name: 'r', version: '0.0.0', scripts: entries }))
+  sh(lane, ['add', 'package.json'])
+  sh(lane, ['commit', '-m', 'scripts'])
+}
+
 const ignore = (laneDir: string): void => {
   mkdirSync(laneDir, { recursive: true })
   writeFileSync(path.join(laneDir, '.gitignore'), '*\n')
@@ -222,6 +230,63 @@ describe('landing', () => {
     expect(sh(repo, ['log', '--oneline']).split('\n')).toHaveLength(1)
     const passed = await landLane(git, { lanePath: lane, gate: ['sh', '-c', 'exit 0'] })
     expect(passed.ok).toBe(true)
+  })
+
+  /**
+   * THE GATE IS THE REPO'S, NOT THE CALLER'S. No caller of LAND passed a
+   * gate, so an agent whose commit did not even typecheck landed on the
+   * shared tree the running app serves from. The default is decided here:
+   * an explicit gate wins; else the repo's own `gate:lane` script; else its
+   * `typecheck`; else none — and the answer says which one ran, so the card
+   * can. A test suite is never a default gate: it is minutes, and a landing
+   * is a press.
+   */
+  it('runs the repo’s typecheck by default, and says so — a commit that does not typecheck never lands', async () => {
+    const repo = initRepo()
+    const lane = await cut(repo)
+    scripts(lane, { typecheck: 'echo tsc: 2 errors; exit 1' })
+    const failed = await landLane(git, { lanePath: lane })
+    expect(failed).toMatchObject({ ok: false, reason: 'gate', gate: 'npm run typecheck' })
+    expect(failed.ok === false && failed.detail).toContain('tsc: 2 errors')
+    expect(sh(repo, ['log', '--oneline']).split('\n')).toHaveLength(1)
+    scripts(lane, { typecheck: 'exit 0' })
+    const passed = await landLane(git, { lanePath: lane })
+    expect(passed).toMatchObject({ ok: true, gate: 'npm run typecheck' })
+  })
+
+  it('prefers the repo’s own gate:lane over typecheck', async () => {
+    const repo = initRepo()
+    const lane = await cut(repo)
+    // typecheck would fail; gate:lane is what the repo asked for.
+    scripts(lane, { 'gate:lane': 'exit 0', typecheck: 'exit 1' })
+    expect(await landLane(git, { lanePath: lane })).toMatchObject({ ok: true, gate: 'npm run gate:lane' })
+  })
+
+  it('runs no gate when the repo offers neither, and says none ran', async () => {
+    const repo = initRepo()
+    const lane = await cut(repo)
+    scripts(lane, null)
+    expect(await landLane(git, { lanePath: lane })).toMatchObject({ ok: true, gate: null })
+    // A test suite is never picked up as a gate.
+    const other = initRepo()
+    const second = await cut(other)
+    scripts(second, { test: 'exit 1', build: 'exit 1' })
+    expect(await landLane(git, { lanePath: second })).toMatchObject({ ok: true, gate: null })
+  })
+
+  it('lets an explicit gate override the repo’s, and reports the one that ran', async () => {
+    const repo = initRepo()
+    const lane = await cut(repo)
+    scripts(lane, { 'gate:lane': 'exit 1', typecheck: 'exit 1' })
+    const result = await landLane(git, { lanePath: lane, gate: ['sh', '-c', 'exit 0'] })
+    expect(result).toMatchObject({ ok: true, gate: 'sh -c exit 0' })
+  })
+
+  it('reports no gate on a repo with no package.json at all', async () => {
+    const repo = initRepo()
+    const lane = await cut(repo)
+    commit(lane, 'a.txt', 'a')
+    expect(await landLane(git, { lanePath: lane })).toMatchObject({ ok: true, gate: null })
   })
 
   it('has nothing to land when the lane is not ahead', async () => {

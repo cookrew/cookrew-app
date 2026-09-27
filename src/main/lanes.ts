@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileSlug } from '../shared/slug'
 import type { LaneInfo, LandResult } from '../shared/model'
@@ -42,6 +43,14 @@ import type { LaneInfo, LandResult } from '../shared/model'
  *   4. NOTHING IS SILENT. A lane that is ahead of base is unlanded work and
  *      says so on its card; a conflict or a failed gate is a state the card
  *      shows, not a line in a log.
+ *
+ *   5. THE GATE IS THE REPO'S, NOT THE CALLER'S. No caller of LAND ever
+ *      passed one, so an agent whose commit did not even typecheck landed on
+ *      the shared tree the running app serves from. The default is decided
+ *      here, from the lane's own package.json: an explicit gate wins; else
+ *      the repo's `gate:lane` script; else its `typecheck`; else none. The
+ *      answer names the one that ran. A test suite is never a default gate —
+ *      it is minutes under load, and a landing is a press.
  *
  * Every git call is an ARG ARRAY through the injected runner — no shell, so
  * a branch name or path is never interpreted. The runner is injected so the
@@ -177,10 +186,50 @@ export async function openLane(
 export interface LandOptions {
   /** The lane's worktree. */
   lanePath: string
-  /** A command to pass in the lane before the shared tree moves (e.g. ['npm','run','typecheck']). */
+  /**
+   * An explicit gate, which overrides the repo's own (rule 5). Null or
+   * absent means "the repo decides" — it does NOT mean no gate.
+   */
   gate?: string[] | null
   /** Remove the worktree and its branch after a successful landing. */
   close?: boolean
+}
+
+/** The scripts a repo's own gate may be, in the order they win. */
+const REPO_GATE_SCRIPTS = ['gate:lane', 'typecheck'] as const
+
+/**
+ * The repo's own gate, from its package.json scripts: `gate:lane` if it has
+ * one, else `typecheck`, else none. Pure over the scripts it is handed.
+ * Deliberately never `test` — a suite is not a landing gate.
+ */
+export function repoGate(scripts: Readonly<Record<string, unknown>> | null): string[] | null {
+  if (scripts === null) return null
+  const name = REPO_GATE_SCRIPTS.find((script) => typeof scripts[script] === 'string')
+  return name === undefined ? null : ['npm', 'run', name]
+}
+
+/** The scripts of the package.json in `dir`, or null when there is no readable one. */
+async function packageScripts(dir: string): Promise<Record<string, unknown> | null> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(path.join(dir, 'package.json'), 'utf8'))
+    if (!parsed || typeof parsed !== 'object') return null
+    const scripts = (parsed as { scripts?: unknown }).scripts
+    return scripts && typeof scripts === 'object' ? (scripts as Record<string, unknown>) : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Which gate stands between this lane and the shared tree: the explicit one
+ * when given, else the repo's own. Read from the LANE's package.json — the
+ * lane is what is about to land, and its scripts are the ones that will be
+ * true of the shared tree afterwards.
+ */
+async function gateFor(opts: LandOptions): Promise<string[] | null> {
+  if (opts.gate && opts.gate.length > 0) return opts.gate
+  return repoGate(await packageScripts(opts.lanePath))
 }
 
 /**
@@ -230,11 +279,15 @@ export async function landLane(git: LaneGit, opts: LandOptions): Promise<LandRes
     return { ok: false, reason: 'conflict', files: [], detail: 'merge failed without conflict markers' }
   }
 
-  if (opts.gate && opts.gate.length > 0) {
-    const [command, ...args] = opts.gate
+  // The gate, in the lane, after base is in it — so what is checked is what
+  // would land. Decided here, never left to the caller (rule 5).
+  const gate = await gateFor(opts)
+  const gateName = gate === null ? null : gate.join(' ')
+  if (gate !== null) {
+    const [command, ...args] = gate
     const result = await git.exec(opts.lanePath, command, args)
     if (result.code !== 0) {
-      return { ok: false, reason: 'gate', detail: result.output.split('\n').slice(-20).join('\n') }
+      return { ok: false, reason: 'gate', gate: gateName, detail: result.output.split('\n').slice(-20).join('\n') }
     }
   }
 
@@ -248,7 +301,7 @@ export async function landLane(git: LaneGit, opts: LandOptions): Promise<LandRes
   const landed = await git.run(repo.main, ['rev-parse', '--short', 'HEAD']).catch(() => '')
   let closed = false
   if (opts.close) closed = (await closeLane(git, opts.lanePath)).ok
-  return { ok: true, landed, commits: before.ahead, closed }
+  return { ok: true, landed, commits: before.ahead, closed, gate: gateName }
 }
 
 /**

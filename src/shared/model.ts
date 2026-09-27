@@ -242,14 +242,23 @@ export interface LaneInfo {
 /** A landing's answer, stamped, as a card keeps it. */
 export type LaneOutcome = LandResult & { at: number; auto: boolean }
 
-/** What LAND answered. Every refusal is a reason a card can show. */
+/**
+ * What LAND answered. Every refusal is a reason a card can show.
+ *
+ * `gate` is the command that stood between the lane and the shared tree —
+ * `npm run typecheck`, the repo's own `gate:lane`, an explicit one — or null
+ * when none did. Present on a landing and on a gate refusal, so the card says
+ * WHAT was passed or failed rather than that something was; absent on the
+ * refusals that stop before any gate runs.
+ */
 export type LandResult =
-  | { ok: true; landed: string; commits: number; closed: boolean }
+  | { ok: true; landed: string; commits: number; closed: boolean; gate?: string | null }
   | {
       ok: false
       reason: 'not-a-lane' | 'dirty' | 'conflict' | 'main-branch' | 'main-dirty' | 'gate' | 'nothing'
       detail?: string
       files?: string[]
+      gate?: string | null
     }
 
 export interface GitInfo {

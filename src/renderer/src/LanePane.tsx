@@ -139,7 +139,11 @@ export function LanePane({ terminal, onDone }: { terminal: TerminalNodeData; onD
 
 /** A landing's answer, in the words lanes.ts chose. */
 export function landWords(answer: LandResult): string {
-  if (answer.ok) return `Landed ${answer.commits} commit${answer.commits === 1 ? '' : 's'} → ${answer.landed}${answer.closed ? ', lane closed' : ''}`
+  // The gate is named when the answer carries the field at all: a landing
+  // that ran one says which, one that ran none says so, and an older answer
+  // stored before the field existed says nothing about it.
+  const gate = answer.gate === undefined ? '' : answer.gate === null ? ' · no gate' : ` · gate: ${answer.gate}`
+  if (answer.ok) return `Landed ${answer.commits} commit${answer.commits === 1 ? '' : 's'} → ${answer.landed}${answer.closed ? ', lane closed' : ''}${gate}`
   switch (answer.reason) {
     case 'dirty':
       return `Uncommitted changes in the lane — the agent's part is to commit${answer.files?.length ? `: ${answer.files.join(', ')}` : ''}`
@@ -150,7 +154,7 @@ export function landWords(answer: LandResult): string {
     case 'main-branch':
       return `The shared tree is not on the base branch${answer.detail ? ` (${answer.detail})` : ''}`
     case 'gate':
-      return `The gate failed in the lane${answer.detail ? `:\n${answer.detail}` : ''}`
+      return `The gate failed in the lane${answer.gate ? ` (${answer.gate})` : ''}${answer.detail ? `:\n${answer.detail}` : ''}`
     case 'nothing':
       return 'Nothing to land — the lane has no commits base does not'
     default:
