@@ -3710,8 +3710,14 @@ function retireTerminal(id: string, why: string): void {
  */
 function tuneDeps(): TuneDeps {
   return {
+    // ACROSS WORKSPACES, not just the focused one. store.node() searches only
+    // what the desktop is currently looking at, and the phone can be scoped to
+    // a different workspace entirely — a card there would have answered "no
+    // such terminal" and drawn a blank rail. The fleet readout already spans
+    // every workspace (it is built from the durable registry), so the per-card
+    // route has to reach as far or the two disagree about the same card.
     node: (id) => {
-      const node = store.node(id)
+      const node = store.nodeAcrossWorkspaces(id)?.node
       return node?.kind === 'terminal' ? node : null
     },
     write: (id, data) => ptys.get(id)?.write(data),
