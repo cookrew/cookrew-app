@@ -19,6 +19,8 @@ interface HeaderProps {
   onViewChange: (view: MainView) => void
   /** Opens the activity metrics / history panel (workspace popout item). */
   onActivity: () => void
+  /** Opens the screen wall (WorkspaceWall.tsx). */
+  onWall?: () => void
   /** Re-pull the canvas and re-establish the push channel (the brand mark). */
   onResync: () => void
   /**
@@ -73,6 +75,7 @@ export function Header({
   view,
   onViewChange,
   onActivity,
+  onWall,
   onResync,
   avatar
 }: HeaderProps): React.JSX.Element {
@@ -153,7 +156,12 @@ export function Header({
         </span>
       </div>
 
-      <WorkspaceSwitcher fallbackName={workspaceName} fallbackDir={dir} onActivity={onActivity} />
+      <WorkspaceSwitcher
+        fallbackName={workspaceName}
+        fallbackDir={dir}
+        onActivity={onActivity}
+        onWall={onWall}
+      />
     </header>
   )
 }

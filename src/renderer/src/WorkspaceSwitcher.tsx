@@ -24,6 +24,13 @@ interface WorkspaceSwitcherProps {
    * header button of its own.
    */
   onActivity?: () => void
+  /**
+   * Opens the screen wall. Optional because the switcher is also rendered by
+   * surfaces that have no canvas to photograph (and no stage to hand back
+   * to); without it the name falls back to opening the list, which is what it
+   * always did.
+   */
+  onWall?: () => void
 }
 
 /**
@@ -35,7 +42,8 @@ interface WorkspaceSwitcherProps {
 export function WorkspaceSwitcher({
   fallbackName,
   fallbackDir,
-  onActivity
+  onActivity,
+  onWall
 }: WorkspaceSwitcherProps): React.JSX.Element {
   const [list, setList] = useState<WorkspaceList | null>(null)
   const [open, setOpen] = useState(false)
@@ -141,9 +149,27 @@ export function WorkspaceSwitcher({
 
   return (
     <div className="cr-ws" ref={rootRef}>
-      <button className="cr-ws-current" onClick={() => setOpen((v) => !v)} title={dir}>
+      {/* TWO DOORS, AND THE PICTURE IS THE PRIMARY ONE.
+          The name opens the SCREEN WALL — switching is choosing a canvas, and
+          people recognise the canvas, not the name. The caret keeps the list,
+          because the list is also where a workspace is made, renamed, given
+          another directory or removed, and none of that belongs on a wall of
+          pictures. */}
+      <button
+        className="cr-ws-current"
+        onClick={() => (onWall ? onWall() : setOpen((v) => !v))}
+        title={dir}
+      >
         <span className="cr-ws-icon">{icon}</span>
         <span className="cr-kicker cr-ws-name">{name}</span>
+      </button>
+      <button
+        className="cr-ws-caret-btn"
+        onClick={() => setOpen((v) => !v)}
+        title="Workspaces, and what you can do to them"
+        aria-label="Workspace menu"
+        aria-expanded={open}
+      >
         <span className="cr-ws-caret">
           <CrIcon name={open ? 'caret-down' : 'caret-right'} />
         </span>

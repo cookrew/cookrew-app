@@ -3598,6 +3598,22 @@ a.card-close {
   font-size: 8px;
   color: var(--muted);
 }
+/* The caret is its own button now: the NAME opens the screen wall, the caret
+   opens the list. Same chip to look at, two destinations — so it wears the
+   name's border on its left edge only, and never reads as a gap. */
+.cr-ws-caret-btn {
+  display: flex;
+  align-items: center;
+  background: var(--cream-md);
+  border: 1.5px solid var(--line);
+  border-left: none;
+  border-radius: 0 3px 3px 0;
+  margin-left: -10px;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+.cr-ws-caret-btn:hover { background: var(--amber-soft) }
+.cr-ws-current { border-radius: 3px 0 0 3px }
 .cr-ws-name {
   max-width: 200px;
   white-space: nowrap;

@@ -290,6 +290,10 @@ export interface CookrewApi {
     { ok: true; phase: ServePhase } | { ok: false; reason: string; detail?: string }
   >;
   switchWorkspace: (id: string) => Promise<WorkspaceList>;
+  /** Photograph the canvas as it is now (the screen wall). */
+  snapWorkspace: (rect: { x: number; y: number; width: number; height: number }) => Promise<boolean>;
+  /** Every workspace's picture, as data URLs, read on demand. */
+  workspaceShots: () => Promise<Record<string, { src: string; at: number }>>;
   renameWorkspace: (id: string, name: string) => Promise<WorkspaceList>;
   /** Workspace v2: remove workspace, multi-directory, per-terminal cwd, git. */
   removeWorkspace: (id: string) => Promise<WorkspaceList>;
