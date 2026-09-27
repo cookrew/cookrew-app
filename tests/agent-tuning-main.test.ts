@@ -23,7 +23,8 @@ import {
 import { claudeProjectDir } from '../src/main/claude-fork'
 import { claudeTuning } from '../src/main/claude-tuning'
 import { codexTuning } from '../src/main/codex-tuning'
-import type { HarnessTuning } from '../src/shared/agent-tuning'
+import { piTuning } from '../src/main/pi-tuning'
+import { tuningTag, type HarnessTuning } from '../src/shared/agent-tuning'
 import type { TerminalNodeData } from '../src/shared/model'
 
 const SESSION = '11111111-2222-4333-8444-555555555555'
@@ -138,6 +139,44 @@ describe('codex writes its dials at the START of every turn', () => {
     // would do nothing.
     expect(codexTuning.knobs).toEqual([])
     expect(codexTuning.line('model', 'opus')).toBeNull()
+  })
+})
+
+describe('pi records a model and no effort, and says exactly that', () => {
+  it('reads the model off an assistant message', () => {
+    // Verified against a real ~/.cookrew/pi-sessions file.
+    const record = {
+      type: 'message',
+      timestamp: '2026-08-12T17:21:12.314Z',
+      message: { role: 'assistant', model: 'k3', provider: 'ifunk', timestamp: 1786555263682 }
+    }
+    expect(piTuning.read(record)).toEqual({
+      model: 'k3',
+      effort: null,
+      at: Date.parse('2026-08-12T17:21:12.314Z')
+    })
+  })
+
+  it('reports NO effort rather than inventing one', () => {
+    // Every surface already draws whichever half it has, so a pi card wears
+    // its model alone instead of a made-up level or nothing at all.
+    const tuning = piTuning.read({
+      type: 'message',
+      timestamp: '2026-08-12T17:21:12.314Z',
+      message: { role: 'assistant', model: 'k3' }
+    })
+    expect(tuning?.effort).toBeNull()
+    expect(tuningTag(tuning ?? null)).toBe('k3')
+  })
+
+  it('takes nothing from a user message or a non-message record', () => {
+    expect(piTuning.read({ type: 'message', message: { role: 'user', model: 'k3' } })).toBeNull()
+    expect(piTuning.read({ type: 'session', message: { role: 'assistant', model: 'k3' } })).toBeNull()
+  })
+
+  it('offers no button, because pi has no one-line model command', () => {
+    expect(piTuning.knobs).toEqual([])
+    expect(piTuning.line('model', 'opus')).toBeNull()
   })
 })
 
