@@ -168,7 +168,7 @@ answer the same, so the directory cannot be used to enumerate what is here.</p><
   const tags = door.tags ?? []
   const rails =
     door.access === 'paid' && door.rails.length > 0
-      ? `<ul class="rails">${door.rails.map((rail) => `<li>${rail === 'x402' ? 'USDC · wallet' : 'card'}</li>`).join('')}</ul>`
+      ? `<p class="row" style="margin:8px 0 0">${door.rails.map((rail) => `<span class="chip">${rail === 'x402' ? 'USDC · wallet' : 'card'}</span>`).join('')}</p>`
       : ''
   const relayed = door.transport === 'relay' && typeof door.sealKey === 'string'
   // WHO IS READING, decided once. The seat bar, the line's chip, the strip and
@@ -183,6 +183,18 @@ answer the same, so the directory cannot be used to enumerate what is here.</p><
     relayed,
     price: door.priceUsd ?? ''
   })
+  // THE GATE CARD IS A STATUS, NOT A SECOND DOOR. The seat bar above the line
+  // is the one place that offers buy / ask / sign in / open; the card inside
+  // the terminal says where the line stands and keeps the line's own entry
+  // (`btn-open`, which line.js and the bar's buttons press) out of sight, so
+  // the page never shows two buttons for one act. line.js still swaps real
+  // buttons into `gate-actions` for the states only it can know (retry, pay).
+  const gateText = line.phase === 'NO SEAT' ? `A seat first — buy one above, or ask @${door.handle}.` : line.gate.text
+  const seatLine = door.access === 'paid' && door.priceUsd ? `${esc(door.priceUsd)} USD · a seat, once` : 'free · account needed'
+  const about =
+    door.access === 'paid'
+      ? `<p class="meta">A seat is charged once, at the door, and follows you to any device you sign in on — never per question, and an open session is never interrupted for money.</p>${rails}<p class="meta" style="margin-top:10px">Money goes from you to the author directly; cookrew.dev holds none of it.</p>`
+      : `<p class="meta">Free to open — you still sign in, because the author lends their machine to accounts rather than to anyone who finds the address.</p>`
 
   return page(
     {
@@ -202,16 +214,14 @@ answer the same, so the directory cannot be used to enumerate what is here.</p><
         teamProduct(door, input.stars)
       ]
     },
-    `<div class="wrap" style="padding-top:36px" id="team" data-door="${esc(name)}" data-seal-key="${esc(door.sealKey ?? '')}" data-live="${off ? '0' : '1'}" data-access="${esc(door.access)}" data-price="${esc(door.priceUsd ?? '')}" data-orch="${esc(door.door)}" data-relayed="${relayed ? '1' : '0'}">
-<p class="meta"><a href="/market">Marketplace</a> / <a href="/${esc(door.handle)}">@${esc(door.handle)}</a> / ${esc(door.name)}</p>
+    `<div class="wrap" style="padding-top:30px" id="team" data-door="${esc(name)}" data-seal-key="${esc(door.sealKey ?? '')}" data-live="${off ? '0' : '1'}" data-access="${esc(door.access)}" data-price="${esc(door.priceUsd ?? '')}" data-orch="${esc(door.door)}" data-relayed="${relayed ? '1' : '0'}">
 <div class="tp-head">
-<div><h1 style="margin-bottom:8px">${esc(door.title)}</h1>
-<p class="lede" style="margin-bottom:12px"><b>${esc(door.door)}</b> answers, on behalf of ${door.agents} agent${door.agents === 1 ? '' : 's'} standing behind it.${door.summary ? ` ${esc(door.summary)}` : ''}</p>
+<div><p class="meta" style="margin:0 0 6px"><a href="/market">Marketplace</a> / <a href="/${esc(door.handle)}">@${esc(door.handle)}</a></p>
+<h1 style="margin-bottom:6px">${esc(door.title)}</h1>
+<p class="lede" style="margin-bottom:10px"><b>${esc(door.door)}</b> answers for ${door.agents} agent${door.agents === 1 ? '' : 's'}.${door.summary ? ` ${esc(door.summary)}` : ''}</p>
 <div class="row"><span class="led${off ? ' off' : ''}" id="led"></span><span id="livetxt" class="meta">${off ? 'Not taking calls right now — the address stays valid' : 'taking calls'}</span><span class="chip">${esc(door.transport)}</span>${harnesses.map((h) => `<span class="chip">${esc(h)}</span>`).join('')}${tags.map((t) => `<span class="chip violet">${esc(t)}</span>`).join('')}</div></div>
-<div class="row" style="flex-direction:column;align-items:flex-end;gap:10px">
-<div class="row"><button class="star${input.starred ? ' on' : ''}" id="star" data-star="${esc(door.handle)}/${esc(door.name)}" title="one star per account">★ <span>${input.stars}</span></button><a class="btn primary lg" id="open" href="#open" data-open="cookrew://import/${esc(name)}">Open in Cookrew</a></div>
-<div class="addr" style="width:min(420px,88vw)"><span id="addr">${esc(address)}</span><button class="btn sm" data-copy="${esc(address)}">copy</button></div>
-</div></div>
+<div class="tp-actions"><button class="star${input.starred ? ' on' : ''}" id="star" data-star="${esc(door.handle)}/${esc(door.name)}" title="one star per account">★ <span>${input.stars}</span></button><a class="btn primary lg" id="open" href="#open" data-open="cookrew://import/${esc(name)}">Open in Cookrew</a></div>
+</div>
 
 ${seatBar(input, door, name, standing)}
 <div class="tp">
@@ -219,38 +229,31 @@ ${seatBar(input, door, name, standing)}
 <p class="kicker"><span class="no">LINE</span>this team’s own terminal, bound to cookrew.dev</p>
 <div class="overlay" id="overlay">
 <div class="bar"><span class="led${off ? ' off' : ''}" id="bar-led"></span><span class="name">${esc(door.door)}</span><span class="chip violet">ORCH · THE DOOR</span><span class="chip" id="phase">${esc(line.phase)}</span><span class="sp"></span><button class="btn sm" id="btn-new" hidden>⏎ start a new session</button><button class="btn sm danger" id="btn-end" hidden>End session</button><a class="btn sm" href="#how">how it works</a></div>
-<div class="strip" id="strip"><span id="strip-opened">not opened</span><span class="sep">·</span><span>${door.access === 'paid' && door.priceUsd ? `${esc(door.priceUsd)} USD a seat` : 'free — this team charges nothing'}</span><span class="sep">·</span><span>runs at ${esc(name)}</span><span class="sep">·</span><span class="state" id="state">${esc(line.state)}</span></div>
+<div class="strip" id="strip"><span id="strip-opened">not opened</span><span class="sep">·</span><span>${seatLine}</span><span class="sep">·</span><span>runs at ${esc(name)}</span><span class="sep">·</span><span class="state" id="state">${esc(line.state)}</span></div>
 <div class="term">
 <div class="out" id="term"></div>
-<div class="gate" id="gate"><div class="card"><h3 id="gate-h">${esc(line.gate.title)}</h3><p id="gate-p">${esc(line.gate.text)}</p><p class="row" style="justify-content:center" id="gate-actions"><button class="btn primary" id="btn-open"${line.gate.disabled ? ' disabled' : ''}>${esc(line.gate.button)}</button></p></div></div>
+<div class="gate" id="gate"><div class="card"><h3 id="gate-h">${esc(line.gate.title)}</h3><p id="gate-p">${esc(gateText)}</p><p class="row" style="justify-content:center" id="gate-actions"><button class="btn primary" id="btn-open" hidden${line.gate.disabled ? ' disabled' : ''}>Open the line</button></p></div></div>
 <div class="in"><input id="prompt" placeholder="type to ${esc(door.door)} — Enter sends; keystrokes go raw to the PTY" disabled autocomplete="off"><button class="btn sm primary" id="send" disabled>Send</button></div>
 </div>
 <div class="rail"><div class="rh"><span>Checkpoints</span><span id="rail-n">0</span></div><ol id="rail"><li class="live ended" id="rail-tail"><span class="n">—</span><span class="t"><span class="dot"></span>no session</span></li></ol></div>
 </div>
-<p class="meta" style="margin-top:12px">Same experience as the placed card: prompt on the line, the reply appears as the terminal draws it, a checkpoint lands on the rail. Click a rail row to read that turn’s block. The roster is never listed; you talk to the door, and the door decides what the crew does.</p>
+<p class="meta" style="margin-top:10px">The same line a placed card gets: prompt, the reply as the terminal draws it, a checkpoint on the rail. Click a rail row to read that turn’s block. The roster is never listed — you talk to the door.</p>
 <pre class="crt" id="block" hidden style="margin-top:12px;padding:12px 14px;white-space:pre-wrap;max-height:360px;overflow:auto"></pre>
 
-<section id="how" style="padding:36px 0 0;border:none">
-<h2>How the web line works</h2>
-<div class="grid">
-<div class="card"><h3>1 · Sign in</h3><p>Your cookrew.dev account signs a challenge; the registry mints a token for this one door, <code>${esc(name)}</code>. The door seats you under that account; no OS username is involved.</p></div>
-<div class="card"><h3>2 · The ladder</h3><p>GET <code>/line</code> through the relay: 401 sign in · 403 no seat — buy one at the door or ask the owner · 402 the seat’s price, once · 429 the owner’s lending limit · 410 your session ended, press Enter to start a new one.</p></div>
-<div class="card"><h3>3 · The PTY</h3><p>Then a stream of the orch’s real terminal, ANSI intact, drawn here by xterm.js. Keystrokes go back as <code>/line/raw</code>, geometry as <code>/line/resize</code>. Sealed both ways in this browser; the relay carries bytes it cannot read.</p></div>
-<div class="card"><h3>4 · End</h3><p>You end it, or the author does. The session workspace on their machine is destroyed either way; the rail reads ENDED and the address stays valid for next time.</p></div>
-</div>
-</section>
+<div class="faq" id="how" style="margin-top:18px"><details><summary>How the web line works</summary><ol class="pts how">
+<li><b>Sign in.</b> Your cookrew.dev account signs a challenge; the registry mints a token for this one door, <code>${esc(name)}</code>. The door seats you under that account.</li>
+<li><b>The ladder.</b> <code>GET /line</code> through the relay: 401 sign in · 403 no seat — buy one or ask the owner · 402 the seat’s price, once · 429 the owner’s lending limit · 410 your session ended, press Enter for a new one.</li>
+<li><b>The PTY.</b> A stream of the orch’s real terminal, drawn here by xterm.js; keystrokes go back as <code>/line/raw</code>. Sealed both ways in this browser — the relay carries bytes it cannot read.</li>
+<li><b>End.</b> You end it, or the author does. The session workspace on their machine is destroyed either way; the address stays valid for next time.</li>
+</ol></details></div>
 </div>
 
 <aside class="side">
-<div class="card"><h3>What it costs</h3><p class="row">${priceChip(door)}</p>${
-      door.access === 'paid'
-        ? `<p class="meta">A seat, charged once at the door — it follows you to any device you sign in on. Never per question, and an open session is never interrupted for money.</p>${rails}<p class="meta" style="margin-top:12px">Payment goes from you to the author directly. This registry does not hold it and takes nothing from it.</p>`
-        : `<p class="meta">Free to call. You still sign in, because the author lends their machine to accounts rather than to anyone who finds the address.</p>`
-    }</div>
-<div class="card"><h3>Facts</h3><dl><dt>Owner</dt><dd><a href="/${esc(door.handle)}">@${esc(door.handle)}</a></dd><dt>Door</dt><dd>${esc(door.door)}</dd><dt>Agents</dt><dd>${door.agents}</dd><dt>Reach</dt><dd>${door.transport === 'relay' || door.transport === 'public' ? 'Anyone with the link' : door.transport === 'tailnet' ? 'People on the owner’s tailnet' : 'People on the owner’s network'}</dd>${harnesses.length > 0 ? `<dt>Harnesses</dt><dd>${esc(harnesses.join(', '))}</dd>` : ''}<dt>Last seen</dt><dd><time datetime="${new Date(door.seenAt).toISOString()}">${esc(new Date(door.seenAt).toISOString().slice(0, 16).replace('T', ' '))} UTC</time></dd></dl></div>
-<div class="card"><h3>Open it in the app</h3><p class="meta">The card on your canvas gets the same rail and transcript as a preset card, fed from the door’s record. Paste the address into Cookrew → Import a team, or use the button.</p><p class="row"><a class="btn primary" href="#open" data-open="cookrew://import/${esc(name)}">Open in Cookrew</a><a class="btn" href="/#download">Get the app</a></p></div>
-<div class="card"><h3>One door</h3><p class="meta">A team has exactly one interface: its orchestrator, <strong>${esc(door.door)}</strong>. The roster behind it is never listed and never reachable.</p></div>
-<div class="note">The relay reads nothing. The author can end any session at any time. Money, when a team is priced, goes from you to the author; cookrew.dev holds none of it.</div>
+<div class="card"><h3>About this door</h3><p class="row">${priceChip(door)}</p>${about}<p class="meta" style="margin-top:10px">One interface: its orchestrator, <strong>${esc(door.door)}</strong>. The roster behind it is never listed and never reachable; the relay reads nothing; the author can end any session.</p></div>
+<div class="card"><h3>Facts</h3><dl><dt>Owner</dt><dd><a href="/${esc(door.handle)}">@${esc(door.handle)}</a></dd><dt>Door</dt><dd>${esc(door.door)}</dd><dt>Agents</dt><dd>${door.agents}</dd><dt>Reach</dt><dd>${door.transport === 'relay' || door.transport === 'public' ? 'Anyone with the link' : door.transport === 'tailnet' ? 'People on the owner’s tailnet' : 'People on the owner’s network'}</dd>${harnesses.length > 0 ? `<dt>Harnesses</dt><dd>${esc(harnesses.join(', '))}</dd>` : ''}<dt>Last seen</dt><dd><time datetime="${new Date(door.seenAt).toISOString()}">${esc(new Date(door.seenAt).toISOString().slice(0, 16).replace('T', ' '))} UTC</time></dd></dl>
+<div class="addr" style="margin-top:12px"><span id="addr">${esc(address)}</span><button class="btn sm" data-copy="${esc(address)}">copy</button></div></div>
+<p class="row"><a class="btn primary" href="#open" data-open="cookrew://import/${esc(name)}">Open in Cookrew</a><a class="btn" href="/#download">Get the app</a></p>
+<p class="meta" style="margin:8px 0 0">In the app the card gets the same rail and transcript as a preset card, fed from the door’s record.</p>
 </aside>
 </div></div>`
   )

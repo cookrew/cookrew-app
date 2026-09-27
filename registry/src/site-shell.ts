@@ -434,7 +434,10 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
 .team.example{opacity:.9}.team.example .head::after{content:'EXAMPLE';font:8px var(--font-pixel);letter-spacing:.06em;border:1.5px solid var(--line);padding:1px 5px;background:var(--violet-hi);color:#2d2a20}
 .empty{padding:40px;text-align:center;color:var(--muted);border:2px dashed var(--line-soft)}
 /* team page */
-.tp-head{}@media (max-width:760px){.tp-head{grid-template-columns:1fr!important}.tp-head>.row{align-items:flex-start!important}}
+.tp-head h1{font-size:clamp(26px,3.4vw,38px)}
+.tp-head{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:18px;align-items:start}
+.tp-actions{display:flex;gap:10px;align-items:center;justify-content:flex-end;padding-top:26px}
+@media (max-width:760px){.tp-head{grid-template-columns:1fr}.tp-actions{justify-content:flex-start;padding-top:0}.tp-actions .btn{flex:1;justify-content:center}.seat .row .btn{flex:1;justify-content:center}}
 .tp{display:grid;gap:26px;grid-template-columns:minmax(0,1fr) 320px;align-items:start}
 @media (max-width:960px){.tp{grid-template-columns:1fr}}
 .overlay{border:2px solid var(--line);box-shadow:6px 6px 0 var(--line);background:var(--cream-hi);display:grid;grid-template-columns:minmax(0,1fr) 230px;min-height:520px}
@@ -471,7 +474,7 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
 .addr span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dl{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin:18px 0}
 .dl .card small{display:block;color:var(--muted);margin-top:6px;font-size:12.5px}
-.hero{padding:34px 0 30px;border-bottom:2px solid var(--line)}
+.hero{padding:22px 0 20px;border-bottom:2px solid var(--line)}
 /* the homepage: the page in one column, its catalog on the right rail. The
    sections keep their own .wrap markup; inside the column it is just a box. */
 .home{display:grid;grid-template-columns:minmax(0,1fr) 188px;gap:0 40px;align-items:start}
@@ -525,7 +528,30 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
 .dock .d{font-size:13px;color:var(--muted);display:block;line-height:1.35}
 .dock .ico{font:16px var(--font-screen);background:var(--phos-bg);color:var(--phos);border:2px solid var(--line);width:34px;height:34px;display:grid;place-items:center;flex:0 0 auto}
 @media (max-width:760px){.dock{grid-template-columns:1fr}.dock a{border-right:none;border-bottom:2px solid var(--line)}.dock a:last-child{border-bottom:none}}
-.mkt-h{display:flex;align-items:center;gap:10px;font-size:17px;margin:22px 0 4px}
+.mkt-h{display:flex;align-items:center;gap:10px;font-size:17px;margin:22px 0 4px;flex-wrap:wrap}
+.mkt-h .sp{flex:1}
+/* THE RENT STRIP — the marketplace's priced instances on the first screen,
+   right under the hero: the price and a BUY on each, at most three, the rest
+   one link away. The dock follows it as one compact row. */
+.rent-strip{margin:18px 0 10px}
+.rent-strip .mkt-h{margin:0 0 10px}
+.rent-cards{display:grid;gap:14px;grid-template-columns:repeat(3,minmax(0,1fr))}
+.rent{display:flex;flex-direction:column;gap:8px;background:var(--cream-hi);border:2px solid var(--line);box-shadow:4px 4px 0 var(--line);padding:12px 14px;min-width:0}
+.rent.off{background:var(--cream-md)}
+.rent .head{display:flex;align-items:center;gap:8px;min-width:0}
+.rent .head .ttl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:16px}
+.rent p{margin:0;font-size:14px;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.rent .foot{display:flex;gap:8px;margin-top:auto;padding-top:4px}
+.rent .foot .btn{flex:1;justify-content:center}
+@media (max-width:900px){.rent-cards{grid-template-columns:1fr 1fr}}
+@media (max-width:640px){.rent-cards{grid-template-columns:1fr}.rent .foot{flex-direction:column}}
+.dock.compact a{padding:9px 14px}
+.dock.compact .d{display:none}
+.dock.compact .ico{width:26px;height:26px;font-size:13px}
+.dock.compact .t{margin:0}
+/* a list inside a folded FAQ block — the team page's "how it works", the market's notes */
+.faq ol.how,.faq ul.how{margin:0;padding:0 16px 14px 34px;color:var(--muted);font-size:14px}
+.faq .how li{margin:6px 0}.faq .how b{color:var(--ink)}
 .tagline{display:inline-block;background:var(--amber);color:#2d2a20;font:700 9.5px var(--font-pixel);letter-spacing:.14em;padding:4px 10px;border:2px solid var(--line);transform:rotate(-1deg);margin-bottom:18px}
 .faq details{border:2px solid var(--line);background:var(--cream-hi);margin:8px 0;box-shadow:3px 3px 0 var(--line)}
 .faq summary{cursor:pointer;padding:10px 14px;font-weight:600}.faq details>p{padding:0 16px 14px;margin:0;color:var(--muted)}
