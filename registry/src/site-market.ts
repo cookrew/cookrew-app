@@ -16,6 +16,9 @@ import { breadcrumbs, organization, teamList, webPage } from './site-seo'
  * is up, and never rewrites what the owner published.
  */
 
+/** The definition's first sentence — the lede; the rest is in the FAQ below the grid. */
+const MARKET_ONE_LINE = MARKET_DEFINITION.slice(0, MARKET_DEFINITION.indexOf('. ') + 1)
+
 export type MarketTab = 'teams' | 'presets' | 'starred'
 export type MarketSort = 'stars' | 'recent' | 'name'
 
@@ -86,16 +89,22 @@ export function filterDoors(input: MarketInput): ListedDoor[] {
   })
 }
 
+/**
+ * A listing. The price sits in the head beside the name — it is the first
+ * thing a reader decides on — and a priced team's foot offers the seat
+ * itself: `?buy=1` on the team page starts the purchase there (line.js).
+ */
 function teamCard(d: ListedDoor, stars: number, starred: boolean): string {
   const at = `/${esc(d.handle)}/${esc(d.name)}`
   const off = d.live === false
   const harnesses = d.harnesses ?? []
   const tags = d.tags ?? []
+  const priced = d.access === 'paid' && d.priceUsd
   return `<article class="team">
-<div class="head"><span class="led${off ? ' off' : ''}"></span><a class="ttl" href="${at}">${esc(d.title)}</a><span class="chip">${d.agents} AGENT${d.agents === 1 ? '' : 'S'}</span></div>
+<div class="head"><span class="led${off ? ' off' : ''}"></span><a class="ttl" href="${at}">${esc(d.title)}</a>${priceChip(d)}</div>
 <div class="screen crt"><div class="l d">$ cookrew.dev/@${esc(d.handle)}/${esc(d.name)}</div><div class="l">${esc(d.door)}&gt; ${off ? 'offline — address stays valid' : `ready — one door, ${d.agents} behind it`}</div><div class="l d">${harnesses.length > 0 ? esc(harnesses.map((h) => h.toLowerCase()).join(' · ')) : `via ${esc(d.transport)}`}</div></div>
-<div class="body">${d.summary ? `<p>${esc(d.summary)}</p>` : `<p class="dim">The owner has not written a summary.</p>`}<div class="row">${tags.map((t) => `<span class="chip">${esc(t)}</span>`).join('')}<span class="chip violet">${esc(d.door)} answers</span><span class="chip">${esc(d.transport)}</span></div><div class="meta">by <a href="/${esc(d.handle)}">@${esc(d.handle)}</a>${d.access === 'paid' ? ' · ' + d.rails.map((r) => (r === 'x402' ? 'USDC · wallet' : 'card')).join(', ') : ''}</div></div>
-<div class="foot">${priceChip(d)}<span class="sp"></span><button class="star${starred ? ' on' : ''}" data-star="${esc(d.handle)}/${esc(d.name)}" title="one star per account">★ <span>${stars}</span></button><a class="btn sm" href="${at}">Page</a><a class="btn sm primary" href="${at}#open" data-open="cookrew://import/@${esc(d.handle)}/${esc(d.name)}">Open in Cookrew</a></div>
+<div class="body">${d.summary ? `<p>${esc(d.summary)}</p>` : `<p class="dim">The owner has not written a summary.</p>`}<div class="row">${tags.map((t) => `<span class="chip">${esc(t)}</span>`).join('')}<span class="chip violet">${esc(d.door)} answers</span><span class="chip">${d.agents} agent${d.agents === 1 ? '' : 's'}</span></div><div class="meta">by <a href="/${esc(d.handle)}">@${esc(d.handle)}</a> · ${esc(d.transport)}${d.access === 'paid' ? ' · ' + d.rails.map((r) => (r === 'x402' ? 'USDC · wallet' : 'card')).join(', ') : ''}</div></div>
+<div class="foot"><button class="star${starred ? ' on' : ''}" data-star="${esc(d.handle)}/${esc(d.name)}" title="one star per account">★ <span>${stars}</span></button><span class="sp"></span>${priced ? `<a class="btn sm primary" href="${at}?buy=1">Buy a seat · $${esc(d.priceUsd ?? '')}</a>` : `<a class="btn sm primary" href="${at}">Page</a>`}<a class="btn sm" href="${at}#open" data-open="cookrew://import/@${esc(d.handle)}/${esc(d.name)}">In Cookrew</a></div>
 </article>`
 }
 
@@ -145,10 +154,10 @@ export function marketPage(input: MarketInput): Page {
       noindex: query.tab === 'starred',
       jsonLd: [organization(), webPage({ path: '/market', name: 'Cookrew marketplace', description: MARKET_DEFINITION }), breadcrumbs([{ name: 'Cookrew', path: '/' }, { name: 'Marketplace', path: '/market' }]), teamList(query.tab === 'teams' ? doors : [])]
     },
-    `<div class="wrap" style="padding-top:44px">
+    `<div class="wrap" style="padding-top:36px">
 <p class="kicker"><span class="no">MARKET</span>doors, not copies</p>
-<h1 style="font-size:clamp(28px,3.6vw,40px)">Find a crew. Star it. Open it in Cookrew.</h1>
-<p class="lede">${esc(MARKET_DEFINITION)}</p>
+<h1 style="font-size:clamp(28px,3.6vw,40px);margin-bottom:10px">Find a crew. Buy a seat, or open it free.</h1>
+<p class="lede" style="margin-bottom:8px">${esc(MARKET_ONE_LINE)}</p>
 <div class="tabs">${tab('teams', 'Served teams')}${tab('presets', 'Presets to download')}${tab('starred', '★ Starred')}</div>
 <form class="card soft" style="padding:14px 16px" method="get" action="/market" id="filters">
 ${hidden('tab', query.tab === 'teams' ? '' : query.tab)}${hidden('owner', query.owner)}
@@ -165,11 +174,12 @@ ${query.owner ? `<a class="chip amber" href="/market">@${esc(query.owner)} ✕</
 </div></form>
 <p class="meta" id="count" style="margin:16px 0 10px">${count}${query.q ? ` matching “${esc(query.q)}”` : ''}${query.owner ? ` by @${esc(query.owner)}` : ''} · ${input.account ? `signed in as @${esc(input.account)}` : 'not signed in — stars need an account'}</p>
 ${grid}
-<div class="grid" style="margin-top:36px" id="account">
-<div class="card"><h3>How a listing gets here</h3><p>In the app: save a team, press SERVE, sign the registration with your passkey. The registry lists the address you gave it, verbatim, and marks it live only while your relay downlink is up.</p></div>
-<div class="card"><h3>What a star means</h3><p>One per account per team, signed with the same passkey that publishes. Stars sort this page; they never gate anything.</p></div>
-<div class="card"><h3>What opening does</h3><p>“Open in Cookrew” fires a <code>cookrew://import/@owner/team</code> link. The app shows the import sheet first, then the gate answers 401 · 402 · 403, then the orch card lands. Nothing is installed by a link alone.</p></div>
-</div>
+<div class="faq" style="margin-top:24px" id="account"><details><summary>How listings, stars and opening work</summary><ul class="pts how">
+<li><b>A listing.</b> In the app: save a team, press SERVE, sign the registration. The registry lists the address you gave it, verbatim, and marks it live only while your relay downlink is up.</li>
+<li><b>A star.</b> One per account per team. Stars sort this page; they never gate anything.</li>
+<li><b>A seat.</b> A priced team charges a seat once, at its own door; it follows you to any device. Money goes from you to the author — cookrew.dev takes no cut.</li>
+<li><b>Opening.</b> “In Cookrew” fires a <code>cookrew://import/@owner/team</code> link; the app shows the import sheet first, then the gate answers 401 · 402 · 403, then the orch card lands. Nothing is installed by a link alone.</li>
+</ul></details></div>
 </div>`
   )
 }
