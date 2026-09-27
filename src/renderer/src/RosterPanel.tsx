@@ -97,7 +97,7 @@ export function RosterPanel({
   variant?: 'modal' | 'view'
 }): React.JSX.Element {
   const roster = useRoster()
-  const { zoomToNode } = useCanvasUi()
+  const { zoomToNode, jumpToNode } = useCanvasUi()
   // The roster needs the whole map (it lists every agent's live status); it is
   // one sidebar component, not 91 cards, so a snapshot subscription is right.
   const activities = useActivitiesSnapshot()
@@ -346,12 +346,18 @@ export function RosterPanel({
   // non-destructive + reversible). Result → toast, mapped honestly.
   // A row click is a handoff, not an expand: select here, zoom there. The
   // canvas already owns the trace reader, the checkpoint rail and fork.
+  //
+  // The board is the whole machine and the canvas is one workspace of it, so
+  // the handoff has to cross that gap: a row from another workspace switches
+  // there first and lands on the card when the incoming canvas arrives
+  // (cross-workspace-jump.ts). It used to do nothing at all — the zoom found
+  // no card in the flow store, said so to the console, and the board closed
+  // over the workspace the owner was already looking at.
   const open = (row: Row): void => {
     setSelected(row.id)
-    if (row.active) {
-      zoomToNode(row.id)
-      onClose()
-    }
+    if (!row.active) return
+    jumpToNode(row.workspaceId, row.id)
+    onClose()
   }
 
   // The clipboard stages from the ACTIVE canvas only (that is what a paste
