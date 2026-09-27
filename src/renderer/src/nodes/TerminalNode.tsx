@@ -99,7 +99,9 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
               view that is usually on screen. Name and dials stack in the space
               the name was already using. */}
           <div className="vi-mini-text">
-            <span className="vi-mini-name">{node.name}</span>
+            <span className="vi-mini-name" title={node.name}>
+              {node.name}
+            </span>
             <DialTag id={node.id} className="vi-mini-dial" stack />
           </div>
         </div>

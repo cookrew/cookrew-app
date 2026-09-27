@@ -3488,16 +3488,23 @@ a.card-close {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: calc(1px * var(--z, 1));
   overflow: hidden;
 }
 
-/* The NAME yields, not the dials. A four-line name would otherwise push the
-   tag out of an overflow:hidden column, and which agent it is stays legible
-   from the avatar and the card's position — what it runs on does not. */
+/* THE NAME YIELDS, NOT THE DIALS — and the budget is why, measured rather than
+   guessed: the tile is 418 card-px tall, a name line is ~130 and a dial line
+   ~78. Name-at-four-lines plus two dial lines wants 462 and the tile clips the
+   overflow at the BOTTOM, which is exactly where the effort sits. So the name
+   takes two lines and a slightly smaller size here (242 + 157 + gap ≈ 400,
+   inside 418), the full name stays one hover away in its title, and the effort
+   is never the thing that falls off. Which agent it is survives truncation —
+   the avatar, the colour and the card's position all still say so. What it
+   runs on does not survive it at all. */
 .vi-mini-text .vi-mini-name {
   flex: 0 1 auto;
   min-height: 0;
+  font-size: calc(12px * var(--z, 1));
+  -webkit-line-clamp: 2;
 }
 
 /* NOT a chip. At 0.1 zoom a chip's border and radius resolve to sub-pixel and
@@ -3510,8 +3517,8 @@ a.card-close {
      on second. Measured at 0.1 zoom the box is ~253 card-px wide, which is
      about five glyphs at the name's 13px — hence the stack below rather than a
      longer line. */
-  font-size: calc(10px * var(--z, 1));
-  line-height: 1.15;
+  font-size: calc(8.5px * var(--z, 1));
+  line-height: 1.1;
   color: var(--vi-dim);
   /* The two parts on their own lines (DialTag stack). A single line needed
      402px in that 253px box and clipped on EVERY tile, taking the effort with
