@@ -5450,6 +5450,9 @@ app.whenReady().then(() => {
       createTerminal,
       forkTerminal,
       listWorkspaces,
+      // The screen wall's pictures, for the phone. Read-only over the wire —
+      // see the route's own note for why the phone never asks for a capture.
+      workspaceShots: () => workspaceShots.all(),
       createWorkspace: (name: string, dir: string, team?: string) =>
         team ? createWorkspaceFromTeam(name, dir, team) : createWorkspace(name, dir),
       switchWorkspace,

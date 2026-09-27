@@ -31,6 +31,13 @@ interface WorkspaceSwitcherProps {
    * always did.
    */
   onWall?: () => void
+  /**
+   * Photograph the canvas before switching away from it. The wall's own door
+   * does this when it opens; this is the OTHER way out of a workspace, and
+   * without it a workspace switched from this list would never leave a
+   * picture behind.
+   */
+  onBeforeSwitch?: () => Promise<void>
 }
 
 /**
@@ -43,7 +50,8 @@ export function WorkspaceSwitcher({
   fallbackName,
   fallbackDir,
   onActivity,
-  onWall
+  onWall,
+  onBeforeSwitch
 }: WorkspaceSwitcherProps): React.JSX.Element {
   const [list, setList] = useState<WorkspaceList | null>(null)
   const [open, setOpen] = useState(false)
@@ -92,7 +100,14 @@ export function WorkspaceSwitcher({
 
   const switchTo = (id: string): void => {
     setOpen(false)
-    if (list && id !== list.activeId) void cookrew().switchWorkspace(id)
+    if (list && id !== list.activeId) {
+      void (async () => {
+        // Awaited: the canvas being photographed is the one about to be torn
+        // down, so the capture has to finish before the switch starts.
+        await onBeforeSwitch?.().catch(() => undefined)
+        void cookrew().switchWorkspace(id)
+      })()
+    }
   }
 
   const startCreate = (): void => {
