@@ -31,11 +31,12 @@ export const BUDGET_RETRY_MS = 15 * 60 * 1000
 /**
  * The dispatch, by reason (G2). Everything the author can change — a seat,
  * their seat count, a region, a version, credit — goes to their page; the
- * refusals that pass with time are retried. `no_seat` in cut 1 is BUY, and
- * BUY is the team's page: a seatless account cannot reach the door's checkout
- * (cookrew.dev mints no call token without a seat, and the door's own seat
- * rung refuses one), so the page's seat bar is the one purchase surface until
- * the registry grows a purchase path; ASK joins when V3-11 lands.
+ * refusals that pass with time are retried. `no_seat` is BUY, and BUY is the
+ * team's page: cookrew.dev now mints an unseated token on an explicit
+ * `intent: 'buy'` and the door admits it as far as its 402, so the page's
+ * seat bar completes the purchase end to end. This sheet still sends people
+ * there rather than paying in place — one purchase surface, on the author's
+ * own page, until an in-app buy is worth a second one.
  */
 export function remedyFor(reason: string, team: string | null): RemedyAct {
   switch (reason) {

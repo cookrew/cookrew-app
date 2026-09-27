@@ -319,6 +319,40 @@ describe('POST /v2/teams/@o/t/call-token — the word the door verifies', () => 
     expect(body.message).toContain('ask @drej')
   })
 
+  /**
+   * THE PURCHASE PATH. A seat is BOUGHT at the door's 402, with the owner's
+   * keys — but a signed-in stranger could never reach that 402, because this
+   * route refused them first and the door's seat rung refused them second.
+   * Buying was a dead button on every surface. An explicit intent mints a
+   * token with NO seat claim: enough to reach the door and be quoted, and
+   * nothing the door will open a line on until the 402 is paid.
+   */
+  it('mints an UNSEATED token on an explicit intent to buy — the way to the door’s 402', async () => {
+    const res = await call('POST', '/v2/teams/@drej/alpha/call-token', { intent: 'buy' }, as(people.stranger))
+    expect(res.status).toBe(201)
+    const body = (await res.json()) as { token: string; seat: string | null; purpose?: string; account: string }
+    expect(body.seat).toBeNull()
+    expect(body.purpose).toBe('buy')
+    expect(body.account).toBe('stranger')
+    const claims = claimsOf(body.token)
+    expect(claims.aud).toBe('@drej/alpha')
+    expect(claims.seat).toBeUndefined()
+  })
+
+  it('an intent to buy from somebody already seated is just their seat — nothing to buy', async () => {
+    const res = await call('POST', '/v2/teams/@drej/alpha/call-token', { intent: 'buy' }, as(people.mira))
+    expect(res.status).toBe(201)
+    const body = (await res.json()) as { seat: string | null; purpose?: string }
+    expect(typeof body.seat).toBe('string')
+    expect(body.purpose).toBeUndefined()
+  })
+
+  it('without the intent, no seat is still the sentence with both ways in — nothing softened', async () => {
+    const res = await call('POST', '/v2/teams/@drej/alpha/call-token', { intent: 'open' }, as(people.stranger))
+    expect(res.status).toBe(403)
+    expect(((await res.json()) as { error: string }).error).toBe('no_seat')
+  })
+
   it('refuses a signed-out reader before it refuses the seat', async () => {
     const res = await call('POST', '/v2/teams/@drej/alpha/call-token', {})
     expect(res.status).toBe(401)

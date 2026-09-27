@@ -260,7 +260,10 @@ describe('the front page', () => {
     expect(body).toContain('Instances you can rent')
     expect(body).toContain('id="rent"')
     expect(body.indexOf('id="rent"')).toBeLessThan(body.indexOf('<section id="start">'))
-    expect(body).toContain('USD · per session')
+    // The price buys a SEAT (ruled copy G1: "charges {price} a seat"), not a
+    // session — the old chip said the thing the money rung no longer does.
+    expect(body).toContain('USD · a seat')
+    expect(body).not.toContain('per session')
     // and nothing pretends there is a rent shelf when every team is free
     expect(home([{ ...door(), access: 'account' as const, priceUsd: undefined }]).body).not.toContain('Instances you can rent')
   })

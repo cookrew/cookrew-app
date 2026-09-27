@@ -143,10 +143,10 @@ export function lineFace(standing: Standing, at: LineAt): LineFace {
     case 'unseated':
       return {
         phase: 'NO SEAT',
-        state: `@${at.handle} lends this team to seated accounts · ${at.price} USD per session.`,
+        state: `@${at.handle} lends this team to seated accounts · a seat is ${at.price} USD, once.`,
         gate: {
           title: 'A seat first',
-          text: `Buy one at the door — ${at.price} USD, charged once when the session starts — or ask @${at.handle} for one; the request reaches every device they have.`,
+          text: `Buy one at the door — ${at.price} USD, once, and it follows you to any device — or ask @${at.handle} for one; the request reaches every device they have.`,
           button: `Buy a seat · $${at.price}`,
           disabled: false
         }

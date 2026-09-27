@@ -24,10 +24,15 @@ import type { ServedTemplate } from '../src/main/session-served'
  * POST /api/call/assert, and the gate order the architecture note fixed:
  * 401 sign in → 403 no seat → 402 buy → open.
  *
- * The 403 is what this phase adds, and the two rules that must never soften
- * are asserted here rather than read: a paid team refuses a token with NO SEAT
- * CLAIM (absence is not a wildcard), and the owner of the door plus a free
- * team are admitted without one because neither is admitted BY a seat.
+ * THE 402 IS WHERE A SEAT IS BOUGHT, so a token with no seat claim has to be
+ * able to reach it. This rung used to refuse one outright — and with the
+ * registry refusing to mint one in the first place, "Buy a seat" was a dead
+ * button on every surface. Absence is still not a wildcard: an unseated
+ * caller is admitted as far as the money rung and no further, and the money
+ * rung is what a HELD seat satisfies — a seat is the entitlement (G1: the
+ * price is "a seat"), granted by the owner or bought once at that 402, and it
+ * is not charged again per session. The owner of the door and a free team's
+ * callers are entitled without one because neither is admitted BY a seat.
  *
  * Every legacy path — the key-based TOFU sign-in and the v1 registryToken —
  * is walked in the same file, unchanged, so a regression there fails here.
@@ -173,15 +178,22 @@ describe('v2 admission — the assert, the 403 and the legacy paths', () => {
 
   // ── 403: the seat rung ─────────────────────────────────────────────────
 
-  it('REFUSES a paid team when the token carries no seat, in the sentence', async () => {
+  it('ADMITS a paid team with no seat — as far as the 402, where a seat is bought', async () => {
     const res = await assert(PAID, { v2Token: callToken() })
-    expect(res!.status).toBe(403)
-    expect(res!.body).toEqual({
-      reason: 'no_seat',
-      error: 'You are @mira. No seat here yet. Buy one, or ask @drej.'
-    })
-    expect(noSeatSentence('mira', OWNER)).toBe((res!.body as { error: string }).error)
-    expect(seated).toEqual([])
+    expect(res!.status).toBe(200)
+    expect(res!.body).toMatchObject({ account: 'mira', seat: null })
+    // Recorded as here and UNSEATED, so the money rung knows to quote them.
+    expect(seated).toHaveLength(1)
+    expect(seated[0]).toMatchObject({ username: 'mira', seat: null })
+    expect(seated[0].owner).not.toBe(true)
+    // The sentence still exists for the surfaces that show it; it is just no
+    // longer this rung's answer.
+    expect(noSeatSentence('mira', OWNER)).toBe('You are @mira. No seat here yet. Buy one, or ask @drej.')
+  })
+
+  it('records the OWNER as the owner, so the money rung never quotes their own team', async () => {
+    await assert(PAID, { v2Token: callToken({ sub: OWNER }) })
+    expect(seated[0]).toMatchObject({ username: OWNER, seat: null, owner: true })
   })
 
   it('admits a paid team WITH a seat', async () => {
@@ -386,6 +398,34 @@ describe('the 402, and the moment it is paid', () => {
     const gate = await gateCaller(deps, template, bearer())
     expect(gate.ok).toBe(false)
     expect(paid).toEqual([])
+  })
+
+  /**
+   * A SEAT IS THE ENTITLEMENT. The money rung was written before seats
+   * existed and charged every new session; with seats it charged a guest the
+   * owner had GRANTED, and charged a buyer again the next time they came —
+   * which is not what "a seat that follows you to any device" means. What the
+   * door recorded at sign-in (the token's seat claim, or that this is the
+   * owner) is what settles the rung now; the 402 is only for somebody with
+   * neither, and paying it is what makes their seat.
+   */
+  it('does not quote a caller the door recorded as SEATED — the seat was the purchase', async () => {
+    const gate = await gateCaller({ ...deps, entitled: () => true }, template, bearer())
+    expect(gate.ok).toBe(true)
+    expect(paid).toEqual([])
+  })
+
+  it('quotes a caller the door recorded as unseated, and a door with nothing recorded', async () => {
+    const unseated = await gateCaller({ ...deps, entitled: () => false }, template, bearer())
+    expect(unseated.ok).toBe(false)
+    expect(unseated.ok || unseated.response.status).toBe(402)
+    const unknown = await gateCaller(deps, template, bearer())
+    expect(unknown.ok).toBe(false)
+  })
+
+  it('still does not quote a caller with an OPEN session, seat or no seat', async () => {
+    const gate = await gateCaller({ ...deps, hasOpenSession: () => true, entitled: () => false }, template, bearer())
+    expect(gate.ok).toBe(true)
   })
 
   it('a door with no onPaid wired behaves exactly as it did before', async () => {

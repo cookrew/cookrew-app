@@ -219,7 +219,7 @@ ${seatBar(input, door, name, standing)}
 <p class="kicker"><span class="no">LINE</span>this team’s own terminal, bound to cookrew.dev</p>
 <div class="overlay" id="overlay">
 <div class="bar"><span class="led${off ? ' off' : ''}" id="bar-led"></span><span class="name">${esc(door.door)}</span><span class="chip violet">ORCH · THE DOOR</span><span class="chip" id="phase">${esc(line.phase)}</span><span class="sp"></span><button class="btn sm" id="btn-new" hidden>⏎ start a new session</button><button class="btn sm danger" id="btn-end" hidden>End session</button><a class="btn sm" href="#how">how it works</a></div>
-<div class="strip" id="strip"><span id="strip-opened">not opened</span><span class="sep">·</span><span>${door.access === 'paid' && door.priceUsd ? `${esc(door.priceUsd)} USD per session` : 'free — this team charges nothing'}</span><span class="sep">·</span><span>runs at ${esc(name)}</span><span class="sep">·</span><span class="state" id="state">${esc(line.state)}</span></div>
+<div class="strip" id="strip"><span id="strip-opened">not opened</span><span class="sep">·</span><span>${door.access === 'paid' && door.priceUsd ? `${esc(door.priceUsd)} USD a seat` : 'free — this team charges nothing'}</span><span class="sep">·</span><span>runs at ${esc(name)}</span><span class="sep">·</span><span class="state" id="state">${esc(line.state)}</span></div>
 <div class="term">
 <div class="out" id="term"></div>
 <div class="gate" id="gate"><div class="card"><h3 id="gate-h">${esc(line.gate.title)}</h3><p id="gate-p">${esc(line.gate.text)}</p><p class="row" style="justify-content:center" id="gate-actions"><button class="btn primary" id="btn-open"${line.gate.disabled ? ' disabled' : ''}>${esc(line.gate.button)}</button></p></div></div>
@@ -234,7 +234,7 @@ ${seatBar(input, door, name, standing)}
 <h2>How the web line works</h2>
 <div class="grid">
 <div class="card"><h3>1 · Sign in</h3><p>Your cookrew.dev account signs a challenge; the registry mints a token for this one door, <code>${esc(name)}</code>. The door seats you under that account; no OS username is involved.</p></div>
-<div class="card"><h3>2 · The ladder</h3><p>GET <code>/line</code> through the relay: 401 sign in · 402 pay, once, at session start · 403 not covered · 429 the owner’s lending limit · 410 your session ended, press Enter to start a new one.</p></div>
+<div class="card"><h3>2 · The ladder</h3><p>GET <code>/line</code> through the relay: 401 sign in · 403 no seat — buy one at the door or ask the owner · 402 the seat’s price, once · 429 the owner’s lending limit · 410 your session ended, press Enter to start a new one.</p></div>
 <div class="card"><h3>3 · The PTY</h3><p>Then a stream of the orch’s real terminal, ANSI intact, drawn here by xterm.js. Keystrokes go back as <code>/line/raw</code>, geometry as <code>/line/resize</code>. Sealed both ways in this browser; the relay carries bytes it cannot read.</p></div>
 <div class="card"><h3>4 · End</h3><p>You end it, or the author does. The session workspace on their machine is destroyed either way; the rail reads ENDED and the address stays valid for next time.</p></div>
 </div>
@@ -244,7 +244,7 @@ ${seatBar(input, door, name, standing)}
 <aside class="side">
 <div class="card"><h3>What it costs</h3><p class="row">${priceChip(door)}</p>${
       door.access === 'paid'
-        ? `<p class="meta">Charged once, when a session starts — never per question. An open session is never interrupted for money.</p>${rails}<p class="meta" style="margin-top:12px">Payment goes from you to the author directly. This registry does not hold it and takes nothing from it.</p>`
+        ? `<p class="meta">A seat, charged once at the door — it follows you to any device you sign in on. Never per question, and an open session is never interrupted for money.</p>${rails}<p class="meta" style="margin-top:12px">Payment goes from you to the author directly. This registry does not hold it and takes nothing from it.</p>`
         : `<p class="meta">Free to call. You still sign in, because the author lends their machine to accounts rather than to anyone who finds the address.</p>`
     }</div>
 <div class="card"><h3>Facts</h3><dl><dt>Owner</dt><dd><a href="/${esc(door.handle)}">@${esc(door.handle)}</a></dd><dt>Door</dt><dd>${esc(door.door)}</dd><dt>Agents</dt><dd>${door.agents}</dd><dt>Reach</dt><dd>${door.transport === 'relay' || door.transport === 'public' ? 'Anyone with the link' : door.transport === 'tailnet' ? 'People on the owner’s tailnet' : 'People on the owner’s network'}</dd>${harnesses.length > 0 ? `<dt>Harnesses</dt><dd>${esc(harnesses.join(', '))}</dd>` : ''}<dt>Last seen</dt><dd><time datetime="${new Date(door.seenAt).toISOString()}">${esc(new Date(door.seenAt).toISOString().slice(0, 16).replace('T', ' '))} UTC</time></dd></dl></div>

@@ -82,7 +82,7 @@ export function doorRow(door: ListedDoor, stars: number): string {
 
 export function priceChip(door: ListedDoor): string {
   return door.access === 'paid' && door.priceUsd
-    ? `<span class="price">${esc(door.priceUsd)} USD · per session</span>`
+    ? `<span class="price">${esc(door.priceUsd)} USD · a seat</span>`
     : `<span class="price free">free · account needed</span>`
 }
 
@@ -245,7 +245,7 @@ function marketSection(input: HomeInput): string {
   const rent =
     paid.length > 0
       ? `<h3 id="rent" class="mkt-h">Instances you can rent<span class="chip amber">${paid.length} listed · ${paid.filter((d) => d.live !== false).length} taking calls</span></h3>
-<p class="meta" style="margin:0 0 14px">Pay per session. The canvas runs on its author's machine; your session is sandboxed and thrown away when you close it.</p>
+<p class="meta" style="margin:0 0 14px">Buy a seat once; it follows you to any device. The canvas runs on its author's machine; your session is sandboxed and thrown away when you close it — the seat is not.</p>
 <div class="teams">${paid.slice(0, 6).map(card).join('')}</div>`
       : ''
   const open =
