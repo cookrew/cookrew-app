@@ -638,18 +638,6 @@ a.cr-btn {
   height: 9px;
   vertical-align: -1.5px;
 }
-.cr-ws-caret .cr-icon {
-  width: 9px;
-  height: 9px;
-  vertical-align: -1px;
-}
-
-.cr-ws-check .cr-icon {
-  width: 11px;
-  height: 11px;
-  vertical-align: -2px;
-}
-
 .cr-ws-icon .cr-icon {
   width: 12px;
   height: 12px;
@@ -3568,37 +3556,24 @@ a.card-close {
   max-height: 100%;
 }
 
-/* ---- workspace switcher (header) ---- */
-/*
- * ONE CHIP, TWO DEPTHS.
- *
- * The name opens the screen wall and the caret opens the list, but they are
- * one control and have to look like it. So THE BORDER BELONGS TO THE
- * CONTAINER: giving each half its own put two 1.5px edges against each other,
- * which drew a heavy double seam and two sets of corners — it read as two
- * chips shoved together. Inside, the halves are borderless and share one
- * background; a hairline in `--line-soft` is the only thing between them,
- * enough to say "two targets" and not enough to break the silhouette.
- */
+/* ---- workspace chip (header) ----
+ * ONE CHIP, ONE DOOR. The name opens the screen wall, and the wall is the
+ * whole workspace surface — switching, making, directories, removing, the
+ * history. The caret and its dropdown are gone, so the chip is one button
+ * wearing its own border again. */
 .cr-ws {
   position: relative;
   display: flex;
   align-items: stretch;
   min-width: 0;
-  background: var(--cream-md);
-  border: 1.5px solid var(--line);
-  border-radius: 3px;
 }
 .cr-ws-current {
   display: flex;
   align-items: center;
   gap: 7px;
-  background: transparent;
-  border: none;
-  /* Rounded to sit INSIDE the container's 3px, so the hover fill follows the
-     chip's corners. Not `overflow:hidden` on the parent — the dropdown is
-     absolutely positioned inside it and would be clipped away entirely. */
-  border-radius: 2px 0 0 2px;
+  background: var(--cream-md);
+  border: 1.5px solid var(--line);
+  border-radius: 3px;
   padding: 3px 8px;
   cursor: pointer;
   min-width: 0;
@@ -3610,108 +3585,14 @@ a.card-close {
   font-size: 12px;
   line-height: 1;
 }
-.cr-ws-caret {
-  font-family: var(--font-pixel);
-  font-size: 8px;
-  color: var(--muted);
-  display: flex;
-  align-items: center;
-}
-.cr-ws-caret-btn {
-  display: flex;
-  align-items: center;
-  background: transparent;
-  border: none;
-  border-left: 1px solid var(--line-soft);
-  border-radius: 0 2px 2px 0;
-  padding: 0 6px;
-  cursor: pointer;
-}
-.cr-ws-caret-btn:hover { background: var(--amber-soft) }
-/* Open, the list is the thing being looked at — so the caret holds the
-   highlight for as long as it is showing, rather than snapping back the
-   moment the pointer leaves. */
-.cr-ws-caret-btn[aria-expanded='true'] { background: var(--amber-soft) }
 .cr-ws-name {
   max-width: 200px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.cr-ws-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  min-width: 280px;
-  background: var(--cream-hi);
-  border: 2px solid var(--line);
-  border-radius: 4px;
-  box-shadow: 4px 4px 0 rgba(45, 42, 32, 0.18);
-  padding: 6px;
-  z-index: 200;
-  -webkit-app-region: no-drag;
-}
-.cr-ws-menu-head {
-  font-family: var(--font-pixel);
-  font-size: 8px;
-  letter-spacing: 0.12em;
-  color: var(--muted);
-  padding: 4px 6px 6px;
-}
-.cr-ws-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 7px 8px;
-  background: transparent;
-  border: none;
-  border-radius: 3px;
-  cursor: pointer;
-  text-align: left;
-}
-.cr-ws-item:hover {
-  background: var(--cream-lo);
-}
-.cr-ws-item.active {
-  background: var(--amber-soft);
-}
-.cr-ws-item.add {
-  color: var(--amber-deep);
-}
-.cr-ws-item-text {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-.cr-ws-item-name {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--ink);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-/* Workspace path — surfaced here (on open) instead of crowding the bar. */
-.cr-ws-item-dir {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.cr-ws-check {
-  color: var(--hp);
-  font-size: 9px;
-}
-.cr-ws-sep {
-  height: 1.5px;
-  background: var(--line-soft);
-  margin: 6px 4px;
-}
+/* The new-workspace form — the create sheet on the screen wall
+   (WorkspaceCreateSheet.tsx). */
 .cr-ws-new {
   display: flex;
   flex-direction: column;
@@ -3779,14 +3660,6 @@ a.card-close {
   color: var(--cream-hi);
 }
 
-/* The header owns the workspace dropdown, which overflows downward past the
-   header into the stage's band. Header and stage both sit at z-index:1, and
-   the stage is later in the DOM, so it would cover the dropdown. Lift the
-   whole header stacking context above the stage. */
-.cr-header {
-  z-index: 60;
-}
-
 /* ---- remote (phone) mode tweaks ----
    Served by the mobile server: no macOS traffic lights, no drag regions,
    tighter chrome for small screens. */
@@ -3828,7 +3701,8 @@ body.cookrew-mobile .cr-header .cr-kicker {
 
 /* THE WORKSPACE CHIP IS A STUB ON THE PHONE. The bar has one line and the
    name was walking off its right edge; the icon says which workspace, the
-   name keeps a few letters, the caret goes. The menu still has the full names. */
+   name keeps a few letters — a few more than before, since the caret's
+   sliver is gone. The wall has the full names. */
 body.cookrew-mobile .cr-ws-current {
   padding: 3px 6px;
   gap: 5px;
@@ -3836,16 +3710,8 @@ body.cookrew-mobile .cr-ws-current {
 }
 
 body.cookrew-mobile .cr-ws-name {
-  max-width: 54px;
+  max-width: 72px;
   font-size: 9px;
-}
-
-body.cookrew-mobile .cr-ws-caret {
-  display: none;
-}
-
-body.cookrew-mobile .cr-ws-menu {
-  max-width: calc(100vw - 24px);
 }
 
 @media (max-width: 480px) {
@@ -5067,9 +4933,8 @@ body.cookrew-mobile .cookrew-minimap {
   border-top: calc(5px * var(--z, 1)) solid currentColor;
 }
 
-/* Cream chrome (workspace directory rows in the switcher): swap the dark
-   pill for ink-on-cream, --z is 1 here so sizes are static. */
-.cr-ws-item .cr-git-branch,
+/* Cream chrome (the directory manager's rows): swap the dark pill for
+   ink-on-cream, --z is 1 here so sizes are static. */
 .cr-git.on-cream .cr-git-branch {
   color: var(--ink-soft);
   background: var(--cream-md);
@@ -5078,26 +4943,22 @@ body.cookrew-mobile .cookrew-minimap {
   padding: 1px 5px;
 }
 
-.cr-ws-item .cr-git-branch .cr-icon,
 .cr-git.on-cream .cr-git-branch .cr-icon {
   width: 9px;
   height: 9px;
 }
 
-.cr-ws-item .cr-git-dirty,
 .cr-git.on-cream .cr-git-dirty {
   width: 6px;
   height: 6px;
   background: var(--amber-deep);
 }
 
-.cr-ws-item .cr-git-track,
 .cr-git.on-cream .cr-git-track {
   color: var(--muted);
   font-size: 8.5px;
 }
 
-.cr-ws-item .cr-git-track .cr-icon,
 .cr-git.on-cream .cr-git-track .cr-icon {
   width: 8px;
   height: 8px;

@@ -42,7 +42,8 @@ export interface WallTier {
  * is the same as having no wall at all, so the narrow band shrinks the screens
  * rather than letting the neighbours fall off the edge.
  */
-export function tierFor(width: number): WallTier {
+export function tierFor(width: number, height?: number): WallTier {
+  if (height !== undefined && height > width && width < 520) return uprightTier(width)
   if (width < 520) {
     return { stepA: 136, stepB: 66, depth: 86, depthB: 62, screen: { width: 196, height: 124 }, perspective: 900 }
   }
@@ -50,6 +51,42 @@ export function tierFor(width: number): WallTier {
     return { stepA: 212, stepB: 106, depth: 120, depthB: 88, screen: { width: 300, height: 188 }, perspective: 1500 }
   }
   return { stepA: 300, stepB: 150, depth: 150, depthB: 110, screen: { width: 430, height: 270 }, perspective: 1500 }
+}
+
+/**
+ * A PHONE HELD UPRIGHT IS NOT A NARROW CARD.
+ *
+ * The narrow band exists for a 380px browser card on the canvas, where height
+ * is as scarce as width. A phone in portrait has the same width and twice the
+ * height, and the band's 196px screens left most of it empty — three stamps
+ * in a dark room. So when the stage is taller than it is wide the screens
+ * grow with the width instead, and the row is still a row: the centre plus a
+ * neighbour fit inside the stage at every phone width there is.
+ */
+function uprightTier(width: number): WallTier {
+  const screenWidth = Math.round(width * 0.62)
+  return {
+    stepA: Math.round(width * 0.42),
+    stepB: Math.round(width * 0.18),
+    depth: 90,
+    depthB: 60,
+    screen: { width: screenWidth, height: Math.round(screenWidth * 0.62) },
+    perspective: 900,
+  }
+}
+
+/**
+ * THE LAST SCREEN IS NOT A WORKSPACE — it is where one gets made.
+ *
+ * The header dropdown used to be where a workspace was created, and the
+ * dropdown is gone: switching is done by looking at pictures, so making a
+ * new one is picking the empty screen at the end of the row. It is appended
+ * AFTER the recency order, so it never sits between two real workspaces.
+ */
+export const NEW_WORKSPACE_ID = '__new__'
+
+export function withNewScreen(workspaces: readonly WorkspaceFace[]): WorkspaceFace[] {
+  return [...workspaces, { id: NEW_WORKSPACE_ID, name: 'New workspace', icon: '+', dir: '' }]
 }
 
 /** Screens further than this are not drawn at all — not merely transparent. */
@@ -77,6 +114,8 @@ export interface Snapshot {
 }
 
 export interface WallScreen extends WorkspaceFace {
+  /** A real workspace, or the empty screen at the end where one is made. */
+  kind: 'workspace' | 'new'
   snapshot: Snapshot
   /** How old the picture is, in the words the stamp shows. Null with no picture. */
   age: string | null
@@ -170,6 +209,8 @@ export interface WallInput {
   activeId: string
   pick: number
   width: number
+  /** The stage's height, when known — it is what tells a phone from a card. */
+  height?: number
   shots: Readonly<Record<string, Snapshot>>
   now: number
 }
@@ -189,8 +230,12 @@ export interface WallView {
  * stylesheet cannot hold. What CSS keeps is everything that does not move.
  */
 export function wallView(input: WallInput): WallView {
-  const tier = tierFor(input.width)
-  const ordered = mruOrder(input.workspaces, input.recent)
+  const tier = tierFor(input.width, input.height)
+  // The NEW screen goes last whatever recency says; it is not somewhere
+  // anybody has been.
+  const ordered = mruOrder(input.workspaces, input.recent).sort(
+    (a, b) => Number(a.id === NEW_WORKSPACE_ID) - Number(b.id === NEW_WORKSPACE_ID)
+  )
   const pick = ordered.length === 0 ? 0 : stepPick(input.pick, ordered.length, 0)
   const screens = ordered.map((face, index) => {
     const delta = index - pick
@@ -200,9 +245,13 @@ export function wallView(input: WallInput): WallView {
     const z = distance === 0 ? 0 : -tier.depth - (distance - 1) * tier.depthB
     const rotate = distance === 0 ? 0 : delta < 0 ? TILT_DEG : -TILT_DEG
     const scale = distance === 0 ? 1 : 0.94
-    const snapshot = input.shots[face.id] ?? { src: null, at: null }
+    const kind: WallScreen['kind'] = face.id === NEW_WORKSPACE_ID ? 'new' : 'workspace'
+    // Nothing has ever been photographed on the NEW screen, whatever a stray
+    // entry under its id might claim.
+    const snapshot = kind === 'new' ? { src: null, at: null } : (input.shots[face.id] ?? { src: null, at: null })
     return {
       ...face,
+      kind,
       snapshot,
       age: shotAge(snapshot.at, input.now),
       distance,

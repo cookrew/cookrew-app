@@ -34,7 +34,7 @@
 }
 /* The lights come back up as the chosen screen grows into the canvas. */
 .cr-wsw-leaving .cr-wsw-wash { opacity: 0; transition: opacity 300ms ease }
-.cr-wsw-leaving .cr-wsw-hud { opacity: 0; transition: opacity 160ms ease }
+.cr-wsw-leaving .cr-wsw-hud { opacity: 0; transition: opacity 160ms ease; pointer-events: none }
 .cr-wsw-leaving .cr-wsw-screen:not(.cr-wsw-landing) { opacity: 0 !important; transition: opacity 180ms ease }
 
 .cr-wsw-track {
@@ -242,4 +242,131 @@
   .cr-wsw-bezel,
   .cr-wsw-shade,
   .cr-wsw-label { transition-duration: 90ms !important; animation-duration: 90ms !important }
+}
+
+/* ---- the dropdown's jobs, on the wall ---------------------------------- */
+
+/* The wall is the swipe surface now, floor and screens alike; pan-y leaves
+   vertical scrolling to the page and hands every horizontal move to us. */
+.cr-wsw { touch-action: pan-y }
+
+/* The NEW screen at the end of the row: an empty bezel that says what it is
+   for, in the same voice as a screen with no picture, because it is one. */
+.cr-wsw-glass:has(.cr-wsw-plus) { background: #1a1811 }
+.cr-wsw-plus {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+}
+.cr-wsw-plus b {
+  font: 700 26px var(--font-pixel);
+  line-height: 1;
+  color: var(--amber);
+}
+.cr-wsw-screen.new .cr-wsw-bezel { border-style: dashed }
+.cr-wsw-screen.new.pick .cr-wsw-bezel { border-style: solid }
+
+/* What can be done to the picked screen. A strip above the HUD rather than
+   under the label, so it sits in the same place at every width band. */
+.cr-wsw-actions {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 42px;
+  z-index: 25;
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 12px;
+  flex-wrap: wrap;
+}
+/* Faded AND untouchable: an invisible REMOVE? mid-handoff must not fire. */
+.cr-wsw-leaving .cr-wsw-actions { opacity: 0; transition: opacity 160ms ease; pointer-events: none }
+.cr-wsw-actions button {
+  font: 700 9px var(--font-pixel);
+  letter-spacing: 0.1em;
+  color: #d8d0bc;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid #5c5646;
+  border-radius: 3px;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+.cr-wsw-actions button:hover { background: rgba(255, 255, 255, 0.12); color: var(--cream-hi) }
+.cr-wsw-actions button.primary {
+  background: var(--amber);
+  border-color: var(--amber-deep);
+  color: var(--ink);
+}
+.cr-wsw-actions button.primary:hover { background: var(--amber-deep); color: var(--cream-hi) }
+.cr-wsw-actions button.danger {
+  background: #6a2418;
+  border-color: #b04a36;
+  color: var(--cream-hi);
+}
+.cr-wsw-actions button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* The create sheet: cream paper over the dark room, the app's own form
+   language (.cr-ws-input etc. in styles.css). Centred on a desk; on a phone
+   it is the width of the stage, above the keyboard the name input raises. */
+.cr-wsw-sheet {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(16, 13, 8, 0.55);
+  animation: cr-wsw-in 120ms ease both;
+}
+.cr-wsw-sheet .cr-ws-new {
+  width: min(360px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  border-radius: 4px;
+  box-shadow: 4px 4px 0 rgba(45, 42, 32, 0.18);
+  padding: 12px;
+}
+.cr-ws-new-head {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  padding: 0 2px 4px;
+}
+.cr-ws-new-foot {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px;
+}
+.cr-ws-cancel {
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  background: transparent;
+  border: 1.5px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.cr-ws-cancel:hover { color: var(--ink); border-color: var(--line) }
+
+/* A thumb needs a target, not a caption. */
+.cr-wsw-touch .cr-wsw-actions { bottom: 46px; gap: 10px }
+.cr-wsw-touch .cr-wsw-actions button {
+  min-height: 40px;
+  padding: 8px 14px;
+  font-size: 10px;
+}
+.cr-wsw-touch .cr-wsw-hud { font-size: 8px }
+.cr-wsw-touch .cr-wsw-sheet { align-items: start; padding-top: 24px }
+@media (max-width: 520px) {
+  .cr-wsw-plus b { font-size: 20px }
+  .cr-wsw-actions { gap: 6px }
 }

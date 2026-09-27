@@ -17,12 +17,11 @@ interface HeaderProps {
   /** Which view the stage is showing — drives the pressed state of the switch. */
   view: MainView
   onViewChange: (view: MainView) => void
-  /** Opens the activity metrics / history panel (workspace popout item). */
-  onActivity: () => void
-  /** Opens the screen wall (WorkspaceWall.tsx). */
-  onWall?: () => void
-  /** Photograph the canvas before leaving it, so the wall has a picture. */
-  onBeforeSwitch?: () => Promise<void>
+  /**
+   * Opens the screen wall (WorkspaceWall.tsx) — switching, making, managing
+   * and removing workspaces, and the activity history, all live behind it.
+   */
+  onWall: () => void
   /** Re-pull the canvas and re-establish the push channel (the brand mark). */
   onResync: () => void
   /**
@@ -60,8 +59,8 @@ const RESYNC_BUTTON: React.CSSProperties = {
  * CANVAS ⇄ AGENTS switch, live status, then the workspace. The inline tool
  * group that used to sit before the workspace (activity + fork) is gone:
  * saving/duplicating the team lives on the dock — you save the canvas FROM
- * the canvas — and activity is an option inside the workspace popout, since
- * history is a property of the workspace, not a top-level destination.
+ * the canvas — and activity is an action on the screen wall, since history
+ * is a property of the workspace, not a top-level destination.
  *
  * ATTENTION LIVES ON THE SWITCH. It used to be a second coin plus "N NEED YOU"
  * in the status block — a passive label next to the button you would then have
@@ -76,9 +75,7 @@ export function Header({
   attentionCount,
   view,
   onViewChange,
-  onActivity,
   onWall,
-  onBeforeSwitch,
   onResync,
   avatar
 }: HeaderProps): React.JSX.Element {
@@ -159,13 +156,7 @@ export function Header({
         </span>
       </div>
 
-      <WorkspaceSwitcher
-        fallbackName={workspaceName}
-        fallbackDir={dir}
-        onActivity={onActivity}
-        onWall={onWall}
-        onBeforeSwitch={onBeforeSwitch}
-      />
+      <WorkspaceSwitcher fallbackName={workspaceName} fallbackDir={dir} onWall={onWall} />
     </header>
   )
 }

@@ -37,14 +37,17 @@ const wall = (over: Partial<React.ComponentProps<typeof WorkspaceWall>> = {}): s
       now={NOW}
       onEnter={() => undefined}
       onClose={() => undefined}
+      onCreate={() => undefined}
+      onDirectories={() => undefined}
+      onRemove={() => undefined}
       {...over}
     />
   )
 
 describe('the wall is a row of screens carrying canvases', () => {
-  it('draws one screen per workspace, each with its snapshot', () => {
+  it('draws one screen per workspace, each with its snapshot, and one more for NEW', () => {
     const html = wall()
-    expect((html.match(/cr-wsw-screen/g) ?? []).length).toBe(3)
+    expect((html.match(/cr-wsw-screen/g) ?? []).length).toBe(4)
     expect(html).toContain('data:image/jpeg;base64,AAAA')
     expect(html).toContain('data:image/jpeg;base64,BBBB')
   })
@@ -116,7 +119,7 @@ describe('the picked screen', () => {
   it('carries the only visible label', () => {
     // Every screen has a label in the markup; CSS shows the picked one's. The
     // markup keeps them all so the label does not pop in on every step.
-    expect((wall().match(/cr-wsw-label/g) ?? []).length).toBe(3)
+    expect((wall().match(/cr-wsw-label/g) ?? []).length).toBe(4)
     expect(wall()).toContain('cr-wsw-screen pick')
   })
 
@@ -177,9 +180,58 @@ describe('what it refuses to spend', () => {
         now={NOW}
         onEnter={() => undefined}
         onClose={() => undefined}
+        onCreate={() => undefined}
+        onDirectories={() => undefined}
+        onRemove={() => undefined}
       />
     )
     expect(html).toContain('pointer-events:none')
     expect(html).toContain('opacity:0')
+  })
+})
+
+describe('the dropdown’s jobs, on the wall', () => {
+  it('ends the row with a NEW screen, so making a workspace is picking a picture too', () => {
+    const html = wall()
+    expect((html.match(/cr-wsw-screen/g) ?? []).length).toBe(4)
+    expect(html).toContain('NEW WORKSPACE')
+    expect(html.lastIndexOf('data-ws="__new__"')).toBeGreaterThan(html.lastIndexOf('data-ws="w3"'))
+  })
+
+  it('offers the picked workspace its actions: open, directories, remove, history', () => {
+    const html = wall({ onActivity: () => undefined })
+    expect(html).toContain('cr-wsw-actions')
+    for (const word of ['OPEN', 'DIRECTORIES', 'REMOVE', 'HISTORY']) expect(html, word).toContain(word)
+  })
+
+  it('will not offer to remove the last workspace', () => {
+    const html = wall({ workspaces: [WS[0]], recent: ['w1'], canRemove: false })
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>[^<]*REMOVE/)
+  })
+
+  it('offers CREATE, and nothing to remove, on the NEW screen', () => {
+    // A single workspace opens on itself; step once and NEW is the pick.
+    const html = wall({ workspaces: [WS[0]], recent: ['w1'], initialPick: 1 })
+    expect(html).toContain('CREATE')
+    expect(html).not.toContain('>REMOVE')
+  })
+
+  it('opens the create sheet over the wall when asked to', () => {
+    const html = wall({ initialSheet: 'create', teams: [] })
+    expect(html).toContain('cr-wsw-sheet')
+    expect(html).toContain('placeholder="workspace name"')
+  })
+})
+
+describe('on a phone', () => {
+  it('says swipe and tap, because there are no arrow keys', () => {
+    const html = wall({ touch: true })
+    expect(html).toContain('SWIPE')
+    expect(html).toContain('TAP')
+    expect(html).not.toContain('ESC')
+  })
+
+  it('still says the keys on a desk', () => {
+    expect(wall({ touch: false })).toContain('ESC')
   })
 })

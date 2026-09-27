@@ -16,7 +16,7 @@ import {
   ReactFlowProvider
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import type { AgentRole, CanvasNode, BrowserNodeData, TeamClipStatus, TerminalNodeData, WorkspaceList, WorkspaceState } from '../../shared/model'
+import type { AgentRole, CanvasNode, BrowserNodeData, TeamClipStatus, TerminalNodeData, WorkspaceState } from '../../shared/model'
 import { activeBrowserTab, browserTabs } from '../../shared/model'
 import type { TerminalActivity } from '../../shared/turn'
 import { cookrew, isRemoteMode } from './api'
@@ -24,7 +24,7 @@ import { mergeActivity } from './turn-view-model'
 import { isViewed, markViewed, pruneViewers, type ViewerClocks } from '../../shared/phone-viewing'
 import { TerminalNode } from './nodes/TerminalNode'
 import { NoteNode } from './nodes/NoteNode'
-import { WorkspaceWall } from './WorkspaceWall'
+import { useWorkspaceWall } from './WorkspaceWallHost'
 import { BrowserNode } from './nodes/BrowserNode'
 import { CableEdge } from './CableEdge'
 import { Header, type MainView } from './Header'
@@ -269,85 +269,12 @@ function Canvas(): React.JSX.Element {
     return cookrew().onWorkspaceList((list) => noteActiveWorkspace(list.activeId))
   }, [])
 
-  /* ── THE SCREEN WALL (WorkspaceWall.tsx) ────────────────────────────────
-   *
+  /* ── THE SCREEN WALL (WorkspaceWall.tsx, hosted by WorkspaceWallHost.tsx) ──
    * Switching by NAME asks people to remember the one thing about a workspace
    * nobody does. The wall shows each one as a tilted screen carrying a
-   * snapshot of its canvas, and you pick the picture.
-   *
-   * The list and the recency order are held here because the wall is opened
-   * from the header and covers the stage; the snapshots are fetched only when
-   * it opens, never held, because they are a few hundred kilobytes of base64
-   * each and are looked at for two seconds.
-   */
-  const [wallOpen, setWallOpen] = useState(false)
-  const [wallList, setWallList] = useState<WorkspaceList | null>(null)
-  const [wallShots, setWallShots] = useState<Record<string, { src: string; at: number }>>({})
-  const [wallStage, setWallStage] = useState<DOMRect | null>(null)
-  const recentRef = useRef<string[]>([])
-
-  // Recency, kept as the workspace changes under us — the wall orders by it so
-  // the one you were last in sits beside the one you are in.
-  useEffect(
-    () =>
-      cookrew().onWorkspaceList((list) => {
-        if (!list.activeId) return
-        recentRef.current = [list.activeId, ...recentRef.current.filter((id) => id !== list.activeId)]
-      }),
-    []
-  )
-
-  /**
-   * THE CHIP TOGGLES, AND IT NEVER PHOTOGRAPHS ITS OWN WALL.
-   *
-   * Clicking the chip a second time is the natural way to dismiss the wall,
-   * and without this guard that click ran a fresh capture WITH THE WALL ON
-   * SCREEN — so the workspace's snapshot became a picture of the switcher,
-   * and the next open showed a wall inside a wall. Found by using it, not by
-   * a test: nothing about the code reads wrong, it is purely a question of
-   * what is painted at the moment the compositor is asked for a frame.
-   */
-  const wallOpenRef = useRef(false)
-  useEffect(() => {
-    wallOpenRef.current = wallOpen
-  }, [wallOpen])
-
-  /**
-   * Photograph the canvas as it stands. Both doors out of a workspace use it —
-   * the wall and the dropdown — so a picture accumulates however somebody
-   * leaves, not only when they happen to open the wall.
-   */
-  const snapNow = useCallback(async () => {
-    if (wallOpenRef.current) return
-    const stage = stageRef.current?.getBoundingClientRect()
-    if (!stage) return
-    await cookrew()
-      .snapWorkspace({ x: stage.left, y: stage.top, width: stage.width, height: stage.height })
-      .catch(() => false)
-  }, [])
-
-  const openWall = useCallback(async () => {
-    if (wallOpenRef.current) {
-      setWallOpen(false)
-      return
-    }
-    const stage = stageRef.current?.getBoundingClientRect() ?? null
-    setWallStage(stage)
-    // PHOTOGRAPH THE CANVAS FIRST. Opening the wall is the moment this
-    // workspace stops being looked at, and it is still on screen right now —
-    // so its own screen in the wall is current rather than a memory.
-    await snapNow()
-    const [list, shots] = await Promise.all([
-      cookrew().listWorkspaces().catch(() => null),
-      cookrew().workspaceShots().catch(() => ({}))
-    ])
-    if (list) {
-      setWallList(list)
-      if (recentRef.current.length === 0 && list.activeId) recentRef.current = [list.activeId]
-    }
-    setWallShots(shots)
-    setWallOpen(true)
-  }, [snapNow])
+   * snapshot of its canvas, and you pick the picture — and it is where a
+   * workspace is made, given directories or removed, too. */
+  const wall = useWorkspaceWall({ stageRef, onActivity: () => setMetricsOpen(true) })
   /**
    * A workspace switch replaces every node while the viewport still frames the
    * OUTGOING canvas — so the incoming workspace opens somewhere off in empty
@@ -1522,9 +1449,7 @@ function Canvas(): React.JSX.Element {
           attentionCount={attentionCount}
           view={view}
           onViewChange={setView}
-          onActivity={() => setMetricsOpen(true)}
-          onWall={() => void openWall()}
-          onBeforeSwitch={snapNow}
+          onWall={wall.open}
           onResync={resync}
           avatar={account.avatar}
         />
@@ -1779,23 +1704,7 @@ function Canvas(): React.JSX.Element {
         )}
         {/* The screen wall covers the stage it hands back to, so it is mounted
             after the canvas and measures that stage rather than guessing. */}
-        <WorkspaceWall
-          open={wallOpen}
-          workspaces={(wallList?.workspaces ?? []).map((w) => ({
-            id: w.id,
-            name: w.name,
-            icon: w.icon,
-            dir: w.dir
-          }))}
-          activeId={wallList?.activeId ?? ''}
-          recent={recentRef.current}
-          shots={wallShots}
-          stage={wallStage}
-          onEnter={(id) => {
-            if (id !== wallList?.activeId) void cookrew().switchWorkspace(id)
-          }}
-          onClose={() => setWallOpen(false)}
-        />
+        {wall.element}
         <EventToastLayer />
         {/* D14 · a door this Mac was serving moved to another of the account's. */}
         <DoorMovedNotice />

@@ -4794,6 +4794,17 @@ const workspaceShots = new WorkspaceShots({
   }
 })
 
+/**
+ * Every workspace's picture, for the desktop wall (IPC) and the phone's
+ * (GET /api/workspaces/shots) alike. Swept here rather than on a timer: a wall
+ * opening is the only moment anything reads these, so it is the only moment
+ * a stale one costs.
+ */
+function currentWorkspaceShots(): Record<string, { src: string; at: number }> {
+  workspaceShots.sweep(store.list().workspaces.map((w) => w.id))
+  return workspaceShots.all()
+}
+
 async function captureWindow(): Promise<string> {
   if (!mainWindow) throw new Error('No window')
   const image = await mainWindow.webContents.capturePage()
@@ -5534,6 +5545,8 @@ app.whenReady().then(() => {
     board: boardSources(),
     // The main thread's pulse (loop-health.ts) for GET /api/health.
     health: () => loopHealth.snapshot(),
+    // The screen wall's pictures, for the phone (GET /api/workspaces/shots).
+    workspaceShots: currentWorkspaceShots,
     // Attach-free dispatch (v4 §3): the two /api routes answer 503 without it.
     dispatch: dispatchService,
     // While a dispatch is armed, the HTTP input/ask producers refuse 409 —
@@ -5576,9 +5589,6 @@ app.whenReady().then(() => {
       createTerminal,
       forkTerminal,
       listWorkspaces,
-      // The screen wall's pictures, for the phone. Read-only over the wire —
-      // see the route's own note for why the phone never asks for a capture.
-      workspaceShots: () => workspaceShots.all(),
       createWorkspace: (name: string, dir: string, team?: string) =>
         team ? createWorkspaceFromTeam(name, dir, team) : createWorkspace(name, dir),
       switchWorkspace,
@@ -6244,12 +6254,7 @@ function registerIpc(handlers: RestoreHandlers): void {
     if (!id) return false
     return workspaceShots.capture(id, rect)
   })
-  ipcMain.handle('workspace:shots', () => {
-    // Swept here rather than on a timer: the wall opening is the only moment
-    // anything reads these, so it is the only moment a stale one costs.
-    workspaceShots.sweep(store.list().workspaces.map((w) => w.id))
-    return workspaceShots.all()
-  })
+  ipcMain.handle('workspace:shots', () => currentWorkspaceShots())
 
   ipcMain.handle('workspace:switch', (_e, id: string) => {
     switchWorkspace(id)

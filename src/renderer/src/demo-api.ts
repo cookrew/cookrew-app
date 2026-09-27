@@ -101,6 +101,11 @@ export function createDemoApi(): CookrewApi {
   ]
   const states = new Map<string, WorkspaceState>([['demo-ws', demoWorkspace()]])
   let activeId = 'demo-ws'
+  // A counter beside the clock: two workspaces made in the same millisecond
+  // (a fixture seeding several at boot) must not share an id, or switching to
+  // one lands on the other. Connection ids learned this the same way.
+  let minted = 0
+  const mintId = (): string => `demo-ws-${Date.now()}-${++minted}`
   let state = states.get(activeId)!
 
   const stateListeners = new Set<(s: WorkspaceState) => void>()
@@ -132,7 +137,7 @@ export function createDemoApi(): CookrewApi {
     createWorkspace: (name, dir) => {
       const wsDir = dir.trim() || '~'
       const meta: WorkspaceMeta = {
-        id: `demo-ws-${Date.now()}`,
+        id: mintId(),
         name: uniqueName(name.trim() || 'Workspace', metas.map((m) => m.name)),
         dir: wsDir,
         dirs: [wsDir],
@@ -153,7 +158,7 @@ export function createDemoApi(): CookrewApi {
       return Promise.resolve(meta)
     },
     templateImport: (team) =>
-      Promise.resolve({ id: `demo-ws-${Date.now()}`, name: `${team} · session`, dir: '~', dirs: ['~'], icon: '🗂' }),
+      Promise.resolve({ id: mintId(), name: `${team} · session`, dir: '~', dirs: ['~'], icon: '🗂' }),
     switchWorkspace: (id) => {
       if (states.has(id)) {
         states.set(activeId, state)

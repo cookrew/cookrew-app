@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  NEW_WORKSPACE_ID,
+  withNewScreen,
   WALL_VISIBLE_DEPTH,
   flipOnto,
   mruOrder,
@@ -245,5 +247,56 @@ describe('which screen the wall opens on', () => {
     expect(live.id).toBe('w1')
     expect(live.transform).toMatch(/translateX\(-\d/)   // to the left
     expect(out.screens.filter((s) => s.opacity === 1 && !s.picked).length).toBeGreaterThan(1)
+  })
+})
+
+describe('a phone held upright', () => {
+  it('draws bigger screens than the same width would get in a browser card', () => {
+    // A 390px-wide stage that is 700px TALL is a phone, not a narrow card:
+    // the row has all that height to spend, and the landscape band's 196px
+    // screens left most of it empty.
+    const upright = tierFor(390, 700)
+    const card = tierFor(390)
+    expect(upright.screen.width).toBeGreaterThan(card.screen.width)
+    // Centre plus a neighbour still fits — a wall is a ROW or it is nothing.
+    expect(upright.screen.width / 2 + upright.stepA).toBeLessThan(390)
+  })
+
+  it('is only a phone when the stage is taller than it is wide', () => {
+    expect(tierFor(390, 300)).toEqual(tierFor(390))
+    expect(tierFor(1200, 2000)).toEqual(tierFor(1200))
+  })
+
+  it('reaches the wall through the view, so nothing else has to know', () => {
+    const upright = view({ width: 390, height: 700 })
+    expect(upright.tier).toEqual(tierFor(390, 700))
+  })
+})
+
+describe('the NEW screen at the end of the row', () => {
+  it('is appended after every workspace, whatever the recency order says', () => {
+    const faces = withNewScreen(WS)
+    const { screens } = wallView({
+      workspaces: faces, recent: ['w3', 'w1'], activeId: 'w1', pick: 0, width: 1200, shots: {}, now: NOW,
+    })
+    expect(screens.at(-1)?.id).toBe(NEW_WORKSPACE_ID)
+    expect(screens.at(-1)?.kind).toBe('new')
+    expect(screens.slice(0, -1).every((s) => s.kind === 'workspace')).toBe(true)
+  })
+
+  it('never carries a picture, an age, or a directory', () => {
+    const { screens } = wallView({
+      workspaces: withNewScreen(WS), recent: [], activeId: 'w1', pick: 0, width: 1200,
+      shots: { [NEW_WORKSPACE_ID]: shot(NOW) }, now: NOW,
+    })
+    const fresh = screens.at(-1)!
+    expect(fresh.snapshot.src).toBeNull()
+    expect(fresh.age).toBeNull()
+    expect(fresh.dir).toBe('')
+  })
+
+  it('does not move where the wall opens: the previous workspace is still the pick', () => {
+    // One real workspace plus NEW must open on the workspace, not on NEW.
+    expect(openingPick(1)).toBe(0)
   })
 })

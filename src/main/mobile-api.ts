@@ -76,8 +76,6 @@ export interface MobileOps {
   }) => CanvasNode;
   forkTerminal: (sourceId: string, turnIndex?: number) => TerminalNodeData;
   listWorkspaces: () => WorkspaceList;
-  /** Each workspace's canvas snapshot, as data URLs (the screen wall). */
-  workspaceShots?: () => Record<string, { src: string; at: number }>;
   createWorkspace: (
     name: string,
     dir: string,
@@ -229,6 +227,14 @@ export interface MobileApiDeps {
    * a missing wire-up is loud rather than a fabricated all-clear.
    */
   health?: () => LoopHealthSnapshot;
+  /**
+   * The Mac's pictures of its canvases (workspace-shots.ts), for the phone's
+   * screen wall. A picture of every workspace is a picture of every task the
+   * owner has going, so it answers behind the /api GET gate like the board.
+   * Absent = 503, so a missing wire-up is loud rather than a wall that quietly
+   * says NO SNAPSHOT YET for everything.
+   */
+  workspaceShots?: () => Record<string, { src: string; at: number }>;
   /**
    * Importing a served team FROM THE PHONE — the desktop's own operations,
    * reached over this API. Absent = the six /api/serve routes answer 503
@@ -608,17 +614,14 @@ export async function handleMobileApi(
     respondJson(response, 200, ops.listWorkspaces());
     return true;
   }
-  /**
-   * The screen wall's pictures, for the phone.
-   *
-   * READ-ONLY FROM HERE. The phone does not ask the Mac to photograph itself:
-   * the Mac's window may be showing something else entirely, and a capture
-   * triggered from another device would put whatever is on that screen into a
-   * workspace's snapshot. The phone shows the pictures the Mac has already
-   * taken, and says "no snapshot yet" for the rest — which is the truth.
-   */
+  // The screen wall's pictures. Read when the wall opens, never streamed:
+  // each is a JPEG of a whole canvas, and a phone looks at them for seconds.
   if (method === "GET" && p === "/api/workspaces/shots") {
-    respondJson(response, 200, ops.workspaceShots ? ops.workspaceShots() : {});
+    if (!deps.workspaceShots) {
+      respondJson(response, 503, { error: "workspace shots not wired" });
+      return true;
+    }
+    respondJson(response, 200, deps.workspaceShots());
     return true;
   }
   if (method === "POST" && p === "/api/workspaces") {
