@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { WorkspaceWall } from '../src/renderer/src/WorkspaceWall'
 import type { Snapshot, WorkspaceFace } from '../src/renderer/src/workspace-wall-store'
+import type { WorkspaceMap } from '../src/shared/workspace-map'
 
 /**
  * THE WALL PAINTS — the cheap half of "it is on the card".
@@ -23,6 +24,17 @@ const STAGE = { left: 0, top: 56, width: 1200, height: 800 }
 const SHOTS: Record<string, Snapshot> = {
   w1: { src: 'data:image/jpeg;base64,AAAA', at: NOW - 90_000 },
   w2: { src: 'data:image/jpeg;base64,BBBB', at: NOW - 5 * 3_600_000 },
+}
+
+/** The live workspace's own shape, which needs no camera (workspace-map.ts). */
+const MAP: WorkspaceMap = {
+  width: 1000,
+  height: 600,
+  cells: [
+    { x: 0, y: 0, w: 120, h: 80, kind: 'terminal' },
+    { x: 300, y: 200, w: 120, h: 80, kind: 'note' },
+    { x: 700, y: 400, w: 200, h: 140, kind: 'browser' },
+  ],
 }
 
 const wall = (over: Partial<React.ComponentProps<typeof WorkspaceWall>> = {}): string =>
@@ -77,6 +89,46 @@ describe('the wall is a row of screens carrying canvases', () => {
 })
 
 describe('what the wall opens on', () => {
+  /**
+   * THE SCREEN YOU ARE STANDING IN. Its photograph is taken by Electron when
+   * the wall opens, so the phone — which has no window to photograph and may
+   * not fire a capture on the Mac — never had one, and the centre screen read
+   * NO SNAPSHOT YET for the one workspace the reader was actually in. The
+   * renderer holds that workspace's state, so the shape is drawn from it.
+   */
+  it('draws the live workspace’s own shape when no photograph exists', () => {
+    const html = wall({ shots: {}, maps: { w1: MAP } })
+    expect(html).toContain('cr-wsw-map')
+    expect(html).toContain('viewBox="0 0 1000 600"')
+    // One rectangle per node, each saying what it is so the drawing can
+    // colour an agent differently from a note.
+    expect((html.match(/data-kind=/g) ?? [])).toHaveLength(3)
+    expect(html).toContain('data-kind="terminal"')
+    // …and the screen no longer claims to have nothing.
+    const screen = html.slice(html.indexOf('data-ws="w1"'), html.indexOf('data-ws="w2"'))
+    expect(screen).not.toContain('NO SNAPSHOT YET')
+  })
+
+  it('prefers the photograph when there is one — the drawing is the fallback', () => {
+    const html = wall({ maps: { w1: MAP } })
+    const screen = html.slice(html.indexOf('data-ws="w1"'), html.indexOf('data-ws="w2"'))
+    expect(screen).toContain('data:image/jpeg;base64,AAAA')
+    expect(screen).not.toContain('cr-wsw-map')
+  })
+
+  it('still says so for a workspace with neither a photograph nor a shape', () => {
+    const html = wall({ shots: {}, maps: {} })
+    expect(html).toContain('NO SNAPSHOT YET')
+    expect(html).not.toContain('cr-wsw-map')
+  })
+
+  it('draws a shape and nothing else — no names, no note bodies', () => {
+    const html = wall({ shots: {}, maps: { w1: MAP } })
+    const svg = html.slice(html.indexOf('cr-wsw-map'), html.indexOf('</svg>'))
+    expect(svg).not.toContain('Cookrew Dev')
+    expect(svg).not.toMatch(/<text/)
+  })
+
   it('renders nothing at all when it is closed', () => {
     // Closed means GONE, not hidden: a wall left in the tree is three images
     // decoded for a surface nobody asked for.

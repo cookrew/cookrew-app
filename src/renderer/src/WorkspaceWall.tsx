@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { TeamMeta } from '../../shared/model'
+import type { WorkspaceMap } from '../../shared/workspace-map'
+import { WorkspaceMapView } from './WorkspaceMapView'
 import { WorkspaceCreateSheet, type CreateRequest } from './WorkspaceCreateSheet'
 import {
   NEW_WORKSPACE_ID,
@@ -66,6 +68,13 @@ export interface WorkspaceWallProps {
   /** Ids newest-first; the wall opens on the live one and orders by recency. */
   recent: readonly string[]
   shots: Readonly<Record<string, Snapshot>>
+  /**
+   * The SHAPE of a workspace, drawn when it has no photograph (the phone can
+   * take none). Keyed by workspace id; in practice the live one, whose state
+   * the renderer already holds — a neighbour's would need its state fetched,
+   * and a photograph of it usually exists.
+   */
+  maps?: Readonly<Record<string, WorkspaceMap>>
   /** The canvas area this wall covers and hands back to. */
   stage: DOMRectLike | null
   onEnter: (id: string) => void
@@ -106,6 +115,7 @@ export function WorkspaceWall({
   activeId,
   recent,
   shots,
+  maps,
   stage,
   onEnter,
   onClose,
@@ -346,6 +356,12 @@ export function WorkspaceWall({
                   </span>
                 ) : screen.snapshot.src ? (
                   <img src={screen.snapshot.src} alt="" draggable={false} />
+                ) : maps?.[screen.id] ? (
+                  // NO CAMERA NEEDED FOR THE ONE YOU ARE IN. The phone can
+                  // photograph nothing, so the live workspace's screen said
+                  // NO SNAPSHOT YET for the canvas the reader was standing
+                  // in. Its shape is drawn from the state instead.
+                  <WorkspaceMapView map={maps[screen.id]} />
                 ) : (
                   // Never been left, so never photographed. Says so rather
                   // than showing a blank that reads as a broken image.
