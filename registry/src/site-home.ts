@@ -166,8 +166,8 @@ function rentCard(d: ListedDoor, today: DoorPulse): string {
 
 /**
  * THE RENT STRIP — the marketplace's purchasable instances, on the first
- * screen, right under the hero (owner, 2026-09-27: 把 marketplace 的可购买
- * 实例展示到首页可触达的地方).
+ * screen, right under the hero (owner ruling, 2026-09-27: the
+ * marketplace's purchasable instances must be reachable on the front page).
  *
  * A priced instance is the one thing on this site somebody can decide about
  * in a second, so it does not wait below a heading and a lede: up to three of
