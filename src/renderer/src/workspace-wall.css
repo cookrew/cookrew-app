@@ -110,6 +110,26 @@
    white screen beside three that carry canvases — so the glass goes dark and
    says what it is. */
 .cr-wsw-glass:has(.cr-wsw-blank) { background: #17150f }
+
+/* THE SHAPE, where there is no photograph (WorkspaceMapView.tsx). It sits on
+   the CANVAS's own cream rather than the dark of an empty screen, because it
+   is a picture of a canvas and not the absence of one — the wall should read
+   "this is that workspace", not "this one is missing". Padded, because a
+   photograph is cropped to the stage and this is the whole board: flush to
+   the bezel it would read as a diagram rather than a canvas seen from afar. */
+.cr-wsw-map {
+  width: 100%;
+  height: 100%;
+  display: block;
+  padding: 7%;
+  box-sizing: border-box;
+}
+/* The card colours the canvas itself uses, so the shape is recognisable as
+   the board it is a picture of: agents dark, notes amber, browsers framed. */
+.cr-wsw-map rect { stroke: var(--line); stroke-width: 6; }
+.cr-wsw-map rect[data-kind='terminal'] { fill: var(--ink); }
+.cr-wsw-map rect[data-kind='note'] { fill: var(--note-bg); }
+.cr-wsw-map rect[data-kind='browser'] { fill: var(--cream-hi); }
 .cr-wsw-blank {
   font: 700 9px var(--font-pixel);
   letter-spacing: 0.14em;

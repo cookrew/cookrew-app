@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
-import type { TeamMeta, WorkspaceList, WorkspaceMeta } from '../../shared/model'
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import type { TeamMeta, WorkspaceList, WorkspaceMeta, WorkspaceState } from '../../shared/model'
+import { workspaceMap } from '../../shared/workspace-map'
 import { cookrew } from './api'
 import { DirectoryManager } from './DirectoryManager'
 import { WorkspaceWall } from './WorkspaceWall'
@@ -24,10 +25,17 @@ import { hasNativeDirPicker, pickDirectory, removeWorkspace } from './workspace-
 export function useWorkspaceWall(opts: {
   /** The canvas area the wall covers and hands back to. */
   stageRef: RefObject<HTMLDivElement | null>
+  /**
+   * The live workspace, for the one screen no camera can reach. `snapWorkspace`
+   * is Electron's; the phone answers false to it and may not fire a capture on
+   * the Mac, so the screen for the canvas the reader is STANDING IN read NO
+   * SNAPSHOT YET. Its shape comes from this instead (workspace-map.ts).
+   */
+  workspace: WorkspaceState | null
   /** The activity / history panel — a property of the live workspace. */
   onActivity: () => void
 }): { open: () => void; element: React.JSX.Element } {
-  const { stageRef, onActivity } = opts
+  const { stageRef, workspace, onActivity } = opts
   const [open, setOpen] = useState(false)
   const [list, setList] = useState<WorkspaceList | null>(null)
   const [shots, setShots] = useState<Record<string, Snapshot>>({})
@@ -139,6 +147,17 @@ export function useWorkspaceWall(opts: {
     [list]
   )
 
+  /**
+   * Built only while the wall is up — it walks every node, and the wall is
+   * looked at for two seconds. Keyed by the live id, because that is the only
+   * workspace whose state this renderer holds.
+   */
+  const maps = useMemo(() => {
+    if (!open || !workspace || !list?.activeId) return {}
+    const map = workspaceMap(workspace)
+    return map.cells.length === 0 ? {} : { [list.activeId]: map }
+  }, [open, workspace, list?.activeId])
+
   const activity = useCallback(() => {
     setOpen(false)
     onActivity()
@@ -152,6 +171,7 @@ export function useWorkspaceWall(opts: {
         activeId={list?.activeId ?? ''}
         recent={recentRef.current}
         shots={shots}
+        maps={maps}
         stage={stage}
         teams={teams}
         canRemove={(list?.workspaces.length ?? 0) > 1}

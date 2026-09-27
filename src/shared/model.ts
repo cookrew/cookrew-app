@@ -154,6 +154,13 @@ export interface NoteNodeData {
   customName: string | null
   /** Markdown body. Persisted as a real .md file on disk. */
   content: string
+  /**
+   * ON THE WIRE ONLY, and only when `content` is a HEAD of the body: the whole
+   * length. A workspace switch sends the canvas light first so it can be drawn
+   * (wire-canvas.ts) and whole a beat later; while a note is only half here it
+   * must not be written over, and `noteIsWhole` is how anything asks.
+   */
+  contentBytes?: number
   locked: boolean
   position: CanvasPosition
   size: CanvasSize

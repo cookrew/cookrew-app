@@ -274,7 +274,7 @@ function Canvas(): React.JSX.Element {
    * nobody does. The wall shows each one as a tilted screen carrying a
    * snapshot of its canvas, and you pick the picture — and it is where a
    * workspace is made, given directories or removed, too. */
-  const wall = useWorkspaceWall({ stageRef, onActivity: () => setMetricsOpen(true) })
+  const wall = useWorkspaceWall({ stageRef, workspace, onActivity: () => setMetricsOpen(true) })
   /**
    * A workspace switch replaces every node while the viewport still frames the
    * OUTGOING canvas — so the incoming workspace opens somewhere off in empty
