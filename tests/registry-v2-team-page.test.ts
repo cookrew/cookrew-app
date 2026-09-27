@@ -224,4 +224,20 @@ describe('the page itself', () => {
     expect(ASSETS['site.js'].body).toContain('clipboard')
     expect(ASSETS['line.js'].body).toContain('/call-token')
   })
+
+  it('ships the card return in the line: same tab out, back with the session, no second tab', () => {
+    const line = ASSETS['line.js'].body
+    // The door is asked to send the buyer back to THIS page.
+    expect(line).toContain("JSON.stringify({ returnUrl })")
+    expect(line).toContain('location.assign(out.url)')
+    expect(line).not.toContain('window.open(')
+    // The return is read off the URL, spent, and the line opened on it.
+    expect(line).toContain("searchParams.get('paid')")
+    expect(line).toContain("searchParams.delete('paid')")
+    expect(line).toContain('history.replaceState(')
+    expect(line).toContain("searchParams.get('buy')")
+    expect(line).toContain('cr_paying:')
+    expect(line).toContain('cr_paid:')
+    expect(line).toContain('cr_buy:')
+  })
 })

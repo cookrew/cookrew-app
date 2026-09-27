@@ -42,8 +42,41 @@
   const RECONNECT_MAX_MS = 60_000
   const RECONNECT_LIMIT = 40
   const STRIPE_CHECKOUT = /^https:\/\/checkout\.stripe\.com\//
+  const SESSION_ID = /^cs_[A-Za-z0-9_]+$/
   let seq = 0
   const [handle, team] = door.replace(/^@/, '').split('/')
+  /**
+   * WHAT SURVIVES THE TRIP TO THE CARD PAGE — per tab, per door, in
+   * sessionStorage: that this tab LEFT for Stripe (so a `?paid=` on the way
+   * back is ours and not a link somebody pasted), the session it came back
+   * with (until the line is open on it, or the door refuses it), and a BUY
+   * that arrived by link before anyone was signed in (until the sign-in).
+   */
+  const PAYING_KEY = `cr_paying:${door}`
+  const PAID_KEY = `cr_paid:${door}`
+  const BUY_KEY = `cr_buy:${door}`
+  const remember = (key, value) => {
+    try {
+      sessionStorage.setItem(key, value)
+    } catch {
+      // A refused store means the return is not recognised; the buyer is
+      // told so and the seat still lands at cookrew.dev from the door.
+    }
+  }
+  const recall = (key) => {
+    try {
+      return sessionStorage.getItem(key)
+    } catch {
+      return null
+    }
+  }
+  const forget = (key) => {
+    try {
+      sessionStorage.removeItem(key)
+    } catch {
+      // Nothing to forget, then.
+    }
+  }
   const callPath = `/v1/relay/call/${encodeURIComponent(`@${handle}`)}/${encodeURIComponent(team)}`
 
   /**
@@ -284,8 +317,13 @@
             reconnects = 0
             gate(null)
             // A paid line means the seat is settled at cookrew.dev a moment
-            // later, by the owner's app. The seat bar watches for it.
-            if (payment) window.cookrewSeatbar?.watchSeat?.()
+            // later, by the owner's app. The seat bar watches for it. The
+            // session presented is spent now: a reload must not present it again.
+            if (payment) {
+              forget(PAID_KEY)
+              forget(PAYING_KEY)
+              window.cookrewSeatbar?.watchSeat?.()
+            }
             $('btn-end').hidden = false
             $('prompt').disabled = false
             $('send').disabled = false
@@ -403,7 +441,12 @@
     const terms = body?.terms
     const price = root.dataset.price
     if (body?.reason === 'invalid') {
-      gate('Payment refused', 'The door did not accept that payment. Nothing was charged twice.', [button('Try again', true, () => void open())])
+      // A refused session is never presented again — not on a retry, not on
+      // a reload. The next attempt starts from the quote.
+      payment = null
+      forget(PAID_KEY)
+      forget(PAYING_KEY)
+      gate('Payment refused', 'The door did not accept that payment. Nothing was charged twice.', [button('Try again', true, () => void open({ buy: true }))])
       return
     }
     if (body?.reason === 'unverifiable') {
@@ -417,7 +460,13 @@
     if (card) {
       actions.push(
         button(`Pay ${price} USD by card`, true, async () => {
-          const res = await exchange('POST', '/api/call/pay', { ...auth(), 'content-type': 'application/json' }, '{}')
+          // THIS TAB GOES TO THE CARD PAGE AND COMES BACK. The door is asked
+          // to send the buyer back to this page — this page, at this origin,
+          // which is the only return the door accepts — with the session id
+          // in the query; the page then opens the line on it by itself. No
+          // second tab, no button to press afterwards.
+          const returnUrl = `${location.origin}${location.pathname}`
+          const res = await exchange('POST', '/api/call/pay', { ...auth(), 'content-type': 'application/json' }, JSON.stringify({ returnUrl }))
           const out = jsonOf(res.body)
           if (res.status !== 200 || !out?.url) {
             toast(`Card payment is not available right now (${res.status}).`, 5000)
@@ -427,12 +476,10 @@
             toast('The door offered a checkout that is not Stripe’s; refusing to open it.', 6000)
             return
           }
-          const session = /\/(cs_[A-Za-z0-9_]+)/.exec(out.url)?.[1]
-          window.open(out.url, '_blank', 'noopener')
-          if (session) {
-            payment = btoa(JSON.stringify({ rail: 'stripe', session }))
-            gate('Finish paying in the other tab', 'When the checkout completes, open the line.', [button('Open the line', true, () => void connectLine())])
-          }
+          remember(PAYING_KEY, JSON.stringify({ team: door, at: Date.now() }))
+          setPhase('PAYING', 'Going to the card page — this page opens the line when you are back.')
+          gate('Going to the card page', 'Stripe takes the card; you come straight back here and the line opens.', [])
+          location.assign(out.url)
         })
       )
     }
@@ -618,9 +665,13 @@
       return
     }
     if (!seated) {
+      // The intent that brought us here (a BUY link, a paid return) stays in
+      // sessionStorage: the sign-in sheet leaves this page, and the next
+      // load of it picks the intent up again.
       toast('Sign in to cookrew.dev first — a seat is yours, not this browser’s.')
       return acct?.account?.()
     }
+    forget(BUY_KEY)
     closed = false
     gate(null)
     term.clear()
@@ -659,4 +710,41 @@
   $('btn-new').addEventListener('click', startNew)
   $('btn-end').addEventListener('click', () => void end())
   window.addEventListener('pagehide', () => controller?.abort())
+
+  /**
+   * THE RETURN, AND THE LINK THAT MEANS BUY.
+   *
+   * `?paid=cs_…` is Stripe sending this tab back after the card. It counts
+   * only when this tab is the one that left (PAYING_KEY): a pasted link with
+   * somebody's session id in it is scrubbed and ignored. `?buy=1` is a link
+   * from a card elsewhere on the site that already said BUY; both are spent
+   * off the URL at once, so a reload or a share never repeats them, and both
+   * are remembered in the tab until they are done — the sign-in sheet takes
+   * the reader to /me and back.
+   *
+   * Opening the line here is not a session opened by a link: the click was
+   * the BUY, on this page or on the card that linked here.
+   */
+  const resume = () => {
+    const url = new URL(location.href)
+    const paid = url.searchParams.get('paid')
+    const buy = url.searchParams.get('buy')
+    if (paid !== null || buy !== null) {
+      url.searchParams.delete('paid')
+      url.searchParams.delete('buy')
+      history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`)
+    }
+    if (paid !== null && SESSION_ID.test(paid) && recall(PAYING_KEY) !== null) remember(PAID_KEY, paid)
+    if (buy === '1') remember(BUY_KEY, '1')
+    const session = recall(PAID_KEY)
+    if (session !== null && SESSION_ID.test(session)) {
+      payment = btoa(JSON.stringify({ rail: 'stripe', session }))
+      setPhase('PAID', 'Payment received — opening the line…')
+      gate('Payment received', 'Opening the line on your new seat…', [])
+      void open({ buy: true })
+      return
+    }
+    if (recall(BUY_KEY) !== null) void open({ buy: true })
+  }
+  resume()
 })()
