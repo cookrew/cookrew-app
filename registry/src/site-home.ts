@@ -24,8 +24,10 @@ import { BRAND_LOCKUP_CSS, BRAND_LOCKUP_HTML } from './site-brand'
  * What used to be three pages is one, in the order of what a visitor came for.
  * The two destinations — a canvas and the marketplace — are both in the first
  * screen: the hero's three buttons open a live canvas, download the app, or go
- * to the market, and the dock strip under it repeats them with today's count.
- * The market itself is the first section, not the last; GET STARTED (the two
+ * to the market; the RENT STRIP under the hero shows the priced instances with
+ * their price and a BUY (rentStrip), and the dock repeats the three destinations
+ * with today's count. The market section then lists only what the strip did
+ * not; GET STARTED (the two
  * steps and the crew builder) and the FEATURES (every one with its recorded
  * frame, the comparison, the questions, the commits) follow for the reader who
  * keeps going. The page's
@@ -130,11 +132,87 @@ function heroButtons(release: Release | null, live: ListedDoor | null): string {
 <p class="meta">${release ? `v${esc(release.version)}${date ? ` · ${esc(date)}` : ''}` : `<a href="${RELEASES_PAGE}">latest release</a>`} · ${FACTS.license} · Apple Silicon${win ? ` · <a href="${esc(win.url)}">Windows preview</a>` : ', Windows preview'} · Node 20+ · <a href="${GITHUB_REPO}" target="_blank" rel="noopener">Source ↗</a></p>`
 }
 
+/** How many rentable instances the strip under the hero shows before it points at the market. */
+const RENT_STRIP_MAX = 3
+
 /**
- * THE DOCK — the strip right under the hero, and the reason nobody scrolls to
- * find what they came for: what the canvas is, the machines on your own
- * account, and the marketplace with today's count. All three are one click
- * from the first screen.
+ * ONE RENTABLE INSTANCE, in the strip under the hero: the lamp, the name, the
+ * price, one line of what it does, and the two things a reader can do with it
+ * — buy a seat, or open the page. `?buy=1` on the team page starts the
+ * purchase there (line.js), so the price on this card is one click from the
+ * checkout.
+ */
+function rentCard(d: ListedDoor, today: DoorPulse): string {
+  const at = `/${esc(d.handle)}/${esc(d.name)}`
+  const off = d.live === false
+  const harnesses = d.harnesses ?? []
+  const priced = d.access === 'paid' && d.priceUsd
+  const what = d.summary
+    ? esc(d.summary)
+    : `${esc(d.door)} answers on behalf of ${d.agents} agent${d.agents === 1 ? '' : 's'}.`
+  const chips = [
+    `<span class="chip">@${esc(d.handle)}</span>`,
+    ...harnesses.slice(0, 3).map((h) => `<span class="chip">${esc(h)}</span>`),
+    `<span class="chip${off ? '' : ' amber'}">${off ? 'offline' : `${today.lines} line${today.lines === 1 ? '' : 's'} today`}</span>`
+  ].join('')
+  const buy = priced ? `<a class="btn sm primary" href="${at}?buy=1">Buy a seat · $${esc(d.priceUsd ?? '')}</a>` : ''
+  return `<article class="rent${off ? ' off' : ''}">
+<div class="head"><span class="led${off ? ' off' : ''}" title="${off ? 'offline' : 'taking calls'}"></span><a class="ttl" href="${at}">${esc(d.title)}</a></div>
+<div class="row">${priceChip(d)}${chips}</div>
+<p>${what}</p>
+<div class="foot">${buy}<a class="btn sm${priced ? '' : ' primary'}" href="${at}">Open</a></div>
+</article>`
+}
+
+/**
+ * THE RENT STRIP — the marketplace's purchasable instances, on the first
+ * screen, right under the hero (owner, 2026-09-27: 把 marketplace 的可购买
+ * 实例展示到首页可触达的地方).
+ *
+ * A priced instance is the one thing on this site somebody can decide about
+ * in a second, so it does not wait below a heading and a lede: up to three of
+ * them sit here with the price and a BUY button, and the rest are one link
+ * away. With nothing priced the strip shows what is free to open; with
+ * nothing listed at all it says so and points at how to serve one. A team
+ * appears ONCE on this page — the market section below carries only what
+ * this strip did not.
+ */
+function rentStrip(input: HomeInput): string {
+  const paid = input.doors.filter((d) => d.access === 'paid')
+  const free = input.doors.filter((d) => d.access !== 'paid')
+  const shown = (paid.length > 0 ? paid : free).slice(0, RENT_STRIP_MAX)
+  const rest = (paid.length > 0 ? paid : free).length - shown.length
+  const live = (list: readonly ListedDoor[]): number => list.filter((d) => d.live !== false).length
+  if (input.doors.length === 0) {
+    return `<div class="rent-strip" id="rent"><div class="mkt-h"><span class="kicker" style="margin:0"><span class="no">RENT</span></span>Nobody is serving a team here yet<span class="sp"></span><a class="btn sm" href="#serve">Serve yours ${icon('arrow')}</a></div></div>`
+  }
+  const heading =
+    paid.length > 0
+      ? `Instances you can rent<span class="chip amber">${paid.length} listed · ${live(paid)} taking calls</span>`
+      : `Free to open<span class="chip">account needed</span>`
+  const more =
+    rest > 0
+      ? `<a class="btn sm" href="/market?access=${paid.length > 0 ? 'paid' : 'free'}">+${rest} more ${icon('arrow')}</a>`
+      : `<a class="btn sm" href="/market">Marketplace ${icon('arrow')}</a>`
+  return `<div class="rent-strip" id="rent">
+<div class="mkt-h"><span class="kicker" style="margin:0"><span class="no">RENT</span></span>${heading}<span class="sp"></span>${more}</div>
+<div class="rent-cards">${shown.map((d) => rentCard(d, input.pulse(d.handle, d.name))).join('')}</div>
+<p class="meta" style="margin:8px 0 0">Buy a seat once; it follows you to any device. The canvas runs on its author’s machine; your session is sandboxed and yours.</p>
+</div>`
+}
+
+/** The doors the rent strip did not show — what the market section still has to list. */
+function leftForMarket(input: HomeInput): { free: ListedDoor[]; shownFree: number } {
+  const paid = input.doors.filter((d) => d.access === 'paid')
+  const free = input.doors.filter((d) => d.access !== 'paid')
+  const shownFree = paid.length > 0 ? 0 : Math.min(free.length, RENT_STRIP_MAX)
+  return { free: free.slice(shownFree), shownFree }
+}
+
+/**
+ * THE DOCK — one row under the rent strip: what the canvas is, the machines
+ * on your own account, and the marketplace with today's count. All three are
+ * one click from the first screen.
  *
  * THE MIDDLE CELL IS HONEST ABOUT BOTH STATES. This page has no script, so it
  * cannot know whether the reader is signed in; /me answers for both — a
@@ -147,7 +225,7 @@ function dock(input: HomeInput): string {
     input.doors.length === 0
       ? 'Nobody is serving a team yet — serve yours'
       : `${paid.length > 0 ? `${paid.length} to rent · ` : ''}${input.doors.length} listed · ${serving} taking calls now`
-  return `<nav class="dock" aria-label="Where to go first">
+  return `<nav class="dock compact" aria-label="Where to go first">
 <a href="/features/ai-agents-on-one-canvas"><span class="ico">${icon('canvas')}</span><span><span class="t">See the canvas</span><span class="d">Terminals, notes and browsers on one board, wired together.</span></span></a>
 <a href="/me#desktops"><span class="ico">${icon('mac')}</span><span><span class="t">Your machines</span><span class="d">Open a canvas on a Mac of yours, in this browser.</span></span></a>
 <a href="/market"><span class="ico">${icon('market')}</span><span><span class="t">Marketplace</span><span class="d">${esc(market)}</span></span></a>
@@ -228,26 +306,17 @@ function catalog(release: Release | null): string {
 }
 
 /**
- * THE MARKET, and it is the page's first section now.
- *
- * RENT COMES FIRST. A paid instance is the one thing here somebody can decide
- * about in a second — the price is on the card — so it leads, under its own
- * heading, and the free ones follow. Presets are last because they are a
- * download and a review, not a door.
+ * THE MARKET — the page's first section, carrying what the rent strip under
+ * the hero did not: the free teams, and the presets, which are a download and
+ * a review rather than a door. The priced instances are ABOVE, on the first
+ * screen; listing them again here would put the same team on the page twice.
  */
 function marketSection(input: HomeInput): string {
   const card = (d: ListedDoor): string => teamCard(d, input.stars(d.handle, d.name), input.pulse(d.handle, d.name))
-  const paid = input.doors.filter((d) => d.access === 'paid')
-  const free = input.doors.filter((d) => d.access !== 'paid')
+  const { free } = leftForMarket(input)
   const serving = input.doors.filter((d) => d.live !== false).length
   const presets = input.presets.slice(0, 6).map(presetCard)
   const serveYours = `<article class="team" style="border-style:dashed;box-shadow:none"><div class="body" style="justify-content:center;text-align:center;padding:26px 16px"><h3 style="margin:0 0 6px">Serve yours</h3><p>Save a team in the app, press SERVE. It is listed here while your relay connection is up.</p><p class="row" style="justify-content:center;margin-top:12px"><a class="btn primary" href="#serve">How ↑</a></p></div></article>`
-  const rent =
-    paid.length > 0
-      ? `<h3 id="rent" class="mkt-h">Instances you can rent<span class="chip amber">${paid.length} listed · ${paid.filter((d) => d.live !== false).length} taking calls</span></h3>
-<p class="meta" style="margin:0 0 14px">Buy a seat once; it follows you to any device. The canvas runs on its author's machine; your session is sandboxed and thrown away when you close it — the seat is not.</p>
-<div class="teams">${paid.slice(0, 6).map(card).join('')}</div>`
-      : ''
   const open =
     free.length > 0
       ? `<h3 id="free" class="mkt-h">Free to open<span class="chip">account needed</span></h3><div class="teams">${free.slice(0, 6).map(card).join('')}${serveYours}</div>`
@@ -256,7 +325,7 @@ function marketSection(input: HomeInput): string {
 <p class="kicker"><span class="no">MARKET</span>${serving} serving now · ${input.linesToday} line${input.linesToday === 1 ? '' : 's'} opened today</p>
 <h2>Open someone’s canvas — nothing to install</h2>
 <p class="lede" style="font-size:16px">A served team stays on its author’s machine; you get a sandboxed session of your own, in this browser or in the app.</p>
-${input.doors.length === 0 ? `<p class="empty">Nobody is serving a team here yet.</p>` : ''}${rent}${open}
+${input.doors.length === 0 ? `<p class="empty">Nobody is serving a team here yet.</p>` : ''}${open}
 ${presets.length > 0 ? `<h3 class="mkt-h" style="margin-top:26px">Presets to download<span class="chip">signed team files</span></h3><div class="teams">${presets.join('')}</div>` : ''}
 <p class="row" style="margin-top:18px"><a class="btn primary lg" href="/market">Explore the marketplace ${icon('arrow')}</a><a class="btn lg" href="/me#desktops">${icon('mac')} Your own machines</a></p>
 </div></section>`
@@ -298,7 +367,7 @@ ${heroButtons(input.release, live)}</div>
 <div>${promo()}</div>
 </div></div>
 
-<div class="wrap" style="padding:0;margin-top:-2px">${dock(input)}</div>
+<div class="wrap" style="padding:0">${rentStrip(input)}${dock(input)}</div>
 
 ${marketSection(input)}
 
