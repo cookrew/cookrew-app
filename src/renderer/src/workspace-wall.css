@@ -1,0 +1,253 @@
+/* THE SCREEN WALL (WorkspaceWall.tsx).
+ *
+ * Everything that does not move lives here; everything that depends on WHICH
+ * screen is picked is a transform the store computes, because a rule that
+ * changes with state is a rule a stylesheet cannot hold.
+ *
+ * ONE COLOUR NOTE, because it is the difference between this looking good and
+ * looking like a stack of paper: the canvas is cream, and cream only reads as
+ * a LIT SCREEN against a dark room. The wash is not decoration.
+ */
+
+.cr-wsw {
+  position: fixed;
+  z-index: 900;
+  overflow: hidden;
+  perspective-origin: 50% 43%;
+  animation: cr-wsw-in 160ms ease both;
+}
+@keyframes cr-wsw-in {
+  from { opacity: 0 }
+  to { opacity: 1 }
+}
+
+.cr-wsw-wash {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse 74% 64% at 50% 42%,
+    rgba(16, 13, 8, 0.88),
+    rgba(16, 13, 8, 0.965) 66%,
+    rgba(16, 13, 8, 0.99)
+  );
+}
+/* The lights come back up as the chosen screen grows into the canvas. */
+.cr-wsw-leaving .cr-wsw-wash { opacity: 0; transition: opacity 300ms ease }
+.cr-wsw-leaving .cr-wsw-hud { opacity: 0; transition: opacity 160ms ease }
+.cr-wsw-leaving .cr-wsw-screen:not(.cr-wsw-landing) { opacity: 0 !important; transition: opacity 180ms ease }
+
+.cr-wsw-track {
+  position: absolute;
+  left: 50%;
+  top: 43%;
+  width: 0;
+  height: 0;
+  transform-style: preserve-3d;
+}
+
+.cr-wsw-screen {
+  position: absolute;
+  transform-style: preserve-3d;
+  cursor: pointer;
+  transition:
+    transform 300ms cubic-bezier(0.22, 0.72, 0.24, 1),
+    opacity 240ms ease;
+}
+
+/* A screen has an edge. The bezel is the one piece of chrome here that is not
+   the app's paper language — it is a monitor, and it says so. */
+.cr-wsw-bezel {
+  position: absolute;
+  inset: 0;
+  background: #0d0b07;
+  border: 1px solid #3a3529;
+  border-radius: 6px;
+  padding: 6px;
+  box-shadow:
+    0 26px 60px rgba(0, 0, 0, 0.62),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  transition:
+    border-color 300ms ease,
+    border-radius 300ms ease,
+    box-shadow 300ms ease,
+    padding 300ms ease;
+}
+.cr-wsw-screen.pick .cr-wsw-bezel {
+  border-color: var(--amber);
+  box-shadow: 0 0 0 2px var(--amber-deep), 0 30px 72px rgba(0, 0, 0, 0.68);
+}
+/* Landing: it stops being a bezel, or the canvas arrives framed in leftovers. */
+.cr-wsw-landing .cr-wsw-bezel {
+  border-radius: 0;
+  border-color: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+.cr-wsw-landing .cr-wsw-glass { inset: 0; transition: inset 300ms ease }
+.cr-wsw-landing .cr-wsw-stamp,
+.cr-wsw-landing .cr-wsw-label,
+.cr-wsw-landing .cr-wsw-mirror { opacity: 0; transition: opacity 140ms ease }
+
+.cr-wsw-glass {
+  position: absolute;
+  inset: 6px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--cream);
+  display: grid;
+  place-items: center;
+}
+.cr-wsw-glass img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top left;
+  display: block;
+  user-select: none;
+}
+/* A workspace never left has no picture. It must not read as a blown-out
+   white screen beside three that carry canvases — so the glass goes dark and
+   says what it is. */
+.cr-wsw-glass:has(.cr-wsw-blank) { background: #17150f }
+.cr-wsw-blank {
+  font: 700 9px var(--font-pixel);
+  letter-spacing: 0.14em;
+  color: #6e685c;
+  text-align: center;
+  padding: 0 10px;
+}
+
+/* One soft diagonal — a screen has a surface. */
+.cr-wsw-sheen {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: 6px;
+  background: linear-gradient(
+    118deg,
+    rgba(255, 255, 255, 0.16) 0%,
+    rgba(255, 255, 255, 0.035) 24%,
+    transparent 46%
+  );
+}
+/* Stepping back is a solid overlay, NOT filter:brightness — a filter on a
+   composited 3D layer is an order of magnitude dearer for the same look. */
+.cr-wsw-shade {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: 6px;
+  background: #12100a;
+  transition: opacity 300ms ease;
+}
+
+/* How old the picture is. A snapshot presented as "now" is the one way this
+   feature could lie about somebody's own machine. */
+.cr-wsw-stamp {
+  position: absolute;
+  right: 8px;
+  bottom: 7px;
+  z-index: 3;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: #cfc7b4;
+  background: rgba(18, 15, 9, 0.6);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+/* The reflection — what makes the screens stand on a surface rather than
+   float. Neighbours only; under the picked one that space is the label's. */
+.cr-wsw-mirror {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 78px;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0.2;
+  transform: scaleY(-1);
+  transform-origin: top;
+  -webkit-mask-image: linear-gradient(to top, transparent 3%, rgba(0, 0, 0, 0.8) 96%);
+  mask-image: linear-gradient(to top, transparent 3%, rgba(0, 0, 0, 0.8) 96%);
+}
+.cr-wsw-mirror img { width: 100%; display: block }
+
+.cr-wsw-label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -46px;
+  text-align: center;
+  opacity: 0;
+  transition: opacity 200ms ease;
+  pointer-events: none;
+}
+.cr-wsw-screen.pick .cr-wsw-label { opacity: 1 }
+.cr-wsw-label b {
+  display: block;
+  font: 700 12px var(--font-pixel);
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--cream-hi);
+}
+.cr-wsw-label span {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #a49b86;
+}
+
+.cr-wsw-hud {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 14px;
+  margin: 0;
+  text-align: center;
+  z-index: 25;
+  pointer-events: none;
+  font: 700 9px var(--font-pixel);
+  letter-spacing: 0.12em;
+  color: #8d8471;
+}
+.cr-wsw-hud kbd {
+  font-family: var(--font-mono);
+  border: 1px solid #5c5646;
+  background: rgba(255, 255, 255, 0.06);
+  color: #c9c0aa;
+  font-size: 9px;
+  padding: 1px 5px;
+}
+
+/* The swipe surface sits UNDER the screens, so a drag across the background
+   pans the wall and a click on a screen still reaches that screen. */
+.cr-wsw-swipe {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  touch-action: pan-y;
+}
+
+/* Three bands. The narrow one is a browser card on the canvas, and the whole
+   idea — a ROW of screens — has to survive at that width; the sizes come from
+   tierFor() so these two cannot drift. */
+@media (max-width: 760px) {
+  .cr-wsw-mirror { height: 56px }
+  .cr-wsw-label { bottom: -40px }
+}
+@media (max-width: 520px) {
+  .cr-wsw-mirror { height: 38px }
+  .cr-wsw-label { bottom: -36px }
+  .cr-wsw-label b { font-size: 10px }
+  .cr-wsw-label span { font-size: 9.5px }
+  .cr-wsw-stamp { font-size: 8.5px; padding: 1px 4px; right: 5px; bottom: 5px }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cr-wsw,
+  .cr-wsw-screen,
+  .cr-wsw-bezel,
+  .cr-wsw-shade,
+  .cr-wsw-label { transition-duration: 90ms !important; animation-duration: 90ms !important }
+}

@@ -107,6 +107,7 @@ import { AgentExportStore } from './agent-export'
 import { OwnerGrant, isOwnerSender } from './owner-grant'
 import { Accounts, DEFAULT_LOCK_AFTER_MS, registryOrigin } from './account-v2'
 import { relayHandle } from './legacy-identity'
+import { WorkspaceShots } from './workspace-shots'
 import { republishDoors, servingChange } from './serving-identity'
 import { createAdmittedDeviceStore } from './admitted-devices'
 import { pairingHandout } from './pairing-handout'
@@ -3321,6 +3322,10 @@ function removeWorkspace(nameOrId: string): ReturnType<WorkspaceStore['list']> {
     store.list().workspaces.find((w) => w.id === nameOrId) ?? store.metaByName(nameOrId)
   if (!meta) throw new Error(`Workspace '${nameOrId}' not found`)
   const browserIds = store.browserIdsOf(meta.id)
+  // A workspace that is gone should not keep a picture of itself (the screen
+  // wall). Dropped here, where the removal is known, rather than left for the
+  // sweep that runs when the wall next opens.
+  workspaceShots.forget(meta.id)
   // A served session's workspace: the session ends WITH it. Otherwise the
   // record lingers open with no conductor and every caller read is a 503.
   const servedHere = serving.instantiator.sessionForWorkspace(meta.id)
@@ -4649,6 +4654,19 @@ async function injectInput(args: string[]): Promise<string> {
   }
   throw new Error('Usage: cookrew ui click X Y | dblclick X Y | type "text" | key Enter')
 }
+
+/**
+ * The canvas pictures the screen wall draws. Its capturer is the main window,
+ * injected so the store itself never imports Electron and can be tested.
+ */
+const workspaceShots = new WorkspaceShots({
+  capturer: {
+    capture: async (rect) => {
+      if (!mainWindow || mainWindow.webContents.isDestroyed()) throw new Error('no window')
+      return mainWindow.webContents.capturePage(rect)
+    }
+  }
+})
 
 async function captureWindow(): Promise<string> {
   if (!mainWindow) throw new Error('No window')
@@ -6076,6 +6094,28 @@ function registerIpc(handlers: RestoreHandlers): void {
     (_e, link: string, position?: { x: number; y: number }, paid?: { price: string; asset: string; rail: 'x402' | 'stripe' }) =>
       serveOps.import(link, position, paid)
   )
+
+  /**
+   * THE SCREEN WALL'S PICTURES.
+   *
+   * Taken when the wall OPENS, which is the moment a workspace stops being
+   * looked at — the canvas is still on screen and still current, and the
+   * person is by definition on their way somewhere else. Never on a timer.
+   *
+   * The rect comes from the renderer because only it knows where the canvas
+   * sits; `capturePage` takes CSS pixels, which is what a DOMRect already is.
+   */
+  ipcMain.handle('workspace:snap', async (_e, rect: { x: number; y: number; width: number; height: number }) => {
+    const id = store.focusedId
+    if (!id) return false
+    return workspaceShots.capture(id, rect)
+  })
+  ipcMain.handle('workspace:shots', () => {
+    // Swept here rather than on a timer: the wall opening is the only moment
+    // anything reads these, so it is the only moment a stale one costs.
+    workspaceShots.sweep(store.list().workspaces.map((w) => w.id))
+    return workspaceShots.all()
+  })
 
   ipcMain.handle('workspace:switch', (_e, id: string) => {
     switchWorkspace(id)

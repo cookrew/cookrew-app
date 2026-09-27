@@ -371,6 +371,9 @@ export function createDemoApi(): CookrewApi {
     serveGate: async () => ({ ok: false as const, reason: 'desktop-only' }),
     serveCheckout: async () => ({ ok: false as const, reason: 'desktop-only' }),
     serveSettle: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    /** The demo has no compositor behind it and photographs nothing. */
+    snapWorkspace: async () => false,
+    workspaceShots: async () => ({}),
     quitApp: () => undefined
   }
   return api
