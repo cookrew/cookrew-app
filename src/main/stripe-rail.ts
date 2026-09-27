@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { Settle } from './x402-rail'
@@ -218,10 +219,16 @@ export async function stripeCreateCheckout(
       // times the request is retried. The window is part of the key because it
       // is part of the body (see expires_at above) — a key must never outlive
       // the parameters it was minted with, or every later attempt is refused.
+      // …AND BY THE BODY IT GUARDS. Stripe refuses a repeated key whose body
+      // changed at all, and the body carries the return page: a door whose
+      // page moved (a QA registry on a new port, a renamed team) inside one
+      // window answered every buyer "card payment is not available". The key
+      // ends in a digest of the form, so an identical request replays and a
+      // different one is a new session — which is all a key is for.
       headers: stripeHeaders(
         deps.config,
         true,
-        `checkout:${input.serviceId}:${input.sub}:${amount}:${window}`
+        `checkout:${input.serviceId}:${input.sub}:${amount}:${window}:${digest(form.toString())}`
       ),
       body: form.toString()
     })
@@ -257,6 +264,8 @@ export function seatName(input: Pick<StripeCheckoutInput, 'slug' | 'team'>): str
  * buyer would land on a page carrying the literal words. The door's own face
  * keeps its `?payment=received` marker, as before.
  */
+const digest = (body: string): string => createHash('sha256').update(body).digest('hex').slice(0, 12)
+
 function resolveSuccessUrl(config: StripeConfig, input: StripeCheckoutInput): string | null {
   const returnTo = input.returnUrl?.trim()
   if (returnTo) return withPaidSession(returnTo)

@@ -104,6 +104,10 @@ describe('Checkout creation', () => {
     await stripeCreateCheckout({ config: CONFIG, post, now: () => 3_000_000 }, input)
     expect(calls[2].headers['idempotency-key']).not.toBe(calls[0].headers['idempotency-key'])
     expect(calls[2].form.get('expires_at')).not.toBe(calls[0].form.get('expires_at'))
+    // And a different return page inside the SAME window is a different body,
+    // so it must be a different key too, or Stripe refuses it outright.
+    await stripeCreateCheckout({ config: CONFIG, post, now: () => 1_000_000 }, { ...input, returnUrl: 'https://cookrew.dev/drej/alpha' })
+    expect(calls[3].headers['idempotency-key']).not.toBe(calls[0].headers['idempotency-key'])
   })
 
   it('posts a 30-minute, form-encoded Checkout with bound metadata', async () => {
@@ -125,17 +129,19 @@ describe('Checkout creation', () => {
     expect(result).toEqual({ ok: true, session: SESSION, url: 'https://checkout.stripe.com/c/pay/test' })
     expect(call).not.toBeNull()
     expect(call!.url).toBe('https://api.stripe.com/v1/checkout/sessions')
-    expect(call!.headers).toEqual({
+    expect(call!.headers).toMatchObject({
       authorization: 'Bearer injected-test-value',
       'content-type': 'application/x-www-form-urlencoded',
       // Pinned, so a Stripe API upgrade cannot change response shapes under a
       // shipped desktop app; keyed by the caller's INTENT, so a retry after a
       // timeout replays the first session instead of charging twice.
-      'stripe-version': '2025-08-27.basil',
-      // The quote WINDOW is part of the key because it is part of the body:
-      // now=1_000_000ms → 1000s → window 0 at a 30-minute TTL.
-      'idempotency-key': 'checkout:svc-1:ana:250:0'
+      'stripe-version': '2025-08-27.basil'
     })
+    // The quote WINDOW is part of the key because it is part of the body:
+    // now=1_000_000ms → 1000s → window 0 at a 30-minute TTL — and so is a
+    // digest of the body, so a changed return page is a new key, never a
+    // Stripe idempotency_error on a working rail.
+    expect(call!.headers['idempotency-key']).toMatch(/^checkout:svc-1:ana:250:0:[0-9a-f]{12}$/)
     // Tax is computed by Stripe, never by us: the AI-service tax code, an
     // address to locate the buyer, and a tax ID so a cross-border B2B sale can
     // take reverse charge. Hong Kong levies no VAT itself — the obligation, if
