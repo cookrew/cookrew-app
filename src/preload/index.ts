@@ -277,6 +277,15 @@ const api = {
   },
 
   ptyInput: (terminalId: string, data: string) => ipcRenderer.send('pty:input', terminalId, data),
+  terminalTuning: (terminalId: string) => ipcRenderer.invoke('terminal:tuning', terminalId),
+  listTuning: () => ipcRenderer.invoke('tuning:list'),
+  onTerminalTuning: (cb: (row: { terminalId: string; tuning: unknown }) => void) => {
+    const listener = (_e: unknown, row: { terminalId: string; tuning: unknown }): void => cb(row)
+    ipcRenderer.on('terminal:tuning', listener)
+    return () => ipcRenderer.removeListener('terminal:tuning', listener)
+  },
+  tuneTerminal: (terminalId: string, knob: string, value: string) =>
+    ipcRenderer.invoke('terminal:tune', terminalId, knob, value),
   ptyResize: (terminalId: string, cols: number, rows: number) =>
     ipcRenderer.send('pty:resize', terminalId, cols, rows),
   ptyJump: (terminalId: string, text: string | null) =>

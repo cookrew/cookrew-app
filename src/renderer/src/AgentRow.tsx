@@ -1,4 +1,5 @@
 import { AgentAvatar } from './nodes/AgentAvatar'
+import { DialTag } from './nodes/DialTag'
 import type { AgentExportState } from './grant-state'
 import { TurnView } from './nodes/TurnView'
 import { RoleAvatar } from './nodes/RoleAvatar'
@@ -127,6 +128,7 @@ export function AgentRow({
         <span className="ags-nameline">
           <span className="ags-name">{row.name}</span>
           <span className="cr-chip">{row.preset}</span>
+          <DialTag id={row.id} className="cr-chip dial" />
           {row.orch && <span className="cr-chip amber">ORCH</span>}
           {row.role && <span className="cr-chip">{row.role}</span>}
           <span className="cr-chip violet">

@@ -32,6 +32,9 @@ import { TranslateButton } from './TranslateButton'
 import { languageByCode } from '../../shared/translate'
 import { useCheckpointTranslation } from './use-checkpoint-translation'
 import { StatusCoin } from './nodes/AgentAvatar'
+import { DialTag } from './nodes/DialTag'
+import { TuneRail } from './nodes/TuneRail'
+import { useAgentTuning } from './nodes/use-agent-tuning'
 
 const PHOSPHOR_THEME = {
   background: '#14110A',
@@ -374,6 +377,10 @@ function TerminalOverlay({
     selectedRow === null ? '' : checkpointRowTitle(selectedRow, titleMode)
 
   const keepFocus = (e: React.MouseEvent): void => e.preventDefault()
+
+  // The LEFT rail: the agent's model and effort, read off its own record and
+  // turned by one typed line. Mirror of the checkpoint rail on the right.
+  const tuning = useAgentTuning({ terminalId: node.id, phase, remote })
 
   // Owner ruling 2026-08-30: the zoomed view is PTY-DIRECT for every card.
   useEffect(() => {
@@ -883,6 +890,7 @@ function TerminalOverlay({
         </span>
         {node.orch && <span className="cr-chip amber">ORCH</span>}
         <span className={`cr-chip${PHASE_CHIP[phase].cls}`}>{PHASE_CHIP[phase].label}</span>
+        <DialTag id={node.id} className="cr-chip dial" />
         <div className="popout-actions">
           <TranslateButton
             active={translation.showing !== null}
@@ -1065,6 +1073,16 @@ function TerminalOverlay({
         </div>
       )}
       <div className="popout-terminal-wrap">
+        {tuning.view !== null && (
+          <TuneRail
+            view={tuning.view}
+            open={tuning.open}
+            onOpen={tuning.setOpen}
+            onTurn={tuning.turn}
+            error={tuning.error}
+            onMouseDown={keepFocus}
+          />
+        )}
         <TranscriptView
           ref={transcriptRef}
           terminalId={node.id}

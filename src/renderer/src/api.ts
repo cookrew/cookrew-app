@@ -1,5 +1,6 @@
 import type { DeepLink } from '../../shared/deep-link'
 import type { AnsweredRow, QueueRow, RowAction } from '../../shared/account-requests'
+import type { AgentTuning, AgentTuningState, TuneKnob } from '../../shared/agent-tuning'
 import type { TranslateResult } from '../../shared/translate'
 import type { Surface as SousSurface } from '../../shared/sous-intent'
 import type { SousCommandResult } from '../../main/sous-control'
@@ -333,6 +334,27 @@ export interface CookrewApi {
   /** Native multi-file picker (desktop only; returns [] elsewhere). */
   pickFiles: () => Promise<string[]>;
   ptyInput: (terminalId: string, data: string) => void;
+  /**
+   * THE DIALS (shared/agent-tuning): what the agent's last reply ran at, and
+   * turning one. OPTIONAL on purpose — a phone talking to someone else's app
+   * has no business typing slash commands into their pane, so the remote api
+   * simply does not carry these and the rail feature-detects its way out.
+   */
+  terminalTuning?: (terminalId: string) => Promise<AgentTuningState>;
+  /**
+   * The whole fleet's dials in one call — the per-card tag is drawn for the
+   * roster too, which spans workspaces that are not loaded. Ids with nothing
+   * recorded are simply absent, so a card draws no tag rather than a blank.
+   */
+  listTuning?: () => Promise<Record<string, AgentTuning>>;
+  onTerminalTuning?: (
+    cb: (row: { terminalId: string; tuning: AgentTuning }) => void
+  ) => () => void;
+  tuneTerminal?: (
+    terminalId: string,
+    knob: TuneKnob,
+    value: string
+  ) => Promise<{ ok: true } | { ok: false; reason: string }>;
   ptyResize: (terminalId: string, cols: number, rows: number) => void;
   /** Scroll the terminal view to a past ask's line; null returns to live. */
   ptyJump: (terminalId: string, text: string | null) => void;
