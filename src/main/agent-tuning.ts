@@ -8,6 +8,7 @@
 
 import { closeSync, openSync, readSync, statSync } from 'node:fs'
 import {
+  TUNE_KNOBS,
   inputRefusal,
   isTuneKnob,
   tuneValueOk,
@@ -121,8 +122,23 @@ function scanTail(file: string, tuning: HarnessTuning): AgentTuning | null {
   return null
 }
 
-/** The newest dial-bearing record in these lines, scanning backwards. */
+/**
+ * The newest reading in these lines, scanning backwards and MERGING.
+ *
+ * Merging, because a record may carry only one dial: claude's acknowledgment
+ * of `/model` names a model and says nothing about effort, and taking it whole
+ * would blank an effort that is still perfectly well known. Each field is
+ * filled from the newest record that states it.
+ *
+ * The walk stops as soon as every dial the harness RECORDS is filled — which
+ * is what keeps it from reading a whole session file for a field that harness
+ * never writes (pi records no effort at all).
+ */
 function newestIn(lines: readonly string[], tuning: HarnessTuning): AgentTuning | null {
+  const records = tuning.records ?? TUNE_KNOBS
+  let model: string | null = null
+  let effort: string | null = null
+  let at: number | null = null
   // Newest first: the dials are whatever the most recent record says, and a
   // forward scan would hand back the settings the session STARTED on.
   for (let i = lines.length - 1; i >= 0; i -= 1) {
@@ -137,9 +153,20 @@ function newestIn(lines: readonly string[], tuning: HarnessTuning): AgentTuning 
       continue
     }
     const found = tuning.read(record)
-    if (found !== null) return found
+    if (found === null) continue
+    if (model === null && found.model !== null) {
+      model = found.model
+      at ??= found.at
+    }
+    if (effort === null && found.effort !== null) {
+      effort = found.effort
+      at ??= found.at
+    }
+    const wantModel = records.includes('model') ? model !== null : true
+    const wantEffort = records.includes('effort') ? effort !== null : true
+    if (wantModel && wantEffort) break
   }
-  return null
+  return model === null && effort === null ? null : { model, effort, at }
 }
 
 /** The newest record carrying dials in [from, EOF), or null if there is none. */
@@ -234,8 +261,10 @@ export class TuningCache {
     // the harness registry's own rollout notes give for a byte-offset cursor.)
     const grew = prior !== undefined && prior.file === file && stamp.size >= prior.size
     const tuning = grew
-      ? (scanWindow(file, harness.tuning, Math.max(0, prior.size - APPEND_OVERLAP)) ??
-        prior.tuning)
+      ? mergedOver(
+          prior.tuning,
+          scanWindow(file, harness.tuning, Math.max(0, prior.size - APPEND_OVERLAP))
+        )
       : scanTail(file, harness.tuning)
     this.held.set(subject.id, { file, ...stamp, tuning })
     return tuning
@@ -243,6 +272,24 @@ export class TuningCache {
 
   forget(terminalId: string): void {
     this.held.delete(terminalId)
+  }
+}
+
+/**
+ * Fresh fields over what was already known.
+ *
+ * The appended bytes may state only one dial — a `/model` acknowledgment says
+ * nothing about effort — so replacing wholesale would blank the other one on
+ * every model change. Nothing fresh at all leaves the prior reading standing:
+ * no new statement is not the same as a new statement of nothing.
+ */
+function mergedOver(prior: AgentTuning | null, fresh: AgentTuning | null): AgentTuning | null {
+  if (fresh === null) return prior
+  if (prior === null) return fresh
+  return {
+    model: fresh.model ?? prior.model,
+    effort: fresh.effort ?? prior.effort,
+    at: fresh.at ?? prior.at
   }
 }
 
