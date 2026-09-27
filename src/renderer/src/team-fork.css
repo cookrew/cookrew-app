@@ -359,50 +359,6 @@
 
 /* ==== workspace v2: directory manager + fork dir chooser (Velvet lane) ==== */
 
-/* --- workspace switcher add/remove row (styles bundled globally) --- */
-.cr-ws-row {
-  display: flex;
-  align-items: stretch;
-  gap: 2px;
-}
-
-.cr-ws-row.active {
-  background: var(--amber-soft);
-}
-
-.cr-ws-row .cr-ws-item {
-  flex: 1;
-  min-width: 0;
-}
-
-.cr-ws-mini {
-  flex: 0 0 auto;
-  width: 30px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  cursor: pointer;
-  border-radius: 3px;
-}
-
-.cr-ws-mini:hover:not(:disabled) {
-  background: var(--cream-lo);
-  color: var(--ink);
-}
-
-.cr-ws-mini.danger:hover {
-  background: var(--rose);
-  color: var(--cream-hi);
-}
-
-.cr-ws-mini:disabled {
-  opacity: 0.3;
-  cursor: default;
-}
-
 /* --- directory manager panel --- */
 .dm-panel {
   width: min(560px, calc(100vw - 32px));
@@ -637,10 +593,6 @@
   .tf-target-dir {
     min-height: 36px;
     max-width: 42%;
-  }
-
-  .cr-ws-mini {
-    width: 40px;
   }
 }
 

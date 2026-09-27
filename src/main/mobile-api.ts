@@ -220,6 +220,14 @@ export interface MobileApiDeps {
    */
   health?: () => LoopHealthSnapshot;
   /**
+   * The Mac's pictures of its canvases (workspace-shots.ts), for the phone's
+   * screen wall. A picture of every workspace is a picture of every task the
+   * owner has going, so it answers behind the /api GET gate like the board.
+   * Absent = 503, so a missing wire-up is loud rather than a wall that quietly
+   * says NO SNAPSHOT YET for everything.
+   */
+  workspaceShots?: () => Record<string, { src: string; at: number }>;
+  /**
    * Importing a served team FROM THE PHONE — the desktop's own operations,
    * reached over this API. Absent = the six /api/serve routes answer 503
    * rather than pretending; the phone bridge then reports the refusal.
@@ -596,6 +604,16 @@ export async function handleMobileApi(
 
   if (method === "GET" && p === "/api/workspaces") {
     respondJson(response, 200, ops.listWorkspaces());
+    return true;
+  }
+  // The screen wall's pictures. Read when the wall opens, never streamed:
+  // each is a JPEG of a whole canvas, and a phone looks at them for seconds.
+  if (method === "GET" && p === "/api/workspaces/shots") {
+    if (!deps.workspaceShots) {
+      respondJson(response, 503, { error: "workspace shots not wired" });
+      return true;
+    }
+    respondJson(response, 200, deps.workspaceShots());
     return true;
   }
   if (method === "POST" && p === "/api/workspaces") {

@@ -200,6 +200,8 @@ export interface MobileServerDeps {
   /** Sous's door and its `ui` bus — see MobileApiDeps; passed through as-is. */
   sous?: MobileApiDeps['sous']
   uiBus?: MobileApiDeps['uiBus']
+  /** The screen wall's pictures for the phone — see MobileApiDeps; passed through as-is. */
+  workspaceShots?: MobileApiDeps['workspaceShots']
   recoverAgent: (id: string) => RecoverResult
   restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>
   undoRestore: (id: string) => Promise<RestoreResult>

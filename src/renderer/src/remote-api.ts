@@ -638,13 +638,14 @@ export function createRemoteApi(): CookrewApi {
     serveSettle: (link, rail, session) =>
       req(apiPath('/api/serve/settle'), 'POST', { link, rail, session }),
     /**
-     * The screen wall's pictures are a fact about the Mac's own compositor:
-     * there is no canvas here to photograph, and the Mac does not ship its
-     * snapshots down the relay. Answering nothing is the truth — the wall
-     * draws "NO SNAPSHOT YET" rather than a picture that is not this device's.
+     * THE SCREEN WALL'S PICTURES COME FROM THE MAC. There is no canvas here to
+     * photograph, so the phone cannot take one (false, honestly) — but the Mac
+     * keeps a picture of every workspace it has left, and the wall draws
+     * those, stamped with their age. Fetched when the wall opens, never held:
+     * they are the one big payload this surface asks for by choice.
      */
     snapWorkspace: async () => false,
-    workspaceShots: async () => ({}),
+    workspaceShots: () => req<Record<string, { src: string; at: number }>>(apiPath('/api/workspaces/shots')),
     quitApp: () => undefined
   }
 }

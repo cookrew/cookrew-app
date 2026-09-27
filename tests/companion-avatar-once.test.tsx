@@ -57,7 +57,7 @@ function Bar(): React.JSX.Element {
       attentionCount={0}
       view="canvas"
       onViewChange={() => undefined}
-      onActivity={() => undefined}
+      onWall={() => undefined}
       onResync={() => undefined}
       avatar={account.avatar}
     />
