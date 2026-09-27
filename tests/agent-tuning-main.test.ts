@@ -224,6 +224,15 @@ describe('pi records a model and no effort, and says exactly that', () => {
     ).toEqual({ model: null, effort: 'off', at: Date.parse('2026-08-12T17:20:35.399Z') })
   })
 
+  it('looks deep enough to find a level written at session start', () => {
+    // Pi writes thinking_level_change only when the level MOVES, so for an
+    // unretuned session that is once, at the very beginning. Measured on this
+    // machine: 512 KB to 3.5 MB back, so the default window read every pi
+    // card's effort as unknown.
+    expect(piTuning.tailSteps?.at(-1) ?? 0).toBeGreaterThanOrEqual(4 * 1024 * 1024)
+    expect(piTuning.tailSteps?.[0] ?? Infinity).toBeLessThanOrEqual(64 * 1024)
+  })
+
   it('qualifies a changed model by provider, because that is what the rows offer', () => {
     // An unqualified id would tick no row: the choices are `provider/id`.
     const changed = piTuning.read({

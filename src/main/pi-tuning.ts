@@ -51,6 +51,20 @@ export function piTuningWith(options: PiCatalogOptions = {}): HarnessTuning {
     // Both, via the change records above.
     records: ['model', 'effort'],
 
+    /**
+     * Deeper windows than the default, for the same reason codex needs them
+     * and a different cause. Pi writes `thinking_level_change` when the level
+     * MOVES — which for a session nobody has retuned means once, at the very
+     * start. Measured across this machine's pi sessions: the level record sat
+     * 512 KB to 3.5 MB back in files of the same size, so every pi card but
+     * the smallest read its effort as unknown.
+     *
+     * The model is unaffected either way (every assistant message carries it);
+     * this is what makes the OTHER dial readable. Paid once per file: the
+     * cache then follows the appended bytes alone.
+     */
+    tailSteps: [64 * 1024, 512 * 1024, 4 * 1024 * 1024],
+
     values: (knob, current) => {
       const models = piModels(options)
       if (models.length === 0) return []
