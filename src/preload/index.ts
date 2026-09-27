@@ -256,6 +256,14 @@ const api = {
   ) => ipcRenderer.invoke('serve:import', link, position, paid),
 
   switchWorkspace: (id: string) => ipcRenderer.invoke('workspace:switch', id),
+  /**
+   * The screen wall's two calls. `snapWorkspace` is given the canvas rect
+   * because only the renderer knows where the canvas is on screen; `shots`
+   * reads what is on disk and is called when the wall opens, never held.
+   */
+  snapWorkspace: (rect: { x: number; y: number; width: number; height: number }) =>
+    ipcRenderer.invoke('workspace:snap', rect),
+  workspaceShots: () => ipcRenderer.invoke('workspace:shots'),
   renameWorkspace: (id: string, name: string) =>
     ipcRenderer.invoke('workspace:rename', id, name),
   removeWorkspace: (id: string) => ipcRenderer.invoke('workspace:remove', id),
