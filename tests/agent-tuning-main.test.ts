@@ -16,6 +16,7 @@ import {
   TuningCache,
   applyTuning,
   readTuning,
+  scanSessionFile,
   subjectOf,
   tuningStateOf,
   type TuneDeps
@@ -427,6 +428,42 @@ describe('the readout for a whole canvas', () => {
     const second = cache.of(subject, { projectsDir })
     expect(second).not.toBe(first)
     expect(second?.model).toBe('claude-sonnet-5')
+  })
+
+  it('keeps widening until every RECORDED dial is filled, not until one is', () => {
+    // The bug this pins: the first window contained a reply (every window
+    // does), so the scan stopped with the model found and the effort still
+    // missing — which on pi, whose level record sits at the START of the
+    // session, meant every card read its effort as unknown.
+    const levelFirst: HarnessTuning = {
+      knobs: [],
+      records: ['model', 'effort'],
+      tailSteps: [1024, 4 * 1024 * 1024],
+      line: () => null,
+      read: (r) => {
+        const rec = r as { effort?: unknown; message?: { model?: unknown } }
+        if (typeof rec.effort === 'string') return { model: null, effort: rec.effort, at: 1 }
+        const m = rec.message?.model
+        return typeof m === 'string' ? { model: m, effort: null, at: 2 } : null
+      }
+    }
+    const projectsDir = mkdtempSync(path.join(tmpdir(), 'widen-'))
+    const dir = claudeProjectDir(CWD, projectsDir)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      path.join(dir, `${SESSION}.jsonl`),
+      [
+        JSON.stringify({ effort: 'off' }),
+        JSON.stringify({ type: 'user', pad: 'p'.repeat(40_000) }),
+        JSON.stringify({ message: { model: 'qwen3.8-27b-q8' } })
+      ].join('\n')
+    )
+    const file = path.join(dir, `${SESSION}.jsonl`)
+    expect(scanSessionFile(file, levelFirst)).toEqual({
+      model: 'qwen3.8-27b-q8',
+      effort: 'off',
+      at: 2
+    })
   })
 
   it('reaches past a turn too long for the first window', () => {

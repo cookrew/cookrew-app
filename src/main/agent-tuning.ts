@@ -110,16 +110,42 @@ export function readTuning(
   return scanTail(file, harness.tuning)
 }
 
+/**
+ * The escalating cold read, exposed so the widening rule can be tested with a
+ * harness of the test's own making — the real ones are resolved from a launch
+ * command, which is the wrong axis to vary here.
+ */
+export function scanSessionFile(file: string, tuning: HarnessTuning): AgentTuning | null {
+  return scanTail(file, tuning)
+}
+
 function scanTail(file: string, tuning: HarnessTuning): AgentTuning | null {
+  const records = tuning.records ?? TUNE_KNOBS
+  let best: AgentTuning | null = null
   for (const step of tuning.tailSteps ?? TAIL_STEPS) {
     const { lines, from } = tailLines(file, step)
-    const found = newestIn(lines, tuning)
-    if (found !== null) return found
+    // Each larger window is a superset of the last, so the newer result wins
+    // outright; merging only guards the fields it did not restate.
+    best = mergedOver(best, newestIn(lines, tuning))
+    // ESCALATE UNTIL EVERY RECORDED DIAL IS FILLED, not until something is.
+    //
+    // Returning the first non-null answer meant a window that happened to
+    // contain a reply — which every window does — stopped the search with the
+    // model found and the effort still missing. Pi is where that showed:
+    // its level record sits at the START of the session, so the effort read
+    // as unknown on every pi card while the first 64 KB cheerfully answered.
+    if (complete(best, records)) return best
     // The window already reached byte 0 — a larger step would read the same
     // bytes again and find the same nothing.
     if (from === 0) break
   }
-  return null
+  return best
+}
+
+/** Every dial this harness records has a value. */
+function complete(tuning: AgentTuning | null, records: readonly TuneKnob[]): boolean {
+  if (tuning === null) return false
+  return records.every((knob) => (knob === 'model' ? tuning.model : tuning.effort) !== null)
 }
 
 /**
