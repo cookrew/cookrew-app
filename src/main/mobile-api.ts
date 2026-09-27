@@ -39,6 +39,7 @@ import type {
   RecoverResult,
   RestoreResult,
 } from "../shared/model";
+import { lightenCanvas } from "../shared/wire-canvas";
 import { readBytes, readJson, respondJson, startSse, pairingAuthorized, presentedToken } from "./mobile-http";
 import type { StreamService } from "./stream-service";
 import { handleStreamRoutes } from "./stream-routes";
@@ -1350,7 +1351,37 @@ export async function handleMobileApi(
     // per-workspace signal instead, so a desktop switching workspaces no
     // longer re-points a phone that arrived by slug, and a background
     // workspace's own edits still reach it (marketplace §11).
-    const onChange = (state: WorkspaceState): void => send("workspace", state);
+    /**
+     * A SWITCH IS THE ONE CHANGE THAT REPLACES THE WHOLE CANVAS, and over the
+     * relay it is the one the reader waits on: measured at 280 KB gzipped,
+     * 82% of it note bodies that nothing draws until a note is zoomed to a
+     * readable size. So a switch sends the canvas LIGHT first — what the
+     * canvas is drawn from, about five times smaller — and WHOLE a beat
+     * later. The client reconciles repeated workspace frames already, so the
+     * second frame is a no-op but for the bodies it fills in.
+     *
+     * Every other change sends one frame exactly as before. Two-framing a
+     * card drag would double the traffic of moving a card.
+     */
+    let switched = false;
+    const onSwitch = (): void => void (switched = true);
+    const onChange = (state: WorkspaceState): void => {
+      const wasSwitch = switched;
+      switched = false;
+      const light = wasSwitch ? lightenCanvas(state) : null;
+      if (light === null) {
+        send("workspace", state);
+        return;
+      }
+      send("workspace", light);
+      // Next tick, not this one: the point is that the light frame reaches
+      // the wire on its own. A subscriber that left in between is checked
+      // for, because writing into a destroyed gzip stream throws.
+      setImmediate(() => {
+        if (response.writableEnded || response.destroyed) return;
+        send("workspace", state);
+      });
+    };
     const onScopedChange = (payload: {
       workspaceId: string;
       state: WorkspaceState;
@@ -1396,8 +1427,10 @@ export async function handleMobileApi(
         if (fresh !== sentProbe) onBoardSignal();
       }, () => undefined);
     }
-    if (scope === null) store.on("change", onChange);
-    else store.on("workspace-change", onScopedChange);
+    if (scope === null) {
+      store.on("switch", onSwitch);
+      store.on("change", onChange);
+    } else store.on("workspace-change", onScopedChange);
     store.on("workspaces", onWorkspaces);
     turns.on("activity", onActivity);
     store.on("op", onOp);
@@ -1409,8 +1442,10 @@ export async function handleMobileApi(
     request.on("close", () => {
       // Symmetric with the attach above — an unremoved scoped listener is a
       // leak per disconnected phone, and phones disconnect constantly.
-      if (scope === null) store.removeListener("change", onChange);
-      else store.removeListener("workspace-change", onScopedChange);
+      if (scope === null) {
+        store.removeListener("switch", onSwitch);
+        store.removeListener("change", onChange);
+      } else store.removeListener("workspace-change", onScopedChange);
       store.removeListener("workspaces", onWorkspaces);
       turns.removeListener("activity", onActivity);
       store.removeListener("op", onOp);

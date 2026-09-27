@@ -7,6 +7,7 @@ import { renderNoteMarkdown } from '../note-markdown'
 import { cardTypeScale, cardZoomMode } from './card-zoom'
 import { TILE_DRAG_SURFACE } from './drag-surface'
 import type { NoteNodeData } from '../../../shared/model'
+import { noteIsWhole } from '../../../shared/wire-canvas'
 import { cookrew } from '../api'
 import { useCanvasUi } from '../canvas-ui'
 
@@ -22,6 +23,15 @@ export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
   const invZoom = useStore((s) => cardTypeScale(s.transform[2]))
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(node.content)
+  /**
+   * A workspace switch delivers the canvas light first and whole a beat later
+   * (wire-canvas.ts), so for that beat a long note is only its opening lines.
+   * It still READS — the head is what the card shows anyway — but it must not
+   * be edited: a save from a half-held body would write the rest away. The
+   * guard is on both ends, because the whole body can arrive mid-edit and the
+   * commit is what actually destroys anything.
+   */
+  const whole = noteIsWhole(node)
   // Single click zooms the note to the stage after a beat; a double click
   // (edit) cancels the pending zoom so editing stays in place.
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -55,12 +65,14 @@ export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
       clearTimeout(clickTimer.current)
       clickTimer.current = null
     }
-    if (!node.locked) setEditing(true)
+    if (!node.locked && whole) setEditing(true)
   }
 
   const commit = (): void => {
     setEditing(false)
-    if (draft !== node.content) {
+    // Never over a body we only half have — the rest of the note is not this
+    // canvas's to delete.
+    if (whole && draft !== node.content) {
       void cookrew().updateNode(node.id, { content: draft })
     }
   }
