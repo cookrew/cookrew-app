@@ -1,8 +1,15 @@
 import type { Edge, Node } from '@xyflow/react'
 
-export type CanvasVisualMode = 'all' | 'no-cables' | 'agents'
+/**
+ * The canvas view ladder. `harness` sits right after `all`: one tap from the
+ * default shows the same cables routed around the cards and bundled where
+ * they share a run (cable-route.ts), one more hides them. In harness mode
+ * ReactFlow is handed NO edges — its per-edge components cannot share a run
+ * between two cables — and the CableHarness layer draws the whole set.
+ */
+export type CanvasVisualMode = 'all' | 'harness' | 'no-cables' | 'agents'
 
-const MODES: readonly CanvasVisualMode[] = ['all', 'no-cables', 'agents']
+const MODES: readonly CanvasVisualMode[] = ['all', 'harness', 'no-cables', 'agents']
 const NO_EDGES: Edge[] = []
 
 export function canvasVisualModeOf(value: string | null): CanvasVisualMode {
@@ -18,7 +25,10 @@ export function visibleCanvasNodes(nodes: Node[], mode: CanvasVisualMode): Node[
   return mode === 'agents' ? nodes.filter((node) => node.type === 'terminal') : nodes
 }
 
-/** Both reduced modes omit edges entirely, avoiding cable render work. */
+/**
+ * Only `all` lets ReactFlow draw cables. The reduced modes omit them to save
+ * the render work; `harness` omits them because a separate layer draws them.
+ */
 export function visibleCanvasEdges(edges: Edge[], mode: CanvasVisualMode): Edge[] {
   return mode === 'all' ? edges : NO_EDGES
 }

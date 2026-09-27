@@ -75,6 +75,7 @@ describe('the phone reads and turns the dials', () => {
         state: (id): AgentTuningState => ({
           harness: 'claude',
           knobs: ['model', 'effort'],
+          records: ['model', 'effort'],
           tuning: id === 'term-1' ? RUNNING : null,
           asks: [],
           caveat: 'this also becomes the default every new agent boots on'

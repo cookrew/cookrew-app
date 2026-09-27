@@ -108,6 +108,7 @@ import {
   visibleCanvasNodes,
   type CanvasVisualMode
 } from './canvas-visual-mode'
+import { CableHarness } from './CableHarness'
 
 /** How often a headless browser card refreshes its still. Matches the legacy
  *  webview capture cadence — the same picture, from the page that now owns it. */
@@ -116,12 +117,14 @@ const CANVAS_VISUAL_MODE_KEY = 'cookrew-canvas-visual-mode'
 
 const VISUAL_MODE_LABEL: Record<CanvasVisualMode, string> = {
   all: 'All',
+  harness: 'Cables tidied',
   'no-cables': 'Cables hidden',
   agents: 'Agents only'
 }
 
 const VISUAL_MODE_ICON: Record<CanvasVisualMode, 'canvas' | 'connect' | 'agent'> = {
   all: 'canvas',
+  harness: 'connect',
   'no-cables': 'connect',
   agents: 'agent'
 }
@@ -1530,6 +1533,11 @@ function Canvas(): React.JSX.Element {
           >
             <Background variant={BackgroundVariant.Dots} gap={22} size={1.5} color="#D9D3C5" />
             <SnapGuides guides={guides} />
+            {/* The tidied cables. ReactFlow holds no edges in this mode (see
+                visibleCanvasEdges); this layer routes the full set around the
+                cards and draws shared runs once. It reads `nodes` and `edges`,
+                which a pan never changes — so a pan never renders it. */}
+            {canvasVisualMode === 'harness' && <CableHarness nodes={nodes} edges={edges} />}
             <MiniMap
               pannable
               zoomable

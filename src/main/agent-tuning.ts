@@ -294,14 +294,27 @@ export function tuningStateOf(deps: TuneDeps, terminalId: string): AgentTuningSt
   const node = deps.node(terminalId)
   const harness = node ? harnessFor(node.command) : null
   if (node === null || harness === null) {
-    return { harness: null, knobs: [], tuning: null, asks: [], caveat: null }
+    return { harness: null, knobs: [], records: [], tuning: null, asks: [], caveat: null }
+  }
+  const knobs = [...(harness.tuning?.knobs ?? [])]
+  const tuning = (deps.cache ?? new TuningCache()).of(subjectOf(node), deps.watch ?? {})
+  // A harness may name its own values, and pi's depend on the model currently
+  // loaded — so the reading has to be in hand before the choices are asked for.
+  const choices: Partial<Record<TuneKnob, readonly string[]>> = {}
+  for (const knob of knobs) {
+    const values = harness.tuning?.values?.(knob, tuning)
+    if (values) choices[knob] = values
   }
   return {
     harness: harness.id,
-    knobs: [...(harness.tuning?.knobs ?? [])],
-    tuning: (deps.cache ?? new TuningCache()).of(subjectOf(node), deps.watch ?? {}),
+    knobs,
+    // Absent means "every knob it can set, it also writes down" — true of
+    // claude, and the safe default for a harness that has not thought about it.
+    records: [...(harness.tuning?.records ?? knobs)],
+    tuning,
     asks: deps.asks.of(terminalId),
     caveat: harness.tuning?.caveat ?? null,
+    ...(Object.keys(choices).length > 0 ? { choices } : {}),
   }
 }
 
@@ -324,7 +337,14 @@ export function applyTuning(
   if (!harness?.tuning) return { ok: false, reason: 'this agent has no dials' }
   // Both arrive over IPC and both end up inside a line typed into a live pane.
   if (!isTuneKnob(knob)) return { ok: false, reason: 'not a dial' }
-  if (!tuneValueOk(knob, value)) return { ok: false, reason: `not a ${knob} we offer` }
+  if (!harness.tuning.knobs.includes(knob)) return { ok: false, reason: `this agent has no ${knob} dial` }
+  // Against the HARNESS's values when it names them, not the shared defaults.
+  // For pi this is the difference between setting a model and opening a picker
+  // that swallows the pane's input.
+  const offered =
+    harness.tuning.values?.(knob, readTuning(subjectOf(node), deps.watch ?? {})) ?? null
+  const allowed = offered === null ? tuneValueOk(knob, value) : offered.includes(value)
+  if (!allowed) return { ok: false, reason: `not a ${knob} this agent offers` }
   const line = harness.tuning.line(knob, value)
   if (line === null) return { ok: false, reason: `this agent has no ${knob} dial` }
 

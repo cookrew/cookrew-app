@@ -22,7 +22,16 @@ interface CodexRecord {
 }
 
 export const codexTuning: HarnessTuning = {
-  // Nothing here is settable from one typed line; see the header.
+  // NOTHING HERE IS SETTABLE, and this is a refusal rather than a gap.
+  //
+  // Verified by driving a real codex in a PTY: `/model gpt-5.6-sol high` is
+  // NOT parsed as a command — codex sent the whole string to the model as a
+  // prompt and started a turn. So a model button on a codex card would not
+  // fail safely, it would put junk in the conversation and spend a turn every
+  // time it was pressed. Bare `/model` opens a picker, which is arrow keys and
+  // a modal that eats input if a drive goes wrong.
+  //
+  // Both halves are still READ, so a codex card wears its tag like any other.
   knobs: [],
   line: () => null,
 

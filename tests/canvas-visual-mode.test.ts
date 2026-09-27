@@ -22,8 +22,12 @@ const appSource = readFileSync(
 )
 
 describe('canvas visual modes', () => {
-  it('cycles through all three states', () => {
-    expect(nextCanvasVisualMode('all')).toBe('no-cables')
+  it('cycles through all four states, the harness right after all', () => {
+    // The harness sits next to `all` so one tap from the default shows the
+    // same cables tidied, and one more hides them — the reduced rungs keep
+    // their order behind it.
+    expect(nextCanvasVisualMode('all')).toBe('harness')
+    expect(nextCanvasVisualMode('harness')).toBe('no-cables')
     expect(nextCanvasVisualMode('no-cables')).toBe('agents')
     expect(nextCanvasVisualMode('agents')).toBe('all')
   })
@@ -31,6 +35,7 @@ describe('canvas visual modes', () => {
   it('falls back to all for an unknown persisted value', () => {
     expect(canvasVisualModeOf('stale')).toBe('all')
     expect(canvasVisualModeOf(null)).toBe('all')
+    expect(canvasVisualModeOf('harness')).toBe('harness')
   })
 
   it('keeps every preset terminal in agents-only, including Shell', () => {
@@ -40,16 +45,26 @@ describe('canvas visual modes', () => {
   it('preserves array identity in all/no-cables and omits edges in reduced modes', () => {
     expect(visibleCanvasNodes(nodes, 'all')).toBe(nodes)
     expect(visibleCanvasNodes(nodes, 'no-cables')).toBe(nodes)
+    expect(visibleCanvasNodes(nodes, 'harness')).toBe(nodes)
     expect(visibleCanvasEdges(edges, 'all')).toBe(edges)
     expect(visibleCanvasEdges(edges, 'no-cables')).toEqual([])
     expect(visibleCanvasEdges(edges, 'agents')).toEqual([])
     expect(visibleCanvasEdges(edges, 'no-cables')).toBe(visibleCanvasEdges(edges, 'agents'))
   })
 
-  it('replaces the lock slot with the three-state visual control', () => {
+  it('hands ReactFlow no edges in harness mode — the harness layer draws them', () => {
+    // ReactFlow's per-edge components cannot share a run between two cables;
+    // the layer that can gets the whole list, and ReactFlow gets none, so no
+    // cable is drawn twice.
+    expect(visibleCanvasEdges(edges, 'harness')).toEqual([])
+    expect(visibleCanvasEdges(edges, 'harness')).toBe(visibleCanvasEdges(edges, 'no-cables'))
+  })
+
+  it('replaces the lock slot with the visual control and mounts the harness under it', () => {
     expect(appSource).toContain('<Controls position="bottom-right" showInteractive={false}>')
     expect(appSource).toContain('className={`canvas-visual-toggle mode-${canvasVisualMode}`}')
     expect(appSource).toContain('nodes={renderedNodes}')
     expect(appSource).toContain('edges={renderedEdges}')
+    expect(appSource).toContain("canvasVisualMode === 'harness' && <CableHarness")
   })
 })
