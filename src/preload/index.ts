@@ -276,6 +276,13 @@ const api = {
     ipcRenderer.invoke('terminal:setCwd', nodeId, dir),
   pickDir: () => ipcRenderer.invoke('dir:pick'),
   gitInfo: (dir: string) => ipcRenderer.invoke('git:info', dir),
+  // Lanes (main/lanes.ts): a worktree per agent, landing as a product action.
+  laneList: (dir: string) => ipcRenderer.invoke('lane:list', dir),
+  laneOpen: (nodeId: string, name: string) => ipcRenderer.invoke('lane:open', nodeId, name),
+  laneLand: (nodeId: string, opts?: { close?: boolean; gate?: string[] | null }) =>
+    ipcRenderer.invoke('lane:land', nodeId, opts),
+  laneClose: (nodeId: string, force?: boolean) => ipcRenderer.invoke('lane:close', nodeId, force),
+  laneAuto: (nodeId: string, on: boolean) => ipcRenderer.invoke('lane:auto', nodeId, on),
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   browserSnapshot: (browserId: string) => ipcRenderer.invoke('browser:snapshot', browserId),
   onWorkspaceList: (cb: (list: unknown) => void) => {

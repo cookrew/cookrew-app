@@ -178,6 +178,12 @@ export function createDemoApi(): CookrewApi {
       Promise.resolve(state.nodes.find((n) => n.id === nodeId) as CanvasNode),
     pickDir: () => Promise.resolve(null),
     gitInfo: () => Promise.resolve(null),
+    // No git in the demo: no lanes to list, nothing to land.
+    laneList: () => Promise.resolve([]),
+    laneOpen: () => Promise.reject(new Error('Lanes need a git repo — not in the demo')),
+    laneLand: () => Promise.resolve({ ok: false as const, reason: 'not-a-lane' as const, detail: 'not in the demo' }),
+    laneClose: () => Promise.reject(new Error('Lanes need a git repo — not in the demo')),
+    laneAuto: (nodeId) => Promise.resolve(state.nodes.find((n) => n.id === nodeId) as CanvasNode),
     onWorkspaceList: (cb) => {
       wsListeners.add(cb)
       return () => wsListeners.delete(cb)

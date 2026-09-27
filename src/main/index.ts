@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from 'electron'
 import path from 'node:path'
-import { chmodSync, existsSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
@@ -108,6 +108,9 @@ import { OwnerGrant, isOwnerSender } from './owner-grant'
 import { Accounts, DEFAULT_LOCK_AFTER_MS, registryOrigin } from './account-v2'
 import { relayHandle } from './legacy-identity'
 import { WorkspaceShots } from './workspace-shots'
+import { closeLane, landLane, listLanes, openLane, repoOf } from './lanes'
+import type { LaneInfo, LandResult } from '../shared/model'
+import { laneGit } from './git'
 import { republishDoors, servingChange } from './serving-identity'
 import { createAdmittedDeviceStore } from './admitted-devices'
 import { pairingHandout } from './pairing-handout'
@@ -1835,6 +1838,8 @@ function boardSources(): ReturnType<typeof boardSourcesFrom> {
 }
 // A turn boundary is a phase change for one terminal: recompute it, no listing.
 turns.on('turn', ({ terminalId }: { terminalId: string }) => void boardProbe.invalidate(terminalId))
+// A turn ended: the auto-lander looks at the lane (lanes.ts rule 3).
+turns.on('turn', ({ terminalId }: { terminalId: string }) => scheduleAutoLand(terminalId))
 const events = new EventLog()
 const recoverable = new RecoverableStore()
 // Snapshot every killed terminal (node + position + session refs + edges)
@@ -3377,6 +3382,115 @@ function setPrimaryDir(id: string, dir: string): ReturnType<WorkspaceStore['list
  * directory the workspace does not have yet is enrolled first, which is what
  * makes the file browser a working escape hatch. Order lives in terminal-cwd.ts.
  */
+/* ── LANES (lanes.ts) ────────────────────────────────────────────────────
+ * One agent, one worktree, one branch; landing is the app's action, never a
+ * prompt. The four operations below are what the card menu, the phone and
+ * the auto-lander call; the rules live in lanes.ts and are tested there. */
+
+function laneTerminal(nodeId: string): TerminalNodeData {
+  const node = store.node(nodeId)
+  if (!node || node.kind !== 'terminal') throw new Error('Not a terminal node')
+  return node as TerminalNodeData
+}
+
+/** The lane directory is inside the repo; git must never see it. */
+function ensureLaneDirIgnored(laneDir: string): void {
+  mkdirSync(laneDir, { recursive: true })
+  const ignore = path.join(laneDir, '.gitignore')
+  if (!existsSync(ignore)) writeFileSync(ignore, '*\n')
+}
+
+function laneList(dir: string): Promise<LaneInfo[]> {
+  return listLanes(laneGit(), dir)
+}
+
+/** Cut a lane from the agent's repo and move the agent into it (respawn, conversation carried). */
+async function laneOpen(nodeId: string, name: string): Promise<CanvasNode> {
+  const terminal = laneTerminal(nodeId)
+  const opened = await openLane(laneGit(), terminal.cwd, name, ensureLaneDirIgnored)
+  if (!opened.ok) throw new Error(opened.error)
+  gitCache.invalidate(terminal.cwd)
+  const moved = await setTerminalCwd(nodeId, opened.path)
+  return store.updateNode(nodeId, { laneLast: null } as Partial<CanvasNode>) ?? moved
+}
+
+/** Land the agent's lane; the answer is kept on the node for the card. */
+async function laneLand(nodeId: string, opts: { close?: boolean; gate?: string[] | null; auto?: boolean } = {}): Promise<LandResult> {
+  const terminal = laneTerminal(nodeId)
+  const lanePath = terminal.cwd
+  // Closing removes the worktree the agent sits in, so the agent leaves first.
+  const repo = opts.close ? await repoOf(laneGit(), lanePath) : null
+  const result = await landLane(laneGit(), { lanePath, gate: opts.gate ?? null, close: false })
+  if (result.ok && opts.close && repo) {
+    await setTerminalCwd(nodeId, repo.main)
+    const closed = await closeLane(laneGit(), lanePath)
+    store.updateNode(nodeId, { laneLast: { ...result, closed: closed.ok, at: Date.now(), auto: false } } as Partial<CanvasNode>)
+    gitCache.invalidate(repo.main)
+    return { ...result, closed: closed.ok }
+  }
+  store.updateNode(nodeId, { laneLast: { ...result, at: Date.now(), auto: opts.auto ?? false } } as Partial<CanvasNode>)
+  if (repo) gitCache.invalidate(repo.main)
+  gitCache.invalidate(lanePath)
+  return result
+}
+
+/** Drop the agent's lane (back to the shared tree first). Refuses unlanded work unless forced. */
+async function laneClose(nodeId: string, force = false): Promise<CanvasNode> {
+  const terminal = laneTerminal(nodeId)
+  const lanePath = terminal.cwd
+  const repo = await repoOf(laneGit(), lanePath)
+  if (!repo) throw new Error(`${lanePath} is not in a git repo`)
+  if (repo.root === repo.main) throw new Error('This agent is in the shared tree, not a lane')
+  // Check before moving the agent, so a refused close leaves it where it was.
+  const lanes = await listLanes(laneGit(), lanePath)
+  const mine = lanes.find((l) => l.path === repo.root)
+  if (!force && mine && (mine.dirty || mine.ahead > 0)) {
+    throw new Error(mine.dirty ? 'The lane has uncommitted changes' : `The lane has ${mine.ahead} unlanded commit${mine.ahead === 1 ? '' : 's'} — LAND first`)
+  }
+  const moved = await setTerminalCwd(nodeId, repo.main)
+  const closed = await closeLane(laneGit(), lanePath, force)
+  if (!closed.ok) throw new Error(closed.error)
+  return store.updateNode(nodeId, { laneAutoLand: false, laneLast: null } as Partial<CanvasNode>) ?? moved
+}
+
+function laneAuto(nodeId: string, on: boolean): CanvasNode {
+  laneTerminal(nodeId)
+  const updated = store.updateNode(nodeId, { laneAutoLand: on } as Partial<CanvasNode>)
+  if (!updated) throw new Error('Not a terminal node')
+  return updated
+}
+
+/**
+ * THE AUTO-LANDER. A finished turn is the one moment an agent's lane is
+ * worth looking at: if the agent committed, the lane lands; if it did not,
+ * nothing happens and nothing is said. Debounced per terminal so a burst of
+ * turn records is one landing, and never concurrent for one lane.
+ */
+const autoLandTimers = new Map<string, NodeJS.Timeout>()
+const autoLanding = new Set<string>()
+const AUTO_LAND_SETTLE_MS = 4000
+function scheduleAutoLand(terminalId: string): void {
+  const node = store.nodeAcrossWorkspaces(terminalId)?.node
+  if (!node || node.kind !== 'terminal' || !(node as TerminalNodeData).laneAutoLand) return
+  const pending = autoLandTimers.get(terminalId)
+  if (pending) clearTimeout(pending)
+  autoLandTimers.set(
+    terminalId,
+    setTimeout(() => {
+      autoLandTimers.delete(terminalId)
+      if (autoLanding.has(terminalId)) return
+      autoLanding.add(terminalId)
+      laneLand(terminalId, { auto: true })
+        .then((result) => {
+          if (result.ok) console.log(`[cookrew] auto-landed ${terminalId}: ${result.commits} commit(s) → ${result.landed}`)
+          else if (result.reason !== 'nothing' && result.reason !== 'dirty') console.error(`[cookrew] auto-land ${terminalId} stopped: ${result.reason}`)
+        })
+        .catch((error) => console.error('[cookrew] auto-land failed:', error))
+        .finally(() => autoLanding.delete(terminalId))
+    }, AUTO_LAND_SETTLE_MS)
+  )
+}
+
 async function setTerminalCwd(nodeId: string, dir: string): Promise<CanvasNode> {
   return moveTerminalCwd(
     {
@@ -5469,6 +5583,11 @@ app.whenReady().then(() => {
       setPrimaryDir,
       setTerminalCwd,
       gitInfo: (dir: string) => gitCache.info(dir),
+      laneList,
+      laneOpen,
+      laneLand,
+      laneClose,
+      laneAuto,
       teamFork,
       teamSave: teamSaveTracked,
       teamClipSet,
@@ -6160,6 +6279,14 @@ function registerIpc(handlers: RestoreHandlers): void {
   // ref), so nothing has to be resident to be readable.
   ipcMain.handle('tuning:list', () => tuningFleet())
   ipcMain.handle('git:info', (_e, dir: string) => gitCache.info(dir))
+  // Lanes: worktree per agent, landing as a product action (lanes.ts).
+  ipcMain.handle('lane:list', (_e, dir: string) => laneList(dir))
+  ipcMain.handle('lane:open', (_e, nodeId: string, name: string) => laneOpen(nodeId, name))
+  ipcMain.handle('lane:land', (_e, nodeId: string, opts?: { close?: boolean; gate?: string[] | null }) =>
+    laneLand(nodeId, opts ?? {})
+  )
+  ipcMain.handle('lane:close', (_e, nodeId: string, force?: boolean) => laneClose(nodeId, force ?? false))
+  ipcMain.handle('lane:auto', (_e, nodeId: string, on: boolean) => laneAuto(nodeId, on))
   ipcMain.handle('dir:pick', async () => {
     if (!mainWindow) return null
     const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] })

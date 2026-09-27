@@ -7,6 +7,8 @@ import type { SousCommandResult } from '../../main/sous-control'
 import type { ListenEvent } from '../../main/listen'
 import type { UiCommandEvent } from '../../shared/sous-ui'
 import type {
+  LaneInfo,
+  LandResult,
   AgentRole,
   CanvasNode,
   Connection,
@@ -305,6 +307,17 @@ export interface CookrewApi {
   pickDir: () => Promise<string | null>;
   /** Git state of a directory; null when unavailable (demo). */
   gitInfo: (dir: string) => Promise<GitInfo | null>;
+  /**
+   * LANES (main/lanes.ts): every worktree of the repo `dir` is in; cut a lane
+   * for an agent and move it there; LAND it (base into the lane, gate, then
+   * fast-forward the shared tree); drop it; and the AUTO-LAND switch. The
+   * demo answers an empty list and refuses the rest.
+   */
+  laneList: (dir: string) => Promise<LaneInfo[]>;
+  laneOpen: (nodeId: string, name: string) => Promise<CanvasNode>;
+  laneLand: (nodeId: string, opts?: { close?: boolean; gate?: string[] | null }) => Promise<LandResult>;
+  laneClose: (nodeId: string, force?: boolean) => Promise<CanvasNode>;
+  laneAuto: (nodeId: string, on: boolean) => Promise<CanvasNode>;
   onWorkspaceList: (cb: (list: WorkspaceList) => void) => () => void;
   addNode: (node: CanvasNode) => Promise<CanvasNode>;
   updateNode: (

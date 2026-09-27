@@ -91,6 +91,15 @@ export interface TerminalNodeData {
    * remote open.
    */
   git?: GitInfo | null
+  /**
+   * LANES (main/lanes.ts). AUTO-LAND: when this agent's turn ends and its
+   * lane is committed and ahead, the app lands it — no prompt, no errand in
+   * the conversation. `laneLast` is what the last landing (manual or auto)
+   * answered, kept on the node so the card can show a conflict or a failed
+   * gate as a state rather than a log line.
+   */
+  laneAutoLand?: boolean
+  laneLast?: LaneOutcome | null
   /** Set when this agent was forked from another agent's turn. */
   forkOf?: ForkOrigin | null
   /**
@@ -209,6 +218,40 @@ export interface WorkspaceMeta {
 }
 
 /** Git state of a workspace directory (main/git.ts). */
+/**
+ * LANES (main/lanes.ts): one worktree of a repo and where it stands against
+ * the base branch the shared tree is on. The shared tree itself is listed too
+ * (isMain), so a card can tell "in the shared tree" from "in a lane".
+ */
+export interface LaneInfo {
+  path: string
+  branch: string | null
+  /** The branch the shared tree is on — what a lane lands onto. */
+  base: string
+  isMain: boolean
+  /** Uncommitted changes to tracked files. */
+  dirty: boolean
+  /** Files left in conflict by a landing that stopped. */
+  conflicts: string[]
+  /** Commits on the lane that base does not have — unlanded work. */
+  ahead: number
+  /** Commits on base the lane has not taken. */
+  behind: number
+}
+
+/** A landing's answer, stamped, as a card keeps it. */
+export type LaneOutcome = LandResult & { at: number; auto: boolean }
+
+/** What LAND answered. Every refusal is a reason a card can show. */
+export type LandResult =
+  | { ok: true; landed: string; commits: number; closed: boolean }
+  | {
+      ok: false
+      reason: 'not-a-lane' | 'dirty' | 'conflict' | 'main-branch' | 'main-dirty' | 'gate' | 'nothing'
+      detail?: string
+      files?: string[]
+    }
+
 export interface GitInfo {
   isRepo: boolean
   root: string | null

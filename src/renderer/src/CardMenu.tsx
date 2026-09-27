@@ -5,6 +5,7 @@ import { cookrew, isDemoMode, isRemoteMode } from './api'
 import { cardAffordances } from './card-affordances'
 import { hasRoleFromCheckpoint, saveRoleFromCheckpoint } from './role-checkpoint'
 import { CrIcon } from './icons'
+import { LanePane } from './LanePane'
 
 /**
  * The card edit menu — right-click (mouse) or long-press (touch) on any
@@ -18,6 +19,8 @@ import { CrIcon } from './icons'
  *   FORK ▸         clone this agent from a checkpoint onto a new card.
  *   WORKDIR ▸      move the card to another directory (respawns the agent
  *                  there — the workdir chip on the full view does the same).
+ *   LANE ▸         a worktree of its own for this agent, and LAND: the app
+ *                  merges its branch back, never a prompt (LanePane.tsx).
  *
  * The menu is modeless chrome: outside tap or Escape dismisses, and App
  * drops it the moment its card leaves the canvas.
@@ -30,7 +33,7 @@ export interface CardMenuAnchor {
   y: number
 }
 
-type Mode = 'root' | 'rename' | 'role' | 'fork' | 'workdir'
+type Mode = 'root' | 'rename' | 'role' | 'fork' | 'workdir' | 'lane'
 
 const MENU_W = 252
 const MENU_H = 340
@@ -98,6 +101,7 @@ export function CardMenu({
           {mode === 'role' && 'SAVE ROLE'}
           {mode === 'fork' && 'FORK FROM CHECKPOINT'}
           {mode === 'workdir' && 'WORKDIR'}
+          {mode === 'lane' && 'LANE'}
         </span>
         <button className="cr-cardmenu-back" aria-label="Close" onClick={onClose}>
           <CrIcon name="close" />
@@ -123,6 +127,11 @@ export function CardMenu({
           {can.workdir && terminal && (
             <button className="cr-cardmenu-item" onClick={go('workdir')}>
               WORKDIR <span className="cr-cardmenu-sub">{shortDir(terminal.cwd)}</span>
+            </button>
+          )}
+          {can.lane && terminal && (
+            <button className="cr-cardmenu-item" onClick={go('lane')}>
+              LANE <span className="cr-cardmenu-sub">{laneSub(terminal)}</span>
             </button>
           )}
         </div>
@@ -154,8 +163,15 @@ export function CardMenu({
       {mode === 'workdir' && terminal && (
         <WorkdirPane terminal={terminal} workspace={workspace} onDone={onClose} />
       )}
+      {mode === 'lane' && terminal && <LanePane terminal={terminal} onDone={onClose} />}
     </div>
   )
+
+  function laneSub(t: TerminalNodeData): string {
+    if (t.laneLast && !t.laneLast.ok && t.laneLast.reason !== 'nothing') return t.laneLast.reason
+    if (t.laneAutoLand) return 'auto-land on'
+    return t.cwd.includes('/.claude/worktrees/') ? 'in a lane' : 'shared tree'
+  }
 
   function shortDir(dir: string): string {
     const parts = dir.split('/').filter(Boolean)

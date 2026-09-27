@@ -27,7 +27,7 @@ interface CacheEntry {
 }
 
 /** Run `git <args>` in cwd with no shell; resolve stdout or reject on error. */
-function git(cwd: string, args: string[]): Promise<string> {
+export function git(cwd: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       'git',
@@ -130,5 +130,27 @@ export async function addWorktree(
     return { ok: true, path: worktreePath }
   } catch (error) {
     return { ok: false, error: gitErrorMessage(error) }
+  }
+}
+
+/**
+ * The lanes module's git: the same no-shell runner, plus a way to pass a gate
+ * command in a lane. A landing may wait on a typecheck, so the gate gets a
+ * long ceiling of its own; the git calls keep the short one.
+ */
+export const GATE_TIMEOUT_MS = 10 * 60_000
+
+export function laneGit(): import('./lanes').LaneGit {
+  return {
+    run: git,
+    exec: (cwd, command, args) =>
+      new Promise((resolve) => {
+        execFile(
+          command,
+          args,
+          { cwd, timeout: GATE_TIMEOUT_MS, windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
+          (error, stdout, stderr) => resolve({ code: error ? 1 : 0, output: `${stdout}${stderr}` })
+        )
+      })
   }
 }

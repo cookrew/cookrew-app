@@ -34,6 +34,13 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
   // Quantized subscriptions: these only change when crossing a bucket, so
   // zoom animation frames don't re-render every card.
   const mode = useStore((s) => cardZoomMode(s.transform[2]))
+  // How many agents sit in THIS directory. Two is the situation lanes exist
+  // for, and the card is where it should show — not a panel somebody opens.
+  const sharers = useStore((s) => {
+    let count = 0
+    for (const n of s.nodes) if ((n.data as { cwd?: string }).cwd === node.cwd && (n.data as { kind?: string }).kind === 'terminal') count += 1
+    return count
+  })
   const invZoom = useStore((s) => cardTypeScale(s.transform[2]))
   // Per-id subscription: this card re-renders only when ITS activity changes,
   // not on every other terminal's stream (the canvas-wide re-render fix).
@@ -168,6 +175,7 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
             caller's own directory — a lie. The cwd of an imported card is at
             the author's app; nothing here is on a branch. */}
         {!node.servedSession && <GitChip dir={node.cwd} git={node.git} />}
+        {!node.servedSession && <LaneChip node={node} sharers={sharers} />}
         {phase === 'idle' && activity && (
           <span className="vi-chip dim">{agoLabel(activity.updatedAt)}</span>
         )}
@@ -213,4 +221,39 @@ function ShellTail({ activity }: { activity: TerminalActivity | undefined }): Re
       <span className="phos-cursor">▮</span>
     </div>
   )
+}
+
+/**
+ * THE LANE CHIP — what the card says about its git situation without asking
+ * git: read off the node (lanes.ts keeps the last landing there) and the flow
+ * store (who else is in this directory). A shared directory is amber, an
+ * unlanded stop is red, a landing is a quiet tick; nothing when there is
+ * nothing to say.
+ */
+function LaneChip({ node, sharers }: { node: TerminalNodeData; sharers: number }): React.JSX.Element | null {
+  const last = node.laneLast ?? null
+  const inLane = node.cwd.includes('/.claude/worktrees/')
+  if (last && !last.ok && last.reason !== 'nothing' && last.reason !== 'dirty') {
+    return (
+      <span className="vi-chip cr-lane-chip bad" title={`Landing stopped: ${last.reason}${last.files?.length ? ' · ' + last.files.join(', ') : ''}`}>
+        {last.reason === 'conflict' ? 'CONFLICT' : last.reason === 'gate' ? 'GATE FAILED' : 'LAND STOPPED'}
+      </span>
+    )
+  }
+  if (!inLane && sharers > 1) {
+    return (
+      <span className="vi-chip cr-lane-chip warn" title={`${sharers} agents share this working tree — give each a LANE (card menu)`}>
+        SHARED ×{sharers}
+      </span>
+    )
+  }
+  if (inLane && node.laneAutoLand) {
+    return (
+      <span className="vi-chip cr-lane-chip" title={last?.ok ? `Auto-land: last landed ${last.commits} commit(s) → ${last.landed}` : 'Auto-land after each turn'}>
+        AUTO-LAND
+      </span>
+    )
+  }
+  if (inLane) return <span className="vi-chip cr-lane-chip" title="In a lane of its own — LAND from the card menu">LANE</span>
+  return null
 }

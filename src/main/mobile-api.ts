@@ -26,6 +26,8 @@ import type {
   AgentRole,
   CanvasNode,
   GitInfo,
+  LaneInfo,
+  LandResult,
   TeamForkSpec,
   TeamClipStatus,
   TeamCopyResult,
@@ -89,6 +91,12 @@ export interface MobileOps {
   /** Async: the respawn waits for the old session to actually be gone. */
   setTerminalCwd: (nodeId: string, dir: string) => Promise<CanvasNode>;
   gitInfo: (dir: string) => Promise<GitInfo>;
+  /** Lanes (lanes.ts): worktree per agent, landing as a product action. */
+  laneList: (dir: string) => Promise<LaneInfo[]>;
+  laneOpen: (nodeId: string, name: string) => Promise<CanvasNode>;
+  laneLand: (nodeId: string, opts: { close?: boolean; gate?: string[] | null }) => Promise<LandResult>;
+  laneClose: (nodeId: string, force: boolean) => Promise<CanvasNode>;
+  laneAuto: (nodeId: string, on: boolean) => CanvasNode;
   /** Team fork/save + roles (spec note team-fork-roles-v1). */
   teamFork: (spec: TeamForkSpec) => Promise<WorkspaceMeta>;
   teamSave: (name?: string, nodeIds?: string[]) => TeamMeta;
@@ -1054,6 +1062,31 @@ export async function handleMobileApi(
       respondJson(response, 400, {
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+    return true;
+  }
+  // Lanes: the same four operations the desktop menu calls, so LAND from the
+  // phone is the same code path. Errors are the operation's own words.
+  if (method === "GET" && p === "/api/lanes") {
+    respondJson(response, 200, await ops.laneList(url.searchParams.get("dir") ?? ""));
+    return true;
+  }
+  const laneMatch = p.match(/^\/api\/lanes\/(open|land|close|auto)$/);
+  if (laneMatch && method === "POST") {
+    const body = await readJson<{ nodeId?: string; name?: string; close?: boolean; gate?: string[] | null; force?: boolean; on?: boolean }>(request);
+    const nodeId = body.nodeId ?? "";
+    try {
+      const answer =
+        laneMatch[1] === "open"
+          ? await ops.laneOpen(nodeId, body.name ?? "")
+          : laneMatch[1] === "land"
+            ? await ops.laneLand(nodeId, { close: body.close, gate: body.gate })
+            : laneMatch[1] === "close"
+              ? await ops.laneClose(nodeId, body.force ?? false)
+              : ops.laneAuto(nodeId, body.on ?? false);
+      respondJson(response, 200, answer);
+    } catch (error) {
+      respondJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
     }
     return true;
   }
