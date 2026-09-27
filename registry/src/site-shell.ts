@@ -239,12 +239,15 @@ function head(options: ShellOptions): string {
 }
 
 function shell(options: ShellOptions, main: string): string {
-  // HOME, the MARKET and the account (owner ruling, 2026-09-06). The sections
-  // of the homepage are its own catalog, on the right rail (site-home.ts);
+  // HOME, the MARKET, the app and the account. The two things a visitor came
+  // for — the canvas and the marketplace — are one click from every page, and
+  // the header is sticky, so they never scroll to find them again. The
+  // homepage's sections are its own catalog, on the right rail (site-home.ts);
   // GitHub is in the footer with the rest of the outbound links.
   const nav = [
     ['/', 'Home', 'home'],
-    ['/market', 'Marketplace', 'market']
+    ['/market', 'Marketplace', 'market'],
+    ['/#download', 'Get the app', 'download']
   ]
     .map(
       ([href, label, key]) =>
@@ -428,7 +431,7 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
 .addr span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dl{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin:18px 0}
 .dl .card small{display:block;color:var(--muted);margin-top:6px;font-size:12.5px}
-.hero{padding:64px 0 52px;border-bottom:2px solid var(--line)}
+.hero{padding:34px 0 30px;border-bottom:2px solid var(--line)}
 /* the homepage: the page in one column, its catalog on the right rail. The
    sections keep their own .wrap markup; inside the column it is just a box. */
 .home{display:grid;grid-template-columns:minmax(0,1fr) 188px;gap:0 40px;align-items:start}
@@ -447,9 +450,40 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
   .toc ol{display:flex;flex-wrap:wrap;gap:6px;border-left:none}
   .toc li.sub{display:none}
   .toc a{border:1.5px solid var(--line);background:var(--cream-hi);box-shadow:2px 2px 0 var(--line)}
+  /* the rail folds above the brand here, and the sticky header is already
+     carrying both destinations two rows up — one copy is enough. */
+  .toc .jump{display:none}
 }
-.hero .wrap{display:grid;gap:40px;grid-template-columns:minmax(0,6fr) minmax(0,6fr);align-items:center}
+.hero .wrap{display:grid;gap:34px;grid-template-columns:minmax(0,6fr) minmax(0,7fr);align-items:center}
 @media (max-width:900px){.hero .wrap{grid-template-columns:1fr}}
+.hero h1{margin-bottom:12px;font-size:clamp(28px,3.3vw,40px)}
+/* the lockup is the header's mark writ large — a brand beat, not a billboard.
+   site-brand.ts sizes it for a full-width band; in the hero it shares the
+   column with the headline, so it is capped here. */
+.hero .brand{padding:0 0 14px}
+.hero .brand .cr-lockup{width:min(100%,300px)}
+.hero .lede{margin-bottom:16px;font-size:clamp(16px,1.4vw,18px);max-width:46ch}
+.hero .row#download{gap:8px}
+.hero .row#download .btn.lg{padding:11px 13px}
+.hero .tagline{margin-bottom:12px}
+/* THE DOCK — the strip under the hero. Three cells, the app's own chrome: a
+   lamp, what it is, and the one number that says whether it is worth a click.
+   It is the second thing on the page so the marketplace is never a scroll. */
+.dock{display:grid;grid-template-columns:repeat(3,1fr);border:2px solid var(--line);box-shadow:4px 4px 0 var(--line);background:var(--cream-hi);margin:0 0 4px}
+.dock a{display:flex;gap:12px;align-items:center;padding:14px 16px;text-decoration:none;border-right:2px solid var(--line)}
+.dock a:last-child{border-right:none}
+.dock a:hover{background:var(--amber-soft)}
+.dock a:last-child{background:var(--amber)}
+.dock a:last-child:hover{background:var(--amber-soft)}
+.dock .t{font:700 9.5px var(--font-pixel);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:3px}
+.dock .d{font-size:13px;color:var(--muted);display:block;line-height:1.35}
+.dock .ico{font:16px var(--font-screen);background:var(--phos-bg);color:var(--phos);border:2px solid var(--line);width:34px;height:34px;display:grid;place-items:center;flex:0 0 auto}
+@media (max-width:760px){.dock{grid-template-columns:1fr}.dock a{border-right:none;border-bottom:2px solid var(--line)}.dock a:last-child{border-bottom:none}}
+/* the rail's two destinations, pinned above the section list */
+.toc .jump{display:grid;gap:6px;margin:0 0 12px}
+.toc .jump a{border:2px solid var(--line);box-shadow:2px 2px 0 var(--line);background:var(--cream-hi);text-align:center}
+.toc .jump a.primary{background:var(--amber)}
+.mkt-h{display:flex;align-items:center;gap:10px;font-size:17px;margin:22px 0 4px}
 .tagline{display:inline-block;background:var(--amber);color:#2d2a20;font:700 9.5px var(--font-pixel);letter-spacing:.14em;padding:4px 10px;border:2px solid var(--line);transform:rotate(-1deg);margin-bottom:18px}
 .faq details{border:2px solid var(--line);background:var(--cream-hi);margin:8px 0;box-shadow:3px 3px 0 var(--line)}
 .faq summary{cursor:pointer;padding:10px 14px;font-weight:600}.faq details>p{padding:0 16px 14px;margin:0;color:var(--muted)}

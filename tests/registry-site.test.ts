@@ -227,7 +227,42 @@ describe('the front page', () => {
     const page = home([door()])
     expect(page.body).toContain('Run a team of AI coding agents on one canvas')
     expect(page.body).toContain('COOKREW Alpha')
-    expect(page.body).toContain('Teams you can open right now')
+    expect(page.body).toContain('Open someone’s canvas — nothing to install')
+  })
+
+  // WHAT A VISITOR CAME FOR IS IN THE FIRST SCREEN. Two things: a canvas and
+  // the marketplace. The hero's buttons are the first, the dock under it is
+  // the second, and neither is a scroll — so both are asserted to land before
+  // the page's first section starts.
+  it('puts a canvas and the marketplace in the first screen, before any section', () => {
+    const body = home([door()]).body
+    const at = (marker: string): number => {
+      const i = body.indexOf(marker)
+      expect(i, marker).toBeGreaterThan(-1)
+      return i
+    }
+    const firstSection = at('<section id="market">')
+    expect(at('id="download"')).toBeLessThan(firstSection)
+    expect(at('<nav class="dock"')).toBeLessThan(firstSection)
+    // the dock's three cells: what the canvas is, the reader's own machines,
+    // and the market with a count rather than an adjective.
+    const dock = body.slice(at('<nav class="dock"'), body.indexOf('</nav>', at('<nav class="dock"')))
+    expect(dock).toContain('href="/features/ai-agents-on-one-canvas"')
+    expect(dock).toContain('href="/me#desktops"')
+    expect(dock).toContain('href="/market"')
+    expect(dock).toMatch(/1 listed · \d+ taking calls/)
+  })
+
+  // A PAID INSTANCE IS THE ONE THING HERE SOMEBODY DECIDES ABOUT IN A SECOND,
+  // so it gets its own heading above the free ones, with the price on the card.
+  it('gives the instances you can rent their own heading, ahead of the free ones', () => {
+    const body = home([door()]).body
+    expect(body).toContain('Instances you can rent')
+    expect(body).toContain('id="rent"')
+    expect(body.indexOf('id="rent"')).toBeLessThan(body.indexOf('<section id="start">'))
+    expect(body).toContain('USD · per session')
+    // and nothing pretends there is a rent shelf when every team is free
+    expect(home([{ ...door(), access: 'account' as const, priceUsd: undefined }]).body).not.toContain('Instances you can rent')
   })
 
   it('says so plainly when nobody is serving', () => {
@@ -277,18 +312,20 @@ describe('the front page', () => {
    * GET STARTED, then the FEATURES, then the market. The header's three
    * buttons are anchors into it.
    */
-  it('is the three pages in one, in the order a newcomer reads', () => {
+  it('is the three pages in one, in the order of what a visitor came for', () => {
     const body = home([door()]).body
     const at = (marker: string): number => {
       const i = body.indexOf(marker)
       expect(i, marker).toBeGreaterThan(-1)
       return i
     }
-    expect(at('id="download"')).toBeLessThan(at('<section id="start">'))
+    // The market leads, because opening somebody's canvas needs no install;
+    // the two steps and the features follow for the reader who keeps going.
+    expect(at('id="download"')).toBeLessThan(at('<section id="market">'))
+    expect(at('<section id="market">')).toBeLessThan(at('<section id="start">'))
     expect(at('<section id="start">')).toBeLessThan(at('<section id="features">'))
-    expect(at('<section id="features">')).toBeLessThan(at('<section id="market">'))
     // The download links sit under the headline, with the version beside them.
-    expect(body.indexOf('https://x/dmg')).toBeLessThan(body.indexOf('<section id="start">'))
+    expect(body.indexOf('https://x/dmg')).toBeLessThan(body.indexOf('<section id="market">'))
     // GET STARTED: the two steps and the commands the orch runs — as text,
     // because the front page stays a document with no script (see below).
     expect(body).toContain('Place an agent, and let it orchestrate your workflow')
@@ -299,15 +336,19 @@ describe('the front page', () => {
     // The sections are the page's own catalog, on the right rail; the header
     // keeps HOME, the market and the account, and nothing that used to be a page.
     const rail = body.slice(body.indexOf('<aside class="toc"'), body.indexOf('</aside>'))
-    for (const href of ['#download', '#start', '#features', '#market']) expect(rail).toContain(`href="${href}"`)
+    for (const href of ['#start', '#features', '#market']) expect(rail).toContain(`href="${href}"`)
+    // the rail is sticky, so the two destinations ride down the page with it
+    expect(rail).toContain('href="https://x/dmg"')
+    expect(rail).toContain('href="/market"')
     expect(body.indexOf('<div class="home-body">')).toBeLessThan(body.indexOf('<aside class="toc"'))
     const header = body.slice(body.indexOf('<nav class="top">'), body.indexOf('</nav>'))
     expect(header).toContain('href="/"')
     expect(header).toContain('href="/market"')
     expect(header).toContain('Sign in')
+    // the app is one click from every page, and the header is sticky
+    expect(header).toContain('href="/#download"')
     expect(header).not.toContain('Features')
     expect(header).not.toContain('Get started')
-    expect(header).not.toContain('Download')
     expect(header).not.toContain('github.com')
     expect(body).not.toContain('href="/start"')
     expect(body).not.toContain('href="/features"')

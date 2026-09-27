@@ -112,7 +112,7 @@ export function desktopsSection(username: string, desktops: readonly V2Desktop[]
     desktops.length === 0
       ? `<li><span class="meta">No desktop has registered its workspaces yet. Claim this username in the app and they appear here.</span></li>`
       : desktops.map((desktop) => desktopRow(username, desktop)).join('')
-  return `<h2 style="margin-top:30px">Desktops</h2>
+  return `<h2 id="desktops" style="margin-top:30px">Your machines</h2>
 <p class="meta">Names and workspaces only — cookrew.dev never holds what is on a canvas. ONLINE means that Mac is holding its line at cookrew.dev right now, so OPEN reaches it; opening one stays here, on cookrew.dev. USE WI-FI asks that Mac once for its keyboard on this network; ${esc(webCopy('m5.no-account'))}</p>
 <ul class="doors me-list" id="me-desktops"
   data-asked="${esc(webCopy('m5.asked'))}"
