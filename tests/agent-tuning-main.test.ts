@@ -24,7 +24,7 @@ import { claudeProjectDir } from '../src/main/claude-fork'
 import { claudeTuning } from '../src/main/claude-tuning'
 import { codexTuning } from '../src/main/codex-tuning'
 import { piTuning, piTuningWith } from '../src/main/pi-tuning'
-import { tuningTag, type HarnessTuning } from '../src/shared/agent-tuning'
+import { askOutcome, modelAliasOf, tuningTag, type HarnessTuning } from '../src/shared/agent-tuning'
 import type { TerminalNodeData } from '../src/shared/model'
 
 const SESSION = '11111111-2222-4333-8444-555555555555'
@@ -241,6 +241,102 @@ describe('pi records a model and no effort, and says exactly that', () => {
     const tuning = piTuningWith({ agentDir: mkdtempSync(path.join(tmpdir(), 'pi-empty-')) })
     expect(tuning.values?.('model', null)).toEqual([])
     expect(tuning.line('model', 'ifunk/k3')).toBeNull()
+  })
+})
+
+/** The pair claude writes when a slash command runs, verbatim in shape. */
+function commandResult(stdout: string, at: string): string {
+  return JSON.stringify({
+    type: 'user',
+    timestamp: at,
+    sessionId: SESSION,
+    message: { role: 'user', content: `<local-command-stdout>${stdout}</local-command-stdout>` }
+  })
+}
+
+describe('claude acknowledges a dial turn in the record, and that is the readout', () => {
+  it('reads the model out of the command result, not the next reply', () => {
+    // The complaint this fixes: the pane said "Set model to Fable 5.1" while
+    // the rail still read `opus`, because an idle agent may not reply for
+    // minutes. The acknowledgment is written the moment the command runs.
+    const record = JSON.parse(
+      commandResult('Set model to `Fable 5.1` and saved as your default for new sessions',
+        '2026-09-27T06:12:27.788Z')
+    )
+    expect(claudeTuning.read(record)).toEqual({
+      model: 'Fable 5.1',
+      effort: null,
+      at: Date.parse('2026-09-27T06:12:27.788Z')
+    })
+  })
+
+  it('reads either effort wording — saved as default, or this session only', () => {
+    const saved = JSON.parse(commandResult(
+      'Set effort level to high (saved as your default for new sessions): Comprehensive',
+      '2026-09-27T06:12:08.817Z'))
+    const once = JSON.parse(commandResult(
+      'Set effort level to max (this session only): Maximum capability', '2026-09-27T06:12:41.280Z'))
+    expect(claudeTuning.read(saved)?.effort).toBe('high')
+    expect(claudeTuning.read(once)?.effort).toBe('max')
+  })
+
+  it('ignores a command that did NOT set anything, so a refusal stays visible', () => {
+    // A rejected pick prints an error instead of "Set model to", which is
+    // what keeps the refused state detectable rather than papered over.
+    expect(claudeTuning.read(JSON.parse(commandResult('Reset model to the workspace default', '2026-09-27T06:00:00.000Z')))).toBeNull()
+    expect(claudeTuning.read(JSON.parse(commandResult("Unknown model 'nope'", '2026-09-27T06:00:00.000Z')))).toBeNull()
+    expect(claudeTuning.read(JSON.parse(JSON.stringify({
+      type: 'user', timestamp: '2026-09-27T06:00:00.000Z',
+      message: { role: 'user', content: 'please set the model to fable' }
+    })))).toBeNull()
+  })
+
+  it('maps the DISPLAY name the acknowledgment uses onto the offered alias', () => {
+    // The reply records `claude-fable-5-1`; the acknowledgment says
+    // "Fable 5.1". Both have to tick the same row.
+    expect(modelAliasOf('Fable 5.1')).toBe('fable')
+    expect(modelAliasOf('Opus 5')).toBe('opus')
+    expect(modelAliasOf('Haiku 4.5')).toBe('haiku')
+  })
+
+  it('takes the model from the acknowledgment WITHOUT blanking the effort', () => {
+    // A /model result names no effort. Replacing wholesale would wipe a
+    // perfectly well-known one on every model change.
+    const projectsDir = projectsWith([
+      reply('claude-opus-5', 'max', '2026-09-27T03:00:00.000Z'),
+      commandResult('Set model to `Fable 5.1` and saved as your default for new sessions',
+        '2026-09-27T04:00:00.000Z')
+    ])
+    expect(readTuning(subjectOf(node()), { projectsDir })).toEqual({
+      model: 'Fable 5.1',
+      effort: 'max',
+      at: Date.parse('2026-09-27T04:00:00.000Z')
+    })
+  })
+
+  it('settles the ask immediately instead of waiting for a reply', () => {
+    const at = Date.parse('2026-09-27T04:00:00.000Z')
+    const projectsDir = projectsWith([
+      reply('claude-opus-5', 'max', '2026-09-27T03:00:00.000Z'),
+      commandResult('Set model to `Fable 5.1` and saved as your default', '2026-09-27T04:00:00.000Z')
+    ])
+    const tuning = readTuning(subjectOf(node()), { projectsDir })
+    const ask = { knob: 'model' as const, value: 'fable', at: at - 1000 }
+    expect(askOutcome(ask, tuning)).toBe('settled')
+  })
+
+  it('merges through the APPEND path too, not only a cold read', () => {
+    const projectsDir = projectsWith([reply('claude-opus-5', 'max', '2026-09-27T03:00:00.000Z')])
+    const cache = new TuningCache()
+    const subject = subjectOf(node())
+    expect(cache.of(subject, { projectsDir })).toEqual({
+      model: 'claude-opus-5', effort: 'max', at: Date.parse('2026-09-27T03:00:00.000Z')
+    })
+    const file = path.join(claudeProjectDir(CWD, projectsDir), `${SESSION}.jsonl`)
+    appendFileSync(file, `\n${commandResult('Set model to `Fable 5.1` and saved', '2026-09-27T04:00:00.000Z')}`)
+    expect(cache.of(subject, { projectsDir })).toEqual({
+      model: 'Fable 5.1', effort: 'max', at: Date.parse('2026-09-27T04:00:00.000Z')
+    })
   })
 })
 
