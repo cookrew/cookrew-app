@@ -33,24 +33,24 @@ export const SEQUENCES: Readonly<Record<string, readonly Step[]>> = {
   "canvas": [
     {
       "file": "seq-canvas-1.jpg",
-      "title": "Wide canvas overview",
-      "caption": "Framed a wide slice of the Cookrew Dev board in the harness view: two rows of agent cards, their notes stacked under them, and the browsers below, with the cables routed as shared trunks along the gutters instead of a line per link.",
+      "title": "The crew on the canvas",
+      "caption": "Framed Fresco, Velvet, Conductor and Solosea on the Cookrew Dev board in the harness view: each agent card shows the last prompt it was given and the reply it made, the spec notes sit in a row beneath, the browser cards beneath those show the pages the agents opened, and the cables between them run as shared trunks.",
       "width": 1400,
-      "height": 875
+      "height": 874
     },
     {
       "file": "seq-canvas-2.jpg",
-      "title": "Medium zoom on the canvas",
-      "caption": "Framed the Conductor row at 0.39 zoom: Fresco, Velvet, Conductor and Solosea with their notes and browsers, the harness trunks running between the columns and a tab on each card naming the partner that sits off-screen.",
+      "title": "An agent card opened, the rail scrubbed",
+      "caption": "Clicked the Velvet card and dragged its checkpoint rail upward: the transcript on the left scrolled to checkpoint T78, the rail fanned out into a list of the 138 checkpoints with the title Sous gave each, and the FORK action appeared on the focused row.",
       "width": 1400,
       "height": 875
     },
     {
       "file": "seq-canvas-3.jpg",
-      "title": "Close zoom on canvas cards",
-      "caption": "Wheeled in on the Conductor card until the far-partner tabs read — Marketplace, Forge, Magpie, Fresco and +71 more — while the trunks to the notes above stayed one shared run each.",
+      "title": "A browser card opened",
+      "caption": "Clicked the Detection research + verdicts browser card under Conductor: the card zoomed to the stage and the page it holds — a research document on the local disk — rendered inside it with its address in the card's bar.",
       "width": 1400,
-      "height": 874
+      "height": 875
     }
   ],
   "checkpoints": [

@@ -306,7 +306,7 @@ describe('the front page', () => {
     expect(page.body).toContain('1 serving now')
     expect(page.body).toContain('Ship Crew')
     expect(page.body).toContain('href="/install/sha256:' + 'a'.repeat(64) + '"')
-    expect(page.body).toContain('width="1400" height="875"')
+    expect(page.body).toContain('width="1400" height="874"')
     expect(page.body).toContain('rel="preload" as="image" href="https://raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/promo-poster.jpg"')
     expect(page.headers['content-security-policy']).toContain("manifest-src 'self'")
     expect(page.body).toContain('poster="https://raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/promo-poster.jpg"')

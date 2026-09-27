@@ -26,7 +26,7 @@ const SIZES: Record<string, [number, number]> = {
   'intro-5.jpg': [647, 1400],
   'intro-6.jpg': [1400, 887],
   'qa-board.jpg': [1400, 875],
-  'qa-canvas.jpg': [1400, 875],
+  'qa-canvas.jpg': [1400, 874],
   'promo-poster.jpg': [1400, 874],
   'qa-history-trace.jpg': [1400, 875],
   'qa-marketplace.jpg': [1400, 875],
@@ -53,7 +53,7 @@ export const FRAMES = {
   canvas: frame(
     'qa-canvas.jpg',
     'The Cookrew Dev canvas: agent terminal cards, notes and wires',
-    'Framed the Conductor row of the Cookrew Dev board at 0.39 zoom in the harness view: Fresco, Velvet, Conductor and Solosea, their notes stacked above and below, the browsers under them, and the cables routed as shared trunks along the gutters — a tab on each card names the partner that sits off-screen.'
+    'Framed the Velvet row of the Cookrew Dev board in the harness view: Fresco, Velvet, Conductor and Solosea show the last turn each agent took, the spec notes they were handed sit under them, the browser cards below carry the pages they opened, and the cables run as shared trunks along the gutters.'
   ),
   task: frame(
     'intro-1.jpg',

@@ -166,7 +166,7 @@ function dock(input: HomeInput): string {
  */
 function promo(): string {
   const poster = `${SITE_FRAMES}promo-poster.jpg`
-  return `<figure class="shot promo"><video autoplay muted loop playsinline preload="metadata" poster="${esc(poster)}" width="1400" height="874" aria-label="Ten seconds of Cookrew: the board, a card dragged and the harness re-routing, a card opening"><source src="${SITE_FRAMES}promo.mp4" type="video/mp4"></video><figcaption><span class="rec">● REC</span>Ten seconds of the real app on the Cookrew Dev board: the harness view zooms to the crew, Velvet is dragged and its cables re-route, the Conductor card opens. <a href="/features/ai-agents-on-one-canvas">The canvas, frame by frame →</a></figcaption></figure>`
+  return `<figure class="shot promo"><video autoplay muted loop playsinline preload="metadata" poster="${esc(poster)}" width="1400" height="874" aria-label="Ten seconds of Cookrew: agent cards on the canvas, one opened on its transcript and checkpoint rail, a note card, a browser card"><source src="${SITE_FRAMES}promo.mp4" type="video/mp4"></video><figcaption><span class="rec">● REC</span>Ten seconds of the real app on the Cookrew Dev board: agent cards with their last turn, wired to notes and browsers; Velvet opens on its transcript and 138 checkpoints, the rail fans out; a spec note opens; a research page opens in a browser card. Every record is the agents' own. <a href="/features/ai-agents-on-one-canvas">The canvas, frame by frame →</a></figcaption></figure>`
 }
 
 /** GET STARTED: the two steps, the crew builder, and the two questions people ask first. */
