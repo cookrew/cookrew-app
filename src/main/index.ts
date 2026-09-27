@@ -1491,7 +1491,9 @@ function servedStripeConfig(): ReturnType<typeof servedPayments.stripeConfig> {
 function servedPaymentTerms(
   template: Pick<ServedTemplate, 'priceUsd' | 'slug'>
 ): unknown | null {
-  return servedPayments.terms(template)
+  // The published name rides along so the quote says whose seat it is.
+  const team = relayServing?.addressFor(template.slug)?.name ?? null
+  return servedPayments.terms({ ...template, ...(team === null ? {} : { team }) })
 }
 
 /** Public address + presence/mode only. The Stripe value has no read path. */
@@ -1549,17 +1551,24 @@ async function handleServedSlug(
                 serviceId: input.serviceId,
                 sub: input.sub,
                 slug: input.slug,
-                successUrl: input.successUrl
+                successUrl: input.successUrl,
+                ...(input.returnUrl === undefined ? {} : { returnUrl: input.returnUrl }),
+                ...(input.team === undefined ? {} : { team: input.team })
               }
             )
             return result.ok ? result.url : null
           },
-      successUrl: (t) => servedPaymentReturn(t.slug)
+      successUrl: (t) => servedPaymentReturn(t.slug),
+      // A buyer paying FROM the team's page at cookrew.dev is sent back to it
+      // — that page, at that origin, and nowhere else (returnUrlFor).
+      doorName: (t) => relayServing?.addressFor(t.slug)?.name ?? null,
+      registryOrigin: () => registryOrigin()
     },
     template,
     method,
     pathname,
-    headers
+    headers,
+    body
   )
   if (checkout !== null) {
     for (const [key, value] of Object.entries(checkout.headers ?? {})) {
