@@ -174,8 +174,15 @@ body,
   background: var(--cream-hi);
   border-bottom: 2px solid var(--line);
   -webkit-app-region: drag;
+  /* THE BAR OUTRANKS THE CANVAS IT OVERHANGS, and two things depend on it:
+     the local-network ask hangs off the bottom edge of this bar, and the
+     connection sheet is a fixed scrim rendered inside it. Both are painted
+     outside the header's own box, so a header on the stage's own layer puts
+     both UNDER the canvas — which is what folding this selector into the
+     `.cr-stage, .cr-dock` block below did, silently, for the whole life of
+     this file. Bounded above by the sheets and the lock (60+), which must
+     cover the bar too. tests/header-layer.test.ts holds the comparison. */
   z-index: 50;
-  /* The local-network ask hangs off the bottom edge of this bar. */
   position: relative;
 }
 
@@ -2516,7 +2523,9 @@ a.card-close {
   pointer-events: none;
 }
 
-.cr-header,
+/* One layer for the canvas and the bar below it; the dock wins it by document
+   order. THE HEADER IS DELIBERATELY NOT IN THIS LIST — it carries its own
+   higher layer, and being folded in here overrode that. See the rule above. */
 .cr-stage,
 .cr-dock {
   position: relative;
