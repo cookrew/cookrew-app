@@ -122,6 +122,7 @@ export function mePage(
     {
       title: `@${account.username} — Cookrew`,
       kind: 'app',
+      account: account.username,
       cache: 0,
       noindex: true,
       // device-seal.js before reach.js: M5's answer arrives sealed to this

@@ -160,6 +160,14 @@ export interface ShellOptions {
    */
   cache?: number
   status?: number
+  /**
+   * WHO IS READING, when the server knows. The header names them and links to
+   * /me; absent or null, it offers sign in. A DOCUMENT page has no script and
+   * so no other way to ever learn this — the front page said "Sign in" to a
+   * person who was, for as long as this field did not exist. A page rendered
+   * with an account is rendered for one reader: its caller sets `cache: 0`.
+   */
+  account?: string | null
 }
 
 export function page(options: ShellOptions, main: string): Page {
@@ -254,10 +262,19 @@ function shell(options: ShellOptions, main: string): string {
         `<a class="btn sm${options.active === key ? ' primary' : ''}" href="${href}"${href.startsWith('http') ? ' target="_blank" rel="noopener"' : ''}>${label}</a>`
     )
     .join('')
+  // The reader, when the request said who they were. An app page keeps the
+  // button (site.js turns `me` into a visit to /me); a document page, which
+  // may run nothing, is a link — and it is the ONLY way the front page can
+  // ever name the person reading it.
+  const who = options.account ?? null
   const account =
-    options.kind === 'app'
-      ? `<button class="btn sm" id="signin" data-signin>🔑 Sign in</button>`
-      : `<a class="btn sm" href="/market#account">🔑 Sign in</a>`
+    who !== null
+      ? options.kind === 'app'
+        ? `<button class="btn sm" id="signin" data-signin="me">@${esc(who)}</button>`
+        : `<a class="btn sm" href="/me">@${esc(who)}</a>`
+      : options.kind === 'app'
+        ? `<button class="btn sm" id="signin" data-signin>🔑 Sign in</button>`
+        : `<a class="btn sm" href="/market#account">🔑 Sign in</a>`
   // The ladder's screens travel with the account sheet: every page that
   // carries site.js is a page a second factor can be asked on.
   const scripts = (options.kind === 'app' ? options.scripts ?? [] : [])
