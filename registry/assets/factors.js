@@ -146,7 +146,8 @@
       if (out.status === 201) {
         done()
         dialog.close()
-        location.assign('/me')
+        // site.js decides where a sign-in lands: a team page reloads, else /me.
+        ;(window.cookrewAfterSignIn ?? (() => location.assign('/me')))()
         return true
       }
       if (out.status === 410) {
@@ -357,7 +358,7 @@
     const device = await window.cookrewAccount?.device?.()
     const out = await api('POST', '/v2/sessions/passkey', { credential: wireAssertion(credential), device })
     if (out.status === 201) {
-      location.assign('/me')
+      ;(window.cookrewAfterSignIn ?? (() => location.assign('/me')))()
       return
     }
     status(said(out, 'That passkey did not open an account here.'))

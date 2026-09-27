@@ -11,6 +11,17 @@
  */
 ;(() => {
   'use strict'
+  /**
+   * WHERE A SIGN-IN LANDS. On a team's page the reader came to open or buy
+   * that team, so the page is reloaded for them — the server renders the seat
+   * bar for who they now are, and line.js resumes a buy or a paid return it
+   * kept in sessionStorage. Everywhere else the account page is the answer.
+   */
+  const afterSignIn = () => {
+    if (document.getElementById('team')) location.reload()
+    else location.assign('/me')
+  }
+  window.cookrewAfterSignIn = afterSignIn
   const $ = (id) => document.getElementById(id)
   const enc = new TextEncoder()
 
@@ -687,7 +698,7 @@
         const out = await v2('POST', '/v2/join', { code, device })
         if (out.status === 201) {
           dialog.close()
-          location.assign('/me')
+          afterSignIn()
           return
         }
         /**
@@ -735,7 +746,7 @@
               : await v2('POST', '/v2/sessions', { username, password, device })
         if (out.status === 201) {
           dialog.close()
-          location.assign('/me')
+          afterSignIn()
           return
         }
         // PHASE 4: the password was right and the account wants one more step.
