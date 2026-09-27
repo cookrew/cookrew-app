@@ -163,6 +163,15 @@ import {
 import { isCodexCommand, resolveCodexRolloutByPid } from './codex-bind'
 import { isOpenCodeCommand, resolveOpencodeSessionByPid } from './opencode-bind'
 import { isPiCommand, piAdoptableSession, piLaunchBinding, resolvePiSessionByPane } from './pi-bind'
+import {
+  applyTuning,
+  subjectOf,
+  TuneAsks,
+  TuningCache,
+  tuningStateOf,
+  type TuneDeps
+} from './agent-tuning'
+import type { AgentTuning, TuneKnob } from '../shared/agent-tuning'
 import { harnessFor } from './harness'
 import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
 import { blocksResume, holderOf, liveSessionHolders, planHeldSessionFork } from './claude-live-session'
@@ -444,6 +453,12 @@ const teams = new TeamStore()
 }
 const gitCache = new GitInfoCache()
 const agents = new AgentRegistry()
+/** Dial turns typed into a pane but not yet confirmed by a reply. */
+const tuneAsks = new TuneAsks()
+/** Size+mtime-gated readout, so dozens of cards cost dozens of stats. */
+const tuningCache = new TuningCache()
+/** What each card was last TOLD, so an unchanged readout sends nothing. */
+const tuningAnnounced = new Map<string, string>()
 /**
  * The internet gate's two stores (§9 · ④). The issuer signs this instance's
  * call credentials — owner-as-issuer, so nothing here reaches the registry —
@@ -3671,6 +3686,29 @@ function retireTerminal(id: string, why: string): void {
   turns.observeBackendPhase(id, null)
   sessionSync.unwatch(id)
   turns.untrack(id)
+  // Unsettled dial turns belong to the pane that was asked; a reborn id
+  // must not inherit a pending ask nothing will ever confirm.
+  tuneAsks.forget(id)
+  tuningCache.forget(id)
+  tuningAnnounced.delete(id)
+}
+
+/**
+ * Tell the renderer this card's dials CHANGED, and only then.
+ *
+ * Activity fires several times a second while a turn runs; the model an agent
+ * answers on changes perhaps twice a day. The cache makes the question cheap
+ * (one stat on an unchanged file) and this makes the answer quiet.
+ */
+function announceTuning(terminalId: string): void {
+  const node = store.node(terminalId)
+  if (node?.kind !== 'terminal') return
+  const tuning = tuningCache.of(subjectOf(node))
+  if (tuning === null) return
+  const stamp = `${tuning.model ?? ''}|${tuning.effort ?? ''}`
+  if (tuningAnnounced.get(terminalId) === stamp) return
+  tuningAnnounced.set(terminalId, stamp)
+  mainWindow?.webContents.send('terminal:tuning', { terminalId, tuning })
 }
 
 async function removeNode(id: string): Promise<void> {
@@ -6003,6 +6041,43 @@ function registerIpc(handlers: RestoreHandlers): void {
     setPrimaryDir(id, dir)
   )
   ipcMain.handle('terminal:setCwd', (_e, nodeId: string, dir: string) => setTerminalCwd(nodeId, dir))
+  // THE DIALS (agent-tuning) — the zoomed card's left rail. Reading and
+  // turning share one deps object so the rail can never show a value the
+  // record did not state: the readout comes off the harness's own session
+  // file, and turning a dial is one line typed through the ordinary input
+  // gate, not a privileged side channel.
+  const tuneDeps = (): TuneDeps => ({
+    node: (id) => {
+      const node = store.node(id)
+      return node?.kind === 'terminal' ? node : null
+    },
+    write: (id, data) => ptys.get(id)?.write(data),
+    asks: tuneAsks,
+    cache: tuningCache
+  })
+  ipcMain.handle('terminal:tuning', (_e, terminalId: string) =>
+    tuningStateOf(tuneDeps(), terminalId)
+  )
+  ipcMain.handle('terminal:tune', (_e, terminalId: string, knob: TuneKnob, value: string) =>
+    applyTuning(tuneDeps(), terminalId, knob, value)
+  )
+  // EVERY agent the fleet knows, not only the open workspace: the roster spans
+  // workspaces that are not loaded, and a card there wears the same tag. The
+  // durable registry holds exactly what a readout needs (command, cwd, session
+  // ref), so nothing has to be resident to be readable.
+  ipcMain.handle('tuning:list', () => {
+    const rows: Record<string, AgentTuning> = {}
+    for (const entry of agents.list()) {
+      const tuning = tuningCache.of({
+        id: entry.id,
+        command: entry.command,
+        cwd: entry.cwd,
+        sessionRef: entry.sessionRef
+      })
+      if (tuning !== null) rows[entry.id] = tuning
+    }
+    return rows
+  })
   ipcMain.handle('git:info', (_e, dir: string) => gitCache.info(dir))
   ipcMain.handle('dir:pick', async () => {
     if (!mainWindow) return null
@@ -6029,6 +6104,7 @@ function registerIpc(handlers: RestoreHandlers): void {
     lazyTerminals.reconsider(activity.terminalId)
     if (mainWindow && !mainWindow.webContents.isDestroyed()) {
       mainWindow.webContents.send('terminal:activity', activity)
+      announceTuning(activity.terminalId)
     }
   })
 

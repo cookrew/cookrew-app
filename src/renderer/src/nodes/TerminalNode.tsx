@@ -12,6 +12,7 @@ import { turnViewOf, checkpointViewModel, isEmptyTurnView } from '../turn-view-m
 import { useStreamTail } from '../stream/use-stream-tails'
 import { PastTurnView, TurnPagerBar, useTurnPaging } from './TurnPager'
 import type { TerminalNodeData } from '../../../shared/model'
+import { DialTag } from './DialTag'
 import type { TerminalActivity } from '../../../shared/turn'
 import { useCanvasUi } from '../canvas-ui'
 import { useActivity, useActivitySeeded } from '../activity-thumb-store'
@@ -107,6 +108,7 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
           <span className="node-title">{node.name}</span>
           {node.orch && <span className="cr-chip amber">ORCH</span>}
           <span className="cr-chip preset-chip">{node.preset}</span>
+          <DialTag id={node.id} className="cr-chip preset-chip dial" />
           <CardClose nodeId={node.id} />
         </div>
         <div className="card-body nodrag nowheel" onClick={open}>
@@ -138,6 +140,9 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
           {node.name}
         </div>
         <span className="vi-chip tan">{node.preset}</span>
+        {/* What it is RUNNING ON, beside what it is. Absent until a record
+            says so — see DialTag. */}
+        <DialTag id={node.id} />
         {node.orch && <span className="vi-chip">Orch</span>}
         {node.forkOf && (
           <span

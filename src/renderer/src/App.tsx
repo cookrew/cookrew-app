@@ -28,6 +28,7 @@ import { BrowserNode } from './nodes/BrowserNode'
 import { CableEdge } from './CableEdge'
 import { Header, type MainView } from './Header'
 import { Dock } from './Dock'
+import { tuningStore } from './tuning-store'
 import { CardMenu, type CardMenuAnchor } from './CardMenu'
 import { LodOverlays } from './LodOverlays'
 import { browserInFullView } from './dock-target'
@@ -509,6 +510,24 @@ function Canvas(): React.JSX.Element {
       clearTimeout(seedDeadline)
       off()
     }
+  }, [])
+
+  // WHAT EACH AGENT IS RUNNING ON (tuning-store). One snapshot for the whole
+  // fleet, then a push per card when — and only when — its dials change.
+  // Feature-detected: the remote (phone) api carries neither, and a card
+  // without a readout simply wears no tag.
+  useEffect(() => {
+    const snapshot = cookrew().listTuning
+    if (snapshot) {
+      void snapshot()
+        .then((rows) =>
+          // Live pushes may land first; seed UNDER them so the snapshot never
+          // replaces a fresher reading (same rule as the activity seed).
+          tuningStore.seed(Object.entries(rows), true)
+        )
+        .catch(() => undefined)
+    }
+    return cookrew().onTerminalTuning?.((row) => tuningStore.set(row.terminalId, row.tuning))
   }, [])
 
   // ⌘W from the main process, resolved against the latest layer state.
