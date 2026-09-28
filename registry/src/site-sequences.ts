@@ -103,7 +103,7 @@ export const SEQUENCES: Readonly<Record<string, readonly Step[]>> = {
     {
       "file": "seq-harnesses-3.jpg",
       "title": "Import a team, opened",
-      "caption": "Pressed + IMPORT A TEAM: the sheet opened over the canvas with its address field, an example address as the placeholder, and CANCEL and LOOK UP under it.",
+      "caption": "Pressed + IMPORT A TEAM: the sheet opened over the canvas with its address field, and under it the teams saved on this machine — private, placed as a session with one press — where the seats this account holds would list too.",
       "width": 1400,
       "height": 875
     }
@@ -112,7 +112,7 @@ export const SEQUENCES: Readonly<Record<string, readonly Step[]>> = {
     {
       "file": "seq-marketplace-1.jpg",
       "title": "An address pasted in",
-      "caption": "Pasted cookrew.dev/@drej/cookrew-alpha into the Import a team sheet — the address a served team is published at.",
+      "caption": "Pasted cookrew.dev/@drej/cookrew-alpha into the Import a team sheet — the address a served team is published at — above the shelf of teams saved on this machine.",
       "width": 1400,
       "height": 875
     },

@@ -90,7 +90,7 @@ export const FRAMES = {
   market: frame(
     'qa-marketplace.jpg',
     "The Import a team sheet showing the COOKREW Alpha door",
-    "Pressed + IMPORT A TEAM in the dock and pasted cookrew.dev/@drej/cookrew-alpha: LOOK UP read the door's face from cookrew.dev \u2014 COOKREW Alpha, Pilot answering for 3 agents, a priced seat \u2014 above CANCEL and the import button."
+    "Pressed + IMPORT A TEAM in the dock and pasted cookrew.dev/@drej/cookrew-alpha: LOOK UP read the door's face from cookrew.dev \u2014 COOKREW Alpha, Pilot answering for 3 agents, a priced seat \u2014 above CANCEL and the import button. Before an address is typed the same sheet lists the teams saved on this machine and the seats the account holds."
   )
 } as const
 
