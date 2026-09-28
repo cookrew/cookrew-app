@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { cookrew, type BrowsedTeam, type ServeFacePreview } from './api'
 import { ImportGate } from './ImportGate'
+import { heldLine, heldState, shelvesOf, yoursLine, type Shelves } from './import-shelves'
+import type { TeamMeta } from '../../shared/model'
+import type { HeldSeatRow, SeatsSurface } from '../../shared/seats'
 // The gs-* sheet primitives — stated here, by the component that wears them.
 import './grant-surface.css'
 
@@ -15,6 +18,13 @@ import './grant-surface.css'
  * are the orch's real terminal, mirrored from the session workspace the
  * author's app mints for you; sign-in happens when the card boots, money (a
  * paid door) is asked for once, in the line, at session start.
+ *
+ * TWO SHELVES SIT UNDER THE FIELD (import-shelves.ts): the teams saved on
+ * this machine, which are private, and the seats this account holds at other
+ * people's doors, which are already paid for. Most imports start from one of
+ * those, not from a pasted address — and a phone, which cannot type an
+ * address well, needs them most. The field stays first: it is still the one
+ * way in for a team you have never seen.
  */
 export function ImportServedSheet({
   onClose,
@@ -52,6 +62,22 @@ export function ImportServedSheet({
   // The first field, never the primary — the same rule the enrol sheet keeps.
   useEffect(() => {
     field.current?.focus()
+  }, [])
+
+  /** The two shelves. Both reads are feature-detected: a phone has teams and no seats surface. */
+  const [shelves, setShelves] = useState<Shelves>({ yours: [], held: [] })
+  useEffect(() => {
+    let alive = true
+    const api = cookrew()
+    void Promise.all([
+      api.teamList?.().catch(() => [] as TeamMeta[]) ?? Promise.resolve([] as TeamMeta[]),
+      api.accountSeats?.().then((r) => (r.ok ? r.value : null)).catch(() => null) ?? Promise.resolve(null)
+    ]).then(([teams, seats]) => {
+      if (alive) setShelves(shelvesOf(teams, seats as SeatsSurface | null))
+    })
+    return () => {
+      alive = false
+    }
   }, [])
 
   const REASONS: Record<string, string> = {
@@ -119,6 +145,34 @@ export function ImportServedSheet({
     lookUp()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  /**
+   * A SAVED TEAM becomes a session workspace, the same way it does from the
+   * dock. No card is placed on this canvas — the new workspace is the result —
+   * so the sheet closes with nothing to scroll to.
+   */
+  const placeSaved = (team: TeamMeta): void => {
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    void cookrew()
+      .templateImport(team.name)
+      .then(() => {
+        setBusy(false)
+        onImported()
+      })
+      .catch((err: unknown) => {
+        setBusy(false)
+        console.error('import sheet:', err)
+        setError(`Couldn't open ${team.name}. Try again.`)
+      })
+  }
+
+  /** A HELD SEAT is the address flow with the address already known. */
+  const chooseHeld = (row: HeldSeatRow): void => {
+    if (busy || heldState(row) !== 'open') return
+    choose({ link: row.seat.team } as BrowsedTeam)
+  }
 
   /** Chose a team from an owner's list: fill the field and read its face. */
   const choose = (team: BrowsedTeam): void => {
@@ -229,6 +283,42 @@ export function ImportServedSheet({
           <p className="gs-paste-error" role="alert">
             {error}
           </p>
+        )}
+
+        {!preview && !account && shelves.yours.length > 0 && (
+          <section className="isv-shelf" aria-label="Teams saved on this machine">
+            <p className="gs-sub isv-shelf-title">Yours · saved here, only you see them</p>
+            <ul className="isv-teams">
+              {shelves.yours.map((team) => (
+                <li key={team.name}>
+                  <button className="isv-team" disabled={busy} onClick={() => placeSaved(team)}>
+                    <span className="isv-team-name">{team.name}</span>
+                    <span className="isv-team-meta">{yoursLine(team)}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {!preview && !account && shelves.held.length > 0 && (
+          <section className="isv-shelf" aria-label="Seats you hold at other people's teams">
+            <p className="gs-sub isv-shelf-title">Seats you hold · bought or granted, paid once</p>
+            <ul className="isv-teams">
+              {shelves.held.map((row) => (
+                <li key={row.seat.id}>
+                  <button
+                    className="isv-team"
+                    disabled={busy || heldState(row) !== 'open'}
+                    onClick={() => chooseHeld(row)}
+                  >
+                    <span className="isv-team-name">{row.seat.team}</span>
+                    <span className="isv-team-meta">{heldLine(row)}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
         )}
 
         {account && account.teams.length > 0 && (

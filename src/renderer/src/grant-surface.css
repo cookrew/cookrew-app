@@ -317,6 +317,20 @@
 .isv-teams li + li {
   margin-top: 6px;
 }
+/* THE TWO SHELVES under the field: what can be placed with no address typed.
+ * Each is capped so both fit on a phone above the keyboard; the list scrolls. */
+.isv-shelf {
+  margin-top: 12px;
+}
+.isv-shelf .isv-teams {
+  max-height: 150px;
+}
+.isv-shelf-title {
+  font: 700 9.5px var(--font-pixel, monospace);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-soft, #55524a);
+}
 .isv-team {
   display: flex;
   flex-direction: column;
