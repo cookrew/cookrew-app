@@ -144,9 +144,9 @@ describe('the team page has one brain', () => {
     expect(body).not.toContain('SIGNED OUT')
     expect(body).not.toContain('Sign in &amp; open')
     expect(body).not.toContain('Sign in to open your own session')
-    // The grant form is still there for guests — it is just no longer the
-    // only thing an owner can press.
-    expect(body).toContain('Grant a seat')
+    // No grant form on the page any more (owner, 2026-10-04): seats are
+    // granted and ended in the app; the page offers the line and a count.
+    expect(body).not.toContain('Grant a seat')
   })
 
   it('a seated guest reads SEATED, and a stranger still reads SIGNED OUT', () => {
