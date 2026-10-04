@@ -433,6 +433,14 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
 .team .foot .sp{flex:1}
 .team.example{opacity:.9}.team.example .head::after{content:'EXAMPLE';font:8px var(--font-pixel);letter-spacing:.06em;border:1.5px solid var(--line);padding:1px 5px;background:var(--violet-hi);color:#2d2a20}
 .empty{padding:40px;text-align:center;color:var(--muted);border:2px dashed var(--line-soft)}
+/* the shop: who is reading, the shelf of what they hold, and what a card is to them */
+.who{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:6px 0 2px;padding:10px 14px;border:2px solid var(--line);background:var(--cream-hi);box-shadow:3px 3px 0 var(--line)}
+.who .meta{flex:1;min-width:220px}
+.shelf{margin:18px 0 6px;padding:14px 16px 2px;border:2px solid var(--line);background:var(--amber-soft);box-shadow:4px 4px 0 var(--line)}
+.shelf h2.mkt-h{margin:0 0 12px;font-size:15px}
+.team .head .stand{margin-left:auto;max-width:55%;overflow:hidden;text-overflow:ellipsis}
+.team .body .note-line{font-size:12.5px;margin-top:auto}
+@media (max-width:700px){.who{flex-direction:column;align-items:stretch}.who .btn{justify-content:center}.team .head .stand{max-width:100%}}
 /* team page */
 .tp-head h1{font-size:clamp(26px,3.4vw,38px)}
 .tp-head{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:18px;align-items:start}

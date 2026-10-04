@@ -488,11 +488,15 @@ describe('the rent strip and the one buy control', () => {
     expect(none).toContain('href="#serve"')
   })
 
-  it('the market card offers the seat for a priced team, the page for a free one', () => {
-    const body = market([door(), door({ name: 'f', title: 'F', access: 'account', priceUsd: undefined, rails: [] })]).body
-    expect(body).toContain('href="/drej/cookrew-alpha?buy=1">Buy a seat · $2.50')
-    expect(body).not.toContain('href="/drej/f?buy=1"')
-    expect(body).toContain('<details><summary>How listings, stars and opening work')
+  it('the market card offers the seat for a priced team to a signed-in reader, the sheet to a stranger', () => {
+    const doors = [door(), door({ name: 'f', title: 'F', access: 'account', priceUsd: undefined, rails: [] })]
+    const signedIn = market(doors, '', { account: 'mira' }).body
+    expect(signedIn).toContain('href="/drej/cookrew-alpha?buy=1">Buy a seat · $2.50')
+    expect(signedIn).not.toContain('href="/drej/f?buy=1"')
+    const stranger = market(doors).body
+    expect(stranger).not.toContain('?buy=1')
+    expect(stranger).toContain('Sign in to buy · $2.50')
+    expect(stranger).toContain('<details><summary>How listings, seats, stars and opening work')
   })
 
   it('a team page has exactly one buy control, in the seat bar, and the gate card has no button', () => {
@@ -526,5 +530,50 @@ describe('the rent strip and the one buy control', () => {
     const owner = team(door(), { account: 'drej', owner: true, seats: [] }).body
     for (const id of ['seat-username', 'seat-list', 'seat-grant']) expect(owner, id).toContain(`id="${id}"`)
     expect(team(door(), { account: null }).body).toContain('data-signin')
+  })
+})
+
+describe('the market is a shop with one name on the door', () => {
+  const doors = [
+    door({ live: true, seenAt: 5 }),
+    door({ handle: 'mira', name: 'growth-desk', title: 'Growth Desk', door: 'Anchor', live: true, access: 'paid', priceUsd: '4', rails: ['stripe'], seenAt: 9 }),
+    door({ handle: 'lin', name: 'ledger', title: 'Ledger Close', door: 'Clerk', live: false, access: 'account', priceUsd: undefined, rails: [], seenAt: 2 })
+  ]
+  const seat = { id: 's1', team: '@drej/cookrew-alpha', account: 'mira', source: 'bought' as const, by: 'stripe', createdAt: 1 }
+  const titles = (body: string): string[] => [...body.matchAll(/class="ttl" href="\/[^"]+">([^<]+)</g)].map((m) => m[1])
+
+  it('offers a stranger the account sheet on every card, and never a handle to enrol', () => {
+    const page = market(doors).body
+    expect(page).toContain('Sign in to buy · $2.50')
+    expect(page).toContain('Sign in to open')
+    expect(page.match(/data-signin/g)?.length).toBeGreaterThanOrEqual(4)
+    expect(page).not.toContain('Enrol')
+    expect(page).not.toContain('id="yours"')
+    expect(page).not.toContain('Buy a seat')
+  })
+
+  it('puts what the reader holds on a shelf, and prices the rest by their standing', () => {
+    const page = market(doors, '', { account: 'mira', seats: [seat] }).body
+    const shelf = page.slice(page.indexOf('id="yours"'), page.indexOf('id="count"'))
+    expect(titles(shelf)).toEqual(['Growth Desk', 'COOKREW Alpha'])
+    expect(shelf).toContain('Yours · you serve it')
+    expect(shelf).toContain('Seated · bought')
+    expect(shelf.match(/>Open</g)).toHaveLength(2)
+    const rest = page.slice(page.indexOf('id="count"'))
+    expect(titles(rest)).toEqual(['Ledger Close'])
+    expect(rest).toContain('1 more team')
+    expect(rest).toContain('Free · yours to open')
+    expect(page).toContain('@mira · 1 seat · 1 team served · 0 starred')
+    expect(page).not.toContain('data-signin>')
+  })
+
+  it('sends an unseated reader to buy, and keeps every match once under a search', () => {
+    const page = market(doors, '', { account: 'lin' }).body
+    expect(page).toContain('href="/drej/cookrew-alpha?buy=1">Buy a seat · $2.50')
+    expect(page).toContain('href="/mira/growth-desk?buy=1">Buy a seat · $4')
+    expect(page).toContain('Yours · you serve it')
+    const searched = market(doors, 'q=ledger', { account: 'lin' }).body
+    expect(searched).not.toContain('id="yours"')
+    expect(titles(searched)).toEqual(['Ledger Close'])
   })
 })
