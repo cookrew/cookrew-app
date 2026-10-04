@@ -416,6 +416,12 @@ const api = {
     ipcRenderer.on('event:new', listener)
     return () => ipcRenderer.removeListener('event:new', listener)
   },
+  // A cable lit: one agent asked another, or answered (cable-signal.ts).
+  onCableSignal: (cb: (signal: unknown) => void) => {
+    const listener = (_e: unknown, signal: unknown): void => cb(signal)
+    ipcRenderer.on('cable:signal', listener)
+    return () => ipcRenderer.removeListener('cable:signal', listener)
+  },
   queryEvents: (query: unknown) => ipcRenderer.invoke('events:query', query),
   countEvents: (query: unknown) => ipcRenderer.invoke('events:count', query),
   listAgents: () => ipcRenderer.invoke('agents:list'),

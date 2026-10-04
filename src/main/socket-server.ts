@@ -55,6 +55,13 @@ export interface SocketServerDeps {
    * silently falling back to a blocking ask the caller did not ask for.
    */
   dispatch?: DispatchService
+  /**
+   * Light the cable between the asking pane and the agent it asks
+   * (cable-signal.ts): once when the prompt is submitted, once when the reply
+   * is back. The caller pane is the sender, which is why this lives here and
+   * not in the ask itself — the ask does not know who is asking.
+   */
+  signal?: (moment: { from: string; to: string; kind: 'ask' | 'answer' }) => void
   /** Durable global agent directory (~/.cookrew/agents.json). */
   agents: AgentRegistry
   /** Fork an agent from one of its turns (same path as IPC forking). */
@@ -659,6 +666,9 @@ async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<stri
     return askRaw(session, decodeRawEscapes(String(request.flags.raw)))
   }
   if (!prompt) throw new Error('Missing prompt')
+  // The asking pane, for the cable between the two. Already resolved once by
+  // findConnected; resolving is cheap and the id is what the canvas needs.
+  const me = self(request, deps)
   // No armed-dispatch check here, on purpose (Sol r5 P0-1): a route-level
   // refusal would only be a fast path with a check-to-submit race behind it.
   // The load-bearing serialization lives at the submit site — askTerminal
@@ -677,7 +687,7 @@ async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<stri
   // cannot match it. Correct by construction rather than by careful timing.
   if (request.flags['no-wait']) {
     if (!deps.dispatch) throw new Error('--no-wait needs the dispatch engine, which is not wired')
-    const result = await deps.dispatch.dispatch(target.id, { text: prompt })
+    const result = await deps.dispatch.dispatch(target.id, { text: prompt, origin: me.id })
     const body = result.body as { dispatchId?: string; error?: string }
     if (result.status !== 202 || !body.dispatchId) {
       throw new Error(body.error ?? `dispatch refused (${result.status})`)
@@ -686,6 +696,7 @@ async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<stri
   }
 
   // Same verified path the phone uses — the order lives in deliverAndConfirm.
+  deps.signal?.({ from: me.id, to: target.id, kind: 'ask' })
   const { reply, submitRetries } = await deliverAndConfirm({
     terminalId: target.id,
     agentName: target.name,
@@ -693,6 +704,7 @@ async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<stri
     deliver: () => askTerminal(session, prompt),
     observe: terminalDeliveryDeps(deps.turns, (data) => session.write(data))
   })
+  deps.signal?.({ from: target.id, to: me.id, kind: 'answer' })
 
   if (deps.voice.enabled) {
     deps.voice.speakReply(target.name, reply).catch((error) => {

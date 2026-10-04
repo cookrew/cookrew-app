@@ -151,6 +151,14 @@ export interface DispatchRecord {
    */
   reply?: string
   /**
+   * The agent that ASKED, when this dispatch is one agent's `cookrew ask
+   * --no-wait` at another — IN MEMORY ONLY, like `reply`. It exists so the
+   * canvas can light the cable between the two (cable-signal.ts) at delivery
+   * and at the answer; it is not a settlement fact, so it is neither
+   * persisted nor projected over HTTP. Absent for the owner's own dispatches.
+   */
+  origin?: string
+  /**
    * Did that turn produce a reply? Survives the restart the text does not, so
    * a rehydrated record can still say "there is an answer, ask the turn ledger"
    * instead of implying the agent said nothing.
@@ -179,6 +187,12 @@ export interface DispatchInput {
   /** Free text. */
   text?: string
   idempotencyKey?: string
+  /**
+   * The asking AGENT's card id, for an agent-to-agent `ask --no-wait`. Set by
+   * the CLI socket server from the caller pane's resolved identity, never
+   * from a body. Kept in memory on the record (see DispatchRecord.origin).
+   */
+  origin?: string
   /**
    * Authenticated caller identity, injected by the route — never accepted
    * from the HTTP body. Scopes the idempotency key so one tenant's retry can
@@ -399,6 +413,13 @@ export interface DispatchDeps {
    * announcer must never affect the dispatch itself.
    */
   announce?: (event: { kind: 'accepted' | 'settled'; record: DispatchRecord }) => void
+  /**
+   * The cable lights (cable-signal.ts): once when the prompt is in the
+   * agent's pane (the record first becomes `running`), once when the turn
+   * closes it `done`. Only for dispatches that carry an `origin` — the
+   * owner's own asks have no cable. Fire-and-forget like `announce`.
+   */
+  signal?: (moment: { from: string; to: string; kind: 'ask' | 'answer' }) => void
   /**
    * Append the record to the durable registry. MUST report failure — return
    * false (or throw) — never swallow it: the accept path refuses work it
@@ -720,7 +741,7 @@ export function defaultDispatchRegistry(): string {
 export function persistedRecord(record: DispatchRecord): DispatchRecord {
   // ledgerFault is a statement ABOUT the ledger, not a fact for it — a row
   // carrying it would be a durable copy of "this could not be made durable".
-  const { reply, ledgerFault, ...row } = record
+  const { reply, ledgerFault, origin, ...row } = record
   return { ...row, ...(reply !== undefined || row.hasReply ? { hasReply: true } : {}) }
 }
 
@@ -1270,7 +1291,7 @@ export class DispatchService {
     if (requester !== 'owner' && record.consumer !== requester) {
       return { status: 404, body: { error: 'no such dispatch' } }
     }
-    const { reply, ...projection } = record
+    const { reply, origin, ...projection } = record
     return {
       status: 200,
       // `hasReply` outlives the text: after a restart the reply is gone from
@@ -1414,6 +1435,7 @@ export class DispatchService {
       updatedAt: at,
       ...(key !== undefined ? { idempotencyKey: key } : {}),
       ...(input.consumer !== undefined ? { consumer: input.consumer } : {}),
+      ...(input.origin !== undefined ? { origin: input.origin } : {}),
       ...(promptHash !== undefined ? { promptHash } : {})
     }
     this.reserved.set(agentId, record.id)
@@ -1965,7 +1987,26 @@ export class DispatchService {
       )
       return
     }
+    this.signalCable(record, 'answer')
     this.update(dispatchId, { state: 'done', ...identity, ...reply }, 'parser')
+  }
+
+  /**
+   * Light the cable between the asking agent and this one. Nothing without an
+   * origin (the owner's own dispatches), and nothing can throw out of here —
+   * the canvas is downstream of the dispatch, never in its path.
+   */
+  private signalCable(record: DispatchRecord, kind: 'ask' | 'answer'): void {
+    if (record.origin === undefined || !this.deps.signal) return
+    const moment =
+      kind === 'ask'
+        ? { from: record.origin, to: record.agentId, kind }
+        : { from: record.agentId, to: record.origin, kind }
+    try {
+      this.deps.signal(moment)
+    } catch (error) {
+      console.error('Cable signal failed:', error)
+    }
   }
 
   /**
@@ -2157,6 +2198,10 @@ export class DispatchService {
     // must never regress done → running and erase the completed lifecycle.
     if (!record || TERMINAL_STATES.has(record.state)) return
     const next = { ...record, ...patch, updatedAt: this.now() }
+    // The prompt is in the pane: the asked cable lights, once. Every
+    // delivery branch that stamps `running` passes through here, so the
+    // moment is this transition and not any one of them.
+    if (record.state !== 'running' && next.state === 'running') this.signalCable(record, 'ask')
     if (TERMINAL_STATES.has(next.state)) {
       this.commitTerminal(record, next, evidence)
       return

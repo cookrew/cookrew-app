@@ -37,6 +37,7 @@ import { DEEP_LINK_CHANNEL } from '../shared/deep-link'
 import { createRegistryTokenVerifier, registryKeyOverHttp } from './registry-token'
 import { faceWords, harnessesOf } from './served-face'
 import { askTerminal, beginShutdown, cancelAllAsks, ownerSubmit, pasteAndSubmit } from './ask'
+import { CableSignalBus } from './cable-signal'
 import { defaultProducerLease } from './producer-lease'
 import {
   boardSourcesFrom,
@@ -466,6 +467,13 @@ const tuningCache = new TuningCache()
 const tuningAnnounced = new Map<string, string>()
 /** The same change-gated announcement the renderer gets, for phone streams. */
 const tuningBus = new EventEmitter()
+/**
+ * Signals on the cables: "A asked B" and "B answered A", one frame each, to
+ * the desktop renderer over IPC and to every phone stream over SSE
+ * (mobile-api). Minted by the CLI ask and by the dispatch engine; the owner's
+ * own asks mint nothing, there being no cable from the owner.
+ */
+const cableSignals = new CableSignalBus()
 /**
  * The internet gate's two stores (§9 · ④). The issuer signs this instance's
  * call credentials — owner-as-issuer, so nothing here reaches the registry —
@@ -2199,6 +2207,7 @@ syncBackendPhases()
 // stream over the /api/events SSE, subscribed in mobile-api).
 store.on('op', (e) => events.append(e))
 events.on('event', (e) => mainWindow?.webContents.send('event:new', e))
+cableSignals.on((signal) => mainWindow?.webContents.send('cable:signal', signal))
 let mainWindow: BrowserWindow | null = null
 
 /**
@@ -3200,6 +3209,9 @@ const dispatchService = new DispatchService({
       }
     })
   },
+  // The cable between the asking agent and this one lights at delivery and
+  // at the answer; only CLI-minted dispatches carry the asker.
+  signal: (moment) => void cableSignals.emit(moment),
   // The sweep must not spare a stuck-working agent whose durable final
   // answer already exists — status may hold, never outrank the row.
   hasFinalAnswer: (agentId, prompt, armedAt) => turns.hasFinalAnswer(agentId, prompt, armedAt),
@@ -5406,6 +5418,8 @@ app.whenReady().then(() => {
     // route uses, so a CLI-minted dispatch and an API-minted one are one
     // record with one lifecycle.
     dispatch: dispatchService,
+    // The cable between the asking pane and the agent it asks lights twice.
+    signal: (moment) => void cableSignals.emit(moment),
     forkTerminal,
     routines,
     browserCommand,
@@ -5479,6 +5493,8 @@ app.whenReady().then(() => {
         applyTuning(tuneDeps(), terminalId, knob as TuneKnob, value)
     },
     tuningBus,
+    // The same cable signals the desktop gets, filtered to the stream's canvas.
+    signalBus: cableSignals,
     // Serves the CA-issued chain by SNI for this Mac's names, keeps the
     // self-signed one as the default, and spells the printed URLs.
     nameCert: nameCertificate,

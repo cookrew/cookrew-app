@@ -6482,6 +6482,74 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   border-width: 2.5px;
 }
 
+/* ---- signals on the cables (cable-signal.ts, CableHarness.tsx) ----
+   One agent asked another, or answered: the trunks that carry the cable
+   take the signal's colour, and a pulse travels sender → receiver. The
+   pulse is an HTML element on an `offset-path` in flow coordinates, moved
+   by ONE keyframe on `offset-distance`, which Chromium runs on the
+   compositor — nothing here is per-frame work for React or the main thread.
+   Nothing is in the tree when nothing is in flight. */
+:root {
+  --sig-ask: #d97706;
+  --sig-answer: #1d4ed8;
+}
+.cr-harness .cr-harness-trunk.sig,
+.cr-harness .cr-harness-stub.sig {
+  stroke-opacity: 1;
+  transition: stroke 160ms ease, stroke-opacity 160ms ease;
+}
+.cr-harness .sig-ask { stroke: var(--sig-ask) }
+.cr-harness .sig-answer { stroke: var(--sig-answer) }
+
+.cr-sig-dot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  pointer-events: none;
+  offset-rotate: 0deg;
+  animation: cr-sig-travel var(--cr-sig-ms, 2400ms) linear forwards;
+}
+.cr-sig-dot.ask {
+  background: var(--sig-ask);
+  box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.22), 0 0 14px 4px rgba(217, 119, 6, 0.55);
+}
+.cr-sig-dot.answer {
+  background: var(--sig-answer);
+  box-shadow: 0 0 0 3px rgba(29, 78, 216, 0.2), 0 0 14px 4px rgba(29, 78, 216, 0.5);
+}
+@keyframes cr-sig-travel {
+  0% { offset-distance: 0%; opacity: 0 }
+  6% { opacity: 1 }
+  82% { offset-distance: 100%; opacity: 1 }
+  100% { offset-distance: 100%; opacity: 0 }
+}
+
+/* The tab as the lamp: the cable it names is off the stage, so the traffic
+   on it shows here. A composited opacity pulse, nothing else moves. */
+.cr-harness-tab.sig {
+  border-color: var(--sig-ask);
+  border-width: 2.5px;
+  background: var(--amber-soft);
+  animation: cr-sig-lamp 700ms ease-in-out infinite alternate;
+}
+.cr-harness-tab.sig-answer {
+  border-color: var(--sig-answer);
+}
+@keyframes cr-sig-lamp {
+  from { opacity: 1 }
+  to { opacity: 0.45 }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The fact stays on screen for the signal's lifetime; nothing travels. */
+  .cr-sig-dot { animation: none; display: none }
+  .cr-harness-tab.sig { animation: none }
+}
+
 /* ---- lanes (LanePane.tsx, TerminalNode LaneChip) ----
    A worktree per agent and landing as a product action. The chip says the
    git situation the card is in without asking git; the pane is the menu page. */
