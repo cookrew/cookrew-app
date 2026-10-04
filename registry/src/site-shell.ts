@@ -412,25 +412,33 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
 .stat{border:2px solid var(--line);background:var(--cream-hi);box-shadow:3px 3px 0 var(--line);padding:14px}
 .stat b{display:block;font:700 30px/1 var(--font-pixel);letter-spacing:-.02em;margin-bottom:6px;color:var(--amber-deep)}
 .stat span{font-size:13px;color:var(--muted)}
-/* market */
-.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:18px 0}
-.toolbar input[type=search]{flex:1;min-width:220px;font:15px var(--font-mono);padding:9px 12px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink);box-shadow:2px 2px 0 var(--line);outline:none}
+/* market — one finder (tabs, search, filters, sort) above the grid; nothing before the first card
+   that is not a way to narrow it. The reader strip sits under the headline and folds on a phone. */
+.finder{padding:12px 14px 10px}
+.toolbar{display:flex;gap:8px;align-items:center;margin:0 0 10px}
+.toolbar input[type=search]{flex:1;min-width:0;font:15px var(--font-mono);padding:9px 12px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink);box-shadow:2px 2px 0 var(--line);outline:none}
 .toolbar input[type=search]:focus{background:var(--amber-soft)}
-.toolbar select{font:9.5px var(--font-pixel);text-transform:uppercase;letter-spacing:.08em;padding:8px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink)}
-.filters{display:flex;gap:6px;flex-wrap:wrap}
+.filters{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .filters label{cursor:pointer}.filters input{display:none}.filters input:checked+.chip{background:var(--amber);color:#2d2a20}
-.tabs{display:flex;gap:0;margin:24px 0 0}.tabs a{font:9.5px var(--font-pixel);letter-spacing:.08em;text-transform:uppercase;padding:9px 14px;border:2px solid var(--line);border-bottom:none;text-decoration:none;background:var(--cream-md)}
+.filters .sort{margin-left:auto;display:inline-flex;gap:6px;align-items:center;cursor:default}
+.filters .sort select{font:9.5px var(--font-pixel);text-transform:uppercase;letter-spacing:.08em;padding:6px 8px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink)}
+.tabs{display:flex;gap:0;margin:22px 0 0}.tabs a{font:9.5px var(--font-pixel);letter-spacing:.08em;text-transform:uppercase;padding:9px 14px;border:2px solid var(--line);border-bottom:none;text-decoration:none;background:var(--cream-md);white-space:nowrap}
 .tabs a.on{background:var(--cream-hi);position:relative;top:2px}
-.teams{display:grid;gap:22px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));margin:0 0 30px}
+#count{margin:14px 0 8px}
+.teams{display:grid;gap:18px;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));margin:0 0 28px}
 .team{display:flex;flex-direction:column;background:var(--cream-hi);border:2px solid var(--line);box-shadow:4px 4px 0 var(--line)}
 .team .head{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:2px solid var(--line);background:var(--cream-md)}
 .team .head .ttl{font:700 10px var(--font-pixel);letter-spacing:.06em;text-transform:uppercase;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.team .screen{height:96px;padding:10px 12px;display:flex;flex-direction:column;justify-content:flex-end;border-bottom:2px solid var(--line)}
-.team .screen .l{white-space:pre;overflow:hidden}.team .screen .l.d{color:var(--phos-dim)}
+.team .head .stand{margin-left:auto;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.team .screen{height:84px;padding:10px 12px;display:flex;flex-direction:column;justify-content:flex-end;border-bottom:2px solid var(--line)}
+.team .screen .l{white-space:pre;overflow:hidden;text-overflow:ellipsis}.team .screen .l.d{color:var(--phos-dim)}
 .team .body{padding:12px 14px;display:flex;flex-direction:column;gap:8px;flex:1}
 .team .body p{margin:0;font-size:14px;color:var(--muted)}
-.team .foot{display:flex;gap:8px;align-items:center;padding:10px 12px;border-top:2px solid var(--line-soft);flex-wrap:wrap}
-.team .foot .sp{flex:1}
+.team .body .note-line{font-size:12.5px;margin-top:auto}
+.team .foot{display:flex;gap:8px;align-items:center;padding:10px 12px;border-top:2px solid var(--line-soft)}
+.team .foot .sp{display:none}
+.team .foot .btn{justify-content:center;white-space:nowrap}
+.team .foot .btn.primary{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .team.example{opacity:.9}.team.example .head::after{content:'EXAMPLE';font:8px var(--font-pixel);letter-spacing:.06em;border:1.5px solid var(--line);padding:1px 5px;background:var(--violet-hi);color:#2d2a20}
 .empty{padding:40px;text-align:center;color:var(--muted);border:2px dashed var(--line-soft)}
 /* the shop: who is reading, the shelf of what they hold, and what a card is to them */
@@ -438,9 +446,14 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
 .who .meta{flex:1;min-width:220px}
 .shelf{margin:18px 0 6px;padding:14px 16px 2px;border:2px solid var(--line);background:var(--amber-soft);box-shadow:4px 4px 0 var(--line)}
 .shelf h2.mkt-h{margin:0 0 12px;font-size:15px}
-.team .head .stand{margin-left:auto;max-width:55%;overflow:hidden;text-overflow:ellipsis}
-.team .body .note-line{font-size:12.5px;margin-top:auto}
-@media (max-width:700px){.who{flex-direction:column;align-items:stretch}.who .btn{justify-content:center}.team .head .stand{max-width:100%}}
+@media (max-width:700px){
+  .who{padding:9px 12px;gap:8px}.who .meta{min-width:0;font-size:12.5px}.who .btn{margin-left:auto}
+  .tabs{margin-top:16px}.tabs a{flex:1;text-align:center;padding:9px 6px;font-size:8.5px}
+  .finder{padding:10px 10px 8px}.toolbar .btn{display:none}
+  .filters{gap:5px}.filters .chip{font-size:7.5px}.filters .sort{margin-left:auto}.filters .sort .meta{display:none}
+  .teams{gap:14px}.team .screen{height:76px}.team .head .stand{max-width:60%}
+  .team .foot{padding:9px 10px}
+}
 /* team page */
 .tp-head h1{font-size:clamp(26px,3.4vw,38px)}
 .tp-head{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:18px;align-items:start}
@@ -550,7 +563,7 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
 .rent .head .ttl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:16px}
 .rent p{margin:0;font-size:14px;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .rent .foot{display:flex;gap:8px;margin-top:auto;padding-top:4px}
-.rent .foot .btn{flex:1;justify-content:center}
+.rent .foot .btn{flex:1;justify-content:center;white-space:nowrap;padding-inline:8px}.rent .foot .btn.primary{flex:1.5}
 @media (max-width:900px){.rent-cards{grid-template-columns:1fr 1fr}}
 @media (max-width:640px){.rent-cards{grid-template-columns:1fr}.rent .foot{flex-direction:column}}
 .dock.compact a{padding:9px 14px}
