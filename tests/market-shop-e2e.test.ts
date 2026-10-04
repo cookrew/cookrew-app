@@ -264,8 +264,9 @@ suite('the market, driven as a stranger who becomes @lin', () => {
     expect(await text('article.team[data-standing="admitted"] .btn.primary')).toBe('Open')
   }, 20_000)
 
-  it('stars a team with one click and no dialog', async () => {
+  it('stars a team with one click and no dialog — on its page, where the star lives now', async () => {
     const star = 'button[data-star="drej/alpha"]'
+    await go(`${origin}/drej/alpha`)
     await click(star)
     await new Promise((r) => setTimeout(r, 600))
     expect(await text(`${star} span`)).toBe('1')
@@ -285,8 +286,7 @@ suite('the market, driven as a stranger who becomes @lin', () => {
     expect(await text('#yours .chip.amber')).toBe('@lin · 1 seat · 1 starred')
     expect(await text('#yours .ttl')).toBe('COOKREW Alpha')
     expect(await text('#yours .stand')).toBe('Seated · granted by @drej')
-    expect(await text('#yours .btn.primary')).toBe('Open the line')
-    expect(await text('#count')).toContain('2 more teams')
+    expect(await text('#yours .btn.primary')).toBe('Open')
     // The strip's row and the catalogue list it once: two cards remain below.
     expect(await count('article.team .ttl')).toBe(2)
   })

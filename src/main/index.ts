@@ -2248,6 +2248,14 @@ function focusMainWindow(): void {
  * development the running Electron binary has to be told which script it
  * launches with, or the OS would open a bare Electron shell on the link
  * (the form Electron's own docs prescribe).
+ *
+ * ON macOS THAT FORM IS NOT ENOUGH. The OS binds a scheme to a bundle id and
+ * ignores the arguments, and every project's node_modules Electron.app shares
+ * the id com.github.Electron — so the link can open another project's copy,
+ * bare, with the Electron welcome page (seen 2026-10-04). The claim is still
+ * made, because it is right whenever this repository's copy is the only one
+ * registered; scripts/dev-deeplink-doctor.mjs lists the others and unregisters
+ * them. A packaged build has its own id and none of this applies.
  */
 function registerDeepLinkScheme(): void {
   const claimed = app.isPackaged

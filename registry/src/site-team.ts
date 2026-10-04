@@ -47,58 +47,51 @@ export interface TeamInput {
 }
 
 /**
- * THE SEAT BAR (W2) — the same address, rendered by what the request holds.
+ * THE ONE ACT (owner, 2026-10-04: too many buttons — one per reader, a path
+ * of three steps at most). It is rendered INSIDE the line's gate card, which
+ * used to be a status while a bar above repeated the act: now there is one
+ * place. The card carries id="seatbar" so site.js's verbs bind to it, and the
+ * sentence names the reader. line.js owns gate-h / gate-p / gate-actions and
+ * rewrites them as the line's state changes; the reader's sentence and act
+ * live in seat-head / seat-act, which it never replaces — it only hides the
+ * act while it is showing buttons of its own (retry, pay).
  *
- * Five states, decided here rather than by a script, because the CSP forbids
- * an inline one and because a page that said "buy a seat" and then changed its
- * mind after a fetch has already told the reader something untrue. The gate
- * order is written into the buttons: sign in, then a seat, then payment, then
- * the line.
+ *   stranger   Sign in to open                  (the account sheet, then reload)
+ *   owner      Open the line                    (no seat, no charge)
+ *   seated     Open the line                    (seat since …)
+ *   admitted   Open the line                    (free, signed in)
+ *   unseated   Buy a seat · $N  · or ask @owner (W6: the ask is a request)
  *
- * The BUY and OPEN buttons do not invent a ceremony — they press the line's
- * own entry below, which is where the door's 402 and its session already live.
+ * Offline or off the relay: no act but the sentence (and, off the relay, the
+ * app link, because the app is the only thing that can carry that line).
  */
-function seatBar(input: TeamInput, door: ListedDoor, address: string, standing: Standing): string {
-  const owner = standing.kind === 'owner'
-  const seat = input.seat ?? null
+function gateAct(input: TeamInput, door: ListedDoor, standing: Standing, live: ReturnType<typeof lineFace>, name: string): { attrs: string; text: string; actions: string } {
   const seated = input.seated ?? []
-  const paid = door.access === 'paid'
+  const seat = input.seat ?? null
   const price = door.priceUsd ?? ''
-
-  // ONE STRIP, ONE ACT (owner, 2026-10-04: keep the least interaction and the core).
-  // Sign in · open · buy or ask — a sentence and the button. Seats are managed
-  // in the app's account sheet, not here; the room is a count, not a list.
-  if (standing.kind === 'stranger' || input.account === null) {
-    return `<section class="seat strip" id="seatbar" data-team="${esc(`@${door.handle}/${door.name}`)}">
-<span class="meta">A seat is yours, not a browser’s — sign in so it follows you.</span>
-<button class="btn primary" data-signin>Sign in to open</button></section>`
+  const team = `@${door.handle}/${door.name}`
+  // Off the relay the app is the only thing that can carry the line, so the
+  // act is the app link. Offline keeps the reader's own act: pressing it says
+  // "nobody is serving" (site.js), which is truer than hiding the button.
+  if (live.phase === 'IN THE APP') {
+    return { attrs: `data-team="${esc(team)}"`, text: live.gate.text, actions: `<a class="btn primary" href="#open" data-open="cookrew://import/${esc(name)}">Open in Cookrew</a>` }
   }
-
-  if (owner) {
-    return `<section class="seat strip" id="seatbar" data-team="${esc(address)}" data-owner="1">
-<span class="chip amber">Your team</span><span class="meta">${seated.length} seated · the line is yours, no seat and no charge.</span>
-<button class="btn primary" data-seat-open>Open the line</button></section>`
+  switch (standing.kind) {
+    case 'stranger':
+      return { attrs: `data-team="${esc(team)}"`, text: 'Sign in with your cookrew.dev account; the door mints a sandboxed session of your own. A seat is yours, not a browser’s — it follows you to any device.', actions: `<button class="btn primary" data-signin>Sign in to open</button>` }
+    case 'owner':
+      return { attrs: `data-team="${esc(team)}" data-owner="1"`, text: `You are @${esc(standing.account)} · Your team · ${seated.length} seated — the line is yours, with no seat and no charge.`, actions: `<button class="btn primary" data-seat-open>Open the line</button>` }
+    case 'seated':
+      return { attrs: `data-team="${esc(team)}"`, text: `You are @${esc(standing.account)} · Seat since ${esc(day(seat?.createdAt ?? standing.since))} — your session continues where you left it.`, actions: `<button class="btn primary" data-seat-open>Open the line</button>` }
+    case 'admitted':
+      return { attrs: `data-team="${esc(team)}"`, text: `You are @${esc(standing.account)} · this team charges nothing — the line is yours.`, actions: `<button class="btn primary" data-seat-open>Open the line</button>` }
+    case 'unseated':
+      return {
+        attrs: `data-team="${esc(team)}" data-owner="${esc(door.handle)}" data-asked-head="${esc(webCopy('w6.asked-head', { handle: door.handle }))}" data-already-asked="${esc(webCopy('w6.already-asked', { handle: '{handle}' }))}"`,
+        text: `You are @${esc(standing.account)} · no seat here yet. A seat is ${esc(price)} USD, once, and follows you to any device.`,
+        actions: `<button class="btn primary" data-seat-buy id="seat-buy">Buy a seat · $${esc(price)}</button><a class="ask" href="#ask" data-seat-ask>Ask @${esc(door.handle)}</a>`
+      }
   }
-
-  if (seat !== null || !paid) {
-    const since = seat === null ? 'free to open — you are signed in.' : `Seat since ${esc(day(seat.createdAt))}.`
-    return `<section class="seat strip" id="seatbar" data-team="${esc(address)}">
-<span class="meta">You are @${esc(input.account)} · ${since}</span>
-<button class="btn primary" data-seat-open>Open the line</button></section>`
-  }
-
-  // W6 · ASK IS A REQUEST (R1): it files to the owner's queue and reaches every
-  // device they have. Both states ship in the markup and site.js unhides one,
-  // because the CSP forbids an inline script and the asked state is reachable
-  // on a reload. There is no withdraw, because no route retracts a request.
-  return `<section class="seat strip" id="seatbar" data-team="${esc(address)}" data-owner="${esc(door.handle)}"
-  data-asked-head="${esc(webCopy('w6.asked-head', { handle: door.handle }))}"
-  data-already-asked="${esc(webCopy('w6.already-asked', { handle: '{handle}' }))}">
-<span class="meta" id="seat-head">You are @${esc(input.account)} · no seat here yet</span>
-<span class="sp"></span>
-<button class="btn primary" data-seat-buy id="seat-buy">Buy a seat · $${esc(price)}</button>
-<button class="btn" data-seat-ask>Ask @${esc(door.handle)}</button>
-<span class="meta" id="seat-ask-note" hidden>${esc(webCopy('w6.asked'))}</span></section>`
 }
 
 export function teamPage(input: TeamInput): Page {
@@ -115,8 +108,6 @@ answer the same, so the directory cannot be used to enumerate what is here.</p><
   const address = `${input.origin}/${door.handle}/${door.name}`
   const name = `@${door.handle}/${door.name}`
   const off = door.live === false
-  const harnesses = door.harnesses ?? []
-  const tags = door.tags ?? []
   const relayed = door.transport === 'relay' && typeof door.sealKey === 'string'
   // WHO IS READING, decided once. The seat bar, the line's chip, the strip and
   // the gate all render from this, so none of them can contradict another —
@@ -136,7 +127,7 @@ answer the same, so the directory cannot be used to enumerate what is here.</p><
   // (`btn-open`, which line.js and the bar's buttons press) out of sight, so
   // the page never shows two buttons for one act. line.js still swaps real
   // buttons into `gate-actions` for the states only it can know (retry, pay).
-  const gateText = line.phase === 'NO SEAT' ? `A seat first — buy one above, or ask @${door.handle}.` : line.gate.text
+  const act = gateAct(input, door, standing, line, name)
   const seatLine = door.access === 'paid' && door.priceUsd ? `${esc(door.priceUsd)} USD · a seat, once` : 'free · account needed'
   return page(
     {
@@ -157,30 +148,23 @@ answer the same, so the directory cannot be used to enumerate what is here.</p><
       ]
     },
     `<div class="wrap" style="padding-top:30px" id="team" data-door="${esc(name)}" data-seal-key="${esc(door.sealKey ?? '')}" data-live="${off ? '0' : '1'}" data-access="${esc(door.access)}" data-price="${esc(door.priceUsd ?? '')}" data-orch="${esc(door.door)}" data-relayed="${relayed ? '1' : '0'}">
-<div class="tp-head">
-<div><p class="meta" style="margin:0 0 6px"><a href="/market">Marketplace</a> / <a href="/${esc(door.handle)}">@${esc(door.handle)}</a></p>
+<div class="tp-head one">
 <h1 style="margin-bottom:6px">${esc(door.title)}</h1>
-<p class="lede" style="margin-bottom:10px"><b>${esc(door.door)}</b> answers for ${door.agents} agent${door.agents === 1 ? '' : 's'}.${door.summary ? ` ${esc(door.summary)}` : ''}</p>
-<div class="row"><span class="led${off ? ' off' : ''}" id="led"></span><span id="livetxt" class="meta">${off ? 'Not taking calls right now — the address stays valid' : 'taking calls'}</span><span class="chip">${esc(door.transport)}</span>${harnesses.map((h) => `<span class="chip">${esc(h)}</span>`).join('')}${door.access === 'paid' ? door.rails.map((rail) => `<span class="chip">${rail === 'x402' ? 'USDC · wallet' : 'card'}</span>`).join('') : ''}${tags.map((t) => `<span class="chip violet">${esc(t)}</span>`).join('')}</div></div>
-<div class="tp-actions"><button class="star${input.starred ? ' on' : ''}" id="star" data-star="${esc(door.handle)}/${esc(door.name)}" title="one star per account">★ <span>${input.stars}</span></button><a class="btn primary lg" id="open" href="#open" data-open="cookrew://import/${esc(name)}">Open in Cookrew</a></div>
+<p class="lede" style="margin-bottom:8px"><b>${esc(door.door)}</b> answers for ${door.agents} agent${door.agents === 1 ? '' : 's'} · by <a href="/${esc(door.handle)}">@${esc(door.handle)}</a>${door.summary ? ` · ${esc(door.summary)}` : ''}</p>
+<p class="row meta" style="margin:0 0 14px"><span class="led${off ? ' off' : ''}" id="led"></span><span id="livetxt">${off ? 'Not taking calls right now — the address stays valid' : 'taking calls'}</span><span class="chip">${seatLine}</span></p>
 </div>
-
-${seatBar(input, door, name, standing)}
-<div class="tp one">
-<div>
 <div class="overlay" id="overlay">
-<div class="bar"><span class="led${off ? ' off' : ''}" id="bar-led"></span><span class="name">${esc(door.door)}</span><span class="chip violet">ORCH · THE DOOR</span><span class="chip" id="phase">${esc(line.phase)}</span><span class="sp"></span><button class="btn sm" id="btn-new" hidden>⏎ start a new session</button><button class="btn sm danger" id="btn-end" hidden>End session</button></div>
-<div class="strip" id="strip"><span id="strip-opened">not opened</span><span class="sep">·</span><span>${seatLine}</span><span class="sep">·</span><span>runs at ${esc(name)}</span><span class="sep">·</span><span class="state" id="state">${esc(line.state)}</span></div>
+<div class="bar"><span class="led${off ? ' off' : ''}" id="bar-led"></span><span class="name">${esc(door.door)}</span><span class="chip" id="phase">${esc(line.phase)}</span><span class="sp"></span><button class="btn sm" id="btn-new" hidden>⏎ start a new session</button><button class="btn sm danger" id="btn-end" hidden>End session</button></div>
+<div class="strip" id="strip"><span id="strip-opened">not opened</span><span class="sep">·</span><span class="state" id="state">${esc(line.state)}</span></div>
 <div class="term">
 <div class="out" id="term"></div>
-<div class="gate" id="gate"><div class="card"><h3 id="gate-h">${esc(line.gate.title)}</h3><p id="gate-p">${esc(gateText)}</p><p class="row" style="justify-content:center" id="gate-actions"><button class="btn primary" id="btn-open" hidden${line.gate.disabled ? ' disabled' : ''}>Open the line</button></p></div></div>
-<div class="in"><input id="prompt" placeholder="type to ${esc(door.door)} — Enter sends; keystrokes go raw to the PTY" disabled autocomplete="off"><button class="btn sm primary" id="send" disabled>Send</button></div>
+<div class="gate" id="gate"><div class="card" id="seatbar" ${act.attrs}><h3 id="gate-h">${esc(line.gate.title)}</h3><p id="gate-p"></p><p id="seat-head">${act.text}</p><p class="row acts" id="seat-act">${act.actions}</p><p class="row acts" id="gate-actions"><button class="btn primary" id="btn-open" hidden${line.gate.disabled ? ' disabled' : ''}>Open the line</button></p><p class="meta" id="seat-ask-note" hidden>${esc(webCopy('w6.asked'))}</p></div></div>
+<div class="in"><input id="prompt" placeholder="type to ${esc(door.door)} — Enter sends" disabled autocomplete="off"><button class="btn sm primary" id="send" disabled hidden>Send</button></div>
 </div>
 <div class="rail"><div class="rh"><span>Checkpoints</span><span id="rail-n">0</span></div><ol id="rail"><li class="live ended" id="rail-tail"><span class="n">—</span><span class="t"><span class="dot"></span>no session</span></li></ol></div>
 </div>
 <pre class="crt" id="block" hidden style="margin-top:12px;padding:12px 14px;white-space:pre-wrap;max-height:360px;overflow:auto"></pre>
-<div class="addr" style="margin-top:12px"><span id="addr">${esc(address)}</span><button class="btn sm" data-copy="${esc(address)}">copy</button></div>
-</div>
-</div></div>`
+<p class="meta tp-foot"><span class="mono">${esc(address)}</span><button class="star${input.starred ? ' on' : ''}" id="star" data-star="${esc(door.handle)}/${esc(door.name)}" title="one star per account">★ <span>${input.stars}</span></button><a href="#open" data-open="cookrew://import/${esc(name)}">Open in Cookrew</a></p>
+</div>`
   )
 }
