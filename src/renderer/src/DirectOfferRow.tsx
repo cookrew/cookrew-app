@@ -22,12 +22,14 @@ import { directNavigationUrl, type DirectOffer } from './path/direct-offer'
  * local-network permission to grant, so a fetch from cookrew.dev to the Mac
  * can never succeed while a navigation to the same trusted name always can.
  *
- * TWO BUTTONS, IN THE ORDER THE SENTENCE NAMES THEM. TRY AGAIN re-runs the
- * race the switcher already owns (path-retry-gate.ts) and is the cheaper of
- * the two answers: a Mac that was asleep, a card that lagged a network hop, a
- * Wi-Fi that had just changed under the phone — all of those answer on the
- * next pass and none of them needs a page load. Leaving the page is the
- * second answer because it is the irreversible-looking one.
+ * TWO BUTTONS, IN THE ORDER THE SENTENCE NAMES THEM. After a TIMEOUT, TRY
+ * AGAIN comes first: it re-runs the race the switcher already owns
+ * (path-retry-gate.ts) and is the cheaper answer — a Mac that was asleep, a
+ * card that lagged a network hop, a Wi-Fi that had just changed under the
+ * phone all answer on the next pass without a page load. After a REFUSAL the
+ * navigation comes first: the browser refused in 4 ms by rule, the Mac was
+ * never asked, and racing again measures the same rule (path-copy.ts ·
+ * directOfferWhy). The sentence decides, and the buttons follow it.
  *
  * THE PRESS WAITS, AND SAYS SO. A race is up to a second of probes; a button
  * that went back to its resting state immediately would read as a button that
@@ -65,25 +67,32 @@ export function DirectOfferRow(): React.JSX.Element | null {
     void retryPath().then(settle, settle)
   }
 
+  const retry = (
+    <button
+      key="retry"
+      type="button"
+      className="cr-btn cr-path-direct-retry"
+      disabled={trying}
+      onClick={tryAgain}
+    >
+      {trying ? DIRECT_OFFER_COPY.retrying : DIRECT_OFFER_COPY.retry}
+    </button>
+  )
+  const go = (
+    <button
+      key="go"
+      type="button"
+      className="cr-btn cr-path-direct-go"
+      onClick={() => openDirectly(offer)}
+    >
+      {offer.kind === 'lan' ? DIRECT_OFFER_COPY.lan : DIRECT_OFFER_COPY.tailnet}
+    </button>
+  )
   return (
     <p className="cr-path-direct" role="status">
-      <span className="cr-path-direct-why">{directOfferWhy(offer.family, offer.proxy)}</span>
+      <span className="cr-path-direct-why">{directOfferWhy(offer.family, offer.reason)}</span>
       <span className="cr-path-direct-acts">
-        <button
-          type="button"
-          className="cr-btn cr-path-direct-retry"
-          disabled={trying}
-          onClick={tryAgain}
-        >
-          {trying ? DIRECT_OFFER_COPY.retrying : DIRECT_OFFER_COPY.retry}
-        </button>
-        <button
-          type="button"
-          className="cr-btn cr-path-direct-go"
-          onClick={() => openDirectly(offer)}
-        >
-          {offer.kind === 'lan' ? DIRECT_OFFER_COPY.lan : DIRECT_OFFER_COPY.tailnet}
-        </button>
+        {offer.reason === 'timeout' ? [retry, go] : [go, retry]}
       </span>
     </p>
   )

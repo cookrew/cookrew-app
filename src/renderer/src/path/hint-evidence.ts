@@ -43,6 +43,19 @@ export const blockedBothWays = (attempts: readonly PathAttempt[]): boolean =>
   attempts.length > 0 &&
   attempts.every((attempt) => attempt.outcome === 'blocked' && attempt.hint === 'none')
 
+/**
+ * EVERY CANDIDATE REFUSED BEFORE IT CONNECTED, whichever variant was tried.
+ *
+ * The badge's question, not the proxy's: "is the relay what we have because
+ * the browser would not try, or because nothing answered?" The sentence it
+ * replaces — "your Mac is not on this network" — is a claim about the Mac,
+ * and a race whose every row died in the browser measured nothing about the
+ * Mac at all (2026-10-04: Safari 26, 4 ms, both ways). EVERY, as above: one
+ * timeout is a Mac that may be asleep, and that sentence may then be true.
+ */
+export const refusedBeforeConnecting = (attempts: readonly PathAttempt[]): boolean =>
+  attempts.length > 0 && attempts.every((attempt) => attempt.outcome === 'blocked')
+
 /** What the explainer draws: an ask, the after-refusal line, or nothing. */
 export interface AskRowView {
   readonly kind: 'ask' | 'denied' | 'hidden'

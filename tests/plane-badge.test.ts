@@ -67,6 +67,31 @@ describe('the badge under a relay prefix', () => {
     expect(window.location.origin).toBe('https://cookrew.dev')
   })
 
+  it('reads the last race: a browser that refused every candidate is not a Mac elsewhere', async () => {
+    stubPhone('https://cookrew.dev')
+    const { link } = await servedAt(RELAY_BASE)
+    const attempts = await import('../src/renderer/src/path-attempts')
+    attempts.resetPathAttempts()
+    expect(link.currentPathBadge().sentence).toContain('not on this network')
+    attempts.recordAttempts(
+      [
+        {
+          name: '192.168.0.105:8643',
+          outcome: 'blocked',
+          ms: 4,
+          plane: 'LAN',
+          chosen: false,
+          hint: 'none',
+          detail: 'TypeError: Load failed'
+        }
+      ],
+      'RELAY'
+    )
+    expect(link.currentPathBadge().word).toBe('RELAY')
+    expect(link.currentPathBadge().sentence).not.toContain('not on this network')
+    expect(link.currentPathBadge().sentence).toContain('refused')
+  })
+
   it('says TAILNET for a tailnet plane, not LAN', async () => {
     // The two are not the same path and never read as the same word: a tailnet
     // hop painted green would tell a reader their Mac is on this Wi-Fi.

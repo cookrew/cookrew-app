@@ -3,7 +3,9 @@ import {
   classifyOrigin,
   isLanHostname,
   isTailnetHostname,
-  pathBadgeView
+  pathBadgeView,
+  RELAY_BLOCKED_SENTENCE,
+  RELAY_REFUSED_SENTENCE
 } from '../src/shared/path-badge'
 
 describe('path badge host classes', () => {
@@ -70,6 +72,45 @@ describe('path badge view model', () => {
     expect(view.pulsing).toBe(false)
     expect(view.desktopName).toBe('MacBook Pro')
     expect(view.latencyMs).toBe(12)
+  })
+
+  it('stops claiming the Mac is elsewhere once the browser is what refused', () => {
+    // 2026-10-04, the owner's iPhone on its own Wi-Fi: every LAN candidate was
+    // refused by Safari before connecting, in 4 ms, and the sheet's first line
+    // still read "your Mac is not on this network". A refusal is a fact about
+    // the browser; the Mac's whereabouts were never measured.
+    const refused = pathBadgeView({
+      origin: 'https://cookrew.dev',
+      link: 'live',
+      relayed: true,
+      plane: 'RELAY',
+      localNetwork: 'unsupported',
+      refusedByBrowser: true
+    })
+    expect(refused.word).toBe('RELAY')
+    expect(refused.sentence).toBe(RELAY_BLOCKED_SENTENCE)
+    expect(refused.sentence).not.toContain('not on this network')
+    expect(refused.sentence).toContain('relay')
+    // A decided refusal still wins: it names the switch that undoes it.
+    expect(
+      pathBadgeView({
+        origin: 'https://cookrew.dev',
+        link: 'live',
+        relayed: true,
+        localNetwork: 'denied',
+        refusedByBrowser: true
+      }).sentence
+    ).toBe(RELAY_REFUSED_SENTENCE)
+    // And on a direct plane the rows are history: the plane is the fact.
+    expect(
+      pathBadgeView({
+        origin: 'https://cookrew.dev',
+        link: 'live',
+        relayed: true,
+        plane: 'LAN',
+        refusedByBrowser: true
+      }).sentence
+    ).toBe('Direct over this Wi-Fi.')
   })
 
   it('uses the owner sentences for tailnet and relay', () => {

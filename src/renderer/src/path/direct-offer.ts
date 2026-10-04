@@ -40,6 +40,23 @@ import type { PlaneCandidate } from './plane-switch'
  * holds unchanged.
  */
 
+/**
+ * WHY THE OFFER IS BEING MADE, as the three things the rows can have measured.
+ *
+ *   timeout  the address was reached and did not answer before the deadline.
+ *            A Mac that is asleep, a slow Wi-Fi; TRY AGAIN is the cheap answer.
+ *   blocked  the browser refused the address before it connected — the Mac was
+ *            never asked. 2026-10-04, the owner's iPhone: Safari 26 refused the
+ *            LAN name in 4 ms, with and without the hint, "TypeError: Load
+ *            failed". The row under the headline said so; the headline said
+ *            "did not answer in time". Carrying the reason is what stops the
+ *            two from disagreeing, and TRY AGAIN measures the same rule again,
+ *            so the navigation is named first.
+ *   proxy    a desktop Chrome that HAS the permission and can never be made to
+ *            prompt for it (Chrome 152 behind a system proxy, 2026-09-08).
+ */
+export type DirectOfferReason = 'timeout' | 'blocked' | 'proxy'
+
 /** Where the button would send this phone, and what to call that network. */
 export interface DirectOffer {
   /** A trusted name off the desktop's card — never a bare IP, never a label. */
@@ -53,17 +70,13 @@ export interface DirectOffer {
    */
   readonly family: string
   /**
-   * WHY THIS OFFER EXISTS, where the answer is not iOS.
-   *
-   * Set only for the proxy case (Chrome 152 behind a system proxy, 2026-09-08):
-   * a desktop browser that HAS the permission and cannot be made to prompt for
-   * it, because the annotated request fails the address-space check before any
-   * dialog. The sentence differs completely — blaming iOS on a Mac would send
-   * that reader hunting through a settings screen that has nothing to do with
-   * it — so the reason travels with the offer rather than being guessed at
-   * render time. Absent is the original iOS case, unchanged.
+   * WHY THIS OFFER EXISTS — read off the row for the address the button opens,
+   * never off the user agent. The sentence differs completely between the
+   * three (blaming iOS on a Mac would send that reader hunting through a
+   * settings screen that has nothing to do with it), so the reason travels
+   * with the offer rather than being guessed at render time.
    */
-  readonly proxy?: true
+  readonly reason: DirectOfferReason
 }
 
 /**
@@ -178,8 +191,10 @@ export const directNavigationOffer = (state: DirectOfferState): DirectOffer | nu
   if (!platform && !proxy) return null
   if (!state.hasToken) return null
   if (state.attempts.some((attempt) => attempt.outcome === 'answered')) return null
-  const stalled = new Set(
-    state.attempts.filter((attempt) => STALLED.has(attempt.outcome)).map((attempt) => attempt.name)
+  const stalled = new Map(
+    state.attempts
+      .filter((attempt) => STALLED.has(attempt.outcome))
+      .map((attempt) => [attempt.name, attempt.outcome] as const)
   )
   if (stalled.size === 0) return null
   // NAME THE CANDIDATE THE EVIDENCE IS ABOUT. Rows outlive a network, and a
@@ -189,14 +204,16 @@ export const directNavigationOffer = (state: DirectOfferState): DirectOffer | nu
   const best = bestFirst(state.candidates).find((candidate) =>
     stalled.has(attemptName(candidate.origin))
   )
-  return best
-    ? {
-        origin: best.origin,
-        kind: best.kind,
-        family: familyName(state.browser),
-        ...(proxy ? { proxy: true as const } : {})
-      }
-    : null
+  if (!best) return null
+  // THE REASON IS THAT ADDRESS'S OWN ROW. A tailnet that timed out says
+  // nothing about a LAN name the browser refused, and the button opens the LAN.
+  const outcome = stalled.get(attemptName(best.origin))
+  return {
+    origin: best.origin,
+    kind: best.kind,
+    family: familyName(state.browser),
+    reason: proxy ? 'proxy' : outcome === 'blocked' ? 'blocked' : 'timeout'
+  }
 }
 
 /**

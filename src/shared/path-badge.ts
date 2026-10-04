@@ -36,6 +36,18 @@ export type LocalNetworkPermission = 'unsupported' | 'granted' | 'denied' | 'pro
 export const RELAY_REFUSED_SENTENCE =
   "Staying on the relay. You can allow local network access in the browser's site settings."
 
+/**
+ * WHAT THE RELAY SENTENCE BECOMES WHEN THE BROWSER WOULD NOT TRY.
+ *
+ * "Your Mac is not on this network" is a claim about the Mac. A race whose
+ * every row was refused by the browser before it connected measured nothing
+ * about the Mac — 2026-10-04, the owner's iPhone on the Mac's own Wi-Fi:
+ * Safari 26, 4 ms, with and without the hint — so the sentence states the one
+ * thing that was measured and stops there.
+ */
+export const RELAY_BLOCKED_SENTENCE =
+  'Via cookrew.dev relay — the browser refused the direct path from this page.'
+
 export type PathState = 'LAN' | 'TAILNET' | 'RELAY' | 'OFFLINE' | 'PROBING'
 
 /** What the companion's transport knows about itself. */
@@ -95,6 +107,13 @@ export type PathBadgeInput = {
    * feet away and the browser simply will not let us knock.
    */
   readonly localNetwork?: LocalNetworkPermission
+  /**
+   * THE LAST RACE'S ROWS WERE ALL REFUSED BY THE BROWSER BEFORE CONNECTING
+   * (path/hint-evidence.ts · refusedBeforeConnecting). Like `localNetwork`, it
+   * only ever changes the sentence: the relay is still the word, and the
+   * reason is no longer the Mac's whereabouts, which nobody measured.
+   */
+  readonly refusedByBrowser?: boolean
 }
 
 export type PathBadgeView = {
@@ -223,11 +242,18 @@ export const pathBadgeView = (input: PathBadgeInput): PathBadgeView => {
   // direct plane the plane is the fact, and a permission read on some other
   // network is stale the moment the phone moves.
   const refused = state === 'RELAY' && input.localNetwork === 'denied'
+  // A decided refusal outranks a measured one: it names the switch that
+  // undoes it, and the rows would say "refused" under it anyway.
+  const blocked = state === 'RELAY' && input.refusedByBrowser === true
   return {
     state,
     word: state,
     pulsing: state === 'PROBING',
-    sentence: refused ? RELAY_REFUSED_SENTENCE : PATH_SENTENCES[state],
+    sentence: refused
+      ? RELAY_REFUSED_SENTENCE
+      : blocked
+        ? RELAY_BLOCKED_SENTENCE
+        : PATH_SENTENCES[state],
     desktopName: input.desktopName ?? null,
     latencyMs: typeof input.latencyMs === 'number' ? input.latencyMs : null,
     switchDesktopUrl: input.registryOrigin

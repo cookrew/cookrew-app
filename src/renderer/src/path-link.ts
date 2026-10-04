@@ -1,6 +1,8 @@
 import { clientBase } from './api-base'
 import { dataPlane } from './data-plane'
 import { localNetworkGate } from './local-network-gate'
+import { pathAttempts } from './path-attempts'
+import { refusedBeforeConnecting } from './path/hint-evidence'
 import {
   classifyOrigin,
   pathBadgeView,
@@ -175,7 +177,16 @@ export const currentPathBadge = (): PathBadgeView =>
     latencyMs: state.latencyMs,
     probing: state.probing,
     relayed: relayed(),
-    ...(relayed() ? { plane: planeState(), localNetwork: localNetworkGate() } : {}),
+    ...(relayed()
+      ? {
+          plane: planeState(),
+          localNetwork: localNetworkGate(),
+          // The badge's sentence reads the last race, not the address bar: a
+          // race whose every row died in the browser says nothing about where
+          // the Mac is, and the sentence must not either.
+          refusedByBrowser: refusedBeforeConnecting(pathAttempts().attempts)
+        }
+      : {}),
     ...(state.desktopName ? { desktopName: state.desktopName } : {}),
     ...(registryOf() ? { registryOrigin: registryOf() as string } : {})
   })

@@ -5999,6 +5999,22 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   color: var(--muted);
 }
 
+/* The refusal line: the ask's slot, with the sentence on one row and its two
+   buttons free to drop to the next on a narrow phone. Amber like the sheet's
+   row, because it is a suggestion rather than a fact. */
+.cr-path-direct-line {
+  flex-wrap: wrap;
+  background: var(--amber-soft, var(--cream-hi));
+}
+
+.cr-path-direct-line .cr-path-ask-text {
+  flex: 1 1 180px;
+}
+
+.cr-path-direct-hide {
+  color: var(--muted);
+}
+
 /* The note on the page the OPEN ON WI-FI button landed on. Same hanging line
    as the ask — it is the same slot under the same badge — and it is the only
    one of the two that ever appears on a directly-served companion. */
