@@ -49,48 +49,48 @@ export function frameImg(frame: Frame, options: { eager?: boolean; sizes?: strin
 export const FRAMES = {
   canvas: frame(
     'qa-canvas.jpg',
-    'The Cookrew Dev canvas: agent terminal cards, notes and wires',
-    'Framed the Velvet row of the Cookrew Dev board in the harness view: Fresco, Velvet, Conductor and Solosea show the last turn each agent took, the spec notes they were handed sit under them, the browser cards below carry the pages they opened, and the cables run as shared trunks along the gutters.'
+    "The Cookrew Dev canvas: eight agent cards mid-turn, wired to their notes and browser cards",
+    "Framed the crew in the harness view with the pointer resting on the orchestrator: its cables light amber while the rest of the board falls back, the dispatch it just sent has landed on Vigil — whose card now reads Auditing the door seal — and the others carry on, each showing the brief it was given and the tool call it is on."
   ),
   task: frame(
     'intro-1.jpg',
     "An agent card open on its record: the brief, the reply, the tool calls, the checkpoint rail",
-    "Clicked the Velvet card open on the Cookrew Dev board: its latest turn fills the card \u2014 the brief it was given, the reply it wrote and the Bash calls between \u2014 with the LIVE line under it and the checkpoint rail on the right counting 138."
+    "Clicked the Velvet card open: its turns fill the card — the brief it was given, the tool calls between, the reply it wrote — with the live terminal under the LIVE line and the rail on the right counting 124 checkpoints."
   ),
   harness: frame(
     'intro-2.jpg',
-    "The dock's harness picker: Claude Code, Codex, OpenCode, Pi, Shell and the saved teams",
-    "Pressed TERMINAL in the dock over the harness canvas: the picker slid up with the five harness chips, CLAUDE CODE lit, the saved teams beside them and + IMPORT A TEAM at the end of the row."
+    "The dock's harness picker: Claude Code, Codex, OpenCode, Pi and a plain shell",
+    "Pressed TERMINAL in the dock over the harness canvas: the picker slid up with the five harnesses Cookrew ships, CLAUDE CODE lit, the ORCH toggle beside them and + IMPORT A TEAM at the end of the row."
   ),
   trace: frame(
     'qa-history-trace.jpg',
-    "The Velvet card scrubbed to checkpoint T78, the rail fanned open",
-    "Dragged the Velvet rail up from its live end: the list of 138 checkpoints fanned out with the title Sous gave each one, T78 took the focus with FORK beside it, and the transcript on the left scrolled to that turn."
+    "The Velvet card scrubbed back through its checkpoints, the rail fanned open",
+    "Dragged the Velvet rail up from its live end: the 124 checkpoints fanned out with the title each turn was given, one row took the focus with FORK beside it, and the transcript on the left scrolled to that turn."
   ),
   rail: frame(
     'qa-terminal-rail.jpg',
-    "The Conductor card open: the transcript on the left, 1126 checkpoints on the rail",
-    "Clicked the Conductor card open: its latest reply sits above the LIVE line, the terminal below it is quiet, and the rail on the right counts 1126 checkpoints across the session's whole chain, compaction ticks included."
+    "The orchestrator card open: the transcript on the left, 311 checkpoints on the rail",
+    "Clicked the orchestrator open: the transcript holds the turns it has taken, the live terminal runs under the LIVE line, and the rail on the right counts 311 checkpoints across the session’s whole chain."
   ),
   board: frame(
     'qa-board.jpg',
-    "The Board: every agent, its last turn, its role and its checkpoint, on one screen",
-    "Switched the header to BOARD: nineteen active agents of twenty listed with the harness, role and workspace chips, the prompt each was last given and the reply it made, and how long ago it finished \u2014 the facet bar counts them by harness and role."
+    "The Board: every agent, its harness, its role and what it is doing now, on one screen",
+    "Switched the header to BOARD: eight agents with their harness, role and workspace chips, the prompt each was last given and what it is doing now — five working, one just finished, and Velvet in red, because it has stopped to ask its owner which way to go."
   ),
   mobile: frame(
     'qa-mobile.jpg',
     "The canvas at phone width: the same cards, the same cables",
-    "Rendered the same fixture at 500 px with touch emulation, the layout the phone companion uses: Velvet between its notes and the browser card below it, the harness cables running between them, the header's icons and the dock at the bottom."
+    "Rendered the same canvas at 390 px with touch emulation, the layout the phone companion serves: the orchestrator between its notes and the browser cards below it, the harness cables running between them, and the dock along the bottom."
   ),
   workspaces: frame(
     'intro-6.jpg',
     "The workspace wall: every workspace as a screen, Cookrew Dev picked with its snapshot",
-    "Pressed the workspace pill in the header: the wall of workspaces slid in, one tilted screen each, with Cookrew Dev picked in front carrying a snapshot of this canvas and its directory under it, and OPEN, DIRECTORIES, REMOVE and HISTORY below."
+    "Pressed the workspace pill in the header: the wall of workspaces slid in, one tilted screen each, Cookrew Dev picked in front carrying a snapshot of this canvas and its directory under it, with BACK, DIRECTORIES, REMOVE and HISTORY below."
   ),
   market: frame(
     'qa-marketplace.jpg',
-    "The Import a team sheet showing the COOKREW Alpha door",
-    "Pressed + IMPORT A TEAM in the dock and pasted cookrew.dev/@drej/cookrew-alpha: LOOK UP read the door's face from cookrew.dev \u2014 COOKREW Alpha, Pilot answering for 3 agents, a priced seat \u2014 above CANCEL and the import button. Before an address is typed the same sheet lists the teams saved on this machine and the seats the account holds."
+    "The cookrew.dev rent strip: the instances taking calls, each with a price and a seat to buy",
+    "Opened cookrew.dev: the rent strip lists the instances taking calls with what a seat costs and how many lines were opened at each today, every one carrying BUY A SEAT and OPEN — and under it the free doors, which need nothing but an account."
   )
 } as const
 
