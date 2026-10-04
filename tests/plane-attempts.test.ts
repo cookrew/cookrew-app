@@ -139,3 +139,74 @@ describe('what the race writes down', () => {
     expect(noted).toEqual([])
   })
 })
+
+describe('what the race writes down once it can ask the zone', () => {
+  // 2026-10-04: every LAN candidate died in 4 ms with "TypeError: Load
+  // failed" and the row said "refused by the browser before connecting". The
+  // name was NXDOMAIN. The stopwatch cannot tell those apart; the zone can.
+  const blocked = (ms = 4) => ({ ok: false as const, kind: 'blocked' as const, ms, detail: 'TypeError: Load failed' })
+  const network = () => ({ ok: false as const, kind: 'network' as const, ms: 263, detail: 'TypeError: Load failed' })
+
+  it('calls a fast failure on a name the zone is not answering UNNAMED, not refused', async () => {
+    const asked: string[] = []
+    const noted = await race({
+      hello: async () => blocked(),
+      named: async (origin) => {
+        asked.push(origin)
+        return 'dead'
+      }
+    })
+    expect(noted.map((row) => row.outcome)).toEqual(['unnamed', 'unnamed'])
+    expect(noted[0].ms).toBe(4)
+    // The browser's words are dropped: the sentence is now about the name.
+    expect(noted[0].detail).toBeUndefined()
+    expect(noted[0].hint).toBeUndefined()
+    expect(asked.sort()).toEqual([LAN, TAILNET].sort())
+  })
+
+  it('keeps BLOCKED only when the zone confirms the name is live', async () => {
+    const noted = await race({ hello: async () => blocked(), named: async () => 'live' })
+    expect(noted.map((row) => row.outcome)).toEqual(['blocked', 'blocked'])
+    expect(noted[0].detail).toBe('TypeError: Load failed')
+  })
+
+  it('will not claim a refusal it could not confirm: unknown downgrades blocked to network', async () => {
+    const noted = await race({ hello: async () => blocked(), named: async () => 'unknown' })
+    expect(noted.map((row) => row.outcome)).toEqual(['network', 'network'])
+  })
+
+  it('calls a slow failure on a dead name unnamed too, and leaves a live one as it was', async () => {
+    const dead = await race({ hello: async () => network(), named: async () => 'dead' })
+    expect(dead[0].outcome).toBe('unnamed')
+    const live = await race({ hello: async () => network(), named: async () => 'live' })
+    expect(live[0].outcome).toBe('network')
+  })
+
+  it('does not ask about a timeout, an http answer, or an answer it merely could not verify', async () => {
+    let asked = 0
+    const named = async (): Promise<'dead'> => {
+      asked += 1
+      return 'dead'
+    }
+    const timeout = await race({ hello: async () => ({ ok: false, kind: 'timeout', ms: 800 }), named })
+    expect(timeout[0].outcome).toBe('timeout')
+    const http = await race({ hello: async () => ({ ok: false, kind: 'http', status: 404, ms: 20 }), named })
+    expect(http[0].outcome).toBe('http')
+    expect(asked).toBe(0)
+  })
+
+  it('treats an oracle that throws as unknown', async () => {
+    const noted = await race({
+      hello: async () => blocked(),
+      named: async () => {
+        throw new Error('no registry')
+      }
+    })
+    expect(noted[0].outcome).toBe('network')
+  })
+
+  it('without an oracle, the stopwatch verdict stands as before', async () => {
+    const noted = await race({ hello: async () => blocked() })
+    expect(noted[0].outcome).toBe('blocked')
+  })
+})

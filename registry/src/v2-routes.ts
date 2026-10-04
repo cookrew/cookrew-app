@@ -117,6 +117,10 @@ export function handleV2Route(ctx: V2Context): boolean {
     void checkHello(ctx)
     return true
   }
+  if (rest.length === 2 && rest[0] === 'names' && method === 'GET') {
+    lookUpName(ctx, ctx.decode(rest[1]) ?? '')
+    return true
+  }
   if (rest[0] === 'me') {
     void mine(ctx, rest.slice(1))
     return true
@@ -296,6 +300,48 @@ async function redeemRecovery(ctx: V2Context): Promise<void> {
     { token: minted.token, exp: minted.exp, deviceId: attached.device.id },
     { 'set-cookie': cookie(minted.token) }
   )
+}
+
+// ── /v2/names/<host> ─────────────────────────────────────────────────────
+
+/** A hostname as a resolver would send it: labels of letters, digits and hyphens. */
+const HOSTNAME = /^(?:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/
+
+/**
+ * IS THE ZONE ANSWERING THIS NAME RIGHT NOW? One bit, for the phone.
+ *
+ * The companion's probes fail as a bare TypeError whether the browser refused
+ * by policy or the resolver said "no such name", and on 2026-10-04 it told
+ * the owner the former over five days of the latter. The zone is the
+ * authority on its own names, and a page on cookrew.dev can always reach
+ * cookrew.dev — so the question is answered here, over HTTPS, instead of
+ * being guessed from a stopwatch on the phone.
+ *
+ * PUBLIC, because the answer is public: anyone with `dig` gets the same bit
+ * from port 53. RATE LIMITED with verify-hello's budget, because a question
+ * against many names must not be free either. ONLY NAMES UNDER THE ZONE: a
+ * question about anything else is malformed, not "dead" — the phone reads
+ * 200 as a verdict and everything else as "could not ask".
+ */
+function lookUpName(ctx: V2Context, host: string): void {
+  const { response, v2 } = ctx
+  if (ctx.names === undefined) {
+    refuse(response, 404, 'not_found')
+    return
+  }
+  // Shape before budget: a malformed question costs a regex, not a lookup,
+  // and must not spend the caller's allowance on nothing.
+  const name = host.trim().toLowerCase().replace(/\.$/, '')
+  if (name.length > 253 || !HOSTNAME.test(name) || !name.endsWith(`.${ctx.names.zone}`)) {
+    refuse(response, 400, 'malformed')
+    return
+  }
+  const who = callerAddress(ctx.request.headers, ctx.request.socket.remoteAddress)
+  if (!v2.limits.hello.take(`names|${who}`)) {
+    refuse(response, 429, 'rate_limited', undefined, { 'retry-after': '60' })
+    return
+  }
+  v2Json(response, 200, { live: ctx.names.lookup(name).live }, { 'cache-control': 'no-store' })
 }
 
 // ── /v2/verify-hello ─────────────────────────────────────────────────────

@@ -142,3 +142,13 @@ describe('the browser family', () => {
     expect(browserFamily('')).toBe('other')
   })
 })
+
+describe('the unnamed row', () => {
+  it('says the zone is not answering the name, with the time, and no browser words', async () => {
+    const { attemptSentence } = await import('../src/renderer/src/path-copy')
+    const sentence = attemptSentence({ outcome: 'unnamed', ms: 4 })
+    expect(sentence).toContain('not answered by cookrew.dev')
+    expect(sentence).toContain('4 ms')
+    expect(sentence).not.toContain('browser')
+  })
+})

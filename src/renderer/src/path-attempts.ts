@@ -40,6 +40,8 @@ export type AttemptOutcome =
   | 'blocked'
   | 'network'
   | 'http'
+  /** The zone is not answering the name — the Mac has not published it (plane-race.ts · settleNames). */
+  | 'unnamed'
 
 export interface PathAttempt {
   /**

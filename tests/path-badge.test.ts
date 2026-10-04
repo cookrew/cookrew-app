@@ -138,6 +138,14 @@ describe('path badge view model', () => {
     expect(pathBadgeView({ ...base, plane: 'LAN', unpublished: 'session-expired' }).sentence).toBe('Direct over this Wi-Fi.')
   })
 
+  it('has a sentence for names the zone stopped answering mid-session', () => {
+    const base = { origin: 'https://cookrew.dev', link: 'live' as const, relayed: true, plane: 'RELAY' as const }
+    const sentence = pathBadgeView({ ...base, unpublished: 'unnamed' }).sentence
+    expect(sentence).toBe(RELAY_UNPUBLISHED_SENTENCE.unnamed)
+    expect(sentence).not.toContain('not on this network')
+    expect(sentence).toContain('not answering')
+  })
+
   it('uses the owner sentences for tailnet and relay', () => {
     expect(pathBadgeView({ origin: 'https://m.tail9.ts.net', link: 'live' }).sentence)
       .toBe('Via your tailnet.')

@@ -264,6 +264,10 @@ describe('when it is not', () => {
     }
   })
 
+  it('never for a name the zone is not answering — a navigation lands on the same dead name', () => {
+    expect(directNavigationOffer(iphone({ attempts: [attempt({ outcome: 'unnamed', ms: 4 })] }))).toBeNull()
+  })
+
   it('never with no race behind it', () => {
     expect(directNavigationOffer(iphone({ attempts: [] }))).toBeNull()
   })

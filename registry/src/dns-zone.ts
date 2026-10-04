@@ -1,15 +1,4 @@
-import {
-  DNS_CLASS_IN,
-  DNS_TYPE,
-  RCODE,
-  ipText,
-  parseIp,
-  sameIp,
-  type DnsQuestion,
-  type DnsRecord,
-  type Ip,
-  type Soa
-} from './dns-wire'
+import { DNS_CLASS_IN, DNS_TYPE, RCODE, ipText, parseIp, sameIp, type DnsQuestion, type DnsRecord, type Ip, type Soa } from './dns-wire'
 
 /**
  * AUTHORITATIVE DNS — WHAT THE ZONE d.cookrew.dev ANSWERS.
@@ -252,4 +241,29 @@ export function createZone(options: ZoneOptions): Responder {
     if (label === ACME_LABEL) return challenge(deviceId, type)
     return address(name, label, deviceId, type)
   }
+}
+
+/**
+ * THE ZONE'S ANSWER AS ONE BIT, FOR THE HTTP ORACLE (`GET /v2/names/<host>`).
+ *
+ * A browser's failed fetch carries no cause, and a phone cannot run `dig`.
+ * On 2026-10-04 the companion read a TypeError in 4 ms as "the browser
+ * refused before connecting" while the truth was a negative DNS answer from
+ * the resolver's cache: the Mac's card had gone stale and this zone had
+ * stopped answering. The same question, asked of the same responder over
+ * HTTPS, is a fact the phone can have in one round trip.
+ *
+ * Both record types are tried so an IPv6 label is as answerable as an IPv4
+ * one; the host is normalised the way a resolver would send it.
+ */
+export function lookupName(respond: Responder, host: string): { live: boolean; address?: string } {
+  const name = host.trim().toLowerCase().replace(/\.$/, '')
+  if (name.length === 0 || name.length > 253) return { live: false }
+  for (const type of [DNS_TYPE.A, DNS_TYPE.AAAA]) {
+    const answer = respond({ name, type, class: DNS_CLASS_IN })
+    if (answer.rcode !== RCODE.NOERROR) continue
+    const record = answer.answers.find((r) => r.type === 'A' || r.type === 'AAAA')
+    if (record !== undefined && 'address' in record) return { live: true, address: record.address }
+  }
+  return { live: false }
 }

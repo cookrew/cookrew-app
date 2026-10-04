@@ -14,6 +14,7 @@ import { isLocalOrigin, localNetworkState, requestLocalNetwork } from '../local-
 import { localNetworkGate, offerLocalNetwork, setLocalNetwork } from '../local-network-gate'
 import { recordAttempts, type PathAttempt } from '../path-attempts'
 import { setReachPublish, type ReachPublish } from '../reach-publish'
+import { nameLive } from './name-oracle'
 import { createPathMemory, watchNetwork, type PathMemory, type PathMemoryDeps } from '../path-memory'
 import { planeFetch } from '../plane-fetch'
 import { planeHealth, type LinkHealth } from '../plane-health'
@@ -390,6 +391,10 @@ const startPlaneSwitch = (): (() => void) => {
           // to the endpoint, which is the only kind this switcher accepts.
           hello: (origin, nonce) => askHello(origin, nonce, { origin }),
           verify: verifyHello,
+          // The zone's word on a name whose probe died without a cause, so
+          // the rows say "not published" where that is the fact and never
+          // "refused by the browser" where it is not (path/name-oracle.ts).
+          named: (origin) => nameLive(origin),
           adopt: (plane: DataPlane) => setDataPlane(plane),
           nonce: () => randomNonce((bytes) => window.crypto.getRandomValues(bytes)),
           held: () => health.held(),

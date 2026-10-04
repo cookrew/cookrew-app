@@ -63,7 +63,10 @@ export const RELAY_UNPUBLISHED_SENTENCE: Record<string, string> = {
   'session-expired':
     'Via cookrew.dev relay — this Mac is not publishing its Wi-Fi name: its cookrew.dev sign-in ended. Sign in on the Mac to bring the direct path back.',
   stale:
-    'Via cookrew.dev relay — this Mac has not refreshed its Wi-Fi name at cookrew.dev for over a day, so the name is not answered.'
+    'Via cookrew.dev relay — this Mac has not refreshed its Wi-Fi name at cookrew.dev for over a day, so the name is not answered.',
+  /** Every candidate of the last race was a name the zone is not answering (plane-race.ts · settleNames). */
+  unnamed:
+    "Via cookrew.dev relay — cookrew.dev is not answering this Mac's Wi-Fi name right now, so there is no direct path to try."
 }
 
 /** The sentence for a reason the table does not name: the registry's own word, quoted. */

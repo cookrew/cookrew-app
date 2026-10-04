@@ -56,6 +56,15 @@ export const blockedBothWays = (attempts: readonly PathAttempt[]): boolean =>
 export const refusedBeforeConnecting = (attempts: readonly PathAttempt[]): boolean =>
   attempts.length > 0 && attempts.every((attempt) => attempt.outcome === 'blocked')
 
+/**
+ * EVERY CANDIDATE WAS A NAME THE ZONE IS NOT ANSWERING. The Mac's card said
+ * the names were live and the zone said otherwise — a card that went stale
+ * between two reads, or a registry that lost it. Nothing about the phone, its
+ * browser or its network is the story then, and the badge says so.
+ */
+export const everyUnnamed = (attempts: readonly PathAttempt[]): boolean =>
+  attempts.length > 0 && attempts.every((attempt) => attempt.outcome === 'unnamed')
+
 /** What the explainer draws: an ask, the after-refusal line, or nothing. */
 export interface AskRowView {
   readonly kind: 'ask' | 'denied' | 'hidden'

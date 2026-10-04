@@ -154,7 +154,15 @@ export const ATTEMPT_COPY = {
   timeout: 'timed out',
   blocked: 'refused by the browser before connecting',
   network: 'could not connect (DNS, certificate or network)',
-  http: 'answered'
+  http: 'answered',
+  /**
+   * THE ROW THE ZONE WROTE, NOT THE BROWSER. A name the registry is not
+   * answering fails in the resolver, whatever the browser says about it and
+   * however fast; the fix is on the Mac (publish the card), never in the
+   * phone's settings. 2026-10-04: this row read "refused by the browser
+   * before connecting" for five days.
+   */
+  unnamed: 'not answered by cookrew.dev — the Mac has not published this name'
 } as const
 
 /**

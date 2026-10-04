@@ -106,6 +106,30 @@ describe('the badge under a relay prefix', () => {
     expect(link.currentPathBadge().sentence).toContain('not on this network')
   })
 
+  it('reads the rows: every candidate unnamed is a Mac with no name, not a Mac elsewhere', async () => {
+    stubPhone('https://cookrew.dev')
+    const { link } = await servedAt(RELAY_BASE)
+    const attempts = await import('../src/renderer/src/path-attempts')
+    attempts.resetPathAttempts()
+    attempts.recordAttempts(
+      [
+        { name: '192.168.0.105:8643', outcome: 'unnamed', ms: 4, plane: 'LAN', chosen: false },
+        { name: '100.68.81.64:8643', outcome: 'unnamed', ms: 5, plane: 'TAILNET', chosen: false }
+      ],
+      'RELAY'
+    )
+    expect(link.currentPathBadge().sentence).toContain('not answering')
+    // One live row among them and the rows are not the story.
+    attempts.recordAttempts(
+      [
+        { name: '192.168.0.105:8643', outcome: 'unnamed', ms: 4, plane: 'LAN', chosen: false },
+        { name: '100.68.81.64:8643', outcome: 'timeout', ms: 800, plane: 'TAILNET', chosen: false }
+      ],
+      'RELAY'
+    )
+    expect(link.currentPathBadge().sentence).toContain('not on this network')
+  })
+
   it('says TAILNET for a tailnet plane, not LAN', async () => {
     // The two are not the same path and never read as the same word: a tailnet
     // hop painted green would tell a reader their Mac is on this Wi-Fi.
