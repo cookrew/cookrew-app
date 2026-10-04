@@ -288,7 +288,7 @@ function shell(options: ShellOptions, main: string): string {
 <html lang="en"><head>${head(options)}${styles}<style>${FONT_FACES}${SITE_STYLE}${ACCOUNT_STYLE}</style>${scripts}</head>
 <body>
 <header class="hdr"><div class="wrap">
-<a class="mark" href="/">${LOGO}<span>COOK<b>REW</b></span></a>
+<a class="mark" href="/">${LOGO}<span>COOKREW</span></a>
 <span class="chip">an open-source spatial workspace for AI agents</span>
 <nav class="top">${nav}${account}</nav>
 </div></header>
@@ -341,7 +341,7 @@ a{color:inherit}
 @media (max-width:760px){.hdr .wrap>.chip{display:none}.hdr nav.top{margin-left:0;width:100%}}
 .mark{display:flex;align-items:center;gap:9px;text-decoration:none;font:700 15px var(--font-pixel);letter-spacing:.12em}
 .mark-coo{width:40px;height:28px;display:block;flex:0 0 auto;overflow:visible}
-.mark b{color:var(--amber-deep)}
+
 nav.top{display:flex;gap:6px;margin-left:auto;flex-wrap:wrap}
 .chip{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:uppercase;color:var(--ink);background:var(--cream-md);border:1.5px solid var(--line);padding:2px 6px;white-space:nowrap;display:inline-flex;align-items:center;gap:5px}
 .chip.amber{background:var(--amber);color:#2d2a20}.chip.violet{background:var(--violet);color:#fffef5}.chip.rose{background:var(--rose);color:#fffef5}
@@ -518,7 +518,7 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
    site-brand.ts sizes it for a full-width band; in the hero it shares the
    column with the headline, so it is capped here. */
 .hero .brand{padding:0 0 14px}
-.hero .brand .cr-lockup{width:min(100%,300px)}
+.hero .brand .stack{width:min(100%,400px)}
 .hero .lede{margin-bottom:16px;font-size:clamp(16px,1.4vw,18px);max-width:46ch}
 .hero .row#download{gap:8px}
 .hero .row#download .btn.lg{padding:11px 13px}
