@@ -209,6 +209,10 @@
     $('gate-p').textContent = text
     const row = $('gate-actions')
     row.replaceChildren(...actions)
+    // The page's own act (sign in / open / buy, rendered by the server) yields
+    // while the line shows buttons of its own, so there is never two.
+    const act = $('seat-act')
+    if (act) act.hidden = actions.length > 0
     g.hidden = false
   }
   const button = (label, primary, onClick) => {

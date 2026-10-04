@@ -120,6 +120,8 @@ describe('signed out (401)', () => {
     expect(body).toContain('Sign in to open')
     expect(body).toContain('data-signin')
     expect(body).toContain('A seat is yours, not a browser')
+    // one act on the page: the gate card's button, no bar above it
+    expect(body).not.toContain('class="seat strip"')
     expect(body).not.toContain('Buy a seat')
     expect(body).not.toContain('seated here')
   })

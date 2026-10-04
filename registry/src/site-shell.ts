@@ -414,7 +414,8 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
 .stat span{font-size:13px;color:var(--muted)}
 /* market — one finder (tabs, search, filters, sort) above the grid; nothing before the first card
    that is not a way to narrow it. The reader strip sits under the headline and folds on a phone. */
-.finder{padding:12px 14px 10px}
+.finder{margin:18px 0 14px}.finder input[type=search]{width:100%;box-sizing:border-box;font:15px var(--font-mono);padding:10px 12px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink);box-shadow:2px 2px 0 var(--line);outline:none}.finder input[type=search]:focus{background:var(--amber-soft)}
+.market h1{font-size:clamp(28px,3.6vw,40px);margin-bottom:8px}.market .lede{margin-bottom:6px}
 .toolbar{display:flex;gap:8px;align-items:center;margin:0 0 10px}
 .toolbar input[type=search]{flex:1;min-width:0;font:15px var(--font-mono);padding:9px 12px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink);box-shadow:2px 2px 0 var(--line);outline:none}
 .toolbar input[type=search]:focus{background:var(--amber-soft)}
@@ -430,15 +431,13 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
 .team .head{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:2px solid var(--line);background:var(--cream-md)}
 .team .head .ttl{font:700 10px var(--font-pixel);letter-spacing:.06em;text-transform:uppercase;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .team .head .stand{margin-left:auto;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.team .screen{height:84px;padding:10px 12px;display:flex;flex-direction:column;justify-content:flex-end;border-bottom:2px solid var(--line)}
+.team .screen{height:64px;padding:10px 12px;display:flex;flex-direction:column;justify-content:flex-end;border-bottom:2px solid var(--line)}
 .team .screen .l{white-space:pre;overflow:hidden;text-overflow:ellipsis}.team .screen .l.d{color:var(--phos-dim)}
-.team .body{padding:12px 14px;display:flex;flex-direction:column;gap:8px;flex:1}
+.team .body{padding:12px 14px;flex:1}.team .body p{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .team .body p{margin:0;font-size:14px;color:var(--muted)}
 .team .body .note-line{font-size:12.5px;margin-top:auto}
-.team .foot{display:flex;gap:8px;align-items:center;padding:10px 12px;border-top:2px solid var(--line-soft)}
-.team .foot .sp{display:none}
-.team .foot .btn{justify-content:center;white-space:nowrap}
-.team .foot .btn.primary{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.team .foot{display:flex;padding:10px 12px;border-top:2px solid var(--line-soft)}
+.team .foot .btn{flex:1;justify-content:center;white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .team.example{opacity:.9}.team.example .head::after{content:'EXAMPLE';font:8px var(--font-pixel);letter-spacing:.06em;border:1.5px solid var(--line);padding:1px 5px;background:var(--violet-hi);color:#2d2a20}
 .empty{padding:40px;text-align:center;color:var(--muted);border:2px dashed var(--line-soft)}
 /* the shop: who is reading, the shelf of what they hold, and what a card is to them */
@@ -452,16 +451,14 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
 .yours-head h2{margin:0;font-size:15px}.yours-head .sp{flex:1}
 .yours-empty{margin:0;padding:12px 14px}
 .yours-rows{list-style:none;margin:0;padding:0}
-.yours-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto auto auto;gap:10px;align-items:center;padding:10px 14px;background:var(--cream-hi);border-bottom:2px solid var(--line-soft)}
+.yours-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto auto;gap:10px;align-items:center;padding:10px 14px;background:var(--cream-hi);border-bottom:2px solid var(--line-soft)}
 .yours-row:last-child{border-bottom:none}
 .yours-row .ttl{font:700 10px var(--font-pixel);letter-spacing:.06em;text-transform:uppercase;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .yours-row .meta{white-space:nowrap}.yours-row .stand{white-space:nowrap}
 .yours-row .btn{white-space:nowrap}
 @media (max-width:760px){
-  .yours-row{grid-template-columns:auto minmax(0,1fr) auto;row-gap:8px}
-  .yours-row .meta{display:none}
-  .yours-row .btn.primary{grid-column:1/3}.yours-row .btn{justify-content:center}
-  .yours-head .btn{display:none}
+  .yours-row{grid-template-columns:auto minmax(0,1fr) auto auto}
+  .yours-row .meta{display:none}.yours-row .stand{display:none}
 }
 @media (max-width:700px){
   .who{padding:9px 12px;gap:8px}.who .meta{min-width:0;font-size:12.5px}.who .btn{margin-left:auto}
@@ -491,7 +488,8 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
 .term .out .d{color:var(--phos-dim)}.term .out .g{color:var(--phos-glow)}.term .out .h{color:var(--hp)}.term .out .r{color:#ff8a80}
 .term .gate{position:absolute;inset:0;display:grid;place-items:center;background:rgba(20,17,10,.86);padding:20px;text-align:center}
 .term .gate .card{max-width:380px}
-.term .gate .card p{font-size:14px;color:var(--muted)}
+.term .gate .card p{font-size:14px;color:var(--muted)}.term .gate .acts{justify-content:center;align-items:center;gap:12px}.term .gate .acts .ask{font-size:13px;color:var(--muted)}.term .gate #seat-head:empty,.term .gate #gate-p:empty,.term .gate #gate-actions:not(:has(:not([hidden]))){display:none}.term .gate #seat-head{font-size:14px;color:var(--muted)}
+.tp-head.one{display:block}.tp-foot{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:12px 0 0}.tp-foot .mono{font:13px var(--font-mono);color:var(--muted);min-width:0;overflow:hidden;text-overflow:ellipsis}.tp-foot a{color:var(--ink)}
 .term .in{display:flex;gap:8px;padding:8px;border-top:2px solid var(--line);background:var(--cream-hi);position:relative;z-index:1}
 .term .in input{flex:1;font:14px var(--font-mono);padding:8px 10px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink);outline:none}
 .term .in input:focus{background:var(--amber-soft)}
