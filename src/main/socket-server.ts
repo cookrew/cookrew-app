@@ -27,6 +27,7 @@ import { AgentRegistry, AgentRegistryEntry } from './agent-registry'
 import { planRecruitTarget } from '../shared/workspace-dirs'
 import { PtyManager, multiplexer, sessionNameFor, type PtySession } from './pty'
 import { askRaw, askTerminal, decodeRawEscapes } from './ask'
+import { browserVerbKind, noteVerbKind } from '../shared/cable-signal'
 import {
   DeliveryError,
   deliverAndConfirm,
@@ -61,7 +62,7 @@ export interface SocketServerDeps {
    * is back. The caller pane is the sender, which is why this lives here and
    * not in the ask itself — the ask does not know who is asking.
    */
-  signal?: (moment: { from: string; to: string; kind: 'ask' | 'answer' }) => void
+  signal?: (moment: { from: string; to: string; kind: 'ask' | 'answer' | 'write' | 'read' }) => void
   /** Durable global agent directory (~/.cookrew/agents.json). */
   agents: AgentRegistry
   /** Fork an agent from one of its turns (same path as IPC forking). */
@@ -569,7 +570,16 @@ export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): P
   }
   // Same repair for every other subcommand. These do not anchor a node, but the
   // id still names who is driving, and one identity per command beats two.
-  return deps.browserCommand(request.args, me.id)
+  const result = await deps.browserCommand(request.args, me.id)
+  // The cable lights once the verb has run: driving the page is agent →
+  // browser, reading it is browser → agent (shared/cable-signal browserVerbKind).
+  // Resolved by name on the active canvas — the same browser the engine drove.
+  const kind = browserVerbKind(sub ?? '')
+  const browser = name ? deps.store.nodeByName(name, 'browser') : undefined
+  if (kind && browser) {
+    deps.signal?.(kind === 'write' ? { from: me.id, to: browser.id, kind } : { from: browser.id, to: me.id, kind })
+  }
+  return result
 }
 
 function workspaceName(deps: SocketServerDeps, id: string): string {
@@ -865,6 +875,8 @@ export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
     }
     case 'read': {
       const note = findConnected(request, deps, rest[0], 'note') as NoteNodeData
+      // Reading takes the note's words out: the pulse runs note → agent.
+      deps.signal?.({ from: note.id, to: me.id, kind: noteVerbKind('read') ?? 'read' })
       const lines = note.content.split('\n')
       const offset = rest[1] ? Math.max(1, parseInt(rest[1], 10)) : 1
       const limit = rest[2] ? parseInt(rest[2], 10) : lines.length
@@ -876,6 +888,8 @@ export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
       const note = findConnected(request, deps, rest[0], 'note') as NoteNodeData
       if (note.locked) throw new Error(`Note '${note.name}' is locked`)
       deps.store.writeNote(note.id, rest[1] ?? '')
+      // Writing puts words in: agent → note.
+      deps.signal?.({ from: me.id, to: note.id, kind: noteVerbKind('write') ?? 'write' })
       return 'OK'
     }
     case 'edit': {
@@ -889,6 +903,7 @@ export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
         throw new Error(`Text not found in note '${note.name}'`)
       }
       deps.store.writeNote(note.id, note.content.replace(oldText, newText))
+      deps.signal?.({ from: me.id, to: note.id, kind: noteVerbKind('edit') ?? 'write' })
       return 'OK'
     }
     case 'delete': {

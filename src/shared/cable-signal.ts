@@ -15,7 +15,18 @@
  * lights the harness), so the wire shape cannot drift.
  */
 
-export type CableSignalKind = 'ask' | 'answer'
+/**
+ * Four kinds, and the DIRECTION is always `from` → `to`:
+ *  - `ask`     an agent's question, agent → agent
+ *  - `answer`  the reply, back the other way
+ *  - `write`   an agent putting something INTO a card it is wired to — a note
+ *              written or edited, a browser driven (navigate, click, type …)
+ *  - `read`    an agent taking something OUT of a card — a note read, a page's
+ *              text or snapshot — so the pulse runs card → agent
+ * A verb on a card the agent has no cable to lights nothing: the renderer only
+ * draws on a link that exists, and a signal rides a cable or it is not drawn.
+ */
+export type CableSignalKind = 'ask' | 'answer' | 'write' | 'read'
 
 export interface CableSignal {
   from: string
@@ -25,7 +36,50 @@ export interface CableSignal {
   at: number
 }
 
-const KINDS: ReadonlySet<string> = new Set<CableSignalKind>(['ask', 'answer'])
+const KINDS: ReadonlySet<string> = new Set<CableSignalKind>(['ask', 'answer', 'write', 'read'])
+
+/**
+ * Which way a `cookrew note …` verb moves. `create` makes the card AND the
+ * cable in one step and announces itself; `delete` removes the cable's end.
+ * Neither is traffic on a cable, so neither lights one.
+ */
+export function noteVerbKind(verb: string): Extract<CableSignalKind, 'write' | 'read'> | null {
+  switch (verb) {
+    case 'read':
+      return 'read'
+    case 'write':
+    case 'edit':
+      return 'write'
+    default:
+      return null
+  }
+}
+
+/**
+ * Which way a `cookrew browser …` verb moves: driving the page is input
+ * (agent → browser), taking the page's words or picture is output
+ * (browser → agent). `create` is a new card with a new cable; unknown verbs
+ * and `create` light nothing.
+ */
+export function browserVerbKind(verb: string): Extract<CableSignalKind, 'write' | 'read'> | null {
+  switch (verb) {
+    case 'navigate':
+    case 'click':
+    case 'fill':
+    case 'type':
+    case 'key':
+    case 'scroll':
+    case 'evaluate':
+      return 'write'
+    case 'text':
+    case 'html':
+    case 'snapshot':
+    case 'info':
+      return 'read'
+    default:
+      return null
+  }
+}
 
 /** Is this frame off the wire a signal? A stream is untrusted input like any other. */
 export function isCableSignal(value: unknown): value is CableSignal {

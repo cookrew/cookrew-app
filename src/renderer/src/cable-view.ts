@@ -58,6 +58,12 @@ export interface Tab {
   /** The fold: `+N` when collapsed, `less` when expanded. Clicking it toggles the card. */
   more: boolean
   hot: boolean
+  /**
+   * Carrying traffic right now (cable-signal.ts). On a naming tab the partner
+   * is lit; on the fold, a lit partner is still hidden behind it — which only
+   * happens when more partners are lit than fit, since lit ones are promoted.
+   */
+  lit: boolean
 }
 
 export const TAB_W = 132
@@ -166,6 +172,11 @@ export function harnessView(
  * A card with more partners than fit shows `limit - 1` of them and a fold
  * saying how many are hidden; `expanded` holds the cards whose fold has been
  * clicked, and those show every partner and a `less` to put them back.
+ *
+ * LIT PARTNERS COME FIRST. `lit` holds `tabPairKey(card, partner)` for every
+ * cable carrying a signal right now. A hub with a hundred cables keeps its
+ * busy partner behind `+17` otherwise, and a lamp nobody can see is no lamp;
+ * promoting it for the signal's lifetime is a tab moving, not a route.
  */
 export function tabLayout(
   tabs: readonly ViewTab[],
@@ -173,15 +184,17 @@ export function tabLayout(
   names: ReadonlyMap<string, string>,
   order: ReadonlyMap<string, number>,
   expanded: ReadonlySet<string>,
-  limit: number = TABS_PER_CARD
+  limit: number = TABS_PER_CARD,
+  lit: ReadonlySet<string> = EMPTY
 ): Tab[] {
-  const perCard = new Map<string, { partner: string; right: boolean; hot: boolean; at: number }[]>()
+  const perCard = new Map<string, { partner: string; right: boolean; hot: boolean; lit: boolean; at: number }[]>()
   tabs.forEach((t, arrival) => {
     const me = rects.get(t.card)
     const other = rects.get(t.partner)
     if (!me || !other) return
     const right = other.x + other.width / 2 > me.x + me.width / 2
-    const entry = { partner: t.partner, right, hot: t.hot, at: (order.get(t.partner) ?? -1) * 1e6 - arrival }
+    const isLit = lit.has(tabPairKey(t.card, t.partner))
+    const entry = { partner: t.partner, right, hot: t.hot, lit: isLit, at: (isLit ? 1e12 : 0) + (order.get(t.partner) ?? -1) * 1e6 - arrival }
     const list = perCard.get(t.card)
     if (list) list.push(entry)
     else perCard.set(t.card, [entry])
@@ -195,10 +208,11 @@ export function tabLayout(
     const open = expanded.has(card)
     // One hidden partner would occupy the fold's own slot, so never fold one.
     const shown = open || partners.length <= limit ? partners : partners.slice(0, limit - 1)
+    const hidden = partners.slice(shown.length)
     const tabX = (right: boolean): number => (right ? r.x + r.width - TAB_OVERHANG : r.x - TAB_OVERHANG)
     const slotY = (i: number): number => r.y + 8 + i * (TAB_H + TAB_GAP)
     shown.forEach((p, i) => {
-      out.push({ card, partner: p.partner, x: tabX(p.right), y: slotY(i), label: names.get(p.partner) ?? '', more: false, hot: p.hot })
+      out.push({ card, partner: p.partner, x: tabX(p.right), y: slotY(i), label: names.get(p.partner) ?? '', more: false, hot: p.hot, lit: p.lit })
     })
     if (shown.length < partners.length || open) {
       const right = shown.filter((p) => p.right).length * 2 >= shown.length
@@ -209,9 +223,15 @@ export function tabLayout(
         y: slotY(shown.length),
         label: open ? 'less' : `+${partners.length - shown.length}`,
         more: true,
-        hot: false
+        hot: false,
+        lit: hidden.some((p) => p.lit)
       })
     }
   }
   return out
 }
+
+const EMPTY: ReadonlySet<string> = new Set()
+
+/** The key `tabLayout` reads lit cables by: one card and the partner its tab names. */
+export const tabPairKey = (card: string, partner: string): string => `${card}\u0000${partner}`

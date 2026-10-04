@@ -1,20 +1,23 @@
-import { memo, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { ViewportPortal, useStore, useStoreApi, type Edge, type Node } from '@xyflow/react'
 import { cookrew } from './api'
 import { geometryKey, routeCables, type CableLink, type CableRect } from './cable-route'
 import {
-  SIGNAL_TTL_MS,
+  PULSE_SCREEN_PX,
   connectSignalFeed,
   linkBetween,
   litLinks,
-  pathD,
+  pulseDuration,
+  pulseKeyframes,
   signalFeed,
   signalPath,
   tabSignal,
   trunkSignal,
-  type LiveSignal
+  type LiveSignal,
+  type Point
 } from './cable-signal'
-import { TAB_H, TAB_W, harnessView, stageOf, tabLayout, viewportKey } from './cable-view'
+import type { CableSignalKind } from '../../shared/cable-signal'
+import { TAB_H, TAB_W, harnessView, stageOf, tabLayout, tabPairKey, viewportKey } from './cable-view'
 
 /**
  * THE HARNESS LAYER — every cable on the canvas, drawn as one wiring diagram.
@@ -46,22 +49,23 @@ import { TAB_H, TAB_W, harnessView, stageOf, tabLayout, viewportKey } from './ca
  * card the pointer crossed.
  *
  * SIGNALS ride the same two clocks and add no third. When one agent asks
- * another, or answers, main mints one frame (shared/cable-signal.ts) and the
- * feed (cable-signal.ts) holds it for a few seconds. This layer subscribes
- * to the feed: a signal's arrival and expiry each cost one render of this
- * component — a class on the trunks that carry the cable, a tab lit as a
- * lamp when the far end is off the stage, and one <div> per signal whose
- * movement is a CSS `offset-distance` keyframe, which Chromium runs on the
- * compositor. Nothing is in the tree when nothing is in flight, and a pan
- * reads the feed's unchanged snapshot, so the render-count gate holds.
+ * another, answers, writes a note or drives a browser, main mints one frame
+ * (shared/cable-signal.ts) and the feed (cable-signal.ts) holds it for a few
+ * seconds. This layer subscribes to the feed: a signal's arrival and expiry
+ * each cost one render of this component — a class and a glow on the trunks
+ * that carry the cable, a tab lit as a lamp (and promoted out of the fold)
+ * when the far end is off the stage, and one <div> per signal moved by a
+ * Web Animations `transform` animation the compositor runs. Nothing is in
+ * the tree when nothing is in flight, and a pan reads the feed's unchanged
+ * snapshot, so the render-count gate holds.
  */
 
 /** A drag re-keys geometry every frame; route once it has been still this long. */
 const SETTLE_MS = 120
 const INK = '#2D2A20'
 const HOT = '#D97706'
-/** The pulse fades out over the last part of its lifetime; the travel takes the rest. */
-const SIGNAL_FADE_MS = 200
+/** Screen-pixel width of the glow under a lit trunk, over the trunk's own width. */
+const GLOW_EXTRA = 7
 
 function rectOf(node: Node): CableRect | null {
   const style = node.style as { width?: unknown; height?: unknown } | undefined
@@ -156,9 +160,9 @@ function CableHarnessComponent({ nodes, edges }: Props): React.JSX.Element | nul
   // ---- clock two: viewport → what is shown, a few times per screen
   const store = useStoreApi()
   const vkey = useStore((s) => viewportKey(s.transform, s.width, s.height))
-  const stage = useMemo(() => {
+  const { stage, zoom } = useMemo(() => {
     const s = store.getState()
-    return stageOf(s.transform, s.width, s.height)
+    return { stage: stageOf(s.transform, s.width, s.height), zoom: s.transform[2] > 0 ? s.transform[2] : 1 }
   }, [vkey, store]) // eslint-disable-line react-hooks/exhaustive-deps
   const hovered = useHoveredCard()
   const view = useMemo(() => harnessView(harness, rects, links, stage, hovered), [harness, rects, links, stage, hovered])
@@ -168,17 +172,28 @@ function CableHarnessComponent({ nodes, edges }: Props): React.JSX.Element | nul
   const signals = useSyncExternalStore(signalFeed.subscribe, signalFeed.snapshot, signalFeed.snapshot)
   const lit = useMemo(() => litLinks(signals, links), [signals, links])
   const pulses = useMemo(() => signalPulses(signals, links, harness, view.drawn), [signals, links, harness, view.drawn])
+  // Lit cables by the tab that would name them, both ways round: the layout
+  // promotes these out of a hub's fold for the signal's lifetime.
+  const litPairs = useMemo(() => {
+    const out = new Set<string>()
+    for (const l of links) {
+      if (!lit.has(l.id)) continue
+      out.add(tabPairKey(l.a, l.b))
+      out.add(tabPairKey(l.b, l.a))
+    }
+    return out
+  }, [lit, links])
   // Cards whose fold has been clicked open. Kept here rather than in App: it
   // is this layer's own affordance and nothing else reads it.
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set())
   const chips = useMemo(
-    () => tabLayout(view.tabs, rectById, names, order, expanded),
-    [view.tabs, rectById, names, order, expanded]
+    () => tabLayout(view.tabs, rectById, names, order, expanded, undefined, litPairs),
+    [view.tabs, rectById, names, order, expanded, litPairs]
   )
 
   if (view.trunks.length === 0 && chips.length === 0) return null
   const dimmed = hovered !== null
-  const signalClass = (kind: 'ask' | 'answer' | null): string => (kind ? ` sig sig-${kind}` : '')
+  const signalClass = (kind: CableSignalKind | null): string => (kind ? ` sig sig-${kind}` : '')
   return (
     <ViewportPortal>
       <svg
@@ -207,39 +222,50 @@ function CableHarnessComponent({ nodes, edges }: Props): React.JSX.Element | nul
           })}
           {view.trunks.map((t) => {
             const kind = trunkSignal(t, lit)
-            return (
+            const key = `${t.x1},${t.y1},${t.x2},${t.y2}`
+            const line = (
               <line
-                key={`${t.x1},${t.y1},${t.x2},${t.y2}`}
+                key={key}
                 className={`cr-harness-trunk${signalClass(kind)}`}
                 x1={t.x1}
                 y1={t.y1}
                 x2={t.x2}
                 y2={t.y2}
                 stroke={t.hot ? HOT : INK}
-                strokeWidth={trunkWidth(t.count) + (t.hot || kind ? 1.2 : 0)}
+                strokeWidth={trunkWidth(t.count) + (t.hot ? 1.2 : 0) + (kind ? 1.6 : 0)}
                 strokeOpacity={t.hot ? 0.95 : dimmed ? 0.18 : t.count > 1 ? 0.62 : 0.4}
                 vectorEffect="non-scaling-stroke"
               />
             )
+            if (!kind) return line
+            // The glow: a wide, faint second stroke under a lit trunk for the
+            // signal's lifetime. A second line, not a filter — painted once
+            // with the trunk, never per frame.
+            return [
+              <line
+                key={`${key}:glow`}
+                className={`cr-harness-glow${signalClass(kind)}`}
+                x1={t.x1}
+                y1={t.y1}
+                x2={t.x2}
+                y2={t.y2}
+                strokeWidth={trunkWidth(t.count) + GLOW_EXTRA}
+                vectorEffect="non-scaling-stroke"
+              />,
+              line
+            ]
           })}
         </g>
       </svg>
       {/*
         The pulses. One element per signal in flight, in flow coordinates
-        like the tabs, moved by a keyframe on `offset-distance` — the
-        compositor's work, not React's and not the main thread's. Keyed on
-        the stamp, so a refreshed signal restarts its travel.
+        like the tabs, sized in SCREEN pixels, moved by a Web Animations
+        transform animation the compositor runs — not React's work and not
+        the main thread's. Keyed on the stamp, so a refreshed signal restarts
+        its travel.
       */}
       {pulses.map((p) => (
-        <div
-          key={`${p.signal.from}:${p.signal.to}:${p.signal.kind}:${p.signal.at}`}
-          className={`cr-sig-dot ${p.signal.kind}`}
-          style={{
-            offsetPath: `path("${p.d}")`,
-            ['--cr-sig-ms' as string]: `${Math.max(400, SIGNAL_TTL_MS[p.signal.kind] - SIGNAL_FADE_MS)}ms`
-          }}
-          aria-hidden="true"
-        />
+        <PulseDot key={`${p.signal.from}:${p.signal.to}:${p.signal.kind}:${p.signal.at}`} signal={p.signal} points={p.points} zoom={zoom} />
       ))}
       {/*
         Tabs are real elements, not SVG. A 1 x 1 svg with overflow:visible
@@ -252,10 +278,13 @@ function CableHarnessComponent({ nodes, edges }: Props): React.JSX.Element | nul
         // The tab is the lamp: the cable it names is not drawn at this
         // viewport, so the traffic on it has nowhere else to show.
         const kind = c.partner === null ? null : tabSignal(lit, links, c.card, c.partner)
+        // The fold is the lamp only when a lit partner is still behind it,
+        // which the layout's promotion makes rare: more lit than fit.
+        const foldLit = c.more && c.lit
         return (
         <div
           key={`${c.card}:${c.partner ?? 'fold'}:${i}`}
-          className={`cr-harness-tab${c.more ? ' fold' : ''}${c.hot ? ' hot' : ''}${signalClass(kind)}`}
+          className={`cr-harness-tab${c.more ? ' fold' : ''}${c.hot ? ' hot' : ''}${signalClass(kind)}${foldLit ? ' sig' : ''}`}
           style={{
             transform: `translate(${c.x}px, ${c.y}px)`,
             width: TAB_W,
@@ -287,7 +316,45 @@ function CableHarnessComponent({ nodes, edges }: Props): React.JSX.Element | nul
 
 interface Pulse {
   signal: LiveSignal
-  d: string
+  points: Point[]
+}
+
+/**
+ * One pulse. Mounted once per signal (keyed on the stamp), it hands the
+ * compositor a transform animation built from the polyline and does nothing
+ * else for the rest of its life. Reduced motion: the stylesheet hides it and
+ * no animation is started.
+ */
+function PulseDot({ signal, points, zoom }: { signal: LiveSignal; points: Point[]; zoom: number }): React.JSX.Element {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el || typeof el.animate !== 'function') return
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+    const duration = pulseDuration(points, zoom, signal.kind)
+    const animation = el.animate(pulseKeyframes(points, duration) as unknown as Keyframe[], { duration, easing: 'linear', fill: 'forwards' })
+    return () => animation.cancel()
+    // Once per mount: the key changes when the signal does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  // The dot is a screen-sized thing on a zoomed layer: its flow size is the
+  // screen size over the zoom. Set at mount from the zoom then; a pan during
+  // the trip keeps the dot its size until the next signal.
+  const scale = 1 / zoom
+  return (
+    <div
+      ref={ref}
+      className={`cr-sig-dot ${signal.kind}`}
+      style={{
+        width: PULSE_SCREEN_PX * scale,
+        height: PULSE_SCREEN_PX * scale,
+        margin: `${(-PULSE_SCREEN_PX / 2) * scale}px 0 0 ${(-PULSE_SCREEN_PX / 2) * scale}px`,
+        ['--cr-sig-s' as string]: scale.toFixed(3),
+        opacity: 0
+      }}
+      aria-hidden="true"
+    />
+  )
 }
 
 /**
@@ -307,7 +374,7 @@ function signalPulses(
     const link = linkBetween(links, signal.from, signal.to)
     if (!link || !drawn.has(link.id)) continue
     const points = signalPath(harness, link.id, signal.from)
-    if (points) out.push({ signal, d: pathD(points) })
+    if (points) out.push({ signal, points })
   }
   return out
 }

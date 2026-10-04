@@ -14,11 +14,20 @@ import { isCableSignal, type CableSignal, type CableSignalKind } from '../../sha
  *
  * THE COST MODEL IS THE DESIGN. Everything here runs on a signal's arrival
  * and on its expiry — a handful of times per exchange — and never per frame.
- * Moving the pulse is CSS (`offset-distance` in a keyframe, which Chromium
- * runs on the compositor); lighting a trunk is a class on an element already
- * on screen; the harness's route and view memos keep their deps and do not
- * re-run. A pan subscribes to nothing here, so the render-count gate
- * (tests/perf/render-count.perf.ts) sees exactly what it saw before.
+ * Moving the pulse is a Web Animations API `transform` animation built from
+ * the polyline (`pulseKeyframes`): transform IS a compositor property, where
+ * `offset-distance` was not — measured, one offset-path dot cost a style
+ * recalc, a PrePaint and a commit on the main thread every frame. Lighting a
+ * trunk is a class on an element already on screen; the harness's route and
+ * view memos keep their deps and do not re-run. A pan subscribes to nothing
+ * here, so the render-count gate (tests/perf/render-count.perf.ts) sees
+ * exactly what it saw before.
+ *
+ * THE PULSE IS A SCREEN-SIZED THING. It lives in flow coordinates so it rides
+ * the viewport, but its diameter is PULSE_SCREEN_PX divided by the zoom, and
+ * its speed is PULSE_SPEED_PX_S in screen pixels — so a short cable gets a
+ * short trip and a long one a long trip, within bounds, and the dot is the
+ * same dot at fit-all as at working distance.
  *
  * DIRECTION IS DERIVED, NOT STORED. The router merges grid edges into trunks
  * whose link set is constant along their length, so a link enters a trunk at
@@ -28,8 +37,19 @@ import { isCableSignal, type CableSignal, type CableSignalKind } from '../../sha
  * pulse is not shown, and nothing is invented.
  */
 
-/** How long each kind stays on the cable. The answer is the one people wait for. */
-export const SIGNAL_TTL_MS: Readonly<Record<CableSignalKind, number>> = { ask: 2600, answer: 3200 }
+/**
+ * How long each kind keeps its trunks lit. The answer is the one people wait
+ * for; a write or a read is a glance.
+ */
+export const SIGNAL_TTL_MS: Readonly<Record<CableSignalKind, number>> = { ask: 2600, answer: 3200, write: 2000, read: 2000 }
+/** The dot's diameter on screen, whatever the zoom. */
+export const PULSE_SCREEN_PX = 12
+/** How fast the dot travels, in screen pixels per second — a speed, not a duration. */
+export const PULSE_SPEED_PX_S = 600
+/** The trip is never shorter than a glance nor longer than the signal's own lifetime. */
+export const PULSE_MIN_MS = 500
+/** Fade at the end of the trip, inside the trip. */
+export const PULSE_FADE_MS = 220
 /**
  * A fleet of thirty can ask at once. Four pulses read as activity; forty read
  * as noise and cost forty composited layers. The oldest is dropped first.
@@ -187,12 +207,93 @@ export function signalPath(
   return null
 }
 
-/** The SVG path string for `offset-path: path(...)`. */
+/** The SVG path string for `offset-path: path(...)`. Kept for tests and the design page; the dot no longer uses it. */
 export function pathD(points: readonly Point[]): string {
   return points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${round(p.x)} ${round(p.y)}`).join(' ')
 }
 
 const round = (n: number): number => Math.round(n * 100) / 100
+
+/** Length of the polyline in flow px. */
+export function pathLength(points: readonly Point[]): number {
+  let length = 0
+  for (let i = 1; i < points.length; i += 1) length += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y)
+  return length
+}
+
+/**
+ * How long the trip takes: the path's SCREEN length at this zoom over the
+ * pulse speed, never under PULSE_MIN_MS and never past the signal's lifetime
+ * less its fade — so the lit trunks always outlive the dot by a little.
+ */
+export function pulseDuration(points: readonly Point[], zoom: number, kind: CableSignalKind): number {
+  const screenPx = pathLength(points) * Math.max(zoom, 0.01)
+  const travel = (screenPx / PULSE_SPEED_PX_S) * 1000
+  const max = Math.max(PULSE_MIN_MS, SIGNAL_TTL_MS[kind] - PULSE_FADE_MS)
+  return Math.round(Math.min(max, Math.max(PULSE_MIN_MS, travel)))
+}
+
+/** One Web Animations keyframe. `offset` is the fraction of the trip at which the dot is at this vertex. */
+export interface PulseKeyframe {
+  transform: string
+  offset: number
+  opacity: number
+}
+
+/**
+ * The trip as transform keyframes: one per vertex, placed in time by the
+ * distance along the path so the dot moves at one speed round every corner.
+ * Fades in over the first short step and out over the last PULSE_FADE_MS
+ * worth of travel. The compositor runs these; React and the main thread set
+ * them once.
+ */
+export function pulseKeyframes(points: readonly Point[], durationMs: number): PulseKeyframe[] {
+  if (points.length === 0) return []
+  const total = pathLength(points)
+  const fadeFraction = total === 0 ? 0 : Math.min(0.4, PULSE_FADE_MS / Math.max(durationMs, 1))
+  const at = (p: Point): string => `translate(${round(p.x)}px, ${round(p.y)}px)`
+  if (points.length === 1 || total === 0) {
+    return [
+      { transform: at(points[0]), offset: 0, opacity: 0 },
+      { transform: at(points[0]), offset: 0.5, opacity: 1 },
+      { transform: at(points[0]), offset: 1, opacity: 0 }
+    ]
+  }
+  const frames: PulseKeyframe[] = []
+  let walked = 0
+  for (let i = 0; i < points.length; i += 1) {
+    if (i > 0) walked += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y)
+    const offset = i === points.length - 1 ? 1 : round(walked / total)
+    const opacity = offset <= 0 ? 0 : offset >= 1 ? 0 : offset >= 1 - fadeFraction ? round(1 - (offset - (1 - fadeFraction)) / fadeFraction) : 1
+    frames.push({ transform: at(points[i]), offset, opacity })
+  }
+  // Fade in: fully lit a little way in, and fade out: start dimming where the last stretch begins.
+  const inAt = Math.min(0.08, frames[1].offset / 2)
+  const fadeStart = round(Math.max(inAt + 0.01, 1 - fadeFraction))
+  const extra: PulseKeyframe[] = [
+    { ...pointAt(points, total, inAt), offset: inAt, opacity: 1 },
+    { ...pointAt(points, total, fadeStart), offset: fadeStart, opacity: 1 }
+  ]
+  const merged = [...frames, ...extra].sort((a, b) => a.offset - b.offset)
+  // Two keyframes at one offset: keep the first, which is the vertex.
+  return merged.filter((f, i) => i === 0 || f.offset !== merged[i - 1].offset)
+}
+
+/** The point `fraction` of the way along the polyline, as a keyframe transform. */
+function pointAt(points: readonly Point[], total: number, fraction: number): { transform: string } {
+  let target = fraction * total
+  for (let i = 1; i < points.length; i += 1) {
+    const seg = Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y)
+    if (target <= seg || i === points.length - 1) {
+      const t = seg === 0 ? 0 : Math.min(1, target / seg)
+      const x = points[i - 1].x + (points[i].x - points[i - 1].x) * t
+      const y = points[i - 1].y + (points[i].y - points[i - 1].y) * t
+      return { transform: `translate(${round(x)}px, ${round(y)}px)` }
+    }
+    target -= seg
+  }
+  return { transform: `translate(${round(points[0].x)}px, ${round(points[0].y)}px)` }
+}
 
 /**
  * THE FEED — what the harness subscribes to.

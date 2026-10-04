@@ -6483,15 +6483,19 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
 }
 
 /* ---- signals on the cables (cable-signal.ts, CableHarness.tsx) ----
-   One agent asked another, or answered: the trunks that carry the cable
-   take the signal's colour, and a pulse travels sender → receiver. The
-   pulse is an HTML element on an `offset-path` in flow coordinates, moved
-   by ONE keyframe on `offset-distance`, which Chromium runs on the
-   compositor — nothing here is per-frame work for React or the main thread.
-   Nothing is in the tree when nothing is in flight. */
+   One agent asked another, answered, wrote a note or drove a browser: the
+   trunks that carry the cable take the signal's colour with a faint glow
+   under them, and a pulse travels sender → receiver. The pulse is an HTML
+   element in flow coordinates sized in SCREEN pixels (CableHarness scales it
+   by 1/zoom), moved by a Web Animations `transform` animation — the
+   compositor's property; `offset-distance` was not, and cost the main thread
+   a style recalc, a PrePaint and a commit every frame. Nothing is in the
+   tree when nothing is in flight. */
 :root {
   --sig-ask: #d97706;
   --sig-answer: #1d4ed8;
+  --sig-write: #15803d;
+  --sig-read: #7c3aed;
 }
 .cr-harness .cr-harness-trunk.sig,
 .cr-harness .cr-harness-stub.sig {
@@ -6500,45 +6504,49 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
 }
 .cr-harness .sig-ask { stroke: var(--sig-ask) }
 .cr-harness .sig-answer { stroke: var(--sig-answer) }
+.cr-harness .sig-write { stroke: var(--sig-write) }
+.cr-harness .sig-read { stroke: var(--sig-read) }
+/* The glow is a second, wide, faint stroke under the lit trunk — painted
+   with it, never per frame. */
+.cr-harness .cr-harness-glow { stroke-opacity: 0.22; stroke-linecap: round }
 
 .cr-sig-dot {
   position: absolute;
   top: 0;
   left: 0;
-  width: 14px;
-  height: 14px;
-  margin: -7px 0 0 -7px;
   border-radius: 50%;
   pointer-events: none;
-  offset-rotate: 0deg;
-  animation: cr-sig-travel var(--cr-sig-ms, 2400ms) linear forwards;
+  will-change: transform, opacity;
 }
 .cr-sig-dot.ask {
   background: var(--sig-ask);
-  box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.22), 0 0 14px 4px rgba(217, 119, 6, 0.55);
+  box-shadow: 0 0 0 calc(3px * var(--cr-sig-s, 1)) rgba(217, 119, 6, 0.22), 0 0 calc(14px * var(--cr-sig-s, 1)) calc(4px * var(--cr-sig-s, 1)) rgba(217, 119, 6, 0.55);
 }
 .cr-sig-dot.answer {
   background: var(--sig-answer);
-  box-shadow: 0 0 0 3px rgba(29, 78, 216, 0.2), 0 0 14px 4px rgba(29, 78, 216, 0.5);
+  box-shadow: 0 0 0 calc(3px * var(--cr-sig-s, 1)) rgba(29, 78, 216, 0.2), 0 0 calc(14px * var(--cr-sig-s, 1)) calc(4px * var(--cr-sig-s, 1)) rgba(29, 78, 216, 0.5);
 }
-@keyframes cr-sig-travel {
-  0% { offset-distance: 0%; opacity: 0 }
-  6% { opacity: 1 }
-  82% { offset-distance: 100%; opacity: 1 }
-  100% { offset-distance: 100%; opacity: 0 }
+.cr-sig-dot.write {
+  background: var(--sig-write);
+  box-shadow: 0 0 0 calc(3px * var(--cr-sig-s, 1)) rgba(21, 128, 61, 0.2), 0 0 calc(14px * var(--cr-sig-s, 1)) calc(4px * var(--cr-sig-s, 1)) rgba(21, 128, 61, 0.5);
+}
+.cr-sig-dot.read {
+  background: var(--sig-read);
+  box-shadow: 0 0 0 calc(3px * var(--cr-sig-s, 1)) rgba(124, 58, 237, 0.2), 0 0 calc(14px * var(--cr-sig-s, 1)) calc(4px * var(--cr-sig-s, 1)) rgba(124, 58, 237, 0.5);
 }
 
 /* The tab as the lamp: the cable it names is off the stage, so the traffic
-   on it shows here. A composited opacity pulse, nothing else moves. */
+   on it shows here. A composited opacity pulse, nothing else moves. The fold
+   lights the same way when a lit partner is still behind it. */
 .cr-harness-tab.sig {
   border-color: var(--sig-ask);
   border-width: 2.5px;
   background: var(--amber-soft);
   animation: cr-sig-lamp 700ms ease-in-out infinite alternate;
 }
-.cr-harness-tab.sig-answer {
-  border-color: var(--sig-answer);
-}
+.cr-harness-tab.sig-answer { border-color: var(--sig-answer) }
+.cr-harness-tab.sig-write { border-color: var(--sig-write) }
+.cr-harness-tab.sig-read { border-color: var(--sig-read) }
 @keyframes cr-sig-lamp {
   from { opacity: 1 }
   to { opacity: 0.45 }
@@ -6546,7 +6554,7 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
 
 @media (prefers-reduced-motion: reduce) {
   /* The fact stays on screen for the signal's lifetime; nothing travels. */
-  .cr-sig-dot { animation: none; display: none }
+  .cr-sig-dot { display: none }
   .cr-harness-tab.sig { animation: none }
 }
 
