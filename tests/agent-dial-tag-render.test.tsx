@@ -122,10 +122,14 @@ describe('every card view carries the tag', () => {
     expect(rest.slice(agentReturn), 'agent card lost its tag').toContain('<DialTag')
   })
 
-  it('draws it in the roster row and the zoomed header', () => {
+  it('draws it in the roster row; the zoomed header leaves it to the tune rail', () => {
     const read = (file: string): string =>
       readFileSync(path.join(__dirname, '..', 'src/renderer/src', file), 'utf8')
     expect(read('AgentRow.tsx'), 'roster row lost its tag').toContain('<DialTag')
-    expect(read('TerminalOverlay.tsx'), 'zoomed header lost its tag').toContain('<DialTag')
+    // Owner, 2026-10-04: the zoomed card showed "fable high" twice — the chip in the title bar
+    // and the MDL / EFF rail beside the transcript. The rail stays; the chip goes.
+    const overlay = read('TerminalOverlay.tsx')
+    expect(overlay, 'the zoomed header grew a second tag').not.toContain('<DialTag')
+    expect(overlay, 'the zoomed card lost its tune rail').toContain('<TuneRail')
   })
 })
