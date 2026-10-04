@@ -3,6 +3,11 @@ import App from '../../../../src/renderer/src/App'
 import { cookrew } from '../../../../src/renderer/src/api'
 import '../../../../src/renderer/src/styles.css'
 import type { CanvasNode } from '../../../../src/shared/model'
+// The dump is gitignored (it is a copy of somebody's live board), so a
+// checkout without it must still typecheck: CI has no board.json and does
+// not build this fixture. The preview script regenerates it from
+// GET /api/workspace before it builds.
+// @ts-ignore -- resolved locally, absent in CI by design
 import board from './board.json'
 
 /**
