@@ -74,14 +74,6 @@
   min-height: 16px;
   margin: 2px 0;
 }
-.gk-pin {
-  font-family: var(--font-pixel);
-  font-size: 7px;
-  color: var(--violet);
-  border: 1.5px solid var(--violet);
-  padding: 1px 3px;
-  background: var(--cream-hi);
-}
 
 .gk-main {
   flex: 1;
@@ -222,28 +214,6 @@
   margin: 0;
 }
 
-/* The receipt — the violet-edged thing you leave with. */
-.gk-rcpt {
-  margin: 10px 12px;
-  border: 1.5px solid var(--violet);
-  background: var(--cream-hi);
-  padding: 9px 10px;
-}
-.gk-rcpt .r1 {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--ink);
-}
-.gk-rcpt .r2 {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  color: var(--ink-soft);
-  margin-top: 3px;
-}
 
 /* Two-voice fault strips: an accusation names the payment; an apology names us. */
 .gk-err {

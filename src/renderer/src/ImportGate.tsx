@@ -355,7 +355,6 @@ export function ImportGate({
     <GateSheet
       scene={{ door: facts.door, phase: gatePhase, pricing }}
       title={face.name}
-      version={`V${face.version}`}
       agentCount={face.agents}
       bannerLine={bannerLine}
       wallets={wallets}
