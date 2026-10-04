@@ -233,18 +233,23 @@ function dock(input: HomeInput): string {
 }
 
 /**
- * THE PROMO — ten seconds, muted, looping, in the hero where the still frame was.
+ * THE PROMO — fifteen seconds, muted, looping, in the hero where the still frame was.
  *
- * It is the product, not a render: the shipped App on a geometry dump of the Cookrew Dev board,
- * driven with real input in a headless Chrome (docs/shoot-fixture, the shoot script in the job
- * dir) — the board zooms to the crew, a card is dragged and the harness re-routes, a card opens.
- * The file lives with the frames on GitHub; the registry bundle has no room for a megabyte. No
- * script: <video autoplay muted loop playsinline> needs none, and a reader whose browser refuses
- * autoplay sees the poster, which is the still frame this replaced.
+ * It is the product, not a render: the shipped App driven with real input in a headless Chrome
+ * (docs/shoot-fixture, the shoot script in scratchpad/shoot) across four beats — a fleet mid-turn,
+ * an agent that stops to ask and is answered ON the card, a card opened on its transcript and
+ * checkpoint rail, and the harness with one card's cables lit. The bookends are the site's own
+ * lockup, rendered from site-brand.ts rather than copied from it.
+ *
+ * The crew, its transcripts and the pages in the browser cards are WRITTEN — English, every word
+ * of them — not replayed from the owner's sessions as the first cut was: the site is in English
+ * and half those sessions are not. The file lives with the frames on GitHub; the registry bundle
+ * has no room for a megabyte. No script: <video autoplay muted loop playsinline> needs none, and a
+ * reader whose browser refuses autoplay sees the poster, which is the fleet beat.
  */
 function promo(): string {
   const poster = `${SITE_FRAMES}promo-poster.jpg`
-  return `<figure class="shot promo"><video autoplay muted loop playsinline preload="metadata" poster="${esc(poster)}" width="1400" height="874" aria-label="Ten seconds of Cookrew: agent cards on the canvas, one opened on its transcript and checkpoint rail, a note card, a browser card"><source src="${SITE_FRAMES}promo.mp4" type="video/mp4"></video><figcaption><span class="rec">● REC</span>Ten seconds of the real app on the Cookrew Dev board: agent cards with their last turn, wired to notes and browsers; Velvet opens on its transcript and 138 checkpoints, the rail fans out; a spec note opens; a research page opens in a browser card. Every record is the agents' own. <a href="/features/ai-agents-on-one-canvas">The canvas, frame by frame →</a></figcaption></figure>`
+  return `<figure class="shot promo"><video autoplay muted loop playsinline preload="metadata" poster="${esc(poster)}" width="1400" height="874" aria-label="Fifteen seconds of Cookrew: eight agent cards on one canvas with six of them working, one stopping to ask a question its owner answers on the card, a card opened on its transcript and checkpoint rail, and the cable harness with one card's cables lit"><source src="${SITE_FRAMES}promo.mp4" type="video/mp4"></video><figcaption><span class="rec">● REC</span>Fifteen seconds of the real app: eight agent cards on one canvas, six of them mid-turn, each showing what it is doing right now; Velvet stops to ask which way to keep the rail and the answer is typed on the card, so it carries on; Fresco opens on its transcript and 132 checkpoints, and the rail fans out into the turns it marks; then the harness — hover one card and its cables light, and a dispatch from the orch lands on Vigil. <a href="/features/ai-agents-on-one-canvas">The canvas, frame by frame →</a></figcaption></figure>`
 }
 
 /** GET STARTED: the two steps, the crew builder, and the two questions people ask first. */
