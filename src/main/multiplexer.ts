@@ -384,3 +384,55 @@ export interface CommandRunner {
   runQuiet: (file: string, args: string[]) => void
   probe: (file: string, args: string[]) => boolean
 }
+
+/**
+ * THE STALL HAS A NAME.
+ *
+ * Every call through a CommandRunner forks a child and waits for it on the
+ * main thread. On this machine at its usual load (60–90 on 10 cores) one such
+ * fork can take seconds, and /api/health showed exactly that — loop maxima of
+ * 1.7 s, 2.3 s and 4.3 s inside otherwise quiet minutes — without saying
+ * which command. The observer below is told the LABEL of each call and how
+ * long it held the thread, so the health page can.
+ *
+ * The label is the binary and the first two argument WORDS and nothing else:
+ * `shell:herdr pane list`, `shell:tmux list-sessions`. A pane id, a path or
+ * a session name never enters it — the label lands verbatim as a key in an
+ * HTTP body, and the loop-health names are a closed set for that reason.
+ */
+export type ShellObserver = (label: `shell:${string}`, ms: number) => void
+
+let shellObserver: ShellObserver | null = null
+
+/** Install the one observer (loop-health's); null removes it. */
+export function setShellObserver(observer: ShellObserver | null): void {
+  shellObserver = observer
+}
+
+const WORD = /^[a-z][a-z0-9-]*$/
+
+/** `shell:<file> <verb> <noun>` — words only; anything else is left out. */
+export function shellLabel(file: string, args: readonly string[]): `shell:${string}` {
+  const bin = file.split('/').pop() ?? file
+  const words = args.slice(0, 2).filter((a) => WORD.test(a))
+  return `shell:${[bin, ...words].join(' ')}`
+}
+
+/** A runner whose every call is reported to the shell observer, label and duration. */
+export function observedRunner(runner: CommandRunner): CommandRunner {
+  const timed = <T>(file: string, args: string[], run: () => T): T => {
+    const observer = shellObserver
+    if (observer === null) return run()
+    const started = performance.now()
+    try {
+      return run()
+    } finally {
+      observer(shellLabel(file, args), performance.now() - started)
+    }
+  }
+  return {
+    run: (file, args) => timed(file, args, () => runner.run(file, args)),
+    runQuiet: (file, args) => timed(file, args, () => runner.runQuiet(file, args)),
+    probe: (file, args) => timed(file, args, () => runner.probe(file, args))
+  }
+}

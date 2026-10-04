@@ -95,9 +95,11 @@ export interface LoopHealthDeps {
 /**
  * The periodic loops that report. A closed set on purpose: the name lands
  * verbatim as a key in an HTTP body, so it must never be a workspace or
- * terminal id.
+ * terminal id. `shell:` names are the synchronous child processes the
+ * multiplexers fork (multiplexer.ts shellLabel) — the binary and two command
+ * words, never an id or a path.
  */
-export type LoopName = 'boardProbe' | 'sessionDrain'
+export type LoopName = 'boardProbe' | 'sessionDrain' | `shell:${string}`
 
 /** A read is memoised this long: the route must not perturb what it measures. */
 export const SNAPSHOT_MEMO_MS = 1000

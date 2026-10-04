@@ -5,6 +5,7 @@
 // the whole change. Where a comment explains WHY a flag is there, it came
 // across with the code, because that reasoning is the expensive part.
 
+import { observedRunner } from './multiplexer'
 import { execFileSync, spawnSync } from 'node:child_process'
 import path from 'node:path'
 import type {
@@ -97,7 +98,7 @@ export class TmuxMultiplexer implements Multiplexer {
 
   constructor(options: TmuxOptions) {
     this.configFile = options.configFile
-    this.runner = options.runner ?? execRunner
+    this.runner = observedRunner(options.runner ?? execRunner)
   }
 
   /** Probed once — the answer cannot change while the app runs. */

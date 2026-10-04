@@ -47,6 +47,7 @@ import {
   tmuxProbeDeps
 } from './board-index'
 import { createBoardHolds } from './board-hold'
+import { setShellObserver } from './multiplexer'
 import { createLoopHealth } from './loop-health'
 import { loadOrCreateReadOnlyToken } from './readonly-token'
 import { loadOrCreatePairingToken } from './pairing-token'
@@ -1829,6 +1830,11 @@ const loopHealth = createLoopHealth({
   sous: () => sousBreakerState(),
   probe: () => boardProbe.stats()
 })
+
+// Every synchronous fork the multiplexers make lands in the loop ledger
+// under its command's name, so a multi-second stall on /api/health says
+// which `herdr` or `tmux` call held the thread (multiplexer.ts).
+setShellObserver((label, ms) => loopHealth.observe(label, ms))
 
 const boardProbe = createProbeSampler(
   tmuxProbeDeps({
