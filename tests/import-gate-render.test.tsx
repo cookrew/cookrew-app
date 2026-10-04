@@ -27,7 +27,6 @@ const scene = (asset: string, chain: string, price: string): Parameters<typeof G
     }
   },
   title: 'QA ORCH DOOR',
-  version: 'V1',
   agentCount: 2,
   wallets: [
     { id: 'stripe', label: MKT_PAY['mkt.pay.rail.card'], icon: '▭' },

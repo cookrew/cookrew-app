@@ -162,7 +162,6 @@ export function ServedTeamCard({
             sessions.map((s) => (
               <div key={s.sessionId} className="stc-row">
                 <span className="stc-caller">{s.workspaceName}</span>
-                <span className="stc-ver">V{s.version}</span>
                 <span className="stc-state">{MKT_SESSIONS['mkt.sessions.state.working']}</span>
                 <button className="cr-btn sm" onClick={() => setConfirmEnd(s)}>
                   {MKT_SESSIONS['mkt.sessions.end.action']}

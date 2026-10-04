@@ -356,7 +356,6 @@ export function ImportServedSheet({
           <section className="isv-face" aria-label="Team preview">
             <div className="isv-row">
               <span className="isv-name">{preview.name}</span>
-              <span className="cr-chip-ver">V{preview.version}</span>
             </div>
             <div className="isv-row isv-dim">
               <span>

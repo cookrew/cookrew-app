@@ -727,7 +727,6 @@
   font-family: var(--font-mono); font-size: 11.5px;
 }
 .stc-caller { font-weight: 600; flex: 1; min-width: 0; }
-.stc-ver { color: var(--violet); font-size: 10px; }
 .stc-state { color: var(--cr-dim, #a8a29e); font-size: 10.5px; }
 .stc-confirm {
   margin-top: 10px; padding: 10px 12px;

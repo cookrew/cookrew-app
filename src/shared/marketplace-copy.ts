@@ -1081,8 +1081,6 @@ export const MKT_GATE = {
   /** Acknowledge the served state and close — the copy is already placed. */
   'mkt.gate.open.action': 'DONE',
   /** The pin you leave with — the violet mark, said in words. */
-  'mkt.gate.pin': 'Pinned to your rail',
-  'mkt.gate.pin.why': 'Update from the chip when a new version ships — never pushed, always offered.',
   /** The direct door's honest wait — a first reply is slow while the line warms. */
   'mkt.gate.warming':
     'First reply can take a moment while the line warms — the card says so; it never just spins.',

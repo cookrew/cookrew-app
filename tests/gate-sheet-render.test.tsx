@@ -28,7 +28,7 @@ const paint = (over: Partial<GateSheetProps>, scene?: Partial<GateScene>): strin
 
 describe('GateSheet — state A: priced install (401→402→open)', () => {
   const html = paint(
-    { version: 'V4', agentCount: 4, wallets: [{ id: 'mm', label: 'METAMASK', icon: '🦊' }], selectedWallet: 'mm' },
+    { agentCount: 4, wallets: [{ id: 'mm', label: 'METAMASK', icon: '🦊' }], selectedWallet: 'mm' },
     { pricing: PRICED, phase: { kind: 'pay' }, pin: 'V4' }
   )
 
@@ -55,7 +55,7 @@ describe('GateSheet — state A: priced install (401→402→open)', () => {
 })
 
 describe('GateSheet — state B: free install dashes the pay step', () => {
-  const html = paint({ version: 'V2' }, { pricing: null, phase: { kind: 'open' }, pin: 'V2' })
+  const html = paint({}, { pricing: null, phase: { kind: 'open' }, pin: 'V2' })
 
   it('renders the pay tick DASHED (skip), never green (done)', () => {
     expect(html).toContain('gk-tick skip')
@@ -68,9 +68,10 @@ describe('GateSheet — state B: free install dashes the pay step', () => {
     expect(html).not.toContain('WHAT THE GATE QUOTED')
   })
 
-  it('leaves the buyer with the pinned version as a receipt, and a DONE to close', () => {
-    expect(html).toContain('gk-rcpt')
-    expect(html).toContain('Pinned to your rail')
+  it('closes on the open band and a DONE — no pinned-version receipt (that interaction is gone)', () => {
+    expect(html).not.toContain('gk-rcpt')
+    expect(html).not.toContain('gk-pin')
+    expect(html).not.toContain('Pinned to your rail')
     // The footer acknowledges the served state — it does not reuse the receipt line.
     expect(html).toMatch(/>DONE</)
   })

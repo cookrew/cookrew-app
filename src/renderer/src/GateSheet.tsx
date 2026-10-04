@@ -52,8 +52,6 @@ export interface GateSheetProps {
   scene: GateScene
   /** The crew or line being gated, e.g. 'RESEARCH CREW'. */
   title: string
-  /** Head chip — the version, e.g. 'V4'. */
-  version?: string | null
   /** Head chip — agent count, when known. */
   agentCount?: number | null
   /** The amber banner line: a price line, or who this Mac is signed in as. */
@@ -248,7 +246,6 @@ export function GateSheet(props: GateSheetProps): React.JSX.Element {
   const {
     scene,
     title,
-    version = null,
     agentCount = null,
     bannerLine = null,
     wallets = [],
@@ -288,7 +285,6 @@ export function GateSheet(props: GateSheetProps): React.JSX.Element {
       >
         <header className="tf-head">
           <span className="tf-title">{title}</span>
-          {version && <span className="cr-chip-ver">{version}</span>}
           <span className="tf-spacer" />
           {agentCount != null && (
             <span className="cr-chip">{fillCopy(MKT_GATE['mkt.gate.agents'], { n: agentCount })}</span>
@@ -353,7 +349,7 @@ export function GateSheet(props: GateSheetProps): React.JSX.Element {
   }
 
   // ── The walk — rail + bands + the live step's body. ──
-  const { steps, door, pin } = walk
+  const { steps, door } = walk
   const active = steps.find((s) => s.state === 'now')
   const primary = primaryFor(active, door, pricing, props)
 
@@ -363,10 +359,9 @@ export function GateSheet(props: GateSheetProps): React.JSX.Element {
         {steps.map((s, i) => (
           <div key={s.id} className="gk-rail-node">
             <div className={`gk-tick ${s.state}`} />
-            {(i < steps.length - 1 || pin) && <div className="gk-link" />}
+            {i < steps.length - 1 && <div className="gk-link" />}
           </div>
         ))}
-        {pin && <div className="gk-pin">{pin}</div>}
       </div>
       <div className="gk-main">
         {steps.map((s) => {
@@ -386,14 +381,8 @@ export function GateSheet(props: GateSheetProps): React.JSX.Element {
             onSelectWallet={props.onSelectWallet}
           />
         )}
-        {active?.id === 'open' && (
-          <div className="gk-rcpt">
-            <div className="r1">
-              {pin && <span className="gk-pin">{pin}</span>} {MKT_GATE['mkt.gate.pin']}
-            </div>
-            <div className="r2">{MKT_GATE['mkt.gate.pin.why']}</div>
-          </div>
-        )}
+        {/* No version receipt here any more (owner, 2026-10-04): the open band above says
+            what happened; a pinned V-number was the v1/v2 interaction, and it is gone. */}
         {door === 'direct' && active?.id === 'identify' && (
           <p className="gk-fine">{MKT_GATE['mkt.gate.warming']}</p>
         )}

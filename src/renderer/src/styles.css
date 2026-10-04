@@ -69,10 +69,9 @@
   --rose: #dc2626;
   --violet: #9b8acb;
   /* Violet is the persona accent (role coins, never a status colour). The HI
-     step is its raised sibling — the marketplace's own surfaces sit on it:
-     version pins on the rail, and the gated-chip lock badge. Promoted to a
-     real token because those two need to agree, and a hand-picked lighter
-     violet in each place is how palettes drift apart. */
+     step is its raised sibling — the marketplace's own surfaces sit on it,
+     such as the gated-chip lock badge. A real token so they agree, and a
+     hand-picked lighter violet in each place is how palettes drift apart. */
   --violet-hi: #c3b6e6;
   --note-bg: #fff3ad;
   --note-text: #3a3625;
@@ -3337,30 +3336,6 @@ a.card-close {
   flex: 0 0 auto;
 }
 
-/* VERSION — which version of a preset you hold.
-   FILLED violet, and that is load-bearing: .cr-ckpt-pin on the rail is a solid
-   violet flag, so the tag on the chip and the pin on the rail are the SAME MARK
-   in two places. A buyer who sees V2 on a dock chip and V2 on a rail is looking
-   at one object and never has to be told so.
-
-   NOTE FOR THE RULING THAT IS STILL OPEN: gate-sheet-unified, e2e-demo and
-   export-ux-demo all draw this OUTLINED, and use filled-violet for the UPDATE
-   state instead. That inverts the rhyme — on the rail, filled violet already
-   means "the version you are on" (.cr-ckpt-pin.current); on an outlined-tag
-   chip it would mean "a version you do NOT have". Shipping the filled form
-   because it is the one the shipped rail agrees with; if the ruling goes the
-   other way this rule and .cr-ckpt-pin.current move together, not separately. */
-.cr-chip-ver {
-  font-family: var(--font-pixel);
-  font-size: 7px;
-  letter-spacing: 0.04em;
-  color: var(--cream-hi);
-  background: var(--violet);
-  border-radius: 2px;
-  padding: 1px 3px 0;
-  margin-left: 1px;
-  flex: 0 0 auto;
-}
 
 /* PRICE — a FACT about the preset, so a tag like the version tag, never a
    badge. Badges say "a state is true of this"; a price says "this is what the
@@ -4486,8 +4461,7 @@ body.cookrew-mobile .cookrew-minimap {
 
 /* The SEGMENT boundary tick is a tap target (it opens the earlier-sessions
    panel), so it reads as one: full opacity, a ring, and a pointer. The ring is
-   what separates "information" from "control" at 8px — same rule that gives
-   the version pins their hard edge. */
+   what separates "information" from "control" at 8px. */
 .cr-ckpt-tick.lineage {
   cursor: pointer;
   opacity: 1;
@@ -4649,121 +4623,6 @@ body.cookrew-mobile .cookrew-minimap {
   font-size: 10.5px;
 }
 
-/* --- VERSION PINS: the rail's THIRD marker class (marketplace §10, R8/R18) ---
-   Everything else on this bar is AMBER and UNLABELLED and either points
-   (diamond) or cuts (bar). A pin is the opposite on four axes at once, which is
-   what makes it separable in peripheral vision rather than on inspection:
-     hue     violet, not amber       — published identity, not session mechanics
-     shape   flag, not diamond/bar   — the only silhouette the rail was not using
-     label   named (V2), not anonymous
-     fill    opaque hard edge, not glow — permanent, not transient
-   Violet is not a free pick either: it is already this product's persona accent
-   (.role-avatar, .cr-chip.role), so a pin inherits a meaning the UI has been
-   teaching since the first role chip.
-
-   GEOMETRY. The rail is 30px and the line sits 13–16px in from its right edge.
-   right:11 + width:19 puts the flag's LEFT edge flush with the rail's left edge
-   (11 + 19 = 30), and the tip lands 11px from the right edge — so it crosses
-   the full 3px of the line and stops 2px PAST its far side. (The first version
-   of this comment said "2px into the line"; Tinker measured it and the tip is
-   past it, not inside it. The number was right and the sentence was not.)
-   Nothing overhangs the transcript.
-
-   ANCHORING: the component sets `top` from railAnchorTop(frac) and nothing
-   else, so F6 is inherited rather than re-derived. See CheckpointTimeline. */
-.cr-ckpt-pin {
-  position: absolute;
-  right: 11px;
-  width: 19px;
-  height: 13px;
-  transform: translateY(-50%);
-  display: flex;
-  align-items: center;
-  padding-left: 2px;
-  font-family: var(--font-pixel);
-  font-size: 7px;
-  letter-spacing: 0.02em;
-  line-height: 1;
-  color: var(--cream-hi);
-  background: var(--violet);
-  clip-path: polygon(0 0, 62% 0, 100% 50%, 62% 100%, 0 100%);
-  /* NO z-index, deliberately. `.cr-ckpt-here` is z-index AUTO, so a positive
-     value here painted the pin ON TOP of the scrub thumb — the exact inversion
-     the old comment claimed to prevent. It said "under the thumb (5)", but the
-     5 was from the design mock; the product's thumb never had one. Painting
-     order for auto/0 positioned siblings is TREE order, and the pins render
-     before the count and the thumb, so the thumb stays on top by construction.
-     A test pins that DOM order, because it is now load-bearing. */
-  pointer-events: auto;
-  cursor: pointer;
-}
-
-/* v100+ carries no label (R8). It keeps the full silhouette — an unlabelled
-   flag only LOOKS smaller because the eye reads text as mass. */
-/* IMPORTED PROVENANCE — the whole "whose is this" surface on a version pin.
-   A caller has to tell "my V2" from "drej's V2, authorized" in peripheral
-   vision, on a 19x13 flag, without a second panel to explain it.
-
-   THE CLIP IS THE CONSTRAINT, and it is why this is a corner dot and not a
-   ring, a border or a second flag: .cr-ckpt-pin carries
-   `clip-path: polygon(0 0, 62% 0, 100% 50%, 62% 100%, 0 100%)`, and a
-   clip-path clips the element's PSEUDO-ELEMENTS too. Anything drawn outside
-   that polygon — the obvious outline, a badge hanging off the tip — is sliced
-   by the flag's own silhouette. (0,0) is a polygon vertex, so the top-left
-   corner is the one place a mark is guaranteed whole.
-
-   F6 IS PRESERVED BY CONSTRUCTION, not by retest: `position: absolute` takes
-   the dot out of flow, so the pin's box is byte-identical with and without
-   `.imported`. The pin centres on railAnchorTop via translateY(-50%), and a
-   box that does not change cannot move a centre. The eval still runs, because
-   that is the gate's whole point.
-
-   Cream, not a new hue: it is the label's own colour, so the signal is the
-   PRESENCE of a mark rather than a colour nobody has been taught. At this size
-   peripheral vision resolves presence long before it resolves hue. */
-.cr-ckpt-pin.imported::after {
-  content: '';
-  position: absolute;
-  top: 2px;
-  left: 1.5px;
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background: var(--cream-hi);
-  /* The current pin inverts to a dark label, so the dot inverts with it. */
-  box-shadow: 0 0 0 0.5px rgba(20, 17, 10, 0.35);
-}
-
-.cr-ckpt-pin.current.imported::after {
-  background: var(--phos-bg);
-  box-shadow: none;
-}
-
-/* The label shifts clear of the dot rather than sitting under it. Only when
-   imported — a local pin keeps every pixel of its 9.8px label area. */
-.cr-ckpt-pin.imported {
-  padding-left: 6px;
-}
-
-.cr-ckpt-pin.bare {
-  padding-left: 0;
-}
-
-/* The version the buyer is on, in the here-marker's emphasis grammar but the
-   pin's family colour. */
-.cr-ckpt-pin.current {
-  background: var(--violet-hi);
-  color: var(--phos-bg);
-  box-shadow: 0 0 6px rgba(155, 138, 203, 0.75);
-}
-
-/* COINCIDENCE RULE: while scrubbing, the thumb passes over pins. They dim and
-   drop the glow so the handle stays the brightest thing on the line. */
-.cr-ckpt-rail.dragging .cr-ckpt-pin {
-  opacity: 0.55;
-  box-shadow: none;
-}
-
 /* --- cream chrome (light contexts) --- */
 
 /* F5 made rows OPAQUE, which means they now carry a surface colour — and a
@@ -4785,14 +4644,6 @@ body.cookrew-mobile .cookrew-minimap {
 .cr-ckpt-rail.on-cream .cr-ckpt-count .n {
   color: var(--amber-deep);
   text-shadow: none;
-}
-
-/* `:not(.current)` is load-bearing: this selector is (0,3,0) and beat
-   `.cr-ckpt-pin.current` (0,2,0), repainting the current pin's dark label
-   cream-on-violet-hi at 1.86:1. Light chrome may restate the RESTING label
-   only; the current pin keeps the contrast its own rule gives it. */
-.cr-ckpt-rail.on-cream .cr-ckpt-pin:not(.current) {
-  color: var(--cream-hi);
 }
 
 .cr-ckpt-rail.on-cream .cr-ckpt-here {
