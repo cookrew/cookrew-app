@@ -39,6 +39,7 @@ import {
   recordThumbSuccess,
   shouldClearLegacyThumbs,
   shouldPollThumbs,
+  snapshotPlan,
   shouldSnapshotLocally,
   thumbPollList,
   THUMB_BATCH_MAX,
@@ -981,6 +982,29 @@ function Canvas(): React.JSX.Element {
     [zoomBack]
   )
 
+  /**
+   * The browser cards the screen can see, in flow space — the one set both
+   * picture producers are bounded by (the desktop's sweep and the phone's
+   * poll). A picture nobody can see is a picture nobody should pay for.
+   */
+  const visibleBrowserIds = useCallback((): string[] => {
+    const topLeft = reactFlow.screenToFlowPosition({ x: 0, y: 0 })
+    const bottomRight = reactFlow.screenToFlowPosition({ x: window.innerWidth, y: window.innerHeight })
+    return viewportBrowserIds(
+      reactFlow.getNodes().map((n) => ({
+        id: n.id,
+        kind: n.type ?? '',
+        x: n.position.x,
+        y: n.position.y,
+        // Unmeasured on the first tick: fall back to the card's own size,
+        // or a zero-width card would miss the viewport it is plainly in.
+        width: n.measured?.width ?? n.width ?? (n.data as { node?: { size?: { width: number } } }).node?.size?.width ?? 0,
+        height: n.measured?.height ?? n.height ?? (n.data as { node?: { size?: { height: number } } }).node?.size?.height ?? 0
+      })),
+      { left: topLeft.x, top: topLeft.y, right: bottomRight.x, bottom: bottomRight.y }
+    )
+  }, [reactFlow])
+
   const onThumb = useCallback((id: string, dataUrl: string) => {
     if (interactiveBrowser !== false) return
     thumbStore.set(id, dataUrl)
@@ -993,8 +1017,12 @@ function Canvas(): React.JSX.Element {
    * no longer exists here, so every browser card sat on its placeholder; the
    * picture now comes from the headless page that owns the tab.
    *
-   * Paused while the window is hidden and while a card is zoomed — the zoomed
-   * one is showing the live stream, and its own card is behind that overlay.
+   * ONLY WHAT THE SCREEN SHOWS. This used to walk every browser on the canvas
+   * — at mount and every five seconds — which on a board of forty browsers is
+   * forty CDP screenshots through main before anything is looked at. It now
+   * takes the same plan the phone's poll takes (snapshotPlan): the visible
+   * cards, none at mini, never the zoomed one (its card is behind the live
+   * view), capped. A card scrolled into view is photographed on the next tick.
    */
   useEffect(() => {
     if (!shouldSnapshotLocally({ remote: isRemoteMode(), interactive: interactiveBrowser })) return
@@ -1002,13 +1030,22 @@ function Canvas(): React.JSX.Element {
     if (!snapshot) return
     let disposed = false
     const tick = async (): Promise<void> => {
-      if (document.hidden) return
-      for (const browser of browsersRef.current) {
+      const ids = snapshotPlan({
+        zoom: cardZoomMode(reactFlow.getZoom()),
+        hidden: document.hidden,
+        visible: visibleBrowserIds(),
+        zoomedId: zoomedNodeIdRef.current,
+        max: THUMB_BATCH_MAX
+      })
+      for (const id of ids) {
         if (disposed) return
-        if (browser.id === zoomedNodeIdRef.current) continue
-        const dataUrl = await snapshot(browser.id).catch(() => null)
+        const dataUrl = await snapshot(id).catch(() => null)
         if (!disposed && dataUrl) {
-          thumbStore.set(browser.id, dataUrl) // set() dedupes identical values
+          // A handed-off live frame is a blob; replacing one must revoke it,
+          // exactly as the poll path does. set() dedupes identical strings.
+          const old = thumbStore.get(id)
+          if (old?.startsWith('blob:')) URL.revokeObjectURL(old)
+          thumbStore.set(id, dataUrl)
         }
       }
     }
@@ -1018,7 +1055,7 @@ function Canvas(): React.JSX.Element {
       disposed = true
       clearInterval(timer)
     }
-  }, [interactiveBrowser])
+  }, [interactiveBrowser, reactFlow, visibleBrowserIds])
 
   // Never retain a legacy frame once ownership resolves to headless. Browser
   // cards remain neutral until their shared stream is opened in the popout.
@@ -1084,21 +1121,7 @@ function Canvas(): React.JSX.Element {
       // the viewport, one GET /api/browser/thumbs, and the version of each
       // frame already held rides along so an unchanged one answers with a
       // number and no bytes.
-      const topLeft = reactFlow.screenToFlowPosition({ x: 0, y: 0 })
-      const bottomRight = reactFlow.screenToFlowPosition({ x: window.innerWidth, y: window.innerHeight })
-      const visible = viewportBrowserIds(
-        reactFlow.getNodes().map((n) => ({
-          id: n.id,
-          kind: n.type ?? '',
-          x: n.position.x,
-          y: n.position.y,
-          // Unmeasured on the first tick: fall back to the card's own size,
-          // or a zero-width card would miss the viewport it is plainly in.
-          width: n.measured?.width ?? n.width ?? (n.data as { node?: { size?: { width: number } } }).node?.size?.width ?? 0,
-          height: n.measured?.height ?? n.height ?? (n.data as { node?: { size?: { height: number } } }).node?.size?.height ?? 0
-        })),
-        { left: topLeft.x, top: topLeft.y, right: bottomRight.x, bottom: bottomRight.y }
-      )
+      const visible = visibleBrowserIds()
       // Per-id failure backoff — the desktop's capture-storm lesson, applied to
       // the polling side. After an app restart NO engine is booted, so 40+
       // cards have no frame at once; re-asking them all every 5s was a
@@ -1148,7 +1171,7 @@ function Canvas(): React.JSX.Element {
     tick()
     const timer = setInterval(tick, 5000)
     return () => clearInterval(timer)
-  }, [interactiveBrowser])
+  }, [interactiveBrowser, reactFlow, visibleBrowserIds])
 
   // ESC dismisses the top overlay: modal panels (team fork / roster / metrics /
   // directory manager) self-handle it in the capture phase; this bubble-phase

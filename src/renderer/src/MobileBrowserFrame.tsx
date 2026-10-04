@@ -24,6 +24,8 @@ import {
   type StreamTouchPointer
 } from './browser-stream'
 import { useBrowserStream } from './useBrowserStream'
+import { thumbStore, useThumb } from './activity-thumb-store'
+import { handOffFrame, posterSource, shouldHandOff } from './browser-poster'
 import { useRemoteKeyboard } from './useRemoteKeyboard'
 
 /**
@@ -63,6 +65,17 @@ export function MobileBrowserFrame({
   const [coarsePointer, setCoarsePointer] = useState(false)
   const boxRef = useRef<HTMLDivElement>(null)
   const paintedFrameSeq = useRef<number | null>(null)
+  /**
+   * THE CARD'S OWN PICTURE, read here for two reasons and fetched for neither.
+   * It is the POSTER under the status chip while the stream has no decoded
+   * frame (connecting, stalled, unavailable — over the relay, always); and it
+   * is where the last painted live frame goes at zoom-out, so the card keeps
+   * the picture the owner was just looking at instead of the poll's last
+   * guess (browser-poster.ts).
+   */
+  const poster = useThumb(browserId)
+  const lastPaintedRef = useRef<string | null>(null)
+  const wasOpenRef = useRef(open)
   const mobilePreference = mobileViewportPreference(view.w, coarsePointer)
   const stream = useBrowserStream(browserId, open, streamEnabled, desktopStreamToken, {
     width: view.w,
@@ -81,6 +94,14 @@ export function MobileBrowserFrame({
   const kbd = useRemoteKeyboard(stream.send)
 
   useEffect(() => {
+    // The zoom-out EDGE: the last painted live frame becomes the card's
+    // picture — once, here, never per frame. Read before the reset below
+    // forgets it.
+    if (shouldHandOff({ wasOpen: wasOpenRef.current, open, painted: lastPaintedRef.current !== null })) {
+      handOffFrame(thumbStore, browserId, lastPaintedRef.current as string)
+    }
+    wasOpenRef.current = open
+    lastPaintedRef.current = null
     paintedFrameSeq.current = null
     setStreamFrameLoaded(false)
     if (!open) {
@@ -88,6 +109,17 @@ export function MobileBrowserFrame({
       setNatural({ w: 0, h: 0 })
     }
   }, [open, browserId])
+
+  // Unmounted while open — the layer took the frame down with the zoom, so
+  // the edge above never ran. Same hand-off, from the cleanup.
+  useEffect(
+    () => () => {
+      if (wasOpenRef.current && lastPaintedRef.current !== null) {
+        handOffFrame(thumbStore, browserId, lastPaintedRef.current)
+      }
+    },
+    [browserId]
+  )
 
   useEffect(() => {
     paintedFrameSeq.current = null
@@ -156,14 +188,19 @@ export function MobileBrowserFrame({
   // frame's JPEG dims, the thumb's PNG dims) — used as the letterbox + coord basis.
   const fit = fitContain(natural.w, natural.h, view.w, view.h)
 
-  const src = streaming
-    ? stream.frameUrl
-    : fallback === 'thumb' && open
-      ? frameSrc(browserId, seq)
-      : null
+  // Headless: the live frame, else the card's picture as the poster, else
+  // nothing. The legacy flag-off phone keeps its own /thumb poll while open.
+  const src =
+    fallback === 'thumb' && !streaming
+      ? open
+        ? frameSrc(browserId, seq)
+        : null
+      : posterSource({ streaming, frameUrl: stream.frameUrl, poster })
   // In stream mode the placeholder shows until the view is genuinely live, so a
-  // frozen frame reads as "connecting…", not an interactive surface.
-  const showPlaceholder = streaming ? !frameReady : fallback === 'loading' || !loaded
+  // frozen frame reads as "connecting…", not an interactive surface. Headless
+  // with a poster: the picture shows and the status chip says the state — the
+  // glyph would only cover the one thing worth looking at.
+  const showPlaceholder = streaming ? !frameReady : fallback === 'loading' ? poster === undefined : !loaded
   const surfaceState = streamSurfaceState({
     open,
     status: stream.status,
@@ -460,6 +497,7 @@ export function MobileBrowserFrame({
             }
             if (streaming) {
               paintedFrameSeq.current = stream.frameSeq
+              lastPaintedRef.current = src
               setStreamFrameLoaded(true)
             } else setLoaded(true)
           }}

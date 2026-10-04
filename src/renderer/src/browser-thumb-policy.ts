@@ -174,3 +174,24 @@ export function applyThumbBatch(
   }
   return { backoffs: nextBackoffs, versions: nextVersions, changed }
 }
+
+/**
+ * THE DESKTOP'S OWN SWEEP, bounded the way the phone's poll already is.
+ *
+ * With the flag on, the desktop photographed EVERY browser on the canvas
+ * through main every five seconds — and once at mount, which on a canvas of
+ * forty browsers is forty CDP screenshots before anything is looked at. The
+ * phone's poll had already learned this (above); one plan serves both:
+ * only the cards the screen shows, none at mini (no card decodes a picture
+ * there), never the zoomed one (its card is behind the live view), capped.
+ */
+export function snapshotPlan(input: {
+  zoom: 'card' | 'mini'
+  hidden: boolean
+  visible: readonly string[]
+  zoomedId: string | null
+  max: number
+}): string[] {
+  if (input.hidden || input.zoom === 'mini') return []
+  return input.visible.filter((id) => id !== input.zoomedId).slice(0, input.max)
+}
