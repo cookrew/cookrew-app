@@ -166,7 +166,20 @@ export const LATENCY = {
   // owner's real chain is ~30x these bytes; the ratio is what transfers, not
   // the milliseconds.
   streamOpenCold1048: { p50: 500, p95: 2000, p98: 2500 },
-  streamOpenWarm1048: { p50: 30, p95: 80, p98: 120 }
+  streamOpenWarm1048: { p50: 30, p95: 80, p98: 120 },
+
+  // ---- The block WINDOW (2026-10-04): what the drawer actually renders ----
+  // The two gates above never called service.blocks(), and that was the route
+  // still walking the whole chain for every page — nine documents parsed to
+  // serve twenty blocks on this fixture, 220 MB and 30.5 s on the owner's
+  // busiest card. The window is answered from the materialised index now
+  // (stream-window.ts): the files it spans, and nothing else.
+  //
+  // The STRUCTURAL half is the gate: one document for the page's own file,
+  // at most one more for the tail the materialise re-touches. The time is
+  // one ~1.5 MB document's cold parse plus the index lookup, on a fresh
+  // reader each sample — gated at the order of magnitude a walk would cross.
+  streamWindowWarm1048: { p50: 150, p95: 400, p98: 600 }
 } as const
 
 /**

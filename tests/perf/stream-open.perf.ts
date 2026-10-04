@@ -246,6 +246,38 @@ describe('/stream/open — a 9-file, 1,048-block chain', () => {
     expectEvery(measured, 'reads', 2)
   })
 
+  it('WINDOW: a page of blocks reads the files it spans, never the chain', async () => {
+    const { service } = serviceOver(bed)
+    await openOnce(service)
+    const measured = await measure('stream window warm (9 files, 1048 blocks)', async () => {
+      // A FRESH reader each sample, after the open every window follows: the
+      // state file is warm, the document cache is not — the shape of the
+      // first scroll fill after a restart.
+      const { service: reopened, reads } = serviceOver(bed)
+      await openOnce(reopened)
+      const before = reads()
+      const started = performance.now()
+      const page = await reopened.blocks('busiest', { limit: 20 })
+      const elapsed = performance.now() - started
+      return {
+        elapsed,
+        structural: { blocks: page.blocks.length, total: page.total, reads: reads() - before }
+      }
+    })
+    expectTail(measured, LATENCY.streamWindowWarm1048)
+    expectEvery(measured, 'blocks', 20)
+    expectEvery(measured, 'total', BLOCKS)
+    // THE STRUCTURAL GATE. The first page lives in the chain's OLDEST
+    // transcript: one document read for it, and at most one more when the
+    // materialise inside blocks() falls outside the open's coalescing window
+    // and re-touches the tail. It was nine — the whole chain — before
+    // stream-window.ts, and no machine is fast enough to fake the difference.
+    for (const structural of measured.structurals) {
+      expect(structural.reads).toBeGreaterThanOrEqual(1)
+      expect(structural.reads).toBeLessThanOrEqual(2)
+    }
+  })
+
   it('a warm open agrees with a cold one, row for row', async () => {
     const stateDir = coldState(bed)
     const cold = serviceOver(bed, { stateDir })
