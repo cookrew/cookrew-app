@@ -138,8 +138,40 @@ export const sameReach = (a: ReachCard | null, b: ReachCard): boolean =>
 
 export type PublishOutcome = 'published' | 'unchanged' | 'refused' | 'skipped'
 
+/**
+ * HOW LONG THE ZONE REMEMBERS A CARD. The registry's dns-zone.ts answers a
+ * device's names only while the card it holds is younger than REACH_TTL_MS;
+ * this is that number, and tests/reach.test.ts pins the two to each other.
+ */
+export const NAME_TTL_MS = 24 * 60 * 60 * 1000
+
+/**
+ * HOW OFTEN AN UNCHANGED CARD IS SENT ANYWAY.
+ *
+ * Found 2026-10-04: the publisher spoke only when something changed, the
+ * owner's Mac sat still, and from a day after its last card every one of its
+ * names answered NXDOMAIN — a phone on the same Wi-Fi read "Load failed". A
+ * quarter of the zone's memory leaves three missed sends before a name dies.
+ */
+export const REFRESH_EVERY_MS = NAME_TTL_MS / 4
+
+/**
+ * The Mac's clock and the registry's are not the same clock. A name is called
+ * dead this much before the zone's own deadline, so the phone is never handed
+ * a name in the last minutes the Mac believes in and the zone does not.
+ */
+export const NAME_SKEW_MS = 5 * 60 * 1000
+
+/** Where the publisher stands with the registry, for the phone and the owner. */
+export interface PublishState {
+  /** When the registry last took a card from this process, epoch ms. */
+  readonly acceptedAt: number | null
+  /** The registry's last refusal in its own words, until a send succeeds. */
+  readonly refused: string | null
+}
+
 export type ReachPublisher = {
-  /** Publish if there is anything to publish and it has changed. */
+  /** Publish if there is anything to publish and it has changed — or the zone is about to forget it. */
   readonly publish: (reason: string) => Promise<PublishOutcome>
   /** Publish even if nothing changed — boot, and the reachability toggle. */
   readonly republish: (reason: string) => Promise<PublishOutcome>
@@ -148,6 +180,58 @@ export type ReachPublisher = {
   readonly last: () => ReachCard | null
   /** How long until the next retry, or null when nothing is pending. */
   readonly retryInMs: () => number | null
+  /** Where this process stands with the registry right now. */
+  readonly state: () => PublishState
+}
+
+/** What `/api/reach` adds to the card about the names it lists. */
+export interface PublishAnswer {
+  readonly at: number | null
+  readonly refused: string | null
+  /** The zone is still answering these names, as far as this Mac can tell. */
+  readonly live: boolean
+}
+
+export interface ReachAnswerInput {
+  readonly deviceId: string
+  readonly lan: ReachCard['lan']
+  readonly tailnet: ReachCard['tailnet']
+  readonly trusted: readonly string[]
+  readonly publish: PublishState
+  readonly now: number
+}
+
+/**
+ * THE CARD THE PHONE GETS, WITH THE NAMES IT CAN ACTUALLY USE.
+ *
+ * A trusted name is a promise that the zone answers it, and the zone only
+ * does while the registry holds a fresh card. So the names are withheld —
+ * not merely annotated — when nothing has been accepted within the zone's
+ * memory, and the reason travels in `publish` for the sheet to say. The
+ * phone that raced a dead name got a negative DNS answer in 4 ms and called
+ * it a browser refusal (2026-10-04); a name it never saw cannot be misread.
+ *
+ * A refusal AFTER a fresh success keeps the names: the zone answers for the
+ * rest of its memory whatever the last send said.
+ */
+export const reachAnswer = (
+  input: ReachAnswerInput
+): {
+  readonly deviceId: string
+  readonly lan: ReachCard['lan']
+  readonly tailnet: ReachCard['tailnet']
+  readonly trusted: readonly string[]
+  readonly publish: PublishAnswer
+} => {
+  const at = input.publish.acceptedAt
+  const live = at !== null && input.now - at < NAME_TTL_MS - NAME_SKEW_MS
+  return {
+    deviceId: input.deviceId,
+    lan: input.lan,
+    tailnet: input.tailnet,
+    trusted: live ? [...input.trusted] : [],
+    publish: { at, refused: input.publish.refused, live }
+  }
 }
 
 export type ReachPublisherDeps = {
@@ -219,6 +303,9 @@ export const createReachPublisher = (deps: ReachPublisherDeps): ReachPublisher =
   let retryAt: number | null = null
   /** The last refusal SAID OUT LOUD, so a five-minute loop is not a log flood. */
   let announced: string | null = null
+  /** When the registry last took a card, and its standing refusal if any. */
+  let acceptedAt: number | null = null
+  let refused: string | null = null
 
   const build = (): { account: AccountFile; card: ReachCard } | null => {
     const account = deps.account()
@@ -282,11 +369,14 @@ export const createReachPublisher = (deps: ReachPublisherDeps): ReachPublisher =
         log(`reach refused (${reason}): ${refusal} — retrying`)
         announced = refusal
       }
+      refused = refusal
       scheduleRetry(reason)
       return 'refused'
     }
     last = built.card
     lastTrusted = trusted.join(' ')
+    acceptedAt = now()
+    refused = null
     attempt = 0
     announced = null
     clearRetry()
@@ -298,7 +388,14 @@ export const createReachPublisher = (deps: ReachPublisherDeps): ReachPublisher =
     const built = build()
     if (!built) return 'skipped'
     if (sameReach(last, built.card) && (deps.trusted?.() ?? []).join(' ') === lastTrusted) {
-      return 'unchanged'
+      // Unchanged is not the same as remembered: the zone forgets a card
+      // after NAME_TTL_MS, so an unchanged one is re-sent well before that.
+      const fresh = acceptedAt !== null && now() - acceptedAt <= REFRESH_EVERY_MS
+      if (fresh) return 'unchanged'
+      // A refresh that was refused is already on the retry clock; the poll
+      // must not add a second, un-backed-off sender beside it.
+      if (retryHandle !== null) return 'refused'
+      return send(`refresh after ${reason}`)
     }
     return send(reason)
   }
@@ -316,6 +413,7 @@ export const createReachPublisher = (deps: ReachPublisherDeps): ReachPublisher =
       }
     },
     last: () => last,
-    retryInMs: () => (retryAt === null ? null : Math.max(0, retryAt - now()))
+    retryInMs: () => (retryAt === null ? null : Math.max(0, retryAt - now())),
+    state: () => ({ acceptedAt, refused })
   }
 }

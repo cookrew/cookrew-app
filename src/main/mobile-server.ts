@@ -68,7 +68,7 @@ import {
 import { companionAccount } from './companion-account'
 import { RELAY_BASE_HEADER, RELAY_MARKER, relayBaseOf } from './relay-base'
 import { takeRelayDevice, type RelayDevice } from './relay-device'
-import { certFingerprint, reachCard } from './reach'
+import { certFingerprint, reachAnswer, reachCard, type PublishState } from './reach'
 import { applyCompanionCors } from './companion-cors'
 import { companionHostsOf, LOOPBACK_HOSTS } from './companion-hosts'
 import { refuseMisdirected, refuseMisdirectedUpgrade } from './host-gate'
@@ -202,6 +202,12 @@ export interface MobileServerDeps {
   uiBus?: MobileApiDeps['uiBus']
   /** The screen wall's pictures for the phone — see MobileApiDeps; passed through as-is. */
   workspaceShots?: MobileApiDeps['workspaceShots']
+  /**
+   * Where the reach publisher stands with the registry (reach.ts · state).
+   * Absent reads as "never accepted", which withholds the trusted names —
+   * the honest answer for a server with no publisher behind it.
+   */
+  reachPublish?: () => PublishState
   recoverAgent: (id: string) => RecoverResult
   restoreCheckpoint: (id: string, checkpointIndex: number) => Promise<RestoreResult>
   undoRestore: (id: string) => Promise<RestoreResult>
@@ -1416,12 +1422,18 @@ export async function handle(
      * travels alongside — and it is EMPTY unless a valid chain is held, so a
      * phone that reads a name here can dial it without a warning.
      */
-    respondJson(response, 200, {
-      deviceId: card.deviceId,
-      lan: card.lan,
-      tailnet: card.tailnet,
-      trusted: trustedOrigins()
-    })
+    respondJson(
+      response,
+      200,
+      reachAnswer({
+        deviceId: card.deviceId,
+        lan: card.lan,
+        tailnet: card.tailnet,
+        trusted: trustedOrigins(),
+        publish: deps.reachPublish?.() ?? { acceptedAt: null, refused: null },
+        now: Date.now()
+      })
+    )
     return
   }
 

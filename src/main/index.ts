@@ -1285,6 +1285,13 @@ let saidExpiring = 0
 
 async function renewSessionIfDue(): Promise<void> {
   try {
+    // A local "ended" mark is checked against the registry first: it has been
+    // wrong (account-v2.ts · endSession), and while it is wrong the reach
+    // card is never published and this Mac's names fall out of DNS. A mark
+    // the registry does not confirm is lifted, and the card goes out at once.
+    if (await accounts.reconcileEndedSession()) {
+      void reachPublisher?.republish('session reconciled').catch(() => undefined)
+    }
     await accounts.renew()
   } catch (error) {
     console.error('Could not renew this Mac\'s session:', error)
@@ -5573,6 +5580,9 @@ app.whenReady().then(() => {
     // owner's public face. `/api/hello` answers above the pairing-token gate
     // because it exists for a phone that has not got the token yet — it is how
     // the phone checks it found the right Mac before it sends a credential.
+    // Where the reach publisher stands with the registry, so /api/reach can
+    // withhold names the zone no longer answers and say why (reach.ts).
+    reachPublish: () => reachPublisher?.state() ?? { acceptedAt: null, refused: null },
     identity: {
       account: () => accounts.account(),
       registryOrigin: () => registryOrigin(),

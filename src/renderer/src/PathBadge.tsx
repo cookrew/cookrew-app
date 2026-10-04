@@ -8,6 +8,7 @@ import { subscribeLocalNetwork } from './local-network-gate'
 import { subscribePathAttempts } from './path-attempts'
 import { PathWhy } from './PathWhy'
 import { currentPathBadge, subscribePathLink } from './path-link'
+import { subscribeReachPublish } from './reach-publish'
 import type { PathBadgeView } from '../../shared/path-badge'
 
 /**
@@ -38,7 +39,8 @@ export function PathBadge({ onRefresh }: { onRefresh: () => void }): React.JSX.E
     const offs = [
       subscribePathLink(refresh),
       subscribePathAttempts(refresh),
-      subscribeLocalNetwork(refresh)
+      subscribeLocalNetwork(refresh),
+      subscribeReachPublish(refresh)
     ]
     return () => offs.forEach((off) => off())
   }, [])

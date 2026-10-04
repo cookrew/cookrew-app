@@ -5,7 +5,9 @@ import {
   isTailnetHostname,
   pathBadgeView,
   RELAY_BLOCKED_SENTENCE,
-  RELAY_REFUSED_SENTENCE
+  RELAY_REFUSED_SENTENCE,
+  RELAY_UNPUBLISHED_SENTENCE,
+  relayUnpublishedSentence
 } from '../src/shared/path-badge'
 
 describe('path badge host classes', () => {
@@ -111,6 +113,29 @@ describe('path badge view model', () => {
         refusedByBrowser: true
       }).sentence
     ).toBe('Direct over this Wi-Fi.')
+  })
+
+  it('says the Mac is not publishing a name when that is why the relay is all there is', () => {
+    // 2026-10-04: the Mac's names had been NXDOMAIN for five days because its
+    // reach publish was refused ('session-expired'); the phone raced them,
+    // got a negative DNS answer in 4 ms, and the sheet blamed first the Mac's
+    // whereabouts and then the browser. The card now says why, and so does
+    // the badge — above every other reason, because it is the one with a fix.
+    const base = { origin: 'https://cookrew.dev', link: 'live' as const, relayed: true, plane: 'RELAY' as const }
+    const ended = pathBadgeView({ ...base, unpublished: 'session-expired' })
+    expect(ended.word).toBe('RELAY')
+    expect(ended.sentence).toBe(RELAY_UNPUBLISHED_SENTENCE['session-expired'])
+    expect(ended.sentence).toContain('sign')
+    expect(ended.sentence).not.toContain('not on this network')
+    const other = pathBadgeView({ ...base, unpublished: 'offline' })
+    expect(other.sentence).toBe(relayUnpublishedSentence('offline'))
+    expect(other.sentence).toContain('offline')
+    // It outranks a browser refusal and a denied permission: no names were
+    // offered, so nothing the browser did is the story.
+    expect(pathBadgeView({ ...base, unpublished: 'session-expired', refusedByBrowser: true, localNetwork: 'denied' }).sentence)
+      .toBe(RELAY_UNPUBLISHED_SENTENCE['session-expired'])
+    // And says nothing on a direct plane, where the names evidently work.
+    expect(pathBadgeView({ ...base, plane: 'LAN', unpublished: 'session-expired' }).sentence).toBe('Direct over this Wi-Fi.')
   })
 
   it('uses the owner sentences for tailnet and relay', () => {

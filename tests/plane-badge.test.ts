@@ -92,6 +92,20 @@ describe('the badge under a relay prefix', () => {
     expect(link.currentPathBadge().sentence).toContain('refused')
   })
 
+  it('reads the card: a Mac whose publish was refused is not a Mac elsewhere', async () => {
+    stubPhone('https://cookrew.dev')
+    const { link } = await servedAt(RELAY_BASE)
+    const publish = await import('../src/renderer/src/reach-publish')
+    publish.resetReachPublish()
+    expect(link.currentPathBadge().sentence).toContain('not on this network')
+    publish.setReachPublish({ at: null, refused: 'session-expired', live: false })
+    expect(link.currentPathBadge().sentence).toContain('sign')
+    expect(link.currentPathBadge().sentence).not.toContain('not on this network')
+    // A live card says nothing extra.
+    publish.setReachPublish({ at: 1, refused: null, live: true })
+    expect(link.currentPathBadge().sentence).toContain('not on this network')
+  })
+
   it('says TAILNET for a tailnet plane, not LAN', async () => {
     // The two are not the same path and never read as the same word: a tailnet
     // hop painted green would tell a reader their Mac is on this Wi-Fi.

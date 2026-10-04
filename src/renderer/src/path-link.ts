@@ -3,6 +3,7 @@ import { dataPlane } from './data-plane'
 import { localNetworkGate } from './local-network-gate'
 import { pathAttempts } from './path-attempts'
 import { refusedBeforeConnecting } from './path/hint-evidence'
+import { reachPublish, unpublishedReason } from './reach-publish'
 import {
   classifyOrigin,
   pathBadgeView,
@@ -184,7 +185,11 @@ export const currentPathBadge = (): PathBadgeView =>
           // The badge's sentence reads the last race, not the address bar: a
           // race whose every row died in the browser says nothing about where
           // the Mac is, and the sentence must not either.
-          refusedByBrowser: refusedBeforeConnecting(pathAttempts().attempts)
+          refusedByBrowser: refusedBeforeConnecting(pathAttempts().attempts),
+          // And the Mac's own word on whether it has a name to race at all.
+          ...(unpublishedReason(reachPublish()) !== undefined
+            ? { unpublished: unpublishedReason(reachPublish()) }
+            : {})
         }
       : {}),
     ...(state.desktopName ? { desktopName: state.desktopName } : {}),
