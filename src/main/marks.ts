@@ -43,7 +43,7 @@
 // and can never parse. Truncation is therefore detectable in both directions,
 // which is exactly what a length prefix would have bought.
 
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, statSync, type Stats } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { PRIVATE_DIR_MODE, PRIVATE_FILE_MODE } from './atomic-file'
@@ -236,17 +236,75 @@ export interface MarkLedger {
   tornTail: boolean
 }
 
+/**
+ * THE FOLDED LEDGER, REMEMBERED AGAINST THE FILE'S STAT (perf, 2026-10-04).
+ *
+ * The ledger is append-only and every seen-at is a line, so on a card the
+ * owner reads it is not small: 172 KB on the busiest card, 617 KB on another,
+ * measured 2026-10-04. It was read and folded from the top on every call —
+ * twice per /stream/open (the route and the checkpoint reader each ask), once
+ * per bridge tick on the desktop, and on the phone's live pass each time a
+ * scroll wrote a seen-at and so changed the very file about to be re-read.
+ *
+ * Same size, mtime and inode means the same lines, and the same lines fold to
+ * the same marks. A write forgets the entry (the append changes the size
+ * anyway; this is belt and braces), so the fold after a write is a fresh one.
+ *
+ * THE MAP IS SHARED between callers, and a Map cannot be frozen. No reader in
+ * this process writes into one — every mark change goes through writeMark —
+ * and that is the contract this cache rests on. A caller that needs its own
+ * copy must take one.
+ */
+const LEDGER_CACHE_CAP = 64
+
+interface RememberedLedger {
+  size: number
+  mtimeMs: number
+  ino: number
+  ledger: MarkLedger
+}
+
+const remembered = new Map<string, RememberedLedger>()
+
+function sameFile(held: RememberedLedger, stat: Stats): boolean {
+  return held.size === stat.size && held.mtimeMs === stat.mtimeMs && held.ino === stat.ino
+}
+
+function remember(file: string, stat: Stats, ledger: MarkLedger): MarkLedger {
+  remembered.delete(file)
+  remembered.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, ino: stat.ino, ledger })
+  while (remembered.size > LEDGER_CACHE_CAP) {
+    const oldest = remembered.keys().next()
+    if (oldest.done === true) break
+    remembered.delete(oldest.value)
+  }
+  return ledger
+}
+
+/** Test seam: forget every remembered ledger. */
+export function forgetMarkLedgers(): void {
+  remembered.clear()
+}
+
 /** Read the ledger with its diagnostics. Never throws: an unreadable ledger
  *  costs the marks, never the history they describe. */
 export function readMarkLedger(terminalId: string, options: MarkOptions = {}): MarkLedger {
   const marks = new Map<string, Mark>()
   const file = markFileFor(terminalId, options)
   if (file === null) return { marks, skipped: 0, tornTail: false }
+  let stat: Stats
+  try {
+    stat = statSync(file)
+  } catch {
+    return { marks, skipped: 0, tornTail: false } // absent is the common case
+  }
+  const held = remembered.get(file)
+  if (held !== undefined && sameFile(held, stat)) return held.ledger
   let text: string
   try {
     text = readFileSync(file, 'utf8')
   } catch {
-    return { marks, skipped: 0, tornTail: false } // absent is the common case
+    return { marks, skipped: 0, tornTail: false }
   }
   const lines = text.split('\n')
   const tornTail = text.length > 0 && !text.endsWith('\n')
@@ -265,7 +323,7 @@ export function readMarkLedger(terminalId: string, options: MarkOptions = {}): M
       skipped += 1
     }
   }
-  return { marks, skipped, tornTail }
+  return remember(file, stat, { marks, skipped, tornTail })
 }
 
 /** Every checkpoint's marks for a terminal, keyed by identity. */
@@ -327,6 +385,7 @@ export function writeMark(
       mode: PRIVATE_FILE_MODE,
       flag: 'a'
     })
+    remembered.delete(file)
     return { ok: true }
   } catch (error) {
     return { ok: false, error: `mark write for ${terminalId} failed: ${(error as Error).message}` }
