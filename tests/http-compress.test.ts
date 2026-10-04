@@ -4,6 +4,9 @@ import type http from 'node:http'
 import {
   acceptsGzip,
   compressible,
+  contentTag,
+  dynamicCompressionStats,
+  etagMatches,
   MIN_COMPRESS_BYTES,
   negotiateEncoding,
   sendBody
@@ -207,5 +210,108 @@ describe('sendBody with brotli', () => {
       true
     )
     expect(elapsedMs).toBeLessThan(5)
+  })
+})
+
+/**
+ * THE DYNAMIC BODIES ARE THE TAIL. /api/workspace is 750 KB on a real canvas
+ * and was compressed from scratch on every poll on the main thread — 183 ms
+ * p50 / 520 ms p95 under load against 10 / 24 ms uncompressed. A canvas that
+ * nobody is editing answers the same bytes poll after poll, so the compressed
+ * copy is kept under the body's own hash, the client is told that hash as an
+ * ETag, and a poll that names it back is answered with no bytes at all.
+ */
+describe('a dynamic body is compressed once while its bytes keep coming back', () => {
+  const canvas = (seed: string): Buffer =>
+    Buffer.from(JSON.stringify({ nodes: Array.from({ length: 400 }, (_, i) => ({ id: `${seed}-${i}`, content: `note ${seed} `.repeat(40) })) }))
+  const json = { 'content-type': 'application/json' }
+
+  it('answers the second poll from the cache, and the body still decodes to the same bytes', () => {
+    const body = canvas('alpha')
+    const before = dynamicCompressionStats()
+    const first = stubResponse()
+    sendBody(first.response, 200, json, body, 'gzip')
+    const second = stubResponse()
+    sendBody(second.response, 200, json, body, 'gzip')
+    const after = dynamicCompressionStats()
+    expect(after.misses - before.misses).toBe(1)
+    expect(after.hits - before.hits).toBe(1)
+    expect(gunzipSync(Buffer.concat(second.captured.chunks)).equals(body)).toBe(true)
+    expect(first.captured.headers.etag).toBe(`W/"${contentTag(body)}"`)
+    expect(second.captured.headers.etag).toBe(first.captured.headers.etag)
+  })
+
+  it('a body that changed is a new tag and a new pass', () => {
+    const before = dynamicCompressionStats()
+    const a = stubResponse()
+    sendBody(a.response, 200, json, canvas('one'), 'br')
+    const b = stubResponse()
+    sendBody(b.response, 200, json, canvas('two'), 'br')
+    expect(dynamicCompressionStats().misses - before.misses).toBe(2)
+    expect(a.captured.headers.etag).not.toBe(b.captured.headers.etag)
+    expect(brotliDecompressSync(Buffer.concat(b.captured.chunks)).equals(canvas('two'))).toBe(true)
+  })
+
+  it('answers 304 with no body to a client that names the tag it last saw', () => {
+    const body = canvas('same')
+    const seen = stubResponse()
+    sendBody(seen.response, 200, json, body, 'gzip')
+    const tag = seen.captured.headers.etag
+    const again = stubResponse()
+    sendBody(again.response, 200, json, body, 'gzip', { ifNoneMatch: tag })
+    expect(again.captured.status).toBe(304)
+    expect(again.captured.chunks).toEqual([])
+    expect(again.captured.headers['content-length']).toBeUndefined()
+    expect(again.captured.headers['content-encoding']).toBeUndefined()
+    expect(again.captured.headers.etag).toBe(tag)
+    // A stale tag is a full answer; so is a client that sent none.
+    const stale = stubResponse()
+    sendBody(stale.response, 200, json, body, 'gzip', { ifNoneMatch: 'W/"somethingelse"' })
+    expect(stale.captured.status).toBe(200)
+    expect(stale.captured.chunks.length).toBe(1)
+  })
+
+  it('names the body even for a client that takes no compression, so it can revalidate too', () => {
+    const body = canvas('plain')
+    const out = stubResponse()
+    sendBody(out.response, 200, json, body, 'identity')
+    expect(out.captured.headers.etag).toBe(`W/"${contentTag(body)}"`)
+    expect(out.captured.headers['content-encoding']).toBeUndefined()
+    const not = stubResponse()
+    sendBody(not.response, 200, json, body, 'identity', { ifNoneMatch: out.captured.headers.etag })
+    expect(not.captured.status).toBe(304)
+  })
+
+  it('does not name an error body or a small one, and never serves a 304 for them', () => {
+    const error = stubResponse()
+    sendBody(error.response, 500, json, canvas('err'), 'gzip', { ifNoneMatch: '*' })
+    expect(error.captured.status).toBe(500)
+    expect(error.captured.headers.etag).toBeUndefined()
+    const small = stubResponse()
+    sendBody(small.response, 200, json, Buffer.from('{"ok":true}'), 'gzip', { ifNoneMatch: '*' })
+    expect(small.captured.status).toBe(200)
+    expect(small.captured.headers.etag).toBeUndefined()
+  })
+
+  it('keeps a bounded number of copies — the oldest goes, the live ones stay', () => {
+    for (let i = 0; i < 40; i += 1) sendBody(stubResponse().response, 200, json, canvas(`many-${i}`), 'gzip')
+    const stats = dynamicCompressionStats()
+    expect(stats.entries).toBeLessThanOrEqual(32)
+    expect(stats.bytes).toBeLessThanOrEqual(8 * 1024 * 1024)
+    // The most recent is still a hit; the first has been evicted.
+    const before = dynamicCompressionStats()
+    sendBody(stubResponse().response, 200, json, canvas('many-39'), 'gzip')
+    expect(dynamicCompressionStats().hits - before.hits).toBe(1)
+    sendBody(stubResponse().response, 200, json, canvas('many-0'), 'gzip')
+    expect(dynamicCompressionStats().misses - before.misses).toBe(1)
+  })
+
+  it('reads If-None-Match the way clients write it', () => {
+    expect(etagMatches('W/"abc"', 'abc')).toBe(true)
+    expect(etagMatches('"abc"', 'abc')).toBe(true)
+    expect(etagMatches('"x", W/"abc"', 'abc')).toBe(true)
+    expect(etagMatches('*', 'abc')).toBe(true)
+    expect(etagMatches('W/"abd"', 'abc')).toBe(false)
+    expect(etagMatches(undefined, 'abc')).toBe(false)
   })
 })
