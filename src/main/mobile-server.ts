@@ -162,6 +162,8 @@ export interface MobileServerDeps {
    *  tuning routes simply do not match and the phone draws no tags. */
   tuning?: MobileApiDeps['tuning']
   tuningBus?: MobileApiDeps['tuningBus']
+  /** Signals on the cables (cable-signal.ts) — passed straight through to the /api/events stream. */
+  signalBus?: MobileApiDeps['signalBus']
   /** The one stream (T2) — passed straight through to handleMobileApi, which
    *  serves /stream* from it and, behind COOKREW_STREAM_ADAPTERS, the five
    *  old routes as well. Absent = the new routes 503, the old ones unchanged. */

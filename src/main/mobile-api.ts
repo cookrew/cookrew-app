@@ -6,6 +6,8 @@ import type { WorkspaceStore } from "./store";
 import type { PtyManager } from "./pty";
 import type { TurnTracker } from "./turn-tracker";
 import type { DispatchService } from "./dispatch";
+import type { CableSignalBus } from "./cable-signal";
+import type { CableSignal } from "../shared/cable-signal";
 import type { EventLog, CookrewEvent, EventQuery } from "./event-log";
 import { pageTurns, type TurnRecord } from "../shared/turn";
 import type { VersionPinRecord } from "../shared/version-pin";
@@ -194,6 +196,12 @@ export interface MobileApiDeps {
     turn: (terminalId: string, knob: string, value: string) => { ok: boolean; reason?: string };
   };
   tuningBus?: EventEmitter;
+  /**
+   * Signals on the cables ("A asked B", "B answered A" — cable-signal.ts),
+   * one small frame each, so the phone's harness lights the same way the
+   * desktop's does. Optional: a test server without agents has none.
+   */
+  signalBus?: CableSignalBus;
   /** Recover an inactive teammate as it was (agent-recover feature). */
   recoverAgent: (id: string) => RecoverResult;
   /** Endpoint restore: rewind an agent to a checkpoint (+ undo). The optional
@@ -1344,6 +1352,13 @@ export async function handleMobileApi(
     };
     deps.tuningBus?.on("tuning", onTuning);
     request.on("close", () => deps.tuningBus?.removeListener("tuning", onTuning));
+    // A cable lit on this canvas. Either end on it is enough: the other end
+    // may be a tab naming an agent elsewhere, and the tab is the lamp.
+    const onSignal = (signal: CableSignal): void => {
+      if (inScopedCanvas(signal.from) || inScopedCanvas(signal.to)) send("signal", signal);
+    };
+    const offSignal = deps.signalBus?.on(onSignal) ?? null;
+    request.on("close", () => offSignal?.());
     for (const activity of turns.list()) {
       if (inScopedCanvas((activity as { terminalId: string }).terminalId)) {
         send("activity", activity);

@@ -1,6 +1,19 @@
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { ViewportPortal, useStore, useStoreApi, type Edge, type Node } from '@xyflow/react'
+import { cookrew } from './api'
 import { geometryKey, routeCables, type CableLink, type CableRect } from './cable-route'
+import {
+  SIGNAL_TTL_MS,
+  connectSignalFeed,
+  linkBetween,
+  litLinks,
+  pathD,
+  signalFeed,
+  signalPath,
+  tabSignal,
+  trunkSignal,
+  type LiveSignal
+} from './cable-signal'
 import { TAB_H, TAB_W, harnessView, stageOf, tabLayout, viewportKey } from './cable-view'
 
 /**
@@ -31,12 +44,24 @@ import { TAB_H, TAB_W, harnessView, stageOf, tabLayout, viewportKey } from './ca
  * Hover is tracked here, on the flow's own DOM node, rather than lifted into
  * App: a hover that re-rendered App would re-render the app shell on every
  * card the pointer crossed.
+ *
+ * SIGNALS ride the same two clocks and add no third. When one agent asks
+ * another, or answers, main mints one frame (shared/cable-signal.ts) and the
+ * feed (cable-signal.ts) holds it for a few seconds. This layer subscribes
+ * to the feed: a signal's arrival and expiry each cost one render of this
+ * component — a class on the trunks that carry the cable, a tab lit as a
+ * lamp when the far end is off the stage, and one <div> per signal whose
+ * movement is a CSS `offset-distance` keyframe, which Chromium runs on the
+ * compositor. Nothing is in the tree when nothing is in flight, and a pan
+ * reads the feed's unchanged snapshot, so the render-count gate holds.
  */
 
 /** A drag re-keys geometry every frame; route once it has been still this long. */
 const SETTLE_MS = 120
 const INK = '#2D2A20'
 const HOT = '#D97706'
+/** The pulse fades out over the last part of its lifetime; the travel takes the rest. */
+const SIGNAL_FADE_MS = 200
 
 function rectOf(node: Node): CableRect | null {
   const style = node.style as { width?: unknown; height?: unknown } | undefined
@@ -137,6 +162,12 @@ function CableHarnessComponent({ nodes, edges }: Props): React.JSX.Element | nul
   }, [vkey, store]) // eslint-disable-line react-hooks/exhaustive-deps
   const hovered = useHoveredCard()
   const view = useMemo(() => harnessView(harness, rects, links, stage, hovered), [harness, rects, links, stage, hovered])
+
+  // ---- signals: arrival and expiry, never a frame
+  useEffect(() => connectSignalFeed(cookrew()), [])
+  const signals = useSyncExternalStore(signalFeed.subscribe, signalFeed.snapshot, signalFeed.snapshot)
+  const lit = useMemo(() => litLinks(signals, links), [signals, links])
+  const pulses = useMemo(() => signalPulses(signals, links, harness, view.drawn), [signals, links, harness, view.drawn])
   // Cards whose fold has been clicked open. Kept here rather than in App: it
   // is this layer's own affordance and nothing else reads it.
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set())
@@ -147,6 +178,7 @@ function CableHarnessComponent({ nodes, edges }: Props): React.JSX.Element | nul
 
   if (view.trunks.length === 0 && chips.length === 0) return null
   const dimmed = hovered !== null
+  const signalClass = (kind: 'ask' | 'answer' | null): string => (kind ? ` sig sig-${kind}` : '')
   return (
     <ViewportPortal>
       <svg
@@ -157,35 +189,58 @@ function CableHarnessComponent({ nodes, edges }: Props): React.JSX.Element | nul
         <g strokeLinecap="round" fill="none">
           {view.stubs.map((s) => {
             const hot = view.hot.has(s.link)
+            const kind = lit.get(s.link)?.kind ?? null
             return (
               <line
                 key={`${s.link}:${s.card}`}
+                className={`cr-harness-stub${signalClass(kind)}`}
                 x1={s.from.x}
                 y1={s.from.y}
                 x2={s.to.x}
                 y2={s.to.y}
                 stroke={hot ? HOT : INK}
-                strokeWidth={hot ? 2 : 1}
+                strokeWidth={hot || kind ? 2 : 1}
                 strokeOpacity={hot ? 0.95 : dimmed ? 0.16 : 0.45}
                 vectorEffect="non-scaling-stroke"
               />
             )
           })}
-          {view.trunks.map((t) => (
-            <line
-              key={`${t.x1},${t.y1},${t.x2},${t.y2}`}
-              x1={t.x1}
-              y1={t.y1}
-              x2={t.x2}
-              y2={t.y2}
-              stroke={t.hot ? HOT : INK}
-              strokeWidth={trunkWidth(t.count) + (t.hot ? 1.2 : 0)}
-              strokeOpacity={t.hot ? 0.95 : dimmed ? 0.18 : t.count > 1 ? 0.62 : 0.4}
-              vectorEffect="non-scaling-stroke"
-            />
-          ))}
+          {view.trunks.map((t) => {
+            const kind = trunkSignal(t, lit)
+            return (
+              <line
+                key={`${t.x1},${t.y1},${t.x2},${t.y2}`}
+                className={`cr-harness-trunk${signalClass(kind)}`}
+                x1={t.x1}
+                y1={t.y1}
+                x2={t.x2}
+                y2={t.y2}
+                stroke={t.hot ? HOT : INK}
+                strokeWidth={trunkWidth(t.count) + (t.hot || kind ? 1.2 : 0)}
+                strokeOpacity={t.hot ? 0.95 : dimmed ? 0.18 : t.count > 1 ? 0.62 : 0.4}
+                vectorEffect="non-scaling-stroke"
+              />
+            )
+          })}
         </g>
       </svg>
+      {/*
+        The pulses. One element per signal in flight, in flow coordinates
+        like the tabs, moved by a keyframe on `offset-distance` — the
+        compositor's work, not React's and not the main thread's. Keyed on
+        the stamp, so a refreshed signal restarts its travel.
+      */}
+      {pulses.map((p) => (
+        <div
+          key={`${p.signal.from}:${p.signal.to}:${p.signal.kind}:${p.signal.at}`}
+          className={`cr-sig-dot ${p.signal.kind}`}
+          style={{
+            offsetPath: `path("${p.d}")`,
+            ['--cr-sig-ms' as string]: `${Math.max(400, SIGNAL_TTL_MS[p.signal.kind] - SIGNAL_FADE_MS)}ms`
+          }}
+          aria-hidden="true"
+        />
+      ))}
       {/*
         Tabs are real elements, not SVG. A 1 x 1 svg with overflow:visible
         paints outside its box but does not hit-test there, so a fold drawn as
@@ -193,15 +248,19 @@ function CableHarnessComponent({ nodes, edges }: Props): React.JSX.Element | nul
         canvas's own type rendering, and they ride the viewport transform like
         the paste ghosts do.
       */}
-      {chips.map((c, i) => (
+      {chips.map((c, i) => {
+        // The tab is the lamp: the cable it names is not drawn at this
+        // viewport, so the traffic on it has nowhere else to show.
+        const kind = c.partner === null ? null : tabSignal(lit, links, c.card, c.partner)
+        return (
         <div
           key={`${c.card}:${c.partner ?? 'fold'}:${i}`}
-          className={`cr-harness-tab${c.more ? ' fold' : ''}${c.hot ? ' hot' : ''}`}
+          className={`cr-harness-tab${c.more ? ' fold' : ''}${c.hot ? ' hot' : ''}${signalClass(kind)}`}
           style={{
             transform: `translate(${c.x}px, ${c.y}px)`,
             width: TAB_W,
             height: TAB_H,
-            opacity: dimmed && !c.hot ? 0.35 : 1,
+            opacity: dimmed && !c.hot && !kind ? 0.35 : 1,
             pointerEvents: c.more ? 'auto' : 'none'
           }}
           // Only the fold takes a click; a naming tab is a sign, not a control.
@@ -220,9 +279,37 @@ function CableHarnessComponent({ nodes, edges }: Props): React.JSX.Element | nul
         >
           {c.label}
         </div>
-      ))}
+        )
+      })}
     </ViewportPortal>
   )
+}
+
+interface Pulse {
+  signal: LiveSignal
+  d: string
+}
+
+/**
+ * One pulse per signal whose cable is drawn as a run here — sender's edge to
+ * receiver's edge through the trunks that carry it. A signal on a cable
+ * that is a tab at this viewport, or that the router could not route, has
+ * no pulse: the lamp or the lit trunks say what there is to say.
+ */
+function signalPulses(
+  signals: readonly LiveSignal[],
+  links: readonly CableLink[],
+  harness: ReturnType<typeof routeCables>,
+  drawn: ReadonlySet<string>
+): Pulse[] {
+  const out: Pulse[] = []
+  for (const signal of signals) {
+    const link = linkBetween(links, signal.from, signal.to)
+    if (!link || !drawn.has(link.id)) continue
+    const points = signalPath(harness, link.id, signal.from)
+    if (points) out.push({ signal, d: pathD(points) })
+  }
+  return out
 }
 
 export const CableHarness = memo(CableHarnessComponent)

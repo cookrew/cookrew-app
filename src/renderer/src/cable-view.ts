@@ -77,6 +77,12 @@ export interface HarnessView {
   tabs: readonly ViewTab[]
   /** Links that touch the hovered card. */
   hot: ReadonlySet<string>
+  /**
+   * Links drawn as runs at this viewport — both ends on stage, or hovered.
+   * A signal on one of these rides the trunks; on any other it is a lamp on
+   * the tab (cable-signal.ts).
+   */
+  drawn: ReadonlySet<string>
 }
 
 /** The flow-space rectangle the viewport shows. */
@@ -145,7 +151,7 @@ export function harnessView(
     trunks.push({ ...t, count: visible.length, links: visible, hot: visible.some((l) => hot.has(l)) })
   }
   const stubs = harness.stubs.filter((s) => drawn.has(s.link))
-  return { trunks, stubs, tabs, hot }
+  return { trunks, stubs, tabs, hot, drawn }
 }
 
 /**

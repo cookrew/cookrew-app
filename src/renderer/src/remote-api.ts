@@ -458,6 +458,7 @@ export function createRemoteApi(): CookrewApi {
     // Observability event log (observability-event-log-spec): the shared SSE
     // stream carries 'event'; queries/roster are plain GETs.
     onEvent: (cb) => subscribe('event', cb),
+    onCableSignal: (cb) => subscribe('signal', cb),
     queryEvents: async (query) => {
       const params = new URLSearchParams()
       const q = (query ?? {}) as Record<string, unknown>

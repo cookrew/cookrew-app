@@ -410,6 +410,12 @@ export interface CookrewApi {
    * Optional — the demo api lacks them; consumers feature-detect (EventToast).
    */
   onEvent?: (cb: (event: unknown) => void) => () => void;
+  /**
+   * Signals on the cables: one agent asked another, or answered — one frame
+   * per moment (shared/cable-signal.ts). Optional and feature-detected: the
+   * harness lights nothing on a bridge without it.
+   */
+  onCableSignal?: (cb: (signal: unknown) => void) => () => void;
   queryEvents?: (query?: unknown) => Promise<unknown[]>;
   countEvents?: (query?: unknown) => Promise<Record<string, number>>;
   listAgents?: () => Promise<unknown[]>;

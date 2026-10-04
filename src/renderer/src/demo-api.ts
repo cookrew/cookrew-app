@@ -112,6 +112,15 @@ export function createDemoApi(): CookrewApi {
   const wsListeners = new Set<(l: WorkspaceList) => void>()
   const ptyListeners = new Map<string, (data: string) => void>()
   const lineBuffers = new Map<string, string>()
+  // Signals on the cables, with no main behind them: a fixture page (the
+  // harness preview, QA) puts one on a cable through `window.__cableSignal`.
+  const signalListeners = new Set<(signal: unknown) => void>()
+  if (typeof window !== 'undefined') {
+    ;(window as unknown as { __cableSignal?: (moment: unknown) => void }).__cableSignal = (moment) => {
+      const frame = { at: Date.now(), ...(typeof moment === 'object' && moment !== null ? moment : {}) }
+      for (const listener of signalListeners) listener(frame)
+    }
+  }
 
   const broadcast = (next: WorkspaceState): void => {
     state = next
@@ -318,6 +327,12 @@ export function createDemoApi(): CookrewApi {
 
     listActivity: () => Promise.resolve([]),
     onTerminalActivity: () => () => undefined,
+    onCableSignal: (cb) => {
+      signalListeners.add(cb)
+      return () => {
+        signalListeners.delete(cb)
+      }
+    },
 
     // The demo shell has no turn tracking; forking degrades to a plain clone
     // so the canvas interaction still demonstrates the lineage edge.
