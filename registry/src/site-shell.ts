@@ -446,6 +446,23 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
 .who .meta{flex:1;min-width:220px}
 .shelf{margin:18px 0 6px;padding:14px 16px 2px;border:2px solid var(--line);background:var(--amber-soft);box-shadow:4px 4px 0 var(--line)}
 .shelf h2.mkt-h{margin:0 0 12px;font-size:15px}
+/* YOUR AGENTS — the signed-in reader's own teams, first on the page, one row and one act each */
+.yours{margin:10px 0 4px;padding:0;border:2px solid var(--line);background:var(--amber-soft);box-shadow:4px 4px 0 var(--line)}
+.yours-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 14px;border-bottom:2px solid var(--line)}
+.yours-head h2{margin:0;font-size:15px}.yours-head .sp{flex:1}
+.yours-empty{margin:0;padding:12px 14px}
+.yours-rows{list-style:none;margin:0;padding:0}
+.yours-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto auto auto;gap:10px;align-items:center;padding:10px 14px;background:var(--cream-hi);border-bottom:2px solid var(--line-soft)}
+.yours-row:last-child{border-bottom:none}
+.yours-row .ttl{font:700 10px var(--font-pixel);letter-spacing:.06em;text-transform:uppercase;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.yours-row .meta{white-space:nowrap}.yours-row .stand{white-space:nowrap}
+.yours-row .btn{white-space:nowrap}
+@media (max-width:760px){
+  .yours-row{grid-template-columns:auto minmax(0,1fr) auto;row-gap:8px}
+  .yours-row .meta{display:none}
+  .yours-row .btn.primary{grid-column:1/3}.yours-row .btn{justify-content:center}
+  .yours-head .btn{display:none}
+}
 @media (max-width:700px){
   .who{padding:9px 12px;gap:8px}.who .meta{min-width:0;font-size:12.5px}.who .btn{margin-left:auto}
   .tabs{margin-top:16px}.tabs a{flex:1;text-align:center;padding:9px 6px;font-size:8.5px}

@@ -5,7 +5,7 @@ import { presetCard } from './site-home'
 import { esc, icon, page, type Page } from './site-shell'
 import { MARKET_DEFINITION } from './site-content'
 import { breadcrumbs, organization, teamList, webPage } from './site-seo'
-import { cardFace, readerLine, seatAt, shelfOf, type CardFace, type Standing } from './market-shelf'
+import { cardFace, readerLine, seatAt, shelfOf, type CardFace, type Shelf, type Standing } from './market-shelf'
 
 /**
  * THE MARKET — a shop with one name on the door.
@@ -132,11 +132,38 @@ function chip(name: string, value: string, label: string, on: boolean): string {
  * page a click away. Signed out: the one sentence that explains why signing
  * in is worth it, and the sheet.
  */
-function readerStrip(input: MarketInput, line: string | null): string {
-  if (input.account === null || line === null) {
-    return `<div class="who" data-signin-stays><span class="meta">Sign in once — your seats, stars and teams follow your username to any device, and into the app.</span><button class="btn sm primary" data-signin>${icon('key')} Sign in</button></div>`
+function readerStrip(input: MarketInput): string {
+  if (input.account !== null) return ''
+  return `<div class="who" data-signin-stays><span class="meta">Sign in once — the teams you serve and the seats you hold are the first thing on this page, on any device, and in the app.</span><button class="btn sm primary" data-signin>${icon('key')} Sign in</button></div>`
+}
+
+/**
+ * YOUR AGENTS — the first thing a signed-in reader sees (owner, 2026-10-04:
+ * from the market, once signed in, pick the agents you control).
+ *
+ * One row per team the reader serves or holds a seat at, newest seat first,
+ * and one act per row: OPEN THE LINE goes to the team's page with `?open=1`,
+ * which line.js spends on the click's behalf — the line opens on arrival,
+ * because the click here WAS the open. Rows, not cards, so five fit on a
+ * phone above the catalogue. A reader with nothing yet is told so in one
+ * line and pointed below.
+ */
+function yoursStrip(input: MarketInput, shelf: Shelf, seats: readonly V2Seat[], line: string): string {
+  if (input.account === null) return ''
+  const head = `<div class="yours-head"><span class="chip amber">${esc(line)}</span><h2>Your agents</h2><span class="sp"></span><a class="btn sm" href="/me">Your account</a></div>`
+  if (shelf.yours.length === 0) {
+    return `<section class="yours" id="yours">${head}<p class="meta yours-empty">Nothing of yours yet. A seat you buy below lands here; so does a team you serve from the app.</p></section>`
   }
-  return `<div class="who"><span class="chip amber">${esc(line)}</span><span class="meta">A seat bought here is the seat the app opens with — same username, no second sign-in.</span><a class="btn sm" href="/me">Your account</a></div>`
+  const rows = shelf.yours
+    .map((d) => {
+      const at = `/${esc(d.handle)}/${esc(d.name)}`
+      const standing = shelf.standing.get(`${d.handle}/${d.name}`) ?? { kind: 'stranger' as const }
+      const face = cardFace(standing, d, seatAt(d, seats, input.now))
+      const off = d.live === false
+      return `<li class="yours-row" data-standing="${esc(standing.kind)}"><span class="led${off ? ' off' : ''}"></span><a class="ttl" href="${at}">${esc(d.title)}</a><span class="meta">${esc(d.door)} · ${d.agents} agent${d.agents === 1 ? '' : 's'}${off ? ' · offline' : ''}</span><span class="${chipClass(face.chip.tone)} stand">${esc(face.chip.label)}</span><a class="btn sm primary" href="${at}?open=1">Open the line</a><a class="btn sm" href="${at}#open" data-open="cookrew://import/@${esc(d.handle)}/${esc(d.name)}">In Cookrew</a></li>`
+    })
+    .join('')
+  return `<section class="yours" id="yours">${head}<ul class="yours-rows">${rows}</ul></section>`
 }
 
 export function marketPage(input: MarketInput): Page {
@@ -164,15 +191,15 @@ export function marketPage(input: MarketInput): Page {
   // The shelf is the reader's own: it shows on the teams tab only, where the
   // whole market is on the page. A search or the starred tab is a question
   // about the catalogue, and the answer lists every match once.
-  const shelved = query.tab === 'teams' && !query.q && !query.owner && shelf.yours.length > 0
+  // The strip is the reader's own, and shows where the whole market is on the
+  // page; a search or another tab is a question about the catalogue.
+  const onYourTab = query.tab === 'teams' && !query.q && !query.owner
+  const shelved = onYourTab && shelf.yours.length > 0
   const catalogue = shelved ? shelf.rest : doors
   const count =
     query.tab === 'presets'
       ? `${presets.length} preset${presets.length === 1 ? '' : 's'}`
       : `${catalogue.length} ${shelved ? 'more ' : ''}team${catalogue.length === 1 ? '' : 's'}`
-  const yours = shelved
-    ? `<section class="shelf" id="yours"><h2 class="mkt-h">Yours<span class="chip amber">${shelf.yours.length} to open</span></h2><div class="teams">${shelf.yours.map(card).join('')}</div></section>`
-    : ''
   const grid =
     query.tab === 'presets'
       ? presets.length > 0
@@ -183,9 +210,10 @@ export function marketPage(input: MarketInput): Page {
         : query.tab === 'starred' && !input.account
           ? `<div class="empty">Sign in to see what you starred.</div>`
           : shelved
-            ? `<div class="empty">Everything listed is already yours.</div>`
+            ? `<div class="empty">Everything listed is already yours — it is all above.</div>`
             : `<div class="empty">No team matches. Widen the filters, or serve one yourself.</div>`
-  const reader = input.account === null ? null : readerLine(input.account, shelfOf(input.doors, input.account, seats, input.now), input.starredTeams.length)
+  const whole = shelfOf(input.doors, input.account, seats, input.now)
+  const reader = input.account === null ? '' : readerLine(input.account, whole, input.starredTeams.length)
 
   return page(
     {
@@ -204,7 +232,8 @@ export function marketPage(input: MarketInput): Page {
 <p class="kicker"><span class="no">MARKET</span>one account · a seat once · any device</p>
 <h1 style="font-size:clamp(28px,3.6vw,40px);margin-bottom:10px">Find a crew. Open it, or buy a seat.</h1>
 <p class="lede" style="margin-bottom:8px">${esc(MARKET_ONE_LINE)}</p>
-${readerStrip(input, reader)}
+${readerStrip(input)}
+${onYourTab ? yoursStrip(input, whole, seats, reader) : ''}
 <div class="tabs">${tab('teams', 'Served teams')}${tab('presets', 'Presets to download')}${tab('starred', '★ Starred')}</div>
 <form class="card soft finder" method="get" action="/market" id="filters">
 ${hidden('tab', query.tab === 'teams' ? '' : query.tab)}${hidden('owner', query.owner)}
@@ -218,7 +247,6 @@ ${chip('rail', 'stripe', 'card · stripe', query.rail === 'stripe')}
 ${query.owner ? `<a class="chip amber" href="/market">@${esc(query.owner)} ✕</a>` : ''}
 <label class="sort"><span class="meta">sort</span><select name="sort" id="sort" aria-label="Sort"><option value="stars"${query.sort === 'stars' ? ' selected' : ''}>Most starred</option><option value="recent"${query.sort === 'recent' ? ' selected' : ''}>Recently served</option><option value="name"${query.sort === 'name' ? ' selected' : ''}>Name</option></select></label>
 </div></form>
-${yours}
 <p class="meta" id="count">${count}${query.q ? ` matching “${esc(query.q)}”` : ''}${query.owner ? ` by @${esc(query.owner)}` : ''}${input.account ? ` · signed in as @${esc(input.account)}` : ''}</p>
 ${grid}
 <div class="faq" style="margin-top:24px" id="account"><details><summary>How listings, seats, stars and opening work</summary><ul class="pts how">
