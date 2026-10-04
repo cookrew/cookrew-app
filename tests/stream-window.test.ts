@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -100,7 +100,7 @@ function bed() {
   return {
     service,
     readsSince,
-    files: { A: `${A}.jsonl`, B: `${B}.jsonl`, C: `${C}.jsonl` },
+    files: { dir, A: `${A}.jsonl`, B: `${B}.jsonl`, C: `${C}.jsonl` },
     ageOut: (ids: string[]) => void (lineage = ids)
   }
 }
@@ -151,6 +151,21 @@ describe('windowRows — the paging rule, over index rows', () => {
 
   it('takes the reader’s default when no limit is asked for', () => {
     expect(windowRows(rows, {}, 3).rows).toHaveLength(3)
+  })
+
+  it('never counts a row whose transcript is gone, either — it has no bytes to serve', () => {
+    const mixed = [
+      row(1, { occurrences: [{ file: '/t/gone.jsonl', byteOffset: 5 }] }),
+      row(2, { occurrences: [{ file: '/t/gone.jsonl', byteOffset: 9 }] }),
+      row(3),
+      row(4)
+    ]
+    const gone = new Set(['/t/gone.jsonl'])
+    // The first page is the first rows that are ON DISK — what the walk, which
+    // only ever saw files that exist, handed back for a cursorless request.
+    expect(windowRows(mixed, { limit: 2 }, 20, gone).rows.map((r) => r.ordinal)).toEqual([3, 4])
+    // And a cursor into the gone file is as unknown as it was to the walk.
+    expect(windowRows(mixed, { after: 'id-1' }, 20, gone).unknownAfter).toBe(true)
   })
 })
 
@@ -275,6 +290,24 @@ describe('service.blocks — THE STRUCTURAL GATE: only the files a window spans 
     expect(page.blocks.map((b) => b.ordinal)).toEqual([1, 2, 3, 4, 5])
     expect(page.blocks[0].sessionId).toBe(A)
     expect(page.total).toBe(10)
+  })
+
+  it('skips the rows of a transcript deleted since the index was built — the first page is still twenty blocks', async () => {
+    const { service, readsSince, files } = bed()
+    await indexOf(service, 't-win')
+    // The oldest transcript is deleted but still in the lineage: the index
+    // keeps its four rows (a deletion is not a renumbering), the chain reports
+    // it missing, and a cursorless page starts at the first row with bytes —
+    // exactly where the walk, which never saw the file, started.
+    rmSync(path.join(files.dir, files.A))
+    readsSince()
+    const page = await service.blocks('t-win', { limit: 3 })
+    expect(page.blocks.map((b) => b.ordinal)).toEqual([5, 6, 7])
+    expect(page.total).toBe(10)
+    expect(page.missing.map((m) => path.basename(m.file))).toEqual([files.A])
+    expect(readsSince()[files.A]).toBeUndefined()
+    // A cursor into the deleted file is unknown, as it was to the walk.
+    expect((await service.blocks('t-win', { after: 'a-u2' })).unknownAfter).toBe(true)
   })
 
   it('answers a card on its very first read, before any snapshot exists', async () => {

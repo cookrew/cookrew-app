@@ -50,16 +50,22 @@ export interface WindowRows {
 /**
  * Which rows a request addresses. Pure: a test hands it a list.
  *
- * Rolled-back rows are excluded BEFORE the window is cut, not dropped from it
- * after, so `limit` means "this many blocks" exactly as it did when the walk
- * — which never saw those rows at all — was the one being sliced.
+ * Rows WITHOUT BYTES are excluded BEFORE the window is cut, not dropped from
+ * it after, so `limit` means "this many blocks" exactly as it did when the
+ * walk — which never saw those rows at all — was the one being sliced. Two
+ * kinds of row have none: a rolled-back row (a /rewind took its bytes) and a
+ * row whose transcript the chain reports MISSING (`gone`) — on the owner's
+ * busiest card, 693 of 1,136 rows live in two files that were deleted, and
+ * the first page of that card is the first twenty rows that are still on
+ * disk, as it always was, not twenty addresses with nothing behind them.
  */
 export function windowRows(
   entries: readonly ProjectedCheckpoint[],
   request: StreamBlocksRequest,
-  defaultLimit: number
+  defaultLimit: number,
+  gone: ReadonlySet<string> = new Set()
 ): WindowRows {
-  const servable = entries.filter((row) => row.rolledBack !== true)
+  const servable = entries.filter((row) => row.rolledBack !== true && !gone.has(fileOfRow(row)))
   const limit = Math.max(1, request.limit ?? defaultLimit)
   if (request.after !== undefined) {
     const at = servable.findIndex((row) => row.identity === request.after)

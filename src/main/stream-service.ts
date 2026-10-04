@@ -321,7 +321,10 @@ export function createStreamService(deps: StreamServiceDeps): StreamService {
       // card that has never materialised, or one whose state was unreadable.
       // The walk's own answer stands, exactly as it did before.
       if (index.entries.length === 0) return reader.blocks(terminalId, request)
-      const { rows, ...unknown } = windowRows(index.entries, request, STREAM_PAGE_DEFAULT_LIMIT)
+      // Rows in a transcript the chain reports missing have no bytes to serve
+      // and are not a page's worth of anything — the walk never saw them.
+      const gone = new Set(index.missing.map((member) => member.file))
+      const { rows, ...unknown } = windowRows(index.entries, request, STREAM_PAGE_DEFAULT_LIMIT, gone)
       const members = new Map(chain.files.map((entry) => [entry.file, entry]))
       // A file the chain no longer lists is still an address: it rotated out
       // of the lineage, not off the disk. Only Claude chains have more than
