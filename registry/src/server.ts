@@ -21,6 +21,7 @@ import { respondPage } from './site-shell'
 import type { StarStore } from './stars'
 import type { Release, ReleaseCache } from './releases'
 import { handleV2Route, signedIn, v2AccountOf, type V2Identity } from './v2-routes'
+import { sameOrigin } from './v2-http'
 import type { NamesFeature } from './names'
 import { teamAddress } from './v2-seats'
 import { mePage } from './site-account'
@@ -466,9 +467,13 @@ export function createRegistry(deps: RegistryDeps): Server {
         }, PRIVATE)
         return
       }
-      // A state change takes the Bearer only — never the cookie, so a page on
-      // another origin cannot star on a reader's behalf.
-      const account = accountOf(request, 'bearer')
+      // A state change takes the Bearer — or the v2 session cookie from a page
+      // on THIS origin. The v1 cookie is never enough: a page elsewhere could
+      // carry it. The v2 session is HttpOnly and the Origin is checked, which
+      // is the same two locks every /v2 write stands behind, and it is what
+      // lets a signed-in reader star without a second credential.
+      const account =
+        accountOf(request, 'bearer') ?? (deps.v2 && sameOrigin(request) ? v2AccountOf(request, deps.v2) : null)
       if (account === null) {
         json(response, 401, { error: 'unidentified' }, PRIVATE)
         return
@@ -891,7 +896,11 @@ export function createRegistry(deps: RegistryDeps): Server {
             query: marketQuery(url.searchParams),
             stars: starsOf,
             account,
-            starredTeams: account === null ? [] : (deps.stars?.byAccount(account) ?? [])
+            starredTeams: account === null ? [] : (deps.stars?.byAccount(account) ?? []),
+            // THE SHOP KNOWS ONE NAME. The seats this account holds decide what
+            // every card is to the reader (market-shelf.ts); a v1 handle with
+            // no v2 account holds none and reads the market as a stranger would.
+            seats: account === null || !deps.v2 ? [] : deps.v2.seats.heldBy(account)
           })
         )
         return

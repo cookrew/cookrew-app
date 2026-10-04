@@ -180,108 +180,33 @@
     return out.body.token
   }
 
-  async function enrol(handle) {
-    const clean = handle.trim().toLowerCase().replace(/^@/, '')
-    if (!/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/.test(clean)) throw new Error('a handle is 1–32 lowercase letters, digits or dashes')
-    const key = await mintKey()
-    const publicKeyJwk = await crypto.subtle.exportKey('jwk', key.pair.publicKey)
-    const res = await api('/v1/identity/register', { credentialId: clean, publicKeyJwk })
-    if (res.status === 409) throw new Error(`@${clean} is already taken — if it is yours, it belongs to the device that enrolled it`)
-    if (res.status !== 201) throw new Error(`the registry refused the enrolment (${res.status})`)
-    await saveAccount({ handle: clean, alg: key.alg, pair: key.pair })
-    return clean
-  }
-
-  /* ── the sign-in sheet ─────────────────────────────────────────────────── */
-  function sheet() {
-    let dialog = $('signin-sheet')
-    if (dialog) return dialog
-    dialog = document.createElement('dialog')
-    dialog.id = 'signin-sheet'
-    dialog.className = 'card'
-    dialog.innerHTML = `<h3 style="margin-top:0">Your cookrew.dev account</h3>
-<p class="meta">A handle plus a key this browser holds. No password. The first key to enrol a handle owns it.</p>
-<form method="dialog" id="signin-form"><div class="row"><input id="signin-handle" placeholder="handle" autocomplete="username" spellcheck="false" style="font:14px var(--font-mono);padding:8px 10px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink);min-width:200px"><button class="btn primary" value="enrol">Enrol this browser</button><button class="btn" value="cancel">Cancel</button></div></form>
-<p class="meta" id="signin-note" style="margin-top:10px"></p>`
-    document.body.appendChild(dialog)
-    return dialog
-  }
-
-  async function signInFlow() {
-    const account = await loadAccount()
-    if (account) {
-      const dialog = sheet()
-      const form = dialog.querySelector('#signin-form')
-      form.replaceChildren()
-      const row = document.createElement('div')
-      row.className = 'row'
-      const who = document.createElement('span')
-      who.className = 'chip amber'
-      who.textContent = `@${account.handle}`
-      const out = document.createElement('button')
-      out.className = 'btn'
-      out.value = 'out'
-      out.textContent = "Forget this browser's key"
-      const cancel = document.createElement('button')
-      cancel.className = 'btn'
-      cancel.value = 'cancel'
-      cancel.textContent = 'Close'
-      row.append(who, out, cancel)
-      form.append(row)
-      dialog.querySelector('#signin-note').textContent = 'Stars and the line use this account. Forgetting the key here does not release the handle.'
-      dialog.showModal()
-      dialog.onclose = async () => {
-        if (dialog.returnValue === 'out') {
-          await forgetAccount()
-          tokens.clear()
-          document.cookie = 'cr_account=; Path=/; Max-Age=0'
-          location.reload()
-        }
-      }
-      return
-    }
-    const dialog = sheet()
-    dialog.showModal()
-    dialog.querySelector('#signin-handle')?.focus()
-    dialog.onclose = async () => {
-      if (dialog.returnValue !== 'enrol') return
-      const handle = dialog.querySelector('#signin-handle')?.value ?? ''
-      try {
-        await enrol(handle)
-        await token('download')
-        toast(`Enrolled @${handle.trim().toLowerCase().replace(/^@/, '')}. Signed in.`)
-        setTimeout(() => location.reload(), 600)
-      } catch (error) {
-        toast(error.message, 6000)
-      }
-    }
-  }
+  /* ── the sign-in sheet is the account sheet (site-shell.ts) — one name, a
+   *    password, no key this browser mints. The v1 enrolment under a bare
+   *    handle is gone from this page: a key-holder can never be the person a
+   *    seat names, and the market binds everything to the username. ─────── */
 
   /* ── stars ─────────────────────────────────────────────────────────────── */
+  /**
+   * A star is recorded under the ACCOUNT, over the same session cookie every
+   * /v2 write uses. Signed out, the answer is the account sheet — never a
+   * handle to enrol: the market knows one name, and this is it.
+   */
   async function star(button) {
     const [handle, name] = button.dataset.star.split('/')
-    let bearer
-    try {
-      bearer = await token('download')
-    } catch (error) {
-      toast(error.message, 6000)
-      return
-    }
-    if (!bearer) {
+    const out = await v2('POST', `/v1/doors/@${handle}/${name}/star`)
+    if (out.status === 401) {
       toast('Sign in to star a team — one star per account.')
-      signInFlow()
+      openAccountSheet()
       return
     }
-    const res = await fetch(`/v1/doors/@${handle}/${name}/star`, { method: 'POST', headers: { authorization: `Bearer ${bearer}` } })
-    if (!res.ok) {
-      toast(`The star did not take (${res.status}).`)
+    if (out.status !== 200 || !out.body) {
+      toast(`The star did not take (${out.status}).`)
       return
     }
-    const out = await res.json()
-    button.classList.toggle('on', out.starred === true)
+    button.classList.toggle('on', out.body.starred === true)
     const n = button.querySelector('span')
-    if (n) n.textContent = String(out.stars)
-    toast(out.starred ? 'Starred.' : 'Star removed.')
+    if (n) n.textContent = String(out.body.stars)
+    toast(out.body.starred ? 'Starred.' : 'Star removed.')
   }
 
   /* ── deep link ─────────────────────────────────────────────────────────── */
@@ -312,9 +237,7 @@
       navigator.clipboard.writeText(el.dataset.copy).then(() => toast('Address copied. Paste it into Cookrew → Import a team.'))
     } else if (el.dataset.signin !== undefined) {
       event.preventDefault()
-      // The header's button is the v2 sheet now. The v1 ceremony is still
-      // reachable — line.js calls it by name when a door needs the older
-      // key-based sign-in — but it is no longer what a person clicks.
+      // The header's button and every card's "Sign in" are the one sheet.
       if (el.dataset.signin === 'me') location.assign('/me')
       else openAccountSheet()
     }
@@ -1167,8 +1090,9 @@
      * `signIn` used to be the v1 enrolment flow, and the line called it when a
      * reader was not signed in — so the marketplace's own door could still be
      * answered by a key this browser minted under a bare handle. Both names
-     * point at the account sheet now; the enrolment flow keeps only the one
-     * caller it was written for (stars), which is not a door and not a seat.
+     * point at the account sheet now, and nothing on the site enrols a handle
+     * any more; the v1 key survives only to carry an old handle across to a
+     * v2 account (migrateWithOldKey) and to keep its cookie fresh meanwhile.
      */
     signIn: openAccountSheet,
     account: openAccountSheet,

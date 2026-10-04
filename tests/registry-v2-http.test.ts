@@ -494,6 +494,17 @@ describe('accountOf — v1 and v2 agree about who is reading', () => {
     const unsigned = await call('POST', '/v1/doors/@somebody/alpha/star')
     expect(unsigned.status).toBe(401)
   })
+
+  it('stars over the session cookie from this origin, so the page needs no second credential', async () => {
+    const reader = await claim()
+    const cookie = { cookie: `__Host-cr_session=${reader.token}` }
+    const res = await call('POST', '/v1/doors/@somebody/alpha/star', undefined, cookie)
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as { starred: boolean }).starred).toBe(true)
+    // The cookie carried by a page on another origin is not this person's wish.
+    const foreign = await call('POST', '/v1/doors/@somebody/alpha/star', undefined, { ...cookie, origin: 'https://evil.example' })
+    expect(foreign.status).toBe(401)
+  })
 })
 
 describe('the limiter', () => {

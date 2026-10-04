@@ -27,3 +27,13 @@ describe('a sign-in on a team page reloads the page instead of leaving for /me',
     expect(factors.match(/window\.cookrewAfterSignIn \?\? \(\(\) => location\.assign\('\/me'\)\)/g)).toHaveLength(2)
   })
 })
+
+describe('the site enrols no handle', () => {
+  it('site.js carries no v1 enrolment dialog, and stars act over the v2 session', () => {
+    const site = ASSETS['site.js'].body
+    expect(site).not.toContain('Enrol this browser')
+    expect(site).not.toContain('signInFlow')
+    expect(site).not.toContain('/v1/identity/register')
+    expect(site).toContain("v2('POST', `/v1/doors/@${handle}/${name}/star`)")
+  })
+})
