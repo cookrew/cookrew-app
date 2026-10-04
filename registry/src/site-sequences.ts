@@ -24,8 +24,8 @@ export const SEQUENCES: Readonly<Record<string, readonly Step[]>> = {
     },
     {
       "file": "seq-canvas-3.jpg",
-      "title": "An agent stops to ask, and is answered on the card",
-      "caption": "Velvet reached a decision it would not take alone: its card went to attention, it printed the two choices into its own terminal, and the answer was typed straight onto the card — one line, and the agent carried on from there.",
+      "title": "An agent asks, and the owner answers in its own prompt",
+      "caption": "Mason reached a fork only the owner could settle \u2014 what 2.5 does at a half \u2014 and raised Claude Code\u2019s own question prompt for it. The answer was given on the card, in the agent\u2019s own composer: the transcript records \u201cUser answered Claude\u2019s questions: Which rounding do you want at a half? \u2192 Half to even\u201d, and the agent says which rule it will use and carries on to write the test first.",
       "width": 1400,
       "height": 875
     }

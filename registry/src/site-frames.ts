@@ -54,8 +54,8 @@ export const FRAMES = {
   ),
   task: frame(
     'intro-1.jpg',
-    "An agent card open on its record: the brief, the reply, the tool calls, the checkpoint rail",
-    "Clicked the Velvet card open: its turns fill the card — the brief it was given, the tool calls between, the reply it wrote — with the live terminal under the LIVE line and the rail on the right counting 124 checkpoints."
+    'An agent card open on its record: the brief, the work, the test result and the commit',
+    "Clicked Mason open after it finished: the turn above the LIVE line holds what it did \u2014 wrote the test first, ran it, implemented, re-ran \u2014 and the live screen under it still shows the run: tests/round.test.ts, 17 tests passed, committed as \u201cadd roundTo with half-to-even rounding and vitest coverage\u201d. The work, the test and the commit are the agent's own."
   ),
   harness: frame(
     'intro-2.jpg',
