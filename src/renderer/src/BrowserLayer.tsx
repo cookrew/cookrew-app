@@ -23,6 +23,7 @@ import {
   thumbNeedsCapture
 } from './capture-backoff'
 import { isSelfEmbedding } from './self-embed'
+import { isVphoneUrl } from '../../shared/vphone-url'
 import type { ScreenRect } from './zoom-lod'
 import type { LodLayout } from './zoom-lod'
 import { useCanvasUi } from './canvas-ui'
@@ -599,10 +600,12 @@ function BrowserTabView({
   }, [browserId, tab.id, visible, onThumb, isPhoneViewing, interactiveBrowser])
 
   const client: StreamClient = isRemoteMode() ? 'remote' : hasNativeWebview() ? 'desktop' : 'demo'
+  const vphone = isVphoneUrl(tab.url)
   const renderMode = browserRenderMode({
     interactive: interactiveBrowser,
     client,
-    selfEmbedding: isSelfEmbedding(tab.url, window.location.origin)
+    selfEmbedding: isSelfEmbedding(tab.url, window.location.origin),
+    vphone
   })
 
   switch (renderMode) {
@@ -616,8 +619,19 @@ function BrowserTabView({
           streamEnabled
           desktopStreamToken={client === 'desktop' ? desktopStreamToken : null}
           fallback="loading"
-          actions={zoomed ? <OpenExternal url={tab.url} className="browser-frame-btn" /> : null}
+          actions={zoomed && !vphone ? <OpenExternal url={tab.url} className="browser-frame-btn" /> : null}
         />
+      ) : null
+    case 'vphone-off':
+      // A virtual iPhone has no page to put in a web surface; only the
+      // headless stream can draw it (main/vphone-instance.ts).
+      return visible ? (
+        <div className="browser-body browser-blocked">
+          <span>
+            📱 {shortUrl(tab.url)} is a virtual iPhone. It needs the interactive browser stream
+            (COOKREW_INTERACTIVE_BROWSER=1) to be shown here.
+          </span>
+        </div>
       ) : null
     case 'legacy-blocked':
       // Never load Cookrew inside Cookrew in a legacy renderer: recursive

@@ -13,7 +13,8 @@ import { sanitizeViewportMessage } from '../shared/cast-viewport'
 import { jpegSize } from './jpeg-size'
 import { DEFAULT_DRAIN_THRESHOLD } from './screencast-pace'
 import type { BrowserViewportState } from './browser-viewport'
-import type { FrameMeta, HeadlessInstance } from './headless-chrome'
+import type { FrameMeta } from './headless-chrome'
+import type { BrowserInstance } from './browser-instance'
 import {
   acceptKey,
   decodeFrame,
@@ -25,7 +26,7 @@ import {
 } from './ws-frame'
 
 export interface BrowserCastDeps {
-  getInstance: (browserId: string) => Promise<HeadlessInstance | null>
+  getInstance: (browserId: string) => Promise<BrowserInstance | null>
   enabled: () => boolean
   /** Per-process secret used only by the cross-origin Electron renderer. */
   desktopToken: () => string
@@ -179,7 +180,7 @@ class ClientConn {
   private latestContext: MapContext | null = null
   private deliveredRevision: number | null = null
   private drainArmed = false
-  private instance: HeadlessInstance | null = null
+  private instance: BrowserInstance | null = null
   private unsubscribeViewport: (() => void) | null = null
   private ctx: MapContext = { displayScale: 1, viewportWidth: 800, viewportHeight: 600 }
   private readonly frameContexts = new Map<number, { ctx: MapContext; revision: number }>()
@@ -199,7 +200,7 @@ class ClientConn {
     socket.on('error', this.close)
   }
 
-  attach(instance: HeadlessInstance): void {
+  attach(instance: BrowserInstance): void {
     if (this.closed) return
     this.instance = instance
     instance.registerViewportViewer(this.id)

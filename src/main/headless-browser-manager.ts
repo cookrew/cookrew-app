@@ -9,6 +9,8 @@ import path from 'node:path'
 import type { BrowserNodeData, BrowserTab } from '../shared/model'
 import { activeBrowserTab, browserTabs } from '../shared/model'
 import { HeadlessInstance, type HeadlessOptions, type HeadlessPageState } from './headless-chrome'
+import type { BrowserInstance } from './browser-instance'
+import { parseVphoneUrl } from '../shared/vphone-url'
 
 const SIZE_MIN = 320
 const SIZE_MAX = 2048
@@ -30,16 +32,23 @@ export interface HeadlessBrowserManagerDeps {
   onTabOpened: (browserId: string, tab: BrowserTab) => void
   onTabClosed: (browserId: string, tabId: string) => void
   deleteProfile?: (browserId: string) => void | Promise<void>
-  makeInstance?: (options: HeadlessOptions) => HeadlessInstance
+  makeInstance?: (options: HeadlessOptions) => BrowserInstance
+  /**
+   * A VIRTUAL iPHONE BEHIND A CARD. A card whose active tab is
+   * `vphone://<machine>` is backed by this instead of a Chrome
+   * (vphone-instance.ts); absent, such a card is simply unavailable, never
+   * a Chrome pointed at an address it cannot load.
+   */
+  vphone?: { makeInstance: (machine: string, node: BrowserNodeData) => BrowserInstance }
 }
 
 interface StartingEntry {
-  instance: HeadlessInstance
-  promise: Promise<HeadlessInstance | null>
+  instance: BrowserInstance
+  promise: Promise<BrowserInstance | null>
 }
 
 export class HeadlessBrowserManager {
-  private readonly instances = new Map<string, HeadlessInstance>()
+  private readonly instances = new Map<string, BrowserInstance>()
   private readonly starting = new Map<string, StartingEntry>()
   private readonly stopping = new Map<string, Promise<void>>()
   private readonly desired = new Map<string, BrowserNodeData>()
@@ -74,7 +83,7 @@ export class HeadlessBrowserManager {
     )
   }
 
-  async syncNode(node: BrowserNodeData): Promise<HeadlessInstance | null> {
+  async syncNode(node: BrowserNodeData): Promise<BrowserInstance | null> {
     if (!this.deps.enabled() || this.shuttingDown) return null
     this.desired.set(node.id, node)
     const instance = await this.ensure(node.id)
@@ -97,11 +106,11 @@ export class HeadlessBrowserManager {
    * thumbnail poll is the case: it runs for every browser on the canvas, and
    * making a picture is never a reason to spend a Chrome process.
    */
-  peek(browserId: string): HeadlessInstance | null {
+  peek(browserId: string): BrowserInstance | null {
     return this.instances.get(browserId) ?? null
   }
 
-  async get(browserId: string): Promise<HeadlessInstance | null> {
+  async get(browserId: string): Promise<BrowserInstance | null> {
     if (!this.deps.enabled() || this.shuttingDown) return null
     const node = this.deps.resolveNode(browserId)
     if (!node) return null
@@ -109,36 +118,22 @@ export class HeadlessBrowserManager {
     return this.ensure(browserId)
   }
 
-  private async ensure(browserId: string): Promise<HeadlessInstance | null> {
+  private async ensure(browserId: string): Promise<BrowserInstance | null> {
     const existing = this.instances.get(browserId)
     if (existing) return existing
     const pending = this.starting.get(browserId)
     if (pending) return pending.promise
 
     const node = this.desired.get(browserId) ?? this.deps.resolveNode(browserId)
-    const executablePath = this.deps.chromePath()
-    if (!node || !executablePath || this.shuttingDown) return null
-
-    const tabs = browserTabs(node)
-    const active = activeBrowserTab(node)
-    const options: HeadlessOptions = {
-      executablePath,
-      profileDir: path.join(this.deps.profileRoot(), browserId),
-      ...(this.deps.sharedInstallationRoot
-        ? { sharedInstallationDir: this.deps.sharedInstallationRoot() }
-        : {}),
-      width: clampSize(node.size.width, 800),
-      height: clampSize(node.size.height, 600),
-      tabs,
-      activeTabId: active.id
-    }
-    const instance = (this.deps.makeInstance ?? ((opts) => new HeadlessInstance(opts)))(options)
+    if (!node || this.shuttingDown) return null
+    const instance = this.makeInstanceFor(browserId, node)
+    if (!instance) return null
     instance.onPageState = (tabId, state) => this.deps.onPageState(browserId, tabId, state)
     instance.onTabOpened = (tab) => this.deps.onTabOpened(browserId, tab)
     instance.onTabClosed = (tabId) => this.deps.onTabClosed(browserId, tabId)
     instance.onExit = () => this.handleExit(browserId, instance)
 
-    const promise = (async (): Promise<HeadlessInstance | null> => {
+    const promise = (async (): Promise<BrowserInstance | null> => {
       try {
         await instance.start()
       } catch {
@@ -168,7 +163,28 @@ export class HeadlessBrowserManager {
     }
   }
 
-  private handleExit(browserId: string, instance: HeadlessInstance): void {
+  /** A phone for a vphone address, a Chrome for anything else — or nothing, when the desktop cannot provide it. */
+  private makeInstanceFor(browserId: string, node: BrowserNodeData): BrowserInstance | null {
+    const active = activeBrowserTab(node)
+    const phone = parseVphoneUrl(active.url)
+    if (phone) return this.deps.vphone?.makeInstance(phone.machine, node) ?? null
+    const executablePath = this.deps.chromePath()
+    if (!executablePath) return null
+    const options: HeadlessOptions = {
+      executablePath,
+      profileDir: path.join(this.deps.profileRoot(), browserId),
+      ...(this.deps.sharedInstallationRoot
+        ? { sharedInstallationDir: this.deps.sharedInstallationRoot() }
+        : {}),
+      width: clampSize(node.size.width, 800),
+      height: clampSize(node.size.height, 600),
+      tabs: browserTabs(node),
+      activeTabId: active.id
+    }
+    return (this.deps.makeInstance ?? ((opts) => new HeadlessInstance(opts)))(options)
+  }
+
+  private handleExit(browserId: string, instance: BrowserInstance): void {
     if (this.instances.get(browserId) === instance) this.instances.delete(browserId)
     const starting = this.starting.get(browserId)
     if (starting?.instance === instance) this.starting.delete(browserId)

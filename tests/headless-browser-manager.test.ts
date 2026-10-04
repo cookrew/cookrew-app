@@ -206,3 +206,52 @@ describe('HeadlessBrowserManager node ownership', () => {
     expect(settled).toBe(true)
   })
 })
+
+describe('a vphone card', () => {
+  const phone = (): BrowserNodeData => ({
+    ...browser('phone-1'),
+    url: 'vphone://myphone',
+    tabs: [{ id: 'phone-1-tab', url: 'vphone://myphone', title: '' }],
+    activeTabId: 'phone-1-tab'
+  })
+
+  it('is backed by a vphone instance for its machine, with no Chrome at all', async () => {
+    const makeInstance = vi.fn(() => fakeInstance())
+    const vphoneInstance = fakeInstance()
+    const makeVphone = vi.fn(() => vphoneInstance)
+    const nodes = new Map([[phone().id, phone()]])
+    const manager = new HeadlessBrowserManager({
+      enabled: () => true,
+      chromePath: () => null,
+      profileRoot: () => '/profiles',
+      resolveNode: (id) => nodes.get(id) ?? null,
+      onPageState: vi.fn(),
+      onTabOpened: vi.fn(),
+      onTabClosed: vi.fn(),
+      makeInstance,
+      vphone: { makeInstance: makeVphone }
+    })
+    const got = await manager.get('phone-1')
+    expect(got).toBe(vphoneInstance)
+    expect(makeInstance).not.toHaveBeenCalled()
+    expect(makeVphone).toHaveBeenCalledWith('myphone', expect.objectContaining({ id: 'phone-1' }))
+    expect(manager.activeCount()).toBe(1)
+  })
+
+  it('is unavailable, not a Chrome, when the desktop has no vphone wired', async () => {
+    const makeInstance = vi.fn(() => fakeInstance())
+    const nodes = new Map([[phone().id, phone()]])
+    const manager = new HeadlessBrowserManager({
+      enabled: () => true,
+      chromePath: () => '/fake/chrome',
+      profileRoot: () => '/profiles',
+      resolveNode: (id) => nodes.get(id) ?? null,
+      onPageState: vi.fn(),
+      onTabOpened: vi.fn(),
+      onTabClosed: vi.fn(),
+      makeInstance
+    })
+    expect(await manager.get('phone-1')).toBeNull()
+    expect(makeInstance).not.toHaveBeenCalled()
+  })
+})
