@@ -142,7 +142,8 @@ describe('what a team’s page says', () => {
   it('never lists the roster — one door is the whole interface', () => {
     const page = team(door({ agents: 9 }))
     expect(page.body).toContain('9 agents')
-    expect(page.body).toContain('never listed')
+    // the page never lists them: no roster markup, only the door's name and a count
+    expect(page.body).not.toMatch(/class="roster|<ul class="agents/)
   })
 
   it('a free door still says an account is needed', () => {
@@ -521,14 +522,16 @@ describe('the rent strip and the one buy control', () => {
 
   it('keeps every element line.js and site.js read', () => {
     const body = team(door(), { account: 'mira' }).body
-    for (const id of ['team', 'phase', 'state', 'strip-opened', 'gate', 'gate-h', 'gate-p', 'gate-actions', 'btn-open', 'btn-new', 'btn-end', 'bar-led', 'prompt', 'send', 'term', 'rail', 'rail-n', 'rail-tail', 'block', 'seatbar', 'seat-head', 'seat-lede', 'seat-ask-note', 'seat-buy', 'star', 'addr', 'led', 'livetxt', 'overlay', 'open']) {
+    for (const id of ['team', 'phase', 'state', 'strip-opened', 'gate', 'gate-h', 'gate-p', 'gate-actions', 'btn-open', 'btn-new', 'btn-end', 'bar-led', 'prompt', 'send', 'term', 'rail', 'rail-n', 'rail-tail', 'block', 'seatbar', 'seat-head', 'seat-ask-note', 'seat-buy', 'star', 'addr', 'led', 'livetxt', 'overlay', 'open']) {
       expect(body, id).toContain(`id="${id}"`)
     }
     for (const hook of ['data-seat-buy', 'data-seat-ask', 'data-open=', 'data-copy=', 'data-star=', 'data-door=', 'data-seal-key=', 'data-relayed=', 'data-price=', 'data-orch=', 'data-live=', 'data-access=']) {
       expect(body, hook).toContain(hook)
     }
+    // the owner's bar is the line and a count — seats are managed in the app (owner, 2026-10-04)
     const owner = team(door(), { account: 'drej', owner: true, seats: [] }).body
-    for (const id of ['seat-username', 'seat-list', 'seat-grant']) expect(owner, id).toContain(`id="${id}"`)
+    expect(owner).toContain('data-seat-open')
+    for (const id of ['seat-username', 'seat-list', 'seat-grant']) expect(owner, id).not.toContain(`id="${id}"`)
     expect(team(door(), { account: null }).body).toContain('data-signin')
   })
 })

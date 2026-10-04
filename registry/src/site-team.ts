@@ -65,89 +65,40 @@ function seatBar(input: TeamInput, door: ListedDoor, address: string, standing: 
   const paid = door.access === 'paid'
   const price = door.priceUsd ?? ''
 
+  // ONE STRIP, ONE ACT (owner, 2026-10-04: keep the least interaction and the core).
+  // Sign in · open · buy or ask — a sentence and the button. Seats are managed
+  // in the app's account sheet, not here; the room is a count, not a list.
   if (standing.kind === 'stranger' || input.account === null) {
-    return `<section class="card seat" id="seatbar" data-team="${esc(`@${door.handle}/${door.name}`)}">
-<h2>Open this team</h2>
-<p class="lede" style="margin:0 0 10px">A seat is yours, not a browser’s. Sign in so it follows you.</p>
-<p class="row" style="margin:0"><button class="btn primary lg" data-signin>Sign in to open</button></p></section>`
+    return `<section class="seat strip" id="seatbar" data-team="${esc(`@${door.handle}/${door.name}`)}">
+<span class="meta">A seat is yours, not a browser’s — sign in so it follows you.</span>
+<button class="btn primary" data-signin>Sign in to open</button></section>`
   }
 
-  const room =
-    seated.length === 0
-      ? ''
-      : `<p class="meta" id="seat-room" style="margin:10px 0 0">seated here: ${esc(seated.map((who) => `@${who}`).join(', '))}</p>`
-
   if (owner) {
-    const rows =
-      input.seats === undefined || input.seats.length === 0
-        ? `<li><span class="chip">Empty</span><span class="meta">Nobody is seated yet. Grant one by username, or share the address.</span><span></span></li>`
-        : input.seats
-            .map((held) => {
-              const gone = held.endedAt !== undefined
-              const where =
-                held.source === 'bought'
-                  ? `bought · ${esc(day(held.createdAt))}`
-                  : `granted by you · ${esc(day(held.createdAt))}`
-              const action = gone
-                ? `<span class="chip">${esc(held.endedAt === undefined ? '' : `ended ${day(held.endedAt)}`)}</span>`
-                : `<button class="btn sm danger" data-seat-end="${esc(held.id)}">${held.source === 'bought' ? 'End' : 'Revoke'}</button>`
-              return `<li><span class="chip">${esc(held.account.slice(0, 2).toUpperCase())}</span>
-<span><b>@${esc(held.account)}</b><br><span class="meta">${where}</span></span>${action}</li>`
-            })
-            .join('')
-    const asked = input.ask ?? ''
-    // THE OWNER OPENS FIRST. This bar used to offer an owner nothing but the
-    // grant form, while the line below told them to sign in — so they typed
-    // their own name into the form and granted themselves a seat at a team
-    // the registry admits them to without one. The line is the first thing an
-    // owner is offered; the room and the form follow.
-    return `<section class="card seat" id="seatbar" data-team="${esc(address)}" data-owner="1">
-<h2>Your team · ${seated.length} seated</h2>
-<p class="lede" style="margin:0 0 10px">Your own team — the line is yours, with no seat and no charge.</p>
-<p class="row" style="margin:0 0 14px"><button class="btn primary lg" data-seat-open>Open the line</button></p>
-<p class="meta" style="margin:0 0 10px">A seat is per account and follows the person to any device they sign in on. Ending one stops their next call at the door.</p>
-<div class="row" id="seat-grant"><input id="seat-username" value="${esc(asked)}" placeholder="username" autocomplete="off" spellcheck="false" maxlength="32">
-<button class="btn primary" data-seat-grant>Grant a seat</button></div>
-<ul class="doors me-list" id="seat-list">${rows}</ul></section>`
+    return `<section class="seat strip" id="seatbar" data-team="${esc(address)}" data-owner="1">
+<span class="chip amber">Your team</span><span class="meta">${seated.length} seated · the line is yours, no seat and no charge.</span>
+<button class="btn primary" data-seat-open>Open the line</button></section>`
   }
 
   if (seat !== null || !paid) {
-    const since = seat === null ? 'This team charges nothing — you are signed in, so the line is yours.' : `Seat since ${esc(day(seat.createdAt))} · your session continues where you left it.`
-    return `<section class="card seat" id="seatbar" data-team="${esc(address)}">
-<h2>You are @${esc(input.account)}</h2>
-<p class="lede" style="margin:0 0 10px">${since}</p>
-<p class="row" style="margin:0"><button class="btn primary lg" data-seat-open>Open the line</button></p>${room}</section>`
+    const since = seat === null ? 'free to open — you are signed in.' : `Seat since ${esc(day(seat.createdAt))}.`
+    return `<section class="seat strip" id="seatbar" data-team="${esc(address)}">
+<span class="meta">You are @${esc(input.account)} · ${since}</span>
+<button class="btn primary" data-seat-open>Open the line</button></section>`
   }
 
-  /**
-   * W6 · ASK IS A REQUEST (R1) — it files, it does not copy.
-   *
-   * The button used to put a link on the clipboard, which left the asker with
-   * an errand: find the owner somewhere else and send it to them. The request
-   * goes to the owner's one queue instead and reaches every device they have,
-   * so the sentence names that rather than describing a paste.
-   *
-   * BOTH STATES SHIP IN THE MARKUP and site.js unhides one. The CSP forbids an
-   * inline script, so a bar assembled at load is a bar nobody can read in
-   * view-source; and the asked state is reachable on a RELOAD — this page
-   * polls GET …/seat, and somebody who closed the tab and came back must find
-   * the bar already waiting rather than a button that would file a second
-   * request.
-   *
-   * THERE IS NO WITHDRAW, and it is left out rather than faked. The design's
-   * asked state offers one, but no route retracts a seat request — a button
-   * that stopped this tab polling while the request sat in the owner's queue
-   * would be a lie told to the only person who believed it. It arrives with
-   * the route (see the report).
-   */
-  return `<section class="card seat" id="seatbar" data-team="${esc(address)}" data-owner="${esc(door.handle)}"
+  // W6 · ASK IS A REQUEST (R1): it files to the owner's queue and reaches every
+  // device they have. Both states ship in the markup and site.js unhides one,
+  // because the CSP forbids an inline script and the asked state is reachable
+  // on a reload. There is no withdraw, because no route retracts a request.
+  return `<section class="seat strip" id="seatbar" data-team="${esc(address)}" data-owner="${esc(door.handle)}"
   data-asked-head="${esc(webCopy('w6.asked-head', { handle: door.handle }))}"
   data-already-asked="${esc(webCopy('w6.already-asked', { handle: '{handle}' }))}">
-<h2 id="seat-head">You are @${esc(input.account)} · no seat here yet</h2>
-<p class="lede" style="margin:0 0 10px" id="seat-lede">${esc(webCopy('w6.no-seat', { handle: door.handle }))}</p>
-<p class="row" style="margin:0"><button class="btn primary lg" data-seat-buy id="seat-buy">Buy a seat · $${esc(price)}</button>
-<button class="btn lg" data-seat-ask>Ask @${esc(door.handle)}</button></p>
-<p class="meta" style="margin:10px 0 0" id="seat-ask-note" hidden>${esc(webCopy('w6.asked'))}</p></section>`
+<span class="meta" id="seat-head">You are @${esc(input.account)} · no seat here yet</span>
+<span class="sp"></span>
+<button class="btn primary" data-seat-buy id="seat-buy">Buy a seat · $${esc(price)}</button>
+<button class="btn" data-seat-ask>Ask @${esc(door.handle)}</button>
+<span class="meta" id="seat-ask-note" hidden>${esc(webCopy('w6.asked'))}</span></section>`
 }
 
 export function teamPage(input: TeamInput): Page {
@@ -166,10 +117,6 @@ answer the same, so the directory cannot be used to enumerate what is here.</p><
   const off = door.live === false
   const harnesses = door.harnesses ?? []
   const tags = door.tags ?? []
-  const rails =
-    door.access === 'paid' && door.rails.length > 0
-      ? `<p class="row" style="margin:8px 0 0">${door.rails.map((rail) => `<span class="chip">${rail === 'x402' ? 'USDC · wallet' : 'card'}</span>`).join('')}</p>`
-      : ''
   const relayed = door.transport === 'relay' && typeof door.sealKey === 'string'
   // WHO IS READING, decided once. The seat bar, the line's chip, the strip and
   // the gate all render from this, so none of them can contradict another —
@@ -191,11 +138,6 @@ answer the same, so the directory cannot be used to enumerate what is here.</p><
   // buttons into `gate-actions` for the states only it can know (retry, pay).
   const gateText = line.phase === 'NO SEAT' ? `A seat first — buy one above, or ask @${door.handle}.` : line.gate.text
   const seatLine = door.access === 'paid' && door.priceUsd ? `${esc(door.priceUsd)} USD · a seat, once` : 'free · account needed'
-  const about =
-    door.access === 'paid'
-      ? `<p class="meta">A seat is charged once, at the door, and follows you to any device you sign in on — never per question, and an open session is never interrupted for money.</p>${rails}<p class="meta" style="margin-top:10px">Money goes from you to the author directly; cookrew.dev holds none of it.</p>`
-      : `<p class="meta">Free to open — you still sign in, because the author lends their machine to accounts rather than to anyone who finds the address.</p>`
-
   return page(
     {
       title: `${door.title} — @${door.handle} · Cookrew`,
@@ -219,16 +161,15 @@ answer the same, so the directory cannot be used to enumerate what is here.</p><
 <div><p class="meta" style="margin:0 0 6px"><a href="/market">Marketplace</a> / <a href="/${esc(door.handle)}">@${esc(door.handle)}</a></p>
 <h1 style="margin-bottom:6px">${esc(door.title)}</h1>
 <p class="lede" style="margin-bottom:10px"><b>${esc(door.door)}</b> answers for ${door.agents} agent${door.agents === 1 ? '' : 's'}.${door.summary ? ` ${esc(door.summary)}` : ''}</p>
-<div class="row"><span class="led${off ? ' off' : ''}" id="led"></span><span id="livetxt" class="meta">${off ? 'Not taking calls right now — the address stays valid' : 'taking calls'}</span><span class="chip">${esc(door.transport)}</span>${harnesses.map((h) => `<span class="chip">${esc(h)}</span>`).join('')}${tags.map((t) => `<span class="chip violet">${esc(t)}</span>`).join('')}</div></div>
+<div class="row"><span class="led${off ? ' off' : ''}" id="led"></span><span id="livetxt" class="meta">${off ? 'Not taking calls right now — the address stays valid' : 'taking calls'}</span><span class="chip">${esc(door.transport)}</span>${harnesses.map((h) => `<span class="chip">${esc(h)}</span>`).join('')}${door.access === 'paid' ? door.rails.map((rail) => `<span class="chip">${rail === 'x402' ? 'USDC · wallet' : 'card'}</span>`).join('') : ''}${tags.map((t) => `<span class="chip violet">${esc(t)}</span>`).join('')}</div></div>
 <div class="tp-actions"><button class="star${input.starred ? ' on' : ''}" id="star" data-star="${esc(door.handle)}/${esc(door.name)}" title="one star per account">★ <span>${input.stars}</span></button><a class="btn primary lg" id="open" href="#open" data-open="cookrew://import/${esc(name)}">Open in Cookrew</a></div>
 </div>
 
 ${seatBar(input, door, name, standing)}
-<div class="tp">
+<div class="tp one">
 <div>
-<p class="kicker"><span class="no">LINE</span>this team’s own terminal, bound to cookrew.dev</p>
 <div class="overlay" id="overlay">
-<div class="bar"><span class="led${off ? ' off' : ''}" id="bar-led"></span><span class="name">${esc(door.door)}</span><span class="chip violet">ORCH · THE DOOR</span><span class="chip" id="phase">${esc(line.phase)}</span><span class="sp"></span><button class="btn sm" id="btn-new" hidden>⏎ start a new session</button><button class="btn sm danger" id="btn-end" hidden>End session</button><a class="btn sm" href="#how">how it works</a></div>
+<div class="bar"><span class="led${off ? ' off' : ''}" id="bar-led"></span><span class="name">${esc(door.door)}</span><span class="chip violet">ORCH · THE DOOR</span><span class="chip" id="phase">${esc(line.phase)}</span><span class="sp"></span><button class="btn sm" id="btn-new" hidden>⏎ start a new session</button><button class="btn sm danger" id="btn-end" hidden>End session</button></div>
 <div class="strip" id="strip"><span id="strip-opened">not opened</span><span class="sep">·</span><span>${seatLine}</span><span class="sep">·</span><span>runs at ${esc(name)}</span><span class="sep">·</span><span class="state" id="state">${esc(line.state)}</span></div>
 <div class="term">
 <div class="out" id="term"></div>
@@ -237,24 +178,9 @@ ${seatBar(input, door, name, standing)}
 </div>
 <div class="rail"><div class="rh"><span>Checkpoints</span><span id="rail-n">0</span></div><ol id="rail"><li class="live ended" id="rail-tail"><span class="n">—</span><span class="t"><span class="dot"></span>no session</span></li></ol></div>
 </div>
-<p class="meta" style="margin-top:10px">The same line a placed card gets: prompt, the reply as the terminal draws it, a checkpoint on the rail. Click a rail row to read that turn’s block. The roster is never listed — you talk to the door.</p>
 <pre class="crt" id="block" hidden style="margin-top:12px;padding:12px 14px;white-space:pre-wrap;max-height:360px;overflow:auto"></pre>
-
-<div class="faq" id="how" style="margin-top:18px"><details><summary>How the web line works</summary><ol class="pts how">
-<li><b>Sign in.</b> Your cookrew.dev account signs a challenge; the registry mints a token for this one door, <code>${esc(name)}</code>. The door seats you under that account.</li>
-<li><b>The ladder.</b> <code>GET /line</code> through the relay: 401 sign in · 403 no seat — buy one or ask the owner · 402 the seat’s price, once · 429 the owner’s lending limit · 410 your session ended, press Enter for a new one.</li>
-<li><b>The PTY.</b> A stream of the orch’s real terminal, drawn here by xterm.js; keystrokes go back as <code>/line/raw</code>. Sealed both ways in this browser — the relay carries bytes it cannot read.</li>
-<li><b>End.</b> You end it, or the author does. The session workspace on their machine is destroyed either way; the address stays valid for next time.</li>
-</ol></details></div>
+<div class="addr" style="margin-top:12px"><span id="addr">${esc(address)}</span><button class="btn sm" data-copy="${esc(address)}">copy</button></div>
 </div>
-
-<aside class="side">
-<div class="card"><h3>About this door</h3><p class="row">${priceChip(door)}</p>${about}<p class="meta" style="margin-top:10px">One interface: its orchestrator, <strong>${esc(door.door)}</strong>. The roster behind it is never listed and never reachable; the relay reads nothing; the author can end any session.</p></div>
-<div class="card"><h3>Facts</h3><dl><dt>Owner</dt><dd><a href="/${esc(door.handle)}">@${esc(door.handle)}</a></dd><dt>Door</dt><dd>${esc(door.door)}</dd><dt>Agents</dt><dd>${door.agents}</dd><dt>Reach</dt><dd>${door.transport === 'relay' || door.transport === 'public' ? 'Anyone with the link' : door.transport === 'tailnet' ? 'People on the owner’s tailnet' : 'People on the owner’s network'}</dd>${harnesses.length > 0 ? `<dt>Harnesses</dt><dd>${esc(harnesses.join(', '))}</dd>` : ''}<dt>Last seen</dt><dd><time datetime="${new Date(door.seenAt).toISOString()}">${esc(new Date(door.seenAt).toISOString().slice(0, 16).replace('T', ' '))} UTC</time></dd></dl>
-<div class="addr" style="margin-top:12px"><span id="addr">${esc(address)}</span><button class="btn sm" data-copy="${esc(address)}">copy</button></div></div>
-<p class="row"><a class="btn primary" href="#open" data-open="cookrew://import/${esc(name)}">Open in Cookrew</a><a class="btn" href="/#download">Get the app</a></p>
-<p class="meta" style="margin:8px 0 0">In the app the card gets the same rail and transcript as a preset card, fed from the door’s record.</p>
-</aside>
 </div></div>`
   )
 }

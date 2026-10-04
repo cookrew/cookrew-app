@@ -8,8 +8,8 @@ import {
   useRef,
   useState
 } from 'react'
-import { checkpointTitle, type TitleMode } from './checkpoint-sync'
-import { MarkdownText } from './MarkdownText'
+import type { TitleMode } from './checkpoint-sync'
+import { TranscriptRow } from './TranscriptRow'
 import {
   coalescingSingleFlight,
   evictTrace,
@@ -700,58 +700,24 @@ export const TranscriptView = forwardRef<
     <div className="ctx-transcript" ref={scrollRef} onScroll={onScroll}>
       {spaceIds.map((id) => {
         const block = loadedMap.get(id)
-        const active = id === selectedIndex
         // Only the checkpoint that was translated is shown translated; every
         // other block on the same scroll keeps its own words.
         const translated = translation && translation.index === id ? translation : null
+        // ONE MEMOISED COMPONENT PER ROW (TranscriptRow.tsx, 2026-10-04). This
+        // map runs on every scroll frame; the rows it hands out re-render only
+        // when their own props change, so a frame that moves the active row
+        // re-renders two of them and re-parses no markdown at all.
         return (
-          <div
+          <TranscriptRow
             key={id}
-            className={
-              block ? `ctx-block${active ? ' active' : ''}` : `ctx-placeholder${active ? ' active' : ''}`
-            }
-            data-checkpoint={id}
-            style={block ? undefined : { height: estHeight }}
+            id={id}
+            block={block}
+            active={id === selectedIndex}
+            placeholderHeight={block ? undefined : estHeight}
+            titleMode={titleMode}
+            translated={translated}
             ref={rowRef(id)}
-          >
-            {block ? (
-              <>
-                <div className="ctx-block-head">
-                  <span className="ctx-block-idx">T{id}</span>
-                  <span className="ctx-block-title">{checkpointTitle(block, titleMode)}</span>
-                </div>
-                {/* Prompt stays VERBATIM (pre-wrap) — the human's exact words,
-                    unless the reader asked for this checkpoint translated, in
-                    which case the words shown are the translation's. Marked, so
-                    "these are not the words that were typed" is visible rather
-                    than inferred. */}
-                <div className="ctx-block-prompt" data-translated={translated ? '' : undefined}>
-                  {(translated?.prompt ?? block.prompt) || '(empty prompt)'}
-                </div>
-                {block.activity.length > 0 && (
-                  <div>
-                    {block.activity.map((call, i) => (
-                      <div key={i} className="ctx-block-tool">
-                        <div className="ctx-tool-call">
-                          <span className="ctx-tool-name">{call.tool}</span>
-                          {call.args && <span className="ctx-tool-args">{call.args}</span>}
-                        </div>
-                        {call.result && <div className="ctx-tool-result">{call.result}</div>}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {/* Reply renders MARKDOWN as React elements; .md is Fresco's flag. */}
-                {block.reply && (
-                  <div className="ctx-block-reply md" data-translated={translated ? '' : undefined}>
-                    <MarkdownText source={translated?.reply ?? block.reply} />
-                  </div>
-                )}
-              </>
-            ) : (
-              <span className="ctx-placeholder-idx">T{id}</span>
-            )}
-          </div>
+          />
         )
       })}
       {/* live seam: the real xterm/tmux tail — one continuous stream. When the

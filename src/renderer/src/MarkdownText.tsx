@@ -1,4 +1,4 @@
-import { Fragment } from 'react'
+import { Fragment, memo } from 'react'
 import { parseMarkdown, type BlockNode, type InlineNode } from './markdown'
 
 /**
@@ -9,7 +9,14 @@ import { parseMarkdown, type BlockNode, type InlineNode } from './markdown'
  * `.ctx-block-reply.md` to keep the phosphor terminal aesthetic. Anything the
  * parser didn't recognize already arrived as plain text, so it renders verbatim.
  */
-export function MarkdownText({ source }: { source: string }): React.JSX.Element {
+export const MarkdownText = memo(function MarkdownText({
+  source
+}: {
+  source: string
+}): React.JSX.Element {
+  // memo() over the one string prop (2026-10-04): a reply that has not
+  // changed is not parsed again. Transcript rows re-render on every scroll
+  // frame of a live card, and this parse was the cost of each.
   return (
     <>
       {parseMarkdown(source).map((block, i) => (
@@ -17,7 +24,7 @@ export function MarkdownText({ source }: { source: string }): React.JSX.Element 
       ))}
     </>
   )
-}
+})
 
 function Inlines({ nodes }: { nodes: InlineNode[] }): React.JSX.Element {
   return (

@@ -108,12 +108,19 @@ export async function streamOpen(
 ): Promise<StreamOpenAnswer | null> {
   const source = deps.stream.sourceOf(terminalId)
   if (source === null) return null
-  const { rows, anomalies } = await allRows(terminalId, source, deps)
+  // THE ROWS AND THE TAIL ARE READ TOGETHER. They share one materialisation
+  // through the service's coalescer, and the tail's own reads (the chain, the
+  // finality window) have nothing to wait for in the rows — so serialising
+  // them was a round trip of disk latency added to every open for no answer.
+  const [{ rows, anomalies }, tail] = await Promise.all([
+    allRows(terminalId, source, deps),
+    streamTail(terminalId, deps)
+  ])
   const from = Math.max(0, rows.length - STREAM_OPEN_ROWS)
   const page = rows.slice(from)
   return {
     index: page,
-    tail: await streamTail(terminalId, deps),
+    tail,
     // A cursor ONLY when there is genuinely more behind this page. Handing
     // back a cursor at the stream's oldest would leave the rail paging
     // forever against an answer that never grows.

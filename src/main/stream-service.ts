@@ -20,6 +20,7 @@
 // place scraping remains."
 
 import { existsSync } from 'node:fs'
+import path from 'node:path'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { isCodexCommand } from './codex-bind'
 import { isPiCommand } from './pi-bind'
@@ -28,6 +29,7 @@ import type { TerminalNodeData } from '../shared/model'
 import { claudeStreamChain, type ChainOptions, type StreamChain } from './stream-chain'
 import {
   createStreamReader,
+  STREAM_PAGE_DEFAULT_LIMIT,
   type StreamBlocksRequest,
   type StreamBlocksResult,
   type StreamReaderDeps,
@@ -53,6 +55,7 @@ import {
 } from './stream-state'
 import { tailIsFinal, type FinalityDeps } from './stream-finality'
 import { transcriptSourceFor, type TranscriptSource } from './transcript-source'
+import { blocksOfRows, filesOfRows, windowRows } from './stream-window'
 import type { TraceDocument, TraceKind } from './trace'
 
 /** The tail, with the finality question answered. */
@@ -304,43 +307,50 @@ export function createStreamService(deps: StreamServiceDeps): StreamService {
     async rollbacks(terminalId) {
       return (await materialiseOf(terminalId)).rolledBack
     },
-    async blocks(terminalId, request) {
-      // THE MATERIALISED INDEX ANSWERS THE NUMBERS (D6) — the same rule
-      // tailState follows two functions below, and it belongs here even more
-      // than it does there. The drawer ADDRESSES blocks by ordinal: its
-      // placeholders, its jumps and the rail's rows are all laid out in the
-      // index's numbering, and a window published in the walk's numbering is
-      // not merely misplaced, it is unreachable. Every position the index
-      // numbers above the walk's length can never be filled, and every block
-      // that does arrive lands on another turn's row.
-      //
-      // The two records agree while the chain still holds everything the
-      // index has ever seen. They come apart when it does not — a rotation
-      // aged out of the lineage, a rewind the index keeps at its own ordinals
-      // — and then the walk is a SUFFIX of the index, contiguous from 1.
-      // Measured on the owner's card: 1122 index entries against a 680-block
-      // walk, a constant gap of 442, with every walked block placeable by the
-      // index. Renumbering from it is exact, not a guess.
-      const [index, page] = await Promise.all([
-        materialiseOf(terminalId),
-        reader.blocks(terminalId, request)
-      ])
-      // An index with nothing in it has nothing to say about numbering, and
-      // taking `total: 0` from it would have the drawer prune away the very
-      // window this call just delivered. The walk's own answer stands.
-      if (index.entries.length === 0) return page
-      const ordinals = new Map(index.entries.map((row) => [row.identity, row.ordinal]))
+    async blocks(terminalId, request = {}) {
+      // THE INDEX ANSWERS THE WINDOW — which rows, which numbers, and WHICH
+      // FILES (stream-window.ts, 2026-10-04). This used to be
+      // Promise.all([materialiseOf, reader.blocks]) with the walk renumbered
+      // from the index afterwards, and reader.blocks() walked the WHOLE chain
+      // for every page: 220 MB of transcripts parsed to serve twenty blocks on
+      // the owner's busiest card, 30.5 s for the first window after a restart.
+      // The index already names the file each row is read from, so only the
+      // files a window actually spans are read now, through the same cache.
+      const [index, chain] = await Promise.all([materialiseOf(terminalId), chainOf(terminalId)])
+      // An index with nothing in it has nothing to address a window by — a
+      // card that has never materialised, or one whose state was unreadable.
+      // The walk's own answer stands, exactly as it did before.
+      if (index.entries.length === 0) return reader.blocks(terminalId, request)
+      const members = new Map(chain.files.map((entry) => [entry.file, entry]))
+      // ROWS WITHOUT BYTES ARE NOT A PAGE'S WORTH OF ANYTHING. A transcript the
+      // chain reports missing, or one the lineage no longer lists AND that is
+      // not on disk either — on the owner's busiest card 693 of 1,136 rows
+      // live in two such files. The walk never saw them, so neither does the
+      // window; one stat per distinct file outside the chain is the price.
+      const exists = deps.exists ?? existsSync
+      const gone = new Set(index.missing.map((member) => member.file))
+      for (const file of filesOfRows(index.entries)) {
+        if (!members.has(file) && !exists(file)) gone.add(file)
+      }
+      const { rows, ...unknown } = windowRows(index.entries, request, STREAM_PAGE_DEFAULT_LIMIT, gone)
+      // A file the chain no longer lists is still an address: it rotated out
+      // of the lineage, not off the disk. Only Claude chains have more than
+      // one member, so that is the parser such a file is read with.
+      const kindOf = (file: string): TraceKind => members.get(file)?.kind ?? 'claude'
+      const sessionIdOf = (file: string): string =>
+        members.get(file)?.sessionId ?? path.basename(file, path.extname(file))
+      const documents = new Map(
+        await Promise.all(
+          filesOfRows(rows).map(
+            async (file) => [file, await deps.documentOf(file, kindOf(file))] as const
+          )
+        )
+      )
       return {
-        ...page,
+        blocks: blocksOfRows(rows, documents, sessionIdOf),
         total: index.entries.length,
-        blocks: page.blocks.map((block) => {
-          const known = ordinals.get(block.id)
-          // Unplaceable means the index has not seen this identity yet — a
-          // block written between materialising and walking. Its own number
-          // stands, exactly as tailState lets the walk's number stand for a
-          // tail the index cannot place; the next materialise places it.
-          return known === undefined ? block : { ...block, ordinal: known }
-        })
+        missing: index.missing,
+        ...unknown
       }
     },
     async tailState(terminalId) {

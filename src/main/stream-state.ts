@@ -42,7 +42,7 @@
 // rewrite per turn is the price of "the cursor never lies", and it is paid in
 // the same breath as a turn that already cost seconds of model time.
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync, type Stats } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { writeFileAtomic, type AtomicWriteDeps } from './atomic-file'
@@ -235,13 +235,83 @@ export function parseStreamState(text: string): StreamState {
   }
 }
 
+/**
+ * THE PARSED STATE, REMEMBERED AGAINST THE FILE'S STAT (perf, 2026-10-04).
+ *
+ * Every materialise begins by reading this file, and on the owner's busiest
+ * card it is 646 KB of JSON — 108 ms to parse, measured 2026-10-04 — read
+ * again for every request that falls outside the service's 250 ms coalescing
+ * window: each scroll fill, each rail page, every live tick on which the
+ * transcript grew. The file changes when a TURN lands (see the header), so
+ * nearly all of those parses produced the object the previous one did.
+ *
+ * A stat is microseconds. Same size, mtime and inode (the write is an atomic
+ * rename, so a rewrite is always a new inode) means the same bytes, and the
+ * same bytes mean the same state. A write remembers what it wrote, so the
+ * read that follows a materialise pays nothing either.
+ *
+ * FROZEN, shallowly. The one thing a shared object must not be is mutated by
+ * one reader underneath the next, and this codebase's rule is that nothing
+ * derived mutates what it read — the freeze turns a breach of that rule into
+ * a thrown TypeError in strict mode rather than a corrupted index that every
+ * later reader inherits. Rows are not frozen individually: 1,135 freezes per
+ * read would be a cost for a property the top-level freeze already defends
+ * (a row cannot be swapped, and nothing here rewrites a row's fields).
+ */
+const STATE_CACHE_CAP = 64
+
+interface RememberedState {
+  size: number
+  mtimeMs: number
+  ino: number
+  state: StreamState
+}
+
+const remembered = new Map<string, RememberedState>()
+
+function sameFile(held: RememberedState, stat: Stats): boolean {
+  return held.size === stat.size && held.mtimeMs === stat.mtimeMs && held.ino === stat.ino
+}
+
+function freezeState(state: StreamState): StreamState {
+  Object.freeze(state.index)
+  Object.freeze(state.rolledBack)
+  return Object.freeze(state)
+}
+
+function remember(file: string, stat: Stats, state: StreamState): StreamState {
+  const frozen = freezeState(state)
+  remembered.delete(file)
+  remembered.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, ino: stat.ino, state: frozen })
+  while (remembered.size > STATE_CACHE_CAP) {
+    const oldest = remembered.keys().next()
+    if (oldest.done === true) break
+    remembered.delete(oldest.value)
+  }
+  return frozen
+}
+
+/** Test seam: forget every remembered state, so a suite that rewrites a file
+ *  behind the reader's back starts from a cold read. */
+export function forgetStreamStates(): void {
+  remembered.clear()
+}
+
 /** Read the state. NEVER throws: an absent or unreadable file is an empty
  *  cursor, which replays the whole chain — slower, never wrong. */
 export function readStreamState(terminalId: string, options: StreamStateOptions = {}): StreamState {
   const file = streamStateFileFor(terminalId, options)
   if (file === null) return emptyStreamState()
+  let stat: Stats
   try {
-    return parseStreamState(readFileSync(file, 'utf8'))
+    stat = statSync(file)
+  } catch {
+    return emptyStreamState()
+  }
+  const held = remembered.get(file)
+  if (held !== undefined && sameFile(held, stat)) return held.state
+  try {
+    return remember(file, stat, parseStreamState(readFileSync(file, 'utf8')))
   } catch {
     return emptyStreamState()
   }
@@ -266,6 +336,14 @@ export function writeStreamState(
       ...(options.rename ? { rename: options.rename } : {}),
       ...(options.now ? { now: options.now } : {})
     })
+    // What was just written IS the state the next read would parse. Remember
+    // it against the new file's stat, so that read parses nothing. A stat
+    // that fails here only forfeits the shortcut — the write itself stood.
+    try {
+      remember(file, statSync(file), state)
+    } catch {
+      remembered.delete(file)
+    }
     return { ok: true }
   } catch (error) {
     return {

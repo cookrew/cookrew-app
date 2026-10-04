@@ -32,6 +32,12 @@ import type { TerminalNodeData } from '../src/shared/model'
  * Measured on the owner's own card before the fix: the index held 1122 turns
  * and the walk 680, a constant gap of 442. Every walked block was placeable by
  * the index, which is why renumbering from it is exact and not a guess.
+ *
+ * 2026-10-04: the window is now READ from the index rather than renumbered by
+ * it (stream-window.ts), so the "run of empty placeholders" above fills too —
+ * the index names the file each row lives in, lineage or not. The numbering
+ * rule this suite guards is unchanged; two expectations below widened to the
+ * blocks the walk could not reach.
  */
 
 const T0 = Date.parse('2026-09-20T09:00:00.000Z')
@@ -127,8 +133,12 @@ describe('a block window when the walk is shorter than the index', () => {
     // The walk now finds two blocks and would call them 1 and 2. The index has
     // already issued 4 and 5 for those identities, and an issued ordinal is
     // the turn's ordinal — the rail, the placeholders and every jump are laid
-    // out in it.
-    expect(page.blocks.map((b) => b.ordinal)).toEqual([4, 5])
+    // out in it. Since 2026-10-04 the window is answered FROM the index
+    // (stream-window.ts), so the three turns in the aged-out file come back
+    // too: the index still names the file that holds them, and the file is
+    // still on disk. Those were the rows the walk could never fill.
+    expect(page.blocks.map((b) => b.ordinal)).toEqual([1, 2, 3, 4, 5])
+    expect(page.blocks.map((b) => b.sessionId)).toEqual([OLD, OLD, OLD, NOW, NOW])
   })
 
   it('reports the index’s total, so the drawer does not prune what it just fetched', async () => {
@@ -151,8 +161,9 @@ describe('a block window when the walk is shorter than the index', () => {
     const first = all.blocks[0]
     const after = await service.blocks('t-ord', { after: first.id, limit: 10 })
     // Cursors are identities and are untouched by the renumbering; what must
-    // follow is the NEXT ordinal in the index's space.
-    expect(after.blocks.map((b) => b.ordinal)).toEqual([5])
+    // follow is the NEXT ordinal in the index's space — and, with the window
+    // read from the index, every ordinal after it that still has bytes.
+    expect(after.blocks.map((b) => b.ordinal)).toEqual([2, 3, 4, 5])
     expect(after.total).toBe(5)
   })
 })
