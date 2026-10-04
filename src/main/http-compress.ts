@@ -21,6 +21,7 @@
 //
 // SCOPE — encoding only. No routing, no auth, no caching policy.
 
+import { createHash } from 'node:crypto'
 import { brotliCompressSync, constants, gzipSync } from 'node:zlib'
 import type http from 'node:http'
 
@@ -32,11 +33,27 @@ import type http from 'node:http'
 export const MIN_COMPRESS_BYTES = 1024
 
 /**
- * Brotli quality. 5 buys 9–10% over gzip on the real payloads for ~25 ms on
- * the 1.6 MB bundle; 11 would spend seconds of main-process time for a few
- * more percent, which on an Electron main thread is a UI freeze.
+ * Brotli quality for IMMUTABLE bodies (the renderer bundle): compressed once
+ * per app run, so the quality is spent once. 5 buys 9–10% over gzip for ~25 ms
+ * on the 1.6 MB bundle; 11 would spend seconds for a few more percent.
  */
 const BROTLI_QUALITY = 5
+/**
+ * THE DYNAMIC BODIES ARE THE TAIL. /api/workspace and /api/state are 750 KB
+ * on the Cookrew Dev canvas (590 KB of it note bodies) and were compressed
+ * from scratch on every poll, on the main thread: gzip at the default level
+ * measured 35 ms idle and 183 ms p50 / 520 ms p95 under the machine's usual
+ * load, against 10 / 24 ms uncompressed — the compressor was the latency.
+ *
+ * Two things fix it. The LEVELS: on that payload brotli q4 takes 12.7 ms for
+ * 277 KB and gzip level 3 takes 17 ms for 309 KB, against 35 ms / 287 KB for
+ * gzip-6 — cheaper AND smaller, or cheaper for 7% more bytes. And the CACHE
+ * below: a canvas that nobody is editing answers the same bytes poll after
+ * poll, so the compressed copy is kept under the body's own hash and the
+ * second poll costs a hash (0.9 ms), not a pass.
+ */
+const DYNAMIC_BROTLI_QUALITY = 4
+const DYNAMIC_GZIP_LEVEL = 3
 
 export type Encoding = 'br' | 'gzip'
 
@@ -85,13 +102,76 @@ export function compressible(contentType: string): boolean {
   return /^application\/(javascript|json|xml|wasm|manifest\+json)$/.test(type)
 }
 
-function pack(body: Buffer, encoding: Encoding): Buffer {
-  if (encoding === 'gzip') return gzipSync(body)
+function pack(body: Buffer, encoding: Encoding, quality: 'once' | 'dynamic' = 'once'): Buffer {
+  if (encoding === 'gzip') return gzipSync(body, quality === 'once' ? {} : { level: DYNAMIC_GZIP_LEVEL })
   return brotliCompressSync(body, {
     params: {
-      [constants.BROTLI_PARAM_QUALITY]: BROTLI_QUALITY,
+      [constants.BROTLI_PARAM_QUALITY]: quality === 'once' ? BROTLI_QUALITY : DYNAMIC_BROTLI_QUALITY,
       [constants.BROTLI_PARAM_SIZE_HINT]: body.length
     }
+  })
+}
+
+/**
+ * A body's own name: the hash of its bytes, as the ETag and as the key the
+ * compressed copy is kept under. SHA-1 because it is the fastest digest Node
+ * ships that is wide enough for a cache key — 0.9 ms on 750 KB — and nothing
+ * here is a security claim.
+ */
+export function contentTag(body: Buffer): string {
+  return createHash('sha1').update(body).digest('base64url')
+}
+
+/**
+ * Compressed copies of DYNAMIC bodies, keyed by their content, kept while the
+ * content keeps coming back. Bounded by count and by bytes: a handful of
+ * canvases at a few hundred KB each, never a store. Insertion order is the
+ * eviction order, and a hit is moved to the end so the live polls stay.
+ */
+interface Dynamic {
+  out: Buffer
+  bytes: number
+}
+const dynamic = new Map<string, Dynamic>()
+const DYNAMIC_CACHE_LIMIT = 32
+const DYNAMIC_CACHE_BYTES = 8 * 1024 * 1024
+let dynamicBytes = 0
+const stats = { hits: 0, misses: 0 }
+
+function packDynamic(tag: string, body: Buffer, encoding: Encoding): Buffer {
+  const id = `${encoding}:${tag}`
+  const hit = dynamic.get(id)
+  if (hit) {
+    dynamic.delete(id)
+    dynamic.set(id, hit)
+    stats.hits += 1
+    return hit.out
+  }
+  stats.misses += 1
+  const out = pack(body, encoding, 'dynamic')
+  dynamic.set(id, { out, bytes: out.length })
+  dynamicBytes += out.length
+  while (dynamic.size > DYNAMIC_CACHE_LIMIT || dynamicBytes > DYNAMIC_CACHE_BYTES) {
+    const oldest = dynamic.keys().next().value
+    if (oldest === undefined) break
+    dynamicBytes -= dynamic.get(oldest)?.bytes ?? 0
+    dynamic.delete(oldest)
+  }
+  return out
+}
+
+/** What the dynamic cache has done — for tests and the health page. */
+export function dynamicCompressionStats(): { hits: number; misses: number; entries: number; bytes: number } {
+  return { hits: stats.hits, misses: stats.misses, entries: dynamic.size, bytes: dynamicBytes }
+}
+
+/** Does an If-None-Match header name this tag? Weak comparison, `*` matches. */
+export function etagMatches(ifNoneMatch: string | string[] | undefined, tag: string): boolean {
+  const raw = Array.isArray(ifNoneMatch) ? ifNoneMatch.join(',') : ifNoneMatch
+  if (!raw) return false
+  return raw.split(',').some((part) => {
+    const candidate = part.trim().replace(/^W\//, '')
+    return candidate === '*' || candidate === `"${tag}"`
   })
 }
 
@@ -118,9 +198,17 @@ function packCached(key: string, body: Buffer, encoding: Encoding): Buffer {
 export interface SendOptions {
   /**
    * Content-addressed identity of `body` — a hashed asset path. Supplying it
-   * caches the compressed bytes; omitting it compresses every time.
+   * caches the compressed bytes under that key, at the once-per-run quality.
+   * Without it a body of any size is named by its own hash (contentTag) and
+   * the compressed copy is kept while the same bytes keep being answered.
    */
   cacheKey?: string
+  /**
+   * The request's If-None-Match. A body whose tag it names is answered 304
+   * with no bytes at all — the cheapest answer there is, and the companion's
+   * fetch sends the header on its own once it has seen the ETag.
+   */
+  ifNoneMatch?: string | string[]
 }
 
 /**
@@ -176,17 +264,29 @@ export function sendBody(
   }
   const contentType = headers['content-type'] ?? ''
   const worth = body.length >= MIN_COMPRESS_BYTES && compressible(contentType)
+  // A dynamic body big enough to be worth compressing is worth naming too:
+  // the tag is the cache key below and the ETag the client can send back.
+  // Only a 200 is revalidatable — an error body is not "the resource".
+  const tag = worth && !options.cacheKey && status === 200 ? contentTag(body) : null
+  const named = tag === null ? headers : { ...headers, etag: `W/"${tag}"` }
+  if (tag !== null && etagMatches(options.ifNoneMatch, tag)) {
+    response.writeHead(304, { ...withoutBodyHeaders(named), vary: 'accept-encoding, origin' })
+    response.end()
+    return
+  }
   const encoding = worth ? negotiateEncoding(acceptEncoding) : null
   if (!encoding) {
-    response.writeHead(status, { ...headers, 'content-length': String(body.length) })
+    response.writeHead(status, { ...named, 'content-length': String(body.length) })
     response.end(body)
     return
   }
   const out = options.cacheKey
     ? packCached(options.cacheKey, body, encoding)
-    : pack(body, encoding)
+    : tag !== null
+      ? packDynamic(tag, body, encoding)
+      : pack(body, encoding, 'dynamic')
   response.writeHead(status, {
-    ...headers,
+    ...named,
     'content-encoding': encoding,
     vary: 'accept-encoding, origin',
     'content-length': String(out.length)

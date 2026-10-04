@@ -206,11 +206,9 @@ export function marketPage(input: MarketInput): Page {
 <p class="lede" style="margin-bottom:8px">${esc(MARKET_ONE_LINE)}</p>
 ${readerStrip(input, reader)}
 <div class="tabs">${tab('teams', 'Served teams')}${tab('presets', 'Presets to download')}${tab('starred', '★ Starred')}</div>
-<form class="card soft" style="padding:14px 16px" method="get" action="/market" id="filters">
+<form class="card soft finder" method="get" action="/market" id="filters">
 ${hidden('tab', query.tab === 'teams' ? '' : query.tab)}${hidden('owner', query.owner)}
-<div class="toolbar"><input type="search" name="q" id="q" value="${esc(query.q)}" placeholder="search teams, owners, harnesses, tags…" autocomplete="off">
-<select name="sort" id="sort"><option value="stars"${query.sort === 'stars' ? ' selected' : ''}>Most starred</option><option value="recent"${query.sort === 'recent' ? ' selected' : ''}>Recently served</option><option value="name"${query.sort === 'name' ? ' selected' : ''}>Name</option></select>
-<button class="btn" type="submit">Search</button></div>
+<div class="toolbar"><input type="search" name="q" id="q" value="${esc(query.q)}" placeholder="search teams, owners, harnesses, tags…" autocomplete="off" aria-label="Search the marketplace"><button class="btn" type="submit">Search</button></div>
 <div class="filters">
 ${chip('live', '1', '● live now', query.live)}
 ${chip('access', 'free', 'free', query.access === 'free')}
@@ -218,9 +216,10 @@ ${chip('access', 'paid', 'paid', query.access === 'paid')}
 ${chip('rail', 'x402', 'USDC · x402', query.rail === 'x402')}
 ${chip('rail', 'stripe', 'card · stripe', query.rail === 'stripe')}
 ${query.owner ? `<a class="chip amber" href="/market">@${esc(query.owner)} ✕</a>` : ''}
+<label class="sort"><span class="meta">sort</span><select name="sort" id="sort" aria-label="Sort"><option value="stars"${query.sort === 'stars' ? ' selected' : ''}>Most starred</option><option value="recent"${query.sort === 'recent' ? ' selected' : ''}>Recently served</option><option value="name"${query.sort === 'name' ? ' selected' : ''}>Name</option></select></label>
 </div></form>
 ${yours}
-<p class="meta" id="count" style="margin:16px 0 10px">${count}${query.q ? ` matching “${esc(query.q)}”` : ''}${query.owner ? ` by @${esc(query.owner)}` : ''}${input.account ? ` · signed in as @${esc(input.account)}` : ''}</p>
+<p class="meta" id="count">${count}${query.q ? ` matching “${esc(query.q)}”` : ''}${query.owner ? ` by @${esc(query.owner)}` : ''}${input.account ? ` · signed in as @${esc(input.account)}` : ''}</p>
 ${grid}
 <div class="faq" style="margin-top:24px" id="account"><details><summary>How listings, seats, stars and opening work</summary><ul class="pts how">
 <li><b>One account.</b> Your cookrew.dev username is the only identity here. What you serve, the seats you hold, your stars and what the app opens all follow it — there is no handle to enrol and no key to mint.</li>

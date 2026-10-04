@@ -11,7 +11,7 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   CanvasNode,
   Connection,
@@ -1427,7 +1427,11 @@ function loadWorkspaceState(base: string, id: string): WorkspaceState {
   try {
     const file = workspaceFile(base, id)
     if (existsSync(file)) {
-      const state = JSON.parse(readFileSync(file, 'utf8')) as WorkspaceState
+      const text = readFileSync(file, 'utf8')
+      // What was read is what is on disk: a flush of the same canvas later
+      // has nothing to write (saveWorkspaceState).
+      onDisk.set(id, digest(text))
+      const state = JSON.parse(text) as WorkspaceState
       return normalizeState(state)
     }
   } catch (error) {
@@ -1447,10 +1451,25 @@ function loadWorkspaceStateStrict(base: string, id: string): WorkspaceState {
   return normalizeState(JSON.parse(readFileSync(file, 'utf8')) as WorkspaceState)
 }
 
+/**
+ * WHAT IS ON DISK, by content. A switch flushes the canvas it leaves and the
+ * app's quit flushes every resident one, whether or not anything changed —
+ * and on the Cookrew Dev canvas that is a 1 MB synchronous write of bytes
+ * already there, inside the switch the user is waiting on (workspace.switched
+ * p50 89 ms, p95 326 ms). The digest of the last text written (or read) per
+ * workspace lets an unchanged canvas cost a stringify and a hash, not a write.
+ */
+const onDisk = new Map<string, string>()
+const digest = (text: string): string => createHash('sha1').update(text).digest('base64url')
+
 function saveWorkspaceState(base: string, id: string, state: WorkspaceState): void {
   try {
+    const text = JSON.stringify(state, null, 2)
+    const tag = digest(text)
+    if (onDisk.get(id) === tag) return
     mkdirSync(path.join(workspacesDir(base), id), { recursive: true })
-    writeFileSync(workspaceFile(base, id), JSON.stringify(state, null, 2), 'utf8')
+    writeFileSync(workspaceFile(base, id), text, 'utf8')
+    onDisk.set(id, tag)
   } catch (error) {
     console.error('Failed to save workspace state:', error)
   }

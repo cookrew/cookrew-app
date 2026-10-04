@@ -41,6 +41,7 @@ import type {
 } from "../shared/model";
 import { lightenCanvas } from "../shared/wire-canvas";
 import { readBytes, readJson, respondJson, startSse, pairingAuthorized, presentedToken } from "./mobile-http";
+import { dynamicCompressionStats } from "./http-compress";
 import type { StreamService } from "./stream-service";
 import { handleStreamRoutes } from "./stream-routes";
 import { handleStreamAdapters } from "./stream-adapters";
@@ -530,7 +531,9 @@ export async function handleMobileApi(
       respondJson(response, 503, { error: "health not wired" });
       return true;
     }
-    respondJson(response, 200, deps.health());
+    // The compressor's own ledger rides along: how often a poll was answered
+    // from the cache or with a 304 is the number behind the API tails.
+    respondJson(response, 200, { ...deps.health(), compression: dynamicCompressionStats() });
     return true;
   }
   if (method === "GET" && p === "/api/presets") {

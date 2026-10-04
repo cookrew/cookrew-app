@@ -13,7 +13,7 @@
 // exactly, because a flag-off regression is the one thing this refactor is not
 // allowed to cost.
 
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -398,5 +398,39 @@ describe('a background node patch is not dropped (review H2)', () => {
     expect((patched as TerminalNodeData).claudeSessionId).toBe('sess-abc')
     const persisted = store.workspaceState(alpha).nodes.find((n) => n.id === bg.id)
     expect((persisted as TerminalNodeData).claudeSessionId).toBe('sess-abc')
+  })
+})
+
+/**
+ * A SWITCH WRITES ONLY WHAT CHANGED. Leaving a canvas flushes it, whether or
+ * not anything on it moved — a 1 MB synchronous write of bytes already on
+ * disk, inside the switch the user is waiting on. The store remembers the
+ * digest of what it last wrote or read per workspace, so an unchanged canvas
+ * costs a stringify and a hash and the file keeps its mtime.
+ */
+describe('leaving an unchanged canvas writes nothing', () => {
+  const fileOf = (store: WorkspaceStore, id: string): string =>
+    path.join(store.baseDirForTests, 'workspaces', id, 'workspace.json')
+
+  it('a switch away and back leaves the file untouched when nothing moved, and rewrites it when something did', async () => {
+    const store = makeStore(false)
+    const alpha = store.createWorkspace('Alpha', '/work/alpha')
+    store.switchWorkspace(alpha.id)
+    const node = store.addNode(terminal('Forge'), alpha.id)
+    await new Promise((r) => setTimeout(r, 350))
+    const beta = store.createWorkspace('Beta', '/work/beta')
+    const before = statSync(fileOf(store, alpha.id))
+    // Leave alpha (a flush) and come back (a hydrate), without touching it.
+    store.switchWorkspace(beta.id)
+    store.switchWorkspace(alpha.id)
+    store.switchWorkspace(beta.id)
+    const after = statSync(fileOf(store, alpha.id))
+    expect(after.mtimeMs).toBe(before.mtimeMs)
+    expect(onDisk(store, alpha.id).nodes.map((n) => n.id)).toEqual([node.id])
+    // A real change is written on the way out.
+    store.switchWorkspace(alpha.id)
+    store.updateNode(node.id, { position: { x: 40, y: 40 } })
+    store.switchWorkspace(beta.id)
+    expect(onDisk(store, alpha.id).nodes[0].position).toEqual({ x: 40, y: 40 })
   })
 })

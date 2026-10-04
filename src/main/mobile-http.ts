@@ -33,7 +33,10 @@ export function respondJson(
     status,
     { 'content-type': 'application/json' },
     Buffer.from(JSON.stringify(body ?? null)),
-    acceptEncodingOf(response)
+    acceptEncodingOf(response),
+    // The client's revalidation, when it sent one: the same canvas it last
+    // saw is a 304, not another 750 KB.
+    { ifNoneMatch: response.req?.headers['if-none-match'] }
   )
 }
 
