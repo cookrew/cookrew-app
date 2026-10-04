@@ -55,6 +55,8 @@
   const PAYING_KEY = `cr_paying:${door}`
   const PAID_KEY = `cr_paid:${door}`
   const BUY_KEY = `cr_buy:${door}`
+  /** `?open=1` — a row on the market said OPEN THE LINE; this page opens it for that click. */
+  const OPEN_KEY = `cr_open:${door}`
   const remember = (key, value) => {
     try {
       sessionStorage.setItem(key, value)
@@ -744,13 +746,16 @@
     const url = new URL(location.href)
     const paid = url.searchParams.get('paid')
     const buy = url.searchParams.get('buy')
-    if (paid !== null || buy !== null) {
+    const go = url.searchParams.get('open')
+    if (paid !== null || buy !== null || go !== null) {
       url.searchParams.delete('paid')
       url.searchParams.delete('buy')
+      url.searchParams.delete('open')
       history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`)
     }
     if (paid !== null && SESSION_ID.test(paid) && recall(PAYING_KEY) !== null) remember(PAID_KEY, paid)
     if (buy === '1') remember(BUY_KEY, '1')
+    if (go === '1') remember(OPEN_KEY, '1')
     const session = recall(PAID_KEY)
     if (session !== null && SESSION_ID.test(session)) {
       payment = btoa(JSON.stringify({ rail: 'stripe', session }))
@@ -759,7 +764,15 @@
       void open({ buy: true })
       return
     }
-    if (recall(BUY_KEY) !== null) void open({ buy: true })
+    if (recall(BUY_KEY) !== null) {
+      void open({ buy: true })
+      return
+    }
+    // Spent at once: a reload after this is a reload, not a second click.
+    if (recall(OPEN_KEY) !== null) {
+      forget(OPEN_KEY)
+      void open()
+    }
   }
   resume()
 })()

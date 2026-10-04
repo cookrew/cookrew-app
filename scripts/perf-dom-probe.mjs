@@ -124,7 +124,15 @@ export async function launchChrome({ width, height, chrome = findChrome() }) {
       })
       child.kill('SIGKILL')
       await exited
-      rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      // Best effort: the profile is a temp dir and Chrome may still be
+      // writing it when the kill lands (ENOTEMPTY on the macOS CI runner).
+      // A profile left in tmp is nothing; a teardown that throws fails the
+      // suite that just passed.
+      try {
+        rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      } catch {
+        // leave it to tmp
+      }
     }
   }
 }

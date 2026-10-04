@@ -257,7 +257,7 @@ suite('the market, driven as a stranger who becomes @lin', () => {
     } catch (error) {
       throw new Error(`${String(error)} — the sheet says: ${await text('#acct-message')}`)
     }
-    expect(await text('.who .chip')).toBe('@lin · 0 seats · 0 starred')
+    expect(await text('#yours .chip.amber')).toBe('@lin · 0 seats · 0 starred')
     expect(await text('#signin')).toBe('@lin')
     expect(await count('article.team [data-signin]')).toBe(0)
     expect(await text('article.team[data-standing="unseated"] .btn.primary')).toContain('Buy a seat · $')
@@ -282,13 +282,13 @@ suite('the market, driven as a stranger who becomes @lin', () => {
     })
     expect(granted.status).toBe(201)
     await go(`${origin}/market`)
-    expect(await text('.who .chip')).toBe('@lin · 1 seat · 1 starred')
+    expect(await text('#yours .chip.amber')).toBe('@lin · 1 seat · 1 starred')
     expect(await text('#yours .ttl')).toBe('COOKREW Alpha')
     expect(await text('#yours .stand')).toBe('Seated · granted by @drej')
-    expect(await text('#yours .btn.primary')).toBe('Open')
+    expect(await text('#yours .btn.primary')).toBe('Open the line')
     expect(await text('#count')).toContain('2 more teams')
-    // The shelf's card and the catalogue list it once.
-    expect(await count('article.team .ttl')).toBe(3)
+    // The strip's row and the catalogue list it once: two cards remain below.
+    expect(await count('article.team .ttl')).toBe(2)
   })
 
   it('BUY on a priced team lands on its page and goes to buy as @lin — no handle, no second sign-in', async () => {
