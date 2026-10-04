@@ -321,11 +321,18 @@ export function createStreamService(deps: StreamServiceDeps): StreamService {
       // card that has never materialised, or one whose state was unreadable.
       // The walk's own answer stands, exactly as it did before.
       if (index.entries.length === 0) return reader.blocks(terminalId, request)
-      // Rows in a transcript the chain reports missing have no bytes to serve
-      // and are not a page's worth of anything — the walk never saw them.
-      const gone = new Set(index.missing.map((member) => member.file))
-      const { rows, ...unknown } = windowRows(index.entries, request, STREAM_PAGE_DEFAULT_LIMIT, gone)
       const members = new Map(chain.files.map((entry) => [entry.file, entry]))
+      // ROWS WITHOUT BYTES ARE NOT A PAGE'S WORTH OF ANYTHING. A transcript the
+      // chain reports missing, or one the lineage no longer lists AND that is
+      // not on disk either — on the owner's busiest card 693 of 1,136 rows
+      // live in two such files. The walk never saw them, so neither does the
+      // window; one stat per distinct file outside the chain is the price.
+      const exists = deps.exists ?? existsSync
+      const gone = new Set(index.missing.map((member) => member.file))
+      for (const file of filesOfRows(index.entries)) {
+        if (!members.has(file) && !exists(file)) gone.add(file)
+      }
+      const { rows, ...unknown } = windowRows(index.entries, request, STREAM_PAGE_DEFAULT_LIMIT, gone)
       // A file the chain no longer lists is still an address: it rotated out
       // of the lineage, not off the disk. Only Claude chains have more than
       // one member, so that is the parser such a file is read with.

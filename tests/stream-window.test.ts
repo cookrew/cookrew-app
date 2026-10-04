@@ -293,7 +293,7 @@ describe('service.blocks — THE STRUCTURAL GATE: only the files a window spans 
   })
 
   it('skips the rows of a transcript deleted since the index was built — the first page is still twenty blocks', async () => {
-    const { service, readsSince, files } = bed()
+    const { service, readsSince, files, ageOut } = bed()
     await indexOf(service, 't-win')
     // The oldest transcript is deleted but still in the lineage: the index
     // keeps its four rows (a deletion is not a renumbering), the chain reports
@@ -308,6 +308,14 @@ describe('service.blocks — THE STRUCTURAL GATE: only the files a window spans 
     expect(readsSince()[files.A]).toBeUndefined()
     // A cursor into the deleted file is unknown, as it was to the walk.
     expect((await service.blocks('t-win', { after: 'a-u2' })).unknownAfter).toBe(true)
+    // And once the lineage forgets the file too — the chain no longer reports
+    // it missing, because it no longer reports it at all — the rows are still
+    // skipped: the file is neither listed nor on disk. This is the shape of the
+    // owner's card, where `missing` was empty and 693 rows pointed at nothing.
+    ageOut([B, C])
+    const forgotten = await service.blocks('t-win', { limit: 3 })
+    expect(forgotten.blocks.map((b) => b.ordinal)).toEqual([5, 6, 7])
+    expect(forgotten.missing).toEqual([])
   })
 
   it('answers a card on its very first read, before any snapshot exists', async () => {
