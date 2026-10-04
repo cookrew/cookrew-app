@@ -160,9 +160,13 @@ export async function serveStreamOpen(
   deps: StreamIndexRouteDeps
 ): Promise<void> {
   const service = deps.stream as StreamService
-  const { rows, result } = await rowsOf(terminalId, source, deps)
+  // Rows and tail together, as stream-ipc's streamOpen reads them: one
+  // materialisation between them, and no reason for one to wait on the other.
+  const [{ rows, result }, tail] = await Promise.all([
+    rowsOf(terminalId, source, deps),
+    tailFrame(terminalId, source, deps, service)
+  ])
   const page = pageByIdentity(rows, { limit: indexPageLimit(url.searchParams.get('limit')) })
-  const tail = await tailFrame(terminalId, source, deps, service)
   respondJson(response, 200, {
     index: page.rows,
     nextCursor: page.nextCursor,
