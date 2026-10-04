@@ -32,7 +32,6 @@ import { TranslateButton } from './TranslateButton'
 import { languageByCode } from '../../shared/translate'
 import { useCheckpointTranslation } from './use-checkpoint-translation'
 import { StatusCoin } from './nodes/AgentAvatar'
-import { DialTag } from './nodes/DialTag'
 import { TuneRail } from './nodes/TuneRail'
 import { useAgentTuning } from './nodes/use-agent-tuning'
 
@@ -890,7 +889,8 @@ function TerminalOverlay({
         </span>
         {node.orch && <span className="cr-chip amber">ORCH</span>}
         <span className={`cr-chip${PHASE_CHIP[phase].cls}`}>{PHASE_CHIP[phase].label}</span>
-        <DialTag id={node.id} className="cr-chip dial" />
+        {/* No model/effort chip up here: the zoomed card already says both on its tune rail
+            (MDL / EFF), and the same two words twice on one screen read as two facts. */}
         <div className="popout-actions">
           <TranslateButton
             active={translation.showing !== null}
