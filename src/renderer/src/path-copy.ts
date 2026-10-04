@@ -100,12 +100,38 @@ const OPEN_INSTEAD = 'Open the Mac directly on Wi-Fi instead:'
  * The family is a family name — `Chrome`, `Safari`, or `This browser` when
  * nothing was recognised — never a version and never a user-agent string.
  */
-export const directOfferWhy = (family: string, proxy?: boolean): string => {
-  if (proxy) {
+export const directOfferWhy = (
+  family: string,
+  reason: 'timeout' | 'blocked' | 'proxy' = 'timeout'
+): string => {
+  if (reason === 'proxy') {
     return `${family} cannot reach your Mac from this page — a system proxy hides the address, so the browser refuses the request with and without the local-network hint. ${OPEN_INSTEAD}`
+  }
+  /**
+   * A REFUSAL BEFORE CONNECTING IS THE BROWSER'S, AND THE ROW ALREADY SAYS SO
+   * — 2026-10-04, the owner's iPhone: "refused by the browser before
+   * connecting (with and without the hint) — 4 ms" under a headline reading
+   * "did not answer in time". The Mac was never asked, so the headline says
+   * who refused and names the navigation FIRST: TRY AGAIN measures the same
+   * rule again in another 4 ms, and the buttons keep the sentence's order.
+   */
+  if (reason === 'blocked') {
+    return `${family} refused the Mac's address from this page before connecting, so the Mac was never asked. Open it directly instead, or try again:`
   }
   return 'That Mac did not answer in time. Try again, or open it directly:'
 }
+
+/**
+ * THE LINE UNDER THE BADGE, for the refusal case only.
+ *
+ * The sheet is two taps away and the bar showed one word, RELAY, over a Mac
+ * three metres off and an 845 ms round trip (same screenshot). A browser that
+ * refuses the direct path by rule leaves exactly one way onto the Wi-Fi, so
+ * that way hangs where the ask would — the ask never renders on a browser
+ * with no permission to ask for, so the slot is free (DirectOfferLine.tsx).
+ */
+export const directOfferLine = (family: string): string =>
+  `${family} refused the direct path from this page.`
 
 /**
  * WHAT HAPPENED TO ONE CANDIDATE, in words a reader can act on.
@@ -128,7 +154,15 @@ export const ATTEMPT_COPY = {
   timeout: 'timed out',
   blocked: 'refused by the browser before connecting',
   network: 'could not connect (DNS, certificate or network)',
-  http: 'answered'
+  http: 'answered',
+  /**
+   * THE ROW THE ZONE WROTE, NOT THE BROWSER. A name the registry is not
+   * answering fails in the resolver, whatever the browser says about it and
+   * however fast; the fix is on the Mac (publish the card), never in the
+   * phone's settings. 2026-10-04: this row read "refused by the browser
+   * before connecting" for five days.
+   */
+  unnamed: 'not answered by cookrew.dev — the Mac has not published this name'
 } as const
 
 /**

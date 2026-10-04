@@ -633,9 +633,12 @@ export const MKT_SERVE = {
   'mkt.serve.who.paid': 'Anyone who pays',
   'mkt.serve.who.paid.sub':
     'Set a price. Callers pay you directly — Cookrew never holds the money and takes nothing.',
-  'mkt.serve.price.unit': 'USD · per session',
-  'mkt.serve.price.label': 'Price in USD per session',
-  'mkt.serve.price.paid': '{price} USD · per session · {rails}',
+  // A SEAT, not a session (ruled copy G1: "charges {price} a seat"). The
+  // door charges once, at its 402, and the seat it settles follows the buyer
+  // to any device; the owner ends the seat to make the next call pay again.
+  'mkt.serve.price.unit': 'USD · a seat',
+  'mkt.serve.price.label': 'Price in USD, a seat',
+  'mkt.serve.price.paid': '{price} USD · a seat · {rails}',
   'mkt.serve.price.free': 'free · sign in to start',
   'mkt.serve.rails.live': 'Offers {rails}',
   'mkt.serve.rails.none': 'No payment rail is configured yet.',
@@ -1078,8 +1081,6 @@ export const MKT_GATE = {
   /** Acknowledge the served state and close — the copy is already placed. */
   'mkt.gate.open.action': 'DONE',
   /** The pin you leave with — the violet mark, said in words. */
-  'mkt.gate.pin': 'Pinned to your rail',
-  'mkt.gate.pin.why': 'Update from the chip when a new version ships — never pushed, always offered.',
   /** The direct door's honest wait — a first reply is slow while the line warms. */
   'mkt.gate.warming':
     'First reply can take a moment while the line warms — the card says so; it never just spins.',

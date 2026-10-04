@@ -19,14 +19,12 @@ export interface Frame {
 
 /** Pixel size of every 1400-wide frame in registry/assets/site (an 800-wide twin exists for each). */
 const SIZES: Record<string, [number, number]> = {
-  'intro-1.jpg': [1400, 1112],
-  'intro-2.jpg': [1400, 887],
-  'intro-3.jpg': [996, 1400],
-  'intro-4.jpg': [1400, 887],
-  'intro-5.jpg': [647, 1400],
-  'intro-6.jpg': [1400, 887],
+  'intro-1.jpg': [1400, 875],
+  'intro-2.jpg': [1400, 875],
+  'intro-6.jpg': [1400, 875],
   'qa-board.jpg': [1400, 875],
-  'qa-canvas.jpg': [1400, 875],
+  'qa-canvas.jpg': [1400, 874],
+  'promo-poster.jpg': [1400, 874],
   'qa-history-trace.jpg': [1400, 875],
   'qa-marketplace.jpg': [1400, 875],
   'qa-mobile.jpg': [700, 1400],
@@ -52,47 +50,47 @@ export const FRAMES = {
   canvas: frame(
     'qa-canvas.jpg',
     'The Cookrew Dev canvas: agent terminal cards, notes and wires',
-    'Framed the Cookrew Dev canvas at 0.42 zoom with cables shown: the Conductor orch card beside Magpie, Forge, Sol and Pixel, the program-spec notes above them, and the dotted wires fanning out of the orchestrator.'
+    'Framed the Velvet row of the Cookrew Dev board in the harness view: Fresco, Velvet, Conductor and Solosea show the last turn each agent took, the spec notes they were handed sit under them, the browser cards below carry the pages they opened, and the cables run as shared trunks along the gutters.'
   ),
   task: frame(
     'intro-1.jpg',
-    'A real task in an agent terminal, with a checkpoint landing on the rail',
-    'Recorded a real task into an agent terminal: the brief went in, Bash counted 36 PNG and 7 JPG files, the agent reported 10.6 MB, and a checkpoint dropped on the rail.'
+    "An agent card open on its record: the brief, the reply, the tool calls, the checkpoint rail",
+    "Clicked the Velvet card open on the Cookrew Dev board: its latest turn fills the card \u2014 the brief it was given, the reply it wrote and the Bash calls between \u2014 with the LIVE line under it and the checkpoint rail on the right counting 138."
   ),
   harness: frame(
     'intro-2.jpg',
-    'Dock preset chips: Claude Code, Codex, OpenCode, Pi, Shell, Add by link',
-    'Recorded placing a harness: chose CLAUDE CODE in the dock, clicked the canvas, the new teammate landed, started, and its card opened.'
+    "The dock's harness picker: Claude Code, Codex, OpenCode, Pi, Shell and the saved teams",
+    "Pressed TERMINAL in the dock over the harness canvas: the picker slid up with the five harness chips, CLAUDE CODE lit, the saved teams beside them and + IMPORT A TEAM at the end of the row."
   ),
   trace: frame(
     'qa-history-trace.jpg',
-    'The Conductor card scrubbed to checkpoint T13, the rail fanned open',
-    "Dragged the Conductor rail up to checkpoint T13: the rail fanned into the full checkpoint list with T13 focused, the transcript scrolled to that turn's block and the ask bar read CHECKPOINT T13."
+    "The Velvet card scrubbed to checkpoint T78, the rail fanned open",
+    "Dragged the Velvet rail up from its live end: the list of 138 checkpoints fanned out with the title Sous gave each one, T78 took the focus with FORK beside it, and the transcript on the left scrolled to that turn."
   ),
   rail: frame(
     'qa-terminal-rail.jpg',
-    'The Conductor card open: live terminal on the left, checkpoint rail on the right',
-    'Zoomed the Conductor card open: the live Claude Code terminal filled the overlay while the checkpoint rail on the right showed 23 CP, two compact ticks and the LIVE dot at the tail.'
+    "The Conductor card open: the transcript on the left, 1126 checkpoints on the rail",
+    "Clicked the Conductor card open: its latest reply sits above the LIVE line, the terminal below it is quiet, and the rail on the right counts 1126 checkpoints across the session's whole chain, compaction ticks included."
   ),
   board: frame(
     'qa-board.jpg',
-    'The Board: every agent, its phase, tokens and checkpoint, on one screen',
-    'Opened the Board from the header and focused its search: the facet chips counted 20 active and 174 inactive agents by preset and role, with Conductor WORKING and Tinker OFFLINE listed above the notes out of 643 items in total.'
+    "The Board: every agent, its last turn, its role and its checkpoint, on one screen",
+    "Switched the header to BOARD: nineteen active agents of twenty listed with the harness, role and workspace chips, the prompt each was last given and the reply it made, and how long ago it finished \u2014 the facet bar counts them by harness and role."
   ),
   mobile: frame(
     'qa-mobile.jpg',
-    'The phone companion with the Tinker card open',
-    "Paired the phone companion in a 500px headless Chrome and tapped the Tinker card: the overlay showed its last verdict block, the rail with 186 CP, version pins V1 and V7, and the LIVE marker, over the phone's arrow, ESC and send controls."
+    "The canvas at phone width: the same cards, the same cables",
+    "Rendered the same fixture at 500 px with touch emulation, the layout the phone companion uses: Velvet between its notes and the browser card below it, the harness cables running between them, the header's icons and the dock at the bottom."
   ),
   workspaces: frame(
     'intro-6.jpg',
-    'The workspace switcher: five named workspaces and a row of served session workspaces',
-    "Recorded the switcher: five named workspaces plus a row of served session workspaces, each one a caller's own sandbox."
+    "The workspace wall: every workspace as a screen, Cookrew Dev picked with its snapshot",
+    "Pressed the workspace pill in the header: the wall of workspaces slid in, one tilted screen each, with Cookrew Dev picked in front carrying a snapshot of this canvas and its directory under it, and OPEN, DIRECTORIES, REMOVE and HISTORY below."
   ),
   market: frame(
     'qa-marketplace.jpg',
-    'The Import a team sheet over the canvas',
-    "Armed the dock's terminal family and pressed + IMPORT A TEAM: the Import a team sheet opened over the canvas with its served-team address field, CANCEL and LOOK UP, above the AGENT presets and YOUR TEAMS rows."
+    "The Import a team sheet showing the COOKREW Alpha door",
+    "Pressed + IMPORT A TEAM in the dock and pasted cookrew.dev/@drej/cookrew-alpha: LOOK UP read the door's face from cookrew.dev \u2014 COOKREW Alpha, Pilot answering for 3 agents, a priced seat \u2014 above CANCEL and the import button. Before an address is typed the same sheet lists the teams saved on this machine and the seats the account holds."
   )
 } as const
 

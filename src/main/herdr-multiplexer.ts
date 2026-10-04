@@ -92,6 +92,7 @@
 // and the selector will not make it primary. It is a read-side accelerator.
 // HerdrHostMultiplexer is the tmux replacement.
 
+import { observedRunner } from './multiplexer'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { isTransientHerdrError, runWithHerdrRetry } from './herdr-retry'
 import type {
@@ -242,7 +243,7 @@ export class HerdrMultiplexer implements Multiplexer {
   private probed: boolean | null = null
 
   constructor(options: HerdrOptions = {}) {
-    this.runner = options.runner ?? herdrRunner
+    this.runner = observedRunner(options.runner ?? herdrRunner)
     this.bin = options.bin ?? 'herdr'
   }
 

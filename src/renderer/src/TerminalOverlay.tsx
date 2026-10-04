@@ -7,7 +7,6 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 import type { TerminalNodeData } from '../../shared/model'
-import type { VersionPinRecord } from '../../shared/version-pin'
 import type { TerminalActivity, TurnPhase } from '../../shared/turn'
 import type { LodLayout, ScreenRect } from './zoom-lod'
 import { useActivity } from './activity-thumb-store'
@@ -32,6 +31,8 @@ import { TranslateButton } from './TranslateButton'
 import { languageByCode } from '../../shared/translate'
 import { useCheckpointTranslation } from './use-checkpoint-translation'
 import { StatusCoin } from './nodes/AgentAvatar'
+import { TuneRail } from './nodes/TuneRail'
+import { useAgentTuning } from './nodes/use-agent-tuning'
 
 const PHOSPHOR_THEME = {
   background: '#14110A',
@@ -252,26 +253,6 @@ function TerminalOverlay({
   // plus a bump when a template is saved (a save adds no turn, so turnCount
   // alone would miss it). Without the save signal the marker only appeared
   // after the next turn — which read as "save did nothing".
-  const [pins, setPins] = useState<VersionPinRecord[]>([])
-  const [pinRefresh, setPinRefresh] = useState(0)
-  useEffect(() => {
-    const bump = (): void => setPinRefresh((n) => n + 1)
-    window.addEventListener('cookrew:template-saved', bump)
-    return () => window.removeEventListener('cookrew:template-saved', bump)
-  }, [])
-  useEffect(() => {
-    if (!metadataReady) return
-    let alive = true
-    void cookrew()
-      .listPins(node.id)
-      .then((list) => {
-        if (alive) setPins(list)
-      })
-      .catch((error) => console.error('listPins failed:', error))
-    return () => {
-      alive = false
-    }
-  }, [node.id, pinRefresh, metadataReady])
 
   const transcriptRef = useRef<TranscriptHandle>(null)
   const translation = useCheckpointTranslation()
@@ -374,6 +355,10 @@ function TerminalOverlay({
     selectedRow === null ? '' : checkpointRowTitle(selectedRow, titleMode)
 
   const keepFocus = (e: React.MouseEvent): void => e.preventDefault()
+
+  // The LEFT rail: the agent's model and effort, read off its own record and
+  // turned by one typed line. Mirror of the checkpoint rail on the right.
+  const tuning = useAgentTuning({ terminalId: node.id, phase, remote })
 
   // Owner ruling 2026-08-30: the zoomed view is PTY-DIRECT for every card.
   useEffect(() => {
@@ -883,6 +868,8 @@ function TerminalOverlay({
         </span>
         {node.orch && <span className="cr-chip amber">ORCH</span>}
         <span className={`cr-chip${PHASE_CHIP[phase].cls}`}>{PHASE_CHIP[phase].label}</span>
+        {/* No model/effort chip up here: the zoomed card already says both on its tune rail
+            (MDL / EFF), and the same two words twice on one screen read as two facts. */}
         <div className="popout-actions">
           <TranslateButton
             active={translation.showing !== null}
@@ -1065,6 +1052,16 @@ function TerminalOverlay({
         </div>
       )}
       <div className="popout-terminal-wrap">
+        {tuning.view !== null && (
+          <TuneRail
+            view={tuning.view}
+            open={tuning.open}
+            onOpen={tuning.setOpen}
+            onTurn={tuning.turn}
+            error={tuning.error}
+            onMouseDown={keepFocus}
+          />
+        )}
         <TranscriptView
           ref={transcriptRef}
           terminalId={node.id}
@@ -1103,7 +1100,6 @@ function TerminalOverlay({
           rows={rows}
           // The chain's length, not the page this client has fetched.
           total={stream.total}
-          pins={pins}
           markers={traceMarkers}
           titleMode={titleMode}
           activeIndex={activeBlock.index}

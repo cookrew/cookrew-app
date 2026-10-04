@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { AcmeClient } from './acme-client'
 import { CertStore, type CertState } from './cert-store'
 import { readCsr } from './csr-read'
-import { createZone, type NameServer, type ReachLookup, type Responder } from './dns-zone'
+import { createZone, lookupName, type NameServer, type ReachLookup, type Responder } from './dns-zone'
 import type { V2Desktop } from './v2-accounts'
 
 /**
@@ -79,6 +79,8 @@ export interface NamesFeature {
   zone: string
   /** The DNS responder, for dns-server.ts. */
   respond: Responder
+  /** The same zone's answer for one host, as the HTTP oracle says it (dns-zone.ts · lookupName). */
+  lookup: (host: string) => { live: boolean; address?: string }
   /** The wildcard a Mac's CSR must ask for and nothing else. */
   wildcardFor: (deviceId: string) => string
   /** Does that Mac have a live certificate — the `names` bit on a reach card. */
@@ -223,6 +225,7 @@ export function createNames(options: NamesOptions): NamesFeature {
   return {
     zone,
     respond,
+    lookup: (host) => lookupName(respond, host),
     wildcardFor,
     hasNames: (deviceId) => certs.hasNames(deviceId),
     state: (deviceId) => certs.state(deviceId),

@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react'
 import { cookrew, isRemoteMode } from './api'
 import { DirectLandedNote } from './DirectLandedNote'
+import { DirectOfferLine } from './DirectOfferLine'
 import { DirectOfferRow } from './DirectOfferRow'
 import { LocalNetworkRow } from './LocalNetworkRow'
+import { subscribeLocalNetwork } from './local-network-gate'
+import { subscribePathAttempts } from './path-attempts'
 import { PathWhy } from './PathWhy'
 import { currentPathBadge, subscribePathLink } from './path-link'
+import { subscribeReachPublish } from './reach-publish'
 import type { PathBadgeView } from '../../shared/path-badge'
 
 /**
@@ -26,7 +30,20 @@ export function PathBadge({ onRefresh }: { onRefresh: () => void }): React.JSX.E
   const [view, setView] = useState<PathBadgeView>(() => currentPathBadge())
   const [open, setOpen] = useState(false)
 
-  useEffect(() => subscribePathLink(() => setView(currentPathBadge())), [])
+  useEffect(() => {
+    // The view reads three stores (path-link.ts · currentPathBadge): the
+    // link, the permission, and the last race's rows. A sentence that only
+    // re-read on a link change kept saying "your Mac is not on this network"
+    // after a race had shown the browser refusing every candidate.
+    const refresh = (): void => setView(currentPathBadge())
+    const offs = [
+      subscribePathLink(refresh),
+      subscribePathAttempts(refresh),
+      subscribeLocalNetwork(refresh),
+      subscribeReachPublish(refresh)
+    ]
+    return () => offs.forEach((off) => off())
+  }, [])
 
   return (
     <>
@@ -50,6 +67,10 @@ export function PathBadge({ onRefresh }: { onRefresh: () => void }): React.JSX.E
           permission nobody grants. It renders nothing in three of the four
           states, so on most phones the bar is exactly as it was. */}
       <LocalNetworkRow />
+      {/* The same slot, for the browser that has nothing to ask: it refused the
+          direct path by rule, so the one way onto the Wi-Fi is a press, here,
+          and not two taps down a sheet (DirectOfferLine.tsx). */}
+      <DirectOfferLine />
       {/* The other side of the same journey: this one renders on the page the
           OPEN ON WI-FI button landed on, once, and only there. */}
       <DirectLandedNote />

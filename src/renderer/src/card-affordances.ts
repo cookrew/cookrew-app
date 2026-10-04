@@ -15,6 +15,8 @@ export interface CardAffordances {
   role: boolean
   fork: boolean
   workdir: boolean
+  /** LANE: a worktree of its own, and landing — any agent in a repo, on any surface. */
+  lane: boolean
 }
 
 export interface CardCapabilities {
@@ -32,5 +34,6 @@ export function cardAffordances(node: CanvasNode | null, caps: CardCapabilities)
   const fork = terminal !== null && !remote && caps.listTurns
   const role = fork && caps.roleFromCheckpoint && terminal.command.trim() !== ''
   const workdir = terminal !== null && !remote
-  return { rename: node !== null, role, fork, workdir }
+  const lane = terminal !== null && !terminal.servedSession
+  return { rename: node !== null, role, fork, workdir, lane }
 }

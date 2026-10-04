@@ -20,7 +20,7 @@ import {
  *  rule and the scrub mapping cannot drift — they describe the same 16px.
  *  railAnchors: the F6 gate, as ONE function — see rail-fill.ts. */
 import { countBadgeTop, fillRows, railAnchors, railFraction, railScale, RAIL_INSET } from './rail-fill'
-import { pinAnchors, pinLabel, traceFraction, type VersionPinRecord } from '../../shared/version-pin'
+import { traceFraction } from '../../shared/version-pin'
 import {
   focusPinned,
   initialFocusState,
@@ -76,7 +76,6 @@ export function CheckpointTimeline({
   rows,
   total,
   markers,
-  pins,
   titleMode,
   activeIndex,
   loadingIndex,
@@ -106,12 +105,6 @@ export function CheckpointTimeline({
   total?: number
   /** Boundary markers (◆ compact / ⇥ clear) interleaved between rows. */
   markers?: TraceMarkerRow[]
-  /**
-   * Version pins (marketplace §10) — the rail's THIRD marker class. Cuts made
-   * by an export or a remote call, each pinned at the checkpoint it forked
-   * from. Absent by default: a rail with no marketplace history draws none.
-   */
-  pins?: VersionPinRecord[]
   titleMode: TitleMode
   /** Checkpoint identity in view; null at the live tail. */
   activeIndex?: number | null
@@ -420,8 +413,7 @@ export function CheckpointTimeline({
   /**
    * THE BAR'S DENOMINATOR — the whole chain, not the page loaded (D1).
    *
-   * One value, read by the reveal, the boundary ticks, the version pins and
-   * the scrub mapping, so none of them can place a checkpoint where another
+   * One value, read by the reveal, the boundary ticks and the scrub mapping, so none of them can place a checkpoint where another
    * one would not. `total` is /stream/open's own count; without it the newest
    * ordinal loaded stands in, which is what a caller with no stream has.
    */
@@ -674,13 +666,9 @@ export function CheckpointTimeline({
    * safest way to keep it green is to not touch what anchors it.
    */
   const laid = fanned ? fillRows(rows, railHeight, focused!.index, scale) : []
-  // Where the badge has to sit to clear the pins, in the same px space
-  // railAnchorTop lays them in. Null = nothing reaches it, badge stays put.
-  // Pure and unit-tested in rail-fill; the rail only supplies the fractions.
-  const countTop = countBadgeTop(
-    pinAnchors(pins ?? [], rows, scale).map((p) => p.frac),
-    railHeight
-  )
+  // The CP badge keeps its place: nothing else is laid on the rail any more (the
+  // version pins went with the v1/v2 interaction, 2026-10-04).
+  const countTop: number | null = countBadgeTop([], railHeight)
   /**
    * MED-2 — LIVE takes the slice the denominator reserves for it, and fillRows
    * places it: rows and tail have to be spaced against each other, so they
@@ -773,7 +761,7 @@ export function CheckpointTimeline({
           // The SEGMENT boundary (a marker naming its previous session) is a
           // TAP TARGET: it opens the earlier-sessions panel, which is where
           // the checkpoints an auto-compact moved out of this file now live.
-          // Same pointer discipline as the version pins below: stop the
+          // Pointer discipline: stop the
           // press before .cr-ckpt-mini captures it, or the click never fires.
           const reachable =
             lineageReach && m.previousSessionId !== undefined && hasLineageSegmentsApi()
@@ -813,61 +801,6 @@ export function CheckpointTimeline({
             actually is: with no pin near the top the badge does not move at all,
             and this is the common case for a fresh install, whose pin sits on
             the oldest drawn row. */}
-        {/* VERSION PINS — the third marker class (§10). Position comes from
-            pinAnchors() and railAnchorTop() and from nowhere else: pins share
-            the drawn-row space with the rows and the ticks (R17), so F6 applies
-            to them with no special case. A pin whose checkpoint is not drawn is
-            omitted by pinAnchors, never guessed onto an end of the bar.
-
-            The exact version is in the title even when the flag carries no
-            label (R8, v100+): a truncated number would be a WRONG version, and
-            a wrong version is worse than an absent one. */}
-        {pinAnchors(pins ?? [], rows, scale).map((p) => {
-          const label = pinLabel(p.version)
-          // pinAnchors returns {version, frac} only, so the checkpoint comes
-          // back from the record. `current` is the pin under the focus — the
-          // rail knows which checkpoint you are on, not which version you
-          // installed, and claiming the latter from here would be a guess.
-          const record = (pins ?? []).find((r) => r.version === p.version)
-          if (!record) return null
-          return (
-            <div
-              key={`pin-${p.version}`}
-              className={`cr-ckpt-pin${label.labelled ? '' : ' bare'}${
-                focused?.index === record.atIndex ? ' current' : ''
-              }`}
-              style={{ top: railAnchorTop(p.frac) }}
-              data-version={p.version}
-              role="separator"
-              // THE PIN IS A TAP TARGET, so it must not let the bar capture the
-              // pointer. `.cr-ckpt-mini`'s onPointerDown calls setPointerCapture,
-              // which retargets every later event — the click included — to the
-              // bar, so onClick here never fired and a real press produced
-              // onGoto null. Stopping propagation BEFORE the capture is taken is
-              // what makes the pin tappable; the cost is that a drag started on
-              // a pin does not scrub, which is the right trade for a 19x13 mark.
-              onPointerDown={(e) => e.stopPropagation()}
-              title={`Version ${p.version}`}
-              aria-label={`Version ${p.version}`}
-              onClick={(e) => {
-                e.stopPropagation()
-                // Tapping a pin is NAVIGATION, so it dismisses a revealed row's
-                // actions the way pointing anywhere else would. It has to do so
-                // explicitly for two reasons: this handler stops propagation so
-                // the bar cannot capture the pointer, which also keeps the event
-                // from reaching the document listener — and that listener would
-                // not have dismissed anyway, because it only fires for targets
-                // OUTSIDE the rail and a pin is inside it. Leaving the strip up
-                // would strand one row's actions over a different checkpoint.
-                setActing(null)
-                setSavingIndex(null)
-                onGoto(record.atIndex)
-              }}
-            >
-              {label.text}
-            </div>
-          )
-        })}
         <div
           className="cr-ckpt-count"
           style={countTop === null ? undefined : { top: `${Math.round(countTop)}px` }}

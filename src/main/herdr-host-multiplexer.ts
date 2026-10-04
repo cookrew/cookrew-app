@@ -61,8 +61,7 @@ import {
   type MultiplexerCapabilities,
   type PaneCardInfo,
   type PaneLaunch,
-  type ScrollState
-} from './multiplexer'
+  type ScrollState, observedRunner } from './multiplexer'
 
 /** Cookrew's own herdr session, isolated from the user's — tmux's `-L cookrew`. */
 export const HERDR_SESSION = 'cookrew'
@@ -566,7 +565,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
     })
     this.session = options.session
     this.configPath = options.configPath
-    this.runner = options.runner ?? createHerdrRunner(env)
+    this.runner = observedRunner(options.runner ?? createHerdrRunner(env))
     this.asyncRunner = options.asyncRunner ?? createAsyncHerdrRunner(env)
     this.startServer = options.startServer ?? (() => spawnHerdrServer(env))
     this.waitForServerMs = options.waitForServerMs ?? 5000

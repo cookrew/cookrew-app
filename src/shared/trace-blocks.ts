@@ -177,6 +177,42 @@ export function parseClaudeTraceDocument(lines: string[]): {
    */
   blockLines: number[]
 } {
+  const accumulator = createClaudeTraceAccumulator()
+  accumulator.feed(lines)
+  return { blocks: accumulator.blocks(), markers: accumulator.markers(), blockLines: accumulator.blockLines() }
+}
+
+/** The Claude trace parser as a resumable accumulator — see createClaudeTraceAccumulator. */
+export interface ClaudeTraceAccumulator extends TraceBlockAccumulator {
+  /** The compact boundaries fed so far, positioned in the checkpoint stream. */
+  markers(): TraceBoundaryMarker[]
+  /** Where each block opened, as an index into EVERYTHING fed so far — the
+   *  line numbering runs across feeds, so a caller holding every line can
+   *  still turn the last of these into the tail's byte span. */
+  blockLines(): number[]
+}
+
+/**
+ * THE CLAUDE PARSER, RESUMABLE (perf, 2026-10-04).
+ *
+ * Codex and Pi have had this shape since their parsers were written: feed the
+ * lines in any chunking, read the blocks so far, identical to a whole-file
+ * parse by construction. Claude's parser was the same single forward fold —
+ * one CheckpointAssigner, one open block, one map of pending tool calls, no
+ * look-ahead anywhere — but it was only ever offered as a whole-file function,
+ * so trace.ts re-ran it over EVERY retained line on every append: "incremental
+ * I/O, not incremental parse". On the owner's live card that was a 20 MB,
+ * 5,264-line transcript parsed from the top for each poll that saw it grow —
+ * 300 to 600 ms of main-thread time per second, measured 2026-10-04, for one
+ * subscriber on one card.
+ *
+ * Nothing about the fold changed here. The state that used to be locals of
+ * parseClaudeTraceDocument is the closure's state, `feed` is its loop, and
+ * parseClaudeTraceDocument is a single feed of it — so the two cannot
+ * diverge, and tests/trace-incremental-ingest.test.ts holds them to that at
+ * every possible split point.
+ */
+export function createClaudeTraceAccumulator(): ClaudeTraceAccumulator {
   const blocks: TraceBlock[] = []
   const blockLines: number[] = []
   const markers: TraceBoundaryMarker[] = []
@@ -185,82 +221,88 @@ export function parseClaudeTraceDocument(lines: string[]): {
   // tool_use id → its call object, for filling results (tool_use_id match).
   const pendingCalls = new Map<string, TraceToolCall>()
   let at = -1
-  for (const line of lines) {
-    at += 1
-    const entry = parseLine(line) as ClaudeEntry | null
-    if (entry === null || typeof entry.type !== 'string') continue
-    const content = entry.message?.content
-    const step = assigner.feed(entry)
-    if (entry.type === 'system' && entry.subtype === 'compact_boundary') {
-      const meta = entry.compactMetadata
-      markers.push({
-        kind: 'compact',
-        afterIndex: assigner.assigned,
-        ...(typeof meta?.preTokens === 'number' ? { preTokens: meta.preTokens } : {}),
-        ...(typeof meta?.postTokens === 'number' ? { postTokens: meta.postTokens } : {})
-      })
-    }
-    if (step !== null) {
-      if (step.sibling && current !== null) {
-        // Same submission — collapse: adopt the continuation identity/prompt,
-        // keep the accumulated reply/activity (siblings precede any reply).
-        current.id = checkpointIdentity(step.id)
-        current.prompt = step.id.prompt
-        continue
-      }
-      const startedAt = timeMs(entry.timestamp, current?.endedAt ?? 0)
-      current = {
-        id: checkpointIdentity(step.id),
-        index: step.id.index,
-        prompt: step.id.prompt,
-        reply: '',
-        activity: [],
-        startedAt,
-        endedAt: startedAt
-      }
-      pendingCalls.clear()
-      blocks.push(current)
-      blockLines.push(at)
-      continue
-    }
-    if (!current) continue
-    // tool_result entries arrive as user records with array content.
-    if (entry.type === 'user' && Array.isArray(content)) {
-      for (const raw of content as ClaudeContentBlock[]) {
-        if (raw.type !== 'tool_result' || typeof raw.tool_use_id !== 'string') continue
-        const call = pendingCalls.get(raw.tool_use_id)
-        if (call && call.result === '') call.result = claudeResultText(raw.content)
-      }
-      current.endedAt = timeMs(entry.timestamp, current.endedAt)
-      continue
-    }
-    if (entry.type !== 'assistant' || !Array.isArray(content)) continue
-    const texts: string[] = []
-    for (const raw of content as ClaudeContentBlock[]) {
-      if (raw.type === 'text' && typeof raw.text === 'string' && raw.text.trim().length > 0) {
-        texts.push(raw.text)
-      } else if (
-        raw.type === 'tool_use' &&
-        typeof raw.name === 'string' &&
-        raw.name.trim().length > 0
-      ) {
-        // Empty-name blocks are SKIPPED — a bare "()" line is worse than
-        // nothing (user screenshot evidence).
-        const call: TraceToolCall = {
-          tool: raw.name.trim(),
-          args: claudeToolArgs(raw.input),
-          result: ''
+  return {
+    feed(lines: string[]): void {
+      for (const line of lines) {
+        at += 1
+        const entry = parseLine(line) as ClaudeEntry | null
+        if (entry === null || typeof entry.type !== 'string') continue
+        const content = entry.message?.content
+        const step = assigner.feed(entry)
+        if (entry.type === 'system' && entry.subtype === 'compact_boundary') {
+          const meta = entry.compactMetadata
+          markers.push({
+            kind: 'compact',
+            afterIndex: assigner.assigned,
+            ...(typeof meta?.preTokens === 'number' ? { preTokens: meta.preTokens } : {}),
+            ...(typeof meta?.postTokens === 'number' ? { postTokens: meta.postTokens } : {})
+          })
         }
-        current.activity.push(call)
-        if (typeof raw.id === 'string') pendingCalls.set(raw.id, call)
+        if (step !== null) {
+          if (step.sibling && current !== null) {
+            // Same submission — collapse: adopt the continuation identity/prompt,
+            // keep the accumulated reply/activity (siblings precede any reply).
+            current.id = checkpointIdentity(step.id)
+            current.prompt = step.id.prompt
+            continue
+          }
+          const startedAt = timeMs(entry.timestamp, current?.endedAt ?? 0)
+          current = {
+            id: checkpointIdentity(step.id),
+            index: step.id.index,
+            prompt: step.id.prompt,
+            reply: '',
+            activity: [],
+            startedAt,
+            endedAt: startedAt
+          }
+          pendingCalls.clear()
+          blocks.push(current)
+          blockLines.push(at)
+          continue
+        }
+        if (!current) continue
+        // tool_result entries arrive as user records with array content.
+        if (entry.type === 'user' && Array.isArray(content)) {
+          for (const raw of content as ClaudeContentBlock[]) {
+            if (raw.type !== 'tool_result' || typeof raw.tool_use_id !== 'string') continue
+            const call = pendingCalls.get(raw.tool_use_id)
+            if (call && call.result === '') call.result = claudeResultText(raw.content)
+          }
+          current.endedAt = timeMs(entry.timestamp, current.endedAt)
+          continue
+        }
+        if (entry.type !== 'assistant' || !Array.isArray(content)) continue
+        const texts: string[] = []
+        for (const raw of content as ClaudeContentBlock[]) {
+          if (raw.type === 'text' && typeof raw.text === 'string' && raw.text.trim().length > 0) {
+            texts.push(raw.text)
+          } else if (
+            raw.type === 'tool_use' &&
+            typeof raw.name === 'string' &&
+            raw.name.trim().length > 0
+          ) {
+            // Empty-name blocks are SKIPPED — a bare "()" line is worse than
+            // nothing (user screenshot evidence).
+            const call: TraceToolCall = {
+              tool: raw.name.trim(),
+              args: claudeToolArgs(raw.input),
+              result: ''
+            }
+            current.activity.push(call)
+            if (typeof raw.id === 'string') pendingCalls.set(raw.id, call)
+          }
+        }
+        if (texts.length > 0) {
+          current.reply = current.reply.length > 0 ? `${current.reply}\n${texts.join('\n')}` : texts.join('\n')
+        }
+        current.endedAt = timeMs(entry.timestamp, current.endedAt)
       }
-    }
-    if (texts.length > 0) {
-      current.reply = current.reply.length > 0 ? `${current.reply}\n${texts.join('\n')}` : texts.join('\n')
-    }
-    current.endedAt = timeMs(entry.timestamp, current.endedAt)
+    },
+    blocks: () => blocks,
+    markers: () => markers,
+    blockLines: () => blockLines
   }
-  return { blocks, markers, blockLines }
 }
 
 /** Whole-file compatibility projection; TraceReader keeps the markers too. */

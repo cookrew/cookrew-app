@@ -91,6 +91,9 @@ const DEMO_RESPONSES: Record<string, string> = {
   about: 'Cookrew — open-source spatial workspace for AI agents. Electron + React Flow + xterm.js + node-pty.\r\nThis browser demo simulates the shell; the desktop app runs real PTYs.'
 }
 
+/** Connections minted so far — the tie-breaker that keeps demo ids unique within a millisecond. */
+let demoConnections = 0
+
 export function createDemoApi(): CookrewApi {
   // In-memory workspace registry so the demo can switch canvases too.
   const metas: WorkspaceMeta[] = [
@@ -98,12 +101,26 @@ export function createDemoApi(): CookrewApi {
   ]
   const states = new Map<string, WorkspaceState>([['demo-ws', demoWorkspace()]])
   let activeId = 'demo-ws'
+  // A counter beside the clock: two workspaces made in the same millisecond
+  // (a fixture seeding several at boot) must not share an id, or switching to
+  // one lands on the other. Connection ids learned this the same way.
+  let minted = 0
+  const mintId = (): string => `demo-ws-${Date.now()}-${++minted}`
   let state = states.get(activeId)!
 
   const stateListeners = new Set<(s: WorkspaceState) => void>()
   const wsListeners = new Set<(l: WorkspaceList) => void>()
   const ptyListeners = new Map<string, (data: string) => void>()
   const lineBuffers = new Map<string, string>()
+  // Signals on the cables, with no main behind them: a fixture page (the
+  // harness preview, QA) puts one on a cable through `window.__cableSignal`.
+  const signalListeners = new Set<(signal: unknown) => void>()
+  if (typeof window !== 'undefined') {
+    ;(window as unknown as { __cableSignal?: (moment: unknown) => void }).__cableSignal = (moment) => {
+      const frame = { at: Date.now(), ...(typeof moment === 'object' && moment !== null ? moment : {}) }
+      for (const listener of signalListeners) listener(frame)
+    }
+  }
 
   const broadcast = (next: WorkspaceState): void => {
     state = next
@@ -129,7 +146,7 @@ export function createDemoApi(): CookrewApi {
     createWorkspace: (name, dir) => {
       const wsDir = dir.trim() || '~'
       const meta: WorkspaceMeta = {
-        id: `demo-ws-${Date.now()}`,
+        id: mintId(),
         name: uniqueName(name.trim() || 'Workspace', metas.map((m) => m.name)),
         dir: wsDir,
         dirs: [wsDir],
@@ -150,7 +167,7 @@ export function createDemoApi(): CookrewApi {
       return Promise.resolve(meta)
     },
     templateImport: (team) =>
-      Promise.resolve({ id: `demo-ws-${Date.now()}`, name: `${team} · session`, dir: '~', dirs: ['~'], icon: '🗂' }),
+      Promise.resolve({ id: mintId(), name: `${team} · session`, dir: '~', dirs: ['~'], icon: '🗂' }),
     switchWorkspace: (id) => {
       if (states.has(id)) {
         states.set(activeId, state)
@@ -178,6 +195,12 @@ export function createDemoApi(): CookrewApi {
       Promise.resolve(state.nodes.find((n) => n.id === nodeId) as CanvasNode),
     pickDir: () => Promise.resolve(null),
     gitInfo: () => Promise.resolve(null),
+    // No git in the demo: no lanes to list, nothing to land.
+    laneList: () => Promise.resolve([]),
+    laneOpen: () => Promise.reject(new Error('Lanes need a git repo — not in the demo')),
+    laneLand: () => Promise.resolve({ ok: false as const, reason: 'not-a-lane' as const, detail: 'not in the demo' }),
+    laneClose: () => Promise.reject(new Error('Lanes need a git repo — not in the demo')),
+    laneAuto: (nodeId) => Promise.resolve(state.nodes.find((n) => n.id === nodeId) as CanvasNode),
     onWorkspaceList: (cb) => {
       wsListeners.add(cb)
       return () => wsListeners.delete(cb)
@@ -219,7 +242,11 @@ export function createDemoApi(): CookrewApi {
       return Promise.resolve()
     },
     connectNodes: (a, b) => {
-      const conn: Connection = { id: `demo-${Date.now()}`, a, b }
+      // A clock alone is not an id: a fixture that seeds a board wires hundreds
+      // of cables inside one millisecond, and duplicate ids collide in every
+      // consumer keyed on them — React keys included, which made a harness
+      // layer grow on each re-render (harness-preview, 2026-09-27).
+      const conn: Connection = { id: `demo-${Date.now()}-${++demoConnections}`, a, b }
       broadcast({ ...state, connections: [...state.connections, conn] })
       return Promise.resolve(conn)
     },
@@ -300,6 +327,12 @@ export function createDemoApi(): CookrewApi {
 
     listActivity: () => Promise.resolve([]),
     onTerminalActivity: () => () => undefined,
+    onCableSignal: (cb) => {
+      signalListeners.add(cb)
+      return () => {
+        signalListeners.delete(cb)
+      }
+    },
 
     // The demo shell has no turn tracking; forking degrades to a plain clone
     // so the canvas interaction still demonstrates the lineage edge.
@@ -371,6 +404,9 @@ export function createDemoApi(): CookrewApi {
     serveGate: async () => ({ ok: false as const, reason: 'desktop-only' }),
     serveCheckout: async () => ({ ok: false as const, reason: 'desktop-only' }),
     serveSettle: async () => ({ ok: false as const, reason: 'desktop-only' }),
+    /** The demo has no compositor behind it and photographs nothing. */
+    snapWorkspace: async () => false,
+    workspaceShots: async () => ({}),
     quitApp: () => undefined
   }
   return api

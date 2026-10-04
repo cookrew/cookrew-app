@@ -65,6 +65,12 @@ export interface ReachCardLite {
    * never a fall back to a bare IP.
    */
   readonly trusted?: readonly string[]
+  /**
+   * WHERE THE MAC STANDS WITH THE REGISTRY about the names above (main
+   * reach.ts · reachAnswer). Absent from an older Mac. `live: false` means
+   * the zone is not answering any name, and `refused` says why, if known.
+   */
+  readonly publish?: { readonly at: number | null; readonly refused: string | null; readonly live: boolean }
 }
 
 export interface Candidate {

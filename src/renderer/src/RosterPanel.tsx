@@ -97,7 +97,7 @@ export function RosterPanel({
   variant?: 'modal' | 'view'
 }): React.JSX.Element {
   const roster = useRoster()
-  const { zoomToNode } = useCanvasUi()
+  const { zoomToNode, jumpToNode } = useCanvasUi()
   // The roster needs the whole map (it lists every agent's live status); it is
   // one sidebar component, not 91 cards, so a snapshot subscription is right.
   const activities = useActivitiesSnapshot()
@@ -266,6 +266,15 @@ export function RosterPanel({
 
   /** Id of the row whose recover is in flight (disables its button). */
   const [recovering, setRecovering] = useState<string | null>(null)
+  /**
+   * The row we are travelling to, if its card lives in another workspace. The
+   * board STAYS OPEN while this is set: closing on the tap handed the owner
+   * the canvas they were already looking at and asked them to believe a
+   * switch was happening behind it.
+   */
+  const [opening, setOpening] = useState<string | null>(null)
+  /** Read by the answers coming back, which outlive the tap that asked. */
+  const openingRef = useRef<string | null>(null)
   /** Transient recover-result toast (ok / defer / warn / error). */
   const [toast, setToast] = useState<RecoverToast | null>(null)
   // LIVE api only (never mocked): the button renders once the bridge has it —
@@ -346,12 +355,34 @@ export function RosterPanel({
   // non-destructive + reversible). Result → toast, mapped honestly.
   // A row click is a handoff, not an expand: select here, zoom there. The
   // canvas already owns the trace reader, the checkpoint rail and fork.
+  //
+  // The board is the whole machine and the canvas is one workspace of it, so
+  // the handoff has to cross that gap: a row from another workspace switches
+  // there first and lands on the card when the incoming canvas arrives
+  // (cross-workspace-jump.ts). It used to do nothing at all — the zoom found
+  // no card in the flow store, said so to the console, and the board closed
+  // over the workspace the owner was already looking at.
   const open = (row: Row): void => {
     setSelected(row.id)
-    if (row.active) {
-      zoomToNode(row.id)
+    if (!row.active) return
+    openingRef.current = row.id
+    setOpening(row.id)
+    void jumpToNode(row.workspaceId, row.id).then((outcome) => {
+      // A later tap owns the board now. The jump we started was superseded
+      // rather than failed, so it gets no complaint and no close.
+      if (openingRef.current !== row.id) return
+      openingRef.current = null
+      setOpening(null)
+      // A miss is a card that could not be reached — the workspace refused the
+      // switch, or the agent went away between the roster read and the
+      // arrival. The board is the only surface that can say so; the console
+      // warning behind it is not readable on a phone.
+      if (outcome === 'missed') {
+        setToast({ tone: 'warn', text: `Could not open “${row.name}” in ${row.workspaceName}` })
+        return
+      }
       onClose()
-    }
+    })
   }
 
   // The clipboard stages from the ACTIVE canvas only (that is what a paste
@@ -436,6 +467,7 @@ export function RosterPanel({
       now={now}
       selected={editing ? picked.has(row.id) : selected === row.id}
       recovering={recovering === row.id}
+      opening={opening === row.id}
       canRecover={!editing && canRecover && recoverEligible(row)}
       hit={hits.get(row.id) ?? null}
       selectable={editing}

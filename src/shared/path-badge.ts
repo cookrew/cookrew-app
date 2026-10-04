@@ -36,6 +36,44 @@ export type LocalNetworkPermission = 'unsupported' | 'granted' | 'denied' | 'pro
 export const RELAY_REFUSED_SENTENCE =
   "Staying on the relay. You can allow local network access in the browser's site settings."
 
+/**
+ * WHAT THE RELAY SENTENCE BECOMES WHEN THE BROWSER WOULD NOT TRY.
+ *
+ * "Your Mac is not on this network" is a claim about the Mac. A race whose
+ * every row was refused by the browser before it connected measured nothing
+ * about the Mac — 2026-10-04, the owner's iPhone on the Mac's own Wi-Fi:
+ * Safari 26, 4 ms, with and without the hint — so the sentence states the one
+ * thing that was measured and stops there.
+ */
+export const RELAY_BLOCKED_SENTENCE =
+  'Via cookrew.dev relay — the browser refused the direct path from this page.'
+
+/**
+ * WHAT THE RELAY SENTENCE BECOMES WHEN THE MAC IS NOT PUBLISHING A NAME.
+ *
+ * The Mac's own card now says whether cookrew.dev holds a fresh reach card
+ * (reach.ts · reachAnswer). When it does not, there is no direct path to
+ * race and nothing the phone or its browser did is the story: 2026-10-04 the
+ * owner's Mac had been refused for five days ('session-expired' — a session
+ * the Mac had wrongly marked ended), its names were NXDOMAIN, and the sheet
+ * blamed first the Mac's whereabouts and then the browser. The reason with a
+ * fix is said first, and the fix is on the Mac.
+ */
+export const RELAY_UNPUBLISHED_SENTENCE: Record<string, string> = {
+  'session-expired':
+    'Via cookrew.dev relay — this Mac is not publishing its Wi-Fi name: its cookrew.dev sign-in ended. Sign in on the Mac to bring the direct path back.',
+  stale:
+    'Via cookrew.dev relay — this Mac has not refreshed its Wi-Fi name at cookrew.dev for over a day, so the name is not answered.',
+  /** Every candidate of the last race was a name the zone is not answering (plane-race.ts · settleNames). */
+  unnamed:
+    "Via cookrew.dev relay — cookrew.dev is not answering this Mac's Wi-Fi name right now, so there is no direct path to try."
+}
+
+/** The sentence for a reason the table does not name: the registry's own word, quoted. */
+export const relayUnpublishedSentence = (reason: string): string =>
+  RELAY_UNPUBLISHED_SENTENCE[reason] ??
+  `Via cookrew.dev relay — this Mac could not publish its Wi-Fi name to cookrew.dev (${reason}).`
+
 export type PathState = 'LAN' | 'TAILNET' | 'RELAY' | 'OFFLINE' | 'PROBING'
 
 /** What the companion's transport knows about itself. */
@@ -95,6 +133,20 @@ export type PathBadgeInput = {
    * feet away and the browser simply will not let us knock.
    */
   readonly localNetwork?: LocalNetworkPermission
+  /**
+   * THE LAST RACE'S ROWS WERE ALL REFUSED BY THE BROWSER BEFORE CONNECTING
+   * (path/hint-evidence.ts · refusedBeforeConnecting). Like `localNetwork`, it
+   * only ever changes the sentence: the relay is still the word, and the
+   * reason is no longer the Mac's whereabouts, which nobody measured.
+   */
+  readonly refusedByBrowser?: boolean
+  /**
+   * WHY THE MAC HAS NO LIVE NAME, when it has none: the registry's refusal
+   * ('session-expired', 'offline', …) or 'stale'. Read off the Mac's own card
+   * (renderer reach-publish.ts). Outranks every other relay reason, because
+   * with no name on offer nothing the browser did can be the cause.
+   */
+  readonly unpublished?: string
 }
 
 export type PathBadgeView = {
@@ -222,12 +274,22 @@ export const pathBadgeView = (input: PathBadgeInput): PathBadgeView => {
   // A refusal is only the reason when the relay is what we ended up with. On a
   // direct plane the plane is the fact, and a permission read on some other
   // network is stale the moment the phone moves.
+  const unpublished = state === 'RELAY' ? input.unpublished : undefined
   const refused = state === 'RELAY' && input.localNetwork === 'denied'
+  // A decided refusal outranks a measured one: it names the switch that
+  // undoes it, and the rows would say "refused" under it anyway.
+  const blocked = state === 'RELAY' && input.refusedByBrowser === true
   return {
     state,
     word: state,
     pulsing: state === 'PROBING',
-    sentence: refused ? RELAY_REFUSED_SENTENCE : PATH_SENTENCES[state],
+    sentence: unpublished
+      ? relayUnpublishedSentence(unpublished)
+      : refused
+        ? RELAY_REFUSED_SENTENCE
+        : blocked
+          ? RELAY_BLOCKED_SENTENCE
+          : PATH_SENTENCES[state],
     desktopName: input.desktopName ?? null,
     latencyMs: typeof input.latencyMs === 'number' ? input.latencyMs : null,
     switchDesktopUrl: input.registryOrigin

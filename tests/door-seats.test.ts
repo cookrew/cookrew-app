@@ -196,6 +196,28 @@ describe('the callers at the door — D7\'s data', () => {
     )
   })
 
+  it('entitles a caller by the seat their token named, by owning the door, or by paying here', () => {
+    const callers = new DoorCallers()
+    const at = (sub: string, over: Partial<Parameters<DoorCallers['seated']>[0]> = {}) =>
+      callers.seated({ serviceId: 'svc-alpha', sub, username: sub.slice(5), dev: 'd', seat: null, ...over })
+    at('acct-mira', { seat: 'seat-1' })
+    at('acct-drej', { owner: true })
+    at('acct-lin')
+    expect(callers.entitled('svc-alpha', 'acct-mira')).toBe(true)
+    expect(callers.entitled('svc-alpha', 'acct-drej')).toBe(true)
+    expect(callers.entitled('svc-alpha', 'acct-lin')).toBe(false)
+    expect(callers.entitled('svc-alpha', 'acct-nobody')).toBe(false)
+    // The 402 paid: lin is entitled from that moment, on the token they hold.
+    callers.bought('svc-alpha', 'acct-lin')
+    expect(callers.entitled('svc-alpha', 'acct-lin')).toBe(true)
+    // A refreshed token (still unseated, the registry has not caught up) keeps the purchase.
+    at('acct-lin')
+    expect(callers.entitled('svc-alpha', 'acct-lin')).toBe(true)
+    // Paying for somebody never recorded records nothing — there is no sign-in to attach it to.
+    callers.bought('svc-alpha', 'acct-ghost')
+    expect(callers.entitled('svc-alpha', 'acct-ghost')).toBe(false)
+  })
+
   it('leaves out a key-based caller — there is no username to draw', () => {
     expect(seatedCallersFor('svc-alpha', [session({ caller: 'ana' })], new DoorCallers())).toEqual([])
   })

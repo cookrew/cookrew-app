@@ -4,13 +4,17 @@
 // is one entry here, so recover/resume extends automatically (note
 // agent-recover-feature-design).
 
+import type { HarnessTuning } from '../shared/agent-tuning'
 import { stripSessionFlags } from '../shared/claude-fork'
 import type { TerminalNodeData } from '../shared/model'
 import { parseSessionTurns } from '../shared/session-turns'
 import { parseCodexTurns, parsePiTurns } from '../shared/trace-blocks'
 import type { TurnRecord } from '../shared/turn'
 import { claudeWatchFile } from './claude-fork'
+import { claudeTuning } from './claude-tuning'
 import { codexWatchFile, sessionIdFromRolloutPath } from './codex-bind'
+import { codexTuning } from './codex-tuning'
+import { piTuning } from './pi-tuning'
 import {
   isPiCommand,
   piNodeSessionDir,
@@ -36,6 +40,17 @@ export type SessionField =
   | 'codexSessionRef'
   | 'opencodeSessionId'
   | 'piSessionId'
+
+/**
+ * The node fields a watchFile resolver may read — id, cwd, and this harness's
+ * own session ref. Narrower than TerminalNodeData on purpose: the per-card
+ * model/effort readout is built from the durable agent registry, which holds
+ * exactly these and is NOT a canvas node. Widening it back would make a live
+ * card the only thing whose session file can be located, and the roster spans
+ * workspaces that are not open.
+ */
+export type WatchSubject = Pick<TerminalNodeData, 'id' | 'cwd'> &
+  Partial<Pick<TerminalNodeData, SessionField>>
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -143,7 +158,19 @@ export interface Harness {
    * (UUID shape, sessions-tree prefix, exclusive-dir scan). Present exactly
    * when turns === 'file'.
    */
-  watchFile?: (node: TerminalNodeData, options: HarnessWatchOptions) => string | null
+  watchFile?: (node: WatchSubject, options: HarnessWatchOptions) => string | null
+  /**
+   * THE DIALS (shared/agent-tuning): which model answers and how hard it
+   * thinks, when this harness can both set them from one typed line AND write
+   * them back onto its own replies. Absent means the zoomed card's rail
+   * explains where they are set instead of offering buttons.
+   *
+   * Declaring `tuning` REQUIRES turns === 'file': confirmation reads the
+   * session record, so a scrape-only harness could offer a dial and never be
+   * able to say whether turning it worked — precisely the state decision 3 of
+   * agent-tuning exists to prevent. Pinned by tests/harness-conformance.
+   */
+  tuning?: HarnessTuning
   /**
    * Golden-save clone capability (see GoldenCloneCapability). ABSENT on
    * every harness today — absent means golden-save template publishing must
@@ -162,7 +189,8 @@ const CLAUDE: Harness = {
   // Tail proof: assistant stop_reason 'end_turn' (session-turns accumulator).
   turnFinality: 'native',
   parseTurns: parseSessionTurns,
-  watchFile: claudeWatchFile
+  watchFile: claudeWatchFile,
+  tuning: claudeTuning
 }
 
 const CODEX: Harness = {
@@ -181,7 +209,10 @@ const CODEX: Harness = {
   // turn writes `turn_aborted` instead and stays non-final — correct).
   turnFinality: 'native',
   parseTurns: parseCodexTurns,
-  watchFile: codexWatchFile
+  watchFile: codexWatchFile,
+  // READ ONLY: codex stamps every turn with its model and effort, but changes
+  // them only in its own picker — see codex-tuning.
+  tuning: codexTuning
 }
 
 const OPENCODE_SESSION_FLAG_RE = /\s(?:--session|--continue|-s|-c)(?:[= ]\S+)?/g
@@ -225,7 +256,10 @@ const PI: Harness = {
   // 'length' are not completion and stay non-final).
   turnFinality: 'native',
   parseTurns: parsePiTurns,
-  watchFile: piWatchFile
+  watchFile: piWatchFile,
+  // READ ONLY, and model only: pi stamps each assistant message with its
+  // model and records no effort — see pi-tuning.
+  tuning: piTuning
 }
 
 /** Every registered harness. Conformance: tests/harness-conformance.test.ts. */

@@ -3,8 +3,11 @@ import { ReconnectingStream, attachTerminalStream } from './live-stream'
 import { recordLatency, setDesktopName, setPathLink, setRegistryOrigin } from './path-link'
 import type { CompanionAccount } from '../../main/companion-account'
 import type { AccountStatus } from '../../shared/account-v2'
+import type { AgentTuning, AgentTuningState } from '../../shared/agent-tuning'
 import type { BoardSnapshotLike, CookrewApi } from './api'
-import type { CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
+import type {
+  LaneInfo,
+  LandResult, CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
 import type { UiCommandEvent } from '../../shared/sous-ui'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 import type { VersionPinRecord } from '../../shared/version-pin'
@@ -358,6 +361,12 @@ export function createRemoteApi(): CookrewApi {
     // No native picker on the phone — the UI collects a path via text input.
     pickDir: () => Promise.resolve(null),
     gitInfo: (dir) => req<GitInfo>(apiPath(`/api/git?dir=${encodeURIComponent(dir)}`), 'GET'),
+    // Lanes: LAND from the phone is the desktop's own operation over HTTP.
+    laneList: (dir) => req<LaneInfo[]>(apiPath(`/api/lanes?dir=${encodeURIComponent(dir)}`), 'GET'),
+    laneOpen: (nodeId, name) => req<CanvasNode>(apiPath('/api/lanes/open'), 'POST', { nodeId, name }),
+    laneLand: (nodeId, opts) => req<LandResult>(apiPath('/api/lanes/land'), 'POST', { nodeId, ...(opts ?? {}) }),
+    laneClose: (nodeId, force) => req<CanvasNode>(apiPath('/api/lanes/close'), 'POST', { nodeId, force: force ?? false }),
+    laneAuto: (nodeId, on) => req<CanvasNode>(apiPath('/api/lanes/auto'), 'POST', { nodeId, on }),
     onWorkspaceList: (cb) => subscribe<WorkspaceList>('workspaces', cb),
 
     addNode: (node) => req(apiPath('/api/nodes'), 'POST', node),
@@ -425,9 +434,31 @@ export function createRemoteApi(): CookrewApi {
 
     listActivity: () => req<TerminalActivity[]>(apiPath('/api/activity')),
     onTerminalActivity: (cb) => subscribe<TerminalActivity>('activity', cb),
+
+    // THE DIALS (shared/agent-tuning). The phone gets the readout AND the
+    // control, because this surface is the owner's own canvas in their own
+    // hand: a companion that showed you an agent burning max effort and would
+    // not let you turn it down is a worse companion than one that showed
+    // nothing. The genuinely-someone-else's-session case is separate and is
+    // refused by the rail itself (TerminalNodeData.servedSession).
+    //
+    // One fleet-wide GET for every card's tag, then the same change-gated push
+    // the desktop renderer gets — so nothing here polls.
+    listTuning: () => req<Record<string, AgentTuning>>(apiPath('/api/tuning')),
+    onTerminalTuning: (cb) =>
+      subscribe<{ terminalId: string; tuning: AgentTuning }>('tuning', cb),
+    terminalTuning: (terminalId) =>
+      req<AgentTuningState>(apiPath(`/api/terminal/${terminalId}/tuning`)),
+    tuneTerminal: (terminalId, knob, value) =>
+      req<{ ok: true } | { ok: false; reason: string }>(
+        apiPath(`/api/terminal/${terminalId}/tune`),
+        'POST',
+        { knob, value }
+      ),
     // Observability event log (observability-event-log-spec): the shared SSE
     // stream carries 'event'; queries/roster are plain GETs.
     onEvent: (cb) => subscribe('event', cb),
+    onCableSignal: (cb) => subscribe('signal', cb),
     queryEvents: async (query) => {
       const params = new URLSearchParams()
       const q = (query ?? {}) as Record<string, unknown>
@@ -615,6 +646,25 @@ export function createRemoteApi(): CookrewApi {
     },
     serveSettle: (link, rail, session) =>
       req(apiPath('/api/serve/settle'), 'POST', { link, rail, session }),
+    /**
+     * THE PHONE READS THE MAC'S PICTURES, AND NEVER ASKS FOR ONE.
+     *
+     * The Mac keeps a picture of every workspace it has left, and the wall
+     * draws those, stamped with their age. Fetched when the wall opens, never
+     * held: they are the one big payload this surface asks for by choice.
+     * (Reading was once stubbed to `{}` as "a fact about the Mac's own
+     * compositor" — true, and the wrong conclusion: the phone is LOOKING at
+     * the Mac, and the wall read NO SNAPSHOT YET for everything, forever.)
+     *
+     * CAPTURING stays refused. The Mac's window may be showing something else
+     * entirely, so a capture triggered from here would put whatever is on that
+     * screen into a workspace's snapshot.
+     */
+    snapWorkspace: async () => false,
+    workspaceShots: () =>
+      req<Record<string, { src: string; at: number }>>(apiPath('/api/workspaces/shots')).catch(
+        () => ({})
+      ),
     quitApp: () => undefined
   }
 }

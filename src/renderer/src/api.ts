@@ -1,11 +1,14 @@
 import type { DeepLink } from '../../shared/deep-link'
 import type { AnsweredRow, QueueRow, RowAction } from '../../shared/account-requests'
+import type { AgentTuning, AgentTuningState, TuneKnob } from '../../shared/agent-tuning'
 import type { TranslateResult } from '../../shared/translate'
 import type { Surface as SousSurface } from '../../shared/sous-intent'
 import type { SousCommandResult } from '../../main/sous-control'
 import type { ListenEvent } from '../../main/listen'
 import type { UiCommandEvent } from '../../shared/sous-ui'
 import type {
+  LaneInfo,
+  LandResult,
   AgentRole,
   CanvasNode,
   Connection,
@@ -289,6 +292,10 @@ export interface CookrewApi {
     { ok: true; phase: ServePhase } | { ok: false; reason: string; detail?: string }
   >;
   switchWorkspace: (id: string) => Promise<WorkspaceList>;
+  /** Photograph the canvas as it is now (the screen wall). */
+  snapWorkspace: (rect: { x: number; y: number; width: number; height: number }) => Promise<boolean>;
+  /** Every workspace's picture, as data URLs, read on demand. */
+  workspaceShots: () => Promise<Record<string, { src: string; at: number }>>;
   renameWorkspace: (id: string, name: string) => Promise<WorkspaceList>;
   /** Workspace v2: remove workspace, multi-directory, per-terminal cwd, git. */
   removeWorkspace: (id: string) => Promise<WorkspaceList>;
@@ -300,6 +307,17 @@ export interface CookrewApi {
   pickDir: () => Promise<string | null>;
   /** Git state of a directory; null when unavailable (demo). */
   gitInfo: (dir: string) => Promise<GitInfo | null>;
+  /**
+   * LANES (main/lanes.ts): every worktree of the repo `dir` is in; cut a lane
+   * for an agent and move it there; LAND it (base into the lane, gate, then
+   * fast-forward the shared tree); drop it; and the AUTO-LAND switch. The
+   * demo answers an empty list and refuses the rest.
+   */
+  laneList: (dir: string) => Promise<LaneInfo[]>;
+  laneOpen: (nodeId: string, name: string) => Promise<CanvasNode>;
+  laneLand: (nodeId: string, opts?: { close?: boolean; gate?: string[] | null }) => Promise<LandResult>;
+  laneClose: (nodeId: string, force?: boolean) => Promise<CanvasNode>;
+  laneAuto: (nodeId: string, on: boolean) => Promise<CanvasNode>;
   onWorkspaceList: (cb: (list: WorkspaceList) => void) => () => void;
   addNode: (node: CanvasNode) => Promise<CanvasNode>;
   updateNode: (
@@ -333,6 +351,33 @@ export interface CookrewApi {
   /** Native multi-file picker (desktop only; returns [] elsewhere). */
   pickFiles: () => Promise<string[]>;
   ptyInput: (terminalId: string, data: string) => void;
+  /**
+   * THE DIALS (shared/agent-tuning): what the agent's last reply ran at, and
+   * turning one.
+   *
+   * BOTH REAL TRANSPORTS CARRY THESE — the Electron bridge over IPC and the
+   * remote (phone) api over /api/tuning + /api/terminal/:id/tune. Optional on
+   * the type only so the demo api and any bridge older than this feature go
+   * without: the rail and the tag then draw nothing instead of throwing. It is
+   * NOT a statement that the phone should not have them. The phone is the
+   * owner's own canvas in their own hand; a card that is a line into someone
+   * ELSE's session is a different thing and the rail refuses that separately.
+   */
+  terminalTuning?: (terminalId: string) => Promise<AgentTuningState>;
+  /**
+   * The whole fleet's dials in one call — the per-card tag is drawn for the
+   * roster too, which spans workspaces that are not loaded. Ids with nothing
+   * recorded are simply absent, so a card draws no tag rather than a blank.
+   */
+  listTuning?: () => Promise<Record<string, AgentTuning>>;
+  onTerminalTuning?: (
+    cb: (row: { terminalId: string; tuning: AgentTuning }) => void
+  ) => () => void;
+  tuneTerminal?: (
+    terminalId: string,
+    knob: TuneKnob,
+    value: string
+  ) => Promise<{ ok: true } | { ok: false; reason: string }>;
   ptyResize: (terminalId: string, cols: number, rows: number) => void;
   /** Scroll the terminal view to a past ask's line; null returns to live. */
   ptyJump: (terminalId: string, text: string | null) => void;
@@ -365,6 +410,12 @@ export interface CookrewApi {
    * Optional — the demo api lacks them; consumers feature-detect (EventToast).
    */
   onEvent?: (cb: (event: unknown) => void) => () => void;
+  /**
+   * Signals on the cables: one agent asked another, or answered — one frame
+   * per moment (shared/cable-signal.ts). Optional and feature-detected: the
+   * harness lights nothing on a bridge without it.
+   */
+  onCableSignal?: (cb: (signal: unknown) => void) => () => void;
   queryEvents?: (query?: unknown) => Promise<unknown[]>;
   countEvents?: (query?: unknown) => Promise<Record<string, number>>;
   listAgents?: () => Promise<unknown[]>;

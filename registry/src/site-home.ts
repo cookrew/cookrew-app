@@ -2,7 +2,8 @@ import type { ListedDoor } from './site'
 import type { PresetSummary } from './store'
 import type { Commit } from './github-commits'
 import { FRAMES, frameImg, frameUrl, type Frame } from './site-frames'
-import { GITHUB_REPO, esc, page, type Page } from './site-shell'
+import { SITE_FRAMES } from './site-shell'
+import { GITHUB_REPO, esc, icon, page, type Page } from './site-shell'
 import { RELEASES_PAGE, pickAsset, type Release } from './releases'
 import type { DoorPulse } from './pulse'
 import {
@@ -20,10 +21,16 @@ import { BRAND_LOCKUP_CSS, BRAND_LOCKUP_HTML } from './site-brand'
 /**
  * THE FRONT PAGE — one page, top to bottom (owner ruling, 2026-09-06).
  *
- * What used to be three pages is one, in the order a newcomer reads: what
- * Cookrew is and the download, then GET STARTED (the two steps and the crew
- * builder), then the FEATURES (every one with its recorded frame, the
- * comparison, the questions, the commits), then the live market. The page's
+ * What used to be three pages is one, in the order of what a visitor came for.
+ * The two destinations — a canvas and the marketplace — are both in the first
+ * screen: the hero's three buttons open a live canvas, download the app, or go
+ * to the market; the RENT STRIP under the hero shows the priced instances with
+ * their price and a BUY (rentStrip), and the dock repeats the three destinations
+ * with today's count. The market section then lists only what the strip did
+ * not; GET STARTED (the two
+ * steps and the crew builder) and the FEATURES (every one with its recorded
+ * frame, the comparison, the questions, the commits) follow for the reader who
+ * keeps going. The page's
  * sections are its catalog, on the right rail — where the header's FEATURES,
  * GET STARTED and DOWNLOAD buttons went; the header keeps HOME, the market
  * and the account. The old /start and /features addresses redirect to the
@@ -47,6 +54,12 @@ export interface HomeInput {
   linesToday: number
   /** The latest commits on dev, for the PROOF section; null when GitHub has not answered. */
   commits?: readonly Commit[] | null
+  /**
+   * The signed-in reader, when the request carried one. The header names them;
+   * the page is then theirs and is never shared from a cache. A document page
+   * cannot learn this any other way — it runs no script, by design.
+   */
+  account?: string | null
 }
 
 /** The definition's first sentence: enough to quote, short enough to read. */
@@ -71,7 +84,7 @@ export function doorRow(door: ListedDoor, stars: number): string {
 
 export function priceChip(door: ListedDoor): string {
   return door.access === 'paid' && door.priceUsd
-    ? `<span class="price">${esc(door.priceUsd)} USD · per session</span>`
+    ? `<span class="price">${esc(door.priceUsd)} USD · a seat</span>`
     : `<span class="price free">free · account needed</span>`
 }
 
@@ -98,13 +111,140 @@ export function presetCard(p: PresetSummary): string {
 </article>`
 }
 
-/** The download links, at the top of the page — the DOWNLOAD button lands here. */
-function downloadButtons(release: Release | null): string {
+/**
+ * THE HERO'S BUTTONS — in the order of how fast each one reaches a canvas.
+ *
+ * A served team is the fastest: it is somebody's canvas, already running, and
+ * it opens in this browser with nothing installed. When none is live the
+ * download leads, because then the only canvas is the one you run yourself.
+ * The marketplace is always the third, never a scroll away.
+ */
+function heroButtons(release: Release | null, live: ListedDoor | null): string {
   const mac = release ? pickAsset(release, 'mac') : null
   const win = release ? pickAsset(release, 'windows') : null
   const date = release?.publishedAt ? release.publishedAt.slice(0, 10) : ''
-  return `<p class="row" id="download"><a class="btn primary lg" href="${mac ? esc(mac.url) : '/download'}">⬇ Download for macOS</a>${win ? `<a class="btn lg" href="${esc(win.url)}">Windows preview</a>` : ''}<a class="btn lg" href="${GITHUB_REPO}" target="_blank" rel="noopener">Source ↗</a></p>
-<p class="meta">${release ? `v${esc(release.version)}${date ? ` · ${esc(date)}` : ''}` : `<a href="${RELEASES_PAGE}">latest release</a>`} · ${FACTS.license} · Apple Silicon, Windows preview · Node 20+ · tmux or herdr · <a href="#start">get started ↓</a></p>`
+  const open = live
+    ? `<a class="btn primary lg" href="/${esc(live.handle)}/${esc(live.name)}">${icon('play')} Open a live canvas</a>`
+    : ''
+  const dl = `<a class="btn ${live ? '' : 'primary '}lg" href="${mac ? esc(mac.url) : '/download'}">${icon('download')} Download for Mac</a>`
+  const market = `<a class="btn lg" href="/market">${icon('market')} Marketplace</a>`
+  return `<p class="row" id="download">${open}${dl}${market}</p>
+<p class="meta">${release ? `v${esc(release.version)}${date ? ` · ${esc(date)}` : ''}` : `<a href="${RELEASES_PAGE}">latest release</a>`} · ${FACTS.license} · Apple Silicon${win ? ` · <a href="${esc(win.url)}">Windows preview</a>` : ', Windows preview'} · Node 20+ · <a href="${GITHUB_REPO}" target="_blank" rel="noopener">Source ↗</a></p>`
+}
+
+/** How many rentable instances the strip under the hero shows before it points at the market. */
+const RENT_STRIP_MAX = 3
+
+/**
+ * ONE RENTABLE INSTANCE, in the strip under the hero: the lamp, the name, the
+ * price, one line of what it does, and the two things a reader can do with it
+ * — buy a seat, or open the page. `?buy=1` on the team page starts the
+ * purchase there (line.js), so the price on this card is one click from the
+ * checkout.
+ */
+function rentCard(d: ListedDoor, today: DoorPulse): string {
+  const at = `/${esc(d.handle)}/${esc(d.name)}`
+  const off = d.live === false
+  const harnesses = d.harnesses ?? []
+  const priced = d.access === 'paid' && d.priceUsd
+  const what = d.summary
+    ? esc(d.summary)
+    : `${esc(d.door)} answers on behalf of ${d.agents} agent${d.agents === 1 ? '' : 's'}.`
+  const chips = [
+    `<span class="chip">@${esc(d.handle)}</span>`,
+    ...harnesses.slice(0, 3).map((h) => `<span class="chip">${esc(h)}</span>`),
+    `<span class="chip${off ? '' : ' amber'}">${off ? 'offline' : `${today.lines} line${today.lines === 1 ? '' : 's'} today`}</span>`
+  ].join('')
+  const buy = priced ? `<a class="btn sm primary" href="${at}?buy=1">Buy a seat · $${esc(d.priceUsd ?? '')}</a>` : ''
+  return `<article class="rent${off ? ' off' : ''}">
+<div class="head"><span class="led${off ? ' off' : ''}" title="${off ? 'offline' : 'taking calls'}"></span><a class="ttl" href="${at}">${esc(d.title)}</a></div>
+<div class="row">${priceChip(d)}${chips}</div>
+<p>${what}</p>
+<div class="foot">${buy}<a class="btn sm${priced ? '' : ' primary'}" href="${at}">Open</a></div>
+</article>`
+}
+
+/**
+ * THE RENT STRIP — the marketplace's purchasable instances, on the first
+ * screen, right under the hero (owner ruling, 2026-09-27: the
+ * marketplace's purchasable instances must be reachable on the front page).
+ *
+ * A priced instance is the one thing on this site somebody can decide about
+ * in a second, so it does not wait below a heading and a lede: up to three of
+ * them sit here with the price and a BUY button, and the rest are one link
+ * away. With nothing priced the strip shows what is free to open; with
+ * nothing listed at all it says so and points at how to serve one. A team
+ * appears ONCE on this page — the market section below carries only what
+ * this strip did not.
+ */
+function rentStrip(input: HomeInput): string {
+  const paid = input.doors.filter((d) => d.access === 'paid')
+  const free = input.doors.filter((d) => d.access !== 'paid')
+  const shown = (paid.length > 0 ? paid : free).slice(0, RENT_STRIP_MAX)
+  const rest = (paid.length > 0 ? paid : free).length - shown.length
+  const live = (list: readonly ListedDoor[]): number => list.filter((d) => d.live !== false).length
+  if (input.doors.length === 0) {
+    return `<div class="rent-strip" id="rent"><div class="mkt-h"><span class="kicker" style="margin:0"><span class="no">RENT</span></span>Nobody is serving a team here yet<span class="sp"></span><a class="btn sm" href="#serve">Serve yours ${icon('arrow')}</a></div></div>`
+  }
+  const heading =
+    paid.length > 0
+      ? `Instances you can rent<span class="chip amber">${paid.length} listed · ${live(paid)} taking calls</span>`
+      : `Free to open<span class="chip">account needed</span>`
+  const more =
+    rest > 0
+      ? `<a class="btn sm" href="/market?access=${paid.length > 0 ? 'paid' : 'free'}">+${rest} more ${icon('arrow')}</a>`
+      : `<a class="btn sm" href="/market">Marketplace ${icon('arrow')}</a>`
+  return `<div class="rent-strip" id="rent">
+<div class="mkt-h"><span class="kicker" style="margin:0"><span class="no">RENT</span></span>${heading}<span class="sp"></span>${more}</div>
+<div class="rent-cards">${shown.map((d) => rentCard(d, input.pulse(d.handle, d.name))).join('')}</div>
+<p class="meta" style="margin:8px 0 0">Buy a seat once; it follows you to any device. The canvas runs on its author’s machine; your session is sandboxed and yours.</p>
+</div>`
+}
+
+/** The doors the rent strip did not show — what the market section still has to list. */
+function leftForMarket(input: HomeInput): { free: ListedDoor[]; shownFree: number } {
+  const paid = input.doors.filter((d) => d.access === 'paid')
+  const free = input.doors.filter((d) => d.access !== 'paid')
+  const shownFree = paid.length > 0 ? 0 : Math.min(free.length, RENT_STRIP_MAX)
+  return { free: free.slice(shownFree), shownFree }
+}
+
+/**
+ * THE DOCK — one row under the rent strip: what the canvas is, the machines
+ * on your own account, and the marketplace with today's count. All three are
+ * one click from the first screen.
+ *
+ * THE MIDDLE CELL IS HONEST ABOUT BOTH STATES. This page has no script, so it
+ * cannot know whether the reader is signed in; /me answers for both — a
+ * signed-in reader lands on their Macs, a signed-out one on one button.
+ */
+function dock(input: HomeInput): string {
+  const paid = input.doors.filter((d) => d.access === 'paid')
+  const serving = input.doors.filter((d) => d.live !== false).length
+  const market =
+    input.doors.length === 0
+      ? 'Nobody is serving a team yet — serve yours'
+      : `${paid.length > 0 ? `${paid.length} to rent · ` : ''}${input.doors.length} listed · ${serving} taking calls now`
+  return `<nav class="dock compact" aria-label="Where to go first">
+<a href="/features/ai-agents-on-one-canvas"><span class="ico">${icon('canvas')}</span><span><span class="t">See the canvas</span><span class="d">Terminals, notes and browsers on one board, wired together.</span></span></a>
+<a href="/me#desktops"><span class="ico">${icon('mac')}</span><span><span class="t">Your machines</span><span class="d">Open a canvas on a Mac of yours, in this browser.</span></span></a>
+<a href="/market"><span class="ico">${icon('market')}</span><span><span class="t">Marketplace</span><span class="d">${esc(market)}</span></span></a>
+</nav>`
+}
+
+/**
+ * THE PROMO — ten seconds, muted, looping, in the hero where the still frame was.
+ *
+ * It is the product, not a render: the shipped App on a geometry dump of the Cookrew Dev board,
+ * driven with real input in a headless Chrome (docs/shoot-fixture, the shoot script in the job
+ * dir) — the board zooms to the crew, a card is dragged and the harness re-routes, a card opens.
+ * The file lives with the frames on GitHub; the registry bundle has no room for a megabyte. No
+ * script: <video autoplay muted loop playsinline> needs none, and a reader whose browser refuses
+ * autoplay sees the poster, which is the still frame this replaced.
+ */
+function promo(): string {
+  const poster = `${SITE_FRAMES}promo-poster.jpg`
+  return `<figure class="shot promo"><video autoplay muted loop playsinline preload="metadata" poster="${esc(poster)}" width="1400" height="874" aria-label="Ten seconds of Cookrew: agent cards on the canvas, one opened on its transcript and checkpoint rail, a note card, a browser card"><source src="${SITE_FRAMES}promo.mp4" type="video/mp4"></video><figcaption><span class="rec">● REC</span>Ten seconds of the real app on the Cookrew Dev board: agent cards with their last turn, wired to notes and browsers; Velvet opens on its transcript and 138 checkpoints, the rail fans out; a spec note opens; a research page opens in a browser card. Every record is the agents' own. <a href="/features/ai-agents-on-one-canvas">The canvas, frame by frame →</a></figcaption></figure>`
 }
 
 /** GET STARTED: the two steps, the crew builder, and the two questions people ask first. */
@@ -145,47 +285,63 @@ ${commitsSection(commits)}`
  * the header's FEATURES, GET STARTED and DOWNLOAD buttons went. Plain
  * anchors, because the front page has no script.
  */
-function catalog(): string {
+function catalog(release: Release | null): string {
+  const mac = release ? pickAsset(release, 'mac') : null
   const items: [string, string, boolean][] = [
-    ['#download', 'Download', false],
-    ['#start', 'Get started', false],
+    ['#market', 'Open a team', false],
+    ['#rent', 'Instances to rent', true],
+    ['#start', 'Get started', true],
     ['#serve', 'Save and serve a team', true],
     ['#build', 'What your orch runs', true],
     ['#features', 'Features', false],
     ['#compare', 'Chat tab, one agent, or a team', true],
     ['#faq', 'Questions', true],
-    ['#built', 'What landed on dev', true],
-    ['#market', 'Market', false]
+    ['#built', 'What landed on dev', true]
   ]
-  return `<aside class="toc" aria-label="On this page"><p class="kicker"><span class="no">ON THIS PAGE</span></p><ol>${items
+  return `<aside class="toc" aria-label="On this page">
+<div class="jump"><a class="btn sm primary" href="${mac ? esc(mac.url) : '/download'}">${icon('download')} Get the app</a><a class="btn sm" href="/market">${icon('market')} Marketplace</a></div>
+<p class="kicker"><span class="no">ON THIS PAGE</span></p><ol>${items
     .map(([href, label, sub]) => `<li${sub ? ' class="sub"' : ''}><a href="${href}">${esc(label)}</a></li>`)
     .join('')}</ol></aside>`
 }
 
+/**
+ * THE MARKET — the page's first section, carrying what the rent strip under
+ * the hero did not: the free teams, and the presets, which are a download and
+ * a review rather than a door. The priced instances are ABOVE, on the first
+ * screen; listing them again here would put the same team on the page twice.
+ */
 function marketSection(input: HomeInput): string {
+  const card = (d: ListedDoor): string => teamCard(d, input.stars(d.handle, d.name), input.pulse(d.handle, d.name))
+  const { free } = leftForMarket(input)
   const serving = input.doors.filter((d) => d.live !== false).length
-  const teams = input.doors.slice(0, 6).map((d) => teamCard(d, input.stars(d.handle, d.name), input.pulse(d.handle, d.name)))
   const presets = input.presets.slice(0, 6).map(presetCard)
   const serveYours = `<article class="team" style="border-style:dashed;box-shadow:none"><div class="body" style="justify-content:center;text-align:center;padding:26px 16px"><h3 style="margin:0 0 6px">Serve yours</h3><p>Save a team in the app, press SERVE. It is listed here while your relay connection is up.</p><p class="row" style="justify-content:center;margin-top:12px"><a class="btn primary" href="#serve">How ↑</a></p></div></article>`
+  const open =
+    free.length > 0
+      ? `<h3 id="free" class="mkt-h">Free to open<span class="chip">account needed</span></h3><div class="teams">${free.slice(0, 6).map(card).join('')}${serveYours}</div>`
+      : `<div class="teams">${serveYours}</div>`
   return `<section id="market"><div class="wrap">
 <p class="kicker"><span class="no">MARKET</span>${serving} serving now · ${input.linesToday} line${input.linesToday === 1 ? '' : 's'} opened today</p>
-<h2>Teams you can open right now</h2>
-<p class="lede" style="font-size:16px">A served team stays on its author’s machine; you get a sandboxed session of your own, from a browser or the app. Presets are signed team files you download and review.</p>
-${input.doors.length === 0 ? `<p class="empty">Nobody is serving a team here yet.</p>` : ''}<div class="teams">${teams.join('')}${serveYours}</div>
-${presets.length > 0 ? `<h3 style="margin-top:26px">Presets to download</h3><div class="teams">${presets.join('')}</div>` : ''}
-<p class="row" style="margin-top:18px"><a class="btn primary" href="/market">Explore the marketplace →</a></p>
+<h2>Open someone’s canvas — nothing to install</h2>
+<p class="lede" style="font-size:16px">A served team stays on its author’s machine; you get a sandboxed session of your own, in this browser or in the app.</p>
+${input.doors.length === 0 ? `<p class="empty">Nobody is serving a team here yet.</p>` : ''}${open}
+${presets.length > 0 ? `<h3 class="mkt-h" style="margin-top:26px">Presets to download<span class="chip">signed team files</span></h3><div class="teams">${presets.join('')}</div>` : ''}
+<p class="row" style="margin-top:18px"><a class="btn primary lg" href="/market">Explore the marketplace ${icon('arrow')}</a><a class="btn lg" href="/me#desktops">${icon('mac')} Your own machines</a></p>
 </div></section>`
 }
 
 export function homePage(input: HomeInput): Page {
+  const live = input.doors.find((d) => d.live !== false) ?? null
   return page(
     {
       title: 'Cookrew — run a team of AI coding agents on one canvas, or open someone’s',
       kind: 'document',
       active: 'home',
+      ...(input.account ? { account: input.account, cache: 0 } : {}),
       description: DESCRIPTION,
       path: '/',
-      preload: [`${frameUrl(FRAMES.canvas).replace(/\.jpg$/, '-800.jpg')}`],
+      preload: [`${SITE_FRAMES}promo-poster.jpg`],
       jsonLd: [
         organization(),
         softwareApplication(input.release),
@@ -203,21 +359,23 @@ export function homePage(input: HomeInput): Page {
     `<div class="wrap home">
 <div class="home-body">
 <style>${BRAND_LOCKUP_CSS}</style>
-<div class="hero">${BRAND_LOCKUP_HTML}<div class="wrap">
-<div><span class="tagline">OPEN SOURCE · ${FACTS.harnesses.slice(0, 4).join(' · ').toUpperCase()}</span>
+<div class="hero"><div class="wrap">
+<div>${BRAND_LOCKUP_HTML}<span class="tagline">OPEN SOURCE · ${FACTS.harnesses.slice(0, 4).join(' · ').toUpperCase()}</span>
 <h1>${esc(HEADLINE)}</h1>
-<p class="lede">${esc(ONE_LINE)} Every turn is a checkpoint. Serve a team at a cookrew.dev address and anyone can open it.</p>
-${downloadButtons(input.release)}</div>
-<div>${figure(FRAMES.canvas, { eager: true })}</div>
+<p class="lede">${esc(ONE_LINE)} Every turn is a checkpoint.</p>
+${heroButtons(input.release, live)}</div>
+<div>${promo()}</div>
 </div></div>
+
+<div class="wrap" style="padding:0">${rentStrip(input)}${dock(input)}</div>
+
+${marketSection(input)}
 
 ${startSection()}
 
 ${featuresSection(input.commits ?? null)}
-
-${marketSection(input)}
 </div>
-${catalog()}
+${catalog(input.release)}
 </div>`
   )
 }

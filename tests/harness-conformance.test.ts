@@ -38,6 +38,18 @@ describe('harness registry conformance', () => {
     }
   })
 
+  it('a harness with DIALS can also read them back — never buttons with no readout', () => {
+    for (const harness of HARNESSES) {
+      if (harness.tuning === undefined) continue
+      // Confirmation reads the session record. A scrape-only harness could
+      // offer a model picker and never be able to say whether the pick took,
+      // which is the one state shared/agent-tuning exists to prevent.
+      expect(harness.turns, `${harness.id} declares tuning but has no session file`).toBe('file')
+      expect(typeof harness.tuning.line, `${harness.id} tuning needs a line()`).toBe('function')
+      expect(typeof harness.tuning.read, `${harness.id} tuning needs a read()`).toBe('function')
+    }
+  })
+
   it('claude, codex and pi all carry file-derived history (the general-agent baseline)', () => {
     const byId = new Map(HARNESSES.map((h) => [h.id, h]))
     for (const id of ['claude', 'codex', 'pi'] as const) {

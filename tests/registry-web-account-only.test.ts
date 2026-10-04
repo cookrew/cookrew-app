@@ -53,10 +53,11 @@ describe('nothing the line can reach opens the enrolment modal', () => {
     expect(site).toContain('Open cookrew.dev/me to sign in.')
   })
 
-  it('the enrolment flow keeps exactly the one caller it was written for', () => {
-    // Stars, which are not a door and not a seat. If this count moves, a new
-    // surface has started enrolling again and should be read before it ships.
-    const callers = site.match(/(?<!function )signInFlow\(\)/g) ?? []
-    expect(callers).toHaveLength(1)
+  it('the enrolment flow is gone — stars were its last caller, and they act as the account now', () => {
+    // If either of these comes back, a surface has started enrolling a handle
+    // again and should be read before it ships: the market binds everything
+    // to the username (market-shelf.ts).
+    expect(site).not.toContain('signInFlow')
+    expect(site).not.toContain('/v1/identity/register')
   })
 })

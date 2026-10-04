@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { handleServedPayRoute, type ServedPayRouteDeps } from '../src/main/served-pay-route'
+import { handleServedPayRoute, returnUrlFor, type ServedPayRouteDeps } from '../src/main/served-pay-route'
 import type { ServedTemplate } from '../src/main/session-served'
 
 const PAID: ServedTemplate = {
@@ -23,8 +23,14 @@ const deps = (over: Partial<ServedPayRouteDeps> = {}): ServedPayRouteDeps => ({
 const pay = (
   d: ServedPayRouteDeps,
   headers: Record<string, string | undefined> = { authorization: 'Bearer good' },
-  template = PAID
-) => handleServedPayRoute(d, template, 'POST', '/api/call/pay', headers)
+  template = PAID,
+  body: unknown = null
+) => handleServedPayRoute(d, template, 'POST', '/api/call/pay', headers, body)
+
+const LISTED: Partial<ServedPayRouteDeps> = {
+  doorName: () => '@drej/research',
+  registryOrigin: () => 'https://cookrew.dev'
+}
 
 describe('the authenticated Stripe Checkout route', () => {
   it('returns null outside its one method and path', async () => {
@@ -74,10 +80,86 @@ describe('the authenticated Stripe Checkout route', () => {
     expect(await pay(deps({ createCheckout: async () => 'http://checkout.stripe.com/not-secure' }))).toMatchObject({ status: 503 })
   })
 
+  it('sends a buyer back to the team page it asked for, at the registry, and names the team', async () => {
+    const createCheckout = vi.fn(async () => 'https://checkout.stripe.com/c/pay/cs_test_value')
+    const answer = await pay(deps({ createCheckout, ...LISTED }), undefined, PAID, {
+      returnUrl: 'https://cookrew.dev/drej/research'
+    })
+    expect(answer).toMatchObject({ status: 200 })
+    expect(createCheckout).toHaveBeenCalledWith({
+      serviceId: PAID.serviceId,
+      sub: 'ana',
+      slug: PAID.slug,
+      amountUsd: PAID.priceUsd,
+      successUrl: 'https://owner.example/research?payment=received',
+      returnUrl: 'https://cookrew.dev/drej/research',
+      team: '@drej/research'
+    })
+  })
+
+  it('refuses a return anywhere but this door\'s own page, rather than quietly replacing it', async () => {
+    const createCheckout = vi.fn(async () => 'https://checkout.stripe.com/c/pay/cs_test_value')
+    for (const returnUrl of [
+      'https://evil.example/drej/research',
+      'https://cookrew.dev/drej/other',
+      'https://cookrew.dev/drej/research?x=1',
+      'javascript:alert(1)',
+      '/drej/research',
+      42
+    ]) {
+      expect(await pay(deps({ createCheckout, ...LISTED }), undefined, PAID, { returnUrl })).toEqual({
+        status: 400,
+        body: { error: 'bad_return' }
+      })
+    }
+    // An unlisted door has no page to return to.
+    expect(await pay(deps({ createCheckout }), undefined, PAID, { returnUrl: 'https://cookrew.dev/drej/research' })).toEqual({
+      status: 400,
+      body: { error: 'bad_return' }
+    })
+    expect(createCheckout).not.toHaveBeenCalled()
+  })
+
+  it('keeps the door\'s own face as the return when no page is asked for', async () => {
+    const createCheckout = vi.fn(async () => 'https://checkout.stripe.com/c/pay/cs_test_value')
+    await pay(deps({ createCheckout, ...LISTED }), undefined, PAID, {})
+    expect(createCheckout).toHaveBeenCalledWith(expect.not.objectContaining({ returnUrl: expect.anything() }))
+    expect(createCheckout).toHaveBeenCalledWith(expect.objectContaining({ team: '@drej/research' }))
+  })
+
   it('does not offer payment for an account-only crew', async () => {
     expect(await pay(deps(), undefined, { ...PAID, access: 'account', priceUsd: undefined })).toEqual({
       status: 404,
       body: {}
     })
+  })
+})
+
+describe('returnUrlFor — the one page a buyer may be sent back to', () => {
+  const at = (candidate: unknown, origin = 'https://cookrew.dev', door: string | null = '@drej/alpha') =>
+    returnUrlFor(origin, door, candidate)
+
+  it('accepts exactly the team page at the registry origin, canonicalised', () => {
+    expect(at('https://cookrew.dev/drej/alpha')).toBe('https://cookrew.dev/drej/alpha')
+    expect(at('HTTPS://COOKREW.DEV/drej/alpha')).toBe('https://cookrew.dev/drej/alpha')
+    // A loopback registry is what tests and a QA instance run against.
+    expect(at('http://127.0.0.1:8790/owner/crew', 'http://127.0.0.1:8790', '@owner/crew')).toBe('http://127.0.0.1:8790/owner/crew')
+  })
+
+  it('refuses every other origin, path, scheme and shape', () => {
+    expect(at('https://evil.example/drej/alpha')).toBeNull()
+    expect(at('http://cookrew.dev/drej/alpha')).toBeNull()
+    expect(at('https://cookrew.dev/drej/other')).toBeNull()
+    expect(at('https://cookrew.dev/drej/alpha/')).toBeNull()
+    expect(at('https://cookrew.dev/@drej/alpha')).toBeNull()
+    expect(at('https://cookrew.dev/drej/alpha?paid=cs_1')).toBeNull()
+    expect(at('https://cookrew.dev/drej/alpha#open')).toBeNull()
+    expect(at('https://user:pw@cookrew.dev/drej/alpha')).toBeNull()
+    expect(at('javascript:alert(1)')).toBeNull()
+    expect(at('/drej/alpha')).toBeNull()
+    expect(at('')).toBeNull()
+    expect(at(null)).toBeNull()
+    expect(at('https://cookrew.dev/drej/alpha', 'not a url')).toBeNull()
+    expect(at('https://cookrew.dev/drej/alpha', 'https://cookrew.dev', null)).toBeNull()
   })
 })

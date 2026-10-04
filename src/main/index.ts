@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from 'electron'
 import path from 'node:path'
-import { chmodSync, existsSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
@@ -37,6 +37,7 @@ import { DEEP_LINK_CHANNEL } from '../shared/deep-link'
 import { createRegistryTokenVerifier, registryKeyOverHttp } from './registry-token'
 import { faceWords, harnessesOf } from './served-face'
 import { askTerminal, beginShutdown, cancelAllAsks, ownerSubmit, pasteAndSubmit } from './ask'
+import { CableSignalBus } from './cable-signal'
 import { defaultProducerLease } from './producer-lease'
 import {
   boardSourcesFrom,
@@ -47,6 +48,7 @@ import {
   tmuxProbeDeps
 } from './board-index'
 import { createBoardHolds } from './board-hold'
+import { setShellObserver } from './multiplexer'
 import { createLoopHealth } from './loop-health'
 import { loadOrCreateReadOnlyToken } from './readonly-token'
 import { loadOrCreatePairingToken } from './pairing-token'
@@ -107,6 +109,10 @@ import { AgentExportStore } from './agent-export'
 import { OwnerGrant, isOwnerSender } from './owner-grant'
 import { Accounts, DEFAULT_LOCK_AFTER_MS, registryOrigin } from './account-v2'
 import { relayHandle } from './legacy-identity'
+import { WorkspaceShots } from './workspace-shots'
+import { closeLane, landLane, listLanes, openLane, repoOf } from './lanes'
+import type { LaneInfo, LandResult } from '../shared/model'
+import { laneGit } from './git'
 import { republishDoors, servingChange } from './serving-identity'
 import { createAdmittedDeviceStore } from './admitted-devices'
 import { pairingHandout } from './pairing-handout'
@@ -163,6 +169,15 @@ import {
 import { isCodexCommand, resolveCodexRolloutByPid } from './codex-bind'
 import { isOpenCodeCommand, resolveOpencodeSessionByPid } from './opencode-bind'
 import { isPiCommand, piAdoptableSession, piLaunchBinding, resolvePiSessionByPane } from './pi-bind'
+import {
+  applyTuning,
+  subjectOf,
+  TuneAsks,
+  TuningCache,
+  tuningStateOf,
+  type TuneDeps
+} from './agent-tuning'
+import type { AgentTuning, TuneKnob } from '../shared/agent-tuning'
 import { harnessFor } from './harness'
 import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
 import { blocksResume, holderOf, liveSessionHolders, planHeldSessionFork } from './claude-live-session'
@@ -444,6 +459,21 @@ const teams = new TeamStore()
 }
 const gitCache = new GitInfoCache()
 const agents = new AgentRegistry()
+/** Dial turns typed into a pane but not yet confirmed by a reply. */
+const tuneAsks = new TuneAsks()
+/** Size+mtime-gated readout, so dozens of cards cost dozens of stats. */
+const tuningCache = new TuningCache()
+/** What each card was last TOLD, so an unchanged readout sends nothing. */
+const tuningAnnounced = new Map<string, string>()
+/** The same change-gated announcement the renderer gets, for phone streams. */
+const tuningBus = new EventEmitter()
+/**
+ * Signals on the cables: "A asked B" and "B answered A", one frame each, to
+ * the desktop renderer over IPC and to every phone stream over SSE
+ * (mobile-api). Minted by the CLI ask and by the dispatch engine; the owner's
+ * own asks mint nothing, there being no cable from the owner.
+ */
+const cableSignals = new CableSignalBus()
 /**
  * The internet gate's two stores (§9 · ④). The issuer signs this instance's
  * call credentials — owner-as-issuer, so nothing here reaches the registry —
@@ -1264,6 +1294,13 @@ let saidExpiring = 0
 
 async function renewSessionIfDue(): Promise<void> {
   try {
+    // A local "ended" mark is checked against the registry first: it has been
+    // wrong (account-v2.ts · endSession), and while it is wrong the reach
+    // card is never published and this Mac's names fall out of DNS. A mark
+    // the registry does not confirm is lifted, and the card goes out at once.
+    if (await accounts.reconcileEndedSession()) {
+      void reachPublisher?.republish('session reconciled').catch(() => undefined)
+    }
     await accounts.renew()
   } catch (error) {
     console.error('Could not renew this Mac\'s session:', error)
@@ -1470,7 +1507,9 @@ function servedStripeConfig(): ReturnType<typeof servedPayments.stripeConfig> {
 function servedPaymentTerms(
   template: Pick<ServedTemplate, 'priceUsd' | 'slug'>
 ): unknown | null {
-  return servedPayments.terms(template)
+  // The published name rides along so the quote says whose seat it is.
+  const team = relayServing?.addressFor(template.slug)?.name ?? null
+  return servedPayments.terms({ ...template, ...(team === null ? {} : { team }) })
 }
 
 /** Public address + presence/mode only. The Stripe value has no read path. */
@@ -1528,17 +1567,24 @@ async function handleServedSlug(
                 serviceId: input.serviceId,
                 sub: input.sub,
                 slug: input.slug,
-                successUrl: input.successUrl
+                successUrl: input.successUrl,
+                ...(input.returnUrl === undefined ? {} : { returnUrl: input.returnUrl }),
+                ...(input.team === undefined ? {} : { team: input.team })
               }
             )
             return result.ok ? result.url : null
           },
-      successUrl: (t) => servedPaymentReturn(t.slug)
+      successUrl: (t) => servedPaymentReturn(t.slug),
+      // A buyer paying FROM the team's page at cookrew.dev is sent back to it
+      // — that page, at that origin, and nowhere else (returnUrlFor).
+      doorName: (t) => relayServing?.addressFor(t.slug)?.name ?? null,
+      registryOrigin: () => registryOrigin()
     },
     template,
     method,
     pathname,
-    headers
+    headers,
+    body
   )
   if (checkout !== null) {
     for (const [key, value] of Object.entries(checkout.headers ?? {})) {
@@ -1570,6 +1616,9 @@ async function handleServedSlug(
         doorCallers.seated(entry)
         publishServedCallers()
       },
+      // The money rung asks what the sign-in said: a seat, or the owner. A
+      // caller nobody recorded (a key-based one) is quoted, as before.
+      entitled: (serviceId, sub) => doorCallers.entitled(serviceId, sub),
       // The money moved. Report it to cookrew.dev as a bought seat, through
       // the queue that survives the registry being down (seat-settle.ts).
       onPaid: (payment) => {
@@ -1581,6 +1630,9 @@ async function handleServedSlug(
         // A key-based caller has no account for a seat to land on, and a door
         // with no published name has no team for one to be at. Both are
         // ordinary states, not failures — the caller is still admitted.
+        // The door itself learns it first: the buyer's token still says no
+        // seat, and their next session must not meet the 402 again.
+        doorCallers.bought(payment.serviceId, payment.sub)
         if (team === null || username === null || username.length === 0) return
         void seatSettles
           .record({ team, username, by: payment.by, receipt: payment.receipt })
@@ -1787,6 +1839,11 @@ const loopHealth = createLoopHealth({
   probe: () => boardProbe.stats()
 })
 
+// Every synchronous fork the multiplexers make lands in the loop ledger
+// under its command's name, so a multi-second stall on /api/health says
+// which `herdr` or `tmux` call held the thread (multiplexer.ts).
+setShellObserver((label, ms) => loopHealth.observe(label, ms))
+
 const boardProbe = createProbeSampler(
   tmuxProbeDeps({
     knownTerminalIds: () => agents.list().map((entry) => entry.id),
@@ -1817,6 +1874,8 @@ function boardSources(): ReturnType<typeof boardSourcesFrom> {
 }
 // A turn boundary is a phase change for one terminal: recompute it, no listing.
 turns.on('turn', ({ terminalId }: { terminalId: string }) => void boardProbe.invalidate(terminalId))
+// A turn ended: the auto-lander looks at the lane (lanes.ts rule 3).
+turns.on('turn', ({ terminalId }: { terminalId: string }) => scheduleAutoLand(terminalId))
 const events = new EventLog()
 const recoverable = new RecoverableStore()
 // Snapshot every killed terminal (node + position + session refs + edges)
@@ -2148,6 +2207,7 @@ syncBackendPhases()
 // stream over the /api/events SSE, subscribed in mobile-api).
 store.on('op', (e) => events.append(e))
 events.on('event', (e) => mainWindow?.webContents.send('event:new', e))
+cableSignals.on((signal) => mainWindow?.webContents.send('cable:signal', signal))
 let mainWindow: BrowserWindow | null = null
 
 /**
@@ -3149,6 +3209,9 @@ const dispatchService = new DispatchService({
       }
     })
   },
+  // The cable between the asking agent and this one lights at delivery and
+  // at the answer; only CLI-minted dispatches carry the asker.
+  signal: (moment) => void cableSignals.emit(moment),
   // The sweep must not spare a stuck-working agent whose durable final
   // answer already exists — status may hold, never outrank the row.
   hasFinalAnswer: (agentId, prompt, armedAt) => turns.hasFinalAnswer(agentId, prompt, armedAt),
@@ -3304,6 +3367,10 @@ function removeWorkspace(nameOrId: string): ReturnType<WorkspaceStore['list']> {
     store.list().workspaces.find((w) => w.id === nameOrId) ?? store.metaByName(nameOrId)
   if (!meta) throw new Error(`Workspace '${nameOrId}' not found`)
   const browserIds = store.browserIdsOf(meta.id)
+  // A workspace that is gone should not keep a picture of itself (the screen
+  // wall). Dropped here, where the removal is known, rather than left for the
+  // sweep that runs when the wall next opens.
+  workspaceShots.forget(meta.id)
   // A served session's workspace: the session ends WITH it. Otherwise the
   // record lingers open with no conductor and every caller read is a 503.
   const servedHere = serving.instantiator.sessionForWorkspace(meta.id)
@@ -3355,6 +3422,115 @@ function setPrimaryDir(id: string, dir: string): ReturnType<WorkspaceStore['list
  * directory the workspace does not have yet is enrolled first, which is what
  * makes the file browser a working escape hatch. Order lives in terminal-cwd.ts.
  */
+/* ── LANES (lanes.ts) ────────────────────────────────────────────────────
+ * One agent, one worktree, one branch; landing is the app's action, never a
+ * prompt. The four operations below are what the card menu, the phone and
+ * the auto-lander call; the rules live in lanes.ts and are tested there. */
+
+function laneTerminal(nodeId: string): TerminalNodeData {
+  const node = store.node(nodeId)
+  if (!node || node.kind !== 'terminal') throw new Error('Not a terminal node')
+  return node as TerminalNodeData
+}
+
+/** The lane directory is inside the repo; git must never see it. */
+function ensureLaneDirIgnored(laneDir: string): void {
+  mkdirSync(laneDir, { recursive: true })
+  const ignore = path.join(laneDir, '.gitignore')
+  if (!existsSync(ignore)) writeFileSync(ignore, '*\n')
+}
+
+function laneList(dir: string): Promise<LaneInfo[]> {
+  return listLanes(laneGit(), dir)
+}
+
+/** Cut a lane from the agent's repo and move the agent into it (respawn, conversation carried). */
+async function laneOpen(nodeId: string, name: string): Promise<CanvasNode> {
+  const terminal = laneTerminal(nodeId)
+  const opened = await openLane(laneGit(), terminal.cwd, name, ensureLaneDirIgnored)
+  if (!opened.ok) throw new Error(opened.error)
+  gitCache.invalidate(terminal.cwd)
+  const moved = await setTerminalCwd(nodeId, opened.path)
+  return store.updateNode(nodeId, { laneLast: null } as Partial<CanvasNode>) ?? moved
+}
+
+/** Land the agent's lane; the answer is kept on the node for the card. */
+async function laneLand(nodeId: string, opts: { close?: boolean; gate?: string[] | null; auto?: boolean } = {}): Promise<LandResult> {
+  const terminal = laneTerminal(nodeId)
+  const lanePath = terminal.cwd
+  // Closing removes the worktree the agent sits in, so the agent leaves first.
+  const repo = opts.close ? await repoOf(laneGit(), lanePath) : null
+  const result = await landLane(laneGit(), { lanePath, gate: opts.gate ?? null, close: false })
+  if (result.ok && opts.close && repo) {
+    await setTerminalCwd(nodeId, repo.main)
+    const closed = await closeLane(laneGit(), lanePath)
+    store.updateNode(nodeId, { laneLast: { ...result, closed: closed.ok, at: Date.now(), auto: false } } as Partial<CanvasNode>)
+    gitCache.invalidate(repo.main)
+    return { ...result, closed: closed.ok }
+  }
+  store.updateNode(nodeId, { laneLast: { ...result, at: Date.now(), auto: opts.auto ?? false } } as Partial<CanvasNode>)
+  if (repo) gitCache.invalidate(repo.main)
+  gitCache.invalidate(lanePath)
+  return result
+}
+
+/** Drop the agent's lane (back to the shared tree first). Refuses unlanded work unless forced. */
+async function laneClose(nodeId: string, force = false): Promise<CanvasNode> {
+  const terminal = laneTerminal(nodeId)
+  const lanePath = terminal.cwd
+  const repo = await repoOf(laneGit(), lanePath)
+  if (!repo) throw new Error(`${lanePath} is not in a git repo`)
+  if (repo.root === repo.main) throw new Error('This agent is in the shared tree, not a lane')
+  // Check before moving the agent, so a refused close leaves it where it was.
+  const lanes = await listLanes(laneGit(), lanePath)
+  const mine = lanes.find((l) => l.path === repo.root)
+  if (!force && mine && (mine.dirty || mine.ahead > 0)) {
+    throw new Error(mine.dirty ? 'The lane has uncommitted changes' : `The lane has ${mine.ahead} unlanded commit${mine.ahead === 1 ? '' : 's'} — LAND first`)
+  }
+  const moved = await setTerminalCwd(nodeId, repo.main)
+  const closed = await closeLane(laneGit(), lanePath, force)
+  if (!closed.ok) throw new Error(closed.error)
+  return store.updateNode(nodeId, { laneAutoLand: false, laneLast: null } as Partial<CanvasNode>) ?? moved
+}
+
+function laneAuto(nodeId: string, on: boolean): CanvasNode {
+  laneTerminal(nodeId)
+  const updated = store.updateNode(nodeId, { laneAutoLand: on } as Partial<CanvasNode>)
+  if (!updated) throw new Error('Not a terminal node')
+  return updated
+}
+
+/**
+ * THE AUTO-LANDER. A finished turn is the one moment an agent's lane is
+ * worth looking at: if the agent committed, the lane lands; if it did not,
+ * nothing happens and nothing is said. Debounced per terminal so a burst of
+ * turn records is one landing, and never concurrent for one lane.
+ */
+const autoLandTimers = new Map<string, NodeJS.Timeout>()
+const autoLanding = new Set<string>()
+const AUTO_LAND_SETTLE_MS = 4000
+function scheduleAutoLand(terminalId: string): void {
+  const node = store.nodeAcrossWorkspaces(terminalId)?.node
+  if (!node || node.kind !== 'terminal' || !(node as TerminalNodeData).laneAutoLand) return
+  const pending = autoLandTimers.get(terminalId)
+  if (pending) clearTimeout(pending)
+  autoLandTimers.set(
+    terminalId,
+    setTimeout(() => {
+      autoLandTimers.delete(terminalId)
+      if (autoLanding.has(terminalId)) return
+      autoLanding.add(terminalId)
+      laneLand(terminalId, { auto: true })
+        .then((result) => {
+          if (result.ok) console.log(`[cookrew] auto-landed ${terminalId}: ${result.commits} commit(s) → ${result.landed}`)
+          else if (result.reason !== 'nothing' && result.reason !== 'dirty') console.error(`[cookrew] auto-land ${terminalId} stopped: ${result.reason}`)
+        })
+        .catch((error) => console.error('[cookrew] auto-land failed:', error))
+        .finally(() => autoLanding.delete(terminalId))
+    }, AUTO_LAND_SETTLE_MS)
+  )
+}
+
 async function setTerminalCwd(nodeId: string, dir: string): Promise<CanvasNode> {
   return moveTerminalCwd(
     {
@@ -3671,6 +3847,80 @@ function retireTerminal(id: string, why: string): void {
   turns.observeBackendPhase(id, null)
   sessionSync.unwatch(id)
   turns.untrack(id)
+  // Unsettled dial turns belong to the pane that was asked; a reborn id
+  // must not inherit a pending ask nothing will ever confirm.
+  tuneAsks.forget(id)
+  tuningCache.forget(id)
+  tuningAnnounced.delete(id)
+}
+
+/**
+ * The node store and the PTY table, as the two functions agent-tuning wants.
+ *
+ * Module scope because THREE callers need the identical object — the desktop's
+ * two IPC handlers and the phone's three routes. A second copy built at the
+ * mobile call site is how the two surfaces would come to disagree about which
+ * cache they read and whose asks they remember.
+ */
+function tuneDeps(): TuneDeps {
+  return {
+    // ACROSS WORKSPACES, not just the focused one. store.node() searches only
+    // what the desktop is currently looking at, and the phone can be scoped to
+    // a different workspace entirely — a card there would have answered "no
+    // such terminal" and drawn a blank rail. The fleet readout already spans
+    // every workspace (it is built from the durable registry), so the per-card
+    // route has to reach as far or the two disagree about the same card.
+    node: (id) => {
+      const node = store.nodeAcrossWorkspaces(id)?.node
+      return node?.kind === 'terminal' ? node : null
+    },
+    write: (id, data) => ptys.get(id)?.write(data),
+    asks: tuneAsks,
+    cache: tuningCache
+  }
+}
+
+/**
+ * EVERY agent the fleet knows, not only the open workspace: the roster spans
+ * workspaces that are not loaded, and a card there wears the same tag. The
+ * durable registry holds exactly what a readout needs (command, cwd, session
+ * ref), so nothing has to be resident to be readable. Ids with nothing
+ * recorded are ABSENT rather than null — a card with no reading draws no tag.
+ */
+function tuningFleet(): Record<string, AgentTuning> {
+  const rows: Record<string, AgentTuning> = {}
+  for (const entry of agents.list()) {
+    const tuning = tuningCache.of({
+      id: entry.id,
+      command: entry.command,
+      cwd: entry.cwd,
+      sessionRef: entry.sessionRef
+    })
+    if (tuning !== null) rows[entry.id] = tuning
+  }
+  return rows
+}
+
+/**
+ * Tell the renderer this card's dials CHANGED, and only then.
+ *
+ * Activity fires several times a second while a turn runs; the model an agent
+ * answers on changes perhaps twice a day. The cache makes the question cheap
+ * (one stat on an unchanged file) and this makes the answer quiet.
+ */
+function announceTuning(terminalId: string): void {
+  const node = store.node(terminalId)
+  if (node?.kind !== 'terminal') return
+  const tuning = tuningCache.of(subjectOf(node))
+  if (tuning === null) return
+  const stamp = `${tuning.model ?? ''}|${tuning.effort ?? ''}`
+  if (tuningAnnounced.get(terminalId) === stamp) return
+  tuningAnnounced.set(terminalId, stamp)
+  const row = { terminalId, tuning }
+  mainWindow?.webContents.send('terminal:tuning', row)
+  // The phone is the owner's own surface and gets the same frame, filtered to
+  // its own canvas by the stream (mobile-api onTuning).
+  tuningBus.emit('tuning', row)
 }
 
 async function removeNode(id: string): Promise<void> {
@@ -4565,6 +4815,30 @@ async function injectInput(args: string[]): Promise<string> {
   throw new Error('Usage: cookrew ui click X Y | dblclick X Y | type "text" | key Enter')
 }
 
+/**
+ * The canvas pictures the screen wall draws. Its capturer is the main window,
+ * injected so the store itself never imports Electron and can be tested.
+ */
+const workspaceShots = new WorkspaceShots({
+  capturer: {
+    capture: async (rect) => {
+      if (!mainWindow || mainWindow.webContents.isDestroyed()) throw new Error('no window')
+      return mainWindow.webContents.capturePage(rect)
+    }
+  }
+})
+
+/**
+ * Every workspace's picture, for the desktop wall (IPC) and the phone's
+ * (GET /api/workspaces/shots) alike. Swept here rather than on a timer: a wall
+ * opening is the only moment anything reads these, so it is the only moment
+ * a stale one costs.
+ */
+function currentWorkspaceShots(): Record<string, { src: string; at: number }> {
+  workspaceShots.sweep(store.list().workspaces.map((w) => w.id))
+  return workspaceShots.all()
+}
+
 async function captureWindow(): Promise<string> {
   if (!mainWindow) throw new Error('No window')
   const image = await mainWindow.webContents.capturePage()
@@ -5144,6 +5418,8 @@ app.whenReady().then(() => {
     // route uses, so a CLI-minted dispatch and an API-minted one are one
     // record with one lifecycle.
     dispatch: dispatchService,
+    // The cable between the asking pane and the agent it asks lights twice.
+    signal: (moment) => void cableSignals.emit(moment),
     forkTerminal,
     routines,
     browserCommand,
@@ -5208,6 +5484,17 @@ app.whenReady().then(() => {
     // Sous's door for the phone and for voice-gateway; `ui` events for both.
     sous,
     uiBus,
+    // THE DIALS on the phone — the same reads and the same write the desktop
+    // does, through the same deps, so the two surfaces cannot drift.
+    tuning: {
+      state: (terminalId) => tuningStateOf(tuneDeps(), terminalId),
+      fleet: tuningFleet,
+      turn: (terminalId, knob, value) =>
+        applyTuning(tuneDeps(), terminalId, knob as TuneKnob, value)
+    },
+    tuningBus,
+    // The same cable signals the desktop gets, filtered to the stream's canvas.
+    signalBus: cableSignals,
     // Serves the CA-issued chain by SNI for this Mac's names, keeps the
     // self-signed one as the default, and spells the printed URLs.
     nameCert: nameCertificate,
@@ -5296,6 +5583,8 @@ app.whenReady().then(() => {
     board: boardSources(),
     // The main thread's pulse (loop-health.ts) for GET /api/health.
     health: () => loopHealth.snapshot(),
+    // The screen wall's pictures, for the phone (GET /api/workspaces/shots).
+    workspaceShots: currentWorkspaceShots,
     // Attach-free dispatch (v4 §3): the two /api routes answer 503 without it.
     dispatch: dispatchService,
     // While a dispatch is armed, the HTTP input/ask producers refuse 409 —
@@ -5313,6 +5602,9 @@ app.whenReady().then(() => {
     // owner's public face. `/api/hello` answers above the pairing-token gate
     // because it exists for a phone that has not got the token yet — it is how
     // the phone checks it found the right Mac before it sends a credential.
+    // Where the reach publisher stands with the registry, so /api/reach can
+    // withhold names the zone no longer answers and say why (reach.ts).
+    reachPublish: () => reachPublisher?.state() ?? { acceptedAt: null, refused: null },
     identity: {
       account: () => accounts.account(),
       registryOrigin: () => registryOrigin(),
@@ -5351,6 +5643,11 @@ app.whenReady().then(() => {
       setPrimaryDir,
       setTerminalCwd,
       gitInfo: (dir: string) => gitCache.info(dir),
+      laneList,
+      laneOpen,
+      laneLand,
+      laneClose,
+      laneAuto,
       teamFork,
       teamSave: teamSaveTracked,
       teamClipSet,
@@ -5983,6 +6280,23 @@ function registerIpc(handlers: RestoreHandlers): void {
       serveOps.import(link, position, paid)
   )
 
+  /**
+   * THE SCREEN WALL'S PICTURES.
+   *
+   * Taken when the wall OPENS, which is the moment a workspace stops being
+   * looked at — the canvas is still on screen and still current, and the
+   * person is by definition on their way somewhere else. Never on a timer.
+   *
+   * The rect comes from the renderer because only it knows where the canvas
+   * sits; `capturePage` takes CSS pixels, which is what a DOMRect already is.
+   */
+  ipcMain.handle('workspace:snap', async (_e, rect: { x: number; y: number; width: number; height: number }) => {
+    const id = store.focusedId
+    if (!id) return false
+    return workspaceShots.capture(id, rect)
+  })
+  ipcMain.handle('workspace:shots', () => currentWorkspaceShots())
+
   ipcMain.handle('workspace:switch', (_e, id: string) => {
     switchWorkspace(id)
     return store.list()
@@ -6003,7 +6317,31 @@ function registerIpc(handlers: RestoreHandlers): void {
     setPrimaryDir(id, dir)
   )
   ipcMain.handle('terminal:setCwd', (_e, nodeId: string, dir: string) => setTerminalCwd(nodeId, dir))
+  // THE DIALS (agent-tuning) — the zoomed card's left rail. Reading and
+  // turning share one deps object so the rail can never show a value the
+  // record did not state: the readout comes off the harness's own session
+  // file, and turning a dial is one line typed through the ordinary input
+  // gate, not a privileged side channel.
+  ipcMain.handle('terminal:tuning', (_e, terminalId: string) =>
+    tuningStateOf(tuneDeps(), terminalId)
+  )
+  ipcMain.handle('terminal:tune', (_e, terminalId: string, knob: TuneKnob, value: string) =>
+    applyTuning(tuneDeps(), terminalId, knob, value)
+  )
+  // EVERY agent the fleet knows, not only the open workspace: the roster spans
+  // workspaces that are not loaded, and a card there wears the same tag. The
+  // durable registry holds exactly what a readout needs (command, cwd, session
+  // ref), so nothing has to be resident to be readable.
+  ipcMain.handle('tuning:list', () => tuningFleet())
   ipcMain.handle('git:info', (_e, dir: string) => gitCache.info(dir))
+  // Lanes: worktree per agent, landing as a product action (lanes.ts).
+  ipcMain.handle('lane:list', (_e, dir: string) => laneList(dir))
+  ipcMain.handle('lane:open', (_e, nodeId: string, name: string) => laneOpen(nodeId, name))
+  ipcMain.handle('lane:land', (_e, nodeId: string, opts?: { close?: boolean; gate?: string[] | null }) =>
+    laneLand(nodeId, opts ?? {})
+  )
+  ipcMain.handle('lane:close', (_e, nodeId: string, force?: boolean) => laneClose(nodeId, force ?? false))
+  ipcMain.handle('lane:auto', (_e, nodeId: string, on: boolean) => laneAuto(nodeId, on))
   ipcMain.handle('dir:pick', async () => {
     if (!mainWindow) return null
     const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] })
@@ -6029,6 +6367,7 @@ function registerIpc(handlers: RestoreHandlers): void {
     lazyTerminals.reconsider(activity.terminalId)
     if (mainWindow && !mainWindow.webContents.isDestroyed()) {
       mainWindow.webContents.send('terminal:activity', activity)
+      announceTuning(activity.terminalId)
     }
   })
 

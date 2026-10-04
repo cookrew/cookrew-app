@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { DNS_CLASS_IN, DNS_TYPE, RCODE } from '../registry/src/dns-wire'
 import { readNameServers } from '../registry/src/dns-glue'
+import * as zoneModule from '../registry/src/dns-zone'
 import {
   ADDRESS_TTL,
   NEGATIVE_TTL,
@@ -278,5 +279,46 @@ describe('the name servers a deployment is given', () => {
     const answer = zone({ name: 'ns1.d.cookrew.dev', type: DNS_TYPE.A, class: DNS_CLASS_IN })
     expect(answer.answers).toHaveLength(1)
     expect(answer.answers[0]).toMatchObject({ type: 'A', address: '203.0.113.10' })
+  })
+})
+
+describe('the HTTP oracle reads the same zone', () => {
+  // GET /v2/names/<host> exists so a phone can tell "the browser refused" from
+  // "the name is not answered" with a fact instead of a stopwatch
+  // (2026-10-04: a negative DNS answer in 4 ms read as a browser refusal).
+  it('says live for a name the zone answers, with the address it would answer', () => {
+    const { lookupName } = zoneModule
+    const cards = new Map([[MAC, { addresses: ['192.168.1.24'], at: 1_000 }]])
+    const respond = createZone({
+      zone: ZONE,
+      ns: [{ host: `ns1.${ZONE}`, address: '203.0.113.10' }],
+      reach: { find: (id) => cards.get(id) ?? null },
+      challenges: { textsFor: () => [] },
+      changedAt: () => 1_000,
+      now: () => 2_000
+    })
+    expect(lookupName(respond, `192-168-1-24.${MAC}.${ZONE}`)).toEqual({ live: true, address: '192.168.1.24' })
+    expect(lookupName(respond, `192-168-1-24.${MAC}.${ZONE}.`)).toEqual({ live: true, address: '192.168.1.24' })
+    expect(lookupName(respond, `192-168-1-24.${MAC}.${ZONE}`.toUpperCase())).toEqual({ live: true, address: '192.168.1.24' })
+  })
+
+  it('says dead for an address the card does not hold, an unknown device, a stale card, and the apex', () => {
+    const { lookupName } = zoneModule
+    const cards = new Map([[MAC, { addresses: ['192.168.1.24'], at: 1_000 }]])
+    let clock = 2_000
+    const respond = createZone({
+      zone: ZONE,
+      ns: [{ host: `ns1.${ZONE}`, address: '203.0.113.10' }],
+      reach: { find: (id) => cards.get(id) ?? null },
+      challenges: { textsFor: () => [] },
+      changedAt: () => 1_000,
+      now: () => clock
+    })
+    expect(lookupName(respond, `10-0-0-9.${MAC}.${ZONE}`)).toEqual({ live: false })
+    expect(lookupName(respond, `192-168-1-24.ffffffff-1111-2222-3333-444444444444.${ZONE}`)).toEqual({ live: false })
+    expect(lookupName(respond, ZONE)).toEqual({ live: false })
+    expect(lookupName(respond, `192-168-1-24.${MAC}.example.com`)).toEqual({ live: false })
+    clock = 1_000 + 24 * 60 * 60 * 1000 + 1
+    expect(lookupName(respond, `192-168-1-24.${MAC}.${ZONE}`)).toEqual({ live: false })
   })
 })

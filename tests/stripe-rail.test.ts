@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createStripeRedemptionStore,
   decodeStripePaymentHeader,
+  seatName,
   stripeCreateCheckout,
   stripeGet,
   stripePaymentTerms,
@@ -103,6 +104,10 @@ describe('Checkout creation', () => {
     await stripeCreateCheckout({ config: CONFIG, post, now: () => 3_000_000 }, input)
     expect(calls[2].headers['idempotency-key']).not.toBe(calls[0].headers['idempotency-key'])
     expect(calls[2].form.get('expires_at')).not.toBe(calls[0].form.get('expires_at'))
+    // And a different return page inside the SAME window is a different body,
+    // so it must be a different key too, or Stripe refuses it outright.
+    await stripeCreateCheckout({ config: CONFIG, post, now: () => 1_000_000 }, { ...input, returnUrl: 'https://cookrew.dev/drej/alpha' })
+    expect(calls[3].headers['idempotency-key']).not.toBe(calls[0].headers['idempotency-key'])
   })
 
   it('posts a 30-minute, form-encoded Checkout with bound metadata', async () => {
@@ -124,17 +129,19 @@ describe('Checkout creation', () => {
     expect(result).toEqual({ ok: true, session: SESSION, url: 'https://checkout.stripe.com/c/pay/test' })
     expect(call).not.toBeNull()
     expect(call!.url).toBe('https://api.stripe.com/v1/checkout/sessions')
-    expect(call!.headers).toEqual({
+    expect(call!.headers).toMatchObject({
       authorization: 'Bearer injected-test-value',
       'content-type': 'application/x-www-form-urlencoded',
       // Pinned, so a Stripe API upgrade cannot change response shapes under a
       // shipped desktop app; keyed by the caller's INTENT, so a retry after a
       // timeout replays the first session instead of charging twice.
-      'stripe-version': '2025-08-27.basil',
-      // The quote WINDOW is part of the key because it is part of the body:
-      // now=1_000_000ms → 1000s → window 0 at a 30-minute TTL.
-      'idempotency-key': 'checkout:svc-1:ana:250:0'
+      'stripe-version': '2025-08-27.basil'
     })
+    // The quote WINDOW is part of the key because it is part of the body:
+    // now=1_000_000ms → 1000s → window 0 at a 30-minute TTL — and so is a
+    // digest of the body, so a changed return page is a new key, never a
+    // Stripe idempotency_error on a working rail.
+    expect(call!.headers['idempotency-key']).toMatch(/^checkout:svc-1:ana:250:0:[0-9a-f]{12}$/)
     // Tax is computed by Stripe, never by us: the AI-service tax code, an
     // address to locate the buyer, and a tax ID so a cross-border B2B sale can
     // take reverse charge. Hong Kong levies no VAT itself — the obligation, if
@@ -151,7 +158,9 @@ describe('Checkout creation', () => {
       mode: 'payment',
       'line_items[0][price_data][currency]': 'usd',
       'line_items[0][price_data][unit_amount]': '250',
-      'line_items[0][price_data][product_data][name]': 'One session with the crew-one crew',
+      // A SEAT, once (ruled copy G1) — never "one session", which is a charge
+      // that no longer happens per session.
+      'line_items[0][price_data][product_data][name]': 'A seat at the crew-one crew',
       'line_items[0][quantity]': '1',
       // Quantised to the TTL window, not now+TTL — see the retry test below.
       // Always ≥ 30 minutes out, which is Stripe's own floor.
@@ -182,6 +191,40 @@ describe('Checkout creation', () => {
     expect(success).toBe('http://127.0.0.1:8639/crew-one?source=checkout&payment=received')
   })
 
+  it('sends the buyer back to the team page with the session id, raw placeholder and all', async () => {
+    let form = new URLSearchParams()
+    const post: StripePost = async (_url, request) => {
+      form = new URLSearchParams(request.body)
+      return { ok: true, status: 200, json: { id: SESSION, url: 'https://checkout.stripe.com/x' } }
+    }
+    await stripeCreateCheckout(
+      { config: CONFIG, post },
+      {
+        priceUsd: '1',
+        serviceId: 'svc-1',
+        sub: 'acct-lin',
+        slug: 'crew-one',
+        successUrl: 'https://crews.example.test/crew-one?payment=received',
+        returnUrl: 'https://cookrew.dev/drej/alpha',
+        team: '@drej/alpha'
+      }
+    )
+    // The placeholder is Stripe's to fill: it must reach the wire as braces,
+    // form-encoded ONCE by the body encoding and never percent-encoded into
+    // the URL itself (which Stripe would not substitute).
+    expect(form.get('success_url')).toBe('https://cookrew.dev/drej/alpha?paid={CHECKOUT_SESSION_ID}')
+    expect(form.toString()).toContain('success_url=https%3A%2F%2Fcookrew.dev%2Fdrej%2Falpha%3Fpaid%3D%7BCHECKOUT_SESSION_ID%7D')
+    expect(form.get('cancel_url')).toBe('https://cookrew.dev/drej/alpha')
+    // The receipt names the seat at the published door.
+    expect(form.get('line_items[0][price_data][product_data][name]')).toBe('A seat at @drej/alpha')
+  })
+
+  it('names the seat by the published team, else by the slug', () => {
+    expect(seatName({ slug: 'crew-one', team: '@drej/alpha' })).toBe('A seat at @drej/alpha')
+    expect(seatName({ slug: 'crew-one', team: '  ' })).toBe('A seat at the crew-one crew')
+    expect(seatName({ slug: 'crew-one' })).toBe('A seat at the crew-one crew')
+  })
+
   it('rejects invalid local input without a network call', async () => {
     const post = vi.fn<StripePost>()
     const base = { priceUsd: '2.50', serviceId: 'svc-1', sub: 'ana', slug: 'crew-one' }
@@ -189,7 +232,8 @@ describe('Checkout creation', () => {
       { ...base, priceUsd: '0.001' },
       { ...base, serviceId: '' },
       { ...base, sub: '' },
-      { ...base, slug: '' }
+      { ...base, slug: '' },
+      { ...base, returnUrl: 'javascript:alert(1)' }
     ]) {
       expect(await stripeCreateCheckout({ config: CONFIG, post }, input)).toEqual({
         ok: false,

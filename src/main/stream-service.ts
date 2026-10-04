@@ -20,6 +20,7 @@
 // place scraping remains."
 
 import { existsSync } from 'node:fs'
+import path from 'node:path'
 import { isClaudeCommand } from '../shared/claude-fork'
 import { isCodexCommand } from './codex-bind'
 import { isPiCommand } from './pi-bind'
@@ -28,6 +29,7 @@ import type { TerminalNodeData } from '../shared/model'
 import { claudeStreamChain, type ChainOptions, type StreamChain } from './stream-chain'
 import {
   createStreamReader,
+  STREAM_PAGE_DEFAULT_LIMIT,
   type StreamBlocksRequest,
   type StreamBlocksResult,
   type StreamReaderDeps,
@@ -53,6 +55,7 @@ import {
 } from './stream-state'
 import { tailIsFinal, type FinalityDeps } from './stream-finality'
 import { transcriptSourceFor, type TranscriptSource } from './transcript-source'
+import { blocksOfRows, filesOfRows, windowRows } from './stream-window'
 import type { TraceDocument, TraceKind } from './trace'
 
 /** The tail, with the finality question answered. */
@@ -304,7 +307,52 @@ export function createStreamService(deps: StreamServiceDeps): StreamService {
     async rollbacks(terminalId) {
       return (await materialiseOf(terminalId)).rolledBack
     },
-    blocks: (terminalId, request) => reader.blocks(terminalId, request),
+    async blocks(terminalId, request = {}) {
+      // THE INDEX ANSWERS THE WINDOW — which rows, which numbers, and WHICH
+      // FILES (stream-window.ts, 2026-10-04). This used to be
+      // Promise.all([materialiseOf, reader.blocks]) with the walk renumbered
+      // from the index afterwards, and reader.blocks() walked the WHOLE chain
+      // for every page: 220 MB of transcripts parsed to serve twenty blocks on
+      // the owner's busiest card, 30.5 s for the first window after a restart.
+      // The index already names the file each row is read from, so only the
+      // files a window actually spans are read now, through the same cache.
+      const [index, chain] = await Promise.all([materialiseOf(terminalId), chainOf(terminalId)])
+      // An index with nothing in it has nothing to address a window by — a
+      // card that has never materialised, or one whose state was unreadable.
+      // The walk's own answer stands, exactly as it did before.
+      if (index.entries.length === 0) return reader.blocks(terminalId, request)
+      const members = new Map(chain.files.map((entry) => [entry.file, entry]))
+      // ROWS WITHOUT BYTES ARE NOT A PAGE'S WORTH OF ANYTHING. A transcript the
+      // chain reports missing, or one the lineage no longer lists AND that is
+      // not on disk either — on the owner's busiest card 693 of 1,136 rows
+      // live in two such files. The walk never saw them, so neither does the
+      // window; one stat per distinct file outside the chain is the price.
+      const exists = deps.exists ?? existsSync
+      const gone = new Set(index.missing.map((member) => member.file))
+      for (const file of filesOfRows(index.entries)) {
+        if (!members.has(file) && !exists(file)) gone.add(file)
+      }
+      const { rows, ...unknown } = windowRows(index.entries, request, STREAM_PAGE_DEFAULT_LIMIT, gone)
+      // A file the chain no longer lists is still an address: it rotated out
+      // of the lineage, not off the disk. Only Claude chains have more than
+      // one member, so that is the parser such a file is read with.
+      const kindOf = (file: string): TraceKind => members.get(file)?.kind ?? 'claude'
+      const sessionIdOf = (file: string): string =>
+        members.get(file)?.sessionId ?? path.basename(file, path.extname(file))
+      const documents = new Map(
+        await Promise.all(
+          filesOfRows(rows).map(
+            async (file) => [file, await deps.documentOf(file, kindOf(file))] as const
+          )
+        )
+      )
+      return {
+        blocks: blocksOfRows(rows, documents, sessionIdOf),
+        total: index.entries.length,
+        missing: index.missing,
+        ...unknown
+      }
+    },
     async tailState(terminalId) {
       // THE MATERIALISED INDEX ANSWERS THE NUMBERS (D6). `total` used to come
       // from a second whole-chain walk asked for one block, and the tail's

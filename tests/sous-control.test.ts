@@ -169,6 +169,37 @@ describe('two ears', () => {
     })
     expect(r).toMatchObject({ intent: 'prompt', agentId: 'a-cc', text: '给 fetch 加一个重试' })
   })
+  it('prefers an ear that resolved outright over one that only got as far as asking which', async () => {
+    // Both ears are command-shaped, so the old loop kept whichever came first
+    // and the owner was asked "which Conductor?" — a question the ear beside
+    // it had already answered by naming an agent there is only one of.
+    const h = harness({ active: null })
+    const r = await h.controller.handle({
+      text: '帮我问问双球',
+      alternates: ['ask Conductor', 'ask Magpie'],
+      surface: 'cli'
+    })
+    expect(r).toMatchObject({ intent: 'ask', agentId: 'a-magpie' })
+  })
+
+  it('does not depend on the order the ears happened to be spawned in', async () => {
+    // The whole defect, stated as a property: two recognizers race on the same
+    // microphone and their order is an accident of process startup. It must
+    // not decide which agent the owner reaches.
+    const forwards = await harness({ active: null }).controller.handle({
+      text: '帮我问问双球',
+      alternates: ['ask Conductor', 'ask Magpie'],
+      surface: 'cli'
+    })
+    const backwards = await harness({ active: null }).controller.handle({
+      text: '帮我问问双球',
+      alternates: ['ask Magpie', 'ask Conductor'],
+      surface: 'cli'
+    })
+    expect(forwards).toMatchObject({ agentId: 'a-magpie' })
+    expect(backwards).toMatchObject({ agentId: 'a-magpie' })
+  })
+
   it('a refusal that asks which stays a refusal — the alternate is not used to guess', async () => {
     const h = harness({ active: null })
     const r = await h.controller.handle({ text: 'ask Conductor', alternates: ['ask Paul'], surface: 'cli' })

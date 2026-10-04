@@ -20,9 +20,24 @@ import type { DirectOffer } from './path/direct-offer'
  */
 
 let offer: DirectOffer | null = null
+/**
+ * THE READER CLOSED THE LINE UNDER THE BADGE. Session-only and per offer: the
+ * 60-second race re-publishes the same answer and must not re-raise a line
+ * somebody dismissed, while a new address on a new network is news again.
+ * The sheet's own row is never hidden — it is behind a tap already.
+ */
+let lineHidden = false
 const listeners = new Set<(next: DirectOffer | null) => void>()
 
 export const directOffer = (): DirectOffer | null => offer
+
+export const directOfferLineHidden = (): boolean => lineHidden
+
+export const hideDirectOfferLine = (): void => {
+  if (lineHidden) return
+  lineHidden = true
+  for (const listener of listeners) listener(offer)
+}
 
 /**
  * Publish the answer, including "no". A race that stops qualifying must take
@@ -37,11 +52,12 @@ export const setDirectOffer = (next: DirectOffer | null): void => {
     offer?.origin === next?.origin &&
     offer?.kind === next?.kind &&
     offer?.family === next?.family &&
-    offer?.proxy === next?.proxy
+    offer?.reason === next?.reason
   ) {
     return
   }
   offer = next
+  lineHidden = false
   for (const listener of listeners) listener(offer)
 }
 
@@ -55,5 +71,6 @@ export const subscribeDirectOffer = (
 /** Test seam: the module is a singleton and a test needs a clean one. */
 export const resetDirectOffer = (): void => {
   offer = null
+  lineHidden = false
   listeners.clear()
 }

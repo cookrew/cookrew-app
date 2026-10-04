@@ -69,10 +69,9 @@
   --rose: #dc2626;
   --violet: #9b8acb;
   /* Violet is the persona accent (role coins, never a status colour). The HI
-     step is its raised sibling — the marketplace's own surfaces sit on it:
-     version pins on the rail, and the gated-chip lock badge. Promoted to a
-     real token because those two need to agree, and a hand-picked lighter
-     violet in each place is how palettes drift apart. */
+     step is its raised sibling — the marketplace's own surfaces sit on it,
+     such as the gated-chip lock badge. A real token so they agree, and a
+     hand-picked lighter violet in each place is how palettes drift apart. */
   --violet-hi: #c3b6e6;
   --note-bg: #fff3ad;
   --note-text: #3a3625;
@@ -174,8 +173,15 @@ body,
   background: var(--cream-hi);
   border-bottom: 2px solid var(--line);
   -webkit-app-region: drag;
+  /* THE BAR OUTRANKS THE CANVAS IT OVERHANGS, and two things depend on it:
+     the local-network ask hangs off the bottom edge of this bar, and the
+     connection sheet is a fixed scrim rendered inside it. Both are painted
+     outside the header's own box, so a header on the stage's own layer puts
+     both UNDER the canvas — which is what folding this selector into the
+     `.cr-stage, .cr-dock` block below did, silently, for the whole life of
+     this file. Bounded above by the sheets and the lock (60+), which must
+     cover the bar too. tests/header-layer.test.ts holds the comparison. */
   z-index: 50;
-  /* The local-network ask hangs off the bottom edge of this bar. */
   position: relative;
 }
 
@@ -638,18 +644,6 @@ a.cr-btn {
   height: 9px;
   vertical-align: -1.5px;
 }
-.cr-ws-caret .cr-icon {
-  width: 9px;
-  height: 9px;
-  vertical-align: -1px;
-}
-
-.cr-ws-check .cr-icon {
-  width: 11px;
-  height: 11px;
-  vertical-align: -2px;
-}
-
 .cr-ws-icon .cr-icon {
   width: 12px;
   height: 12px;
@@ -2528,7 +2522,9 @@ a.card-close {
   pointer-events: none;
 }
 
-.cr-header,
+/* One layer for the canvas and the bar below it; the dock wins it by document
+   order. THE HEADER IS DELIBERATELY NOT IN THIS LIST — it carries its own
+   higher layer, and being folded in here overrode that. See the rule above. */
 .cr-stage,
 .cr-dock {
   position: relative;
@@ -3340,30 +3336,6 @@ a.card-close {
   flex: 0 0 auto;
 }
 
-/* VERSION — which version of a preset you hold.
-   FILLED violet, and that is load-bearing: .cr-ckpt-pin on the rail is a solid
-   violet flag, so the tag on the chip and the pin on the rail are the SAME MARK
-   in two places. A buyer who sees V2 on a dock chip and V2 on a rail is looking
-   at one object and never has to be told so.
-
-   NOTE FOR THE RULING THAT IS STILL OPEN: gate-sheet-unified, e2e-demo and
-   export-ux-demo all draw this OUTLINED, and use filled-violet for the UPDATE
-   state instead. That inverts the rhyme — on the rail, filled violet already
-   means "the version you are on" (.cr-ckpt-pin.current); on an outlined-tag
-   chip it would mean "a version you do NOT have". Shipping the filled form
-   because it is the one the shipped rail agrees with; if the ruling goes the
-   other way this rule and .cr-ckpt-pin.current move together, not separately. */
-.cr-chip-ver {
-  font-family: var(--font-pixel);
-  font-size: 7px;
-  letter-spacing: 0.04em;
-  color: var(--cream-hi);
-  background: var(--violet);
-  border-radius: 2px;
-  padding: 1px 3px 0;
-  margin-left: 1px;
-  flex: 0 0 auto;
-}
 
 /* PRICE — a FACT about the preset, so a tag like the version tag, never a
    badge. Badges say "a state is true of this"; a price says "this is what the
@@ -3478,6 +3450,71 @@ a.card-close {
   animation: none;
 }
 
+/* Name over dials, in the space the name alone used to hold. It takes over
+   .vi-mini-name's flex-item role (flex + min-width:0), so the name keeps
+   wrapping INSIDE the row rather than widening it — see that rule's own note
+   on why min-width:0 is load-bearing there. */
+.vi-mini-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
+}
+
+/* THE NAME YIELDS, NOT THE DIALS — and the budget is why, measured rather than
+   guessed: the tile is 418 card-px tall, a name line is ~130 and a dial line
+   ~78. Name-at-four-lines plus two dial lines wants 462 and the tile clips the
+   overflow at the BOTTOM, which is exactly where the effort sits. So the name
+   takes two lines and a slightly smaller size here (242 + 157 + gap ≈ 400,
+   inside 418), the full name stays one hover away in its title, and the effort
+   is never the thing that falls off. Which agent it is survives truncation —
+   the avatar, the colour and the card's position all still say so. What it
+   runs on does not survive it at all. */
+.vi-mini-text .vi-mini-name {
+  flex: 0 1 auto;
+  min-height: 0;
+  font-size: calc(12px * var(--z, 1));
+  -webkit-line-clamp: 2;
+}
+
+/* NOT a chip. At 0.1 zoom a chip's border and radius resolve to sub-pixel and
+   read as grit, so the dials are a plain dim line under the name — the counter
+   scale keeps them legible, one notch smaller than the name so the tile still
+   says WHICH agent first and what it runs on second. */
+.vi-mini-dial {
+  font-family: var(--font-mono);
+  /* One notch under the name: the tile says WHICH agent first and what it runs
+     on second. Measured at 0.1 zoom the box is ~253 card-px wide, which is
+     about five glyphs at the name's 13px — hence the stack below rather than a
+     longer line. */
+  font-size: calc(8.5px * var(--z, 1));
+  line-height: 1.1;
+  color: var(--vi-dim);
+  /* The two parts on their own lines (DialTag stack). A single line needed
+     402px in that 253px box and clipped on EVERY tile, taking the effort with
+     it — the half of the tag you cannot reconstruct from the card's own
+     avatar. Stacked, a long model id clips alone and the effort always shows. */
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+.vi-mini-dial .dial-model,
+.vi-mini-dial .dial-effort {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The effort is the shorter word and the one that changes most; keeping it a
+   shade dimmer than the model stops the tile reading as two equal facts. */
+.vi-mini-dial .dial-effort {
+  opacity: 0.75;
+}
+
 .vi-mini-name {
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif;
   font-size: calc(13px * var(--z, 1));
@@ -3503,12 +3540,15 @@ a.card-close {
   max-height: 100%;
 }
 
-/* ---- workspace switcher (header) ---- */
+/* ---- workspace chip (header) ----
+ * ONE CHIP, ONE DOOR. The name opens the screen wall, and the wall is the
+ * whole workspace surface — switching, making, directories, removing, the
+ * history. The caret and its dropdown are gone, so the chip is one button
+ * wearing its own border again. */
 .cr-ws {
   position: relative;
   display: flex;
-  align-items: baseline;
-  gap: 10px;
+  align-items: stretch;
   min-width: 0;
 }
 .cr-ws-current {
@@ -3520,6 +3560,7 @@ a.card-close {
   border-radius: 3px;
   padding: 3px 8px;
   cursor: pointer;
+  min-width: 0;
 }
 .cr-ws-current:hover {
   background: var(--amber-soft);
@@ -3528,91 +3569,14 @@ a.card-close {
   font-size: 12px;
   line-height: 1;
 }
-.cr-ws-caret {
-  font-family: var(--font-pixel);
-  font-size: 8px;
-  color: var(--muted);
-}
 .cr-ws-name {
   max-width: 200px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.cr-ws-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  min-width: 280px;
-  background: var(--cream-hi);
-  border: 2px solid var(--line);
-  border-radius: 4px;
-  box-shadow: 4px 4px 0 rgba(45, 42, 32, 0.18);
-  padding: 6px;
-  z-index: 200;
-  -webkit-app-region: no-drag;
-}
-.cr-ws-menu-head {
-  font-family: var(--font-pixel);
-  font-size: 8px;
-  letter-spacing: 0.12em;
-  color: var(--muted);
-  padding: 4px 6px 6px;
-}
-.cr-ws-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 7px 8px;
-  background: transparent;
-  border: none;
-  border-radius: 3px;
-  cursor: pointer;
-  text-align: left;
-}
-.cr-ws-item:hover {
-  background: var(--cream-lo);
-}
-.cr-ws-item.active {
-  background: var(--amber-soft);
-}
-.cr-ws-item.add {
-  color: var(--amber-deep);
-}
-.cr-ws-item-text {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-.cr-ws-item-name {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--ink);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-/* Workspace path — surfaced here (on open) instead of crowding the bar. */
-.cr-ws-item-dir {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.cr-ws-check {
-  color: var(--hp);
-  font-size: 9px;
-}
-.cr-ws-sep {
-  height: 1.5px;
-  background: var(--line-soft);
-  margin: 6px 4px;
-}
+/* The new-workspace form — the create sheet on the screen wall
+   (WorkspaceCreateSheet.tsx). */
 .cr-ws-new {
   display: flex;
   flex-direction: column;
@@ -3680,14 +3644,6 @@ a.card-close {
   color: var(--cream-hi);
 }
 
-/* The header owns the workspace dropdown, which overflows downward past the
-   header into the stage's band. Header and stage both sit at z-index:1, and
-   the stage is later in the DOM, so it would cover the dropdown. Lift the
-   whole header stacking context above the stage. */
-.cr-header {
-  z-index: 60;
-}
-
 /* ---- remote (phone) mode tweaks ----
    Served by the mobile server: no macOS traffic lights, no drag regions,
    tighter chrome for small screens. */
@@ -3729,7 +3685,8 @@ body.cookrew-mobile .cr-header .cr-kicker {
 
 /* THE WORKSPACE CHIP IS A STUB ON THE PHONE. The bar has one line and the
    name was walking off its right edge; the icon says which workspace, the
-   name keeps a few letters, the caret goes. The menu still has the full names. */
+   name keeps a few letters — a few more than before, since the caret's
+   sliver is gone. The wall has the full names. */
 body.cookrew-mobile .cr-ws-current {
   padding: 3px 6px;
   gap: 5px;
@@ -3737,16 +3694,8 @@ body.cookrew-mobile .cr-ws-current {
 }
 
 body.cookrew-mobile .cr-ws-name {
-  max-width: 54px;
+  max-width: 72px;
   font-size: 9px;
-}
-
-body.cookrew-mobile .cr-ws-caret {
-  display: none;
-}
-
-body.cookrew-mobile .cr-ws-menu {
-  max-width: calc(100vw - 24px);
 }
 
 @media (max-width: 480px) {
@@ -4512,8 +4461,7 @@ body.cookrew-mobile .cookrew-minimap {
 
 /* The SEGMENT boundary tick is a tap target (it opens the earlier-sessions
    panel), so it reads as one: full opacity, a ring, and a pointer. The ring is
-   what separates "information" from "control" at 8px — same rule that gives
-   the version pins their hard edge. */
+   what separates "information" from "control" at 8px. */
 .cr-ckpt-tick.lineage {
   cursor: pointer;
   opacity: 1;
@@ -4675,121 +4623,6 @@ body.cookrew-mobile .cookrew-minimap {
   font-size: 10.5px;
 }
 
-/* --- VERSION PINS: the rail's THIRD marker class (marketplace §10, R8/R18) ---
-   Everything else on this bar is AMBER and UNLABELLED and either points
-   (diamond) or cuts (bar). A pin is the opposite on four axes at once, which is
-   what makes it separable in peripheral vision rather than on inspection:
-     hue     violet, not amber       — published identity, not session mechanics
-     shape   flag, not diamond/bar   — the only silhouette the rail was not using
-     label   named (V2), not anonymous
-     fill    opaque hard edge, not glow — permanent, not transient
-   Violet is not a free pick either: it is already this product's persona accent
-   (.role-avatar, .cr-chip.role), so a pin inherits a meaning the UI has been
-   teaching since the first role chip.
-
-   GEOMETRY. The rail is 30px and the line sits 13–16px in from its right edge.
-   right:11 + width:19 puts the flag's LEFT edge flush with the rail's left edge
-   (11 + 19 = 30), and the tip lands 11px from the right edge — so it crosses
-   the full 3px of the line and stops 2px PAST its far side. (The first version
-   of this comment said "2px into the line"; Tinker measured it and the tip is
-   past it, not inside it. The number was right and the sentence was not.)
-   Nothing overhangs the transcript.
-
-   ANCHORING: the component sets `top` from railAnchorTop(frac) and nothing
-   else, so F6 is inherited rather than re-derived. See CheckpointTimeline. */
-.cr-ckpt-pin {
-  position: absolute;
-  right: 11px;
-  width: 19px;
-  height: 13px;
-  transform: translateY(-50%);
-  display: flex;
-  align-items: center;
-  padding-left: 2px;
-  font-family: var(--font-pixel);
-  font-size: 7px;
-  letter-spacing: 0.02em;
-  line-height: 1;
-  color: var(--cream-hi);
-  background: var(--violet);
-  clip-path: polygon(0 0, 62% 0, 100% 50%, 62% 100%, 0 100%);
-  /* NO z-index, deliberately. `.cr-ckpt-here` is z-index AUTO, so a positive
-     value here painted the pin ON TOP of the scrub thumb — the exact inversion
-     the old comment claimed to prevent. It said "under the thumb (5)", but the
-     5 was from the design mock; the product's thumb never had one. Painting
-     order for auto/0 positioned siblings is TREE order, and the pins render
-     before the count and the thumb, so the thumb stays on top by construction.
-     A test pins that DOM order, because it is now load-bearing. */
-  pointer-events: auto;
-  cursor: pointer;
-}
-
-/* v100+ carries no label (R8). It keeps the full silhouette — an unlabelled
-   flag only LOOKS smaller because the eye reads text as mass. */
-/* IMPORTED PROVENANCE — the whole "whose is this" surface on a version pin.
-   A caller has to tell "my V2" from "drej's V2, authorized" in peripheral
-   vision, on a 19x13 flag, without a second panel to explain it.
-
-   THE CLIP IS THE CONSTRAINT, and it is why this is a corner dot and not a
-   ring, a border or a second flag: .cr-ckpt-pin carries
-   `clip-path: polygon(0 0, 62% 0, 100% 50%, 62% 100%, 0 100%)`, and a
-   clip-path clips the element's PSEUDO-ELEMENTS too. Anything drawn outside
-   that polygon — the obvious outline, a badge hanging off the tip — is sliced
-   by the flag's own silhouette. (0,0) is a polygon vertex, so the top-left
-   corner is the one place a mark is guaranteed whole.
-
-   F6 IS PRESERVED BY CONSTRUCTION, not by retest: `position: absolute` takes
-   the dot out of flow, so the pin's box is byte-identical with and without
-   `.imported`. The pin centres on railAnchorTop via translateY(-50%), and a
-   box that does not change cannot move a centre. The eval still runs, because
-   that is the gate's whole point.
-
-   Cream, not a new hue: it is the label's own colour, so the signal is the
-   PRESENCE of a mark rather than a colour nobody has been taught. At this size
-   peripheral vision resolves presence long before it resolves hue. */
-.cr-ckpt-pin.imported::after {
-  content: '';
-  position: absolute;
-  top: 2px;
-  left: 1.5px;
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background: var(--cream-hi);
-  /* The current pin inverts to a dark label, so the dot inverts with it. */
-  box-shadow: 0 0 0 0.5px rgba(20, 17, 10, 0.35);
-}
-
-.cr-ckpt-pin.current.imported::after {
-  background: var(--phos-bg);
-  box-shadow: none;
-}
-
-/* The label shifts clear of the dot rather than sitting under it. Only when
-   imported — a local pin keeps every pixel of its 9.8px label area. */
-.cr-ckpt-pin.imported {
-  padding-left: 6px;
-}
-
-.cr-ckpt-pin.bare {
-  padding-left: 0;
-}
-
-/* The version the buyer is on, in the here-marker's emphasis grammar but the
-   pin's family colour. */
-.cr-ckpt-pin.current {
-  background: var(--violet-hi);
-  color: var(--phos-bg);
-  box-shadow: 0 0 6px rgba(155, 138, 203, 0.75);
-}
-
-/* COINCIDENCE RULE: while scrubbing, the thumb passes over pins. They dim and
-   drop the glow so the handle stays the brightest thing on the line. */
-.cr-ckpt-rail.dragging .cr-ckpt-pin {
-  opacity: 0.55;
-  box-shadow: none;
-}
-
 /* --- cream chrome (light contexts) --- */
 
 /* F5 made rows OPAQUE, which means they now carry a surface colour — and a
@@ -4811,14 +4644,6 @@ body.cookrew-mobile .cookrew-minimap {
 .cr-ckpt-rail.on-cream .cr-ckpt-count .n {
   color: var(--amber-deep);
   text-shadow: none;
-}
-
-/* `:not(.current)` is load-bearing: this selector is (0,3,0) and beat
-   `.cr-ckpt-pin.current` (0,2,0), repainting the current pin's dark label
-   cream-on-violet-hi at 1.86:1. Light chrome may restate the RESTING label
-   only; the current pin keeps the contrast its own rule gives it. */
-.cr-ckpt-rail.on-cream .cr-ckpt-pin:not(.current) {
-  color: var(--cream-hi);
 }
 
 .cr-ckpt-rail.on-cream .cr-ckpt-here {
@@ -4968,9 +4793,8 @@ body.cookrew-mobile .cookrew-minimap {
   border-top: calc(5px * var(--z, 1)) solid currentColor;
 }
 
-/* Cream chrome (workspace directory rows in the switcher): swap the dark
-   pill for ink-on-cream, --z is 1 here so sizes are static. */
-.cr-ws-item .cr-git-branch,
+/* Cream chrome (the directory manager's rows): swap the dark pill for
+   ink-on-cream, --z is 1 here so sizes are static. */
 .cr-git.on-cream .cr-git-branch {
   color: var(--ink-soft);
   background: var(--cream-md);
@@ -4979,26 +4803,22 @@ body.cookrew-mobile .cookrew-minimap {
   padding: 1px 5px;
 }
 
-.cr-ws-item .cr-git-branch .cr-icon,
 .cr-git.on-cream .cr-git-branch .cr-icon {
   width: 9px;
   height: 9px;
 }
 
-.cr-ws-item .cr-git-dirty,
 .cr-git.on-cream .cr-git-dirty {
   width: 6px;
   height: 6px;
   background: var(--amber-deep);
 }
 
-.cr-ws-item .cr-git-track,
 .cr-git.on-cream .cr-git-track {
   color: var(--muted);
   font-size: 8.5px;
 }
 
-.cr-ws-item .cr-git-track .cr-icon,
 .cr-git.on-cream .cr-git-track .cr-icon {
   width: 8px;
   height: 8px;
@@ -6030,6 +5850,22 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   color: var(--muted);
 }
 
+/* The refusal line: the ask's slot, with the sentence on one row and its two
+   buttons free to drop to the next on a narrow phone. Amber like the sheet's
+   row, because it is a suggestion rather than a fact. */
+.cr-path-direct-line {
+  flex-wrap: wrap;
+  background: var(--amber-soft, var(--cream-hi));
+}
+
+.cr-path-direct-line .cr-path-ask-text {
+  flex: 1 1 180px;
+}
+
+.cr-path-direct-hide {
+  color: var(--muted);
+}
+
 /* The note on the page the OPEN ON WI-FI button landed on. Same hanging line
    as the ask — it is the same slot under the same badge — and it is the only
    one of the two that ever appears on a directly-served companion. */
@@ -6604,3 +6440,152 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
     opacity: 0.35;
   }
 }
+
+/* The harness's tabs: a card's far partners, named on the border they face.
+   Real elements rather than SVG, so the fold has a true click target — see
+   CableHarness.tsx. Positioned in flow coordinates inside the viewport
+   portal, so they pan and zoom with the canvas like the paste ghosts do. */
+.cr-harness-tab {
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  padding: 0 9px;
+  border: 1.5px solid var(--ink);
+  border-radius: 6px;
+  background: var(--cream-hi);
+  color: var(--ink);
+  font-family: ui-monospace, monospace;
+  font-size: 17px;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cr-harness-tab.fold {
+  background: var(--cream-lo, #efe9da);
+  color: var(--ink-soft, #6b6355);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.cr-harness-tab.fold:hover {
+  border-color: var(--amber-deep);
+  color: var(--amber-deep);
+}
+
+.cr-harness-tab.hot {
+  border-color: var(--amber-deep);
+  border-width: 2.5px;
+}
+
+/* ---- signals on the cables (cable-signal.ts, CableHarness.tsx) ----
+   One agent asked another, or answered: the trunks that carry the cable
+   take the signal's colour, and a pulse travels sender → receiver. The
+   pulse is an HTML element on an `offset-path` in flow coordinates, moved
+   by ONE keyframe on `offset-distance`, which Chromium runs on the
+   compositor — nothing here is per-frame work for React or the main thread.
+   Nothing is in the tree when nothing is in flight. */
+:root {
+  --sig-ask: #d97706;
+  --sig-answer: #1d4ed8;
+}
+.cr-harness .cr-harness-trunk.sig,
+.cr-harness .cr-harness-stub.sig {
+  stroke-opacity: 1;
+  transition: stroke 160ms ease, stroke-opacity 160ms ease;
+}
+.cr-harness .sig-ask { stroke: var(--sig-ask) }
+.cr-harness .sig-answer { stroke: var(--sig-answer) }
+
+.cr-sig-dot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  pointer-events: none;
+  offset-rotate: 0deg;
+  animation: cr-sig-travel var(--cr-sig-ms, 2400ms) linear forwards;
+}
+.cr-sig-dot.ask {
+  background: var(--sig-ask);
+  box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.22), 0 0 14px 4px rgba(217, 119, 6, 0.55);
+}
+.cr-sig-dot.answer {
+  background: var(--sig-answer);
+  box-shadow: 0 0 0 3px rgba(29, 78, 216, 0.2), 0 0 14px 4px rgba(29, 78, 216, 0.5);
+}
+@keyframes cr-sig-travel {
+  0% { offset-distance: 0%; opacity: 0 }
+  6% { opacity: 1 }
+  82% { offset-distance: 100%; opacity: 1 }
+  100% { offset-distance: 100%; opacity: 0 }
+}
+
+/* The tab as the lamp: the cable it names is off the stage, so the traffic
+   on it shows here. A composited opacity pulse, nothing else moves. */
+.cr-harness-tab.sig {
+  border-color: var(--sig-ask);
+  border-width: 2.5px;
+  background: var(--amber-soft);
+  animation: cr-sig-lamp 700ms ease-in-out infinite alternate;
+}
+.cr-harness-tab.sig-answer {
+  border-color: var(--sig-answer);
+}
+@keyframes cr-sig-lamp {
+  from { opacity: 1 }
+  to { opacity: 0.45 }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The fact stays on screen for the signal's lifetime; nothing travels. */
+  .cr-sig-dot { animation: none; display: none }
+  .cr-harness-tab.sig { animation: none }
+}
+
+/* ---- lanes (LanePane.tsx, TerminalNode LaneChip) ----
+   A worktree per agent and landing as a product action. The chip says the
+   git situation the card is in without asking git; the pane is the menu page. */
+.vi-chip.cr-lane-chip { background: #2a2620; color: #cfc7b4; border-color: #4a4436 }
+.vi-chip.cr-lane-chip.warn { background: #4a3a10; color: var(--amber); border-color: var(--amber-deep) }
+.vi-chip.cr-lane-chip.bad { background: #4a1a12; color: #ffb0a0; border-color: #b04a36 }
+.cr-lane-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink);
+}
+.cr-lane-branch { font-weight: 700 }
+.cr-lane-arrow { color: var(--muted) }
+.cr-lane-fact {
+  padding: 1px 6px;
+  border: 1.5px solid var(--line-soft);
+  border-radius: 3px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.cr-lane-fact.warn { border-color: var(--amber-deep); color: var(--ink) }
+.cr-lane-fact.bad { border-color: #b04a36; color: #8a2a1a }
+.cr-lane-actions { display: flex; flex-wrap: wrap; gap: 6px }
+.cr-lane-auto { font-family: var(--font-mono); font-size: 11px; display: flex; align-items: center; gap: 6px }
+.cr-lane-answer {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  padding: 6px 8px;
+  border-radius: 3px;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream);
+}
+.cr-lane-answer.ok { border-color: #6bbe58 }
+.cr-lane-answer.bad { border-color: #b04a36 }

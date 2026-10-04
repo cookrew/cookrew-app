@@ -26,6 +26,11 @@ const snapshot: LoopHealthSnapshot = {
   residency: { store: 3, registry: 3 }
 }
 
+/**
+ * The answer carries the compressor's own ledger too (`compression`: hits,
+ * misses, entries, bytes) — the number behind the API tails. These assert
+ * the loop snapshot by shape, so the ledger riding beside it is not a drift.
+ */
 describe('GET /api/health', () => {
   const cleanup: Array<() => void> = []
   afterEach(() => {
@@ -63,7 +68,7 @@ describe('GET /api/health', () => {
     expect((await get(port, WALL)).status).toBe(200)
     const paired = await get(port, PAIRING)
     expect(paired.status).toBe(200)
-    expect(paired.body).toEqual(snapshot)
+    expect(paired.body).toMatchObject(snapshot)
     expect(paired.text).not.toContain(PAIRING)
     expect(paired.text).not.toContain(WALL)
   })
@@ -72,6 +77,6 @@ describe('GET /api/health', () => {
     const port = await startApi({})
     const answer = await get(port, PAIRING)
     expect(answer.status).toBe(503)
-    expect(answer.body).toEqual({ error: 'health not wired' })
+    expect(answer.body).toMatchObject({ error: 'health not wired' })
   })
 })

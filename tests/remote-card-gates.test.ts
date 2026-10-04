@@ -180,13 +180,15 @@ describe('P10 refusal-honesty (auto half)', () => {
 })
 
 describe('P11 no-dead-affordance (auto half)', () => {
-  it('the menu for a Remote node offers no FORK, SAVE ROLE or WORKDIR; a local node keeps all three', () => {
+  it('the menu for a Remote node offers no FORK, SAVE ROLE, WORKDIR or LANE; a local node keeps all four', () => {
     const caps = { listTurns: true, roleFromCheckpoint: true }
     expect(cardAffordances(remoteNode(), caps)).toEqual({
       rename: true,
       role: false,
       fork: false,
-      workdir: false
+      workdir: false,
+      // A lane is a worktree of THIS Mac's repo; a served card's cwd is at the author's app.
+      lane: false
     })
     const local: TerminalNodeData = {
       ...remoteNode(),
@@ -194,7 +196,7 @@ describe('P11 no-dead-affordance (auto half)', () => {
       command: 'claude',
       servedSession: null
     }
-    expect(cardAffordances(local, caps)).toEqual({ rename: true, role: true, fork: true, workdir: true })
+    expect(cardAffordances(local, caps)).toEqual({ rename: true, role: true, fork: true, workdir: true, lane: true })
     expect(cardAffordances(null, caps).rename).toBe(false)
   })
   it.todo('P11-live: every interactive element on the remote overlay/card yields an effect or a sentence within 3s — scratchpad/remote-card-gates.mjs')

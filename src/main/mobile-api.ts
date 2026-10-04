@@ -6,9 +6,12 @@ import type { WorkspaceStore } from "./store";
 import type { PtyManager } from "./pty";
 import type { TurnTracker } from "./turn-tracker";
 import type { DispatchService } from "./dispatch";
+import type { CableSignalBus } from "./cable-signal";
+import type { CableSignal } from "../shared/cable-signal";
 import type { EventLog, CookrewEvent, EventQuery } from "./event-log";
 import { pageTurns, type TurnRecord } from "../shared/turn";
 import type { VersionPinRecord } from "../shared/version-pin";
+import type { AgentTuning, AgentTuningState } from "../shared/agent-tuning";
 import { TRANSLATE_MAX_CHARS } from "../shared/translate";
 import { translateBody } from "./sous-translate";
 import { remoteSousHost } from "./sous-remote-config";
@@ -25,6 +28,8 @@ import type {
   AgentRole,
   CanvasNode,
   GitInfo,
+  LaneInfo,
+  LandResult,
   TeamForkSpec,
   TeamClipStatus,
   TeamCopyResult,
@@ -36,7 +41,9 @@ import type {
   RecoverResult,
   RestoreResult,
 } from "../shared/model";
+import { lightenCanvas } from "../shared/wire-canvas";
 import { readBytes, readJson, respondJson, startSse, pairingAuthorized, presentedToken } from "./mobile-http";
+import { dynamicCompressionStats } from "./http-compress";
 import type { StreamService } from "./stream-service";
 import { handleStreamRoutes } from "./stream-routes";
 import { handleStreamAdapters } from "./stream-adapters";
@@ -88,6 +95,12 @@ export interface MobileOps {
   /** Async: the respawn waits for the old session to actually be gone. */
   setTerminalCwd: (nodeId: string, dir: string) => Promise<CanvasNode>;
   gitInfo: (dir: string) => Promise<GitInfo>;
+  /** Lanes (lanes.ts): worktree per agent, landing as a product action. */
+  laneList: (dir: string) => Promise<LaneInfo[]>;
+  laneOpen: (nodeId: string, name: string) => Promise<CanvasNode>;
+  laneLand: (nodeId: string, opts: { close?: boolean; gate?: string[] | null }) => Promise<LandResult>;
+  laneClose: (nodeId: string, force: boolean) => Promise<CanvasNode>;
+  laneAuto: (nodeId: string, on: boolean) => CanvasNode;
   /** Team fork/save + roles (spec note team-fork-roles-v1). */
   teamFork: (spec: TeamForkSpec) => Promise<WorkspaceMeta>;
   teamSave: (name?: string, nodeIds?: string[]) => TeamMeta;
@@ -163,6 +176,32 @@ export interface MobileApiDeps {
    */
   sous?: SousDoor;
   uiBus?: EventEmitter;
+  /**
+   * THE DIALS (shared/agent-tuning) — model and effort, read and turned.
+   *
+   * The phone gets BOTH halves, not just the readout. This surface is the
+   * owner's own canvas reached from their own hand; the case where a card is
+   * a line into somebody else's app is a different thing entirely and is
+   * already refused by the rail itself (TerminalNodeData.servedSession).
+   * Withholding the control here would mean the companion could show you an
+   * agent burning max effort and not let you turn it down.
+   *
+   * Optional so a test server that wires no dials still serves everything
+   * else; `tuningBus` carries the same change-gated announcement the desktop
+   * renderer gets, so a phone never polls for it.
+   */
+  tuning?: {
+    state: (terminalId: string) => AgentTuningState;
+    fleet: () => Record<string, AgentTuning>;
+    turn: (terminalId: string, knob: string, value: string) => { ok: boolean; reason?: string };
+  };
+  tuningBus?: EventEmitter;
+  /**
+   * Signals on the cables ("A asked B", "B answered A" — cable-signal.ts),
+   * one small frame each, so the phone's harness lights the same way the
+   * desktop's does. Optional: a test server without agents has none.
+   */
+  signalBus?: CableSignalBus;
   /** Recover an inactive teammate as it was (agent-recover feature). */
   recoverAgent: (id: string) => RecoverResult;
   /** Endpoint restore: rewind an agent to a checkpoint (+ undo). The optional
@@ -198,6 +237,14 @@ export interface MobileApiDeps {
    * a missing wire-up is loud rather than a fabricated all-clear.
    */
   health?: () => LoopHealthSnapshot;
+  /**
+   * The Mac's pictures of its canvases (workspace-shots.ts), for the phone's
+   * screen wall. A picture of every workspace is a picture of every task the
+   * owner has going, so it answers behind the /api GET gate like the board.
+   * Absent = 503, so a missing wire-up is loud rather than a wall that quietly
+   * says NO SNAPSHOT YET for everything.
+   */
+  workspaceShots?: () => Record<string, { src: string; at: number }>;
   /**
    * Importing a served team FROM THE PHONE — the desktop's own operations,
    * reached over this API. Absent = the six /api/serve routes answer 503
@@ -492,7 +539,9 @@ export async function handleMobileApi(
       respondJson(response, 503, { error: "health not wired" });
       return true;
     }
-    respondJson(response, 200, deps.health());
+    // The compressor's own ledger rides along: how often a poll was answered
+    // from the cache or with a 304 is the number behind the API tails.
+    respondJson(response, 200, { ...deps.health(), compression: dynamicCompressionStats() });
     return true;
   }
   if (method === "GET" && p === "/api/presets") {
@@ -501,6 +550,31 @@ export async function handleMobileApi(
   }
   if (method === "GET" && p === "/api/activity") {
     respondJson(response, 200, turns.list());
+    return true;
+  }
+  // THE DIALS. One fleet-wide read for every card's tag, one per-card read for
+  // the zoomed rail, one write to turn a knob. The blanket gates above already
+  // cover these: the GETs need `canRead`, the POST needs pairing.
+  if (method === "GET" && p === "/api/tuning" && deps.tuning) {
+    respondJson(response, 200, deps.tuning.fleet());
+    return true;
+  }
+  const tuningMatch = p.match(/^\/api\/terminal\/([^/]+)\/tuning$/);
+  if (tuningMatch && method === "GET" && deps.tuning) {
+    respondJson(response, 200, deps.tuning.state(tuningMatch[1]));
+    return true;
+  }
+  const tuneMatch = p.match(/^\/api\/terminal\/([^/]+)\/tune$/);
+  if (tuneMatch && method === "POST" && deps.tuning) {
+    const body = await readJson<{ knob?: string; value?: string }>(request);
+    if (typeof body.knob !== "string" || typeof body.value !== "string") {
+      respondJson(response, 400, { ok: false, reason: "knob and value are required" });
+      return true;
+    }
+    // Every validation that matters lives in applyTuning — the knob name and
+    // the value both end up inside a line typed into a live pane, and a second
+    // copy of those checks here is a second thing to keep in step.
+    respondJson(response, 200, deps.tuning.turn(tuneMatch[1], body.knob, body.value));
     return true;
   }
   // The phone's BLACK BOX (phone-beacon.ts): self-reported page vitals,
@@ -550,6 +624,16 @@ export async function handleMobileApi(
 
   if (method === "GET" && p === "/api/workspaces") {
     respondJson(response, 200, ops.listWorkspaces());
+    return true;
+  }
+  // The screen wall's pictures. Read when the wall opens, never streamed:
+  // each is a JPEG of a whole canvas, and a phone looks at them for seconds.
+  if (method === "GET" && p === "/api/workspaces/shots") {
+    if (!deps.workspaceShots) {
+      respondJson(response, 503, { error: "workspace shots not wired" });
+      return true;
+    }
+    respondJson(response, 200, deps.workspaceShots());
     return true;
   }
   if (method === "POST" && p === "/api/workspaces") {
@@ -1011,6 +1095,31 @@ export async function handleMobileApi(
     }
     return true;
   }
+  // Lanes: the same four operations the desktop menu calls, so LAND from the
+  // phone is the same code path. Errors are the operation's own words.
+  if (method === "GET" && p === "/api/lanes") {
+    respondJson(response, 200, await ops.laneList(url.searchParams.get("dir") ?? ""));
+    return true;
+  }
+  const laneMatch = p.match(/^\/api\/lanes\/(open|land|close|auto)$/);
+  if (laneMatch && method === "POST") {
+    const body = await readJson<{ nodeId?: string; name?: string; close?: boolean; gate?: string[] | null; force?: boolean; on?: boolean }>(request);
+    const nodeId = body.nodeId ?? "";
+    try {
+      const answer =
+        laneMatch[1] === "open"
+          ? await ops.laneOpen(nodeId, body.name ?? "")
+          : laneMatch[1] === "land"
+            ? await ops.laneLand(nodeId, { close: body.close, gate: body.gate })
+            : laneMatch[1] === "close"
+              ? await ops.laneClose(nodeId, body.force ?? false)
+              : ops.laneAuto(nodeId, body.on ?? false);
+      respondJson(response, 200, answer);
+    } catch (error) {
+      respondJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
+    }
+    return true;
+  }
   // Translate a checkpoint body with Sous. The phone posts the text it is
   // already showing — same contract as the desktop's IPC handler, so a
   // translation on the phone is the same code path, not a second one.
@@ -1236,6 +1345,20 @@ export async function handleMobileApi(
     // stream filters them or it leaks other canvases' agents into this one.
     const inScopedCanvas = (terminalId: string): boolean =>
       scope === null || scopedState().nodes.some((node) => node.id === terminalId);
+    // A card's dials changed. Already change-gated by the announcer, so this
+    // is one small frame per actual change rather than one per tracker tick.
+    const onTuning = (row: { terminalId: string; tuning: unknown }): void => {
+      if (inScopedCanvas(row.terminalId)) send("tuning", row);
+    };
+    deps.tuningBus?.on("tuning", onTuning);
+    request.on("close", () => deps.tuningBus?.removeListener("tuning", onTuning));
+    // A cable lit on this canvas. Either end on it is enough: the other end
+    // may be a tab naming an agent elsewhere, and the tab is the lamp.
+    const onSignal = (signal: CableSignal): void => {
+      if (inScopedCanvas(signal.from) || inScopedCanvas(signal.to)) send("signal", signal);
+    };
+    const offSignal = deps.signalBus?.on(onSignal) ?? null;
+    request.on("close", () => offSignal?.());
     for (const activity of turns.list()) {
       if (inScopedCanvas((activity as { terminalId: string }).terminalId)) {
         send("activity", activity);
@@ -1246,7 +1369,37 @@ export async function handleMobileApi(
     // per-workspace signal instead, so a desktop switching workspaces no
     // longer re-points a phone that arrived by slug, and a background
     // workspace's own edits still reach it (marketplace §11).
-    const onChange = (state: WorkspaceState): void => send("workspace", state);
+    /**
+     * A SWITCH IS THE ONE CHANGE THAT REPLACES THE WHOLE CANVAS, and over the
+     * relay it is the one the reader waits on: measured at 280 KB gzipped,
+     * 82% of it note bodies that nothing draws until a note is zoomed to a
+     * readable size. So a switch sends the canvas LIGHT first — what the
+     * canvas is drawn from, about five times smaller — and WHOLE a beat
+     * later. The client reconciles repeated workspace frames already, so the
+     * second frame is a no-op but for the bodies it fills in.
+     *
+     * Every other change sends one frame exactly as before. Two-framing a
+     * card drag would double the traffic of moving a card.
+     */
+    let switched = false;
+    const onSwitch = (): void => void (switched = true);
+    const onChange = (state: WorkspaceState): void => {
+      const wasSwitch = switched;
+      switched = false;
+      const light = wasSwitch ? lightenCanvas(state) : null;
+      if (light === null) {
+        send("workspace", state);
+        return;
+      }
+      send("workspace", light);
+      // Next tick, not this one: the point is that the light frame reaches
+      // the wire on its own. A subscriber that left in between is checked
+      // for, because writing into a destroyed gzip stream throws.
+      setImmediate(() => {
+        if (response.writableEnded || response.destroyed) return;
+        send("workspace", state);
+      });
+    };
     const onScopedChange = (payload: {
       workspaceId: string;
       state: WorkspaceState;
@@ -1292,8 +1445,10 @@ export async function handleMobileApi(
         if (fresh !== sentProbe) onBoardSignal();
       }, () => undefined);
     }
-    if (scope === null) store.on("change", onChange);
-    else store.on("workspace-change", onScopedChange);
+    if (scope === null) {
+      store.on("switch", onSwitch);
+      store.on("change", onChange);
+    } else store.on("workspace-change", onScopedChange);
     store.on("workspaces", onWorkspaces);
     turns.on("activity", onActivity);
     store.on("op", onOp);
@@ -1305,8 +1460,10 @@ export async function handleMobileApi(
     request.on("close", () => {
       // Symmetric with the attach above — an unremoved scoped listener is a
       // leak per disconnected phone, and phones disconnect constantly.
-      if (scope === null) store.removeListener("change", onChange);
-      else store.removeListener("workspace-change", onScopedChange);
+      if (scope === null) {
+        store.removeListener("switch", onSwitch);
+        store.removeListener("change", onChange);
+      } else store.removeListener("workspace-change", onScopedChange);
       store.removeListener("workspaces", onWorkspaces);
       turns.removeListener("activity", onActivity);
       store.removeListener("op", onOp);

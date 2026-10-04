@@ -142,7 +142,8 @@ describe('what a team’s page says', () => {
   it('never lists the roster — one door is the whole interface', () => {
     const page = team(door({ agents: 9 }))
     expect(page.body).toContain('9 agents')
-    expect(page.body).toContain('never listed')
+    // the page never lists them: no roster markup, only the door's name and a count
+    expect(page.body).not.toMatch(/class="roster|<ul class="agents/)
   })
 
   it('a free door still says an account is needed', () => {
@@ -227,7 +228,45 @@ describe('the front page', () => {
     const page = home([door()])
     expect(page.body).toContain('Run a team of AI coding agents on one canvas')
     expect(page.body).toContain('COOKREW Alpha')
-    expect(page.body).toContain('Teams you can open right now')
+    expect(page.body).toContain('Open someone’s canvas — nothing to install')
+  })
+
+  // WHAT A VISITOR CAME FOR IS IN THE FIRST SCREEN. Two things: a canvas and
+  // the marketplace. The hero's buttons are the first, the dock under it is
+  // the second, and neither is a scroll — so both are asserted to land before
+  // the page's first section starts.
+  it('puts a canvas and the marketplace in the first screen, before any section', () => {
+    const body = home([door()]).body
+    const at = (marker: string): number => {
+      const i = body.indexOf(marker)
+      expect(i, marker).toBeGreaterThan(-1)
+      return i
+    }
+    const firstSection = at('<section id="market">')
+    expect(at('id="download"')).toBeLessThan(firstSection)
+    expect(at('<nav class="dock')).toBeLessThan(firstSection)
+    // the dock's three cells: what the canvas is, the reader's own machines,
+    // and the market with a count rather than an adjective.
+    const dock = body.slice(at('<nav class="dock'), body.indexOf('</nav>', at('<nav class="dock')))
+    expect(dock).toContain('href="/features/ai-agents-on-one-canvas"')
+    expect(dock).toContain('href="/me#desktops"')
+    expect(dock).toContain('href="/market"')
+    expect(dock).toMatch(/1 listed · \d+ taking calls/)
+  })
+
+  // A PAID INSTANCE IS THE ONE THING HERE SOMEBODY DECIDES ABOUT IN A SECOND,
+  // so it gets its own heading above the free ones, with the price on the card.
+  it('gives the instances you can rent their own heading, ahead of the free ones', () => {
+    const body = home([door()]).body
+    expect(body).toContain('Instances you can rent')
+    expect(body).toContain('id="rent"')
+    expect(body.indexOf('id="rent"')).toBeLessThan(body.indexOf('<section id="start">'))
+    // The price buys a SEAT (ruled copy G1: "charges {price} a seat"), not a
+    // session — the old chip said the thing the money rung no longer does.
+    expect(body).toContain('USD · a seat')
+    expect(body).not.toContain('per session')
+    // and nothing pretends there is a rent shelf when every team is free
+    expect(home([{ ...door(), access: 'account' as const, priceUsd: undefined }]).body).not.toContain('Instances you can rent')
   })
 
   it('says so plainly when nobody is serving', () => {
@@ -246,7 +285,10 @@ describe('the front page', () => {
 
   it('shows the recorded cases, from the repository, with what was actually done', () => {
     const page = home([])
-    expect(page.body).toContain('raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/qa-canvas.jpg')
+    // the hero is the promo now — the shipped App on the Dev board, ten seconds, from the repository like every frame
+    expect(page.body).toContain('raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/promo.mp4')
+    expect(page.body).toContain('<video autoplay muted loop playsinline')
+    expect(page.headers['content-security-policy']).toContain('media-src https://raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/')
     expect(page.body).toContain('● REC')
     expect(page.headers['content-security-policy']).toContain("img-src 'self' https://raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/")
     expect(page.headers['content-security-policy']).not.toContain('googleapis')
@@ -265,11 +307,10 @@ describe('the front page', () => {
     expect(page.body).toContain('1 serving now')
     expect(page.body).toContain('Ship Crew')
     expect(page.body).toContain('href="/install/sha256:' + 'a'.repeat(64) + '"')
-    expect(page.body).toContain('width="1400" height="875"')
-    expect(page.body).toContain('qa-canvas-800.jpg 800w')
-    expect(page.body).toContain('rel="preload" as="image" href="https://raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/qa-canvas-800.jpg"')
+    expect(page.body).toContain('width="1400" height="874"')
+    expect(page.body).toContain('rel="preload" as="image" href="https://raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/promo-poster.jpg"')
     expect(page.headers['content-security-policy']).toContain("manifest-src 'self'")
-    expect(page.body).toContain('fetchpriority="high"')
+    expect(page.body).toContain('poster="https://raw.githubusercontent.com/cookrew/cookrew-app/dev/registry/assets/site/promo-poster.jpg"')
   })
 
   /**
@@ -277,18 +318,20 @@ describe('the front page', () => {
    * GET STARTED, then the FEATURES, then the market. The header's three
    * buttons are anchors into it.
    */
-  it('is the three pages in one, in the order a newcomer reads', () => {
+  it('is the three pages in one, in the order of what a visitor came for', () => {
     const body = home([door()]).body
     const at = (marker: string): number => {
       const i = body.indexOf(marker)
       expect(i, marker).toBeGreaterThan(-1)
       return i
     }
-    expect(at('id="download"')).toBeLessThan(at('<section id="start">'))
+    // The market leads, because opening somebody's canvas needs no install;
+    // the two steps and the features follow for the reader who keeps going.
+    expect(at('id="download"')).toBeLessThan(at('<section id="market">'))
+    expect(at('<section id="market">')).toBeLessThan(at('<section id="start">'))
     expect(at('<section id="start">')).toBeLessThan(at('<section id="features">'))
-    expect(at('<section id="features">')).toBeLessThan(at('<section id="market">'))
     // The download links sit under the headline, with the version beside them.
-    expect(body.indexOf('https://x/dmg')).toBeLessThan(body.indexOf('<section id="start">'))
+    expect(body.indexOf('https://x/dmg')).toBeLessThan(body.indexOf('<section id="market">'))
     // GET STARTED: the two steps and the commands the orch runs — as text,
     // because the front page stays a document with no script (see below).
     expect(body).toContain('Place an agent, and let it orchestrate your workflow')
@@ -299,15 +342,19 @@ describe('the front page', () => {
     // The sections are the page's own catalog, on the right rail; the header
     // keeps HOME, the market and the account, and nothing that used to be a page.
     const rail = body.slice(body.indexOf('<aside class="toc"'), body.indexOf('</aside>'))
-    for (const href of ['#download', '#start', '#features', '#market']) expect(rail).toContain(`href="${href}"`)
+    for (const href of ['#start', '#features', '#market']) expect(rail).toContain(`href="${href}"`)
+    // the rail is sticky, so the two destinations ride down the page with it
+    expect(rail).toContain('href="https://x/dmg"')
+    expect(rail).toContain('href="/market"')
     expect(body.indexOf('<div class="home-body">')).toBeLessThan(body.indexOf('<aside class="toc"'))
     const header = body.slice(body.indexOf('<nav class="top">'), body.indexOf('</nav>'))
     expect(header).toContain('href="/"')
     expect(header).toContain('href="/market"')
     expect(header).toContain('Sign in')
+    // the app is one click from every page, and the header is sticky
+    expect(header).toContain('href="/#download"')
     expect(header).not.toContain('Features')
     expect(header).not.toContain('Get started')
-    expect(header).not.toContain('Download')
     expect(header).not.toContain('github.com')
     expect(body).not.toContain('href="/start"')
     expect(body).not.toContain('href="/features"')
@@ -402,5 +449,137 @@ describe('a handle cannot capture a route', () => {
     for (const taken of ['v1', 'install', 'api', '.well-known', 'robots.txt', 'market', 'download', 'assets', 'features', 'start']) {
       expect(RESERVED_HANDLES.has(taken), taken).toBe(true)
     }
+  })
+})
+
+/**
+ * THE PURCHASABLE INSTANCES ARE ON THE FIRST SCREEN (owner, 2026-09-27), and
+ * a team page has ONE way to buy: the seat bar. The gate card inside the
+ * terminal is a status, and the line's own entry stays hidden behind it.
+ */
+describe('the rent strip and the one buy control', () => {
+  const paidDoors = [door(), door({ name: 'b', title: 'B' }), door({ name: 'c', title: 'C' }), door({ name: 'd', title: 'D' })]
+
+  it('puts up to three priced instances under the hero, each with a buy link, and points at the rest', () => {
+    const body = home(paidDoors).body
+    const strip = body.slice(body.indexOf('<div class="rent-strip"'), body.indexOf('<nav class="dock'))
+    expect(strip).toContain('Instances you can rent')
+    expect(strip.match(/<article class="rent/g)).toHaveLength(3)
+    expect(strip.match(/\?buy=1"/g)).toHaveLength(3)
+    expect(strip).toContain('href="/drej/cookrew-alpha?buy=1">Buy a seat · $2.50')
+    expect(strip).toContain('href="/market?access=paid">+1 more')
+    // the strip is before the dock and the first section — the first screen
+    expect(body.indexOf('<div class="rent-strip"')).toBeLessThan(body.indexOf('<nav class="dock'))
+    expect(body.indexOf('<nav class="dock')).toBeLessThan(body.indexOf('<section id="market">'))
+    // a priced team appears ONCE on the page: the market section lists only what the strip did not
+    const market = body.slice(body.indexOf('<section id="market">'), body.indexOf('<section id="start">'))
+    expect(market).not.toContain('Instances you can rent')
+    expect(market).not.toContain('COOKREW Alpha')
+    // still a document: the strip is anchors, no script
+    expect(body).not.toMatch(/<script(?! type="application\/ld\+json")/i)
+  })
+
+  it('shows the free ones when nothing is priced, and says so when nothing is listed', () => {
+    const free = home([door({ access: 'account', priceUsd: undefined, rails: [] })]).body
+    expect(free).toContain('Free to open')
+    expect(free).not.toContain('?buy=1')
+    expect(free).toContain('href="/drej/cookrew-alpha">Open')
+    const none = home([]).body
+    expect(none).toContain('Nobody is serving a team here yet')
+    expect(none).toContain('href="#serve"')
+  })
+
+  it('the market card offers the seat for a priced team to a signed-in reader, the sheet to a stranger', () => {
+    const doors = [door(), door({ name: 'f', title: 'F', access: 'account', priceUsd: undefined, rails: [] })]
+    const signedIn = market(doors, '', { account: 'mira' }).body
+    expect(signedIn).toContain('href="/drej/cookrew-alpha?buy=1">Buy a seat · $2.50')
+    expect(signedIn).not.toContain('href="/drej/f?buy=1"')
+    const stranger = market(doors).body
+    expect(stranger).not.toContain('?buy=1')
+    expect(stranger).toContain('Sign in to buy · $2.50')
+    expect(stranger).toContain('<details><summary>How listings, seats, stars and opening work')
+  })
+
+  it('a team page has exactly one buy control, in the seat bar, and the gate card has no button', () => {
+    const unseated = team(door(), { account: 'mira' }).body
+    expect(unseated.match(/Buy a seat/g)).toHaveLength(1)
+    expect(unseated).toContain('id="seat-buy"')
+    expect(unseated).toContain('A seat first — buy one above, or ask @drej.')
+    expect(unseated).toMatch(/<button class="btn primary" id="btn-open" hidden>/)
+    for (const body of [
+      team(door(), { account: 'mira', seat: { id: 's1', team: '@drej/cookrew-alpha', account: 'mira', source: 'granted', by: 'drej', createdAt: 1 } }).body,
+      team(door(), { account: 'drej', owner: true }).body,
+      team(door({ access: 'account', priceUsd: undefined, rails: [] }), { account: 'mira' }).body
+    ]) {
+      expect(body).not.toContain('Buy a seat')
+      expect(body).toContain('data-seat-open')
+    }
+    // offline beats the standing: the status says so, and the hidden entry is disabled
+    const off = team(door({ live: false }), { account: 'mira' }).body
+    expect(off).toContain('id="gate-h">Not serving right now<')
+    expect(off).toContain('id="btn-open" hidden disabled>')
+  })
+
+  it('keeps every element line.js and site.js read', () => {
+    const body = team(door(), { account: 'mira' }).body
+    for (const id of ['team', 'phase', 'state', 'strip-opened', 'gate', 'gate-h', 'gate-p', 'gate-actions', 'btn-open', 'btn-new', 'btn-end', 'bar-led', 'prompt', 'send', 'term', 'rail', 'rail-n', 'rail-tail', 'block', 'seatbar', 'seat-head', 'seat-ask-note', 'seat-buy', 'star', 'addr', 'led', 'livetxt', 'overlay', 'open']) {
+      expect(body, id).toContain(`id="${id}"`)
+    }
+    for (const hook of ['data-seat-buy', 'data-seat-ask', 'data-open=', 'data-copy=', 'data-star=', 'data-door=', 'data-seal-key=', 'data-relayed=', 'data-price=', 'data-orch=', 'data-live=', 'data-access=']) {
+      expect(body, hook).toContain(hook)
+    }
+    // the owner's bar is the line and a count — seats are managed in the app (owner, 2026-10-04)
+    const owner = team(door(), { account: 'drej', owner: true, seats: [] }).body
+    expect(owner).toContain('data-seat-open')
+    for (const id of ['seat-username', 'seat-list', 'seat-grant']) expect(owner, id).not.toContain(`id="${id}"`)
+    expect(team(door(), { account: null }).body).toContain('data-signin')
+  })
+})
+
+describe('the market is a shop with one name on the door', () => {
+  const doors = [
+    door({ live: true, seenAt: 5 }),
+    door({ handle: 'mira', name: 'growth-desk', title: 'Growth Desk', door: 'Anchor', live: true, access: 'paid', priceUsd: '4', rails: ['stripe'], seenAt: 9 }),
+    door({ handle: 'lin', name: 'ledger', title: 'Ledger Close', door: 'Clerk', live: false, access: 'account', priceUsd: undefined, rails: [], seenAt: 2 })
+  ]
+  const seat = { id: 's1', team: '@drej/cookrew-alpha', account: 'mira', source: 'bought' as const, by: 'stripe', createdAt: 1 }
+  const titles = (body: string): string[] => [...body.matchAll(/class="ttl" href="\/[^"]+">([^<]+)</g)].map((m) => m[1])
+
+  it('offers a stranger the account sheet on every card, and never a handle to enrol', () => {
+    const page = market(doors).body
+    expect(page).toContain('Sign in to buy · $2.50')
+    expect(page).toContain('Sign in to open')
+    expect(page.match(/data-signin/g)?.length).toBeGreaterThanOrEqual(4)
+    expect(page).not.toContain('Enrol')
+    expect(page).not.toContain('id="yours"')
+    expect(page).not.toContain('Buy a seat')
+    // A sign-in from here reloads the market for the reader (site.js).
+    expect(page).toContain('data-signin-stays')
+  })
+
+  it('puts what the reader holds on a shelf, and prices the rest by their standing', () => {
+    const page = market(doors, '', { account: 'mira', seats: [seat] }).body
+    const shelf = page.slice(page.indexOf('id="yours"'), page.indexOf('id="count"'))
+    expect(titles(shelf)).toEqual(['Growth Desk', 'COOKREW Alpha'])
+    expect(shelf).toContain('Yours · you serve it')
+    expect(shelf).toContain('Seated · bought')
+    expect(shelf.match(/>Open the line</g)).toHaveLength(2)
+    expect(shelf.match(/\?open=1"/g)).toHaveLength(2)
+    const rest = page.slice(page.indexOf('id="count"'))
+    expect(titles(rest)).toEqual(['Ledger Close'])
+    expect(rest).toContain('1 more team')
+    expect(rest).toContain('Free · yours to open')
+    expect(page).toContain('@mira · 1 seat · 1 team served · 0 starred')
+    expect(page).not.toContain('data-signin>')
+  })
+
+  it('sends an unseated reader to buy, and keeps every match once under a search', () => {
+    const page = market(doors, '', { account: 'lin' }).body
+    expect(page).toContain('href="/drej/cookrew-alpha?buy=1">Buy a seat · $2.50')
+    expect(page).toContain('href="/mira/growth-desk?buy=1">Buy a seat · $4')
+    expect(page).toContain('Yours · you serve it')
+    const searched = market(doors, 'q=ledger', { account: 'lin' }).body
+    expect(searched).not.toContain('id="yours"')
+    expect(titles(searched)).toEqual(['Ledger Close'])
   })
 })

@@ -141,7 +141,7 @@ export class DoorSeats {
  */
 export class DoorCallers {
   /** serviceId → sub → what the token said, and when it first said it. */
-  private readonly byService = new Map<string, Map<string, V2Seated & { at: number }>>()
+  private readonly byService = new Map<string, Map<string, V2Seated & { at: number; bought?: boolean }>>()
   private readonly clock: () => number
 
   constructor(now: () => number = Date.now) {
@@ -149,15 +149,45 @@ export class DoorCallers {
   }
 
   seated(entry: V2Seated): void {
-    const service = this.byService.get(entry.serviceId) ?? new Map<string, V2Seated & { at: number }>()
+    const service = this.byService.get(entry.serviceId) ?? new Map<string, V2Seated & { at: number; bought?: boolean }>()
     // The CLAIMS are replaced — the newest token is the current truth about
     // which device is here and which seat admitted them — but the ARRIVAL TIME
     // is kept. A caller whose ten-minute token was refreshed has not just
     // arrived, and re-stamping them would reshuffle the avatar row under the
     // owner every few minutes for no reason a person could see.
-    const first = service.get(entry.sub)?.at
-    service.set(entry.sub, { ...entry, at: first ?? this.clock() })
+    const prior = service.get(entry.sub)
+    // A purchase made here outlives the token it was made on: a refreshed
+    // token that still says no seat (cookrew.dev not yet told) must not
+    // put the buyer back in front of the 402.
+    service.set(entry.sub, {
+      ...entry,
+      at: prior?.at ?? this.clock(),
+      ...(prior?.bought === true ? { bought: true } : {})
+    })
     this.byService.set(entry.serviceId, service)
+  }
+
+  /**
+   * THE 402 WAS PAID, by somebody we recorded at sign-in with no seat.
+   *
+   * Their token said no seat, because there was none to say; the seat is
+   * being reported to cookrew.dev now, and the NEXT token they mint will
+   * carry it — but the token this door holds for them is the old one, and
+   * it lives for the rest of their session. Ending that session and asking
+   * again used to meet the 402 a second time, for a seat already paid for.
+   * A purchase is an entitlement from the moment the money moved.
+   */
+  bought(serviceId: string, sub: string): void {
+    const service = this.byService.get(serviceId)
+    const known = service?.get(sub)
+    if (service === undefined || known === undefined) return
+    service.set(sub, { ...known, bought: true })
+  }
+
+  /** May this caller start a session without meeting the 402 — a seat, the owner, or a purchase here. */
+  entitled(serviceId: string, sub: string): boolean {
+    const known = this.byService.get(serviceId)?.get(sub)
+    return known !== undefined && (known.seat !== null || known.owner === true || known.bought === true)
   }
 
   /** What we know about one caller at one service, or null. */

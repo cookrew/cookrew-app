@@ -122,6 +122,7 @@ export function mePage(
     {
       title: `@${account.username} — Cookrew`,
       kind: 'app',
+      account: account.username,
       cache: 0,
       noindex: true,
       // device-seal.js before reach.js: M5's answer arrives sealed to this
@@ -149,6 +150,11 @@ export function mePage(
  data-wifi-row="${esc(webCopy('w5.reach-elsewhere', { device: '{device}' }))}"></ul>
 </section>
 
+<!-- THE MACHINES COME FIRST. Devices and security are things to look at
+     once; a desktop row is a door into a canvas that is running right now,
+     and it is what most people open this page for. -->
+${desktopsSection(account.username, account.desktops)}
+
 <h2 style="margin-top:30px">Devices</h2>
 <p class="meta">Every device attached to @${esc(account.username)}. ${esc(webCopy('d12.revoke', { device: 'device' }))} ${esc(webCopy('d12.last-device', { handle: account.username }))}</p>
 <ul class="doors me-list" id="me-devices">${devices}</ul>
@@ -171,7 +177,6 @@ ${authenticatorRow(factors.totp)}
 <pre class="cmd" id="me-codes" hidden></pre>
 <div class="totp-panel" id="me-totp" hidden></div>
 
-${desktopsSection(account.username, account.desktops)}
 </div>`
   )
 }

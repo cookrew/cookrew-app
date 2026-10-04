@@ -144,10 +144,10 @@ describe('signed in, no seat (403)', () => {
 })
 
 describe('seated', () => {
-  it('opens the line and names who else is in the room', async () => {
+  it('opens the line, and lists nobody — the room is not a page', async () => {
     const body = await read('/@drej/alpha', token.mira)
     expect(body).toContain('Open the line')
-    expect(body).toContain('seated here: @lin, @mira')
+    expect(body).not.toContain('seated here')
     expect(body).not.toContain('Buy a seat')
     expect(body).not.toContain('Copy link to ask')
   })
@@ -160,33 +160,30 @@ describe('seated', () => {
 })
 
 describe('the owner’s view', () => {
-  it('counts the room, offers the grant form and ends a seat by its id', async () => {
+  // Owner, 2026-10-04: the page keeps the least interaction and the core. The
+  // owner gets the line and a count; seats are granted and ended in the app.
+  it('counts the room and opens the line — no grant form, no seat list', async () => {
     const body = await read('/@drej/alpha', token.drej)
     expect(body).toContain('Your team')
     expect(body).toContain('2 seated')
-    expect(body).toContain('id="seat-username"')
-    expect(body).toContain('Grant a seat')
-    expect(body).toContain('data-seat-end=')
-    expect(body).toContain('@mira')
-    expect(body).toContain('granted by you')
+    expect(body).toContain('data-seat-open')
+    expect(body).not.toContain('id="seat-username"')
+    expect(body).not.toContain('Grant a seat')
+    expect(body).not.toContain('data-seat-end=')
+    expect(body).not.toContain('granted by you')
     // No cap on a door face, so no free count is invented.
     expect(body).not.toContain('FREE')
   })
 
-  it('prefills the grant form from the ask link the guest copied', async () => {
-    const body = await read('/@drej/alpha?ask=stranger', token.drej)
-    expect(body).toMatch(/id="seat-username"[^>]*value="stranger"/)
-  })
-
-  it('ignores an ask that is not a username, rather than echoing it', async () => {
+  it('ignores an ask link entirely, rather than echoing it anywhere', async () => {
     const body = await read('/@drej/alpha?ask=%3Cscript%3E', token.drej)
     expect(body).not.toContain('<script>alert')
-    expect(body).toMatch(/id="seat-username"[^>]*value=""/)
+    expect(body).not.toContain('id="seat-username"')
   })
 
   it('is not shown to a guest who happens to be seated', async () => {
     const body = await read('/@drej/alpha', token.lin)
-    expect(body).not.toContain('id="seat-username"')
+    expect(body).not.toContain('Your team')
   })
 })
 
@@ -223,5 +220,21 @@ describe('the page itself', () => {
     expect(ASSETS['site.js'].body).toContain('/seats')
     expect(ASSETS['site.js'].body).toContain('clipboard')
     expect(ASSETS['line.js'].body).toContain('/call-token')
+  })
+
+  it('ships the card return in the line: same tab out, back with the session, no second tab', () => {
+    const line = ASSETS['line.js'].body
+    // The door is asked to send the buyer back to THIS page.
+    expect(line).toContain("JSON.stringify({ returnUrl })")
+    expect(line).toContain('location.assign(out.url)')
+    expect(line).not.toContain('window.open(')
+    // The return is read off the URL, spent, and the line opened on it.
+    expect(line).toContain("searchParams.get('paid')")
+    expect(line).toContain("searchParams.delete('paid')")
+    expect(line).toContain('history.replaceState(')
+    expect(line).toContain("searchParams.get('buy')")
+    expect(line).toContain('cr_paying:')
+    expect(line).toContain('cr_paid:')
+    expect(line).toContain('cr_buy:')
   })
 })

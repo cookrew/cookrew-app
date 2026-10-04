@@ -24,10 +24,12 @@ import { mergeActivity } from './turn-view-model'
 import { isViewed, markViewed, pruneViewers, type ViewerClocks } from '../../shared/phone-viewing'
 import { TerminalNode } from './nodes/TerminalNode'
 import { NoteNode } from './nodes/NoteNode'
+import { useWorkspaceWall } from './WorkspaceWallHost'
 import { BrowserNode } from './nodes/BrowserNode'
 import { CableEdge } from './CableEdge'
 import { Header, type MainView } from './Header'
 import { Dock } from './Dock'
+import { tuningStore } from './tuning-store'
 import { CardMenu, type CardMenuAnchor } from './CardMenu'
 import { LodOverlays } from './LodOverlays'
 import { browserInFullView } from './dock-target'
@@ -37,6 +39,7 @@ import {
   recordThumbSuccess,
   shouldClearLegacyThumbs,
   shouldPollThumbs,
+  snapshotPlan,
   shouldSnapshotLocally,
   thumbPollList,
   THUMB_BATCH_MAX,
@@ -66,7 +69,17 @@ import {
   OVERVIEW_FIT_MS,
   OVERVIEW_FIT_PADDING
 } from './nodes/card-zoom'
-import { nodesZoomBounds, nodeZoomBounds, reportMissingZoomTarget } from './nodes/zoom-target'
+import {
+  nodesZoomBounds,
+  nodeZoomBounds,
+  reportMissingZoomTarget,
+  savesReturnViewport
+} from './nodes/zoom-target'
+import {
+  createJumpController,
+  reportJumpMiss,
+  type JumpController
+} from './cross-workspace-jump'
 import { useBrowserEngine } from './browser-engine'
 import { ErrorBoundary } from './ErrorBoundary'
 import { ReauthOverlay } from './ReauthOverlay'
@@ -96,6 +109,7 @@ import {
   visibleCanvasNodes,
   type CanvasVisualMode
 } from './canvas-visual-mode'
+import { CableHarness } from './CableHarness'
 
 /** How often a headless browser card refreshes its still. Matches the legacy
  *  webview capture cadence — the same picture, from the page that now owns it. */
@@ -104,12 +118,14 @@ const CANVAS_VISUAL_MODE_KEY = 'cookrew-canvas-visual-mode'
 
 const VISUAL_MODE_LABEL: Record<CanvasVisualMode, string> = {
   all: 'All',
+  harness: 'Cables tidied',
   'no-cables': 'Cables hidden',
   agents: 'Agents only'
 }
 
 const VISUAL_MODE_ICON: Record<CanvasVisualMode, 'canvas' | 'connect' | 'agent'> = {
   all: 'canvas',
+  harness: 'connect',
   'no-cables': 'connect',
   agents: 'agent'
 }
@@ -253,6 +269,13 @@ function Canvas(): React.JSX.Element {
       .catch(() => undefined)
     return cookrew().onWorkspaceList((list) => noteActiveWorkspace(list.activeId))
   }, [])
+
+  /* ── THE SCREEN WALL (WorkspaceWall.tsx, hosted by WorkspaceWallHost.tsx) ──
+   * Switching by NAME asks people to remember the one thing about a workspace
+   * nobody does. The wall shows each one as a tilted screen carrying a
+   * snapshot of its canvas, and you pick the picture — and it is where a
+   * workspace is made, given directories or removed, too. */
+  const wall = useWorkspaceWall({ stageRef, workspace, onActivity: () => setMetricsOpen(true) })
   /**
    * A workspace switch replaces every node while the viewport still frames the
    * OUTGOING canvas — so the incoming workspace opens somewhere off in empty
@@ -267,6 +290,15 @@ function Canvas(): React.JSX.Element {
    * React chooses to batch the two updates into.
    */
   const fitPendingRef = useRef(false)
+  /**
+   * The board's cross-workspace tap. A ref because the arrival fit declared
+   * just below reads it, while the controller itself is built much further
+   * down, where the zoom it needs exists. A jump is what ASKED for the switch,
+   * so the fit that switch would have done is the jump's to spend: it has a
+   * better destination than the overview, and hands the fit back if its card
+   * never arrives.
+   */
+  const jumpRef = useRef<JumpController<Node> | null>(null)
   const knownWsIdRef = useRef<string | null>(null)
   const reactFlow = useReactFlow()
   const { screenToFlowPosition } = reactFlow
@@ -314,11 +346,19 @@ function Canvas(): React.JSX.Element {
     knownWsIdRef.current = id
     setActiveWsId(id)
     if (previous === null || previous === id) return
-    fitPendingRef.current = true
-    // The outgoing canvas is gone, so the saved "back" viewport and the zoomed
-    // node both point at cards that no longer exist; ⤢ / ESC must fall back to
-    // the overview rather than restore a dead frame.
+    // The outgoing canvas is gone either way, so the saved "back" viewport
+    // points at cards that no longer exist; ⤢ / ESC must fall back to the
+    // overview rather than restore a dead frame.
     prevViewportRef.current = null
+    // WHOSE SWITCH IS THIS. A jump asked for this one and is arriving at a
+    // CARD, not at a workspace — so none of the resets below are right for it,
+    // and the store's two broadcasts give no order to lean on: when the nodes
+    // beat the id here, the jump has ALREADY zoomed and these lines would undo
+    // it. No arrival, so no full view; no deliberate flag, so the phone's LOD
+    // refuses to open the card; and an armed fit left over for the next node
+    // change to spend on the overview.
+    if (jumpRef.current?.claims(id) === true) return
+    fitPendingRef.current = true
     zoomedNodeIdRef.current = null
     // …and so do the auto-open credentials. Left armed, the switch's fitView
     // settling would passively mount whatever card crosses the coverage floor
@@ -435,6 +475,10 @@ function Canvas(): React.JSX.Element {
   useEffect(() => {
     if (!fitPendingRef.current) return
     fitPendingRef.current = false
+    // A jump asked for this switch and owes the owner one particular card, so
+    // the overview is not where they are going. Spending the fit here would
+    // frame the whole board for a beat and then throw the viewport across it.
+    if (jumpRef.current?.travelling() === true) return
     // An empty workspace has nothing to frame; fitView would be a no-op that
     // still costs an animation, so leave the viewport where it is.
     if (nodes.length === 0) return
@@ -478,6 +522,25 @@ function Canvas(): React.JSX.Element {
       clearTimeout(seedDeadline)
       off()
     }
+  }, [])
+
+  // WHAT EACH AGENT IS RUNNING ON (tuning-store). One snapshot for the whole
+  // fleet, then a push per card when — and only when — its dials change. The
+  // phone runs this same effect over its own transport (/api/tuning + the
+  // stream's `tuning` frame); feature-detected so a bridge without either
+  // leaves every card wearing no tag rather than throwing.
+  useEffect(() => {
+    const snapshot = cookrew().listTuning
+    if (snapshot) {
+      void snapshot()
+        .then((rows) =>
+          // Live pushes may land first; seed UNDER them so the snapshot never
+          // replaces a fresher reading (same rule as the activity seed).
+          tuningStore.seed(Object.entries(rows), true)
+        )
+        .catch(() => undefined)
+    }
+    return cookrew().onTerminalTuning?.((row) => tuningStore.set(row.terminalId, row.tuning))
   }, [])
 
   // ⌘W from the main process, resolved against the latest layer state.
@@ -699,7 +762,16 @@ function Canvas(): React.JSX.Element {
   // fills the stage; crossing the coverage threshold swaps its thumbnail
   // for the full renderer (see zoom-lod.ts).
   const zoomToNode = useCallback(
-    (id: string, rect?: { x: number; y: number; width: number; height: number }) => {
+    (
+      id: string,
+      rect?: { x: number; y: number; width: number; height: number },
+      /**
+       * The canvas under this zoom is not the one the viewport was framing: a
+       * board row from another workspace, landing on a canvas that arrived a
+       * moment ago. See savesReturnViewport — it decides what Back means here.
+       */
+      freshCanvas = false
+    ) => {
       // WHERE ARE WE GOING — resolved FIRST, because a zoom that cannot land
       // must change nothing at all (not the return point, not the deliberate
       // flag, not the zoomed id).
@@ -723,13 +795,16 @@ function Canvas(): React.JSX.Element {
         reportMissingZoomTarget(id)
         return
       }
-      // Save the return point only when not already mid-zoom: a second click
-      // (or a click after a reload that landed already zoomed, with a terminal
-      // overlay covering the stage) must NOT persist a zoomed viewport as the
-      // "back" target — that makes ⤢/ESC restore another zoomed state, an
-      // inescapable loop (Magpie E2). Leaving it null falls Back back to
-      // fitView instead.
-      if (!prevViewportRef.current && !zoomedTerminalIdRef.current) {
+      // Where Back goes, and the three reasons it may go nowhere — all of
+      // them in nodes/zoom-target.ts, where they can be read one at a time.
+      // Leaving the return point empty falls Back to the overview instead.
+      if (
+        savesReturnViewport({
+          saved: prevViewportRef.current,
+          overlayOpen: zoomedTerminalIdRef.current !== null,
+          freshCanvas
+        })
+      ) {
         prevViewportRef.current = reactFlow.getViewport()
       }
       // A deliberate tap: from here the LOD may open the card's full view (see
@@ -772,6 +847,59 @@ function Canvas(): React.JSX.Element {
       fitAll(OVERVIEW_FIT_MS)
     }
   }, [reactFlow, fitAll])
+
+  /**
+   * THE BOARD'S CROSS-WORKSPACE TAP. The board lists every agent on the
+   * machine; the canvas holds one workspace at a time. A row from anywhere
+   * else needs a switch before there is a card to fly to, and the switch
+   * arrives as a broadcast the tap cannot await — so the intent waits here
+   * (cross-workspace-jump.ts) and lands when the canvas carrying the card
+   * shows up.
+   *
+   * Built once and steered through refs: `zoomToNode` and `fitAll` are stable
+   * callbacks, and rebuilding the controller would drop a jump in flight.
+   */
+  const jump = useMemo(
+    () =>
+      createJumpController<Node>({
+        activeWorkspaceId: () => knownWsIdRef.current,
+        hasNode: (nodeId) => reactFlow.getNode(nodeId) !== undefined,
+        switchWorkspace: (workspaceId) => cookrew().switchWorkspace(workspaceId),
+        arrive: (nodeId, node) => {
+          // A landed jump brings its node: the canvas was handed to us this
+          // instant, and the card's own declared box needs no measurement —
+          // which is what the flow store would still be waiting on. It is also
+          // what says this canvas is a fresh one, so the viewport we came in
+          // with is not a place Back can return to.
+          zoomToNode(nodeId, nodeZoomBounds(node) ?? undefined, node !== null)
+        },
+        handBack: () => {
+          // The jump is over and no card is opening, so give the switch the
+          // arrival it was denied when the jump claimed it: nothing is zoomed,
+          // nothing may auto-open, and the board gets framed.
+          zoomedNodeIdRef.current = null
+          deliberateOpenRef.current = false
+          setArrivedId(null)
+          fitAll(OVERVIEW_FIT_MS)
+        },
+        schedule: (run, ms) => {
+          const timer = window.setTimeout(run, ms)
+          return () => window.clearTimeout(timer)
+        },
+        report: reportJumpMiss
+      }),
+    [zoomToNode, fitAll, reactFlow]
+  )
+  jumpRef.current = jump
+
+  // The incoming canvas, offered to the jump. Declared after the fit above so
+  // it runs after it: the fit stands down for a jump in flight, and then this
+  // is what lands it — one commit, one viewport move.
+  useEffect(() => jump.sawNodes(nodes), [nodes, jump])
+
+  // Dropping the canvas must drop the travel with it: a zoom that fires into
+  // an unmounted tree is the kind of thing that outlives its own reason.
+  useEffect(() => () => jump.cancel(), [jump])
 
   const requestClose = useCallback((nodeId: string) => setClosingId(nodeId), [])
 
@@ -854,6 +982,29 @@ function Canvas(): React.JSX.Element {
     [zoomBack]
   )
 
+  /**
+   * The browser cards the screen can see, in flow space — the one set both
+   * picture producers are bounded by (the desktop's sweep and the phone's
+   * poll). A picture nobody can see is a picture nobody should pay for.
+   */
+  const visibleBrowserIds = useCallback((): string[] => {
+    const topLeft = reactFlow.screenToFlowPosition({ x: 0, y: 0 })
+    const bottomRight = reactFlow.screenToFlowPosition({ x: window.innerWidth, y: window.innerHeight })
+    return viewportBrowserIds(
+      reactFlow.getNodes().map((n) => ({
+        id: n.id,
+        kind: n.type ?? '',
+        x: n.position.x,
+        y: n.position.y,
+        // Unmeasured on the first tick: fall back to the card's own size,
+        // or a zero-width card would miss the viewport it is plainly in.
+        width: n.measured?.width ?? n.width ?? (n.data as { node?: { size?: { width: number } } }).node?.size?.width ?? 0,
+        height: n.measured?.height ?? n.height ?? (n.data as { node?: { size?: { height: number } } }).node?.size?.height ?? 0
+      })),
+      { left: topLeft.x, top: topLeft.y, right: bottomRight.x, bottom: bottomRight.y }
+    )
+  }, [reactFlow])
+
   const onThumb = useCallback((id: string, dataUrl: string) => {
     if (interactiveBrowser !== false) return
     thumbStore.set(id, dataUrl)
@@ -866,8 +1017,12 @@ function Canvas(): React.JSX.Element {
    * no longer exists here, so every browser card sat on its placeholder; the
    * picture now comes from the headless page that owns the tab.
    *
-   * Paused while the window is hidden and while a card is zoomed — the zoomed
-   * one is showing the live stream, and its own card is behind that overlay.
+   * ONLY WHAT THE SCREEN SHOWS. This used to walk every browser on the canvas
+   * — at mount and every five seconds — which on a board of forty browsers is
+   * forty CDP screenshots through main before anything is looked at. It now
+   * takes the same plan the phone's poll takes (snapshotPlan): the visible
+   * cards, none at mini, never the zoomed one (its card is behind the live
+   * view), capped. A card scrolled into view is photographed on the next tick.
    */
   useEffect(() => {
     if (!shouldSnapshotLocally({ remote: isRemoteMode(), interactive: interactiveBrowser })) return
@@ -875,13 +1030,22 @@ function Canvas(): React.JSX.Element {
     if (!snapshot) return
     let disposed = false
     const tick = async (): Promise<void> => {
-      if (document.hidden) return
-      for (const browser of browsersRef.current) {
+      const ids = snapshotPlan({
+        zoom: cardZoomMode(reactFlow.getZoom()),
+        hidden: document.hidden,
+        visible: visibleBrowserIds(),
+        zoomedId: zoomedNodeIdRef.current,
+        max: THUMB_BATCH_MAX
+      })
+      for (const id of ids) {
         if (disposed) return
-        if (browser.id === zoomedNodeIdRef.current) continue
-        const dataUrl = await snapshot(browser.id).catch(() => null)
+        const dataUrl = await snapshot(id).catch(() => null)
         if (!disposed && dataUrl) {
-          thumbStore.set(browser.id, dataUrl) // set() dedupes identical values
+          // A handed-off live frame is a blob; replacing one must revoke it,
+          // exactly as the poll path does. set() dedupes identical strings.
+          const old = thumbStore.get(id)
+          if (old?.startsWith('blob:')) URL.revokeObjectURL(old)
+          thumbStore.set(id, dataUrl)
         }
       }
     }
@@ -891,7 +1055,7 @@ function Canvas(): React.JSX.Element {
       disposed = true
       clearInterval(timer)
     }
-  }, [interactiveBrowser])
+  }, [interactiveBrowser, reactFlow, visibleBrowserIds])
 
   // Never retain a legacy frame once ownership resolves to headless. Browser
   // cards remain neutral until their shared stream is opened in the popout.
@@ -957,21 +1121,7 @@ function Canvas(): React.JSX.Element {
       // the viewport, one GET /api/browser/thumbs, and the version of each
       // frame already held rides along so an unchanged one answers with a
       // number and no bytes.
-      const topLeft = reactFlow.screenToFlowPosition({ x: 0, y: 0 })
-      const bottomRight = reactFlow.screenToFlowPosition({ x: window.innerWidth, y: window.innerHeight })
-      const visible = viewportBrowserIds(
-        reactFlow.getNodes().map((n) => ({
-          id: n.id,
-          kind: n.type ?? '',
-          x: n.position.x,
-          y: n.position.y,
-          // Unmeasured on the first tick: fall back to the card's own size,
-          // or a zero-width card would miss the viewport it is plainly in.
-          width: n.measured?.width ?? n.width ?? (n.data as { node?: { size?: { width: number } } }).node?.size?.width ?? 0,
-          height: n.measured?.height ?? n.height ?? (n.data as { node?: { size?: { height: number } } }).node?.size?.height ?? 0
-        })),
-        { left: topLeft.x, top: topLeft.y, right: bottomRight.x, bottom: bottomRight.y }
-      )
+      const visible = visibleBrowserIds()
       // Per-id failure backoff — the desktop's capture-storm lesson, applied to
       // the polling side. After an app restart NO engine is booted, so 40+
       // cards have no frame at once; re-asking them all every 5s was a
@@ -1021,7 +1171,7 @@ function Canvas(): React.JSX.Element {
     tick()
     const timer = setInterval(tick, 5000)
     return () => clearInterval(timer)
-  }, [interactiveBrowser])
+  }, [interactiveBrowser, reactFlow, visibleBrowserIds])
 
   // ESC dismisses the top overlay: modal panels (team fork / roster / metrics /
   // directory manager) self-handle it in the capture phase; this bubble-phase
@@ -1049,12 +1199,23 @@ function Canvas(): React.JSX.Element {
       clipping,
       interactiveBrowser,
       zoomToNode,
+      jumpToNode: jump.to,
       zoomBack,
       requestClose,
       picked,
       togglePick
     }),
-    [tool, clipping, interactiveBrowser, zoomToNode, zoomBack, requestClose, picked, togglePick]
+    [
+      tool,
+      clipping,
+      interactiveBrowser,
+      zoomToNode,
+      jump,
+      zoomBack,
+      requestClose,
+      picked,
+      togglePick
+    ]
   )
 
   // Every change batch routes through the edge snapper: while a card is
@@ -1311,7 +1472,7 @@ function Canvas(): React.JSX.Element {
           attentionCount={attentionCount}
           view={view}
           onViewChange={setView}
-          onActivity={() => setMetricsOpen(true)}
+          onWall={wall.open}
           onResync={resync}
           avatar={account.avatar}
         />
@@ -1350,6 +1511,11 @@ function Canvas(): React.JSX.Element {
           >
             <Background variant={BackgroundVariant.Dots} gap={22} size={1.5} color="#D9D3C5" />
             <SnapGuides guides={guides} />
+            {/* The tidied cables. ReactFlow holds no edges in this mode (see
+                visibleCanvasEdges); this layer routes the full set around the
+                cards and draws shared runs once. It reads `nodes` and `edges`,
+                which a pan never changes — so a pan never renders it. */}
+            {canvasVisualMode === 'harness' && <CableHarness nodes={nodes} edges={edges} />}
             <MiniMap
               pannable
               zoomable
@@ -1559,6 +1725,9 @@ function Canvas(): React.JSX.Element {
             onConfirm={() => confirmClose(closingNode.id)}
           />
         )}
+        {/* The screen wall covers the stage it hands back to, so it is mounted
+            after the canvas and measures that stage rather than guessing. */}
+        {wall.element}
         <EventToastLayer />
         {/* D14 · a door this Mac was serving moved to another of the account's. */}
         <DoorMovedNotice />

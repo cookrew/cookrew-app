@@ -46,7 +46,7 @@ const bar = (): string =>
       attentionCount={0}
       view="canvas"
       onViewChange={() => undefined}
-      onActivity={() => undefined}
+      onWall={() => undefined}
       onResync={() => undefined}
     />
   )

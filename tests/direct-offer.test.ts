@@ -65,7 +65,12 @@ const iphone = (over: Partial<DirectOfferState> = {}): DirectOfferState => ({
 
 describe('when the offer is made', () => {
   it('offers the LAN name a Safari could not fetch but can be sent to', () => {
-    expect(directNavigationOffer(iphone())).toEqual({ origin: LAN, kind: 'lan', family: 'Safari' })
+    expect(directNavigationOffer(iphone())).toEqual({
+      origin: LAN,
+      kind: 'lan',
+      family: 'Safari',
+      reason: 'timeout'
+    })
   })
 
   it('offers the tailnet when only the tailnet candidate stalled', () => {
@@ -74,7 +79,7 @@ describe('when the offer is made', () => {
         attempts: [attempt({ name: '100.84.1.9:8643', plane: 'TAILNET', outcome: 'blocked' })]
       })
     )
-    expect(offer).toEqual({ origin: TAILNET, kind: 'tailnet', family: 'Safari' })
+    expect(offer).toEqual({ origin: TAILNET, kind: 'tailnet', family: 'Safari', reason: 'blocked' })
   })
 
   it('prefers the LAN over the tailnet when both stalled', () => {
@@ -86,7 +91,7 @@ describe('when the offer is made', () => {
         ]
       })
     )
-    expect(offer).toEqual({ origin: LAN, kind: 'lan', family: 'Safari' })
+    expect(offer).toEqual({ origin: LAN, kind: 'lan', family: 'Safari', reason: 'timeout' })
   })
 
   it('offers the candidate that actually stalled, not merely the first one', () => {
@@ -101,7 +106,32 @@ describe('when the offer is made', () => {
         ]
       })
     )
-    expect(offer).toEqual({ origin: LAN, kind: 'lan', family: 'Safari' })
+    expect(offer).toEqual({ origin: LAN, kind: 'lan', family: 'Safari', reason: 'timeout' })
+  })
+
+  it('names the refusal when the address was refused before it connected', () => {
+    // The owner's iPhone on 2026-10-04: Safari 26 refused the LAN address in
+    // 4 ms, with and without the hint — "TypeError: Load failed". The row said
+    // so and the headline above it said "did not answer in time". The offer
+    // now carries which of the two it is, so the two cannot disagree.
+    const offer = directNavigationOffer(
+      iphone({ attempts: [attempt({ outcome: 'blocked', ms: 4, hint: 'none' })] })
+    )
+    expect(offer).toEqual({ origin: LAN, kind: 'lan', family: 'Safari', reason: 'blocked' })
+  })
+
+  it('reads the reason off the address the button opens, not off the other rows', () => {
+    // LAN refused, tailnet timed out: the button opens the LAN, so the sentence
+    // is about a refusal. The tailnet's timeout is a fact about another path.
+    const offer = directNavigationOffer(
+      iphone({
+        attempts: [
+          attempt({ outcome: 'blocked', ms: 4 }),
+          attempt({ name: '100.84.1.9:8643', plane: 'TAILNET', outcome: 'timeout' })
+        ]
+      })
+    )
+    expect(offer?.reason).toBe('blocked')
   })
 
   it('is made for a macOS Safari too, which is harmless and the same fix', () => {
@@ -115,7 +145,8 @@ describe('when the offer is made', () => {
     expect(directNavigationOffer(iphone({ browser: 'Chrome 152' }))).toEqual({
       origin: LAN,
       kind: 'lan',
-      family: 'Chrome'
+      family: 'Chrome',
+      reason: 'timeout'
     })
   })
 
@@ -148,14 +179,14 @@ describe('the desktop Chrome whose prompt cannot be raised at all', () => {
       origin: LAN,
       kind: 'lan',
       family: 'Chrome',
-      proxy: true
+      reason: 'proxy'
     })
   })
 
   it('blames the proxy, never iOS, in the sentence it carries', () => {
     const offer = directNavigationOffer(proxied())
-    expect(offer?.proxy).toBe(true)
-    const why = directOfferWhy(offer?.family ?? '', offer?.proxy)
+    expect(offer?.reason).toBe('proxy')
+    const why = directOfferWhy(offer?.family ?? '', offer?.reason)
     expect(why).toContain('system proxy')
     expect(why).not.toContain('iPhone')
     expect(why).not.toContain('iOS')
@@ -233,6 +264,10 @@ describe('when it is not', () => {
     }
   })
 
+  it('never for a name the zone is not answering — a navigation lands on the same dead name', () => {
+    expect(directNavigationOffer(iphone({ attempts: [attempt({ outcome: 'unnamed', ms: 4 })] }))).toBeNull()
+  })
+
   it('never with no race behind it', () => {
     expect(directNavigationOffer(iphone({ attempts: [] }))).toBeNull()
   })
@@ -281,7 +316,7 @@ describe('which user agents are on the platform with no permission', () => {
     const offer = directNavigationOffer(
       iphone({ browser: browserFamily(IPHONE_CHROME), ios: isAppleMobile(IPHONE_CHROME) })
     )
-    expect(offer).toEqual({ origin: LAN, kind: 'lan', family: 'Chrome' })
+    expect(offer).toEqual({ origin: LAN, kind: 'lan', family: 'Chrome', reason: 'timeout' })
   })
 
   it('does not offer on a real macOS Chrome UA', () => {
@@ -327,10 +362,49 @@ describe('the sentence the offer carries', () => {
     // Chrome 152 behind a system proxy: a refusal recorded with AND without
     // the address-space hint is a fact about that browser, not an inference,
     // and "did not answer in time" would send that reader to look at the Mac.
-    const why = directOfferWhy('Chrome', true)
+    const why = directOfferWhy('Chrome', 'proxy')
     expect(why).toContain('system proxy')
     expect(why).toContain('Open the Mac directly on Wi-Fi instead:')
     expect(why).not.toContain('did not answer in time')
+  })
+
+  it('says REFUSED when the row says refused, and names the fix first', () => {
+    // The screenshot of 2026-10-04: the row under the headline read "refused
+    // by the browser before connecting — 4 ms" and the headline read "did not
+    // answer in time". A refusal in 4 ms is the browser's doing; the Mac was
+    // never asked, and TRY AGAIN measures the same rule again. So the sentence
+    // states the refusal, offers the navigation first and the race second.
+    const why = directOfferWhy('Safari', 'blocked')
+    expect(why).toContain('Safari refused')
+    expect(why).toContain('before connecting')
+    expect(why).not.toContain('did not answer in time')
+    expect(why).not.toContain('site settings')
+    expect(why.indexOf('Open it directly')).toBeGreaterThan(-1)
+    expect(why.indexOf('Open it directly')).toBeLessThan(why.indexOf('try again'))
+    expect(why.trimEnd().endsWith(':')).toBe(true)
+  })
+})
+
+describe('what a race proves about the browser', () => {
+  it('every row refused before connecting is the browser, not the network', async () => {
+    const { refusedBeforeConnecting } = await import('../src/renderer/src/path/hint-evidence')
+    expect(refusedBeforeConnecting([attempt({ outcome: 'blocked', ms: 4 })])).toBe(true)
+    expect(
+      refusedBeforeConnecting([
+        attempt({ outcome: 'blocked', ms: 4, hint: 'none' }),
+        attempt({ name: '100.84.1.9:8643', plane: 'TAILNET', outcome: 'blocked', ms: 3 })
+      ])
+    ).toBe(true)
+  })
+
+  it('is not claimed over a timeout, an empty race, or a row that answered', async () => {
+    const { refusedBeforeConnecting } = await import('../src/renderer/src/path/hint-evidence')
+    expect(refusedBeforeConnecting([])).toBe(false)
+    expect(refusedBeforeConnecting([attempt()])).toBe(false)
+    expect(
+      refusedBeforeConnecting([attempt({ outcome: 'blocked' }), attempt({ outcome: 'timeout' })])
+    ).toBe(false)
+    expect(refusedBeforeConnecting([attempt({ outcome: 'answered', ms: 6 })])).toBe(false)
   })
 })
 

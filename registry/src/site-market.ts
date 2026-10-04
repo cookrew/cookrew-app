@@ -1,20 +1,30 @@
 import type { ListedDoor } from './site'
 import type { PresetSummary } from './store'
-import { presetCard, priceChip } from './site-home'
-import { esc, page, type Page } from './site-shell'
+import type { V2Seat } from './v2-seats'
+import { presetCard } from './site-home'
+import { esc, icon, page, type Page } from './site-shell'
 import { MARKET_DEFINITION } from './site-content'
 import { breadcrumbs, organization, teamList, webPage } from './site-seo'
+import { cardFace, readerLine, seatAt, shelfOf, type CardFace, type Shelf, type Standing } from './market-shelf'
 
 /**
- * THE MARKET — doors first, presets second, stars as the sort key.
+ * THE MARKET — a shop with one name on the door.
  *
- * Search, filters and sort are ordinary GET parameters rendered on the server,
- * so the page is complete and correct with script disabled; the one script it
- * loads turns the star buttons into a passkey ceremony and "Open in Cookrew"
- * into a deep link. A listing is a team somebody is serving from their own
- * machine; the registry lists it, marks it live only while its relay downlink
- * is up, and never rewrites what the owner published.
+ * The reader's cookrew.dev USERNAME is the only identity the market knows
+ * (market-shelf.ts): it decides what every card is to them — theirs, seated,
+ * free to open, for sale — and what the one button on it does. A reader who
+ * holds something sees it first, on a shelf above the catalogue; a reader who
+ * is signed out sees the prices and one way in, the account sheet. Nothing
+ * here asks for a handle, a key or a second credential: signing in is the
+ * whole ceremony, and a seat bought here is the seat the app opens with.
+ *
+ * Search, filters and sort are GET parameters rendered on the server, so the
+ * page is complete with script disabled; the script makes the star buttons
+ * and "In Cookrew" act, and both act as the same account.
  */
+
+/** The definition's first sentence — the lede; the rest is in the FAQ below the grid. */
+const MARKET_ONE_LINE = MARKET_DEFINITION.slice(0, MARKET_DEFINITION.indexOf('. ') + 1)
 
 export type MarketTab = 'teams' | 'presets' | 'starred'
 export type MarketSort = 'stars' | 'recent' | 'name'
@@ -38,6 +48,9 @@ export interface MarketInput {
   account: string | null
   /** Teams the account starred, `handle/name`. */
   starredTeams: readonly string[]
+  /** Every seat the account holds, anywhere. Empty for a stranger. */
+  seats?: readonly V2Seat[]
+  now?: number
 }
 
 /** Read a market query from URL parameters; anything odd falls to its default. */
@@ -86,16 +99,27 @@ export function filterDoors(input: MarketInput): ListedDoor[] {
   })
 }
 
-function teamCard(d: ListedDoor, stars: number, starred: boolean): string {
+const chipClass = (tone: CardFace['chip']['tone']): string => (tone === 'plain' ? 'chip' : `chip ${tone}`)
+
+/**
+ * A listing, for this reader. The head carries what the team is to them; the
+ * foot carries the one thing they can do about it, beside the star and the
+ * app. `?buy=1` on the team page starts the purchase there (line.js).
+ */
+function teamCard(d: ListedDoor, stars: number, starred: boolean, standing: Standing, seat: V2Seat | null): string {
   const at = `/${esc(d.handle)}/${esc(d.name)}`
   const off = d.live === false
   const harnesses = d.harnesses ?? []
   const tags = d.tags ?? []
-  return `<article class="team">
-<div class="head"><span class="led${off ? ' off' : ''}"></span><a class="ttl" href="${at}">${esc(d.title)}</a><span class="chip">${d.agents} AGENT${d.agents === 1 ? '' : 'S'}</span></div>
+  const face = cardFace(standing, d, seat)
+  const primary = face.primary.signin
+    ? `<button class="btn sm primary" data-signin>${icon('key')} ${esc(face.primary.label)}</button>`
+    : `<a class="btn sm primary" href="${esc(face.primary.href ?? at)}">${esc(face.primary.label)}</a>`
+  return `<article class="team" data-standing="${esc(standing.kind)}">
+<div class="head"><span class="led${off ? ' off' : ''}"></span><a class="ttl" href="${at}">${esc(d.title)}</a><span class="${chipClass(face.chip.tone)} stand">${esc(face.chip.label)}</span></div>
 <div class="screen crt"><div class="l d">$ cookrew.dev/@${esc(d.handle)}/${esc(d.name)}</div><div class="l">${esc(d.door)}&gt; ${off ? 'offline — address stays valid' : `ready — one door, ${d.agents} behind it`}</div><div class="l d">${harnesses.length > 0 ? esc(harnesses.map((h) => h.toLowerCase()).join(' · ')) : `via ${esc(d.transport)}`}</div></div>
-<div class="body">${d.summary ? `<p>${esc(d.summary)}</p>` : `<p class="dim">The owner has not written a summary.</p>`}<div class="row">${tags.map((t) => `<span class="chip">${esc(t)}</span>`).join('')}<span class="chip violet">${esc(d.door)} answers</span><span class="chip">${esc(d.transport)}</span></div><div class="meta">by <a href="/${esc(d.handle)}">@${esc(d.handle)}</a>${d.access === 'paid' ? ' · ' + d.rails.map((r) => (r === 'x402' ? 'USDC · wallet' : 'card')).join(', ') : ''}</div></div>
-<div class="foot">${priceChip(d)}<span class="sp"></span><button class="star${starred ? ' on' : ''}" data-star="${esc(d.handle)}/${esc(d.name)}" title="one star per account">★ <span>${stars}</span></button><a class="btn sm" href="${at}">Page</a><a class="btn sm primary" href="${at}#open" data-open="cookrew://import/@${esc(d.handle)}/${esc(d.name)}">Open in Cookrew</a></div>
+<div class="body">${d.summary ? `<p>${esc(d.summary)}</p>` : `<p class="dim">The owner has not written a summary.</p>`}<div class="row">${tags.map((t) => `<span class="chip">${esc(t)}</span>`).join('')}<span class="chip violet">${esc(d.door)} answers</span><span class="chip">${d.agents} agent${d.agents === 1 ? '' : 's'}</span></div><div class="meta">by <a href="/${esc(d.handle)}">@${esc(d.handle)}</a> · ${esc(d.transport)}${d.access === 'paid' ? ' · ' + d.rails.map((r) => (r === 'x402' ? 'USDC · wallet' : 'card')).join(', ') : ''}</div>${face.note ? `<p class="meta note-line">${esc(face.note)}</p>` : ''}</div>
+<div class="foot"><button class="star${starred ? ' on' : ''}" data-star="${esc(d.handle)}/${esc(d.name)}" title="one star per account">★ <span>${stars}</span></button><span class="sp"></span>${primary}<a class="btn sm" href="${at}#open" data-open="cookrew://import/@${esc(d.handle)}/${esc(d.name)}">In Cookrew</a></div>
 </article>`
 }
 
@@ -103,9 +127,50 @@ function chip(name: string, value: string, label: string, on: boolean): string {
   return `<label><input type="checkbox" name="${name}" value="${value}"${on ? ' checked' : ''}><span class="chip">${label}</span></label>`
 }
 
+/**
+ * WHO IS SHOPPING. Signed in: the name and what it holds, with the account
+ * page a click away. Signed out: the one sentence that explains why signing
+ * in is worth it, and the sheet.
+ */
+function readerStrip(input: MarketInput): string {
+  if (input.account !== null) return ''
+  return `<div class="who" data-signin-stays><span class="meta">Sign in once — the teams you serve and the seats you hold are the first thing on this page, on any device, and in the app.</span><button class="btn sm primary" data-signin>${icon('key')} Sign in</button></div>`
+}
+
+/**
+ * YOUR AGENTS — the first thing a signed-in reader sees (owner, 2026-10-04:
+ * from the market, once signed in, pick the agents you control).
+ *
+ * One row per team the reader serves or holds a seat at, newest seat first,
+ * and one act per row: OPEN THE LINE goes to the team's page with `?open=1`,
+ * which line.js spends on the click's behalf — the line opens on arrival,
+ * because the click here WAS the open. Rows, not cards, so five fit on a
+ * phone above the catalogue. A reader with nothing yet is told so in one
+ * line and pointed below.
+ */
+function yoursStrip(input: MarketInput, shelf: Shelf, seats: readonly V2Seat[], line: string): string {
+  if (input.account === null) return ''
+  const head = `<div class="yours-head"><span class="chip amber">${esc(line)}</span><h2>Your agents</h2><span class="sp"></span><a class="btn sm" href="/me">Your account</a></div>`
+  if (shelf.yours.length === 0) {
+    return `<section class="yours" id="yours">${head}<p class="meta yours-empty">Nothing of yours yet. A seat you buy below lands here; so does a team you serve from the app.</p></section>`
+  }
+  const rows = shelf.yours
+    .map((d) => {
+      const at = `/${esc(d.handle)}/${esc(d.name)}`
+      const standing = shelf.standing.get(`${d.handle}/${d.name}`) ?? { kind: 'stranger' as const }
+      const face = cardFace(standing, d, seatAt(d, seats, input.now))
+      const off = d.live === false
+      return `<li class="yours-row" data-standing="${esc(standing.kind)}"><span class="led${off ? ' off' : ''}"></span><a class="ttl" href="${at}">${esc(d.title)}</a><span class="meta">${esc(d.door)} · ${d.agents} agent${d.agents === 1 ? '' : 's'}${off ? ' · offline' : ''}</span><span class="${chipClass(face.chip.tone)} stand">${esc(face.chip.label)}</span><a class="btn sm primary" href="${at}?open=1">Open the line</a><a class="btn sm" href="${at}#open" data-open="cookrew://import/@${esc(d.handle)}/${esc(d.name)}">In Cookrew</a></li>`
+    })
+    .join('')
+  return `<section class="yours" id="yours">${head}<ul class="yours-rows">${rows}</ul></section>`
+}
+
 export function marketPage(input: MarketInput): Page {
   const { query } = input
   const doors = filterDoors(input)
+  const seats = input.seats ?? []
+  const shelf = shelfOf(doors, input.account, seats, input.now)
   const presets =
     query.tab === 'presets'
       ? input.presets.filter((p) => !query.q || `${p.name} ${p.author}`.toLowerCase().includes(query.q.toLowerCase()))
@@ -115,28 +180,47 @@ export function marketPage(input: MarketInput): Page {
     `<a class="${query.tab === key ? 'on' : ''}" href="/market?tab=${key}${query.q ? `&q=${encodeURIComponent(query.q)}` : ''}">${label}</a>`
   const hidden = (name: string, value: string): string =>
     value ? `<input type="hidden" name="${name}" value="${esc(value)}">` : ''
+  const card = (d: ListedDoor): string =>
+    teamCard(
+      d,
+      input.stars(d.handle, d.name),
+      starred.has(`${d.handle}/${d.name}`),
+      shelf.standing.get(`${d.handle}/${d.name}`) ?? { kind: 'stranger' },
+      input.account === null ? null : seatAt(d, seats, input.now)
+    )
+  // The shelf is the reader's own: it shows on the teams tab only, where the
+  // whole market is on the page. A search or the starred tab is a question
+  // about the catalogue, and the answer lists every match once.
+  // The strip is the reader's own, and shows where the whole market is on the
+  // page; a search or another tab is a question about the catalogue.
+  const onYourTab = query.tab === 'teams' && !query.q && !query.owner
+  const shelved = onYourTab && shelf.yours.length > 0
+  const catalogue = shelved ? shelf.rest : doors
   const count =
     query.tab === 'presets'
       ? `${presets.length} preset${presets.length === 1 ? '' : 's'}`
-      : `${doors.length} team${doors.length === 1 ? '' : 's'}`
+      : `${catalogue.length} ${shelved ? 'more ' : ''}team${catalogue.length === 1 ? '' : 's'}`
   const grid =
     query.tab === 'presets'
       ? presets.length > 0
         ? `<div class="teams">${presets.map(presetCard).join('')}</div>`
         : `<div class="empty">No preset matches.</div>`
-      : doors.length > 0
-        ? `<div class="teams">${doors
-            .map((d) => teamCard(d, input.stars(d.handle, d.name), starred.has(`${d.handle}/${d.name}`)))
-            .join('')}</div>`
+      : catalogue.length > 0
+        ? `<div class="teams">${catalogue.map(card).join('')}</div>`
         : query.tab === 'starred' && !input.account
           ? `<div class="empty">Sign in to see what you starred.</div>`
-          : `<div class="empty">No team matches. Widen the filters, or serve one yourself.</div>`
+          : shelved
+            ? `<div class="empty">Everything listed is already yours — it is all above.</div>`
+            : `<div class="empty">No team matches. Widen the filters, or serve one yourself.</div>`
+  const whole = shelfOf(input.doors, input.account, seats, input.now)
+  const reader = input.account === null ? '' : readerLine(input.account, whole, input.starredTeams.length)
 
   return page(
     {
       title: 'Marketplace — served AI agent teams you can open from a browser · Cookrew',
       kind: 'app',
       active: 'market',
+      account: input.account,
       scripts: ['device-id.js', 'site.js'],
       cache: 0,
       description: MARKET_DEFINITION.slice(0, 158),
@@ -144,16 +228,16 @@ export function marketPage(input: MarketInput): Page {
       noindex: query.tab === 'starred',
       jsonLd: [organization(), webPage({ path: '/market', name: 'Cookrew marketplace', description: MARKET_DEFINITION }), breadcrumbs([{ name: 'Cookrew', path: '/' }, { name: 'Marketplace', path: '/market' }]), teamList(query.tab === 'teams' ? doors : [])]
     },
-    `<div class="wrap" style="padding-top:44px">
-<p class="kicker"><span class="no">MARKET</span>doors, not copies</p>
-<h1 style="font-size:clamp(28px,3.6vw,40px)">Find a crew. Star it. Open it in Cookrew.</h1>
-<p class="lede">${esc(MARKET_DEFINITION)}</p>
+    `<div class="wrap" style="padding-top:36px">
+<p class="kicker"><span class="no">MARKET</span>one account · a seat once · any device</p>
+<h1 style="font-size:clamp(28px,3.6vw,40px);margin-bottom:10px">Find a crew. Open it, or buy a seat.</h1>
+<p class="lede" style="margin-bottom:8px">${esc(MARKET_ONE_LINE)}</p>
+${readerStrip(input)}
+${onYourTab ? yoursStrip(input, whole, seats, reader) : ''}
 <div class="tabs">${tab('teams', 'Served teams')}${tab('presets', 'Presets to download')}${tab('starred', '★ Starred')}</div>
-<form class="card soft" style="padding:14px 16px" method="get" action="/market" id="filters">
+<form class="card soft finder" method="get" action="/market" id="filters">
 ${hidden('tab', query.tab === 'teams' ? '' : query.tab)}${hidden('owner', query.owner)}
-<div class="toolbar"><input type="search" name="q" id="q" value="${esc(query.q)}" placeholder="search teams, owners, harnesses, tags…" autocomplete="off">
-<select name="sort" id="sort"><option value="stars"${query.sort === 'stars' ? ' selected' : ''}>Most starred</option><option value="recent"${query.sort === 'recent' ? ' selected' : ''}>Recently served</option><option value="name"${query.sort === 'name' ? ' selected' : ''}>Name</option></select>
-<button class="btn" type="submit">Search</button></div>
+<div class="toolbar"><input type="search" name="q" id="q" value="${esc(query.q)}" placeholder="search teams, owners, harnesses, tags…" autocomplete="off" aria-label="Search the marketplace"><button class="btn" type="submit">Search</button></div>
 <div class="filters">
 ${chip('live', '1', '● live now', query.live)}
 ${chip('access', 'free', 'free', query.access === 'free')}
@@ -161,14 +245,17 @@ ${chip('access', 'paid', 'paid', query.access === 'paid')}
 ${chip('rail', 'x402', 'USDC · x402', query.rail === 'x402')}
 ${chip('rail', 'stripe', 'card · stripe', query.rail === 'stripe')}
 ${query.owner ? `<a class="chip amber" href="/market">@${esc(query.owner)} ✕</a>` : ''}
+<label class="sort"><span class="meta">sort</span><select name="sort" id="sort" aria-label="Sort"><option value="stars"${query.sort === 'stars' ? ' selected' : ''}>Most starred</option><option value="recent"${query.sort === 'recent' ? ' selected' : ''}>Recently served</option><option value="name"${query.sort === 'name' ? ' selected' : ''}>Name</option></select></label>
 </div></form>
-<p class="meta" id="count" style="margin:16px 0 10px">${count}${query.q ? ` matching “${esc(query.q)}”` : ''}${query.owner ? ` by @${esc(query.owner)}` : ''} · ${input.account ? `signed in as @${esc(input.account)}` : 'not signed in — stars need an account'}</p>
+<p class="meta" id="count">${count}${query.q ? ` matching “${esc(query.q)}”` : ''}${query.owner ? ` by @${esc(query.owner)}` : ''}${input.account ? ` · signed in as @${esc(input.account)}` : ''}</p>
 ${grid}
-<div class="grid" style="margin-top:36px" id="account">
-<div class="card"><h3>How a listing gets here</h3><p>In the app: save a team, press SERVE, sign the registration with your passkey. The registry lists the address you gave it, verbatim, and marks it live only while your relay downlink is up.</p></div>
-<div class="card"><h3>What a star means</h3><p>One per account per team, signed with the same passkey that publishes. Stars sort this page; they never gate anything.</p></div>
-<div class="card"><h3>What opening does</h3><p>“Open in Cookrew” fires a <code>cookrew://import/@owner/team</code> link. The app shows the import sheet first, then the gate answers 401 · 402 · 403, then the orch card lands. Nothing is installed by a link alone.</p></div>
-</div>
+<div class="faq" style="margin-top:24px" id="account"><details><summary>How listings, seats, stars and opening work</summary><ul class="pts how">
+<li><b>One account.</b> Your cookrew.dev username is the only identity here. What you serve, the seats you hold, your stars and what the app opens all follow it — there is no handle to enrol and no key to mint.</li>
+<li><b>A listing.</b> In the app: save a team, press SERVE, sign the registration. The registry lists the address you gave it, verbatim, and marks it live only while your relay downlink is up.</li>
+<li><b>A seat.</b> A priced team charges a seat once, at its own door; it is yours on any device you sign in on. Money goes from you to the author — cookrew.dev takes no cut.</li>
+<li><b>A star.</b> One per account per team. Stars sort this page; they never gate anything.</li>
+<li><b>Opening.</b> “In Cookrew” fires a <code>cookrew://import/@owner/team</code> link; the app, signed in as you, shows the import sheet, meets the gate, and the orch card lands. Nothing is installed by a link alone.</li>
+</ul></details></div>
 </div>`
   )
 }

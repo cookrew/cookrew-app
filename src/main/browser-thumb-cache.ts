@@ -19,8 +19,16 @@ export type ThumbType = 'image/png' | 'image/jpeg'
 export interface ThumbFrame {
   readonly data: Buffer
   readonly type: ThumbType
-  /** When the frame was stored, for the freshness window. */
+  /**
+   * THE VERSION: when these PIXELS first arrived. A recapture that returns the
+   * same bytes keeps it, so the phone's `known=` matches and the batch answers
+   * with a number instead of the frame. It used to move on every capture, and
+   * a poll triggers a capture — so an idle page re-sent its 65 KB every five
+   * seconds for as long as its card was on screen (relay report, 2026-09-18).
+   */
   readonly at: number
+  /** When the last capture HAPPENED, for the freshness window — a different fact. */
+  readonly capturedAt: number
 }
 
 export interface ThumbCacheDeps {
@@ -55,10 +63,18 @@ export class BrowserThumbCache {
     this.put(browserId, match[2], match[1] as ThumbType)
   }
 
-  /** Store a frame pushed as raw base64 of a known type. */
+  /**
+   * Store a frame pushed as raw base64 of a known type. Identical bytes keep
+   * their version: the comparison is one `Buffer.equals`, which is nothing
+   * beside the screenshot that produced them.
+   */
   put(browserId: string, base64: string, type: ThumbType): void {
     if (base64.length === 0) return
-    this.frames.set(browserId, { data: Buffer.from(base64, 'base64'), type, at: this.now() })
+    const data = Buffer.from(base64, 'base64')
+    const now = this.now()
+    const held = this.frames.get(browserId)
+    const same = held !== undefined && held.type === type && held.data.equals(data)
+    this.frames.set(browserId, same ? { ...held, capturedAt: now } : { data, type, at: now, capturedAt: now })
   }
 
   frame(browserId: string): ThumbFrame | undefined {
@@ -85,7 +101,7 @@ export class BrowserThumbCache {
     const capture = this.deps.capture
     if (!capture) return
     const existing = this.frames.get(browserId)
-    if (existing && this.now() - existing.at < this.freshMs) return
+    if (existing && this.now() - existing.capturedAt < this.freshMs) return
     const inFlight = this.pending.get(browserId)
     if (inFlight) return inFlight
     const run = capture(browserId)

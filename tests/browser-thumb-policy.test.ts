@@ -7,6 +7,7 @@ import {
   shouldSnapshotLocally,
   thumbPollList
 } from '../src/renderer/src/browser-thumb-policy'
+import { snapshotPlan } from '../src/renderer/src/browser-thumb-policy'
 import { INITIAL_BACKOFF_MS, MAX_BACKOFF_MS } from '../src/renderer/src/capture-backoff'
 
 describe('browser thumbnail source policy', () => {
@@ -75,5 +76,40 @@ describe('thumb poll backoff — the 404 storm the owner\u2019s inspector caught
     expect(before).toEqual({})
     expect(after).not.toBe(before)
     expect(recordThumbSuccess(after, 'missing')).toBe(recordThumbSuccess(after, 'missing'))
+  })
+})
+
+/**
+ * THE DESKTOP'S OWN SWEEP, bounded the way the phone's poll already is.
+ *
+ * With the flag on, the desktop photographed EVERY browser on the canvas
+ * through main every five seconds — and once at mount, which on a canvas of
+ * forty browsers is forty CDP screenshots before anything is looked at. The
+ * phone's poll learned this: only the cards the screen shows, none at mini
+ * (no card decodes a picture there), a cap, and never the one that is zoomed
+ * (its card is behind the live view). One plan, both surfaces.
+ */
+describe('what the desktop photographs this tick', () => {
+  const plan = (over: Partial<Parameters<typeof snapshotPlan>[0]> = {}) =>
+    snapshotPlan({ zoom: 'card', hidden: false, visible: ['a', 'b', 'c'], zoomedId: null, max: 24, ...over })
+
+  it('the visible browsers, and only those', () => {
+    expect(plan()).toEqual(['a', 'b', 'c'])
+  })
+
+  it('nothing at the overview — no card decodes a picture at mini', () => {
+    expect(plan({ zoom: 'mini' })).toEqual([])
+  })
+
+  it('nothing while the window is hidden', () => {
+    expect(plan({ hidden: true })).toEqual([])
+  })
+
+  it('skips the zoomed card — it is showing the live view, its card is behind it', () => {
+    expect(plan({ zoomedId: 'b' })).toEqual(['a', 'c'])
+  })
+
+  it('is capped, so a dense viewport cannot become a burst', () => {
+    expect(plan({ visible: ['a', 'b', 'c', 'd'], max: 2 })).toEqual(['a', 'b'])
   })
 })

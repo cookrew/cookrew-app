@@ -4,9 +4,13 @@ import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { verifyWithDevice } from '../src/main/account-v2'
 import {
+  NAME_SKEW_MS,
+  NAME_TTL_MS,
   NETWORK_POLL_MS,
+  REFRESH_EVERY_MS,
   certFingerprint,
   createReachPublisher,
+  reachAnswer,
   reachCard,
   sameReach,
   signReach,
@@ -654,5 +658,127 @@ describe('a refused publish is not a published one', () => {
     expect(await p.publish('boot')).toBe('refused')
     expect(p.last()).toBeNull()
     expect(waits[0]).toBe(30_000)
+  })
+})
+
+describe('what the publisher knows about its own standing', () => {
+  const account = fakeAccount()
+  const lan = [endpoint('https://192.168.1.24:8643/?token=t', 'lan', '192.168.1.24')]
+  const publisher = (over: Partial<ReachPublisherDeps> = {}) => {
+    const deps: ReachPublisherDeps = {
+      account: () => account,
+      endpoints: () => lan,
+      certFp: () => FP,
+      relay: () => false,
+      workspaces: () => [{ id: 'w1', name: 'Cookrew Dev' }],
+      register: async () => ({ ok: true }),
+      setTimeout: () => ({ unref: () => undefined }),
+      now: () => AT,
+      ...over
+    }
+    return createReachPublisher(deps)
+  }
+
+  it('starts knowing nothing, and records the moment the registry took a card', async () => {
+    const p = publisher()
+    expect(p.state()).toEqual({ acceptedAt: null, refused: null })
+    await p.publish('boot')
+    expect(p.state()).toEqual({ acceptedAt: AT, refused: null })
+  })
+
+  it('records the refusal in the registry’s own words, and clears it on the next success', async () => {
+    let refuse = true
+    const p = publisher({
+      register: async () => (refuse ? { ok: false, reason: 'session-expired' } : { ok: true })
+    })
+    await p.publish('boot')
+    expect(p.state()).toEqual({ acceptedAt: null, refused: 'session-expired' })
+    refuse = false
+    await p.republish('session reconciled')
+    expect(p.state()).toEqual({ acceptedAt: AT, refused: null })
+  })
+
+  it('re-sends an UNCHANGED card before the zone forgets it', async () => {
+    // The zone answers a name only while the card it holds is under a day old
+    // (registry dns-zone.ts · REACH_TTL_MS). A publisher that only spoke when
+    // something changed let a Mac that sat still for a day fall out of DNS —
+    // found 2026-10-04: last card 09-28 18:37, nothing since, every name
+    // NXDOMAIN.
+    let now = AT
+    let sent = 0
+    const p = publisher({ now: () => now, register: async () => void sent++ })
+    await p.publish('boot')
+    expect(sent).toBe(1)
+    now = AT + REFRESH_EVERY_MS - 1
+    expect(await p.publish('poll')).toBe('unchanged')
+    now = AT + REFRESH_EVERY_MS + 1
+    expect(await p.publish('poll')).toBe('published')
+    expect(sent).toBe(2)
+    expect(REFRESH_EVERY_MS).toBeLessThan(NAME_TTL_MS / 2)
+  })
+
+  it('does not let the poll hammer a registry that refused the refresh', async () => {
+    // The refusal schedules a backed-off retry; the minute poll must not add
+    // a second sender beside it (reviewer, 2026-10-04).
+    let now = AT
+    let refuse = false
+    let sent = 0
+    const p = publisher({
+      now: () => now,
+      register: async () => {
+        sent++
+        return refuse ? { ok: false, reason: 'offline' } : { ok: true }
+      }
+    })
+    await p.publish('boot')
+    refuse = true
+    now = AT + REFRESH_EVERY_MS + 1
+    expect(await p.publish('poll')).toBe('refused')
+    expect(sent).toBe(2)
+    now += NETWORK_POLL_MS
+    expect(await p.publish('poll')).toBe('refused')
+    now += NETWORK_POLL_MS
+    expect(await p.publish('poll')).toBe('refused')
+    // Only the retry clock may send again.
+    expect(sent).toBe(2)
+    expect(p.retryInMs()).not.toBeNull()
+  })
+})
+
+describe('what the Mac tells the phone about its names', () => {
+  const TRUSTED = ['https://192-168-1-24.dev.d.cookrew.dev:8643']
+  const base = { deviceId: 'dev', lan: [], tailnet: null }
+
+  it('hands over the trusted names while the registry holds a fresh card', () => {
+    const answer = reachAnswer({ ...base, trusted: TRUSTED, publish: { acceptedAt: AT - 1000, refused: null }, now: AT })
+    expect(answer.trusted).toEqual(TRUSTED)
+    expect(answer.publish).toEqual({ at: AT - 1000, refused: null, live: true })
+  })
+
+  it('withholds names the zone no longer answers, and says why', () => {
+    // A trusted name is only a promise while the card behind it is fresh. The
+    // phone that raced a withheld name got "Load failed" from a negative DNS
+    // answer and called it a browser refusal.
+    const refused = reachAnswer({ ...base, trusted: TRUSTED, publish: { acceptedAt: null, refused: 'session-expired' }, now: AT })
+    expect(refused.trusted).toEqual([])
+    expect(refused.publish).toEqual({ at: null, refused: 'session-expired', live: false })
+    const stale = reachAnswer({ ...base, trusted: TRUSTED, publish: { acceptedAt: AT - NAME_TTL_MS - 1, refused: null }, now: AT })
+    expect(stale.trusted).toEqual([])
+    expect(stale.publish.live).toBe(false)
+    // And a few minutes before the zone's own deadline, for clock skew.
+    const edge = reachAnswer({ ...base, trusted: TRUSTED, publish: { acceptedAt: AT - NAME_TTL_MS + NAME_SKEW_MS / 2, refused: null }, now: AT })
+    expect(edge.publish.live).toBe(false)
+  })
+
+  it('keeps the names through a refusal that came after a fresh success', () => {
+    // The zone still answers for the rest of the day; the phone may still use them.
+    const answer = reachAnswer({ ...base, trusted: TRUSTED, publish: { acceptedAt: AT - 60_000, refused: 'offline' }, now: AT })
+    expect(answer.trusted).toEqual(TRUSTED)
+    expect(answer.publish.live).toBe(true)
+  })
+
+  it('pins the Mac’s idea of the zone’s memory to the zone’s own constant', async () => {
+    const zone = await import('../registry/src/dns-zone')
+    expect(NAME_TTL_MS).toBe(zone.REACH_TTL_MS)
   })
 })

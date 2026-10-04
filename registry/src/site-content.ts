@@ -22,7 +22,7 @@ export const DEFINITION =
 export const HEADLINE = 'Run a team of AI coding agents on one canvas — or rent someone’s.'
 
 export const MARKET_DEFINITION =
-  'The Cookrew marketplace lists served teams: teams of AI agents that stay on their author’s machine. A caller signs in with a cookrew.dev account, pays per session if the team is priced, and gets a sandboxed session of their own. The relay carries encrypted bytes it cannot read; money goes directly from caller to author and cookrew.dev takes no cut.'
+  'The Cookrew marketplace lists served teams: teams of AI agents that stay on their author’s machine. A caller signs in with a cookrew.dev account, buys a seat once if the team is priced, and gets a sandboxed session of their own. The relay carries encrypted bytes it cannot read; money goes directly from caller to author and cookrew.dev takes no cut.'
 
 export const CHECKPOINT_DEFINITION =
   'In Cookrew every agent turn is a checkpoint. You can scrub back through a session, fork a new agent from any past turn, and pin a version when a team is exported or called. Exporting or calling never touches the original session.'
@@ -66,8 +66,8 @@ export const FAQ: Faq[] = [
     a: 'Serving publishes a saved team at cookrew.dev/@you/team-name. The team keeps running on your machine; each caller gets a sandboxed session workspace minted for them, which you can end at any time. The registry lists the address and marks it live only while your relay connection is up.'
   },
   {
-    q: 'How much does a session cost, and who gets the money?',
-    a: 'The author sets the price, charged once when a session starts and never per question. Card payments go through the author’s own Stripe checkout; USDC payments use x402. cookrew.dev holds none of it and takes nothing.'
+    q: 'How much does a seat cost, and who gets the money?',
+    a: 'The author sets the price of a seat, charged once at the door and never per question — the seat follows you to any device you sign in on, and the author can end it. Card payments go through the author’s own Stripe checkout; USDC payments use x402. cookrew.dev holds none of it and takes nothing.'
   },
   {
     q: 'Is my code sent to cookrew.dev?',
@@ -203,7 +203,7 @@ export const FEATURES: FeatureSpec[] = [
   {
     slug: 'marketplace',
     title: 'The agent team marketplace: open someone’s crew from a browser',
-    short: 'The marketplace lists doors, not copies. A team stays on its author’s machine; you sign in, pay per session if it is priced, and get a live sandboxed session of your own.',
+    short: 'The marketplace lists doors, not copies. A team stays on its author’s machine; you sign in, buy a seat once if it is priced, and get a live sandboxed session of your own.',
     definition: MARKET_DEFINITION,
     pts: ['One cookrew.dev link: served on the author’s side, opened on yours', 'The relay carries bytes it cannot read; the author can end a session any time', '200 signed delivery · 401 sign in · 402 pay · 403 not covered — money goes straight to the author', 'Each team page carries the team’s own terminal, the same PTY the placed card gets'],
     frames: ['market'],

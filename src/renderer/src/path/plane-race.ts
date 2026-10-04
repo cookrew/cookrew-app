@@ -46,6 +46,8 @@ export interface PlaneAttempt {
     | 'blocked'
     | 'network'
     | 'http'
+    /** The zone is not answering this name: the Mac has not published it. Nothing the browser did. */
+    | 'unnamed'
   /** Present only for 'http': the status something on that port actually said. */
   readonly status?: number
   readonly ms: number | null
@@ -107,7 +109,7 @@ export const raceTier = async (
   deviceId: string,
   deps: PlaneSwitchDeps
 ): Promise<TierResult> => {
-  const probes = await probeTier(tier, deviceId, deps, deps.now ?? monotonicNow)
+  const probes = await settleNames(await probeTier(tier, deviceId, deps, deps.now ?? monotonicNow), deps)
   const plane = kind === 'lan' ? 'LAN' : 'TAILNET'
   const rows = probes.map((probe): PlaneAttempt => ({ ...rowOf(probe), plane, chosen: false }))
   return verifyInOrder(answeredFirst(probes), rows, deviceId, deps)
@@ -129,14 +131,47 @@ const rowOf = (probe: Probe): Omit<PlaneAttempt, 'plane' | 'chosen'> => {
   const hint = probe.hint ? { hint: probe.hint } : {}
   if (probe.kind === 'answered') return { name, outcome: 'answered', ms: Math.round(probe.ms), ...hint }
   const { failure } = probe
+  // THE ZONE'S WORD OUTRANKS THE CLOCK'S. A name the zone is not answering
+  // failed because of the name, whatever the browser said or how fast; and a
+  // 'blocked' nobody confirmed is written down as the ordinary failure it
+  // may well be. See settleNames.
+  if (probe.verdict === 'dead') return { name, outcome: 'unnamed', ms: failure.ms }
+  const outcome = failure.kind === 'blocked' && probe.verdict === 'unknown' ? 'network' : failure.kind
   return {
     name,
-    outcome: failure.kind,
+    outcome,
     ms: failure.ms,
     ...hint,
     ...(failure.status !== undefined ? { status: failure.status } : {}),
     ...(failure.detail !== undefined ? { detail: failure.detail } : {})
   }
+}
+
+/** The failures whose cause a resolver could be: nothing was heard from the address. */
+const ASKABLE: ReadonlySet<HelloFailed['kind']> = new Set(['blocked', 'network'])
+
+/**
+ * ASK THE ZONE ABOUT EVERY PROBE THAT DIED WITHOUT A CAUSE.
+ *
+ * The stopwatch cannot tell a browser refusing by policy from a resolver
+ * answering "no such name" out of its cache — both are a TypeError in single
+ * digit milliseconds, and on 2026-10-04 the second wore the first's sentence
+ * for five days. The registry's zone can tell them apart in one round trip
+ * (path/name-oracle.ts), so it is asked, once per candidate, in parallel,
+ * and only where the question has meaning: a timeout held a socket open and
+ * an HTTP status came from a machine, so neither is a name that does not
+ * resolve. An oracle that throws is an oracle that did not answer.
+ */
+const settleNames = async (probes: readonly Probe[], deps: PlaneSwitchDeps): Promise<readonly Probe[]> => {
+  const ask = deps.named
+  if (!ask) return probes
+  return Promise.all(
+    probes.map(async (probe): Promise<Probe> => {
+      if (probe.kind !== 'failed' || !ASKABLE.has(probe.failure.kind)) return probe
+      const verdict = await ask(probe.origin).catch((): 'unknown' => 'unknown')
+      return { ...probe, verdict }
+    })
+  )
 }
 
 /**
@@ -206,7 +241,15 @@ interface MeasuredReply {
 type Probe =
   | { readonly kind: 'answered'; readonly origin: string; readonly ms: number; readonly measured: MeasuredReply; readonly hint?: AddressSpaceHint }
   | { readonly kind: 'unreadable'; readonly origin: string; readonly ms: number }
-  | { readonly kind: 'failed'; readonly origin: string; readonly ms: number; readonly failure: HelloFailed; readonly hint?: AddressSpaceHint }
+  | {
+      readonly kind: 'failed'
+      readonly origin: string
+      readonly ms: number
+      readonly failure: HelloFailed
+      readonly hint?: AddressSpaceHint
+      /** The zone's word on the name, where it was asked (settleNames). */
+      readonly verdict?: 'live' | 'dead' | 'unknown'
+    }
 
 /**
  * THE VARIANT, ONLY WHERE IT IS NEWS TO A READER.

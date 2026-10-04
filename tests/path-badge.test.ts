@@ -3,7 +3,11 @@ import {
   classifyOrigin,
   isLanHostname,
   isTailnetHostname,
-  pathBadgeView
+  pathBadgeView,
+  RELAY_BLOCKED_SENTENCE,
+  RELAY_REFUSED_SENTENCE,
+  RELAY_UNPUBLISHED_SENTENCE,
+  relayUnpublishedSentence
 } from '../src/shared/path-badge'
 
 describe('path badge host classes', () => {
@@ -70,6 +74,76 @@ describe('path badge view model', () => {
     expect(view.pulsing).toBe(false)
     expect(view.desktopName).toBe('MacBook Pro')
     expect(view.latencyMs).toBe(12)
+  })
+
+  it('stops claiming the Mac is elsewhere once the browser is what refused', () => {
+    // 2026-10-04, the owner's iPhone on its own Wi-Fi: every LAN candidate was
+    // refused by Safari before connecting, in 4 ms, and the sheet's first line
+    // still read "your Mac is not on this network". A refusal is a fact about
+    // the browser; the Mac's whereabouts were never measured.
+    const refused = pathBadgeView({
+      origin: 'https://cookrew.dev',
+      link: 'live',
+      relayed: true,
+      plane: 'RELAY',
+      localNetwork: 'unsupported',
+      refusedByBrowser: true
+    })
+    expect(refused.word).toBe('RELAY')
+    expect(refused.sentence).toBe(RELAY_BLOCKED_SENTENCE)
+    expect(refused.sentence).not.toContain('not on this network')
+    expect(refused.sentence).toContain('relay')
+    // A decided refusal still wins: it names the switch that undoes it.
+    expect(
+      pathBadgeView({
+        origin: 'https://cookrew.dev',
+        link: 'live',
+        relayed: true,
+        localNetwork: 'denied',
+        refusedByBrowser: true
+      }).sentence
+    ).toBe(RELAY_REFUSED_SENTENCE)
+    // And on a direct plane the rows are history: the plane is the fact.
+    expect(
+      pathBadgeView({
+        origin: 'https://cookrew.dev',
+        link: 'live',
+        relayed: true,
+        plane: 'LAN',
+        refusedByBrowser: true
+      }).sentence
+    ).toBe('Direct over this Wi-Fi.')
+  })
+
+  it('says the Mac is not publishing a name when that is why the relay is all there is', () => {
+    // 2026-10-04: the Mac's names had been NXDOMAIN for five days because its
+    // reach publish was refused ('session-expired'); the phone raced them,
+    // got a negative DNS answer in 4 ms, and the sheet blamed first the Mac's
+    // whereabouts and then the browser. The card now says why, and so does
+    // the badge — above every other reason, because it is the one with a fix.
+    const base = { origin: 'https://cookrew.dev', link: 'live' as const, relayed: true, plane: 'RELAY' as const }
+    const ended = pathBadgeView({ ...base, unpublished: 'session-expired' })
+    expect(ended.word).toBe('RELAY')
+    expect(ended.sentence).toBe(RELAY_UNPUBLISHED_SENTENCE['session-expired'])
+    expect(ended.sentence).toContain('sign')
+    expect(ended.sentence).not.toContain('not on this network')
+    const other = pathBadgeView({ ...base, unpublished: 'offline' })
+    expect(other.sentence).toBe(relayUnpublishedSentence('offline'))
+    expect(other.sentence).toContain('offline')
+    // It outranks a browser refusal and a denied permission: no names were
+    // offered, so nothing the browser did is the story.
+    expect(pathBadgeView({ ...base, unpublished: 'session-expired', refusedByBrowser: true, localNetwork: 'denied' }).sentence)
+      .toBe(RELAY_UNPUBLISHED_SENTENCE['session-expired'])
+    // And says nothing on a direct plane, where the names evidently work.
+    expect(pathBadgeView({ ...base, plane: 'LAN', unpublished: 'session-expired' }).sentence).toBe('Direct over this Wi-Fi.')
+  })
+
+  it('has a sentence for names the zone stopped answering mid-session', () => {
+    const base = { origin: 'https://cookrew.dev', link: 'live' as const, relayed: true, plane: 'RELAY' as const }
+    const sentence = pathBadgeView({ ...base, unpublished: 'unnamed' }).sentence
+    expect(sentence).toBe(RELAY_UNPUBLISHED_SENTENCE.unnamed)
+    expect(sentence).not.toContain('not on this network')
+    expect(sentence).toContain('not answering')
   })
 
   it('uses the owner sentences for tailnet and relay', () => {

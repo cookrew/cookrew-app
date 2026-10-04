@@ -185,7 +185,8 @@ describe('the one exception is a press and only a press', () => {
     gate.setDirectOffer({
       origin: `https://192-168-2-40.${DEVICE}.d.cookrew.dev:8643`,
       kind: 'lan',
-      family: 'Safari'
+      family: 'Safari',
+      reason: 'blocked'
     })
     await settle()
     expect(phone.replaced()).toEqual([])

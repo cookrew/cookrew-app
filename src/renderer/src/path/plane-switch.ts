@@ -141,6 +141,14 @@ export interface PlaneSwitchDeps {
   readonly mayPrompt?: () => boolean
   /** What was tried and what happened, for the "why this path" panel. */
   readonly note?: (attempts: readonly PlaneAttempt[]) => void
+  /**
+   * IS THE ZONE ANSWERING THIS NAME? Asked only about a probe that died
+   * without a cause (path/name-oracle.ts). 'dead' makes the row `unnamed`;
+   * 'live' lets the clock's 'blocked' stand; 'unknown' downgrades it to
+   * 'network', because a refusal nobody confirmed is not a claim to make.
+   * Absent, the clock's verdict stands as it always did.
+   */
+  readonly named?: (origin: string) => Promise<'live' | 'dead' | 'unknown'>
 }
 
 /**

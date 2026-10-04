@@ -27,7 +27,11 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getViewportForBounds } from '@xyflow/react'
 import { describe, expect, it } from 'vitest'
-import { nodesZoomBounds, nodeZoomBounds } from '../src/renderer/src/nodes/zoom-target'
+import {
+  nodesZoomBounds,
+  nodeZoomBounds,
+  savesReturnViewport
+} from '../src/renderer/src/nodes/zoom-target'
 import { CARD_FIT_PADDING } from '../src/renderer/src/nodes/card-zoom'
 
 /** App.tsx's ReactFlow bounds. */
@@ -216,5 +220,57 @@ describe('the canvas does not call the queued fitView any more', () => {
 
   it('says so out loud when a tap has nowhere to land', () => {
     expect(app).toContain('reportMissingZoomTarget(id)')
+  })
+
+  it('asks this module whether the zoom has a viewport to come back to', () => {
+    expect(app).toContain('savesReturnViewport(')
+  })
+})
+
+/**
+ * WHERE ⤢ AND ESC GO BACK TO — the other half of the same tap.
+ *
+ * Three rules, each one a fix that cost a hunt, and until now all three lived
+ * inside a condition in App.tsx where none of them could be checked:
+ *
+ *   A zoom already inside a zoom must not overwrite the return point, or ⤢
+ *   restores another zoomed frame and the view is inescapable (Magpie E2).
+ *
+ *   Neither may a zoom made while a terminal overlay owns the stage — after a
+ *   reload that lands already zoomed, the viewport underneath is that same
+ *   zoomed frame.
+ *
+ *   And an arrival from ANOTHER WORKSPACE has nothing to return to at all: the
+ *   viewport it came in with was framing a canvas that is gone. Saving it sends
+ *   Back to whatever coordinates the previous workspace's cards happened to
+ *   occupy — empty space, on a canvas laid out differently.
+ *
+ * Empty is not a failure: `zoomBack` falls back to this canvas's own overview,
+ * which is what "back" means when there is nowhere else.
+ */
+describe('the return point a zoom records', () => {
+  const zoom = { saved: null, overlayOpen: false, freshCanvas: false }
+
+  it('is recorded for an ordinary tap from the overview', () => {
+    expect(savesReturnViewport(zoom)).toBe(true)
+  })
+
+  it('is NOT overwritten when one is already held — that loop has no exit', () => {
+    expect(savesReturnViewport({ ...zoom, saved: { x: 10, y: 20, zoom: 2 } })).toBe(false)
+  })
+
+  it('is not taken from under an overlay, which is already a zoomed frame', () => {
+    expect(savesReturnViewport({ ...zoom, overlayOpen: true })).toBe(false)
+  })
+
+  it('is not taken on arrival from another workspace — that frame is gone', () => {
+    expect(savesReturnViewport({ ...zoom, freshCanvas: true })).toBe(false)
+  })
+
+  it('stays refused on a fresh canvas even when nothing else objects', () => {
+    // The strongest rule of the three: a switch clears the held viewport on
+    // the way in, so without this one the stale frame would be saved precisely
+    // BECAUSE the switch had tidied up after itself.
+    expect(savesReturnViewport({ saved: null, overlayOpen: false, freshCanvas: true })).toBe(false)
   })
 })

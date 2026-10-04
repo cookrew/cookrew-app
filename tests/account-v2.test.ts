@@ -23,6 +23,7 @@ import {
   unlockVerifierFor,
   writeAccount,
   type AccountFile,
+  type FetchLike,
 } from '../src/main/account-v2'
 import { isValidUsername, normaliseUsername, passwordStrength } from '../src/shared/account-v2'
 
@@ -477,5 +478,122 @@ describe('a 401 with a named refusal is that refusal, not a dead session', () =>
     expect(wrong).toMatchObject({ ok: false, reason: 'bad_code', message: sentence })
     const dead = await it.call<void>('/v2/me', { method: 'GET' })
     expect(dead).toMatchObject({ ok: false, reason: 'session-expired' })
+  })
+})
+
+describe('a 401 ends only the session it was about', () => {
+  // THE INCIDENT (2026-09-29 23:37 UTC, the owner's Mac): the device-key
+  // renewal filed a fresh session at .571; at .881 an authed call that had
+  // left with the OLD token came back 401 unauthenticated, and endSession()
+  // wrote the FRESH session off. The registry kept the new session for its
+  // full month; the Mac refused every authed call locally for five days —
+  // including the reach publish, so the Mac's names fell out of DNS and the
+  // phone read "Load failed" for a Wi-Fi it was standing in.
+  const ORIGIN_ME = `${ORIGIN}/v2/me`
+
+  const controllable = () => {
+    let releaseMe: ((response: Response) => void) | null = null
+    const urls: string[] = []
+    const fetchLike: FetchLike = (input, init) => {
+      const url = String(input)
+      urls.push(url)
+      const json = (status: number, body: unknown) =>
+        new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+      if (url.endsWith('/v2/accounts') || url.endsWith('/v2/claim') || (init?.method === 'POST' && url.includes('/v2/me') === false && !url.includes('renew'))) {
+        return Promise.resolve(json(201, { ...CLAIMED, session: { token: 'tok', exp: Date.now() + 3.6e6 } }))
+      }
+      if (url.endsWith('/v2/sessions/renew-nonce')) return Promise.resolve(json(200, { nonce: 'n-1' }))
+      if (url.endsWith('/v2/sessions/renew')) {
+        return Promise.resolve(json(201, { token: 'fresh', exp: Date.now() + 30 * 24 * 3.6e6 }))
+      }
+      if (url === ORIGIN_ME) return new Promise<Response>((resolve) => void (releaseMe = resolve))
+      return Promise.resolve(json(500, {}))
+    }
+    return { fetchLike, urls, release: (status: number, body: unknown) => releaseMe?.(new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })) }
+  }
+
+  it('ignores a 401 for a token that was replaced while the call was in flight', async () => {
+    const base = scratch()
+    const wire = controllable()
+    const it = new Accounts({ base, origin: ORIGIN, fetch: wire.fetchLike })
+    await it.claim({ username: 'drej', password: PASSWORD })
+    expect(loadAccount(base)?.session?.token).toBe('tok')
+    const pending = it.profile()
+    // The renewal lands while /v2/me is still out with 'tok'.
+    expect(await it.renew()).toBe(true)
+    expect(loadAccount(base)?.session?.token).toBe('fresh')
+    wire.release(401, { error: 'unauthenticated' })
+    expect(await pending).toMatchObject({ ok: false, reason: 'session-expired' })
+    // The call failed; the SESSION did not. The refusal was about 'tok'.
+    expect(it.sessionLive()).toBe(true)
+    expect(loadAccount(base)?.session).toMatchObject({ token: 'fresh' })
+    expect(loadAccount(base)?.session?.endedAt).toBeUndefined()
+  })
+
+  it('still ends the session when the refused token is the current one', async () => {
+    const base = scratch()
+    const wire = controllable()
+    const it = new Accounts({ base, origin: ORIGIN, fetch: wire.fetchLike })
+    await it.claim({ username: 'drej', password: PASSWORD })
+    const pending = it.profile()
+    wire.release(401, { error: 'unauthenticated' })
+    await pending
+    expect(it.sessionLive()).toBe(false)
+    expect(loadAccount(base)?.session?.endedAt).toBeTypeOf('number')
+  })
+})
+
+describe('an ended mark is checked against the registry, which is the authority', () => {
+  // The local mark can be wrong (above). The registry cannot: a session it
+  // still honours answers /v2/me, one it ended answers 401. So the mark is
+  // reconciled — at boot, and never more than once per check — rather than
+  // trusted for a month while the owner's Wi-Fi name is dead.
+  const ended = async (replies: readonly { status: number; body?: unknown }[]) => {
+    const base = scratch()
+    const script = scriptedFetch([
+      { status: 201, body: { ...CLAIMED, session: { token: 'tok', exp: Date.now() + 3.6e6 } } },
+      { status: 401, body: { error: 'unauthenticated' } },
+      ...replies
+    ])
+    const it = new Accounts({ base, origin: ORIGIN, fetch: script.fetch })
+    await it.claim({ username: 'drej', password: PASSWORD })
+    await it.profile()
+    expect(it.sessionLive()).toBe(false)
+    return { it, base, urls: script.urls }
+  }
+
+  it('lifts the mark when the registry still answers the token', async () => {
+    const { it, base, urls } = await ended([{ status: 200, body: { username: 'drej', devices: [] } }])
+    expect(await it.reconcileEndedSession()).toBe(true)
+    expect(it.sessionLive()).toBe(true)
+    expect(loadAccount(base)?.session?.endedAt).toBeUndefined()
+    expect(urls.at(-1)).toBe(`${ORIGIN}/v2/me`)
+  })
+
+  it('keeps the mark when the registry says the session is gone', async () => {
+    const { it, base } = await ended([{ status: 401, body: { error: 'unauthenticated' } }])
+    expect(await it.reconcileEndedSession()).toBe(false)
+    expect(it.sessionLive()).toBe(false)
+    expect(loadAccount(base)?.session?.endedAt).toBeTypeOf('number')
+  })
+
+  it('keeps the mark, and does not throw, when the registry cannot be reached', async () => {
+    const { it } = await ended([])
+    // scriptedFetch's last reply repeats; make the next one a network failure.
+    const offline = new Accounts({ base: scratch(), origin: ORIGIN, fetch: () => Promise.reject(new Error('offline')) })
+    expect(await offline.reconcileEndedSession()).toBe(false)
+    expect(await it.reconcileEndedSession()).toBe(false)
+  })
+
+  it('asks nothing when there is no mark to check', async () => {
+    const base = scratch()
+    const script = scriptedFetch([
+      { status: 201, body: { ...CLAIMED, session: { token: 'tok', exp: Date.now() + 3.6e6 } } }
+    ])
+    const it = new Accounts({ base, origin: ORIGIN, fetch: script.fetch })
+    await it.claim({ username: 'drej', password: PASSWORD })
+    const before = script.urls.length
+    expect(await it.reconcileEndedSession()).toBe(false)
+    expect(script.urls.length).toBe(before)
   })
 })

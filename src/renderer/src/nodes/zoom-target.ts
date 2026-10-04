@@ -121,6 +121,47 @@ export function nodesZoomBounds(nodes: readonly MeasurableNode[]): ZoomBox | nul
   return { x: left, y: top, width: right - left, height: bottom - top }
 }
 
+/** The viewport a zoom could come back to, if it is worth keeping. */
+export interface ReturnViewport {
+  readonly x: number
+  readonly y: number
+  readonly zoom: number
+}
+
+/**
+ * DOES THIS ZOOM HAVE SOMEWHERE TO COME BACK TO — the other half of a tap.
+ *
+ * ⤢ CANVAS and ESC restore the viewport the tap left behind, and three
+ * situations make that viewport worthless. Each was found the hard way, and
+ * each used to live inside one condition in App.tsx where none of them could
+ * be read separately, let alone checked.
+ *
+ *   ALREADY HELD. A zoom from inside a zoom must not overwrite the saved
+ *   frame, or Back restores another zoomed-in frame and there is no way out of
+ *   the card at all (Magpie E2).
+ *
+ *   UNDER AN OVERLAY. A terminal overlay owning the stage means the viewport
+ *   beneath it is already a zoomed frame — a reload that lands zoomed is how
+ *   that happens without a tap.
+ *
+ *   A FRESH CANVAS. An arrival from another workspace (the board's
+ *   cross-workspace row) came in on a viewport that framed a canvas which no
+ *   longer exists. Those coordinates mean nothing here, and a switch has
+ *   already cleared the held frame — so without this rule the stale viewport
+ *   would be saved precisely BECAUSE the switch tidied up first.
+ *
+ * Refusing is safe: `zoomBack` with nothing saved falls back to this canvas's
+ * own overview, which is what Back means when there is nowhere else to be.
+ */
+export function savesReturnViewport(zoom: {
+  readonly saved: ReturnViewport | null
+  readonly overlayOpen: boolean
+  readonly freshCanvas: boolean
+}): boolean {
+  if (zoom.freshCanvas) return false
+  return zoom.saved === null && !zoom.overlayOpen
+}
+
 /** Ids already reported — a tap that cannot land must say so, but a card that
  *  is repeatedly tapped must not flood the console. */
 const reported = new Set<string>()

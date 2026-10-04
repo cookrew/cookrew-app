@@ -42,8 +42,43 @@
   const RECONNECT_MAX_MS = 60_000
   const RECONNECT_LIMIT = 40
   const STRIPE_CHECKOUT = /^https:\/\/checkout\.stripe\.com\//
+  const SESSION_ID = /^cs_[A-Za-z0-9_]+$/
   let seq = 0
   const [handle, team] = door.replace(/^@/, '').split('/')
+  /**
+   * WHAT SURVIVES THE TRIP TO THE CARD PAGE — per tab, per door, in
+   * sessionStorage: that this tab LEFT for Stripe (so a `?paid=` on the way
+   * back is ours and not a link somebody pasted), the session it came back
+   * with (until the line is open on it, or the door refuses it), and a BUY
+   * that arrived by link before anyone was signed in (until the sign-in).
+   */
+  const PAYING_KEY = `cr_paying:${door}`
+  const PAID_KEY = `cr_paid:${door}`
+  const BUY_KEY = `cr_buy:${door}`
+  /** `?open=1` — a row on the market said OPEN THE LINE; this page opens it for that click. */
+  const OPEN_KEY = `cr_open:${door}`
+  const remember = (key, value) => {
+    try {
+      sessionStorage.setItem(key, value)
+    } catch {
+      // A refused store means the return is not recognised; the buyer is
+      // told so and the seat still lands at cookrew.dev from the door.
+    }
+  }
+  const recall = (key) => {
+    try {
+      return sessionStorage.getItem(key)
+    } catch {
+      return null
+    }
+  }
+  const forget = (key) => {
+    try {
+      sessionStorage.removeItem(key)
+    } catch {
+      // Nothing to forget, then.
+    }
+  }
   const callPath = `/v1/relay/call/${encodeURIComponent(`@${handle}`)}/${encodeURIComponent(team)}`
 
   /**
@@ -197,14 +232,20 @@
    * credential; 403 means the account is real and has no seat at this team,
    * which is the page's sentence and not a thing to retry.
    */
-  async function v2CallToken() {
+  /**
+   * `buy` is a DELIBERATE CLICK, never a default. Without it a signed-in
+   * person with no seat is told so and offered both ways in; with it the
+   * registry mints a token with no seat claim — enough to reach the door and
+   * meet its 402, which is where a seat is actually bought.
+   */
+  async function v2CallToken(buy = false) {
     let res
     try {
       res = await fetch(`/v2/teams/${door}/call-token`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
-        body: '{}'
+        body: JSON.stringify(buy ? { intent: 'buy' } : {})
       })
     } catch {
       return null
@@ -217,6 +258,10 @@
       body = null
     }
     if (res.status === 201 && body?.token) return body
+    // 403 is a person who IS signed in and holds no seat. It is its own kind
+    // so the page can say that — the registry's sentence names the owner and
+    // the two ways to a seat — instead of treating it like an absence.
+    if (res.status === 403) throw new LineError('no-seat', body?.message ?? `you hold no seat at ${door}`)
     throw new LineError('refused', body?.message ?? `cookrew.dev would not mint a token for this door (${res.status})`)
   }
 
@@ -235,8 +280,8 @@
    * verify a cookrew.dev token says so plainly rather than being met with a
    * ceremony that would seat the wrong caller.
    */
-  async function signIn() {
-    const seated = await v2CallToken()
+  async function signIn(buy = false) {
+    const seated = await v2CallToken(buy)
     if (!seated) throw new LineError('account', 'sign in to cookrew.dev first')
     const JSON_HEADERS = { 'content-type': 'application/json' }
     const res = await exchange('POST', '/api/call/assert', JSON_HEADERS, JSON.stringify({ v2Token: seated.token }))
@@ -273,6 +318,14 @@
             everUp = true
             reconnects = 0
             gate(null)
+            // A paid line means the seat is settled at cookrew.dev a moment
+            // later, by the owner's app. The seat bar watches for it. The
+            // session presented is spent now: a reload must not present it again.
+            if (payment) {
+              forget(PAID_KEY)
+              forget(PAYING_KEY)
+              window.cookrewSeatbar?.watchSeat?.()
+            }
             $('btn-end').hidden = false
             $('prompt').disabled = false
             $('send').disabled = false
@@ -338,6 +391,7 @@
         await signIn()
         return connectLine()
       } catch (error) {
+        if (error instanceof LineError && error.kind === 'not-serving') return offline()
         note(`✕ ${error.message}`)
         setPhase('SIGNED OUT', error.message)
         gate('Sign in', error.message, [button('🔑 Try again', true, () => void open())])
@@ -390,7 +444,12 @@
     const terms = body?.terms
     const price = root.dataset.price
     if (body?.reason === 'invalid') {
-      gate('Payment refused', 'The door did not accept that payment. Nothing was charged twice.', [button('Try again', true, () => void open())])
+      // A refused session is never presented again — not on a retry, not on
+      // a reload. The next attempt starts from the quote.
+      payment = null
+      forget(PAID_KEY)
+      forget(PAYING_KEY)
+      gate('Payment refused', 'The door did not accept that payment. Nothing was charged twice.', [button('Try again', true, () => void open({ buy: true }))])
       return
     }
     if (body?.reason === 'unverifiable') {
@@ -404,7 +463,13 @@
     if (card) {
       actions.push(
         button(`Pay ${price} USD by card`, true, async () => {
-          const res = await exchange('POST', '/api/call/pay', { ...auth(), 'content-type': 'application/json' }, '{}')
+          // THIS TAB GOES TO THE CARD PAGE AND COMES BACK. The door is asked
+          // to send the buyer back to this page — this page, at this origin,
+          // which is the only return the door accepts — with the session id
+          // in the query; the page then opens the line on it by itself. No
+          // second tab, no button to press afterwards.
+          const returnUrl = `${location.origin}${location.pathname}`
+          const res = await exchange('POST', '/api/call/pay', { ...auth(), 'content-type': 'application/json' }, JSON.stringify({ returnUrl }))
           const out = jsonOf(res.body)
           if (res.status !== 200 || !out?.url) {
             toast(`Card payment is not available right now (${res.status}).`, 5000)
@@ -414,20 +479,18 @@
             toast('The door offered a checkout that is not Stripe’s; refusing to open it.', 6000)
             return
           }
-          const session = /\/(cs_[A-Za-z0-9_]+)/.exec(out.url)?.[1]
-          window.open(out.url, '_blank', 'noopener')
-          if (session) {
-            payment = btoa(JSON.stringify({ rail: 'stripe', session }))
-            gate('Finish paying in the other tab', 'When the checkout completes, open the line.', [button('Open the line', true, () => void connectLine())])
-          }
+          remember(PAYING_KEY, JSON.stringify({ team: door, at: Date.now() }))
+          setPhase('PAYING', 'Going to the card page — this page opens the line when you are back.')
+          gate('Going to the card page', 'Stripe takes the card; you come straight back here and the line opens.', [])
+          location.assign(out.url)
         })
       )
     }
     if (wallet) {
       actions.push(button('USDC · wallet', false, () => toast('Wallet payment is not wired on the web yet — open this team in Cookrew to pay with USDC.', 6000)))
     }
-    setPhase('PAY', `This team charges ${price} USD per session, once, at the start.`)
-    gate('This team charges per session', `${price} USD, charged once when the session starts — never per question. An open session is never interrupted for money.`, actions.length > 0 ? actions : [button('Open in Cookrew to pay', true, () => (location.href = `cookrew://import/${door}`))])
+    setPhase('PAY', `This team charges ${price} USD a seat, once.`)
+    gate('A seat costs', `${price} USD, once — the seat is yours after that and follows you to any device. Never per question, and an open session is never interrupted for money.`, actions.length > 0 ? actions : [button('Open in Cookrew to pay', true, () => (location.href = `cookrew://import/${door}`))])
   }
 
   /* ── keystrokes, geometry, the rail ────────────────────────────────────── */
@@ -564,27 +627,76 @@
     $('bar-led').classList.add('off')
     railLive(false)
   }
-  async function open() {
+  /** The two ways to a seat, as the 403 offers them: buy here, or ask the owner. */
+  const seatActions = (price) => [
+    button(`Buy a seat · $${price}`, true, () => void open({ buy: true })),
+    button(`Ask @${handle}`, false, () => {
+      // The ask belongs to the seat bar (site.js): it files the request, then
+      // waits for the seat and reloads when it lands.
+      const ask = document.querySelector('[data-seat-ask]')
+      if (ask) ask.click()
+      else toast(`Ask @${handle} for a seat from their page.`, 5000)
+    })
+  ]
+  /**
+   * A DOOR NOBODY IS SERVING IS NOT A SIGN-IN PROBLEM. The sign-in step
+   * reaches the door through the relay, and the relay's 404 used to land in
+   * the same catch as a refused credential — so a reader who was signed in,
+   * seated, and had just pressed OPEN read SIGNED OUT and was offered the
+   * sheet. The door's own condition is said first, as the page does on load.
+   */
+  const offline = () => {
+    note(`— ${door} is not serving this team. Nothing was charged; the address works again when they start it. —`)
+    setPhase('OFFLINE', `Nobody is serving ${door} right now.`)
+    gate('Not serving right now', 'The address stays valid. Come back when the owner starts the team again.', [])
+    stop()
+  }
+  async function open(options = {}) {
     if (!relayed) return toast('This door is not on the relay; open it in Cookrew.')
     reconnects = 0
     const acct = account()
+    const buy = options.buy === true
     // WHO IS READING IS AN ACCOUNT QUESTION (v3, G1). The old check asked
     // whether this browser had ENROLLED a handle, which a person could satisfy
     // without ever having an account — and then be charged for a seat their
-    // account already holds. The door's own word decides now, and its absence
-    // opens the sign-in sheet rather than a ceremony.
-    if (!(await v2CallToken().catch(() => null))) {
+    // account already holds. The registry's own word decides now.
+    //
+    // AND ITS TWO REFUSALS ARE TWO DIFFERENT SENTENCES. 401 is "nobody is
+    // signed in here" and the sign-in sheet is the answer. 403 is "you are,
+    // and you hold no seat" — a person told to sign in when they already had
+    // is the confusion the whole page was redesigned to remove.
+    let seated
+    try {
+      seated = await v2CallToken(buy)
+    } catch (error) {
+      const message = error instanceof LineError ? error.message : String(error)
+      note(`✕ ${message}`)
+      if (error instanceof LineError && error.kind === 'no-seat') {
+        setPhase('NO SEAT', message)
+        gate('A seat first', message, seatActions(root.dataset.price))
+      } else {
+        setPhase('REFUSED', message)
+        gate('cookrew.dev refused', message, [button('Try again', true, () => void open())])
+      }
+      return
+    }
+    if (!seated) {
+      // The intent that brought us here (a BUY link, a paid return) stays in
+      // sessionStorage: the sign-in sheet leaves this page, and the next
+      // load of it picks the intent up again.
       toast('Sign in to cookrew.dev first — a seat is yours, not this browser’s.')
       return acct?.account?.()
     }
+    forget(BUY_KEY)
     closed = false
     gate(null)
     term.clear()
     note(`cookrew.dev · web line · sealed to ${door}'s key, carried by the relay, decrypted only at the owner's machine.`)
     try {
-      const who = await signIn()
-      note(`signed in as @${who} · asking for a line`)
+      const who = await signIn(buy)
+      note(buy ? `signed in as @${who} · going to the door to buy a seat` : `signed in as @${who} · asking for a line`)
     } catch (error) {
+      if (error instanceof LineError && error.kind === 'not-serving') return offline()
       note(`✕ ${error.message}`)
       setPhase('SIGNED OUT', error.message)
       gate('Sign in', error.message, [button('🔑 Try again', true, () => void open())])
@@ -615,4 +727,52 @@
   $('btn-new').addEventListener('click', startNew)
   $('btn-end').addEventListener('click', () => void end())
   window.addEventListener('pagehide', () => controller?.abort())
+
+  /**
+   * THE RETURN, AND THE LINK THAT MEANS BUY.
+   *
+   * `?paid=cs_…` is Stripe sending this tab back after the card. It counts
+   * only when this tab is the one that left (PAYING_KEY): a pasted link with
+   * somebody's session id in it is scrubbed and ignored. `?buy=1` is a link
+   * from a card elsewhere on the site that already said BUY; both are spent
+   * off the URL at once, so a reload or a share never repeats them, and both
+   * are remembered in the tab until they are done — the sign-in sheet takes
+   * the reader to /me and back.
+   *
+   * Opening the line here is not a session opened by a link: the click was
+   * the BUY, on this page or on the card that linked here.
+   */
+  const resume = () => {
+    const url = new URL(location.href)
+    const paid = url.searchParams.get('paid')
+    const buy = url.searchParams.get('buy')
+    const go = url.searchParams.get('open')
+    if (paid !== null || buy !== null || go !== null) {
+      url.searchParams.delete('paid')
+      url.searchParams.delete('buy')
+      url.searchParams.delete('open')
+      history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`)
+    }
+    if (paid !== null && SESSION_ID.test(paid) && recall(PAYING_KEY) !== null) remember(PAID_KEY, paid)
+    if (buy === '1') remember(BUY_KEY, '1')
+    if (go === '1') remember(OPEN_KEY, '1')
+    const session = recall(PAID_KEY)
+    if (session !== null && SESSION_ID.test(session)) {
+      payment = btoa(JSON.stringify({ rail: 'stripe', session }))
+      setPhase('PAID', 'Payment received — opening the line…')
+      gate('Payment received', 'Opening the line on your new seat…', [])
+      void open({ buy: true })
+      return
+    }
+    if (recall(BUY_KEY) !== null) {
+      void open({ buy: true })
+      return
+    }
+    // Spent at once: a reload after this is a reload, not a second click.
+    if (recall(OPEN_KEY) !== null) {
+      forget(OPEN_KEY)
+      void open()
+    }
+  }
+  resume()
 })()

@@ -359,50 +359,6 @@
 
 /* ==== workspace v2: directory manager + fork dir chooser (Velvet lane) ==== */
 
-/* --- workspace switcher add/remove row (styles bundled globally) --- */
-.cr-ws-row {
-  display: flex;
-  align-items: stretch;
-  gap: 2px;
-}
-
-.cr-ws-row.active {
-  background: var(--amber-soft);
-}
-
-.cr-ws-row .cr-ws-item {
-  flex: 1;
-  min-width: 0;
-}
-
-.cr-ws-mini {
-  flex: 0 0 auto;
-  width: 30px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  cursor: pointer;
-  border-radius: 3px;
-}
-
-.cr-ws-mini:hover:not(:disabled) {
-  background: var(--cream-lo);
-  color: var(--ink);
-}
-
-.cr-ws-mini.danger:hover {
-  background: var(--rose);
-  color: var(--cream-hi);
-}
-
-.cr-ws-mini:disabled {
-  opacity: 0.3;
-  cursor: default;
-}
-
 /* --- directory manager panel --- */
 .dm-panel {
   width: min(560px, calc(100vw - 32px));
@@ -638,10 +594,6 @@
     min-height: 36px;
     max-width: 42%;
   }
-
-  .cr-ws-mini {
-    width: 40px;
-  }
 }
 
 /* ── SHARE ON SAVE (R30) — the one publish entry, inside the save sheet ──
@@ -775,7 +727,6 @@
   font-family: var(--font-mono); font-size: 11.5px;
 }
 .stc-caller { font-weight: 600; flex: 1; min-width: 0; }
-.stc-ver { color: var(--violet); font-size: 10px; }
 .stc-state { color: var(--cr-dim, #a8a29e); font-size: 10.5px; }
 .stc-confirm {
   margin-top: 10px; padding: 10px 12px;

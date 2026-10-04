@@ -13,6 +13,8 @@ import type { LocalNetworkState } from '../local-network'
 import { isLocalOrigin, localNetworkState, requestLocalNetwork } from '../local-network'
 import { localNetworkGate, offerLocalNetwork, setLocalNetwork } from '../local-network-gate'
 import { recordAttempts, type PathAttempt } from '../path-attempts'
+import { setReachPublish, type ReachPublish } from '../reach-publish'
+import { nameLive } from './name-oracle'
 import { createPathMemory, watchNetwork, type PathMemory, type PathMemoryDeps } from '../path-memory'
 import { planeFetch } from '../plane-fetch'
 import { planeHealth, type LinkHealth } from '../plane-health'
@@ -93,6 +95,17 @@ let lastDeviceId: string | null = null
  */
 let lastTrusted: readonly PlaneCandidate[] = []
 
+/** `publish` off the card, or null where the Mac is too old to send one. */
+const readPublish = (raw: unknown): ReachPublish | null => {
+  if (typeof raw !== 'object' || raw === null) return null
+  const p = raw as { at?: unknown; refused?: unknown; live?: unknown }
+  return {
+    at: typeof p.at === 'number' ? p.at : null,
+    refused: typeof p.refused === 'string' ? p.refused : null,
+    live: p.live === true
+  }
+}
+
 /** The desktop this companion is talking to, as far as the card ever said. */
 export const cardDeviceId = (): string | null => lastDeviceId
 
@@ -121,6 +134,9 @@ const fetchCard = async (): Promise<ReachCardLite | null> => {
       trusted
     }
     lastTrusted = planeCandidates(card, 'relay')
+    // What the Mac says about the names it did (or did not) list. An older
+    // Mac sends no `publish`; the badge then says nothing new, as before.
+    setReachPublish(readPublish(body.publish))
     return card
   } catch {
     return null
@@ -375,6 +391,10 @@ const startPlaneSwitch = (): (() => void) => {
           // to the endpoint, which is the only kind this switcher accepts.
           hello: (origin, nonce) => askHello(origin, nonce, { origin }),
           verify: verifyHello,
+          // The zone's word on a name whose probe died without a cause, so
+          // the rows say "not published" where that is the fact and never
+          // "refused by the browser" where it is not (path/name-oracle.ts).
+          named: (origin) => nameLive(origin),
           adopt: (plane: DataPlane) => setDataPlane(plane),
           nonce: () => randomNonce((bytes) => window.crypto.getRandomValues(bytes)),
           held: () => health.held(),

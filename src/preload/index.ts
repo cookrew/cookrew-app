@@ -256,6 +256,14 @@ const api = {
   ) => ipcRenderer.invoke('serve:import', link, position, paid),
 
   switchWorkspace: (id: string) => ipcRenderer.invoke('workspace:switch', id),
+  /**
+   * The screen wall's two calls. `snapWorkspace` is given the canvas rect
+   * because only the renderer knows where the canvas is on screen; `shots`
+   * reads what is on disk and is called when the wall opens, never held.
+   */
+  snapWorkspace: (rect: { x: number; y: number; width: number; height: number }) =>
+    ipcRenderer.invoke('workspace:snap', rect),
+  workspaceShots: () => ipcRenderer.invoke('workspace:shots'),
   renameWorkspace: (id: string, name: string) =>
     ipcRenderer.invoke('workspace:rename', id, name),
   removeWorkspace: (id: string) => ipcRenderer.invoke('workspace:remove', id),
@@ -268,6 +276,13 @@ const api = {
     ipcRenderer.invoke('terminal:setCwd', nodeId, dir),
   pickDir: () => ipcRenderer.invoke('dir:pick'),
   gitInfo: (dir: string) => ipcRenderer.invoke('git:info', dir),
+  // Lanes (main/lanes.ts): a worktree per agent, landing as a product action.
+  laneList: (dir: string) => ipcRenderer.invoke('lane:list', dir),
+  laneOpen: (nodeId: string, name: string) => ipcRenderer.invoke('lane:open', nodeId, name),
+  laneLand: (nodeId: string, opts?: { close?: boolean; gate?: string[] | null }) =>
+    ipcRenderer.invoke('lane:land', nodeId, opts),
+  laneClose: (nodeId: string, force?: boolean) => ipcRenderer.invoke('lane:close', nodeId, force),
+  laneAuto: (nodeId: string, on: boolean) => ipcRenderer.invoke('lane:auto', nodeId, on),
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   browserSnapshot: (browserId: string) => ipcRenderer.invoke('browser:snapshot', browserId),
   onWorkspaceList: (cb: (list: unknown) => void) => {
@@ -277,6 +292,15 @@ const api = {
   },
 
   ptyInput: (terminalId: string, data: string) => ipcRenderer.send('pty:input', terminalId, data),
+  terminalTuning: (terminalId: string) => ipcRenderer.invoke('terminal:tuning', terminalId),
+  listTuning: () => ipcRenderer.invoke('tuning:list'),
+  onTerminalTuning: (cb: (row: { terminalId: string; tuning: unknown }) => void) => {
+    const listener = (_e: unknown, row: { terminalId: string; tuning: unknown }): void => cb(row)
+    ipcRenderer.on('terminal:tuning', listener)
+    return () => ipcRenderer.removeListener('terminal:tuning', listener)
+  },
+  tuneTerminal: (terminalId: string, knob: string, value: string) =>
+    ipcRenderer.invoke('terminal:tune', terminalId, knob, value),
   ptyResize: (terminalId: string, cols: number, rows: number) =>
     ipcRenderer.send('pty:resize', terminalId, cols, rows),
   ptyJump: (terminalId: string, text: string | null) =>
@@ -391,6 +415,12 @@ const api = {
     const listener = (_e: unknown, event: unknown): void => cb(event)
     ipcRenderer.on('event:new', listener)
     return () => ipcRenderer.removeListener('event:new', listener)
+  },
+  // A cable lit: one agent asked another, or answered (cable-signal.ts).
+  onCableSignal: (cb: (signal: unknown) => void) => {
+    const listener = (_e: unknown, signal: unknown): void => cb(signal)
+    ipcRenderer.on('cable:signal', listener)
+    return () => ipcRenderer.removeListener('cable:signal', listener)
   },
   queryEvents: (query: unknown) => ipcRenderer.invoke('events:query', query),
   countEvents: (query: unknown) => ipcRenderer.invoke('events:count', query),

@@ -312,7 +312,7 @@ export function writeAccount(account: AccountFile, base?: string): void {
   chmodSync(file, 0o600)
 }
 
-type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
+export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
 
 export interface AccountsDeps {
   /** Directory holding account.json. Defaults to ~/.cookrew. */
@@ -469,9 +469,20 @@ export class Accounts {
    * still live at the registry the account actually lives at. A 401 from
    * somewhere else is a different building saying it does not know you.
    */
-  private endSession(): void {
+  private endSession(refusedToken?: string): void {
     const account = this.cached
     if (!account?.session || account.session.endedAt !== undefined) return
+    /**
+     * AND ONLY THE TOKEN THAT WAS REFUSED. 2026-09-29 23:37 UTC, the owner's
+     * Mac: the device-key renewal filed a fresh session at .571, and at .881 a
+     * call that had left with the OLD token came back 401 unauthenticated —
+     * and this method wrote the FRESH session off. The registry honoured it
+     * for its full month while the Mac refused every authed call locally for
+     * five days, reach publish included, so its names fell out of DNS. A
+     * refusal is about the bearer that was sent; a bearer that has since
+     * been replaced is not news about the one in hand.
+     */
+    if (refusedToken !== undefined && account.session.token !== refusedToken) return
     const elsewhere = this.registryMismatch()
     if (elsewhere !== null) {
       if (!this.saidMismatch) {
@@ -1141,7 +1152,7 @@ export class Accounts {
       // THE FIX: a 401 the registry called `unauthenticated` (or did not name)
       // is this token being told it is finished. Recorded here, once, where
       // every authenticated call already passes.
-      if (refused.reason === 'session-expired') this.endSession()
+      if (refused.reason === 'session-expired') this.endSession(sent.token)
       return { ok: false, ...refused }
     }
     if (!parse || response.status === 204) return { ok: true, value: undefined as T }
@@ -1169,23 +1180,80 @@ export class Accounts {
   async authedResponse(
     pathname: string,
     init: RequestInit = {},
-  ): Promise<{ ok: true; response: Response } | { ok: false; reason: AccountRefusal }> {
+  ): Promise<
+    { ok: true; response: Response; token: string } | { ok: false; reason: AccountRefusal }
+  > {
     const account = this.cached
     if (!account) return { ok: false, reason: 'no_account' }
     if (!this.sessionLive()) return { ok: false, reason: 'session-expired' }
+    // Read once, and handed back with the response: a 401 that arrives after
+    // a renewal has to be matched against the token that actually went out.
+    const token = account.session?.token ?? ''
     try {
       const response = await this.http(`${this.origin}${pathname}`, {
         ...init,
         headers: {
           ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
           ...(init.headers as Record<string, string> | undefined),
-          authorization: `Bearer ${account.session?.token ?? ''}`,
+          authorization: `Bearer ${token}`,
         },
       })
-      return { ok: true, response }
+      return { ok: true, response, token }
     } catch {
       return { ok: false, reason: 'offline' }
     }
+  }
+
+  /**
+   * CHECK A LOCAL "ENDED" MARK AGAINST THE REGISTRY, WHICH IS THE AUTHORITY.
+   *
+   * The mark exists so a session the registry really ended is not retried
+   * every tick (endSession). But the mark has been wrong — see endSession —
+   * and while it is wrong nothing authed leaves this Mac, for as long as a
+   * month, and nothing on screen says so beyond a password field in a sheet
+   * nobody opens. The registry cannot be wrong about this: a session it still
+   * honours answers /v2/me, one it ended answers 401.
+   *
+   * One request, straight at the registry with the marked token, bypassing
+   * the local short-circuit on purpose. 200 lifts the mark; anything else —
+   * 401, 5xx, no network — leaves it exactly as it was, because "not sure" is
+   * not "alive". Called at boot and on the renewal clock (index.ts).
+   */
+  async reconcileEndedSession(): Promise<boolean> {
+    const account = this.cached
+    const session = account?.session
+    if (!account || !session || session.endedAt === undefined) return false
+    if (session.exp - SESSION_SKEW_MS <= this.now()) return false
+    // Only the account's own registry can vouch for its session; asking
+    // another deployment would be a 401 that means nothing (see endSession).
+    const elsewhere = this.registryMismatch()
+    if (elsewhere !== null) {
+      if (!this.saidMismatch) {
+        this.saidMismatch = true
+        console.error(
+          `[cookrew] not checking this Mac's ended session at ${elsewhere.pointedAt}: it is signed in at ${elsewhere.signedInAt}`,
+        )
+      }
+      return false
+    }
+    let response: Response
+    try {
+      response = await this.http(`${this.origin}/v2/me`, {
+        headers: { authorization: `Bearer ${session.token}` },
+      })
+    } catch {
+      return false
+    }
+    if (!response.ok) return false
+    // The file may have moved under the request (a sign-in landed). Only the
+    // session that was checked is cleared.
+    if (this.cached?.session?.token !== session.token) return false
+    const { endedAt: _lifted, ...kept } = session
+    this.save({ ...account, session: kept })
+    console.error(
+      "[cookrew] this Mac's session was marked ended here but the registry still honours it; the mark is lifted",
+    )
+    return true
   }
 
   /** The whole profile: who, which devices, which desktops (D4). */

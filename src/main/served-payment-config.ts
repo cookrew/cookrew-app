@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { combinePaymentTerms, type PaymentTermsEnvelope } from './payment-rails'
 import { loadStripeSecret, stripeEnvPath, writeStripeSecret } from './stripe-config'
-import { stripePaymentTerms, type StripeConfig } from './stripe-rail'
+import { seatName, stripePaymentTerms, type StripeConfig } from './stripe-rail'
 import { writeFileAtomic } from './turn-annotations'
 import { BASE_SEPOLIA, paymentRequirements, type X402Config } from './x402-rail'
 import {
@@ -17,6 +17,8 @@ import { servedPaymentRails } from '../shared/served-payment-rails'
 export interface PaymentTemplate {
   priceUsd?: string
   slug: string
+  /** `@handle/team` when the door is published; the words on the quote. */
+  team?: string
 }
 
 export interface ServedPaymentConfig {
@@ -95,7 +97,7 @@ export function createServedPaymentConfig(
         x402,
         template.priceUsd ?? '',
         `/${template.slug}/ask`,
-        `One session with the ${template.slug} crew`
+        seatName(template)
       ),
       stripePaymentTerms(
         stripe,

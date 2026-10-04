@@ -91,7 +91,7 @@ export const ACCOUNT_SHEET = `<dialog id="account-sheet" class="card acct" aria-
 export type PageKind = 'document' | 'app'
 
 const CSP: Record<PageKind, string> = {
-  document: `default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; manifest-src 'self'; img-src 'self' ${SITE_FRAMES} data:; script-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'`,
+  document: `default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; manifest-src 'self'; img-src 'self' ${SITE_FRAMES} data:; media-src ${SITE_FRAMES}; script-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'`,
   app: `default-src 'none'; style-src 'self' 'unsafe-inline'; font-src 'self'; manifest-src 'self'; img-src 'self' ${SITE_FRAMES} data:; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`
 }
 
@@ -160,6 +160,14 @@ export interface ShellOptions {
    */
   cache?: number
   status?: number
+  /**
+   * WHO IS READING, when the server knows. The header names them and links to
+   * /me; absent or null, it offers sign in. A DOCUMENT page has no script and
+   * so no other way to ever learn this — the front page said "Sign in" to a
+   * person who was, for as long as this field did not exist. A page rendered
+   * with an account is rendered for one reader: its caller sets `cache: 0`.
+   */
+  account?: string | null
 }
 
 export function page(options: ShellOptions, main: string): Page {
@@ -206,8 +214,8 @@ const LOGO = BRAND_MARK_SVG
 const FONT_FACES = `
 @font-face{font-family:'Inter';font-style:normal;font-weight:400 700;font-display:optional;src:url(${SITE_FONTS}inter.woff2?v=${ASSET_VERSION}) format('woff2')}
 @font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400 700;font-display:optional;src:url(${SITE_FONTS}jetbrains-mono.woff2?v=${ASSET_VERSION}) format('woff2')}
-@font-face{font-family:'Silkscreen';font-style:normal;font-weight:400;font-display:optional;src:url(${SITE_FONTS}silkscreen-400.woff2?v=${ASSET_VERSION}) format('woff2')}
-@font-face{font-family:'Silkscreen';font-style:normal;font-weight:700;font-display:optional;src:url(${SITE_FONTS}silkscreen-700.woff2?v=${ASSET_VERSION}) format('woff2')}
+@font-face{font-family:'Silkscreen';font-style:normal;font-weight:400;font-display:swap;src:url(${SITE_FONTS}silkscreen-400.woff2?v=${ASSET_VERSION}) format('woff2')}
+@font-face{font-family:'Silkscreen';font-style:normal;font-weight:700;font-display:swap;src:url(${SITE_FONTS}silkscreen-700.woff2?v=${ASSET_VERSION}) format('woff2')}
 @font-face{font-family:'VT323';font-style:normal;font-weight:400;font-display:optional;src:url(${SITE_FONTS}vt323-400.woff2?v=${ASSET_VERSION}) format('woff2')}`
 const PRECONNECT = `<link rel="preconnect" href="https://raw.githubusercontent.com" crossorigin><link rel="preload" as="font" type="font/woff2" href="${SITE_FONTS}inter.woff2?v=${ASSET_VERSION}" crossorigin><link rel="preload" as="font" type="font/woff2" href="${SITE_FONTS}silkscreen-700.woff2?v=${ASSET_VERSION}" crossorigin>`
 
@@ -239,22 +247,34 @@ function head(options: ShellOptions): string {
 }
 
 function shell(options: ShellOptions, main: string): string {
-  // HOME, the MARKET and the account (owner ruling, 2026-09-06). The sections
-  // of the homepage are its own catalog, on the right rail (site-home.ts);
+  // HOME, the MARKET, the app and the account. The two things a visitor came
+  // for — the canvas and the marketplace — are one click from every page, and
+  // the header is sticky, so they never scroll to find them again. The
+  // homepage's sections are its own catalog, on the right rail (site-home.ts);
   // GitHub is in the footer with the rest of the outbound links.
   const nav = [
     ['/', 'Home', 'home'],
-    ['/market', 'Marketplace', 'market']
+    ['/market', 'Marketplace', 'market'],
+    ['/#download', 'Get the app', 'download']
   ]
     .map(
       ([href, label, key]) =>
         `<a class="btn sm${options.active === key ? ' primary' : ''}" href="${href}"${href.startsWith('http') ? ' target="_blank" rel="noopener"' : ''}>${label}</a>`
     )
     .join('')
+  // The reader, when the request said who they were. An app page keeps the
+  // button (site.js turns `me` into a visit to /me); a document page, which
+  // may run nothing, is a link — and it is the ONLY way the front page can
+  // ever name the person reading it.
+  const who = options.account ?? null
   const account =
-    options.kind === 'app'
-      ? `<button class="btn sm" id="signin" data-signin>🔑 Sign in</button>`
-      : `<a class="btn sm" href="/market#account">🔑 Sign in</a>`
+    who !== null
+      ? options.kind === 'app'
+        ? `<button class="btn sm" id="signin" data-signin="me">@${esc(who)}</button>`
+        : `<a class="btn sm" href="/me">@${esc(who)}</a>`
+      : options.kind === 'app'
+        ? `<button class="btn sm" id="signin" data-signin>${icon('key')} Sign in</button>`
+        : `<a class="btn sm" href="/market#account">${icon('key')} Sign in</a>`
   // The ladder's screens travel with the account sheet: every page that
   // carries site.js is a page a second factor can be asked on.
   const scripts = (options.kind === 'app' ? options.scripts ?? [] : [])
@@ -268,7 +288,7 @@ function shell(options: ShellOptions, main: string): string {
 <html lang="en"><head>${head(options)}${styles}<style>${FONT_FACES}${SITE_STYLE}${ACCOUNT_STYLE}</style>${scripts}</head>
 <body>
 <header class="hdr"><div class="wrap">
-<a class="mark" href="/">${LOGO}<span>COOK<b>REW</b></span></a>
+<a class="mark" href="/">${LOGO}<span>COOKREW</span></a>
 <span class="chip">an open-source spatial workspace for AI agents</span>
 <nav class="top">${nav}${account}</nav>
 </div></header>
@@ -280,6 +300,26 @@ ${main}
 <div class="toast" id="toast" hidden></div>
 ${options.kind === 'app' ? ACCOUNT_SHEET : ''}
 </body></html>`
+}
+
+
+/**
+ * THE ICONS. One family, drawn here: 12 px on a 16-unit grid, a 1.8 stroke in the button's own
+ * colour, round caps. Buttons used to carry Unicode glyphs (⬇ ◳ ▶) and one colour emoji (🔑); those
+ * rendered in whatever font the reader happened to have, at four different weights. A button's
+ * icon should be as certain as its border.
+ */
+const ICONS: Readonly<Record<string, string>> = {
+  download: '<path d="M8 2v8M4.5 6.5 8 10l3.5-3.5M3 13h10"/>',
+  market: '<path d="M2.5 6.5h11l-1 6.5h-9zM4 6.5 5.5 3h5L12 6.5M6 9.5h4"/>',
+  play: '<path d="M4.5 3.2v9.6L12.5 8z"/>',
+  key: '<circle cx="5.5" cy="8" r="3"/><path d="M8.5 8h5M11.5 8v2.5M13.5 8v1.8"/>',
+  canvas: '<rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M6.5 6.5v7"/>',
+  mac: '<rect x="2" y="3" width="12" height="8" rx="1.5"/><path d="M5 13.5h6M8 11v2.5"/>',
+  arrow: '<path d="M3 8h10M9 4l4 4-4 4"/>'
+}
+export function icon(name: keyof typeof ICONS): string {
+  return `<svg class="ic" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[name]}</svg>`
 }
 
 /** One stylesheet for every document; a second would drift from the first. */
@@ -301,7 +341,7 @@ a{color:inherit}
 @media (max-width:760px){.hdr .wrap>.chip{display:none}.hdr nav.top{margin-left:0;width:100%}}
 .mark{display:flex;align-items:center;gap:9px;text-decoration:none;font:700 15px var(--font-pixel);letter-spacing:.12em}
 .mark-coo{width:40px;height:28px;display:block;flex:0 0 auto;overflow:visible}
-.mark b{color:var(--amber-deep)}
+
 nav.top{display:flex;gap:6px;margin-left:auto;flex-wrap:wrap}
 .chip{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:uppercase;color:var(--ink);background:var(--cream-md);border:1.5px solid var(--line);padding:2px 6px;white-space:nowrap;display:inline-flex;align-items:center;gap:5px}
 .chip.amber{background:var(--amber);color:#2d2a20}.chip.violet{background:var(--violet);color:#fffef5}.chip.rose{background:var(--rose);color:#fffef5}
@@ -309,6 +349,8 @@ nav.top{display:flex;gap:6px;margin-left:auto;flex-wrap:wrap}
 .btn{font:9.5px var(--font-pixel);letter-spacing:.08em;text-transform:uppercase;color:#2d2a20;background:var(--cream-hi);border:2px solid var(--line);box-shadow:2px 2px 0 var(--line);padding:7px 11px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;text-decoration:none;user-select:none}
 @media (prefers-color-scheme:dark){.btn{color:var(--ink)}.btn.primary{color:#2d2a20}}
 .btn:hover{background:var(--amber-soft)}.btn:active{transform:translate(2px,2px);box-shadow:none}
+.btn .ic{flex:0 0 auto;margin:-1px 0}.btn.sm .ic{width:10px;height:10px}.btn.lg .ic{width:13px;height:13px}
+.dock .ico .ic{width:16px;height:16px;stroke-width:1.6}
 .btn.primary{background:var(--amber)}.btn.lg{font-size:11px;padding:11px 16px;box-shadow:3px 3px 0 var(--line)}
 .btn.sm{padding:3px 8px;font-size:8.5px;box-shadow:none}.btn[disabled]{opacity:.35;pointer-events:none}
 .btn.danger{background:var(--rose);color:#fffef5}
@@ -344,7 +386,8 @@ code,.mono{font-family:var(--font-mono);font-size:.88em}
 .crt::before{content:'';position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(to bottom,rgba(255,255,255,.03) 0,rgba(255,255,255,.03) 1px,transparent 1px,transparent 3px)}
 /* recorded frame */
 figure.shot{margin:0;border:2px solid var(--line);box-shadow:6px 6px 0 var(--line);background:var(--phos-bg);overflow:hidden}
-figure.shot img{display:block;width:100%;height:auto}
+figure.shot img,figure.shot video{display:block;width:100%;height:auto}
+figure.shot video{aspect-ratio:1400/874;background:var(--phos-bg)}
 figure.shot figcaption{font-size:13px;color:var(--muted);padding:9px 12px;background:var(--cream-hi);border-top:2px solid var(--line);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 figure.shot .rec{font:8.5px var(--font-pixel);letter-spacing:.08em;text-transform:uppercase;background:var(--hp);color:#14110a;border:1.5px solid var(--line);padding:2px 6px}
 figure.shot.missing{min-height:220px;display:grid;place-items:center;color:var(--phos-dim);font:18px var(--font-screen)}
@@ -369,41 +412,82 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
 .stat{border:2px solid var(--line);background:var(--cream-hi);box-shadow:3px 3px 0 var(--line);padding:14px}
 .stat b{display:block;font:700 30px/1 var(--font-pixel);letter-spacing:-.02em;margin-bottom:6px;color:var(--amber-deep)}
 .stat span{font-size:13px;color:var(--muted)}
-/* market */
-.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:18px 0}
-.toolbar input[type=search]{flex:1;min-width:220px;font:15px var(--font-mono);padding:9px 12px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink);box-shadow:2px 2px 0 var(--line);outline:none}
+/* market — one finder (tabs, search, filters, sort) above the grid; nothing before the first card
+   that is not a way to narrow it. The reader strip sits under the headline and folds on a phone. */
+.finder{padding:12px 14px 10px}
+.toolbar{display:flex;gap:8px;align-items:center;margin:0 0 10px}
+.toolbar input[type=search]{flex:1;min-width:0;font:15px var(--font-mono);padding:9px 12px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink);box-shadow:2px 2px 0 var(--line);outline:none}
 .toolbar input[type=search]:focus{background:var(--amber-soft)}
-.toolbar select{font:9.5px var(--font-pixel);text-transform:uppercase;letter-spacing:.08em;padding:8px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink)}
-.filters{display:flex;gap:6px;flex-wrap:wrap}
+.filters{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .filters label{cursor:pointer}.filters input{display:none}.filters input:checked+.chip{background:var(--amber);color:#2d2a20}
-.tabs{display:flex;gap:0;margin:24px 0 0}.tabs a{font:9.5px var(--font-pixel);letter-spacing:.08em;text-transform:uppercase;padding:9px 14px;border:2px solid var(--line);border-bottom:none;text-decoration:none;background:var(--cream-md)}
+.filters .sort{margin-left:auto;display:inline-flex;gap:6px;align-items:center;cursor:default}
+.filters .sort select{font:9.5px var(--font-pixel);text-transform:uppercase;letter-spacing:.08em;padding:6px 8px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink)}
+.tabs{display:flex;gap:0;margin:22px 0 0}.tabs a{font:9.5px var(--font-pixel);letter-spacing:.08em;text-transform:uppercase;padding:9px 14px;border:2px solid var(--line);border-bottom:none;text-decoration:none;background:var(--cream-md);white-space:nowrap}
 .tabs a.on{background:var(--cream-hi);position:relative;top:2px}
-.teams{display:grid;gap:22px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));margin:0 0 30px}
+#count{margin:14px 0 8px}
+.teams{display:grid;gap:18px;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));margin:0 0 28px}
 .team{display:flex;flex-direction:column;background:var(--cream-hi);border:2px solid var(--line);box-shadow:4px 4px 0 var(--line)}
 .team .head{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:2px solid var(--line);background:var(--cream-md)}
 .team .head .ttl{font:700 10px var(--font-pixel);letter-spacing:.06em;text-transform:uppercase;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.team .screen{height:96px;padding:10px 12px;display:flex;flex-direction:column;justify-content:flex-end;border-bottom:2px solid var(--line)}
-.team .screen .l{white-space:pre;overflow:hidden}.team .screen .l.d{color:var(--phos-dim)}
+.team .head .stand{margin-left:auto;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.team .screen{height:84px;padding:10px 12px;display:flex;flex-direction:column;justify-content:flex-end;border-bottom:2px solid var(--line)}
+.team .screen .l{white-space:pre;overflow:hidden;text-overflow:ellipsis}.team .screen .l.d{color:var(--phos-dim)}
 .team .body{padding:12px 14px;display:flex;flex-direction:column;gap:8px;flex:1}
 .team .body p{margin:0;font-size:14px;color:var(--muted)}
-.team .foot{display:flex;gap:8px;align-items:center;padding:10px 12px;border-top:2px solid var(--line-soft);flex-wrap:wrap}
-.team .foot .sp{flex:1}
+.team .body .note-line{font-size:12.5px;margin-top:auto}
+.team .foot{display:flex;gap:8px;align-items:center;padding:10px 12px;border-top:2px solid var(--line-soft)}
+.team .foot .sp{display:none}
+.team .foot .btn{justify-content:center;white-space:nowrap}
+.team .foot .btn.primary{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .team.example{opacity:.9}.team.example .head::after{content:'EXAMPLE';font:8px var(--font-pixel);letter-spacing:.06em;border:1.5px solid var(--line);padding:1px 5px;background:var(--violet-hi);color:#2d2a20}
 .empty{padding:40px;text-align:center;color:var(--muted);border:2px dashed var(--line-soft)}
+/* the shop: who is reading, the shelf of what they hold, and what a card is to them */
+.who{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:6px 0 2px;padding:10px 14px;border:2px solid var(--line);background:var(--cream-hi);box-shadow:3px 3px 0 var(--line)}
+.who .meta{flex:1;min-width:220px}
+.shelf{margin:18px 0 6px;padding:14px 16px 2px;border:2px solid var(--line);background:var(--amber-soft);box-shadow:4px 4px 0 var(--line)}
+.shelf h2.mkt-h{margin:0 0 12px;font-size:15px}
+/* YOUR AGENTS — the signed-in reader's own teams, first on the page, one row and one act each */
+.yours{margin:10px 0 4px;padding:0;border:2px solid var(--line);background:var(--amber-soft);box-shadow:4px 4px 0 var(--line)}
+.yours-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 14px;border-bottom:2px solid var(--line)}
+.yours-head h2{margin:0;font-size:15px}.yours-head .sp{flex:1}
+.yours-empty{margin:0;padding:12px 14px}
+.yours-rows{list-style:none;margin:0;padding:0}
+.yours-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto auto auto;gap:10px;align-items:center;padding:10px 14px;background:var(--cream-hi);border-bottom:2px solid var(--line-soft)}
+.yours-row:last-child{border-bottom:none}
+.yours-row .ttl{font:700 10px var(--font-pixel);letter-spacing:.06em;text-transform:uppercase;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.yours-row .meta{white-space:nowrap}.yours-row .stand{white-space:nowrap}
+.yours-row .btn{white-space:nowrap}
+@media (max-width:760px){
+  .yours-row{grid-template-columns:auto minmax(0,1fr) auto;row-gap:8px}
+  .yours-row .meta{display:none}
+  .yours-row .btn.primary{grid-column:1/3}.yours-row .btn{justify-content:center}
+  .yours-head .btn{display:none}
+}
+@media (max-width:700px){
+  .who{padding:9px 12px;gap:8px}.who .meta{min-width:0;font-size:12.5px}.who .btn{margin-left:auto}
+  .tabs{margin-top:16px}.tabs a{flex:1;text-align:center;padding:9px 6px;font-size:8.5px}
+  .finder{padding:10px 10px 8px}.toolbar .btn{display:none}
+  .filters{gap:5px}.filters .chip{font-size:7.5px}.filters .sort{margin-left:auto}.filters .sort .meta{display:none}
+  .teams{gap:14px}.team .screen{height:76px}.team .head .stand{max-width:60%}
+  .team .foot{padding:9px 10px}
+}
 /* team page */
-.tp-head{}@media (max-width:760px){.tp-head{grid-template-columns:1fr!important}.tp-head>.row{align-items:flex-start!important}}
-.tp{display:grid;gap:26px;grid-template-columns:minmax(0,1fr) 320px;align-items:start}
+.tp-head h1{font-size:clamp(26px,3.4vw,38px)}
+.tp-head{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:18px;align-items:start}
+.tp-actions{display:flex;gap:10px;align-items:center;justify-content:flex-end;padding-top:26px}
+@media (max-width:760px){.tp-head{grid-template-columns:1fr}.tp-actions{justify-content:flex-start;padding-top:0}.tp-actions .btn{flex:1;justify-content:center}.seat .row .btn{flex:1;justify-content:center}}
+.tp{display:grid;gap:26px;grid-template-columns:minmax(0,1fr) 320px;align-items:start}.tp.one{grid-template-columns:minmax(0,1fr)}
 @media (max-width:960px){.tp{grid-template-columns:1fr}}
 .overlay{border:2px solid var(--line);box-shadow:6px 6px 0 var(--line);background:var(--cream-hi);display:grid;grid-template-columns:minmax(0,1fr) 230px;min-height:520px}
-@media (max-width:760px){.overlay{grid-template-columns:1fr}}
+@media (max-width:760px){.overlay{grid-template-columns:minmax(0,1fr)}}
 .overlay .bar{grid-column:1/-1;display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:2px solid var(--line);background:var(--cream-md);flex-wrap:wrap}
 .overlay .bar .name{font:700 11px var(--font-pixel);letter-spacing:.08em;text-transform:uppercase}
 .overlay .bar .sp{flex:1}
 .strip{grid-column:1/-1;font-size:12.5px;color:var(--muted);padding:6px 12px;border-bottom:2px solid var(--line-soft);display:flex;gap:6px;flex-wrap:wrap}
 .strip .sep{color:var(--dim)}.strip .state{color:var(--ink)}
-.term{background:var(--phos-bg);position:relative;display:flex;flex-direction:column;min-height:420px}
+.term{background:var(--phos-bg);position:relative;display:flex;flex-direction:column;min-height:420px;min-width:0}
 .term::before{content:'';position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(to bottom,rgba(255,255,255,.03) 0,rgba(255,255,255,.03) 1px,transparent 1px,transparent 3px)}
-.term .out{flex:1;padding:12px 14px;font:15px/1.28 var(--font-screen);color:var(--phos);white-space:pre-wrap;word-break:break-word;overflow:auto;max-height:440px}
+.term .out{flex:1;min-width:0;padding:12px 14px;font:15px/1.28 var(--font-screen);color:var(--phos);white-space:pre-wrap;word-break:break-word;overflow:auto;max-height:440px}
 .term .out .d{color:var(--phos-dim)}.term .out .g{color:var(--phos-glow)}.term .out .h{color:var(--hp)}.term .out .r{color:#ff8a80}
 .term .gate{position:absolute;inset:0;display:grid;place-items:center;background:rgba(20,17,10,.86);padding:20px;text-align:center}
 .term .gate .card{max-width:380px}
@@ -428,7 +512,7 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
 .addr span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dl{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin:18px 0}
 .dl .card small{display:block;color:var(--muted);margin-top:6px;font-size:12.5px}
-.hero{padding:64px 0 52px;border-bottom:2px solid var(--line)}
+.hero{padding:22px 0 20px;border-bottom:2px solid var(--line)}
 /* the homepage: the page in one column, its catalog on the right rail. The
    sections keep their own .wrap markup; inside the column it is just a box. */
 .home{display:grid;grid-template-columns:minmax(0,1fr) 188px;gap:0 40px;align-items:start}
@@ -440,6 +524,12 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
 .toc a{display:block;padding:6px 12px;font:700 9.5px var(--font-pixel);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);text-decoration:none}
 .toc a:hover{background:var(--amber-soft);color:var(--ink)}
 .toc li.sub a{font:500 12.5px var(--font-body);letter-spacing:0;text-transform:none;color:var(--muted);padding:3px 12px 3px 22px}
+/* the rail's two destinations, pinned above the section list. Declared before
+   the breakpoint below on purpose: it hides them at equal specificity, so
+   source order is what decides. */
+.toc .jump{display:grid;gap:6px;margin:0 0 12px}
+.toc .jump a{border:2px solid var(--line);box-shadow:2px 2px 0 var(--line);background:var(--cream-hi);text-align:center}
+.toc .jump a.primary{background:var(--amber)}
 @media (max-width:1000px){
   .home{grid-template-columns:1fr}
   .toc{position:static;order:-1;padding:14px 0 0}
@@ -447,9 +537,59 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
   .toc ol{display:flex;flex-wrap:wrap;gap:6px;border-left:none}
   .toc li.sub{display:none}
   .toc a{border:1.5px solid var(--line);background:var(--cream-hi);box-shadow:2px 2px 0 var(--line)}
+  /* the rail folds above the brand here, and the sticky header is already
+     carrying both destinations two rows up — one copy is enough. */
+  .toc .jump{display:none}
 }
-.hero .wrap{display:grid;gap:40px;grid-template-columns:minmax(0,6fr) minmax(0,6fr);align-items:center}
+.hero .wrap{display:grid;gap:34px;grid-template-columns:minmax(0,6fr) minmax(0,7fr);align-items:center}
 @media (max-width:900px){.hero .wrap{grid-template-columns:1fr}}
+.hero h1{margin-bottom:12px;font-size:clamp(28px,3.3vw,40px)}
+/* the lockup is the header's mark writ large — a brand beat, not a billboard.
+   site-brand.ts sizes it for a full-width band; in the hero it shares the
+   column with the headline, so it is capped here. */
+.hero .brand{padding:0 0 14px}
+.hero .brand .stack{width:min(100%,400px)}
+.hero .lede{margin-bottom:16px;font-size:clamp(16px,1.4vw,18px);max-width:46ch}
+.hero .row#download{gap:8px}
+.hero .row#download .btn.lg{padding:11px 13px}
+.hero .tagline{margin-bottom:12px;font-size:9px;letter-spacing:.1em;white-space:nowrap}
+/* THE DOCK — the strip under the hero. Three cells, the app's own chrome: a
+   lamp, what it is, and the one number that says whether it is worth a click.
+   It is the second thing on the page so the marketplace is never a scroll. */
+.dock{display:grid;grid-template-columns:repeat(3,1fr);border:2px solid var(--line);box-shadow:4px 4px 0 var(--line);background:var(--cream-hi);margin:0 0 4px}
+.dock a{display:flex;gap:12px;align-items:center;padding:14px 16px;text-decoration:none;border-right:2px solid var(--line)}
+.dock a:last-child{border-right:none}
+.dock a:hover{background:var(--amber-soft)}
+.dock a:last-child{background:var(--amber)}
+.dock a:last-child:hover{background:var(--amber-soft)}
+.dock .t{font:700 9.5px var(--font-pixel);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:3px}
+.dock .d{font-size:13px;color:var(--muted);display:block;line-height:1.35}
+.dock .ico{font:16px var(--font-screen);background:var(--phos-bg);color:var(--phos);border:2px solid var(--line);width:34px;height:34px;display:grid;place-items:center;flex:0 0 auto}
+@media (max-width:760px){.dock{grid-template-columns:1fr}.dock a{border-right:none;border-bottom:2px solid var(--line)}.dock a:last-child{border-bottom:none}}
+.mkt-h{display:flex;align-items:center;gap:10px;font-size:17px;margin:22px 0 4px;flex-wrap:wrap}
+.mkt-h .sp{flex:1}
+/* THE RENT STRIP — the marketplace's priced instances on the first screen,
+   right under the hero: the price and a BUY on each, at most three, the rest
+   one link away. The dock follows it as one compact row. */
+.rent-strip{margin:18px 0 10px}
+.rent-strip .mkt-h{margin:0 0 10px}
+.rent-cards{display:grid;gap:14px;grid-template-columns:repeat(3,minmax(0,1fr))}
+.rent{display:flex;flex-direction:column;gap:8px;background:var(--cream-hi);border:2px solid var(--line);box-shadow:4px 4px 0 var(--line);padding:12px 14px;min-width:0}
+.rent.off{background:var(--cream-md)}
+.rent .head{display:flex;align-items:center;gap:8px;min-width:0}
+.rent .head .ttl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:16px}
+.rent p{margin:0;font-size:14px;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.rent .foot{display:flex;gap:8px;margin-top:auto;padding-top:4px}
+.rent .foot .btn{flex:1;justify-content:center;white-space:nowrap;padding-inline:8px}.rent .foot .btn.primary{flex:1.5}
+@media (max-width:900px){.rent-cards{grid-template-columns:1fr 1fr}}
+@media (max-width:640px){.rent-cards{grid-template-columns:1fr}.rent .foot{flex-direction:column}}
+.dock.compact a{padding:9px 14px}
+.dock.compact .d{display:none}
+.dock.compact .ico{width:26px;height:26px;font-size:13px}
+.dock.compact .t{margin:0}
+/* a list inside a folded FAQ block — the team page's "how it works", the market's notes */
+.faq ol.how,.faq ul.how{margin:0;padding:0 16px 14px 34px;color:var(--muted);font-size:14px}
+.faq .how li{margin:6px 0}.faq .how b{color:var(--ink)}
 .tagline{display:inline-block;background:var(--amber);color:#2d2a20;font:700 9.5px var(--font-pixel);letter-spacing:.14em;padding:4px 10px;border:2px solid var(--line);transform:rotate(-1deg);margin-bottom:18px}
 .faq details{border:2px solid var(--line);background:var(--cream-hi);margin:8px 0;box-shadow:3px 3px 0 var(--line)}
 .faq summary{cursor:pointer;padding:10px 14px;font-weight:600}.faq details>p{padding:0 16px 14px;margin:0;color:var(--muted)}
@@ -492,6 +632,10 @@ dialog.acct::backdrop{background:rgba(20,17,10,.55)}
 .avatar{width:56px;height:56px;display:grid;place-items:center;border:2px solid var(--line);box-shadow:3px 3px 0 var(--line);background:var(--amber);color:#2d2a20;font:700 18px var(--font-pixel);object-fit:cover}
 ul.me-list li{grid-template-columns:auto 1fr auto}
 .seat{margin:20px 0 4px}
+/* the seat strip: one sentence and the one act — sign in, open, or buy / ask */
+.seat.strip{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:14px 0 12px;padding:10px 14px;border:2px solid var(--line);background:var(--cream-hi);box-shadow:3px 3px 0 var(--line)}
+.seat.strip .meta{flex:1;min-width:200px}.seat.strip .sp{display:none}
+@media (max-width:700px){.seat.strip .meta{flex-basis:100%}.seat.strip .btn{flex:1;justify-content:center}}
 .seat h2{margin:0 0 6px;font:11px var(--font-pixel);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft)}
 .seat .row{gap:10px;flex-wrap:wrap;align-items:center}
 .seat input{font:14px var(--font-mono);padding:8px 10px;border:2px solid var(--line);background:var(--cream-hi);color:var(--ink);min-width:220px;outline:none}
