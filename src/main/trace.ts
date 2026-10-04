@@ -15,11 +15,13 @@ import {
   TraceIndexRequest,
   TracePage,
   TracePageRequest,
+  createClaudeTraceAccumulator,
+  createCodexTraceAccumulator,
+  createPiTraceAccumulator,
   pageTraceBlocks,
-  parseClaudeTraceDocument,
-  parseCodexTrace,
-  parsePiTrace,
-  traceIndexOf
+  traceIndexOf,
+  type ClaudeTraceAccumulator,
+  type TraceBlockAccumulator
 } from '../shared/trace-blocks'
 import { claudeSessionFile } from './claude-fork'
 import { sessionChain } from './session-lineage-walk'
@@ -250,6 +252,15 @@ interface CacheEntry {
   lines: string[]
   blocks: TraceBlock[]
   compactMarkers: TraceBoundaryMarker[]
+  /**
+   * The parser, mid-fold (perf, 2026-10-04). An append feeds it the new lines
+   * ALONE; `blocks` above is what it has accumulated. This is what turned
+   * "incremental I/O, not incremental parse" into incremental both: the three
+   * parsers were already resumable accumulators (Codex and Pi by design,
+   * Claude since this change), and re-running them from line one on every
+   * append was the main-thread cost a live 20 MB transcript paid per poll.
+   */
+  parser: TraceBlockAccumulator
   /** The last block's own byte span, computed once per ingest — see
    *  TraceDocument.tailBlockBytes. */
   tailBlockBytes?: number
@@ -264,7 +275,10 @@ export class TraceReader {
   private blockReads = new Map<string, Promise<TraceBlock[]>>()
   /** Derived index memo, keyed by the blocks ARRAY IDENTITY — trace growth
    *  produces a fresh array (blocksOf re-ingests), invalidating for free. */
-  private indexCache = new Map<string, { blocks: TraceBlock[]; entries: TraceIndexEntry[] }>()
+  private indexCache = new Map<
+    string,
+    { blocks: TraceBlock[]; entries: TraceIndexEntry[]; bytesRead: number }
+  >()
   /**
    * T1 latest-checkpoint cache, stat-guarded. A canvas of mostly-idle agents
    * polls latestCheckpoint on every card each tick; without this, an idle
@@ -305,12 +319,20 @@ export class TraceReader {
     if (!file) return []
     const kind = claude ? 'claude' : codex ? 'codex' : 'pi'
     const blocks = await this.blocksOf(file, kind)
+    // GROWTH IS A CHANGE IN BYTES, NOT IN ARRAY IDENTITY (2026-10-04). An
+    // append now extends the cached block array in place — the resumable
+    // parser's own array — so `memo.blocks === blocks` is true across a
+    // growth and would have served the pre-append listing forever. The bytes
+    // the blocks were derived from are the honest key; identity is kept as
+    // the guard it always was against a reload handing back a new array.
+    const bytesRead = this.cache.get(file)?.bytesRead ?? 0
     const memo = this.indexCache.get(terminalId)
-    const entries = memo && memo.blocks === blocks ? memo.entries : traceIndexOf(blocks)
+    const fresh = memo !== undefined && memo.blocks === blocks && memo.bytesRead === bytesRead
+    const entries = fresh ? memo.entries : traceIndexOf(blocks)
     // cappedSet, not a bare set: this map held blocks for every terminal
     // ever indexed and was the one memo M8 forgot to bound.
-    if (!memo || memo.blocks !== blocks) {
-      TraceReader.cappedSet(this.indexCache, terminalId, { blocks, entries })
+    if (!fresh) {
+      TraceReader.cappedSet(this.indexCache, terminalId, { blocks, entries, bytesRead })
     }
     const afterIndex = request.afterIndex
     return afterIndex === undefined ? entries : entries.filter((entry) => entry.index > afterIndex)
@@ -498,7 +520,15 @@ export class TraceReader {
   /** Per-file memo: refs/markers keyed by the blocks ARRAY IDENTITY — trace
    *  growth re-ingests (fresh array) and re-derives once; steady state and
    *  repeat calls within one poll are cache hits. */
-  private segmentMemo = new Map<string, { blocks: TraceBlock[]; refs: { index: number; id: string }[]; markers: TraceBoundaryMarker[] }>()
+  private segmentMemo = new Map<
+    string,
+    {
+      blocks: TraceBlock[]
+      refs: { index: number; id: string }[]
+      markers: TraceBoundaryMarker[]
+      bytesRead: number
+    }
+  >()
 
   /** M8: the per-file memo maps are insertion-order capped — otherwise they
    *  grew one entry per session file for the whole process lifetime. An
@@ -540,11 +570,17 @@ export class TraceReader {
    */
   private async segmentOfFile(file: string): Promise<{ refs: { index: number; id: string }[]; markers: TraceBoundaryMarker[] }> {
     const blocks = await this.blocksOf(file, 'claude')
+    // Keyed on the bytes read as well as the array — see index(): an append
+    // extends the cached array in place now, so identity alone would pin the
+    // pre-growth refs.
+    const bytesRead = this.cache.get(file)?.bytesRead ?? 0
     const memo = this.segmentMemo.get(file)
-    if (memo && memo.blocks === blocks) return { refs: memo.refs, markers: memo.markers }
+    if (memo && memo.blocks === blocks && memo.bytesRead === bytesRead) {
+      return { refs: memo.refs, markers: memo.markers }
+    }
     const refs = blocks.map((b) => ({ index: b.index, id: b.id }))
     const markers = this.cache.get(file)?.compactMarkers ?? []
-    TraceReader.cappedSet(this.segmentMemo, file, { blocks, refs, markers })
+    TraceReader.cappedSet(this.segmentMemo, file, { blocks, refs, markers, bytesRead })
     return { refs, markers }
   }
 
@@ -767,16 +803,20 @@ export class TraceReader {
         return touched.blocks
       }
       if (cached && info.size > cached.bytesRead) {
-        // Append-only growth: read ONLY the new bytes.
-        const lines = [...cached.lines]
+        // Append-only growth: read ONLY the new bytes, and PARSE only them —
+        // the cached parser resumes where it stopped.
+        const fresh: string[] = []
         const remainder = await readLines(
           file,
           cached.bytesRead,
           info.size - cached.bytesRead,
           cached.remainder,
-          (line) => lines.push(line)
+          (line) => fresh.push(line)
         )
-        return this.ingest(file, kind, lines, remainder, info.size)
+        return this.ingest(file, kind, [...cached.lines, ...fresh], remainder, info.size, {
+          parser: cached.parser,
+          fresh
+        })
       }
       // First read or a shrink (/rewind truncation): reload — streamed, so a
       // 90MB session file is never four copies of itself in flight.
@@ -791,22 +831,28 @@ export class TraceReader {
     }
   }
 
-  /** Parse the lines the reader gathered and cache them; the tail waits. */
+  /**
+   * Parse what the reader gathered and cache it; the tail waits.
+   *
+   * With `carry`, this is an APPEND: the cached parser is fed the fresh lines
+   * only, and everything it accumulated before stands. Without it — a first
+   * read, or a shrink after a /rewind truncation — a new parser is fed every
+   * line, which is the whole-file parse the resumable one is defined against.
+   */
   private ingest(
     file: string,
     kind: 'claude' | 'codex' | 'pi',
     lines: string[],
     remainder: Buffer,
-    bytesRead: number
+    bytesRead: number,
+    carry?: { parser: TraceBlockAccumulator; fresh: string[] }
   ): TraceBlock[] {
-    const parsedClaude = kind === 'claude' ? parseClaudeTraceDocument(lines) : null
-    const blocks = parsedClaude
-      ? parsedClaude.blocks
-      : kind === 'codex'
-        ? parseCodexTrace(lines)
-        : parsePiTrace(lines)
-    const tailBlockBytes = parsedClaude
-      ? tailBlockSpan(lines, parsedClaude.blockLines, remainder.length)
+    const parser = carry?.parser ?? parserFor(kind)
+    parser.feed(carry?.fresh ?? lines)
+    const blocks = parser.blocks()
+    const claude = isClaudeParser(parser) ? parser : null
+    const tailBlockBytes = claude
+      ? tailBlockSpan(lines, claude.blockLines(), remainder.length)
       : undefined
     TraceReader.cappedSetSized(this.cache, file, {
       file,
@@ -815,11 +861,23 @@ export class TraceReader {
       remainder,
       lines,
       blocks,
-      compactMarkers: parsedClaude?.markers ?? [],
+      compactMarkers: claude?.markers() ?? [],
+      parser,
       ...(tailBlockBytes !== undefined ? { tailBlockBytes } : {})
     })
     return blocks
   }
+}
+
+/** A fresh, resumable parser for one harness's transcript. */
+function parserFor(kind: 'claude' | 'codex' | 'pi'): TraceBlockAccumulator {
+  if (kind === 'claude') return createClaudeTraceAccumulator()
+  return kind === 'codex' ? createCodexTraceAccumulator() : createPiTraceAccumulator()
+}
+
+/** Only Claude's parser knows compact boundaries and where each block opened. */
+function isClaudeParser(parser: TraceBlockAccumulator): parser is ClaudeTraceAccumulator {
+  return typeof (parser as ClaudeTraceAccumulator).blockLines === 'function'
 }
 
 /**
