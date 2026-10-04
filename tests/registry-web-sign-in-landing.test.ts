@@ -17,7 +17,7 @@ describe('a sign-in on a team page reloads the page instead of leaving for /me',
   const factors = ASSETS['factors.js'].body
 
   it('site.js decides the landing once and publishes it for the ladder', () => {
-    expect(site).toContain("if (document.getElementById('team')) location.reload()")
+    expect(site).toContain("if (document.getElementById('team') || document.querySelector('[data-signin-stays]')) location.reload()")
     expect(site).toContain('window.cookrewAfterSignIn = afterSignIn')
     // Neither sign-in path in the sheet jumps to /me on its own any more.
     expect(site.match(/dialog\.close\(\)\n\s+location\.assign\('\/me'\)/g)).toBeNull()
@@ -35,5 +35,12 @@ describe('the site enrols no handle', () => {
     expect(site).not.toContain('signInFlow')
     expect(site).not.toContain('/v1/identity/register')
     expect(site).toContain("v2('POST', `/v1/doors/@${handle}/${name}/star`)")
+  })
+})
+
+describe('a door nobody is serving is not a sign-in problem', () => {
+  it('line.js answers the relay’s not-serving with OFFLINE on both sign-in paths, never SIGNED OUT', () => {
+    const line = ASSETS['line.js'].body
+    expect(line.match(/if \(error instanceof LineError && error\.kind === 'not-serving'\) return offline\(\)/g)).toHaveLength(2)
   })
 })

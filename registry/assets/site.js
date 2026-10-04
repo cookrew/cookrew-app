@@ -18,7 +18,9 @@
    * kept in sessionStorage. Everywhere else the account page is the answer.
    */
   const afterSignIn = () => {
-    if (document.getElementById('team')) location.reload()
+    // A page rendered for the reader — a team's page, the market — is reloaded
+    // for who they now are; anywhere else, the account page is the answer.
+    if (document.getElementById('team') || document.querySelector('[data-signin-stays]')) location.reload()
     else location.assign('/me')
   }
   window.cookrewAfterSignIn = afterSignIn

@@ -550,6 +550,8 @@ describe('the market is a shop with one name on the door', () => {
     expect(page).not.toContain('Enrol')
     expect(page).not.toContain('id="yours"')
     expect(page).not.toContain('Buy a seat')
+    // A sign-in from here reloads the market for the reader (site.js).
+    expect(page).toContain('data-signin-stays')
   })
 
   it('puts what the reader holds on a shelf, and prices the rest by their standing', () => {

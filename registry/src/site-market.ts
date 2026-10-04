@@ -134,7 +134,7 @@ function chip(name: string, value: string, label: string, on: boolean): string {
  */
 function readerStrip(input: MarketInput, line: string | null): string {
   if (input.account === null || line === null) {
-    return `<div class="who"><span class="meta">Sign in once — your seats, stars and teams follow your username to any device, and into the app.</span><button class="btn sm primary" data-signin>${icon('key')} Sign in</button></div>`
+    return `<div class="who" data-signin-stays><span class="meta">Sign in once — your seats, stars and teams follow your username to any device, and into the app.</span><button class="btn sm primary" data-signin>${icon('key')} Sign in</button></div>`
   }
   return `<div class="who"><span class="chip amber">${esc(line)}</span><span class="meta">A seat bought here is the seat the app opens with — same username, no second sign-in.</span><a class="btn sm" href="/me">Your account</a></div>`
 }

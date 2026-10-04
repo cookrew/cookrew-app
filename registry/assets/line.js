@@ -389,6 +389,7 @@
         await signIn()
         return connectLine()
       } catch (error) {
+        if (error instanceof LineError && error.kind === 'not-serving') return offline()
         note(`✕ ${error.message}`)
         setPhase('SIGNED OUT', error.message)
         gate('Sign in', error.message, [button('🔑 Try again', true, () => void open())])
@@ -635,6 +636,19 @@
       else toast(`Ask @${handle} for a seat from their page.`, 5000)
     })
   ]
+  /**
+   * A DOOR NOBODY IS SERVING IS NOT A SIGN-IN PROBLEM. The sign-in step
+   * reaches the door through the relay, and the relay's 404 used to land in
+   * the same catch as a refused credential — so a reader who was signed in,
+   * seated, and had just pressed OPEN read SIGNED OUT and was offered the
+   * sheet. The door's own condition is said first, as the page does on load.
+   */
+  const offline = () => {
+    note(`— ${door} is not serving this team. Nothing was charged; the address works again when they start it. —`)
+    setPhase('OFFLINE', `Nobody is serving ${door} right now.`)
+    gate('Not serving right now', 'The address stays valid. Come back when the owner starts the team again.', [])
+    stop()
+  }
   async function open(options = {}) {
     if (!relayed) return toast('This door is not on the relay; open it in Cookrew.')
     reconnects = 0
@@ -680,6 +694,7 @@
       const who = await signIn(buy)
       note(buy ? `signed in as @${who} · going to the door to buy a seat` : `signed in as @${who} · asking for a line`)
     } catch (error) {
+      if (error instanceof LineError && error.kind === 'not-serving') return offline()
       note(`✕ ${error.message}`)
       setPhase('SIGNED OUT', error.message)
       gate('Sign in', error.message, [button('🔑 Try again', true, () => void open())])
