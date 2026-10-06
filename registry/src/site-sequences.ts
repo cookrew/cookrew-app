@@ -10,22 +10,22 @@ export const SEQUENCES: Readonly<Record<string, readonly Step[]>> = {
   "canvas": [
     {
       "file": "seq-canvas-1.jpg",
-      "title": "The crew on the canvas",
-      "caption": "Framed the crew in the harness view: every agent card shows what it is doing right now — the brief it was given, the tool call it is on and the status line under it — with the spec notes each was handed in a row beneath, the browser cards under those, and the cables drawn as shared trunks along the gutters.",
+      "title": "The crew at work on one canvas",
+      "caption": "Five agents on three harnesses — Claude Code, Codex and Pi — working a scratch TypeScript repo together: each card carries the brief it was given, what it answered and how many checkpoints it has taken, with the note one of them wrote and the page it opened sitting under its own card.",
       "width": 1400,
       "height": 874
     },
     {
       "file": "seq-canvas-2.jpg",
-      "title": "An agent card opened, the rail scrubbed",
-      "caption": "Clicked Fresco open and dragged its checkpoint rail upward: the transcript on the left holds the turns it has taken, the live terminal runs under the LIVE line, and the rail fanned out into the 132 checkpoints with the title each turn was given.",
+      "title": "A card opened, its rail scrubbed",
+      "caption": "Clicked Mason open and dragged its checkpoint rail up from the live end: the rail fanned out into the eight turns it had taken — the test runs, the rename, the README line, the commit — and the transcript on the left followed the drag to the turn under the marker.",
       "width": 1400,
       "height": 875
     },
     {
       "file": "seq-canvas-3.jpg",
-      "title": "An agent asks, and the owner answers in its own prompt",
-      "caption": "Mason reached a fork only the owner could settle \u2014 what 2.5 does at a half \u2014 and raised Claude Code\u2019s own question prompt for it. The answer was given on the card, in the agent\u2019s own composer: the transcript records \u201cUser answered Claude\u2019s questions: Which rounding do you want at a half? \u2192 Half to even\u201d, and the agent says which rule it will use and carries on to write the test first.",
+      "title": "An agent stops to ask, in its own prompt",
+      "caption": "Quill reached a decision it would not take alone — what the cut looks like when text is truncated — and raised Claude Code’s own question prompt for it. The card went to NEEDS ATTENTION and the work stopped there, with the two options named and nothing chosen.",
       "width": 1400,
       "height": 875
     }
@@ -34,21 +34,21 @@ export const SEQUENCES: Readonly<Record<string, readonly Step[]>> = {
     {
       "file": "seq-harnesses-1.jpg",
       "title": "The harness picker, Shell chosen",
-      "caption": "Pressed TERMINAL in the dock over the harness canvas and chose SHELL: the picker shows the five harnesses Cookrew ships — Claude Code, Codex, OpenCode, Pi and a plain shell — with Shell lit and + IMPORT A TEAM at the end of the row.",
+      "caption": "Pressed TERMINAL in the dock over the live canvas and chose SHELL: the picker shows the five harnesses Cookrew ships — Claude Code, Codex, OpenCode, Pi and a plain shell — then the teams saved on this machine, then + IMPORT A TEAM.",
       "width": 1400,
       "height": 875
     },
     {
       "file": "seq-harnesses-2.jpg",
       "title": "Claude Code chosen",
-      "caption": "Chose CLAUDE CODE in the same picker: the lit chip moved from Shell to Claude Code, and a click on the canvas would now place an agent on that harness. The crew behind it is already mixed — Codex, OpenCode and Pi all answer on this board.",
+      "caption": "Chose CLAUDE CODE in the same picker: the lit chip moved from Shell to Claude Code, and the next click on the canvas would place an agent on that harness. The crew behind it is already mixed — Codex and Pi answer on this board too.",
       "width": 1400,
       "height": 875
     },
     {
       "file": "seq-harnesses-3.jpg",
       "title": "Import a team, opened",
-      "caption": "Pressed + IMPORT A TEAM: the sheet opened over the canvas with its address field, and under it the teams saved on this machine — private, visible to nobody else, placed as a session with one press.",
+      "caption": "Pressed + IMPORT A TEAM: the sheet opened over the canvas with its address field, the teams saved on this machine under it, and — under those — the seats this account already holds, including one granted at @drej/cookrew-alpha.",
       "width": 1400,
       "height": 875
     }
@@ -57,21 +57,21 @@ export const SEQUENCES: Readonly<Record<string, readonly Step[]>> = {
     {
       "file": "seq-checkpoints-1.jpg",
       "title": "A card open on its rail",
-      "caption": "Clicked Magpie open: its latest turn sits above the LIVE line, the live terminal runs under it, and the rail on the right counts 78 checkpoints over the session’s whole chain.",
+      "caption": "Clicked Mason open after a morning of work: the finished turn sits above the LIVE line, the live terminal runs under it, and the rail on the right counts the eight checkpoints it has taken in this session.",
       "width": 1400,
       "height": 875
     },
     {
       "file": "seq-checkpoints-2.jpg",
       "title": "Mid-scrub on the rail",
-      "caption": "Pressed the orchestrator’s rail at its live end and dragged upward: the list of 311 checkpoints fanned out with the title each turn was given, the focus riding the drag, and the transcript on the left following it.",
+      "caption": "Pressed the rail at its live end and dragged upward: the checkpoints fanned out with the title each turn was given — the suite run, the 999 B and 1 PB cases, the rename to UNITS, the README line — and the transcript followed the marker.",
       "width": 1400,
       "height": 875
     },
     {
       "file": "seq-checkpoints-3.jpg",
-      "title": "Fork offered on a row",
-      "caption": "Held the pointer on a row of the fanned list until its action surfaced: FORK, which starts a new agent from that checkpoint and leaves the original running, untouched.",
+      "title": "What a past turn offers",
+      "caption": "Held the pointer on one row of the fanned list until its actions surfaced: ROLE, FORK and REWIND — fork starts a new agent from that checkpoint and leaves this one running, untouched.",
       "width": 1400,
       "height": 875
     }
@@ -80,21 +80,21 @@ export const SEQUENCES: Readonly<Record<string, readonly Step[]>> = {
     {
       "file": "seq-board-1.jpg",
       "title": "The Board, one row per agent",
-      "caption": "Switched the header from Canvas to Board: one row per agent with its harness, role and workspace chips, the prompt it was last given, what it is doing now and its checkpoint count — and Velvet’s row in red, because it has stopped to ask its owner which way to go.",
+      "caption": "Switched the header to BOARD and narrowed it to this workspace: one row per agent with its harness, role and workspace chips, the prompt it was last given, what it answered and its checkpoint count — and the note the crew wrote, folded into the same stream.",
       "width": 1400,
       "height": 875
     },
     {
       "file": "seq-board-2.jpg",
       "title": "A facet chip narrows the roster",
-      "caption": "Focused the Board’s search so the facet bar opened, then clicked CLAUDE CODE: the roster dropped to the five agents on that harness and CLEAR appeared at the head of the bar. The chips count the rest — Codex 1, OpenCode 1, Pi 1 — and one more per role.",
+      "caption": "Clicked the SITE SHOOT chip in the Board’s facet bar: the roster dropped from the whole fleet to the five agents in this workspace, and CLEAR appeared at the head of the bar.",
       "width": 1400,
       "height": 875
     },
     {
       "file": "seq-board-3.jpg",
-      "title": "Searched the checkpoints",
-      "caption": "Typed checkpoint into the Board’s search: every agent answered, and each row carries the checkpoint the hit landed in — T131, T121 — with the words around it, read from the agents’ own transcripts rather than from a log.",
+      "title": "Searched the transcripts",
+      "caption": "Typed roundTo into the Board’s search: one agent of 721 answered, with the checkpoint the hit landed in and the words around it — read from the agent’s own transcript, not from a log.",
       "width": 1400,
       "height": 875
     }
@@ -102,8 +102,8 @@ export const SEQUENCES: Readonly<Record<string, readonly Step[]>> = {
   "cli": [
     {
       "file": "seq-cli-1.jpg",
-      "title": "cookrew list, in a plain shell card",
-      "caption": "Opened a Shell card on the same canvas: cookrew list printed the crew with each one’s role and harness, and cookrew ask sent Vigil a brief it will answer in its own card — the same command line an orchestrating agent types.",
+      "title": "The CLI people and agents share",
+      "caption": "Asked an agent to run cookrew list and cookrew status and show the output: it printed the crew it is wired to and what each one is doing — the same two commands a person types, run by the agent itself.",
       "width": 1400,
       "height": 878
     }
@@ -111,29 +111,29 @@ export const SEQUENCES: Readonly<Record<string, readonly Step[]>> = {
   "mobile": [
     {
       "file": "seq-mobile-1.jpg",
-      "title": "The canvas at phone width",
-      "caption": "Rendered the same canvas at 390 px with touch emulation, the layout the phone companion serves: the cards keep their turn, their harness chip and their checkpoint count, and the dock sits along the bottom.",
+      "title": "The same canvas at phone width",
+      "caption": "Opened the phone companion against the same live workspace at 390 px with touch emulation: the cards keep their turn, their harness chip and their checkpoint count, and the dock sits along the bottom.",
       "width": 700,
       "height": 1400
     },
     {
       "file": "seq-mobile-2.jpg",
-      "title": "A waiting card, tapped open on the phone",
-      "caption": "Tapped the card that wanted an answer: it takes the screen with NEEDS ATTENTION beside its name, the ask at the top, the rail counting 124 down the right edge, and the phone’s own key row under it.",
+      "title": "A card tapped open on the phone",
+      "caption": "Tapped Mason on the phone: it takes the screen with its name and status at the top, the turn it is on, the rail down the right edge, and the phone’s own key row under it.",
       "width": 700,
       "height": 1400
     },
     {
       "file": "seq-mobile-3.jpg",
       "title": "The Board on the phone",
-      "caption": "Tapped BOARD on the phone: the same roster in the narrow layout, each row carrying its harness and role chips and what the agent last did — and NEEDS YOU on the one that stopped to ask.",
+      "caption": "Tapped BOARD on the phone and searched for this workspace: the same roster in the narrow layout, each row carrying its harness and role chips and what the agent last did.",
       "width": 700,
       "height": 1400
     },
     {
       "file": "seq-mobile-4.jpg",
       "title": "The dock picker on the phone",
-      "caption": "Tapped TERMINAL in the phone’s dock: the harness picker opened above it with the five harnesses and + IMPORT A TEAM — the same row the desktop shows, at thumb size.",
+      "caption": "Tapped TERMINAL in the phone’s dock: the harness picker opened above it with the same five harnesses and + IMPORT A TEAM the desktop shows, at thumb size.",
       "width": 700,
       "height": 1400
     }
@@ -142,7 +142,7 @@ export const SEQUENCES: Readonly<Record<string, readonly Step[]>> = {
     {
       "file": "seq-workspaces-1.jpg",
       "title": "The workspace wall",
-      "caption": "Pressed the workspace pill: the wall slid in as tilted screens, Cookrew Dev picked in front with a snapshot of this canvas and its directory under it, the others behind, and BACK, DIRECTORIES, REMOVE and HISTORY below.",
+      "caption": "Pressed the workspace pill: the wall slid in as tilted screens with Site Shoot picked in front, its directory under it and a snapshot of the canvas on its face, and BACK, DIRECTORIES, REMOVE and HISTORY below.",
       "width": 1400,
       "height": 875
     }
@@ -150,15 +150,15 @@ export const SEQUENCES: Readonly<Record<string, readonly Step[]>> = {
   "marketplace": [
     {
       "file": "seq-marketplace-1.jpg",
-      "title": "The marketplace, and the seats you already hold",
-      "caption": "Opened cookrew.dev/market signed in: the Your agents strip lists the doors this account can open right now — one it serves itself, one it was granted a seat at — above the finder and the shelf of teams taking calls.",
+      "title": "The marketplace, signed in",
+      "caption": "Opened cookrew.dev/market signed in as a reader who holds no seats yet: the Your agents strip says so in as many words, and under the finder the listed team shows its own terminal — Pilot, ready, three agents behind the door — with what a seat costs.",
       "width": 1400,
       "height": 875
     },
     {
       "file": "seq-marketplace-2.jpg",
       "title": "A team page: one line, one strip",
-      "caption": "Opened a priced team page as a reader holding no seat: the page is one line — who answers, for how many agents, over which transports — above one strip carrying the team’s own terminal and its checkpoints, with BUY A SEAT · $1 beside the line.",
+      "caption": "Opened a live team page as a reader with no seat: the page is one line — who answers, for how many agents, on which models, taking calls — over one strip carrying the team’s own terminal and its checkpoints, with BUY A SEAT · $1 and a note that the seat follows you to any device.",
       "width": 1400,
       "height": 875
     }
