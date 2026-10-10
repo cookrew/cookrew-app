@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Notification, powerMonitor, shell } from 'electron'
 import path from 'node:path'
 import { chmodSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -78,7 +78,9 @@ import {
   activeCertFingerprint,
   trustedOrigins,
   allowedCompanionOrigins,
-  companionTokenAccepted
+  companionTokenAccepted,
+  refreshMobileCert,
+  advertisedHostsNow
 } from './mobile-server'
 import { createDesktopCert, type DesktopCert } from './desktop-cert'
 import { DEFAULT_NAME_ZONE } from '../shared/reach-names'
@@ -119,6 +121,7 @@ import { pairingHandout } from './pairing-handout'
 import { pairingUrl } from '../shared/pairing-url'
 import type { PairingHandout } from '../shared/account-v2'
 import { createReachPublisher, type ReachPublisher } from './reach'
+import { createNetworkWatch } from './network-watch'
 import { createCanvasLink } from './canvas-link'
 import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
 import { IdleLock } from './lock'
@@ -467,6 +470,13 @@ const tuningCache = new TuningCache()
 const tuningAnnounced = new Map<string, string>()
 /** The same change-gated announcement the renderer gets, for phone streams. */
 const tuningBus = new EventEmitter()
+/**
+ * 'changed' when the registry has taken a reach card that differs from the
+ * last one it took: this Mac's addresses moved and the zone answers the new
+ * names. Phone streams relay it as `reach` (mobile-api) and the renderer gets
+ * `reach:changed`; both mean "race the Mac's names now, not in a minute".
+ */
+const reachBus = new EventEmitter()
 /**
  * Signals on the cables: "A asked B" and "B answered A", one frame each, to
  * the desktop renderer over IPC and to every phone stream over SSE
@@ -5503,6 +5513,7 @@ app.whenReady().then(() => {
     tuningBus,
     // The same cable signals the desktop gets, filtered to the stream's canvas.
     signalBus: cableSignals,
+    reachBus,
     // Serves the CA-issued chain by SNI for this Mac's names, keeps the
     // self-signed one as the default, and spells the printed URLs.
     nameCert: nameCertificate,
@@ -5769,6 +5780,15 @@ app.whenReady().then(() => {
     trusted: () => trustedOrigins(),
     register: (workspaces, reach, trusted) =>
       accounts.registerDesktop(workspaces, reach, trusted),
+    // ONLY ONCE THE ZONE ANSWERS. A phone told before the registry took the
+    // card would resolve the new name to NXDOMAIN and cache that answer for
+    // minutes (path/name-oracle.ts, 2026-10-04); told after, it finds a Mac.
+    onChanged: () => {
+      reachBus.emit('changed')
+      if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+        mainWindow.webContents.send('reach:changed')
+      }
+    },
     log: (message) => console.error(`[cookrew] ${message}`)
   })
   // The line's state IS half the card, so a line that comes up or goes down
@@ -5780,6 +5800,29 @@ app.whenReady().then(() => {
   // The addresses move without anyone asking: a laptop lid, a new Wi-Fi, a
   // Tailscale that finally came up. Polling is the only honest way to notice.
   reachPublisher.watch()
+  // AND NOTICE IN SECONDS, NOT A MINUTE. The publisher's clock is the floor;
+  // this diff of the interfaces is one syscall and forks nothing (it reads
+  // the tailnet from the cache the minute clocks fill), so it runs every few
+  // seconds, and the two moments macOS can name — waking and unlocking — are
+  // checked at once. On a change the self-signed certificate is re-issued
+  // for the new bare address FIRST, then the card goes to the registry, and
+  // the registry's acceptance (onChanged above) is what tells the phone.
+  const networkWatch = createNetworkWatch({
+    read: advertisedHostsNow,
+    onChange: ({ reason, added, removed }) => {
+      console.error(
+        `[cookrew] addresses changed (${reason}): +[${added.join(' ')}] -[${removed.join(' ')}]`
+      )
+      void refreshMobileCert()
+        .catch((error) => console.error('Mobile cert refresh after a network change failed:', error))
+        .then(() => reachPublisher?.republish('addresses changed'))
+        .catch(() => undefined)
+    }
+  })
+  networkWatch.check('boot')
+  networkWatch.start()
+  powerMonitor.on('resume', () => void networkWatch.check('wake'))
+  powerMonitor.on('unlock-screen', () => void networkWatch.check('unlock'))
 
   // The certificate, once the account and the addresses are known. Best
   // effort and never awaited: an order is seconds of polling at the registry

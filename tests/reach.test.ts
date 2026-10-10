@@ -782,3 +782,45 @@ describe('what the Mac tells the phone about its names', () => {
     expect(NAME_TTL_MS).toBe(zone.REACH_TTL_MS)
   })
 })
+
+describe('the publisher says when the card it got accepted is a different card', () => {
+  const account = fakeAccount()
+  const lan = [endpoint('https://192.168.1.24:8643/?token=t', 'lan', '192.168.1.24')]
+  const moved = [endpoint('https://10.0.0.7:8643/?token=t', 'lan', '10.0.0.7')]
+
+  const publisher = (register: ReachPublisherDeps['register'], over: Partial<ReachPublisherDeps> = {}) => {
+    const changed: string[] = []
+    const p = createReachPublisher({
+      account: () => account,
+      endpoints: () => lan,
+      certFp: () => FP,
+      relay: () => false,
+      workspaces: () => [],
+      register,
+      now: () => AT,
+      setTimeout: () => ({ unref: () => undefined }),
+      onChanged: (card) => changed.push(card.lan.map((slot) => new URL(slot.url).hostname).join(' ')),
+      ...over
+    })
+    return { p, changed }
+  }
+
+  it('fires on the first accepted card and on every accepted card that differs, never on a refresh', async () => {
+    let endpoints = lan
+    const { p, changed } = publisher(async () => ({ ok: true }), { endpoints: () => endpoints })
+    expect(await p.publish('boot')).toBe('published')
+    expect(changed).toEqual(['192.168.1.24'])
+    expect(await p.publish('network change')).toBe('unchanged')
+    expect(await p.republish('relay link')).toBe('published')
+    expect(changed).toEqual(['192.168.1.24'])
+    endpoints = moved
+    expect(await p.publish('network change')).toBe('published')
+    expect(changed).toEqual(['192.168.1.24', '10.0.0.7'])
+  })
+
+  it('does NOT fire for a card the registry refused — a name the zone will not answer is not news', async () => {
+    const { p, changed } = publisher(async () => ({ ok: false, reason: 'bad_reach' }))
+    expect(await p.publish('boot')).toBe('refused')
+    expect(changed).toEqual([])
+  })
+})

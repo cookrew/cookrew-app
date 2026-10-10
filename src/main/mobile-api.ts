@@ -202,6 +202,13 @@ export interface MobileApiDeps {
    * desktop's does. Optional: a test server without agents has none.
    */
   signalBus?: CableSignalBus;
+  /**
+   * 'changed' once the registry has taken a reach card that differs from the
+   * last one it took (reach.ts · onChanged). The stream relays it as `reach`
+   * so a phone on the relay plane races the Mac's new names at once instead
+   * of on its own minute clock.
+   */
+  reachBus?: EventEmitter;
   /** Recover an inactive teammate as it was (agent-recover feature). */
   recoverAgent: (id: string) => RecoverResult;
   /** Endpoint restore: rewind an agent to a checkpoint (+ undo). The optional
@@ -1359,6 +1366,10 @@ export async function handleMobileApi(
     };
     const offSignal = deps.signalBus?.on(onSignal) ?? null;
     request.on("close", () => offSignal?.());
+    // The Mac's addresses moved and the zone knows the new names: look now.
+    const onReach = (): void => send("reach", { at: Date.now() });
+    deps.reachBus?.on("changed", onReach);
+    request.on("close", () => deps.reachBus?.removeListener("changed", onReach));
     for (const activity of turns.list()) {
       if (inScopedCanvas((activity as { terminalId: string }).terminalId)) {
         send("activity", activity);

@@ -255,6 +255,13 @@ export type ReachPublisherDeps = {
     trusted: readonly string[]
   ) => Promise<{ ok: boolean; reason?: string; message?: string } | unknown>
   readonly now?: () => number
+  /**
+   * Called when the registry TOOK a card that differs from the last one it
+   * took — the moment a phone should look again, and the only such moment: a
+   * refused card has names the zone will not answer, and a refresh of the
+   * same card is not news.
+   */
+  readonly onChanged?: (card: ReachCard) => void
   /** How often the address list is re-read looking for a network change. */
   readonly intervalMs?: number
   readonly setInterval?: (fn: () => void, ms: number) => { unref?: () => void }
@@ -373,6 +380,7 @@ export const createReachPublisher = (deps: ReachPublisherDeps): ReachPublisher =
       scheduleRetry(reason)
       return 'refused'
     }
+    const changed = !sameReach(last, built.card) || trusted.join(' ') !== lastTrusted
     last = built.card
     lastTrusted = trusted.join(' ')
     acceptedAt = now()
@@ -381,6 +389,7 @@ export const createReachPublisher = (deps: ReachPublisherDeps): ReachPublisher =
     announced = null
     clearRetry()
     log(`reach published (${reason}): ${built.card.lan.length} lan, at ${built.card.at}`)
+    if (changed) deps.onChanged?.(built.card)
     return 'published'
   }
 

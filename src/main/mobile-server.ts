@@ -164,6 +164,8 @@ export interface MobileServerDeps {
   tuningBus?: MobileApiDeps['tuningBus']
   /** Signals on the cables (cable-signal.ts) — passed straight through to the /api/events stream. */
   signalBus?: MobileApiDeps['signalBus']
+  /** 'changed' when the registry took a different reach card — the phone re-races on it. */
+  reachBus?: MobileApiDeps['reachBus']
   /** The one stream (T2) — passed straight through to handleMobileApi, which
    *  serves /stream* from it and, behind COOKREW_STREAM_ADAPTERS, the five
    *  old routes as well. Absent = the new routes 503, the old ones unchanged. */
@@ -481,25 +483,41 @@ const TAILNET_WATCH_MS = 60_000
  * already connected is not knocked off to fix one that is not yet.
  */
 function watchTailnetCert(secure: https.Server): void {
+  secureServer = secure
   const refresh = (): void => {
-    void refreshTailnetNow(true)
-      .then((tailnet) => {
-        const hosts = advertisedCertHosts(tailnet)
-        const missing = missingHosts(certSans, hosts)
-        if (missing.length === 0) return
-        const reissued = ensureCert(hosts)
-        if (!reissued) return
-        certSans = sansOf(new X509Certificate(reissued.cert).subjectAltName)
-        activeCertFp = certFingerprint(reissued.cert)
-        secure.setSecureContext({ key: reissued.key, cert: reissued.cert })
-        console.error(`Mobile cert reissued for ${missing.join(', ')} — no restart needed`)
-      })
-      .catch((error) => console.error('Tailscale certificate refresh failed:', error))
+    void refreshMobileCert().catch((error) =>
+      console.error('Tailscale certificate refresh failed:', error)
+    )
   }
   // Fill the cold cache immediately, but outside the startup call stack.
   refresh()
   const timer = setInterval(refresh, TAILNET_WATCH_MS)
   timer.unref()
+}
+
+/** The running TLS listener, once there is one; the cert is swapped on it. */
+let secureServer: https.Server | null = null
+
+/**
+ * Re-read the tailnet and the interfaces NOW and re-issue the self-signed
+ * certificate if an advertised host is missing from it. The clock above calls
+ * this every minute; a network change (index.ts · network watch) calls it the
+ * moment it is noticed, so a phone that probes the new bare address seconds
+ * later meets a certificate that names it. No-op before the listener is up.
+ */
+export async function refreshMobileCert(): Promise<void> {
+  const secure = secureServer
+  if (!secure) return
+  const tailnet = await refreshTailnetNow(true)
+  const hosts = advertisedCertHosts(tailnet)
+  const missing = missingHosts(certSans, hosts)
+  if (missing.length === 0) return
+  const reissued = ensureCert(hosts)
+  if (!reissued) return
+  certSans = sansOf(new X509Certificate(reissued.cert).subjectAltName)
+  activeCertFp = certFingerprint(reissued.cert)
+  secure.setSecureContext({ key: reissued.key, cert: reissued.cert })
+  console.error(`Mobile cert reissued for ${missing.join(', ')} — no restart needed`)
 }
 
 /**
@@ -585,6 +603,18 @@ function refreshTailnetNow(force = false): Promise<TailnetIdentity | null> {
     })
   tailnetCache.refreshing = pending
   return pending
+}
+
+/**
+ * THE ADDRESSES AS THEY ARE, WITHOUT ASKING TAILSCALE. The network watch
+ * (index.ts) reads this every few seconds; going through `cachedTailnet()`
+ * there would fork `tailscale status` every fifteen seconds for the life of
+ * the app. The interfaces are one syscall; the tailnet is whatever the
+ * minute clocks (watchTailnetCert, the reach publisher) last read, which is
+ * exactly as fresh as the card they publish.
+ */
+export function advertisedHostsNow(): string[] {
+  return [...localAddresses(), ...(tailnetCache.value?.ips ?? [])]
 }
 
 /**

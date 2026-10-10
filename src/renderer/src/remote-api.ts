@@ -459,6 +459,7 @@ export function createRemoteApi(): CookrewApi {
     // stream carries 'event'; queries/roster are plain GETs.
     onEvent: (cb) => subscribe('event', cb),
     onCableSignal: (cb) => subscribe('signal', cb),
+    onReachChanged: (cb) => subscribe('reach', () => cb()),
     queryEvents: async (query) => {
       const params = new URLSearchParams()
       const q = (query ?? {}) as Record<string, unknown>

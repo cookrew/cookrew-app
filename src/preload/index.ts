@@ -177,6 +177,11 @@ const api = {
     ipcRenderer.on('account:changed', listener)
     return () => ipcRenderer.removeListener('account:changed', listener)
   },
+  onReachChanged: (cb: () => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('reach:changed', listener)
+    return () => ipcRenderer.removeListener('reach:changed', listener)
+  },
   onAccountLocked: (cb: (locked: boolean) => void) => {
     const listener = (_e: unknown, locked: boolean): void => cb(locked)
     ipcRenderer.on('account:locked', listener)

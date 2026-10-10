@@ -1,5 +1,5 @@
 import { apiPath, clientBase } from '../api-base'
-import { isRemoteMode } from '../api'
+import { cookrew, isRemoteMode } from '../api'
 import { authHeaders, authStore } from '../auth-gate'
 import { PATH_REPORT_ROUTE } from '../../../shared/path-report'
 import { currentBrowser, onAppleMobile } from '../browser-family'
@@ -370,6 +370,11 @@ const startPlaneSwitch = (): (() => void) => {
           raceNow()
         })
     ),
+    // THE MAC SAID ITS ADDRESSES MOVED — and said it only once the registry
+    // took the new card, so the names resolve. The same race as TRY AGAIN,
+    // for the same reason and under the same rule: no `pressed`, so a phone
+    // nobody is holding is never shown the one permission prompt it gets.
+    cookrew().onReachChanged?.(() => raceNow()) ?? ((): void => undefined),
     offerLocalNetwork(async () => {
       await askForLocalNetwork()
       // Whatever the browser decided, look again immediately — a grant that

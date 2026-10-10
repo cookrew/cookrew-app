@@ -89,6 +89,16 @@ const stubPhone = (origin: string): Phone => {
     fetched += 1
     throw new Error('a companion under a relay prefix must not probe')
   }
+  // The page's one /api/events stream: the switcher listens on it for the
+  // Mac's "addresses moved" push. Listening is not probing.
+  Object.assign(globalThis, {
+    EventSource: class {
+      readyState = 1
+      addEventListener(): void {}
+      removeEventListener(): void {}
+      close(): void {}
+    }
+  })
   return { replaced: () => replaced, listened: () => listened, fetched: () => fetched }
 }
 
@@ -115,6 +125,7 @@ const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve,
 afterEach(() => {
   delete (globalThis as { COOKREW_BASE?: unknown }).COOKREW_BASE
   delete (globalThis as { fetch?: unknown }).fetch
+  delete (globalThis as { EventSource?: unknown }).EventSource
   vi.resetModules()
 })
 

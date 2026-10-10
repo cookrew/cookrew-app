@@ -416,6 +416,12 @@ export interface CookrewApi {
    * harness lights nothing on a bridge without it.
    */
   onCableSignal?: (cb: (signal: unknown) => void) => () => void;
+  /**
+   * The Mac's addresses moved and the registry has taken the new card. The
+   * companion's plane switcher races the Mac's names at once on it
+   * (path/companion.ts). Optional: the demo has no Mac to move.
+   */
+  onReachChanged?: (cb: () => void) => () => void;
   queryEvents?: (query?: unknown) => Promise<unknown[]>;
   countEvents?: (query?: unknown) => Promise<Record<string, number>>;
   listAgents?: () => Promise<unknown[]>;
