@@ -104,6 +104,8 @@ export interface PathReport {
   readonly browser: string
   readonly attempts: readonly PathReportAttempt[]
   readonly probes?: readonly PathReportProbe[]
+  /** 'standalone' from a Home Screen web app, 'browser' from a tab (path/page-context.ts). */
+  readonly context?: 'standalone' | 'browser'
 }
 
 /** A report as the Mac keeps it: what arrived, plus who it arrived from and when. */

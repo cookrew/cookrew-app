@@ -148,13 +148,15 @@ export const readPathReport = (body: unknown, receivedAt: number): PathReport | 
         .map(readProbe)
         .filter((probe): probe is PathReportProbe => probe !== null)
     : []
+  const context = raw.context === 'standalone' || raw.context === 'browser' ? raw.context : null
   return {
     at: safeMs(raw.at) ?? receivedAt,
     plane: plane as PathReport['plane'],
     permission: PERMISSIONS.has(permission) ? permission : 'unsupported',
     browser: safeText(raw.browser, 40) || 'other',
     attempts,
-    ...(probes.length > 0 ? { probes } : {})
+    ...(probes.length > 0 ? { probes } : {}),
+    ...(context !== null ? { context } : {})
   }
 }
 
@@ -182,6 +184,7 @@ export const pathReportLine = (report: StoredPathReport): string =>
   `[cookrew] path report from ${report.device ?? UNNAMED_DEVICE}: ${report.plane} · ` +
   `${report.attempts.length} candidate${report.attempts.length === 1 ? '' : 's'} · ` +
   outcomeSummary(report.attempts) +
+  (report.context ? ` · ${report.context}` : '') +
   (report.probes && report.probes.length > 0
     ? ` · probes ${report.probes
         .map((probe) => `${probe.kind} ${probe.outcome}${probe.ms === null ? '' : ` ${probe.ms}ms`}`)

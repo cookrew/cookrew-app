@@ -333,3 +333,14 @@ describe('the probes a phone reports beside its attempts', () => {
     expect(report && 'probes' in report).toBe(false)
   })
 })
+
+describe('who ran the page', () => {
+  it('is kept as one of two words and spelled on the line; anything else is dropped', async () => {
+    const { readPathReport, pathReportLine } = await import('../src/main/path-reports')
+    const base = { plane: 'RELAY', permission: 'unsupported', browser: 'Safari 26', attempts: [] }
+    const standalone = readPathReport({ ...base, context: 'standalone' }, 1_000)
+    expect(standalone?.context).toBe('standalone')
+    expect(pathReportLine({ ...standalone!, receivedAt: 1_000, device: 'iPhone' })).toContain('· standalone')
+    expect(readPathReport({ ...base, context: 'kiosk' }, 1_000)?.context).toBeUndefined()
+  })
+})

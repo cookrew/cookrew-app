@@ -7,6 +7,7 @@ import { createPathReporter, postPathReport, reportedAttempts } from './report'
 import { directNavigationOffer, directNavigationUrl, type DirectOffer } from './direct-offer'
 import { probeReach, type ReachProbe } from './reach-probes'
 import { homeJump } from './home-jump'
+import { pageContext } from './page-context'
 import type { PathReport } from '../../../shared/path-report'
 import { landingReport, navigationTiming } from './landing'
 import { setDirectOffer } from '../direct-offer-gate'
@@ -496,7 +497,8 @@ const startPlaneSwitch = (): (() => void) => {
               plane: settled,
               permission: localNetworkGate(),
               browser: currentBrowser(),
-              attempts: reportedAttempts(attempts)
+              attempts: reportedAttempts(attempts),
+              context: pageContext()
             })
           },
           permission: readLocalNetwork,
