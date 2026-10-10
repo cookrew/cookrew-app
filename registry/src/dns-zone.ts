@@ -26,8 +26,20 @@ import { DNS_CLASS_IN, DNS_TYPE, RCODE, ipText, parseIp, sameIp, type DnsQuestio
  * answer to a small spoofed question is the whole of DNS amplification.
  */
 
-/** Addresses live 60 s: a Mac changing Wi-Fi must not be wrong for longer. */
-export const ADDRESS_TTL = 60
+/**
+ * An address answer may be cached for an hour, because it CANNOT GO STALE: the
+ * name encodes the address (192-168-2-40.<id> answers 192.168.2.40 or
+ * nothing), and a Mac that changes Wi-Fi gets a new name rather than a new
+ * answer under the old one. The gate below is what a short TTL cannot buy —
+ * an unpublished name stops resolving when the cache expires either way, and
+ * a probe to an address nobody is at simply times out.
+ *
+ * This was 60 s, "a Mac changing Wi-Fi must not be wrong for longer", and the
+ * cost was invisible from here: the phone races once a minute, so EVERY probe
+ * was a cold lookup, and from the owner's ISP to this zone a cold chain took
+ * longer than the probe's deadline. The Mac was never found (2026-10-11).
+ */
+export const ADDRESS_TTL = 3600
 /** A challenge answer is read once, by one CA, within seconds. */
 export const TXT_TTL = 5
 export const APEX_TTL = 300

@@ -32,6 +32,42 @@ import type { HelloReply } from './switch'
  */
 export const HELLO_TIMEOUT_MS = 800
 
+/**
+ * How long a trusted NAME has to answer — the same question, after a lookup.
+ *
+ * A name is on the same Wi-Fi too, but before its first packet can leave the
+ * phone's resolver walks cookrew.dev, then the d.cookrew.dev servers, then the
+ * record, cold, across whatever distance separates the phone's ISP from the
+ * registry. Measured from the owner's LAN on 2026-10-11: 564 ms for one cold
+ * chain through a Chinese public resolver — and the phone's own reports said
+ * "timeout, 800–804 ms" for every candidate, once a minute, LAN and tailnet
+ * alike, with the Mac three metres away. The address was right, the zone
+ * answered, the Mac listened; the clock ran out during the lookup, and the
+ * sheet blamed the network.
+ *
+ * Twice a cold lookup, plus the handshake and the hello. The race runs beside
+ * the plane in use, so this patience delays only the verdict "no".
+ */
+export const NAME_HELLO_TIMEOUT_MS = 2500
+
+/** Is this host an IP literal (v4, or a bracketed v6) rather than a name? */
+const isIpLiteral = (host: string): boolean => {
+  const bare = host.replace(/^\[/, '').replace(/]$/, '')
+  return bare.includes(':') || /^\d{1,3}(\.\d{1,3}){3}$/.test(bare)
+}
+
+/** The deadline a candidate gets when the caller sets none: by what it is. */
+export const helloDeadlineMs = (url: string): number => {
+  let host: string
+  try {
+    host = new URL(url).hostname
+  } catch {
+    return HELLO_TIMEOUT_MS
+  }
+  if (host === 'localhost' || isIpLiteral(host)) return HELLO_TIMEOUT_MS
+  return NAME_HELLO_TIMEOUT_MS
+}
+
 export interface AskHelloOptions {
   readonly timeoutMs?: number
   /** A monotonic clock, injected so a failure's `ms` is a fact a test can set. */
@@ -89,7 +125,7 @@ const oneHello = async (
   const timer = setTimeout(() => {
     timedOut = true
     abort.abort()
-  }, options.timeoutMs ?? HELLO_TIMEOUT_MS)
+  }, options.timeoutMs ?? helloDeadlineMs(url))
   const asked =
     options.origin === undefined ? '' : `&origin=${encodeURIComponent(options.origin)}`
   try {
