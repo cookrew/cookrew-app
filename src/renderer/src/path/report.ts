@@ -87,7 +87,7 @@ export interface PathReporterDeps {
  * observed again.
  */
 const signatureOf = (report: PathReport): string =>
-  JSON.stringify([report.plane, report.permission, report.browser, report.attempts])
+  JSON.stringify([report.plane, report.permission, report.browser, report.attempts, report.probes ?? []])
 
 /**
  * A reporter with its three guards, as a value.

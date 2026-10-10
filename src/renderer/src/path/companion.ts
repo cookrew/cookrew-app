@@ -4,7 +4,10 @@ import { authHeaders, authStore } from '../auth-gate'
 import { PATH_REPORT_ROUTE } from '../../../shared/path-report'
 import { currentBrowser, onAppleMobile } from '../browser-family'
 import { createPathReporter, postPathReport, reportedAttempts } from './report'
-import { directNavigationOffer } from './direct-offer'
+import { directNavigationOffer, directNavigationUrl, type DirectOffer } from './direct-offer'
+import { probeReach, type ReachProbe } from './reach-probes'
+import { homeJump } from './home-jump'
+import type { PathReport } from '../../../shared/path-report'
 import { landingReport, navigationTiming } from './landing'
 import { setDirectOffer } from '../direct-offer-gate'
 import { offerPathRetry } from '../path-retry-gate'
@@ -280,6 +283,62 @@ const tellTheDesktop = createPathReporter({
  * and one-at-a-time guards are about races, and a landing is not a race — it
  * happens once, at boot, before any race could.
  */
+/** Where the page remembers its last jump home, across the bounce a failed landing makes. */
+const HOME_JUMP_AT_KEY = 'cr-home-jump-at'
+
+const lastHomeJump = (): number | null => {
+  try {
+    const raw = window.sessionStorage.getItem(HOME_JUMP_AT_KEY)
+    const at = raw === null ? NaN : Number(raw)
+    return Number.isFinite(at) ? at : null
+  } catch {
+    return null
+  }
+}
+
+const rememberHomeJump = (at: number): void => {
+  try {
+    window.sessionStorage.setItem(HOME_JUMP_AT_KEY, String(at))
+  } catch {
+    // No storage is no memory, and the cooldown then rests on the race gap.
+  }
+}
+
+/** One set of knocks per race; a race that lands while one is out reuses nothing. */
+let knocking = false
+
+/**
+ * KNOCK THE WAY THE BROWSER ALLOWS, REPORT, AND GO HOME IF IT OPENED.
+ *
+ * Only when the ordinary switch has given up for good on this browser — the
+ * platform offer exists — and never while a previous knock is still out. The
+ * report goes first so the Mac keeps the evidence even if the navigation
+ * that follows ends this page.
+ */
+const comeHome = async (offer: DirectOffer | null, report: PathReport): Promise<void> => {
+  if (!offer || offer.reason === 'proxy' || knocking) {
+    await tellTheDesktop(report)
+    return
+  }
+  knocking = true
+  let probes: ReachProbe[] = []
+  try {
+    probes = await probeReach(offer.origin)
+  } catch {
+    probes = []
+  } finally {
+    knocking = false
+  }
+  await tellTheDesktop({ ...report, probes })
+  const now = Date.now()
+  const to = homeJump({ offer, probes, lastJumpAt: lastHomeJump(), now })
+  if (!to) return
+  const url = directNavigationUrl({ origin: to }, authStore().token())
+  if (!url) return
+  rememberHomeJump(now)
+  window.location.assign(url)
+}
+
 const reportLanding = async (): Promise<void> => {
   const report = landingReport({
     timing: navigationTiming(),
@@ -417,22 +476,22 @@ const startPlaneSwitch = (): (() => void) => {
             // navigation that still works. Every guard is in the pure decision
             // and nothing here acts on the answer: it is published, drawn as a
             // button, and taken only by a press (DirectOfferRow.tsx).
-            setDirectOffer(
-              directNavigationOffer({
-                base: clientBase(),
-                plane: dataPlane().kind,
-                browser: currentBrowser(),
-                ios: onAppleMobile(),
-                permission: localNetworkGate(),
-                attempts,
-                candidates: lastTrusted,
-                hasToken: (authStore().token() ?? '').length > 0
-              })
-            )
-            // AND TELL THE MAC. The panel answers the person holding the
-            // phone; this answers the owner at the desk, who otherwise has
-            // only a photograph of a phone screen to work from.
-            void tellTheDesktop({
+            const offer = directNavigationOffer({
+              base: clientBase(),
+              plane: dataPlane().kind,
+              browser: currentBrowser(),
+              ios: onAppleMobile(),
+              permission: localNetworkGate(),
+              attempts,
+              candidates: lastTrusted,
+              hasToken: (authStore().token() ?? '').length > 0
+            })
+            setDirectOffer(offer)
+            // AND TELL THE MAC — after knocking the one way this browser may
+            // carry, when the fetch could not (reach-probes.ts), so the owner
+            // at the desk reads which knock got through, and so the page can
+            // go home by itself when one did (home-jump.ts).
+            void comeHome(offer, {
               at: Date.now(),
               plane: settled,
               permission: localNetworkGate(),

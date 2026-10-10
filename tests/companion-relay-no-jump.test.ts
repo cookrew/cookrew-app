@@ -36,6 +36,13 @@
 // path may navigate, which is what these tests say — so `assign` is watched
 // here beside `replace`, because the exception's method must be under the same
 // gate as the rule's.
+//
+// AND ONE AUTOMATIC EXCEPTION, RULED 2026-10-11 ("come home and it turns LAN by itself, no press"):
+// path/home-jump.ts. It fires only after a race on the platform offer, only
+// when a knock the browser DID carry (path/reach-probes.ts) reached the Mac's
+// LAN name just now, and only through `comeHome` in companion.ts. The stub
+// below refuses every request, so no knock answers and nothing here moves —
+// which is still the rule: an unreachable Mac is never navigated to.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 

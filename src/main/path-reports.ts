@@ -2,9 +2,11 @@ import {
   PATH_REPORTS_KEPT,
   PATH_REPORT_DEVICES_KEPT,
   PATH_REPORT_MAX_ATTEMPTS,
+  PATH_REPORT_MAX_PROBES,
   PATH_REPORT_TEXT_MAX,
   type PathReport,
   type PathReportAttempt,
+  type PathReportProbe,
   type StoredPathReport
 } from '../shared/path-report'
 
@@ -88,6 +90,19 @@ const safeText = (raw: unknown, max = PATH_REPORT_TEXT_MAX): string => {
 const safeMs = (raw: unknown): number | null =>
   typeof raw === 'number' && Number.isFinite(raw) ? Math.max(0, Math.round(raw)) : null
 
+const PROBE_KINDS: ReadonlySet<string> = new Set(['socket', 'image', 'opaque'])
+
+const readProbe = (raw: unknown): PathReportProbe | null => {
+  if (!raw || typeof raw !== 'object') return null
+  const probe = raw as Record<string, unknown>
+  const kind = typeof probe.kind === 'string' ? probe.kind : ''
+  if (!PROBE_KINDS.has(kind)) return null
+  const name = safeText(probe.name, PATH_REPORT_TEXT_MAX)
+  const outcome = safeText(probe.outcome, 40)
+  if (!name || !outcome) return null
+  return { kind: kind as PathReportProbe['kind'], name, outcome, ms: safeMs(probe.ms) }
+}
+
 const readAttempt = (raw: unknown): PathReportAttempt | null => {
   if (!raw || typeof raw !== 'object') return null
   const row = raw as Record<string, unknown>
@@ -127,12 +142,19 @@ export const readPathReport = (body: unknown, receivedAt: number): PathReport | 
     .map(readAttempt)
     .filter((attempt): attempt is PathReportAttempt => attempt !== null)
   const permission = typeof raw.permission === 'string' ? raw.permission : ''
+  const probes = Array.isArray(raw.probes)
+    ? raw.probes
+        .slice(0, PATH_REPORT_MAX_PROBES)
+        .map(readProbe)
+        .filter((probe): probe is PathReportProbe => probe !== null)
+    : []
   return {
     at: safeMs(raw.at) ?? receivedAt,
     plane: plane as PathReport['plane'],
     permission: PERMISSIONS.has(permission) ? permission : 'unsupported',
     browser: safeText(raw.browser, 40) || 'other',
-    attempts
+    attempts,
+    ...(probes.length > 0 ? { probes } : {})
   }
 }
 
@@ -159,7 +181,12 @@ export const outcomeSummary = (attempts: readonly PathReportAttempt[]): string =
 export const pathReportLine = (report: StoredPathReport): string =>
   `[cookrew] path report from ${report.device ?? UNNAMED_DEVICE}: ${report.plane} · ` +
   `${report.attempts.length} candidate${report.attempts.length === 1 ? '' : 's'} · ` +
-  outcomeSummary(report.attempts)
+  outcomeSummary(report.attempts) +
+  (report.probes && report.probes.length > 0
+    ? ` · probes ${report.probes
+        .map((probe) => `${probe.kind} ${probe.outcome}${probe.ms === null ? '' : ` ${probe.ms}ms`}`)
+        .join(', ')}`
+    : '')
 
 export interface PathReportStoreDeps {
   readonly now?: () => number
