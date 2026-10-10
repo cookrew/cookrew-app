@@ -163,7 +163,7 @@ export class HeadlessBrowserCommandEngine {
 
   private async create(params: string[], terminalId: string): Promise<string> {
     const [url, requestedName] = params
-    if (!url) throw new Error('Usage: cookrew browser create URL ["Name"]')
+    if (!url) throw new Error('Usage: cookrew browser create URL ["Name"] [--new]')
     // A caller parked in ANOTHER workspace is refused before it gets here
     // (cmdBrowser). What remains is a caller no workspace file holds at all —
     // a terminal resolved from the durable registry after a reboot. It has no

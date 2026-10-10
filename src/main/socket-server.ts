@@ -544,6 +544,33 @@ export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): P
     // the raw id onward meant create()'s `store.node(terminalId)` missed, so the
     // card was anchored nowhere, owned no edge, and announced itself as "not
     // connected" — the caller's own browser, disowned by its caller.
+    // A DELIVERABLE WITH THE SAME NAME IS THE SAME DELIVERABLE. Two agents
+    // opened one page twice: the second could not see the first's card
+    // (`cookrew list` is what is wired to YOU) and the store minted "(2)".
+    // A name that already exists on this canvas is adopted — the caller is
+    // wired to it, and it is navigated when the URL differs — unless the
+    // caller says --new. The engine is never asked to create a second.
+    const [, url, requestedName] = request.args
+    if (requestedName && !request.flags.new) {
+      const existing = deps.store.nodeByName(requestedName, 'browser') as BrowserNodeData | undefined
+      if (existing) {
+        const wired = deps.store.connectedTo(me.id).some((n) => n.id === existing.id)
+        if (!wired) deps.store.connect(me.id, existing.id)
+        const navigated = url !== undefined && url !== existing.url
+        if (navigated) await deps.browserCommand(['navigate', existing.name, url], me.id)
+        const holders = deps.store
+          .connectedTo(existing.id)
+          .filter((n) => n.kind === 'terminal' && n.id !== me.id)
+          .map((n) => n.name)
+        return (
+          `Browser "${existing.name}" already exists on this canvas` +
+          (holders.length > 0 ? ` (wired to ${holders.join(', ')})` : '') +
+          ` — ${wired ? 'already wired to you' : 'now wired to you too'}` +
+          (navigated ? `, navigated to ${url}` : '') +
+          '. Pass --new to create a second one.'
+        )
+      }
+    }
     return deps.browserCommand(request.args, me.id)
   }
 
@@ -586,8 +613,9 @@ function workspaceName(deps: SocketServerDeps, id: string): string {
   return deps.listWorkspaces().workspaces.find((w) => w.id === id)?.name ?? id
 }
 
-function cmdList(request: CliRequest, deps: SocketServerDeps): string {
+export function cmdList(request: CliRequest, deps: SocketServerDeps): string {
   if (request.flags.all) return cmdListAll(deps)
+  if (request.flags.canvas) return cmdListCanvas(request, deps)
   const me = self(request, deps)
   // Relative to where the CALLER lives. An agent in workspace B asking what it
   // is connected to must be told "[workspace: X]" against B — its own canvas —
@@ -630,8 +658,45 @@ function cmdList(request: CliRequest, deps: SocketServerDeps): string {
   if (agents.length + notes.length + browsers.length === 0) {
     lines.push('', 'No connected agents, notes, or browsers. Connect nodes on the canvas or use `cookrew note create`.')
   }
+  // WHAT YOU ARE NOT WIRED TO still exists. An orchestrator checking whether
+  // a teammate's card is there read this list, saw nothing, and made the card
+  // again. The count names the gap; --canvas lists every card and its wiring.
+  const canvas = deps.store.workspaceState(activeId).nodes
+  const wiredIds = new Set(connected.map((h) => h.node.id))
+  const unwired = canvas.filter((n) => n.id !== me.id && !wiredIds.has(n.id))
+  if (unwired.length > 0) {
+    lines.push('', `${unwired.length} more card${unwired.length === 1 ? '' : 's'} on this canvas ${unwired.length === 1 ? 'is' : 'are'} not wired to you — \`cookrew list --canvas\` lists every card and who it is wired to.`)
+  }
   return lines.join('\n')
 }
+
+/**
+ * Every card on the caller's canvas, whoever it is wired to. The answer to
+ * "does a card called X already exist?", which the wired-only listing above
+ * cannot give — and the reason a page was once opened twice.
+ */
+function cmdListCanvas(request: CliRequest, deps: SocketServerDeps): string {
+  const me = self(request, deps)
+  const activeId = deps.store.ownerOf(me.id) ?? deps.store.focusedId
+  const nodes = deps.store.workspaceState(activeId).nodes
+  const wsName = deps.listWorkspaces().workspaces.find((w) => w.id === activeId)?.name ?? activeId
+  const terminalNames = (id: string): string[] =>
+    deps.store.connectedTo(id).filter((n) => n.kind === 'terminal').map((n) => n.name)
+  const lines: string[] = [`Everything on "${wsName}" (${nodes.length} card${nodes.length === 1 ? '' : 's'}):`]
+  for (const kind of ['terminal', 'note', 'browser'] as const) {
+    const group = nodes.filter((n) => n.kind === kind)
+    if (group.length === 0) continue
+    lines.push('', `${kind === 'terminal' ? 'Agents' : kind === 'note' ? 'Notes' : 'Browsers'}:`)
+    for (const n of group) {
+      const wiredTo = terminalNames(n.id).filter((name) => name !== n.name)
+      const you = n.id === me.id ? ' (you)' : ''
+      const url = n.kind === 'browser' ? ` - url: ${(n as BrowserNodeData).url}` : ''
+      lines.push(`  - "${n.name}"${you}${url}${wiredTo.length > 0 ? ` — wired to: ${wiredTo.join(', ')}` : ' — wired to nobody'}`)
+    }
+  }
+  return lines.join('\n')
+}
+
 
 /** Global roster from the durable agent registry, grouped by workspace. */
 function cmdListAll(deps: SocketServerDeps): string {
