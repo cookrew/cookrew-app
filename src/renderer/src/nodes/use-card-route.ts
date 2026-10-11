@@ -70,7 +70,12 @@ export function useCardRoute(input: { terminalId: string; enabled: boolean }): C
       if (!api.terminalRouteSet) return
       api
         .terminalRouteSet(terminalId, route)
-        .then(setState)
+        .then((result) => {
+          // The service refuses a route it cannot set (a served session, an
+          // id outside the catalog) with a sentence, not a throw.
+          if ('error' in result) setError(result.error)
+          else setState(result)
+        })
         .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
     },
     [terminalId]

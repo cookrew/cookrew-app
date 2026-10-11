@@ -1,0 +1,218 @@
+import { ROUTE_LIVE_MAX, routeSession, type RouteDecision, type RouteTurnFacts } from '../../shared/route'
+
+/**
+ * WHERE EACH TURN WENT — the long-poll per card in flight (route program).
+ *
+ * `GET /v1/magpie/route?session=cookrew:<cardId>&after=<seq>&wait=30` holds
+ * until the route changes past `seq`, so one request at a time per card
+ * follows a turn: the decision appears before the first token (which
+ * member of the group, at what effort, after how many tries) and once more
+ * when it is done. The gateway answers `{route: null, seq: 0}` before a
+ * session has one, and `{route: {asked, group, model, effort, tries, done,
+ * status, served}, seq}` after (reference.md, "Connecting anything else";
+ * confirmed against magpie 0.1.1182 on 2026-10-11).
+ *
+ * THE COST MODEL: no request for a card that is idle, direct, or served by
+ * someone else; one request in flight per routed card while its phase is
+ * thinking or waiting; the wait is the gateway's (30 s), so an idle fleet
+ * costs nothing and a busy card costs one open socket. All async; nothing
+ * here can block the main thread (loop ledger).
+ *
+ * When a decision comes back `done`, one more GET fetches the turn's facts
+ * (`/v1/magpie/usage/requests?session=…&limit=1`: `served`, `in`, `out`,
+ * `cost`, `t`) so the card can wear what the turn cost. Two things seen on
+ * the real gateway (0.1.1182, 2026-10-11) shape that read: a Claude Code
+ * turn is logged under claude's OWN session id (magpie prefers an agent's
+ * session header to X-Magpie-Session for the log, while /route keys on
+ * ours), so the harness's session id is asked for as well; and a session
+ * filter that matches nothing answers the LATEST row of all, so a row is
+ * taken only when its `session` is one we asked for.
+ */
+
+export interface DecisionsFetch {
+  (input: string, init?: { headers?: Record<string, string>; signal?: AbortSignal }): Promise<{ ok: boolean; json: () => Promise<unknown> }>
+}
+
+export interface DecisionsDeps {
+  fetch: DecisionsFetch
+  gateway: () => { url: string; key: string } | null
+  now?: () => number
+  /** The long-poll's wait, in seconds (the gateway caps it at 60). */
+  waitSeconds?: number
+  onDecision: (decision: RouteDecision) => void
+  onTurn: (terminalId: string, facts: RouteTurnFacts) => void
+  /** The harness's own session id for the card, when the log is keyed by it (claude). */
+  harnessSession?: (terminalId: string) => string | null
+}
+
+const asRecord = (v: unknown): Record<string, unknown> | null => (typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : null)
+const str = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null)
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+
+/** One `/v1/magpie/route` answer as a decision row, or null before the session has a route. */
+export function toDecision(terminalId: string, body: unknown, at: number): RouteDecision | null {
+  const b = asRecord(body)
+  const route = b ? asRecord(b.route) : null
+  if (!b || !route) return null
+  const tries = Array.isArray(route.tries) ? route.tries.length : num(route.tries) ?? 0
+  return {
+    terminalId,
+    session: str(b.session) ?? routeSession(terminalId),
+    seq: num(b.seq) ?? num(route.seq) ?? 0,
+    asked: str(route.asked),
+    group: str(route.group),
+    model: str(route.model) ?? str(route.served),
+    effort: str(route.effort),
+    tries,
+    done: route.done === true,
+    status: str(route.status) ?? (num(route.status) !== null ? String(route.status) : null),
+    at
+  }
+}
+
+/**
+ * The newest row of `/v1/magpie/usage/requests` as the turn's facts — only
+ * when the row belongs to one of `sessions`; the gateway answers the latest
+ * row of all for a session it has no rows for.
+ */
+export function toTurnFacts(body: unknown, sessions: readonly string[] | null = null): RouteTurnFacts | null {
+  const b = asRecord(body)
+  const rows = Array.isArray(b?.rows) ? (b!.rows as unknown[]) : Array.isArray(body) ? body : []
+  const r = asRecord(rows[0])
+  if (!r) return null
+  if (sessions !== null && !sessions.includes(str(r.session) ?? '')) return null
+  const t = str(r.t)
+  const parsed = t ? Date.parse(t) : NaN
+  return {
+    model: str(r.served) ?? str(r.model),
+    inputTokens: num(r.in) ?? num(r.input_tokens),
+    outputTokens: num(r.out) ?? num(r.output_tokens),
+    cost: num(r.cost),
+    at: Number.isFinite(parsed) ? parsed : num(r.at)
+  }
+}
+
+/** The last 20, newest first, one row per card per seq. */
+export function pushLive(live: readonly RouteDecision[], row: RouteDecision): RouteDecision[] {
+  const kept = live.filter((d) => !(d.terminalId === row.terminalId && d.seq === row.seq))
+  return [row, ...kept].slice(0, ROUTE_LIVE_MAX)
+}
+
+interface Follow {
+  seq: number
+  controller: AbortController | null
+  stopped: boolean
+}
+
+export class RouteDecisions {
+  private readonly follows = new Map<string, Follow>()
+  private readonly lastByCard = new Map<string, RouteDecision>()
+  private readonly turnByCard = new Map<string, RouteTurnFacts>()
+
+  constructor(private readonly deps: DecisionsDeps) {}
+
+  /** The card's latest decision and turn facts, for CardRouteState. */
+  cardLive(terminalId: string): RouteDecision | null {
+    return this.lastByCard.get(terminalId) ?? null
+  }
+
+  cardTurn(terminalId: string): RouteTurnFacts | null {
+    return this.turnByCard.get(terminalId) ?? null
+  }
+
+  get following(): string[] {
+    return [...this.follows.keys()]
+  }
+
+  /** A routed card's turn started: follow it. Idempotent while in flight. */
+  follow(terminalId: string): void {
+    if (this.follows.has(terminalId)) return
+    const follow: Follow = { seq: this.lastByCard.get(terminalId)?.seq ?? 0, controller: null, stopped: false }
+    this.follows.set(terminalId, follow)
+    void this.loop(terminalId, follow)
+  }
+
+  /** The turn ended, the card went direct, or it was removed: one request at most is cut short. */
+  unfollow(terminalId: string): void {
+    const follow = this.follows.get(terminalId)
+    if (!follow) return
+    follow.stopped = true
+    follow.controller?.abort()
+    this.follows.delete(terminalId)
+  }
+
+  forget(terminalId: string): void {
+    this.unfollow(terminalId)
+    this.lastByCard.delete(terminalId)
+    this.turnByCard.delete(terminalId)
+  }
+
+  dispose(): void {
+    for (const id of [...this.follows.keys()]) this.unfollow(id)
+  }
+
+  private async loop(terminalId: string, follow: Follow): Promise<void> {
+    const wait = this.deps.waitSeconds ?? 30
+    while (!follow.stopped) {
+      const gateway = this.deps.gateway()
+      if (!gateway) {
+        this.unfollow(terminalId)
+        return
+      }
+      const session = encodeURIComponent(routeSession(terminalId))
+      follow.controller = new AbortController()
+      let body: unknown = null
+      try {
+        const res = await this.deps.fetch(`${gateway.url}/v1/magpie/route?session=${session}&after=${follow.seq}&wait=${wait}`, {
+          headers: { authorization: `Bearer ${gateway.key}`, 'user-agent': 'cookrew' },
+          signal: follow.controller.signal
+        })
+        body = res.ok ? await res.json() : null
+      } catch {
+        body = null
+      }
+      follow.controller = null
+      if (follow.stopped) return
+      if (body === null) {
+        // A refused or broken poll: stop rather than spin; the next turn re-follows.
+        this.unfollow(terminalId)
+        return
+      }
+      const decision = toDecision(terminalId, body, (this.deps.now ?? Date.now)())
+      const seq = num(asRecord(body)?.seq) ?? follow.seq
+      if (decision === null) {
+        // No route yet (the first request has not reached routing): wait for the next change.
+        follow.seq = seq
+        continue
+      }
+      follow.seq = Math.max(follow.seq, decision.seq)
+      this.lastByCard.set(terminalId, decision)
+      this.deps.onDecision(decision)
+      if (decision.done) {
+        await this.facts(terminalId, gateway)
+        this.unfollow(terminalId)
+        return
+      }
+    }
+  }
+
+  private async facts(terminalId: string, gateway: { url: string; key: string }): Promise<void> {
+    const own = this.deps.harnessSession?.(terminalId) ?? null
+    const sessions = own ? [routeSession(terminalId), own] : [routeSession(terminalId)]
+    for (const session of sessions) {
+      try {
+        const res = await this.deps.fetch(`${gateway.url}/v1/magpie/usage/requests?session=${encodeURIComponent(session)}&limit=1`, {
+          headers: { authorization: `Bearer ${gateway.key}`, 'user-agent': 'cookrew' }
+        })
+        const facts = res.ok ? toTurnFacts(await res.json(), sessions) : null
+        if (facts) {
+          this.turnByCard.set(terminalId, facts)
+          this.deps.onTurn(terminalId, facts)
+          return
+        }
+      } catch {
+        // The turn's facts are a nicety; the decision already landed.
+      }
+    }
+  }
+}

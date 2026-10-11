@@ -339,6 +339,13 @@ export interface PtySessionOptions {
    * the one remaining integration.
    */
   served?: { env: Record<string, string>; profilePath: string }
+  /**
+   * The card's route (route program): what the harness is handed to reach
+   * the Magpie gateway. Ignored outright for a served session — a stranger's
+   * seat never runs on the owner's gateway (design D3) — so an option set by
+   * mistake cannot leak it.
+   */
+  route?: { env: Record<string, string>; args: string[] }
 }
 
 /**
@@ -457,7 +464,8 @@ export class PtySession extends EventEmitter {
       cliDir: options.cliDir,
       path: `${options.cliDir}:${process.env.PATH ?? ''}`,
       cwd: options.cwd,
-      card: options.card
+      card: options.card,
+      ...(options.route && !options.served ? { env: options.route.env, args: options.route.args } : {})
     }
     // One live process per terminal across ALL backends: a copy of this
     // agent alive under a non-host multiplexer is killed there first and

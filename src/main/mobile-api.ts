@@ -48,6 +48,7 @@ import type { StreamService } from "./stream-service";
 import { handleStreamRoutes } from "./stream-routes";
 import { handleStreamAdapters } from "./stream-adapters";
 import type { LoopHealthSnapshot } from "./loop-health";
+import type { CardRouteState, RouteState } from "../shared/route";
 import { ownerSubmit } from "./ask";
 import { MAX_ATTACHMENT_BYTES } from "./attachments";
 import type { SousDoor } from "./socket-server";
@@ -202,6 +203,21 @@ export interface MobileApiDeps {
    * desktop's does. Optional: a test server without agents has none.
    */
   signalBus?: CableSignalBus;
+  /**
+   * The route program (shared/route.ts): the gateway state, the owner's one
+   * default, each card's route. `routeBus` carries 'route' (the whole state,
+   * at most once a second) and 'card-route' (one card) for the stream.
+   */
+  route?: {
+    state: () => RouteState;
+    setDefault: (model: string | null) => RouteState;
+    cardState: (terminalId: string) => CardRouteState;
+    setCardRoute: (terminalId: string, route: string) => Promise<CardRouteState | { error: string }>;
+    health: () => { status: string; source: string | null; providers: number; live: number };
+    /** Held while a stream is open, so the gateway's clock runs only while someone looks. */
+    hold: () => () => void;
+  };
+  routeBus?: EventEmitter;
   /**
    * 'changed' once the registry has taken a reach card that differs from the
    * last one it took (reach.ts · onChanged). The stream relays it as `reach`
@@ -548,7 +564,43 @@ export async function handleMobileApi(
     }
     // The compressor's own ledger rides along: how often a poll was answered
     // from the cache or with a 304 is the number behind the API tails.
-    respondJson(response, 200, { ...deps.health(), compression: dynamicCompressionStats() });
+    respondJson(response, 200, {
+      ...deps.health(),
+      compression: dynamicCompressionStats(),
+      ...(deps.route ? { route: deps.route.health() } : {})
+    });
+    return true;
+  }
+  // THE ROUTE. One fleet-wide read for the panel, one write for the owner's
+  // default, one read and one write per card. The blanket gates above cover
+  // them: GETs need `canRead`, the PUTs need pairing.
+  if (p === "/api/route" && method === "GET" && deps.route) {
+    respondJson(response, 200, deps.route.state());
+    return true;
+  }
+  if (p === "/api/route/default" && method === "PUT" && deps.route) {
+    const body = await readJson<{ model?: unknown }>(request);
+    if (body.model !== null && typeof body.model !== "string") {
+      respondJson(response, 400, { ok: false, reason: "model must be a string or null" });
+      return true;
+    }
+    respondJson(response, 200, deps.route.setDefault(body.model === "" ? null : body.model));
+    return true;
+  }
+  const routeMatch = p.match(/^\/api\/terminal\/([^/]+)\/route$/);
+  if (routeMatch && deps.route && (method === "GET" || method === "PUT")) {
+    const terminalId = decodeURIComponent(routeMatch[1]);
+    if (method === "GET") {
+      respondJson(response, 200, deps.route.cardState(terminalId));
+      return true;
+    }
+    const body = await readJson<{ route?: unknown }>(request);
+    if (typeof body.route !== "string" || body.route === "") {
+      respondJson(response, 400, { ok: false, reason: "route is required" });
+      return true;
+    }
+    const result = await deps.route.setCardRoute(terminalId, body.route);
+    respondJson(response, "error" in result ? 404 : 200, result);
     return true;
   }
   if (method === "GET" && p === "/api/presets") {
@@ -1366,6 +1418,21 @@ export async function handleMobileApi(
     };
     const offSignal = deps.signalBus?.on(onSignal) ?? null;
     request.on("close", () => offSignal?.());
+    // The route: the whole state on change (debounced by the service), one
+    // card's state when its decision or turn facts land. The stream holds the
+    // gateway's clock open while it is, so a phone watching sees a probe.
+    const onRoute = (state: RouteState): void => send("route", state);
+    const onCardRoute = (row: { terminalId: string }): void => {
+      if (inScopedCanvas(row.terminalId)) send("card-route", row);
+    };
+    deps.routeBus?.on("route", onRoute);
+    deps.routeBus?.on("card-route", onCardRoute);
+    const releaseRoute = deps.route?.hold() ?? null;
+    request.on("close", () => {
+      deps.routeBus?.removeListener("route", onRoute);
+      deps.routeBus?.removeListener("card-route", onCardRoute);
+      releaseRoute?.();
+    });
     // The Mac's addresses moved and the zone knows the new names: look now.
     const onReach = (): void => send("reach", { at: Date.now() });
     deps.reachBus?.on("changed", onReach);

@@ -1,0 +1,11 @@
+{
+  "name": "@magpie-community/agent-cookrew",
+  "version": "0.1.0",
+  "description": "Cookrew as an agent row on Magpie's Agents page: pick a model there and Cookrew's new cards route through the gateway.",
+  "type": "module",
+  "license": "MIT",
+  "magpie": {
+    "agent": "./cookrew.agent.js"
+  },
+  "keywords": ["magpie", "magpie-agent", "cookrew"]
+}

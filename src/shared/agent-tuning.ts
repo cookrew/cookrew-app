@@ -39,10 +39,21 @@
 
 import type { TurnPhase } from './turn'
 
-/** The dials. One name, used as the slash command and as the wire key. */
-export type TuneKnob = 'model' | 'effort'
+/**
+ * The dials. One name, used as the slash command and as the wire key.
+ *
+ * 'route' (route program, 2026-10-11) is the third: which gateway model or
+ * group the card runs on. It is NOT a slash command and never typed into the
+ * pane — its reading comes from CardRouteState (shared/route.ts) and turning
+ * it goes through PUT /api/terminal/:id/route — so tuneValues/tuneValueOk
+ * keep answering for the two typed knobs only, and the route is checked
+ * against the catalog by the route service.
+ */
+export type TuneKnob = 'model' | 'effort' | 'route'
 
-export const TUNE_KNOBS: readonly TuneKnob[] = ['model', 'effort']
+export const TUNE_KNOBS: readonly TuneKnob[] = ['model', 'effort', 'route']
+/** The knobs that are turned by typing a line into the pane. */
+export const TYPED_KNOBS: readonly TuneKnob[] = ['model', 'effort']
 
 /**
  * A knob name arrives over IPC from the renderer and ends up inside a line
@@ -85,8 +96,12 @@ export function isModelAlias(value: string): value is ModelAlias {
 
 /** The values a knob will accept. Anything else never reaches a PTY. */
 export function tuneValues(knob: TuneKnob): readonly string[] {
+  if (knob === 'route') return ROUTE_DIRECT_ONLY
   return knob === 'model' ? MODEL_ALIASES : EFFORT_LEVELS
 }
+
+/** With no catalog in hand a route can only be direct; the service supplies the rest as `choices`. */
+export const ROUTE_DIRECT_ONLY: readonly string[] = ['direct']
 
 export function tuneValueOk(knob: TuneKnob, value: string): boolean {
   return tuneValues(knob).includes(value)
@@ -210,6 +225,7 @@ export interface HarnessTuning {
 export const TUNE_COPY = {
   model: { label: 'MDL', title: 'Model' },
   effort: { label: 'EFF', title: 'Effort' },
+  route: { label: 'RTE', title: 'Route' },
   /** No reply has been recorded yet, so nothing is known about the dials. */
   unread: 'no reply recorded yet',
   /** The ask is typed; the harness confirms it on its next reply. */

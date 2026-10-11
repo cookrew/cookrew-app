@@ -142,6 +142,13 @@ export interface TerminalNodeData {
    * injects it once the terminal is live, then clears it. Absent otherwise.
    */
   pendingInject?: string | null
+  /**
+   * The card's model route (route program, shared/route.ts): 'direct', or a
+   * Magpie model/group id. Absent = the fleet default at spawn time.
+   */
+  route?: string
+  /** What the running process was actually handed at its last spawn; null before one. */
+  routeEffective?: string | null
   position: CanvasPosition
   size: CanvasSize
 }

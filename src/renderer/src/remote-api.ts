@@ -449,8 +449,8 @@ export function createRemoteApi(): CookrewApi {
     // Magpie routing over the companion's API (LEDGER endpoints).
     routeState: () => req<RouteState>(apiPath('/api/route')),
     routeSetDefault: (model) => req<RouteState>(apiPath('/api/route/default'), 'PUT', { model }),
-    terminalRoute: (terminalId) => req<CardRouteState>(apiPath(`/api/terminal/${terminalId}/route`)),
-    terminalRouteSet: (terminalId, route) => req<CardRouteState>(apiPath(`/api/terminal/${terminalId}/route`), 'PUT', { route }),
+    terminalRoute: (terminalId) => req<CardRouteState>(apiPath(`/api/terminal/${encodeURIComponent(terminalId)}/route`)),
+    terminalRouteSet: (terminalId, route) => req<CardRouteState>(apiPath(`/api/terminal/${encodeURIComponent(terminalId)}/route`), 'PUT', { route }),
     onRoute: (cb) => subscribe<RouteState>('route', cb),
     onCardRoute: (cb) => subscribe<{ terminalId: string } & CardRouteState>('card-route', cb),
     onTerminalTuning: (cb) =>
