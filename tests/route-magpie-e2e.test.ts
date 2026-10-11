@@ -11,11 +11,13 @@
 //   COOKREW_MAGPIE_E2E=1 npx vitest run tests/route-magpie-e2e.test.ts
 //
 // What it needs set up once (docs/route-program/report-e2e.md has the full recipe):
-//   magpie serve · magpie provider add ollama · a group of THINKING models for codex
+//   magpie serve · magpie provider add ollama · group/smart · group/think PINNED to one small
+//   thinking model (`magpie group pick think ollama/qwen3:1.7b`) so the member is never a toss-up
 //
-// Three findings from the first real run are baked in as constants here rather than hidden in
-// the asserts, because each one is a product decision waiting to be made:
-//   · claude 2.1.275 stalls on an unknown model id unless the enforcement is turned off
+// Three findings from the first real run are baked in here rather than hidden in the asserts,
+// because each one is a product decision:
+//   · claude 2.1.275 stalls on an unknown model id unless the enforcement is turned off — that
+//     variable is now routeEnv's job, and this file ASSERTS it rather than supplying it
 //   · codex needs --skip-git-repo-check outside a repo and a closed stdin
 //   · codex always asks for thinking, so qwen2.5 refuses it — it needs a qwen3-class member
 import { spawn } from 'node:child_process'
@@ -27,28 +29,53 @@ import { GatewayMonitor } from '../src/main/route/gateway'
 import { toDecision, toTurnFacts } from '../src/main/route/decisions'
 import { RouteService } from '../src/main/route/service'
 import { routeEnv } from '../src/main/route-env'
-import { routeSession, type RouteGateway } from '../src/shared/route'
+import { routeSession } from '../src/shared/route'
 import type { TerminalNodeData } from '../src/shared/model'
 
 const GATEWAY = 'http://127.0.0.1:3425'
 const KEY = 'magpie-cookrew'
-/** A model every harness here can hold a conversation on: codex asks for thinking. */
-const THINKING_MODEL = 'ollama/qwen3:4b'
+const OLLAMA = 'http://localhost:11434'
 /** The group the brief names; claude can use it, codex cannot (see the header). */
 const GROUP = 'group/smart'
+/**
+ * The group codex routes through, PINNED (routing=manual) to one small thinking model, so the
+ * member the decision names is a constant and not whichever of two the router liked. The member
+ * is asserted, not read: if the pin is gone the case says so instead of chasing a new model.
+ */
+const THINK_GROUP = 'group/think'
+const THINK_MODEL = 'ollama/qwen3:1.7b'
+const THINK_BARE = 'qwen3:1.7b'
 const CLAUDE_BIN = 'claude'
 const CODEX_BIN = 'codex'
 const SPAWN_MS = 180_000
+/**
+ * Ollama holds one model at a time here, so a cold one is loaded BEFORE the case, not during it.
+ * Each try is a preload and then a direct one-word turn, so the ceiling before the case stands
+ * down is WARM_TRIES × 2 × WARM_MS = 270 s. A 1.4 GB model loads in about 3 s when the slot is
+ * free; the rest of that budget is for a slot that is not.
+ */
+const PRELOAD_MS = 60_000
+const WARM_TRIES = 3
+const WARM_MS = 45_000
 
 const hello = await fetch(`${GATEWAY}/api/hello`)
   .then((r) => (r.ok ? (r.json() as Promise<{ name?: string }>) : null))
   .catch(() => null)
 const RUN = process.env.COOKREW_MAGPIE_E2E === '1' && hello?.name === 'magpie'
 
-const gateway: Pick<RouteGateway, 'url' | 'v1' | 'key'> = { url: GATEWAY, v1: `${GATEWAY}/v1`, key: KEY }
+// The key is not on RouteGateway any more (fix round 1: it never leaves main), so the spawn
+// input is spelled out here the way the service spells it from the probe.
+const gateway = { url: GATEWAY, v1: `${GATEWAY}/v1`, key: KEY }
 const cards: string[] = []
 const dirs: string[] = []
 const latency: Record<string, number[]> = {}
+const abstentions: string[] = []
+
+/** Say out loud why a case is standing down, and keep the sentence for the report. */
+function abstain(reason: string): void {
+  abstentions.push(reason)
+  process.stdout.write(`\n  ↯ ABSTAINED: ${reason}\n`)
+}
 
 function card(prefix: string): string {
   const id = `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
@@ -119,7 +146,7 @@ function node(id: string, command: string): TerminalNodeData {
     cwd: '/tmp',
     orch: false,
     role: null,
-    route: THINKING_MODEL
+    route: THINK_MODEL
   } as TerminalNodeData
 }
 
@@ -147,6 +174,9 @@ afterAll(() => {
   if (Object.keys(latency).length > 0) {
     writeFileSync('/tmp/route-latency.json', `${JSON.stringify(latency, null, 2)}\n`)
   }
+  if (abstentions.length > 0) {
+    writeFileSync('/tmp/route-abstentions.json', `${JSON.stringify(abstentions, null, 2)}\n`)
+  }
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
 })
 
@@ -165,14 +195,14 @@ describe.skipIf(!RUN)('the route, against the real Magpie gateway', () => {
     const id = card('e2e-claude')
     const session = routeSession(id)
     const r = routeEnv({ harness: 'claude', gateway, model: GROUP, cardId: id })
-    const ran = await run(
-      CLAUDE_BIN,
-      ['-p', 'Reply with exactly the word OK'],
-      // The enforcement variable is NOT in routeEnv yet; without it claude 2.1.275 sends the
-      // request and then stalls on its own unknown-model check, so a routed card looks hung.
-      { ...r.env, CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: '1' },
-      workdir()
-    )
+    // THE SPAWN ENV IS THE WHOLE ENV. Without this variable claude 2.1.275 sends the request,
+    // gets its 200 and then stalls on its own unknown-model check — a routed card that looks
+    // hung on its first turn. The test used to supply it; routeEnv does now, so it is asserted.
+    expect(
+      r.env.CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT,
+      'routeEnv must disable claude’s unknown-model wait, or every routed claude card hangs'
+    ).toBe('1')
+    const ran = await run(CLAUDE_BIN, ['-p', 'Reply with exactly the word OK'], r.env, workdir())
     expect(ran.out.length).toBeGreaterThan(0)
     await settle()
 
@@ -201,7 +231,7 @@ describe.skipIf(!RUN)('the route, against the real Magpie gateway', () => {
     const spawned = run(
       CLAUDE_BIN,
       ['-p', 'Count slowly from one to twenty, one number per line.'],
-      { ...r.env, CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: '1' },
+      r.env,
       workdir()
     ).then((ran) => {
       replied = true
@@ -233,20 +263,30 @@ describe.skipIf(!RUN)('the route, against the real Magpie gateway', () => {
     await spawned
   }, SPAWN_MS)
 
-  it('routes codex on a thinking model and files it the same way', async () => {
+  it('routes codex through the pinned thinking group and files it the same way', async (ctx) => {
+    // A LOCAL MODEL THAT CANNOT BE LOADED IS NOT A ROUTING FAULT, and this machine makes the
+    // difference visible: Ollama holds ONE model at a time, and the fleet's turn-titler keeps
+    // qwen2.5:1.5b resident with a rolling 5-minute keep-alive, so a request for any other model
+    // waits for a slot that never frees (measured: 8 minutes, no load). The case therefore loads
+    // the model itself first (keep_alive, so it survives the turn), retries a bounded number of
+    // times, and ABSTAINS with the reason rather than reporting the route broken.
+    const warm = await warmUp(THINK_MODEL)
+    if (!warm.ok) {
+      // vitest 2.1's `skip()` carries no reason, and a silent skip is the thing this whole file
+      // exists to prevent — so the reason is said on stdout and left in a file beside the
+      // latency numbers, and only then does the case abstain.
+      abstain(
+        `${THINK_MODEL} would not load: ${warm.attempts} attempts over ${Math.round(warm.ms / 1000)}s, ` +
+          `Ollama is holding [${warm.resident.join(', ') || 'nothing'}]. ` +
+          'Local-model capacity, not routing — report-e2e.md §8 has the one-line fix.'
+      )
+      ctx.skip()
+      return
+    }
+
     const id = card('e2e-codex')
     const session = routeSession(id)
-    const r = routeEnv({ harness: 'codex', gateway, model: THINKING_MODEL, cardId: id })
-    // A LOCAL MODEL THAT CANNOT ANSWER IS NOT A ROUTING FAULT. codex asks for thinking, so this
-    // case needs qwen3-class weights, and on a loaded machine Ollama can take minutes to load
-    // them — the first run of this test failed with a 169-second 499 while a DIRECT call for the
-    // same model timed out too. Warm it first and say which it is.
-    const warm = await warmUp(THINKING_MODEL)
-    expect(
-      warm,
-      `${THINKING_MODEL} did not answer a one-word prompt in 90s — Ollama is loaded, not the route`
-    ).toBe(true)
-
+    const r = routeEnv({ harness: 'codex', gateway, model: THINK_GROUP, cardId: id })
     const ran = await run(
       CODEX_BIN,
       // --skip-git-repo-check: the temp dir is not a repo. The prompt is last, as codex takes it.
@@ -260,7 +300,10 @@ describe.skipIf(!RUN)('the route, against the real Magpie gateway', () => {
     await settle()
 
     const decision = toDecision(id, await routeOf(session), Date.now())
-    expect(decision?.model).toBe(THINKING_MODEL)
+    expect(decision?.asked).toBe(THINK_GROUP)
+    expect(decision?.group).toBe('think')
+    // The pin, read back off the gateway: `magpie group pick think ollama/qwen3:1.7b`.
+    expect(decision?.model, `${THINK_GROUP} is no longer pinned to ${THINK_MODEL}`).toBe(THINK_MODEL)
 
     // NOT `decision.status === '200'`: codex fires a follow-up call as it exits and cancels it,
     // so the session's LATEST route is a 499 (client closed) even though the turn was answered.
@@ -272,9 +315,9 @@ describe.skipIf(!RUN)('the route, against the real Magpie gateway', () => {
     expect(answered.length).toBeGreaterThan(0)
     expect(answered[0]?.agent).toBe('cookrew')
     expect(answered[0]?.session).toBe(session)
-    expect(answered[0]?.model).toBe('qwen3:4b')
+    expect(answered[0]?.model).toBe(THINK_BARE)
     expect(answered[0]?.out ?? 0).toBeGreaterThan(0)
-  }, SPAWN_MS)
+  }, PRELOAD_MS + WARM_TRIES * WARM_MS + SPAWN_MS)
 
   it('spawns direct while the gateway is down, and routed again when it is back', async () => {
     const monitor = new GatewayMonitor({ hasBinary: () => true })
@@ -283,7 +326,7 @@ describe.skipIf(!RUN)('the route, against the real Magpie gateway', () => {
 
     expect((await monitor.refresh()).status).toBe('online')
     const online = svc.envFor(data)
-    expect(online.effective).toBe(THINKING_MODEL)
+    expect(online.effective).toBe(THINK_MODEL)
     expect(online.offline).toBe(false)
     expect(online.env.ANTHROPIC_BASE_URL).toBe(GATEWAY)
 
@@ -298,7 +341,7 @@ describe.skipIf(!RUN)('the route, against the real Magpie gateway', () => {
     await startGateway()
     expect((await monitor.refresh()).status).toBe('online')
     const back = svc.envFor(data)
-    expect(back.effective).toBe(THINKING_MODEL)
+    expect(back.effective).toBe(THINK_MODEL)
     expect(back.offline).toBe(false)
   }, SPAWN_MS)
 
@@ -341,21 +384,79 @@ describe.skipIf(!RUN)('the route, against the real Magpie gateway', () => {
   }, SPAWN_MS)
 })
 
-/** Ask Ollama for the model directly, so a slow local model is told apart from a broken route. */
-async function warmUp(model: string): Promise<boolean> {
-  const bare = model.replace(/^ollama\//, '')
-  const stop = AbortSignal.timeout(90_000)
+/** What Ollama is holding right now — the evidence an abstention needs. */
+async function resident(): Promise<string[]> {
   try {
-    const res = await fetch('http://localhost:11434/v1/chat/completions', {
+    const body = (await fetch(`${OLLAMA}/api/ps`, { signal: AbortSignal.timeout(3_000) }).then((r) =>
+      r.json()
+    )) as { models?: { name?: string }[] }
+    return (body.models ?? []).map((m) => m.name ?? '').filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Ollama's own preload: an EMPTY prompt loads the weights and answers nothing, and `keep_alive`
+ * is the only way to say "hold it past this request" — a chat completion through the gateway
+ * cannot carry it, so the model would be evictable again the moment it arrived.
+ */
+async function preload(model: string, keepAlive = '20m', timeoutMs = PRELOAD_MS): Promise<boolean> {
+  try {
+    const res = await fetch(`${OLLAMA}/api/generate`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model: bare, stream: false, messages: [{ role: 'user', content: 'say ok' }] }),
-      signal: stop
+      body: JSON.stringify({ model: model.replace(/^ollama\//, ''), prompt: '', keep_alive: keepAlive }),
+      signal: AbortSignal.timeout(timeoutMs)
     })
     return res.ok
   } catch {
     return false
   }
+}
+
+/** One direct one-word turn: proof the weights are up, told apart from anything the route does. */
+async function answersDirect(model: string, timeoutMs: number): Promise<boolean> {
+  try {
+    const res = await fetch(`${OLLAMA}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: model.replace(/^ollama\//, ''),
+        stream: false,
+        messages: [{ role: 'user', content: 'say ok' }]
+      }),
+      signal: AbortSignal.timeout(timeoutMs)
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+interface Warm {
+  ok: boolean
+  attempts: number
+  ms: number
+  /** What Ollama held at the end — named in the skip so the reason is evidence, not a guess. */
+  resident: string[]
+}
+
+/**
+ * Load the model and prove it answers, in a BOUNDED number of tries. Unbounded waiting was the
+ * first version's mistake: a single 90-second attempt on a machine whose one model slot is
+ * taken reads exactly like a broken route.
+ */
+async function warmUp(model: string, tries = WARM_TRIES, perTryMs = WARM_MS): Promise<Warm> {
+  const started = Date.now()
+  for (let attempt = 1; attempt <= tries; attempt++) {
+    await preload(model, '20m', perTryMs)
+    if (await answersDirect(model, perTryMs)) {
+      return { ok: true, attempts: attempt, ms: Date.now() - started, resident: await resident() }
+    }
+    await settle(1_000)
+  }
+  return { ok: false, attempts: tries, ms: Date.now() - started, resident: await resident() }
 }
 
 /** Stop the gateway the way a person would, and wait until the port stops answering. */
