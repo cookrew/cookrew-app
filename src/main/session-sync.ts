@@ -211,7 +211,33 @@ export class SessionTurnSync {
     parse: SessionTurnParser,
     opts: SessionWatchOptions = {}
   ): void {
-    const prior = this.watched.get(terminalId) ?? this.dormant.get(terminalId)
+    // A LIVE WATCH ON THE SAME FILE IS LEFT ALONE. The linger re-watches a
+    // terminal on every `working` status event (lazy-terminal.ts), and this
+    // used to treat that live entry like a dormant one: it kept the verified
+    // history only while the tracker's memoized snapshot was the same object
+    // — which every commit replaces — and otherwise swapped in a fresh
+    // null-history entry and a full re-parse. A 140 MB transcript was parsed
+    // again on each status event, and the probation sweep (dispatch.ts ·
+    // observerLive) read the null as "never materialized" and interrupted
+    // asks the agent had answered (the dispatch ledger, 2026-10-11, after a
+    // restart put every pane on the lazy path). Rotation is not lost by
+    // returning here: reconcile() compares the inode on every poll and
+    // re-parses whole when it moves. Only the drain and stale clocks restart,
+    // exactly as the resume paths below restart them.
+    const live = this.watched.get(terminalId)
+    if (live && live.file === file && live.parse === parse) {
+      this.watched.set(terminalId, {
+        ...live,
+        draining: false,
+        drainTicks: 0,
+        staleTicks: 0,
+        staleReported: false
+      })
+      if (opts.deferInitial !== true) this.reconcile(terminalId)
+      this.ensureTimer()
+      return
+    }
+    const prior = this.dormant.get(terminalId)
     this.dormant.delete(terminalId)
     if (prior && prior.file === file && prior.parse === parse && prior.history !== null) {
       try {
