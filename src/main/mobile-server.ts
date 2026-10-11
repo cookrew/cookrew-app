@@ -210,6 +210,9 @@ export interface MobileServerDeps {
   /** Sous's door and its `ui` bus — see MobileApiDeps; passed through as-is. */
   sous?: MobileApiDeps['sous']
   uiBus?: MobileApiDeps['uiBus']
+  /** The HITL inbox (R3) — see MobileApiDeps; passed through as-is. */
+  inbox?: MobileApiDeps['inbox']
+  inboxBus?: MobileApiDeps['inboxBus']
   /** The screen wall's pictures for the phone — see MobileApiDeps; passed through as-is. */
   workspaceShots?: MobileApiDeps['workspaceShots']
   /**

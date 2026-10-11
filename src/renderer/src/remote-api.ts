@@ -10,6 +10,7 @@ import type {
   LandResult, CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
 import type { SecretListing } from '../../shared/secret-slot'
 import type { UiCommandEvent } from '../../shared/sous-ui'
+import type { InboxRow } from '../../shared/inbox-rank'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 import type { VersionPinRecord } from '../../shared/version-pin'
 import { apiPath } from './api-base'
@@ -611,6 +612,9 @@ export function createRemoteApi(): CookrewApi {
     sousCommand: (text, ctx) =>
       req(apiPath('/api/sous/command'), 'POST', { text, surface: ctx.surface, callerId: sousCallerId() }),
     onUiCommand: (cb) => subscribe<UiCommandEvent>('ui', cb),
+    sousCommit: (token, choice) => req(apiPath('/api/sous/commit'), 'POST', { token, ...(choice?.target ? { target: choice.target } : {}) }),
+    inbox: () => req<{ rows: InboxRow[] }>(apiPath('/api/inbox')).then((out) => out.rows),
+    onInbox: (cb) => subscribe<{ rows: InboxRow[] }>('inbox', (frame) => cb(frame.rows)),
     // The phone hears through its own browser (VoiceBar); the Mac's ear is
     // the desktop's alone.
     listenAvailable: () => Promise.resolve(false),

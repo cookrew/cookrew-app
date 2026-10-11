@@ -52,6 +52,7 @@ import type { CardRouteState, RouteState } from "../shared/route";
 import { ownerSubmit } from "./ask";
 import { MAX_ATTACHMENT_BYTES } from "./attachments";
 import type { SousDoor } from "./socket-server";
+import type { InboxRow } from "../shared/inbox-rank";
 import type { Surface as SousSurface } from "../shared/sous-intent";
 import type { UiCommandEvent } from "../shared/sous-ui";
 import type { EventEmitter } from "node:events";
@@ -185,6 +186,9 @@ export interface MobileApiDeps {
    */
   sous?: SousDoor;
   uiBus?: EventEmitter;
+  /** The HITL inbox (R3): the ranked rows, and the bus that says when they changed. */
+  inbox?: () => InboxRow[];
+  inboxBus?: EventEmitter;
   /**
    * THE DIALS (shared/agent-tuning) — model and effort, read and turned.
    *
@@ -1421,6 +1425,31 @@ export async function handleMobileApi(
     return true;
   }
 
+  if (method === "GET" && p === "/api/inbox") {
+    // Task text for every workspace, like the board: gated the same way.
+    if (deps.pairingToken && !canRead) {
+      respondJson(response, 401, { error: "Unauthorized — the inbox requires a pairing or read-only token." });
+      return true;
+    }
+    respondJson(response, 200, { rows: deps.inbox?.() ?? [] });
+    return true;
+  }
+
+  if (method === "POST" && p === "/api/sous/commit") {
+    if (!deps.sous?.commit) {
+      respondJson(response, 503, { error: "Sous does not decide on this desktop" });
+      return true;
+    }
+    const body = await readJson<{ token?: string; target?: string }>(request);
+    if (typeof body.token !== "string" || body.token.length === 0 || body.token.length > 64) {
+      respondJson(response, 400, { error: "Missing token" });
+      return true;
+    }
+    const choice = typeof body.target === "string" && body.target.length <= 128 ? { target: body.target } : {};
+    respondJson(response, 200, await deps.sous.commit(body.token, choice));
+    return true;
+  }
+
   if (method === "GET" && p === "/api/events") {
     const send = startSse(response);
     // The opening workspace snapshot is skipped ONCE per boot: the client
@@ -1451,6 +1480,14 @@ export async function handleMobileApi(
     };
     deps.tuningBus?.on("tuning", onTuning);
     request.on("close", () => deps.tuningBus?.removeListener("tuning", onTuning));
+    // The inbox rides the same stream, under the board's read gate; the
+    // opening frame is the list as it stands, so a phone never polls for it.
+    if (deps.inbox && (!deps.pairingToken || canRead)) {
+      const onInbox = (rows: InboxRow[]): void => send("inbox", { rows });
+      send("inbox", { rows: deps.inbox() });
+      deps.inboxBus?.on("inbox", onInbox);
+      request.on("close", () => deps.inboxBus?.removeListener("inbox", onInbox));
+    }
     // A cable lit on this canvas. Either end on it is enough: the other end
     // may be a tab naming an agent elsewhere, and the tab is the lamp.
     const onSignal = (signal: CableSignal): void => {
