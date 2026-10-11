@@ -7,8 +7,14 @@
 //   2 default-pick   one chip in the DEFAULT row, and routeState() agrees
 //   3 cmdk           ⌘K · "write a haiku about cables" · Sous echoes a decision · committed
 //   4 recruited      the new card's RTE reads the default, and its first turn names the model
-//   5 rte-pick       RTE → the other model · the card respawns · the next turn names that one
-//   6 offline        magpie stopped → the dial says "direct" and wears the offline flag
+//   5 rte-pick        RTE → the group · the card respawns · the next turn is DECIDED by the group
+//   6 offline         magpie stopped → the dial says "direct" and wears the offline flag
+//
+// Beat 5 learned something on its first real run: `group/smart` sent the turn to
+// `ollama/qwen2.5:1.5b`, the member the card was already on, so the turn line was identical and
+// the naive "wait for a different line" assertion reported a failure that had not happened. A
+// router may legitimately pick the same model; what changed is who chose it. The assertion is
+// the live RouteDecision now — a new `seq`, `asked` = the group, `group` = its name.
 //
 // Every selector below is taken from the MERGED renderer (branch route-merge), not from a mock:
 //   .cr-routing-entry          Header.tsx → RoutingEntry
@@ -27,6 +33,12 @@
 //   node scratchpad/route-story.mjs --plan          # beats, selectors, click budget; no CDP
 //   node scratchpad/route-story.mjs --go            # the storyboard, against the running app
 //   node scratchpad/route-story.mjs --go --leave-stopped   # do not restart magpie at the end
+//   node scratchpad/route-story.mjs --go --from=5 --card=<terminalId>   # rerun 5–6 on that card
+//
+// `--from=N` starts at beat N and skips what is before it. Beats 5–6 act on one card, so from 5
+// onwards `--card=<terminalId>` is required — the id beat 4 prints — and the card is found,
+// zoomed and confirmed again rather than assumed to be on screen. That is what makes a failed
+// beat 5 cheap to retry: no second recruit, no second haiku.
 //
 // Beat 6 stops the gateway on purpose and starts it again afterwards (the owner's cards are
 // unaffected: a running card keeps whatever env it was spawned with).
@@ -50,6 +62,11 @@ const SECOND = value('second', 'group/smart')
 const SENTENCE = value('say', 'write a haiku about cables')
 const SHOT_DIR = value('shots', '/tmp')
 const WORKSPACE = value('workspace', null)
+/** Start at beat N (1-based). Beats 5–6 need `--card=<terminalId>` — the one beat 4 recruited. */
+const FROM = Math.max(1, Number(value('from', 1)))
+const CARD = value('card', null)
+/** The group's own name, for the decision read-back: `group/smart` → `smart`. */
+const SECOND_GROUP = SECOND.startsWith('group/') ? SECOND.slice('group/'.length) : null
 
 /** Velvet's section-9 budget (report-panel.md), the numbers this run is counted against. */
 const BUDGET = [
@@ -72,6 +89,7 @@ function plan() {
   process.stdout.write('\n  Click budget to compare with (report-panel.md section 9):\n')
   for (const row of BUDGET) process.stdout.write(`    ${String(row.clicks)}  ${row.path} — ${row.note}\n`)
   process.stdout.write(`\n  Shots: ${SHOT_DIR}/route-story-<n>-<beat>.png · record: /tmp/route-story.json\n`)
+  process.stdout.write(`  Rerun a late beat on the same card: --go --from=5 --card=<terminalId>${FROM > 1 ? ` (set: --from=${FROM}, card ${CARD ?? 'MISSING'})` : ''}\n`)
   process.stdout.write('  Nothing was driven: pass --go to run it against the app.\n\n')
 }
 
@@ -238,6 +256,25 @@ async function toBoard(d) {
   }
 }
 
+/**
+ * The card beats 5–6 work on, zoomed and PROVED — whether beat 4 left it open or this is a
+ * `--from=5 --card=<id>` rerun that has to find it again. Looking is not doing, so the taps it
+ * costs are taken back off the count.
+ */
+async function ensureOpen(d, memo) {
+  if (memo.card && (await d.openName()) === memo.card.name) return memo.card
+  const id = memo.card?.id ?? CARD
+  if (!id) throw new Error('no card to work on — pass --card=<terminalId> when starting at beat 4 or later')
+  await toBoard(d)
+  const here = (await d.cards()).find((c) => c.id === id)
+  if (!here) throw new Error(`no card ${id} on this canvas — is the app in the right workspace?`)
+  await d.tap(here.x, here.y + Math.min(26, here.h / 6))
+  d.clicks -= 1
+  const name = await until('the overlay agrees which card it is', () => d.openName(), (n) => n === here.name, 20_000, 500)
+  memo.card = { ...here, name }
+  return memo.card
+}
+
 const BEATS = [
   {
     name: 'r1-online',
@@ -306,23 +343,22 @@ const BEATS = [
     run: async (d, memo) => {
       await d.escape()
       await sleep(400)
-      const before = new Set(memo.cardIds ?? [])
-      const fresh = await until(
-        'Sous recruits a card',
-        async () => (await d.cards()).filter((c) => !before.has(c.id)),
-        (list) => list.length > 0,
-        120_000,
-        1_500
-      )
-      const card = fresh[0]
-      await toBoard(d)
-      // Coordinates are re-read AFTER leaving the overlay: the board may have panned, and a tap
-      // at a stale point either misses or opens the neighbour.
-      const here = (await d.cards()).find((c) => c.id === card.id)
-      if (!here) throw new Error(`card ${card.id} left the canvas before it could be opened`)
-      await d.tap(here.x, here.y + Math.min(26, here.h / 6))
-      d.clicks -= 1 // zooming to look is not a step of the route path
-      const name = await until('the overlay agrees which card it is', () => d.openName(), (n) => n === here.name, 20_000, 500)
+      // A rerun (`--from=4 --card=<id>`) re-reads the card that was already recruited; a full run
+      // waits for the one Sous is about to make.
+      if (!memo.card && CARD === null) {
+        const before = new Set(memo.cardIds ?? [])
+        const fresh = await until(
+          'Sous recruits a card',
+          async () => (await d.cards()).filter((c) => !before.has(c.id)),
+          (list) => list.length > 0,
+          120_000,
+          1_500
+        )
+        memo.card = fresh[0]
+      }
+      // ensureOpen re-reads the coordinates AFTER leaving the overlay: the board may have panned,
+      // and a tap at a stale point either misses or opens the neighbour.
+      const { id: cardId, name } = await ensureOpen(d, memo)
       const dial = await until(
         'the RTE dial reads the default',
         () => d.text('[data-knob="route"] .cr-tune-v'),
@@ -336,19 +372,18 @@ const BEATS = [
         180_000,
         2_000
       )
-      const state = await d.cardRoute(card.id)
-      memo.card = card
-      return { card: { id: card.id, name }, dial, turn, route: state?.route ?? null, effective: state?.effective ?? null, appliesOn: state?.appliesOn ?? null }
+      const state = await d.cardRoute(cardId)
+      // Printed so a rerun has the one argument it needs: --from=5 --card=<id>.
+      return { card: { id: cardId, name }, dial, turn, route: state?.route ?? null, effective: state?.effective ?? null, appliesOn: state?.appliesOn ?? null }
     }
   },
   {
     name: 'rte-pick',
     budget: 2,
-    what: `RTE → ${SECOND}; the card respawns with exact context and the next turn names it`,
-    reads: 'the chip’s pending flag clearing · .cr-tune-v · a new .cr-tune-turn',
+    what: `RTE → ${SECOND}; the card respawns with exact context and the next turn goes through it`,
+    reads: 'route takes the pick · effective + appliesOn after the respawn · the live decision’s seq/asked/group',
     run: async (d, memo) => {
-      const card = memo.card
-      if (!card) throw new Error('no card from the previous beat')
+      const card = await ensureOpen(d, memo)
       const chip = await d.at('[data-knob="route"] button.cr-tune-chip')
       if (!chip) throw new Error('no RTE chip on this card — a served session has none by design')
       await d.tap(chip.x, chip.y)
@@ -373,7 +408,24 @@ const BEATS = [
         2_000
       )
       const dial = await d.text('[data-knob="route"] .cr-tune-v')
-      // The next turn, said into the card's own composer the way a person would.
+
+      /**
+       * THE NEXT TURN IS PROVED BY THE DECISION, NOT BY A DIFFERENT MODEL NAME.
+       *
+       * The first run of this read it the naive way — wait for a `.cr-tune-turn` line unlike the
+       * previous one — and reported a failure that was not one: `group/smart` routed the turn to
+       * `ollama/qwen2.5:1.5b`, which is the member the card was already on, so the turn line was
+       * word-for-word identical. A router is allowed to pick the same model; what changed is WHO
+       * chose it. So the proof is the live RouteDecision: a NEW `seq` on this card's session,
+       * `asked` = the group that was picked, and `group` = its name. The turn line is kept as
+       * evidence, never as the assertion.
+       *
+       * `seq` is monotonic per session and the session is `cookrew:<cardId>`, which the respawn
+       * does not change — so it survives exactly the event this beat is about. The decision that
+       * satisfies this may be the respawned harness's own first request rather than the sentence
+       * typed below; either one is a request the group decided, which is the claim.
+       */
+      const before = (await d.cardRoute(card.id))?.live?.seq ?? 0
       const term = await d.at('.xterm-screen')
       if (term) {
         await d.tap(term.x, term.y)
@@ -381,14 +433,21 @@ const BEATS = [
         await d.type('Say the word READY and nothing else.')
         await d.enter()
       }
-      const turn = await until(
-        'the next turn names the new model',
-        () => d.text('[data-knob="route"] .cr-tune-turn'),
-        (t) => typeof t === 'string' && t.length > 0 && t !== memo.lastTurn,
+      const live = await until(
+        `the next turn is routed through ${SECOND}`,
+        async () => {
+          const l = (await d.cardRoute(card.id))?.live ?? null
+          return l === null ? null : { seq: l.seq, asked: l.asked, group: l.group, model: l.model, status: l.status, done: l.done }
+        },
+        (l) => l !== null && l.seq > before && l.asked === SECOND && (SECOND_GROUP === null || l.group === SECOND_GROUP),
         180_000,
         2_000
       )
-      return { asked, ...settled, dial, turn }
+      const turn = await d.text('[data-knob="route"] .cr-tune-turn')
+      // Said plainly, because it is the thing that fooled the first run: the member may be the
+      // same model the card was on before, and that is a pass.
+      const sameMember = typeof turn === 'string' && typeof memo.lastTurn === 'string' && turn === memo.lastTurn
+      return { asked, ...settled, dial, seqBefore: before, live, turn, turnLineUnchanged: sameMember }
     }
   },
   {
@@ -396,7 +455,9 @@ const BEATS = [
     budget: 0,
     what: 'stop magpie; the dial says direct and wears the offline flag',
     reads: '.cr-tune-chip.refused · .cr-tune-v · routeState().status',
-    run: async (d) => {
+    run: async (d, memo) => {
+      // The dial is only on a zoomed card, so a `--from=6` rerun has to open one first.
+      await ensureOpen(d, memo)
       await stopGateway()
       // The monitor re-probes on its own 30 s clock while the window holds it, so this waits a
       // whole clock plus slack rather than poking anything.
@@ -422,6 +483,9 @@ async function main() {
     return
   }
   if (!(await gatewayUp())) throw new Error(`${GATEWAY} does not answer — beat 1 needs a live gateway`)
+  if (FROM >= 5 && CARD === null) {
+    throw new Error(`--from=${FROM} works on the card beat 4 recruited: pass --card=<terminalId> (beat 4 prints it)`)
+  }
   const d = await attach()
   const memo = {}
   try {
@@ -432,7 +496,14 @@ async function main() {
       }
     }
     memo.cardIds = (await d.cards()).map((c) => c.id)
+    story.from = FROM
+    story.card = CARD
     for (const [i, beat] of BEATS.entries()) {
+      if (i + 1 < FROM) {
+        process.stdout.write(`  · ${i + 1}/${BEATS.length} ${beat.name} — skipped (--from=${FROM})\n`)
+        story.beats.push({ name: beat.name, skipped: true })
+        continue
+      }
       const at = d.clicks
       const startedAt = Date.now()
       process.stdout.write(`\n▶ ${i + 1}/${BEATS.length} ${beat.name} — ${beat.what}\n`)
@@ -461,8 +532,10 @@ async function main() {
     writeFileSync('/tmp/route-story.json', `${JSON.stringify(story, null, 2)}\n`)
     d.close()
   }
-  const failed = story.beats.filter((b) => b.error)
-  process.stdout.write(`\n${failed.length === 0 ? 'ALL SIX BEATS' : `${story.beats.length - failed.length}/${BEATS.length} BEATS`} · ${story.clicks} clicks · /tmp/route-story.json\n\n`)
+  const ran = story.beats.filter((b) => !b.skipped)
+  const failed = ran.filter((b) => b.error)
+  const tally = failed.length === 0 ? `${ran.length}/${ran.length} BEATS` : `${ran.length - failed.length}/${ran.length} BEATS · ${failed.map((b) => b.name).join(', ')} failed`
+  process.stdout.write(`\n${tally} · ${story.clicks} clicks · /tmp/route-story.json\n\n`)
   if (failed.length > 0) process.exitCode = 1
 }
 
