@@ -287,6 +287,11 @@ const api = {
   laneLand: (nodeId: string, opts?: { close?: boolean; gate?: string[] | null }) =>
     ipcRenderer.invoke('lane:land', nodeId, opts),
   laneClose: (nodeId: string, force?: boolean) => ipcRenderer.invoke('lane:close', nodeId, force),
+  // The sealed slots (R4): names and dates come back; the value only ever goes in.
+  secretPut: (name: string, value: string, served: boolean) =>
+    ipcRenderer.invoke('secret:put', name, value, served),
+  secretList: () => ipcRenderer.invoke('secret:list'),
+  secretRemove: (name: string) => ipcRenderer.invoke('secret:remove', name),
   laneAuto: (nodeId: string, on: boolean) => ipcRenderer.invoke('lane:auto', nodeId, on),
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   browserSnapshot: (browserId: string) => ipcRenderer.invoke('browser:snapshot', browserId),

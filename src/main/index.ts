@@ -86,6 +86,8 @@ import {
   advertisedHostsNow
 } from './mobile-server'
 import { createDesktopCert, type DesktopCert } from './desktop-cert'
+import { createSecretsStore } from './secrets-store'
+import { secretAuditDetails, type SecretAudit } from './secret-cli'
 import { DEFAULT_NAME_ZONE } from '../shared/reach-names'
 import { NameCertStore } from './name-cert-store'
 import {
@@ -527,6 +529,33 @@ const ownerGrant = new OwnerGrant({
   }
 })
 const callConversations = new CallConversationStore()
+/**
+ * THE SEALED SLOTS (R4): ~/.cookrew/secrets/, one 0600 file per name. The
+ * value goes in from the note slot (IPC `secret:put`, or the phone's owner-
+ * token PUT) and comes out through `cookrew secret read` in an owner pane,
+ * and through nothing else — not an event, not workspace state, not a log.
+ */
+const secrets = createSecretsStore()
+/** The audit line every read and every missing read leaves: name only. */
+const auditSecret = (event: SecretAudit): void => {
+  const hit = store.nodeAcrossWorkspaces(event.terminalId)
+  const home = store.workspaceOfNode(event.terminalId)
+  const workspaceId = hit?.workspaceId ?? home?.id ?? store.focusedId
+  events.append({
+    type: event.type,
+    entityId: event.terminalId,
+    entityName: hit?.node.name ?? event.terminalId,
+    workspaceId,
+    workspaceName: home?.name ?? store.list().workspaces.find((w) => w.id === workspaceId)?.name ?? workspaceId,
+    actor: 'agent',
+    timestamp: Date.now(),
+    // `<name>` or `<name> note:<id>` when a note on that canvas has the slot.
+    details: secretAuditDetails(
+      event.name,
+      store.workspaceState(workspaceId).nodes.flatMap((node) => (node.kind === 'note' ? [node] : []))
+    )
+  })
+}
 /**
  * The pre-credential lookup, memoized for a beat (Tinker HIGH-2).
  *
@@ -5528,6 +5557,17 @@ app.whenReady().then(() => {
     agents,
     turns,
     sous,
+    // `cookrew secret read/list` (secret-cli.ts): the store, and the line
+    // each read leaves in the event log.
+    secrets,
+    audit: auditSecret,
+    // THE SERVED FACT for the secret verbs: a pane spawned for a stranger's
+    // seat (pty.ts), or any pane on a workspace this app serves out
+    // (servedSpawnContexts). `servedSession` on the node is the OTHER thing —
+    // the owner's receipt of a session served elsewhere — and must not be
+    // read for this.
+    isServed: (terminalId) =>
+      ptys.isServed(terminalId) || servedSpawnContexts.has(store.ownerOf(terminalId) ?? ''),
     // `ask --no-wait` and `cookrew dispatch <id>`: the SAME engine the HTTP
     // route uses, so a CLI-minted dispatch and an API-minted one are one
     // record with one lifecycle.
@@ -5622,6 +5662,8 @@ app.whenReady().then(() => {
     // §10: the same pin store the desktop rail reads — the phone's rail must
     // not drift from what the canvas shows.
     listPins: (terminalId) => pinsFor(terminalId),
+    // The sealed slots, for the phone's note editor: names out, values in.
+    secrets,
     // Gates slug routing: off, /<slug>/... is not a route (see mobile-server).
     multiInstance: () => store.isMultiInstance,
     // THE INTERNET GATE (§9 · ④), mounted per workspace session. Reachable only
@@ -6485,6 +6527,13 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('tuning:list', () => tuningFleet())
   ipcMain.handle('git:info', (_e, dir: string) => gitCache.info(dir))
   // Lanes: worktree per agent, landing as a product action (lanes.ts).
+  // The sealed slots (R4): the zoom editor's SEAL button and its listing.
+  // The value crosses IPC once, into the store, and is never sent back.
+  ipcMain.handle('secret:put', (_e, name: string, value: string, served?: boolean) =>
+    secrets.put(name, value, { served: served === true })
+  )
+  ipcMain.handle('secret:list', () => secrets.list())
+  ipcMain.handle('secret:remove', (_e, name: string) => secrets.remove(name))
   ipcMain.handle('lane:list', (_e, dir: string) => laneList(dir))
   ipcMain.handle('lane:open', (_e, nodeId: string, name: string) => laneOpen(nodeId, name))
   ipcMain.handle('lane:land', (_e, nodeId: string, opts?: { close?: boolean; gate?: string[] | null }) =>

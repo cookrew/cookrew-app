@@ -55,6 +55,22 @@ import type { InboxRow } from "../shared/inbox-rank";
 import type { Surface as SousSurface } from "../shared/sous-intent";
 import type { UiCommandEvent } from "../shared/sous-ui";
 import type { EventEmitter } from "node:events";
+import type { SecretsStore } from "./secrets-store";
+import { isSecretName } from "../shared/secret-slot";
+
+/** TLS, or this Mac talking to itself: the only transports a secret value may ride. */
+export const sealedTransport = (request: { socket: { encrypted?: boolean; remoteAddress?: string } }): boolean => {
+  if (request.socket.encrypted === true) return true;
+  const peer = request.socket.remoteAddress ?? "";
+  return peer === "127.0.0.1" || peer === "::1" || peer === "::ffff:127.0.0.1";
+};
+
+/** A `secret.*` event with its details — the name — withheld. */
+export const redactSecretDetails = <T extends { type: string; details?: string }>(event: T): T => {
+  if (!event.type.startsWith("secret.")) return event;
+  const { details: _details, ...rest } = event;
+  return rest as T;
+};
 
 const SOUS_SURFACES: ReadonlySet<string> = new Set(["canvas", "zoom", "phone", "home", "cli"]);
 /** A spoken sentence; anything longer is a document and has other routes. */
@@ -161,6 +177,12 @@ export interface MobileApiDeps {
    * that has never been exported.
    */
   listPins?: (terminalId: string) => readonly VersionPinRecord[];
+  /**
+   * The sealed slots (secrets-store.ts). Names and dates travel; values
+   * travel in exactly one direction — INTO the store, on an owner-token PUT
+   * from the note slot. Nothing on this API ever answers a value.
+   */
+  secrets?: SecretsStore;
   /**
    * Cold-boot wait window for a stream open (acquireViewWhenReady). Omitted in
    * production (defaults ~2s in 50ms steps); tests shrink it for determinism.
@@ -574,6 +596,56 @@ export async function handleMobileApi(
   if (tuningMatch && method === "GET" && deps.tuning) {
     respondJson(response, 200, deps.tuning.state(tuningMatch[1]));
     return true;
+  }
+  // THE SEALED SLOTS — owner token only, GET included: the read-only wall
+  // token must not even learn the names. The write gate above already
+  // refused a read-only PUT/DELETE; this refuses its GET too.
+  const secretMatch = p.match(/^\/api\/secrets(?:\/([^/]+))?$/);
+  if (secretMatch && deps.secrets) {
+    // No pairing token configured means no owner to answer to: refused, not open.
+    if (!deps.pairingToken) {
+      respondJson(response, 403, { error: "secrets need a paired companion" });
+      return true;
+    }
+    if (!hasPairing) {
+      respondJson(response, 401, { error: "Unauthorized — secrets are the owner's." });
+      return true;
+    }
+    let name: string | null;
+    try {
+      name = secretMatch[1] === undefined ? null : decodeURIComponent(secretMatch[1]);
+    } catch {
+      respondJson(response, 400, { error: "not a secret name" });
+      return true;
+    }
+    if (method === "GET" && name === null) {
+      respondJson(response, 200, deps.secrets.list());
+      return true;
+    }
+    if (name !== null && !isSecretName(name)) {
+      respondJson(response, 400, { error: "not a secret name" });
+      return true;
+    }
+    if (method === "PUT" && name !== null) {
+      // THE VALUE CROSSES THE NETWORK HERE, once. Only over TLS or from this
+      // Mac itself (the desktop renderer, the relay bridge on loopback):
+      // a cleartext LAN PUT would hand the value to the Wi-Fi.
+      if (!sealedTransport(request)) {
+        respondJson(response, 403, { error: "seal from the desktop or over TLS" });
+        return true;
+      }
+      const body = await readJson<{ value?: unknown; served?: unknown }>(request);
+      if (typeof body.value !== "string" || body.value.length === 0) {
+        respondJson(response, 400, { error: "value is required" });
+        return true;
+      }
+      respondJson(response, 200, deps.secrets.put(name, body.value, { served: body.served === true }));
+      return true;
+    }
+    if (method === "DELETE" && name !== null) {
+      respondJson(response, 200, { removed: deps.secrets.remove(name) });
+      return true;
+    }
   }
   const tuneMatch = p.match(/^\/api\/terminal\/([^/]+)\/tune$/);
   if (tuneMatch && method === "POST" && deps.tuning) {
@@ -1530,8 +1602,11 @@ export async function handleMobileApi(
   // Observability queries (metrics/history panel) + global agent roster.
   if (method === "GET" && p === "/api/events/query") {
     const q = parseEventQuery(url.searchParams);
+    // The wall (read-only token) sees that a secret was read, never which:
+    // the names are the owner's.
+    const events = deps.events.query(q);
     respondJson(response, 200, {
-      events: deps.events.query(q),
+      events: hasPairing ? events : events.map(redactSecretDetails),
       counts: deps.events.count(q),
     });
     return true;

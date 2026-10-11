@@ -24,6 +24,7 @@ import type {
   RecoverResult,
   RestoreResult,
 } from "../../shared/model";
+import type { SecretListing } from "../../shared/secret-slot";
 import type { TerminalActivity, TurnRecord } from "../../shared/turn";
 import type { TurnMatch } from "../../shared/turn-search";
 import type { TraceBoundaryMarker } from "../../shared/trace-blocks";
@@ -423,6 +424,15 @@ export interface CookrewApi {
    * (path/companion.ts). Optional: the demo has no Mac to move.
    */
   onReachChanged?: (cb: () => void) => () => void;
+  /**
+   * The sealed slots (R4, shared/secret-slot.ts): a note line `🔒 <name>` is
+   * a slot; SEAL puts the value in ~/.cookrew/secrets/ and nothing in the
+   * note. The listing carries names and dates, never values. Optional: an
+   * older bridge draws the slot with no store behind it.
+   */
+  secretPut?: (name: string, value: string, served: boolean) => Promise<SecretListing>;
+  secretList?: () => Promise<SecretListing[]>;
+  secretRemove?: (name: string) => Promise<boolean>;
   queryEvents?: (query?: unknown) => Promise<unknown[]>;
   countEvents?: (query?: unknown) => Promise<Record<string, number>>;
   listAgents?: () => Promise<unknown[]>;
