@@ -129,10 +129,11 @@ const roster: IntentRoster = {
   presets: ['Claude Code', 'Codex', 'OpenCode', 'Pi', 'Shell']
 }
 
-function controller(): { calls: string[]; sous: SousController; tick: (ms: number) => void } {
+function controller(options: { failDeliveries?: number } = {}): { calls: string[]; sous: SousController; tick: (ms: number) => void } {
   const calls: string[] = []
   let clock = NOW
   let minted = 0
+  let failDeliveries = options.failDeliveries ?? 0
   const deps: SousControlDeps = {
     roster: () => roster,
     activeWorkspaceId: () => 'ws',
@@ -158,6 +159,13 @@ function controller(): { calls: string[]; sous: SousController; tick: (ms: numbe
       recruit: ({ preset, name, role, besideId }) => {
         calls.push(`recruit ${preset} "${name}" beside ${besideId ?? '-'} role ${role.slice(0, 12)}`)
         return { id: 'recruited', name }
+      },
+      deliver: async ({ nodeId, sentence, originId }) => {
+        if (failDeliveries > 0) {
+          failDeliveries -= 1
+          throw new Error('the new card did not take the brief: unreachable')
+        }
+        calls.push(`deliver ${nodeId} from ${originId ?? '-'} ${sentence}`)
       },
       token: () => `t${++minted}`
     }
@@ -291,7 +299,7 @@ describe('SousController — fix round 1: surfaces, targets, the token’s life'
       },
       ui: () => undefined,
       now: () => NOW,
-      decide: { candidates: () => crew, workdir: () => '/repo', recruit: () => ({ id: 'x', name: 'x' }), token: () => 'tok' }
+      decide: { candidates: () => crew, workdir: () => '/repo', recruit: () => ({ id: 'x', name: 'x' }), deliver: async () => undefined, token: () => 'tok' }
     }
     const sous = new SousController(deps)
     await sous.handle({ text: 'Make the install section of README English and add a test', surface: 'canvas', box: true })
@@ -372,7 +380,7 @@ describe('SousController — round 2: the box, the caller, and a commit in fligh
         }),
       ui: () => undefined,
       now: () => NOW,
-      decide: { candidates: () => crew, workdir: () => '/repo', recruit: () => ({ id: 'x', name: 'x' }), token: () => 'tok' }
+      decide: { candidates: () => crew, workdir: () => '/repo', recruit: () => ({ id: 'x', name: 'x' }), deliver: async () => undefined, token: () => 'tok' }
     }
     const sous = new SousController(deps)
     await sous.handle({ text: brief, surface: 'canvas', box: true })
@@ -384,5 +392,43 @@ describe('SousController — round 2: the box, the caller, and a commit in fligh
     expect((await committing).intent).toBe('ask')
     expect(calls).toEqual([`submit forge ${brief}`])
     expect(sous.cancel('tok')).toBe(false)
+  })
+})
+
+describe('SousController — round 4: the recruited card gets the brief', () => {
+  const brief = 'Delete every V1 route and its tests'
+
+  it('recruit ends with ONE delivery to the new card, the role set to the sentence, and "sent" said only then', async () => {
+    const h = controller()
+    const r = await h.sous.handle({ text: brief, surface: 'canvas', box: true })
+    expect(r.decision?.kind).toBe('recruit')
+    const out = await h.sous.commit(r.decision?.token ?? '')
+    expect(out.intent).toBe('create')
+    expect(out.spoken).toContain('sent')
+    expect(out.agentId).toBe('recruited')
+    // the role on the created node is the sentence
+    expect(h.calls.find((c) => c.startsWith('recruit '))).toContain(`role ${brief.slice(0, 12)}`)
+    // exactly one delivery, to the new card, from the orch it was placed beside
+    expect(h.calls.filter((c) => c.startsWith('deliver '))).toEqual([`deliver recruited from conductor ${brief}`])
+    // the delivery is on the ledger after the recruit, and nothing went through the owner-submit sink
+    expect(h.calls.filter((c) => c.startsWith('submit'))).toEqual([])
+    expect(h.calls.indexOf('note prompt recruited Delete V1 Route')).toBeGreaterThan(h.calls.findIndex((c) => c.startsWith('note recruit ')))
+  })
+
+  it('a delivery that fails leaves the token AND the card: the retry delivers to the same card, never a second one', async () => {
+    const h = controller({ failDeliveries: 1 })
+    const r = await h.sous.handle({ text: brief, surface: 'canvas', box: true })
+    const token = r.decision?.token ?? ''
+    const first = await h.sous.commit(token)
+    expect(first.intent).toBe('refused')
+    expect(first.spoken).not.toContain('sent')
+    const second = await h.sous.commit(token)
+    expect(second.intent).toBe('create')
+    expect(second.spoken).toContain('sent')
+    expect(h.calls.filter((c) => c.startsWith('recruit '))).toHaveLength(1)
+    expect(h.calls.filter((c) => c.startsWith('connect '))).toHaveLength(1)
+    expect(h.calls.filter((c) => c.startsWith('deliver '))).toHaveLength(1)
+    // spent now
+    expect((await h.sous.commit(token)).error).toBe('expired')
   })
 })
