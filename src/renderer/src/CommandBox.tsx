@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { cookrew, isRemoteMode } from './api'
 import { useCanvasUi } from './canvas-ui'
+import { createHold, enterSubmits, type Hold } from './decision-hold'
 import { waitedFor, type InboxRow } from '../../shared/inbox-rank'
+import { INBOX_MARK } from '../../shared/inbox-copy'
 import type { Decision, SousCommandResult } from '../../main/sous-control'
 import './command-box.css'
 
@@ -19,10 +21,13 @@ import './command-box.css'
  *
  * Desktop: ⌘K shows it, Esc hides it. Phone: it is the bottom bar and is
  * always there. Both read the same rows and talk to the same Sous.
+ *
+ * THE HOLD IS A MACHINE (decision-hold.ts), not an effect on the echo: closing
+ * the box cancels it and tells main to drop the token; a keystroke or
+ * "change" pauses it; Enter and the alternate commit it once.
  */
 
-const ICON: Record<InboxRow['kind'], string> = { waiting: '?', secret: '🔑', dispatch: '!', signin: '🌐' }
-const HOLD_TICK_MS = 100
+const WAIT_TICK_MS = 60_000
 
 export interface CommandBoxProps {
   open: boolean
@@ -34,49 +39,56 @@ export interface CommandBoxProps {
   initialDecision?: Decision | null
 }
 
-type Echo = { kind: 'decision'; decision: Decision; line: string; left: number } | { kind: 'said'; text: string; refused: boolean }
+type Echo = { kind: 'decision'; decision: Decision; left: number } | { kind: 'said'; text: string; refused: boolean }
 
 export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecision = null }: CommandBoxProps): React.JSX.Element | null {
   const { jumpToNode } = useCanvasUi()
   const [rows, setRows] = useState<InboxRow[]>(givenRows ?? [])
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
-  const [echo, setEcho] = useState<Echo | null>(initialDecision ? { kind: 'decision', decision: initialDecision, line: echoLine(initialDecision), left: initialDecision.holdMs } : null)
+  const [echo, setEcho] = useState<Echo | null>(initialDecision ? { kind: 'decision', decision: initialDecision, left: initialDecision.holdMs } : null)
   const [alts, setAlts] = useState(false)
+  const [, setClock] = useState(0)
   const field = useRef<HTMLInputElement>(null)
+  const hold = useRef<Hold | null>(null)
+  const slotTimer = useRef<number | null>(null)
   const isPhone = phone ?? isRemoteMode()
 
-  // The rows: once on mount, then on every change the bridge announces.
+  // The rows: the subscription holds the list open in main and delivers the
+  // opening rows; a bridge without one falls back to a single read.
   useEffect(() => {
     if (givenRows) return
     const api = cookrew()
     let alive = true
-    void api.inbox?.().then((list) => alive && setRows(list)).catch(() => undefined)
     const off = api.onInbox?.((list) => alive && setRows(list))
+    if (!off) void api.inbox?.().then((list) => alive && setRows(list)).catch(() => undefined)
     return () => {
       alive = false
       off?.()
     }
   }, [givenRows])
 
+  // The printed wait comes from `since` and moves once a minute.
+  useEffect(() => {
+    if (rows.length === 0) return
+    const timer = window.setInterval(() => setClock((c) => c + 1), WAIT_TICK_MS)
+    return () => window.clearInterval(timer)
+  }, [rows.length])
+
   useEffect(() => {
     if (open && !isPhone) field.current?.focus()
   }, [open, isPhone])
 
-  const show = useCallback((result: SousCommandResult) => {
-    if (result.intent === 'decide' && result.decision) {
-      setEcho({ kind: 'decision', decision: result.decision, line: echoLine(result.decision), left: result.decision.holdMs })
-      setAlts(false)
-      return
-    }
+  const say = useCallback((result: SousCommandResult) => {
     if (result.spoken) setEcho({ kind: 'said', text: result.spoken, refused: result.intent === 'refused' })
     else setEcho(null)
   }, [])
 
   /** Commit the shown decision — once; the echo turns into what Sous did. */
-  const commit = useCallback(
+  const commitDecision = useCallback(
     (decision: Decision, target?: string) => {
       const api = cookrew()
+      hold.current = null
       setEcho({ kind: 'said', text: '…', refused: false })
       if (!api.sousCommit) {
         setEcho({ kind: 'said', text: 'This build cannot commit a decision.', refused: true })
@@ -87,7 +99,7 @@ export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecis
         .sousCommit(decision.token, target ? { target } : {})
         .then((result) => {
           setBusy(false)
-          show(result)
+          say(result)
           setText('')
         })
         .catch(() => {
@@ -95,20 +107,43 @@ export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecis
           setEcho({ kind: 'said', text: 'That did not go through. Say it again.', refused: true })
         })
     },
-    [show]
+    [say]
   )
 
-  // The hold: the echo counts down and commits on its own unless Enter or a
-  // change gets there first. A question has no token to commit.
+  /** A decision arrives: the machine starts the hold; the echo draws it. */
+  const showDecision = useCallback(
+    (decision: Decision) => {
+      hold.current?.close()
+      setAlts(false)
+      setEcho({ kind: 'decision', decision, left: decision.holdMs })
+      hold.current = createHold(decision, {
+        holdMs: decision.holdMs,
+        onTick: (left) => setEcho((e) => (e && e.kind === 'decision' && e.decision.token === decision.token ? { ...e, left } : e)),
+        onCommit: (target) => commitDecision(decision, target),
+        onCancel: (token) => void cookrew().sousCancel?.(token).catch(() => undefined)
+      })
+    },
+    [commitDecision]
+  )
+
+  /** The box goes away: a held decision is cancelled, never committed unseen. */
+  const dismiss = useCallback(() => {
+    hold.current?.close()
+    hold.current = null
+    setEcho((e) => (e && e.kind === 'decision' ? null : e))
+    setAlts(false)
+  }, [])
+
   useEffect(() => {
-    if (!echo || echo.kind !== 'decision' || echo.decision.kind === 'question') return
-    if (echo.left <= 0) {
-      commit(echo.decision)
-      return
-    }
-    const timer = window.setTimeout(() => setEcho((e) => (e && e.kind === 'decision' ? { ...e, left: e.left - HOLD_TICK_MS } : e)), HOLD_TICK_MS)
-    return () => window.clearTimeout(timer)
-  }, [echo, commit])
+    if (!open && !isPhone) dismiss()
+  }, [open, isPhone, dismiss])
+  useEffect(
+    () => () => {
+      hold.current?.close()
+      if (slotTimer.current !== null) window.clearTimeout(slotTimer.current)
+    },
+    []
+  )
 
   // What Sous said fades; a decision does not.
   useEffect(() => {
@@ -118,8 +153,8 @@ export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecis
   }, [echo])
 
   const submit = (): void => {
-    if (echo?.kind === 'decision' && echo.decision.kind !== 'question') {
-      commit(echo.decision)
+    if (echo?.kind === 'decision' && hold.current) {
+      hold.current.commit()
       return
     }
     const sentence = text.trim()
@@ -129,8 +164,11 @@ export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecis
       .sousCommand(sentence, { surface: isPhone ? 'phone' : 'canvas' })
       .then((result) => {
         setBusy(false)
-        show(result)
-        if (result.intent !== 'decide') setText('')
+        if (result.intent === 'decide' && result.decision) showDecision(result.decision)
+        else {
+          say(result)
+          setText('')
+        }
       })
       .catch(() => {
         setBusy(false)
@@ -140,20 +178,23 @@ export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecis
 
   /**
    * One click, the right input. The jump switches workspaces when it must and
-   * zooms the card; a zoomed terminal takes focus on open, a zoomed browser
-   * is its own interactive view, and a note's secret slot is found by the
-   * hook agreed with the sealed-note lane: `[data-secret-slot="<name>"]`
-   * holding a focusable input.
+   * zooms the card — the note the producer named for a secret, else the card
+   * itself. A zoomed terminal takes focus on open, a zoomed browser is its own
+   * interactive view, and a secret slot is found by the hook agreed with the
+   * sealed-note lane: `[data-secret-slot="<name>"]` holding a focusable input.
    */
   const go = (row: InboxRow): void => {
-    void jumpToNode(row.workspaceId, row.nodeId).then((outcome) => {
+    dismiss()
+    const landing = row.kind === 'secret' && row.noteId ? row.noteId : row.nodeId
+    void jumpToNode(row.workspaceId, landing).then((outcome) => {
       if (outcome === 'missed') return
-      if (row.kind === 'secret' && row.slot) focusSlot(row.slot, 8)
+      if (row.kind === 'secret' && row.slot) focusSlot(row.slot, 8, slotTimer)
       if (!isPhone) onClose()
     })
   }
 
   const ordered = useMemo(() => (isPhone ? rows.slice(0, 3) : rows.slice(0, 6)), [rows, isPhone])
+  const now = Date.now()
 
   if (!open && !isPhone) return null
   return (
@@ -163,12 +204,12 @@ export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecis
           {ordered.map((row) => (
             <li key={row.nodeId}>
               <button className={`cmd-row${row.served ? ' served' : ''}`} data-kind={row.kind} onClick={() => go(row)}>
-                <span className="k" aria-hidden="true">{ICON[row.kind]}</span>
+                <span className="k" aria-hidden="true">{INBOX_MARK[row.kind]}</span>
                 <span className="who">
                   <b>{row.nodeName}</b>
                   <span>{row.reasons[0]}</span>
                 </span>
-                <span className="wait">{waitedFor(row.waitMinutes)}</span>
+                <span className="wait">{waitedFor(Math.max(0, (now - row.since) / 60_000))}</span>
                 <span className="blocks">{row.blockedDownstream > 0 ? `blocks ${row.blockedDownstream}` : ''}</span>
                 <span className="go" aria-hidden="true">›</span>
               </button>
@@ -185,14 +226,20 @@ export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecis
           aria-label="Tell the crew what to do"
           autoComplete="off"
           spellCheck={false}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value)
+            // Typing while a decision is held: the owner is changing their mind — nothing commits.
+            hold.current?.pause()
+          }}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') {
+            if (enterSubmits(e)) {
               e.preventDefault()
               submit()
             } else if (e.key === 'Escape') {
+              // Ours, not the zoomed card's behind us.
               e.preventDefault()
-              if (echo?.kind === 'decision') setEcho(null)
+              e.stopPropagation()
+              if (echo?.kind === 'decision') dismiss()
               else onClose()
             }
           }}
@@ -201,19 +248,26 @@ export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecis
       </div>
       {echo && echo.kind === 'decision' && (
         <div className="cmd-echo" role="status" aria-live="polite" data-decision={echo.decision.kind}>
-          <span className="line">{echo.line}</span>
+          <span className="line">{echoLine(echo.decision)}</span>
           {echo.decision.kind !== 'question' && (
             <>
-              <span className="hold">{(echo.left / 1000).toFixed(1)} s · or ↵ now</span>
+              <span className="hold">{hold.current?.state === 'paused' ? 'paused · ↵ to send' : `${(echo.left / 1000).toFixed(1)} s · or ↵ now`}</span>
               {echo.decision.alternates.length > 0 && (
-                <button type="button" onClick={() => setAlts((v) => !v)}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Choosing pauses the hold: nothing commits to the first target while the list is open.
+                    hold.current?.pause()
+                    setAlts((v) => !v)
+                  }}
+                >
                   change ▾
                 </button>
               )}
               {alts && (
                 <span className="cmd-alts">
                   {echo.decision.alternates.map((alt) => (
-                    <button key={alt.id} type="button" onClick={() => commit(echo.decision, alt.id)}>
+                    <button key={alt.id} type="button" onClick={() => hold.current?.commit(alt.id)}>
                       → {alt.name} ({alt.reasons.join(' · ')})
                     </button>
                   ))}
@@ -239,12 +293,13 @@ export function echoLine(decision: Decision): string {
   return decision.question
 }
 
-/** The sealed-note slot renders after the zoom; look a few times, then give up quietly. */
-function focusSlot(name: string, tries: number): void {
+/** The sealed-note slot renders after the zoom; look a few times, then give up quietly. The timer is the box's to clear. */
+function focusSlot(name: string, tries: number, timer: { current: number | null }): void {
   const el = document.querySelector<HTMLElement>(`[data-secret-slot="${CSS.escape(name)}"] input, [data-secret-slot="${CSS.escape(name)}"] textarea`)
+  timer.current = null
   if (el) {
     el.focus()
     return
   }
-  if (tries > 0) window.setTimeout(() => focusSlot(name, tries - 1), 300)
+  if (tries > 0) timer.current = window.setTimeout(() => focusSlot(name, tries - 1, timer), 300)
 }

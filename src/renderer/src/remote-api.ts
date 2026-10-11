@@ -621,6 +621,7 @@ export function createRemoteApi(): CookrewApi {
       req(apiPath('/api/sous/command'), 'POST', { text, surface: ctx.surface, callerId: sousCallerId() }),
     onUiCommand: (cb) => subscribe<UiCommandEvent>('ui', cb),
     sousCommit: (token, choice) => req(apiPath('/api/sous/commit'), 'POST', { token, ...(choice?.target ? { target: choice.target } : {}) }),
+    sousCancel: (token) => req<{ cancelled: boolean }>(apiPath('/api/sous/cancel'), 'POST', { token }).then((out) => out.cancelled),
     inbox: () => req<{ rows: InboxRow[] }>(apiPath('/api/inbox')).then((out) => out.rows),
     onInbox: (cb) => subscribe<{ rows: InboxRow[] }>('inbox', (frame) => cb(frame.rows)),
     // The phone hears through its own browser (VoiceBar); the Mac's ear is
