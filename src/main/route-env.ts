@@ -1,6 +1,6 @@
 import path from 'node:path'
 import type { HarnessId } from './harness'
-import { routeSession, type RouteGateway } from '../shared/route'
+import { routeSession } from '../shared/route'
 
 /**
  * THE ENVIRONMENT THAT POINTS A HARNESS AT THE GATEWAY (route program, D1b).
@@ -30,7 +30,8 @@ import { routeSession, type RouteGateway } from '../shared/route'
 
 export interface RouteEnvInput {
   harness: HarnessId
-  gateway: Pick<RouteGateway, 'url' | 'v1' | 'key'>
+  /** The gateway's address and the bearer — the key is main-only and arrives only here. */
+  gateway: { url: string; v1: string; key: string }
   /** A Magpie model id or group id, never 'direct' (the caller decides that first). */
   model: string
   cardId: string
@@ -120,7 +121,3 @@ export function routeEnv(input: RouteEnvInput): RouteEnv {
   }
 }
 
-/** Shell-quote one arg for a command line that a login shell will split. */
-export function shellArg(arg: string): string {
-  return /^[A-Za-z0-9_./:=@%+,-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`
-}

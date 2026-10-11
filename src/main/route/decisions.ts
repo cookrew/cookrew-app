@@ -39,6 +39,11 @@ export interface DecisionsDeps {
   now?: () => number
   /** The long-poll's wait, in seconds (the gateway caps it at 60). */
   waitSeconds?: number
+  /** The least time between two laps, so a gateway that answers at once cannot make a hot loop. */
+  lapFloorMs?: number
+  /** Laps that moved nothing before the follow is abandoned (resumed by the next activity). */
+  maxIdleLaps?: number
+  schedule?: (fn: () => void, ms: number) => () => void
   onDecision: (decision: RouteDecision) => void
   onTurn: (terminalId: string, facts: RouteTurnFacts) => void
   /** The harness's own session id for the card, when the log is keyed by it (claude). */
@@ -102,7 +107,18 @@ interface Follow {
   seq: number
   controller: AbortController | null
   stopped: boolean
+  /** Laps that moved neither seq nor the decision. */
+  idleLaps: number
+  /** Cuts a lap-floor pause short on unfollow. */
+  cancelPause: (() => void) | null
 }
+
+export const LAP_FLOOR_MS = 500
+export const MAX_IDLE_LAPS = 8
+
+/** The same decision, whenever it was read: a repeat is not a change. */
+const sameDecision = (a: RouteDecision | undefined, b: RouteDecision): boolean =>
+  a !== undefined && JSON.stringify({ ...a, at: 0 }) === JSON.stringify({ ...b, at: 0 })
 
 export class RouteDecisions {
   private readonly follows = new Map<string, Follow>()
@@ -127,7 +143,7 @@ export class RouteDecisions {
   /** A routed card's turn started: follow it. Idempotent while in flight. */
   follow(terminalId: string): void {
     if (this.follows.has(terminalId)) return
-    const follow: Follow = { seq: this.lastByCard.get(terminalId)?.seq ?? 0, controller: null, stopped: false }
+    const follow: Follow = { seq: this.lastByCard.get(terminalId)?.seq ?? 0, controller: null, stopped: false, idleLaps: 0, cancelPause: null }
     this.follows.set(terminalId, follow)
     void this.loop(terminalId, follow)
   }
@@ -138,6 +154,7 @@ export class RouteDecisions {
     if (!follow) return
     follow.stopped = true
     follow.controller?.abort()
+    follow.cancelPause?.()
     this.follows.delete(terminalId)
   }
 
@@ -153,12 +170,16 @@ export class RouteDecisions {
 
   private async loop(terminalId: string, follow: Follow): Promise<void> {
     const wait = this.deps.waitSeconds ?? 30
+    const floor = this.deps.lapFloorMs ?? LAP_FLOOR_MS
+    const maxIdle = this.deps.maxIdleLaps ?? MAX_IDLE_LAPS
+    const now = this.deps.now ?? Date.now
     while (!follow.stopped) {
       const gateway = this.deps.gateway()
       if (!gateway) {
         this.unfollow(terminalId)
         return
       }
+      const lapStart = now()
       const session = encodeURIComponent(routeSession(terminalId))
       follow.controller = new AbortController()
       let body: unknown = null
@@ -178,22 +199,53 @@ export class RouteDecisions {
         this.unfollow(terminalId)
         return
       }
-      const decision = toDecision(terminalId, body, (this.deps.now ?? Date.now)())
+      const decision = toDecision(terminalId, body, now())
       const seq = num(asRecord(body)?.seq) ?? follow.seq
-      if (decision === null) {
-        // No route yet (the first request has not reached routing): wait for the next change.
-        follow.seq = seq
-        continue
+      const before = this.lastByCard.get(terminalId)
+      const moved = seq > follow.seq || (decision !== null && !sameDecision(before, decision))
+      follow.seq = Math.max(follow.seq, seq, decision?.seq ?? 0)
+      if (decision !== null && !sameDecision(before, decision)) {
+        // Only a CHANGE reaches the card: a repeat of the same decision (a
+        // gateway answering at once, a wait that timed out) is not a frame.
+        this.lastByCard.set(terminalId, decision)
+        this.deps.onDecision(decision)
       }
-      follow.seq = Math.max(follow.seq, decision.seq)
-      this.lastByCard.set(terminalId, decision)
-      this.deps.onDecision(decision)
-      if (decision.done) {
+      if (decision?.done) {
         await this.facts(terminalId, gateway)
         this.unfollow(terminalId)
         return
       }
+      follow.idleLaps = moved ? 0 : follow.idleLaps + 1
+      if (follow.idleLaps >= maxIdle) {
+        // Nothing has moved for this many laps: the turn is not reaching the
+        // gateway (direct after all, or a session the gateway never saw).
+        // Stop; the next activity event follows again.
+        this.unfollow(terminalId)
+        return
+      }
+      // THE FLOOR: a lap never starts sooner than this after the last began,
+      // whatever the gateway did — the one guard against a hot fetch loop.
+      const elapsed = now() - lapStart
+      if (elapsed < floor) await this.pause(floor - elapsed, follow)
     }
+  }
+
+  private pause(ms: number, follow: Follow): Promise<void> {
+    const schedule = this.deps.schedule ?? ((fn: () => void, wait: number) => {
+      const id = setTimeout(fn, wait)
+      return () => clearTimeout(id)
+    })
+    return new Promise((resolve) => {
+      const cancel = schedule(() => {
+        follow.cancelPause = null
+        resolve()
+      }, ms)
+      follow.cancelPause = () => {
+        cancel()
+        follow.cancelPause = null
+        resolve()
+      }
+    })
   }
 
   private async facts(terminalId: string, gateway: { url: string; key: string }): Promise<void> {

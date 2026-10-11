@@ -23,7 +23,8 @@ export function routeFixture(status: RouteState['status'] = 'online'): RouteStat
   const online = status === 'online'
   return {
     status,
-    gateway: status === 'absent' ? null : { url: 'http://127.0.0.1:3425', v1: 'http://127.0.0.1:3425/v1', key: 'magpie-cookrew', port: 3425, version: '0.9.3', source: 'plugin' },
+    gateway: status === 'absent' ? null : { url: 'http://127.0.0.1:3425', v1: 'http://127.0.0.1:3425/v1', port: 3425, version: '0.1.1182', source: 'plugin' },
+    why: null,
     defaultModel: online ? 'group/smart' : null,
     providers: online ? 3 : 0,
     models: online

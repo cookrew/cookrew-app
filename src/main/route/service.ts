@@ -5,6 +5,7 @@ import type { TerminalNodeData } from '../../shared/model'
 import type { TurnPhase } from '../../shared/turn'
 import {
   DIRECT,
+  ROUTE_ID_RE,
   type CardRoute,
   type CardRouteState,
   type RouteDecision,
@@ -17,8 +18,9 @@ import type { HarnessId } from '../harness'
 import { routeEnv, type RouteEnv } from '../route-env'
 import { fetchCatalog, fetchQuotas, providersOf, type CatalogFetch } from './catalog'
 import { RouteDecisions, pushLive } from './decisions'
+import { DEFAULT_PORT } from './discovery'
 import type { GatewayMonitor, GatewayProbe } from './gateway'
-import { groupLineFor, harnessRows, setupLines, type HarnessRowDeps } from './setup'
+import { HarnessScan, groupLineFor, setupLines } from './setup'
 
 /**
  * THE ROUTE SERVICE — one object main keeps, every route question answered
@@ -32,15 +34,23 @@ import { groupLineFor, harnessRows, setupLines, type HarnessRowDeps } from './se
  * out) and 'card-route' with one card's state when its route, decision or
  * turn facts change.
  *
+ * THE KEY NEVER LEAVES MAIN. RouteState carries the gateway without it; the
+ * only places that read it are the spawn env (route-env.ts) and the
+ * gateway reads here. The read-only wall token can read RouteState.
+ *
  * THE DEFAULT IS CHOSEN ONCE. New cards route to `defaultModel` only when the
  * gateway is online AND a default was named — by the plugin file (the owner
  * picked Cookrew's model on magpie's Agents page) or by PUT /api/route/default.
  * It is never inferred from the catalog: a fleet on claude.ai must never be
  * moved onto a local model because a gateway appeared.
  *
- * SERVED SESSIONS NEVER GET A ROUTE ENV (design D3): a stranger's seat on
- * this machine runs on nothing of the owner's. `envFor` answers nothing for a
- * served node, and a test pins it.
+ * SERVED SESSIONS NEVER GET A ROUTE (design D3): a stranger's seat on this
+ * machine runs on nothing of the owner's — no env, no default, no PUT, and
+ * the Seatbelt profile denies the gateway's port outright (sandbox-deny.ts).
+ *
+ * WHAT WAS RECORDED IS WHAT A PROCESS GOT. `envFor` computes; `recordEffective`
+ * is called by the spawner only when the attach CREATED a process (a tmux
+ * reattach ignores the boot command, so nothing it was handed applies).
  */
 
 export interface RouteServiceDeps {
@@ -58,7 +68,8 @@ export interface RouteServiceDeps {
   /** Kill and respawn the card in place with exact context; true when it did. */
   respawn: (terminalId: string) => Promise<boolean>
   dockCommands: () => readonly string[]
-  claudeKeychain?: () => boolean
+  /** The harness scan (installed, signed in, in dock), cached; injected for tests. */
+  scan?: HarnessScan
   now?: () => number
   schedule?: (fn: () => void, ms: number) => () => void
   writeFile?: (file: string, content: string) => void
@@ -90,7 +101,10 @@ export class RouteService extends EventEmitter {
   private live: RouteDecision[] = []
   private ownerDefault: string | null
   private readonly offlineAtSpawn = new Set<string>()
+  /** Cards whose running process was handed a route — the only ones a turn is followed for. */
+  private readonly routed = new Set<string>()
   private readonly decisions: RouteDecisions
+  private readonly scan: HarnessScan
   private holds = 0
   private releaseMonitor: (() => void) | null = null
   private announceTimer: (() => void) | null = null
@@ -100,13 +114,15 @@ export class RouteService extends EventEmitter {
   constructor(private readonly deps: RouteServiceDeps) {
     super()
     this.ownerDefault = this.readOwnerDefault()
+    this.scan = deps.scan ?? new HarnessScan({ home: deps.home, pathEnv: deps.pathEnv, dockCommands: deps.dockCommands, harnessOfCommand: (c) => deps.harnessOf(c) })
     this.decisions = new RouteDecisions({
       fetch: (input, init) => deps.fetch(input, init),
       gateway: () => {
-        const g = deps.monitor.probe.gateway
-        return deps.monitor.probe.status === 'online' && g ? { url: g.url, key: g.key } : null
+        const p = deps.monitor.probe
+        return p.status === 'online' && p.gateway ? { url: p.gateway.url, key: p.key } : null
       },
       now: deps.now,
+      schedule: deps.schedule,
       onDecision: (decision) => {
         this.live = pushLive(this.live, decision)
         this.emitCard(decision.terminalId)
@@ -125,12 +141,13 @@ export class RouteService extends EventEmitter {
     return {
       status: probe.status,
       gateway: probe.gateway,
+      why: probe.why,
       defaultModel: this.defaultModel(),
       providers: providersOf(this.models),
       models: this.models,
       quotas: this.quotas,
       live: this.live,
-      harnesses: harnessRows(this.rowDeps()),
+      harnesses: this.scan.rows(),
       checkedAt: probe.checkedAt,
       setup: { ...lines, addKeyLine: lines.addKeyLine('<preset>'), addGroupLine: groupLineFor(this.models.map((m) => m.id)) }
     }
@@ -139,6 +156,12 @@ export class RouteService extends EventEmitter {
   health(): { status: RouteState['status']; source: 'plugin' | 'probe' | null; providers: number; live: number } {
     const probe = this.deps.monitor.probe
     return { status: probe.status, source: probe.gateway?.source ?? null, providers: providersOf(this.models), live: this.decisions.following.length }
+  }
+
+  /** The port(s) a served sandbox must not reach: the one found, and the default. */
+  gatewayPorts(): number[] {
+    const found = this.deps.monitor.probe.gateway?.port
+    return found ? [found, DEFAULT_PORT] : [DEFAULT_PORT]
   }
 
   /** The plugin's pick wins; else the owner's own; else nothing. */
@@ -154,10 +177,10 @@ export class RouteService extends EventEmitter {
     return this.state()
   }
 
-  /** The panel or a rail is looking: the monitor's clock runs while it does. */
+  /** The panel, a rail or the main window is looking: the monitor's clock runs while it does. */
   hold(): () => void {
     this.holds += 1
-    if (this.holds === 1) this.releaseMonitor = this.deps.monitor.listen((probe) => this.onProbe(probe))
+    if (this.holds === 1) this.releaseMonitor = this.deps.monitor.listen((probe) => void this.onProbe(probe))
     let released = false
     return () => {
       if (released) return
@@ -171,8 +194,10 @@ export class RouteService extends EventEmitter {
   }
 
   /** One probe now, whoever is or is not looking. */
-  refresh(): Promise<RouteState> {
-    return this.deps.monitor.refresh().then((probe) => this.onProbe(probe)).then(() => this.state())
+  async refresh(): Promise<RouteState> {
+    const probe = await this.deps.monitor.refresh()
+    await this.onProbe(probe)
+    return this.state()
   }
 
   // ---- one card
@@ -191,9 +216,11 @@ export class RouteService extends EventEmitter {
     }
   }
 
-  /** The card's route as it stands: its own, else the fleet default, else direct. */
+  /** The card's route as it stands: its own, else the fleet default, else direct. A served card is direct, always. */
   routeOf(node: TerminalNodeData | null): CardRoute {
-    if (node?.route) return node.route
+    if (node === null) return DIRECT
+    if (this.isServedNode(node)) return DIRECT
+    if (node.route) return node.route
     const d = this.defaultModel()
     return this.deps.monitor.probe.status === 'online' && d ? d : DIRECT
   }
@@ -201,8 +228,10 @@ export class RouteService extends EventEmitter {
   async setCardRoute(terminalId: string, route: CardRoute): Promise<CardRouteState | { error: string }> {
     const node = this.deps.node(terminalId)
     if (!node) return { error: 'unknown terminal' }
-    if (route !== DIRECT && this.models.length > 0 && !this.models.some((m) => m.id === route)) {
-      return { error: `not in the catalog: ${route}` }
+    if (this.isServedNode(node)) return { error: 'a served session is never routed' }
+    if (route !== DIRECT) {
+      if (!ROUTE_ID_RE.test(route)) return { error: 'not a route id' }
+      if (this.models.length > 0 && !this.models.some((m) => m.id === route)) return { error: `not in the catalog: ${route}` }
     }
     this.deps.updateNode(terminalId, { route })
     const phase = this.deps.phaseOf(terminalId)
@@ -215,72 +244,88 @@ export class RouteService extends EventEmitter {
     return this.cardState(terminalId)
   }
 
-  /** What the spawn hands the harness; recorded on the node as `routeEffective`. */
+  /**
+   * What a spawn would hand the harness. Pure of the node: nothing is
+   * recorded here — the spawner calls recordEffective once it knows a
+   * process was created (a reattach got none of this).
+   */
   envFor(node: TerminalNodeData): SpawnRoute {
     const direct = (offline: boolean): SpawnRoute => ({ env: {}, args: [], effective: DIRECT, offline })
-    if (this.deps.isServed(node.id) || node.servedSession) return this.record(node.id, direct(false), false)
+    if (this.isServedNode(node)) return direct(false)
     const route = this.routeOf(node)
-    if (route === DIRECT) return this.record(node.id, direct(false), true)
+    if (route === DIRECT) return direct(false)
     const probe = this.deps.monitor.probe
-    if (probe.status !== 'online' || !probe.gateway) return this.record(node.id, direct(true), true)
+    if (probe.status !== 'online' || !probe.gateway) return direct(true)
     const harness = this.deps.harnessOf(node.command)
-    if (!harness) return this.record(node.id, direct(false), true)
-    const r: RouteEnv = routeEnv({ harness, gateway: probe.gateway, model: route, cardId: node.id })
-    if (!r.routable) return this.record(node.id, direct(false), true)
+    if (!harness) return direct(false)
+    const r: RouteEnv = routeEnv({ harness, gateway: { url: probe.gateway.url, v1: probe.gateway.v1, key: probe.key }, model: route, cardId: node.id })
+    if (!r.routable) return direct(false)
     for (const f of r.files) (this.deps.writeFile ?? writeFile0600)(f.path, f.content)
-    return this.record(node.id, { env: r.env, args: r.args, effective: route, offline: false }, true)
+    return { env: r.env, args: r.args, effective: route, offline: false }
   }
 
-  private record(terminalId: string, spawn: SpawnRoute, persist: boolean): SpawnRoute {
+  /** A process was CREATED with this spawn: what it got is now the card's effective route. */
+  recordEffective(terminalId: string, spawn: SpawnRoute): void {
     if (spawn.offline) this.offlineAtSpawn.add(terminalId)
     else this.offlineAtSpawn.delete(terminalId)
-    if (persist) this.deps.updateNode(terminalId, { routeEffective: spawn.effective })
+    if (spawn.effective === DIRECT) this.routed.delete(terminalId)
+    else this.routed.add(terminalId)
+    const node = this.deps.node(terminalId)
+    if (node && !this.isServedNode(node)) this.deps.updateNode(terminalId, { routeEffective: spawn.effective })
     this.emitCard(terminalId)
-    return spawn
   }
 
-  /** A turn's phase moved: follow a routed card in flight, drop it when it rests. */
+  /** A turn's phase moved. Only a card whose process was handed a route is looked at; the rest cost nothing. */
   onActivity(terminalId: string, phase: TurnPhase): void {
+    if (!this.routed.has(terminalId)) return
     const inFlight = phase === 'thinking' || phase === 'waiting'
-    const node = this.deps.node(terminalId)
-    const routed = node !== null && (node.routeEffective ?? null) !== null && node.routeEffective !== DIRECT && !this.deps.isServed(terminalId)
-    if (inFlight && routed) this.decisions.follow(terminalId)
+    if (inFlight) this.decisions.follow(terminalId)
     else this.decisions.unfollow(terminalId)
   }
 
   forget(terminalId: string): void {
     this.decisions.forget(terminalId)
     this.offlineAtSpawn.delete(terminalId)
+    this.routed.delete(terminalId)
   }
 
   dispose(): void {
     this.decisions.dispose()
     this.releaseMonitor?.()
+    this.releaseMonitor = null
     this.announceTimer?.()
+    this.announceTimer = null
+    this.scan.dispose()
   }
 
   // ---- internals
 
+  private isServedNode(node: TerminalNodeData): boolean {
+    return Boolean(node.servedSession) || this.deps.isServed(node.id)
+  }
+
   private async onProbe(probe: GatewayProbe): Promise<void> {
-    if (probe.status !== 'online' || !probe.gateway) {
-      if (this.models.length > 0 || this.quotas.length > 0) {
+    try {
+      if (probe.status !== 'online' || !probe.gateway) {
         this.models = []
         this.quotas = []
+        this.catalogFor = ''
+        this.announce()
+        return
       }
-      this.catalogFor = ''
+      const key = `${probe.gateway.url}|${probe.key}|${probe.checkedAt}`
+      if (key === this.catalogFor) return
+      this.catalogFor = key
+      const [models, quotas] = await Promise.all([
+        fetchCatalog(this.deps.fetch, probe.gateway.v1, probe.key),
+        fetchQuotas(this.deps.fetch, probe.gateway.url, probe.key)
+      ])
+      this.models = models
+      this.quotas = quotas
       this.announce()
-      return
+    } catch {
+      // A probe that could not be followed up leaves the last catalog in place; nothing rejects upward.
     }
-    const key = `${probe.gateway.url}|${probe.gateway.key}|${probe.checkedAt}`
-    if (key === this.catalogFor) return
-    this.catalogFor = key
-    const [models, quotas] = await Promise.all([
-      fetchCatalog(this.deps.fetch, probe.gateway.v1, probe.gateway.key),
-      fetchQuotas(this.deps.fetch, probe.gateway.url, probe.gateway.key)
-    ])
-    this.models = models
-    this.quotas = quotas
-    this.announce()
   }
 
   private announce(): void {
@@ -296,16 +341,6 @@ export class RouteService extends EventEmitter {
 
   private emitCard(terminalId: string): void {
     this.emit('card-route', { terminalId, ...this.cardState(terminalId) })
-  }
-
-  private rowDeps(): HarnessRowDeps {
-    return {
-      home: this.deps.home,
-      pathEnv: this.deps.pathEnv,
-      dockCommands: this.deps.dockCommands,
-      harnessOfCommand: (c) => this.deps.harnessOf(c),
-      claudeKeychain: this.deps.claudeKeychain
-    }
   }
 
   private readOwnerDefault(): string | null {

@@ -17,10 +17,14 @@
 
 export type RouteStatus = 'absent' | 'offline' | 'online'
 
+/**
+ * The gateway as every surface may see it. The KEY IS NOT HERE: it never
+ * leaves main (route-env.ts hands it to a harness process; the read-only
+ * wall token can read RouteState and must not learn it).
+ */
 export interface RouteGateway {
   url: string
   v1: string
-  key: string
   port: number
   version: string | null
   /** 'plugin' when ~/.cookrew/magpie.json (written by the Magpie agent plugin) named it; 'probe' otherwise. */
@@ -99,6 +103,8 @@ export interface RouteSetupLines {
 export interface RouteState {
   status: RouteStatus
   gateway: RouteGateway | null
+  /** Why the status is what it is when that needs saying — a rejected plugin file, a refused host. */
+  why: string | null
   /** null = new cards stay direct even when online: the owner picks once, never inferred. */
   defaultModel: string | null
   providers: number
@@ -127,6 +133,8 @@ export interface CardRouteState {
 }
 
 export const DIRECT: CardRoute = 'direct'
+/** What a route string may look like when the catalog cannot vouch for it (offline, or never read). */
+export const ROUTE_ID_RE = /^[A-Za-z0-9._/:-]{1,128}$/
 export const ROUTE_LIVE_MAX = 20
 
 /** The session header every routed request carries, so the gateway counts per card. */

@@ -479,8 +479,18 @@ export class PtySession extends EventEmitter {
     this.startAttach(false)
   }
 
+  /**
+   * True when the backend already held this session and the attach rode it:
+   * the boot command (and so the route env) was ignored and no process was
+   * created. Read by the spawner to record only what a real create set.
+   */
+  reattached = false
+
   /** Spawn one attach client and bind it to this stable session object. */
   private startAttach(recovering: boolean): void {
+    // Asked BEFORE the attach: `new-session -A` creates or reattaches in one
+    // step and never says which, so the question is put to the backend first.
+    this.reattached = this.mux.sessionExists(this.sessionName)
     // Idempotent, and a no-op for tmux (whose `new-session -A` does it inside
     // the attach). On recovery herdr also verifies the server and refreshes
     // runtime-only agent registration before resolving a new attach argv.
