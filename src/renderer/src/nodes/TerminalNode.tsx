@@ -109,6 +109,11 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
             <span className="vi-mini-name" title={node.name}>
               {node.name}
             </span>
+            {node.brief && (
+              <span className="cr-brief vi-mini-brief" title={node.brief}>
+                {node.brief}
+              </span>
+            )}
             <DialTag id={node.id} className="vi-mini-dial" stack />
           </div>
         </div>
@@ -125,6 +130,11 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
         <div className="node-header">
           <span className="cr-led on" />
           <span className="node-title">{node.name}</span>
+          {node.brief && (
+            <span className="cr-brief" title={node.brief}>
+              {node.brief}
+            </span>
+          )}
           {node.orch && <span className="cr-chip amber">ORCH</span>}
           <span className="cr-chip preset-chip">{node.preset}</span>
           <DialTag id={node.id} className="cr-chip preset-chip dial" />
@@ -157,6 +167,11 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
         <AgentAvatar phase={phase} preset={node.preset} />
         <div className="vi-title" title={node.name}>
           {node.name}
+          {node.brief && (
+            <span className="cr-brief vi-brief" title={node.brief}>
+              {node.brief}
+            </span>
+          )}
         </div>
         <span className="vi-chip tan">{node.preset}</span>
         {/* What it is RUNNING ON, beside what it is. Absent until a record

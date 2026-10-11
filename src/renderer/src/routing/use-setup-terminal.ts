@@ -1,7 +1,8 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { cookrew } from '../api'
 import type { TerminalNodeData, WorkspaceState } from '../../../shared/model'
 import { setupLineAllowed } from '../../../shared/route-lines'
+import { LINE_RUNNING, observeOutput, runningView, startedLine, type SetupRunning } from './setup-line-state'
 
 /**
  * THE SETUP CARD — a real Shell terminal named "Setup" in the CURRENT
@@ -55,6 +56,8 @@ export interface SetupTerminalControls {
   focusTick: number
   /** Why the last run did nothing, or null. Cleared by the next run. */
   error: SetupError | null
+  /** The line typed last, while the pane has not shown its prompt again. */
+  running: SetupRunning | null
 }
 
 export function findSetupCard(workspace: WorkspaceState | null): TerminalNodeData | null {
@@ -123,6 +126,9 @@ export function useSetupTerminal(workspace: WorkspaceState | null): SetupTermina
   const [created, setCreated] = useState<{ key: string; id: string } | null>(null)
   const [focusTick, setFocusTick] = useState(0)
   const [error, setError] = useState<SetupError | null>(null)
+  const [running, setRunning] = useState<SetupRunning | null>(null)
+  const runningRef = useRef<SetupRunning | null>(null)
+  const watching = useRef<(() => void) | null>(null)
   const creating = useRef<{ key: string; promise: Promise<string> } | null>(null)
   const workspaceRef = useRef(workspace)
   workspaceRef.current = workspace
@@ -159,23 +165,54 @@ export function useSetupTerminal(workspace: WorkspaceState | null): SetupTermina
     return promise
   }, [created])
 
+  // The line runs until the pane shows its prompt again (setup-line-state):
+  // a third attachment to the same PTY, dropped the moment the prompt is back.
+  const watch = useCallback((id: string, line: string): void => {
+    watching.current?.()
+    let state = startedLine(line)
+    const show = (next: SetupRunning | null): void => {
+      runningRef.current = next
+      setRunning(next)
+    }
+    show(runningView(state))
+    const detach = cookrew().ptyAttach(id, (chunk) => {
+      state = observeOutput(state, chunk)
+      if (state.done) {
+        detach()
+        if (watching.current === detach) watching.current = null
+        show(null)
+      } else show(runningView(state))
+    })
+    watching.current = detach
+  }, [])
+  useEffect(() => () => watching.current?.(), [])
+
   const run = useCallback(
     async (line: string, options: RunOptions = {}): Promise<RunOutcome> => {
       setError(null)
       const enter = options.enter ?? true
+      if (runningRef.current !== null && runningRef.current.line === line) {
+        setError({ text: LINE_RUNNING, at: Date.now() })
+        return { ok: false, reason: LINE_RUNNING }
+      }
+      let typedInto: string | null = null
       const outcome = await runLine({
         line,
         enter,
         currentKey: () => workspaceKey(workspaceRef.current),
         ensure,
-        type: (id, bytes) => cookrew().ptyInput(id, bytes)
+        type: (id, bytes) => {
+          typedInto = id
+          cookrew().ptyInput(id, bytes)
+        }
       })
       if (!outcome.ok) setError({ text: outcome.reason, at: Date.now() })
       else if (!enter) setFocusTick((n) => n + 1)
+      else if (typedInto !== null) watch(typedInto, line)
       return outcome
     },
-    [ensure]
+    [ensure, watch]
   )
 
-  return { terminalId, run, focusTick, error }
+  return { terminalId, run, focusTick, error, running }
 }

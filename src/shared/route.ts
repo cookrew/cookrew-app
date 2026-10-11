@@ -97,6 +97,8 @@ export interface HarnessRow {
   inDock: boolean
   installLine: string
   loginLine: string | null
+  /** Round 2: can this harness be pointed at the gateway at all (pi/opencode truth)? Forge fills it; absent = the renderer's own table. */
+  routable?: boolean
 }
 
 export interface RouteSetupLines {
@@ -149,6 +151,8 @@ export interface CardRouteState {
    * it was offline at the spawn.
    */
   gateway: RouteStatus
+  /** Round 2: false when this card's harness cannot be routed; the dial then reads `note`. Forge fills it. */
+  routable?: boolean
 }
 
 export const DIRECT: CardRoute = 'direct'
