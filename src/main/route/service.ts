@@ -20,7 +20,7 @@ import { fetchCatalog, fetchQuotas, providersOf, withLocalRows, type CatalogFetc
 import { RouteDecisions, pushLive } from './decisions'
 import { DEFAULT_PORT } from './discovery'
 import type { GatewayMonitor, GatewayProbe } from './gateway'
-import { HarnessScan, groupLineFor, setupLines } from './setup'
+import { ADD_KEY_STEM, HarnessScan, groupLineFor, setupLines } from './setup'
 
 /**
  * THE ROUTE SERVICE — one object main keeps, every route question answered
@@ -149,7 +149,7 @@ export class RouteService extends EventEmitter {
       live: this.live,
       harnesses: this.scan.rows(),
       checkedAt: probe.checkedAt,
-      setup: { ...lines, addKeyLine: lines.addKeyLine('<preset>'), addGroupLine: groupLineFor(this.models.map((m) => m.id)) }
+      setup: { ...lines, addKeyLine: ADD_KEY_STEM, addGroupLine: groupLineFor(this.models.map((m) => m.id)) }
     }
   }
 

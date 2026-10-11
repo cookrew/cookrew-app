@@ -152,9 +152,9 @@ export function createDemoApi(): CookrewApi {
     setup: {
       installLine: 'curl -fsSL https://usemagpie.ai/install.sh | sh',
       serveLine: 'magpie autostart on',
-      pluginLine: 'magpie plugin add /Applications/Cookrew.app/Contents/Resources/magpie',
+      pluginLine: "magpie plugin add '/Applications/Cookrew Dev.app/Contents/Resources/magpie'",
       addSubscriptionLine: 'magpie accounts add codex',
-      addKeyLine: 'magpie provider add <preset> ',
+      addKeyLine: 'magpie provider add ',
       addLocalLine: 'magpie provider add ollama',
       addGroupLine: 'magpie group add smart models=claude/claude-sonnet-5-5,deepseek/deepseek-chat routing=smart'
     }

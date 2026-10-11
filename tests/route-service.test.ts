@@ -115,13 +115,15 @@ describe('state', () => {
       expect(online.quotas.map((q) => [q.provider, q.kind])).toEqual([['claude', 'subscription'], ['deepseek', 'key']])
       expect(online.defaultModel).toBeNull()
       expect(online.setup.addGroupLine).toBe('magpie group add smart models=claude/claude-sonnet-5-5,deepseek/deepseek-chat routing=smart')
-      expect(online.setup.pluginLine).toBe('magpie plugin add /app/resources/magpie')
-      expect(online.setup.addKeyLine.endsWith(' ')).toBe(true)
+      expect(online.setup.pluginLine).toBe("magpie plugin add '/app/resources/magpie'")
+      expect(online.setup.addKeyLine).toBe('magpie provider add ')
       expect(online.harnesses.map((h) => [h.id, h.inDock])).toEqual([['claude', true], ['codex', true], ['opencode', false], ['pi', false]])
       fake.answer = false
       const offline = await svc.refresh()
       expect(offline.status).toBe('offline')
       expect(offline.models).toEqual([])
+      // No catalog, no group line: null, never a placeholder.
+      expect(offline.setup.addGroupLine).toBeNull()
       expect(svc.health()).toEqual({ status: 'offline', source: 'probe', providers: 0, live: 0 })
       svc.dispose()
     } finally {

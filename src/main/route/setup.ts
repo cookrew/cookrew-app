@@ -23,25 +23,26 @@ import type { HarnessRow, RouteSetupLines } from '../../shared/route'
  */
 
 export const INSTALL_LINE = 'curl -fsSL https://usemagpie.ai/install.sh | sh'
+/** The bare stem the renderer appends a preset to and the user pastes a key after: one trailing space. */
+export const ADD_KEY_STEM = 'magpie provider add '
 
 export function setupLines(pluginDir: string): RouteSetupLines {
   return {
     installLine: INSTALL_LINE,
     serveLine: 'magpie autostart on',
-    pluginLine: `magpie plugin add ${pluginDir}`,
+    // Single-quoted: a packaged path can hold a space ("Cookrew Dev.app").
+    pluginLine: `magpie plugin add '${pluginDir.replace(/'/g, `'\\''`)}'`,
     addSubscriptionLine: 'magpie accounts add codex',
-    addKeyLine: (preset: string) => `magpie provider add ${preset} `,
+    addKeyLine: (preset: string) => (preset === '' ? ADD_KEY_STEM : `${ADD_KEY_STEM}${preset} `),
     addLocalLine: 'magpie provider add ollama',
-    addGroupLine: 'magpie group add smart models=<model-1>,<model-2> routing=smart'
+    addGroupLine: null
   }
 }
 
-/** The group line with the first two catalog ids filled in, when there are two. */
-export function groupLineFor(modelIds: readonly string[]): string {
+/** The group line with the first two catalog models filled in; null below two — never a placeholder. */
+export function groupLineFor(modelIds: readonly string[]): string | null {
   const members = modelIds.filter((id) => !id.startsWith('group/')).slice(0, 2)
-  return members.length === 2
-    ? `magpie group add smart models=${members.join(',')} routing=smart`
-    : setupLines('').addGroupLine
+  return members.length === 2 ? `magpie group add smart models=${members.join(',')} routing=smart` : null
 }
 
 export interface HarnessFacts {

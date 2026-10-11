@@ -102,11 +102,13 @@ export interface HarnessRow {
 export interface RouteSetupLines {
   installLine: string
   serveLine: string
+  /** `magpie plugin add '<absolute dir>'` — the path single-quoted, since a packaged path may hold a space. */
   pluginLine: string
   addSubscriptionLine: string
   addKeyLine: (preset: string) => string
   addLocalLine: string
-  addGroupLine: string
+  /** The group line with the first two catalog models, or null when the catalog has fewer than two — never a placeholder. */
+  addGroupLine: string | null
 }
 
 export interface RouteState {
@@ -123,7 +125,7 @@ export interface RouteState {
   live: RouteDecision[]
   harnesses: HarnessRow[]
   checkedAt: number
-  /** addKeyLine ends with a space: the user pastes the key after it. */
+  /** addKeyLine is the BARE stem `magpie provider add ` ending in one space: the renderer appends the preset, the user pastes the key. */
   setup: Omit<RouteSetupLines, 'addKeyLine'> & { addKeyLine: string }
 }
 
