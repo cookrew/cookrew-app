@@ -10,6 +10,8 @@ import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { RoutingEntry, RoutingPanel, markRoutingSeen, shouldAutoOpen, ROUTING_SEEN_KEY } from '../src/renderer/src/routing/RoutingPanel'
 import { keyLineFor } from '../src/shared/route-lines'
+import { newestError } from '../src/renderer/src/routing/newest-error'
+import { WORKSPACE_CHANGED, workspaceKey } from '../src/renderer/src/routing/use-setup-terminal'
 import { findSetupCard, setupCardPosition } from '../src/renderer/src/routing/use-setup-terminal'
 import { cardRouteFixture, localTurnFixture, routeFixture } from '../src/shared/route-fixture'
 import { decisionFacts, harnessTicks, maskAccount, quotaBar, routeChoices, routeDialAllowed, routeDialLines, statusLine, windowLabel } from '../src/shared/route-view'
@@ -203,8 +205,23 @@ describe('the setup card and the entry', () => {
     expect(shouldAutoOpen('absent', storage)).toBe(false)
   })
 
-  it('shows why a default pick or a Setup line did nothing, as one line under the status', () => {
+  it('shows why a default pick or a Setup line did nothing, as one line under the status — the newest of them', () => {
     expect(paint(routeFixture('online'), { error: 'setup line unexpected — not typed' })).toContain('setup line unexpected')
+    expect(newestError({ text: 'default not set: refused', at: 10 }, { text: WORKSPACE_CHANGED, at: 20 })).toBe(WORKSPACE_CHANGED)
+    expect(newestError({ text: 'default not set: refused', at: 30 }, { text: WORKSPACE_CHANGED, at: 20 })).toBe('default not set: refused')
+    expect(newestError(null, null)).toBeNull()
+  })
+
+  it('keys the Setup card to its workspace with a printable separator', () => {
+    const key = workspaceKey({ name: 'Cookrew Dev', dir: '/Users/me/cookrew-dev', nodes: [], connections: [] } as unknown as WorkspaceState)
+    expect(key).toBe('Cookrew Dev | /Users/me/cookrew-dev')
+    expect(key.split('').every((c) => c.charCodeAt(0) >= 32)).toBe(true)
+  })
+
+  it('never carries a placeholder group line into the markup', () => {
+    const html = paint(routeFixture('online', { setup: { ...routeFixture('online').setup, addGroupLine: null } }))
+    expect(html).not.toContain('<model-1>')
+    expect(routeFixture('online').setup.addGroupLine).toMatch(/^magpie group add smart models=/)
   })
 
   it('renders nothing while closed, and says so on a bridge without routing', () => {

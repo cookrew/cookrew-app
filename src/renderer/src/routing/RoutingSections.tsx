@@ -122,6 +122,12 @@ export function AddMenu({ setup, onRun }: { setup: RouteState['setup']; onRun: R
   const [open, setOpen] = useState(false)
   const [keys, setKeys] = useState(false)
   const [unexpected, setUnexpected] = useState(false)
+  const toggle = (): void => {
+    setOpen((o) => !o)
+    setKeys(false)
+    // The notice is about the last click on the open menu; a new opening starts clean.
+    setUnexpected(false)
+  }
   const run = (line: string, enter = true): void => {
     setOpen(false)
     setKeys(false)
@@ -144,7 +150,7 @@ export function AddMenu({ setup, onRun }: { setup: RouteState['setup']; onRun: R
     <span className="cr-routing-add">
       {unexpected && <span className="cr-routing-bad">setup line unexpected — nothing typed</span>}{' '}
 
-      <button type="button" className="cr-routing-btn primary" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+      <button type="button" className="cr-routing-btn primary" aria-expanded={open} onClick={toggle}>
         {ROUTING_COPY.add} ▾
       </button>
       {open && (
@@ -172,9 +178,10 @@ export function AddMenu({ setup, onRun }: { setup: RouteState['setup']; onRun: R
             <b>{ROUTING_COPY.addLocal}</b>
             <span className="c">{setup.addLocalLine}</span>
           </button>
-          <button type="button" role="menuitem" onClick={() => run(setup.addGroupLine)}>
+          {/* Main sends the group line only with two catalogue models filled in — never a placeholder; below two there is nothing to type. */}
+          <button type="button" role="menuitem" disabled={setup.addGroupLine === null} onClick={() => setup.addGroupLine !== null && run(setup.addGroupLine)}>
             <b>{ROUTING_COPY.addGroup}</b>
-            <span className="c">{setup.addGroupLine}</span>
+            <span className="c">{setup.addGroupLine ?? ROUTING_COPY.groupNeedsTwo}</span>
           </button>
         </div>
       )}
