@@ -485,11 +485,18 @@ const api = {
   },
   // R3: the decide step's commit, and the HITL inbox.
   sousCommit: (token: string, choice?: { target?: string }) => ipcRenderer.invoke('sous:commit', token, choice ?? {}),
+  sousCancel: (token: string) => ipcRenderer.invoke('sous:cancel', token),
   inbox: () => ipcRenderer.invoke('inbox:list'),
+  // Subscribing HOLDS the list open in main (it is built only while someone
+  // looks); the opening rows arrive through the callback too.
   onInbox: (cb: (rows: unknown) => void) => {
     const listener = (_e: unknown, rows: unknown): void => cb(rows)
     ipcRenderer.on('inbox:changed', listener)
-    return () => ipcRenderer.removeListener('inbox:changed', listener)
+    void ipcRenderer.invoke('inbox:subscribe').then((rows: unknown) => cb(rows))
+    return () => {
+      ipcRenderer.removeListener('inbox:changed', listener)
+      void ipcRenderer.invoke('inbox:unsubscribe')
+    }
   },
   // Hold ⌘ to talk: main runs the on-device recognizer and streams what it hears.
   listenAvailable: () => ipcRenderer.invoke('listen:available'),

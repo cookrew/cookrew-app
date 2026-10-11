@@ -421,6 +421,7 @@ export function createDemoApi(): CookrewApi {
     },
     sousCommit: (_token, choice) =>
       Promise.resolve({ intent: 'ask' as const, spoken: `Sent to ${choice?.target === 'demo-bench-0' ? 'Bench 0' : 'Conductor'}`, agentId: choice?.target ?? 'demo-conductor' }),
+    sousCancel: () => Promise.resolve(true),
     onUiCommand: () => () => undefined,
     // The inbox the harness view renders: one of each signal, on the demo's own cards.
     inbox: () =>

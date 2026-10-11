@@ -209,6 +209,7 @@ export interface MobileServerDeps {
   uiBus?: MobileApiDeps['uiBus']
   /** The HITL inbox (R3) — see MobileApiDeps; passed through as-is. */
   inbox?: MobileApiDeps['inbox']
+  inboxHold?: MobileApiDeps['inboxHold']
   inboxBus?: MobileApiDeps['inboxBus']
   /** The screen wall's pictures for the phone — see MobileApiDeps; passed through as-is. */
   workspaceShots?: MobileApiDeps['workspaceShots']

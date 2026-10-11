@@ -27,7 +27,8 @@ const stubDesktop = (): void => {
   ;(globalThis as unknown as { localStorage: unknown }).localStorage = storage
 }
 
-const NOW = Date.parse('2026-10-11T10:00:00Z')
+// the wait is rendered from `since` against the clock, so the rows are relative to now
+const NOW = Date.now()
 const rows: InboxRow[] = [
   {
     nodeId: 'forge',

@@ -22,6 +22,7 @@ import {
   type SousIntent,
   type Surface
 } from '../shared/sous-intent'
+import { randomUUID } from 'node:crypto'
 import { rankHearings, vocabularyOf } from '../shared/sous-hearing'
 import type { UiCommand } from '../shared/sous-ui'
 import { DECISION_HOLD_MS, DECISION_TTL_MS, decide, type DecideCandidate, type DecisionDraft, type Harness } from '../shared/sous-decide'
@@ -112,6 +113,12 @@ export interface SousCommandResult {
   decision?: Decision
   needs?: 'prompt' | Refusal
   choices?: string[]
+  /**
+   * Why a commit was refused, for a door that answers in status codes:
+   * `bad-target` is not one of the decision's choices (400), `expired` is a
+   * token that was spent or outlived its hold (410).
+   */
+  error?: 'bad-target' | 'expired'
   /** The agent the sentence ended up about, when there is one. */
   agentId?: string
   /** The text that went into the agent, after polish — so a surface can show it. */
@@ -132,6 +139,9 @@ const IN_THE_BOX = {
 
 /** Where a dictated sentence is typed and left, rather than submitted. */
 const TYPES_WITHOUT_ENTER: ReadonlySet<Surface> = new Set(['zoom'])
+/** The surfaces with a box: the only ones a decision is minted for. */
+const DECIDING_SURFACES: ReadonlySet<Surface> = new Set(['canvas', 'phone'])
+const NOT_A_CHOICE = { en: 'That is not one of the choices.', zh: '这不在可选项里。' } as const
 
 const EXPIRED = { en: 'That decision expired — say it again.', zh: '这个决定已过期，再说一次。' } as const
 const SENT = {
@@ -218,9 +228,12 @@ export class SousController {
         ...(parsed.choices ? { choices: parsed.choices } : {})
       }
     }
-    // THE DECIDE STEP: not a command the core knows, not dictation into a
-    // zoomed terminal, and a sentence rather than a word — Sous picks who.
-    if (parsed.intent.kind === 'none' && this.deps.decide && input.surface !== 'zoom' && input.text.trim().length > 0) {
+    // THE DECIDE STEP: not a command the core knows, a sentence rather than
+    // a word, and a surface that HAS a box to show the echo in and commit
+    // from — the canvas and the phone. Voice, the CLI and the gateway only
+    // speak what comes back, so a decision minted for them would expire
+    // unseen; they keep the regex core and nothing more.
+    if (parsed.intent.kind === 'none' && this.deps.decide && DECIDING_SURFACES.has(input.surface) && input.text.trim().length > 0) {
       try {
         return await this.decideStep(input.text.trim(), key, input.surface, parsed.lang)
       } catch (error) {
@@ -318,7 +331,7 @@ export class SousController {
     const deps = this.deps.decide
     if (!deps) return { intent: 'none', spoken: '' }
     const draft = decide(sentence, { candidates: await deps.candidates(), workdir: deps.workdir(), now: this.now() })
-    const token = deps.token?.() ?? `d-${this.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+    const token = deps.token?.() ?? randomUUID()
     const decision: Decision = { ...draft, token, holdMs: DECISION_HOLD_MS, sentence }
     this.sweepDecisions()
     // A question is answered in the box and creates nothing — there is nothing to commit.
@@ -336,23 +349,30 @@ export class SousController {
   async commit(token: string, choice: CommitChoice = {}): Promise<SousCommandResult> {
     this.sweepDecisions()
     const slot = this.decisions.get(token)
-    if (!slot) return { intent: 'refused', spoken: EXPIRED.en }
-    this.decisions.delete(token)
-    const { decision, key, lang } = slot
+    if (!slot) return { intent: 'refused', spoken: EXPIRED.en, error: 'expired' }
+    const { decision, surface, key, lang } = slot
+    // ONLY THE CHOICES SHOWN. An ask takes its target or one of its
+    // alternates and never a harness; a recruit takes its harness or an
+    // alternate harness and never a card. Anything else is a bad request,
+    // and the decision stays on the line for a proper choice.
+    const allowed = decision.kind === 'ask' ? [decision.target.id, ...decision.alternates.map((a) => a.id)] : decision.kind === 'recruit' ? [`harness:${decision.harness}`, ...decision.alternates.map((a) => a.id)] : []
+    if (choice.target !== undefined && !allowed.includes(choice.target)) {
+      return { intent: 'refused', spoken: NOT_A_CHOICE[lang], error: 'bad-target' }
+    }
     const roster = this.deps.roster()
     try {
+      let result: SousCommandResult
       if (decision.kind === 'ask') {
-        const targetId = choice.target ?? decision.target.id
-        const agent = agentOf(roster, targetId)
+        const agent = agentOf(roster, choice.target ?? decision.target.id)
         await this.moveTo(agent.workspaceId)
         this.deps.ui({ kind: 'zoom', nodeId: agent.id }, agent.workspaceId)
         this.deps.ui({ kind: 'focus-input', nodeId: agent.id }, agent.workspaceId)
         this.focus.set(key, agent.id)
-        // Committed from the box: the owner has read the sentence already, so it goes in and is sent.
-        const sent = await this.deliver(agent, decision.sentence, 'canvas', lang, SENT[lang](agent.name))
-        return { intent: 'ask', ...sent, spoken: SENT[lang](agent.name) }
-      }
-      if (decision.kind === 'recruit') {
+        // The surface the decision was made on decides how the brief goes in
+        // (the box's surfaces both submit; the rule is deliver's).
+        const sent = await this.deliver(agent, decision.sentence, surface, lang, SENT[lang](agent.name))
+        result = { intent: 'ask', ...sent, spoken: SENT[lang](agent.name) }
+      } else if (decision.kind === 'recruit') {
         const deps = this.deps.decide
         if (!deps) throw new Error('recruiting is not wired on this desktop')
         const harness = (choice.target?.startsWith('harness:') ? choice.target.slice('harness:'.length) : decision.harness) as Harness
@@ -362,14 +382,24 @@ export class SousController {
         this.deps.ui({ kind: 'zoom', nodeId: node.id }, workspaceId)
         this.focus.set(key, node.id)
         this.note('recruit', node.id, `${harness} · ${node.name}${decision.beside ? ` ↔ ${decision.beside.name}` : ''}`)
-        return { intent: 'create', spoken: RECRUITED[lang](harness, node.name), agentId: node.id, text: decision.sentence }
+        result = { intent: 'create', spoken: RECRUITED[lang](harness, node.name), agentId: node.id, text: decision.sentence }
+      } else {
+        result = { intent: 'decide', spoken: decision.question }
       }
-      return { intent: 'decide', spoken: decision.question }
+      // Spent only now: a delivery that threw left the token in place, so the
+      // same echo can be committed again instead of typing the brief twice.
+      this.decisions.delete(token)
+      return result
     } catch (error) {
       const what = error instanceof Error ? error.message : String(error)
       console.error(`Sous: commit ${decision.kind} failed:`, error)
       return { intent: 'refused', spoken: FAILED[lang](what) }
     }
+  }
+
+  /** The box closed with the decision uncommitted: the token is dropped, nothing runs. */
+  cancel(token: string): boolean {
+    return this.decisions.delete(token)
   }
 
   private sweepDecisions(): void {

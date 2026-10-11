@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { WorkspaceStore } from './store'
 import { PtyManager, multiplexer, sessionNameFor } from './pty'
-import { buildInbox, createInboxBus, type InboxNode } from './inbox'
+import { buildInbox, type InboxNode } from './inbox'
+import { cachedDispatchReader, wireInbox } from './inbox-wiring'
 import { placeBeside, type DecideCandidate } from '../shared/sous-decide'
 import type { PtySession } from './pty'
 import type { PaneCardInfo } from './multiplexer'
@@ -5477,48 +5478,65 @@ app.whenReady().then(() => {
       })
   )
 
-  // THE INBOX (R3): one ranked list of what only a person can move. Rebuilt on
-  // every store op, event and probe change, announced only when its words change.
-  const inboxBus = createInboxBus(() => {
-    const workspaces = store.list().workspaces
-    const nameOf = (id: string): string => workspaces.find((w) => w.id === id)?.name ?? id
-    const nodes: InboxNode[] = []
-    const connections: { a: string; b: string }[] = []
-    for (const meta of workspaces) {
-      const state = store.workspaceState(meta.id)
-      for (const n of state.nodes) {
-        nodes.push({
-          id: n.id,
-          name: n.name,
-          kind: n.kind,
-          workspaceId: meta.id,
-          workspaceName: nameOf(meta.id),
-          served: n.kind === 'terminal' && n.servedSession != null
-        })
+  // THE INBOX (R3): one ranked list of what only a person can move. Built
+  // only while a client holds it, on a trailing debounce over the store, the
+  // event log and the probe — never on Sous's own lines (inbox-wiring.ts).
+  // The rows come from the probe's CURRENT phases, not from a touch that
+  // would announce back into this very builder.
+  const readDispatches = cachedDispatchReader(defaultDispatchRegistry())
+  const inbox = wireInbox({
+    build: () => {
+      const workspaces = store.list().workspaces
+      const nameOf = (id: string): string => workspaces.find((w) => w.id === id)?.name ?? id
+      const nodes: InboxNode[] = []
+      const connections: { a: string; b: string }[] = []
+      for (const meta of workspaces) {
+        const state = store.workspaceState(meta.id)
+        for (const n of state.nodes) {
+          nodes.push({
+            id: n.id,
+            name: n.name,
+            kind: n.kind,
+            workspaceId: meta.id,
+            workspaceName: nameOf(meta.id),
+            served: n.kind === 'terminal' && n.servedSession != null
+          })
+        }
+        for (const c of state.connections) connections.push({ a: c.a, b: c.b })
       }
-      for (const c of state.connections) connections.push({ a: c.a, b: c.b })
-    }
-    return buildInbox({
-      rows: () => buildBoard(boardSources()).rows,
-      nodes: () => nodes,
-      connections: () => connections,
-      dispatches: () => readDispatchRecords(defaultDispatchRegistry()),
-      events: (type, since) => events.query({ type, since })
-    })
+      const sources = { ...boardSources(), probe: () => boardProbe.phases() }
+      return buildInbox({
+        rows: () => buildBoard(sources).rows,
+        nodes: () => nodes,
+        connections: () => connections,
+        dispatches: readDispatches,
+        events: (type, since) => events.query({ type, since })
+      })
+    },
+    onStoreOp: (cb) => {
+      store.on('op', cb)
+      return () => void store.off('op', cb)
+    },
+    onEvent: (cb) => {
+      events.on('event', cb)
+      return () => void events.off('event', cb)
+    },
+    onProbeChange: (cb) => boardProbe.onChange(cb),
+    announce: (rows) => mainWindow?.webContents.send('inbox:changed', rows)
   })
-  let inboxTimer: NodeJS.Timeout | null = null
-  const touchInbox = (): void => {
-    if (inboxTimer) return
-    inboxTimer = setTimeout(() => {
-      inboxTimer = null
-      inboxBus.touch()
-    }, 400)
-  }
-  inboxBus.on('inbox', (rows) => mainWindow?.webContents.send('inbox:changed', rows))
-  store.on('op', touchInbox)
-  events.on('event', touchInbox)
-  boardProbe.onChange(touchInbox)
-  ipcMain.handle('inbox:list', () => inboxBus.touch())
+  // The window holds the list while its box is subscribed; a one-shot read
+  // builds on demand.
+  let windowHold: (() => void) | null = null
+  ipcMain.handle('inbox:subscribe', () => {
+    if (!windowHold) windowHold = inbox.hold()
+    return inbox.read()
+  })
+  ipcMain.handle('inbox:unsubscribe', () => {
+    windowHold?.()
+    windowHold = null
+  })
+  ipcMain.handle('inbox:list', () => inbox.read())
+  ipcMain.handle('sous:cancel', (_e, token: string) => sous.cancel(String(token)))
 
   // THE MAC'S EAR. One recognizer child per hold of ⌘; the roster's names go
   // in as hints so "cookrew dev" is not heard as "cooker Dev".
@@ -5638,9 +5656,10 @@ app.whenReady().then(() => {
     // Sous's door for the phone and for voice-gateway; `ui` events for both.
     sous,
     uiBus,
-    // The inbox (R3): the same rows the desktop box lists, pushed on change.
-    inbox: () => inboxBus.touch(),
-    inboxBus,
+    // The inbox (R3): the same rows the desktop box lists; a stream holds it open.
+    inbox: () => inbox.read(),
+    inboxHold: () => inbox.hold(),
+    inboxBus: inbox,
     // THE DIALS on the phone — the same reads and the same write the desktop
     // does, through the same deps, so the two surfaces cannot drift.
     tuning: {

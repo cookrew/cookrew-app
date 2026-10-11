@@ -199,9 +199,10 @@ export interface MobileApiDeps {
    */
   sous?: SousDoor;
   uiBus?: EventEmitter;
-  /** The HITL inbox (R3): the ranked rows, and the bus that says when they changed. */
+  /** The HITL inbox (R3): a one-shot read, a hold while a stream is open, and the announcements. */
   inbox?: () => InboxRow[];
-  inboxBus?: EventEmitter;
+  inboxHold?: () => () => void;
+  inboxBus?: { on: (event: "inbox", cb: (rows: InboxRow[]) => void) => void; removeListener: (event: "inbox", cb: (rows: InboxRow[]) => void) => void };
   /**
    * THE DIALS (shared/agent-tuning) — model and effort, read and turned.
    *
@@ -1426,7 +1427,23 @@ export async function handleMobileApi(
       return true;
     }
     const choice = typeof body.target === "string" && body.target.length <= 128 ? { target: body.target } : {};
-    respondJson(response, 200, await deps.sous.commit(body.token, choice));
+    const result = await deps.sous.commit(body.token, choice);
+    // A choice that was never shown is a bad request; a spent or stale token is gone.
+    respondJson(response, result.error === "bad-target" ? 400 : result.error === "expired" ? 410 : 200, result);
+    return true;
+  }
+
+  if (method === "POST" && p === "/api/sous/cancel") {
+    if (!deps.sous?.cancel) {
+      respondJson(response, 503, { error: "Sous does not decide on this desktop" });
+      return true;
+    }
+    const body = await readJson<{ token?: string }>(request);
+    if (typeof body.token !== "string" || body.token.length === 0 || body.token.length > 64) {
+      respondJson(response, 400, { error: "Missing token" });
+      return true;
+    }
+    respondJson(response, 200, { cancelled: deps.sous.cancel(body.token) });
     return true;
   }
 
@@ -1464,9 +1481,14 @@ export async function handleMobileApi(
     // opening frame is the list as it stands, so a phone never polls for it.
     if (deps.inbox && (!deps.pairingToken || canRead)) {
       const onInbox = (rows: InboxRow[]): void => send("inbox", { rows });
+      // The stream HOLDS the list open; the opening frame is built on demand.
+      const release = deps.inboxHold?.() ?? null;
       send("inbox", { rows: deps.inbox() });
       deps.inboxBus?.on("inbox", onInbox);
-      request.on("close", () => deps.inboxBus?.removeListener("inbox", onInbox));
+      request.on("close", () => {
+        deps.inboxBus?.removeListener("inbox", onInbox);
+        release?.();
+      });
     }
     // A cable lit on this canvas. Either end on it is enough: the other end
     // may be a tab naming an agent elsewhere, and the tab is the lamp.

@@ -733,18 +733,35 @@ function Canvas(): React.JSX.Element {
 
   // ⌘K is the one box (CommandBox): the command line to Sous and the inbox.
   // Toggles anywhere but inside a terminal, where ⌘K is the terminal's.
+  // Same guard as ⌘A: never while typing somewhere else. Focus goes back to
+  // where it was when the box closes.
   const [commandOpen, setCommandOpen] = useState(false)
+  const commandReturnFocus = useRef<HTMLElement | null>(null)
+  const closeCommand = useCallback(() => {
+    setCommandOpen(false)
+    const back = commandReturnFocus.current
+    commandReturnFocus.current = null
+    if (back && back.isConnected) back.focus()
+  }, [])
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'k') return
       const target = e.target as HTMLElement | null
-      if (target?.closest('.xterm')) return
+      if (target?.closest('.cmd')) {
+        e.preventDefault()
+        closeCommand()
+        return
+      }
+      if (target?.closest('input, textarea, [contenteditable="true"], .xterm')) return
       e.preventDefault()
-      setCommandOpen((v) => !v)
+      setCommandOpen((v) => {
+        if (!v) commandReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+        return !v
+      })
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [closeCommand])
 
   // ⌘A while clipping picks the whole canvas — the whole-team case the old
   // dock buttons owned. Never while typing (any input/textarea/xterm owns
@@ -1749,7 +1766,7 @@ function Canvas(): React.JSX.Element {
         <DoorMovedNotice />
         <SousPill listening={ptt.listening} partial={ptt.partial} reply={sousReply} />
         {/* R3 · the one box: ⌘K on the desktop, the bottom bar on the phone. */}
-        <CommandBox open={commandOpen} onClose={() => setCommandOpen(false)} phone={isRemoteMode()} />
+        <CommandBox open={commandOpen} onClose={closeCommand} phone={isRemoteMode()} />
         {/* Identity: the sheets and the lock. Mounted here, after everything
             else, so the lock screen is drawn over the canvas it covers. */}
         {account.overlays}

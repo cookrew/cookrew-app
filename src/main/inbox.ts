@@ -7,11 +7,10 @@
 //             stays in the type and the report says so
 //
 // Pure over its sources, so a test feeds it rows and events and reads the
-// list; main wires the sources once (index.ts) and announces changes through
-// `createInboxBus`, change-gated on what the rows SAY rather than on the
-// clock, because the wait is printed by the box from `since`.
+// list; inbox-wiring.ts decides WHEN it is built and announces a change,
+// gated on what the rows SAY (inboxStamp) rather than on the clock, because
+// the wait is printed by the box from `since`.
 
-import { EventEmitter } from 'node:events'
 import type { BoardRow } from '../shared/board'
 import { rankInbox, type InboxItem, type InboxRow } from '../shared/inbox-rank'
 import type { CookrewEvent } from './event-log'
@@ -41,8 +40,6 @@ export interface InboxSources {
 export const DISPATCH_WINDOW_MS = 24 * 60 * 60 * 1000
 export const SECRET_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 
-const IDLE = new Set(['done', 'unread', 'waiting'])
-
 /** `secret.requested` details: "<name>" or "<name> note:<noteId>". */
 export function parseSecretDetails(details: string | undefined): { name: string; noteId: string | null } | null {
   const text = (details ?? '').trim()
@@ -59,14 +56,14 @@ export function buildInbox(sources: InboxSources): InboxRow[] {
   const phase = new Map(rows.map((r) => [r.terminalId, r.phase]))
   const connections = sources.connections()
 
-  // Cards wired to X that sit idle: the work X is holding up.
+  // The work X is holding up: cards DOWNSTREAM of it (edges from X) that sit
+  // idle waiting on it — `unread` or `waiting`, never `done`, which is a card
+  // that finished and owes nobody anything.
+  const WAITING_ON = new Set(['unread', 'waiting'])
   const blockedDownstream = (id: string): number => {
-    const neighbours = new Set<string>()
-    for (const c of connections) {
-      if (c.a === id) neighbours.add(c.b)
-      else if (c.b === id) neighbours.add(c.a)
-    }
-    return [...neighbours].filter((n) => nodes.get(n)?.kind === 'terminal' && IDLE.has(phase.get(n) ?? '')).length
+    const downstream = new Set<string>()
+    for (const c of connections) if (c.a === id) downstream.add(c.b)
+    return [...downstream].filter((n) => nodes.get(n)?.kind === 'terminal' && WAITING_ON.has(phase.get(n) ?? '')).length
   }
 
   const items: InboxItem[] = []
@@ -88,7 +85,9 @@ export function buildInbox(sources: InboxSources): InboxRow[] {
       kind: 'waiting',
       ...base(node),
       reason: asked ? `asks you — ${asked}` : 'asks you',
-      since: row.task.startedAt || row.lastActivityAt,
+      // When the card started WAITING — the phase changed on its last
+      // activity — not when its turn began.
+      since: row.lastActivityAt,
       blockedDownstream: blockedDownstream(node.id)
     })
   }
@@ -130,14 +129,14 @@ export function buildInbox(sources: InboxSources): InboxRow[] {
     if (!slot) continue
     const asker = nodes.get(event.entityId)
     if (!asker) continue
-    // The click lands on the note that carries the slot when the event names
-    // one; otherwise on the asking card, whose zoom is where the slot is made.
+    // The ROW is the asker's — one row per problem, merged with a `waiting`
+    // signal about the same card. The click lands on the note the producer
+    // named (`note:<id>`) when it exists, else on the asker, whose zoom is
+    // where the slot is made.
     const note = slot.noteId ? nodes.get(slot.noteId) : undefined
-    const landing = note ?? asker
     items.push({
       kind: 'secret',
-      ...base(landing),
-      nodeName: asker.name,
+      ...base(asker),
       reason: `needs ${slot.name} — seal it`,
       since: event.timestamp,
       blockedDownstream: blockedDownstream(asker.id),
@@ -152,33 +151,4 @@ export function buildInbox(sources: InboxSources): InboxRow[] {
 /** What a list says, without the clock: the stamp a change is gated on. */
 export function inboxStamp(rows: readonly InboxRow[]): string {
   return rows.map((r) => `${r.nodeId}|${r.kinds.join(',')}|${r.reasons.join(';')}|${r.blockedDownstream}|${r.served ? 1 : 0}`).join('\n')
-}
-
-export interface InboxBus extends EventEmitter {
-  /** The rows as of the last build (cheap; the build runs on `touch`). */
-  current: () => InboxRow[]
-  /** Recompute, and emit `inbox` with the rows when what they say changed. */
-  touch: () => InboxRow[]
-}
-
-/**
- * The change gate. Sources fire on every store op and every event; the bus
- * rebuilds (cheap: a few hundred rows at most) and tells the window and the
- * phone only when a row appeared, left, or changed its words.
- */
-export function createInboxBus(build: () => InboxRow[]): InboxBus {
-  const bus = new EventEmitter() as InboxBus
-  let rows: InboxRow[] = []
-  let stamp = ''
-  bus.current = () => rows
-  bus.touch = () => {
-    rows = build()
-    const next = inboxStamp(rows)
-    if (next !== stamp) {
-      stamp = next
-      bus.emit('inbox', rows)
-    }
-    return rows
-  }
-  return bus
 }

@@ -662,7 +662,9 @@ export interface CookrewApi {
    * what Sous said and nothing else.
    */
   sousCommit?: (token: string, choice?: { target?: string }) => Promise<SousCommandResult>;
-  /** R3 · the HITL inbox: the ranked rows, and the change-gated push. */
+  /** The box closed with a decision still held: main drops the token. */
+  sousCancel?: (token: string) => Promise<boolean>;
+  /** R3 · the HITL inbox: a one-shot read, and the subscription that holds the list open in main. */
   inbox?: () => Promise<InboxRow[]>;
   onInbox?: (cb: (rows: InboxRow[]) => void) => () => void;
   /**

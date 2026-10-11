@@ -1234,6 +1234,8 @@ export interface SousDoor {
   handle: (input: SousCommandInput) => Promise<SousCommandResult>
   /** The box's commit of a shown decision (R3); optional for a door with no decide step. */
   commit?: (token: string, choice?: { target?: string }) => Promise<SousCommandResult>
+  /** The box closed with the decision uncommitted: drop the token. */
+  cancel?: (token: string) => boolean
 }
 
 async function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): Promise<string> {
