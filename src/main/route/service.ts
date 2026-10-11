@@ -16,7 +16,7 @@ import {
 } from '../../shared/route'
 import type { HarnessId } from '../harness'
 import { routeEnv, type RouteEnv } from '../route-env'
-import { fetchCatalog, fetchQuotas, providersOf, type CatalogFetch } from './catalog'
+import { fetchCatalog, fetchQuotas, providersOf, withLocalRows, type CatalogFetch } from './catalog'
 import { RouteDecisions, pushLive } from './decisions'
 import { DEFAULT_PORT } from './discovery'
 import type { GatewayMonitor, GatewayProbe } from './gateway'
@@ -212,8 +212,24 @@ export class RouteService extends EventEmitter {
       appliesOn: effective === null || effective === route ? 'now' : 'restart',
       live: this.decisions.cardLive(terminalId),
       turn: this.decisions.cardTurn(terminalId),
-      offline: this.offlineAtSpawn.has(terminalId)
+      offline: this.offlineAtSpawn.has(terminalId),
+      note: this.noteFor(node, route)
     }
+  }
+
+  /**
+   * The sentence the rail shows beside the route. Codex always asks for
+   * reasoning on the Responses path and a model that refuses it answers 400;
+   * the catalog's `reasoning` flag cannot tell (every Ollama model reads
+   * false, qwen3 included), so nothing is filtered — the owner is told. Pi
+   * cannot be pointed at the gateway this round at all.
+   */
+  private noteFor(node: TerminalNodeData | null, route: CardRoute): string | null {
+    if (!node) return null
+    const harness = this.deps.harnessOf(node.command)
+    if (harness === 'pi') return 'direct · pi is not routable yet'
+    if (harness === 'codex' && route !== DIRECT) return 'codex needs a thinking-capable model behind the gateway'
+    return null
   }
 
   /** The card's route as it stands: its own, else the fleet default, else direct. A served card is direct, always. */
@@ -258,7 +274,8 @@ export class RouteService extends EventEmitter {
     if (probe.status !== 'online' || !probe.gateway) return direct(true)
     const harness = this.deps.harnessOf(node.command)
     if (!harness) return direct(false)
-    const r: RouteEnv = routeEnv({ harness, gateway: { url: probe.gateway.url, v1: probe.gateway.v1, key: probe.key }, model: route, cardId: node.id })
+    const contextWindow = this.models.find((m) => m.id === route)?.contextWindow ?? null
+    const r: RouteEnv = routeEnv({ harness, gateway: { url: probe.gateway.url, v1: probe.gateway.v1, key: probe.key }, model: route, cardId: node.id, contextWindow })
     if (!r.routable) return direct(false)
     for (const f of r.files) (this.deps.writeFile ?? writeFile0600)(f.path, f.content)
     return { env: r.env, args: r.args, effective: route, offline: false }
@@ -321,7 +338,7 @@ export class RouteService extends EventEmitter {
         fetchQuotas(this.deps.fetch, probe.gateway.url, probe.key)
       ])
       this.models = models
-      this.quotas = quotas
+      this.quotas = withLocalRows(quotas, models)
       this.announce()
     } catch {
       // A probe that could not be followed up leaves the last catalog in place; nothing rejects upward.

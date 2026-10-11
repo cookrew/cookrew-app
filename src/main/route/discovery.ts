@@ -19,6 +19,19 @@ import type { RouteGateway } from '../../shared/route'
  */
 
 export const DEFAULT_PORT = 3425
+
+/**
+ * Is magpie on this machine? The installer puts a symlink at
+ * ~/.local/bin/magpie into /Applications/magpie.app, and ~/.local/bin is
+ * NOT on a GUI app's PATH — so a stopped gateway read `absent` (INSTALL)
+ * instead of `offline` (START). Three places are asked, in this order.
+ */
+export function magpieInstalled(d: DiscoveryEnv, exists: (p: string) => boolean): boolean {
+  for (const dir of (d.env.PATH ?? '').split(path.delimiter)) {
+    if (dir !== '' && exists(path.join(dir, 'magpie'))) return true
+  }
+  return exists(path.join(d.home, '.local', 'bin', 'magpie')) || exists('/Applications/magpie.app')
+}
 export const DEFAULT_KEY = 'magpie-cookrew'
 export const PLUGIN_FILE = 'magpie.json'
 

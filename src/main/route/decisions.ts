@@ -60,6 +60,8 @@ export function toDecision(terminalId: string, body: unknown, at: number): Route
   const route = b ? asRecord(b.route) : null
   if (!b || !route) return null
   const tries = Array.isArray(route.tries) ? route.tries.length : num(route.tries) ?? 0
+  // The gateway stamps `time` (RFC3339) on the route; ours is the fallback.
+  const stamped = str(route.time) ? Date.parse(str(route.time) as string) : NaN
   return {
     terminalId,
     session: str(b.session) ?? routeSession(terminalId),
@@ -71,7 +73,9 @@ export function toDecision(terminalId: string, body: unknown, at: number): Route
     tries,
     done: route.done === true,
     status: str(route.status) ?? (num(route.status) !== null ? String(route.status) : null),
-    at
+    at: Number.isFinite(stamped) ? stamped : at,
+    ttftMs: num(route.ttft_ms) ?? num(route.ttftMs),
+    ms: num(route.ms)
   }
 }
 
@@ -88,14 +92,20 @@ export function toTurnFacts(body: unknown, sessions: readonly string[] | null = 
   if (sessions !== null && !sessions.includes(str(r.session) ?? '')) return null
   const t = str(r.t)
   const parsed = t ? Date.parse(t) : NaN
+  // A local model is `cost: 0, priced: false`: the rail must say "local", never "$0.00".
+  const priced = r.priced === true
   return {
     model: str(r.served) ?? str(r.model),
     inputTokens: num(r.in) ?? num(r.input_tokens),
     outputTokens: num(r.out) ?? num(r.output_tokens),
-    cost: num(r.cost),
+    cost: priced ? num(r.cost) : null,
+    priced,
     at: Number.isFinite(parsed) ? parsed : num(r.at)
   }
 }
+
+/** Every Usage read is ours alone: the log also holds the owner's DIRECT Claude Code traffic. */
+export const USAGE_AGENT = 'cookrew'
 
 /** The last 20, newest first, one row per card per seq. */
 export function pushLive(live: readonly RouteDecision[], row: RouteDecision): RouteDecision[] {
@@ -253,7 +263,7 @@ export class RouteDecisions {
     const sessions = own ? [routeSession(terminalId), own] : [routeSession(terminalId)]
     for (const session of sessions) {
       try {
-        const res = await this.deps.fetch(`${gateway.url}/v1/magpie/usage/requests?session=${encodeURIComponent(session)}&limit=1`, {
+        const res = await this.deps.fetch(`${gateway.url}/v1/magpie/usage/requests?session=${encodeURIComponent(session)}&agent=${USAGE_AGENT}&limit=1`, {
           headers: { authorization: `Bearer ${gateway.key}`, 'user-agent': 'cookrew' }
         })
         const facts = res.ok ? toTurnFacts(await res.json(), sessions) : null

@@ -29,10 +29,20 @@ describe('routeEnv', () => {
       ANTHROPIC_DEFAULT_OPUS_MODEL: 'group/smart',
       ANTHROPIC_DEFAULT_SONNET_MODEL: 'group/smart',
       ANTHROPIC_DEFAULT_HAIKU_MODEL: 'group/smart',
-      ANTHROPIC_CUSTOM_HEADERS: 'X-Magpie-Session: cookrew:card-1'
+      ANTHROPIC_CUSTOM_HEADERS: 'X-Magpie-Session: cookrew:card-1',
+      // Without this claude 2.1.275 prints unrecognized_model and WAITS until killed (real gateway, round 2).
+      CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: '1'
     })
     // Never an API key: ANTHROPIC_API_KEY asks claude for a one-time approval; the token does not.
     expect(r.env).not.toHaveProperty('ANTHROPIC_API_KEY')
+    // No context window named (a local model): the variable stays unset.
+    expect(r.env).not.toHaveProperty('CLAUDE_CODE_MAX_CONTEXT_TOKENS')
+  })
+
+  it("claude: the catalog's context window, when the model has one", () => {
+    const r = routeEnv({ harness: 'claude', gateway, model: 'claude/claude-sonnet-5-5', cardId: 'card-1', contextWindow: 1000000 })
+    expect(r.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('1000000')
+    expect(routeEnv({ harness: 'claude', gateway, model: 'ollama/qwen3', cardId: 'card-1', contextWindow: null }).env).not.toHaveProperty('CLAUDE_CODE_MAX_CONTEXT_TOKENS')
   })
 
   it('codex: the provider table on the command line, the key through env_key', () => {

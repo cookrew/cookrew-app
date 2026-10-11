@@ -111,6 +111,8 @@ describe('state', () => {
       expect(online.models.map((m) => m.id)).toEqual(['group/smart', 'claude/claude-sonnet-5-5', 'deepseek/deepseek-chat'])
       expect(online.providers).toBe(2)
       expect(online.quotas[0]).toMatchObject({ provider: 'claude', account: 'o@x', kind: 'subscription' })
+      // A catalog provider with no quota row gets one synthesised (round 2: Ollama never appears).
+      expect(online.quotas.map((q) => [q.provider, q.kind])).toEqual([['claude', 'subscription'], ['deepseek', 'key']])
       expect(online.defaultModel).toBeNull()
       expect(online.setup.addGroupLine).toBe('magpie group add smart models=claude/claude-sonnet-5-5,deepseek/deepseek-chat routing=smart')
       expect(online.setup.pluginLine).toBe('magpie plugin add /app/resources/magpie')

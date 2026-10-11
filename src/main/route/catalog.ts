@@ -87,7 +87,9 @@ function toWindow(name: string, row: unknown): RouteQuotaWindow {
     name,
     used: num(r?.used) ?? num(r?.usedPercent) ?? num(r?.utilization) ?? null,
     limit: num(r?.limit) ?? num(r?.total) ?? null,
-    resetsAt: resetAt(r?.resetsAt ?? r?.resets_at ?? r?.reset ?? r?.resetAt)
+    // The real rows carry no reset time (round 2); the field stays for a gateway that does.
+    resetsAt: resetAt(r?.resetsAt ?? r?.resets_at ?? r?.reset ?? r?.resetAt),
+    display: str(r?.display)
   }
 }
 
@@ -124,8 +126,28 @@ export function toQuota(row: unknown): RouteQuota | null {
     plan: str(r.plan),
     kind: kindOf(r, provider),
     windows: windowsOf(r),
-    last: r.last === true
+    last: r.last === true,
+    error: str(r.error)
   }
+}
+
+/**
+ * A quota row for every catalog provider the gateway said nothing about.
+ * Ollama never appears in /v1/magpie/quotas (nothing to allow, nothing to
+ * read), yet the panel must list it as "Ollama · local"; a provider with
+ * models but no row is a local or keyed source with no allowance to show.
+ */
+export function withLocalRows(quotas: readonly RouteQuota[], models: readonly RouteModel[]): RouteQuota[] {
+  const seen = new Set(quotas.map((q) => q.provider.toLowerCase()))
+  const extra: RouteQuota[] = []
+  for (const m of models) {
+    if (m.group) continue
+    const key = m.ownedBy.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    extra.push({ provider: m.ownedBy, account: null, alias: null, plan: null, kind: kindOf({}, m.ownedBy), windows: [], last: false, error: null })
+  }
+  return [...quotas, ...extra]
 }
 
 export function toQuotas(body: unknown): RouteQuota[] {
