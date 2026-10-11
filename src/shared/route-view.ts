@@ -204,6 +204,24 @@ export function shortRoute(id: string): string {
   return tail.length > 0 ? tail : id
 }
 
+/**
+ * What the RTE dial is given: main's choices alone (it alone knows whether
+ * this card's harness can be routed); with none listed, no list and a
+ * sentence — main's note when it sent one, else "no routable models".
+ * Null when the card may not have a dial at all.
+ */
+export function routeDialInput(input: {
+  allowed: boolean
+  /** Main's `choices.route`, or null when main listed none. */
+  routeChoices: readonly string[] | null
+  state: CardRouteState | null
+}): { choices: string[]; notRoutable: string | null } | null {
+  if (!input.allowed) return null
+  if (input.routeChoices === null && input.state === null) return null
+  if (input.routeChoices === null) return { choices: [], notRoutable: input.state?.note ?? ROUTING_COPY.noRoutable }
+  return { choices: [...input.routeChoices], notRoutable: null }
+}
+
 /** A card the owner does not own (a served session) never gets a route dial. */
 export function routeDialAllowed(input: { remote: boolean; served: boolean }): boolean {
   return !input.remote && !input.served

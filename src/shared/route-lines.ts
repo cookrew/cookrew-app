@@ -13,9 +13,17 @@
  * key and presses Enter themselves.
  */
 
-/** A path inside single quotes may hold a space (a packaged "Cookrew Dev.app"); unquoted it may not. */
-const PLUGIN_PATH_QUOTED = "'[A-Za-z0-9._/@~ -]+'"
-const PLUGIN_PATH_BARE = '[A-Za-z0-9._/@~-]+'
+/**
+ * A plugin path starts with / or ~ — never with a dash, so a shaped
+ * RouteState cannot hand the vendor CLI an option. Inside single quotes it
+ * may hold a space (a packaged "Cookrew Dev.app") and the one POSIX escape
+ * for an apostrophe, `'\''`, exactly as main emits it for /Users/d'arcy;
+ * unquoted it may hold neither.
+ */
+const PATH_CHARS = '[A-Za-z0-9._/@~ -]'
+// Regex source `'\\''` — the four characters ' \ ' ' of the shell escape, the backslash escaped for the regex.
+const PLUGIN_PATH_QUOTED = `'[/~]${PATH_CHARS}*(?:'\\\\''${PATH_CHARS}*)*'`
+const PLUGIN_PATH_BARE = '[/~][A-Za-z0-9._/@~-]*'
 
 export const ROUTE_LINE_PATTERNS: readonly RegExp[] = [
   /^curl -fsSL https:\/\/usemagpie\.ai\/install\.sh \| sh$/,
@@ -27,7 +35,8 @@ export const ROUTE_LINE_PATTERNS: readonly RegExp[] = [
   /^npm i(nstall)? -g @[a-z0-9-]+\/[a-z0-9-]+$/,
   /^(claude|claude login|codex login|opencode auth login)$/,
   /^curl -fsSL https:\/\/opencode\.ai\/install \| bash$/,
-  /^brew install [A-Za-z0-9._/@-]+$/
+  // A formula starts with a letter or digit: `--cask` and `-f` are not formulae.
+  /^brew install [A-Za-z0-9][A-Za-z0-9._/@-]*$/
 ]
 
 export function setupLineAllowed(line: string): boolean {
