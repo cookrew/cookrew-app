@@ -51,6 +51,8 @@ export interface RouteEnv {
 
 export const SESSION_HEADER = 'X-Magpie-Session'
 export const ROUTE_DIR = path.join(process.env.HOME ?? '', '.cookrew', 'route')
+/** Which harnesses can be pointed at the gateway per process — all four, each proven with one real turn on 2026-10-11. */
+export const ROUTABLE: Record<HarnessId, boolean> = { claude: true, codex: true, opencode: true, pi: true }
 
 /** The header line claude takes: `Name: value`, one per line. */
 export function sessionHeaderLine(cardId: string): string {
@@ -120,12 +122,35 @@ export function routeEnv(input: RouteEnvInput): RouteEnv {
         routable: true
       }
     }
-    case 'pi':
-      // pi takes a custom provider only from ~/.pi/agent/models.json, which is
-      // the user's own file and global to every pi: there is no per-process
-      // way to point one card at the gateway without rewriting it. Not this
-      // round; the rail says "direct · pi is not routable yet".
-      return { env: {}, args: [], files: [], routable: false }
+    case 'pi': {
+      // PI_CODING_AGENT_DIR moves pi's config directory per process, so a
+      // per-card agent dir holding ONE models.json names the gateway as the
+      // provider `magpie` without touching the user's ~/.pi/agent. Sessions
+      // stay where Cookrew's pi binding looks (PI_CODING_AGENT_SESSION_DIR =
+      // the default). Proven 2026-10-11: one real `pi -p` turn on Ollama
+      // through magpie 0.1.1182 answered, with the route and the usage row
+      // keyed by the session header. The user's extensions, skills and
+      // auth.json in ~/.pi/agent are not loaded by a routed card (its dir is
+      // its own) — the trade this round makes for not rewriting their file.
+      const dir = path.join(ROUTE_DIR, cardId, 'pi')
+      const models = {
+        providers: {
+          magpie: {
+            baseUrl: gateway.v1,
+            api: 'openai-completions',
+            apiKey: gateway.key,
+            headers: { [SESSION_HEADER]: session },
+            models: [{ id: model }]
+          }
+        }
+      }
+      return {
+        env: { PI_CODING_AGENT_DIR: dir, PI_CODING_AGENT_SESSION_DIR: path.join(process.env.HOME ?? '', '.pi', 'agent', 'sessions') },
+        args: ['--provider', 'magpie', '--model', model],
+        files: [{ path: path.join(dir, 'models.json'), content: `${JSON.stringify(models, null, 2)}\n` }],
+        routable: true
+      }
+    }
   }
 }
 

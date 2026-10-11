@@ -15,7 +15,7 @@ import {
   type RouteTurnFacts
 } from '../../shared/route'
 import type { HarnessId } from '../harness'
-import { routeEnv, type RouteEnv } from '../route-env'
+import { ROUTABLE, routeEnv, type RouteEnv } from '../route-env'
 import { fetchCatalog, fetchQuotas, providersOf, withLocalRows, type CatalogFetch } from './catalog'
 import { RouteDecisions, pushLive } from './decisions'
 import { DEFAULT_PORT } from './discovery'
@@ -225,8 +225,14 @@ export class RouteService extends EventEmitter {
       turn: this.decisions.cardTurn(terminalId),
       offline: this.offlineAtSpawn.has(terminalId),
       note: this.noteFor(node, route),
-      gateway: this.deps.monitor.probe.status
+      gateway: this.deps.monitor.probe.status,
+      routable: this.routableOf(node)
     }
+  }
+
+  private routableOf(node: TerminalNodeData | null): boolean {
+    const harness = node ? this.deps.harnessOf(node.command) : null
+    return harness !== null && ROUTABLE[harness]
   }
 
   /**
@@ -249,7 +255,7 @@ export class RouteService extends EventEmitter {
   private noteFor(node: TerminalNodeData | null, route: CardRoute): string | null {
     if (!node) return null
     const harness = this.deps.harnessOf(node.command)
-    if (harness === 'pi') return 'direct · pi is not routable yet'
+    if (harness !== null && !ROUTABLE[harness]) return `direct · ${harness} is not routable`
     if (harness === 'codex' && route !== DIRECT) return 'codex needs a thinking-capable model behind the gateway'
     return null
   }

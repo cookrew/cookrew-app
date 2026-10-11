@@ -97,6 +97,8 @@ export interface HarnessRow {
   inDock: boolean
   installLine: string
   loginLine: string | null
+  /** Can a card of this harness be pointed at the gateway per process? (All four, proven on the real binaries 2026-10-11.) */
+  routable: boolean
 }
 
 export interface RouteSetupLines {
@@ -149,6 +151,8 @@ export interface CardRouteState {
    * it was offline at the spawn.
    */
   gateway: RouteStatus
+  /** The card's harness can be routed; false reads as "direct · <harness> is not routable" on the rail. */
+  routable: boolean
 }
 
 export const DIRECT: CardRoute = 'direct'

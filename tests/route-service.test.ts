@@ -243,14 +243,17 @@ describe('envFor', () => {
     }
   })
 
-  it('pi is not routable this round; opencode gets its config file written 0600', async () => {
+  it('pi routes through a per-card agent dir; opencode is matched by the harness lookup', async () => {
     const fake = await fakeGateway()
     try {
       const svc = service(w, { MAGPIE_ADDR: `:${fake.port}` })
       await svc.refresh()
       const pi = terminal('p1', 'pi', { route: 'group/smart' })
       w.nodes.set('p1', pi)
-      expect(svc.envFor(pi).effective).toBe('direct')
+      const piSpawn = svc.envFor(pi)
+      expect(piSpawn.effective).toBe('group/smart')
+      expect(piSpawn.env.PI_CODING_AGENT_DIR).toMatch(/route\/p1\/pi$/)
+      expect(w.files.some((f) => f.path.endsWith('/p1/pi/models.json'))).toBe(true)
       const oc = terminal('o1', 'opencode', { route: 'group/smart' })
       w.nodes.set('o1', oc)
       // opencode is matched by the service's harnessOf; this fake maps only claude/codex/pi,

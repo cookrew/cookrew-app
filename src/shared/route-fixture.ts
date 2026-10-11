@@ -64,10 +64,10 @@ export function routeFixture(status: RouteState['status'] = 'online', over: Part
         ]
       : [],
     harnesses: [
-      { id: 'claude', name: 'Claude Code', installed: true, signedIn: true, inDock: true, installLine: 'npm i -g @anthropic-ai/claude-code', loginLine: 'claude' },
-      { id: 'codex', name: 'Codex', installed: true, signedIn: online, inDock: true, installLine: 'npm i -g @openai/codex', loginLine: 'codex login' },
-      { id: 'opencode', name: 'OpenCode', installed: false, signedIn: null, inDock: false, installLine: 'curl -fsSL https://opencode.ai/install | bash', loginLine: 'opencode auth login' },
-      { id: 'pi', name: 'Pi', installed: true, signedIn: null, inDock: false, installLine: 'npm i -g @earendil-works/pi-coding-agent', loginLine: null }
+      { id: 'claude', name: 'Claude Code', installed: true, signedIn: true, inDock: true, installLine: 'npm i -g @anthropic-ai/claude-code', loginLine: 'claude', routable: true },
+      { id: 'codex', name: 'Codex', installed: true, signedIn: online, inDock: true, installLine: 'npm i -g @openai/codex', loginLine: 'codex login', routable: true },
+      { id: 'opencode', name: 'OpenCode', installed: false, signedIn: null, inDock: false, installLine: 'curl -fsSL https://opencode.ai/install | bash', loginLine: 'opencode auth login', routable: true },
+      { id: 'pi', name: 'Pi', installed: true, signedIn: null, inDock: false, installLine: 'npm i -g @earendil-works/pi-coding-agent', loginLine: null, routable: true }
     ],
     checkedAt: NOW,
     setup: SETUP_LINES,
@@ -85,6 +85,7 @@ export function cardRouteFixture(over: Partial<CardRouteState> = {}): CardRouteS
     offline: false,
     note: null,
     gateway: 'online',
+    routable: true,
     ...over
   }
 }

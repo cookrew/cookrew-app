@@ -78,9 +78,16 @@ describe('routeEnv', () => {
     expect(config.model).toBe('magpie/group/smart')
   })
 
-  it('pi: not routable this round — nothing in the env, nothing on the line', () => {
-    const r = routeEnv({ harness: 'pi', gateway, model: 'group/smart', cardId: 'card-4' })
-    expect(r).toEqual({ env: {}, args: [], files: [], routable: false })
+  it('pi: a per-card agent dir with one models.json, sessions left where the binding looks, the provider on the line', () => {
+    const r = routeEnv({ harness: 'pi', gateway, model: 'ollama/qwen2.5:1.5b', cardId: 'card-4' })
+    expect(r.routable).toBe(true)
+    expect(r.env.PI_CODING_AGENT_DIR).toMatch(/\.cookrew\/route\/card-4\/pi$/)
+    expect(r.env.PI_CODING_AGENT_SESSION_DIR).toMatch(/\.pi\/agent\/sessions$/)
+    expect(r.args).toEqual(['--provider', 'magpie', '--model', 'ollama/qwen2.5:1.5b'])
+    expect(r.files).toHaveLength(1)
+    expect(r.files[0].path).toBe(`${r.env.PI_CODING_AGENT_DIR}/models.json`)
+    const models = JSON.parse(r.files[0].content) as { providers: { magpie: unknown } }
+    expect(models.providers.magpie).toEqual({ baseUrl: 'http://127.0.0.1:3425/v1', api: 'openai-completions', apiKey: 'magpie-cookrew', headers: { 'X-Magpie-Session': 'cookrew:card-4' }, models: [{ id: 'ollama/qwen2.5:1.5b' }] })
   })
 
   it('the one shell quote leaves plain tokens alone and single-quotes the inline table', () => {
