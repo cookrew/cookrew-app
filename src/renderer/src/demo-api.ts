@@ -460,8 +460,12 @@ export function createDemoApi(): CookrewApi {
             harness: 'Codex' as const,
             name: sentence.split(/\s+/).slice(0, 3).join(' '),
             beside: { id: 'demo-conductor', name: 'Conductor' },
-            alternates: [{ id: 'harness:Claude Code', name: 'Claude Code', reasons: ['Claude Code instead'] }],
+            alternates: [
+              { kind: 'recruit' as const, id: 'harness:Claude Code', name: 'Claude Code', harness: 'Claude Code' as const, reasons: ['Claude Code instead'] },
+              { kind: 'ask' as const, id: 'demo-bench-0', name: 'Bench 0', reasons: ['idle', 'same repo', 'no word matched · 2h'] }
+            ],
             reasons: ['no idle card fits the brief', 'repo-wide → Codex', 'beside Conductor, wired to it'],
+            direct: true,
             token: 'demo-decision',
             holdMs: 1500,
             sentence
@@ -469,8 +473,12 @@ export function createDemoApi(): CookrewApi {
         : {
             kind: 'ask' as const,
             target: { id: 'demo-conductor', name: 'Conductor' },
-            alternates: [{ id: 'demo-bench-0', name: 'Bench 0', reasons: ['idle', 'same repo', 'last touched the bench'] }],
+            alternates: [
+              { kind: 'ask' as const, id: 'demo-bench-0', name: 'Bench 0', reasons: ['idle', 'same repo', 'last touched the bench'] },
+              { kind: 'recruit' as const, id: 'harness:Claude Code', name: 'Claude Code', harness: 'Claude Code' as const, reasons: ['a brief with no shape → Claude Code'] }
+            ],
             reasons: ['idle', 'same repo', 'last touched README · 2h'],
+            recruit: { harness: 'Claude Code' as const, name: sentence.split(/\s+/).slice(0, 3).join(' '), beside: { id: 'demo-conductor', name: 'Conductor' }, direct: true },
             token: 'demo-decision',
             holdMs: 1500,
             sentence

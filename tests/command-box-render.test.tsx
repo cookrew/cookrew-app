@@ -66,7 +66,11 @@ const rows: InboxRow[] = [
 const decision: Decision = {
   kind: 'ask',
   target: { id: 'forge', name: 'Forge' },
-  alternates: [{ id: 'tinker', name: 'Tinker', reasons: ['idle', 'same repo', 'role: Bugfix'] }],
+  alternates: [
+    { kind: 'ask', id: 'tinker', name: 'Tinker', reasons: ['idle', 'same repo', 'role: Bugfix'] },
+    { kind: 'recruit', id: 'harness:Claude Code', name: 'Claude Code', harness: 'Claude Code', reasons: ['a brief with no shape → Claude Code'] }
+  ],
+  recruit: { harness: 'Claude Code', name: 'Install Section', beside: null, direct: true },
   reasons: ['idle', 'same repo', 'last touched README · 2h'],
   token: 't1',
   holdMs: 1500,
@@ -107,7 +111,7 @@ describe('CommandBox — one surface: the inbox rows, the field, the echo', () =
     expect(html).toContain('1.5 s · or ↵ now')
     expect(html).toContain('change ▾')
     expect(html).not.toContain('cmd-rows')
-    expect(echoLine({ ...decision, kind: 'recruit', harness: 'Codex', name: 'Prune v1', beside: null, reasons: ['no idle card fits the brief', 'repo-wide → Codex', 'placed on the bench'] } as Decision)).toBe(
+    expect(echoLine({ ...decision, kind: 'recruit', harness: 'Codex', name: 'Prune v1', beside: null, direct: false, reasons: ['no idle card fits the brief', 'repo-wide → Codex', 'placed on the bench'] } as Decision)).toBe(
       '+ Codex card · Prune v1 (no idle card fits the brief · repo-wide → Codex · placed on the bench)'
     )
   })
@@ -145,5 +149,16 @@ describe('CommandBox — one surface: the inbox rows, the field, the echo', () =
     expect(html.match(/data-kind="/g)).toHaveLength(3)
     // closed on the desktop renders nothing at all
     expect(renderToStaticMarkup(<CommandBox open={false} onClose={() => undefined} phone={false} rows={rows} />)).toBe('')
+  })
+})
+
+describe('round 2 — the change list names the other path, and a direct recruit says so', () => {
+  it('"+ new Claude Code card" for the recruit alternate, "→ Tinker instead" for a card', async () => {
+    const { altLabel, echoLine } = await box()
+    expect(altLabel({ kind: 'recruit', id: 'harness:Claude Code', name: 'Claude Code', harness: 'Claude Code', reasons: [] })).toBe('+ new Claude Code card')
+    expect(altLabel({ kind: 'ask', id: 'tinker', name: 'Tinker', reasons: [] })).toBe('→ Tinker instead')
+    expect(echoLine({ ...decision, kind: 'recruit', harness: 'Pi', name: 'Draft Limerick', beside: null, direct: true, reasons: ['no idle card fits the brief', 'light · cheap · local → Pi', 'placed on the bench'] } as Decision)).toBe(
+      '+ Pi card · Draft Limerick (no idle card fits the brief · light · cheap · local → Pi · placed on the bench) · will run direct'
+    )
   })
 })

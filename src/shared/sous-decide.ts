@@ -11,6 +11,7 @@
 // systemone) is a refinement main may add behind a flag, not a dependency.
 
 import type { BoardPhase } from './board'
+import { contentWords, hasGenericVerb, saidWords, STOP_WORDS } from './sous-words'
 
 export type Harness = 'Claude Code' | 'Codex' | 'OpenCode' | 'Pi'
 
@@ -35,16 +36,30 @@ export interface DecideContext {
   /** The active workspace's directory. */
   workdir: string | null
   now: number
+  /** Absent = no route service: today's shape rules, every harness runs direct. */
+  routing?: RoutingFacts
 }
 
+/** Another way to go: a card (`ask`, id = the card) or a new card (`recruit`, id = `harness:<name>`). The echo always offers the other path. */
 export interface Alternate {
+  kind: 'ask' | 'recruit'
   id: string
   name: string
   reasons: string[]
+  harness?: Harness
+}
+
+/** What a recruit would be, carried on an ask so the alternate can be committed without re-deciding. */
+export interface RecruitPath {
+  harness: Harness
+  name: string
+  beside: { id: string; name: string } | null
+  /** The harness will run direct — no default route, or the harness cannot be routed. */
+  direct: boolean
 }
 
 export type DecisionDraft =
-  | { kind: 'ask'; target: { id: string; name: string }; alternates: Alternate[]; reasons: string[] }
+  | { kind: 'ask'; target: { id: string; name: string }; alternates: Alternate[]; reasons: string[]; recruit: RecruitPath }
   | {
       kind: 'recruit'
       harness: Harness
@@ -54,6 +69,8 @@ export type DecisionDraft =
       beside: { id: string; name: string } | null
       alternates: Alternate[]
       reasons: string[]
+      /** The chosen harness will run direct (no default route set, or it is not routable). */
+      direct: boolean
     }
   | { kind: 'question'; question: string; reasons: string[] }
 
@@ -64,26 +81,13 @@ export const DECISION_TTL_MS = 30_000
 
 // ── words ─────────────────────────────────────────────────────────────────
 
-const STOP = new Set(
-  'the a an and or of to in on for with into from by at as is are be this that it its my our your please make add fix do all every keep then also just 把 的 了 和 与 并 在 给 让 要 一个 这个 那个 所有 全部 一下'.split(' ')
-)
+/** Content words: stopwords and generic task verbs never count (shared/sous-words.ts). */
+export const words = contentWords
 
-/** Lowercased content words; CJK runs become overlapping bigrams so "安装一节" and "安装" meet. */
-export function words(text: string): Set<string> {
-  const out = new Set<string>()
-  for (const token of text.toLowerCase().match(/[a-z0-9][a-z0-9_./-]*|[一-鿿]+/g) ?? []) {
-    if (/^[一-鿿]+$/.test(token)) {
-      if (token.length === 1) continue
-      for (let i = 0; i + 1 < token.length || i === 0; i++) {
-        const bigram = token.slice(i, i + 2)
-        if (!STOP.has(bigram)) out.add(bigram)
-      }
-      continue
-    }
-    if (token.length < 2 || STOP.has(token)) continue
-    out.add(token.replace(/^[./-]+|[./-]+$/g, ''))
-  }
-  return out
+/** Routability, as the route service knows it: is a fleet default set, and which harnesses can be pointed at the gateway. */
+export interface RoutingFacts {
+  defaultSet: boolean
+  routable: Partial<Record<Harness, boolean>>
 }
 
 const overlap = (a: Set<string>, b: Set<string>): string[] => [...a].filter((w) => b.has(w))
@@ -102,9 +106,10 @@ export function isQuestion(sentence: string): boolean {
   if (QUESTION_RE.test(s)) return true
   // A date and a verb with nothing to act on ("release next week") is a plan
   // said out loud; a brief that happens to mention a date has an object too.
-  if (PLAN_RE.test(s) && words(s).size <= 3) return true
+  if (PLAN_RE.test(s) && saidWords(s).size <= 3) return true
   // Two words with no verb anyone could act on is a remark, not a brief.
-  return words(s).size <= 2 && !TASK_VERB_RE.test(s)
+  // Counted with the verbs in: "compose a sonnet" is a brief, not a remark.
+  return saidWords(s).size <= 2 && !TASK_VERB_RE.test(s) && !hasGenericVerb(s)
 }
 
 /** What Sous asks back — it names the sentence, so the owner sees what was heard. */
@@ -119,7 +124,18 @@ const LONG_RE = /\b(?:tests?|spec|ci|e2e|end.to.end|multi.?step|pipeline|feature
 const REPO_RE = /\b(?:repo-?wide|whole repo|every|all|refactor|review|audit|rename across|prune|delete every|clean ?up|lint|dead code)\b|(?:全仓|整个仓库|所有|全部|重构|评审|审计|清理|死代码)/iu
 const LIGHT_RE = /\b(?:quick|small|tiny|cheap|local|offline|explain|summari[sz]e|what does|look up|draft|one.?liner|typo)\b|(?:快速|小改|便宜|本地|离线|解释|总结|看看|草稿|错别字)/iu
 
-export function pickHarness(sentence: string): { harness: Harness; reason: string } {
+export function pickHarness(sentence: string, routing?: RoutingFacts): { harness: Harness; reason: string; direct: boolean } {
+  const shaped = shapeHarness(sentence)
+  if (!routing?.defaultSet) return { ...shaped, direct: true }
+  // A default route is set: a harness that cannot be routed would silently
+  // run direct — pick Claude Code instead and say why.
+  if (routing.routable[shaped.harness] === false) {
+    return { harness: 'Claude Code', reason: `${shaped.harness} is not routable → Claude Code on the default route`, direct: false }
+  }
+  return { ...shaped, direct: false }
+}
+
+function shapeHarness(sentence: string): { harness: Harness; reason: string } {
   if (LIGHT_RE.test(sentence) && !LONG_RE.test(sentence)) return { harness: 'Pi', reason: 'light · cheap · local → Pi' }
   if (REPO_RE.test(sentence) && !LONG_RE.test(sentence)) return { harness: 'Codex', reason: 'repo-wide → Codex' }
   if (LONG_RE.test(sentence)) return { harness: 'Claude Code', reason: 'long · multi-step · tests → Claude Code' }
@@ -133,7 +149,7 @@ export function titleOf(sentence: string, max = 24): string {
   if (/[一-鿿]/.test(cleaned)) return cleaned.length > 14 ? `${cleaned.slice(0, 14).trimEnd()}…` : cleaned
   const picked = cleaned
     .split(/\s+/)
-    .filter((w) => !STOP.has(w.toLowerCase()))
+    .filter((w) => !STOP_WORDS.has(w.toLowerCase()))
     .slice(0, 3)
     .map((w) => w.replace(/^[a-z]/, (c) => c.toUpperCase()))
     .join(' ')
@@ -153,21 +169,29 @@ function ago(at: number, now: number): string {
   return h < 48 ? `${h}h` : `${Math.round(h / 24)}d`
 }
 
+/** A card matches on ANY role word, or on at least two content words of its last task — never on glue. */
+export const TASK_OVERLAP_MIN = 2
+
 export function decide(sentence: string, ctx: DecideContext): DecisionDraft {
   const said = words(sentence)
   if (isQuestion(sentence)) {
     return { kind: 'question', question: questionBack(sentence), reasons: ['a question, not a brief', 'nothing is created', 'answer in the box'] }
   }
   const sameRepo = ctx.candidates.filter((c) => ctx.workdir !== null && c.cwd === ctx.workdir)
-  const fit = sameRepo
-    .filter((c) => IDLE.has(c.phase) && !c.contextFull)
+  const idle = sameRepo.filter((c) => IDLE.has(c.phase) && !c.contextFull)
+  const fit = idle
     .map((c) => {
       const role = overlap(words(`${c.role ?? ''}`), said)
       const touched = overlap(words(c.lastTask ?? ''), said)
-      return { c, role, touched, score: role.length * 2 + touched.length }
+      const taskHit = touched.length >= TASK_OVERLAP_MIN ? touched.length : 0
+      return { c, role, touched, score: role.length * 2 + taskHit }
     })
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score || b.c.lastActivityAt - a.c.lastActivityAt)
+  const orch = sameRepo.find((c) => c.orch) ?? ctx.candidates.find((c) => c.orch) ?? null
+  const picked = pickHarness(sentence, ctx.routing)
+  const recruitPath: RecruitPath = { harness: picked.harness, name: titleOf(sentence), beside: orch ? { id: orch.id, name: orch.name } : null, direct: picked.direct }
+  const recruitAlt: Alternate = { kind: 'recruit', id: `harness:${picked.harness}`, name: picked.harness, harness: picked.harness, reasons: [picked.reason] }
   if (fit.length > 0) {
     const reasonsOf = (x: (typeof fit)[number]): string[] => [
       x.c.phase === 'waiting' ? 'waiting' : 'idle',
@@ -178,26 +202,29 @@ export function decide(sentence: string, ctx: DecideContext): DecisionDraft {
     return {
       kind: 'ask',
       target: { id: best.c.id, name: best.c.name },
-      alternates: rest.slice(0, 2).map((x) => ({ id: x.c.id, name: x.c.name, reasons: reasonsOf(x) })),
-      reasons: reasonsOf(best)
+      // The next fit, then always the other path: a new card.
+      alternates: [...rest.slice(0, 1).map((x): Alternate => ({ kind: 'ask', id: x.c.id, name: x.c.name, reasons: reasonsOf(x) })), recruitAlt],
+      reasons: reasonsOf(best),
+      recruit: recruitPath
     }
   }
-  const { harness, reason } = pickHarness(sentence)
-  const orch = sameRepo.find((c) => c.orch) ?? ctx.candidates.find((c) => c.orch) ?? null
-  const idleButWrong = sameRepo.filter((c) => IDLE.has(c.phase) && !c.contextFull).length
   const alternates: Alternate[] = (['Claude Code', 'Codex', 'Pi'] as const)
-    .filter((h) => h !== harness)
+    .filter((h) => h !== picked.harness && ctx.routing?.routable[h] !== false)
     .slice(0, 1)
-    .map((h) => ({ id: `harness:${h}`, name: h, reasons: [`${h} instead`] }))
+    .map((h): Alternate => ({ kind: 'recruit', id: `harness:${h}`, name: h, harness: h, reasons: [`${h} instead`] }))
+  // The other path for a recruit: the best idle card here, even though no word matched.
+  const bench = [...idle].sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0]
+  if (bench) alternates.push({ kind: 'ask', id: bench.id, name: bench.name, reasons: ['idle', 'same repo', `no word matched · ${ago(bench.lastActivityAt, ctx.now)}`] })
   return {
     kind: 'recruit',
-    harness,
-    name: titleOf(sentence),
-    beside: orch ? { id: orch.id, name: orch.name } : null,
+    harness: picked.harness,
+    name: recruitPath.name,
+    beside: recruitPath.beside,
     alternates,
+    direct: picked.direct,
     reasons: [
-      sameRepo.length === 0 ? 'no card in this repo' : idleButWrong === 0 ? 'every card here is busy or full' : 'no idle card fits the brief',
-      reason,
+      sameRepo.length === 0 ? 'no card in this repo' : idle.length === 0 ? 'every card here is busy or full' : 'no idle card fits the brief',
+      picked.reason,
       orch ? `beside ${orch.name}, wired to it` : 'placed on the bench'
     ]
   }

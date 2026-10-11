@@ -6,6 +6,7 @@ import { createInboxFeed, enterDuringHold, holdsInbox } from './command-box-feed
 import { waitedFor, type InboxRow } from '../../shared/inbox-rank'
 import { INBOX_MARK } from '../../shared/inbox-copy'
 import type { Decision, SousCommandResult } from '../../main/sous-control'
+import type { Alternate } from '../../shared/sous-decide'
 import './command-box.css'
 
 /**
@@ -277,8 +278,8 @@ export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecis
               {alts && (
                 <span className="cmd-alts">
                   {echo.decision.alternates.map((alt) => (
-                    <button key={alt.id} type="button" onClick={() => hold.current?.commit(alt.id)}>
-                      → {alt.name} ({alt.reasons.join(' · ')})
+                    <button key={alt.id} type="button" data-alt={alt.kind} onClick={() => hold.current?.commit(alt.id)}>
+                      {altLabel(alt)} ({alt.reasons.join(' · ')})
                     </button>
                   ))}
                 </span>
@@ -296,11 +297,16 @@ export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecis
   )
 }
 
-/** The line under the box: who and the three reasons, or the question back. */
+/** The line under the box: who and the three reasons, or the question back. A recruit that runs direct says so. */
 export function echoLine(decision: Decision): string {
   if (decision.kind === 'ask') return `→ ${decision.target.name} (${decision.reasons.join(' · ')})`
-  if (decision.kind === 'recruit') return `+ ${decision.harness} card · ${decision.name} (${decision.reasons.join(' · ')})`
+  if (decision.kind === 'recruit') return `+ ${decision.harness} card · ${decision.name} (${decision.reasons.join(' · ')})${decision.direct ? ' · will run direct' : ''}`
   return decision.question
+}
+
+/** The other path, named as the thing it does: a new card, or a card instead. */
+export function altLabel(alt: Alternate): string {
+  return alt.kind === 'recruit' ? `+ new ${alt.harness ?? alt.name} card` : `→ ${alt.name} instead`
 }
 
 /** The sealed-note slot renders after the zoom; look a few times, then give up quietly. The timer is the box's to clear. */

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { decide, isQuestion, pickHarness, placeBeside, titleOf, type DecideCandidate } from '../src/shared/sous-decide'
+import { contentWords } from '../src/shared/sous-words'
 
 const NOW = Date.parse('2026-10-11T10:00:00Z')
 const H = 3_600_000
@@ -43,7 +44,8 @@ describe('decide — ask an existing card', () => {
     if (d.kind !== 'ask') return
     expect(d.target.name).toBe('Tinker')
     expect(d.reasons[2]).toBe('role: Bugfix')
-    expect(d.alternates).toEqual([])
+    // no second fit — but the other path is always offered
+    expect(d.alternates.map((a) => a.kind)).toEqual(['recruit'])
   })
 
   it('never picks a working card, a full card, or a card in another repo', () => {
@@ -430,5 +432,114 @@ describe('SousController — round 4: the recruited card gets the brief', () => 
     expect(h.calls.filter((c) => c.startsWith('deliver '))).toHaveLength(1)
     // spent now
     expect((await h.sous.commit(token)).error).toBe('expired')
+  })
+})
+
+describe('round 2 — overlap is CONTENT, routability is respected, the other path is always offered', () => {
+  const H2 = 3_600_000
+  const today = [
+    card({ id: 'conductor', name: 'Conductor', orch: true, phase: 'working', lastTask: 'orchestrating the release' }),
+    card({ id: 'fresco', name: 'Fresco', role: 'UI designer', lastTask: 'a haiku about cables', lastActivityAt: NOW - H2 }),
+    card({ id: 'velvet', name: 'Velvet', role: 'Panel', lastTask: 'notes about the release page', lastActivityAt: NOW - 30 * 60_000 }),
+    card({ id: 'pi-card', name: 'Scribe', role: null, lastTask: 'draft of the changelog', lastActivityAt: NOW - H2 })
+  ]
+  const c2 = { candidates: today, workdir: '/repo', now: NOW }
+  const routed = { ...c2, routing: { defaultSet: true, routable: { 'Claude Code': true, Codex: true, Pi: false } } }
+
+  it('stopwords and generic task verbs never count as overlap', () => {
+    expect([...contentWords('write a haiku about cables')]).toEqual(['haiku', 'cables'])
+    expect([...contentWords('please draft a limerick, make it about the release')]).toEqual(['limerick', 'release'])
+    expect([...contentWords('say something')]).toEqual(['something'])
+  })
+
+  it('"write a haiku about cables" → Fresco, and only because of haiku + cables (two content words of its last task)', () => {
+    const d = decide('write a haiku about cables', c2)
+    expect(d.kind).toBe('ask')
+    if (d.kind !== 'ask') return
+    expect(d.target.name).toBe('Fresco')
+    expect(d.reasons[2]).toMatch(/last touched haiku cables/)
+    // Velvet shares only "about" — glue, not a match — so it is not even an alternate card
+    expect(d.alternates.filter((a) => a.kind === 'ask')).toEqual([])
+    expect(d.alternates.at(-1)).toMatchObject({ kind: 'recruit', id: 'harness:Claude Code', harness: 'Claude Code' })
+    expect(d.recruit).toMatchObject({ harness: 'Claude Code', beside: { id: 'conductor', name: 'Conductor' }, direct: true })
+  })
+
+  it('a single content word of a last task is not enough: "the changelog is wrong" does not go to the card that drafted it', () => {
+    const d = decide('fix the changelog entry', c2)
+    // "changelog" matches Scribe's last task once — one content word is not a match
+    expect(d.kind).toBe('recruit')
+  })
+
+  it('a role word still matches on its own', () => {
+    const d = decide('the panel header is misaligned', c2)
+    expect(d.kind).toBe('ask')
+    if (d.kind === 'ask') expect(d.target.name).toBe('Velvet')
+  })
+
+  it('"compose a sonnet about volcanoes" recruits, and with a default route set never the Pi card', () => {
+    const plain = decide('compose a sonnet about volcanoes', c2)
+    expect(plain.kind).toBe('recruit')
+    const light = decide('draft a limerick', c2)
+    expect(light.kind).toBe('recruit')
+    if (light.kind === 'recruit') {
+      // today's shape rule, no default route: light → Pi, and it says it runs direct
+      expect(light.harness).toBe('Pi')
+      expect(light.direct).toBe(true)
+    }
+    const routedLight = decide('draft a limerick', routed)
+    expect(routedLight.kind).toBe('recruit')
+    if (routedLight.kind !== 'recruit') return
+    expect(routedLight.harness).toBe('Claude Code')
+    expect(routedLight.direct).toBe(false)
+    expect(routedLight.reasons[1]).toBe('Pi is not routable → Claude Code on the default route')
+    // the harness alternate offered is routable too, never Pi
+    expect(routedLight.alternates.find((a) => a.kind === 'recruit')?.harness).toBe('Codex')
+  })
+
+  it('a recruit always offers the best idle card as the other path', () => {
+    const d = decide('compose a sonnet about volcanoes', c2)
+    if (d.kind !== 'recruit') return
+    const bench = d.alternates.find((a) => a.kind === 'ask')
+    // the most recently active idle card here
+    expect(bench).toMatchObject({ id: 'velvet', name: 'Velvet' })
+    expect(bench?.reasons[2]).toMatch(/no word matched/)
+  })
+
+  it('pickHarness keeps the shape rules when no default is set', () => {
+    expect(pickHarness('quick: explain this file', { defaultSet: false, routable: { Pi: false } })).toMatchObject({ harness: 'Pi', direct: true })
+    expect(pickHarness('quick: explain this file', { defaultSet: true, routable: { Pi: false } })).toMatchObject({ harness: 'Claude Code', direct: false })
+    expect(pickHarness('Wire the inbox into the bar', { defaultSet: true, routable: {} })).toMatchObject({ harness: 'Claude Code', direct: false })
+  })
+})
+
+describe('SousController — round 2: the alternate is the OTHER path, and the commit follows it', () => {
+  it('an ask committed with the recruit alternate recruits, with the recruit path the decision carried', async () => {
+    const h = controller()
+    const r = await h.sous.handle({ text: 'Make the install section of README English and add a test for the install script', surface: 'canvas', box: true })
+    expect(r.decision?.kind).toBe('ask')
+    const alt = r.decision?.kind === 'ask' ? r.decision.alternates.find((a) => a.kind === 'recruit') : undefined
+    expect(alt?.id).toBe('harness:Claude Code')
+    const out = await h.sous.commit(r.decision?.token ?? '', { target: alt?.id })
+    expect(out.intent).toBe('create')
+    expect(h.calls.find((c) => c.startsWith('recruit '))).toContain('recruit Claude Code "Make Install Section" beside conductor')
+    expect(h.calls.filter((c) => c.startsWith('submit'))).toEqual([])
+  })
+
+  it('a recruit committed with the card alternate asks that card instead', async () => {
+    const h = controller()
+    const r = await h.sous.handle({ text: 'compose a sonnet about volcanoes', surface: 'canvas', box: true })
+    expect(r.decision?.kind).toBe('recruit')
+    const alt = r.decision?.kind === 'recruit' ? r.decision.alternates.find((a) => a.kind === 'ask') : undefined
+    expect(alt).toBeDefined()
+    const out = await h.sous.commit(r.decision?.token ?? '', { target: alt?.id })
+    expect(out.intent).toBe('ask')
+    expect(h.calls.filter((c) => c.startsWith('recruit '))).toEqual([])
+    expect(h.calls.filter((c) => c.startsWith('submit'))).toEqual([`submit ${alt?.id} compose a sonnet about volcanoes`])
+  })
+
+  it('a recruit echo says it will run direct when nothing routes it', async () => {
+    const h = controller()
+    const r = await h.sous.handle({ text: 'compose a sonnet about volcanoes', surface: 'canvas', box: true })
+    expect(r.spoken).toContain('· will run direct')
   })
 })

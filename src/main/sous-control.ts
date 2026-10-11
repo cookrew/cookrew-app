@@ -25,7 +25,7 @@ import {
 import { randomUUID } from 'node:crypto'
 import { rankHearings, vocabularyOf } from '../shared/sous-hearing'
 import type { UiCommand } from '../shared/sous-ui'
-import { DECISION_HOLD_MS, DECISION_TTL_MS, decide, type DecideCandidate, type DecisionDraft, type Harness } from '../shared/sous-decide'
+import { DECISION_HOLD_MS, DECISION_TTL_MS, decide, type DecideCandidate, type DecisionDraft, type Harness, type RoutingFacts } from '../shared/sous-decide'
 
 export interface SousControlDeps {
   /** The live roster, read per sentence — names change under a running app. */
@@ -75,6 +75,8 @@ export interface SousControlDeps {
     deliver: (input: { nodeId: string; sentence: string; originId: string | null }) => Promise<void>
     /** Mint the token a decision travels under. */
     token?: () => string
+    /** Routability from the route service: whether a default route is set, which harnesses can be routed. */
+    routing?: () => RoutingFacts | undefined
   }
 }
 
@@ -165,6 +167,8 @@ const DECIDING_SURFACES: ReadonlySet<Surface> = new Set(['canvas', 'phone'])
 const NOT_A_CHOICE = { en: 'That is not one of the choices.', zh: '这不在可选项里。' } as const
 const NOT_YOURS = { en: 'That decision was made for another box.' } as const
 const IN_FLIGHT = { en: 'That brief is already on its way.' } as const
+/** Appended to a recruit echo whose harness runs direct (no default route, or not routable). */
+export const DIRECT_NOTE = ' · will run direct'
 
 const EXPIRED = { en: 'That decision expired — say it again.', zh: '这个决定已过期，再说一次。' } as const
 const SENT = {
@@ -180,7 +184,7 @@ const RECRUITED = {
 /** The line under the box: who, and the three reasons — or the question back. */
 export function echoOf(decision: Decision, lang: Lang): string {
   if (decision.kind === 'ask') return `→ ${decision.target.name} (${decision.reasons.join(' · ')})`
-  if (decision.kind === 'recruit') return `+ ${decision.harness} card · ${decision.name} (${decision.reasons.join(' · ')})`
+  if (decision.kind === 'recruit') return `+ ${decision.harness} card · ${decision.name} (${decision.reasons.join(' · ')})${decision.direct ? DIRECT_NOTE : ''}`
   return lang === 'zh' ? decision.question : decision.question
 }
 
@@ -365,7 +369,7 @@ export class SousController {
   private async decideStep(sentence: string, key: string, surface: Surface, lang: Lang): Promise<SousCommandResult> {
     const deps = this.deps.decide
     if (!deps) return { intent: 'none', spoken: '' }
-    const draft = decide(sentence, { candidates: await deps.candidates(), workdir: deps.workdir(), now: this.now() })
+    const draft = decide(sentence, { candidates: await deps.candidates(), workdir: deps.workdir(), now: this.now(), routing: deps.routing?.() })
     const token = deps.token?.() ?? randomUUID()
     const decision: Decision = { ...draft, token, holdMs: DECISION_HOLD_MS, sentence }
     this.sweepDecisions()
@@ -402,8 +406,13 @@ export class SousController {
     slot.committing = true
     try {
       let result: SousCommandResult
-      if (decision.kind === 'ask') {
-        const agent = agentOf(roster, choice.target ?? decision.target.id)
+      // The chosen path, which may be the OTHER one: an ask committed with a
+      // `harness:` target recruits; a recruit committed with a card id asks.
+      const path = chosenPath(decision, choice.target)
+      if (path.kind === 'question') {
+        result = { intent: 'decide', spoken: decision.kind === 'question' ? decision.question : '' }
+      } else if (path.kind === 'ask') {
+        const agent = agentOf(roster, path.agentId)
         await this.moveTo(agent.workspaceId)
         this.deps.ui({ kind: 'zoom', nodeId: agent.id }, agent.workspaceId)
         this.deps.ui({ kind: 'focus-input', nodeId: agent.id }, agent.workspaceId)
@@ -412,31 +421,29 @@ export class SousController {
         // (the box's surfaces both submit; the rule is deliver's).
         const sent = await this.deliver(agent, decision.sentence, surface, lang, SENT[lang](agent.name))
         result = { intent: 'ask', ...sent, spoken: SENT[lang](agent.name) }
-      } else if (decision.kind === 'recruit') {
+      } else {
         const deps = this.deps.decide
         if (!deps) throw new Error('recruiting is not wired on this desktop')
-        const chosen = (choice.target?.startsWith('harness:') ? choice.target.slice('harness:'.length) : decision.harness) as Harness
         // A card recruited by an earlier commit whose delivery failed is
         // reused: the retry delivers to it instead of minting a second one.
-        const harness = slot.recruited?.harness ?? chosen
+        const harness = slot.recruited?.harness ?? path.harness
+        const beside = path.beside
         let node = slot.recruited
         if (!node) {
-          const made = await deps.recruit({ preset: harness, name: decision.name, brief: decision.sentence, besideId: decision.beside?.id ?? null })
+          const made = await deps.recruit({ preset: harness, name: path.name, brief: decision.sentence, besideId: beside?.id ?? null })
           node = { ...made, harness }
           slot.recruited = node
-          if (decision.beside) this.deps.connect(decision.beside.id, node.id)
-          this.note('recruit', node.id, `${harness} · ${node.name}${decision.beside ? ` ↔ ${decision.beside.name}` : ''}`)
+          if (beside) this.deps.connect(beside.id, node.id)
+          this.note('recruit', node.id, `${harness} · ${node.name}${beside ? ` ↔ ${beside.name}` : ''}`)
         }
         const workspaceId = this.deps.activeWorkspaceId() ?? ''
         this.deps.ui({ kind: 'zoom', nodeId: node.id }, workspaceId)
         this.focus.set(key, node.id)
         // The sentence goes in through the dispatch engine, which waits for
         // the harness to reach its prompt; "sent" is said only once it has.
-        await deps.deliver({ nodeId: node.id, sentence: decision.sentence, originId: decision.beside?.id ?? null })
+        await deps.deliver({ nodeId: node.id, sentence: decision.sentence, originId: beside?.id ?? null })
         this.note('prompt', node.id, node.name)
         result = { intent: 'create', spoken: RECRUITED[lang](harness, node.name), agentId: node.id, text: decision.sentence }
-      } else {
-        result = { intent: 'decide', spoken: decision.question }
       }
       // Spent only now: a delivery that threw left the token in place, so the
       // same echo can be committed again instead of typing the brief twice.
@@ -512,6 +519,20 @@ export class SousController {
 function isCommandThatResolved(parsed: ReturnType<typeof parseUtterance>): boolean {
   if (!parsed.ok) return parsed.needs === 'which-agent' || parsed.needs === 'which-workspace' || parsed.needs === 'bad-name'
   return parsed.intent.kind !== 'none' && parsed.intent.kind !== 'prompt'
+}
+
+/** Where a commit goes: the decision's own path, or the alternate the owner picked — across kinds. */
+type ChosenPath = { kind: 'ask'; agentId: string } | { kind: 'recruit'; harness: Harness; name: string; beside: { id: string; name: string } | null } | { kind: 'question' }
+
+export function chosenPath(decision: Decision, target: string | undefined): ChosenPath {
+  if (decision.kind === 'question') return { kind: 'question' }
+  if (decision.kind === 'ask') {
+    if (target?.startsWith('harness:')) return { kind: 'recruit', ...decision.recruit, harness: target.slice('harness:'.length) as Harness }
+    return { kind: 'ask', agentId: target ?? decision.target.id }
+  }
+  if (target !== undefined && !target.startsWith('harness:')) return { kind: 'ask', agentId: target }
+  const harness = (target ? target.slice('harness:'.length) : decision.harness) as Harness
+  return { kind: 'recruit', harness, name: decision.name, beside: decision.beside }
 }
 
 function callerKey(surface: Surface, callerId: string | undefined): string {

@@ -11,7 +11,7 @@ import { cachedDispatchReader, wireInbox } from './inbox-wiring'
 import { createWindowHold } from './inbox-window-hold'
 import { deliverToRecruit } from './recruit-delivery'
 import { recruitPatch, spawnInjectionFor } from './recruit-node'
-import { placeBeside, type DecideCandidate } from '../shared/sous-decide'
+import { placeBeside, type DecideCandidate, type Harness } from '../shared/sous-decide'
 import type { PtySession } from './pty'
 import type { PaneCardInfo } from './multiplexer'
 import { paneCardFor, reportAllPaneBindings, type BindableTerminal } from './pane-bindings'
@@ -5593,6 +5593,20 @@ app.whenReady().then(() => {
       // delivered by herdr once the harness is at its prompt, on the ledger.
       deliver: async (input) => {
         await deliverToRecruit(dispatchService, input)
+      },
+      // Routability, read from the route service: a default route set means
+      // a recruit should land on a harness the gateway can carry. `routable`
+      // comes from HarnessRow when the service reports it (round 2 contract);
+      // until then the one harness route-env refuses is pi.
+      routing: () => {
+        const state = routeService.state()
+        const names: Record<string, Harness> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', pi: 'Pi' }
+        const routable: Partial<Record<Harness, boolean>> = { Pi: false }
+        for (const row of state.harnesses) {
+          const flag = (row as { routable?: boolean }).routable
+          if (flag !== undefined) routable[names[row.id]] = flag
+        }
+        return { defaultSet: state.defaultModel !== null, routable }
       }
     }
   })

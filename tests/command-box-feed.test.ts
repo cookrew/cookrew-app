@@ -61,7 +61,7 @@ describe('createInboxFeed — subscribe and unsubscribe are paired', () => {
 })
 
 describe('enterDuringHold', () => {
-  const decision = { kind: 'ask', target: { id: 'forge', name: 'Forge' }, alternates: [], reasons: [], token: 't', holdMs: 1500, sentence: 'Make the install section of README English' } as Decision
+  const decision = { kind: 'ask', target: { id: 'forge', name: 'Forge' }, alternates: [], reasons: [], token: 't', holdMs: 1500, sentence: 'Make the install section of README English' } as unknown as Decision
   it('the same sentence commits; a changed one cancels the hold and resubmits', () => {
     expect(enterDuringHold('Make the install section of README English', decision)).toBe('commit')
     expect(enterDuringHold('  Make the install section of README English ', decision)).toBe('commit')
