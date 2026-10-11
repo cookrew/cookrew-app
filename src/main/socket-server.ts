@@ -34,6 +34,8 @@ import {
   replyText,
   terminalDeliveryDeps
 } from './ask-delivery'
+import { cmdSecret, SECRET_EXIT, SecretCliError, type SecretAudit } from './secret-cli'
+import type { SecretsStore } from './secrets-store'
 import { PRESETS } from './presets'
 import { RoutineScheduler, parseInterval } from './routines'
 import type { VoiceEngine } from './voice'
@@ -65,6 +67,12 @@ export interface SocketServerDeps {
   signal?: (moment: { from: string; to: string; kind: 'ask' | 'answer' | 'write' | 'read' }) => void
   /** Durable global agent directory (~/.cookrew/agents.json). */
   agents: AgentRegistry
+  /**
+   * The sealed slots (secrets-store.ts) and their audit line. Absent in a
+   * test server that has none: `cookrew secret` then says so and exits 3.
+   */
+  secrets?: SecretsStore
+  audit?: (event: SecretAudit) => void
   /** Fork an agent from one of its turns (same path as IPC forking). */
   forkTerminal: (sourceId: string, turnIndex?: number) => TerminalNodeData
   routines: RoutineScheduler
@@ -168,7 +176,9 @@ async function handleLine(
       // Per-outcome exit code (delivery contract): a shell caller's next
       // action differs per outcome, so collapsing every failure to 1 would
       // rebuild the ambiguity one layer down.
-      ...(error instanceof DeliveryError ? { exitCode: error.exitCode } : {})
+      // Any error that names its exit code — an ask delivery, a refused
+      // secret — hands it to the shell; the rest leave with 1.
+      ...(hasExitCode(error) ? { exitCode: error.exitCode } : {})
     })
   }
 }
@@ -179,6 +189,9 @@ async function handleLine(
  * rebuild). Retried once; a persistent condition (wrong workspace, not the
  * orch, unknown command) is a plain Error and never retried.
  */
+const hasExitCode = (error: unknown): error is { exitCode: number } =>
+  error instanceof Error && typeof (error as { exitCode?: unknown }).exitCode === 'number'
+
 export class RetryableDispatchError extends Error {}
 
 /** How long to wait before the single retry across a workspace switch. */
@@ -231,6 +244,8 @@ async function dispatch(request: CliRequest, deps: SocketServerDeps): Promise<st
       return cmdDispatch(request, deps)
     case 'note':
       return cmdNote(request, deps)
+    case 'secret':
+      return cmdSecretVerb(request, deps)
     case 'connect':
       return cmdConnect(request, deps)
     case 'recruit':
@@ -914,6 +929,18 @@ function cmdCheck(request: CliRequest, deps: SocketServerDeps): string {
   return session.viewportText()
 }
 
+/** `cookrew secret …` (secret-cli.ts), with the caller resolved the way every verb resolves it. */
+function cmdSecretVerb(request: CliRequest, deps: SocketServerDeps): string {
+  if (!deps.secrets) {
+    throw new SecretCliError("refused: secrets are the owner's — this app holds none", SECRET_EXIT.refused)
+  }
+  return cmdSecret(request, {
+    secrets: deps.secrets,
+    self: (r) => self(r, deps),
+    audit: (event) => deps.audit?.(event)
+  })
+}
+
 export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
   const [sub, ...rest] = request.args
   const me = self(request, deps)
@@ -1455,6 +1482,8 @@ Usage:
   cookrew note write "Name" "content"           Replace a note's content
   cookrew note edit "Name" "old" "new"          Replace a substring within a note
   cookrew note delete "Name"                    Remove a connected note (destructive)
+  cookrew secret read <name>                    Print a sealed secret (owner panes only; every read is logged)
+  cookrew secret list                           Sealed secret names, never values
   cookrew browser create URL ["Name"]            Create a connected browser browser
   cookrew browser snapshot|click|fill|type|key|navigate|screenshot|evaluate|html|text|info "Browser" ...
   cookrew browser tabs "Browser"                  List the browser's tabs (pages opened by the site land here)

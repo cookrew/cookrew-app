@@ -55,6 +55,8 @@ import type { SousDoor } from "./socket-server";
 import type { Surface as SousSurface } from "../shared/sous-intent";
 import type { UiCommandEvent } from "../shared/sous-ui";
 import type { EventEmitter } from "node:events";
+import type { SecretsStore } from "./secrets-store";
+import { isSecretName } from "../shared/secret-slot";
 
 const SOUS_SURFACES: ReadonlySet<string> = new Set(["canvas", "zoom", "phone", "home", "cli"]);
 /** A spoken sentence; anything longer is a document and has other routes. */
@@ -161,6 +163,12 @@ export interface MobileApiDeps {
    * that has never been exported.
    */
   listPins?: (terminalId: string) => readonly VersionPinRecord[];
+  /**
+   * The sealed slots (secrets-store.ts). Names and dates travel; values
+   * travel in exactly one direction — INTO the store, on an owner-token PUT
+   * from the note slot. Nothing on this API ever answers a value.
+   */
+  secrets?: SecretsStore;
   /**
    * Cold-boot wait window for a stream open (acquireViewWhenReady). Omitted in
    * production (defaults ~2s in 50ms steps); tests shrink it for determinism.
@@ -622,6 +630,38 @@ export async function handleMobileApi(
   if (tuningMatch && method === "GET" && deps.tuning) {
     respondJson(response, 200, deps.tuning.state(tuningMatch[1]));
     return true;
+  }
+  // THE SEALED SLOTS — owner token only, GET included: the read-only wall
+  // token must not even learn the names. The write gate above already
+  // refused a read-only PUT/DELETE; this refuses its GET too.
+  const secretMatch = p.match(/^\/api\/secrets(?:\/([^/]+))?$/);
+  if (secretMatch && deps.secrets) {
+    if (deps.pairingToken && !hasPairing) {
+      respondJson(response, 401, { error: "Unauthorized — secrets are the owner's." });
+      return true;
+    }
+    const name = secretMatch[1] === undefined ? null : decodeURIComponent(secretMatch[1]);
+    if (method === "GET" && name === null) {
+      respondJson(response, 200, deps.secrets.list());
+      return true;
+    }
+    if (name !== null && !isSecretName(name)) {
+      respondJson(response, 400, { error: "not a secret name" });
+      return true;
+    }
+    if (method === "PUT" && name !== null) {
+      const body = await readJson<{ value?: unknown; served?: unknown }>(request);
+      if (typeof body.value !== "string" || body.value.length === 0) {
+        respondJson(response, 400, { error: "value is required" });
+        return true;
+      }
+      respondJson(response, 200, deps.secrets.put(name, body.value, { served: body.served === true }));
+      return true;
+    }
+    if (method === "DELETE" && name !== null) {
+      respondJson(response, 200, { removed: deps.secrets.remove(name) });
+      return true;
+    }
   }
   const tuneMatch = p.match(/^\/api\/terminal\/([^/]+)\/tune$/);
   if (tuneMatch && method === "POST" && deps.tuning) {

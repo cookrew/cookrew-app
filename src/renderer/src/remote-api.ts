@@ -8,6 +8,7 @@ import type { BoardSnapshotLike, CookrewApi } from './api'
 import type {
   LaneInfo,
   LandResult, CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
+import type { SecretListing } from '../../shared/secret-slot'
 import type { UiCommandEvent } from '../../shared/sous-ui'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 import type { VersionPinRecord } from '../../shared/version-pin'
@@ -460,6 +461,12 @@ export function createRemoteApi(): CookrewApi {
     onEvent: (cb) => subscribe('event', cb),
     onCableSignal: (cb) => subscribe('signal', cb),
     onReachChanged: (cb) => subscribe('reach', () => cb()),
+    // The sealed slots: owner-token routes; the read-only wall token gets 401.
+    secretPut: (name, value, served) =>
+      req<SecretListing>(apiPath(`/api/secrets/${encodeURIComponent(name)}`), 'PUT', { value, served }),
+    secretList: () => req<SecretListing[]>(apiPath('/api/secrets')),
+    secretRemove: (name) =>
+      req<{ removed: boolean }>(apiPath(`/api/secrets/${encodeURIComponent(name)}`), 'DELETE').then((r) => r.removed),
     queryEvents: async (query) => {
       const params = new URLSearchParams()
       const q = (query ?? {}) as Record<string, unknown>

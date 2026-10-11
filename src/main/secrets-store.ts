@@ -1,0 +1,136 @@
+/**
+ * WHERE A SEALED SECRET LIVES: ~/.cookrew/secrets/<name>, one file each.
+ *
+ * The same discipline as ~/.cookrew/stripe.env: a directory nobody else can
+ * list (0700), a file nobody else can read (0600), written whole to a
+ * sibling and renamed into place so a crash leaves the old value or the new
+ * one and never half of either. The value is returned by `read` and by
+ * nothing else — `list` carries names and dates, the audit line carries the
+ * name, a thrown error carries the name, and no event, no workspace state
+ * and no log ever sees the value.
+ *
+ * `served` is a flag with no reader yet: a secret the owner marked "served
+ * sessions may read" is still unreadable from a served pane in this round
+ * (secret-cli.ts refuses before it looks). The flag is kept so the owner's
+ * choice survives until the route that honours it exists.
+ */
+
+import { chmodSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import path from 'node:path'
+import { isSecretName, type SecretListing } from '../shared/secret-slot'
+
+export type { SecretListing } from '../shared/secret-slot'
+
+export interface SecretRecord {
+  readonly value: string
+  readonly served: boolean
+  readonly createdAt: number
+  readonly updatedAt: number
+}
+
+
+export interface SecretsStore {
+  readonly put: (name: string, value: string, options?: { served?: boolean }) => SecretListing
+  readonly read: (name: string) => SecretRecord | null
+  readonly list: () => SecretListing[]
+  readonly remove: (name: string) => boolean
+  readonly dir: string
+}
+
+export interface SecretsStoreOptions {
+  readonly baseDir?: string
+  readonly now?: () => number
+}
+
+export const SECRETS_DIR_NAME = 'secrets'
+
+const assertName = (name: string): void => {
+  if (!isSecretName(name)) {
+    throw new Error(`not a secret name: lower-case letters, digits and dashes, up to 64, never a leading dash`)
+  }
+}
+
+const parseRecord = (raw: string): SecretRecord | null => {
+  try {
+    const parsed = JSON.parse(raw) as Partial<SecretRecord>
+    if (typeof parsed.value !== 'string') return null
+    return {
+      value: parsed.value,
+      served: parsed.served === true,
+      createdAt: typeof parsed.createdAt === 'number' ? parsed.createdAt : 0,
+      updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0
+    }
+  } catch {
+    return null
+  }
+}
+
+export const createSecretsStore = (options: SecretsStoreOptions = {}): SecretsStore => {
+  const dir = path.join(options.baseDir ?? path.join(homedir(), '.cookrew'), SECRETS_DIR_NAME)
+  const now = options.now ?? ((): number => Date.now())
+
+  const ensureDir = (): void => {
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    // A directory that already existed keeps whatever mode it had: say 0700 again.
+    if ((statSync(dir).mode & 0o777) !== 0o700) chmodSync(dir, 0o700)
+  }
+
+  const fileOf = (name: string): string => path.join(dir, name)
+
+  const read = (name: string): SecretRecord | null => {
+    assertName(name)
+    try {
+      return parseRecord(readFileSync(fileOf(name), 'utf8'))
+    } catch {
+      return null
+    }
+  }
+
+  const put: SecretsStore['put'] = (name, value, putOptions = {}) => {
+    assertName(name)
+    if (typeof value !== 'string' || value.length === 0) throw new Error('a secret needs a value')
+    ensureDir()
+    const before = read(name)
+    const at = now()
+    const record: SecretRecord = {
+      value,
+      served: putOptions.served === true,
+      createdAt: before?.createdAt ?? at,
+      updatedAt: at
+    }
+    const file = fileOf(name)
+    const tmp = `${file}.${process.pid}.tmp`
+    writeFileSync(tmp, JSON.stringify(record), { mode: 0o600 })
+    renameSync(tmp, file)
+    return { name, served: record.served, updatedAt: record.updatedAt }
+  }
+
+  const list = (): SecretListing[] => {
+    let names: string[]
+    try {
+      names = readdirSync(dir)
+    } catch {
+      return []
+    }
+    const rows: SecretListing[] = []
+    for (const name of names.sort()) {
+      if (!isSecretName(name)) continue
+      const record = read(name)
+      if (record) rows.push({ name, served: record.served, updatedAt: record.updatedAt })
+    }
+    return rows
+  }
+
+  const remove = (name: string): boolean => {
+    assertName(name)
+    try {
+      rmSync(fileOf(name))
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  return { put, read, list, remove, dir }
+}

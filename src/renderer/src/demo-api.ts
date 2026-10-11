@@ -95,6 +95,8 @@ const DEMO_RESPONSES: Record<string, string> = {
 /** Connections minted so far — the tie-breaker that keeps demo ids unique within a millisecond. */
 let demoConnections = 0
 
+const demoSecrets = new Map<string, { name: string; served: boolean; updatedAt: number }>()
+
 export function createDemoApi(): CookrewApi {
   // In-memory workspace registry so the demo can switch canvases too.
   const metas: WorkspaceMeta[] = [
@@ -255,6 +257,15 @@ export function createDemoApi(): CookrewApi {
     laneOpen: () => Promise.reject(new Error('Lanes need a git repo — not in the demo')),
     laneLand: () => Promise.resolve({ ok: false as const, reason: 'not-a-lane' as const, detail: 'not in the demo' }),
     laneClose: () => Promise.reject(new Error('Lanes need a git repo — not in the demo')),
+    // The sealed slots, in memory: the harness view draws the block with a
+    // store that forgets on reload and never had a file.
+    secretPut: (name, _value, served) => {
+      const row = { name, served, updatedAt: Date.now() }
+      demoSecrets.set(name, row)
+      return Promise.resolve(row)
+    },
+    secretList: () => Promise.resolve([...demoSecrets.values()]),
+    secretRemove: (name) => Promise.resolve(demoSecrets.delete(name)),
     laneAuto: (nodeId) => Promise.resolve(state.nodes.find((n) => n.id === nodeId) as CanvasNode),
     onWorkspaceList: (cb) => {
       wsListeners.add(cb)
