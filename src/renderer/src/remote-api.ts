@@ -9,7 +9,9 @@ import type { BoardSnapshotLike, CookrewApi } from './api'
 import type {
   LaneInfo,
   LandResult, CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
+import type { SecretListing } from '../../shared/secret-slot'
 import type { UiCommandEvent } from '../../shared/sous-ui'
+import type { InboxRow } from '../../shared/inbox-rank'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 import type { VersionPinRecord } from '../../shared/version-pin'
 import { apiPath } from './api-base'
@@ -468,6 +470,12 @@ export function createRemoteApi(): CookrewApi {
     onEvent: (cb) => subscribe('event', cb),
     onCableSignal: (cb) => subscribe('signal', cb),
     onReachChanged: (cb) => subscribe('reach', () => cb()),
+    // The sealed slots: owner-token routes; the read-only wall token gets 401.
+    secretPut: (name, value, served) =>
+      req<SecretListing>(apiPath(`/api/secrets/${encodeURIComponent(name)}`), 'PUT', { value, served }),
+    secretList: () => req<SecretListing[]>(apiPath('/api/secrets')),
+    secretRemove: (name) =>
+      req<{ removed: boolean }>(apiPath(`/api/secrets/${encodeURIComponent(name)}`), 'DELETE').then((r) => r.removed),
     queryEvents: async (query) => {
       const params = new URLSearchParams()
       const q = (query ?? {}) as Record<string, unknown>
@@ -610,8 +618,12 @@ export function createRemoteApi(): CookrewApi {
     // focusedAgentId is deliberately not sent — a network door names agents
     // by name only (see SousCommandInput).
     sousCommand: (text, ctx) =>
-      req(apiPath('/api/sous/command'), 'POST', { text, surface: ctx.surface, callerId: sousCallerId() }),
+      req(apiPath('/api/sous/command'), 'POST', { text, surface: ctx.surface, callerId: sousCallerId(), ...(ctx.box ? { box: true } : {}) }),
     onUiCommand: (cb) => subscribe<UiCommandEvent>('ui', cb),
+    sousCommit: (token, choice, surface) => req(apiPath('/api/sous/commit'), 'POST', { token, surface: surface ?? 'phone', callerId: sousCallerId(), ...(choice?.target ? { target: choice.target } : {}) }),
+    sousCancel: (token, surface) => req<{ cancelled: boolean }>(apiPath('/api/sous/cancel'), 'POST', { token, surface: surface ?? 'phone', callerId: sousCallerId() }).then((out) => out.cancelled),
+    inbox: () => req<{ rows: InboxRow[] }>(apiPath('/api/inbox')).then((out) => out.rows),
+    onInbox: (cb) => subscribe<{ rows: InboxRow[] }>('inbox', (frame) => cb(frame.rows)),
     // The phone hears through its own browser (VoiceBar); the Mac's ear is
     // the desktop's alone.
     listenAvailable: () => Promise.resolve(false),

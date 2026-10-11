@@ -6,6 +6,11 @@ import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { WorkspaceStore } from './store'
 import { PtyManager, multiplexer, sessionNameFor } from './pty'
+import { buildInbox, type InboxNode } from './inbox'
+import { cachedDispatchReader, wireInbox } from './inbox-wiring'
+import { createWindowHold } from './inbox-window-hold'
+import { deliverToRecruit } from './recruit-delivery'
+import { placeBeside, type DecideCandidate } from '../shared/sous-decide'
 import type { PtySession } from './pty'
 import type { PaneCardInfo } from './multiplexer'
 import { paneCardFor, reportAllPaneBindings, type BindableTerminal } from './pane-bindings'
@@ -27,6 +32,7 @@ import {
   compactDispatchRegistry,
   defaultDispatchRegistry,
   readDispatchRecords,
+  contextExhausted,
   readDispatchTombstones,
   turnDetails
 } from './dispatch'
@@ -83,6 +89,8 @@ import {
   advertisedHostsNow
 } from './mobile-server'
 import { createDesktopCert, type DesktopCert } from './desktop-cert'
+import { createSecretsStore } from './secrets-store'
+import { secretAuditDetails, type SecretAudit } from './secret-cli'
 import { DEFAULT_NAME_ZONE } from '../shared/reach-names'
 import { NameCertStore } from './name-cert-store'
 import {
@@ -527,6 +535,33 @@ const ownerGrant = new OwnerGrant({
   }
 })
 const callConversations = new CallConversationStore()
+/**
+ * THE SEALED SLOTS (R4): ~/.cookrew/secrets/, one 0600 file per name. The
+ * value goes in from the note slot (IPC `secret:put`, or the phone's owner-
+ * token PUT) and comes out through `cookrew secret read` in an owner pane,
+ * and through nothing else — not an event, not workspace state, not a log.
+ */
+const secrets = createSecretsStore()
+/** The audit line every read and every missing read leaves: name only. */
+const auditSecret = (event: SecretAudit): void => {
+  const hit = store.nodeAcrossWorkspaces(event.terminalId)
+  const home = store.workspaceOfNode(event.terminalId)
+  const workspaceId = hit?.workspaceId ?? home?.id ?? store.focusedId
+  events.append({
+    type: event.type,
+    entityId: event.terminalId,
+    entityName: hit?.node.name ?? event.terminalId,
+    workspaceId,
+    workspaceName: home?.name ?? store.list().workspaces.find((w) => w.id === workspaceId)?.name ?? workspaceId,
+    actor: 'agent',
+    timestamp: Date.now(),
+    // `<name>` or `<name> note:<id>` when a note on that canvas has the slot.
+    details: secretAuditDetails(
+      event.name,
+      store.workspaceState(workspaceId).nodes.flatMap((node) => (node.kind === 'note' ? [node] : []))
+    )
+  })
+}
 /**
  * The pre-credential lookup, memoized for a beat (Tinker HIGH-2).
  *
@@ -5463,19 +5498,140 @@ app.whenReady().then(() => {
       mainWindow?.webContents.send('ui:command', event)
       uiBus.emit('command', event)
     },
-    note: (kind, subjectId, detail) => store.recordEvent(`sous.${kind}`, subjectId ?? '', detail, 'voice')
+    note: (kind, subjectId, detail) => store.recordEvent(`sous.${kind}`, subjectId ?? '', detail, 'voice'),
+    // THE DECIDE STEP (R3): who takes a brief the intent core did not match.
+    // Candidates are the cards as the Board sees them; a context-full card is
+    // read off its pane the way the pre-dispatch probe reads it, for the idle
+    // same-repo cards only (one capture each, never the whole fleet).
+    decide: {
+      workdir: () => store.focusedState.dir,
+      candidates: async () => {
+        const rows = new Map(buildBoard(boardSources()).rows.map((r) => [r.terminalId, r]))
+        const workdir = store.focusedState.dir
+        const out: DecideCandidate[] = []
+        for (const t of store.terminalsAcross()) {
+          const row = rows.get(t.id)
+          const phase = row?.phase ?? 'offline'
+          const idleHere = t.cwd === workdir && (phase === 'done' || phase === 'unread' || phase === 'waiting')
+          let contextFull = false
+          if (idleHere) {
+            try {
+              const mux = multiplexer()
+              const name = sessionNameFor(t.id)
+              const pane = mux instanceof HerdrHostMultiplexer ? await mux.captureAsync(name) : (mux?.capture(name) ?? null)
+              contextFull = contextExhausted(pane)
+            } catch {
+              contextFull = false
+            }
+          }
+          out.push({
+            id: t.id,
+            name: t.name,
+            workspaceId: store.ownerOf(t.id) ?? '',
+            cwd: t.cwd,
+            role: t.role,
+            orch: t.orch === true,
+            phase,
+            contextFull,
+            lastTask: row?.task.title ?? row?.task.summary ?? null,
+            lastActivityAt: row?.lastActivityAt ?? 0
+          })
+        }
+        return out
+      },
+      recruit: ({ preset, name, role, besideId }) => {
+        const nodes = store.focusedState.nodes
+        const anchor = besideId ? (nodes.find((n) => n.id === besideId) ?? null) : null
+        const position = placeBeside(anchor, nodes, DEFAULT_TERMINAL_SIZE)
+        const node = createTerminal({ name, preset, position })
+        updateNode(node.id, { role })
+        return { id: node.id, name: node.name }
+      },
+      // The same door `cookrew ask --no-wait` uses: admitted by the dispatch
+      // engine (retrying the boot-time 503s of a card made a moment ago),
+      // delivered by herdr once the harness is at its prompt, on the ledger.
+      deliver: async (input) => {
+        await deliverToRecruit(dispatchService, input)
+      }
+    }
   })
+  // The desktop's box: one caller, on the surface it says. A token minted on
+  // the canvas is the canvas box's to commit or cancel, and nobody else's.
+  const desktopCaller = (surface: unknown): { surface: SousSurface; callerId: string } => ({ surface: surface === 'phone' ? 'phone' : 'canvas', callerId: 'desktop' })
+  ipcMain.handle('sous:commit', (_e, token: string, choice?: { target?: string }, surface?: unknown) => sous.commit(String(token), choice ?? {}, desktopCaller(surface)))
   ipcMain.handle(
     'sous:command',
-    (_e, text: string, ctx: { surface: SousSurface; focusedAgentId?: string | null; alternates?: string[] }) =>
+    (_e, text: string, ctx: { surface: SousSurface; focusedAgentId?: string | null; alternates?: string[]; box?: boolean }) =>
       sous.handle({
         text,
         alternates: ctx.alternates,
         surface: ctx.surface,
+        // Only the box decides; push-to-talk sends no flag and keeps the regex core.
+        box: ctx.box === true,
         callerId: 'desktop',
         focusedAgentId: ctx.focusedAgentId ?? null
       })
   )
+
+  // THE INBOX (R3): one ranked list of what only a person can move. Built
+  // only while a client holds it, on a trailing debounce over the store, the
+  // event log and the probe — never on Sous's own lines (inbox-wiring.ts).
+  // The rows come from the probe's CURRENT phases, not from a touch that
+  // would announce back into this very builder.
+  const readDispatches = cachedDispatchReader(defaultDispatchRegistry())
+  const inbox = wireInbox({
+    build: () => {
+      const workspaces = store.list().workspaces
+      const nameOf = (id: string): string => workspaces.find((w) => w.id === id)?.name ?? id
+      const nodes: InboxNode[] = []
+      const connections: { a: string; b: string }[] = []
+      for (const meta of workspaces) {
+        const state = store.workspaceState(meta.id)
+        for (const n of state.nodes) {
+          nodes.push({
+            id: n.id,
+            name: n.name,
+            kind: n.kind,
+            workspaceId: meta.id,
+            workspaceName: nameOf(meta.id),
+            served: n.kind === 'terminal' && n.servedSession != null
+          })
+        }
+        for (const c of state.connections) connections.push({ a: c.a, b: c.b })
+      }
+      const sources = { ...boardSources(), probe: () => boardProbe.phases() }
+      return buildInbox({
+        rows: () => buildBoard(sources).rows,
+        nodes: () => nodes,
+        connections: () => connections,
+        dispatches: readDispatches,
+        events: (type, since) => events.query({ type, since })
+      })
+    },
+    // The op itself rides along: Sous's notes are store ops too.
+    onStoreOp: (cb) => {
+      const listener = (op: { type: string }): void => cb(op)
+      store.on('op', listener)
+      return () => void store.off('op', listener)
+    },
+    onEvent: (cb) => {
+      events.on('event', cb)
+      return () => void events.off('event', cb)
+    },
+    onProbeChange: (cb) => boardProbe.onChange(cb),
+    announce: (rows) => mainWindow?.webContents.send('inbox:changed', rows)
+  })
+  // The window holds the list while its box is subscribed; a one-shot read
+  // builds on demand. The hold goes with the page that took it: a reload or a
+  // closed window never sends the unsubscribe (inbox-window-hold.ts).
+  const windowHold = createWindowHold(() => inbox.hold())
+  ipcMain.handle('inbox:subscribe', (event) => {
+    windowHold.subscribe(event.sender)
+    return inbox.read()
+  })
+  ipcMain.handle('inbox:unsubscribe', () => windowHold.release())
+  ipcMain.handle('inbox:list', () => inbox.read())
+  ipcMain.handle('sous:cancel', (_e, token: string, surface?: unknown) => sous.cancel(String(token), desktopCaller(surface)))
 
   // THE MAC'S EAR. One recognizer child per hold of ⌘; the roster's names go
   // in as hints so "cookrew dev" is not heard as "cooker Dev".
@@ -5514,6 +5670,17 @@ app.whenReady().then(() => {
     agents,
     turns,
     sous,
+    // `cookrew secret read/list` (secret-cli.ts): the store, and the line
+    // each read leaves in the event log.
+    secrets,
+    audit: auditSecret,
+    // THE SERVED FACT for the secret verbs: a pane spawned for a stranger's
+    // seat (pty.ts), or any pane on a workspace this app serves out
+    // (servedSpawnContexts). `servedSession` on the node is the OTHER thing —
+    // the owner's receipt of a session served elsewhere — and must not be
+    // read for this.
+    isServed: (terminalId) =>
+      ptys.isServed(terminalId) || servedSpawnContexts.has(store.ownerOf(terminalId) ?? ''),
     // `ask --no-wait` and `cookrew dispatch <id>`: the SAME engine the HTTP
     // route uses, so a CLI-minted dispatch and an API-minted one are one
     // record with one lifecycle.
@@ -5584,6 +5751,10 @@ app.whenReady().then(() => {
     // Sous's door for the phone and for voice-gateway; `ui` events for both.
     sous,
     uiBus,
+    // The inbox (R3): the same rows the desktop box lists; a stream holds it open.
+    inbox: () => inbox.read(),
+    inboxHold: () => inbox.hold(),
+    inboxBus: inbox,
     // THE DIALS on the phone — the same reads and the same write the desktop
     // does, through the same deps, so the two surfaces cannot drift.
     tuning: {
@@ -5605,6 +5776,8 @@ app.whenReady().then(() => {
     // §10: the same pin store the desktop rail reads — the phone's rail must
     // not drift from what the canvas shows.
     listPins: (terminalId) => pinsFor(terminalId),
+    // The sealed slots, for the phone's note editor: names out, values in.
+    secrets,
     // Gates slug routing: off, /<slug>/... is not a route (see mobile-server).
     multiInstance: () => store.isMultiInstance,
     // THE INTERNET GATE (§9 · ④), mounted per workspace session. Reachable only
@@ -6487,6 +6660,13 @@ function registerIpc(handlers: RestoreHandlers): void {
   )
   ipcMain.handle('git:info', (_e, dir: string) => gitCache.info(dir))
   // Lanes: worktree per agent, landing as a product action (lanes.ts).
+  // The sealed slots (R4): the zoom editor's SEAL button and its listing.
+  // The value crosses IPC once, into the store, and is never sent back.
+  ipcMain.handle('secret:put', (_e, name: string, value: string, served?: boolean) =>
+    secrets.put(name, value, { served: served === true })
+  )
+  ipcMain.handle('secret:list', () => secrets.list())
+  ipcMain.handle('secret:remove', (_e, name: string) => secrets.remove(name))
   ipcMain.handle('lane:list', (_e, dir: string) => laneList(dir))
   ipcMain.handle('lane:open', (_e, nodeId: string, name: string) => laneOpen(nodeId, name))
   ipcMain.handle('lane:land', (_e, nodeId: string, opts?: { close?: boolean; gate?: string[] | null }) =>

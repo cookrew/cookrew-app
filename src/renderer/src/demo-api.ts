@@ -8,6 +8,7 @@ import type {
   WorkspaceState
 } from '../../shared/model'
 import { noteNameFromContent, uniqueName } from '../../shared/model'
+import { rankInbox } from '../../shared/inbox-rank'
 import type { CookrewApi } from './api'
 
 /**
@@ -95,6 +96,8 @@ const DEMO_RESPONSES: Record<string, string> = {
 
 /** Connections minted so far — the tie-breaker that keeps demo ids unique within a millisecond. */
 let demoConnections = 0
+
+const demoSecrets = new Map<string, { name: string; served: boolean; updatedAt: number }>()
 
 export function createDemoApi(): CookrewApi {
   // In-memory workspace registry so the demo can switch canvases too.
@@ -227,6 +230,15 @@ export function createDemoApi(): CookrewApi {
     laneOpen: () => Promise.reject(new Error('Lanes need a git repo — not in the demo')),
     laneLand: () => Promise.resolve({ ok: false as const, reason: 'not-a-lane' as const, detail: 'not in the demo' }),
     laneClose: () => Promise.reject(new Error('Lanes need a git repo — not in the demo')),
+    // The sealed slots, in memory: the harness view draws the block with a
+    // store that forgets on reload and never had a file.
+    secretPut: (name, _value, served) => {
+      const row = { name, served, updatedAt: Date.now() }
+      demoSecrets.set(name, row)
+      return Promise.resolve(row)
+    },
+    secretList: () => Promise.resolve([...demoSecrets.values()]),
+    secretRemove: (name) => Promise.resolve(demoSecrets.delete(name)),
     laneAuto: (nodeId) => Promise.resolve(state.nodes.find((n) => n.id === nodeId) as CanvasNode),
     onWorkspaceList: (cb) => {
       wsListeners.add(cb)
@@ -433,9 +445,56 @@ export function createDemoApi(): CookrewApi {
     onBrowserOpenTab: () => () => undefined,
     onBrowserPhoneViewing: () => () => undefined,
     onCmdW: () => () => undefined,
-    // No Sous in the demo: nothing to drive, so every sentence is `none`.
-    sousCommand: () => Promise.resolve({ intent: 'none' as const, spoken: '' }),
+    // Sous in the demo DECIDES but never drives: a sentence comes back as the
+    // decision the box would show (so the harness view renders the echo),
+    // and a commit answers as if the brief went out. Nothing is created.
+    sousCommand: (text) => {
+      const sentence = text.trim()
+      if (sentence === '' || /\?|？$/.test(sentence)) {
+        return Promise.resolve({ intent: 'none' as const, spoken: '' })
+      }
+      const recruit = /\b(every|all|refactor|audit|prune)\b|全部|所有|重构/i.test(sentence)
+      const decision = recruit
+        ? {
+            kind: 'recruit' as const,
+            harness: 'Codex' as const,
+            name: sentence.split(/\s+/).slice(0, 3).join(' '),
+            beside: { id: 'demo-conductor', name: 'Conductor' },
+            alternates: [{ id: 'harness:Claude Code', name: 'Claude Code', reasons: ['Claude Code instead'] }],
+            reasons: ['no idle card fits the brief', 'repo-wide → Codex', 'beside Conductor, wired to it'],
+            token: 'demo-decision',
+            holdMs: 1500,
+            sentence
+          }
+        : {
+            kind: 'ask' as const,
+            target: { id: 'demo-conductor', name: 'Conductor' },
+            alternates: [{ id: 'demo-bench-0', name: 'Bench 0', reasons: ['idle', 'same repo', 'last touched the bench'] }],
+            reasons: ['idle', 'same repo', 'last touched README · 2h'],
+            token: 'demo-decision',
+            holdMs: 1500,
+            sentence
+          }
+      const spoken = decision.kind === 'ask' ? `→ Conductor (${decision.reasons.join(' · ')})` : `+ Codex card · ${decision.name} (${decision.reasons.join(' · ')})`
+      return Promise.resolve({ intent: 'decide' as const, spoken, decision })
+    },
+    sousCommit: (_token, choice) =>
+      Promise.resolve({ intent: 'ask' as const, spoken: `Sent to ${choice?.target === 'demo-bench-0' ? 'Bench 0' : 'Conductor'}`, agentId: choice?.target ?? 'demo-conductor' }),
+    sousCancel: () => Promise.resolve(true),
     onUiCommand: () => () => undefined,
+    // The inbox the harness view renders: one of each signal, on the demo's own cards.
+    inbox: () =>
+      Promise.resolve(
+        rankInbox(
+          [
+            { kind: 'waiting', nodeId: 'demo-conductor', nodeName: 'Conductor', nodeKind: 'terminal', workspaceId: 'demo', workspaceName: 'Cookrew Demo', reason: 'asks you — "replace the Chinese headings too?"', since: Date.now() - 4 * 60_000, served: false, blockedDownstream: 2 },
+            { kind: 'secret', nodeId: 'demo-note', nodeName: 'Bench 0', nodeKind: 'note', workspaceId: 'demo', workspaceName: 'Cookrew Demo', reason: 'needs STRIPE_SECRET_KEY — seal it', since: Date.now() - 60_000, served: false, blockedDownstream: 1, slot: 'STRIPE_SECRET_KEY', noteId: 'demo-note' },
+            { kind: 'dispatch', nodeId: 'demo-bench-1', nodeName: 'Bench 1', nodeKind: 'terminal', workspaceId: 'demo', workspaceName: 'Cookrew Demo', reason: 'delivery failed — owner is composing', since: Date.now() - 12 * 60_000, served: false, blockedDownstream: 0 }
+          ],
+          Date.now()
+        )
+      ),
+    onInbox: () => () => undefined,
     listenAvailable: () => Promise.resolve(false),
     listenStart: () => Promise.resolve(false),
     listenStop: () => Promise.resolve(),

@@ -52,11 +52,60 @@ import { ROUTE_ID_RE, type CardRouteState, type RouteState } from "../shared/rou
 import { ownerSubmit } from "./ask";
 import { MAX_ATTACHMENT_BYTES } from "./attachments";
 import type { SousDoor } from "./socket-server";
+import type { InboxRow } from "../shared/inbox-rank";
 import type { Surface as SousSurface } from "../shared/sous-intent";
 import type { UiCommandEvent } from "../shared/sous-ui";
 import type { EventEmitter } from "node:events";
+import type { SecretsStore } from "./secrets-store";
+import { isSecretName } from "../shared/secret-slot";
+import { RELAY_MARKER, isLoopbackPeer } from "./relay-base";
+
+/**
+ * THE TRANSPORTS A SECRET VALUE MAY RIDE, each named for why:
+ *
+ *   TLS       the phone on the LAN or the tailnet, under a trusted name.
+ *   relay     a request the canvas bridge carried in (RELAY_MARKER, which
+ *             only the bridge on loopback may set — host-gate.ts). It is
+ *             accepted BECAUSE the relay leg is TLS hop by hop — phone to
+ *             cookrew.dev, cookrew.dev to this Mac's uplink — and not
+ *             because it happens to arrive from 127.0.0.1.
+ *   loopback  this Mac's own renderer and CLI.
+ *
+ * A plain-HTTP request from the LAN is none of these and is refused.
+ */
+export const sealedTransport = (request: {
+  socket: { encrypted?: boolean; remoteAddress?: string };
+  headers?: Record<string, string | string[] | undefined>;
+}): boolean => {
+  if (request.socket.encrypted === true) return true;
+  const loopback = isLoopbackPeer(request.socket.remoteAddress);
+  if (request.headers?.[RELAY_MARKER] === "1") return loopback;
+  return loopback;
+};
+
+/** A `secret.*` event with its details — the name — withheld. */
+export const redactSecretDetails = <T extends { type: string; details?: string }>(event: T): T => {
+  if (!event.type.startsWith("secret.")) return event;
+  const { details: _details, ...rest } = event;
+  return rest as T;
+};
 
 const SOUS_SURFACES: ReadonlySet<string> = new Set(["canvas", "zoom", "phone", "home", "cli"]);
+
+/**
+ * WHO is on the other end of a decision: the caller's own id when it sends
+ * one (the phone's install), and no one when it does not. A caller-less
+ * request is NOT bound to its socket address — a dual-stack phone roams
+ * between v4 and v6 and between Wi-Fi and the tailnet mid-hold, and the
+ * token it minted on one address must still commit from the next. Never the
+ * token. The surface defaults to the phone's, the only network surface with a
+ * box.
+ */
+function sousCaller(body: { surface?: string; callerId?: string }): { surface: SousSurface; callerId: string } | undefined {
+  if (typeof body.callerId !== "string" || body.callerId.trim() === "") return undefined;
+  const surface = SOUS_SURFACES.has(body.surface ?? "") ? (body.surface as SousSurface) : "phone";
+  return { surface, callerId: body.callerId.trim().slice(0, 64) };
+}
 /** A spoken sentence; anything longer is a document and has other routes. */
 const SOUS_MAX_TEXT = 2000;
 
@@ -162,6 +211,12 @@ export interface MobileApiDeps {
    */
   listPins?: (terminalId: string) => readonly VersionPinRecord[];
   /**
+   * The sealed slots (secrets-store.ts). Names and dates travel; values
+   * travel in exactly one direction — INTO the store, on an owner-token PUT
+   * from the note slot. Nothing on this API ever answers a value.
+   */
+  secrets?: SecretsStore;
+  /**
    * Cold-boot wait window for a stream open (acquireViewWhenReady). Omitted in
    * production (defaults ~2s in 50ms steps); tests shrink it for determinism.
    */
@@ -177,6 +232,10 @@ export interface MobileApiDeps {
    */
   sous?: SousDoor;
   uiBus?: EventEmitter;
+  /** The HITL inbox (R3): a one-shot read, a hold while a stream is open, and the announcements. */
+  inbox?: () => InboxRow[];
+  inboxHold?: () => () => void;
+  inboxBus?: { on: (event: "inbox", cb: (rows: InboxRow[]) => void) => void; removeListener: (event: "inbox", cb: (rows: InboxRow[]) => void) => void };
   /**
    * THE DIALS (shared/agent-tuning) — model and effort, read and turned.
    *
@@ -622,6 +681,56 @@ export async function handleMobileApi(
   if (tuningMatch && method === "GET" && deps.tuning) {
     respondJson(response, 200, deps.tuning.state(tuningMatch[1]));
     return true;
+  }
+  // THE SEALED SLOTS — owner token only, GET included: the read-only wall
+  // token must not even learn the names. The write gate above already
+  // refused a read-only PUT/DELETE; this refuses its GET too.
+  const secretMatch = p.match(/^\/api\/secrets(?:\/([^/]+))?$/);
+  if (secretMatch && deps.secrets) {
+    // No pairing token configured means no owner to answer to: refused, not open.
+    if (!deps.pairingToken) {
+      respondJson(response, 403, { error: "secrets need a paired companion" });
+      return true;
+    }
+    if (!hasPairing) {
+      respondJson(response, 401, { error: "Unauthorized — secrets are the owner's." });
+      return true;
+    }
+    let name: string | null;
+    try {
+      name = secretMatch[1] === undefined ? null : decodeURIComponent(secretMatch[1]);
+    } catch {
+      respondJson(response, 400, { error: "not a secret name" });
+      return true;
+    }
+    if (method === "GET" && name === null) {
+      respondJson(response, 200, deps.secrets.list());
+      return true;
+    }
+    if (name !== null && !isSecretName(name)) {
+      respondJson(response, 400, { error: "not a secret name" });
+      return true;
+    }
+    if (method === "PUT" && name !== null) {
+      // THE VALUE CROSSES THE NETWORK HERE, once: over TLS, through the relay
+      // (TLS hop by hop), or from this Mac itself — see sealedTransport. A
+      // cleartext LAN PUT would hand the value to the Wi-Fi.
+      if (!sealedTransport(request)) {
+        respondJson(response, 403, { error: "seal from the desktop or over TLS" });
+        return true;
+      }
+      const body = await readJson<{ value?: unknown; served?: unknown }>(request);
+      if (typeof body.value !== "string" || body.value.length === 0) {
+        respondJson(response, 400, { error: "value is required" });
+        return true;
+      }
+      respondJson(response, 200, deps.secrets.put(name, body.value, { served: body.served === true }));
+      return true;
+    }
+    if (method === "DELETE" && name !== null) {
+      respondJson(response, 200, { removed: deps.secrets.remove(name) });
+      return true;
+    }
   }
   const tuneMatch = p.match(/^\/api\/terminal\/([^/]+)\/tune$/);
   if (tuneMatch && method === "POST" && deps.tuning) {
@@ -1351,7 +1460,7 @@ export async function handleMobileApi(
       respondJson(response, 503, { error: "Sous is not listening on this desktop" });
       return true;
     }
-    const body = await readJson<{ text?: string; surface?: string; callerId?: string }>(request);
+    const body = await readJson<{ text?: string; surface?: string; callerId?: string; box?: boolean }>(request);
     const text = (body.text ?? "").trim();
     if (!text) {
       respondJson(response, 400, { error: "Missing text" });
@@ -1376,8 +1485,53 @@ export async function handleMobileApi(
       typeof body.callerId === "string" && body.callerId.trim() !== ""
         ? body.callerId.trim().slice(0, 64)
         : (request.socket.remoteAddress ?? "unknown");
-    const result = await deps.sous.handle({ text, surface: body.surface as SousSurface, callerId });
+    // `box: true` is the phone's bar; voice-gateway and anything else keep the regex core.
+    const result = await deps.sous.handle({ text, surface: body.surface as SousSurface, callerId, box: body.box === true });
     respondJson(response, 200, result);
+    return true;
+  }
+
+  if (method === "GET" && p === "/api/inbox") {
+    // Task text for every workspace, like the board: gated the same way.
+    if (deps.pairingToken && !canRead) {
+      respondJson(response, 401, { error: "Unauthorized — the inbox requires a pairing or read-only token." });
+      return true;
+    }
+    respondJson(response, 200, { rows: deps.inbox?.() ?? [] });
+    return true;
+  }
+
+  if (method === "POST" && p === "/api/sous/commit") {
+    if (!deps.sous?.commit) {
+      respondJson(response, 503, { error: "Sous does not decide on this desktop" });
+      return true;
+    }
+    const body = await readJson<{ token?: string; target?: string; surface?: string; callerId?: string }>(request);
+    if (typeof body.token !== "string" || body.token.length === 0 || body.token.length > 64) {
+      respondJson(response, 400, { error: "Missing token" });
+      return true;
+    }
+    const choice = typeof body.target === "string" && body.target.length <= 128 ? { target: body.target } : {};
+    const result = await deps.sous.commit(body.token, choice, sousCaller(body));
+    // A choice that was never shown is a bad request; another caller's token
+    // is not theirs; a commit already landing is a conflict; a spent or stale
+    // token is gone.
+    const status = result.error === "bad-target" ? 400 : result.error === "not-yours" ? 403 : result.error === "in-flight" ? 409 : result.error === "expired" ? 410 : 200;
+    respondJson(response, status, result);
+    return true;
+  }
+
+  if (method === "POST" && p === "/api/sous/cancel") {
+    if (!deps.sous?.cancel) {
+      respondJson(response, 503, { error: "Sous does not decide on this desktop" });
+      return true;
+    }
+    const body = await readJson<{ token?: string; surface?: string; callerId?: string }>(request);
+    if (typeof body.token !== "string" || body.token.length === 0 || body.token.length > 64) {
+      respondJson(response, 400, { error: "Missing token" });
+      return true;
+    }
+    respondJson(response, 200, { cancelled: deps.sous.cancel(body.token, sousCaller(body)) });
     return true;
   }
 
@@ -1411,6 +1565,19 @@ export async function handleMobileApi(
     };
     deps.tuningBus?.on("tuning", onTuning);
     request.on("close", () => deps.tuningBus?.removeListener("tuning", onTuning));
+    // The inbox rides the same stream, under the board's read gate; the
+    // opening frame is the list as it stands, so a phone never polls for it.
+    if (deps.inbox && (!deps.pairingToken || canRead)) {
+      const onInbox = (rows: InboxRow[]): void => send("inbox", { rows });
+      // The stream HOLDS the list open; the opening frame is built on demand.
+      const release = deps.inboxHold?.() ?? null;
+      send("inbox", { rows: deps.inbox() });
+      deps.inboxBus?.on("inbox", onInbox);
+      request.on("close", () => {
+        deps.inboxBus?.removeListener("inbox", onInbox);
+        release?.();
+      });
+    }
     // A cable lit on this canvas. Either end on it is enough: the other end
     // may be a tab naming an agent elsewhere, and the tab is the lamp.
     const onSignal = (signal: CableSignal): void => {
@@ -1560,8 +1727,11 @@ export async function handleMobileApi(
   // Observability queries (metrics/history panel) + global agent roster.
   if (method === "GET" && p === "/api/events/query") {
     const q = parseEventQuery(url.searchParams);
+    // The wall (read-only token) sees that a secret was read, never which:
+    // the names are the owner's.
+    const events = deps.events.query(q);
     respondJson(response, 200, {
-      events: deps.events.query(q),
+      events: hasPairing ? events : events.map(redactSecretDetails),
       counts: deps.events.count(q),
     });
     return true;

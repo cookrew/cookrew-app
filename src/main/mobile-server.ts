@@ -205,9 +205,15 @@ export interface MobileServerDeps {
   ) => Promise<boolean>
   /** Version pins (§10) for the rail's third marker class; absent = []. */
   listPins?: (terminalId: string) => readonly VersionPinRecord[]
+  /** The sealed slots — passed straight through; names only ever leave. */
+  secrets?: MobileApiDeps['secrets']
   /** Sous's door and its `ui` bus — see MobileApiDeps; passed through as-is. */
   sous?: MobileApiDeps['sous']
   uiBus?: MobileApiDeps['uiBus']
+  /** The HITL inbox (R3) — see MobileApiDeps; passed through as-is. */
+  inbox?: MobileApiDeps['inbox']
+  inboxHold?: MobileApiDeps['inboxHold']
+  inboxBus?: MobileApiDeps['inboxBus']
   /** The screen wall's pictures for the phone — see MobileApiDeps; passed through as-is. */
   workspaceShots?: MobileApiDeps['workspaceShots']
   /**

@@ -5,6 +5,7 @@ import type { AgentTuning, AgentTuningState, TuneKnob } from '../../shared/agent
 import type { TranslateResult } from '../../shared/translate'
 import type { Surface as SousSurface } from '../../shared/sous-intent'
 import type { SousCommandResult } from '../../main/sous-control'
+import type { InboxRow } from '../../shared/inbox-rank'
 import type { ListenEvent } from '../../main/listen'
 import type { UiCommandEvent } from '../../shared/sous-ui'
 import type {
@@ -24,6 +25,7 @@ import type {
   RecoverResult,
   RestoreResult,
 } from "../../shared/model";
+import type { SecretListing } from "../../shared/secret-slot";
 import type { TerminalActivity, TurnRecord } from "../../shared/turn";
 import type { TurnMatch } from "../../shared/turn-search";
 import type { TraceBoundaryMarker } from "../../shared/trace-blocks";
@@ -434,6 +436,15 @@ export interface CookrewApi {
    * (path/companion.ts). Optional: the demo has no Mac to move.
    */
   onReachChanged?: (cb: () => void) => () => void;
+  /**
+   * The sealed slots (R4, shared/secret-slot.ts): a note line `🔒 <name>` is
+   * a slot; SEAL puts the value in ~/.cookrew/secrets/ and nothing in the
+   * note. The listing carries names and dates, never values. Optional: an
+   * older bridge draws the slot with no store behind it.
+   */
+  secretPut?: (name: string, value: string, served: boolean) => Promise<SecretListing>;
+  secretList?: () => Promise<SecretListing[]>;
+  secretRemove?: (name: string) => Promise<boolean>;
   queryEvents?: (query?: unknown) => Promise<unknown[]>;
   countEvents?: (query?: unknown) => Promise<Record<string, number>>;
   listAgents?: () => Promise<unknown[]>;
@@ -653,9 +664,21 @@ export interface CookrewApi {
    */
   sousCommand: (
     text: string,
-    ctx: { surface: SousSurface; focusedAgentId?: string | null; alternates?: string[] }
+    ctx: { surface: SousSurface; focusedAgentId?: string | null; alternates?: string[]; box?: boolean }
   ) => Promise<SousCommandResult>;
   onUiCommand: (cb: (event: UiCommandEvent) => void) => () => void;
+  /**
+   * R3 · the decide step. `sousCommand` may answer `intent: 'decide'` with a
+   * decision the box shows for `holdMs`; this commits it under its token —
+   * once. Optional: an older bridge never decides, and the box then shows
+   * what Sous said and nothing else.
+   */
+  sousCommit?: (token: string, choice?: { target?: string }, surface?: SousSurface) => Promise<SousCommandResult>;
+  /** The box closed with a decision still held: main drops the token. */
+  sousCancel?: (token: string, surface?: SousSurface) => Promise<boolean>;
+  /** R3 · the HITL inbox: a one-shot read, and the subscription that holds the list open in main. */
+  inbox?: () => Promise<InboxRow[]>;
+  onInbox?: (cb: (rows: InboxRow[]) => void) => () => void;
   /**
    * Hold ⌘ to talk (desktop only — the phone dictates through the Web Speech
    * API in VoiceBar). Main spawns the on-device recognizer on start, SIGINTs

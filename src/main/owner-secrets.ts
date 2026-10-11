@@ -147,6 +147,12 @@ export function ownerSecretPaths(
     path.join(base, 'stripe.env'),
     // Public data, but still owner payment configuration. The fixture binds it
     // to the same served-sandbox deny as the write-only Stripe source.
-    path.join(base, 'payment.json')
+    path.join(base, 'payment.json'),
+    // THE SEALED SLOTS (R4, secrets-store.ts): one 0600 file per name. The
+    // served CLI refuses every read; the sandbox must refuse the files too,
+    // or the refusal is theatre. And the root pairing token, which opens the
+    // owner's companion to whoever holds it.
+    path.join(base, 'secrets'),
+    path.join(base, 'pairing-token')
   ]
 }

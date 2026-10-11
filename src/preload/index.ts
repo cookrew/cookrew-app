@@ -287,6 +287,11 @@ const api = {
   laneLand: (nodeId: string, opts?: { close?: boolean; gate?: string[] | null }) =>
     ipcRenderer.invoke('lane:land', nodeId, opts),
   laneClose: (nodeId: string, force?: boolean) => ipcRenderer.invoke('lane:close', nodeId, force),
+  // The sealed slots (R4): names and dates come back; the value only ever goes in.
+  secretPut: (name: string, value: string, served: boolean) =>
+    ipcRenderer.invoke('secret:put', name, value, served),
+  secretList: () => ipcRenderer.invoke('secret:list'),
+  secretRemove: (name: string) => ipcRenderer.invoke('secret:remove', name),
   laneAuto: (nodeId: string, on: boolean) => ipcRenderer.invoke('lane:auto', nodeId, on),
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   browserSnapshot: (browserId: string) => ipcRenderer.invoke('browser:snapshot', browserId),
@@ -487,12 +492,27 @@ const api = {
     return () => ipcRenderer.removeListener('app:cmd-w', listener)
   },
   // Sous driving the canvas: a sentence up, zoom / zoom-back down.
-  sousCommand: (text: string, ctx: { surface: string; focusedAgentId?: string | null; alternates?: string[] }) =>
+  sousCommand: (text: string, ctx: { surface: string; focusedAgentId?: string | null; alternates?: string[]; box?: boolean }) =>
     ipcRenderer.invoke('sous:command', text, ctx),
   onUiCommand: (cb: (event: unknown) => void) => {
     const listener = (_e: unknown, event: unknown): void => cb(event)
     ipcRenderer.on('ui:command', listener)
     return () => ipcRenderer.removeListener('ui:command', listener)
+  },
+  // R3: the decide step's commit, and the HITL inbox.
+  sousCommit: (token: string, choice?: { target?: string }, surface?: string) => ipcRenderer.invoke('sous:commit', token, choice ?? {}, surface ?? 'canvas'),
+  sousCancel: (token: string, surface?: string) => ipcRenderer.invoke('sous:cancel', token, surface ?? 'canvas'),
+  inbox: () => ipcRenderer.invoke('inbox:list'),
+  // Subscribing HOLDS the list open in main (it is built only while someone
+  // looks); the opening rows arrive through the callback too.
+  onInbox: (cb: (rows: unknown) => void) => {
+    const listener = (_e: unknown, rows: unknown): void => cb(rows)
+    ipcRenderer.on('inbox:changed', listener)
+    void ipcRenderer.invoke('inbox:subscribe').then((rows: unknown) => cb(rows))
+    return () => {
+      ipcRenderer.removeListener('inbox:changed', listener)
+      void ipcRenderer.invoke('inbox:unsubscribe')
+    }
   },
   // Hold ⌘ to talk: main runs the on-device recognizer and streams what it hears.
   listenAvailable: () => ipcRenderer.invoke('listen:available'),
