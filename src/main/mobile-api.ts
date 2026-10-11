@@ -75,16 +75,18 @@ export const redactSecretDetails = <T extends { type: string; details?: string }
 const SOUS_SURFACES: ReadonlySet<string> = new Set(["canvas", "zoom", "phone", "home", "cli"]);
 
 /**
- * WHO is on the other end of a decision: the same id the command route keys
- * Sous's pending questions on — the caller's own id when it sends one, else
- * the address it came from. Never the token. The surface defaults to the
- * phone's, the only network surface with a box.
+ * WHO is on the other end of a decision: the caller's own id when it sends
+ * one (the phone's install), and no one when it does not. A caller-less
+ * request is NOT bound to its socket address — a dual-stack phone roams
+ * between v4 and v6 and between Wi-Fi and the tailnet mid-hold, and the
+ * token it minted on one address must still commit from the next. Never the
+ * token. The surface defaults to the phone's, the only network surface with a
+ * box.
  */
-function sousCaller(request: http.IncomingMessage, body: { surface?: string; callerId?: string }): { surface: SousSurface; callerId: string } {
+function sousCaller(body: { surface?: string; callerId?: string }): { surface: SousSurface; callerId: string } | undefined {
+  if (typeof body.callerId !== "string" || body.callerId.trim() === "") return undefined;
   const surface = SOUS_SURFACES.has(body.surface ?? "") ? (body.surface as SousSurface) : "phone";
-  const callerId =
-    typeof body.callerId === "string" && body.callerId.trim() !== "" ? body.callerId.trim().slice(0, 64) : (request.socket.remoteAddress ?? "unknown");
-  return { surface, callerId };
+  return { surface, callerId: body.callerId.trim().slice(0, 64) };
 }
 /** A spoken sentence; anything longer is a document and has other routes. */
 const SOUS_MAX_TEXT = 2000;
@@ -1441,10 +1443,12 @@ export async function handleMobileApi(
       return true;
     }
     const choice = typeof body.target === "string" && body.target.length <= 128 ? { target: body.target } : {};
-    const result = await deps.sous.commit(body.token, choice, sousCaller(request, body));
+    const result = await deps.sous.commit(body.token, choice, sousCaller(body));
     // A choice that was never shown is a bad request; another caller's token
-    // is not theirs; a spent or stale token is gone.
-    respondJson(response, result.error === "bad-target" ? 400 : result.error === "not-yours" ? 403 : result.error === "expired" ? 410 : 200, result);
+    // is not theirs; a commit already landing is a conflict; a spent or stale
+    // token is gone.
+    const status = result.error === "bad-target" ? 400 : result.error === "not-yours" ? 403 : result.error === "in-flight" ? 409 : result.error === "expired" ? 410 : 200;
+    respondJson(response, status, result);
     return true;
   }
 
@@ -1458,7 +1462,7 @@ export async function handleMobileApi(
       respondJson(response, 400, { error: "Missing token" });
       return true;
     }
-    respondJson(response, 200, { cancelled: deps.sous.cancel(body.token, sousCaller(request, body)) });
+    respondJson(response, 200, { cancelled: deps.sous.cancel(body.token, sousCaller(body)) });
     return true;
   }
 

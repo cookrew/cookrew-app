@@ -379,7 +379,7 @@ describe('SousController — round 2: the box, the caller, and a commit in fligh
     const committing = sous.commit('tok')
     await Promise.resolve()
     expect(sous.cancel('tok')).toBe(false)
-    expect((await sous.commit('tok')).error).toBe('expired')
+    expect((await sous.commit('tok')).error).toBe('in-flight')
     release()
     expect((await committing).intent).toBe('ask')
     expect(calls).toEqual([`submit forge ${brief}`])

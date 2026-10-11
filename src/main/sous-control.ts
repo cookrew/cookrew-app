@@ -132,7 +132,7 @@ export interface SousCommandResult {
    * `bad-target` is not one of the decision's choices (400), `expired` is a
    * token that was spent or outlived its hold (410).
    */
-  error?: 'bad-target' | 'expired' | 'not-yours'
+  error?: 'bad-target' | 'expired' | 'not-yours' | 'in-flight'
   /** The agent the sentence ended up about, when there is one. */
   agentId?: string
   /** The text that went into the agent, after polish — so a surface can show it. */
@@ -369,7 +369,9 @@ export class SousController {
     // THE TOKEN IS THE CALLER'S. A decision minted for one box is committed
     // or cancelled by that box and no other paired caller.
     if (caller && callerKey(caller.surface, caller.callerId) !== slot.key) return { intent: 'refused', spoken: NOT_YOURS.en, error: 'not-yours' }
-    if (slot.committing) return { intent: 'refused', spoken: IN_FLIGHT.en, error: 'expired' }
+    // A second commit while the first is landing is not a stale token: the
+    // brief is on its way, and the box is told that rather than "expired".
+    if (slot.committing) return { intent: 'refused', spoken: IN_FLIGHT.en, error: 'in-flight' }
     const { decision, surface, key, lang } = slot
     const allowed = decision.kind === 'ask' ? [decision.target.id, ...decision.alternates.map((a) => a.id)] : decision.kind === 'recruit' ? [`harness:${decision.harness}`, ...decision.alternates.map((a) => a.id)] : []
     if (choice.target !== undefined && !allowed.includes(choice.target)) {
