@@ -169,7 +169,8 @@ export function createDemoApi(): CookrewApi {
       live: routeLive.find((d) => d.terminalId === terminalId) ?? null,
       turn: terminalId === 'card-1' ? { model: 'deepseek/deepseek-chat', inputTokens: 1840, outputTokens: 312, cost: 0.0021, priced: true, at: Date.now() - 11000 } : null,
       offline: false,
-      note: null
+      note: null,
+      gateway: 'online'
     }
   }
   if (typeof window !== 'undefined') {

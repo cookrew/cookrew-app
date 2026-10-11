@@ -36,7 +36,7 @@ function fakeRoute() {
   const cards = new Map<string, string>()
   let state = routeState('online')
   let holds = 0
-  const card = (id: string): CardRouteState => ({ route: cards.get(id) ?? 'direct', effective: 'direct', appliesOn: 'restart', live: null, turn: null, offline: false, note: null })
+  const card = (id: string): CardRouteState => ({ route: cards.get(id) ?? 'direct', effective: 'direct', appliesOn: 'restart', live: null, turn: null, offline: false, note: null, gateway: 'online' })
   const route: NonNullable<MobileApiDeps['route']> = {
     state: () => state,
     setDefault: (model) => {
@@ -178,7 +178,7 @@ describe('the route over HTTP', () => {
     expect(written.split('event: route').length).toBe(before)
     fake.bus.emit('route', routeState('online'))
     expect(written.split('event: route').length).toBe(before + 1)
-    fake.bus.emit('card-route', { terminalId: 'card-1', route: 'direct', effective: 'direct', appliesOn: 'now', live: null, turn: null, offline: false, note: null })
+    fake.bus.emit('card-route', { terminalId: 'card-1', route: 'direct', effective: 'direct', appliesOn: 'now', live: null, turn: null, offline: false, note: null, gateway: 'online' })
     expect(written).toContain('event: card-route\ndata: {"terminalId":"card-1"')
     // Another canvas's card stays off this stream... this one is unscoped, so it passes.
     fake.bus.emit('card-route', { terminalId: 'elsewhere', route: 'direct' })
