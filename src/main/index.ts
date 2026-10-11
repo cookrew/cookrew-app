@@ -641,7 +641,17 @@ const routeService = new RouteService({
     return true
   },
   dockCommands: () => PRESETS.map((p) => p.command),
-  hasTurns: (id) => turns.history(id).length > 0
+  hasTurns: (id) => turns.history(id).length > 0,
+  // The session file the node names, on disk: the harness resumes it itself,
+  // whatever the lazy tracker has verified so far (claude and codex; the
+  // other two keep the gate's answer).
+  sessionOnDisk: (node) => {
+    const harness = harnessFor(node.command)?.id
+    if (harness === 'claude') return Boolean(node.claudeSessionId) && existsSync(claudeSessionFile(node.cwd, node.claudeSessionId as string))
+    if (harness === 'codex') return typeof node.codexSessionRef === 'string' && existsSync(node.codexSessionRef)
+    return false
+  },
+  terminalsAcross: () => store.terminalsAcross()
 })
 routeService.on('route', (state) => {
   if (mainWindow && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('route', state)
@@ -5312,7 +5322,9 @@ app.whenReady().then(() => {
       console.error('Dock icon failed to load:', error)
     }
   }
-  // One probe at boot, before the first card spawns (route program).
+  // The cards routed before this restart are still routed (their node data
+  // says so); seed them, then one probe before the first card spawns.
+  routeService.seedRouted()
   void routeService.refresh()
   // Ship the CLI next to the socket so PTYs get it on PATH.
   const cliSource = app.isPackaged

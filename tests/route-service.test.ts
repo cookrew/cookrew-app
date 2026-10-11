@@ -32,6 +32,8 @@ async function fakeGateway() {
         { id: 'deepseek/deepseek-chat', owned_by: 'deepseek' }
       ] }))
     if (req.url === '/v1/magpie/quotas') return res.end(JSON.stringify({ data: [{ provider: 'claude', kind: 'subscription', plan: 'max', user: 'o@x', windows: [] }] }))
+    // No route yet for any session: the follow waits out its floor rather than stopping.
+    if (req.url?.startsWith('/v1/magpie/route')) return res.end(JSON.stringify({ route: null, seq: 0 }))
     res.writeHead(404)
     res.end('{}')
   })
@@ -62,7 +64,7 @@ function world(): World {
   return { home, nodes: new Map(), served: new Set(), phases: new Map(), exact: true, respawned: [], files: [] }
 }
 
-function service(w: World, env: Record<string, string | undefined>, fastAnnounce = true, hasTurns: (id: string) => boolean = () => false) {
+function service(w: World, env: Record<string, string | undefined>, fastAnnounce = true, hasTurns: (id: string) => boolean = () => false, sessionOnDisk: (node: TerminalNodeData) => boolean = () => false) {
   const monitor = new GatewayMonitor({ discovery: { home: w.home, env }, hasBinary: () => true, watchDir: null, helloTimeoutMs: 500, schedule: () => () => {} })
   const svc = new RouteService({
     monitor,
@@ -87,6 +89,8 @@ function service(w: World, env: Record<string, string | undefined>, fastAnnounce
     },
     dockCommands: () => ['claude --permission-mode bypassPermissions', 'codex'],
     hasTurns,
+    sessionOnDisk,
+    terminalsAcross: () => [...w.nodes.values()],
     schedule: fastAnnounce ? (fn) => { const t = setTimeout(fn, 5); return () => clearTimeout(t) } : undefined,
     writeFile: (p, content) => w.files.push({ path: p, content })
   })
@@ -305,6 +309,55 @@ describe('setCardRoute', () => {
       svc.recordEffective('n3', svc.envFor(w.nodes.get('n3')!))
       expect(await svc.setCardRoute('n3', 'group/smart')).toMatchObject({ appliesOn: 'restart' })
       expect(w.respawned).toEqual(['n1'])
+      svc.dispose()
+    } finally {
+      await fake.close()
+    }
+  })
+
+  it('a session file on disk makes a respawn safe before the tracker has verified it (round 6)', async () => {
+    const fake = await fakeGateway()
+    try {
+      const onDisk = new Set<string>()
+      const svc = service(w, { MAGPIE_ADDR: `:${fake.port}` }, true, () => true, (node) => onDisk.has(node.id))
+      await svc.refresh()
+      w.exact = false // the lazy tracker has not verified anything yet
+      w.phases.set('d1', 'idle')
+      w.nodes.set('d1', terminal('d1', 'claude', { claudeSessionId: 'sess-1' }))
+      svc.recordEffective('d1', svc.envFor(w.nodes.get('d1')!))
+      onDisk.add('d1')
+      expect(await svc.setCardRoute('d1', 'group/smart')).toMatchObject({ appliesOn: 'now', effective: 'group/smart' })
+      expect(w.respawned).toEqual(['d1'])
+      // No file for the id it names: refused, as before.
+      w.phases.set('d2', 'idle')
+      w.nodes.set('d2', terminal('d2', 'claude', { claudeSessionId: 'gone' }))
+      svc.recordEffective('d2', svc.envFor(w.nodes.get('d2')!))
+      expect(await svc.setCardRoute('d2', 'group/smart')).toMatchObject({ appliesOn: 'restart' })
+      expect(w.respawned).toEqual(['d1'])
+      svc.dispose()
+    } finally {
+      await fake.close()
+    }
+  })
+
+  it('cards routed before a restart are seeded from their node data, so their activity is followed (round 6)', async () => {
+    const fake = await fakeGateway()
+    try {
+      // Node data as the store reloads it: routed before the restart, direct, and served-but-routed (never).
+      w.nodes.set('r1', terminal('r1', 'claude', { route: 'group/smart', routeEffective: 'group/smart' }))
+      w.nodes.set('r2', terminal('r2', 'claude', { routeEffective: 'direct' }))
+      w.nodes.set('r3', terminal('r3', 'claude', { routeEffective: 'group/smart', servedSession: { serviceId: 'x' } as never }))
+      const svc = service(w, { MAGPIE_ADDR: `:${fake.port}` })
+      expect(svc.seedRouted()).toBe(1)
+      await svc.refresh()
+      svc.onActivity('r1', 'thinking')
+      await sleep(30)
+      expect(svc.health().live).toBe(1)
+      svc.onActivity('r2', 'thinking')
+      svc.onActivity('r3', 'thinking')
+      expect(svc.health().live).toBe(1)
+      svc.onActivity('r1', 'idle')
+      expect(svc.health().live).toBe(0)
       svc.dispose()
     } finally {
       await fake.close()

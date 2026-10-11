@@ -69,6 +69,15 @@ export interface RouteServiceDeps {
   respawn: (terminalId: string) => Promise<boolean>
   /** Has this card recorded any turn? A card with none and no session id has nothing to lose in a respawn. */
   hasTurns?: (terminalId: string) => boolean
+  /**
+   * Is the session the node names still on disk? Right after a restart the
+   * exact-context gate says no until the lazy tracker has verified the
+   * session; a file that exists is resumed by the harness itself, so a
+   * respawn loses nothing. Refuses (false) with no session id or no file.
+   */
+  sessionOnDisk?: (node: TerminalNodeData) => boolean
+  /** Every terminal node across workspaces, for seeding the routed set at boot. */
+  terminalsAcross?: () => readonly TerminalNodeData[]
   dockCommands: () => readonly string[]
   /** The harness scan (installed, signed in, in dock), cached; injected for tests. */
   scan?: HarnessScan
@@ -266,7 +275,9 @@ export class RouteService extends EventEmitter {
     const phase = this.deps.phaseOf(terminalId)
     const idle = phase === undefined || phase === 'idle' || phase === 'replied'
     const after = this.deps.node(terminalId)
-    if (idle && after && (after.routeEffective ?? null) !== route && (this.deps.canRestoreExact(after) || this.fresh(after))) {
+    const restorable = (node: TerminalNodeData): boolean =>
+      this.deps.canRestoreExact(node) || this.fresh(node) || (this.deps.sessionOnDisk?.(node) ?? false)
+    if (idle && after && (after.routeEffective ?? null) !== route && restorable(after)) {
       await this.deps.respawn(terminalId)
     }
     this.emitCard(terminalId)
@@ -292,6 +303,23 @@ export class RouteService extends EventEmitter {
     if (!r.routable) return direct(false)
     for (const f of r.files) (this.deps.writeFile ?? writeFile0600)(f.path, f.content)
     return { env: r.env, args: r.args, effective: route, offline: false }
+  }
+
+  /**
+   * After a restart the routed set is empty while cards that were routed
+   * BEFORE it still run — their node data says so (`routeEffective`), and
+   * without this their activity never starts the long-poll and `live` stays
+   * null for good. Called once at boot, before the first probe.
+   */
+  seedRouted(): number {
+    let seeded = 0
+    for (const node of this.deps.terminalsAcross?.() ?? []) {
+      const effective = node.routeEffective ?? null
+      if (effective === null || effective === DIRECT || this.isServedNode(node)) continue
+      this.routed.add(node.id)
+      seeded += 1
+    }
+    return seeded
   }
 
   /** A process was CREATED with this spawn: what it got is now the card's effective route. */
