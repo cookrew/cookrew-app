@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { SecretSlot, SECRET_SLOT_COPY, sealedWhen } from '../src/renderer/src/nodes/SecretSlot'
 import { renderNoteMarkdown } from '../src/renderer/src/note-markdown'
-import { isSecretName, secretSlotLine, secretSlotOf, secretSlotsOf } from '../src/shared/secret-slot'
+import { afterSeal, isSecretName, secretSlotLine, secretSlotOf, secretSlotsOf } from '../src/shared/secret-slot'
 
 const VALUE = 'sk_live_51Hx9QxTESTVALUE0000'
 
@@ -68,8 +68,9 @@ describe('the editor block', () => {
     // And it LOOKS empty: no dots standing in for a value that is not there.
     expect(set).not.toContain('••••')
     expect(set).toContain('placeholder="paste to replace"')
-    expect(SECRET_SLOT_COPY.how).toContain('prefer exec')
+    expect(SECRET_SLOT_COPY.how).toContain("the value is in that command's environment and its children inherit it")
     expect(SECRET_SLOT_COPY.where).toContain('over TLS')
+    expect(SECRET_SLOT_COPY.where).toContain('hop by hop through cookrew.dev')
   })
 
   it('the served toggle is off by default, and follows the store when it holds a flag', () => {
@@ -99,5 +100,28 @@ describe('the editor block', () => {
     expect(node).toContain('stageShare(visible, pane) >= ENTER_STAGE_SHARE')
     // Rendered after the editing/viewing branch, not inside it.
     expect(node.indexOf('{hasSlots && (')).toBeGreaterThan(node.indexOf('__html: renderNoteMarkdown'))
+  })
+})
+
+describe('afterSeal', () => {
+  it('empties the field, clears the error, and replaces this name in the listing without touching the old map', () => {
+    const before = new Map([['openai-key', { name: 'openai-key', served: false, updatedAt: 1 }]])
+    const sealed = { name: 'stripe-key', served: true, updatedAt: 2 }
+    const next = afterSeal(sealed, before)
+    expect(next.field).toEqual({ value: '', error: null })
+    expect([...next.listing.keys()]).toEqual(['openai-key', 'stripe-key'])
+    expect(next.listing.get('stripe-key')).toBe(sealed)
+    expect(before.has('stripe-key')).toBe(false)
+    const again = afterSeal({ ...sealed, updatedAt: 3 }, next.listing)
+    expect(again.listing.get('stripe-key')?.updatedAt).toBe(3)
+    expect(again.listing.size).toBe(2)
+  })
+
+  it('is the step the component takes', () => {
+    const src = readFileSync('src/renderer/src/nodes/SecretSlot.tsx', 'utf8')
+    expect(src).toContain('const next = afterSeal(sealed, new Map())')
+    expect(src).toContain('setValue(next.field.value)')
+    const node = readFileSync('src/renderer/src/nodes/NoteNode.tsx', 'utf8')
+    expect(node).toContain('afterSeal(entry, prev).listing')
   })
 })

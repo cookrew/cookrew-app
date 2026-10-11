@@ -45,6 +45,9 @@ export interface SecretsStoreOptions {
 
 export const SECRETS_DIR_NAME = 'secrets'
 
+/** A tmp file older than this was left by a crash; younger, it may be in flight. */
+export const STALE_TMP_MS = 60_000
+
 const assertName = (name: string): void => {
   if (!isSecretName(name)) {
     throw new Error(`not a secret name: lower-case letters, digits and dashes, up to 64, never a leading dash`)
@@ -87,6 +90,26 @@ export const createSecretsStore = (options: SecretsStoreOptions = {}): SecretsSt
     }
   }
 
+  /**
+   * A `<name>.<pid>.tmp` left by a crash mid-write holds nothing anyone should
+   * keep — but one that is seconds old may be another live writer's, so only
+   * a file older than STALE_TMP_MS goes. Every put sweeps its own name first,
+   * so a crash does not leave the next put throwing EEXIST until a list runs.
+   */
+  const sweepStale = (names: readonly string[]): void => {
+    const cutoff = now() - STALE_TMP_MS
+    for (const entry of names) {
+      if (!/^[a-z0-9][a-z0-9-]{0,63}\.\d+\.tmp$/.test(entry)) continue
+      const file = path.join(dir, entry)
+      try {
+        if (statSync(file).mtimeMs > cutoff) continue
+        rmSync(file)
+      } catch {
+        // Already gone, or not ours to remove.
+      }
+    }
+  }
+
   const put: SecretsStore['put'] = (name, value, putOptions = {}) => {
     assertName(name)
     if (typeof value !== 'string' || value.length === 0) throw new Error('a secret needs a value')
@@ -101,6 +124,11 @@ export const createSecretsStore = (options: SecretsStoreOptions = {}): SecretsSt
     }
     const file = fileOf(name)
     const tmp = `${file}.${process.pid}.tmp`
+    try {
+      sweepStale(readdirSync(dir).filter((entry) => entry.startsWith(`${name}.`)))
+    } catch {
+      // The directory was just made: nothing to sweep.
+    }
     // `wx`: create, never open an existing file, never follow a symlink that
     // was planted at this path — a value must land in a file this process
     // made with this mode, or nowhere. Then fsync, then rename into place.
@@ -113,19 +141,6 @@ export const createSecretsStore = (options: SecretsStoreOptions = {}): SecretsSt
     }
     renameSync(tmp, file)
     return { name, served: record.served, updatedAt: record.updatedAt }
-  }
-
-  /** A `<name>.<pid>.tmp` left by a crash mid-write holds nothing anyone should keep. */
-  const sweepStale = (names: readonly string[]): void => {
-    for (const entry of names) {
-      if (/^[a-z0-9][a-z0-9-]{0,63}\.\d+\.tmp$/.test(entry)) {
-        try {
-          rmSync(path.join(dir, entry))
-        } catch {
-          // Already gone, or not ours to remove.
-        }
-      }
-    }
   }
 
   const list = (): SecretListing[] => {

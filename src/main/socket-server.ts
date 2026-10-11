@@ -73,8 +73,11 @@ export interface SocketServerDeps {
    */
   secrets?: SecretsStore
   audit?: (event: SecretAudit) => void
-  /** Was this terminal spawned for a served session? Read for the secret verbs only. */
-  isServed?: (terminalId: string) => boolean
+  /**
+   * Was this terminal spawned for a served session? Read for the secret verbs
+   * only, and REQUIRED: an optional predicate fails open when nobody wires it.
+   */
+  isServed: (terminalId: string) => boolean
   /** Fork an agent from one of its turns (same path as IPC forking). */
   forkTerminal: (sourceId: string, turnIndex?: number) => TerminalNodeData
   routines: RoutineScheduler
@@ -957,7 +960,7 @@ export function ownerPaneOf(request: CliRequest, deps: SocketServerDeps): Termin
   const id = identity.terminalId
   const node = deps.store.node(id) ?? deps.store.nodeAcrossWorkspaces?.(id)?.node
   if (!node || node.kind !== 'terminal') throw refuse('no live pane of this app answers to this terminal')
-  if (deps.isServed?.(id) === true) throw refuse('never readable from a served session')
+  if (deps.isServed(id)) throw refuse('never readable from a served session')
   return node
 }
 
@@ -1518,7 +1521,8 @@ Usage:
   cookrew note write "Name" "content"           Replace a note's content
   cookrew note edit "Name" "old" "new"          Replace a substring within a note
   cookrew note delete "Name"                    Remove a connected note (destructive)
-  cookrew secret exec <name> -- <command…>      Run a command with the secret as COOKREW_SECRET_<NAME> in its env (preferred)
+  cookrew secret exec <name> -- <command…>      Run a command with the secret as COOKREW_SECRET_<NAME> in its environment
+                                                (its children inherit it; nothing is printed — the better of the two paths)
   cookrew secret read <name>                    Print a sealed secret — into the pane and its transcript; prefer exec
   cookrew secret list                           Sealed secret names, never values
                                                 (owner panes only; every read is logged)

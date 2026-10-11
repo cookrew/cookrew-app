@@ -58,12 +58,29 @@ import type { UiCommandEvent } from "../shared/sous-ui";
 import type { EventEmitter } from "node:events";
 import type { SecretsStore } from "./secrets-store";
 import { isSecretName } from "../shared/secret-slot";
+import { RELAY_MARKER, isLoopbackPeer } from "./relay-base";
 
-/** TLS, or this Mac talking to itself: the only transports a secret value may ride. */
-export const sealedTransport = (request: { socket: { encrypted?: boolean; remoteAddress?: string } }): boolean => {
+/**
+ * THE TRANSPORTS A SECRET VALUE MAY RIDE, each named for why:
+ *
+ *   TLS       the phone on the LAN or the tailnet, under a trusted name.
+ *   relay     a request the canvas bridge carried in (RELAY_MARKER, which
+ *             only the bridge on loopback may set — host-gate.ts). It is
+ *             accepted BECAUSE the relay leg is TLS hop by hop — phone to
+ *             cookrew.dev, cookrew.dev to this Mac's uplink — and not
+ *             because it happens to arrive from 127.0.0.1.
+ *   loopback  this Mac's own renderer and CLI.
+ *
+ * A plain-HTTP request from the LAN is none of these and is refused.
+ */
+export const sealedTransport = (request: {
+  socket: { encrypted?: boolean; remoteAddress?: string };
+  headers?: Record<string, string | string[] | undefined>;
+}): boolean => {
   if (request.socket.encrypted === true) return true;
-  const peer = request.socket.remoteAddress ?? "";
-  return peer === "127.0.0.1" || peer === "::1" || peer === "::ffff:127.0.0.1";
+  const loopback = isLoopbackPeer(request.socket.remoteAddress);
+  if (request.headers?.[RELAY_MARKER] === "1") return loopback;
+  return loopback;
 };
 
 /** A `secret.*` event with its details — the name — withheld. */
@@ -680,9 +697,9 @@ export async function handleMobileApi(
       return true;
     }
     if (method === "PUT" && name !== null) {
-      // THE VALUE CROSSES THE NETWORK HERE, once. Only over TLS or from this
-      // Mac itself (the desktop renderer, the relay bridge on loopback):
-      // a cleartext LAN PUT would hand the value to the Wi-Fi.
+      // THE VALUE CROSSES THE NETWORK HERE, once: over TLS, through the relay
+      // (TLS hop by hop), or from this Mac itself — see sealedTransport. A
+      // cleartext LAN PUT would hand the value to the Wi-Fi.
       if (!sealedTransport(request)) {
         respondJson(response, 403, { error: "seal from the desktop or over TLS" });
         return true;
