@@ -1,5 +1,6 @@
 import type { DeepLink } from '../../shared/deep-link'
 import type { AnsweredRow, QueueRow, RowAction } from '../../shared/account-requests'
+import type { CardRoute, CardRouteState, RouteState } from '../../shared/route';
 import type { AgentTuning, AgentTuningState, TuneKnob } from '../../shared/agent-tuning'
 import type { TranslateResult } from '../../shared/translate'
 import type { Surface as SousSurface } from '../../shared/sous-intent'
@@ -410,6 +411,17 @@ export interface CookrewApi {
    * Optional — the demo api lacks them; consumers feature-detect (EventToast).
    */
   onEvent?: (cb: (event: unknown) => void) => () => void;
+  /**
+   * The route program (shared/route.ts): is the Magpie gateway here, what it
+   * serves, where each turn went; and one card's route. Optional and
+   * feature-detected like the dials: a bridge without it draws no panel.
+   */
+  routeState?: () => Promise<RouteState>;
+  routeSetDefault?: (model: string | null) => Promise<RouteState>;
+  terminalRoute?: (terminalId: string) => Promise<CardRouteState>;
+  terminalRouteSet?: (terminalId: string, route: CardRoute) => Promise<CardRouteState | { error: string }>;
+  onRoute?: (cb: (state: RouteState) => void) => () => void;
+  onCardRoute?: (cb: (row: { terminalId: string } & CardRouteState) => void) => () => void;
   /**
    * Signals on the cables: one agent asked another, or answered — one frame
    * per moment (shared/cable-signal.ts). Optional and feature-detected: the

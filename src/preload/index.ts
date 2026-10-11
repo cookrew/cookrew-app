@@ -422,6 +422,22 @@ const api = {
     return () => ipcRenderer.removeListener('event:new', listener)
   },
   // A cable lit: one agent asked another, or answered (cable-signal.ts).
+  // The route program (shared/route.ts): the gateway state, the owner's one
+  // default, and each card's route. Pushed, never polled, like the dials.
+  routeState: () => ipcRenderer.invoke('route:state'),
+  routeSetDefault: (model: string | null) => ipcRenderer.invoke('route:set-default', model),
+  terminalRoute: (terminalId: string) => ipcRenderer.invoke('terminal:route', terminalId),
+  terminalRouteSet: (terminalId: string, route: string) => ipcRenderer.invoke('terminal:route-set', terminalId, route),
+  onRoute: (cb: (state: unknown) => void) => {
+    const listener = (_e: unknown, state: unknown): void => cb(state)
+    ipcRenderer.on('route', listener)
+    return () => ipcRenderer.removeListener('route', listener)
+  },
+  onCardRoute: (cb: (row: unknown) => void) => {
+    const listener = (_e: unknown, row: unknown): void => cb(row)
+    ipcRenderer.on('card-route', listener)
+    return () => ipcRenderer.removeListener('card-route', listener)
+  },
   onCableSignal: (cb: (signal: unknown) => void) => {
     const listener = (_e: unknown, signal: unknown): void => cb(signal)
     ipcRenderer.on('cable:signal', listener)

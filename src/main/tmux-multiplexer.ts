@@ -57,7 +57,7 @@ export const execRunner: CommandRunner = {
  * restart preserve the original env and the running agent.
  */
 export function bootScript(spec: AttachSpec): string {
-  const inner = spec.command && spec.command.trim().length > 0 ? spec.command : `${spec.shell} -l`
+  const inner = commandWithArgs(spec)
   // path.posix, not path — this string is a POSIX shell script handed to
   // `sh -c`, so it must use forward slashes on every platform. Using the
   // platform joiner emitted `\tmp\cli\cookrew` on Windows, where the
@@ -68,8 +68,26 @@ export function bootScript(spec: AttachSpec): string {
     `export COOKREW_SOCKET='${spec.socketPath}'`,
     `export COOKREW_CLI='${path.posix.join(spec.cliDir, 'cookrew')}'`,
     `export PATH='${spec.path}'`,
+    ...routeExports(spec),
     `exec ${inner}`
   ].join('; ')
+}
+
+/** The agent command with the route's args appended, shell-quoted; a bare login shell takes none. */
+export function commandWithArgs(spec: AttachSpec): string {
+  const command = spec.command && spec.command.trim().length > 0 ? spec.command : null
+  if (command === null) return `${spec.shell} -l`
+  const args = (spec.args ?? []).map(shellQuote)
+  return args.length > 0 ? `${command} ${args.join(' ')}` : command
+}
+
+/** `export K='v'` per route env entry, with the single quote escaped the POSIX way. */
+export function routeExports(spec: AttachSpec): string[] {
+  return Object.entries(spec.env ?? {}).map(([key, value]) => `export ${key}=${shellQuote(value)}`)
+}
+
+export function shellQuote(value: string): string {
+  return /^[A-Za-z0-9_./:=@%+,-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`
 }
 
 export interface TmuxOptions {
