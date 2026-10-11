@@ -56,7 +56,9 @@ describe('a typed Setup line, watched', () => {
 
 describe('the routes tick and the dial say the same thing', () => {
   it('pi gets ✗ routes with the reason as the title; the others get ✓', () => {
-    const state = routeFixture('online')
+    const online = routeFixture('online')
+    // pi became routable in core2 (proven on the real binary); the ✗ case is a row main marked not routable.
+    const state = { ...online, harnesses: online.harnesses.map((r) => (r.id === 'pi' ? { ...r, routable: false } : r)) }
     const html = renderToStaticMarkup(<Harnesses rows={state.harnesses} onRun={() => {}} />)
     expect(html).toContain(`title="${NOT_ROUTABLE_REASON.pi}"`)
     expect(html).toContain('✗ routes')
