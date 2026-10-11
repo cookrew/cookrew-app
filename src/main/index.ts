@@ -8,6 +8,7 @@ import { WorkspaceStore } from './store'
 import { PtyManager, multiplexer, sessionNameFor } from './pty'
 import { buildInbox, type InboxNode } from './inbox'
 import { cachedDispatchReader, wireInbox } from './inbox-wiring'
+import { createWindowHold } from './inbox-window-hold'
 import { placeBeside, type DecideCandidate } from '../shared/sous-decide'
 import type { PtySession } from './pty'
 import type { PaneCardInfo } from './multiplexer'
@@ -5613,24 +5614,14 @@ app.whenReady().then(() => {
     announce: (rows) => mainWindow?.webContents.send('inbox:changed', rows)
   })
   // The window holds the list while its box is subscribed; a one-shot read
-  // builds on demand.
-  let windowHold: (() => void) | null = null
-  const releaseWindowHold = (): void => {
-    windowHold?.()
-    windowHold = null
-  }
+  // builds on demand. The hold goes with the page that took it: a reload or a
+  // closed window never sends the unsubscribe (inbox-window-hold.ts).
+  const windowHold = createWindowHold(() => inbox.hold())
   ipcMain.handle('inbox:subscribe', (event) => {
-    if (!windowHold) {
-      windowHold = inbox.hold()
-      // A reload or a closed window never sends the unsubscribe: the hold
-      // goes with the page that took it.
-      const contents = event.sender
-      contents.once('did-start-navigation', releaseWindowHold)
-      contents.once('destroyed', releaseWindowHold)
-    }
+    windowHold.subscribe(event.sender)
     return inbox.read()
   })
-  ipcMain.handle('inbox:unsubscribe', releaseWindowHold)
+  ipcMain.handle('inbox:unsubscribe', () => windowHold.release())
   ipcMain.handle('inbox:list', () => inbox.read())
   ipcMain.handle('sous:cancel', (_e, token: string, surface?: unknown) => sous.cancel(String(token), desktopCaller(surface)))
 
