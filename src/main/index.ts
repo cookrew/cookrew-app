@@ -105,6 +105,9 @@ import {
   WorkspaceMeta
 } from '../shared/model'
 import { DEFAULT_ORCH_PRESET, PRESETS } from './presets'
+import { GatewayMonitor } from './route/gateway'
+import { RouteService } from './route/service'
+import { onPath } from './route/setup'
 import { forkContextReady, forkTerminal as forkTerminalOp, injectWhenReady } from './fork'
 import { AgentRegistry } from './agent-registry'
 import { AgentExportStore } from './agent-export'
@@ -568,6 +571,48 @@ const servedSpawnContexts = new Map<
  * counts sessions rather than dollars.
  */
 const grants = serviceGrants(sessionsBase)
+// THE ROUTE (route program, 2026-10-11): is the Magpie gateway here, what it
+// serves, where each card's turns go. One service; the panel, the rail, the
+// phone and every spawn read it. Its emitter fans out to the renderer and
+// the phone stream (routeBus) exactly like the dials' tuningBus.
+const routeBus = new EventEmitter()
+const routeService = new RouteService({
+  monitor: new GatewayMonitor({ hasBinary: () => onPath('magpie', process.env.PATH) }),
+  fetch: (input, init) => fetch(input, init),
+  home: homedir(),
+  pathEnv: process.env.PATH,
+  pluginDir: app.isPackaged ? path.join(process.resourcesPath, 'magpie') : path.join(app.getAppPath(), 'resources', 'magpie'),
+  node: (id) => {
+    const node = store.nodeAcrossWorkspaces(id)?.node
+    return node?.kind === 'terminal' ? node : null
+  },
+  updateNode: (id, patch) => void store.updateNodeUnsafe(id, patch),
+  isServed: (id) => {
+    const owner = store.ownerOf(id)
+    return owner !== undefined && servedSpawnContexts.has(owner)
+  },
+  harnessOf: (command) => harnessFor(command)?.id ?? null,
+  phaseOf: (id) => turns.phaseOf(id),
+  canRestoreExact: (node) => canRestoreExact(node),
+  // In place, with exact context: the kill drops the PTY, the spawn resumes
+  // the same session under the new env (the recover path's own guarantee).
+  respawn: async (id) => {
+    const node = store.nodeAcrossWorkspaces(id)?.node
+    if (!node || node.kind !== 'terminal') return false
+    if (ptys.get(id)) ptys.kill(id)
+    spawnTracked(node)
+    return true
+  },
+  dockCommands: () => PRESETS.map((p) => p.command)
+})
+routeService.on('route', (state) => {
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('route', state)
+  routeBus.emit('route', state)
+})
+routeService.on('card-route', (row) => {
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('card-route', row)
+  routeBus.emit('card-route', row)
+})
 const grantPreflight = servedGrantPreflight({
   grants,
   orch: {
@@ -2666,8 +2711,19 @@ function spawnTracked(t: {
         controlSocketPath: ptys.socketPath
       })
     : undefined
+  // The card's route, as env and args the harness is spawned with. Decided
+  // here, at the spawn, so what the process got is what the node records as
+  // `routeEffective`; a served session gets none (the service refuses it).
+  const route = cardNode?.kind === 'terminal' ? routeService.envFor(cardNode) : null
   const session = ptys.spawn(
-    { terminalId: t.id, command: effective, cwd: t.cwd, card, served },
+    {
+      terminalId: t.id,
+      command: effective,
+      cwd: t.cwd,
+      card,
+      served,
+      ...(route && !served ? { route: { env: route.env, args: route.args } } : {})
+    },
     owner
   )
   // One producer per conversation: every owner keystroke consults the
@@ -3894,7 +3950,17 @@ function tuneDeps(): TuneDeps {
     },
     write: (id, data) => ptys.get(id)?.write(data),
     asks: tuneAsks,
-    cache: tuningCache
+    cache: tuningCache,
+    // The RTE dial: offered only when the gateway is online and the card's
+    // harness can be routed; 'direct' first, then the catalog, groups first.
+    routeChoices: (id) => {
+      const state = routeService.state()
+      if (state.status !== 'online') return null
+      const node = store.nodeAcrossWorkspaces(id)?.node
+      const harness = node?.kind === 'terminal' ? harnessFor(node.command)?.id : null
+      if (!harness || harness === 'pi') return null
+      return ['direct', ...state.models.map((m) => m.id)]
+    }
   }
 }
 
@@ -3954,6 +4020,7 @@ async function removeNode(id: string): Promise<void> {
   if (node?.kind === 'terminal' && node.servedSession) void endSessionAtDoor(node)
   retireTerminal(id, 'terminal removed')
   defaultProducerLease().forgetTerminal(id)
+  routeService.forget(id)
   // A permanently removed uuid never returns: its input-provenance fact
   // protects nothing and would otherwise sit in the WAL forever.
   defaultProducerLease().clearProvenanceOnDeath(id)
@@ -5602,6 +5669,17 @@ app.whenReady().then(() => {
     board: boardSources(),
     // The main thread's pulse (loop-health.ts) for GET /api/health.
     health: () => loopHealth.snapshot(),
+    // The route program's four endpoints, the stream's two frames, and the
+    // `route` field on /api/health (mobile-api.ts).
+    route: {
+      state: () => routeService.state(),
+      setDefault: (model) => routeService.setDefault(model),
+      cardState: (id) => routeService.cardState(id),
+      setCardRoute: (id, route) => routeService.setCardRoute(id, route),
+      health: () => routeService.health(),
+      hold: () => routeService.hold()
+    },
+    routeBus,
     // The screen wall's pictures, for the phone (GET /api/workspaces/shots).
     workspaceShots: currentWorkspaceShots,
     // Attach-free dispatch (v4 §3): the two /api routes answer 503 without it.
@@ -6384,6 +6462,13 @@ function registerIpc(handlers: RestoreHandlers): void {
   // durable registry holds exactly what a readout needs (command, cwd, session
   // ref), so nothing has to be resident to be readable.
   ipcMain.handle('tuning:list', () => tuningFleet())
+  // The route (route program): read on demand, pushed on change (routeService).
+  ipcMain.handle('route:state', () => routeService.refresh())
+  ipcMain.handle('route:set-default', (_e, model: string | null) => routeService.setDefault(model))
+  ipcMain.handle('terminal:route', (_e, terminalId: string) => routeService.cardState(terminalId))
+  ipcMain.handle('terminal:route-set', (_e, terminalId: string, route: string) =>
+    routeService.setCardRoute(terminalId, route)
+  )
   ipcMain.handle('git:info', (_e, dir: string) => gitCache.info(dir))
   // Lanes: worktree per agent, landing as a product action (lanes.ts).
   ipcMain.handle('lane:list', (_e, dir: string) => laneList(dir))
@@ -6416,6 +6501,8 @@ function registerIpc(handlers: RestoreHandlers): void {
   // Turn/summary activity for the canvas cards.
   turns.on('activity', (activity) => {
     lazyTerminals.reconsider(activity.terminalId)
+    // A routed card in flight is followed at the gateway; at rest, it is not.
+    routeService.onActivity(activity.terminalId, activity.phase)
     if (mainWindow && !mainWindow.webContents.isDestroyed()) {
       mainWindow.webContents.send('terminal:activity', activity)
       announceTuning(activity.terminalId)

@@ -165,6 +165,9 @@ export interface MobileServerDeps {
   tuningBus?: MobileApiDeps['tuningBus']
   /** Signals on the cables (cable-signal.ts) — passed straight through to the /api/events stream. */
   signalBus?: MobileApiDeps['signalBus']
+  /** The route program's endpoints and stream frames — see MobileApiDeps; passed through as-is. */
+  route?: MobileApiDeps['route']
+  routeBus?: MobileApiDeps['routeBus']
   /** 'changed' when the registry took a different reach card — the phone re-races on it. */
   reachBus?: MobileApiDeps['reachBus']
   /** The one stream (T2) — passed straight through to handleMobileApi, which

@@ -358,6 +358,12 @@ export interface TuneDeps {
   cache?: TuningCache
   watch?: HarnessWatchOptions
   now?: () => number
+  /**
+   * The route knob's choices (route program): ['direct', ...groups, ...models]
+   * from the gateway catalog, when the card's harness can be routed. Absent =
+   * no RTE dial, exactly the rail before the program.
+   */
+  routeChoices?: (terminalId: string) => readonly string[] | null
 }
 
 export type TuneResult = { ok: true; ask: TuneAsk } | { ok: false; reason: string }
@@ -378,12 +384,20 @@ export function tuningStateOf(deps: TuneDeps, terminalId: string): AgentTuningSt
     const values = harness.tuning?.values?.(knob, tuning)
     if (values) choices[knob] = values
   }
+  // The RTE dial reads from CardRouteState, never from the session file; it
+  // is listed here only so the rail knows the card has one and what it offers.
+  const typed = [...knobs]
+  const routeChoices = deps.routeChoices?.(terminalId) ?? null
+  if (routeChoices) {
+    knobs.push('route')
+    choices.route = routeChoices
+  }
   return {
     harness: harness.id,
     knobs,
     // Absent means "every knob it can set, it also writes down" — true of
     // claude, and the safe default for a harness that has not thought about it.
-    records: [...(harness.tuning?.records ?? knobs)],
+    records: [...(harness.tuning?.records ?? typed)],
     tuning,
     asks: deps.asks.of(terminalId),
     caveat: harness.tuning?.caveat ?? null,
@@ -410,6 +424,8 @@ export function applyTuning(
   if (!harness?.tuning) return { ok: false, reason: 'this agent has no dials' }
   // Both arrive over IPC and both end up inside a line typed into a live pane.
   if (!isTuneKnob(knob)) return { ok: false, reason: 'not a dial' }
+  // The route is never typed into the pane: PUT /api/terminal/:id/route sets it.
+  if (knob === 'route') return { ok: false, reason: 'the route is set on the card, not typed' }
   if (!harness.tuning.knobs.includes(knob)) return { ok: false, reason: `this agent has no ${knob} dial` }
   // Against the HARNESS's values when it names them, not the shared defaults.
   // For pi this is the difference between setting a model and opening a picker

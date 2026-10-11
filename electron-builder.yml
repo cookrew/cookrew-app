@@ -46,6 +46,10 @@ protocols:
 extraResources:
   - from: resources/cr-listen/cr-listen
     to: cr-listen
+  # The Magpie agent plugin (resources/magpie): `magpie plugin add <this dir>`
+  # puts a Cookrew row on magpie's Agents page (route program, D1b).
+  - from: resources/magpie
+    to: magpie
 
 mac:
   category: public.app-category.developer-tools

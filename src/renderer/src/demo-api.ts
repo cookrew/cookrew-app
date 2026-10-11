@@ -7,6 +7,7 @@ import type {
 } from '../../shared/model'
 import { noteNameFromContent, uniqueName } from '../../shared/model'
 import type { CookrewApi } from './api'
+import type { CardRouteState, RouteDecision, RouteState } from '../../shared/route'
 
 /**
  * Browser demo backend: when the renderer runs outside Electron (plain
@@ -115,6 +116,60 @@ export function createDemoApi(): CookrewApi {
   // Signals on the cables, with no main behind them: a fixture page (the
   // harness preview, QA) puts one on a cable through `window.__cableSignal`.
   const signalListeners = new Set<(signal: unknown) => void>()
+  // The route program's fixture: a gateway online with three providers, a
+  // smart group as the default, two decisions in flight — enough for the
+  // harness view to draw the panel and the rail's RTE dial without a main.
+  const routeLive: RouteDecision[] = [
+    { terminalId: 'card-0', session: 'cookrew:card-0', seq: 3, asked: 'group/smart', group: 'group/smart', model: 'claude/claude-sonnet-5-5', effort: 'high', tries: 1, done: false, status: null, at: Date.now() - 4000 },
+    { terminalId: 'card-1', session: 'cookrew:card-1', seq: 7, asked: 'group/smart', group: 'group/smart', model: 'deepseek/deepseek-chat', effort: null, tries: 2, done: true, status: '200', at: Date.now() - 12000 }
+  ]
+  let routeDefault: string | null = 'group/smart'
+  const routeState = (): RouteState => ({
+    status: 'online',
+    gateway: { url: 'http://127.0.0.1:3425', v1: 'http://127.0.0.1:3425/v1', key: 'magpie-cookrew', port: 3425, version: '0.1.1182', source: 'plugin' },
+    defaultModel: routeDefault,
+    providers: 3,
+    models: [
+      { id: 'group/smart', displayName: 'smart', ownedBy: 'magpie', group: true, reasoning: true, levels: ['low', 'high'], contextWindow: null },
+      { id: 'claude/claude-sonnet-5-5', displayName: 'Claude Sonnet 5.5', ownedBy: 'claude', group: false, reasoning: true, levels: ['low', 'medium', 'high'], contextWindow: 1000000 },
+      { id: 'deepseek/deepseek-chat', displayName: 'DeepSeek Chat', ownedBy: 'deepseek', group: false, reasoning: false, levels: [], contextWindow: 128000 },
+      { id: 'ollama/qwen3', displayName: 'qwen3', ownedBy: 'ollama', group: false, reasoning: false, levels: [], contextWindow: 32768 }
+    ],
+    quotas: [
+      { provider: 'claude', account: 'owner@example.com', alias: null, plan: 'max', kind: 'subscription', windows: [{ name: '5h', used: 12, limit: 100, resetsAt: Date.now() + 3600_000 }], last: true },
+      { provider: 'deepseek', account: null, alias: null, plan: null, kind: 'key', windows: [], last: false },
+      { provider: 'ollama', account: null, alias: null, plan: null, kind: 'local', windows: [], last: false }
+    ],
+    live: routeLive,
+    harnesses: [
+      { id: 'claude', name: 'Claude Code', installed: true, signedIn: true, inDock: true, installLine: 'npm i -g @anthropic-ai/claude-code', loginLine: 'claude' },
+      { id: 'codex', name: 'Codex', installed: true, signedIn: false, inDock: true, installLine: 'npm i -g @openai/codex', loginLine: 'codex login' },
+      { id: 'opencode', name: 'OpenCode', installed: false, signedIn: null, inDock: true, installLine: 'curl -fsSL https://opencode.ai/install | bash', loginLine: 'opencode auth login' },
+      { id: 'pi', name: 'Pi', installed: true, signedIn: null, inDock: true, installLine: 'npm i -g @earendil-works/pi-coding-agent', loginLine: null }
+    ],
+    checkedAt: Date.now(),
+    setup: {
+      installLine: 'curl -fsSL https://usemagpie.ai/install.sh | sh',
+      serveLine: 'magpie autostart on',
+      pluginLine: 'magpie plugin add /Applications/Cookrew.app/Contents/Resources/magpie',
+      addSubscriptionLine: 'magpie accounts add codex',
+      addKeyLine: 'magpie provider add <preset> ',
+      addLocalLine: 'magpie provider add ollama',
+      addGroupLine: 'magpie group add smart models=claude/claude-sonnet-5-5,deepseek/deepseek-chat routing=smart'
+    }
+  })
+  const cardRoutes = new Map<string, string>()
+  const cardRoute = (terminalId: string): CardRouteState => {
+    const route = cardRoutes.get(terminalId) ?? routeDefault ?? 'direct'
+    return {
+      route,
+      effective: route,
+      appliesOn: 'now',
+      live: routeLive.find((d) => d.terminalId === terminalId) ?? null,
+      turn: terminalId === 'card-1' ? { model: 'deepseek/deepseek-chat', inputTokens: 1840, outputTokens: 312, cost: 0.0021, at: Date.now() - 11000 } : null,
+      offline: false
+    }
+  }
   if (typeof window !== 'undefined') {
     ;(window as unknown as { __cableSignal?: (moment: unknown) => void }).__cableSignal = (moment) => {
       const frame = { at: Date.now(), ...(typeof moment === 'object' && moment !== null ? moment : {}) }
@@ -327,6 +382,18 @@ export function createDemoApi(): CookrewApi {
 
     listActivity: () => Promise.resolve([]),
     onTerminalActivity: () => () => undefined,
+    routeState: () => Promise.resolve(routeState()),
+    routeSetDefault: (model) => {
+      routeDefault = model
+      return Promise.resolve(routeState())
+    },
+    terminalRoute: (terminalId) => Promise.resolve(cardRoute(terminalId)),
+    terminalRouteSet: (terminalId, route) => {
+      cardRoutes.set(terminalId, route)
+      return Promise.resolve(cardRoute(terminalId))
+    },
+    onRoute: () => () => undefined,
+    onCardRoute: () => () => undefined,
     onCableSignal: (cb) => {
       signalListeners.add(cb)
       return () => {

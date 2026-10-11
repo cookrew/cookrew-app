@@ -50,6 +50,7 @@
 import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { commandWithArgs, routeExports } from './tmux-multiplexer'
 import { promptViaHerdr, submitViaHerdr, waitForAgentState } from './herdr-agent-wait'
 import { isTransientHerdrError, runWithHerdrRetry } from './herdr-retry'
 import {
@@ -212,7 +213,7 @@ export function toScrollState(pane: HerdrPane | null): ScrollState {
  * lsof. The single quotes are the same containment tmux's boot script uses.
  */
 export function bootCommand(spec: AttachSpec): string {
-  const inner = spec.command && spec.command.trim().length > 0 ? spec.command : `${spec.shell} -l`
+  const inner = commandWithArgs(spec)
   return [
     `export TERM_PROGRAM=Cookrew`,
     `export COOKREW_TERMINAL_ID='${spec.terminalId}'`,
@@ -221,11 +222,12 @@ export function bootCommand(spec: AttachSpec): string {
     // is read by the pane's POSIX shell, so backslashes would be escapes.
     `export COOKREW_CLI='${path.posix.join(spec.cliDir, 'cookrew')}'`,
     `export PATH='${spec.path}'`,
+    ...routeExports(spec),
     `exec ${inner}`
   ].join('; ')
 }
 
-/** Env every Cookrew pane needs, as herdr `--env KEY=VALUE` arguments. */
+/** Env every Cookrew pane needs, as herdr `--env KEY=VALUE` arguments — the route's too. */
 export function envArgs(spec: AttachSpec): string[] {
   return [
     ['TERM_PROGRAM', 'Cookrew'],
@@ -234,7 +236,8 @@ export function envArgs(spec: AttachSpec): string[] {
     // path.posix for the same reason the tmux boot script uses it: this is a
     // value the pane's POSIX shell will see, not a host filesystem path.
     ['COOKREW_CLI', path.posix.join(spec.cliDir, 'cookrew')],
-    ['PATH', spec.path]
+    ['PATH', spec.path],
+    ...Object.entries(spec.env ?? {})
   ].flatMap(([key, value]) => ['--env', `${key}=${value}`])
 }
 

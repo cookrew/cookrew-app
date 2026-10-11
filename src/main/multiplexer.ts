@@ -86,6 +86,15 @@ export interface AttachSpec {
    * (tmux, direct) ignore it entirely.
    */
   card?: PaneCardInfo
+  /**
+   * The card's ROUTE (route program): env the harness reads to reach the
+   * Magpie gateway, and args appended to its command line. Both are set by
+   * pty.ts from the route service at spawn, never for a served pane, and
+   * each backend carries them the way it carries COOKREW_*: the boot script
+   * (tmux, herdr), `--env` (herdr split) or the spawn options (direct).
+   */
+  env?: Record<string, string>
+  args?: string[]
 }
 
 /**

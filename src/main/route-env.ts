@@ -1,0 +1,126 @@
+import path from 'node:path'
+import type { HarnessId } from './harness'
+import { routeSession, type RouteGateway } from '../shared/route'
+
+/**
+ * THE ENVIRONMENT THAT POINTS A HARNESS AT THE GATEWAY (route program, D1b).
+ *
+ * One function, pure: given the harness, the gateway and the model a card
+ * was given, the env and the extra args its process is spawned with — and,
+ * for a harness that only takes a provider from a file, the file to write
+ * first. Nothing here reads the disk or the network, so the exact lines
+ * every harness receives are pinned by tests/route-env.test.ts and the two
+ * that matter most were checked against the real binaries on 2026-10-11:
+ *
+ *   claude 2.1.275 sends `X-Magpie-Session` from ANTHROPIC_CUSTOM_HEADERS,
+ *   `Authorization: Bearer <key>` from ANTHROPIC_AUTH_TOKEN and the model
+ *   from ANTHROPIC_MODEL (a fake gateway recorded all three). It warns that
+ *   a group id is "not in this version's model catalog" and sends anyway.
+ *
+ *   codex 0.162.1 takes the inline table on the command line exactly as
+ *   written below — `-c 'model_providers.magpie.http_headers={"X-Magpie-
+ *   Session"="cookrew:<id>"}'` — and the header, the bearer from env_key and
+ *   the model all arrived; the exec round-tripped a Responses stream.
+ *
+ * The key is one for the whole app (`magpie-cookrew`, or what the plugin
+ * file gave): on this machine the gateway takes any key and counts the
+ * call under it; the card is told apart by the session header, which both
+ * /v1/magpie/route?session= and /usage/requests?session= take.
+ */
+
+export interface RouteEnvInput {
+  harness: HarnessId
+  gateway: Pick<RouteGateway, 'url' | 'v1' | 'key'>
+  /** A Magpie model id or group id, never 'direct' (the caller decides that first). */
+  model: string
+  cardId: string
+}
+
+export interface RouteEnv {
+  env: Record<string, string>
+  /** Appended to the harness command. */
+  args: string[]
+  /** Written before the spawn, 0600, under ~/.cookrew/route/<cardId>/. */
+  files: { path: string; content: string }[]
+  /** False when this harness cannot be pointed at the gateway yet (pi, this round). */
+  routable: boolean
+}
+
+export const SESSION_HEADER = 'X-Magpie-Session'
+export const ROUTE_DIR = path.join(process.env.HOME ?? '', '.cookrew', 'route')
+
+/** The header line claude takes: `Name: value`, one per line. */
+export function sessionHeaderLine(cardId: string): string {
+  return `${SESSION_HEADER}: ${routeSession(cardId)}`
+}
+
+export function routeEnv(input: RouteEnvInput): RouteEnv {
+  const { harness, gateway, model, cardId } = input
+  const session = routeSession(cardId)
+  switch (harness) {
+    case 'claude':
+      return {
+        env: {
+          ANTHROPIC_BASE_URL: gateway.url,
+          ANTHROPIC_AUTH_TOKEN: gateway.key,
+          ANTHROPIC_MODEL: model,
+          ANTHROPIC_DEFAULT_OPUS_MODEL: model,
+          ANTHROPIC_DEFAULT_SONNET_MODEL: model,
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: model,
+          ANTHROPIC_CUSTOM_HEADERS: sessionHeaderLine(cardId)
+        },
+        args: [],
+        files: [],
+        routable: true
+      }
+    case 'codex':
+      return {
+        env: { MAGPIE_GATEWAY_KEY: gateway.key },
+        args: [
+          '-c', 'model_provider=magpie',
+          '-c', 'model_providers.magpie.name=Magpie',
+          '-c', `model_providers.magpie.base_url=${gateway.v1}`,
+          '-c', 'model_providers.magpie.env_key=MAGPIE_GATEWAY_KEY',
+          '-c', 'model_providers.magpie.wire_api=responses',
+          '-c', `model_providers.magpie.http_headers={"${SESSION_HEADER}"="${session}"}`,
+          '-c', `model=${model}`
+        ],
+        files: [],
+        routable: true
+      }
+    case 'opencode': {
+      // OPENCODE_CONFIG names one more config file (merged over the user's);
+      // the provider entry is opencode's documented OpenAI-compatible shape.
+      const file = path.join(ROUTE_DIR, cardId, 'opencode.json')
+      const config = {
+        $schema: 'https://opencode.ai/config.json',
+        provider: {
+          magpie: {
+            npm: '@ai-sdk/openai-compatible',
+            name: 'Magpie',
+            options: { baseURL: gateway.v1, apiKey: gateway.key, headers: { [SESSION_HEADER]: session } },
+            models: { [model]: { name: model } }
+          }
+        },
+        model: `magpie/${model}`
+      }
+      return {
+        env: { OPENCODE_CONFIG: file },
+        args: ['--model', `magpie/${model}`],
+        files: [{ path: file, content: `${JSON.stringify(config, null, 2)}\n` }],
+        routable: true
+      }
+    }
+    case 'pi':
+      // pi takes a custom provider only from ~/.pi/agent/models.json, which is
+      // the user's own file and global to every pi: there is no per-process
+      // way to point one card at the gateway without rewriting it. Not this
+      // round; the rail says "direct · pi is not routable yet".
+      return { env: {}, args: [], files: [], routable: false }
+  }
+}
+
+/** Shell-quote one arg for a command line that a login shell will split. */
+export function shellArg(arg: string): string {
+  return /^[A-Za-z0-9_./:=@%+,-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`
+}

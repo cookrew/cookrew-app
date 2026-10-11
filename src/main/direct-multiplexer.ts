@@ -20,6 +20,7 @@
 // the agents. `persistsAcrossRestart: false` says so, once, where callers can
 // act on it — rather than each of them re-deriving it from the backend's name.
 
+import { commandWithArgs } from './tmux-multiplexer'
 import type {
   AttachSpawn,
   AttachSpec,
@@ -84,8 +85,12 @@ export class DirectMultiplexer implements Multiplexer {
    * the one thing this backend has that tmux does not.
    */
   attachSpawn(spec: AttachSpec): AttachSpawn {
-    const command = spec.command && spec.command.trim().length > 0 ? spec.command : spec.shell
-    return { file: spec.shell, args: ['-l', '-c', command] }
+    const command = spec.command && spec.command.trim().length > 0 ? commandWithArgs(spec) : spec.shell
+    // The route's env rides the spawn options like everything else here
+    // (pty.ts merges `env` over the pane environment).
+    return spec.env && Object.keys(spec.env).length > 0
+      ? { file: spec.shell, args: ['-l', '-c', command], env: spec.env }
+      : { file: spec.shell, args: ['-l', '-c', command] }
   }
 
   /**
