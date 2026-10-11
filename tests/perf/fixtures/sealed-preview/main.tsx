@@ -18,7 +18,9 @@ async function boot(): Promise<void> {
     name: 'Stripe keys',
     customName: 'Stripe keys',
     content:
-      '# Stripe keys\n\nTest cards live in docs/. The live key goes in a sealed slot, never in this text.\n\n🔒 stripe-key\n'
+      '# Stripe keys\n\nTest cards live in docs/. The live key goes in a sealed slot, never in this text.\n\n🔒 stripe-key\n',
+    // Tall enough for the body and the block together, as an owner would size it.
+    size: { width: 300, height: 380 }
   })
   if (new URLSearchParams(location.search).get('phone') === '1') document.body.classList.add('cookrew-mobile')
   createRoot(document.getElementById('root')!).render(<App />)
