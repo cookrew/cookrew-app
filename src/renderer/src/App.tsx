@@ -289,6 +289,12 @@ function Canvas(): React.JSX.Element {
   useEffect(() => {
     if (routeState.state && shouldAutoOpen(routeState.state.status, window.localStorage)) setRoutingOpen(true)
   }, [routeState.state])
+  // The panel opening is the owner looking: ask main once, so a renderer that
+  // fell behind the gateway shows the default the owner actually has.
+  const rereadRoute = routeState.reread
+  useEffect(() => {
+    if (routingOpen) rereadRoute()
+  }, [routingOpen, rereadRoute])
   const cardNames = useMemo(() => new Map((workspace?.nodes ?? []).map((n) => [n.id, n.name])), [workspace?.nodes])
   /**
    * A workspace switch replaces every node while the viewport still frames the

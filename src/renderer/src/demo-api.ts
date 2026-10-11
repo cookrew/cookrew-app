@@ -124,10 +124,19 @@ export function createDemoApi(): CookrewApi {
   const routeChanged = (): void => {
     for (const listener of routeListeners) listener(route)
   }
+  // A read that answers late, with the state as it was when asked — the
+  // companion's GET through a slow link, for the fixture's race test.
+  let routeReadLagMs = 0
   if (typeof window !== 'undefined') {
-    ;(window as unknown as { __routeStatus?: (status: RouteState['status']) => void }).__routeStatus = (status) => {
+    const hooks = window as unknown as { __routeStatus?: (status: RouteState['status']) => void; __routePush?: () => void; __routeReadLag?: (ms: number) => void }
+    hooks.__routeStatus = (status) => {
       route = routeFixture(status)
       routeChanged()
+    }
+    // The same state, pushed again — what main does after any probe.
+    hooks.__routePush = () => routeChanged()
+    hooks.__routeReadLag = (ms) => {
+      routeReadLagMs = ms
     }
   }
   // Signals on the cables, with no main behind them: a fixture page (the
@@ -345,7 +354,10 @@ export function createDemoApi(): CookrewApi {
 
     listActivity: () => Promise.resolve([]),
     onTerminalActivity: () => () => undefined,
-    routeState: () => Promise.resolve(route),
+    routeState: () => {
+      const asked = route
+      return routeReadLagMs > 0 ? new Promise((resolve) => setTimeout(() => resolve(asked), routeReadLagMs)) : Promise.resolve(asked)
+    },
     routeSetDefault: (model) => {
       route = { ...route, defaultModel: model }
       routeChanged()
