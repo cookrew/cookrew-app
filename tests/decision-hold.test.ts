@@ -10,8 +10,9 @@ import type { Decision } from '../src/main/sous-control'
 const decision: Decision = {
   kind: 'ask',
   target: { id: 'forge', name: 'Forge' },
-  alternates: [{ id: 'tinker', name: 'Tinker', reasons: ['idle', 'same repo', 'role: Bugfix'] }],
+  alternates: [{ kind: 'ask' as const, id: 'tinker', name: 'Tinker', reasons: ['idle', 'same repo', 'role: Bugfix'] }],
   reasons: ['idle', 'same repo', 'last touched README · 2h'],
+  recruit: { harness: 'Claude Code' as const, name: 'Install Section', beside: null, direct: true },
   token: 't1',
   holdMs: 1500,
   sentence: 'Make the install section of README English'
