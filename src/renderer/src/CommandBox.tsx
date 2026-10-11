@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { cookrew, isRemoteMode } from './api'
 import { useCanvasUi } from './canvas-ui'
 import { createHold, enterSubmits, type Hold } from './decision-hold'
+import { createInboxFeed, enterDuringHold, holdsInbox } from './command-box-feed'
 import { waitedFor, type InboxRow } from '../../shared/inbox-rank'
 import { INBOX_MARK } from '../../shared/inbox-copy'
 import type { Decision, SousCommandResult } from '../../main/sous-control'
@@ -54,19 +55,16 @@ export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecis
   const slotTimer = useRef<number | null>(null)
   const isPhone = phone ?? isRemoteMode()
 
-  // The rows: the subscription holds the list open in main and delivers the
-  // opening rows; a bridge without one falls back to a single read.
+  // The rows: the subscription HOLDS the list open in main (it is built only
+  // while someone looks), so it is attached only while the box can be seen —
+  // open on the desktop, always on the phone — and detached when it cannot.
   useEffect(() => {
     if (givenRows) return
-    const api = cookrew()
-    let alive = true
-    const off = api.onInbox?.((list) => alive && setRows(list))
-    if (!off) void api.inbox?.().then((list) => alive && setRows(list)).catch(() => undefined)
-    return () => {
-      alive = false
-      off?.()
-    }
-  }, [givenRows])
+    if (!holdsInbox({ open, phone: isPhone })) return
+    const feed = createInboxFeed(cookrew(), (list) => setRows(list as InboxRow[]))
+    feed.attach()
+    return () => feed.detach()
+  }, [givenRows, open, isPhone])
 
   // The printed wait comes from `since` and moves once a minute.
   useEffect(() => {
@@ -96,7 +94,7 @@ export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecis
       }
       setBusy(true)
       void api
-        .sousCommit(decision.token, target ? { target } : {})
+        .sousCommit(decision.token, target ? { target } : {}, isPhone ? 'phone' : 'canvas')
         .then((result) => {
           setBusy(false)
           say(result)
@@ -120,7 +118,7 @@ export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecis
         holdMs: decision.holdMs,
         onTick: (left) => setEcho((e) => (e && e.kind === 'decision' && e.decision.token === decision.token ? { ...e, left } : e)),
         onCommit: (target) => commitDecision(decision, target),
-        onCancel: (token) => void cookrew().sousCancel?.(token).catch(() => undefined)
+        onCancel: (token) => void cookrew().sousCancel?.(token, isPhone ? 'phone' : 'canvas').catch(() => undefined)
       })
     },
     [commitDecision]
@@ -154,14 +152,19 @@ export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecis
 
   const submit = (): void => {
     if (echo?.kind === 'decision' && hold.current) {
-      hold.current.commit()
-      return
+      // The same sentence commits the held decision; a changed one is a new
+      // brief — the held decision is cancelled, and the text goes to Sous.
+      if (enterDuringHold(text, echo.decision) === 'commit') {
+        hold.current.commit()
+        return
+      }
+      dismiss()
     }
     const sentence = text.trim()
     if (!sentence || busy) return
     setBusy(true)
     void cookrew()
-      .sousCommand(sentence, { surface: isPhone ? 'phone' : 'canvas' })
+      .sousCommand(sentence, { surface: isPhone ? 'phone' : 'canvas', box: true })
       .then((result) => {
         setBusy(false)
         if (result.intent === 'decide' && result.decision) showDecision(result.decision)

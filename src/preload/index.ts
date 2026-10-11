@@ -492,7 +492,7 @@ const api = {
     return () => ipcRenderer.removeListener('app:cmd-w', listener)
   },
   // Sous driving the canvas: a sentence up, zoom / zoom-back down.
-  sousCommand: (text: string, ctx: { surface: string; focusedAgentId?: string | null; alternates?: string[] }) =>
+  sousCommand: (text: string, ctx: { surface: string; focusedAgentId?: string | null; alternates?: string[]; box?: boolean }) =>
     ipcRenderer.invoke('sous:command', text, ctx),
   onUiCommand: (cb: (event: unknown) => void) => {
     const listener = (_e: unknown, event: unknown): void => cb(event)
@@ -500,8 +500,8 @@ const api = {
     return () => ipcRenderer.removeListener('ui:command', listener)
   },
   // R3: the decide step's commit, and the HITL inbox.
-  sousCommit: (token: string, choice?: { target?: string }) => ipcRenderer.invoke('sous:commit', token, choice ?? {}),
-  sousCancel: (token: string) => ipcRenderer.invoke('sous:cancel', token),
+  sousCommit: (token: string, choice?: { target?: string }, surface?: string) => ipcRenderer.invoke('sous:commit', token, choice ?? {}, surface ?? 'canvas'),
+  sousCancel: (token: string, surface?: string) => ipcRenderer.invoke('sous:cancel', token, surface ?? 'canvas'),
   inbox: () => ipcRenderer.invoke('inbox:list'),
   // Subscribing HOLDS the list open in main (it is built only while someone
   // looks); the opening rows arrive through the callback too.

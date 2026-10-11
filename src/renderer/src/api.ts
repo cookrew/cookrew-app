@@ -664,7 +664,7 @@ export interface CookrewApi {
    */
   sousCommand: (
     text: string,
-    ctx: { surface: SousSurface; focusedAgentId?: string | null; alternates?: string[] }
+    ctx: { surface: SousSurface; focusedAgentId?: string | null; alternates?: string[]; box?: boolean }
   ) => Promise<SousCommandResult>;
   onUiCommand: (cb: (event: UiCommandEvent) => void) => () => void;
   /**
@@ -673,9 +673,9 @@ export interface CookrewApi {
    * once. Optional: an older bridge never decides, and the box then shows
    * what Sous said and nothing else.
    */
-  sousCommit?: (token: string, choice?: { target?: string }) => Promise<SousCommandResult>;
+  sousCommit?: (token: string, choice?: { target?: string }, surface?: SousSurface) => Promise<SousCommandResult>;
   /** The box closed with a decision still held: main drops the token. */
-  sousCancel?: (token: string) => Promise<boolean>;
+  sousCancel?: (token: string, surface?: SousSurface) => Promise<boolean>;
   /** R3 · the HITL inbox: a one-shot read, and the subscription that holds the list open in main. */
   inbox?: () => Promise<InboxRow[]>;
   onInbox?: (cb: (rows: InboxRow[]) => void) => () => void;

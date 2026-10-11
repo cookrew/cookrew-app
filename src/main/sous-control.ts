@@ -74,6 +74,12 @@ export interface SousControlDeps {
 /** A draft decision stamped for the box: the token to commit it under, how long to hold. */
 export type Decision = DecisionDraft & { token: string; holdMs: number; sentence: string }
 
+/** Who is committing or cancelling: the surface and caller the decision was minted for. */
+export interface Caller {
+  surface: Surface
+  callerId?: string
+}
+
 /** What `commit` may change: the ask's target, or the recruit's harness. */
 export interface CommitChoice {
   /** For `ask`: another candidate's id. For `recruit`: `harness:<name>`. */
@@ -90,6 +96,14 @@ export interface SousCommandInput {
    */
   alternates?: readonly string[]
   surface: Surface
+  /**
+   * The sentence came from A BOX — a surface that will show the decision
+   * echo and commit or cancel it (CommandBox on the desktop, the phone bar).
+   * Push-to-talk, the CLI and the gateway only speak what comes back, so a
+   * decision minted for them would be held by nobody; they send false (or
+   * nothing) and keep the regex core exactly as before.
+   */
+  box?: boolean
   /**
    * WHO is speaking on that surface — the desktop, one phone, one speaker.
    * A surface is a class of door, not a device: two phones are both 'phone',
@@ -118,7 +132,7 @@ export interface SousCommandResult {
    * `bad-target` is not one of the decision's choices (400), `expired` is a
    * token that was spent or outlived its hold (410).
    */
-  error?: 'bad-target' | 'expired'
+  error?: 'bad-target' | 'expired' | 'not-yours'
   /** The agent the sentence ended up about, when there is one. */
   agentId?: string
   /** The text that went into the agent, after polish — so a surface can show it. */
@@ -142,6 +156,8 @@ const TYPES_WITHOUT_ENTER: ReadonlySet<Surface> = new Set(['zoom'])
 /** The surfaces with a box: the only ones a decision is minted for. */
 const DECIDING_SURFACES: ReadonlySet<Surface> = new Set(['canvas', 'phone'])
 const NOT_A_CHOICE = { en: 'That is not one of the choices.', zh: '这不在可选项里。' } as const
+const NOT_YOURS = { en: 'That decision was made for another box.' } as const
+const IN_FLIGHT = { en: 'That brief is already on its way.' } as const
 
 const EXPIRED = { en: 'That decision expired — say it again.', zh: '这个决定已过期，再说一次。' } as const
 const SENT = {
@@ -170,7 +186,7 @@ export class SousController {
   /** Where Sous last zoomed each caller — the only focus a network door gets. */
   private readonly focus = new Map<string, string>()
   /** Decisions shown and not yet committed, by token; each dies after DECISION_TTL_MS. */
-  private readonly decisions = new Map<string, { decision: Decision; surface: Surface; key: string; lang: Lang; until: number }>()
+  private readonly decisions = new Map<string, { decision: Decision; surface: Surface; key: string; lang: Lang; until: number; committing: boolean }>()
 
   constructor(private readonly deps: SousControlDeps) {}
 
@@ -233,7 +249,7 @@ export class SousController {
     // from — the canvas and the phone. Voice, the CLI and the gateway only
     // speak what comes back, so a decision minted for them would expire
     // unseen; they keep the regex core and nothing more.
-    if (parsed.intent.kind === 'none' && this.deps.decide && DECIDING_SURFACES.has(input.surface) && input.text.trim().length > 0) {
+    if (parsed.intent.kind === 'none' && this.deps.decide && input.box === true && DECIDING_SURFACES.has(input.surface) && input.text.trim().length > 0) {
       try {
         return await this.decideStep(input.text.trim(), key, input.surface, parsed.lang)
       } catch (error) {
@@ -335,7 +351,7 @@ export class SousController {
     const decision: Decision = { ...draft, token, holdMs: DECISION_HOLD_MS, sentence }
     this.sweepDecisions()
     // A question is answered in the box and creates nothing — there is nothing to commit.
-    if (draft.kind !== 'question') this.decisions.set(token, { decision, surface, key, lang, until: this.now() + DECISION_TTL_MS })
+    if (draft.kind !== 'question') this.decisions.set(token, { decision, surface, key, lang, until: this.now() + DECISION_TTL_MS, committing: false })
     this.note('decide', draft.kind === 'ask' ? draft.target.id : null, `${draft.kind}: ${draft.reasons.join(' · ')}`)
     return { intent: 'decide', spoken: echoOf(decision, lang), decision }
   }
@@ -346,20 +362,23 @@ export class SousController {
    * A token that was spent or that outlived DECISION_TTL_MS is refused, so a
    * stale box cannot send a brief twice.
    */
-  async commit(token: string, choice: CommitChoice = {}): Promise<SousCommandResult> {
+  async commit(token: string, choice: CommitChoice = {}, caller?: Caller): Promise<SousCommandResult> {
     this.sweepDecisions()
     const slot = this.decisions.get(token)
     if (!slot) return { intent: 'refused', spoken: EXPIRED.en, error: 'expired' }
+    // THE TOKEN IS THE CALLER'S. A decision minted for one box is committed
+    // or cancelled by that box and no other paired caller.
+    if (caller && callerKey(caller.surface, caller.callerId) !== slot.key) return { intent: 'refused', spoken: NOT_YOURS.en, error: 'not-yours' }
+    if (slot.committing) return { intent: 'refused', spoken: IN_FLIGHT.en, error: 'expired' }
     const { decision, surface, key, lang } = slot
-    // ONLY THE CHOICES SHOWN. An ask takes its target or one of its
-    // alternates and never a harness; a recruit takes its harness or an
-    // alternate harness and never a card. Anything else is a bad request,
-    // and the decision stays on the line for a proper choice.
     const allowed = decision.kind === 'ask' ? [decision.target.id, ...decision.alternates.map((a) => a.id)] : decision.kind === 'recruit' ? [`harness:${decision.harness}`, ...decision.alternates.map((a) => a.id)] : []
     if (choice.target !== undefined && !allowed.includes(choice.target)) {
       return { intent: 'refused', spoken: NOT_A_CHOICE[lang], error: 'bad-target' }
     }
     const roster = this.deps.roster()
+    // Marked BEFORE the first await: a cancel that arrives while the brief is
+    // on its way answers false — the brief lands, and the box is told so.
+    slot.committing = true
     try {
       let result: SousCommandResult
       if (decision.kind === 'ask') {
@@ -393,12 +412,21 @@ export class SousController {
     } catch (error) {
       const what = error instanceof Error ? error.message : String(error)
       console.error(`Sous: commit ${decision.kind} failed:`, error)
+      slot.committing = false
       return { intent: 'refused', spoken: FAILED[lang](what) }
     }
   }
 
-  /** The box closed with the decision uncommitted: the token is dropped, nothing runs. */
-  cancel(token: string): boolean {
+  /**
+   * The box closed with the decision uncommitted: the token is dropped and
+   * nothing runs. False when the token is not this caller's, was spent, or
+   * is committing right now — the brief is landing and cannot be unsent.
+   */
+  cancel(token: string, caller?: Caller): boolean {
+    const slot = this.decisions.get(token)
+    if (!slot) return false
+    if (caller && callerKey(caller.surface, caller.callerId) !== slot.key) return false
+    if (slot.committing) return false
     return this.decisions.delete(token)
   }
 
