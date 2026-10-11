@@ -478,6 +478,14 @@ const api = {
     ipcRenderer.on('ui:command', listener)
     return () => ipcRenderer.removeListener('ui:command', listener)
   },
+  // R3: the decide step's commit, and the HITL inbox.
+  sousCommit: (token: string, choice?: { target?: string }) => ipcRenderer.invoke('sous:commit', token, choice ?? {}),
+  inbox: () => ipcRenderer.invoke('inbox:list'),
+  onInbox: (cb: (rows: unknown) => void) => {
+    const listener = (_e: unknown, rows: unknown): void => cb(rows)
+    ipcRenderer.on('inbox:changed', listener)
+    return () => ipcRenderer.removeListener('inbox:changed', listener)
+  },
   // Hold ⌘ to talk: main runs the on-device recognizer and streams what it hears.
   listenAvailable: () => ipcRenderer.invoke('listen:available'),
   listenStart: () => ipcRenderer.invoke('listen:start'),

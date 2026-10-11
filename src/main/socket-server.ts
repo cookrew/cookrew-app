@@ -1173,6 +1173,8 @@ const SOUS_SURFACES: ReadonlySet<string> = new Set(['canvas', 'zoom', 'phone', '
 /** The one method of the controller a door needs; tests fake it in one line. */
 export interface SousDoor {
   handle: (input: SousCommandInput) => Promise<SousCommandResult>
+  /** The box's commit of a shown decision (R3); optional for a door with no decide step. */
+  commit?: (token: string, choice?: { target?: string }) => Promise<SousCommandResult>
 }
 
 async function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): Promise<string> {

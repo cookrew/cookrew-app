@@ -24,6 +24,7 @@ import {
 } from '../shared/sous-intent'
 import { rankHearings, vocabularyOf } from '../shared/sous-hearing'
 import type { UiCommand } from '../shared/sous-ui'
+import { DECISION_HOLD_MS, DECISION_TTL_MS, decide, type DecideCandidate, type DecisionDraft, type Harness } from '../shared/sous-decide'
 
 export interface SousControlDeps {
   /** The live roster, read per sentence — names change under a running app. */
@@ -53,6 +54,29 @@ export interface SousControlDeps {
   /** One ledger line per executed intent, so a misheard rename has a trail. */
   note?: (kind: string, subjectId: string | null, detail: string) => void
   now?: () => number
+  /**
+   * THE DECIDE STEP (route program R3). A sentence the intent core does not
+   * match is a brief for the crew, and these are what Sous needs to pick who:
+   * the cards as the Board sees them, the active workdir, and a way to
+   * recruit a card beside the orch. Absent = the old behaviour, `none`.
+   */
+  decide?: {
+    candidates: () => Promise<DecideCandidate[]> | DecideCandidate[]
+    workdir: () => string | null
+    /** A new card in the ACTIVE workspace, placed beside `besideId` (sous-decide placeBeside), wired to it, role = the brief. */
+    recruit: (input: { preset: Harness; name: string; role: string; besideId: string | null }) => Promise<{ id: string; name: string }> | { id: string; name: string }
+    /** Mint the token a decision travels under. */
+    token?: () => string
+  }
+}
+
+/** A draft decision stamped for the box: the token to commit it under, how long to hold. */
+export type Decision = DecisionDraft & { token: string; holdMs: number; sentence: string }
+
+/** What `commit` may change: the ask's target, or the recruit's harness. */
+export interface CommitChoice {
+  /** For `ask`: another candidate's id. For `recruit`: `harness:<name>`. */
+  target?: string
 }
 
 export interface SousCommandInput {
@@ -82,8 +106,10 @@ export interface SousCommandInput {
 }
 
 export interface SousCommandResult {
-  intent: SousIntent['kind'] | 'refused'
+  intent: SousIntent['kind'] | 'refused' | 'decide'
   spoken: string
+  /** The decide step's answer, shown for `holdMs` then committed by token. */
+  decision?: Decision
   needs?: 'prompt' | Refusal
   choices?: string[]
   /** The agent the sentence ended up about, when there is one. */
@@ -107,6 +133,23 @@ const IN_THE_BOX = {
 /** Where a dictated sentence is typed and left, rather than submitted. */
 const TYPES_WITHOUT_ENTER: ReadonlySet<Surface> = new Set(['zoom'])
 
+const EXPIRED = { en: 'That decision expired — say it again.', zh: '这个决定已过期，再说一次。' } as const
+const SENT = {
+  zh: (agent: string) => `已派给 ${agent}`,
+  en: (agent: string) => `Sent to ${agent}`
+} as const
+const RECRUITED = {
+  zh: (harness: string, name: string) => `新建了 ${harness} 卡「${name}」`,
+  en: (harness: string, name: string) => `New ${harness} card · ${name}`
+} as const
+
+/** The line under the box: who, and the three reasons — or the question back. */
+export function echoOf(decision: Decision, lang: Lang): string {
+  if (decision.kind === 'ask') return `→ ${decision.target.name} (${decision.reasons.join(' · ')})`
+  if (decision.kind === 'recruit') return `+ ${decision.harness} card · ${decision.name} (${decision.reasons.join(' · ')})`
+  return lang === 'zh' ? decision.question : decision.question
+}
+
 export class SousController {
   /**
    * "What should I ask Conductor?" — asked by one caller on one surface, answered
@@ -116,6 +159,8 @@ export class SousController {
   private readonly pending = new Map<string, PendingPrompt>()
   /** Where Sous last zoomed each caller — the only focus a network door gets. */
   private readonly focus = new Map<string, string>()
+  /** Decisions shown and not yet committed, by token; each dies after DECISION_TTL_MS. */
+  private readonly decisions = new Map<string, { decision: Decision; surface: Surface; key: string; lang: Lang; until: number }>()
 
   constructor(private readonly deps: SousControlDeps) {}
 
@@ -171,6 +216,17 @@ export class SousController {
         spoken: parsed.spoken,
         needs: parsed.needs,
         ...(parsed.choices ? { choices: parsed.choices } : {})
+      }
+    }
+    // THE DECIDE STEP: not a command the core knows, not dictation into a
+    // zoomed terminal, and a sentence rather than a word — Sous picks who.
+    if (parsed.intent.kind === 'none' && this.deps.decide && input.surface !== 'zoom' && input.text.trim().length > 0) {
+      try {
+        return await this.decideStep(input.text.trim(), key, input.surface, parsed.lang)
+      } catch (error) {
+        const what = error instanceof Error ? error.message : String(error)
+        console.error('Sous: decide failed:', error)
+        return { intent: 'refused', spoken: FAILED[parsed.lang](what) }
       }
     }
     try {
@@ -256,6 +312,69 @@ export class SousController {
         return { intent: 'rename', spoken, agentId: agent.id }
       }
     }
+  }
+
+  private async decideStep(sentence: string, key: string, surface: Surface, lang: Lang): Promise<SousCommandResult> {
+    const deps = this.deps.decide
+    if (!deps) return { intent: 'none', spoken: '' }
+    const draft = decide(sentence, { candidates: await deps.candidates(), workdir: deps.workdir(), now: this.now() })
+    const token = deps.token?.() ?? `d-${this.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+    const decision: Decision = { ...draft, token, holdMs: DECISION_HOLD_MS, sentence }
+    this.sweepDecisions()
+    // A question is answered in the box and creates nothing — there is nothing to commit.
+    if (draft.kind !== 'question') this.decisions.set(token, { decision, surface, key, lang, until: this.now() + DECISION_TTL_MS })
+    this.note('decide', draft.kind === 'ask' ? draft.target.id : null, `${draft.kind}: ${draft.reasons.join(' · ')}`)
+    return { intent: 'decide', spoken: echoOf(decision, lang), decision }
+  }
+
+  /**
+   * The box's commit: the decision shown under the token, executed ONCE —
+   * on the hold's expiry, on Enter, or after the owner picked the alternate.
+   * A token that was spent or that outlived DECISION_TTL_MS is refused, so a
+   * stale box cannot send a brief twice.
+   */
+  async commit(token: string, choice: CommitChoice = {}): Promise<SousCommandResult> {
+    this.sweepDecisions()
+    const slot = this.decisions.get(token)
+    if (!slot) return { intent: 'refused', spoken: EXPIRED.en }
+    this.decisions.delete(token)
+    const { decision, key, lang } = slot
+    const roster = this.deps.roster()
+    try {
+      if (decision.kind === 'ask') {
+        const targetId = choice.target ?? decision.target.id
+        const agent = agentOf(roster, targetId)
+        await this.moveTo(agent.workspaceId)
+        this.deps.ui({ kind: 'zoom', nodeId: agent.id }, agent.workspaceId)
+        this.deps.ui({ kind: 'focus-input', nodeId: agent.id }, agent.workspaceId)
+        this.focus.set(key, agent.id)
+        // Committed from the box: the owner has read the sentence already, so it goes in and is sent.
+        const sent = await this.deliver(agent, decision.sentence, 'canvas', lang, SENT[lang](agent.name))
+        return { intent: 'ask', ...sent, spoken: SENT[lang](agent.name) }
+      }
+      if (decision.kind === 'recruit') {
+        const deps = this.deps.decide
+        if (!deps) throw new Error('recruiting is not wired on this desktop')
+        const harness = (choice.target?.startsWith('harness:') ? choice.target.slice('harness:'.length) : decision.harness) as Harness
+        const node = await deps.recruit({ preset: harness, name: decision.name, role: decision.sentence, besideId: decision.beside?.id ?? null })
+        if (decision.beside) this.deps.connect(decision.beside.id, node.id)
+        const workspaceId = this.deps.activeWorkspaceId() ?? ''
+        this.deps.ui({ kind: 'zoom', nodeId: node.id }, workspaceId)
+        this.focus.set(key, node.id)
+        this.note('recruit', node.id, `${harness} · ${node.name}${decision.beside ? ` ↔ ${decision.beside.name}` : ''}`)
+        return { intent: 'create', spoken: RECRUITED[lang](harness, node.name), agentId: node.id, text: decision.sentence }
+      }
+      return { intent: 'decide', spoken: decision.question }
+    } catch (error) {
+      const what = error instanceof Error ? error.message : String(error)
+      console.error(`Sous: commit ${decision.kind} failed:`, error)
+      return { intent: 'refused', spoken: FAILED[lang](what) }
+    }
+  }
+
+  private sweepDecisions(): void {
+    const now = this.now()
+    for (const [token, slot] of this.decisions) if (slot.until <= now) this.decisions.delete(token)
   }
 
   /**

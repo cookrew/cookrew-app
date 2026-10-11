@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { WorkspaceStore } from './store'
 import { PtyManager, multiplexer, sessionNameFor } from './pty'
+import { buildInbox, createInboxBus, type InboxNode } from './inbox'
+import { placeBeside, type DecideCandidate } from '../shared/sous-decide'
 import type { PtySession } from './pty'
 import type { PaneCardInfo } from './multiplexer'
 import { paneCardFor, reportAllPaneBindings, type BindableTerminal } from './pane-bindings'
@@ -27,6 +29,7 @@ import {
   compactDispatchRegistry,
   defaultDispatchRegistry,
   readDispatchRecords,
+  contextExhausted,
   readDispatchTombstones,
   turnDetails
 } from './dispatch'
@@ -5381,8 +5384,58 @@ app.whenReady().then(() => {
       mainWindow?.webContents.send('ui:command', event)
       uiBus.emit('command', event)
     },
-    note: (kind, subjectId, detail) => store.recordEvent(`sous.${kind}`, subjectId ?? '', detail, 'voice')
+    note: (kind, subjectId, detail) => store.recordEvent(`sous.${kind}`, subjectId ?? '', detail, 'voice'),
+    // THE DECIDE STEP (R3): who takes a brief the intent core did not match.
+    // Candidates are the cards as the Board sees them; a context-full card is
+    // read off its pane the way the pre-dispatch probe reads it, for the idle
+    // same-repo cards only (one capture each, never the whole fleet).
+    decide: {
+      workdir: () => store.focusedState.dir,
+      candidates: async () => {
+        const rows = new Map(buildBoard(boardSources()).rows.map((r) => [r.terminalId, r]))
+        const workdir = store.focusedState.dir
+        const out: DecideCandidate[] = []
+        for (const t of store.terminalsAcross()) {
+          const row = rows.get(t.id)
+          const phase = row?.phase ?? 'offline'
+          const idleHere = t.cwd === workdir && (phase === 'done' || phase === 'unread' || phase === 'waiting')
+          let contextFull = false
+          if (idleHere) {
+            try {
+              const mux = multiplexer()
+              const name = sessionNameFor(t.id)
+              const pane = mux instanceof HerdrHostMultiplexer ? await mux.captureAsync(name) : (mux?.capture(name) ?? null)
+              contextFull = contextExhausted(pane)
+            } catch {
+              contextFull = false
+            }
+          }
+          out.push({
+            id: t.id,
+            name: t.name,
+            workspaceId: store.ownerOf(t.id) ?? '',
+            cwd: t.cwd,
+            role: t.role,
+            orch: t.orch === true,
+            phase,
+            contextFull,
+            lastTask: row?.task.title ?? row?.task.summary ?? null,
+            lastActivityAt: row?.lastActivityAt ?? 0
+          })
+        }
+        return out
+      },
+      recruit: ({ preset, name, role, besideId }) => {
+        const nodes = store.focusedState.nodes
+        const anchor = besideId ? (nodes.find((n) => n.id === besideId) ?? null) : null
+        const position = placeBeside(anchor, nodes, DEFAULT_TERMINAL_SIZE)
+        const node = createTerminal({ name, preset, position })
+        updateNode(node.id, { role })
+        return { id: node.id, name: node.name }
+      }
+    }
   })
+  ipcMain.handle('sous:commit', (_e, token: string, choice?: { target?: string }) => sous.commit(String(token), choice ?? {}))
   ipcMain.handle(
     'sous:command',
     (_e, text: string, ctx: { surface: SousSurface; focusedAgentId?: string | null; alternates?: string[] }) =>
@@ -5394,6 +5447,49 @@ app.whenReady().then(() => {
         focusedAgentId: ctx.focusedAgentId ?? null
       })
   )
+
+  // THE INBOX (R3): one ranked list of what only a person can move. Rebuilt on
+  // every store op, event and probe change, announced only when its words change.
+  const inboxBus = createInboxBus(() => {
+    const workspaces = store.list().workspaces
+    const nameOf = (id: string): string => workspaces.find((w) => w.id === id)?.name ?? id
+    const nodes: InboxNode[] = []
+    const connections: { a: string; b: string }[] = []
+    for (const meta of workspaces) {
+      const state = store.workspaceState(meta.id)
+      for (const n of state.nodes) {
+        nodes.push({
+          id: n.id,
+          name: n.name,
+          kind: n.kind,
+          workspaceId: meta.id,
+          workspaceName: nameOf(meta.id),
+          served: n.kind === 'terminal' && n.servedSession != null
+        })
+      }
+      for (const c of state.connections) connections.push({ a: c.a, b: c.b })
+    }
+    return buildInbox({
+      rows: () => buildBoard(boardSources()).rows,
+      nodes: () => nodes,
+      connections: () => connections,
+      dispatches: () => readDispatchRecords(defaultDispatchRegistry()),
+      events: (type, since) => events.query({ type, since })
+    })
+  })
+  let inboxTimer: NodeJS.Timeout | null = null
+  const touchInbox = (): void => {
+    if (inboxTimer) return
+    inboxTimer = setTimeout(() => {
+      inboxTimer = null
+      inboxBus.touch()
+    }, 400)
+  }
+  inboxBus.on('inbox', (rows) => mainWindow?.webContents.send('inbox:changed', rows))
+  store.on('op', touchInbox)
+  events.on('event', touchInbox)
+  boardProbe.onChange(touchInbox)
+  ipcMain.handle('inbox:list', () => inboxBus.touch())
 
   // THE MAC'S EAR. One recognizer child per hold of ⌘; the roster's names go
   // in as hints so "cookrew dev" is not heard as "cooker Dev".
@@ -5502,6 +5598,9 @@ app.whenReady().then(() => {
     // Sous's door for the phone and for voice-gateway; `ui` events for both.
     sous,
     uiBus,
+    // The inbox (R3): the same rows the desktop box lists, pushed on change.
+    inbox: () => inboxBus.touch(),
+    inboxBus,
     // THE DIALS on the phone — the same reads and the same write the desktop
     // does, through the same deps, so the two surfaces cannot drift.
     tuning: {

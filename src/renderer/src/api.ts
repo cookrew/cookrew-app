@@ -4,6 +4,7 @@ import type { AgentTuning, AgentTuningState, TuneKnob } from '../../shared/agent
 import type { TranslateResult } from '../../shared/translate'
 import type { Surface as SousSurface } from '../../shared/sous-intent'
 import type { SousCommandResult } from '../../main/sous-control'
+import type { InboxRow } from '../../shared/inbox-rank'
 import type { ListenEvent } from '../../main/listen'
 import type { UiCommandEvent } from '../../shared/sous-ui'
 import type {
@@ -644,6 +645,16 @@ export interface CookrewApi {
     ctx: { surface: SousSurface; focusedAgentId?: string | null; alternates?: string[] }
   ) => Promise<SousCommandResult>;
   onUiCommand: (cb: (event: UiCommandEvent) => void) => () => void;
+  /**
+   * R3 · the decide step. `sousCommand` may answer `intent: 'decide'` with a
+   * decision the box shows for `holdMs`; this commits it under its token —
+   * once. Optional: an older bridge never decides, and the box then shows
+   * what Sous said and nothing else.
+   */
+  sousCommit?: (token: string, choice?: { target?: string }) => Promise<SousCommandResult>;
+  /** R3 · the HITL inbox: the ranked rows, and the change-gated push. */
+  inbox?: () => Promise<InboxRow[]>;
+  onInbox?: (cb: (rows: InboxRow[]) => void) => () => void;
   /**
    * Hold ⌘ to talk (desktop only — the phone dictates through the Web Speech
    * API in VoiceBar). Main spawns the on-device recognizer on start, SIGINTs
