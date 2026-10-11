@@ -2166,6 +2166,11 @@ a.card-close {
   color: var(--ink, #2d2a20);
   min-width: 0;
 }
+.cr-secret-slot-how {
+  grid-column: 1 / -1;
+  font-size: 10.5px;
+  opacity: 0.75;
+}
 .cr-secret-slot-served {
   grid-column: 1 / -1;
   display: flex;

@@ -5628,6 +5628,13 @@ app.whenReady().then(() => {
     // each read leaves in the event log.
     secrets,
     audit: auditSecret,
+    // THE SERVED FACT for the secret verbs: a pane spawned for a stranger's
+    // seat (pty.ts), or any pane on a workspace this app serves out
+    // (servedSpawnContexts). `servedSession` on the node is the OTHER thing —
+    // the owner's receipt of a session served elsewhere — and must not be
+    // read for this.
+    isServed: (terminalId) =>
+      ptys.isServed(terminalId) || servedSpawnContexts.has(store.ownerOf(terminalId) ?? ''),
     // `ask --no-wait` and `cookrew dispatch <id>`: the SAME engine the HTTP
     // route uses, so a CLI-minted dispatch and an API-minted one are one
     // record with one lifecycle.

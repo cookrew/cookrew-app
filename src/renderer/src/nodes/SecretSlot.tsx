@@ -42,8 +42,8 @@ export const SECRET_SLOT_COPY = {
   sealing: 'SEALING…',
   empty: 'not set',
   set: 'set ✓',
-  how: 'local agents read it with cookrew secret read · every read audited',
-  where: 'nothing leaves this machine; the note keeps only the name'
+  how: 'agents: cookrew secret exec <name> -- <command> (prefer exec — read prints the value into the pane) · every read audited',
+  where: 'stored on this machine; the phone sends it to the desktop over TLS; the note keeps only the name'
 } as const
 
 /** "updated 10:52" — the clock of the seal, never the value. */
@@ -93,7 +93,9 @@ export function SecretSlot({ name, entry, onSealed, put = defaultPut }: SecretSl
         aria-label={`${SECRET_SLOT_COPY.secret} ${name}`}
         autoComplete="off"
         value={value}
-        placeholder={entry ? '••••••••' : 'paste the secret'}
+        // Never dots: an empty field after SEAL must LOOK empty, or the
+        // reader cannot tell a sealed value from a typed one.
+        placeholder={entry ? 'paste to replace' : 'paste the secret'}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') seal()
@@ -104,6 +106,7 @@ export function SecretSlot({ name, entry, onSealed, put = defaultPut }: SecretSl
         {busy ? SECRET_SLOT_COPY.sealing : SECRET_SLOT_COPY.seal}
       </button>
       <span className="cr-secret-slot-state">{error ?? state}</span>
+      <span className="cr-secret-slot-how">{SECRET_SLOT_COPY.how}</span>
       <label className="cr-secret-slot-served">
         <input type="checkbox" checked={served} onChange={(e) => setServed(e.target.checked)} />
         <span>

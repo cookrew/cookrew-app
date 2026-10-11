@@ -65,6 +65,11 @@ describe('the editor block', () => {
     expect(set).toContain(`${SECRET_SLOT_COPY.set} · ${sealedWhen(now)} · served ✗`)
     expect(set).toContain('value=""')
     expect(set).not.toContain(VALUE)
+    // And it LOOKS empty: no dots standing in for a value that is not there.
+    expect(set).not.toContain('••••')
+    expect(set).toContain('placeholder="paste to replace"')
+    expect(SECRET_SLOT_COPY.how).toContain('prefer exec')
+    expect(SECRET_SLOT_COPY.where).toContain('over TLS')
   })
 
   it('the served toggle is off by default, and follows the store when it holds a flag', () => {

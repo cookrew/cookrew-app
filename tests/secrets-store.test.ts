@@ -1,6 +1,6 @@
 // ONE FILE PER SECRET, UNDER A DIRECTORY NOBODY ELSE CAN LIST — and the
 // value comes out of exactly one call.
-import { mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -71,5 +71,24 @@ describe('createSecretsStore', () => {
     const { store } = fresh()
     expect(store.list()).toEqual([])
     expect(store.read('a-key')).toBeNull()
+  })
+})
+
+describe('the write is wx: a planted file at the tmp path takes nothing', () => {
+  it('fails the put rather than writing the value into someone else\'s file, and the sweep removes it', () => {
+    const { base, store } = fresh()
+    const dir = path.join(base, 'secrets')
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    const planted = path.join(dir, `stripe-key.${process.pid}.tmp`)
+    writeFileSync(planted, 'planted', { mode: 0o644 })
+    expect(() => store.put('stripe-key', VALUE)).toThrow(/EEXIST/)
+    expect(readFileSync(planted, 'utf8')).toBe('planted')
+    expect(store.read('stripe-key')).toBeNull()
+    // list() and remove() sweep a stale tmp file; then the put lands.
+    store.list()
+    expect(readdirSync(dir)).toEqual([])
+    store.put('stripe-key', VALUE)
+    expect(store.read('stripe-key')?.value).toBe(VALUE)
+    expect(statSync(path.join(dir, 'stripe-key')).mode & 0o777).toBe(0o600)
   })
 })

@@ -375,6 +375,10 @@ export class PtySession extends EventEmitter {
   private readonly paneEnvironment: Record<string, string>
   private readonly served: boolean
   private readonly servedProfilePath: string | null
+  /** The served fact, as the socket server's secret verbs read it. */
+  get isServed(): boolean {
+    return this.served
+  }
   private readonly cwd: string
   /** Raw child output is synchronous; xterm's parsed mirror drains later. */
   private attachOutputTail = ''
@@ -1246,6 +1250,11 @@ export class PtyManager {
 
   get(terminalId: string): PtySession | undefined {
     return this.sessions.get(terminalId)
+  }
+
+  /** Was this terminal spawned for a served session — someone else's seat? */
+  isServed(terminalId: string): boolean {
+    return this.sessions.get(terminalId)?.isServed ?? false
   }
 
   /**

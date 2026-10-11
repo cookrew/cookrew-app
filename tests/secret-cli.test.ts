@@ -77,6 +77,13 @@ describe('cookrew secret read', () => {
     expect(Object.values(env).join(' ')).not.toContain('cookrew.sock')
   })
 
+  it('exec is a read with the same audit line — the value for the env, never the pane', () => {
+    const { store, audits, run } = harness()
+    store.put('stripe-key', VALUE)
+    expect(run('exec', 'stripe-key')).toBe(VALUE)
+    expect(audits).toEqual([{ type: 'secret.read', terminalId: 't-owner', name: 'stripe-key' }])
+  })
+
   it('usage mistakes exit 1 and log nothing', () => {
     const { audits, run } = harness()
     expect(failure(() => run('read')).exitCode).toBe(SECRET_EXIT.usage)
