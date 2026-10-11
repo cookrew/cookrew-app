@@ -143,6 +143,12 @@ export interface CardRouteState {
   offline: boolean
   /** A sentence the rail shows beside the route: codex's thinking-model need, pi's not-routable-yet. */
   note: string | null
+  /**
+   * The gateway's status NOW, so the rail can say "gateway offline" for a
+   * RUNNING routed card whose requests will fail — `offline` above only says
+   * it was offline at the spawn.
+   */
+  gateway: RouteStatus
 }
 
 export const DIRECT: CardRoute = 'direct'

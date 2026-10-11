@@ -67,6 +67,8 @@ export interface RouteServiceDeps {
   canRestoreExact: (node: TerminalNodeData) => boolean
   /** Kill and respawn the card in place with exact context; true when it did. */
   respawn: (terminalId: string) => Promise<boolean>
+  /** Has this card recorded any turn? A card with none and no session id has nothing to lose in a respawn. */
+  hasTurns?: (terminalId: string) => boolean
   dockCommands: () => readonly string[]
   /** The harness scan (installed, signed in, in dock), cached; injected for tests. */
   scan?: HarnessScan
@@ -213,8 +215,19 @@ export class RouteService extends EventEmitter {
       live: this.decisions.cardLive(terminalId),
       turn: this.decisions.cardTurn(terminalId),
       offline: this.offlineAtSpawn.has(terminalId),
-      note: this.noteFor(node, route)
+      note: this.noteFor(node, route),
+      gateway: this.deps.monitor.probe.status
     }
+  }
+
+  /**
+   * Nothing to restore is also nothing to lose: a card with no session id of
+   * any harness and no recorded turn can be respawned at once, where the
+   * exact-context gate would refuse for want of anything to restore.
+   */
+  private fresh(node: TerminalNodeData): boolean {
+    const hasSession = Boolean(node.claudeSessionId || node.codexSessionRef || node.opencodeSessionId || node.piSessionId)
+    return !hasSession && !(this.deps.hasTurns?.(node.id) ?? false)
   }
 
   /**
@@ -253,7 +266,7 @@ export class RouteService extends EventEmitter {
     const phase = this.deps.phaseOf(terminalId)
     const idle = phase === undefined || phase === 'idle' || phase === 'replied'
     const after = this.deps.node(terminalId)
-    if (idle && after && this.deps.canRestoreExact(after) && (after.routeEffective ?? null) !== route) {
+    if (idle && after && (after.routeEffective ?? null) !== route && (this.deps.canRestoreExact(after) || this.fresh(after))) {
       await this.deps.respawn(terminalId)
     }
     this.emitCard(terminalId)

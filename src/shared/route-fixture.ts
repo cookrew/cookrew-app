@@ -84,6 +84,7 @@ export function cardRouteFixture(over: Partial<CardRouteState> = {}): CardRouteS
     turn: { model: 'deepseek/deepseek-v4', inputTokens: 11_300, outputTokens: 1_100, cost: 0.018, priced: true, at: NOW - 40_000 },
     offline: false,
     note: null,
+    gateway: 'online',
     ...over
   }
 }
