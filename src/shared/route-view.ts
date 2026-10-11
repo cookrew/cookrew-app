@@ -161,18 +161,31 @@ export interface RouteDialLines {
   value: string
   /** "this turn → model · tokens · cost", or null before the first routed turn. */
   turn: string | null
-  /** "applies on restart" / "gateway offline · direct" / null. */
+  /** "applies on restart" / "gateway offline · direct" / "gateway offline — requests will fail until restart" / null. */
   note: string | null
-  /** The chip wears a flag when its reading is not what the card asked for. */
+  /** The chip wears a flag when its reading is not what the card asked for, or what it got will not answer. */
   flag: 'restart' | 'offline' | null
 }
 
+/** The gateway is down NOW under a process that was handed a route: its requests fail until it is respawned. */
+export const GATEWAY_DOWN_NOW = 'gateway offline — requests will fail until restart'
+
 export function routeDialLines(card: CardRouteState | null): RouteDialLines {
   if (card === null) return { value: '—', turn: null, note: null, flag: null }
+  // Offline AT SPAWN: the process went direct and is fine; the chip says so.
   if (card.offline) return { value: 'direct', turn: null, note: joinNotes('gateway offline · direct', card.note), flag: 'offline' }
-  const turn = card.turn && card.turn.model ? `this turn → ${card.turn.model}${tokens(card.turn.inputTokens, card.turn.outputTokens)}${cost(card.turn)}` : card.live?.model ? `this turn → ${card.live.model}` : null
+  // Offline NOW under a routed process: the same slot, the opposite sentence —
+  // nothing is fine until the restart. `effective` is what the process got.
+  if (card.gateway === 'offline' && card.effective !== null && card.effective !== 'direct') {
+    return { value: card.route, turn: turnLine(card), note: joinNotes(GATEWAY_DOWN_NOW, card.note), flag: 'offline' }
+  }
   const note = joinNotes(card.appliesOn === 'restart' ? 'applies on restart' : null, card.note)
-  return { value: card.route, turn, note, flag: card.appliesOn === 'restart' ? 'restart' : null }
+  return { value: card.route, turn: turnLine(card), note, flag: card.appliesOn === 'restart' ? 'restart' : null }
+}
+
+function turnLine(card: CardRouteState): string | null {
+  if (card.turn && card.turn.model) return `this turn → ${card.turn.model}${tokens(card.turn.inputTokens, card.turn.outputTokens)}${cost(card.turn)}`
+  return card.live?.model ? `this turn → ${card.live.model}` : null
 }
 
 function joinNotes(...notes: (string | null | undefined)[]): string | null {
