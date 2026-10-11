@@ -118,8 +118,8 @@ function Quota({ q }: { q: RouteQuota }): React.JSX.Element {
   )
 }
 
-export function AddMenu({ setup, onRun }: { setup: RouteState['setup']; onRun: RunLine }): React.JSX.Element {
-  const [open, setOpen] = useState(false)
+export function AddMenu({ setup, onRun, defaultOpen = false }: { setup: RouteState['setup']; onRun: RunLine; defaultOpen?: boolean }): React.JSX.Element {
+  const [open, setOpen] = useState(defaultOpen)
   const [keys, setKeys] = useState(false)
   const [unexpected, setUnexpected] = useState(false)
   const toggle = (): void => {

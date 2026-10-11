@@ -34,7 +34,7 @@ import { StatusCoin } from './nodes/AgentAvatar'
 import { TuneRail } from './nodes/TuneRail'
 import { useAgentTuning } from './nodes/use-agent-tuning'
 import { useCardRoute } from './nodes/use-card-route'
-import { ROUTING_COPY, routeDialAllowed } from '../../shared/route-view'
+import { routeDialAllowed, routeDialInput } from '../../shared/route-view'
 
 const PHOSPHOR_THEME = {
   background: '#14110A',
@@ -1066,21 +1066,11 @@ function TerminalOverlay({
             onTurn={tuning.turn}
             error={tuning.error}
             onMouseDown={keepFocus}
-            route={
-              routeAllowed && (tuning.routeChoices !== null || cardRoute.state !== null)
-                ? {
-                    state: cardRoute.state,
-                    // Main's choices, and only main's: it alone knows whether
-                    // this card's harness can be routed. With none listed the
-                    // dial says why (main's note) or that there is nothing to pick.
-                    choices: [...(tuning.routeChoices ?? [])],
-                    open: cardRoute.open,
-                    onOpen: cardRoute.setOpen,
-                    onPick: cardRoute.pick,
-                    notRoutable: tuning.routeChoices === null ? (cardRoute.state?.note ?? ROUTING_COPY.noRoutable) : null
-                  }
-                : null
-            }
+            route={(() => {
+              // Main's choices, and only main's (route-view.routeDialInput).
+              const dial = routeDialInput({ allowed: routeAllowed, routeChoices: tuning.routeChoices, state: cardRoute.state })
+              return dial ? { ...dial, state: cardRoute.state, open: cardRoute.open, onOpen: cardRoute.setOpen, onPick: cardRoute.pick } : null
+            })()}
           />
         )}
         <TranscriptView

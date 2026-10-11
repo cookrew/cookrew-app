@@ -88,6 +88,35 @@ export function workspaceKey(workspace: WorkspaceState | null): string {
 }
 
 export const WORKSPACE_CHANGED = 'the workspace changed while the Setup card was being readied — nothing typed'
+export const LINE_UNEXPECTED = 'setup line unexpected — not typed'
+
+/**
+ * One run, as a decision: the allowlist, the card, the workspace read before
+ * and after, and only then the bytes. Pure over its deps so the refusals can
+ * be tested without React — the hook supplies the live workspace and the PTY.
+ */
+export async function runLine(input: {
+  line: string
+  enter: boolean
+  /** The workspace key now; read twice, around `ensure`. */
+  currentKey: () => string
+  ensure: (forKey: string) => Promise<string>
+  type: (terminalId: string, bytes: string) => void
+}): Promise<RunOutcome> {
+  if (!setupLineAllowed(input.line)) return { ok: false, reason: LINE_UNEXPECTED }
+  const startKey = input.currentKey()
+  let id: string
+  try {
+    id = await input.ensure(startKey)
+  } catch (e: unknown) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+  // The owner may have switched while the card was being made: the id
+  // belongs to the workspace it was made in, and that is not this one.
+  if (input.currentKey() !== startKey) return { ok: false, reason: WORKSPACE_CHANGED }
+  input.type(id, typedBytes(input.line, input.enter))
+  return { ok: true }
+}
 
 export function useSetupTerminal(workspace: WorkspaceState | null): SetupTerminalControls {
   // A card this hook made, remembered with the workspace it was made in.
@@ -133,25 +162,17 @@ export function useSetupTerminal(workspace: WorkspaceState | null): SetupTermina
   const run = useCallback(
     async (line: string, options: RunOptions = {}): Promise<RunOutcome> => {
       setError(null)
-      const refuse = (reason: string): RunOutcome => {
-        setError({ text: reason, at: Date.now() })
-        return { ok: false, reason }
-      }
-      if (!setupLineAllowed(line)) return refuse('setup line unexpected — not typed')
-      const startKey = workspaceKey(workspaceRef.current)
-      let id: string
-      try {
-        id = await ensure(startKey)
-      } catch (e: unknown) {
-        return refuse(e instanceof Error ? e.message : String(e))
-      }
-      // The owner may have switched while the card was being made: the id
-      // belongs to the workspace it was made in, and that is not this one.
-      if (workspaceKey(workspaceRef.current) !== startKey) return refuse(WORKSPACE_CHANGED)
       const enter = options.enter ?? true
-      cookrew().ptyInput(id, typedBytes(line, enter))
-      if (!enter) setFocusTick((n) => n + 1)
-      return { ok: true }
+      const outcome = await runLine({
+        line,
+        enter,
+        currentKey: () => workspaceKey(workspaceRef.current),
+        ensure,
+        type: (id, bytes) => cookrew().ptyInput(id, bytes)
+      })
+      if (!outcome.ok) setError({ text: outcome.reason, at: Date.now() })
+      else if (!enter) setFocusTick((n) => n + 1)
+      return outcome
     },
     [ensure]
   )
