@@ -1,0 +1,299 @@
+/* THE ROUTING PANEL (RoutingPanel.tsx) — Magpie's Agents and Providers
+   pages inside Cookrew. One sheet over the stage in the app's own paper
+   language: cream, ink lines, hard bevel shadows, Silkscreen labels. The
+   Setup terminal card's live screen is docked under the sections. */
+
+.cr-routing {
+  position: absolute;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(45, 42, 32, 0.28);
+  overflow: auto;
+}
+.cr-routing-panel {
+  width: min(1080px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 6px 6px 0 var(--amber-deep);
+}
+.cr-routing-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-pixel);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.cr-routing-title .sp { flex: 1 }
+.cr-routing-clicks {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  background: var(--ink);
+  color: var(--cream-hi);
+  padding: 2px 7px;
+  border-radius: 3px;
+}
+
+/* The status line: red when there is something to do, green when there is not. */
+.cr-routing-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 2px solid var(--line);
+  background: var(--cream-md);
+  font-size: 13px;
+}
+.cr-routing-status.absent, .cr-routing-status.offline { border-color: var(--rose); background: rgba(220, 38, 38, 0.07) }
+.cr-routing-status.online { border-color: #2a7d4f; background: #dcefd3; color: #1f4d14 }
+.cr-routing-status .big { font-family: var(--font-pixel); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase }
+.cr-routing-status .sp { flex: 1 }
+.cr-routing-lamp { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--line); background: var(--dim) }
+.cr-routing-status.online .cr-routing-lamp { background: var(--hp); box-shadow: 0 0 6px rgba(107, 190, 88, 0.8) }
+.cr-routing-status.absent .cr-routing-lamp, .cr-routing-status.offline .cr-routing-lamp { background: var(--rose) }
+.cr-routing-source { font-family: var(--font-mono); font-size: 10.5px; color: #1f4d14; border: 1px solid #2a7d4f; padding: 1px 6px; background: var(--cream-hi) }
+
+.cr-routing-seg {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 4px;
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+.cr-routing-seg .sp { flex: 1 }
+.cr-routing-seg .k3 { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0; text-transform: none; color: var(--muted) }
+
+/* Harness rows: three ticks; a missing tick IS the button. */
+.cr-routing-hrow {
+  display: grid;
+  grid-template-columns: 130px 170px 190px 128px 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 12.5px;
+}
+.cr-routing-hrow .n { font-weight: 700 }
+.cr-routing-tick {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 7px;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream-hi);
+  white-space: nowrap;
+  color: var(--ink);
+}
+.cr-routing-tick.ok { color: #1f4d14; border-color: #2a7d4f; background: #eef7e9 }
+.cr-routing-tick.btn {
+  cursor: pointer;
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  background: var(--amber);
+  color: #2d2a20;
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cr-routing-tick.btn:active { transform: translate(2px, 2px); box-shadow: none }
+.cr-routing-tick.dim { color: var(--dim); border-style: dashed }
+
+/* Models & accounts. */
+.cr-routing-arow {
+  display: grid;
+  grid-template-columns: 150px 1fr 140px auto;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 12.5px;
+}
+.cr-routing-quota { display: flex; flex-direction: column; gap: 3px }
+.cr-routing-quota .l { font-family: var(--font-mono); font-size: 10px; color: var(--muted); display: flex; justify-content: space-between }
+.cr-routing-quota .b { height: 7px; border: 1.5px solid var(--line); background: var(--cream-hi); position: relative }
+.cr-routing-quota .b i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--amber-deep) }
+.cr-routing-quota .b i.hot { background: var(--rose) }
+.cr-routing-add { position: relative }
+.cr-routing-menu {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  margin-top: 4px;
+  min-width: 330px;
+  z-index: 5;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 4px 4px 0 var(--line);
+  font-size: 12.5px;
+}
+.cr-routing-menu button {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--line-soft);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+.cr-routing-menu button:last-child { border-bottom: 0 }
+.cr-routing-menu button:hover { background: var(--amber-soft) }
+.cr-routing-menu .c { font-family: var(--font-mono); font-size: 11px; color: var(--muted) }
+.cr-routing-presets { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 10px 8px }
+.cr-routing-fold { border: 1.5px solid var(--line-soft); background: var(--cream-md) }
+.cr-routing-fold summary {
+  cursor: pointer;
+  padding: 6px 10px;
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+.cr-routing-fold > div { padding: 0 10px 10px }
+.cr-routing-model {
+  display: grid;
+  grid-template-columns: 230px 110px 170px 70px;
+  gap: 6px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--line-soft);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+.cr-routing-model .t { color: var(--muted) }
+
+/* Live routes. */
+.cr-routing-lrow {
+  display: grid;
+  grid-template-columns: 62px 110px 20px 160px 20px 190px 1fr;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 0;
+  border-bottom: 1px solid var(--line-soft);
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+.cr-routing-lrow:hover { background: var(--amber-soft) }
+.cr-routing-lrow .t { color: var(--muted) }
+.cr-routing-lrow .g { color: var(--blue, #1d4ed8) }
+.cr-routing-lrow .m { font-weight: 700 }
+.cr-routing-lrow .alt { color: var(--muted); font-size: 11px }
+.cr-routing-lrow .arr { color: var(--amber-deep); text-align: center }
+
+.cr-routing-empty {
+  border: 2px dashed var(--line-soft);
+  padding: 18px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  background: var(--cream-md);
+}
+.cr-routing-empty b { display: block; font-family: var(--font-pixel); font-size: 10px; letter-spacing: 0.1em; color: var(--ink-soft); margin-bottom: 6px }
+
+/* The default picker: a chip row, groups first. */
+.cr-routing-default { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 8px; border-bottom: 1px solid var(--line-soft); font-size: 12.5px }
+.cr-routing-pick {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 7px;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream-md);
+  color: var(--ink);
+  cursor: pointer;
+}
+.cr-routing-pick.on { background: var(--amber); border-color: var(--line); color: #2d2a20 }
+
+/* The Setup card's screen, folded under everything. */
+.cr-routing-setup { margin-top: 8px }
+.cr-routing-screen { height: 240px; background: var(--phos-bg); padding: 6px 0 6px 8px }
+.cr-routing-screen .xterm { height: 100% }
+.cr-routing-hint { font-family: var(--font-mono); font-size: 11px; color: var(--muted); padding: 4px 10px }
+
+/* One line for what did not happen: a refused line, a default that did not land. */
+.cr-routing-bad { font-family: var(--font-mono); font-size: 11.5px; color: var(--rose); padding: 2px 8px }
+
+/* A plain button in the panel's own language. */
+.cr-routing-btn {
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  padding: 4px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cr-routing-btn.primary { background: var(--amber); color: #2d2a20 }
+.cr-routing-btn:active { transform: translate(2px, 2px); box-shadow: none }
+
+/* The header entry: same weight as the workspace chip beside it. */
+.cr-routing-entry {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--cream-md);
+  border: 1.5px solid var(--line);
+  border-radius: 3px;
+  padding: 3px 8px;
+  cursor: pointer;
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+.cr-routing-entry .cr-routing-lamp { width: 8px; height: 8px }
+.cr-routing-entry.online .cr-routing-lamp { background: var(--hp); box-shadow: 0 0 5px rgba(107, 190, 88, 0.8) }
+.cr-routing-entry.absent .cr-routing-lamp, .cr-routing-entry.offline .cr-routing-lamp { background: var(--rose) }
+
+/* The phone: one column, the ticks wrap under the name, the screen shorter. */
+@media (max-width: 700px) {
+  .cr-routing { padding: 8px }
+  .cr-routing-panel { padding: 10px }
+  .cr-routing-hrow { grid-template-columns: 1fr 1fr; gap: 6px }
+  .cr-routing-hrow .n { grid-column: 1 / -1 }
+  .cr-routing-hrow .small { display: none }
+  .cr-routing-arow { grid-template-columns: 1fr auto }
+  .cr-routing-arow .ws { display: none }
+  .cr-routing-lrow { grid-template-columns: 1fr 20px 1fr; font-size: 11px }
+  .cr-routing-lrow .t, .cr-routing-lrow .alt, .cr-routing-lrow .arr:last-of-type { display: none }
+  .cr-routing-model { grid-template-columns: 1fr 70px }
+  .cr-routing-model .t:nth-child(2), .cr-routing-model .t:nth-child(3) { display: none }
+  .cr-routing-menu { min-width: 260px }
+  .cr-routing-screen { height: 200px }
+  .cr-routing-entry span.word { display: none }
+  .cr-routing-source { display: none }
+  .cr-routing-status { flex-wrap: wrap }
+}

@@ -1,3 +1,4 @@
+import type { CardRouteState, RouteState } from '../../shared/route'
 import { AuthError, authStore, tokenParam, type AuthScope } from './auth-gate'
 import { ReconnectingStream, attachTerminalStream } from './live-stream'
 import { recordLatency, setDesktopName, setPathLink, setRegistryOrigin } from './path-link'
@@ -447,6 +448,13 @@ export function createRemoteApi(): CookrewApi {
     // One fleet-wide GET for every card's tag, then the same change-gated push
     // the desktop renderer gets — so nothing here polls.
     listTuning: () => req<Record<string, AgentTuning>>(apiPath('/api/tuning')),
+    // Magpie routing over the companion's API (LEDGER endpoints).
+    routeState: () => req<RouteState>(apiPath('/api/route')),
+    routeSetDefault: (model) => req<RouteState>(apiPath('/api/route/default'), 'PUT', { model }),
+    terminalRoute: (terminalId) => req<CardRouteState>(apiPath(`/api/terminal/${encodeURIComponent(terminalId)}/route`)),
+    terminalRouteSet: (terminalId, route) => req<CardRouteState>(apiPath(`/api/terminal/${encodeURIComponent(terminalId)}/route`), 'PUT', { route }),
+    onRoute: (cb) => subscribe<RouteState>('route', cb),
+    onCardRoute: (cb) => subscribe<{ terminalId: string } & CardRouteState>('card-route', cb),
     onTerminalTuning: (cb) =>
       subscribe<{ terminalId: string; tuning: AgentTuning }>('tuning', cb),
     terminalTuning: (terminalId) =>

@@ -18,6 +18,26 @@ import {
   type TuneKnob,
   type TuneRailView
 } from '../../../shared/agent-tuning'
+import type { CardRouteState } from '../../../shared/route'
+import { routeDialLines, shortRoute } from '../../../shared/route-view'
+
+/**
+ * R2 · THE THIRD DIAL. Model and effort come from the harness's own record;
+ * the route comes from the gateway (CardRouteState) — what the card asked
+ * for, what answered this turn and what it cost. Same chip, same list, two
+ * clicks to change: open, pick. Null when the card may not have one (a
+ * served session, a bridge without routing).
+ */
+export interface RouteDialProps {
+  state: CardRouteState | null
+  /** direct first, then groups, then models (route-view.routeChoices). */
+  choices: string[]
+  open: boolean
+  onOpen: (open: boolean) => void
+  onPick: (route: string) => void
+  /** A harness that cannot be routed this round (pi): the chip says so and has no list. */
+  notRoutable?: string | null
+}
 
 export interface TuneRailProps {
   view: TuneRailView
@@ -27,6 +47,7 @@ export interface TuneRailProps {
   error: string | null
   /** Clicking the rail must not pull focus out of the live pane. */
   onMouseDown?: (e: React.MouseEvent) => void
+  route?: RouteDialProps | null
 }
 
 export function TuneRail({
@@ -35,12 +56,16 @@ export function TuneRail({
   onOpen,
   onTurn,
   error,
-  onMouseDown
+  onMouseDown,
+  route
 }: TuneRailProps): React.JSX.Element {
   const locked = view.locked
   return (
-    <div className="cr-tune-rail" role="group" aria-label="Model and effort">
-      {view.dials.map((dial) => (
+    <div className="cr-tune-rail" role="group" aria-label={route ? 'Model, effort and route' : 'Model and effort'}>
+      {/* The generic dials are the TYPED knobs. The route knob main lists in
+          `knobs` is drawn by RouteDial below from CardRouteState — never as a
+          generic dial, which would read the session file for a route. */}
+      {view.dials.filter((dial) => dial.knob !== 'route').map((dial) => (
         <Dial
           key={dial.knob}
           dial={dial}
@@ -52,6 +77,7 @@ export function TuneRail({
           onMouseDown={onMouseDown}
         />
       ))}
+      {route && <RouteDial route={route} locked={locked} onMouseDown={onMouseDown} />}
       {/* The reason sits UNDER the dials whether or not there are any: a
           harness without dials has only this line, and it is the whole point
           of drawing a rail for it. */}
@@ -128,6 +154,60 @@ function Dial({
           {/* The caveat sits at the moment of PICKING, not in the rail at
               rest: it is a fact about the click that is about to happen. */}
           {caveat !== null && <div className="cr-tune-caveat">{caveat}</div>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function RouteDial({
+  route,
+  locked,
+  onMouseDown
+}: {
+  route: RouteDialProps
+  locked: string | null
+  onMouseDown?: (e: React.MouseEvent) => void
+}): React.JSX.Element {
+  const lines = route.notRoutable ? { value: 'direct', turn: null, note: route.notRoutable, flag: null as null } : routeDialLines(route.state)
+  const reading = route.state === null && !route.notRoutable ? 'not read yet' : lines.value
+  const canOpen = !route.notRoutable
+  return (
+    <div className={`cr-tune-dial${route.open ? ' open' : ''}`} data-knob="route">
+      <button
+        type="button"
+        className={`cr-tune-chip${lines.flag === 'offline' ? ' refused' : lines.flag === 'restart' ? ' pending' : ''}`}
+        aria-expanded={route.open}
+        aria-label={`Route: ${reading}`}
+        title={[`Route: ${reading}`, lines.turn, lines.note].filter(Boolean).join(' · ')}
+        onMouseDown={onMouseDown}
+        onClick={() => canOpen && route.onOpen(!route.open)}
+      >
+        <span className="cr-tune-k">RTE</span>
+        <span className="cr-tune-v">{route.state === null && !route.notRoutable ? '\u2014' : shortRoute(lines.value)}</span>
+        {lines.turn !== null && <span className="cr-tune-flag cr-tune-turn">{lines.turn.replace('this turn → ', '→ ')}</span>}
+        {lines.note !== null && <span className="cr-tune-flag">{lines.note}</span>}
+      </button>
+      {route.open && canOpen && (
+        <div className="cr-tune-list" role="listbox" aria-label="Route">
+          {route.choices.map((value) => {
+            const current = route.state !== null && route.state.route === value
+            return (
+              <button
+                key={value}
+                type="button"
+                role="option"
+                aria-selected={current}
+                className={`cr-tune-row ${current ? 'current' : 'plain'}${value.startsWith('group/') ? ' group' : ''}`}
+                disabled={locked !== null}
+                onMouseDown={onMouseDown}
+                onClick={() => route.onPick(value)}
+              >
+                {value}
+              </button>
+            )
+          })}
+          <div className="cr-tune-note">groups first · a pick applies on the card's next restart</div>
         </div>
       )}
     </div>

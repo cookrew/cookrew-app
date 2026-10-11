@@ -1943,6 +1943,11 @@
   border-color: var(--amber-deep);
 }
 
+/* R2 · the route dial's two small lines: this turn's model · tokens · cost,
+   and "applies on restart" / "gateway offline". Same strip, same type. */
+.cr-tune-turn { color: var(--phos); opacity: 0.85 }
+.cr-tune-row.group { color: var(--phos-glow) }
+
 .cr-tune-chip.refused .cr-tune-flag {
   color: var(--amber-deep);
 }
