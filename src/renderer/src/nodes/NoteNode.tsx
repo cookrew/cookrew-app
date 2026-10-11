@@ -10,6 +10,7 @@ import type { NoteNodeData } from '../../../shared/model'
 import { noteIsWhole } from '../../../shared/wire-canvas'
 import { secretSlotsOf, type SecretListing } from '../../../shared/secret-slot'
 import { SecretSlot } from './SecretSlot'
+import { ENTER_STAGE_SHARE, projectToStage, stageShare } from '../zoom-lod'
 import { cookrew } from '../api'
 import { useCanvasUi } from '../canvas-ui'
 
@@ -43,9 +44,21 @@ export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
    * listing — names and dates, never values — is read when the editor opens
    * and after each seal; the body itself is never touched by a seal.
    */
-  // In BOTH states: the inbox zooms a note and focuses its slot's field
-  // (Fresco's inbox, `[data-secret-slot]`) without a double-click first.
-  const slots = mode === 'mini' ? [] : secretSlotsOf(editing ? draft : node.content)
+  // ON THE STAGE in both states — the inbox zooms a note and focuses its
+  // slot's field (`[data-secret-slot]`) without a double-click first — and
+  // never on the card face at canvas zoom, where the slot is a chip and the
+  // only password field in Cookrew must not be lying around. "On the stage"
+  // is the LOD rule the overlays use: the card covers a quarter of the pane.
+  const onStage = useStore((s) => {
+    const pane = { width: s.width, height: s.height }
+    const { visible } = projectToStage(
+      node,
+      { x: s.transform[0], y: s.transform[1], zoom: s.transform[2] },
+      pane
+    )
+    return stageShare(visible, pane) >= ENTER_STAGE_SHARE
+  })
+  const slots = editing || (onStage && mode !== 'mini') ? secretSlotsOf(editing ? draft : node.content) : []
   const [sealed, setSealed] = useState<ReadonlyMap<string, SecretListing>>(new Map())
   const hasSlots = slots.length > 0
   useEffect(() => {

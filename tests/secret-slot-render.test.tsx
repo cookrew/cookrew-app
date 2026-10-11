@@ -87,9 +87,11 @@ describe('the editor block', () => {
     expect(seal).not.toContain('setDraft')
   })
 
-  it('exists on the zoomed card in BOTH states, so the inbox can focus it without a double-click', () => {
+  it('exists on the STAGED card in both states, and never on the face at canvas zoom', () => {
     const node = readFileSync('src/renderer/src/nodes/NoteNode.tsx', 'utf8')
-    expect(node).toContain("secretSlotsOf(editing ? draft : node.content)")
+    expect(node).toContain("editing || (onStage && mode !== 'mini') ? secretSlotsOf(editing ? draft : node.content) : []")
+    // The stage rule is the overlays' own, not a second threshold.
+    expect(node).toContain('stageShare(visible, pane) >= ENTER_STAGE_SHARE')
     // Rendered after the editing/viewing branch, not inside it.
     expect(node.indexOf('{hasSlots && (')).toBeGreaterThan(node.indexOf('__html: renderNoteMarkdown'))
   })
