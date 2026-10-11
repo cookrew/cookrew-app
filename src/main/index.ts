@@ -10,6 +10,7 @@ import { buildInbox, type InboxNode } from './inbox'
 import { cachedDispatchReader, wireInbox } from './inbox-wiring'
 import { createWindowHold } from './inbox-window-hold'
 import { deliverToRecruit } from './recruit-delivery'
+import { recruitPatch, spawnInjectionFor } from './recruit-node'
 import { placeBeside, type DecideCandidate } from '../shared/sous-decide'
 import type { PtySession } from './pty'
 import type { PaneCardInfo } from './multiplexer'
@@ -3696,10 +3697,12 @@ function adoptLiveNode(added: CanvasNode): void {
  * a failed spawn keeps the preamble for the next boot.
  */
 function deliverPendingInject(t: TerminalNodeData): void {
-  if (!t.pendingInject) return
+  // The one text a (re)spawn may type — a staged copy preamble; never the
+  // card's brief or role (recruit-node.ts).
+  const inject = spawnInjectionFor(t)
+  if (inject === null) return
   const session = ptys.get(t.id)
   if (!session) return
-  const inject = t.pendingInject
   store.updateNodeUnsafe(t.id, { pendingInject: null })
   injectWhenReady(session, inject).catch((error) => {
     console.error('Deferred copy context injection failed:', error)
@@ -5539,12 +5542,15 @@ app.whenReady().then(() => {
         }
         return out
       },
-      recruit: ({ preset, name, role, besideId }) => {
+      recruit: ({ preset, name, brief, besideId }) => {
         const nodes = store.focusedState.nodes
         const anchor = besideId ? (nodes.find((n) => n.id === besideId) ?? null) : null
         const position = placeBeside(anchor, nodes, DEFAULT_TERMINAL_SIZE)
         const node = createTerminal({ name, preset, position })
-        updateNode(node.id, { role })
+        // The sentence is the card's BRIEF, not its role: a role is a saved
+        // role's name, worn by the pane chrome and typed by role boot; a brief
+        // is display only and nothing types it on a respawn (recruit-node.ts).
+        updateNode(node.id, recruitPatch(brief))
         return { id: node.id, name: node.name }
       },
       // The same door `cookrew ask --no-wait` uses: admitted by the dispatch

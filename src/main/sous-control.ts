@@ -64,8 +64,8 @@ export interface SousControlDeps {
   decide?: {
     candidates: () => Promise<DecideCandidate[]> | DecideCandidate[]
     workdir: () => string | null
-    /** A new card in the ACTIVE workspace, placed beside `besideId` (sous-decide placeBeside), wired to it, role = the brief. */
-    recruit: (input: { preset: Harness; name: string; role: string; besideId: string | null }) => Promise<{ id: string; name: string }> | { id: string; name: string }
+    /** A new card in the ACTIVE workspace, placed beside `besideId` (sous-decide placeBeside), wired to it, carrying the sentence as its `brief` (never as a role). */
+    recruit: (input: { preset: Harness; name: string; brief: string; besideId: string | null }) => Promise<{ id: string; name: string }> | { id: string; name: string }
     /**
      * The brief into the recruited card, through the dispatch engine (its boot
      * wait, its ledger, its cable pulse from `originId`). Resolves once the
@@ -421,7 +421,7 @@ export class SousController {
         const harness = slot.recruited?.harness ?? chosen
         let node = slot.recruited
         if (!node) {
-          const made = await deps.recruit({ preset: harness, name: decision.name, role: decision.sentence, besideId: decision.beside?.id ?? null })
+          const made = await deps.recruit({ preset: harness, name: decision.name, brief: decision.sentence, besideId: decision.beside?.id ?? null })
           node = { ...made, harness }
           slot.recruited = node
           if (decision.beside) this.deps.connect(decision.beside.id, node.id)

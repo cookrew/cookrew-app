@@ -68,7 +68,14 @@ export interface TerminalNodeData {
   command: string
   cwd: string
   orch: boolean
+  /** A SAVED role's name (roles.ts), never free text — the pane chrome and team fork read it as one. */
   role: string | null
+  /**
+   * THE BRIEF THIS CARD WAS RECRUITED FOR (Sous, route program R3): the
+   * sentence that was delivered to it once, kept as what the card is about.
+   * Display only — nothing types it on a spawn or respawn (recruit-node.ts).
+   */
+  brief?: string | null
   /**
    * WHAT THIS CARD WAS ADMITTED WITH — a placed orch card only.
    *

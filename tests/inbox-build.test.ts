@@ -110,4 +110,31 @@ describe('buildInbox', () => {
     expect(rows[1].reasons[0]).toBe('delivery failed — owner is composing — the input box is theirs')
     expect(rows[0].served).toBe(true)
   })
+
+  // Observed live after the restarts: 60 of 102 records 'interrupted —
+  // observer never materialized' for asks that plainly ran. Until the engine's
+  // probation is fixed, a card the Board saw active AFTER the dispatch took it.
+  it('a failed or interrupted delivery is NOT a row when the card had any turn activity after the dispatch', () => {
+    const record = (agentId: string, state: DispatchRecord['state'], createdAt: number, error?: string): DispatchRecord =>
+      ({ id: `d-${agentId}`, agentId, agentName: agentId, workspaceId: 'ws', state, via: 'herdr', createdAt, updatedAt: createdAt + 60_000, ...(error ? { error } : {}) }) as DispatchRecord
+    const rows = build({
+      rows: [
+        // forge: dispatched at -10 min, active at -4 → it ran; no row
+        brow('forge', 'done', { lastActivityAt: m(4), task: { title: 'haiku', summary: 'haiku', turnIndex: 4, startedAt: m(9), endedAt: m(4) } }),
+        // atlas: dispatched at -10, last active at -20, its turn started before → nothing since; row
+        brow('atlas', 'done', { lastActivityAt: m(20), task: { title: 'old', summary: 'old', turnIndex: 2, startedAt: m(30), endedAt: m(20) } }),
+        // tinker: lastActivityAt is stale but a turn STARTED after the dispatch; no row
+        brow('tinker', 'working', { lastActivityAt: m(12), task: { title: 'new', summary: 'new', turnIndex: 5, startedAt: m(8), endedAt: null } })
+      ],
+      nodes: [node('forge'), node('atlas'), node('tinker'), node('guest')],
+      dispatches: [
+        record('forge', 'interrupted', m(10), 'observer never materialized'),
+        record('atlas', 'interrupted', m(10), 'observer never materialized'),
+        record('tinker', 'failed', m(10)),
+        // guest has no Board row at all: nothing says it ran, so it stays
+        record('guest', 'interrupted', m(10))
+      ]
+    })
+    expect(rows.map((r) => r.nodeId).sort()).toEqual(['atlas', 'guest'])
+  })
 })
