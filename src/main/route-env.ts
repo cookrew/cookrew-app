@@ -35,6 +35,8 @@ export interface RouteEnvInput {
   /** A Magpie model id or group id, never 'direct' (the caller decides that first). */
   model: string
   cardId: string
+  /** The catalog's context_window for the model, when it has one; null for a local model. */
+  contextWindow?: number | null
 }
 
 export interface RouteEnv {
@@ -68,7 +70,13 @@ export function routeEnv(input: RouteEnvInput): RouteEnv {
           ANTHROPIC_DEFAULT_OPUS_MODEL: model,
           ANTHROPIC_DEFAULT_SONNET_MODEL: model,
           ANTHROPIC_DEFAULT_HAIKU_MODEL: model,
-          ANTHROPIC_CUSTOM_HEADERS: sessionHeaderLine(cardId)
+          ANTHROPIC_CUSTOM_HEADERS: sessionHeaderLine(cardId),
+          // Seen on the real gateway (round 2): with a model id outside its
+          // catalog claude 2.1.275 prints `unrecognized_model` and then WAITS
+          // until killed. This restores the previous wait-for-the-API path.
+          CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: '1',
+          // The window claude should assume: the catalog's, when it names one.
+          ...(input.contextWindow ? { CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(input.contextWindow) } : {})
         },
         args: [],
         files: [],

@@ -113,7 +113,7 @@ import {
 import { DEFAULT_ORCH_PRESET, PRESETS } from './presets'
 import { GatewayMonitor } from './route/gateway'
 import { RouteService } from './route/service'
-import { onPath } from './route/setup'
+import { magpieInstalled } from './route/discovery'
 import { forkContextReady, forkTerminal as forkTerminalOp, injectWhenReady } from './fork'
 import { AgentRegistry } from './agent-registry'
 import { AgentExportStore } from './agent-export'
@@ -610,7 +610,8 @@ const grants = serviceGrants(sessionsBase)
 // the phone stream (routeBus) exactly like the dials' tuningBus.
 const routeBus = new EventEmitter()
 const routeService = new RouteService({
-  monitor: new GatewayMonitor({ hasBinary: () => onPath('magpie', process.env.PATH) }),
+  // PATH, ~/.local/bin (the installer's symlink, off a GUI app's PATH) and the app bundle.
+  monitor: new GatewayMonitor({ hasBinary: () => magpieInstalled({ home: homedir(), env: process.env }, existsSync) }),
   fetch: (input, init) => fetch(input, init),
   home: homedir(),
   pathEnv: process.env.PATH,

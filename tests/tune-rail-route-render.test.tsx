@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { TuneRail, type RouteDialProps } from '../src/renderer/src/nodes/TuneRail'
 import { tuneRailView, type AgentTuningState, type TuneRailView } from '../src/shared/agent-tuning'
-import { cardRouteFixture, routeFixture } from '../src/shared/route-fixture'
+import { cardRouteFixture, localTurnFixture, routeFixture } from '../src/shared/route-fixture'
 import { routeChoices } from '../src/shared/route-view'
 
 const T0 = 1_759_000_000_000
@@ -69,7 +69,7 @@ describe('the third dial', () => {
     const html = paint(dial())
     expect(html).toContain('aria-label="Route: group/smart"')
     expect(html).toContain('>smart<') // the chip clips to the tail; the full id is in the name
-    expect(html).toContain('→ deepseek/deepseek-v4 · 12.4k tok · $0.018')
+    expect(html).toContain('→ deepseek/deepseek-v4 · 11.3k in · 1.1k out · $0.018')
   })
 
   it('says a pick applies on restart, wearing the pending colour', () => {
@@ -108,6 +108,19 @@ describe('the third dial', () => {
     expect(html).toContain('direct · pi is not routable yet')
     expect(html).toContain('aria-label="Route: direct"')
     expect(html).not.toContain('role="option"')
+  })
+
+  it('shows the codex note under the value and keeps every model in the list', () => {
+    const html = paint(dial({ state: cardRouteFixture({ note: 'codex needs a thinking-capable model behind the gateway' }), open: true }))
+    expect(html).toContain('codex needs a thinking-capable model behind the gateway')
+    const rows = [...html.matchAll(/role="option"[^>]*>([^<]+)</g)].map((m) => m[1])
+    expect(rows.length).toBe(CHOICES.length)
+  })
+
+  it('prints a local turn as local, with tokens in and out, never $0.00', () => {
+    const html = paint(dial({ state: localTurnFixture() }))
+    expect(html).toContain('→ ollama/qwen3:32b · 1.8k in · 312 out · local')
+    expect(html).not.toContain('$0')
   })
 
   it('shows a dash before the first read instead of guessing', () => {

@@ -9,11 +9,10 @@
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { RoutingEntry, RoutingPanel, markRoutingSeen, shouldAutoOpen, ROUTING_SEEN_KEY } from '../src/renderer/src/routing/RoutingPanel'
-import { windowReading } from '../src/renderer/src/routing/RoutingSections'
 import { keyLineFor } from '../src/shared/route-lines'
 import { findSetupCard, setupCardPosition } from '../src/renderer/src/routing/use-setup-terminal'
-import { cardRouteFixture, routeFixture } from '../src/shared/route-fixture'
-import { harnessTicks, quotaBar, routeChoices, routeDialAllowed, routeDialLines, statusLine } from '../src/shared/route-view'
+import { cardRouteFixture, localTurnFixture, routeFixture } from '../src/shared/route-fixture'
+import { decisionFacts, harnessTicks, maskAccount, quotaBar, routeChoices, routeDialAllowed, routeDialLines, statusLine, windowLabel } from '../src/shared/route-view'
 import type { RouteState } from '../src/shared/route'
 import type { WorkspaceState } from '../src/shared/model'
 
@@ -97,20 +96,34 @@ describe('harness rows', () => {
 })
 
 describe('models and accounts', () => {
-  it('shows a quota bar per subscription and a plain reading for a key or a local model', () => {
+  it('shows a quota bar per subscription, the gateway’s own label, a sentence for a row it could not read, local · free for a local one', () => {
     const [claude, codex, deepseek, ollama] = routeFixture('online').quotas.map(quotaBar)
-    expect(claude).toMatchObject({ fill: 0.62, reading: '5-hour 62%', hot: false })
-    // A window with no limit is a counter, shown as the count; with both numbers, a percent.
-    expect(windowReading({ used: 1840, limit: null })).toBe('1840')
-    expect(windowReading({ used: 41, limit: 100 })).toBe('41%')
-    expect(windowReading({ used: null, limit: 100 })).toBe('—')
-    expect(quotaBar({ ...routeFixture('online').quotas[2], windows: [{ name: 'requests', used: 312, limit: null, resetsAt: null }] }).reading).toBe('requests 312')
-    expect(codex).toMatchObject({ fill: 0.77, reading: 'week 77%' })
+    // The gateway could not read Claude's usage: the sentence, no bar.
+    expect(claude).toMatchObject({ fill: null, error: "Claude Code's /usage is temporarily unavailable" })
+    // The fullest window wears the gateway's own label ("77 / 100"), not a recomputed percent.
+    expect(codex).toMatchObject({ fill: 0.77, reading: 'week 77 / 100', error: null })
     expect(deepseek).toMatchObject({ fill: null, reading: 'key' })
-    expect(ollama).toMatchObject({ fill: null, reading: 'local' })
+    expect(ollama).toMatchObject({ fill: null, reading: 'local · free' })
+    // A window with no limit is a counter, shown as the count; with both numbers and no label, a percent.
+    expect(windowLabel({ used: 1840, limit: null, display: null })).toBe('1840')
+    expect(windowLabel({ used: 41, limit: 100, display: null })).toBe('41%')
+    expect(windowLabel({ used: 0, limit: 130, display: '0 / 130' })).toBe('0 / 130')
+    expect(windowLabel({ used: null, limit: 100, display: null })).toBe('—')
     const html = paint(routeFixture('online'))
     expect(html).toContain('Claude Max')
-    expect(html).toContain('width:62%')
+    expect(html).toContain("Claude Code&#x27;s /usage is temporarily unavailable")
+    expect(html).toContain('width:77%')
+    expect(html).toContain('local · free')
+    expect(html).not.toContain('resets')
+  })
+
+  it('shows an account as its local part and an ellipsis, never the whole email — the phone draws the same row', () => {
+    expect(maskAccount('drej@example.com')).toBe('drej@…')
+    expect(maskAccount(null)).toBeNull()
+    expect(maskAccount('key …3f2a')).toBe('key …3f2a')
+    const html = paint(routeFixture('online'))
+    expect(html).toContain('drej@…')
+    expect(html).not.toContain('example.com')
   })
 
   it('offers one Add with four lines, and the key line ends in a space for the paste', () => {
@@ -204,7 +217,7 @@ describe('what the rail will say (route-view)', () => {
   it('reads direct, routed with this turn, restart, and offline', () => {
     expect(routeDialLines(cardRouteFixture({ route: 'direct', effective: null, live: null, turn: null })).value).toBe('direct')
     const routed = routeDialLines(cardRouteFixture())
-    expect(routed.turn).toBe('this turn → deepseek/deepseek-v4 · 12.4k tok · $0.018')
+    expect(routed.turn).toBe('this turn → deepseek/deepseek-v4 · 11.3k in · 1.1k out · $0.018')
     expect(routeDialLines(cardRouteFixture({ appliesOn: 'restart' })).note).toBe('applies on restart')
     expect(routeDialLines(cardRouteFixture({ offline: true })).value).toBe('direct')
     expect(routeDialLines(cardRouteFixture({ offline: true })).note).toBe('gateway offline · direct')
@@ -219,5 +232,39 @@ describe('what the rail will say (route-view)', () => {
   it('spells the status sentence from the state and not from a guess', () => {
     expect(statusLine(routeFixture('absent')).action?.label).toBe('INSTALL')
     expect(statusLine(routeFixture('online')).action).toBeNull()
+  })
+
+  it('says why it is not routing when main says so, and offers no INSTALL — the owner fixes the file', () => {
+    const refused = routeFixture('absent', { why: 'the plugin file names a gateway off this machine (http://10.0.0.9:3425)' })
+    const line = statusLine(refused)
+    expect(line.text).toBe('not routing — the plugin file names a gateway off this machine (http://10.0.0.9:3425)')
+    expect(line.action).toBeNull()
+    const html = paint(refused)
+    expect(html).toContain('not routing —')
+    expect(html).not.toContain('INSTALL ·')
+  })
+
+  it('reads a turn on a local model as local, never $0.00, with tokens in and out', () => {
+    expect(routeDialLines(localTurnFixture()).turn).toBe('this turn → ollama/qwen3:32b · 1.8k in · 312 out · local')
+    expect(routeDialLines(cardRouteFixture()).turn).toBe('this turn → deepseek/deepseek-v4 · 11.3k in · 1.1k out · $0.018')
+    expect(routeDialLines(localTurnFixture()).turn).not.toContain('$')
+  })
+
+  it('carries main’s note under the value — codex needs a thinking-capable model', () => {
+    const lines = routeDialLines(cardRouteFixture({ route: 'deepseek/deepseek-v4', note: 'codex needs a thinking-capable model behind the gateway' }))
+    expect(lines.note).toBe('codex needs a thinking-capable model behind the gateway')
+    expect(routeDialLines(cardRouteFixture({ appliesOn: 'restart', note: 'codex needs a thinking-capable model behind the gateway' })).note).toBe('applies on restart · codex needs a thinking-capable model behind the gateway')
+  })
+
+  it('says tries, failures and the first-token time on a live row', () => {
+    const base = routeFixture('online').live[0]
+    expect(decisionFacts(base)).toBe('first token 2.3 s')
+    expect(decisionFacts({ ...base, tries: 2, status: 'claude rested · 429', ttftMs: 4100 })).toBe('2 tries · claude rested · 429 · first token 4.1 s')
+    // The gateway's own array, each try with a `fail`, is read the same way.
+    expect(decisionFacts({ ...base, tries: [{ model: 'a', fail: 'rate limited' }, { model: 'b' }] as unknown as number, status: null, ttftMs: null })).toBe('2 tries · 1 failed')
+    expect(decisionFacts({ ...base, ttftMs: null })).toBe('first pick')
+    const html = paint(routeFixture('online'))
+    expect(html).toContain('first token 2.3 s')
+    expect(html).toContain('2 tries · claude rested · 429')
   })
 })
