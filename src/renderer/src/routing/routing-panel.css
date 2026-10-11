@@ -160,7 +160,8 @@
   cursor: pointer;
 }
 .cr-routing-menu button:last-child { border-bottom: 0 }
-.cr-routing-menu button:hover { background: var(--amber-soft) }
+.cr-routing-menu button:hover:not(:disabled) { background: var(--amber-soft) }
+.cr-routing-menu button:disabled { cursor: default; opacity: 0.55 }
 .cr-routing-menu .c { font-family: var(--font-mono); font-size: 11px; color: var(--muted) }
 .cr-routing-presets { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 10px 8px }
 .cr-routing-fold { border: 1.5px solid var(--line-soft); background: var(--cream-md) }

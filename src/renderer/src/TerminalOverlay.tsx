@@ -34,7 +34,7 @@ import { StatusCoin } from './nodes/AgentAvatar'
 import { TuneRail } from './nodes/TuneRail'
 import { useAgentTuning } from './nodes/use-agent-tuning'
 import { useCardRoute } from './nodes/use-card-route'
-import { routeDialAllowed } from '../../shared/route-view'
+import { ROUTING_COPY, routeDialAllowed } from '../../shared/route-view'
 
 const PHOSPHOR_THEME = {
   background: '#14110A',
@@ -1067,16 +1067,17 @@ function TerminalOverlay({
             error={tuning.error}
             onMouseDown={keepFocus}
             route={
-              routeAllowed && (tuning.routeChoices !== null || cardRoute.choices !== null)
+              routeAllowed && (tuning.routeChoices !== null || cardRoute.state !== null)
                 ? {
                     state: cardRoute.state,
-                    // Main's choices when it listed them (the card's harness can be routed); the catalogue otherwise.
-                    choices: [...(tuning.routeChoices ?? cardRoute.choices ?? [])],
+                    // Main's choices, and only main's: it alone knows whether
+                    // this card's harness can be routed. With none listed the
+                    // dial says why (main's note) or that there is nothing to pick.
+                    choices: [...(tuning.routeChoices ?? [])],
                     open: cardRoute.open,
                     onOpen: cardRoute.setOpen,
                     onPick: cardRoute.pick,
-                    // Core reports pi as not routable this round; the dial says so instead of offering a list.
-                    notRoutable: node.preset === 'Pi' ? 'direct · pi is not routable yet' : null
+                    notRoutable: tuning.routeChoices === null ? (cardRoute.state?.note ?? ROUTING_COPY.noRoutable) : null
                   }
                 : null
             }

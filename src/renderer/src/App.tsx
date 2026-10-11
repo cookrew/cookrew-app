@@ -28,6 +28,7 @@ import { useWorkspaceWall } from './WorkspaceWallHost'
 import { RoutingPanel, shouldAutoOpen } from './routing/RoutingPanel'
 import { useRouteState } from './routing/use-route-state'
 import { useSetupTerminal } from './routing/use-setup-terminal'
+import { newestError } from './routing/newest-error'
 import { BrowserNode } from './nodes/BrowserNode'
 import { CableEdge } from './CableEdge'
 import { Header, type MainView } from './Header'
@@ -1752,7 +1753,7 @@ function Canvas(): React.JSX.Element {
           setupTerminalId={setupTerminal.terminalId}
           focusTick={setupTerminal.focusTick}
           onSetDefault={routeState.setDefault}
-          error={routeState.error ?? setupTerminal.error}
+          error={newestError(routeState.error, setupTerminal.error)}
           onAddToDock={(harness) => {
             // "In the dock" as Cookrew can make it true today: the harness
             // becomes the dock's active preset, so the next click on the

@@ -14,7 +14,7 @@ import type { CardRouteState, RouteState } from './route'
 export const SETUP_LINES: RouteState['setup'] = {
   installLine: 'curl -fsSL https://usemagpie.ai/install.sh | sh',
   serveLine: 'magpie autostart on',
-  pluginLine: 'magpie plugin add /Applications/Cookrew.app/Contents/Resources/magpie',
+  pluginLine: "magpie plugin add '/Applications/Cookrew Dev.app/Contents/Resources/magpie'",
   addSubscriptionLine: 'magpie accounts add codex',
   addKeyLine: 'magpie provider add ',
   addLocalLine: 'magpie provider add ollama',

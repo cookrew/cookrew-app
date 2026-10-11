@@ -87,9 +87,19 @@ export function toDecision(terminalId: string, body: unknown, at: number): Route
 export function toTurnFacts(body: unknown, sessions: readonly string[] | null = null): RouteTurnFacts | null {
   const b = asRecord(body)
   const rows = Array.isArray(b?.rows) ? (b!.rows as unknown[]) : Array.isArray(body) ? body : []
-  const r = asRecord(rows[0])
+  // THE NEWEST ROW IS NOT THE TURN (round 3, the gated e2e): codex fires a
+  // follow-up call as it exits and cancels it, so a session's newest row is
+  // a 499 with no tokens beside the 200 that carries them. The last few rows
+  // are read (USAGE_ROWS) and the newest one that answered 200 with output
+  // tokens is the turn; none → null, never a cancelled row dressed as one.
+  const r = rows.map(asRecord).find((row) => {
+    if (!row) return false
+    if (sessions !== null && !sessions.includes(str(row.session) ?? '')) return false
+    const status = num(row.status) ?? (str(row.status) ? Number(str(row.status)) : NaN)
+    const out = num(row.out) ?? num(row.output_tokens) ?? 0
+    return status === 200 && out > 0
+  })
   if (!r) return null
-  if (sessions !== null && !sessions.includes(str(r.session) ?? '')) return null
   const t = str(r.t)
   const parsed = t ? Date.parse(t) : NaN
   // A local model is `cost: 0, priced: false`: the rail must say "local", never "$0.00".
@@ -106,6 +116,8 @@ export function toTurnFacts(body: unknown, sessions: readonly string[] | null = 
 
 /** Every Usage read is ours alone: the log also holds the owner's DIRECT Claude Code traffic. */
 export const USAGE_AGENT = 'cookrew'
+/** How many of a session's newest rows are read to find the turn (a cancelled 499 may sit on top). */
+export const USAGE_ROWS = 5
 
 /** The last 20, newest first, one row per card per seq. */
 export function pushLive(live: readonly RouteDecision[], row: RouteDecision): RouteDecision[] {
@@ -217,6 +229,10 @@ export class RouteDecisions {
       if (decision !== null && !sameDecision(before, decision)) {
         // Only a CHANGE reaches the card: a repeat of the same decision (a
         // gateway answering at once, a wait that timed out) is not a frame.
+        // A decision with `model: null` IS a change and IS a frame — magpie
+        // publishes the route the moment a request arrives and fills the
+        // member in a later seq; the rail prints "deciding…" meanwhile. The
+        // follow goes on, and the facts are read only once `done`.
         this.lastByCard.set(terminalId, decision)
         this.deps.onDecision(decision)
       }
@@ -263,7 +279,7 @@ export class RouteDecisions {
     const sessions = own ? [routeSession(terminalId), own] : [routeSession(terminalId)]
     for (const session of sessions) {
       try {
-        const res = await this.deps.fetch(`${gateway.url}/v1/magpie/usage/requests?session=${encodeURIComponent(session)}&agent=${USAGE_AGENT}&limit=1`, {
+        const res = await this.deps.fetch(`${gateway.url}/v1/magpie/usage/requests?session=${encodeURIComponent(session)}&agent=${USAGE_AGENT}&limit=${USAGE_ROWS}`, {
           headers: { authorization: `Bearer ${gateway.key}`, 'user-agent': 'cookrew' }
         })
         const facts = res.ok ? toTurnFacts(await res.json(), sessions) : null

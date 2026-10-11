@@ -10,7 +10,8 @@ import { connectPage, findChrome, launchChrome, serveBuild, waitForCanvas, type 
  * THE ROUTING PANEL, CLICKED.
  *
  * The real App on the demo api (tests/perf/fixtures/route-preview), built
- * with Vite and driven in a headless Chrome with real clicks: ADD → API key
+ * with Vite and driven in a headless Chrome with real pointer clicks
+ * (CDP Input.dispatchMouseEvent at each element's centre): ADD → API key
  * → deepseek types exactly one line, `magpie provider add deepseek `,
  * WITHOUT Enter, and leaves the Setup pane holding the keyboard focus so the
  * paste lands there; INSTALL types its line WITH Enter. There is no DOM test
@@ -42,9 +43,15 @@ describeWithChrome('the Routing panel, clicked', () => {
     if (out) rmSync(out, { recursive: true, force: true })
   })
 
+  /** A REAL click: the pointer moves to the element's centre and presses, through CDP — what a hand does, not el.click(). */
   async function click(page: CdpPage, selector: string): Promise<void> {
-    const r = await page.evaluate<string>(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return 'MISSING'; el.click(); return 'ok' })()`)
-    expect(r, selector).toBe('ok')
+    const box = await page.evaluate<{ x: number; y: number } | null>(
+      `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return null; el.scrollIntoView({ block: 'center' }); const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()`
+    )
+    expect(box, selector).not.toBeNull()
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: box!.x, y: box!.y })
+    await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: box!.x, y: box!.y, button: 'left', clickCount: 1 })
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: box!.x, y: box!.y, button: 'left', clickCount: 1 })
   }
 
   it('ADD → API key → deepseek types the key line once, without Enter, and focuses the pane; INSTALL types with Enter', async () => {

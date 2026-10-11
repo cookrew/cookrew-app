@@ -15,14 +15,14 @@ export interface RouteStateControls {
   state: RouteState | null
   available: boolean
   setDefault: (model: string | null) => void
-  /** Why the last default pick did not land, or null. The radio shows the state, so it reverts by itself. */
-  error: string | null
+  /** Why the last default pick did not land, with when — the panel shows the newest of its sources. */
+  error: { text: string; at: number } | null
 }
 
 export function useRouteState(): RouteStateControls {
   const [state, setState] = useState<RouteState | null>(null)
   const [available, setAvailable] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<{ text: string; at: number } | null>(null)
 
   useEffect(() => {
     const api = cookrew()
@@ -53,7 +53,7 @@ export function useRouteState(): RouteStateControls {
     api
       .routeSetDefault(model)
       .then(setState)
-      .catch((e: unknown) => setError(`default not set: ${e instanceof Error ? e.message : String(e)}`))
+      .catch((e: unknown) => setError({ text: `default not set: ${e instanceof Error ? e.message : String(e)}`, at: Date.now() }))
   }
 
   return { state, available, setDefault, error }

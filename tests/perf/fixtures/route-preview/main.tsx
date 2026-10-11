@@ -32,7 +32,8 @@ async function boot(): Promise<void> {
       records: ['model', 'effort'],
       tuning: { model: 'claude-opus-5', effort: 'high', at: Date.now() - 60_000 },
       asks: [],
-      caveat: null
+      caveat: null,
+      choices: { route: ['direct', 'group/smart', 'group/opus-anywhere', 'claude/claude-opus-5-5', 'claude/claude-sonnet-5', 'codex/gpt-5.5', 'deepseek/deepseek-v4', 'deepseek/deepseek-v4-flash', 'ollama/qwen3:32b'] }
     }),
     onTerminalTuning: () => () => undefined,
     tuneTerminal: async () => ({ ok: true })

@@ -6,37 +6,48 @@
  * (route/setup.ts) — but a RouteState also travels over the companion API
  * and the relay, and a renderer must not turn an arbitrary string it was
  * handed into shell. So the renderer refuses anything that is not one of
- * these shapes, whoever sent it. A key line ends in a space: the user
- * pastes the key and presses Enter themselves.
+ * these shapes, whoever sent it — and the shapes admit no shell
+ * metacharacter anywhere: no `$`, backtick, `;`, `|` outside the two fixed
+ * install pipes, `&`, `<`, `>`, quote (but the plugin path's own single
+ * quotes), `\`, newline. A key line ends in a space: the user pastes the
+ * key and presses Enter themselves.
  */
+
+/** A path inside single quotes may hold a space (a packaged "Cookrew Dev.app"); unquoted it may not. */
+const PLUGIN_PATH_QUOTED = "'[A-Za-z0-9._/@~ -]+'"
+const PLUGIN_PATH_BARE = '[A-Za-z0-9._/@~-]+'
+
 export const ROUTE_LINE_PATTERNS: readonly RegExp[] = [
   /^curl -fsSL https:\/\/usemagpie\.ai\/install\.sh \| sh$/,
   /^magpie (serve|autostart on)$/,
-  /^magpie plugin add \S+$/,
+  new RegExp(`^magpie plugin add (${PLUGIN_PATH_QUOTED}|${PLUGIN_PATH_BARE})$`),
   /^magpie provider add [a-z0-9-]+ ?$/,
   /^magpie accounts add codex$/,
   /^magpie group add smart models=[A-Za-z0-9./:,_-]+ routing=smart$/,
   /^npm i(nstall)? -g @[a-z0-9-]+\/[a-z0-9-]+$/,
   /^(claude|claude login|codex login|opencode auth login)$/,
   /^curl -fsSL https:\/\/opencode\.ai\/install \| bash$/,
-  /^brew install \S+$/
+  /^brew install [A-Za-z0-9._/@-]+$/
 ]
 
 export function setupLineAllowed(line: string): boolean {
-  if (line.length > 400 || /[\r\n]/.test(line)) return false
+  if (line.length > 400 || /[\r\n\x00]/.test(line)) return false
   return ROUTE_LINE_PATTERNS.some((pattern) => pattern.test(line))
 }
 
-/** The `magpie provider add ` stem a preset is appended to; null when main's line is not that stem. */
-const KEY_STEM = /^magpie provider add $/
+/** The bare stem the renderer appends a preset to; main's ADD_KEY_STEM. */
+export const KEY_STEM = 'magpie provider add '
+/** An older main sent the stem with a literal placeholder where the preset goes. */
+const KEY_PLACEHOLDER = 'magpie provider add <preset> '
 
 /**
- * `magpie provider add ` + preset + a trailing space for the paste. Null when
- * main's addKeyLine is not the bare stem — a renderer that guessed would have
- * the user paste the key as the provider's NAME.
+ * `magpie provider add ` + preset + a trailing space for the paste. Holds
+ * whatever main sends for the key line: the bare stem, or the stem with the
+ * literal `<preset>` placeholder. Anything else is null — a renderer that
+ * guessed would have the user paste the key as the provider's NAME.
  */
 export function keyLineFor(addKeyLine: string, preset: string): string | null {
-  if (!KEY_STEM.test(addKeyLine)) return null
   if (!/^[a-z0-9-]+$/.test(preset)) return null
-  return `${addKeyLine}${preset} `
+  if (addKeyLine === KEY_STEM || addKeyLine === KEY_PLACEHOLDER) return `${KEY_STEM}${preset} `
+  return null
 }

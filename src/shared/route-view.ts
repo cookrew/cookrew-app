@@ -27,6 +27,8 @@ export const ROUTING_COPY = {
   addKey: 'API key',
   addLocal: 'Local',
   addGroup: 'Routing group',
+  groupNeedsTwo: 'needs two models in the catalog',
+  noRoutable: 'no routable models',
   keyHint: 'the line is typed; paste the key and press Enter — it never touches Cookrew'
 } as const
 
