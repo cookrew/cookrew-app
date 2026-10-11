@@ -44,7 +44,6 @@ export function Harnesses({
       <div className="cr-routing-seg">
         Harnesses <span className="k3">installed · signed in · in dock — a missing tick is the button</span>
         <span className="sp" />
-        <span className="cr-routing-clicks">1 click per missing tick</span>
       </div>
       {rows.map((row) => (
         <div className="cr-routing-hrow" key={row.id} data-harness={row.id}>
@@ -122,7 +121,7 @@ export function AddMenu({ setup, onRun }: { setup: RouteState['setup']; onRun: R
   }
   return (
     <span className="cr-routing-add">
-      <span className="cr-routing-clicks">1 click + paste</span>{' '}
+
       <button type="button" className="cr-routing-btn primary" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
         {ROUTING_COPY.add} ▾
       </button>

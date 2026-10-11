@@ -61,7 +61,6 @@ export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null
       <div className="cr-routing-panel" onClick={(e) => e.stopPropagation()}>
         <div className="cr-routing-title">
           ⇄ {ROUTING_COPY.title}
-          <span className="cr-routing-clicks">2 clicks · fresh machine → routed</span>
           <span className="sp" />
           <button type="button" className="cr-routing-btn" onClick={onClose} aria-label="Close">
             ✕
