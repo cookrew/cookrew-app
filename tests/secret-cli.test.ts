@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { cmdSecret, SECRET_EXIT, SecretCliError, type SecretAudit } from '../src/main/secret-cli'
+import { cmdSecret, SECRET_EXIT, SecretCliError, secretAuditDetails, type SecretAudit } from '../src/main/secret-cli'
 import { createSecretsStore } from '../src/main/secrets-store'
 import { paneEnv } from '../src/main/pane-env'
 import type { CliRequest, TerminalNodeData } from '../src/shared/model'
@@ -99,5 +99,17 @@ describe('cookrew secret read', () => {
     expect(src).toContain("case 'secret':")
     expect(src).toMatch(/exitCode/)
     expect(src).not.toMatch(/\.\.\.\(error instanceof DeliveryError \? \{ exitCode: error\.exitCode \} : \{\}\)/)
+  })
+})
+
+describe('the audit row the inbox parses', () => {
+  it('is the name, then `note:<id>` when a note on that canvas has the slot line', () => {
+    const notes = [
+      { id: 'n-other', content: '# plain\nno slot' },
+      { id: 'n-keys', content: '# Stripe keys\n🔒 stripe-key\n' }
+    ]
+    expect(secretAuditDetails('stripe-key', notes)).toBe('stripe-key note:n-keys')
+    expect(secretAuditDetails('openai-key', notes)).toBe('openai-key')
+    expect(secretAuditDetails('stripe-key', [])).toBe('stripe-key')
   })
 })

@@ -43,10 +43,13 @@ export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
    * listing — names and dates, never values — is read when the editor opens
    * and after each seal; the body itself is never touched by a seal.
    */
-  const slots = editing ? secretSlotsOf(draft) : []
+  // In BOTH states: the inbox zooms a note and focuses its slot's field
+  // (Fresco's inbox, `[data-secret-slot]`) without a double-click first.
+  const slots = mode === 'mini' ? [] : secretSlotsOf(editing ? draft : node.content)
   const [sealed, setSealed] = useState<ReadonlyMap<string, SecretListing>>(new Map())
+  const hasSlots = slots.length > 0
   useEffect(() => {
-    if (!editing) return
+    if (!hasSlots) return
     const api = cookrew()
     if (!api.secretList) return
     let live = true
@@ -59,7 +62,7 @@ export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
     return () => {
       live = false
     }
-  }, [editing])
+  }, [hasSlots, editing])
 
   useEffect(() => {
     if (!editing) setDraft(node.content)
@@ -157,18 +160,6 @@ export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
               e.stopPropagation()
             }}
           />
-          {slots.length > 0 && (
-            <div className="cr-secret-slots">
-              {slots.map((name) => (
-                <SecretSlot
-                  key={name}
-                  name={name}
-                  entry={sealed.get(name) ?? null}
-                  onSealed={(entry) => setSealed((prev) => new Map(prev).set(entry.name, entry))}
-                />
-              ))}
-            </div>
-          )}
         </>
       ) : (
         <div
@@ -181,6 +172,18 @@ export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
             __html: renderNoteMarkdown(node.content || '*Double-click to write…*')
           }}
         />
+      )}
+      {hasSlots && (
+        <div className="cr-secret-slots">
+          {slots.map((name) => (
+            <SecretSlot
+              key={name}
+              name={name}
+              entry={sealed.get(name) ?? null}
+              onSealed={(entry) => setSealed((prev) => new Map(prev).set(entry.name, entry))}
+            />
+          ))}
+        </div>
       )}
     </div>
   )

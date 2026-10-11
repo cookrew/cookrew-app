@@ -86,4 +86,11 @@ describe('the editor block', () => {
     expect(seal).toContain('setSealed(')
     expect(seal).not.toContain('setDraft')
   })
+
+  it('exists on the zoomed card in BOTH states, so the inbox can focus it without a double-click', () => {
+    const node = readFileSync('src/renderer/src/nodes/NoteNode.tsx', 'utf8')
+    expect(node).toContain("secretSlotsOf(editing ? draft : node.content)")
+    // Rendered after the editing/viewing branch, not inside it.
+    expect(node.indexOf('{hasSlots && (')).toBeGreaterThan(node.indexOf('__html: renderNoteMarkdown'))
+  })
 })

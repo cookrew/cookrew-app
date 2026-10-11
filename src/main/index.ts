@@ -84,7 +84,7 @@ import {
 } from './mobile-server'
 import { createDesktopCert, type DesktopCert } from './desktop-cert'
 import { createSecretsStore } from './secrets-store'
-import type { SecretAudit } from './secret-cli'
+import { secretAuditDetails, type SecretAudit } from './secret-cli'
 import { DEFAULT_NAME_ZONE } from '../shared/reach-names'
 import { NameCertStore } from './name-cert-store'
 import {
@@ -546,7 +546,11 @@ const auditSecret = (event: SecretAudit): void => {
     workspaceName: home?.name ?? store.list().workspaces.find((w) => w.id === workspaceId)?.name ?? workspaceId,
     actor: 'agent',
     timestamp: Date.now(),
-    details: event.name
+    // `<name>` or `<name> note:<id>` when a note on that canvas has the slot.
+    details: secretAuditDetails(
+      event.name,
+      store.workspaceState(workspaceId).nodes.flatMap((node) => (node.kind === 'note' ? [node] : []))
+    )
   })
 }
 /**

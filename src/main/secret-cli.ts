@@ -18,7 +18,7 @@
  */
 
 import type { CliRequest, TerminalNodeData } from '../shared/model'
-import { isSecretName } from '../shared/secret-slot'
+import { isSecretName, secretSlotOf } from '../shared/secret-slot'
 import type { SecretsStore } from './secrets-store'
 
 /** Exit codes a shell caller branches on. */
@@ -86,4 +86,18 @@ export const cmdSecret = (request: CliRequest, deps: SecretCliDeps): string => {
   }
   deps.audit({ type: 'secret.read', terminalId: me.id, name })
   return record.value
+}
+
+/**
+ * THE DETAILS FIELD OF AN AUDIT ROW, as the inbox parses it (Fresco's
+ * src/main/inbox.ts · parseSecretDetails): the name first, then — when a
+ * note on the asking pane's canvas already carries the slot line — a
+ * `note:<id>` the row can open straight to the field. Never the value.
+ */
+export const secretAuditDetails = (
+  name: string,
+  notes: readonly { readonly id: string; readonly content: string }[]
+): string => {
+  const holder = notes.find((note) => note.content.split('\n').some((line) => secretSlotOf(line) === name))
+  return holder ? `${name} note:${holder.id}` : name
 }
