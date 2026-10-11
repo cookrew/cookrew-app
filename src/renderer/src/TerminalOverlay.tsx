@@ -33,6 +33,8 @@ import { useCheckpointTranslation } from './use-checkpoint-translation'
 import { StatusCoin } from './nodes/AgentAvatar'
 import { TuneRail } from './nodes/TuneRail'
 import { useAgentTuning } from './nodes/use-agent-tuning'
+import { useCardRoute } from './nodes/use-card-route'
+import { routeDialAllowed } from '../../shared/route-view'
 
 const PHOSPHOR_THEME = {
   background: '#14110A',
@@ -359,6 +361,10 @@ function TerminalOverlay({
   // The LEFT rail: the agent's model and effort, read off its own record and
   // turned by one typed line. Mirror of the checkpoint rail on the right.
   const tuning = useAgentTuning({ terminalId: node.id, phase, remote })
+  // The RTE dial (R2). A served session never gets this machine's route, so
+  // it never gets the dial either (design D3).
+  const routeAllowed = routeDialAllowed({ remote, served: node.servedSession != null })
+  const cardRoute = useCardRoute({ terminalId: node.id, enabled: routeAllowed })
 
   // Owner ruling 2026-08-30: the zoomed view is PTY-DIRECT for every card.
   useEffect(() => {
@@ -1060,6 +1066,11 @@ function TerminalOverlay({
             onTurn={tuning.turn}
             error={tuning.error}
             onMouseDown={keepFocus}
+            route={
+              routeAllowed && cardRoute.choices !== null
+                ? { state: cardRoute.state, choices: cardRoute.choices, open: cardRoute.open, onOpen: cardRoute.setOpen, onPick: cardRoute.pick }
+                : null
+            }
           />
         )}
         <TranscriptView

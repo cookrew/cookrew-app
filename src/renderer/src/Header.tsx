@@ -4,6 +4,8 @@ import { CompanionAvatar, PathBadge } from './PathBadge'
 import { CrIcon } from './icons'
 import { StatusCoin } from './nodes/AgentAvatar'
 import { WorkspaceSwitcher } from './WorkspaceSwitcher'
+import { RoutingEntry } from './routing/RoutingPanel'
+import type { RouteStatus } from '../../shared/route'
 
 /** The two things the stage can be showing. */
 export type MainView = 'canvas' | 'agents'
@@ -22,6 +24,12 @@ interface HeaderProps {
    * and removing workspaces, and the activity history, all live behind it.
    */
   onWall: () => void
+  /**
+   * Opens the Routing panel (routing/RoutingPanel.tsx) — Magpie's models,
+   * accounts and live routes inside Cookrew. Null status = not read yet.
+   */
+  onRouting?: () => void
+  routeStatus?: RouteStatus | null
   /** Re-pull the canvas and re-establish the push channel (the brand mark). */
   onResync: () => void
   /**
@@ -76,6 +84,8 @@ export function Header({
   view,
   onViewChange,
   onWall,
+  onRouting,
+  routeStatus,
   onResync,
   avatar
 }: HeaderProps): React.JSX.Element {
@@ -156,6 +166,7 @@ export function Header({
         </span>
       </div>
 
+      {onRouting && <RoutingEntry status={routeStatus ?? null} onOpen={onRouting} />}
       <WorkspaceSwitcher fallbackName={workspaceName} fallbackDir={dir} onWall={onWall} />
     </header>
   )

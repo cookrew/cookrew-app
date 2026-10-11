@@ -1,6 +1,7 @@
 import type { DeepLink } from '../../shared/deep-link'
 import type { AnsweredRow, QueueRow, RowAction } from '../../shared/account-requests'
 import type { AgentTuning, AgentTuningState, TuneKnob } from '../../shared/agent-tuning'
+import type { CardRouteState, RouteState } from '../../shared/route'
 import type { TranslateResult } from '../../shared/translate'
 import type { Surface as SousSurface } from '../../shared/sous-intent'
 import type { SousCommandResult } from '../../main/sous-control'
@@ -363,6 +364,19 @@ export interface CookrewApi {
    * owner's own canvas in their own hand; a card that is a line into someone
    * ELSE's session is a different thing and the rail refuses that separately.
    */
+  /**
+   * MAGPIE ROUTING (docs/route-program/LEDGER.md). The gateway's state for
+   * the Routing panel and one card's route for the RTE dial; both pushed on
+   * change, never polled. Optional: the demo api answers a fixture, the
+   * phone answers over /api/route, an older bridge answers nothing and the
+   * panel says so.
+   */
+  routeState?: () => Promise<RouteState>;
+  routeSetDefault?: (model: string | null) => Promise<RouteState>;
+  terminalRoute?: (terminalId: string) => Promise<CardRouteState>;
+  terminalRouteSet?: (terminalId: string, route: string) => Promise<CardRouteState>;
+  onRoute?: (cb: (state: RouteState) => void) => () => void;
+  onCardRoute?: (cb: (row: { terminalId: string } & CardRouteState) => void) => () => void;
   terminalTuning?: (terminalId: string) => Promise<AgentTuningState>;
   /**
    * The whole fleet's dials in one call — the per-card tag is drawn for the

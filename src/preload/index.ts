@@ -297,6 +297,22 @@ const api = {
   },
 
   ptyInput: (terminalId: string, data: string) => ipcRenderer.send('pty:input', terminalId, data),
+  // Magpie routing (docs/route-program/LEDGER.md): the gateway's state and
+  // one card's route, pushed on change.
+  routeState: () => ipcRenderer.invoke('route:state'),
+  routeSetDefault: (model: string | null) => ipcRenderer.invoke('route:set-default', model),
+  terminalRoute: (terminalId: string) => ipcRenderer.invoke('terminal:route', terminalId),
+  terminalRouteSet: (terminalId: string, route: string) => ipcRenderer.invoke('terminal:route:set', terminalId, route),
+  onRoute: (cb: (state: unknown) => void) => {
+    const listener = (_e: unknown, state: unknown): void => cb(state)
+    ipcRenderer.on('route:changed', listener)
+    return () => ipcRenderer.removeListener('route:changed', listener)
+  },
+  onCardRoute: (cb: (row: unknown) => void) => {
+    const listener = (_e: unknown, row: unknown): void => cb(row)
+    ipcRenderer.on('card-route:changed', listener)
+    return () => ipcRenderer.removeListener('card-route:changed', listener)
+  },
   terminalTuning: (terminalId: string) => ipcRenderer.invoke('terminal:tuning', terminalId),
   listTuning: () => ipcRenderer.invoke('tuning:list'),
   onTerminalTuning: (cb: (row: { terminalId: string; tuning: unknown }) => void) => {

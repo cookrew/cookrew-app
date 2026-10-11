@@ -25,6 +25,9 @@ import { isViewed, markViewed, pruneViewers, type ViewerClocks } from '../../sha
 import { TerminalNode } from './nodes/TerminalNode'
 import { NoteNode } from './nodes/NoteNode'
 import { useWorkspaceWall } from './WorkspaceWallHost'
+import { RoutingPanel, shouldAutoOpen } from './routing/RoutingPanel'
+import { useRouteState } from './routing/use-route-state'
+import { useSetupTerminal } from './routing/use-setup-terminal'
 import { BrowserNode } from './nodes/BrowserNode'
 import { CableEdge } from './CableEdge'
 import { Header, type MainView } from './Header'
@@ -276,6 +279,16 @@ function Canvas(): React.JSX.Element {
    * snapshot of its canvas, and you pick the picture — and it is where a
    * workspace is made, given directories or removed, too. */
   const wall = useWorkspaceWall({ stageRef, workspace, onActivity: () => setMetricsOpen(true) })
+  // R1 · the Routing panel: the gateway's state (pushed), the Setup card its
+  // buttons type into, and one self-opening on first boot while nothing is
+  // installed. Everything else about it is a menu entry in the header.
+  const routeState = useRouteState()
+  const setupTerminal = useSetupTerminal(workspace)
+  const [routingOpen, setRoutingOpen] = useState(false)
+  useEffect(() => {
+    if (routeState.state && shouldAutoOpen(routeState.state.status, window.localStorage)) setRoutingOpen(true)
+  }, [routeState.state])
+  const cardNames = useMemo(() => new Map((workspace?.nodes ?? []).map((n) => [n.id, n.name])), [workspace?.nodes])
   /**
    * A workspace switch replaces every node while the viewport still frames the
    * OUTGOING canvas — so the incoming workspace opens somewhere off in empty
@@ -1473,6 +1486,8 @@ function Canvas(): React.JSX.Element {
           view={view}
           onViewChange={setView}
           onWall={wall.open}
+          onRouting={routeState.available ? () => setRoutingOpen(true) : undefined}
+          routeStatus={routeState.state?.status ?? null}
           onResync={resync}
           avatar={account.avatar}
         />
@@ -1728,6 +1743,29 @@ function Canvas(): React.JSX.Element {
         {/* The screen wall covers the stage it hands back to, so it is mounted
             after the canvas and measures that stage rather than guessing. */}
         {wall.element}
+        <RoutingPanel
+          open={routingOpen}
+          onClose={() => setRoutingOpen(false)}
+          state={routeState.state}
+          available={routeState.available}
+          onRun={(line, options) => void setupTerminal.run(line, options)}
+          setupTerminalId={setupTerminal.terminalId}
+          focusTick={setupTerminal.focusTick}
+          onSetDefault={routeState.setDefault}
+          onAddToDock={(harness) => {
+            // "In the dock" as Cookrew can make it true today: the harness
+            // becomes the dock's active preset, so the next click on the
+            // canvas places it.
+            setPreset(harness.name)
+            setRole(null)
+            setRoutingOpen(false)
+          }}
+          names={cardNames}
+          onZoom={(terminalId) => {
+            setRoutingOpen(false)
+            zoomToNode(terminalId)
+          }}
+        />
         <EventToastLayer />
         {/* D14 · a door this Mac was serving moved to another of the account's. */}
         <DoorMovedNotice />

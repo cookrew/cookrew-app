@@ -1,3 +1,5 @@
+import type { CardRouteState, RouteState } from '../../shared/route'
+import { cardRouteFixture, routeFixture } from '../../shared/route-fixture'
 import type {
   CanvasNode,
   Connection,
@@ -112,6 +114,22 @@ export function createDemoApi(): CookrewApi {
   const wsListeners = new Set<(l: WorkspaceList) => void>()
   const ptyListeners = new Map<string, (data: string) => void>()
   const lineBuffers = new Map<string, string>()
+  // Magpie routing with no gateway behind it: the online fixture, switchable
+  // from a fixture page through `window.__routeStatus('absent'|'offline'|'online')`
+  // so the Routing panel's states can be photographed.
+  let route: RouteState = routeFixture('online')
+  const routeListeners = new Set<(state: RouteState) => void>()
+  const cardRoutes = new Map<string, CardRouteState>()
+  const cardRouteListeners = new Set<(row: { terminalId: string } & CardRouteState) => void>()
+  const routeChanged = (): void => {
+    for (const listener of routeListeners) listener(route)
+  }
+  if (typeof window !== 'undefined') {
+    ;(window as unknown as { __routeStatus?: (status: RouteState['status']) => void }).__routeStatus = (status) => {
+      route = routeFixture(status)
+      routeChanged()
+    }
+  }
   // Signals on the cables, with no main behind them: a fixture page (the
   // harness preview, QA) puts one on a cable through `window.__cableSignal`.
   const signalListeners = new Set<(signal: unknown) => void>()
@@ -327,6 +345,35 @@ export function createDemoApi(): CookrewApi {
 
     listActivity: () => Promise.resolve([]),
     onTerminalActivity: () => () => undefined,
+    routeState: () => Promise.resolve(route),
+    routeSetDefault: (model) => {
+      route = { ...route, defaultModel: model }
+      routeChanged()
+      return Promise.resolve(route)
+    },
+    terminalRoute: (terminalId) =>
+      Promise.resolve(
+        cardRoutes.get(terminalId) ??
+          cardRouteFixture(route.status === 'online' ? {} : { route: 'direct', effective: null, live: null, turn: null, offline: route.status === 'offline' })
+      ),
+    terminalRouteSet: (terminalId, next) => {
+      const row = cardRouteFixture({ route: next, effective: next === 'direct' ? null : next, appliesOn: 'restart', live: null, turn: null, offline: false })
+      cardRoutes.set(terminalId, row)
+      for (const listener of cardRouteListeners) listener({ terminalId, ...row })
+      return Promise.resolve(row)
+    },
+    onRoute: (cb) => {
+      routeListeners.add(cb)
+      return () => {
+        routeListeners.delete(cb)
+      }
+    },
+    onCardRoute: (cb) => {
+      cardRouteListeners.add(cb)
+      return () => {
+        cardRouteListeners.delete(cb)
+      }
+    },
     onCableSignal: (cb) => {
       signalListeners.add(cb)
       return () => {
