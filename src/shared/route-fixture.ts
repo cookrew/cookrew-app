@@ -57,9 +57,9 @@ export function routeFixture(status: RouteState['status'] = 'online'): RouteStat
       : [],
     harnesses: [
       { id: 'claude', name: 'Claude Code', installed: true, signedIn: true, inDock: true, installLine: 'npm install -g @anthropic-ai/claude-code', loginLine: 'claude login' },
-      { id: 'codex', name: 'Codex', installed: true, signedIn: online, inDock: true, installLine: 'npm install -g @openai/codex', loginLine: 'magpie accounts add codex' },
+      { id: 'codex', name: 'Codex', installed: true, signedIn: online, inDock: true, installLine: 'npm install -g @openai/codex', loginLine: 'codex login' },
       { id: 'opencode', name: 'OpenCode', installed: false, signedIn: null, inDock: false, installLine: 'brew install sst/tap/opencode', loginLine: null },
-      { id: 'pi', name: 'Pi', installed: true, signedIn: null, inDock: false, installLine: 'npm install -g @mariozechner/pi-coding-agent', loginLine: null }
+      { id: 'pi', name: 'Pi', installed: true, signedIn: null, inDock: false, installLine: 'npm install -g @earendil-works/pi-coding-agent', loginLine: null }
     ],
     checkedAt: NOW,
     setup: SETUP_LINES

@@ -89,7 +89,7 @@ describe('harness rows', () => {
 
   it('draws sign-in as the line the harness owns, and no sign-in at all for a harness without one', () => {
     const ticks = harnessTicks(routeFixture('offline').harnesses[1])
-    expect(ticks[1]).toMatchObject({ ok: false, line: 'magpie accounts add codex' })
+    expect(ticks[1]).toMatchObject({ ok: false, line: 'codex login' })
     const pi = harnessTicks(routeFixture('online').harnesses[3])
     expect(pi[1]).toMatchObject({ ok: true, label: 'no sign-in' })
   })
