@@ -8,6 +8,8 @@ import { cardTypeScale, cardZoomMode } from './card-zoom'
 import { TILE_DRAG_SURFACE } from './drag-surface'
 import type { NoteNodeData } from '../../../shared/model'
 import { noteIsWhole } from '../../../shared/wire-canvas'
+import { secretSlotsOf, type SecretListing } from '../../../shared/secret-slot'
+import { SecretSlot } from './SecretSlot'
 import { cookrew } from '../api'
 import { useCanvasUi } from '../canvas-ui'
 
@@ -35,6 +37,29 @@ export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
   // Single click zooms the note to the stage after a beat; a double click
   // (edit) cancels the pending zoom so editing stays in place.
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /**
+   * THE SEALED SLOTS of the body being edited (shared/secret-slot.ts): each
+   * `🔒 <name>` line draws a SecretSlot block under the editor. The store's
+   * listing — names and dates, never values — is read when the editor opens
+   * and after each seal; the body itself is never touched by a seal.
+   */
+  const slots = editing ? secretSlotsOf(draft) : []
+  const [sealed, setSealed] = useState<ReadonlyMap<string, SecretListing>>(new Map())
+  useEffect(() => {
+    if (!editing) return
+    const api = cookrew()
+    if (!api.secretList) return
+    let live = true
+    void api
+      .secretList()
+      .then((rows) => {
+        if (live) setSealed(new Map(rows.map((row) => [row.name, row])))
+      })
+      .catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [editing])
 
   useEffect(() => {
     if (!editing) setDraft(node.content)
@@ -114,17 +139,37 @@ export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
         <CardClose nodeId={node.id} />
       </div>
       {editing ? (
-        <textarea
-          className="note-editor nodrag nowheel"
-          value={draft}
-          autoFocus
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') commit()
-            e.stopPropagation()
-          }}
-        />
+        <>
+          <textarea
+            className="note-editor nodrag nowheel"
+            value={draft}
+            autoFocus
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={(e) => {
+              // A blur INTO a slot block (the password field, SEAL) is not the
+              // end of the edit: the slots live inside the editor.
+              const next = e.relatedTarget as HTMLElement | null
+              if (next?.closest('.cr-secret-slots')) return
+              commit()
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') commit()
+              e.stopPropagation()
+            }}
+          />
+          {slots.length > 0 && (
+            <div className="cr-secret-slots">
+              {slots.map((name) => (
+                <SecretSlot
+                  key={name}
+                  name={name}
+                  entry={sealed.get(name) ?? null}
+                  onSealed={(entry) => setSealed((prev) => new Map(prev).set(entry.name, entry))}
+                />
+              ))}
+            </div>
+          )}
+        </>
       ) : (
         <div
           className="note-body nodrag nowheel"

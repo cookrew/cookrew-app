@@ -2119,6 +2119,61 @@ a.card-close {
   opacity: 0.6;
 }
 
+/* The sealed slot (R4): the card face shows a chip; the zoom editor shows
+   the block with the only password field in Cookrew (nodes/SecretSlot.tsx). */
+.cr-secret-chip {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  padding: 1px 7px;
+  border: 1.5px solid var(--note-text);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--note-text) 8%, transparent);
+  color: var(--note-text);
+}
+.cr-secret-slots {
+  flex: 0 0 auto;
+  border-top: 1.5px dashed var(--note-text);
+  padding: 8px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--note-text);
+}
+.cr-secret-slot {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-rows: auto auto;
+  gap: 4px 8px;
+  align-items: center;
+  font-size: 12px;
+}
+.cr-secret-slot-name {
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+.cr-secret-slot-state {
+  grid-column: 1 / -1;
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  opacity: 0.7;
+}
+.cr-secret-slot input[type='password'] {
+  font: 12px var(--font-mono);
+  padding: 3px 6px;
+  border: 1.5px solid var(--note-text);
+  background: var(--cream-hi, #fffef5);
+  color: var(--ink, #2d2a20);
+  min-width: 0;
+}
+.cr-secret-slot-served {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
 .note-body,
 .note-editor {
   flex: 1;
