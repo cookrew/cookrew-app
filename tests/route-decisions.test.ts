@@ -95,6 +95,7 @@ describe('the follow', () => {
       fetch: (i, init) => fetch(i, init),
       gateway: () => ({ url: fake.url, key: 'magpie-cookrew' }),
       waitSeconds: 1,
+      lapFloorMs: 50,
       onDecision: (row) => decisions.push(row),
       onTurn: (id, facts) => turns.push(`${id}:${facts.model}:${facts.outputTokens}`)
     })
@@ -139,6 +140,7 @@ describe('the follow', () => {
       fetch: (i, init) => fetch(i, init),
       gateway: () => ({ url: fake.url, key: 'k' }),
       waitSeconds: 1,
+      lapFloorMs: 50,
       onDecision: () => {},
       onTurn: (id, facts) => turns.push(`${id}:${facts.model}`),
       harnessSession: (id) => (id === 'card-9' ? 'claude-own-session' : null)

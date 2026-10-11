@@ -53,6 +53,8 @@ export interface ServedSpawnContext {
   grantedKeys?: readonly string[]
   /** The app's CLI command socket, denied in the profile. See seatbeltProfile. */
   controlSocketPath?: string
+  /** The gateway's port(s) the seat must not reach (session-sandbox.ts, sandbox-deny.ts). */
+  gatewayPorts?: readonly number[]
 }
 
 /** A confined spawn: the wrapped command, the scrubbed env, and the profile it uses. */
@@ -114,7 +116,8 @@ export function servedConfinement(
     // service-grants.ts is a formality — the agent could read the originals.
     secretPaths: ownerSecretPaths(ctx.base),
     // The owner's canvas control plane, denied from the other side of the env.
-    ...(ctx.controlSocketPath ? { controlSocketPath: ctx.controlSocketPath } : {})
+    ...(ctx.controlSocketPath ? { controlSocketPath: ctx.controlSocketPath } : {}),
+    ...(ctx.gatewayPorts ? { gatewayPorts: ctx.gatewayPorts } : {})
   })
   // Inside the sandbox (so END's cleanup removes it); the per-session SANDBOX
   // dir is what keeps two sessions' profiles apart, not this constant filename.

@@ -18,7 +18,8 @@ afterEach(() => {
 function routeState(status: RouteState['status']): RouteState {
   return {
     status,
-    gateway: status === 'absent' ? null : { url: 'http://127.0.0.1:3425', v1: 'http://127.0.0.1:3425/v1', key: 'magpie-cookrew', port: 3425, version: null, source: 'probe' },
+    why: null,
+    gateway: status === 'absent' ? null : { url: 'http://127.0.0.1:3425', v1: 'http://127.0.0.1:3425/v1', port: 3425, version: null, source: 'probe' },
     defaultModel: null,
     providers: 2,
     models: [],
@@ -112,6 +113,17 @@ describe('the route over HTTP', () => {
     expect((await call(bare, '/api/route')).status).toBe(404)
   })
 
+  it('the read-only wall token reads /api/route and never a key', async () => {
+    const fake = fakeRoute()
+    const port = await startApi({ route: fake.route, wallToken: 'wall-token' })
+    const res = await fetch(`http://127.0.0.1:${port}/api/route`, { headers: { authorization: 'Bearer wall-token' } })
+    expect(res.status).toBe(200)
+    const text = await res.text()
+    expect(text).toContain('"status":"online"')
+    expect(text).not.toContain('magpie-')
+    expect(text).not.toContain('"key"')
+  })
+
   it('/api/health carries the route facts', async () => {
     const fake = fakeRoute()
     const port = await startApi({ route: fake.route })
@@ -160,6 +172,12 @@ describe('the route over HTTP', () => {
     expect(fake.holds()).toBe(1)
     fake.bus.emit('route', routeState('offline'))
     expect(written).toContain('event: route\ndata: {"status":"offline"')
+    // An unchanged RouteState is a snapshot event: the repeat is not re-sent.
+    const before = written.split('event: route').length
+    fake.bus.emit('route', routeState('offline'))
+    expect(written.split('event: route').length).toBe(before)
+    fake.bus.emit('route', routeState('online'))
+    expect(written.split('event: route').length).toBe(before + 1)
     fake.bus.emit('card-route', { terminalId: 'card-1', route: 'direct', effective: 'direct', appliesOn: 'now', live: null, turn: null, offline: false })
     expect(written).toContain('event: card-route\ndata: {"terminalId":"card-1"')
     // Another canvas's card stays off this stream... this one is unscoped, so it passes.

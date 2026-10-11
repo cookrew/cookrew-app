@@ -126,7 +126,8 @@ export function createDemoApi(): CookrewApi {
   let routeDefault: string | null = 'group/smart'
   const routeState = (): RouteState => ({
     status: 'online',
-    gateway: { url: 'http://127.0.0.1:3425', v1: 'http://127.0.0.1:3425/v1', key: 'magpie-cookrew', port: 3425, version: '0.1.1182', source: 'plugin' },
+    gateway: { url: 'http://127.0.0.1:3425', v1: 'http://127.0.0.1:3425/v1', port: 3425, version: '0.1.1182', source: 'plugin' },
+    why: null,
     defaultModel: routeDefault,
     providers: 3,
     models: [

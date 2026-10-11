@@ -48,7 +48,7 @@ import type { StreamService } from "./stream-service";
 import { handleStreamRoutes } from "./stream-routes";
 import { handleStreamAdapters } from "./stream-adapters";
 import type { LoopHealthSnapshot } from "./loop-health";
-import type { CardRouteState, RouteState } from "../shared/route";
+import { ROUTE_ID_RE, type CardRouteState, type RouteState } from "../shared/route";
 import { ownerSubmit } from "./ask";
 import { MAX_ATTACHMENT_BYTES } from "./attachments";
 import type { SousDoor } from "./socket-server";
@@ -595,8 +595,8 @@ export async function handleMobileApi(
       return true;
     }
     const body = await readJson<{ route?: unknown }>(request);
-    if (typeof body.route !== "string" || body.route === "") {
-      respondJson(response, 400, { ok: false, reason: "route is required" });
+    if (typeof body.route !== "string" || !ROUTE_ID_RE.test(body.route)) {
+      respondJson(response, 400, { ok: false, reason: "route must be 'direct' or a model id" });
       return true;
     }
     const result = await deps.route.setCardRoute(terminalId, body.route);

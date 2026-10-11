@@ -110,10 +110,32 @@ export function parseAddr(addr: string): { url: string; port: number } | null {
 
 export interface Discovered {
   gateway: RouteGateway
+  /** The bearer every routed request carries. Main-only: never on RouteState. */
+  key: string
   /** The plugin's default model, when the plugin named the gateway. */
   defaultModel: string | null
   /** Something on this machine names magpie: a binary, the plugin file, or MAGPIE_ADDR. */
   known: boolean
+  /** A refusal, said out loud: the plugin file or MAGPIE_ADDR named a host off this machine. */
+  why: string | null
+}
+
+const LOOPBACK = new Set(['127.0.0.1', '::1', '[::1]', 'localhost'])
+
+/**
+ * The gateway must be THIS machine's. The plugin file is written by another
+ * program and MAGPIE_ADDR by whoever set the environment; a host off the
+ * loopback would send every card's prompts — and the key — somewhere else.
+ * COOKREW_ROUTE_REMOTE=1 is the owner's explicit say-so for a gateway on
+ * another box (Share on local network); without it the address is refused.
+ */
+export function hostAllowed(url: string, env: DiscoveryEnv['env']): boolean {
+  if (env.COOKREW_ROUTE_REMOTE === '1') return true
+  try {
+    return LOOPBACK.has(new URL(url).hostname.toLowerCase())
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -121,23 +143,37 @@ export interface Discovered {
  * `which magpie` (kept out of here so the pure part stays pure).
  */
 export function discover(d: DiscoveryEnv, hasBinary: boolean): Discovered {
+  const refused = (source: string, url: string): Discovered => ({
+    gateway: { url: '', v1: '', port: 0, version: null, source: 'probe' },
+    key: DEFAULT_KEY,
+    defaultModel: null,
+    known: false,
+    why: `${source} names ${url}, which is not this machine; set COOKREW_ROUTE_REMOTE=1 to allow a remote gateway`
+  })
   const plugin = readPluginRoute(d)
   if (plugin) {
     const parsed = parseAddr(plugin.gateway)
     const url = parsed?.url ?? plugin.gateway
+    if (!hostAllowed(url, d.env)) return refused(`${PLUGIN_FILE}`, url)
     const port = parsed?.port ?? DEFAULT_PORT
+    const v1 = plugin.v1 && hostAllowed(plugin.v1, d.env) ? plugin.v1 : `${url}/v1`
     return {
-      gateway: { url, v1: plugin.v1 ?? `${url}/v1`, key: plugin.key ?? DEFAULT_KEY, port, version: null, source: 'plugin' },
+      gateway: { url, v1, port, version: null, source: 'plugin' },
+      key: plugin.key ?? DEFAULT_KEY,
       defaultModel: plugin.model,
-      known: true
+      known: true,
+      why: null
     }
   }
   const fromEnv = d.env.MAGPIE_ADDR ? parseAddr(d.env.MAGPIE_ADDR) : null
+  if (fromEnv && !hostAllowed(fromEnv.url, d.env)) return refused('MAGPIE_ADDR', fromEnv.url)
   const port = fromEnv?.port ?? settingsPort(d) ?? DEFAULT_PORT
   const url = fromEnv?.url ?? `http://127.0.0.1:${port}`
   return {
-    gateway: { url, v1: `${url}/v1`, key: DEFAULT_KEY, port, version: null, source: 'probe' },
+    gateway: { url, v1: `${url}/v1`, port, version: null, source: 'probe' },
+    key: DEFAULT_KEY,
     defaultModel: null,
-    known: hasBinary || fromEnv !== null
+    known: hasBinary || fromEnv !== null,
+    why: null
   }
 }
