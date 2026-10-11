@@ -38,16 +38,23 @@ export interface CommandBoxProps {
   rows?: InboxRow[]
   /** Test seam: a decision already on the line. */
   initialDecision?: Decision | null
+  /** Test seam: something Sous already said — main's own sentence, shown as it is. */
+  initialSaid?: string | null
 }
+
+/** What Sous said stays this long, then fades; a decision never fades. */
+export const SAID_FADE_MS = 3500
 
 type Echo = { kind: 'decision'; decision: Decision; left: number } | { kind: 'said'; text: string; refused: boolean }
 
-export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecision = null }: CommandBoxProps): React.JSX.Element | null {
+export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecision = null, initialSaid = null }: CommandBoxProps): React.JSX.Element | null {
   const { jumpToNode } = useCanvasUi()
   const [rows, setRows] = useState<InboxRow[]>(givenRows ?? [])
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
-  const [echo, setEcho] = useState<Echo | null>(initialDecision ? { kind: 'decision', decision: initialDecision, left: initialDecision.holdMs } : null)
+  const [echo, setEcho] = useState<Echo | null>(
+    initialDecision ? { kind: 'decision', decision: initialDecision, left: initialDecision.holdMs } : initialSaid ? { kind: 'said', text: initialSaid, refused: false } : null
+  )
   const [alts, setAlts] = useState(false)
   const [, setClock] = useState(0)
   const field = useRef<HTMLInputElement>(null)
@@ -146,7 +153,7 @@ export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecis
   // What Sous said fades; a decision does not.
   useEffect(() => {
     if (!echo || echo.kind !== 'said' || echo.text === '…') return
-    const timer = window.setTimeout(() => setEcho(null), 3500)
+    const timer = window.setTimeout(() => setEcho(null), SAID_FADE_MS)
     return () => window.clearTimeout(timer)
   }, [echo])
 

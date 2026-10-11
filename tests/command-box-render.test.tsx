@@ -123,6 +123,20 @@ describe('CommandBox — one surface: the inbox rows, the field, the echo', () =
     expect(html).not.toContain('change ▾')
   })
 
+  it('what Sous said is shown as main said it — the recruit line ends in "sent" / "已派出" only because main put it there — and fades after 3.5 s', async () => {
+    const { CommandBox, SAID_FADE_MS } = await box()
+    // Main's copy (sous-control RECRUITED), said only once the brief reached the new card.
+    for (const said of ['New Claude Code card · Write Haiku About · sent', '新建了 Claude Code 卡「写俳句」，已派出']) {
+      const html = renderToStaticMarkup(<CommandBox open onClose={() => undefined} phone={false} rows={[]} initialSaid={said} />)
+      expect(html).toContain('class="cmd-echo said"')
+      expect(html).toContain(`<span class="line">${said}</span>`)
+    }
+    // The box adds no "sent" of its own: the word is in the line exactly as often as main wrote it.
+    const once = renderToStaticMarkup(<CommandBox open onClose={() => undefined} phone={false} rows={[]} initialSaid="Sent to Forge" />)
+    expect(once.match(/sent/gi)).toHaveLength(1)
+    expect(SAID_FADE_MS).toBe(3500)
+  })
+
   it('the phone is the same box as the bottom bar, three rows at most, and it never closes', async () => {
     const { CommandBox } = await box()
     const many = [0, 1, 2, 3, 4].map((i) => ({ ...rows[0], nodeId: `n${i}`, nodeName: `Card ${i}` }))
