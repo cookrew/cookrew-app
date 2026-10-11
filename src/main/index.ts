@@ -5465,14 +5465,19 @@ app.whenReady().then(() => {
       }
     }
   })
-  ipcMain.handle('sous:commit', (_e, token: string, choice?: { target?: string }) => sous.commit(String(token), choice ?? {}))
+  // The desktop's box: one caller, on the surface it says. A token minted on
+  // the canvas is the canvas box's to commit or cancel, and nobody else's.
+  const desktopCaller = (surface: unknown): { surface: SousSurface; callerId: string } => ({ surface: surface === 'phone' ? 'phone' : 'canvas', callerId: 'desktop' })
+  ipcMain.handle('sous:commit', (_e, token: string, choice?: { target?: string }, surface?: unknown) => sous.commit(String(token), choice ?? {}, desktopCaller(surface)))
   ipcMain.handle(
     'sous:command',
-    (_e, text: string, ctx: { surface: SousSurface; focusedAgentId?: string | null; alternates?: string[] }) =>
+    (_e, text: string, ctx: { surface: SousSurface; focusedAgentId?: string | null; alternates?: string[]; box?: boolean }) =>
       sous.handle({
         text,
         alternates: ctx.alternates,
         surface: ctx.surface,
+        // Only the box decides; push-to-talk sends no flag and keeps the regex core.
+        box: ctx.box === true,
         callerId: 'desktop',
         focusedAgentId: ctx.focusedAgentId ?? null
       })
@@ -5513,9 +5518,11 @@ app.whenReady().then(() => {
         events: (type, since) => events.query({ type, since })
       })
     },
+    // The op itself rides along: Sous's notes are store ops too.
     onStoreOp: (cb) => {
-      store.on('op', cb)
-      return () => void store.off('op', cb)
+      const listener = (op: { type: string }): void => cb(op)
+      store.on('op', listener)
+      return () => void store.off('op', listener)
     },
     onEvent: (cb) => {
       events.on('event', cb)
@@ -5527,16 +5534,24 @@ app.whenReady().then(() => {
   // The window holds the list while its box is subscribed; a one-shot read
   // builds on demand.
   let windowHold: (() => void) | null = null
-  ipcMain.handle('inbox:subscribe', () => {
-    if (!windowHold) windowHold = inbox.hold()
-    return inbox.read()
-  })
-  ipcMain.handle('inbox:unsubscribe', () => {
+  const releaseWindowHold = (): void => {
     windowHold?.()
     windowHold = null
+  }
+  ipcMain.handle('inbox:subscribe', (event) => {
+    if (!windowHold) {
+      windowHold = inbox.hold()
+      // A reload or a closed window never sends the unsubscribe: the hold
+      // goes with the page that took it.
+      const contents = event.sender
+      contents.once('did-start-navigation', releaseWindowHold)
+      contents.once('destroyed', releaseWindowHold)
+    }
+    return inbox.read()
   })
+  ipcMain.handle('inbox:unsubscribe', releaseWindowHold)
   ipcMain.handle('inbox:list', () => inbox.read())
-  ipcMain.handle('sous:cancel', (_e, token: string) => sous.cancel(String(token)))
+  ipcMain.handle('sous:cancel', (_e, token: string, surface?: unknown) => sous.cancel(String(token), desktopCaller(surface)))
 
   // THE MAC'S EAR. One recognizer child per hold of ⌘; the roster's names go
   // in as hints so "cookrew dev" is not heard as "cooker Dev".

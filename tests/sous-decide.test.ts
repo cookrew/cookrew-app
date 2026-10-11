@@ -168,7 +168,7 @@ function controller(): { calls: string[]; sous: SousController; tick: (ms: numbe
 describe('SousController — the decide step and its commit', () => {
   it('a brief the core does not match comes back as a decision, held, not executed', async () => {
     const h = controller()
-    const r = await h.sous.handle({ text: 'Make the install section of README English and add a test for the install script', surface: 'canvas' })
+    const r = await h.sous.handle({ text: 'Make the install section of README English and add a test for the install script', surface: 'canvas', box: true })
     expect(r.intent).toBe('decide')
     expect(r.decision?.kind).toBe('ask')
     expect(r.decision?.token).toBe('t1')
@@ -179,7 +179,7 @@ describe('SousController — the decide step and its commit', () => {
 
   it('commit sends the brief to the chosen card exactly once; a second commit is refused', async () => {
     const h = controller()
-    const r = await h.sous.handle({ text: 'Make the install section of README English and add a test', surface: 'canvas' })
+    const r = await h.sous.handle({ text: 'Make the install section of README English and add a test', surface: 'canvas', box: true })
     const token = r.decision?.token ?? ''
     const done = await h.sous.commit(token)
     expect(done.intent).toBe('ask')
@@ -193,7 +193,7 @@ describe('SousController — the decide step and its commit', () => {
 
   it('the alternate re-targets the same brief', async () => {
     const h = controller()
-    const r = await h.sous.handle({ text: 'bugfix: the install section of README flickers', surface: 'canvas' })
+    const r = await h.sous.handle({ text: 'bugfix: the install section of README flickers', surface: 'canvas', box: true })
     expect(r.decision?.kind).toBe('ask')
     const done = await h.sous.commit(r.decision?.token ?? '', { target: 'forge' })
     expect(done.spoken).toBe('Sent to Forge')
@@ -201,7 +201,7 @@ describe('SousController — the decide step and its commit', () => {
 
   it('a token outlives nothing: 30 s later it is expired', async () => {
     const h = controller()
-    const r = await h.sous.handle({ text: 'Make the install section of README English', surface: 'canvas' })
+    const r = await h.sous.handle({ text: 'Make the install section of README English', surface: 'canvas', box: true })
     h.tick(30_001)
     const late = await h.sous.commit(r.decision?.token ?? '')
     expect(late.intent).toBe('refused')
@@ -210,7 +210,7 @@ describe('SousController — the decide step and its commit', () => {
 
   it('recruit places the harness beside the orch, wires it, and the alternate harness can be chosen', async () => {
     const h = controller()
-    const r = await h.sous.handle({ text: 'Delete every v1 route in the registry and keep the tests green', surface: 'canvas' })
+    const r = await h.sous.handle({ text: 'Delete every v1 route in the registry and keep the tests green', surface: 'canvas', box: true })
     expect(r.decision?.kind).toBe('recruit')
     const done = await h.sous.commit(r.decision?.token ?? '', { target: 'harness:Codex' })
     expect(done.intent).toBe('create')
@@ -221,7 +221,7 @@ describe('SousController — the decide step and its commit', () => {
 
   it('a question is answered in the box and leaves nothing to commit', async () => {
     const h = controller()
-    const r = await h.sous.handle({ text: '下周发版', surface: 'canvas' })
+    const r = await h.sous.handle({ text: '下周发版', surface: 'canvas', box: true })
     expect(r.intent).toBe('decide')
     expect(r.decision?.kind).toBe('question')
     expect(r.spoken).toContain('下周发版')
@@ -241,10 +241,10 @@ describe('SousController — fix round 1: surfaces, targets, the token’s life'
   it('HIGH 3 · only the surfaces with a box mint a decision; voice, the CLI and the gateway keep the regex core', async () => {
     const h = controller()
     const brief = 'Make the install section of README English and add a test'
-    expect((await h.sous.handle({ text: brief, surface: 'canvas' })).intent).toBe('decide')
-    expect((await h.sous.handle({ text: brief, surface: 'phone' })).intent).toBe('decide')
-    expect((await h.sous.handle({ text: brief, surface: 'cli' })).intent).toBe('none')
-    expect((await h.sous.handle({ text: brief, surface: 'home' })).intent).toBe('none')
+    expect((await h.sous.handle({ text: brief, surface: 'canvas', box: true })).intent).toBe('decide')
+    expect((await h.sous.handle({ text: brief, surface: 'phone', box: true })).intent).toBe('decide')
+    expect((await h.sous.handle({ text: brief, surface: 'cli', box: true })).intent).toBe('none')
+    expect((await h.sous.handle({ text: brief, surface: 'home', box: true })).intent).toBe('none')
     expect((await h.sous.handle({ text: brief, surface: 'zoom', focusedAgentId: 'forge' })).intent).toBe('prompt')
     // a command still works everywhere
     expect((await h.sous.handle({ text: 'rename Forge to Anvil', surface: 'cli' })).intent).toBe('rename')
@@ -252,7 +252,7 @@ describe('SousController — fix round 1: surfaces, targets, the token’s life'
 
   it('HIGH 4 · commit takes only the choices shown: a stranger id or a harness on an ask is a bad target, and the decision stays', async () => {
     const h = controller()
-    const r = await h.sous.handle({ text: 'Make the install section of README English and add a test', surface: 'canvas' })
+    const r = await h.sous.handle({ text: 'Make the install section of README English and add a test', surface: 'canvas', box: true })
     const token = r.decision?.token ?? ''
     const stranger = await h.sous.commit(token, { target: 'conductor' })
     expect(stranger).toMatchObject({ intent: 'refused', error: 'bad-target' })
@@ -267,7 +267,7 @@ describe('SousController — fix round 1: surfaces, targets, the token’s life'
 
   it('HIGH 4 · a recruit takes its harness or an alternate harness, never a card', async () => {
     const h = controller()
-    const r = await h.sous.handle({ text: 'Delete every v1 route in the registry and keep the tests green', surface: 'canvas' })
+    const r = await h.sous.handle({ text: 'Delete every v1 route in the registry and keep the tests green', surface: 'canvas', box: true })
     const token = r.decision?.token ?? ''
     expect(await h.sous.commit(token, { target: 'forge' })).toMatchObject({ intent: 'refused', error: 'bad-target' })
     expect(await h.sous.commit(token, { target: 'harness:Pi' })).toMatchObject({ intent: 'refused', error: 'bad-target' })
@@ -294,7 +294,7 @@ describe('SousController — fix round 1: surfaces, targets, the token’s life'
       decide: { candidates: () => crew, workdir: () => '/repo', recruit: () => ({ id: 'x', name: 'x' }), token: () => 'tok' }
     }
     const sous = new SousController(deps)
-    await sous.handle({ text: 'Make the install section of README English and add a test', surface: 'canvas' })
+    await sous.handle({ text: 'Make the install section of README English and add a test', surface: 'canvas', box: true })
     const first = await sous.commit('tok')
     expect(first.intent).toBe('refused')
     expect(first.error).toBeUndefined()
@@ -307,7 +307,7 @@ describe('SousController — fix round 1: surfaces, targets, the token’s life'
 
   it('CRITICAL 1 · cancel drops the token: a commit after the box closed is expired, nothing runs', async () => {
     const h = controller()
-    const r = await h.sous.handle({ text: 'Make the install section of README English and add a test', surface: 'canvas' })
+    const r = await h.sous.handle({ text: 'Make the install section of README English and add a test', surface: 'canvas', box: true })
     const token = r.decision?.token ?? ''
     expect(h.sous.cancel(token)).toBe(true)
     expect(h.sous.cancel(token)).toBe(false)
@@ -319,7 +319,70 @@ describe('SousController — fix round 1: surfaces, targets, the token’s life'
     const h = controller()
     const deps = (h.sous as unknown as { deps: SousControlDeps }).deps
     if (deps.decide) delete deps.decide.token
-    const r = await h.sous.handle({ text: 'Make the install section of README English and add a test', surface: 'canvas' })
+    const r = await h.sous.handle({ text: 'Make the install section of README English and add a test', surface: 'canvas', box: true })
     expect(r.decision?.token).toMatch(/^[0-9a-f-]{36}$/)
+  })
+})
+
+
+describe('SousController — round 2: the box, the caller, and a commit in flight', () => {
+  const brief = 'Make the install section of README English and add a test'
+
+  it('1 · push-to-talk on the canvas mints nothing: the same sentence without `box` is the regex core’s answer', async () => {
+    const h = controller()
+    const spoken = await h.sous.handle({ text: brief, surface: 'canvas' })
+    expect(spoken.intent).toBe('none')
+    expect(spoken.decision).toBeUndefined()
+    const flagged = await h.sous.handle({ text: brief, surface: 'canvas', box: false })
+    expect(flagged.intent).toBe('none')
+    // a command spoken aloud still runs
+    expect((await h.sous.handle({ text: 'rename Forge to Anvil', surface: 'canvas' })).intent).toBe('rename')
+    // and the box gets its decision
+    expect((await h.sous.handle({ text: brief, surface: 'canvas', box: true })).intent).toBe('decide')
+  })
+
+  it('6 · a token belongs to the caller that minted it: another box can neither commit nor cancel it', async () => {
+    const h = controller()
+    const r = await h.sous.handle({ text: brief, surface: 'phone', box: true, callerId: 'phone-a' })
+    const token = r.decision?.token ?? ''
+    expect(await h.sous.commit(token, {}, { surface: 'phone', callerId: 'phone-b' })).toMatchObject({ intent: 'refused', error: 'not-yours' })
+    expect(await h.sous.commit(token, {}, { surface: 'canvas', callerId: 'desktop' })).toMatchObject({ intent: 'refused', error: 'not-yours' })
+    expect(h.sous.cancel(token, { surface: 'phone', callerId: 'phone-b' })).toBe(false)
+    expect(h.calls.filter((c) => c.startsWith('submit'))).toEqual([])
+    expect((await h.sous.commit(token, {}, { surface: 'phone', callerId: 'phone-a' })).intent).toBe('ask')
+  })
+
+  it('5 · a cancel that arrives while the brief is on its way answers false, and the brief lands', async () => {
+    const calls: string[] = []
+    let release: () => void = () => undefined
+    const deps: SousControlDeps = {
+      roster: () => roster,
+      activeWorkspaceId: () => 'ws',
+      switchWorkspace: () => undefined,
+      createTerminal: () => ({ id: 'new', name: 'new' }),
+      createBrowser: async () => undefined,
+      connect: () => undefined,
+      rename: () => undefined,
+      submit: (id, text) =>
+        new Promise<void>((resolve) => {
+          release = () => {
+            calls.push(`submit ${id} ${text}`)
+            resolve()
+          }
+        }),
+      ui: () => undefined,
+      now: () => NOW,
+      decide: { candidates: () => crew, workdir: () => '/repo', recruit: () => ({ id: 'x', name: 'x' }), token: () => 'tok' }
+    }
+    const sous = new SousController(deps)
+    await sous.handle({ text: brief, surface: 'canvas', box: true })
+    const committing = sous.commit('tok')
+    await Promise.resolve()
+    expect(sous.cancel('tok')).toBe(false)
+    expect((await sous.commit('tok')).error).toBe('expired')
+    release()
+    expect((await committing).intent).toBe('ask')
+    expect(calls).toEqual([`submit forge ${brief}`])
+    expect(sous.cancel('tok')).toBe(false)
   })
 })

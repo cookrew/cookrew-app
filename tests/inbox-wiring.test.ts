@@ -25,7 +25,7 @@ const row = (id: string): InboxRow => ({
 function harness(initial: InboxRow[] = [row('a')]) {
   let current = initial
   const announced: InboxRow[][] = []
-  let op: () => void = () => undefined
+  let op: (o: { type: string }) => void = () => undefined
   let ev: (e: { type: string }) => void = () => undefined
   let probe: () => void = () => undefined
   const wiring = wireInbox({
@@ -44,7 +44,7 @@ function harness(initial: InboxRow[] = [row('a')]) {
     },
     announce: (rows) => announced.push(rows)
   })
-  return { wiring, announced, op: () => op(), ev: (type: string) => ev({ type }), probe: () => probe(), set: (rows: InboxRow[]) => (current = rows) }
+  return { wiring, announced, op: (type = 'terminal.created') => op({ type }), ev: (type: string) => ev({ type }), probe: () => probe(), set: (rows: InboxRow[]) => (current = rows) }
 }
 
 describe('wireInbox — only while held, debounced, never on its own events', () => {
@@ -110,5 +110,24 @@ describe('wireInbox — only while held, debounced, never on its own events', ()
     h.op()
     vi.advanceTimersByTime(400)
     expect(h.announced).toHaveLength(2)
+  })
+})
+
+describe('wireInbox — round 2: the STORE-op seam', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('Sous’s own notes arrive as store ops and rebuild nothing; a card op rebuilds once', () => {
+    const h = harness()
+    h.wiring.hold()
+    h.op('sous.decide')
+    h.op('sous.recruit')
+    h.op('sous.ask')
+    vi.advanceTimersByTime(2000)
+    expect(h.wiring.rebuilds()).toBe(0)
+    h.op('terminal.recruited')
+    h.op('connection.added')
+    vi.advanceTimersByTime(400)
+    expect(h.wiring.rebuilds()).toBe(1)
   })
 })

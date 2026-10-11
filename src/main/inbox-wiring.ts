@@ -18,7 +18,8 @@ import { readDispatchRecords, type DispatchRecord } from './dispatch'
 export interface InboxWiringDeps {
   build: () => InboxRow[]
   /** The signals a rebuild may follow. Each returns its unsubscribe. */
-  onStoreOp: (cb: () => void) => () => void
+  /** Every store op, WITH the op: Sous's own notes are ops too and must not rebuild the list they came from. */
+  onStoreOp: (cb: (op: { type: string }) => void) => () => void
   onEvent: (cb: (event: { type: string }) => void) => () => void
   onProbeChange: (cb: () => void) => () => void
   /** Where a changed list goes: the window, the phone streams. */
@@ -44,8 +45,9 @@ export interface InboxWiring {
 
 export const INBOX_DEBOUNCE_MS = 400
 
-/** Events the inbox itself causes, or that cannot change it. */
+/** Lines the inbox itself causes (Sous's notes land as store ops AND as events), or that cannot change it. */
 const IGNORED_EVENT_PREFIXES = ['sous.']
+const ignored = (type: string): boolean => IGNORED_EVENT_PREFIXES.some((p) => type.startsWith(p))
 
 export function wireInbox(deps: InboxWiringDeps): InboxWiring {
   const bus = new EventEmitter()
@@ -80,9 +82,12 @@ export function wireInbox(deps: InboxWiringDeps): InboxWiring {
     }, debounceMs)
   }
   const offs = [
-    deps.onStoreOp(schedule),
+    deps.onStoreOp((op) => {
+      if (ignored(op.type)) return
+      schedule()
+    }),
     deps.onEvent((event) => {
-      if (IGNORED_EVENT_PREFIXES.some((p) => event.type.startsWith(p))) return
+      if (ignored(event.type)) return
       schedule()
     }),
     deps.onProbeChange(schedule)

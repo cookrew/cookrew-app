@@ -610,10 +610,10 @@ export function createRemoteApi(): CookrewApi {
     // focusedAgentId is deliberately not sent — a network door names agents
     // by name only (see SousCommandInput).
     sousCommand: (text, ctx) =>
-      req(apiPath('/api/sous/command'), 'POST', { text, surface: ctx.surface, callerId: sousCallerId() }),
+      req(apiPath('/api/sous/command'), 'POST', { text, surface: ctx.surface, callerId: sousCallerId(), ...(ctx.box ? { box: true } : {}) }),
     onUiCommand: (cb) => subscribe<UiCommandEvent>('ui', cb),
-    sousCommit: (token, choice) => req(apiPath('/api/sous/commit'), 'POST', { token, ...(choice?.target ? { target: choice.target } : {}) }),
-    sousCancel: (token) => req<{ cancelled: boolean }>(apiPath('/api/sous/cancel'), 'POST', { token }).then((out) => out.cancelled),
+    sousCommit: (token, choice, surface) => req(apiPath('/api/sous/commit'), 'POST', { token, surface: surface ?? 'phone', callerId: sousCallerId(), ...(choice?.target ? { target: choice.target } : {}) }),
+    sousCancel: (token, surface) => req<{ cancelled: boolean }>(apiPath('/api/sous/cancel'), 'POST', { token, surface: surface ?? 'phone', callerId: sousCallerId() }).then((out) => out.cancelled),
     inbox: () => req<{ rows: InboxRow[] }>(apiPath('/api/inbox')).then((out) => out.rows),
     onInbox: (cb) => subscribe<{ rows: InboxRow[] }>('inbox', (frame) => cb(frame.rows)),
     // The phone hears through its own browser (VoiceBar); the Mac's ear is

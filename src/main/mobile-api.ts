@@ -73,6 +73,19 @@ export const redactSecretDetails = <T extends { type: string; details?: string }
 };
 
 const SOUS_SURFACES: ReadonlySet<string> = new Set(["canvas", "zoom", "phone", "home", "cli"]);
+
+/**
+ * WHO is on the other end of a decision: the same id the command route keys
+ * Sous's pending questions on — the caller's own id when it sends one, else
+ * the address it came from. Never the token. The surface defaults to the
+ * phone's, the only network surface with a box.
+ */
+function sousCaller(request: http.IncomingMessage, body: { surface?: string; callerId?: string }): { surface: SousSurface; callerId: string } {
+  const surface = SOUS_SURFACES.has(body.surface ?? "") ? (body.surface as SousSurface) : "phone";
+  const callerId =
+    typeof body.callerId === "string" && body.callerId.trim() !== "" ? body.callerId.trim().slice(0, 64) : (request.socket.remoteAddress ?? "unknown");
+  return { surface, callerId };
+}
 /** A spoken sentence; anything longer is a document and has other routes. */
 const SOUS_MAX_TEXT = 2000;
 
@@ -1376,7 +1389,7 @@ export async function handleMobileApi(
       respondJson(response, 503, { error: "Sous is not listening on this desktop" });
       return true;
     }
-    const body = await readJson<{ text?: string; surface?: string; callerId?: string }>(request);
+    const body = await readJson<{ text?: string; surface?: string; callerId?: string; box?: boolean }>(request);
     const text = (body.text ?? "").trim();
     if (!text) {
       respondJson(response, 400, { error: "Missing text" });
@@ -1401,7 +1414,8 @@ export async function handleMobileApi(
       typeof body.callerId === "string" && body.callerId.trim() !== ""
         ? body.callerId.trim().slice(0, 64)
         : (request.socket.remoteAddress ?? "unknown");
-    const result = await deps.sous.handle({ text, surface: body.surface as SousSurface, callerId });
+    // `box: true` is the phone's bar; voice-gateway and anything else keep the regex core.
+    const result = await deps.sous.handle({ text, surface: body.surface as SousSurface, callerId, box: body.box === true });
     respondJson(response, 200, result);
     return true;
   }
@@ -1421,15 +1435,16 @@ export async function handleMobileApi(
       respondJson(response, 503, { error: "Sous does not decide on this desktop" });
       return true;
     }
-    const body = await readJson<{ token?: string; target?: string }>(request);
+    const body = await readJson<{ token?: string; target?: string; surface?: string; callerId?: string }>(request);
     if (typeof body.token !== "string" || body.token.length === 0 || body.token.length > 64) {
       respondJson(response, 400, { error: "Missing token" });
       return true;
     }
     const choice = typeof body.target === "string" && body.target.length <= 128 ? { target: body.target } : {};
-    const result = await deps.sous.commit(body.token, choice);
-    // A choice that was never shown is a bad request; a spent or stale token is gone.
-    respondJson(response, result.error === "bad-target" ? 400 : result.error === "expired" ? 410 : 200, result);
+    const result = await deps.sous.commit(body.token, choice, sousCaller(request, body));
+    // A choice that was never shown is a bad request; another caller's token
+    // is not theirs; a spent or stale token is gone.
+    respondJson(response, result.error === "bad-target" ? 400 : result.error === "not-yours" ? 403 : result.error === "expired" ? 410 : 200, result);
     return true;
   }
 
@@ -1438,12 +1453,12 @@ export async function handleMobileApi(
       respondJson(response, 503, { error: "Sous does not decide on this desktop" });
       return true;
     }
-    const body = await readJson<{ token?: string }>(request);
+    const body = await readJson<{ token?: string; surface?: string; callerId?: string }>(request);
     if (typeof body.token !== "string" || body.token.length === 0 || body.token.length > 64) {
       respondJson(response, 400, { error: "Missing token" });
       return true;
     }
-    respondJson(response, 200, { cancelled: deps.sous.cancel(body.token) });
+    respondJson(response, 200, { cancelled: deps.sous.cancel(body.token, sousCaller(request, body)) });
     return true;
   }
 
