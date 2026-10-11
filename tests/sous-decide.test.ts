@@ -156,8 +156,8 @@ function controller(options: { failDeliveries?: number } = {}): { calls: string[
     decide: {
       candidates: () => crew,
       workdir: () => '/repo',
-      recruit: ({ preset, name, role, besideId }) => {
-        calls.push(`recruit ${preset} "${name}" beside ${besideId ?? '-'} role ${role.slice(0, 12)}`)
+      recruit: ({ preset, name, brief, besideId }) => {
+        calls.push(`recruit ${preset} "${name}" beside ${besideId ?? '-'} brief ${brief.slice(0, 12)}`)
         return { id: 'recruited', name }
       },
       deliver: async ({ nodeId, sentence, originId }) => {
@@ -222,7 +222,7 @@ describe('SousController — the decide step and its commit', () => {
     expect(r.decision?.kind).toBe('recruit')
     const done = await h.sous.commit(r.decision?.token ?? '', { target: 'harness:Codex' })
     expect(done.intent).toBe('create')
-    expect(h.calls).toContain('recruit Codex "Delete V1 Route" beside conductor role Delete every')
+    expect(h.calls).toContain('recruit Codex "Delete V1 Route" beside conductor brief Delete every')
     expect(h.calls).toContain('connect conductor recruited')
     expect(h.calls).toContain('ui zoom recruited @ws')
   })
@@ -398,7 +398,7 @@ describe('SousController — round 2: the box, the caller, and a commit in fligh
 describe('SousController — round 4: the recruited card gets the brief', () => {
   const brief = 'Delete every V1 route and its tests'
 
-  it('recruit ends with ONE delivery to the new card, the role set to the sentence, and "sent" said only then', async () => {
+  it('recruit ends with ONE delivery to the new card, the brief set to the sentence, and "sent" said only then', async () => {
     const h = controller()
     const r = await h.sous.handle({ text: brief, surface: 'canvas', box: true })
     expect(r.decision?.kind).toBe('recruit')
@@ -406,8 +406,8 @@ describe('SousController — round 4: the recruited card gets the brief', () => 
     expect(out.intent).toBe('create')
     expect(out.spoken).toContain('sent')
     expect(out.agentId).toBe('recruited')
-    // the role on the created node is the sentence
-    expect(h.calls.find((c) => c.startsWith('recruit '))).toContain(`role ${brief.slice(0, 12)}`)
+    // the created node carries the sentence as its brief
+    expect(h.calls.find((c) => c.startsWith('recruit '))).toContain(`brief ${brief.slice(0, 12)}`)
     // exactly one delivery, to the new card, from the orch it was placed beside
     expect(h.calls.filter((c) => c.startsWith('deliver '))).toEqual([`deliver recruited from conductor ${brief}`])
     // the delivery is on the ledger after the recruit, and nothing went through the owner-submit sink

@@ -1168,7 +1168,7 @@ export class WorkspaceStore extends EventEmitter {
    * plantable from there; internal main-process code uses updateNodeUnsafe).
    */
   private static readonly PATCHABLE: Record<CanvasNode['kind'], ReadonlySet<string>> = {
-    terminal: new Set(['name', 'position', 'size', 'role']),
+    terminal: new Set(['name', 'position', 'size', 'role', 'brief']),
     note: new Set(['name', 'customName', 'content', 'locked', 'position', 'size']),
     browser: new Set(['name', 'url', 'tabs', 'activeTabId', 'position', 'size'])
   }
