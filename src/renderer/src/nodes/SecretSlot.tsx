@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { cookrew } from '../api'
-import type { SecretListing } from '../../../shared/secret-slot'
+import { afterSeal, type SecretListing } from '../../../shared/secret-slot'
 
 /**
  * THE SEALED SLOT — the only password field in Cookrew (R4).
@@ -42,8 +42,8 @@ export const SECRET_SLOT_COPY = {
   sealing: 'SEALING…',
   empty: 'not set',
   set: 'set ✓',
-  how: 'agents: cookrew secret exec <name> -- <command> (prefer exec — read prints the value into the pane) · every read audited',
-  where: 'stored on this machine; the phone sends it to the desktop over TLS; the note keeps only the name'
+  how: 'agents: cookrew secret exec <name> -- <command> — the value is in that command\'s environment and its children inherit it; read prints it into the pane · every read audited',
+  where: 'stored on this machine; the phone sends it over TLS — to the desktop directly, or hop by hop through cookrew.dev; the note keeps only the name'
 } as const
 
 /** "updated 10:52" — the clock of the seal, never the value. */
@@ -72,8 +72,11 @@ export function SecretSlot({ name, entry, onSealed, put = defaultPut }: SecretSl
     setError(null)
     put(name, value, served)
       .then((sealed) => {
-        // The value is gone from this page the moment the store has it.
-        setValue('')
+        // The value is gone from this page the moment the store has it
+        // (shared/secret-slot.ts · afterSeal, the step a test can call).
+        const next = afterSeal(sealed, new Map())
+        setValue(next.field.value)
+        setError(next.field.error)
         onSealed?.(sealed)
       })
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))

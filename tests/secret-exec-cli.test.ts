@@ -66,7 +66,7 @@ describe('cookrew secret exec', () => {
     // The app saw `secret exec stripe-key` and nothing of the command.
     expect(seen).toHaveLength(1)
     expect((seen[0] as { args: string[] }).args).toEqual(['exec', 'stripe-key'])
-    expect(JSON.stringify(seen[0])).not.toContain('-e')
+    expect(JSON.stringify(seen[0])).not.toContain('process.stdout.write')
   })
 
   it('carries the command\'s exit code, and the app\'s refusal code', async () => {

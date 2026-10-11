@@ -1,5 +1,7 @@
 // THE PHONE'S SIDE OF THE SLOT: names out, values in, owner token only.
 import http from 'node:http'
+import { readFileSync } from 'node:fs'
+import { Readable } from 'node:stream'
 import { mkdtempSync } from 'node:fs'
 import type net from 'node:net'
 import { tmpdir } from 'node:os'
@@ -93,15 +95,24 @@ describe('the transport a value may ride', () => {
     expect(sealedTransport({ socket: {} })).toBe(false)
   })
 
+  it('a relayed request is accepted for its TLS hops, explicitly — and a forged marker from the LAN is not', () => {
+    // The bridge sets the marker and lives on loopback; that pairing is the
+    // relay leg, and the relay leg is TLS hop by hop.
+    expect(sealedTransport({ socket: { remoteAddress: '127.0.0.1' }, headers: { 'x-cookrew-relay': '1' } })).toBe(true)
+    expect(sealedTransport({ socket: { remoteAddress: '192.168.2.46' }, headers: { 'x-cookrew-relay': '1' } })).toBe(false)
+    const src = readFileSync('src/main/mobile-api.ts', 'utf8')
+    expect(src).toContain('accepted BECAUSE the relay leg is TLS hop by hop')
+  })
+
   it('a cleartext LAN PUT is refused with 403 and seals nothing; TLS from the LAN is taken', async () => {
     const secrets = createSecretsStore({ baseDir: mkdtempSync(path.join(tmpdir(), 'cookrew-secret-tls-')) })
     const deps = { pairingToken: TOKEN, turns: { list: () => [] }, secrets } as unknown as MobileApiDeps
-    const call = async (socket: { encrypted?: boolean; remoteAddress: string }) => {
+    const call = async (socket: { encrypted?: boolean; remoteAddress: string }, extra: Record<string, string> = {}) => {
       const body = Buffer.from(JSON.stringify({ value: VALUE }))
-      const request = Object.assign(require('node:stream').Readable.from([body]), {
+      const request = Object.assign(Readable.from([body]), {
         method: 'PUT',
         url: '/api/secrets/stripe-key',
-        headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json', 'content-length': String(body.length), host: 'mac.local:8643' },
+        headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json', 'content-length': String(body.length), host: 'mac.local:8643', ...extra },
         socket
       }) as unknown as http.IncomingMessage
       let status = 0
@@ -123,6 +134,10 @@ describe('the transport a value may ride', () => {
     }
     const lan = await call({ remoteAddress: '192.168.2.46' })
     expect(lan.status).toBe(403)
+    const relayed = await call({ remoteAddress: '127.0.0.1' }, { 'x-cookrew-relay': '1' })
+    expect(relayed.status).toBe(200)
+    expect(secrets.read('stripe-key')?.value).toBe(VALUE)
+    secrets.remove('stripe-key')
     expect(lan.text).toContain('seal from the desktop or over TLS')
     expect(secrets.read('stripe-key')).toBeNull()
     const tls = await call({ encrypted: true, remoteAddress: '192.168.2.46' })

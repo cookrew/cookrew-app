@@ -45,3 +45,22 @@ export interface SecretListing {
   readonly served: boolean
   readonly updatedAt: number
 }
+
+/** The password field's state, as the block holds it. */
+export interface SealedField {
+  readonly value: string
+  readonly error: string | null
+}
+
+/**
+ * WHAT A SUCCESSFUL SEAL LEAVES BEHIND: an empty field with no error, and
+ * the listing with this name's row replaced. Pure, so the one state step
+ * that must never keep the value is a function a test can call.
+ */
+export const afterSeal = (
+  sealed: SecretListing,
+  listing: ReadonlyMap<string, SecretListing>
+): { readonly field: SealedField; readonly listing: ReadonlyMap<string, SecretListing> } => ({
+  field: { value: '', error: null },
+  listing: new Map(listing).set(sealed.name, sealed)
+})

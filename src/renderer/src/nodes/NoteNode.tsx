@@ -8,7 +8,7 @@ import { cardTypeScale, cardZoomMode } from './card-zoom'
 import { TILE_DRAG_SURFACE } from './drag-surface'
 import type { NoteNodeData } from '../../../shared/model'
 import { noteIsWhole } from '../../../shared/wire-canvas'
-import { secretSlotsOf, type SecretListing } from '../../../shared/secret-slot'
+import { afterSeal, secretSlotsOf, type SecretListing } from '../../../shared/secret-slot'
 import { SecretSlot } from './SecretSlot'
 import { ENTER_STAGE_SHARE, projectToStage, stageShare } from '../zoom-lod'
 import { cookrew } from '../api'
@@ -193,7 +193,7 @@ export function NoteNode({ data, selected }: NodeProps): React.JSX.Element {
               key={name}
               name={name}
               entry={sealed.get(name) ?? null}
-              onSealed={(entry) => setSealed((prev) => new Map(prev).set(entry.name, entry))}
+              onSealed={(entry) => setSealed((prev) => afterSeal(entry, prev).listing)}
             />
           ))}
         </div>

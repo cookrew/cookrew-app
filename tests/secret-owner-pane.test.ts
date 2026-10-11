@@ -1,6 +1,7 @@
 // THE CALLER OF A SECRET VERB: a live owner pane of this app, resolved from
 // a real COOKREW_TERMINAL_ID — never `--as`, never the agent registry, never
 // a pane spawned for a served session.
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { ownerPaneOf, type SocketServerDeps } from '../src/main/socket-server'
 import { SecretCliError, SECRET_EXIT } from '../src/main/secret-cli'
@@ -22,7 +23,7 @@ const deps = (over: {
       terminalsAcross: () => []
     },
     agents: { lookup: over.registry ?? (() => undefined), list: () => [] },
-    isServed: over.isServed
+    isServed: over.isServed ?? (() => false)
   }) as unknown as SocketServerDeps
 
 const request = (over: Partial<CliRequest>): CliRequest =>
@@ -73,5 +74,14 @@ describe('ownerPaneOf', () => {
     )
     expect(error.exitCode).toBe(SECRET_EXIT.refused)
     expect(error.message).toContain('no live pane')
+  })
+})
+
+describe('the served predicate is required', () => {
+  it('is not optional on the deps, and the verb reads it without a fail-open', () => {
+    const src = readFileSync('src/main/socket-server.ts', 'utf8')
+    expect(src).toContain('isServed: (terminalId: string) => boolean')
+    expect(src).not.toContain('isServed?.(')
+    expect(src).toContain("if (deps.isServed(id)) throw refuse('never readable from a served session')")
   })
 })
