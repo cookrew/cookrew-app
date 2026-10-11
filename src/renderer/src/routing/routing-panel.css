@@ -16,6 +16,12 @@
 }
 .cr-routing-panel {
   width: min(1080px, 100%);
+  /* Never taller than the stage: the panel scrolls inside its own frame,
+     so its bottom edge — and the Setup screen docked there — is always on
+     screen and nothing of it paints over the canvas below. */
+  max-height: 100%;
+  box-sizing: border-box;
+  overflow: auto;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -24,6 +30,7 @@
   border: 2px solid var(--line);
   box-shadow: 6px 6px 0 var(--amber-deep);
 }
+.cr-routing-panel > * { flex-shrink: 0 }
 .cr-routing-title {
   display: flex;
   align-items: center;
@@ -235,10 +242,23 @@
 }
 .cr-routing-pick.on { background: var(--amber); border-color: var(--line); color: #2d2a20 }
 
-/* The Setup card's screen, folded under everything. */
+/* The Setup card's screen, folded under everything. The PTY's geometry is
+   the canvas card's (SetupScreen.tsx follows it, never pushes back), so the
+   card's rows can be taller than this box: the box CLIPS, and the viewer
+   keeps the newest rows — the prompt — in view by scrolling to the bottom
+   after every render. Nothing of the terminal paints outside this frame. */
 .cr-routing-setup { margin-top: 8px }
-.cr-routing-screen { height: 240px; background: var(--phos-bg); padding: 6px 0 6px 8px }
+.cr-routing-screen {
+  height: 240px;
+  max-height: 40vh;
+  box-sizing: border-box;
+  overflow: hidden;
+  position: relative;
+  background: var(--phos-bg);
+  padding: 6px 0 6px 8px;
+}
 .cr-routing-screen .xterm { height: 100% }
+.cr-routing-screen .xterm-viewport { overflow: hidden !important }
 .cr-routing-hint { font-family: var(--font-mono); font-size: 11px; color: var(--muted); padding: 4px 10px }
 
 /* One line for what did not happen: a refused line, a default that did not land. */

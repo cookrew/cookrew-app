@@ -49,11 +49,34 @@ export function SetupScreen({ terminalId, focusTick }: { terminalId: string; foc
       term.loadAddon(fit)
       term.open(host)
       termRef.current = term
-      try {
-        fit.fit()
-      } catch {
-        // not laid out yet
+      const tryFit = (): void => {
+        try {
+          fit.fit()
+        } catch {
+          // not laid out yet
+        }
       }
+      tryFit()
+      // The fold may open after the first paint; fit once more when it has a size.
+      const raf = requestAnimationFrame(tryFit)
+      cleanups.push(() => cancelAnimationFrame(raf))
+      // THE BOUNDARY. The PTY's rows are the canvas card's and can exceed
+      // this box; the box clips (CSS), and after every render the newest
+      // rows — the prompt — are brought into view by scrolling the host to
+      // its bottom. Programmatic scroll works under overflow:hidden, so the
+      // user never sees a scrollbar and never sees text outside the frame.
+      let pinned: number | null = null
+      const pin = (): void => {
+        if (pinned !== null) return
+        pinned = requestAnimationFrame(() => {
+          pinned = null
+          if (!disposed) host.scrollTop = host.scrollHeight
+        })
+      }
+      const rendered = term.onRender(pin)
+      cleanups.push(() => rendered.dispose(), () => {
+        if (pinned !== null) cancelAnimationFrame(pinned)
+      })
       const detach = cookrew().ptyAttach(
         terminalId,
         (chunk) => term.write(chunk),
@@ -62,6 +85,7 @@ export function SetupScreen({ terminalId, focusTick }: { terminalId: string; foc
           // and never pushes its own back.
           if (disposed || cols <= 0 || rows <= 0) return
           term.resize(cols, rows)
+          pin()
         }
       )
       const input = term.onData((data) => cookrew().ptyInput(terminalId, data))
