@@ -62,7 +62,7 @@ function world(): World {
   return { home, nodes: new Map(), served: new Set(), phases: new Map(), exact: true, respawned: [], files: [] }
 }
 
-function service(w: World, env: Record<string, string | undefined>, fastAnnounce = true) {
+function service(w: World, env: Record<string, string | undefined>, fastAnnounce = true, hasTurns: (id: string) => boolean = () => false) {
   const monitor = new GatewayMonitor({ discovery: { home: w.home, env }, hasBinary: () => true, watchDir: null, helloTimeoutMs: 500, schedule: () => () => {} })
   const svc = new RouteService({
     monitor,
@@ -86,6 +86,7 @@ function service(w: World, env: Record<string, string | undefined>, fastAnnounce
       return true
     },
     dockCommands: () => ['claude --permission-mode bypassPermissions', 'codex'],
+    hasTurns,
     schedule: fastAnnounce ? (fn) => { const t = setTimeout(fn, 5); return () => clearTimeout(t) } : undefined,
     writeFile: (p, content) => w.files.push({ path: p, content })
   })
@@ -281,12 +282,60 @@ describe('setCardRoute', () => {
     }
   })
 
+  it('a card with no session and no turn has nothing to lose: respawned at once even when the exact gate refuses', async () => {
+    const fake = await fakeGateway()
+    try {
+      const turned = new Set<string>()
+      const svc = service(w, { MAGPIE_ADDR: `:${fake.port}` }, true, (id) => turned.has(id))
+      await svc.refresh()
+      w.exact = false
+      w.phases.set('n1', 'idle')
+      w.nodes.set('n1', terminal('n1', 'claude'))
+      svc.recordEffective('n1', svc.envFor(w.nodes.get('n1')!))
+      expect(await svc.setCardRoute('n1', 'group/smart')).toMatchObject({ appliesOn: 'now', effective: 'group/smart' })
+      expect(w.respawned).toEqual(['n1'])
+      // A session id, or a recorded turn, is something to lose: the gate decides.
+      w.phases.set('n2', 'idle')
+      w.nodes.set('n2', terminal('n2', 'claude', { claudeSessionId: 'abc' }))
+      svc.recordEffective('n2', svc.envFor(w.nodes.get('n2')!))
+      expect(await svc.setCardRoute('n2', 'group/smart')).toMatchObject({ appliesOn: 'restart' })
+      w.phases.set('n3', 'idle')
+      w.nodes.set('n3', terminal('n3', 'codex'))
+      turned.add('n3')
+      svc.recordEffective('n3', svc.envFor(w.nodes.get('n3')!))
+      expect(await svc.setCardRoute('n3', 'group/smart')).toMatchObject({ appliesOn: 'restart' })
+      expect(w.respawned).toEqual(['n1'])
+      svc.dispose()
+    } finally {
+      await fake.close()
+    }
+  })
+
+  it("a card's state carries the gateway's status now, not only whether it was offline at spawn", async () => {
+    const fake = await fakeGateway()
+    try {
+      const svc = service(w, { MAGPIE_ADDR: `:${fake.port}` })
+      await svc.refresh()
+      svc.setDefault('group/smart')
+      w.nodes.set('g1', terminal('g1', 'claude'))
+      svc.recordEffective('g1', svc.envFor(w.nodes.get('g1')!))
+      expect(svc.cardState('g1')).toMatchObject({ effective: 'group/smart', offline: false, gateway: 'online' })
+      fake.answer = false
+      await svc.refresh()
+      // Still routed, spawned while online — but its requests will fail now, and the card says so.
+      expect(svc.cardState('g1')).toMatchObject({ effective: 'group/smart', offline: false, gateway: 'offline' })
+      svc.dispose()
+    } finally {
+      await fake.close()
+    }
+  })
+
   it('on a busy card, or one that cannot be restored exactly, waits for the restart', async () => {
     const fake = await fakeGateway()
     try {
       const svc = service(w, { MAGPIE_ADDR: `:${fake.port}` })
       await svc.refresh()
-      const node = terminal('c5', 'claude')
+      const node = terminal('c5', 'claude', { claudeSessionId: 'held' })
       w.nodes.set('c5', node)
       svc.recordEffective('c5', svc.envFor(node))
       w.phases.set('c5', 'thinking')

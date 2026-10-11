@@ -604,7 +604,8 @@ const routeService = new RouteService({
     spawnTracked(node)
     return true
   },
-  dockCommands: () => PRESETS.map((p) => p.command)
+  dockCommands: () => PRESETS.map((p) => p.command),
+  hasTurns: (id) => turns.history(id).length > 0
 })
 routeService.on('route', (state) => {
   if (mainWindow && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('route', state)
