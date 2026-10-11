@@ -107,7 +107,7 @@ import {
 import { DEFAULT_ORCH_PRESET, PRESETS } from './presets'
 import { GatewayMonitor } from './route/gateway'
 import { RouteService } from './route/service'
-import { onPath } from './route/setup'
+import { magpieInstalled } from './route/discovery'
 import { forkContextReady, forkTerminal as forkTerminalOp, injectWhenReady } from './fork'
 import { AgentRegistry } from './agent-registry'
 import { AgentExportStore } from './agent-export'
@@ -577,7 +577,8 @@ const grants = serviceGrants(sessionsBase)
 // the phone stream (routeBus) exactly like the dials' tuningBus.
 const routeBus = new EventEmitter()
 const routeService = new RouteService({
-  monitor: new GatewayMonitor({ hasBinary: () => onPath('magpie', process.env.PATH) }),
+  // PATH, ~/.local/bin (the installer's symlink, off a GUI app's PATH) and the app bundle.
+  monitor: new GatewayMonitor({ hasBinary: () => magpieInstalled({ home: homedir(), env: process.env }, existsSync) }),
   fetch: (input, init) => fetch(input, init),
   home: homedir(),
   pathEnv: process.env.PATH,
@@ -2708,13 +2709,16 @@ function spawnTracked(t: {
         grantedKeys: grants.envKeysFor(servedCtx.serviceId),
         // The canvas control plane is the owner's alone: pty.ts withholds the
         // env keys that name this socket, and the profile denies the connect.
-        controlSocketPath: ptys.socketPath
+        controlSocketPath: ptys.socketPath,
+        // The owner's gateway is denied to a seat outright (sandbox-deny.ts).
+        gatewayPorts: routeService.gatewayPorts()
       })
     : undefined
   // The card's route, as env and args the harness is spawned with. Decided
   // here, at the spawn, so what the process got is what the node records as
   // `routeEffective`; a served session gets none (the service refuses it).
   const route = cardNode?.kind === 'terminal' ? routeService.envFor(cardNode) : null
+  const fresh = !ptys.get(t.id)
   const session = ptys.spawn(
     {
       terminalId: t.id,
@@ -2726,6 +2730,10 @@ function spawnTracked(t: {
     },
     owner
   )
+  // The route is RECORDED only when a process was created: a tmux reattach
+  // rode a surviving session and ignored the boot command, so what this
+  // spawn computed never reached it; the card then reads "applies on restart".
+  if (route && !served && fresh && !session.reattached) routeService.recordEffective(t.id, route)
   // One producer per conversation: every owner keystroke consults the
   // tracker BEFORE the byte reaches the child; a dispatch in flight is
   // preempted durably or the write is refused (Sol r4 P0-1).
@@ -5180,9 +5188,13 @@ function createWindow(): void {
   // A deep link waits for the renderer, not for the window: the subscriber
   // lives in App.tsx, which does not exist until the page has loaded.
   mainWindow.webContents.on('did-finish-load', () => deepLinks.ready())
+  // The gateway's clock runs while the window lives: a card spawned after a
+  // restart routes when the gateway is online and a default is set.
+  const releaseRouteHold = routeService.hold()
   mainWindow.on('closed', () => {
     mainWindow = null
     deepLinks.gone()
+    releaseRouteHold()
   })
   // Browser webviews: window.open / target=_blank must become a tab in the
   // same browser, never a detached native window. The renderer maps the
@@ -5261,6 +5273,8 @@ app.whenReady().then(() => {
       console.error('Dock icon failed to load:', error)
     }
   }
+  // One probe at boot, before the first card spawns (route program).
+  void routeService.refresh()
   // Ship the CLI next to the socket so PTYs get it on PATH.
   const cliSource = app.isPackaged
     ? path.join(process.resourcesPath, 'cli', 'cookrew.mjs')
@@ -5932,6 +5946,7 @@ app.on('before-quit', (event) => {
   clearInterval(dispatchSweep)
   clearInterval(sessionDrain)
   loopHealth.stop()
+  routeService.dispose()
   // Latch FIRST: no new ask may register after the drain snapshot begins
   // (Sol r11) — then interrupt commissioned work and retire the lease
   // generations, firing the abort seam into everything still in flight.

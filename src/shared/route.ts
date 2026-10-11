@@ -17,10 +17,14 @@
 
 export type RouteStatus = 'absent' | 'offline' | 'online'
 
+/**
+ * The gateway as every surface may see it. The KEY IS NOT HERE: it never
+ * leaves main (route-env.ts hands it to a harness process; the read-only
+ * wall token can read RouteState and must not learn it).
+ */
 export interface RouteGateway {
   url: string
   v1: string
-  key: string
   port: number
   version: string | null
   /** 'plugin' when ~/.cookrew/magpie.json (written by the Magpie agent plugin) named it; 'probe' otherwise. */
@@ -42,6 +46,8 @@ export interface RouteQuotaWindow {
   used: number | null
   limit: number | null
   resetsAt: number | null
+  /** The gateway's own rendering ("0 / 130"), when it gives one. */
+  display: string | null
 }
 
 export interface RouteQuota {
@@ -52,6 +58,8 @@ export interface RouteQuota {
   kind: 'subscription' | 'key' | 'local'
   windows: RouteQuotaWindow[]
   last: boolean
+  /** The gateway could not read this one ("Claude Code's /usage is temporarily unavailable"). */
+  error: string | null
 }
 
 export interface RouteDecision {
@@ -66,13 +74,18 @@ export interface RouteDecision {
   done: boolean
   status: string | null
   at: number
+  /** Time to first token and the whole request, in ms, when the gateway has them. */
+  ttftMs: number | null
+  ms: number | null
 }
 
 export interface RouteTurnFacts {
   model: string | null
   inputTokens: number | null
   outputTokens: number | null
+  /** null when the gateway did not price it (a local model): the rail says "local", never "$0.00". */
   cost: number | null
+  priced: boolean
   at: number | null
 }
 
@@ -99,6 +112,8 @@ export interface RouteSetupLines {
 export interface RouteState {
   status: RouteStatus
   gateway: RouteGateway | null
+  /** Why the status is what it is when that needs saying — a rejected plugin file, a refused host. */
+  why: string | null
   /** null = new cards stay direct even when online: the owner picks once, never inferred. */
   defaultModel: string | null
   providers: number
@@ -124,9 +139,13 @@ export interface CardRouteState {
   turn: RouteTurnFacts | null
   /** The gateway was offline when the card spawned, so it went direct. */
   offline: boolean
+  /** A sentence the rail shows beside the route: codex's thinking-model need, pi's not-routable-yet. */
+  note: string | null
 }
 
 export const DIRECT: CardRoute = 'direct'
+/** What a route string may look like when the catalog cannot vouch for it (offline, or never read). */
+export const ROUTE_ID_RE = /^[A-Za-z0-9._/:-]{1,128}$/
 export const ROUTE_LIVE_MAX = 20
 
 /** The session header every routed request carries, so the gateway counts per card. */

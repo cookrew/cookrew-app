@@ -39,7 +39,7 @@ async function fakeGateway(): Promise<Fake> {
       // not answers the latest row of all (another session's).
       const asked = url.searchParams.get('session') ?? ''
       const known = fake.usageSessions.includes(asked)
-      return res.end(JSON.stringify({ rows: [{ t: '2026-10-11T06:13:57.702Z', served: 'claude/claude-sonnet-5-5', model: 'group/smart', in: 32, out: 3027, cost: 0.4357, session: known ? asked : 'somebody-else' }], total: 1 }))
+      return res.end(JSON.stringify({ rows: [{ t: '2026-10-11T06:13:57.702Z', served: 'claude/claude-sonnet-5-5', model: 'group/smart', in: 32, out: 3027, cost: 0.4357, priced: true, session: known ? asked : 'somebody-else' }], total: 1 }))
     }
     res.writeHead(404)
     res.end('{}')
@@ -59,13 +59,23 @@ describe('mapping', () => {
   it('a route answer becomes a decision row; no route yet is null', () => {
     expect(toDecision('card-1', { route: null, seq: 0, session: 'cookrew:card-1' }, 5)).toBeNull()
     const d = toDecision('card-1', { route: { asked: 'group/smart', group: 'group/smart', model: 'deepseek/deepseek-chat', effort: 'high', tries: [{ model: 'claude/x', fail: '429' }, { model: 'deepseek/deepseek-chat' }], done: false }, seq: 4, session: 'cookrew:card-1' }, 5)
-    expect(d).toEqual({ terminalId: 'card-1', session: 'cookrew:card-1', seq: 4, asked: 'group/smart', group: 'group/smart', model: 'deepseek/deepseek-chat', effort: 'high', tries: 2, done: false, status: null, at: 5 })
+    expect(d).toEqual({ terminalId: 'card-1', session: 'cookrew:card-1', seq: 4, asked: 'group/smart', group: 'group/smart', model: 'deepseek/deepseek-chat', effort: 'high', tries: 2, done: false, status: null, at: 5, ttftMs: null, ms: null })
   })
 
-  it('the usage row becomes turn facts', () => {
-    expect(toTurnFacts({ rows: [{ t: '2026-10-11T06:13:57.702Z', served: 'claude/claude-sonnet-5-5', in: 32, out: 3027, cost: 0.4357 }] })).toEqual({
-      model: 'claude/claude-sonnet-5-5', inputTokens: 32, outputTokens: 3027, cost: 0.4357, at: Date.parse('2026-10-11T06:13:57.702Z')
+  it('the real route answer: time stamped by the gateway, tries an array, group absent for a plain model, ttft and ms kept', () => {
+    // Verbatim from magpie 0.1.1182 (round 2), trimmed.
+    const real = { route: { id: 1791699193049, time: '2026-10-11T14:24:32.197169+08:00', asked: 'ollama/qwen2.5:1.5b', asked_effort: 'high', model: 'ollama/qwen2.5:1.5b', effort: 'high', served: 'qwen2.5:1.5b', tries: [{ model: 'ollama/qwen2.5:1.5b', effort: 'high', done: true, status: 200, ms: 4267 }], done: true, status: 200, ttft_ms: 812, ms: 4267 }, seq: 1, session: 'cookrew:probe-claude' }
+    const d = toDecision('probe-claude', real, 1)
+    expect(d).toMatchObject({ asked: 'ollama/qwen2.5:1.5b', group: null, model: 'ollama/qwen2.5:1.5b', effort: 'high', tries: 1, done: true, status: '200', ttftMs: 812, ms: 4267, seq: 1 })
+    expect(d?.at).toBe(Date.parse('2026-10-11T14:24:32.197169+08:00'))
+  })
+
+  it('the usage row becomes turn facts; an unpriced (local) row has no cost', () => {
+    expect(toTurnFacts({ rows: [{ t: '2026-10-11T06:13:57.702Z', served: 'claude/claude-sonnet-5-5', in: 32, out: 3027, cost: 0.4357, priced: true }] })).toEqual({
+      model: 'claude/claude-sonnet-5-5', inputTokens: 32, outputTokens: 3027, cost: 0.4357, priced: true, at: Date.parse('2026-10-11T06:13:57.702Z')
     })
+    // The real local row (round 2): cost 0, priced false — the rail says "local", never "$0.00".
+    expect(toTurnFacts({ rows: [{ t: '2026-10-11T06:26:01.334Z', agent: 'cookrew', model: 'qwen2.5:1.5b', in: 0, out: 0, status: 400, session: 'cookrew:probe-codex', cost: 0, priced: false }] })).toMatchObject({ cost: null, priced: false, model: 'qwen2.5:1.5b' })
     expect(toTurnFacts({ rows: [] })).toBeNull()
     // A row for another session is not this card's turn.
     expect(toTurnFacts({ rows: [{ session: 'other', in: 1 }] }, ['cookrew:c'])).toBeNull()
@@ -74,7 +84,7 @@ describe('mapping', () => {
 
   it('live keeps the last 20, newest first, one per card and seq', () => {
     let live: RouteDecision[] = []
-    for (let i = 1; i <= 25; i += 1) live = pushLive(live, { terminalId: `c${i % 3}`, session: 's', seq: i, asked: null, group: null, model: null, effort: null, tries: 0, done: false, status: null, at: i })
+    for (let i = 1; i <= 25; i += 1) live = pushLive(live, { terminalId: `c${i % 3}`, session: 's', seq: i, asked: null, group: null, model: null, effort: null, tries: 0, done: false, status: null, at: i, ttftMs: null, ms: null })
     expect(live).toHaveLength(20)
     expect(live[0].seq).toBe(25)
     const again = pushLive(live, { ...live[0], model: 'x' })
@@ -95,6 +105,7 @@ describe('the follow', () => {
       fetch: (i, init) => fetch(i, init),
       gateway: () => ({ url: fake.url, key: 'magpie-cookrew' }),
       waitSeconds: 1,
+      lapFloorMs: 50,
       onDecision: (row) => decisions.push(row),
       onTurn: (id, facts) => turns.push(`${id}:${facts.model}:${facts.outputTokens}`)
     })
@@ -139,6 +150,7 @@ describe('the follow', () => {
       fetch: (i, init) => fetch(i, init),
       gateway: () => ({ url: fake.url, key: 'k' }),
       waitSeconds: 1,
+      lapFloorMs: 50,
       onDecision: () => {},
       onTurn: (id, facts) => turns.push(`${id}:${facts.model}`),
       harnessSession: (id) => (id === 'card-9' ? 'claude-own-session' : null)
@@ -146,8 +158,10 @@ describe('the follow', () => {
     d.follow('card-9')
     await sleep(200)
     expect(turns).toEqual(['card-9:claude/claude-sonnet-5-5'])
-    const usage = fake.calls.filter((c) => c.path.includes('/usage/requests')).map((c) => new URL(c.path, 'http://x').searchParams.get('session'))
-    expect(usage).toEqual(['cookrew:card-9', 'claude-own-session'])
+    const usageCalls = fake.calls.filter((c) => c.path.includes('/usage/requests')).map((c) => new URL(c.path, 'http://x'))
+    expect(usageCalls.map((u) => u.searchParams.get('session'))).toEqual(['cookrew:card-9', 'claude-own-session'])
+    // Every Usage read is ours alone: the log also holds the owner's direct Claude Code traffic.
+    expect(usageCalls.map((u) => u.searchParams.get('agent'))).toEqual(['cookrew', 'cookrew'])
   })
 
   it('does not start when the gateway is not online', async () => {

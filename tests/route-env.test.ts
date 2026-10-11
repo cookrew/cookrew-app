@@ -5,7 +5,8 @@
 // what was verified.
 
 import { describe, expect, it } from 'vitest'
-import { routeEnv, sessionHeaderLine, shellArg } from '../src/main/route-env'
+import { routeEnv, sessionHeaderLine } from '../src/main/route-env'
+import { shellQuote } from '../src/main/shell-quote'
 import { routeSession } from '../src/shared/route'
 
 const gateway = { url: 'http://127.0.0.1:3425', v1: 'http://127.0.0.1:3425/v1', key: 'magpie-cookrew' }
@@ -28,10 +29,20 @@ describe('routeEnv', () => {
       ANTHROPIC_DEFAULT_OPUS_MODEL: 'group/smart',
       ANTHROPIC_DEFAULT_SONNET_MODEL: 'group/smart',
       ANTHROPIC_DEFAULT_HAIKU_MODEL: 'group/smart',
-      ANTHROPIC_CUSTOM_HEADERS: 'X-Magpie-Session: cookrew:card-1'
+      ANTHROPIC_CUSTOM_HEADERS: 'X-Magpie-Session: cookrew:card-1',
+      // Without this claude 2.1.275 prints unrecognized_model and WAITS until killed (real gateway, round 2).
+      CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: '1'
     })
     // Never an API key: ANTHROPIC_API_KEY asks claude for a one-time approval; the token does not.
     expect(r.env).not.toHaveProperty('ANTHROPIC_API_KEY')
+    // No context window named (a local model): the variable stays unset.
+    expect(r.env).not.toHaveProperty('CLAUDE_CODE_MAX_CONTEXT_TOKENS')
+  })
+
+  it("claude: the catalog's context window, when the model has one", () => {
+    const r = routeEnv({ harness: 'claude', gateway, model: 'claude/claude-sonnet-5-5', cardId: 'card-1', contextWindow: 1000000 })
+    expect(r.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('1000000')
+    expect(routeEnv({ harness: 'claude', gateway, model: 'ollama/qwen3', cardId: 'card-1', contextWindow: null }).env).not.toHaveProperty('CLAUDE_CODE_MAX_CONTEXT_TOKENS')
   })
 
   it('codex: the provider table on the command line, the key through env_key', () => {
@@ -72,12 +83,12 @@ describe('routeEnv', () => {
     expect(r).toEqual({ env: {}, args: [], files: [], routable: false })
   })
 
-  it('shellArg leaves plain tokens alone and single-quotes the inline table', () => {
-    expect(shellArg('model_provider=magpie')).toBe('model_provider=magpie')
-    expect(shellArg('model_providers.magpie.base_url=http://127.0.0.1:3425/v1')).toBe('model_providers.magpie.base_url=http://127.0.0.1:3425/v1')
-    expect(shellArg('model_providers.magpie.http_headers={"X-Magpie-Session"="cookrew:c"}')).toBe(
+  it('the one shell quote leaves plain tokens alone and single-quotes the inline table', () => {
+    expect(shellQuote('model_provider=magpie')).toBe('model_provider=magpie')
+    expect(shellQuote('model_providers.magpie.base_url=http://127.0.0.1:3425/v1')).toBe('model_providers.magpie.base_url=http://127.0.0.1:3425/v1')
+    expect(shellQuote('model_providers.magpie.http_headers={"X-Magpie-Session"="cookrew:c"}')).toBe(
       `'model_providers.magpie.http_headers={"X-Magpie-Session"="cookrew:c"}'`
     )
-    expect(shellArg("it's")).toBe(`'it'\\''s'`)
+    expect(shellQuote("it's")).toBe(`'it'\\''s'`)
   })
 })

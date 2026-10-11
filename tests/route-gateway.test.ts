@@ -119,7 +119,8 @@ describe('discovery', () => {
     const found = discover({ home, env: {} }, false)
     expect(found.known).toBe(true)
     expect(found.gateway.source).toBe('plugin')
-    expect(found.gateway.key).toBe('magpie-cookrew')
+    expect(found.key).toBe('magpie-cookrew')
+    expect(found.gateway).not.toHaveProperty('key')
     expect(found.gateway.v1).toBe('http://127.0.0.1:3425/v1')
     expect(found.defaultModel).toBe('deepseek/deepseek-chat')
   })
@@ -149,7 +150,8 @@ describe('the monitor', () => {
       const stop = monitor.listen((p) => seen.push(p))
       await new Promise((r) => setTimeout(r, 50))
       expect(monitor.probe.status).toBe('online')
-      expect(monitor.probe.gateway).toMatchObject({ url: fake.url, v1: `${fake.url}/v1`, key: 'magpie-cookrew', port: fake.port, version: '1.2.3', source: 'probe' })
+      expect(monitor.probe.gateway).toMatchObject({ url: fake.url, v1: `${fake.url}/v1`, port: fake.port, version: '1.2.3', source: 'probe' })
+      expect(monitor.probe.key).toBe('magpie-cookrew')
       expect(seen.map((p) => p.status)).toEqual(['online'])
       // One clock timer at the online cadence, plus the stat poll.
       const clockTimer = clock.timers.find((t) => t.ms === ONLINE_EVERY_MS)
@@ -161,7 +163,8 @@ describe('the monitor', () => {
       expect(clock.timers.some((t) => t.ms === OFFLINE_BACKOFF_MS[0])).toBe(true)
       await clock.fire(OFFLINE_BACKOFF_MS[0])
       expect(clock.timers.some((t) => t.ms === OFFLINE_BACKOFF_MS[1])).toBe(true)
-      // The stat poll is the only other timer, re-armed each time it fires.
+      // watchDir is null here (no watch could be placed), so the stat poll is
+      // the backstop, re-armed each time it fires.
       await clock.fire(10_000)
       expect(clock.timers.filter((t) => t.ms === 10_000)).toHaveLength(1)
 
@@ -195,6 +198,8 @@ describe('the monitor', () => {
       await new Promise((r) => setTimeout(r, 50))
       expect(monitor.probe.gateway?.source).toBe('probe')
       expect(monitor.probe.defaultModel).toBeNull()
+      // A placed watch means no stat poll: only the probe clock is armed.
+      expect(clock.timers.filter((t) => t.ms === 10_000)).toHaveLength(0)
 
       writeFileSync(path.join(home, '.cookrew', 'magpie.json'), JSON.stringify({ route: { gateway: fake.url, v1: `${fake.url}/v1`, key: 'magpie-cookrew', model: 'group/smart' } }))
       dirListener!()
@@ -238,7 +243,7 @@ describe('the catalog', () => {
       expect(quotas).toHaveLength(3)
       expect(quotas[0]).toEqual({
         provider: 'claude', account: 'me@example.com', alias: null, plan: 'Max', kind: 'subscription',
-        windows: [{ name: '5h', used: 12, limit: 100, resetsAt: Date.parse('2026-10-11T12:00:00Z') }], last: true
+        windows: [{ name: '5h', used: 12, limit: 100, resetsAt: Date.parse('2026-10-11T12:00:00Z'), display: null }], last: true, error: null
       })
       expect(quotas[1]).toMatchObject({ provider: 'deepseek', kind: 'key', windows: [], last: false, account: null })
       expect(quotas[2]).toMatchObject({ provider: 'ollama', kind: 'local' })

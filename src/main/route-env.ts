@@ -1,6 +1,6 @@
 import path from 'node:path'
 import type { HarnessId } from './harness'
-import { routeSession, type RouteGateway } from '../shared/route'
+import { routeSession } from '../shared/route'
 
 /**
  * THE ENVIRONMENT THAT POINTS A HARNESS AT THE GATEWAY (route program, D1b).
@@ -30,10 +30,13 @@ import { routeSession, type RouteGateway } from '../shared/route'
 
 export interface RouteEnvInput {
   harness: HarnessId
-  gateway: Pick<RouteGateway, 'url' | 'v1' | 'key'>
+  /** The gateway's address and the bearer — the key is main-only and arrives only here. */
+  gateway: { url: string; v1: string; key: string }
   /** A Magpie model id or group id, never 'direct' (the caller decides that first). */
   model: string
   cardId: string
+  /** The catalog's context_window for the model, when it has one; null for a local model. */
+  contextWindow?: number | null
 }
 
 export interface RouteEnv {
@@ -67,7 +70,13 @@ export function routeEnv(input: RouteEnvInput): RouteEnv {
           ANTHROPIC_DEFAULT_OPUS_MODEL: model,
           ANTHROPIC_DEFAULT_SONNET_MODEL: model,
           ANTHROPIC_DEFAULT_HAIKU_MODEL: model,
-          ANTHROPIC_CUSTOM_HEADERS: sessionHeaderLine(cardId)
+          ANTHROPIC_CUSTOM_HEADERS: sessionHeaderLine(cardId),
+          // Seen on the real gateway (round 2): with a model id outside its
+          // catalog claude 2.1.275 prints `unrecognized_model` and then WAITS
+          // until killed. This restores the previous wait-for-the-API path.
+          CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: '1',
+          // The window claude should assume: the catalog's, when it names one.
+          ...(input.contextWindow ? { CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(input.contextWindow) } : {})
         },
         args: [],
         files: [],
@@ -120,7 +129,3 @@ export function routeEnv(input: RouteEnvInput): RouteEnv {
   }
 }
 
-/** Shell-quote one arg for a command line that a login shell will split. */
-export function shellArg(arg: string): string {
-  return /^[A-Za-z0-9_./:=@%+,-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`
-}

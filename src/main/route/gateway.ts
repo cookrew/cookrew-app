@@ -26,7 +26,11 @@ import { defaultDiscoveryEnv, discover, pluginFilePath, type DiscoveryEnv } from
 export interface GatewayProbe {
   status: RouteStatus
   gateway: RouteGateway | null
+  /** The bearer for routed requests. Main-only: the service never puts it on RouteState. */
+  key: string
   defaultModel: string | null
+  /** Said when the status needs a reason (a refused host). */
+  why: string | null
   checkedAt: number
 }
 
@@ -38,8 +42,8 @@ export interface GatewayMonitorDeps {
   now?: () => number
   /** setTimeout-shaped; injected so a test can run the clock. */
   schedule?: (fn: () => void, ms: number) => () => void
-  /** fs.watch-shaped on the plugin file's directory; injected for tests, null to disable. */
-  watchDir?: ((dir: string, cb: () => void) => () => void) | null
+  /** fs.watch-shaped on the plugin file's directory, answering null when it cannot watch (the stat poll then runs); injected for tests, null to disable watching. */
+  watchDir?: ((dir: string, cb: () => void) => (() => void) | null) | null
   helloTimeoutMs?: number
   statPollMs?: number
 }
@@ -52,13 +56,15 @@ const defaultSchedule = (fn: () => void, ms: number): (() => void) => {
   return () => clearTimeout(id)
 }
 
-const defaultWatchDir = (dir: string, cb: () => void): (() => void) => {
+/** Null when no watch could be placed — the caller then polls instead. */
+const defaultWatchDir = (dir: string, cb: () => void): (() => void) | null => {
   let watcher: FSWatcher | null = null
   try {
     if (existsSync(dir)) watcher = watch(dir, { persistent: false }, () => cb())
   } catch {
     watcher = null
   }
+  if (watcher === null) return null
   return () => watcher?.close()
 }
 
@@ -92,7 +98,7 @@ export class GatewayMonitor {
   private readonly helloTimeoutMs: number
   private readonly statPollMs: number
 
-  private last: GatewayProbe = { status: 'absent', gateway: null, defaultModel: null, checkedAt: 0 }
+  private last: GatewayProbe = { status: 'absent', gateway: null, key: '', defaultModel: null, why: null, checkedAt: 0 }
   private readonly listeners = new Set<(probe: GatewayProbe) => void>()
   private cancelClock: (() => void) | null = null
   private cancelStat: (() => void) | null = null
@@ -140,13 +146,15 @@ export class GatewayMonitor {
     const checkedAt = this.now()
     let next: GatewayProbe
     if (!found.known) {
-      next = { status: 'absent', gateway: null, defaultModel: null, checkedAt }
+      next = { status: 'absent', gateway: null, key: found.key, defaultModel: null, why: found.why, checkedAt }
     } else {
       const answer = await hello(this.fetchFn, found.gateway.url, this.helloTimeoutMs)
       next = {
         status: answer.ok ? 'online' : 'offline',
         gateway: { ...found.gateway, version: answer.version },
+        key: found.key,
         defaultModel: found.defaultModel,
+        why: null,
         checkedAt
       }
     }
@@ -161,8 +169,11 @@ export class GatewayMonitor {
   private arm(): void {
     this.pluginStamp = this.stamp()
     const dir = path.dirname(pluginFilePath(this.d))
+    // fs.watch is the immediacy layer; the stat poll is the backstop armed
+    // ONLY when a watch could not be placed (the directory is missing, or the
+    // volume does not deliver events), so a watched file costs no clock.
     this.unwatch = this.watchDir ? this.watchDir(dir, () => this.onPluginMaybeChanged()) : null
-    this.armStat()
+    if (this.unwatch === null) this.armStat()
     void this.refresh()
   }
 

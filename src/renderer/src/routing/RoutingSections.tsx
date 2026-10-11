@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { HarnessRow, RouteDecision, RouteModel, RouteQuota, RouteState } from '../../../shared/route'
-import { KEY_PRESETS, ROUTING_COPY, harnessTicks, quotaBar, routeChoices, statusLine } from '../../../shared/route-view'
+import { KEY_PRESETS, ROUTING_COPY, decisionFacts, harnessTicks, quotaBar, routeChoices, statusLine, windowLabel } from '../../../shared/route-view'
 import { keyLineFor } from '../../../shared/route-lines'
 
 /**
@@ -93,21 +93,27 @@ function Quota({ q }: { q: RouteQuota }): React.JSX.Element {
         <br />
         <span className="small">{bar.sub || bar.kind}</span>
       </span>
-      {bar.fill === null ? (
+      {bar.error !== null ? (
+        // The gateway could not read this one: the sentence, no bar.
+        <span className="cr-routing-bad" style={{ padding: 0 }}>
+          {bar.error}
+        </span>
+      ) : bar.fill === null ? (
         <span className="small">{bar.reading}</span>
       ) : (
         <span className="cr-routing-quota">
           <span className="l">
-            <span>{bar.reading.split(' ')[0]}</span>
-            <span>{Math.round(bar.fill * 100)}%</span>
+            {/* The fullest window names the bar; its label is the gateway's own. */}
+            <span>{bar.reading.slice(0, bar.reading.indexOf(' '))}</span>
+            <span>{bar.reading.slice(bar.reading.indexOf(' ') + 1)}</span>
           </span>
           <span className="b">
             <i className={bar.hot ? 'hot' : ''} style={{ width: `${Math.round(bar.fill * 100)}%` }} />
           </span>
         </span>
       )}
-      <span className="small ws">{q.windows.length > 1 ? `${q.windows[1].name} ${windowReading(q.windows[1])}` : ''}</span>
-      <span className="cr-routing-tick ok">{q.kind}</span>
+      <span className="small ws">{bar.error === null && q.windows.length > 1 ? `${q.windows[1].name} ${windowLabel(q.windows[1])}` : ''}</span>
+      <span className={`cr-routing-tick ${bar.error !== null ? 'dim' : 'ok'}`}>{q.kind}</span>
     </div>
   )
 }
@@ -239,13 +245,6 @@ export function Accounts({
   )
 }
 
-/** A window's `used` is a counter unless there is a limit to divide it by. */
-export function windowReading(w: { used: number | null; limit: number | null }): string {
-  if (w.used === null) return '—'
-  if (w.limit !== null && w.limit > 0) return `${Math.round((w.used / w.limit) * 100)}%`
-  return String(w.used)
-}
-
 function ModelLine({ m }: { m: RouteModel }): React.JSX.Element {
   return (
     <div className="cr-routing-model">
@@ -294,7 +293,7 @@ function LiveRow({ d, name, onZoom }: { d: RouteDecision; name: string; onZoom?:
   const hh = String(at.getHours()).padStart(2, '0')
   const mm = String(at.getMinutes()).padStart(2, '0')
   const ss = String(at.getSeconds()).padStart(2, '0')
-  const alt = d.status ?? (d.tries > 1 ? `${d.tries} tries` : d.group ? 'first pick' : 'direct pick')
+  const alt = decisionFacts(d)
   return (
     <button type="button" className="cr-routing-lrow" onClick={() => onZoom?.(d.terminalId)}>
       <span className="t">{`${hh}:${mm}:${ss}`}</span>

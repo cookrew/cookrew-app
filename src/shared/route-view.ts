@@ -1,4 +1,4 @@
-import type { CardRouteState, HarnessRow, RouteModel, RouteQuota, RouteState } from './route'
+import type { CardRouteState, HarnessRow, RouteDecision, RouteModel, RouteQuota, RouteState } from './route'
 
 /**
  * WHAT THE ROUTING PANEL AND THE RTE DIAL SAY — as words and numbers, no DOM.
@@ -45,6 +45,9 @@ export interface StatusLine {
 
 export function statusLine(state: RouteState): StatusLine {
   if (state.status === 'absent') {
+    // A why is a file the owner wrote (a refused gateway host): nothing to
+    // install, something to fix — so the line says it and offers no button.
+    if (state.why) return { status: 'absent', text: `not routing — ${state.why}`, action: null, source: null }
     return { status: 'absent', text: ROUTING_COPY.absent, action: { label: ROUTING_COPY.install, line: state.setup.installLine }, source: null }
   }
   if (state.status === 'offline') {
@@ -91,28 +94,64 @@ export function routeChoices(models: readonly RouteModel[]): string[] {
 
 export interface QuotaBar {
   title: string
+  /** The account (an email shown as its local part and an ellipsis) and the plan. */
   sub: string
   kind: RouteQuota['kind']
-  /** 0..1 of the fullest window, or null when nothing is metered (a key balance, a local model). */
+  /** 0..1 of the fullest window, or null when nothing is metered (a key, a local model, an error). */
   fill: number | null
-  /** The fullest window's name and percent, or the balance / "local". */
+  /** The fullest window's name and label, or "local · free" / "key", or the error sentence. */
   reading: string
+  /** The gateway could not read this row: the reading IS the sentence. */
+  error: string | null
   hot: boolean
+}
+
+/** `drej@example.com` → `drej@…`: the local part names the account, the domain is nobody's business on a wall. */
+export function maskAccount(account: string | null): string | null {
+  if (account === null || account.length === 0) return null
+  const at = account.indexOf('@')
+  if (at <= 0) return account
+  return `${account.slice(0, at)}@…`
+}
+
+/** A window's label: the gateway's own when it gives one, else a percent when both numbers are there, else the count. */
+export function windowLabel(w: { used: number | null; limit: number | null; display: string | null }): string {
+  if (w.display) return w.display
+  if (w.used === null) return '—'
+  if (w.limit !== null && w.limit > 0) return `${Math.round((w.used / w.limit) * 100)}%`
+  return String(w.used)
 }
 
 export function quotaBar(q: RouteQuota): QuotaBar {
   const title = q.alias ?? q.provider
-  const sub = [q.account, q.plan].filter((x): x is string => typeof x === 'string' && x.length > 0).join(' · ')
+  const sub = [maskAccount(q.account), q.plan].filter((x): x is string => typeof x === 'string' && x.length > 0).join(' · ')
+  if (q.error) return { title, sub, kind: q.kind, fill: null, reading: q.error, error: q.error, hot: false }
+  if (q.kind === 'local') return { title, sub, kind: q.kind, fill: null, reading: 'local · free', error: null, hot: false }
   const metered = q.windows.filter((w) => w.used !== null && w.limit !== null && w.limit > 0)
   if (metered.length === 0) {
     // No limit to divide by: a counter is shown as the count it is.
     const counted = q.windows.find((w) => w.used !== null)
-    const reading = counted ? `${counted.name} ${counted.used}` : q.kind === 'local' ? 'local' : 'key'
-    return { title, sub, kind: q.kind, fill: null, reading, hot: false }
+    const reading = counted ? `${counted.name} ${windowLabel(counted)}` : 'key'
+    return { title, sub, kind: q.kind, fill: null, reading, error: null, hot: false }
   }
   const fullest = metered.reduce((a, b) => (a.used! / a.limit! >= b.used! / b.limit! ? a : b))
   const fill = Math.min(1, fullest.used! / fullest.limit!)
-  return { title, sub, kind: q.kind, fill, reading: `${fullest.name} ${Math.round(fill * 100)}%`, hot: fill >= 0.9 }
+  return { title, sub, kind: q.kind, fill, reading: `${fullest.name} ${windowLabel(fullest)}`, error: null, hot: fill >= 0.9 }
+}
+
+/** What a live row says after the model: tries, a failure, the first-token time. */
+export function decisionFacts(d: Pick<RouteDecision, 'tries' | 'status' | 'ttftMs' | 'group'>): string {
+  const parts: string[] = []
+  // The contract carries a count; the gateway's own array (each try with
+  // a `fail`) is accepted too, in case it ever arrives unfolded.
+  const raw = d.tries as unknown
+  const count = Array.isArray(raw) ? raw.length : typeof raw === 'number' ? raw : 0
+  const failed = Array.isArray(raw) ? raw.filter((t) => t && typeof t === 'object' && 'fail' in (t as object) && (t as { fail?: unknown }).fail).length : 0
+  if (count > 1) parts.push(`${count} tries${failed > 0 ? ` · ${failed} failed` : ''}`)
+  if (d.status) parts.push(d.status)
+  if (d.ttftMs !== null && d.ttftMs !== undefined) parts.push(`first token ${(d.ttftMs / 1000).toFixed(1)} s`)
+  if (parts.length === 0) parts.push(d.group ? 'first pick' : 'direct pick')
+  return parts.join(' · ')
 }
 
 /** The three lines under the RTE chip. */
@@ -128,21 +167,32 @@ export interface RouteDialLines {
 
 export function routeDialLines(card: CardRouteState | null): RouteDialLines {
   if (card === null) return { value: '—', turn: null, note: null, flag: null }
-  if (card.offline) return { value: 'direct', turn: null, note: 'gateway offline · direct', flag: 'offline' }
-  const turn = card.turn && card.turn.model ? `this turn → ${card.turn.model}${tokens(card.turn.inputTokens, card.turn.outputTokens)}${cost(card.turn.cost)}` : card.live?.model ? `this turn → ${card.live.model}` : null
-  const note = card.appliesOn === 'restart' ? 'applies on restart' : null
+  if (card.offline) return { value: 'direct', turn: null, note: joinNotes('gateway offline · direct', card.note), flag: 'offline' }
+  const turn = card.turn && card.turn.model ? `this turn → ${card.turn.model}${tokens(card.turn.inputTokens, card.turn.outputTokens)}${cost(card.turn)}` : card.live?.model ? `this turn → ${card.live.model}` : null
+  const note = joinNotes(card.appliesOn === 'restart' ? 'applies on restart' : null, card.note)
   return { value: card.route, turn, note, flag: card.appliesOn === 'restart' ? 'restart' : null }
 }
 
-function tokens(input: number | null, output: number | null): string {
-  if (input === null && output === null) return ''
-  const total = (input ?? 0) + (output ?? 0)
-  return ` · ${total >= 1000 ? `${(total / 1000).toFixed(1)}k` : String(total)} tok`
+function joinNotes(...notes: (string | null | undefined)[]): string | null {
+  const kept = notes.filter((n): n is string => typeof n === 'string' && n.length > 0)
+  return kept.length === 0 ? null : kept.join(' · ')
 }
 
-function cost(value: number | null): string {
-  if (value === null) return ''
-  return ` · $${value < 0.01 ? value.toFixed(4) : value.toFixed(3)}`
+/** `1.8k in · 312 out`; nothing when nothing was counted. */
+function tokens(input: number | null, output: number | null): string {
+  if (input === null && output === null) return ''
+  const k = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n))
+  const parts: string[] = []
+  if (input !== null) parts.push(`${k(input)} in`)
+  if (output !== null) parts.push(`${k(output)} out`)
+  return ` · ${parts.join(' · ')}`
+}
+
+/** A price when the gateway priced it; "local" when it did not; nothing when it said nothing. */
+function cost(turn: { cost: number | null; priced: boolean }): string {
+  if (!turn.priced) return ' · local'
+  if (turn.cost === null) return ''
+  return ` · $${turn.cost < 0.01 ? turn.cost.toFixed(4) : turn.cost.toFixed(3)}`
 }
 
 /** Shorten a model id for a 46px chip: the part after the last slash. */
