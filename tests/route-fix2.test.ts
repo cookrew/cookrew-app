@@ -134,7 +134,9 @@ describe('2 · the notes on a card', () => {
       nodes.set('cd', terminal('cd', 'codex', { route: 'direct' }))
       expect(svc.cardState('cx').note).toBe('codex needs a thinking-capable model behind the gateway')
       expect(svc.cardState('cd').note).toBeNull()
-      expect(svc.cardState('pi').note).toBe('direct · pi is not routable yet')
+      expect(svc.cardState('pi').note).toBeNull()
+      expect(svc.cardState('pi').routable).toBe(true)
+      expect(svc.cardState('cx').routable).toBe(true)
       expect(svc.cardState('cl').note).toBeNull()
       // The context window from the catalog reaches claude's env; a model without one leaves it unset.
       nodes.set('cw', terminal('cw', 'claude', { route: 'claude/claude-sonnet-5-5' }))

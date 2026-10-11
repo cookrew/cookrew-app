@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import type { HarnessRow, RouteSetupLines } from '../../shared/route'
+import { ROUTABLE } from '../route-env'
 
 /**
  * THE LINES THE SETUP TERMINAL TYPES, AND THE HARNESS ROWS (route program).
@@ -53,13 +54,14 @@ export interface HarnessFacts {
   loginLine: string | null
   /** Files whose presence means "signed in"; null = nothing readable. */
   signInFiles: ((home: string) => string[]) | null
+  routable: boolean
 }
 
 export const HARNESS_FACTS: readonly HarnessFacts[] = [
-  { id: 'claude', name: 'Claude Code', bin: 'claude', installLine: 'npm i -g @anthropic-ai/claude-code', loginLine: 'claude', signInFiles: (home) => [path.join(home, '.claude', '.credentials.json')] },
-  { id: 'codex', name: 'Codex', bin: 'codex', installLine: 'npm i -g @openai/codex', loginLine: 'codex login', signInFiles: (home) => [path.join(home, '.codex', 'auth.json')] },
-  { id: 'opencode', name: 'OpenCode', bin: 'opencode', installLine: 'curl -fsSL https://opencode.ai/install | bash', loginLine: 'opencode auth login', signInFiles: (home) => [path.join(home, '.local', 'share', 'opencode', 'auth.json')] },
-  { id: 'pi', name: 'Pi', bin: 'pi', installLine: 'npm i -g @earendil-works/pi-coding-agent', loginLine: null, signInFiles: null }
+  { id: 'claude', name: 'Claude Code', bin: 'claude', installLine: 'npm i -g @anthropic-ai/claude-code', loginLine: 'claude', signInFiles: (home) => [path.join(home, '.claude', '.credentials.json')], routable: ROUTABLE.claude },
+  { id: 'codex', name: 'Codex', bin: 'codex', installLine: 'npm i -g @openai/codex', loginLine: 'codex login', signInFiles: (home) => [path.join(home, '.codex', 'auth.json')], routable: ROUTABLE.codex },
+  { id: 'opencode', name: 'OpenCode', bin: 'opencode', installLine: 'curl -fsSL https://opencode.ai/install | bash', loginLine: 'opencode auth login', signInFiles: (home) => [path.join(home, '.local', 'share', 'opencode', 'auth.json')], routable: ROUTABLE.opencode },
+  { id: 'pi', name: 'Pi', bin: 'pi', installLine: 'npm i -g @earendil-works/pi-coding-agent', loginLine: null, signInFiles: null, routable: ROUTABLE.pi }
 ]
 
 /** `which`, by hand: the first PATH entry holding an executable of that name. */
@@ -143,7 +145,7 @@ export class HarnessScan {
         signedIn = h.signInFiles(this.deps.home).some((f) => exists(f))
         if (!signedIn && h.id === 'claude') signedIn = this.keychainSignedIn
       }
-      return { id: h.id, name: h.name, installed: installed(h.bin), signedIn, inDock: inDock.has(h.id), installLine: h.installLine, loginLine: h.loginLine }
+      return { id: h.id, name: h.name, installed: installed(h.bin), signedIn, inDock: inDock.has(h.id), installLine: h.installLine, loginLine: h.loginLine, routable: h.routable }
     })
   }
 
