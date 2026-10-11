@@ -92,6 +92,7 @@ import {
 import { createDesktopCert, type DesktopCert } from './desktop-cert'
 import { createSecretsStore } from './secrets-store'
 import { secretAuditDetails, type SecretAudit } from './secret-cli'
+import { ensureSecretSlotNote } from './secret-note'
 import { DEFAULT_NAME_ZONE } from '../shared/reach-names'
 import { NameCertStore } from './name-cert-store'
 import {
@@ -548,6 +549,28 @@ const auditSecret = (event: SecretAudit): void => {
   const hit = store.nodeAcrossWorkspaces(event.terminalId)
   const home = store.workspaceOfNode(event.terminalId)
   const workspaceId = hit?.workspaceId ?? home?.id ?? store.focusedId
+  // A name nobody sealed gets a slot to land on (secret-note.ts) BEFORE the
+  // row is written, so the row can name the note. Best effort: a canvas that
+  // refuses the note still gets its audit line.
+  if (event.type === 'secret.requested') {
+    try {
+      ensureSecretSlotNote(
+        {
+          nodesOf: (id) => store.workspaceState(id).nodes,
+          createNote: (partial, id) => store.createNote(partial, id),
+          writeNote: (id, content) => store.writeNote(id, content),
+          connect: (from, to) => void store.connectAcross(from, to)
+        },
+        {
+          workspaceId,
+          asker: hit?.node.kind === 'terminal' ? (hit.node as TerminalNodeData) : null,
+          name: event.name
+        }
+      )
+    } catch (error) {
+      console.error(`[secrets] could not make a slot for ${event.name}:`, error)
+    }
+  }
   events.append({
     type: event.type,
     entityId: event.terminalId,

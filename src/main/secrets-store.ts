@@ -15,6 +15,7 @@
  * choice survives until the route that honours it exists.
  */
 
+import { execFileSync } from 'node:child_process'
 import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
@@ -29,6 +30,18 @@ export interface SecretRecord {
   readonly updatedAt: number
 }
 
+/**
+ * THE KEYCHAIN OPT-IN. With `COOKREW_SECRETS_KEYCHAIN=1` the VALUE lives in
+ * the macOS login keychain as a generic password (account `cookrew`,
+ * service `cookrew-secret-<name>`), and the per-name file keeps only the
+ * facts the listing shows: served, createdAt, updatedAt, and that the
+ * value is in the keychain. Files stay the default. Everything above the
+ * store — the audit line, the served refusal, the routes — is the same.
+ */
+export const KEYCHAIN_ENV = 'COOKREW_SECRETS_KEYCHAIN'
+export const KEYCHAIN_ACCOUNT = 'cookrew'
+export const keychainService = (name: string): string => `cookrew-secret-${name}`
+
 
 export interface SecretsStore {
   readonly put: (name: string, value: string, options?: { served?: boolean }) => SecretListing
@@ -41,6 +54,11 @@ export interface SecretsStore {
 export interface SecretsStoreOptions {
   readonly baseDir?: string
   readonly now?: () => number
+  /** Values in the keychain rather than the file; default from COOKREW_SECRETS_KEYCHAIN. */
+  readonly keychain?: boolean
+  /** The `security` binary (tests point this at a fake). */
+  readonly security?: string
+  readonly env?: NodeJS.ProcessEnv
 }
 
 export const SECRETS_DIR_NAME = 'secrets'
@@ -51,6 +69,18 @@ export const STALE_TMP_MS = 60_000
 const assertName = (name: string): void => {
   if (!isSecretName(name)) {
     throw new Error(`not a secret name: lower-case letters, digits and dashes, up to 64, never a leading dash`)
+  }
+}
+
+/** What the file holds: the record, or the record without its value when the keychain has it. */
+type StoredRecord = Partial<SecretRecord> & { keychain?: boolean }
+
+const parseStored = (raw: string): StoredRecord | null => {
+  try {
+    const parsed = JSON.parse(raw) as StoredRecord
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
   }
 }
 
@@ -72,6 +102,32 @@ const parseRecord = (raw: string): SecretRecord | null => {
 export const createSecretsStore = (options: SecretsStoreOptions = {}): SecretsStore => {
   const dir = path.join(options.baseDir ?? path.join(homedir(), '.cookrew'), SECRETS_DIR_NAME)
   const now = options.now ?? ((): number => Date.now())
+  const env = options.env ?? process.env
+  const keychain = options.keychain ?? env[KEYCHAIN_ENV] === '1'
+  const security = options.security ?? 'security'
+
+  /** `security …` with the value never on stdout of this process. */
+  const securityRun = (args: string[]): string =>
+    execFileSync(security, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+
+  const keychainPut = (name: string, value: string): void => {
+    // -U updates in place; the item is this app's own account+service pair.
+    securityRun(['add-generic-password', '-U', '-a', KEYCHAIN_ACCOUNT, '-s', keychainService(name), '-w', value])
+  }
+  const keychainRead = (name: string): string | null => {
+    try {
+      return securityRun(['find-generic-password', '-a', KEYCHAIN_ACCOUNT, '-s', keychainService(name), '-w']).replace(/\n$/, '')
+    } catch {
+      return null
+    }
+  }
+  const keychainRemove = (name: string): void => {
+    try {
+      securityRun(['delete-generic-password', '-a', KEYCHAIN_ACCOUNT, '-s', keychainService(name)])
+    } catch {
+      // Nothing there: the file is the record of that.
+    }
+  }
 
   const ensureDir = (): void => {
     mkdirSync(dir, { recursive: true, mode: 0o700 })
@@ -83,11 +139,26 @@ export const createSecretsStore = (options: SecretsStoreOptions = {}): SecretsSt
 
   const read = (name: string): SecretRecord | null => {
     assertName(name)
+    let raw: string
     try {
-      return parseRecord(readFileSync(fileOf(name), 'utf8'))
+      raw = readFileSync(fileOf(name), 'utf8')
     } catch {
       return null
     }
+    const stored = parseStored(raw)
+    if (stored?.keychain === true) {
+      // The file is the facts; the keychain is the value. A file with no
+      // keychain item behind it is a secret that is gone, not an empty one.
+      const value = keychainRead(name)
+      if (value === null || value.length === 0) return null
+      return {
+        value,
+        served: stored.served === true,
+        createdAt: typeof stored.createdAt === 'number' ? stored.createdAt : 0,
+        updatedAt: typeof stored.updatedAt === 'number' ? stored.updatedAt : 0
+      }
+    }
+    return parseRecord(raw)
   }
 
   /**
@@ -122,6 +193,13 @@ export const createSecretsStore = (options: SecretsStoreOptions = {}): SecretsSt
       createdAt: before?.createdAt ?? at,
       updatedAt: at
     }
+    // Keychain: the value goes there FIRST, so a file that says "keychain"
+    // never points at an item that was not written; the file then holds no
+    // value at all.
+    if (keychain) keychainPut(name, value)
+    const stored: StoredRecord = keychain
+      ? { keychain: true, served: record.served, createdAt: record.createdAt, updatedAt: record.updatedAt }
+      : record
     const file = fileOf(name)
     const tmp = `${file}.${process.pid}.tmp`
     try {
@@ -134,7 +212,7 @@ export const createSecretsStore = (options: SecretsStoreOptions = {}): SecretsSt
     // made with this mode, or nowhere. Then fsync, then rename into place.
     const fd = openSync(tmp, 'wx', 0o600)
     try {
-      writeSync(fd, JSON.stringify(record))
+      writeSync(fd, JSON.stringify(stored))
       fsyncSync(fd)
     } finally {
       closeSync(fd)
@@ -154,8 +232,19 @@ export const createSecretsStore = (options: SecretsStoreOptions = {}): SecretsSt
     const rows: SecretListing[] = []
     for (const name of names.sort()) {
       if (!isSecretName(name)) continue
-      const record = read(name)
-      if (record) rows.push({ name, served: record.served, updatedAt: record.updatedAt })
+      // The listing never needs the value, so it never asks the keychain.
+      let stored: StoredRecord | null
+      try {
+        stored = parseStored(readFileSync(fileOf(name), 'utf8'))
+      } catch {
+        continue
+      }
+      if (!stored || (stored.keychain !== true && typeof stored.value !== 'string')) continue
+      rows.push({
+        name,
+        served: stored.served === true,
+        updatedAt: typeof stored.updatedAt === 'number' ? stored.updatedAt : 0
+      })
     }
     return rows
   }
@@ -167,6 +256,13 @@ export const createSecretsStore = (options: SecretsStoreOptions = {}): SecretsSt
     } catch {
       // No directory: nothing stale either.
     }
+    let had = false
+    try {
+      had = parseStored(readFileSync(fileOf(name), 'utf8'))?.keychain === true
+    } catch {
+      // No file: nothing in the keychain was ever recorded for it either.
+    }
+    if (had) keychainRemove(name)
     try {
       rmSync(fileOf(name))
       return true
