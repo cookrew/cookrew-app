@@ -8,6 +8,7 @@
 import { observedRunner } from './multiplexer'
 import { execFileSync, spawnSync } from 'node:child_process'
 import path from 'node:path'
+import { shellQuote } from './shell-quote'
 import type {
   AttachSpawn,
   AttachSpec,
@@ -86,9 +87,7 @@ export function routeExports(spec: AttachSpec): string[] {
   return Object.entries(spec.env ?? {}).map(([key, value]) => `export ${key}=${shellQuote(value)}`)
 }
 
-export function shellQuote(value: string): string {
-  return /^[A-Za-z0-9_./:=@%+,-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`
-}
+
 
 export interface TmuxOptions {
   /** Path to the generated cookrew.tmux.conf. */

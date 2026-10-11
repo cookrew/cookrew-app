@@ -173,7 +173,7 @@ export type SseSend = (event: string, data: unknown) => void
  * deliberately absent; those are per-terminal notifications and every one of
  * the 102 observed differed.
  */
-const SNAPSHOT_EVENTS = new Set(['board', 'workspace', 'workspaces'])
+const SNAPSHOT_EVENTS = new Set(['board', 'workspace', 'workspaces', 'route'])
 
 /**
  * Switch a response into a Server-Sent-Events stream. Returns the emitter;

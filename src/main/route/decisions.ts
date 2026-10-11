@@ -39,6 +39,11 @@ export interface DecisionsDeps {
   now?: () => number
   /** The long-poll's wait, in seconds (the gateway caps it at 60). */
   waitSeconds?: number
+  /** The least time between two laps, so a gateway that answers at once cannot make a hot loop. */
+  lapFloorMs?: number
+  /** Laps that moved nothing before the follow is abandoned (resumed by the next activity). */
+  maxIdleLaps?: number
+  schedule?: (fn: () => void, ms: number) => () => void
   onDecision: (decision: RouteDecision) => void
   onTurn: (terminalId: string, facts: RouteTurnFacts) => void
   /** The harness's own session id for the card, when the log is keyed by it (claude). */
@@ -55,6 +60,8 @@ export function toDecision(terminalId: string, body: unknown, at: number): Route
   const route = b ? asRecord(b.route) : null
   if (!b || !route) return null
   const tries = Array.isArray(route.tries) ? route.tries.length : num(route.tries) ?? 0
+  // The gateway stamps `time` (RFC3339) on the route; ours is the fallback.
+  const stamped = str(route.time) ? Date.parse(str(route.time) as string) : NaN
   return {
     terminalId,
     session: str(b.session) ?? routeSession(terminalId),
@@ -66,7 +73,9 @@ export function toDecision(terminalId: string, body: unknown, at: number): Route
     tries,
     done: route.done === true,
     status: str(route.status) ?? (num(route.status) !== null ? String(route.status) : null),
-    at
+    at: Number.isFinite(stamped) ? stamped : at,
+    ttftMs: num(route.ttft_ms) ?? num(route.ttftMs),
+    ms: num(route.ms)
   }
 }
 
@@ -78,19 +87,37 @@ export function toDecision(terminalId: string, body: unknown, at: number): Route
 export function toTurnFacts(body: unknown, sessions: readonly string[] | null = null): RouteTurnFacts | null {
   const b = asRecord(body)
   const rows = Array.isArray(b?.rows) ? (b!.rows as unknown[]) : Array.isArray(body) ? body : []
-  const r = asRecord(rows[0])
+  // THE NEWEST ROW IS NOT THE TURN (round 3, the gated e2e): codex fires a
+  // follow-up call as it exits and cancels it, so a session's newest row is
+  // a 499 with no tokens beside the 200 that carries them. The last few rows
+  // are read (USAGE_ROWS) and the newest one that answered 200 with output
+  // tokens is the turn; none → null, never a cancelled row dressed as one.
+  const r = rows.map(asRecord).find((row) => {
+    if (!row) return false
+    if (sessions !== null && !sessions.includes(str(row.session) ?? '')) return false
+    const status = num(row.status) ?? (str(row.status) ? Number(str(row.status)) : NaN)
+    const out = num(row.out) ?? num(row.output_tokens) ?? 0
+    return status === 200 && out > 0
+  })
   if (!r) return null
-  if (sessions !== null && !sessions.includes(str(r.session) ?? '')) return null
   const t = str(r.t)
   const parsed = t ? Date.parse(t) : NaN
+  // A local model is `cost: 0, priced: false`: the rail must say "local", never "$0.00".
+  const priced = r.priced === true
   return {
     model: str(r.served) ?? str(r.model),
     inputTokens: num(r.in) ?? num(r.input_tokens),
     outputTokens: num(r.out) ?? num(r.output_tokens),
-    cost: num(r.cost),
+    cost: priced ? num(r.cost) : null,
+    priced,
     at: Number.isFinite(parsed) ? parsed : num(r.at)
   }
 }
+
+/** Every Usage read is ours alone: the log also holds the owner's DIRECT Claude Code traffic. */
+export const USAGE_AGENT = 'cookrew'
+/** How many of a session's newest rows are read to find the turn (a cancelled 499 may sit on top). */
+export const USAGE_ROWS = 5
 
 /** The last 20, newest first, one row per card per seq. */
 export function pushLive(live: readonly RouteDecision[], row: RouteDecision): RouteDecision[] {
@@ -102,7 +129,18 @@ interface Follow {
   seq: number
   controller: AbortController | null
   stopped: boolean
+  /** Laps that moved neither seq nor the decision. */
+  idleLaps: number
+  /** Cuts a lap-floor pause short on unfollow. */
+  cancelPause: (() => void) | null
 }
+
+export const LAP_FLOOR_MS = 500
+export const MAX_IDLE_LAPS = 8
+
+/** The same decision, whenever it was read: a repeat is not a change. */
+const sameDecision = (a: RouteDecision | undefined, b: RouteDecision): boolean =>
+  a !== undefined && JSON.stringify({ ...a, at: 0 }) === JSON.stringify({ ...b, at: 0 })
 
 export class RouteDecisions {
   private readonly follows = new Map<string, Follow>()
@@ -127,7 +165,7 @@ export class RouteDecisions {
   /** A routed card's turn started: follow it. Idempotent while in flight. */
   follow(terminalId: string): void {
     if (this.follows.has(terminalId)) return
-    const follow: Follow = { seq: this.lastByCard.get(terminalId)?.seq ?? 0, controller: null, stopped: false }
+    const follow: Follow = { seq: this.lastByCard.get(terminalId)?.seq ?? 0, controller: null, stopped: false, idleLaps: 0, cancelPause: null }
     this.follows.set(terminalId, follow)
     void this.loop(terminalId, follow)
   }
@@ -138,6 +176,7 @@ export class RouteDecisions {
     if (!follow) return
     follow.stopped = true
     follow.controller?.abort()
+    follow.cancelPause?.()
     this.follows.delete(terminalId)
   }
 
@@ -153,12 +192,16 @@ export class RouteDecisions {
 
   private async loop(terminalId: string, follow: Follow): Promise<void> {
     const wait = this.deps.waitSeconds ?? 30
+    const floor = this.deps.lapFloorMs ?? LAP_FLOOR_MS
+    const maxIdle = this.deps.maxIdleLaps ?? MAX_IDLE_LAPS
+    const now = this.deps.now ?? Date.now
     while (!follow.stopped) {
       const gateway = this.deps.gateway()
       if (!gateway) {
         this.unfollow(terminalId)
         return
       }
+      const lapStart = now()
       const session = encodeURIComponent(routeSession(terminalId))
       follow.controller = new AbortController()
       let body: unknown = null
@@ -178,22 +221,57 @@ export class RouteDecisions {
         this.unfollow(terminalId)
         return
       }
-      const decision = toDecision(terminalId, body, (this.deps.now ?? Date.now)())
+      const decision = toDecision(terminalId, body, now())
       const seq = num(asRecord(body)?.seq) ?? follow.seq
-      if (decision === null) {
-        // No route yet (the first request has not reached routing): wait for the next change.
-        follow.seq = seq
-        continue
+      const before = this.lastByCard.get(terminalId)
+      const moved = seq > follow.seq || (decision !== null && !sameDecision(before, decision))
+      follow.seq = Math.max(follow.seq, seq, decision?.seq ?? 0)
+      if (decision !== null && !sameDecision(before, decision)) {
+        // Only a CHANGE reaches the card: a repeat of the same decision (a
+        // gateway answering at once, a wait that timed out) is not a frame.
+        // A decision with `model: null` IS a change and IS a frame — magpie
+        // publishes the route the moment a request arrives and fills the
+        // member in a later seq; the rail prints "deciding…" meanwhile. The
+        // follow goes on, and the facts are read only once `done`.
+        this.lastByCard.set(terminalId, decision)
+        this.deps.onDecision(decision)
       }
-      follow.seq = Math.max(follow.seq, decision.seq)
-      this.lastByCard.set(terminalId, decision)
-      this.deps.onDecision(decision)
-      if (decision.done) {
+      if (decision?.done) {
         await this.facts(terminalId, gateway)
         this.unfollow(terminalId)
         return
       }
+      follow.idleLaps = moved ? 0 : follow.idleLaps + 1
+      if (follow.idleLaps >= maxIdle) {
+        // Nothing has moved for this many laps: the turn is not reaching the
+        // gateway (direct after all, or a session the gateway never saw).
+        // Stop; the next activity event follows again.
+        this.unfollow(terminalId)
+        return
+      }
+      // THE FLOOR: a lap never starts sooner than this after the last began,
+      // whatever the gateway did — the one guard against a hot fetch loop.
+      const elapsed = now() - lapStart
+      if (elapsed < floor) await this.pause(floor - elapsed, follow)
     }
+  }
+
+  private pause(ms: number, follow: Follow): Promise<void> {
+    const schedule = this.deps.schedule ?? ((fn: () => void, wait: number) => {
+      const id = setTimeout(fn, wait)
+      return () => clearTimeout(id)
+    })
+    return new Promise((resolve) => {
+      const cancel = schedule(() => {
+        follow.cancelPause = null
+        resolve()
+      }, ms)
+      follow.cancelPause = () => {
+        cancel()
+        follow.cancelPause = null
+        resolve()
+      }
+    })
   }
 
   private async facts(terminalId: string, gateway: { url: string; key: string }): Promise<void> {
@@ -201,7 +279,7 @@ export class RouteDecisions {
     const sessions = own ? [routeSession(terminalId), own] : [routeSession(terminalId)]
     for (const session of sessions) {
       try {
-        const res = await this.deps.fetch(`${gateway.url}/v1/magpie/usage/requests?session=${encodeURIComponent(session)}&limit=1`, {
+        const res = await this.deps.fetch(`${gateway.url}/v1/magpie/usage/requests?session=${encodeURIComponent(session)}&agent=${USAGE_AGENT}&limit=${USAGE_ROWS}`, {
           headers: { authorization: `Bearer ${gateway.key}`, 'user-agent': 'cookrew' }
         })
         const facts = res.ok ? toTurnFacts(await res.json(), sessions) : null

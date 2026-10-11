@@ -5,7 +5,8 @@
 
 import { describe, expect, it } from 'vitest'
 import type { AttachSpec } from '../src/main/multiplexer'
-import { bootScript, commandWithArgs, routeExports, shellQuote } from '../src/main/tmux-multiplexer'
+import { bootScript, commandWithArgs, routeExports } from '../src/main/tmux-multiplexer'
+import { shellQuote } from '../src/main/shell-quote'
 import { bootCommand, envArgs } from '../src/main/herdr-host-multiplexer'
 import { DirectMultiplexer } from '../src/main/direct-multiplexer'
 import { routeEnv } from '../src/main/route-env'

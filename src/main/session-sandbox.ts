@@ -1,5 +1,6 @@
 import { mkdirSync, realpathSync, utimesSync } from 'node:fs'
 import path from 'node:path'
+import { gatewayDenyClauses } from './route/sandbox-deny'
 
 /**
  * THE SANDBOX — cwd is not a jail, so this is the jail (SEC-S, slice 1).
@@ -176,6 +177,12 @@ export interface ProfileInput {
    * process could simply read it there.
    */
   controlSocketPath?: string
+  /**
+   * The Magpie gateway's port(s), denied outbound — on loopback the gateway
+   * takes any key, so without this a seat could spend the owner's providers
+   * with one curl. See route/sandbox-deny.ts.
+   */
+  gatewayPorts?: readonly number[]
 }
 
 /**
@@ -238,6 +245,8 @@ export function seatbeltProfile(input: ProfileInput): string {
           `(deny file-read* file-write* (literal ${quote(input.controlSocketPath)}))`
         ]
       : []),
+    // The owner's gateway (route program): any port it listens on, any host.
+    ...gatewayDenyClauses(input.gatewayPorts ?? []),
     // TRAVERSAL. Found by running it: denying the service root outright made a
     // session unable to reach its OWN sandbox — `cd` into it failed with "Not a
     // directory", because reaching a child means traversing the parent. The

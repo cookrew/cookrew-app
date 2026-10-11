@@ -120,13 +120,14 @@ export function createDemoApi(): CookrewApi {
   // smart group as the default, two decisions in flight — enough for the
   // harness view to draw the panel and the rail's RTE dial without a main.
   const routeLive: RouteDecision[] = [
-    { terminalId: 'card-0', session: 'cookrew:card-0', seq: 3, asked: 'group/smart', group: 'group/smart', model: 'claude/claude-sonnet-5-5', effort: 'high', tries: 1, done: false, status: null, at: Date.now() - 4000 },
-    { terminalId: 'card-1', session: 'cookrew:card-1', seq: 7, asked: 'group/smart', group: 'group/smart', model: 'deepseek/deepseek-chat', effort: null, tries: 2, done: true, status: '200', at: Date.now() - 12000 }
+    { terminalId: 'card-0', session: 'cookrew:card-0', seq: 3, asked: 'group/smart', group: 'group/smart', model: 'claude/claude-sonnet-5-5', effort: 'high', tries: 1, done: false, status: null, at: Date.now() - 4000, ttftMs: 820, ms: null },
+    { terminalId: 'card-1', session: 'cookrew:card-1', seq: 7, asked: 'group/smart', group: 'group/smart', model: 'deepseek/deepseek-chat', effort: null, tries: 2, done: true, status: '200', at: Date.now() - 12000, ttftMs: 410, ms: 6200 }
   ]
   let routeDefault: string | null = 'group/smart'
   const routeState = (): RouteState => ({
     status: 'online',
-    gateway: { url: 'http://127.0.0.1:3425', v1: 'http://127.0.0.1:3425/v1', key: 'magpie-cookrew', port: 3425, version: '0.1.1182', source: 'plugin' },
+    gateway: { url: 'http://127.0.0.1:3425', v1: 'http://127.0.0.1:3425/v1', port: 3425, version: '0.1.1182', source: 'plugin' },
+    why: null,
     defaultModel: routeDefault,
     providers: 3,
     models: [
@@ -136,9 +137,9 @@ export function createDemoApi(): CookrewApi {
       { id: 'ollama/qwen3', displayName: 'qwen3', ownedBy: 'ollama', group: false, reasoning: false, levels: [], contextWindow: 32768 }
     ],
     quotas: [
-      { provider: 'claude', account: 'owner@example.com', alias: null, plan: 'max', kind: 'subscription', windows: [{ name: '5h', used: 12, limit: 100, resetsAt: Date.now() + 3600_000 }], last: true },
-      { provider: 'deepseek', account: null, alias: null, plan: null, kind: 'key', windows: [], last: false },
-      { provider: 'ollama', account: null, alias: null, plan: null, kind: 'local', windows: [], last: false }
+      { provider: 'claude', account: 'owner@example.com', alias: null, plan: 'max', kind: 'subscription', windows: [{ name: '5h', used: 12, limit: 100, resetsAt: Date.now() + 3600_000, display: '12 / 100' }], last: true, error: null },
+      { provider: 'deepseek', account: null, alias: null, plan: null, kind: 'key', windows: [], last: false, error: null },
+      { provider: 'ollama', account: null, alias: null, plan: null, kind: 'local', windows: [], last: false, error: null }
     ],
     live: routeLive,
     harnesses: [
@@ -166,8 +167,9 @@ export function createDemoApi(): CookrewApi {
       effective: route,
       appliesOn: 'now',
       live: routeLive.find((d) => d.terminalId === terminalId) ?? null,
-      turn: terminalId === 'card-1' ? { model: 'deepseek/deepseek-chat', inputTokens: 1840, outputTokens: 312, cost: 0.0021, at: Date.now() - 11000 } : null,
-      offline: false
+      turn: terminalId === 'card-1' ? { model: 'deepseek/deepseek-chat', inputTokens: 1840, outputTokens: 312, cost: 0.0021, priced: true, at: Date.now() - 11000 } : null,
+      offline: false,
+      note: null
     }
   }
   if (typeof window !== 'undefined') {

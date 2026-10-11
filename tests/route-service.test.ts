@@ -82,7 +82,7 @@ function service(w: World, env: Record<string, string | undefined>, fastAnnounce
     respawn: async (id) => {
       w.respawned.push(id)
       const n = w.nodes.get(id)
-      if (n) svc.envFor(n)
+      if (n) svc.recordEffective(id, svc.envFor(n))
       return true
     },
     dockCommands: () => ['claude --permission-mode bypassPermissions', 'codex'],
@@ -105,9 +105,14 @@ describe('state', () => {
       const online = await svc.refresh()
       expect(online.status).toBe('online')
       expect(online.gateway).toMatchObject({ url: fake.url, source: 'probe', version: '0.1.1182' })
+      expect(online.gateway).not.toHaveProperty('key')
+      expect(JSON.stringify(online)).not.toContain('magpie-cookrew')
+      expect(online.why).toBeNull()
       expect(online.models.map((m) => m.id)).toEqual(['group/smart', 'claude/claude-sonnet-5-5', 'deepseek/deepseek-chat'])
       expect(online.providers).toBe(2)
       expect(online.quotas[0]).toMatchObject({ provider: 'claude', account: 'o@x', kind: 'subscription' })
+      // A catalog provider with no quota row gets one synthesised (round 2: Ollama never appears).
+      expect(online.quotas.map((q) => [q.provider, q.kind])).toEqual([['claude', 'subscription'], ['deepseek', 'key']])
       expect(online.defaultModel).toBeNull()
       expect(online.setup.addGroupLine).toBe('magpie group add smart models=claude/claude-sonnet-5-5,deepseek/deepseek-chat routing=smart')
       expect(online.setup.pluginLine).toBe('magpie plugin add /app/resources/magpie')
@@ -154,7 +159,11 @@ describe('envFor', () => {
       await svc.refresh()
       const node = terminal('c1', 'claude')
       w.nodes.set('c1', node)
-      expect(svc.envFor(node)).toEqual({ env: {}, args: [], effective: 'direct', offline: false })
+      const spawn = svc.envFor(node)
+      expect(spawn).toEqual({ env: {}, args: [], effective: 'direct', offline: false })
+      // Nothing is recorded by the computation alone — only by a real create.
+      expect(w.nodes.get('c1')?.routeEffective).toBeUndefined()
+      svc.recordEffective('c1', spawn)
       expect(w.nodes.get('c1')?.routeEffective).toBe('direct')
       expect(svc.cardState('c1')).toMatchObject({ route: 'direct', effective: 'direct', appliesOn: 'now', offline: false })
       svc.dispose()
@@ -175,6 +184,7 @@ describe('envFor', () => {
       expect(spawn.effective).toBe('group/smart')
       expect(spawn.env.ANTHROPIC_BASE_URL).toBe(fake.url)
       expect(spawn.env.ANTHROPIC_CUSTOM_HEADERS).toBe('X-Magpie-Session: cookrew:c2')
+      svc.recordEffective('c2', spawn)
       expect(w.nodes.get('c2')?.routeEffective).toBe('group/smart')
       expect(svc.cardState('c2').route).toBe('group/smart')
       svc.dispose()
@@ -192,10 +202,15 @@ describe('envFor', () => {
       const node = terminal('s1', 'claude', { route: 'group/smart' })
       w.nodes.set('s1', node)
       w.served.add('s1')
-      expect(svc.envFor(node)).toEqual({ env: {}, args: [], effective: 'direct', offline: false })
+      const spawn = svc.envFor(node)
+      expect(spawn).toEqual({ env: {}, args: [], effective: 'direct', offline: false })
+      svc.recordEffective('s1', spawn)
       expect(w.nodes.get('s1')?.routeEffective).toBeUndefined()
       const byFacts = terminal('s2', 'claude', { route: 'group/smart', servedSession: { serviceId: 'x' } as never })
       expect(svc.envFor(byFacts).env).toEqual({})
+      // And it is direct to every reader, never the fleet default; a PUT is refused.
+      expect(svc.cardState('s1').route).toBe('direct')
+      expect(await svc.setCardRoute('s1', 'group/smart')).toEqual({ error: 'a served session is never routed' })
       svc.dispose()
     } finally {
       await fake.close()
@@ -211,7 +226,9 @@ describe('envFor', () => {
       await svc.refresh()
       const node = terminal('c3', 'codex', { route: 'deepseek/deepseek-chat' })
       w.nodes.set('c3', node)
-      expect(svc.envFor(node)).toEqual({ env: {}, args: [], effective: 'direct', offline: true })
+      const spawn = svc.envFor(node)
+      expect(spawn).toEqual({ env: {}, args: [], effective: 'direct', offline: true })
+      svc.recordEffective('c3', spawn)
       expect(svc.cardState('c3')).toMatchObject({ route: 'deepseek/deepseek-chat', effective: 'direct', appliesOn: 'restart', offline: true })
       svc.dispose()
     } finally {
@@ -248,7 +265,7 @@ describe('setCardRoute', () => {
       await svc.refresh()
       const node = terminal('c4', 'claude')
       w.nodes.set('c4', node)
-      svc.envFor(node)
+      svc.recordEffective('c4', svc.envFor(node))
       w.phases.set('c4', 'idle')
       const rows: unknown[] = []
       svc.on('card-route', (row) => rows.push(row))
@@ -269,7 +286,7 @@ describe('setCardRoute', () => {
       await svc.refresh()
       const node = terminal('c5', 'claude')
       w.nodes.set('c5', node)
-      svc.envFor(node)
+      svc.recordEffective('c5', svc.envFor(node))
       w.phases.set('c5', 'thinking')
       expect(await svc.setCardRoute('c5', 'group/smart')).toMatchObject({ route: 'group/smart', effective: 'direct', appliesOn: 'restart' })
       w.phases.set('c5', 'idle')
@@ -277,6 +294,7 @@ describe('setCardRoute', () => {
       expect(await svc.setCardRoute('c5', 'deepseek/deepseek-chat')).toMatchObject({ appliesOn: 'restart' })
       expect(w.respawned).toEqual([])
       expect(await svc.setCardRoute('c5', 'nope/unknown')).toEqual({ error: 'not in the catalog: nope/unknown' })
+      expect(await svc.setCardRoute('c5', 'bad id with spaces')).toEqual({ error: 'not a route id' })
       expect(await svc.setCardRoute('ghost', 'direct')).toEqual({ error: 'unknown terminal' })
       svc.dispose()
     } finally {
