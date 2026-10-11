@@ -48,7 +48,7 @@ export interface SecretAudit {
 
 export interface SecretCliDeps {
   readonly secrets: SecretsStore
-  /** Who is asking: the calling pane as the socket server resolved it. */
+  /** Who is asking: the calling pane, held to an owner pane (socket-server · ownerPaneOf). */
   readonly self: (request: CliRequest) => TerminalNodeData
   readonly audit: (event: SecretAudit) => void
 }
@@ -57,11 +57,18 @@ export interface SecretCliDeps {
 export const isServedPane = (me: TerminalNodeData): boolean =>
   me.servedSession !== undefined && me.servedSession !== null
 
-export const SECRET_USAGE = 'usage: cookrew secret read <name> | cookrew secret list'
+export const SECRET_USAGE =
+  'usage: cookrew secret exec <name> -- <command…> | cookrew secret read <name> | cookrew secret list'
+
+/** `COOKREW_SECRET_STRIPE_KEY` for `stripe-key`: the env name exec hands the command. */
+export const secretEnvName = (name: string): string => `COOKREW_SECRET_${name.toUpperCase().replace(/-/g, '_')}`
 
 export const cmdSecret = (request: CliRequest, deps: SecretCliDeps): string => {
   const [sub, name] = request.args
-  if (sub !== 'read' && sub !== 'list') throw new SecretCliError(SECRET_USAGE, SECRET_EXIT.usage)
+  // `exec` is a read whose value never touches the pane: the CLI client puts
+  // it in the command's env (cli/cookrew.mjs) and prints only the command's
+  // own output. Here the two are the same read with the same audit line.
+  if (sub !== 'read' && sub !== 'exec' && sub !== 'list') throw new SecretCliError(SECRET_USAGE, SECRET_EXIT.usage)
   const me = deps.self(request)
   if (isServedPane(me)) {
     throw new SecretCliError("refused: secrets are the owner's — never readable from a served session", SECRET_EXIT.refused)

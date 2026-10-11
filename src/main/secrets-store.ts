@@ -15,7 +15,7 @@
  * choice survives until the route that honours it exists.
  */
 
-import { chmodSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { isSecretName, type SecretListing } from '../shared/secret-slot'
@@ -101,9 +101,31 @@ export const createSecretsStore = (options: SecretsStoreOptions = {}): SecretsSt
     }
     const file = fileOf(name)
     const tmp = `${file}.${process.pid}.tmp`
-    writeFileSync(tmp, JSON.stringify(record), { mode: 0o600 })
+    // `wx`: create, never open an existing file, never follow a symlink that
+    // was planted at this path — a value must land in a file this process
+    // made with this mode, or nowhere. Then fsync, then rename into place.
+    const fd = openSync(tmp, 'wx', 0o600)
+    try {
+      writeSync(fd, JSON.stringify(record))
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
     renameSync(tmp, file)
     return { name, served: record.served, updatedAt: record.updatedAt }
+  }
+
+  /** A `<name>.<pid>.tmp` left by a crash mid-write holds nothing anyone should keep. */
+  const sweepStale = (names: readonly string[]): void => {
+    for (const entry of names) {
+      if (/^[a-z0-9][a-z0-9-]{0,63}\.\d+\.tmp$/.test(entry)) {
+        try {
+          rmSync(path.join(dir, entry))
+        } catch {
+          // Already gone, or not ours to remove.
+        }
+      }
+    }
   }
 
   const list = (): SecretListing[] => {
@@ -113,6 +135,7 @@ export const createSecretsStore = (options: SecretsStoreOptions = {}): SecretsSt
     } catch {
       return []
     }
+    sweepStale(names)
     const rows: SecretListing[] = []
     for (const name of names.sort()) {
       if (!isSecretName(name)) continue
@@ -124,6 +147,11 @@ export const createSecretsStore = (options: SecretsStoreOptions = {}): SecretsSt
 
   const remove = (name: string): boolean => {
     assertName(name)
+    try {
+      sweepStale(readdirSync(dir).filter((entry) => entry.startsWith(`${name}.`)))
+    } catch {
+      // No directory: nothing stale either.
+    }
     try {
       rmSync(fileOf(name))
       return true

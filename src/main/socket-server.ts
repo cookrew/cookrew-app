@@ -73,6 +73,8 @@ export interface SocketServerDeps {
    */
   secrets?: SecretsStore
   audit?: (event: SecretAudit) => void
+  /** Was this terminal spawned for a served session? Read for the secret verbs only. */
+  isServed?: (terminalId: string) => boolean
   /** Fork an agent from one of its turns (same path as IPC forking). */
   forkTerminal: (sourceId: string, turnIndex?: number) => TerminalNodeData
   routines: RoutineScheduler
@@ -929,14 +931,44 @@ function cmdCheck(request: CliRequest, deps: SocketServerDeps): string {
   return session.viewportText()
 }
 
-/** `cookrew secret …` (secret-cli.ts), with the caller resolved the way every verb resolves it. */
+/**
+ * THE CALLER OF A SECRET VERB — an owner pane of this app, and nothing else.
+ *
+ * Every other verb resolves its caller generously: `--as <name>` lets a
+ * plain shell speak as an agent, and a terminal the store has forgotten is
+ * still answered from the agent registry. A secret read must not be that
+ * generous. It needs a real COOKREW_TERMINAL_ID (repaired against the
+ * session bindings, as every verb's is) that resolves to a LIVE pane of
+ * this app, and that pane must not have been spawned for a served session —
+ * the fact the pty layer and the served spawn contexts hold, never the
+ * node's `servedSession`, which marks the owner's receipt of a session
+ * served somewhere else.
+ */
+export function ownerPaneOf(request: CliRequest, deps: SocketServerDeps): TerminalNodeData {
+  const refuse = (why: string): SecretCliError =>
+    new SecretCliError(`refused: secrets are the owner's — ${why}`, SECRET_EXIT.refused)
+  if (typeof request.flags.as === 'string') throw refuse('--as names another pane')
+  if (!request.terminalId) throw refuse('this shell is not a Cookrew terminal')
+  const identity = resolveCallerTerminalId({
+    envTerminalId: request.terminalId,
+    sessionId: request.sessionId ?? null,
+    terminals: deps.store.terminalsAcross?.() ?? []
+  })
+  const id = identity.terminalId
+  const node = deps.store.node(id) ?? deps.store.nodeAcrossWorkspaces?.(id)?.node
+  if (!node || node.kind !== 'terminal') throw refuse('no live pane of this app answers to this terminal')
+  if (deps.isServed?.(id) === true) throw refuse('never readable from a served session')
+  return node
+}
+
+/** `cookrew secret …` (secret-cli.ts), with the caller held to ownerPaneOf. */
 function cmdSecretVerb(request: CliRequest, deps: SocketServerDeps): string {
   if (!deps.secrets) {
     throw new SecretCliError("refused: secrets are the owner's — this app holds none", SECRET_EXIT.refused)
   }
   return cmdSecret(request, {
     secrets: deps.secrets,
-    self: (r) => self(r, deps),
+    self: (r) => ownerPaneOf(r, deps),
     audit: (event) => deps.audit?.(event)
   })
 }
@@ -1482,8 +1514,10 @@ Usage:
   cookrew note write "Name" "content"           Replace a note's content
   cookrew note edit "Name" "old" "new"          Replace a substring within a note
   cookrew note delete "Name"                    Remove a connected note (destructive)
-  cookrew secret read <name>                    Print a sealed secret (owner panes only; every read is logged)
+  cookrew secret exec <name> -- <command…>      Run a command with the secret as COOKREW_SECRET_<NAME> in its env (preferred)
+  cookrew secret read <name>                    Print a sealed secret — into the pane and its transcript; prefer exec
   cookrew secret list                           Sealed secret names, never values
+                                                (owner panes only; every read is logged)
   cookrew browser create URL ["Name"]            Create a connected browser browser
   cookrew browser snapshot|click|fill|type|key|navigate|screenshot|evaluate|html|text|info "Browser" ...
   cookrew browser tabs "Browser"                  List the browser's tabs (pages opened by the site land here)
