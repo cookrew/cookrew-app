@@ -9,12 +9,12 @@ import type { CardRouteState, RouteState } from './route'
 
 export const SETUP_LINES: RouteState['setup'] = {
   installLine: 'curl -fsSL https://usemagpie.ai/install.sh | sh',
-  serveLine: 'magpie serve',
-  pluginLine: 'magpie plugin add @magpie-community/agent-cookrew',
+  serveLine: 'magpie autostart on',
+  pluginLine: 'magpie plugin add /Applications/Cookrew.app/Contents/Resources/magpie',
   addSubscriptionLine: 'magpie accounts add codex',
-  addKeyLine: 'magpie provider add deepseek ',
+  addKeyLine: 'magpie provider add ',
   addLocalLine: 'magpie provider add ollama',
-  addGroupLine: 'magpie group add "smart" models=claude/claude-sonnet-5,codex/gpt-5.5,deepseek/deepseek-v4 routing=smart'
+  addGroupLine: 'magpie group add smart models=claude/claude-sonnet-5,codex/gpt-5.5,deepseek/deepseek-v4 routing=smart'
 }
 
 const NOW = 1_791_000_000_000
@@ -56,10 +56,10 @@ export function routeFixture(status: RouteState['status'] = 'online'): RouteStat
         ]
       : [],
     harnesses: [
-      { id: 'claude', name: 'Claude Code', installed: true, signedIn: true, inDock: true, installLine: 'npm install -g @anthropic-ai/claude-code', loginLine: 'claude login' },
-      { id: 'codex', name: 'Codex', installed: true, signedIn: online, inDock: true, installLine: 'npm install -g @openai/codex', loginLine: 'codex login' },
-      { id: 'opencode', name: 'OpenCode', installed: false, signedIn: null, inDock: false, installLine: 'brew install sst/tap/opencode', loginLine: null },
-      { id: 'pi', name: 'Pi', installed: true, signedIn: null, inDock: false, installLine: 'npm install -g @earendil-works/pi-coding-agent', loginLine: null }
+      { id: 'claude', name: 'Claude Code', installed: true, signedIn: true, inDock: true, installLine: 'npm i -g @anthropic-ai/claude-code', loginLine: 'claude' },
+      { id: 'codex', name: 'Codex', installed: true, signedIn: online, inDock: true, installLine: 'npm i -g @openai/codex', loginLine: 'codex login' },
+      { id: 'opencode', name: 'OpenCode', installed: false, signedIn: null, inDock: false, installLine: 'curl -fsSL https://opencode.ai/install | bash', loginLine: 'opencode auth login' },
+      { id: 'pi', name: 'Pi', installed: true, signedIn: null, inDock: false, installLine: 'npm i -g @earendil-works/pi-coding-agent', loginLine: null }
     ],
     checkedAt: NOW,
     setup: SETUP_LINES

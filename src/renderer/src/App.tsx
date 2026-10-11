@@ -1752,6 +1752,7 @@ function Canvas(): React.JSX.Element {
           setupTerminalId={setupTerminal.terminalId}
           focusTick={setupTerminal.focusTick}
           onSetDefault={routeState.setDefault}
+          error={routeState.error ?? setupTerminal.error}
           onAddToDock={(harness) => {
             // "In the dock" as Cookrew can make it true today: the harness
             // becomes the dock's active preset, so the next click on the

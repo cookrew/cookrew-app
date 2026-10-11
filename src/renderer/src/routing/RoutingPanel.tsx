@@ -34,6 +34,8 @@ export interface RoutingPanelProps {
   /** Bumped when the screen should take focus (a key line was typed). */
   focusTick: number
   onSetDefault: (model: string | null) => void
+  /** Why the last default pick or Setup line did nothing; one line under the status. */
+  error?: string | null
   onAddToDock?: (harness: HarnessRow) => void
   /** Card names for the live rows. */
   names: ReadonlyMap<string, string>
@@ -41,8 +43,13 @@ export interface RoutingPanelProps {
 }
 
 export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null {
-  const { open, onClose, state, available, onRun, setupTerminalId, focusTick, onSetDefault, onAddToDock, names, onZoom } = props
+  const { open, onClose, state, available, onRun, setupTerminalId, focusTick, onSetDefault, error, onAddToDock, names, onZoom } = props
   const [setupOpen, setSetupOpen] = useState(true)
+  // The first-boot flag burns when the panel is actually on screen, not when
+  // it was merely decided — a panel that never mounted must come back.
+  useEffect(() => {
+    if (open && typeof window !== 'undefined') markRoutingSeen(window.localStorage)
+  }, [open])
   // A key line was typed: the fold opens so the paste has somewhere to land.
   useEffect(() => {
     if (focusTick > 0) setSetupOpen(true)
@@ -74,6 +81,11 @@ export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null
         ) : (
           <>
             <StatusLine state={state} onRun={onRun} />
+            {error && (
+              <div className="cr-routing-bad" role="alert">
+                {error}
+              </div>
+            )}
             <Harnesses rows={state.harnesses} onRun={onRun} onAddToDock={onAddToDock} />
             <Accounts state={state} onRun={onRun} onSetDefault={onSetDefault} />
             <LiveRoutes state={state} names={names} onZoom={onZoom} />
@@ -107,14 +119,21 @@ export function RoutingEntry({ status, onOpen }: { status: RouteState['status'] 
   )
 }
 
-/** Should the panel open by itself on this boot? Once, and only while nothing is installed. */
-export function shouldAutoOpen(status: RouteState['status'] | null, storage: Pick<Storage, 'getItem' | 'setItem'>): boolean {
+/** Should the panel open by itself on this boot? Only while nothing is installed, and only until it has been shown once. */
+export function shouldAutoOpen(status: RouteState['status'] | null, storage: Pick<Storage, 'getItem'>): boolean {
   if (status !== 'absent') return false
   try {
-    if (storage.getItem(ROUTING_SEEN_KEY)) return false
-    storage.setItem(ROUTING_SEEN_KEY, String(Date.now()))
-    return true
+    return !storage.getItem(ROUTING_SEEN_KEY)
   } catch {
     return false
+  }
+}
+
+/** The panel is on screen: it will not open by itself again. */
+export function markRoutingSeen(storage: Pick<Storage, 'setItem'>): void {
+  try {
+    storage.setItem(ROUTING_SEEN_KEY, String(Date.now()))
+  } catch {
+    // storage refused; the panel may open again next boot, which is the safer failure
   }
 }

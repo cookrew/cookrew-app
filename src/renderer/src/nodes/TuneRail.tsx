@@ -35,6 +35,8 @@ export interface RouteDialProps {
   open: boolean
   onOpen: (open: boolean) => void
   onPick: (route: string) => void
+  /** A harness that cannot be routed this round (pi): the chip says so and has no list. */
+  notRoutable?: string | null
 }
 
 export interface TuneRailProps {
@@ -60,7 +62,10 @@ export function TuneRail({
   const locked = view.locked
   return (
     <div className="cr-tune-rail" role="group" aria-label={route ? 'Model, effort and route' : 'Model and effort'}>
-      {view.dials.map((dial) => (
+      {/* The generic dials are the TYPED knobs. The route knob main lists in
+          `knobs` is drawn by RouteDial below from CardRouteState — never as a
+          generic dial, which would read the session file for a route. */}
+      {view.dials.filter((dial) => dial.knob !== 'route').map((dial) => (
         <Dial
           key={dial.knob}
           dial={dial}
@@ -164,8 +169,9 @@ function RouteDial({
   locked: string | null
   onMouseDown?: (e: React.MouseEvent) => void
 }): React.JSX.Element {
-  const lines = routeDialLines(route.state)
-  const reading = route.state === null ? 'not read yet' : lines.value
+  const lines = route.notRoutable ? { value: 'direct', turn: null, note: route.notRoutable, flag: null as null } : routeDialLines(route.state)
+  const reading = route.state === null && !route.notRoutable ? 'not read yet' : lines.value
+  const canOpen = !route.notRoutable
   return (
     <div className={`cr-tune-dial${route.open ? ' open' : ''}`} data-knob="route">
       <button
@@ -175,14 +181,14 @@ function RouteDial({
         aria-label={`Route: ${reading}`}
         title={[`Route: ${reading}`, lines.turn, lines.note].filter(Boolean).join(' · ')}
         onMouseDown={onMouseDown}
-        onClick={() => route.onOpen(!route.open)}
+        onClick={() => canOpen && route.onOpen(!route.open)}
       >
         <span className="cr-tune-k">RTE</span>
-        <span className="cr-tune-v">{route.state === null ? '\u2014' : shortRoute(lines.value)}</span>
+        <span className="cr-tune-v">{route.state === null && !route.notRoutable ? '\u2014' : shortRoute(lines.value)}</span>
         {lines.turn !== null && <span className="cr-tune-flag cr-tune-turn">{lines.turn.replace('this turn → ', '→ ')}</span>}
         {lines.note !== null && <span className="cr-tune-flag">{lines.note}</span>}
       </button>
-      {route.open && (
+      {route.open && canOpen && (
         <div className="cr-tune-list" role="listbox" aria-label="Route">
           {route.choices.map((value) => {
             const current = route.state !== null && route.state.route === value

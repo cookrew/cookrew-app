@@ -4,14 +4,17 @@ import { cookrew } from '../api'
 
 /**
  * THE SETUP CARD'S LIVE SCREEN inside the Routing panel — the same PTY the
- * card on the canvas shows, attached a second time. The zoom view's pane
- * (TerminalOverlay.tsx) carries clipboard, IME and paste machinery this one
- * does not need: the Setup card is a plain shell the buttons type into, and
- * what the user does here is read, paste a key, press Enter.
+ * card on the canvas shows, attached a SECOND time. A second viewer must not
+ * resize the PTY: the card on the canvas owns the geometry, and a viewer
+ * that fought it made both flicker. This one fits itself to the pane's
+ * current size and renders what arrives.
  *
  * xterm is loaded when the screen mounts, not when this module does: the
  * panel renders in a static test and on a page that may never open the fold,
- * and xterm's addons want a window at import time.
+ * and xterm's addons want a window at import time. Focus asked for before
+ * the import resolves is remembered and applied when the terminal exists —
+ * the first key line is typed right after the fold mounts, and the paste
+ * has to land in the pane, not on the document.
  */
 
 const PHOSPHOR = {
@@ -29,6 +32,9 @@ const PHOSPHOR = {
 export function SetupScreen({ terminalId, focusTick }: { terminalId: string; focusTick: number }): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
+  /** A focus asked for while xterm was still loading. */
+  const pendingFocus = useRef(false)
+  const seenTick = useRef(focusTick)
 
   useEffect(() => {
     const host = hostRef.current
@@ -52,21 +58,18 @@ export function SetupScreen({ terminalId, focusTick }: { terminalId: string; foc
         terminalId,
         (chunk) => term.write(chunk),
         ({ cols, rows }) => {
+          // The PTY's geometry is the canvas card's; this viewer follows it
+          // and never pushes its own back.
           if (disposed || cols <= 0 || rows <= 0) return
           term.resize(cols, rows)
         }
       )
       const input = term.onData((data) => cookrew().ptyInput(terminalId, data))
-      const observer = new ResizeObserver(() => {
-        try {
-          fit.fit()
-          cookrew().ptyResize(terminalId, term.cols, term.rows)
-        } catch {
-          // mid-teardown
-        }
-      })
-      observer.observe(host)
-      cleanups.push(() => observer.disconnect(), () => input.dispose(), detach, () => term.dispose())
+      cleanups.push(() => input.dispose(), detach, () => term.dispose())
+      if (pendingFocus.current) {
+        pendingFocus.current = false
+        term.focus()
+      }
     })()
     return () => {
       disposed = true
@@ -75,9 +78,13 @@ export function SetupScreen({ terminalId, focusTick }: { terminalId: string; foc
     }
   }, [terminalId])
 
-  // A key line was typed: the cursor goes to the pane so the paste lands there.
+  // A key line was typed: the cursor goes to the pane so the paste lands
+  // there. If the pane is not built yet, the wish waits for it.
   useEffect(() => {
-    if (focusTick > 0) termRef.current?.focus()
+    if (focusTick === seenTick.current) return
+    seenTick.current = focusTick
+    if (termRef.current) termRef.current.focus()
+    else pendingFocus.current = true
   }, [focusTick])
 
   return <div className="cr-routing-screen" ref={hostRef} />

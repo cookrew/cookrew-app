@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { HarnessRow, RouteDecision, RouteModel, RouteQuota, RouteState } from '../../../shared/route'
 import { KEY_PRESETS, ROUTING_COPY, harnessTicks, quotaBar, routeChoices, statusLine } from '../../../shared/route-view'
+import { keyLineFor } from '../../../shared/route-lines'
 
 /**
  * THE ROUTING PANEL'S SECTIONS. Each is a function of the route state and a
@@ -105,7 +106,7 @@ function Quota({ q }: { q: RouteQuota }): React.JSX.Element {
           </span>
         </span>
       )}
-      <span className="small ws">{q.windows.length > 1 ? `${q.windows[1].name} ${q.windows[1].used ?? '—'}%` : ''}</span>
+      <span className="small ws">{q.windows.length > 1 ? `${q.windows[1].name} ${windowReading(q.windows[1])}` : ''}</span>
       <span className="cr-routing-tick ok">{q.kind}</span>
     </div>
   )
@@ -114,13 +115,28 @@ function Quota({ q }: { q: RouteQuota }): React.JSX.Element {
 export function AddMenu({ setup, onRun }: { setup: RouteState['setup']; onRun: RunLine }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [keys, setKeys] = useState(false)
+  const [unexpected, setUnexpected] = useState(false)
   const run = (line: string, enter = true): void => {
     setOpen(false)
     setKeys(false)
     onRun(line, { enter })
   }
+  // Only `magpie provider add ` + preset is ever typed; a stem of another
+  // shape means main changed the line and the renderer refuses to guess.
+  const runKey = (preset: string): void => {
+    const line = keyLineFor(setup.addKeyLine, preset)
+    if (line === null) {
+      setUnexpected(true)
+      setOpen(false)
+      setKeys(false)
+      return
+    }
+    setUnexpected(false)
+    run(line, false)
+  }
   return (
     <span className="cr-routing-add">
+      {unexpected && <span className="cr-routing-bad">setup line unexpected — nothing typed</span>}{' '}
 
       <button type="button" className="cr-routing-btn primary" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
         {ROUTING_COPY.add} ▾
@@ -140,7 +156,7 @@ export function AddMenu({ setup, onRun }: { setup: RouteState['setup']; onRun: R
           {keys && (
             <div className="cr-routing-presets">
               {KEY_PRESETS.map((preset) => (
-                <button key={preset} type="button" className="cr-routing-pick" onClick={() => run(keyLine(setup.addKeyLine, preset), false)}>
+                <button key={preset} type="button" className="cr-routing-pick" data-preset={preset} onClick={() => runKey(preset)}>
                   {preset}
                 </button>
               ))}
@@ -158,14 +174,6 @@ export function AddMenu({ setup, onRun }: { setup: RouteState['setup']; onRun: R
       )}
     </span>
   )
-}
-
-/** `magpie provider add deepseek ` → the same line for another preset, still ending in a space. */
-export function keyLine(addKeyLine: string, preset: string): string {
-  const words = addKeyLine.trim().split(/\s+/)
-  // The preset is the word before the (absent) key: `magpie provider add <preset> `.
-  if (words.length >= 4) words[3] = preset
-  return `${words.join(' ')} `
 }
 
 export function Accounts({
@@ -229,6 +237,13 @@ export function Accounts({
       </details>
     </>
   )
+}
+
+/** A window's `used` is a counter unless there is a limit to divide it by. */
+export function windowReading(w: { used: number | null; limit: number | null }): string {
+  if (w.used === null) return '—'
+  if (w.limit !== null && w.limit > 0) return `${Math.round((w.used / w.limit) * 100)}%`
+  return String(w.used)
 }
 
 function ModelLine({ m }: { m: RouteModel }): React.JSX.Element {

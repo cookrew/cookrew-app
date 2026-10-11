@@ -1067,8 +1067,17 @@ function TerminalOverlay({
             error={tuning.error}
             onMouseDown={keepFocus}
             route={
-              routeAllowed && cardRoute.choices !== null
-                ? { state: cardRoute.state, choices: cardRoute.choices, open: cardRoute.open, onOpen: cardRoute.setOpen, onPick: cardRoute.pick }
+              routeAllowed && (tuning.routeChoices !== null || cardRoute.choices !== null)
+                ? {
+                    state: cardRoute.state,
+                    // Main's choices when it listed them (the card's harness can be routed); the catalogue otherwise.
+                    choices: [...(tuning.routeChoices ?? cardRoute.choices ?? [])],
+                    open: cardRoute.open,
+                    onOpen: cardRoute.setOpen,
+                    onPick: cardRoute.pick,
+                    // Core reports pi as not routable this round; the dial says so instead of offering a list.
+                    notRoutable: node.preset === 'Pi' ? 'direct · pi is not routable yet' : null
+                  }
                 : null
             }
           />

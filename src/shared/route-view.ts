@@ -105,7 +105,10 @@ export function quotaBar(q: RouteQuota): QuotaBar {
   const sub = [q.account, q.plan].filter((x): x is string => typeof x === 'string' && x.length > 0).join(' · ')
   const metered = q.windows.filter((w) => w.used !== null && w.limit !== null && w.limit > 0)
   if (metered.length === 0) {
-    return { title, sub, kind: q.kind, fill: null, reading: q.kind === 'local' ? 'local' : 'key', hot: false }
+    // No limit to divide by: a counter is shown as the count it is.
+    const counted = q.windows.find((w) => w.used !== null)
+    const reading = counted ? `${counted.name} ${counted.used}` : q.kind === 'local' ? 'local' : 'key'
+    return { title, sub, kind: q.kind, fill: null, reading, hot: false }
   }
   const fullest = metered.reduce((a, b) => (a.used! / a.limit! >= b.used! / b.limit! ? a : b))
   const fill = Math.min(1, fullest.used! / fullest.limit!)

@@ -15,11 +15,14 @@ export interface RouteStateControls {
   state: RouteState | null
   available: boolean
   setDefault: (model: string | null) => void
+  /** Why the last default pick did not land, or null. The radio shows the state, so it reverts by itself. */
+  error: string | null
 }
 
 export function useRouteState(): RouteStateControls {
   const [state, setState] = useState<RouteState | null>(null)
   const [available, setAvailable] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     const api = cookrew()
@@ -46,11 +49,12 @@ export function useRouteState(): RouteStateControls {
   const setDefault = (model: string | null): void => {
     const api = cookrew()
     if (!api.routeSetDefault) return
+    setError(null)
     api
       .routeSetDefault(model)
       .then(setState)
-      .catch((error: unknown) => console.error('Setting the default route failed:', error))
+      .catch((e: unknown) => setError(`default not set: ${e instanceof Error ? e.message : String(e)}`))
   }
 
-  return { state, available, setDefault }
+  return { state, available, setDefault, error }
 }

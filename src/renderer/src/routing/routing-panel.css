@@ -238,6 +238,9 @@
 .cr-routing-screen .xterm { height: 100% }
 .cr-routing-hint { font-family: var(--font-mono); font-size: 11px; color: var(--muted); padding: 4px 10px }
 
+/* One line for what did not happen: a refused line, a default that did not land. */
+.cr-routing-bad { font-family: var(--font-mono); font-size: 11.5px; color: var(--rose); padding: 2px 8px }
+
 /* A plain button in the panel's own language. */
 .cr-routing-btn {
   font-family: var(--font-pixel);

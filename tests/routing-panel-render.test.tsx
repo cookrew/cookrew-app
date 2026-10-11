@@ -8,8 +8,9 @@
 
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { RoutingEntry, RoutingPanel, shouldAutoOpen, ROUTING_SEEN_KEY } from '../src/renderer/src/routing/RoutingPanel'
-import { keyLine } from '../src/renderer/src/routing/RoutingSections'
+import { RoutingEntry, RoutingPanel, markRoutingSeen, shouldAutoOpen, ROUTING_SEEN_KEY } from '../src/renderer/src/routing/RoutingPanel'
+import { windowReading } from '../src/renderer/src/routing/RoutingSections'
+import { keyLineFor } from '../src/shared/route-lines'
 import { findSetupCard, setupCardPosition } from '../src/renderer/src/routing/use-setup-terminal'
 import { cardRouteFixture, routeFixture } from '../src/shared/route-fixture'
 import { harnessTicks, quotaBar, routeChoices, routeDialAllowed, routeDialLines, statusLine } from '../src/shared/route-view'
@@ -54,7 +55,7 @@ describe('the status line', () => {
   it('is red with START when Magpie is known but /api/hello refuses', () => {
     const html = paint(routeFixture('offline'))
     expect(html).toContain('cr-routing-status offline')
-    expect(html).toContain('START · magpie serve')
+    expect(html).toContain('START · magpie autostart on')
     expect(html).toContain('gateway offline')
   })
 
@@ -83,7 +84,7 @@ describe('harness rows', () => {
   it('draws a missing tick as the button that types its line', () => {
     const html = paint(routeFixture('online'))
     expect(html).toContain('✓ installed')
-    expect(html).toContain('install · brew install sst/tap/opencode')
+    expect(html).toContain('install · curl -fsSL https://opencode.ai/install | bash')
     expect(html).toContain('add to dock')
   })
 
@@ -99,6 +100,11 @@ describe('models and accounts', () => {
   it('shows a quota bar per subscription and a plain reading for a key or a local model', () => {
     const [claude, codex, deepseek, ollama] = routeFixture('online').quotas.map(quotaBar)
     expect(claude).toMatchObject({ fill: 0.62, reading: '5-hour 62%', hot: false })
+    // A window with no limit is a counter, shown as the count; with both numbers, a percent.
+    expect(windowReading({ used: 1840, limit: null })).toBe('1840')
+    expect(windowReading({ used: 41, limit: 100 })).toBe('41%')
+    expect(windowReading({ used: null, limit: 100 })).toBe('—')
+    expect(quotaBar({ ...routeFixture('online').quotas[2], windows: [{ name: 'requests', used: 312, limit: null, resetsAt: null }] }).reading).toBe('requests 312')
     expect(codex).toMatchObject({ fill: 0.77, reading: 'week 77%' })
     expect(deepseek).toMatchObject({ fill: null, reading: 'key' })
     expect(ollama).toMatchObject({ fill: null, reading: 'local' })
@@ -111,9 +117,13 @@ describe('models and accounts', () => {
     const html = paint(routeFixture('online'))
     expect(html).toContain('ADD ▾')
     const setup = routeFixture('online').setup
-    expect(setup.addKeyLine.endsWith(' ')).toBe(true)
-    expect(keyLine(setup.addKeyLine, 'openrouter')).toBe('magpie provider add openrouter ')
-    expect(keyLine(setup.addKeyLine, 'kimi').endsWith(' ')).toBe(true)
+    expect(setup.addKeyLine).toBe('magpie provider add ')
+    expect(keyLineFor(setup.addKeyLine, 'openrouter')).toBe('magpie provider add openrouter ')
+    expect(keyLineFor(setup.addKeyLine, 'kimi')!.endsWith(' ')).toBe(true)
+    // A stem of another shape is refused rather than guessed — the user
+    // would otherwise paste the key as the provider's NAME.
+    expect(keyLineFor('magpie provider add deepseek ', 'kimi')).toBeNull()
+    expect(keyLineFor('magpie provider add ', 'Kimi K2')).toBeNull()
   })
 
   it('never contains a password or key field', () => {
@@ -172,8 +182,16 @@ describe('the setup card and the entry', () => {
     const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) }
     expect(shouldAutoOpen('online', storage)).toBe(false)
     expect(shouldAutoOpen('absent', storage)).toBe(true)
+    // Deciding to open burns nothing — only a panel actually on screen does.
+    expect(store.has(ROUTING_SEEN_KEY)).toBe(false)
+    expect(shouldAutoOpen('absent', storage)).toBe(true)
+    markRoutingSeen(storage)
     expect(store.has(ROUTING_SEEN_KEY)).toBe(true)
     expect(shouldAutoOpen('absent', storage)).toBe(false)
+  })
+
+  it('shows why a default pick or a Setup line did nothing, as one line under the status', () => {
+    expect(paint(routeFixture('online'), { error: 'setup line unexpected — not typed' })).toContain('setup line unexpected')
   })
 
   it('renders nothing while closed, and says so on a bridge without routing', () => {

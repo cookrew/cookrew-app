@@ -37,6 +37,20 @@ async function boot(): Promise<void> {
     onTerminalTuning: () => () => undefined,
     tuneTerminal: async () => ({ ok: true })
   })
+  // What the buttons typed, for the click test: every byte that reached a
+  // PTY, by card, and whether the Setup screen holds the keyboard focus.
+  const typed: { terminalId: string; data: string }[] = []
+  const realInput = api.ptyInput.bind(api)
+  Object.assign(api, {
+    ptyInput: (terminalId: string, data: string) => {
+      typed.push({ terminalId, data })
+      realInput(terminalId, data)
+    }
+  })
+  Object.assign(window, {
+    __typed: () => typed,
+    __setupFocused: () => document.activeElement !== null && document.activeElement.closest('.cr-routing-screen') !== null
+  })
   if (new URLSearchParams(location.search).get('phone') === '1') document.body.classList.add('cookrew-mobile')
   createRoot(document.getElementById('root')!).render(<App />)
 }

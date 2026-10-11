@@ -14,10 +14,10 @@ import { routeChoices } from '../src/shared/route-view'
 
 const T0 = 1_759_000_000_000
 
-function rail(): TuneRailView {
+function rail(knobs: AgentTuningState['knobs'] = ['model', 'effort']): TuneRailView {
   const state: AgentTuningState = {
     harness: 'claude',
-    knobs: ['model', 'effort'],
+    knobs,
     records: ['model', 'effort'],
     tuning: { model: 'claude-opus-5', effort: 'high', at: T0 },
     asks: [],
@@ -30,8 +30,8 @@ function rail(): TuneRailView {
 
 const CHOICES = routeChoices(routeFixture('online').models)
 
-function paint(route: RouteDialProps | null): string {
-  return renderToStaticMarkup(<TuneRail view={rail()} open={null} onOpen={() => {}} onTurn={() => {}} error={null} route={route} />)
+function paint(route: RouteDialProps | null, knobs?: AgentTuningState['knobs']): string {
+  return renderToStaticMarkup(<TuneRail view={rail(knobs)} open={null} onOpen={() => {}} onTurn={() => {}} error={null} route={route} />)
 }
 
 const dial = (over: Partial<RouteDialProps> = {}): RouteDialProps => ({
@@ -92,6 +92,22 @@ describe('the third dial', () => {
     expect(rows.length).toBe(CHOICES.length)
     expect(html).toContain('aria-selected="true"')
     expect(html).toContain('cr-tune-row current group')
+  })
+
+  it('is ONE dial when main lists route among the knobs — never a generic chip reading the session file', () => {
+    // Core pushes 'route' into AgentTuningState.knobs; the generic rail
+    // skips it and RouteDial, fed by CardRouteState, is the only RTE.
+    const html = paint(dial(), ['model', 'effort', 'route'])
+    expect((html.match(/>RTE</g) ?? []).length).toBe(1)
+    expect((html.match(/cr-tune-chip/g) ?? []).length).toBe(3)
+    expect(html).toContain('data-knob="route"')
+  })
+
+  it('says pi is not routable yet, and offers no list', () => {
+    const html = paint(dial({ notRoutable: 'direct · pi is not routable yet', open: true, state: null }))
+    expect(html).toContain('direct · pi is not routable yet')
+    expect(html).toContain('aria-label="Route: direct"')
+    expect(html).not.toContain('role="option"')
   })
 
   it('shows a dash before the first read instead of guessing', () => {
