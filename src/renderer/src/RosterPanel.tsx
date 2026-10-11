@@ -166,9 +166,15 @@ export function RosterPanel({
   // a crew the canvas shows mid-sentence.
   const idle = useMemo(() => checkpointWanted(roster, activities), [roster, activities])
   const checkpoints = useStreamTails(idle)
+  // The brief lives on the card (TerminalNodeData.brief), not in the registry.
+  const briefs = useMemo(() => {
+    const out: Record<string, string> = {}
+    for (const n of workspace?.nodes ?? []) if (n.kind === 'terminal' && n.brief) out[n.id] = n.brief
+    return out
+  }, [workspace])
   const all = useMemo(
-    () => buildAgentRows({ roster, activities, checkpoints, now, changedAt }),
-    [roster, activities, checkpoints, now, changedAt],
+    () => buildAgentRows({ roster, activities, checkpoints, now, changedAt, briefs }),
+    [roster, activities, checkpoints, now, changedAt, briefs],
   )
   // Facet TAGS speak for the CURRENT workspace only — a wall of every
   // workspace's presets/roles was noise; the list itself stays global.

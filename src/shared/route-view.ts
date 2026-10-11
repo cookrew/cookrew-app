@@ -74,6 +74,32 @@ export interface Tick {
   line: string | null
   /** For a tick that is a Cookrew act, not a terminal line. */
   act: 'dock' | null
+  /** Why a tick that nothing can fix is missing — the title of the ✗. */
+  why?: string | null
+}
+
+/**
+ * WHY A HARNESS CANNOT BE ROUTED — one sentence per harness, said the same
+ * on R1's "routes" tick (as the ✗'s title) and on the card's RTE dial
+ * ("direct · <reason>"). Main's CardRouteState.note should carry
+ * notRoutableNote(id) so the two surfaces never drift. Null = routable.
+ */
+export const NOT_ROUTABLE_REASON: Record<HarnessRow['id'], string | null> = {
+  claude: null,
+  codex: null,
+  opencode: null,
+  pi: 'pi takes a provider only from its global models.json'
+}
+
+/** Forge's word when it sent one; the table above until then. */
+export function harnessRoutable(row: Pick<HarnessRow, 'id' | 'routable'>): boolean {
+  return row.routable ?? NOT_ROUTABLE_REASON[row.id] === null
+}
+
+/** The dial's line for a harness that cannot be routed. */
+export function notRoutableNote(id: HarnessRow['id']): string | null {
+  const why = NOT_ROUTABLE_REASON[id]
+  return why === null ? null : `direct · ${why}`
 }
 
 /** installed · signed in · in dock — the missing tick is the button. */
@@ -84,7 +110,8 @@ export function harnessTicks(row: HarnessRow): Tick[] {
       ? { label: 'no sign-in', ok: true, line: null, act: null }
       : { label: 'signed in', ok: row.signedIn, line: row.signedIn ? null : row.loginLine, act: null }
   const inDock: Tick = { label: 'in dock', ok: row.inDock, line: null, act: row.inDock ? null : 'dock' }
-  return [installed, signedIn, inDock]
+  const routes: Tick = { label: 'routes', ok: harnessRoutable(row), line: null, act: null, why: NOT_ROUTABLE_REASON[row.id] }
+  return [installed, signedIn, inDock, routes]
 }
 
 /** Picker order: direct, then groups, then models — the groups are what a card should usually ride. */
@@ -230,6 +257,7 @@ export function routeDialInput(input: {
   state: CardRouteState | null
 }): { choices: string[]; notRoutable: string | null } | null {
   if (!input.allowed) return null
+  if (input.state?.routable === false) return { choices: [], notRoutable: input.state.note ?? ROUTING_COPY.noRoutable }
   if (input.routeChoices === null && input.state === null) return null
   if (input.routeChoices === null) return { choices: [], notRoutable: input.state?.note ?? ROUTING_COPY.noRoutable }
   return { choices: [...input.routeChoices], notRoutable: null }

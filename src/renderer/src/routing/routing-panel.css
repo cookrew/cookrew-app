@@ -80,7 +80,7 @@
 /* Harness rows: three ticks; a missing tick IS the button. */
 .cr-routing-hrow {
   display: grid;
-  grid-template-columns: 130px 170px 190px 128px 1fr;
+  grid-template-columns: 130px 170px 190px 128px 96px 1fr;
   align-items: center;
   gap: 8px;
   padding: 5px 8px;
@@ -116,6 +116,8 @@
 }
 .cr-routing-tick.btn:active { transform: translate(2px, 2px); box-shadow: none }
 .cr-routing-tick.dim { color: var(--dim); border-style: dashed }
+.cr-routing-tick.bad { color: var(--rose); border-color: var(--rose); background: #fff1f0; cursor: help }
+.cr-routing-btn.running, .cr-routing-tick.btn.running { opacity: 0.8; cursor: wait; font-style: italic }
 
 /* Models & accounts. */
 .cr-routing-arow {

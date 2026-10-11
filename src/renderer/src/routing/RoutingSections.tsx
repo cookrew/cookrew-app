@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { HarnessRow, RouteDecision, RouteModel, RouteQuota, RouteState } from '../../../shared/route'
 import { KEY_PRESETS, ROUTING_COPY, decisionFacts, harnessTicks, quotaBar, routeChoices, statusLine, windowLabel } from '../../../shared/route-view'
 import { keyLineFor } from '../../../shared/route-lines'
+import { runningLabel, type SetupRunning } from './setup-line-state'
 
 /**
  * THE ROUTING PANEL'S SECTIONS. Each is a function of the route state and a
@@ -13,8 +14,9 @@ export interface RunLine {
   (line: string, options?: { enter?: boolean }): void
 }
 
-export function StatusLine({ state, onRun }: { state: RouteState; onRun: RunLine }): React.JSX.Element {
+export function StatusLine({ state, onRun, running = null }: { state: RouteState; onRun: RunLine; running?: SetupRunning | null }): React.JSX.Element {
   const line = statusLine(state)
+  const busy = line.action !== null ? runningLabel(running, line.action.line) : null
   return (
     <div className={`cr-routing-status ${line.status}`} role="status">
       <span className="cr-routing-lamp" />
@@ -23,8 +25,8 @@ export function StatusLine({ state, onRun }: { state: RouteState; onRun: RunLine
       {line.source !== null && <span className="cr-routing-source">{line.source}</span>}
       <span className="sp" />
       {line.action !== null && (
-        <button type="button" className="cr-routing-btn primary" title={line.action.line} onClick={() => onRun(line.action!.line)}>
-          {line.action.label} · {line.action.line}
+        <button type="button" className={`cr-routing-btn primary${busy ? ' running' : ''}`} title={line.action.line} disabled={busy !== null} onClick={() => onRun(line.action!.line)}>
+          {busy ?? `${line.action.label} · ${line.action.line}`}
         </button>
       )}
     </div>
@@ -34,16 +36,18 @@ export function StatusLine({ state, onRun }: { state: RouteState; onRun: RunLine
 export function Harnesses({
   rows,
   onRun,
-  onAddToDock
+  onAddToDock,
+  running = null
 }: {
   rows: readonly HarnessRow[]
   onRun: RunLine
   onAddToDock?: (harness: HarnessRow) => void
+  running?: SetupRunning | null
 }): React.JSX.Element {
   return (
     <>
       <div className="cr-routing-seg">
-        Harnesses <span className="k3">installed · signed in · in dock — a missing tick is the button</span>
+        Harnesses <span className="k3">installed · signed in · in dock · routes — a missing tick is the button</span>
         <span className="sp" />
       </div>
       {rows.map((row) => (
@@ -58,10 +62,19 @@ export function Harnesses({
               )
             }
             if (tick.line !== null) {
+              const busy = runningLabel(running, tick.line)
               return (
-                <button key={tick.label} type="button" className="cr-routing-tick btn" title={tick.line} onClick={() => onRun(tick.line!)}>
-                  {tick.label === 'installed' ? 'install' : 'sign in'} · {tick.line}
+                <button key={tick.label} type="button" className={`cr-routing-tick btn${busy ? ' running' : ''}`} title={tick.line} disabled={busy !== null} onClick={() => onRun(tick.line!)}>
+                  {busy ?? `${tick.label === 'installed' ? 'install' : 'sign in'} · ${tick.line}`}
                 </button>
+              )
+            }
+            if (tick.why) {
+              // Nothing to type and nothing to click: the reason is the title, the same sentence the card's RTE dial reads.
+              return (
+                <span key={tick.label} className="cr-routing-tick bad" title={tick.why}>
+                  ✗ {tick.label}
+                </span>
               )
             }
             if (tick.act === 'dock' && onAddToDock) {
@@ -118,7 +131,8 @@ function Quota({ q }: { q: RouteQuota }): React.JSX.Element {
   )
 }
 
-export function AddMenu({ setup, onRun, defaultOpen = false }: { setup: RouteState['setup']; onRun: RunLine; defaultOpen?: boolean }): React.JSX.Element {
+export function AddMenu({ setup, onRun, defaultOpen = false, running = null }: { setup: RouteState['setup']; onRun: RunLine; defaultOpen?: boolean; running?: SetupRunning | null }): React.JSX.Element {
+  const busyFor = (line: string | null): string | null => (line === null ? null : runningLabel(running, line))
   const [open, setOpen] = useState(defaultOpen)
   const [keys, setKeys] = useState(false)
   const [unexpected, setUnexpected] = useState(false)
@@ -155,9 +169,9 @@ export function AddMenu({ setup, onRun, defaultOpen = false }: { setup: RouteSta
       </button>
       {open && (
         <div className="cr-routing-menu" role="menu">
-          <button type="button" role="menuitem" onClick={() => run(setup.addSubscriptionLine)}>
+          <button type="button" role="menuitem" disabled={busyFor(setup.addSubscriptionLine) !== null} onClick={() => run(setup.addSubscriptionLine)}>
             <b>{ROUTING_COPY.addSubscription}</b>
-            <span className="c">{setup.addSubscriptionLine} · claude login · gemini auth</span>
+            <span className="c">{busyFor(setup.addSubscriptionLine) ?? `${setup.addSubscriptionLine} · claude login · gemini auth`}</span>
           </button>
           <button type="button" role="menuitem" aria-expanded={keys} onClick={() => setKeys((k) => !k)}>
             <b>{ROUTING_COPY.addKey}</b>
@@ -174,14 +188,14 @@ export function AddMenu({ setup, onRun, defaultOpen = false }: { setup: RouteSta
               ))}
             </div>
           )}
-          <button type="button" role="menuitem" onClick={() => run(setup.addLocalLine)}>
+          <button type="button" role="menuitem" disabled={busyFor(setup.addLocalLine) !== null} onClick={() => run(setup.addLocalLine)}>
             <b>{ROUTING_COPY.addLocal}</b>
-            <span className="c">{setup.addLocalLine}</span>
+            <span className="c">{busyFor(setup.addLocalLine) ?? setup.addLocalLine}</span>
           </button>
           {/* Main sends the group line only with two catalogue models filled in — never a placeholder; below two there is nothing to type. */}
-          <button type="button" role="menuitem" disabled={setup.addGroupLine === null} onClick={() => setup.addGroupLine !== null && run(setup.addGroupLine)}>
+          <button type="button" role="menuitem" disabled={setup.addGroupLine === null || busyFor(setup.addGroupLine) !== null} onClick={() => setup.addGroupLine !== null && run(setup.addGroupLine)}>
             <b>{ROUTING_COPY.addGroup}</b>
-            <span className="c">{setup.addGroupLine ?? ROUTING_COPY.groupNeedsTwo}</span>
+            <span className="c">{busyFor(setup.addGroupLine) ?? setup.addGroupLine ?? ROUTING_COPY.groupNeedsTwo}</span>
           </button>
         </div>
       )}
@@ -192,11 +206,13 @@ export function AddMenu({ setup, onRun, defaultOpen = false }: { setup: RouteSta
 export function Accounts({
   state,
   onRun,
-  onSetDefault
+  onSetDefault,
+  running = null
 }: {
   state: RouteState
   onRun: RunLine
   onSetDefault: (model: string | null) => void
+  running?: SetupRunning | null
 }): React.JSX.Element {
   if (state.status !== 'online') {
     return (
@@ -214,7 +230,7 @@ export function Accounts({
     <>
       <div className="cr-routing-seg">
         Models &amp; accounts <span className="sp" />
-        <AddMenu setup={state.setup} onRun={onRun} />
+        <AddMenu setup={state.setup} onRun={onRun} running={running} />
       </div>
       {state.quotas.map((q) => (
         <Quota key={`${q.provider}:${q.account ?? ''}`} q={q} />

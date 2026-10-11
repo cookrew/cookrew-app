@@ -1,3 +1,4 @@
+import type { SetupRunning } from './setup-line-state'
 import { useEffect, useState } from 'react'
 import type { HarnessRow, RouteState } from '../../../shared/route'
 import { ROUTING_COPY } from '../../../shared/route-view'
@@ -33,6 +34,8 @@ export interface RoutingPanelProps {
   setupTerminalId: string | null
   /** Bumped when the screen should take focus (a key line was typed). */
   focusTick: number
+  /** The Setup line still running, so its button says so and cannot be pressed twice. */
+  running?: SetupRunning | null
   onSetDefault: (model: string | null) => void
   /** Why the last default pick or Setup line did nothing; one line under the status. */
   error?: string | null
@@ -43,7 +46,7 @@ export interface RoutingPanelProps {
 }
 
 export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null {
-  const { open, onClose, state, available, onRun, setupTerminalId, focusTick, onSetDefault, error, onAddToDock, names, onZoom } = props
+  const { open, onClose, state, available, onRun, setupTerminalId, focusTick, onSetDefault, error, onAddToDock, names, onZoom, running = null } = props
   const [setupOpen, setSetupOpen] = useState(true)
   // The first-boot flag burns when the panel is actually on screen, not when
   // it was merely decided — a panel that never mounted must come back.
@@ -80,14 +83,14 @@ export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null
           </div>
         ) : (
           <>
-            <StatusLine state={state} onRun={onRun} />
+            <StatusLine state={state} onRun={onRun} running={running} />
             {error && (
               <div className="cr-routing-bad" role="alert">
                 {error}
               </div>
             )}
-            <Harnesses rows={state.harnesses} onRun={onRun} onAddToDock={onAddToDock} />
-            <Accounts state={state} onRun={onRun} onSetDefault={onSetDefault} />
+            <Harnesses rows={state.harnesses} onRun={onRun} onAddToDock={onAddToDock} running={running} />
+            <Accounts state={state} onRun={onRun} onSetDefault={onSetDefault} running={running} />
             <LiveRoutes state={state} names={names} onZoom={onZoom} />
             <Rented state={state} />
           </>

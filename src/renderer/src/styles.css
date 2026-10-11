@@ -6657,3 +6657,24 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
 }
 .cr-lane-answer.ok { border-color: #6bbe58 }
 .cr-lane-answer.bad { border-color: #b04a36 }
+
+/* THE BRIEF — what a recruited card is about (TerminalNodeData.brief), one
+   line under the name on the card, in the zoomed header and on the Board row.
+   Display only; nothing edits it here. */
+.cr-brief {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.vi-brief { font-size: calc(10.5px * var(--z, 1)) }
+.vi-mini-brief { font-size: 9px }
+.popout-brief { max-width: 260px; flex: 0 1 auto }
+.ags-brief { font-size: 11px; margin-top: 1px }

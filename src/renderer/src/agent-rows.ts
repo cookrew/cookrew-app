@@ -35,6 +35,8 @@ export interface AgentRow {
   /** Bound from the SAME selector the canvas card uses. */
   turn: TurnViewModel | null
   turnCount: number
+  /** THE BRIEF the card was recruited for (TerminalNodeData.brief) — display only; null or absent when none or unknown here. */
+  brief?: string | null
   /**
    * THE sort key, descending. Start time while a turn is in flight, last
    * output once it is done — never a value that moves on its own, or the list
@@ -72,6 +74,8 @@ export interface AgentRowsInput {
    * turn's own timestamps, which is correct but coarser.
    */
   changedAt?: ActivityClock
+  /** terminalId → brief, read off the loaded workspace's nodes (the registry carries none). */
+  briefs?: Record<string, string>
 }
 
 export interface AgentRows {
@@ -159,6 +163,7 @@ function rowOf(
   activity: TerminalActivity | undefined,
   checkpoint: LatestCheckpoint | null | undefined,
   changedAt: number | undefined,
+  brief: string | null,
 ): AgentRow {
   // The live tracker wins the moment it has anything; the checkpoint is the
   // fallback, through the same view model the card binds (T1).
@@ -177,6 +182,7 @@ function rowOf(
     phase: phaseOf(activity, entry.active, turn),
     turn,
     turnCount: activity?.turnCount ?? 0,
+    brief,
     lastActivityAt: changedAt ?? sortKeyOf(activity) ?? entry.spawnedAt,
   }
 }
@@ -205,13 +211,14 @@ export function buildAgentRows(input: AgentRowsInput): AgentRows {
     floatWaiting = false,
     workspaceId = null,
     changedAt = {},
+    briefs = {},
   } = input
   const workspaces = facetsOf(roster)
 
   const rows = roster
     .filter((entry) => workspaceId === null || entry.workspaceId === workspaceId)
     .map((entry) =>
-      rowOf(entry, activities[entry.id], checkpoints[entry.id], changedAt[entry.id]),
+      rowOf(entry, activities[entry.id], checkpoints[entry.id], changedAt[entry.id], briefs[entry.id] ?? null),
     )
 
   // A row is quiet when there is nothing to say about it — no turn tracked

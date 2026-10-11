@@ -872,6 +872,11 @@ function TerminalOverlay({
         <span className="popout-name" title={`${node.name} · ${node.preset}`}>
           {node.name}
         </span>
+        {node.brief && (
+          <span className="cr-brief popout-brief" title={node.brief}>
+            {node.brief}
+          </span>
+        )}
         {node.orch && <span className="cr-chip amber">ORCH</span>}
         <span className={`cr-chip${PHASE_CHIP[phase].cls}`}>{PHASE_CHIP[phase].label}</span>
         {/* No model/effort chip up here: the zoomed card already says both on its tune rail

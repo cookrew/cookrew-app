@@ -1791,6 +1791,7 @@ function Canvas(): React.JSX.Element {
           onRun={(line, options) => void setupTerminal.run(line, options)}
           setupTerminalId={setupTerminal.terminalId}
           focusTick={setupTerminal.focusTick}
+          running={setupTerminal.running}
           onSetDefault={routeState.setDefault}
           error={newestError(routeState.error, setupTerminal.error)}
           onAddToDock={(harness) => {

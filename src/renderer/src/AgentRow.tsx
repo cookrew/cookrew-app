@@ -136,6 +136,11 @@ export function AgentRow({
           </span>
           {!row.active && <span className="cr-chip">INACTIVE</span>}
         </span>
+        {row.brief && (
+          <span className="cr-brief ags-brief" title={row.brief}>
+            {row.brief}
+          </span>
+        )}
 
         {/* Revealed by width, never by a mode switch (see agent-sidebar.css).
             The turn block is the SAME component the canvas card renders. */}
