@@ -5,7 +5,7 @@
 //
 //   1 r1-online     the header's Routing chip opens R1 and the status line is green
 //   2 default-pick   one chip in the DEFAULT row, and routeState() agrees
-//   3 cmdk           ⌘K · "write a haiku about cables" · Sous echoes a decision · committed
+//   3 cmdk           ⌘K · a RESERVED sentence · Sous echoes a RECRUIT decision · committed
 //   4 recruited      the new card's RTE reads the default, and its first turn names the model
 //   5 rte-pick        RTE → the group · the card respawns · the next turn is DECIDED by the group
 //   6 offline         magpie stopped → the dial says "direct" and wears the offline flag
@@ -42,6 +42,14 @@
 //
 // Beat 6 stops the gateway on purpose and starts it again afterwards (the owner's cards are
 // unaffected: a running card keeps whatever env it was spawned with).
+//
+// TWO THINGS THE FIRST LIVE RUN COST, both fixed here (lane e2e2, item 1):
+//   · it exited with the card's xterm focused, and from then on every `cookrew ask` to that card
+//     read "owner is composing" and dropped the brief. leaveClean() now runs on success, on
+//     failure and on ^C, and records what it had to close.
+//   · its sentence ("write a haiku about cables") shared a word with cards on the board, so Sous
+//     ASKED one of them instead of recruiting. The sentence is drawn from RESERVED now, checked
+//     against this board's own words, and beat 3 fails loudly if the decision is not `recruit`.
 import { spawn } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -59,7 +67,27 @@ const GATEWAY = value('gateway', 'http://127.0.0.1:3425')
 const FIRST = value('first', 'ollama/qwen2.5:1.5b')
 /** The model beat 5 turns the dial to. A group is the honest second choice: it is what a card should ride. */
 const SECOND = value('second', 'group/smart')
-const SENTENCE = value('say', 'write a haiku about cables')
+/**
+ * THE RECRUIT SENTENCE IS RESERVED, NOT CHOSEN FOR FLAVOUR.
+ *
+ * `decide()` (shared/sous-decide.ts) ASKS an existing card whenever a same-repo idle card's role
+ * or last task shares a content word with the sentence, and only RECRUITS when nothing fits. The
+ * first live run said "write a haiku about cables" on a board with cable-harness and cable-signal
+ * cards on it — "cables" overlapped, Sous asked one of them, and beat 4 waited for a card that was
+ * never going to be made.
+ *
+ * So every sentence here is from a domain no card in this repo can be working in, and each one
+ * also carries a LONG_RE word (tests · implement · pipeline) so `pickHarness` answers Claude Code
+ * — never Pi, which is `routable: false` this round and would route nothing. `--say=…` overrides,
+ * and then the overlap check still runs and says what it found.
+ */
+const RESERVED = [
+  'implement a pangolin burrow census and write tests for the counter',
+  'implement an ocarina fingering chart and test every pentatonic run',
+  'build a marzipan lattice scaler pipeline with tests for each step',
+  'implement a xylophone mallet tuner and write tests for the octaves'
+]
+const SAID = value('say', null)
 const SHOT_DIR = value('shots', '/tmp')
 const WORKSPACE = value('workspace', null)
 /** Start at beat N (1-based). Beats 5–6 need `--card=<terminalId>` — the one beat 4 recruited. */
@@ -79,12 +107,63 @@ const BUDGET = [
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
 
+/** The same stop list and tokens `decide()` matches on, enough of it to predict an overlap. */
+const STOP = new Set(
+  'the a an and or of to in on for with into from by at as is are be this that it its my our your please make add fix do all every keep then also just'.split(' ')
+)
+const words = (text) =>
+  new Set(
+    (String(text ?? '').toLowerCase().match(/[a-z0-9][a-z0-9_./-]*/g) ?? [])
+      .filter((w) => w.length >= 2 && !STOP.has(w))
+      .map((w) => w.replace(/^[./-]+|[./-]+$/g, ''))
+  )
+
+/**
+ * The first reserved sentence that shares no content word with anything on the board — which is
+ * what makes Sous recruit instead of ask. The card faces carry their last task as text, so this
+ * reads the same words `decide()` would.
+ */
+function reservedSentence(cards) {
+  const board = words(cards.map((c) => `${c.name} ${c.text ?? ''}`).join(' '))
+  const list = SAID ? [SAID, ...RESERVED] : RESERVED
+  const tried = []
+  for (const sentence of list) {
+    const clash = [...words(sentence)].filter((w) => board.has(w))
+    tried.push({ sentence, clash })
+    if (clash.length === 0) return { sentence, tried, boardWords: board.size }
+  }
+  throw new Error(`every reserved sentence overlaps a card on this board: ${JSON.stringify(tried)}`)
+}
+
 const story = { startedAt: new Date().toISOString(), gateway: GATEWAY, first: FIRST, second: SECOND, beats: [], budget: BUDGET }
+
+/** The live driver, so ^C can tidy the app before the process goes. */
+let driver = null
+let leaving = false
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    if (leaving) process.exit(130)
+    leaving = true
+    process.stdout.write(`\n${signal} — leaving the app tidy before exit\n`)
+    const done = () => {
+      try {
+        writeFileSync('/tmp/route-story.json', `${JSON.stringify({ ...story, interruptedBy: signal }, null, 2)}\n`)
+      } catch {
+        // the record is a courtesy; the tidy-up is the point
+      }
+      process.exit(130)
+    }
+    if (driver === null) done()
+    else leaveClean(driver).then(done, done)
+  })
+}
 
 function plan() {
   process.stdout.write(`\nTHE ROUTE STORYBOARD — ${BEATS.length} beats, ${BEATS.reduce((n, b) => n + b.budget, 0)} clicks budgeted\n`)
   for (const [i, beat] of BEATS.entries()) {
-    process.stdout.write(`\n  ${i + 1}. ${beat.name}  (${beat.budget} click${beat.budget === 1 ? '' : 's'})\n     ${beat.what}\n     reads: ${beat.reads}\n`)
+    process.stdout.write(
+      `\n  ${i + 1}. ${beat.name}  (${beat.budget} click${beat.budget === 1 ? '' : 's'})\n     ${beat.what}\n     reads: ${beat.reads}\n     Sous path: ${beat.expects}\n`
+    )
   }
   process.stdout.write('\n  Click budget to compare with (report-panel.md section 9):\n')
   for (const row of BUDGET) process.stdout.write(`    ${String(row.clicks)}  ${row.path} — ${row.note}\n`)
@@ -196,6 +275,8 @@ async function attach() {
           const t = n.querySelector('.vi-title,.node-title,.vi-mini-name')
           const r = n.getBoundingClientRect()
           return { id: n.getAttribute('data-id'), name: ((t ? t.textContent : '') || '').trim(),
+                   // The card face carries its last task; the reserved-sentence check reads it.
+                   text: ((n.textContent || '').replace(/\\s+/g, ' ')).trim().slice(0, 400),
                    x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2), h: Math.round(r.height) }
         }))`)
       ),
@@ -264,6 +345,7 @@ async function toBoard(d) {
 async function ensureOpen(d, memo) {
   if (memo.card && (await d.openName()) === memo.card.name) return memo.card
   const id = memo.card?.id ?? CARD
+  memo.rerun = memo.card === undefined
   if (!id) throw new Error('no card to work on — pass --card=<terminalId> when starting at beat 4 or later')
   await toBoard(d)
   const here = (await d.cards()).find((c) => c.id === id)
@@ -275,10 +357,50 @@ async function ensureOpen(d, memo) {
   return memo.card
 }
 
+/**
+ * LEAVE NOTHING FOCUSED, LEAVE NOTHING OPEN — on every exit path.
+ *
+ * The first live run ended with the card's xterm still holding the keyboard focus, and from then
+ * on every `cookrew ask` to that card answered "owner is composing" and dropped the brief: a
+ * focused composer is how the app knows a person is typing, and this script is not a person. So
+ * success, failure and ^C all come through here: close the Routing panel, leave the overlay, blur
+ * whatever has the focus, and WRITE DOWN what was left behind so a dirty exit is visible.
+ */
+async function leaveClean(d) {
+  const exit = { panelWasOpen: false, overlayWasOpen: false, blurred: null, activeElement: null }
+  try {
+    exit.panelWasOpen = (await d.at('.cr-routing-panel')) !== null
+    if (exit.panelWasOpen) {
+      await d.escape()
+      await sleep(400)
+    }
+    exit.overlayWasOpen = (await d.openName()) !== null
+    await toBoard(d)
+    exit.blurred = await d.ev(`(() => {
+      const el = document.activeElement
+      const was = el ? (el.className || el.tagName || '').toString().slice(0, 80) : null
+      if (el && typeof el.blur === 'function') el.blur()
+      if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur()
+      return was
+    })()`)
+    exit.activeElement = await d.ev(
+      `(() => { const el = document.activeElement; return el === null || el === document.body ? 'body' : (el.className || el.tagName || '').toString().slice(0, 80) })()`
+    )
+    exit.panelOpenAfter = (await d.at('.cr-routing-panel')) !== null
+    exit.overlayOpenAfter = (await d.openName()) !== null
+    exit.clean = exit.activeElement === 'body' && !exit.panelOpenAfter && !exit.overlayOpenAfter
+  } catch (e) {
+    exit.error = String(e?.message ?? e)
+  }
+  story.exit = exit
+  return exit
+}
+
 const BEATS = [
   {
     name: 'r1-online',
     budget: 1,
+    expects: 'no Sous',
     what: 'click the header’s Routing chip; R1 opens and its status line is green',
     reads: '.cr-routing-panel · .cr-routing-status.online text · routeState().status',
     run: async (d) => {
@@ -295,6 +417,7 @@ const BEATS = [
   {
     name: 'default-pick',
     budget: 1,
+    expects: 'no Sous',
     what: `click the ${FIRST} chip in the DEFAULT row`,
     reads: 'the chip’s aria-checked · routeState().defaultModel',
     run: async (d) => {
@@ -316,28 +439,38 @@ const BEATS = [
   {
     name: 'cmdk',
     budget: 0,
-    what: `⌘K, type "${SENTENCE}", ↵ for Sous’s decision, ↵ to commit it`,
-    reads: '.cmd-field input focus · .cmd-echo[data-decision] text',
+    expects: 'recruit',
+    what: '⌘K, a RESERVED sentence Sous cannot match to a card, ↵ for the decision, ↵ to commit it',
+    reads: '.cmd-field input focus · .cmd-echo[data-decision] — which must read `recruit`',
     run: async (d, memo) => {
+      // Picked here, against this board, not baked in: see reservedSentence().
+      const chosen = reservedSentence(await d.cards())
+      memo.sentence = chosen.sentence
       await d.commandK()
       await until('the ⌘K box opens', () => d.at('.cmd-field input'), (p) => p !== null, 8_000, 250)
       const focused = await d.ev(`document.activeElement === document.querySelector('.cmd-field input')`)
-      await d.type(SENTENCE)
+      await d.type(chosen.sentence)
       await d.enter()
       const echo = await until('Sous answers', () => d.text('.cmd-echo'), (t) => typeof t === 'string' && t.length > 0, 60_000)
       const kind = await d.ev(`(() => { const e = document.querySelector('.cmd-echo[data-decision]'); return e ? e.getAttribute('data-decision') : null })()`)
+      // A sentence that was supposed to recruit and got an ask means the reserved list has aged
+      // into this board's vocabulary — say so here, where it is cheap, not in beat 4's timeout.
+      if (kind !== null && kind !== 'recruit') {
+        throw new Error(`Sous answered "${kind}", not recruit, for a reserved sentence — ${JSON.stringify(chosen)}`)
+      }
       // The card roll is taken HERE, one moment before the commit: a card another agent made
       // while beats 1–2 ran would otherwise be mistaken for the one Sous is about to recruit.
       memo.cardIds = (await d.cards()).map((c) => c.id)
       // A held decision commits on the second ↵; a plain answer has nothing to commit.
       if (kind !== null) await d.enter()
       await sleep(1200)
-      return { focused, echo, decision: kind, cardsBefore: memo.cardIds.length }
+      return { focused, echo, decision: kind, sentence: chosen.sentence, clashesTried: chosen.tried.length - 1, boardWords: chosen.boardWords, cardsBefore: memo.cardIds.length }
     }
   },
   {
     name: 'recruited',
     budget: 0,
+    expects: 'recruit — a NEW card; an ask would leave this beat waiting for a card nobody makes',
     what: 'the new card appears, its RTE reads the default, and its first turn names the model',
     reads: '.popout-name · [data-knob="route"] .cr-tune-v · .cr-tune-turn · terminalRoute(id)',
     run: async (d, memo) => {
@@ -380,10 +513,32 @@ const BEATS = [
   {
     name: 'rte-pick',
     budget: 2,
+    expects: 'no Sous — the sentence goes into the card’s own composer, not the box',
     what: `RTE → ${SECOND}; the card respawns with exact context and the next turn goes through it`,
     reads: 'route takes the pick · effective + appliesOn after the respawn · the live decision’s seq/asked/group',
     run: async (d, memo) => {
       const card = await ensureOpen(d, memo)
+      /**
+       * A RERUN STARTS FROM THE FIRST MODEL, OR IT PROVES NOTHING. After a run that reached beat
+       * 5 the card is already on `--second`, and clicking the dial to the value it already holds
+       * is not a change: the respawn never comes and the beat "fails" for the second time running.
+       * So a rerun sets the card back to `--first` THROUGH THE API — the same PUT the dial makes —
+       * and waits for `effective` before touching the chip.
+       */
+      const start = await d.cardRoute(card.id)
+      if (start?.route !== FIRST) {
+        await d.ev(`window.cookrew.terminalRouteSet(${JSON.stringify(card.id)}, ${JSON.stringify(FIRST)})`)
+        memo.reset = await until(
+          `the card goes back to ${FIRST} before the pick`,
+          async () => {
+            const s = await d.cardRoute(card.id)
+            return { route: s?.route ?? null, effective: s?.effective ?? null, appliesOn: s?.appliesOn ?? null }
+          },
+          (s) => s.route === FIRST && s.effective === FIRST,
+          180_000,
+          2_000
+        )
+      }
       const chip = await d.at('[data-knob="route"] button.cr-tune-chip')
       if (!chip) throw new Error('no RTE chip on this card — a served session has none by design')
       await d.tap(chip.x, chip.y)
@@ -453,6 +608,7 @@ const BEATS = [
   {
     name: 'offline',
     budget: 0,
+    expects: 'no Sous',
     what: 'stop magpie; the dial says direct and wears the offline flag',
     reads: '.cr-tune-chip.refused · .cr-tune-v · routeState().status',
     run: async (d, memo) => {
@@ -487,6 +643,7 @@ async function main() {
     throw new Error(`--from=${FROM} works on the card beat 4 recruited: pass --card=<terminalId> (beat 4 prints it)`)
   }
   const d = await attach()
+  driver = d
   const memo = {}
   try {
     if (WORKSPACE) {
@@ -523,6 +680,8 @@ async function main() {
       if (error) break
     }
   } finally {
+    // Every exit path, including a ^C that lands mid-beat: nothing focused, nothing open.
+    await leaveClean(d)
     if (!flag('leave-stopped') && !(await gatewayUp())) {
       await startGateway().catch(() => undefined)
       story.gatewayRestarted = await gatewayUp()
