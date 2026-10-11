@@ -116,22 +116,11 @@ export const directOfferWhy = (
    * rule again in another 4 ms, and the buttons keep the sentence's order.
    */
   if (reason === 'blocked') {
-    return `${family} refused the Mac's address from this page before connecting, so the Mac was never asked. Open it directly instead, or try again:`
+    return `${family} refused the Mac's address from this page before connecting, so the Mac was never asked. Try again:`
   }
-  return 'That Mac did not answer in time. Try again, or open it directly:'
+  return 'That Mac did not answer in time. Try again:'
 }
 
-/**
- * THE LINE UNDER THE BADGE, for the refusal case only.
- *
- * The sheet is two taps away and the bar showed one word, RELAY, over a Mac
- * three metres off and an 845 ms round trip (same screenshot). A browser that
- * refuses the direct path by rule leaves exactly one way onto the Wi-Fi, so
- * that way hangs where the ask would — the ask never renders on a browser
- * with no permission to ask for, so the slot is free (DirectOfferLine.tsx).
- */
-export const directOfferLine = (family: string): string =>
-  `${family} refused the direct path from this page.`
 
 /**
  * WHAT HAPPENED TO ONE CANDIDATE, in words a reader can act on.

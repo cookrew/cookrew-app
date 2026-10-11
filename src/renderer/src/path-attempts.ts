@@ -80,13 +80,23 @@ export interface PathAttempt {
   readonly hint?: 'local' | 'none'
 }
 
+/** A knock that was not a fetch (path/reach-probes.ts), as the last race left it. */
+export interface PathProbe {
+  readonly kind: 'socket' | 'image' | 'opaque'
+  readonly name: string
+  readonly outcome: 'answered' | 'network' | 'timeout'
+  readonly ms: number | null
+}
+
 export interface PathAttempts {
   readonly attempts: readonly PathAttempt[]
   /** Where the session actually ended up. */
   readonly settled: 'LAN' | 'TAILNET' | 'RELAY'
+  /** The knocks made after `attempts`, on the same race; empty until they return. */
+  readonly probes: readonly PathProbe[]
 }
 
-const EMPTY: PathAttempts = { attempts: [], settled: 'RELAY' }
+const EMPTY: PathAttempts = { attempts: [], settled: 'RELAY', probes: [] }
 
 let state: PathAttempts = EMPTY
 const listeners = new Set<(next: PathAttempts) => void>()
@@ -97,7 +107,14 @@ export const recordAttempts = (
   attempts: readonly PathAttempt[],
   settled: 'LAN' | 'TAILNET' | 'RELAY'
 ): void => {
-  state = { attempts: [...attempts], settled }
+  // A new race: its knocks have not returned yet, so the old ones are not evidence.
+  state = { attempts: [...attempts], settled, probes: [] }
+  for (const listener of listeners) listener(state)
+}
+
+/** The knocks of the race whose rows are already recorded. */
+export const recordProbes = (probes: readonly PathProbe[]): void => {
+  state = { ...state, probes: [...probes] }
   for (const listener of listeners) listener(state)
 }
 

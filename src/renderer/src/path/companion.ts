@@ -16,7 +16,7 @@ import { dataPlane, setDataPlane, subscribeDataPlane, type DataPlane } from '../
 import type { LocalNetworkState } from '../local-network'
 import { isLocalOrigin, localNetworkState, requestLocalNetwork } from '../local-network'
 import { localNetworkGate, offerLocalNetwork, setLocalNetwork } from '../local-network-gate'
-import { recordAttempts, type PathAttempt } from '../path-attempts'
+import { recordAttempts, recordProbes, type PathAttempt } from '../path-attempts'
 import { setReachPublish, type ReachPublish } from '../reach-publish'
 import { nameLive } from './name-oracle'
 import { createPathMemory, watchNetwork, type PathMemory, type PathMemoryDeps } from '../path-memory'
@@ -330,6 +330,7 @@ const comeHome = async (offer: DirectOffer | null, report: PathReport): Promise<
   } finally {
     knocking = false
   }
+  recordProbes(probes)
   await tellTheDesktop({ ...report, probes })
   const now = Date.now()
   const to = homeJump({ offer, probes, lastJumpAt: lastHomeJump(), now })

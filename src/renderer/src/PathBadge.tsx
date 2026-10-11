@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { cookrew, isRemoteMode } from './api'
 import { DirectLandedNote } from './DirectLandedNote'
-import { DirectOfferLine } from './DirectOfferLine'
 import { DirectOfferRow } from './DirectOfferRow'
 import { LocalNetworkRow } from './LocalNetworkRow'
 import { subscribeLocalNetwork } from './local-network-gate'
@@ -67,10 +66,6 @@ export function PathBadge({ onRefresh }: { onRefresh: () => void }): React.JSX.E
           permission nobody grants. It renders nothing in three of the four
           states, so on most phones the bar is exactly as it was. */}
       <LocalNetworkRow />
-      {/* The same slot, for the browser that has nothing to ask: it refused the
-          direct path by rule, so the one way onto the Wi-Fi is a press, here,
-          and not two taps down a sheet (DirectOfferLine.tsx). */}
-      <DirectOfferLine />
       {/* The other side of the same journey: this one renders on the page the
           OPEN ON WI-FI button landed on, once, and only there. */}
       <DirectLandedNote />

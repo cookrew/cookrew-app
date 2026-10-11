@@ -334,9 +334,10 @@ describe('the sentence the offer carries', () => {
     // why — off the user agent, not off the evidence — so it now says what
     // was measured and leaves the cause to the permission line above the rows
     // (owner's wording, 2026-09-11).
-    expect(directOfferWhy('Safari')).toBe(
-      'That Mac did not answer in time. Try again, or open it directly:'
-    )
+    // No "open it directly" any more (owner, 2026-10-11): a reachable Mac is
+    // navigated to by the page itself (path/home-jump.ts), and a button that
+    // sends a reader to a Mac nothing could reach is a dead page.
+    expect(directOfferWhy('Safari')).toBe('That Mac did not answer in time. Try again:')
   })
 
   it('says the same thing in every browser on the phone', () => {
@@ -368,7 +369,7 @@ describe('the sentence the offer carries', () => {
     expect(why).not.toContain('did not answer in time')
   })
 
-  it('says REFUSED when the row says refused, and names the fix first', () => {
+  it('says REFUSED when the row says refused, and offers the race', () => {
     // The screenshot of 2026-10-04: the row under the headline read "refused
     // by the browser before connecting — 4 ms" and the headline read "did not
     // answer in time". A refusal in 4 ms is the browser's doing; the Mac was
@@ -379,9 +380,8 @@ describe('the sentence the offer carries', () => {
     expect(why).toContain('before connecting')
     expect(why).not.toContain('did not answer in time')
     expect(why).not.toContain('site settings')
-    expect(why.indexOf('Open it directly')).toBeGreaterThan(-1)
-    expect(why.indexOf('Open it directly')).toBeLessThan(why.indexOf('try again'))
-    expect(why.trimEnd().endsWith(':')).toBe(true)
+    expect(why).not.toContain('Open it directly')
+    expect(why.trimEnd().endsWith('Try again:')).toBe(true)
   })
 })
 

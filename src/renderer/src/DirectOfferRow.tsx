@@ -92,7 +92,7 @@ export function DirectOfferRow(): React.JSX.Element | null {
     <p className="cr-path-direct" role="status">
       <span className="cr-path-direct-why">{directOfferWhy(offer.family, offer.reason)}</span>
       <span className="cr-path-direct-acts">
-        {offer.reason === 'timeout' ? [retry, go] : [go, retry]}
+        {offer.reason === 'proxy' ? [go, retry] : [retry]}
       </span>
     </p>
   )

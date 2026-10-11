@@ -1,5 +1,5 @@
 import type { LocalNetworkState } from '../local-network'
-import type { PathAttempt } from '../path-attempts'
+import type { PathAttempt, PathProbe } from '../path-attempts'
 import { LOCAL_NETWORK_COPY } from '../path-copy'
 
 /**
@@ -55,6 +55,37 @@ export const blockedBothWays = (attempts: readonly PathAttempt[]): boolean =>
  */
 export const refusedBeforeConnecting = (attempts: readonly PathAttempt[]): boolean =>
   attempts.length > 0 && attempts.every((attempt) => attempt.outcome === 'blocked')
+
+export interface WalledInEvidence {
+  readonly attempts: readonly PathAttempt[]
+  readonly probes: readonly PathProbe[]
+  readonly permission: LocalNetworkState
+  readonly ios: boolean
+}
+
+/**
+ * THIS APP CANNOT REACH THE LOCAL NETWORK AT ALL — iOS, and every knock died.
+ *
+ * 2026-10-11, the owner's iPhone, a Home Screen web app of cookrew.dev on the
+ * Mac's own Wi-Fi: the fetch timed out, and so did the socket, the image and
+ * the opaque request (reach-probes.ts) — 2.5 s each, zero packets at the Mac.
+ * iOS decides local network privacy per process (TN3179): Safari's own
+ * traffic is exempt, a web app pinned to the Home Screen is not, and it is
+ * never asked. The sentence that says "your Mac is not on this network" is
+ * then false, and "the browser refused" is not quite it either: nothing was
+ * refused, nothing was carried.
+ *
+ * Only on the platform with no permission to grant, only with rows that never
+ * answered, and only once the knocks are back and none got in. A race whose
+ * knocks are still out keeps the ordinary sentence for the second they take.
+ */
+export const walledIn = (evidence: WalledInEvidence): boolean =>
+  evidence.ios &&
+  evidence.permission === 'unsupported' &&
+  evidence.attempts.length > 0 &&
+  evidence.attempts.every((attempt) => attempt.outcome === 'timeout' || attempt.outcome === 'blocked') &&
+  evidence.probes.length > 0 &&
+  evidence.probes.every((probe) => probe.outcome !== 'answered')
 
 /**
  * EVERY CANDIDATE WAS A NAME THE ZONE IS NOT ANSWERING. The Mac's card said

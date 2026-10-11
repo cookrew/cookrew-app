@@ -49,6 +49,19 @@ export const RELAY_BLOCKED_SENTENCE =
   'Via cookrew.dev relay — the browser refused the direct path from this page.'
 
 /**
+ * WHAT THE RELAY SENTENCE BECOMES WHEN THIS APP CANNOT REACH THE LAN AT ALL.
+ *
+ * iOS grants local network access per process and never asks a Home Screen
+ * web app (2026-10-11: fetch, socket, image and opaque request all died at
+ * the Mac's name, zero packets at the Mac, from the owner's own Wi-Fi). The
+ * Mac is right here; the sentence says what is true and names the two things
+ * that work: Tailscale, which is a VPN and not the local network, and Safari
+ * itself, which is exempt.
+ */
+export const RELAY_WALLED_SENTENCE =
+  'Via cookrew.dev relay — iOS does not let this app reach the local network. Turn on Tailscale on this phone for a direct path, or open cookrew.dev in Safari.'
+
+/**
  * WHAT THE RELAY SENTENCE BECOMES WHEN THE MAC IS NOT PUBLISHING A NAME.
  *
  * The Mac's own card now says whether cookrew.dev holds a fresh reach card
@@ -140,6 +153,8 @@ export type PathBadgeInput = {
    * reason is no longer the Mac's whereabouts, which nobody measured.
    */
   readonly refusedByBrowser?: boolean
+  /** Every knock this app could make died at the LAN (path/hint-evidence.ts · walledIn). */
+  readonly walledIn?: boolean
   /**
    * WHY THE MAC HAS NO LIVE NAME, when it has none: the registry's refusal
    * ('session-expired', 'offline', …) or 'stale'. Read off the Mac's own card
@@ -279,6 +294,9 @@ export const pathBadgeView = (input: PathBadgeInput): PathBadgeView => {
   // A decided refusal outranks a measured one: it names the switch that
   // undoes it, and the rows would say "refused" under it anyway.
   const blocked = state === 'RELAY' && input.refusedByBrowser === true
+  // Nothing was refused and nothing was carried: a stronger fact than a
+  // refusal, and the one with a fix the reader can actually perform.
+  const walled = state === 'RELAY' && input.walledIn === true
   return {
     state,
     word: state,
@@ -287,9 +305,11 @@ export const pathBadgeView = (input: PathBadgeInput): PathBadgeView => {
       ? relayUnpublishedSentence(unpublished)
       : refused
         ? RELAY_REFUSED_SENTENCE
-        : blocked
-          ? RELAY_BLOCKED_SENTENCE
-          : PATH_SENTENCES[state],
+        : walled
+          ? RELAY_WALLED_SENTENCE
+          : blocked
+            ? RELAY_BLOCKED_SENTENCE
+            : PATH_SENTENCES[state],
     desktopName: input.desktopName ?? null,
     latencyMs: typeof input.latencyMs === 'number' ? input.latencyMs : null,
     switchDesktopUrl: input.registryOrigin
