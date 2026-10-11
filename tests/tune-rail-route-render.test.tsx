@@ -10,7 +10,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { TuneRail, type RouteDialProps } from '../src/renderer/src/nodes/TuneRail'
 import { tuneRailView, type AgentTuningState, type TuneRailView } from '../src/shared/agent-tuning'
 import { cardRouteFixture, localTurnFixture, routeFixture } from '../src/shared/route-fixture'
-import { routeChoices } from '../src/shared/route-view'
+import { GATEWAY_DOWN_NOW, routeChoices, routeDialLines } from '../src/shared/route-view'
 
 const T0 = 1_759_000_000_000
 
@@ -76,6 +76,23 @@ describe('the third dial', () => {
     const html = paint(dial({ state: cardRouteFixture({ route: 'deepseek/deepseek-v4', appliesOn: 'restart', turn: null, live: null }) }))
     expect(html).toContain('applies on restart')
     expect(html).toContain('cr-tune-chip pending')
+  })
+
+  it('says the requests will fail when the gateway goes down under a running routed card', () => {
+    // Routed at spawn (effective is a model), gateway offline NOW: the same slot as the at-spawn line, the opposite sentence.
+    const html = paint(dial({ state: cardRouteFixture({ gateway: 'offline' }) }))
+    expect(html).toContain(GATEWAY_DOWN_NOW)
+    expect(html).toContain('refused')
+    expect(html).not.toContain('gateway offline · direct')
+    // The chip keeps the route it was asked for and the last turn; nothing is rewritten to direct.
+    expect(routeDialLines(cardRouteFixture({ gateway: 'offline' }))).toMatchObject({ value: 'group/smart', flag: 'offline', note: GATEWAY_DOWN_NOW })
+    expect(routeDialLines(cardRouteFixture({ gateway: 'offline', note: 'codex needs a thinking-capable model behind the gateway' })).note).toBe(`${GATEWAY_DOWN_NOW} · codex needs a thinking-capable model behind the gateway`)
+    // A direct process does not care that the gateway is down; neither does one not spawned yet.
+    expect(routeDialLines(cardRouteFixture({ gateway: 'offline', effective: 'direct', route: 'direct' })).note).toBeNull()
+    expect(routeDialLines(cardRouteFixture({ gateway: 'offline', effective: null, appliesOn: 'restart' }))).toMatchObject({ note: 'applies on restart', flag: 'restart' })
+    // Offline AT SPAWN keeps its meaning and wins the slot: the process went direct and is fine.
+    expect(routeDialLines(cardRouteFixture({ offline: true, gateway: 'offline' }))).toMatchObject({ value: 'direct', note: 'gateway offline · direct', flag: 'offline' })
+    expect(routeDialLines(cardRouteFixture({ gateway: 'online' })).flag).toBeNull()
   })
 
   it('says direct and why when the gateway is offline', () => {

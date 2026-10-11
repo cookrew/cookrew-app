@@ -95,4 +95,79 @@ describeWithChrome('the Routing panel, clicked', () => {
       await browser.kill()
     }
   }, 240_000)
+
+  /** The DEFAULT chip with this text: where it is, and whether it is checked. */
+  async function chip(page: CdpPage, id: string): Promise<{ x: number; y: number; checked: string | null } | null> {
+    return page.evaluate<{ x: number; y: number; checked: string | null } | null>(
+      `(() => { const el = [...document.querySelectorAll('.cr-routing-default button.cr-routing-pick')].find((b) => (b.textContent || '').trim() === ${JSON.stringify(id)}); if (!el) return null; el.scrollIntoView({ block: 'center' }); const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, checked: el.getAttribute('aria-checked') } })()`
+    )
+  }
+
+  async function escape(page: CdpPage): Promise<void> {
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  }
+
+  it('a picked DEFAULT survives a push of the same state, a close and a reopen, and a read that lands after a newer pick', async () => {
+    const browser = await launchChrome({ width: 1280, height: 900, chrome })
+    try {
+      const page: CdpPage = await connectPage(browser.port)
+      await page.send('Page.enable')
+      await page.send('Runtime.enable')
+      const errors: string[] = []
+      page.on('Runtime.exceptionThrown', (params) => {
+        const details = params.exceptionDetails as { text?: string; exception?: { description?: string } } | undefined
+        errors.push(details?.exception?.description ?? details?.text ?? 'exception')
+      })
+      await page.send('Page.navigate', { url: `http://127.0.0.1:${served!.port}/index.html` })
+      await waitForCanvas(page, 90_000, 800)
+      await page.evaluate("window.__routeStatus('online')")
+      await click(page, '.cr-routing-entry')
+      await sleep(400)
+      // The pick: the chip goes on, direct goes off.
+      const before = await chip(page, 'deepseek/deepseek-v4')
+      expect(before).not.toBeNull()
+      await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: before!.x, y: before!.y })
+      await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: before!.x, y: before!.y, button: 'left', clickCount: 1 })
+      await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: before!.x, y: before!.y, button: 'left', clickCount: 1 })
+      await sleep(300)
+      expect((await chip(page, 'deepseek/deepseek-v4'))?.checked).toBe('true')
+      expect((await chip(page, 'direct'))?.checked).toBe('false')
+      // Main pushes the same state again, as it does after any probe: nothing moves.
+      await page.evaluate('window.__routePush()')
+      await sleep(300)
+      expect((await chip(page, 'deepseek/deepseek-v4'))?.checked).toBe('true')
+      // Closed on Escape and reopened from the header: the reopened panel re-reads main and shows the pick.
+      await escape(page)
+      await sleep(300)
+      expect(await page.evaluate<number>("document.querySelectorAll('.cr-routing-panel').length")).toBe(0)
+      await click(page, '.cr-routing-entry')
+      await sleep(500)
+      expect((await chip(page, 'deepseek/deepseek-v4'))?.checked).toBe('true')
+      expect((await chip(page, 'direct'))?.checked).toBe('false')
+      // THE RACE. The next read answers late, with the state as it was when
+      // asked. The panel is reopened (a read goes out, holding deepseek) and
+      // the owner picks sonnet before it lands. The late read must not put
+      // deepseek back.
+      await page.evaluate('window.__routeReadLag(900)')
+      await escape(page)
+      await sleep(200)
+      await click(page, '.cr-routing-entry')
+      await sleep(150)
+      const sonnet = await chip(page, 'claude/claude-sonnet-5')
+      expect(sonnet).not.toBeNull()
+      await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: sonnet!.x, y: sonnet!.y })
+      await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: sonnet!.x, y: sonnet!.y, button: 'left', clickCount: 1 })
+      await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: sonnet!.x, y: sonnet!.y, button: 'left', clickCount: 1 })
+      await sleep(200)
+      expect((await chip(page, 'claude/claude-sonnet-5'))?.checked).toBe('true')
+      await sleep(1200) // the late read has landed by now
+      expect((await chip(page, 'claude/claude-sonnet-5'))?.checked, 'the late read did not revert the pick').toBe('true')
+      expect((await chip(page, 'deepseek/deepseek-v4'))?.checked).toBe('false')
+      expect(errors).toEqual([])
+      page.close()
+    } finally {
+      await browser.kill()
+    }
+  }, 240_000)
 })
