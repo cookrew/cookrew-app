@@ -66,6 +66,13 @@ export interface SousControlDeps {
     workdir: () => string | null
     /** A new card in the ACTIVE workspace, placed beside `besideId` (sous-decide placeBeside), wired to it, role = the brief. */
     recruit: (input: { preset: Harness; name: string; role: string; besideId: string | null }) => Promise<{ id: string; name: string }> | { id: string; name: string }
+    /**
+     * The brief into the recruited card, through the dispatch engine (its boot
+     * wait, its ledger, its cable pulse from `originId`). Resolves once the
+     * prompt reached the card; throws when it did not — the echo says "sent"
+     * only after this resolves.
+     */
+    deliver: (input: { nodeId: string; sentence: string; originId: string | null }) => Promise<void>
     /** Mint the token a decision travels under. */
     token?: () => string
   }
@@ -164,9 +171,10 @@ const SENT = {
   zh: (agent: string) => `已派给 ${agent}`,
   en: (agent: string) => `Sent to ${agent}`
 } as const
+/** Said only after the brief reached the new card — never on creation alone. */
 const RECRUITED = {
-  zh: (harness: string, name: string) => `新建了 ${harness} 卡「${name}」`,
-  en: (harness: string, name: string) => `New ${harness} card · ${name}`
+  zh: (harness: string, name: string) => `新建了 ${harness} 卡「${name}」，已派出`,
+  en: (harness: string, name: string) => `New ${harness} card · ${name} · sent`
 } as const
 
 /** The line under the box: who, and the three reasons — or the question back. */
@@ -174,6 +182,17 @@ export function echoOf(decision: Decision, lang: Lang): string {
   if (decision.kind === 'ask') return `→ ${decision.target.name} (${decision.reasons.join(' · ')})`
   if (decision.kind === 'recruit') return `+ ${decision.harness} card · ${decision.name} (${decision.reasons.join(' · ')})`
   return lang === 'zh' ? decision.question : decision.question
+}
+
+/** A decision shown and not yet spent; `recruited` survives a failed delivery so a retry does not mint a second card. */
+interface DecisionSlot {
+  decision: Decision
+  surface: Surface
+  key: string
+  lang: Lang
+  until: number
+  committing: boolean
+  recruited?: { id: string; name: string; harness: Harness }
 }
 
 export class SousController {
@@ -186,7 +205,7 @@ export class SousController {
   /** Where Sous last zoomed each caller — the only focus a network door gets. */
   private readonly focus = new Map<string, string>()
   /** Decisions shown and not yet committed, by token; each dies after DECISION_TTL_MS. */
-  private readonly decisions = new Map<string, { decision: Decision; surface: Surface; key: string; lang: Lang; until: number; committing: boolean }>()
+  private readonly decisions = new Map<string, DecisionSlot>()
 
   constructor(private readonly deps: SousControlDeps) {}
 
@@ -396,13 +415,25 @@ export class SousController {
       } else if (decision.kind === 'recruit') {
         const deps = this.deps.decide
         if (!deps) throw new Error('recruiting is not wired on this desktop')
-        const harness = (choice.target?.startsWith('harness:') ? choice.target.slice('harness:'.length) : decision.harness) as Harness
-        const node = await deps.recruit({ preset: harness, name: decision.name, role: decision.sentence, besideId: decision.beside?.id ?? null })
-        if (decision.beside) this.deps.connect(decision.beside.id, node.id)
+        const chosen = (choice.target?.startsWith('harness:') ? choice.target.slice('harness:'.length) : decision.harness) as Harness
+        // A card recruited by an earlier commit whose delivery failed is
+        // reused: the retry delivers to it instead of minting a second one.
+        const harness = slot.recruited?.harness ?? chosen
+        let node = slot.recruited
+        if (!node) {
+          const made = await deps.recruit({ preset: harness, name: decision.name, role: decision.sentence, besideId: decision.beside?.id ?? null })
+          node = { ...made, harness }
+          slot.recruited = node
+          if (decision.beside) this.deps.connect(decision.beside.id, node.id)
+          this.note('recruit', node.id, `${harness} · ${node.name}${decision.beside ? ` ↔ ${decision.beside.name}` : ''}`)
+        }
         const workspaceId = this.deps.activeWorkspaceId() ?? ''
         this.deps.ui({ kind: 'zoom', nodeId: node.id }, workspaceId)
         this.focus.set(key, node.id)
-        this.note('recruit', node.id, `${harness} · ${node.name}${decision.beside ? ` ↔ ${decision.beside.name}` : ''}`)
+        // The sentence goes in through the dispatch engine, which waits for
+        // the harness to reach its prompt; "sent" is said only once it has.
+        await deps.deliver({ nodeId: node.id, sentence: decision.sentence, originId: decision.beside?.id ?? null })
+        this.note('prompt', node.id, node.name)
         result = { intent: 'create', spoken: RECRUITED[lang](harness, node.name), agentId: node.id, text: decision.sentence }
       } else {
         result = { intent: 'decide', spoken: decision.question }

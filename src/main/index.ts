@@ -9,6 +9,7 @@ import { PtyManager, multiplexer, sessionNameFor } from './pty'
 import { buildInbox, type InboxNode } from './inbox'
 import { cachedDispatchReader, wireInbox } from './inbox-wiring'
 import { createWindowHold } from './inbox-window-hold'
+import { deliverToRecruit } from './recruit-delivery'
 import { placeBeside, type DecideCandidate } from '../shared/sous-decide'
 import type { PtySession } from './pty'
 import type { PaneCardInfo } from './multiplexer'
@@ -5463,6 +5464,12 @@ app.whenReady().then(() => {
         const node = createTerminal({ name, preset, position })
         updateNode(node.id, { role })
         return { id: node.id, name: node.name }
+      },
+      // The same door `cookrew ask --no-wait` uses: admitted by the dispatch
+      // engine (retrying the boot-time 503s of a card made a moment ago),
+      // delivered by herdr once the harness is at its prompt, on the ledger.
+      deliver: async (input) => {
+        await deliverToRecruit(dispatchService, input)
       }
     }
   })
