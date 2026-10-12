@@ -112,8 +112,15 @@ describe('placeBeside — the bench beside the orch, on the 110 px grid', () => 
     expect(second.x % 110).toBe(0)
     expect(second.y % 110).toBe(0)
   })
-  it('with no anchor goes to the right of everything', () => {
-    expect(placeBeside(null, [{ position: { x: 0, y: 115 }, size }], size)).toEqual({ x: 770, y: 110 })
+  it('with no anchor sits on the bench at the top-left of the canvas, not past the rightmost card', () => {
+    const at = placeBeside(null, [{ position: { x: 0, y: 115 }, size }], size)
+    expect(at.x).toBeLessThan(2000)
+    expect(at.y % 110).toBe(0)
+    expect(at.x % 110).toBe(0)
+    expect([{ position: { x: 0, y: 115 }, size }].some((n) => at.x < n.position.x + n.size.width && at.x + size.width > n.position.x && at.y < n.position.y + n.size.height && at.y + size.height > n.position.y)).toBe(false)
+  })
+  it('an empty canvas still gets a bench slot next to the origin', () => {
+    expect(placeBeside(null, [], size)).toEqual({ x: 110, y: 110 })
   })
 })
 

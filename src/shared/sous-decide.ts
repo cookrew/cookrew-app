@@ -357,6 +357,22 @@ const snap = (v: number): number => Math.round(v / GRID) * GRID
  */
 export function placeBeside(anchor: Box | null, nodes: readonly Box[], size: Box['size']): { x: number; y: number } {
   if (!anchor) {
+    // THE BENCH WITHOUT AN ANCHOR: the top-left corner of what is already on
+    // the canvas, scanned right then down. Placing it "right of everything"
+    // drifted every chore card further out (a card at x 19360 on a canvas of
+    // 240 cards); this stays where the owner's cards already are.
+    if (nodes.length > 0) {
+      const minX = nodes.reduce((m, n) => Math.min(m, n.position.x), Infinity)
+      const minY = nodes.reduce((m, n) => Math.min(m, n.position.y), Infinity)
+      const startX = snap(minX)
+      const startY = snap(minY)
+      for (let row = 0; row < 12; row++) {
+        for (let col = 0; col < 12; col++) {
+          const candidate: Box = { position: { x: startX + col * GRID, y: startY + row * GRID }, size }
+          if (!nodes.some((n) => overlaps(candidate, n))) return candidate.position
+        }
+      }
+    }
     const right = nodes.reduce((max, n) => Math.max(max, n.position.x + n.size.width), 0)
     return { x: snap(right + GRID), y: snap(nodes[0]?.position.y ?? GRID) }
   }
