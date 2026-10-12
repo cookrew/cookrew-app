@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { HarnessRow, RouteDecision, RouteModel, RouteQuota, RouteState } from '../../../shared/route'
-import { KEY_PRESETS, ROUTING_COPY, decisionFacts, harnessTicks, quotaBar, routeChoices, statusLine, windowLabel } from '../../../shared/route-view'
+import { KEY_PRESETS, ROUTING_COPY, decisionFacts, harnessTicks, quotaBar, routeChoices, statusLine, windowLabel, routeHead } from '../../../shared/route-view'
 import { keyLineFor } from '../../../shared/route-lines'
 import { runningLabel, type SetupRunning } from './setup-line-state'
 
@@ -322,7 +322,7 @@ function LiveRow({ d, name, onZoom }: { d: RouteDecision; name: string; onZoom?:
       <span className="t">{`${hh}:${mm}:${ss}`}</span>
       <span>{name}</span>
       <span className="arr">→</span>
-      <span className="g">{d.group ?? d.asked ?? 'direct'}</span>
+      <span className="g">{routeHead(d)}</span>
       <span className="arr">→</span>
       <span className="m">{d.model ?? '—'}</span>
       <span className="alt">{alt}</span>

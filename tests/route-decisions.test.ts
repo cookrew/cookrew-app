@@ -63,7 +63,7 @@ describe('mapping', () => {
   it('a route answer becomes a decision row; no route yet is null', () => {
     expect(toDecision('card-1', { route: null, seq: 0, session: 'cookrew:card-1' }, 5)).toBeNull()
     const d = toDecision('card-1', { route: { asked: 'group/smart', group: 'group/smart', model: 'deepseek/deepseek-chat', effort: 'high', tries: [{ model: 'claude/x', fail: '429' }, { model: 'deepseek/deepseek-chat' }], done: false }, seq: 4, session: 'cookrew:card-1' }, 5)
-    expect(d).toEqual({ terminalId: 'card-1', session: 'cookrew:card-1', seq: 4, asked: 'group/smart', group: 'group/smart', model: 'deepseek/deepseek-chat', effort: 'high', tries: 2, done: false, status: null, at: 5, ttftMs: null, ms: null })
+    expect(d).toEqual({ terminalId: 'card-1', session: 'cookrew:card-1', seq: 4, asked: 'group/smart', group: 'group/smart', model: 'deepseek/deepseek-chat', effort: 'high', tries: 2, done: false, status: null, at: 5, ttftMs: null, ms: null , rule: null})
   })
 
   it('the real route answer: time stamped by the gateway, tries an array, group absent for a plain model, ttft and ms kept', () => {
@@ -72,6 +72,18 @@ describe('mapping', () => {
     const d = toDecision('probe-claude', real, 1)
     expect(d).toMatchObject({ asked: 'ollama/qwen2.5:1.5b', group: null, model: 'ollama/qwen2.5:1.5b', effort: 'high', tries: 1, done: true, status: '200', ttftMs: 812, ms: 4267, seq: 1 })
     expect(d?.at).toBe(Date.parse('2026-10-11T14:24:32.197169+08:00'))
+  })
+
+  it("keeps the group's rule and its pick; a bare rule name is an id; absent is null (HP round)", () => {
+    // SYNTHESISED from reference.md ("rule (the group's rule that matched,
+    // and rule.pick, the effort its decision model picked)"): no group on
+    // this Mac has a rule yet, so no real body could be recorded. Marked so
+    // the first real one replaces it.
+    const withRule = { route: { asked: 'group/smart', group: 'group/smart', rule: { id: 'night-cheap', pick: 'low' }, model: 'ollama/qwen3:4b', effort: 'low', tries: [{}], done: false }, seq: 2, session: 'cookrew:c' }
+    expect(toDecision('c', withRule, 1)?.rule).toEqual({ id: 'night-cheap', pick: 'low' })
+    expect(toDecision('c', { route: { asked: 'x', rule: 'by-hour', model: 'm', done: false }, seq: 1 }, 1)?.rule).toEqual({ id: 'by-hour', pick: null })
+    expect(toDecision('c', { route: { asked: 'x', rule: { pick: 'high' }, model: 'm', done: false }, seq: 1 }, 1)?.rule).toBeNull()
+    expect(toDecision('c', { route: { asked: 'x', model: 'm', done: false }, seq: 1 }, 1)?.rule).toBeNull()
   })
 
   it('the usage row becomes turn facts; an unpriced (local) row has no cost', () => {
@@ -101,7 +113,7 @@ describe('mapping', () => {
 
   it('live keeps the last 20, newest first, one per card and seq', () => {
     let live: RouteDecision[] = []
-    for (let i = 1; i <= 25; i += 1) live = pushLive(live, { terminalId: `c${i % 3}`, session: 's', seq: i, asked: null, group: null, model: null, effort: null, tries: 0, done: false, status: null, at: i, ttftMs: null, ms: null })
+    for (let i = 1; i <= 25; i += 1) live = pushLive(live, { terminalId: `c${i % 3}`, session: 's', seq: i, asked: null, group: null, model: null, effort: null, tries: 0, done: false, status: null, at: i, ttftMs: null, ms: null , rule: null})
     expect(live).toHaveLength(20)
     expect(live[0].seq).toBe(25)
     const again = pushLive(live, { ...live[0], model: 'x' })
