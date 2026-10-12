@@ -77,6 +77,13 @@ export interface RouteDecision {
   /** Time to first token and the whole request, in ms, when the gateway has them. */
   ttftMs: number | null
   ms: number | null
+  /**
+   * The group's rule that matched this turn, and `pick` — the effort its
+   * decision model chose (reference.md, /v1/magpie/route). Null when the
+   * group had no rule for it, or a plain model was asked. The rail and R1
+   * print `auto → <rule.id> → <model>` when it is here.
+   */
+  rule: { id: string; pick: string | null } | null
 }
 
 export interface RouteTurnFacts {

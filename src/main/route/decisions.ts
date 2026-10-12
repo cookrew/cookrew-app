@@ -62,6 +62,12 @@ export function toDecision(terminalId: string, body: unknown, at: number): Route
   const tries = Array.isArray(route.tries) ? route.tries.length : num(route.tries) ?? 0
   // The gateway stamps `time` (RFC3339) on the route; ours is the fallback.
   const stamped = str(route.time) ? Date.parse(str(route.time) as string) : NaN
+  // The rule that matched (and the effort its decision model picked) — an
+  // object with an id and a `pick` per the docs; a bare string names the rule.
+  const ruleRaw = route.rule
+  const ruleRec = asRecord(ruleRaw)
+  const ruleId = ruleRec ? str(ruleRec.id) ?? str(ruleRec.name) ?? str(ruleRec.rule) : str(ruleRaw)
+  const rule = ruleId ? { id: ruleId, pick: ruleRec ? str(ruleRec.pick) ?? str(ruleRec.effort) : null } : null
   return {
     terminalId,
     session: str(b.session) ?? routeSession(terminalId),
@@ -75,7 +81,8 @@ export function toDecision(terminalId: string, body: unknown, at: number): Route
     status: str(route.status) ?? (num(route.status) !== null ? String(route.status) : null),
     at: Number.isFinite(stamped) ? stamped : at,
     ttftMs: num(route.ttft_ms) ?? num(route.ttftMs),
-    ms: num(route.ms)
+    ms: num(route.ms),
+    rule
   }
 }
 

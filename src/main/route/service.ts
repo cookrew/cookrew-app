@@ -260,6 +260,16 @@ export class RouteService extends EventEmitter {
     return null
   }
 
+  /**
+   * For Sous, minting a decision: the card's route and what its process got —
+   * one node lookup, no probe, no respawn. Null for a card that is not there.
+   */
+  routeOfCard(terminalId: string): { route: CardRoute; effective: CardRoute | null } | null {
+    const node = this.deps.node(terminalId)
+    if (!node) return null
+    return { route: this.routeOf(node), effective: node.routeEffective ?? null }
+  }
+
   /** The card's route as it stands: its own, else the fleet default, else direct. A served card is direct, always. */
   routeOf(node: TerminalNodeData | null): CardRoute {
     if (node === null) return DIRECT

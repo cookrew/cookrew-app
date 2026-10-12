@@ -168,8 +168,26 @@ export function quotaBar(q: RouteQuota): QuotaBar {
   return { title, sub, kind: q.kind, fill, reading: `${fullest.name} ${windowLabel(fullest)}`, error: null, hot: fill >= 0.9 }
 }
 
-/** What a live row says after the model: tries, a failure, the first-token time. */
-export function decisionFacts(d: Pick<RouteDecision, 'tries' | 'status' | 'ttftMs' | 'group'>): string {
+/**
+ * The path a turn took, as the rail and R1 print it: `auto → <rule> → <model>`
+ * when a group rule matched, `<group> → <model>` when a group picked without
+ * one, the model alone when a plain model was asked.
+ */
+export function routePath(d: Pick<RouteDecision, 'rule' | 'group' | 'model' | 'asked'>): string {
+  const model = d.model ?? '—'
+  if (d.rule) return `auto → ${d.rule.id} → ${model}`
+  if (d.group) return `${d.group} → ${model}`
+  return d.model ?? d.asked ?? 'direct'
+}
+
+/** What the live row's first column says: `auto → <rule>` under a rule, else the group, the ask, or direct. */
+export function routeHead(d: Pick<RouteDecision, 'rule' | 'group' | 'asked'>): string {
+  if (d.rule) return `auto → ${d.rule.id}`
+  return d.group ?? d.asked ?? 'direct'
+}
+
+/** What a live row says after the model: tries, a failure, the first-token time, the rule's pick. */
+export function decisionFacts(d: Pick<RouteDecision, 'tries' | 'status' | 'ttftMs' | 'group'> & { rule?: RouteDecision['rule'] }): string {
   const parts: string[] = []
   // The contract carries a count; the gateway's own array (each try with
   // a `fail`) is accepted too, in case it ever arrives unfolded.
@@ -179,6 +197,7 @@ export function decisionFacts(d: Pick<RouteDecision, 'tries' | 'status' | 'ttftM
   if (count > 1) parts.push(`${count} tries${failed > 0 ? ` · ${failed} failed` : ''}`)
   if (d.status) parts.push(d.status)
   if (d.ttftMs !== null && d.ttftMs !== undefined) parts.push(`first token ${(d.ttftMs / 1000).toFixed(1)} s`)
+  if (d.rule?.pick) parts.push(`pick ${d.rule.pick}`)
   if (parts.length === 0) parts.push(d.group ? 'first pick' : 'direct pick')
   return parts.join(' · ')
 }
@@ -211,8 +230,11 @@ export function routeDialLines(card: CardRouteState | null): RouteDialLines {
 }
 
 function turnLine(card: CardRouteState): string | null {
-  if (card.turn && card.turn.model) return `this turn → ${card.turn.model}${tokens(card.turn.inputTokens, card.turn.outputTokens)}${cost(card.turn)}`
-  return card.live?.model ? `this turn → ${card.live.model}` : null
+  // Under a matched rule the line says how the model was reached:
+  // `this turn → auto → <rule> → <model>`; without one, the model alone.
+  const via = card.live?.rule ? `auto → ${card.live.rule.id} → ` : ''
+  if (card.turn && card.turn.model) return `this turn → ${via}${card.turn.model}${tokens(card.turn.inputTokens, card.turn.outputTokens)}${cost(card.turn)}`
+  return card.live?.model ? `this turn → ${via}${card.live.model}` : null
 }
 
 function joinNotes(...notes: (string | null | undefined)[]): string | null {
