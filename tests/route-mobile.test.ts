@@ -27,6 +27,7 @@ function routeState(status: RouteState['status']): RouteState {
     live: [],
     harnesses: [],
     checkedAt: 1,
+    autoGroup: false,
     setup: { installLine: 'i', serveLine: 's', pluginLine: 'p', addSubscriptionLine: 'a', addKeyLine: 'k ', addLocalLine: 'l', addGroupLine: 'g' }
   }
 }

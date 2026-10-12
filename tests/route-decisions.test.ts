@@ -90,6 +90,10 @@ describe('mapping', () => {
     const hit = toDecision('probe-rule', JSON.parse(readFileSync(path.join(__dirname, 'fixtures', 'magpie', 'route-with-rule.json'), 'utf8')), 1)
     expect(hit?.rule).toEqual({ id: '1', pick: 'ollama/qwen2.5:1.5b', held: true, when: ['tokens ≥ 1000'] })
     expect(hit).toMatchObject({ group: 'hp-rule', model: 'ollama/qwen2.5:1.5b', effort: 'high', done: true })
+    // group/auto (E2E round): the same mapping, whatever the group is called.
+    const auto = JSON.parse(readFileSync(path.join(__dirname, 'fixtures', 'magpie', 'route-with-rule.json'), 'utf8')) as { route: Record<string, unknown> }
+    const autoHit = toDecision('a', { ...auto, route: { ...auto.route, group: 'auto', asked: 'group/auto' } }, 1)
+    expect(autoHit).toMatchObject({ group: 'auto', asked: 'group/auto', rule: { id: '1', pick: 'ollama/qwen2.5:1.5b' } })
     // The shapes a hand could write: a missing n, a rule that is not an object.
     expect(toDecision('c', { route: { asked: 'x', model: 'm', done: false, rule: { use: 'm' } }, seq: 1 }, 1)?.rule).toBeNull()
     expect(toDecision('c', { route: { asked: 'x', model: 'm', done: false, rule: 'by-hour' }, seq: 1 }, 1)?.rule).toBeNull()

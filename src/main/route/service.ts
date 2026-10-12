@@ -21,6 +21,7 @@ import { RouteDecisions, pushLive } from './decisions'
 import { DEFAULT_PORT } from './discovery'
 import type { GatewayMonitor, GatewayProbe } from './gateway'
 import { ADD_KEY_STEM, HarnessScan, groupLineFor, setupLines } from './setup'
+import { keyFor, readRouteKeys, type RouteKeys } from './route-keys'
 
 /**
  * THE ROUTE SERVICE — one object main keeps, every route question answered
@@ -78,6 +79,8 @@ export interface RouteServiceDeps {
   sessionOnDisk?: (node: TerminalNodeData) => boolean
   /** Every terminal node across workspaces, for seeding the routed set at boot. */
   terminalsAcross?: () => readonly TerminalNodeData[]
+  /** The per-harness gateway key names (~/.cookrew/route-keys.json); default reads the file. Injected for tests. */
+  routeKeys?: () => RouteKeys
   dockCommands: () => readonly string[]
   /** The harness scan (installed, signed in, in dock), cached; injected for tests. */
   scan?: HarnessScan
@@ -166,6 +169,7 @@ export class RouteService extends EventEmitter {
       live: this.live,
       harnesses: this.scan.rows(),
       checkedAt: probe.checkedAt,
+      autoGroup: this.models.some((m) => m.id === 'group/auto'),
       setup: { ...lines, addKeyLine: ADD_KEY_STEM, addGroupLine: groupLineFor(this.models.map((m) => m.id)) }
     }
   }
@@ -321,7 +325,9 @@ export class RouteService extends EventEmitter {
     const harness = this.deps.harnessOf(node.command)
     if (!harness) return direct(false)
     const contextWindow = this.models.find((m) => m.id === route)?.contextWindow ?? null
-    const r: RouteEnv = routeEnv({ harness, gateway: { url: probe.gateway.url, v1: probe.gateway.v1, key: probe.key }, model: route, cardId: node.id, contextWindow })
+    // The harness's own gateway key when the owner named one, else the app's.
+    const key = keyFor((this.deps.routeKeys ?? (() => readRouteKeys(this.deps.home)))(), harness, probe.key)
+    const r: RouteEnv = routeEnv({ harness, gateway: { url: probe.gateway.url, v1: probe.gateway.v1, key }, model: route, cardId: node.id, contextWindow })
     if (!r.routable) return direct(false)
     for (const f of r.files) (this.deps.writeFile ?? writeFile0600)(f.path, f.content)
     return { env: r.env, args: r.args, effective: route, offline: false }

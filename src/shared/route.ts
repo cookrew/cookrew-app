@@ -146,6 +146,12 @@ export interface RouteState {
   live: RouteDecision[]
   harnesses: HarnessRow[]
   checkedAt: number
+  /**
+   * Whether the gateway serves `group/auto` (design §5's local tier): the
+   * renderer offers it only then; the group is made by the owner from the
+   * line scripts/route-auto-group.mjs prints, never by the app.
+   */
+  autoGroup: boolean
   /** addKeyLine is the BARE stem `magpie provider add ` ending in one space: the renderer appends the preset, the user pastes the key. */
   setup: Omit<RouteSetupLines, 'addKeyLine'> & { addKeyLine: string }
 }
