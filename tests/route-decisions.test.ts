@@ -86,6 +86,10 @@ describe('mapping', () => {
     expect(p).toMatchObject({ group: 'think', asked: 'group/think', model: 'ollama/qwen2.5:1.5b', done: true, rule: null })
     const t = toDecision('hp-think', think, 1)
     expect(t).toMatchObject({ group: 'think', model: 'ollama/qwen3:1.7b', effort: 'high', done: true, rule: { id: '1', pick: 'ollama/qwen3:1.7b' } })
+    // The real claude-driven rule hit (route-with-rule.json): held, with its rendered conditions.
+    const hit = toDecision('probe-rule', JSON.parse(readFileSync(path.join(__dirname, 'fixtures', 'magpie', 'route-with-rule.json'), 'utf8')), 1)
+    expect(hit?.rule).toEqual({ id: '1', pick: 'ollama/qwen2.5:1.5b', held: true, when: ['tokens ≥ 1000'] })
+    expect(hit).toMatchObject({ group: 'hp-rule', model: 'ollama/qwen2.5:1.5b', effort: 'high', done: true })
     // The shapes a hand could write: a missing n, a rule that is not an object.
     expect(toDecision('c', { route: { asked: 'x', model: 'm', done: false, rule: { use: 'm' } }, seq: 1 }, 1)?.rule).toBeNull()
     expect(toDecision('c', { route: { asked: 'x', model: 'm', done: false, rule: 'by-hour' }, seq: 1 }, 1)?.rule).toBeNull()
@@ -182,6 +186,24 @@ describe('the follow', () => {
     expect(frames).toEqual([null, 'claude/claude-sonnet-5-5', 'claude/claude-sonnet-5-5'])
     expect(turns).toEqual(['card-1:3027'])
     expect(fake.calls.filter((c) => c.path.includes('/usage/requests'))).toHaveLength(1)
+    expect(d.following).toEqual([])
+  })
+
+  it("a held rule reported again by a later request of the same turn is not a change: no frame, the follow goes on (round 3)", async () => {
+    const fake = await fakeGateway()
+    cleanup.push(fake.close)
+    const body = JSON.parse(readFileSync(path.join(__dirname, 'fixtures', 'magpie', 'route-with-rule.json'), 'utf8')) as { route: Record<string, unknown>; seq: number }
+    const open = { ...body.route, done: false, status: null, tries: [{ model: 'ollama/qwen2.5:1.5b' }] }
+    // seq 1: the turn opens on rule 1. seq 2: a later request of the same turn, the held rule again, nothing else moved.
+    fake.answers.set(0, { route: open, seq: 1, session: 'cookrew:card-1' })
+    fake.answers.set(1, { route: { ...open, rule: { ...((open as Record<string, unknown>).rule as object), tokens: 40000 } }, seq: 2, session: 'cookrew:card-1' })
+    // seq 3: done — a real change.
+    fake.answers.set(2, { route: body.route, seq: 3, session: 'cookrew:card-1' })
+    const frames: string[] = []
+    const d = new RouteDecisions({ fetch: (i, init) => fetch(i, init), gateway: () => ({ url: fake.url, key: 'k' }), waitSeconds: 1, lapFloorMs: 50, onDecision: (row) => frames.push(`${row.seq}:${row.done}:${row.rule?.id}`), onTurn: () => {} })
+    d.follow('card-1')
+    await sleep(500)
+    expect(frames).toEqual(['1:false:1', '3:true:1'])
     expect(d.following).toEqual([])
   })
 

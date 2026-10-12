@@ -180,6 +180,14 @@ export function routePath(d: Pick<RouteDecision, 'rule' | 'group' | 'model' | 'a
   return d.model ?? d.asked ?? 'direct'
 }
 
+/** The rule's rendered conditions for a row's title ("tokens ≥ 1000 · held"), or null without a rule. */
+export function ruleTitle(d: Pick<RouteDecision, 'rule'>): string | null {
+  if (!d.rule) return null
+  const parts = [`rule ${d.rule.id}`, ...(d.rule.when ?? [])]
+  if (d.rule.held) parts.push('decided when the turn began')
+  return parts.join(' · ')
+}
+
 /** What the live row's first column says: `auto → <rule>` under a rule, else the group, the ask, or direct. */
 export function routeHead(d: Pick<RouteDecision, 'rule' | 'group' | 'asked'>): string {
   if (d.rule) return `auto → ${d.rule.id}`

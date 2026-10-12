@@ -8,7 +8,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { toDecision } from '../src/main/route/decisions'
 import { cardRouteFixture } from '../src/shared/route-fixture'
-import { decisionFacts, routeDialLines, routeHead, routePath } from '../src/shared/route-view'
+import { decisionFacts, routeDialLines, routeHead, routePath, ruleTitle } from '../src/shared/route-view'
 import type { RouteDecision } from '../src/shared/route'
 
 const base: RouteDecision = { terminalId: 'c', session: 'cookrew:c', seq: 1, asked: 'group/smart', group: 'group/smart', model: 'ollama/qwen3:4b', effort: 'low', tries: 1, done: false, status: null, at: 1, ttftMs: null, ms: null, rule: null }
@@ -31,6 +31,14 @@ describe('the route path', () => {
     const ruled: RouteDecision = { ...base, ttftMs: 2300, rule: { id: '1', pick: 'ollama/qwen3:1.7b' } }
     expect(decisionFacts(ruled)).toBe('first token 2.3 s')
     expect(decisionFacts({ ...base, ttftMs: 2300 })).toBe('first token 2.3 s')
+  })
+
+  it("R1's row title carries the rule's rendered conditions and whether it was held (round 3)", () => {
+    const hit = toDecision('probe-rule', JSON.parse(readFileSync(path.join(__dirname, 'fixtures', 'magpie', 'route-with-rule.json'), 'utf8')), 1)!
+    expect(ruleTitle(hit)).toBe('rule 1 · tokens ≥ 1000 · decided when the turn began')
+    expect(routePath(hit)).toBe('auto → 1 → ollama/qwen2.5:1.5b')
+    expect(ruleTitle(base)).toBeNull()
+    expect(ruleTitle({ rule: { id: '2', pick: null } })).toBe('rule 2')
   })
 
   it("the real bodies: the think turn prints auto → 1 → the model, the plain turn never prints 'auto → 0'", () => {

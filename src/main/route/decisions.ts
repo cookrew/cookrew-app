@@ -69,7 +69,11 @@ export function toDecision(terminalId: string, body: unknown, at: number): Route
   // n of 0 or absent is no rule, so the rail never prints "auto → 0".
   const ruleRec = asRecord(route.rule)
   const n = ruleRec ? num(ruleRec.n) : null
-  const rule = n !== null && n > 0 ? { id: String(n), pick: str(ruleRec?.use) } : null
+  const when = Array.isArray(ruleRec?.when) ? (ruleRec!.when as unknown[]).filter((w): w is string => typeof w === 'string') : []
+  const rule =
+    n !== null && n > 0
+      ? { id: String(n), pick: str(ruleRec?.use), ...(ruleRec?.held === true ? { held: true } : {}), ...(when.length > 0 ? { when } : {}) }
+      : null
   return {
     terminalId,
     session: str(b.session) ?? routeSession(terminalId),
@@ -147,9 +151,22 @@ interface Follow {
 export const LAP_FLOOR_MS = 500
 export const MAX_IDLE_LAPS = 8
 
-/** The same decision, whenever it was read: a repeat is not a change. */
-const sameDecision = (a: RouteDecision | undefined, b: RouteDecision): boolean =>
-  a !== undefined && JSON.stringify({ ...a, at: 0 }) === JSON.stringify({ ...b, at: 0 })
+const ruleKey = (r: RouteDecision['rule']): string => (r ? `${r.id}|${r.pick ?? ''}` : '')
+
+/**
+ * The same decision, whenever it was read: a repeat is not a change. A rule
+ * the gateway marks `held` was decided when the turn began and is reported
+ * again by every later request of the turn (a claude turn makes several),
+ * so a held rule with the previous frame's n and use counts as the same
+ * rule — the rest of the decision still decides (a retry, a done).
+ */
+const sameDecision = (a: RouteDecision | undefined, b: RouteDecision): boolean => {
+  if (a === undefined) return false
+  const heldRepeat = b.rule?.held === true && a.rule !== null && ruleKey(a.rule) === ruleKey(b.rule)
+  // A held repeat arrives under a new seq and a new time; neither is news.
+  const strip = (d: RouteDecision): RouteDecision => ({ ...d, at: 0, seq: heldRepeat ? 0 : d.seq, rule: heldRepeat ? null : d.rule })
+  return JSON.stringify(strip(a)) === JSON.stringify(strip(b))
+}
 
 export class RouteDecisions {
   private readonly follows = new Map<string, Follow>()
