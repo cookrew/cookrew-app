@@ -51,3 +51,27 @@ function tokenize(text: string, skip: (word: string) => boolean): Set<string> {
   }
   return out
 }
+
+/**
+ * Words that make a sentence a REPO task: code, files, tests, branches. A
+ * sentence with none of these and no card to take it is a chore — it gets a
+ * card in ~/.cookrew/chores, never in the repo, with no repo digest.
+ */
+export const CODE_WORDS: ReadonlySet<string> = new Set(
+  'test tests spec fix bug bugs refactor file files function class module component commit branch pr merge rebase repo repository lint typecheck build ci deploy release migration schema api endpoint route handler hook store script package dependency dep import export readme changelog docs diff patch regex query sql html css ts tsx js json yaml 测试 修 重构 文件 函数 类 模块 组件 提交 分支 仓库 仓 代码 接口 路由 脚本 依赖 文档 构建 发版 部署 报错 报错了 编译 类型'.split(' ')
+)
+
+const CODE_SHAPE_RE = /[\w-]+\.(?:ts|tsx|js|mjs|cjs|json|md|css|html|py|rs|go|sh|yaml|yml|toml)\b|\/[\w.-]+\/|\b[a-z]+[A-Z]\w+\b|\w+_\w+|#\d+|\bv\d+(?:\.\d+)*\b|`[^`]+`/
+
+/** Does the sentence name code — a word from CODE_WORDS, a path, a filename, an identifier? */
+export function isRepoTask(sentence: string): boolean {
+  if (CODE_SHAPE_RE.test(sentence)) return true
+  for (const token of sentence.toLowerCase().match(/[a-z0-9][a-z0-9_./-]*|[一-鿿]+/g) ?? []) {
+    if (/^[一-鿿]+$/.test(token)) {
+      for (const w of CODE_WORDS) if (/[一-鿿]/.test(w) && token.includes(w)) return true
+      continue
+    }
+    if (CODE_WORDS.has(token.replace(/^[./-]+|[./-]+$/g, ''))) return true
+  }
+  return false
+}

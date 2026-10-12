@@ -9,7 +9,10 @@
 // Pure. Main feeds it (src/main/inbox.ts) and the box draws it; the tests own
 // the clock.
 
-export type InboxKind = 'waiting' | 'dispatch' | 'secret' | 'signin'
+export type InboxKind = 'waiting' | 'dispatch' | 'secret' | 'signin' | 'sous'
+
+/** What one click on the row does (HP contract): re-send a proposal, open the card, or nothing beyond the jump. */
+export type InboxAction = 'retry' | 'open' | null
 
 /** One signal about one card, before merging. */
 export interface InboxItem {
@@ -32,6 +35,12 @@ export interface InboxItem {
   slot?: string
   /** `secret` rows: the note that carries the slot, when it is known. */
   noteId?: string
+  /** `sous` rows: the ledger token the act/dismiss routes take as the id. */
+  token?: string
+  action?: InboxAction
+  dismissable?: boolean
+  /** The proposal as the owner saw it (scrubbed) — a `sous` row's text. */
+  text?: string
 }
 
 /** One row of the inbox: the card, merged over every signal about it. */
@@ -53,11 +62,30 @@ export interface InboxRow {
   score: number
   slot?: string
   noteId?: string
+  token?: string
+  action: InboxAction
+  dismissable: boolean
+  text?: string
+}
+
+/** The WALL's view of a row (read-only scope): kind, card, waited-for — no reasons, no question, no brief, no proposal. */
+export interface WallInboxRow {
+  nodeId: string
+  nodeName: string
+  nodeKind: InboxRow['nodeKind']
+  kind: InboxKind
+  kinds: InboxKind[]
+  since: number
+  waitMinutes: number
+}
+
+export function wallProjection(rows: readonly InboxRow[]): WallInboxRow[] {
+  return rows.map((r) => ({ nodeId: r.nodeId, nodeName: r.nodeName, nodeKind: r.nodeKind, kind: r.kind, kinds: r.kinds, since: r.since, waitMinutes: r.waitMinutes }))
 }
 
 /** A secret beats a question beats a stuck delivery beats a sign-in wall:
  *  the order the box resolves a merged row's click in. */
-const KIND_RANK: Record<InboxKind, number> = { secret: 0, waiting: 1, dispatch: 2, signin: 3 }
+const KIND_RANK: Record<InboxKind, number> = { secret: 0, waiting: 1, dispatch: 2, sous: 3, signin: 4 }
 
 /** (1 + blocked) × log1p(minutes) × (served ? 2 : 1) — design section 5. */
 export function inboxScore(input: { blockedDownstream: number; waitMinutes: number; served: boolean }): number {
@@ -80,6 +108,7 @@ export function rankInbox(items: readonly InboxItem[], now: number): InboxRow[] 
     const blockedDownstream = Math.max(...sorted.map((i) => i.blockedDownstream))
     const served = sorted.some((i) => i.served)
     const slotted = sorted.find((i) => i.kind === 'secret' && i.slot)
+    const acting = sorted.find((i) => i.action) ?? head
     return {
       nodeId: head.nodeId,
       nodeName: head.nodeName,
@@ -94,8 +123,12 @@ export function rankInbox(items: readonly InboxItem[], now: number): InboxRow[] 
       served,
       blockedDownstream,
       score: inboxScore({ blockedDownstream, waitMinutes, served }),
+      action: acting.action ?? null,
+      dismissable: sorted.some((i) => i.dismissable === true),
       ...(slotted?.slot ? { slot: slotted.slot } : {}),
-      ...(slotted?.noteId ? { noteId: slotted.noteId } : {})
+      ...(slotted?.noteId ? { noteId: slotted.noteId } : {}),
+      ...(acting.token ? { token: acting.token } : {}),
+      ...(acting.text ? { text: acting.text } : {})
     }
   })
   // Highest score first; a tie goes to the longer wait, then to the name, so

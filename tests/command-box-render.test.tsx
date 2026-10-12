@@ -43,7 +43,9 @@ const rows: InboxRow[] = [
     waitMinutes: 4,
     served: false,
     blockedDownstream: 2,
-    score: 3 * Math.log1p(4)
+    score: 3 * Math.log1p(4),
+    action: null,
+    dismissable: false
   },
   {
     nodeId: 'note-1',
@@ -59,6 +61,8 @@ const rows: InboxRow[] = [
     served: true,
     blockedDownstream: 1,
     score: 2 * 2 * Math.log1p(1),
+    action: null,
+    dismissable: false,
     slot: 'STRIPE_SECRET_KEY',
     noteId: 'note-1'
   }
@@ -71,6 +75,13 @@ const decision: Decision = {
     { kind: 'recruit', id: 'harness:Claude Code', name: 'Claude Code', harness: 'Claude Code', reasons: ['a brief with no shape → Claude Code'] }
   ],
   recruit: { harness: 'Claude Code', name: 'Install Section', beside: null, direct: true },
+  domain: 'repo',
+  exposure: 1,
+  exposureWhy: 'make',
+  boundaries: null,
+  mode: 'ticking',
+  route: null,
+
   reasons: ['idle', 'same repo', 'last touched README · 2h'],
   token: 't1',
   holdMs: 1500,
@@ -111,7 +122,7 @@ describe('CommandBox — one surface: the inbox rows, the field, the echo', () =
     expect(html).toContain('1.5 s · or ↵ now')
     expect(html).toContain('change ▾')
     expect(html).not.toContain('cmd-rows')
-    expect(echoLine({ ...decision, kind: 'recruit', harness: 'Codex', name: 'Prune v1', beside: null, direct: false, reasons: ['no idle card fits the brief', 'repo-wide → Codex', 'placed on the bench'] } as Decision)).toBe(
+    expect(echoLine({ ...decision, kind: 'recruit', harness: 'Codex', name: 'Prune v1', beside: null, direct: false, cwd: 'repo', reasons: ['no idle card fits the brief', 'repo-wide → Codex', 'placed on the bench'] } as Decision)).toBe(
       '+ Codex card · Prune v1 (no idle card fits the brief · repo-wide → Codex · placed on the bench)'
     )
   })
@@ -119,7 +130,7 @@ describe('CommandBox — one surface: the inbox rows, the field, the echo', () =
   it('a question is the echo itself, with nothing to hold or change', async () => {
     const { CommandBox } = await box()
     const html = renderToStaticMarkup(
-      <CommandBox open onClose={() => undefined} phone={false} rows={[]} initialDecision={{ kind: 'question', question: 'Is that a task for the crew, or a question for me?', reasons: ['a question, not a brief'], token: 'q', holdMs: 1500, sentence: 'next week' }} />
+      <CommandBox open onClose={() => undefined} phone={false} rows={[]} initialDecision={{ kind: 'question', question: 'Is that a task for the crew, or a question for me?', reasons: ['a question, not a brief'], mode: 'question', answer: null, domain: 'question', exposure: 0, exposureWhy: null, boundaries: null, route: null, token: 'q', holdMs: 2500, sentence: 'next week' }} />
     )
     expect(html).toContain('data-decision="question"')
     expect(html).toContain('Is that a task for the crew, or a question for me?')
@@ -157,7 +168,7 @@ describe('round 2 — the change list names the other path, and a direct recruit
     const { altLabel, echoLine } = await box()
     expect(altLabel({ kind: 'recruit', id: 'harness:Claude Code', name: 'Claude Code', harness: 'Claude Code', reasons: [] })).toBe('+ new Claude Code card')
     expect(altLabel({ kind: 'ask', id: 'tinker', name: 'Tinker', reasons: [] })).toBe('→ Tinker instead')
-    expect(echoLine({ ...decision, kind: 'recruit', harness: 'Pi', name: 'Draft Limerick', beside: null, direct: true, reasons: ['no idle card fits the brief', 'light · cheap · local → Pi', 'placed on the bench'] } as Decision)).toBe(
+    expect(echoLine({ ...decision, kind: 'recruit', harness: 'Pi', name: 'Draft Limerick', beside: null, direct: true, cwd: 'repo', reasons: ['no idle card fits the brief', 'light · cheap · local → Pi', 'placed on the bench'] } as Decision)).toBe(
       '+ Pi card · Draft Limerick (no idle card fits the brief · light · cheap · local → Pi · placed on the bench) · will run direct'
     )
   })

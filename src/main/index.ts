@@ -11,7 +11,8 @@ import { cachedDispatchReader, wireInbox } from './inbox-wiring'
 import { createWindowHold } from './inbox-window-hold'
 import { deliverToRecruit } from './recruit-delivery'
 import { recruitPatch, spawnInjectionFor } from './recruit-node'
-import { placeBeside, type DecideCandidate, type Harness } from '../shared/sous-decide'
+import { placeBeside, type Alternate, type DecideCandidate, type Harness } from '../shared/sous-decide'
+import { SousLedger } from './sous-ledger'
 import type { PtySession } from './pty'
 import type { PaneCardInfo } from './multiplexer'
 import { paneCardFor, reportAllPaneBindings, type BindableTerminal } from './pane-bindings'
@@ -4128,6 +4129,8 @@ interface CreateTerminalOpts {
   preset: string
   position?: { x: number; y: number }
   orch?: boolean
+  /** Work here instead of the focused canvas's directory (a chore card in ~/.cookrew/chores). */
+  cwd?: string
   /** Boot a fresh agent from a saved role instead of a bare preset. */
   roleName?: string
   /**
@@ -4160,7 +4163,7 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
     name: opts.name || role?.name || preset.name,
     preset: role ? role.preset : preset.name,
     command: opts.command ?? (role ? role.command : preset.command),
-    cwd: store.focusedState.dir,
+    cwd: opts.cwd ?? store.focusedState.dir,
     orch: opts.orch ?? false,
     role: role ? role.name : null,
     ...(restoredSessionId ? { claudeSessionId: restoredSessionId } : {}),
@@ -5492,6 +5495,9 @@ app.whenReady().then(() => {
       presets: PRESETS.map((p) => p.name)
     }
   }
+  // THE SOUS LEDGER (HP): every decision, the owner's answer, the delivery's end — 0600, scrubbed, 30 d.
+  const sousLedger = new SousLedger()
+  const sousBus = new EventEmitter()
   const sous = new SousController({
     roster: sousRoster,
     activeWorkspaceId: () => store.focusedId,
@@ -5544,24 +5550,12 @@ app.whenReady().then(() => {
     decide: {
       workdir: () => store.focusedState.dir,
       candidates: async () => {
+        // NO PANE CAPTURES HERE (HP budget): context-full is read off the
+        // tracker's mirror, and the whole fleet is a list walk.
         const rows = new Map(buildBoard(boardSources()).rows.map((r) => [r.terminalId, r]))
-        const workdir = store.focusedState.dir
         const out: DecideCandidate[] = []
         for (const t of store.terminalsAcross()) {
           const row = rows.get(t.id)
-          const phase = row?.phase ?? 'offline'
-          const idleHere = t.cwd === workdir && (phase === 'done' || phase === 'unread' || phase === 'waiting')
-          let contextFull = false
-          if (idleHere) {
-            try {
-              const mux = multiplexer()
-              const name = sessionNameFor(t.id)
-              const pane = mux instanceof HerdrHostMultiplexer ? await mux.captureAsync(name) : (mux?.capture(name) ?? null)
-              contextFull = contextExhausted(pane)
-            } catch {
-              contextFull = false
-            }
-          }
           out.push({
             id: t.id,
             name: t.name,
@@ -5569,19 +5563,24 @@ app.whenReady().then(() => {
             cwd: t.cwd,
             role: t.role,
             orch: t.orch === true,
-            phase,
-            contextFull,
+            phase: row?.phase ?? 'offline',
+            contextFull: turns.contextFullCached(t.id),
             lastTask: row?.task.title ?? row?.task.summary ?? null,
-            lastActivityAt: row?.lastActivityAt ?? 0
+            lastActivityAt: row?.lastActivityAt ?? 0,
+            served: t.servedSession != null
           })
         }
         return out
       },
-      recruit: ({ preset, name, brief, besideId }) => {
+      status: () => ({ openDispatches: dispatchService.openDispatchIds().length }),
+      recruit: ({ preset, name, brief, besideId, cwd }) => {
         const nodes = store.focusedState.nodes
         const anchor = besideId ? (nodes.find((n) => n.id === besideId) ?? null) : null
         const position = placeBeside(anchor, nodes, DEFAULT_TERMINAL_SIZE)
-        const node = createTerminal({ name, preset, position })
+        // A chore works outside the repo: ~/.cookrew/chores, 0700, never the tree.
+        const choresDir = path.join(app.getPath('home'), '.cookrew', 'chores')
+        if (cwd === 'chores' && !existsSync(choresDir)) mkdirSync(choresDir, { recursive: true, mode: 0o700 })
+        const node = createTerminal({ name, preset, position, ...(cwd === 'chores' ? { cwd: choresDir } : {}) })
         // The sentence is the card's BRIEF, not its role: a role is a saved
         // role's name, worn by the pane chrome and typed by role boot; a brief
         // is display only and nothing types it on a respawn (recruit-node.ts).
@@ -5592,7 +5591,29 @@ app.whenReady().then(() => {
       // engine (retrying the boot-time 503s of a card made a moment ago),
       // delivered by herdr once the harness is at its prompt, on the ledger.
       deliver: async (input) => {
-        await deliverToRecruit(dispatchService, input)
+        const { dispatchId } = await deliverToRecruit(dispatchService, input)
+        // The ledger learns how the delivery ended once the engine settles it.
+        if (input.token) {
+          const token = input.token
+          void dispatchService.settled(dispatchId).then(() => {
+            const record = dispatchService.get(dispatchId)
+            if (record?.state === 'failed' || record?.state === 'interrupted') sousLedger.write({ token, dispatchId, outcome: record.state })
+          })
+        }
+        return { dispatchId }
+      },
+      ledger: sousLedger,
+      decisionUpdated: (update) => {
+        mainWindow?.webContents.send('sous:decision-updated', update)
+        sousBus.emit('sous', { kind: 'decision-updated', ...update })
+      },
+      // The target's route, when Forge's routeOfCard exists on this build; a
+      // card whose new route applies on restart will respawn to take the brief.
+      routeOf: ({ cardId }) => {
+        const svc = routeService as unknown as { routeOfCard?: (id: string) => { route: string; effective: string | null; appliesOn?: string } | null }
+        if (!cardId || typeof svc.routeOfCard !== 'function') return null
+        const r = svc.routeOfCard(cardId)
+        return r ? { route: r.route, effective: r.effective, respawn: r.appliesOn === 'restart' } : null
       },
       // Routability, read from the route service: a default route set means
       // a recruit should land on a harness the gateway can carry. `routable`
@@ -5660,7 +5681,8 @@ app.whenReady().then(() => {
         nodes: () => nodes,
         connections: () => connections,
         dispatches: readDispatches,
-        events: (type, since) => events.query({ type, since })
+        events: (type, since) => events.query({ type, since }),
+        sous: () => sousLedger.stuck().map((r) => ({ token: r.token, deliveredTo: r.deliveredTo as string, proposalText: r.proposalText as string, outcome: r.outcome, updatedAt: r.updatedAt }))
       })
     },
     // The op itself rides along: Sous's notes are store ops too.
@@ -5674,6 +5696,10 @@ app.whenReady().then(() => {
       return () => void events.off('event', cb)
     },
     onProbeChange: (cb) => boardProbe.onChange(cb),
+    onLedgerChange: (cb) => {
+      sousLedger.on('change', cb)
+      return () => void sousLedger.off('change', cb)
+    },
     announce: (rows) => mainWindow?.webContents.send('inbox:changed', rows)
   })
   // The window holds the list while its box is subscribed; a one-shot read
@@ -5686,6 +5712,28 @@ app.whenReady().then(() => {
   })
   ipcMain.handle('inbox:unsubscribe', () => windowHold.release())
   ipcMain.handle('inbox:list', () => inbox.read())
+  // RETRY re-sends the proposal the owner saw, from the ledger, through the
+  // engine, to the same card; DISMISS hides the row and the ledger remembers.
+  const inboxAct = async (token: string): Promise<{ ok: boolean; error?: string; dispatchId?: string }> => {
+    const row = sousLedger.get(token)
+    if (!row || !row.proposalText || !row.deliveredTo) return { ok: false, error: 'no such proposal' }
+    try {
+      const { dispatchId } = await deliverToRecruit(dispatchService, { nodeId: row.deliveredTo, sentence: row.proposalText, originId: null })
+      sousLedger.write({ token, dispatchId, outcome: 'delivered', dismissed: false })
+      void dispatchService.settled(dispatchId).then(() => {
+        const record = dispatchService.get(dispatchId)
+        if (record?.state === 'failed' || record?.state === 'interrupted') sousLedger.write({ token, dispatchId, outcome: record.state })
+      })
+      return { ok: true, dispatchId }
+    } catch (error) {
+      const what = error instanceof Error ? error.message : String(error)
+      return { ok: false, error: what }
+    }
+  }
+  const inboxDismiss = (token: string): boolean => sousLedger.dismiss(token)
+  ipcMain.handle('inbox:act', (_e, token: unknown) => inboxAct(String(token)))
+  ipcMain.handle('inbox:dismiss', (_e, token: unknown) => inboxDismiss(String(token)))
+  ipcMain.handle('sous:revise', (_e, token: unknown, alternates: unknown) => sous.revise(String(token), Array.isArray(alternates) ? (alternates as Alternate[]) : []))
   ipcMain.handle('sous:cancel', (_e, token: string, surface?: unknown) => sous.cancel(String(token), desktopCaller(surface)))
 
   // THE MAC'S EAR. One recognizer child per hold of ⌘; the roster's names go
@@ -5808,6 +5856,9 @@ app.whenReady().then(() => {
     uiBus,
     // The inbox (R3): the same rows the desktop box lists; a stream holds it open.
     inbox: () => inbox.read(),
+    inboxAct,
+    inboxDismiss,
+    sousBus,
     inboxHold: () => inbox.hold(),
     inboxBus: inbox,
     // THE DIALS on the phone — the same reads and the same write the desktop

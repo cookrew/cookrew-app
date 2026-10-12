@@ -6,7 +6,7 @@ import { diffOutput } from './ask'
 // normalization decides both "did the prompt land?" and "is this turn the
 // dispatched one?" — two rules would let a prompt land under one and never
 // complete under the other.
-import { promptAnswersDispatch, type FinalTurnAnswer } from './dispatch'
+import { contextExhausted, promptAnswersDispatch, type FinalTurnAnswer } from './dispatch'
 // The delta seam's wire type is the parser lane's (shared/session-turns) —
 // one definition, or the emitter and this applier drift apart.
 import type { HistoryDelta } from '../shared/session-turns'
@@ -1449,6 +1449,21 @@ export class TurnTracker extends EventEmitter {
    * has nobody to witness its turn, and accepting work for it would pin a
    * watch on nothing.
    */
+  /**
+   * Is this card's context full, read off the PTY MIRROR's visible screen —
+   * the same text the tracker already watches — never a pane capture. For a
+   * card the tracker does not hold, false: "cannot see" is not "full".
+   */
+  contextFullCached(terminalId: string): boolean {
+    const t = this.tracked.get(terminalId)
+    if (!t) return false
+    try {
+      return contextExhausted(t.session.viewportText())
+    } catch {
+      return false
+    }
+  }
+
   isTracked(terminalId: string): boolean {
     return this.tracked.has(terminalId)
   }

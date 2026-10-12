@@ -6,6 +6,7 @@ import type { TranslateResult } from '../../shared/translate'
 import type { Surface as SousSurface } from '../../shared/sous-intent'
 import type { SousCommandResult } from '../../main/sous-control'
 import type { InboxRow } from '../../shared/inbox-rank'
+import type { Alternate } from '../../shared/sous-decide'
 import type { ListenEvent } from '../../main/listen'
 import type { UiCommandEvent } from '../../shared/sous-ui'
 import type {
@@ -673,7 +674,12 @@ export interface CookrewApi {
    * once. Optional: an older bridge never decides, and the box then shows
    * what Sous said and nothing else.
    */
-  sousCommit?: (token: string, choice?: { target?: string }, surface?: SousSurface) => Promise<SousCommandResult>;
+  sousCommit?: (token: string, choice?: { target?: string; ack?: 'send-anyway' }, surface?: SousSurface) => Promise<SousCommandResult>;
+  /** HP · a late revision appended alternates to a decision the box is showing. */
+  onSousDecisionUpdated?: (cb: (update: { token: string; alternates: Alternate[] }) => void) => () => void;
+  /** HP · a `sous` inbox row: RETRY re-sends the proposal from the ledger; DISMISS hides the row. The id is the row's `token`. */
+  inboxAct?: (id: string) => Promise<{ ok: boolean; error?: string; dispatchId?: string }>;
+  inboxDismiss?: (id: string) => Promise<boolean>;
   /** The box closed with a decision still held: main drops the token. */
   sousCancel?: (token: string, surface?: SousSurface) => Promise<boolean>;
   /** R3 · the HITL inbox: a one-shot read, and the subscription that holds the list open in main. */

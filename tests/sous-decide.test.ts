@@ -182,9 +182,9 @@ describe('SousController — the decide step and its commit', () => {
     expect(r.intent).toBe('decide')
     expect(r.decision?.kind).toBe('ask')
     expect(r.decision?.token).toBe('t1')
-    expect(r.decision?.holdMs).toBe(1500)
+    expect(r.decision?.holdMs).toBe(2500)
     expect(r.spoken).toMatch(/^→ Forge \(idle · same repo · last touched/)
-    expect(h.calls.filter((c) => c.startsWith('submit'))).toEqual([])
+    expect(h.calls.filter((c) => c.startsWith('deliver'))).toEqual([])
   })
 
   it('commit sends the brief to the chosen card exactly once; a second commit is refused', async () => {
@@ -194,11 +194,11 @@ describe('SousController — the decide step and its commit', () => {
     const done = await h.sous.commit(token)
     expect(done.intent).toBe('ask')
     expect(done.spoken).toBe('Sent to Forge')
-    expect(h.calls).toContain('submit forge Make the install section of README English and add a test')
+    expect(h.calls).toContain('deliver forge from - Make the install section of README English and add a test')
     expect(h.calls).toContain('ui zoom forge @ws')
     const again = await h.sous.commit(token)
     expect(again.intent).toBe('refused')
-    expect(h.calls.filter((c) => c.startsWith('submit'))).toHaveLength(1)
+    expect(h.calls.filter((c) => c.startsWith('deliver'))).toHaveLength(1)
   })
 
   it('the alternate re-targets the same brief', async () => {
@@ -222,7 +222,9 @@ describe('SousController — the decide step and its commit', () => {
     const h = controller()
     const r = await h.sous.handle({ text: 'Delete every v1 route in the registry and keep the tests green', surface: 'canvas', box: true })
     expect(r.decision?.kind).toBe('recruit')
-    const done = await h.sous.commit(r.decision?.token ?? '', { target: 'harness:Codex' })
+    // "Delete every…" is exposure 2: a plain commit is refused, the ack commits
+    expect(await h.sous.commit(r.decision?.token ?? '', { target: 'harness:Codex' })).toMatchObject({ intent: 'refused', error: 'needs-ack' })
+    const done = await h.sous.commit(r.decision?.token ?? '', { target: 'harness:Codex', ack: 'send-anyway' })
     expect(done.intent).toBe('create')
     expect(h.calls).toContain('recruit Codex "Delete V1 Route" beside conductor brief Delete every')
     expect(h.calls).toContain('connect conductor recruited')
@@ -237,7 +239,7 @@ describe('SousController — the decide step and its commit', () => {
     expect(r.spoken).toContain('下周发版')
     const none = await h.sous.commit(r.decision?.token ?? '')
     expect(none.intent).toBe('refused')
-    expect(h.calls.filter((c) => c.startsWith('create') || c.startsWith('recruit') || c.startsWith('submit'))).toEqual([])
+    expect(h.calls.filter((c) => c.startsWith('create') || c.startsWith('recruit') || c.startsWith('deliver'))).toEqual([])
   })
 
   it('a zoomed terminal still gets dictation, never a decision', async () => {
@@ -268,11 +270,11 @@ describe('SousController — fix round 1: surfaces, targets, the token’s life'
     expect(stranger).toMatchObject({ intent: 'refused', error: 'bad-target' })
     const harness = await h.sous.commit(token, { target: 'harness:Codex' })
     expect(harness).toMatchObject({ intent: 'refused', error: 'bad-target' })
-    expect(h.calls.filter((c) => c.startsWith('submit'))).toEqual([])
+    expect(h.calls.filter((c) => c.startsWith('deliver'))).toEqual([])
     // the token is still good: the shown target commits
     const ok = await h.sous.commit(token)
     expect(ok.intent).toBe('ask')
-    expect(h.calls.filter((c) => c.startsWith('submit'))).toHaveLength(1)
+    expect(h.calls.filter((c) => c.startsWith('deliver'))).toHaveLength(1)
   })
 
   it('HIGH 4 · a recruit takes its harness or an alternate harness, never a card', async () => {
@@ -281,7 +283,7 @@ describe('SousController — fix round 1: surfaces, targets, the token’s life'
     const token = r.decision?.token ?? ''
     expect(await h.sous.commit(token, { target: 'forge' })).toMatchObject({ intent: 'refused', error: 'bad-target' })
     expect(await h.sous.commit(token, { target: 'harness:Pi' })).toMatchObject({ intent: 'refused', error: 'bad-target' })
-    expect((await h.sous.commit(token, { target: 'harness:Codex' })).intent).toBe('create')
+    expect((await h.sous.commit(token, { target: 'harness:Codex', ack: 'send-anyway' })).intent).toBe('create')
   })
 
   it('HIGH 4 · a delivery that fails leaves the token in place, so the same echo can be committed again', async () => {
@@ -295,13 +297,19 @@ describe('SousController — fix round 1: surfaces, targets, the token’s life'
       createBrowser: async () => undefined,
       connect: () => undefined,
       rename: () => undefined,
-      submit: async (id, text) => {
-        if (fail) throw new Error('input box is busy')
-        calls.push(`submit ${id} ${text}`)
-      },
+      submit: async () => undefined,
       ui: () => undefined,
       now: () => NOW,
-      decide: { candidates: () => crew, workdir: () => '/repo', recruit: () => ({ id: 'x', name: 'x' }), deliver: async () => undefined, token: () => 'tok' }
+      decide: {
+        candidates: () => crew,
+        workdir: () => '/repo',
+        recruit: () => ({ id: 'x', name: 'x' }),
+        deliver: async ({ nodeId, sentence }) => {
+          if (fail) throw new Error('the card did not take the brief: unreachable')
+          calls.push(`deliver ${nodeId} ${sentence}`)
+        },
+        token: () => 'tok'
+      }
     }
     const sous = new SousController(deps)
     await sous.handle({ text: 'Make the install section of README English and add a test', surface: 'canvas', box: true })
@@ -322,7 +330,7 @@ describe('SousController — fix round 1: surfaces, targets, the token’s life'
     expect(h.sous.cancel(token)).toBe(true)
     expect(h.sous.cancel(token)).toBe(false)
     expect(await h.sous.commit(token)).toMatchObject({ intent: 'refused', error: 'expired' })
-    expect(h.calls.filter((c) => c.startsWith('submit'))).toEqual([])
+    expect(h.calls.filter((c) => c.startsWith('deliver'))).toEqual([])
   })
 
   it('LOW 12 · a token is a uuid when the deps mint none', async () => {
@@ -358,7 +366,7 @@ describe('SousController — round 2: the box, the caller, and a commit in fligh
     expect(await h.sous.commit(token, {}, { surface: 'phone', callerId: 'phone-b' })).toMatchObject({ intent: 'refused', error: 'not-yours' })
     expect(await h.sous.commit(token, {}, { surface: 'canvas', callerId: 'desktop' })).toMatchObject({ intent: 'refused', error: 'not-yours' })
     expect(h.sous.cancel(token, { surface: 'phone', callerId: 'phone-b' })).toBe(false)
-    expect(h.calls.filter((c) => c.startsWith('submit'))).toEqual([])
+    expect(h.calls.filter((c) => c.startsWith('deliver'))).toEqual([])
     expect((await h.sous.commit(token, {}, { surface: 'phone', callerId: 'phone-a' })).intent).toBe('ask')
   })
 
@@ -373,16 +381,22 @@ describe('SousController — round 2: the box, the caller, and a commit in fligh
       createBrowser: async () => undefined,
       connect: () => undefined,
       rename: () => undefined,
-      submit: (id, text) =>
-        new Promise<void>((resolve) => {
-          release = () => {
-            calls.push(`submit ${id} ${text}`)
-            resolve()
-          }
-        }),
+      submit: async () => undefined,
       ui: () => undefined,
       now: () => NOW,
-      decide: { candidates: () => crew, workdir: () => '/repo', recruit: () => ({ id: 'x', name: 'x' }), deliver: async () => undefined, token: () => 'tok' }
+      decide: {
+        candidates: () => crew,
+        workdir: () => '/repo',
+        recruit: () => ({ id: 'x', name: 'x' }),
+        deliver: ({ nodeId, sentence }) =>
+          new Promise<void>((resolve) => {
+            release = () => {
+              calls.push(`deliver ${nodeId} ${sentence}`)
+              resolve()
+            }
+          }),
+        token: () => 'tok'
+      }
     }
     const sous = new SousController(deps)
     await sous.handle({ text: brief, surface: 'canvas', box: true })
@@ -392,7 +406,7 @@ describe('SousController — round 2: the box, the caller, and a commit in fligh
     expect((await sous.commit('tok')).error).toBe('in-flight')
     release()
     expect((await committing).intent).toBe('ask')
-    expect(calls).toEqual([`submit forge ${brief}`])
+    expect(calls).toEqual([`deliver forge ${brief}`])
     expect(sous.cancel('tok')).toBe(false)
   })
 })
@@ -404,16 +418,14 @@ describe('SousController — round 4: the recruited card gets the brief', () => 
     const h = controller()
     const r = await h.sous.handle({ text: brief, surface: 'canvas', box: true })
     expect(r.decision?.kind).toBe('recruit')
-    const out = await h.sous.commit(r.decision?.token ?? '')
+    const out = await h.sous.commit(r.decision?.token ?? '', { ack: 'send-anyway' })
     expect(out.intent).toBe('create')
     expect(out.spoken).toContain('sent')
     expect(out.agentId).toBe('recruited')
     // the created node carries the sentence as its brief
     expect(h.calls.find((c) => c.startsWith('recruit '))).toContain(`brief ${brief.slice(0, 12)}`)
     // exactly one delivery, to the new card, from the orch it was placed beside
-    expect(h.calls.filter((c) => c.startsWith('deliver '))).toEqual([`deliver recruited from conductor ${brief}`])
-    // the delivery is on the ledger after the recruit, and nothing went through the owner-submit sink
-    expect(h.calls.filter((c) => c.startsWith('submit'))).toEqual([])
+    expect(h.calls.filter((c) => c.startsWith('deliver ')).map((c) => c.slice(0, `deliver recruited from conductor ${brief}`.length))).toEqual([`deliver recruited from conductor ${brief}`])
     expect(h.calls.indexOf('note prompt recruited Delete V1 Route')).toBeGreaterThan(h.calls.findIndex((c) => c.startsWith('note recruit ')))
   })
 
@@ -421,17 +433,17 @@ describe('SousController — round 4: the recruited card gets the brief', () => 
     const h = controller({ failDeliveries: 1 })
     const r = await h.sous.handle({ text: brief, surface: 'canvas', box: true })
     const token = r.decision?.token ?? ''
-    const first = await h.sous.commit(token)
+    const first = await h.sous.commit(token, { ack: 'send-anyway' })
     expect(first.intent).toBe('refused')
     expect(first.spoken).not.toContain('sent')
-    const second = await h.sous.commit(token)
+    const second = await h.sous.commit(token, { ack: 'send-anyway' })
     expect(second.intent).toBe('create')
     expect(second.spoken).toContain('sent')
     expect(h.calls.filter((c) => c.startsWith('recruit '))).toHaveLength(1)
     expect(h.calls.filter((c) => c.startsWith('connect '))).toHaveLength(1)
     expect(h.calls.filter((c) => c.startsWith('deliver '))).toHaveLength(1)
     // spent now
-    expect((await h.sous.commit(token)).error).toBe('expired')
+    expect((await h.sous.commit(token, { ack: 'send-anyway' })).error).toBe('expired')
   })
 })
 
@@ -479,14 +491,16 @@ describe('round 2 — overlap is CONTENT, routability is respected, the other pa
   it('"compose a sonnet about volcanoes" recruits, and with a default route set never the Pi card', () => {
     const plain = decide('compose a sonnet about volcanoes', c2)
     expect(plain.kind).toBe('recruit')
-    const light = decide('draft a limerick', c2)
+    // HP: no code word and no card → a CHORE card, Claude Code, outside the repo
+    if (plain.kind === 'recruit') expect(plain).toMatchObject({ harness: 'Claude Code', cwd: 'chores', domain: 'chore' })
+    const light = decide('quick: explain what this file does, local is fine', c2)
     expect(light.kind).toBe('recruit')
     if (light.kind === 'recruit') {
       // today's shape rule, no default route: light → Pi, and it says it runs direct
       expect(light.harness).toBe('Pi')
       expect(light.direct).toBe(true)
     }
-    const routedLight = decide('draft a limerick', routed)
+    const routedLight = decide('quick: explain what this file does, local is fine', routed)
     expect(routedLight.kind).toBe('recruit')
     if (routedLight.kind !== 'recruit') return
     expect(routedLight.harness).toBe('Claude Code')
@@ -497,7 +511,7 @@ describe('round 2 — overlap is CONTENT, routability is respected, the other pa
   })
 
   it('a recruit always offers the best idle card as the other path', () => {
-    const d = decide('compose a sonnet about volcanoes', c2)
+    const d = decide('compose notes for the changelog file', c2)
     if (d.kind !== 'recruit') return
     const bench = d.alternates.find((a) => a.kind === 'ask')
     // the most recently active idle card here
@@ -522,19 +536,20 @@ describe('SousController — round 2: the alternate is the OTHER path, and the c
     const out = await h.sous.commit(r.decision?.token ?? '', { target: alt?.id })
     expect(out.intent).toBe('create')
     expect(h.calls.find((c) => c.startsWith('recruit '))).toContain('recruit Claude Code "Make Install Section" beside conductor')
-    expect(h.calls.filter((c) => c.startsWith('submit'))).toEqual([])
+    // one delivery, to the recruited card, through the engine
+    expect(h.calls.filter((c) => c.startsWith('deliver')).map((c) => c.split(' ')[1])).toEqual(['recruited'])
   })
 
   it('a recruit committed with the card alternate asks that card instead', async () => {
     const h = controller()
-    const r = await h.sous.handle({ text: 'compose a sonnet about volcanoes', surface: 'canvas', box: true })
+    const r = await h.sous.handle({ text: 'compose notes for the changelog file', surface: 'canvas', box: true })
     expect(r.decision?.kind).toBe('recruit')
     const alt = r.decision?.kind === 'recruit' ? r.decision.alternates.find((a) => a.kind === 'ask') : undefined
     expect(alt).toBeDefined()
     const out = await h.sous.commit(r.decision?.token ?? '', { target: alt?.id })
     expect(out.intent).toBe('ask')
     expect(h.calls.filter((c) => c.startsWith('recruit '))).toEqual([])
-    expect(h.calls.filter((c) => c.startsWith('submit'))).toEqual([`submit ${alt?.id} compose a sonnet about volcanoes`])
+    expect(h.calls.filter((c) => c.startsWith('deliver'))).toEqual([`deliver ${alt?.id} from - compose notes for the changelog file`])
   })
 
   it('a recruit echo says it will run direct when nothing routes it', async () => {

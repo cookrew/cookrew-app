@@ -22,6 +22,8 @@ export interface InboxWiringDeps {
   onStoreOp: (cb: (op: { type: string }) => void) => () => void
   onEvent: (cb: (event: { type: string }) => void) => () => void
   onProbeChange: (cb: () => void) => () => void
+  /** The Sous ledger moved (a delivery settled, a row dismissed, a retry). Optional. */
+  onLedgerChange?: (cb: () => void) => () => void
   /** Where a changed list goes: the window, the phone streams. */
   announce: (rows: InboxRow[]) => void
   debounceMs?: number
@@ -90,7 +92,8 @@ export function wireInbox(deps: InboxWiringDeps): InboxWiring {
       if (ignored(event.type)) return
       schedule()
     }),
-    deps.onProbeChange(schedule)
+    deps.onProbeChange(schedule),
+    ...(deps.onLedgerChange ? [deps.onLedgerChange(schedule)] : [])
   ]
   return {
     on: (event, cb) => void bus.on(event, cb),

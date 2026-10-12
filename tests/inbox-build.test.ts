@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildInbox, parseSecretDetails, type InboxNode } from '../src/main/inbox'
+import { buildInbox, parseSecretDetails, type InboxNode, type SousStuckRow } from '../src/main/inbox'
 import type { BoardRow } from '../src/shared/board'
 import type { CookrewEvent } from '../src/main/event-log'
 import type { DispatchRecord } from '../src/main/dispatch'
@@ -36,13 +36,14 @@ const secretEvent = (type: 'secret.requested' | 'secret.read', terminalId: strin
   details
 })
 
-function build(input: { rows?: BoardRow[]; nodes?: InboxNode[]; connections?: { a: string; b: string }[]; dispatches?: DispatchRecord[]; events?: CookrewEvent[] }) {
+function build(input: { rows?: BoardRow[]; nodes?: InboxNode[]; connections?: { a: string; b: string }[]; dispatches?: DispatchRecord[]; events?: CookrewEvent[]; sous?: SousStuckRow[] }) {
   return buildInbox({
     rows: () => input.rows ?? [],
     nodes: () => input.nodes ?? [],
     connections: () => input.connections ?? [],
     dispatches: () => input.dispatches ?? [],
     events: (type, since) => (input.events ?? []).filter((e) => e.type === type && e.timestamp >= since),
+    sous: () => input.sous ?? [],
     now: () => NOW
   })
 }
@@ -136,5 +137,22 @@ describe('buildInbox', () => {
       ]
     })
     expect(rows.map((r) => r.nodeId).sort()).toEqual(['atlas', 'guest'])
+  })
+
+  // HP: Sous's own stuck deliveries come from the ledger, carry the proposal
+  // text and a RETRY, are dismissable, and hide once the card moved after them.
+  it('a sous row: the ledger\'s stuck proposal, RETRY + dismissable, hidden once the card was active after it', () => {
+    const rows = build({
+      rows: [brow('tinker', 'done', { lastActivityAt: m(2), task: { title: 'ran', summary: 'ran', turnIndex: 4, startedAt: m(3), endedAt: m(2) } })],
+      nodes: [node('forge'), node('tinker')],
+      sous: [
+        { token: 'tok-1', deliveredTo: 'forge', proposalText: 'push the branch\n\nBoundaries: push only after the check passes', outcome: 'interrupted', updatedAt: m(5) },
+        { token: 'tok-0', deliveredTo: 'forge', proposalText: 'older', outcome: 'failed', updatedAt: m(50) },
+        { token: 'tok-2', deliveredTo: 'tinker', proposalText: 'ran fine', outcome: 'failed', updatedAt: m(10) }
+      ]
+    })
+    expect(rows.map((r) => r.nodeId)).toEqual(['forge'])
+    expect(rows[0]).toMatchObject({ kind: 'sous', action: 'retry', dismissable: true, token: 'tok-1', text: 'push the branch\n\nBoundaries: push only after the check passes' })
+    expect(rows[0].reasons[0]).toBe("Sous's brief interrupted — retry")
   })
 })

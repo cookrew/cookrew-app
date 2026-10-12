@@ -11,7 +11,8 @@
 // systemone) is a refinement main may add behind a flag, not a dependency.
 
 import type { BoardPhase } from './board'
-import { contentWords, hasGenericVerb, saidWords, STOP_WORDS } from './sous-words'
+import { contentWords, hasGenericVerb, isRepoTask, saidWords, STOP_WORDS } from './sous-words'
+import { boundaries, exposure, type Exposure } from './sous-exposure'
 
 export type Harness = 'Claude Code' | 'Codex' | 'OpenCode' | 'Pi'
 
@@ -29,6 +30,13 @@ export interface DecideCandidate {
   /** The card's last task, as the Board summarises it — what it "last touched". */
   lastTask: string | null
   lastActivityAt: number
+  /** Somebody else's seat at this machine: never a target, never a digest row a brief goes to. */
+  served?: boolean
+}
+
+/** What a status question is answered from, beyond the candidates. */
+export interface StatusFacts {
+  openDispatches: number
 }
 
 export interface DecideContext {
@@ -38,6 +46,18 @@ export interface DecideContext {
   now: number
   /** Absent = no route service: today's shape rules, every harness runs direct. */
   routing?: RoutingFacts
+  status?: StatusFacts
+}
+
+/** Where a sentence lives: in the repo, in a chore card outside it, or in an answer. */
+export type Domain = 'repo' | 'chore' | 'question'
+
+/** What every draft carries (HP contract): the domain and the exposure tier with its one boundary line. */
+export interface DraftFacts {
+  domain: Domain
+  exposure: Exposure
+  exposureWhy: string | null
+  boundaries: string | null
 }
 
 /** Another way to go: a card (`ask`, id = the card) or a new card (`recruit`, id = `harness:<name>`). The echo always offers the other path. */
@@ -59,8 +79,8 @@ export interface RecruitPath {
 }
 
 export type DecisionDraft =
-  | { kind: 'ask'; target: { id: string; name: string }; alternates: Alternate[]; reasons: string[]; recruit: RecruitPath }
-  | {
+  | ({ kind: 'ask'; target: { id: string; name: string }; alternates: Alternate[]; reasons: string[]; recruit: RecruitPath } & DraftFacts)
+  | ({
       kind: 'recruit'
       harness: Harness
       /** The new card's name — the sentence, shortened to a title. */
@@ -71,11 +91,20 @@ export type DecisionDraft =
       reasons: string[]
       /** The chosen harness will run direct (no default route set, or it is not routable). */
       direct: boolean
-    }
-  | { kind: 'question'; question: string; reasons: string[] }
+      /** Where the card works: the repo, or the chores directory outside it. */
+      cwd: 'repo' | 'chores'
+    } & DraftFacts)
+  | ({
+      kind: 'question'
+      question: string
+      reasons: string[]
+      /** `question` asks back; `answer` is answered from the digest, deterministically. */
+      mode: 'question' | 'answer'
+      answer: string | null
+    } & DraftFacts)
 
 /** How long the box holds the echo before committing on its own. */
-export const DECISION_HOLD_MS = 1500
+export const DECISION_HOLD_MS = 2500
 /** How long main keeps an uncommitted decision before it expires. */
 export const DECISION_TTL_MS = 30_000
 
@@ -116,6 +145,34 @@ export function isQuestion(sentence: string): boolean {
 export function questionBack(sentence: string): string {
   const s = sentence.trim().replace(/[?？。.!！]+$/u, '')
   return /[一-鿿]/.test(s) ? `「${s}」——这是要我做的事，还是问我的问题？说清楚派给谁，或者直接告诉我做什么。` : `“${s}” — is that a task for the crew, or a question for me? Name who, or say what to do.`
+}
+
+/** A question about the BOARD — answered from it, no model: who waits, what runs, what is out. */
+const STATUS_RE = /\b(?:status|progress|who(?:'s| is) (?:waiting|blocked|working|busy|idle)|what(?:'s| is) (?:blocked|running|waiting|the status)|where are we|how far|can we (?:ship|release|deploy)|ready to (?:ship|release)|any(?:one|thing) (?:waiting|blocked))\b|(?:进度|状态|谁在等|谁卡住|卡住了吗|能不能发|可以发版|发版了吗|能发版|在跑什么|谁在干活|在等我)/iu
+
+export function isStatusQuestion(sentence: string): boolean {
+  return STATUS_RE.test(sentence.trim())
+}
+
+function agoWords(at: number, now: number): string {
+  return ago(at, now)
+}
+
+/** The deterministic answer: waiting cards by name and how long, what is running, open dispatches. */
+export function statusAnswer(ctx: DecideContext): string {
+  const zh = false
+  const now = ctx.now
+  const crew = ctx.candidates.filter((c) => !c.served)
+  const waiting = crew.filter((c) => c.phase === 'waiting').sort((a, b) => a.lastActivityAt - b.lastActivityAt)
+  const working = crew.filter((c) => c.phase === 'working')
+  const full = crew.filter((c) => c.contextFull)
+  const parts: string[] = []
+  parts.push(waiting.length === 0 ? 'nobody is waiting on you' : `waiting on you: ${waiting.map((c) => `${c.name} (${agoWords(c.lastActivityAt, now)})`).join(', ')}`)
+  parts.push(working.length === 0 ? 'nothing is running' : `running: ${working.map((c) => c.name).join(', ')}`)
+  if (ctx.status && ctx.status.openDispatches > 0) parts.push(`${ctx.status.openDispatches} dispatch${ctx.status.openDispatches === 1 ? '' : 'es'} open`)
+  if (full.length > 0) parts.push(`context full: ${full.map((c) => c.name).join(', ')}`)
+  void zh
+  return `${parts.join(' · ')}.`
 }
 
 // ── harness by task shape ─────────────────────────────────────────────────
@@ -174,10 +231,17 @@ export const TASK_OVERLAP_MIN = 2
 
 export function decide(sentence: string, ctx: DecideContext): DecisionDraft {
   const said = words(sentence)
-  if (isQuestion(sentence)) {
-    return { kind: 'question', question: questionBack(sentence), reasons: ['a question, not a brief', 'nothing is created', 'answer in the box'] }
+  const tier = exposure(sentence)
+  const factsOf = (domain: Domain): DraftFacts => ({ domain, exposure: tier.score, exposureWhy: tier.why, boundaries: boundaries(tier.score, sentence) })
+  if (isStatusQuestion(sentence)) {
+    return { kind: 'question', question: statusAnswer(ctx), mode: 'answer', answer: statusAnswer(ctx), reasons: ['a status question', 'answered from the board', 'nothing is created'], ...factsOf('question') }
   }
-  const sameRepo = ctx.candidates.filter((c) => ctx.workdir !== null && c.cwd === ctx.workdir)
+  if (isQuestion(sentence)) {
+    return { kind: 'question', question: questionBack(sentence), mode: 'question', answer: null, reasons: ['a question, not a brief', 'nothing is created', 'answer in the box'], ...factsOf('question') }
+  }
+  // A served card is somebody else's seat: never a target, never a bench.
+  const own = ctx.candidates.filter((c) => !c.served)
+  const sameRepo = own.filter((c) => ctx.workdir !== null && c.cwd === ctx.workdir)
   const idle = sameRepo.filter((c) => IDLE.has(c.phase) && !c.contextFull)
   const fit = idle
     .map((c) => {
@@ -188,7 +252,7 @@ export function decide(sentence: string, ctx: DecideContext): DecisionDraft {
     })
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score || b.c.lastActivityAt - a.c.lastActivityAt)
-  const orch = sameRepo.find((c) => c.orch) ?? ctx.candidates.find((c) => c.orch) ?? null
+  const orch = sameRepo.find((c) => c.orch) ?? own.find((c) => c.orch) ?? null
   const picked = pickHarness(sentence, ctx.routing)
   const recruitPath: RecruitPath = { harness: picked.harness, name: titleOf(sentence), beside: orch ? { id: orch.id, name: orch.name } : null, direct: picked.direct }
   const recruitAlt: Alternate = { kind: 'recruit', id: `harness:${picked.harness}`, name: picked.harness, harness: picked.harness, reasons: [picked.reason] }
@@ -205,7 +269,24 @@ export function decide(sentence: string, ctx: DecideContext): DecisionDraft {
       // The next fit, then always the other path: a new card.
       alternates: [...rest.slice(0, 1).map((x): Alternate => ({ kind: 'ask', id: x.c.id, name: x.c.name, reasons: reasonsOf(x) })), recruitAlt],
       reasons: reasonsOf(best),
-      recruit: recruitPath
+      recruit: recruitPath,
+      ...factsOf('repo')
+    }
+  }
+  // Nothing in the repo names this and nothing here can take it: a CHORE —
+  // its own card outside the repo, Claude Code, no repo digest in the brief.
+  if (!isRepoTask(sentence)) {
+    const chore = ctx.routing?.defaultSet && ctx.routing.routable['Claude Code'] === false ? picked : { harness: 'Claude Code' as Harness, reason: 'a chore → Claude Code, outside the repo', direct: !ctx.routing?.defaultSet }
+    return {
+      kind: 'recruit',
+      harness: chore.harness,
+      name: titleOf(sentence),
+      beside: null,
+      alternates: [],
+      direct: chore.direct,
+      cwd: 'chores',
+      reasons: ['not a repo task', chore.reason, 'a chore card in ~/.cookrew/chores, on the bench'],
+      ...factsOf('chore')
     }
   }
   const alternates: Alternate[] = (['Claude Code', 'Codex', 'Pi'] as const)
@@ -222,11 +303,13 @@ export function decide(sentence: string, ctx: DecideContext): DecisionDraft {
     beside: recruitPath.beside,
     alternates,
     direct: picked.direct,
+    cwd: 'repo',
     reasons: [
       sameRepo.length === 0 ? 'no card in this repo' : idle.length === 0 ? 'every card here is busy or full' : 'no idle card fits the brief',
       picked.reason,
       orch ? `beside ${orch.name}, wired to it` : 'placed on the bench'
-    ]
+    ],
+    ...factsOf('repo')
   }
 }
 
