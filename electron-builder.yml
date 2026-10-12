@@ -50,6 +50,10 @@ extraResources:
   # puts a Cookrew row on magpie's Agents page (route program, D1b).
   - from: resources/magpie
     to: magpie
+  # The Sous agent plugin (resources/magpie-sous): a second row on the Agents
+  # page for the model Sous decides with, under its own key and budget (§12 J4).
+  - from: resources/magpie-sous
+    to: magpie-sous
 
 mac:
   category: public.app-category.developer-tools
