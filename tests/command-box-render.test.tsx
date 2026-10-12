@@ -73,7 +73,7 @@ const decision: Decision = {
   recruit: { harness: 'Claude Code', name: 'Install Section', beside: null, direct: true },
   reasons: ['idle', 'same repo', 'last touched README · 2h'],
   token: 't1',
-  holdMs: 1500,
+  holdMs: 2500,
   sentence: 'Make the install section of README English'
 }
 
@@ -108,7 +108,7 @@ describe('CommandBox — one surface: the inbox rows, the field, the echo', () =
     const html = renderToStaticMarkup(<CommandBox open onClose={() => undefined} phone={false} rows={[]} initialDecision={decision} />)
     expect(html).toContain('data-decision="ask"')
     expect(html).toContain('→ Forge (idle · same repo · last touched README · 2h)')
-    expect(html).toContain('1.5 s · or ↵ now')
+    expect(html).toContain('auto in 2.5 s · or ↵ now')
     expect(html).toContain('change ▾')
     expect(html).not.toContain('cmd-rows')
     expect(echoLine({ ...decision, kind: 'recruit', harness: 'Codex', name: 'Prune v1', beside: null, direct: false, reasons: ['no idle card fits the brief', 'repo-wide → Codex', 'placed on the bench'] } as Decision)).toBe(

@@ -58,7 +58,27 @@ export interface RecruitPath {
   direct: boolean
 }
 
-export type DecisionDraft =
+/**
+ * HP CONTRACT (LEDGER "HP contract", additive): how the box holds the
+ * decision, how exposed the act is, and what the target runs on. Every
+ * field is optional on the wire so a box in front of today's main still
+ * works; the box's decision-hold.ts supplies the defaults.
+ */
+export type DecisionMode = 'ticking' | 'paused' | 'question' | 'answer'
+export interface DecisionFacts {
+  mode?: DecisionMode
+  /** 0 = nothing leaves the machine … 3 = irreversible and outward. ≥ 2 pauses the hold and makes the commit a distinct act. */
+  exposure?: 0 | 1 | 2 | 3
+  exposureWhy?: string | null
+  /** One line, positive form: "push only after the check passes". Appended to the brief on SEND ANYWAY. */
+  boundaries?: string | null
+  domain?: 'repo' | 'chore' | 'question'
+  /** The target card's route (or the recruit's intended one); null when unknown, absent on an older main. */
+  route?: { route: string; effective: string | null } | null
+}
+
+export type DecisionDraft = DecisionFacts &
+  (
   | { kind: 'ask'; target: { id: string; name: string }; alternates: Alternate[]; reasons: string[]; recruit: RecruitPath }
   | {
       kind: 'recruit'
@@ -73,9 +93,10 @@ export type DecisionDraft =
       direct: boolean
     }
   | { kind: 'question'; question: string; reasons: string[] }
+  )
 
-/** How long the box holds the echo before committing on its own. */
-export const DECISION_HOLD_MS = 1500
+/** How long the box holds the echo before committing on its own (HP: 2.5 s, was 1.5). */
+export const DECISION_HOLD_MS = 2500
 /** How long main keeps an uncommitted decision before it expires. */
 export const DECISION_TTL_MS = 30_000
 

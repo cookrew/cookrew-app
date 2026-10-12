@@ -673,12 +673,17 @@ export interface CookrewApi {
    * once. Optional: an older bridge never decides, and the box then shows
    * what Sous said and nothing else.
    */
-  sousCommit?: (token: string, choice?: { target?: string }, surface?: SousSurface) => Promise<SousCommandResult>;
+  sousCommit?: (token: string, choice?: { target?: string; ack?: 'send-anyway' }, surface?: SousSurface) => Promise<SousCommandResult>;
+  /** HP · a late revision of a minted decision: main may only APPEND alternates. Optional on an older bridge. */
+  onSousDecisionUpdated?: (cb: (update: { token: string; alternates: unknown[] }) => void) => () => void;
   /** The box closed with a decision still held: main drops the token. */
   sousCancel?: (token: string, surface?: SousSurface) => Promise<boolean>;
   /** R3 · the HITL inbox: a one-shot read, and the subscription that holds the list open in main. */
   inbox?: () => Promise<InboxRow[]>;
   onInbox?: (cb: (rows: InboxRow[]) => void) => () => void;
+  /** HP · a `sous` row's RETRY/OPEN, and any dismissable row's DISMISS (owner token only). */
+  inboxAct?: (id: string) => Promise<{ ok: boolean }>;
+  inboxDismiss?: (id: string) => Promise<{ ok: boolean }>;
   /**
    * Hold ⌘ to talk (desktop only — the phone dictates through the Web Speech
    * API in VoiceBar). Main spawns the on-device recognizer on start, SIGINTs
