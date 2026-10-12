@@ -92,6 +92,14 @@ export interface SousControlDeps {
     ledger?: { write: (patch: { token: string } & Record<string, unknown>) => void }
     /** Late revisions reach the box through this (IPC `sous:decision-updated`, SSE `sous`). */
     decisionUpdated?: (update: { token: string; alternates: Alternate[] }) => void
+    /**
+     * The five-question Jev refinement (sous-jev.ts), wired ONLY when
+     * COOKREW_SOUS_JEV=1. Given the rule draft and the allowed set it answers
+     * the refined draft, the badge and the hold it asks for; it never throws
+     * and never blocks past its budget — a miss is the draft with the
+     * 'rule (timed out)' badge.
+     */
+    jev?: (input: { sentence: string; lang: Lang; draft: DecisionDraft; candidates: readonly DecideCandidate[]; workdir: string | null; routing?: RoutingFacts; token: string; now: number }) => Promise<{ draft: DecisionDraft; badge: string; mode: 'paused' | 'ticking' | null }>
   }
 }
 
@@ -410,11 +418,19 @@ export class SousController {
     const all = await deps.candidates()
     const digest = buildDigest(all.map((c) => ({ ...c, harness: null })), { workdir, now: this.now() })
     const seen = new Set(digest.listed.map((c) => c.id))
-    const draft = decide(sentence, { candidates: all.filter((c) => seen.has(c.id)), workdir, now: this.now(), routing: deps.routing?.(), status: deps.status?.() })
+    const listed = all.filter((c) => seen.has(c.id))
+    const routing = deps.routing?.()
+    const draft0 = decide(sentence, { candidates: listed, workdir, now: this.now(), routing, status: deps.status?.() })
     const token = deps.token?.() ?? randomUUID()
+    // Jev (flag on only): refines the rule draft inside its allowed set, or
+    // leaves it as it was with the timed-out badge. Absent = the draft is the decision.
+    const refined = deps.jev ? await deps.jev({ sentence, lang, draft: draft0, candidates: listed, workdir, routing, token, now: this.now() }) : null
+    const draft = refined ? ({ ...refined.draft, badge: refined.badge } as DecisionDraft) : draft0
     const routeFacts =
       deps.routeOf?.({ cardId: draft.kind === 'ask' ? draft.target.id : null, harness: draft.kind === 'recruit' ? draft.harness : draft.kind === 'ask' ? draft.recruit.harness : null }) ?? null
-    const mode = holdMode({ kind: draft.kind, answer: draft.mode === 'answer', exposure: draft.exposure ?? 0, respawn: routeFacts?.respawn ?? false, rewritten: false, box: true })
+    const ruled = holdMode({ kind: draft.kind, answer: draft.mode === 'answer', exposure: draft.exposure ?? 0, respawn: routeFacts?.respawn ?? false, rewritten: false, box: true })
+    // Jev may only make a ticking hold pause (a narrow margin), never the reverse.
+    const mode = refined?.mode === 'paused' && ruled === 'ticking' ? 'paused' : ruled
     const decision = { ...draft, token, holdMs: DECISION_HOLD_MS, sentence, mode, route: routeFacts ? { route: routeFacts.route, effective: routeFacts.effective } : null } as Decision
     this.sweepDecisions()
     // A question is answered in the box and creates nothing — there is nothing to commit.

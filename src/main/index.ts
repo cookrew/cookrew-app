@@ -13,6 +13,8 @@ import { deliverToRecruit } from './recruit-delivery'
 import { recruitPatch, spawnInjectionFor } from './recruit-node'
 import { placeBeside, type Alternate, type DecideCandidate, type Harness } from '../shared/sous-decide'
 import { SousLedger } from './sous-ledger'
+import { createJevDecider, jevEnabled, JEV_DEADLINE_MS } from './sous-jev'
+import { createSousBreaker } from './sous-breaker'
 import { retryVerdict } from './sous-retry'
 import { buildCandidates } from './decide-candidates'
 import type { PtySession } from './pty'
@@ -5622,6 +5624,22 @@ app.whenReady().then(() => {
         return { dispatchId }
       },
       ledger: sousLedger,
+      // THE FIVE-QUESTION JEV (E2E lane jev), only when COOKREW_SOUS_JEV=1:
+      // one budgeted POST to the gateway's /v1/systemone through its own
+      // breaker; with the flag off this dep is absent and nothing changes.
+      ...(jevEnabled()
+        ? {
+            jev: createJevDecider({
+              gateway: () => {
+                const g = routeService.state().gateway
+                return g ? { v1: g.v1 } : null
+              },
+              key: () => sousGatewayKey(),
+              breaker: createSousBreaker({ probeTimeoutMs: JEV_DEADLINE_MS }),
+              recent: () => sousLedger.rows().slice(-3).map((r) => `${r.ownerResponse ?? 'pending'}: ${r.sentence.slice(0, 60)} → ${r.target?.name ?? '—'}`)
+            })
+          }
+        : {}),
       decisionUpdated: (update) => {
         mainWindow?.webContents.send('sous:decision-updated', update)
         sousBus.emit('sous', { kind: 'decision-updated', ...update })
