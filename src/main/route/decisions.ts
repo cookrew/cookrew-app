@@ -62,12 +62,14 @@ export function toDecision(terminalId: string, body: unknown, at: number): Route
   const tries = Array.isArray(route.tries) ? route.tries.length : num(route.tries) ?? 0
   // The gateway stamps `time` (RFC3339) on the route; ours is the fallback.
   const stamped = str(route.time) ? Date.parse(str(route.time) as string) : NaN
-  // The rule that matched (and the effort its decision model picked) — an
-  // object with an id and a `pick` per the docs; a bare string names the rule.
-  const ruleRaw = route.rule
-  const ruleRec = asRecord(ruleRaw)
-  const ruleId = ruleRec ? str(ruleRec.id) ?? str(ruleRec.name) ?? str(ruleRec.rule) : str(ruleRaw)
-  const rule = ruleId ? { id: ruleId, pick: ruleRec ? str(ruleRec.pick) ?? str(ruleRec.effort) : null } : null
+  // The rule that matched, as the real gateway sends it (recorded bodies in
+  // tests/fixtures/magpie/route-hp-*.json): `{n, use, when[], turn, tokens,
+  // effort}`, and `{n: 0}` — not null — when no rule matched. `n` is the
+  // rule's number in the group and becomes the id; `use` is what it picked.
+  // n of 0 or absent is no rule, so the rail never prints "auto → 0".
+  const ruleRec = asRecord(route.rule)
+  const n = ruleRec ? num(ruleRec.n) : null
+  const rule = n !== null && n > 0 ? { id: String(n), pick: str(ruleRec?.use) } : null
   return {
     terminalId,
     session: str(b.session) ?? routeSession(terminalId),

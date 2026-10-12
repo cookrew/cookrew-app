@@ -2,7 +2,9 @@
 // a time per card, none when idle, the decision rows and the turn facts
 // mapped from the real answers, all against a fake gateway on a free port.
 
+import { readFileSync } from 'node:fs'
 import http from 'node:http'
+import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { RouteDecisions, pushLive, toDecision, toTurnFacts } from '../src/main/route/decisions'
 import type { RouteDecision } from '../src/shared/route'
@@ -74,15 +76,19 @@ describe('mapping', () => {
     expect(d?.at).toBe(Date.parse('2026-10-11T14:24:32.197169+08:00'))
   })
 
-  it("keeps the group's rule and its pick; a bare rule name is an id; absent is null (HP round)", () => {
-    // SYNTHESISED from reference.md ("rule (the group's rule that matched,
-    // and rule.pick, the effort its decision model picked)"): no group on
-    // this Mac has a rule yet, so no real body could be recorded. Marked so
-    // the first real one replaces it.
-    const withRule = { route: { asked: 'group/smart', group: 'group/smart', rule: { id: 'night-cheap', pick: 'low' }, model: 'ollama/qwen3:4b', effort: 'low', tries: [{}], done: false }, seq: 2, session: 'cookrew:c' }
-    expect(toDecision('c', withRule, 1)?.rule).toEqual({ id: 'night-cheap', pick: 'low' })
-    expect(toDecision('c', { route: { asked: 'x', rule: 'by-hour', model: 'm', done: false }, seq: 1 }, 1)?.rule).toEqual({ id: 'by-hour', pick: null })
-    expect(toDecision('c', { route: { asked: 'x', rule: { pick: 'high' }, model: 'm', done: false }, seq: 1 }, 1)?.rule).toBeNull()
+  it("keeps the group's rule as the real gateway sends it: n → id, use → pick, and {n: 0} is no rule (HP round)", () => {
+    // Two bodies recorded off magpie 0.1.1182 by the facts lane
+    // (tests/fixtures/magpie/route-hp-*.json): a plain turn the group's
+    // rule did not match, and a reasoning turn its rule 1 sent to qwen3.
+    const plain = JSON.parse(readFileSync(path.join(__dirname, 'fixtures', 'magpie', 'route-hp-plain.json'), 'utf8')) as unknown
+    const think = JSON.parse(readFileSync(path.join(__dirname, 'fixtures', 'magpie', 'route-hp-think.json'), 'utf8')) as unknown
+    const p = toDecision('hp-plain', plain, 1)
+    expect(p).toMatchObject({ group: 'think', asked: 'group/think', model: 'ollama/qwen2.5:1.5b', done: true, rule: null })
+    const t = toDecision('hp-think', think, 1)
+    expect(t).toMatchObject({ group: 'think', model: 'ollama/qwen3:1.7b', effort: 'high', done: true, rule: { id: '1', pick: 'ollama/qwen3:1.7b' } })
+    // The shapes a hand could write: a missing n, a rule that is not an object.
+    expect(toDecision('c', { route: { asked: 'x', model: 'm', done: false, rule: { use: 'm' } }, seq: 1 }, 1)?.rule).toBeNull()
+    expect(toDecision('c', { route: { asked: 'x', model: 'm', done: false, rule: 'by-hour' }, seq: 1 }, 1)?.rule).toBeNull()
     expect(toDecision('c', { route: { asked: 'x', model: 'm', done: false }, seq: 1 }, 1)?.rule).toBeNull()
   })
 
