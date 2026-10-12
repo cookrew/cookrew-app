@@ -90,6 +90,8 @@ export interface DecisionFacts {
   domain?: Domain
   /** The target card's route (or the recruit's intended one); null when unknown, absent on an older main. */
   route?: { route: string; effective: string | null } | null
+  /** Who made the call (E2E, behind COOKREW_SOUS_JEV): 'jev', or 'rule (timed out)' when Jev could not answer in budget. Absent with the flag off. */
+  badge?: string
 }
 
 export type DecisionDraft = DecisionFacts &
