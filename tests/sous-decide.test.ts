@@ -286,9 +286,8 @@ describe('SousController — fix round 1: surfaces, targets, the token’s life'
     expect((await h.sous.commit(token, { target: 'harness:Codex', ack: 'send-anyway' })).intent).toBe('create')
   })
 
-  it('HIGH 4 · a delivery that fails leaves the token in place, so the same echo can be committed again', async () => {
+  it('HIGH 4 (round 2) · a delivery that fails SPENDS the token: the box cannot send the same echo twice — the sous row is the retry', async () => {
     const calls: string[] = []
-    let fail = true
     const deps: SousControlDeps = {
       roster: () => roster,
       activeWorkspaceId: () => 'ws',
@@ -304,9 +303,9 @@ describe('SousController — fix round 1: surfaces, targets, the token’s life'
         candidates: () => crew,
         workdir: () => '/repo',
         recruit: () => ({ id: 'x', name: 'x' }),
-        deliver: async ({ nodeId, sentence }) => {
-          if (fail) throw new Error('the card did not take the brief: unreachable')
-          calls.push(`deliver ${nodeId} ${sentence}`)
+        deliver: async () => {
+          calls.push('deliver')
+          throw new Error('the card did not take the brief: unreachable')
         },
         token: () => 'tok'
       }
@@ -316,11 +315,8 @@ describe('SousController — fix round 1: surfaces, targets, the token’s life'
     const first = await sous.commit('tok')
     expect(first.intent).toBe('refused')
     expect(first.error).toBeUndefined()
-    fail = false
-    const second = await sous.commit('tok')
-    expect(second.intent).toBe('ask')
-    expect(calls).toHaveLength(1)
     expect((await sous.commit('tok')).error).toBe('expired')
+    expect(calls).toHaveLength(1)
   })
 
   it('CRITICAL 1 · cancel drops the token: a commit after the box closed is expired, nothing runs', async () => {
@@ -429,21 +425,16 @@ describe('SousController — round 4: the recruited card gets the brief', () => 
     expect(h.calls.indexOf('note prompt recruited Delete V1 Route')).toBeGreaterThan(h.calls.findIndex((c) => c.startsWith('note recruit ')))
   })
 
-  it('a delivery that fails leaves the token AND the card: the retry delivers to the same card, never a second one', async () => {
+  it('a delivery that fails spends the token: one recruit, one delivery attempt, no second commit through the box', async () => {
     const h = controller({ failDeliveries: 1 })
     const r = await h.sous.handle({ text: brief, surface: 'canvas', box: true })
     const token = r.decision?.token ?? ''
     const first = await h.sous.commit(token, { ack: 'send-anyway' })
     expect(first.intent).toBe('refused')
     expect(first.spoken).not.toContain('sent')
-    const second = await h.sous.commit(token, { ack: 'send-anyway' })
-    expect(second.intent).toBe('create')
-    expect(second.spoken).toContain('sent')
-    expect(h.calls.filter((c) => c.startsWith('recruit '))).toHaveLength(1)
-    expect(h.calls.filter((c) => c.startsWith('connect '))).toHaveLength(1)
-    expect(h.calls.filter((c) => c.startsWith('deliver '))).toHaveLength(1)
-    // spent now
     expect((await h.sous.commit(token, { ack: 'send-anyway' })).error).toBe('expired')
+    expect(h.calls.filter((c) => c.startsWith('recruit '))).toHaveLength(1)
+    expect(h.calls.filter((c) => c.startsWith('deliver '))).toHaveLength(0)
   })
 })
 

@@ -38,7 +38,7 @@ const roster: IntentRoster = {
   presets: ['Claude Code', 'Codex', 'OpenCode', 'Pi', 'Shell']
 }
 
-function controller(options: { respawn?: boolean; openDispatches?: number } = {}) {
+function controller(options: { respawn?: boolean; openDispatches?: number; failDelivery?: boolean } = {}) {
   const calls: string[] = []
   const ledger: Array<Record<string, unknown>> = []
   const updates: Array<{ token: string; alternates: unknown[] }> = []
@@ -64,12 +64,13 @@ function controller(options: { respawn?: boolean; openDispatches?: number } = {}
         return { id: 'recruited', name }
       },
       deliver: async ({ nodeId, sentence }) => {
+        if (options.failDelivery) throw new Error('the card did not take the brief: unreachable')
         calls.push(`deliver ${nodeId} ${JSON.stringify(sentence)}`)
         return { dispatchId: `d-${nodeId}` }
       },
       token: () => `t${++minted}`,
       status: () => ({ openDispatches: options.openDispatches ?? 0 }),
-      routeOf: ({ cardId }) => (cardId ? { route: 'group/auto', effective: 'direct', respawn: options.respawn ?? false } : null),
+      routeOf: ({ cardId }) => (cardId ? { route: 'group/auto', effective: 'direct', respawn: options.respawn ?? false } : { route: 'group/auto', effective: null, respawn: false }),
       ledger: { write: (patch) => ledger.push(patch) },
       decisionUpdated: (u) => updates.push(u)
     }
@@ -237,5 +238,40 @@ describe('the box receives what main minted', () => {
     const c = (await h.sous.handle({ text: 'draft a limerick about the weather', surface: 'canvas', box: true })).decision
     // "draft" names no tier: exposure 0, nothing leaves the machine
     expect(c).toMatchObject({ kind: 'recruit', cwd: 'chores', domain: 'chore', mode: 'ticking', exposure: 0, boundaries: null })
+  })
+})
+
+describe('round 2 residuals', () => {
+  it('a question carries no exposure and no boundary line, whatever its words — 下周能发版吗 is a question, not a release', async () => {
+    const h = controller()
+    const r = await h.sous.handle({ text: '下周能发版吗', surface: 'canvas', box: true })
+    expect(r.decision).toMatchObject({ kind: 'question', domain: 'question', exposure: 0, exposureWhy: null, boundaries: null })
+  })
+
+  it('single-character code words no longer pull chores into the repo: 修一下自行车 and 整理仓鼠的照片 are chores; 把路由面板的测试补齐 is repo work', async () => {
+    const h = controller()
+    for (const text of ['修一下自行车', '整理仓鼠的照片', '帮我预定明天的饭店']) {
+      const d = (await h.sous.handle({ text, surface: 'canvas', box: true })).decision
+      expect(d, text).toMatchObject({ kind: 'recruit', domain: 'chore', cwd: 'chores' })
+    }
+    const repo = (await h.sous.handle({ text: '把路由面板的测试补齐', surface: 'canvas', box: true })).decision
+    expect(repo?.domain).toBe('repo')
+    expect(repo).toMatchObject({ exposure: 1, exposureWhy: '补齐' })
+  })
+
+  it('a recruit carries the fleet default as its intended route, pinned at start', async () => {
+    const h = controller()
+    const d = (await h.sous.handle({ text: 'draft a limerick about the weather', surface: 'canvas', box: true })).decision
+    expect(d).toMatchObject({ kind: 'recruit', route: { route: 'group/auto', effective: null } })
+  })
+
+  it('after a failed commit the token is spent and the ledger holds the sous row: outcome failed, the proposal and the card', async () => {
+    const h = controller({ failDelivery: true })
+    const r = await h.sous.handle({ text: 'fix the install section of README', surface: 'canvas', box: true })
+    const token = r.decision?.token ?? ''
+    expect((await h.sous.commit(token)).intent).toBe('refused')
+    expect((await h.sous.commit(token)).error).toBe('expired')
+    const fold = Object.assign({}, ...h.ledger.filter((p) => p.token === token)) as Record<string, unknown>
+    expect(fold).toMatchObject({ outcome: 'failed', deliveredTo: 'forge', proposalText: 'fix the install section of README' })
   })
 })

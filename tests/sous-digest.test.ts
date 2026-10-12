@@ -1,9 +1,9 @@
 // THE DIGEST AND THE BUDGET (HP round): 200 cards in one positional table under
 // 2,500 tokens, decide() on them under 50 ms, and NOT ONE pane capture on the
 // way — the candidates come from the Board and the tracker's mirror.
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { buildCandidates } from '../src/main/decide-candidates'
+import { SousController } from '../src/main/sous-control'
 import { approxTokens, buildDigest, digestOrder, type DigestCard } from '../src/shared/sous-digest'
 import { decide, type DecideCandidate } from '../src/shared/sous-decide'
 
@@ -82,15 +82,57 @@ describe('decide on the fleet — fast, and without a single pane capture', () =
     }
   })
 
-  // Source proxy (house pattern): the candidate builder in index.ts reads
-  // context-full from the tracker's mirror and never captures a pane.
-  it('index.ts builds candidates with no pane capture — contextFullCached, not captureAsync', () => {
-    const main = readFileSync(join(__dirname, '../src/main/index.ts'), 'utf8')
-    const start = main.indexOf('candidates: async () => {')
-    const block = main.slice(start, main.indexOf('recruit: ({ preset, name, brief, besideId', start))
-    expect(block).toContain('turns.contextFullCached(t.id)')
-    expect(block).not.toMatch(/captureAsync|\.capture\(|contextExhausted\(/)
-    const tracker = readFileSync(join(__dirname, '../src/main/turn-tracker.ts'), 'utf8')
-    expect(tracker).toContain('contextExhausted(t.session.viewportText())')
+  it('the candidate builder never calls the capture — a runtime spy, one contextFull read per card', () => {
+    const capture = vi.fn(() => 'never read')
+    const contextFull = vi.fn(() => false)
+    const cards = fleet()
+    const out = buildCandidates({
+      terminals: () => cards.map((c) => ({ id: c.id, name: c.name, cwd: c.cwd, role: c.role, orch: c.orch, servedSession: c.served ? {} : null })),
+      rowOf: () => undefined,
+      ownerOf: () => 'ws',
+      contextFull,
+      capture
+    })
+    expect(out).toHaveLength(200)
+    expect(capture).not.toHaveBeenCalled()
+    expect(contextFull).toHaveBeenCalledTimes(200)
+    expect(out.filter((c) => c.served)).toHaveLength(cards.filter((c) => c.served).length)
+  })
+
+  it('the decision is made over the digest, so the token bound is real: a card the table leaves out is never picked', async () => {
+    // 400 idle same-repo cards; the ONLY one whose last task matches is the least recently active, so the table drops it.
+    const many: DecideCandidate[] = Array.from({ length: 400 }, (_, i) => ({
+      id: `c${i}`,
+      name: `Card ${i}`,
+      workspaceId: 'ws',
+      cwd: '/repo',
+      role: null,
+      orch: false,
+      phase: 'done',
+      contextFull: false,
+      lastTask: i === 399 ? 'the haiku about cables' : `turn ${i}: tidy the ${['inbox', 'board', 'relay'][i % 3]} module`,
+      lastActivityAt: NOW - i * 60_000
+    }))
+    const digest = buildDigest(many.map((c) => ({ ...c, harness: null })), { workdir: '/repo', now: NOW })
+    expect(digest.omitted).toBeGreaterThan(0)
+    expect(digest.listed.some((c) => c.id === 'c399')).toBe(false)
+    // straight decide() over everything would ask c399
+    expect(decide('write a haiku about cables', { candidates: many, workdir: '/repo', now: NOW })).toMatchObject({ kind: 'ask', target: { id: 'c399' } })
+    // through the controller (digest-fed) it cannot: the card is outside the table
+    const sous = new SousController({
+      roster: () => ({ agents: [], workspaces: [{ id: 'ws', name: 'Dev' }], presets: ['Claude Code'] }),
+      activeWorkspaceId: () => 'ws',
+      switchWorkspace: () => undefined,
+      createTerminal: () => ({ id: 'n', name: 'n' }),
+      createBrowser: async () => undefined,
+      connect: () => undefined,
+      rename: () => undefined,
+      submit: async () => undefined,
+      ui: () => undefined,
+      now: () => NOW,
+      decide: { candidates: () => many, workdir: () => '/repo', recruit: () => ({ id: 'n', name: 'n' }), deliver: async () => undefined }
+    })
+    const r = await sous.handle({ text: 'write a haiku about cables', surface: 'canvas', box: true })
+    expect(r.decision?.kind).toBe('recruit')
   })
 })

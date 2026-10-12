@@ -2,6 +2,7 @@
 // by its token (owner token only), and a read-only (wall) token sees the
 // projection of the inbox — kind, card, waited-for — on the GET and the stream.
 import http from 'node:http'
+import { EventEmitter } from 'node:events'
 import type net from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import { handleMobileApi, type MobileApiDeps } from '../src/main/mobile-api'
@@ -39,11 +40,15 @@ describe('HP routes', () => {
   const startApi = async () => {
     const acted: string[] = []
     const dismissed: string[] = []
+    const inboxBus = new EventEmitter()
     const deps = {
       pairingToken: TOKEN,
       wallToken: WALL,
-      turns: { list: () => [] },
+      turns: { list: () => [], on: () => undefined, off: () => undefined, removeListener: () => undefined },
+      ops: { listWorkspaces: () => [] },
+      store: { focusedState: { nodes: [], connections: [] }, workspaceState: () => ({ nodes: [], connections: [] }), focusedId: 'ws', on: () => undefined, off: () => undefined, removeListener: () => undefined },
       inbox: () => [row],
+      inboxBus,
       inboxAct: async (id: string) => {
         acted.push(id)
         return id === 'tok-1' ? { ok: true, dispatchId: 'd9' } : { ok: false, error: 'no such proposal' }
@@ -104,5 +109,33 @@ describe('HP routes', () => {
     expect(wall.status).toBe(200)
     expect((wall.body.rows as unknown[])[0]).toEqual({ nodeId: 'forge', nodeName: 'Forge', nodeKind: 'terminal', kind: 'sous', kinds: ['sous'], since: 1, waitMinutes: 3 })
     expect(JSON.stringify(wall.body)).not.toMatch(/Boundaries|retry|tok-1/)
+  })
+
+  it('the stream projects the inbox for a wall token too, and sends the whole row to the owner', async () => {
+    const api = await startApi()
+    const firstInboxFrame = (token: string): Promise<unknown> =>
+      new Promise((resolve, reject) => {
+        const req = http.get({ host: '127.0.0.1', port: api.port, path: '/api/events', headers: { authorization: `Bearer ${token}` } }, (res) => {
+          let buf = ''
+          res.on('data', (chunk: Buffer) => {
+            buf += chunk.toString()
+            const m = /event: inbox\ndata: (.*)\n/.exec(buf)
+            if (m) {
+              req.destroy()
+              resolve(JSON.parse(m[1]))
+            }
+          })
+          res.on('error', reject)
+        })
+        req.on('error', (e) => (e.message.includes('socket hang up') ? undefined : reject(e)))
+        setTimeout(() => {
+          req.destroy()
+          reject(new Error('no inbox frame'))
+        }, 2000)
+      })
+    const wall = (await firstInboxFrame(WALL)) as { rows: unknown[] }
+    expect(wall.rows[0]).toEqual({ nodeId: 'forge', nodeName: 'Forge', nodeKind: 'terminal', kind: 'sous', kinds: ['sous'], since: 1, waitMinutes: 3 })
+    const owner = (await firstInboxFrame(TOKEN)) as { rows: InboxRow[] }
+    expect(owner.rows[0]).toMatchObject({ id: 'tok-1', action: 'retry', text: row.text })
   })
 })

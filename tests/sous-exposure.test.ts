@@ -43,3 +43,15 @@ describe('boundaries — one positive line at 2 and above, none below', () => {
     expect(boundaries(0, 'read it')).toBeNull()
   })
 })
+
+describe('the five AUDIT sentences (round 2)', () => {
+  it('score as the owner would', () => {
+    expect(exposure('帮我预定明天的饭店')).toMatchObject({ score: 0 })
+    expect(exposure('把路由面板的测试补齐')).toMatchObject({ score: 1, why: '补齐' })
+    expect(exposure('全仓把 v1 路由重构成 v2')).toMatchObject({ score: 1, why: '重构' })
+    expect(exposure('把 v1 路由全删了并推送')).toMatchObject({ score: 2, why: '删了' })
+    expect(boundaries(2, '把 v1 路由全删了并推送')).toBe('测试通过后才推送')
+    // the question is scored by exposure() like any text, but decide() strips it — see sous-hp-decide
+    expect(exposure('下周能发版吗').score).toBe(2)
+  })
+})
