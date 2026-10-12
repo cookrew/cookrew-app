@@ -1,0 +1,24 @@
+{
+  "question": "does any effort= threshold separate codex from claude in the USEFUL direction (codex -> thinking models, claude not)?",
+  "asked": {
+    "claude -p, Cookrew's routeEnv env, model group/think": "high",
+    "codex exec, Cookrew's routeEnv args, NO model_reasoning_effort (the default)": "medium",
+    "codex exec, -c model_reasoning_effort=low": "low",
+    "codex exec, -c model_reasoning_effort=medium": "medium",
+    "codex exec, -c model_reasoning_effort=high": "high"
+  },
+  "semantics": "effort=<level> is AT LEAST that level: the rule renders as 'effort >= high', and a medium request misses it (rule n 0) while a high request hits it (rule n 1). Proven on scratch group hp-eff, since removed.",
+  "thresholds": {
+    "effort=on": "matches BOTH (any reasoning)",
+    "effort=low": "matches both",
+    "effort=medium": "matches both (claude's high is >= medium)",
+    "effort=high": "matches CLAUDE only - the wrong one",
+    "effort=xhigh / max": "matches neither"
+  },
+  "answer": "NO. At Cookrew's defaults claude asks high and codex asks medium, so the ordering is inverted: a >= predicate can never select the lower level and exclude the higher. No effort= threshold does what the route program wanted.",
+  "options": [
+    "a bearer per harness (magpie-claude / magpie-codex): agents= then matches, because agentOf() takes the agent from the token first. Costs the single cookrew Usage identity.",
+    "invert the rule instead of the traffic: make the group's ORDER put the thinking model first (codex's medium matches nothing and lands there) and add effort=high -> <chat model> so claude's high effort is the thing the rule moves. Needs no new bearer and no spoofed effort.",
+    "manufacture the gap: route-env adds -c model_reasoning_effort=xhigh for codex cards so effort=xhigh matches codex alone. Overrides the card's EFF dial and sets a reasoning level for a reason that is not about reasoning."
+  ]
+}
