@@ -257,6 +257,7 @@ import { doorMovedSentence } from '../shared/door-ownership'
 import { startRelayProxy, type RelayProxy } from './relay-proxy'
 import { importedDoors, rememberDoor, resolveDoor } from './relay-doorbook'
 import { SERVED_SESSION_END_PATH } from '../shared/served-transcript'
+import { prepareChoresDir } from './claude-trust'
 import { DoorTranscript } from './door-transcript'
 import { DoorWatch } from './door-watch'
 import { doorNameOf, transcriptSourceFor } from './transcript-source'
@@ -5596,7 +5597,8 @@ app.whenReady().then(() => {
         const position = placeBeside(anchor, nodes, DEFAULT_TERMINAL_SIZE)
         // A chore works outside the repo: ~/.cookrew/chores, 0700, never the tree.
         const choresDir = path.join(app.getPath('home'), '.cookrew', 'chores')
-        if (cwd === 'chores' && !existsSync(choresDir)) mkdirSync(choresDir, { recursive: true, mode: 0o700 })
+        // Created 0700 and pre-trusted in ~/.claude.json: a fresh chore card must not stop at Claude's trust dialog.
+        if (cwd === 'chores') prepareChoresDir(choresDir, path.join(app.getPath('home'), '.claude.json'))
         const node = createTerminal({ name, preset, position, ...(cwd === 'chores' ? { cwd: choresDir } : {}) })
         // The sentence is the card's BRIEF, not its role: a role is a saved
         // role's name, worn by the pane chrome and typed by role boot; a brief
