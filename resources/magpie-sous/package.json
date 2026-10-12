@@ -1,0 +1,11 @@
+{
+  "name": "@magpie-community/agent-cookrew-sous",
+  "version": "0.1.0",
+  "description": "Cookrew's Sous as an agent row on Magpie's Agents page: pick the model Sous decides with, under its own gateway key and budget.",
+  "type": "module",
+  "license": "MIT",
+  "magpie": {
+    "agent": "./sous.agent.js"
+  },
+  "keywords": ["magpie", "magpie-agent", "cookrew", "sous"]
+}
