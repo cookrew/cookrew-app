@@ -70,6 +70,7 @@ export function routeFixture(status: RouteState['status'] = 'online', over: Part
       { id: 'pi', name: 'Pi', installed: true, signedIn: null, inDock: false, installLine: 'npm i -g @earendil-works/pi-coding-agent', loginLine: null, routable: true }
     ],
     checkedAt: NOW,
+    autoGroup: false,
     setup: SETUP_LINES,
     ...over
   }
