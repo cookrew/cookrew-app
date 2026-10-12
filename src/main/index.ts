@@ -64,7 +64,7 @@ import { sousBreakerState, sousReadiness, summarizeTurn } from './sous'
 import { translateBody } from './sous-translate'
 import { remoteSousHost } from './sous-remote-config'
 import { TRANSLATE_MAX_CHARS } from '../shared/translate'
-import { startSocketServer } from './socket-server'
+import { startSocketServer, type SousDoor } from './socket-server'
 import { RoutineScheduler } from './routines'
 import { VoiceEngine } from './voice'
 import { SousController } from './sous-control'
@@ -93,6 +93,8 @@ import { createDesktopCert, type DesktopCert } from './desktop-cert'
 import { createSecretsStore } from './secrets-store'
 import { secretAuditDetails, type SecretAudit } from './secret-cli'
 import { ensureSecretSlotNote } from './secret-note'
+import { createScrubber } from './scrub'
+import { scrubInboxRow, scrubSousResult } from './scrub-surfaces'
 import { DEFAULT_NAME_ZONE } from '../shared/reach-names'
 import { NameCertStore } from './name-cert-store'
 import {
@@ -544,6 +546,20 @@ const callConversations = new CallConversationStore()
  * and through nothing else — not an event, not workspace state, not a log.
  */
 const secrets = createSecretsStore()
+/**
+ * THE SCRUB (scrub.ts): every string that leaves main for a pane, a phone,
+ * a wall or a ledger. The sealed values are read per call from the store,
+ * the tokens from where they live; nothing is cached across calls.
+ */
+const scrub = createScrubber({
+  secrets: () =>
+    secrets
+      .list()
+      .map((row) => secrets.read(row.name)?.value)
+      .filter((value): value is string => typeof value === 'string'),
+  tokens: () => [activePairingTokenValue(), routeService.gatewayKey()],
+  env: process.env
+})
 /** The audit line every read and every missing read leaves: name only. */
 const auditSecret = (event: SecretAudit): void => {
   const hit = store.nodeAcrossWorkspaces(event.terminalId)
@@ -579,10 +595,14 @@ const auditSecret = (event: SecretAudit): void => {
     workspaceName: home?.name ?? store.list().workspaces.find((w) => w.id === workspaceId)?.name ?? workspaceId,
     actor: 'agent',
     timestamp: Date.now(),
-    // `<name>` or `<name> note:<id>` when a note on that canvas has the slot.
-    details: secretAuditDetails(
-      event.name,
-      store.workspaceState(workspaceId).nodes.flatMap((node) => (node.kind === 'note' ? [node] : []))
+    // `<name>` or `<name> note:<id>` when a note on that canvas has the slot —
+    // scrubbed like every string that leaves main, for everyone, not only
+    // the wall (which still gets no details at all).
+    details: scrub(
+      secretAuditDetails(
+        event.name,
+        store.workspaceState(workspaceId).nodes.flatMap((node) => (node.kind === 'note' ? [node] : []))
+      )
     )
   })
 }
@@ -5585,7 +5605,7 @@ app.whenReady().then(() => {
         // The sentence is the card's BRIEF, not its role: a role is a saved
         // role's name, worn by the pane chrome and typed by role boot; a brief
         // is display only and nothing types it on a respawn (recruit-node.ts).
-        updateNode(node.id, recruitPatch(brief))
+        updateNode(node.id, recruitPatch(scrub(brief)))
         return { id: node.id, name: node.name }
       },
       // The same door `cookrew ask --no-wait` uses: admitted by the dispatch
@@ -5613,11 +5633,19 @@ app.whenReady().then(() => {
   // The desktop's box: one caller, on the surface it says. A token minted on
   // the canvas is the canvas box's to commit or cancel, and nobody else's.
   const desktopCaller = (surface: unknown): { surface: SousSurface; callerId: string } => ({ surface: surface === 'phone' ? 'phone' : 'canvas', callerId: 'desktop' })
+  // THE DOOR EVERY SURFACE GETS — the desktop box, the phone, the CLI: the
+  // same controller, its spoken sentence and its choices scrubbed on the way
+  // out (scrub-surfaces.ts). Commit and cancel pass through untouched.
+  const sousDoor: SousDoor = {
+    handle: async (input) => scrubSousResult(await sous.handle(input), scrub),
+    commit: (token, choice, caller) => sous.commit(token, choice ?? {}, caller),
+    cancel: (token, caller) => sous.cancel(token, caller)
+  }
   ipcMain.handle('sous:commit', (_e, token: string, choice?: { target?: string }, surface?: unknown) => sous.commit(String(token), choice ?? {}, desktopCaller(surface)))
   ipcMain.handle(
     'sous:command',
     (_e, text: string, ctx: { surface: SousSurface; focusedAgentId?: string | null; alternates?: string[]; box?: boolean }) =>
-      sous.handle({
+      sousDoor.handle({
         text,
         alternates: ctx.alternates,
         surface: ctx.surface,
@@ -5661,7 +5689,7 @@ app.whenReady().then(() => {
         connections: () => connections,
         dispatches: readDispatches,
         events: (type, since) => events.query({ type, since })
-      })
+      }).map((row) => scrubInboxRow(row, scrub))
     },
     // The op itself rides along: Sous's notes are store ops too.
     onStoreOp: (cb) => {
@@ -5724,7 +5752,7 @@ app.whenReady().then(() => {
     spawnTerminal: spawnTracked,
     agents,
     turns,
-    sous,
+    sous: sousDoor,
     // `cookrew secret read/list` (secret-cli.ts): the store, and the line
     // each read leaves in the event log.
     secrets,
@@ -5804,7 +5832,7 @@ app.whenReady().then(() => {
     servedSlug: handleServedSlug,
     store,
     // Sous's door for the phone and for voice-gateway; `ui` events for both.
-    sous,
+    sous: sousDoor,
     uiBus,
     // The inbox (R3): the same rows the desktop box lists; a stream holds it open.
     inbox: () => inbox.read(),

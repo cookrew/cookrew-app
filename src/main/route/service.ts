@@ -146,6 +146,12 @@ export class RouteService extends EventEmitter {
 
   // ---- the whole state
 
+  /** The gateway's bearer, main-only (never on RouteState): for the scrub. */
+  gatewayKey(): string | null {
+    const key = this.deps.monitor.probe.key
+    return typeof key === 'string' && key.length > 0 ? key : null
+  }
+
   state(): RouteState {
     const probe = this.deps.monitor.probe
     const lines = setupLines(this.deps.pluginDir)
