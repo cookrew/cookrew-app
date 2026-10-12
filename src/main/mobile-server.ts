@@ -214,6 +214,9 @@ export interface MobileServerDeps {
   inbox?: MobileApiDeps['inbox']
   inboxHold?: MobileApiDeps['inboxHold']
   inboxBus?: MobileApiDeps['inboxBus']
+  inboxAct?: MobileApiDeps['inboxAct']
+  inboxDismiss?: MobileApiDeps['inboxDismiss']
+  sousBus?: MobileApiDeps['sousBus']
   /** The screen wall's pictures for the phone — see MobileApiDeps; passed through as-is. */
   workspaceShots?: MobileApiDeps['workspaceShots']
   /**

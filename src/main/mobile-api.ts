@@ -52,7 +52,7 @@ import { ROUTE_ID_RE, type CardRouteState, type RouteState } from "../shared/rou
 import { ownerSubmit } from "./ask";
 import { MAX_ATTACHMENT_BYTES } from "./attachments";
 import type { SousDoor } from "./socket-server";
-import type { InboxRow } from "../shared/inbox-rank";
+import { wallProjection, type InboxRow } from "../shared/inbox-rank";
 import type { Surface as SousSurface } from "../shared/sous-intent";
 import type { UiCommandEvent } from "../shared/sous-ui";
 import type { EventEmitter } from "node:events";
@@ -236,6 +236,11 @@ export interface MobileApiDeps {
   inbox?: () => InboxRow[];
   inboxHold?: () => () => void;
   inboxBus?: { on: (event: "inbox", cb: (rows: InboxRow[]) => void) => void; removeListener: (event: "inbox", cb: (rows: InboxRow[]) => void) => void };
+  /** HP: RETRY a Sous proposal from the ledger; DISMISS a row. Owner (pairing) scope only. */
+  inboxAct?: (id: string) => Promise<{ ok: boolean; error?: string; dispatchId?: string }>;
+  inboxDismiss?: (id: string) => boolean;
+  /** Late decision revisions (`sous:decision-updated`) for the phone's box, as SSE `sous` frames. */
+  sousBus?: EventEmitter;
   /**
    * THE DIALS (shared/agent-tuning) — model and effort, read and turned.
    *
@@ -1497,7 +1502,30 @@ export async function handleMobileApi(
       respondJson(response, 401, { error: "Unauthorized — the inbox requires a pairing or read-only token." });
       return true;
     }
-    respondJson(response, 200, { rows: deps.inbox?.() ?? [] });
+    // The WALL reads only kind, card and waited-for: no reasons, no question
+    // text, no brief, no proposal (HP contract).
+    const rows = deps.inbox?.() ?? [];
+    respondJson(response, 200, { rows: hasPairing || !deps.pairingToken ? rows : wallProjection(rows) });
+    return true;
+  }
+
+  if (method === "POST" && /^\/api\/inbox\/[^/]+\/(?:act|dismiss)$/.test(p)) {
+    const [, , , id, verb] = p.split("/");
+    if (verb === "act") {
+      if (!deps.inboxAct) {
+        respondJson(response, 503, { error: "this desktop cannot retry from the inbox" });
+        return true;
+      }
+      const out = await deps.inboxAct(decodeURIComponent(id));
+      respondJson(response, out.ok ? 200 : 409, out);
+      return true;
+    }
+    if (!deps.inboxDismiss) {
+      respondJson(response, 503, { error: "this desktop cannot dismiss inbox rows" });
+      return true;
+    }
+    const dismissed = deps.inboxDismiss(decodeURIComponent(id));
+    respondJson(response, dismissed ? 200 : 404, { ok: dismissed, dismissed });
     return true;
   }
 
@@ -1506,17 +1534,21 @@ export async function handleMobileApi(
       respondJson(response, 503, { error: "Sous does not decide on this desktop" });
       return true;
     }
-    const body = await readJson<{ token?: string; target?: string; surface?: string; callerId?: string }>(request);
+    const body = await readJson<{ token?: string; target?: string; surface?: string; callerId?: string; ack?: string }>(request);
     if (typeof body.token !== "string" || body.token.length === 0 || body.token.length > 64) {
       respondJson(response, 400, { error: "Missing token" });
       return true;
     }
-    const choice = typeof body.target === "string" && body.target.length <= 128 ? { target: body.target } : {};
+    const choice = {
+      ...(typeof body.target === "string" && body.target.length <= 128 ? { target: body.target } : {}),
+      ...(body.ack === "send-anyway" ? { ack: "send-anyway" as const } : {}),
+    };
     const result = await deps.sous.commit(body.token, choice, sousCaller(body));
     // A choice that was never shown is a bad request; another caller's token
     // is not theirs; a commit already landing is a conflict; a spent or stale
     // token is gone.
-    const status = result.error === "bad-target" ? 400 : result.error === "not-yours" ? 403 : result.error === "in-flight" ? 409 : result.error === "expired" ? 410 : 200;
+    const status =
+      result.error === "bad-target" ? 400 : result.error === "not-yours" ? 403 : result.error === "in-flight" ? 409 : result.error === "expired" ? 410 : result.error === "needs-ack" ? 428 : 200;
     respondJson(response, status, result);
     return true;
   }
@@ -1568,10 +1600,12 @@ export async function handleMobileApi(
     // The inbox rides the same stream, under the board's read gate; the
     // opening frame is the list as it stands, so a phone never polls for it.
     if (deps.inbox && (!deps.pairingToken || canRead)) {
-      const onInbox = (rows: InboxRow[]): void => send("inbox", { rows });
+      // A read-only (wall) token sees the projection only (HP contract).
+      const project = (rows: InboxRow[]): unknown => (hasPairing || !deps.pairingToken ? rows : wallProjection(rows));
+      const onInbox = (rows: InboxRow[]): void => send("inbox", { rows: project(rows) });
       // The stream HOLDS the list open; the opening frame is built on demand.
       const release = deps.inboxHold?.() ?? null;
-      send("inbox", { rows: deps.inbox() });
+      send("inbox", { rows: project(deps.inbox()) });
       deps.inboxBus?.on("inbox", onInbox);
       request.on("close", () => {
         deps.inboxBus?.removeListener("inbox", onInbox);
@@ -1580,6 +1614,11 @@ export async function handleMobileApi(
     }
     // A cable lit on this canvas. Either end on it is enough: the other end
     // may be a tab naming an agent elsewhere, and the tab is the lamp.
+    if (hasPairing || !deps.pairingToken) {
+      const onSous = (frame: unknown): void => send("sous", frame);
+      deps.sousBus?.on("sous", onSous);
+      request.on("close", () => deps.sousBus?.removeListener("sous", onSous));
+    }
     const onSignal = (signal: CableSignal): void => {
       if (inScopedCanvas(signal.from) || inScopedCanvas(signal.to)) send("signal", signal);
     };

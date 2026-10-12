@@ -6,6 +6,7 @@ import type { TranslateResult } from '../../shared/translate'
 import type { Surface as SousSurface } from '../../shared/sous-intent'
 import type { SousCommandResult } from '../../main/sous-control'
 import type { InboxRow } from '../../shared/inbox-rank'
+import type { Alternate } from '../../shared/sous-decide'
 import type { ListenEvent } from '../../main/listen'
 import type { UiCommandEvent } from '../../shared/sous-ui'
 import type {
@@ -675,14 +676,14 @@ export interface CookrewApi {
    */
   sousCommit?: (token: string, choice?: { target?: string; ack?: 'send-anyway' }, surface?: SousSurface) => Promise<SousCommandResult>;
   /** HP · a late revision of a minted decision: main may only APPEND alternates. Optional on an older bridge. */
-  onSousDecisionUpdated?: (cb: (update: { token: string; alternates: unknown[] }) => void) => () => void;
+  onSousDecisionUpdated?: (cb: (update: { token: string; alternates: Alternate[] }) => void) => () => void;
   /** The box closed with a decision still held: main drops the token. */
   sousCancel?: (token: string, surface?: SousSurface) => Promise<boolean>;
   /** R3 · the HITL inbox: a one-shot read, and the subscription that holds the list open in main. */
   inbox?: () => Promise<InboxRow[]>;
   onInbox?: (cb: (rows: InboxRow[]) => void) => () => void;
   /** HP · a `sous` row's RETRY/OPEN, and any dismissable row's DISMISS (owner token only). */
-  inboxAct?: (id: string) => Promise<{ ok: boolean }>;
+  inboxAct?: (id: string) => Promise<{ ok: boolean; error?: string; dispatchId?: string }>;
   inboxDismiss?: (id: string) => Promise<{ ok: boolean }>;
   /**
    * Hold ⌘ to talk (desktop only — the phone dictates through the Web Speech

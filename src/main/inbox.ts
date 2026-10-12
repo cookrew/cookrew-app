@@ -3,6 +3,7 @@
 //   waiting   the Board's phase — a permission prompt, an AskUserQuestion
 //   dispatch  a delivery that failed or was interrupted (~/.cookrew/dispatches.jsonl) — only while the card has been quiet since
 //   secret    `secret.requested` in the event log, until `secret.read` answers it (lane sealed)
+//   sous      a proposal Sous delivered that failed or was interrupted — read from the Sous ledger, RETRY re-sends it
 //   signin    a browser card at a sign-in wall — no signal exists for it yet; the kind
 //             stays in the type and the report says so
 //
@@ -26,6 +27,15 @@ export interface InboxNode {
   served: boolean
 }
 
+/** A Sous decision whose delivery did not land, as the ledger folds it (sous-ledger.ts `stuck()`). */
+export interface SousStuckRow {
+  token: string
+  deliveredTo: string
+  proposalText: string
+  outcome: string
+  updatedAt: number
+}
+
 export interface InboxSources {
   rows: () => readonly BoardRow[]
   nodes: () => readonly InboxNode[]
@@ -33,6 +43,8 @@ export interface InboxSources {
   dispatches: () => readonly DispatchRecord[]
   /** Events of the given type prefix, newest last. */
   events: (type: string, since: number) => readonly CookrewEvent[]
+  /** Sous's own stuck deliveries; absent = no ledger wired. */
+  sous?: () => readonly SousStuckRow[]
   now?: () => number
 }
 
@@ -126,6 +138,31 @@ export function buildInbox(sources: InboxSources): InboxRow[] {
     })
   }
 
+  // Sous's proposals that never landed: one row per card, the newest, with
+  // the proposal text the owner saw, so RETRY sends exactly that again.
+  const sousLatest = new Map<string, SousStuckRow>()
+  for (const row of sources.sous?.() ?? []) {
+    if (row.updatedAt < now - DISPATCH_WINDOW_MS) continue
+    if (activeSince(rowOf.get(row.deliveredTo), row.updatedAt)) continue
+    const seen = sousLatest.get(row.deliveredTo)
+    if (!seen || seen.updatedAt < row.updatedAt) sousLatest.set(row.deliveredTo, row)
+  }
+  for (const [cardId, row] of sousLatest) {
+    const node = nodes.get(cardId)
+    if (!node) continue
+    items.push({
+      kind: 'sous',
+      ...base(node),
+      reason: `Sous's brief ${row.outcome} — retry`,
+      since: row.updatedAt,
+      blockedDownstream: blockedDownstream(node.id),
+      id: row.token,
+      action: 'retry',
+      dismissable: true,
+      text: row.proposalText
+    })
+  }
+
   const asked = sources.events('secret.requested', now - SECRET_WINDOW_MS)
   const read = sources.events('secret.read', now - SECRET_WINDOW_MS)
   const answered = new Set(read.map((e) => `${e.entityId}:${parseSecretDetails(e.details)?.name ?? ''}`))
@@ -164,5 +201,5 @@ export function buildInbox(sources: InboxSources): InboxRow[] {
 
 /** What a list says, without the clock: the stamp a change is gated on. */
 export function inboxStamp(rows: readonly InboxRow[]): string {
-  return rows.map((r) => `${r.nodeId}|${r.kinds.join(',')}|${r.reasons.join(';')}|${r.blockedDownstream}|${r.served ? 1 : 0}`).join('\n')
+  return rows.map((r) => `${r.nodeId}|${r.kinds.join(',')}|${r.reasons.join(';')}|${r.blockedDownstream}|${r.served ? 1 : 0}|${r.action ?? ''}|${r.id ?? ''}`).join('\n')
 }

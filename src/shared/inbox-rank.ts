@@ -11,11 +11,14 @@
 
 export type InboxKind = 'waiting' | 'dispatch' | 'secret' | 'signin' | 'sous'
 
+/** What one click on the row does (HP contract). */
+export type InboxAction = 'retry' | 'open' | null
+
 /** HP contract: a `sous` row is Sous's own — a proposal that failed (RETRY), a card to look at (OPEN), or an answer to read (DISMISS). */
 export interface SousRowFacts {
   /** The row's id for `POST /api/inbox/:id/act|dismiss`; absent on an older main (the box falls back to nodeId). */
   id?: string
-  action?: 'retry' | 'open' | null
+  action?: InboxAction
   dismissable?: boolean
   /** The proposal or the answer, one line, scrubbed in main. */
   text?: string
@@ -123,4 +126,19 @@ export function waitedFor(waitMinutes: number): string {
   if (waitMinutes < 60) return `${Math.floor(waitMinutes)} m`
   if (waitMinutes < 60 * 24) return `${Math.floor(waitMinutes / 60)} h`
   return `${Math.floor(waitMinutes / (60 * 24))} d`
+}
+
+/** The WALL's view of a row (read-only scope): kind, card, waited-for — no reasons, no question, no brief, no proposal. */
+export interface WallInboxRow {
+  nodeId: string
+  nodeName: string
+  nodeKind: InboxRow['nodeKind']
+  kind: InboxKind
+  kinds: InboxKind[]
+  since: number
+  waitMinutes: number
+}
+
+export function wallProjection(rows: readonly InboxRow[]): WallInboxRow[] {
+  return rows.map((r) => ({ nodeId: r.nodeId, nodeName: r.nodeName, nodeKind: r.nodeKind, kind: r.kind, kinds: r.kinds, since: r.since, waitMinutes: r.waitMinutes }))
 }

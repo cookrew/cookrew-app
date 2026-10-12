@@ -13,6 +13,12 @@ const decision: Decision = {
   alternates: [{ kind: 'ask' as const, id: 'tinker', name: 'Tinker', reasons: ['idle', 'same repo', 'role: Bugfix'] }],
   reasons: ['idle', 'same repo', 'last touched README · 2h'],
   recruit: { harness: 'Claude Code' as const, name: 'Install Section', beside: null, direct: true },
+  domain: 'repo' as const,
+  exposure: 1 as const,
+  exposureWhy: 'make',
+  boundaries: null,
+  mode: 'ticking' as const,
+  route: null,
   token: 't1',
   holdMs: 1500,
   sentence: 'Make the install section of README English'
@@ -96,7 +102,7 @@ describe('the hold', () => {
   })
 
   it('a question never ticks and never commits', () => {
-    const h = harness({ ...decision, kind: 'question', question: 'Is that a task?' } as Decision)
+    const h = harness({ ...decision, kind: 'question', question: 'Is that a task?', mode: 'question', answer: null } as Decision)
     vi.advanceTimersByTime(10_000)
     expect(h.commits).toEqual([])
     expect(h.hold.state).toBe('paused')

@@ -500,7 +500,7 @@ const api = {
     return () => ipcRenderer.removeListener('ui:command', listener)
   },
   // R3: the decide step's commit, and the HITL inbox.
-  sousCommit: (token: string, choice?: { target?: string }, surface?: string) => ipcRenderer.invoke('sous:commit', token, choice ?? {}, surface ?? 'canvas'),
+  sousCommit: (token: string, choice?: { target?: string; ack?: 'send-anyway' }, surface?: string) => ipcRenderer.invoke('sous:commit', token, choice ?? {}, surface ?? 'canvas'),
   sousCancel: (token: string, surface?: string) => ipcRenderer.invoke('sous:cancel', token, surface ?? 'canvas'),
   // HP: a late revision may only append alternates; the box merges them.
   onSousDecisionUpdated: (cb: (update: unknown) => void) => {

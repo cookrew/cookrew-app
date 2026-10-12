@@ -46,7 +46,8 @@ describe('index.ts wiring — the recruit, the one injection path, and role boot
   const main = readFileSync(join(__dirname, '../src/main/index.ts'), 'utf8').replace(/\s+/g, ' ')
 
   it('the recruit dep writes the recruit patch, not a role', () => {
-    expect(main).toContain('updateNode(node.id, recruitPatch(brief))')
+    // the brief is scrubbed on its way onto the node (Tinker's scrub), still through the recruit patch
+    expect(main).toMatch(/updateNode\(node\.id, recruitPatch\((?:scrub\()?brief\)?\)\)/)
     expect(main).not.toContain('updateNode(node.id, { role })')
   })
 

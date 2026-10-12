@@ -19,7 +19,9 @@ const row = (id: string): InboxRow => ({
   waitMinutes: 1,
   served: false,
   blockedDownstream: 0,
-  score: 1
+  score: 1,
+  action: null,
+  dismissable: false
 })
 
 function harness(initial: InboxRow[] = [row('a')]) {

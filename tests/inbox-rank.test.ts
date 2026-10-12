@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { inboxScore, rankInbox, waitedFor, type InboxItem } from '../src/shared/inbox-rank'
+import { inboxScore, rankInbox, waitedFor, wallProjection, type InboxItem } from '../src/shared/inbox-rank'
 
 const NOW = Date.parse('2026-10-11T10:00:00Z')
 const min = (n: number): number => NOW - n * 60_000
@@ -79,5 +79,33 @@ describe('rankInbox — one row per card, the most stuck first', () => {
     expect(waitedFor(4.9)).toBe('4 m')
     expect(waitedFor(130)).toBe('2 h')
     expect(waitedFor(3 * 24 * 60 + 5)).toBe('3 d')
+  })
+})
+
+describe('HP — the sous kind, the row action, and the wall projection', () => {
+  it('a sous item ranks last (Velvet: sous 4), and its action, id and text ride the row when it heads the card', () => {
+    const rows = rankInbox(
+      [
+        item({ nodeId: 'a', kind: 'signin', since: min(5) }),
+        item({ nodeId: 'a', kind: 'sous', since: min(5), action: 'retry', dismissable: true, id: 'tok', text: 'push the branch' }),
+        item({ nodeId: 'a', kind: 'dispatch', since: min(5) })
+      ],
+      NOW
+    )
+    expect(rows[0].kinds).toEqual(['dispatch', 'signin', 'sous'])
+    // the facts ride the HEAD item only (Velvet's rank): a card that is also stuck on a dispatch shows no RETRY
+    expect(rows[0].action).toBeUndefined()
+    const alone = rankInbox([item({ nodeId: 'b', kind: 'sous', since: min(5), action: 'retry', dismissable: true, id: 'tok', text: 'push the branch' })], NOW)[0]
+    expect(alone).toMatchObject({ action: 'retry', dismissable: true, id: 'tok', text: 'push the branch' })
+    const plain = rankInbox([item({ nodeId: 'c', kind: 'waiting' })], NOW)[0]
+    expect(plain.action).toBeUndefined()
+    expect(plain.text).toBeUndefined()
+  })
+
+  it('the wall sees kind, card and waited-for only — no reasons, question, brief or proposal', () => {
+    const rows = rankInbox([item({ nodeId: 'a', kind: 'sous', action: 'retry', dismissable: true, id: 'tok', text: 'secret-ish proposal', reason: 'Sous\'s brief failed — retry' })], NOW)
+    const wall = wallProjection(rows)
+    expect(wall).toEqual([{ nodeId: 'a', nodeName: 'a', nodeKind: 'terminal', kind: 'sous', kinds: ['sous'], since: rows[0].since, waitMinutes: rows[0].waitMinutes }])
+    expect(JSON.stringify(wall)).not.toMatch(/proposal|reason|tok/)
   })
 })

@@ -9,6 +9,7 @@ import type {
 } from '../../shared/model'
 import { noteNameFromContent, uniqueName } from '../../shared/model'
 import { rankInbox } from '../../shared/inbox-rank'
+import type { Alternate } from '../../shared/sous-decide'
 import type { CookrewApi } from './api'
 
 /**
@@ -122,9 +123,9 @@ export function createDemoApi(): CookrewApi {
   // so the Routing panel's states can be photographed.
   let route: RouteState = routeFixture('online')
   const routeListeners = new Set<(state: RouteState) => void>()
-  const sousUpdateListeners = new Set<(update: { token: string; alternates: unknown[] }) => void>()
+  const sousUpdateListeners = new Set<(update: { token: string; alternates: Alternate[] }) => void>()
   if (typeof window !== 'undefined') {
-    ;(window as unknown as { __sousRevise?: (token: string, alternates: unknown[]) => void }).__sousRevise = (token, alternates) => {
+    ;(window as unknown as { __sousRevise?: (token: string, alternates: Alternate[]) => void }).__sousRevise = (token, alternates) => {
       for (const listener of sousUpdateListeners) listener({ token, alternates })
     }
   }
@@ -472,6 +473,7 @@ export function createDemoApi(): CookrewApi {
             ],
             reasons: ['no idle card fits the brief', 'repo-wide → Codex', 'beside Conductor, wired to it'],
             direct: true,
+            cwd: 'repo' as const,
             token: 'demo-decision',
             holdMs: 2500,
             sentence,

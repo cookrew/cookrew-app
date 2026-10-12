@@ -130,6 +130,8 @@ export function ownerSecretPaths(
     // …and the app's OWN origin state, entry by entry (the default session
     // writes it beside the settings, so the tree cannot be taken).
     ...defaultSessionStatePaths(home, appDir),
+    // The Sous ledger: every sentence the owner said to the crew, scrubbed but theirs (sous-ledger.ts).
+    at(appDir === DEFAULT_APP_DIR ? '.cookrew' : appDir, 'sous-decisions.jsonl'),
     // The one the ruling names by hand.
     at('.claude', '.credentials.json'),
     at('.claude.json'),
