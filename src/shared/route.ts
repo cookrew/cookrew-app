@@ -78,10 +78,11 @@ export interface RouteDecision {
   ttftMs: number | null
   ms: number | null
   /**
-   * The group's rule that matched this turn, and `pick` — the effort its
-   * decision model chose (reference.md, /v1/magpie/route). Null when the
-   * group had no rule for it, or a plain model was asked. The rail and R1
-   * print `auto → <rule.id> → <model>` when it is here.
+   * The group's rule that matched this turn: `id` is the rule's number in
+   * the group (the gateway's `n`, as a string), `pick` what it chose (the
+   * gateway's `use`). Null when no rule matched — the gateway says that as
+   * `{n: 0}`, never null — or a plain model was asked. The rail and R1 print
+   * `auto → <rule.id> → <model>` when it is here.
    */
   rule: { id: string; pick: string | null } | null
 }

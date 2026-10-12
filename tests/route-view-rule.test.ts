@@ -3,7 +3,10 @@
 // prints `<group> → <model>`; a plain model prints itself. Velvet's lines
 // without a rule are unchanged.
 
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { toDecision } from '../src/main/route/decisions'
 import { cardRouteFixture } from '../src/shared/route-fixture'
 import { decisionFacts, routeDialLines, routeHead, routePath } from '../src/shared/route-view'
 import type { RouteDecision } from '../src/shared/route'
@@ -24,9 +27,22 @@ describe('the route path', () => {
     expect(routeHead({ ...base, group: null, asked: null })).toBe('direct')
   })
 
-  it("the facts name the rule's pick after the first-token time", () => {
-    expect(decisionFacts({ ...base, ttftMs: 2300, rule: { id: 'r', pick: 'high' } })).toBe('first token 2.3 s · pick high')
+  it('the facts are unchanged by a rule — the path already names what it picked', () => {
+    const ruled: RouteDecision = { ...base, ttftMs: 2300, rule: { id: '1', pick: 'ollama/qwen3:1.7b' } }
+    expect(decisionFacts(ruled)).toBe('first token 2.3 s')
     expect(decisionFacts({ ...base, ttftMs: 2300 })).toBe('first token 2.3 s')
+  })
+
+  it("the real bodies: the think turn prints auto → 1 → the model, the plain turn never prints 'auto → 0'", () => {
+    const plain = toDecision('hp-plain', JSON.parse(readFileSync(path.join(__dirname, 'fixtures', 'magpie', 'route-hp-plain.json'), 'utf8')), 1)!
+    const think = toDecision('hp-think', JSON.parse(readFileSync(path.join(__dirname, 'fixtures', 'magpie', 'route-hp-think.json'), 'utf8')), 1)!
+    expect(routePath(think)).toBe('auto → 1 → ollama/qwen3:1.7b')
+    expect(routeHead(think)).toBe('auto → 1')
+    expect(routePath(plain)).toBe('think → ollama/qwen2.5:1.5b')
+    expect(routeHead(plain)).toBe('think')
+    expect(routePath(plain)).not.toContain('auto')
+    expect(routeDialLines(cardRouteFixture({ turn: null, live: think })).turn).toBe('this turn → auto → 1 → ollama/qwen3:1.7b')
+    expect(routeDialLines(cardRouteFixture({ turn: null, live: plain })).turn).toBe('this turn → ollama/qwen2.5:1.5b')
   })
 
   it("the rail's this-turn line carries the rule, and stays as it was without one", () => {

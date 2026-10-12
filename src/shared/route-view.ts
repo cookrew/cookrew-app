@@ -186,8 +186,8 @@ export function routeHead(d: Pick<RouteDecision, 'rule' | 'group' | 'asked'>): s
   return d.group ?? d.asked ?? 'direct'
 }
 
-/** What a live row says after the model: tries, a failure, the first-token time, the rule's pick. */
-export function decisionFacts(d: Pick<RouteDecision, 'tries' | 'status' | 'ttftMs' | 'group'> & { rule?: RouteDecision['rule'] }): string {
+/** What a live row says after the model: tries, a failure, the first-token time. */
+export function decisionFacts(d: Pick<RouteDecision, 'tries' | 'status' | 'ttftMs' | 'group'>): string {
   const parts: string[] = []
   // The contract carries a count; the gateway's own array (each try with
   // a `fail`) is accepted too, in case it ever arrives unfolded.
@@ -197,7 +197,6 @@ export function decisionFacts(d: Pick<RouteDecision, 'tries' | 'status' | 'ttftM
   if (count > 1) parts.push(`${count} tries${failed > 0 ? ` · ${failed} failed` : ''}`)
   if (d.status) parts.push(d.status)
   if (d.ttftMs !== null && d.ttftMs !== undefined) parts.push(`first token ${(d.ttftMs / 1000).toFixed(1)} s`)
-  if (d.rule?.pick) parts.push(`pick ${d.rule.pick}`)
   if (parts.length === 0) parts.push(d.group ? 'first pick' : 'direct pick')
   return parts.join(' · ')
 }
