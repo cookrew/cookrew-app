@@ -28,6 +28,8 @@ export const ROUTING_COPY = {
   addLocal: 'Local',
   addGroup: 'Routing group',
   groupNeedsTwo: 'needs two models in the catalog',
+  addAutoGroup: 'Auto group (local tier)',
+  autoGroupNeedsScript: 'run the auto-group script once',
   noRoutable: 'no routable models',
   keyHint: 'the line is typed; paste the key and press Enter — it never touches Cookrew'
 } as const
@@ -112,6 +114,20 @@ export function harnessTicks(row: HarnessRow): Tick[] {
   const inDock: Tick = { label: 'in dock', ok: row.inDock, line: null, act: row.inDock ? null : 'dock' }
   const routes: Tick = { label: 'routes', ok: harnessRoutable(row), line: null, act: null, why: NOT_ROUTABLE_REASON[row.id] }
   return [installed, signedIn, inDock, routes]
+}
+
+/** The local tier's id (design §5). */
+export const AUTO_GROUP = 'group/auto'
+
+/** Does the gateway have group/auto? Main's word first; else the catalog (feature-detected, so nothing changes until main says). */
+export function autoGroupExists(state: Pick<RouteState, 'models'> & { autoGroup?: boolean }): boolean {
+  return state.autoGroup ?? state.models.some((m) => m.id === AUTO_GROUP)
+}
+
+/** What the Add menu's auto item does: types the script's printed command, or says why it cannot. */
+export function autoGroupItem(setup: Pick<RouteState['setup'], 'addAutoGroupLine'>): { line: string | null; why: string | null } {
+  const line = setup.addAutoGroupLine ?? null
+  return line ? { line, why: null } : { line: null, why: ROUTING_COPY.autoGroupNeedsScript }
 }
 
 /** Picker order: direct, then groups, then models — the groups are what a card should usually ride. */
@@ -230,18 +246,28 @@ export function routeDialLines(card: CardRouteState | null): RouteDialLines {
   // Offline NOW under a routed process: the same slot, the opposite sentence —
   // nothing is fine until the restart. `effective` is what the process got.
   if (card.gateway === 'offline' && card.effective !== null && card.effective !== 'direct') {
-    return { value: card.route, turn: turnLine(card), note: joinNotes(GATEWAY_DOWN_NOW, card.note), flag: 'offline' }
+    return { value: dialValue(card.route), turn: turnLine(card), note: joinNotes(GATEWAY_DOWN_NOW, card.note), flag: 'offline' }
   }
   const note = joinNotes(card.appliesOn === 'restart' ? 'applies on restart' : null, card.note)
-  return { value: card.route, turn: turnLine(card), note, flag: card.appliesOn === 'restart' ? 'restart' : null }
+  return { value: dialValue(card.route), turn: turnLine(card), note, flag: card.appliesOn === 'restart' ? 'restart' : null }
+}
+
+/** The chip's value: the local tier reads `auto`; anything else is the route id (the chip shortens it). */
+export function dialValue(route: string): string {
+  return route === AUTO_GROUP ? 'auto' : route
 }
 
 function turnLine(card: CardRouteState): string | null {
-  // Under a matched rule the line says how the model was reached:
-  // `this turn → auto → <rule> → <model>`; without one, the model alone.
-  const via = card.live?.rule ? `auto → ${card.live.rule.id} → ` : ''
-  if (card.turn && card.turn.model) return `this turn → ${via}${card.turn.model}${tokens(card.turn.inputTokens, card.turn.outputTokens)}${cost(card.turn)}`
-  return card.live?.model ? `this turn → ${via}${card.live.model}` : null
+  // On the local tier, or under a matched rule, the line says how the model
+  // was reached, as R1's live rows print it (routePath): `auto → <rule> → <model>`.
+  // Elsewhere the model alone. The turn's own model wins when the facts carry it.
+  const viaPath = card.live !== null && (card.live.rule !== null || card.route === AUTO_GROUP)
+  if (card.turn && card.turn.model) {
+    const path = viaPath && card.live ? routePath({ ...card.live, model: card.turn.model }) : card.turn.model
+    return `this turn → ${path}${tokens(card.turn.inputTokens, card.turn.outputTokens)}${cost(card.turn)}`
+  }
+  if (!card.live?.model) return null
+  return `this turn → ${viaPath ? routePath(card.live) : card.live.model}`
 }
 
 function joinNotes(...notes: (string | null | undefined)[]): string | null {

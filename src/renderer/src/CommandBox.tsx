@@ -125,7 +125,7 @@ export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecis
         .sousCommit(decision.token, { ...(target ? { target } : {}), ...(ack ? { ack } : {}) }, isPhone ? 'phone' : 'canvas')
         .then((result) => {
           setBusy(false)
-          say(result)
+          say({ ...result, spoken: commitToast(result.spoken, decision) })
           setText('')
           setDraft(false)
         })
@@ -421,6 +421,12 @@ export function routeLabel(decision: Pick<Decision, 'route'>): string | null {
   if (decision.route === undefined) return null
   if (decision.route === null) return '—'
   return decision.route.effective ?? `${decision.route.route} (pinned at start)`
+}
+
+/** What Sous said after the commit, with the model the card runs on when the decision carried one: `Sent to Forge · deepseek/deepseek-v4`. */
+export function commitToast(spoken: string, decision: Pick<Decision, 'route'>): string {
+  const model = decision.route?.effective ?? null
+  return spoken && model ? `${spoken} · ${model}` : spoken
 }
 
 /** The line under the box: who, the model, and the three reasons, or the question back. A recruit that runs direct says so. */

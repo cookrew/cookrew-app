@@ -32,6 +32,8 @@ export const ROUTE_LINE_PATTERNS: readonly RegExp[] = [
   /^magpie provider add [a-z0-9-]+ ?$/,
   /^magpie accounts add codex$/,
   /^magpie group add smart models=[A-Za-z0-9./:,_-]+ routing=smart$/,
+  // The local tier, exactly as scripts/route-auto-group.mjs prints it (stays=turn is required: Magpie facts §4).
+  /^magpie group add auto models=[A-Za-z0-9./:,_-]+ routing=smart stays=turn$/,
   /^npm i(nstall)? -g @[a-z0-9-]+\/[a-z0-9-]+$/,
   /^(claude|claude login|codex login|opencode auth login)$/,
   /^curl -fsSL https:\/\/opencode\.ai\/install \| bash$/,

@@ -123,6 +123,13 @@ export interface RouteSetupLines {
   addLocalLine: string
   /** The group line with the first two catalog models, or null when the catalog has fewer than two — never a placeholder. */
   addGroupLine: string | null
+  /**
+   * E2E (design §5): the local tier. The command `scripts/route-auto-group.mjs`
+   * printed — `magpie group add auto models=<installed ollama models> routing=smart stays=turn` —
+   * when the gateway lists ollama models to build it from; null when it cannot
+   * be built; ABSENT on a main without the script (the item is then disabled).
+   */
+  addAutoGroupLine?: string | null
 }
 
 export interface RouteState {
