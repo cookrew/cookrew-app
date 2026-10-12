@@ -44,7 +44,9 @@ describe('1 · the Add menu offers the local tier only when main sent the script
   it('knows whether group/auto exists: main’s word first, else the catalog', () => {
     const online = routeFixture('online')
     expect(autoGroupExists(online)).toBe(false)
-    expect(autoGroupExists({ ...online, models: [{ id: AUTO_GROUP, displayName: 'auto', ownedBy: 'magpie', group: true, reasoning: false, levels: [], contextWindow: null }, ...online.models] })).toBe(true)
+    // Without main's word (an older main), the catalog answers.
+    const { autoGroup: _absent, ...withoutWord } = online
+    expect(autoGroupExists({ ...withoutWord, models: [{ id: AUTO_GROUP, displayName: 'auto', ownedBy: 'magpie', group: true, reasoning: false, levels: [], contextWindow: null }, ...withoutWord.models] })).toBe(true)
     expect(autoGroupExists({ ...online, autoGroup: true })).toBe(true)
     expect(autoGroupExists({ models: [{ id: AUTO_GROUP, displayName: 'auto', ownedBy: 'magpie', group: true, reasoning: false, levels: [], contextWindow: null }], autoGroup: false })).toBe(false)
   })
