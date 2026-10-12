@@ -56,11 +56,11 @@ export function routeFixture(status: RouteState['status'] = 'online', over: Part
       : [],
     live: online
       ? [
-          { terminalId: 'forge', session: 'cookrew:forge', seq: 12, asked: 'group/smart', group: 'group/smart', model: 'deepseek/deepseek-v4', effort: 'high', tries: 1, done: true, status: null, at: NOW - 48_000, ttftMs: 2_300, ms: 14_800 },
-          { terminalId: 'tinker', session: 'cookrew:tinker', seq: 7, asked: 'group/smart', group: 'group/smart', model: 'codex/gpt-5.5', effort: 'medium', tries: 1, done: true, status: null, at: NOW - 80_000, ttftMs: 820, ms: 6_200 },
-          { terminalId: 'orch', session: 'cookrew:orch', seq: 31, asked: 'claude/claude-opus-5-5', group: null, model: 'claude/claude-opus-5-5', effort: 'high', tries: 1, done: true, status: null, at: NOW - 177_000, ttftMs: null, ms: null },
-          { terminalId: 'prune', session: 'cookrew:prune', seq: 2, asked: 'group/smart', group: 'group/smart', model: 'deepseek/deepseek-v4', effort: null, tries: 2, done: true, status: 'claude rested · 429', at: NOW - 245_000, ttftMs: 4_100, ms: 22_000 },
-          { terminalId: 'fresco', session: 'cookrew:fresco', seq: 9, asked: 'group/opus-anywhere', group: 'group/opus-anywhere', model: 'copilot/claude-opus-5.5', effort: 'high', tries: 1, done: true, status: 'claude/opus at 98%', at: NOW - 470_000, ttftMs: 1_050, ms: null }
+          { terminalId: 'forge', session: 'cookrew:forge', seq: 12, asked: 'group/smart', group: 'group/smart', model: 'deepseek/deepseek-v4', effort: 'high', tries: 1, done: true, status: null, at: NOW - 48_000, ttftMs: 2_300, ms: 14_800 , rule: null},
+          { terminalId: 'tinker', session: 'cookrew:tinker', seq: 7, asked: 'group/smart', group: 'group/smart', model: 'codex/gpt-5.5', effort: 'medium', tries: 1, done: true, status: null, at: NOW - 80_000, ttftMs: 820, ms: 6_200 , rule: null},
+          { terminalId: 'orch', session: 'cookrew:orch', seq: 31, asked: 'claude/claude-opus-5-5', group: null, model: 'claude/claude-opus-5-5', effort: 'high', tries: 1, done: true, status: null, at: NOW - 177_000, ttftMs: null, ms: null , rule: null},
+          { terminalId: 'prune', session: 'cookrew:prune', seq: 2, asked: 'group/smart', group: 'group/smart', model: 'deepseek/deepseek-v4', effort: null, tries: 2, done: true, status: 'claude rested · 429', at: NOW - 245_000, ttftMs: 4_100, ms: 22_000 , rule: null},
+          { terminalId: 'fresco', session: 'cookrew:fresco', seq: 9, asked: 'group/opus-anywhere', group: 'group/opus-anywhere', model: 'copilot/claude-opus-5.5', effort: 'high', tries: 1, done: true, status: 'claude/opus at 98%', at: NOW - 470_000, ttftMs: 1_050, ms: null , rule: null}
         ]
       : [],
     harnesses: [
@@ -80,7 +80,7 @@ export function cardRouteFixture(over: Partial<CardRouteState> = {}): CardRouteS
     route: 'group/smart',
     effective: 'deepseek/deepseek-v4',
     appliesOn: 'now',
-    live: { terminalId: 'forge', session: 'cookrew:forge', seq: 12, asked: 'group/smart', group: 'group/smart', model: 'deepseek/deepseek-v4', effort: 'high', tries: 1, done: true, status: null, at: NOW - 48_000, ttftMs: 2_300, ms: 14_800 },
+    live: { terminalId: 'forge', session: 'cookrew:forge', seq: 12, asked: 'group/smart', group: 'group/smart', model: 'deepseek/deepseek-v4', effort: 'high', tries: 1, done: true, status: null, at: NOW - 48_000, ttftMs: 2_300, ms: 14_800 , rule: null},
     turn: { model: 'deepseek/deepseek-v4', inputTokens: 11_300, outputTokens: 1_100, cost: 0.018, priced: true, at: NOW - 40_000 },
     offline: false,
     note: null,

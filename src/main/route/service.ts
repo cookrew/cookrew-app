@@ -146,6 +146,12 @@ export class RouteService extends EventEmitter {
 
   // ---- the whole state
 
+  /** The gateway's bearer, main-only (never on RouteState): for the scrub. */
+  gatewayKey(): string | null {
+    const key = this.deps.monitor.probe.key
+    return typeof key === 'string' && key.length > 0 ? key : null
+  }
+
   state(): RouteState {
     const probe = this.deps.monitor.probe
     const lines = setupLines(this.deps.pluginDir)
@@ -258,6 +264,16 @@ export class RouteService extends EventEmitter {
     if (harness !== null && !ROUTABLE[harness]) return `direct · ${harness} is not routable`
     if (harness === 'codex' && route !== DIRECT) return 'codex needs a thinking-capable model behind the gateway'
     return null
+  }
+
+  /**
+   * For Sous, minting a decision: the card's route and what its process got —
+   * one node lookup, no probe, no respawn. Null for a card that is not there.
+   */
+  routeOfCard(terminalId: string): { route: CardRoute; effective: CardRoute | null } | null {
+    const node = this.deps.node(terminalId)
+    if (!node) return null
+    return { route: this.routeOf(node), effective: node.routeEffective ?? null }
   }
 
   /** The card's route as it stands: its own, else the fleet default, else direct. A served card is direct, always. */

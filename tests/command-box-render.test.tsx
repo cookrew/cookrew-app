@@ -84,7 +84,7 @@ const decision: Decision = {
 
   reasons: ['idle', 'same repo', 'last touched README · 2h'],
   token: 't1',
-  holdMs: 1500,
+  holdMs: 2500,
   sentence: 'Make the install section of README English'
 }
 
@@ -118,12 +118,12 @@ describe('CommandBox — one surface: the inbox rows, the field, the echo', () =
     const { CommandBox, echoLine } = await box()
     const html = renderToStaticMarkup(<CommandBox open onClose={() => undefined} phone={false} rows={[]} initialDecision={decision} />)
     expect(html).toContain('data-decision="ask"')
-    expect(html).toContain('→ Forge (idle · same repo · last touched README · 2h)')
-    expect(html).toContain('1.5 s · or ↵ now')
+    expect(html).toContain('→ Forge · — (idle · same repo · last touched README · 2h)')
+    expect(html).toContain('auto in 2.5 s · or ↵ now')
     expect(html).toContain('change ▾')
     expect(html).not.toContain('cmd-rows')
     expect(echoLine({ ...decision, kind: 'recruit', harness: 'Codex', name: 'Prune v1', beside: null, direct: false, cwd: 'repo', reasons: ['no idle card fits the brief', 'repo-wide → Codex', 'placed on the bench'] } as Decision)).toBe(
-      '+ Codex card · Prune v1 (no idle card fits the brief · repo-wide → Codex · placed on the bench)'
+      '+ Codex card · Prune v1 · — (no idle card fits the brief · repo-wide → Codex · placed on the bench)'
     )
   })
 
@@ -169,7 +169,7 @@ describe('round 2 — the change list names the other path, and a direct recruit
     expect(altLabel({ kind: 'recruit', id: 'harness:Claude Code', name: 'Claude Code', harness: 'Claude Code', reasons: [] })).toBe('+ new Claude Code card')
     expect(altLabel({ kind: 'ask', id: 'tinker', name: 'Tinker', reasons: [] })).toBe('→ Tinker instead')
     expect(echoLine({ ...decision, kind: 'recruit', harness: 'Pi', name: 'Draft Limerick', beside: null, direct: true, cwd: 'repo', reasons: ['no idle card fits the brief', 'light · cheap · local → Pi', 'placed on the bench'] } as Decision)).toBe(
-      '+ Pi card · Draft Limerick (no idle card fits the brief · light · cheap · local → Pi · placed on the bench) · will run direct'
+      '+ Pi card · Draft Limerick · — (no idle card fits the brief · light · cheap · local → Pi · placed on the bench) · will run direct'
     )
   })
 })

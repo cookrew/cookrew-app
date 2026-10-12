@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import path from 'node:path'
 // Where Sous lives and what it runs. Shared by every Sous caller so a machine
 // with a non-default Ollama is configured once, not once per feature.
 //
@@ -37,3 +40,24 @@ export const SOUS_POLISH_MODEL =
  * not sit in memory all day for occasional work.
  */
 export const SOUS_KEEP_ALIVE = process.env.COOKREW_SOUS_KEEPALIVE ?? '5m'
+
+/**
+ * THE SCOPED GATEWAY KEY SOUS SPEAKS WITH (HP round, audit §11).
+ *
+ * scripts/magpie-sous-key.sh mints a Magpie gateway key limited to the
+ * groups Sous may route to and stores it at ~/.cookrew/sous-gateway.key
+ * (0600, in the served deny list). When the file is there its contents are
+ * the bearer; otherwise the local `magpie-sous` token, exactly as before.
+ * Read per call, so a rotation needs no restart; never logged.
+ */
+export const SOUS_GATEWAY_KEY_FILE = 'sous-gateway.key'
+export const SOUS_GATEWAY_KEY_FALLBACK = 'magpie-sous'
+
+export const sousGatewayKey = (base: string = path.join(homedir(), '.cookrew')): string => {
+  try {
+    const key = readFileSync(path.join(base, SOUS_GATEWAY_KEY_FILE), 'utf8').trim()
+    return key.length > 0 ? key : SOUS_GATEWAY_KEY_FALLBACK
+  } catch {
+    return SOUS_GATEWAY_KEY_FALLBACK
+  }
+}

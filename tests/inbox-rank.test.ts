@@ -83,24 +83,27 @@ describe('rankInbox — one row per card, the most stuck first', () => {
 })
 
 describe('HP — the sous kind, the row action, and the wall projection', () => {
-  it('a sous item ranks under a stuck dispatch and above a sign-in, and its action, token and text ride the row', () => {
+  it('a sous item ranks last (Velvet: sous 4), and its action, id and text ride the row when it heads the card', () => {
     const rows = rankInbox(
       [
         item({ nodeId: 'a', kind: 'signin', since: min(5) }),
-        item({ nodeId: 'a', kind: 'sous', since: min(5), action: 'retry', dismissable: true, token: 'tok', text: 'push the branch' }),
+        item({ nodeId: 'a', kind: 'sous', since: min(5), action: 'retry', dismissable: true, id: 'tok', text: 'push the branch' }),
         item({ nodeId: 'a', kind: 'dispatch', since: min(5) })
       ],
       NOW
     )
-    expect(rows[0].kinds).toEqual(['dispatch', 'sous', 'signin'])
-    expect(rows[0]).toMatchObject({ action: 'retry', dismissable: true, token: 'tok', text: 'push the branch' })
-    const plain = rankInbox([item({ nodeId: 'b', kind: 'waiting' })], NOW)[0]
-    expect(plain).toMatchObject({ action: null, dismissable: false })
+    expect(rows[0].kinds).toEqual(['dispatch', 'signin', 'sous'])
+    // the facts ride the HEAD item only (Velvet's rank): a card that is also stuck on a dispatch shows no RETRY
+    expect(rows[0].action).toBeUndefined()
+    const alone = rankInbox([item({ nodeId: 'b', kind: 'sous', since: min(5), action: 'retry', dismissable: true, id: 'tok', text: 'push the branch' })], NOW)[0]
+    expect(alone).toMatchObject({ action: 'retry', dismissable: true, id: 'tok', text: 'push the branch' })
+    const plain = rankInbox([item({ nodeId: 'c', kind: 'waiting' })], NOW)[0]
+    expect(plain.action).toBeUndefined()
     expect(plain.text).toBeUndefined()
   })
 
   it('the wall sees kind, card and waited-for only — no reasons, question, brief or proposal', () => {
-    const rows = rankInbox([item({ nodeId: 'a', kind: 'sous', action: 'retry', dismissable: true, token: 'tok', text: 'secret-ish proposal', reason: 'Sous\'s brief failed — retry' })], NOW)
+    const rows = rankInbox([item({ nodeId: 'a', kind: 'sous', action: 'retry', dismissable: true, id: 'tok', text: 'secret-ish proposal', reason: 'Sous\'s brief failed — retry' })], NOW)
     const wall = wallProjection(rows)
     expect(wall).toEqual([{ nodeId: 'a', nodeName: 'a', nodeKind: 'terminal', kind: 'sous', kinds: ['sous'], since: rows[0].since, waitMinutes: rows[0].waitMinutes }])
     expect(JSON.stringify(wall)).not.toMatch(/proposal|reason|tok/)

@@ -12,6 +12,7 @@ import type {
 import type { SecretListing } from '../../shared/secret-slot'
 import type { UiCommandEvent } from '../../shared/sous-ui'
 import type { InboxRow } from '../../shared/inbox-rank'
+import type { Alternate } from '../../shared/sous-decide'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 import type { VersionPinRecord } from '../../shared/version-pin'
 import { apiPath } from './api-base'
@@ -620,10 +621,14 @@ export function createRemoteApi(): CookrewApi {
     sousCommand: (text, ctx) =>
       req(apiPath('/api/sous/command'), 'POST', { text, surface: ctx.surface, callerId: sousCallerId(), ...(ctx.box ? { box: true } : {}) }),
     onUiCommand: (cb) => subscribe<UiCommandEvent>('ui', cb),
-    sousCommit: (token, choice, surface) => req(apiPath('/api/sous/commit'), 'POST', { token, surface: surface ?? 'phone', callerId: sousCallerId(), ...(choice?.target ? { target: choice.target } : {}) }),
+    sousCommit: (token, choice, surface) =>
+      req(apiPath('/api/sous/commit'), 'POST', { token, surface: surface ?? 'phone', callerId: sousCallerId(), ...(choice?.target ? { target: choice.target } : {}), ...(choice?.ack ? { ack: choice.ack } : {}) }),
+    onSousDecisionUpdated: (cb) => subscribe<{ token: string; alternates: Alternate[] }>('sous', cb),
     sousCancel: (token, surface) => req<{ cancelled: boolean }>(apiPath('/api/sous/cancel'), 'POST', { token, surface: surface ?? 'phone', callerId: sousCallerId() }).then((out) => out.cancelled),
     inbox: () => req<{ rows: InboxRow[] }>(apiPath('/api/inbox')).then((out) => out.rows),
     onInbox: (cb) => subscribe<{ rows: InboxRow[] }>('inbox', (frame) => cb(frame.rows)),
+    inboxAct: (id) => req<{ ok: boolean }>(apiPath(`/api/inbox/${encodeURIComponent(id)}/act`), 'POST', {}),
+    inboxDismiss: (id) => req<{ ok: boolean }>(apiPath(`/api/inbox/${encodeURIComponent(id)}/dismiss`), 'POST', {}),
     // The phone hears through its own browser (VoiceBar); the Mac's ear is
     // the desktop's alone.
     listenAvailable: () => Promise.resolve(false),

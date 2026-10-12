@@ -156,7 +156,7 @@ export function buildInbox(sources: InboxSources): InboxRow[] {
       reason: `Sous's brief ${row.outcome} — retry`,
       since: row.updatedAt,
       blockedDownstream: blockedDownstream(node.id),
-      token: row.token,
+      id: row.token,
       action: 'retry',
       dismissable: true,
       text: row.proposalText
@@ -201,5 +201,5 @@ export function buildInbox(sources: InboxSources): InboxRow[] {
 
 /** What a list says, without the clock: the stamp a change is gated on. */
 export function inboxStamp(rows: readonly InboxRow[]): string {
-  return rows.map((r) => `${r.nodeId}|${r.kinds.join(',')}|${r.reasons.join(';')}|${r.blockedDownstream}|${r.served ? 1 : 0}|${r.action ?? ''}|${r.token ?? ''}`).join('\n')
+  return rows.map((r) => `${r.nodeId}|${r.kinds.join(',')}|${r.reasons.join(';')}|${r.blockedDownstream}|${r.served ? 1 : 0}|${r.action ?? ''}|${r.id ?? ''}`).join('\n')
 }

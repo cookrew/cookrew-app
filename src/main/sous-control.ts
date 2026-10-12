@@ -25,7 +25,9 @@ import {
 import { randomUUID } from 'node:crypto'
 import { rankHearings, vocabularyOf } from '../shared/sous-hearing'
 import type { UiCommand } from '../shared/sous-ui'
-import { DECISION_HOLD_MS, DECISION_TTL_MS, decide, type Alternate, type DecideCandidate, type DecisionDraft, type Harness, type RoutingFacts, type StatusFacts } from '../shared/sous-decide'
+import { DECISION_HOLD_MS, DECISION_TTL_MS, decide, type Alternate, type DecideCandidate, type DecisionDraft, type DecisionMode, type Harness, type RoutingFacts, type StatusFacts } from '../shared/sous-decide'
+
+export type { DecisionMode } from '../shared/sous-decide'
 
 export interface SousControlDeps {
   /** The live roster, read per sentence — names change under a running app. */
@@ -92,9 +94,6 @@ export interface SousControlDeps {
   }
 }
 
-/** The hold's mode (HP contract): ticking by default; paused for exposure ≥ 2, a respawn, a rewritten brief or a non-box trigger. */
-export type DecisionMode = 'ticking' | 'paused' | 'question' | 'answer'
-
 /** Why a hold starts paused — the one of the four that applied. */
 export function holdMode(input: { kind: DecisionDraft['kind']; answer: boolean; exposure: number; respawn: boolean; rewritten: boolean; box: boolean }): DecisionMode {
   if (input.kind === 'question') return input.answer ? 'answer' : 'question'
@@ -105,14 +104,12 @@ export function holdMode(input: { kind: DecisionDraft['kind']; answer: boolean; 
 /** The exposure tier from which a plain commit is refused and `ack: 'send-anyway'` is required. */
 export const ACK_EXPOSURE = 2
 
-/** A draft decision stamped for the box: the token to commit it under, how long to hold, the hold's mode, the route it will run on. */
-export type Decision = DecisionDraft & {
-  token: string
-  holdMs: number
-  sentence: string
-  mode: DecisionMode
-  route: { route: string; effective: string | null } | null
-}
+/**
+ * A draft decision stamped for the box: the token to commit it under, how
+ * long to hold. The HP facts (mode, exposure, boundaries, domain, route) ride
+ * on the draft (shared DecisionFacts) — optional on the wire, always set here.
+ */
+export type Decision = DecisionDraft & { token: string; holdMs: number; sentence: string }
 
 /** Who is committing or cancelling: the surface and caller the decision was minted for. */
 export interface Caller {
@@ -409,7 +406,7 @@ export class SousController {
     const token = deps.token?.() ?? randomUUID()
     const routeFacts =
       deps.routeOf?.({ cardId: draft.kind === 'ask' ? draft.target.id : null, harness: draft.kind === 'recruit' ? draft.harness : draft.kind === 'ask' ? draft.recruit.harness : null }) ?? null
-    const mode = holdMode({ kind: draft.kind, answer: draft.kind === 'question' && draft.mode === 'answer', exposure: draft.exposure, respawn: routeFacts?.respawn ?? false, rewritten: false, box: true })
+    const mode = holdMode({ kind: draft.kind, answer: draft.mode === 'answer', exposure: draft.exposure ?? 0, respawn: routeFacts?.respawn ?? false, rewritten: false, box: true })
     const decision = { ...draft, token, holdMs: DECISION_HOLD_MS, sentence, mode, route: routeFacts ? { route: routeFacts.route, effective: routeFacts.effective } : null } as Decision
     this.sweepDecisions()
     // A question is answered in the box and creates nothing — there is nothing to commit.
@@ -419,8 +416,8 @@ export class SousController {
         token,
         at: this.now(),
         sentence,
-        domain: draft.domain,
-        exposure: draft.exposure,
+        domain: draft.domain ?? 'repo',
+        exposure: draft.exposure ?? 0,
         mode,
         target: draft.kind === 'ask' ? draft.target : { id: `harness:${draft.harness}`, name: draft.harness },
         alternates: draft.alternates.map((a) => a.id),
@@ -475,10 +472,11 @@ export class SousController {
     // EXPOSURE ≥ 2 IS A DISTINCT ACT: the hold never commits it, Enter does
     // not commit it, and a plain commit is refused — only the SEND ANYWAY
     // control does, and the brief then carries its Boundaries line.
-    if (decision.exposure >= ACK_EXPOSURE && choice.ack !== 'send-anyway') {
+    const tier = decision.exposure ?? 0
+    if (tier >= ACK_EXPOSURE && choice.ack !== 'send-anyway') {
       return { intent: 'refused', spoken: NEEDS_ACK[lang], error: 'needs-ack' }
     }
-    const brief = decision.exposure >= ACK_EXPOSURE && decision.boundaries ? `${decision.sentence}\n\nBoundaries: ${decision.boundaries}` : decision.sentence
+    const brief = tier >= ACK_EXPOSURE && decision.boundaries ? `${decision.sentence}\n\nBoundaries: ${decision.boundaries}` : decision.sentence
     const ledger = this.deps.decide?.ledger
     ledger?.write({ token, ownerResponse: choice.ack === 'send-anyway' ? 'send-anyway' : 'commit', proposalText: brief })
     const roster = this.deps.roster()
@@ -641,7 +639,7 @@ export function chosenPath(decision: Decision, target: string | undefined): Chos
   }
   if (target !== undefined && !target.startsWith('harness:')) return { kind: 'ask', agentId: target }
   const harness = (target ? target.slice('harness:'.length) : decision.harness) as Harness
-  return { kind: 'recruit', harness, name: decision.name, beside: decision.beside, cwd: decision.cwd }
+  return { kind: 'recruit', harness, name: decision.name, beside: decision.beside, cwd: decision.cwd ?? 'repo' }
 }
 
 function callerKey(surface: Surface, callerId: string | undefined): string {

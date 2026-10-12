@@ -77,6 +77,18 @@ export interface RouteDecision {
   /** Time to first token and the whole request, in ms, when the gateway has them. */
   ttftMs: number | null
   ms: number | null
+  /**
+   * The group's rule that matched this turn: `id` is the rule's number in
+   * the group (the gateway's `n`, as a string), `pick` what it chose (the
+   * gateway's `use`). Null when no rule matched — the gateway says that as
+   * `{n: 0}`, never null — or a plain model was asked. The rail and R1 print
+   * `auto → <rule.id> → <model>` when it is here. `held` means the rule was
+   * decided when the turn began: a claude turn makes several requests and
+   * the later ones report the rule the turn opened on, not a fresh match,
+   * so a held repeat is not a change. `when` is the rendered conditions
+   * ("tokens ≥ 1000"), for a title.
+   */
+  rule: { id: string; pick: string | null; held?: boolean; when?: string[] } | null
 }
 
 export interface RouteTurnFacts {

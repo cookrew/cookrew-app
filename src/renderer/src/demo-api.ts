@@ -9,6 +9,7 @@ import type {
 } from '../../shared/model'
 import { noteNameFromContent, uniqueName } from '../../shared/model'
 import { rankInbox } from '../../shared/inbox-rank'
+import type { Alternate } from '../../shared/sous-decide'
 import type { CookrewApi } from './api'
 
 /**
@@ -122,6 +123,12 @@ export function createDemoApi(): CookrewApi {
   // so the Routing panel's states can be photographed.
   let route: RouteState = routeFixture('online')
   const routeListeners = new Set<(state: RouteState) => void>()
+  const sousUpdateListeners = new Set<(update: { token: string; alternates: Alternate[] }) => void>()
+  if (typeof window !== 'undefined') {
+    ;(window as unknown as { __sousRevise?: (token: string, alternates: Alternate[]) => void }).__sousRevise = (token, alternates) => {
+      for (const listener of sousUpdateListeners) listener({ token, alternates })
+    }
+  }
   const cardRoutes = new Map<string, CardRouteState>()
   const cardRouteListeners = new Set<(row: { terminalId: string } & CardRouteState) => void>()
   const routeChanged = (): void => {
@@ -467,15 +474,15 @@ export function createDemoApi(): CookrewApi {
             reasons: ['no idle card fits the brief', 'repo-wide → Codex', 'beside Conductor, wired to it'],
             direct: true,
             cwd: 'repo' as const,
-            domain: 'repo' as const,
-            exposure: 1 as const,
-            exposureWhy: 'refactor',
-            boundaries: null,
-            mode: 'ticking' as const,
-            route: null,
             token: 'demo-decision',
-            holdMs: 1500,
-            sentence
+            holdMs: 2500,
+            sentence,
+            mode: 'paused' as const,
+            exposure: 2 as const,
+            exposureWhy: 'touches every file in the repo',
+            boundaries: 'push only after the check passes',
+            domain: 'repo' as const,
+            route: { route: 'group/smart', effective: null }
           }
         : {
             kind: 'ask' as const,
@@ -486,15 +493,15 @@ export function createDemoApi(): CookrewApi {
             ],
             reasons: ['idle', 'same repo', 'last touched README · 2h'],
             recruit: { harness: 'Claude Code' as const, name: sentence.split(/\s+/).slice(0, 3).join(' '), beside: { id: 'demo-conductor', name: 'Conductor' }, direct: true },
-            domain: 'repo' as const,
-            exposure: 1 as const,
-            exposureWhy: 'make',
-            boundaries: null,
-            mode: 'ticking' as const,
-            route: null,
             token: 'demo-decision',
-            holdMs: 1500,
-            sentence
+            holdMs: 2500,
+            sentence,
+            mode: 'ticking' as const,
+            exposure: 1 as const,
+            exposureWhy: null,
+            boundaries: null,
+            domain: 'repo' as const,
+            route: { route: 'group/smart', effective: 'deepseek/deepseek-v4' }
           }
       const spoken = decision.kind === 'ask' ? `→ Conductor (${decision.reasons.join(' · ')})` : `+ Codex card · ${decision.name} (${decision.reasons.join(' · ')})`
       return Promise.resolve({ intent: 'decide' as const, spoken, decision })
@@ -502,6 +509,15 @@ export function createDemoApi(): CookrewApi {
     sousCommit: (_token, choice) =>
       Promise.resolve({ intent: 'ask' as const, spoken: `Sent to ${choice?.target === 'demo-bench-0' ? 'Bench 0' : 'Conductor'}`, agentId: choice?.target ?? 'demo-conductor' }),
     sousCancel: () => Promise.resolve(true),
+    // HP: a fixture page pushes a late revision through `window.__sousRevise(token, alternates)`.
+    onSousDecisionUpdated: (cb) => {
+      sousUpdateListeners.add(cb)
+      return () => {
+        sousUpdateListeners.delete(cb)
+      }
+    },
+    inboxAct: () => Promise.resolve({ ok: true }),
+    inboxDismiss: () => Promise.resolve({ ok: true }),
     onUiCommand: () => () => undefined,
     // The inbox the harness view renders: one of each signal, on the demo's own cards.
     inbox: () =>
@@ -510,7 +526,9 @@ export function createDemoApi(): CookrewApi {
           [
             { kind: 'waiting', nodeId: 'demo-conductor', nodeName: 'Conductor', nodeKind: 'terminal', workspaceId: 'demo', workspaceName: 'Cookrew Demo', reason: 'asks you — "replace the Chinese headings too?"', since: Date.now() - 4 * 60_000, served: false, blockedDownstream: 2 },
             { kind: 'secret', nodeId: 'demo-note', nodeName: 'Bench 0', nodeKind: 'note', workspaceId: 'demo', workspaceName: 'Cookrew Demo', reason: 'needs STRIPE_SECRET_KEY — seal it', since: Date.now() - 60_000, served: false, blockedDownstream: 1, slot: 'STRIPE_SECRET_KEY', noteId: 'demo-note' },
-            { kind: 'dispatch', nodeId: 'demo-bench-1', nodeName: 'Bench 1', nodeKind: 'terminal', workspaceId: 'demo', workspaceName: 'Cookrew Demo', reason: 'delivery failed — owner is composing', since: Date.now() - 12 * 60_000, served: false, blockedDownstream: 0 }
+            { kind: 'dispatch', nodeId: 'demo-bench-1', nodeName: 'Bench 1', nodeKind: 'terminal', workspaceId: 'demo', workspaceName: 'Cookrew Demo', reason: 'delivery failed — owner is composing', since: Date.now() - 12 * 60_000, served: false, blockedDownstream: 0 },
+            { kind: 'sous', id: 'sous-1', nodeId: 'demo-bench-2', nodeName: 'Bench 2', nodeKind: 'terminal', workspaceId: 'demo', workspaceName: 'Cookrew Demo', reason: 'the brief never reached the card', since: Date.now() - 3 * 60_000, served: false, blockedDownstream: 0, action: 'retry', dismissable: true, text: 'Audit every README for stale install lines' },
+            { kind: 'sous', id: 'sous-2', nodeId: 'demo-conductor', nodeName: 'Sous', nodeKind: 'terminal', workspaceId: 'demo', workspaceName: 'Cookrew Demo', reason: 'an answer', since: Date.now() - 60_000, served: false, blockedDownstream: 0, action: null, dismissable: true, text: 'Three cards are idle in this repo; Forge last touched README.' }
           ],
           Date.now()
         )

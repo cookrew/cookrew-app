@@ -115,9 +115,13 @@ export const DEFAULT_APP_DIR = 'cookrew'
 export function ownerSecretPaths(
   base: string,
   home: string = homedir(),
-  appDir: string = DEFAULT_APP_DIR
+  appDir: string = DEFAULT_APP_DIR,
+  env: NodeJS.ProcessEnv = process.env
 ): readonly string[] {
   const at = (...parts: string[]): string => path.join(home, ...parts)
+  // Magpie's config dir follows XDG when the owner set it; the default lives
+  // under ~/.config. Both are denied when both could exist.
+  const xdg = typeof env.XDG_CONFIG_HOME === 'string' && env.XDG_CONFIG_HOME.length > 0 ? env.XDG_CONFIG_HOME : null
   return [
     // The owner's browsing identity: Default/Cookies for every card they ever
     // logged into. `file-read*` is allowed across the disk, so without these a
@@ -155,6 +159,18 @@ export function ownerSecretPaths(
     // or the refusal is theatre. And the root pairing token, which opens the
     // owner's companion to whoever holds it.
     path.join(base, 'secrets'),
-    path.join(base, 'pairing-token')
+    path.join(base, 'pairing-token'),
+    // THE ROUTE (HP round, audit §11): Magpie's own config — providers.json,
+    // plugin-providers.json, logins.json, plugin auth — is every upstream key
+    // the owner holds; the Sous ledger and its Magpie facts; the owner's
+    // route choices; and the scoped gateway key Sous speaks with.
+    at('.config', 'magpie'),
+    ...(xdg ? [path.join(xdg, 'magpie')] : []),
+    path.join(base, 'sous-decisions.jsonl'),
+    path.join(base, 'sous-magpie.json'),
+    path.join(base, 'route.json'),
+    path.join(base, 'sous-gateway.key'),
+    // The plugin file Magpie writes for this app carries `route.key`.
+    path.join(base, 'magpie.json')
   ]
 }

@@ -152,7 +152,7 @@ describe('buildInbox', () => {
       ]
     })
     expect(rows.map((r) => r.nodeId)).toEqual(['forge'])
-    expect(rows[0]).toMatchObject({ kind: 'sous', action: 'retry', dismissable: true, token: 'tok-1', text: 'push the branch\n\nBoundaries: push only after the check passes' })
+    expect(rows[0]).toMatchObject({ kind: 'sous', action: 'retry', dismissable: true, id: 'tok-1', text: 'push the branch\n\nBoundaries: push only after the check passes' })
     expect(rows[0].reasons[0]).toBe("Sous's brief interrupted — retry")
   })
 })

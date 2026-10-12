@@ -367,6 +367,25 @@ describe('setCardRoute', () => {
     }
   })
 
+  it('routeOfCard answers route and effective from one lookup, for Sous (HP round)', async () => {
+    const fake = await fakeGateway()
+    try {
+      const svc = service(w, { MAGPIE_ADDR: `:${fake.port}` })
+      await svc.refresh()
+      svc.setDefault('group/smart')
+      w.nodes.set('s1', terminal('s1', 'claude'))
+      expect(svc.routeOfCard('s1')).toEqual({ route: 'group/smart', effective: null })
+      svc.recordEffective('s1', svc.envFor(w.nodes.get('s1')!))
+      expect(svc.routeOfCard('s1')).toEqual({ route: 'group/smart', effective: 'group/smart' })
+      w.nodes.set('s2', terminal('s2', 'claude', { route: 'direct', routeEffective: 'group/smart' }))
+      expect(svc.routeOfCard('s2')).toEqual({ route: 'direct', effective: 'group/smart' })
+      expect(svc.routeOfCard('nobody')).toBeNull()
+      svc.dispose()
+    } finally {
+      await fake.close()
+    }
+  })
+
   it("a card's state carries the gateway's status now, not only whether it was offline at spawn", async () => {
     const fake = await fakeGateway()
     try {

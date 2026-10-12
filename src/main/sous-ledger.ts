@@ -1,7 +1,8 @@
 // THE SOUS LEDGER (HP round, lane hp-decide) — what Sous decided, what the
 // owner answered, and how the delivery ended, one JSONL file the owner can
 // read and nobody served can: ~/.cookrew/sous-decisions.jsonl, mode 0600,
-// every string through scrub(), 30 days, folded by token on read (the newest
+// every string through Tinker's scrub() (the one main built over the sealed
+// values and this Mac's tokens; shapes-only when none is given), 30 days, folded by token on read (the newest
 // row for a token wins field by field). The inbox's `sous` rows and RETRY are
 // read from here, so a brief that never landed can be sent again from the
 // text the owner actually saw — never from a pane, never from memory alone.
@@ -10,7 +11,7 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, openSync, closeSync, 
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { EventEmitter } from 'node:events'
-import { scrub } from './scrub'
+import { scrubShapes, type Scrub } from './scrub'
 
 export const SOUS_LEDGER_FILE = 'sous-decisions.jsonl'
 export const SOUS_LEDGER_TTL_MS = 30 * 24 * 60 * 60 * 1000
@@ -46,10 +47,10 @@ export function sousLedgerPath(home: string = homedir()): string {
   return path.join(home, '.cookrew', SOUS_LEDGER_FILE)
 }
 
-const scrubDeep = <T>(value: T): T => {
+const scrubDeep = <T>(value: T, scrub: Scrub): T => {
   if (typeof value === 'string') return scrub(value) as T
-  if (Array.isArray(value)) return value.map(scrubDeep) as T
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, scrubDeep(v)])) as T
+  if (Array.isArray(value)) return value.map((v) => scrubDeep(v, scrub)) as T
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, scrubDeep(v, scrub)])) as T
   return value
 }
 
@@ -57,7 +58,11 @@ export class SousLedger extends EventEmitter {
   private readonly file: string
   private cache: { size: number; mtimeMs: number; rows: Map<string, SousLedgerRow> } | null = null
 
-  constructor(file: string = sousLedgerPath(), private readonly now: () => number = Date.now) {
+  constructor(
+    file: string = sousLedgerPath(),
+    private readonly now: () => number = Date.now,
+    private readonly scrub: Scrub = scrubShapes
+  ) {
     super()
     this.file = file
   }
@@ -73,7 +78,7 @@ export class SousLedger extends EventEmitter {
     const fresh = !existsSync(this.file)
     if (fresh) closeSync(openSync(this.file, 'a', 0o600))
     chmodSync(this.file, 0o600)
-    const line = JSON.stringify({ ...scrubDeep(patch), updatedAt: this.now() })
+    const line = JSON.stringify({ ...scrubDeep(patch, this.scrub), updatedAt: this.now() })
     appendFileSync(this.file, `${line}\n`, { mode: 0o600 })
     this.cache = null
     this.emit('change')

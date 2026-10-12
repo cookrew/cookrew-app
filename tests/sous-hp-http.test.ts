@@ -26,7 +26,7 @@ const row: InboxRow = {
   score: 1,
   action: 'retry',
   dismissable: true,
-  token: 'tok-1',
+  id: 'tok-1',
   text: 'push the branch\n\nBoundaries: push only after the check passes'
 }
 
@@ -99,7 +99,7 @@ describe('HP routes', () => {
   it('the owner reads the whole row; the wall reads kind, card and waited-for only', async () => {
     const api = await startApi()
     const owner = await call(api.port, '/api/inbox')
-    expect((owner.body.rows as InboxRow[])[0]).toMatchObject({ text: row.text, token: 'tok-1', action: 'retry' })
+    expect((owner.body.rows as InboxRow[])[0]).toMatchObject({ text: row.text, id: 'tok-1', action: 'retry' })
     const wall = await call(api.port, '/api/inbox', { token: WALL })
     expect(wall.status).toBe(200)
     expect((wall.body.rows as unknown[])[0]).toEqual({ nodeId: 'forge', nodeName: 'Forge', nodeKind: 'terminal', kind: 'sous', kinds: ['sous'], since: 1, waitMinutes: 3 })

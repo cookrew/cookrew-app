@@ -1525,7 +1525,7 @@ export async function handleMobileApi(
       return true;
     }
     const dismissed = deps.inboxDismiss(decodeURIComponent(id));
-    respondJson(response, dismissed ? 200 : 404, { dismissed });
+    respondJson(response, dismissed ? 200 : 404, { ok: dismissed, dismissed });
     return true;
   }
 

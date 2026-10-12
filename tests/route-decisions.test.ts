@@ -2,7 +2,9 @@
 // a time per card, none when idle, the decision rows and the turn facts
 // mapped from the real answers, all against a fake gateway on a free port.
 
+import { readFileSync } from 'node:fs'
 import http from 'node:http'
+import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { RouteDecisions, pushLive, toDecision, toTurnFacts } from '../src/main/route/decisions'
 import type { RouteDecision } from '../src/shared/route'
@@ -63,7 +65,7 @@ describe('mapping', () => {
   it('a route answer becomes a decision row; no route yet is null', () => {
     expect(toDecision('card-1', { route: null, seq: 0, session: 'cookrew:card-1' }, 5)).toBeNull()
     const d = toDecision('card-1', { route: { asked: 'group/smart', group: 'group/smart', model: 'deepseek/deepseek-chat', effort: 'high', tries: [{ model: 'claude/x', fail: '429' }, { model: 'deepseek/deepseek-chat' }], done: false }, seq: 4, session: 'cookrew:card-1' }, 5)
-    expect(d).toEqual({ terminalId: 'card-1', session: 'cookrew:card-1', seq: 4, asked: 'group/smart', group: 'group/smart', model: 'deepseek/deepseek-chat', effort: 'high', tries: 2, done: false, status: null, at: 5, ttftMs: null, ms: null })
+    expect(d).toEqual({ terminalId: 'card-1', session: 'cookrew:card-1', seq: 4, asked: 'group/smart', group: 'group/smart', model: 'deepseek/deepseek-chat', effort: 'high', tries: 2, done: false, status: null, at: 5, ttftMs: null, ms: null , rule: null})
   })
 
   it('the real route answer: time stamped by the gateway, tries an array, group absent for a plain model, ttft and ms kept', () => {
@@ -72,6 +74,26 @@ describe('mapping', () => {
     const d = toDecision('probe-claude', real, 1)
     expect(d).toMatchObject({ asked: 'ollama/qwen2.5:1.5b', group: null, model: 'ollama/qwen2.5:1.5b', effort: 'high', tries: 1, done: true, status: '200', ttftMs: 812, ms: 4267, seq: 1 })
     expect(d?.at).toBe(Date.parse('2026-10-11T14:24:32.197169+08:00'))
+  })
+
+  it("keeps the group's rule as the real gateway sends it: n → id, use → pick, and {n: 0} is no rule (HP round)", () => {
+    // Two bodies recorded off magpie 0.1.1182 by the facts lane
+    // (tests/fixtures/magpie/route-hp-*.json): a plain turn the group's
+    // rule did not match, and a reasoning turn its rule 1 sent to qwen3.
+    const plain = JSON.parse(readFileSync(path.join(__dirname, 'fixtures', 'magpie', 'route-hp-plain.json'), 'utf8')) as unknown
+    const think = JSON.parse(readFileSync(path.join(__dirname, 'fixtures', 'magpie', 'route-hp-think.json'), 'utf8')) as unknown
+    const p = toDecision('hp-plain', plain, 1)
+    expect(p).toMatchObject({ group: 'think', asked: 'group/think', model: 'ollama/qwen2.5:1.5b', done: true, rule: null })
+    const t = toDecision('hp-think', think, 1)
+    expect(t).toMatchObject({ group: 'think', model: 'ollama/qwen3:1.7b', effort: 'high', done: true, rule: { id: '1', pick: 'ollama/qwen3:1.7b' } })
+    // The real claude-driven rule hit (route-with-rule.json): held, with its rendered conditions.
+    const hit = toDecision('probe-rule', JSON.parse(readFileSync(path.join(__dirname, 'fixtures', 'magpie', 'route-with-rule.json'), 'utf8')), 1)
+    expect(hit?.rule).toEqual({ id: '1', pick: 'ollama/qwen2.5:1.5b', held: true, when: ['tokens ≥ 1000'] })
+    expect(hit).toMatchObject({ group: 'hp-rule', model: 'ollama/qwen2.5:1.5b', effort: 'high', done: true })
+    // The shapes a hand could write: a missing n, a rule that is not an object.
+    expect(toDecision('c', { route: { asked: 'x', model: 'm', done: false, rule: { use: 'm' } }, seq: 1 }, 1)?.rule).toBeNull()
+    expect(toDecision('c', { route: { asked: 'x', model: 'm', done: false, rule: 'by-hour' }, seq: 1 }, 1)?.rule).toBeNull()
+    expect(toDecision('c', { route: { asked: 'x', model: 'm', done: false }, seq: 1 }, 1)?.rule).toBeNull()
   })
 
   it('the usage row becomes turn facts; an unpriced (local) row has no cost', () => {
@@ -101,7 +123,7 @@ describe('mapping', () => {
 
   it('live keeps the last 20, newest first, one per card and seq', () => {
     let live: RouteDecision[] = []
-    for (let i = 1; i <= 25; i += 1) live = pushLive(live, { terminalId: `c${i % 3}`, session: 's', seq: i, asked: null, group: null, model: null, effort: null, tries: 0, done: false, status: null, at: i, ttftMs: null, ms: null })
+    for (let i = 1; i <= 25; i += 1) live = pushLive(live, { terminalId: `c${i % 3}`, session: 's', seq: i, asked: null, group: null, model: null, effort: null, tries: 0, done: false, status: null, at: i, ttftMs: null, ms: null , rule: null})
     expect(live).toHaveLength(20)
     expect(live[0].seq).toBe(25)
     const again = pushLive(live, { ...live[0], model: 'x' })
@@ -164,6 +186,24 @@ describe('the follow', () => {
     expect(frames).toEqual([null, 'claude/claude-sonnet-5-5', 'claude/claude-sonnet-5-5'])
     expect(turns).toEqual(['card-1:3027'])
     expect(fake.calls.filter((c) => c.path.includes('/usage/requests'))).toHaveLength(1)
+    expect(d.following).toEqual([])
+  })
+
+  it("a held rule reported again by a later request of the same turn is not a change: no frame, the follow goes on (round 3)", async () => {
+    const fake = await fakeGateway()
+    cleanup.push(fake.close)
+    const body = JSON.parse(readFileSync(path.join(__dirname, 'fixtures', 'magpie', 'route-with-rule.json'), 'utf8')) as { route: Record<string, unknown>; seq: number }
+    const open = { ...body.route, done: false, status: null, tries: [{ model: 'ollama/qwen2.5:1.5b' }] }
+    // seq 1: the turn opens on rule 1. seq 2: a later request of the same turn, the held rule again, nothing else moved.
+    fake.answers.set(0, { route: open, seq: 1, session: 'cookrew:card-1' })
+    fake.answers.set(1, { route: { ...open, rule: { ...((open as Record<string, unknown>).rule as object), tokens: 40000 } }, seq: 2, session: 'cookrew:card-1' })
+    // seq 3: done — a real change.
+    fake.answers.set(2, { route: body.route, seq: 3, session: 'cookrew:card-1' })
+    const frames: string[] = []
+    const d = new RouteDecisions({ fetch: (i, init) => fetch(i, init), gateway: () => ({ url: fake.url, key: 'k' }), waitSeconds: 1, lapFloorMs: 50, onDecision: (row) => frames.push(`${row.seq}:${row.done}:${row.rule?.id}`), onTurn: () => {} })
+    d.follow('card-1')
+    await sleep(500)
+    expect(frames).toEqual(['1:false:1', '3:true:1'])
     expect(d.following).toEqual([])
   })
 

@@ -47,3 +47,42 @@ export function createInboxFeed(api: InboxApi, onRows: (rows: unknown[]) => void
 export function enterDuringHold(text: string, decision: Decision): 'commit' | 'resubmit' {
   return text.trim() === decision.sentence.trim() ? 'commit' : 'resubmit'
 }
+
+/**
+ * HP · A LATE REVISION may only APPEND alternates to a minted decision — never
+ * change its target, mode or brief. Appending is by id, so a revision that
+ * repeats what the box already shows changes nothing.
+ */
+export function appendAlternates<A extends { id: string }>(existing: readonly A[], incoming: readonly A[]): A[] {
+  const seen = new Set(existing.map((a) => a.id))
+  const fresh = incoming.filter((a) => !seen.has(a.id))
+  return fresh.length === 0 ? [...existing] : [...existing, ...fresh]
+}
+
+/** Is this frame off the wire a revision? A stream is untrusted input like any other. */
+export function isDecisionUpdate(value: unknown): value is { token: string; alternates: { id: string }[] } {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  return typeof v.token === 'string' && Array.isArray(v.alternates) && v.alternates.every((a) => typeof a === 'object' && a !== null && typeof (a as { id?: unknown }).id === 'string')
+}
+
+/**
+ * HP · DRAFT HYGIENE. Closing the box clears the field; reopening starts
+ * empty. A field that is NOT empty when the box opens (the phone bar never
+ * closes; a sentence typed while the box was hidden) is a draft from earlier,
+ * and the box says so with a chip rather than sending it by surprise.
+ */
+export function draftOnOpen(text: string): boolean {
+  return text.trim().length > 0
+}
+
+/** What a `sous` row offers: the act main named, and DISMISS when main allows it. */
+export function sousRowActions(row: { kind: string; action?: 'retry' | 'open' | null; dismissable?: boolean }): { act: 'retry' | 'open' | null; dismiss: boolean } {
+  if (row.kind !== 'sous') return { act: null, dismiss: row.dismissable === true }
+  return { act: row.action ?? null, dismiss: row.dismissable !== false }
+}
+
+/** The id a row is acted on by: main's row id, else the card (an older main keyed rows by card). */
+export function inboxRowId(row: { id?: string; nodeId: string }): string {
+  return row.id ?? row.nodeId
+}

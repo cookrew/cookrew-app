@@ -52,13 +52,7 @@ export interface DecideContext {
 /** Where a sentence lives: in the repo, in a chore card outside it, or in an answer. */
 export type Domain = 'repo' | 'chore' | 'question'
 
-/** What every draft carries (HP contract): the domain and the exposure tier with its one boundary line. */
-export interface DraftFacts {
-  domain: Domain
-  exposure: Exposure
-  exposureWhy: string | null
-  boundaries: string | null
-}
+
 
 /** Another way to go: a card (`ask`, id = the card) or a new card (`recruit`, id = `harness:<name>`). The echo always offers the other path. */
 export interface Alternate {
@@ -78,32 +72,53 @@ export interface RecruitPath {
   direct: boolean
 }
 
-export type DecisionDraft =
-  | ({ kind: 'ask'; target: { id: string; name: string }; alternates: Alternate[]; reasons: string[]; recruit: RecruitPath } & DraftFacts)
-  | ({
-      kind: 'recruit'
-      harness: Harness
-      /** The new card's name — the sentence, shortened to a title. */
-      name: string
-      /** The orch the card is placed beside and wired to, when the workdir has one. */
-      beside: { id: string; name: string } | null
-      alternates: Alternate[]
-      reasons: string[]
-      /** The chosen harness will run direct (no default route set, or it is not routable). */
-      direct: boolean
-      /** Where the card works: the repo, or the chores directory outside it. */
-      cwd: 'repo' | 'chores'
-    } & DraftFacts)
-  | ({
-      kind: 'question'
-      question: string
-      reasons: string[]
-      /** `question` asks back; `answer` is answered from the digest, deterministically. */
-      mode: 'question' | 'answer'
-      answer: string | null
-    } & DraftFacts)
+/**
+ * HP CONTRACT (LEDGER "HP contract", additive): how the box holds the
+ * decision, how exposed the act is, and what the target runs on. Every
+ * field is optional on the wire so a box in front of today's main still
+ * works; the box's decision-hold.ts supplies the defaults. `decide()` sets
+ * every one of them on this main.
+ */
+export type DecisionMode = 'ticking' | 'paused' | 'question' | 'answer'
+export interface DecisionFacts {
+  mode?: DecisionMode
+  /** 0 = nothing leaves the machine … 3 = irreversible and outward. ≥ 2 pauses the hold and makes the commit a distinct act. */
+  exposure?: Exposure
+  exposureWhy?: string | null
+  /** One line, positive form: "push only after the check passes". Appended to the brief on SEND ANYWAY. */
+  boundaries?: string | null
+  domain?: Domain
+  /** The target card's route (or the recruit's intended one); null when unknown, absent on an older main. */
+  route?: { route: string; effective: string | null } | null
+}
 
-/** How long the box holds the echo before committing on its own. */
+export type DecisionDraft = DecisionFacts &
+  (
+    | { kind: 'ask'; target: { id: string; name: string }; alternates: Alternate[]; reasons: string[]; recruit: RecruitPath }
+    | {
+        kind: 'recruit'
+        harness: Harness
+        /** The new card's name — the sentence, shortened to a title. */
+        name: string
+        /** The orch the card is placed beside and wired to, when the workdir has one. */
+        beside: { id: string; name: string } | null
+        alternates: Alternate[]
+        reasons: string[]
+        /** The chosen harness will run direct (no default route set, or it is not routable). */
+        direct: boolean
+        /** Where the card works: the repo (absent = repo), or the chores directory outside it. */
+        cwd?: 'repo' | 'chores'
+      }
+    | {
+        kind: 'question'
+        question: string
+        reasons: string[]
+        /** `mode: 'answer'` carries the deterministic answer built from the board. */
+        answer?: string | null
+      }
+  )
+
+/** How long the box holds the echo before committing on its own (HP: 2.5 s, was 1.5). */
 export const DECISION_HOLD_MS = 2500
 /** How long main keeps an uncommitted decision before it expires. */
 export const DECISION_TTL_MS = 30_000
@@ -232,12 +247,12 @@ export const TASK_OVERLAP_MIN = 2
 export function decide(sentence: string, ctx: DecideContext): DecisionDraft {
   const said = words(sentence)
   const tier = exposure(sentence)
-  const factsOf = (domain: Domain): DraftFacts => ({ domain, exposure: tier.score, exposureWhy: tier.why, boundaries: boundaries(tier.score, sentence) })
+  const factsOf = (domain: Domain, mode: DecisionMode): DecisionFacts => ({ domain, mode, exposure: tier.score, exposureWhy: tier.why, boundaries: boundaries(tier.score, sentence), route: null })
   if (isStatusQuestion(sentence)) {
-    return { kind: 'question', question: statusAnswer(ctx), mode: 'answer', answer: statusAnswer(ctx), reasons: ['a status question', 'answered from the board', 'nothing is created'], ...factsOf('question') }
+    return { kind: 'question', question: statusAnswer(ctx), answer: statusAnswer(ctx), reasons: ['a status question', 'answered from the board', 'nothing is created'], ...factsOf('question', 'answer') }
   }
   if (isQuestion(sentence)) {
-    return { kind: 'question', question: questionBack(sentence), mode: 'question', answer: null, reasons: ['a question, not a brief', 'nothing is created', 'answer in the box'], ...factsOf('question') }
+    return { kind: 'question', question: questionBack(sentence), answer: null, reasons: ['a question, not a brief', 'nothing is created', 'answer in the box'], ...factsOf('question', 'question') }
   }
   // A served card is somebody else's seat: never a target, never a bench.
   const own = ctx.candidates.filter((c) => !c.served)
@@ -270,7 +285,7 @@ export function decide(sentence: string, ctx: DecideContext): DecisionDraft {
       alternates: [...rest.slice(0, 1).map((x): Alternate => ({ kind: 'ask', id: x.c.id, name: x.c.name, reasons: reasonsOf(x) })), recruitAlt],
       reasons: reasonsOf(best),
       recruit: recruitPath,
-      ...factsOf('repo')
+      ...factsOf('repo', 'ticking')
     }
   }
   // Nothing in the repo names this and nothing here can take it: a CHORE —
@@ -286,7 +301,7 @@ export function decide(sentence: string, ctx: DecideContext): DecisionDraft {
       direct: chore.direct,
       cwd: 'chores',
       reasons: ['not a repo task', chore.reason, 'a chore card in ~/.cookrew/chores, on the bench'],
-      ...factsOf('chore')
+      ...factsOf('chore', 'ticking')
     }
   }
   const alternates: Alternate[] = (['Claude Code', 'Codex', 'Pi'] as const)
@@ -309,7 +324,7 @@ export function decide(sentence: string, ctx: DecideContext): DecisionDraft {
       picked.reason,
       orch ? `beside ${orch.name}, wired to it` : 'placed on the bench'
     ],
-    ...factsOf('repo')
+    ...factsOf('repo', 'ticking')
   }
 }
 

@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { ACK_EXPOSURE, holdMode, SousController, type SousControlDeps } from '../src/main/sous-control'
 import { DECISION_HOLD_MS, type DecideCandidate } from '../src/shared/sous-decide'
 import type { IntentRoster } from '../src/shared/sous-intent'
+import { enterAction, holdMode as boxHoldMode, modeBadge, needsSendAnyway } from '../src/renderer/src/decision-hold'
 
 const NOW = Date.parse('2026-10-12T09:00:00Z')
 const H = 3_600_000
@@ -192,5 +193,49 @@ describe('cancel clears the pending sentence; chores and status answers', () => 
       expect(r.decision.target.id).toBe('forge')
       expect(r.decision.alternates.map((a) => a.id)).not.toContain('guest')
     }
+  })
+})
+
+// INTEGRATION (route-merge): the decision main mints is the one the box
+// reads. Velvet's decision-hold.ts readers are run over a decision minted
+// through sous-control — mode, exposure, exposureWhy, boundaries, route and
+// domain arrive on the wire, and the box's own rules agree with main's.
+describe('the box receives what main minted', () => {
+  it('an exposure-2 ask: paused, SEND ANYWAY required, the badge names why, Enter focuses the control, the route label is the card\'s', async () => {
+    const h = controller()
+    const r = await h.sous.handle({ text: 'push the install section of README to the branch', surface: 'canvas', box: true })
+    const d = r.decision
+    expect(d).toBeDefined()
+    if (!d) return
+    expect(d).toMatchObject({ mode: 'paused', exposure: 2, exposureWhy: 'push', boundaries: 'push only after the check passes', domain: 'repo', route: { route: 'group/auto', effective: 'direct' }, holdMs: 2500 })
+    expect(boxHoldMode(d)).toBe('paused')
+    expect(needsSendAnyway(d)).toBe(true)
+    expect(modeBadge(d, 'paused', 0)).toBe('paused — push')
+    expect(enterAction(d, d.sentence)).toBe('focus-send-anyway')
+    // the plain commit main refuses is the same act the box refuses to take on Enter
+    expect((await h.sous.commit(d.token)).error).toBe('needs-ack')
+  })
+
+  it('an exposure-1 ask ticks: the box auto-commits on its clock and Enter commits', async () => {
+    const h = controller()
+    const r = await h.sous.handle({ text: 'fix the install section of README', surface: 'canvas', box: true })
+    const d = r.decision
+    if (!d) throw new Error('no decision')
+    expect(d).toMatchObject({ mode: 'ticking', exposure: 1, boundaries: null, domain: 'repo' })
+    expect(boxHoldMode(d)).toBe('ticking')
+    expect(needsSendAnyway(d)).toBe(false)
+    expect(modeBadge(d, 'ticking', 2500)).toBe('auto in 2.5 s · or ↵ now')
+    expect(enterAction(d, d.sentence)).toBe('commit')
+  })
+
+  it('a status question arrives as mode answer with the answer text; a chore as a recruit with cwd chores', async () => {
+    const h = controller({ openDispatches: 1 })
+    const a = (await h.sous.handle({ text: 'what is the status?', surface: 'canvas', box: true })).decision
+    expect(a).toMatchObject({ kind: 'question', mode: 'answer', domain: 'question' })
+    if (a?.kind === 'question') expect(a.answer).toMatch(/^waiting on you: Tinker/)
+    expect(boxHoldMode(a as NonNullable<typeof a>)).toBe('answer')
+    const c = (await h.sous.handle({ text: 'draft a limerick about the weather', surface: 'canvas', box: true })).decision
+    // "draft" names no tier: exposure 0, nothing leaves the machine
+    expect(c).toMatchObject({ kind: 'recruit', cwd: 'chores', domain: 'chore', mode: 'ticking', exposure: 0, boundaries: null })
   })
 })

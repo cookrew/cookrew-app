@@ -1,0 +1,27 @@
+{
+  "route": {
+    "id": 1791718534373,
+    "time": "2026-10-12T14:37:00.44115+08:00",
+    "asked": "group/think",
+    "asked_effort": "high",
+    "group": "think",
+    "model": "ollama/qwen3:1.7b",
+    "effort": "high",
+    "served": "qwen3:1.7b",
+    "tries": [
+      {
+        "model": "ollama/qwen3:1.7b",
+        "effort": "high",
+        "done": true,
+        "status": 200,
+        "ms": 24551
+      }
+    ],
+    "done": true,
+    "status": 200,
+    "ms": 24709,
+    "ttft_ms": 17547
+  },
+  "seq": 1319,
+  "session": "cookrew:probe-claude-effort"
+}

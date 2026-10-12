@@ -168,6 +168,32 @@ export function quotaBar(q: RouteQuota): QuotaBar {
   return { title, sub, kind: q.kind, fill, reading: `${fullest.name} ${windowLabel(fullest)}`, error: null, hot: fill >= 0.9 }
 }
 
+/**
+ * The path a turn took, as the rail and R1 print it: `auto → <rule> → <model>`
+ * when a group rule matched, `<group> → <model>` when a group picked without
+ * one, the model alone when a plain model was asked.
+ */
+export function routePath(d: Pick<RouteDecision, 'rule' | 'group' | 'model' | 'asked'>): string {
+  const model = d.model ?? '—'
+  if (d.rule) return `auto → ${d.rule.id} → ${model}`
+  if (d.group) return `${d.group} → ${model}`
+  return d.model ?? d.asked ?? 'direct'
+}
+
+/** The rule's rendered conditions for a row's title ("tokens ≥ 1000 · held"), or null without a rule. */
+export function ruleTitle(d: Pick<RouteDecision, 'rule'>): string | null {
+  if (!d.rule) return null
+  const parts = [`rule ${d.rule.id}`, ...(d.rule.when ?? [])]
+  if (d.rule.held) parts.push('decided when the turn began')
+  return parts.join(' · ')
+}
+
+/** What the live row's first column says: `auto → <rule>` under a rule, else the group, the ask, or direct. */
+export function routeHead(d: Pick<RouteDecision, 'rule' | 'group' | 'asked'>): string {
+  if (d.rule) return `auto → ${d.rule.id}`
+  return d.group ?? d.asked ?? 'direct'
+}
+
 /** What a live row says after the model: tries, a failure, the first-token time. */
 export function decisionFacts(d: Pick<RouteDecision, 'tries' | 'status' | 'ttftMs' | 'group'>): string {
   const parts: string[] = []
@@ -211,8 +237,11 @@ export function routeDialLines(card: CardRouteState | null): RouteDialLines {
 }
 
 function turnLine(card: CardRouteState): string | null {
-  if (card.turn && card.turn.model) return `this turn → ${card.turn.model}${tokens(card.turn.inputTokens, card.turn.outputTokens)}${cost(card.turn)}`
-  return card.live?.model ? `this turn → ${card.live.model}` : null
+  // Under a matched rule the line says how the model was reached:
+  // `this turn → auto → <rule> → <model>`; without one, the model alone.
+  const via = card.live?.rule ? `auto → ${card.live.rule.id} → ` : ''
+  if (card.turn && card.turn.model) return `this turn → ${via}${card.turn.model}${tokens(card.turn.inputTokens, card.turn.outputTokens)}${cost(card.turn)}`
+  return card.live?.model ? `this turn → ${via}${card.live.model}` : null
 }
 
 function joinNotes(...notes: (string | null | undefined)[]): string | null {
