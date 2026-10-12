@@ -1,0 +1,27 @@
+{
+  "route": {
+    "id": 1791718534367,
+    "time": "2026-10-12T14:35:11.422147+08:00",
+    "asked": "group/think",
+    "asked_effort": "medium",
+    "group": "think",
+    "model": "ollama/qwen3:1.7b",
+    "effort": "medium",
+    "served": "qwen3:1.7b",
+    "tries": [
+      {
+        "model": "ollama/qwen3:1.7b",
+        "effort": "medium",
+        "done": true,
+        "status": 200,
+        "ms": 11895
+      }
+    ],
+    "done": true,
+    "status": 200,
+    "ms": 11960,
+    "ttft_ms": 4452
+  },
+  "seq": 1287,
+  "session": "cookrew:probe-codex-effort-default"
+}

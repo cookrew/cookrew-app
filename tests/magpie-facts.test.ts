@@ -275,6 +275,56 @@ describe('gateway-key models — a group id is accepted, unvalidated, and enforc
   })
 })
 
+describe('what each harness actually asks for — the measurement §6 said would decide it', () => {
+  const matrix = json<{ asked: Record<string, string>; thresholds: Record<string, string>; answer: string }>('effort-matrix.json')
+  const route = (file: string): RouteBody => json<RouteBody>(file)
+
+  /**
+   * Spawned with the EXACT args src/main/route-env.ts composes (codex: the seven `-c` pairs;
+   * claude: the env), model `group/think`, one session per level. The turns are recorded off
+   * /v1/magpie/route, which stamps `asked_effort` when the request ARRIVES — so the reading does
+   * not depend on a local model answering well.
+   */
+  it('records claude at high and codex at medium on Cookrew’s own defaults', () => {
+    expect(route('route-claude-effort.json').route.asked_effort).toBe('high')
+    expect(route('route-codex-effort-default.json').route.asked_effort).toBe('medium')
+    expect(matrix.asked["claude -p, Cookrew's routeEnv env, model group/think"]).toBe('high')
+    expect(matrix.asked["codex exec, Cookrew's routeEnv args, NO model_reasoning_effort (the default)"]).toBe('medium')
+  })
+
+  it('passes an explicit -c model_reasoning_effort straight through', () => {
+    expect(route('route-codex-effort-low.json').route.asked_effort).toBe('low')
+    expect(route('route-codex-effort-medium.json').route.asked_effort).toBe('medium')
+    expect(route('route-codex-effort-high.json').route.asked_effort).toBe('high')
+  })
+
+  it('reaches the same member every time, so the effort is the only variable', () => {
+    for (const file of ['route-claude-effort.json', 'route-codex-effort-default.json', 'route-codex-effort-low.json', 'route-codex-effort-medium.json', 'route-codex-effort-high.json']) {
+      expect(route(file).route.model, file).toBe('ollama/qwen3:1.7b')
+      expect(route(file).route.status, file).toBe(200)
+    }
+  })
+
+  /**
+   * THE ANSWER, AND IT IS NO. `effort=<level>` is a >= predicate (proven on a scratch group: the
+   * rule renders "effort ≥ high", a medium request misses it, a high request hits it). Cookrew's
+   * claude asks HIGH and Cookrew's codex asks MEDIUM, so the ordering is inverted — no >= cut can
+   * select the lower level and exclude the higher. `effort=on` and `effort=medium` take both;
+   * `effort=high` takes claude alone, which is backwards; `xhigh` takes neither.
+   */
+  it('leaves no threshold that selects codex and excludes claude', () => {
+    const [claude, codex] = ['high', 'medium']
+    const order = ['low', 'medium', 'high', 'xhigh', 'max']
+    const atLeast = (level: string, asked: string): boolean => order.indexOf(asked) >= order.indexOf(level)
+    const useful = order.filter((level) => atLeast(level, codex) && !atLeast(level, claude))
+    expect(useful).toEqual([])
+    // and the one threshold that does separate them picks the wrong harness
+    expect(order.filter((level) => atLeast(level, claude) && !atLeast(level, codex))).toEqual(['high'])
+    expect(matrix.thresholds['effort=high']).toMatch(/CLAUDE only/)
+    expect(matrix.answer).toMatch(/^NO\./)
+  })
+})
+
 describe('the fixtures themselves', () => {
   it('carry no email address', () => {
     for (const file of ['providers.txt', 'models.json', 'group-think.txt', 'gateway-key-help.txt', 'route-with-rule.json', 'gateway-key-groups.json']) {
