@@ -123,3 +123,29 @@
 .cmd.phone .cmd-row .blocks { display: none; }
 .cmd.phone .cmd-field .key { display: none; }
 .cmd.phone .cmd-field input { font-size: 16px; }
+
+/* HP: how the decision is held, and the distinct act for an exposed one. */
+.cmd-echo .mode { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; padding: 1px 6px; border: 1.5px solid currentColor; white-space: nowrap; }
+.cmd-echo[data-mode="paused"] { background: var(--cream, #faf8f4); color: var(--ink); }
+.cmd-echo[data-mode="question"], .cmd-echo[data-mode="answer"] { background: var(--paper); color: var(--ink); }
+.cmd-boundary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 2px solid #b7791f;
+  background: #fff3b0;
+  color: #5b4300;
+}
+.cmd-boundary .line { flex: 1; min-width: 0; }
+.cmd-boundary .send-anyway { border: 2px solid #b7791f; background: var(--amber, #ffd600); color: #2d2a20; font-weight: 700; letter-spacing: 0.06em; }
+.cmd-boundary .send-anyway:focus-visible { outline: 3px solid var(--ink); outline-offset: 1px; }
+.cmd-draft { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted, #6b665c); white-space: nowrap; }
+.cmd-draft button { border: 1.5px solid currentColor; background: transparent; color: inherit; font: inherit; font-size: 11px; padding: 1px 6px; cursor: pointer; }
+/* A sous row: the proposal on one line, and its act and DISMISS as buttons of their own. */
+.cmd-row[data-kind="sous"] { grid-template-columns: 18px minmax(0, 1fr) auto auto auto; cursor: default; }
+.cmd-row[data-kind="sous"] .who span { font-style: italic; }
+.cmd-row .act, .cmd-row .dismiss { border: 1.5px solid var(--ink); background: transparent; color: var(--ink); font: inherit; font-size: 11px; letter-spacing: 0.06em; padding: 2px 8px; cursor: pointer; }
+.cmd-row .act:hover, .cmd-row .dismiss:hover { background: var(--amber-soft, #fff3b0); }
+.cmd-row .dismiss { color: var(--muted, #6b665c); border-color: var(--muted, #6b665c); }

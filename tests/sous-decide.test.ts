@@ -182,7 +182,7 @@ describe('SousController — the decide step and its commit', () => {
     expect(r.intent).toBe('decide')
     expect(r.decision?.kind).toBe('ask')
     expect(r.decision?.token).toBe('t1')
-    expect(r.decision?.holdMs).toBe(1500)
+    expect(r.decision?.holdMs).toBe(2500)
     expect(r.spoken).toMatch(/^→ Forge \(idle · same repo · last touched/)
     expect(h.calls.filter((c) => c.startsWith('submit'))).toEqual([])
   })

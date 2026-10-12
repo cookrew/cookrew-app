@@ -9,10 +9,20 @@
 // Pure. Main feeds it (src/main/inbox.ts) and the box draws it; the tests own
 // the clock.
 
-export type InboxKind = 'waiting' | 'dispatch' | 'secret' | 'signin'
+export type InboxKind = 'waiting' | 'dispatch' | 'secret' | 'signin' | 'sous'
+
+/** HP contract: a `sous` row is Sous's own — a proposal that failed (RETRY), a card to look at (OPEN), or an answer to read (DISMISS). */
+export interface SousRowFacts {
+  /** The row's id for `POST /api/inbox/:id/act|dismiss`; absent on an older main (the box falls back to nodeId). */
+  id?: string
+  action?: 'retry' | 'open' | null
+  dismissable?: boolean
+  /** The proposal or the answer, one line, scrubbed in main. */
+  text?: string
+}
 
 /** One signal about one card, before merging. */
-export interface InboxItem {
+export interface InboxItem extends SousRowFacts {
   kind: InboxKind
   /** The card the person has to go to. */
   nodeId: string
@@ -35,7 +45,7 @@ export interface InboxItem {
 }
 
 /** One row of the inbox: the card, merged over every signal about it. */
-export interface InboxRow {
+export interface InboxRow extends SousRowFacts {
   nodeId: string
   nodeName: string
   nodeKind: InboxItem['nodeKind']
@@ -57,7 +67,7 @@ export interface InboxRow {
 
 /** A secret beats a question beats a stuck delivery beats a sign-in wall:
  *  the order the box resolves a merged row's click in. */
-const KIND_RANK: Record<InboxKind, number> = { secret: 0, waiting: 1, dispatch: 2, signin: 3 }
+const KIND_RANK: Record<InboxKind, number> = { secret: 0, waiting: 1, dispatch: 2, signin: 3, sous: 4 }
 
 /** (1 + blocked) × log1p(minutes) × (served ? 2 : 1) — design section 5. */
 export function inboxScore(input: { blockedDownstream: number; waitMinutes: number; served: boolean }): number {
@@ -95,7 +105,11 @@ export function rankInbox(items: readonly InboxItem[], now: number): InboxRow[] 
       blockedDownstream,
       score: inboxScore({ blockedDownstream, waitMinutes, served }),
       ...(slotted?.slot ? { slot: slotted.slot } : {}),
-      ...(slotted?.noteId ? { noteId: slotted.noteId } : {})
+      ...(slotted?.noteId ? { noteId: slotted.noteId } : {}),
+      ...(head.id !== undefined ? { id: head.id } : {}),
+      ...(head.action !== undefined ? { action: head.action } : {}),
+      ...(head.dismissable !== undefined ? { dismissable: head.dismissable } : {}),
+      ...(head.text !== undefined ? { text: head.text } : {})
     }
   })
   // Highest score first; a tie goes to the longer wait, then to the name, so

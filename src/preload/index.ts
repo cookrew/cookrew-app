@@ -502,7 +502,15 @@ const api = {
   // R3: the decide step's commit, and the HITL inbox.
   sousCommit: (token: string, choice?: { target?: string }, surface?: string) => ipcRenderer.invoke('sous:commit', token, choice ?? {}, surface ?? 'canvas'),
   sousCancel: (token: string, surface?: string) => ipcRenderer.invoke('sous:cancel', token, surface ?? 'canvas'),
+  // HP: a late revision may only append alternates; the box merges them.
+  onSousDecisionUpdated: (cb: (update: unknown) => void) => {
+    const listener = (_e: unknown, update: unknown): void => cb(update)
+    ipcRenderer.on('sous:decision-updated', listener)
+    return () => ipcRenderer.removeListener('sous:decision-updated', listener)
+  },
   inbox: () => ipcRenderer.invoke('inbox:list'),
+  inboxAct: (id: string) => ipcRenderer.invoke('inbox:act', id),
+  inboxDismiss: (id: string) => ipcRenderer.invoke('inbox:dismiss', id),
   // Subscribing HOLDS the list open in main (it is built only while someone
   // looks); the opening rows arrive through the callback too.
   onInbox: (cb: (rows: unknown) => void) => {
