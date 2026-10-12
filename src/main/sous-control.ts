@@ -26,6 +26,7 @@ import { randomUUID } from 'node:crypto'
 import { rankHearings, vocabularyOf } from '../shared/sous-hearing'
 import type { UiCommand } from '../shared/sous-ui'
 import { DECISION_HOLD_MS, DECISION_TTL_MS, decide, type Alternate, type DecideCandidate, type DecisionDraft, type DecisionMode, type Harness, type RoutingFacts, type StatusFacts } from '../shared/sous-decide'
+import { buildDigest } from '../shared/sous-digest'
 
 export type { DecisionMode } from '../shared/sous-decide'
 
@@ -227,8 +228,7 @@ interface DecisionSlot {
   lang: Lang
   until: number
   committing: boolean
-  recruited?: { id: string; name: string; harness: Harness }
-  /** Set once the commit ran to the end: a late revise is ignored from here. */
+  /** Set once the commit ran — to the end or into a failure: a late revise is ignored and the token is gone. */
   spent: boolean
 }
 
@@ -402,7 +402,15 @@ export class SousController {
   private async decideStep(sentence: string, key: string, surface: Surface, lang: Lang): Promise<SousCommandResult> {
     const deps = this.deps.decide
     if (!deps) return { intent: 'none', spoken: '' }
-    const draft = decide(sentence, { candidates: await deps.candidates(), workdir: deps.workdir(), now: this.now(), routing: deps.routing?.(), status: deps.status?.() })
+    const workdir = deps.workdir()
+    // The decision is made over the DIGEST — the positional table under its
+    // token budget — so the bound is real: a card the table left out is a
+    // card the decision never sees (sous-digest.ts orders the ones a brief
+    // can go to first).
+    const all = await deps.candidates()
+    const digest = buildDigest(all.map((c) => ({ ...c, harness: null })), { workdir, now: this.now() })
+    const seen = new Set(digest.listed.map((c) => c.id))
+    const draft = decide(sentence, { candidates: all.filter((c) => seen.has(c.id)), workdir, now: this.now(), routing: deps.routing?.(), status: deps.status?.() })
     const token = deps.token?.() ?? randomUUID()
     const routeFacts =
       deps.routeOf?.({ cardId: draft.kind === 'ask' ? draft.target.id : null, harness: draft.kind === 'recruit' ? draft.harness : draft.kind === 'ask' ? draft.recruit.harness : null }) ?? null
@@ -508,18 +516,11 @@ export class SousController {
       } else {
         const deps = this.deps.decide
         if (!deps) throw new Error('recruiting is not wired on this desktop')
-        // A card recruited by an earlier commit whose delivery failed is
-        // reused: the retry delivers to it instead of minting a second one.
-        const harness = slot.recruited?.harness ?? path.harness
+        const harness = path.harness
         const beside = path.beside
-        let node = slot.recruited
-        if (!node) {
-          const made = await deps.recruit({ preset: harness, name: path.name, brief: brief, besideId: beside?.id ?? null, cwd: path.cwd })
-          node = { ...made, harness }
-          slot.recruited = node
-          if (beside) this.deps.connect(beside.id, node.id)
-          this.note('recruit', node.id, `${harness} · ${node.name}${beside ? ` ↔ ${beside.name}` : ''}`)
-        }
+        const node = await deps.recruit({ preset: harness, name: path.name, brief: brief, besideId: beside?.id ?? null, cwd: path.cwd })
+        if (beside) this.deps.connect(beside.id, node.id)
+        this.note('recruit', node.id, `${harness} · ${node.name}${beside ? ` ↔ ${beside.name}` : ''}`)
         const workspaceId = this.deps.activeWorkspaceId() ?? ''
         this.deps.ui({ kind: 'zoom', nodeId: node.id }, workspaceId)
         this.focus.set(key, node.id)
@@ -531,15 +532,17 @@ export class SousController {
         this.note('prompt', node.id, node.name)
         result = { intent: 'create', spoken: RECRUITED[lang](harness, node.name), agentId: node.id, text: brief }
       }
-      // Spent only now: a delivery that threw left the token in place, so the
-      // same echo can be committed again instead of typing the brief twice.
       slot.spent = true
       this.decisions.delete(token)
       return result
     } catch (error) {
       const what = error instanceof Error ? error.message : String(error)
       console.error(`Sous: commit ${decision.kind} failed:`, error)
-      slot.committing = false
+      // ONE retry path (round 2): a failed commit SPENDS the token — the box
+      // cannot send the same echo twice — and the ledger's failed row is the
+      // sous inbox row, whose RETRY re-sends the proposal to the same card.
+      slot.spent = true
+      this.decisions.delete(token)
       ledger?.write({ token, outcome: 'failed' })
       return { intent: 'refused', spoken: FAILED[lang](what) }
     }

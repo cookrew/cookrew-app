@@ -247,7 +247,9 @@ export const TASK_OVERLAP_MIN = 2
 export function decide(sentence: string, ctx: DecideContext): DecisionDraft {
   const said = words(sentence)
   const tier = exposure(sentence)
-  const factsOf = (domain: Domain, mode: DecisionMode): DecisionFacts => ({ domain, mode, exposure: tier.score, exposureWhy: tier.why, boundaries: boundaries(tier.score, sentence), route: null })
+  // A question is not an act: it carries no exposure tier and no boundary line.
+  const factsOf = (domain: Domain, mode: DecisionMode): DecisionFacts =>
+    domain === 'question' ? { domain, mode, exposure: 0, exposureWhy: null, boundaries: null, route: null } : { domain, mode, exposure: tier.score, exposureWhy: tier.why, boundaries: boundaries(tier.score, sentence), route: null }
   if (isStatusQuestion(sentence)) {
     return { kind: 'question', question: statusAnswer(ctx), answer: statusAnswer(ctx), reasons: ['a status question', 'answered from the board', 'nothing is created'], ...factsOf('question', 'answer') }
   }

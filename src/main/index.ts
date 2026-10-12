@@ -13,6 +13,8 @@ import { deliverToRecruit } from './recruit-delivery'
 import { recruitPatch, spawnInjectionFor } from './recruit-node'
 import { placeBeside, type Alternate, type DecideCandidate, type Harness } from '../shared/sous-decide'
 import { SousLedger } from './sous-ledger'
+import { retryVerdict } from './sous-retry'
+import { buildCandidates } from './decide-candidates'
 import type { PtySession } from './pty'
 import type { PaneCardInfo } from './multiplexer'
 import { paneCardFor, reportAllPaneBindings, type BindableTerminal } from './pane-bindings'
@@ -5576,26 +5578,16 @@ app.whenReady().then(() => {
       workdir: () => store.focusedState.dir,
       candidates: async () => {
         // NO PANE CAPTURES HERE (HP budget): context-full is read off the
-        // tracker's mirror, and the whole fleet is a list walk.
+        // tracker's mirror; the capture is wired so the builder's test can
+        // prove it is never called (decide-candidates.ts).
         const rows = new Map(buildBoard(boardSources()).rows.map((r) => [r.terminalId, r]))
-        const out: DecideCandidate[] = []
-        for (const t of store.terminalsAcross()) {
-          const row = rows.get(t.id)
-          out.push({
-            id: t.id,
-            name: t.name,
-            workspaceId: store.ownerOf(t.id) ?? '',
-            cwd: t.cwd,
-            role: t.role,
-            orch: t.orch === true,
-            phase: row?.phase ?? 'offline',
-            contextFull: turns.contextFullCached(t.id),
-            lastTask: row?.task.title ?? row?.task.summary ?? null,
-            lastActivityAt: row?.lastActivityAt ?? 0,
-            served: t.servedSession != null
-          })
-        }
-        return out
+        return buildCandidates({
+          terminals: () => store.terminalsAcross(),
+          rowOf: (id) => rows.get(id),
+          ownerOf: (id) => store.ownerOf(id),
+          contextFull: (id) => turns.contextFullCached(id),
+          capture: (id) => multiplexer()?.capture(sessionNameFor(id)) ?? null
+        })
       },
       status: () => ({ openDispatches: dispatchService.openDispatchIds().length }),
       recruit: ({ preset, name, brief, besideId, cwd }) => {
@@ -5635,8 +5627,11 @@ app.whenReady().then(() => {
       // The target's route, when Forge's routeOfCard exists on this build; a
       // card whose new route applies on restart will respawn to take the brief.
       routeOf: ({ cardId }) => {
+        // A recruit has no card yet: its intended route is the fleet default
+        // (pinned at start), or direct when none is set.
+        if (!cardId) return { route: routeService.defaultModel() ?? 'direct', effective: null, respawn: false }
         const svc = routeService as unknown as { routeOfCard?: (id: string) => { route: string; effective: string | null; appliesOn?: string } | null }
-        if (!cardId || typeof svc.routeOfCard !== 'function') return null
+        if (typeof svc.routeOfCard !== 'function') return null
         const r = svc.routeOfCard(cardId)
         return r ? { route: r.route, effective: r.effective, respawn: r.appliesOn === 'restart' } : null
       },
@@ -5668,7 +5663,7 @@ app.whenReady().then(() => {
     commit: async (token, choice, caller) => scrubSousResult(await sous.commit(token, choice ?? {}, caller), scrub),
     cancel: (token, caller) => sous.cancel(token, caller)
   }
-  ipcMain.handle('sous:commit', (_e, token: string, choice?: { target?: string }, surface?: unknown) => sous.commit(String(token), choice ?? {}, desktopCaller(surface)))
+  ipcMain.handle('sous:commit', (_e, token: string, choice?: { target?: string; ack?: 'send-anyway' }, surface?: unknown) => sous.commit(String(token), choice ?? {}, desktopCaller(surface)))
   ipcMain.handle(
     'sous:command',
     (_e, text: string, ctx: { surface: SousSurface; focusedAgentId?: string | null; alternates?: string[]; box?: boolean }) =>
@@ -5750,10 +5745,16 @@ app.whenReady().then(() => {
   // RETRY re-sends the proposal the owner saw, from the ledger, through the
   // engine, to the same card; DISMISS hides the row and the ledger remembers.
   const inboxAct = async (token: string): Promise<{ ok: boolean; error?: string; dispatchId?: string }> => {
-    const row = sousLedger.get(token)
-    if (!row || !row.proposalText || !row.deliveredTo) return { ok: false, error: 'no such proposal' }
+    // Only a brief that never landed, and only into a card that can take it
+    // right now (sous-retry.ts) — never a second copy of a delivered one.
+    const verdict = retryVerdict(sousLedger.get(token), (nodeId) => {
+      const hit = store.nodeAcrossWorkspaces(nodeId)
+      if (!hit || hit.node.kind !== 'terminal') return null
+      return { served: hit.node.servedSession != null, phase: turns.phaseOf(nodeId), ownerComposing: turns.ownerComposing(nodeId) }
+    })
+    if (!verdict.ok) return { ok: false, error: verdict.error }
     try {
-      const { dispatchId } = await deliverToRecruit(dispatchService, { nodeId: row.deliveredTo, sentence: row.proposalText, originId: null })
+      const { dispatchId } = await deliverToRecruit(dispatchService, { nodeId: verdict.nodeId, sentence: verdict.text, originId: null })
       sousLedger.write({ token, dispatchId, outcome: 'delivered', dismissed: false })
       void dispatchService.settled(dispatchId).then(() => {
         const record = dispatchService.get(dispatchId)

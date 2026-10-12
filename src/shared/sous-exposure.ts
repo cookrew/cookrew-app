@@ -28,7 +28,7 @@ const TIER_2 = [
 ]
 const TIER_1 = [
   /\b(?:edit|fix|add|refactor|change|rename|update|write|rewrite|implement|move|replace|convert|translate|format|clean|tidy|revert|patch|wire|build|test)\b/i,
-  /改|修|加|重构|写|实现|替换|转换|翻译|整理|回退|修复|新增|重命名/
+  /改|修|加|写|补齐|补充|补|重构|实现|替换|转换|翻译|整理|回退|修复|新增|重命名/
 ]
 const TIER_0 = [/\b(?:read|explain|list|show|summari[sz]e|describe|what|look|check|find|grep|search|review|count)\b/i, /读|解释|列出|列一下|看看|看一下|总结|说明|查|找|搜|数一下/]
 
