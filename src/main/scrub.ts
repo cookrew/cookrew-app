@@ -3,33 +3,56 @@
  * a ledger passes through here (HP contract, docs/route-program/LEDGER.md).
  *
  * It replaces VALUES, never words: the sealed secrets this Mac holds
- * (secrets-store.ts), the pairing token, the gateway key, the values of env
- * vars whose NAMES say KEY / TOKEN / SECRET / PASSWORD, and anything that
- * looks like a credential on its own — a known prefix (`sk-`, `ghp_`,
- * `xox…-`, `apikey_`) or a high-entropy run (32+ of base64, 32+ of hex,
- * 40+ of URL-safe base64). "pairing token" and "API key" as words survive,
- * a sentence of Chinese survives, and scrubbing twice is scrubbing once.
+ * (secrets-store.ts), the pairing token, the gateway keys, the values of env
+ * vars whose NAMES say KEY / TOKEN / SECRET / PASSWORD, and a credential by
+ * its own shape — a known prefix (`sk-`, `ghp_`, `xox…-`, `apikey_`,
+ * `AKIA`), a padded base64 run of 32+, or a 32+ run right after a bearer /
+ * token= / key= introducer. Bare hex and bare URL-safe runs are NOT shapes:
+ * a git SHA, a long path segment and a kebab branch name are prose here
+ * (round 2). "pairing token" and "API key" as words survive, a sentence of
+ * Chinese survives, and scrubbing twice is scrubbing once.
  *
- * Exact values are matched by content, so a secret that is also a common
- * word would be replaced wherever it appears; values under 8 characters are
- * therefore never matched by content — nothing that short is a secret worth
- * mangling prose for.
+ * THE VALUE TABLE IS A SNAPSHOT. Reading every sealed value on every string
+ * put a file read per secret under each inbox rebuild (rows × reasons, on
+ * the main thread). The table is built once and kept for SNAPSHOT_TTL_MS,
+ * and dropped at once when the store changes (SecretsStore.onChange) — so a
+ * value sealed a moment ago is scrubbed on the next string, and a thousand
+ * strings in a burst cost one table.
+ *
+ * Exact values are matched by content, so values under 8 characters are
+ * never matched, and the literal defaults (`magpie-cookrew`, `magpie-sous`)
+ * are never in the table: a default is not a secret, and redacting it would
+ * blank the Routing panel's own sentence.
  */
 
 export const REDACTED = '[redacted]'
 
 export interface ScrubDeps {
-  /** The sealed values, read when a scrub runs (never cached across calls). */
+  /** The sealed values, read when the table is (re)built. */
   readonly secrets?: () => readonly string[]
-  /** Tokens this Mac holds: the pairing token, the gateway key. */
+  /** Tokens this Mac holds: the pairing token, the gateway keys. */
   readonly tokens?: () => readonly (string | null | undefined)[]
   readonly env?: NodeJS.ProcessEnv
+  /** The store's change signal: the table is dropped on it. */
+  readonly onChange?: (listener: () => void) => void
+  readonly ttlMs?: number
+  readonly now?: () => number
 }
 
-export type Scrub = (text: string) => string
+export interface Scrub {
+  (text: string): string
+  /** Drop the value table; the next string rebuilds it. */
+  invalidate(): void
+}
 
 /** The shortest value matched by content. */
 export const MIN_VALUE_LENGTH = 8
+
+/** How long a value table serves before it is rebuilt, absent a change signal. */
+export const SNAPSHOT_TTL_MS = 2_000
+
+/** Local tokens that are not secrets: never redacted by value. */
+export const DEFAULT_VALUES: ReadonlySet<string> = new Set(['magpie-cookrew', 'magpie-sous'])
 
 const SECRET_ENV_NAME = /KEY|TOKEN|SECRET|PASSWORD/i
 
@@ -41,10 +64,12 @@ const SHAPES: readonly RegExp[] = [
   /\bxox[abprs]-[A-Za-z0-9-]{8,}/g,
   /\bapikey_[A-Za-z0-9]{8,}/g,
   /\bAKIA[A-Z0-9]{16}\b/g,
-  /(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{32,}={0,2}(?![A-Za-z0-9+/=])/g,
-  /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{40,}(?![A-Za-z0-9_-])/g,
-  /(?<![0-9a-fA-F])[0-9a-fA-F]{32,}(?![0-9a-fA-F])/g
+  // 32+ of base64 WITH its '=' padding: a shape no SHA or path has.
+  /(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{32,}={1,2}(?![A-Za-z0-9+/=])/g
 ]
+
+/** A 32+ run that an introducer names as a credential: the run goes, the introducer stays. */
+const INTRODUCED = /\b(bearer\s+|token=|key=|apikey=|secret=|password=)([A-Za-z0-9+/_.-]{32,})/gi
 
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
@@ -53,29 +78,46 @@ const secretEnvValues = (env: NodeJS.ProcessEnv): string[] =>
     .filter(([name, value]) => SECRET_ENV_NAME.test(name) && typeof value === 'string')
     .map(([, value]) => value as string)
 
-/** Replace every exact value, longest first so a value inside another is not left as a stub. */
-const replaceValues = (text: string, values: readonly string[]): string => {
-  const distinct = [...new Set(values.filter((value) => value.length >= MIN_VALUE_LENGTH))].sort(
+/** The table: one regex over every value, longest first so a value inside another is not left as a stub. */
+const compile = (values: readonly string[]): RegExp | null => {
+  const distinct = [...new Set(values.filter((value) => value.length >= MIN_VALUE_LENGTH && !DEFAULT_VALUES.has(value)))].sort(
     (a, b) => b.length - a.length
   )
-  let out = text
-  for (const value of distinct) out = out.replace(new RegExp(escapeRegExp(value), 'g'), REDACTED)
-  return out
+  return distinct.length === 0 ? null : new RegExp(distinct.map(escapeRegExp).join('|'), 'g')
 }
 
 export const createScrubber = (deps: ScrubDeps = {}): Scrub => {
   const env = deps.env ?? process.env
-  return (text: string): string => {
-    if (typeof text !== 'string' || text.length === 0) return text
-    const values = [
+  const now = deps.now ?? ((): number => Date.now())
+  const ttl = deps.ttlMs ?? SNAPSHOT_TTL_MS
+  let table: { values: RegExp | null; at: number } | null = null
+
+  const build = (): RegExp | null =>
+    compile([
       ...(deps.secrets?.() ?? []),
       ...(deps.tokens?.() ?? []).filter((token): token is string => typeof token === 'string'),
       ...secretEnvValues(env)
-    ]
-    let out = replaceValues(text, values)
-    for (const shape of SHAPES) out = out.replace(shape, REDACTED)
-    return out
+    ])
+  const current = (): RegExp | null => {
+    const at = now()
+    if (table === null || at - table.at > ttl) table = { values: build(), at }
+    return table.values
   }
+  const invalidate = (): void => {
+    table = null
+  }
+  deps.onChange?.(invalidate)
+
+  const scrub = ((text: string): string => {
+    if (typeof text !== 'string' || text.length === 0) return text
+    const values = current()
+    let out = values === null ? text : text.replace(values, REDACTED)
+    for (const shape of SHAPES) out = out.replace(shape, REDACTED)
+    out = out.replace(INTRODUCED, (_match, introducer: string) => `${introducer}${REDACTED}`)
+    return out
+  }) as Scrub
+  scrub.invalidate = invalidate
+  return scrub
 }
 
 /** The scrub with nothing of this Mac's: shapes only. For tests and pure callers. */
