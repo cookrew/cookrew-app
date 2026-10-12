@@ -138,7 +138,7 @@ export function createDemoApi(): CookrewApi {
   // companion's GET through a slow link, for the fixture's race test.
   let routeReadLagMs = 0
   if (typeof window !== 'undefined') {
-    const hooks = window as unknown as { __routeStatus?: (status: RouteState['status']) => void; __routePush?: () => void; __routeReadLag?: (ms: number) => void }
+    const hooks = window as unknown as { __routeStatus?: (status: RouteState['status']) => void; __routePush?: () => void; __routeReadLag?: (ms: number) => void; __routeAuto?: (on: boolean) => void }
     hooks.__routeStatus = (status) => {
       route = routeFixture(status)
       routeChanged()
@@ -147,6 +147,17 @@ export function createDemoApi(): CookrewApi {
     hooks.__routePush = () => routeChanged()
     hooks.__routeReadLag = (ms) => {
       routeReadLagMs = ms
+    }
+    // The local tier offered (the script's printed command on the setup lines, group/auto in the catalog) or not.
+    hooks.__routeAuto = (on) => {
+      route = on
+        ? {
+            ...route,
+            models: route.models.some((m) => m.id === 'group/auto') ? route.models : [{ id: 'group/auto', displayName: 'auto', ownedBy: 'magpie', group: true, reasoning: false, levels: [], contextWindow: null }, ...route.models],
+            setup: { ...route.setup, addAutoGroupLine: 'magpie group add auto models=ollama/qwen3:32b,ollama/qwen2.5:1.5b routing=smart stays=turn' }
+          }
+        : { ...route, models: route.models.filter((m) => m.id !== 'group/auto'), setup: { ...route.setup, addAutoGroupLine: null } }
+      routeChanged()
     }
   }
   // Signals on the cables, with no main behind them: a fixture page (the

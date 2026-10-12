@@ -96,7 +96,8 @@ describe('the Add menu, open', () => {
   it('offers the line when main sent one', () => {
     const html = paint('magpie group add smart models=claude/claude-opus-5-5,deepseek/deepseek-v4 routing=smart')
     expect(html).toContain('magpie group add smart models=')
-    expect(html).not.toContain('disabled=""')
+    const item = html.slice(html.indexOf('Routing group') - 200, html.indexOf('Routing group'))
+    expect(item).not.toContain('disabled=""')
   })
 })
 

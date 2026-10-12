@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { HarnessRow, RouteDecision, RouteModel, RouteQuota, RouteState } from '../../../shared/route'
-import { KEY_PRESETS, ROUTING_COPY, decisionFacts, harnessTicks, quotaBar, routeChoices, statusLine, windowLabel, routeHead, ruleTitle } from '../../../shared/route-view'
+import { KEY_PRESETS, ROUTING_COPY, autoGroupItem, decisionFacts, harnessTicks, quotaBar, routeChoices, statusLine, windowLabel, routeHead, ruleTitle } from '../../../shared/route-view'
 import { keyLineFor } from '../../../shared/route-lines'
 import { runningLabel, type SetupRunning } from './setup-line-state'
 
@@ -197,6 +197,16 @@ export function AddMenu({ setup, onRun, defaultOpen = false, running = null }: {
             <b>{ROUTING_COPY.addGroup}</b>
             <span className="c">{busyFor(setup.addGroupLine) ?? setup.addGroupLine ?? ROUTING_COPY.groupNeedsTwo}</span>
           </button>
+          {/* The local tier (design §5): main sends the script's printed command when the gateway lists ollama models to build it from; until then the item says to run the script. */}
+          {(() => {
+            const auto = autoGroupItem(setup)
+            return (
+              <button type="button" role="menuitem" data-item="auto-group" disabled={auto.line === null || busyFor(auto.line) !== null} title={auto.why ?? auto.line ?? undefined} onClick={() => auto.line !== null && run(auto.line)}>
+                <b>{ROUTING_COPY.addAutoGroup}</b>
+                <span className="c">{busyFor(auto.line) ?? auto.line ?? auto.why}</span>
+              </button>
+            )
+          })()}
         </div>
       )}
     </span>
