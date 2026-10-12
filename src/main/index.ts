@@ -94,6 +94,7 @@ import { createSecretsStore } from './secrets-store'
 import { secretAuditDetails, type SecretAudit } from './secret-cli'
 import { ensureSecretSlotNote } from './secret-note'
 import { createScrubber } from './scrub'
+import { sousGatewayKey } from './sous-config'
 import { scrubInboxRow, scrubSousResult } from './scrub-surfaces'
 import { DEFAULT_NAME_ZONE } from '../shared/reach-names'
 import { NameCertStore } from './name-cert-store'
@@ -557,8 +558,12 @@ const scrub = createScrubber({
       .list()
       .map((row) => secrets.read(row.name)?.value)
       .filter((value): value is string => typeof value === 'string'),
-  tokens: () => [activePairingTokenValue(), routeService.gatewayKey()],
-  env: process.env
+  // The pairing token, the gateway's bearer, and the scoped key Sous will
+  // speak with (sous-config.ts) — read when the table is rebuilt.
+  tokens: () => [activePairingTokenValue(), routeService.gatewayKey(), sousGatewayKey()],
+  env: process.env,
+  // A seal or a removal drops the table at once; otherwise it lives 2 s.
+  onChange: (listener) => void secrets.onChange(listener)
 })
 /** The audit line every read and every missing read leaves: name only. */
 const auditSecret = (event: SecretAudit): void => {
@@ -5638,7 +5643,8 @@ app.whenReady().then(() => {
   // out (scrub-surfaces.ts). Commit and cancel pass through untouched.
   const sousDoor: SousDoor = {
     handle: async (input) => scrubSousResult(await sous.handle(input), scrub),
-    commit: (token, choice, caller) => sous.commit(token, choice ?? {}, caller),
+    // A commit answers a result too — the same scrub; cancel answers a boolean.
+    commit: async (token, choice, caller) => scrubSousResult(await sous.commit(token, choice ?? {}, caller), scrub),
     cancel: (token, caller) => sous.cancel(token, caller)
   }
   ipcMain.handle('sous:commit', (_e, token: string, choice?: { target?: string }, surface?: unknown) => sous.commit(String(token), choice ?? {}, desktopCaller(surface)))

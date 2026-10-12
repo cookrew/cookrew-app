@@ -117,3 +117,20 @@ describe('the write is wx, and the sweep knows a crash from a live writer', () =
     expect(readdirSync(dir)).toEqual([])
   })
 })
+
+describe('the change signal', () => {
+  it('fires after a put and after a remove, and an unsubscribed listener stays quiet', () => {
+    const { store } = fresh()
+    let fired = 0
+    const off = store.onChange(() => (fired += 1))
+    store.put('a-key', VALUE)
+    expect(fired).toBe(1)
+    store.remove('a-key')
+    expect(fired).toBe(2)
+    store.remove('a-key')
+    expect(fired).toBe(2)
+    off()
+    store.put('a-key', VALUE)
+    expect(fired).toBe(2)
+  })
+})

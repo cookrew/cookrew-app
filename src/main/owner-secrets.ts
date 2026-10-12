@@ -167,6 +167,8 @@ export function ownerSecretPaths(
     path.join(base, 'sous-decisions.jsonl'),
     path.join(base, 'sous-magpie.json'),
     path.join(base, 'route.json'),
-    path.join(base, 'sous-gateway.key')
+    path.join(base, 'sous-gateway.key'),
+    // The plugin file Magpie writes for this app carries `route.key`.
+    path.join(base, 'magpie.json')
   ]
 }

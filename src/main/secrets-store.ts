@@ -48,6 +48,8 @@ export interface SecretsStore {
   readonly read: (name: string) => SecretRecord | null
   readonly list: () => SecretListing[]
   readonly remove: (name: string) => boolean
+  /** Fires after a put or a remove: the scrub drops its value table on it. */
+  readonly onChange: (listener: () => void) => () => void
   readonly dir: string
 }
 
@@ -181,6 +183,15 @@ export const createSecretsStore = (options: SecretsStoreOptions = {}): SecretsSt
     }
   }
 
+  const listeners = new Set<() => void>()
+  const changed = (): void => {
+    for (const listener of listeners) listener()
+  }
+  const onChange: SecretsStore['onChange'] = (listener) => {
+    listeners.add(listener)
+    return () => void listeners.delete(listener)
+  }
+
   const put: SecretsStore['put'] = (name, value, putOptions = {}) => {
     assertName(name)
     if (typeof value !== 'string' || value.length === 0) throw new Error('a secret needs a value')
@@ -218,6 +229,7 @@ export const createSecretsStore = (options: SecretsStoreOptions = {}): SecretsSt
       closeSync(fd)
     }
     renameSync(tmp, file)
+    changed()
     return { name, served: record.served, updatedAt: record.updatedAt }
   }
 
@@ -265,11 +277,12 @@ export const createSecretsStore = (options: SecretsStoreOptions = {}): SecretsSt
     if (had) keychainRemove(name)
     try {
       rmSync(fileOf(name))
+      changed()
       return true
     } catch {
       return false
     }
   }
 
-  return { put, read, list, remove, dir }
+  return { put, read, list, remove, onChange, dir }
 }

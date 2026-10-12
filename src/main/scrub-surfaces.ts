@@ -19,6 +19,7 @@ export const scrubInboxRow = <T extends InboxRow & { text?: string }>(row: T, sc
 export const scrubSousResult = (result: SousCommandResult, scrub: Scrub): SousCommandResult => ({
   ...result,
   spoken: scrub(result.spoken),
+  ...(typeof result.text === 'string' ? { text: scrub(result.text) } : {}),
   ...(result.choices ? { choices: result.choices.map(scrub) } : {}),
   ...(result.decision ? { decision: { ...result.decision, sentence: scrub(result.decision.sentence) } } : {})
 })

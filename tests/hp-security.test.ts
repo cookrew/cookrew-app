@@ -21,7 +21,8 @@ describe('the served deny list (item 1)', () => {
       '/home/owner/.cookrew/sous-decisions.jsonl',
       '/home/owner/.cookrew/sous-magpie.json',
       '/home/owner/.cookrew/route.json',
-      '/home/owner/.cookrew/sous-gateway.key'
+      '/home/owner/.cookrew/sous-gateway.key',
+      '/home/owner/.cookrew/magpie.json'
     ]) {
       expect(paths).toContain(p)
     }
@@ -35,7 +36,7 @@ describe('the served deny list (item 1)', () => {
   })
   it('the profile denies each, after the broad read allow', () => {
     const profile = seatbeltProfile({ sandbox: '/s/svc/a', siblingRoot: '/s/svc', sessionsRoot: '/s', secretPaths: paths })
-    for (const p of ['/home/owner/.config/magpie', '/xdg/magpie', '/home/owner/.cookrew/sous-decisions.jsonl', '/home/owner/.cookrew/route.json']) {
+    for (const p of ['/home/owner/.config/magpie', '/xdg/magpie', '/home/owner/.cookrew/sous-decisions.jsonl', '/home/owner/.cookrew/route.json', '/home/owner/.cookrew/magpie.json']) {
       const rule = `(deny file-read* (subpath "${p}") (literal "${p}"))`
       expect(profile).toContain(rule)
       expect(profile.indexOf(rule)).toBeGreaterThan(profile.indexOf('(allow file-read*)'))
@@ -101,12 +102,13 @@ describe('the scrub on its surfaces (item 2)', () => {
     expect(out.slot).toBe('stripe-key')
     expect(out.nodeName).toBe('Tinker')
   })
-  it('a Sous result: spoken, the choices, the decision sentence', () => {
+  it('a Sous result: spoken, text, the choices, the decision sentence', () => {
     const out = scrubSousResult(
-      { intent: 'decide', spoken: 'the key is sk_live_SEALEDVALUE_1234', choices: ['sk-abcdefghijklmnop', 'Forge'], decision: { token: 't', holdMs: 1, sentence: 'send sk_live_SEALEDVALUE_1234' } as never },
+      { intent: 'decide', spoken: 'the key is sk_live_SEALEDVALUE_1234', text: 'typed sk_live_SEALEDVALUE_1234', choices: ['sk-abcdefghijklmnop', 'Forge'], decision: { token: 't', holdMs: 1, sentence: 'send sk_live_SEALEDVALUE_1234' } as never },
       scrub
     )
     expect(out.spoken).toBe(`the key is ${REDACTED}`)
+    expect(out.text).toBe(`typed ${REDACTED}`)
     expect(out.choices).toEqual([REDACTED, 'Forge'])
     expect(out.decision?.sentence).toBe(`send ${REDACTED}`)
     expect(out.decision?.token).toBe('t')
@@ -120,7 +122,9 @@ describe('the scrub on its surfaces (item 2)', () => {
     expect(main).toContain("sousDoor.handle({")
     expect(main).not.toMatch(/\n\s+sous\.handle\(\{/)
     expect(main).toContain('recruitPatch(scrub(brief))')
-    expect(main).toContain('tokens: () => [activePairingTokenValue(), routeService.gatewayKey()]')
+    expect(main).toContain('tokens: () => [activePairingTokenValue(), routeService.gatewayKey(), sousGatewayKey()]')
+    expect(main).toContain('commit: async (token, choice, caller) => scrubSousResult(await sous.commit(token, choice ?? {}, caller), scrub)')
+    expect(main).toContain('onChange: (listener) => void secrets.onChange(listener)')
   })
 })
 
@@ -133,6 +137,17 @@ describe('the scoped gateway key for Sous (item 3)', () => {
     writeFileSync(path.join(base, 'sous-gateway.key'), '\n')
     expect(sousGatewayKey(base)).toBe(SOUS_GATEWAY_KEY_FALLBACK)
   })
+  it('the script reads the real table: the id is the first column of the row that carries the name', () => {
+    // `magpie gateway-key list` on this Mac (2026-10-12), keys masked:
+    const table = 'ID                        NAME    STATE    GATEWAY KEY            LIMIT  MODELS  ACCOUNTS\n' +
+      'a097d7880d484cd469a4593c  Cookrew Sous  enabled  sk-magpie-key-…0d99e6  -      all     all\n'
+    const id = execFileSync('awk', ['-v', 'n=Cookrew Sous', 'index($0, n) { print $1; exit }'], { input: table, encoding: 'utf8' }).trim()
+    expect(id).toBe('a097d7880d484cd469a4593c')
+    // `gateway-key add` prints the bare credential on its own line.
+    const credential = execFileSync('awk', ['NF { line = $NF } END { print line }'], { input: 'sk-magpie-key-0123456789abcdef0123456789abcdef\n', encoding: 'utf8' }).trim()
+    expect(credential).toBe('sk-magpie-key-0123456789abcdef0123456789abcdef')
+  })
+
   it('the script mints, stores at 0600 without printing, and limits the key to the Sous groups', () => {
     const script = readFileSync('scripts/magpie-sous-key.sh', 'utf8')
     expect(script).toContain('umask 077')
