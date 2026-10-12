@@ -32,7 +32,7 @@ interface RouteBody {
     group?: string
     model: string
     served?: string
-    rule?: { n: number; use?: string; when?: string[]; turn?: number; tokens?: number; effort?: string }
+    rule?: { n: number; use?: string; when?: string[]; held?: boolean; turn?: number; tokens?: number; effort?: string }
     asked_effort?: string
     tries: { model: string; status: number; ms: number; done: boolean; effort?: string }[]
     done: boolean
@@ -97,10 +97,11 @@ describe('one bearer, many cards — what a routing rule may match on', () => {
   })
 
   /**
-   * THE ANSWER TO "can codex get thinking models while claude does not, under one key": yes, but
-   * not through `agents=`. `agentOf()` takes the agent from the TOKEN first, so every card on
-   * `magpie-cookrew` reads as one agent. `effort=on` is the condition that still separates them,
-   * because codex asks for reasoning on the Responses path and a Cookrew claude card does not.
+   * `agents=` cannot do it: `agentOf()` takes the agent from the TOKEN first, so every card on
+   * `magpie-cookrew` reads as one agent. `effort` DOES separate a reasoning turn from a plain one
+   * on one bearer, which is what this records — but see route-with-rule.json: a Cookrew claude
+   * card asks for `high` effort too, so `effort=on` is not the codex/claude discriminator the
+   * first draft of this lane's report took it for.
    */
   it('separates a reasoning turn from a plain one on the same bearer', () => {
     expect(rules.oneBearerProof.plain.rule.n).toBe(0)
@@ -190,9 +191,93 @@ describe('gateway-key — key scoping exists, and nothing here minted one', () =
   })
 })
 
+describe('a REAL rule hit, driven by claude -p through a scratch group (route-with-rule.json)', () => {
+  const body = json<RouteBody>('route-with-rule.json')
+
+  /**
+   * Recorded for Forge: fix/hp-route mapped `RouteDecision.rule` from a body synthesised out of
+   * the docs, because no group on this machine had a rule. This one is real — `group/hp-rule`
+   * with `[ollama/qwen2.5:3b, ollama/qwen2.5:1.5b]` in order and one rule
+   * (`use=ollama/qwen2.5:1.5b tokens=1k`), asked by a real `claude -p` under
+   * `X-Magpie-Session: cookrew:probe-rule`. The group is removed again; the body is the fixture.
+   */
+  it('names the rule by number and the pick by `use` — NOT `id` and `pick`', () => {
+    expect(body.route.rule?.n).toBe(1)
+    expect(body.route.rule?.use).toBe('ollama/qwen2.5:1.5b')
+    expect(body.route.rule?.when).toEqual(['tokens ≥ 1000'])
+    // The rule beat the group's own order: member 1 is qwen2.5:3b.
+    expect(body.route.model).toBe('ollama/qwen2.5:1.5b')
+    expect(body.route.asked).toBe('group/hp-rule')
+    const keys = Object.keys(body.route.rule ?? {})
+    expect(keys).not.toContain('id')
+    expect(keys).not.toContain('pick')
+  })
+
+  /**
+   * `held: true` is "decided when the turn began" (internal/gateway/rules.go:31, set at :217).
+   * A claude turn makes several requests — system prompt, then tool results — and the later ones
+   * report the rule the turn opened on rather than a fresh match. A rail that treats `held` as a
+   * new decision would redraw the same rule all turn.
+   */
+  it('marks a within-turn decision as held', () => {
+    expect(body.route.rule?.held).toBe(true)
+    expect(body.route.rule?.turn).toBe(1)
+    expect(body.route.rule?.tokens).toBeGreaterThan(1000)
+  })
+
+  /**
+   * THE CORRECTION TO THIS LANE'S OWN §3. A Cookrew claude card asks for `high` effort — the
+   * banner says so at boot and the route body says so here — so `effort=on` matches claude
+   * traffic too and CANNOT be the thing that sends codex to thinking models and leaves claude
+   * alone. Pinned so the recommendation cannot be read off the earlier fixture alone.
+   */
+  it('shows a claude turn asking for high effort, which breaks the effort=on discriminator', () => {
+    expect(body.route.asked_effort).toBe('high')
+    expect(body.route.rule?.effort).toBe('high')
+  })
+
+  it('maps to the HP contract the same way a curl-driven hit does', () => {
+    const toContract = (route: RouteBody['route']): { id: string; pick: string | null } | null =>
+      route.rule && route.rule.n > 0 ? { id: String(route.rule.n), pick: route.rule.use ?? null } : null
+    expect(toContract(body.route)).toEqual({ id: '1', pick: 'ollama/qwen2.5:1.5b' })
+  })
+})
+
+describe('gateway-key models — a group id is accepted, unvalidated, and enforced', () => {
+  const rec = json<{
+    accepted: Record<string, string>
+    validated: boolean
+    enforced: boolean
+    enforcement: Record<string, number>
+  }>('gateway-key-groups.json')
+
+  /** For Tinker: scripts/magpie-sous-key.sh passes `group/jevs group/auto`, and the CLI takes them. */
+  it('takes group ids on the command line, including ones no group answers to', () => {
+    expect(rec.accepted['group/think (a group that exists)']).toBe('hp-facts probe: only group/think')
+    expect(rec.accepted["group/jevs group/auto (Tinker's exact arguments; NEITHER group exists here)"]).toBe(
+      'hp-facts probe: only group/jevs, group/auto'
+    )
+    expect(rec.validated).toBe(false)
+  })
+
+  it('enforces the scope at the gateway: in-scope 200, out-of-scope 403', () => {
+    expect(rec.enforced).toBe(true)
+    expect(rec.enforcement['models=group/think, POST /v1/chat/completions model=group/think']).toBe(200)
+    expect(rec.enforcement['models=group/think, POST /v1/chat/completions model=ollama/qwen2.5:1.5b']).toBe(403)
+  })
+
+  it('refuses with a sentence that names the key and what it may use', () => {
+    const body = json<ErrorBody>('gateway-key-403-out-of-scope.json')
+    expect(body.error.message).toMatch(/may not use ollama\/qwen2\.5:1\.5b/)
+    expect(body.error.message).toMatch(/it may use group\/think/)
+    // The sentence names the key by NAME, never by credential.
+    expect(body.error.message).not.toMatch(/sk-magpie-key/)
+  })
+})
+
 describe('the fixtures themselves', () => {
   it('carry no email address', () => {
-    for (const file of ['providers.txt', 'models.json', 'group-think.txt', 'gateway-key-help.txt']) {
+    for (const file of ['providers.txt', 'models.json', 'group-think.txt', 'gateway-key-help.txt', 'route-with-rule.json', 'gateway-key-groups.json']) {
       expect(read(file), file).not.toMatch(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/)
     }
   })

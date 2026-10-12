@@ -1,0 +1,38 @@
+{
+  "route": {
+    "id": 1791718534350,
+    "time": "2026-10-12T14:29:52.622843+08:00",
+    "asked": "group/hp-rule",
+    "asked_effort": "high",
+    "group": "hp-rule",
+    "rule": {
+      "n": 1,
+      "use": "ollama/qwen2.5:1.5b",
+      "when": [
+        "tokens ≥ 1000"
+      ],
+      "held": true,
+      "turn": 1,
+      "tokens": 29253,
+      "effort": "high"
+    },
+    "model": "ollama/qwen2.5:1.5b",
+    "effort": "high",
+    "served": "qwen2.5:1.5b",
+    "tries": [
+      {
+        "model": "ollama/qwen2.5:1.5b",
+        "effort": "high",
+        "done": true,
+        "status": 200,
+        "ms": 5713
+      }
+    ],
+    "done": true,
+    "status": 200,
+    "ms": 5745,
+    "ttft_ms": 3411
+  },
+  "seq": 1202,
+  "session": "cookrew:probe-rule"
+}
