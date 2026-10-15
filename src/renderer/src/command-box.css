@@ -105,12 +105,14 @@
 .cmd-alts { display: flex; gap: 6px; flex-wrap: wrap; width: 100%; }
 .cmd-alts button { font-size: 12px; }
 
-/* The phone: the box is the bar along the bottom, above the safe area; the
-   rows fold to three. */
+/* The phone: summoned by the dock's SOUS button (no ⌘K there), the box is a
+   sheet along the bottom, above the safe area, lifted by the keyboard the
+   way the dock is; the rows fold to three; its own ✕ closes it. Parked there
+   permanently it covered the dock's tool and preset rows (IMG_3770). */
 .cmd.phone {
   left: 0;
   right: 0;
-  bottom: 0;
+  bottom: var(--kb-inset, 0px);
   transform: none;
   width: auto;
   padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
@@ -123,6 +125,7 @@
 .cmd.phone .cmd-row .blocks { display: none; }
 .cmd.phone .cmd-field .key { display: none; }
 .cmd.phone .cmd-field input { font-size: 16px; }
+.cmd.phone .cmd-close { flex: none; border: 1.5px solid var(--ink); background: transparent; color: var(--ink); font: inherit; font-size: 13px; padding: 2px 8px; cursor: pointer; }
 
 /* HP: how the decision is held, and the distinct act for an exposed one. */
 .cmd-echo .mode { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; padding: 1px 6px; border: 1.5px solid currentColor; white-space: nowrap; }

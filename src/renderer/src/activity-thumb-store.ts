@@ -50,7 +50,7 @@ const readSeed = (): boolean => activitySeeded
 
 export function useActivitySeeded(): boolean {
   // Module-level functions, so a re-render never resubscribes.
-  return useSyncExternalStore(subscribeSeed, readSeed)
+  return useSyncExternalStore(subscribeSeed, readSeed, readSeed)
 }
 
 /** One terminal's latest activity. Re-renders only when THIS id changes. */
@@ -58,7 +58,9 @@ export function useActivity(id: string): TerminalActivity | undefined {
   // Keyed on the id: a fresh subscribe function per render would make React
   // unsubscribe and resubscribe on every render of the caller.
   const subscribe = useCallback((cb: () => void) => activityStore.subscribeKey(id, cb), [id])
-  return useSyncExternalStore(subscribe, () => activityStore.get(id))
+  // The third read is the server snapshot: static renders (tests, previews) of
+  // a Dock read the same store instead of throwing.
+  return useSyncExternalStore(subscribe, () => activityStore.get(id), () => activityStore.get(id))
 }
 
 /** The whole activity map — for the header count / roster. Re-renders on any change. */

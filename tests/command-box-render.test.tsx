@@ -152,13 +152,13 @@ describe('CommandBox — one surface: the inbox rows, the field, the echo', () =
     expect(SAID_FADE_MS).toBe(3500)
   })
 
-  it('the phone is the same box as the bottom bar, three rows at most, and it never closes', async () => {
+  it('the phone is the same box, summoned, three rows at most; closed it renders nothing on either surface', async () => {
     const { CommandBox } = await box()
     const many = [0, 1, 2, 3, 4].map((i) => ({ ...rows[0], nodeId: `n${i}`, nodeName: `Card ${i}` }))
-    const html = renderToStaticMarkup(<CommandBox open={false} onClose={() => undefined} phone rows={many} />)
+    const html = renderToStaticMarkup(<CommandBox open onClose={() => undefined} phone rows={many} />)
     expect(html).toContain('class="cmd phone"')
     expect(html.match(/data-kind="/g)).toHaveLength(3)
-    // closed on the desktop renders nothing at all
+    expect(renderToStaticMarkup(<CommandBox open={false} onClose={() => undefined} phone rows={many} />)).toBe('')
     expect(renderToStaticMarkup(<CommandBox open={false} onClose={() => undefined} phone={false} rows={rows} />)).toBe('')
   })
 })

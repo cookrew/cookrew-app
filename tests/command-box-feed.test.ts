@@ -10,7 +10,7 @@ describe('holdsInbox', () => {
   it('holds only while the desktop box is open, and always on the phone bar', () => {
     expect(holdsInbox({ open: false, phone: false })).toBe(false)
     expect(holdsInbox({ open: true, phone: false })).toBe(true)
-    expect(holdsInbox({ open: false, phone: true })).toBe(true)
+    expect(holdsInbox({ open: false, phone: true })).toBe(false)
   })
 })
 

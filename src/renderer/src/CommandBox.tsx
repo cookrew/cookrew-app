@@ -80,7 +80,7 @@ export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecis
 
   // The rows: the subscription HOLDS the list open in main (it is built only
   // while someone looks), so it is attached only while the box can be seen —
-  // open on the desktop, always on the phone — and detached when it cannot.
+  // open, on either surface — and detached when it cannot.
   useEffect(() => {
     if (givenRows) return
     if (!holdsInbox({ open, phone: isPhone })) return
@@ -97,8 +97,8 @@ export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecis
   }, [rows.length])
 
   useEffect(() => {
-    if (open && !isPhone) field.current?.focus()
-  }, [open, isPhone])
+    if (open) field.current?.focus()
+  }, [open])
 
   // Opening with something already in the field: a draft from earlier, said.
   useEffect(() => {
@@ -176,12 +176,12 @@ export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecis
 
   // Closing clears the field as well: reopening starts empty.
   useEffect(() => {
-    if (!open && !isPhone) {
+    if (!open) {
       dismiss()
       setText('')
       setDraft(false)
     }
-  }, [open, isPhone, dismiss])
+  }, [open, dismiss])
   useEffect(
     () => () => {
       hold.current?.close()
@@ -248,7 +248,7 @@ export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecis
     void jumpToNode(row.workspaceId, landing).then((outcome) => {
       if (outcome === 'missed') return
       if (row.kind === 'secret' && row.slot) focusSlot(row.slot, 8, slotTimer)
-      if (!isPhone) onClose()
+      onClose()
     })
   }
 
@@ -271,7 +271,7 @@ export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecis
   const ordered = useMemo(() => (isPhone ? rows.slice(0, 3) : rows.slice(0, 6)), [rows, isPhone])
   const now = Date.now()
 
-  if (!open && !isPhone) return null
+  if (!open) return null
   return (
     <div className={`cmd${isPhone ? ' phone' : ''}`} role="dialog" aria-label="Command and inbox">
       {ordered.length > 0 && (
@@ -367,6 +367,12 @@ export function CommandBox({ open, onClose, phone, rows: givenRows, initialDecis
           </span>
         )}
         {busy && <span className="busy">…</span>}
+        {/* The phone has no Escape key: the sheet closes by its own ✕. */}
+        {isPhone && (
+          <button type="button" className="cmd-close" aria-label="Close" onClick={onClose}>
+            ✕
+          </button>
+        )}
       </div>
       {echo && echo.kind === 'decision' && (
         <div className="cmd-echo" role="status" aria-live="polite" data-decision={echo.decision.kind} data-mode={holdMode(echo.decision)}>

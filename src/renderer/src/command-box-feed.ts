@@ -6,7 +6,7 @@ import type { Decision } from '../../main/sous-control'
 
 /** The list is held open only while somebody can see it: the open desktop box, or the phone bar, which is always there. */
 export function holdsInbox(input: { open: boolean; phone: boolean }): boolean {
-  return input.phone || input.open
+  return input.open
 }
 
 export interface InboxApi {

@@ -763,6 +763,8 @@ function Canvas(): React.JSX.Element {
     commandReturnFocus.current = null
     if (back && back.isConnected) back.focus()
   }, [])
+  // The phone's SOUS button (Dock): no ⌘K there, so the box is summoned by tap.
+  const openCommand = useCallback(() => setCommandOpen(true), [])
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'k') return
@@ -1693,6 +1695,7 @@ function Canvas(): React.JSX.Element {
             setRole(name)
           }}
           onImportServed={() => setImportServedOpen(true)}
+          onSous={isRemoteMode() ? openCommand : undefined}
           orch={orch}
           onOrch={setOrch}
           voiceFor={
