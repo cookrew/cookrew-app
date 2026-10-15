@@ -3762,6 +3762,65 @@ body.cookrew-mobile .cr-ws-name {
   body.cookrew-mobile .cr-logo {
     display: none;
   }
+
+  /* THE BAR IN PORTRAIT HAS ONE LINE AND SEVEN THINGS ON IT: the hand, the
+     path badge, the avatar, canvas/board, the status coin, the routing lamp
+     and the workspace chip. At 390 px the chip was walking off the right
+     edge (2026-10-15). The budget: every mark loses its slack, the count
+     beside the coin goes (the board has it), the chip keeps its icon only,
+     and nothing on the bar may shrink the chip — it is the one control
+     that moves the whole canvas. */
+  body.cookrew-mobile .cr-header {
+    gap: 6px;
+    padding-left: 10px;
+    padding-right: 8px;
+  }
+  body.cookrew-mobile .cr-header-brand {
+    gap: 6px;
+    min-width: 0;
+  }
+  body.cookrew-mobile .cr-hand-mark img {
+    height: 22px;
+  }
+  body.cookrew-mobile .cr-path {
+    height: 22px;
+    padding: 0 6px;
+    gap: 4px;
+    font-size: 8.5px;
+    letter-spacing: 0.04em;
+    /* The one thing on the bar that may give: on a 320 px phone the word
+       loses its tail before the chip loses its place. */
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+  }
+  body.cookrew-mobile .cr-path-word {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  body.cookrew-mobile .cr-viewseg button {
+    padding: 5px 8px;
+  }
+  body.cookrew-mobile .cr-header-status {
+    gap: 0;
+  }
+  body.cookrew-mobile .cr-header-status .cr-kicker {
+    display: none;
+  }
+  body.cookrew-mobile .cr-routing-entry {
+    padding: 3px 6px;
+    gap: 0;
+  }
+  body.cookrew-mobile .cr-ws {
+    flex: 0 0 auto;
+  }
+  body.cookrew-mobile .cr-ws-current {
+    padding: 3px 6px;
+    gap: 0;
+  }
+  body.cookrew-mobile .cr-ws-name {
+    display: none;
+  }
 }
 
 body.cookrew-mobile .cr-dock {
