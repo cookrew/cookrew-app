@@ -108,6 +108,19 @@ export interface LoopSample {
   } | null
 }
 export function loopFromHealth(body: unknown): LoopSample | null
+export interface LineSample {
+  held: boolean
+  linesHeld: number
+  ended: number
+  lost: Record<string, number>
+  failed: Record<string, number>
+  heldForMs: number | null
+  sinceLastFrameMs: number | null
+  lastReason: string | null
+  lastLifetimeMs: number | null
+}
+export function lineFromHealth(body: unknown): LineSample | null
+export function lineLossPerHour(previous: LineSample | null | undefined, current: LineSample | null | undefined, elapsedMs: number): number | null
 export function latencyFromEvents(lines: readonly string[], since?: number): Record<string, Percentiles>
 export function fmtMb(bytes: number): string
 export function fmtMs(ms: number | null | undefined): string

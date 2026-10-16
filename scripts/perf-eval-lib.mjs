@@ -280,6 +280,41 @@ export function loopFromHealth(body) {
   }
 }
 
+/**
+ * The desktop's line at cookrew.dev, from a GET /api/health body: how many
+ * lines were held and ended since boot, by reason, and what the open one
+ * looks like. Counters are since boot; the eval turns them into a rate by
+ * differencing against the previous row for the same pid.
+ */
+export function lineFromHealth(body) {
+  const line = body?.canvasLine
+  if (!line || typeof line.lines?.ended !== 'number') return null
+  return {
+    held: line.held === true,
+    linesHeld: line.lines.held ?? 0,
+    ended: line.lines.ended,
+    lost: { ...(line.lines.lost ?? {}) },
+    failed: { ...(line.lines.failed ?? {}) },
+    heldForMs: line.current?.heldForMs ?? null,
+    sinceLastFrameMs: line.current?.sinceLastFrameMs ?? null,
+    lastReason: line.last?.reason ?? null,
+    lastLifetimeMs: line.last?.ageMs ?? null
+  }
+}
+
+/**
+ * Lines lost per hour between two rows of the same process: the flap rate
+ * the owner feels as "cookrew.dev/me has no OPEN link". Null without a
+ * previous row (a restart starts a new line), or when the counters went
+ * backwards (which is a restart the pid check missed).
+ */
+export function lineLossPerHour(previous, current, elapsedMs) {
+  if (!previous || !current || !(elapsedMs > 0)) return null
+  const lost = current.ended - previous.ended
+  if (lost < 0) return null
+  return (lost * 60 * 60 * 1000) / elapsedMs
+}
+
 export const fmtMb = (bytes) => `${(bytes / MB).toFixed(1)} MB`
 export const fmtMs = (ms) => (ms === null || ms === undefined ? '—' : `${Math.round(ms)} ms`)
 

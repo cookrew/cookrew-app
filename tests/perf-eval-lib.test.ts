@@ -7,6 +7,8 @@ import {
   bucketStorage,
   judge,
   latencyFromEvents,
+  lineFromHealth,
+  lineLossPerHour,
   loopFromHealth,
   orphanSidecars,
   parseEtime,
@@ -302,5 +304,40 @@ describe('loopFromHealth — the row the memory history keeps', () => {
     expect(loopFromHealth(null)).toBeNull()
     expect(loopFromHealth({ error: 'not found' })).toBeNull()
     expect(loopFromHealth({ loop: { current: { p95: 'fast' } } })).toBeNull()
+  })
+})
+
+describe('lineFromHealth / lineLossPerHour — the line, as a rate', () => {
+  const body = {
+    canvasLine: {
+      held: true,
+      name: '@drej/desktop/x',
+      current: { ageMs: 120_000, heldForMs: 119_000, sinceLastFrameMs: 4_000, sinceLastBeatMs: 4_000, framesDown: 9, pongsUp: 4, uplinkWritable: true, uplinkPendingBytes: 0 },
+      lines: { held: 15, ended: 21, lost: { quiet: 16, hangup: 3, withdrew: 1 }, failed: { tls: 1 } },
+      last: { at: 1, reason: 'quiet', why: 'the registry went quiet', ageMs: 300_000, heldForMs: 299_000, sinceLastFrameMs: 75_000, sinceLastBeatMs: 75_000, framesDown: 12, pongsUp: 9, uplinkWritable: true, uplinkPendingBytes: 42 }
+    }
+  }
+  it('reads the counters and the open line', () => {
+    expect(lineFromHealth(body)).toEqual({
+      held: true,
+      linesHeld: 15,
+      ended: 21,
+      lost: { quiet: 16, hangup: 3, withdrew: 1 },
+      failed: { tls: 1 },
+      heldForMs: 119_000,
+      sinceLastFrameMs: 4_000,
+      lastReason: 'quiet',
+      lastLifetimeMs: 300_000
+    })
+    expect(lineFromHealth({})).toBeNull()
+    expect(lineFromHealth({ canvasLine: { held: false } })).toBeNull()
+  })
+  it('turns two rows of the same process into lost per hour, and refuses a restart', () => {
+    const previous = lineFromHealth({ ...body, canvasLine: { ...body.canvasLine, lines: { ...body.canvasLine.lines, ended: 0 } } })
+    const current = lineFromHealth(body)
+    expect(lineLossPerHour(previous, current, 20 * 60 * 1000)).toBe(63)
+    expect(lineLossPerHour(current, previous, 60 * 60 * 1000)).toBeNull() // counters went backwards: a restart
+    expect(lineLossPerHour(null, current, 1000)).toBeNull()
+    expect(lineLossPerHour(previous, current, 0)).toBeNull()
   })
 })

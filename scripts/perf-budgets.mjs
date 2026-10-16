@@ -35,7 +35,13 @@ export const BUDGETS = {
     // plus a read per pixels-only pane whenever anything was detached; with
     // the board closed the number is 0, open and quiet it backs off to 1/min
     // plus the per-event reads. 10 says the ladder stopped climbing.
-    boardChildrenPerMinute: { warn: 10 }
+    boardChildrenPerMinute: { warn: 10 },
+    // The desktop's line at cookrew.dev, lost per hour (GET /api/health
+    // canvasLine, differenced against the previous row for the same pid).
+    // Measured 2026-09-14 before the fix: 21 endings in 20 minutes on the
+    // owner's tunnel — 63/h; every loss is a 1-60 s window with no OPEN
+    // link on cookrew.dev/me. 6/h is one every ten minutes.
+    canvasLineLostPerHour: { warn: 6, fail: 30 }
   },
   // The renderer DOM, measured by scripts/perf-dom-probe.mjs in a headless
   // Chrome at the phone viewport against the local companion (the same React
