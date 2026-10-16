@@ -5892,6 +5892,24 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   white-space: nowrap;
 }
 
+.cr-path-trust {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border: 1.5px dashed var(--line);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.cr-path-trust-steps {
+  color: var(--muted);
+}
+.cr-path-trust-link {
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .cr-path-dot {
   width: 7px;
   height: 7px;

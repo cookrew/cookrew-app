@@ -176,6 +176,9 @@ describe('the badge sheet', () => {
   it('offers NOTHING rather than a guessed address', () => {
     const html = paint({ origin: 'https://cookrew.dev', link: 'live' })
     expect(html).not.toContain('Switch desktop')
-    expect(html).not.toContain('href=')
+    // The one link the sheet may carry is this Mac's own root, served by the
+    // Mac itself (TrustMacRow.tsx) — never a guessed address for a desktop.
+    const links = [...html.matchAll(/href="([^"]*)"/g)].map((m) => m[1])
+    expect(links).toEqual(['/cookrew-ca.mobileconfig'])
   })
 })

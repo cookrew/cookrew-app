@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { cookrew, isRemoteMode } from './api'
 import { DirectLandedNote } from './DirectLandedNote'
 import { DirectOfferRow } from './DirectOfferRow'
+import { TrustMacRow } from './TrustMacRow'
 import { LocalNetworkRow } from './LocalNetworkRow'
 import { subscribeLocalNetwork } from './local-network-gate'
 import { subscribePathAttempts } from './path-attempts'
@@ -106,6 +107,9 @@ export function PathSheet({
             same thing for ever, so the fix goes first. Absent in every other
             browser (DirectOfferRow.tsx). */}
         <DirectOfferRow />
+        {/* The one-time trust that lets the LAN plane go by address, past any
+            resolver or proxy that redirects the name (TrustMacRow.tsx). */}
+        <TrustMacRow state={view.state} />
         {/* The evidence behind the word above it. Closed, and absent entirely
             until a race has happened — on a desktop-served companion there is
             nothing to explain. */}
