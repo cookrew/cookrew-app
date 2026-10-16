@@ -106,6 +106,21 @@ describe('the phone half', () => {
     expect(outcome.changed).toEqual([{ id: 'c', type: 'image/jpeg', data: 'QUJD' }])
   })
 
+  it('never moves a version backwards, and never hands back bytes older than what is held', () => {
+    // Two polls in flight; the older answer lands second.
+    const outcome = applyThumbBatch(
+      [{ id: 'c', at: 5, type: 'image/jpeg', data: 'OLD' }],
+      {},
+      { c: 7 },
+      1_000
+    )
+    expect(outcome.versions).toEqual({ c: 7 })
+    expect(outcome.changed).toEqual([])
+    // An equal version is the unchanged case and still ends the backoff.
+    const same = applyThumbBatch([{ id: 'c', at: 7 }], { c: { failures: 1, until: 5_000 } } as never, { c: 7 }, 1_000)
+    expect(same.backoffs).toEqual({})
+  })
+
   it('never mutates what it was given', () => {
     const backoffs = {}
     const versions = { b: 5 }
