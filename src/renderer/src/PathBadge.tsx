@@ -1,12 +1,9 @@
 import { useEffect, useState } from 'react'
 import { cookrew, isRemoteMode } from './api'
 import { DirectLandedNote } from './DirectLandedNote'
-import { DirectOfferRow } from './DirectOfferRow'
-import { TrustMacRow } from './TrustMacRow'
 import { LocalNetworkRow } from './LocalNetworkRow'
 import { subscribeLocalNetwork } from './local-network-gate'
 import { subscribePathAttempts } from './path-attempts'
-import { PathWhy } from './PathWhy'
 import { currentPathBadge, subscribePathLink } from './path-link'
 import { subscribeReachPublish } from './reach-publish'
 import type { PathBadgeView } from '../../shared/path-badge'
@@ -75,7 +72,13 @@ export function PathBadge({ onRefresh }: { onRefresh: () => void }): React.JSX.E
   )
 }
 
-/** The sentence, the latency, and the way to another desktop. */
+/**
+ * The sentence, the latency, and the way to another desktop — and nothing to
+ * do. The path finds itself (LAN > tailnet > relay, path/rtc-adopt.ts), so a
+ * retry button, a certificate to install or a table of what timed out would
+ * each be a chore for something that is not the reader's job. The evidence
+ * still reaches the Mac in the path reports, where it is read.
+ */
 export function PathSheet({
   view,
   onClose
@@ -102,18 +105,6 @@ export function PathSheet({
         <p className="cr-path-latency">
           {view.latencyMs === null ? 'Latency not measured yet.' : `${view.latencyMs} ms round trip`}
         </p>
-        {/* THE CONCLUSION, ABOVE THE EVIDENCE. On a browser with no local
-            network permission to grant, the rows below can only ever say the
-            same thing for ever, so the fix goes first. Absent in every other
-            browser (DirectOfferRow.tsx). */}
-        <DirectOfferRow />
-        {/* The one-time trust that lets the LAN plane go by address, past any
-            resolver or proxy that redirects the name (TrustMacRow.tsx). */}
-        <TrustMacRow state={view.state} />
-        {/* The evidence behind the word above it. Closed, and absent entirely
-            until a race has happened — on a desktop-served companion there is
-            nothing to explain. */}
-        <PathWhy />
         <footer className="gs-sheet-foot">
           {/* Offered only once the desktop has said where its account lives.
               A hard-coded cookrew.dev sends a self-hosting owner somewhere

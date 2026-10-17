@@ -176,9 +176,15 @@ describe('the badge sheet', () => {
   it('offers NOTHING rather than a guessed address', () => {
     const html = paint({ origin: 'https://cookrew.dev', link: 'live' })
     expect(html).not.toContain('Switch desktop')
-    // The one link the sheet may carry is this Mac's own root, served by the
-    // Mac itself (TrustMacRow.tsx) — never a guessed address for a desktop.
-    const links = [...html.matchAll(/href="([^"]*)"/g)].map((m) => m[1])
-    expect(links).toEqual(['/cookrew-ca.mobileconfig'])
+    expect([...html.matchAll(/href="([^"]*)"/g)]).toEqual([])
+  })
+
+  it('asks nothing of the reader — no retry, no profile, no table of timeouts', () => {
+    // 2026-10-18, the owner on a sheet that said LAN above a yellow TRY AGAIN
+    // and five timed-out rows: the path finds itself, so the sheet only says
+    // where it is. The one button is the close.
+    const html = paint({ origin: 'https://cookrew.dev', link: 'live', relayed: true, plane: 'RELAY' })
+    expect(html).not.toMatch(/try again|why this path|certificate|mobileconfig/i)
+    expect([...html.matchAll(/<button/g)]).toHaveLength(1)
   })
 })

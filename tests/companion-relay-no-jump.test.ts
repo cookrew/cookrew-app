@@ -192,7 +192,7 @@ describe('the path badge under a relay prefix', () => {
   })
 })
 
-describe('the one exception is a press and only a press', () => {
+describe('an offer on the table navigates nothing — there is no press any more', () => {
   it('publishing an offer navigates nothing by itself', async () => {
     const phone = stubPhone('https://cookrew.dev')
     const { companion } = await servedAt(RELAY_BASE)
@@ -209,21 +209,6 @@ describe('the one exception is a press and only a press', () => {
     await settle()
     expect(phone.replaced()).toEqual([])
     stop()
-  })
-
-  it('and the press itself uses assign, which is why assign is watched', async () => {
-    const phone = stubPhone('https://cookrew.dev')
-    await servedAt(RELAY_BASE)
-    const { openDirectly } = await import('../src/renderer/src/DirectOfferRow')
-    const origin = `https://192-168-2-40.${DEVICE}.d.cookrew.dev:8643`
-    const win = (globalThis as unknown as {
-      window: { location: { assign: (url: string) => void } }
-    }).window
-    openDirectly(
-      { origin },
-      { token: () => 'a-token-value-0000', go: (url) => win.location.assign(url) }
-    )
-    expect(phone.replaced()).toEqual([`${origin}/?token=a-token-value-0000&from=relay`])
   })
 })
 

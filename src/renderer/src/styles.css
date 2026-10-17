@@ -5892,24 +5892,6 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   white-space: nowrap;
 }
 
-.cr-path-trust {
-  margin: 10px 0 0;
-  padding: 8px 10px;
-  border: 1.5px dashed var(--line);
-  font-size: 12.5px;
-  line-height: 1.45;
-}
-.cr-path-trust-steps {
-  color: var(--muted);
-}
-.cr-path-trust-link {
-  font-family: var(--font-pixel);
-  font-size: 9.5px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
 .cr-path-dot {
   width: 7px;
   height: 7px;
@@ -5987,71 +5969,11 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   color: var(--muted);
 }
 
-/* The refusal line: the ask's slot, with the sentence on one row and its two
-   buttons free to drop to the next on a narrow phone. Amber like the sheet's
-   row, because it is a suggestion rather than a fact. */
-.cr-path-direct-line {
-  flex-wrap: wrap;
-  background: var(--amber-soft, var(--cream-hi));
-}
-
-.cr-path-direct-line .cr-path-ask-text {
-  flex: 1 1 180px;
-}
-
-.cr-path-direct-hide {
-  color: var(--muted);
-}
-
 /* The note on the page the OPEN ON WI-FI button landed on. Same hanging line
    as the ask — it is the same slot under the same badge — and it is the only
    one of the two that ever appears on a directly-served companion. */
 .cr-path-landed-ok {
   flex: 0 0 auto;
-}
-
-/* ---- open on Wi-Fi ----
-   INSIDE the sheet, not hanging off the bar: it is the conclusion drawn from
-   the rows underneath it, so it is stacked, in flow, and full width. Amber
-   because it is the one thing in this sheet that is a suggestion rather than a
-   fact, and the button sits on its own line so a long sentence never squeezes
-   it to two characters on a narrow phone. */
-
-.cr-path-direct {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-  margin: 0 0 12px;
-  padding: 9px 10px;
-  background: var(--amber-soft, var(--cream-hi));
-  border: 2px solid var(--line);
-  box-shadow: 2px 2px 0 var(--line);
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--ink);
-}
-
-.cr-path-direct-why {
-  display: block;
-}
-
-.cr-path-direct-go {
-  flex: 0 0 auto;
-}
-
-/* TRY AGAIN and OPEN ON WI-FI, in the order the sentence names them. They
-   wrap rather than shrink: on a narrow phone two full-width taps beat two
-   half-width ones. */
-.cr-path-direct-acts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}
-
-.cr-path-direct-retry[disabled] {
-  opacity: 0.6;
 }
 
 .cr-path-latency {
@@ -6060,87 +5982,6 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   font-size: 9.5px;
   letter-spacing: 0.06em;
   color: var(--muted);
-}
-
-/* ---- why this path ----
-   Reference material inside the badge sheet: closed by default, monospaced
-   addresses so two of them line up, and one row per candidate. The winning
-   row is the only one with any weight, because the panel's whole job is to
-   answer "why THIS one". */
-
-.cr-path-why {
-  margin: 0 0 12px;
-  font-size: 11.5px;
-  color: var(--muted);
-}
-
-.cr-path-why-head {
-  font-family: var(--font-pixel);
-  font-size: 9.5px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--ink);
-  cursor: pointer;
-}
-
-/* The condition every row below ran under: which browser, and what it says
-   about the local network. Four rows reading "refused before connecting" mean
-   one thing under a denied Chrome permission and something else under a Safari
-   that has no such permission at all. */
-.cr-path-why-env {
-  margin: 6px 0 0;
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.cr-path-why-list {
-  list-style: none;
-  margin: 8px 0 0;
-  padding: 0;
-}
-
-.cr-path-why-row {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 3px 0;
-  border-top: 1px solid var(--line);
-  /* The browser's own words go on their own line under the sentence, rather
-     than squeezing the address and the plane out of a phone-width row. */
-  flex-wrap: wrap;
-}
-
-.cr-path-why-detail {
-  flex: 1 0 100%;
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 10px;
-  opacity: 0.75;
-}
-
-.cr-path-why-name {
-  flex: 0 0 auto;
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 11px;
-  color: var(--ink);
-}
-
-.cr-path-why-what {
-  flex: 1 1 auto;
-}
-
-.cr-path-why-plane {
-  flex: 0 0 auto;
-  font-family: var(--font-pixel);
-  font-size: 8.5px;
-  letter-spacing: 0.08em;
-}
-
-.cr-path-why-chosen {
-  color: var(--ink);
-}
-
-.cr-path-why-chosen .cr-path-why-plane {
-  color: var(--green, #3f8f4f);
 }
 
 .cr-path-switch {

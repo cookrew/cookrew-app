@@ -77,31 +77,3 @@ describe('the bare-address origins', () => {
     expect(settle.indexOf('if (isBareOrigin(probe.origin)) return probe')).toBeLessThan(settle.indexOf('await ask(probe.origin)'))
   })
 })
-
-describe('the row that offers the root', () => {
-  afterEach(() => {
-    delete (globalThis as { window?: unknown }).window
-  })
-  const phone = (): void => {
-    ;(globalThis as unknown as { window: Record<string, unknown> }).window = {
-      COOKREW_MOBILE: 1,
-      location: { origin: 'https://cookrew.dev', search: '' }
-    }
-  }
-
-  it('shows on the relay, on the phone, as a link to the profile', async () => {
-    phone()
-    const { TrustMacRow, TRUST_MAC_COPY } = await import('../src/renderer/src/TrustMacRow')
-    const html = renderToStaticMarkup(<TrustMacRow state="RELAY" />)
-    expect(html).toContain(TRUST_MAC_COPY.lead)
-    expect(html).toContain('/cookrew-ca.mobileconfig')
-    expect(html).toContain('Certificate Trust Settings')
-  })
-
-  it('is absent on a direct plane', async () => {
-    phone()
-    const { TrustMacRow } = await import('../src/renderer/src/TrustMacRow')
-    expect(renderToStaticMarkup(<TrustMacRow state="LAN" />)).toBe('')
-    expect(renderToStaticMarkup(<TrustMacRow state="TAILNET" />)).toBe('')
-  })
-})
