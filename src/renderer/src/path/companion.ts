@@ -272,7 +272,13 @@ const rtcKnock = async (): Promise<RtcRow[]> => {
     connect,
     plane: dataPlane,
     adopt: setDataPlane,
-    fallBack: fallBackToRelay,
+    // A link that dropped (the Mac restarted, the Wi-Fi blinked) is retried
+    // on the next race rather than after the two-minute gap: the gap is for a
+    // Mac that never answered, not for one that just did.
+    fallBack: () => {
+      lastRtcAt = 0
+      fallBackToRelay()
+    },
     setLink: setRtcLink,
     classify: (address) => (isTailnetHostname(address) ? 'tailnet' : isLanHostname(address) ? 'lan' : 'other')
   }).catch(() => null)
