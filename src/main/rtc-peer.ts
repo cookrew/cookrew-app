@@ -17,11 +17,24 @@
  */
 
 import { RTCPeerConnection, type RTCDataChannel } from 'werift'
+import { createCanvasBridge, loopbackDialer, type BridgeDialer } from './canvas-bridge'
+import { RELAY_BASE_HEADER } from './relay-base'
+import { RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER } from './relay-device'
+import { encodeFrame } from '../shared/relay-frame'
 
 export const RTC_PROBE_LABEL = 'cookrew-probe'
+/**
+ * THE DATA PLANE (round P1): the relay's own frame protocol (canvas-bridge.ts,
+ * shared/relay-frame.ts) carried on a data channel instead of the relay's
+ * line. Every request the phone makes becomes a loopback request to this
+ * Mac's companion server, exactly as a relayed one does.
+ */
+export const RTC_BRIDGE_LABEL = 'cookrew-bridge'
+/** Raw bytes per chunk frame: 16 KB is the message size every browser takes. */
+export const RTC_CHUNK = 16 * 1024
 /** A peer nobody finished with is closed after this long. */
 export const RTC_PEER_TTL_MS = 30_000
-/** Answers in flight at once; beyond it the offer is refused. */
+/** Peers open at once; past it the oldest is closed to make room. */
 export const RTC_MAX_PEERS = 4
 /** How long gathering may take before the answer goes out with what it has. */
 export const RTC_GATHER_MS = 2_000
@@ -54,6 +67,8 @@ export interface RtcHostDeps {
   readonly deviceId: () => string | null
   readonly ttlMs?: number
   readonly maxPeers?: number
+  /** Where bridged requests go; the companion server on loopback by default. */
+  readonly dial?: BridgeDialer
 }
 
 export interface RtcHost {
@@ -80,7 +95,60 @@ export const createRtcHost = (deps: RtcHostDeps): RtcHost => {
   const ttl = deps.ttlMs ?? RTC_PEER_TTL_MS
   const max = deps.maxPeers ?? RTC_MAX_PEERS
 
-  const serve = (channel: RTCDataChannel): void => {
+  /** The address this Mac answered on, from the pair ICE settled on. */
+  const viaOf = (pc: RTCPeerConnection): string | null => {
+    const nominated = (pc.iceTransports[0] as unknown as { connection?: { nominated?: { localCandidate?: { host?: string } } } })
+      ?.connection?.nominated?.localCandidate?.host
+    return typeof nominated === 'string' ? nominated : null
+  }
+
+  /**
+   * What the registry would have vouched for on the relay, it cannot here: the
+   * base and the caller's name are its headers, so a phone's copy is dropped.
+   * The pairing token is still the one credential, checked as on any request.
+   */
+  const dial: BridgeDialer = (() => {
+    const inner = deps.dial ?? loopbackDialer(8639)
+    const vouched = new Set([RELAY_BASE_HEADER, RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER])
+    return (input, ...rest) =>
+      inner(
+        {
+          ...input,
+          headers: Object.fromEntries(Object.entries(input.headers).filter(([key]) => !vouched.has(key.toLowerCase())))
+        },
+        ...rest
+      )
+  })()
+
+  /** A bridge on a data channel: frames in, loopback requests out, frames back. */
+  const bridge = (pc: RTCPeerConnection, channel: RTCDataChannel, keep: () => void): void => {
+    const link = createCanvasBridge({
+      send: (line) => {
+        try {
+          channel.send(line)
+        } catch {
+          // The channel went away mid-answer; the reset below cleans up.
+        }
+      },
+      dial,
+      chunk: RTC_CHUNK
+    })
+    const greet = (): void => {
+      keep()
+      // The first frame names the address this link runs on, so the phone's
+      // badge says LAN or TAILNET by fact (Safari's own stats do not say).
+      channel.send(encodeFrame({ t: 'ready', name: viaOf(pc) ?? 'unknown' }))
+    }
+    if (channel.readyState === 'open') greet()
+    else channel.stateChanged.subscribe((state) => state === 'open' && greet())
+    channel.onMessage.subscribe((data) => link.frame(typeof data === 'string' ? data : data.toString('utf8')))
+    channel.stateChanged.subscribe((state) => {
+      if (state === 'closed') link.reset()
+    })
+  }
+
+  const serve = (pc: RTCPeerConnection, keep: () => void) => (channel: RTCDataChannel): void => {
+    if (channel.label === RTC_BRIDGE_LABEL) return bridge(pc, channel, keep)
     if (channel.label !== RTC_PROBE_LABEL) return
     channel.onMessage.subscribe((data) => {
       const text = typeof data === 'string' ? data : data.toString('utf8')
@@ -92,24 +160,41 @@ export const createRtcHost = (deps: RtcHostDeps): RtcHost => {
 
   const answer = async (offerSdp: string): Promise<string | null> => {
     const hosts = deps.hosts()
-    if (hosts.length === 0 || deps.deviceId() === null || peers.size >= max) return null
+    if (hosts.length === 0 || deps.deviceId() === null || max <= 0) return null
+    // Full: the oldest goes. A phone that slept or reloaded never said
+    // goodbye, and its next offer must not be the one refused.
+    if (peers.size >= max) {
+      const oldest = peers.values().next().value
+      if (oldest) {
+        peers.delete(oldest)
+        void oldest.close().catch(() => undefined)
+      }
+    }
     const pc = new RTCPeerConnection({
       iceServers: [],
       // Tunnel interfaces (the tailnet's utun) are skipped by default; the
       // published addresses are named outright, and the SDP is filtered to
       // them below, so a VPN's or a VM's interface is never offered.
       iceAdditionalHostAddresses: [...hosts],
+      // AND CHECKED ONLY FROM THEM. Advertising is not enough: ICE checks from
+      // every interface it gathered, and a pair settled on a VPN's or a proxy's
+      // address would be a link this Mac cannot name as LAN or tailnet.
+      iceFilterCandidatePair: (pair) => hosts.includes(pair.localCandidate.host),
       iceUseIpv6: false
     })
     peers.add(pc)
     const done = (): void => {
+      clearTimeout(expiry)
       if (!peers.delete(pc)) return
       void pc.close().catch(() => undefined)
     }
-    setTimeout(done, ttl).unref?.()
-    pc.onDataChannel.subscribe(serve)
+    // A probe is closed after the TTL; a bridge that opened is kept until
+    // the phone or the network ends it.
+    const expiry = setTimeout(done, ttl)
+    expiry.unref?.()
+    pc.onDataChannel.subscribe(serve(pc, () => clearTimeout(expiry)))
     pc.connectionStateChange.subscribe((state) => {
-      if (state === 'failed' || state === 'closed') done()
+      if (state === 'failed' || state === 'closed' || state === 'disconnected') done()
     })
     try {
       await pc.setRemoteDescription({ type: 'offer', sdp: offerSdp })

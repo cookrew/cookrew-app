@@ -7,14 +7,16 @@ import { createPathReporter, postPathReport, reportedAttempts } from './report'
 import { directNavigationOffer, directNavigationUrl, type DirectOffer } from './direct-offer'
 import { probeReach, type ReachProbe } from './reach-probes'
 import { homeJump } from './home-jump'
-import { probeRtc } from './rtc-probe'
+import { adoptRtcLink } from './rtc-adopt'
+import { connectRtcLink } from './rtc-link'
+import { rtcLink, setRtcLink } from '../rtc-plane'
 import { isLanHostname, isTailnetHostname } from '../../../shared/path-badge'
 import { pageContext } from './page-context'
 import type { PathReport } from '../../../shared/path-report'
 import { landingReport, navigationTiming } from './landing'
 import { setDirectOffer } from '../direct-offer-gate'
 import { offerPathRetry } from '../path-retry-gate'
-import { dataPlane, setDataPlane, subscribeDataPlane, type DataPlane } from '../data-plane'
+import { dataPlane, fallBackToRelay, setDataPlane, subscribeDataPlane, type DataPlane } from '../data-plane'
 import type { LocalNetworkState } from '../local-network'
 import { isLocalOrigin, localNetworkState, requestLocalNetwork } from '../local-network'
 import { localNetworkGate, offerLocalNetwork, setLocalNetwork } from '../local-network-gate'
@@ -318,20 +320,21 @@ let knocking = false
  * report goes first so the Mac keeps the evidence even if the navigation
  * that follows ends this page.
  */
-/** One WebRTC probe per this long at most: each one opens a peer on the Mac. */
+/** One WebRTC attempt per this long at most: each one opens a peer on the Mac. */
 const RTC_EVERY_MS = 2 * 60 * 1000
 let lastRtcAt = 0
 
 /**
- * THE WEBRTC PROBE (path/rtc-probe.ts, round P0), on the relay only and at
- * most every two minutes. Its row rides the path report; nothing moves yet.
+ * THE DIRECT LINK BY WEBRTC (path/rtc-adopt.ts), tried on the relay only and
+ * at most every two minutes. When it opens, the plane is LAN or TAILNET by
+ * the Mac's word and the data moves onto it; its row rides the path report.
  */
 const rtcKnock = async (): Promise<ReachProbe[]> => {
   if (typeof RTCPeerConnection !== 'function' || dataPlane().kind !== 'relay') return []
   const at = Date.now()
   if (at - lastRtcAt < RTC_EVERY_MS) return []
   lastRtcAt = at
-  const probe = await probeRtc({
+  const connect = () => connectRtcLink({
     offer: async (sdp) => {
       const response = await planeFetch(apiPath('/api/rtc/offer'), {
         method: 'POST',
@@ -341,7 +344,14 @@ const rtcKnock = async (): Promise<ReachProbe[]> => {
       if (!response.ok) return null
       const body = (await response.json()) as { sdp?: unknown }
       return typeof body.sdp === 'string' ? body.sdp : null
-    },
+    }
+  })
+  const probe = await adoptRtcLink({
+    connect,
+    plane: dataPlane,
+    adopt: setDataPlane,
+    fallBack: fallBackToRelay,
+    setLink: setRtcLink,
     classify: (address) => (isTailnetHostname(address) ? 'tailnet' : isLanHostname(address) ? 'lan' : 'other')
   }).catch(() => null)
   return probe ? [probe] : []
@@ -443,6 +453,12 @@ const startPlaneSwitch = (): (() => void) => {
     // the smoothing that keeps it steady within a path makes it a lie across
     // one. So a switch drops it and the next request re-establishes it.
     subscribeDataPlane(forgetLatency),
+    // A plane that is no longer the link (the health watchdog fell back, a
+    // name answered) lets the link go, so the Mac's peer is freed.
+    subscribeDataPlane((next) => {
+      if (next.transport !== 'rtc') rtcLink()?.close()
+    }),
+    () => rtcLink()?.close(),
     // The push channel is the first thing to notice a plane that has died, so
     // its state is fed to the health watchdog rather than only to the badge.
     subscribePathLink((state) => {
@@ -541,7 +557,11 @@ const startPlaneSwitch = (): (() => void) => {
             pressed = false
             return may
           }
-        }).finally(raceSettled)
+        })
+          // A Mac with no trusted names never gets a race row to report, so
+          // nothing would knock the link open; it is tried here instead.
+          .then((outcome) => (outcome === 'no-trusted' ? rtcKnock().then(() => undefined) : undefined))
+          .finally(raceSettled)
     })
   ]
   return () => offs.forEach((off) => off())

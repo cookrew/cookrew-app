@@ -1,5 +1,6 @@
 import { apiRequestInit } from './api-base'
 import { planeHealth } from './plane-health'
+import { linkBody, linkHeaders, viaLink } from './rtc-plane'
 
 /**
  * ONE FETCH, ON WHICHEVER PLANE IS CARRYING THE SESSION.
@@ -23,6 +24,27 @@ import { planeHealth } from './plane-health'
  * every time the Mac hiccuped.
  */
 export async function planeFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  // THE DIRECT LINK (rtc-plane.ts): the same URL, carried on the data
+  // channel. A body only a real fetch can send (a FormData upload) takes the
+  // relay, which is still there underneath.
+  const routed = viaLink(url)
+  const body = routed ? await linkBody(init.body) : undefined
+  if (routed && body !== undefined) {
+    try {
+      const response = await routed.link.request({
+        method: (init.method ?? 'GET').toUpperCase(),
+        path: routed.path,
+        headers: linkHeaders(init.headers),
+        body,
+        ...(init.signal ? { signal: init.signal } : {})
+      })
+      planeHealth().note(true)
+      return response
+    } catch (error) {
+      if ((error as Error).name !== 'AbortError') planeHealth().note(false)
+      throw error
+    }
+  }
   try {
     const response = await fetch(url, { ...init, ...apiRequestInit() })
     planeHealth().note(true)

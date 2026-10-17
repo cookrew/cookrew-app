@@ -18,6 +18,7 @@ import type { VersionPinRecord } from '../../shared/version-pin'
 import { apiPath } from './api-base'
 import { planeFetch } from './plane-fetch'
 import { registerPlaneStream } from './plane-streams'
+import { openEventSource } from './rtc-plane'
 import { createRawInputQueue } from './raw-input-queue'
 
 /**
@@ -257,7 +258,7 @@ function sharedEvents(): ReconnectingStream {
         // gets the snapshot, which is how a dropped stream heals (L7).
         const first = !streamOpenedOnce
         streamOpenedOnce = true
-        return new EventSource(tokenParam(apiPath(first ? `/api/events?boot=${bootNonce()}` : '/api/events')))
+        return openEventSource(tokenParam(apiPath(first ? `/api/events?boot=${bootNonce()}` : '/api/events')))
       },
       // The one place the companion learns its link is down. Without this the
       // badge would report the address bar forever, which is a memory rather
@@ -420,7 +421,7 @@ export function createRemoteApi(): CookrewApi {
       // so a foreground return revives the link the way the canvas stream's
       // resync does.
       const stream = attachTerminalStream(
-        { open: () => new EventSource(tokenParam(apiPath(`/api/terminal/${terminalId}/stream`))) },
+        { open: () => openEventSource(tokenParam(apiPath(`/api/terminal/${terminalId}/stream`))) },
         onData,
         onHello
       )

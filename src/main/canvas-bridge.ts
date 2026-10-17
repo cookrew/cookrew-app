@@ -98,6 +98,12 @@ export interface CanvasBridgeDeps {
   readonly dial?: BridgeDialer
   readonly maxOpen?: number
   readonly log?: (message: string) => void
+  /**
+   * Raw bytes per `chunk` frame. The relay's line takes 384 KB; a WebRTC data
+   * channel to Safari does not take a message that large, so the direct link
+   * (rtc-peer.ts) asks for less.
+   */
+  readonly chunk?: number
 }
 
 /**
@@ -167,6 +173,7 @@ interface Exchange {
 export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
   const dial = deps.dial ?? loopbackDialer(8639)
   const maxOpen = deps.maxOpen ?? BRIDGE_MAX_OPEN
+  const chunkBytes = deps.chunk ?? BRIDGE_CHUNK
   const log = deps.log ?? ((): void => undefined)
 
   /** Requests whose body is still arriving. */
@@ -214,11 +221,11 @@ export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
           // ≤ 384 KB of RAW bytes per frame: a single read off a fast local
           // socket can be larger, and one oversized frame is refused by the
           // decoder at the other end rather than truncated.
-          for (let at = 0; at < chunk.byteLength; at += BRIDGE_CHUNK) {
+          for (let at = 0; at < chunk.byteLength; at += chunkBytes) {
             send({
               t: 'chunk',
               id,
-              data: chunk.subarray(at, at + BRIDGE_CHUNK).toString('base64'),
+              data: chunk.subarray(at, at + chunkBytes).toString('base64'),
               ...seal
             })
           }

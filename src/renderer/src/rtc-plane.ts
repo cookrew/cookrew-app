@@ -1,0 +1,66 @@
+/**
+ * WHICH REQUESTS RIDE THE DIRECT LINK (path/rtc-link.ts).
+ *
+ * The WebRTC plane keeps the relay's URLs: the page still composes
+ * `/relay/@user/desktop/<id>/api/...`, and images, links and anything else
+ * that is not a request this module carries keep loading over the relay. The
+ * two openers that matter — the plane-aware fetch and the event streams —
+ * ask here first, and when the plane is the link they strip the base and
+ * send the Mac path over the data channel.
+ */
+
+import { clientBase } from './api-base'
+import { dataPlane } from './data-plane'
+import { RtcEventSource, type RtcLink } from './path/rtc-link'
+
+let current: RtcLink | null = null
+
+export const rtcLink = (): RtcLink | null => (current?.isOpen() ? current : null)
+export const setRtcLink = (link: RtcLink | null): void => {
+  current = link
+}
+
+/** What the registry strips before a relayed request reaches the Mac (v2-canvas-relay.ts). */
+const RELAY_PREFIX = /^\/relay\/@[^/]+\/desktop\/[^/]+(?=\/)/
+
+/**
+ * The Mac path for a page URL, or null when the URL is not one the link
+ * carries: an absolute URL (the registry, a direct origin), or a path outside
+ * this page's relay base (cookrew.dev's own routes).
+ */
+export const linkPath = (url: string, base: string = clientBase()): string | null => {
+  if (!url.startsWith('/') || url.startsWith('//')) return null
+  if (base && !url.startsWith(`${base}/`)) return null
+  return url.replace(RELAY_PREFIX, '')
+}
+
+/** The link to use for this URL right now, with its Mac path; null for the ordinary way. */
+export const viaLink = (url: string): { link: RtcLink; path: string } | null => {
+  if (dataPlane().transport !== 'rtc') return null
+  const link = rtcLink()
+  const path = linkPath(url)
+  return link && path ? { link, path } : null
+}
+
+/** A request body the link can carry, or undefined when only a real fetch can (a FormData upload). */
+export const linkBody = async (body: BodyInit | null | undefined): Promise<Uint8Array | null | undefined> => {
+  if (body === null || body === undefined) return null
+  if (typeof body === 'string') return new TextEncoder().encode(body)
+  if (body instanceof Uint8Array) return body
+  if (body instanceof ArrayBuffer) return new Uint8Array(body)
+  if (typeof Blob !== 'undefined' && body instanceof Blob) return new Uint8Array(await body.arrayBuffer())
+  return undefined
+}
+
+/** Plain header pairs, lowercased, out of whatever a caller passed. */
+export const linkHeaders = (headers: HeadersInit | undefined): Record<string, string> => {
+  const out: Record<string, string> = {}
+  new Headers(headers).forEach((value, key) => void (out[key.toLowerCase()] = value))
+  return out
+}
+
+/** `new EventSource(url)`, or the same stream over the direct link when the plane is the link. */
+export const openEventSource = (url: string): EventSource => {
+  const routed = viaLink(url)
+  return routed ? (new RtcEventSource(routed.link, routed.path) as unknown as EventSource) : new EventSource(url)
+}

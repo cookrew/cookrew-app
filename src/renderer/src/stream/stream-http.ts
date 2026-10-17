@@ -15,6 +15,7 @@
 import { AuthError, authStore, tokenParam } from '../auth-gate'
 import { apiPath } from '../api-base'
 import { planeFetch } from '../plane-fetch'
+import { openEventSource } from '../rtc-plane'
 import type {
   MarkPatch,
   StreamBlockPage,
@@ -169,7 +170,7 @@ function subscribe(terminalId: string, handlers: StreamLiveHandlers): () => void
   const connect = (): void => {
     if (stopped) return
     try {
-      source = new EventSource(tokenParam(liveHref(terminalId, since)))
+      source = openEventSource(tokenParam(liveHref(terminalId, since)))
     } catch (error) {
       handlers.onState('off')
       handlers.onError(error instanceof Error ? error.message : String(error))
