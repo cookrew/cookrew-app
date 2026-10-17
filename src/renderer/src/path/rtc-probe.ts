@@ -60,7 +60,7 @@ export const selectedRemote = (stats: RTCStatsReport): string | null => {
   const selectedId = entries.find((e) => e.type === 'transport' && typeof e.selectedCandidatePairId === 'string')
     ?.selectedCandidatePairId
   const pair =
-    pairs.find((e) => e.id === selectedId) ??
+    (typeof selectedId === 'string' ? pairs.find((e) => e.id === selectedId) : undefined) ??
     pairs.find((e) => e.state === 'succeeded' && e.nominated === true) ??
     pairs.find((e) => e.state === 'succeeded')
   if (!pair) return null
