@@ -122,6 +122,16 @@ export const flattenHeaders = (headers: http.IncomingHttpHeaders): Record<string
 }
 
 /** The default: the companion's own plaintext listener, on loopback. */
+/**
+ * A path as the log may show it: never the query. Event streams carry the
+ * pairing token as `?token=` (EventSource cannot set a header), and a log line
+ * is a file anyone with the disk can read.
+ */
+export const loggedPath = (path: string): string => {
+  const cut = path.indexOf('?')
+  return cut === -1 ? path : `${path.slice(0, cut)}?…`
+}
+
 export const loopbackDialer =
   (port: number, host: string = BRIDGE_HOST): BridgeDialer =>
   (input, onResponse, onError) => {
@@ -238,7 +248,7 @@ export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
         if (ended) return
         // The companion failing is OURS, and it must not take the line with
         // it: one bad request would otherwise drop every other exchange.
-        log(`canvas bridge: ${exchange.method} ${exchange.path} failed: ${error.message}`)
+        log(`canvas bridge: ${exchange.method} ${loggedPath(exchange.path)} failed: ${error.message}`)
         abort(id, 'companion-failed')
       }
     )
@@ -266,7 +276,7 @@ export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
       switch (frame.t) {
         case 'open': {
           if (arriving.size + calls.size >= maxOpen) {
-            log(`canvas bridge: refused ${frame.path}, ${maxOpen} exchanges already open`)
+            log(`canvas bridge: refused ${loggedPath(frame.path)}, ${maxOpen} exchanges already open`)
             send({ t: 'abort', id: frame.id, reason: 'busy' })
             return
           }

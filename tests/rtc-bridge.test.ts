@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import { RTCPeerConnection, type RTCDataChannel } from 'werift'
 import { candidatesOn, createRtcHost, RTC_BRIDGE_LABEL, RTC_CHUNK } from '../src/main/rtc-peer'
-import type { BridgeDialer } from '../src/main/canvas-bridge'
+import { loggedPath, type BridgeDialer } from '../src/main/canvas-bridge'
 import { decodeFrame, encodeFrame, type RelayFrame } from '../src/shared/relay-frame'
 
 interface Dialed {
@@ -135,4 +135,11 @@ describe('the peer cap', () => {
     expect(host.open()).toBe(1)
     host.close()
   }, 20000)
+})
+
+describe('the bridge log', () => {
+  it('never shows a query — streams carry the pairing token there', () => {
+    expect(loggedPath('/api/events?boot=1&token=abcdefabcdefabcdefabcdefabcdefab')).toBe('/api/events?…')
+    expect(loggedPath('/api/board')).toBe('/api/board')
+  })
 })
