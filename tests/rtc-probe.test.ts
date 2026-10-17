@@ -100,3 +100,23 @@ describe('selectedRemote', () => {
     expect(selectedRemote(stats)).toBe('100.68.81.64')
   })
 })
+
+describe('selectedRemote on Safari', () => {
+  it('reads the transport\'s selected pair when no pair is marked nominated', () => {
+    const stats = new Map<string, Record<string, unknown>>([
+      ['T', { id: 'T', type: 'transport', selectedCandidatePairId: 'P2' }],
+      ['P1', { id: 'P1', type: 'candidate-pair', state: 'failed', remoteCandidateId: 'R1' }],
+      ['P2', { id: 'P2', type: 'candidate-pair', state: 'succeeded', remoteCandidateId: 'R2' }],
+      ['R1', { id: 'R1', type: 'remote-candidate', address: '100.68.81.64' }],
+      ['R2', { id: 'R2', type: 'remote-candidate', address: '192.168.2.40' }]
+    ]) as unknown as RTCStatsReport
+    expect(selectedRemote(stats)).toBe('192.168.2.40')
+  })
+  it('falls back to the one pair that succeeded when there is no transport entry', () => {
+    const stats = new Map<string, Record<string, unknown>>([
+      ['P', { id: 'P', type: 'candidate-pair', state: 'succeeded', remoteCandidateId: 'R' }],
+      ['R', { id: 'R', type: 'remote-candidate', address: '192.168.2.40' }]
+    ]) as unknown as RTCStatsReport
+    expect(selectedRemote(stats)).toBe('192.168.2.40')
+  })
+})

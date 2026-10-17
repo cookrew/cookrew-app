@@ -45,17 +45,29 @@ const gathered = (pc: RTCPeerConnection, ms: number): Promise<void> =>
     })
   })
 
-/** The remote address of the pair the browser settled on, from getStats. */
+/**
+ * The remote address of the pair the browser settled on, from getStats.
+ *
+ * Chrome marks that pair `nominated`; Safari does not (the owner's iPhone,
+ * 2026-10-18: a live link and a null address). The standard answer is the
+ * transport's `selectedCandidatePairId`, read first; a nominated pair next;
+ * then any pair that succeeded, which on a probe with one link is the link.
+ */
 export const selectedRemote = (stats: RTCStatsReport): string | null => {
-  let remote: string | null = null
-  stats.forEach((entry: Record<string, unknown>) => {
-    if (remote !== null || entry.type !== 'candidate-pair') return
-    if (entry.state !== 'succeeded' || entry.nominated !== true) return
-    const candidate = stats.get(String(entry.remoteCandidateId)) as Record<string, unknown> | undefined
-    const address = candidate?.address ?? candidate?.ip
-    if (typeof address === 'string') remote = address
-  })
-  return remote
+  const entries: Record<string, unknown>[] = []
+  stats.forEach((entry: Record<string, unknown>) => void entries.push(entry))
+  const pairs = entries.filter((e) => e.type === 'candidate-pair')
+  const selectedId = entries.find((e) => e.type === 'transport' && typeof e.selectedCandidatePairId === 'string')
+    ?.selectedCandidatePairId
+  const pair =
+    pairs.find((e) => e.id === selectedId) ??
+    pairs.find((e) => e.state === 'succeeded' && e.nominated === true) ??
+    pairs.find((e) => e.state === 'succeeded')
+  if (!pair) return null
+  const candidate = entries.find((e) => e.id === pair.remoteCandidateId) ??
+    (stats.get(String(pair.remoteCandidateId)) as Record<string, unknown> | undefined)
+  const address = candidate?.address ?? candidate?.ip
+  return typeof address === 'string' ? address : null
 }
 
 export const probeRtc = async (deps: RtcProbeDeps): Promise<RtcProbe> => {
