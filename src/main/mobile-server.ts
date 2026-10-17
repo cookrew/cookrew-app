@@ -45,9 +45,7 @@ import {
   terminalDeliveryDeps
 } from './ask-delivery'
 import { ASK_HTTP_STATUS, ASK_REMEDY } from '../shared/ask-outcome'
-import { ensureCert, localCaPem, missingHosts, sansOf } from './cert'
-import { CA_PEM_PATH, CA_PROFILE_PATH, CA_PROFILE_TYPE, caProfile } from './ca-profile'
-import { answerSocketHello } from './socket-hello'
+import { ensureCert, missingHosts, sansOf } from './cert'
 import { enrichStateWithGit, handleMobileApi, MobileApiDeps, MobileOps, type ServeOps } from './mobile-api'
 import type { LoopHealthSnapshot } from './loop-health'
 import { holdSocketsOpen, presentedToken, readJson, respondJson } from './mobile-http'
@@ -410,10 +408,6 @@ export function startMobileServer(deps: MobileServerDeps): void {
   }
 }
 
-export const PIXEL_PATH = '/api/pixel'
-/** A 1×1 transparent GIF, 43 bytes. */
-const PIXEL_GIF = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64')
-
 /**
  * ONE WEBSOCKET UPGRADE, FOR BOTH LISTENERS.
  *
@@ -438,9 +432,6 @@ export function handleUpgrade(
   if (isViteHmrUpgrade(request) && proxyViteHmrUpgrade(deps.rendererDevUrl, request, socket, head)) {
     return
   }
-  // The reachability hello (socket-hello.ts): behind the Host gate, before
-  // the pairing gate — it answers nothing a stranger could use.
-  if (answerSocketHello(request, socket)) return
   deps.onUpgrade?.(request, socket)
 }
 
@@ -1314,41 +1305,6 @@ export async function handle(
         '<p>The phone client is the renderer bundle. Run <code>npm run build</code> ' +
         '(or start the dev server) and reload.</p>'
     )
-  }
-
-  // `/api/pixel`, above the pairing gate like `/api/hello`: one transparent
-  // GIF, so a browser that will not carry a fetch to the LAN can still be
-  // asked whether an <img> gets there (path/reach-probes.ts). It says nothing.
-  // THIS MAC'S ROOT, for a phone to trust once (cert.ts, ca-profile.ts).
-  // Public on purpose and above the pairing gate: it is a certificate, not a
-  // credential — the key never leaves ~/.cookrew/certs — and the phone that
-  // needs it is by definition one that cannot reach this Mac directly yet,
-  // so it arrives over plain http on the LAN or through the relay.
-  if (request.method === 'GET' && (url.pathname === CA_PROFILE_PATH || url.pathname === CA_PEM_PATH)) {
-    const pem = localCaPem()
-    if (!pem) {
-      respondJson(response, 404, { error: 'This Mac has no local certificate authority yet' })
-      return
-    }
-    const profile = url.pathname === CA_PROFILE_PATH
-    const body = profile ? Buffer.from(caProfile(pem)) : pem
-    response.writeHead(200, {
-      'content-type': profile ? CA_PROFILE_TYPE : 'application/x-pem-file',
-      'content-disposition': `attachment; filename="${profile ? 'cookrew-ca.mobileconfig' : 'cookrew-ca.pem'}"`,
-      'content-length': body.length,
-      'cache-control': 'no-store'
-    })
-    response.end(body)
-    return
-  }
-  if (request.method === 'GET' && url.pathname === PIXEL_PATH) {
-    response.writeHead(200, {
-      'content-type': 'image/gif',
-      'content-length': PIXEL_GIF.length,
-      'cache-control': 'no-store'
-    })
-    response.end(PIXEL_GIF)
-    return
   }
 
   // `/api/hello`, ABOVE the pairing gate on purpose: it exists for a phone

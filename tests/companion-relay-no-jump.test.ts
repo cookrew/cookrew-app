@@ -27,22 +27,11 @@
 // are untouched and still covered by path-switch.test.ts — this is only about
 // whether the browser wiring is allowed to fire.
 //
-// THERE IS NOW EXACTLY ONE EXCEPTION AND IT IS NOT AN AUTOMATIC ONE. No
-// browser on iOS or iPadOS is ever asked for the Local Network permission —
-// they are all WebKit — so a fetch from cookrew.dev to the Mac can never
-// succeed there and the sheet offers a top-level navigation instead
-// (path/direct-offer.ts, DirectOfferRow.tsx).
-// That is a PRESS. Nothing on a timer, a race, an `online` event or a boot
-// path may navigate, which is what these tests say — so `assign` is watched
-// here beside `replace`, because the exception's method must be under the same
-// gate as the rule's.
-//
-// AND ONE AUTOMATIC EXCEPTION, RULED 2026-10-11 ("come home and it turns LAN by itself, no press"):
-// path/home-jump.ts. It fires only after a race on the platform offer, only
-// when a knock the browser DID carry (path/reach-probes.ts) reached the Mac's
-// LAN name just now, and only through `comeHome` in companion.ts. The stub
-// below refuses every request, so no knock answers and nothing here moves —
-// which is still the rule: an unreachable Mac is never navigated to.
+// NO EXCEPTIONS, as of 2026-10-18. The press (OPEN ON WI-FI) and the
+// automatic jump home both existed because a page on cookrew.dev could not
+// reach the Mac from iOS; the WebRTC link (path/rtc-adopt.ts) does, without
+// leaving the page, so both are gone. `assign` is still watched beside
+// `replace`, so neither comes back by accident.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -189,26 +178,6 @@ describe('the path badge under a relay prefix', () => {
     link.setPathLink('failed')
     expect(link.currentPathBadge().word).toBe('OFFLINE')
     link.resetPathLink()
-  })
-})
-
-describe('an offer on the table navigates nothing — there is no press any more', () => {
-  it('publishing an offer navigates nothing by itself', async () => {
-    const phone = stubPhone('https://cookrew.dev')
-    const { companion } = await servedAt(RELAY_BASE)
-    const gate = await import('../src/renderer/src/direct-offer-gate')
-    const stop = companion.startCompanionPathSwitch()
-    // The state the owner's iPhone is actually in: an offer on the table, a
-    // race that has just finished, and a phone in a pocket.
-    gate.setDirectOffer({
-      origin: `https://192-168-2-40.${DEVICE}.d.cookrew.dev:8643`,
-      kind: 'lan',
-      family: 'Safari',
-      reason: 'blocked'
-    })
-    await settle()
-    expect(phone.replaced()).toEqual([])
-    stop()
   })
 })
 

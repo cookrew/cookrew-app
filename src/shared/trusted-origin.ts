@@ -59,37 +59,6 @@ const isIpLiteral = (host: string): boolean => {
 }
 
 /**
- * Which network a BARE-ADDRESS origin is on — `https://192.168.2.40:8643` —
- * or null when the host is a name or not a LAN / tailnet address.
- *
- * The counterpart of `trustedNetwork` for the addresses on the reach card's
- * `lan` and `tailnet` slots. They load from cookrew.dev only on a phone that
- * trusts this Mac's own root (main/cert.ts), and on that phone they are the
- * path no resolver or proxy can redirect.
- */
-export const bareNetwork = (origin: string): TrustedNetwork | null => {
-  let host: string
-  try {
-    host = new URL(origin).hostname
-  } catch {
-    return null
-  }
-  if (!isIpLiteral(host)) return null
-  const bare = host.replace(/^\[/, '').replace(/]$/, '')
-  if (isTailnetHostname(bare)) return 'tailnet'
-  return isLanHostname(bare) ? 'lan' : null
-}
-
-/** Is this origin a bare address rather than a name? */
-export const isBareOrigin = (origin: string): boolean => {
-  try {
-    return isIpLiteral(new URL(origin).hostname)
-  } catch {
-    return false
-  }
-}
-
-/**
  * Which network a trusted origin is on, or null when it is not a candidate.
  *
  * Null covers three different mistakes on purpose — a bare IP, a name whose

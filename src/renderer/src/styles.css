@@ -5969,13 +5969,6 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   color: var(--muted);
 }
 
-/* The note on the page the OPEN ON WI-FI button landed on. Same hanging line
-   as the ask — it is the same slot under the same badge — and it is the only
-   one of the two that ever appears on a directly-served companion. */
-.cr-path-landed-ok {
-  flex: 0 0 auto;
-}
-
 .cr-path-latency {
   margin: 0 0 12px;
   font-family: var(--font-pixel);

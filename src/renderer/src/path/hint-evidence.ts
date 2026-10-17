@@ -1,5 +1,5 @@
 import type { LocalNetworkState } from '../local-network'
-import type { PathAttempt, PathProbe } from '../path-attempts'
+import type { PathAttempt } from '../path-attempts'
 import { LOCAL_NETWORK_COPY } from '../path-copy'
 
 /**
@@ -43,60 +43,6 @@ export const blockedBothWays = (attempts: readonly PathAttempt[]): boolean =>
   attempts.length > 0 &&
   attempts.every((attempt) => attempt.outcome === 'blocked' && attempt.hint === 'none')
 
-/**
- * EVERY CANDIDATE REFUSED BEFORE IT CONNECTED, whichever variant was tried.
- *
- * The badge's question, not the proxy's: "is the relay what we have because
- * the browser would not try, or because nothing answered?" The sentence it
- * replaces — "your Mac is not on this network" — is a claim about the Mac,
- * and a race whose every row died in the browser measured nothing about the
- * Mac at all (2026-10-04: Safari 26, 4 ms, both ways). EVERY, as above: one
- * timeout is a Mac that may be asleep, and that sentence may then be true.
- */
-export const refusedBeforeConnecting = (attempts: readonly PathAttempt[]): boolean =>
-  attempts.length > 0 && attempts.every((attempt) => attempt.outcome === 'blocked')
-
-export interface WalledInEvidence {
-  readonly attempts: readonly PathAttempt[]
-  readonly probes: readonly PathProbe[]
-  readonly permission: LocalNetworkState
-  readonly ios: boolean
-}
-
-/**
- * THIS APP CANNOT REACH THE LOCAL NETWORK AT ALL — iOS, and every knock died.
- *
- * 2026-10-11, the owner's iPhone, a Home Screen web app of cookrew.dev on the
- * Mac's own Wi-Fi: the fetch timed out, and so did the socket, the image and
- * the opaque request (reach-probes.ts) — 2.5 s each, zero packets at the Mac.
- * iOS decides local network privacy per process (TN3179): Safari's own
- * traffic is exempt, a web app pinned to the Home Screen is not, and it is
- * never asked. The sentence that says "your Mac is not on this network" is
- * then false, and "the browser refused" is not quite it either: nothing was
- * refused, nothing was carried.
- *
- * Only on the platform with no permission to grant, only with rows that never
- * answered, and only once the knocks are back and none got in. A race whose
- * knocks are still out keeps the ordinary sentence for the second they take.
- */
-export const walledIn = (evidence: WalledInEvidence): boolean =>
-  evidence.ios &&
-  evidence.permission === 'unsupported' &&
-  evidence.attempts.length > 0 &&
-  evidence.attempts.every((attempt) => attempt.outcome === 'timeout' || attempt.outcome === 'blocked') &&
-  evidence.probes.length > 0 &&
-  evidence.probes.every((probe) => probe.outcome !== 'answered')
-
-/**
- * EVERY CANDIDATE WAS A NAME THE ZONE IS NOT ANSWERING. The Mac's card said
- * the names were live and the zone said otherwise — a card that went stale
- * between two reads, or a registry that lost it. Nothing about the phone, its
- * browser or its network is the story then, and the badge says so.
- */
-export const everyUnnamed = (attempts: readonly PathAttempt[]): boolean =>
-  attempts.length > 0 && attempts.every((attempt) => attempt.outcome === 'unnamed')
-
-/** What the explainer draws: an ask, the after-refusal line, or nothing. */
 export interface AskRowView {
   readonly kind: 'ask' | 'denied' | 'hidden'
   readonly sentence: string
@@ -126,9 +72,7 @@ const HIDDEN: AskRowView = { kind: 'hidden', sentence: '' }
  *                          Keeping the button would be asking a reader to fix
  *                          something that is not broken.
  *   blocked both ways      still worth asking — this may be a browser nobody
- *                          has asked yet — but the sentence names the proxy,
- *                          and the direct offer puts OPEN ON WI-FI beside it
- *                          (path/direct-offer.ts).
+ *                          has asked yet — but the sentence names the proxy.
  */
 export const localNetworkAskRow = (state: AskRowState): AskRowView => {
   if (state.permission === 'denied') {

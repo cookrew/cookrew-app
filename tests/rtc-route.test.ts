@@ -59,10 +59,12 @@ describe('the rtc row in a path report', () => {
     expect(report?.probes).toEqual([{ kind: 'rtc', name: '192.168.2.40', outcome: 'answered', ms: 420 }])
   })
 
-  it('runs only on the relay, at most every two minutes, beside the knocks', () => {
+  it('runs only on the relay, at most every two minutes, and rides the race report', () => {
     const src = readFileSync('src/renderer/src/path/companion.ts', 'utf8')
     expect(src).toContain("dataPlane().kind !== 'relay'")
     expect(src).toContain('const RTC_EVERY_MS = 2 * 60 * 1000')
-    expect(src).toContain('Promise.all([probeReach(offer.origin), rtcKnock()])')
+    expect(src).toContain('const rtc = await rtcKnock()')
+    // The knocks and the navigation home are gone with the offer that drove them.
+    expect(src).not.toMatch(/probeReach|homeJump|location\.assign/)
   })
 })

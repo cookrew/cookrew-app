@@ -2,26 +2,19 @@ import { apiPath, clientBase } from '../api-base'
 import { cookrew, isRemoteMode } from '../api'
 import { authHeaders, authStore } from '../auth-gate'
 import { PATH_REPORT_ROUTE } from '../../../shared/path-report'
-import { currentBrowser, onAppleMobile } from '../browser-family'
+import { currentBrowser } from '../browser-family'
 import { createPathReporter, postPathReport, reportedAttempts } from './report'
-import { directNavigationOffer, directNavigationUrl, type DirectOffer } from './direct-offer'
-import { probeReach, type ReachProbe } from './reach-probes'
-import { homeJump } from './home-jump'
-import { adoptRtcLink } from './rtc-adopt'
+import { adoptRtcLink, type RtcRow } from './rtc-adopt'
 import { connectRtcLink } from './rtc-link'
 import { rtcLink, setRtcLink } from '../rtc-plane'
 import { isLanHostname, isTailnetHostname } from '../../../shared/path-badge'
 import { pageContext } from './page-context'
 import type { PathReport } from '../../../shared/path-report'
-import { landingReport, navigationTiming } from './landing'
-import { setDirectOffer } from '../direct-offer-gate'
-import { offerPathRetry } from '../path-retry-gate'
 import { dataPlane, fallBackToRelay, setDataPlane, subscribeDataPlane, type DataPlane } from '../data-plane'
 import type { LocalNetworkState } from '../local-network'
 import { isLocalOrigin, localNetworkState, requestLocalNetwork } from '../local-network'
 import { localNetworkGate, offerLocalNetwork, setLocalNetwork } from '../local-network-gate'
-import { recordAttempts, recordProbes, type PathAttempt } from '../path-attempts'
-import { setReachPublish, type ReachPublish } from '../reach-publish'
+import { recordAttempts, type PathAttempt } from '../path-attempts'
 import { nameLive } from './name-oracle'
 import { createPathMemory, watchNetwork, type PathMemory, type PathMemoryDeps } from '../path-memory'
 import { planeFetch } from '../plane-fetch'
@@ -31,9 +24,7 @@ import { currentOriginState, forgetLatency, setProbing, subscribePathLink } from
 import {
   PLANE_PROBE_EVERY_MS,
   planeCandidates,
-  switchPlaneIfBetter,
-  type HelloClaim,
-  type PlaneCandidate
+  switchPlaneIfBetter
 } from './plane-switch'
 import { startPlaneRecheck } from './plane-recheck'
 // The registry call it makes lives beside its own deadline (verify-hello.ts)
@@ -88,32 +79,6 @@ import {
  */
 let lastDeviceId: string | null = null
 
-/**
- * AND WHICH TRUSTED NAMES IT PUBLISHES, for the same reason and at no cost.
- *
- * The direct-navigation offer needs an ORIGIN, and an attempt row deliberately
- * holds only the address it spells — a row must never carry the label, which
- * is a device id on a screen that gets screenshotted. So the ordered candidate
- * list is kept beside the device id, from the same card, and the offer is
- * matched back to it by address (path/direct-offer.ts).
- *
- * Ranked against the relay rather than the live plane, so the list is always
- * the desktop's full set; whether the plane makes an offer sensible is the
- * decision's business, not this cache's.
- */
-let lastTrusted: readonly PlaneCandidate[] = []
-
-/** `publish` off the card, or null where the Mac is too old to send one. */
-const readPublish = (raw: unknown): ReachPublish | null => {
-  if (typeof raw !== 'object' || raw === null) return null
-  const p = raw as { at?: unknown; refused?: unknown; live?: unknown }
-  return {
-    at: typeof p.at === 'number' ? p.at : null,
-    refused: typeof p.refused === 'string' ? p.refused : null,
-    live: p.live === true
-  }
-}
-
 /** The desktop this companion is talking to, as far as the card ever said. */
 export const cardDeviceId = (): string | null => lastDeviceId
 
@@ -141,10 +106,6 @@ const fetchCard = async (): Promise<ReachCardLite | null> => {
       tailnet: body.tailnet ?? null,
       trusted
     }
-    lastTrusted = planeCandidates(card, 'relay')
-    // What the Mac says about the names it did (or did not) list. An older
-    // Mac sends no `publish`; the badge then says nothing new, as before.
-    setReachPublish(readPublish(body.publish))
     return card
   } catch {
     return null
@@ -281,45 +242,6 @@ const tellTheDesktop = createPathReporter({
     })
 })
 
-/**
- * The landed page's one report, on the plane it landed on.
- *
- * Posted directly rather than through `tellTheDesktop`: the reporter's floor
- * and one-at-a-time guards are about races, and a landing is not a race — it
- * happens once, at boot, before any race could.
- */
-/** Where the page remembers its last jump home, across the bounce a failed landing makes. */
-const HOME_JUMP_AT_KEY = 'cr-home-jump-at'
-
-const lastHomeJump = (): number | null => {
-  try {
-    const raw = window.sessionStorage.getItem(HOME_JUMP_AT_KEY)
-    const at = raw === null ? NaN : Number(raw)
-    return Number.isFinite(at) ? at : null
-  } catch {
-    return null
-  }
-}
-
-const rememberHomeJump = (at: number): void => {
-  try {
-    window.sessionStorage.setItem(HOME_JUMP_AT_KEY, String(at))
-  } catch {
-    // No storage is no memory, and the cooldown then rests on the race gap.
-  }
-}
-
-/** One set of knocks per race; a race that lands while one is out reuses nothing. */
-let knocking = false
-
-/**
- * KNOCK THE WAY THE BROWSER ALLOWS, REPORT, AND GO HOME IF IT OPENED.
- *
- * Only when the ordinary switch has given up for good on this browser — the
- * platform offer exists — and never while a previous knock is still out. The
- * report goes first so the Mac keeps the evidence even if the navigation
- * that follows ends this page.
- */
 /** One WebRTC attempt per this long at most: each one opens a peer on the Mac. */
 const RTC_EVERY_MS = 2 * 60 * 1000
 let lastRtcAt = 0
@@ -329,7 +251,7 @@ let lastRtcAt = 0
  * at most every two minutes. When it opens, the plane is LAN or TAILNET by
  * the Mac's word and the data moves onto it; its row rides the path report.
  */
-const rtcKnock = async (): Promise<ReachProbe[]> => {
+const rtcKnock = async (): Promise<RtcRow[]> => {
   if (typeof RTCPeerConnection !== 'function' || dataPlane().kind !== 'relay') return []
   const at = Date.now()
   if (at - lastRtcAt < RTC_EVERY_MS) return []
@@ -357,48 +279,10 @@ const rtcKnock = async (): Promise<ReachProbe[]> => {
   return probe ? [probe] : []
 }
 
-const comeHome = async (offer: DirectOffer | null, report: PathReport): Promise<void> => {
-  if (!offer || offer.reason === 'proxy' || knocking) {
-    const rtc = knocking ? [] : await rtcKnock()
-    await tellTheDesktop(rtc.length > 0 ? { ...report, probes: rtc } : report)
-    return
-  }
-  knocking = true
-  let probes: ReachProbe[] = []
-  try {
-    const [knocks, rtc] = await Promise.all([probeReach(offer.origin), rtcKnock()])
-    probes = [...knocks, ...rtc]
-  } catch {
-    probes = []
-  } finally {
-    knocking = false
-  }
-  recordProbes(probes)
-  await tellTheDesktop({ ...report, probes })
-  const now = Date.now()
-  const to = homeJump({ offer, probes, lastJumpAt: lastHomeJump(), now })
-  if (!to) return
-  const url = directNavigationUrl({ origin: to }, authStore().token())
-  if (!url) return
-  rememberHomeJump(now)
-  window.location.assign(url)
-}
-
-const reportLanding = async (): Promise<void> => {
-  const report = landingReport({
-    timing: navigationTiming(),
-    host: window.location.host,
-    plane: settledPlane(),
-    browser: currentBrowser(),
-    permission: localNetworkGate(),
-    now: Date.now()
-  })
-  if (!report) return
-  await postPathReport(report, {
-    url: apiPath(PATH_REPORT_ROUTE),
-    headers: authHeaders(),
-    fetch: planeFetch
-  }).catch(() => undefined)
+/** The race's report to the Mac, with the WebRTC attempt's row when one ran. */
+const reportRace = async (report: PathReport): Promise<void> => {
+  const rtc = await rtcKnock()
+  await tellTheDesktop(rtc.length > 0 ? { ...report, probes: rtc } : report)
 }
 
 const startPlaneSwitch = (): (() => void) => {
@@ -410,19 +294,6 @@ const startPlaneSwitch = (): (() => void) => {
   // Every other race — the timer, `online`, a tab coming back — must never
   // raise a dialog at a phone nobody is looking at.
   let pressed = false
-  /**
-   * WHO IS WAITING FOR A RACE TO FINISH — the TRY AGAIN presses, and nothing
-   * else. They are resolved rather than counted because a press that arrives
-   * while a race is already in flight must wait for THAT race: the loop's
-   * one-at-a-time guard means `raceNow()` starts nothing in that case, and a
-   * button that stopped saying TRYING… without a result would be lying.
-   */
-  let waitingForRace: Array<() => void> = []
-  const raceSettled = (): void => {
-    const waiting = waitingForRace
-    waitingForRace = []
-    for (const resolve of waiting) resolve()
-  }
   // The link store announces on EVERY change it holds — latency, probing, the
   // desktop's name — and only the transport's own state is evidence about the
   // plane. Without this the latency recorded by each successful request would
@@ -470,19 +341,8 @@ const startPlaneSwitch = (): (() => void) => {
       // far end is still the Mac before the session keeps using it.
       if (reconnected) recheck.now()
     }),
-    // TRY AGAIN on the sheet: the same race, asked for by a person rather than
-    // a timer. No `pressed` — a retry must not spend the one permission
-    // prompt a reader will ever be shown; that is the ALLOW button's job.
-    offerPathRetry(
-      () =>
-        new Promise<void>((resolve) => {
-          waitingForRace.push(resolve)
-          raceNow()
-        })
-    ),
     // THE MAC SAID ITS ADDRESSES MOVED — and said it only once the registry
-    // took the new card, so the names resolve. The same race as TRY AGAIN,
-    // for the same reason and under the same rule: no `pressed`, so a phone
+    // took the new card, so the names resolve. No `pressed`, so a phone
     // nobody is holding is never shown the one permission prompt it gets.
     cookrew().onReachChanged?.(() => raceNow()) ?? ((): void => undefined),
     offerLocalNetwork(async () => {
@@ -497,8 +357,6 @@ const startPlaneSwitch = (): (() => void) => {
       everyMs: PLANE_PROBE_EVERY_MS,
       ready: (run) => void (raceNow = run),
       race: () =>
-        // `finally` rather than `then`: a race that threw still ended, and a
-        // TRY AGAIN press waiting on it must be released either way.
         switchPlaneIfBetter({
           plane: dataPlane,
           card: fetchCard,
@@ -521,28 +379,9 @@ const startPlaneSwitch = (): (() => void) => {
             // stops being testable without one.
             const attempts = rows as readonly PathAttempt[]
             recordAttempts(attempts, settled)
-            // AND ASK WHETHER THIS BROWSER HAS ANY WAY LEFT. On iOS Safari the
-            // rows above can only ever say "timeout" — there is no permission
-            // to grant and no setting to find — so the sheet offers the one
-            // navigation that still works. Every guard is in the pure decision
-            // and nothing here acts on the answer: it is published, drawn as a
-            // button, and taken only by a press (DirectOfferRow.tsx).
-            const offer = directNavigationOffer({
-              base: clientBase(),
-              plane: dataPlane().kind,
-              browser: currentBrowser(),
-              ios: onAppleMobile(),
-              permission: localNetworkGate(),
-              attempts,
-              candidates: lastTrusted,
-              hasToken: (authStore().token() ?? '').length > 0
-            })
-            setDirectOffer(offer)
-            // AND TELL THE MAC — after knocking the one way this browser may
-            // carry, when the fetch could not (reach-probes.ts), so the owner
-            // at the desk reads which knock got through, and so the page can
-            // go home by itself when one did (home-jump.ts).
-            void comeHome(offer, {
+            // AND TELL THE MAC, with the WebRTC attempt beside the rows, so
+            // the owner at the desk reads which way got through.
+            void reportRace({
               at: Date.now(),
               plane: settled,
               permission: localNetworkGate(),
@@ -561,7 +400,6 @@ const startPlaneSwitch = (): (() => void) => {
           // A Mac with no trusted names never gets a race row to report, so
           // nothing would knock the link open; it is tried here instead.
           .then((outcome) => (outcome === 'no-trusted' ? rtcKnock().then(() => undefined) : undefined))
-          .finally(raceSettled)
     })
   ]
   return () => offs.forEach((off) => off())
@@ -577,11 +415,6 @@ export const startCompanionPathSwitch = (): (() => void) => {
   const noop = (): void => undefined
   if (!isRemoteMode()) return noop
   if (clientBase() !== '') return startPlaneSwitch()
-  // A page the relay's button opened tells the Mac how long the trip took and
-  // where the time went (path/landing.ts). Once, straight away, and never a
-  // reason to delay anything else: the report is the whole point of the
-  // button working, and a Mac that refuses it loses nothing.
-  void reportLanding()
   // Already as close as it gets. Nothing on the card can beat this origin.
   if (pathRank(currentOriginState()) >= pathRank('LAN')) return noop
   const store = memory()

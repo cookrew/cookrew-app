@@ -1,10 +1,5 @@
 import { clientBase } from './api-base'
 import { dataPlane } from './data-plane'
-import { localNetworkGate } from './local-network-gate'
-import { pathAttempts } from './path-attempts'
-import { everyUnnamed, refusedBeforeConnecting, walledIn } from './path/hint-evidence'
-import { onAppleMobile } from './browser-family'
-import { reachPublish, unpublishedReason } from './reach-publish'
 import {
   classifyOrigin,
   pathBadgeView,
@@ -171,10 +166,6 @@ const planeState = (): 'LAN' | 'TAILNET' | 'RELAY' => {
   return kind === 'lan' ? 'LAN' : kind === 'tailnet' ? 'TAILNET' : 'RELAY'
 }
 
-/** Why there is no name to race, from the card first and the last race's rows second. */
-const unpublishedOf = (): string | undefined =>
-  unpublishedReason(reachPublish()) ?? (everyUnnamed(pathAttempts().attempts) ? 'unnamed' : undefined)
-
 /** The badge's whole view, from this page's own origin and link state. */
 export const currentPathBadge = (): PathBadgeView =>
   pathBadgeView({
@@ -186,21 +177,6 @@ export const currentPathBadge = (): PathBadgeView =>
     ...(relayed()
       ? {
           plane: planeState(),
-          localNetwork: localNetworkGate(),
-          // The badge's sentence reads the last race, not the address bar: a
-          // race whose every row died in the browser says nothing about where
-          // the Mac is, and the sentence must not either.
-          refusedByBrowser: refusedBeforeConnecting(pathAttempts().attempts),
-          // And whether this app could knock at all (iOS, every knock dead).
-          walledIn: walledIn({
-            attempts: pathAttempts().attempts,
-            probes: pathAttempts().probes,
-            permission: localNetworkGate(),
-            ios: onAppleMobile()
-          }),
-          // And the Mac's own word on whether it has a name to race at all —
-          // or, failing that, the zone's word on every name it did offer.
-          ...(unpublishedOf() !== undefined ? { unpublished: unpublishedOf() } : {})
         }
       : {}),
     ...(state.desktopName ? { desktopName: state.desktopName } : {}),

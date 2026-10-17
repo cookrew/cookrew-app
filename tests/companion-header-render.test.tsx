@@ -160,7 +160,7 @@ describe('the badge sheet', () => {
 
   it('uses the relay sentence, in the owner voice', () => {
     const html = paint({ origin: 'https://cookrew.dev', link: 'live' })
-    expect(html).toContain('Via cookrew.dev relay — your Mac is not on this network.')
+    expect(html).toContain('Via cookrew.dev relay. It goes direct by itself when your Mac can be reached from here.')
   })
 
   it('offers a way to another desktop, once the desktop has said where', () => {

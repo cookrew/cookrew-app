@@ -1,11 +1,8 @@
 import { useEffect, useState } from 'react'
 import { cookrew, isRemoteMode } from './api'
-import { DirectLandedNote } from './DirectLandedNote'
 import { LocalNetworkRow } from './LocalNetworkRow'
-import { subscribeLocalNetwork } from './local-network-gate'
-import { subscribePathAttempts } from './path-attempts'
+import { subscribeDataPlane } from './data-plane'
 import { currentPathBadge, subscribePathLink } from './path-link'
-import { subscribeReachPublish } from './reach-publish'
 import type { PathBadgeView } from '../../shared/path-badge'
 
 /**
@@ -28,17 +25,10 @@ export function PathBadge({ onRefresh }: { onRefresh: () => void }): React.JSX.E
   const [open, setOpen] = useState(false)
 
   useEffect(() => {
-    // The view reads three stores (path-link.ts · currentPathBadge): the
-    // link, the permission, and the last race's rows. A sentence that only
-    // re-read on a link change kept saying "your Mac is not on this network"
-    // after a race had shown the browser refusing every candidate.
+    // The view reads two stores (path-link.ts · currentPathBadge): the link,
+    // and the data plane that names the path.
     const refresh = (): void => setView(currentPathBadge())
-    const offs = [
-      subscribePathLink(refresh),
-      subscribePathAttempts(refresh),
-      subscribeLocalNetwork(refresh),
-      subscribeReachPublish(refresh)
-    ]
+    const offs = [subscribePathLink(refresh), subscribeDataPlane(refresh)]
     return () => offs.forEach((off) => off())
   }, [])
 
@@ -64,9 +54,6 @@ export function PathBadge({ onRefresh }: { onRefresh: () => void }): React.JSX.E
           permission nobody grants. It renders nothing in three of the four
           states, so on most phones the bar is exactly as it was. */}
       <LocalNetworkRow />
-      {/* The other side of the same journey: this one renders on the page the
-          OPEN ON WI-FI button landed on, once, and only there. */}
-      <DirectLandedNote />
       {open && <PathSheet view={view} onClose={() => setOpen(false)} />}
     </>
   )

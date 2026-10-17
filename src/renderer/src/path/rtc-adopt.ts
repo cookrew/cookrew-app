@@ -14,8 +14,11 @@
  */
 
 import type { DataPlane } from '../data-plane'
-import type { ReachProbe } from './reach-probes'
+import type { PathReportProbe } from '../../../shared/path-report'
 import type { RtcLink } from './rtc-link'
+
+/** The attempt's row in the path report. */
+export type RtcRow = PathReportProbe & { readonly kind: 'rtc'; readonly outcome: 'answered' | 'timeout' }
 
 export interface RtcAdoptDeps {
   readonly connect: () => Promise<RtcLink | null>
@@ -28,10 +31,10 @@ export interface RtcAdoptDeps {
 }
 
 /** One attempt: the row for the path report, and the plane moved when it answered. */
-export const adoptRtcLink = async (deps: RtcAdoptDeps): Promise<ReachProbe> => {
+export const adoptRtcLink = async (deps: RtcAdoptDeps): Promise<RtcRow> => {
   const now = deps.now ?? ((): number => performance.now())
   const started = now()
-  const row = (outcome: ReachProbe['outcome'], name: string): ReachProbe => ({
+  const row = (outcome: RtcRow['outcome'], name: string): RtcRow => ({
     kind: 'rtc',
     name,
     outcome,

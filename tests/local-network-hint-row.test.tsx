@@ -65,7 +65,8 @@ describe('the decision behind the row', () => {
     expect(view.kind).toBe('ask')
     expect(view.sentence).toContain(LOCAL_NETWORK_COPY.ask)
     expect(view.sentence).toContain('A system proxy may be hiding the address')
-    expect(view.sentence).toContain('Wi-Fi address directly')
+    // No instruction after it: the button it once pointed at is gone.
+    expect(view.sentence).not.toContain('Wi-Fi address')
   })
 
   it('does not name a proxy when only one of several was refused both ways', () => {

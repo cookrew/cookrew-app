@@ -107,10 +107,9 @@ function sanArguments(hosts: CertHosts): string[] {
  * not 192.168.2.40, while the bare address opens at once (2026-10-16). A bare
  * address has no public certificate and never will. So the Mac signs its own:
  * a root that stays the same for ten years, kept beside the serving key, and
- * a short-lived serving certificate it issues for its addresses. A phone that
- * trusts the root ONCE (the profile at /cookrew-ca.mobileconfig) loads every
- * address this Mac will ever have without a warning, and the companion on
- * cookrew.dev can reach it by IP with no name in the way.
+ * a short-lived serving certificate it issues for its addresses. (The profile
+ * that let a phone trust the root was retired 2026-10-18: the companion now
+ * reaches the Mac over WebRTC, which needs no certificate a phone must trust.)
  *
  * Why two certificates and not one self-signed one: iOS refuses a TLS server
  * certificate valid for more than 825 days or without serverAuth, whoever

@@ -1,6 +1,6 @@
 import { readHelloReply } from '../../../shared/hello-proof'
 import { addressFromTrustedName } from '../../../shared/reach-names'
-import { isBareOrigin, type TrustedNetwork } from '../../../shared/trusted-origin'
+import type { TrustedNetwork } from '../../../shared/trusted-origin'
 import { isLocalOrigin, type AddressSpaceHint } from '../local-network'
 import {
   classifyHelloFailure,
@@ -76,10 +76,6 @@ export interface PlaneAttempt {
 export const attemptName = (origin: string): string => {
   try {
     const url = new URL(origin)
-    // A bare address is its own row, told apart from the name that spells the
-    // same address: the two fail for different reasons (a resolver or proxy
-    // for the name, an untrusted root for the address).
-    if (isBareOrigin(origin)) return `${url.host} by address`
     const address = addressFromTrustedName(url.hostname)
     const host = address ?? url.hostname
     return url.port ? `${host}:${url.port}` : host
@@ -172,8 +168,6 @@ const settleNames = async (probes: readonly Probe[], deps: PlaneSwitchDeps): Pro
   return Promise.all(
     probes.map(async (probe): Promise<Probe> => {
       if (probe.kind !== 'failed' || !ASKABLE.has(probe.failure.kind)) return probe
-      // The zone answers for names; a bare address was never in it.
-      if (isBareOrigin(probe.origin)) return probe
       const verdict = await ask(probe.origin).catch((): 'unknown' => 'unknown')
       return { ...probe, verdict }
     })

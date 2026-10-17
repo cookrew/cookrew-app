@@ -13,7 +13,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { LOCAL_NETWORK_COPY } from '../src/renderer/src/path-copy'
-import { pathBadgeView } from '../src/shared/path-badge'
 
 afterEach(() => vi.resetModules())
 
@@ -56,31 +55,5 @@ describe('the explainer', () => {
     gate.resetLocalNetworkGate()
     gate.setLocalNetwork('prompt')
     expect(renderToStaticMarkup(<LocalNetworkRow />)).toBe('')
-  })
-})
-
-describe('the badge after a refusal', () => {
-  const relayed = { origin: 'https://cookrew.dev', link: 'live' as const, relayed: true }
-
-  it('names the refusal instead of blaming the network', () => {
-    const view = pathBadgeView({ ...relayed, plane: 'RELAY', localNetwork: 'denied' })
-    expect(view.state).toBe('RELAY')
-    expect(view.sentence).toBe(LOCAL_NETWORK_COPY.denied)
-    expect(view.sentence).not.toContain('not on this network')
-  })
-
-  it('leaves the ordinary relay sentence alone in every other state', () => {
-    for (const localNetwork of ['granted', 'prompt', 'unsupported'] as const) {
-      const view = pathBadgeView({ ...relayed, plane: 'RELAY', localNetwork })
-      expect(view.sentence).toContain('your Mac is not on this network')
-    }
-    expect(pathBadgeView({ ...relayed, plane: 'RELAY' }).sentence).toContain('not on this network')
-  })
-
-  it('does not touch a badge that is already on a direct plane', () => {
-    // A refusal recorded on one network is stale the moment the phone moves;
-    // if the plane is LAN the plane is the fact and the permission is not.
-    const view = pathBadgeView({ ...relayed, plane: 'LAN', localNetwork: 'denied' })
-    expect(view.sentence).toBe('Direct over this Wi-Fi.')
   })
 })

@@ -35,7 +35,6 @@ const LAN2 = `https://10-0-0-9.${DEVICE}.d.cookrew.dev:8643`
 const TAILNET = `https://100-68-81-64.${DEVICE}.d.cookrew.dev:8643`
 const TAILNET6 = `https://fd7a-115c-a1e0-ab12--1.${DEVICE}.d.cookrew.dev:8643`
 const BARE_LAN = 'https://192.168.1.24:8643'
-const BARE_TAILNET = 'https://100.68.81.64:8643'
 
 const RELAY: DataPlane = { origin: '', kind: 'relay' }
 const NOW = 1_800_000_000_000
@@ -43,7 +42,7 @@ const NOW = 1_800_000_000_000
 const card = (over: Partial<ReachCardLite> = {}): ReachCardLite => ({
   deviceId: DEVICE,
   lan: [{ url: BARE_LAN }],
-  tailnet: { url: BARE_TAILNET },
+  tailnet: { url: 'https://100.68.81.64:8643' },
   trusted: [LAN, TAILNET],
   ...over
 })
@@ -131,29 +130,18 @@ describe('reading a network off a trusted name', () => {
 })
 
 describe('which origins are raced', () => {
-  it('is each trusted name, then the bare address beside it — the path no resolver or proxy can redirect', () => {
-    // 2026-10-16: on the owner's Wi-Fi the names never connected while the
-    // bare address opened at once. A phone that trusts this Mac's own root
-    // (main/cert.ts) loads the bare address from cookrew.dev; one that does
-    // not fails its handshake in milliseconds, in parallel with the name.
+  it('is card.trusted and nothing else — lan[] is for the navigating switch', () => {
     expect(planeCandidates(card(), 'relay')).toEqual([
       { origin: LAN, kind: 'lan' },
-      { origin: BARE_LAN, kind: 'lan' },
-      { origin: TAILNET, kind: 'tailnet' },
-      { origin: BARE_TAILNET, kind: 'tailnet' }
+      { origin: TAILNET, kind: 'tailnet' }
     ])
-  })
-
-  it('offers no bare address that is not a LAN or tailnet address', () => {
-    const odd = card({ lan: [{ url: 'https://8.8.8.8:8643' }, { url: 'https://example.com:8643' }], tailnet: null })
-    expect(planeCandidates(odd, 'relay').map((c) => c.origin)).toEqual([LAN, TAILNET])
+    // The bare-IP addresses are still on the card and are still ignored here.
+    expect(planeCandidates(card(), 'relay').map((c) => c.origin)).not.toContain(BARE_LAN)
   })
 
   it('offers nothing at all when the Mac holds no certificates yet', () => {
     // No account, no internet, issuance not done. An empty list means "no
     // live switch today", never a fall back to an address a browser refuses.
-    // The bare addresses go with the names: a Mac holding no names has no
-    // account the registry could verify a hello against.
     expect(planeCandidates(card({ trusted: [] }), 'relay')).toEqual([])
     expect(planeCandidates(card({ trusted: undefined }), 'relay')).toEqual([])
   })
@@ -163,26 +151,20 @@ describe('which origins are raced', () => {
     expect(planeCandidates(shuffled, 'relay').map((c) => c.kind)).toEqual([
       'lan',
       'lan',
-      'lan',
-      'tailnet',
       'tailnet'
     ])
   })
 
   it('offers only what beats the plane the phone is already on', () => {
-    expect(planeCandidates(card(), 'tailnet')).toEqual([
-      { origin: LAN, kind: 'lan' },
-      { origin: BARE_LAN, kind: 'lan' }
-    ])
+    expect(planeCandidates(card(), 'tailnet')).toEqual([{ origin: LAN, kind: 'lan' }])
     expect(planeCandidates(card(), 'lan')).toEqual([])
     expect(planeRank('lan')).toBeGreaterThan(planeRank('tailnet'))
     expect(planeRank('tailnet')).toBeGreaterThan(planeRank('relay'))
   })
 
   it('drops a duplicate rather than probing the same origin twice', () => {
-    expect(planeCandidates(card({ trusted: [LAN, `${LAN}/`], lan: [{ url: BARE_LAN }, { url: `${BARE_LAN}/` }], tailnet: null }), 'relay')).toEqual([
-      { origin: LAN, kind: 'lan' },
-      { origin: BARE_LAN, kind: 'lan' }
+    expect(planeCandidates(card({ trusted: [LAN, `${LAN}/`] }), 'relay')).toEqual([
+      { origin: LAN, kind: 'lan' }
     ])
   })
 })
@@ -192,10 +174,8 @@ describe('one race', () => {
     const run = await race()
     expect(run.outcome()).toBe('switched')
     expect(run.adopted()).toEqual({ origin: LAN, kind: 'lan' })
-    // The LAN answered, so the tailnet was never asked. Both spellings of
-    // the LAN address are asked at once; the bare one fails here as it does
-    // on a phone that has not trusted this Mac's root.
-    expect(run.asked()).toEqual([LAN, BARE_LAN])
+    // The LAN answered, so the tailnet was never asked.
+    expect(run.asked()).toEqual([LAN])
     // No `go`, no URL, no token in a query string: the deps have no way to
     // navigate, which is the design and not an omission.
     expect(Object.keys(run)).not.toContain('went')
@@ -216,7 +196,7 @@ describe('one race', () => {
   it('falls through to the tailnet when the LAN name does not answer', async () => {
     const run = await race({ answers: { [TAILNET]: DEVICE } })
     expect(run.outcome()).toBe('switched')
-    expect(run.asked()).toEqual([LAN, BARE_LAN, TAILNET, BARE_TAILNET])
+    expect(run.asked()).toEqual([LAN, TAILNET])
     expect(run.adopted()).toEqual({ origin: TAILNET, kind: 'tailnet' })
   })
 
@@ -230,7 +210,7 @@ describe('one race', () => {
       hello: async (origin, nonce) => ({
         ok: true,
         reply:
-          origin === LAN || origin === BARE_LAN
+          origin === LAN
             ? { v: 2, deviceId: DEVICE, origin, issuedAtMs: NOW, nonce: 'a-nonce-from-yesterday', sig: 'a-signature' }
             : { v: 2, deviceId: DEVICE, origin, issuedAtMs: NOW, nonce, sig: 'a-signature' }
       })
@@ -294,20 +274,5 @@ describe('one race', () => {
 describe('the schedule', () => {
   it('is slower than the navigating switcher, because it is not racing a page load', () => {
     expect(PLANE_PROBE_EVERY_MS).toBe(60_000)
-  })
-})
-
-describe('the bare address on a phone that trusts this Mac', () => {
-  it('wins the LAN when the name never connects — the proxy-app home Wi-Fi of 2026-10-16', async () => {
-    const run = await race({ answers: { [BARE_LAN]: DEVICE, [TAILNET]: DEVICE } })
-    expect(run.outcome()).toBe('switched')
-    expect(run.adopted()).toEqual({ origin: BARE_LAN, kind: 'lan' })
-    // The tailnet was not touched: the LAN tier won.
-    expect(run.asked()).toEqual([LAN, BARE_LAN])
-  })
-
-  it('is still verified by the registry — an address that answers as somebody else is refused', async () => {
-    const run = await race({ answers: { [BARE_LAN]: 'a-different-mac', [TAILNET]: DEVICE } })
-    expect(run.adopted()).toEqual({ origin: TAILNET, kind: 'tailnet' })
   })
 })

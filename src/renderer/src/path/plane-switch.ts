@@ -1,4 +1,4 @@
-import { bareNetwork, trustedNetwork, type TrustedNetwork } from '../../../shared/trusted-origin'
+import { trustedNetwork, type TrustedNetwork } from '../../../shared/trusted-origin'
 import type { DataPlane, DataPlaneKind } from '../data-plane'
 import { isLocalOrigin, type LocalNetworkState } from '../local-network'
 import { attemptName, raceTier, type PlaneAttempt } from './plane-race'
@@ -19,14 +19,10 @@ import type { ReachCardLite } from './switch'
  * PLANE moves and the page stays. Every rule from switch.ts survives, and two
  * are added because the ground is different:
  *
- *   A TRUSTED NAME, AND THE BARE ADDRESS BESIDE IT. The names in
- *   `card.trusted` carry a public certificate. The bare addresses in
- *   `lan`/`tailnet` carry one signed by this Mac's own root (main/cert.ts),
- *   which loads only on a phone that installed that root once — and on that
- *   phone they are the path a resolver or a proxy app cannot redirect, which
- *   is exactly what broke the names on the owner's Wi-Fi (2026-10-16). On a
- *   phone that did not, the bare address fails its TLS handshake in a few
- *   milliseconds, in parallel with the name, and costs nothing.
+ *   ONLY A TRUSTED NAME. The candidates are `card.trusted` and nothing else.
+ *   The bare-IP addresses in `lan`/`tailnet` cannot be opened from a page on
+ *   cookrew.dev — no public CA vouches for them — so racing them would spend a
+ *   phone's battery producing a certificate error the reader never sees.
  *
  *   THE MAC PROVES ITSELF TO THE REGISTRY, NOT TO US. Navigating, the browser
  *   did half the work: it would not have loaded the page at all if the Mac's
@@ -80,21 +76,14 @@ export const planeCandidates = (
   const here = planeRank(current)
   const seen = new Set<string>()
   const candidates: PlaneCandidate[] = []
-  const offer = (origin: unknown, classify: (origin: string) => TrustedNetwork | null): void => {
-    if (typeof origin !== 'string') return
+  for (const origin of card.trusted ?? []) {
+    if (typeof origin !== 'string') continue
     const trimmed = origin.replace(/\/+$/, '')
-    if (seen.has(trimmed)) return
-    const kind = classify(trimmed)
-    if (kind === null || planeRank(kind) <= here) return
+    if (seen.has(trimmed)) continue
+    const kind = trustedNetwork(trimmed)
+    if (kind === null || planeRank(kind) <= here) continue
     seen.add(trimmed)
     candidates.push({ origin: trimmed, kind })
-  }
-  for (const origin of card.trusted ?? []) offer(origin, trustedNetwork)
-  // The bare addresses only beside a name: a Mac with no trusted names has no
-  // account, and a card from it is not one the registry can vouch for.
-  if ((card.trusted ?? []).length > 0) {
-    for (const address of card.lan ?? []) offer(address?.url, bareNetwork)
-    if (card.tailnet) offer(card.tailnet.url, bareNetwork)
   }
   return [
     ...candidates.filter((candidate) => candidate.kind === 'lan'),
