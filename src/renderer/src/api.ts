@@ -437,6 +437,8 @@ export interface CookrewApi {
    * (path/companion.ts). Optional: the demo has no Mac to move.
    */
   onReachChanged?: (cb: () => void) => () => void;
+  /** The build the Mac serves (main/build-id.ts); the companion reloads when it changes. */
+  onBuild?: (cb: (id: string) => void) => () => void;
   /**
    * The sealed slots (R4, shared/secret-slot.ts): a note line `🔒 <name>` is
    * a slot; SEAL puts the value in ~/.cookrew/secrets/ and nothing in the

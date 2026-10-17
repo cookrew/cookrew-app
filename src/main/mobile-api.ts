@@ -222,6 +222,8 @@ export interface MobileApiDeps {
    * write gate above refuses a POST without pairing.
    */
   rtc?: { answer: (offerSdp: string) => Promise<string | null> };
+  /** The build this Mac serves (build-id.ts): sent on every stream, and again when it changes. */
+  build?: { id: () => string; bus: EventEmitter };
   /**
    * Cold-boot wait window for a stream open (acquireViewWhenReady). Omitted in
    * production (defaults ~2s in 50ms steps); tests shrink it for determinism.
@@ -1602,6 +1604,13 @@ export async function handleMobileApi(
     // kilobyte, and the switcher's source of truth (perf lane L7).
     if (!spendBootNonce(url.searchParams.get("boot"))) send("workspace", scopedState());
     send("workspaces", ops.listWorkspaces());
+    // WHICH BUILD THIS IS: the page reloads itself when it changes (build-watch.ts).
+    if (deps.build) {
+      send("build", { id: deps.build.id() });
+      const onBuild = (id: string): void => send("build", { id });
+      deps.build.bus.on("build", onBuild);
+      request.on("close", () => deps.build?.bus.removeListener("build", onBuild));
+    }
     // Sous's zoom / zoom-back, so the phone and the TV follow the owner's
     // voice. A scoped stream only hears about its own canvas.
     const onUi = (event: UiCommandEvent): void => {

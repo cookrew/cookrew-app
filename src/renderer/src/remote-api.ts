@@ -471,6 +471,9 @@ export function createRemoteApi(): CookrewApi {
     onEvent: (cb) => subscribe('event', cb),
     onCableSignal: (cb) => subscribe('signal', cb),
     onReachChanged: (cb) => subscribe('reach', () => cb()),
+    onBuild: (cb) => subscribe<{ id?: unknown }>('build', (data) => {
+      if (typeof data.id === 'string') cb(data.id)
+    }),
     // The sealed slots: owner-token routes; the read-only wall token gets 401.
     secretPut: (name, value, served) =>
       req<SecretListing>(apiPath(`/api/secrets/${encodeURIComponent(name)}`), 'PUT', { value, served }),

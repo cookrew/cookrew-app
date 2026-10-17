@@ -97,6 +97,7 @@ import {
 import { createDesktopCert, type DesktopCert } from './desktop-cert'
 import { createSecretsStore } from './secrets-store'
 import { createRtcHost } from './rtc-peer'
+import { BUILD_CHECK_MS, readBuildId } from './build-id'
 import { secretAuditDetails, type SecretAudit } from './secret-cli'
 import { ensureSecretSlotNote } from './secret-note'
 import { createScrubber } from './scrub'
@@ -500,6 +501,19 @@ const tuningBus = new EventEmitter()
  * `reach:changed`; both mean "race the Mac's names now, not in a minute".
  */
 const reachBus = new EventEmitter()
+/**
+ * THE BUILD THIS MAC SERVES (build-id.ts). Read now and every minute; a
+ * change goes to every phone stream, whose page reloads itself when the
+ * owner next switches away from it or back (renderer/build-watch.ts).
+ */
+const buildBus = new EventEmitter()
+let buildId = readBuildId(app.getAppPath(), app.getVersion())
+setInterval(() => {
+  const next = readBuildId(app.getAppPath(), app.getVersion())
+  if (next === buildId) return
+  buildId = next
+  buildBus.emit('build', next)
+}, BUILD_CHECK_MS).unref()
 /**
  * Signals on the cables: "A asked B" and "B answered A", one frame each, to
  * the desktop renderer over IPC and to every phone stream over SSE
@@ -5957,6 +5971,7 @@ app.whenReady().then(() => {
     secrets,
     // The direct link over WebRTC (rtc-peer.ts), answered on the published addresses.
     rtc: rtcHost,
+    build: { id: () => buildId, bus: buildBus },
     // Gates slug routing: off, /<slug>/... is not a route (see mobile-server).
     multiInstance: () => store.isMultiInstance,
     // THE INTERNET GATE (§9 · ④), mounted per workspace session. Reachable only

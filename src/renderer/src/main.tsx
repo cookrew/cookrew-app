@@ -5,7 +5,8 @@ import './styles.css'
 import { authStore } from './auth-gate'
 import { startPhoneBeacon } from './phone-beacon'
 import { startCompanionPathSwitch } from './path/companion'
-import { isRemoteMode } from './api'
+import { cookrew, isRemoteMode } from './api'
+import { watchBuild } from './build-watch'
 import { scheduleWebglWarmup } from './gpu-warmup'
 
 // PAIRING, FIRST — before anything on this page can make a request.
@@ -27,6 +28,20 @@ startPhoneBeacon()
 // nearer network, and moves the session there without asking. A no-op on the
 // desktop and on a phone already on the LAN (see path/companion.ts).
 startCompanionPathSwitch()
+
+// A resident Home Screen app reloads itself when the Mac serves another
+// build, at the next switch away or back — never under a finger (build-watch.ts).
+const onBuild = isRemoteMode() ? cookrew().onBuild : undefined
+if (onBuild) {
+  watchBuild({
+    onBuild,
+    reload: () => window.location.reload(),
+    onVisibility: (cb) => {
+      document.addEventListener('visibilitychange', cb)
+      return () => document.removeEventListener('visibilitychange', cb)
+    }
+  })
+}
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
