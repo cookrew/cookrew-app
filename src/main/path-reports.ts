@@ -90,7 +90,7 @@ const safeText = (raw: unknown, max = PATH_REPORT_TEXT_MAX): string => {
 const safeMs = (raw: unknown): number | null =>
   typeof raw === 'number' && Number.isFinite(raw) ? Math.max(0, Math.round(raw)) : null
 
-const PROBE_KINDS: ReadonlySet<string> = new Set(['socket', 'image', 'opaque'])
+const PROBE_KINDS: ReadonlySet<string> = new Set(['socket', 'image', 'opaque', 'rtc'])
 
 const readProbe = (raw: unknown): PathReportProbe | null => {
   if (!raw || typeof raw !== 'object') return null

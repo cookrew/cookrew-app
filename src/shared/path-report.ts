@@ -87,7 +87,7 @@ export interface PathReportAttempt {
  * carried where a fetch is not; each is reported as what it did.
  */
 export interface PathReportProbe {
-  readonly kind: 'socket' | 'image' | 'opaque'
+  readonly kind: 'socket' | 'image' | 'opaque' | 'rtc'
   readonly name: string
   readonly outcome: string
   readonly ms: number | null

@@ -96,6 +96,7 @@ import {
 } from './mobile-server'
 import { createDesktopCert, type DesktopCert } from './desktop-cert'
 import { createSecretsStore } from './secrets-store'
+import { createRtcHost } from './rtc-peer'
 import { secretAuditDetails, type SecretAudit } from './secret-cli'
 import { ensureSecretSlotNote } from './secret-note'
 import { createScrubber } from './scrub'
@@ -553,6 +554,20 @@ const callConversations = new CallConversationStore()
  * and through nothing else — not an event, not workspace state, not a log.
  */
 const secrets = createSecretsStore()
+/**
+ * THE DIRECT LINK BY WEBRTC (rtc-peer.ts): a phone on the relay offers, this
+ * Mac answers on exactly the addresses it publishes — the LAN first, then
+ * the tailnet — and the link needs no name and no certificate authority.
+ */
+const rtcHost = createRtcHost({
+  hosts: () => {
+    const endpoints = mobileEndpointList()
+    const v4 = (kind: string): string[] =>
+      endpoints.filter((e) => e.kind === kind && /^\d{1,3}(\.\d{1,3}){3}$/.test(e.host)).map((e) => e.host)
+    return [...new Set([...v4('lan'), ...v4('tailscale')])]
+  },
+  deviceId: () => accounts.account()?.deviceId ?? null
+})
 /**
  * THE SCRUB (scrub.ts): every string that leaves main for a pane, a phone,
  * a wall or a ledger. The sealed values are read per call from the store,
@@ -5940,6 +5955,8 @@ app.whenReady().then(() => {
     listPins: (terminalId) => pinsFor(terminalId),
     // The sealed slots, for the phone's note editor: names out, values in.
     secrets,
+    // The direct link over WebRTC (rtc-peer.ts), answered on the published addresses.
+    rtc: rtcHost,
     // Gates slug routing: off, /<slug>/... is not a route (see mobile-server).
     multiInstance: () => store.isMultiInstance,
     // THE INTERNET GATE (§9 · ④), mounted per workspace session. Reachable only

@@ -82,7 +82,7 @@ export interface PathAttempt {
 
 /** A knock that was not a fetch (path/reach-probes.ts), as the last race left it. */
 export interface PathProbe {
-  readonly kind: 'socket' | 'image' | 'opaque'
+  readonly kind: 'socket' | 'image' | 'opaque' | 'rtc'
   readonly name: string
   readonly outcome: 'answered' | 'network' | 'timeout'
   readonly ms: number | null

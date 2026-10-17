@@ -217,6 +217,12 @@ export interface MobileApiDeps {
    */
   secrets?: SecretsStore;
   /**
+   * The Mac's WebRTC end (rtc-peer.ts): answers a phone's offer with
+   * candidates on this Mac's published addresses. Owner token only — the
+   * write gate above refuses a POST without pairing.
+   */
+  rtc?: { answer: (offerSdp: string) => Promise<string | null> };
+  /**
    * Cold-boot wait window for a stream open (acquireViewWhenReady). Omitted in
    * production (defaults ~2s in 50ms steps); tests shrink it for determinism.
    */
@@ -690,6 +696,23 @@ export async function handleMobileApi(
   // THE SEALED SLOTS — owner token only, GET included: the read-only wall
   // token must not even learn the names. The write gate above already
   // refused a read-only PUT/DELETE; this refuses its GET too.
+  // A WEBRTC OFFER, over whatever plane the phone is already on (the relay,
+  // at home): the answer carries this Mac's LAN and tailnet candidates and
+  // the DTLS fingerprint the direct link is checked against (rtc-peer.ts).
+  if (method === "POST" && p === "/api/rtc/offer" && deps.rtc) {
+    const body = await readJson<{ sdp?: unknown }>(request);
+    if (typeof body.sdp !== "string" || body.sdp.length === 0 || body.sdp.length > 64_000) {
+      respondJson(response, 400, { error: "sdp is required" });
+      return true;
+    }
+    try {
+      const sdp = await deps.rtc.answer(body.sdp);
+      respondJson(response, sdp === null ? 503 : 200, sdp === null ? { error: "no direct link offered" } : { sdp });
+    } catch {
+      respondJson(response, 400, { error: "offer not accepted" });
+    }
+    return true;
+  }
   const secretMatch = p.match(/^\/api\/secrets(?:\/([^/]+))?$/);
   if (secretMatch && deps.secrets) {
     // No pairing token configured means no owner to answer to: refused, not open.
