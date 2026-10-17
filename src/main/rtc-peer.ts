@@ -23,7 +23,7 @@ import { dialLoopbackSocket, type LoopbackSocket, type LoopbackSocketDeps } from
 import { createJoiner, socketPathOf, splitMessage } from '../shared/rtc-socket-chunks'
 import { RELAY_BASE_HEADER } from './relay-base'
 import { RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER } from './relay-device'
-import { encodeFrame } from '../shared/relay-frame'
+import { decodeFrame, encodeFrame } from '../shared/relay-frame'
 
 export const RTC_PROBE_LABEL = 'cookrew-probe'
 /**
@@ -42,10 +42,22 @@ export const RTC_CHUNK = 16 * 1024
  */
 export const RTC_SOCKET_HIGH = 4 * 1024 * 1024
 export const RTC_SOCKET_LOW = 1024 * 1024
+/**
+ * WebRTC's `disconnected` is a blip as often as an end — a phone's Wi-Fi
+ * power saving drops a few consent checks and the pair comes back on its own.
+ * The peer is closed only if it has not come back within this.
+ */
+export const RTC_DISCONNECT_GRACE_MS = 15_000
+/**
+ * A link that has said nothing for this long is gone: the phone pings every
+ * 10 s (path/rtc-link.ts), so silence this long is a page that went away
+ * without a goodbye, or a phone asleep with the app in the background.
+ */
+export const RTC_SILENT_MS = 60_000
 /** A peer nobody finished with is closed after this long. */
 export const RTC_PEER_TTL_MS = 30_000
-/** Peers open at once; past it the oldest is closed to make room. */
-export const RTC_MAX_PEERS = 4
+/** Peers open at once; past it the one heard from longest ago is closed to make room. */
+export const RTC_MAX_PEERS = 6
 /** How long gathering may take before the answer goes out with what it has. */
 export const RTC_GATHER_MS = 2_000
 
@@ -81,6 +93,23 @@ export interface RtcHostDeps {
   readonly dial?: BridgeDialer
   /** Where a carried WebSocket is dialled; the companion server on loopback by default. */
   readonly socket?: (deps: LoopbackSocketDeps) => LoopbackSocket
+  /** One line per link opened and closed, with why. */
+  readonly log?: (message: string) => void
+  readonly graceMs?: number
+  readonly silentMs?: number
+}
+
+/** What a channel tells the peer it rides on. */
+interface PeerLife {
+  /** The bridge opened: the peer is a link now, kept past the TTL. */
+  readonly opened: (via: string | null) => void
+  /** The phone said something; it is still there. */
+  readonly seen: () => void
+}
+
+interface PeerState {
+  lastSeen: number
+  readonly end: (reason: string) => void
 }
 
 export interface RtcHost {
@@ -103,9 +132,12 @@ const waitGathered = (pc: RTCPeerConnection, ms: number): Promise<void> =>
   })
 
 export const createRtcHost = (deps: RtcHostDeps): RtcHost => {
-  const peers = new Set<RTCPeerConnection>()
+  const peers = new Map<RTCPeerConnection, PeerState>()
   const ttl = deps.ttlMs ?? RTC_PEER_TTL_MS
   const max = deps.maxPeers ?? RTC_MAX_PEERS
+  const graceMs = deps.graceMs ?? RTC_DISCONNECT_GRACE_MS
+  const silentMs = deps.silentMs ?? RTC_SILENT_MS
+  const log = deps.log ?? ((): void => undefined)
 
   /** The address this Mac answered on, from the pair ICE settled on. */
   const viaOf = (pc: RTCPeerConnection): string | null => {
@@ -133,7 +165,7 @@ export const createRtcHost = (deps: RtcHostDeps): RtcHost => {
   })()
 
   /** A bridge on a data channel: frames in, loopback requests out, frames back. */
-  const bridge = (pc: RTCPeerConnection, channel: RTCDataChannel, keep: () => void): void => {
+  const bridge = (pc: RTCPeerConnection, channel: RTCDataChannel, life: PeerLife): void => {
     const link = createCanvasBridge({
       send: (line) => {
         try {
@@ -146,14 +178,30 @@ export const createRtcHost = (deps: RtcHostDeps): RtcHost => {
       chunk: RTC_CHUNK
     })
     const greet = (): void => {
-      keep()
+      life.opened(viaOf(pc))
       // The first frame names the address this link runs on, so the phone's
       // badge says LAN or TAILNET by fact (Safari's own stats do not say).
       channel.send(encodeFrame({ t: 'ready', name: viaOf(pc) ?? 'unknown' }))
     }
     if (channel.readyState === 'open') greet()
     else channel.stateChanged.subscribe((state) => state === 'open' && greet())
-    channel.onMessage.subscribe((data) => link.frame(typeof data === 'string' ? data : data.toString('utf8')))
+    channel.onMessage.subscribe((data) => {
+      const text = typeof data === 'string' ? data : data.toString('utf8')
+      life.seen()
+      // The phone's heartbeat (path/rtc-link.ts): answered here, never a request.
+      if (text.startsWith('{"t":"ping"')) {
+        const ping = decodeFrame(text)
+        if (ping?.t === 'ping') {
+          try {
+            channel.send(encodeFrame({ t: 'pong', at: ping.at }))
+          } catch {
+            // Going down; the state handler below closes the peer.
+          }
+          return
+        }
+      }
+      link.frame(text)
+    })
     channel.stateChanged.subscribe((state) => {
       if (state === 'closed') link.reset()
     })
@@ -166,7 +214,7 @@ export const createRtcHost = (deps: RtcHostDeps): RtcHost => {
    * sends before the upgrade lands is held, not dropped — its first message
    * goes the moment its own channel opens.
    */
-  const carrySocket = (channel: RTCDataChannel, path: string): void => {
+  const carrySocket = (channel: RTCDataChannel, path: string, life: PeerLife): void => {
     const held: string[] = []
     let open = false
     let paused = false
@@ -191,6 +239,7 @@ export const createRtcHost = (deps: RtcHostDeps): RtcHost => {
       upstream?.resume()
     })
     channel.onMessage.subscribe((data) => {
+      life.seen()
       if (join(typeof data === 'string' ? data : data.toString('utf8'))) return
       upstream?.close()
     })
@@ -216,10 +265,10 @@ export const createRtcHost = (deps: RtcHostDeps): RtcHost => {
     })
   }
 
-  const serve = (pc: RTCPeerConnection, keep: () => void) => (channel: RTCDataChannel): void => {
-    if (channel.label === RTC_BRIDGE_LABEL) return bridge(pc, channel, keep)
+  const serve = (pc: RTCPeerConnection, life: PeerLife) => (channel: RTCDataChannel): void => {
+    if (channel.label === RTC_BRIDGE_LABEL) return bridge(pc, channel, life)
     const socketPath = socketPathOf(channel.label)
-    if (socketPath !== null) return carrySocket(channel, socketPath)
+    if (socketPath !== null) return carrySocket(channel, socketPath, life)
     if (channel.label !== RTC_PROBE_LABEL) return
     channel.onMessage.subscribe((data) => {
       const text = typeof data === 'string' ? data : data.toString('utf8')
@@ -232,14 +281,13 @@ export const createRtcHost = (deps: RtcHostDeps): RtcHost => {
   const answer = async (offerSdp: string): Promise<string | null> => {
     const hosts = deps.hosts()
     if (hosts.length === 0 || deps.deviceId() === null || max <= 0) return null
-    // Full: the oldest goes. A phone that slept or reloaded never said
-    // goodbye, and its next offer must not be the one refused.
+    // Full: the one heard from longest ago goes. A phone that slept or
+    // reloaded never said goodbye, and its next offer must not be the one
+    // refused — nor may it cost a page that is still talking its link.
     if (peers.size >= max) {
-      const oldest = peers.values().next().value
-      if (oldest) {
-        peers.delete(oldest)
-        void oldest.close().catch(() => undefined)
-      }
+      let quietest: PeerState | null = null
+      for (const state of peers.values()) if (!quietest || state.lastSeen < quietest.lastSeen) quietest = state
+      quietest?.end('closed to make room for a new link')
     }
     const pc = new RTCPeerConnection({
       iceServers: [],
@@ -253,19 +301,58 @@ export const createRtcHost = (deps: RtcHostDeps): RtcHost => {
       iceFilterCandidatePair: (pair) => hosts.includes(pair.localCandidate.host),
       iceUseIpv6: false
     })
-    peers.add(pc)
-    const done = (): void => {
+    let expiry: ReturnType<typeof setTimeout> | undefined
+    let grace: ReturnType<typeof setTimeout> | undefined
+    let silence: ReturnType<typeof setTimeout> | undefined
+    let openedAt: number | null = null
+    let via: string | null = null
+    const done = (reason: string): void => {
       clearTimeout(expiry)
+      clearTimeout(grace)
+      clearTimeout(silence)
       if (!peers.delete(pc)) return
       void pc.close().catch(() => undefined)
+      if (openedAt !== null) {
+        log(`rtc: link via ${via ?? 'unknown'} closed (${reason}) after ${Math.round((Date.now() - openedAt) / 1000)} s, ${peers.size} open`)
+      }
     }
+    const state: PeerState = { lastSeen: Date.now(), end: done }
+    peers.set(pc, state)
     // A probe is closed after the TTL; a bridge that opened is kept until
-    // the phone or the network ends it.
-    const expiry = setTimeout(done, ttl)
+    // the phone, the network or the phone's silence ends it.
+    expiry = setTimeout(() => done('never opened'), ttl)
     expiry.unref?.()
-    pc.onDataChannel.subscribe(serve(pc, () => clearTimeout(expiry)))
-    pc.connectionStateChange.subscribe((state) => {
-      if (state === 'failed' || state === 'closed' || state === 'disconnected') done()
+    pc.onDataChannel.subscribe(
+      serve(pc, {
+        opened: (name) => {
+          if (openedAt !== null) return
+          clearTimeout(expiry)
+          openedAt = Date.now()
+          via = name
+          state.lastSeen = openedAt
+          silence = setTimeout(() => done('silent'), silentMs)
+          silence.unref?.()
+          log(`rtc: link via ${via ?? 'unknown'} open, ${peers.size} open`)
+        },
+        seen: () => {
+          state.lastSeen = Date.now()
+          silence?.refresh()
+        }
+      })
+    )
+    pc.connectionStateChange.subscribe((next) => {
+      if (next === 'failed' || next === 'closed') return done(next)
+      if (next === 'disconnected') {
+        if (grace === undefined) {
+          grace = setTimeout(() => done('disconnected'), graceMs)
+          grace.unref?.()
+        }
+        return
+      }
+      if (next === 'connected' && grace !== undefined) {
+        clearTimeout(grace)
+        grace = undefined
+      }
     })
     try {
       await pc.setRemoteDescription({ type: 'offer', sdp: offerSdp })
@@ -275,7 +362,7 @@ export const createRtcHost = (deps: RtcHostDeps): RtcHost => {
       if (!sdp) throw new Error('no local description')
       return candidatesOn(sdp, hosts)
     } catch (error) {
-      done()
+      done('bad offer')
       throw error
     }
   }
@@ -284,10 +371,7 @@ export const createRtcHost = (deps: RtcHostDeps): RtcHost => {
     answer,
     open: () => peers.size,
     close: () => {
-      for (const pc of [...peers]) {
-        peers.delete(pc)
-        void pc.close().catch(() => undefined)
-      }
+      for (const state of [...peers.values()]) state.end('host closed')
     }
   }
 }

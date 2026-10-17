@@ -20,6 +20,21 @@ export const RTC_GATHER_MS = 1_500
 /** From the answer to the Mac's first frame; past this the link is not there. */
 export const RTC_OPEN_MS = 6_000
 /**
+ * THE HEARTBEAT. A ping every RTC_PING_MS, answered by the Mac; a link that
+ * has said nothing for RTC_DEAD_MS is over. The Mac reaps a phone it has not
+ * heard from (main/rtc-peer.ts · RTC_SILENT_MS), and the traffic keeps the
+ * Wi-Fi path warm on a phone that is only watching.
+ */
+export const RTC_PING_MS = 10_000
+export const RTC_DEAD_MS = 30_000
+/**
+ * `disconnected` is a blip as often as an end (Wi-Fi power saving drops a few
+ * consent checks); only one that has not healed in this long closes the link.
+ */
+export const RTC_DISCONNECT_GRACE_MS = 10_000
+/** After the page comes back to the front: the Mac must answer within this. */
+export const RTC_CHECK_MS = 3_000
+/**
  * Raw bytes per body frame going up. A data channel message past the peer's
  * limit throws (Safari's is far below the relay's 1 MiB frame), and 16 KB is
  * the size every browser takes — the Mac sends its chunks at the same size.
@@ -35,6 +50,17 @@ export interface RtcLinkDeps {
   readonly peer?: () => RTCPeerConnection
   readonly gatherMs?: number
   readonly openMs?: number
+  readonly pingMs?: number
+  readonly deadMs?: number
+  readonly graceMs?: number
+  readonly checkMs?: number
+  readonly now?: () => number
+}
+
+/** How a link ended, for the next path report. */
+export interface RtcLinkEnd {
+  readonly reason: string
+  readonly afterMs: number
 }
 
 export interface RtcRequest {
@@ -55,6 +81,14 @@ export interface RtcLink {
   readonly isOpen: () => boolean
   readonly onClose: (cb: () => void) => () => void
   readonly close: () => void
+  /** Why it closed, once it has. */
+  readonly ended: () => RtcLinkEnd | null
+  /**
+   * Ask the Mac to answer within RTC_CHECK_MS, or close. For a page coming
+   * back to the front: a link that died while the phone slept would otherwise
+   * hold every request until the heartbeat noticed, up to RTC_DEAD_MS later.
+   */
+  readonly check: () => void
 }
 
 const toBase64 = (bytes: Uint8Array): string => {
@@ -101,13 +135,33 @@ export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null>
   }
   const exchanges = new Map<string, Exchange>()
   const closers = new Set<() => void>()
+  const now = deps.now ?? ((): number => Date.now())
+  const pingMs = deps.pingMs ?? RTC_PING_MS
+  const deadMs = deps.deadMs ?? RTC_DEAD_MS
   let closed = false
   let next = 0
+  let startedAt = now()
+  let heard = now()
+  /** Messages heard, counted: a check compares counts, which a clock tick cannot blur. */
+  let messages = 0
+  let endedAs: RtcLinkEnd | null = null
+  let beat: ReturnType<typeof setInterval> | null = null
+  let grace: ReturnType<typeof setTimeout> | null = null
+  let checking: ReturnType<typeof setTimeout> | null = null
   const channel = pc.createDataChannel(RTC_BRIDGE_LABEL, { ordered: true })
 
-  const shut = (): void => {
+  const shut = (reason: string): void => {
     if (closed) return
     closed = true
+    endedAs = { reason, afterMs: Math.round(now() - startedAt) }
+    if (beat !== null) clearInterval(beat)
+    if (grace !== null) clearTimeout(grace)
+    if (checking !== null) clearTimeout(checking)
+    // THE PLANE MOVES FIRST, then the requests in flight fail. In the other
+    // order every one of them is a transport failure on a plane that still
+    // names the link, three of them condemn it (plane-health.ts), and a blip
+    // costs a minute's hold on the relay instead of a retry on the next race.
+    for (const cb of [...closers]) cb()
     for (const exchange of exchanges.values()) exchange.fail(new Error('the direct link closed'))
     exchanges.clear()
     try {
@@ -116,7 +170,14 @@ export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null>
     } catch {
       // Already down.
     }
-    for (const cb of [...closers]) cb()
+  }
+
+  const ping = (): void => {
+    try {
+      send({ t: 'ping', at: Date.now() })
+    } catch {
+      // Not open, or going down; the state handlers end the link.
+    }
   }
 
   const send = (frame: RelayFrame): void => {
@@ -130,6 +191,8 @@ export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null>
   const ready = new Promise<string | null>((resolve) => void (via = resolve))
 
   channel.addEventListener('message', (event) => {
+    heard = now()
+    messages += 1
     const frame = decodeFrame(String((event as MessageEvent).data))
     if (!frame) return
     if (frame.t === 'ready') return via(frame.name)
@@ -169,10 +232,19 @@ export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null>
   })
   channel.addEventListener('close', () => {
     via(null)
-    shut()
+    shut('channel closed')
   })
   pc.addEventListener('connectionstatechange', () => {
-    if (pc.connectionState === 'failed' || pc.connectionState === 'closed' || pc.connectionState === 'disconnected') shut()
+    const state = pc.connectionState
+    if (state === 'failed' || state === 'closed') return shut(state)
+    if (state === 'disconnected') {
+      grace ??= setTimeout(() => shut('disconnected'), deps.graceMs ?? RTC_DISCONNECT_GRACE_MS)
+      return
+    }
+    if (state === 'connected' && grace !== null) {
+      clearTimeout(grace)
+      grace = null
+    }
   })
 
   try {
@@ -180,21 +252,33 @@ export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null>
     await gathered(pc, deps.gatherMs ?? RTC_GATHER_MS)
     const answer = await deps.offer(pc.localDescription?.sdp ?? '')
     if (answer === null) {
-      shut()
+      shut('no answer')
       return null
     }
     await pc.setRemoteDescription({ type: 'answer', sdp: answer })
   } catch {
-    shut()
+    shut('no answer')
     return null
   }
   const timer = setTimeout(() => via(null), deps.openMs ?? RTC_OPEN_MS)
   const name = await ready
   clearTimeout(timer)
   if (name === null || closed) {
-    shut()
+    shut('never opened')
     return null
   }
+  startedAt = now()
+  heard = now()
+  let lastTick = now()
+  beat = setInterval(() => {
+    const t = now()
+    // A page the phone suspended (screen off, app in the background) ran no
+    // timers at all; that gap is not the Mac's silence.
+    if (t - lastTick > pingMs * 2) heard = t
+    lastTick = t
+    if (t - heard > deadMs) return shut('silent')
+    ping()
+  }, pingMs)
 
   const request = (input: RtcRequest): Promise<Response> =>
     new Promise<Response>((resolve, reject) => {
@@ -271,7 +355,17 @@ export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null>
       closers.add(cb)
       return () => void closers.delete(cb)
     },
-    close: shut
+    close: () => shut('closed here'),
+    ended: () => endedAs,
+    check: () => {
+      if (closed || checking !== null) return
+      const before = messages
+      ping()
+      checking = setTimeout(() => {
+        checking = null
+        if (messages === before) shut('silent after the page came back')
+      }, deps.checkMs ?? RTC_CHECK_MS)
+    }
   }
 }
 

@@ -245,6 +245,8 @@ const tellTheDesktop = createPathReporter({
 /** One WebRTC attempt per this long at most: each one opens a peer on the Mac. */
 const RTC_EVERY_MS = 2 * 60 * 1000
 let lastRtcAt = 0
+/** How the last adopted link ended, carried by the next report and then dropped. */
+let lastEnd: RtcRow | null = null
 
 /**
  * THE DIRECT LINK BY WEBRTC (path/rtc-adopt.ts), tried on the relay only and
@@ -280,6 +282,7 @@ const rtcKnock = async (): Promise<RtcRow[]> => {
       fallBackToRelay()
     },
     setLink: setRtcLink,
+    ended: (row) => void (lastEnd = row),
     classify: (address) => (isTailnetHostname(address) ? 'tailnet' : isLanHostname(address) ? 'lan' : 'other')
   }).catch(() => null)
   return probe ? [probe] : []
@@ -288,7 +291,12 @@ const rtcKnock = async (): Promise<RtcRow[]> => {
 /** The race's report to the Mac, with the WebRTC attempt's row when one ran. */
 const reportRace = async (report: PathReport): Promise<void> => {
   const rtc = await rtcKnock()
-  await tellTheDesktop(rtc.length > 0 ? { ...report, probes: rtc } : report)
+  const ended = lastEnd ? [lastEnd] : []
+  lastEnd = null
+  const probes = [...ended, ...rtc]
+  // The plane AFTER the attempt: a link that opened makes this LAN, and a
+  // report that still said RELAY would read as a link that never came up.
+  await tellTheDesktop(probes.length > 0 ? { ...report, plane: settledPlane(), probes } : report)
 }
 
 const startPlaneSwitch = (): (() => void) => {
@@ -336,6 +344,11 @@ const startPlaneSwitch = (): (() => void) => {
       if (next.transport !== 'rtc') rtcLink()?.close()
     }),
     () => rtcLink()?.close(),
+    // Back to the front: a link that died while the phone slept is found in
+    // seconds (path/rtc-link.ts · check), not when the heartbeat gets to it.
+    listen('visibilitychange', () => {
+      if (document.visibilityState === 'visible') rtcLink()?.check()
+    }),
     // The push channel is the first thing to notice a plane that has died, so
     // its state is fed to the health watchdog rather than only to the badge.
     subscribePathLink((state) => {

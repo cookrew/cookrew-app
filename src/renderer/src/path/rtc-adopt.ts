@@ -18,7 +18,7 @@ import type { PathReportProbe } from '../../../shared/path-report'
 import type { RtcLink } from './rtc-link'
 
 /** The attempt's row in the path report. */
-export type RtcRow = PathReportProbe & { readonly kind: 'rtc'; readonly outcome: 'answered' | 'timeout' }
+export type RtcRow = PathReportProbe & { readonly kind: 'rtc'; readonly outcome: 'answered' | 'timeout' | 'closed' }
 
 export interface RtcAdoptDeps {
   readonly connect: () => Promise<RtcLink | null>
@@ -27,6 +27,8 @@ export interface RtcAdoptDeps {
   readonly fallBack: () => void
   readonly setLink: (link: RtcLink | null) => void
   readonly classify: (address: string) => 'lan' | 'tailnet' | 'other'
+  /** How an adopted link ended, as a row for the next report: the evidence for a flapping badge. */
+  readonly ended?: (row: RtcRow) => void
   readonly now?: () => number
 }
 
@@ -51,6 +53,8 @@ export const adoptRtcLink = async (deps: RtcAdoptDeps): Promise<RtcRow> => {
   }
   deps.setLink(link)
   link.onClose(() => {
+    const end = link.ended()
+    if (end) deps.ended?.({ kind: 'rtc', name: `${link.via} closed: ${end.reason}`, outcome: 'closed', ms: end.afterMs })
     deps.setLink(null)
     if (deps.plane().transport === 'rtc') deps.fallBack()
   })

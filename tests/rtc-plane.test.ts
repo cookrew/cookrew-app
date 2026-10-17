@@ -27,7 +27,9 @@ const fakeLink = (via = '192.168.2.40'): RtcLink & { readonly fireClose: () => v
       link.closed = true
       closers.forEach((cb) => cb())
     },
-    fireClose: () => link.close()
+    fireClose: () => link.close(),
+    ended: () => (link.closed ? { reason: 'closed here', afterMs: 1000 } : null),
+    check: () => undefined
   }
   return link
 }

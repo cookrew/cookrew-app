@@ -580,7 +580,8 @@ const rtcHost = createRtcHost({
       endpoints.filter((e) => e.kind === kind && /^\d{1,3}(\.\d{1,3}){3}$/.test(e.host)).map((e) => e.host)
     return [...new Set([...v4('lan'), ...v4('tailscale')])]
   },
-  deviceId: () => accounts.account()?.deviceId ?? null
+  deviceId: () => accounts.account()?.deviceId ?? null,
+  log: (message) => console.error(`[cookrew] ${message}`)
 })
 /**
  * THE SCRUB (scrub.ts): every string that leaves main for a pane, a phone,

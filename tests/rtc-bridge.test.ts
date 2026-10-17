@@ -207,3 +207,36 @@ describe('a WebSocket on its own channel', () => {
     server.close()
   }, 30000)
 })
+
+describe('a link the Mac keeps honest', () => {
+  it('answers the heartbeat, logs the link, and reaps it once the phone goes quiet', async () => {
+    const logs: string[] = []
+    const host = createRtcHost({
+      hosts: () => ['127.0.0.1'],
+      deviceId: () => 'mac-1',
+      dial: fakeDial([], 3),
+      silentMs: 1_500,
+      log: (line) => void logs.push(line)
+    })
+    const phone = new RTCPeerConnection({ iceServers: [], iceAdditionalHostAddresses: ['127.0.0.1'], iceUseIpv6: false })
+    const channel = phone.createDataChannel(RTC_BRIDGE_LABEL)
+    const frames: RelayFrame[] = []
+    channel.onMessage.subscribe((data) => {
+      const frame = decodeFrame(String(data))
+      if (frame) frames.push(frame)
+    })
+    await phone.setLocalDescription(await phone.createOffer())
+    await new Promise((r) => setTimeout(r, 300))
+    const answer = await host.answer(phone.localDescription!.sdp)
+    await phone.setRemoteDescription({ type: 'answer', sdp: candidatesOn(answer!, ['127.0.0.1']) })
+    await until(() => frames.some((f) => f.t === 'ready'), 8000)
+    channel.send(encodeFrame({ t: 'ping', at: 42 }))
+    await until(() => frames.some((f) => f.t === 'pong'), 5000)
+    expect(frames.find((f) => f.t === 'pong')).toEqual({ t: 'pong', at: 42 })
+    expect(logs[0]).toMatch(/^rtc: link via 127\.0\.0\.1 open, 1 open$/)
+    await until(() => host.open() === 0, 5000)
+    expect(logs.at(-1)).toMatch(/^rtc: link via 127\.0\.0\.1 closed \(silent\) after \d+ s, 0 open$/)
+    await phone.close()
+    host.close()
+  }, 20000)
+})
