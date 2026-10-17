@@ -143,3 +143,67 @@ describe('the bridge log', () => {
     expect(loggedPath('/api/board')).toBe('/api/board')
   })
 })
+
+describe('a WebSocket on its own channel', () => {
+  it('reaches the companion on loopback with the relay marker, and carries messages of any size both ways', async () => {
+    const http = await import('node:http')
+    const frames = await import('../src/main/ws-frame')
+    const { dialLoopbackSocket } = await import('../src/main/ws-client')
+    const { socketLabel, splitMessage, createJoiner } = await import('../src/shared/rtc-socket-chunks')
+    const seen: { path: string; marker: string | undefined }[] = []
+    const big = 'f'.repeat(300 * 1024)
+    // A companion that speaks as browser-cast does (ws-frame.ts, the server's codec).
+    const server = http.createServer()
+    server.on('upgrade', (req, socket) => {
+      seen.push({ path: req.url ?? '', marker: req.headers['x-cookrew-relay'] as string | undefined })
+      socket.write(
+        'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n' +
+          `Sec-WebSocket-Accept: ${frames.acceptKey(String(req.headers['sec-websocket-key']))}\r\n\r\n`
+      )
+      // The Mac closes its end when the phone goes; a reset there is not a failure.
+      socket.on('error', () => undefined)
+      let inbound = Buffer.alloc(0)
+      socket.on('data', (chunk: Buffer) => {
+        inbound = Buffer.concat([inbound, chunk])
+        for (;;) {
+          const frame = frames.decodeFrame(inbound)
+          if (!frame || frame === frames.OVERSIZED_FRAME) return
+          inbound = Buffer.from(frame.rest)
+          const text = frame.payload.toString('utf8')
+          socket.write(frames.encodeTextFrame(text === 'big' ? big : `echo:${text}`))
+        }
+      })
+    })
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()))
+    const port = (server.address() as { port: number }).port
+    const host = createRtcHost({
+      hosts: () => ['127.0.0.1'],
+      deviceId: () => 'mac-1',
+      socket: (d) => dialLoopbackSocket({ ...d, port })
+    })
+    const phone = new RTCPeerConnection({ iceServers: [], iceAdditionalHostAddresses: ['127.0.0.1'], iceUseIpv6: false })
+    phone.createDataChannel(RTC_BRIDGE_LABEL)
+    await phone.setLocalDescription(await phone.createOffer())
+    await new Promise((r) => setTimeout(r, 300))
+    const answer = await host.answer(phone.localDescription!.sdp)
+    await phone.setRemoteDescription({ type: 'answer', sdp: candidatesOn(answer!, ['127.0.0.1']) })
+    await until(() => phone.connectionState === 'connected', 8000)
+
+    const ws = phone.createDataChannel(socketLabel('/api/browser/b1/stream?token=t'))
+    const got: string[] = []
+    const join = createJoiner((text) => void got.push(text))
+    ws.onMessage.subscribe((data) => void join(String(data)))
+    await until(() => ws.readyState === 'open', 5000)
+    // Sent the moment the channel opens: held on the Mac until the upgrade lands.
+    for (const piece of splitMessage('hello')) ws.send(piece)
+    for (const piece of splitMessage('big')) ws.send(piece)
+    await until(() => got.length === 2, 8000)
+
+    expect(seen).toEqual([{ path: '/api/browser/b1/stream?token=t', marker: '1' }])
+    expect(got[0]).toBe('echo:hello')
+    expect(got[1]).toBe(big)
+    await phone.close()
+    host.close()
+    server.close()
+  }, 30000)
+})

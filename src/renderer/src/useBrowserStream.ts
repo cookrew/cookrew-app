@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { hasNativeWebview, isRemoteMode } from './api'
 import { apiPath } from './api-base'
 import { tokenParam } from './auth-gate'
-import { useDataPlaneOrigin } from './use-data-plane'
+import { useDataPlaneRoute } from './use-data-plane'
+import { openWebSocket } from './rtc-plane'
 import {
   DESKTOP_STREAM_ORIGIN,
   clampViewport,
@@ -12,7 +13,6 @@ import {
   parseStreamMessage,
   streamCanDrive,
   streamInputAllowed,
-  socketUrl,
   streamPath,
   streamSupported,
   streamUrl,
@@ -81,7 +81,7 @@ export function useBrowserStream(
   viewport: ViewportPreference
 ): BrowserStream {
   const client = currentClient()
-  const planeOrigin = useDataPlaneOrigin()
+  const planeRoute = useDataPlaneRoute()
   const viewportReady = measuredViewport(viewport)
   const [status, setStatus] = useState<StreamStatus>('idle')
   const [frameUrl, setFrameUrl] = useState<string | null>(null)
@@ -277,15 +277,15 @@ export function useBrowserStream(
         // server on its stable loopback address. A phone composes through
         // apiPath, which answers the relay prefix or the Mac's own trusted
         // origin depending on where the plane is pointing right now.
-        ws = new WebSocket(
+        ws =
           client === 'desktop'
-            ? streamUrl(DESKTOP_STREAM_ORIGIN, browserId, w, h, desktopToken)
+            ? new WebSocket(streamUrl(DESKTOP_STREAM_ORIGIN, browserId, w, h, desktopToken))
             : // THE TOKEN RIDES THE URL, because `new WebSocket(...)` cannot
               // set a header — the same constraint EventSource has, answered
               // the same way. Without it the socket is an unauthenticated
               // stream, and the desktop now refuses those (browser-cast.ts).
-              socketUrl(window.location.origin, tokenParam(apiPath(streamPath(browserId, w, h, null))))
-        )
+              // On the direct link it rides a data channel (rtc-plane.ts).
+              openWebSocket(tokenParam(apiPath(streamPath(browserId, w, h, null))))
       } catch {
         fail('error')
         return
@@ -388,10 +388,10 @@ export function useBrowserStream(
       }
       if (wsRef.current === ws) wsRef.current = null
     }
-    // planeOrigin is a dependency and not an unused read: a switch onto the
+    // planeRoute is a dependency and not an unused read: a switch onto the
     // LAN has to drop this socket and open the new one, and a socket is the
     // one connection that cannot re-read its own URL (plane-streams.ts).
-  }, [browserId, open, enabled, desktopToken, advance, viewportReady, client, planeOrigin])
+  }, [browserId, open, enabled, desktopToken, advance, viewportReady, client, planeRoute])
 
   // Report the actual browser-frame content box without reconnecting the socket.
   useEffect(() => {

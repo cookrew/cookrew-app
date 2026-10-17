@@ -12,6 +12,7 @@
 import { clientBase } from './api-base'
 import { dataPlane } from './data-plane'
 import { RtcEventSource, type RtcLink } from './path/rtc-link'
+import { socketUrl } from './browser-stream'
 
 let current: RtcLink | null = null
 
@@ -57,6 +58,19 @@ export const linkHeaders = (headers: HeadersInit | undefined): Record<string, st
   const out: Record<string, string> = {}
   new Headers(headers).forEach((value, key) => void (out[key.toLowerCase()] = value))
   return out
+}
+
+/**
+ * `new WebSocket(...)` for a scoped URL, or the same socket on its own data
+ * channel when the plane is the link. The relay carries no WebSocket at all,
+ * so on the link this is the only way the browser card's live view reaches a
+ * phone opened at cookrew.dev.
+ */
+export const openWebSocket = (scopedUrl: string): WebSocket => {
+  const routed = viaLink(scopedUrl)
+  return routed
+    ? (routed.link.openSocket(routed.path) as unknown as WebSocket)
+    : new WebSocket(socketUrl(window.location.origin, scopedUrl))
 }
 
 /** `new EventSource(url)`, or the same stream over the direct link when the plane is the link. */

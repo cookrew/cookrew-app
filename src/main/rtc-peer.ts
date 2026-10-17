@@ -12,12 +12,15 @@
  * that answer — which arrived over the relay's TLS, from this Mac.
  *
  * Probe round (P0): one data channel, `cookrew-probe`, that answers a ping
- * with this Mac's device id. The data plane does not move yet; the result
- * rides the phone's path report so the owner's phone is the test bench.
+ * with this Mac's device id. Since round P1 the link carries the data plane
+ * too: requests and streams on `cookrew-bridge`, and each WebSocket (the
+ * browser card's live view) on a channel of its own.
  */
 
 import { RTCPeerConnection, type RTCDataChannel } from 'werift'
-import { createCanvasBridge, loopbackDialer, type BridgeDialer } from './canvas-bridge'
+import { createCanvasBridge, loopbackDialer, RELAY_MARKER, type BridgeDialer } from './canvas-bridge'
+import { dialLoopbackSocket, type LoopbackSocket, type LoopbackSocketDeps } from './ws-client'
+import { createJoiner, socketPathOf, splitMessage } from '../shared/rtc-socket-chunks'
 import { RELAY_BASE_HEADER } from './relay-base'
 import { RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER } from './relay-device'
 import { encodeFrame } from '../shared/relay-frame'
@@ -32,6 +35,13 @@ export const RTC_PROBE_LABEL = 'cookrew-probe'
 export const RTC_BRIDGE_LABEL = 'cookrew-bridge'
 /** Raw bytes per chunk frame: 16 KB is the message size every browser takes. */
 export const RTC_CHUNK = 16 * 1024
+/**
+ * A socket's channel past this many bytes queued stops reading the companion
+ * until it drains below the low mark — the browser cast then holds the
+ * latest frame instead of piling every one up in this process.
+ */
+export const RTC_SOCKET_HIGH = 4 * 1024 * 1024
+export const RTC_SOCKET_LOW = 1024 * 1024
 /** A peer nobody finished with is closed after this long. */
 export const RTC_PEER_TTL_MS = 30_000
 /** Peers open at once; past it the oldest is closed to make room. */
@@ -69,6 +79,8 @@ export interface RtcHostDeps {
   readonly maxPeers?: number
   /** Where bridged requests go; the companion server on loopback by default. */
   readonly dial?: BridgeDialer
+  /** Where a carried WebSocket is dialled; the companion server on loopback by default. */
+  readonly socket?: (deps: LoopbackSocketDeps) => LoopbackSocket
 }
 
 export interface RtcHost {
@@ -147,8 +159,67 @@ export const createRtcHost = (deps: RtcHostDeps): RtcHost => {
     })
   }
 
+  /**
+   * ONE WEBSOCKET ON ONE CHANNEL (shared/rtc-socket-chunks.ts): the channel's
+   * label names the path, the companion is dialled on loopback with the
+   * relay's marker, and messages cross in pieces both ways. What the phone
+   * sends before the upgrade lands is held, not dropped — its first message
+   * goes the moment its own channel opens.
+   */
+  const carrySocket = (channel: RTCDataChannel, path: string): void => {
+    const held: string[] = []
+    let open = false
+    let paused = false
+    let upstream: LoopbackSocket | null = null
+    const toPhone = (text: string): void => {
+      try {
+        for (const piece of splitMessage(text)) channel.send(piece)
+      } catch {
+        upstream?.close()
+        return
+      }
+      if (!paused && channel.bufferedAmount > RTC_SOCKET_HIGH) {
+        paused = true
+        upstream?.pause()
+      }
+    }
+    const join = createJoiner((text) => (open ? upstream?.send(text) : held.push(text)))
+    channel.bufferedAmountLowThreshold = RTC_SOCKET_LOW
+    channel.bufferedAmountLow.subscribe(() => {
+      if (!paused) return
+      paused = false
+      upstream?.resume()
+    })
+    channel.onMessage.subscribe((data) => {
+      if (join(typeof data === 'string' ? data : data.toString('utf8'))) return
+      upstream?.close()
+    })
+    channel.stateChanged.subscribe((state) => {
+      if (state === 'closed') upstream?.close()
+    })
+    upstream = (deps.socket ?? dialLoopbackSocket)({
+      port: 8639,
+      path,
+      headers: { [RELAY_MARKER]: '1' },
+      onOpen: () => {
+        open = true
+        for (const text of held.splice(0)) upstream?.send(text)
+      },
+      onMessage: toPhone,
+      onClose: () => {
+        try {
+          channel.close()
+        } catch {
+          // Already closed from the phone's side.
+        }
+      }
+    })
+  }
+
   const serve = (pc: RTCPeerConnection, keep: () => void) => (channel: RTCDataChannel): void => {
     if (channel.label === RTC_BRIDGE_LABEL) return bridge(pc, channel, keep)
+    const socketPath = socketPathOf(channel.label)
+    if (socketPath !== null) return carrySocket(channel, socketPath)
     if (channel.label !== RTC_PROBE_LABEL) return
     channel.onMessage.subscribe((data) => {
       const text = typeof data === 'string' ? data : data.toString('utf8')

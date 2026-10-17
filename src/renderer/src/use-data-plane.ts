@@ -23,4 +23,13 @@ export const useDataPlane = (): DataPlane => {
   return plane
 }
 
-export const useDataPlaneOrigin = (): string => useDataPlane().origin
+/**
+ * Where the transport is, as one scalar: the origin, and whether the direct
+ * link carries it. The link keeps the relay's empty origin (rtc-plane.ts), so
+ * an effect keyed on the origin alone would not re-run when the plane moves
+ * onto it — and a socket opened on the relay would stay there.
+ */
+export const useDataPlaneRoute = (): string => {
+  const plane = useDataPlane()
+  return `${plane.transport ?? 'fetch'} ${plane.origin}`
+}

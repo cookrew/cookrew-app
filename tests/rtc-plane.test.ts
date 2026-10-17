@@ -14,6 +14,9 @@ const fakeLink = (via = '192.168.2.40'): RtcLink & { readonly fireClose: () => v
     via,
     closed: false,
     request: () => new Promise<Response>(() => undefined),
+    openSocket: (): never => {
+      throw new Error('not in this test')
+    },
     isOpen: () => !link.closed,
     onClose: (cb: () => void) => {
       closers.push(cb)

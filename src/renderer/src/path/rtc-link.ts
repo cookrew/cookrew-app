@@ -12,6 +12,8 @@
  */
 
 import { decodeFrame, encodeFrame, type RelayFrame } from '../../../shared/relay-frame'
+import { socketLabel } from '../../../shared/rtc-socket-chunks'
+import { RtcWebSocket, type SocketChannel } from './rtc-socket'
 
 export const RTC_BRIDGE_LABEL = 'cookrew-bridge'
 export const RTC_GATHER_MS = 1_500
@@ -48,6 +50,8 @@ export interface RtcLink {
   /** The Mac's address this link runs on, as the Mac named it. */
   readonly via: string
   readonly request: (request: RtcRequest) => Promise<Response>
+  /** A WebSocket at a Mac path (`/api/...`), on a data channel of its own. */
+  readonly openSocket: (path: string) => RtcWebSocket
   readonly isOpen: () => boolean
   readonly onClose: (cb: () => void) => () => void
   readonly close: () => void
@@ -257,6 +261,11 @@ export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null>
   return {
     via: name,
     request,
+    openSocket: (path) =>
+      new RtcWebSocket(() => {
+        if (closed) throw new Error('the direct link is closed')
+        return pc.createDataChannel(socketLabel(path), { ordered: true }) as unknown as SocketChannel
+      }),
     isOpen: () => !closed,
     onClose: (cb) => {
       closers.add(cb)
