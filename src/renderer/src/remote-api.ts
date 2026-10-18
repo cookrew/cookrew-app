@@ -17,6 +17,7 @@ import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 import type { VersionPinRecord } from '../../shared/version-pin'
 import { apiPath } from './api-base'
 import { planeFetch } from './plane-fetch'
+import { planeHealth } from './plane-health'
 import { registerPlaneStream } from './plane-streams'
 import { openEventSource } from './rtc-plane'
 import { createRawInputQueue } from './raw-input-queue'
@@ -265,13 +266,16 @@ function sharedEvents(): ReconnectingStream {
       // The one place the companion learns its link is down. Without this the
       // badge would report the address bar forever, which is a memory rather
       // than a fact the moment the channel dies.
-      onState: setPathLink
+      onState: setPathLink,
+      // A switch whose new plane would not open a stream is evidence against
+      // that plane; the old stream keeps the session meanwhile.
+      onSwitchFailed: () => planeHealth().note(false)
     })
     events = stream
     // A live stream does not re-read its own URL, so a plane switch has to
     // push it. It is never torn down, so the unsubscribe is deliberately
     // dropped rather than stored.
-    registerPlaneStream({ restart: () => stream.restart() })
+    registerPlaneStream({ restart: () => stream.restart(), revive: () => stream.revive() })
   }
   return events
 }
@@ -431,7 +435,7 @@ export function createRemoteApi(): CookrewApi {
         if (document.visibilityState === 'visible') stream.revive()
       }
       document.addEventListener('visibilitychange', onVisible)
-      const unregister = registerPlaneStream({ restart: () => stream.restart() })
+      const unregister = registerPlaneStream({ restart: () => stream.restart(), revive: () => stream.revive() })
       return () => {
         document.removeEventListener('visibilitychange', onVisible)
         unregister()

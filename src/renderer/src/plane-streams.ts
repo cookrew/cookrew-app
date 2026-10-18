@@ -23,6 +23,8 @@ import { subscribeDataPlane } from './data-plane'
 export interface PlaneStream {
   /** Drop the current connection and open a new one at today's URL. */
   restart: () => void
+  /** Reconnect now if the connection is down; a live one is left alone. */
+  revive?: () => void
 }
 
 const streams = new Set<PlaneStream>()
@@ -44,8 +46,31 @@ export const restartPlaneStreams = (): void => {
   }
 }
 
+/**
+ * A REQUEST JUST WORKED, so the network is there: a stream sitting out its
+ * backoff after a drop (a VPN switch reset every connection the phone had)
+ * reconnects now rather than in up to 8 s. Throttled, because a burst of
+ * requests is one piece of evidence, not twenty.
+ */
+const REVIVE_EVERY_MS = 2_000
+let lastRevive = 0
+export const reviveStreams = (now: number = Date.now()): void => {
+  if (now - lastRevive < REVIVE_EVERY_MS) return
+  lastRevive = now
+  for (const stream of streams) {
+    try {
+      stream.revive?.()
+    } catch {
+      // As above: one stream must not strand the others.
+    }
+  }
+}
+
 /** Follow the plane. Called once at boot, from the companion wiring. */
 export const followDataPlane = (): (() => void) => subscribeDataPlane(restartPlaneStreams)
 
 /** Test seam: the registry is a singleton and a test needs a clean one. */
-export const resetPlaneStreams = (): void => streams.clear()
+export const resetPlaneStreams = (): void => {
+  streams.clear()
+  lastRevive = 0
+}

@@ -2,6 +2,7 @@ import { apiRequestInit } from './api-base'
 import { dataPlane, subscribeDataPlane, type DataPlane } from './data-plane'
 import { planeHealth } from './plane-health'
 import { linkBody, linkHeaders, viaLink } from './rtc-plane'
+import { reviveStreams } from './plane-streams'
 
 /**
  * ONE FETCH, ON WHICHEVER PLANE IS CARRYING THE SESSION.
@@ -86,6 +87,7 @@ async function fetchOnPlane(url: string, init: RequestInit): Promise<Response> {
         ...(init.signal ? { signal: init.signal } : {})
       })
       planeHealth().note(true)
+      reviveStreams()
       return response
     } catch (error) {
       if (transportFailed(error)) planeHealth().note(false)
@@ -95,6 +97,7 @@ async function fetchOnPlane(url: string, init: RequestInit): Promise<Response> {
   try {
     const response = await fetch(url, { ...init, ...apiRequestInit() })
     planeHealth().note(true)
+    reviveStreams()
     return response
   } catch (error) {
     if (transportFailed(error)) planeHealth().note(false)

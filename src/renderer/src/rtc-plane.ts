@@ -13,6 +13,7 @@ import { clientBase } from './api-base'
 import { dataPlane } from './data-plane'
 import { RtcEventSource, type RtcLink } from './path/rtc-link'
 import { socketUrl } from './browser-stream'
+import { watchStream } from './stream-watch'
 
 let current: RtcLink | null = null
 
@@ -76,5 +77,9 @@ export const openWebSocket = (scopedUrl: string): WebSocket => {
 /** `new EventSource(url)`, or the same stream over the direct link when the plane is the link. */
 export const openEventSource = (url: string): EventSource => {
   const routed = viaLink(url)
-  return routed ? (new RtcEventSource(routed.link, routed.path) as unknown as EventSource) : new EventSource(url)
+  // Watched either way: a stream on a path that died without a reset looks
+  // open for ever (stream-watch.ts).
+  return routed
+    ? (watchStream(new RtcEventSource(routed.link, routed.path), { native: false }) as unknown as EventSource)
+    : watchStream(new EventSource(url), { native: true })
 }

@@ -43,9 +43,18 @@ export interface ReconnectingStreamDeps {
   cancel?: (handle: unknown) => void
   /** Delay before each successive retry; the last value repeats. */
   backoffMs?: readonly number[]
+  /**
+   * A restart onto a new plane could not open its stream there, while the
+   * old one is still carrying the session. Evidence about the NEW plane
+   * (plane-health.ts counts it), never a reason to show the link as down.
+   */
+  onSwitchFailed?: () => void
 }
 
-const DEFAULT_BACKOFF = [1000, 2000, 5000, 10_000, 15_000] as const
+// Capped at 8 s: a phone that changed networks pays at most that before its
+// stream is back, and a successful request revives a waiting stream at once
+// (plane-streams.ts · reviveStreams).
+const DEFAULT_BACKOFF = [1000, 2000, 4000, 8000, 8000] as const
 
 type Listener = (event: MessageEvent) => void
 
@@ -56,6 +65,9 @@ type Listener = (event: MessageEvent) => void
  */
 export class ReconnectingStream {
   private source: EventStreamLike | null = null
+  /** The stream opening on a new plane while the old one still carries the session. */
+  private pending: EventStreamLike | null = null
+  private pendingRetry = 0
   private readonly listeners = new Map<string, Set<Listener>>()
   private readonly onError: Listener
   private readonly onOpen: Listener
@@ -129,13 +141,75 @@ export class ReconnectingStream {
   restart(): void {
     if (this.closed) return
     this.retry = 0
-    this.connect()
+    // MAKE BEFORE BREAK. A live stream keeps carrying the session until the
+    // new one has opened; tearing it down first left a phone switching onto
+    // a slow tailnet with no stream at all for as long as the handshake took
+    // — and with none at all when the new path did not open.
+    if (!this.alive || this.listeners.size === 0) return this.connect()
+    this.openPending()
+  }
+
+  private dropPending(): void {
+    const pending = this.pending
+    if (!pending) return
+    this.pending = null
+    pending.removeEventListener('open', this.onPendingOpen)
+    pending.removeEventListener('error', this.onPendingError)
+    pending.close()
+  }
+
+  private openPending(): void {
+    this.dropPending()
+    if (this.timer !== null) {
+      this.cancel(this.timer)
+      this.timer = null
+    }
+    const pending = this.deps.open()
+    this.pending = pending
+    pending.addEventListener('open', this.onPendingOpen)
+    pending.addEventListener('error', this.onPendingError)
+  }
+
+  /** The new stream opened: it takes over, and the old one is closed. */
+  private readonly onPendingOpen = (): void => {
+    const next = this.pending
+    if (!next) return
+    this.pending = null
+    next.removeEventListener('open', this.onPendingOpen)
+    next.removeEventListener('error', this.onPendingError)
+    this.detach()
+    this.source?.close()
+    this.source = next
+    next.addEventListener('error', this.onError)
+    next.addEventListener('open', this.onOpen)
+    for (const [type, set] of this.listeners) {
+      for (const listener of set) next.addEventListener(type, listener)
+    }
+    this.retry = 0
+    this.pendingRetry = 0
+    this.deps.onState?.('live')
+  }
+
+  /** The new plane would not open: keep the old stream, say so, try again. */
+  private readonly onPendingError = (): void => {
+    const pending = this.pending
+    if (!pending || pending.readyState !== STREAM_CLOSED) return
+    this.dropPending()
+    this.deps.onSwitchFailed?.()
+    if (!this.alive) return this.connect()
+    const wait = this.backoff[Math.min(this.pendingRetry, this.backoff.length - 1)]
+    this.pendingRetry += 1
+    this.timer = this.schedule(() => {
+      this.timer = null
+      if (!this.closed) this.restart()
+    }, wait)
   }
 
   close(): void {
     this.closed = true
     if (this.timer !== null) this.cancel(this.timer)
     this.timer = null
+    this.dropPending()
     this.detach()
     this.source?.close()
     this.source = null
@@ -150,6 +224,7 @@ export class ReconnectingStream {
       this.cancel(this.timer)
       this.timer = null
     }
+    this.dropPending()
     this.detach()
     this.source?.close()
     const source = this.deps.open()

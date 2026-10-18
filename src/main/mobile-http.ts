@@ -190,8 +190,17 @@ const SNAPSHOT_EVENTS = new Set(['board', 'workspace', 'workspaces', 'route'])
 /**
  * Idle keepalive. Long enough to be nearly free, short enough to beat the
  * intermediaries that drop a silent connection — iOS is the aggressive one.
+ *
+ * AND A PULSE THE PAGE CAN SEE. It used to be a comment (`:hb`), which keeps a
+ * connection warm but which EventSource never hands to the page — so a
+ * stream whose path died without a reset (Tailscale going down under it, a
+ * phone changing networks) looked open for ever and the transcript simply
+ * stopped. As a named event (`hb`) the phone can time it: a stream silent for
+ * several beats is dead, whatever its readyState says (renderer
+ * stream-watch.ts). Pages that do not listen for `hb` never see it.
  */
-const SSE_HEARTBEAT_MS = 25_000
+export const SSE_HEARTBEAT_MS = 10_000
+export const SSE_HEARTBEAT_FRAME = 'event: hb\ndata: 1\n\n'
 
 export function startSse(response: http.ServerResponse): SseSend {
   const compressed = acceptsGzip(response.req?.headers['accept-encoding'])
@@ -233,7 +242,7 @@ export function startSse(response: http.ServerResponse): SseSend {
   // frozen until EventSource noticed, reconnected, and died again 25 s later.
   //
   // A call site cannot make that mistake if it never touches the response.
-  const heartbeat = setInterval(() => write(':hb\n\n'), SSE_HEARTBEAT_MS)
+  const heartbeat = setInterval(() => write(SSE_HEARTBEAT_FRAME), SSE_HEARTBEAT_MS)
   heartbeat.unref()
   response.on('close', () => clearInterval(heartbeat))
 

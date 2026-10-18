@@ -16,6 +16,7 @@ import { AuthError, authStore, tokenParam } from '../auth-gate'
 import { apiPath } from '../api-base'
 import { planeFetch } from '../plane-fetch'
 import { openEventSource } from '../rtc-plane'
+import { registerPlaneStream } from '../plane-streams'
 import type {
   MarkPatch,
   StreamBlockPage,
@@ -214,9 +215,30 @@ function subscribe(terminalId: string, handlers: StreamLiveHandlers): () => void
   }
 
   connect()
+  // THE TRANSCRIPT FOLLOWS THE PLANE, like the canvas stream. It did not: a
+  // phone that fell back from the tailnet kept this one stream on the dead
+  // path, where it looked open and said nothing, and the transcript froze
+  // while everything else had moved on. `since` makes the reopen cost only
+  // the delta.
+  const reopen = (): void => {
+    if (stopped) return
+    if (retry !== null) clearTimeout(retry)
+    retry = null
+    source?.close()
+    source = null
+    connect()
+  }
+  const unregister = registerPlaneStream({
+    restart: reopen,
+    // Waiting out the retry after a drop while a request just got through.
+    revive: () => {
+      if (retry !== null) reopen()
+    }
+  })
   return () => {
     if (stopped) return
     stopped = true
+    unregister()
     if (retry !== null) clearTimeout(retry)
     source?.close()
     handlers.onState('off')
