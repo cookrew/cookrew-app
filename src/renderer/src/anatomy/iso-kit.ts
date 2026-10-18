@@ -4,8 +4,8 @@
 // shading, the painter's-order helpers and the camera are the parts of the
 // look that are easy to get subtly wrong by hand.
 //
-// The Cookrew side of the anatomy canvas is anatomy/cards.tsx (the three card
-// kinds) and anatomy/containers.tsx (the swappable scenes).
+// The Cookrew side of the anatomy canvas is anatomy/station.tsx (the agent
+// station) and anatomy/containers.tsx (the swappable scenes).
 
 export type Flat = [number, number];
 export type Point3 = [number, number, number];

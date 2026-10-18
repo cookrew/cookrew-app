@@ -58,6 +58,16 @@ function asCanvasNode(n: Seed['nodes'][number]): CanvasNode {
 }
 
 const PHASES: TurnPhase[] = ['idle', 'thinking', 'waiting', 'replied']
+// Stand-ins for the one line a station shows: the app feeds the real thing
+// from TerminalActivity.reply, which this page has no bridge for.
+const REPLIES = [
+  '迁移写好了，旧列保留并标注弃用，dry-run 通过',
+  '两个超时用例重跑通过，是负载问题，全量 8993 通过',
+  'Round 5 for lane PANEL: the RTE dial is wired and the routes tick',
+  '手机端的 sous 对话框挡住了交互界面的底层按钮，已修',
+  'PR #62 is MERGED into dev — good work.',
+  '今日任务已确认保存成功'
+]
 const MODELS: Array<[string, string]> = [
   ['opus', 'high'],
   ['sonnet', 'medium'],
@@ -78,8 +88,11 @@ function seedLive(terminals: Seed['nodes']): void {
         prompt: null,
         pendingInput: null,
         lines: [],
-        reply: null,
-        glance: null,
+        glance:
+          PHASES[i % PHASES.length] === 'thinking'
+            ? { status: 'Herding… (esc to interrupt · 34s)', tools: [], message: null }
+            : null,
+        reply: REPLIES[i % REPLIES.length],
         title: node.name,
         turnCount: 1
       } as unknown as TerminalActivity

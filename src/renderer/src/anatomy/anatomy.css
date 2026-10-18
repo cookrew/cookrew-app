@@ -2,12 +2,11 @@
  *
  * The isometric kit draws through a fixed set of classes (iso-fill, iso-shade,
  * iso-top, iso-crease, iso-edge, iso-halo). Rather than ship the kit's dark
- * stylesheet and fight it, every one of those is defined here against the
- * app's tokens, so the figure is the same cream board the flat canvas is —
- * and a card reads as the same object in both.
+ * stylesheet and fight it, each one is defined here against the app's tokens,
+ * so the figure is the same cream board the flat canvas is.
  *
  * One SVG unit is one CSS pixel: the projection fits the figure to the stage
- * and the viewBox matches, so stroke widths below are real pixels.
+ * and the viewBox matches, so the widths below are real pixels.
  */
 
 .an-host {
@@ -37,9 +36,7 @@
 .an-svg .iso-shade[data-shade='0'] {
   fill: var(--cream-lo, #ece6da);
 }
-.an-svg .iso-shade[data-shade='1'] {
-  fill: var(--cream-md, #f5f0e8);
-}
+.an-svg .iso-shade[data-shade='1'],
 .an-svg .iso-shade[data-shade='2'] {
   fill: var(--cream-md, #f5f0e8);
 }
@@ -68,7 +65,7 @@
   stroke-width: 1.2;
 }
 .an-svg .iso-halo {
-  fill: rgba(45, 42, 32, 0.14);
+  fill: rgba(45, 42, 32, 0.13);
   stroke: none;
   filter: blur(3px);
 }
@@ -76,55 +73,49 @@
   fill: #8a8378;
   stroke: none;
 }
-.an-svg .iso-dots[data-tone='hi'] circle {
-  fill: var(--ink);
-}
 .an-svg .iso-dots[data-tone='lo'] circle {
   fill: var(--line-soft);
 }
 .an-svg .iso-face-text {
   font-family: var(--font-mono);
-  fill: var(--ink);
+  fill: var(--muted);
   pointer-events: none;
   user-select: none;
 }
-.an-svg .iso-face-text[data-tone='mid'] {
-  fill: var(--muted);
-}
 
-/* ---------- the three cards ---------- */
-.an-card {
+/* ---------- the station ---------- */
+.an-station {
   cursor: pointer;
 }
+.an-plinth .iso-fill {
+  fill: #efe9dd;
+}
+.an-plinth .iso-top {
+  fill: #f4efe4;
+}
 
-/* Agent: the dark terminal, exactly as it reads on the flat canvas. */
-.an-terminal .an-skin .iso-fill {
+/* The desk is the dark terminal, the same object the flat card is. */
+.an-desk .iso-fill {
   fill: #1f1d17;
 }
-.an-terminal .an-skin .iso-top {
+.an-desk .iso-top {
   fill: #35312a;
 }
-.an-terminal .an-skin .iso-shade[data-shade='0'] {
+.an-desk .iso-shade[data-shade='0'] {
   fill: #141310;
 }
-.an-terminal .an-skin .iso-shade[data-shade='1'],
-.an-terminal .an-skin .iso-shade[data-shade='2'] {
+.an-desk .iso-shade[data-shade='1'],
+.an-desk .iso-shade[data-shade='2'] {
   fill: #1c1a15;
 }
-.an-terminal .an-skin .iso-shade[data-shade='3'] {
+.an-desk .iso-shade[data-shade='3'] {
   fill: #272420;
 }
-.an-terminal .an-skin .iso-edge {
+.an-desk .iso-edge {
   stroke: var(--ink);
 }
-.an-terminal .an-skin .iso-crease {
+.an-desk .iso-crease {
   stroke: #4a443a;
-}
-.an-terminal .an-lamp {
-  stroke: #4a443a;
-}
-.an-terminal .an-mark line {
-  stroke-linecap: round;
 }
 .an-screen {
   fill: #0e0d0a;
@@ -134,115 +125,336 @@
 .an-scanline {
   fill: none;
   stroke: var(--phos, #e9b949);
-  stroke-width: 1;
+  stroke-width: 1.1;
   stroke-linecap: round;
-  opacity: 0.62;
+  opacity: 0.6;
 }
 .an-scanline[data-row='2'] {
-  opacity: 0.34;
+  opacity: 0.32;
+}
+.an-orch-rule {
+  stroke-dasharray: 3 2;
 }
 
-/* Note: the amber pad. */
-.an-note .an-skin .iso-fill {
+/* The bins. Amber is a note and cool blue is a browser, as on the flat card. */
+.an-bin {
+  cursor: pointer;
+}
+.an-note .an-bin-skin .iso-fill {
   fill: var(--note-bg);
 }
-.an-note .an-skin .iso-top {
+.an-note .an-bin-skin .iso-top {
   fill: #fff8c8;
 }
-.an-note .an-skin .iso-shade[data-shade='0'] {
+.an-note .an-bin-skin .iso-shade[data-shade='0'] {
   fill: #e8dc96;
 }
-.an-note .an-skin .iso-shade[data-shade='1'],
-.an-note .an-skin .iso-shade[data-shade='2'] {
+.an-note .an-bin-skin .iso-shade[data-shade='1'],
+.an-note .an-bin-skin .iso-shade[data-shade='2'] {
   fill: #f2e6a8;
 }
-.an-note .an-skin .iso-shade[data-shade='3'] {
+.an-note .an-bin-skin .iso-shade[data-shade='3'] {
   fill: #fdf2bb;
 }
-.an-note .an-skin .iso-edge {
-  stroke: var(--ink);
+.an-note .an-bin-skin .iso-edge {
+  stroke: #8a7330;
 }
-.an-note .an-skin .iso-crease {
-  stroke: #cbbd72;
+.an-browser .an-bin-skin .iso-fill {
+  fill: #dfe8f3;
 }
-
-/* Browser: cream with an ink frame, the window on its lid. */
-.an-browser .an-skin .iso-fill {
-  fill: var(--cream);
+.an-browser .an-bin-skin .iso-top {
+  fill: #eef4fb;
 }
-.an-browser .an-skin .iso-top {
-  fill: #fffdf6;
+.an-browser .an-bin-skin .iso-shade[data-shade='0'] {
+  fill: #c3d2e4;
 }
-.an-browser .an-skin .iso-shade[data-shade='0'] {
-  fill: #e4ded1;
+.an-browser .an-bin-skin .iso-shade[data-shade='1'],
+.an-browser .an-bin-skin .iso-shade[data-shade='2'] {
+  fill: #d3dfee;
 }
-.an-browser .an-skin .iso-shade[data-shade='1'],
-.an-browser .an-skin .iso-shade[data-shade='2'] {
-  fill: #efe9dd;
+.an-browser .an-bin-skin .iso-shade[data-shade='3'] {
+  fill: #e9f1f9;
 }
-.an-browser .an-skin .iso-shade[data-shade='3'] {
-  fill: #fbf7ee;
+.an-browser .an-bin-skin .iso-edge {
+  stroke: #4f6a8c;
 }
-.an-browser .an-skin .iso-edge {
-  stroke: var(--ink);
+.an-bin.empty {
+  stroke-dasharray: 2 3;
 }
 
-/* The nameplate is the same object on all three. */
-.an-plate-slab .iso-fill {
-  fill: #efe9dd;
+/* The lamp says exactly what the flat card's status coin says. */
+.an-lamp {
+  stroke: #4a443a;
 }
-.an-plate-slab .iso-top {
-  fill: #f6f1e6;
+.an-lens {
+  stroke: var(--ink);
+  stroke-width: 0.7;
+  fill: var(--vi-done);
+}
+.st-thinking .an-lens {
+  fill: var(--vi-working);
+}
+.st-waiting .an-lens {
+  fill: var(--vi-wait);
+}
+.st-replied .an-lens {
+  fill: #64d2ff;
+}
+
+/* Height is the attention axis: only a waiting agent has a mast at all. */
+.an-flag {
+  fill: var(--vi-wait);
+  stroke: var(--ink);
+  stroke-width: 0.8;
+  stroke-linejoin: round;
+  transform-box: fill-box;
+  transform-origin: 0 50%;
+  animation: an-wave 2.4s ease-in-out infinite;
+}
+@keyframes an-wave {
+  50% {
+    transform: scaleX(0.82);
+  }
+}
+
+.an-station:hover .an-desk .iso-edge,
+.an-station:hover .an-bin-skin .iso-edge {
+  stroke: var(--ink);
+  stroke-width: 1.8;
+}
+.an-station.sel .an-desk .iso-edge {
+  stroke: var(--amber-deep, #d97706);
+  stroke-width: 2.2;
 }
 
 /* ---------- cables: the only thing that stands for talking ---------- */
 .an-cable-out {
   fill: none;
-  stroke: #6f675a;
-  stroke-width: 3.4;
+  stroke: #9a9184;
+  stroke-width: 3;
   stroke-linejoin: round;
   stroke-linecap: round;
 }
 .an-cable-in {
   fill: none;
   stroke: var(--cream);
-  stroke-width: 1.5;
+  stroke-width: 1.3;
   stroke-linejoin: round;
   stroke-linecap: round;
 }
-.an-host[data-dim='1'] .an-cable {
-  opacity: 0.35;
+
+/* ---------- THE GLASS: every word on this view, upright ---------- */
+.an-glass {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.an-label {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  padding: 2px 6px 3px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--cream) 88%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--line-soft) 70%, transparent);
+  line-height: 1.25;
+  text-align: left;
+  overflow: hidden;
+}
+.an-label b {
+  display: block;
+  font: 600 11.5px/1.3 var(--font-body);
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.an-label b i {
+  font: 400 9.5px var(--font-mono);
+  font-style: normal;
+  color: var(--muted);
+  margin-left: 5px;
+}
+.an-label span {
+  display: block;
+  font: 10.5px/1.35 var(--font-body);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Only a phase worth noticing tints the label. Idle stays plain on purpose. */
+.an-label.st-thinking {
+  box-shadow: 0 0 0 1px var(--vi-working);
+}
+.an-label.st-thinking span {
+  color: var(--amber-deep, #d97706);
+}
+.an-label.st-waiting {
+  box-shadow: 0 0 0 1.5px var(--vi-wait);
+}
+.an-label.st-waiting span {
+  color: var(--rose, #dc2626);
+}
+.an-label.on {
+  background: var(--cream-hi, #fffef5);
+  box-shadow: 0 0 0 1.5px var(--ink);
 }
 
-/* ---------- the live layer ---------- */
-.an-lens {
-  stroke: var(--ink);
-  stroke-width: 0.8;
+/* ---------- the only interrupt ---------- */
+.an-hitl {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 1.5px solid var(--rose, #dc2626);
+  border-radius: 999px;
+  background: var(--cream-hi, #fffef5);
+  color: var(--ink);
+  font: 600 12.5px var(--font-body);
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(45, 42, 32, 0.14);
 }
-.an-lens.st-idle {
-  fill: var(--vi-done);
+.an-hitl i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--vi-wait);
 }
-.an-lens.st-thinking {
-  fill: var(--vi-working);
-}
-.an-lens.st-waiting {
-  fill: var(--vi-wait);
-}
-.an-lens.st-replied {
-  fill: #64d2ff;
-}
-.an-pick circle {
-  fill: none;
-  stroke: var(--amber-deep, #d97706);
-  stroke-width: 2;
-  stroke-dasharray: 5 4;
+.an-hitl u {
+  text-decoration: none;
+  font: 11px var(--font-mono);
+  color: var(--muted);
 }
 
-/* ---------- controls ---------- */
+/* ---------- the summary, on demand ---------- */
+.an-panel {
+  position: absolute;
+  z-index: 4;
+  padding: 10px 12px 12px;
+  background: var(--cream-hi, #fffef5);
+  border: 1px solid var(--ink);
+  border-radius: 8px;
+  box-shadow: 0 6px 22px rgba(45, 42, 32, 0.18);
+  font: 12px/1.5 var(--font-body);
+  color: var(--ink);
+}
+.an-panel.st-waiting {
+  border-color: var(--rose, #dc2626);
+}
+.an-panel header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.an-panel header b {
+  font-size: 14px;
+  font-weight: 650;
+}
+.an-phase {
+  font: 10.5px var(--font-mono);
+  color: var(--muted);
+}
+.an-phase.st-thinking {
+  color: var(--amber-deep, #d97706);
+}
+.an-phase.st-waiting {
+  color: var(--rose, #dc2626);
+}
+.an-x {
+  margin-left: auto;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+}
+.an-panel p {
+  margin: 6px 0 0;
+}
+.an-panel em {
+  display: block;
+  font: 10px var(--font-mono);
+  font-style: normal;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.an-meta {
+  font: 10.5px var(--font-mono);
+  color: var(--muted);
+}
+.an-task,
+.an-reply {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+.an-task {
+  -webkit-line-clamp: 3;
+  color: var(--muted);
+}
+.an-reply {
+  -webkit-line-clamp: 7;
+}
+.an-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+.an-chip {
+  max-width: 132px;
+  padding: 3px 6px;
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  background: var(--cream);
+  font: 10.5px var(--font-mono);
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.an-chip.an-note {
+  background: var(--note-bg);
+  border-color: #cbbd72;
+}
+.an-chip.an-browser {
+  background: #e9f1f9;
+  border-color: #9ab3cd;
+}
+.an-more {
+  align-self: center;
+  font: 10.5px var(--font-mono);
+  color: var(--muted);
+}
+.an-open {
+  margin-top: 10px;
+  width: 100%;
+  padding: 7px;
+  border: 1px solid var(--ink);
+  border-radius: 6px;
+  background: var(--cream);
+  font: 600 12px var(--font-body);
+  color: var(--ink);
+  cursor: pointer;
+}
+.an-open:hover {
+  background: var(--amber-soft, #fff3ad);
+}
+
+/* ---------- chrome ---------- */
 .an-controls {
   position: absolute;
   left: 12px;
   top: 12px;
+  z-index: 3;
   display: flex;
   gap: 4px;
   font: 11px/1 var(--font-mono);
@@ -260,7 +472,7 @@
   color: var(--ink);
   border-color: var(--ink);
 }
-.an-dense {
+.an-foot {
   position: absolute;
   left: 12px;
   bottom: 10px;
@@ -275,13 +487,44 @@
     left: 8px;
     top: 8px;
   }
-  .an-dense {
+  .an-foot {
     display: none;
+  }
+  /* On a phone the one-line summary would be two characters wide. The name
+     and the status colour survive; the words are one tap away in the panel. */
+  .an-label span {
+    display: none;
+  }
+  .an-panel {
+    left: 8px !important;
+    right: 8px;
+    width: auto !important;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .an-svg * {
-    animation: none !important;
+  .an-flag {
+    animation: none;
   }
+}
+
+/* A settled agent is a name and a colour, nothing more: it has nothing new to
+   say, and thirty-four of them talking at once is the noise this view removes. */
+.an-label.quiet {
+  padding: 1px 5px 2px;
+  background: color-mix(in srgb, var(--cream) 78%, transparent);
+  box-shadow: none;
+}
+.an-label.quiet b {
+  font-weight: 500;
+  color: var(--muted);
+}
+.an-label.quiet b i {
+  display: none;
+}
+.an-label.on.quiet b {
+  color: var(--ink);
+}
+.an-label.on.quiet b i {
+  display: inline;
 }

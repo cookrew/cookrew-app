@@ -2,27 +2,22 @@ import { describe, expect, it } from 'vitest'
 import {
   GUTTER,
   PITCH,
-  orderCards,
+  orderAgents,
   planGrid,
   roundedPath,
   routeCables,
-  slotCentre,
-  type AnatomyClusterInput
+  slotCentre
 } from '../src/renderer/src/anatomy/layout'
-import { CARD_HEIGHT, CELL } from '../src/renderer/src/anatomy/cards'
+import { STATION_CELL } from '../src/renderer/src/anatomy/station'
 
-const agent = (id: string): AnatomyClusterInput => ({ id, kind: 'terminal', owner: null })
-const note = (id: string, owner: string | null): AnatomyClusterInput => ({
-  id,
-  kind: 'note',
-  owner
-})
+const AZIMUTHS = [45, 78]
+const ELEVATIONS = [30, 38]
 
 describe('planGrid', () => {
   it('fills the stage instead of laying one long row', () => {
-    // The first scorer matched the floor's ASPECT to the screen's, and at the
-    // default azimuth that aspect is the same for every column count — so the
-    // tie broke on wasted slots and 14 cards became a 14x1 strip across a
+    // The first scorer matched the floor's ASPECT to the screen's, and with the
+    // camera fixed that aspect is the same for every column count — so the tie
+    // broke on wasted slots, and fourteen units became a 14x1 strip across a
     // 1440px stage with the whole screen empty around it.
     const grid = planGrid(14, 1440 / 795, 'landscape')
     expect(grid.rows).toBeGreaterThan(1)
@@ -34,83 +29,85 @@ describe('planGrid', () => {
     // At azimuth 45 the floor projects to a diamond whose aspect is
     // 1/sin(elevation) WHATEVER the grid is, so a portrait picture is only
     // reachable by swinging the camera round.
-    const grid = planGrid(40, 390 / 739, 'portrait')
+    const grid = planGrid(33, 390 / 739, 'portrait')
     expect(grid.rows).toBeGreaterThanOrEqual(grid.cols)
     expect(grid.azimuth).toBeGreaterThan(45)
   })
 
-  it('keeps the kit camera when the stage does not demand otherwise', () => {
-    const grid = planGrid(36, 16 / 9, 'landscape')
-    expect(grid.azimuth).toBe(45)
+  it('keeps the kit camera in landscape', () => {
+    expect(planGrid(33, 16 / 9, 'landscape').azimuth).toBe(45)
   })
 
-  it('always has room for every card', () => {
-    for (const n of [1, 2, 7, 33, 250]) {
+  it('always has room for every agent', () => {
+    for (const n of [1, 2, 7, 33, 120]) {
       const grid = planGrid(n, 1440 / 795, 'landscape')
       expect(grid.cols * grid.rows).toBeGreaterThanOrEqual(n)
     }
   })
 })
 
-describe('card heights', () => {
-  it('stay under the height that would hide the row behind', () => {
-    // h*cos(e) is how far a card climbs the screen; pitch*sin(a)*sin(e) is how
-    // far the row behind it already sits. Taller than the ratio of those and a
-    // card covers its neighbour's nameplate, which is what 17 used to do.
-    const worst = Math.min(
-      ...[24, 30, 38, 46, 54].flatMap((elevation) =>
-        [45, 54, 63, 72, 80, 86].map((azimuth) => {
+describe('the station in its slot', () => {
+  it('stands under the height that would hide the row behind it', () => {
+    // h*cos(e) is how far a solid climbs the screen; pitch*sin(a)*sin(e) is how
+    // far the row behind already sits. Taller than the ratio of those and a
+    // station covers its neighbour. The MAST is deliberately exempt: a raised
+    // flag breaking the plane is the whole point of it.
+    const ceiling = Math.min(
+      ...ELEVATIONS.flatMap((elevation) =>
+        AZIMUTHS.map((azimuth) => {
           const a = (azimuth * Math.PI) / 180
           const e = (elevation * Math.PI) / 180
           return PITCH * Math.sin(a) * Math.tan(e)
         })
       )
     )
-    expect(CARD_HEIGHT.terminal).toBeLessThan(worst)
-    expect(CARD_HEIGHT.terminal).toBeGreaterThan(CARD_HEIGHT.browser)
-    expect(CARD_HEIGHT.browser).toBeGreaterThan(CARD_HEIGHT.note)
+    const plinthAndDesk = 1.6 + 14
+    expect(plinthAndDesk).toBeLessThan(ceiling)
   })
 
   it('leaves a real aisle between slots for the cables', () => {
-    expect(PITCH).toBe(CELL + GUTTER)
+    expect(PITCH).toBe(STATION_CELL + GUTTER)
     expect(GUTTER).toBeGreaterThan(8)
   })
 })
 
-describe('orderCards', () => {
-  it('keeps an agent and the cards it owns together', () => {
-    const order = orderCards(
-      [agent('a'), agent('b'), note('n1', 'a'), note('n2', 'b'), note('n3', 'a')],
-      8
-    )
-    const at = (id: string): number => order.indexOf(id)
-    expect(at('n1')).toBe(at('a') + 1)
-    expect(at('n3')).toBe(at('a') + 2)
-    expect(at('n2')).toBe(at('b') + 1)
+describe('orderAgents', () => {
+  const link = (a: string, b: string): readonly [string, string] => [a, b] as const
+  const cell = (slot: number, cols: number): [number, number] => [slot % cols, Math.floor(slot / cols)]
+  const far = (s: number, t: number, cols: number): number => {
+    const [a, b] = cell(s, cols)
+    const [c, d] = cell(t, cols)
+    return Math.abs(a - c) + Math.abs(b - d)
+  }
+
+  it('places every agent exactly once', () => {
+    const ids = ['a', 'b', 'c', 'd', 'e']
+    const out = orderAgents(ids, [], 3, 2)
+    expect(out).toHaveLength(6)
+    expect(out.filter((id) => id !== '').sort()).toEqual([...ids].sort())
   })
 
-  it('starts a new row rather than splitting a block that would fit on one', () => {
-    // Four columns, a block of three already down, then a block of three: the
-    // second must not wrap, so one slot is left empty on purpose.
-    const order = orderCards(
-      [
-        agent('a'),
-        note('a1', 'a'),
-        note('a2', 'a'),
-        agent('b'),
-        note('b1', 'b'),
-        note('b2', 'b')
-      ],
-      4
-    )
-    expect(order[3]).toBe('')
-    expect(order.slice(4, 7)).toEqual(['b', 'b1', 'b2'])
+  it('sits a hub next to everyone it talks to', () => {
+    // The whole reason to order at all: short cables are the difference
+    // between a diagram and a hairball.
+    const ids = ['hub', 'p1', 'p2', 'p3', 'p4']
+    const links = [link('hub', 'p1'), link('hub', 'p2'), link('hub', 'p3'), link('hub', 'p4')]
+    const out = orderAgents(ids, links, 3, 3)
+    const at = (id: string): number => out.indexOf(id)
+    for (const peer of ['p1', 'p2', 'p3', 'p4']) {
+      expect(far(at('hub'), at(peer), 3)).toBe(1)
+    }
   })
 
-  it('parks cards wired to no agent in their own block', () => {
-    const order = orderCards([agent('a'), note('loose', null), note('a1', 'a')], 8)
-    expect(order.filter((id) => id !== '')).toHaveLength(3)
-    expect(order.indexOf('loose')).toBeGreaterThan(order.indexOf('a1'))
+  it('is the same room every time, so a status change never shuffles it', () => {
+    const ids = ['a', 'b', 'c', 'd', 'e', 'f']
+    const links = [link('a', 'b'), link('b', 'c'), link('e', 'f')]
+    expect(orderAgents(ids, links, 3, 2)).toEqual(orderAgents(ids, links, 3, 2))
+  })
+
+  it('ignores a link to something that is not on the board', () => {
+    const out = orderAgents(['a', 'b'], [link('a', 'ghost')], 2, 1)
+    expect(out.filter((id) => id !== '').sort()).toEqual(['a', 'b'])
   })
 })
 
@@ -139,8 +136,6 @@ describe('routeCables', () => {
   })
 
   it('gives each cable its own port, so a bundle does not knot at one corner', () => {
-    // Every cable leaving the same slot used to start at the same corner
-    // point, and six of them met in a single knot there.
     const cables = routeCables(
       [
         ['a', 'b'],
@@ -159,16 +154,14 @@ describe('routeCables', () => {
     expect(routeCables([['a', 'a']], indexOf, grid)).toHaveLength(0)
   })
 
-  it('runs in the aisle, never across a card', () => {
+  it('runs in the aisle, never across a station', () => {
     const cables = routeCables([['a', 'd']], indexOf, grid)
     for (const [x, y] of cables[0].points) {
-      // Distance from the nearest slot centre, on the axis that is not the
-      // cable's own run, has to clear the card's footprint.
       const near = (v: number): number => {
         const k = Math.round(v / PITCH - 0.5)
         return Math.abs(v - (k + 0.5) * PITCH)
       }
-      expect(Math.max(near(x), near(y))).toBeGreaterThan(CELL / 2 - 0.01)
+      expect(Math.max(near(x), near(y))).toBeGreaterThan(STATION_CELL / 2 - 0.01)
     }
   })
 })

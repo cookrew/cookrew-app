@@ -180,6 +180,87 @@ function boardFurniture({ floor, P, title, grid }: AnatomyContainerCtx): React.R
   )
 }
 
+/* ---------- 4. the shelf: bays of shelving behind the floor ---------- */
+const SHELF_H = 66
+function shelfFurniture({ floor, P, title }: AnatomyContainerCtx): React.ReactNode {
+  const uprights: React.ReactNode[] = []
+  const step = 48
+  for (let x = floor.x - 6; x <= floor.x + floor.w + 2; x += step) {
+    uprights.push(
+      <Solid
+        key={x}
+        paths={slabOf({ x, y: floor.y - 16, w: 3, d: 14, r: 0.3 }, -2, SHELF_H, P, 1, 0.4)}
+        tone="mid"
+        crease="lo"
+      />
+    )
+  }
+  const shelves = [10, 26, 42, 58].map((z) => (
+    <Solid
+      key={z}
+      paths={slabOf({ x: floor.x - 6, y: floor.y - 16, w: floor.w + 11, d: 14, r: 0.3 }, z, 1.8, P, 1, 0.3)}
+      tone="lo"
+      crease="none"
+    />
+  ))
+  return (
+    <>
+      <path className="iso-halo" d={haloOf(floor, -8, 8, P)} />
+      <Solid paths={slabOf(floor, -5, 5, P, 5, 1)} tone="mid" crease="lo" className="an-floor" />
+      <Line d={planOutline(insetPlan(floor, 5), 0, P, 5)} tone="faint" />
+      <Solid
+        paths={slabOf({ x: floor.x - 18, y: floor.y - 18, w: floor.w + 20, d: 18, r: 0.4 }, -5, SHELF_H + 8, P, 1, 0.8)}
+        tone="mid"
+        className="an-wall"
+      />
+      {shelves}
+      {uprights}
+      <FaceText transform={sideMatrix([floor.x + 10, floor.y - 16], SHELF_H + 3, P, 'left')} size={4} tone="mid">
+        {title.toUpperCase()}
+      </FaceText>
+    </>
+  )
+}
+
+/* ---------- 5. the yard: painted bays under a gantry ---------- */
+function yardFurniture({ floor, P, title, grid }: AnatomyContainerCtx): React.ReactNode {
+  const bays: string[] = []
+  for (let c = 0; c < grid.cols; c++) {
+    for (let r = 0; r < grid.rows; r++) {
+      bays.push(
+        planOutline(
+          { x: c * PITCH + 3, y: r * PITCH + 3, w: PITCH - 6, d: PITCH - 6, r: 2 },
+          0.2,
+          P,
+          3
+        )
+      )
+    }
+  }
+  const legX = [floor.x + 6, floor.x + floor.w - 12]
+  return (
+    <>
+      <path className="iso-halo" d={haloOf(floor, -7, 7, P)} />
+      <Solid paths={slabOf(floor, -4, 4, P, 2, 0.6)} tone="mid" crease="lo" className="an-floor" />
+      <Line d={bays.join('')} tone="faint" className="an-bay" />
+      {corners(floor, 9).map(([x, y], i) => (
+        <Solid key={i} paths={cylinder(x, y, 3, 0, 9, P, 16)} tone="lo" crease="none" />
+      ))}
+      {legX.map((x) => (
+        <Solid key={x} paths={slabOf({ x, y: floor.y - 12, w: 6, d: 6, r: 0.5 }, -4, 58, P, 2, 0.5)} tone="mid" />
+      ))}
+      <Solid
+        paths={slabOf({ x: floor.x + 2, y: floor.y - 13, w: floor.w - 4, d: 8, r: 0.5 }, 54, 7, P, 1, 0.6)}
+        tone="mid"
+        className="an-gantry"
+      />
+      <FaceText transform={sideMatrix([floor.x + 16, floor.y - 13], 56.5, P, 'left')} size={4.2} tone="mid">
+        {title.toUpperCase()}
+      </FaceText>
+    </>
+  )
+}
+
 export const CONTAINERS: readonly AnatomyContainer[] = [
   {
     id: 'bench',
@@ -203,6 +284,18 @@ export const CONTAINERS: readonly AnatomyContainer[] = [
     label: 'Board',
     furniture: boardFurniture,
     extent: (floor) => boxCorners(floor, -12, 0)
+  },
+  {
+    id: 'shelf',
+    label: 'Shelf',
+    furniture: shelfFurniture,
+    extent: (floor) => boxCorners({ ...floor, y: floor.y - 18, d: floor.d + 18 }, -8, SHELF_H + 10)
+  },
+  {
+    id: 'yard',
+    label: 'Yard',
+    furniture: yardFurniture,
+    extent: (floor) => boxCorners({ ...floor, y: floor.y - 13, d: floor.d + 13 }, -7, 61)
   }
 ]
 

@@ -2,14 +2,14 @@
 // card goes where, and where the cables run. All pure, so the awkward parts
 // (the camera search and the cable lanes) are testable without a DOM.
 
-import { CELL } from './cards'
 import { iso, type Point3, type Projection } from './iso-kit'
+import { STATION_CELL } from './station'
 
 export type AnatomyOrientation = 'landscape' | 'portrait'
 
 /** The gap between two slots. Cables run in it, so it is not decoration. */
-export const GUTTER = 15
-export const PITCH = CELL + GUTTER
+export const GUTTER = 16
+export const PITCH = STATION_CELL + GUTTER
 
 export interface AnatomyGrid {
   cols: number
@@ -119,54 +119,73 @@ export function slotCentre(index: number, grid: AnatomyGrid): { x: number; y: nu
   }
 }
 
-/* ---------- which card lands in which slot ---------- */
-
-export interface AnatomyClusterInput {
-  id: string
-  kind: 'terminal' | 'note' | 'browser'
-  /** The agent this note or browser is wired to, if any. */
-  owner: string | null
-}
+/* ---------- which agent lands in which slot ---------- */
 
 /**
- * An agent followed by the cards it owns, as one block. The ownership cables
- * are 88% of the board's wiring and the longest of them, and a block keeps
- * them short enough that the picture does not need them drawn at all — which
- * is the whole reason the flat canvas reads as a hairball and this does not.
+ * Agents placed so the ones that talk sit near each other: the busiest hub
+ * goes to the middle, then whoever has the most wires to the already-placed
+ * takes the free slot closest to them. Cables get short, and short cables are
+ * the difference between a diagram and a hairball.
  *
- * A block that would straddle a row break starts the next row instead, so a
- * crew reads as a crew rather than as a wrapped sentence.
+ * Deterministic for a given board, so a status change never shuffles the
+ * room: a board you cannot learn the shape of is a board you have to read
+ * from scratch every time.
  */
-export function orderCards(cards: readonly AnatomyClusterInput[], cols: number): string[] {
-  const owned = new Map<string, string[]>()
-  const agents: AnatomyClusterInput[] = []
-  const loose: AnatomyClusterInput[] = []
-  for (const card of cards) {
-    if (card.kind === 'terminal') {
-      agents.push(card)
-      if (!owned.has(card.id)) owned.set(card.id, [])
+export function orderAgents(
+  ids: readonly string[],
+  links: ReadonlyArray<readonly [string, string]>,
+  cols: number,
+  rows: number
+): string[] {
+  const slots = cols * rows
+  const peers = new Map<string, string[]>(ids.map((id) => [id, []]))
+  for (const [a, b] of links) {
+    if (peers.has(a) && peers.has(b) && a !== b) {
+      peers.get(a)?.push(b)
+      peers.get(b)?.push(a)
     }
   }
-  for (const card of cards) {
-    if (card.kind === 'terminal') continue
-    const bucket = card.owner === null ? undefined : owned.get(card.owner)
-    if (bucket) bucket.push(card.id)
-    else loose.push(card)
+  const at = new Map<string, number>()
+  const free = new Set<number>(Array.from({ length: slots }, (_, i) => i))
+  const cell = (s: number): [number, number] => [s % cols, Math.floor(s / cols)]
+  const far = (s: number, t: number): number => {
+    const [a, b] = cell(s)
+    const [c, d] = cell(t)
+    return Math.abs(a - c) + Math.abs(b - d)
   }
-  const blocks = agents
-    .map((agent) => [agent.id, ...(owned.get(agent.id) ?? [])])
-    .sort((a, b) => b.length - a.length)
-  if (loose.length > 0) blocks.push(loose.map((card) => card.id))
-
-  const out: string[] = []
-  for (const block of blocks) {
-    const room = (cols - (out.length % cols)) % cols
-    // Only pad when the block would be split AND it could sit whole on a row.
-    if (room > 0 && block.length > room && block.length <= cols) {
-      for (let i = 0; i < room; i++) out.push('')
+  const middle = Math.floor(rows / 2) * cols + Math.floor(cols / 2)
+  // A stable starting order: degree, then the board's own order. Never status.
+  const left = [...ids].sort((a, b) => (peers.get(b)?.length ?? 0) - (peers.get(a)?.length ?? 0))
+  while (left.length > 0) {
+    left.sort((a, b) => {
+      const placed = (id: string): number => (peers.get(id) ?? []).filter((p) => at.has(p)).length
+      return placed(b) - placed(a) || (peers.get(b)?.length ?? 0) - (peers.get(a)?.length ?? 0)
+    })
+    const id = left.shift()
+    if (id === undefined) break
+    const near = (peers.get(id) ?? []).filter((p) => at.has(p)).map((p) => at.get(p) ?? 0)
+    let best: number | null = null
+    let cost = Infinity
+    for (const slot of free) {
+      const c =
+        near.length > 0
+          ? near.reduce((t, n) => t + far(slot, n), 0)
+          : (peers.get(id)?.length ?? 0) > 0
+            ? far(slot, middle)
+            : 1e6 - far(slot, middle)
+      if (c < cost) {
+        cost = c
+        best = slot
+      }
     }
-    out.push(...block)
+    if (best === null) break
+    at.set(id, best)
+    free.delete(best)
   }
+  const out: string[] = Array.from({ length: slots }, () => '')
+  at.forEach((slot, id) => {
+    out[slot] = id
+  })
   return out
 }
 
