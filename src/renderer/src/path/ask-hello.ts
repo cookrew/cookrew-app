@@ -12,6 +12,7 @@ import {
   type HelloResult
 } from './hello-result'
 import type { HelloReply } from './switch'
+import { trustedNetwork } from '../../../shared/trusted-origin'
 
 /**
  * THE ONE PROBE THE COMPANION MAKES DIRECTLY AT A MAC.
@@ -50,6 +51,17 @@ export const HELLO_TIMEOUT_MS = 800
  */
 export const NAME_HELLO_TIMEOUT_MS = 2500
 
+/**
+ * A TAILNET NAME GETS LONGER STILL: the path behind it is not the Wi-Fi.
+ *
+ * Away from home Tailscale often runs through one of its relay servers, and
+ * the owner's phone on 2026-10-18 answered its tailnet name in 1281 and
+ * 1975 ms on the tries that made it — every other try died at exactly
+ * 2500. The Mac was there; the deadline was the LAN's. The race runs beside
+ * the plane in use, so this patience delays only the verdict "no".
+ */
+export const TAILNET_HELLO_TIMEOUT_MS = 6000
+
 /** Is this host an IP literal (v4, or a bracketed v6) rather than a name? */
 const isIpLiteral = (host: string): boolean => {
   const bare = host.replace(/^\[/, '').replace(/]$/, '')
@@ -65,7 +77,7 @@ export const helloDeadlineMs = (url: string): number => {
     return HELLO_TIMEOUT_MS
   }
   if (host === 'localhost' || isIpLiteral(host)) return HELLO_TIMEOUT_MS
-  return NAME_HELLO_TIMEOUT_MS
+  return trustedNetwork(url) === 'tailnet' ? TAILNET_HELLO_TIMEOUT_MS : NAME_HELLO_TIMEOUT_MS
 }
 
 export interface AskHelloOptions {

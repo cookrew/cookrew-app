@@ -314,7 +314,9 @@ export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null>
       exchanges.set(id, exchange)
       input.signal?.addEventListener('abort', () => {
         if (!exchanges.delete(id)) return
-        exchange.fail(new DOMException('aborted', 'AbortError'))
+        // The caller's reason, so a missed deadline still reads as one.
+        const reason: unknown = input.signal?.reason
+        exchange.fail(reason instanceof Error ? reason : new DOMException('aborted', 'AbortError'))
         try {
           send({ t: 'end', id })
         } catch {

@@ -154,3 +154,26 @@ describe('the hold after a fallback', () => {
     expect(rig().health.held()).toBe(false)
   })
 })
+
+describe('the grace a dropped stream gets, by the plane it is on', () => {
+  it('is longer on the tailnet, whose path away from home is often a Tailscale relay', async () => {
+    const { TAILNET_STREAM_GRACE_MS } = await import('../src/renderer/src/plane-health')
+    const plane = await import('../src/renderer/src/data-plane')
+    const delays: number[] = []
+    const health = createPlaneHealth({
+      schedule: (_run, ms) => void delays.push(ms),
+      cancel: () => undefined,
+      direct: () => true,
+      fallBack: () => undefined
+    })
+    plane.setDataPlane({ origin: 'https://100-68-81-64.x.d.cookrew.dev:8643', kind: 'tailnet' })
+    health.link('reconnecting')
+    health.link('live')
+    plane.setDataPlane({ origin: 'https://192-168-2-40.x.d.cookrew.dev:8643', kind: 'lan' })
+    health.link('reconnecting')
+    plane.resetDataPlane()
+    expect(delays).toEqual([TAILNET_STREAM_GRACE_MS, STREAM_GRACE_MS])
+    // A reconnect is a TLS handshake plus a 1 s and a 2 s backoff at ~0.5 s a round trip.
+    expect(TAILNET_STREAM_GRACE_MS).toBeGreaterThanOrEqual(3 * STREAM_GRACE_MS)
+  })
+})

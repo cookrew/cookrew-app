@@ -46,6 +46,8 @@ import { createRawInputQueue } from './raw-input-queue'
  */
 interface ParseOptions {
   passive?: boolean
+  /** Abort the request (raw-input-queue.ts gives up on a hung keystroke). */
+  signal?: AbortSignal
 }
 
 /** Turn a server answer into a value, or into the right kind of failure. */
@@ -104,7 +106,7 @@ async function req<T>(path: string, method = 'GET', body?: unknown, parseOptions
 }
 
 async function reqOnce<T>(path: string, method: string, body: unknown, parseOptions: ParseOptions): Promise<T> {
-  const options: RequestInit = { method }
+  const options: RequestInit = { method, ...(parseOptions.signal ? { signal: parseOptions.signal } : {}) }
   const headers: Record<string, string> = {}
   const token = authStore().token()
   if (token) headers.authorization = `Bearer ${token}`
@@ -198,8 +200,8 @@ function passivePost(path: string, body: unknown): void {
  * req() has already reported any auth failure to the store by the time the
  * queue swallows the rejection — same contract as post() above.
  */
-const rawInput = createRawInputQueue((terminalId, data) =>
-  req(apiPath(`/api/terminal/${terminalId}/raw`), 'POST', { data })
+const rawInput = createRawInputQueue((terminalId, data, signal) =>
+  req(apiPath(`/api/terminal/${terminalId}/raw`), 'POST', { data }, { signal })
 )
 
 /**

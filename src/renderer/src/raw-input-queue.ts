@@ -23,9 +23,19 @@
  *
  * A failed request drops only its own bytes (same contract as the
  * fire-and-forget POST it replaces); the bytes behind it still go.
+ *
+ * AND A HUNG ONE IS A FAILED ONE. One request in flight means one request
+ * that never answers stops the terminal: on 2026-10-18 the phone's Tailscale
+ * dropped mid-request, the plane fell back to the relay, and the typing that
+ * followed queued behind a fetch the OS would not give up on for minutes. A
+ * request gets RAW_INPUT_DEADLINE_MS; past it it is aborted (a 'TimeoutError',
+ * which plane-fetch.ts counts against the plane) and the lane moves on.
  */
 
-type SendRaw = (terminalId: string, data: string) => Promise<unknown>
+/** Long enough for a relayed tailnet's worst round trip, short enough that typing never looks dead. */
+export const RAW_INPUT_DEADLINE_MS = 8_000
+
+type SendRaw = (terminalId: string, data: string, signal: AbortSignal) => Promise<unknown>
 
 interface Lane {
   chunks: string[]
@@ -36,7 +46,8 @@ interface Lane {
 const carriesEnter = (chunk: string): boolean => chunk.includes('\r') || chunk.includes('\n')
 
 export function createRawInputQueue(
-  send: SendRaw
+  send: SendRaw,
+  deadlineMs: number = RAW_INPUT_DEADLINE_MS
 ): (terminalId: string, data: string) => void {
   const lanes = new Map<string, Lane>()
 
@@ -52,12 +63,28 @@ export function createRawInputQueue(
       }
     }
     lane.inFlight = true
-    void send(terminalId, data)
-      .catch(() => undefined)
-      .finally(() => {
-        lane.inFlight = false
-        pump(terminalId, lane)
-      })
+    const abort = new AbortController()
+    let released = false
+    const release = (): void => {
+      if (released) return
+      released = true
+      clearTimeout(deadline)
+      lane.inFlight = false
+      pump(terminalId, lane)
+    }
+    // The lane is freed at the deadline even if the abort is not honoured
+    // (a body still arriving): nothing behind it waits on it again.
+    const deadline = setTimeout(() => {
+      abort.abort(new DOMException('no answer in time', 'TimeoutError'))
+      release()
+    }, deadlineMs)
+    let sent: Promise<unknown>
+    try {
+      sent = send(terminalId, data, abort.signal)
+    } catch (error) {
+      sent = Promise.reject(error)
+    }
+    void sent.catch(() => undefined).finally(release)
   }
 
   return (terminalId, data) => {

@@ -1,4 +1,5 @@
 import { apiRequestInit } from './api-base'
+import { dataPlane, subscribeDataPlane, type DataPlane } from './data-plane'
 import { planeHealth } from './plane-health'
 import { linkBody, linkHeaders, viaLink } from './rtc-plane'
 
@@ -23,7 +24,53 @@ import { linkBody, linkHeaders, viaLink } from './rtc-plane'
  * the plane for a server error would drop a working phone back onto the relay
  * every time the Mac hiccuped.
  */
+/**
+ * A REQUEST ON A PLANE THAT WAS LEFT BEHIND IS ABANDONED, not waited for.
+ *
+ * A fetch to a direct origin that stopped answering (Tailscale went down, the
+ * phone left the Wi-Fi) does not fail: it hangs until the OS gives up, which
+ * on iOS is minutes. The companion falls back to the relay long before that,
+ * and anything queued behind the hung request — every keystroke, since input
+ * keeps one request in flight (raw-input-queue.ts) — waited with it. So when
+ * the plane moves off the direct one a request was sent on, the request is
+ * aborted. A request on the relay is left alone: the relay is still there
+ * when the plane moves onto something better.
+ */
+const abandonOnMove = (sent: DataPlane, abort: AbortController): (() => void) => {
+  if (sent.kind === 'relay') return () => undefined
+  return subscribeDataPlane((next) => {
+    if (next.origin !== sent.origin || next.kind !== sent.kind || next.transport !== sent.transport) {
+      abort.abort(new DOMException('the plane this request was sent on was left', 'AbortError'))
+    }
+  })
+}
+
+/** One signal for the caller's abort and ours. */
+const joined = (caller: AbortSignal | null | undefined): AbortController => {
+  const abort = new AbortController()
+  if (caller?.aborted) abort.abort(caller.reason)
+  else caller?.addEventListener('abort', () => abort.abort(caller.reason), { once: true })
+  return abort
+}
+
+/**
+ * Only a transport failure counts against a plane. An abort is not one — the
+ * caller gave up, or the plane already moved — but a deadline the caller set
+ * and the request missed (a 'TimeoutError', raw-input-queue.ts) is.
+ */
+const transportFailed = (error: unknown): boolean => (error as Error | undefined)?.name !== 'AbortError'
+
 export async function planeFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const abort = joined(init.signal)
+  const unwatch = abandonOnMove(dataPlane(), abort)
+  try {
+    return await fetchOnPlane(url, { ...init, signal: abort.signal })
+  } finally {
+    unwatch()
+  }
+}
+
+async function fetchOnPlane(url: string, init: RequestInit): Promise<Response> {
   // THE DIRECT LINK (rtc-plane.ts): the same URL, carried on the data
   // channel. A body only a real fetch can send (a FormData upload) takes the
   // relay, which is still there underneath.
@@ -41,7 +88,7 @@ export async function planeFetch(url: string, init: RequestInit = {}): Promise<R
       planeHealth().note(true)
       return response
     } catch (error) {
-      if ((error as Error).name !== 'AbortError') planeHealth().note(false)
+      if (transportFailed(error)) planeHealth().note(false)
       throw error
     }
   }
@@ -50,7 +97,7 @@ export async function planeFetch(url: string, init: RequestInit = {}): Promise<R
     planeHealth().note(true)
     return response
   } catch (error) {
-    planeHealth().note(false)
+    if (transportFailed(error)) planeHealth().note(false)
     throw error
   }
 }

@@ -20,7 +20,8 @@ import {
   askHello,
   HELLO_TIMEOUT_MS,
   helloDeadlineMs,
-  NAME_HELLO_TIMEOUT_MS
+  NAME_HELLO_TIMEOUT_MS,
+  TAILNET_HELLO_TIMEOUT_MS
 } from '../src/renderer/src/path/ask-hello'
 
 const NAME = 'https://192-168-2-40.e03994f9-138d-80ff-9377-475cc59142b4.d.cookrew.dev:8643'
@@ -34,7 +35,10 @@ afterEach(() => {
 describe('helloDeadlineMs', () => {
   it('a trusted name has room for a cold lookup; an address does not need it', () => {
     expect(helloDeadlineMs(NAME)).toBe(NAME_HELLO_TIMEOUT_MS)
-    expect(helloDeadlineMs(TAILNET_NAME)).toBe(NAME_HELLO_TIMEOUT_MS)
+    // A tailnet name has the tailnet's path behind it, which away from home is
+    // often a Tailscale relay: answered in 1.3–2.0 s, or not at all within 2.5.
+    expect(helloDeadlineMs(TAILNET_NAME)).toBe(TAILNET_HELLO_TIMEOUT_MS)
+    expect(TAILNET_HELLO_TIMEOUT_MS).toBeGreaterThan(2 * 1975)
     expect(helloDeadlineMs('https://192.168.2.40:8643')).toBe(HELLO_TIMEOUT_MS)
     expect(helloDeadlineMs('https://[fd7a:115c:a1e0::5401:51a4]:8643')).toBe(HELLO_TIMEOUT_MS)
     expect(helloDeadlineMs('http://localhost:8639')).toBe(HELLO_TIMEOUT_MS)

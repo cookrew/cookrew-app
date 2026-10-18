@@ -36,6 +36,14 @@ export const DIRECT_FAILURE_LIMIT = 3
 
 /** How long a dropped stream has to come back before the plane is blamed. */
 export const STREAM_GRACE_MS = 5_000
+/**
+ * The same, on the tailnet. Away from home its path is often a Tailscale
+ * relay with a ~0.5 s round trip; a reconnect is a TLS handshake plus the
+ * stream's own backoff (1 s, then 2 s), and one attempt that misses already
+ * spends 5 s. The owner's phone fell off TAILNET exactly that way on
+ * 2026-10-18 — "back on the relay after it reconnected".
+ */
+export const TAILNET_STREAM_GRACE_MS = 15_000
 
 /** How long the switcher stays off a plane it just fell back from. */
 export const HOLD_AFTER_FALLBACK_MS = 60_000
@@ -49,6 +57,8 @@ export interface PlaneHealthDeps {
   /** What "the plane is direct" means; injected so a test needs no store. */
   readonly direct?: () => boolean
   readonly fallBack?: () => void
+  /** The grace a dropped stream gets on the plane in use. */
+  readonly graceMs?: () => number
 }
 
 export interface PlaneHealth {
@@ -79,6 +89,8 @@ export const createPlaneHealth = (deps: PlaneHealthDeps = {}): PlaneHealth => {
   const cancel = deps.cancel ?? ((handle): void => clearTimeout(handle as ReturnType<typeof setTimeout>))
   const direct = deps.direct ?? ((): boolean => dataPlane().kind !== 'relay')
   const fallBack = deps.fallBack ?? ((): void => setDataPlane(RELAY_PLANE))
+  const graceMs =
+    deps.graceMs ?? ((): number => (dataPlane().kind === 'tailnet' ? TAILNET_STREAM_GRACE_MS : STREAM_GRACE_MS))
 
   let failures = 0
   let holdUntil = 0
@@ -119,7 +131,7 @@ export const createPlaneHealth = (deps: PlaneHealthDeps = {}): PlaneHealth => {
       grace = schedule(() => {
         grace = null
         give()
-      }, STREAM_GRACE_MS)
+      }, graceMs())
     },
     condemn: give,
     held: () => now() < holdUntil,

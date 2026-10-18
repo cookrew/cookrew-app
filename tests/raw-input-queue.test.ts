@@ -106,3 +106,35 @@ describe('the ordered keystroke queue', () => {
     expect(h.sent).toEqual([{ terminalId: 't1', data: 'hello world\r' }])
   })
 })
+
+describe('a keystroke request that never answers', () => {
+  it('is aborted at the deadline, and the typing behind it still goes — 2026-10-18, Tailscale dropped mid-request', async () => {
+    const sent: string[] = []
+    const signals: AbortSignal[] = []
+    const push = createRawInputQueue((_id, data, signal) => {
+      sent.push(data)
+      signals.push(signal)
+      // The first never settles, as a fetch on a dead path does not.
+      return sent.length === 1 ? new Promise(() => undefined) : Promise.resolve()
+    }, 20)
+    push('t1', 'a')
+    push('t1', 'b')
+    push('t1', 'c')
+    expect(sent).toEqual(['a'])
+    await new Promise((r) => setTimeout(r, 40))
+    expect(signals[0].aborted).toBe(true)
+    expect((signals[0].reason as Error).name).toBe('TimeoutError')
+    expect(sent).toEqual(['a', 'bc'])
+  })
+
+  it('leaves an answered request alone', async () => {
+    const signals: AbortSignal[] = []
+    const push = createRawInputQueue((_id, _data, signal) => {
+      signals.push(signal)
+      return Promise.resolve()
+    }, 20)
+    push('t1', 'a')
+    await new Promise((r) => setTimeout(r, 40))
+    expect(signals[0].aborted).toBe(false)
+  })
+})
