@@ -56,6 +56,14 @@ export interface ReconnectingStreamDeps {
 // (plane-streams.ts · reviveStreams).
 const DEFAULT_BACKOFF = [1000, 2000, 4000, 8000, 8000] as const
 
+/**
+ * A switch completes when the new stream DELIVERS, not when it connects. On a
+ * tailnet through a slow Tailscale relay the headers came back and the data
+ * never did — a black terminal under a TAILNET badge (2026-10-18). A new
+ * stream that has said nothing within this long is a failed switch.
+ */
+export const SWITCH_PROVE_MS = 8_000
+
 type Listener = (event: MessageEvent) => void
 
 /**
@@ -68,6 +76,9 @@ export class ReconnectingStream {
   /** The stream opening on a new plane while the old one still carries the session. */
   private pending: EventStreamLike | null = null
   private pendingRetry = 0
+  private pendingTimer: unknown = null
+  /** The listeners watching the pending stream for its first event, by type. */
+  private pendingProbes: [string, (event: MessageEvent) => void][] = []
   private readonly listeners = new Map<string, Set<Listener>>()
   private readonly onError: Listener
   private readonly onOpen: Listener
@@ -149,12 +160,19 @@ export class ReconnectingStream {
     this.openPending()
   }
 
+  private unwatchPending(pending: EventStreamLike): void {
+    pending.removeEventListener('error', this.onPendingError)
+    for (const [type, probe] of this.pendingProbes) pending.removeEventListener(type, probe)
+    this.pendingProbes = []
+    if (this.pendingTimer !== null) this.cancel(this.pendingTimer)
+    this.pendingTimer = null
+  }
+
   private dropPending(): void {
     const pending = this.pending
     if (!pending) return
     this.pending = null
-    pending.removeEventListener('open', this.onPendingOpen)
-    pending.removeEventListener('error', this.onPendingError)
+    this.unwatchPending(pending)
     pending.close()
   }
 
@@ -166,17 +184,28 @@ export class ReconnectingStream {
     }
     const pending = this.deps.open()
     this.pending = pending
-    pending.addEventListener('open', this.onPendingOpen)
     pending.addEventListener('error', this.onPendingError)
+    // The first event of any kind this stream carries — or the Mac's beat —
+    // proves the path delivers. It is handed on, so nothing is lost.
+    for (const type of new Set([...this.listeners.keys(), 'hb'])) {
+      const probe = (event: MessageEvent): void => this.takeOver(event, type)
+      this.pendingProbes.push([type, probe])
+      pending.addEventListener(type, probe)
+    }
+    this.pendingTimer = this.schedule(() => {
+      this.pendingTimer = null
+      if (this.pending !== pending) return
+      this.dropPending()
+      this.switchFailed()
+    }, SWITCH_PROVE_MS)
   }
 
-  /** The new stream opened: it takes over, and the old one is closed. */
-  private readonly onPendingOpen = (): void => {
+  /** The new stream delivered: it takes over, and the old one is closed. */
+  private takeOver(first: MessageEvent, type: string): void {
     const next = this.pending
     if (!next) return
     this.pending = null
-    next.removeEventListener('open', this.onPendingOpen)
-    next.removeEventListener('error', this.onPendingError)
+    this.unwatchPending(next)
     this.detach()
     this.source?.close()
     this.source = next
@@ -188,6 +217,7 @@ export class ReconnectingStream {
     this.retry = 0
     this.pendingRetry = 0
     this.deps.onState?.('live')
+    for (const listener of this.listeners.get(type) ?? []) listener(first)
   }
 
   /** The new plane would not open: keep the old stream, say so, try again. */
@@ -195,6 +225,10 @@ export class ReconnectingStream {
     const pending = this.pending
     if (!pending || pending.readyState !== STREAM_CLOSED) return
     this.dropPending()
+    this.switchFailed()
+  }
+
+  private switchFailed(): void {
     this.deps.onSwitchFailed?.()
     if (!this.alive) return this.connect()
     const wait = this.backoff[Math.min(this.pendingRetry, this.backoff.length - 1)]

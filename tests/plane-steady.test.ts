@@ -108,17 +108,38 @@ describe('a switch makes before it breaks', () => {
     return { stream, sources, seen, failed: () => failed, run: () => queue.splice(0).forEach((f) => f()) }
   }
 
-  it('keeps the old stream carrying events until the new one opens', () => {
+  it('keeps the old stream carrying events until the new one DELIVERS, and loses nothing at the swap', () => {
     const { stream, sources, seen } = rig()
     stream.restart()
     expect(sources).toHaveLength(2)
-    expect(sources[0].closed).toBe(false)
     sources[0].send('workspace', 'old')
+    // Connected is not enough: a slow tailnet connects and then carries nothing.
     sources[1].open()
+    expect(sources[0].closed).toBe(false)
+    sources[1].send('workspace', 'first')
     expect(sources[0].closed).toBe(true)
-    sources[1].send('workspace', 'new')
+    sources[1].send('workspace', 'second')
     sources[0].send('workspace', 'late')
-    expect(seen).toEqual(['old', 'new'])
+    expect(seen).toEqual(['old', 'first', 'second'])
+  })
+
+  it('takes over on the Mac\'s beat too, for a stream with nothing to say yet', () => {
+    const { stream, sources } = rig()
+    stream.restart()
+    sources[1].open()
+    sources[1].send('hb', '1')
+    expect(sources[0].closed).toBe(true)
+  })
+
+  it('fails a switch whose new stream connects and then says nothing', () => {
+    const { stream, sources, failed, run } = rig()
+    stream.restart()
+    sources[1].open()
+    // The proving deadline (SWITCH_PROVE_MS) is the scheduled timer.
+    run()
+    expect(sources[1].closed).toBe(true)
+    expect(sources[0].closed).toBe(false)
+    expect(failed()).toBe(1)
   })
 
   it('keeps the old stream when the new plane will not open, says so, and tries again', () => {
@@ -131,8 +152,9 @@ describe('a switch makes before it breaks', () => {
     run()
     expect(sources).toHaveLength(3)
     sources[2].open()
+    sources[2].send('workspace', 'new')
     expect(sources[0].closed).toBe(true)
-    expect(seen).toEqual(['still'])
+    expect(seen).toEqual(['still', 'new'])
   })
 
   it('just connects when the old stream is already dead', () => {

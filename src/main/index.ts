@@ -97,6 +97,7 @@ import {
 import { createDesktopCert, type DesktopCert } from './desktop-cert'
 import { createSecretsStore } from './secrets-store'
 import { createRtcHost } from './rtc-peer'
+import { createSocketBridge } from './socket-bridge'
 import { BUILD_CHECK_MS, readBuildId } from './build-id'
 import { secretAuditDetails, type SecretAudit } from './secret-cli'
 import { ensureSecretSlotNote } from './secret-note'
@@ -5972,6 +5973,8 @@ app.whenReady().then(() => {
     secrets,
     // The direct link over WebRTC (rtc-peer.ts), answered on the published addresses.
     rtc: rtcHost,
+    // The browser card's socket over plain HTTP, for a phone on the relay.
+    socketBridge: createSocketBridge(),
     build: { id: () => buildId, bus: buildBus },
     // Gates slug routing: off, /<slug>/... is not a route (see mobile-server).
     multiInstance: () => store.isMultiInstance,

@@ -9,7 +9,10 @@
  * send the Mac path over the data channel.
  */
 
-import { clientBase } from './api-base'
+import { apiPath, clientBase } from './api-base'
+import { authHeaders, tokenParam } from './auth-gate'
+import { BridgeWebSocket } from './path/bridge-socket'
+import { planeFetch } from './plane-fetch'
 import { dataPlane } from './data-plane'
 import { RtcEventSource, type RtcLink } from './path/rtc-link'
 import { socketUrl } from './browser-stream'
@@ -69,10 +72,29 @@ export const linkHeaders = (headers: HeadersInit | undefined): Record<string, st
  */
 export const openWebSocket = (scopedUrl: string): WebSocket => {
   const routed = viaLink(scopedUrl)
-  return routed
-    ? (routed.link.openSocket(routed.path) as unknown as WebSocket)
-    : new WebSocket(socketUrl(window.location.origin, scopedUrl))
+  if (routed) return routed.link.openSocket(routed.path) as unknown as WebSocket
+  // ON THE RELAY a WebSocket goes nowhere: the relay forwards requests and
+  // streams, never an upgrade. The same socket is bridged over those two
+  // (path/bridge-socket.ts, main/socket-bridge.ts).
+  const relayed = dataPlane().origin === '' && clientBase() !== ''
+  const path = relayed ? linkPath(scopedUrl) : null
+  if (path) return openBridgedSocket(path) as unknown as WebSocket
+  return new WebSocket(socketUrl(window.location.origin, scopedUrl))
 }
+
+/** The socket at a Mac path, as an event stream down and POSTs up. */
+export const openBridgedSocket = (path: string): BridgeWebSocket =>
+  new BridgeWebSocket({
+    stream: () => openEventSource(tokenParam(apiPath(`/api/socket-bridge?path=${encodeURIComponent(path)}`))),
+    post: async (id, messages) => {
+      const response = await planeFetch(apiPath(`/api/socket-bridge/${id}`), {
+        method: 'POST',
+        headers: { ...authHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ m: messages })
+      })
+      return response.status !== 404
+    }
+  })
 
 /** `new EventSource(url)`, or the same stream over the direct link when the plane is the link. */
 export const openEventSource = (url: string): EventSource => {

@@ -43,6 +43,7 @@ import type {
 } from "../shared/model";
 import { lightenCanvas } from "../shared/wire-canvas";
 import { readBytes, readJson, respondJson, startSse, pairingAuthorized, presentedToken } from "./mobile-http";
+import { bridgeablePath, SOCKET_BRIDGE_MESSAGE_MAX, SOCKET_BRIDGE_PATH, SOCKET_BRIDGE_POST_MESSAGES, type SocketBridge } from "./socket-bridge";
 import { dynamicCompressionStats } from "./http-compress";
 import type { StreamService } from "./stream-service";
 import { handleStreamRoutes } from "./stream-routes";
@@ -222,6 +223,8 @@ export interface MobileApiDeps {
    * write gate above refuses a POST without pairing.
    */
   rtc?: { answer: (offerSdp: string) => Promise<string | null> };
+  /** The browser card's socket over plain HTTP, for the relay (socket-bridge.ts). */
+  socketBridge?: SocketBridge;
   /** The build this Mac serves (build-id.ts): sent on every stream, and again when it changes. */
   build?: { id: () => string; bus: EventEmitter };
   /**
@@ -713,6 +716,33 @@ export async function handleMobileApi(
     } catch {
       respondJson(response, 400, { error: "offer not accepted" });
     }
+    return true;
+  }
+  // THE BROWSER CARD'S SOCKET OVER PLAIN HTTP (socket-bridge.ts): down as an
+  // event stream, up as POSTs — the two things the relay carries.
+  if (deps.socketBridge && p === SOCKET_BRIDGE_PATH && method === "GET") {
+    const target = url.searchParams.get("path") ?? "";
+    if (!deps.socketBridge.open(target, response))
+      respondJson(response, bridgeablePath(target) ? 503 : 400, { error: "that socket cannot be bridged now" });
+    return true;
+  }
+  const bridgePost = p.match(/^\/api\/socket-bridge\/([0-9a-f-]{36})$/);
+  if (deps.socketBridge && bridgePost && method === "POST") {
+    const body = await readJson<{ m?: unknown }>(request);
+    const messages = Array.isArray(body.m) ? body.m : [];
+    if (
+      messages.length === 0 ||
+      messages.length > SOCKET_BRIDGE_POST_MESSAGES ||
+      !messages.every((m): m is string => typeof m === "string" && m.length <= SOCKET_BRIDGE_MESSAGE_MAX)
+    ) {
+      respondJson(response, 400, { error: "m must be a short list of strings" });
+      return true;
+    }
+    if (!deps.socketBridge.post(bridgePost[1], messages)) {
+      respondJson(response, 404, { error: "no such bridged socket" });
+      return true;
+    }
+    response.writeHead(204).end();
     return true;
   }
   const secretMatch = p.match(/^\/api\/secrets(?:\/([^/]+))?$/);

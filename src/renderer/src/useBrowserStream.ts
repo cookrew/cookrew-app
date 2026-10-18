@@ -29,6 +29,12 @@ import {
 
 /** No first frame within this long after the socket opens -> use the renderer fallback. */
 const FIRST_FRAME_TIMEOUT_MS = 4000
+/**
+ * The phone's, longer: its socket may be bridged through the relay
+ * (rtc-plane.ts · openWebSocket), where the first frame is a whole JPEG over
+ * the slowest path the companion has.
+ */
+const REMOTE_FIRST_FRAME_TIMEOUT_MS = 10_000
 const VIEWPORT_REPORT_DEBOUNCE_MS = 200
 
 /** No frame for this long -> treat the view as NOT live (frozen), input OFF. */
@@ -294,7 +300,7 @@ export function useBrowserStream(
 
       deadline = setTimeout(() => {
         if (!gotFrameRef.current) fail('error')
-      }, FIRST_FRAME_TIMEOUT_MS)
+      }, client === 'desktop' ? FIRST_FRAME_TIMEOUT_MS : REMOTE_FIRST_FRAME_TIMEOUT_MS)
 
       staleTimer = setInterval(() => {
         if (!disposed && !frameIsFresh(lastFrameAtRef.current, Date.now(), FRAME_STALE_MS)) {

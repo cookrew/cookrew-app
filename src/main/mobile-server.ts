@@ -208,6 +208,8 @@ export interface MobileServerDeps {
   secrets?: MobileApiDeps['secrets']
   /** The Mac's WebRTC end (rtc-peer.ts) — passed straight through. */
   rtc?: MobileApiDeps['rtc']
+  /** The browser card's socket over plain HTTP (socket-bridge.ts) — passed straight through. */
+  socketBridge?: MobileApiDeps['socketBridge']
   /** The build this Mac serves — passed straight through. */
   build?: MobileApiDeps['build']
   /** Sous's door and its `ui` bus — see MobileApiDeps; passed through as-is. */

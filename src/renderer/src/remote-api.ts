@@ -267,9 +267,10 @@ function sharedEvents(): ReconnectingStream {
       // badge would report the address bar forever, which is a memory rather
       // than a fact the moment the channel dies.
       onState: setPathLink,
-      // A switch whose new plane would not open a stream is evidence against
-      // that plane; the old stream keeps the session meanwhile.
-      onSwitchFailed: () => planeHealth().note(false)
+      // A direct plane that cannot deliver this stream within SWITCH_PROVE_MS
+      // carries nothing a session needs (live-stream.ts): it is given up, and
+      // the old stream kept the session meanwhile. A no-op on the relay.
+      onSwitchFailed: () => planeHealth().condemn()
     })
     events = stream
     // A live stream does not re-read its own URL, so a plane switch has to

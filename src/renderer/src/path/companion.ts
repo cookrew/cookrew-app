@@ -21,7 +21,8 @@ import { planeFetch } from '../plane-fetch'
 import { planeHealth, type LinkHealth } from '../plane-health'
 import { followDataPlane } from '../plane-streams'
 import { onStreamDeath } from '../stream-watch'
-import { currentOriginState, forgetLatency, setProbing, subscribePathLink } from '../path-link'
+import { tailnetWorthIt, warmRoundTrip } from './plane-quality'
+import { currentOriginState, forgetLatency, pathLinkState, setProbing, subscribePathLink } from '../path-link'
 import {
   PLANE_PROBE_EVERY_MS,
   planeCandidates,
@@ -417,6 +418,16 @@ const startPlaneSwitch = (): (() => void) => {
           // "refused by the browser" where it is not (path/name-oracle.ts).
           named: (origin) => nameLive(origin),
           adopt: (plane: DataPlane) => setDataPlane(plane),
+          // A tailnet must beat the relay on a warm connection, not just
+          // answer once (path/plane-quality.ts). The LAN is the same Wi-Fi.
+          worthIt: async (origin, kind) => {
+            if (kind === 'lan') return true
+            const warm = await warmRoundTrip(async () => {
+              const result = await askHello(origin, randomNonce((bytes) => window.crypto.getRandomValues(bytes)), { origin })
+              return result.ok
+            })
+            return tailnetWorthIt(warm, pathLinkState().latencyMs)
+          },
           nonce: () => randomNonce((bytes) => window.crypto.getRandomValues(bytes)),
           held: () => health.held(),
           probing: setProbing,
