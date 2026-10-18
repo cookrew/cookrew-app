@@ -165,3 +165,38 @@ describe('a tailnet worth moving onto', () => {
     expect(await switchPlaneIfBetter({ ...deps, worthIt: async () => true })).toBe('switched')
   })
 })
+
+describe('the browser card on the relay is paced', () => {
+  it('sends at most one frame per interval, always the newest, and every other message at once', async () => {
+    const { SOCKET_BRIDGE_FRAME_MS } = await import('../src/main/socket-bridge')
+    let deps!: LoopbackSocketDeps
+    const bridge = createSocketBridge({
+      dial: (d) => {
+        deps = d
+        return { send: () => undefined, close: () => undefined, pause: () => undefined, resume: () => undefined }
+      }
+    })
+    const server = http.createServer((_req, res) => void bridge.open('/api/browser/b1/stream', res))
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()))
+    const port = (server.address() as { port: number }).port
+    let text = ''
+    http.get({ host: '127.0.0.1', port, path: '/', headers: { 'accept-encoding': 'identity' } }, (res) => {
+      res.setEncoding('utf8')
+      res.on('data', (chunk: string) => void (text += chunk))
+    })
+    await new Promise((r) => setTimeout(r, 50))
+    deps.onOpen()
+    // A burst of frames from an animated page, and a control message among them.
+    for (let i = 1; i <= 30; i += 1) {
+      deps.onMessage(`{"t":"frame","seq":${i}}`)
+      if (i === 10) deps.onMessage('{"t":"control"}')
+    }
+    await new Promise((r) => setTimeout(r, SOCKET_BRIDGE_FRAME_MS * 2 + 100))
+    const sentFrames = [...text.matchAll(/\\"seq\\":(\d+)/g)].map((m) => Number(m[1]))
+    expect(text).toContain('control')
+    // The burst became its newest frame, not thirty.
+    expect(sentFrames).toEqual([30])
+    server.closeAllConnections()
+    server.close()
+  })
+})
