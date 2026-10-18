@@ -256,9 +256,20 @@ export function WorldView({
         if (here !== null && p.id !== here) continue
         if (here === null) {
           // Above the TALLEST tower, not a fixed height: on a busy island the
-          // name was buried in its own crew.
+          // name was buried in its own crew. And anchored at the island's FAR
+          // edge rather than its centre — the back of a crowd projects highest
+          // on screen, so a centre anchor still lands inside the forest. The
+          // edge is taken from the camera's own direction, so it stays the far
+          // one however the view is orbited.
           const crown = p.agents.reduce((t, ag) => Math.max(t, towerHeight(ag.turnCount)), 0)
-          point.set(p.at.x, p.at.y + 26 + crown, p.at.z)
+          const dx = p.at.x - handles.camera.position.x
+          const dz = p.at.z - handles.camera.position.z
+          const away = Math.hypot(dx, dz) || 1
+          point.set(
+            p.at.x + (dx / away) * p.radius,
+            p.at.y + 26 + crown,
+            p.at.z + (dz / away) * p.radius
+          )
           const at = project(point, handles.camera, size.w, size.h)
           if (at) marks.push({ id: p.id, kind: 'place', ...at })
         } else {
