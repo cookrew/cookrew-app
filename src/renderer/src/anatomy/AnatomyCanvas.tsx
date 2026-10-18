@@ -1,13 +1,13 @@
-// The anatomy canvas: the whole board as one isometric figure, sized to the
-// stage and never panned.
+// The anatomy canvas: the whole board as one figure, sized to the stage and
+// never panned.
 //
-// THREE RULES, and everything here follows from them.
+// FOUR RULES, and everything here follows from them.
 //
 // 1. A SLOT IS AN AGENT. A note and a browser are evidence of work, not
-//    workers: they cannot act and they never need anybody, so they live in
-//    their agent's station (station.tsx) instead of taking a slot each. On
-//    the owner's board that is 247 tiles down to 34 units, and the area that
-//    buys is what pays for rule 2.
+//    workers: they cannot act and they never need anybody, so they live with
+//    the agent that made them instead of taking a slot each. On the owner's
+//    board that is 247 tiles down to 34 units, and the area that buys is what
+//    pays for rule 2.
 //
 // 2. THE SCENE CARRIES STATE, THE GLASS CARRIES WORDS. Objects are drawn in
 //    the isometric scene; every word is upright HTML on top of it. Text laid
@@ -15,9 +15,14 @@
 //    hopeless in Chinese, and it was the first version's worst fault.
 //
 // 3. HEIGHT IS THE ATTENTION AXIS. The board rests flat and still. The one
-//    agent waiting on a person raises a mast, and a single pill names how
+//    agent waiting on a person raises something, and a single pill names how
 //    many there are. Nothing else moves, and when nobody is waiting the pill
 //    is not rendered at all — a calm board has to look calm.
+//
+// 4. THE SURFACE IS THE CONTAINER'S CHOICE. A floor is only one option, and
+//    the worst for density: it projects to a diamond and a diamond leaves the
+//    rectangle's four corners empty. A wall fills the rectangle; a can turns.
+//    mounts.tsx holds the two that are not a floor.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './anatomy.css'
@@ -28,7 +33,8 @@ import { spriteForPreset, type AgentSpriteKind } from '../nodes/AgentSprite'
 import { tuningTag } from '../../../shared/agent-tuning'
 import type { TerminalActivity, TurnPhase } from '../../../shared/turn'
 import { AnatomyStation, stationLabelAt, type StationAgent } from './station'
-import { CONTAINERS, containerOf, floorOf } from './containers'
+import { CONTAINERS, containerOf, floorOf, type AnatomyContainer } from './containers'
+import { buildCan, buildWall, planCan, planWall, type MountScene } from './mounts'
 import {
   PITCH,
   gridBounds,
@@ -39,7 +45,7 @@ import {
   slotCentre,
   type AnatomyOrientation
 } from './layout'
-import { depthOf, fitProjection, iso, type Flat, type Projection } from './iso-kit'
+import { depthOf, fitProjection, iso, type Flat, type Point3, type Projection } from './iso-kit'
 
 const CONTAINER_KEY = 'cookrew-anatomy-container'
 const ORIENTATION_KEY = 'cookrew-anatomy-orientation'
@@ -149,9 +155,9 @@ const PHASE_WORD: Record<TurnPhase, string> = {
 }
 const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim()
 /**
- * The single line a station shows without being asked. While a turn runs that
- * is what the agent is doing; the rest of the time it is the last thing it
- * said — which is what a person actually wants off a glance.
+ * The single line a unit shows without being asked. While a turn runs that is
+ * what the agent is doing; the rest of the time it is the last thing it said —
+ * which is what a person actually wants off a glance.
  */
 function latestOf(activity: TerminalActivity | undefined): string {
   if (activity === undefined) return ''
@@ -200,6 +206,67 @@ const writeStored = (key: string, value: string): void => {
   }
 }
 
+/** The floor mount, in the same shape the wall and the can return. */
+function buildFloor(
+  container: Extract<AnatomyContainer, { topology: 'floor' }>,
+  agents: readonly StationAgent[],
+  placed: readonly string[],
+  links: ReadonlyArray<readonly [string, string]>,
+  grid: ReturnType<typeof planGrid>,
+  title: string,
+  selectedId: string | null,
+  fit: (points: Point3[], azimuth: number, elevation: number) => Projection
+): MountScene {
+  const floor = floorOf(grid)
+  const P = fit([...gridBounds(grid), ...container.extent(floor, grid)], grid.azimuth, grid.elevation)
+  const byId = new Map(agents.map((a) => [a.id, a]))
+  const indexOf = new Map<string, number>()
+  placed.forEach((id, i) => {
+    if (id !== '') indexOf.set(id, i)
+  })
+  const seats = placed.flatMap((id, i) => {
+    const agent = byId.get(id)
+    if (!agent) return []
+    const { x, y } = slotCentre(i, grid)
+    return [
+      {
+        agent,
+        label: stationLabelAt(x, y, P),
+        depth: depthOf([x, y, 0], P),
+        node: (
+          <AnatomyStation
+            key={id}
+            agent={agent}
+            x={x}
+            y={y}
+            P={P}
+            selected={selectedId === id}
+          />
+        )
+      }
+    ]
+  })
+  seats.sort((a, b) => a.depth - b.depth)
+  const a = iso([0, 0, 0], P)
+  const b = iso([PITCH, 0, 0], P)
+  const cables = routeCables(links, (id) => indexOf.get(id), grid).map((cable) => ({
+    a: cable.a,
+    b: cable.b,
+    d: roundedPath(
+      cable.points.map((p) => iso([p[0], p[1], 0.6], P)),
+      6
+    )
+  }))
+  return {
+    P,
+    furniture: container.furniture({ grid, P, floor, title }),
+    seats,
+    cables,
+    cellPx: Math.hypot(b[0] - a[0], b[1] - a[1]),
+    labelAnchor: 'above'
+  }
+}
+
 export function AnatomyCanvas({
   nodes,
   edges,
@@ -218,6 +285,7 @@ export function AnatomyCanvas({
   })
   const [pinned, setPinned] = useState<string | null>(null)
   const [hovered, setHovered] = useState<string | null>(null)
+  const [spin, setSpin] = useState(0)
   const orientation: AnatomyOrientation =
     override ?? (w > 0 && w / h < 0.85 ? 'portrait' : 'landscape')
 
@@ -226,102 +294,50 @@ export function AnatomyCanvas({
   const activities = useActivitiesSnapshot()
   const tunings = useTuningsSnapshot()
 
-  const view = useMemo(() => {
-    if (w < 40 || h < 40 || board.agents.length === 0) return null
-    const grid = planGrid(board.agents.length, w / h, orientation)
-    const placed = orderAgents(
-      board.agents.map((a) => a.id),
-      board.links,
-      grid.cols,
-      grid.rows
-    )
-    const floor = floorOf(grid)
-    const P: Projection = fitProjection([...gridBounds(grid), ...container.extent(floor, grid)], w, h, {
-      pad: 8,
-      azimuth: grid.azimuth,
-      elevation: grid.elevation
-    })
-    const indexOf = new Map<string, number>()
-    placed.forEach((id, i) => {
-      if (id !== '') indexOf.set(id, i)
-    })
-    const byId = new Map(board.agents.map((a) => [a.id, a]))
-    const seats = placed.flatMap((id, i) => {
-      const agent = byId.get(id)
-      if (!agent) return []
-      const { x, y } = slotCentre(i, grid)
-      return [{ agent, x, y, depth: depthOf([x, y, 0], P), label: stationLabelAt(x, y, P) }]
-    })
-    seats.sort((a, b) => a.depth - b.depth)
-    const a = iso([0, 0, 0], P)
-    const b = iso([PITCH, 0, 0], P)
-    const cellPx = Math.hypot(b[0] - a[0], b[1] - a[1])
-    const cables = routeCables(board.links, (id) => indexOf.get(id), grid).map((cable) => ({
-      ...cable,
-      d: roundedPath(
-        cable.points.map((p) => iso([p[0], p[1], 0.6], P)),
-        6
-      )
-    }))
-    return { grid, P, seats, cables, floor, cellPx }
-  }, [board, w, h, orientation, container])
-
   /**
-   * The figure is redrawn when the BOARD or a PHASE changes, not when an
-   * activity object does. A running turn replaces its activity several times
-   * a second and the geometry has nothing to say about any of it; only the
-   * four phases change what is drawn (the lamp, and the mast on waiting).
+   * The scene is rebuilt when the BOARD, the surface or a PHASE changes — not
+   * when an activity object does. A running turn replaces its activity several
+   * times a second and the geometry has nothing to say about any of it; only
+   * the four phases change what is drawn (the lamp, and what a waiting agent
+   * raises). `phaseKey` is that read, spelled out so the memo can see it.
    */
   const phaseKey = board.agents.map((a) => `${a.id}:${activities[a.id]?.phase ?? 'idle'}`).join('|')
-  const figure = useMemo(() => {
-    if (view === null) return null
-    const phaseOf = (id: string): TurnPhase => activities[id]?.phase ?? 'idle'
-    return (
-      <>
-        <g className="an-furniture">
-          {container.furniture({ grid: view.grid, P: view.P, floor: view.floor, title })}
-        </g>
-        <g className="an-cables">
-          {view.cables.map((cable) => (
-            <g key={`${cable.a}-${cable.b}`} className="an-cable" data-a={cable.a} data-b={cable.b}>
-              <path className="an-cable-out" d={cable.d} />
-              <path className="an-cable-in" d={cable.d} />
-            </g>
-          ))}
-        </g>
-        <g className="an-stations">
-          {view.seats.map((seat) => {
-            const agent: StationAgent = {
-              id: seat.agent.id,
-              name: seat.agent.name,
-              harness: seat.agent.harness,
-              phase: phaseOf(seat.agent.id),
-              orch: seat.agent.orch,
-              notes: seat.agent.notes.length,
-              browsers: seat.agent.browsers.length
-            }
-            return (
-              <AnatomyStation
-                key={agent.id}
-                agent={agent}
-                x={seat.x}
-                y={seat.y}
-                P={view.P}
-                selected={selectedId === agent.id}
-              />
-            )
-          })}
-        </g>
-      </>
-    )
-    // phaseKey IS the read of `activities` this memo depends on: depending on
-    // the object itself would redraw every solid several times a second.
+  const scene = useMemo(() => {
+    if (w < 40 || h < 40 || board.agents.length === 0) return null
+    const agents: StationAgent[] = board.agents.map((a) => ({
+      id: a.id,
+      name: a.name,
+      harness: a.harness,
+      phase: activities[a.id]?.phase ?? 'idle',
+      orch: a.orch,
+      notes: a.notes.length,
+      browsers: a.browsers.length
+    }))
+    const ids = agents.map((a) => a.id)
+    const fit = (points: Point3[], azimuth: number, elevation: number): Projection =>
+      fitProjection(points, w, h, { pad: 8, azimuth, elevation })
+    if (container.topology === 'wall') {
+      const plan = planWall(agents.length, w / h)
+      const placed = orderAgents(ids, board.links, plan.cols, plan.rows)
+      return buildWall(agents, placed, board.links, w, h, title, fit, selectedId)
+    }
+    if (container.topology === 'can') {
+      const plan = planCan(agents.length)
+      const placed = orderAgents(ids, board.links, plan.cols, plan.rows)
+      return buildCan(agents, placed, board.links, w, h, spin, fit, selectedId)
+    }
+    if (container.topology !== 'floor') return null
+    const grid = planGrid(agents.length, w / h, orientation)
+    const placed = orderAgents(ids, board.links, grid.cols, grid.rows)
+    return buildFloor(container, agents, placed, board.links, grid, title, selectedId, fit)
+    // phaseKey IS the read of `activities` above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, container, title, phaseKey, selectedId])
+  }, [board, w, h, orientation, container, title, selectedId, spin, phaseKey])
 
   const waiting = board.agents.filter((a) => activities[a.id]?.phase === 'waiting')
   const shown = pinned ?? hovered
   const shownAgent = shown === null ? null : (board.agents.find((a) => a.id === shown) ?? null)
+  const spinnable = container.topology === 'can'
 
   const pickContainer = useCallback((id: string) => {
     setContainerId(id)
@@ -335,60 +351,111 @@ export function AnatomyCanvas({
     })
   }, [])
 
+  /* ---------- turning the can ---------- */
+  const drag = useRef<{ x: number; spin: number; moved: number } | null>(null)
+  const onPointerDown = useCallback(
+    (event: React.PointerEvent<SVGSVGElement>) => {
+      if (!spinnable) return
+      drag.current = { x: event.clientX, spin, moved: 0 }
+      event.currentTarget.setPointerCapture(event.pointerId)
+    },
+    [spinnable, spin]
+  )
+  const onPointerMove = useCallback((event: React.PointerEvent<SVGSVGElement>) => {
+    const d = drag.current
+    if (d === null) {
+      setHovered(unitUnder(event.target))
+      return
+    }
+    const dx = event.clientX - d.x
+    d.moved = Math.max(d.moved, Math.abs(dx))
+    setSpin(d.spin + dx * 0.007)
+  }, [])
+  const endDrag = useCallback((event: React.PointerEvent<SVGSVGElement>) => {
+    if (drag.current !== null) {
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId)
+      } catch {
+        /* the pointer was already gone */
+      }
+    }
+    // A drag is not a click: let the moved flag survive one click handler.
+    setTimeout(() => {
+      drag.current = null
+    }, 0)
+  }, [])
+
   const unitUnder = (target: EventTarget | null): string | null =>
     (target as Element | null)?.closest('[data-unit]')?.getAttribute('data-unit') ?? null
   const onClick = useCallback((event: React.MouseEvent<SVGSVGElement>) => {
+    if ((drag.current?.moved ?? 0) > 4) return
     const id = unitUnder(event.target)
     setPinned((prev) => (id === null ? null : prev === id ? null : id))
-  }, [])
-  const onMove = useCallback((event: React.MouseEvent<SVGSVGElement>) => {
-    setHovered(unitUnder(event.target))
   }, [])
 
   // The pill walks the waiting agents, so nobody has to scan for them.
   const nextWaiting = useCallback(() => {
     if (waiting.length === 0) return
     const at = waiting.findIndex((a) => a.id === pinned)
-    setPinned(waiting[(at + 1) % waiting.length].id)
-  }, [waiting, pinned])
+    const next = waiting[(at + 1) % waiting.length]
+    setPinned(next.id)
+    // On the can the one you want may be round the back; turn it to the front.
+    if (spinnable) {
+      const i = board.agents.findIndex((a) => a.id === next.id)
+      const plan = planCan(board.agents.length)
+      setSpin(-((i % plan.cols) * (Math.PI * 2)) / plan.cols + Math.PI / 4)
+    }
+  }, [waiting, pinned, spinnable, board.agents])
 
   const panelAt: Flat | null =
-    shownAgent === null ? null : (view?.seats.find((s) => s.agent.id === shownAgent.id)?.label ?? null)
+    shownAgent === null ? null : (scene?.seats.find((s) => s.agent.id === shownAgent.id)?.label ?? null)
 
   return (
-    <div className="an-host" ref={hostRef} data-orientation={orientation}>
-      {view === null ? null : (
+    <div className="an-host" ref={hostRef} data-orientation={orientation} data-topology={container.topology}>
+      {scene === null ? null : (
         <>
           <svg
-            className="iso-svg an-svg"
+            className={`iso-svg an-svg${spinnable ? ' spinnable' : ''}`}
             viewBox={`0 0 ${w} ${h}`}
             role="application"
             aria-label={`${title}: ${board.agents.length} agents as an anatomy figure`}
             onClick={onClick}
-            onMouseMove={onMove}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
             onMouseLeave={() => setHovered(null)}
           >
-            {figure}
+            <g className="an-furniture">{scene.furniture}</g>
+            <g className="an-cables">
+              {scene.cables.map((cable) => (
+                <g key={`${cable.a}-${cable.b}`} className="an-cable" data-a={cable.a} data-b={cable.b}>
+                  <path className="an-cable-out" d={cable.d} />
+                  <path className="an-cable-in" d={cable.d} />
+                </g>
+              ))}
+            </g>
+            <g className="an-units">{scene.seats.map((seat) => seat.node)}</g>
           </svg>
           {/* THE GLASS. Every word on this view is here, upright. */}
           <div className="an-glass" aria-hidden="true">
-            {view.seats.map((seat) => {
+            {scene.seats.map((seat) => {
               const activity = activities[seat.agent.id]
               const phase = activity?.phase ?? 'idle'
               const tag = tuningTag(tunings[seat.agent.id] ?? null)
-              // On a phone every slot is about sixty pixels across and
-              // thirty-four names land on top of each other. The ones with
-              // something to say keep their label; the settled ones are a
-              // lamp and a shape, which is all a glance needs from them.
-              if (view.cellPx < 78 && phase === 'idle' && shown !== seat.agent.id) return null
+              // On a phone every slot is about sixty pixels across and the
+              // names land on top of each other. The ones with something to
+              // say keep their label; the settled ones are a lamp and a
+              // shape, which is all a glance needs from them.
+              if (scene.cellPx < 78 && phase === 'idle' && shown !== seat.agent.id) return null
               return (
                 <div
                   key={seat.agent.id}
-                  className={`an-label st-${phase}${shown === seat.agent.id ? ' on' : ''}${phase === 'idle' ? ' quiet' : ''}`}
+                  className={`an-label an-${scene.labelAnchor} st-${phase}${shown === seat.agent.id ? ' on' : ''}${phase === 'idle' ? ' quiet' : ''}`}
                   style={{
                     left: `${seat.label[0].toFixed(1)}px`,
                     top: `${seat.label[1].toFixed(1)}px`,
-                    maxWidth: `${Math.max(90, view.cellPx * 0.98).toFixed(0)}px`
+                    maxWidth: `${Math.max(90, scene.cellPx * 0.98).toFixed(0)}px`
                   }}
                 >
                   <b>
@@ -397,9 +464,8 @@ export function AnatomyCanvas({
                   </b>
                   {/* A line only when there is something new to say. `idle`
                       means nothing has happened since you last looked, and a
-                      board where thirty-four agents all talk at once is the
-                      noise this view exists to remove. Its last word is still
-                      one hover away in the panel. */}
+                      board where everyone talks at once is the noise this
+                      view exists to remove. Its last word is one hover away. */}
                   {phase === 'idle' ? null : <span>{latestOf(activity) || PHASE_WORD[phase]}</span>}
                 </div>
               )
@@ -441,21 +507,33 @@ export function AnatomyCanvas({
             {c.label}
           </button>
         ))}
-        <button
-          type="button"
-          className="an-flip"
-          onClick={flip}
-          title={`Shape: ${orientation}. Tap for ${orientation === 'landscape' ? 'portrait' : 'landscape'}.`}
-          aria-label={`Shape: ${orientation}`}
-        >
-          {orientation === 'landscape' ? '↔' : '↕'}
-        </button>
+        {spinnable ? (
+          <>
+            <button type="button" className="an-turn" onClick={() => setSpin((s) => s - 0.45)} aria-label="Turn left">
+              ‹
+            </button>
+            <button type="button" className="an-turn" onClick={() => setSpin((s) => s + 0.45)} aria-label="Turn right">
+              ›
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            className="an-flip"
+            onClick={flip}
+            title={`Shape: ${orientation}. Tap for ${orientation === 'landscape' ? 'portrait' : 'landscape'}.`}
+            aria-label={`Shape: ${orientation}`}
+          >
+            {orientation === 'landscape' ? '↔' : '↕'}
+          </button>
+        )}
       </div>
 
       <p className="an-foot">
         {board.agents.length} agents · {board.agents.reduce((n, a) => n + a.notes.length, 0)} notes ·{' '}
         {board.agents.reduce((n, a) => n + a.browsers.length, 0)} browsers
         {board.unowned > 0 ? ` · ${board.unowned} unowned` : ''}
+        {spinnable ? ` · ${scene?.seats.length ?? 0} facing you — drag to turn` : ''}
       </p>
     </div>
   )

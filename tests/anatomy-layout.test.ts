@@ -9,6 +9,8 @@ import {
   slotCentre
 } from '../src/renderer/src/anatomy/layout'
 import { STATION_CELL } from '../src/renderer/src/anatomy/station'
+import { planCan, planWall } from '../src/renderer/src/anatomy/mounts'
+import { iso, type Point3, type Projection } from '../src/renderer/src/anatomy/iso-kit'
 
 const AZIMUTHS = [45, 78]
 const ELEVATIONS = [30, 38]
@@ -201,5 +203,71 @@ describe('roundedPath', () => {
         6
       )
     ).not.toContain('Q')
+  })
+})
+
+describe('the mounts that are not a floor', () => {
+  it('a wall fills far more of the screen than a floor does', () => {
+    // The whole reason the wall exists. An isometric FLOOR projects to a
+    // diamond, and a diamond fills half its own bounding box — that is where
+    // the empty corners come from, and no regridding gets them back. A
+    // vertical plane projects to a parallelogram, which fills nearly all of
+    // it. This measures both rather than asserting the claim.
+    const area = (pts: Array<[number, number]>): number => {
+      let a = 0
+      for (let i = 0; i < pts.length; i++) {
+        const [x1, y1] = pts[i]
+        const [x2, y2] = pts[(i + 1) % pts.length]
+        a += x1 * y2 - x2 * y1
+      }
+      return Math.abs(a) / 2
+    }
+    const fill = (points: Point3[], azimuth: number, elevation: number): number => {
+      const P: Projection = { origin: [0, 0], scale: 1, azimuth, elevation }
+      const flat = points.map((p) => iso(p, P)) as Array<[number, number]>
+      const xs = flat.map(([x]) => x)
+      const ys = flat.map(([, y]) => y)
+      const box = (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys))
+      return area(flat) / box
+    }
+    const floor = fill(
+      [
+        [0, 0, 0],
+        [600, 0, 0],
+        [600, 600, 0],
+        [0, 600, 0]
+      ],
+      45,
+      30
+    )
+    const wall = fill(
+      [
+        [0, 0, 0],
+        [600, 0, 0],
+        [600, 0, 340],
+        [0, 0, 340]
+      ],
+      80,
+      12
+    )
+    expect(floor).toBeLessThan(0.55)
+    expect(wall).toBeGreaterThan(0.9)
+    expect(wall).toBeGreaterThan(floor * 1.7)
+  })
+
+  it('the wall has a place for every agent and more than one row', () => {
+    const plan = planWall(34, 1440 / 795)
+    expect(plan.cols * plan.rows).toBeGreaterThanOrEqual(34)
+    expect(plan.rows).toBeGreaterThan(1)
+  })
+
+  it('the can holds everyone, and shows only the half turned toward you', () => {
+    const plan = planCan(34)
+    expect(plan.cols * plan.rows).toBeGreaterThanOrEqual(34)
+    expect(plan.rows).toBeLessThanOrEqual(4)
+    // A cylinder's surface is about pi times its silhouette, which is the
+    // whole trade: it HOLDS more than a flat panel of the same footprint and
+    // shows less of it at once.
+    expect(plan.cols).toBeGreaterThan(6)
   })
 })

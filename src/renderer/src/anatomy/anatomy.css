@@ -528,3 +528,132 @@
 .an-label.on.quiet b i {
   display: inline;
 }
+
+/* ---------- WALL: a cabinet of pigeonholes, the densest mount ---------- */
+.an-hole {
+  cursor: pointer;
+}
+.an-box .iso-fill {
+  fill: #1f1d17;
+}
+.an-box .iso-top {
+  fill: #35312a;
+}
+.an-box .iso-shade[data-shade='0'] {
+  fill: #141310;
+}
+.an-box .iso-shade[data-shade='1'],
+.an-box .iso-shade[data-shade='2'] {
+  fill: #1c1a15;
+}
+.an-box .iso-shade[data-shade='3'] {
+  fill: #272420;
+}
+.an-box .iso-edge {
+  stroke: var(--ink);
+}
+.an-box .iso-crease {
+  stroke: #4a443a;
+}
+.an-carcass .iso-fill {
+  fill: #efe9dd;
+}
+.an-rail .iso-fill {
+  fill: #e4ded1;
+}
+.an-hole:hover .an-box .iso-edge {
+  stroke: var(--amber-deep, #d97706);
+  stroke-width: 1.8;
+}
+.an-hole.sel .an-box .iso-edge {
+  stroke: var(--amber-deep, #d97706);
+  stroke-width: 2.4;
+}
+/* The deliverable bars: a count you can read without a number. */
+.an-bar {
+  stroke: var(--ink);
+  stroke-width: 0.5;
+}
+.an-bar.an-note {
+  fill: #d8c468;
+}
+.an-bar.an-browser {
+  fill: #7e9ec2;
+}
+
+/* ---------- CAN: a tin you turn ---------- */
+.an-svg.spinnable {
+  cursor: grab;
+  touch-action: none;
+}
+.an-svg.spinnable:active {
+  cursor: grabbing;
+}
+.an-tin .iso-fill {
+  fill: #f2ece0;
+}
+.an-tin .iso-shade[data-shade='0'] {
+  fill: #ddd5c6;
+}
+.an-tin .iso-shade[data-shade='1'],
+.an-tin .iso-shade[data-shade='2'] {
+  fill: #eae3d6;
+}
+.an-tin .iso-shade[data-shade='3'] {
+  fill: #fbf6ec;
+}
+.an-tin .iso-edge,
+.an-rim .iso-edge {
+  stroke: var(--ink);
+}
+.an-rim .iso-fill {
+  fill: #e0d8c8;
+}
+.an-tile {
+  cursor: pointer;
+}
+.an-tile-face {
+  fill: #1f1d17;
+  stroke: var(--ink);
+  stroke-width: 0.9;
+  stroke-linejoin: round;
+}
+.an-tile:hover .an-tile-face,
+.an-tile.sel .an-tile-face {
+  stroke: var(--amber-deep, #d97706);
+  stroke-width: 2;
+}
+.an-turn {
+  min-width: 26px;
+}
+
+/* A wall unit's caption lives INSIDE its hole: the row above leaves no sky to
+   hang it in, and a label centred on the leftmost column fell off the stage. */
+.an-label.an-inside {
+  transform: none;
+  background: rgba(18, 17, 14, 0.76);
+  box-shadow: none;
+  border-radius: 3px;
+}
+.an-label.an-inside b {
+  color: #f3efe4;
+}
+.an-label.an-inside b i,
+.an-label.an-inside span {
+  color: #b9b2a3;
+}
+.an-label.an-inside.quiet {
+  background: rgba(18, 17, 14, 0.5);
+}
+.an-label.an-inside.quiet b {
+  color: #cfc8ba;
+}
+.an-label.an-inside.st-thinking span {
+  color: var(--phos, #e9b949);
+}
+.an-label.an-inside.st-waiting span {
+  color: #ff8a80;
+}
+.an-label.an-inside.on {
+  background: rgba(18, 17, 14, 0.95);
+}

@@ -40,19 +40,37 @@ export interface AnatomyContainerCtx {
   title: string
 }
 
-export interface AnatomyContainer {
+/**
+ * A container owns the room — and, since the mounts landed, the SURFACE the
+ * units stand on too. A floor is only one option and the worst of them for
+ * density: an isometric floor projects to a diamond, and a diamond inscribed
+ * in a 16:9 rectangle leaves nearly half the screen in the corners. A wall
+ * projects to a parallelogram and fills it; a can trades what fits on screen
+ * for a surface three times larger that a drag brings round.
+ */
+export type AnatomyTopology = 'floor' | 'wall' | 'can'
+
+interface FloorContainer {
   id: string
   /** Shown in the picker. English, like the rest of the app's chrome. */
   label: string
+  topology: 'floor'
   furniture: (ctx: AnatomyContainerCtx) => React.ReactNode
   /**
    * Every extreme point this container's furniture reaches, floor included.
    * The camera is fitted to it, which is the whole of "the scene fits the
-   * screen": a room's walls stand 54 units above a floor the cards sit on,
+   * screen": a room's walls stand 54 units above a floor the units sit on,
    * and fitting the floor alone pushed them off the stage.
    */
   extent: (floor: Plan, grid: AnatomyGrid) => Point3[]
 }
+/** Wall and can bring their own surface, camera and furniture (mounts.tsx). */
+interface MountContainer {
+  id: string
+  label: string
+  topology: 'wall' | 'can'
+}
+export type AnatomyContainer = FloorContainer | MountContainer
 
 /** The margin between the outermost slot and the floor's edge. */
 export const FLOOR_PAD = GUTTER
@@ -264,12 +282,14 @@ function yardFurniture({ floor, P, title, grid }: AnatomyContainerCtx): React.Re
 export const CONTAINERS: readonly AnatomyContainer[] = [
   {
     id: 'bench',
+    topology: 'floor',
     label: 'Bench',
     furniture: benchFurniture,
     extent: (floor) => boxCorners(floor, -13, 0)
   },
   {
     id: 'room',
+    topology: 'floor',
     label: 'Room',
     furniture: roomFurniture,
     extent: (floor) =>
@@ -281,22 +301,29 @@ export const CONTAINERS: readonly AnatomyContainer[] = [
   },
   {
     id: 'board',
+    topology: 'floor',
     label: 'Board',
     furniture: boardFurniture,
     extent: (floor) => boxCorners(floor, -12, 0)
   },
   {
     id: 'shelf',
+    topology: 'floor',
     label: 'Shelf',
     furniture: shelfFurniture,
     extent: (floor) => boxCorners({ ...floor, y: floor.y - 18, d: floor.d + 18 }, -8, SHELF_H + 10)
   },
   {
     id: 'yard',
+    topology: 'floor',
     label: 'Yard',
     furniture: yardFurniture,
     extent: (floor) => boxCorners({ ...floor, y: floor.y - 13, d: floor.d + 13 }, -7, 61)
-  }
+  },
+  // The two that are not a floor. Wall is the density answer; Can trades
+  // simultaneity for a surface you turn.
+  { id: 'wall', topology: 'wall', label: 'Wall' },
+  { id: 'can', topology: 'can', label: 'Can' }
 ]
 
 export function containerOf(id: string | null): AnatomyContainer {
