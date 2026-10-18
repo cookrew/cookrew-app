@@ -23,6 +23,7 @@ import type { WorkspaceMeta } from '../../../shared/model'
 import {
   PHASE_WORD,
   fleetTotals,
+  mergeRows,
   readFleet,
   towerHeight,
   type WorldAgent,
@@ -136,19 +137,23 @@ export function WorldView({
         setActiveId(list.activeId)
       })
       .catch(() => undefined)
+    // '7d' is the widest window the board offers, and the world wants every
+    // place it can get: at the default day, a fleet whose last week of work is
+    // spread over ten workspaces opens as six towers on an empty plain.
     void api
-      .listBoard?.()
+      .listBoard?.('7d')
       .then((board) => {
         if (!alive || !board) return
-        setRows(board.rows)
+        setRows((prev) => mergeRows(prev, board.rows))
         setActiveId(board.activeWorkspaceId)
       })
       .catch(() => undefined)
     // A board that stays open pushes on every change; without it the world is
     // simply the snapshot it opened with, which is honest and still useful.
+    // The push carries the DEFAULT window, so it is merged, never swapped in.
     const off = api.subscribeBoard?.((board) => {
       if (!alive) return
-      setRows(board.rows)
+      setRows((prev) => mergeRows(prev, board.rows))
       setActiveId(board.activeWorkspaceId)
     })
     return () => {

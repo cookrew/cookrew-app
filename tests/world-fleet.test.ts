@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   fleetTotals,
+  mergeRows,
   radiusFor,
   readFleet,
   strideFor,
@@ -143,5 +144,37 @@ describe('an island and its crew', () => {
       NOW
     )
     expect(fleetTotals(places)).toEqual({ agents: 3, waiting: 1, working: 1, places: 2 })
+  })
+})
+
+describe('the wide snapshot', () => {
+  it('keeps a quiet agent when the live push only carries the last day', () => {
+    // The board is a timeline and windows itself; the world is a map. A push
+    // that no longer mentions last week's agent must not erase its island.
+    const wide = [
+      row({ id: 'fresh', ws: 'w1', agoMin: 5 }),
+      row({ id: 'quiet', ws: 'w2', agoMin: 6 * 24 * 60 })
+    ]
+    const push = [row({ id: 'fresh', ws: 'w1', phase: 'waiting', agoMin: 1 })]
+    const merged = mergeRows(wide, push)
+    expect(merged.map((r) => r.terminalId).sort()).toEqual(['fresh', 'quiet'])
+    // …and the push still corrects the row it does know about.
+    expect(merged.find((r) => r.terminalId === 'fresh')?.phase).toBe('waiting')
+  })
+
+  it('orders by the clock, freshest first', () => {
+    const merged = mergeRows(
+      [row({ id: 'old', ws: 'w1', agoMin: 900 })],
+      [row({ id: 'new', ws: 'w1', agoMin: 2 })]
+    )
+    expect(merged.map((r) => r.terminalId)).toEqual(['new', 'old'])
+  })
+
+  it('does not mutate what it was given', () => {
+    const prev = [row({ id: 'a', ws: 'w1' })]
+    const next = [row({ id: 'b', ws: 'w1' })]
+    mergeRows(prev, next)
+    expect(prev).toHaveLength(1)
+    expect(next).toHaveLength(1)
   })
 })

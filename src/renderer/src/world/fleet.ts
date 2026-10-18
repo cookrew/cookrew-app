@@ -119,6 +119,26 @@ export function radiusFor(crew: number): number {
 }
 
 /**
+ * A wide snapshot, corrected by the live board's pushes.
+ *
+ * The board is a TIMELINE and windows itself to the last day on purpose; the
+ * world is a MAP of everything you have, where a workspace that has gone quiet
+ * must stay on it and simply recede. So the world opens on the widest window
+ * the board offers and merges every later push by terminal instead of
+ * replacing: a push may correct any row it knows about, but it may not shrink
+ * the map back to the last twenty-four hours while you are standing in it.
+ *
+ * A row for an agent that is genuinely gone lingers until the view is
+ * re-opened. That is the right trade for a map: showing a place that has
+ * emptied is a smaller lie than hiding the ones that went quiet.
+ */
+export function mergeRows(prev: readonly BoardRow[], next: readonly BoardRow[]): BoardRow[] {
+  const by = new Map(prev.map((row) => [row.terminalId, row]))
+  for (const row of next) by.set(row.terminalId, row)
+  return [...by.values()].sort((a, b) => b.lastActivityAt - a.lastActivityAt)
+}
+
+/**
  * Board rows (every workspace, not just the loaded one) and the workspace list
  * become the world. A workspace with no rows in the board's window still gets
  * an island — an empty place out in the fog is information, and dropping it
