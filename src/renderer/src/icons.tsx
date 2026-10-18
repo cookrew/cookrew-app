@@ -22,6 +22,7 @@ export type CrIconName =
   | 'prev'
   | 'next'
   | 'canvas'
+  | 'world'
   | 'demo'
   | 'mobile'
   | 'bash'
@@ -160,6 +161,13 @@ const ICONS: Record<CrIconName, React.JSX.Element> = {
       <rect x="9" y="2.3" width="4.7" height="4.7" />
       <rect x="2.3" y="9" width="4.7" height="4.7" />
       <rect x="9" y="9" width="4.7" height="4.7" />
+    </g>
+  ),
+  world: (
+    <g {...STROKE}>
+      <circle cx="8" cy="8" r="5.7" />
+      <ellipse cx="8" cy="8" rx="2.4" ry="5.7" />
+      <path d="M2.4 8h11.2" />
     </g>
   ),
   demo: (
