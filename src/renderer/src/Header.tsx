@@ -8,7 +8,7 @@ import { RoutingEntry } from './routing/RoutingPanel'
 import type { RouteStatus } from '../../shared/route'
 
 /** The two things the stage can be showing. */
-export type MainView = 'canvas' | 'agents'
+export type MainView = 'canvas' | 'agents' | 'world'
 
 interface HeaderProps {
   workspaceName: string
@@ -155,6 +155,15 @@ export function Header({
           <CrIcon name="agent" />
           <span className="cr-viewseg-label">Board</span>
           {attentionCount > 0 && <span className="cr-viewseg-badge">{attentionCount}</span>}
+        </button>
+        <button
+          type="button"
+          aria-pressed={view === 'world'}
+          title="The world — every workspace as an island, distance is how long you have left it alone"
+          onClick={() => onViewChange('world')}
+        >
+          <CrIcon name="world" />
+          <span className="cr-viewseg-label">World</span>
         </button>
       </div>
 
