@@ -59,8 +59,8 @@ export interface AnatomyCard {
   name: string
   /** Agents only: which mark to stamp on the lid. */
   harness?: AgentSpriteKind
-  /** Agents only. 'off' is a card with no live session. */
-  phase?: TurnPhase | 'off'
+  /** Agents only. The app's four phases and no fifth: see TurnPhase. */
+  phase?: TurnPhase
   /** Agents only: the model + effort tag, e.g. "opus high". Null when unrecorded. */
   tag?: string | null
   orch?: boolean

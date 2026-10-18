@@ -231,9 +231,6 @@
 .an-lens.st-replied {
   fill: #64d2ff;
 }
-.an-lens.st-off {
-  fill: #c6bfb1;
-}
 .an-pick circle {
   fill: none;
   stroke: var(--amber-deep, #d97706);

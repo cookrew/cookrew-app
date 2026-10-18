@@ -265,7 +265,13 @@ export function AnatomyCanvas({
           <g className="an-status" aria-hidden="true">
             {view.seats.map((seat) => {
               if (seat.card.kind !== 'terminal') return null
-              const phase: TurnPhase | 'off' = activities[seat.card.id]?.phase ?? 'off'
+              // `?? 'idle'` is TerminalNode's own line (nodes/TerminalNode.tsx).
+              // This read used to default to an invented 'off', and on the live
+              // board 31 of 33 agents had no activity record yet — so the figure
+              // showed a fleet of dark lamps while the flat cards right beside
+              // it showed the same agents green. A view of the same board has
+              // to make the same claim about it.
+              const phase: TurnPhase = activities[seat.card.id]?.phase ?? 'idle'
               const [lx, ly] = lampAt(seat.x, seat.y, view.P)
               return (
                 <circle
@@ -273,7 +279,7 @@ export function AnatomyCanvas({
                   className={`an-lens st-${phase}`}
                   cx={lx.toFixed(1)}
                   cy={ly.toFixed(1)}
-                  r={Math.max(1.6, view.cellPx * 0.035)}
+                  r={Math.max(2.2, view.cellPx * 0.05)}
                 />
               )
             })}
