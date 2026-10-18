@@ -45,8 +45,17 @@ export const STREAM_GRACE_MS = 5_000
  */
 export const TAILNET_STREAM_GRACE_MS = 15_000
 
-/** How long the switcher stays off a plane it just fell back from. */
-export const HOLD_AFTER_FALLBACK_MS = 60_000
+/**
+ * How long the switcher stays off a plane it just fell back from — and the
+ * companion races again the moment it ends (path/companion.ts), so a tailnet
+ * that came back is used within seconds of the hold, not at the next minute.
+ * A plane that fails again within HOLD_REPEAT_WINDOW_MS is held twice as long
+ * each time, up to HOLD_MAX_MS: a path that flaps does not get to drag the
+ * phone back and forth.
+ */
+export const HOLD_AFTER_FALLBACK_MS = 30_000
+export const HOLD_REPEAT_WINDOW_MS = 5 * 60_000
+export const HOLD_MAX_MS = 5 * 60_000
 
 export type LinkHealth = 'live' | 'reconnecting' | 'failed'
 
@@ -80,6 +89,8 @@ export interface PlaneHealth {
   readonly condemn: () => void
   /** Is the switcher holding off after a fallback? */
   readonly held: () => boolean
+  /** When the current hold ends (0 when there is none), so a race can be set for it. */
+  readonly holdEndsAt: () => number
   readonly reset: () => void
 }
 
@@ -94,6 +105,8 @@ export const createPlaneHealth = (deps: PlaneHealthDeps = {}): PlaneHealth => {
 
   let failures = 0
   let holdUntil = 0
+  let lastGaveAt = -Infinity
+  let lastHold = 0
   let grace: unknown = null
 
   const clearGrace = (): void => {
@@ -106,7 +119,10 @@ export const createPlaneHealth = (deps: PlaneHealthDeps = {}): PlaneHealth => {
     failures = 0
     clearGrace()
     if (!direct()) return
-    holdUntil = now() + HOLD_AFTER_FALLBACK_MS
+    const at = now()
+    lastHold = at - lastGaveAt < HOLD_REPEAT_WINDOW_MS ? Math.min(lastHold * 2, HOLD_MAX_MS) : HOLD_AFTER_FALLBACK_MS
+    lastGaveAt = at
+    holdUntil = at + lastHold
     fallBack()
   }
 
@@ -135,9 +151,12 @@ export const createPlaneHealth = (deps: PlaneHealthDeps = {}): PlaneHealth => {
     },
     condemn: give,
     held: () => now() < holdUntil,
+    holdEndsAt: () => holdUntil,
     reset: () => {
       failures = 0
       holdUntil = 0
+      lastGaveAt = -Infinity
+      lastHold = 0
       clearGrace()
     }
   }

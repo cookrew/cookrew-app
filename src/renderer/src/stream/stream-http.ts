@@ -200,8 +200,11 @@ function subscribe(terminalId: string, handlers: StreamLiveHandlers): () => void
         handlers.onRollback(frame.fromOrdinal, frame.at ?? Date.now())
       )
     )
+    const mine = source
     source.onerror = (): void => {
-      if (stopped) return
+      // A stream already replaced (a plane switch reopened it) says nothing
+      // about the one that took its place.
+      if (stopped || source !== mine) return
       handlers.onState('reconnecting')
       source?.close()
       source = null

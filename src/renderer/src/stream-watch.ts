@@ -23,8 +23,23 @@
  */
 
 export const STREAM_OPEN_MS = 15_000
-/** Two and a half beats: one late beat is a slow path, three missing are a dead one. */
-export const STREAM_SILENT_MS = 25_000
+/** Two and a bit beats: one late beat is a slow path, two missing are a dead one. */
+export const STREAM_SILENT_MS = 22_000
+/** A timer this late did not run on time: the page was suspended, not the path silent. */
+export const SUSPENDED_LATE_MS = 4_000
+
+/**
+ * Why a stream was declared dead, for whoever decides about the plane
+ * (path/companion.ts): SILENT is proof the path stopped carrying a stream
+ * that was working; NEVER-OPENED is one failed connect; SUSPENDED is a phone
+ * that slept — the stream is reopened, and nothing is blamed.
+ */
+export type StreamDeath = 'silent' | 'never-opened' | 'suspended'
+const deaths = new Set<(why: StreamDeath) => void>()
+export const onStreamDeath = (listener: (why: StreamDeath) => void): (() => void) => {
+  deaths.add(listener)
+  return () => void deaths.delete(listener)
+}
 
 const CLOSED = 2
 
@@ -48,6 +63,7 @@ export const watchStream = <S extends WatchableSource>(source: S, options: Strea
   const native = options.native ?? (typeof EventSource !== 'undefined' && source instanceof EventSource)
   let beating = false
   let timer: ReturnType<typeof setTimeout> | null = null
+  let due = 0
   const close = source.close.bind(source)
 
   const stop = (): void => {
@@ -57,7 +73,10 @@ export const watchStream = <S extends WatchableSource>(source: S, options: Strea
   const kill = (): void => {
     timer = null
     if (source.readyState === CLOSED) return
+    const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden'
+    const why: StreamDeath = hidden || Date.now() - due > SUSPENDED_LATE_MS ? 'suspended' : beating ? 'silent' : 'never-opened'
     close()
+    for (const listener of [...deaths]) listener(why)
     const event = new Event('error')
     source.dispatchEvent(event)
     // A stand-in's `onerror` is a plain property no dispatched event reaches.
@@ -65,6 +84,7 @@ export const watchStream = <S extends WatchableSource>(source: S, options: Strea
   }
   const arm = (ms: number): void => {
     stop()
+    due = Date.now() + ms
     timer = setTimeout(kill, ms)
   }
 

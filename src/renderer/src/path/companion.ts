@@ -20,6 +20,7 @@ import { createPathMemory, watchNetwork, type PathMemory, type PathMemoryDeps } 
 import { planeFetch } from '../plane-fetch'
 import { planeHealth, type LinkHealth } from '../plane-health'
 import { followDataPlane } from '../plane-streams'
+import { onStreamDeath } from '../stream-watch'
 import { currentOriginState, forgetLatency, setProbing, subscribePathLink } from '../path-link'
 import {
   PLANE_PROBE_EVERY_MS,
@@ -338,6 +339,34 @@ const startPlaneSwitch = (): (() => void) => {
     // the smoothing that keeps it steady within a path makes it a lie across
     // one. So a switch drops it and the next request re-establishes it.
     subscribeDataPlane(forgetLatency),
+    // A STREAM THAT WENT SILENT ON A DIRECT PLANE is the path dying under it
+    // (Tailscale down, the Wi-Fi gone) — proof, not a hiccup, so the plane is
+    // given up at once rather than after a grace on top of the silence. A
+    // stream that never opened is one failed connect; a phone that slept
+    // blames nothing (stream-watch.ts).
+    onStreamDeath((why) => {
+      if (dataPlane().kind === 'relay') return
+      if (why === 'silent') health.condemn()
+      else if (why === 'never-opened') health.note(false)
+    }),
+    // AND RACE AGAIN THE MOMENT A HOLD ENDS. The loop ticks once a minute, so
+    // a tailnet that came back waited up to a minute past its hold.
+    (() => {
+      let timer: ReturnType<typeof setTimeout> | null = null
+      const off = subscribeDataPlane((next) => {
+        if (timer !== null) clearTimeout(timer)
+        timer = null
+        if (next.kind !== 'relay' || !health.held()) return
+        timer = setTimeout(() => {
+          timer = null
+          raceNow()
+        }, Math.max(0, health.holdEndsAt() - Date.now()) + 250)
+      })
+      return () => {
+        off()
+        if (timer !== null) clearTimeout(timer)
+      }
+    })(),
     // A plane that is no longer the link (the health watchdog fell back, a
     // name answered) lets the link go, so the Mac's peer is freed.
     subscribeDataPlane((next) => {

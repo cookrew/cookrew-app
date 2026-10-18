@@ -4,12 +4,13 @@
 // the plane, and a stream waiting out its backoff while requests already work.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { watchStream, STREAM_OPEN_MS, STREAM_SILENT_MS, type WatchableSource } from '../src/renderer/src/stream-watch'
+import { onStreamDeath, watchStream, STREAM_OPEN_MS, STREAM_SILENT_MS, SUSPENDED_LATE_MS, type StreamDeath, type WatchableSource } from '../src/renderer/src/stream-watch'
+import { createPlaneHealth, HOLD_AFTER_FALLBACK_MS, HOLD_MAX_MS } from '../src/renderer/src/plane-health'
 import { ReconnectingStream, STREAM_CLOSED, STREAM_OPEN, type EventStreamLike } from '../src/renderer/src/live-stream'
 import { registerPlaneStream, resetPlaneStreams, reviveStreams } from '../src/renderer/src/plane-streams'
 import { SSE_HEARTBEAT_FRAME, SSE_HEARTBEAT_MS } from '../src/main/mobile-http'
 
-class FakeSource extends EventTarget implements WatchableSource, EventStreamLike {
+class FakeSource extends EventTarget implements WatchableSource {
   readyState = 0
   onerror: ((event: Event) => void) | null = null
   closed = false
@@ -94,7 +95,7 @@ describe('a switch makes before it breaks', () => {
       open: () => {
         const s = new FakeSource()
         sources.push(s)
-        return s
+        return s as unknown as EventStreamLike
       },
       schedule: (run) => void queue.push(run),
       cancel: () => undefined,
@@ -160,5 +161,90 @@ describe('the transcript follows the plane', () => {
     const src = readFileSync('src/renderer/src/stream/stream-http.ts', 'utf8')
     expect(src).toContain('registerPlaneStream({')
     expect(src).toMatch(/restart: reopen/)
+  })
+})
+
+describe('why a stream died, for whoever decides about the plane', () => {
+  const watchDeaths = (): { deaths: StreamDeath[]; off: () => void } => {
+    const deaths: StreamDeath[] = []
+    const off = onStreamDeath((why) => void deaths.push(why))
+    return { deaths, off }
+  }
+
+  it('is SILENT for a stream that beat and stopped, NEVER-OPENED for one that never came up', () => {
+    vi.useFakeTimers()
+    const { deaths, off } = watchDeaths()
+    const beat = watchStream(new FakeSource(), { native: false })
+    beat.open()
+    beat.send('hb', '1')
+    watchStream(new FakeSource(), { native: false })
+    vi.advanceTimersByTime(STREAM_SILENT_MS)
+    off()
+    expect(deaths.sort()).toEqual(['never-opened', 'silent'])
+  })
+
+  it('is SUSPENDED when the timer ran late — the phone slept, nothing is blamed', () => {
+    vi.useFakeTimers()
+    const { deaths, off } = watchDeaths()
+    const source = watchStream(new FakeSource(), { native: false })
+    source.open()
+    source.send('hb', '1')
+    // The clock jumps past the deadline without the timer having run.
+    vi.setSystemTime(Date.now() + STREAM_SILENT_MS + SUSPENDED_LATE_MS + 1)
+    vi.advanceTimersByTime(STREAM_SILENT_MS)
+    off()
+    expect(deaths).toEqual(['suspended'])
+    expect(source.closed).toBe(true)
+  })
+})
+
+describe('the hold after a fallback', () => {
+  const rig = () => {
+    let now = 1_000_000
+    let direct = true
+    const health = createPlaneHealth({
+      now: () => now,
+      schedule: () => 'timer',
+      cancel: () => undefined,
+      direct: () => direct,
+      fallBack: () => void (direct = false)
+    })
+    return { health, tick: (ms: number) => void (now += ms), onDirect: () => void (direct = true), now: () => now }
+  }
+
+  it('is short, and says when it ends so the next race can be set for it', () => {
+    const r = rig()
+    r.health.condemn()
+    expect(HOLD_AFTER_FALLBACK_MS).toBe(30_000)
+    expect(r.health.holdEndsAt()).toBe(r.now() + HOLD_AFTER_FALLBACK_MS)
+  })
+
+  it('doubles for a plane that fails again soon after, up to a cap — a flapping path is not chased', () => {
+    const r = rig()
+    const holds: number[] = []
+    for (let i = 0; i < 6; i += 1) {
+      r.onDirect()
+      r.health.condemn()
+      holds.push(r.health.holdEndsAt() - r.now())
+      r.tick(40_000)
+    }
+    expect(holds).toEqual([30_000, 60_000, 120_000, 240_000, HOLD_MAX_MS, HOLD_MAX_MS])
+  })
+
+  it('starts over for a plane that held for a while', () => {
+    const r = rig()
+    r.health.condemn()
+    r.tick(10 * 60_000)
+    r.onDirect()
+    r.health.condemn()
+    expect(r.health.holdEndsAt() - r.now()).toBe(HOLD_AFTER_FALLBACK_MS)
+  })
+})
+
+describe('the companion acts on a dead stream and on a hold that ends', () => {
+  it('condemns a direct plane on silence and races when the hold ends', () => {
+    const src = readFileSync('src/renderer/src/path/companion.ts', 'utf8')
+    expect(src).toMatch(/if \(why === 'silent'\) health\.condemn\(\)/)
+    expect(src).toContain('health.holdEndsAt() - Date.now()')
   })
 })
