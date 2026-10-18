@@ -22,14 +22,16 @@ const appSource = readFileSync(
 )
 
 describe('canvas visual modes', () => {
-  it('starts on the harness and cycles through all four states', () => {
+  it('starts on the harness and cycles through all five states', () => {
     // Tidy cables are the default, not a mode to find: a fresh canvas opens on
     // the harness, one tap hides the cables, one more shows agents only, and
     // the raw `all` view is last on the ladder for auditing the wiring.
     expect(nextCanvasVisualMode('harness')).toBe('no-cables')
     expect(nextCanvasVisualMode('no-cables')).toBe('agents')
     expect(nextCanvasVisualMode('agents')).toBe('all')
-    expect(nextCanvasVisualMode('all')).toBe('harness')
+    expect(nextCanvasVisualMode('all')).toBe('anatomy')
+    // The anatomy figure is the last rung and hands back to the default.
+    expect(nextCanvasVisualMode('anatomy')).toBe('harness')
   })
 
   it('falls back to the harness for nothing stored or an unknown value, and honours a stored choice', () => {

@@ -10,10 +10,12 @@ import type { Edge, Node } from '@xyflow/react'
  * ReactFlow is handed NO edges — its per-edge components cannot share a run
  * between two cables — and the CableHarness layer draws the whole set.
  */
-export type CanvasVisualMode = 'harness' | 'no-cables' | 'agents' | 'all'
+export type CanvasVisualMode = 'harness' | 'no-cables' | 'agents' | 'all' | 'anatomy'
 
-const MODES: readonly CanvasVisualMode[] = ['harness', 'no-cables', 'agents', 'all']
+const MODES: readonly CanvasVisualMode[] = ['harness', 'no-cables', 'agents', 'all', 'anatomy']
 const NO_EDGES: Edge[] = []
+/** Stable identity: a fresh [] every call would defeat the caller's memo. */
+const NO_NODES: Node[] = []
 
 /** The persisted choice if it is one of ours; the harness otherwise. */
 export function canvasVisualModeOf(value: string | null): CanvasVisualMode {
@@ -26,6 +28,10 @@ export function nextCanvasVisualMode(mode: CanvasVisualMode): CanvasVisualMode {
 
 /** Preserve the original array in modes that show every node. */
 export function visibleCanvasNodes(nodes: Node[], mode: CanvasVisualMode): Node[] {
+  // `anatomy` draws the whole board itself, as one isometric figure over the
+  // pane, so ReactFlow is handed nothing to draw: two sets of cards on one
+  // canvas would fight over the same taps.
+  if (mode === 'anatomy') return NO_NODES
   return mode === 'agents' ? nodes.filter((node) => node.type === 'terminal') : nodes
 }
 

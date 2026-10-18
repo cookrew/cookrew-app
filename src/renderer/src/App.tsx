@@ -93,6 +93,10 @@ import { EventToastLayer } from './EventToast'
 import { DoorMovedNotice } from './DoorMovedNotice'
 // Opened by a tap, never at boot: each panel is its own chunk (perf lane L7).
 const RosterPanel = lazy(() => import('./RosterPanel').then((m) => ({ default: m.RosterPanel })))
+// Lazy: the isometric kit only loads for someone who asks for the anatomy view.
+const AnatomyCanvas = lazy(() =>
+  import('./anatomy/AnatomyCanvas').then((m) => ({ default: m.AnatomyCanvas }))
+)
 const MetricsPanel = lazy(() => import('./MetricsPanel').then((m) => ({ default: m.MetricsPanel })))
 import { GateSheet } from './GateSheet'
 import { ImportServedSheet } from './ImportServedSheet'
@@ -125,14 +129,16 @@ const VISUAL_MODE_LABEL: Record<CanvasVisualMode, string> = {
   all: 'All',
   harness: 'Cables tidied',
   'no-cables': 'Cables hidden',
-  agents: 'Agents only'
+  agents: 'Agents only',
+  anatomy: 'Anatomy'
 }
 
-const VISUAL_MODE_ICON: Record<CanvasVisualMode, 'canvas' | 'connect' | 'agent'> = {
+const VISUAL_MODE_ICON: Record<CanvasVisualMode, 'canvas' | 'connect' | 'agent' | 'expand'> = {
   all: 'canvas',
   harness: 'connect',
   'no-cables': 'connect',
-  agents: 'agent'
+  agents: 'agent',
+  anatomy: 'expand'
 }
 
 function storedCanvasVisualMode(): CanvasVisualMode {
@@ -1516,6 +1522,25 @@ function Canvas(): React.JSX.Element {
     else for (const node of selected) void cookrew().removeNode(node.id)
   }
 
+  /**
+   * A tap on the anatomy figure goes to the REAL card. The figure is an
+   * overview of the same board, so the thing reached for is the card itself,
+   * not a second copy of it; leaving the mode first is what puts the nodes
+   * back for zoomToNode to fit against.
+   */
+  const pickFromAnatomy = useCallback(
+    (nodeId: string): void => {
+      setCanvasVisualMode('harness')
+      try {
+        window.localStorage.setItem(CANVAS_VISUAL_MODE_KEY, 'harness')
+      } catch {
+        // The view still works when browser storage is unavailable.
+      }
+      requestAnimationFrame(() => zoomToNode(nodeId))
+    },
+    [zoomToNode]
+  )
+
   return (
     <CanvasUiContext.Provider value={ui}>
       <div className={`cr cr-app tool-${tool}${clipping ? ' clipping' : ''}`}>
@@ -1533,7 +1558,10 @@ function Canvas(): React.JSX.Element {
           onResync={resync}
           avatar={account.avatar}
         />
-        <div className="cr-stage" ref={stageRef}>
+        <div
+          className={`cr-stage${canvasVisualMode === 'anatomy' ? ' anatomy' : ''}`}
+          ref={stageRef}
+        >
           <ReactFlow
             nodes={renderedNodes}
             edges={renderedEdges}
@@ -1622,6 +1650,21 @@ function Canvas(): React.JSX.Element {
                 </ViewportPortal>
               )}
           </ReactFlow>
+          {/* The whole board as one isometric figure, sized to the stage and
+              never panned. ReactFlow stays mounted underneath with no nodes
+              (visibleCanvasNodes) so its controls — and the way back out of
+              this mode — keep working. */}
+          {canvasVisualMode === 'anatomy' && (
+            <Suspense fallback={null}>
+              <AnatomyCanvas
+                nodes={nodes}
+                edges={edges}
+                title={workspace?.name ?? 'Cookrew'}
+                selectedId={nodes.find((node) => node.selected)?.id ?? null}
+                onPick={pickFromAnatomy}
+              />
+            </Suspense>
+          )}
           {/* Inside the stage on purpose: it covers exactly the canvas and
               leaves the header — which owns the way back — reachable above it.
               The canvas keeps running underneath rather than unmounting. */}

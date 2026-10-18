@@ -1,0 +1,290 @@
+/* The anatomy canvas, dressed in Cookrew's own palette.
+ *
+ * The isometric kit draws through a fixed set of classes (iso-fill, iso-shade,
+ * iso-top, iso-crease, iso-edge, iso-halo). Rather than ship the kit's dark
+ * stylesheet and fight it, every one of those is defined here against the
+ * app's tokens, so the figure is the same cream board the flat canvas is —
+ * and a card reads as the same object in both.
+ *
+ * One SVG unit is one CSS pixel: the projection fits the figure to the stage
+ * and the viewBox matches, so stroke widths below are real pixels.
+ */
+
+.an-host {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: var(--cream);
+  /* Above the (empty) ReactFlow pane, below its controls: the button that
+     leaves this mode lives in those controls and has to stay reachable. */
+  z-index: 1;
+}
+
+.an-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---------- the kit's primitives, in Cookrew's colours ---------- */
+.an-svg .iso-fill {
+  fill: var(--cream);
+  stroke: none;
+}
+.an-svg .iso-top {
+  fill: var(--cream-hi, #fffef5);
+}
+.an-svg .iso-shade[data-shade='0'] {
+  fill: var(--cream-lo, #ece6da);
+}
+.an-svg .iso-shade[data-shade='1'] {
+  fill: var(--cream-md, #f5f0e8);
+}
+.an-svg .iso-shade[data-shade='2'] {
+  fill: var(--cream-md, #f5f0e8);
+}
+.an-svg .iso-shade[data-shade='3'] {
+  fill: var(--cream-hi, #fffef5);
+}
+.an-svg .iso-line {
+  fill: none;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  stroke-width: 1;
+}
+.an-svg .iso-line[data-tone='hi'] {
+  stroke: var(--ink);
+}
+.an-svg .iso-line[data-tone='mid'] {
+  stroke: #8a8378;
+}
+.an-svg .iso-line[data-tone='lo'] {
+  stroke: var(--line-soft);
+}
+.an-svg .iso-line[data-tone='faint'] {
+  stroke: #e8e3d8;
+}
+.an-svg .iso-edge {
+  stroke-width: 1.2;
+}
+.an-svg .iso-halo {
+  fill: rgba(45, 42, 32, 0.14);
+  stroke: none;
+  filter: blur(3px);
+}
+.an-svg .iso-dots circle {
+  fill: #8a8378;
+  stroke: none;
+}
+.an-svg .iso-dots[data-tone='hi'] circle {
+  fill: var(--ink);
+}
+.an-svg .iso-dots[data-tone='lo'] circle {
+  fill: var(--line-soft);
+}
+.an-svg .iso-face-text {
+  font-family: var(--font-mono);
+  fill: var(--ink);
+  pointer-events: none;
+  user-select: none;
+}
+.an-svg .iso-face-text[data-tone='mid'] {
+  fill: var(--muted);
+}
+
+/* ---------- the three cards ---------- */
+.an-card {
+  cursor: pointer;
+}
+
+/* Agent: the dark terminal, exactly as it reads on the flat canvas. */
+.an-terminal .an-skin .iso-fill {
+  fill: #1f1d17;
+}
+.an-terminal .an-skin .iso-top {
+  fill: #35312a;
+}
+.an-terminal .an-skin .iso-shade[data-shade='0'] {
+  fill: #141310;
+}
+.an-terminal .an-skin .iso-shade[data-shade='1'],
+.an-terminal .an-skin .iso-shade[data-shade='2'] {
+  fill: #1c1a15;
+}
+.an-terminal .an-skin .iso-shade[data-shade='3'] {
+  fill: #272420;
+}
+.an-terminal .an-skin .iso-edge {
+  stroke: var(--ink);
+}
+.an-terminal .an-skin .iso-crease {
+  stroke: #4a443a;
+}
+.an-terminal .an-lamp {
+  stroke: #4a443a;
+}
+.an-terminal .an-mark line {
+  stroke-linecap: round;
+}
+.an-screen {
+  fill: #0e0d0a;
+  stroke: #3a352c;
+  stroke-width: 0.6;
+}
+.an-scanline {
+  fill: none;
+  stroke: var(--phos, #e9b949);
+  stroke-width: 1;
+  stroke-linecap: round;
+  opacity: 0.62;
+}
+.an-scanline[data-row='2'] {
+  opacity: 0.34;
+}
+
+/* Note: the amber pad. */
+.an-note .an-skin .iso-fill {
+  fill: var(--note-bg);
+}
+.an-note .an-skin .iso-top {
+  fill: #fff8c8;
+}
+.an-note .an-skin .iso-shade[data-shade='0'] {
+  fill: #e8dc96;
+}
+.an-note .an-skin .iso-shade[data-shade='1'],
+.an-note .an-skin .iso-shade[data-shade='2'] {
+  fill: #f2e6a8;
+}
+.an-note .an-skin .iso-shade[data-shade='3'] {
+  fill: #fdf2bb;
+}
+.an-note .an-skin .iso-edge {
+  stroke: var(--ink);
+}
+.an-note .an-skin .iso-crease {
+  stroke: #cbbd72;
+}
+
+/* Browser: cream with an ink frame, the window on its lid. */
+.an-browser .an-skin .iso-fill {
+  fill: var(--cream);
+}
+.an-browser .an-skin .iso-top {
+  fill: #fffdf6;
+}
+.an-browser .an-skin .iso-shade[data-shade='0'] {
+  fill: #e4ded1;
+}
+.an-browser .an-skin .iso-shade[data-shade='1'],
+.an-browser .an-skin .iso-shade[data-shade='2'] {
+  fill: #efe9dd;
+}
+.an-browser .an-skin .iso-shade[data-shade='3'] {
+  fill: #fbf7ee;
+}
+.an-browser .an-skin .iso-edge {
+  stroke: var(--ink);
+}
+
+/* The nameplate is the same object on all three. */
+.an-plate-slab .iso-fill {
+  fill: #efe9dd;
+}
+.an-plate-slab .iso-top {
+  fill: #f6f1e6;
+}
+
+/* ---------- cables: the only thing that stands for talking ---------- */
+.an-cable-out {
+  fill: none;
+  stroke: #6f675a;
+  stroke-width: 3.4;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.an-cable-in {
+  fill: none;
+  stroke: var(--cream);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.an-host[data-dim='1'] .an-cable {
+  opacity: 0.35;
+}
+
+/* ---------- the live layer ---------- */
+.an-lens {
+  stroke: var(--ink);
+  stroke-width: 0.8;
+}
+.an-lens.st-idle {
+  fill: var(--vi-done);
+}
+.an-lens.st-thinking {
+  fill: var(--vi-working);
+}
+.an-lens.st-waiting {
+  fill: var(--vi-wait);
+}
+.an-lens.st-replied {
+  fill: #64d2ff;
+}
+.an-lens.st-off {
+  fill: #c6bfb1;
+}
+.an-pick circle {
+  fill: none;
+  stroke: var(--amber-deep, #d97706);
+  stroke-width: 2;
+  stroke-dasharray: 5 4;
+}
+
+/* ---------- controls ---------- */
+.an-controls {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  display: flex;
+  gap: 4px;
+  font: 11px/1 var(--font-mono);
+}
+.an-controls button {
+  font: inherit;
+  color: var(--muted);
+  background: var(--cream);
+  border: 1px solid var(--line-soft);
+  padding: 6px 9px;
+  cursor: pointer;
+}
+.an-controls button[aria-pressed='true'],
+.an-controls .an-flip {
+  color: var(--ink);
+  border-color: var(--ink);
+}
+.an-dense {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  margin: 0;
+  font: 11px/1.4 var(--font-mono);
+  color: var(--muted);
+  pointer-events: none;
+}
+
+@media (max-width: 700px) {
+  .an-controls {
+    left: 8px;
+    top: 8px;
+  }
+  .an-dense {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .an-svg * {
+    animation: none !important;
+  }
+}
