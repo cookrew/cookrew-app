@@ -27,16 +27,3 @@ export function useTuning(id: string): AgentTuning | undefined {
   // which is how the render tests assert the markup at all.
   return useSyncExternalStore(subscribe, read, read)
 }
-
-/**
- * Every card's tuning at once — for a view that draws the WHOLE board, such as
- * the anatomy canvas, where one subscription per card would mean a hook per
- * card. The snapshot's identity only changes when the map does.
- */
-export function useTuningsSnapshot(): Record<string, AgentTuning> {
-  return useSyncExternalStore(
-    (cb) => tuningStore.subscribeGlobal(cb),
-    () => tuningStore.getSnapshot(),
-    () => tuningStore.getSnapshot()
-  )
-}

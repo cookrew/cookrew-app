@@ -6589,13 +6589,3 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
 .vi-mini-brief { font-size: 9px }
 .popout-brief { max-width: 260px; flex: 0 1 auto }
 .ags-brief { font-size: 11px; margin-top: 1px }
-
-/* The anatomy view owns the whole stage: the minimap would float a second,
-   unrelated map of a board the figure already shows whole. */
-.cr-stage.anatomy .react-flow__minimap {
-  display: none;
-}
-
-.cr-stage.anatomy .react-flow__controls {
-  z-index: 6;
-}
