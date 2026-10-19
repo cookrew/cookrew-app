@@ -28,7 +28,6 @@
     "install-cli": "node scripts/install-cli.mjs"
   },
   "dependencies": {
-    "@types/three": "^0.186.0",
     "@xterm/addon-clipboard": "^0.2.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-serialize": "^0.14.0",
@@ -39,7 +38,6 @@
     "marked": "^15.0.0",
     "node-pty": "^1.0.0",
     "qrcode-terminal": "^0.12.0",
-    "three": "^0.186.1",
     "viem": "^2.55.19",
     "werift": "^0.25.1"
   },

@@ -138,7 +138,6 @@ import { relayHandle } from './legacy-identity'
 import { WorkspaceShots } from './workspace-shots'
 import { closeLane, landLane, listLanes, openLane, repoOf } from './lanes'
 import type { LaneInfo, LandResult } from '../shared/model'
-import { workspaceCards } from '../shared/workspace-cards'
 import { laneGit } from './git'
 import { republishDoors, servingChange } from './serving-identity'
 import { createAdmittedDeviceStore } from './admitted-devices'
@@ -6069,8 +6068,6 @@ app.whenReady().then(() => {
     routeBus,
     // The screen wall's pictures, for the phone (GET /api/workspaces/shots).
     workspaceShots: currentWorkspaceShots,
-    // A workspace's cards for the phone's world view (GET /api/workspaces/:id/cards).
-    workspaceCards: (id: string) => workspaceCards(id, store.workspaceState(id)),
     // Attach-free dispatch (v4 §3): the two /api routes answer 503 without it.
     dispatch: dispatchService,
     // While a dispatch is armed, the HTTP input/ask producers refuse 409 —
@@ -6592,11 +6589,6 @@ function registerIpc(handlers: RestoreHandlers): void {
   // ---- the author journey (Door A), reachable at last -------------------
   //
   ipcMain.handle('workspace:list', () => store.list())
-  // The world's scenes: any workspace's cards, read from disk when parked, so
-  // looking at a place never switches to it (switching stops terminals).
-  ipcMain.handle('workspace:cards', (_e, id: unknown) =>
-    typeof id === 'string' ? workspaceCards(id, store.workspaceState(id)) : null
-  )
   ipcMain.handle('workspace:create', (_e, name: string, dir: string, team?: string) =>
     team ? createWorkspaceFromTeam(name, dir, team) : createWorkspace(name, dir)
   )

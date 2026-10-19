@@ -1,4 +1,3 @@
-import type { WorkspaceCards } from '../../shared/workspace-cards'
 import type { CardRouteState, RouteState } from '../../shared/route'
 import { AuthError, authStore, tokenParam, type AuthScope } from './auth-gate'
 import { ReconnectingStream, attachTerminalStream } from './live-stream'
@@ -703,8 +702,6 @@ export function createRemoteApi(): CookrewApi {
       req<Record<string, { src: string; at: number }>>(apiPath('/api/workspaces/shots')).catch(
         () => ({})
       ),
-    workspaceCards: (id) =>
-      req<WorkspaceCards>(apiPath(`/api/workspaces/${encodeURIComponent(id)}/cards`)),
     quitApp: () => undefined
   }
 }

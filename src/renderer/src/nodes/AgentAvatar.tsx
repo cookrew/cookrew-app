@@ -17,13 +17,10 @@ const STAMP = '#1c1408'
 
 /** Brand marks echoing each agent's real logo: Claude sunburst, OpenAI
     blossom (Codex), opencode block-cursor, Pi's π, arcade invader for Shell. */
-export function brandMark(kind: AgentSpriteKind, ink?: string): React.JSX.Element {
-  // The anatomy canvas stamps the same mark on a dark solid, so the colour is
-  // a parameter there and the coin's near-black everywhere else.
-  const stamp = ink ?? STAMP
+function brandMark(kind: AgentSpriteKind): React.JSX.Element {
   if (kind === 'claude') {
     return (
-      <g stroke={stamp} strokeWidth="2.5" strokeLinecap="round">
+      <g stroke={STAMP} strokeWidth="2.5" strokeLinecap="round">
         {Array.from({ length: 8 }, (_, i) => {
           const a = ((i * 45 - 90) * Math.PI) / 180
           const r = i % 2 === 0 ? 7.2 : 6.4
@@ -42,7 +39,7 @@ export function brandMark(kind: AgentSpriteKind, ink?: string): React.JSX.Elemen
   }
   if (kind === 'codex') {
     return (
-      <g fill={stamp}>
+      <g fill={STAMP}>
         {Array.from({ length: 6 }, (_, i) => (
           <rect
             key={i}
@@ -59,7 +56,7 @@ export function brandMark(kind: AgentSpriteKind, ink?: string): React.JSX.Elemen
   }
   if (kind === 'opencode') {
     return (
-      <g fill={stamp}>
+      <g fill={STAMP}>
         <rect x="7.6" y="7" width="6.2" height="10" rx="1" />
         <rect x="15.4" y="14.8" width="3.6" height="2.2" rx="0.6" />
       </g>
@@ -67,7 +64,7 @@ export function brandMark(kind: AgentSpriteKind, ink?: string): React.JSX.Elemen
   }
   if (kind === 'pi') {
     return (
-      <g fill={stamp}>
+      <g fill={STAMP}>
         <rect x="6.5" y="7" width="13" height="2.4" rx="0.8" />
         <rect x="8" y="8.5" width="2.8" height="9" rx="0.9" />
         <path d="M14.2 8.5h2.8v6.4c0 1 .4 1.5 1.4 1.5h.8v2.2h-1.6c-2.3 0-3.4-1.2-3.4-3.6z" />
@@ -79,7 +76,7 @@ export function brandMark(kind: AgentSpriteKind, ink?: string): React.JSX.Elemen
   const ox = 13 - (7 * cell) / 2
   const oy = 13 - (grid.length * cell) / 2
   return (
-    <g fill={stamp}>
+    <g fill={STAMP}>
       {grid.flatMap((row, y) =>
         [...row].flatMap((c, x) =>
           c === 'X'
