@@ -268,3 +268,62 @@
     display: none;
   }
 }
+
+/* ---------- the dock and the flight ---------- */
+/* A tag is the thing a person clicks: it is the island's name, and the hint
+ * says "click the island" — so the tag enters too. */
+.cr-world-glass .cr-world-tag {
+  pointer-events: auto;
+  cursor: pointer;
+  transition: opacity 240ms ease;
+}
+.cr-world-tag:hover {
+  box-shadow: 0 0 0 1.5px #e8edf7;
+}
+/* While flying, every other tag fades out early (the outgoing content of a
+ * container transform), and the pins fade in late. */
+.cr-world.flying .cr-world-tag:not(.chosen) {
+  opacity: 0 !important;
+  pointer-events: none;
+}
+.cr-world-pin,
+.cr-world-card {
+  transition: opacity 260ms ease;
+}
+.cr-world.flying .cr-world-pin,
+.cr-world.flying .cr-world-card {
+  opacity: 0;
+}
+
+/* Equipment labels: a card's name beside its tablet or screen. */
+.cr-world-card {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  padding: 1px 5px 2px;
+  border-radius: 3px;
+  font: 10px/1.4 var(--font-mono);
+  white-space: nowrap;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.cr-world-card.note {
+  background: rgba(61, 51, 23, 0.9);
+  color: #f3e7bd;
+  box-shadow: 0 0 0 1px #b39a45;
+}
+.cr-world-card.browser {
+  background: rgba(24, 32, 44, 0.9);
+  color: #d6e4f5;
+  box-shadow: 0 0 0 1px #6f8fb8;
+}
+
+.cr-world-hud kbd {
+  margin-left: 6px;
+  font: 10px var(--font-mono);
+  color: #93a0bb;
+  border: 1px solid rgba(150, 170, 210, 0.3);
+  border-radius: 3px;
+  padding: 1px 4px;
+}
