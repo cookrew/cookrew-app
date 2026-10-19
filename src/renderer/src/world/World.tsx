@@ -314,8 +314,11 @@ export function WorldView({ nodes, edges, onPick, onEnterWorkspace }: WorldViewP
     handles.scene.add(made.group)
     gear.current = made
     kick()
+    // shapeKey too: a board push rebuilds the fleet (the effect above), and
+    // the rebuild disposes the equipment, which must then be stood up again
+    // or the island you are standing on empties while you look at it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cards, kit, loose, here])
+  }, [cards, kit, loose, here, shapeKey])
 
   /* ---------- the frame loop, which stops when nothing moves ---------- */
   const still = useRef(matchMedia('(prefers-reduced-motion: reduce)').matches)
