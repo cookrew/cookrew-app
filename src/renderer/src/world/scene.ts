@@ -12,6 +12,7 @@
 
 import * as THREE from 'three'
 import { PHASE_COLOUR, towerHeight, type WorldPlace } from './fleet'
+import type { WorkspaceCard } from '../../../shared/workspace-cards'
 
 export const SKY = 0x06070c
 /** Lighter than the sky on purpose: fog has to be something, or far is just
@@ -90,6 +91,10 @@ export interface FleetObjects {
   pickables: THREE.Object3D[]
   placeOf: Map<number, string>
   agentOf: Map<number, string>
+  /** Each island's group by workspace id, so a flight can shrink the rest. */
+  islandOf: Map<string, THREE.Group>
+  /** Where each agent's tower stands, in island-local units (for equipment). */
+  towerAt: Map<string, { x: number; y: number; z: number; h: number }>
   /** Beacons pulse; nothing else in the scene moves. */
   tick: (seconds: number) => void
   dispose: () => void
@@ -108,6 +113,8 @@ export function buildFleet(places: readonly WorldPlace[]): FleetObjects {
   const pickables: THREE.Object3D[] = []
   const placeOf = new Map<number, string>()
   const agentOf = new Map<number, string>()
+  const islandOf = new Map<string, THREE.Group>()
+  const towerAt = new Map<string, { x: number; y: number; z: number; h: number }>()
   const beacons: THREE.Mesh[] = []
   const owned: Array<{ dispose: () => void }> = []
 
@@ -133,6 +140,7 @@ export function buildFleet(places: readonly WorldPlace[]): FleetObjects {
   for (const place of places) {
     const island = new THREE.Group()
     island.position.set(place.at.x, place.at.y, place.at.z)
+    islandOf.set(place.id, island)
 
     const slabGeo = new THREE.CylinderGeometry(place.radius, place.radius * 0.86, 9, 40)
     owned.push(slabGeo)
@@ -163,6 +171,7 @@ export function buildFleet(places: readonly WorldPlace[]): FleetObjects {
       pickables.push(tower)
       agentOf.set(tower.id, agent.id)
       placeOf.set(tower.id, place.id)
+      towerAt.set(agent.id, { x: tower.position.x, y: 4.5, z: tower.position.z, h })
 
       if (agent.phase === 'waiting') {
         // The only thing in this world that moves. A shaft of light stands
@@ -197,7 +206,7 @@ export function buildFleet(places: readonly WorldPlace[]): FleetObjects {
     for (const item of owned) item.dispose()
     group.clear()
   }
-  return { group, pickables, placeOf, agentOf, tick, dispose }
+  return { group, pickables, placeOf, agentOf, islandOf, towerAt, tick, dispose }
 }
 
 /** Screen position of a world point, or null when it is behind the camera. */
@@ -210,4 +219,95 @@ export function project(
   const v = point.clone().project(camera)
   if (v.z > 1) return null
   return { x: ((v.x + 1) / 2) * w, y: ((1 - v.y) / 2) * h, depth: v.z }
+}
+
+export interface EquipmentObjects {
+  group: THREE.Group
+  pickables: THREE.Object3D[]
+  cardOf: Map<number, string>
+  /** Card id → where it stands, island-local, for its label. */
+  cardAt: Map<string, { x: number; y: number; z: number }>
+  dispose: () => void
+}
+
+const NOTE_FACE = 0xf3e7bd
+const NOTE_EDGE = 0xb39a45
+const BROWSER_FACE = 0x8fb4e8
+const BROWSER_EDGE = 0x3f5f8f
+const CABLE = 0x6f8fb8
+
+/**
+ * THE EQUIPMENT ON AN ISLAND: a note is a small upright tablet, a browser a
+ * small upright screen, each standing in a ring around the agent it is wired
+ * to, with a cable from the tower's top to it. Cards wired to no agent stand
+ * at the island's rim on their own.
+ *
+ * Built only for the island you have entered and torn down when you leave:
+ * a hundred agents' equipment at once is a hairball nobody asked to see, and
+ * it is the FLIGHT that makes it appear — the cards grow out of the island in
+ * the last part of the approach (World.tsx scales this group), which is the
+ * container-transform idea: the thing you chose becomes the place you are in.
+ */
+export function buildEquipment(
+  place: WorldPlace,
+  towerAt: ReadonlyMap<string, { x: number; y: number; z: number; h: number }>,
+  kit: ReadonlyMap<string, readonly WorkspaceCard[]>,
+  loose: readonly WorkspaceCard[]
+): EquipmentObjects {
+  const group = new THREE.Group()
+  group.position.set(place.at.x, place.at.y, place.at.z)
+  const pickables: THREE.Object3D[] = []
+  const cardOf = new Map<number, string>()
+  const cardAt = new Map<string, { x: number; y: number; z: number }>()
+  const owned: Array<{ dispose: () => void }> = []
+
+  const noteGeo = new THREE.BoxGeometry(5.2, 6.4, 0.5)
+  const screenGeo = new THREE.BoxGeometry(7.2, 4.8, 0.5)
+  owned.push(noteGeo, screenGeo)
+  const noteMat = new THREE.MeshLambertMaterial({ color: NOTE_FACE, emissive: NOTE_EDGE, emissiveIntensity: 0.25 })
+  const screenMat = new THREE.MeshLambertMaterial({ color: BROWSER_FACE, emissive: BROWSER_EDGE, emissiveIntensity: 0.35 })
+  const cableMat = new THREE.LineBasicMaterial({ color: CABLE, transparent: true, opacity: 0.7 })
+  owned.push(noteMat, screenMat, cableMat)
+
+  const stand = (card: WorkspaceCard, x: number, z: number, cableFrom: THREE.Vector3 | null): void => {
+    const note = card.kind === 'note'
+    const mesh = new THREE.Mesh(note ? noteGeo : screenGeo, note ? noteMat : screenMat)
+    const y = 4.5 + (note ? 3.2 : 2.4)
+    mesh.position.set(x, y, z)
+    // Face outward from the island's centre, so a ring of cards reads as a
+    // ring and not as a row of edges.
+    mesh.rotation.y = Math.atan2(x, z)
+    group.add(mesh)
+    pickables.push(mesh)
+    cardOf.set(mesh.id, card.id)
+    cardAt.set(card.id, { x, y: y + (note ? 3.2 : 2.4), z })
+    if (cableFrom) {
+      const geo = new THREE.BufferGeometry().setFromPoints([cableFrom, new THREE.Vector3(x, y, z)])
+      owned.push(geo)
+      group.add(new THREE.Line(geo, cableMat))
+    }
+  }
+
+  for (const agent of place.agents) {
+    const items = kit.get(agent.id) ?? []
+    const at = towerAt.get(agent.id)
+    if (items.length === 0 || !at) continue
+    const ring = 9 + Math.min(6, items.length) * 0.6
+    const top = new THREE.Vector3(at.x, at.y + at.h, at.z)
+    items.forEach((card, i) => {
+      const theta = (i / items.length) * Math.PI * 2 + 0.6
+      stand(card, at.x + Math.cos(theta) * ring, at.z + Math.sin(theta) * ring, top)
+    })
+  }
+  loose.forEach((card, i) => {
+    const theta = (i / Math.max(1, loose.length)) * Math.PI * 2
+    const r = place.radius - 6
+    stand(card, Math.cos(theta) * r, Math.sin(theta) * r, null)
+  })
+
+  const dispose = (): void => {
+    for (const item of owned) item.dispose()
+    group.clear()
+  }
+  return { group, pickables, cardOf, cardAt, dispose }
 }

@@ -269,6 +269,8 @@ const api = {
   snapWorkspace: (rect: { x: number; y: number; width: number; height: number }) =>
     ipcRenderer.invoke('workspace:snap', rect),
   workspaceShots: () => ipcRenderer.invoke('workspace:shots'),
+  /** The cards of ANY workspace, names and shapes only, read without a switch (the world). */
+  workspaceCards: (id: string) => ipcRenderer.invoke('workspace:cards', id),
   renameWorkspace: (id: string, name: string) =>
     ipcRenderer.invoke('workspace:rename', id, name),
   removeWorkspace: (id: string) => ipcRenderer.invoke('workspace:remove', id),

@@ -1,3 +1,4 @@
+import type { WorkspaceCards } from "../../shared/workspace-cards";
 import type { DeepLink } from '../../shared/deep-link'
 import type { AnsweredRow, QueueRow, RowAction } from '../../shared/account-requests'
 import type { CardRoute, CardRouteState, RouteState } from '../../shared/route';
@@ -300,6 +301,12 @@ export interface CookrewApi {
   snapWorkspace: (rect: { x: number; y: number; width: number; height: number }) => Promise<boolean>;
   /** Every workspace's picture, as data URLs, read on demand. */
   workspaceShots: () => Promise<Record<string, { src: string; at: number }>>;
+  /**
+   * The cards of ANY workspace — names and shapes, no bodies, no URLs — read
+   * from disk without switching to it (the world's scenes). Optional and
+   * feature-detected: an older bridge shows an island with no equipment.
+   */
+  workspaceCards?: (id: string) => Promise<WorkspaceCards>;
   renameWorkspace: (id: string, name: string) => Promise<WorkspaceList>;
   /** Workspace v2: remove workspace, multi-directory, per-terminal cwd, git. */
   removeWorkspace: (id: string) => Promise<WorkspaceList>;

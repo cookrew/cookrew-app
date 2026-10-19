@@ -24,6 +24,8 @@ interface Seed {
   /** The active workspace's cards, so an agent's equipment is real. */
   nodes: { kind: CanvasNode['kind']; id: string; name: string }[]
   connections: { id: string; a: string; b: string }[]
+  /** Every workspace's cards, names and shapes only — what the peek route answers. */
+  cards: Record<string, unknown>
 }
 
 const seed = world as Seed
@@ -51,6 +53,8 @@ async function boot(): Promise<void> {
       activeWorkspaceId: seed.activeId
     })
   api.listWorkspaces = () => Promise.resolve({ workspaces: seed.workspaces, activeId: seed.activeId })
+  api.workspaceCards = (id: string) =>
+    Promise.resolve(seed.cards[id] ?? { id, cards: [], links: [] })
 
   const real = cookrew()
   for (const [i, node] of seed.nodes.entries()) await real.addNode(asCanvasNode(node, i))

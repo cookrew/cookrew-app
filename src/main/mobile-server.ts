@@ -224,6 +224,8 @@ export interface MobileServerDeps {
   sousBus?: MobileApiDeps['sousBus']
   /** The screen wall's pictures for the phone — see MobileApiDeps; passed through as-is. */
   workspaceShots?: MobileApiDeps['workspaceShots']
+  /** A workspace's cards for the world's scenes — see MobileApiDeps; passed through as-is. */
+  workspaceCards?: MobileApiDeps['workspaceCards']
   /**
    * Where the reach publisher stands with the registry (reach.ts · state).
    * Absent reads as "never accepted", which withholds the trusted names —

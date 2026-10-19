@@ -12,6 +12,7 @@ import type { EventLog, CookrewEvent, EventQuery } from "./event-log";
 import { pageTurns, type TurnRecord } from "../shared/turn";
 import type { VersionPinRecord } from "../shared/version-pin";
 import type { AgentTuning, AgentTuningState } from "../shared/agent-tuning";
+import type { WorkspaceCards } from "../shared/workspace-cards";
 import { TRANSLATE_MAX_CHARS } from "../shared/translate";
 import { translateBody } from "./sous-translate";
 import { remoteSousHost } from "./sous-remote-config";
@@ -343,6 +344,13 @@ export interface MobileApiDeps {
    * says NO SNAPSHOT YET for everything.
    */
   workspaceShots?: () => Record<string, { src: string; at: number }>;
+  /**
+   * The cards of ONE workspace (workspace-cards.ts) for the world's scenes —
+   * names and shapes only, read from disk for a parked workspace so the
+   * phone can look at a place without switching the Mac to it. Behind the
+   * /api GET gate like the board. Absent = 503.
+   */
+  workspaceCards?: (id: string) => WorkspaceCards;
   /**
    * Importing a served team FROM THE PHONE — the desktop's own operations,
    * reached over this API. Absent = the six /api/serve routes answer 503
@@ -892,6 +900,18 @@ export async function handleMobileApi(
       200,
       ops.renameWorkspace(body.id ?? "", body.name ?? ""),
     );
+    return true;
+  }
+  // The world's scenes: a workspace's cards without switching to it. Names
+  // and shapes only — the reducer keeps bodies and addresses out by
+  // construction, and the /api GET gate above already demanded a token.
+  const wsCardsMatch = p.match(/^\/api\/workspaces\/([^/]+)\/cards$/);
+  if (wsCardsMatch && method === "GET") {
+    if (!deps.workspaceCards) {
+      respondJson(response, 503, { error: "workspace cards not wired" });
+      return true;
+    }
+    respondJson(response, 200, deps.workspaceCards(decodeURIComponent(wsCardsMatch[1])));
     return true;
   }
   // Workspace v2: remove + directory management + git (mobile = text input).
