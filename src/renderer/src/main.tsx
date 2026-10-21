@@ -1,6 +1,5 @@
 import React, { Suspense, lazy } from 'react'
 import ReactDOM from 'react-dom/client'
-import App from './App'
 import './styles.css'
 import { authStore } from './auth-gate'
 import { startPhoneBeacon } from './phone-beacon'
@@ -17,6 +16,11 @@ import { bootEmbedMode } from './embed/embed-mode'
 // LAN origin or an RTC link and break the shell's same-origin frame.
 const embed = bootEmbedMode()
 const EmbedRoot = lazy(() => import('./embed/EmbedRoot'))
+// THE CANVAS APP IS A CHUNK OF ITS OWN, so an embed never downloads it (it was
+// most of the 1.7 MB index). The classic boot asks for it on this very line,
+// before anything below runs, so its fetch overlaps the rest of the boot.
+const appModule = embed ? null : import('./App')
+const App = lazy(() => appModule ?? import('./App'))
 
 // PAIRING, FIRST — before anything on this page can make a request.
 //
@@ -59,7 +63,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <EmbedRoot mode={embed} />
       </Suspense>
     ) : (
-      <App />
+      <Suspense fallback={null}>
+        <App />
+      </Suspense>
     )}
   </React.StrictMode>
 )

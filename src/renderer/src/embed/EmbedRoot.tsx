@@ -17,6 +17,7 @@ import { tuningStore } from '../tuning-store'
 import { mergeActivity } from '../turn-view-model'
 import type { LodLayout, ScreenRect } from '../zoom-lod'
 import { AttachmentRails } from './AttachmentRails'
+import { scaleFor } from './rail-layout'
 import { fetchAgentDetail, nodeOfDetail, type EmbedDetail } from './embed-boot'
 import { listenToShell, tellShell } from './embed-bridge'
 import type { EmbedMode } from './embed-mode'
@@ -60,26 +61,51 @@ function useAgentFeeds(): void {
   }, [])
 }
 
-/** The stage's screen rect: the remote full view's own rule (zoom-lod.ts) — the whole pane, never less. */
-function useStageRect(stage: React.RefObject<HTMLDivElement | null>): ScreenRect | null {
-  const [rect, setRect] = useState<ScreenRect | null>(null)
+const sameRect = (a: ScreenRect | null, b: ScreenRect): boolean =>
+  a !== null && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+
+/**
+ * The stage's rect twice: `layout` is what the overlay is placed with — the
+ * remote full view's own rule (zoom-lod.ts), the whole pane, never less — and
+ * `screen` is where it lands on screen, which the rails lay out around. They
+ * differ only under D9's preview-only scale, where the overlay sits inside the
+ * transformed app (its fixed position then counts from it) at full layout size.
+ */
+function useStageRects(stage: React.RefObject<HTMLDivElement | null>, scaled: boolean): { layout: ScreenRect | null; screen: ScreenRect | null } {
+  const [layout, setLayout] = useState<ScreenRect | null>(null)
+  const [screen, setScreen] = useState<ScreenRect | null>(null)
   useLayoutEffect(() => {
     const element = stage.current
     if (!element) return
     const measure = (): void => {
       const box = element.getBoundingClientRect()
-      setRect((now) =>
-        now && now.x === box.left && now.y === box.top && now.width === box.width && now.height === box.height
-          ? now
-          : { x: box.left, y: box.top, width: box.width, height: box.height }
-      )
+      const onScreen = { x: box.left, y: box.top, width: box.width, height: box.height }
+      const placed = scaled ? { x: element.offsetLeft, y: element.offsetTop, width: element.offsetWidth, height: element.offsetHeight } : onScreen
+      setScreen((now) => (sameRect(now, onScreen) ? now : onScreen))
+      setLayout((now) => (sameRect(now, placed) ? now : placed))
     }
     measure()
     const observer = new ResizeObserver(measure)
     observer.observe(element)
-    return () => observer.disconnect()
-  }, [stage])
-  return rect
+    window.addEventListener('resize', measure)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', measure)
+    }
+  }, [stage, scaled])
+  return { layout, screen }
+}
+
+/** D9 'scale' (preview only): the factor for this viewport, or null to draw at 1. */
+function useScale(mode: EmbedMode['rails']): number | null {
+  const [width, setWidth] = useState(window.innerWidth)
+  useEffect(() => {
+    if (mode !== 'scale') return
+    const onResize = (): void => setWidth(window.innerWidth)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [mode])
+  return mode === 'scale' ? scaleFor(width) : null
 }
 
 /** Fires once the lazy overlay has actually committed: the moment the shell may show the frame. */
@@ -92,7 +118,8 @@ export default function EmbedRoot({ mode }: { mode: EmbedMode }): React.JSX.Elem
   const [target, setTarget] = useState<Target | null>(mode.agentId ? { agentId: mode.agentId, attachmentId: null } : null)
   const [detail, setDetail] = useState<EmbedDetail | null>(null)
   const stageRef = useRef<HTMLDivElement>(null)
-  const rect = useStageRect(stageRef)
+  const scale = useScale(mode.rails)
+  const { layout: rect, screen } = useStageRects(stageRef, scale !== null)
   useAgentFeeds()
 
   // Listening first, then say so: a prewarm tells the shell it may focus now.
@@ -168,7 +195,10 @@ export default function EmbedRoot({ mode }: { mode: EmbedMode }): React.JSX.Elem
 
   return (
     <CanvasUiContext.Provider value={ui}>
-      <div className="cr cr-app tool-move cr-embed">
+      <div
+        className="cr cr-app tool-move cr-embed"
+        style={scale !== null ? { transform: `scale(${scale})`, transformOrigin: 'center center' } : undefined}
+      >
         <div className="cr-stage" ref={stageRef} />
         <Dock
           tool="move"
@@ -194,9 +224,10 @@ export default function EmbedRoot({ mode }: { mode: EmbedMode }): React.JSX.Elem
             <Mounted key={node?.id} onMount={readyFor} />
           </Suspense>
         )}
-        {detail && <AttachmentRails detail={detail} terminal={rect} focusAttachmentId={target?.attachmentId ?? null} />}
         {target && !detail && <div className="cr-embed-status">OPENING…</div>}
       </div>
+      {/* Outside the app on purpose: under D9's scale the rails stay full size in the freed columns. */}
+      {detail && <AttachmentRails detail={detail} terminal={screen} focusAttachmentId={target?.attachmentId ?? null} />}
     </CanvasUiContext.Provider>
   )
 }

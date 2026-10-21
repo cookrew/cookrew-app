@@ -21,6 +21,12 @@ export type RailLayout =
   | { mode: 'tabs' }
   | { mode: 'sheet' }
 
+/** D9 'scale': draw the full view at this factor, leaving a rail column each side; null on a phone. */
+export function scaleFor(viewportWidth: number): number | null {
+  if (viewportWidth <= PHONE_MAX_WIDTH) return null
+  return Math.max(0.55, Math.min(0.85, (viewportWidth - 2 * (RAIL_MIN_WIDTH + 40)) / viewportWidth))
+}
+
 export function railLayout(viewport: { width: number; height: number }, terminal: Box): RailLayout {
   if (viewport.width <= PHONE_MAX_WIDTH) return { mode: 'sheet' }
   const leftFree = terminal.x

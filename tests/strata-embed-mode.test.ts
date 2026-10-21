@@ -3,21 +3,22 @@ import type { LevelsAgentDetail } from '../src/shared/strata'
 import { syntheticFleet } from '../src/strata/fixture/synthetic'
 import { embedModeOf } from '../src/renderer/src/embed/embed-mode'
 import { isDetail, nodeOfDetail } from '../src/renderer/src/embed/embed-node'
-import { railLayout, RAIL_MIN_WIDTH } from '../src/renderer/src/embed/rail-layout'
+import { railLayout, RAIL_MIN_WIDTH, scaleFor } from '../src/renderer/src/embed/rail-layout'
 
 const agent = syntheticFleet(1_800_000_000_000)[0].levels!.workspaces[1].agents[0]
 const detail: LevelsAgentDetail = { agent, workspaceId: 'w', notes: [], browsers: [] }
 
 describe('embed mode at boot', () => {
   it('is honoured only inside a frame', () => {
-    expect(embedModeOf('?embed=agent&agent=abc', true)).toEqual({ agentId: 'abc' })
+    expect(embedModeOf('?embed=agent&agent=abc', true)).toEqual({ agentId: 'abc', rails: 'free' })
+    expect(embedModeOf('?embed=agent&agent=abc&rails=scale', true)).toEqual({ agentId: 'abc', rails: 'scale' })
     expect(embedModeOf('?embed=agent&agent=abc', false)).toBeNull()
     expect(embedModeOf('?embed=board', true)).toBeNull()
   })
 
   it('boots bare for a prewarm, and refuses an agent id that is not one', () => {
-    expect(embedModeOf('?embed=agent', true)).toEqual({ agentId: null })
-    expect(embedModeOf('?embed=agent&agent=%3Cscript%3E', true)).toEqual({ agentId: null })
+    expect(embedModeOf('?embed=agent', true)).toEqual({ agentId: null, rails: 'free' })
+    expect(embedModeOf('?embed=agent&agent=%3Cscript%3E', true)).toEqual({ agentId: null, rails: 'free' })
   })
 })
 
@@ -40,6 +41,15 @@ describe('the card the overlay renders', () => {
 })
 
 describe('where the rails go', () => {
+  it('scale mode frees a rail column on each side of a desktop, never on a phone', () => {
+    expect(scaleFor(390)).toBeNull()
+    const s = scaleFor(1280)!
+    const side = (1280 * (1 - s)) / 2
+    expect(side).toBeGreaterThanOrEqual(RAIL_MIN_WIDTH)
+    const layout = railLayout({ width: 1280, height: 800 }, { x: side, y: 0, width: 1280 * s, height: 720 * s })
+    expect(layout.mode).toBe('rails')
+  })
+
   it('never on a phone: a sheet', () => {
     expect(railLayout({ width: 390, height: 844 }, { x: 0, y: 0, width: 390, height: 760 })).toEqual({ mode: 'sheet' })
   })
