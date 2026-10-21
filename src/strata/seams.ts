@@ -31,7 +31,8 @@ export type AvatarSize = 'dot' | 'small' | 'full'
 
 /** Same input → same string, so callers may memoize on the input and never redraw per frame. */
 export interface FigureKit {
-  machine(input: { kind: MachineKind; link: MachineLink }): FigureArt
+  /** reached false = never reached (no lastSeenAt and no levels): a dashed outline, not offline-with-cache. Default true. */
+  machine(input: { kind: MachineKind; link: MachineLink; reached?: boolean }): FigureArt
   /**
    * The archetype comes from the workspace name alone (deterministic, no
    * network). `slots` seats avatars in creation order; beyond `capacity` the
@@ -74,7 +75,8 @@ export interface AgentHit {
 
 /** Across every machine the shell can see, cached ones included. */
 export interface FleetIndex {
-  find(query: string, limit?: number): AgentHit[]
+  /** near breaks ties toward where the user is: the same workspace first, then the same machine. */
+  find(query: string, limit?: number, near?: Pick<StrataPath, 'machine' | 'workspace'>): AgentHit[]
   /** Agents waiting on the owner, then replied-and-unread, oldest first. */
   attention(): AgentHit[]
 }
