@@ -40,6 +40,7 @@ import { bodyOf, classify, plainRefusal, wireError } from './account-wire'
 import { legacyKey, migrateAtRegistry } from './legacy-identity'
 import { renewDue, renewMessage } from '../shared/session-renew'
 import type { RegistryAccount } from './registry-account'
+import type { MachineProfile } from '../shared/strata'
 
 export { DEFAULT_LOCK_AFTER_MS }
 
@@ -340,6 +341,13 @@ export interface AccountsDeps {
    * made somewhere else, which no click on this Mac would otherwise reveal.
    */
   onChange?: () => void
+  /**
+   * STRATA: what kind of machine this is and which app it runs, filed with
+   * the desktop record so cookrew.dev can draw it (machine-profile.ts). Never
+   * a serial, a hardware UUID, a MAC address or a host name. Absent = the
+   * record carries neither field, exactly as before.
+   */
+  machine?: () => Promise<{ profile: MachineProfile; appVersion: string | null } | null>
 }
 
 /** The session a 201 carries — `{token, exp}` at the top of the body — or null when it does not. */
@@ -390,6 +398,7 @@ export class Accounts {
    * that moment is addressed to the pending and carries none.
    */
   private readonly ladder: LadderPasswords
+  private readonly machine: AccountsDeps['machine']
 
   constructor(deps: AccountsDeps = {}) {
     this.base = deps.base
@@ -401,6 +410,7 @@ export class Accounts {
     this.legacy = deps.legacy ?? ((): RegistryAccount | null => legacyKey(this.origin, this.base))
     this.changed = deps.onChange
     this.ladder = new LadderPasswords(this.now)
+    this.machine = deps.machine
   }
 
   /**
@@ -1468,11 +1478,14 @@ export class Accounts {
     const listed = account.workspacesReachable
       ? workspaces.map((w) => ({ id: w.id, name: w.name }))
       : []
+    // A probe that failed files nothing new: the registry keeps what it has.
+    const machine = this.machine ? await this.machine().catch(() => null) : null
     return this.authed<void>(`/v2/me/desktops/${encodeURIComponent(account.deviceId)}`, {
       method: 'PUT',
       body: JSON.stringify({
         name: account.name,
         workspaces: listed,
+        ...(machine ? { profile: machine.profile, appVersion: machine.appVersion } : {}),
         // Omitted rather than null when there is nothing to publish: a desktop
         // with reachability off must not overwrite yesterday's card with an
         // empty one, it must leave the registry with nothing new to say.

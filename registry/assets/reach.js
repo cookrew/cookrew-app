@@ -49,61 +49,59 @@
   }
 
   /**
-   * IS cookrew.dev HOLDING A LINE FOR THAT MAC?
+   * WHICH OF THESE MACS IS cookrew.dev HOLDING A LINE FOR? One question for the
+   * whole list (strata) — it used to be one request per Mac.
    *
    * Every kind of no is the same no from in here — a refusal, a network that
-   * dropped, an answer that was not JSON. None of them mean the Mac is up, and
+   * dropped, an answer that was not JSON. None of them mean a Mac is up, and
    * a badge that says ONLINE on a request that failed is worse than one that
    * says OFFLINE on a Mac that is fine: the first sends a reader to a dead
    * page, the second sends them to look at the Mac.
    */
-  async function live(deviceId) {
+  async function online() {
     try {
-      const res = await fetch(`/v2/me/desktops/${encodeURIComponent(deviceId)}/relay-status`, {
-        credentials: 'same-origin',
-        cache: 'no-store'
-      })
-      if (!res.ok) return false
+      const res = await fetch('/v2/me/presence', { credentials: 'same-origin', cache: 'no-store' })
+      if (!res.ok) return new Set()
       const body = await res.json()
-      return body?.live === true
+      const rows = Array.isArray(body?.desktops) ? body.desktops : []
+      return new Set(rows.filter((row) => row?.online === true).map((row) => String(row.id)))
     } catch {
-      return false
+      return new Set()
     }
   }
 
-  /** Rows whose question is still out, so a re-ask never sends a second one. */
-  const asking = new Set()
-
-  async function refresh(row) {
-    const deviceId = row.dataset.desktop
-    if (deviceId === undefined || asking.has(deviceId)) return
-    asking.add(deviceId)
-    try {
-      const up = await live(deviceId)
-      // LAN OUTRANKS ONLINE and must survive the re-ask. Both are true at
-      // once — the Mac is holding its line AND this device has its token —
-      // and the badge answers one question, which is how this page reaches
-      // that Mac. Letting the timer overwrite LAN with ONLINE would take the
-      // better answer away every sixty seconds.
-      badge(row, up ? (readToken(deviceId) === null ? 'online' : 'lan') : 'offline')
-    } finally {
-      asking.delete(deviceId)
-    }
-  }
+  /** The question is still out, so a re-ask never sends a second one. */
+  let asking = false
 
   /*
    * ASKING AGAIN, because a Mac sleeps and a network moves under the page.
    * When the browser says it is back online, when the tab comes forward, and
    * on a slow timer for the case neither fires.
    */
-  const reask = () => {
-    for (const row of rows()) void refresh(row)
+  const reask = async () => {
+    if (asking) return
+    asking = true
+    try {
+      const up = await online()
+      for (const row of rows()) {
+        const deviceId = row.dataset.desktop
+        if (deviceId === undefined) continue
+        // LAN OUTRANKS ONLINE and must survive the re-ask. Both are true at
+        // once — the Mac is holding its line AND this device has its token —
+        // and the badge answers one question, which is how this page reaches
+        // that Mac. Letting the timer overwrite LAN with ONLINE would take the
+        // better answer away every sixty seconds.
+        badge(row, up.has(deviceId) ? (readToken(deviceId) === null ? 'online' : 'lan') : 'offline')
+      }
+    } finally {
+      asking = false
+    }
   }
-  window.addEventListener('online', reask)
+  window.addEventListener('online', () => void reask())
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) reask()
+    if (!document.hidden) void reask()
   })
-  setInterval(reask, REASK_MS)
+  setInterval(() => void reask(), REASK_MS)
 
   /* ── M5: USE WI-FI ─────────────────────────────────────────────────────── */
 
@@ -323,5 +321,5 @@
   })
 
   for (const row of rows()) settle(row)
-  reask()
+  void reask()
 })()
