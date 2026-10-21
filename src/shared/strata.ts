@@ -286,14 +286,24 @@ export interface Rect {
 /**
  * Every flight starts and ends on a registered anchor. Levels register their
  * items' DOM rects under these ids; the stage reads them once per flight,
- * never per frame.
+ * never per frame. Workspace and agent ids are unique only within their
+ * machine (a Mac restored from another's backup keeps its ids), so their
+ * anchors carry the machine: build them with anchorOf, never by hand.
  */
 export type AnchorId =
   | `machine:${string}`
   | `portal:${string}`
-  | `workspace:${string}`
-  | `agent:${string}`
+  | `workspace:${string}/${string}`
+  | `agent:${string}/${string}`
   | 'terminal'
+
+/** The anchor of the item a path names, its deepest id: levels register it, the stage flies to it. */
+export const anchorOf = (path: StrataPath & { machine: string }): AnchorId =>
+  path.agent
+    ? `agent:${path.machine}/${path.agent}`
+    : path.workspace
+      ? `workspace:${path.machine}/${path.workspace}`
+      : `machine:${path.machine}`
 
 /**
  * A drawn figure. Self-contained SVG markup — no external refs, no
