@@ -56,13 +56,22 @@ export function handleLevelsRoutes(
   }
   try {
     if (match[1]) openStream(request, response, service, deps.heartbeatMs ?? LEVELS_HEARTBEAT_MS)
-    else if (match[2]) answerDetail(response, service, decodeURIComponent(match[2]))
+    else if (match[2]) answerDetail(response, service, safeDecode(match[2]))
     else answerSnapshot(request, response, service)
   } catch (error) {
     console.error('Levels route failed:', error)
     if (!response.headersSent) respondJson(response, 500, { error: 'levels failed' })
   }
   return true
+}
+
+/** A malformed escape names no agent: answered 404, not thrown into a 500. */
+const safeDecode = (raw: string): string => {
+  try {
+    return decodeURIComponent(raw)
+  } catch {
+    return ''
+  }
 }
 
 function answerSnapshot(request: http.IncomingMessage, response: http.ServerResponse, service: LevelsService): void {

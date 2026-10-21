@@ -247,6 +247,7 @@ describe('GET /api/levels/agents/:id', () => {
     const ok = await fetch(`${base}/api/levels/agents/a1`, { headers: auth })
     expect(ok.headers.get('cache-control')).toBe('no-store')
     expect((await fetch(`${base}/api/levels/agents/nope`, { headers: auth })).status).toBe(404)
+    expect((await fetch(`${base}/api/levels/agents/%E0%A4%A`, { headers: auth })).status).toBe(404)
   })
 })
 
