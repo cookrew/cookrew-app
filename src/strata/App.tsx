@@ -1,78 +1,358 @@
-// PREVIEW WIREFRAME of the four levels: plain lists, ids in the URL, no camera,
-// no figures. It proves the contract and the mock end to end, and is replaced
-// piece by piece: the levels (what each shows, input, URL slugs), the stage,
-// the figures, the fleet store and the terminal embed.
-import { useEffect, useState } from 'react'
-import { levelOf, parentOf, type StrataMachine, type StrataPath } from '../shared/strata'
+// THE STRATA SHELL: machines → workspaces → agents → the agent's terminal.
+// Owns the URL (one history entry per level), the one highlight per level, the
+// finder and the summary card, and hands the stage scene(path). The stage,
+// the figures, the fleet store and the embed are stand-ins until their lanes
+// land; each swap is one import.
+import { Profiler, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { levelOf, parentOf, type Rect, type StrataMachine, type StrataPath } from '../shared/strata'
 import { useFleet } from './fleet/use-fleet'
+import { standInFigures } from './stand-in/figures'
+import { Finder } from './finder/Finder'
+import { fanBounds } from './levels/Fan'
+import { InstantStage } from './input/InstantStage'
+import { isTypingTarget, keyIntent } from './input/keys'
+import { useAnchor } from './levels/anchors'
+import { LevelsContext, type GoOptions, type LevelsEnv } from './levels/env'
+import { onlineSummary, stateWords } from './levels/link'
+import { buildLevelModel, isWaiting } from './levels/model'
+import { Scene } from './levels/Scene'
+import { agentPaths, childToward, defaultHighlight, itemOf, nextAgentWithin, nextItem, pathKey, samePath } from './levels/selection'
+import { createHoverIntent } from './summary/hover-intent'
+import { SummaryCard } from './summary/SummaryCard'
+import { useStrataHistory } from './url/use-strata-history'
+import './levels/strata.css'
 
-const pathFromUrl = (): StrataPath => {
-  const [machine, workspace, agent] = location.pathname.replace(/^\/me\/?/, '').split('/').filter(Boolean).map(decodeURIComponent)
-  return { machine, workspace, agent }
+const kit = standInFigures
+const LOAD_GRACE_MS = 2500
+const TOP_BAR = 52
+
+const useMedia = (query: string) => {
+  const [match, setMatch] = useState(() => matchMedia(query).matches)
+  useEffect(() => {
+    const list = matchMedia(query)
+    const on = () => setMatch(list.matches)
+    list.addEventListener('change', on)
+    return () => list.removeEventListener('change', on)
+  }, [query])
+  return match
 }
-const urlOf = (path: StrataPath): string =>
-  ['/me', path.machine, path.workspace, path.agent].filter(Boolean).map((p, i) => (i === 0 ? p : encodeURIComponent(p as string))).join('/')
+
+/** useFleet has no loading flag yet: loaded once it has rows, or after a grace period (empty account). */
+const useLoaded = (fleet: StrataMachine[]) => {
+  const [late, setLate] = useState(false)
+  useEffect(() => {
+    const timer = setTimeout(() => setLate(true), LOAD_GRACE_MS)
+    return () => clearTimeout(timer)
+  }, [])
+  return fleet.length > 0 || late
+}
+
+/**
+ * PREVIEW ONLY (loopback hosts): ?link=<machineId>:<unpaired|outdated>,… forces
+ * link states the mock never produces, so every machine state can be seen.
+ */
+const usePreviewLinks = (fleet: StrataMachine[]): StrataMachine[] =>
+  useMemo(() => {
+    const spec = new URLSearchParams(location.search).get('link')
+    const preview = location.hostname === '127.0.0.1' || location.hostname === 'localhost'
+    if (!preview || !spec) return fleet
+    const forced = new Map(spec.split(',').map((pair) => pair.split(':') as [string, string]))
+    return fleet.map((m) => {
+      const link = forced.get(m.id)
+      return link === 'unpaired' || link === 'outdated' ? { ...m, link, levels: null, stale: false } : m
+    })
+  }, [fleet])
+
+const useViewport = (el: React.RefObject<HTMLDivElement | null>): Rect => {
+  const [size, setSize] = useState<Rect>({
+    x: 0,
+    y: 0,
+    w: innerWidth,
+    h: innerHeight - TOP_BAR
+  })
+  useEffect(() => {
+    if (!el.current) return
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect
+      setSize((s) => (s.w === width && s.h === height ? s : { x: 0, y: 0, w: width, h: height }))
+    })
+    observer.observe(el.current)
+    return () => observer.disconnect()
+  }, [el])
+  return size
+}
 
 export function App() {
-  const machines = useFleet()
-  const [path, setPath] = useState<StrataPath>(pathFromUrl)
+  const fleet = usePreviewLinks(useFleet())
+  const loaded = useLoaded(fleet)
+  const { path, notice, clearNotice, go: navigate } = useStrataHistory(fleet, loaded)
+  const host = useRef<HTMLDivElement>(null)
+  const viewport = useViewport(host)
+  const touch = useMedia('(pointer: coarse)')
+  const reducedMotion = useMedia('(prefers-reduced-motion: reduce)')
+  const [highlight, setHighlightState] = useState<StrataPath | null>(null)
+  const focusVia = useRef<'pointer' | 'key'>('pointer')
+  const [summaryKey, setSummaryKey] = useState<string | null>(null)
+  const hover = useMemo(
+    () =>
+      createHoverIntent({
+        onShow: setSummaryKey,
+        onHide: () => setSummaryKey(null)
+      }),
+    []
+  )
+  const [finder, setFinder] = useState<{ query: string } | null>(null)
+  const [glow, setGlow] = useState<ReadonlySet<string> | null>(null)
+  const [goOptions, setGoOptions] = useState<GoOptions>({})
+  const [announce, setAnnounce] = useState('')
 
-  const go = (next: StrataPath) => {
-    history.pushState(null, '', urlOf(next))
-    setPath(next)
-  }
+  const model = useMemo(() => buildLevelModel(path, fleet, viewport, kit), [path, fleet, viewport])
+  const level = levelOf(path)
+  const machineOf = useCallback((id?: string) => fleet.find((m) => m.id === id) ?? null, [fleet])
+
+  const setHighlight = useCallback((target: StrataPath | null, via: 'pointer' | 'key') => {
+    focusVia.current = via
+    setHighlightState((now) => (samePath(now, target) ? now : target))
+  }, [])
+
+  const go = useCallback(
+    (target: StrataPath, opts: GoOptions = {}) => {
+      setGoOptions(opts)
+      hover.hideNow()
+      setFinder(null)
+      navigate(target)
+    },
+    [hover, navigate]
+  )
+  const openFinder = useCallback(
+    (query = '') => {
+      hover.hideNow()
+      setFinder({ query })
+    },
+    [hover]
+  )
+
+  // Whoever moved last decides whether a new level's highlight also takes DOM focus.
+  const lastInput = useRef<'pointer' | 'key'>('pointer')
+  useEffect(() => {
+    const onKey = () => (lastInput.current = 'key')
+    const onPointer = () => (lastInput.current = 'pointer')
+    addEventListener('keydown', onKey, true)
+    addEventListener('pointerdown', onPointer, true)
+    return () => {
+      removeEventListener('keydown', onKey, true)
+      removeEventListener('pointerdown', onPointer, true)
+    }
+  }, [])
+
+  // Entering a level: the highlight starts where you came from, else on attention, else first.
+  const previous = useRef<StrataPath>(path)
+  const key = pathKey(path)
+  useEffect(() => {
+    const cameFrom = childToward(path, previous.current)
+    previous.current = path
+    hover.hideNow()
+    setHighlight(
+      defaultHighlight(model.items, cameFrom, (t) => isWaiting(machineOf(t.machine), t)),
+      lastInput.current
+    )
+    const names = {
+      machines: 'Machines',
+      workspaces: `${machineOf(path.machine)?.name ?? ''}: workspaces`,
+      agents: 'Agents',
+      terminal: 'Terminal'
+    }
+    setAnnounce(`${names[level]}${model.items.length ? `, ${model.items.length} items` : ''}`)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key])
+  // The fleet arrived after the level did: give it a highlight once.
+  useEffect(() => {
+    if (!highlight && model.items.length > 0)
+      setHighlight(
+        defaultHighlight(model.items, null, (t) => isWaiting(machineOf(t.machine), t)),
+        'pointer'
+      )
+  }, [highlight, model.items, machineOf, setHighlight])
+
+  // Keyboard focus follows the highlight, and so does the summary card (after the same intent delay).
+  useEffect(() => {
+    if (focusVia.current !== 'key' || !highlight) return
+    const el = document.querySelector<HTMLElement>(`[data-path="${CSS.escape(pathKey(highlight))}"]`)
+    el?.focus({ preventScroll: true })
+    if (highlight.agent) hover.enter(`${highlight.machine}/${highlight.agent}`)
+    else hover.hideNow()
+  }, [highlight, hover])
 
   useEffect(() => {
-    const onPop = () => setPath(pathFromUrl())
     const onKey = (e: KeyboardEvent) => {
-      if ((e.key === 'ArrowLeft' || e.key === 'Escape') && levelOf(path) !== 'machines') go(parentOf(path))
+      const intent = keyIntent(e, {
+        level,
+        typing: isTypingTarget(document.activeElement),
+        overlayOpen: finder !== null || summaryKey !== null
+      })
+      if (!intent) return
+      e.preventDefault()
+      if (intent.type === 'finder') return openFinder('')
+      if (intent.type === 'close') return finder ? setFinder(null) : hover.hideNow()
+      if (intent.type === 'out') return go(parentOf(path))
+      if (intent.type === 'in') return highlight && go(highlight)
+      const item = itemOf(model.items, highlight)
+      if (intent.within && item?.machine) {
+        const machine = machineOf(item.machine)
+        const agents = machine ? agentPaths(machine, item.workspace) : []
+        return setHighlight(nextAgentWithin(agents, highlight, intent.dir), 'key')
+      }
+      setHighlight(nextItem(model.items, level === 'agents' ? highlight : item, intent.dir), 'key')
     }
-    addEventListener('popstate', onPop)
     addEventListener('keydown', onKey)
-    return () => {
-      removeEventListener('popstate', onPop)
-      removeEventListener('keydown', onKey)
-    }
-  })
+    return () => removeEventListener('keydown', onKey)
+  }, [level, finder, summaryKey, highlight, model.items, path, go, hover, openFinder, machineOf, setHighlight])
 
-  const machine = machines.find((m) => m.id === path.machine)
-  const workspace = machine?.levels?.workspaces.find((w) => w.id === path.workspace)
-  const agent = workspace?.agents.find((a) => a.id === path.agent)
+  useEffect(() => () => hover.dispose(), [hover])
+
+  const finderContext = useMemo(() => ({ machine: path.machine, workspace: path.workspace }), [path.machine, path.workspace])
+  const onFinderActive = useCallback((target: StrataPath | null) => target && setHighlight(target, 'pointer'), [setHighlight])
+  const summarySeat = model.seats.find((s) => s.key === summaryKey) ?? null
+  // On L2 the fan opens above the avatar with the card: anchor the card on both.
+  const cardSeat =
+    summarySeat && level === 'agents' && summarySeat.agent.attachments.length > 0 ? { ...summarySeat, rect: fanBounds(summarySeat.rect, touch) } : summarySeat
+
+  const env: LevelsEnv = {
+    kit,
+    fleet,
+    viewport,
+    touch,
+    now: Date.now,
+    highlight,
+    setHighlight,
+    go,
+    glow,
+    hover,
+    summaryKey,
+    useAnchor,
+    reducedMotion,
+    goOptions
+  }
 
   return (
-    <main style={{ font: '14px/1.5 ui-monospace, monospace', padding: 24 }}>
-      <p>
-        {levelOf(path)} · <a href={urlOf({})} onClick={(e) => (e.preventDefault(), go({}))}>machines</a>
-        {machine && ` › ${machine.name}`}
-        {workspace && ` › ${workspace.name}`}
-        {agent && ` › ${agent.name}`}
-      </p>
-      {levelOf(path) === 'machines' && <MachineList machines={machines} onPick={(m) => go({ machine: m })} />}
-      {levelOf(path) === 'workspaces' &&
-        machine?.levels?.workspaces.map((w) => (
-          <button key={w.id} style={{ display: 'block' }} onClick={() => go({ ...path, workspace: w.id })}>
-            {w.name} · {w.state} · {w.agents.length} agents
-          </button>
-        ))}
-      {levelOf(path) === 'agents' &&
-        workspace?.agents.map((a) => (
-          <button key={a.id} style={{ display: 'block' }} title={[a.task, a.reply].filter(Boolean).join('\n')} onClick={() => go({ ...path, agent: a.id })}>
-            {a.name} · {a.harness} · {a.phase} · {a.attachments.length} attached
-          </button>
-        ))}
-      {levelOf(path) === 'terminal' && <p>terminal of {agent?.name ?? path.agent} — the companion embed goes here</p>}
-    </main>
+    <Probe>
+      <div className={`strata${touch ? ' touch' : ''}${reducedMotion ? ' reduced' : ''}`}>
+        <TopBar path={path} fleet={fleet} onGo={go} onFind={() => openFinder('')} />
+        <div className="stage-host" ref={host}>
+          <LevelsContext.Provider value={env}>
+            <InstantStage
+              path={path}
+              scene={(p) => (
+                <Scene model={samePath(p, path) || pathKey(p) === key ? model : buildLevelModel(p, fleet, viewport, kit)} openFinder={openFinder} />
+              )}
+              inTarget={() => highlight}
+              onCommit={(next) => go(next)}
+              reducedMotion={reducedMotion}
+            />
+            <SummaryCard
+              seat={cardSeat}
+              machine={machineOf(summarySeat?.path.machine)}
+              viewport={viewport}
+              onHold={hover.holdCard}
+              onRelease={hover.releaseCard}
+            />
+          </LevelsContext.Provider>
+        </div>
+        {finder && (
+          <Finder
+            fleet={fleet}
+            context={finderContext}
+            initialQuery={finder.query}
+            onClose={() => setFinder(null)}
+            onGlow={setGlow}
+            onActive={onFinderActive}
+            onDive={(t) => go(t)}
+          />
+        )}
+        {notice && (
+          <div className="toast" role="status" onClick={clearNotice}>
+            {notice}
+          </div>
+        )}
+        {touch && <LevelDots depth={['machines', 'workspaces', 'agents', 'terminal'].indexOf(level)} />}
+        <div className="sr-only" aria-live="polite">
+          {announce}
+        </div>
+      </div>
+    </Probe>
   )
 }
 
-function MachineList({ machines, onPick }: { machines: StrataMachine[]; onPick: (id: string) => void }) {
+/** QA only (?probe): counts React commits, so a probe can prove nothing commits per animation frame. */
+const PROBE = typeof location !== 'undefined' && new URLSearchParams(location.search).has('probe')
+const countCommit = () => {
+  const w = window as unknown as { __strataCommits?: number }
+  w.__strataCommits = (w.__strataCommits ?? 0) + 1
+}
+export function Probe({ children }: { children: ReactNode }) {
+  return PROBE ? (
+    <Profiler id="strata" onRender={countCommit}>
+      {children}
+    </Profiler>
+  ) : (
+    <>{children}</>
+  )
+}
+
+function TopBar({ path, fleet, onGo, onFind }: { path: StrataPath; fleet: StrataMachine[]; onGo: (p: StrataPath) => void; onFind: () => void }) {
+  const machine = fleet.find((m) => m.id === path.machine)
+  const workspace = machine?.levels?.workspaces.find((w) => w.id === path.workspace)
+  const agent = workspace?.agents.find((a) => a.id === path.agent)
+  const crumbs: Array<{ label: string; to: StrataPath }> = [
+    { label: 'machines', to: {} },
+    ...(path.machine ? [{ label: machine?.name ?? '…', to: { machine: path.machine } }] : []),
+    ...(path.workspace
+      ? [
+          {
+            label: workspace?.name ?? '…',
+            to: { machine: path.machine, workspace: path.workspace }
+          }
+        ]
+      : []),
+    ...(path.agent ? [{ label: agent?.name ?? '…', to: path }] : [])
+  ]
+  const status = !path.machine ? onlineSummary(fleet) : machine ? stateWords(machine, Date.now()) : ''
   return (
-    <>
-      {machines.map((m) => (
-        <button key={m.id} style={{ display: 'block' }} onClick={() => onPick(m.id)}>
-          {m.name} · {m.profile?.kind ?? 'unknown'} · {m.link} · {m.levels?.workspaces.length ?? '–'} workspaces
+    <header className="topbar">
+      {path.machine && (
+        <button type="button" className="back" aria-label="Back out one level" onClick={() => onGo(parentOf(path))}>
+          ‹
         </button>
+      )}
+      <nav className="crumbs" aria-label="Level">
+        {crumbs.map((c, i) =>
+          i === crumbs.length - 1 ? (
+            <span key={i} aria-current="page">
+              {c.label}
+            </span>
+          ) : (
+            <button key={i} type="button" onClick={() => onGo(c.to)}>
+              {c.label}
+            </button>
+          )
+        )}
+      </nav>
+      <span className="status">{status}</span>
+      <button type="button" className="find" onClick={onFind} aria-label="Find an agent (⌘K or /)">
+        <span aria-hidden="true">⌕</span>
+        <span className="find-label"> Find</span>
+        <kbd>⌘K</kbd>
+      </button>
+    </header>
+  )
+}
+
+function LevelDots({ depth }: { depth: number }) {
+  return (
+    <div className="level-dots" aria-hidden="true">
+      {[0, 1, 2, 3].map((i) => (
+        <span key={i} className={i === depth ? 'on' : undefined} />
       ))}
-    </>
+    </div>
   )
 }
