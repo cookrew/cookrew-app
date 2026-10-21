@@ -10,7 +10,8 @@ import {
   relaySignInPage
 } from './site-relay'
 import { respondPage } from './site-shell'
-import type { DesktopPresence } from './v2-fleet'
+import { fleetPresence, type DesktopPresence } from './v2-fleet'
+import { createLineSeen } from './v2-line-seen'
 
 /**
  * IDENTITY v2, PHASE 3 — THE PRIVATE RELAY SESSION.
@@ -405,6 +406,8 @@ export interface CanvasRelayDeps {
   headDeadlineMs?: number
   idleDeadlineMs?: number
   bodyBudget?: number
+  /** STRATA: where line sightings persist (v2-line-seen.ts); absent = memory only. */
+  seenFile?: string
 }
 
 /** A refusal this file words itself, for the routes only a desktop calls. */
@@ -480,10 +483,10 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
   const holding = new Map<string, Set<string>>()
   /** Request bytes buffered right now, across every exchange. */
   let buffering = 0
-  /** STRATA: when each line was last opened, beaten or closed — presence's lastSeenAt. */
-  const seen = new Map<string, number>()
+  /** STRATA: when each line was last opened, beaten or closed — presence's lastSeenAt, kept across a restart. */
   const nowMs = deps.now ?? ((): number => Date.now())
-  const sawLine = (name: string): void => void seen.set(name, nowMs())
+  const seen = createLineSeen(deps.seenFile ?? null, nowMs)
+  const sawLine = (name: string): void => seen.see(name)
 
   /** The account a canvas name belongs to. The name is built from a token. */
   const ownerOf = (name: string): string => name.slice(1, name.indexOf('/'))
@@ -684,9 +687,10 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
       refuse(response, 401, 'unauthenticated')
       return
     }
-    const rows = [...presence(signed.account.username)].map(([id, p]) => ({ id, ...p }))
+    // The same standing the list row gives (v2-fleet · standing), at one instant.
+    const answer = fleetPresence(signed.account.desktops, presence(signed.account.username), perAccount, nowMs())
     response.setHeader('cache-control', 'private, no-store')
-    v2Json(response, 200, { at: nowMs(), cap: perAccount, online: rows.filter((r) => r.online).length, desktops: rows })
+    v2Json(response, 200, answer)
   }
 
   // ── the phone's side ───────────────────────────────────────────────────
@@ -969,7 +973,10 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
     live: (username, deviceId) => hub.has(canvasName(username, deviceId)),
     presence,
     stats: () => ({ links: live.size, ...counts }),
-    stop: () => live.stop(),
+    stop: () => {
+      live.stop()
+      seen.flush()
+    },
     handle(request, response, parts, url) {
       const method = request.method ?? 'GET'
       // The desktop's own pair of halves, under one name: GET is the downlink,

@@ -13,7 +13,9 @@ import { RegistryStore } from '../registry/src/store'
 import { StarStore } from '../registry/src/stars'
 import { loadShellBundle, readShellBundle } from '../registry/src/strata-shell'
 import { LINKS_PER_ACCOUNT } from '../registry/src/v2-canvas-relay'
-import { BAD, fleetRow, PROFILE_BYTES_MAX, readAppVersion, readProfile } from '../registry/src/v2-fleet'
+import { BAD, fleetPresence, fleetRow, PROFILE_BYTES_MAX, readAppVersion, readProfile, type DesktopPresence } from '../registry/src/v2-fleet'
+import { createLineSeen, SEEN_KEEP_MS } from '../registry/src/v2-line-seen'
+import type { V2Desktop } from '../registry/src/v2-accounts'
 import { createV2 } from '../registry/src/v2-routes'
 import { decodeFrame, encodeFrame } from '../src/shared/relay-frame'
 import type { FleetMachine, MachineProfile } from '../src/shared/strata'
@@ -94,6 +96,54 @@ describe('a FleetMachine row', () => {
   it('draws an older desktop as unknown and names its base', () => {
     const row = fleetRow('mira', desktop, undefined, 9_000)
     expect(row).toEqual({ id: 'd1', name: 'Invented Mac', online: false, lastSeenAt: 1_000, appVersion: null, profile: null, base: '/relay/@mira/desktop/d1/' })
+  })
+})
+
+describe('a presence row means what its list row means', () => {
+  it('equals the list row’s id, online and lastSeenAt at the same instant, for every kind of desktop', () => {
+    const at = (deviceId: string, updatedAt: number): V2Desktop => ({ deviceId, name: deviceId, workspaces: [], reach: null, updatedAt })
+    const desktops = [at('online', 1_000), at('seen-later', 1_000), at('record-later', 8_000), at('record-only', 2_000), at('never', 0)]
+    const lines = new Map<string, DesktopPresence>([
+      ['online', { online: true, lastSeenAt: 500 }],
+      ['seen-later', { online: false, lastSeenAt: 7_000 }],
+      ['record-later', { online: false, lastSeenAt: 3_000 }],
+      // After a registry restart the relay has no sighting at all: the record PUT time stands.
+      ['record-only', { online: false, lastSeenAt: null }]
+    ])
+    const now = 9_000
+    const presence = fleetPresence(desktops, lines, 8, now)
+    expect(presence).toMatchObject({ at: now, cap: 8, online: 1 })
+    for (const desktop of desktops) {
+      const row = fleetRow('mira', desktop, lines.get(desktop.deviceId), now)
+      expect(presence.desktops.find((d) => d.id === desktop.deviceId)).toEqual({ id: row.id, online: row.online, lastSeenAt: row.lastSeenAt })
+    }
+    expect(presence.desktops.map((d) => d.lastSeenAt)).toEqual([9_000, 7_000, 8_000, 2_000, null])
+  })
+})
+
+describe('line sightings survive a restart', () => {
+  it('writes once per window, atomically, and reads back what it wrote', () => {
+    const file = path.join(mkdtempSync(path.join(tmpdir(), 'strata-seen-')), 'seen.json')
+    let now = 1_000_000
+    const first = createLineSeen(file, () => now, 60_000)
+    first.see('@mira/desktop/a')
+    now += 5
+    first.see('@mira/desktop/b')
+    first.flush()
+    const second = createLineSeen(file, () => now)
+    expect(second.get('@mira/desktop/a')).toBe(1_000_000)
+    expect(second.get('@mira/desktop/b')).toBe(1_000_005)
+  })
+
+  it('forgets sightings older than the keep window, and survives a torn file', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'strata-seen-'))
+    const file = path.join(dir, 'seen.json')
+    const now = SEEN_KEEP_MS * 3
+    writeFileSync(file, JSON.stringify({ old: now - SEEN_KEEP_MS - 1, fresh: now - 1, bad: 'x' }))
+    const seen = createLineSeen(file, () => now)
+    expect([seen.get('old'), seen.get('fresh'), seen.get('bad')]).toEqual([undefined, now - 1, undefined])
+    writeFileSync(file, '{"torn":')
+    expect(createLineSeen(file, () => now).get('torn')).toBeUndefined()
   })
 })
 
@@ -265,7 +315,12 @@ describe('presence, one question for the fleet', () => {
       expect(res.headers.get('cache-control')).toContain('no-store')
       return (await res.json()) as { at: number; cap: number; online: number; desktops: Array<{ id: string; online: boolean; lastSeenAt: number | null }> }
     }
-    expect(await ask()).toMatchObject({ cap: LINKS_PER_ACCOUNT, online: 0, desktops: [{ id: mac.id, online: false, lastSeenAt: null }] })
+    const before = await ask()
+    expect(before).toMatchObject({ cap: LINKS_PER_ACCOUNT, online: 0, desktops: [{ id: mac.id, online: false }] })
+    // Never on a line yet: the record PUT time, exactly as the list row says.
+    const [listed] = await desktops(site.origin, mac.token)
+    expect(before.desktops[0].lastSeenAt).toBe(listed.lastSeenAt)
+    expect(listed.lastSeenAt).toBeGreaterThan(0)
 
     const line = holdLine(site.origin, mac)
     await line.ready
@@ -283,6 +338,40 @@ describe('presence, one question for the fleet', () => {
     }
     expect(gone.desktops[0]).toMatchObject({ online: false })
     expect(gone.desktops[0].lastSeenAt).toBeGreaterThan(0)
+  })
+
+  it('after a restart, reads a line seen in the last run and agrees with the list', async () => {
+    const restartDir = mkdtempSync(path.join(tmpdir(), 'strata-registry-restart-'))
+    const seenFile = path.join(restartDir, 'canvas-line-seen.json')
+    const make = (): Server =>
+      createRegistry({
+        store: new RegistryStore(restartDir),
+        log: new TransparencyLog(restartDir),
+        identity: new IdentityService(restartDir),
+        stars: new StarStore(restartDir),
+        origin: 'https://cookrew.dev',
+        v2: createV2(restartDir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000, lookupsPerMinute: 1000 } }),
+        lineSeenFile: seenFile
+      })
+    const first = await listen(make())
+    const mac = await claim(first.origin, 'vale')
+    await put(first.origin, mac, {})
+    await first.close()
+    // What the last run wrote: the line seen well after the record was filed.
+    const lineAt = Date.now() + 60_000
+    writeFileSync(seenFile, JSON.stringify({ [`@vale/desktop/${mac.id}`]: lineAt }))
+    const second = await listen(make())
+    try {
+      const presence = (await (await fetch(`${second.origin}/v2/me/presence`, { headers: { authorization: `Bearer ${mac.token}` } })).json()) as {
+        desktops: Array<{ id: string; online: boolean; lastSeenAt: number | null }>
+      }
+      const [row] = await desktops(second.origin, mac.token)
+      expect(presence.desktops).toEqual([{ id: mac.id, online: false, lastSeenAt: lineAt }])
+      expect({ id: row.id, online: row.online, lastSeenAt: row.lastSeenAt }).toEqual(presence.desktops[0])
+    } finally {
+      await second.close()
+      rmSync(restartDir, { recursive: true, force: true })
+    }
   })
 
   it('answers only about the reader’s own desktops, and needs a session', async () => {

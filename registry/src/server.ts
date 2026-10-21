@@ -134,6 +134,8 @@ export interface RegistryDeps {
    * ConfigMap. Absent → /me is the account page, exactly as before.
    */
   shell?: ShellBundle | null
+  /** STRATA: where the canvas relay keeps when each desktop's line was last seen; absent = memory only. */
+  lineSeenFile?: string
 }
 
 /** An account name: the same shape a handle has everywhere else on this site. */
@@ -193,7 +195,11 @@ export function createRegistry(deps: RegistryDeps): Server {
    * wherever v2 is, because it is part of what an account is FOR.
    */
   const canvas: CanvasRelay | null = deps.v2
-    ? createCanvasRelay({ v2: deps.v2, ...(deps.note === undefined ? {} : { log: deps.note }) })
+    ? createCanvasRelay({
+        v2: deps.v2,
+        ...(deps.note === undefined ? {} : { log: deps.note }),
+        ...(deps.lineSeenFile === undefined ? {} : { seenFile: deps.lineSeenFile })
+      })
     : null
 
   const relay: RelayHttp | null = deps.relay

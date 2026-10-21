@@ -98,9 +98,22 @@ const snapshot = object({
   workspaces: array(workspace)
 })
 
+/** The card's TerminalNodeData: the members a terminal node always has, and its kind. */
+const terminalNode: Check = (v, p) => {
+  if (typeof v !== 'object' || v === null) return fail(p, 'object', v)
+  const n = v as Record<string, unknown>
+  oneOf('terminal')(n.kind, `${p}.kind`)
+  for (const key of ['id', 'name', 'preset', 'command', 'cwd']) str(n[key], `${p}.${key}`)
+  bool(n.orch, `${p}.orch`)
+  nullable(str)(n.role, `${p}.role`)
+  object({ x: num, y: num })(n.position, `${p}.position`)
+  object({ width: num, height: num })(n.size, `${p}.size`)
+}
+
 const detail = object({
   agent,
   workspaceId: str,
+  'node?': terminalNode,
   notes: array(object({ id: str, title: str, content: str, shared: bool })),
   browsers: array(
     object({ id: str, title: str, url: nullable(str), tabs: array(object({ id: str, url: str })), live: bool, shared: bool })
@@ -110,7 +123,6 @@ const detail = object({
 const EVENTS: Record<string, Check> = {
   snapshot: object({ type: str, snapshot }),
   agent: object({ type: str, rev: num, workspaceId: str, agent }),
-  'agent-gone': object({ type: str, rev: num, workspaceId: str, agentId: str }),
   workspace: object({ type: str, rev: num, workspace }),
   'workspace-gone': object({ type: str, rev: num, workspaceId: str }),
   focus: object({ type: str, rev: num, workspaceId: nullable(str) })

@@ -8,7 +8,7 @@
 // refused outright: the desktop never sends one, so one arriving is a bug or a
 // forgery, and either way it is not filed.
 
-import type { FleetMachine, MachineKind, MachineProfile } from '../../src/shared/strata'
+import type { FleetMachine, FleetPresence, MachineKind, MachineProfile } from '../../src/shared/strata'
 import type { V2Desktop } from './v2-accounts'
 
 export const PROFILE_STRING_MAX = 64
@@ -88,7 +88,7 @@ export function readAppVersion(raw: unknown): string | null | undefined | typeof
   return typeof raw === 'string' && raw.length <= APP_VERSION_MAX && APP_VERSION.test(raw) ? raw : BAD
 }
 
-/** Whether a desktop holds its relay line now, and when it last did. */
+/** The relay's own fact about a line: held now, and when this process last saw it. */
 export interface DesktopPresence {
   online: boolean
   /** Epoch ms; null when this registry process has never seen its line. */
@@ -100,20 +100,39 @@ export const desktopBase = (username: string, deviceId: string): string =>
   `/relay/@${encodeURIComponent(username)}/desktop/${encodeURIComponent(deviceId)}/`
 
 /**
- * A level-0 row. `lastSeenAt` is the later of the relay's last sight and the
- * desktop's last record PUT — a desktop filing its record is a desktop that
- * was up — and now while it holds its line.
+ * WHERE A DESKTOP STANDS, one answer for the list row and the presence row, so
+ * the shell can lay one over the other as it stands. Now while it holds its
+ * line; otherwise the later of the relay's last sight and the desktop's last
+ * record PUT (a desktop filing its record is a desktop that was up); null when
+ * neither ever happened.
  */
-export function fleetRow(username: string, desktop: V2Desktop, presence: DesktopPresence | undefined, now: number): FleetMachine {
-  const online = presence?.online === true
-  const seen = Math.max(presence?.lastSeenAt ?? 0, desktop.updatedAt ?? 0)
+export function standing(desktop: V2Desktop, line: DesktopPresence | undefined, now: number): Pick<FleetMachine, 'id' | 'online' | 'lastSeenAt'> {
+  const online = line?.online === true
+  const seen = Math.max(line?.lastSeenAt ?? 0, desktop.updatedAt ?? 0)
+  return { id: desktop.deviceId, online, lastSeenAt: online ? now : seen > 0 ? seen : null }
+}
+
+/** A level-0 row. */
+export function fleetRow(username: string, desktop: V2Desktop, line: DesktopPresence | undefined, now: number): FleetMachine {
+  const { id, online, lastSeenAt } = standing(desktop, line, now)
   return {
-    id: desktop.deviceId,
+    id,
     name: desktop.name,
     online,
-    lastSeenAt: online ? now : seen > 0 ? seen : null,
+    lastSeenAt,
     appVersion: desktop.appVersion ?? null,
     profile: desktop.profile ?? null,
     base: desktopBase(username, desktop.deviceId)
   }
+}
+
+/** GET /v2/me/presence: every desktop's standing at one instant, and the cap. */
+export function fleetPresence(
+  desktops: readonly V2Desktop[],
+  lines: ReadonlyMap<string, DesktopPresence>,
+  cap: number,
+  now: number
+): FleetPresence {
+  const rows = desktops.map((desktop) => standing(desktop, lines.get(desktop.deviceId), now))
+  return { at: now, cap, online: rows.filter((row) => row.online).length, desktops: rows }
 }

@@ -328,6 +328,8 @@ createRegistry({
   ...(names === undefined ? {} : { names }),
   // STRATA: the shell's files, from the second ConfigMap (strata-shell.ts).
   // No flag and no env → /me stays the account page.
+  // STRATA: a desktop's last-seen time survives a restart (v2-line-seen.ts).
+  lineSeenFile: path.join(DATA, 'canvas-line-seen.json'),
   shell: loadShellBundle(flag('shell-assets', process.env.STRATA_SHELL_ASSETS ?? ''), (message) => console.error(message)),
   authorize: makeAuthorize(store, identity, pricing)
 }).listen(PORT, () => {
