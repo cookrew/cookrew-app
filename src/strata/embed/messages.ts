@@ -41,6 +41,7 @@ export const parseEmbedToShell = (data: unknown): EmbedToShell | null => {
 export const parseShellToEmbed = (data: unknown): ShellToEmbed | null => {
   if (!isObject(data)) return null
   if (data.type === 'strata:blur') return { type: 'strata:blur' }
+  if (data.type === 'strata:prefetch') return isId(data.agentId) && data.agentId.length > 0 ? { type: 'strata:prefetch', agentId: data.agentId } : null
   if (data.type !== 'strata:focus' || !isId(data.agentId) || data.agentId.length === 0) return null
   return isId(data.attachmentId)
     ? { type: 'strata:focus', agentId: data.agentId, attachmentId: data.attachmentId }

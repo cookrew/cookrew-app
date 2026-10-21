@@ -40,3 +40,8 @@ const subscribe = (listener: () => void): (() => void) => {
 const getSnapshot = (): StrataMachine[] => fleetStore().getSnapshot()
 
 export const useFleet = (): StrataMachine[] => useSyncExternalStore(subscribe, getSnapshot)
+
+const getLoaded = (): boolean => fleetStore().loaded()
+
+/** UseFleetLoaded (seams.ts): the list has answered, from cache, live or with an error. */
+export const useFleetLoaded = (): boolean => useSyncExternalStore(subscribe, getLoaded)

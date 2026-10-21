@@ -7,13 +7,16 @@
 //               hidden frame can never resize anybody's PTY)
 //   open(path)  shows path.agent's terminal: a warm document gets a focus, a
 //               cold one is created with the agent in its URL
-//   close()     blurs the shown document (its terminal unmounts) and keeps it warm
+//   prefetch()  hover intent on an agent of a document that is up: it reads
+//               that agent's detail ahead (strata:prefetch), mounting nothing
+//   close()     fades the shown document out, then blurs it (its terminal
+//               unmounts) once the fade is over, and keeps it warm
 //
 // At most maxWarm() documents live at once (2 on a phone, 3 on a desktop);
 // the least recently used one that is not on screen goes first. DOM-free:
 // frames come from an injected factory, so this is tested in node.
 import type { EmbedToShell, ShellToEmbed, StrataMachine, StrataPath } from '../../shared/strata'
-import type { EmbedPool } from '../seams'
+import type { EmbedPool, EmbedState } from '../seams'
 import { fromFrame, type MessageLike } from './messages'
 
 export type EmbedErrorCode = Extract<EmbedToShell, { type: 'strata:error' }>['code']
@@ -44,6 +47,8 @@ export interface FrameHandle {
 
 export interface EmbedDeps {
   origin: string
+  /** Where frames are created from now on: the stage host. Set once; a frame never moves. */
+  host?(el: HTMLElement): void
   /**
    * `onLoad` reports each document the frame finishes loading: `page` false
    * means it is not an HTML page at all (a relay refusal answered as JSON), so
@@ -61,6 +66,9 @@ export interface EmbedDeps {
   /** The embed asked to step out (zoomBack / close): the owner of history pops one level. */
   onOut(): void
 }
+
+/** The frame's crossfade (browser-pool.ts): a closed frame keeps its terminal until it has faded out. */
+export const FRAME_FADE_MS = 120
 
 export const EMBED_TIMEOUTS = {
   /** A document that is already up only has to fetch one agent and mount it. */
@@ -96,6 +104,10 @@ export interface EmbedView {
 interface Frame extends FrameView {
   handle: FrameHandle
   usedAt: number
+  /** A blur waiting for the fade-out to finish; cancelled if the frame is wanted again first. */
+  blurTimer: unknown
+  /** The agent last prefetched in it, so a lingering hover does not ask twice. */
+  prefetched: string | null
 }
 
 interface Opening {
@@ -112,7 +124,7 @@ interface Opening {
 }
 
 export interface StrataEmbedPool extends EmbedPool {
-  subscribe(listener: () => void): () => void
+  /** QA's fuller view (frames, timings, failure detail); state() is the seam's. */
   getSnapshot(): EmbedView
   /** Drops every document not on screen: a long-hidden tab, or a sign-out. */
   trim(): void
@@ -132,10 +144,30 @@ export const createEmbedPool = (deps: EmbedDeps): StrataEmbedPool => {
   let failed: EmbedView['failed'] = null
   let lastDive: DiveTiming | null = null
   let view: EmbedView | null = null
+  let state: EmbedState = { shown: null, opening: null, failed: null }
+  let hostSet = false
   const listeners = new Set<() => void>()
+
+  const same = <T extends { machineId: string; agentId: string }>(a: T | null, b: T | null, extra?: (a: T, b: T) => boolean) =>
+    a === b || (a !== null && b !== null && a.machineId === b.machineId && a.agentId === b.agentId && (!extra || extra(a, b)))
+
+  /** state() is the same object until shown, opening or failed really change. */
+  const nextState = (): EmbedState => {
+    const next: EmbedState = {
+      shown,
+      opening: opening && { machineId: opening.machineId, agentId: opening.agentId },
+      failed: failed && { machineId: failed.machineId, agentId: failed.agentId, code: failed.code }
+    }
+    const kept =
+      same(state.shown, next.shown) &&
+      same(state.opening, next.opening) &&
+      same(state.failed, next.failed, (a, b) => a.code === b.code)
+    return kept ? state : next
+  }
 
   const changed = () => {
     view = null
+    state = nextState()
     for (const listener of [...listeners]) listener()
   }
 
@@ -148,6 +180,7 @@ export const createEmbedPool = (deps: EmbedDeps): StrataEmbedPool => {
   const dropFrame = (machineId: string) => {
     const frame = frames.get(machineId)
     if (!frame) return
+    if (frame.blurTimer !== null) deps.clearTimer(frame.blurTimer)
     frame.handle.remove()
     const next = new Map(frames)
     next.delete(machineId)
@@ -184,18 +217,40 @@ export const createEmbedPool = (deps: EmbedDeps): StrataEmbedPool => {
     changed()
   }
 
+  /** Talking to a frame again cancels the blur its fade-out was waiting to send. */
+  const keepFocus = (machineId: string) => {
+    const frame = frames.get(machineId)
+    if (!frame || frame.blurTimer === null) return
+    deps.clearTimer(frame.blurTimer)
+    setFrame(machineId, { blurTimer: null })
+  }
+
+  /**
+   * The way out crossfades into the flight: the frame starts fading at once,
+   * still showing its terminal, and is blurred (the terminal unmounts) only
+   * when the fade is over.
+   */
   const hideShown = (except?: string) => {
     if (!shown || shown.machineId === except) return
     const frame = frames.get(shown.machineId)
     if (frame) {
-      deps.post(frame.handle, { type: 'strata:blur' })
       frame.handle.hide()
-      setFrame(frame.machineId, { agentId: null })
+      if (frame.blurTimer !== null) deps.clearTimer(frame.blurTimer)
+      const machineId = frame.machineId
+      const blurTimer = deps.setTimer(() => {
+        const now = frames.get(machineId)
+        if (!now || now.blurTimer !== blurTimer) return
+        setFrame(machineId, { blurTimer: null })
+        deps.post(now.handle, { type: 'strata:blur' })
+      }, FRAME_FADE_MS)
+      setFrame(machineId, { agentId: null, blurTimer, prefetched: null })
     }
     shown = null
   }
 
   const sendFocus = (frame: Frame, target: Opening) => {
+    keepFocus(frame.machineId)
+    setFrame(frame.machineId, { prefetched: null })
     deps.post(frame.handle, {
       type: 'strata:focus',
       agentId: target.agentId,
@@ -262,7 +317,7 @@ export const createEmbedPool = (deps: EmbedDeps): StrataEmbedPool => {
       else changed()
     })
     handle.hide()
-    const frame: Frame = { machineId: machine.id, handle, state: 'loading', agentId: null, usedAt: deps.now() }
+    const frame: Frame = { machineId: machine.id, handle, state: 'loading', agentId: null, usedAt: deps.now(), blurTimer: null, prefetched: null }
     frames = new Map(frames).set(machine.id, frame)
     return frame
   }
@@ -274,6 +329,22 @@ export const createEmbedPool = (deps: EmbedDeps): StrataEmbedPool => {
   }
 
   return {
+    host(el) {
+      if (hostSet || frames.size > 0) return
+      hostSet = true
+      deps.host?.(el)
+    },
+
+    prefetch(path: Required<StrataPath>) {
+      const frame = frames.get(path.machine)
+      // Only a document that is up, and never for the agent already on screen.
+      if (!frame || frame.state !== 'warm' || frame.agentId === path.agent || frame.prefetched === path.agent) return
+      setFrame(path.machine, { prefetched: path.agent })
+      deps.post(frame.handle, { type: 'strata:prefetch', agentId: path.agent })
+    },
+
+    state: () => state,
+
     prewarm(machineId) {
       const existing = frames.get(machineId)
       if (existing) {
@@ -326,6 +397,7 @@ export const createEmbedPool = (deps: EmbedDeps): StrataEmbedPool => {
         opening = target
         failed = null
         hideShown(machine.id)
+        keepFocus(machine.id)
         setFrame(machine.id, { usedAt: deps.now() })
         if (existing && existing.state === 'warm') sendFocus(existing, target)
         changed()

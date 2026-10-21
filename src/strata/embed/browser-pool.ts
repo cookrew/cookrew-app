@@ -3,6 +3,7 @@
 // answers in embed mode. The iframes live outside React on purpose: a warm
 // document must survive every re-render and level change of the shell.
 import type { StrataMachine } from '../../shared/strata'
+import { fleetStreamLimit, pageProtocol } from '../fleet/stream-budget'
 import { fleetStore } from '../fleet/use-fleet'
 import { maxWarmEmbeds } from './budget'
 import { createEmbedPool, type EmbedDeps, type FrameHandle, type StrataEmbedPool } from './embed-pool'
@@ -26,13 +27,19 @@ const LAYER_ID = 'strata-embed-layer'
  * inert — never display:none or 0×0 — because a terminal measuring a tiny
  * viewport would resize the PTY for every viewer of that agent.
  */
+let hostElement: HTMLElement | null = null
+
+/**
+ * The layer lives in the stage host at inset 0 once the shell has named one
+ * (host(el), set once before the first frame), else fixed over the body.
+ */
 const layer = (): HTMLElement => {
   const found = document.getElementById(LAYER_ID)
   if (found) return found
   const element = document.createElement('div')
   element.id = LAYER_ID
-  Object.assign(element.style, { position: 'fixed', inset: '0', zIndex: '50', pointerEvents: 'none' })
-  document.body.appendChild(element)
+  Object.assign(element.style, { position: hostElement ? 'absolute' : 'fixed', inset: '0', zIndex: '50', pointerEvents: 'none' })
+  ;(hostElement ?? document.body).appendChild(element)
   return element
 }
 
@@ -74,6 +81,9 @@ const createFrame = (machineId: string, src: string, onLoad: (load: { page: bool
 
 export const browserEmbedDeps = (onOut: () => void): EmbedDeps => ({
   origin: location.origin,
+  host: (el) => {
+    hostElement = el
+  },
   createFrame,
   post: (frame, message) => {
     const target = frame.window as Window | null
@@ -106,7 +116,30 @@ export const setEmbedOut = (run: () => void) => {
 
 export const embedPool = (): StrataEmbedPool => {
   if (shared) return shared
-  const pool = createEmbedPool(browserEmbedDeps(() => outHandler()))
+  const core = createEmbedPool(browserEmbedDeps(() => outHandler()))
+  // Where the user is, for the fleet's stream budget: the shell prewarms the
+  // machine the user is inside and opens the one they dive into.
+  const pool: StrataEmbedPool = {
+    ...core,
+    prewarm(machineId) {
+      fleetStore().enter(machineId)
+      core.prewarm(machineId)
+    },
+    open(path, attachmentId) {
+      fleetStore().enter(path.machine)
+      return core.open(path, attachmentId)
+    }
+  }
+  // The embed's connections come before any levels stream (stream-budget.ts).
+  const protocol = pageProtocol()
+  const budget = () => {
+    const { frames, opening } = core.getSnapshot()
+    // A document being pointed at an agent is about to hold all of its streams.
+    const held = frames.map((f) => (f.machineId === opening?.machineId ? { ...f, state: 'loading' as const } : f))
+    fleetStore().setStreamLimit(fleetStreamLimit(protocol, held))
+  }
+  core.subscribe(budget)
+  budget()
   let hiddenTimer: ReturnType<typeof setTimeout> | null = null
   document.addEventListener('visibilitychange', () => {
     if (hiddenTimer !== null) clearTimeout(hiddenTimer)

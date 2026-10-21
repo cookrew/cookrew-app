@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ShellToEmbed, StrataMachine } from '../src/shared/strata'
-import { createEmbedPool, EMBED_TIMEOUTS, isEmbedError, SUPERSEDED, type EmbedDeps, type FrameHandle } from '../src/strata/embed/embed-pool'
+import { createEmbedPool, EMBED_TIMEOUTS, FRAME_FADE_MS, isEmbedError, SUPERSEDED, type EmbedDeps, type FrameHandle } from '../src/strata/embed/embed-pool'
 import { fromFrame, fromShell, parseEmbedToShell, type MessageLike } from '../src/strata/embed/messages'
 
 const ORIGIN = 'https://cookrew.dev'
@@ -28,13 +28,14 @@ interface FakeFrame extends FrameHandle {
   load(page: boolean): void
 }
 
-const harness = (opts: { machines?: StrataMachine[]; maxWarm?: number } = {}) => {
+const harness = (opts: { machines?: StrataMachine[]; maxWarm?: number; onHost?: (el: HTMLElement) => void } = {}) => {
   const machines = new Map((opts.machines ?? [machine('a'), machine('b'), machine('c'), machine('d')]).map((m) => [m.id, m]))
   const frames: FakeFrame[] = []
   let deliver: (event: MessageLike) => void = () => {}
   const out = vi.fn()
   const deps: EmbedDeps = {
     origin: ORIGIN,
+    host: opts.onHost,
     createFrame: (machineId, src, onLoad) => {
       const frame: FakeFrame = {
         machineId,
@@ -180,8 +181,9 @@ describe('the embed pool: warm documents', () => {
     h.say('a', { type: 'strata:ready', agentId: 'y' })
     await second
     const third = h.pool.open({ machine: 'b', workspace: 'w', agent: 'z' })
-    expect(h.frameOf('a').inbox.at(-1)).toEqual({ type: 'strata:blur' })
     expect(h.frameOf('a').visible).toBe(false)
+    vi.advanceTimersByTime(FRAME_FADE_MS)
+    expect(h.frameOf('a').inbox.at(-1)).toEqual({ type: 'strata:blur' })
     h.say('b', { type: 'strata:ready', agentId: 'z' })
     await third
     expect(h.frames.filter((f) => f.visible).map((f) => f.machineId)).toEqual(['b'])
@@ -237,12 +239,82 @@ describe('the embed pool: warm documents', () => {
     await shown
     h.pool.prewarm('b')
     h.pool.close()
-    expect(h.frameOf('a').inbox.at(-1)).toEqual({ type: 'strata:blur' })
     expect(h.frameOf('a').visible).toBe(false)
+    // The way out fades first: the terminal stays mounted until the fade is over.
+    expect(h.frameOf('a').inbox).toEqual([])
+    vi.advanceTimersByTime(FRAME_FADE_MS)
+    expect(h.frameOf('a').inbox.at(-1)).toEqual({ type: 'strata:blur' })
     expect(h.pool.getSnapshot().shown).toBeNull()
     h.pool.trim()
     expect(h.live('a')).toHaveLength(0)
     expect(h.live('b')).toHaveLength(0)
+  })
+})
+
+describe('the embed pool: the seam', () => {
+  it('state() is the same object until shown, opening or failed change', async () => {
+    const h = harness()
+    const idle = h.pool.state()
+    h.pool.prewarm('a')
+    expect(h.pool.state()).toBe(idle)
+    const opened = h.pool.open({ machine: 'a', workspace: 'w', agent: 'x' })
+    const opening = h.pool.state()
+    expect(opening).not.toBe(idle)
+    expect(opening).toEqual({ shown: null, opening: { machineId: 'a', agentId: 'x' }, failed: null })
+    h.say('a', { type: 'strata:warm' })
+    expect(h.pool.state()).toBe(opening)
+    h.say('a', { type: 'strata:ready', agentId: 'x' })
+    await opened
+    expect(h.pool.state()).toEqual({ shown: { machineId: 'a', agentId: 'x' }, opening: null, failed: null })
+    const shown = h.pool.state()
+    h.pool.prewarm('b')
+    expect(h.pool.state()).toBe(shown)
+  })
+
+  it('prefetch goes only to a document that is up, once per agent, never for the one on screen', async () => {
+    const h = harness()
+    h.pool.prefetch({ machine: 'a', workspace: 'w', agent: 'x' })
+    expect(h.frames).toHaveLength(0)
+    h.pool.prewarm('a')
+    h.pool.prefetch({ machine: 'a', workspace: 'w', agent: 'x' })
+    expect(h.frameOf('a').inbox).toEqual([])
+    h.say('a', { type: 'strata:warm' })
+    h.pool.prefetch({ machine: 'a', workspace: 'w', agent: 'x' })
+    h.pool.prefetch({ machine: 'a', workspace: 'w', agent: 'x' })
+    h.pool.prefetch({ machine: 'a', workspace: 'w', agent: 'y' })
+    expect(h.frameOf('a').inbox).toEqual([
+      { type: 'strata:prefetch', agentId: 'x' },
+      { type: 'strata:prefetch', agentId: 'y' }
+    ])
+    const opened = h.pool.open({ machine: 'a', workspace: 'w', agent: 'y' })
+    h.say('a', { type: 'strata:ready', agentId: 'y' })
+    await opened
+    h.pool.prefetch({ machine: 'a', workspace: 'w', agent: 'y' })
+    expect(h.frameOf('a').inbox.at(-1)).toEqual({ type: 'strata:focus', agentId: 'y' })
+  })
+
+  it('a reopen inside the fade-out cancels the blur, so the terminal never unmounts', async () => {
+    const h = harness()
+    const first = h.pool.open({ machine: 'a', workspace: 'w', agent: 'x' })
+    h.say('a', { type: 'strata:ready', agentId: 'x' })
+    await first
+    h.pool.close()
+    vi.advanceTimersByTime(FRAME_FADE_MS / 2)
+    const again = h.pool.open({ machine: 'a', workspace: 'w', agent: 'x' })
+    h.say('a', { type: 'strata:ready', agentId: 'x' })
+    await again
+    vi.advanceTimersByTime(FRAME_FADE_MS * 2)
+    expect(h.frameOf('a').inbox.some((m) => m.type === 'strata:blur')).toBe(false)
+    expect(h.frameOf('a').visible).toBe(true)
+  })
+
+  it('takes its host once, before any frame', () => {
+    const hosts: unknown[] = []
+    const h = harness({ onHost: (el) => hosts.push(el) })
+    const el = { id: 'stage' } as unknown as HTMLElement
+    h.pool.host(el)
+    h.pool.host({ id: 'other' } as unknown as HTMLElement)
+    expect(hosts).toEqual([el])
   })
 })
 
