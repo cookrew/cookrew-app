@@ -23,11 +23,10 @@ export const CONTAINER_SCALE = 3
 const INK_K = 0.95
 const WOBBLE = 0.7
 /**
- * Shadow height caps: the default tiers never reach 56, so their art is as it
- * was; a hinted (phone) layout stacks tall and narrow, where a full shadow
- * would spend a third of the width the seats need.
+ * A hinted (phone) layout stacks tall and narrow, where a full cast shadow
+ * would spend a third of the width the seats need: its shadow stops at this
+ * height. The default tiers keep their full shadow.
  */
-const SHADOW_CAP = 56
 const HINTED_SHADOW_CAP = 24
 
 const DEFS: Record<Archetype, ArchetypeDef<Plan>> = {
@@ -82,7 +81,7 @@ export const containerArt = memo(({ name, slots, archetype, columns }: Container
   const hint = columnsHint(columns)
   const tier = hint === null ? tierFor(Math.max(1, seats)) : hintedTier(seats, hint, MAX_ROWS[kind])
   const plan = def.plan(tier, seatGrid(seats, tier))
-  const framed = frameScale({ scale: CONTAINER_SCALE, fit: plan.fit, shadowZ: 0, pad: 6, k: INK_K, wob: WOBBLE, wobStep: 20, seed: hash(name) % 97, shadowCap: hint === null ? SHADOW_CAP : HINTED_SHADOW_CAP })
+  const framed = frameScale({ scale: CONTAINER_SCALE, fit: plan.fit, shadowZ: 0, pad: 6, k: INK_K, wob: WOBBLE, wobStep: 20, seed: hash(name) % 97, shadowCap: hint === null ? undefined : HINTED_SHADOW_CAP })
   const p = framed.pen
   const ctx = { name, m: paletteOf(name), overflow }
   const R = SEAT_R * 1.2247 * CONTAINER_SCALE
