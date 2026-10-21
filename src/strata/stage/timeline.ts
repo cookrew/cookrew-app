@@ -90,7 +90,14 @@ export const gridPivot = (F: Point, viewport: Rect): Point => {
   return { x: Math.round(p.x / GRID_CELL) * GRID_CELL, y: Math.round(p.y / GRID_CELL) * GRID_CELL }
 }
 
-export const stepDuration = (K: number): number => clamp(400 + 75 * Math.log(K), 450, 650)
+/**
+ * One level step. The brief's range is 450-650 ms for the whole move as seen,
+ * and the landing commit plus any mount land on top of the plan, so the plan
+ * stops at 600: a real machine portal is small at 1440 (K ≈ 14-30), and the old
+ * 650 ceiling put the measured move just over the range.
+ */
+export const STEP_MAX_MS = 600
+export const stepDuration = (K: number): number => clamp(400 + 60 * Math.log(K), 450, STEP_MAX_MS)
 
 export const durationOf = (geom: FlightGeometry): number => {
   if (geom.kind === 'fade') return FADE_MS

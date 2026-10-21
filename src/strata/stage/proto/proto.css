@@ -1,12 +1,33 @@
-/* PROTOTYPE chrome and stand-in scene styling; the stage's own rules are in ../stage.css. */
+/* PROTOTYPE chrome and stand-in scene styling; the stage's own rules are in ../stage.css.
+   The tokens stand in for the shell's strata.css (paper, ink, muted, dot in both schemes),
+   so the stage's paint can be checked light and dark. --card is the prototype's own. */
+:root {
+  --paper: #f4eedc;
+  --ink: #2d2a20;
+  --muted: var(--muted);
+  --dot: rgba(45, 42, 32, 0.22);
+  --card: var(--card);
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #16140f;
+    --ink: #efe6d2;
+    --muted: #a39d8f;
+    --dot: rgba(239, 230, 210, 0.16);
+    --card: #1f1c16;
+  }
+}
+
 html,
 body,
 #root {
   margin: 0;
   height: 100%;
   overflow: hidden;
-  background: #f4eedc;
-  color: #2d2a20;
+  background: var(--paper);
+  color: var(--ink);
   font: 13px/1.4 ui-monospace, Menlo, monospace;
 }
 
@@ -76,7 +97,7 @@ body,
 .mini {
   position: absolute;
   transform-origin: 0 0;
-  background: #f4eedc;
+  background: var(--paper);
 }
 
 .label {
@@ -90,7 +111,7 @@ body,
 
 .label.small {
   font-size: 11px;
-  color: #5c5545;
+  color: var(--muted);
 }
 
 .label.tiny {
@@ -154,19 +175,21 @@ body,
 .chip {
   flex: none;
   padding: 3px 8px;
-  border: 1.5px solid #2d2a20;
+  border: 1.5px solid var(--ink);
   border-radius: 6px;
-  background: #fffaf0;
+  background: var(--card);
   font-size: 11px;
   white-space: nowrap;
 }
 
 .tab.on {
   background: #ffd98a;
+  color: #2d2a20;
 }
 
 .chip.note {
   background: #fff3c4;
+  color: #2d2a20;
 }
 
 .card {
@@ -174,13 +197,13 @@ body,
   flex-direction: column;
   margin: 0 0 8px;
   padding: 8px 10px;
-  border: 1.5px solid #2d2a20;
+  border: 1.5px solid var(--ink);
   border-radius: 8px;
-  background: #fffaf0;
+  background: var(--card);
 }
 
 .card span {
-  color: #5c5545;
+  color: var(--muted);
   font-size: 11px;
 }
 
@@ -227,9 +250,9 @@ body,
 .tools button,
 .tools label {
   font: inherit;
-  background: #fffaf0;
-  color: #2d2a20;
-  border: 1.5px solid #2d2a20;
+  background: var(--card);
+  color: var(--ink);
+  border: 1.5px solid var(--ink);
   border-radius: 7px;
   padding: 4px 8px;
   cursor: pointer;
@@ -243,7 +266,7 @@ body,
 .readout {
   flex-basis: 100%;
   font-size: 11px;
-  color: #5c5545;
+  color: var(--muted);
   min-height: 1.4em;
 }
 
@@ -255,7 +278,7 @@ body,
   margin: 0;
   text-align: center;
   font-size: 11px;
-  color: #8f8775;
+  color: var(--muted);
   pointer-events: none;
   z-index: 2;
 }

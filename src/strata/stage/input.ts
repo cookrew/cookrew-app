@@ -7,7 +7,6 @@
 // terminal, a tab strip that scrolls sideways) keeps its own input.
 import { useEffect, type RefObject } from 'react'
 import {
-  EDGE_ZONE,
   TOUCH_FLICK,
   TOUCH_SPAN,
   WHEEL_FLICK,
@@ -41,8 +40,11 @@ export interface GestureSink {
    * for this input; `flicked` = a touch flick (panFlick), which commits from any distance.
    */
   release(progress: number, velocity: number, flick: number, span: number, flicked: boolean): void
-  /** At the terminal level only pans from the left edge zone count. */
-  edgeOnly(): boolean
+  /**
+   * No touch pans at all (the terminal level): the embed's frame covers the stage, and on a phone the
+   * platform edge swipe is browser Back, which is already one level out. A stage edge-pan would double it.
+   */
+  touchOff(): boolean
 }
 
 const LINE_PX = 16
@@ -110,8 +112,7 @@ export const useStageInput = (rootRef: RefObject<HTMLElement>, sinkRef: RefObjec
     }
     const onDown = (e: PointerEvent) => {
       if (e.pointerType === 'mouse' || !e.isPrimary || optedOut(e.target)) return
-      const s = sink()
-      if (s?.edgeOnly() && e.clientX - root.getBoundingClientRect().left > EDGE_ZONE) return
+      if (sink()?.touchOff()) return
       pan = panStart(e.clientX, e.clientY, e.timeStamp)
       panMode = null
       pointerId = e.pointerId

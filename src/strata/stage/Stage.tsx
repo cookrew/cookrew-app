@@ -196,7 +196,7 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
   // ── gestures ──
   const rubberEl = () => sceneEls.current.get(pathKey(stateRef.current.rest))
   const sink: GestureSink = {
-    edgeOnly: () => levelOf(stateRef.current.rest) === 'terminal',
+    touchOff: () => levelOf(stateRef.current.rest) === 'terminal',
     begin(dir) {
       const s = stateRef.current
       if (s.flight || gestureRef.current) return 'busy'

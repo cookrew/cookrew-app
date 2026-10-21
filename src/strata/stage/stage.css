@@ -1,5 +1,9 @@
 /* The stage (motion.html §4): paper, scenes, and the planes' rules. Only
-   transform and opacity ever animate. Theme with --glide-paper / --glide-dot. */
+   transform and opacity ever animate.
+   Colours have one source: the shell's strata.css owns --paper and --dot in
+   both schemes, and the stage paints from them. --glide-paper / --glide-dot
+   override them for the stage alone; the literal values are the last resort
+   when neither is defined. */
 
 .glide-stage {
   position: absolute;
@@ -9,7 +13,7 @@
   overscroll-behavior: none;
   /* The browser keeps vertical panning; horizontal pans come to the stage. */
   touch-action: pan-y;
-  background: var(--glide-paper, #f4eedc);
+  background: var(--glide-paper, var(--paper, #f4eedc));
   contain: strict;
   isolation: isolate;
 }
@@ -25,13 +29,13 @@
   position: absolute;
   inset: 0;
   transform-origin: 0 0;
-  background-image: radial-gradient(circle, var(--glide-dot, rgba(45, 42, 32, 0.22)) 1px, transparent 1.25px);
+  background-image: radial-gradient(circle, var(--glide-dot, var(--dot, rgba(45, 42, 32, 0.22))) 1px, transparent 1.25px);
   background-size: 24px 24px;
 }
 
 .glide-dots--fine {
   opacity: 0;
-  background-image: radial-gradient(circle, var(--glide-dot, rgba(45, 42, 32, 0.22)) 0.5px, transparent 0.625px);
+  background-image: radial-gradient(circle, var(--glide-dot, var(--dot, rgba(45, 42, 32, 0.22))) 0.5px, transparent 0.625px);
   background-size: 12px 12px;
 }
 

@@ -27,8 +27,6 @@ const DECAY_SHARE = 0.6
 const DECAY_EVENTS = 2
 export const WHEEL_IDLE_MS = 90
 export const WHEEL_ABSORB_MS = 160
-/** Touch pans that start this close to the left edge belong to the terminal level's edge-out (and to the OS elsewhere). */
-export const EDGE_ZONE = 24
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 

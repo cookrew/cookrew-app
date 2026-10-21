@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Rect } from '../src/shared/strata'
 import { aboutPoint, applyToRect, fitStep, incomingAt, outgoingAt, pushOf, toCss, visibleShare, PUSH_CAP } from '../src/strata/stage/camera'
 import { DIVE, FLY, ease, settleCurve } from '../src/strata/stage/easing'
-import { GRID_CELL, boundariesOf, durationOf, easingOf, framesFor, geometryOf, gridPivot, stateAt, type FlightGeometry } from '../src/strata/stage/timeline'
+import { GRID_CELL, STEP_MAX_MS, boundariesOf, durationOf, easingOf, framesFor, geometryOf, gridPivot, stateAt, stepDuration, type FlightGeometry } from '../src/strata/stage/timeline'
 import { planFlight } from '../src/strata/stage/plan'
 
 const V: Rect = { x: 0, y: 0, w: 1440, h: 900 }
@@ -221,6 +221,17 @@ describe('timeline: a single step', () => {
     // 900×780 contain-fits a 36 px square by its width.
     close(start.w, 36, 1)
     expect(start.h).toBeLessThan(36)
+  })
+})
+
+describe('timeline: step durations', () => {
+  it('leave room under the 650 ms ceiling for the landing, however small the portal', () => {
+    for (const K of [1, 2, 6, 14, 28, 60, 400]) {
+      expect(stepDuration(K)).toBeGreaterThanOrEqual(450)
+      expect(stepDuration(K)).toBeLessThanOrEqual(STEP_MAX_MS)
+    }
+    expect(STEP_MAX_MS).toBeLessThanOrEqual(600)
+    expect(stepDuration(28)).toBeGreaterThan(stepDuration(6))
   })
 })
 
