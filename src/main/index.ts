@@ -151,6 +151,7 @@ import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
 import { IdleLock } from './lock'
 import { registerAccountIpc } from './account-ipc'
 import { localDeviceName } from './device-name'
+import { machineProfile } from './machine-profile'
 import { COMPANION_BOOTSTRAPS } from '../shared/lan-token-mode'
 import { Requests, answeredStoreIn } from './requests'
 import {
@@ -869,6 +870,8 @@ const accounts = new Accounts({
   // host, and a name already on the account gets a counter — decided here,
   // never at the registry, which files what it is sent.
   deviceName: localDeviceName(),
+  // STRATA: the record also says what kind of machine this is (machine-profile.ts).
+  machine: async () => ({ profile: await machineProfile(), appVersion: app.getVersion() }),
   // THE ACCOUNT CHANGED WITHOUT A CLICK ON THIS MAC. A password changed on the
   // web ends this session; nothing local would ever notice. Pushing the status
   // is what turns that into a password prompt the owner can actually answer.
