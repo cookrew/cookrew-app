@@ -31,7 +31,8 @@ export type AvatarSize = 'dot' | 'small' | 'full'
 
 /** Same input → same string, so callers may memoize on the input and never redraw per frame. */
 export interface FigureKit {
-  machine(input: { kind: MachineKind; link: MachineLink }): FigureArt
+  /** reached false = never reached (no lastSeenAt and no levels): a dashed outline, not offline-with-cache. Default true. */
+  machine(input: { kind: MachineKind; link: MachineLink; reached?: boolean }): FigureArt
   /**
    * The archetype comes from the workspace name alone (deterministic, no
    * network). `slots` seats avatars in creation order; beyond `capacity` the

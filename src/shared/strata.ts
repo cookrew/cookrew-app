@@ -155,7 +155,11 @@ export interface LevelsAgent {
   task: string | null
   /** First line of the latest reply, or the live glance message while thinking. Scrubbed. */
   reply: string | null
-  /** Live status verb while thinking ('Cerebrating… 34s'); else null. */
+  /**
+   * Live status verb while thinking ('Cerebrating…'), never a counter, so the
+   * wire changes only with the verb: views draw the elapsed time from phaseSince.
+   * Else null.
+   */
   status?: string | null
   turns: number
   /** Wired notes and browsers, in connection order. */
@@ -197,15 +201,21 @@ export interface LevelsSnapshot {
 export interface LevelsAgentDetail {
   agent: LevelsAgent
   workspaceId: string
+  /** Bodies are scrubbed for display (lines.ts): never write one back. */
   notes: Array<{ id: string; title: string; content: string; shared: boolean }>
   browsers: Array<{ id: string; title: string; url: string | null; tabs: Array<{ id: string; url: string }>; live: boolean; shared: boolean }>
 }
 
-/** A rev that is not exactly previous + 1 means a gap: drop the stream and reconnect. */
+/**
+ * A rev that is not exactly previous + 1 means a gap: drop the stream and reconnect.
+ * Any change to a workspace's seating (an agent added, removed or moved) is ONE
+ * 'workspace' event, counts and tray with it. A 'snapshot' may also arrive
+ * mid-stream (a machine-only change, or more than 48 deltas at once) with
+ * snapshot.rev = previous + 1: replace everything.
+ */
 export type LevelsEvent =
   | { type: 'snapshot'; snapshot: LevelsSnapshot }
   | { type: 'agent'; rev: number; workspaceId: string; agent: LevelsAgent }
-  | { type: 'agent-gone'; rev: number; workspaceId: string; agentId: string }
   | { type: 'workspace'; rev: number; workspace: LevelsWorkspace }
   | { type: 'workspace-gone'; rev: number; workspaceId: string }
   | { type: 'focus'; rev: number; workspaceId: string | null }

@@ -83,7 +83,7 @@ const mockFleet = (machines) => {
         phase,
         phaseSince: Date.now(),
         phaseSource: workspace.state === 'focused' ? 'live' : 'probe',
-        status: phase === 'thinking' ? 'Working… (0s)' : null,
+        status: phase === 'thinking' ? 'Working…' : null,
         turns: phase === 'replied' ? before.turns + 1 : before.turns
       }
       const rev = machine.levels.rev + 1
