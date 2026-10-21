@@ -10,6 +10,7 @@ import {
   relaySignInPage
 } from './site-relay'
 import { respondPage } from './site-shell'
+import type { DesktopPresence } from './v2-fleet'
 
 /**
  * IDENTITY v2, PHASE 3 — THE PRIVATE RELAY SESSION.
@@ -381,6 +382,11 @@ export interface CanvasRelay {
   hub: RelayHub
   /** Is this account's desktop holding a line right now? */
   live(username: string, deviceId: string): boolean
+  /**
+   * STRATA: every desktop of the account — online now, and when its line was
+   * last seen by this process (null: not since it started).
+   */
+  presence(username: string): ReadonlyMap<string, DesktopPresence>
   /** Answered it? False when the path belongs to somebody else. */
   handle(request: IncomingMessage, response: ServerResponse, parts: string[], url: URL): boolean
   stats(): CanvasRelayStats
@@ -474,16 +480,22 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
   const holding = new Map<string, Set<string>>()
   /** Request bytes buffered right now, across every exchange. */
   let buffering = 0
+  /** STRATA: when each line was last opened, beaten or closed — presence's lastSeenAt. */
+  const seen = new Map<string, number>()
+  const nowMs = deps.now ?? ((): number => Date.now())
+  const sawLine = (name: string): void => void seen.set(name, nowMs())
 
   /** The account a canvas name belongs to. The name is built from a token. */
   const ownerOf = (name: string): string => name.slice(1, name.indexOf('/'))
   const holdsLine = (name: string): void => {
+    sawLine(name)
     const owner = ownerOf(name)
     const mine = holding.get(owner) ?? new Set<string>()
     mine.add(name)
     holding.set(owner, mine)
   }
   const releasesLine = (name: string): void => {
+    sawLine(name)
     const owner = ownerOf(name)
     const mine = holding.get(owner)
     if (mine === undefined) return
@@ -602,7 +614,10 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
     }
     readFrameLines(request, (line) => {
       // The pong is for the relay, not for any reader.
-      if (line.startsWith('{"t":"pong"')) live.beat(name)
+      if (line.startsWith('{"t":"pong"')) {
+        live.beat(name)
+        sawLine(name)
+      }
       else hub.fromDoor(name, line)
     })
     /**
@@ -644,6 +659,34 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
       return
     }
     v2Json(response, 200, { live: hub.has(canvasName(signed.account.username, deviceId)) })
+  }
+
+  /** STRATA: the account's desktops, each with its line's state — one read for the whole fleet. */
+  const presence = (username: string): Map<string, DesktopPresence> => {
+    const account = deps.v2.accounts.get(username)
+    const out = new Map<string, DesktopPresence>()
+    for (const desktop of account?.desktops ?? []) {
+      const name = canvasName(username, desktop.deviceId)
+      out.set(desktop.deviceId, { online: hub.has(name), lastSeenAt: seen.get(name) ?? null })
+    }
+    return out
+  }
+
+  /**
+   * ONE QUESTION FOR THE WHOLE FLEET (strata), where the account page used to
+   * ask relay-status once per desktop. The same gate and the same answer as
+   * relay-status — only the reader's own desktops, never a stranger's — plus
+   * the cap the relay holds them to, so a page can say "8 of 11 online".
+   */
+  const presenceRoute = (request: IncomingMessage, response: ServerResponse): void => {
+    const signed = signedIn(request, deps.v2)
+    if (signed === null) {
+      refuse(response, 401, 'unauthenticated')
+      return
+    }
+    const rows = [...presence(signed.account.username)].map(([id, p]) => ({ id, ...p }))
+    response.setHeader('cache-control', 'private, no-store')
+    v2Json(response, 200, { at: nowMs(), cap: perAccount, online: rows.filter((r) => r.online).length, desktops: rows })
   }
 
   // ── the phone's side ───────────────────────────────────────────────────
@@ -924,6 +967,7 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
   return {
     hub,
     live: (username, deviceId) => hub.has(canvasName(username, deviceId)),
+    presence,
     stats: () => ({ links: live.size, ...counts }),
     stop: () => live.stop(),
     handle(request, response, parts, url) {
@@ -955,6 +999,10 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
         parts[4] === 'relay-status'
       ) {
         relayStatus(request, response, parts[3])
+        return true
+      }
+      if (method === 'GET' && parts.length === 3 && parts[0] === 'v2' && parts[1] === 'me' && parts[2] === 'presence') {
+        presenceRoute(request, response)
         return true
       }
       // EVERYTHING under the prefix, whatever the method: this is a whole

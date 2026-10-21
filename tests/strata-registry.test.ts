@@ -1,0 +1,366 @@
+import { generateKeyPairSync, randomUUID } from 'node:crypto'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { request as httpRequest, type ClientRequest, type Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { DoorStore } from '../registry/src/doors'
+import { IdentityService } from '../registry/src/identity'
+import { TransparencyLog } from '../registry/src/log'
+import { createRegistry } from '../registry/src/server'
+import { RegistryStore } from '../registry/src/store'
+import { StarStore } from '../registry/src/stars'
+import { loadShellBundle, readShellBundle } from '../registry/src/strata-shell'
+import { LINKS_PER_ACCOUNT } from '../registry/src/v2-canvas-relay'
+import { BAD, fleetRow, PROFILE_BYTES_MAX, readAppVersion, readProfile } from '../registry/src/v2-fleet'
+import { createV2 } from '../registry/src/v2-routes'
+import { decodeFrame, encodeFrame } from '../src/shared/relay-frame'
+import type { FleetMachine, MachineProfile } from '../src/shared/strata'
+import { checkProfile } from './strata-levels-shape'
+
+// Strata on the registry: the desktop record's profile, the FleetMachine rows,
+// the batch presence answer and /me as level 0 — over real HTTP on loopback.
+// Every account, machine and name is invented.
+
+const PASSWORD = 'correct horse battery staple'
+
+const PROFILE: MachineProfile = {
+  kind: 'laptop',
+  model: 'MacBookPro18,1',
+  label: 'MacBook Pro 16-inch (2021)',
+  vendor: 'Apple',
+  os: 'darwin',
+  osVersion: 'macOS 26.5',
+  arch: 'arm64',
+  cpus: 10,
+  memoryGb: 32,
+  evidence: ['hw.model=MacBookPro18,1', 'battery=present']
+}
+
+const FLEET_KEYS = ['appVersion', 'base', 'id', 'lastSeenAt', 'name', 'online', 'profile']
+
+describe('reading a profile off the record PUT', () => {
+  it('takes a well-formed profile and drops members the contract does not name', () => {
+    expect(readProfile(PROFILE)).toEqual(PROFILE)
+    expect(readProfile({ ...PROFILE, hostname: 'someones-mbp', serial: 'X' })).toEqual(PROFILE)
+    expect(() => checkProfile(readProfile(PROFILE), 'profile')).not.toThrow()
+  })
+
+  it('tells absent from cleared', () => {
+    expect(readProfile(undefined)).toBeUndefined()
+    expect(readProfile(null)).toBeNull()
+    expect(readAppVersion(undefined)).toBeUndefined()
+    expect(readAppVersion(null)).toBeNull()
+  })
+
+  it('refuses a malformed, oversized or identifier-carrying profile', () => {
+    const bad: unknown[] = [
+      'laptop',
+      [],
+      { ...PROFILE, kind: 'mainframe' },
+      { ...PROFILE, os: 'beos' },
+      { ...PROFILE, arch: null },
+      { ...PROFILE, cpus: -1 },
+      { ...PROFILE, cpus: 1.5 },
+      { ...PROFILE, model: 'x'.repeat(65) },
+      { ...PROFILE, label: 'line\nbreak' },
+      { ...PROFILE, vendor: '4C4C4544-0042-3510-8051-B4C04F4D3732' },
+      { ...PROFILE, evidence: ['mac=a4:83:e7:12:34:56'] },
+      { ...PROFILE, evidence: Array.from({ length: 13 }, (_, i) => `fact=${i}`) },
+      { ...PROFILE, evidence: [null] },
+      { ...PROFILE, evidence: 'battery=present' },
+      { ...PROFILE, extra: 'y'.repeat(PROFILE_BYTES_MAX) }
+    ]
+    for (const raw of bad) expect(readProfile(raw), JSON.stringify(raw).slice(0, 80)).toBe(BAD)
+  })
+
+  it('takes a version string and refuses anything else', () => {
+    expect(readAppVersion('0.3.0')).toBe('0.3.0')
+    expect(readAppVersion('0.4.0-beta.2+build.7')).toBe('0.4.0-beta.2+build.7')
+    for (const raw of [3, '', 'v'.repeat(33), '0.3.0 <script>', '../../etc']) expect(readAppVersion(raw)).toBe(BAD)
+  })
+})
+
+describe('a FleetMachine row', () => {
+  const desktop = { deviceId: 'd1', name: 'Invented Mac', workspaces: [], reach: null, updatedAt: 1_000 }
+
+  it('is online now, or last seen at the later of the line and the record', () => {
+    expect(fleetRow('mira', desktop, { online: true, lastSeenAt: 500 }, 9_000)).toMatchObject({ online: true, lastSeenAt: 9_000 })
+    expect(fleetRow('mira', desktop, { online: false, lastSeenAt: 5_000 }, 9_000)).toMatchObject({ online: false, lastSeenAt: 5_000 })
+    expect(fleetRow('mira', desktop, undefined, 9_000)).toMatchObject({ online: false, lastSeenAt: 1_000 })
+  })
+
+  it('draws an older desktop as unknown and names its base', () => {
+    const row = fleetRow('mira', desktop, undefined, 9_000)
+    expect(row).toEqual({ id: 'd1', name: 'Invented Mac', online: false, lastSeenAt: 1_000, appVersion: null, profile: null, base: '/relay/@mira/desktop/d1/' })
+  })
+})
+
+// ── over HTTP ───────────────────────────────────────────────────────────────
+
+interface Up {
+  origin: string
+  close: () => Promise<void>
+}
+
+const listen = async (server: Server): Promise<Up> => {
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  return {
+    origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    close: () =>
+      new Promise((resolve) => {
+        server.closeAllConnections()
+        server.close(() => resolve())
+      })
+  }
+}
+
+const jwkOf = (): Record<string, string> => generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' }) as Record<string, string>
+
+let dir = ''
+let site: Up
+let shellSite: Up
+let shellFile = ''
+
+async function claim(origin: string, name: string): Promise<{ id: string; token: string }> {
+  const id = randomUUID()
+  const res = await fetch(`${origin}/v2/accounts`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: name, password: PASSWORD, device: { id, kind: 'desktop', name: 'A machine', jwk: jwkOf() } })
+  })
+  expect(res.status).toBe(201)
+  return { id, token: ((await res.json()) as { session: { token: string } }).session.token }
+}
+
+const put = (origin: string, desktop: { id: string; token: string }, body: Record<string, unknown>): Promise<Response> =>
+  fetch(`${origin}/v2/me/desktops/${desktop.id}`, {
+    method: 'PUT',
+    headers: { authorization: `Bearer ${desktop.token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'Invented Mac', workspaces: [{ id: 'w1', name: 'Alpha' }], ...body })
+  })
+
+const desktops = async (origin: string, token: string): Promise<Array<FleetMachine & Record<string, unknown>>> => {
+  const res = await fetch(`${origin}/v2/me/desktops`, { headers: { authorization: `Bearer ${token}` } })
+  expect(res.status).toBe(200)
+  return (await res.json()) as Array<FleetMachine & Record<string, unknown>>
+}
+
+/** A desktop's relay line, the minimum that holds it: a downlink, an uplink, a pong per ping. */
+function holdLine(origin: string, desktop: { id: string; token: string }): { ready: Promise<void>; close: () => void } {
+  const address = `${origin}/v2/canvas/link/${desktop.id}`
+  const headers = { authorization: `Bearer ${desktop.token}` }
+  const up: ClientRequest = httpRequest(address, { method: 'POST', headers }, () => undefined)
+  up.on('error', () => undefined)
+  let settle: () => void = () => undefined
+  const ready = new Promise<void>((resolve) => (settle = resolve))
+  const down = httpRequest(address, { method: 'GET', headers }, (res) => {
+    let buffer = ''
+    res.setEncoding('utf8')
+    res.on('data', (text: string) => {
+      buffer += text
+      let at: number
+      while ((at = buffer.indexOf('\n')) >= 0) {
+        const frame = decodeFrame(buffer.slice(0, at))
+        buffer = buffer.slice(at + 1)
+        if (frame?.t === 'ready') settle()
+        else if (frame?.t === 'ping') up.write(`${encodeFrame({ t: 'pong', at: frame.at })}\n`)
+      }
+    })
+  })
+  down.on('error', () => undefined)
+  down.end()
+  return {
+    ready,
+    close: () => {
+      up.destroy()
+      down.destroy()
+    }
+  }
+}
+
+const registry = (shell: ReturnType<typeof loadShellBundle>): Server =>
+  createRegistry({
+    store: new RegistryStore(dir),
+    log: new TransparencyLog(dir),
+    identity: new IdentityService(dir),
+    doors: new DoorStore(dir, { allowPrivate: true }),
+    stars: new StarStore(dir),
+    origin: 'https://cookrew.dev',
+    v2: createV2(dir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000, lookupsPerMinute: 1000 } }),
+    shell
+  })
+
+beforeAll(async () => {
+  dir = mkdtempSync(path.join(tmpdir(), 'strata-registry-'))
+  shellFile = path.join(dir, 'strata-shell-assets.json')
+  writeFileSync(
+    shellFile,
+    JSON.stringify({
+      version: 'abc123',
+      index: '<!doctype html><title>Strata</title><script type="module" src="/strata/assets/index-abc123.js"></script><div id="root"></div>',
+      files: {
+        'assets/index-abc123.js': { type: 'text/javascript; charset=utf-8', body: 'export {}' },
+        'favicon.svg': { type: 'image/svg+xml', body: '<svg/>' }
+      }
+    })
+  )
+  site = await listen(registry(null))
+  shellSite = await listen(registry(loadShellBundle(shellFile)))
+})
+
+afterAll(async () => {
+  await site.close()
+  await shellSite.close()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+describe('the desktop record carries profile and appVersion', () => {
+  it('files them, lists them as FleetMachine rows, and keeps them across a PUT that does not say', async () => {
+    const mac = await claim(site.origin, 'mira')
+    expect((await put(site.origin, mac, { profile: PROFILE, appVersion: '0.3.0' })).status).toBe(204)
+    let [row] = await desktops(site.origin, mac.token)
+    for (const key of FLEET_KEYS) expect(row).toHaveProperty(key)
+    expect(row).toMatchObject({ id: mac.id, name: 'Invented Mac', online: false, appVersion: '0.3.0', profile: PROFILE, base: `/relay/@mira/desktop/${mac.id}/` })
+    // Every member a client read before is still on the row.
+    expect(row).toMatchObject({ deviceId: mac.id, workspaces: [{ id: 'w1', name: 'Alpha' }], doors: [], reach: null })
+    expect(typeof row.lastSeenAt).toBe('number')
+
+    expect((await put(site.origin, mac, {})).status).toBe(204)
+    ;[row] = await desktops(site.origin, mac.token)
+    expect(row).toMatchObject({ appVersion: '0.3.0', profile: PROFILE })
+
+    expect((await put(site.origin, mac, { profile: null, appVersion: null })).status).toBe(204)
+    ;[row] = await desktops(site.origin, mac.token)
+    expect(row).toMatchObject({ appVersion: null, profile: null })
+  })
+
+  it('refuses a bad profile and keeps the one filed', async () => {
+    const mac = await claim(site.origin, 'nell')
+    await put(site.origin, mac, { profile: PROFILE, appVersion: '0.3.0' })
+    const refused = await put(site.origin, mac, { profile: { ...PROFILE, vendor: '4C4C4544-0042-3510-8051-B4C04F4D3732' } })
+    expect(refused.status).toBe(400)
+    expect(await refused.json()).toMatchObject({ error: 'bad_desktop' })
+    expect((await put(site.origin, mac, { appVersion: '<b>' })).status).toBe(400)
+    expect((await put(site.origin, mac, { profile: { ...PROFILE, evidence: 'x'.repeat(20_000) } })).status).toBe(413)
+    const [row] = await desktops(site.origin, mac.token)
+    expect(row.profile).toEqual(PROFILE)
+  })
+
+  it('lets only that desktop describe itself', async () => {
+    const mac = await claim(site.origin, 'otto')
+    const other = { id: randomUUID(), token: mac.token }
+    expect((await put(site.origin, other, { profile: PROFILE })).status).toBe(403)
+  })
+})
+
+describe('presence, one question for the fleet', () => {
+  it('says online while a desktop holds its line, with the cap, and remembers when it left', async () => {
+    const mac = await claim(site.origin, 'pip')
+    await put(site.origin, mac, { profile: PROFILE, appVersion: '0.3.0' })
+    const ask = async () => {
+      const res = await fetch(`${site.origin}/v2/me/presence`, { headers: { authorization: `Bearer ${mac.token}` } })
+      expect(res.status).toBe(200)
+      expect(res.headers.get('cache-control')).toContain('no-store')
+      return (await res.json()) as { at: number; cap: number; online: number; desktops: Array<{ id: string; online: boolean; lastSeenAt: number | null }> }
+    }
+    expect(await ask()).toMatchObject({ cap: LINKS_PER_ACCOUNT, online: 0, desktops: [{ id: mac.id, online: false, lastSeenAt: null }] })
+
+    const line = holdLine(site.origin, mac)
+    await line.ready
+    const up = await ask()
+    expect(up).toMatchObject({ online: 1, desktops: [{ id: mac.id, online: true }] })
+    expect(up.desktops[0].lastSeenAt).toBeGreaterThan(0)
+    const [row] = await desktops(site.origin, mac.token)
+    expect(row).toMatchObject({ online: true })
+
+    line.close()
+    let gone = await ask()
+    for (let i = 0; i < 50 && gone.online > 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      gone = await ask()
+    }
+    expect(gone.desktops[0]).toMatchObject({ online: false })
+    expect(gone.desktops[0].lastSeenAt).toBeGreaterThan(0)
+  })
+
+  it('answers only about the reader’s own desktops, and needs a session', async () => {
+    const mine = await claim(site.origin, 'quill')
+    await put(site.origin, mine, {})
+    const theirs = await claim(site.origin, 'rook')
+    await put(site.origin, theirs, {})
+    const res = await fetch(`${site.origin}/v2/me/presence`, { headers: { authorization: `Bearer ${mine.token}` } })
+    const body = (await res.json()) as { desktops: Array<{ id: string }> }
+    expect(body.desktops.map((d) => d.id)).toEqual([mine.id])
+    expect((await fetch(`${site.origin}/v2/me/presence`)).status).toBe(401)
+  })
+})
+
+describe('/me as level 0', () => {
+  let token = ''
+  beforeAll(async () => {
+    token = (await claim(shellSite.origin, 'sage')).token
+  })
+
+  const page = (origin: string, at: string, signedIn = true) =>
+    fetch(`${origin}${at}`, { headers: signedIn ? { authorization: `Bearer ${token}` } : {} })
+
+  it('serves the shell at /me and every level under it, with frame-src self', async () => {
+    for (const at of ['/me', '/me/m1', '/me/m1/w1', '/me/m1/w1/a1']) {
+      const res = await page(shellSite.origin, at)
+      expect(res.status, at).toBe(200)
+      expect(await res.text()).toContain('/strata/assets/index-abc123.js')
+      const csp = res.headers.get('content-security-policy') ?? ''
+      expect(csp).toContain("frame-src 'self'")
+      expect(csp).toContain("script-src 'self'")
+      expect(csp).toContain("frame-ancestors 'none'")
+      expect(res.headers.get('cache-control')).toBe('private, no-store')
+    }
+  })
+
+  it('moves the account page to /me/account', async () => {
+    const res = await page(shellSite.origin, '/me/account')
+    expect(res.status).toBe(200)
+    const html = await res.text()
+    expect(html).toContain('id="me-desktops"')
+    expect(html).not.toContain('/strata/assets/')
+  })
+
+  it('sends a signed-out reader to the sign-in page, never the shell', async () => {
+    for (const at of ['/me', '/me/m1/w1']) {
+      const res = await page(shellSite.origin, at, false)
+      expect(res.status, at).toBe(401)
+      expect(await res.text()).not.toContain('/strata/assets/')
+    }
+  })
+
+  it('keeps /me the account page on a registry with no shell deployed', async () => {
+    const mac = await claim(site.origin, 'tansy')
+    const res = await fetch(`${site.origin}/me`, { headers: { authorization: `Bearer ${mac.token}` } })
+    expect(res.status).toBe(200)
+    expect(await res.text()).toContain('id="me-desktops"')
+    const account = await fetch(`${site.origin}/me/account`, { headers: { authorization: `Bearer ${mac.token}` } })
+    expect(account.status).toBe(200)
+  })
+
+  it('serves the shell’s files from the second bundle, hashed ones immutable', async () => {
+    const js = await fetch(`${shellSite.origin}/strata/assets/index-abc123.js`)
+    expect(js.status).toBe(200)
+    expect(js.headers.get('content-type')).toBe('text/javascript; charset=utf-8')
+    expect(js.headers.get('cache-control')).toContain('immutable')
+    const icon = await fetch(`${shellSite.origin}/strata/favicon.svg`)
+    expect(icon.headers.get('cache-control')).toBe('public, max-age=300')
+    expect((await fetch(`${shellSite.origin}/strata/assets/nope.js`)).status).toBe(404)
+    expect((await fetch(`${shellSite.origin}/strata/toString`)).status).toBe(404)
+    expect((await fetch(`${site.origin}/strata/assets/index-abc123.js`)).status).toBe(404)
+  })
+
+  it('refuses a bundle that is not one', () => {
+    expect(readShellBundle('not json')).toBeNull()
+    expect(readShellBundle(JSON.stringify({ version: 'v', index: 'x', files: { '../etc/passwd': { type: 't', body: 'b' } } }))).toBeNull()
+    expect(readShellBundle(JSON.stringify({ version: 'v', index: 'x', files: { 'a.js': { body: 'b' } } }))).toBeNull()
+    expect(loadShellBundle(path.join(dir, 'missing.json'))).toBeNull()
+    expect(loadShellBundle(undefined)).toBeNull()
+  })
+})

@@ -25,6 +25,7 @@ import { sameOrigin } from './v2-http'
 import type { NamesFeature } from './names'
 import { teamAddress } from './v2-seats'
 import { mePage } from './site-account'
+import { serveShellAsset, shellPage, type ShellBundle } from './strata-shell'
 import { createCanvasRelay, type CanvasRelay } from './v2-canvas-relay'
 
 /**
@@ -128,6 +129,11 @@ export interface RegistryDeps {
    * is exactly as it was, which is what lets the feature ship dark.
    */
   names?: NamesFeature
+  /**
+   * STRATA: the shell's built files (strata-shell.ts), from the second
+   * ConfigMap. Absent → /me is the account page, exactly as before.
+   */
+  shell?: ShellBundle | null
 }
 
 /** An account name: the same shape a handle has everywhere else on this site. */
@@ -366,7 +372,9 @@ export function createRegistry(deps: RegistryDeps): Server {
         // spoken for by a key that has no password yet (phase 6).
         ...(deps.identity === undefined ? {} : { legacy: deps.identity }),
         // The names half, for the cert route and the `names` bit on a card.
-        ...(deps.names === undefined ? {} : { names: deps.names })
+        ...(deps.names === undefined ? {} : { names: deps.names }),
+        // STRATA: which desktops hold their relay line, for the fleet rows.
+        ...(canvas === null ? {} : { presence: canvas.presence })
       })
     )
       return
@@ -817,11 +825,28 @@ export function createRegistry(deps: RegistryDeps): Server {
     )
       return
 
-    // GET /me — the reader's own account: devices, security, desktops. A page
-    // rather than a JSON route because it is where a person GOES; signed out
-    // it is a 401 that is still a page, since somebody following a link
-    // deserves a sentence and a way in.
-    if (deps.v2 && method === 'GET' && parts.length === 1 && parts[0] === 'me') {
+    // GET /strata/<file> — the shell's built files, from its own bundle.
+    if (method === 'GET' && parts.length >= 2 && parts[0] === 'strata') {
+      if (!serveShellAsset(response, deps.shell ?? null, parts.slice(1).join('/'))) json(response, 404, { error: 'not_found' })
+      return
+    }
+
+    // GET /me and /me/<machine>[/<workspace>[/<agent>]] — STRATA level 0 and
+    // the levels under it, one page that routes itself (D2). Signed out, or
+    // with no shell deployed, it is the account page below.
+    const accountPath = parts.length === 2 && parts[0] === 'me' && parts[1] === 'account'
+    if (deps.v2 && deps.shell && method === 'GET' && parts[0] === 'me' && parts.length <= 4 && !accountPath) {
+      if (signedIn(request, deps.v2) !== null) {
+        respondPage(response, shellPage(deps.shell))
+        return
+      }
+    }
+
+    // GET /me/account (and /me with no shell) — the reader's own account:
+    // devices, security, desktops. A page rather than a JSON route because it
+    // is where a person GOES; signed out it is a 401 that is still a page,
+    // since somebody following a link deserves a sentence and a way in.
+    if (deps.v2 && method === 'GET' && parts[0] === 'me' && parts.length <= 4) {
       const signed = signedIn(request, deps.v2)
       respondPage(
         response,
