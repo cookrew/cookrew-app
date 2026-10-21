@@ -12,7 +12,7 @@
  * Which part answers for which types (every part reads this whole file, and a
  * type changes for all of them at once or not at all):
  *   desktop   MachineProfile, LevelsSnapshot, LevelsEvent, LevelsAgentDetail
- *   registry  FleetMachine rows for the signed-in account
+ *   registry  FleetMachine rows and FleetPresence for the signed-in account
  *   shell     joins both per machine, keeps them live, MachineLink, the embed
  *             handoff (ShellToEmbed / EmbedToShell)
  *   levels    StrataPath ⇄ URL, what each level shows, input mapping
@@ -72,6 +72,19 @@ export interface FleetMachine {
    * 8 desktops online per account.
    */
   base: string
+}
+
+// ── registry: served by cookrew.dev, account cookie, same-origin ────────────
+//
+// GET  /v2/me/desktops            → FleetMachine[]   today's array: every row keeps
+//                                   its older fields and gains the ones above
+// GET  /v2/me/desktops/presence   → FleetPresence    every desktop in one answer; the
+//                                   shell refreshes presence with this, never the list
+
+/** Who is online right now, for every desktop of the account at once. */
+export interface FleetPresence {
+  at: number
+  machines: Array<Pick<FleetMachine, 'id' | 'online' | 'lastSeenAt'>>
 }
 
 // ── levels: served by each desktop ──────────────────────────────────────────
@@ -279,6 +292,8 @@ export type ShellToEmbed =
   | { type: 'strata:blur' }
 
 export type EmbedToShell =
+  /** A prewarmed document is up and listening with no agent mounted: the shell may send focus now. */
+  | { type: 'strata:warm' }
   | { type: 'strata:ready'; agentId: string }
   | { type: 'strata:out' }
   | { type: 'strata:error'; code: 'not-found' | 'offline' | 'unauthorized' | 'unreachable'; detail?: string }
