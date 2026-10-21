@@ -63,6 +63,8 @@ export interface PenSpec {
   /** Hand wobble amplitude in viewBox units; 0 = none (always 0 at dot size). */
   wob: number
   seed: number
+  /** Wobble sample spacing in viewBox units (default 9): bigger figures can afford coarser. */
+  wobStep?: number
   /** Outline only (a machine never reached): no fills, only silhouettes and `keep` ink, all in currentColor. */
   ghost?: boolean
 }
@@ -93,6 +95,7 @@ const WOBBLE_STEP = 9
 export const makePen = (spec: PenSpec) => {
   const { s, ox, oy, k, vw, wob, seed } = spec
   const ghost = spec.ghost ?? false
+  const wobStep = spec.wobStep ?? WOBBLE_STEP
 
   const P = (p: V3): V2 => {
     const [u, v] = isoRaw(p)
@@ -118,7 +121,7 @@ export const makePen = (spec: PenSpec) => {
     for (let i = 0; i < segs; i++) {
       const a = pts[i]
       const b = pts[(i + 1) % n]
-      const steps = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / WOBBLE_STEP))
+      const steps = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / wobStep))
       for (let j = 0; j < steps; j++) dense.push([a[0] + ((b[0] - a[0]) * j) / steps, a[1] + ((b[1] - a[1]) * j) / steps])
     }
     if (!close) dense.push(pts[n - 1])
@@ -241,6 +244,13 @@ export const makePen = (spec: PenSpec) => {
     const body = disc(0, 0, 1, m.d) + disc(0.09, -0.1, 0.86, m.m) + disc(0.2, -0.24, 0.55, m.l) + disc(0.34, -0.42, 0.13, '#fffdf6')
     return (o.opacity !== undefined && o.opacity < 1 ? `<g opacity="${o.opacity.toFixed(2)}">${body}</g>` : body) + outline
   }
+  /** A small round mark (a knob, a bolt, a peg) as a plain circle: cheap where an ellipse would not read. */
+  const stud = (at: V3, r: number, c: string, w = 0.6): string => {
+    const [cx, cy] = P(at)
+    return ghost
+      ? ''
+      : `<circle cx="${num(cx)}" cy="${num(cy)}" r="${num(r * s)}" fill="${c}"${w ? ` stroke="${INK}" stroke-width="${num(w * k)}"` : ''}/>`
+  }
   /** The screen disc a sphere covers: its anchor rect. */
   const sphereRect = (c: V3, r: number) => {
     const [cx, cy] = P(c)
@@ -350,6 +360,7 @@ export const makePen = (spec: PenSpec) => {
     rod,
     sphere,
     sphereRect,
+    stud,
     shadowOf,
     castShadow,
     boardTop,
