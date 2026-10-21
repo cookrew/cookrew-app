@@ -102,6 +102,19 @@ export function App() {
       }),
     []
   )
+  // After a level change the pointer rests over new items; it must move before hover counts.
+  const armed = useRef(true)
+  const pointer = useRef({ x: -1, y: -1 })
+  const restedAt = useRef({ x: -1, y: -1 })
+  const gatedHover = useMemo(() => ({ ...hover, enter: (key: string) => armed.current && hover.enter(key) }), [hover])
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      pointer.current = { x: e.clientX, y: e.clientY }
+      if (!armed.current && Math.hypot(e.clientX - restedAt.current.x, e.clientY - restedAt.current.y) > 3) armed.current = true
+    }
+    addEventListener('pointermove', onMove, true)
+    return () => removeEventListener('pointermove', onMove, true)
+  }, [])
   const [finder, setFinder] = useState<{ query: string } | null>(null)
   const [glow, setGlow] = useState<ReadonlySet<string> | null>(null)
   const [goOptions, setGoOptions] = useState<GoOptions>({})
@@ -153,6 +166,8 @@ export function App() {
   useEffect(() => {
     const cameFrom = childToward(path, previous.current)
     previous.current = path
+    restedAt.current = pointer.current
+    armed.current = lastInput.current === 'key' || pointer.current.x < 0
     hover.hideNow()
     setHighlight(
       defaultHighlight(model.items, cameFrom, (t) => isWaiting(machineOf(t.machine), t)),
@@ -231,7 +246,7 @@ export function App() {
     go,
     glow,
     codes: finder ? codes : null,
-    hover,
+    hover: gatedHover,
     summaryKey,
     useAnchor,
     reducedMotion,
