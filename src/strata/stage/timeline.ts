@@ -69,11 +69,11 @@ export const geometryOf = (plan: Exclude<FlightPlan, { kind: 'none' }>, rects: S
   const to = count - 1 - from
   if (reduced) return { kind: 'fade', from, to, count }
   if (plan.kind === 'hop') return { kind: 'hop', viewport, from: 0, to: 1, count }
-  const steps = plan.steps.map((_, i): StepGeometry | null => {
+  const steps = plan.steps.map((step, i): StepGeometry | null => {
     const r = rects[i]
     const pivot = r?.anchor ? fitPivot(r.anchor, r.content ?? viewport) : null
     if (!pivot) return null
-    return { pivot, push: pushOf(pivot.K), grid: gridPivot(pivot.F, viewport), weight: Math.max(0.35, Math.log(Math.min(pivot.K, 12))) }
+    return { pivot, push: pushOf(pivot.K, step.opens), grid: gridPivot(pivot.F, viewport), weight: Math.max(0.35, Math.log(Math.min(pivot.K, 12))) }
   })
   if (steps.some((s) => s === null)) return { kind: 'hop', viewport, from, to, count }
   return { kind: 'zoom', dir: plan.dir, viewport, steps: steps as StepGeometry[] }

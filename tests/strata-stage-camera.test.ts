@@ -54,9 +54,10 @@ describe('camera: one pivot, one scale', () => {
     expect(fitPivot({ x: 0, y: 0, w: 2000, h: 1200 }, V)).toBeNull()
   })
 
-  it('caps the push only for tiny anchors', () => {
-    expect(pushOf(8)).toBe(8)
-    expect(pushOf(25)).toBe(PUSH_CAP)
+  it('caps the push only where a terminal opens', () => {
+    expect(pushOf(10, false)).toBe(10)
+    expect(pushOf(10, true)).toBe(PUSH_CAP)
+    expect(pushOf(2, true)).toBe(2)
   })
 
   it('measures how much of a rect is on screen', () => {
@@ -88,8 +89,11 @@ describe('easing', () => {
   })
 })
 
-const oneStep = (R: Rect, C: Rect | null = null, dir: 1 | -1 = 1): FlightGeometry => {
-  const plan = dir > 0 ? planFlight({}, { machine: 'm' }) : planFlight({ machine: 'm' }, {})
+const AGENTS = { machine: 'm', workspace: 'w' }
+const TERMINAL = { ...AGENTS, agent: 'a' }
+const oneStep = (R: Rect, C: Rect | null = null, dir: 1 | -1 = 1, into: 'workspaces' | 'terminal' = 'workspaces'): FlightGeometry => {
+  const [shallow, deep] = into === 'terminal' ? [AGENTS, TERMINAL] : [{}, { machine: 'm' }]
+  const plan = dir > 0 ? planFlight(shallow, deep) : planFlight(deep, shallow)
   if (plan.kind === 'none') throw new Error('no plan')
   return geometryOf(plan, [{ anchor: R, content: C }], V, false)
 }
@@ -171,10 +175,19 @@ describe('timeline: a single step', () => {
     expect(back.scenes[1][back.scenes[1].length - 1].opacity).toBe(0)
   })
 
-  it('a tiny anchor (avatar → terminal) caps the push but still grows the terminal out of it', () => {
+  it('a big push into a nested level stays aligned (a phone portal is ~10×)', () => {
+    const portal: Rect = { x: 30, y: 200, w: 120, h: 80 }
+    const phone: Rect = { x: 0, y: 0, w: 390, h: 844 }
+    const t = oneStep(portal, phone)
+    if (t.kind !== 'zoom') throw new Error('expected a zoom')
+    expect(t.steps[0].pivot.K).toBeGreaterThan(9)
+    expect(parse(stateAt(t, 1).scenes[0].transform).s).toBeCloseTo(t.steps[0].pivot.K, 3)
+  })
+
+  it('a terminal opens out of the avatar: the agents level only recedes', () => {
     const avatar: Rect = { x: 700, y: 430, w: 36, h: 36 }
     const terminal: Rect = { x: 270, y: 60, w: 900, h: 780 }
-    const t = oneStep(avatar, terminal)
+    const t = oneStep(avatar, terminal, 1, 'terminal')
     if (t.kind !== 'zoom') throw new Error('expected a zoom')
     expect(t.steps[0].pivot.K).toBeGreaterThan(12)
     expect(parse(stateAt(t, 1).scenes[0].transform).s).toBeCloseTo(PUSH_CAP, 3)

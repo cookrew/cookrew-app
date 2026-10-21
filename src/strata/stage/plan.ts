@@ -31,13 +31,15 @@ export interface Step {
   anchor: AnchorId[]
   /** The same thing as it stands in the child scene, best first; none = the child's whole viewport. */
   content: AnchorId[]
+  /** The child is a window opening out of the anchor (the terminal), not a nested level. */
+  opens: boolean
 }
 
 export const stepInto = (parent: StrataPath, child: StrataPath): Step => {
   const depth = depthOf(parent)
-  if (depth === 0) return { parent, child, anchor: [`portal:${child.machine}`, `machine:${child.machine}`], content: [`portal:${child.machine}`] }
-  if (depth === 1) return { parent, child, anchor: [`workspace:${child.workspace}`], content: [`workspace:${child.workspace}`] }
-  return { parent, child, anchor: [`agent:${child.agent}`], content: ['terminal'] }
+  if (depth === 0) return { parent, child, anchor: [`portal:${child.machine}`, `machine:${child.machine}`], content: [`portal:${child.machine}`], opens: false }
+  if (depth === 1) return { parent, child, anchor: [`workspace:${child.workspace}`], content: [`workspace:${child.workspace}`], opens: false }
+  return { parent, child, anchor: [`agent:${child.agent}`], content: ['terminal'], opens: true }
 }
 
 export type FlightKind = 'in' | 'out' | 'dive' | 'rise' | 'hop'

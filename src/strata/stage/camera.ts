@@ -19,8 +19,7 @@ export interface Pivot {
   F: Point
 }
 
-/** An outgoing scene pushes the full K up to this; beyond it (an avatar becoming a terminal) the push stops at PUSH_CAP. */
-export const FULL_PUSH_MAX = 12
+/** How far the agents level is pushed while a terminal opens out of an avatar. */
 export const PUSH_CAP = 3
 /** A step whose scale barely changes has its pivot near infinity: fly a hop instead. */
 const MIN_ZOOM = 1.15
@@ -40,8 +39,14 @@ export const fitPivot = (R: Rect, C: Rect): Pivot | null => {
   return { k, K: 1 / k, F: { x: (rc.x - k * cc.x) / (1 - k), y: (rc.y - k * cc.y) / (1 - k) } }
 }
 
-/** How far the outgoing scene is pushed at the end of the step. */
-export const pushOf = (K: number): number => (K <= FULL_PUSH_MAX ? K : PUSH_CAP)
+/**
+ * How far the outgoing scene is pushed at the end of the step. A nested level
+ * is pushed the full K, so the incoming one stays exactly inside the anchor.
+ * The terminal is not a nested level but a window opening out of the avatar:
+ * pushing the agents level ~10× would balloon the avatars around it, so the
+ * level behind only recedes to PUSH_CAP while the terminal grows the full K.
+ */
+export const pushOf = (K: number, opens: boolean): number => (opens ? Math.min(K, PUSH_CAP) : K)
 
 /** Where a point lands after scaling by s about F. */
 export const scaleAbout = (F: Point, s: number, p: Point): Point => ({ x: F.x + s * (p.x - F.x), y: F.y + s * (p.y - F.y) })
