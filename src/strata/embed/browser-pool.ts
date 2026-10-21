@@ -50,7 +50,12 @@ const createFrame = (machineId: string, src: string, onLoad: (load: { page: bool
   Object.assign(frame.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', border: '0', background: 'transparent' })
   frame.src = src
   layer().appendChild(frame)
+  // The real terminal swaps in over the flown placeholder with a ~120 ms
+  // crossfade (felix study); visibility flips at the end of a fade-out.
+  frame.style.transition = 'opacity 120ms ease-out, visibility 0s linear 120ms'
   const setShown = (shown: boolean) => {
+    frame.style.transition = shown ? 'opacity 120ms ease-out, visibility 0s' : 'opacity 120ms ease-out, visibility 0s linear 120ms'
+    frame.style.opacity = shown ? '1' : '0'
     frame.style.visibility = shown ? 'visible' : 'hidden'
     frame.style.pointerEvents = shown ? 'auto' : 'none'
     frame.inert = !shown
