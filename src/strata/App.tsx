@@ -52,14 +52,17 @@ const useLoaded = (fleet: StrataMachine[]) => {
  * PREVIEW ONLY (loopback hosts): ?link=<machineId>:<unpaired|outdated>,… forces
  * link states the mock never produces, so every machine state can be seen.
  */
+/** Read once at load: the shell rewrites the URL to its canonical form, query string and all. */
+const FORCED_LINKS: ReadonlyMap<string, string> = (() => {
+  const spec = new URLSearchParams(location.search).get('link')
+  const preview = location.hostname === '127.0.0.1' || location.hostname === 'localhost'
+  return new Map(preview && spec ? spec.split(',').map((pair) => pair.split(':') as [string, string]) : [])
+})()
 const usePreviewLinks = (fleet: StrataMachine[]): StrataMachine[] =>
   useMemo(() => {
-    const spec = new URLSearchParams(location.search).get('link')
-    const preview = location.hostname === '127.0.0.1' || location.hostname === 'localhost'
-    if (!preview || !spec) return fleet
-    const forced = new Map(spec.split(',').map((pair) => pair.split(':') as [string, string]))
+    if (FORCED_LINKS.size === 0) return fleet
     return fleet.map((m) => {
-      const link = forced.get(m.id)
+      const link = FORCED_LINKS.get(m.id)
       return link === 'unpaired' || link === 'outdated' ? { ...m, link, levels: null, stale: false } : m
     })
   }, [fleet])
