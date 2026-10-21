@@ -36,9 +36,11 @@ export interface FigureKit {
   /**
    * The archetype comes from the workspace name alone (deterministic, no
    * network). `slots` seats avatars in creation order; beyond `capacity` the
-   * last slot reads "+K".
+   * last slot reads "+K". `columns` asks for that many seats per row (a phone
+   * asks for fewer, larger seats); the kit honours it when the archetype can,
+   * and the slot anchors show what it did. Absent = the kit's own choice.
    */
-  container(input: { name: string; slots: number }): FigureArt & { archetype: string; capacity: number }
+  container(input: { name: string; slots: number; columns?: number }): FigureArt & { archetype: string; capacity: number }
   /** `source` other than 'live' draws as last-known, never as fact. */
   avatar(input: { phase: AgentPhase; source: PhaseSource; harness: Harness; size: AvatarSize }): FigureArt
   attachment(input: { kind: LevelsAttachment['kind']; shared: boolean }): FigureArt
@@ -63,6 +65,12 @@ export type UseAnchor = (id: AnchorId) => (el: Element | null) => void
 // ── fleet ───────────────────────────────────────────────────────────────────
 
 export type UseFleet = () => StrataMachine[]
+
+/**
+ * True once the machine list has answered: from this browser's cache, live, or
+ * with an error. Before that an empty fleet means "not yet", not "no machines".
+ */
+export type UseFleetLoaded = () => boolean
 
 export interface AgentHit {
   machineId: string
