@@ -266,7 +266,8 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
     }
     const onUp = () => {
       window.clearTimeout(drop)
-      drop = window.setTimeout(() => setSt((s) => onWarm(s, null)), WARM_MS)
+      // Only a level still waiting needs dropping; anything else would be a commit for nothing.
+      if (stateRef.current.warm) drop = window.setTimeout(() => stateRef.current.warm && setSt((s) => onWarm(s, null)), WARM_MS)
     }
     root.addEventListener('pointerdown', onDown, { capture: true })
     root.addEventListener('pointerup', onUp, { capture: true })
