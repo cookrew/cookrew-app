@@ -18,6 +18,7 @@ export interface FrameBase {
   k?: number
   wob?: number
   seed?: number
+  ghost?: boolean
 }
 export interface FitFrame extends FrameBase {
   vw: number
@@ -56,7 +57,7 @@ export const frameFit = (o: FitFrame): Framed => {
   const ox = (o.vw - bw * s) / 2 - b.x0 * s
   const free = o.vh - 2 * pad - bh * s
   const oy = pad + (o.valign === 'bottom' ? free : free / 2) - b.y0 * s
-  const pen = makePen({ s, ox, oy, k: o.k ?? 1, vw: o.vw, wob: o.wob ?? 0, seed: o.seed ?? 0 })
+  const pen = makePen({ s, ox, oy, k: o.k ?? 1, vw: o.vw, wob: o.wob ?? 0, seed: o.seed ?? 0, ghost: o.ghost })
   return { pen, vw: o.vw, vh: o.vh }
 }
 
@@ -66,7 +67,7 @@ export const frameScale = (o: ScaleFrame): Framed => {
   const s = o.scale
   const vw = Math.ceil((b.x1 - b.x0) * s + 2 * pad)
   const vh = Math.ceil((b.y1 - b.y0) * s + 2 * pad)
-  const pen = makePen({ s, ox: pad - b.x0 * s, oy: pad - b.y0 * s, k: o.k ?? 1, vw, wob: o.wob ?? 0, seed: o.seed ?? 0 })
+  const pen = makePen({ s, ox: pad - b.x0 * s, oy: pad - b.y0 * s, k: o.k ?? 1, vw, wob: o.wob ?? 0, seed: o.seed ?? 0, ghost: o.ghost })
   return { pen, vw, vh }
 }
 

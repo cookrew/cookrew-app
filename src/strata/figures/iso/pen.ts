@@ -63,6 +63,8 @@ export interface PenSpec {
   /** Hand wobble amplitude in viewBox units; 0 = none (always 0 at dot size). */
   wob: number
   seed: number
+  /** Outline only (a machine never reached): no fills, only silhouettes and `keep` ink, all in currentColor. */
+  ghost?: boolean
 }
 
 export interface InkOpts {
@@ -71,6 +73,8 @@ export interface InkOpts {
   edge?: boolean
   color?: string
   extra?: string
+  /** Kept in ghost mode, where only silhouettes (and these) are drawn. */
+  keep?: boolean
 }
 
 export interface SphereOpts {
@@ -88,6 +92,7 @@ const WOBBLE_STEP = 9
 
 export const makePen = (spec: PenSpec) => {
   const { s, ox, oy, k, vw, wob, seed } = spec
+  const ghost = spec.ghost ?? false
 
   const P = (p: V3): V2 => {
     const [u, v] = isoRaw(p)
@@ -120,9 +125,11 @@ export const makePen = (spec: PenSpec) => {
     return dense.map((p) => [p[0] + wob * noise(p, 0), p[1] + wob * noise(p, 1)] as V2)
   }
 
-  const stroke = (o: InkOpts) => (o.edge ? 'currentColor' : (o.color ?? INK))
+  const stroke = (o: InkOpts) => (o.edge || ghost ? 'currentColor' : (o.color ?? INK))
   const inkD = (d: string, w: number, o: InkOpts = {}): string =>
-    `<path d="${d}" stroke="${stroke(o)}" stroke-width="${num(Math.max(0.1, w * k))}"${o.extra ? ' ' + o.extra : ''}/>`
+    ghost && !o.edge && !o.keep
+      ? ''
+      : `<path d="${d}" stroke="${stroke(o)}" stroke-width="${num(Math.max(0.1, w * k))}"${o.extra ? ' ' + o.extra : ''}/>`
   /** Ink along screen points; heavy enough lines get the wobble. */
   const ink2 = (pts: readonly V2[], w = 1, o: InkOpts = {}): string => {
     const close = o.close ?? true
@@ -132,10 +139,12 @@ export const makePen = (spec: PenSpec) => {
   const ink = (pts: readonly V3[], w = 1, o: InkOpts = {}): string => ink2(pts.map(P), w, o)
   const line = (pts: readonly V3[], w = 0.9, o: InkOpts = {}): string => ink(pts, w, { ...o, close: false })
 
-  const fill2 = (pts: readonly V2[], c: string, extra = ''): string => `<path d="${d2(pts)}" fill="${c}"${extra ? ' ' + extra : ''}/>`
+  const fill2 = (pts: readonly V2[], c: string, extra = ''): string =>
+    ghost ? '' : `<path d="${d2(pts)}" fill="${c}"${extra ? ' ' + extra : ''}/>`
   const fill = (pts: readonly V3[], c: string, extra = ''): string => fill2(pts.map(P), c, extra)
   /** A fill with a same-colour hairline, so lofted strips meet without seams. */
-  const face = (pts: readonly V3[], c: string): string => `<path d="${d3(pts)}" fill="${c}" stroke="${c}" stroke-width="${num(0.7 * k)}"/>`
+  const face = (pts: readonly V3[], c: string): string =>
+    ghost ? '' : `<path d="${d3(pts)}" fill="${c}" stroke="${c}" stroke-width="${num(0.7 * k)}"/>`
   const shape = (pts: readonly V3[], c: string, w = 0.9): string => fill(pts, c) + (w ? ink(pts, w) : '')
 
   /** Loft between two equal closed rings; colour(n) shades each strip by its outward normal. */
@@ -228,6 +237,7 @@ export const makePen = (spec: PenSpec) => {
     const outline = w
       ? `<circle cx="${num(cx)}" cy="${num(cy)}" r="${num(R)}" stroke="currentColor" stroke-width="${num(w * k)}"${o.dashed ? ` stroke-dasharray="${num(R * 0.42)} ${num(R * 0.3)}"` : ''}/>`
       : ''
+    if (ghost) return outline
     const body = disc(0, 0, 1, m.d) + disc(0.09, -0.1, 0.86, m.m) + disc(0.2, -0.24, 0.55, m.l) + disc(0.34, -0.42, 0.13, '#fffdf6')
     return (o.opacity !== undefined && o.opacity < 1 ? `<g opacity="${o.opacity.toFixed(2)}">${body}</g>` : body) + outline
   }
@@ -258,6 +268,37 @@ export const makePen = (spec: PenSpec) => {
     return loft(A, B, (n) => toneI(n, m)) + fill(B, m.l) + ink(B, 1) + hullInk([...A, ...B], 1.8)
   }
 
+  /** A slab rounded in plan (a laptop base, a plinth, a tray): sides, top and its ink. */
+  const slab = (x0: number, y0: number, x1: number, y1: number, z0: number, z1: number, r: number, m: Mat, shade: Shade = tone, w = 1.6): string => {
+    const A = on(PZ(z0), rrUV(x0, y0, x1, y1, r, 3))
+    const B = on(PZ(z1), rrUV(x0, y0, x1, y1, r, 3))
+    return loft(A, B, (n) => shade(n, m)) + fill(B, shade([0, 0, 1], m)) + ink(B, Math.min(1.1, w)) + hullInk([...A, ...B], w)
+  }
+  const slabPts = (x0: number, y0: number, x1: number, y1: number, z0: number, z1: number, r: number): V3[] => [
+    ...on(PZ(z0), rrUV(x0, y0, x1, y1, r, 3)),
+    ...on(PZ(z1), rrUV(x0, y0, x1, y1, r, 3))
+  ]
+
+  /**
+   * A soft cable from a to b sagging by `sag` model units: an ink stroke, a
+   * colour stroke and a highlight along one quadratic curve.
+   */
+  const tube = (a: V3, b: V3, sag: number, r: number, m: Mat): string => {
+    const at = (dx: number) => {
+      const [ax, ay] = P(a)
+      const [bx, by] = P(b)
+      const [cx, cy] = P([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2 - 2 * sag])
+      return `M${num(ax + dx)} ${num(ay + dx)}Q${num(cx + dx)} ${num(cy + dx)} ${num(bx + dx)} ${num(by + dx)}`
+    }
+    const width = 2 * r * s
+    if (ghost) return ''
+    return (
+      `<path d="${at(0)}" stroke="${INK}" stroke-width="${num(width + 2.2 * k)}"/>` +
+      `<path d="${at(0)}" stroke="${m.m}" stroke-width="${num(width)}"/>` +
+      `<path d="${at(-width * 0.18)}" stroke="${m.l}" stroke-width="${num(width * 0.3)}"/>`
+    )
+  }
+
   // ── text on a plane: only on faces that look at the viewer ────────────────
   const matrix = (o: V2, U: V2, V: V2) =>
     `matrix(${U[0].toFixed(3)} ${U[1].toFixed(3)} ${V[0].toFixed(3)} ${V[1].toFixed(3)} ${num(o[0])} ${num(o[1])})`
@@ -266,7 +307,9 @@ export const makePen = (spec: PenSpec) => {
     return [v[0] / l, v[1] / l]
   }
   const textOn = (o: V3, along: V3, str: string, size: number, col = INK, weight = 700, anchor = 'middle'): string =>
-    `<text transform="${matrix(P(o), unit(Dv(along)), unit(Dv([0, 0, -1])))}" font-size="${num(size * s)}" fill="${col}"${anchor === 'middle' ? ' text-anchor="middle"' : ''} font-weight="${weight}">${escapeText(str)}</text>`
+    ghost
+      ? ''
+      : `<text transform="${matrix(P(o), unit(Dv(along)), unit(Dv([0, 0, -1])))}" font-size="${num(size * s)}" fill="${col}"${anchor === 'middle' ? ' text-anchor="middle"' : ''} font-weight="${weight}">${escapeText(str)}</text>`
   /** On a front plane x = const, centred at (y, z) baseline. */
   const tx = (x: number, y: number, z: number, str: string, size: number, col = INK, weight = 700): string =>
     textOn([x, y, z], [0, -1, 0], str, size, col, weight)
@@ -311,6 +354,9 @@ export const makePen = (spec: PenSpec) => {
     castShadow,
     boardTop,
     board,
+    slab,
+    slabPts,
+    tube,
     textOn,
     tx,
     txY,
