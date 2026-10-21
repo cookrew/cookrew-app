@@ -104,6 +104,17 @@ describe('container figures', () => {
     expect(containerArt({ name: 'Monorepo', slots: 48 }).anchors.more).toBeUndefined()
   })
 
+  it('treats odd slot counts as whole agents', () => {
+    for (const slots of [Number.NaN, -3, Number.POSITIVE_INFINITY]) {
+      const art = containerArt({ name: 'Odd', slots })
+      expect(slotsOf(art.anchors), String(slots)).toHaveLength(0)
+      expect(art.svg).not.toMatch(/NaN|Infinity/)
+    }
+    const almost = containerArt({ name: 'Odd', slots: 48.5 })
+    expect(slotsOf(almost.anchors)).toHaveLength(48)
+    expect(almost.anchors.more).toBeUndefined()
+  })
+
   it('escapes the name on its plaque', () => {
     const { svg } = containerArt({ name: '<b>&"x', slots: 2 })
     expect(svg).not.toContain('<b>')

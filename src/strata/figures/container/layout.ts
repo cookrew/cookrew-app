@@ -29,11 +29,14 @@ const TIERS: Tier[] = [
 
 export const tierFor = (slots: number): Tier => TIERS.find((t) => t.cols * t.rows >= slots) ?? TIERS[TIERS.length - 1]
 
+/** A slot count as a whole number of agents: NaN, negatives and fractions never reach the geometry. */
+export const agentsIn = (slots: number): number => (Number.isFinite(slots) ? Math.max(0, Math.floor(slots)) : 0)
+
 /** Seats actually drawn: capped at capacity (the last one is "+K" when over). */
-export const seatsFor = (slots: number): number => Math.max(0, Math.min(Math.floor(slots), CAPACITY))
+export const seatsFor = (slots: number): number => Math.min(agentsIn(slots), CAPACITY)
 
 /** Overflow shown on the last seat; 0 when everyone fits. */
-export const overflowOf = (slots: number): number => (slots > CAPACITY ? Math.floor(slots) - (CAPACITY - 1) : 0)
+export const overflowOf = (slots: number): number => (agentsIn(slots) > CAPACITY ? agentsIn(slots) - (CAPACITY - 1) : 0)
 
 export interface Seat {
   index: number
