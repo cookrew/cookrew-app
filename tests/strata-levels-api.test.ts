@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { handleLevelsRoutes } from '../src/main/levels/routes'
 import type { LevelsService } from '../src/main/levels/service'
 import type { LevelsAgentDetail, LevelsEvent, LevelsSnapshot } from '../src/shared/strata'
-import { fakeDesktop } from './strata-levels-fixture'
+import { fakeDesktop, GIT } from './strata-levels-fixture'
 import { assertAgentDetail, assertEvent, assertSnapshot } from './strata-levels-shape'
 
 const TOKEN = 'invented-pairing-token-0123456789'
@@ -221,6 +221,19 @@ describe('GET /api/levels/agents/:id', () => {
         shared: false
       }
     ])
+  })
+
+  it('carries the card’s own node, with git only when it is already cached', async () => {
+    const desk = fakeDesktop()
+    const base = await serve(desk.service)
+    const ada = (await (await fetch(`${base}/api/levels/agents/a1`, { headers: auth })).json()) as LevelsAgentDetail
+    expect(ada.node).toMatchObject({ kind: 'terminal', id: 'a1', preset: 'claude --session-id x', orch: true, brief: 'Own the invented loader', git: GIT })
+    const cleo = (await (await fetch(`${base}/api/levels/agents/g1`, { headers: auth })).json()) as LevelsAgentDetail
+    assertAgentDetail(cleo)
+    // An imported card opens as itself: servedSession rides along.
+    expect(cleo.node).toMatchObject({ id: 'g1', servedSession: { slug: 'invented-team' } })
+    expect(cleo.node).not.toHaveProperty('git')
+    expect(desk.gitPeeks).toEqual(['/work/invented', '/work/beta'])
   })
 
   it('marks a background workspace’s browsers as not live', async () => {

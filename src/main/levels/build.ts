@@ -10,7 +10,7 @@
 import { activeBrowserTab, browserTabs } from '../../shared/model'
 import type { BoardPhase } from '../../shared/board'
 import type { AgentTuning } from '../../shared/agent-tuning'
-import type { BrowserNodeData, CanvasNode, NoteNodeData, TerminalNodeData, WorkspaceMeta, WorkspaceState } from '../../shared/model'
+import type { BrowserNodeData, CanvasNode, GitInfo, NoteNodeData, TerminalNodeData, WorkspaceMeta, WorkspaceState } from '../../shared/model'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 import type {
   AgentPhase,
@@ -217,10 +217,17 @@ export const NOTE_CONTENT_MAX = 256 * 1024
  * snapshot withholds. Browsers are live only in the focused workspace — a
  * background workspace's browsers are not running.
  */
-export function agentDetail(workspace: LevelsWorkspace, state: WorkspaceState, agentId: string, scrub: Scrub = scrubShapes): LevelsAgentDetail | null {
+export function agentDetail(
+  workspace: LevelsWorkspace,
+  state: WorkspaceState,
+  agentId: string,
+  scrub: Scrub = scrubShapes,
+  gitPeek: (dir: string) => GitInfo | undefined = () => undefined
+): LevelsAgentDetail | null {
   const agent = workspace.agents.find((a) => a.id === agentId)
   if (!agent) return null
   const byId = new Map(state.nodes.map((node) => [node.id, node]))
+  const card = byId.get(agentId)
   const notes: LevelsAgentDetail['notes'] = []
   const browsers: LevelsAgentDetail['browsers'] = []
   for (const row of agent.attachments) {
@@ -240,5 +247,10 @@ export function agentDetail(workspace: LevelsWorkspace, state: WorkspaceState, a
       })
     }
   }
-  return { agent, workspaceId: workspace.id, notes, browsers }
+  // The card as the desktop holds it, as /api/workspace sends it: the embed's
+  // overlay reads preset, brief, orch and servedSession off it. Git only when
+  // it is already cached for the cwd — a detail never causes a git fork.
+  const git = card?.kind === 'terminal' ? gitPeek(card.cwd) : undefined
+  const node = card?.kind === 'terminal' ? (git === undefined ? card : { ...card, git }) : undefined
+  return { agent, workspaceId: workspace.id, notes, browsers, ...(node ? { node } : {}) }
 }

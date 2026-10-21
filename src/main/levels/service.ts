@@ -14,7 +14,7 @@ import { performance } from 'node:perf_hooks'
 import { STRATA_VERSION } from '../../shared/strata'
 import type { AgentTuning } from '../../shared/agent-tuning'
 import type { BoardPhase } from '../../shared/board'
-import type { TerminalNodeData, WorkspaceMeta, WorkspaceState } from '../../shared/model'
+import type { GitInfo, TerminalNodeData, WorkspaceMeta, WorkspaceState } from '../../shared/model'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 import type { Harness, LevelsAgentDetail, LevelsEvent, LevelsSnapshot } from '../../shared/strata'
 import { scrubShapes, type Scrub } from '../scrub'
@@ -50,6 +50,8 @@ export interface LevelsSources {
   now?: () => number
   /** Build-time observer (loop health), ms of main thread per build. */
   observe?: (ms: number) => void
+  /** A cwd's git answer if already cached, never a query (the detail's node.git). */
+  gitPeek?: (dir: string) => GitInfo | undefined
 }
 
 export interface LevelsCurrent {
@@ -210,7 +212,7 @@ export function createLevelsService(sources: LevelsSources, pushMs: number = LEV
       const { snapshot } = current()
       const workspace = snapshot.workspaces.find((w) => w.agents.some((a) => a.id === agentId))
       if (!workspace) return null
-      return agentDetail(workspace, sources.workspaceState(workspace.id), agentId, scrub)
+      return agentDetail(workspace, sources.workspaceState(workspace.id), agentId, scrub, sources.gitPeek)
     },
     stats: () => ({ ...stats, streams: streams.size, rev: latest?.snapshot.rev ?? 0 }),
     close: () => {

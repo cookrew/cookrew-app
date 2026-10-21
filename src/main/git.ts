@@ -24,6 +24,8 @@ const NOT_A_REPO: GitInfo = {
 interface CacheEntry {
   at: number
   pending: Promise<GitInfo>
+  /** The answer once `pending` has settled (peek reads it). */
+  settled?: GitInfo
 }
 
 /** Run `git <args>` in cwd with no shell; resolve stdout or reject on error. */
@@ -96,8 +98,22 @@ export class GitInfoCache {
       ...NOT_A_REPO,
       error: gitErrorMessage(error)
     }))
-    this.cache.set(dir, { at: now, pending })
+    const entry: CacheEntry = { at: now, pending }
+    this.cache.set(dir, entry)
+    void pending.then((info) => {
+      entry.settled = info
+    })
     return pending
+  }
+
+  /**
+   * The settled answer for a directory if one is cached and fresh, else
+   * undefined — never a query. For a reader that may only reuse (strata's
+   * agent detail), not cause, a git fork.
+   */
+  peek(dir: string, now = Date.now()): GitInfo | undefined {
+    const hit = this.cache.get(dir)
+    return hit && now - hit.at < CACHE_TTL_MS ? hit.settled : undefined
   }
 
   /** Drop a directory's cached result (e.g. after a worktree add). */

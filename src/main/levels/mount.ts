@@ -4,6 +4,7 @@
 
 import type { EventEmitter } from 'node:events'
 import type { AgentTuning } from '../../shared/agent-tuning'
+import type { GitInfo } from '../../shared/model'
 import type { MachineProfile } from '../../shared/strata'
 import type { BoardSources } from '../board-index'
 import { machineProfile, provisionalProfile } from '../machine-profile'
@@ -19,6 +20,8 @@ export interface LevelsMountDeps {
   tuning?: { fleet: () => Record<string, AgentTuning> }
   tuningBus?: EventEmitter
   identity?: { account: () => { name: string } | null }
+  /** A cwd's cached git answer, never a query (the detail's node.git). */
+  gitPeek?: (dir: string) => GitInfo | undefined
   /** A prebuilt service (tests); otherwise one is made from the fields above. */
   levels?: LevelsService
 }
@@ -67,7 +70,8 @@ export function levelsServiceFor(deps: LevelsMountDeps, options: LevelsMountOpti
         profileListeners.add(listener)
         return () => void profileListeners.delete(listener)
       },
-      scrub: createScrubber({ tokens: options.tokens })
+      scrub: createScrubber({ tokens: options.tokens }),
+      gitPeek: deps.gitPeek
     })
   )
   services.set(deps, service)

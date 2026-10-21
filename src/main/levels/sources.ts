@@ -4,7 +4,7 @@
 
 import type { EventEmitter } from 'node:events'
 import type { AgentTuning } from '../../shared/agent-tuning'
-import type { TerminalNodeData } from '../../shared/model'
+import type { GitInfo, TerminalNodeData } from '../../shared/model'
 import type { Harness, MachineProfile } from '../../shared/strata'
 import type { BoardSources } from '../board-index'
 import { harnessFor } from '../harness'
@@ -35,6 +35,7 @@ export interface LevelsRuntime {
   scrub?: Scrub
   observe?: (ms: number) => void
   now?: () => number
+  gitPeek?: (dir: string) => GitInfo | undefined
 }
 
 const STORE_SIGNALS = ['change', 'workspace-change', 'workspaces', 'switch'] as const
@@ -95,6 +96,7 @@ export function levelsSourcesFrom(runtime: LevelsRuntime): LevelsSources {
     },
     holdProbe: board.probeSubscribe,
     scrub: runtime.scrub,
-    observe: runtime.observe
+    observe: runtime.observe,
+    gitPeek: runtime.gitPeek
   }
 }

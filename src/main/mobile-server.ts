@@ -25,7 +25,7 @@ import { readTailnetAsync, type CertHosts, type TailnetIdentity } from './tailsc
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { app, powerSaveBlocker } from 'electron'
 import type { WorkspaceStore } from './store'
-import type { RecoverResult, RestoreResult, WorkspaceState } from '../shared/model'
+import type { GitInfo, RecoverResult, RestoreResult, WorkspaceState } from '../shared/model'
 import type { PtyManager } from './pty'
 import type { VoiceEngine } from './voice'
 import type { TurnTracker } from './turn-tracker'
@@ -177,6 +177,8 @@ export interface MobileServerDeps {
   stream?: MobileApiDeps['stream']
   /** Activity Board data plane; absent = /api/board answers 503. */
   board?: BoardSources
+  /** STRATA: a cwd's git answer if already cached, never a query (levels detail's node.git). */
+  gitPeek?: (dir: string) => GitInfo | undefined
   /** Event-loop health (loop-health.ts); absent = /api/health answers 503. */
   health?: () => LoopHealthSnapshot
   /** Importing a served team from the phone (mobile-api ServeOps). */

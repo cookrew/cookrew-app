@@ -13,6 +13,8 @@ import { createLevelsService } from '../src/main/levels/service'
 
 export const NOW = 1_800_000_000_000
 
+export const GIT = { isRepo: true, root: '/work/invented', branch: 'main', dirty: false, ahead: 0, behind: 0 }
+
 const at = { position: { x: 0, y: 0 }, size: { width: 100, height: 100 } }
 
 export const terminal = (id: string, name: string, command: string, extra: Record<string, unknown> = {}): CanvasNode => ({
@@ -99,7 +101,13 @@ export function fakeDesktop() {
       name: 'Beta Garden',
       dir: '/work/b',
       dirs: ['/work/b'],
-      nodes: [terminal('g1', 'Cleo', 'codex'), browser('b2', 'Preview', ['http://localhost:5280/'])],
+      nodes: [
+        terminal('g1', 'Cleo', 'codex', {
+          cwd: '/work/beta',
+          servedSession: { origin: 'https://door.example.dev', slug: 'invented-team', openedAt: NOW - 3600_000 }
+        }),
+        browser('b2', 'Preview', ['http://localhost:5280/'])
+      ],
       connections: [wire('c4', 'g1', 'b2')]
     }
   }
@@ -157,6 +165,7 @@ export function fakeDesktop() {
   const tuningBus = new EventEmitter()
   const clock = { now: NOW }
   let fleetReads = 0
+  const gitPeeks: string[] = []
   const sources = levelsSourcesFrom({
     store: store as unknown as WorkspaceStore,
     board,
@@ -169,7 +178,12 @@ export function fakeDesktop() {
     },
     tuningBus,
     machine: { name: () => 'Invented studio', appVersion: '0.3.0', profile: () => PROFILE },
-    now: () => clock.now
+    now: () => clock.now,
+    // Only Alpha's cwd has a cached git answer; Beta's has none and must not get one.
+    gitPeek: (dir) => {
+      gitPeeks.push(dir)
+      return dir === '/work/invented' ? GIT : undefined
+    }
   })
   const service = createLevelsService({ ...sources, now: () => clock.now }, 30)
   return {
@@ -180,6 +194,7 @@ export function fakeDesktop() {
     probeHolds: () => probeHolds,
     tuningBus,
     fleetReads: () => fleetReads,
+    gitPeeks,
     setProbe: (next: Map<string, BoardPhase>) => {
       probe = next
       probeListeners.forEach((listener) => listener())
