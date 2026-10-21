@@ -23,7 +23,7 @@ import { loadOrCreatePairingToken, rotatePairingToken } from './pairing-token'
 import type { VersionPinRecord } from '../shared/version-pin'
 import { readTailnetAsync, type CertHosts, type TailnetIdentity } from './tailscale'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { powerSaveBlocker } from 'electron'
+import { app, powerSaveBlocker } from 'electron'
 import type { WorkspaceStore } from './store'
 import type { RecoverResult, RestoreResult, WorkspaceState } from '../shared/model'
 import type { PtyManager } from './pty'
@@ -74,6 +74,8 @@ import { companionHostsOf, LOOPBACK_HOSTS } from './companion-hosts'
 import { refuseMisdirected, refuseMisdirectedUpgrade } from './host-gate'
 import { createNameSni } from './name-sni'
 import type { DesktopCert } from './desktop-cert'
+import { handleLevelsRoutes } from './levels/routes'
+import { levelsServiceFor } from './levels/mount'
 
 // Re-exported so existing importers keep their import path; the constants
 // themselves live in an Electron-free module so pure code can use them.
@@ -1396,6 +1398,20 @@ export async function handle(
   }
   recordBridgeDevice(request, url, deps, bridgeDevice)
   if (await handleMobileApi(request, response, url, authed as MobileApiDeps)) return
+
+  // STRATA: the levels (src/main/levels). Below the /api GET gate, and asking
+  // for the PAIRING scope on top of it: the wall token reads no note bodies.
+  if (
+    handleLevelsRoutes(request, response, url, {
+      service: () =>
+        levelsServiceFor(deps, {
+          appVersion: () => app?.getVersion?.() ?? null,
+          tokens: () => [activePairingToken ?? deps.pairingToken]
+        }),
+      paired: (req, u) => !authed.pairingToken || authed.companionGate(presentedToken(req, u))
+    })
+  )
+    return
 
   // MOVED BELOW THE DELEGATION, and that is the whole change to it.
   //
