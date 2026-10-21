@@ -117,6 +117,8 @@ function Mounted({ onMount }: { onMount: () => void }): null {
 export default function EmbedRoot({ mode }: { mode: EmbedMode }): React.JSX.Element {
   const [target, setTarget] = useState<Target | null>(mode.agentId ? { agentId: mode.agentId, attachmentId: null } : null)
   const [detail, setDetail] = useState<EmbedDetail | null>(null)
+  /** Details this document has read, by agent id: one document is one machine, so the id is enough. */
+  const seen = useRef(new Map<string, EmbedDetail>())
   const stageRef = useRef<HTMLDivElement>(null)
   const scale = useScale(mode.rails)
   const { layout: rect, screen } = useStageRects(stageRef, scale !== null)
@@ -141,14 +143,22 @@ export default function EmbedRoot({ mode }: { mode: EmbedMode }): React.JSX.Elem
     }
     // Same agent, new attachment: the terminal stays mounted, only the rail moves.
     if (detail?.agent.id === target.agentId) return
+    // An agent this document opened before mounts from what it last read — a
+    // switch back costs no round trip — and is read again behind it, so the
+    // rails and the card catch up within one request.
+    const known = seen.current.get(target.agentId)
+    if (known) setDetail(known)
     const abort = new AbortController()
     void fetchAgentDetail(target.agentId, abort.signal).then((result) => {
       if (abort.signal.aborted) return
-      if (result.ok) setDetail(result.detail)
-      else {
-        setDetail(null)
-        tellShell({ type: 'strata:error', code: result.code, ...(result.detail ? { detail: result.detail } : {}) })
+      if (result.ok) {
+        seen.current.set(target.agentId, result.detail)
+        setDetail(result.detail)
+        return
       }
+      seen.current.delete(target.agentId)
+      setDetail(null)
+      tellShell({ type: 'strata:error', code: result.code, ...(result.detail ? { detail: result.detail } : {}) })
     })
     return () => abort.abort()
     // `detail` is read only to skip a refetch of the agent already shown.
