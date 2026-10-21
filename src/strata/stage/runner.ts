@@ -1,5 +1,6 @@
 // Plays one flight on the DOM with Web Animations: transforms and opacity
-// only, so the compositor runs it and the main thread does nothing per frame.
+// only, so the compositor runs it and the main thread does nothing per frame
+// (the stage sets will-change before it measures, and clears it at landing).
 // A scrub is the same animations paused, moved by currentTime; its release
 // re-samples the rest of the path with a curve that launches at the finger's
 // speed.
@@ -73,7 +74,6 @@ export const createRunner = (id: number, geometry: FlightGeometry, layers: Fligh
     })
   }
 
-  for (const [el] of targets) el.style.willChange = 'transform, opacity'
   start(0, 1, duration, scrub ? 'linear' : easing)
   if (scrub) anims.forEach((a) => a.pause())
 
@@ -116,7 +116,6 @@ export const createRunner = (id: number, geometry: FlightGeometry, layers: Fligh
         else keep.push(a)
       }
       anims = keep
-      for (const [el] of targets) if (!only || only.has(el)) el.style.willChange = ''
     }
   }
 }

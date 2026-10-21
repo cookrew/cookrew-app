@@ -6,16 +6,16 @@
 // "in" direction (u, shallow → deep) and an out flight is the same flight with
 // u = 1 − p, so out is exactly in played backwards.
 import type { Rect } from '../../shared/strata'
-import { clampInto, fitPivot, pushOf, transformAbout, type Pivot, type Point } from './camera'
+import { aboutPoint, clampInto, fitStep, incomingAt, outgoingAt, pivotOf, pushOf, toCss, type Fit, type Point } from './camera'
 import { DIVE, FLY, cssOf } from './easing'
 import type { FlightPlan } from './plan'
 
 export interface StepGeometry {
-  pivot: Pivot
+  fit: Fit
   /** The outgoing scene's scale at the end of the step. */
   push: number
-  /** The paper's pivot (gridPivot). */
-  grid: Point
+  /** The paper's pivot (gridPivot); null = the step barely zooms and the paper stays still. */
+  grid: Point | null
   /** Share of a multi-step timeline: its log-zoom. */
   weight: number
 }
@@ -71,9 +71,10 @@ export const geometryOf = (plan: Exclude<FlightPlan, { kind: 'none' }>, rects: S
   if (plan.kind === 'hop') return { kind: 'hop', viewport, from: 0, to: 1, count }
   const steps = plan.steps.map((step, i): StepGeometry | null => {
     const r = rects[i]
-    const pivot = r?.anchor ? fitPivot(r.anchor, r.content ?? viewport) : null
-    if (!pivot) return null
-    return { pivot, push: pushOf(pivot.K, step.opens), grid: gridPivot(pivot.F, viewport), weight: Math.max(0.35, Math.log(Math.min(pivot.K, 12))) }
+    const fit = r?.anchor ? fitStep(r.anchor, r.content ?? viewport) : null
+    if (!fit) return null
+    const F = fit.K >= GRID_STEP ? pivotOf(fit) : null
+    return { fit, push: pushOf(fit.K, step.opens), grid: F && gridPivot(F, viewport), weight: Math.max(0.35, Math.log(Math.min(fit.K, 12))) }
   })
   if (steps.some((s) => s === null)) return { kind: 'hop', viewport, from, to, count }
   return { kind: 'zoom', dir: plan.dir, viewport, steps: steps as StepGeometry[] }
@@ -94,7 +95,7 @@ export const stepDuration = (K: number): number => clamp(400 + 75 * Math.log(K),
 export const durationOf = (geom: FlightGeometry): number => {
   if (geom.kind === 'fade') return FADE_MS
   if (geom.kind === 'hop') return HOP_MS
-  const sum = geom.steps.reduce((s, step) => s + stepDuration(step.pivot.K), 0)
+  const sum = geom.steps.reduce((s, step) => s + stepDuration(step.fit.K), 0)
   if (geom.steps.length === 1) return Math.round(sum)
   if (geom.steps.length === 2) return Math.round(clamp(0.62 * sum, 560, 760))
   return Math.round(clamp(0.5 * sum, 700, 850))
@@ -117,15 +118,16 @@ const STILL_GRID = { coarse: rest(), fine: { transform: IDENTITY, opacity: 0 } }
 const zoomState = (steps: StepGeometry[], bounds: number[], u: number, seg: number): FrameState => {
   const v = clamp((u - bounds[seg]) / (bounds[seg + 1] - bounds[seg]), 0, 1)
   const scenes = Array.from({ length: steps.length + 1 }, (_, j): LayerState => {
-    if (j < seg) return gone(transformAbout(steps[j].pivot.F, steps[j].push))
-    if (j > seg + 1) return gone(transformAbout(steps[j - 1].pivot.F, 1 / steps[j - 1].pivot.K))
+    if (j < seg) return gone(toCss(outgoingAt(steps[j].fit, steps[j].push, 1)))
+    if (j > seg + 1) return gone(toCss(incomingAt(steps[j - 1].fit, 0)))
     const step = steps[seg]
-    if (j === seg) return { transform: transformAbout(step.pivot.F, Math.pow(step.push, v)), opacity: 1 - window01(v, OUT_FADE) }
-    return { transform: transformAbout(step.pivot.F, Math.pow(step.pivot.K, v - 1)), opacity: window01(v, IN_FADE) }
+    if (j === seg) return { transform: toCss(outgoingAt(step.fit, step.push, v)), opacity: 1 - window01(v, OUT_FADE) }
+    return { transform: toCss(incomingAt(step.fit, v)), opacity: window01(v, IN_FADE) }
   })
   const g = steps[seg].grid
-  const s = Math.pow(GRID_STEP, v)
-  return { scenes, coarse: { transform: transformAbout(g, s), opacity: 1 - v }, fine: { transform: transformAbout(g, s), opacity: v } }
+  if (!g) return { scenes, ...STILL_GRID }
+  const paper = toCss(aboutPoint(g, Math.pow(GRID_STEP, v)))
+  return { scenes, coarse: { transform: paper, opacity: 1 - v }, fine: { transform: paper, opacity: v } }
 }
 
 const segmentAt = (bounds: number[], u: number): number => {
@@ -146,8 +148,8 @@ export const stateAt = (geom: FlightGeometry, p: number): FrameState => {
     const out = window01(t, [0, 0.55])
     const inn = window01(t, [0.3, 1])
     const scenes = Array.from({ length: geom.count }, (_, j): LayerState => {
-      if (j === geom.from) return { transform: transformAbout(c, 1 - (1 - HOP_DIP) * out), opacity: 1 - out }
-      if (j === geom.to) return { transform: transformAbout(c, HOP_DIP + (1 - HOP_DIP) * inn), opacity: inn }
+      if (j === geom.from) return { transform: toCss(aboutPoint(c, 1 - (1 - HOP_DIP) * out)), opacity: 1 - out }
+      if (j === geom.to) return { transform: toCss(aboutPoint(c, HOP_DIP + (1 - HOP_DIP) * inn)), opacity: inn }
       return gone(IDENTITY)
     })
     return { scenes, ...STILL_GRID }

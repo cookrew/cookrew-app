@@ -3,7 +3,7 @@
 // flight itself is Web Animations on the scene layers, built from rects read
 // once at take-off (measure.ts → timeline.ts → runner.ts). Gestures scrub the
 // same animations (input.ts). Spec: docs/strata-2026-10-21/glide/motion.html.
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { levelOf, parentOf, type StrataPath } from '../../shared/strata'
 import type { StageProps } from '../seams'
 import { SceneAnchorsProvider, createRegistry, type AnchorRegistry } from './anchors'
@@ -90,8 +90,12 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
     const fine = fineRef.current
     if (!root || !coarse || !fine) return
     const previous = activeRef.current
+    // Every style the flight needs is set before the one read, so the first frame has no layout of its own.
     root.dataset.flying = ''
-    for (const el of sceneEls.current.values()) el.dataset.flying = ''
+    for (const el of [...sceneEls.current.values(), coarse, fine]) {
+      el.dataset.flying = ''
+      el.style.willChange = 'transform, opacity'
+    }
 
     if (previous && flight.replaces?.how === 'reverse' && previous.flight.id === flight.replaces.id) {
       recordLanding(previous.flight.id, 'replaced')
@@ -140,7 +144,9 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
     active?.runner.release()
     if (active) recordLanding(active.flight.id, landedRef.current?.flight.id === active.flight.id ? landedRef.current.at : 'replaced')
     if (root) delete root.dataset.flying
+    for (const layer of [coarseRef.current, fineRef.current]) layer?.style.removeProperty('will-change')
     if (el) {
+      el.style.removeProperty('will-change')
       delete el.dataset.flying
       el.style.opacity = ''
       el.dataset.landed = ''
@@ -253,7 +259,7 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
         const key = pathKey(p)
         return (
           <div key={key} ref={sceneRef(key)} className="glide-scene" role="region" aria-label={LEVEL_LABEL[levelOf(p)]} tabIndex={-1} data-scene={key}>
-            <SceneAnchorsProvider registry={registryOf(key)}>{scene(p)}</SceneAnchorsProvider>
+            <SceneSlot path={p} scene={scene} registry={registryOf(key)} />
           </div>
         )
       })}
@@ -263,6 +269,18 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
   )
 }
 
+/**
+ * One level's content. Memoised on the scene function and the stop, so take-off
+ * and landing commits never re-render a level that did not change (the landing
+ * commit only unmounts the levels it left).
+ */
+const SceneSlot = memo(
+  function SceneSlot({ path, scene, registry }: { path: StrataPath; scene: (path: StrataPath) => ReactNode; registry: AnchorRegistry }) {
+    return <SceneAnchorsProvider registry={registry}>{scene(path)}</SceneAnchorsProvider>
+  },
+  (a, b) => a.scene === b.scene && a.registry === b.registry && pathKey(a.path) === pathKey(b.path)
+)
+
 const describe = (flight: Flight, runner: Runner) => {
   const g = runner.geometry
   return {
@@ -271,7 +289,7 @@ const describe = (flight: Flight, runner: Runner) => {
     geometry: g.kind,
     mode: flight.mode,
     steps: flight.plan.steps.length,
-    K: g.kind === 'zoom' ? g.steps.map((s) => Number(s.pivot.K.toFixed(2))) : [],
+    K: g.kind === 'zoom' ? g.steps.map((s) => Number(s.fit.K.toFixed(2))) : [],
     planned: runner.duration,
     easing: easingOf(g)
   }

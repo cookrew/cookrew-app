@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Rect } from '../src/shared/strata'
-import { fitPivot, pushOf, scaleRectAbout, transformAbout, visibleShare, PUSH_CAP } from '../src/strata/stage/camera'
+import { aboutPoint, applyToRect, fitStep, incomingAt, outgoingAt, pushOf, toCss, visibleShare, PUSH_CAP } from '../src/strata/stage/camera'
 import { DIVE, FLY, ease, settleCurve } from '../src/strata/stage/easing'
 import { GRID_CELL, boundariesOf, durationOf, easingOf, framesFor, geometryOf, gridPivot, stateAt, type FlightGeometry } from '../src/strata/stage/timeline'
 import { planFlight } from '../src/strata/stage/plan'
@@ -8,50 +8,71 @@ import { planFlight } from '../src/strata/stage/plan'
 const V: Rect = { x: 0, y: 0, w: 1440, h: 900 }
 const close = (a: number, b: number, eps = 0.5) => expect(Math.abs(a - b)).toBeLessThan(eps)
 
-/** "translate(Fx, Fy) scale(s) translate(-Fx, -Fy)" → { F, s }, or identity. */
+/** "translate(dx, dy) scale(s)" → { s, d }, or identity. */
 const parse = (t: string) => {
-  if (t === 'none') return { F: { x: 0, y: 0 }, s: 1 }
+  if (t === 'none') return { s: 1, d: { x: 0, y: 0 } }
   const m = t.match(/translate\((-?[\d.]+)px, (-?[\d.]+)px\) scale\(([\d.e-]+)\)/)
   if (!m) throw new Error(`unparsed transform ${t}`)
-  return { F: { x: Number(m[1]), y: Number(m[2]) }, s: Number(m[3]) }
+  return { s: Number(m[3]), d: { x: Number(m[1]), y: Number(m[2]) } }
 }
-const apply = (t: string, r: Rect): Rect => {
-  const { F, s } = parse(t)
-  return scaleRectAbout(F, s, r)
+const apply = (t: string, r: Rect): Rect => applyToRect(parse(t), r)
+const sameRect = (a: Rect, b: Rect, eps = 1) => {
+  close(a.x, b.x, eps)
+  close(a.y, b.y, eps)
+  close(a.w, b.w, eps)
+  close(a.h, b.h, eps)
 }
 
-describe('camera: one pivot, one scale', () => {
+describe('camera: one similarity per step', () => {
   const R: Rect = { x: 1100, y: 600, w: 200, h: 125 }
 
-  it('the incoming scene at 1/K about F sits exactly in the anchor', () => {
-    const p = fitPivot(R, V)!
-    const placed = scaleRectAbout(p.F, p.k, V)
-    close(placed.x, R.x)
-    close(placed.y, R.y)
-    close(placed.w, R.w)
-    close(placed.h, R.h)
+  it('the incoming scene starts exactly in the anchor', () => {
+    const fit = fitStep(R, V)!
+    sameRect(applyToRect(incomingAt(fit, 0), V), R)
   })
 
-  it('the outgoing scene at K about F carries the anchor onto the viewport', () => {
-    const p = fitPivot(R, V)!
-    const landed = scaleRectAbout(p.F, p.K, R)
-    close(landed.x, 0)
-    close(landed.w, 1440)
+  it('the outgoing scene ends with the anchor on the incoming content', () => {
+    const fit = fitStep(R, V)!
+    sameRect(applyToRect(outgoingAt(fit, fit.K, 1), R), V)
+    expect(incomingAt(fit, 1)).toEqual({ s: 1, d: { x: 0, y: 0 } })
+  })
+
+  it('for K > 1 the step is one scale about a fixed point', () => {
+    const fit = fitStep(R, V)!
+    const F = { x: (fit.K * fit.from.x - fit.to.x) / (fit.K - 1), y: (fit.K * fit.from.y - fit.to.y) / (fit.K - 1) }
+    for (const v of [0.2, 0.6]) {
+      const at = outgoingAt(fit, fit.K, v)
+      const moved = { x: at.s * F.x + at.d.x, y: at.s * F.y + at.d.y }
+      close(moved.x, F.x, 0.01)
+      close(moved.y, F.y, 0.01)
+    }
   })
 
   it('contain-fits a content rect of another aspect, centred in the anchor', () => {
     const portrait: Rect = { x: 0, y: 0, w: 390, h: 844 }
-    const p = fitPivot(R, portrait)!
-    const placed = scaleRectAbout(p.F, p.k, portrait)
+    const fit = fitStep(R, portrait)!
+    const placed = applyToRect(incomingAt(fit, 0), portrait)
     close(placed.h, R.h)
     expect(placed.w).toBeLessThan(R.w)
     close(placed.x + placed.w / 2, R.x + R.w / 2)
   })
 
-  it('refuses steps that are not a zoom in', () => {
-    expect(fitPivot({ x: 0, y: 0, w: 1440, h: 900 }, V)).toBeNull()
-    expect(fitPivot({ x: 0, y: 0, w: 0, h: 10 }, V)).toBeNull()
-    expect(fitPivot({ x: 0, y: 0, w: 2000, h: 1200 }, V)).toBeNull()
+  it('a same-size step is a plain pan (a phone container lands on itself)', () => {
+    const small: Rect = { x: 14, y: 120, w: 362, h: 300 }
+    const big: Rect = { x: 10, y: 84, w: 370, h: 306 }
+    const fit = fitStep(small, big)!
+    expect(fit.K).toBeCloseTo(1.02, 2)
+    const half = applyToRect(outgoingAt(fit, fit.K, 0.5), small)
+    expect(half.y).toBeLessThan(small.y)
+    expect(half.y).toBeGreaterThan(big.y)
+    sameRect(applyToRect(outgoingAt(fit, fit.K, 1), small), big)
+    const exact = fitStep(V, V)!
+    expect(outgoingAt(exact, 1, 0.5)).toEqual({ s: 1, d: { x: 0, y: 0 } })
+  })
+
+  it('refuses rects that cannot be flown', () => {
+    expect(fitStep({ x: 0, y: 0, w: 0, h: 10 }, V)).toBeNull()
+    expect(fitStep({ x: 0, y: 0, w: 4000, h: 3000 }, V)).toBeNull()
   })
 
   it('caps the push only where a terminal opens', () => {
@@ -180,8 +201,8 @@ describe('timeline: a single step', () => {
     const phone: Rect = { x: 0, y: 0, w: 390, h: 844 }
     const t = oneStep(portal, phone)
     if (t.kind !== 'zoom') throw new Error('expected a zoom')
-    expect(t.steps[0].pivot.K).toBeGreaterThan(9)
-    expect(parse(stateAt(t, 1).scenes[0].transform).s).toBeCloseTo(t.steps[0].pivot.K, 3)
+    expect(t.steps[0].fit.K).toBeGreaterThan(9)
+    expect(parse(stateAt(t, 1).scenes[0].transform).s).toBeCloseTo(t.steps[0].fit.K, 3)
   })
 
   it('a terminal opens out of the avatar: the agents level only recedes', () => {
@@ -189,7 +210,7 @@ describe('timeline: a single step', () => {
     const terminal: Rect = { x: 270, y: 60, w: 900, h: 780 }
     const t = oneStep(avatar, terminal, 1, 'terminal')
     if (t.kind !== 'zoom') throw new Error('expected a zoom')
-    expect(t.steps[0].pivot.K).toBeGreaterThan(12)
+    expect(t.steps[0].fit.K).toBeGreaterThan(12)
     expect(parse(stateAt(t, 1).scenes[0].transform).s).toBeCloseTo(PUSH_CAP, 3)
     const start = apply(stateAt(t, 0).scenes[1].transform, terminal)
     // 900×780 contain-fits a 36 px square by its width.
@@ -282,7 +303,7 @@ describe('timeline: fallbacks', () => {
     expect(stateAt(g, 1).scenes.map((s) => s.opacity)).toEqual([1, 0])
   })
 
-  it('transformAbout is exact about its pivot', () => {
-    expect(apply(transformAbout({ x: 100, y: 50 }, 3), { x: 100, y: 50, w: 10, h: 10 })).toEqual({ x: 100, y: 50, w: 30, h: 30 })
+  it('scaling about a point keeps that point', () => {
+    expect(apply(toCss(aboutPoint({ x: 100, y: 50 }, 3)), { x: 100, y: 50, w: 10, h: 10 })).toEqual({ x: 100, y: 50, w: 30, h: 30 })
   })
 })

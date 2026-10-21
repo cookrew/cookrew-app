@@ -55,6 +55,9 @@ export const useStageInput = (rootRef: RefObject<HTMLElement>, sinkRef: RefObjec
     let wheel: WheelState = WHEEL_IDLE
     let wheelMode: GestureMode | null = null
     let idleTimer = 0
+    // A main-thread stall (mounting the target level) delays the queued wheel events past the idle
+    // timer; one quiet tick is not proof the fingers lifted, two are.
+    let quietTicks = 0
     const handleWheelOut = (out: WheelOut | null) => {
       const s = sink()
       if (!out || !s) return
@@ -69,6 +72,11 @@ export const useStageInput = (rootRef: RefObject<HTMLElement>, sinkRef: RefObjec
       }
     }
     const checkIdle = () => {
+      quietTicks += 1
+      if (quietTicks < 2 && wheel.phase === 'active') {
+        idleTimer = window.setTimeout(checkIdle, WHEEL_IDLE_MS / 2)
+        return
+      }
       const [next, out] = wheelIdle(wheel, performance.now())
       wheel = next
       handleWheelOut(out)
@@ -81,6 +89,7 @@ export const useStageInput = (rootRef: RefObject<HTMLElement>, sinkRef: RefObjec
       wheel = next
       if (out.type === 'pass') return
       e.preventDefault()
+      quietTicks = 0
       handleWheelOut(out)
       window.clearTimeout(idleTimer)
       idleTimer = window.setTimeout(checkIdle, WHEEL_IDLE_MS)

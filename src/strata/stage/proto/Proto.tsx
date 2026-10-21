@@ -156,7 +156,13 @@ export function Proto() {
   }, [])
 
   useEffect(() => {
-    Object.assign(window, { __glide: { go, path: () => pathRef.current, commits, flights: flightLog.all, machines: () => machinesRef.current, inTarget } })
+    // nextLanding lets a driver wait without polling the page mid-flight.
+    const nextLanding = (ms = 3000) =>
+      new Promise((resolve) => {
+        const off = flightLog.subscribe((r) => (off(), resolve(r)))
+        setTimeout(() => (off(), resolve(null)), ms)
+      })
+    Object.assign(window, { __glide: { go, path: () => pathRef.current, commits, flights: flightLog.all, machines: () => machinesRef.current, inTarget, nextLanding } })
   }, [go, inTarget])
 
   if (!machines) return <div className="booting">loading the mock fleet…</div>
