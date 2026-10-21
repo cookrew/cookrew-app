@@ -42,6 +42,8 @@ export interface GestureSink {
 }
 
 const LINE_PX = 16
+/** An idle timer this late was itself stalled. */
+const STALL_MS = 30
 const optedOut = (target: EventTarget | null) => target instanceof Element && target.closest('[data-stage-gestures="off"]') !== null
 
 export const useStageInput = (rootRef: RefObject<HTMLElement>, sinkRef: RefObject<GestureSink>): void => {
@@ -55,9 +57,14 @@ export const useStageInput = (rootRef: RefObject<HTMLElement>, sinkRef: RefObjec
     let wheel: WheelState = WHEEL_IDLE
     let wheelMode: GestureMode | null = null
     let idleTimer = 0
+    let armedAt = 0
     // A main-thread stall (mounting the target level) delays the queued wheel events past the idle
-    // timer; one quiet tick is not proof the fingers lifted, two are.
-    let quietTicks = 0
+    // timer. A timer that fires late was stalled too, so its silence proves nothing: it re-arms.
+    const arm = (ms: number) => {
+      window.clearTimeout(idleTimer)
+      armedAt = performance.now() + ms
+      idleTimer = window.setTimeout(checkIdle, ms)
+    }
     const handleWheelOut = (out: WheelOut | null) => {
       const s = sink()
       if (!out || !s) return
@@ -71,16 +78,12 @@ export const useStageInput = (rootRef: RefObject<HTMLElement>, sinkRef: RefObjec
         wheelMode = null
       }
     }
-    const checkIdle = () => {
-      quietTicks += 1
-      if (quietTicks < 2 && wheel.phase === 'active') {
-        idleTimer = window.setTimeout(checkIdle, WHEEL_IDLE_MS / 2)
-        return
-      }
+    function checkIdle() {
+      if (performance.now() - armedAt > STALL_MS) return arm(WHEEL_IDLE_MS)
       const [next, out] = wheelIdle(wheel, performance.now())
       wheel = next
       handleWheelOut(out)
-      if (wheel.phase !== 'idle') idleTimer = window.setTimeout(checkIdle, WHEEL_IDLE_MS)
+      if (wheel.phase !== 'idle') arm(WHEEL_IDLE_MS)
     }
     const onWheel = (e: WheelEvent) => {
       if (e.ctrlKey || (wheel.phase === 'idle' && optedOut(e.target))) return
@@ -89,10 +92,8 @@ export const useStageInput = (rootRef: RefObject<HTMLElement>, sinkRef: RefObjec
       wheel = next
       if (out.type === 'pass') return
       e.preventDefault()
-      quietTicks = 0
       handleWheelOut(out)
-      window.clearTimeout(idleTimer)
-      idleTimer = window.setTimeout(checkIdle, WHEEL_IDLE_MS)
+      arm(WHEEL_IDLE_MS)
     }
 
     // ── touch ──
