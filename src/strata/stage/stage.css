@@ -1,0 +1,88 @@
+/* The stage (motion.html §4): paper, scenes, and the planes' rules. Only
+   transform and opacity ever animate. Theme with --glide-paper / --glide-dot. */
+
+.glide-stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  /* Never let a horizontal gesture become history navigation, never chain a scroll out. */
+  overscroll-behavior: none;
+  /* The browser keeps vertical panning; horizontal pans come to the stage. */
+  touch-action: pan-y;
+  background: var(--glide-paper, #f4eedc);
+  contain: strict;
+  isolation: isolate;
+}
+
+.glide-paper {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* 24 px dots; the fine layer is the same lattice at half size, so doubling it lands on the coarse one. */
+.glide-dots {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+  background-image: radial-gradient(circle, var(--glide-dot, rgba(45, 42, 32, 0.22)) 1px, transparent 1.25px);
+  background-size: 24px 24px;
+}
+
+.glide-dots--fine {
+  opacity: 0;
+  background-image: radial-gradient(circle, var(--glide-dot, rgba(45, 42, 32, 0.22)) 0.5px, transparent 0.625px);
+  background-size: 12px 12px;
+}
+
+/* One level. The stage owns its scroll container, so it can restore scroll on the way out. */
+.glide-scene {
+  position: absolute;
+  inset: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  transform-origin: 0 0;
+  outline: none;
+}
+
+.glide-stage[data-flying] .glide-scene {
+  pointer-events: none;
+}
+
+/* Screen-fixed plane: out within 90 ms of take-off, back for 160 ms after landing. */
+.glide-scene[data-flying] [data-plane='screen'] {
+  opacity: 0 !important;
+  transition: opacity 90ms linear;
+}
+
+.glide-scene[data-landed] [data-plane='screen'] {
+  animation: glide-plane-in 160ms ease-out both;
+}
+
+@keyframes glide-plane-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* Reduced motion's rubber band: a shade on the blocked edge, opacity only. */
+.glide-edge {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 32px;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 1;
+}
+
+.glide-edge--left {
+  left: 0;
+  background: linear-gradient(to right, rgba(45, 42, 32, 0.28), transparent);
+}
+
+.glide-edge--right {
+  right: 0;
+  background: linear-gradient(to left, rgba(45, 42, 32, 0.28), transparent);
+}
