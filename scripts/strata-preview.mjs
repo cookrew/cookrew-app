@@ -143,7 +143,8 @@ const detailOf = (levels, agentId) => {
       const tabs = url ? Array.from({ length: a.tabs ?? 1 }, (_, i) => ({ id: `${a.id}-t${i}`, url })) : []
       return { id: a.id, title: a.title, url, tabs, live: workspace.state === 'focused', shared: a.shared }
     })
-  return { agent, workspaceId: workspace.id, notes, browsers }
+  const node = { kind: 'terminal', id: agent.id, name: agent.name, preset: agent.harness, command: '', cwd: '', orch: agent.orch, role: null, brief: agent.task }
+  return { agent, workspaceId: workspace.id, notes, browsers, node }
 }
 
 /** The failure switches, replaced whole on every change (scripts/strata-mock-gate.mjs). */

@@ -20,6 +20,8 @@
  *   figures   FigureArt with the anchors the stage flies to
  */
 
+import type { TerminalNodeData } from './model'
+
 export const STRATA_VERSION = 1
 
 /** Every free-text line a level shows (task, reply, titles) is cut to this. */
@@ -67,7 +69,9 @@ export interface FleetMachine {
    * Same-origin base the shell reaches this desktop under: '/relay/@<user>/desktop/<deviceId>/'.
    * The registry admits the account cookie; the desktop admits its own pairing
    * token, which this browser keeps as localStorage 'cr_token:<deviceId>' (absent
-   * = unpaired). Event streams carry it as ?token= because EventSource sends no headers.
+   * = unpaired). The shell sends it as Authorization: Bearer on every request,
+   * streams included: they run over fetch, so no token lands in a URL and a
+   * silent stream can be caught.
    * Relay caps: 16 requests in flight per desktop (every open stream holds one),
    * 8 desktops online per account.
    */
@@ -204,6 +208,13 @@ export interface LevelsAgentDetail {
   /** Bodies are scrubbed for display (lines.ts): never write one back. */
   notes: Array<{ id: string; title: string; content: string; shared: boolean }>
   browsers: Array<{ id: string; title: string; url: string | null; tabs: Array<{ id: string; url: string }>; live: boolean; shared: boolean }>
+  /**
+   * The card's own terminal node as the desktop holds it: the embed's overlay
+   * reads preset, brief, orch and servedSession from it, so an imported or placed
+   * card opens as itself. Absent from a desktop older than this field: the embed
+   * then draws one up from agent.
+   */
+  node?: TerminalNodeData
 }
 
 /**

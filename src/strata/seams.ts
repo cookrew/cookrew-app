@@ -75,7 +75,8 @@ export interface AgentHit {
 
 /** Across every machine the shell can see, cached ones included. */
 export interface FleetIndex {
-  find(query: string, limit?: number): AgentHit[]
+  /** near breaks ties toward where the user is: the same workspace first, then the same machine. */
+  find(query: string, limit?: number, near?: Pick<StrataPath, 'machine' | 'workspace'>): AgentHit[]
   /** Agents waiting on the owner, then replied-and-unread, oldest first. */
   attention(): AgentHit[]
 }
