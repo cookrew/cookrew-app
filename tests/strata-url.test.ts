@@ -190,6 +190,12 @@ describe('resolveStrataUrl', () => {
     expect(resolveStrataUrl(['batch-pool', 'jobs'], fleet, { loaded: true })).toMatchObject({ path: { machine: 'm4' }, pending: true, missing: null })
   })
 
+  it('waits for a machine still connecting even when it shows a cached snapshot', () => {
+    const cached: UrlMachine[] = [{ ...fleet[0], link: 'connecting' }]
+    expect(resolveStrataUrl(['studio', 'brand-new-ws'], cached, { loaded: true })).toMatchObject({ path: { machine: 'm1' }, pending: true, missing: null })
+    expect(resolveStrataUrl(['studio', 'monorepo', 'new-agent'], cached, { loaded: true })).toMatchObject({ path: { machine: 'm1', workspace: 'w1' }, pending: true })
+  })
+
   it('falls back from a machine that cannot answer', () => {
     expect(resolveStrataUrl(['old-thinkpad', 'thesis'], fleet, { loaded: true })).toMatchObject({ path: { machine: 'm5' }, pending: false, missing: 'workspace' })
   })

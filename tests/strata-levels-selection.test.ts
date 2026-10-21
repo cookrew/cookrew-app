@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { StrataPath } from '../src/shared/strata'
-import { childToward, defaultHighlight, itemOf, nextAgentWithin, nextItem, pathKey, samePath, type LevelItem } from '../src/strata/levels/selection'
+import { childToward, defaultHighlight, itemOf, nextAgentWithin, nextItem, nextSeed, pathKey, samePath, type LevelItem } from '../src/strata/levels/selection'
 import { keyIntent } from '../src/strata/input/keys'
 
 // A 3 × 2 grid of agents in creation order (row-major), like an L2 container.
@@ -70,12 +70,43 @@ describe('where the highlight starts', () => {
   })
 })
 
+describe('one seeding path for the highlight', () => {
+  const none = () => false
+  const base = { items: grid, current: null, cameFrom: null, waiting: none, preferred: none, present: () => false }
+  it('on arrival coming back out, the item you came from beats anything waiting', () => {
+    expect(nextSeed({ ...base, arrived: true, cameFrom: a(4), waiting: (t) => t.agent === 'a2' })).toEqual(a(4))
+  })
+  it('a stale highlight from the level you left never overrides the came-from seed', () => {
+    // Back from Dahlia (a4): the old highlight is the terminal-level agent, not on this level's items.
+    expect(nextSeed({ ...base, arrived: true, current: { machine: 'm', workspace: 'w', agent: 'a9' }, cameFrom: a(4), waiting: (t) => t.agent === 'a1' })).toEqual(a(4))
+  })
+  it('on arrival with nowhere to come from: waiting, else the preferred (focused workspace), else the first', () => {
+    expect(nextSeed({ ...base, arrived: true, waiting: (t) => t.agent === 'a3', preferred: (t) => t.agent === 'a5' })).toEqual(a(3))
+    expect(nextSeed({ ...base, arrived: true, preferred: (t) => t.agent === 'a5' })).toEqual(a(5))
+    expect(nextSeed({ ...base, arrived: true })).toEqual(a(0))
+  })
+  it('after arrival, a highlight that is still present is kept', () => {
+    expect(nextSeed({ ...base, arrived: false, current: a(2), present: () => true, waiting: (t) => t.agent === 'a3' })).toBeUndefined()
+  })
+  it('after arrival, a highlight that vanished is seeded again, without came-from', () => {
+    expect(nextSeed({ ...base, arrived: false, current: a(9), cameFrom: a(4), waiting: (t) => t.agent === 'a3' })).toEqual(a(3))
+  })
+  it('keeps everything while the level has no items yet (fleet loading, terminal)', () => {
+    expect(nextSeed({ ...base, items: [], arrived: true, cameFrom: a(4) })).toBeUndefined()
+  })
+})
+
 describe('the key map', () => {
-  const at = (level: 'machines' | 'workspaces' | 'agents' | 'terminal', extra = {}) => ({ level, typing: false, overlayOpen: false, ...extra })
+  const at = (level: 'machines' | 'workspaces' | 'agents' | 'terminal', extra = {}) => ({ level, typing: false, overlayOpen: false, onControl: false, ...extra })
   it('arrows move, Shift+arrows walk agents inside items except at L2', () => {
     expect(keyIntent({ key: 'ArrowRight' }, at('machines'))).toEqual({ type: 'move', dir: 'right', within: false })
     expect(keyIntent({ key: 'ArrowRight', shiftKey: true }, at('workspaces'))).toEqual({ type: 'move', dir: 'right', within: true })
     expect(keyIntent({ key: 'ArrowRight', shiftKey: true }, at('agents'))).toEqual({ type: 'move', dir: 'right', within: false })
+  })
+  it('Enter and Space on a focused control belong to that control', () => {
+    expect(keyIntent({ key: 'Enter' }, at('agents', { onControl: true }))).toBeNull()
+    expect(keyIntent({ key: ' ' }, at('machines', { onControl: true }))).toBeNull()
+    expect(keyIntent({ key: 'ArrowRight' }, at('machines', { onControl: true }))).toEqual({ type: 'move', dir: 'right', within: false })
   })
   it('Enter and Space go in or dive', () => {
     expect(keyIntent({ key: 'Enter' }, at('agents'))).toEqual({ type: 'in' })

@@ -939,3 +939,8 @@ button {
 .finder-list li .code-chip {
   margin-left: 0;
 }
+.summary .elapsed {
+  display: inline-block;
+  min-width: 8.5ch;
+  font-variant-numeric: tabular-nums;
+}

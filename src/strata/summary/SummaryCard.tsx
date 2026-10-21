@@ -27,7 +27,7 @@ function Elapsed({ since, suffix }: { since: number | null; suffix: string }) {
     const timer = setInterval(tick, 1000)
     return () => clearInterval(timer)
   }, [since, suffix])
-  return <span ref={node} />
+  return <span ref={node} className="elapsed" />
 }
 
 export function SummaryCard({

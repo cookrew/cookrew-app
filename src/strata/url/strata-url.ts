@@ -62,7 +62,7 @@ export interface Resolution {
   pending: boolean
 }
 
-/** A machine whose levels may still arrive: wait for it before falling back. */
+/** A machine whose levels may still arrive (cached or not): wait for it before falling back. */
 const mayStillLoad = (link: MachineLink) => link === 'connecting'
 
 export const resolveStrataUrl = (slugs: readonly string[], fleet: readonly UrlMachine[], opts: { loaded: boolean }): Resolution => {
@@ -82,11 +82,11 @@ export const resolveStrataUrl = (slugs: readonly string[], fleet: readonly UrlMa
   if (!machine.levels) return mayStillLoad(machine.link) ? done(atMachine, null, undefined, true) : done(atMachine, 'workspace', workspaceSlug)
 
   const workspace = matchSibling(machine.levels.workspaces, workspaceSlug)
-  if (!workspace) return done(atMachine, 'workspace', workspaceSlug)
+  if (!workspace) return mayStillLoad(machine.link) ? done(atMachine, null, undefined, true) : done(atMachine, 'workspace', workspaceSlug)
   const atWorkspace = { machine: machine.id, workspace: workspace.id }
   if (!agentSlug) return done(atWorkspace)
 
   const agent = matchSibling(workspace.agents, agentSlug)
-  if (!agent) return done(atWorkspace, 'agent', agentSlug)
+  if (!agent) return mayStillLoad(machine.link) ? done(atWorkspace, null, undefined, true) : done(atWorkspace, 'agent', agentSlug)
   return done({ ...atWorkspace, agent: agent.id })
 }

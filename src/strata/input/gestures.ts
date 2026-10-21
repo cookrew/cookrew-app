@@ -11,7 +11,8 @@ export interface WheelSample {
   at: number
 }
 
-export const WHEEL = { threshold: 80, quietMs: 180, ratio: 1.5 } as const
+/** lockMs: after a commit nothing fires again for this long, gap or not (a slow level render must not split one gesture). */
+export const WHEEL = { threshold: 80, quietMs: 180, ratio: 1.5, lockMs: 400 } as const
 
 export interface WheelSwipe {
   /** Feed every wheel event; returns a swipe once per gesture, and whether the event belongs to a horizontal gesture. */
@@ -23,14 +24,15 @@ export interface WheelSwipe {
  * left produce deltaX > 0: that is "swipe left", in.
  */
 export const createWheelSwipe = (opts: Partial<typeof WHEEL> = {}): WheelSwipe => {
-  const { threshold, quietMs, ratio } = { ...WHEEL, ...opts }
+  const { threshold, quietMs, ratio, lockMs } = { ...WHEEL, ...opts }
   let accX = 0
   let accY = 0
   let lastAt = -Infinity
   let fired = false
+  let firedAt = -Infinity
   return {
     feed({ deltaX, deltaY, at }) {
-      if (at - lastAt > quietMs) {
+      if (at - lastAt > quietMs && at - firedAt > lockMs) {
         accX = 0
         accY = 0
         fired = false
@@ -41,6 +43,7 @@ export const createWheelSwipe = (opts: Partial<typeof WHEEL> = {}): WheelSwipe =
       const horizontal = Math.abs(accX) >= ratio * Math.abs(accY) && Math.abs(accX) > 0
       if (fired || !horizontal || Math.abs(accX) < threshold) return { swipe: null, horizontal }
       fired = true
+      firedAt = at
       return { swipe: accX > 0 ? 'in' : 'out', horizontal }
     }
   }
@@ -72,3 +75,8 @@ export const classifyTouch = (stroke: TouchStroke, opts: Partial<typeof TOUCH> =
 
 /** Movement that cancels a press-and-hold (it is a swipe or a scrub instead). */
 export const HOLD = { ms: 400, slop: 10 } as const
+
+/** Strokes a level already acted on (a loupe scrub or tap): the stage must not also read them as a swipe. */
+const consumed = new WeakSet<Event>()
+export const markConsumed = (e: Event) => void consumed.add(e)
+export const isConsumed = (e: Event) => consumed.has(e)

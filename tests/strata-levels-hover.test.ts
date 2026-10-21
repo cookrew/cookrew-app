@@ -146,10 +146,20 @@ describe('swipes', () => {
     const out = [10, 30, 30, 30, 40, 40].map((dx, i) => swipe.feed({ deltaX: dx, deltaY: 1, at: i * 16 }).swipe)
     expect(out.filter(Boolean)).toEqual(['in'])
   })
+  it('a jank-sized gap inside one gesture never fires twice (400 ms lockout after a commit)', () => {
+    const swipe = createWheelSwipe()
+    const fired = [
+      swipe.feed({ deltaX: 50, deltaY: 0, at: 0 }),
+      swipe.feed({ deltaX: 50, deltaY: 0, at: 16 }),
+      swipe.feed({ deltaX: 50, deltaY: 0, at: 260 }),
+      swipe.feed({ deltaX: 50, deltaY: 0, at: 276 })
+    ].map((r) => r.swipe)
+    expect(fired.filter(Boolean)).toEqual(['in'])
+  })
   it('a new gesture after a quiet gap fires again; right goes out', () => {
     const swipe = createWheelSwipe()
     swipe.feed({ deltaX: 100, deltaY: 0, at: 0 })
-    expect(swipe.feed({ deltaX: -100, deltaY: 0, at: 400 }).swipe).toBe('out')
+    expect(swipe.feed({ deltaX: -100, deltaY: 0, at: 600 }).swipe).toBe('out')
   })
   it('vertical scrolling is not a swipe', () => {
     const swipe = createWheelSwipe()

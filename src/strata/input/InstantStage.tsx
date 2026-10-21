@@ -6,7 +6,7 @@
 import { useEffect, useRef } from 'react'
 import { levelOf, parentOf } from '../../shared/strata'
 import type { StageProps } from '../seams'
-import { classifyTouch, createWheelSwipe } from './gestures'
+import { classifyTouch, createWheelSwipe, isConsumed } from './gestures'
 
 export function InstantStage({ path, scene, inTarget, onCommit, reducedMotion }: StageProps) {
   const el = useRef<HTMLDivElement>(null)
@@ -33,7 +33,8 @@ export function InstantStage({ path, scene, inTarget, onCommit, reducedMotion }:
     const wheel = createWheelSwipe()
     const onWheel = (e: WheelEvent) => {
       if (levelOf(latest.current.path) === 'terminal') return
-      const { swipe, horizontal } = wheel.feed({ deltaX: e.deltaX, deltaY: e.deltaY, at: e.timeStamp })
+      // Handling time, not e.timeStamp: events queued behind a long frame must read as one gesture.
+      const { swipe, horizontal } = wheel.feed({ deltaX: e.deltaX, deltaY: e.deltaY, at: performance.now() })
       if (horizontal) e.preventDefault()
       if (swipe) commit(swipe)
     }
@@ -45,6 +46,7 @@ export function InstantStage({ path, scene, inTarget, onCommit, reducedMotion }:
       if (!stroke || e.pointerId !== stroke.id) return
       const s = stroke
       stroke = null
+      if (isConsumed(e)) return
       if (levelOf(latest.current.path) === 'terminal') return
       const swipe = classifyTouch({ startX: s.x, startY: s.y, endX: e.clientX, endY: e.clientY, duration: e.timeStamp - s.at, viewportWidth: innerWidth })
       if (swipe) commit(swipe)

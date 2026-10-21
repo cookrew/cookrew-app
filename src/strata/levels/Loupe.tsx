@@ -6,7 +6,7 @@
 // a seat for the hover intent (highlight + summary card, one commit).
 import { useEffect, useRef, type PointerEvent } from 'react'
 import type { FigureArt, Rect, StrataPath } from '../../shared/strata'
-import { HOLD } from '../input/gestures'
+import { HOLD, markConsumed } from '../input/gestures'
 import { HOVER_INTENT_MS } from '../summary/hover-intent'
 import { center } from './geometry'
 import { useLevels } from './env'
@@ -46,6 +46,8 @@ export function Loupe({ region, seats, boxes, onGoIn, label }: { region: Rect; s
   const picked = useRef<SeatRef | null>(null)
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dwell = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const touchStart = useRef<{ x: number; y: number } | null>(null)
+  const touchMoved = useRef(false)
   const touchActive = useRef(false)
   const zoom = loupeZoom(seats[0]?.rect.w ?? 4)
   const size = env.touch ? LENS.touch : LENS.pointer
@@ -121,7 +123,15 @@ export function Loupe({ region, seats, boxes, onGoIn, label }: { region: Rect; s
         role="presentation"
         aria-label={label}
         onPointerMove={(e) => {
-          if (e.pointerType === 'touch' && !touchActive.current) return
+          if (e.pointerType === 'touch' && !touchActive.current) {
+            // Moving before the hold fires makes it a swipe: no lens, no tap.
+            const start = touchStart.current
+            if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > HOLD.slop) {
+              touchMoved.current = true
+              if (holdTimer.current) clearTimeout(holdTimer.current)
+            }
+            return
+          }
           point.current = { ...local(e), touch: e.pointerType === 'touch' }
           schedule()
         }}
@@ -129,6 +139,8 @@ export function Loupe({ region, seats, boxes, onGoIn, label }: { region: Rect; s
         onPointerDown={(e) => {
           if (e.pointerType !== 'touch') return
           const start = local(e)
+          touchStart.current = { x: e.clientX, y: e.clientY }
+          touchMoved.current = false
           ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
           holdTimer.current = setTimeout(() => {
             touchActive.current = true
@@ -139,7 +151,13 @@ export function Loupe({ region, seats, boxes, onGoIn, label }: { region: Rect; s
         onPointerUp={(e) => {
           if (e.pointerType !== 'touch') return
           if (holdTimer.current) clearTimeout(holdTimer.current)
-          if (!touchActive.current) return onGoIn()
+          touchStart.current = null
+          if (!touchActive.current) {
+            if (touchMoved.current) return
+            markConsumed(e.nativeEvent)
+            return onGoIn()
+          }
+          markConsumed(e.nativeEvent)
           const seat = picked.current
           hide()
           if (seat) dive(seat.path)
