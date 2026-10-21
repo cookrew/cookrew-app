@@ -254,6 +254,8 @@ export const pipes: ArchetypeDef<SurfPlan> = {
     const steel = matOf('#9aa3a8')
     const platePts = p.slabPts(0, 0, D, W, 0, PLATE_H, 1.6)
     const xs = Array.from({ length: tier.rows }, (_, r) => PI.back + (r + 0.5) * PX_)
+    // more than four pipes: six facets each keep the rack in budget
+    const facets = tier.rows > 4 ? 6 : 8
     // a stepped stand at each end, its profile running under every pipe
     const profile = xs.flatMap((x, r) => {
       const top = pipeZ(r, tier.rows) - PIPE_R + 0.6
@@ -266,8 +268,8 @@ export const pipes: ArchetypeDef<SurfPlan> = {
     const rows = stand(5) + stand(W - 3.4) + xs.map((x, r) => {
       const z = pipeZ(r, tier.rows)
       return (
-        p.rod([x, W - 1.6, z], [x, 1.6, z], PIPE_R, m, tone, 1.6, PIPE_R, 8) +
-        (r === tier.rows - 1 ? p.rod([x, W / 2 + 0.6, z], [x, W / 2 - 0.6, z], PIPE_R + 0.6, steel, tone, 1, PIPE_R + 0.6, 8) : '')
+        p.rod([x, W - 1.6, z], [x, 1.6, z], PIPE_R, m, tone, 1.6, PIPE_R, facets) +
+        (r === tier.rows - 1 ? p.rod([x, W / 2 + 0.6, z], [x, W / 2 - 0.6, z], PIPE_R + 0.6, steel, tone, 1, PIPE_R + 0.6, facets) : '')
       )
     }).join('')
     const valve = p.shape(on(PY(1.4), ellUV(PI.back + (tier.rows - 0.5) * PX_, pipeZ(tier.rows - 1, tier.rows), 1.6, 1.6, 10)), PALS.tomato.l, 1)

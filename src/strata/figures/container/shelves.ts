@@ -100,6 +100,8 @@ export const bookshelf: ArchetypeDef<ShelfPlan> = {
     const tints = [ctx.m, PALS.mustard, PALS.cobalt]
     const books = pl.rows
       .map((r, ri) => {
+        // a tall case gets books on every third shelf only (bytes, and calm)
+        if (pl.rows.length > 4 && ri % 3 !== 0) return ''
         const clip = opening2(p, pl, r)
         return [0, 1, 2]
           .map((i) => {
@@ -182,8 +184,11 @@ export const lockers: ArchetypeDef<ShelfPlan> = {
 const VAULT_OPTS: ShelfOpts = { D: 11, side: 4, top: 4, base: 5, extra: 0, over: 0, front: 0 }
 const STEEL = matOf('#aeb6ba')
 
+/** The open door's radius: smaller on a tall, narrow (phone) vault so it does not eat the width. */
+const doorR = (pl: ShelfPlan) => Math.min(pl.H * 0.42, pl.tier.rows > 4 ? 6.5 : 15)
+
 const vaultDoor = (p: Pen, pl: ShelfPlan, m: Mat) => {
-  const r = Math.min(pl.H * 0.42, 15)
+  const r = doorR(pl)
   const cx = pl.o.D + r + 0.6
   const cz = r + 0.6
   const disc = (y: number) => on(PY(y), ellUV(cx, cz, r, r, 14))
@@ -209,7 +214,7 @@ const vaultDoor = (p: Pen, pl: ShelfPlan, m: Mat) => {
 export const vault: ArchetypeDef<ShelfPlan> = {
   plan: (tier, seats) => {
     const pl = shelfPlan(tier, seats, VAULT_OPTS)
-    const r = Math.min(pl.H * 0.42, 15)
+    const r = doorR(pl)
     // the open door stands to the right, swung out toward the viewer; the tray moves past it
     const tr = { x0: pl.o.D + 2 * r + 3, x1: pl.o.D + 2 * r + 15, y0: -13, y1: -1 }
     return { ...pl, tray: tr, fit: [...pl.fit, ...corners(pl.o.D, -3.4, 0, pl.o.D + 2 * r + 15, -13, 2 * r + 1.2)] }
@@ -272,14 +277,19 @@ export const lab: ArchetypeDef<ShelfPlan> = {
     const W = pl.W
     const post = (x: number, y: number) =>
       p.box(x, y, 0, x + 1.2, y + 1.2, pl.H, steel, tone, 0) + p.hullInk(p.boxPts(x, y, 0, x + 1.2, y + 1.2, pl.H), 1, { edge: false })
-    const plate = (z: number) => p.box(0, 0, z - 0.8, D, W, z, steel, tone, 0) + p.hullInk(p.boxPts(0, 0, z - 0.8, D, W, z), 1, { edge: false })
+    // a tall rack draws its plates as top and front edge only: same look at that size, half the bytes
+    const lean = pl.tier.rows > 4
+    const plate = (z: number) =>
+      lean
+        ? p.shape(on(PZ(z), rectUV(0, 0, D, W)), tone([0, 0, 1], steel), 0.9) + p.shape(on(PX(D), rectUV(0, z - 0.8, W, z)), tone([1, 0, 0], steel), 0.9)
+        : p.box(0, 0, z - 0.8, D, W, z, steel, tone, 0) + p.hullInk(p.boxPts(0, 0, z - 0.8, D, W, z), 1, { edge: false })
     const basePts = corners(0, 0, 0, D, W, LAB_OPTS.base + BOARD)
     const allPts = corners(0, 0, 0, D, W, pl.H)
     const base = p.box(0, 0, 0, D, W, LAB_OPTS.base + BOARD, matOf('#8f989b'), tone, 1)
     // plates bottom to top (a higher plate never covers the row below it), posts in front last
     const plates = [...pl.rows].reverse().slice(1).map((r) => plate(r.z0)).join('') + plate(pl.H)
     const liquid = [ctx.m, PALS.mint, PALS.blush]
-    const flasks = [0.25, 0.5, 0.75]
+    const flasks = (lean ? [0.3, 0.7] : [0.25, 0.5, 0.75])
       .map((t, i) => {
         const y = W * (1 - t)
         const x = D * 0.45

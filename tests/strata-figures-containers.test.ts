@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ARCHETYPES, archetypeOf, BALL, CAPACITY, containerArt, paletteOf } from '../src/strata/figures/container'
+import { ARCHETYPES, archetypeOf, BALL, CAPACITY, containerArt, MAX_ROWS, paletteOf } from '../src/strata/figures/container'
 import { rowCounts, seatGrid, tierFor } from '../src/strata/figures/container/layout'
 import { plaqueText } from '../src/strata/figures/container/name'
 
@@ -48,6 +48,69 @@ describe('seating', () => {
     const grid = seatGrid(5, tierFor(5))
     expect(grid.map((s) => s.row)).toEqual([0, 0, 0, 1, 1])
     expect(grid[3].col).toBe(1)
+  })
+})
+
+/** Seats per row as the anchors show them: a row runs along model y, where y + x·tan 30° is constant on screen. */
+const rowsOf = (anchors: Readonly<Record<string, { x: number; y: number; w: number; h: number }>>) => {
+  const keys = slotsOf(anchors)
+  const rows = new Map<number, number>()
+  for (const key of keys) {
+    const r = anchors[key]
+    const k = Math.round((r.y + r.h / 2 + (r.x + r.w / 2) * Math.tan(Math.PI / 6)) / 4)
+    rows.set(k, (rows.get(k) ?? 0) + 1)
+  }
+  return [...rows.values()]
+}
+
+describe('the columns hint', () => {
+  it('changes nothing when absent', () => {
+    const plain = containerArt({ name: 'Paper Notes', slots: 48 })
+    expect(containerArt({ name: 'Paper Notes', slots: 48, columns: undefined }).svg).toBe(plain.svg)
+    expect(Math.max(...rowsOf(plain.anchors))).toBe(12)
+    expect(rowsOf(containerArt({ name: 'Paper Notes', slots: 5 }).anchors)).toEqual([3, 2])
+  })
+
+  it('seats 48 agents 4, 5 or 6 to a row when the archetype can, within budget', () => {
+    for (const columns of [4, 5, 6]) {
+      for (const name of ['Paper Notes', 'CI Night Shift', 'Home Lab', 'LLM Evals', 'Brand Design', 'Backups']) {
+        const rows = rowsOf(containerArt({ name, slots: 48, columns }).anchors)
+        expect(Math.max(...rows), `${name} ${columns}`).toBe(columns)
+        expect(rows.reduce((a, b) => a + b, 0)).toBe(48)
+      }
+      for (const archetype of ARCHETYPES) {
+        const art = containerArt({ name: 'x', slots: 48, archetype, columns })
+        expect(art.svg.length, `${archetype} ${columns}`).toBeLessThanOrEqual(CONTAINER_BUDGET)
+      }
+    }
+  })
+
+  it('widens the row when the archetype cannot stack that many rows', () => {
+    const bleachers = containerArt({ name: 'Crew', slots: 48, columns: 4 })
+    expect(bleachers.archetype).toBe('bleachers')
+    expect(rowsOf(bleachers.anchors)).toHaveLength(MAX_ROWS.bleachers)
+    expect(Math.max(...rowsOf(bleachers.anchors))).toBe(8)
+    const bench = containerArt({ name: 'Monorepo', slots: 48, columns: 4 })
+    expect(Math.max(...rowsOf(bench.anchors))).toBe(6)
+  })
+
+  it('gives a shelf at five columns seats of 44 px or more on a 360 px stage', () => {
+    for (const name of ['Paper Notes', 'CI Night Shift', 'Home Lab', 'LLM Evals', 'Brand Design']) {
+      const art = containerArt({ name, slots: 48, columns: 5 })
+      expect((art.anchors['slot:0'].w / art.viewBox.w) * 360, name).toBeGreaterThanOrEqual(44)
+    }
+  })
+
+  it('keeps the row width for a workspace smaller than the hint', () => {
+    const three = containerArt({ name: 'Paper Notes', slots: 3, columns: 5 })
+    const five = containerArt({ name: 'Paper Notes', slots: 5, columns: 5 })
+    expect(three.viewBox.w).toBe(five.viewBox.w)
+  })
+
+  it('ignores hints that are not a positive number, and is memoized on the hint', () => {
+    const plain = containerArt({ name: 'Monorepo', slots: 20 })
+    for (const columns of [0, -2, Number.NaN]) expect(containerArt({ name: 'Monorepo', slots: 20, columns }).svg).toBe(plain.svg)
+    expect(containerArt({ name: 'Monorepo', slots: 20, columns: 5 })).toBe(containerArt({ name: 'Monorepo', slots: 20, columns: 5 }))
   })
 })
 

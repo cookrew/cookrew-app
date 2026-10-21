@@ -20,6 +20,8 @@ export interface FrameBase {
   seed?: number
   ghost?: boolean
   wobStep?: number
+  /** See PenSpec.shadowCap. */
+  shadowCap?: number
 }
 export interface FitFrame extends FrameBase {
   vw: number
@@ -36,7 +38,8 @@ const rawBounds = (o: FrameBase) => {
     const at = isoRaw(p)
     if (o.shadowZ === null || o.shadowZ === undefined) return [at]
     const z0 = o.shadowZ
-    return [at, isoRaw([p[0] + (p[2] - z0) * SH[0], p[1] + (p[2] - z0) * SH[1], z0])]
+    const h = Math.min(p[2] - z0, o.shadowCap ?? Number.POSITIVE_INFINITY)
+    return [at, isoRaw([p[0] + h * SH[0], p[1] + h * SH[1], z0])]
   })
   const xs = pts.map((p) => p[0])
   const ys = pts.map((p) => p[1])
@@ -58,7 +61,7 @@ export const frameFit = (o: FitFrame): Framed => {
   const ox = (o.vw - bw * s) / 2 - b.x0 * s
   const free = o.vh - 2 * pad - bh * s
   const oy = pad + (o.valign === 'bottom' ? free : free / 2) - b.y0 * s
-  const pen = makePen({ s, ox, oy, k: o.k ?? 1, vw: o.vw, wob: o.wob ?? 0, seed: o.seed ?? 0, ghost: o.ghost, wobStep: o.wobStep })
+  const pen = makePen({ s, ox, oy, k: o.k ?? 1, vw: o.vw, wob: o.wob ?? 0, seed: o.seed ?? 0, ghost: o.ghost, wobStep: o.wobStep, shadowCap: o.shadowCap })
   return { pen, vw: o.vw, vh: o.vh }
 }
 
@@ -68,7 +71,7 @@ export const frameScale = (o: ScaleFrame): Framed => {
   const s = o.scale
   const vw = Math.ceil((b.x1 - b.x0) * s + 2 * pad)
   const vh = Math.ceil((b.y1 - b.y0) * s + 2 * pad)
-  const pen = makePen({ s, ox: pad - b.x0 * s, oy: pad - b.y0 * s, k: o.k ?? 1, vw, wob: o.wob ?? 0, seed: o.seed ?? 0, ghost: o.ghost, wobStep: o.wobStep })
+  const pen = makePen({ s, ox: pad - b.x0 * s, oy: pad - b.y0 * s, k: o.k ?? 1, vw, wob: o.wob ?? 0, seed: o.seed ?? 0, ghost: o.ghost, wobStep: o.wobStep, shadowCap: o.shadowCap })
   return { pen, vw, vh }
 }
 

@@ -63,6 +63,8 @@ export interface PenSpec {
   /** Hand wobble amplitude in viewBox units; 0 = none (always 0 at dot size). */
   wob: number
   seed: number
+  /** Heights above this cast no longer shadows (tall shelves would otherwise widen their frame). */
+  shadowCap?: number
   /** Wobble sample spacing in viewBox units (default 9): bigger figures can afford coarser. */
   wobStep?: number
   /** Outline only (a machine never reached): no fills, only silhouettes and `keep` ink, all in currentColor. */
@@ -259,7 +261,11 @@ export const makePen = (spec: PenSpec) => {
   }
 
   /** Where a point falls as shadow on the plane z = z0. */
-  const shadowOf = (p: V3, z0: number): V2 => P([p[0] + (p[2] - z0) * SH[0], p[1] + (p[2] - z0) * SH[1], z0])
+  const cap = spec.shadowCap ?? Number.POSITIVE_INFINITY
+  const shadowOf = (p: V3, z0: number): V2 => {
+    const h = Math.min(p[2] - z0, cap)
+    return P([p[0] + h * SH[0], p[1] + h * SH[1], z0])
+  }
   /**
    * Cast shadow of an outline (bottom and top points) onto z = z0, optionally
    * clipped to a convex surface (a board top) by geometry, not a clipPath.

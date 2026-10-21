@@ -29,6 +29,25 @@ const TIERS: Tier[] = [
 
 export const tierFor = (slots: number): Tier => TIERS.find((t) => t.cols * t.rows >= slots) ?? TIERS[TIERS.length - 1]
 
+/** The widest row a hint may ask for. */
+export const MAX_COLUMNS = 16
+
+/** A columns hint as a whole number of seats per row, or null when there is none to honour. */
+export const columnsHint = (columns: number | undefined): number | null =>
+  columns === undefined || !Number.isFinite(columns) || columns < 1 ? null : Math.min(MAX_COLUMNS, Math.floor(columns))
+
+/**
+ * The grid for a level's columns hint: that many seats per row, as many rows
+ * as it takes — unless the archetype cannot stack that many rows, in which
+ * case the rows stop at maxRows and the row widens to fit. A hint wider than
+ * the agents keeps its width, so every workspace on a level seats at one size.
+ */
+export const hintedTier = (seats: number, columns: number, maxRows: number): Tier => {
+  const n = Math.max(1, seats)
+  const cols = Math.max(columns, Math.ceil(n / maxRows))
+  return { cols, rows: Math.ceil(n / cols) }
+}
+
 /** A slot count as a whole number of agents: NaN, negatives and fractions never reach the geometry. */
 export const agentsIn = (slots: number): number => (Number.isFinite(slots) ? Math.max(0, Math.floor(slots)) : 0)
 
