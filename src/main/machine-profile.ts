@@ -24,6 +24,7 @@ import { execFile } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import os from 'node:os'
 import type { MachineKind, MachineProfile } from '../shared/strata'
+import { pcIdentity, type PcIdentity } from './machine-names'
 import { scrubShapes } from './scrub'
 
 export interface MachineFacts {
@@ -42,6 +43,14 @@ export interface MachineFacts {
   linux?: {
     sysVendor: string | null
     productName: string | null
+    /** DMI product_version: Lenovo's friendly name lives here. */
+    productVersion?: string | null
+    boardVendor?: string | null
+    boardName?: string | null
+    /** An ARM board's own name (/sys/firmware/devicetree/base/model). */
+    deviceTreeModel?: string | null
+    /** The chassis asset tag equals Azure's fixed one (the tag itself is never kept). */
+    azure?: boolean
     chassisType: number | null
     cgroup: string | null
     dockerEnv: boolean
@@ -49,7 +58,17 @@ export interface MachineFacts {
     hypervisorFlag: boolean
     battery: boolean
   }
-  windows?: { manufacturer: string | null; model: string | null; pcSystemType: number | null; chassisTypes: number[] }
+  windows?: {
+    manufacturer: string | null
+    model: string | null
+    pcSystemType: number | null
+    chassisTypes: number[]
+    /** Win32_ComputerSystemProduct.Version (Lenovo's name), the baseboard, and Azure's fixed asset tag. */
+    version?: string | null
+    boardVendor?: string | null
+    boardName?: string | null
+    azure?: boolean
+  }
 }
 
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
@@ -112,7 +131,17 @@ const MAC_MODELS: Readonly<Record<string, string>> = {
   'Mac16,7': 'MacBook Pro 16-inch (2024)',
   'Mac16,8': 'MacBook Pro 14-inch (2024)',
   'Mac16,10': 'Mac mini (2024)',
-  'Mac16,11': 'Mac mini (2024)'
+  'Mac16,11': 'Mac mini (2024)',
+  'Mac16,2': 'iMac 24-inch (2024)',
+  'Mac16,3': 'iMac 24-inch (2024)',
+  'Mac16,9': 'Mac Studio (2025)',
+  'Mac15,14': 'Mac Studio (2025)',
+  'Mac16,12': 'MacBook Air 13-inch (M4, 2025)',
+  'Mac16,13': 'MacBook Air 15-inch (M4, 2025)',
+  'MacPro7,1': 'Mac Pro (2019)',
+  'iMac20,1': 'iMac 27-inch (2020)',
+  'iMac20,2': 'iMac 27-inch (2020)',
+  'Macmini8,1': 'Mac mini (2018)'
 }
 
 const MAC_FAMILIES: ReadonlyArray<[prefix: string, label: string, kind: MachineKind | null]> = [
@@ -237,9 +266,18 @@ function decide(facts: MachineFacts, say: (fact: string) => void): Verdict {
   const linux = facts.linux
   const win = facts.windows
   const mac = facts.mac
+  // Raw strings for recognising a cloud or a hypervisor; friendly ones for the caption.
   const vendor = linux?.sysVendor ?? win?.manufacturer ?? (mac ? 'Apple' : null)
   const product = linux?.productName ?? win?.model ?? mac?.hwModel ?? null
   const hardware = [vendor, product].filter(Boolean).join(' ')
+  const pc = pcIdentity({
+    vendor,
+    product,
+    version: linux?.productVersion ?? win?.version,
+    boardVendor: linux?.boardVendor ?? win?.boardVendor,
+    boardName: linux?.boardName ?? win?.boardName,
+    deviceTree: linux?.deviceTreeModel
+  })
 
   // sandbox: a sandbox runtime said so, or the hardware is a microVM
   const sandboxEnv = SANDBOX_ENV.find(([name]) => env.has(name))
@@ -270,8 +308,14 @@ function decide(facts: MachineFacts, say: (fact: string) => void): Verdict {
   const cloud = cloudLabel(hardware)
   if (cloud) {
     say(linux ? `dmi.sys_vendor=${vendor}` : `wmi.manufacturer=${vendor}`)
-    // On EC2 Nitro the product name IS the instance type (c7g.2xlarge).
-    return { kind: 'cloud', label: cloud, vendor, model: product }
+    // On EC2 Nitro the product name IS the instance type (c7g.2xlarge); a
+    // product that only names the cloud again ('Google Compute Engine') is no model.
+    const model = pc.model !== null && cloudLabel(pc.model) === null ? pc.model : null
+    return { kind: 'cloud', label: cloud, vendor: pc.vendor, model }
+  }
+  if (linux?.azure || win?.azure) {
+    say('chassis_asset_tag=azure')
+    return { kind: 'cloud', label: 'Azure VM', vendor: 'Microsoft', model: null }
   }
   const cloudEnv = CLOUD_ENV.find(([name]) => env.has(name))
   if (cloudEnv) {
@@ -291,28 +335,28 @@ function decide(facts: MachineFacts, say: (fact: string) => void): Verdict {
   const hypervisor = VM_DMI.find(([pattern]) => pattern.test(hardware))
   if (hypervisor) {
     say(win ? `wmi.model=${product}` : `dmi.product_name=${product}`)
-    return { kind: 'vm', label: hypervisor[1], vendor, model: product }
+    return { kind: 'vm', label: hypervisor[1], vendor: pc.vendor, model: pc.model }
   }
   if (linux?.hypervisorFlag) {
     say('cpuinfo=hypervisor')
-    return { kind: 'vm', label: 'Virtual machine', vendor, model: product }
+    return { kind: 'vm', label: 'Virtual machine', vendor: pc.vendor, model: pc.model }
   }
 
   // physical: laptop | desktop | server
   if (mac) return macKind(mac, say)
-  if (linux) return chassisKind(linux.chassisType, linux.battery, vendor, product, 'dmi', say)
+  if (linux) return chassisKind(linux.chassisType, linux.battery, pc, 'dmi', say)
   if (win) {
     if (win.pcSystemType === PC_SYSTEM_LAPTOP) {
       say(`wmi.pc_system_type=${win.pcSystemType}`)
-      return { kind: 'laptop', label: product, vendor, model: product }
+      return { kind: 'laptop', ...pc }
     }
     if (win.pcSystemType !== null && PC_SYSTEM_SERVERS.has(win.pcSystemType)) {
       say(`wmi.pc_system_type=${win.pcSystemType}`)
-      return { kind: 'server', label: product, vendor, model: product }
+      return { kind: 'server', ...pc }
     }
-    return chassisKind(win.chassisTypes[0] ?? null, false, vendor, product, 'wmi', say)
+    return chassisKind(win.chassisTypes[0] ?? null, false, pc, 'wmi', say)
   }
-  return { kind: 'unknown', label: null, vendor, model: product }
+  return { kind: 'unknown', ...pc }
 }
 
 function cloudLabel(hardware: string): string | null {
@@ -338,29 +382,25 @@ function macKind(mac: NonNullable<MachineFacts['mac']>, say: (fact: string) => v
   return { kind, label: named.label, vendor: 'Apple', model: mac.hwModel }
 }
 
-function chassisKind(
-  chassis: number | null,
-  battery: boolean,
-  vendor: string | null,
-  product: string | null,
-  source: 'dmi' | 'wmi',
-  say: (fact: string) => void
-): Verdict {
-  const label = [vendor, product].filter(Boolean).join(' ') || null
+function chassisKind(chassis: number | null, battery: boolean, pc: PcIdentity, source: 'dmi' | 'wmi', say: (fact: string) => void): Verdict {
+  const product = pc.model
   if (chassis !== null) say(`${source}.chassis_type=${chassis}`)
   if (battery) say('battery=present')
-  if ((chassis !== null && CHASSIS_LAPTOP.has(chassis)) || battery) return { kind: 'laptop', label, vendor, model: product }
+  if ((chassis !== null && CHASSIS_LAPTOP.has(chassis)) || battery) return { kind: 'laptop', ...pc }
   if ((chassis !== null && CHASSIS_SERVER.has(chassis)) || SERVER_PRODUCTS.test(product ?? '')) {
     if (product && SERVER_PRODUCTS.test(product)) say(`${source}.product_name=${product}`)
-    return { kind: 'server', label, vendor, model: product }
+    return { kind: 'server', ...pc }
   }
-  if (chassis !== null && CHASSIS_DESKTOP.has(chassis)) return { kind: 'desktop', label, vendor, model: product }
-  return { kind: 'unknown', label, vendor, model: product }
+  if (chassis !== null && CHASSIS_DESKTOP.has(chassis)) return { kind: 'desktop', ...pc }
+  return { kind: 'unknown', ...pc }
 }
 
 // ── reading the facts ───────────────────────────────────────────────────────
 
 const PROBE_TIMEOUT_MS = 3_000
+
+/** The fixed SMBIOS asset tag every Azure VM carries (public, the same on all of them). */
+const AZURE_ASSET_TAG = '7783-7084-3265-9085-8269-3286-77'
 
 function run(command: string, args: readonly string[]): Promise<string | null> {
   return new Promise((resolve) => {
@@ -408,6 +448,12 @@ function readLinux(): NonNullable<MachineFacts['linux']> {
   return {
     sysVendor: dmi('sys_vendor'),
     productName: dmi('product_name'),
+    productVersion: dmi('product_version'),
+    boardVendor: dmi('board_vendor'),
+    boardName: dmi('board_name'),
+    deviceTreeModel: readText('/sys/firmware/devicetree/base/model'),
+    // Compared here and dropped: an asset tag elsewhere can be an inventory number.
+    azure: dmi('chassis_asset_tag') === AZURE_ASSET_TAG,
     chassisType: Number.isFinite(chassis) ? chassis : null,
     cgroup: readText('/proc/1/cgroup'),
     dockerEnv: existsSync('/.dockerenv'),
@@ -425,19 +471,27 @@ function linuxOsVersion(): string | null {
 
 async function readWindows(): Promise<NonNullable<MachineFacts['windows']>> {
   // Select-Object names the members: Win32_ComputerSystem also carries the
-  // host name, and nothing here may read it.
+  // host name, and the product, enclosure and baseboard classes carry serial
+  // numbers and a UUID — nothing here may read them. The asset tag is compared
+  // with Azure's fixed one in PowerShell and only the boolean comes back.
   const script =
     '$c = Get-CimInstance Win32_ComputerSystem | Select-Object Manufacturer,Model,PCSystemType; ' +
-    '$e = Get-CimInstance Win32_SystemEnclosure | Select-Object ChassisTypes; ' +
-    '@{ m = $c.Manufacturer; model = $c.Model; t = $c.PCSystemType; ch = @($e.ChassisTypes) } | ConvertTo-Json -Compress'
+    '$e = Get-CimInstance Win32_SystemEnclosure | Select-Object ChassisTypes,SMBIOSAssetTag; ' +
+    '$p = Get-CimInstance Win32_ComputerSystemProduct | Select-Object Version; ' +
+    '$b = Get-CimInstance Win32_BaseBoard | Select-Object Manufacturer,Product; ' +
+    `@{ m = $c.Manufacturer; model = $c.Model; t = $c.PCSystemType; ch = @($e.ChassisTypes); v = $p.Version; bm = $b.Manufacturer; bp = $b.Product; az = ($e.SMBIOSAssetTag -eq '${AZURE_ASSET_TAG}') } | ConvertTo-Json -Compress`
   const out = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script])
   try {
-    const parsed = JSON.parse(out ?? '') as { m?: string; model?: string; t?: number; ch?: number[] }
+    const parsed = JSON.parse(out ?? '') as { m?: string; model?: string; t?: number; ch?: number[]; v?: string; bm?: string; bp?: string; az?: boolean }
     return {
       manufacturer: parsed.m ?? null,
       model: parsed.model ?? null,
       pcSystemType: typeof parsed.t === 'number' ? parsed.t : null,
-      chassisTypes: Array.isArray(parsed.ch) ? parsed.ch.filter((n) => typeof n === 'number') : []
+      chassisTypes: Array.isArray(parsed.ch) ? parsed.ch.filter((n) => typeof n === 'number') : [],
+      version: parsed.v ?? null,
+      boardVendor: parsed.bm ?? null,
+      boardName: parsed.bp ?? null,
+      azure: parsed.az === true
     }
   } catch {
     return { manufacturer: null, model: null, pcSystemType: null, chassisTypes: [] }
