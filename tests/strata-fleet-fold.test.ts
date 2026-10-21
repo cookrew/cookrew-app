@@ -22,14 +22,20 @@ describe('folding levels events', () => {
     expect(SNAP.workspaces[0].state).toBe('focused')
   })
 
-  it('adds a new agent at the end and keeps counts true', () => {
-    const agent = { ...focused.agents[0], id: 'new-one', name: 'Newt' }
-    const next = fold(SNAP, { type: 'agent', rev: SNAP.rev + 1, workspaceId: focused.id, agent })
-    const workspace = next.workspaces[0]
-    expect(workspace.agents.at(-1)?.id).toBe('new-one')
-    expect(workspace.counts.agents).toBe(focused.agents.length + 1)
-    const gone = fold(next, { type: 'agent-gone', rev: next.rev + 1, workspaceId: focused.id, agentId: 'new-one' })
-    expect(gone.workspaces[0].counts.agents).toBe(focused.agents.length)
+  it('takes a seating change as one whole workspace, counts with it', () => {
+    const seated = { ...focused, agents: focused.agents.slice(1), counts: { ...focused.counts, agents: focused.agents.length - 1 } }
+    const next = fold(SNAP, { type: 'workspace', rev: SNAP.rev + 1, workspace: seated })
+    expect(next.workspaces[0].agents.map((a) => a.id)).toEqual(focused.agents.slice(1).map((a) => a.id))
+    expect(next.workspaces[0].counts.agents).toBe(focused.agents.length - 1)
+  })
+
+  it('replaces everything on a mid-stream snapshot at rev + 1: not a gap', () => {
+    const fresh = { ...SNAP, rev: SNAP.rev + 1, workspaces: SNAP.workspaces.slice(1), focusedWorkspaceId: null }
+    expect(foldLevels(SNAP, { type: 'snapshot', snapshot: fresh })).toEqual({ ok: true, levels: fresh })
+  })
+
+  it('no longer reads agent-gone', () => {
+    expect(parseLevelsEvent(JSON.stringify({ type: 'agent-gone', rev: 2, workspaceId: 'w', agentId: 'a' }))).toBeNull()
   })
 
   it('replaces, appends and removes whole workspaces', () => {

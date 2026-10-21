@@ -38,7 +38,7 @@ function Qa() {
 
   const dive = (machine: string, workspace: string, agent: string) => setPath({ machine, workspace, agent })
   const hits = query ? index.find(query, 8) : index.attention().slice(0, 8)
-  const online = onlinePicture(machines)
+  const online = onlinePicture(machines, fleetStore().presence())
 
   if (path.machine && path.workspace && path.agent) {
     return <TerminalLevel path={{ machine: path.machine, workspace: path.workspace, agent: path.agent }} />

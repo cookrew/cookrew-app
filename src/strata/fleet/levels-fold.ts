@@ -34,12 +34,6 @@ const applyDelta = (levels: LevelsSnapshot, event: Exclude<LevelsEvent, { type: 
       const workspaces = levels.workspaces.map((w) => (w.id === event.workspaceId ? upsertAgent(w, event.agent) : w))
       return { ...levels, rev: event.rev, workspaces }
     }
-    case 'agent-gone': {
-      const workspaces = levels.workspaces.map((w) =>
-        w.id === event.workspaceId ? withAgents(w, w.agents.filter((a) => a.id !== event.agentId)) : w
-      )
-      return { ...levels, rev: event.rev, workspaces }
-    }
     case 'workspace':
       return { ...levels, rev: event.rev, workspaces: upsertWorkspace(levels.workspaces, event.workspace) }
     case 'workspace-gone': {
@@ -58,8 +52,11 @@ const applyDelta = (levels: LevelsSnapshot, event: Exclude<LevelsEvent, { type: 
 }
 
 /**
- * A snapshot always lands, whatever its rev: a restarted desktop starts its
- * revs over, and the stream opens with one. A delta lands only on rev + 1.
+ * A snapshot always lands and replaces everything, whatever its rev: the
+ * stream opens with one, a restarted desktop starts its revs over, and a live
+ * desktop sends one mid-stream at rev + 1 for a machine-only change or a
+ * burst of more than 48 deltas. A delta lands only on rev + 1. Seating
+ * changes (an agent added, removed or moved) arrive as whole 'workspace' events.
  */
 export const foldLevels = (levels: LevelsSnapshot | null, event: LevelsEvent): FoldResult => {
   if (event.type === 'snapshot') return { ok: true, levels: event.snapshot }

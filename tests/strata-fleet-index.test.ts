@@ -94,6 +94,21 @@ describe('FleetIndex.find', () => {
     expect(ids('cns')).toContain('a4')
   })
 
+  it('breaks equal scores toward the user’s workspace, then machine, then fleet order', () => {
+    const near = createFleetIndex([
+      machine('m1', 'one', 'live', [
+        ['w1', 'Alpha', [agent('p1', 'Pip')]],
+        ['w2', 'Beta', [agent('p2', 'Pip')]]
+      ]),
+      machine('m2', 'two', 'live', [['w1', 'Alpha', [agent('p1', 'Pip')]]])
+    ])
+    const order = (where?: { machine?: string; workspace?: string }) => near.find('pip', 10, where).map((h) => `${h.machineId}/${h.agentId}`)
+    expect(order()).toEqual(['m1/p1', 'm1/p2', 'm2/p1'])
+    expect(order({ machine: 'm1', workspace: 'w2' })).toEqual(['m1/p2', 'm1/p1', 'm2/p1'])
+    expect(order({ machine: 'm2', workspace: 'w1' })).toEqual(['m2/p1', 'm1/p1', 'm1/p2'])
+    expect(order({ machine: 'm2' })).toEqual(['m2/p1', 'm1/p1', 'm1/p2'])
+  })
+
   it('finds nothing for nothing, and honours the limit', () => {
     expect(index.find('')).toEqual([])
     expect(index.find('   ')).toEqual([])

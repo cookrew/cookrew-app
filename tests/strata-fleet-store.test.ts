@@ -50,7 +50,7 @@ const memoryStorage = (): StorageLike & { dump(): Record<string, string> } => {
   }
 }
 
-const CONFIG: FleetConfig = { listUrl: '/v2/me/desktops', presenceUrl: '/v2/me/desktops/presence', requireToken: true, seedCacheUrl: null, ...FLEET_TIMINGS }
+const CONFIG: FleetConfig = { listUrl: '/v2/me/desktops', presenceUrl: '/v2/me/presence', requireToken: true, seedCacheUrl: null, ...FLEET_TIMINGS }
 
 const harness = (opts: {
   list: FleetMachine[]
@@ -78,7 +78,15 @@ const harness = (opts: {
       calls.push({ url, at: Date.now(), headers: init.headers ?? {} })
       if (url === CONFIG.listUrl) return Promise.resolve({ status: 200, json: async () => list })
       if (url === CONFIG.presenceUrl)
-        return Promise.resolve({ status: 200, json: async () => ({ at: Date.now(), machines: list.map(({ id, online, lastSeenAt }) => ({ id, online, lastSeenAt })) }) })
+        return Promise.resolve({
+          status: 200,
+          json: async () => ({
+            at: Date.now(),
+            cap: 8,
+            online: list.filter((m) => m.online).length,
+            desktops: list.map(({ id, online, lastSeenAt }) => ({ id, online, lastSeenAt: online ? Date.now() : lastSeenAt }))
+          })
+        })
       const id = url.match(/desktop\/([^/]+)\/api\/levels$/)?.[1] ?? ''
       const queue = answers.get(id) ?? [{ status: 200, body: { ...SNAP } }]
       const next = queue.length > 1 ? queue.shift()! : queue[0]
@@ -508,7 +516,8 @@ describe('the fleet store: the registry list', () => {
     const presences = () => h.calls.filter((c) => c.url === CONFIG.presenceUrl).length
     await vi.advanceTimersByTimeAsync(FLEET_TIMINGS.presenceRefreshMs * 3)
     expect(lists()).toBe(1)
-    expect(presences()).toBe(3)
+    expect(presences()).toBe(4)
+    expect(h.store.presence()).toEqual({ cap: 8, online: 1 })
     h.setList([row('a'), row('new')])
     await vi.advanceTimersByTimeAsync(FLEET_TIMINGS.presenceRefreshMs)
     expect(lists()).toBe(2)
@@ -556,6 +565,11 @@ describe('8 of N online', () => {
   it('counts the registry’s lines against the cap', () => {
     const fleet = [...Array.from({ length: 8 }, (_, i) => machine(`on${i}`, true)), machine('x', false), machine('y', false), machine('z', false)]
     expect(onlinePicture(fleet)).toMatchObject({ total: 11, online: 8, live: 8, capped: true, label: '8 of 11 online' })
+  })
+
+  it('takes cap and online from the registry when it has answered', () => {
+    const fleet = [machine('a', true), machine('b', false)]
+    expect(onlinePicture(fleet, { cap: 1, online: 1 })).toMatchObject({ cap: 1, online: 1, capped: true, label: '1 of 2 online' })
   })
 
   it('is not capped below the cap', () => {

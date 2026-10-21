@@ -40,9 +40,10 @@ export function TerminalLevel({ path }: { path: Required<StrataPath> }) {
     // One dive per agent, and one per RETRY.
   }, [path.machine, path.workspace, path.agent, attempt])
 
-  const failed = view.failed?.agentId === path.agent ? view.failed : null
+  // Ids are unique only within a machine: a dive is always machine AND agent.
+  const failed = view.failed?.machineId === path.machine && view.failed.agentId === path.agent ? view.failed : null
   if (!failed) {
-    const opening = view.opening?.agentId === path.agent
+    const opening = view.opening?.machineId === path.machine && view.opening.agentId === path.agent
     return (
       <div role="status" aria-live="polite" style={{ padding: 24, font: '14px/1.5 ui-monospace, monospace', opacity: 0.7 }}>
         {opening ? `Opening ${agent?.name ?? 'the agent'}…` : null}

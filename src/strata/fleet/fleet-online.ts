@@ -1,8 +1,9 @@
-// "8 of N online" (D6): the relay holds at most ONLINE_CAP desktop lines per
+// "8 of N online" (D6): the relay holds at most `cap` desktop lines per
 // account, so with more machines than that some are offline by the cap, not
-// by being switched off. The registry's `online` is the line; `live` is this
-// page's own stream, which can lag it by a reconnect.
-import type { StrataMachine } from '../../shared/strata'
+// by being switched off. The registry says both numbers (GET /v2/me/presence);
+// counting rows is only the fallback before its first answer. `live` is this
+// page's own streams, which can lag the lines by a reconnect.
+import type { FleetPresence, StrataMachine } from '../../shared/strata'
 import { ONLINE_CAP } from './fleet-store'
 
 export interface OnlinePicture {
@@ -16,8 +17,12 @@ export interface OnlinePicture {
   label: string
 }
 
-export const onlinePicture = (machines: readonly StrataMachine[], cap = ONLINE_CAP): OnlinePicture => {
-  const online = machines.filter((m) => m.online).length
+export const onlinePicture = (
+  machines: readonly StrataMachine[],
+  presence: Pick<FleetPresence, 'cap' | 'online'> | null = null
+): OnlinePicture => {
+  const cap = presence?.cap ?? ONLINE_CAP
+  const online = presence?.online ?? machines.filter((m) => m.online).length
   const live = machines.filter((m) => m.link === 'live').length
   return {
     total: machines.length,

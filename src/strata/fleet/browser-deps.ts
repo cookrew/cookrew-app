@@ -36,7 +36,7 @@ export const defaultFleetConfig = (where: Pick<Location, 'hostname' | 'search'> 
   const preview = LOOPBACK.has(where.hostname) && new URLSearchParams(where.search).get('fleet') !== 'registry'
   return {
     listUrl: '/v2/me/desktops',
-    presenceUrl: '/v2/me/desktops/presence',
+    presenceUrl: '/v2/me/presence',
     requireToken: !preview,
     seedCacheUrl: preview ? '/preview/cache.json' : null,
     ...FLEET_TIMINGS

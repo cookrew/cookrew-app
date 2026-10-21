@@ -11,7 +11,7 @@
 //   error       anything else; retried with backoff
 // A connect is ONE snapshot GET (it classifies — EventSource cannot read a
 // status) and then ONE stream, the machine's whole live budget for levels 0–2.
-import type { FleetMachine, LevelsSnapshot, MachineLink, StrataMachine } from '../../shared/strata'
+import type { FleetMachine, FleetPresence, LevelsSnapshot, MachineLink, StrataMachine } from '../../shared/strata'
 import { backoffDelay, OUTDATED_RECHECK_MS } from './backoff'
 import type { FleetCache } from './fleet-cache'
 import { isLevelsSnapshot, parseFleetList, parseFleetPresence, parseLevelsEvent } from './guards'
@@ -66,7 +66,7 @@ export interface FleetDeps {
 export interface FleetConfig {
   /** The registry's list, GET /v2/me/desktops: read at start and when presence names a stranger. */
   listUrl: string
-  /** GET /v2/me/desktops/presence: who is online, every desktop in one answer, on a timer. */
+  /** GET /v2/me/presence: who is online, every desktop in one answer with the account cap, on a timer. */
   presenceUrl: string
   /** Production: no token means unpaired. The preview's mock needs none. */
   requireToken: boolean
@@ -99,6 +99,8 @@ export interface FleetStore {
   stop(): void
   subscribe(listener: () => void): () => void
   getSnapshot(): StrataMachine[]
+  /** The registry's last word on the account's lines: cap and how many are online. Null before one. */
+  presence(): Pick<FleetPresence, 'cap' | 'online'> | null
   /** Why a link is where it is, for retry copy; null while live. */
   detail(machineId: string): LinkDetail | null
   /** A user's RETRY: backoff forgotten, connect now. */
@@ -158,6 +160,7 @@ export const createFleetStore = (deps: FleetDeps, config: FleetConfig): FleetSto
   let hideTimer: unknown = null
   let listTimer: unknown = null
   let listing: Promise<void> | null = null
+  let lines: Pick<FleetPresence, 'cap' | 'online'> | null = null
   let unsubscribe: Array<() => void> = []
 
   const notify = () => {
@@ -401,7 +404,12 @@ export const createFleetStore = (deps: FleetDeps, config: FleetConfig): FleetSto
       .then(async (response) => {
         const presence = response.status === 200 ? parseFleetPresence(await response.json()) : null
         if (!presence || !started || paused) return schedulePresence()
-        const named = new Map(presence.machines.map((m) => [m.id, m]))
+        if (lines?.cap !== presence.cap || lines?.online !== presence.online) {
+          lines = { cap: presence.cap, online: presence.online }
+          notify()
+        }
+        // A row means what its list row means at the same instant: laid over it as it stands.
+        const named = new Map(presence.desktops.map((d) => [d.id, d]))
         if (named.size !== order.length || !order.every((id) => named.has(id))) return loadList()
         const rows = order.flatMap((id) => {
           const entry = entries.get(id)
@@ -495,7 +503,7 @@ export const createFleetStore = (deps: FleetDeps, config: FleetConfig): FleetSto
       unsubscribe = [deps.visibility.onChange(onVisibility), ...(deps.onWake ? [deps.onWake(wake)] : [])]
       if (deps.visibility.hidden()) onVisibility()
       for (const id of order) connect(id)
-      void loadList().then(() => (config.seedCacheUrl ? seed(config.seedCacheUrl) : undefined))
+      void loadList().then(() => Promise.all([loadPresence(), config.seedCacheUrl ? seed(config.seedCacheUrl) : undefined]))
     },
     stop() {
       if (!started) return
@@ -523,6 +531,7 @@ export const createFleetStore = (deps: FleetDeps, config: FleetConfig): FleetSto
       }
       return snapshot
     },
+    presence: () => lines,
     detail: (machineId) => entries.get(machineId)?.detail ?? null,
     retry(machineId) {
       update(machineId, (e) => ({ ...e, attempt: 0, gaps: 0 }))

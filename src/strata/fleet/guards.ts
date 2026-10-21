@@ -39,14 +39,15 @@ export const parseFleetList = (body: unknown): FleetMachine[] => {
   })
 }
 
-/** GET /v2/me/desktops/presence, or null when it is not one. Bad rows are dropped. */
+/** GET /v2/me/presence, or null when it is not one. Bad rows are dropped. */
 export const parseFleetPresence = (body: unknown): FleetPresence | null => {
-  if (!isObject(body) || typeof body.at !== 'number' || !Array.isArray(body.machines)) return null
-  const machines = body.machines.filter(
-    (m): m is FleetPresence['machines'][number] =>
-      isObject(m) && isString(m.id) && typeof m.online === 'boolean' && isNumberOrNull(m.lastSeenAt)
+  if (!isObject(body) || typeof body.at !== 'number' || typeof body.cap !== 'number' || typeof body.online !== 'number') return null
+  if (!Array.isArray(body.desktops)) return null
+  const desktops = body.desktops.filter(
+    (d): d is FleetPresence['desktops'][number] =>
+      isObject(d) && isString(d.id) && typeof d.online === 'boolean' && isNumberOrNull(d.lastSeenAt)
   )
-  return { at: body.at, machines }
+  return { at: body.at, cap: body.cap, online: body.online, desktops }
 }
 
 export const isLevelsSnapshot = (value: unknown): value is LevelsSnapshot =>
@@ -59,7 +60,7 @@ export const isLevelsSnapshot = (value: unknown): value is LevelsSnapshot =>
   Array.isArray(value.workspaces) &&
   value.workspaces.every((w) => isObject(w) && isString(w.id) && Array.isArray(w.agents))
 
-const DELTA_TYPES = new Set(['agent', 'agent-gone', 'workspace', 'workspace-gone', 'focus'])
+const DELTA_TYPES = new Set(['agent', 'workspace', 'workspace-gone', 'focus'])
 
 /** One SSE `data:` payload, or null when it is not a levels event this version understands. */
 export const parseLevelsEvent = (data: string): LevelsEvent | null => {

@@ -118,7 +118,7 @@ const ATTENTION_RANK: Partial<Record<LevelsAgent['phase'], number>> = { waiting:
 export const createFleetIndex = (machines: readonly StrataMachine[]): FleetIndex => {
   const docs = docsOf(machines)
   return {
-    find(query, limit = DEFAULT_LIMIT) {
+    find(query, limit = DEFAULT_LIMIT, near) {
       const terms = wordsOf(query)
       if (terms.length === 0) return []
       const whole = terms.join(' ')
@@ -137,8 +137,12 @@ export const createFleetIndex = (machines: readonly StrataMachine[]): FleetIndex
         if (doc.name === whole) score += 0.5
         hits.push({ ...doc.hit, score: Math.round(score * 1000) / 1000 })
       }
-      // Array.prototype.sort is stable: equal scores keep fleet order.
-      return hits.sort((a, b) => b.score - a.score).slice(0, Math.max(0, limit))
+      // Ids are unique only within a machine, so nearness is machine AND id.
+      const nearness = (hit: AgentHit): number =>
+        !near?.machine || hit.machineId !== near.machine ? 0 : near.workspace && hit.workspaceId === near.workspace ? 2 : 1
+      // Equal scores lean toward where the user is (same workspace, then same
+      // machine), then keep fleet order: Array.prototype.sort is stable.
+      return hits.sort((a, b) => b.score - a.score || nearness(b) - nearness(a)).slice(0, Math.max(0, limit))
     },
     /**
      * Waiting on the owner, then replied, oldest first. Only machines whose
