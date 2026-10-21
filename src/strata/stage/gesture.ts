@@ -5,8 +5,15 @@
 export type Direction = 'in' | 'out'
 
 export const COMMIT_AT = 0.35
-/** Touch: a flick toward the target commits from any distance (px/ms). */
+/** Touch: still this fast toward the target at release commits from any distance (px/ms). */
 export const TOUCH_FLICK = 0.45
+/**
+ * Touch: a casual thumb flick commits too: felix fires on more than 48 px in
+ * under 350 ms (≈ 0.14 px/ms on average), lifted while still moving toward
+ * the target. Release speed alone misses it: a thumb slows before it lifts.
+ */
+export const FLICK_PX = 48
+export const FLICK_MS = 350
 /** Trackpad: deltas run hotter than fingers on glass. */
 export const WHEEL_FLICK = 1.2
 /** Touch travel for a whole flight, as a share of the stage width. */
@@ -38,12 +45,13 @@ export interface PanState {
   phase: 'pending' | 'locked' | 'rejected'
   x0: number
   y0: number
+  t0: number
   dir: Direction | null
   /** Last two samples, for release velocity. */
   last: ReadonlyArray<{ x: number; t: number }>
 }
 
-export const panStart = (x: number, y: number, t: number): PanState => ({ phase: 'pending', x0: x, y0: y, dir: null, last: [{ x, t }] })
+export const panStart = (x: number, y: number, t: number): PanState => ({ phase: 'pending', x0: x, y0: y, t0: t, dir: null, last: [{ x, t }] })
 
 export const panMove = (s: PanState, x: number, y: number, t: number): PanState => {
   if (s.phase === 'rejected') return s
@@ -70,6 +78,12 @@ export const panVelocity = (s: PanState): number => {
   const [a, b] = s.last
   const v = (b.x - a.x) / Math.max(1, b.t - a.t)
   return s.dir === 'in' ? -v : v
+}
+
+/** A short quick pan, lifted while still moving toward the target. */
+export const panFlick = (s: PanState): boolean => {
+  const end = s.last[s.last.length - 1]
+  return s.phase === 'locked' && panTravel(s) >= FLICK_PX && end.t - s.t0 <= FLICK_MS && panVelocity(s) > 0
 }
 
 // ── two-finger trackpad (wheel) ─────────────────────────────────────────────

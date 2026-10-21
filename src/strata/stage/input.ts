@@ -14,6 +14,7 @@ import {
   WHEEL_IDLE,
   WHEEL_IDLE_MS,
   WHEEL_SPAN,
+  panFlick,
   panMove,
   panProgress,
   panStart,
@@ -35,8 +36,11 @@ export interface GestureSink {
   begin(dir: Direction): GestureMode
   /** `travel` in px toward `dir` (negative = back past the start); `progress` 0..1. */
   move(travel: number, progress: number): void
-  /** `velocity` in px/ms toward the target; `flick` the commit speed and `span` the px of a whole flight for this input. */
-  release(progress: number, velocity: number, flick: number, span: number): void
+  /**
+   * `velocity` in px/ms toward the target; `flick` the commit speed and `span` the px of a whole flight
+   * for this input; `flicked` = a touch flick (panFlick), which commits from any distance.
+   */
+  release(progress: number, velocity: number, flick: number, span: number, flicked: boolean): void
   /** At the terminal level only pans from the left edge zone count. */
   edgeOnly(): boolean
 }
@@ -74,7 +78,7 @@ export const useStageInput = (rootRef: RefObject<HTMLElement>, sinkRef: RefObjec
       } else if (out.type === 'move' && wheelMode && wheelMode !== 'busy') {
         s.move(out.travel, wheelProgress(out.travel))
       } else if (out.type === 'release' && wheelMode) {
-        if (wheelMode !== 'busy') s.release(wheelProgress(out.travel), out.velocity, WHEEL_FLICK, WHEEL_SPAN)
+        if (wheelMode !== 'busy') s.release(wheelProgress(out.travel), out.velocity, WHEEL_FLICK, WHEEL_SPAN, false)
         wheelMode = null
       }
     }
@@ -140,8 +144,9 @@ export const useStageInput = (rootRef: RefObject<HTMLElement>, sinkRef: RefObjec
       const s = sink()
       if (!s || panMode === 'busy') return
       // The OS took the touch (iOS edge swipe, a scroll): spring back.
-      const velocity = e.type === 'pointercancel' ? -Infinity : panVelocity(ended)
-      s.release(panProgress(ended, width()), velocity, TOUCH_FLICK, TOUCH_SPAN * width())
+      const cancelled = e.type === 'pointercancel'
+      const velocity = cancelled ? -Infinity : panVelocity(ended)
+      s.release(panProgress(ended, width()), velocity, TOUCH_FLICK, TOUCH_SPAN * width(), !cancelled && panFlick(ended))
     }
 
     root.addEventListener('wheel', onWheel, { passive: false })

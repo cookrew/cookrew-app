@@ -16,6 +16,11 @@ const parse = (t: string) => {
   return { s: Number(m[3]), d: { x: Number(m[1]), y: Number(m[2]) } }
 }
 const apply = (t: string, r: Rect): Rect => applyToRect(parse(t), r)
+/** A keyframe's transform, narrowed: Keyframe values are string | number | null | undefined. */
+const tf = (k: Keyframe): string => {
+  if (typeof k.transform !== 'string') throw new Error(`keyframe without a transform string: ${JSON.stringify(k)}`)
+  return k.transform
+}
 const sameRect = (a: Rect, b: Rect, eps = 1) => {
   close(a.x, b.x, eps)
   close(a.y, b.y, eps)
@@ -259,8 +264,8 @@ describe('timeline: dive-through', () => {
     const at = offsets.findIndex((o, i) => i > 0 && o === offsets[i - 1])
     expect(f.coarse[at - 1].opacity).toBe(0)
     expect(f.coarse[at].opacity).toBe(1)
-    expect(parse(f.scenes[1][at - 1].transform).s).toBeCloseTo(1, 4)
-    expect(parse(f.scenes[1][at].transform).s).toBeCloseTo(1, 4)
+    expect(parse(tf(f.scenes[1][at - 1])).s).toBeCloseTo(1, 4)
+    expect(parse(tf(f.scenes[1][at])).s).toBeCloseTo(1, 4)
   })
 
   it('rise is the dive reversed', () => {

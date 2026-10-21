@@ -9,13 +9,14 @@ import type { StageProps } from '../seams'
 import { SceneAnchorsProvider, createRegistry, type AnchorRegistry } from './anchors'
 import { SPRING, cssOf } from './easing'
 import { focusAfterLanding } from './focus'
+import type { Framing } from './framing'
 import { decide, rubberBand, type Direction } from './gesture'
 import { useStageInput, type GestureSink } from './input'
 import { measureFlight } from './measure'
 import { browserAnimatedNow } from './nav-signal'
 import { pathKey, planFlight, samePath } from './plan'
 import { createRunner, type Landing, type Runner } from './runner'
-import { initialStage, mountedScenes, onLand, onPath, onScrubStart, type Flight, type StageState } from './stage-state'
+import { initialStage, mountedScenes, onLand, onPath, onScrubStart, onWarm, type Flight, type StageState } from './stage-state'
 import { recordLanding, recordTakeoff } from './telemetry'
 import { durationOf, easingOf } from './timeline'
 import './stage.css'
@@ -33,6 +34,8 @@ const LEVEL_LABEL = { machines: 'Machines', workspaces: 'Workspaces', agents: 'A
 const RUBBER_HOME_MS = 300
 const EDGE_SHADE_MS = 120
 const MAX_SPEED = 3
+/** A pre-mounted level no click claimed is dropped after this. */
+const WARM_MS = 500
 
 export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageProps) {
   const [st, setSt] = useState<StageState>(() => initialStage(path))
@@ -50,7 +53,7 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
   const sceneEls = useRef(new Map<string, HTMLElement>())
   const registries = useRef(new Map<string, AnchorRegistry>())
   const sceneRefs = useRef(new Map<string, (el: HTMLDivElement | null) => void>())
-  const scrollMemo = useRef(new Map<string, number>())
+  const framing = useRef<Framing>(new Map())
   const activeRef = useRef<Active | null>(null)
   const gestureRef = useRef<Gesture | null>(null)
   const landedRef = useRef<{ flight: Flight; at: Landing } | null>(null)
@@ -109,7 +112,7 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
       previous.runner.release()
       recordLanding(previous.flight.id, 'replaced')
     }
-    const lookup = { el: (k: string) => sceneEls.current.get(k), registry: (k: string) => registries.current.get(k), scroll: scrollMemo.current }
+    const lookup = { el: (k: string) => sceneEls.current.get(k), registry: (k: string) => registries.current.get(k), framing }
     const geometry = measureFlight(root, flight.plan, lookup, propsRef.current.reducedMotion)
     const layers = flight.plan.scenes.map((p) => sceneEls.current.get(pathKey(p))).filter((el): el is HTMLElement => !!el)
     if (layers.length !== flight.plan.scenes.length) return void land(flight.id, 'to')
@@ -223,7 +226,7 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
       gestureRef.current = { ...g, x }
       el.style.transform = `translateX(${x}px)`
     },
-    release(progress, velocity, flick, span) {
+    release(progress, velocity, flick, span, flicked) {
       const g = gestureRef.current
       if (!g) return
       if (g.mode === 'rubber') {
@@ -235,7 +238,8 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
         return
       }
       const v = Math.min(MAX_SPEED, Math.max(-MAX_SPEED, velocity))
-      gestureRef.current = { ...g, p: progress, release: { commit: decide(progress, v, flick), speed: v / Math.max(1, span) } }
+      const commit = flicked || decide(progress, v, flick)
+      gestureRef.current = { ...g, p: progress, release: { commit, speed: Math.max(0, v) / Math.max(1, span) } }
       settleScrub()
     }
   }
@@ -248,6 +252,32 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
     sinkRef.current = sink
   })
   useStageInput(rootRef, sinkRef)
+
+  // Pre-mount on pointer-down: the click lands ~100 ms later and finds the next level already built.
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    let drop = 0
+    const onDown = (e: PointerEvent) => {
+      if (!e.isPrimary || e.button !== 0 || stateRef.current.flight) return
+      const target = propsRef.current.inTarget()
+      window.clearTimeout(drop)
+      if (target) setSt((s) => onWarm(s, target))
+    }
+    const onUp = () => {
+      window.clearTimeout(drop)
+      drop = window.setTimeout(() => setSt((s) => onWarm(s, null)), WARM_MS)
+    }
+    root.addEventListener('pointerdown', onDown, { capture: true })
+    root.addEventListener('pointerup', onUp, { capture: true })
+    root.addEventListener('pointercancel', onUp, { capture: true })
+    return () => {
+      window.clearTimeout(drop)
+      root.removeEventListener('pointerdown', onDown, { capture: true })
+      root.removeEventListener('pointerup', onUp, { capture: true })
+      root.removeEventListener('pointercancel', onUp, { capture: true })
+    }
+  }, [])
 
   // The page itself must never turn a horizontal overscroll into history navigation.
   useEffect(() => {
@@ -265,8 +295,19 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
       </div>
       {scenes.map((p) => {
         const key = pathKey(p)
+        const warm = !!state.warm && pathKey(state.warm) === key && !state.flight && key !== restKey
         return (
-          <div key={key} ref={sceneRef(key)} className="glide-scene" role="region" aria-label={LEVEL_LABEL[levelOf(p)]} tabIndex={-1} data-scene={key}>
+          <div
+            key={key}
+            ref={sceneRef(key)}
+            className="glide-scene"
+            role="region"
+            aria-label={LEVEL_LABEL[levelOf(p)]}
+            aria-hidden={warm || undefined}
+            tabIndex={-1}
+            data-scene={key}
+            data-warm={warm ? '' : undefined}
+          >
             <SceneSlot path={p} scene={scene} registry={registryOf(key)} />
           </div>
         )

@@ -5,6 +5,7 @@ import {
   WHEEL_FLICK,
   WHEEL_IDLE,
   decide,
+  panFlick,
   panMove,
   panProgress,
   panStart,
@@ -38,6 +39,57 @@ describe('touch pan', () => {
   it('reports velocity toward the target', () => {
     const s = panMove(panMove(panStart(300, 400, 0), 280, 400, 16), 240, 400, 32)
     expect(panVelocity(s)).toBeCloseTo(2.5)
+  })
+})
+
+describe('touch flick (felix: > 48 px in < 350 ms)', () => {
+  const pan = (points: Array<[number, number]>) => points.reduce((s, [x, t]) => panMove(s, x, 400, t), panStart(300, 400, 0))
+
+  it('a casual thumb flick commits: 60 px in 250 ms, lifted while moving', () => {
+    const s = pan([
+      [290, 40],
+      [280, 90],
+      [265, 150],
+      [250, 200],
+      [240, 250]
+    ])
+    // It is under 35% of a phone's span and slower than TOUCH_FLICK at release...
+    expect(panProgress(s, 390)).toBeLessThan(0.35)
+    expect(panVelocity(s)).toBeLessThan(TOUCH_FLICK)
+    expect(decide(panProgress(s, 390), panVelocity(s), TOUCH_FLICK)).toBe(false)
+    // ...and still a flick.
+    expect(panFlick(s)).toBe(true)
+  })
+
+  it('the same 60 px dragged slowly is not a flick, and springs back', () => {
+    const s = pan([
+      [290, 200],
+      [270, 500],
+      [250, 800],
+      [240, 900]
+    ])
+    expect(panFlick(s)).toBe(false)
+    expect(decide(panProgress(s, 390), panVelocity(s), TOUCH_FLICK)).toBe(false)
+  })
+
+  it('a flick that stopped or turned back before lifting is not a flick', () => {
+    const stopped = pan([
+      [280, 60],
+      [245, 160],
+      [240, 220],
+      [240, 260]
+    ])
+    expect(panFlick(stopped)).toBe(false)
+    const back = pan([
+      [270, 60],
+      [235, 160],
+      [245, 230]
+    ])
+    expect(panFlick(back)).toBe(false)
+  })
+
+  it('under 48 px is never a flick', () => {
+    expect(panFlick(pan([[285, 50], [262, 120]]))).toBe(false)
   })
 })
 

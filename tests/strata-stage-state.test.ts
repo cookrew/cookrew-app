@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { StrataPath } from '../src/shared/strata'
 import { isAncestor, pathKey, planFlight, samePath } from '../src/strata/stage/plan'
-import { initialStage, mountedScenes, onLand, onPath, onScrubStart, type StageState } from '../src/strata/stage/stage-state'
+import { initialStage, mountedScenes, onLand, onPath, onScrubStart, onWarm, type StageState } from '../src/strata/stage/stage-state'
 
 const M: StrataPath = { machine: 'm' }
 const W: StrataPath = { machine: 'm', workspace: 'w' }
@@ -33,7 +33,7 @@ describe('plan', () => {
     const plan = planFlight({}, A)
     if (plan.kind === 'none') throw new Error('no plan')
     expect(keys(plan.scenes)).toEqual(keys([{}, M, W, A]))
-    expect(plan.steps.map((s) => s.anchor[0])).toEqual(['portal:m', 'workspace:w', 'agent:a'])
+    expect(plan.steps.map((s) => s.anchor[0])).toEqual(['portal:m', 'workspace:m/w', 'agent:m/a'])
     expect(plan.steps[0].anchor[1]).toBe('machine:m')
     expect(plan.steps[2].content).toEqual(['terminal'])
   })
@@ -116,6 +116,34 @@ describe('stage state', () => {
   it('no scrub while flying', () => {
     const s1: StageState = onPath(at({}), M, false)
     expect(onScrubStart(s1, W)).toBe(s1)
+  })
+
+  it('pointer-down pre-mounts the target; the click flies with it already mounted', () => {
+    const warm = onWarm(at(W), A)
+    expect(keys(mountedScenes(warm))).toEqual(keys([W, A]))
+    const flying = onPath(warm, A, false)
+    expect(flying.warm).toBeNull()
+    expect(keys(mountedScenes(flying))).toEqual(keys([W, A]))
+  })
+
+  it('a pre-mounted level no click claimed is dropped; nothing pre-mounts mid-flight or twice', () => {
+    expect(mountedScenes(onWarm(onWarm(at(W), A), null)).map(pathKey)).toEqual([pathKey(W)])
+    const flying = onPath(at({}), M, false)
+    expect(onWarm(flying, W)).toBe(flying)
+    const warm = onWarm(at(W), A)
+    expect(onWarm(warm, { ...A })).toBe(warm)
+    expect(onWarm(at(W), W)).toEqual(at(W))
+  })
+
+  it('a click elsewhere than the pre-mounted level drops it at take-off', () => {
+    const s = onPath(onWarm(at(W), A), B, false)
+    expect(keys(mountedScenes(s))).toEqual(keys([W, B]))
+  })
+
+  it('a scrub takes the pre-mounted level along', () => {
+    const s = onScrubStart(onWarm(at(W), A), A)
+    expect(s.warm).toBeNull()
+    expect(keys(mountedScenes(s))).toEqual(keys([W, A]))
   })
 
   it('a hop keeps its target on top', () => {

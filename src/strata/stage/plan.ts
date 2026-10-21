@@ -1,6 +1,6 @@
 // Which flight a path change is (motion.html §3): in / out one level, dive /
 // rise through several, a hop between unrelated stops, or nothing. Pure.
-import { levelOf, type AnchorId, type StrataLevel, type StrataPath } from '../../shared/strata'
+import { anchorOf, levelOf, type AnchorId, type StrataLevel, type StrataPath } from '../../shared/strata'
 
 const DEPTH: Record<StrataLevel, number> = { machines: 0, workspaces: 1, agents: 2, terminal: 3 }
 
@@ -37,9 +37,11 @@ export interface Step {
 
 export const stepInto = (parent: StrataPath, child: StrataPath): Step => {
   const depth = depthOf(parent)
-  if (depth === 0) return { parent, child, anchor: [`portal:${child.machine}`, `machine:${child.machine}`], content: [`portal:${child.machine}`], opens: false }
-  if (depth === 1) return { parent, child, anchor: [`workspace:${child.workspace}`], content: [`workspace:${child.workspace}`], opens: false }
-  return { parent, child, anchor: [`agent:${child.agent}`], content: ['terminal'], opens: true }
+  // Ids are unique only within a machine: every anchor below level 0 comes from anchorOf, never by hand.
+  const item = anchorOf({ ...child, machine: child.machine ?? '' })
+  if (depth === 0) return { parent, child, anchor: [`portal:${child.machine}`, item], content: [`portal:${child.machine}`], opens: false }
+  if (depth === 1) return { parent, child, anchor: [item], content: [item], opens: false }
+  return { parent, child, anchor: [item], content: ['terminal'], opens: true }
 }
 
 export type FlightKind = 'in' | 'out' | 'dive' | 'rise' | 'hop'

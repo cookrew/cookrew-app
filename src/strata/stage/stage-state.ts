@@ -25,10 +25,20 @@ export interface StageState {
   flight: Flight | null
   /** Scenes of a replaced flight, kept mounted until the new one lands. */
   carry: StrataPath[]
+  /** Pre-mounted, unseen, on pointer-down: where a click is about to go (paid before the click, not after). */
+  warm: StrataPath | null
   nextId: number
 }
 
-export const initialStage = (path: StrataPath): StageState => ({ rest: path, seen: path, flight: null, carry: [], nextId: 1 })
+export const initialStage = (path: StrataPath): StageState => ({ rest: path, seen: path, flight: null, carry: [], warm: null, nextId: 1 })
+
+/** Pre-mount `target` (or drop the pre-mounted level with null); only at rest. */
+export const onWarm = (st: StageState, target: StrataPath | null): StageState => {
+  if (st.flight) return st
+  if (target === null) return st.warm ? { ...st, warm: null } : st
+  if (planFlight(st.rest, target).kind === 'none' || (st.warm && samePath(st.warm, target))) return st
+  return { ...st, warm: target }
+}
 
 const fly = (st: StageState, plan: ActivePlan, mode: Flight['mode'], replaces: Flight['replaces'], carry: StrataPath[]): StageState => ({
   ...st,
@@ -43,7 +53,8 @@ const fly = (st: StageState, plan: ActivePlan, mode: Flight['mode'], replaces: F
  */
 export const onPath = (st: StageState, path: StrataPath, browserAnimated: boolean): StageState => {
   if (samePath(st.seen, path)) return st
-  const base = { ...st, seen: path }
+  // Any take-off consumes the pre-mounted level: if it is the target it is already in the flight's scenes.
+  const base = { ...st, seen: path, warm: null }
   const current = st.flight
 
   if (!current) {
@@ -75,7 +86,7 @@ export const onPath = (st: StageState, path: StrataPath, browserAnimated: boolea
 export const onScrubStart = (st: StageState, target: StrataPath): StageState => {
   if (st.flight) return st
   const plan = planFlight(st.rest, target)
-  return plan.kind === 'none' ? st : fly(st, plan, 'scrub', null, [])
+  return plan.kind === 'none' ? st : fly({ ...st, warm: null }, plan, 'scrub', null, [])
 }
 
 /** The flight `id` finished at its end ('to') or snapped back to its start ('from'). */
@@ -89,7 +100,7 @@ export const onLand = (st: StageState, id: number, at: 'to' | 'from'): StageStat
 
 /** Scenes to mount, deepest on top (a hop keeps its target above). */
 export const mountedScenes = (st: StageState): StrataPath[] => {
-  const all = [...st.carry, ...(st.flight?.plan.scenes ?? []), st.rest]
+  const all = [...st.carry, ...(st.flight?.plan.scenes ?? []), st.rest, ...(st.warm ? [st.warm] : [])]
   const unique = [...new Map(all.map((p) => [pathKey(p), p])).values()]
   return unique
     .map((p, i) => ({ p, i }))

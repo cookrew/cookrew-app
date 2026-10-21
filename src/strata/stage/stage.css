@@ -46,6 +46,12 @@
   outline: none;
 }
 
+/* Pre-mounted on pointer-down, waiting for the click: built and laid out, never seen or hit. */
+.glide-scene[data-warm] {
+  opacity: 0;
+  pointer-events: none;
+}
+
 .glide-stage[data-flying] .glide-scene {
   pointer-events: none;
 }

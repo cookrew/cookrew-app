@@ -3,7 +3,7 @@
 // levels and figures lanes land. Scenes are transparent: the paper is the
 // stage's.
 import type { CSSProperties, ReactNode } from 'react'
-import type { AnchorId, FigureArt, LevelsAgent, LevelsWorkspace, Rect, StrataMachine, StrataPath } from '../../../shared/strata'
+import { anchorOf, type AnchorId, type FigureArt, type LevelsAgent, type LevelsWorkspace, type Rect, type StrataMachine, type StrataPath } from '../../../shared/strata'
 import { standInFigures as kit } from '../../stand-in/figures'
 import { useAnchor } from '../anchors'
 import { pathKey } from '../plan'
@@ -70,7 +70,7 @@ export function MachinesScene({ machines, v, go }: SceneProps) {
         const waiting = (m.levels?.workspaces ?? []).flatMap((w) => w.agents.filter((a) => a.phase === 'waiting').map((a) => ({ w, a }))).slice(0, 3)
         return (
           <div key={m.id}>
-            <Item anchor={`machine:${m.id}`} level={{}} id={m.id} first={i === 0} rect={rects[i]} label={`${m.name}, ${m.profile?.kind ?? 'unknown'}`} onPick={() => go({ machine: m.id })}>
+            <Item anchor={anchorOf({ machine: m.id })} level={{}} id={m.id} first={i === 0} rect={rects[i]} label={`${m.name}, ${m.profile?.kind ?? 'unknown'}`} onPick={() => go({ machine: m.id })}>
               <Fig art={art} rect={{ x: 0, y: 0, w: rects[i].w, h: rects[i].h }} />
             </Item>
             <Anchor id={`portal:${m.id}`} rect={portal} className="portal">
@@ -132,7 +132,7 @@ function WorkspacesBody({ machine, v, mini, go }: { machine: StrataMachine; v: V
           mini || !go ? (
             <Fig key={a.id} art={avatarArt(a, 'small')} rect={r} />
           ) : (
-            <AvatarPick key={a.id} agent={a} rect={r} size="small" onPick={() => go({ machine: machine.id, workspace: w.id, agent: a.id })} />
+            <AvatarPick key={a.id} machine={machine.id} workspace={w.id} agent={a} rect={r} size="small" onPick={() => go({ machine: machine.id, workspace: w.id, agent: a.id })} />
           )
         )
         if (mini || !go) {
@@ -145,7 +145,7 @@ function WorkspacesBody({ machine, v, mini, go }: { machine: StrataMachine; v: V
         }
         return (
           <div key={w.id}>
-            <Item anchor={`workspace:${w.id}`} level={level} id={w.id} first={i === 0} rect={rects[i]} label={`${w.name}, ${w.agents.length} agents`} className="container" onPick={() => go({ machine: machine.id, workspace: w.id })}>
+            <Item anchor={anchorOf({ machine: machine.id, workspace: w.id })} level={level} id={w.id} first={i === 0} rect={rects[i]} label={`${w.name}, ${w.agents.length} agents`} className="container" onPick={() => go({ machine: machine.id, workspace: w.id })}>
               <Fig art={arts[i]} rect={{ x: 0, y: 0, w: rects[i].w, h: rects[i].h }} />
             </Item>
             {avatars}
@@ -161,8 +161,8 @@ function WorkspacesBody({ machine, v, mini, go }: { machine: StrataMachine; v: V
 
 const avatarArt = (a: LevelsAgent, size: 'small' | 'full') => kit.avatar({ phase: a.phase, source: a.phaseSource, harness: a.harness, size })
 
-function AvatarPick({ agent, rect, size, onPick }: { agent: LevelsAgent; rect: Rect; size: 'small' | 'full'; onPick: () => void }) {
-  const ref = useAnchor(`agent:${agent.id}`)
+function AvatarPick({ machine, workspace, agent, rect, size, onPick }: { machine: string; workspace: string; agent: LevelsAgent; rect: Rect; size: 'small' | 'full'; onPick: () => void }) {
+  const ref = useAnchor(anchorOf({ machine, workspace, agent: agent.id }))
   return (
     <button ref={ref} className="avatar" style={box(rect)} aria-label={`${agent.name}, ${agent.phase}: dive into its terminal`} title={[agent.name, agent.task].filter(Boolean).join(' · ')} onClick={onPick}>
       <span className="fig" dangerouslySetInnerHTML={{ __html: avatarArt(agent, size).svg }} />
@@ -181,12 +181,12 @@ export function AgentsScene({ machine, workspace, v, go }: { machine: StrataMach
   const named = seats[0] ? seats[0].r.w >= 44 : false
   return (
     <div className="level">
-      <Anchor id={`workspace:${workspace.id}`} rect={rect}>
+      <Anchor id={anchorOf({ machine: machine.id, workspace: workspace.id })} rect={rect}>
         <Fig art={art} rect={{ x: 0, y: 0, w: rect.w, h: rect.h }} />
       </Anchor>
       {seats.map(({ a, r }, j) => (
         <div key={a.id}>
-          <Item anchor={`agent:${a.id}`} level={level} id={a.id} first={j === 0} rect={r} label={`${a.name}, ${a.phase}`} className="avatar" onPick={() => go({ ...level, agent: a.id })}>
+          <Item anchor={anchorOf({ ...level, agent: a.id })} level={level} id={a.id} first={j === 0} rect={r} label={`${a.name}, ${a.phase}`} className="avatar" onPick={() => go({ ...level, agent: a.id })}>
             <span className="fig" dangerouslySetInnerHTML={{ __html: avatarArt(a, 'full').svg }} />
           </Item>
           {named && (
