@@ -1,7 +1,7 @@
 // Every figure in every state, at every size: the matrices the owner reviews.
 // Container names here are invented; real ones only ever arrive at runtime.
 import type { AgentPhase, Harness, MachineKind, MachineLink, PhaseSource } from '../../shared/strata'
-import { ARCHETYPES, avatarArt, cardArt, containerArt, machineArt, type Archetype } from '../figures'
+import { ARCHETYPES, avatarArt, cardArt, containerArt, desktopFormOf, machineArt, type Archetype } from '../figures'
 import type { AvatarSize } from '../seams'
 import { elementsOf, kb, record } from './stats'
 
@@ -15,6 +15,7 @@ const STATES: Array<{ link: MachineLink; reached?: boolean; label: string }> = [
   { link: 'error', label: 'error' },
   { link: 'offline', reached: false, label: 'never reached' }
 ]
+const DESKTOP_LABELS = ['Mac mini', 'Mac Studio', 'Mac Pro', 'iMac (24-inch)']
 const SAMPLE_NAMES: Record<Archetype, string> = {
   workbench: 'Monorepo',
   bookshelf: 'Paper Notes',
@@ -50,7 +51,15 @@ export const machinesHtml = (): string =>
             }).join('')}</div>`
         ).join('')
     )
-    .join('')
+    .join('') +
+  '<h3>desktop forms <span class="muted">· from the profile label (proposed seam field: model)</span></h3><div class="grid">' +
+  DESKTOP_LABELS.flatMap((model) =>
+    (['live', 'offline'] as const).map((link) => {
+      const art = record('machine', `desktop ${model}/${link}`, machineArt({ kind: 'desktop', link, model }))
+      return cell(at(art.svg, 240), `${model} · ${desktopFormOf(model)} · ${link} · ${kb(art.svg.length)}`)
+    })
+  ).join('') +
+  '</div>'
 
 export const containersHtml = (): string =>
   '<h2 id="containers">Containers <span class="muted">· every archetype at 1, 5, 14, 33, 48 and 60 seats (+K past 48)</span></h2>' +

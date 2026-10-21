@@ -3,7 +3,7 @@
 // dots in its portal, then every workspace as its container with the agents
 // seated, a hover summary, and attachment cards that fan out. Timed cold.
 import type { FleetMachine, LevelsAgent, LevelsSnapshot, LevelsWorkspace, MachineLink } from '../../shared/strata'
-import { colorFigures, machineArt, portalSkew } from '../figures'
+import { colorFigures, portalSkew } from '../figures'
 import { escapeText } from '../figures/iso/pen'
 import { kb, record } from './stats'
 
@@ -30,9 +30,9 @@ const load = async (): Promise<Seen[]> => {
 const svgAt = (svg: string, w: number) => svg.replace('<svg ', `<svg width="${w.toFixed(1)}" `)
 
 const portalHtml = (m: Seen, size: number): string => {
-  // `reached` is not in the FigureKit seam yet (asked of Revel): call the kit's machine directly for it
-  const input = { kind: m.row.profile?.kind ?? 'unknown', link: m.link, reached: m.levels !== null || m.link === 'live' }
-  const art = record('machine', `${input.kind}/${m.link}`, machineArt(input))
+  // reached as the levels scene decides it: someone saw it once, or a snapshot exists
+  const input = { kind: m.row.profile?.kind ?? 'unknown', link: m.link, reached: m.row.lastSeenAt !== null || m.levels !== null }
+  const art = record('machine', `${input.kind}/${m.link}`, colorFigures.machine(input))
   const k = size / art.viewBox.w
   const skew = portalSkew(art.anchors.portal)
   const p = art.anchors.portal

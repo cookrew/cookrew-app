@@ -13,9 +13,14 @@ export interface MachineInput {
   link: MachineLink
   /**
    * False = registered but never reached (no snapshot, live or cached): drawn
-   * as an outline. Not in the FigureKit seam yet; defaults to true.
+   * as an outline. Defaults to true.
    */
   reached?: boolean
+  /**
+   * The hardware's label or model id ('Mac mini', 'iMac (24-inch)', 'Mac14,3'),
+   * for the desktop form. Not in the FigureKit seam (proposed); absent = a mini.
+   */
+  model?: string | null
 }
 
 export type MachineState = 'online' | 'connecting' | 'unpaired' | 'outdated' | 'offline' | 'error' | 'never'

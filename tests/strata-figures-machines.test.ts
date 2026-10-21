@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MachineKind, MachineLink } from '../src/shared/strata'
-import { MACHINE_VIEW, machineArt, portalSkew, stateOf } from '../src/strata/figures/machine'
+import { desktopFormOf, MACHINE_VIEW, machineArt, portalSkew, stateOf } from '../src/strata/figures/machine'
 
 const KINDS: MachineKind[] = ['laptop', 'desktop', 'server', 'cloud', 'vm', 'cluster', 'sandbox', 'unknown']
 const LINKS: MachineLink[] = ['unpaired', 'connecting', 'live', 'offline', 'outdated', 'error']
@@ -47,6 +47,28 @@ describe('machine figures', () => {
     expect(offline).not.toContain('#76a0e2')
     expect(never).not.toMatch(/fill="#/)
     expect(never).toContain('stroke-dasharray')
+  })
+
+  it('reads the desktop form from the model or label', () => {
+    expect(desktopFormOf('Mac mini')).toBe('mini')
+    expect(desktopFormOf('Mac14,3')).toBe('mini')
+    expect(desktopFormOf(null)).toBe('mini')
+    expect(desktopFormOf('Mac Studio')).toBe('mini')
+    expect(desktopFormOf('Mac Pro')).toBe('tower')
+    expect(desktopFormOf('MacPro7,1')).toBe('tower')
+    expect(desktopFormOf('Precision 3660 Tower')).toBe('tower')
+    expect(desktopFormOf('iMac (24-inch, 2023)')).toBe('all-in-one')
+    expect(desktopFormOf('iMac21,1')).toBe('all-in-one')
+  })
+
+  it('draws each desktop form differently, all within budget with a portal', () => {
+    const arts = ['Mac mini', 'Mac Studio', 'Mac Pro', 'iMac'].map((model) => machineArt({ kind: 'desktop', link: 'live', model }))
+    expect(new Set(arts.map((a) => a.svg)).size).toBe(4)
+    for (const art of arts) {
+      expect(art.svg.length).toBeLessThanOrEqual(MACHINE_BUDGET)
+      expect(art.anchors.portal.w).toBeGreaterThan(art.viewBox.w * 0.16)
+    }
+    expect(machineArt({ kind: 'desktop', link: 'live' }).svg).toBe(machineArt({ kind: 'desktop', link: 'live', model: 'Mac mini' }).svg)
   })
 
   it('reads the link into a state', () => {

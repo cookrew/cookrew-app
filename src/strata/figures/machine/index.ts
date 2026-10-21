@@ -6,18 +6,19 @@ import { finish, frameFit } from '../iso/frame'
 import type { V3 } from '../iso/geom'
 import { hash, memo } from '../iso/memo'
 import { sandbox, vm } from './boxed'
-import { desktop, laptop, unknown } from './desk'
+import { laptop, unknown } from './desk'
+import { desktopModel } from './desktop'
 import { lookOf, stateOf, type MachineInput, type MachineModel } from './look'
 import { cloud, cluster, server } from './rack'
 
 export type { MachineInput, MachineState } from './look'
 export { stateOf } from './look'
+export { desktopFormOf, type DesktopForm } from './desktop'
 
 export const MACHINE_VIEW = { w: 240, h: 180 } as const
 
-const MODELS: Record<MachineKind, MachineModel> = {
+const MODELS: Record<Exclude<MachineKind, 'desktop'>, MachineModel> = {
   laptop,
-  desktop,
   server,
   cloud,
   vm,
@@ -37,7 +38,7 @@ const boxOf = (pts: readonly V3[]): V3[] => {
 const INK_K = 0.85
 
 export const machineArt = memo((input: MachineInput): FigureArt => {
-  const model = MODELS[input.kind] ?? MODELS.unknown
+  const model = input.kind === 'desktop' ? desktopModel(input.model) : (MODELS[input.kind] ?? MODELS.unknown)
   const look = lookOf(stateOf(input))
   const framed = frameFit({
     vw: MACHINE_VIEW.w,

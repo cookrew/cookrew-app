@@ -40,40 +40,47 @@ export const server: MachineModel = {
   }
 }
 
-// ── cloud: a server on a cloud plinth ───────────────────────────────────────
-const PLINTH = 6
-/** Puffs: x, y, radius, height. The tall ones make the flat top the server stands on. */
-const PUFFS: Array<[number, number, number, number]> = [
-  [12, 12, 11, PLINTH],
-  [14, 30, 11, PLINTH],
-  [26, 21, 11, PLINTH],
-  [2, 22, 7, PLINTH - 1.6],
-  [28, 37, 6.5, PLINTH - 1.6],
-  [32, 6, 6, PLINTH - 2]
-]
+// ── cloud: a server nestled in a heap of cloud puffs ────────────────────────
+/** The server's floor: it rests on the back puffs; the front ones hide its base. */
+const SEAT_Z = 7
 const BOX = { x0: 10, x1: 26, y0: 6, y1: 36, h: 21 }
+/** Puffs: x, y, z of the centre, radius. Back row first; the front row covers the box's base, never the portal. */
+const BACK_PUFFS: Array<[number, number, number, number]> = [
+  [6, 9, 6.5, 8],
+  [4, 22, 8, 9.5],
+  [6, 35, 6.5, 8],
+  [17, 21, 4, 9],
+  [16, 42, 5, 7],
+  [17, 0, 5, 6.5]
+]
+const FRONT_PUFFS: Array<[number, number, number, number]> = [
+  [29, 9, 4.5, 5.5],
+  [30.5, 21, 4.4, 6],
+  [29, 33, 4.5, 5.5]
+]
 
 export const cloud: MachineModel = {
   shadowZ: 0,
-  fit: [[1, -1, 0], [38, 44, 0], [-5, 22, 0], [BOX.x0, BOX.y0, PLINTH + BOX.h], [BOX.x0, BOX.y1, PLINTH + BOX.h]],
+  fit: [[-3, -5, 0], [36, 47, SEAT_Z + BOX.h]],
   draw(p, look) {
     const fluff = look.mat(CLOUD)
     const m = look.mat(PALS.mint)
-    const ring = ([x, y, r]: [number, number, number, number], z: number) => on(PZ(z), ellUV(x, y, r, r, 12))
-    const puffPts = PUFFS.flatMap((q) => [...ring(q, 0), ...ring(q, q[3])])
-    const prof = rrUV(BOX.y0, PLINTH, BOX.y1, PLINTH + BOX.h, 2, 3)
+    const puff = ([x, y, z, r]: [number, number, number, number]) => ({ at: [x, y, z] as V3, svg: p.sphere([x, y, z], r, fluff, { w: 2 }) })
+    const all = [...BACK_PUFFS, ...FRONT_PUFFS]
+    const footprint = all.flatMap(([x, y, z, r]) => [...on(PZ(0), ellUV(x, y, r * 0.8, r * 0.8, 8)), [x, y, z + r] as V3])
+    const prof = rrUV(BOX.y0, SEAT_Z, BOX.y1, SEAT_Z + BOX.h, 2, 3)
     const b = body(p, prof, BOX.x0, BOX.x1, m, 2.6)
-    let svg = p.castShadow(puffPts, 0)
-    svg += byDepth(PUFFS.map((q) => ({ at: [q[0], q[1], q[3]] as V3, svg: p.cyl(q[0], q[1], 0, q[3], q[2], fluff, tone, 1.6, 12) })))
-    const tops = PUFFS.filter((q) => q[3] === PLINTH).flatMap((q) => ring(q, PLINTH))
-    svg += p.castShadow(b.pts, PLINTH, tops, 'opacity=".8"')
+    let svg = p.castShadow(footprint, 0)
+    svg += byDepth(BACK_PUFFS.map(puff))
     svg += b.svg
     const F = BOX.x1 + 0.02
-    const screen = portalScreen(p, look, F, BOX.y0 + 2.2, PLINTH + 3.6, BOX.y1 - 2.2, PLINTH + BOX.h - 2.2)
-    svg += screen.svg + led(p, look, F, BOX.y0 + 1.3, PLINTH + 2, 0.6) + sticker(p, look, F, BOX.y1 - 4, PLINTH + 2, 1.2)
-    svg += vents(p, BOX.y1 + 0.02, BOX.x0 + 3, BOX.x1 - 3, [PLINTH + 12, PLINTH + 14.5, PLINTH + 17])
+    const top = SEAT_Z + BOX.h
+    const screen = portalScreen(p, look, F, BOX.y0 + 2.2, SEAT_Z + 3.8, BOX.y1 - 2.2, top - 3)
+    svg += screen.svg + led(p, look, F, BOX.y0 + 1.5, top - 1.5, 0.6) + sticker(p, look, F, BOX.y0 + 5, top - 1.5, 1.1)
+    svg += vents(p, BOX.y1 + 0.02, BOX.x0 + 3, BOX.x1 - 3, [SEAT_Z + 12, SEAT_Z + 14.5, SEAT_Z + 17])
     svg += b.ink
-    return { svg, portal: screen.corners, body: [...puffPts, ...b.pts] }
+    svg += byDepth(FRONT_PUFFS.map(puff))
+    return { svg, portal: screen.corners, body: [...footprint, ...b.pts] }
   }
 }
 

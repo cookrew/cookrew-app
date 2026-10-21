@@ -24,5 +24,5 @@ export const DARK_SILHOUETTE = '#e9e2cf'
 export { AVATAR_VIEW, HARNESS_INK, type AvatarInput } from './avatar'
 export { CARD_VIEW } from './card'
 export { ARCHETYPES, archetypeOf, BALL, CAPACITY, CONTAINER_SCALE, containerArt, paletteOf, type Archetype, type ContainerInput } from './container'
-export { MACHINE_VIEW, machineArt, portalSkew, stateOf, type MachineInput, type MachineState } from './machine'
+export { desktopFormOf, MACHINE_VIEW, machineArt, portalSkew, stateOf, type DesktopForm, type MachineInput, type MachineState } from './machine'
 export { avatarArt, cardArt }
