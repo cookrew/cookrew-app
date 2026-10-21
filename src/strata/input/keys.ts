@@ -10,6 +10,8 @@ export type KeyIntent =
   | { type: 'out' }
   | { type: 'close' }
   | { type: 'finder' }
+  /** Type-to-find: a printable key at levels 0–2 opens the finder with it. */
+  | { type: 'find'; text: string }
 
 export interface KeyLike {
   key: string
@@ -42,6 +44,7 @@ export const keyIntent = (e: KeyLike, ctx: KeyContext): KeyIntent | null => {
   const dir = ARROWS[e.key]
   if (dir) return { type: 'move', dir, within: !!e.shiftKey && ctx.level !== 'agents' }
   if (e.key === 'Enter' || e.key === ' ') return { type: 'in' }
+  if (/^[\p{L}\p{N}]$/u.test(e.key)) return { type: 'find', text: e.key.toLowerCase() }
   return null
 }
 

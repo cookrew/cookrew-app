@@ -916,3 +916,26 @@ button {
   font-size: 9px;
   z-index: 2;
 }
+.avatar .code {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font: 700 11px ui-monospace, monospace;
+  background: #2d2a20;
+  color: #ffd23f;
+  border-radius: 4px;
+  padding: 0 3px;
+  pointer-events: none;
+}
+.code-chip {
+  font: 700 11px ui-monospace, monospace;
+  background: #2d2a20;
+  color: #ffd23f;
+  border-radius: 4px;
+  padding: 0 4px;
+  margin-left: auto;
+}
+.finder-list li .code-chip {
+  margin-left: 0;
+}

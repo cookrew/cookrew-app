@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { LevelsAgent, StrataMachine } from '../src/shared/strata'
-import { createFleetIndex, flattenFleet, scoreAgent, SCORE } from '../src/strata/finder/search'
+import { agentKey, createFleetIndex, flattenFleet, scoreAgent, SCORE } from '../src/strata/finder/search'
+import { CODE_PATTERN, jumpCodes } from '../src/strata/finder/codes'
 import { syntheticFleet } from '../src/strata/fixture/synthetic'
 
 const agent = (id: string, name: string, extra: Partial<LevelsAgent> = {}): LevelsAgent => ({
@@ -91,6 +92,49 @@ describe('finder results', () => {
 
   it('lists attention: waiting oldest first, then replied', () => {
     expect(createFleetIndex(fleet).attention().map((h) => h.agentId)).toEqual(['b1', 'a1', 'a4'])
+  })
+})
+
+describe('jump codes: any agent in two keystrokes plus Enter', () => {
+  const machines: StrataMachine[] = syntheticFleet(0).map((m) => ({ ...m, base: `/m/${m.id}/`, link: 'live', stale: false }))
+
+  it('gives every agent a unique digit+letter code', () => {
+    const codes = createFleetIndex(machines).codes()
+    expect(codes.size).toBe(flattenFleet(machines).length)
+    expect(new Set(codes.values()).size).toBe(codes.size)
+    for (const code of codes.values()) expect(code).toMatch(CODE_PATTERN)
+  })
+
+  it('a code is the top hit for its agent, from anywhere, namesakes included', () => {
+    const index = createFleetIndex(machines)
+    for (const e of flattenFleet(machines)) {
+      expect(index.find(e.code, 1)[0]).toMatchObject({ machineId: e.machineId, agentId: e.agent.id, score: SCORE.code })
+    }
+  })
+
+  it('keeps an agent\'s code when others join or leave', () => {
+    const keys = ['m/a', 'm/b', 'm/c', 'm/d']
+    const before = jumpCodes(keys)
+    const after = jumpCodes(['m/a', 'm/c', 'm/d', 'n/z'])
+    expect(after.get('m/a')).toBe(before.get('m/a'))
+    expect(after.get('m/d')).toBe(before.get('m/d'))
+  })
+
+  it('a lone digit lights every agent whose code starts with it', () => {
+    const index = createFleetIndex(machines)
+    const codes = index.codes()
+    const threes = [...codes.values()].filter((c) => c.startsWith('3')).length
+    expect(index.find('3', 1000)).toHaveLength(threes)
+  })
+
+  it('runs past 234 agents with longer codes, still unique', () => {
+    const keys = Array.from({ length: 300 }, (_, i) => `m/a${i}`)
+    const codes = jumpCodes(keys)
+    expect(new Set(codes.values()).size).toBe(300)
+  })
+
+  it('agent keys are machine-scoped', () => {
+    expect(agentKey('m1', 'a1')).not.toBe(agentKey('m2', 'a1'))
   })
 })
 

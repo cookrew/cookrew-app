@@ -8,6 +8,7 @@ import { levelOf, parentOf, type Rect, type StrataMachine, type StrataPath } fro
 import { useFleet } from './fleet/use-fleet'
 import { standInFigures } from './stand-in/figures'
 import { Finder } from './finder/Finder'
+import { createFleetIndex } from './finder/search'
 import { fanBounds } from './levels/Fan'
 import { InstantStage } from './input/InstantStage'
 import { isTypingTarget, keyIntent } from './input/keys'
@@ -107,6 +108,7 @@ export function App() {
   const [announce, setAnnounce] = useState('')
 
   const model = useMemo(() => buildLevelModel(path, fleet, viewport, kit), [path, fleet, viewport])
+  const codes = useMemo(() => createFleetIndex(fleet).codes(), [fleet])
   const level = levelOf(path)
   const machineOf = useCallback((id?: string) => fleet.find((m) => m.id === id) ?? null, [fleet])
 
@@ -193,6 +195,7 @@ export function App() {
       if (!intent) return
       e.preventDefault()
       if (intent.type === 'finder') return openFinder('')
+      if (intent.type === 'find') return openFinder(intent.text)
       if (intent.type === 'close') return finder ? setFinder(null) : hover.hideNow()
       if (intent.type === 'out') return go(parentOf(path))
       if (intent.type === 'in') return highlight && go(highlight)
@@ -227,6 +230,7 @@ export function App() {
     setHighlight,
     go,
     glow,
+    codes: finder ? codes : null,
     hover,
     summaryKey,
     useAnchor,
@@ -251,6 +255,7 @@ export function App() {
             />
             <SummaryCard
               seat={cardSeat}
+            code={summarySeat ? codes.get(summarySeat.key) : undefined}
               machine={machineOf(summarySeat?.path.machine)}
               viewport={viewport}
               onHold={hover.holdCard}

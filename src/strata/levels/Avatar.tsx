@@ -64,6 +64,11 @@ export function Avatar({ seat, size, interactive, offline = false }: { seat: Sea
       )}
       <Figure art={art} />
       {agent.phase === 'replied' && !offline && size !== 'dot' && <span className="tick" aria-hidden="true" />}
+      {env.codes && size !== 'dot' && (
+        <span className="code" aria-hidden="true">
+          {env.codes.get(seat.key)}
+        </span>
+      )}
     </button>
   )
 }

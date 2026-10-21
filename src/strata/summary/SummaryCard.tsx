@@ -32,12 +32,15 @@ function Elapsed({ since, suffix }: { since: number | null; suffix: string }) {
 
 export function SummaryCard({
   seat,
+  code,
   machine,
   viewport,
   onHold,
   onRelease
 }: {
   seat: SeatRef | null
+  /** Its jump code: type it anywhere, then Enter. */
+  code?: string
   machine: StrataMachine | null
   viewport: Rect
   onHold: () => void
@@ -64,6 +67,7 @@ export function SummaryCard({
             <span className={`sum-dot ph-${offline ? 'offline' : agent.phase}${phase.live ? '' : ' guess'}`} />
             <b>{agent.name}</b>
             {agent.orch && <span className="chip">orch</span>}
+            {code && <span className="code-chip" title="Jump code: type it anywhere, then Enter">{code}</span>}
           </div>
           <div className="sum-line muted">{modelLine(agent)}</div>
           <div className="sum-line">

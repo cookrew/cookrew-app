@@ -35,6 +35,7 @@ export function Finder({ fleet, context, initialQuery, onClose, onGlow, onActive
   const typed = query.trim().length > 0
   const hits = useMemo(() => (typed ? index.find(query, LIMIT) : index.attention().slice(0, LIMIT)), [index, query, typed])
   const glow = useMemo(() => (typed ? new Set(index.find(query, GLOW_LIMIT).map((h) => agentKey(h.machineId, h.agentId))) : null), [index, query, typed])
+  const codes = useMemo(() => index.codes(), [index])
   const current = hits[Math.min(active, hits.length - 1)] ?? null
 
   useEffect(() => input.current?.focus(), [])
@@ -54,7 +55,7 @@ export function Finder({ fleet, context, initialQuery, onClose, onGlow, onActive
           aria-controls="finder-list"
           aria-activedescendant={current ? `finder-opt-${active}` : undefined}
           aria-autocomplete="list"
-          placeholder="Find an agent on any machine…"
+          placeholder="Name, workspace or jump code (3f)…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
@@ -88,6 +89,7 @@ export function Finder({ fleet, context, initialQuery, onClose, onGlow, onActive
               >
                 <span className={`sum-dot ph-${lastKnown ? 'offline' : (agent?.phase ?? 'idle')}`} />
                 <b>{hit.name}</b>
+                <span className="code-chip">{codes.get(`${hit.machineId}/${hit.agentId}`)}</span>
                 <span className="muted">
                   {workspace?.name ?? '?'} · {machine?.name ?? '?'}
                   {lastKnown ? ' · last known' : ''}

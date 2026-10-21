@@ -26,6 +26,8 @@ export interface LevelsEnv {
   go: (target: StrataPath, opts?: GoOptions) => void
   /** Agent keys the finder lights; null while the finder is closed. */
   glow: ReadonlySet<string> | null
+  /** Jump codes by agent key, drawn on avatars while the finder is open; null otherwise. */
+  codes: ReadonlyMap<string, string> | null
   hover: HoverIntent
   /** Agent key whose summary card is showing. */
   summaryKey: string | null

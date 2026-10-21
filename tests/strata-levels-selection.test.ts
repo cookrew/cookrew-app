@@ -92,6 +92,12 @@ describe('the key map', () => {
     expect(keyIntent({ key: 'K', ctrlKey: true }, at('agents'))).toEqual({ type: 'finder' })
     expect(keyIntent({ key: '/' }, at('terminal'))).toEqual({ type: 'finder' })
   })
+  it('type-to-find: a letter or digit opens the finder with it, except at the terminal', () => {
+    expect(keyIntent({ key: '3' }, at('machines'))).toEqual({ type: 'find', text: '3' })
+    expect(keyIntent({ key: 'H' }, at('agents'))).toEqual({ type: 'find', text: 'h' })
+    expect(keyIntent({ key: 'h' }, at('terminal'))).toBeNull()
+    expect(keyIntent({ key: 'h', metaKey: true }, at('agents'))).toBeNull()
+  })
   it('leaves typing, browser shortcuts and the terminal level alone', () => {
     expect(keyIntent({ key: 'Escape' }, at('agents', { typing: true }))).toBeNull()
     expect(keyIntent({ key: 'ArrowLeft', altKey: true }, at('agents'))).toBeNull()

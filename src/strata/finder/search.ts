@@ -2,9 +2,11 @@
 // lands (same interface, so the swap is one import). Every agent on every
 // machine the shell can see, cached ones included. Equal scores keep fleet
 // order (machine, workspace, creation); a small context bonus lets a namesake
-// in the workspace you are looking at win a tie.
+// in the workspace you are looking at win a tie. A jump code ('3f') beats any
+// name, so every agent is two keystrokes plus Enter away.
 import type { LevelsAgent, StrataMachine, StrataPath } from '../../shared/strata'
 import type { AgentHit, FleetIndex } from '../seams'
+import { CODE_PATTERN, jumpCodes } from './codes'
 
 export interface IndexedAgent {
   machineId: string
@@ -14,24 +16,30 @@ export interface IndexedAgent {
   agent: LevelsAgent
   /** Position in fleet order. */
   order: number
+  /** Its jump code (see codes.ts). */
+  code: string
 }
 
 export const flattenFleet = (machines: readonly StrataMachine[]): IndexedAgent[] => {
   let order = 0
-  return machines.flatMap((m) =>
+  const rows = machines.flatMap((m) =>
     (m.levels?.workspaces ?? []).flatMap((w) =>
       w.agents.map((agent) => ({ machineId: m.id, machineName: m.name, workspaceId: w.id, workspaceName: w.name, agent, order: order++ }))
     )
   )
+  const codes = jumpCodes(rows.map((r) => agentKey(r.machineId, r.agent.id)))
+  return rows.map((r) => ({ ...r, code: codes.get(agentKey(r.machineId, r.agent.id)) as string }))
 }
 
 const fold = (s: string) => s.normalize('NFKD').replace(/\p{M}+/gu, '').toLowerCase()
 const words = (s: string) => fold(s).split(/[^\p{L}\p{N}]+/u).filter(Boolean)
 
-export const SCORE = { namePrefix: 100, nameWord: 80, initials: 70, nameSub: 50, place: 30, task: 10 } as const
+export const SCORE = { code: 1000, codeDigit: 500, namePrefix: 100, nameWord: 80, initials: 70, nameSub: 50, place: 30, task: 10 } as const
 
 /** One query word against one agent: the best way it matches, 0 for none. */
 const scoreWord = (q: string, entry: IndexedAgent): number => {
+  if (CODE_PATTERN.test(q) && entry.code === q) return SCORE.code
+  if (/^[1-9]$/.test(q) && entry.code.startsWith(q)) return SCORE.codeDigit
   const name = fold(entry.agent.name)
   const nameWords = words(entry.agent.name)
   if (name.startsWith(q)) return SCORE.namePrefix
@@ -68,7 +76,12 @@ const toHit = (entry: IndexedAgent, score: number): AgentHit => ({
 const contextBonus = (entry: IndexedAgent, context: StrataPath) =>
   entry.machineId === context.machine ? (entry.workspaceId === context.workspace ? 3 : 1) : 0
 
-export const createFleetIndex = (machines: readonly StrataMachine[], context: StrataPath = {}): FleetIndex => {
+/** The seam's FleetIndex plus the jump codes the shell draws while the finder is open. */
+export interface LocalFleetIndex extends FleetIndex {
+  codes(): Map<string, string>
+}
+
+export const createFleetIndex = (machines: readonly StrataMachine[], context: StrataPath = {}): LocalFleetIndex => {
   const entries = flattenFleet(machines)
   return {
     find(query, limit = 8) {
@@ -79,6 +92,9 @@ export const createFleetIndex = (machines: readonly StrataMachine[], context: St
         .sort((a, b) => b.s - a.s || a.e.order - b.e.order)
         .slice(0, limit)
         .map((x) => toHit(x.e, x.s))
+    },
+    codes() {
+      return new Map(entries.map((e) => [agentKey(e.machineId, e.agent.id), e.code]))
     },
     attention() {
       const since = (e: IndexedAgent) => e.agent.phaseSince ?? Number.MAX_SAFE_INTEGER
