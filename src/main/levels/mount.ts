@@ -10,6 +10,7 @@ import type { BoardSources } from '../board-index'
 import { machineProfile, provisionalProfile } from '../machine-profile'
 import { createScrubber } from '../scrub'
 import type { WorkspaceStore } from '../store'
+import { runAtIdle } from './prewarm'
 import { createLevelsService, type LevelsService } from './service'
 import { levelsSourcesFrom } from './sources'
 
@@ -76,4 +77,24 @@ export function levelsServiceFor(deps: LevelsMountDeps, options: LevelsMountOpti
   )
   services.set(deps, service)
   return service
+}
+
+/** How long after the companion server starts the prewarm begins: boot has its own work first. */
+export const LEVELS_PREWARM_DELAY_MS = 15_000
+
+/**
+ * Pay the cold first build at idle, so the first shell to open a machine does
+ * not. Once per server; nothing happens when the board is not wired.
+ */
+export function prewarmLevels(deps: LevelsMountDeps, options: LevelsMountOptions, delayMs = LEVELS_PREWARM_DELAY_MS): void {
+  const timer = setTimeout(() => {
+    try {
+      const service = levelsServiceFor(deps, options)
+      if (service) void runAtIdle(service.prewarmSteps())
+    } catch (error) {
+      // A prewarm that cannot start is a first request that builds cold, nothing worse.
+      console.error('Levels prewarm could not start:', error)
+    }
+  }, delayMs)
+  timer.unref?.()
 }

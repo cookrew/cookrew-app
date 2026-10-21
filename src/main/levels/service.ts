@@ -76,6 +76,11 @@ export interface LevelsService {
   /** Open a stream: the first event is a snapshot, then every delta. */
   subscribe: (send: (event: LevelsEvent) => void) => () => void
   detail: (agentId: string) => LevelsAgentDetail | null
+  /**
+   * The cold first build cut into steps (prewarm.ts runs each at a quiet
+   * moment): each workspace's state, the ledger, the dials, then the build.
+   */
+  prewarmSteps: () => Array<() => void>
   stats: () => LevelsStats
   close: () => void
 }
@@ -214,6 +219,12 @@ export function createLevelsService(sources: LevelsSources, pushMs: number = LEV
       if (!workspace) return null
       return agentDetail(workspace, sources.workspaceState(workspace.id), agentId, scrub, sources.gitPeek)
     },
+    prewarmSteps: () => [
+      ...sources.workspaces().map((meta) => () => void sources.workspaceState(meta.id)),
+      () => void sources.ledger(),
+      () => void sources.tuning(),
+      () => void current()
+    ],
     stats: () => ({ ...stats, streams: streams.size, rev: latest?.snapshot.rev ?? 0 }),
     close: () => {
       if (timer) clearTimeout(timer)

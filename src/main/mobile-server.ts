@@ -75,7 +75,13 @@ import { refuseMisdirected, refuseMisdirectedUpgrade } from './host-gate'
 import { createNameSni } from './name-sni'
 import type { DesktopCert } from './desktop-cert'
 import { handleLevelsRoutes } from './levels/routes'
-import { levelsServiceFor } from './levels/mount'
+import { levelsServiceFor, prewarmLevels, type LevelsMountOptions } from './levels/mount'
+
+/** What the levels need from this server: its app version, and the token to scrub by value. */
+const levelsOptions = (deps: MobileServerDeps): LevelsMountOptions => ({
+  appVersion: () => app?.getVersion?.() ?? null,
+  tokens: () => [activePairingToken ?? deps.pairingToken]
+})
 
 // Re-exported so existing importers keep their import path; the constants
 // themselves live in an Electron-free module so pure code can use them.
@@ -335,6 +341,8 @@ export function startMobileServer(deps: MobileServerDeps): void {
   if (!powerBlockerId.current) {
     powerBlockerId.current = powerSaveBlocker.start('prevent-app-suspension')
   }
+  // STRATA: the first levels build at idle, not on the first shell's request.
+  prewarmLevels(deps, levelsOptions(deps))
 
   // C1: resolve the pairing token BEFORE any route can run — every mutating
   // route on this server requires it (see handleMobileApi's gate). The
@@ -1405,11 +1413,7 @@ export async function handle(
   // for the PAIRING scope on top of it: the wall token reads no note bodies.
   if (
     handleLevelsRoutes(request, response, url, {
-      service: () =>
-        levelsServiceFor(deps, {
-          appVersion: () => app?.getVersion?.() ?? null,
-          tokens: () => [activePairingToken ?? deps.pairingToken]
-        }),
+      service: () => levelsServiceFor(deps, levelsOptions(deps)),
       paired: (req, u) => !authed.pairingToken || authed.companionGate(presentedToken(req, u))
     })
   )
