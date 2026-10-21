@@ -78,13 +78,22 @@ export interface FleetMachine {
 //
 // GET  /v2/me/desktops            → FleetMachine[]   today's array: every row keeps
 //                                   its older fields and gains the ones above
-// GET  /v2/me/desktops/presence   → FleetPresence    every desktop in one answer; the
-//                                   shell refreshes presence with this, never the list
+// GET  /v2/me/presence            → FleetPresence    every desktop in one answer, with the
+//                                   account cap; the shell refreshes presence with this,
+//                                   never the list
 
-/** Who is online right now, for every desktop of the account at once. */
+/**
+ * Who is online right now, for every desktop of the account at once. A row's
+ * online and lastSeenAt mean exactly what the list row's do (lastSeenAt is
+ * `at` while online), so the shell lays a row over its list row as it stands.
+ */
 export interface FleetPresence {
   at: number
-  machines: Array<Pick<FleetMachine, 'id' | 'online' | 'lastSeenAt'>>
+  /** Desktops the relay keeps online at once for one account. */
+  cap: number
+  /** How many are online now; at the cap the shell says '<online> of <total> online'. */
+  online: number
+  desktops: Array<Pick<FleetMachine, 'id' | 'online' | 'lastSeenAt'>>
 }
 
 // ── levels: served by each desktop ──────────────────────────────────────────
