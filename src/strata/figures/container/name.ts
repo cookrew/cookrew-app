@@ -62,6 +62,7 @@ export const paletteOf = (name: string): Mat => {
 
 /** The name as it fits on a plaque: trimmed, one line, cut with an ellipsis. */
 export const plaqueText = (name: string, max: number): string => {
-  const flat = name.replace(/\s+/g, ' ').trim()
-  return flat.length <= max ? flat : flat.slice(0, Math.max(1, max - 1)).trimEnd() + '…'
+  // by code point, so a cut never splits an emoji's surrogate pair
+  const flat = Array.from(name.replace(/\s+/g, ' ').trim())
+  return flat.length <= max ? flat.join('') : flat.slice(0, Math.max(1, max - 1)).join('').trimEnd() + '…'
 }

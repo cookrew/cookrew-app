@@ -112,7 +112,19 @@ const flag = (cx: number, cy: number, R: number, live: boolean, w: number): stri
   )
 }
 
-const drawAvatar = ({ phase, source, harness, size }: AvatarInput): FigureArt => {
+/**
+ * Values a newer desktop might send that this kit does not know yet fall back
+ * to neutral ones instead of drawing "undefined" or throwing.
+ */
+const known = (input: AvatarInput): AvatarInput => ({
+  phase: input.phase in BALLS ? input.phase : 'idle',
+  source: input.source === 'live' || input.source === 'probe' || input.source === 'ledger' ? input.source : 'probe',
+  harness: input.harness in HARNESS_INK ? input.harness : 'other',
+  size: input.size in AVATAR_VIEW ? input.size : 'small'
+})
+
+const drawAvatar = (input: AvatarInput): FigureArt => {
+  const { phase, source, harness, size } = known(input)
   const V = AVATAR_VIEW[size]
   const cx = V * BALL.cx
   const cy = V * BALL.cy

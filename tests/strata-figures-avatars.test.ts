@@ -62,6 +62,12 @@ describe('avatars', () => {
     expect(dot('thinking')).not.toBe(dot('idle'))
   })
 
+  it('draws values it does not know as neutral ones, never "undefined"', () => {
+    const odd = avatarArt({ phase: 'dreaming', source: 'rumour', harness: 'aider', size: 'huge' } as never)
+    expect(odd.svg).not.toMatch(/undefined|NaN/)
+    expect(odd.svg).toBe(avatarArt({ phase: 'idle', source: 'probe', harness: 'other', size: 'small' }).svg)
+  })
+
   it('exposes badge and fan anchors inside the viewBox', () => {
     const { anchors, viewBox } = avatarArt({ phase: 'idle', source: 'live', harness: 'pi', size: 'full' })
     for (const key of ['badge', 'fan']) {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ARCHETYPES, archetypeOf, BALL, CAPACITY, containerArt, paletteOf } from '../src/strata/figures/container'
 import { rowCounts, seatGrid, tierFor } from '../src/strata/figures/container/layout'
+import { plaqueText } from '../src/strata/figures/container/name'
 
 export const CONTAINER_BUDGET = 10 * 1024
 const slotsOf = (anchors: Readonly<Record<string, unknown>>) => Object.keys(anchors).filter((k) => k.startsWith('slot:'))
@@ -113,6 +114,10 @@ describe('container figures', () => {
     const almost = containerArt({ name: 'Odd', slots: 48.5 })
     expect(slotsOf(almost.anchors)).toHaveLength(48)
     expect(almost.anchors.more).toBeUndefined()
+  })
+
+  it('never splits an emoji when it cuts a long name', () => {
+    expect(plaqueText('😀😀😀😀😀', 3)).toBe('😀😀…')
   })
 
   it('escapes the name on its plaque', () => {

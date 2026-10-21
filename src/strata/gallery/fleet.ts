@@ -44,7 +44,7 @@ const portalHtml = (m: Seen, size: number): string => {
 }
 
 const summaryOf = (a: LevelsAgent) =>
-  [`<b>${escapeText(a.name)}</b> · ${a.harness}${a.model ? ' · ' + escapeText(a.model) : ''}`, `${a.phase} (${a.phaseSource})`, a.task && escapeText(a.task), a.reply && `↳ ${escapeText(a.reply)}`]
+  [`<b>${escapeText(a.name)}</b> · ${escapeText(a.harness)}${a.model ? ' · ' + escapeText(a.model) : ''}`, escapeText(`${a.phase} (${a.phaseSource})`), a.task && escapeText(a.task), a.reply && `↳ ${escapeText(a.reply)}`]
     .filter(Boolean)
     .join('<br>')
 
