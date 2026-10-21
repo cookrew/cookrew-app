@@ -57,10 +57,10 @@ describe('checking what crosses the wire', () => {
     expect(parseLevelsEvent('nope')).toBeNull()
   })
 
-  it('takes the registry list bare or wrapped, drops bad and duplicate rows', () => {
+  it('takes the registry list as the bare array, drops bad and duplicate rows', () => {
     const good = { id: 'a', name: 'a', online: true, lastSeenAt: null, appVersion: null, profile: null, base: '/m/a/' }
     expect(parseFleetList([good, good, { ...good, id: 'b', base: 'http://x/' }])).toHaveLength(1)
-    expect(parseFleetList({ desktops: [good] })).toHaveLength(1)
+    expect(parseFleetList({ desktops: [good] })).toEqual([])
     expect(parseFleetList('nope')).toEqual([])
   })
 })

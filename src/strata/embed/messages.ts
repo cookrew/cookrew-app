@@ -17,19 +17,13 @@ const isId = (value: unknown): value is string => typeof value === 'string' && v
 
 const ERROR_CODES = new Set(['not-found', 'offline', 'unauthorized', 'unreachable'])
 
-/**
- * LOCAL WORKAROUND, asked of Revel: a document booted WITHOUT an agent (a
- * prewarm) says so with `strata:ready` and an EMPTY agentId — the contract has
- * no "warm" message yet, and the shell must know the listener is up before it
- * sends a focus.
- */
-export const WARM_AGENT_ID = ''
-
 export const parseEmbedToShell = (data: unknown): EmbedToShell | null => {
   if (!isObject(data)) return null
   switch (data.type) {
+    case 'strata:warm':
+      return { type: 'strata:warm' }
     case 'strata:ready':
-      return isId(data.agentId) ? { type: 'strata:ready', agentId: data.agentId } : null
+      return isId(data.agentId) && data.agentId.length > 0 ? { type: 'strata:ready', agentId: data.agentId } : null
     case 'strata:out':
       return { type: 'strata:out' }
     case 'strata:error':

@@ -14,7 +14,7 @@
 // frames come from an injected factory, so this is tested in node.
 import type { EmbedToShell, ShellToEmbed, StrataMachine, StrataPath } from '../../shared/strata'
 import type { EmbedPool } from '../seams'
-import { fromFrame, WARM_AGENT_ID, type MessageLike } from './messages'
+import { fromFrame, type MessageLike } from './messages'
 
 export type EmbedErrorCode = Extract<EmbedToShell, { type: 'strata:error' }>['code']
 
@@ -44,7 +44,12 @@ export interface FrameHandle {
 
 export interface EmbedDeps {
   origin: string
-  createFrame(machineId: string, src: string): FrameHandle
+  /**
+   * `onLoad` reports each document the frame finishes loading: `page` false
+   * means it is not an HTML page at all (a relay refusal answered as JSON), so
+   * no embed will ever speak from it.
+   */
+  createFrame(machineId: string, src: string, onLoad: (load: { page: boolean }) => void): FrameHandle
   post(frame: FrameHandle, message: ShellToEmbed): void
   listen(run: (event: MessageLike) => void): () => void
   machine(machineId: string): StrataMachine | undefined
@@ -209,13 +214,14 @@ export const createEmbedPool = (deps: EmbedDeps): StrataEmbedPool => {
     settleOpening({ ok: true })
   }
 
+  /** A prewarmed document is listening with no agent mounted: a held focus can go now. */
+  const onWarm = (frame: Frame) => {
+    setFrame(frame.machineId, { state: 'warm', agentId: null })
+    if (opening?.machineId === frame.machineId && !opening.sent) sendFocus(frame, opening)
+    changed()
+  }
+
   const onReady = (frame: Frame, agentId: string) => {
-    if (agentId === WARM_AGENT_ID) {
-      setFrame(frame.machineId, { state: 'warm' })
-      if (opening?.machineId === frame.machineId && !opening.sent) sendFocus(frame, opening)
-      changed()
-      return
-    }
     setFrame(frame.machineId, { state: 'warm', agentId })
     if (opening?.machineId === frame.machineId && opening.agentId === agentId) return reveal(frame.machineId, agentId)
     // Booted for an earlier open's agent while this one waited: point it here now.
@@ -237,7 +243,8 @@ export const createEmbedPool = (deps: EmbedDeps): StrataEmbedPool => {
     for (const frame of frames.values()) {
       const message = fromFrame(event, deps.origin, frame.handle.window)
       if (!message) continue
-      if (message.type === 'strata:ready') onReady(frame, message.agentId)
+      if (message.type === 'strata:warm') onWarm(frame)
+      else if (message.type === 'strata:ready') onReady(frame, message.agentId)
       else if (message.type === 'strata:error') onError(frame, message.code, message.detail ?? null)
       else if (shown?.machineId === frame.machineId) deps.onOut()
       return
@@ -248,7 +255,12 @@ export const createEmbedPool = (deps: EmbedDeps): StrataEmbedPool => {
 
   const createFrame = (machine: StrataMachine, agentId: string | null): Frame | null => {
     if (!evictFor(machine.id)) return null
-    const handle = deps.createFrame(machine.id, deps.embedUrl(machine, agentId))
+    const handle = deps.createFrame(machine.id, deps.embedUrl(machine, agentId), ({ page }) => {
+      if (page || frames.get(machine.id)?.handle !== handle) return
+      dropFrame(machine.id)
+      if (opening?.machineId === machine.id) settleOpening({ ok: false, error: new EmbedError('unreachable', 'refused') })
+      else changed()
+    })
     handle.hide()
     const frame: Frame = { machineId: machine.id, handle, state: 'loading', agentId: null, usedAt: deps.now() }
     frames = new Map(frames).set(machine.id, frame)

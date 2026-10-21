@@ -18,6 +18,7 @@ export type LinkDetail =
   | 'unreachable'
   | 'no-levels'
   | 'stream-dropped'
+  | 'silent'
   | 'gap'
   | 'server'
 

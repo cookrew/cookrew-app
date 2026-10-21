@@ -2,7 +2,8 @@
 // visibility and this origin's localStorage. Everything here is a thin
 // adapter; the behavior lives in fleet-store.ts and is tested there.
 import { createFleetCache, type StorageLike } from './fleet-cache'
-import { FLEET_TIMINGS, type FleetConfig, type FleetDeps, type LevelsStream, type StreamHandlers } from './fleet-store'
+import { FLEET_TIMINGS, type FleetConfig, type FleetDeps } from './fleet-store'
+import { openFetchStream } from './sse-reader'
 
 /** Same key the companion and cookrew.dev's /me use (src/renderer/src/pairing-scope.ts). */
 export const tokenKey = (machineId: string) => `cr_token:${machineId.toLowerCase()}`
@@ -23,42 +24,19 @@ export const readToken = (machineId: string): string | null => {
   }
 }
 
-/**
- * EventSource retries by itself on some failures; the store owns retries, so
- * the first error closes it and hands over. The URL carries ?token= and is
- * never logged or kept past this call.
- */
-const openEventStream = (url: string, handlers: StreamHandlers): LevelsStream => {
-  const source = new EventSource(url)
-  let closed = false
-  source.onmessage = (event) => {
-    if (!closed) handlers.onMessage(String(event.data))
-  }
-  source.onerror = () => {
-    if (closed) return
-    closed = true
-    source.close()
-    handlers.onError()
-  }
-  return {
-    close() {
-      closed = true
-      source.close()
-    }
-  }
-}
-
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]'])
 
 /**
- * Production reads the registry and needs a token per desktop. A loopback page
- * is the strata preview (scripts/strata-preview.mjs) unless `?fleet=registry`
- * asks for the production list against a local registry.
+ * Both read the registry's routes (the preview's mock serves them too). A
+ * loopback page is the strata preview (scripts/strata-preview.mjs), where a
+ * missing token is not "unpaired" unless the mock's auth switch says so, unless
+ * `?fleet=registry` asks for production rules against a local registry.
  */
 export const defaultFleetConfig = (where: Pick<Location, 'hostname' | 'search'> = location): FleetConfig => {
   const preview = LOOPBACK.has(where.hostname) && new URLSearchParams(where.search).get('fleet') !== 'registry'
   return {
-    listUrl: preview ? '/fleet.json' : '/v2/me/desktops',
+    listUrl: '/v2/me/desktops',
+    presenceUrl: '/v2/me/desktops/presence',
     requireToken: !preview,
     seedCacheUrl: preview ? '/preview/cache.json' : null,
     ...FLEET_TIMINGS
@@ -67,7 +45,7 @@ export const defaultFleetConfig = (where: Pick<Location, 'hostname' | 'search'> 
 
 export const browserFleetDeps = (): FleetDeps => ({
   fetch: (url, init) => fetch(url, init),
-  openStream: openEventStream,
+  openStream: openFetchStream,
   token: readToken,
   cache: createFleetCache(localStore(), Date.now),
   now: Date.now,

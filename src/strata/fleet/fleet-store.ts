@@ -14,7 +14,7 @@
 import type { FleetMachine, LevelsSnapshot, MachineLink, StrataMachine } from '../../shared/strata'
 import { backoffDelay, OUTDATED_RECHECK_MS } from './backoff'
 import type { FleetCache } from './fleet-cache'
-import { isLevelsSnapshot, parseFleetList, parseLevelsEvent } from './guards'
+import { isLevelsSnapshot, parseFleetList, parseFleetPresence, parseLevelsEvent } from './guards'
 import { foldLevels } from './levels-fold'
 import { outcomeOf, outcomeOfThrow, type LinkDetail, type LinkOutcome } from './link-outcome'
 
@@ -32,6 +32,8 @@ export interface FleetFetchInit {
 
 export interface StreamHandlers {
   onMessage(data: string): void
+  /** A `:` comment line: the desktop's 15 s keep-alive. Proves the line is alive, carries nothing. */
+  onPing(): void
   /** The stream is gone for good: the store owns every retry, never the transport. */
   onError(): void
 }
@@ -47,7 +49,8 @@ export interface VisibilitySource {
 
 export interface FleetDeps {
   fetch(url: string, init: FleetFetchInit): Promise<FleetResponse>
-  openStream(url: string, handlers: StreamHandlers): LevelsStream
+  /** `token` goes in a header, never the URL: the transport reads status and pings, which EventSource cannot. */
+  openStream(url: string, token: string | null, handlers: StreamHandlers): LevelsStream
   /** This browser's pairing token for that desktop, or null. Never logged, never stored by the store. */
   token(machineId: string): string | null
   cache: FleetCache
@@ -61,24 +64,29 @@ export interface FleetDeps {
 }
 
 export interface FleetConfig {
-  /** The registry's list: '/v2/me/desktops' in production, '/fleet.json' in the preview. */
+  /** The registry's list, GET /v2/me/desktops: read at start and when presence names a stranger. */
   listUrl: string
+  /** GET /v2/me/desktops/presence: who is online, every desktop in one answer, on a timer. */
+  presenceUrl: string
   /** Production: no token means unpaired. The preview's mock needs none. */
   requireToken: boolean
   /** PREVIEW ONLY: last-known snapshots the mock hands out for machines this browser never saw. */
   seedCacheUrl: string | null
-  listRefreshMs: number
+  presenceRefreshMs: number
   hiddenCloseMs: number
   requestTimeoutMs: number
   /** A link live this long has its backoff reset when it next drops. */
   stableMs: number
+  /** No event and no ping for this long (three missed pings) = the stream is dead without saying so. */
+  silenceMs: number
 }
 
 export const FLEET_TIMINGS = {
-  listRefreshMs: 60_000,
+  presenceRefreshMs: 60_000,
   hiddenCloseMs: 60_000,
   requestTimeoutMs: 10_000,
-  stableMs: 10_000
+  stableMs: 10_000,
+  silenceMs: 45_000
 } as const
 
 /** The relay's account cap (registry/src/v2-canvas-relay.ts `perAccount`). */
@@ -116,13 +124,15 @@ interface Handles {
   abort: AbortController | null
   stream: LevelsStream | null
   timer: unknown
+  /** The silence watchdog of the open stream. */
+  silence: unknown
   /** The stream has delivered its opening snapshot. */
   streamed: boolean
   /** The token the desktop last refused, held only to compare: never emitted or logged. */
   refused: string | null
 }
 
-const IDLE: Omit<Handles, 'gen' | 'refused'> = { abort: null, stream: null, timer: null, streamed: false }
+const IDLE: Omit<Handles, 'gen' | 'refused'> = { abort: null, stream: null, timer: null, silence: null, streamed: false }
 
 const freshEntry = (row: FleetMachine, levels: LevelsSnapshot | null): Entry => ({
   row,
@@ -179,6 +189,7 @@ export const createFleetStore = (deps: FleetDeps, config: FleetConfig): FleetSto
     held.abort?.abort()
     held.stream?.close()
     if (held.timer !== null) deps.clearTimer(held.timer)
+    if (held.silence !== null) deps.clearTimer(held.silence)
     handles.set(id, { ...held, ...IDLE, gen: held.gen + 1 })
   }
 
@@ -195,7 +206,8 @@ export const createFleetStore = (deps: FleetDeps, config: FleetConfig): FleetSto
     release(id)
     const stable = entry.liveSince !== null && deps.now() - entry.liveSince >= config.stableMs
     const attempt = stable ? 0 : entry.attempt
-    const link: MachineLink = outcome.detail === 'stream-dropped' && attempt >= STREAM_PATIENCE ? 'offline' : outcome.link
+    const dropped = outcome.detail === 'stream-dropped' || outcome.detail === 'silent'
+    const link: MachineLink = dropped && attempt >= STREAM_PATIENCE ? 'offline' : outcome.link
     update(id, (e) => ({ ...e, link, detail: outcome.detail, attempt: attempt + 1, liveSince: null }))
     if (outcome.retry === 'never' || paused) return
     schedule(id, outcome.retry === 'outdated' ? OUTDATED_RECHECK_MS : backoffDelay(attempt, deps.random()))
@@ -233,20 +245,36 @@ export const createFleetStore = (deps: FleetDeps, config: FleetConfig): FleetSto
     deps.cache.saveLevels(id, folded.levels, firstLive)
   }
 
+  /** Every event and every ping pushes the deadline; reaching it drops the stream like an error. */
+  const armSilence = (id: string, gen: number) => {
+    const held = handlesOf(id)
+    if (held.silence !== null) deps.clearTimer(held.silence)
+    const silence = deps.setTimer(() => {
+      if (current(id, gen)) fail(id, { link: 'connecting', detail: 'silent', retry: 'backoff' })
+    }, config.silenceMs)
+    patchHandles(id, { silence })
+  }
+
   const openStream = (id: string, gen: number, token: string | null) => {
     const entry = entries.get(id)
     if (!entry) return
-    const query = token ? `?token=${encodeURIComponent(token)}` : ''
-    const stream = deps.openStream(`${entry.row.base}api/levels/stream${query}`, {
+    const stream = deps.openStream(`${entry.row.base}api/levels/stream`, token, {
       onMessage: (data) => {
-        if (current(id, gen)) onStreamData(id, data)
+        if (!current(id, gen)) return
+        armSilence(id, gen)
+        onStreamData(id, data)
+      },
+      onPing: () => {
+        if (current(id, gen)) armSilence(id, gen)
       },
       onError: () => {
         if (current(id, gen)) fail(id, { link: 'connecting', detail: 'stream-dropped', retry: 'backoff' })
       }
     })
     patchHandles(id, { stream })
+    armSilence(id, gen)
   }
+
 
   const connect = (id: string) => {
     release(id)
@@ -310,7 +338,8 @@ export const createFleetStore = (deps: FleetDeps, config: FleetConfig): FleetSto
       return
     }
     if (entry.link === 'outdated') {
-      if (before.row.appVersion !== entry.row.appVersion) connect(id)
+      // An update restarts the desktop: it comes back online, or the list shows the new version.
+      if (before.row.appVersion !== entry.row.appVersion || !before.row.online) connect(id)
       return
     }
     if (entry.link === 'unpaired' && entry.detail === 'refused' && held.refused === deps.token(id)) return
@@ -337,10 +366,13 @@ export const createFleetStore = (deps: FleetDeps, config: FleetConfig): FleetSto
     for (const row of next) reconsider(row.id, before.get(row.id))
   }
 
+  const schedulePresence = () => {
+    if (listTimer !== null) deps.clearTimer(listTimer)
+    listTimer = started && !paused ? deps.setTimer(() => void loadPresence(), config.presenceRefreshMs) : null
+  }
+
   const loadList = (): Promise<void> => {
     if (listing) return listing
-    if (listTimer !== null) deps.clearTimer(listTimer)
-    listTimer = null
     listing = deps
       .fetch(config.listUrl, { credentials: 'same-origin', cache: 'no-store' })
       .then(async (response) => {
@@ -353,10 +385,40 @@ export const createFleetStore = (deps: FleetDeps, config: FleetConfig): FleetSto
       .catch(() => undefined)
       .finally(() => {
         listing = null
-        if (started && !paused) listTimer = deps.setTimer(() => void loadList(), config.listRefreshMs)
+        schedulePresence()
       })
     return listing
   }
+
+  /**
+   * Presence moves `online` and `lastSeenAt` on the rows the list gave. A
+   * desktop it names that the list did not, or one it no longer names, means
+   * the list itself changed: read it again instead.
+   */
+  const loadPresence = (): Promise<void> =>
+    deps
+      .fetch(config.presenceUrl, { credentials: 'same-origin', cache: 'no-store' })
+      .then(async (response) => {
+        const presence = response.status === 200 ? parseFleetPresence(await response.json()) : null
+        if (!presence || !started || paused) return schedulePresence()
+        const named = new Map(presence.machines.map((m) => [m.id, m]))
+        if (named.size !== order.length || !order.every((id) => named.has(id))) return loadList()
+        const rows = order.flatMap((id) => {
+          const entry = entries.get(id)
+          const seen = named.get(id)
+          return entry && seen ? [{ ...entry.row, online: seen.online, lastSeenAt: seen.lastSeenAt }] : []
+        })
+        const moved = rows.some((row) => {
+          const was = entries.get(row.id)?.row
+          return was?.online !== row.online || was?.lastSeenAt !== row.lastSeenAt
+        })
+        if (moved) {
+          merge(rows)
+          deps.cache.saveList(rows)
+        }
+        schedulePresence()
+      })
+      .catch(() => schedulePresence())
 
   /** PREVIEW ONLY: fill machines this browser never saw from the mock's stand-in cache. */
   const seed = (url: string) =>
@@ -391,7 +453,7 @@ export const createFleetStore = (deps: FleetDeps, config: FleetConfig): FleetSto
   const resume = () => {
     paused = false
     for (const id of order) connect(id)
-    void loadList()
+    void loadPresence()
   }
 
   const onVisibility = () => {
@@ -467,6 +529,6 @@ export const createFleetStore = (deps: FleetDeps, config: FleetConfig): FleetSto
       patchHandles(machineId, { refused: null })
       connect(machineId)
     },
-    refresh: () => loadList()
+    refresh: () => loadPresence()
   }
 }

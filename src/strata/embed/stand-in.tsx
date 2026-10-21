@@ -7,17 +7,26 @@
 import { StrictMode, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { EmbedToShell, LevelsAgentDetail } from '../../shared/strata'
-import { fromShell, WARM_AGENT_ID } from './messages'
+import { fromShell } from './messages'
 
 const params = new URLSearchParams(location.search)
-const machineId = params.get('machine') ?? ''
+/** The base this document was served under, '/m/<id>/', the way the companion finds its desktop. */
+const base = location.pathname.match(/^\/m\/[^/]+\//)?.[0] ?? '/'
 
 const tell = (message: EmbedToShell) => {
   if (window.parent !== window) window.parent.postMessage(message, location.origin)
 }
 
+/** The pairing token this origin holds for the machine, as the companion keeps it (cr_token:<id>). */
+const authHeaders = (): Record<string, string> => {
+  const id = base.split('/')[2] ?? ''
+  const token = id ? localStorage.getItem(`cr_token:${decodeURIComponent(id).toLowerCase()}`) : null
+  return token ? { authorization: `Bearer ${token}` } : {}
+}
+
 const load = async (agentId: string): Promise<LevelsAgentDetail> => {
-  const response = await fetch(`/m/${encodeURIComponent(machineId)}/api/levels/agents/${encodeURIComponent(agentId)}`, { cache: 'no-store' })
+  const response = await fetch(`${base}api/levels/agents/${encodeURIComponent(agentId)}`, { cache: 'no-store', headers: authHeaders() })
+  if (response.status === 401) throw Object.assign(new Error('unauthorized'), { code: 'unauthorized' as const })
   if (response.status === 404) throw Object.assign(new Error('not found'), { code: 'not-found' as const })
   if (response.status === 503) throw Object.assign(new Error('offline'), { code: 'offline' as const })
   if (!response.ok) throw Object.assign(new Error(`status ${response.status}`), { code: 'unreachable' as const })
@@ -39,7 +48,7 @@ function StandIn() {
     }
     addEventListener('message', onMessage)
     addEventListener('keydown', onKey)
-    if (!params.get('agent')) tell({ type: 'strata:ready', agentId: WARM_AGENT_ID })
+    if (!params.get('agent')) tell({ type: 'strata:warm' })
     return () => {
       removeEventListener('message', onMessage)
       removeEventListener('keydown', onKey)
@@ -56,7 +65,7 @@ function StandIn() {
         setDetail(next)
         tell({ type: 'strata:ready', agentId })
       },
-      (error: { code?: 'not-found' | 'offline' | 'unreachable' }) => {
+      (error: { code?: 'not-found' | 'offline' | 'unauthorized' | 'unreachable' }) => {
         if (live) tell({ type: 'strata:error', code: error.code ?? 'unreachable' })
       }
     )

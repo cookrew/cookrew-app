@@ -11,22 +11,13 @@ import { createEmbedPool, type EmbedDeps, type FrameHandle, type StrataEmbedPool
 export const isPhone = (): boolean =>
   typeof matchMedia === 'function' && matchMedia('(max-width: 700px), (pointer: coarse) and (max-width: 1024px)').matches
 
-const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]'])
-
 /**
- * Production: the desktop's own companion, '<base>?embed=agent&agent=<id>'.
- * It reads its pairing token from this origin's storage itself, so the URL
- * never carries one. The strata preview has no companion behind its mock
- * machines, so it loads the stand-in embed (src/strata/embed/stand-in.html),
- * which speaks the same messages.
+ * The desktop's own companion, '<base>?embed=agent&agent=<id>' — the preview's
+ * mock serves its stand-in embed at the same shape. The companion reads its
+ * pairing token from this origin's storage itself, so the URL never carries one.
  */
-export const embedUrlFor = (machine: StrataMachine, agentId: string | null, where: Pick<Location, 'hostname'> = location): string => {
-  const query = new URLSearchParams({ embed: 'agent', ...(agentId ? { agent: agentId } : {}) })
-  if (LOOPBACK.has(where.hostname) && machine.base.startsWith('/m/')) {
-    return `/embed/stand-in.html?${new URLSearchParams({ machine: machine.id, ...Object.fromEntries(query) })}`
-  }
-  return `${machine.base}?${query}`
-}
+export const embedUrlFor = (machine: StrataMachine, agentId: string | null): string =>
+  `${machine.base}?${new URLSearchParams({ embed: 'agent', ...(agentId ? { agent: agentId } : {}) })}`
 
 const LAYER_ID = 'strata-embed-layer'
 
@@ -45,8 +36,13 @@ const layer = (): HTMLElement => {
   return element
 }
 
-const createFrame = (machineId: string, src: string): FrameHandle => {
+const createFrame = (machineId: string, src: string, onLoad: (load: { page: boolean }) => void): FrameHandle => {
   const frame = document.createElement('iframe')
+  frame.addEventListener('load', () => {
+    // Same origin by construction, so the loaded document can be asked what it is.
+    const type = frame.contentDocument?.contentType ?? 'text/html'
+    onLoad({ page: type === 'text/html' })
+  })
   frame.title = 'Agent terminal'
   frame.dataset.machine = machineId
   frame.referrerPolicy = 'same-origin'

@@ -27,6 +27,7 @@ type Answer = { status: number; body?: unknown } | 'hang' | 'throw'
 
 interface FakeStream extends StreamHandlers {
   url: string
+  token: string | null
   closed: boolean
 }
 
@@ -49,9 +50,16 @@ const memoryStorage = (): StorageLike & { dump(): Record<string, string> } => {
   }
 }
 
-const CONFIG: FleetConfig = { listUrl: '/v2/me/desktops', requireToken: true, seedCacheUrl: null, ...FLEET_TIMINGS }
+const CONFIG: FleetConfig = { listUrl: '/v2/me/desktops', presenceUrl: '/v2/me/desktops/presence', requireToken: true, seedCacheUrl: null, ...FLEET_TIMINGS }
 
-const harness = (opts: { list: FleetMachine[]; tokens?: Record<string, string>; storage?: ReturnType<typeof memoryStorage>; random?: number }) => {
+const harness = (opts: {
+  list: FleetMachine[]
+  tokens?: Record<string, string>
+  storage?: ReturnType<typeof memoryStorage>
+  random?: number
+  /** Machines whose streams never send the desktop's 15 s keep-alive. */
+  quiet?: string[]
+}) => {
   let list = opts.list
   const answers = new Map<string, Answer[]>()
   const calls: Array<{ url: string; at: number; headers: Record<string, string> }> = []
@@ -69,6 +77,8 @@ const harness = (opts: { list: FleetMachine[]; tokens?: Record<string, string>; 
     fetch: (url, init) => {
       calls.push({ url, at: Date.now(), headers: init.headers ?? {} })
       if (url === CONFIG.listUrl) return Promise.resolve({ status: 200, json: async () => list })
+      if (url === CONFIG.presenceUrl)
+        return Promise.resolve({ status: 200, json: async () => ({ at: Date.now(), machines: list.map(({ id, online, lastSeenAt }) => ({ id, online, lastSeenAt })) }) })
       const id = url.match(/desktop\/([^/]+)\/api\/levels$/)?.[1] ?? ''
       const queue = answers.get(id) ?? [{ status: 200, body: { ...SNAP } }]
       const next = queue.length > 1 ? queue.shift()! : queue[0]
@@ -77,8 +87,8 @@ const harness = (opts: { list: FleetMachine[]; tokens?: Record<string, string>; 
         return new Promise((_, reject) => init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))))
       return Promise.resolve({ status: next.status, json: async () => (next.body === undefined ? Promise.reject(new Error('not json')) : next.body) })
     },
-    openStream: (url, handlers) => {
-      const stream: FakeStream = { url, closed: false, ...handlers }
+    openStream: (url, token, handlers) => {
+      const stream: FakeStream = { url, token, closed: false, ...handlers }
       streams.push(stream)
       return { close: () => void (stream.closed = true) }
     },
@@ -100,6 +110,10 @@ const harness = (opts: { list: FleetMachine[]; tokens?: Record<string, string>; 
       return () => wakes.delete(run)
     }
   }
+  // Every open stream pings like a desktop does, unless its machine is quiet.
+  setInterval(() => {
+    for (const stream of streams) if (!stream.closed && !(opts.quiet ?? []).some((id) => stream.url.includes(`/desktop/${id}/`))) stream.onPing()
+  }, 15_000)
   const store = createFleetStore(deps, CONFIG)
   const machine = (id: string): StrataMachine => store.getSnapshot().find((m) => m.id === id)!
   const openStreams = (id: string) => streams.filter((s) => !s.closed && s.url.includes(`/desktop/${id}/`))
@@ -213,7 +227,7 @@ describe('the fleet store: link states', () => {
     h.store.start()
     await settle()
     expect(h.machine('a').link).toBe('unpaired')
-    await vi.advanceTimersByTimeAsync(FLEET_TIMINGS.listRefreshMs * 2)
+    await vi.advanceTimersByTimeAsync(FLEET_TIMINGS.presenceRefreshMs * 2)
     expect(h.levelCalls('a')).toHaveLength(1)
     h.tokens.a = `${TOKEN}2`
     h.wake()
@@ -221,17 +235,20 @@ describe('the fleet store: link states', () => {
     expect(h.machine('a').link).toBe('live')
   })
 
-  it('rechecks an outdated desktop only after it updates, or on the slow timer', async () => {
+  it('rechecks an outdated desktop only after it restarts, or on the slow timer', async () => {
     const h = harness({ list: [row('a')], tokens: { a: TOKEN } })
     h.answer('a', { status: 404, body: {} }, { status: 200, body: SNAP })
     h.store.start()
     await settle()
-    await vi.advanceTimersByTimeAsync(FLEET_TIMINGS.listRefreshMs)
+    await vi.advanceTimersByTimeAsync(FLEET_TIMINGS.presenceRefreshMs)
     expect(h.levelCalls('a')).toHaveLength(1)
+    h.setList([row('a', { online: false })])
+    await vi.advanceTimersByTimeAsync(FLEET_TIMINGS.presenceRefreshMs)
+    expect(h.machine('a').link).toBe('offline')
     h.setList([row('a', { appVersion: '0.5.0' })])
-    await vi.advanceTimersByTimeAsync(FLEET_TIMINGS.listRefreshMs)
+    await vi.advanceTimersByTimeAsync(FLEET_TIMINGS.presenceRefreshMs)
     expect(h.levelCalls('a')).toHaveLength(2)
-    expect(OUTDATED_RECHECK_MS).toBeGreaterThan(FLEET_TIMINGS.listRefreshMs)
+    expect(OUTDATED_RECHECK_MS).toBeGreaterThan(FLEET_TIMINGS.presenceRefreshMs)
   })
 })
 
@@ -362,6 +379,20 @@ describe('the fleet store: backoff', () => {
   })
 })
 
+describe('the fleet store: a silent stream', () => {
+  it('drops a stream that sends neither events nor pings, and keeps one that pings', async () => {
+    const h = harness({ list: [row('a'), row('b')], tokens: { a: TOKEN, b: TOKEN }, quiet: ['a'] })
+    h.store.start()
+    await goLive(h, 'a')
+    await goLive(h, 'b')
+    await vi.advanceTimersByTimeAsync(FLEET_TIMINGS.silenceMs)
+    expect(h.openStreams('b')).toHaveLength(1)
+    expect(h.openStreams('a')).toHaveLength(0)
+    expect(h.store.detail('a')).toBe('silent')
+    expect(h.machine('a')).toMatchObject({ link: 'connecting', stale: true })
+  })
+})
+
 describe('the fleet store: a hidden tab', () => {
   it('keeps streams for a minute hidden, then closes every one', async () => {
     const h = harness({ list: [row('a'), row('b')], tokens: { a: TOKEN, b: TOKEN } })
@@ -449,7 +480,7 @@ describe('the fleet store: last-known cache', () => {
     h.store.start()
     await goLive(h, 'b')
     h.setList([row('a')])
-    await vi.advanceTimersByTimeAsync(FLEET_TIMINGS.listRefreshMs)
+    await vi.advanceTimersByTimeAsync(FLEET_TIMINGS.presenceRefreshMs)
     expect(h.store.getSnapshot().map((m) => m.id)).toEqual(['a'])
     expect(h.openStreams('b')).toHaveLength(0)
     expect(Object.keys(h.storage.dump()).some((k) => k.endsWith(':b'))).toBe(false)
@@ -457,24 +488,40 @@ describe('the fleet store: last-known cache', () => {
 })
 
 describe('the fleet store: tokens on the wire', () => {
-  it('sends the token as a header on GETs and only in the stream URL as ?token=', async () => {
+  it('never puts the token in a URL: a header on GETs, handed to the stream transport apart', async () => {
     const h = harness({ list: [row('a')], tokens: { a: TOKEN } })
     h.store.start()
     await goLive(h, 'a')
     for (const call of h.calls) expect(call.url).not.toContain(TOKEN)
     expect(h.levelCalls('a')[0].headers.authorization).toBe(`Bearer ${TOKEN}`)
-    expect(h.streams[0].url).toBe(`/relay/@me/desktop/a/api/levels/stream?token=${TOKEN}`)
+    expect(h.streams[0].url).toBe('/relay/@me/desktop/a/api/levels/stream')
+    expect(h.streams[0].token).toBe(TOKEN)
   })
 })
 
 describe('the fleet store: the registry list', () => {
+  it('refreshes presence on its timer, never the list, unless presence names a stranger', async () => {
+    const h = harness({ list: [row('a')], tokens: { a: TOKEN } })
+    h.store.start()
+    await settle()
+    const lists = () => h.calls.filter((c) => c.url === CONFIG.listUrl).length
+    const presences = () => h.calls.filter((c) => c.url === CONFIG.presenceUrl).length
+    await vi.advanceTimersByTimeAsync(FLEET_TIMINGS.presenceRefreshMs * 3)
+    expect(lists()).toBe(1)
+    expect(presences()).toBe(3)
+    h.setList([row('a'), row('new')])
+    await vi.advanceTimersByTimeAsync(FLEET_TIMINGS.presenceRefreshMs)
+    expect(lists()).toBe(2)
+    expect(h.store.getSnapshot().map((m) => m.id)).toEqual(['a', 'new'])
+  })
+
   it('connects a machine as soon as the registry says it came online', async () => {
     const h = harness({ list: [row('a', { online: false })], tokens: { a: TOKEN } })
     h.store.start()
     await settle()
     expect(h.machine('a').link).toBe('offline')
     h.setList([row('a')])
-    await vi.advanceTimersByTimeAsync(FLEET_TIMINGS.listRefreshMs)
+    await vi.advanceTimersByTimeAsync(FLEET_TIMINGS.presenceRefreshMs)
     expect(h.openStreams('a')).toHaveLength(1)
   })
 

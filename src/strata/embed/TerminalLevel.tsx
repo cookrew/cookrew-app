@@ -13,8 +13,10 @@ const COPY: Record<string, string> = {
   'not-found': 'That agent is not on this machine any more.',
   offline: 'That machine is offline.',
   unauthorized: 'This browser is not paired with that machine.',
-  unreachable: 'That machine did not answer in time.',
-  outdated: 'That machine runs an older Cookrew without this view.'
+  unreachable: 'That machine could not be reached.',
+  outdated: 'That machine runs an older Cookrew without this view.',
+  refused: 'That machine turned the terminal away just now — it may be busy.',
+  timeout: 'That machine did not answer in time.'
 }
 
 export const useEmbedView = (): EmbedView => {
@@ -47,7 +49,7 @@ export function TerminalLevel({ path }: { path: Required<StrataPath> }) {
       </div>
     )
   }
-  const why = COPY[failed.detail === 'outdated' ? 'outdated' : failed.code] ?? COPY.unreachable
+  const why = (failed.detail ? COPY[failed.detail] : undefined) ?? COPY[failed.code] ?? COPY.unreachable
   return (
     <div role="alert" style={{ padding: 24, font: '14px/1.5 ui-monospace, monospace', display: 'grid', gap: 12, maxWidth: 420 }}>
       <p style={{ margin: 0 }}>{why}</p>

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ShellToEmbed, StrataMachine } from '../src/shared/strata'
 import { createEmbedPool, EMBED_TIMEOUTS, isEmbedError, SUPERSEDED, type EmbedDeps, type FrameHandle } from '../src/strata/embed/embed-pool'
-import { fromFrame, fromShell, parseEmbedToShell, WARM_AGENT_ID, type MessageLike } from '../src/strata/embed/messages'
+import { fromFrame, fromShell, parseEmbedToShell, type MessageLike } from '../src/strata/embed/messages'
 
 const ORIGIN = 'https://cookrew.dev'
 
@@ -25,6 +25,7 @@ interface FakeFrame extends FrameHandle {
   removed: boolean
   inbox: ShellToEmbed[]
   window: { name: string }
+  load(page: boolean): void
 }
 
 const harness = (opts: { machines?: StrataMachine[]; maxWarm?: number } = {}) => {
@@ -34,10 +35,11 @@ const harness = (opts: { machines?: StrataMachine[]; maxWarm?: number } = {}) =>
   const out = vi.fn()
   const deps: EmbedDeps = {
     origin: ORIGIN,
-    createFrame: (machineId, src) => {
+    createFrame: (machineId, src, onLoad) => {
       const frame: FakeFrame = {
         machineId,
         src,
+        load: (page) => onLoad({ page }),
         visible: true,
         removed: false,
         inbox: [],
@@ -111,6 +113,15 @@ describe('the embed pool: a cold dive', () => {
     expect(h.live('a')).toHaveLength(1)
   })
 
+  it('fails fast when the frame loads a refusal instead of a page', async () => {
+    const h = harness()
+    const opened = h.pool.open({ machine: 'a', workspace: 'w', agent: 'x' })
+    const frame = h.frameOf('a')
+    frame.load(false)
+    await expect(opened).rejects.toMatchObject({ code: 'unreachable', detail: 'refused' })
+    expect(frame.removed).toBe(true)
+  })
+
   it('refuses at once for a machine that cannot embed', async () => {
     const h = harness({ machines: [machine('u', 'unpaired'), machine('o', 'offline'), machine('old', 'outdated')] })
     await expect(h.pool.open({ machine: 'u', workspace: 'w', agent: 'x' })).rejects.toMatchObject({ code: 'unauthorized' })
@@ -138,7 +149,7 @@ describe('the embed pool: warm documents', () => {
     const h = harness()
     h.pool.prewarm('a')
     expect(h.frameOf('a').src).toBe('/relay/@me/desktop/a/?embed=agent')
-    h.say('a', { type: 'strata:ready', agentId: WARM_AGENT_ID })
+    h.say('a', { type: 'strata:warm' })
     const opened = h.pool.open({ machine: 'a', workspace: 'w', agent: 'x' }, 'att-1')
     expect(h.frameOf('a').inbox).toEqual([{ type: 'strata:focus', agentId: 'x', attachmentId: 'att-1' }])
     vi.advanceTimersByTime(120)
@@ -153,7 +164,7 @@ describe('the embed pool: warm documents', () => {
     h.pool.prewarm('a')
     const opened = h.pool.open({ machine: 'a', workspace: 'w', agent: 'x' })
     expect(h.frameOf('a').inbox).toEqual([])
-    h.say('a', { type: 'strata:ready', agentId: WARM_AGENT_ID })
+    h.say('a', { type: 'strata:warm' })
     expect(h.frameOf('a').inbox).toEqual([{ type: 'strata:focus', agentId: 'x' }])
     h.say('a', { type: 'strata:ready', agentId: 'x' })
     await opened
@@ -279,6 +290,8 @@ describe('message checks', () => {
     expect(fromFrame({ origin: ORIGIN, source: self, data: ready }, ORIGIN, self)).toEqual(ready)
     expect(fromFrame({ origin: ORIGIN, source: self, data: ready }, ORIGIN, null)).toBeNull()
     expect(parseEmbedToShell({ type: 'strata:error', code: 'boom' })).toBeNull()
+    expect(parseEmbedToShell({ type: 'strata:ready', agentId: '' })).toBeNull()
+    expect(parseEmbedToShell({ type: 'strata:warm' })).toEqual({ type: 'strata:warm' })
     expect(parseEmbedToShell({ type: 'strata:error', code: 'offline', detail: 'x'.repeat(500) })).toMatchObject({ detail: 'x'.repeat(200) })
   })
 })

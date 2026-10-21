@@ -7,10 +7,18 @@ import { createRoot } from 'react-dom/client'
 import type { StrataPath } from '../../shared/strata'
 import { onlinePicture } from '../fleet/fleet-online'
 import { useFleetIndex } from '../fleet/fleet-index'
-import { useFleet } from '../fleet/use-fleet'
+import { fleetStore, useFleet } from '../fleet/use-fleet'
 import { createHoverIntent, obviousTarget } from './budget'
 import { embedPool, setEmbedOut } from './browser-pool'
 import { TerminalLevel, useEmbedView } from './TerminalLevel'
+
+/** PREVIEW ONLY: store the mock's pairing tokens the way /me's pair flow does (cr_token:<id>). */
+const pairAll = async () => {
+  const tokens = (await (await fetch('/mock/pair')).json()) as Record<string, string>
+  for (const [id, token] of Object.entries(tokens)) localStorage.setItem(`cr_token:${id.toLowerCase()}`, token)
+}
+const setSwitch = (body: Record<string, unknown>) =>
+  fetch('/mock/switch', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
 
 const timers = { setTimer: (run: () => void, ms: number) => setTimeout(run, ms), clearTimer: (h: unknown) => clearTimeout(h as number) }
 
@@ -42,6 +50,14 @@ function Qa() {
         {online.capped ? ' · at the relay cap' : ''} · frames {view.frames.map((f) => `${f.machineId}:${f.state}`).join(' ') || 'none'}
         {view.lastDive ? ` · last dive ${view.lastDive.warm ? 'warm' : 'cold'} ${Math.round(view.lastDive.ms)} ms` : ''}
       </header>
+      <nav aria-label="Mock switches" style={{ display: 'flex', gap: 8 }}>
+        <button onClick={() => void pairAll()}>pair all</button>
+        <button onClick={() => void setSwitch({ auth: true })}>auth on</button>
+        <button onClick={() => void setSwitch({ auth: false, storm: [], hang: [] })}>all clear</button>
+        <button onClick={() => void setSwitch({ storm: ['syn-studio'] })}>storm studio</button>
+        <button onClick={() => void setSwitch({ hang: ['syn-cloud'] })}>hang night-runner</button>
+        <button onClick={() => void fleetStore().refresh()}>presence now</button>
+      </nav>
       <section>
         <input aria-label="Find an agent" placeholder="find an agent…" value={query} onChange={(e) => setQuery(e.target.value)} />
         <div>{query ? 'matches' : 'needs you'}:</div>
@@ -55,6 +71,7 @@ function Qa() {
         <section key={m.id} onPointerEnter={() => intent.enter(m.id)} onPointerLeave={() => intent.leave()}>
           <b>{m.name}</b> · {m.profile?.kind ?? 'unknown'} · {m.link}
           {m.stale ? ' · stale' : ''}
+          {fleetStore().detail(m.id) ? ` (${fleetStore().detail(m.id)})` : ''}
           {m.levels?.workspaces.map((w) => (
             <div key={w.id} style={{ paddingLeft: 12 }}>
               {w.name} ({w.state}):{' '}

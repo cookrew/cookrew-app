@@ -2,7 +2,7 @@
 // registry list, a desktop's snapshot and every stream event. A row or event
 // that fails is dropped (a list) or treated as a resync (a stream) — never
 // half-applied.
-import { STRATA_VERSION, type FleetMachine, type LevelsEvent, type LevelsSnapshot } from '../../shared/strata'
+import { STRATA_VERSION, type FleetMachine, type FleetPresence, type LevelsEvent, type LevelsSnapshot } from '../../shared/strata'
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
 const isString = (value: unknown): value is string => typeof value === 'string'
@@ -28,15 +28,25 @@ export const isFleetMachine = (value: unknown): value is FleetMachine =>
   (value.profile === null || isObject(value.profile)) &&
   isSafeBase(value.base)
 
-/** The registry list, keeping the rows that pass and the order it gave. */
+/** The registry list (a bare array, the contract), keeping the rows that pass and the order it gave. */
 export const parseFleetList = (body: unknown): FleetMachine[] => {
-  const rows = Array.isArray(body) ? body : isObject(body) && Array.isArray(body.desktops) ? body.desktops : []
+  const rows: unknown[] = Array.isArray(body) ? body : []
   const seen = new Set<string>()
   return rows.filter((row): row is FleetMachine => {
     if (!isFleetMachine(row) || seen.has(row.id)) return false
     seen.add(row.id)
     return true
   })
+}
+
+/** GET /v2/me/desktops/presence, or null when it is not one. Bad rows are dropped. */
+export const parseFleetPresence = (body: unknown): FleetPresence | null => {
+  if (!isObject(body) || typeof body.at !== 'number' || !Array.isArray(body.machines)) return null
+  const machines = body.machines.filter(
+    (m): m is FleetPresence['machines'][number] =>
+      isObject(m) && isString(m.id) && typeof m.online === 'boolean' && isNumberOrNull(m.lastSeenAt)
+  )
+  return { at: body.at, machines }
 }
 
 export const isLevelsSnapshot = (value: unknown): value is LevelsSnapshot =>
