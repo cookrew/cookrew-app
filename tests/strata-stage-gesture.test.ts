@@ -105,6 +105,21 @@ describe('trackpad wheel', () => {
     expect(release && release.type === 'release' && release.velocity).toBeGreaterThan(WHEEL_FLICK)
   })
 
+  it('a coalesced stream (busy main thread: fewer, bigger events) is not mistaken for momentum', () => {
+    const { outs } = run([
+      [26, 0, 0],
+      [44, 0, 32],
+      [24, 0, 48],
+      [22, 0, 64],
+      [18, 0, 80],
+      [12, 0, 96],
+      [8, 0, 112],
+      [5, 0, 128]
+    ])
+    const release = outs.find((o) => o.type === 'release')
+    expect(release && release.type === 'release' && release.travel).toBeGreaterThanOrEqual(154)
+  })
+
   it('releases on a quiet gap, and the absorbed tail ends after its own gap', () => {
     const { s } = run([
       [10, 0, 0],
