@@ -34,13 +34,28 @@ export interface LevelsRuntime {
   onProfile?: (listener: () => void) => () => void
   scrub?: Scrub
   observe?: (ms: number) => void
+  now?: () => number
 }
 
 const STORE_SIGNALS = ['change', 'workspace-change', 'workspaces', 'switch'] as const
 const TURN_SIGNALS = ['activity', 'turn'] as const
 
+/**
+ * How stale the dials may get between whole-fleet reads. A model changes a
+ * few times a day and the tuning bus announces a change as it happens; the
+ * whole read (a stat, and a tail parse per moved session file) is what a
+ * build would otherwise pay on every turn's chatter.
+ */
+export const TUNING_REFRESH_MS = 30_000
+
 export function levelsSourcesFrom(runtime: LevelsRuntime): LevelsSources {
   const { store, board } = runtime
+  const clock = runtime.now ?? ((): number => Date.now())
+  let dials: Readonly<Record<string, AgentTuning>> | null = null
+  let dialsAt = 0
+  const onTuning = (row: { terminalId?: unknown; tuning?: AgentTuning } | undefined): void => {
+    if (dials !== null && typeof row?.terminalId === 'string' && row.tuning) dials = { ...dials, [row.terminalId]: row.tuning }
+  }
   return {
     workspaces: () => store.list().workspaces,
     focusedId: () => store.focusedId,
@@ -48,7 +63,13 @@ export function levelsSourcesFrom(runtime: LevelsRuntime): LevelsSources {
     live: () => board.live(),
     probe: () => board.probe?.() ?? new Map(),
     ledger: () => board.ledger(),
-    tuning: () => runtime.tuning?.fleet() ?? {},
+    tuning: () => {
+      if (dials === null || clock() - dialsAt >= TUNING_REFRESH_MS) {
+        dials = runtime.tuning?.fleet() ?? {}
+        dialsAt = clock()
+      }
+      return dials
+    },
     harnessOf: harnessOfNode,
     machine: () => {
       const profile = runtime.machine.profile()
@@ -57,13 +78,17 @@ export function levelsSourcesFrom(runtime: LevelsRuntime): LevelsSources {
     onChange: (listener) => {
       for (const signal of STORE_SIGNALS) store.on(signal, listener)
       for (const signal of TURN_SIGNALS) runtime.turns.on(signal, listener)
-      runtime.tuningBus?.on('tuning', listener)
+      const tuned = (row: { terminalId?: unknown; tuning?: AgentTuning } | undefined): void => {
+        onTuning(row)
+        listener()
+      }
+      runtime.tuningBus?.on('tuning', tuned)
       const offProbe = board.probeOnChange?.(listener) ?? null
       const offProfile = runtime.onProfile?.(listener) ?? null
       return () => {
         for (const signal of STORE_SIGNALS) store.off(signal, listener)
         for (const signal of TURN_SIGNALS) runtime.turns.off(signal, listener)
-        runtime.tuningBus?.off('tuning', listener)
+        runtime.tuningBus?.off('tuning', tuned)
         offProbe?.()
         offProfile?.()
       }

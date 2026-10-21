@@ -115,9 +115,20 @@ function openStream(request: http.IncomingMessage, response: http.ServerResponse
     gzip.flush(zlibConstants.Z_SYNC_FLUSH)
   }
   const send = (event: LevelsEvent): void => write(`data: ${JSON.stringify(event)}\n\n`)
+  let unsubscribe: () => void
+  try {
+    unsubscribe = service.subscribe(send)
+  } catch (error) {
+    // The head is out, so a status cannot say it: end the stream, and the
+    // client's reconnect asks again.
+    console.error('Levels stream could not open:', error)
+    open = false
+    if (gzip) gzip.end()
+    else response.end()
+    return
+  }
   const heartbeat = setInterval(() => write(':\n\n'), heartbeatMs)
   heartbeat.unref?.()
-  const unsubscribe = service.subscribe(send)
   response.on('close', () => {
     open = false
     clearInterval(heartbeat)

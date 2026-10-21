@@ -155,16 +155,22 @@ export function fakeDesktop() {
   }
   const turns = new EventEmitter()
   const tuningBus = new EventEmitter()
+  const clock = { now: NOW }
+  let fleetReads = 0
   const sources = levelsSourcesFrom({
     store: store as unknown as WorkspaceStore,
     board,
     turns,
-    tuning: { fleet: () => ({ a1: { model: 'anthropic/claude-opus-5-5', effort: 'high', at: NOW } }) },
+    tuning: {
+      fleet: () => {
+        fleetReads += 1
+        return { a1: { model: 'anthropic/claude-opus-5-5', effort: 'high', at: NOW } }
+      }
+    },
     tuningBus,
     machine: { name: () => 'Invented studio', appVersion: '0.3.0', profile: () => PROFILE },
-    now: undefined
-  } as Parameters<typeof levelsSourcesFrom>[0])
-  const clock = { now: NOW }
+    now: () => clock.now
+  })
   const service = createLevelsService({ ...sources, now: () => clock.now }, 30)
   return {
     service,
@@ -172,6 +178,8 @@ export function fakeDesktop() {
     turns,
     clock,
     probeHolds: () => probeHolds,
+    tuningBus,
+    fleetReads: () => fleetReads,
     setProbe: (next: Map<string, BoardPhase>) => {
       probe = next
       probeListeners.forEach((listener) => listener())

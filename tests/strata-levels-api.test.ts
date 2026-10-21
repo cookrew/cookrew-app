@@ -168,6 +168,25 @@ describe('GET /api/levels', () => {
     expect(((await changed.json()) as LevelsSnapshot).rev).toBe(2)
   })
 
+  it('reads the dials once per refresh window, and takes a bus change at once', async () => {
+    const desk = fakeDesktop()
+    const base = await serve(desk.service)
+    await fetch(`${base}/api/levels`, { headers: auth })
+    for (let i = 0; i < 5; i += 1) {
+      desk.turns.emit('activity', {})
+      await fetch(`${base}/api/levels`, { headers: auth })
+    }
+    expect(desk.fleetReads()).toBe(1)
+    desk.tuningBus.emit('tuning', { terminalId: 'a1', tuning: { model: 'openai/gpt-5.6', effort: null, at: 1 } })
+    const snapshot = (await (await fetch(`${base}/api/levels`, { headers: auth })).json()) as LevelsSnapshot
+    expect(snapshot.workspaces[0].agents[0].model).toBe('gpt-5.6')
+    expect(desk.fleetReads()).toBe(1)
+    desk.clock.now += 31_000
+    desk.turns.emit('activity', {})
+    await fetch(`${base}/api/levels`, { headers: auth })
+    expect(desk.fleetReads()).toBe(2)
+  })
+
   it('compresses the snapshot for a client that asks', async () => {
     const base = await serve(fakeDesktop().service)
     const port = new URL(base).port
