@@ -25,7 +25,7 @@ import {
   type V2,
   type V3
 } from './geom'
-import { BOARD, INK, SH, SHADOW, tone, toneI, type Mat, type Shade } from './tone'
+import { BOARD, INK, SH, SHADOW, SHADOW_STYLE, tone, toneI, type Mat, type Shade } from './tone'
 
 /** The iso basis: unit steps along x, y, z land here on screen (before the frame's scale). */
 export const C = Math.cos(Math.PI / 6)
@@ -273,7 +273,7 @@ export const makePen = (spec: PenSpec) => {
   const castShadow = (pts: readonly V3[], z0 = 0, clip: readonly V3[] | null = null, extra = ''): string => {
     const sh = hull(pts.map((p) => shadowOf(p, z0)))
     const poly = clip ? clipConvex(sh, hull(clip.map(P))) : sh
-    return poly.length > 2 ? fill2(poly, SHADOW, extra) : ''
+    return poly.length > 2 ? fill2(poly, SHADOW, extra ? `${SHADOW_STYLE} ${extra}` : SHADOW_STYLE) : ''
   }
 
   const boardTop = (x0: number, y0: number, x1: number, y1: number, h = 3, r = 5): V3[] => on(PZ(h), rrUV(x0, y0, x1, y1, r, 3))

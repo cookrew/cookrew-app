@@ -34,6 +34,8 @@ const SOURCES: PhaseSource[] = ['live', 'probe', 'ledger']
 const HARNESSES: Harness[] = ['claude', 'codex', 'opencode', 'pi', 'shell', 'other']
 const AVATAR_PX: Record<AvatarSize, number> = { dot: 12, small: 30, full: 88 }
 
+/** A row on the shell's dark paper, whatever the page theme. */
+const onDark = (title: string, cells: string) => `<div class="on-dark"><small>${title} · on dark paper #17140f</small><div class="grid">${cells}</div></div>`
 const at = (svg: string, w: number) => svg.replace('<svg ', `<svg width="${w.toFixed(1)}" `)
 const cell = (svg: string, label: string) => `<div class="cell">${svg}<small>${label}</small></div>`
 
@@ -52,6 +54,10 @@ export const machinesHtml = (): string =>
         ).join('')
     )
     .join('') +
+  onDark(
+    'every kind and state, 96 px',
+    KINDS.flatMap((kind) => STATES.map((st) => cell(at(machineArt({ kind, link: st.link, reached: st.reached }).svg, 96), `${kind} · ${st.label}`))).join('')
+  ) +
   '<h3>desktop forms <span class="muted">· from the profile label (proposed seam field: model)</span></h3><div class="grid">' +
   DESKTOP_LABELS.flatMap((model) =>
     (['live', 'offline'] as const).map((link) => {
@@ -71,7 +77,14 @@ export const containersHtml = (): string =>
           return cell(at(art.svg, art.viewBox.w * 0.5), `${slots} · ${kb(art.svg.length)} · ${elementsOf(art.svg)} el`)
         })
         .join('')}</div>`
-  ).join('')
+  ).join('') +
+  onDark(
+    'every archetype, 14 seats',
+    ARCHETYPES.map((archetype) => {
+      const art = containerArt({ name: SAMPLE_NAMES[archetype], slots: 14, archetype })
+      return cell(at(art.svg, art.viewBox.w * 0.45), archetype)
+    }).join('')
+  )
 
 export const avatarsHtml = (): string =>
   '<h2 id="avatars">Avatars <span class="muted">· phase × source × harness, at full, small and dot</span></h2>' +
@@ -88,7 +101,17 @@ export const avatarsHtml = (): string =>
           ).join('')}</div>`
       ).join('')
     )
-    .join('')
+    .join('') +
+  onDark(
+    'full and dot, live and last known',
+    (['full', 'dot'] as AvatarSize[])
+      .flatMap((size) =>
+        (['live', 'probe'] as PhaseSource[]).flatMap((source) =>
+          PHASES.map((phase) => at(avatarArt({ phase, source, harness: 'claude', size }).svg, AVATAR_PX[size] * (size === 'dot' ? 2 : 1)))
+        )
+      )
+      .join('')
+  )
 
 export const cardsHtml = (): string =>
   '<h2 id="cards">Attachment cards <span class="muted">· hover an avatar in the fleet above to fan them</span></h2><div class="grid">' +
@@ -100,4 +123,5 @@ export const cardsHtml = (): string =>
       })
     )
     .join('') +
-  '</div>'
+  '</div>' +
+  onDark('cards', (['note', 'browser'] as const).flatMap((kind) => [false, true].map((shared) => at(cardArt({ kind, shared }).svg, 96))).join(''))

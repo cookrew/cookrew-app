@@ -9,8 +9,9 @@
   --silhouette: #231e16;
   color-scheme: light;
 }
+/* dark tokens as the shell paints its stage: paper 23 20 15 */
 :root[data-theme='dark'] {
-  --paper: #1c1a17;
+  --paper: #17140f;
   --ink: #e9e2cf;
   --muted: #9a917f;
   --rule: #3a352d;
@@ -18,11 +19,12 @@
   --ok: #6fd08b;
   --bad: #ff7a6b;
   --silhouette: #e9e2cf;
+  --cf-shadow: #0b0d1c;
   color-scheme: dark;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
-    --paper: #1c1a17;
+    --paper: #17140f;
     --ink: #e9e2cf;
     --muted: #9a917f;
     --rule: #3a352d;
@@ -30,6 +32,7 @@
     --ok: #6fd08b;
     --bad: #ff7a6b;
     --silhouette: #e9e2cf;
+    --cf-shadow: #0b0d1c;
     color-scheme: dark;
   }
 }
@@ -232,4 +235,32 @@ td.num {
   table {
     min-width: 0;
   }
+}
+
+/* a row on the shell's dark paper, whatever the page theme */
+.on-dark {
+  --cf-shadow: #0b0d1c;
+  background: #17140f;
+  color: #e9e2cf;
+  border-radius: 10px;
+  padding: 10px;
+  margin-top: 8px;
+}
+.on-dark .cf {
+  color: #e9e2cf;
+}
+.on-dark small {
+  color: #9a917f;
+}
+.phone {
+  width: 390px;
+  height: 844px;
+  overflow-y: auto;
+  border: 2px solid var(--ink);
+  border-radius: 34px;
+  padding: 40px 16px;
+  background: var(--paper);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
 }

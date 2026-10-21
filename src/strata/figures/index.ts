@@ -4,7 +4,9 @@
 //
 // Theme hook: every figure's root is <svg class="cf" color="#231e16">, and
 // only outer silhouettes use currentColor. On a dark page set
-// `.cf { color: <light ink> }` to lift them; fills keep their own paint.
+// `.cf { color: <light ink>; --cf-shadow: DARK_SHADOW }`: silhouettes lift,
+// shadows fall darker than the paper, fills keep their own paint. Offline and
+// last-known states recede by opacity, so they read on either paper.
 import type { FigureKit } from '../seams'
 import { avatarArt } from './avatar'
 import { cardArt } from './card'
@@ -20,6 +22,8 @@ export const colorFigures: FigureKit = {
 
 /** Silhouette ink for a dark page (see the theme hook above). */
 export const DARK_SILHOUETTE = '#e9e2cf'
+/** Cast shadows read var(--cf-shadow); on a dark page set it to this (a shadow darker than its paper). */
+export { DARK_SHADOW } from './iso/tone'
 
 export { AVATAR_VIEW, HARNESS_INK, type AvatarInput } from './avatar'
 export { CARD_VIEW } from './card'

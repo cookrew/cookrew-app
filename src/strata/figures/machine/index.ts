@@ -52,7 +52,11 @@ export const machineArt = memo((input: MachineInput): FigureArt => {
     ghost: look.ghost
   })
   const { svg, portal, body } = model.draw(framed.pen, look)
-  const drawn = look.ghost ? `<g stroke-dasharray="4 3" opacity=".75">${svg}</g>` : svg
+  const drawn = look.ghost
+    ? `<g stroke-dasharray="4 3" opacity=".75">${svg}</g>`
+    : look.recede < 1
+      ? `<g opacity="${look.recede}">${svg}</g>`
+      : svg
   return finish(framed, drawn, { portal: framed.pen.rectOf(portal), body: framed.pen.rectOf(body) })
 })
 

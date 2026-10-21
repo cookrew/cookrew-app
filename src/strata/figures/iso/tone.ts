@@ -11,6 +11,14 @@ export interface Mat {
 
 export const INK = '#231e16'
 export const SHADOW = '#41538f'
+/**
+ * Every cast shadow paints with this style: the colorfigures blue on light
+ * paper, and whatever the page sets as --cf-shadow on dark paper (a shadow
+ * must be darker than its paper; see DARK_SHADOW).
+ */
+export const SHADOW_STYLE = `style="fill:var(--cf-shadow,${SHADOW})"`
+/** A shadow for the shell's dark paper (#17140f): a deep navy, darker than the paper's lightest neighbours. */
+export const DARK_SHADOW = '#0b0d1c'
 export const PAPER = '#f2efe7'
 
 export const PALS = {
@@ -70,11 +78,14 @@ export const mix = (a: string, b: string, t: number): string => {
 /** A material from one base colour, the colorfigures way. */
 export const matOf = (hex: string): Mat => ({ l: hex, m: mix(hex, '#000000', 0.16), d: mix(hex, '#000000', 0.42) })
 
-/** Toward grey at the same lightness, then a little toward paper: offline machines. */
+/**
+ * Toward grey at the same lightness: offline machines. It does not lighten:
+ * receding is done with opacity, which falls back into light and dark paper alike.
+ */
 export const desaturate = (hex: string, t = 0.8): string => {
   const [r, g, b] = rgb(hex)
   const y = 0.3 * r + 0.59 * g + 0.11 * b
-  return mix(toHex([r + (y - r) * t, g + (y - g) * t, b + (y - b) * t]), PAPER, 0.18)
+  return toHex([r + (y - r) * t, g + (y - g) * t, b + (y - b) * t])
 }
 export const desaturateMat = (m: Mat, t = 0.8): Mat => ({ l: desaturate(m.l, t), m: desaturate(m.m, t), d: desaturate(m.d, t) })
 

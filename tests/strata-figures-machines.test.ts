@@ -71,6 +71,14 @@ describe('machine figures', () => {
     expect(machineArt({ kind: 'desktop', link: 'live' }).svg).toBe(machineArt({ kind: 'desktop', link: 'live', model: 'Mac mini' }).svg)
   })
 
+  it('on any paper: offline recedes by opacity, shadows take the page token', () => {
+    const live = machineArt({ kind: 'laptop', link: 'live' }).svg
+    expect(live).toContain('var(--cf-shadow,#41538f)')
+    expect(live).not.toMatch(/^<svg[^>]*><g opacity/)
+    expect(machineArt({ kind: 'laptop', link: 'offline' }).svg).toMatch(/^<svg[^>]*><g opacity="0.78">/)
+    expect(machineArt({ kind: 'laptop', link: 'error' }).svg).toMatch(/^<svg[^>]*><g opacity="0.78">/)
+  })
+
   it('reads the link into a state', () => {
     expect(stateOf({ kind: 'laptop', link: 'live' })).toBe('online')
     expect(stateOf({ kind: 'laptop', link: 'offline', reached: false })).toBe('never')
