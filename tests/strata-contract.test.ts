@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { levelOf, parentOf, STRATA_LINE_MAX, type MachineKind } from '../src/shared/strata'
+import { anchorOf, levelOf, parentOf, STRATA_LINE_MAX, type MachineKind } from '../src/shared/strata'
 import { syntheticFleet } from '../src/strata/fixture/synthetic'
 
 const NOW = 1_800_000_000_000
@@ -17,6 +17,13 @@ describe('strata levels', () => {
     expect(parentOf({ machine: 'm', workspace: 'w' })).toEqual({ machine: 'm' })
     expect(parentOf({ machine: 'm' })).toEqual({})
     expect(parentOf({})).toEqual({})
+  })
+
+  it('anchors the deepest id a path names, with its machine', () => {
+    expect(anchorOf({ machine: 'm' })).toBe('machine:m')
+    expect(anchorOf({ machine: 'm', workspace: 'w' })).toBe('workspace:m/w')
+    expect(anchorOf({ machine: 'm', workspace: 'w', agent: 'a' })).toBe('agent:m/a')
+    expect(anchorOf({ machine: 'n', workspace: 'w', agent: 'a' })).not.toBe(anchorOf({ machine: 'm', workspace: 'w', agent: 'a' }))
   })
 })
 
@@ -65,14 +72,32 @@ describe('the synthetic preview fleet', () => {
     expect(workspaces.some((w) => w.loose.length > 0)).toBe(true)
   })
 
-  it('keeps every line within the contract limit and every id unique', () => {
-    const agents = fleet.flatMap((m) => m.levels?.workspaces.flatMap((w) => w.agents) ?? [])
-    for (const agent of agents) {
-      expect((agent.task ?? '').length).toBeLessThanOrEqual(STRATA_LINE_MAX)
-      expect((agent.reply ?? '').length).toBeLessThanOrEqual(STRATA_LINE_MAX)
+  it('keeps every line within the contract limit and every id unique within its machine', () => {
+    for (const machine of fleet) {
+      const agents = machine.levels?.workspaces.flatMap((w) => w.agents) ?? []
+      for (const agent of agents) {
+        expect((agent.task ?? '').length).toBeLessThanOrEqual(STRATA_LINE_MAX)
+        expect((agent.reply ?? '').length).toBeLessThanOrEqual(STRATA_LINE_MAX)
+      }
+      const ids = agents.map((a) => a.id)
+      expect(new Set(ids).size).toBe(ids.length)
     }
-    const ids = agents.map((a) => a.id)
-    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('has a machine restored from another, sharing its workspace and agent ids', () => {
+    const idsOf = (id: string) => {
+      const workspaces = fleet.find((m) => m.id === id)?.levels?.workspaces ?? []
+      return new Set([...workspaces.map((w) => w.id), ...workspaces.flatMap((w) => w.agents.map((a) => a.id))])
+    }
+    const studio = idsOf('syn-studio')
+    const shared = [...idsOf('syn-laptop')].filter((id) => studio.has(id))
+    expect(shared.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('says only the status verb, never a counter', () => {
+    const statuses = fleet.flatMap((m) => m.levels?.workspaces.flatMap((w) => w.agents.map((a) => a.status)) ?? []).filter(Boolean)
+    expect(statuses.length).toBeGreaterThan(0)
+    for (const status of statuses) expect(status).toMatch(/^[A-Z][a-z]+…$/)
   })
 
   it('counts what the workspace holds', () => {
