@@ -126,7 +126,13 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
   const settleScrub = () => {
     const g = gestureRef.current
     const active = activeRef.current
-    if (!g || g.mode !== 'scrub' || !active || active.flight.mode !== 'scrub') return
+    if (!active || active.flight.mode !== 'scrub') return
+    if (!g || g.mode !== 'scrub') {
+      // A scrub flight with no gesture behind it (lost to a race) must not hang paused: spring back.
+      const id = active.flight.id
+      active.runner.settle(false, 0).then((at) => land(id, at))
+      return
+    }
     active.runner.scrub(g.p)
     if (!g.release) return
     const { commit, speed } = g.release
@@ -142,6 +148,8 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
     const active = activeRef.current
     activeRef.current = null
     active?.runner.release()
+    // A scrub gesture whose flight never took off (a path change won the race) must not block the next gesture.
+    if (gestureRef.current?.mode === 'scrub' && stateRef.current.flight?.mode !== 'scrub') gestureRef.current = null
     if (active) recordLanding(active.flight.id, landedRef.current?.flight.id === active.flight.id ? landedRef.current.at : 'replaced')
     if (root) delete root.dataset.flying
     for (const layer of [coarseRef.current, fineRef.current]) layer?.style.removeProperty('will-change')
