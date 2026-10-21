@@ -3,7 +3,17 @@
 // with a mock fleet behind it — no Electron, no registry, no relay, nothing of
 // the owner's running app. Every lane runs its own copy on its own port.
 //
-//   npm run strata:preview -- [--port 5280] [--fixture scratchpad/strata/fleet-real.json] [--auth]
+//   npm run strata:preview -- [--port 5280] [--fixture scratchpad/strata/fleet-real.json] [--auth] [--prod] [--still]
+//
+// --prod builds every page under src/strata (index.html and whatever the lanes
+// add: the stage prototype, the gallery, the embed stand-in and QA pages) for
+// production into /tmp/strata-prod-<port> and serves that build instead of
+// Vite's dev transform; the mock routes are unchanged. React is its profiling
+// build, so ?probe still counts commits. The build is a snapshot: restart the
+// preview to pick up an edit. Use it for timings; use the dev server to work.
+//
+// --still stops the mock's phase ticks, so React commits can be counted
+// without the live updates in them.
 //
 // --fixture puts a real machine (written by scratchpad/strata/make-fixture.mjs)
 // in front of the synthetic ones. The mock answers the production shapes of
@@ -35,9 +45,9 @@
 // The dep cache lives in /tmp: a worktree's node_modules resolves to the main
 // tree's, and sharing node_modules/.vite with the live app's dev server makes
 // both re-optimise and force-reload the owner's desktop.
-import { createServer } from 'vite'
+import { build, createServer } from 'vite'
 import react from '@vitejs/plugin-react'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gate, mockToken, MOCK_SWITCHES, nextSwitches, tokenOf } from './strata-mock-gate.mjs'
@@ -53,6 +63,9 @@ const fixtureFile = arg('fixture', process.env.STRATA_FIXTURE)
 const STAND_IN = path.join(tree, 'src', 'strata', 'embed', 'stand-in.html')
 const RESERVED = new Set([5173, 8639, 8643, 9333, 9245])
 if (RESERVED.has(port)) throw new Error(`port ${port} belongs to the live app or its QA tools — pick another`)
+const prod = process.argv.includes('--prod')
+const still = process.argv.includes('--still')
+const PROD_OUT = `/tmp/strata-prod-${port}`
 
 const realMachines = () => {
   if (!fixtureFile) return []
@@ -95,7 +108,7 @@ const mockFleet = (machines) => {
       for (const send of listeners.get(machine.id) ?? []) send(event)
     }
   }
-  setInterval(advance, TICK_MS).unref()
+  if (!still) setInterval(advance, TICK_MS).unref()
   return {
     list: () => [...state.values()],
     get: (id) => state.get(id),
@@ -193,12 +206,72 @@ const machineRoute = (switches, server) => async (url, req, res) => {
   if (refusal) return json(res, refusal.status, refusal.body)
   if (url.pathname !== under[0] || url.searchParams.get('embed') !== 'agent') return false
   if (!existsSync(STAND_IN)) return json(res, 404, { error: 'no stand-in embed in this tree (src/strata/embed/stand-in.html)' })
+  if (prod) return sendFile(res, path.join(PROD_OUT, 'embed', 'stand-in.html'))
   // relative src/href would resolve under /m/<id>/, not next to the file
   const raw = readFileSync(STAND_IN, 'utf8').replace(/(src|href)="\.\//g, '$1="/embed/')
   const html = await server.transformIndexHtml('/embed/stand-in.html', raw, req.originalUrl)
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
   res.end(html)
   return true
+}
+
+const TYPES = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.json': 'application/json',
+  '.png': 'image/png',
+  '.woff2': 'font/woff2',
+  '.map': 'application/json'
+}
+
+const sendFile = (res, file) => {
+  res.writeHead(200, { 'content-type': TYPES[path.extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' })
+  res.end(readFileSync(file))
+  return true
+}
+
+/**
+ * --prod: the built pages. A directory serves its index.html; a path with no
+ * extension that is not a file is a level (/me/…) and gets the shell; anything
+ * else missing is a 404, never Vite's dev transform.
+ */
+const builtRoute = (outDir) => async (url, req, res) => {
+  const file = path.resolve(outDir, `.${decodeURIComponent(url.pathname)}`)
+  if (file !== outDir && !file.startsWith(outDir + path.sep)) return json(res, 403, { error: 'outside the build' })
+  if (existsSync(file) && statSync(file).isFile()) return sendFile(res, file)
+  const index = path.join(file, 'index.html')
+  if (existsSync(index)) return sendFile(res, index)
+  if (path.extname(file)) return json(res, 404, { error: `not in the production build: ${url.pathname}` })
+  return sendFile(res, path.join(outDir, 'index.html'))
+}
+
+/** Every page under src/strata, keyed by its path ('stage/index', 'embed/qa', …). */
+const pagesOf = (root) =>
+  Object.fromEntries(
+    readdirSync(root, { recursive: true })
+      .filter((file) => file.endsWith('.html') && !file.split(path.sep).includes('node_modules'))
+      .map((file) => [file.slice(0, -'.html'.length), path.join(root, file)])
+  )
+
+const buildProd = async () => {
+  const root = path.join(tree, 'src', 'strata')
+  const pages = pagesOf(root)
+  const started = Date.now()
+  await build({
+    root,
+    base: '/',
+    mode: 'production',
+    cacheDir: `/tmp/strata-vite-cache-prod-${port}`,
+    configFile: false,
+    logLevel: 'warn',
+    plugins: [react()],
+    // the profiling build keeps <Profiler> working, so ?probe counts commits in production too
+    resolve: { alias: [{ find: /^react-dom$/, replacement: 'react-dom/profiling' }] },
+    build: { outDir: PROD_OUT, emptyOutDir: true, rollupOptions: { input: pages } }
+  })
+  console.log(`strata preview: production build of ${Object.keys(pages).join(', ')} in ${Date.now() - started} ms (${PROD_OUT})`)
 }
 
 /** The levels stream: a snapshot, then every change; a hung machine's stream stays open and goes silent. */
@@ -236,7 +309,13 @@ const mockPlugin = () => ({
     const { syntheticFleet } = await server.ssrLoadModule('/fixture/synthetic.ts')
     const fleet = mockFleet([...realMachines(), ...syntheticFleet(Date.now())])
     const switches = switchStore({ ...MOCK_SWITCHES, auth: process.argv.includes('--auth') })
-    const routes = [mockRoute(fleet, switches), fleetRoute(fleet), machineRoute(switches, server), levelsRoute(fleet, switches)]
+    const routes = [
+      mockRoute(fleet, switches),
+      fleetRoute(fleet),
+      machineRoute(switches, server),
+      levelsRoute(fleet, switches),
+      ...(prod ? [builtRoute(PROD_OUT)] : [])
+    ]
     const handle = async (req, res, next) => {
       const url = new URL(req.url ?? '/', 'http://preview')
       for (const route of routes) if (await route(url, req, res)) return
@@ -247,6 +326,7 @@ const mockPlugin = () => ({
   }
 })
 
+if (prod) await buildProd()
 const server = await createServer({
   root: path.join(tree, 'src', 'strata'),
   cacheDir: `/tmp/strata-vite-cache-${port}`,
@@ -256,4 +336,6 @@ const server = await createServer({
   server: { port, strictPort: true, host: '127.0.0.1', fs: { allow: [tree] } }
 })
 await server.listen()
-console.log(`strata preview: http://127.0.0.1:${port}/me${fixtureFile ? `  (real machine from ${fixtureFile})` : ''}`)
+console.log(
+  `strata preview: http://127.0.0.1:${port}/me${fixtureFile ? `  (real machine from ${fixtureFile})` : ''}${prod ? '  PRODUCTION BUILD' : ''}${still ? '  still mock' : ''}`
+)

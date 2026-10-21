@@ -330,6 +330,8 @@ export interface FigureArt {
 export type ShellToEmbed =
   | { type: 'strata:focus'; agentId: string; attachmentId?: string }
   | { type: 'strata:blur' }
+  /** Hover intent: fetch that agent's detail ahead of a focus. Mounts nothing, moves no focus. */
+  | { type: 'strata:prefetch'; agentId: string }
 
 export type EmbedToShell =
   /** A prewarmed document is up and listening with no agent mounted: the shell may send focus now. */
