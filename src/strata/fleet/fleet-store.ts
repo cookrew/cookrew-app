@@ -134,7 +134,8 @@ interface Entry {
   /**
    * Answering, but not streamed: over HTTP/1.1 the page cannot hold a stream
    * per machine (stream budget below). Its snapshot is the one read when it
-   * was last connected or entered, so it is drawn stale.
+   * was last connected or entered; presence keeps its line. Internal only:
+   * its row does not change (machineOf).
    */
   parked: boolean
 }
@@ -166,12 +167,19 @@ const freshEntry = (row: FleetMachine, levels: LevelsSnapshot | null): Entry => 
   parked: false
 })
 
+/** Same desktop process and the same rev: the snapshot says nothing new. */
+const sameSnapshot = (a: LevelsSnapshot | null, b: LevelsSnapshot): boolean => a !== null && a.rev === b.rev && a.at === b.at
+
+const ROW_KEYS = ['id', 'name', 'online', 'lastSeenAt', 'appVersion', 'profile', 'base'] as const
+const sameRow = (a: FleetMachine, b: FleetMachine): boolean => ROW_KEYS.every((key) => a[key] === b[key])
+
 export const createFleetStore = (deps: FleetDeps, config: FleetConfig): FleetStore => {
   let entries = new Map<string, Entry>()
   let order: string[] = []
   const handles = new Map<string, Handles>()
   const listeners = new Set<() => void>()
-  const rows = new WeakMap<Entry, StrataMachine>()
+  /** The row last handed out per machine: reused while its content is the same, so a reader commits only on change. */
+  let rows = new Map<string, StrataMachine>()
   let snapshot: StrataMachine[] = []
   let dirty = true
   let notifyQueued = false
@@ -289,11 +297,13 @@ export const createFleetStore = (deps: FleetDeps, config: FleetConfig): FleetSto
     if (!entry || !event || (!handlesOf(id).streamed && event.type !== 'snapshot')) return resync(id)
     const folded = foldLevels(entry.levels, event)
     if (!folded.ok) return resync(id)
+    // A reconnect's opening snapshot that says nothing new keeps what is drawn.
+    const levels = event.type === 'snapshot' && sameSnapshot(entry.levels, folded.levels) ? entry.levels : folded.levels
     const firstLive = entry.link !== 'live'
     patchHandles(id, { streamed: true })
     update(id, (e) => ({
       ...e,
-      levels: folded.levels,
+      levels,
       link: 'live',
       detail: null,
       liveSince: firstLive ? deps.now() : e.liveSince,
@@ -354,7 +364,8 @@ export const createFleetStore = (deps: FleetDeps, config: FleetConfig): FleetSto
       abort.abort()
     }, config.requestTimeoutMs)
     patchHandles(id, { abort, timer: null })
-    update(id, (e) => (e.link === 'connecting' ? e : { ...e, link: 'connecting', liveSince: null }))
+    // A parked machine being woken keeps showing live: it was answering all along.
+    update(id, (e) => (e.link === 'connecting' || (e.parked && e.link === 'live') ? e : { ...e, link: 'connecting', liveSince: null }))
     deps
       .fetch(`${entry.row.base}api/levels`, {
         headers: token ? { authorization: `Bearer ${token}` } : {},
@@ -371,10 +382,10 @@ export const createFleetStore = (deps: FleetDeps, config: FleetConfig): FleetSto
           if (status === 200 && isLevelsSnapshot(body)) {
             // Past the stream budget the snapshot is all it gets: live, but drawn stale.
             if (!streamSet().has(id)) {
-              update(id, (e) => ({ ...e, levels: body, detail: null, link: 'live', parked: true, liveSince: null }))
+              update(id, (e) => ({ ...e, levels: sameSnapshot(e.levels, body) ? e.levels : body, detail: null, link: 'live', parked: true, liveSince: null }))
               return
             }
-            update(id, (e) => ({ ...e, levels: body, detail: null, parked: false }))
+            update(id, (e) => ({ ...e, levels: sameSnapshot(e.levels, body) ? e.levels : body, detail: null, parked: false }))
             openStream(id, gen, token)
             return
           }
@@ -550,13 +561,20 @@ export const createFleetStore = (deps: FleetDeps, config: FleetConfig): FleetSto
     }
   }
 
+  /**
+   * Parking is internal: a parked machine's row does not change (its snapshot
+   * is as good as when its stream closed, and presence keeps its line), so the
+   * stream budget moving at a dive costs no reader a commit.
+   */
   const machineOf = (entry: Entry): StrataMachine => {
-    const known = rows.get(entry)
-    if (known) return known
-    const row: StrataMachine = { ...entry.row, link: entry.link, levels: entry.levels, stale: entry.levels !== null && (entry.link !== 'live' || entry.parked) }
-    rows.set(entry, row)
+    const stale = entry.levels !== null && entry.link !== 'live'
+    const known = rows.get(entry.row.id)
+    if (known && known.link === entry.link && known.levels === entry.levels && known.stale === stale && sameRow(known, entry.row)) return known
+    const row: StrataMachine = { ...entry.row, link: entry.link, levels: entry.levels, stale }
+    rows = new Map(rows).set(entry.row.id, row)
     return row
   }
+
 
   return {
     start() {
@@ -591,11 +609,13 @@ export const createFleetStore = (deps: FleetDeps, config: FleetConfig): FleetSto
     },
     getSnapshot() {
       if (dirty) {
-        snapshot = order.flatMap((id) => {
+        const next = order.flatMap((id) => {
           const entry = entries.get(id)
           return entry ? [machineOf(entry)] : []
         })
         dirty = false
+        // The same rows in the same order are the same snapshot.
+        if (next.length !== snapshot.length || next.some((row, i) => row !== snapshot[i])) snapshot = next
       }
       return snapshot
     },

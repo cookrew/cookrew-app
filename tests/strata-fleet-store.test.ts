@@ -618,21 +618,41 @@ describe('the fleet store: stream budget (HTTP/1.1)', () => {
     expect(streaming(h).sort()).toEqual(['d', 'e'])
   })
 
-  it('a parked machine keeps its snapshot, drawn stale, and is read again when entered', async () => {
+  it('a parked machine keeps its snapshot and its row, and is read again when entered', async () => {
     const h = harness({ list: five.map((id) => row(id)), tokens })
     h.store.setStreamLimit(1)
     h.store.start()
     await settle()
-    expect(h.machine('c')).toMatchObject({ link: 'live', stale: true })
+    expect(h.machine('c')).toMatchObject({ link: 'live', stale: false })
     expect(h.machine('c').levels?.rev).toBe(SNAP.rev)
     const before = h.levelCalls('c').length
     await vi.advanceTimersByTimeAsync(FLEET_TIMINGS.presenceRefreshMs * 2)
     expect(h.levelCalls('c')).toHaveLength(before)
+    // (Presence moves lastSeenAt while online, so the row is taken after it.)
+    const parkedRow = h.machine('c')
     h.store.enter('c')
     await goLive(h, 'c')
     expect(h.levelCalls('c')).toHaveLength(before + 1)
     expect(h.machine('c')).toMatchObject({ link: 'live', stale: false })
-    expect(h.machine('a')).toMatchObject({ link: 'live', stale: true })
+    // Woken and streamed again with the same snapshot: the very same row, so no reader commits.
+    expect(h.machine('c')).toBe(parkedRow)
+  })
+
+  it('moving the budget at a dive hands readers the same snapshot when nothing they draw changed', async () => {
+    const h = harness({ list: five.map((id) => row(id)), tokens })
+    h.store.start()
+    await settle()
+    for (const id of five) h.send(id, { type: 'snapshot', snapshot: SNAP })
+    await settle()
+    const before = h.store.getSnapshot()
+    h.store.setStreamLimit(2)
+    await settle()
+    expect(h.store.getSnapshot()).toBe(before)
+    h.store.setStreamLimit(Number.POSITIVE_INFINITY)
+    await settle()
+    for (const id of five) if (h.openStreams(id)[0]) h.openStreams(id)[0].onMessage(JSON.stringify({ type: 'snapshot', snapshot: SNAP }))
+    await settle()
+    expect(h.store.getSnapshot()).toBe(before)
   })
 
   it('gives every stream back when the budget lifts, and none when it is zero', async () => {
