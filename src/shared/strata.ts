@@ -12,13 +12,15 @@
  * Which part answers for which types (every part reads this whole file, and a
  * type changes for all of them at once or not at all):
  *   desktop   MachineProfile, LevelsSnapshot, LevelsEvent, LevelsAgentDetail
- *   registry  FleetMachine rows for the signed-in account
+ *   registry  FleetMachine rows and FleetPresence for the signed-in account
  *   shell     joins both per machine, keeps them live, MachineLink, the embed
  *             handoff (ShellToEmbed / EmbedToShell)
  *   levels    StrataPath ⇄ URL, what each level shows, input mapping
  *   stage     camera stops and flights between AnchorIds
  *   figures   FigureArt with the anchors the stage flies to
  */
+
+import type { TerminalNodeData } from './model'
 
 export const STRATA_VERSION = 1
 
@@ -67,11 +69,35 @@ export interface FleetMachine {
    * Same-origin base the shell reaches this desktop under: '/relay/@<user>/desktop/<deviceId>/'.
    * The registry admits the account cookie; the desktop admits its own pairing
    * token, which this browser keeps as localStorage 'cr_token:<deviceId>' (absent
-   * = unpaired). Event streams carry it as ?token= because EventSource sends no headers.
+   * = unpaired). The shell sends it as Authorization: Bearer on every request,
+   * streams included: they run over fetch, so no token lands in a URL and a
+   * silent stream can be caught.
    * Relay caps: 16 requests in flight per desktop (every open stream holds one),
    * 8 desktops online per account.
    */
   base: string
+}
+
+// ── registry: served by cookrew.dev, account cookie, same-origin ────────────
+//
+// GET  /v2/me/desktops            → FleetMachine[]   today's array: every row keeps
+//                                   its older fields and gains the ones above
+// GET  /v2/me/presence            → FleetPresence    every desktop in one answer, with the
+//                                   account cap; the shell refreshes presence with this,
+//                                   never the list
+
+/**
+ * Who is online right now, for every desktop of the account at once. A row's
+ * online and lastSeenAt mean exactly what the list row's do (lastSeenAt is
+ * `at` while online), so the shell lays a row over its list row as it stands.
+ */
+export interface FleetPresence {
+  at: number
+  /** Desktops the relay keeps online at once for one account. */
+  cap: number
+  /** How many are online now; at the cap the shell says '<online> of <total> online'. */
+  online: number
+  desktops: Array<Pick<FleetMachine, 'id' | 'online' | 'lastSeenAt'>>
 }
 
 // ── levels: served by each desktop ──────────────────────────────────────────
@@ -133,7 +159,11 @@ export interface LevelsAgent {
   task: string | null
   /** First line of the latest reply, or the live glance message while thinking. Scrubbed. */
   reply: string | null
-  /** Live status verb while thinking ('Cerebrating… 34s'); else null. */
+  /**
+   * Live status verb while thinking ('Cerebrating…'), never a counter, so the
+   * wire changes only with the verb: views draw the elapsed time from phaseSince.
+   * Else null.
+   */
   status?: string | null
   turns: number
   /** Wired notes and browsers, in connection order. */
@@ -175,15 +205,28 @@ export interface LevelsSnapshot {
 export interface LevelsAgentDetail {
   agent: LevelsAgent
   workspaceId: string
+  /** Bodies are scrubbed for display (lines.ts): never write one back. */
   notes: Array<{ id: string; title: string; content: string; shared: boolean }>
   browsers: Array<{ id: string; title: string; url: string | null; tabs: Array<{ id: string; url: string }>; live: boolean; shared: boolean }>
+  /**
+   * The card's own terminal node as the desktop holds it: the embed's overlay
+   * reads preset, brief, orch and servedSession from it, so an imported or placed
+   * card opens as itself. Absent from a desktop older than this field: the embed
+   * then draws one up from agent.
+   */
+  node?: TerminalNodeData
 }
 
-/** A rev that is not exactly previous + 1 means a gap: drop the stream and reconnect. */
+/**
+ * A rev that is not exactly previous + 1 means a gap: drop the stream and reconnect.
+ * Any change to a workspace's seating (an agent added, removed or moved) is ONE
+ * 'workspace' event, counts and tray with it. A 'snapshot' may also arrive
+ * mid-stream (a machine-only change, or more than 48 deltas at once) with
+ * snapshot.rev = previous + 1: replace everything.
+ */
 export type LevelsEvent =
   | { type: 'snapshot'; snapshot: LevelsSnapshot }
   | { type: 'agent'; rev: number; workspaceId: string; agent: LevelsAgent }
-  | { type: 'agent-gone'; rev: number; workspaceId: string; agentId: string }
   | { type: 'workspace'; rev: number; workspace: LevelsWorkspace }
   | { type: 'workspace-gone'; rev: number; workspaceId: string }
   | { type: 'focus'; rev: number; workspaceId: string | null }
@@ -243,14 +286,24 @@ export interface Rect {
 /**
  * Every flight starts and ends on a registered anchor. Levels register their
  * items' DOM rects under these ids; the stage reads them once per flight,
- * never per frame.
+ * never per frame. Workspace and agent ids are unique only within their
+ * machine (a Mac restored from another's backup keeps its ids), so their
+ * anchors carry the machine: build them with anchorOf, never by hand.
  */
 export type AnchorId =
   | `machine:${string}`
   | `portal:${string}`
-  | `workspace:${string}`
-  | `agent:${string}`
+  | `workspace:${string}/${string}`
+  | `agent:${string}/${string}`
   | 'terminal'
+
+/** The anchor of the item a path names, its deepest id: levels register it, the stage flies to it. */
+export const anchorOf = (path: StrataPath & { machine: string }): AnchorId =>
+  path.agent
+    ? `agent:${path.machine}/${path.agent}`
+    : path.workspace
+      ? `workspace:${path.machine}/${path.workspace}`
+      : `machine:${path.machine}`
 
 /**
  * A drawn figure. Self-contained SVG markup — no external refs, no
@@ -279,6 +332,8 @@ export type ShellToEmbed =
   | { type: 'strata:blur' }
 
 export type EmbedToShell =
+  /** A prewarmed document is up and listening with no agent mounted: the shell may send focus now. */
+  | { type: 'strata:warm' }
   | { type: 'strata:ready'; agentId: string }
   | { type: 'strata:out' }
   | { type: 'strata:error'; code: 'not-found' | 'offline' | 'unauthorized' | 'unreachable'; detail?: string }

@@ -4,6 +4,8 @@
 // It covers every MachineKind, an offline machine with a cache, one never
 // reached, background workspaces, a 48-agent workspace and an agent with 40
 // attachments. Exactly one workspace per machine is focused, as on a desktop.
+// One machine was restored from another's backup, so it carries the same
+// workspace and agent ids: ids are unique only within a machine.
 import type {
   AgentPhase,
   Harness,
@@ -61,6 +63,7 @@ const REPLIES = [
 ]
 const HOSTS = ['github.com/acme/app/pull/482', 'localhost:5280', 'docs.example.dev/queue', 'grafana.example.dev/d/latency', 'file · report.html']
 const HARNESSES: Harness[] = ['claude', 'claude', 'claude', 'codex', 'opencode', 'pi', 'shell']
+const VERBS = ['Working…', 'Cerebrating…', 'Pondering…', 'Brewing…']
 const MODELS: Record<Harness, Array<string | null>> = {
   claude: ['claude-opus-5-5', 'claude-sonnet-5-5', null],
   codex: ['gpt-5.6', null],
@@ -84,6 +87,8 @@ interface MachineSpec {
   away: number | null | 'never'
   /** The first one is the focused workspace. */
   workspaces: Array<[name: string, agents: number]>
+  /** Restored from that machine's backup: its workspace and agent ids are that machine's. */
+  idsFrom?: string
 }
 
 const DAY = 24 * 60 * 60 * 1000
@@ -116,7 +121,7 @@ const SPECS: MachineSpec[] = [
   {
     id: 'syn-laptop', name: 'old-thinkpad', kind: 'laptop', model: '20XW', label: 'ThinkPad X1 Carbon', vendor: 'LENOVO',
     os: 'linux', arch: 'x64', evidence: ['dmi.chassis_type=10'], away: 3 * DAY,
-    workspaces: [['Thesis', 3], ['Dotfiles', 1]]
+    workspaces: [['Thesis', 3], ['Dotfiles', 1]], idsFrom: 'syn-studio'
   },
   {
     id: 'syn-vm', name: 'win-test', kind: 'vm', model: 'UTM', label: 'Windows 11 VM', vendor: 'QEMU',
@@ -141,8 +146,8 @@ const attachmentsFor = (rand: () => number, agentId: string, heavy: boolean): Le
   )
 }
 
-const workspaceFor = (rand: () => number, machineId: string, index: number, [name, size]: MachineSpec['workspaces'][number], now: number): LevelsWorkspace => {
-  const id = `${machineId}-w${index}`
+const workspaceFor = (rand: () => number, idBase: string, index: number, [name, size]: MachineSpec['workspaces'][number], now: number): LevelsWorkspace => {
+  const id = `${idBase}-w${index}`
   const agents: LevelsAgent[] = Array.from({ length: size }, (_, i) => {
     const harness = pick(rand, HARNESSES)
     const phase = phaseFor(rand)
@@ -158,7 +163,7 @@ const workspaceFor = (rand: () => number, machineId: string, index: number, [nam
       phaseSince: now - Math.floor(rand() * 40 * 60 * 1000),
       task: harness === 'shell' ? null : pick(rand, TASKS),
       reply: phase === 'replied' || phase === 'idle' ? pick(rand, REPLIES) : null,
-      status: phase === 'thinking' ? `Working… (${Math.floor(rand() * 300)}s)` : null,
+      status: phase === 'thinking' ? pick(rand, VERBS) : null,
       turns: Math.floor(rand() * 60),
       attachments: attachmentsFor(rand, agentId, size >= 9 && i === 1)
     }
@@ -201,7 +206,7 @@ export const syntheticFleet = (now: number, seed = 21): FixtureMachine[] => {
       memoryGb: null,
       evidence: spec.evidence
     }
-    const workspaces = spec.workspaces.map((w, i) => workspaceFor(rand, spec.id, i, w, now))
+    const workspaces = spec.workspaces.map((w, i) => workspaceFor(rand, spec.idsFrom ?? spec.id, i, w, now))
     const offline = spec.away !== null
     const levels: LevelsSnapshot | null =
       spec.away === 'never'
