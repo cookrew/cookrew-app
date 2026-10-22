@@ -138,7 +138,16 @@ export const embedPool = (): StrataEmbedPool => {
     const held = frames.map((f) => (f.machineId === opening?.machineId ? { ...f, state: 'loading' as const } : f))
     fleetStore().setStreamLimit(fleetStreamLimit(protocol, held))
   }
-  core.subscribe(budget)
+  // Once per task: a scene remounted inside one commit (open, close, open) nets out.
+  let budgetQueued = false
+  core.subscribe(() => {
+    if (budgetQueued) return
+    budgetQueued = true
+    queueMicrotask(() => {
+      budgetQueued = false
+      budget()
+    })
+  })
   budget()
   let hiddenTimer: ReturnType<typeof setTimeout> | null = null
   document.addEventListener('visibilitychange', () => {

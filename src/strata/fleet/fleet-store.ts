@@ -251,8 +251,8 @@ export const createFleetStore = (deps: FleetDeps, config: FleetConfig): FleetSto
         release(id)
         // A stream only opens after a snapshot answered, so a parked machine has one to show.
         update(id, (e) => ({ ...e, parked: true, liveSince: null, link: e.levels ? 'live' : e.link }))
-      } else if (allowed.has(id) && entry.parked) {
-        update(id, (e) => ({ ...e, parked: false }))
+      } else if (allowed.has(id) && entry.parked && held.abort === null && held.timer === null) {
+        // Still parked while its snapshot is read, so it keeps reading live; the answer unparks it.
         connect(id)
       }
     }
@@ -273,7 +273,7 @@ export const createFleetStore = (deps: FleetDeps, config: FleetConfig): FleetSto
     const attempt = stable ? 0 : entry.attempt
     const dropped = outcome.detail === 'stream-dropped' || outcome.detail === 'silent'
     const link: MachineLink = dropped && attempt >= STREAM_PATIENCE ? 'offline' : outcome.link
-    update(id, (e) => ({ ...e, link, detail: outcome.detail, attempt: attempt + 1, liveSince: null }))
+    update(id, (e) => ({ ...e, link, detail: outcome.detail, attempt: attempt + 1, liveSince: null, parked: false }))
     if (outcome.retry === 'never' || paused) return
     schedule(id, outcome.retry === 'outdated' ? OUTDATED_RECHECK_MS : backoffDelay(attempt, deps.random()))
   }

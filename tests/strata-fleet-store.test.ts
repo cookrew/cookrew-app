@@ -655,6 +655,25 @@ describe('the fleet store: stream budget (HTTP/1.1)', () => {
     expect(h.store.getSnapshot()).toBe(before)
   })
 
+  it('a budget that drops, lifts and drops again in one task (a remounted dive) changes no row on the way', async () => {
+    const h = harness({ list: five.map((id) => row(id)), tokens })
+    h.store.start()
+    await settle()
+    for (const id of five) h.send(id, { type: 'snapshot', snapshot: SNAP })
+    await settle()
+    const before = h.store.getSnapshot()
+    const seen: StrataMachine[][] = []
+    h.store.subscribe(() => seen.push(h.store.getSnapshot()))
+    h.store.setStreamLimit(2)
+    // Woken, the parked ones are read again; they keep reading live meanwhile.
+    h.store.setStreamLimit(Number.POSITIVE_INFINITY)
+    h.store.setStreamLimit(2)
+    await settle()
+    expect(seen.every((rows) => rows === before)).toBe(true)
+    expect(h.store.getSnapshot()).toBe(before)
+    expect(streaming(h)).toEqual(['a', 'b'])
+  })
+
   it('gives every stream back when the budget lifts, and none when it is zero', async () => {
     const h = harness({ list: five.map((id) => row(id)), tokens })
     h.store.setStreamLimit(0)
