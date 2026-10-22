@@ -43,15 +43,19 @@ export const measureFlight = (root: HTMLElement, plan: ActivePlan, scenes: Scene
 
 const measureSteps = (plan: ActivePlan, scenes: SceneLookup, box: DOMRect, viewport: Rect): FlightGeometry => {
   const rel = (r: DOMRect): Rect => ({ x: r.left - box.left, y: r.top - box.top, w: r.width, h: r.height })
-  const rects = plan.steps.map((step): StepRects => {
-    const parentKey = pathKey(step.parent)
-    const found = findAnchor(scenes.registry(parentKey), step.anchor)
-    let anchor = found ? rel(found.el.getBoundingClientRect()) : null
-    const parentEl = scenes.el(parentKey)
-    if (found && anchor && parentEl && visibleShare(anchor, viewport) < IN_VIEW) {
-      parentEl.scrollTop += anchor.y + anchor.h / 2 - viewport.h / 2
-      anchor = rel(found.el.getBoundingClientRect())
-    }
+  const anchors = plan.steps.map((step) => findAnchor(scenes.registry(pathKey(step.parent)), step.anchor))
+  // Two passes. In a dive a step's child is the next step's parent, so scrolling a later anchor into
+  // view moves an earlier step's content: every level is scrolled first, and only then is anything read.
+  plan.steps.forEach((step, i) => {
+    const found = anchors[i]
+    const parentEl = scenes.el(pathKey(step.parent))
+    if (!found || !parentEl) return
+    const anchor = rel(found.el.getBoundingClientRect())
+    if (visibleShare(anchor, viewport) < IN_VIEW) parentEl.scrollTop += anchor.y + anchor.h / 2 - viewport.h / 2
+  })
+  const rects = plan.steps.map((step, i): StepRects => {
+    const found = anchors[i]
+    const anchor = found ? rel(found.el.getBoundingClientRect()) : null
     const content = findAnchor(scenes.registry(pathKey(step.child)), step.content)
     return {
       anchor: anchor && visibleShare(anchor, viewport) > 0 ? anchor : null,

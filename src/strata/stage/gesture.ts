@@ -27,6 +27,8 @@ const DECAY_SHARE = 0.6
 const DECAY_EVENTS = 2
 export const WHEEL_IDLE_MS = 90
 export const WHEEL_ABSORB_MS = 160
+/** A vertical delta past this (and twice the horizontal) is the page being scrolled, not a swipe's tail. */
+const VERTICAL_PX = 4
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 
@@ -121,9 +123,13 @@ export const wheelProgress = (travel: number): number => clamp(travel / WHEEL_SP
 export const wheelStep = (s: WheelState, dx: number, dy: number, t: number): [WheelState, WheelOut] => {
   const abs = Math.abs(dx)
   if (s.phase === 'absorbing') {
-    const fresh = abs > 8 && abs > 2 * s.lastAbs && t - s.lastT < WHEEL_ABSORB_MS
-    if (!fresh) return [{ ...s, lastT: t, lastAbs: abs }, { type: 'swallow' }]
-    return wheelStep({ ...WHEEL_IDLE }, dx, dy, t)
+    // The tail is over when the stream went quiet (an idle timer that fired late), when fresh fingers
+    // swipe again, or when the fingers scroll the page: a mostly vertical event is never the tail
+    // (a few px of vertical noise in the tail is, or the next horizontal tail event would start a flight).
+    const ended = t - s.lastT >= WHEEL_ABSORB_MS || Math.abs(dy) > Math.max(VERTICAL_PX, 2 * abs)
+    const fresh = abs > 8 && abs > 2 * s.lastAbs
+    if (!ended && !fresh) return [{ ...s, lastT: t, lastAbs: abs }, { type: 'swallow' }]
+    return wheelStep(WHEEL_IDLE, dx, dy, t)
   }
   if (s.phase === 'idle') {
     if (abs < 1 || abs <= Math.abs(dy)) return [s, { type: 'pass' }]
@@ -141,9 +147,12 @@ export const wheelStep = (s: WheelState, dx: number, dy: number, t: number): [Wh
   return [next, { type: 'move', travel: sum }]
 }
 
-/** Call when no wheel event came for a while: an active gesture releases, an absorbed tail ends. */
+/**
+ * Call when no wheel event came for a while: an active gesture releases, an absorbed tail ends.
+ * A release by silence had the fingers at rest before they lifted (no momentum), so it carries no speed.
+ */
 export const wheelIdle = (s: WheelState, t: number): [WheelState, WheelOut | null] => {
-  if (s.phase === 'active' && t - s.lastT >= WHEEL_IDLE_MS) return [{ ...s, phase: 'absorbing' }, { type: 'release', travel: s.sum, velocity: s.velocity }]
+  if (s.phase === 'active' && t - s.lastT >= WHEEL_IDLE_MS) return [{ ...s, phase: 'absorbing' }, { type: 'release', travel: s.sum, velocity: 0 }]
   if (s.phase === 'absorbing' && t - s.lastT >= WHEEL_ABSORB_MS) return [WHEEL_IDLE, null]
   return [s, null]
 }
