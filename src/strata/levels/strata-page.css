@@ -1,0 +1,25 @@
+/* The page around the shell on cookrew.dev: the shell fills it and nothing
+   scrolls. Only the page entry imports this; a host (the desktop app) keeps
+   its own page and gets strata.css alone. */
+:root {
+  color-scheme: light dark;
+}
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+body {
+  background: #f6efe0;
+  color: #2d2a20;
+  font: 14px/1.4 ui-sans-serif, -apple-system, system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  body {
+    background: #17140f;
+    color: #efe6d2;
+  }
+}

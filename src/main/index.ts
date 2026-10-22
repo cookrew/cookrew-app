@@ -60,6 +60,7 @@ import {
   tmuxProbeDeps
 } from './board-index'
 import { createBoardHolds } from './board-hold'
+import { createLevelsHolds } from './levels/holds'
 import { setShellObserver } from './multiplexer'
 import { createLoopHealth } from './loop-health'
 import { loadOrCreateReadOnlyToken } from './readonly-token'
@@ -82,6 +83,7 @@ import { EventEmitter } from 'node:events'
 import {
   cachedTailnet,
   startMobileServer,
+  localLevelsService,
   mobileUrls,
   mobileEndpointList,
   uncoveredCertHosts,
@@ -151,6 +153,7 @@ import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
 import { IdleLock } from './lock'
 import { registerAccountIpc } from './account-ipc'
 import { localDeviceName } from './device-name'
+import { machineProfile } from './machine-profile'
 import { COMPANION_BOOTSTRAPS } from '../shared/lan-token-mode'
 import { Requests, answeredStoreIn } from './requests'
 import {
@@ -869,6 +872,8 @@ const accounts = new Accounts({
   // host, and a name already on the account gets a counter — decided here,
   // never at the registry, which files what it is sent.
   deviceName: localDeviceName(),
+  // STRATA: the record also says what kind of machine this is (machine-profile.ts).
+  machine: async () => ({ profile: await machineProfile(), appVersion: app.getVersion() }),
   // THE ACCOUNT CHANGED WITHOUT A CLICK ON THIS MAC. A password changed on the
   // web ends this session; nothing local would ever notice. Pushing the status
   // is what turns that into a password prompt the owner can actually answer.
@@ -5924,6 +5929,7 @@ app.whenReady().then(() => {
   setTimeout(publishDoorClaims, 5_000).unref?.()
 
   startMobileServer({
+    appVersion: () => app.getVersion(),
     /**
      * v3 (V3-21 · H2): an OVERRIDE for QA, never the switch.
      *
@@ -6053,6 +6059,8 @@ app.whenReady().then(() => {
     // probe (L2) is absent until the tmux sampler lands; rows then degrade to
     // their last known task rather than claiming a phase nobody observed.
     board: boardSources(),
+    // STRATA: the levels detail reuses a cached git answer, never causes one.
+    gitPeek: (dir) => gitCache.peek(dir),
     // The main thread's pulse (loop-health.ts) for GET /api/health.
     health: () => loopHealth.snapshot(),
     // The route program's four endpoints, the stream's two frames, and the
@@ -6118,6 +6126,10 @@ app.whenReady().then(() => {
       switchWorkspace,
       renameWorkspace: (id, name) => {
         store.renameWorkspace(id, name)
+        return store.list()
+      },
+      setWorkspaceBrief: (id, brief) => {
+        store.setWorkspaceBrief(id, brief)
         return store.list()
       },
       removeWorkspace,
@@ -6823,6 +6835,10 @@ function registerIpc(handlers: RestoreHandlers): void {
     if (id === store.focusedId) reportWorkspaceBinding()
     return store.list()
   })
+  ipcMain.handle('workspace:brief', (_e, id: string, brief: unknown) => {
+    store.setWorkspaceBrief(id, brief)
+    return store.list()
+  })
   // Workspace v2: remove + multi-directory + per-terminal cwd + git.
   ipcMain.handle('workspace:remove', (_e, id: string) => removeWorkspace(id))
   ipcMain.handle('workspace:dir:add', (_e, id: string, dir: string) => addWorkspaceDir(id, dir))
@@ -7042,6 +7058,14 @@ function registerIpc(handlers: RestoreHandlers): void {
   const boardHolds = createBoardHolds({ sources: boardSources, turns, store })
   ipcMain.handle('board:subscribe', (event) => boardHolds.subscribe(event.sender))
   ipcMain.handle('board:unsubscribe', (event) => boardHolds.unsubscribe(event.sender))
+  // STRATA: the window's levels view (machines -> workspaces -> agents) reads
+  // the companion's own levels service, pushed per window like the board.
+  const levelsHolds = createLevelsHolds(localLevelsService)
+  ipcMain.handle('levels:subscribe', (event) => levelsHolds.subscribe(event.sender))
+  ipcMain.handle('levels:unsubscribe', (event) => levelsHolds.unsubscribe(event.sender))
+  ipcMain.handle('levels:detail', (_e, agentId: unknown) =>
+    typeof agentId === 'string' ? (localLevelsService()?.detail(agentId) ?? null) : null
+  )
   ipcMain.handle('agent:recover', (_e, id: string) => recoverAgent(id))
   // Endpoint restore channels live alongside the executor (M10).
   registerRestoreIpc(ipcMain.handle.bind(ipcMain), handlers)

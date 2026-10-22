@@ -94,6 +94,8 @@ import { DoorMovedNotice } from './DoorMovedNotice'
 // Opened by a tap, never at boot: each panel is its own chunk (perf lane L7).
 const RosterPanel = lazy(() => import('./RosterPanel').then((m) => ({ default: m.RosterPanel })))
 const MetricsPanel = lazy(() => import('./MetricsPanel').then((m) => ({ default: m.MetricsPanel })))
+// The levels view is the default, but the Strata shell and its figures are their own chunk.
+const LevelsView = lazy(() => import('./levels/LevelsView').then((m) => ({ default: m.LevelsView })))
 import { GateSheet } from './GateSheet'
 import { ImportServedSheet } from './ImportServedSheet'
 import { useAccountSurface } from './account/AccountSurface'
@@ -134,6 +136,26 @@ const VISUAL_MODE_ICON: Record<CanvasVisualMode, 'canvas' | 'connect' | 'agent' 
   'no-cables': 'connect',
   agents: 'agent'
 }
+
+/**
+ * The view a window opens on: the levels on the desktop unless the canvas was
+ * the last one chosen; the canvas on a phone or remote browser unless the
+ * levels were. The board is never remembered.
+ */
+const MAIN_VIEW_KEY = 'cookrew-main-view'
+
+function storedMainView(): MainView {
+  const fallback: MainView = isRemoteMode() ? 'canvas' : 'levels'
+  try {
+    const stored = window.localStorage.getItem(MAIN_VIEW_KEY)
+    return stored === 'canvas' || stored === 'levels' ? stored : fallback
+  } catch {
+    return fallback
+  }
+}
+
+/** The canvas's terminal overlays while the levels hold the window (a stable empty list). */
+const NO_TERMINALS: TerminalNodeData[] = []
 
 function storedCanvasVisualMode(): CanvasVisualMode {
   try {
@@ -235,7 +257,17 @@ function Canvas(): React.JSX.Element {
    * owns live webviews and terminal panes that must never remount, and swapping
    * it out of the tree would also drop the viewport transform.
    */
-  const [view, setView] = useState<MainView>('canvas')
+  const [view, setView] = useState<MainView>(storedMainView)
+  useEffect(() => {
+    if (view === 'agents') return
+    try {
+      window.localStorage.setItem(MAIN_VIEW_KEY, view)
+    } catch {
+      // Storage blocked: the next window opens on the levels, the default.
+    }
+  }, [view])
+  /** The agent whose terminal the levels view has open (level 3), else null: the dock follows it. */
+  const [levelsTerminalId, setLevelsTerminalId] = useState<string | null>(null)
   /** Activity metrics / history panel (opened from the workspace popout). */
   const [metricsOpen, setMetricsOpen] = useState(false)
   /** Board selection mode — the dock's slid-in clipboard button drives it. */
@@ -827,6 +859,9 @@ function Canvas(): React.JSX.Element {
        */
       freshCanvas = false
     ) => {
+      // The levels view covers the canvas: a card asked for from elsewhere
+      // (the command box, a toast) opens on the canvas, in sight.
+      if (viewRef.current === 'levels') setView('canvas')
       // WHERE ARE WE GOING — resolved FIRST, because a zoom that cannot land
       // must change nothing at all (not the return point, not the deliberate
       // flag, not the zoomed id).
@@ -1236,6 +1271,8 @@ function Canvas(): React.JSX.Element {
   // — so ESC always escapes, even from the mid-zoom loop above.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
+      // Under the levels view Esc is the levels' own "out" (strata/input/keys.ts).
+      if (viewRef.current === 'levels') return
       if (e.key === 'Escape' && (zoomedNodeIdRef.current || zoomedTerminalIdRef.current)) {
         e.preventDefault()
         zoomBack()
@@ -1630,6 +1667,11 @@ function Canvas(): React.JSX.Element {
               exportable"). Sharing now happens once, where saving happens —
               the save sheet's share section — and who-is-on lives on the
               served team itself. */}
+          {view === 'levels' && (
+            <Suspense fallback={null}>
+              <LevelsView onTerminal={setLevelsTerminalId} />
+            </Suspense>
+          )}
           {view === 'agents' && (
             <Suspense fallback={null}>
             <RosterPanel
@@ -1677,6 +1719,10 @@ function Canvas(): React.JSX.Element {
             />
           ) : null}
         </div>
+        {/* Under the levels view the canvas tools have no canvas in sight:
+            the dock shows only with an agent's terminal open (level 3). The
+            phone keeps it: its SOUS button is the phone's only command box. */}
+        {(view !== 'levels' || levelsTerminalId !== null || isRemoteMode()) && (
         <Dock
           tool={tool}
           onSelect={selectTool}
@@ -1699,7 +1745,11 @@ function Canvas(): React.JSX.Element {
           orch={orch}
           onOrch={setOrch}
           voiceFor={
-            zoomedTerminalId && terminals.some((t) => t.id === zoomedTerminalId)
+            view === 'levels'
+              ? levelsTerminalId !== null
+                ? { id: levelsTerminalId, remote: terminals.find((t) => t.id === levelsTerminalId)?.servedSession != null }
+                : null
+              : zoomedTerminalId && terminals.some((t) => t.id === zoomedTerminalId)
               ? {
                   id: zoomedTerminalId,
                   // An imported card runs at someone else's app: the dock's
@@ -1725,8 +1775,13 @@ function Canvas(): React.JSX.Element {
               : null
           }
         />
+        )}
         <LodOverlays
-          terminals={terminals}
+          /* One attach per agent per window: main keeps one forwarder per
+             terminal, so a canvas pane left zoomed under the levels would
+             share it with level 3, and either one's detach would starve the
+             other. The canvas pane comes back with the canvas. */
+          terminals={view === 'levels' ? NO_TERMINALS : terminals}
           browsers={browsers}
           deliberateOpen={deliberateOpenRef}
           focused={zoomedNodeIdRef}

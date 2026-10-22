@@ -1,0 +1,313 @@
+/* PROTOTYPE chrome and stand-in scene styling; the stage's own rules are in ../stage.css.
+   The tokens stand in for the shell's strata.css (paper, ink, muted, dot in both schemes),
+   so the stage's paint can be checked light and dark. --card is the prototype's own. */
+:root {
+  --paper: #f4eedc;
+  --ink: #2d2a20;
+  --muted: var(--muted);
+  --dot: rgba(45, 42, 32, 0.22);
+  --card: var(--card);
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #16140f;
+    --ink: #efe6d2;
+    --muted: #a39d8f;
+    --dot: rgba(239, 230, 210, 0.16);
+    --card: #1f1c16;
+  }
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--paper);
+  color: var(--ink);
+  font: 13px/1.4 ui-monospace, Menlo, monospace;
+}
+
+#root {
+  position: fixed;
+  inset: 0;
+}
+
+.booting {
+  padding: 24px;
+}
+
+.level {
+  position: relative;
+  min-height: 100%;
+}
+
+.fig {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+}
+
+.fig > svg,
+.avatar > .fig > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.avatar > .fig {
+  inset: 0;
+}
+
+.item,
+.avatar {
+  position: absolute;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+.avatar {
+  border-radius: 50%;
+}
+
+.item[data-hl] {
+  outline: 3px solid #e8890c;
+  outline-offset: 4px;
+}
+
+.item:focus-visible,
+.avatar:focus-visible,
+.terminal:focus-visible {
+  outline: 3px solid #2f6fd0;
+  outline-offset: 3px;
+}
+
+.portal {
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.mini {
+  position: absolute;
+  transform-origin: 0 0;
+  background: var(--paper);
+}
+
+.label {
+  position: absolute;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+
+.label.small {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.label.tiny {
+  font-size: 10px;
+}
+
+.pin {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid #2d2a20;
+  background: #ff453a;
+  color: #fff;
+  font: 700 13px ui-monospace, monospace;
+  cursor: pointer;
+  padding: 0;
+}
+
+.terminal {
+  position: absolute;
+  background: #14110a;
+  color: #e8dfc6;
+  border-radius: 10px;
+  border: 2px solid #2d2a20;
+  overflow: hidden;
+  box-shadow: 0 10px 30px -18px rgba(0, 0, 0, 0.6);
+}
+
+.term-bar {
+  padding: 8px 12px;
+  background: #2d2a20;
+  color: #e8dfc6;
+  font-size: 12px;
+}
+
+.terminal pre {
+  margin: 0;
+  padding: 14px;
+  white-space: pre-wrap;
+  color: #8fe38f;
+}
+
+.side {
+  position: absolute;
+  overflow: hidden;
+}
+
+.side h4 {
+  margin: 10px 0 6px;
+  font-size: 12px;
+}
+
+.side-tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+}
+
+.tab,
+.chip {
+  flex: none;
+  padding: 3px 8px;
+  border: 1.5px solid var(--ink);
+  border-radius: 6px;
+  background: var(--card);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.tab.on {
+  background: #ffd98a;
+  color: #2d2a20;
+}
+
+.chip.note {
+  background: #fff3c4;
+  color: #2d2a20;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border: 1.5px solid var(--ink);
+  border-radius: 8px;
+  background: var(--card);
+}
+
+.card span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.strip {
+  position: absolute;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  align-items: center;
+}
+
+.empty {
+  position: absolute;
+  left: 0;
+  right: 0;
+  text-align: center;
+}
+
+.hud {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: center;
+  padding: 10px 14px;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.hud > * {
+  pointer-events: auto;
+}
+
+.crumbs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.crumbs button,
+.tools button,
+.tools label {
+  font: inherit;
+  background: var(--card);
+  color: var(--ink);
+  border: 1.5px solid var(--ink);
+  border-radius: 7px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.tools {
+  display: flex;
+  gap: 6px;
+}
+
+.readout {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--muted);
+  min-height: 1.4em;
+}
+
+.hint {
+  position: fixed;
+  bottom: 8px;
+  left: 0;
+  right: 0;
+  margin: 0;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+  pointer-events: none;
+  z-index: 2;
+}
+
+@media (max-width: 699px) {
+  .readout {
+    display: none;
+  }
+}
+
+/* Harbor's frame layer, faked: exactly over the stage's terminal pane, faded by fake-embed.ts. */
+.fake-frame {
+  position: fixed;
+  z-index: 1;
+  opacity: 0;
+  pointer-events: none;
+  background: #0b1d12;
+  color: #b8f5c5;
+  border: 2px solid #2d2a20;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.fake-frame[data-shown] {
+  pointer-events: auto;
+}
+
+.fake-frame pre {
+  margin: 0;
+  padding: 14px;
+  white-space: pre-wrap;
+}

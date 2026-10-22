@@ -207,7 +207,8 @@ describe('the page stays inert', () => {
     expect(ASSETS['reach.js']?.type).toBe('text/javascript; charset=utf-8')
     expect(ASSETS['device-id.js']?.type).toBe('text/javascript; charset=utf-8')
     // The one question it asks, and the three it no longer does.
-    expect(ASSETS['reach.js'].body).toContain('relay-status')
+    expect(ASSETS['reach.js'].body).toContain('/v2/me/presence')
+    expect(ASSETS['reach.js'].body).not.toContain('relay-status')
     expect(ASSETS['reach.js'].body).not.toContain('/api/hello')
     expect(ASSETS['reach.js'].body).not.toContain('cr_pair:')
     expect(ASSETS['reach.js'].body).not.toContain('cr_path:')

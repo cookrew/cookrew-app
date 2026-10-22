@@ -72,7 +72,7 @@ function node(tag: string, cls = '', dataset: Record<string, string> = {}): Node
 interface Scene {
   /** Is cookrew.dev holding a line for that Mac? */
   live?: boolean
-  /** relay-status never answers, for the badge a reader meets while asking. */
+  /** The presence question never answers, for the badge a reader meets while asking. */
   hang?: boolean
   /** The registry refuses the question outright. */
   status?: number
@@ -108,7 +108,8 @@ function mount(scene: Scene): Mounted {
     return {
       ok: status >= 200 && status < 300,
       status,
-      json: async () => ({ live: scene.live === true })
+      // One batch answer for the whole list (strata): /v2/me/presence.
+      json: async () => ({ desktops: [{ id: deviceId, online: scene.live === true, lastSeenAt: null }] })
     }
   }
 
@@ -168,7 +169,7 @@ describe('the one badge', () => {
     const row = mount({ live: true })
     await settle()
     expect(row.badge()).toBe('online')
-    expect(row.asked).toEqual([`/v2/me/desktops/${row.deviceId}/relay-status`])
+    expect(row.asked).toEqual(['/v2/me/presence'])
   })
 
   it('lights OFFLINE when it is not', async () => {

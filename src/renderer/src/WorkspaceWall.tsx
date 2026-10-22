@@ -470,7 +470,7 @@ function WallActions({
       <button type="button" className="primary" onClick={onOpen}>
         {screen.live ? 'BACK' : 'OPEN'}
       </button>
-      <button type="button" title="Manage this workspace's directories" onClick={onDirectories}>
+      <button type="button" title="This workspace's directories and brief" onClick={onDirectories}>
         DIRECTORIES
       </button>
       {confirming ? (

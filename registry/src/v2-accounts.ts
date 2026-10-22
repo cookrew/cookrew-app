@@ -20,6 +20,8 @@ import {
   isTeamSlug,
   type DoorClaim
 } from '../../src/shared/door-ownership'
+import type { MachineProfile } from '../../src/shared/strata'
+import { BAD, readAppVersion, readProfile } from './v2-fleet'
 
 /**
  * IDENTITY v2 — THE ACCOUNT STORE.
@@ -117,6 +119,13 @@ export interface V2Desktop {
    * — an address is a directory fact about a machine, not a public one.
    */
   reach: V2Reach | null
+  /**
+   * STRATA: what kind of machine this is, as the desktop probed it, and the
+   * app it runs (v2-fleet.ts reads both). Optional because records are older
+   * than the probe: a desktop that never sent one is drawn as `unknown`.
+   */
+  profile?: MachineProfile | null
+  appVersion?: string | null
   updatedAt: number
 }
 
@@ -725,7 +734,7 @@ export class V2Accounts {
   putDesktop(
     username: string,
     deviceId: string,
-    input: { name: unknown; workspaces: unknown; doors?: unknown; reach?: V2Reach | null }
+    input: { name: unknown; workspaces: unknown; doors?: unknown; reach?: V2Reach | null; profile?: unknown; appVersion?: unknown }
   ): { ok: true; moved: readonly DoorMove[] } | Refused<'not_found' | 'bad_desktop'> {
     const account = this.get(username)
     if (!account) return { ok: false, reason: 'not_found' }
@@ -772,12 +781,21 @@ export class V2Accounts {
     // the two writes are not made together.
     const held = account.desktops.find((d) => d.deviceId === deviceId) ?? null
     const reach = input.reach === undefined ? (held?.reach ?? null) : input.reach
+    // Absent keeps what is filed, like reach: a PUT about a renamed workspace
+    // has not forgotten what the machine is.
+    const profile = readProfile(input.profile)
+    const appVersion = readAppVersion(input.appVersion)
+    if (profile === BAD || appVersion === BAD) return { ok: false, reason: 'bad_desktop' }
+    const keptProfile = profile === undefined ? held?.profile : profile
+    const keptVersion = appVersion === undefined ? held?.appVersion : appVersion
     const desktop: V2Desktop = {
       deviceId,
       name,
       workspaces,
       ...(held?.doors === undefined ? {} : { doors: held.doors }),
       reach,
+      ...(keptProfile === undefined ? {} : { profile: keptProfile }),
+      ...(keptVersion === undefined ? {} : { appVersion: keptVersion }),
       updatedAt: this.now()
     }
     const known = held !== null

@@ -10,6 +10,7 @@ import { createRenewNonces, type RenewNonces } from './v2-renew'
 import { v2Error, type V2Error } from './v2-copy'
 import type { LegacyIdentity } from './v2-migrate-routes'
 import type { DoorRecord } from './doors'
+import type { DesktopPresence } from './v2-fleet'
 import type { NamesFeature } from './names'
 import { createHelloBurn, helloBurnTtlMs, type HelloBurn } from './hello-nonces'
 import { V2Requests } from './v2-requests'
@@ -206,6 +207,12 @@ export interface V2Context {
    * registry with no v1 credentials, where nothing has to be migrated.
    */
   legacy?: LegacyIdentity
+  /**
+   * STRATA: whether each of an account's desktops holds its relay line now,
+   * and when it last did (v2-canvas-relay.ts owns the lines). Absent → every
+   * desktop reads offline, which is the truth for a registry with no relay.
+   */
+  presence?: (username: string) => ReadonlyMap<string, DesktopPresence>
 }
 
 // ── answers ──────────────────────────────────────────────────────────────

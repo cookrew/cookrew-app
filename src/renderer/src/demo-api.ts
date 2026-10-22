@@ -9,8 +9,10 @@ import type {
 } from '../../shared/model'
 import { noteNameFromContent, uniqueName } from '../../shared/model'
 import { rankInbox } from '../../shared/inbox-rank'
+import { checkBrief } from '../../shared/workspace-brief'
 import type { Alternate } from '../../shared/sous-decide'
 import type { CookrewApi } from './api'
+import { demoLevelsDetail, demoLevelsSnapshot } from './levels/demo-levels'
 
 /**
  * Browser demo backend: when the renderer runs outside Electron (plain
@@ -234,6 +236,16 @@ export function createDemoApi(): CookrewApi {
       }
       return Promise.resolve({ workspaces: metas, activeId })
     },
+    setWorkspaceBrief: (id, brief) => {
+      const checked = checkBrief(brief)
+      if (!checked.ok) return Promise.reject(new Error(checked.reason))
+      const at = metas.findIndex((m) => m.id === id)
+      if (at < 0) return Promise.reject(new Error(`Workspace '${id}' not found`))
+      const { brief: _previous, ...rest } = metas[at]
+      metas[at] = checked.brief ? { ...rest, brief: checked.brief } : rest
+      wsBroadcast()
+      return Promise.resolve({ workspaces: metas, activeId })
+    },
     // Workspace v2 stubs: the demo has one in-memory dir, no git, no picker.
     removeWorkspace: () => Promise.resolve({ workspaces: metas, activeId }),
     addWorkspaceDir: () => Promise.resolve({ workspaces: metas, activeId }),
@@ -382,6 +394,16 @@ export function createDemoApi(): CookrewApi {
       return () => ptyListeners.delete(terminalId)
     },
 
+    subscribeLevels: (cb) => {
+      let live = true
+      void demoLevelsSnapshot().then((levels) => {
+        if (live && levels) cb({ type: 'snapshot', snapshot: levels })
+      })
+      return () => {
+        live = false
+      }
+    },
+    getLevelsAgent: demoLevelsDetail,
     listActivity: () => Promise.resolve([]),
     onTerminalActivity: () => () => undefined,
     routeState: () => {

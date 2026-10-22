@@ -25,7 +25,7 @@ import { readTailnetAsync, type CertHosts, type TailnetIdentity } from './tailsc
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { powerSaveBlocker } from 'electron'
 import type { WorkspaceStore } from './store'
-import type { RecoverResult, RestoreResult, WorkspaceState } from '../shared/model'
+import type { GitInfo, RecoverResult, RestoreResult, WorkspaceState } from '../shared/model'
 import type { PtyManager } from './pty'
 import type { VoiceEngine } from './voice'
 import type { TurnTracker } from './turn-tracker'
@@ -74,6 +74,27 @@ import { companionHostsOf, LOOPBACK_HOSTS } from './companion-hosts'
 import { refuseMisdirected, refuseMisdirectedUpgrade } from './host-gate'
 import { createNameSni } from './name-sni'
 import type { DesktopCert } from './desktop-cert'
+import { handleLevelsRoutes } from './levels/routes'
+import { levelsServiceFor, prewarmLevels, type LevelsMountOptions } from './levels/mount'
+import type { LevelsService } from './levels/service'
+
+/** What the levels need from this server: its app version, and the token to scrub by value. */
+const levelsOptions = (deps: MobileServerDeps): LevelsMountOptions => ({
+  appVersion: () => deps.appVersion?.() ?? null,
+  tokens: () => [activePairingToken ?? deps.pairingToken]
+})
+
+/** The deps the companion server was started with: the desktop levels view shares its service. */
+let levelsDeps: MobileServerDeps | null = null
+
+/**
+ * This desktop's levels service — the one the companion's /api/levels routes
+ * serve — for the window's own levels view (levels:* IPC). Null before the
+ * server starts, or when the board is not wired.
+ */
+export function localLevelsService(): LevelsService | null {
+  return levelsDeps ? levelsServiceFor(levelsDeps, levelsOptions(levelsDeps)) : null
+}
 
 // Re-exported so existing importers keep their import path; the constants
 // themselves live in an Electron-free module so pure code can use them.
@@ -149,6 +170,8 @@ const powerBlockerId: { current: number | null } = { current: null }
 
 export interface MobileServerDeps {
   store: WorkspaceStore
+  /** The app's version for the levels snapshot; injected so this listener never imports electron's app. */
+  appVersion?: () => string
   ptys: PtyManager
   voice: VoiceEngine
   turns: TurnTracker
@@ -175,6 +198,8 @@ export interface MobileServerDeps {
   stream?: MobileApiDeps['stream']
   /** Activity Board data plane; absent = /api/board answers 503. */
   board?: BoardSources
+  /** STRATA: a cwd's git answer if already cached, never a query (levels detail's node.git). */
+  gitPeek?: (dir: string) => GitInfo | undefined
   /** Event-loop health (loop-health.ts); absent = /api/health answers 503. */
   health?: () => LoopHealthSnapshot
   /** Importing a served team from the phone (mobile-api ServeOps). */
@@ -331,6 +356,9 @@ export function startMobileServer(deps: MobileServerDeps): void {
   if (!powerBlockerId.current) {
     powerBlockerId.current = powerSaveBlocker.start('prevent-app-suspension')
   }
+  // STRATA: the first levels build at idle, not on the first shell's request.
+  levelsDeps = deps
+  prewarmLevels(deps, levelsOptions(deps))
 
   // C1: resolve the pairing token BEFORE any route can run — every mutating
   // route on this server requires it (see handleMobileApi's gate). The
@@ -1396,6 +1424,16 @@ export async function handle(
   }
   recordBridgeDevice(request, url, deps, bridgeDevice)
   if (await handleMobileApi(request, response, url, authed as MobileApiDeps)) return
+
+  // STRATA: the levels (src/main/levels). Below the /api GET gate, and asking
+  // for the PAIRING scope on top of it: the wall token reads no note bodies.
+  if (
+    handleLevelsRoutes(request, response, url, {
+      service: () => levelsServiceFor(deps, levelsOptions(deps)),
+      paired: (req, u) => !authed.pairingToken || authed.companionGate(presentedToken(req, u))
+    })
+  )
+    return
 
   // MOVED BELOW THE DELEGATION, and that is the whole change to it.
   //

@@ -5,6 +5,7 @@ import type {
   WorkspaceMeta,
   WorkspaceState
 } from '../../shared/model'
+import { BRIEF_MAX, oneLine } from '../../shared/workspace-brief'
 import { cookrew, isRemoteMode } from './api'
 import { CrIcon } from './icons'
 import { GitChip } from './GitChip'
@@ -24,10 +25,10 @@ import './team-fork.css'
 
 /**
  * Directory manager for the active workspace (picker/workspace UX lane):
- * list the workspace dirs, add one via the native picker (or a text path on
- * mobile), remove, set-primary, and steer each terminal's cwd to one of the
- * dirs. Renders a git-chip slot per dir that Fresco fills. Mutations go
- * through the workspace-v2 adapter, which runs Forge's real API when present
+ * the owner's one-line brief about the project, then the workspace dirs: add
+ * one via the native picker (or a text path on mobile), remove, set-primary,
+ * and steer each terminal's cwd to one of the dirs. Renders a git-chip slot
+ * per dir that Fresco fills. Mutations go through the workspace-v2 adapter, which runs Forge's real API when present
  * and an in-memory mock otherwise (banner shown while mocked).
  */
 export function DirectoryManager({
@@ -40,6 +41,9 @@ export function DirectoryManager({
   const [state, setState] = useState<WorkspaceState | null>(null)
   const [list, setList] = useState<WorkspaceList | null>(null)
   const [addPath, setAddPath] = useState('')
+  // The brief as typed, until it is saved; null shows the saved one, so a
+  // brief set from another device lands here too.
+  const [draft, setDraft] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -87,6 +91,18 @@ export function DirectoryManager({
       .finally(() => setBusy(false))
   }
 
+  const savedBrief = meta.brief ?? ''
+  const brief = draft ?? savedBrief
+  const briefChanged = draft !== null && oneLine(draft) !== savedBrief
+
+  const saveBrief = (): void => {
+    if (!briefChanged) return
+    run(async () => {
+      await cookrew().setWorkspaceBrief(meta.id, brief)
+      setDraft(null)
+    })
+  }
+
   const addViaPicker = (): void => {
     run(async () => {
       const picked = await pickDirectory()
@@ -120,6 +136,24 @@ export function DirectoryManager({
             backend.
           </div>
         )}
+
+        <div className="dm-section-label">BRIEF</div>
+        <div className="dm-add">
+          <input
+            className="tf-input"
+            aria-label="Workspace brief"
+            maxLength={BRIEF_MAX}
+            placeholder="One line about this project: shapes its table on cookrew.dev"
+            value={brief}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && saveBrief()}
+            onBlur={saveBrief}
+          />
+          <button className="cr-btn sm" disabled={busy || !briefChanged} onClick={saveBrief}>
+            SAVE
+          </button>
+        </div>
+        <div className="tf-role-note">Only theme words reach cookrew.dev, never this line.</div>
 
         <div className="dm-section-label">WORKSPACE DIRECTORIES</div>
         <div className="dm-list">

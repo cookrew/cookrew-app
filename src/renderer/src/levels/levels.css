@@ -1,0 +1,50 @@
+/* The levels view (LevelsView.tsx): over the canvas inside the stage, like
+   the board view, so the header above it keeps the way back. */
+.cr-levels {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  overflow: hidden;
+}
+
+/* The shell redefines --ink, --line and --muted inside .strata. Resolved here,
+   on the app root, the app's own values reach level 3's terminal again. */
+.cr-app {
+  --cr-app-ink: var(--ink);
+  --cr-app-line: var(--line);
+  --cr-app-muted: var(--muted);
+}
+
+/* Level 3's terminal box: a containing block, so the overlay's fixed
+   position counts from here and the rect is the box itself. */
+.cr-levels-term {
+  position: absolute;
+  inset: 0;
+  contain: layout paint;
+  --ink: var(--cr-app-ink);
+  --line: var(--cr-app-line);
+  --muted: var(--cr-app-muted);
+  color: var(--cr-app-ink);
+  font: 16px/normal var(--font-body);
+}
+/* The shell's sheet drops focus outlines; the app's terminal keeps the
+   keyboard ring it has on the canvas. */
+.cr-levels-term :focus-visible {
+  outline: revert;
+}
+.cr-levels-term-wait {
+  display: grid;
+  place-items: center;
+  background: #12100c;
+  border-radius: 10px;
+  color: #d6f5c8;
+  font: 600 12px/1 ui-monospace, Menlo, monospace;
+  letter-spacing: 0.08em;
+}
+
+/* The app sizes every element border-box; the shell is drawn content-box on
+   cookrew.dev. Zero specificity, so the shell's own border-box rules still
+   win, and the app's terminal inside level 3 keeps the app's sizing. */
+:where(.cr-levels .strata, .cr-levels .strata *:not(.cr-levels-term, .cr-levels-term *)) {
+  box-sizing: content-box;
+}

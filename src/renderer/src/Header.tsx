@@ -7,8 +7,11 @@ import { WorkspaceSwitcher } from './WorkspaceSwitcher'
 import { RoutingEntry } from './routing/RoutingPanel'
 import type { RouteStatus } from '../../shared/route'
 
-/** The two things the stage can be showing. */
-export type MainView = 'canvas' | 'agents'
+/**
+ * The three things the stage can be showing: the levels (machines →
+ * workspaces → agents, the default), the free canvas, and the board.
+ */
+export type MainView = 'levels' | 'canvas' | 'agents'
 
 interface HeaderProps {
   workspaceName: string
@@ -132,6 +135,15 @@ export function Header({
       </div>
 
       <div className="cr-viewseg" role="group" aria-label="View">
+        <button
+          type="button"
+          aria-pressed={view === 'levels'}
+          title="Machines, workspaces, agents"
+          onClick={() => onViewChange('levels')}
+        >
+          <CrIcon name="levels" />
+          <span className="cr-viewseg-label">Levels</span>
+        </button>
         <button
           type="button"
           aria-pressed={view === 'canvas'}
