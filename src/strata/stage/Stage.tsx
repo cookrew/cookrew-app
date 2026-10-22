@@ -17,7 +17,7 @@ import { browserAnimatedNow } from './nav-signal'
 import { pathKey, planFlight, samePath } from './plan'
 import { createRunner, type Landing, type Runner } from './runner'
 import { initialStage, mountedScenes, onLand, onPath, onScrubStart, onWarm, type Flight, type StageState } from './stage-state'
-import { recordLanding, recordTakeoff } from './telemetry'
+import { recordLanding, recordRelease, recordRest, recordTakeoff } from './telemetry'
 import { durationOf, easingOf } from './timeline'
 import './stage.css'
 
@@ -93,6 +93,7 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
     const fine = fineRef.current
     if (!root || !coarse || !fine) return
     const previous = activeRef.current
+    recordRest(null)
     // Every style the flight needs is set before the one read, so the first frame has no layout of its own.
     root.dataset.flying = ''
     for (const el of [...sceneEls.current.values(), coarse, fine]) {
@@ -141,11 +142,13 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
     const { commit, speed } = g.release
     gestureRef.current = null
     const id = active.flight.id
+    recordRelease(id)
     active.runner.settle(commit, speed).then((at) => land(id, at))
     if (commit) propsRef.current.onCommit(g.target)
   }
 
   const afterLanding = () => {
+    recordRest(restKey)
     const root = rootRef.current
     const el = sceneEls.current.get(restKey)
     const active = activeRef.current
@@ -278,6 +281,12 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
       root.removeEventListener('pointerup', onUp, { capture: true })
       root.removeEventListener('pointercancel', onUp, { capture: true })
     }
+  }, [])
+
+  // At rest from the first frame (a deep link lands without a flight).
+  useEffect(() => {
+    if (!stateRef.current.flight) recordRest(pathKey(stateRef.current.rest))
+    return () => recordRest(null)
   }, [])
 
   // The page itself must never turn a horizontal overscroll into history navigation.

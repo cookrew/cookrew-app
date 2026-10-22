@@ -36,6 +36,9 @@ export const recordTakeoff = (record: Omit<FlightRecord, 'takeoff' | 'landed' | 
   records = [...records.slice(1 - KEEP), { ...record, takeoff: performance.now(), landed: null, outcome: null }]
 }
 
+/** A scrub's finger lifted: before it the camera follows input, after it the compositor settles. */
+export const recordRelease = (id: number): void => mark(`glide:release:${id}`)
+
 export const recordLanding = (id: number, outcome: NonNullable<FlightRecord['outcome']>): void => {
   const found = records.find((r) => r.id === id)
   if (!found || found.outcome) return
@@ -48,6 +51,32 @@ export const recordLanding = (id: number, outcome: NonNullable<FlightRecord['out
   const done = { ...found, landed: performance.now(), outcome }
   records = records.map((r) => (r.id === id ? done : r))
   listeners.forEach((fn) => fn(done))
+}
+
+// ── where the stage rests, outside React ──
+// Whatever waits for the camera to stop (Harbor's frame layer shows the real
+// terminal only once the stage rests at it) listens here; null while flying.
+
+type RestListener = (rest: string | null) => void
+let resting: string | null = null
+let restListeners: RestListener[] = []
+
+/** Called by the stage: the pathKey it rests at, or null at take-off. */
+export const recordRest = (key: string | null): void => {
+  if (resting === key) return
+  resting = key
+  restListeners.forEach((fn) => fn(key))
+}
+
+export const stageRest = {
+  /** The pathKey (plan.ts) the stage rests at, or null while a flight is under way. */
+  get: (): string | null => resting,
+  subscribe(fn: RestListener): () => void {
+    restListeners = [...restListeners, fn]
+    return () => {
+      restListeners = restListeners.filter((l) => l !== fn)
+    }
+  }
 }
 
 export const flightLog = {

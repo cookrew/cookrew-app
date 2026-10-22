@@ -288,3 +288,26 @@ body,
     display: none;
   }
 }
+
+/* Harbor's frame layer, faked: exactly over the stage's terminal pane, faded by fake-embed.ts. */
+.fake-frame {
+  position: fixed;
+  z-index: 1;
+  opacity: 0;
+  pointer-events: none;
+  background: #0b1d12;
+  color: #b8f5c5;
+  border: 2px solid #2d2a20;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.fake-frame[data-shown] {
+  pointer-events: auto;
+}
+
+.fake-frame pre {
+  margin: 0;
+  padding: 14px;
+  white-space: pre-wrap;
+}

@@ -3,15 +3,16 @@
 // Back is "out". Not the product shell: the levels lane owns App.tsx.
 //   /stage/?at=<machine>/<workspace>/<agent>   deep link
 //   ?rm=1 force reduced motion · ?live=1 stream the fleet · ?fps=1 HUD frame meter
-import { Profiler, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { levelOf, parentOf, type StrataMachine, type StrataPath } from '../../../shared/strata'
 import { Stage } from '../Stage'
 import { isAncestor, pathKey } from '../plan'
 import { flightLog } from '../telemetry'
 import { useProtoFleet } from './data'
+import { createFakePool, wireLevel3 } from './fake-embed'
 import { highlightOf, setHighlight, stepHighlight } from './highlight'
 import { AgentsScene, MachinesScene, TerminalScene, WorkspacesScene } from './scenes'
-import type { Viewport } from './layout'
+import { terminalLayout, type Viewport } from './layout'
 
 const params = new URLSearchParams(location.search)
 const FORCE_RM = params.has('rm')
@@ -53,6 +54,9 @@ const usePrefersReduced = (): boolean => {
   }, [query])
   return on
 }
+
+/** Harbor's pool, faked: level 3's frame and the top bar fade on its state. */
+const pool = createFakePool()
 
 /** Commit timestamps of the stage subtree, for "React commits per transition". */
 const commits: number[] = []
@@ -165,6 +169,35 @@ export function Proto() {
     Object.assign(window, { __glide: { go, path: () => pathRef.current, commits, flights: flightLog.all, machines: () => machinesRef.current, inTarget, nextLanding } })
   }, [go, inTarget])
 
+  // The shell opens the embed at the dive's take-off and closes it at the way out's (the same commit as the path).
+  const pathKeyNow = pathKey(path)
+  useLayoutEffect(() => {
+    const here = pathRef.current
+    if (levelOf(here) === 'terminal' && here.machine && here.workspace && here.agent) pool.open({ machine: here.machine, workspace: here.workspace, agent: here.agent }).catch(() => undefined)
+    else pool.close()
+  }, [pathKeyNow])
+
+  const frameRef = useRef<HTMLDivElement>(null)
+  const barRef = useRef<HTMLElement>(null)
+  const vRef = useRef(v)
+  vRef.current = v
+  const booted = !!machines
+  useEffect(() => {
+    if (!booted || !frameRef.current || !barRef.current) return
+    return wireLevel3(
+      pool,
+      frameRef.current,
+      barRef.current,
+      () => terminalLayout(vRef.current).terminal,
+      (s) => {
+        if (!s.shown) return null
+        const m = machinesRef.current?.find((x) => x.id === s.shown?.machineId)
+        const w = m?.levels?.workspaces.find((x) => x.agents.some((a) => a.id === s.shown?.agentId))
+        return w ? { machine: m?.id, workspace: w.id, agent: s.shown.agentId } : null
+      }
+    )
+  }, [booted])
+
   if (!machines) return <div className="booting">loading the mock fleet…</div>
   const { machine, workspace, agent } = find(machines, path)
 
@@ -173,7 +206,11 @@ export function Proto() {
       <Profiler id="stage" onRender={onRender}>
         <Stage path={path} scene={scene} inTarget={inTarget} onCommit={go} reducedMotion={reducedMotion} />
       </Profiler>
-      <header className="hud">
+      <div ref={frameRef} className="fake-frame" aria-hidden="true">
+        <div className="term-bar">the companion's real terminal (fake frame) · {agent?.name ?? ''}</div>
+        <pre>{'$ ready\n› the embed is up: this layer crossfaded in over the stage pane'}</pre>
+      </div>
+      <header ref={barRef} className="hud">
         <nav className="crumbs" aria-label="Where you are">
           <button onClick={() => go({})}>machines</button>
           {machine && <button onClick={() => go({ machine: machine.id })}>› {machine.name}</button>}
