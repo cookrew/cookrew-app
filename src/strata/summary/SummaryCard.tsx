@@ -5,7 +5,7 @@
 import { useEffect, useRef } from 'react'
 import type { Rect, StrataMachine } from '../../shared/strata'
 import type { SeatRef } from '../levels/model'
-import { attachmentCounts, formatElapsed, modelLine, phaseLine, replyLine, statusLine, taskLine } from './format'
+import { attachmentCounts, formatElapsed, modelLine, phaseLine, replyLine, taskLine } from './format'
 
 export const CARD = { w: 288, h: 206, gap: 12, margin: 8 } as const
 
@@ -15,6 +15,18 @@ export const placeCard = (anchor: Rect, viewport: Rect): Rect => {
   const below = anchor.y + anchor.h + CARD.gap
   const y = above >= viewport.y + CARD.margin ? above : Math.min(below, viewport.y + viewport.h - CARD.h - CARD.margin)
   return { x, y, w: CARD.w, h: CARD.h }
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+const TASK = 'M3 2.5h7M3 6h7M3 9.5h4.5'
+const REPLY = 'M5 3 2 6l3 3M2.5 6H8a3 3 0 0 1 3 3v1'
+
+function Glyph({ d }: { d: string }) {
+  return (
+    <svg className="sum-glyph" viewBox="0 0 13 12" aria-hidden="true">
+      <path d={d} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
 }
 
 function Elapsed({ since, suffix }: { since: number | null; suffix: string }) {
@@ -65,22 +77,33 @@ export function SummaryCard({
         <>
           <div className="sum-name">
             <span className={`sum-dot ph-${offline ? 'offline' : agent.phase}${phase.live ? '' : ' guess'}`} />
-            <b>{agent.name}</b>
+            <b className="sum-title">{agent.name}</b>
             {agent.orch && <span className="chip">orch</span>}
-            {code && <span className="code-chip" title="Jump code: type it anywhere, then Enter">{code}</span>}
+            {code && (
+              <kbd className="code-chip" title="Jump code: type it anywhere, then Enter">
+                {code}
+              </kbd>
+            )}
           </div>
-          <div className="sum-line muted">{modelLine(agent)}</div>
-          <div className="sum-line">
-            <b>{phase.label}</b> · <Elapsed since={agent.phaseSince} suffix={phase.label === 'last turn' ? ' ago' : ''} /> · <span className={`chip${phase.live ? ' ok' : ''}`}>{phase.source}</span>
+          <div className="sum-line muted small">{modelLine(agent)}</div>
+          <div className={`sum-line sum-phase ph-text-${offline ? 'offline' : agent.phase}`}>
+            <b>{phase.label}</b> · <Elapsed since={agent.phaseSince} suffix={phase.label === 'last turn' ? ' ago' : ''} />
+            {agent.status && <span className="muted"> · {agent.status}</span>}
+            {!phase.live && <span className="muted"> · estimated</span>}
           </div>
-          <div className="sum-line">📌 {taskLine(agent)}</div>
-          <div className="sum-line muted">↩ {replyLine(agent)}</div>
-          <div className="sum-line muted">⏳ {statusLine(agent, offline)}</div>
+          <div className="sum-task">
+            <Glyph d={TASK} />
+            <span>{taskLine(agent)}</span>
+          </div>
+          <div className="sum-line muted">
+            <Glyph d={REPLY} />
+            {replyLine(agent)}
+          </div>
           <div className="sum-counts">
-            <span>📝 {counts.notes}</span>
-            <span>🌐 {counts.browsers}</span>
-            {counts.shared > 0 && <span>🔗 {counts.shared} shared</span>}
-            <span>{agent.turns} turns</span>
+            <span>{plural(counts.notes, 'note')}</span>
+            <span>{plural(counts.browsers, 'browser')}</span>
+            {counts.shared > 0 && <span>{counts.shared} shared</span>}
+            <span className="sum-turns">{plural(agent.turns, 'turn')}</span>
           </div>
         </>
       )}

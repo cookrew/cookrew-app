@@ -12,6 +12,10 @@ import { Avatar } from './Avatar'
 import { Pins, waitingPins } from './Pins'
 import { pathKey, samePath } from './selection'
 import { MIN_TARGET, type ContainerCell } from './layout'
+import { TrayCards } from './Tray'
+
+const crewLine = (agents: number, waiting: number, unseated: number) =>
+  [`${agents} agent${agents === 1 ? '' : 's'}`, waiting > 0 && `${waiting} waiting`, unseated > 0 && `${unseated} more with /`].filter(Boolean).join(' · ')
 
 type Model = Extract<LevelModel, { level: 'workspaces' }>
 
@@ -90,7 +94,6 @@ function WorkspaceItem({
   const tiny = (seats[0]?.rect.w ?? Infinity) < (env.touch ? MIN_TARGET.touch : MIN_TARGET.pointer)
   const focused = workspace.state === 'focused'
   const hits = env.glow ? seats.filter((s) => env.glow?.has(s.key)).length : 0
-  const loose = workspace.loose.length
   return (
     <div role="listitem" className={`workspace${machine.stale ? ' stale' : ''}`}>
       <button
@@ -111,11 +114,14 @@ function WorkspaceItem({
         <Avatar key={seat.key} seat={seat} size="small" interactive={!tiny} offline={offline} />
       ))}
       {tiny && seats.length > 0 && <Loupe region={cell.rect} seats={seats} boxes={[cell]} onGoIn={() => env.go(target)} label={`Agents in ${workspace.name}`} />}
-      <div className="container-chips" data-plane="screen" style={{ left: cell.rect.x, top: cell.rect.y + cell.rect.h + 4, width: cell.rect.w }}>
-        <span className={`chip${focused ? ' ok' : ''}`}>{focused ? 'on screen' : 'background'}</span>
-        {loose > 0 && <span className="chip">tray · {loose}</span>}
-        {workspace.agents.length > seats.length && <span className="chip">+{workspace.agents.length - seats.length} more · find with /</span>}
-        {hits > 0 && <span className="hits">{hits}</span>}
+      {cell.tray && <TrayCards rect={cell.tray} items={workspace.loose} />}
+      <div className={`container-label${highlighted ? ' on' : ''}`} data-plane="screen" style={{ left: cell.rect.x, top: cell.rect.y + cell.rect.h + 6, width: cell.rect.w }}>
+        <span className="tag">
+          {focused && <i className="tag-eye" title={`On ${machine.name}'s screen`} aria-hidden="true" />}
+          <b>{workspace.name}</b>
+          {hits > 0 && <span className="hits">{hits}</span>}
+        </span>
+        <span className="muted">{crewLine(workspace.agents.length, waitingCount(machine, workspace.id), workspace.agents.length - seats.length)}</span>
       </div>
       <Pins pins={waitingPins(machine, workspace.id)} strip={cell.pins} onMore={() => openFinder('')} />
     </div>

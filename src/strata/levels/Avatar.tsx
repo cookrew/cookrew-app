@@ -35,7 +35,8 @@ export function Avatar({ seat, size, interactive, grow = false, offline = false 
     env.setHighlight(seat.path, 'pointer')
     env.hover.showNow(seat.key)
   })
-  const tucked = size === 'full' ? agent.attachments.length : 0
+  // Up to two of its cards peek out from behind it; the fan shows them all.
+  const tucked = size === 'full' ? agent.attachments.slice(0, 2) : []
 
   return (
     <button
@@ -63,15 +64,14 @@ export function Avatar({ seat, size, interactive, grow = false, offline = false 
         env.go(seat.path)
       }}
     >
-      {tucked > 0 && (
+      {tucked.length > 0 && (
         <span className="tuck" aria-hidden="true">
-          <span className="tuck-card" />
-          {tucked > 1 && <span className="tuck-card second" />}
-          <span className="tuck-count">{tucked}</span>
+          {tucked.map((a, i) => (
+            <Figure key={a.id} art={env.kit.attachment({ kind: a.kind, shared: false })} className={`tuck-card${i > 0 ? ' second' : ''}`} />
+          ))}
         </span>
       )}
       <Figure art={art} />
-      {agent.phase === 'replied' && !offline && size !== 'dot' && <span className="tick" aria-hidden="true" />}
       {env.codes && size !== 'dot' && (
         <span className="code" aria-hidden="true">
           {env.codes.get(seat.key)}

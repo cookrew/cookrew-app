@@ -47,13 +47,8 @@ export function Pins({ pins, strip, onMore }: { pins: PinTarget[]; strip: Rect; 
   const env = useLevels()
   const down = useRef<{ x: number; y: number } | null>(null)
   if (pins.length === 0) return null
-  const size = env.touch ? 44 : 24
   const shown = pins.length > MAX_PINS + 1 ? pins.slice(0, MAX_PINS) : pins
   const more = pins.length - shown.length
-  const count = shown.length + (more > 0 ? 1 : 0)
-  const step = size + 6
-  const x0 = strip.x + strip.w / 2 - (count * step - 6) / 2
-  const y = strip.y + strip.h - size
   const now = env.now()
   // Touch: a tap dives on lift (the stroke is consumed, so the stage never reads it as a swipe).
   const tap = (e: PointerEvent, path: Required<StrataPath>) => {
@@ -65,9 +60,10 @@ export function Pins({ pins, strip, onMore }: { pins: PinTarget[]; strip: Rect; 
     markConsumed(e.nativeEvent)
     env.go(path)
   }
+  // A row of callouts centred over the item, each naming who is waiting; the tail points at the item.
   return (
-    <>
-      {shown.map((pin, i) => {
+    <div className="pins" data-plane="screen" style={rectStyle(strip)}>
+      {shown.map((pin) => {
         const key = agentKey(pin.machineId, pin.agentId)
         const path = { machine: pin.machineId, workspace: pin.workspaceId, agent: pin.agentId }
         return (
@@ -75,8 +71,6 @@ export function Pins({ pins, strip, onMore }: { pins: PinTarget[]; strip: Rect; 
             key={key}
             type="button"
             className="pin"
-            data-plane="screen"
-            style={rectStyle({ x: x0 + i * step, y, w: size, h: size })}
             aria-label={`${pin.name} is waiting${pin.since === null ? '' : `, ${formatElapsed(now - pin.since)}`}. Open terminal`}
             onPointerEnter={(e) => {
               if (e.pointerType === 'touch') return
@@ -88,15 +82,16 @@ export function Pins({ pins, strip, onMore }: { pins: PinTarget[]; strip: Rect; 
             onPointerUp={(e) => tap(e, path)}
             onClick={(e) => (e.nativeEvent as globalThis.PointerEvent).pointerType !== 'touch' && env.go(path)}
           >
-            <span>{pin.name.slice(0, 1).toUpperCase()}</span>
+            <i className="pin-dot" aria-hidden="true" />
+            <span className="pin-name">{pin.name}</span>
           </button>
         )
       })}
       {more > 0 && (
-        <button type="button" className="pin more" data-plane="screen" style={rectStyle({ x: x0 + shown.length * step, y, w: size, h: size })} aria-label={`${more} more waiting. Open the finder`} onClick={onMore}>
-          <span>+{more}</span>
+        <button type="button" className="pin more" aria-label={`${more} more waiting. Open the finder`} onClick={onMore}>
+          <span className="pin-name">+{more}</span>
         </button>
       )}
-    </>
+    </div>
   )
 }

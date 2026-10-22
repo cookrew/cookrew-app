@@ -4,7 +4,9 @@
 import type { LevelsAttachment, Rect } from '../../shared/strata'
 import { center } from './geometry'
 import { useLevels } from './env'
+import { Figure } from './Figure'
 import { fanLayout } from './layout'
+import { FAN } from '../stage'
 import type { SeatRef } from './model'
 
 export const FAN_CAP = { pointer: 6, touch: 4 } as const
@@ -19,8 +21,6 @@ export const fanBounds = (seat: Rect, touch: boolean): Rect => {
   return { x: c.x - reach, y: c.y - reach, w: reach * 2, h: reach + seat.h / 2 }
 }
 
-const glyph = (a: LevelsAttachment) => (a.kind === 'note' ? '📝' : '🌐')
-
 const cardTitle = (a: LevelsAttachment, background: boolean) =>
   a.kind === 'note' ? a.title : `${a.title}${a.host ? ` · ${a.host}` : ''}${background ? ' · not running' : ''}`
 
@@ -33,8 +33,15 @@ export function Fan({ seat, background }: { seat: SeatRef; background: boolean }
   const { cards, more } = fanLayout(list.length, cap, fanRadius(seat.rect.w, env.touch))
   return (
     <div className="fan" onPointerEnter={() => env.hover.holdCard()} onPointerLeave={() => env.hover.releaseCard()}>
-      {cards.map((card) => {
-        const style = { left: c.x + card.x, top: c.y + card.y, transform: `translate(-50%, -50%) rotate(${card.angle}deg)` }
+      {cards.map((card, i) => {
+        // Motion (FAN in the stage's tokens): each card leaves the avatar's centre on a straight line, staggered.
+        const style = {
+          left: c.x + card.x,
+          top: c.y + card.y,
+          transform: `translate(-50%, -50%) rotate(${card.angle}deg)`,
+          animationDelay: `${i * FAN.out.stagger}ms`,
+          ['--from' as string]: `${-card.x}px ${-card.y}px`
+        }
         if (card.item === 'more')
           return (
             <button key="more" type="button" className="fan-card more" style={style} aria-label={`${more} more attachments: open with every note and browser listed`} onClick={() => env.go(seat.path, { allAttachments: true })}>
@@ -45,8 +52,10 @@ export function Fan({ seat, background }: { seat: SeatRef; background: boolean }
         const title = cardTitle(a, background)
         return (
           <button key={a.id} type="button" className={`fan-card ${a.kind}`} style={style} title={title} aria-label={`${a.kind}: ${title}${a.shared ? ', shared' : ''}`} onClick={() => env.go(seat.path, { attachmentId: a.id })}>
-            <span aria-hidden="true">{glyph(a)}</span>
-            {a.shared && <span className="shared-chip" aria-hidden="true" />}
+            <Figure art={env.kit.attachment({ kind: a.kind, shared: a.shared })} />
+            <span className="fan-title" aria-hidden="true">
+              {a.title}
+            </span>
           </button>
         )
       })}

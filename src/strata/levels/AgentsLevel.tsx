@@ -10,6 +10,7 @@ import { Figure, rectStyle } from './Figure'
 import { stateWords } from './link'
 import type { LevelModel } from './model'
 import { PinBadge, waitingPins } from './Pins'
+import { TrayCards } from './Tray'
 
 type Model = Extract<LevelModel, { level: 'agents' }>
 
@@ -26,9 +27,11 @@ export function AgentsLevel({ model }: { model: Model; openFinder: (query?: stri
   const hidden = workspace.agents.length - model.seats.length
   return (
     <div className="level level-agents">
-      <div className="banner subtle" data-plane="screen">
-        {offline ? `${stateWords(machine, env.now())} · read only` : background ? 'background workspace · phases are last known · browsers not running' : 'on screen · live'}
-      </div>
+      {(offline || background) && (
+        <div className="banner" data-plane="screen">
+          {offline ? `${stateWords(machine, env.now())} · read only` : 'Background workspace · its browsers are paused'}
+        </div>
+      )}
       <div ref={containerAnchor} className="container-figure static" style={rectStyle(cell.rect)}>
         <Figure art={cell.art} />
       </div>
@@ -40,26 +43,23 @@ export function AgentsLevel({ model }: { model: Model; openFinder: (query?: stri
       </div>
       {model.seats.map((seat) => waitingPins(machine, workspace.id, seat.agent.id).length > 0 && <PinBadge key={seat.key} seat={seat.rect} />)}
       {fanSeat && <Fan seat={fanSeat} background={background} />}
-      {cell.tray && workspace.loose.length > 0 && (
-        <div className="tray" style={rectStyle(cell.tray)} aria-label="Loose notes and browsers">
-          {workspace.loose.map((item) => (
-            <button key={item.id} type="button" className={`tray-card ${item.kind}`} title={item.host ? `${item.title} · ${item.host}` : item.title} onClick={() => setTray(item)}>
-              {item.kind === 'note' ? '📝' : '🌐'} {item.title}
-            </button>
-          ))}
-        </div>
-      )}
+      {cell.tray && <TrayCards rect={cell.tray} items={workspace.loose} onOpen={setTray} />}
       {tray && (
         <div className="tray-viewer" role="dialog" aria-label={tray.title}>
-          <b>{tray.title}</b>
-          {tray.host && <span className="muted">{tray.host}</span>}
-          <p className="muted">Wired to no agent. Its full view needs the loose-attachment endpoint (asked Revel).</p>
-          <button type="button" onClick={() => setTray(null)}>
-            Close
+          <Figure art={env.kit.attachment({ kind: tray.kind, shared: tray.shared })} className="tray-viewer-card" />
+          <div className="tray-viewer-text">
+            <b>{tray.title}</b>
+            <span className="muted">{tray.host ? `${tray.host} · ` : ''}not wired to an agent</span>
+          </div>
+          <a className="cta small" href={machine.base} target="_blank" rel="noreferrer">
+            Open in the canvas
+          </a>
+          <button type="button" className="close" aria-label="Close" onClick={() => setTray(null)}>
+            ×
           </button>
         </div>
       )}
-      {hidden > 0 && <div className="banner subtle bottom" data-plane="screen">+{hidden} more agents than seats · find them with /</div>}
+      {hidden > 0 && <div className="banner bottom" data-plane="screen">{hidden} more agents than seats · find them with /</div>}
     </div>
   )
 }

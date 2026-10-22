@@ -28,6 +28,9 @@ export function MachinesLevel({ model, openFinder }: { model: Model; openFinder:
   )
 }
 
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+const crewWords = (machine: StrataMachine) => `${plural(machine.levels?.workspaces.length ?? 0, 'workspace')} · ${plural(agentCount(machine), 'agent')}`
+
 function FindingMachines() {
   return (
     <div className="level level-empty" role="status" aria-busy="true">
@@ -71,8 +74,7 @@ function PortalPlate({ machine }: { machine: StrataMachine }) {
         </a>
       </div>
     )
-  if (state === 'never') return <div className="plate">never connected</div>
-  if (!machine.levels) return <div className="plate">offline</div>
+  // Never-connected and offline machines say so in their label; the screen stays dark.
   return null
 }
 
@@ -115,10 +117,13 @@ function MachineItem({ cell, machine, mini, openFinder }: { cell: MachineCell; m
       )}
       {mini?.seats.map((seat) => <Avatar key={seat.key} seat={seat} size="dot" interactive={false} offline={offline} />)}
       {mini && tiny && <Loupe region={cell.portal} seats={mini.seats} boxes={mini.cells} onGoIn={() => env.go(target)} label={`Agents on ${machine.name}`} />}
-      <div className="machine-label" data-plane="screen" style={rectStyle(cell.label)}>
-        <b>{machine.name}</b>
-        <span className="muted">{stateWords(machine, env.now())}</span>
-        {hits > 0 && <span className="hits">{hits}</span>}
+      <div className={`machine-label${highlighted ? ' on' : ''}`} data-plane="screen" style={rectStyle(cell.label)}>
+        <span className="tag">
+          <i className={`tag-dot dot-${state}`} aria-hidden="true" />
+          <b>{machine.name}</b>
+          {hits > 0 && <span className="hits">{hits}</span>}
+        </span>
+        <span className="muted">{state === 'live' ? crewWords(machine) : stateWords(machine, env.now())}</span>
       </div>
       <Pins pins={waitingPins(machine)} strip={cell.pins} onMore={() => openFinder('')} />
     </div>

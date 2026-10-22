@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react'
 import type { LevelsAgentDetail } from '../../shared/strata'
 import { modelLine, phaseLine, replyLine, statusLine, taskLine } from '../summary/format'
 import { useLevels } from './env'
-import { rectStyle } from './Figure'
+import { Figure, rectStyle } from './Figure'
 import { machineState, stateWords } from './link'
 import type { LevelModel } from './model'
 
@@ -37,6 +37,12 @@ interface Tab {
   sub?: string
 }
 
+// The kit's own note and browser cards stand for the two kinds wherever a label needs a mark.
+function KindMark({ kind }: { kind: 'notes' | 'browsers' }) {
+  const env = useLevels()
+  return <Figure art={env.kit.attachment({ kind: kind === 'notes' ? 'note' : 'browser', shared: false })} className="kind-mark" />
+}
+
 function Panel({ kind, tabs, initial, rect }: { kind: 'notes' | 'browsers'; tabs: Tab[]; initial?: string; rect?: { x: number; y: number; w: number; h: number } }) {
   const [active, setActive] = useState(() => tabs.find((t) => t.id === initial)?.id ?? tabs[0]?.id)
   const current = tabs.find((t) => t.id === active) ?? tabs[0]
@@ -45,7 +51,8 @@ function Panel({ kind, tabs, initial, rect }: { kind: 'notes' | 'browsers'; tabs
       <div className="tabs" role="tablist" data-stage-gestures="off">
         {tabs.map((t) => (
           <button key={t.id} type="button" role="tab" aria-selected={t.id === current?.id} className="tab" title={t.title} onClick={() => setActive(t.id)}>
-            {kind === 'notes' ? '📝' : '🌐'} {t.title}
+            <KindMark kind={kind} />
+            <span className="tab-title">{t.title}</span>
           </button>
         ))}
       </div>
@@ -84,7 +91,7 @@ export function TerminalLevel({ model }: { model: Model }) {
     state === 'outdated'
       ? `  ${machine.name} runs a Cookrew without levels.\n  Its classic view opens this agent instead.`
       : live
-        ? `  The companion's full view (TerminalOverlay + Dock, its own header,\n  Back and rails) mounts here through the embed. This is its fallback.`
+        ? `  ${agent.name}'s own terminal opens here from ${machine.name}.\n  Until it does, this is the last thing we know.`
         : `  ${machine.name}: ${stateWords(machine, env.now())}.\n  The terminal opens when the machine is back.`
   const drawerItems = drawer === 'notes' ? notes : browsers
   const count = notes.length + browsers.length
@@ -92,7 +99,7 @@ export function TerminalLevel({ model }: { model: Model }) {
   return (
     <div className="level level-terminal">
       <div ref={terminalAnchor} className="terminal-standin" style={rectStyle(layout.terminal)} role="region" aria-label={`${agent.name}'s terminal on ${machine.name}`}>
-        <pre>{`╭─ ${agent.name} · ${modelLine(agent)}\n│ ${phase.label} · ${phase.elapsed} · ${phase.source}\n│ ${statusLine(agent, !live)}\n│ 📌 ${taskLine(agent)}\n│ ↩ ${replyLine(agent)}\n╰─\n\n${why}`}</pre>
+        <pre>{`╭─ ${agent.name} · ${modelLine(agent)}\n│ ${phase.label} · ${phase.elapsed} · ${phase.source}\n│ ${statusLine(agent, !live)}\n│ task   ${taskLine(agent)}\n│ reply  ${replyLine(agent)}\n╰─\n\n${why}`}</pre>
         {state === 'outdated' && (
           <a className="cta" href={machine.base} target="_blank" rel="noreferrer">
             Open the classic view
@@ -106,7 +113,7 @@ export function TerminalLevel({ model }: { model: Model }) {
             <div key={kind} className={`edge-tabs ${kind}`} style={rectStyle(layout.edgeTabs![kind])} data-plane="screen" data-stage-gestures="off" role="tablist" aria-label={kind === 'notes' ? 'Notes' : 'Browsers'}>
               {items.map((item) => (
                 <button key={item.id} type="button" role="tab" aria-selected={drawer === kind} className="edge-tab" title={item.title} aria-label={`${kind === 'notes' ? 'Note' : 'Browser'}: ${item.title}`} onClick={() => setDrawer(drawer === kind ? null : kind)}>
-                  {kind === 'notes' ? '📝' : '🌐'}
+                  <KindMark kind={kind} />
                 </button>
               ))}
             </div>
@@ -122,7 +129,10 @@ export function TerminalLevel({ model }: { model: Model }) {
       )}
       {layout.sheet && count > 0 && (
         <button type="button" className="sheet-handle" data-plane="screen" onClick={() => setDrawer(drawer ? null : notes.length ? 'notes' : 'browsers')} aria-expanded={!!drawer}>
-          📝 {notes.length} · 🌐 {browsers.length}
+          <KindMark kind="notes" />
+          {notes.length}
+          <KindMark kind="browsers" />
+          {browsers.length}
         </button>
       )}
       {layout.sheet && drawer && (

@@ -15,7 +15,7 @@ import { fanBounds } from './levels/Fan'
 import { Stage, useAnchor } from './stage'
 import { isControlTarget, isTypingTarget, keyIntent } from './input/keys'
 import { LevelsContext, type GoOptions, type LevelsEnv } from './levels/env'
-import { onlineSummary, stateWords } from './levels/link'
+import { machineState, onlineSummary, stateWords } from './levels/link'
 import { buildLevelModel, isWaiting } from './levels/model'
 import { Scene } from './levels/Scene'
 import { agentPaths, childToward, itemOf, nextAgentWithin, nextItem, nextSeed, pathKey, samePath } from './levels/selection'
@@ -353,7 +353,7 @@ function TopBar({ path, fleet, loaded, onGo, onBack, onFind }: {
   const workspace = machine?.levels?.workspaces.find((w) => w.id === path.workspace)
   const agent = workspace?.agents.find((a) => a.id === path.agent)
   const crumbs: Array<{ label: string; to: StrataPath }> = [
-    { label: 'machines', to: {} },
+    { label: 'Machines', to: {} },
     ...(path.machine ? [{ label: machine?.name ?? '…', to: { machine: path.machine } }] : []),
     ...(path.workspace
       ? [
@@ -366,13 +366,17 @@ function TopBar({ path, fleet, loaded, onGo, onBack, onFind }: {
     ...(path.agent ? [{ label: agent?.name ?? '…', to: path }] : [])
   ]
   const status = !loaded ? 'finding your machines…' : !path.machine ? onlineSummary(fleet) : machine ? stateWords(machine, Date.now()) : ''
+  const dot = !loaded ? 'connecting' : machine ? machineState(machine) : fleet.some((m) => m.link === 'live') ? 'live' : 'offline'
   // The top bar always names the exit: out goes to the parent's name.
   const exitName = path.agent ? (workspace?.name ?? '…') : path.workspace ? (machine?.name ?? '…') : 'Machines'
   return (
     <header className="topbar">
       {path.machine && (
         <button type="button" className="back" aria-label={`Out to ${exitName}`} onClick={onBack} data-plane="screen">
-          ‹ <span className="exit">{exitName}</span>
+          <svg className="chev" viewBox="0 0 10 16" aria-hidden="true">
+            <path d="M8 2 2 8l6 6" />
+          </svg>
+          <span className="exit">{exitName}</span>
         </button>
       )}
       <nav className="crumbs" aria-label="Level">
@@ -388,9 +392,17 @@ function TopBar({ path, fleet, loaded, onGo, onBack, onFind }: {
           )
         )}
       </nav>
-      <span className="status">{status}</span>
+      {status && (
+        <span className="status">
+          <i className={`tag-dot dot-${dot}`} aria-hidden="true" />
+          {status}
+        </span>
+      )}
       <button type="button" className="find" onClick={onFind} aria-label="Find an agent (⌘K or /)">
-        <span aria-hidden="true">⌕</span>
+        <svg className="lens" viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="7" cy="7" r="4.6" />
+          <path d="m10.4 10.4 3.6 3.6" />
+        </svg>
         <span className="find-label"> Find</span>
         <kbd>⌘K</kbd>
       </button>
