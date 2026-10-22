@@ -7,14 +7,13 @@
 import { Profiler, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { levelOf, parentOf, type Rect, type StrataMachine, type StrataPath } from '../shared/strata'
 import { useFleet } from './fleet/use-fleet'
-import { standInFigures } from './stand-in/figures'
+import { colorFigures } from './figures'
 import { Finder } from './finder/Finder'
 import { fleetCodes } from './finder/codes'
 import { createFleetIndex } from './finder/search'
 import { fanBounds } from './levels/Fan'
-import { InstantStage } from './input/InstantStage'
+import { Stage, useAnchor } from './stage'
 import { isControlTarget, isTypingTarget, keyIntent } from './input/keys'
-import { useAnchor } from './levels/anchors'
 import { LevelsContext, type GoOptions, type LevelsEnv } from './levels/env'
 import { onlineSummary, stateWords } from './levels/link'
 import { buildLevelModel, isWaiting } from './levels/model'
@@ -25,7 +24,7 @@ import { SummaryCard } from './summary/SummaryCard'
 import { useStrataHistory } from './url/use-strata-history'
 import './levels/strata.css'
 
-const kit = standInFigures
+const kit = colorFigures
 const LOAD_GRACE_MS = 2500
 
 const useMedia = (query: string) => {
@@ -285,7 +284,7 @@ export function App() {
         <TopBar path={path} onBack={goOut} fleet={fleet} loaded={loaded} onGo={go} onFind={() => openFinder('')} />
         <div className="stage-host" ref={host}>
           <LevelsContext.Provider value={env}>
-            <InstantStage
+            <Stage
               path={path}
               scene={(p) => (
                 <Scene model={samePath(p, path) || pathKey(p) === key ? model : buildLevelModel(p, fleet, viewport, kit)} openFinder={openFinder} />
