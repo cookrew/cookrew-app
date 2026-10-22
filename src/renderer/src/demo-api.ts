@@ -9,6 +9,7 @@ import type {
 } from '../../shared/model'
 import { noteNameFromContent, uniqueName } from '../../shared/model'
 import { rankInbox } from '../../shared/inbox-rank'
+import { checkBrief } from '../../shared/workspace-brief'
 import type { Alternate } from '../../shared/sous-decide'
 import type { CookrewApi } from './api'
 
@@ -232,6 +233,16 @@ export function createDemoApi(): CookrewApi {
         if (id === activeId) broadcast({ ...state, name })
         wsBroadcast()
       }
+      return Promise.resolve({ workspaces: metas, activeId })
+    },
+    setWorkspaceBrief: (id, brief) => {
+      const checked = checkBrief(brief)
+      if (!checked.ok) return Promise.reject(new Error(checked.reason))
+      const at = metas.findIndex((m) => m.id === id)
+      if (at < 0) return Promise.reject(new Error(`Workspace '${id}' not found`))
+      const { brief: _previous, ...rest } = metas[at]
+      metas[at] = checked.brief ? { ...rest, brief: checked.brief } : rest
+      wsBroadcast()
       return Promise.resolve({ workspaces: metas, activeId })
     },
     // Workspace v2 stubs: the demo has one in-memory dir, no git, no picker.

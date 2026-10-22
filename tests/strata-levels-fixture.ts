@@ -8,7 +8,7 @@ import type { CanvasNode, Connection, WorkspaceMeta, WorkspaceState } from '../s
 import type { TerminalActivity, TurnRecord } from '../src/shared/turn'
 import type { MachineProfile } from '../src/shared/strata'
 import type { WorkspaceStore } from '../src/main/store'
-import { levelsSourcesFrom } from '../src/main/levels/sources'
+import { levelsSourcesFrom, type LevelsRuntime } from '../src/main/levels/sources'
 import { createLevelsService } from '../src/main/levels/service'
 
 export const NOW = 1_800_000_000_000
@@ -78,7 +78,7 @@ export const activity = (terminalId: string, phase: TerminalActivity['phase'], e
   ...extra
 })
 
-export function fakeDesktop() {
+export function fakeDesktop(options: { traits?: LevelsRuntime['traits'] } = {}) {
   let metas: WorkspaceMeta[] = [
     { id: 'w1', name: 'Alpha Kitchen', dir: '/work/a', dirs: ['/work/a'], icon: '🍳', slug: 'alpha' },
     { id: 'w2', name: 'Beta Garden', dir: '/work/b', dirs: ['/work/b'], icon: '', slug: 'beta' }
@@ -183,7 +183,8 @@ export function fakeDesktop() {
     gitPeek: (dir) => {
       gitPeeks.push(dir)
       return dir === '/work/invented' ? GIT : undefined
-    }
+    },
+    traits: options.traits
   })
   const service = createLevelsService({ ...sources, now: () => clock.now }, 30)
   return {

@@ -2,6 +2,7 @@
 // from (path, fleet, viewport, kit) alone. Scenes render it; the shell reads
 // its items for the keyboard and its agent rects for the summary card. Pure.
 import type { LevelsAgent, LevelsWorkspace, Rect, StrataMachine, StrataPath } from '../../shared/strata'
+import { BALL } from '../figures'
 import { levelOf } from '../../shared/strata'
 import type { FigureKit } from '../seams'
 import { agentKey } from '../finder/search'
@@ -11,7 +12,6 @@ import {
   layoutMachines,
   layoutTerminal,
   layoutWorkspaces,
-  columnsFor,
   miniatureTransform,
   type ContainerCell,
   type MachineCell,
@@ -30,18 +30,34 @@ export const levelArea = (viewport: Rect): Rect => inset(viewport, TOP_BAR + 16,
 export interface SeatRef {
   key: string
   path: Required<StrataPath>
-  /** The drawn seat. */
+  /** The drawn seat: the avatar's whole art (ball, shadow and air, see BALL). */
   rect: Rect
-  /** The hit target: the seat grown to its full pitch (the gap between seats is shared). */
+  /** The drawn ball, which is all of the seat that belongs to this agent alone. */
+  ball: Rect
+  /** The hit target: a square on the ball as wide as the pitch, so no two seats' hits ever overlap. */
   hit: Rect
   agent: LevelsAgent
 }
 
-/** Seat pitch from the first two seats of a row; seats are drawn at 80% of it by convention when alone. */
-const pitchOf = (seats: readonly Rect[]): number =>
-  seats.length >= 2 && Math.abs(seats[1].y - seats[0].y) < 0.5 ? seats[1].x - seats[0].x : (seats[0]?.w ?? 0) * 1.25
+/**
+ * The widest square around each seat that never reaches a neighbour's: the
+ * nearest neighbour by the larger of |dx| and |dy|. The table's seats sit on
+ * screen diagonals, so the next seat in a row is not on the same screen row.
+ */
+const pitchOf = (seats: readonly Rect[]): number => {
+  if (seats.length < 2) return (seats[0]?.w ?? 0) * BALL.d * 1.25
+  let nearest = Infinity
+  for (let i = 0; i < seats.length; i++)
+    for (let j = i + 1; j < seats.length; j++) nearest = Math.min(nearest, Math.max(Math.abs(seats[j].x - seats[i].x), Math.abs(seats[j].y - seats[i].y)))
+  return nearest
+}
 
-const grow = (r: Rect, by: number): Rect => ({ x: r.x - by, y: r.y - by, w: r.w + 2 * by, h: r.h + 2 * by })
+const onBall = (seat: Rect, side: number): Rect => ({
+  x: seat.x + BALL.cx * seat.w - side / 2,
+  y: seat.y + BALL.cy * seat.w - side / 2,
+  w: side,
+  h: side
+})
 
 export interface Miniature {
   transform: Transform
@@ -58,26 +74,27 @@ export type LevelModel =
 const seatsOf = (machine: StrataMachine, workspaces: readonly LevelsWorkspace[], cells: readonly ContainerCell[], t?: Transform): SeatRef[] =>
   cells.flatMap((cell, i) => {
     const seats = t ? cell.seats.map((r) => mapRect(r, t)) : cell.seats
-    const margin = Math.max(0, (pitchOf(seats) - (seats[0]?.w ?? 0)) / 2)
+    const pitch = pitchOf(seats)
     return seats.map((rect, s) => {
       const agent = workspaces[i].agents[s]
       return {
         key: agentKey(machine.id, agent.id),
         path: { machine: machine.id, workspace: workspaces[i].id, agent: agent.id },
         rect,
-        hit: grow(rect, margin),
+        ball: onBall(rect, BALL.d * rect.w),
+        hit: onBall(rect, Math.max(BALL.d * rect.w, pitch)),
         agent
       }
     })
   })
 
-const workspaceInputs = (workspaces: readonly LevelsWorkspace[]) => workspaces.map((w) => ({ id: w.id, name: w.name, agents: w.agents.length }))
+const workspaceInput = (w: LevelsWorkspace) => ({ id: w.id, name: w.name, agents: w.agents.length, ...(w.traits?.length && { traits: w.traits }) })
+const workspaceInputs = (workspaces: readonly LevelsWorkspace[]) => workspaces.map(workspaceInput)
 
 export const machineWorkspaces = (machine: StrataMachine | null | undefined): LevelsWorkspace[] => machine?.levels?.workspaces ?? []
 
 export const buildLevelModel = (path: StrataPath, fleet: readonly StrataMachine[], viewport: Rect, kit: FigureKit): LevelModel => {
   const area = levelArea(viewport)
-  const columns = columnsFor(viewport)
   const level = levelOf(path)
   const machine = fleet.find((m) => m.id === path.machine) ?? null
   const workspace = machineWorkspaces(machine).find((w) => w.id === path.workspace) ?? null
@@ -93,7 +110,7 @@ export const buildLevelModel = (path: StrataPath, fleet: readonly StrataMachine[
       const m = fleet[i]
       const workspaces = machineWorkspaces(m)
       if (workspaces.length === 0) return
-      const levelCells = layoutWorkspaces(workspaceInputs(workspaces), area, kit, { columns })
+      const levelCells = layoutWorkspaces(workspaceInputs(workspaces), area, kit)
       const transform = miniatureTransform(area, cell.portal)
       minis.set(m.id, {
         transform,
@@ -112,7 +129,7 @@ export const buildLevelModel = (path: StrataPath, fleet: readonly StrataMachine[
 
   if (level === 'workspaces') {
     const workspaces = machineWorkspaces(machine)
-    const cells = machine ? layoutWorkspaces(workspaceInputs(workspaces), area, kit, { columns }) : []
+    const cells = machine ? layoutWorkspaces(workspaceInputs(workspaces), area, kit) : []
     return {
       level,
       machine,
@@ -123,7 +140,7 @@ export const buildLevelModel = (path: StrataPath, fleet: readonly StrataMachine[
   }
 
   if (level === 'agents') {
-    const cell = machine && workspace ? layoutAgents({ id: workspace.id, name: workspace.name, agents: workspace.agents.length }, area, kit, columns) : null
+    const cell = machine && workspace ? layoutAgents(workspaceInput(workspace), area, kit) : null
     const seats = machine && workspace && cell ? seatsOf(machine, [workspace], [cell]) : []
     return { level, machine, workspace, cell, seats, items: seats.map((s) => ({ target: s.path, rect: s.rect })) }
   }

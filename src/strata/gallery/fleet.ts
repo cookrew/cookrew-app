@@ -48,10 +48,11 @@ const summaryOf = (a: LevelsAgent) =>
     .filter(Boolean)
     .join('<br>')
 
-const containerHtml = (w: LevelsWorkspace, scaleOf: number | ((width: number) => number), columns?: number): string => {
-  const art = colorFigures.container({ name: w.name, slots: w.agents.length, columns })
-  const scale = typeof scaleOf === 'number' ? scaleOf : scaleOf(art.viewBox.w)
-  record('container', `${art.archetype}/${w.agents.length}`, art)
+const containerOf = (w: LevelsWorkspace) => colorFigures.container({ name: w.name, slots: w.agents.length, ...(w.traits?.length && { traits: w.traits }) })
+
+const containerHtml = (w: LevelsWorkspace, scale: number): string => {
+  const art = containerOf(w)
+  record('container', `${art.theme}/${w.agents.length}`, art)
   const seats = art.anchors.more ? w.agents.slice(0, art.capacity - 1) : w.agents
   const avatars = seats
     .map((a, i) => {
@@ -71,21 +72,22 @@ const containerHtml = (w: LevelsWorkspace, scaleOf: number | ((width: number) =>
     })
     .join('')
   const seatPx = art.anchors['slot:0'] ? ` · seat ${(art.anchors['slot:0'].w * scale).toFixed(0)} px` : ''
-  return `<div class="cell"><div class="box" style="width:${art.viewBox.w * scale}px">${svgAt(art.svg, art.viewBox.w * scale)}${avatars}</div><small>${escapeText(w.name)} · ${art.archetype} · ${w.agents.length} agents · ${kb(art.svg.length)}${seatPx}</small></div>`
+  return `<div class="cell"><div class="box" style="width:${art.viewBox.w * scale}px">${svgAt(art.svg, art.viewBox.w * scale)}${avatars}</div><small>${escapeText(w.name)} · ${art.theme} · ${w.agents.length} agents · ${kb(art.svg.length)}${seatPx}</small></div>`
 }
 
 const frames = () => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())))
 
-/** Usher has not named the phone's columns yet: 5 until it does. */
-export const PHONE_COLUMNS = 5
 const PHONE_INNER = 390 - 2 * 16
 
-/** One phone frame per machine: its workspaces at the phone's columns, each as wide as the screen. */
+/** One phone frame per machine: the same tables as the desktop, one shared scale so the longest fits the screen. */
 const phoneHtml = (fleet: Seen[]): string =>
-  `<h2 id="phone">Phone <span class="muted">· 390 × 844, columns ${PHONE_COLUMNS}, 16 px inset</span></h2><div class="fleetrow">` +
+  `<h2 id="phone">Phone <span class="muted">· 390 × 844, 16 px inset, the same tables at one scale</span></h2><div class="fleetrow">` +
   fleet
     .filter((m) => m.levels && m.levels.workspaces.length > 0)
-    .map((m) => `<div class="phone"><b>${escapeText(m.row.name)}</b>${m.levels!.workspaces.map((w) => containerHtml(w, (width) => PHONE_INNER / width, PHONE_COLUMNS)).join('')}</div>`)
+    .map((m) => {
+      const scale = Math.min(...m.levels!.workspaces.map((w) => PHONE_INNER / containerOf(w).viewBox.w))
+      return `<div class="phone"><b>${escapeText(m.row.name)}</b>${m.levels!.workspaces.map((w) => containerHtml(w, scale)).join('')}</div>`
+    })
     .join('') +
   '</div>'
 

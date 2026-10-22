@@ -7,6 +7,7 @@ import { Avatar } from './Avatar'
 import { useLevels } from './env'
 import { Fan } from './Fan'
 import { Figure, rectStyle } from './Figure'
+import { underTarget } from './layout'
 import { stateWords } from './link'
 import type { LevelModel } from './model'
 import { PinBadge, waitingPins } from './Pins'
@@ -20,11 +21,15 @@ export function AgentsLevel({ model }: { model: Model; openFinder: (query?: stri
   // The big container is this level's content rect, registered under the same id as its L1 box.
   const containerAnchor = env.useAnchor(anchorOf({ machine: machine?.id ?? '-', workspace: workspace?.id ?? '-' }))
   const [tray, setTray] = useState<LevelsAttachment | null>(null)
+  // The seat a first tap picked (never the seat the level entered on), so only a second tap on it dives.
+  const [picked, setPicked] = useState<string | null>(null)
   if (!machine || !workspace || !cell) return <div className="level level-plate">This workspace is not on {machine?.name ?? 'this machine'} any more.</div>
   const offline = machine.link !== 'live' && machine.link !== 'connecting'
   const background = workspace.state === 'background'
   const fanSeat = model.seats.find((s) => s.key === env.summaryKey) ?? null
   const hidden = workspace.agents.length - model.seats.length
+  // The same table on every screen: on a phone its hits (a seat's pitch) fall under the touch target.
+  const small = underTarget(model.seats[0]?.hit.w ?? Infinity, env.touch)
   return (
     <div className="level level-agents">
       {(offline || background) && (
@@ -36,9 +41,17 @@ export function AgentsLevel({ model }: { model: Model; openFinder: (query?: stri
         <Figure art={cell.art} />
       </div>
       {/* L2: the avatar is the only target (the container is static), so its hit takes the whole seat pitch. */}
-      <div role="grid" aria-label={`Agents in ${workspace.name}`} aria-rowcount={Math.ceil(model.seats.length / 8)}>
+      <div className="seats" role="group" aria-label={`Agents in ${workspace.name}`}>
         {model.seats.map((seat) => (
-          <Avatar key={seat.key} seat={seat} size="full" interactive grow offline={offline} />
+          <Avatar
+            key={seat.key}
+            seat={seat}
+            size="full"
+            interactive
+            grow
+            pick={small ? { picked: picked === seat.key, onPick: () => setPicked(seat.key) } : null}
+            offline={offline}
+          />
         ))}
       </div>
       {model.seats.map((seat) => waitingPins(machine, workspace.id, seat.agent.id).length > 0 && <PinBadge key={seat.key} seat={seat.rect} />)}

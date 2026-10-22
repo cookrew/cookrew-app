@@ -301,6 +301,8 @@ export interface CookrewApi {
   /** Every workspace's picture, as data URLs, read on demand. */
   workspaceShots: () => Promise<Record<string, { src: string; at: number }>>;
   renameWorkspace: (id: string, name: string) => Promise<WorkspaceList>;
+  /** The owner's one-line brief (shared/workspace-brief.ts); '' clears it. Rejects an invalid one. */
+  setWorkspaceBrief: (id: string, brief: string) => Promise<WorkspaceList>;
   /** Workspace v2: remove workspace, multi-directory, per-terminal cwd, git. */
   removeWorkspace: (id: string) => Promise<WorkspaceList>;
   addWorkspaceDir: (id: string, dir: string) => Promise<WorkspaceList>;

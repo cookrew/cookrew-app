@@ -19,8 +19,10 @@ import type {
   LevelsAgentDetail,
   LevelsAttachment,
   LevelsWorkspace,
-  PhaseSource
+  PhaseSource,
+  WorkspaceTrait
 } from '../../shared/strata'
+import { TRAITS_MAX, isWorkspaceTrait } from '../../shared/strata'
 import { scrubShapes, type Scrub } from '../scrub'
 import { hostOf, line, noteTitle, replyLine, statusVerb, taskLine } from './lines'
 import { phaseSinceOf, phaseVerdict } from './phase'
@@ -48,6 +50,8 @@ export interface LevelsInput {
   memory: ReadonlyMap<string, PhaseMemory>
   now: number
   scrub?: Scrub
+  /** The workspace's traits (traits.ts), strongest first. Absent = none. */
+  traits?: (meta: WorkspaceMeta) => readonly WorkspaceTrait[]
 }
 
 export interface LevelsBuild {
@@ -159,6 +163,15 @@ function agentRow(
   }
 }
 
+/** Closed-list words only, at most TRAITS_MAX; a lookup that throws is no traits, not a failed build. */
+function traitsFor(input: LevelsInput, meta: WorkspaceMeta): WorkspaceTrait[] {
+  try {
+    return (input.traits?.(meta) ?? []).filter(isWorkspaceTrait).slice(0, TRAITS_MAX)
+  } catch {
+    return []
+  }
+}
+
 function workspaceRow(
   meta: WorkspaceMeta,
   state: WorkspaceState,
@@ -187,10 +200,13 @@ function workspaceRow(
     return agentRow(node, own, input, scrub, memory)
   })
   const loose = state.nodes.flatMap((node) => (isAttachment(node) && !wiring.terminalsOf.has(node.id) ? [attachment(node.id)!] : []))
+  const traits = traitsFor(input, meta)
   return {
     id: meta.id,
     name: line(meta.name, scrub) ?? meta.id,
     icon: meta.icon || null,
+    // Only when there are some, so a desktop without them sends what it always did.
+    ...(traits.length > 0 ? { traits } : {}),
     state: meta.id === input.focusedWorkspaceId ? 'focused' : 'background',
     agents,
     loose,

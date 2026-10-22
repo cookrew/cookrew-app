@@ -170,10 +170,26 @@ export interface LevelsAgent {
   attachments: LevelsAttachment[]
 }
 
+/**
+ * A workspace's character, in words from this closed list only. The desktop
+ * distils them from the owner's one-line brief, else from the project's README
+ * and package.json, and sends these words and nothing else: never the text it
+ * read. Views pick the container's theme from them and drop unknown words.
+ */
+export const WORKSPACE_TRAITS = ['code', 'docs', 'home', 'media', 'security', 'ops', 'data', 'play', 'design', 'ai', 'team'] as const
+export type WorkspaceTrait = (typeof WORKSPACE_TRAITS)[number]
+/** Traits a workspace row carries at most, strongest first. */
+export const TRAITS_MAX = 3
+
+export const isWorkspaceTrait = (word: unknown): word is WorkspaceTrait =>
+  typeof word === 'string' && (WORKSPACE_TRAITS as readonly string[]).includes(word)
+
 export interface LevelsWorkspace {
   id: string
   name: string
   icon: string | null
+  /** At most TRAITS_MAX words of WORKSPACE_TRAITS, strongest first. Absent from a desktop older than this field. */
+  traits?: WorkspaceTrait[]
   /**
    * 'focused' = the one the desktop shows: canvas in memory, browsers running.
    * 'background' = agents still running, canvas read from disk, browsers not

@@ -5,8 +5,8 @@ import type { Rect } from '../../../shared/strata'
 import { clipConvex, hull, on, PX, PZ, rectUV, rrUV, type V2, type V3 } from '../iso/geom'
 import { num, type Pen } from '../iso/pen'
 import { CERAMIC, INK, mix, PAPER, tone, type Mat } from '../iso/tone'
-import { SEAT_R, type Seat, type Tier } from './layout'
-import { plaqueText } from './name'
+import { SEAT_R } from './layout'
+import { plaqueText } from './themes'
 
 export interface Ctx {
   name: string
@@ -32,17 +32,12 @@ export interface Tray {
   y1: number
 }
 
-/** What an archetype lays out before it draws: framing and anchors come from this. */
+/** What the table lays out before it draws: framing and anchors come from this. */
 export interface Plan {
   fit: V3[]
   seats: V3[]
   plaque: Plaque
   tray: Tray
-}
-
-export interface ArchetypeDef<P extends Plan = Plan> {
-  plan(tier: Tier, seats: Seat[]): P
-  draw(p: Pen, plan: P, ctx: Ctx): string
 }
 
 export const TRAY_H = 1.6

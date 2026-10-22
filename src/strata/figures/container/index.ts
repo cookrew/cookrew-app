@@ -1,7 +1,11 @@
-// Containers: a workspace as a piece of furniture whose look comes from its
-// name, seating its agents evenly in creation order. All containers share one
-// scale (CONTAINER_SCALE viewBox units per model unit), so a seat — and the
-// avatar laid into it — is the same size in every workspace.
+// Containers: every workspace is the same standard table (see chassis.ts),
+// one to four 12-seat modules long, seating its agents in creation order. Its
+// theme (materials and props) comes from the workspace's traits and name, its
+// colour from the name; neither ever changes the geometry. All containers
+// share one scale (CONTAINER_SCALE viewBox units per model unit), so a seat,
+// and the avatar laid into it, is the same size in every workspace, on every
+// screen: a phone shows the same table, smaller (the levels' loupe covers
+// seats too small to tap).
 //
 // Anchors: slot:0…slot:n-1 (an avatar's whole viewBox goes here, see BALL),
 // `tray` (loose notes and browsers), `label` (the name plaque). When the
@@ -10,83 +14,38 @@
 import type { FigureArt, Rect } from '../../../shared/strata'
 import { finish, frameScale } from '../iso/frame'
 import { hash, memo } from '../iso/memo'
-import { overflowToken, plaqueCorners, trayRect, type ArchetypeDef, type Plan } from './common'
-import { CAPACITY, columnsHint, hintedTier, overflowOf, SEAT_R, seatGrid, seatsFor, slotRect, tierFor } from './layout'
-import { archetypeOf, paletteOf, type Archetype } from './name'
-import { bookshelf, drawers, house, lab, lockers, vault } from './shelves'
-import { bleachers, crate, pipes, sandbox, workbench } from './surfaces'
-import { UPRIGHT_DEFS, UPRIGHT_MAX_ROWS, UPRIGHT_OF, type Upright } from './uprights'
+import { deskPlan, drawDesk } from './chassis'
+import { overflowToken, plaqueCorners, trayRect } from './common'
+import { CAPACITY, modulesFor, overflowOf, SEAT_R, seatGrid, seatsFor, slotRect, tierFor } from './layout'
+import { paletteOf, themesOf, type Theme } from './themes'
 
-export { ARCHETYPES, archetypeOf, paletteOf, type Archetype } from './name'
-export { BALL, CAPACITY, SEAT_R } from './layout'
-export { UPRIGHT_OF, UPRIGHTS, type Upright } from './uprights'
+export { BALL, CAPACITY, MODULE, MODULE_SEATS, SEAT_R } from './layout'
+export { paletteOf, THEMES, themesOf, type Theme } from './themes'
 
 export const CONTAINER_SCALE = 3
 const INK_K = 0.95
 const WOBBLE = 0.7
-/**
- * A hinted (phone) layout stacks tall and narrow, where a full cast shadow
- * would spend a third of the width the seats need: its shadow stops at this
- * height. The default tiers keep their full shadow.
- */
-const HINTED_SHADOW_CAP = 24
-
-const DEFS: Record<Archetype, ArchetypeDef<Plan>> = {
-  workbench,
-  bookshelf,
-  house,
-  crate,
-  vault,
-  lockers,
-  pipes,
-  sandbox,
-  drawers,
-  lab,
-  bleachers
-} as Record<Archetype, ArchetypeDef<Plan>>
-
-/**
- * How many rows each archetype can stack before it stops reading as itself:
- * stepped ones (bleachers, the pipe rack) climb a step per row; surfaces get
- * deep; shelves just grow taller.
- */
-export const MAX_ROWS: Record<Archetype, number> = {
-  workbench: 8,
-  bookshelf: 12,
-  house: 12,
-  crate: 8,
-  vault: 12,
-  lockers: 12,
-  pipes: 6,
-  sandbox: 8,
-  drawers: 12,
-  lab: 12,
-  bleachers: 6
-}
 
 export interface ContainerInput {
   name: string
   slots: number
-  /** Seats per row the level asks for (a phone asks for fewer, larger seats). Absent = the kit's own tiers. */
-  columns?: number
-  /** Force an archetype (the gallery shows every one); default: from the name. */
-  archetype?: Archetype
+  /** Words of WORKSPACE_TRAITS from the desktop, strongest first; unknown words are dropped. */
+  traits?: readonly string[]
+  /** Force one theme (the gallery shows every one); default: from the traits and the name. */
+  theme?: Theme
 }
 
-/** archetype = the vibe the name picked; face = what is drawn (an upright sibling on a hinted layout). */
-export type ContainerArt = FigureArt & { archetype: string; face: Archetype | Upright; capacity: number }
+/** theme = the strongest of `themes` (one or two) that dressed the table. */
+export type ContainerArt = FigureArt & { theme: Theme; themes: Theme[]; modules: number; capacity: number }
 
-export const containerArt = memo(({ name, slots, archetype, columns }: ContainerInput): ContainerArt => {
-  const kind = archetype ?? archetypeOf(name)
+export const containerArt = memo(({ name, slots, traits, theme }: ContainerInput): ContainerArt => {
+  const themes = theme ? [theme] : themesOf(name, traits)
   const seats = seatsFor(slots)
   const overflow = overflowOf(slots)
-  const hint = columnsHint(columns)
-  const upright = hint === null ? undefined : UPRIGHT_OF[kind]
-  const face: Archetype | Upright = upright ?? kind
-  const def = upright ? UPRIGHT_DEFS[upright] : DEFS[kind]
-  const tier = hint === null ? tierFor(Math.max(1, seats)) : hintedTier(seats, hint, upright ? UPRIGHT_MAX_ROWS : MAX_ROWS[kind])
-  const plan = def.plan(tier, seatGrid(seats, tier))
-  const framed = frameScale({ scale: CONTAINER_SCALE, fit: plan.fit, shadowZ: 0, pad: 6, k: INK_K, wob: WOBBLE, wobStep: 20, seed: hash(name) % 97, shadowCap: hint === null ? undefined : HINTED_SHADOW_CAP })
+  const modules = modulesFor(seats)
+  const plan = deskPlan(modules, seatGrid(seats, tierFor(seats)))
+  const seed = hash(name)
+  const framed = frameScale({ scale: CONTAINER_SCALE, fit: plan.fit, shadowZ: 0, pad: 6, k: INK_K, wob: WOBBLE, wobStep: 20, seed: seed % 97 })
   const p = framed.pen
   const ctx = { name, m: paletteOf(name), overflow }
   const R = SEAT_R * 1.2247 * CONTAINER_SCALE
@@ -102,5 +61,5 @@ export const containerArt = memo(({ name, slots, archetype, columns }: Container
     label: p.rectOf(plaqueCorners(plan.plaque)),
     ...(overflow > 0 && slotsAt.length ? { more: slotsAt[slotsAt.length - 1][1] } : {})
   }
-  return { ...finish(framed, def.draw(p, plan, ctx) + token, anchors), archetype: kind, face, capacity: CAPACITY }
+  return { ...finish(framed, drawDesk(p, plan, ctx, themes, seed) + token, anchors), theme: themes[0], themes, modules, capacity: CAPACITY }
 })

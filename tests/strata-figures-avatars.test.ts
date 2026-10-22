@@ -106,7 +106,7 @@ describe('attachment cards and the kit', () => {
       colorFigures.avatar({ phase: 'idle', source: 'live', harness: 'claude', size: 'small' })
     )
     expect(colorFigures.machine({ kind: 'laptop', link: 'live' }).anchors.portal).toBeDefined()
-    expect(colorFigures.container({ name: 'Monorepo', slots: 3 }).archetype).toBe('workbench')
+    expect(colorFigures.container({ name: 'Monorepo', slots: 3 }).theme).toBe('code')
     expect(colorFigures.attachment({ kind: 'browser', shared: false }).viewBox.w).toBe(48)
   })
 })

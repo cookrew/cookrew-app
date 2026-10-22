@@ -1,32 +1,44 @@
 import { describe, expect, it } from 'vitest'
-import { ARCHETYPES, archetypeOf, BALL, CAPACITY, containerArt, MAX_ROWS, paletteOf, UPRIGHT_OF } from '../src/strata/figures/container'
-import { rowCounts, seatGrid, tierFor } from '../src/strata/figures/container/layout'
-import { plaqueText } from '../src/strata/figures/container/name'
+import { WORKSPACE_TRAITS } from '../src/shared/strata'
+import { BALL, CAPACITY, containerArt, MODULE_SEATS, paletteOf, THEMES, themesOf } from '../src/strata/figures/container'
+import { modulesFor, rowCounts, seatGrid, tierFor } from '../src/strata/figures/container/layout'
+import { plaqueText } from '../src/strata/figures/container/themes'
 
-export const CONTAINER_BUDGET = 10 * 1024
+/** A one-module table, and the longest (four modules, 48 seats). */
+export const MODULE_BUDGET = 9 * 1024
+export const CONTAINER_BUDGET = 22 * 1024
 const slotsOf = (anchors: Readonly<Record<string, unknown>>) => Object.keys(anchors).filter((k) => k.startsWith('slot:'))
 
-describe('container archetypes from the name', () => {
-  it('picks by keyword, first matching word wins', () => {
-    expect(archetypeOf('Monorepo')).toBe('workbench')
-    expect(archetypeOf('Paper Notes')).toBe('bookshelf')
-    expect(archetypeOf('Home Lab')).toBe('house')
-    expect(archetypeOf('CI Night Shift')).toBe('lockers')
-    expect(archetypeOf('Data Pipes')).toBe('pipes')
-    expect(archetypeOf('Backups')).toBe('vault')
-    expect(archetypeOf('Media')).toBe('crate')
-    expect(archetypeOf('Throwaway')).toBe('sandbox')
-    expect(archetypeOf('playgroundStuff')).toBe('sandbox')
-    expect(archetypeOf('Brand Design')).toBe('drawers')
-    expect(archetypeOf('LLM evals')).toBe('lab')
-    expect(archetypeOf('Core Team')).toBe('workbench')
-    expect(archetypeOf('The Team')).toBe('bleachers')
+describe('a workspace theme from its traits and name', () => {
+  it('is one theme per trait word', () => {
+    expect([...THEMES]).toEqual([...WORKSPACE_TRAITS])
+  })
+
+  it('takes the name by keyword when there are no traits, first matching word first', () => {
+    expect(themesOf('Monorepo')).toEqual(['code'])
+    expect(themesOf('Paper Notes')).toEqual(['docs'])
+    expect(themesOf('Home Lab')).toEqual(['home', 'ai'])
+    expect(themesOf('CI Night Shift')).toEqual(['ops'])
+    expect(themesOf('Data Pipes')).toEqual(['data'])
+    expect(themesOf('Backups')).toEqual(['security'])
+    expect(themesOf('Media')).toEqual(['media'])
+    expect(themesOf('Throwaway')).toEqual(['play'])
+    expect(themesOf('playgroundStuff')).toEqual(['play'])
+    expect(themesOf('Brand Design')).toEqual(['design'])
+    expect(themesOf('LLM evals')).toEqual(['ai'])
+    expect(themesOf('Core Team')).toEqual(['code', 'team'])
+  })
+
+  it('puts the traits first and the name second, two themes at most', () => {
+    expect(themesOf('Monorepo', ['ai'])).toEqual(['ai', 'code'])
+    expect(themesOf('Monorepo', ['code', 'ai', 'docs'])).toEqual(['code', 'ai'])
+    expect(themesOf('Zyxwv', ['bogus', 'ai'] as never)).toEqual(['ai'])
   })
 
   it('falls back to a stable hash, and short keys only match whole words', () => {
-    expect(archetypeOf('Zyxwv')).toBe(archetypeOf('Zyxwv'))
-    expect(ARCHETYPES).toContain(archetypeOf('Zyxwv'))
-    expect(archetypeOf('cinema')).not.toBe('lockers')
+    expect(themesOf('Zyxwv')).toEqual(themesOf('Zyxwv'))
+    expect(THEMES).toContain(themesOf('Zyxwv')[0])
+    expect(themesOf('cinema')).not.toContain('ops')
   })
 
   it('gives every name a stable palette', () => {
@@ -35,156 +47,98 @@ describe('container archetypes from the name', () => {
   })
 })
 
-describe('seating', () => {
-  it('grows the tier with the seat count', () => {
-    expect(tierFor(1)).toEqual({ cols: 4, rows: 1 })
-    expect(tierFor(48)).toEqual({ cols: 12, rows: 4 })
-    expect(tierFor(500)).toEqual({ cols: 12, rows: 4 })
+describe('modules: one standard table, longer for a bigger crew', () => {
+  it('seats twelve per module, one to four modules', () => {
+    expect(MODULE_SEATS).toBe(12)
+    expect([0, 1, 12, 13, 24, 25, 36, 37, 48, 500].map(modulesFor)).toEqual([1, 1, 1, 2, 2, 3, 3, 4, 4, 4])
+    expect(tierFor(13)).toEqual({ cols: 8, rows: 3 })
+    expect(tierFor(48)).toEqual({ cols: 16, rows: 3 })
   })
 
-  it('fills rows evenly, earlier rows first, centred', () => {
+  it('fills rows evenly toward the front, every seat on a drawn place', () => {
     expect(rowCounts(5, tierFor(5))).toEqual([3, 2])
-    expect(rowCounts(13, tierFor(13))).toEqual([5, 4, 4])
     const grid = seatGrid(5, tierFor(5))
-    expect(grid.map((s) => s.row)).toEqual([0, 0, 0, 1, 1])
-    expect(grid[3].col).toBe(1)
-  })
-})
-
-/** Seats per row as the anchors show them: a row runs along model y, where y + x·tan 30° is constant on screen. */
-const rowsOf = (anchors: Readonly<Record<string, { x: number; y: number; w: number; h: number }>>) => {
-  const keys = slotsOf(anchors)
-  const rows = new Map<number, number>()
-  for (const key of keys) {
-    const r = anchors[key]
-    const k = Math.round((r.y + r.h / 2 + (r.x + r.w / 2) * Math.tan(Math.PI / 6)) / 4)
-    rows.set(k, (rows.get(k) ?? 0) + 1)
-  }
-  return [...rows.values()]
-}
-
-describe('the columns hint', () => {
-  it('changes nothing when absent', () => {
-    const plain = containerArt({ name: 'Paper Notes', slots: 48 })
-    expect(containerArt({ name: 'Paper Notes', slots: 48, columns: undefined }).svg).toBe(plain.svg)
-    expect(Math.max(...rowsOf(plain.anchors))).toBe(12)
-    expect(rowsOf(containerArt({ name: 'Paper Notes', slots: 5 }).anchors)).toEqual([3, 2])
+    expect(grid.map((s) => s.row)).toEqual([1, 1, 1, 2, 2])
+    expect(seatGrid(1, tierFor(1)).map((s) => s.row)).toEqual([1])
+    for (const n of [1, 3, 5, 7, 13, 29, 48]) for (const s of seatGrid(n, tierFor(n))) expect(Number.isInteger(s.col), `${n}`).toBe(true)
   })
 
-  it('seats 48 agents 4, 5 or 6 to a row when the archetype can, within budget', () => {
-    for (const columns of [4, 5, 6]) {
-      for (const name of ['Paper Notes', 'CI Night Shift', 'Home Lab', 'LLM Evals', 'Brand Design', 'Backups', 'Monorepo', 'Throwaway', 'Media', 'Data Pipes']) {
-        const rows = rowsOf(containerArt({ name, slots: 48, columns }).anchors)
-        expect(Math.max(...rows), `${name} ${columns}`).toBe(columns)
-        expect(rows.reduce((a, b) => a + b, 0)).toBe(48)
-      }
-      for (const archetype of ARCHETYPES) {
-        const art = containerArt({ name: 'x', slots: 48, archetype, columns })
-        expect(art.svg.length, `${archetype} ${columns}`).toBeLessThanOrEqual(CONTAINER_BUDGET)
-      }
-    }
+  it('is the same table for 1 and 12 agents, and grows by one fixed step per module', () => {
+    const w = [1, 12, 13, 25, 37].map((slots) => containerArt({ name: 'Paper Notes', slots }).viewBox)
+    expect(w[0]).toEqual(w[1])
+    const steps = [w[2].w - w[1].w, w[3].w - w[2].w, w[4].w - w[3].w]
+    expect(Math.max(...steps) - Math.min(...steps)).toBeLessThanOrEqual(1)
+    expect(steps[0]).toBeGreaterThan(40)
   })
 
-  it('widens the row when the archetype cannot stack that many rows', () => {
-    const bleachers = containerArt({ name: 'Crew', slots: 48, columns: 4 })
-    expect(bleachers.archetype).toBe('bleachers')
-    expect(rowsOf(bleachers.anchors)).toHaveLength(MAX_ROWS.bleachers)
-    expect(Math.max(...rowsOf(bleachers.anchors))).toBe(8)
-  })
-
-  it('turns a surface upright on a hinted layout: same vibe, a face that stacks', () => {
-    const faces = { Monorepo: 'pegboard', Throwaway: 'toyshelf', Media: 'cratestack', 'Data Pipes': 'pipewall', Crew: 'bleachers', 'Paper Notes': 'bookshelf' }
-    for (const [name, face] of Object.entries(faces)) {
-      const hinted = containerArt({ name, slots: 13, columns: 5 })
-      expect(hinted.face, name).toBe(face)
-      expect(hinted.archetype, name).toBe(archetypeOf(name))
-      expect(containerArt({ name, slots: 13 }).face, name).toBe(archetypeOf(name))
-    }
-    expect(Object.keys(UPRIGHT_OF).sort()).toEqual(['crate', 'pipes', 'sandbox', 'workbench'])
-  })
-
-  it('seats a real-sized workbench and sandbox at 44 px or more on a 358 px phone stage', () => {
-    for (const [name, slots] of [['Monorepo', 33], ['Throwaway', 23], ['Media', 6], ['Data Pipes', 48]] as const) {
-      const art = containerArt({ name, slots, columns: 5 })
-      expect((art.anchors['slot:0'].w / art.viewBox.w) * 358, name).toBeGreaterThanOrEqual(44)
-    }
-  })
-
-  it('keeps an upright\'s slots, tray and label inside the viewBox', () => {
-    for (const name of ['Monorepo', 'Throwaway', 'Media', 'Data Pipes']) {
-      for (const slots of [1, 7, 48]) {
-        const { anchors, viewBox } = containerArt({ name, slots, columns: 5 })
-        for (const [key, r] of Object.entries(anchors)) {
-          expect(r.x, `${name} ${slots} ${key}`).toBeGreaterThanOrEqual(-0.5)
-          expect(r.y, `${name} ${slots} ${key}`).toBeGreaterThanOrEqual(-0.5)
-          expect(r.x + r.w, `${name} ${slots} ${key}`).toBeLessThanOrEqual(viewBox.w + 0.5)
-          expect(r.y + r.h, `${name} ${slots} ${key}`).toBeLessThanOrEqual(viewBox.h + 0.5)
-        }
-      }
-    }
-  })
-
-  it('gives a shelf at five columns seats of 44 px or more on a 360 px stage', () => {
-    for (const name of ['Paper Notes', 'CI Night Shift', 'Home Lab', 'LLM Evals', 'Brand Design']) {
-      const art = containerArt({ name, slots: 48, columns: 5 })
-      expect((art.anchors['slot:0'].w / art.viewBox.w) * 360, name).toBeGreaterThanOrEqual(44)
-    }
-  })
-
-  it('keeps the row width for a workspace smaller than the hint', () => {
-    const three = containerArt({ name: 'Paper Notes', slots: 3, columns: 5 })
-    const five = containerArt({ name: 'Paper Notes', slots: 5, columns: 5 })
-    expect(three.viewBox.w).toBe(five.viewBox.w)
-  })
-
-  it('ignores hints that are not a positive number, and is memoized on the hint', () => {
+  it('has one form on every screen: there is no phone variant to ask for', () => {
     const plain = containerArt({ name: 'Monorepo', slots: 20 })
-    for (const columns of [0, -2, Number.NaN]) expect(containerArt({ name: 'Monorepo', slots: 20, columns }).svg).toBe(plain.svg)
-    expect(containerArt({ name: 'Monorepo', slots: 20, columns: 5 })).toBe(containerArt({ name: 'Monorepo', slots: 20, columns: 5 }))
+    expect(containerArt({ name: 'Monorepo', slots: 20, columns: 5 } as never).svg).toBe(plain.svg)
+  })
+
+  it('lets traits and names change the theme, never the geometry', () => {
+    const base = containerArt({ name: 'Monorepo', slots: 5 })
+    const ai = containerArt({ name: 'Monorepo', slots: 5, traits: ['ai'] })
+    expect(base.theme).toBe('code')
+    expect(ai.theme).toBe('ai')
+    expect(ai.svg).not.toBe(base.svg)
+    expect(ai.anchors).toEqual(base.anchors)
+    expect(ai.viewBox).toEqual(base.viewBox)
+    const other = containerArt({ name: 'Garden Diary', slots: 5 })
+    expect(Object.keys(other.anchors)).toEqual(Object.keys(base.anchors))
+    expect(other.anchors['slot:0'].w).toBeCloseTo(base.anchors['slot:0'].w, 1)
   })
 })
 
 describe('container figures', () => {
-  it('draws every archetype at every size within budget, with no ids or refs', () => {
-    for (const archetype of ARCHETYPES) {
+  it('draws every theme at every size within budget, with no ids or refs', () => {
+    for (const theme of THEMES) {
       for (const slots of [0, 1, 2, 5, 9, 14, 24, 33, 48, 60]) {
-        const art = containerArt({ name: `Sample ${archetype}`, slots, archetype })
-        expect(art.svg.length, `${archetype}/${slots}`).toBeLessThanOrEqual(CONTAINER_BUDGET)
-        expect(art.svg).not.toMatch(/\bid=|url\(|href|<filter|<script|NaN|undefined/)
-        expect(art.archetype).toBe(archetype)
+        const art = containerArt({ name: `Sample ${theme}`, slots, theme })
+        expect(art.svg.length, `${theme}/${slots}`).toBeLessThanOrEqual(art.modules === 1 ? MODULE_BUDGET : CONTAINER_BUDGET)
+        expect(art.svg).not.toMatch(/\bid=|url\(|href|<filter|<script|NaN|undefined|Infinity/)
+        expect(art.theme).toBe(theme)
+        expect(art.modules).toBe(modulesFor(Math.min(Math.max(0, slots), CAPACITY)))
         expect(slotsOf(art.anchors)).toHaveLength(Math.min(slots, CAPACITY))
       }
     }
   })
 
+  it('blends a second theme in when there is one', () => {
+    const one = containerArt({ name: 'Zyxwv', slots: 30, traits: ['data'] })
+    const two = containerArt({ name: 'Zyxwv', slots: 30, traits: ['data', 'team'] })
+    expect(two.svg).not.toBe(one.svg)
+    expect(two.theme).toBe('data')
+  })
+
   it('is deterministic and memoized by input', () => {
     const a = containerArt({ name: 'Monorepo', slots: 48 })
     expect(containerArt({ name: 'Monorepo', slots: 48 })).toBe(a)
-    expect(a.archetype).toBe('workbench')
+    expect(containerArt({ name: 'Monorepo', slots: 48, traits: ['ai'] })).toBe(containerArt({ name: 'Monorepo', slots: 48, traits: ['ai'] }))
   })
 
   it('makes every seat the same size, in every container', () => {
-    const sizes = ARCHETYPES.flatMap((archetype) =>
-      [3, 48].map((slots) => containerArt({ name: 'x', slots, archetype }).anchors['slot:0'].w)
-    )
+    const sizes = THEMES.flatMap((theme) => [3, 48].map((slots) => containerArt({ name: 'x', slots, theme }).anchors['slot:0'].w))
     expect(Math.max(...sizes) - Math.min(...sizes)).toBeLessThan(0.2)
     expect(BALL.d).toBeGreaterThan(0)
   })
 
   it('keeps slots, tray and label inside the viewBox', () => {
-    for (const archetype of ARCHETYPES) {
-      const { anchors, viewBox } = containerArt({ name: 'Paper Notes', slots: 48, archetype })
-      for (const [key, r] of Object.entries(anchors)) {
-        const ball = key.startsWith('slot:') ? { x: r.x + r.w * 0.22, y: r.y + r.h * 0.3, w: r.w * BALL.d, h: r.h * BALL.d } : r
-        expect(ball.x, `${archetype} ${key}`).toBeGreaterThanOrEqual(-0.5)
-        expect(ball.y, `${archetype} ${key}`).toBeGreaterThanOrEqual(-0.5)
-        expect(ball.x + ball.w, `${archetype} ${key}`).toBeLessThanOrEqual(viewBox.w + 0.5)
-        expect(ball.y + ball.h, `${archetype} ${key}`).toBeLessThanOrEqual(viewBox.h + 0.5)
+    for (const theme of THEMES) {
+      for (const slots of [1, 48]) {
+        const { anchors, viewBox } = containerArt({ name: 'Paper Notes', slots, theme })
+        for (const [key, r] of Object.entries(anchors)) {
+          const ball = key.startsWith('slot:') ? { x: r.x + r.w * 0.22, y: r.y + r.h * 0.3, w: r.w * BALL.d, h: r.h * BALL.d } : r
+          expect(ball.x, `${theme} ${key}`).toBeGreaterThanOrEqual(-0.5)
+          expect(ball.y, `${theme} ${key}`).toBeGreaterThanOrEqual(-0.5)
+          expect(ball.x + ball.w, `${theme} ${key}`).toBeLessThanOrEqual(viewBox.w + 0.5)
+          expect(ball.y + ball.h, `${theme} ${key}`).toBeLessThanOrEqual(viewBox.h + 0.5)
+        }
       }
     }
   })
 
-  it('seats in creation order: the first row reads left to right', () => {
+  it('seats in creation order: a row reads left to right, the next row nearer', () => {
     const { anchors } = containerArt({ name: 'Paper Notes', slots: 8 })
     expect(anchors['slot:1'].x).toBeGreaterThan(anchors['slot:0'].x)
     expect(anchors['slot:4'].y).toBeGreaterThan(anchors['slot:0'].y)

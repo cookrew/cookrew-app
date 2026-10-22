@@ -271,6 +271,7 @@ const api = {
   workspaceShots: () => ipcRenderer.invoke('workspace:shots'),
   renameWorkspace: (id: string, name: string) =>
     ipcRenderer.invoke('workspace:rename', id, name),
+  setWorkspaceBrief: (id: string, brief: string) => ipcRenderer.invoke('workspace:brief', id, brief),
   removeWorkspace: (id: string) => ipcRenderer.invoke('workspace:remove', id),
   addWorkspaceDir: (id: string, dir: string) => ipcRenderer.invoke('workspace:dir:add', id, dir),
   removeWorkspaceDir: (id: string, dir: string) =>

@@ -236,6 +236,13 @@ export interface WorkspaceMeta {
   dirs: string[]
   /** One emoji shown in the switcher. */
   icon: string
+  /**
+   * One line the owner writes about the project (workspace-brief.ts: at most
+   * BRIEF_MAX characters, trimmed, newlines collapsed). It picks the
+   * workspace's traits on cookrew.dev and never reaches cookrew.dev itself;
+   * only the desktop and its paired devices see it. Absent = unset.
+   */
+  brief?: string
 }
 
 /** Git state of a workspace directory (main/git.ts). */

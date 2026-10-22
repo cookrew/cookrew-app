@@ -39,13 +39,13 @@ export interface FigureKit {
    */
   machine(input: { kind: MachineKind; link: MachineLink; reached?: boolean; model?: string | null }): FigureArt
   /**
-   * The archetype comes from the workspace name alone (deterministic, no
-   * network). `slots` seats avatars in creation order; beyond `capacity` the
-   * last slot reads "+K". `columns` asks for that many seats per row (a phone
-   * asks for fewer, larger seats); the kit honours it when the archetype can,
-   * and the slot anchors show what it did. Absent = the kit's own choice.
+   * One standard table for every workspace on every screen, longer for a
+   * bigger crew; its theme comes from `traits` (closed words from the desktop)
+   * and the name, deterministic, no network, and never changes the geometry.
+   * `slots` seats avatars in creation order; beyond `capacity` the last slot
+   * reads "+K".
    */
-  container(input: { name: string; slots: number; columns?: number }): FigureArt & { archetype: string; capacity: number }
+  container(input: { name: string; slots: number; traits?: readonly string[] }): FigureArt & { theme: string; capacity: number }
   /** `source` other than 'live' draws as last-known, never as fact. */
   avatar(input: { phase: AgentPhase; source: PhaseSource; harness: Harness; size: AvatarSize }): FigureArt
   attachment(input: { kind: LevelsAttachment['kind']; shared: boolean }): FigureArt

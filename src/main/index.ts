@@ -6125,6 +6125,10 @@ app.whenReady().then(() => {
         store.renameWorkspace(id, name)
         return store.list()
       },
+      setWorkspaceBrief: (id, brief) => {
+        store.setWorkspaceBrief(id, brief)
+        return store.list()
+      },
       removeWorkspace,
       addWorkspaceDir,
       removeWorkspaceDir,
@@ -6826,6 +6830,10 @@ function registerIpc(handlers: RestoreHandlers): void {
     store.renameWorkspace(id, name)
     // The active workspace's new name is what the herdr workspace wears.
     if (id === store.focusedId) reportWorkspaceBinding()
+    return store.list()
+  })
+  ipcMain.handle('workspace:brief', (_e, id: string, brief: unknown) => {
+    store.setWorkspaceBrief(id, brief)
     return store.list()
   })
   // Workspace v2: remove + multi-directory + per-terminal cwd + git.

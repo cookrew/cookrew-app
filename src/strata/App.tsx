@@ -162,7 +162,10 @@ export function App() {
   const lastInput = useRef<'pointer' | 'key'>('pointer')
   useEffect(() => {
     const onKey = () => (lastInput.current = 'key')
-    const onPointer = () => (lastInput.current = 'pointer')
+    const onPointer = () => {
+      lastInput.current = 'pointer'
+      armed.current = true
+    }
     addEventListener('keydown', onKey, true)
     addEventListener('pointerdown', onPointer, true)
     return () => {

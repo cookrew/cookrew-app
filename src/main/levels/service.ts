@@ -16,7 +16,7 @@ import type { AgentTuning } from '../../shared/agent-tuning'
 import type { BoardPhase } from '../../shared/board'
 import type { GitInfo, TerminalNodeData, WorkspaceMeta, WorkspaceState } from '../../shared/model'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
-import type { Harness, LevelsAgentDetail, LevelsEvent, LevelsSnapshot } from '../../shared/strata'
+import type { Harness, LevelsAgentDetail, LevelsEvent, LevelsSnapshot, WorkspaceTrait } from '../../shared/strata'
 import { scrubShapes, type Scrub } from '../scrub'
 import { agentDetail, buildLevels, type PhaseMemory } from './build'
 import { diffLevels, stampRevs } from './diff'
@@ -52,6 +52,8 @@ export interface LevelsSources {
   observe?: (ms: number) => void
   /** A cwd's git answer if already cached, never a query (the detail's node.git). */
   gitPeek?: (dir: string) => GitInfo | undefined
+  /** A workspace's traits (traits.ts); cached by the lookup, so a build pays a stat or two. */
+  traits?: (meta: WorkspaceMeta) => readonly WorkspaceTrait[]
 }
 
 export interface LevelsCurrent {
@@ -124,7 +126,8 @@ export function createLevelsService(sources: LevelsSources, pushMs: number = LEV
       harnessOf: sources.harnessOf,
       memory,
       now: now(),
-      scrub
+      scrub,
+      traits: sources.traits
     })
     memory = built.memory
     const machine = sources.machine()

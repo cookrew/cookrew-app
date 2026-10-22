@@ -11,6 +11,7 @@ import { harnessFor } from '../harness'
 import type { Scrub } from '../scrub'
 import type { WorkspaceStore } from '../store'
 import type { LevelsSources } from './service'
+import { createTraitLookup } from './traits'
 
 /** The harness a card runs: a known agent, a plain shell (no command), or something else. */
 export function harnessOfNode(node: Pick<TerminalNodeData, 'command'>): Harness {
@@ -36,6 +37,8 @@ export interface LevelsRuntime {
   observe?: (ms: number) => void
   now?: () => number
   gitPeek?: (dir: string) => GitInfo | undefined
+  /** Test seam; the real one reads the brief, else the primary dir's README and package.json. */
+  traits?: LevelsSources['traits']
 }
 
 const STORE_SIGNALS = ['change', 'workspace-change', 'workspaces', 'switch'] as const
@@ -97,6 +100,7 @@ export function levelsSourcesFrom(runtime: LevelsRuntime): LevelsSources {
     holdProbe: board.probeSubscribe,
     scrub: runtime.scrub,
     observe: runtime.observe,
-    gitPeek: runtime.gitPeek
+    gitPeek: runtime.gitPeek,
+    traits: runtime.traits ?? createTraitLookup()
   }
 }

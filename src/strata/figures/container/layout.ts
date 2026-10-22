@@ -1,13 +1,16 @@
-// Seating: how many seats a container has room for, and where seat i goes.
-// Containers come in tiers so a 2-agent workspace is a small piece of
-// furniture and a 48-agent one a big one, at ONE shared scale: every seat is
-// the same size everywhere, so every avatar is too.
+// Seating: every workspace sits at the same standard table, built from
+// modules of 4 x 3 = 12 seats joined end to end (one to four), so a bigger crew
+// gets a longer table and never a different one. One shared scale: every seat
+// is the same size everywhere, so every avatar is too.
 //
 // Seats fill in creation order, row by row (rows as even as possible, earlier
-// rows take the extra), each row centred on the column pitch. Past capacity
-// the last seat holds a "+K" token instead of an agent.
+// rows take the extra), each row centred on a drawn place, the rows toward the
+// front. Past capacity the last seat holds a "+K" token instead of an agent.
 
-export const CAPACITY = 48
+export const MODULE = { cols: 4, rows: 3 } as const
+export const MODULE_SEATS = MODULE.cols * MODULE.rows
+export const MAX_MODULES = 4
+export const CAPACITY = MODULE_SEATS * MAX_MODULES
 
 /** Avatar ball radius in model units; every container seats balls of this size. */
 export const SEAT_R = 2.8
@@ -17,36 +20,10 @@ export interface Tier {
   rows: number
 }
 
-const TIERS: Tier[] = [
-  { cols: 4, rows: 1 },
-  { cols: 4, rows: 2 },
-  { cols: 6, rows: 2 },
-  { cols: 6, rows: 3 },
-  { cols: 8, rows: 3 },
-  { cols: 8, rows: 4 },
-  { cols: 12, rows: 4 }
-]
+/** Modules a table needs for this many seats. */
+export const modulesFor = (seats: number): number => Math.min(MAX_MODULES, Math.max(1, Math.ceil(seats / MODULE_SEATS)))
 
-export const tierFor = (slots: number): Tier => TIERS.find((t) => t.cols * t.rows >= slots) ?? TIERS[TIERS.length - 1]
-
-/** The widest row a hint may ask for. */
-export const MAX_COLUMNS = 16
-
-/** A columns hint as a whole number of seats per row, or null when there is none to honour. */
-export const columnsHint = (columns: number | undefined): number | null =>
-  columns === undefined || !Number.isFinite(columns) || columns < 1 ? null : Math.min(MAX_COLUMNS, Math.floor(columns))
-
-/**
- * The grid for a level's columns hint: that many seats per row, as many rows
- * as it takes — unless the archetype cannot stack that many rows, in which
- * case the rows stop at maxRows and the row widens to fit. A hint wider than
- * the agents keeps its width, so every workspace on a level seats at one size.
- */
-export const hintedTier = (seats: number, columns: number, maxRows: number): Tier => {
-  const n = Math.max(1, seats)
-  const cols = Math.max(columns, Math.ceil(n / maxRows))
-  return { cols, rows: Math.ceil(n / cols) }
-}
+export const tierFor = (seats: number): Tier => ({ cols: MODULE.cols * modulesFor(seats), rows: MODULE.rows })
 
 /** A slot count as a whole number of agents: NaN, negatives and fractions never reach the geometry. */
 export const agentsIn = (slots: number): number => (Number.isFinite(slots) ? Math.max(0, Math.floor(slots)) : 0)
@@ -60,7 +37,7 @@ export const overflowOf = (slots: number): number => (agentsIn(slots) > CAPACITY
 export interface Seat {
   index: number
   row: number
-  /** Column position from the left edge on screen, in column units (may be fractional when centred). */
+  /** Column from the left edge on screen: always a drawn place. */
   col: number
 }
 
@@ -75,10 +52,10 @@ export const rowCounts = (seats: number, tier: Tier): number[] => {
 /** Where each seat sits in the tier grid, in creation order. */
 export const seatGrid = (seats: number, tier: Tier): Seat[] => {
   const counts = rowCounts(seats, tier)
-  const rowOffset = Math.floor((tier.rows - counts.length) / 2)
-  let index = 0
+  const rowOffset = Math.ceil((tier.rows - counts.length) / 2)
+  const starts = counts.map((_, r) => counts.slice(0, r).reduce((a, b) => a + b, 0))
   return counts.flatMap((count, r) =>
-    Array.from({ length: count }, (_, c) => ({ index: index++, row: r + rowOffset, col: c + (tier.cols - count) / 2 }))
+    Array.from({ length: count }, (_, c) => ({ index: starts[r] + c, row: r + rowOffset, col: c + Math.floor((tier.cols - count) / 2) }))
   )
 }
 

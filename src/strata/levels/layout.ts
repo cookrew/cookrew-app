@@ -8,12 +8,14 @@ import { fitTransform, inset, mapRect, type Transform } from './geometry'
 
 /** Smallest hit target an avatar may have before the loupe takes over (px). */
 export const MIN_TARGET = { pointer: 24, touch: 44 } as const
+/** A target this wide (its hit, which is the ball where it does not grow) cannot be aimed at alone with this input. */
+export const underTarget = (w: number, touch: boolean): boolean => w < (touch ? MIN_TARGET.touch : MIN_TARGET.pointer)
 
 /** Room above a figure for attention pins, and below it for its name and status. */
 export const PIN_ROOM = 34
 export const LABEL_ROOM = 44
-/** Under a container: the background chip. */
-const CHIP_ROOM = 24
+/** Under a container: its name tag and crew line (6 down, a 26 px tag, 4 apart, a 16 px line) and some air. */
+const NAME_ROOM = 56
 const MAX_MACHINE_SCALE = 2.2
 /** Seats never grow past this, so a 2-agent workspace does not become balloons. */
 export const MAX_SEAT = 88
@@ -96,9 +98,10 @@ export interface WorkspaceInput {
   id: string
   name: string
   agents: number
+  traits?: readonly string[]
 }
 
-export type ContainerArt = FigureArt & { archetype: string; capacity: number }
+export type ContainerArt = FigureArt & { theme: string; capacity: number }
 
 export interface ContainerCell {
   id: string
@@ -140,7 +143,7 @@ const shelve = (sizes: Array<{ w: number; h: number }>, width: number, gap: numb
   return current.items.length ? [...shelves, current] : shelves
 }
 
-const shelvesHeight = (shelves: Shelf[]) => shelves.reduce((sum, s) => sum + PIN_ROOM + s.h + CHIP_ROOM, 0)
+const shelvesHeight = (shelves: Shelf[]) => shelves.reduce((sum, s) => sum + PIN_ROOM + s.h + NAME_ROOM, 0)
 
 /**
  * Containers packed in order on shelves, all at one scale (so seat size is the
@@ -151,11 +154,11 @@ export const layoutWorkspaces = (
   workspaces: readonly WorkspaceInput[],
   viewport: Rect,
   kit: FigureKit,
-  opts: { gap?: number; maxSeat?: number; columns?: number } = {}
+  opts: { gap?: number; maxSeat?: number } = {}
 ): ContainerCell[] => {
   if (workspaces.length === 0) return []
   const gap = opts.gap ?? 28
-  const arts = workspaces.map((w) => kit.container({ name: w.name, slots: w.agents, ...(opts.columns !== undefined && { columns: opts.columns }) }))
+  const arts = workspaces.map((w) => kit.container({ name: w.name, slots: w.agents, ...(w.traits?.length && { traits: w.traits }) }))
   const maxScale = (opts.maxSeat ?? MAX_SEAT) / Math.max(...arts.map(seatSize))
   const sizesAt = (s: number) => arts.map((a) => ({ w: a.viewBox.w * s, h: a.viewBox.h * s }))
   const fits = (s: number) => {
@@ -190,22 +193,14 @@ export const layoutWorkspaces = (
       })
       x += item.w + gap
     }
-    y += PIN_ROOM + shelf.h + CHIP_ROOM
+    y += PIN_ROOM + shelf.h + NAME_ROOM
   }
   return cells
 }
 
-/** L2: one workspace, as large as it may be, from the same container (same columns) as its L1 box. */
-export const layoutAgents = (workspace: WorkspaceInput, viewport: Rect, kit: FigureKit, columns?: number): ContainerCell | null =>
-  layoutWorkspaces([workspace], viewport, kit, { gap: 0, columns })[0] ?? null
-
-/**
- * Seats per row a level asks the kit for: a phone asks for 5, so 48 agents are
- * DRAWN at ≥ 44 px with the normal inset (6 draws 42); wider screens leave it
- * to the kit. L1 and L2 ask the same, so they share one container layout.
- */
-export const PHONE_COLUMNS = 5
-export const columnsFor = (viewport: Rect): number | undefined => (viewport.w < 600 ? PHONE_COLUMNS : undefined)
+/** L2: one workspace, as large as it may be: the same table as its L1 box, on every screen (with its name room, so the two match). */
+export const layoutAgents = (workspace: WorkspaceInput, viewport: Rect, kit: FigureKit): ContainerCell | null =>
+  layoutWorkspaces([workspace], viewport, kit, { gap: 0 })[0] ?? null
 
 /**
  * The miniature of a level drawn inside `portal`: the level's own viewport

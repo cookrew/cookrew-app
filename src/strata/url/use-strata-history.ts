@@ -67,8 +67,13 @@ export const useStrataHistory = (fleet: StrataMachine[], loaded: boolean): Strat
     setPathState(p)
   }
   const push = (p: StrataPath) => history.pushState(historyState(p), '', formatStrataUrl(p, fleetRef.current))
-  /** Make history the chain for `p`: the current entry becomes /me, then every level down. */
+  /**
+   * Make history the chain for `p`: the current entry becomes /me, then every
+   * level down. Once only: an entry that already stands at `p` was seeded (a
+   * re-run effect, StrictMode's included, must not stack a second chain).
+   */
   const seed = (p: StrataPath) => {
+    if (isStrataState(history.state) && samePath(history.state.strata.path, p)) return
     history.replaceState(historyState({}), '', formatStrataUrl({}, fleetRef.current))
     ancestry(p).slice(1).forEach(push)
   }

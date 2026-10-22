@@ -296,12 +296,12 @@ button {
 .level > *,
 .machine > *,
 .workspace > *,
-.level [role='grid'] > * {
+.level .seats > * {
   position: absolute;
 }
 .machine,
 .workspace,
-.level [role='grid'] {
+.level .seats {
   position: static;
 }
 .fig {
@@ -529,15 +529,18 @@ button {
 .avatar.passive {
   pointer-events: none;
 }
+/* L2: the hit is the square the pitch allows; a round one would lose its corners. */
+.avatar.grown {
+  border-radius: 0;
+}
 /* An avatar's highlight: an ink ring like a sticker's cut line, lamp light behind, a small lift. */
 .avatar::before {
-  --art: calc(100% - 2 * var(--pad, 0px));
   content: '';
   position: absolute;
-  left: calc(var(--pad, 0px) + var(--art) * 0.22);
-  top: calc(var(--pad, 0px) + var(--art) * 0.3);
-  width: calc(var(--art) * 0.56);
-  height: calc(var(--art) * 0.56);
+  left: calc(var(--ax, 0px) + var(--aw, 100%) * 0.22);
+  top: calc(var(--ay, 0px) + var(--aw, 100%) * 0.3);
+  width: calc(var(--aw, 100%) * 0.56);
+  height: calc(var(--aw, 100%) * 0.56);
   border-radius: 50%;
   box-shadow: 0 0 0 2px var(--paper), 0 0 0 4px var(--ink), 0 0 16px 7px var(--spot);
   opacity: 0;
@@ -567,11 +570,14 @@ button {
 .machine-figure.dim {
   opacity: 0.3;
 }
-.avatar .fig {
-  inset: var(--pad, 0);
-}
+/* The button is the hit (on the ball); the art is the whole seat around it. */
+.avatar .fig,
 .avatar .tuck {
-  inset: var(--pad, 0);
+  inset: auto;
+  left: var(--ax, 0);
+  top: var(--ay, 0);
+  width: var(--aw, 100%);
+  height: var(--aw, 100%);
   margin: 0;
 }
 .tuck {

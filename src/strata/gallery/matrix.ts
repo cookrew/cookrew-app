@@ -1,7 +1,7 @@
 // Every figure in every state, at every size: the matrices the owner reviews.
 // Container names here are invented; real ones only ever arrive at runtime.
 import type { AgentPhase, Harness, MachineKind, MachineLink, PhaseSource } from '../../shared/strata'
-import { ARCHETYPES, avatarArt, cardArt, containerArt, desktopFormOf, machineArt, type Archetype } from '../figures'
+import { avatarArt, cardArt, containerArt, desktopFormOf, machineArt, THEMES, type Theme } from '../figures'
 import type { AvatarSize } from '../seams'
 import { elementsOf, kb, record } from './stats'
 
@@ -16,18 +16,18 @@ const STATES: Array<{ link: MachineLink; reached?: boolean; label: string }> = [
   { link: 'offline', reached: false, label: 'never reached' }
 ]
 const DESKTOP_LABELS = ['Mac mini', 'Mac Studio', 'Mac Pro', 'iMac (24-inch)']
-const SAMPLE_NAMES: Record<Archetype, string> = {
-  workbench: 'Monorepo',
-  bookshelf: 'Paper Notes',
-  house: 'Home Lab',
-  crate: 'Media',
-  vault: 'Backups',
-  lockers: 'CI Night Shift',
-  pipes: 'Data Pipes',
-  sandbox: 'Throwaway',
-  drawers: 'Brand Design',
-  lab: 'LLM Evals',
-  bleachers: 'Crew'
+const SAMPLE_NAMES: Record<Theme, string> = {
+  code: 'Monorepo',
+  docs: 'Paper Notes',
+  home: 'Home Lab',
+  media: 'Media',
+  security: 'Backups',
+  ops: 'CI Night Shift',
+  data: 'Data Pipes',
+  play: 'Throwaway',
+  design: 'Brand Design',
+  ai: 'LLM Evals',
+  team: 'Crew'
 }
 const PHASES: AgentPhase[] = ['idle', 'thinking', 'waiting', 'replied', 'offline']
 const SOURCES: PhaseSource[] = ['live', 'probe', 'ledger']
@@ -68,21 +68,21 @@ export const machinesHtml = (): string =>
   '</div>'
 
 export const containersHtml = (): string =>
-  '<h2 id="containers">Containers <span class="muted">· every archetype at 1, 5, 14, 33, 48 and 60 seats (+K past 48)</span></h2>' +
-  ARCHETYPES.map(
-    (archetype) =>
-      `<h3>${archetype} <span class="muted">· "${SAMPLE_NAMES[archetype]}"</span></h3><div class="grid">${[1, 5, 14, 33, 48, 60]
+  '<h2 id="containers">Containers <span class="muted">· one standard table, every theme at 1, 5, 14, 33, 48 and 60 seats (+K past 48)</span></h2>' +
+  THEMES.map(
+    (theme) =>
+      `<h3>${theme} <span class="muted">· "${SAMPLE_NAMES[theme]}"</span></h3><div class="grid">${[1, 5, 14, 33, 48, 60]
         .map((slots) => {
-          const art = record('container', `${archetype}/${slots}`, containerArt({ name: SAMPLE_NAMES[archetype], slots, archetype }))
+          const art = record('container', `${theme}/${slots}`, containerArt({ name: SAMPLE_NAMES[theme], slots, theme }))
           return cell(at(art.svg, art.viewBox.w * 0.5), `${slots} · ${kb(art.svg.length)} · ${elementsOf(art.svg)} el`)
         })
         .join('')}</div>`
   ).join('') +
   onDark(
-    'every archetype, 14 seats',
-    ARCHETYPES.map((archetype) => {
-      const art = containerArt({ name: SAMPLE_NAMES[archetype], slots: 14, archetype })
-      return cell(at(art.svg, art.viewBox.w * 0.45), archetype)
+    'every theme, 14 seats',
+    THEMES.map((theme) => {
+      const art = containerArt({ name: SAMPLE_NAMES[theme], slots: 14, theme })
+      return cell(at(art.svg, art.viewBox.w * 0.45), theme)
     }).join('')
   )
 

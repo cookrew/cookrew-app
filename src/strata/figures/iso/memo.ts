@@ -17,7 +17,7 @@ export const memo = <I, O>(draw: (input: I) => O): ((input: I) => O) => {
   }
 }
 
-/** FNV-1a, 32 bit: names → archetypes, palettes and wobble seeds. */
+/** FNV-1a, 32 bit: names → themes, palettes and wobble seeds. */
 export const hash = (text: string): number => {
   let h = 0x811c9dc5
   for (let i = 0; i < text.length; i++) {

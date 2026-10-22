@@ -138,6 +138,8 @@ export interface MobileOps {
   ) => WorkspaceMeta | Promise<WorkspaceMeta>;
   switchWorkspace: (id: string) => WorkspaceMeta;
   renameWorkspace: (id: string, name: string) => WorkspaceList;
+  /** Throws on an unknown workspace or a brief that fails shared/workspace-brief.ts. */
+  setWorkspaceBrief: (id: string, brief: unknown) => WorkspaceList;
   /** Workspace v2: remove workspace + multi-dir + per-terminal cwd + git. */
   removeWorkspace: (id: string) => WorkspaceList;
   addWorkspaceDir: (id: string, dir: string) => WorkspaceList;
@@ -892,6 +894,21 @@ export async function handleMobileApi(
       200,
       ops.renameWorkspace(body.id ?? "", body.name ?? ""),
     );
+    return true;
+  }
+  if (method === "POST" && p === "/api/workspaces/brief") {
+    const body = await readJson<{ id?: string; brief?: unknown }>(request);
+    try {
+      respondJson(
+        response,
+        200,
+        ops.setWorkspaceBrief(body.id ?? "", body.brief),
+      );
+    } catch (error) {
+      respondJson(response, 400, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     return true;
   }
   // Workspace v2: remove + directory management + git (mobile = text input).

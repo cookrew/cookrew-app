@@ -61,7 +61,7 @@ export const standInFigures: FigureKit = {
     const body =
       `<rect x="2" y="2" width="${w - 4}" height="${h - 4}" fill="#f3ecd8" stroke="#2d2a20" stroke-width="3"/>` +
       `<text x="12" y="22" font-family="monospace" font-size="13" fill="#2d2a20">${escape(name)}</text>`
-    return { ...art(w, h, body, anchors), archetype: 'box', capacity: CAPACITY }
+    return { ...art(w, h, body, anchors), theme: 'box', capacity: CAPACITY }
   }),
 
   avatar: memo(({ phase, source, size }) => {

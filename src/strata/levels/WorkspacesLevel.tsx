@@ -11,7 +11,7 @@ import type { LevelModel, SeatRef } from './model'
 import { Avatar } from './Avatar'
 import { Pins, waitingPins } from './Pins'
 import { pathKey, samePath } from './selection'
-import { MIN_TARGET, type ContainerCell } from './layout'
+import { underTarget, type ContainerCell } from './layout'
 import { TrayCards } from './Tray'
 
 const crewLine = (agents: number, waiting: number, unseated: number) =>
@@ -90,8 +90,8 @@ function WorkspaceItem({
   const target = { machine: machine.id, workspace: workspace.id }
   const anchor = env.useAnchor(anchorOf(target))
   const highlighted = samePath(env.highlight, target)
-  // A dive target only when DRAWN at ≥ MIN_TARGET for the input; smaller, a click goes to the container.
-  const tiny = (seats[0]?.rect.w ?? Infinity) < (env.touch ? MIN_TARGET.touch : MIN_TARGET.pointer)
+  // A dive target only when its ball (its hit at L1) is ≥ MIN_TARGET for the input; smaller, a click goes to the container.
+  const tiny = underTarget(seats[0]?.ball.w ?? Infinity, env.touch)
   const focused = workspace.state === 'focused'
   const hits = env.glow ? seats.filter((s) => env.glow?.has(s.key)).length : 0
   return (

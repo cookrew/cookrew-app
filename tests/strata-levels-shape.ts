@@ -83,6 +83,7 @@ const workspace = object({
   id: str,
   name: str,
   icon: nullable(str),
+  'traits?': array(str),
   state: oneOf('focused', 'background'),
   agents: array(agent),
   loose: array(attachment),
