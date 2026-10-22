@@ -22,6 +22,8 @@ export type CrIconName =
   | 'prev'
   | 'next'
   | 'canvas'
+  /** The levels view: machines, workspaces, agents as stacked plates. */
+  | 'levels'
   | 'demo'
   | 'mobile'
   | 'bash'
@@ -160,6 +162,13 @@ const ICONS: Record<CrIconName, React.JSX.Element> = {
       <rect x="9" y="2.3" width="4.7" height="4.7" />
       <rect x="2.3" y="9" width="4.7" height="4.7" />
       <rect x="9" y="9" width="4.7" height="4.7" />
+    </g>
+  ),
+  levels: (
+    <g {...STROKE} strokeLinejoin="round">
+      <path d="M8 2.2 L13.8 5 L8 7.8 L2.2 5 Z" />
+      <path d="M2.2 8 L8 10.8 L13.8 8" />
+      <path d="M2.2 11 L8 13.8 L13.8 11" />
     </g>
   ),
   demo: (

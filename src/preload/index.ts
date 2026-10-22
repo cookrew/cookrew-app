@@ -464,6 +464,22 @@ const api = {
       void ipcRenderer.invoke('board:unsubscribe')
     }
   },
+  // STRATA: the levels view. A snapshot first, then every delta, pushed;
+  // the release closes this window's stream when its last view goes.
+  subscribeLevels: (cb: (event: unknown) => void) => {
+    const listener = (_e: unknown, event: unknown): void => cb(event)
+    ipcRenderer.on('levels:event', listener)
+    // Only a hold that was taken is given back: a refused one must not release another view's.
+    const held = ipcRenderer.invoke('levels:subscribe').then(
+      (ok: unknown) => ok === true,
+      () => false
+    )
+    return () => {
+      ipcRenderer.removeListener('levels:event', listener)
+      void held.then((ok) => (ok ? ipcRenderer.invoke('levels:unsubscribe') : undefined)).catch(() => undefined)
+    }
+  },
+  getLevelsAgent: (agentId: string) => ipcRenderer.invoke('levels:detail', agentId),
   recoverAgent: (id: string) => ipcRenderer.invoke('agent:recover', id),
   restoreCheckpoint: (id: string, checkpointIndex: number, targetSessionId?: string) =>
     ipcRenderer.invoke('agent:restore-checkpoint', id, checkpointIndex, targetSessionId),

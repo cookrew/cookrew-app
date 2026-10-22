@@ -25,7 +25,12 @@ export const focusAfterLanding = (root: HTMLElement, sceneEl: HTMLElement, regis
   let target: HTMLElement | null = null
   // Out: back onto the item we came out of (the step's own item before a machine's portal), so Enter goes straight back in.
   if (plan && plan.dir < 0 && plan.kind !== 'hop') target = focusableIn(sceneEl, findAnchor(registry, [...plan.steps[0].anchor].reverse())?.el)
-  if (!target && levelOf(rest) === 'terminal') target = focusableIn(sceneEl, findAnchor(registry, ['terminal'])?.el)
+  if (!target && levelOf(rest) === 'terminal') {
+    const terminal = findAnchor(registry, ['terminal'])?.el
+    // A host's real terminal that took focus on opening keeps it: the keys belong there, not on its first button.
+    if (terminal && active && active !== terminal && terminal.contains(active)) return
+    target = focusableIn(sceneEl, terminal)
+  }
   if (!target) target = focusableIn(sceneEl, sceneEl.querySelector('[data-stage-focus]'))
   ;(target ?? sceneEl).focus({ preventScroll: true })
 }

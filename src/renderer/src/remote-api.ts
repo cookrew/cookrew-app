@@ -15,6 +15,7 @@ import type { InboxRow } from '../../shared/inbox-rank'
 import type { Alternate } from '../../shared/sous-decide'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 import type { VersionPinRecord } from '../../shared/version-pin'
+import type { LevelsAgentDetail, LevelsEvent } from '../../shared/strata'
 import { apiPath } from './api-base'
 import { planeFetch } from './plane-fetch'
 import { planeHealth } from './plane-health'
@@ -515,6 +516,21 @@ export function createRemoteApi(): CookrewApi {
       req<BoardSnapshotLike>(
         apiPath(`/api/board${window ? `?window=${encodeURIComponent(window)}` : ''}`)
       ),
+    // STRATA: the companion's own levels stream (unnamed data frames, a
+    // snapshot first). EventSource reconnects by itself, and every reconnect
+    // opens on a fresh snapshot, so nothing here has to resync.
+    subscribeLevels: (cb) => {
+      const source = openEventSource(tokenParam(apiPath('/api/levels/stream')))
+      source.onmessage = (message) => {
+        try {
+          cb(JSON.parse(message.data) as LevelsEvent)
+        } catch (error) {
+          console.error('Levels stream sent a frame that is not JSON:', error)
+        }
+      }
+      return () => source.close()
+    },
+    getLevelsAgent: (agentId) => req<LevelsAgentDetail>(apiPath(`/api/levels/agents/${encodeURIComponent(agentId)}`)),
     recoverAgent: (id) => req(apiPath(`/api/agents/${id}/recover`), 'POST'),
     restoreCheckpoint: (id, checkpointIndex, targetSessionId) =>
       req(apiPath(`/api/agents/${id}/restore`), 'POST', {

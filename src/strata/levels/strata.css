@@ -2,8 +2,12 @@
    positioned from the pure layouts; nothing here changes geometry on hover.
    This sheet owns the scheme tokens (paper, ink, muted, dot) in BOTH schemes:
    every surface sets its own colours, nothing inherits the body's, and
-   anything on a fixed light colour (cards, figures) uses --figure-ink. */
-:root {
+   anything on a fixed light colour (cards, figures) uses --figure-ink.
+   Everything is scoped to the shell's root (.strata), so the sheet can sit in
+   a host page (the desktop app) without restyling it: the tokens live on
+   .strata, element rules go through :where(.strata), and the page's own
+   html/body rules are strata-page.css (cookrew.dev only). */
+.strata {
   --paper: #f6efe0;
   --dot: rgba(45, 42, 32, 0.14);
   --figure-ink: #2d2a20;
@@ -29,7 +33,7 @@
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
+  .strata {
     --paper: #17140f;
     --dot: rgba(239, 230, 210, 0.1);
     --panel: #221e17;
@@ -50,20 +54,7 @@
     --cf-shadow: #0b0d1c;
   }
 }
-html,
-body,
-#root {
-  margin: 0;
-  height: 100%;
-  overflow: hidden;
-  overscroll-behavior: none;
-}
-body {
-  background: var(--paper);
-  color: var(--ink);
-  font: 14px/1.4 ui-sans-serif, -apple-system, system-ui, sans-serif;
-}
-button {
+:where(.strata) button {
   font: inherit;
   color: inherit;
 }
@@ -96,7 +87,9 @@ button {
 .strata {
   position: relative;
   height: 100%;
+  background: var(--paper);
   color: var(--ink);
+  font: 14px/1.4 ui-sans-serif, -apple-system, system-ui, sans-serif;
 }
 
 /* top bar */
@@ -347,7 +340,7 @@ button {
   outline: 2px dashed var(--focus);
   outline-offset: 4px;
 }
-:focus {
+:where(.strata) :focus {
   outline: none;
 }
 .machine-figure,
@@ -414,7 +407,7 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.on > .tag {
+:where(.strata) .on > .tag {
   background: var(--ink);
   color: var(--paper);
 }
@@ -488,16 +481,16 @@ button {
   text-decoration: none;
   min-height: 24px;
 }
-.mini {
+:where(.strata) .mini {
   position: static;
   pointer-events: none;
 }
-.mini .mini-box,
-.mini.stale .mini-box {
+:where(.strata) .mini .mini-box,
+:where(.strata) .mini.stale .mini-box {
   pointer-events: none;
 }
 .stale .mini-box,
-.mini.stale .mini-box,
+:where(.strata) .mini.stale .mini-box,
 .workspace.stale .fig {
   filter: saturate(0.25);
 }
@@ -1114,7 +1107,7 @@ button {
   flex: none;
   color: var(--figure-ink);
 }
-.tab {
+:where(.strata) .tab {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1130,20 +1123,20 @@ button {
   cursor: pointer;
   flex: none;
 }
-.tab-title {
+:where(.strata) .tab-title {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.tab[aria-selected='true'] {
+:where(.strata) .tab[aria-selected='true'] {
   background: var(--panel);
   border-color: var(--ink);
 }
-.tab-body {
+:where(.strata) .tab-body {
   padding: 10px 12px;
   overflow: auto;
   flex: 1;
 }
-.tab-body pre {
+:where(.strata) .tab-body pre {
   margin: 0;
   white-space: pre-wrap;
   font: 12.5px/1.5 ui-sans-serif, system-ui, sans-serif;
@@ -1218,7 +1211,7 @@ button {
   padding-right: 44px;
 }
 /* In the thumb's reach, above the level dots. */
-.sheet-handle {
+:where(.strata) .sheet-handle {
   right: 12px;
   bottom: 34px;
   z-index: 6;
@@ -1237,7 +1230,7 @@ button {
 .touch .sheet-handle {
   min-height: 44px;
 }
-.sheet {
+:where(.strata) .sheet {
   left: 0;
   right: 0;
   bottom: 0;
@@ -1250,12 +1243,12 @@ button {
   flex-direction: column;
   box-shadow: 0 -10px 30px var(--shadow);
 }
-.sheet .seg {
+:where(.strata) .sheet .seg {
   display: flex;
   gap: 4px;
   padding: 8px;
 }
-.sheet .seg button {
+:where(.strata) .sheet .seg button {
   border: 1px solid var(--line);
   background: var(--panel2);
   border-radius: 999px;
@@ -1263,14 +1256,14 @@ button {
   min-height: 32px;
   cursor: pointer;
 }
-.sheet .seg button[aria-pressed='true'] {
+:where(.strata) .sheet .seg button[aria-pressed='true'] {
   background: var(--ink);
   color: var(--paper);
 }
-.sheet .seg .close {
+:where(.strata) .sheet .seg .close {
   margin-left: auto;
 }
-.sheet .side-panel {
+:where(.strata) .sheet .side-panel {
   position: relative;
   flex: 1;
   border: 0;
@@ -1321,7 +1314,7 @@ button {
   font-weight: 700;
   text-decoration: none;
 }
-.toast {
+:where(.strata) .toast {
   position: fixed;
   left: 50%;
   bottom: 24px;

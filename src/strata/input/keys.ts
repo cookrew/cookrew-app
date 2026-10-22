@@ -29,6 +29,8 @@ export interface KeyContext {
   overlayOpen: boolean
   /** Focus is on a control that is not a level item (a crumb, Find, a pin, a fan card): Enter and Space are its own. */
   onControl: boolean
+  /** False where the host owns ⌘K (the desktop's command box); / still opens the finder. */
+  modK?: boolean
 }
 
 const ARROWS: Record<string, Direction> = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' }
@@ -36,7 +38,7 @@ const ARROWS: Record<string, Direction> = { ArrowLeft: 'left', ArrowRight: 'righ
 export const keyIntent = (e: KeyLike, ctx: KeyContext): KeyIntent | null => {
   if (ctx.typing) return null
   const mod = e.metaKey || e.ctrlKey
-  if ((mod && e.key.toLowerCase() === 'k') || (!mod && !e.altKey && e.key === '/')) return { type: 'finder' }
+  if ((mod && ctx.modK !== false && e.key.toLowerCase() === 'k') || (!mod && !e.altKey && e.key === '/')) return { type: 'finder' }
   if (mod || e.altKey) return null
   if (e.key === 'Escape' || e.key === 'Backspace') {
     if (ctx.overlayOpen) return { type: 'close' }

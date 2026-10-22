@@ -3,10 +3,12 @@
 // offline or outdated machine or a failed dive (the top bar stays). Its layout
 // follows Harbor's rail-layout rules: the view takes the whole stage, desktop
 // edge tabs open a drawer over it, a phone gets one tab and a bottom sheet.
-import { useEffect, useState } from 'react'
-import type { LevelsAgentDetail } from '../../shared/strata'
+// A host with a terminal slot (the desktop app) draws the agent's real
+// terminal in the stand-in's place; the drawers stay as they are.
+import { useEffect, useRef, useState } from 'react'
+import type { LevelsAgentDetail, StrataMachine } from '../../shared/strata'
 import { modelLine, phaseLine, replyLine, statusLine, taskLine } from '../summary/format'
-import { useLevels } from './env'
+import { useLevels, type LoadDetail } from './env'
 import { Figure, rectStyle } from './Figure'
 import { machineState, stateWords } from './link'
 import type { LevelModel } from './model'
@@ -14,19 +16,29 @@ import type { LevelModel } from './model'
 type Model = Extract<LevelModel, { level: 'terminal' }>
 type Load = { state: 'loading' } | { state: 'ready'; detail: LevelsAgentDetail } | { state: 'failed'; why: string }
 
-const useAgentDetail = (base: string | undefined, agentId: string | undefined, live: boolean): Load => {
+const fetchDetail: LoadDetail = (machine, agentId, signal) =>
+  fetch(`${machine.base}api/levels/agents/${encodeURIComponent(agentId)}`, { signal }).then((res) =>
+    res.ok ? (res.json() as Promise<LevelsAgentDetail>) : Promise.reject(new Error(`HTTP ${res.status}`))
+  )
+
+const useAgentDetail = (machine: StrataMachine | null | undefined, agentId: string | undefined, live: boolean, read: LoadDetail = fetchDetail): Load => {
   const [load, setLoad] = useState<Load>({ state: 'loading' })
+  // The row changes with every fleet event; the read waits only on who and where.
+  const machineRef = useRef(machine)
+  machineRef.current = machine
+  const machineId = machine?.id
+  const base = machine?.base
   useEffect(() => {
-    if (!base || !agentId) return
+    const target = machineRef.current
+    if (!target || !agentId) return
     if (!live) return setLoad({ state: 'failed', why: 'offline' })
     const ctrl = new AbortController()
     setLoad({ state: 'loading' })
-    fetch(`${base}api/levels/agents/${encodeURIComponent(agentId)}`, { signal: ctrl.signal })
-      .then((res) => (res.ok ? (res.json() as Promise<LevelsAgentDetail>) : Promise.reject(new Error(`HTTP ${res.status}`))))
-      .then((detail) => setLoad({ state: 'ready', detail }))
+    read(target, agentId, ctrl.signal)
+      .then((detail) => !ctrl.signal.aborted && setLoad({ state: 'ready', detail }))
       .catch((error: Error) => !ctrl.signal.aborted && setLoad({ state: 'failed', why: error.message }))
     return () => ctrl.abort()
-  }, [base, agentId, live])
+  }, [machineId, base, agentId, live, read])
   return load
 }
 
@@ -73,7 +85,7 @@ export function TerminalLevel({ model }: { model: Model }) {
   const { machine, workspace, agent, layout } = model
   const terminalAnchor = env.useAnchor('terminal')
   const live = machine?.link === 'live'
-  const load = useAgentDetail(machine?.base, agent?.id, live)
+  const load = useAgentDetail(machine, agent?.id, live, env.loadDetail)
   // A dive from a fan card or +N opens the drawer (sheet on a phone) on its list.
   const [drawer, setDrawer] = useState<'notes' | 'browsers' | null>(env.goOptions.attachmentId || env.goOptions.allAttachments ? 'notes' : null)
   if (!machine || !workspace || !agent) return <div className="level level-plate">This agent is not here any more.</div>
@@ -87,8 +99,11 @@ export function TerminalLevel({ model }: { model: Model }) {
   const phase = phaseLine(agent, Date.now(), !live)
 
   const state = machineState(machine)
-  const why =
-    state === 'outdated'
+  // A host's terminal waits on the detail; a read that failed falls back to the stand-in and says why.
+  const failed = env.terminal && load.state === 'failed' ? load.why : null
+  const why = failed
+    ? `  ${agent.name}'s terminal did not open: ${failed}`
+    : state === 'outdated'
       ? `  ${machine.name} runs a Cookrew without levels.\n  Its classic view opens this agent instead.`
       : live
         ? `  ${agent.name}'s own terminal opens here from ${machine.name}.\n  Until it does, this is the last thing we know.`
@@ -96,16 +111,26 @@ export function TerminalLevel({ model }: { model: Model }) {
   const drawerItems = drawer === 'notes' ? notes : browsers
   const count = notes.length + browsers.length
 
+  const current = !env.path || (env.path.machine === machine.id && env.path.agent === agent.id)
+  const out = env.out ?? (() => env.go({ machine: machine.id, workspace: workspace.id }))
+  const slot = env.terminal && live && !failed ? env.terminal : null
+
   return (
     <div className="level level-terminal">
-      <div ref={terminalAnchor} className="terminal-standin" style={rectStyle(layout.terminal)} role="region" aria-label={`${agent.name}'s terminal on ${machine.name}`}>
-        <pre>{`╭─ ${agent.name} · ${modelLine(agent)}\n│ ${phase.label} · ${phase.elapsed} · ${phase.source}\n│ ${statusLine(agent, !live)}\n│ task   ${taskLine(agent)}\n│ reply  ${replyLine(agent)}\n╰─\n\n${why}`}</pre>
-        {state === 'outdated' && (
-          <a className="cta" href={machine.base} target="_blank" rel="noreferrer">
-            Open the classic view
-          </a>
-        )}
-      </div>
+      {slot ? (
+        <div ref={terminalAnchor} className="terminal-host" style={rectStyle(layout.terminal)} role="region" aria-label={`${agent.name}'s terminal on ${machine.name}`}>
+          {slot({ machine, workspace, agent, detail, size: { w: layout.terminal.w, h: layout.terminal.h }, current, out })}
+        </div>
+      ) : (
+        <div ref={terminalAnchor} className="terminal-standin" style={rectStyle(layout.terminal)} role="region" aria-label={`${agent.name}'s terminal on ${machine.name}`}>
+          <pre>{`╭─ ${agent.name} · ${modelLine(agent)}\n│ ${phase.label} · ${phase.elapsed} · ${phase.source}\n│ ${statusLine(agent, !live)}\n│ task   ${taskLine(agent)}\n│ reply  ${replyLine(agent)}\n╰─\n\n${why}`}</pre>
+          {state === 'outdated' && (
+            <a className="cta" href={machine.base} target="_blank" rel="noreferrer">
+              Open the classic view
+            </a>
+          )}
+        </div>
+      )}
       {layout.edgeTabs &&
         (['notes', 'browsers'] as const).map((kind) => {
           const items = kind === 'notes' ? notes : browsers

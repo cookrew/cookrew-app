@@ -60,6 +60,7 @@ import {
   tmuxProbeDeps
 } from './board-index'
 import { createBoardHolds } from './board-hold'
+import { createLevelsHolds } from './levels/holds'
 import { setShellObserver } from './multiplexer'
 import { createLoopHealth } from './loop-health'
 import { loadOrCreateReadOnlyToken } from './readonly-token'
@@ -82,6 +83,7 @@ import { EventEmitter } from 'node:events'
 import {
   cachedTailnet,
   startMobileServer,
+  localLevelsService,
   mobileUrls,
   mobileEndpointList,
   uncoveredCertHosts,
@@ -7055,6 +7057,14 @@ function registerIpc(handlers: RestoreHandlers): void {
   const boardHolds = createBoardHolds({ sources: boardSources, turns, store })
   ipcMain.handle('board:subscribe', (event) => boardHolds.subscribe(event.sender))
   ipcMain.handle('board:unsubscribe', (event) => boardHolds.unsubscribe(event.sender))
+  // STRATA: the window's levels view (machines -> workspaces -> agents) reads
+  // the companion's own levels service, pushed per window like the board.
+  const levelsHolds = createLevelsHolds(localLevelsService)
+  ipcMain.handle('levels:subscribe', (event) => levelsHolds.subscribe(event.sender))
+  ipcMain.handle('levels:unsubscribe', (event) => levelsHolds.unsubscribe(event.sender))
+  ipcMain.handle('levels:detail', (_e, agentId: unknown) =>
+    typeof agentId === 'string' ? (localLevelsService()?.detail(agentId) ?? null) : null
+  )
   ipcMain.handle('agent:recover', (_e, id: string) => recoverAgent(id))
   // Endpoint restore channels live alongside the executor (M10).
   registerRestoreIpc(ipcMain.handle.bind(ipcMain), handlers)
