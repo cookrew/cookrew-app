@@ -19,6 +19,7 @@ import type { LodLayout, ScreenRect } from '../zoom-lod'
 import { AttachmentRails } from './AttachmentRails'
 import { scaleFor } from './rail-layout'
 import { fetchAgentDetail, nodeOfDetail, type EmbedDetail } from './embed-boot'
+import { createDetailLoader } from './detail-loader'
 import { listenToShell, tellShell } from './embed-bridge'
 import type { EmbedMode } from './embed-mode'
 import './embed.css'
@@ -117,8 +118,10 @@ function Mounted({ onMount }: { onMount: () => void }): null {
 export default function EmbedRoot({ mode }: { mode: EmbedMode }): React.JSX.Element {
   const [target, setTarget] = useState<Target | null>(mode.agentId ? { agentId: mode.agentId, attachmentId: null } : null)
   const [detail, setDetail] = useState<EmbedDetail | null>(null)
-  /** Details this document has read, by agent id: one document is one machine, so the id is enough. */
-  const seen = useRef(new Map<string, EmbedDetail>())
+  /** Details this document reads: one in flight at a time, the latest wins (detail-loader.ts). */
+  const loader = useMemo(() => createDetailLoader(fetchAgentDetail), [])
+  const shownId = useRef<string | null>(null)
+  shownId.current = detail?.agent.id ?? null
   const stageRef = useRef<HTMLDivElement>(null)
   const scale = useScale(mode.rails)
   const { layout: rect, screen } = useStageRects(stageRef, scale !== null)
@@ -128,13 +131,19 @@ export default function EmbedRoot({ mode }: { mode: EmbedMode }): React.JSX.Elem
   useEffect(() => {
     const off = listenToShell((message) => {
       if (message.type === 'strata:blur') setTarget(null)
-      else setTarget({ agentId: message.agentId, attachmentId: message.attachmentId ?? null })
+      else if (message.type === 'strata:prefetch') loader.prefetch(message.agentId)
+      else if (message.agentId === shownId.current) {
+        // Refocused on the agent still mounted (a close the shell took back
+        // inside the fade): nothing to load, it is ready as it stands.
+        setTarget({ agentId: message.agentId, attachmentId: message.attachmentId ?? null })
+        tellShell({ type: 'strata:ready', agentId: message.agentId })
+      } else setTarget({ agentId: message.agentId, attachmentId: message.attachmentId ?? null })
     })
     if (!mode.agentId) tellShell({ type: 'strata:warm' })
     // The overlay's chunk is the cold part of a dive; a warm document has it already.
     void loadOverlay().catch(() => undefined)
     return off
-  }, [mode.agentId])
+  }, [mode.agentId, loader])
 
   useEffect(() => {
     if (!target) {
@@ -142,41 +151,32 @@ export default function EmbedRoot({ mode }: { mode: EmbedMode }): React.JSX.Elem
       return
     }
     // Same agent, new attachment: the terminal stays mounted, only the rail moves.
-    if (detail?.agent.id === target.agentId) return
-    // An agent this document opened before mounts from what it last read — a
-    // switch back costs no round trip — and is read again behind it, so the
-    // rails and the card catch up within one request.
-    const known = seen.current.get(target.agentId)
+    if (shownId.current === target.agentId) return
+    // An agent read before (a prefetch on hover, or an earlier dive) mounts
+    // at once and is read again behind it, so the rails and the card catch up
+    // within one request.
+    const known = loader.known(target.agentId)
     if (known) setDetail(known)
-    const abort = new AbortController()
-    void fetchAgentDetail(target.agentId, abort.signal).then((result) => {
-      if (abort.signal.aborted) return
+    let live = true
+    void loader.load(target.agentId).then((result) => {
+      if (!live) return
       if (result.ok) {
-        seen.current.set(target.agentId, result.detail)
         setDetail(result.detail)
         return
       }
-      seen.current.delete(target.agentId)
+      if (result.detail === 'aborted') return
       setDetail(null)
       tellShell({ type: 'strata:error', code: result.code, ...(result.detail ? { detail: result.detail } : {}) })
     })
-    return () => abort.abort()
-    // `detail` is read only to skip a refetch of the agent already shown.
-  }, [target])
-
-  const out = useCallback(() => tellShell({ type: 'strata:out' }), [])
-
-  // Esc leaves, as App's last-resort handler does over a zoomed card. Bubble
-  // phase, so the overlay's own handlers and an open drawer go first.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape' || e.defaultPrevented || !detail) return
-      e.preventDefault()
-      out()
+    return () => {
+      live = false
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [detail, out])
+  }, [target, loader])
+
+  // No Esc handler here, on purpose: Esc inside the terminal is the agent's
+  // interrupt and goes to the PTY. Leaving is the full view's own Back (and its
+  // close), which the CanvasUi below turns into strata:out.
+  const out = useCallback(() => tellShell({ type: 'strata:out' }), [])
 
   const ui = useMemo<CanvasUi>(
     () => ({

@@ -576,3 +576,112 @@ describe('8 of N online', () => {
     expect(onlinePicture([machine('a', true, 'connecting'), machine('b', false)])).toMatchObject({ online: 1, live: 0, capped: false, label: '1 of 2 online' })
   })
 })
+
+describe('the fleet store: loaded', () => {
+  it('is false until the list answers, then true for an answer or an error', async () => {
+    const h = harness({ list: [row('a')], tokens: { a: TOKEN } })
+    expect(h.store.loaded()).toBe(false)
+    h.store.start()
+    expect(h.store.loaded()).toBe(false)
+    await settle()
+    expect(h.store.loaded()).toBe(true)
+  })
+
+  it('is true at once when this browser has the list cached', async () => {
+    const storage = memoryStorage()
+    const first = harness({ list: [row('a')], tokens: { a: TOKEN }, storage })
+    first.store.start()
+    await settle()
+    first.store.stop()
+    const second = harness({ list: [row('a')], tokens: { a: TOKEN }, storage })
+    second.store.start()
+    expect(second.store.loaded()).toBe(true)
+  })
+})
+
+describe('the fleet store: stream budget (HTTP/1.1)', () => {
+  const five = ['a', 'b', 'c', 'd', 'e']
+  const tokens = Object.fromEntries(five.map((id) => [id, TOKEN]))
+  const streaming = (h: ReturnType<typeof harness>) => five.filter((id) => h.openStreams(id).length > 0)
+
+  it('streams at most the limit, the machine the user is in first, then the most recently entered', async () => {
+    const h = harness({ list: five.map((id) => row(id)), tokens })
+    h.store.setStreamLimit(2)
+    h.store.start()
+    await settle()
+    expect(streaming(h)).toEqual(['a', 'b'])
+    h.store.enter('d')
+    await settle()
+    expect(streaming(h).sort()).toEqual(['a', 'd'])
+    h.store.enter('e')
+    await settle()
+    expect(streaming(h).sort()).toEqual(['d', 'e'])
+  })
+
+  it('a parked machine keeps its snapshot and its row, and is read again when entered', async () => {
+    const h = harness({ list: five.map((id) => row(id)), tokens })
+    h.store.setStreamLimit(1)
+    h.store.start()
+    await settle()
+    expect(h.machine('c')).toMatchObject({ link: 'live', stale: false })
+    expect(h.machine('c').levels?.rev).toBe(SNAP.rev)
+    const before = h.levelCalls('c').length
+    await vi.advanceTimersByTimeAsync(FLEET_TIMINGS.presenceRefreshMs * 2)
+    expect(h.levelCalls('c')).toHaveLength(before)
+    // (Presence moves lastSeenAt while online, so the row is taken after it.)
+    const parkedRow = h.machine('c')
+    h.store.enter('c')
+    await goLive(h, 'c')
+    expect(h.levelCalls('c')).toHaveLength(before + 1)
+    expect(h.machine('c')).toMatchObject({ link: 'live', stale: false })
+    // Woken and streamed again with the same snapshot: the very same row, so no reader commits.
+    expect(h.machine('c')).toBe(parkedRow)
+  })
+
+  it('moving the budget at a dive hands readers the same snapshot when nothing they draw changed', async () => {
+    const h = harness({ list: five.map((id) => row(id)), tokens })
+    h.store.start()
+    await settle()
+    for (const id of five) h.send(id, { type: 'snapshot', snapshot: SNAP })
+    await settle()
+    const before = h.store.getSnapshot()
+    h.store.setStreamLimit(2)
+    await settle()
+    expect(h.store.getSnapshot()).toBe(before)
+    h.store.setStreamLimit(Number.POSITIVE_INFINITY)
+    await settle()
+    for (const id of five) if (h.openStreams(id)[0]) h.openStreams(id)[0].onMessage(JSON.stringify({ type: 'snapshot', snapshot: SNAP }))
+    await settle()
+    expect(h.store.getSnapshot()).toBe(before)
+  })
+
+  it('a budget that drops, lifts and drops again in one task (a remounted dive) changes no row on the way', async () => {
+    const h = harness({ list: five.map((id) => row(id)), tokens })
+    h.store.start()
+    await settle()
+    for (const id of five) h.send(id, { type: 'snapshot', snapshot: SNAP })
+    await settle()
+    const before = h.store.getSnapshot()
+    const seen: StrataMachine[][] = []
+    h.store.subscribe(() => seen.push(h.store.getSnapshot()))
+    h.store.setStreamLimit(2)
+    // Woken, the parked ones are read again; they keep reading live meanwhile.
+    h.store.setStreamLimit(Number.POSITIVE_INFINITY)
+    h.store.setStreamLimit(2)
+    await settle()
+    expect(seen.every((rows) => rows === before)).toBe(true)
+    expect(h.store.getSnapshot()).toBe(before)
+    expect(streaming(h)).toEqual(['a', 'b'])
+  })
+
+  it('gives every stream back when the budget lifts, and none when it is zero', async () => {
+    const h = harness({ list: five.map((id) => row(id)), tokens })
+    h.store.setStreamLimit(0)
+    h.store.start()
+    await settle()
+    expect(streaming(h)).toEqual([])
+    h.store.setStreamLimit(Number.POSITIVE_INFINITY)
+    await settle()
+    expect(streaming(h)).toEqual(five)
+  })
+})
