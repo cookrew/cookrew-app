@@ -4,14 +4,20 @@
 // lists "Waiting on you", so "/" then Enter answers the oldest waiting agent.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { StrataMachine, StrataPath } from '../../shared/strata'
-import type { AgentHit } from '../seams'
-import { agentKey, createFleetIndex, hitPath } from './search'
+import type { AgentHit, FleetIndex } from '../seams'
+import { codeMatches, type CodedAgent } from './codes'
+import { agentKey, hitPath } from './search'
 
 const LIMIT = 8
 const GLOW_LIMIT = 2000
 
 export interface FinderProps {
   fleet: StrataMachine[]
+  /** Harbor's FleetIndex at the merge; the local one until then. */
+  index: FleetIndex
+  /** Jump codes, on top of whichever index runs. */
+  coded: readonly CodedAgent[]
+  /** Where the user is: breaks name ties toward it. */
   context: StrataPath
   initialQuery: string
   onClose: () => void
@@ -27,15 +33,24 @@ const placeOf = (fleet: StrataMachine[], hit: AgentHit) => {
   return { machine, workspace, agent }
 }
 
-export function Finder({ fleet, context, initialQuery, onClose, onGlow, onActive, onDive }: FinderProps) {
+export function Finder({ fleet, index, coded, context, initialQuery, onClose, onGlow, onActive, onDive }: FinderProps) {
   const [query, setQuery] = useState(initialQuery)
   const [active, setActive] = useState(0)
   const input = useRef<HTMLInputElement>(null)
-  const index = useMemo(() => createFleetIndex(fleet, context), [fleet, context])
+  const near = useMemo(() => ({ machine: context.machine, workspace: context.workspace }), [context.machine, context.workspace])
   const typed = query.trim().length > 0
-  const hits = useMemo(() => (typed ? index.find(query, LIMIT) : index.attention().slice(0, LIMIT)), [index, query, typed])
-  const glow = useMemo(() => (typed ? new Set(index.find(query, GLOW_LIMIT).map((h) => agentKey(h.machineId, h.agentId))) : null), [index, query, typed])
-  const codes = useMemo(() => index.codes(), [index])
+  // A jump code ('5d', or a lone '5') names agents directly; anything else is a name search.
+  const byCode = useMemo(() => codeMatches(coded, query), [coded, query])
+  const hits = useMemo((): AgentHit[] => {
+    if (!typed) return index.attention().slice(0, LIMIT)
+    if (byCode.length > 0) return byCode.slice(0, LIMIT).map((c) => ({ machineId: c.machineId, workspaceId: c.workspaceId, agentId: c.agentId, name: c.name, score: 0 }))
+    return index.find(query, LIMIT, near)
+  }, [index, query, typed, byCode, near])
+  const glow = useMemo(
+    () => (!typed ? null : new Set(byCode.length > 0 ? byCode.map((c) => c.key) : index.find(query, GLOW_LIMIT, near).map((h) => agentKey(h.machineId, h.agentId)))),
+    [index, query, typed, byCode, near]
+  )
+  const codes = useMemo(() => new Map(coded.map((c) => [c.key, c.code])), [coded])
   const current = hits[Math.min(active, hits.length - 1)] ?? null
 
   useEffect(() => input.current?.focus(), [])

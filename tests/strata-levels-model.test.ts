@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { Rect, StrataMachine } from '../src/shared/strata'
 import { syntheticFleet } from '../src/strata/fixture/synthetic'
 import { buildLevelModel, levelArea } from '../src/strata/levels/model'
-import { MIN_TARGET } from '../src/strata/levels/layout'
+import { MIN_TARGET, PHONE_COLUMNS } from '../src/strata/levels/layout'
+import type { FigureKit } from '../src/strata/seams'
 import { standInFigures } from '../src/strata/stand-in/figures'
 
 const fleet: StrataMachine[] = syntheticFleet(1_000_000).map((m) => ({
@@ -12,7 +13,22 @@ const fleet: StrataMachine[] = syntheticFleet(1_000_000).map((m) => ({
   stale: !m.online && m.levels !== null
 }))
 const desktop: Rect = { x: 0, y: 0, w: 1440, h: 848 }
-const phone: Rect = { x: 0, y: 0, w: 390, h: 792 }
+const phone: Rect = { x: 0, y: 0, w: 390, h: 844 }
+
+/** The stand-in ignores `columns`; Gouache honours it. This kit lays seats out the stand-in's way, in `columns` columns. */
+const asked: Array<number | undefined> = []
+const columnsKit: FigureKit = {
+  ...standInFigures,
+  container: ({ name, slots, columns }) => {
+    asked.push(columns)
+    const cols = Math.min(columns ?? 8, Math.max(1, slots))
+    const base = standInFigures.container({ name, slots: Math.min(slots, cols) })
+    const rows = Math.max(1, Math.ceil(slots / cols))
+    const [w, h] = [cols * 40 + 24, rows * 40 + 56]
+    const seats = Object.fromEntries(Array.from({ length: slots }, (_, i) => [`slot:${i}`, { x: 16 + (i % cols) * 40, y: 36 + Math.floor(i / cols) * 40, w: 32, h: 32 }]))
+    return { ...base, viewBox: { x: 0, y: 0, w, h }, anchors: { label: { x: 12, y: 8, w: w - 24, h: 20 }, ...seats } }
+  }
+}
 
 describe('the level model', () => {
   it('is pure: same path, fleet and viewport give the same model', () => {
@@ -42,10 +58,19 @@ describe('the level model', () => {
     expect(l2.items.map((it) => it.target.agent)).toEqual(created)
   })
 
-  it('gives every L2 avatar a touch-sized hit target on a phone, 48 agents included', () => {
-    const l2 = buildLevelModel({ machine: 'syn-studio', workspace: 'syn-studio-w0' }, fleet, phone, standInFigures)
+  it('asks the kit for phone columns, and only on a phone', () => {
+    asked.length = 0
+    buildLevelModel({ machine: 'syn-studio', workspace: 'syn-studio-w0' }, fleet, phone, columnsKit)
+    expect(asked).toEqual([PHONE_COLUMNS])
+    asked.length = 0
+    buildLevelModel({ machine: 'syn-studio', workspace: 'syn-studio-w0' }, fleet, desktop, columnsKit)
+    expect(asked).toEqual([undefined])
+  })
+
+  it('phone columns DRAW every L2 avatar at a touch target with the normal inset, 48 agents included', () => {
+    const l2 = buildLevelModel({ machine: 'syn-studio', workspace: 'syn-studio-w0' }, fleet, phone, columnsKit)
     expect(l2.seats).toHaveLength(48)
-    l2.seats.forEach((seat) => expect(seat.hit.w).toBeGreaterThanOrEqual(MIN_TARGET.touch - 1))
+    l2.seats.forEach((seat) => expect(seat.rect.w).toBeGreaterThanOrEqual(MIN_TARGET.touch))
   })
 
   it('hit targets never overlap', () => {

@@ -1,7 +1,12 @@
 /* Strata shell: warm paper, ink lines, one focus colour. Levels are absolutely
-   positioned from the pure layouts; nothing here changes geometry on hover. */
+   positioned from the pure layouts; nothing here changes geometry on hover.
+   This sheet owns the scheme tokens (paper, ink, muted, dot) in BOTH schemes:
+   every surface sets its own colours, nothing inherits the body's, and
+   anything on a fixed light colour (cards, figures) uses --figure-ink. */
 :root {
   --paper: #f6efe0;
+  --dot: rgba(45, 42, 32, 0.14);
+  --figure-ink: #2d2a20;
   --panel: #fffaf0;
   --panel2: #efe6d2;
   --ink: #2d2a20;
@@ -21,8 +26,10 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --paper: #17140f;
+    --dot: rgba(239, 230, 210, 0.1);
     --panel: #221e17;
     --panel2: #2b261d;
+    --ink: #efe6d2;
     --muted: #a89d86;
     --line: #3d362a;
     --focus: #6ea0ff;
@@ -41,11 +48,6 @@ body {
   background: var(--paper);
   color: var(--ink);
   font: 14px/1.4 ui-sans-serif, -apple-system, system-ui, sans-serif;
-}
-@media (prefers-color-scheme: dark) {
-  body {
-    color: #efe6d2;
-  }
 }
 button {
   font: inherit;
@@ -76,31 +78,52 @@ button {
   color: #08280f;
   border-color: transparent;
 }
+/* The stage host covers the viewport; the top bar floats over it (levels keep a top inset). */
 .strata {
+  position: relative;
   height: 100%;
-  display: flex;
-  flex-direction: column;
+  color: var(--ink);
 }
 
 /* top bar */
 .topbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 15;
   height: 52px;
-  flex: none;
+  box-sizing: border-box;
+  color: var(--ink);
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 0 14px;
   border-bottom: 1px solid var(--line);
-  background: var(--panel);
+  background: color-mix(in srgb, var(--panel) 90%, transparent);
+  backdrop-filter: blur(8px);
 }
+/* Back always names the exit. */
 .topbar .back {
   border: 0;
   background: none;
   font-size: 26px;
   line-height: 1;
   cursor: pointer;
-  width: 32px;
   height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px 0 0;
+  max-width: 40%;
+  flex: none;
+}
+.topbar .back .exit {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .crumbs {
   flex: 1;
@@ -165,10 +188,13 @@ button {
 }
 
 /* stage */
+/* The paper is the stage's; scenes stay transparent. */
 .stage-host {
-  position: relative;
-  flex: 1;
-  min-height: 0;
+  position: absolute;
+  inset: 0;
+  background-color: var(--paper);
+  background-image: radial-gradient(var(--dot) 1px, transparent 1.3px);
+  background-size: 24px 24px;
 }
 .stage {
   position: absolute;
@@ -229,6 +255,10 @@ button {
   background: none;
   cursor: pointer;
   border-radius: 10px;
+}
+.machine-figure,
+.container-figure:not(.static) {
+  cursor: zoom-in;
 }
 .container-figure.static {
   cursor: default;
@@ -324,6 +354,11 @@ button {
 .avatar.passive {
   pointer-events: none;
 }
+/* An avatar's ring is a round halo; a container's is its frame: going in vs diving reads apart. */
+.avatar.hl {
+  outline-offset: 2px;
+  box-shadow: 0 0 0 7px color-mix(in srgb, var(--focus) 28%, transparent);
+}
 .avatar.avatar-dot.hl {
   outline-width: 2px;
   outline-offset: 1px;
@@ -382,10 +417,10 @@ button {
   font-size: 10px;
   font-weight: 700;
   background: #fffaf0;
-  border: 1px solid #2d2a20;
+  border: 1px solid var(--figure-ink);
   border-radius: 999px;
   padding: 0 4px;
-  color: #2d2a20;
+  color: var(--figure-ink);
 }
 
 /* pins */
@@ -502,7 +537,7 @@ button {
   text-overflow: ellipsis;
   max-width: 160px;
   cursor: pointer;
-  color: #2d2a20;
+  color: var(--figure-ink);
 }
 .tray-card.browser {
   background: #fff;
@@ -540,7 +575,7 @@ button {
   font-size: 15px;
   box-shadow: 2px 3px 0 var(--shadow);
   animation: fan-in 160ms ease-out both;
-  color: #2d2a20;
+  color: var(--figure-ink);
 }
 .touch .fan-card {
   width: 48px;
@@ -553,7 +588,7 @@ button {
   background: #efe6d2;
   font-weight: 700;
   font-size: 12px;
-  color: #2d2a20;
+  color: var(--figure-ink);
 }
 .shared-chip {
   position: absolute;
@@ -775,21 +810,65 @@ button {
   border-radius: 999px;
   padding: 2px 10px;
 }
-.rail {
+/* Desktop: edge tabs at the view's edges open a drawer over it (rail-layout: no free space at 1440). */
+.edge-tabs {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  gap: 6px;
+  padding-top: 14px;
+  box-sizing: border-box;
+  z-index: 6;
 }
-.rail-tab {
-  height: 52px;
+.edge-tab {
+  width: 30px;
+  height: 44px;
+  flex: none;
   border: 1.5px solid var(--ink);
   border-radius: 6px;
   background: var(--panel);
+  color: var(--ink);
   cursor: pointer;
+}
+.edge-tab[aria-selected='true'] {
+  background: var(--panel2);
+  outline: 2px solid var(--focus);
+}
+.drawer {
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1.5px solid var(--ink);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 10px 30px var(--shadow);
+}
+.drawer > .close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel2);
+  cursor: pointer;
+}
+.drawer .side-panel {
+  position: relative;
+  flex: 1;
+  border: 0;
+  border-radius: 0;
+}
+.drawer .tabs {
+  padding-right: 44px;
 }
 .sheet-handle {
   right: 12px;
-  top: 8px;
+  top: 60px;
   z-index: 6;
   border: 1.5px solid var(--ink);
   background: var(--panel2);
@@ -813,15 +892,6 @@ button {
   display: flex;
   flex-direction: column;
   box-shadow: 0 -10px 30px var(--shadow);
-}
-.sheet.over-gutter {
-  left: auto;
-  width: 320px;
-  top: 12px;
-  height: auto;
-  border-radius: 12px;
-  right: 52px;
-  bottom: 12px;
 }
 .sheet .seg {
   display: flex;
@@ -870,6 +940,20 @@ button {
   height: 120px;
   border: 2px dashed var(--line);
   border-radius: 10px;
+}
+.empty-ghost.loading {
+  animation: breathe 1.4s ease-in-out infinite alternate;
+}
+@keyframes breathe {
+  to {
+    opacity: 0.35;
+  }
+}
+.reduced .empty-ghost.loading {
+  animation: none;
+}
+.ink-muted {
+  color: var(--muted);
 }
 .cta {
   background: var(--thinking);
@@ -922,7 +1006,7 @@ button {
   top: 50%;
   transform: translate(-50%, -50%);
   font: 700 11px ui-monospace, monospace;
-  background: #2d2a20;
+  background: var(--figure-ink);
   color: #ffd23f;
   border-radius: 4px;
   padding: 0 3px;
@@ -930,7 +1014,7 @@ button {
 }
 .code-chip {
   font: 700 11px ui-monospace, monospace;
-  background: #2d2a20;
+  background: var(--figure-ink);
   color: #ffd23f;
   border-radius: 4px;
   padding: 0 4px;

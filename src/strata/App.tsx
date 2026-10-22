@@ -9,6 +9,7 @@ import { levelOf, parentOf, type Rect, type StrataMachine, type StrataPath } fro
 import { useFleet } from './fleet/use-fleet'
 import { standInFigures } from './stand-in/figures'
 import { Finder } from './finder/Finder'
+import { fleetCodes } from './finder/codes'
 import { createFleetIndex } from './finder/search'
 import { fanBounds } from './levels/Fan'
 import { InstantStage } from './input/InstantStage'
@@ -26,7 +27,6 @@ import './levels/strata.css'
 
 const kit = standInFigures
 const LOAD_GRACE_MS = 2500
-const TOP_BAR = 52
 
 const useMedia = (query: string) => {
   const [match, setMatch] = useState(() => matchMedia(query).matches)
@@ -39,7 +39,11 @@ const useMedia = (query: string) => {
   return match
 }
 
-/** useFleet has no loading flag yet: loaded once it has rows, or after a grace period (empty account). */
+/**
+ * STAND-IN for Harbor's useFleetLoaded (seams: UseFleetLoaded). The swap is
+ * this one function: `const loaded = useFleetLoaded()`. Until then: loaded once
+ * the fleet has rows, or after a grace period (an empty account).
+ */
 const useLoaded = (fleet: StrataMachine[]) => {
   const [late, setLate] = useState(false)
   useEffect(() => {
@@ -68,12 +72,8 @@ const usePreviewLinks = (fleet: StrataMachine[]): StrataMachine[] =>
   }, [fleet])
 
 const useViewport = (el: React.RefObject<HTMLDivElement | null>): Rect => {
-  const [size, setSize] = useState<Rect>({
-    x: 0,
-    y: 0,
-    w: innerWidth,
-    h: innerHeight - TOP_BAR
-  })
+  // The stage host covers the viewport; the top bar floats over it (levels keep a top inset).
+  const [size, setSize] = useState<Rect>({ x: 0, y: 0, w: innerWidth, h: innerHeight })
   useEffect(() => {
     if (!el.current) return
     const observer = new ResizeObserver(([entry]) => {
@@ -124,7 +124,10 @@ export function App() {
   const [announce, setAnnounce] = useState('')
 
   const model = useMemo(() => buildLevelModel(path, fleet, viewport, kit), [path, fleet, viewport])
-  const codes = useMemo(() => createFleetIndex(fleet).codes(), [fleet])
+  // The finder's index: Harbor's FleetIndex replaces createFleetIndex at the merge (one import). Codes sit on top.
+  const index = useMemo(() => createFleetIndex(fleet), [fleet])
+  const coded = useMemo(() => fleetCodes(fleet), [fleet])
+  const codes = useMemo(() => new Map(coded.map((c) => [c.key, c.code])), [coded])
   const level = levelOf(path)
   const machineOf = useCallback((id?: string) => fleet.find((m) => m.id === id) ?? null, [fleet])
 
@@ -261,6 +264,7 @@ export function App() {
     kit,
     fleet,
     viewport,
+    loaded,
     touch,
     now: Date.now,
     highlight,
@@ -278,7 +282,7 @@ export function App() {
   return (
     <Probe>
       <div className={`strata${touch ? ' touch' : ''}${reducedMotion ? ' reduced' : ''}`}>
-        <TopBar path={path} onBack={goOut} fleet={fleet} onGo={go} onFind={() => openFinder('')} />
+        <TopBar path={path} onBack={goOut} fleet={fleet} loaded={loaded} onGo={go} onFind={() => openFinder('')} />
         <div className="stage-host" ref={host}>
           <LevelsContext.Provider value={env}>
             <InstantStage
@@ -303,6 +307,8 @@ export function App() {
         {finder && (
           <Finder
             fleet={fleet}
+            index={index}
+            coded={coded}
             context={finderContext}
             initialQuery={finder.query}
             onClose={() => setFinder(null)}
@@ -341,7 +347,9 @@ export function Probe({ children }: { children: ReactNode }) {
   )
 }
 
-function TopBar({ path, fleet, onGo, onBack, onFind }: { path: StrataPath; fleet: StrataMachine[]; onGo: (p: StrataPath) => void; onBack: () => void; onFind: () => void }) {
+function TopBar({ path, fleet, loaded, onGo, onBack, onFind }: {
+  loaded: boolean
+  path: StrataPath; fleet: StrataMachine[]; onGo: (p: StrataPath) => void; onBack: () => void; onFind: () => void }) {
   const machine = fleet.find((m) => m.id === path.machine)
   const workspace = machine?.levels?.workspaces.find((w) => w.id === path.workspace)
   const agent = workspace?.agents.find((a) => a.id === path.agent)
@@ -358,12 +366,14 @@ function TopBar({ path, fleet, onGo, onBack, onFind }: { path: StrataPath; fleet
       : []),
     ...(path.agent ? [{ label: agent?.name ?? '…', to: path }] : [])
   ]
-  const status = !path.machine ? onlineSummary(fleet) : machine ? stateWords(machine, Date.now()) : ''
+  const status = !loaded ? 'finding your machines…' : !path.machine ? onlineSummary(fleet) : machine ? stateWords(machine, Date.now()) : ''
+  // The top bar always names the exit: out goes to the parent's name.
+  const exitName = path.agent ? (workspace?.name ?? '…') : path.workspace ? (machine?.name ?? '…') : 'Machines'
   return (
     <header className="topbar">
       {path.machine && (
-        <button type="button" className="back" aria-label="Back out one level" onClick={onBack}>
-          ‹
+        <button type="button" className="back" aria-label={`Out to ${exitName}`} onClick={onBack} data-plane="screen">
+          ‹ <span className="exit">{exitName}</span>
         </button>
       )}
       <nav className="crumbs" aria-label="Level">

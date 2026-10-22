@@ -1,14 +1,14 @@
-// LEVEL 3 — the agent's own terminal. Until the embed lands this is a stand-in
-// box where EmbedPool mounts the companion's TerminalOverlay + Dock unchanged.
-// Notes use the free space on the left and browsers the right, each with
-// tabs; narrow gutters become rails; a phone raises a sheet over the terminal
-// and never shrinks it.
+// LEVEL 3 FALLBACK. Level 3 is Harbor's embed: the companion's full view,
+// unchanged, with its own header, Back and rails. This level shows only for an
+// offline or outdated machine or a failed dive (the top bar stays). Its layout
+// follows Harbor's rail-layout rules: the view takes the whole stage, desktop
+// edge tabs open a drawer over it, a phone gets one tab and a bottom sheet.
 import { useEffect, useState } from 'react'
 import type { LevelsAgentDetail } from '../../shared/strata'
 import { modelLine, phaseLine, replyLine, statusLine, taskLine } from '../summary/format'
 import { useLevels } from './env'
 import { rectStyle } from './Figure'
-import { stateWords } from './link'
+import { machineState, stateWords } from './link'
 import type { LevelModel } from './model'
 
 type Model = Extract<LevelModel, { level: 'terminal' }>
@@ -42,7 +42,7 @@ function Panel({ kind, tabs, initial, rect }: { kind: 'notes' | 'browsers'; tabs
   const current = tabs.find((t) => t.id === active) ?? tabs[0]
   return (
     <section className={`side-panel ${kind}`} style={rect ? rectStyle(rect) : undefined} aria-label={kind === 'notes' ? 'Notes' : 'Browsers'}>
-      <div className="tabs" role="tablist">
+      <div className="tabs" role="tablist" data-stage-gestures="off">
         {tabs.map((t) => (
           <button key={t.id} type="button" role="tab" aria-selected={t.id === current?.id} className="tab" title={t.title} onClick={() => setActive(t.id)}>
             {kind === 'notes' ? '📝' : '🌐'} {t.title}
@@ -64,9 +64,11 @@ function Panel({ kind, tabs, initial, rect }: { kind: 'notes' | 'browsers'; tabs
 export function TerminalLevel({ model }: { model: Model }) {
   const env = useLevels()
   const { machine, workspace, agent, layout } = model
+  const terminalAnchor = env.useAnchor('terminal')
   const live = machine?.link === 'live'
   const load = useAgentDetail(machine?.base, agent?.id, live)
-  const [sheet, setSheet] = useState<'notes' | 'browsers' | null>(env.goOptions.attachmentId || env.goOptions.allAttachments ? 'notes' : null)
+  // A dive from a fan card or +N opens the drawer (sheet on a phone) on its list.
+  const [drawer, setDrawer] = useState<'notes' | 'browsers' | null>(env.goOptions.attachmentId || env.goOptions.allAttachments ? 'notes' : null)
   if (!machine || !workspace || !agent) return <div className="level level-plate">This agent is not here any more.</div>
 
   const detail = load.state === 'ready' ? load.detail : null
@@ -77,46 +79,66 @@ export function TerminalLevel({ model }: { model: Model }) {
   const focusId = env.goOptions.attachmentId
   const phase = phaseLine(agent, Date.now(), !live)
 
+  const state = machineState(machine)
+  const why =
+    state === 'outdated'
+      ? `  ${machine.name} runs a Cookrew without levels.\n  Its classic view opens this agent instead.`
+      : live
+        ? `  The companion's full view (TerminalOverlay + Dock, its own header,\n  Back and rails) mounts here through the embed. This is its fallback.`
+        : `  ${machine.name}: ${stateWords(machine, env.now())}.\n  The terminal opens when the machine is back.`
+  const drawerItems = drawer === 'notes' ? notes : browsers
+  const count = notes.length + browsers.length
+
   return (
     <div className="level level-terminal">
-      <div ref={env.useAnchor('terminal')} className="terminal-standin" style={rectStyle(layout.terminal)} role="region" aria-label={`${agent.name}'s terminal on ${machine.name}`}>
-        <pre>
-          {live
-            ? `╭─ ${agent.name} · ${modelLine(agent)}\n│ ${phase.label} · ${phase.elapsed} · ${phase.source}\n│ ${statusLine(agent, false)}\n│\n│ 📌 ${taskLine(agent)}\n│ ↩ ${replyLine(agent)}\n│\n╰─ the companion's TerminalOverlay + Dock mount here, unchanged (EmbedPool)`
-            : `  ${machine.name} is ${stateWords(machine, env.now())}\n  last known: ${phase.label} ${phase.elapsed}\n\n  📌 ${taskLine(agent)}\n  ↩ ${replyLine(agent)}\n\n  The terminal opens when the machine is back.`}
-        </pre>
+      <div ref={terminalAnchor} className="terminal-standin" style={rectStyle(layout.terminal)} role="region" aria-label={`${agent.name}'s terminal on ${machine.name}`}>
+        <pre>{`╭─ ${agent.name} · ${modelLine(agent)}\n│ ${phase.label} · ${phase.elapsed} · ${phase.source}\n│ ${statusLine(agent, !live)}\n│ 📌 ${taskLine(agent)}\n│ ↩ ${replyLine(agent)}\n╰─\n\n${why}`}</pre>
+        {state === 'outdated' && (
+          <a className="cta" href={machine.base} target="_blank" rel="noreferrer">
+            Open the classic view
+          </a>
+        )}
       </div>
-      {layout.notes && <Panel kind="notes" tabs={notes} initial={focusId} rect={layout.notes} />}
-      {layout.browsers && <Panel kind="browsers" tabs={browsers} initial={focusId} rect={layout.browsers} />}
-      {layout.rails &&
-        (['notes', 'browsers'] as const).map((kind) => (
-          <div key={kind} className={`rail ${kind}`} style={rectStyle(layout.rails![kind])}>
-            {(kind === 'notes' ? notes : browsers).map((t) => (
-              <button key={t.id} type="button" className="rail-tab" title={t.title} aria-label={`${kind === 'notes' ? 'Note' : 'Browser'}: ${t.title}`} onClick={() => setSheet(kind)}>
-                {kind === 'notes' ? '📝' : '🌐'}
-              </button>
-            ))}
-          </div>
-        ))}
-      {(layout.sheet || layout.rails) && (notes.length > 0 || browsers.length > 0) && (
-        <button type="button" className="sheet-handle" onClick={() => setSheet(sheet ? null : 'notes')} aria-expanded={!!sheet}>
+      {layout.edgeTabs &&
+        (['notes', 'browsers'] as const).map((kind) => {
+          const items = kind === 'notes' ? notes : browsers
+          return items.length === 0 ? null : (
+            <div key={kind} className={`edge-tabs ${kind}`} style={rectStyle(layout.edgeTabs![kind])} data-plane="screen" data-stage-gestures="off" role="tablist" aria-label={kind === 'notes' ? 'Notes' : 'Browsers'}>
+              {items.map((item) => (
+                <button key={item.id} type="button" role="tab" aria-selected={drawer === kind} className="edge-tab" title={item.title} aria-label={`${kind === 'notes' ? 'Note' : 'Browser'}: ${item.title}`} onClick={() => setDrawer(drawer === kind ? null : kind)}>
+                  {kind === 'notes' ? '📝' : '🌐'}
+                </button>
+              ))}
+            </div>
+          )
+        })}
+      {drawer && layout.drawer && (
+        <div className="drawer" style={rectStyle(layout.drawer[drawer])} role="dialog" aria-label={drawer === 'notes' ? 'Notes' : 'Browsers'}>
+          <button type="button" className="close" onClick={() => setDrawer(null)} aria-label="Close">
+            ✕
+          </button>
+          <Panel key={drawer} kind={drawer} tabs={drawerItems} initial={focusId} />
+        </div>
+      )}
+      {layout.sheet && count > 0 && (
+        <button type="button" className="sheet-handle" data-plane="screen" onClick={() => setDrawer(drawer ? null : notes.length ? 'notes' : 'browsers')} aria-expanded={!!drawer}>
           📝 {notes.length} · 🌐 {browsers.length}
         </button>
       )}
-      {sheet && (layout.sheet || layout.rails) && (
-        <div className={`sheet${layout.rails ? ' over-gutter' : ''}`} role="dialog" aria-label="Notes and browsers">
+      {layout.sheet && drawer && (
+        <div className="sheet" role="dialog" aria-label="Notes and browsers">
           <div className="seg">
-            <button type="button" aria-pressed={sheet === 'notes'} onClick={() => setSheet('notes')}>
+            <button type="button" aria-pressed={drawer === 'notes'} onClick={() => setDrawer('notes')}>
               Notes {notes.length}
             </button>
-            <button type="button" aria-pressed={sheet === 'browsers'} onClick={() => setSheet('browsers')}>
+            <button type="button" aria-pressed={drawer === 'browsers'} onClick={() => setDrawer('browsers')}>
               Browsers {browsers.length}
             </button>
-            <button type="button" className="close" onClick={() => setSheet(null)} aria-label="Close">
+            <button type="button" className="close" onClick={() => setDrawer(null)} aria-label="Close">
               ✕
             </button>
           </div>
-          <Panel key={sheet} kind={sheet} tabs={sheet === 'notes' ? notes : browsers} initial={focusId} />
+          <Panel key={drawer} kind={drawer} tabs={drawerItems} initial={focusId} />
         </div>
       )}
     </div>

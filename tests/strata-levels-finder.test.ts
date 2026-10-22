@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { LevelsAgent, StrataMachine } from '../src/shared/strata'
 import { agentKey, createFleetIndex, flattenFleet, scoreAgent, SCORE } from '../src/strata/finder/search'
-import { CODE_PATTERN, jumpCodes } from '../src/strata/finder/codes'
+import { CODE_PATTERN, codeMatches, fleetCodes, jumpCodes } from '../src/strata/finder/codes'
 import { syntheticFleet } from '../src/strata/fixture/synthetic'
 
 const agent = (id: string, name: string, extra: Partial<LevelsAgent> = {}): LevelsAgent => ({
@@ -76,9 +76,10 @@ describe('finder results', () => {
     expect(hits.map((h) => h.agentId)).toEqual(['a1', 'b1', 'b2'])
   })
 
-  it('lets a namesake in the current workspace win the tie', () => {
+  it('near breaks ties toward the current workspace, then the machine', () => {
     expect(createFleetIndex(fleet).find('ada')[0].agentId).toBe('a3')
-    expect(createFleetIndex(fleet, { machine: 'm1', workspace: 'w2' }).find('ada')[0].agentId).toBe('a4')
+    expect(createFleetIndex(fleet).find('ada', 8, { machine: 'm1', workspace: 'w2' })[0].agentId).toBe('a4')
+    expect(createFleetIndex(fleet).find('e', 8, { machine: 'm2' })[0].agentId).toBe('b2')
   })
 
   it('a workspace word disambiguates namesakes', () => {
@@ -98,38 +99,34 @@ describe('finder results', () => {
 describe('jump codes: any agent in two keystrokes plus Enter', () => {
   const machines: StrataMachine[] = syntheticFleet(0).map((m) => ({ ...m, base: `/m/${m.id}/`, link: 'live', stale: false }))
 
-  it('gives every agent a unique digit+letter code', () => {
-    const codes = createFleetIndex(machines).codes()
-    expect(codes.size).toBe(flattenFleet(machines).length)
-    expect(new Set(codes.values()).size).toBe(codes.size)
-    for (const code of codes.values()) expect(code).toMatch(CODE_PATTERN)
+  it('gives every agent a unique digit+letter code, machine-scoped (a restored machine shares ids)', () => {
+    const coded = fleetCodes(machines)
+    expect(coded).toHaveLength(flattenFleet(machines).length)
+    expect(new Set(coded.map((c) => c.code)).size).toBe(coded.length)
+    expect(new Set(coded.map((c) => c.key)).size).toBe(coded.length)
+    for (const c of coded) expect(c.code).toMatch(CODE_PATTERN)
   })
 
-  it('a code is the top hit for its agent, from anywhere, namesakes included', () => {
-    const index = createFleetIndex(machines)
-    for (const e of flattenFleet(machines)) {
-      expect(index.find(e.code, 1)[0]).toMatchObject({ machineId: e.machineId, agentId: e.agent.id, score: SCORE.code })
-    }
+  it('a code names exactly its agent, from anywhere, namesakes and cloned ids included', () => {
+    const coded = fleetCodes(machines)
+    for (const c of coded) expect(codeMatches(coded, c.code)).toEqual([c])
   })
 
   it('keeps an agent\'s code when others join or leave', () => {
-    const keys = ['m/a', 'm/b', 'm/c', 'm/d']
-    const before = jumpCodes(keys)
+    const before = jumpCodes(['m/a', 'm/b', 'm/c', 'm/d'])
     const after = jumpCodes(['m/a', 'm/c', 'm/d', 'n/z'])
     expect(after.get('m/a')).toBe(before.get('m/a'))
     expect(after.get('m/d')).toBe(before.get('m/d'))
   })
 
-  it('a lone digit lights every agent whose code starts with it', () => {
-    const index = createFleetIndex(machines)
-    const codes = index.codes()
-    const threes = [...codes.values()].filter((c) => c.startsWith('3')).length
-    expect(index.find('3', 1000)).toHaveLength(threes)
+  it('a lone digit lights every agent whose code starts with it; a name is not a code', () => {
+    const coded = fleetCodes(machines)
+    expect(codeMatches(coded, '3')).toHaveLength(coded.filter((c) => c.code.startsWith('3')).length)
+    expect(codeMatches(coded, 'ha')).toEqual([])
   })
 
   it('runs past 234 agents with longer codes, still unique', () => {
-    const keys = Array.from({ length: 300 }, (_, i) => `m/a${i}`)
-    const codes = jumpCodes(keys)
+    const codes = jumpCodes(Array.from({ length: 300 }, (_, i) => `m/a${i}`))
     expect(new Set(codes.values()).size).toBe(300)
   })
 
@@ -147,9 +144,9 @@ describe('two letters and Enter (synthetic fleet)', () => {
     // From anywhere, typing a name's first two letters plus a third if needed reaches the first of that name.
     let reachedInTwo = 0
     for (const e of entries) {
-      const index = createFleetIndex(machines, { machine: e.machineId, workspace: e.workspaceId })
       const q = e.agent.name.slice(0, 2)
-      if (index.find(q, 1)[0]?.agentId === e.agent.id) reachedInTwo += 1
+      const top = createFleetIndex(machines).find(q, 1, { machine: e.machineId, workspace: e.workspaceId })[0]
+      if (top?.agentId === e.agent.id && top.machineId === e.machineId) reachedInTwo += 1
     }
     expect(reachedInTwo / entries.length).toBeGreaterThan(0.5)
   })

@@ -2,7 +2,7 @@
 // holding its workspaces in miniature in its portal (the L1 layout mapped
 // uniformly, so the zoom in lands exactly). Pins dive from here; the loupe
 // picks agents whose dots are far smaller than a hit target.
-import type { StrataMachine } from '../../shared/strata'
+import { anchorOf, type StrataMachine } from '../../shared/strata'
 import { useLevels } from './env'
 import { Figure, rectStyle } from './Figure'
 import { agentCount, isDimmed, machineState, stateWords, waitingCount } from './link'
@@ -18,12 +18,21 @@ type Model = Extract<LevelModel, { level: 'machines' }>
 
 export function MachinesLevel({ model, openFinder }: { model: Model; openFinder: (query?: string) => void }) {
   const env = useLevels()
-  if (env.fleet.length === 0) return <EmptyAccount />
+  if (env.fleet.length === 0) return env.loaded ? <EmptyAccount /> : <FindingMachines />
   return (
     <div className="level level-machines" role="list" aria-label="Your machines">
       {model.cells.map((cell, i) => (
         <MachineItem key={cell.id} cell={cell} machine={env.fleet[i]} mini={model.minis.get(cell.id) ?? null} openFinder={openFinder} />
       ))}
+    </div>
+  )
+}
+
+function FindingMachines() {
+  return (
+    <div className="level level-empty" role="status" aria-busy="true">
+      <div className="empty-ghost loading" aria-hidden="true" />
+      <p className="ink-muted">Finding your machines…</p>
     </div>
   )
 }
@@ -70,18 +79,21 @@ function PortalPlate({ machine }: { machine: StrataMachine }) {
 function MachineItem({ cell, machine, mini, openFinder }: { cell: MachineCell; machine: StrataMachine; mini: Miniature | null; openFinder: (query?: string) => void }) {
   const env = useLevels()
   const target = { machine: machine.id }
+  const figureAnchor = env.useAnchor(anchorOf(target))
+  const portalAnchor = env.useAnchor(`portal:${machine.id}`)
   const highlighted = samePath(env.highlight, target)
   const state = machineState(machine)
   const offline = state !== 'live' && state !== 'connecting'
   const hits = env.glow ? (mini?.seats.filter((s) => env.glow?.has(s.key)).length ?? 0) : 0
-  const tiny = (mini?.seats[0]?.hit.w ?? Infinity) < (env.touch ? MIN_TARGET.touch : MIN_TARGET.pointer)
+  const tiny = (mini?.seats[0]?.rect.w ?? Infinity) < (env.touch ? MIN_TARGET.touch : MIN_TARGET.pointer)
   const label = `${machine.name}, ${machine.profile?.label ?? machine.profile?.kind ?? 'unknown machine'}, ${stateWords(machine, env.now())}, ${machine.levels?.workspaces.length ?? 0} workspaces, ${agentCount(machine)} agents, ${waitingCount(machine)} waiting`
   return (
     <div role="listitem" className={`machine state-${state}${isDimmed(machine) ? ' dimmed' : ''}`}>
       <button
         type="button"
-        ref={env.useAnchor(`machine:${machine.id}`)}
+        ref={figureAnchor}
         className={`machine-figure${highlighted ? ' hl' : ''}`}
+        data-stage-focus={highlighted || undefined}
         style={rectStyle(cell.rect)}
         data-path={pathKey(target)}
         tabIndex={highlighted ? 0 : -1}
@@ -91,7 +103,7 @@ function MachineItem({ cell, machine, mini, openFinder }: { cell: MachineCell; m
       >
         <Figure art={cell.art} />
       </button>
-      <div className="portal" ref={env.useAnchor(`portal:${machine.id}`)} style={rectStyle(cell.portal)}>
+      <div className="portal" ref={portalAnchor} style={rectStyle(cell.portal)}>
         <PortalPlate machine={machine} />
       </div>
       {mini && (
@@ -103,7 +115,7 @@ function MachineItem({ cell, machine, mini, openFinder }: { cell: MachineCell; m
       )}
       {mini?.seats.map((seat) => <Avatar key={seat.key} seat={seat} size="dot" interactive={false} offline={offline} />)}
       {mini && tiny && <Loupe region={cell.portal} seats={mini.seats} boxes={mini.cells} onGoIn={() => env.go(target)} label={`Agents on ${machine.name}`} />}
-      <div className="machine-label" style={rectStyle(cell.label)}>
+      <div className="machine-label" data-plane="screen" style={rectStyle(cell.label)}>
         <b>{machine.name}</b>
         <span className="muted">{stateWords(machine, env.now())}</span>
         {hits > 0 && <span className="hits">{hits}</span>}

@@ -1,11 +1,13 @@
 // THE LOUPE: where avatars are drawn smaller than a hit target (L0 portals,
 // crowded L1 containers), a round lens follows the pointer and magnifies them
-// to ≥ 28 px; the seat nearest its centre is the pick. On touch it appears
-// above the finger after a press-and-hold. The lens moves by transforms written
-// in rAF straight to the DOM; React hears about it only when the lens rests on
-// a seat for the hover intent (highlight + summary card, one commit).
+// to ≥ 28 px; the seat nearest its centre is previewed. On touch it appears
+// above the finger after a press-and-hold. A PEEK only: a click or tap goes into
+// the container and never dives (dive targets are drawn ≥ MIN_TARGET), and a
+// lift after a hold leaves the highlight and card, so Enter dives. The lens
+// moves by transforms written in rAF straight to the DOM; React hears about it
+// only when the lens rests on a seat (highlight + summary card, one commit).
 import { useEffect, useRef, type PointerEvent } from 'react'
-import type { FigureArt, Rect, StrataPath } from '../../shared/strata'
+import type { FigureArt, Rect } from '../../shared/strata'
 import { HOLD, markConsumed } from '../input/gestures'
 import { HOVER_INTENT_MS } from '../summary/hover-intent'
 import { center } from './geometry'
@@ -101,9 +103,14 @@ export function Loupe({ region, seats, boxes, onGoIn, label }: { region: Rect; s
     const box = host?.getBoundingClientRect() ?? { left: 0, top: 0 }
     return { x: e.clientX - box.left, y: e.clientY - box.top }
   }
-  const dive = (path: StrataPath) => {
-    hide()
-    env.go(path)
+  /** Lens away; the highlight and card the dwell committed stay (touch: until the next tap). */
+  const putAway = () => {
+    if (lens.current) lens.current.style.opacity = '0'
+    if (dwell.current) clearTimeout(dwell.current)
+    dwell.current = null
+    picked.current = null
+    point.current = null
+    touchActive.current = false
   }
 
   useEffect(
@@ -158,9 +165,7 @@ export function Loupe({ region, seats, boxes, onGoIn, label }: { region: Rect; s
             return onGoIn()
           }
           markConsumed(e.nativeEvent)
-          const seat = picked.current
-          hide()
-          if (seat) dive(seat.path)
+          putAway()
         }}
         onPointerCancel={() => {
           if (holdTimer.current) clearTimeout(holdTimer.current)
@@ -168,9 +173,8 @@ export function Loupe({ region, seats, boxes, onGoIn, label }: { region: Rect; s
         }}
         onClick={(e) => {
           if ((e.nativeEvent as globalThis.PointerEvent).pointerType === 'touch') return
-          const seat = picked.current
-          if (seat) dive(seat.path)
-          else onGoIn()
+          hide()
+          onGoIn()
         }}
       />
       <div className="loupe" ref={lens} style={{ width: size, height: size }} aria-hidden="true">
