@@ -59,13 +59,43 @@ export const nextAgentWithin = (agents: readonly StrataPath[], current: StrataPa
 
 /**
  * Where the highlight starts on entering a level: the item you came out of,
- * else the first item holding a waiting agent, else the first item.
+ * else the first item holding a waiting agent, else the preferred one (the
+ * focused workspace), else the first item.
  */
-export const defaultHighlight = (items: readonly LevelItem[], cameFrom: StrataPath | null, waiting: (target: StrataPath) => boolean): StrataPath | null => {
+export const defaultHighlight = (
+  items: readonly LevelItem[],
+  cameFrom: StrataPath | null,
+  waiting: (target: StrataPath) => boolean,
+  preferred: (target: StrataPath) => boolean = () => false
+): StrataPath | null => {
   if (items.length === 0) return null
   const back = cameFrom && items.find((it) => samePath(it.target, cameFrom))
   if (back) return back.target
-  return (items.find((it) => waiting(it.target)) ?? items[0]).target
+  return (items.find((it) => waiting(it.target)) ?? items.find((it) => preferred(it.target)) ?? items[0]).target
+}
+
+export interface SeedInput {
+  items: readonly LevelItem[]
+  current: StrataPath | null
+  /** First seed on this level (it was just entered, or its items just arrived). */
+  arrived: boolean
+  cameFrom: StrataPath | null
+  waiting: (target: StrataPath) => boolean
+  preferred: (target: StrataPath) => boolean
+  /** The current highlight is still drawn on this level (an item, or an agent inside one). */
+  present: (target: StrataPath) => boolean
+}
+
+/**
+ * THE one seeding path: undefined keeps the highlight as it is. On arrival the
+ * default rules (came-from first) always win over whatever the last level left;
+ * afterwards only a highlight that vanished is replaced.
+ */
+export const nextSeed = (s: SeedInput): StrataPath | null | undefined => {
+  if (s.items.length === 0) return undefined
+  if (s.arrived) return defaultHighlight(s.items, s.cameFrom, s.waiting, s.preferred)
+  if (s.current && s.present(s.current)) return undefined
+  return defaultHighlight(s.items, null, s.waiting, s.preferred)
 }
 
 /** The child of `parent` that `previous` sat in: where the highlight lands after going out. */

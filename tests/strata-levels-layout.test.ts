@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Rect } from '../src/shared/strata'
 import { mapRect } from '../src/strata/levels/geometry'
-import { fanLayout, layoutAgents, layoutMachines, layoutTerminal, layoutWorkspaces, MAX_SEAT, miniatureTransform, PANEL_MIN_W } from '../src/strata/levels/layout'
+import { fanLayout, layoutAgents, layoutMachines, layoutTerminal, layoutWorkspaces, MAX_SEAT, miniatureTransform } from '../src/strata/levels/layout'
 import { standInFigures } from '../src/strata/stand-in/figures'
 
 const desktop: Rect = { x: 0, y: 52, w: 1440, h: 848 }
@@ -10,7 +10,7 @@ const inside = (r: Rect, box: Rect) => r.x >= box.x - 0.01 && r.y >= box.y - 0.0
 const overlaps = (a: Rect, b: Rect) => a.x < b.x + b.w - 0.01 && b.x < a.x + a.w - 0.01 && a.y < b.y + b.h - 0.01 && b.y < a.y + a.h - 0.01
 
 const kinds = ['desktop', 'cloud', 'cluster', 'sandbox', 'server', 'laptop', 'vm'] as const
-const machines = kinds.map((kind, i) => ({ id: `m${i}`, kind, link: 'live' as const }))
+const machines = kinds.map((kind, i) => ({ id: `m${i}`, kind, link: 'live' as const, reached: true }))
 const studio = [
   { id: 'w0', name: 'Monorepo', agents: 48 },
   { id: 'w1', name: 'Paper Notes', agents: 9 },
@@ -109,26 +109,25 @@ describe('miniatures land exactly on their level', () => {
   })
 })
 
-describe('terminal layout (L3)', () => {
-  it('keeps the terminal centred and gives wide gutters panels', () => {
-    const t = layoutTerminal({ x: 0, y: 52, w: 1440, h: 848 })
-    expect(t.terminal.x + t.terminal.w / 2).toBeCloseTo(720, 6)
-    expect(t.notes!.w).toBeGreaterThanOrEqual(PANEL_MIN_W - 12)
-    expect(t.notes!.x + t.notes!.w).toBeLessThanOrEqual(t.terminal.x)
-    expect(t.browsers!.x).toBeGreaterThanOrEqual(t.terminal.x + t.terminal.w)
+describe('terminal fallback layout (L3), on rail-layout rules', () => {
+  it('the view takes the whole stage below the top bar, at every width', () => {
+    for (const w of [1440, 1280, 1024]) {
+      const t = layoutTerminal({ x: 0, y: 0, w, h: 900 }, 52)
+      expect(t.terminal).toEqual({ x: 0, y: 52, w, h: 848 })
+    }
   })
 
-  it('narrow gutters become rails that never cover the terminal', () => {
-    const t = layoutTerminal({ x: 0, y: 52, w: 1280, h: 748 })
-    expect(t.notes).toBeNull()
-    expect(t.rails).not.toBeNull()
-    expect(overlaps(t.rails!.notes, t.terminal)).toBe(false)
-    expect(overlaps(t.rails!.browsers, t.terminal)).toBe(false)
+  it('desktop: edge tabs on both sides open drawers over the view, never beside it', () => {
+    const t = layoutTerminal({ x: 0, y: 0, w: 1440, h: 900 }, 52)
+    expect(t.sheet).toBe(false)
+    expect(inside(t.edgeTabs!.notes, t.terminal)).toBe(true)
+    expect(inside(t.edgeTabs!.browsers, t.terminal)).toBe(true)
+    expect(inside(t.drawer!.notes, t.terminal)).toBe(true)
+    expect(t.drawer!.browsers.x + t.drawer!.browsers.w).toBeLessThanOrEqual(t.edgeTabs!.browsers.x + 0.01)
   })
 
-  it('a phone keeps the terminal full bleed and uses a sheet', () => {
-    const viewport = { x: 0, y: 52, w: 390, h: 792 }
-    expect(layoutTerminal(viewport)).toMatchObject({ terminal: viewport, sheet: true })
+  it('a phone keeps the view full bleed and uses one tab and a bottom sheet', () => {
+    expect(layoutTerminal({ x: 0, y: 0, w: 390, h: 844 }, 52)).toMatchObject({ terminal: { x: 0, y: 52, w: 390, h: 792 }, sheet: true, edgeTabs: null, drawer: null })
   })
 })
 

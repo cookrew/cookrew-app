@@ -16,6 +16,8 @@ export interface GoOptions {
 export interface LevelsEnv {
   kit: FigureKit
   fleet: StrataMachine[]
+  /** The machine list has answered (cache, live or error): before that, empty means "not yet". */
+  loaded: boolean
   /** The stage, in its own coordinates (x = y = 0). */
   viewport: Rect
   touch: boolean

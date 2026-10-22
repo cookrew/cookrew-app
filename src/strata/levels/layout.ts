@@ -4,7 +4,7 @@
 // miniature lands exactly on the level.
 import type { FigureArt, MachineKind, MachineLink, Rect } from '../../shared/strata'
 import type { FigureKit } from '../seams'
-import { fitTransform, mapRect, type Transform } from './geometry'
+import { fitTransform, inset, mapRect, type Transform } from './geometry'
 
 /** Smallest hit target an avatar may have before the loupe takes over (px). */
 export const MIN_TARGET = { pointer: 24, touch: 44 } as const
@@ -24,6 +24,8 @@ export interface MachineInput {
   id: string
   kind: MachineKind
   link: MachineLink
+  /** False = never reached (no lastSeenAt, no levels): the kit draws a dashed outline. */
+  reached: boolean
 }
 
 export interface MachineCell {
@@ -51,7 +53,7 @@ const bestGrid = (count: number, viewport: Rect, fits: (cellW: number, cellH: nu
 
 export const layoutMachines = (machines: readonly MachineInput[], viewport: Rect, kit: FigureKit): MachineCell[] => {
   if (machines.length === 0) return []
-  const arts = machines.map((m) => kit.machine({ kind: m.kind, link: m.link }))
+  const arts = machines.map((m) => kit.machine({ kind: m.kind, link: m.link, reached: m.reached }))
   const maxW = Math.max(...arts.map((a) => a.viewBox.w))
   const maxH = Math.max(...arts.map((a) => a.viewBox.h))
   const gap = 16
@@ -149,11 +151,11 @@ export const layoutWorkspaces = (
   workspaces: readonly WorkspaceInput[],
   viewport: Rect,
   kit: FigureKit,
-  opts: { gap?: number; maxSeat?: number } = {}
+  opts: { gap?: number; maxSeat?: number; columns?: number } = {}
 ): ContainerCell[] => {
   if (workspaces.length === 0) return []
   const gap = opts.gap ?? 28
-  const arts = workspaces.map((w) => kit.container({ name: w.name, slots: w.agents }))
+  const arts = workspaces.map((w) => kit.container({ name: w.name, slots: w.agents, ...(opts.columns !== undefined && { columns: opts.columns }) }))
   const maxScale = (opts.maxSeat ?? MAX_SEAT) / Math.max(...arts.map(seatSize))
   const sizesAt = (s: number) => arts.map((a) => ({ w: a.viewBox.w * s, h: a.viewBox.h * s }))
   const fits = (s: number) => {
@@ -193,9 +195,17 @@ export const layoutWorkspaces = (
   return cells
 }
 
-/** L2: one workspace, as large as it may be. */
-export const layoutAgents = (workspace: WorkspaceInput, viewport: Rect, kit: FigureKit): ContainerCell | null =>
-  layoutWorkspaces([workspace], viewport, kit, { gap: 0 })[0] ?? null
+/** L2: one workspace, as large as it may be, from the same container (same columns) as its L1 box. */
+export const layoutAgents = (workspace: WorkspaceInput, viewport: Rect, kit: FigureKit, columns?: number): ContainerCell | null =>
+  layoutWorkspaces([workspace], viewport, kit, { gap: 0, columns })[0] ?? null
+
+/**
+ * Seats per row a level asks the kit for: a phone asks for 5, so 48 agents are
+ * DRAWN at ≥ 44 px with the normal inset (6 draws 42); wider screens leave it
+ * to the kit. L1 and L2 ask the same, so they share one container layout.
+ */
+export const PHONE_COLUMNS = 5
+export const columnsFor = (viewport: Rect): number | undefined => (viewport.w < 600 ? PHONE_COLUMNS : undefined)
 
 /**
  * The miniature of a level drawn inside `portal`: the level's own viewport
@@ -203,47 +213,40 @@ export const layoutAgents = (workspace: WorkspaceInput, viewport: Rect, kit: Fig
  */
 export const miniatureTransform = (levelViewport: Rect, portal: Rect): Transform => fitTransform(levelViewport, portal)
 
-// ── L3 terminal ─────────────────────────────────────────────────────────────
+// ── L3 terminal (fallback) ──────────────────────────────────────────────────
+//
+// Level 3 is Harbor's embed: the companion's full view over the whole stage.
+// This layout is the FALLBACK's (offline or outdated machine, failed dive),
+// on the same rules as Harbor's rail-layout: the view takes the whole stage
+// (below the top bar, which stays for the fallback), so there is no free space
+// for rails; desktop edge tabs open a drawer over it, a phone gets one tab
+// and a bottom sheet. Nothing ever resizes the view.
 
 export interface TerminalLayout {
   terminal: Rect
-  /** Notes (left) and browsers (right) panels; null when the gutter is too narrow. */
-  notes: Rect | null
-  browsers: Rect | null
-  /** Narrow gutters: vertical tab rails instead of panels. */
-  rails: { notes: Rect; browsers: Rect } | null
-  /** Phone: everything rides in a sheet raised from a handle. */
+  /** Desktop: an edge tab strip on each side (notes left, browsers right), over the view's edge. */
+  edgeTabs: { notes: Rect; browsers: Rect } | null
+  /** Where a drawer opens, over the view, from its edge. */
+  drawer: { notes: Rect; browsers: Rect } | null
+  /** Phone: one tab, and a bottom sheet. */
   sheet: boolean
 }
 
-export const TERMINAL_MAX_W = 880
-export const PANEL_MIN_W = 260
-const RAIL_W = 36
 const PHONE_MAX_W = 600
+const EDGE_TAB_W = 34
+export const DRAWER_W = 340
 
-export const layoutTerminal = (viewport: Rect): TerminalLayout => {
-  if (viewport.w < PHONE_MAX_W) return { terminal: viewport, notes: null, browsers: null, rails: null, sheet: true }
-  const pad = 12
-  const w = Math.min(TERMINAL_MAX_W, viewport.w - 2 * (RAIL_W + pad))
-  const x = viewport.x + (viewport.w - w) / 2
-  const terminal = { x, y: viewport.y + pad, w, h: viewport.h - 2 * pad }
-  const gutter = x - viewport.x - pad
-  if (gutter >= PANEL_MIN_W) {
-    return {
-      terminal,
-      notes: { x: viewport.x + pad, y: terminal.y, w: gutter - pad, h: terminal.h },
-      browsers: { x: x + w + pad, y: terminal.y, w: gutter - pad, h: terminal.h },
-      rails: null,
-      sheet: false
-    }
-  }
+export const layoutTerminal = (viewport: Rect, topInset: number): TerminalLayout => {
+  const terminal = inset(viewport, topInset, 0, 0, 0)
+  if (viewport.w < PHONE_MAX_W) return { terminal, edgeTabs: null, drawer: null, sheet: true }
+  const strip = (x: number): Rect => ({ x, y: terminal.y + 48, w: EDGE_TAB_W, h: Math.min(terminal.h - 96, 6 * 60) })
+  const drawerW = Math.min(DRAWER_W, terminal.w / 2 - EDGE_TAB_W)
   return {
     terminal,
-    notes: null,
-    browsers: null,
-    rails: {
-      notes: { x: viewport.x + pad / 2, y: terminal.y, w: RAIL_W, h: terminal.h },
-      browsers: { x: viewport.x + viewport.w - pad / 2 - RAIL_W, y: terminal.y, w: RAIL_W, h: terminal.h }
+    edgeTabs: { notes: strip(terminal.x), browsers: strip(terminal.x + terminal.w - EDGE_TAB_W) },
+    drawer: {
+      notes: { x: terminal.x + EDGE_TAB_W, y: terminal.y, w: drawerW, h: terminal.h },
+      browsers: { x: terminal.x + terminal.w - EDGE_TAB_W - drawerW, y: terminal.y, w: drawerW, h: terminal.h }
     },
     sheet: false
   }

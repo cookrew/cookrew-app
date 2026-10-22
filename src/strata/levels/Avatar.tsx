@@ -2,6 +2,7 @@
 // (hover → summary after intent, click → dive, hold on touch → summary + fan);
 // seats too small to hit are drawn passive and picked through the loupe, but
 // stay keyboard-focusable so Shift+arrows can reach them.
+import { anchorOf } from '../../shared/strata'
 import type { AvatarSize } from '../seams'
 import { agentLabel } from '../summary/format'
 import { usePressHold } from '../input/use-press-hold'
@@ -10,8 +11,14 @@ import { Figure, rectStyle } from './Figure'
 import type { SeatRef } from './model'
 import { pathKey, samePath } from './selection'
 
-export function Avatar({ seat, size, interactive, offline = false }: { seat: SeatRef; size: AvatarSize; interactive: boolean; offline?: boolean }) {
+/**
+ * interactive: drawn at ≥ MIN_TARGET for the input, so it is a dive target.
+ * grow: its hit area takes the whole seat pitch (L2); at L1 only the drawn
+ * seat is the avatar's, so the gaps, label band and frame go in.
+ */
+export function Avatar({ seat, size, interactive, grow = false, offline = false }: { seat: SeatRef; size: AvatarSize; interactive: boolean; grow?: boolean; offline?: boolean }) {
   const env = useLevels()
+  const anchor = env.useAnchor(anchorOf(seat.path))
   const { agent } = seat
   const art = env.kit.avatar({
     phase: offline ? 'offline' : agent.phase,
@@ -33,9 +40,10 @@ export function Avatar({ seat, size, interactive, offline = false }: { seat: Sea
   return (
     <button
       type="button"
-      ref={env.useAnchor(`agent:${agent.id}`)}
+      ref={anchor}
       className={className}
-      style={{ ...rectStyle(seat.hit), ['--pad' as string]: `${(seat.hit.w - seat.rect.w) / 2}px` }}
+      style={{ ...rectStyle(grow ? seat.hit : seat.rect), ['--pad' as string]: `${grow ? (seat.hit.w - seat.rect.w) / 2 : 0}px` }}
+      data-stage-focus={highlighted || undefined}
       data-path={pathKey(seat.path)}
       tabIndex={highlighted ? 0 : -1}
       aria-label={agentLabel(agent, env.now(), offline)}

@@ -11,6 +11,7 @@ import {
   layoutMachines,
   layoutTerminal,
   layoutWorkspaces,
+  columnsFor,
   miniatureTransform,
   type ContainerCell,
   type MachineCell,
@@ -20,10 +21,11 @@ import type { LevelItem } from './selection'
 
 /**
  * Every level lays out inside the same inset of the stage, so miniatures match
- * exactly. A phone gives the sides back: 48 seats in 8 columns need the width
- * for 44 px touch targets.
+ * exactly. The top bar floats over the stage host, so every level keeps a top
+ * inset for it and no flight ever sees the host resize.
  */
-export const levelArea = (viewport: Rect): Rect => (viewport.w < 600 ? inset(viewport, 12, 4, 12, 4) : inset(viewport, 16, 20, 16, 20))
+export const TOP_BAR = 52
+export const levelArea = (viewport: Rect): Rect => inset(viewport, TOP_BAR + 16, 20, 16, 20)
 
 export interface SeatRef {
   key: string
@@ -75,13 +77,14 @@ export const machineWorkspaces = (machine: StrataMachine | null | undefined): Le
 
 export const buildLevelModel = (path: StrataPath, fleet: readonly StrataMachine[], viewport: Rect, kit: FigureKit): LevelModel => {
   const area = levelArea(viewport)
+  const columns = columnsFor(viewport)
   const level = levelOf(path)
   const machine = fleet.find((m) => m.id === path.machine) ?? null
   const workspace = machineWorkspaces(machine).find((w) => w.id === path.workspace) ?? null
 
   if (level === 'machines') {
     const cells = layoutMachines(
-      fleet.map((m) => ({ id: m.id, kind: m.profile?.kind ?? 'unknown', link: m.link })),
+      fleet.map((m) => ({ id: m.id, kind: m.profile?.kind ?? 'unknown', link: m.link, reached: m.lastSeenAt !== null || m.levels !== null })),
       area,
       kit
     )
@@ -90,7 +93,7 @@ export const buildLevelModel = (path: StrataPath, fleet: readonly StrataMachine[
       const m = fleet[i]
       const workspaces = machineWorkspaces(m)
       if (workspaces.length === 0) return
-      const levelCells = layoutWorkspaces(workspaceInputs(workspaces), area, kit)
+      const levelCells = layoutWorkspaces(workspaceInputs(workspaces), area, kit, { columns })
       const transform = miniatureTransform(area, cell.portal)
       minis.set(m.id, {
         transform,
@@ -109,7 +112,7 @@ export const buildLevelModel = (path: StrataPath, fleet: readonly StrataMachine[
 
   if (level === 'workspaces') {
     const workspaces = machineWorkspaces(machine)
-    const cells = machine ? layoutWorkspaces(workspaceInputs(workspaces), area, kit) : []
+    const cells = machine ? layoutWorkspaces(workspaceInputs(workspaces), area, kit, { columns }) : []
     return {
       level,
       machine,
@@ -120,13 +123,13 @@ export const buildLevelModel = (path: StrataPath, fleet: readonly StrataMachine[
   }
 
   if (level === 'agents') {
-    const cell = machine && workspace ? layoutAgents({ id: workspace.id, name: workspace.name, agents: workspace.agents.length }, area, kit) : null
+    const cell = machine && workspace ? layoutAgents({ id: workspace.id, name: workspace.name, agents: workspace.agents.length }, area, kit, columns) : null
     const seats = machine && workspace && cell ? seatsOf(machine, [workspace], [cell]) : []
     return { level, machine, workspace, cell, seats, items: seats.map((s) => ({ target: s.path, rect: s.rect })) }
   }
 
   const agent = workspace?.agents.find((a) => a.id === path.agent) ?? null
-  return { level, machine, workspace, agent, layout: layoutTerminal(viewport), items: [], seats: [] }
+  return { level, machine, workspace, agent, layout: layoutTerminal(viewport, TOP_BAR), items: [], seats: [] }
 }
 
 export const isWaiting = (machine: StrataMachine | null | undefined, target: StrataPath): boolean => {

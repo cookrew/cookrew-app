@@ -36,3 +36,31 @@ export const jumpCodes = (keys: readonly string[]): Map<string, string> => {
   }
   return out
 }
+
+export interface CodedAgent {
+  key: string
+  code: string
+  machineId: string
+  workspaceId: string
+  agentId: string
+  name: string
+}
+
+/** Every agent's code, in fleet order, keyed `machine/agent`. Independent of any search index. */
+export const fleetCodes = (
+  machines: ReadonlyArray<{ id: string; levels: { workspaces: ReadonlyArray<{ id: string; agents: ReadonlyArray<{ id: string; name: string }> }> } | null }>
+): CodedAgent[] => {
+  const rows = machines.flatMap((m) =>
+    (m.levels?.workspaces ?? []).flatMap((w) => w.agents.map((a) => ({ key: `${m.id}/${a.id}`, machineId: m.id, workspaceId: w.id, agentId: a.id, name: a.name })))
+  )
+  const codes = jumpCodes(rows.map((r) => r.key))
+  return rows.map((r) => ({ ...r, code: codes.get(r.key) as string }))
+}
+
+/** What a code query names: a full code → that agent; a lone digit → every code starting with it, in code order; else nothing. */
+export const codeMatches = (coded: readonly CodedAgent[], query: string): CodedAgent[] => {
+  const q = query.trim().toLowerCase()
+  if (CODE_PATTERN.test(q)) return coded.filter((c) => c.code === q)
+  if (/^[1-9]$/.test(q)) return coded.filter((c) => c.code.startsWith(q)).sort((a, b) => a.code.localeCompare(b.code))
+  return []
+}

@@ -1,8 +1,10 @@
 // Attention pins: every waiting agent raises one, clickable at every level —
 // a click dives straight in. A pin never moves its item. Per item at most
 // MAX_PINS, then a +N pin that opens the finder's "Waiting on you" list.
-import type { Rect, StrataMachine } from '../../shared/strata'
+import { useRef, type PointerEvent } from 'react'
+import type { Rect, StrataMachine, StrataPath } from '../../shared/strata'
 import { agentKey } from '../finder/search'
+import { HOLD, markConsumed } from '../input/gestures'
 import { formatElapsed } from '../summary/format'
 import { useLevels } from './env'
 import { rectStyle } from './Figure'
@@ -43,6 +45,7 @@ export function PinBadge({ seat }: { seat: Rect }) {
 
 export function Pins({ pins, strip, onMore }: { pins: PinTarget[]; strip: Rect; onMore: () => void }) {
   const env = useLevels()
+  const down = useRef<{ x: number; y: number } | null>(null)
   if (pins.length === 0) return null
   const size = env.touch ? 44 : 24
   const shown = pins.length > MAX_PINS + 1 ? pins.slice(0, MAX_PINS) : pins
@@ -52,6 +55,16 @@ export function Pins({ pins, strip, onMore }: { pins: PinTarget[]; strip: Rect; 
   const x0 = strip.x + strip.w / 2 - (count * step - 6) / 2
   const y = strip.y + strip.h - size
   const now = env.now()
+  // Touch: a tap dives on lift (the stroke is consumed, so the stage never reads it as a swipe).
+  const tap = (e: PointerEvent, path: Required<StrataPath>) => {
+    const start = down.current
+    down.current = null
+    if (e.pointerType !== 'touch' || !start) return
+    const still = Math.hypot(e.clientX - start.x, e.clientY - start.y) <= HOLD.slop
+    if (!still) return
+    markConsumed(e.nativeEvent)
+    env.go(path)
+  }
   return (
     <>
       {shown.map((pin, i) => {
@@ -62,6 +75,7 @@ export function Pins({ pins, strip, onMore }: { pins: PinTarget[]; strip: Rect; 
             key={key}
             type="button"
             className="pin"
+            data-plane="screen"
             style={rectStyle({ x: x0 + i * step, y, w: size, h: size })}
             aria-label={`${pin.name} is waiting${pin.since === null ? '' : `, ${formatElapsed(now - pin.since)}`}. Open terminal`}
             onPointerEnter={(e) => {
@@ -70,14 +84,16 @@ export function Pins({ pins, strip, onMore }: { pins: PinTarget[]; strip: Rect; 
               env.hover.enter(key)
             }}
             onPointerLeave={() => env.hover.leave(key)}
-            onClick={() => env.go(path)}
+            onPointerDown={(e) => e.pointerType === 'touch' && (down.current = { x: e.clientX, y: e.clientY })}
+            onPointerUp={(e) => tap(e, path)}
+            onClick={(e) => (e.nativeEvent as globalThis.PointerEvent).pointerType !== 'touch' && env.go(path)}
           >
             <span>{pin.name.slice(0, 1).toUpperCase()}</span>
           </button>
         )
       })}
       {more > 0 && (
-        <button type="button" className="pin more" style={rectStyle({ x: x0 + shown.length * step, y, w: size, h: size })} aria-label={`${more} more waiting. Open the finder`} onClick={onMore}>
+        <button type="button" className="pin more" data-plane="screen" style={rectStyle({ x: x0 + shown.length * step, y, w: size, h: size })} aria-label={`${more} more waiting. Open the finder`} onClick={onMore}>
           <span>+{more}</span>
         </button>
       )}

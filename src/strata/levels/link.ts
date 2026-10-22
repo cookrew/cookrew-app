@@ -13,8 +13,11 @@ export const machineState = (m: StrataMachine): MachineState => {
   return m.link === 'error' ? 'error' : 'offline'
 }
 
+/** ' · last seen 3h 5m ago', or nothing for a machine never seen. */
+export const lastSeenWords = (m: StrataMachine, now: number): string => (m.lastSeenAt === null ? '' : ` · last seen ${formatElapsed(now - m.lastSeenAt)} ago`)
+
 export const stateWords = (m: StrataMachine, now: number): string => {
-  const ago = m.lastSeenAt === null ? '' : ` · last seen ${formatElapsed(now - m.lastSeenAt)} ago`
+  const ago = lastSeenWords(m, now)
   switch (machineState(m)) {
     case 'live':
       return 'live'

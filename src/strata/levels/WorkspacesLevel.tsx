@@ -2,10 +2,10 @@
 // per machine), packed in order. The focused one reads "on screen"; the rest
 // are background (agents running, browsers not). A machine that cannot answer
 // shows why, with the one action that helps.
-import type { LevelsWorkspace, StrataMachine } from '../../shared/strata'
+import { anchorOf, type LevelsWorkspace, type StrataMachine } from '../../shared/strata'
 import { useLevels } from './env'
 import { Figure, rectStyle } from './Figure'
-import { machineState, stateWords, waitingCount } from './link'
+import { lastSeenWords, machineState, stateWords, waitingCount } from './link'
 import { Loupe } from './Loupe'
 import type { LevelModel, SeatRef } from './model'
 import { Avatar } from './Avatar'
@@ -24,7 +24,7 @@ export function WorkspacesLevel({ model, openFinder }: { model: Model; openFinde
   const offline = machine.link !== 'live' && machine.link !== 'connecting'
   return (
     <div className="level level-workspaces" role="list" aria-label={`Workspaces on ${machine.name}`}>
-      {machine.stale && <div className="banner">{`${stateWords(machine, env.now())} · read only`}</div>}
+      {machine.stale && <div className="banner" data-plane="screen">{`${stateWords(machine, env.now())} · read only`}</div>}
       {model.cells.map((cell, i) => (
         <WorkspaceItem
           key={cell.id}
@@ -51,7 +51,7 @@ function MachinePlate({ machine }: { machine: StrataMachine }) {
     unpaired: 'This browser is not paired with this machine yet.',
     outdated: 'This machine runs an older Cookrew without levels. Update it, or open the classic view.',
     never: 'This machine has never connected. Open Cookrew on it once.',
-    offline: `Offline (${stateWords(machine, env.now())}) and nothing cached in this browser.`,
+    offline: `Offline${lastSeenWords(machine, env.now())}. Nothing from it is cached in this browser yet.`,
     error: 'This machine did not answer.'
   }
   return (
@@ -84,8 +84,10 @@ function WorkspaceItem({
 }) {
   const env = useLevels()
   const target = { machine: machine.id, workspace: workspace.id }
+  const anchor = env.useAnchor(anchorOf(target))
   const highlighted = samePath(env.highlight, target)
-  const tiny = (seats[0]?.hit.w ?? Infinity) < (env.touch ? MIN_TARGET.touch : MIN_TARGET.pointer)
+  // A dive target only when DRAWN at ≥ MIN_TARGET for the input; smaller, a click goes to the container.
+  const tiny = (seats[0]?.rect.w ?? Infinity) < (env.touch ? MIN_TARGET.touch : MIN_TARGET.pointer)
   const focused = workspace.state === 'focused'
   const hits = env.glow ? seats.filter((s) => env.glow?.has(s.key)).length : 0
   const loose = workspace.loose.length
@@ -93,8 +95,9 @@ function WorkspaceItem({
     <div role="listitem" className={`workspace${machine.stale ? ' stale' : ''}`}>
       <button
         type="button"
-        ref={env.useAnchor(`workspace:${workspace.id}`)}
+        ref={anchor}
         className={`container-figure${highlighted ? ' hl' : ''}`}
+        data-stage-focus={highlighted || undefined}
         style={rectStyle(cell.rect)}
         data-path={pathKey(target)}
         tabIndex={highlighted ? 0 : -1}
@@ -108,7 +111,7 @@ function WorkspaceItem({
         <Avatar key={seat.key} seat={seat} size="small" interactive={!tiny} offline={offline} />
       ))}
       {tiny && seats.length > 0 && <Loupe region={cell.rect} seats={seats} boxes={[cell]} onGoIn={() => env.go(target)} label={`Agents in ${workspace.name}`} />}
-      <div className="container-chips" style={{ left: cell.rect.x, top: cell.rect.y + cell.rect.h + 4, width: cell.rect.w }}>
+      <div className="container-chips" data-plane="screen" style={{ left: cell.rect.x, top: cell.rect.y + cell.rect.h + 4, width: cell.rect.w }}>
         <span className={`chip${focused ? ' ok' : ''}`}>{focused ? 'on screen' : 'background'}</span>
         {loose > 0 && <span className="chip">tray · {loose}</span>}
         {workspace.agents.length > seats.length && <span className="chip">+{workspace.agents.length - seats.length} more · find with /</span>}

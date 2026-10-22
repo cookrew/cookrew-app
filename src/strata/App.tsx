@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 // THE STRATA SHELL: machines → workspaces → agents → the agent's terminal.
 // Owns the URL (one history entry per level), the one highlight per level, the
 // finder and the summary card, and hands the stage scene(path). The stage,
@@ -8,16 +9,17 @@ import { levelOf, parentOf, type Rect, type StrataMachine, type StrataPath } fro
 import { useFleet } from './fleet/use-fleet'
 import { standInFigures } from './stand-in/figures'
 import { Finder } from './finder/Finder'
+import { fleetCodes } from './finder/codes'
 import { createFleetIndex } from './finder/search'
 import { fanBounds } from './levels/Fan'
 import { InstantStage } from './input/InstantStage'
-import { isTypingTarget, keyIntent } from './input/keys'
+import { isControlTarget, isTypingTarget, keyIntent } from './input/keys'
 import { useAnchor } from './levels/anchors'
 import { LevelsContext, type GoOptions, type LevelsEnv } from './levels/env'
 import { onlineSummary, stateWords } from './levels/link'
 import { buildLevelModel, isWaiting } from './levels/model'
 import { Scene } from './levels/Scene'
-import { agentPaths, childToward, defaultHighlight, itemOf, nextAgentWithin, nextItem, pathKey, samePath } from './levels/selection'
+import { agentPaths, childToward, itemOf, nextAgentWithin, nextItem, nextSeed, pathKey, samePath } from './levels/selection'
 import { createHoverIntent } from './summary/hover-intent'
 import { SummaryCard } from './summary/SummaryCard'
 import { useStrataHistory } from './url/use-strata-history'
@@ -25,7 +27,6 @@ import './levels/strata.css'
 
 const kit = standInFigures
 const LOAD_GRACE_MS = 2500
-const TOP_BAR = 52
 
 const useMedia = (query: string) => {
   const [match, setMatch] = useState(() => matchMedia(query).matches)
@@ -38,7 +39,11 @@ const useMedia = (query: string) => {
   return match
 }
 
-/** useFleet has no loading flag yet: loaded once it has rows, or after a grace period (empty account). */
+/**
+ * STAND-IN for Harbor's useFleetLoaded (seams: UseFleetLoaded). The swap is
+ * this one function: `const loaded = useFleetLoaded()`. Until then: loaded once
+ * the fleet has rows, or after a grace period (an empty account).
+ */
 const useLoaded = (fleet: StrataMachine[]) => {
   const [late, setLate] = useState(false)
   useEffect(() => {
@@ -49,14 +54,13 @@ const useLoaded = (fleet: StrataMachine[]) => {
 }
 
 /**
- * PREVIEW ONLY (loopback hosts): ?link=<machineId>:<unpaired|outdated>,… forces
+ * PREVIEW ONLY (dev builds; compiled out of production): ?link=<machineId>:<unpaired|outdated>,… forces
  * link states the mock never produces, so every machine state can be seen.
  */
 /** Read once at load: the shell rewrites the URL to its canonical form, query string and all. */
 const FORCED_LINKS: ReadonlyMap<string, string> = (() => {
   const spec = new URLSearchParams(location.search).get('link')
-  const preview = location.hostname === '127.0.0.1' || location.hostname === 'localhost'
-  return new Map(preview && spec ? spec.split(',').map((pair) => pair.split(':') as [string, string]) : [])
+  return new Map(import.meta.env.DEV && spec ? spec.split(',').map((pair) => pair.split(':') as [string, string]) : [])
 })()
 const usePreviewLinks = (fleet: StrataMachine[]): StrataMachine[] =>
   useMemo(() => {
@@ -68,12 +72,8 @@ const usePreviewLinks = (fleet: StrataMachine[]): StrataMachine[] =>
   }, [fleet])
 
 const useViewport = (el: React.RefObject<HTMLDivElement | null>): Rect => {
-  const [size, setSize] = useState<Rect>({
-    x: 0,
-    y: 0,
-    w: innerWidth,
-    h: innerHeight - TOP_BAR
-  })
+  // The stage host covers the viewport; the top bar floats over it (levels keep a top inset).
+  const [size, setSize] = useState<Rect>({ x: 0, y: 0, w: innerWidth, h: innerHeight })
   useEffect(() => {
     if (!el.current) return
     const observer = new ResizeObserver(([entry]) => {
@@ -89,7 +89,7 @@ const useViewport = (el: React.RefObject<HTMLDivElement | null>): Rect => {
 export function App() {
   const fleet = usePreviewLinks(useFleet())
   const loaded = useLoaded(fleet)
-  const { path, notice, clearNotice, go: navigate } = useStrataHistory(fleet, loaded)
+  const { path, notice, clearNotice, go: navigate, out: navigateOut } = useStrataHistory(fleet, loaded)
   const host = useRef<HTMLDivElement>(null)
   const viewport = useViewport(host)
   const touch = useMedia('(pointer: coarse)')
@@ -124,7 +124,10 @@ export function App() {
   const [announce, setAnnounce] = useState('')
 
   const model = useMemo(() => buildLevelModel(path, fleet, viewport, kit), [path, fleet, viewport])
-  const codes = useMemo(() => createFleetIndex(fleet).codes(), [fleet])
+  // The finder's index: Harbor's FleetIndex replaces createFleetIndex at the merge (one import). Codes sit on top.
+  const index = useMemo(() => createFleetIndex(fleet), [fleet])
+  const coded = useMemo(() => fleetCodes(fleet), [fleet])
+  const codes = useMemo(() => new Map(coded.map((c) => [c.key, c.code])), [coded])
   const level = levelOf(path)
   const machineOf = useCallback((id?: string) => fleet.find((m) => m.id === id) ?? null, [fleet])
 
@@ -142,6 +145,12 @@ export function App() {
     },
     [hover, navigate]
   )
+  const goOut = useCallback(() => {
+    setGoOptions({})
+    hover.hideNow()
+    setFinder(null)
+    navigateOut()
+  }, [hover, navigateOut])
   const openFinder = useCallback(
     (query = '') => {
       hover.hideNow()
@@ -163,36 +172,39 @@ export function App() {
     }
   }, [])
 
-  // Entering a level: the highlight starts where you came from, else on attention, else first.
-  const previous = useRef<StrataPath>(path)
+  // Entering a level, the fleet arriving, an item vanishing: ONE seeding path (nextSeed).
   const key = pathKey(path)
+  const lastPath = useRef<StrataPath>(path)
+  const lastKey = useRef<string | null>(null)
+  const cameFrom = useRef<StrataPath | null>(null)
+  const seededFor = useRef<string | null>(null)
   useEffect(() => {
-    const cameFrom = childToward(path, previous.current)
-    previous.current = path
-    restedAt.current = pointer.current
-    armed.current = lastInput.current === 'key' || pointer.current.x < 0
-    hover.hideNow()
-    setHighlight(
-      defaultHighlight(model.items, cameFrom, (t) => isWaiting(machineOf(t.machine), t)),
-      lastInput.current
-    )
-    const names = {
-      machines: 'Machines',
-      workspaces: `${machineOf(path.machine)?.name ?? ''}: workspaces`,
-      agents: 'Agents',
-      terminal: 'Terminal'
+    if (lastKey.current !== key) {
+      cameFrom.current = lastKey.current === null ? null : childToward(path, lastPath.current)
+      lastPath.current = path
+      lastKey.current = key
+      restedAt.current = pointer.current
+      armed.current = lastInput.current === 'key' || pointer.current.x < 0
+      hover.hideNow()
+      const names = { machines: 'Machines', workspaces: `${machineOf(path.machine)?.name ?? ''}: workspaces`, agents: 'Agents', terminal: 'Terminal' }
+      setAnnounce(`${names[level]}${model.items.length ? `, ${model.items.length} items` : ''}`)
     }
-    setAnnounce(`${names[level]}${model.items.length ? `, ${model.items.length} items` : ''}`)
+    if (finder) return
+    const arrived = seededFor.current !== key
+    const focusedWorkspace = machineOf(path.machine)?.levels?.focusedWorkspaceId
+    const next = nextSeed({
+      items: model.items,
+      current: highlight,
+      arrived,
+      cameFrom: cameFrom.current,
+      waiting: (t) => isWaiting(machineOf(t.machine), t),
+      preferred: (t) => level === 'workspaces' && !!focusedWorkspace && t.workspace === focusedWorkspace,
+      present: (t) => (t.agent ? model.seats.some((s) => samePath(s.path, t)) : model.items.some((it) => samePath(it.target, t)))
+    })
+    if (model.items.length > 0) seededFor.current = key
+    if (next !== undefined) setHighlight(next, lastInput.current)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key])
-  // The fleet arrived after the level did: give it a highlight once.
-  useEffect(() => {
-    if (!highlight && model.items.length > 0)
-      setHighlight(
-        defaultHighlight(model.items, null, (t) => isWaiting(machineOf(t.machine), t)),
-        'pointer'
-      )
-  }, [highlight, model.items, machineOf, setHighlight])
+  }, [key, finder, highlight, model.items, model.seats])
 
   // Keyboard focus follows the highlight, and so does the summary card (after the same intent delay).
   useEffect(() => {
@@ -208,14 +220,15 @@ export function App() {
       const intent = keyIntent(e, {
         level,
         typing: isTypingTarget(document.activeElement),
-        overlayOpen: finder !== null || summaryKey !== null
+        onControl: isControlTarget(document.activeElement),
+        overlayOpen: finder !== null
       })
       if (!intent) return
       e.preventDefault()
       if (intent.type === 'finder') return openFinder('')
       if (intent.type === 'find') return openFinder(intent.text)
-      if (intent.type === 'close') return finder ? setFinder(null) : hover.hideNow()
-      if (intent.type === 'out') return go(parentOf(path))
+      if (intent.type === 'close') return setFinder(null)
+      if (intent.type === 'out') return goOut()
       if (intent.type === 'in') return highlight && go(highlight)
       const item = itemOf(model.items, highlight)
       if (intent.within && item?.machine) {
@@ -238,14 +251,24 @@ export function App() {
   const cardSeat =
     summarySeat && level === 'agents' && summarySeat.agent.attachments.length > 0 ? { ...summarySeat, rect: fanBounds(summarySeat.rect, touch) } : summarySeat
 
+  // Levels move the highlight on hover only once the pointer has really moved (see `armed`).
+  const levelSetHighlight = useCallback(
+    (target: StrataPath | null, via: 'pointer' | 'key') => {
+      if (via === 'pointer' && !armed.current) return
+      setHighlight(target, via)
+    },
+    [setHighlight]
+  )
+
   const env: LevelsEnv = {
     kit,
     fleet,
     viewport,
+    loaded,
     touch,
     now: Date.now,
     highlight,
-    setHighlight,
+    setHighlight: levelSetHighlight,
     go,
     glow,
     codes: finder ? codes : null,
@@ -259,7 +282,7 @@ export function App() {
   return (
     <Probe>
       <div className={`strata${touch ? ' touch' : ''}${reducedMotion ? ' reduced' : ''}`}>
-        <TopBar path={path} fleet={fleet} onGo={go} onFind={() => openFinder('')} />
+        <TopBar path={path} onBack={goOut} fleet={fleet} loaded={loaded} onGo={go} onFind={() => openFinder('')} />
         <div className="stage-host" ref={host}>
           <LevelsContext.Provider value={env}>
             <InstantStage
@@ -284,6 +307,8 @@ export function App() {
         {finder && (
           <Finder
             fleet={fleet}
+            index={index}
+            coded={coded}
             context={finderContext}
             initialQuery={finder.query}
             onClose={() => setFinder(null)}
@@ -307,7 +332,7 @@ export function App() {
 }
 
 /** QA only (?probe): counts React commits, so a probe can prove nothing commits per animation frame. */
-const PROBE = typeof location !== 'undefined' && new URLSearchParams(location.search).has('probe')
+const PROBE = import.meta.env.DEV && new URLSearchParams(location.search).has('probe')
 const countCommit = () => {
   const w = window as unknown as { __strataCommits?: number }
   w.__strataCommits = (w.__strataCommits ?? 0) + 1
@@ -322,7 +347,9 @@ export function Probe({ children }: { children: ReactNode }) {
   )
 }
 
-function TopBar({ path, fleet, onGo, onFind }: { path: StrataPath; fleet: StrataMachine[]; onGo: (p: StrataPath) => void; onFind: () => void }) {
+function TopBar({ path, fleet, loaded, onGo, onBack, onFind }: {
+  loaded: boolean
+  path: StrataPath; fleet: StrataMachine[]; onGo: (p: StrataPath) => void; onBack: () => void; onFind: () => void }) {
   const machine = fleet.find((m) => m.id === path.machine)
   const workspace = machine?.levels?.workspaces.find((w) => w.id === path.workspace)
   const agent = workspace?.agents.find((a) => a.id === path.agent)
@@ -339,12 +366,14 @@ function TopBar({ path, fleet, onGo, onFind }: { path: StrataPath; fleet: Strata
       : []),
     ...(path.agent ? [{ label: agent?.name ?? '…', to: path }] : [])
   ]
-  const status = !path.machine ? onlineSummary(fleet) : machine ? stateWords(machine, Date.now()) : ''
+  const status = !loaded ? 'finding your machines…' : !path.machine ? onlineSummary(fleet) : machine ? stateWords(machine, Date.now()) : ''
+  // The top bar always names the exit: out goes to the parent's name.
+  const exitName = path.agent ? (workspace?.name ?? '…') : path.workspace ? (machine?.name ?? '…') : 'Machines'
   return (
     <header className="topbar">
       {path.machine && (
-        <button type="button" className="back" aria-label="Back out one level" onClick={() => onGo(parentOf(path))}>
-          ‹
+        <button type="button" className="back" aria-label={`Out to ${exitName}`} onClick={onBack} data-plane="screen">
+          ‹ <span className="exit">{exitName}</span>
         </button>
       )}
       <nav className="crumbs" aria-label="Level">
