@@ -135,6 +135,13 @@ export interface RegistryDeps {
    * ConfigMap. Absent → /me is the account page, exactly as before.
    */
   shell?: ShellBundle | null
+  /**
+   * STRATA: the shell takes /me, and a signed-in front page goes there, only
+   * when this is true. Without it a deployed shell only lends the front page
+   * its sample fleet and serves its own files: the state while no released
+   * app can be stepped into.
+   */
+  strataMe?: boolean
   /** STRATA: where the canvas relay keeps when each desktop's line was last seen; absent = memory only. */
   lineSeenFile?: string
 }
@@ -844,7 +851,7 @@ export function createRegistry(deps: RegistryDeps): Server {
     // the levels under it, one page that routes itself (D2). Signed out, or
     // with no shell deployed, it is the account page below.
     const accountPath = parts.length === 2 && parts[0] === 'me' && parts[1] === 'account'
-    if (deps.v2 && deps.shell && method === 'GET' && parts[0] === 'me' && parts.length <= 4 && !accountPath) {
+    if (deps.v2 && deps.shell && deps.strataMe && method === 'GET' && parts[0] === 'me' && parts.length <= 4 && !accountPath) {
       if (signedIn(request, deps.v2) !== null) {
         respondPage(response, shellPage(deps.shell))
         return
@@ -891,7 +898,7 @@ export function createRegistry(deps: RegistryDeps): Server {
         // strata shell, whose addresses all live under /me. Signed out (or
         // with no shell deployed) it is the page below, whose stage shows the
         // same three levels on a sample fleet.
-        if (deps.v2 && deps.shell && signedIn(request, deps.v2) !== null) {
+        if (deps.v2 && deps.shell && deps.strataMe && signedIn(request, deps.v2) !== null) {
           response.writeHead(302, { location: '/me', 'cache-control': 'private, no-store', vary: 'cookie' })
           response.end()
           return

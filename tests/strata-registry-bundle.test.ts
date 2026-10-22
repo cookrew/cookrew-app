@@ -63,6 +63,7 @@ async function boot(name: string, extra: string[]): Promise<Booted> {
   const env = { ...process.env }
   delete env.COOKREW_REGISTRY
   delete env.STRATA_SHELL_ASSETS
+  delete env.STRATA_ME
   const child: ChildProcess = spawn(process.execPath, [bundle, '--port', String(port), '--data', path.join(dir, name), '--dev', ...extra], {
     cwd: dir,
     env,
@@ -195,7 +196,7 @@ describe('the minified bundle with the Strata shell', () => {
   let up: Booted
   let who: Signed
   beforeAll(async () => {
-    up = await boot('with-shell', ['--shell-assets', path.join(dir, 'strata-shell-assets.json')])
+    up = await boot('with-shell', ['--shell-assets', path.join(dir, 'strata-shell-assets.json'), '--strata-me'])
     who = await signUp(up.origin)
   }, 30_000)
   afterAll(() => up?.stop())
@@ -212,6 +213,24 @@ describe('the minified bundle with the Strata shell', () => {
   })
 
   sharedRoutes(() => up, () => who)
+})
+
+describe('the minified bundle with the Strata shell but not --strata-me', () => {
+  let up: Booted
+  let who: Signed
+  beforeAll(async () => {
+    up = await boot('shell-dark', ['--shell-assets', path.join(dir, 'strata-shell-assets.json')])
+    who = await signUp(up.origin)
+  }, 30_000)
+  afterAll(() => up?.stop())
+
+  it('keeps /me the account page and the front page where it is, and still serves the shell’s files', async () => {
+    const res = await fetch(`${up.origin}/me`, { headers: bearer(who) })
+    expect(res.status).toBe(200)
+    expect(await res.text()).toContain('id="me-desktops"')
+    expect((await fetch(`${up.origin}/`, { headers: bearer(who), redirect: 'manual' })).status).toBe(200)
+    expect((await fetch(`${up.origin}${SHELL_SCRIPT}`)).status).toBe(200)
+  })
 })
 
 describe('the minified bundle when the second ConfigMap is missing', () => {
