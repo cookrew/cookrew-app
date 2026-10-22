@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Rect, StrataPath } from '../src/shared/strata'
+import type { AnchorId, Rect, StrataPath } from '../src/shared/strata'
 import { createRegistry, type AnchorRegistry } from '../src/strata/stage/anchors'
 import { fitStep } from '../src/strata/stage/camera'
 import { measureFlight, type SceneLookup } from '../src/strata/stage/measure'
@@ -25,7 +25,7 @@ describe('measure', () => {
     const [s0, s1] = plan.steps
     const levels = new Map([top, M, W].map((p) => [pathKey(p), scene()]))
     const registries = new Map<string, AnchorRegistry>([top, M, W].map((p) => [pathKey(p), createRegistry()]))
-    const put = (at: StrataPath, id: string, r: Rect) => registries.get(pathKey(at))!.set(id, drawn(levels.get(pathKey(at))!, r) as unknown as Element)
+    const put = (at: StrataPath, id: AnchorId, r: Rect) => registries.get(pathKey(at))!.set(id, drawn(levels.get(pathKey(at))!, r) as unknown as Element)
 
     put(top, s0.anchor[s0.anchor.length - 1], { x: 100, y: 100, w: 200, h: 160 })
     // Level M: the machine's region (step 0's content) and, far below the fold, the workspace (step 1's anchor).

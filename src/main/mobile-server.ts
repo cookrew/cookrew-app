@@ -23,7 +23,7 @@ import { loadOrCreatePairingToken, rotatePairingToken } from './pairing-token'
 import type { VersionPinRecord } from '../shared/version-pin'
 import { readTailnetAsync, type CertHosts, type TailnetIdentity } from './tailscale'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { app, powerSaveBlocker } from 'electron'
+import { powerSaveBlocker } from 'electron'
 import type { WorkspaceStore } from './store'
 import type { GitInfo, RecoverResult, RestoreResult, WorkspaceState } from '../shared/model'
 import type { PtyManager } from './pty'
@@ -80,7 +80,7 @@ import type { LevelsService } from './levels/service'
 
 /** What the levels need from this server: its app version, and the token to scrub by value. */
 const levelsOptions = (deps: MobileServerDeps): LevelsMountOptions => ({
-  appVersion: () => app?.getVersion?.() ?? null,
+  appVersion: () => deps.appVersion?.() ?? null,
   tokens: () => [activePairingToken ?? deps.pairingToken]
 })
 
@@ -170,6 +170,8 @@ const powerBlockerId: { current: number | null } = { current: null }
 
 export interface MobileServerDeps {
   store: WorkspaceStore
+  /** The app's version for the levels snapshot; injected so this listener never imports electron's app. */
+  appVersion?: () => string
   ptys: PtyManager
   voice: VoiceEngine
   turns: TurnTracker

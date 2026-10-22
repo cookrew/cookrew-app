@@ -5929,6 +5929,7 @@ app.whenReady().then(() => {
   setTimeout(publishDoorClaims, 5_000).unref?.()
 
   startMobileServer({
+    appVersion: () => app.getVersion(),
     /**
      * v3 (V3-21 · H2): an OVERRIDE for QA, never the switch.
      *
