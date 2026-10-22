@@ -48,8 +48,9 @@ const summaryOf = (a: LevelsAgent) =>
     .filter(Boolean)
     .join('<br>')
 
-const containerHtml = (w: LevelsWorkspace, scale: number): string => {
-  const art = colorFigures.container({ name: w.name, slots: w.agents.length })
+const containerHtml = (w: LevelsWorkspace, scaleOf: number | ((width: number) => number), columns?: number): string => {
+  const art = colorFigures.container({ name: w.name, slots: w.agents.length, columns })
+  const scale = typeof scaleOf === 'number' ? scaleOf : scaleOf(art.viewBox.w)
   record('container', `${art.archetype}/${w.agents.length}`, art)
   const seats = art.anchors.more ? w.agents.slice(0, art.capacity - 1) : w.agents
   const avatars = seats
@@ -69,12 +70,26 @@ const containerHtml = (w: LevelsWorkspace, scale: number): string => {
       return `<div class="av" style="left:${r.x * scale}px;top:${r.y * scale}px;width:${side}px;height:${side}px">${cards}${av.svg}<div class="tip">${summaryOf(a)}${a.attachments.length ? `<br>${a.attachments.length} attached` : ''}</div></div>`
     })
     .join('')
-  return `<div class="cell"><div class="box" style="width:${art.viewBox.w * scale}px">${svgAt(art.svg, art.viewBox.w * scale)}${avatars}</div><small>${escapeText(w.name)} · ${art.archetype} · ${w.agents.length} agents · ${kb(art.svg.length)}</small></div>`
+  const seatPx = art.anchors['slot:0'] ? ` · seat ${(art.anchors['slot:0'].w * scale).toFixed(0)} px` : ''
+  return `<div class="cell"><div class="box" style="width:${art.viewBox.w * scale}px">${svgAt(art.svg, art.viewBox.w * scale)}${avatars}</div><small>${escapeText(w.name)} · ${art.archetype} · ${w.agents.length} agents · ${kb(art.svg.length)}${seatPx}</small></div>`
 }
 
 const frames = () => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())))
 
-export const renderFleet = async (root: HTMLElement): Promise<void> => {
+/** Usher has not named the phone's columns yet: 5 until it does. */
+export const PHONE_COLUMNS = 5
+const PHONE_INNER = 390 - 2 * 16
+
+/** One phone frame per machine: its workspaces at the phone's columns, each as wide as the screen. */
+const phoneHtml = (fleet: Seen[]): string =>
+  `<h2 id="phone">Phone <span class="muted">· 390 × 844, columns ${PHONE_COLUMNS}, 16 px inset</span></h2><div class="fleetrow">` +
+  fleet
+    .filter((m) => m.levels && m.levels.workspaces.length > 0)
+    .map((m) => `<div class="phone"><b>${escapeText(m.row.name)}</b>${m.levels!.workspaces.map((w) => containerHtml(w, (width) => PHONE_INNER / width, PHONE_COLUMNS)).join('')}</div>`)
+    .join('') +
+  '</div>'
+
+export const renderFleet = async (root: HTMLElement, phone?: HTMLElement): Promise<void> => {
   root.innerHTML = '<h2>Fleet <span class="muted">· live from this preview (real fixture when started with --fixture)</span></h2><p class="muted">loading…</p>'
   const fleet = await load()
   const t0 = performance.now()
@@ -95,4 +110,6 @@ export const renderFleet = async (root: HTMLElement): Promise<void> => {
   const t2 = performance.now()
   const paint = root.querySelector('#paint')
   if (paint) paint.textContent = `· to first paint ${(t2 - t0).toFixed(0)} ms (draw + DOM + layout)`
+  document.documentElement.dataset.firstPaintMs = (t2 - t0).toFixed(0)
+  if (phone) phone.innerHTML = phoneHtml(fleet)
 }

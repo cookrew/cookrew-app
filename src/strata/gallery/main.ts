@@ -56,10 +56,11 @@ motion.addEventListener('change', applyMotion)
 if (matchMedia('(prefers-reduced-motion: reduce)').matches) motion.checked = false
 
 const fleet = section('fleet')
+const phone = section('phone-frames')
 const budgets = section('budgets')
 const rest = section('matrices')
 
-renderFleet(fleet)
+renderFleet(fleet, phone)
   .catch((error: unknown) => {
     fleet.innerHTML = `<h2>Fleet</h2><p class="bad">could not load the preview fleet: ${String(error)}</p>`
   })

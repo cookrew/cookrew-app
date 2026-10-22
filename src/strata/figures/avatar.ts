@@ -18,7 +18,7 @@ import type { AvatarSize } from '../seams'
 import { BALL } from './container/layout'
 import { memo } from './iso/memo'
 import { num } from './iso/pen'
-import { GREEN, INK, mix, PAPER, SHADOW, type Mat } from './iso/tone'
+import { GREEN, INK, SHADOW, SHADOW_STYLE, type Mat } from './iso/tone'
 
 export const AVATAR_VIEW: Record<AvatarSize, number> = { dot: 12, small: 30, full: 88 }
 
@@ -52,7 +52,6 @@ export interface AvatarInput {
   size: AvatarSize
 }
 
-const fade = (m: Mat, t: number): Mat => ({ l: mix(m.l, PAPER, t), m: mix(m.m, PAPER, t), d: mix(m.d, PAPER, t) })
 const xy = (x: number, y: number) => `${num(x)} ${num(y)}`
 
 /** The harness mark, centred at (x, y), about 2u wide. */
@@ -107,7 +106,7 @@ const flag = (cx: number, cy: number, R: number, live: boolean, w: number): stri
     `L${xy(px + len, top + R * 0.52)}C${xy(px + len * 0.65, top + R * 0.42 + lift)} ${xy(px + len * 0.35, top + R * 0.42 - lift)} ${xy(px, top + R * 0.42)}Z`
   const wave = live ? `<animate attributeName="d" values="${shape(R * 0.12)};${shape(-R * 0.12)};${shape(R * 0.12)}" dur="1.1s" repeatCount="indefinite"/>` : ''
   return (
-    `<path d="M${xy(px, base)} ${xy(px, top)}" stroke="${INK}" stroke-width="${num(w * 0.9)}"/>` +
+    `<path d="M${xy(px, base)} ${xy(px, top)}" stroke="currentColor" stroke-width="${num(w * 0.9)}"/>` +
     `<path d="${shape(R * 0.12)}" fill="${FLAG}" stroke="${INK}" stroke-width="${num(w * 0.7)}">${wave}</path>`
   )
 }
@@ -133,20 +132,22 @@ const drawAvatar = (input: AvatarInput): FigureArt => {
   const live = sure && phase !== 'offline'
   const w = size === 'dot' ? 0.9 : size === 'small' ? 1.2 : 2
   const base = size === 'dot' && phase === 'thinking' ? THINKING_DOT : BALLS[phase]
-  const m = sure ? base : fade(base, 0.35)
+  const m = base
+  // a guess and an offline agent recede by opacity, which works on light and dark paper alike
+  const recede = (sure ? 1 : 0.6) * (phase === 'offline' ? 0.72 : 1)
   const disc = (dx: number, dy: number, r: number, c: string) =>
     `<circle cx="${num(cx + dx * R)}" cy="${num(cy + dy * R)}" r="${num(r * R)}" fill="${c}"/>`
   const dash = sure ? '' : ` stroke-dasharray="${num(R * 0.36)} ${num(R * 0.26)}"`
   let svg = ''
-  if (size !== 'dot') svg += `<ellipse cx="${num(cx - R * 0.42)}" cy="${num(cy + R * 0.9)}" rx="${num(R * 0.8)}" ry="${num(R * 0.28)}" fill="${SHADOW}"${sure ? '' : ' opacity=".5"'}/>`
+  if (size !== 'dot') svg += `<ellipse cx="${num(cx - R * 0.42)}" cy="${num(cy + R * 0.9)}" rx="${num(R * 0.8)}" ry="${num(R * 0.28)}" fill="${SHADOW}" ${SHADOW_STYLE}${sure ? '' : ' opacity=".5"'}/>`
   if (phase === 'waiting' && size !== 'dot') svg += flag(cx, cy, R, live, w)
-  svg += disc(0, 0, 1, m.d) + disc(0.09, -0.1, 0.86, m.m)
-  if (size !== 'dot') svg += disc(0.2, -0.24, 0.55, m.l) + disc(0.34, -0.42, 0.13, '#fffdf6')
-  svg += `<circle cx="${num(cx)}" cy="${num(cy)}" r="${num(R)}" stroke="currentColor" stroke-width="${num(w)}"${dash}/>`
+  let ball = disc(0, 0, 1, m.d) + disc(0.09, -0.1, 0.86, m.m)
+  if (size !== 'dot') ball += disc(0.2, -0.24, 0.55, m.l) + disc(0.34, -0.42, 0.13, '#fffdf6')
   if (size !== 'dot' && phase !== 'offline') {
-    const markSvg = mark(harness, cx + R * 0.08, cy + R * 0.12, R * 0.3, Math.max(0.9, R * 0.12), phase === 'waiting' ? ON_RED : HARNESS_INK[harness])
-    svg += sure ? markSvg : `<g opacity=".6">${markSvg}</g>`
+    ball += mark(harness, cx + R * 0.08, cy + R * 0.12, R * 0.3, Math.max(0.9, R * 0.12), phase === 'waiting' ? ON_RED : HARNESS_INK[harness])
   }
+  svg += recede < 1 ? `<g opacity="${recede.toFixed(2)}">${ball}</g>` : ball
+  svg += `<circle cx="${num(cx)}" cy="${num(cy)}" r="${num(R)}" stroke="currentColor" stroke-width="${num(w)}"${dash}/>`
   if (phase === 'thinking' && size !== 'dot') svg += ring(cx, cy, R, live)
   if (phase === 'replied') {
     const r = size === 'dot' ? R * 0.42 : R * 0.26

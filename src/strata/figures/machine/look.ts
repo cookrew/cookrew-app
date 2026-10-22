@@ -41,6 +41,8 @@ export interface Look {
   led: string
   lock: boolean
   sticker: boolean
+  /** Opacity of the whole figure: offline recedes into light or dark paper alike. */
+  recede: number
 }
 
 const LED_OFF = '#a49e90'
@@ -55,7 +57,8 @@ export const lookOf = (state: MachineState): Look => {
     screen: grey ? '#4a524e' : SCREEN,
     led: state === 'error' ? RED : grey ? LED_OFF : state === 'connecting' || state === 'outdated' ? AMBER : GREEN,
     lock: state === 'unpaired',
-    sticker: state === 'outdated'
+    sticker: state === 'outdated',
+    recede: state === 'offline' || state === 'error' ? 0.78 : 1
   }
 }
 

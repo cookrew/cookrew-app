@@ -25,7 +25,7 @@ import {
   type V2,
   type V3
 } from './geom'
-import { BOARD, INK, SH, SHADOW, tone, toneI, type Mat, type Shade } from './tone'
+import { BOARD, INK, SH, SHADOW, SHADOW_STYLE, tone, toneI, type Mat, type Shade } from './tone'
 
 /** The iso basis: unit steps along x, y, z land here on screen (before the frame's scale). */
 export const C = Math.cos(Math.PI / 6)
@@ -63,6 +63,8 @@ export interface PenSpec {
   /** Hand wobble amplitude in viewBox units; 0 = none (always 0 at dot size). */
   wob: number
   seed: number
+  /** Heights above this cast no longer shadows (tall shelves would otherwise widen their frame). */
+  shadowCap?: number
   /** Wobble sample spacing in viewBox units (default 9): bigger figures can afford coarser. */
   wobStep?: number
   /** Outline only (a machine never reached): no fills, only silhouettes and `keep` ink, all in currentColor. */
@@ -259,7 +261,11 @@ export const makePen = (spec: PenSpec) => {
   }
 
   /** Where a point falls as shadow on the plane z = z0. */
-  const shadowOf = (p: V3, z0: number): V2 => P([p[0] + (p[2] - z0) * SH[0], p[1] + (p[2] - z0) * SH[1], z0])
+  const cap = spec.shadowCap ?? Number.POSITIVE_INFINITY
+  const shadowOf = (p: V3, z0: number): V2 => {
+    const h = Math.min(p[2] - z0, cap)
+    return P([p[0] + h * SH[0], p[1] + h * SH[1], z0])
+  }
   /**
    * Cast shadow of an outline (bottom and top points) onto z = z0, optionally
    * clipped to a convex surface (a board top) by geometry, not a clipPath.
@@ -267,7 +273,7 @@ export const makePen = (spec: PenSpec) => {
   const castShadow = (pts: readonly V3[], z0 = 0, clip: readonly V3[] | null = null, extra = ''): string => {
     const sh = hull(pts.map((p) => shadowOf(p, z0)))
     const poly = clip ? clipConvex(sh, hull(clip.map(P))) : sh
-    return poly.length > 2 ? fill2(poly, SHADOW, extra) : ''
+    return poly.length > 2 ? fill2(poly, SHADOW, extra ? `${SHADOW_STYLE} ${extra}` : SHADOW_STYLE) : ''
   }
 
   const boardTop = (x0: number, y0: number, x1: number, y1: number, h = 3, r = 5): V3[] => on(PZ(h), rrUV(x0, y0, x1, y1, r, 3))

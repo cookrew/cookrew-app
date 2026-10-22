@@ -24,7 +24,7 @@ describe('avatars', () => {
 
   it('is one size of ball per size, laid out like a seat', () => {
     for (const size of SIZES) {
-      const radii = new Set(PHASES.map((phase) => avatarArt({ phase, source: 'live', harness: 'claude', size }).svg.match(/stroke="currentColor" stroke-width="[\d.]+"/)?.[0]))
+      const radii = new Set(PHASES.map((phase) => avatarArt({ phase, source: 'live', harness: 'claude', size }).svg.match(/<circle [^>]*r="([\d.]+)" stroke="currentColor"/)?.[1]))
       expect(radii.size, size).toBe(1)
     }
     const slot = containerArt({ name: 'Paper Notes', slots: 3 }).anchors['slot:0']
@@ -66,6 +66,17 @@ describe('avatars', () => {
     const odd = avatarArt({ phase: 'dreaming', source: 'rumour', harness: 'aider', size: 'huge' } as never)
     expect(odd.svg).not.toMatch(/undefined|NaN/)
     expect(odd.svg).toBe(avatarArt({ phase: 'idle', source: 'probe', harness: 'other', size: 'small' }).svg)
+  })
+
+  it('reads on dark paper: guesses and offline recede by opacity, shadows take the page token, the pole is inked', () => {
+    const live = avatarArt({ phase: 'idle', source: 'live', harness: 'claude', size: 'full' }).svg
+    const probe = avatarArt({ phase: 'idle', source: 'probe', harness: 'claude', size: 'full' }).svg
+    const offline = avatarArt({ phase: 'offline', source: 'live', harness: 'claude', size: 'full' }).svg
+    expect(live).not.toContain('<g opacity')
+    expect(probe).toContain('<g opacity="0.60">')
+    expect(offline).toContain('<g opacity="0.72">')
+    expect(live).toContain('var(--cf-shadow,#41538f)')
+    expect(avatarArt({ phase: 'waiting', source: 'live', harness: 'claude', size: 'full' }).svg).toMatch(/<path d="M[^"]+" stroke="currentColor"/)
   })
 
   it('exposes badge and fan anchors inside the viewBox', () => {
