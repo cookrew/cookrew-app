@@ -46,6 +46,9 @@
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
+  /* Again here: the stage's pan-y stops at a scroll container, so without it Chromium (and Safari)
+     take every horizontal pan inside a scene and cancel the stage's pointer stream after one move. */
+  touch-action: pan-y;
   transform-origin: 0 0;
   outline: none;
 }

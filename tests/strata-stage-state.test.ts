@@ -99,6 +99,32 @@ describe('stage state', () => {
     expect(s3.flight).toBeNull()
   })
 
+  it('Back during a committed scrub’s settle reverses it in place: nothing unmounts, it flies home (§7)', () => {
+    const s1 = onPath(onScrubStart(at(W), A), A, false)
+    const s2 = onPath(s1, W, false)
+    expect(s2.flight).not.toBeNull()
+    expect(s2.flight?.replaces).toEqual({ id: s1.flight!.id, how: 'reverse' })
+    expect(s2.flight?.mode).toBe('auto')
+    expect(keys(mountedScenes(s2))).toEqual(keys([W, A]))
+    expect(samePath(onLand(s2, s2.flight!.id, 'to').rest, W)).toBe(true)
+  })
+
+  it('a crumb mid-settle finishes the committed scrub and flies on from its target', () => {
+    const s1 = onPath(onScrubStart(at(W), A), A, false)
+    const s2 = onPath(s1, M, false)
+    expect(s2.flight?.replaces?.how).toBe('finish')
+    expect(samePath(s2.flight!.plan.from, A)).toBe(true)
+    expect(samePath(s2.flight!.plan.to, M)).toBe(true)
+    expect(samePath(s2.rest, A)).toBe(true)
+  })
+
+  it('an uncommitted scrub interrupted by a path change still gives way from where it started', () => {
+    const s1 = onScrubStart(at(W), A)
+    const s2 = onPath(s1, M, false)
+    expect(s2.flight?.replaces?.how).toBe('cancel')
+    expect(samePath(s2.flight!.plan.from, W)).toBe(true)
+  })
+
   it('scrub spring-back lands where it started', () => {
     const s1 = onScrubStart(at(W), M)
     const s2 = onLand(s1, s1.flight!.id, 'from')

@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   COMMIT_AT,
   TOUCH_FLICK,
+  WHEEL_ABSORB_MS,
   WHEEL_FLICK,
   WHEEL_IDLE,
   decide,
@@ -185,5 +188,55 @@ describe('trackpad wheel', () => {
   it('new fingers during the tail start a new gesture', () => {
     const absorbing: WheelState = { ...WHEEL_IDLE, phase: 'absorbing', lastT: 100, lastAbs: 3 }
     expect(wheelStep(absorbing, -20, 0, 120)[1]).toMatchObject({ type: 'start', dir: 'out' })
+  })
+
+  it('a release by silence carries no speed: the fingers had stopped', () => {
+    const { s } = run([
+      [30, 0, 0],
+      [30, 0, 16]
+    ])
+    expect(wheelIdle(s, 200)[1]).toMatchObject({ type: 'release', velocity: 0 })
+  })
+
+  it('a vertical scroll right after a swipe passes through: the swallow window ends on the first mostly vertical event', () => {
+    const { s } = run([
+      [10, 0, 0],
+      [20, 0, 16],
+      [30, 0, 32],
+      [30, 0, 48],
+      [15, 0, 64],
+      [12, 0, 80]
+    ])
+    expect(s.phase).toBe('absorbing')
+    // The reviewer's case: a vertical scroll 100 ms after the swipe, one event a frame.
+    let w = s
+    const outs: string[] = []
+    for (let i = 0; i < 20; i++) {
+      const [next, out] = wheelStep(w, i % 3 === 0 ? 1 : 0, 18, 180 + i * 16)
+      w = next
+      outs.push(out.type)
+    }
+    expect(outs.every((o) => o === 'pass')).toBe(true)
+    expect(w.phase).toBe('idle')
+  })
+
+  it('the tail itself is still swallowed, a few px of vertical noise included', () => {
+    const absorbing: WheelState = { ...WHEEL_IDLE, phase: 'absorbing', dir: 'in', lastT: 100, lastAbs: 6 }
+    expect(wheelStep(absorbing, 5, 2, 116)[1]).toEqual({ type: 'swallow' })
+    expect(wheelStep(absorbing, 0, 3, 116)[1]).toEqual({ type: 'swallow' })
+  })
+
+  it('a tail whose idle timer fired late ends at the next event after the gap, so a new swipe is not eaten', () => {
+    const absorbing: WheelState = { ...WHEEL_IDLE, phase: 'absorbing', dir: 'in', lastT: 100, lastAbs: 30 }
+    expect(wheelStep(absorbing, 12, 0, 100 + WHEEL_ABSORB_MS)[1]).toMatchObject({ type: 'start', dir: 'in' })
+  })
+})
+
+describe('touch-action', () => {
+  it('every scene hands horizontal pans to the stage: touch-action does not reach below a scroll container', () => {
+    const css = readFileSync(path.join(__dirname, '..', 'src', 'strata', 'stage', 'stage.css'), 'utf8')
+    const rule = css.match(/\.glide-scene\s*\{([^}]*)\}/)?.[1] ?? ''
+    expect(rule).toMatch(/overflow-y:\s*auto/)
+    expect(rule).toMatch(/touch-action:\s*pan-y/)
   })
 })

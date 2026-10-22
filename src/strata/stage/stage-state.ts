@@ -66,7 +66,9 @@ export const onPath = (st: StageState, path: StrataPath, browserAnimated: boolea
 
   if (browserAnimated) return { ...base, rest: path, flight: null, carry: [] }
 
-  if (current.mode === 'scrub') {
+  // A scrub still under the finger (or springing back) gives way from where it started. A committed
+  // one is settling toward its target like any flight, so it reverses in place or finishes (§7).
+  if (current.mode === 'scrub' && !current.committed) {
     if (samePath(path, current.plan.to)) return { ...base, flight: { ...current, committed: true } }
     const plan = planFlight(current.plan.from, path)
     if (plan.kind === 'none') return { ...base, rest: current.plan.from, flight: null, carry: [] }

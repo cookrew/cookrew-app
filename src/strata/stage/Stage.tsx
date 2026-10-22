@@ -27,7 +27,7 @@ interface Active {
 }
 
 type Gesture =
-  | { mode: 'rubber'; dir: Direction; x: number }
+  | { mode: 'rubber'; dir: Direction; x: number; w: number }
   | { mode: 'scrub'; dir: Direction; target: StrataPath; p: number; release: { commit: boolean; speed: number } | null }
 
 const LEVEL_LABEL = { machines: 'Machines', workspaces: 'Workspaces', agents: 'Agents', terminal: 'Terminal' } as const
@@ -39,12 +39,13 @@ const WARM_MS = 500
 
 export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageProps) {
   const [st, setSt] = useState<StageState>(() => initialStage(path))
-  // Derived from the prop during render (no extra commit): a new path is a take-off.
-  let state = st
+  // A new path is a take-off, applied during render so it costs no commit of its own. As an updater:
+  // React replays it over any update still pending at a lower priority, where a value would overwrite it.
   if (!samePath(st.seen, path)) {
-    state = onPath(st, path, browserAnimatedNow())
-    setSt(state)
+    const animated = browserAnimatedNow()
+    setSt((s) => (samePath(s.seen, path) ? s : onPath(s, path, animated)))
   }
+  const state = st
 
   const rootRef = useRef<HTMLDivElement>(null)
   const coarseRef = useRef<HTMLDivElement>(null)
@@ -61,6 +62,8 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
   const stateRef = useRef(state)
   const propsRef = useRef({ inTarget, onCommit, reducedMotion })
   const sinkRef = useRef<GestureSink | null>(null)
+  /** A rubber band still out, or springing home. */
+  const rubberRef = useRef<{ el: HTMLElement; home: Animation | null } | null>(null)
 
   const scenes = mountedScenes(state)
   const restKey = pathKey(state.rest)
@@ -94,6 +97,14 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
     if (!root || !coarse || !fine) return
     const previous = activeRef.current
     recordRest(null)
+    // A rubber band still out (or springing home) would skew the one read and outlive the flight.
+    const rubber = rubberRef.current
+    rubberRef.current = null
+    if (rubber) {
+      rubber.home?.cancel()
+      rubber.el.style.transform = ''
+    }
+    if (gestureRef.current?.mode === 'rubber') gestureRef.current = null
     // Every style the flight needs is set before the one read, so the first frame has no layout of its own.
     root.dataset.flying = ''
     for (const el of [...sceneEls.current.values(), coarse, fine]) {
@@ -111,15 +122,28 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
     // Everything back to identity before the one read; the new animations exist before the next frame.
     if (previous) {
       previous.runner.release()
-      recordLanding(previous.flight.id, 'replaced')
+      // A landing that chains straight into the next flight (the path moved on meanwhile) still landed.
+      const landed = landedRef.current
+      landedRef.current = null
+      recordLanding(previous.flight.id, landed?.flight.id === previous.flight.id ? landed.at : 'replaced')
     }
     const lookup = { el: (k: string) => sceneEls.current.get(k), registry: (k: string) => registries.current.get(k), framing }
     const geometry = measureFlight(root, flight.plan, lookup, propsRef.current.reducedMotion)
     const layers = flight.plan.scenes.map((p) => sceneEls.current.get(pathKey(p))).filter((el): el is HTMLElement => !!el)
-    if (layers.length !== flight.plan.scenes.length) return void land(flight.id, 'to')
+    if (layers.length !== flight.plan.scenes.length) {
+      // Nothing to fly: land at once, a scrub where it started (no one committed it), with nothing else in sight.
+      const at: Landing = flight.mode === 'scrub' ? 'from' : 'to'
+      const home = pathKey(at === 'to' ? flight.plan.to : flight.plan.from)
+      for (const [key, el] of sceneEls.current) if (key !== home) el.style.opacity = '0'
+      return void land(flight.id, at)
+    }
     const runner = createRunner(flight.id, geometry, { scenes: layers, coarse, fine }, durationOf(geometry), easingOf(geometry), flight.mode === 'scrub')
-    // Scenes of a replaced flight that this one does not show stay out of sight until landing unmounts them.
-    for (const el of sceneEls.current.values()) if (!runner.elements.has(el)) el.style.opacity = '0'
+    // Scenes of a replaced flight that this one does not show stay out of sight (and out of reach) until landing unmounts them.
+    for (const el of sceneEls.current.values()) {
+      const shown = runner.elements.has(el)
+      if (!shown) el.style.opacity = '0'
+      el.inert = !shown
+    }
     activeRef.current = { runner, flight }
     recordTakeoff(describe(flight, runner))
     if (flight.mode === 'auto') runner.play().then((at) => land(flight.id, at))
@@ -158,11 +182,15 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
     if (gestureRef.current?.mode === 'scrub' && stateRef.current.flight?.mode !== 'scrub') gestureRef.current = null
     if (active) recordLanding(active.flight.id, landedRef.current?.flight.id === active.flight.id ? landedRef.current.at : 'replaced')
     if (root) delete root.dataset.flying
-    for (const layer of [coarseRef.current, fineRef.current]) layer?.style.removeProperty('will-change')
+    for (const layer of [coarseRef.current, fineRef.current]) {
+      layer?.style.removeProperty('will-change')
+      if (layer) delete layer.dataset.flying
+    }
     if (el) {
       el.style.removeProperty('will-change')
       delete el.dataset.flying
       el.style.opacity = ''
+      el.inert = false
       el.dataset.landed = ''
       window.setTimeout(() => delete el.dataset.landed, 220)
     }
@@ -180,6 +208,8 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
   useLayoutEffect(() => {
     stateRef.current = state
     propsRef.current = { inTarget, onCommit, reducedMotion }
+    // At rest only the resting level is reachable: a pre-mounted one is built, never seen, never tabbed to.
+    if (!state.flight && !activeRef.current) for (const [key, el] of sceneEls.current) el.inert = key !== restKey
   })
 
   const flightId = state.flight?.id ?? 0
@@ -206,7 +236,7 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
       const level = levelOf(s.rest)
       const target = dir === 'in' ? (level === 'terminal' ? null : propsRef.current.inTarget()) : level === 'machines' ? null : parentOf(s.rest)
       if (!target || planFlight(s.rest, target).kind === 'none') {
-        gestureRef.current = { mode: 'rubber', dir, x: 0 }
+        gestureRef.current = { mode: 'rubber', dir, x: 0, w: rubberEl()?.clientWidth ?? 0 }
         if (propsRef.current.reducedMotion) shadeEdge(dir)
         return 'rubber'
       }
@@ -225,8 +255,9 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
       }
       const el = rubberEl()
       if (!el || propsRef.current.reducedMotion) return
-      const x = (g.dir === 'in' ? -1 : 1) * rubberBand(Math.max(0, travel), el.clientWidth)
+      const x = (g.dir === 'in' ? -1 : 1) * rubberBand(Math.max(0, travel), g.w)
       gestureRef.current = { ...g, x }
+      rubberRef.current = { el, home: null }
       el.style.transform = `translateX(${x}px)`
     },
     release(progress, velocity, flick, span, flicked) {
@@ -236,8 +267,13 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
         gestureRef.current = null
         const el = rubberEl()
         if (!el || g.x === 0) return
-        el.animate([{ transform: `translateX(${g.x}px)` }, { transform: 'none' }], { duration: RUBBER_HOME_MS, easing: cssOf(SPRING) })
+        const home = el.animate([{ transform: `translateX(${g.x}px)` }, { transform: 'none' }], { duration: RUBBER_HOME_MS, easing: cssOf(SPRING) })
         el.style.transform = ''
+        rubberRef.current = { el, home }
+        home.finished.then(
+          () => rubberRef.current?.home === home && (rubberRef.current = null),
+          () => undefined
+        )
         return
       }
       const v = Math.min(MAX_SPEED, Math.max(-MAX_SPEED, velocity))
@@ -265,21 +301,16 @@ export function Stage({ path, scene, inTarget, onCommit, reducedMotion }: StageP
       if (!e.isPrimary || e.button !== 0 || stateRef.current.flight) return
       const target = propsRef.current.inTarget()
       window.clearTimeout(drop)
-      if (target) setSt((s) => onWarm(s, target))
-    }
-    const onUp = () => {
-      window.clearTimeout(drop)
-      // Only a level still waiting needs dropping; anything else would be a commit for nothing.
-      if (stateRef.current.warm) drop = window.setTimeout(() => stateRef.current.warm && setSt((s) => onWarm(s, null)), WARM_MS)
+      if (!target) return
+      setSt((s) => onWarm(s, target))
+      // Armed at the press, so a press released anywhere (even off the stage) still drops it.
+      // Only a level still waiting is dropped; anything else would be a commit for nothing.
+      drop = window.setTimeout(() => stateRef.current.warm && setSt((s) => onWarm(s, null)), WARM_MS)
     }
     root.addEventListener('pointerdown', onDown, { capture: true })
-    root.addEventListener('pointerup', onUp, { capture: true })
-    root.addEventListener('pointercancel', onUp, { capture: true })
     return () => {
       window.clearTimeout(drop)
       root.removeEventListener('pointerdown', onDown, { capture: true })
-      root.removeEventListener('pointerup', onUp, { capture: true })
-      root.removeEventListener('pointercancel', onUp, { capture: true })
     }
   }, [])
 

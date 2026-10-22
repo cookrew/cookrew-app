@@ -28,7 +28,7 @@ export interface Runner {
   progress(): number
   /** From the scrub position to the end (commit) or the start (spring back). `speed` is progress per ms toward the end. */
   settle(commit: boolean, speed: number): Promise<Landing>
-  /** Play the running flight backwards in place; resolves at its start. */
+  /** Turn the running flight round in place, toward the end it was leaving; resolves there. */
   reverse(): Promise<Landing>
   /** Remove every animation of this flight from these elements (a newer flight animates them now), or from all. */
   release(only?: ReadonlySet<Element>): void
@@ -49,6 +49,8 @@ export const createRunner = (id: number, geometry: FlightGeometry, layers: Fligh
   let anims: Animation[] = []
   let span: [number, number] = [0, 1]
   let span_ms = duration
+  // Whether the animations run toward span[1] (false once reversed in place).
+  let towardEnd = true
   // Every play/settle/reverse/release starts a new generation; only the current one may land.
   let gen = 0
 
@@ -61,6 +63,7 @@ export const createRunner = (id: number, geometry: FlightGeometry, layers: Fligh
     anims = next
     span = [p0, p1]
     span_ms = ms
+    towardEnd = true
     return next
   }
 
@@ -104,8 +107,18 @@ export const createRunner = (id: number, geometry: FlightGeometry, layers: Fligh
       return landing(commit ? 'to' : 'from')
     },
     reverse() {
-      anims.forEach((a) => a.reverse())
-      return landing('from')
+      const heading = towardEnd ? span[1] : span[0]
+      const goal = heading === 1 ? 0 : 1
+      // A whole flight plays its own curve backwards. A partial one (a committed scrub settling from
+      // where the finger let go) would only get back to that point: it springs from here to the goal.
+      if ((towardEnd ? span[0] : span[1]) === goal) {
+        anims.forEach((a) => a.reverse())
+        towardEnd = !towardEnd
+      } else {
+        const p0 = this.progress()
+        start(p0, goal, clamp(Math.abs(goal - p0) * duration, SETTLE_MIN, SETTLE_MAX), cssOf(settleCurve(0)))
+      }
+      return landing(goal === 1 ? 'to' : 'from')
     },
     release(only) {
       gen += 1
