@@ -7,12 +7,12 @@ import { CERAMIC, CLEAR, INK, matOf, METAL, mix, PALS, PAPER, tone, toneI, WOOD,
 import { boxIn, openings, plaque, seatY, tray, type ArchetypeDef, type Ctx, type Plan } from './common'
 import { SEAT_R, seatGrid, type Seat, type Tier } from './layout'
 
-const CW = 8.4
-const CH = 11
-const BOARD = 1.2
+export const CW = 8.4
+export const CH = 11
+export const BOARD = 1.2
 const BACK = 1.2
 
-interface ShelfOpts {
+export interface ShelfOpts {
   D: number
   side: number
   top: number
@@ -25,7 +25,7 @@ interface ShelfOpts {
   front: number
 }
 
-interface Row {
+export interface Row {
   z0: number
   z1: number
 }
@@ -40,10 +40,10 @@ export interface ShelfPlan extends Plan {
   y1: number
 }
 
-const corners = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): V3[] =>
+export const corners = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): V3[] =>
   [x0, x1].flatMap((x) => [y0, y1].flatMap((y) => [z0, z1].map((z) => [x, y, z] as V3)))
 
-const shelfPlan = (tier: Tier, seats: Seat[], o: ShelfOpts): ShelfPlan => {
+export const shelfPlan = (tier: Tier, seats: Seat[], o: ShelfOpts): ShelfPlan => {
   const W = 2 * o.side + o.extra + tier.cols * CW
   const H = o.base + tier.rows * CH + o.top
   const rows = Array.from({ length: tier.rows }, (_, r) => {
@@ -68,14 +68,14 @@ const shelfPlan = (tier: Tier, seats: Seat[], o: ShelfOpts): ShelfPlan => {
 
 const rowFace = (pl: ShelfPlan, r: Row): V3[] => on(PX(pl.o.D + 0.01), rectUV(pl.y0, r.z0, pl.y1, r.z1))
 
-interface Finish {
+export interface Finish {
   body: Mat
   wall: string
   back: string
 }
 
 /** Shadow, body, the row openings: what every closed shelf starts with. */
-const shell = (p: Pen, pl: ShelfPlan, f: Finish) => {
+export const shell = (p: Pen, pl: ShelfPlan, f: Finish) => {
   const pts = corners(0, 0, 0, pl.o.D, pl.W, pl.H)
   return {
     pts,
@@ -87,7 +87,7 @@ const shell = (p: Pen, pl: ShelfPlan, f: Finish) => {
 }
 
 const opening2 = (p: Pen, pl: ShelfPlan, r: Row): V2[] => rowFace(pl, r).map(p.P)
-const ends = (p: Pen, pl: ShelfPlan, ctx: Ctx) => tray(p, pl.tray) + plaque(p, pl.plaque, ctx)
+export const ends = (p: Pen, pl: ShelfPlan, ctx: Ctx) => tray(p, pl.tray) + plaque(p, pl.plaque, ctx)
 
 // ── bookshelf ───────────────────────────────────────────────────────────────
 const BOOK_OPTS: ShelfOpts = { D: 9, side: 2.2, top: 2.2, base: 4, extra: 6, over: 1.4, front: 1 }

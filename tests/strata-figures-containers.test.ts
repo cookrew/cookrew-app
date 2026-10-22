@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ARCHETYPES, archetypeOf, BALL, CAPACITY, containerArt, MAX_ROWS, paletteOf } from '../src/strata/figures/container'
+import { ARCHETYPES, archetypeOf, BALL, CAPACITY, containerArt, MAX_ROWS, paletteOf, UPRIGHT_OF } from '../src/strata/figures/container'
 import { rowCounts, seatGrid, tierFor } from '../src/strata/figures/container/layout'
 import { plaqueText } from '../src/strata/figures/container/name'
 
@@ -73,7 +73,7 @@ describe('the columns hint', () => {
 
   it('seats 48 agents 4, 5 or 6 to a row when the archetype can, within budget', () => {
     for (const columns of [4, 5, 6]) {
-      for (const name of ['Paper Notes', 'CI Night Shift', 'Home Lab', 'LLM Evals', 'Brand Design', 'Backups']) {
+      for (const name of ['Paper Notes', 'CI Night Shift', 'Home Lab', 'LLM Evals', 'Brand Design', 'Backups', 'Monorepo', 'Throwaway', 'Media', 'Data Pipes']) {
         const rows = rowsOf(containerArt({ name, slots: 48, columns }).anchors)
         expect(Math.max(...rows), `${name} ${columns}`).toBe(columns)
         expect(rows.reduce((a, b) => a + b, 0)).toBe(48)
@@ -90,8 +90,38 @@ describe('the columns hint', () => {
     expect(bleachers.archetype).toBe('bleachers')
     expect(rowsOf(bleachers.anchors)).toHaveLength(MAX_ROWS.bleachers)
     expect(Math.max(...rowsOf(bleachers.anchors))).toBe(8)
-    const bench = containerArt({ name: 'Monorepo', slots: 48, columns: 4 })
-    expect(Math.max(...rowsOf(bench.anchors))).toBe(6)
+  })
+
+  it('turns a surface upright on a hinted layout: same vibe, a face that stacks', () => {
+    const faces = { Monorepo: 'pegboard', Throwaway: 'toyshelf', Media: 'cratestack', 'Data Pipes': 'pipewall', Crew: 'bleachers', 'Paper Notes': 'bookshelf' }
+    for (const [name, face] of Object.entries(faces)) {
+      const hinted = containerArt({ name, slots: 13, columns: 5 })
+      expect(hinted.face, name).toBe(face)
+      expect(hinted.archetype, name).toBe(archetypeOf(name))
+      expect(containerArt({ name, slots: 13 }).face, name).toBe(archetypeOf(name))
+    }
+    expect(Object.keys(UPRIGHT_OF).sort()).toEqual(['crate', 'pipes', 'sandbox', 'workbench'])
+  })
+
+  it('seats a real-sized workbench and sandbox at 44 px or more on a 358 px phone stage', () => {
+    for (const [name, slots] of [['Monorepo', 33], ['Throwaway', 23], ['Media', 6], ['Data Pipes', 48]] as const) {
+      const art = containerArt({ name, slots, columns: 5 })
+      expect((art.anchors['slot:0'].w / art.viewBox.w) * 358, name).toBeGreaterThanOrEqual(44)
+    }
+  })
+
+  it('keeps an upright\'s slots, tray and label inside the viewBox', () => {
+    for (const name of ['Monorepo', 'Throwaway', 'Media', 'Data Pipes']) {
+      for (const slots of [1, 7, 48]) {
+        const { anchors, viewBox } = containerArt({ name, slots, columns: 5 })
+        for (const [key, r] of Object.entries(anchors)) {
+          expect(r.x, `${name} ${slots} ${key}`).toBeGreaterThanOrEqual(-0.5)
+          expect(r.y, `${name} ${slots} ${key}`).toBeGreaterThanOrEqual(-0.5)
+          expect(r.x + r.w, `${name} ${slots} ${key}`).toBeLessThanOrEqual(viewBox.w + 0.5)
+          expect(r.y + r.h, `${name} ${slots} ${key}`).toBeLessThanOrEqual(viewBox.h + 0.5)
+        }
+      }
+    }
   })
 
   it('gives a shelf at five columns seats of 44 px or more on a 360 px stage', () => {
