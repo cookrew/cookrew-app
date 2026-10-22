@@ -8,10 +8,19 @@
 //
 // --out is emptied first, so it must sit under out/ or /tmp. The dep cache
 // lives in /tmp, as the preview's does (scripts/strata-preview.mjs).
+//
+// THE FRONT PAGE'S SAMPLE FLEET rides in the same bundle: after the shell,
+// registry/src/site-art.ts draws its six pictures with the same figure kit
+// into assets/art/ and writes site-art.json beside index.html, which the
+// registry reads at boot (site-art-manifest.ts). The kit stays out of the
+// registry's own bundle that way.
 import { build } from 'vite'
+import { build as bundle } from 'esbuild'
 import react from '@vitejs/plugin-react'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const tree = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const at = process.argv.indexOf('--out')
@@ -30,4 +39,21 @@ await build({
   plugins: [react()],
   build: { outDir, emptyOutDir: true }
 })
-console.log(`strata shell: ${outDir}`)
+
+const scratch = mkdtempSync(path.join(tmpdir(), 'strata-site-art-'))
+try {
+  const composer = path.join(scratch, 'site-art.mjs')
+  await bundle({ entryPoints: [path.join(tree, 'registry', 'src', 'site-art.ts')], bundle: true, platform: 'node', format: 'esm', outfile: composer, logLevel: 'warning' })
+  const { composeSampleArt, ART_MANIFEST } = await import(pathToFileURL(composer).href)
+  const { files, manifest } = composeSampleArt()
+  for (const [rel, svg] of Object.entries(files)) {
+    const file = path.join(outDir, rel)
+    mkdirSync(path.dirname(file), { recursive: true })
+    writeFileSync(file, svg)
+  }
+  writeFileSync(path.join(outDir, ART_MANIFEST), JSON.stringify(manifest))
+  const bytes = Object.values(files).reduce((sum, svg) => sum + svg.length, 0)
+  console.log(`strata shell: ${outDir} (+ ${Object.keys(files).length} sample pictures, ${(bytes / 1024).toFixed(0)} KB)`)
+} finally {
+  rmSync(scratch, { recursive: true, force: true })
+}

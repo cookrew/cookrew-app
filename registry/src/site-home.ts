@@ -17,6 +17,8 @@ import {
 import { commitsSection, compareTable, featuresGrid } from './site-features'
 import { faqPage, organization, softwareApplication, teamList, webPage } from './site-seo'
 import { BRAND_LOCKUP_CSS, BRAND_LOCKUP_HTML } from './site-brand'
+import type { SampleArt } from './site-art-manifest'
+import { STRATA_STAGE_CSS, sampleStage } from './site-strata'
 
 /**
  * THE FRONT PAGE — one page, top to bottom (owner ruling, 2026-09-06).
@@ -60,6 +62,12 @@ export interface HomeInput {
    * cannot learn this any other way — it runs no script, by design.
    */
   account?: string | null
+  /**
+   * The sample fleet's pictures, from the strata shell's bundle. With them the
+   * first screen is the sample at three levels and the promo moves down to
+   * the features; without (no shell deployed) the page is as it was.
+   */
+  art?: SampleArt | null
 }
 
 /** The definition's first sentence: enough to quote, short enough to read. */
@@ -273,11 +281,12 @@ $ cookrew orch "Forge"</code>
 }
 
 /** FEATURES: every one with its recorded frame, then what each thing can do, the questions, the proof. */
-function featuresSection(commits: readonly Commit[] | null): string {
+function featuresSection(commits: readonly Commit[] | null, withPromo: boolean): string {
   return `<section id="features"><div class="wrap">
 <p class="kicker"><span class="no">FEATURES</span>recorded, not described</p>
 <h2>What Cookrew does</h2>
 <p class="lede">${esc(DEFINITION)}</p>
+${withPromo ? promo() : ''}
 ${featuresGrid()}
 <h3 id="compare" style="margin-top:32px">A chat tab, one CLI agent, or a team</h3>${compareTable()}
 <h3 id="faq" style="margin-top:32px">Questions and answers</h3><div class="faq">${FAQ.map((f) => `<details><summary>${esc(f.q)}</summary><p>${esc(f.a)}</p></details>`).join('')}</div>
@@ -346,7 +355,7 @@ export function homePage(input: HomeInput): Page {
       ...(input.account ? { account: input.account, cache: 0 } : {}),
       description: DESCRIPTION,
       path: '/',
-      preload: [`${SITE_FRAMES}promo-poster.jpg`],
+      ...(input.art ? {} : { preload: [`${SITE_FRAMES}promo-poster.jpg`] }),
       jsonLd: [
         organization(),
         softwareApplication(input.release),
@@ -363,13 +372,13 @@ export function homePage(input: HomeInput): Page {
     },
     `<div class="wrap home">
 <div class="home-body">
-<style>${BRAND_LOCKUP_CSS}</style>
-<div class="hero"><div class="wrap">
+<style>${BRAND_LOCKUP_CSS}${input.art ? STRATA_STAGE_CSS : ''}</style>
+<div class="hero${input.art ? ' levels' : ''}"><div class="wrap">
 <div>${BRAND_LOCKUP_HTML}<span class="tagline">OPEN SOURCE · ${FACTS.harnesses.slice(0, 4).join(' · ').toUpperCase()}</span>
 <h1>${esc(HEADLINE)}</h1>
 <p class="lede">${esc(ONE_LINE)} Every turn is a checkpoint.</p>
 ${heroButtons(input.release, live)}</div>
-<div>${promo()}</div>
+${input.art ? sampleStage(input.art) : `<div>${promo()}</div>`}
 </div></div>
 
 <div class="wrap" style="padding:0">${rentStrip(input)}${dock(input)}</div>
@@ -378,7 +387,7 @@ ${marketSection(input)}
 
 ${startSection()}
 
-${featuresSection(input.commits ?? null)}
+${featuresSection(input.commits ?? null, Boolean(input.art))}
 </div>
 ${catalog(input.release)}
 </div>`

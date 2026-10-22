@@ -26,6 +26,7 @@ import type { NamesFeature } from './names'
 import { teamAddress } from './v2-seats'
 import { mePage } from './site-account'
 import { serveShellAsset, shellPage, type ShellBundle } from './strata-shell'
+import { readSampleArt } from './site-art-manifest'
 import { createCanvasRelay, type CanvasRelay } from './v2-canvas-relay'
 
 /**
@@ -156,6 +157,8 @@ function defaultAuthorize(store: RegistryStore): (id: string) => Verdict {
 export function createRegistry(deps: RegistryDeps): Server {
   const { store, log } = deps
   const authorize = deps.authorize ?? ((id: string) => defaultAuthorize(store)(id))
+  /** The front page's sample fleet, drawn at the shell's build; null without a shell (the page stays as it was). */
+  const sampleArt = readSampleArt(deps.shell)
 
   /**
    * What the write routes need, assembled once.
@@ -884,6 +887,15 @@ export function createRegistry(deps: RegistryDeps): Server {
       const bare = (value: string): string => (decode(value) ?? '').replace(/^@/, '')
 
       if (parts.length === 0) {
+        // Signed in, the front page IS the reader's fleet: level 0 of the
+        // strata shell, whose addresses all live under /me. Signed out (or
+        // with no shell deployed) it is the page below, whose stage shows the
+        // same three levels on a sample fleet.
+        if (deps.v2 && deps.shell && signedIn(request, deps.v2) !== null) {
+          response.writeHead(302, { location: '/me', 'cache-control': 'private, no-store', vary: 'cookie' })
+          response.end()
+          return
+        }
         deps.pulse?.page('/')
         // The front page is a document and can never ask who is reading; the
         // request already said. With an account the page is that person's and
@@ -906,7 +918,8 @@ export function createRegistry(deps: RegistryDeps): Server {
                 stars: starsOf,
                 pulse: pulseOf,
                 linesToday: deps.pulse?.linesToday() ?? 0,
-                account: reader
+                account: reader,
+                art: sampleArt
               })
             )
           })

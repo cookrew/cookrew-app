@@ -9,6 +9,7 @@ import { DoorStore } from '../registry/src/doors'
 import { IdentityService } from '../registry/src/identity'
 import { TransparencyLog } from '../registry/src/log'
 import { createRegistry } from '../registry/src/server'
+import { ART_MANIFEST, composeSampleArt } from '../registry/src/site-art'
 import { RegistryStore } from '../registry/src/store'
 import { StarStore } from '../registry/src/stars'
 import { loadShellBundle, readShellBundle } from '../registry/src/strata-shell'
@@ -245,6 +246,9 @@ const registry = (shell: ReturnType<typeof loadShellBundle>): Server =>
 beforeAll(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'strata-registry-'))
   shellFile = path.join(dir, 'strata-shell-assets.json')
+  // The front page's sample pictures ride in the shell's bundle, as strata-build.mjs puts them there.
+  const art = composeSampleArt()
+  const pictures = Object.fromEntries(Object.entries(art.files).map(([file, svg]) => [file, { type: 'image/svg+xml', body: svg }]))
   writeFileSync(
     shellFile,
     JSON.stringify({
@@ -252,7 +256,9 @@ beforeAll(async () => {
       index: '<!doctype html><title>Strata</title><script type="module" src="/strata/assets/index-abc123.js"></script><div id="root"></div>',
       files: {
         'assets/index-abc123.js': { type: 'text/javascript; charset=utf-8', body: 'export {}' },
-        'favicon.svg': { type: 'image/svg+xml', body: '<svg/>' }
+        'favicon.svg': { type: 'image/svg+xml', body: '<svg/>' },
+        ...pictures,
+        [ART_MANIFEST]: { type: 'application/json', body: JSON.stringify(art.manifest) }
       }
     })
   )
@@ -422,6 +428,33 @@ describe('/me as level 0', () => {
       expect(res.status, at).toBe(401)
       expect(await res.text()).not.toContain('/strata/assets/')
     }
+  })
+
+  it('sends a signed-in reader from the front page to their fleet; a signed-out one gets the sample', async () => {
+    const mine = await fetch(`${shellSite.origin}/`, { headers: { authorization: `Bearer ${token}` }, redirect: 'manual' })
+    expect(mine.status).toBe(302)
+    expect(mine.headers.get('location')).toBe('/me')
+    expect(mine.headers.get('cache-control')).toBe('private, no-store')
+    const anyone = await fetch(`${shellSite.origin}/`, { redirect: 'manual' })
+    expect(anyone.status).toBe(200)
+    const sample = await anyone.text()
+    expect(sample).toContain('class="strata"')
+    // Every picture the stage shows is one the shell's bundle serves.
+    const shown = [...sample.matchAll(/<img src="(\/strata\/assets\/art\/[^"]+)"/g)].map((m) => m[1])
+    expect(shown).toHaveLength(6)
+    for (const at of shown) {
+      const res = await fetch(`${shellSite.origin}${at}`)
+      expect(res.status, at).toBe(200)
+      expect(res.headers.get('content-type'), at).toBe('image/svg+xml')
+      expect(res.headers.get('cache-control'), at).toContain('immutable')
+    }
+    // No shell deployed: /me is the account page, so the front page stays the front page, with its promo.
+    const mac = await claim(site.origin, 'yarrow')
+    const noShell = await fetch(`${site.origin}/`, { headers: { authorization: `Bearer ${mac.token}` }, redirect: 'manual' })
+    expect(noShell.status).toBe(200)
+    const promo = await noShell.text()
+    expect(promo).not.toContain('class="strata"')
+    expect(promo).toContain('promo-poster')
   })
 
   it('keeps /me the account page on a registry with no shell deployed', async () => {
