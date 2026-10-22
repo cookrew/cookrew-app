@@ -312,6 +312,15 @@ describe('the shell sheet inside the app', () => {
       expect(leaks, file).toEqual([])
     }
   })
+
+  it('stays light inside the app, which has no dark theme, whatever the system says', () => {
+    // Every dark rule must step aside for a shell the host pinned light.
+    const css = readFileSync('src/strata/levels/strata.css', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const dark = [...css.matchAll(/@media \(prefers-color-scheme: dark\) \{([\s\S]*?)\n\}/g)].flatMap((m) => selectors(m[1]))
+    expect(dark.length).toBeGreaterThan(0)
+    for (const sel of dark) expect(sel).toContain(":not([data-scheme='light'])")
+    expect(readFileSync('src/renderer/src/levels/LevelsView.tsx', 'utf8')).toMatch(/<StrataShell[\s\S]*?scheme="light"/)
+  })
 })
 
 describe('landing on a host terminal', () => {

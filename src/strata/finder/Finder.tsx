@@ -53,10 +53,19 @@ export function Finder({ fleet, index, coded, context, initialQuery, onClose, on
   const codes = useMemo(() => new Map(coded.map((c) => [c.key, c.code])), [coded])
   const current = hits[Math.min(active, hits.length - 1)] ?? null
 
-  useEffect(() => input.current?.focus(), [])
-  useEffect(() => setActive(0), [query])
-  useEffect(() => onGlow(glow), [glow, onGlow])
-  useEffect(() => onActive(current ? hitPath(current) : null), [current, onActive])
+  // Block bodies: a callback's return value must never become the effect's cleanup.
+  useEffect(() => {
+    input.current?.focus()
+  }, [])
+  useEffect(() => {
+    setActive(0)
+  }, [query])
+  useEffect(() => {
+    onGlow(glow)
+  }, [glow, onGlow])
+  useEffect(() => {
+    onActive(current ? hitPath(current) : null)
+  }, [current, onActive])
   useEffect(() => () => onGlow(null), [onGlow])
 
   return (

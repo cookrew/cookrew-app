@@ -32,8 +32,11 @@
   --shadow: rgba(45, 42, 32, 0.18);
   color-scheme: light dark;
 }
+.strata[data-scheme='light'] {
+  color-scheme: light;
+}
 @media (prefers-color-scheme: dark) {
-  .strata {
+  .strata:not([data-scheme='light']) {
     --paper: #17140f;
     --dot: rgba(239, 230, 210, 0.1);
     --panel: #221e17;
@@ -49,7 +52,7 @@
     --replied-ink: #5ee27a;
     --shadow: rgba(0, 0, 0, 0.5);
   }
-  .cf {
+  .strata:not([data-scheme='light']) .cf {
     color: #e9e2cf;
     --cf-shadow: #0b0d1c;
   }

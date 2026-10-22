@@ -33,12 +33,14 @@ export function LevelsView({ onTerminal }: {
   const history = useLevelsHistory(fleet, loaded)
   const agentId = history.path.agent ?? null
 
-  useEffect(() => onTerminal(agentId), [agentId, onTerminal])
+  useEffect(() => {
+    onTerminal(agentId)
+  }, [agentId, onTerminal])
   useEffect(() => () => onTerminal(null), [onTerminal])
 
   return (
     <div className="cr-levels">
-      <StrataShell fleet={fleet} loaded={loaded} history={history} terminal={terminalSlot} loadDetail={loadDetail} modK={false} />
+      <StrataShell fleet={fleet} loaded={loaded} history={history} terminal={terminalSlot} loadDetail={loadDetail} modK={false} scheme="light" />
     </div>
   )
 }

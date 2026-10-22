@@ -73,6 +73,8 @@ export interface StrataShellProps {
   loadDetail?: LoadDetail
   /** False where the host owns ⌘K (the desktop's command box): the finder keeps / and type-to-find. */
   modK?: boolean
+  /** 'light' where the host has no dark theme (the desktop app): the system's dark mode then leaves the shell alone. */
+  scheme?: 'system' | 'light'
 }
 
 /**
@@ -82,7 +84,7 @@ export interface StrataShellProps {
 const hostDialogOpen = (): boolean =>
   [...document.querySelectorAll('[aria-modal="true"]')].some((el) => !el.closest('.strata'))
 
-export function StrataShell({ fleet, loaded, history, terminal, loadDetail, modK = true }: StrataShellProps) {
+export function StrataShell({ fleet, loaded, history, terminal, loadDetail, modK = true, scheme = 'system' }: StrataShellProps) {
   const { path, notice, clearNotice, go: navigate, out: navigateOut } = history
   const host = useRef<HTMLDivElement>(null)
   const viewport = useViewport(host)
@@ -244,7 +246,12 @@ export function StrataShell({ fleet, loaded, history, terminal, loadDetail, modK
   useEffect(() => () => hover.dispose(), [hover])
 
   const finderContext = useMemo(() => ({ machine: path.machine, workspace: path.workspace }), [path.machine, path.workspace])
-  const onFinderActive = useCallback((target: StrataPath | null) => target && setHighlight(target, 'pointer'), [setHighlight])
+  const onFinderActive = useCallback(
+    (target: StrataPath | null) => {
+      if (target) setHighlight(target, 'pointer')
+    },
+    [setHighlight]
+  )
   const summarySeat = model.seats.find((s) => s.key === summaryKey) ?? null
   // On L2 the fan opens above the avatar with the card: anchor the card on both.
   const cardSeat =
@@ -284,7 +291,7 @@ export function StrataShell({ fleet, loaded, history, terminal, loadDetail, modK
 
   return (
     <Probe>
-      <div className={`strata${touch ? ' touch' : ''}${reducedMotion ? ' reduced' : ''}`}>
+      <div className={`strata${touch ? ' touch' : ''}${reducedMotion ? ' reduced' : ''}`} data-scheme={scheme}>
         <TopBar path={path} onBack={goOut} fleet={fleet} loaded={loaded} onGo={go} onFind={() => openFinder('')} findKey={modK ? '⌘K' : '/'} />
         <div className="stage-host" ref={host}>
           <LevelsContext.Provider value={env}>
