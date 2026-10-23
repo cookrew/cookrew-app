@@ -108,7 +108,7 @@ describe('the ordered keystroke queue', () => {
 })
 
 describe('a keystroke request that never answers', () => {
-  it('is aborted at the deadline, and the typing behind it still goes — 2026-10-18, Tailscale dropped mid-request', async () => {
+  it('is aborted at the deadline and sent again, and the typing behind it still goes — 2026-10-18, Tailscale dropped mid-request', async () => {
     const sent: string[] = []
     const signals: AbortSignal[] = []
     const push = createRawInputQueue((_id, data, signal) => {
@@ -116,7 +116,7 @@ describe('a keystroke request that never answers', () => {
       signals.push(signal)
       // The first never settles, as a fetch on a dead path does not.
       return sent.length === 1 ? new Promise(() => undefined) : Promise.resolve()
-    }, 20)
+    }, { deadlineMs: 20 })
     push('t1', 'a')
     push('t1', 'b')
     push('t1', 'c')
@@ -124,7 +124,9 @@ describe('a keystroke request that never answers', () => {
     await new Promise((r) => setTimeout(r, 40))
     expect(signals[0].aborted).toBe(true)
     expect((signals[0].reason as Error).name).toBe('TimeoutError')
-    expect(sent).toEqual(['a', 'bc'])
+    // No answer is not "not typed": the same batch goes again, and the Mac
+    // types its id once (main/once-by-key.ts).
+    expect(sent).toEqual(['a', 'a', 'bc'])
   })
 
   it('leaves an answered request alone', async () => {
@@ -132,9 +134,64 @@ describe('a keystroke request that never answers', () => {
     const push = createRawInputQueue((_id, _data, signal) => {
       signals.push(signal)
       return Promise.resolve()
-    }, 20)
+    }, { deadlineMs: 20 })
     push('t1', 'a')
     await new Promise((r) => setTimeout(r, 40))
     expect(signals[0].aborted).toBe(false)
+  })
+})
+
+describe('a keystroke batch that got no answer', () => {
+  const lost = (): Error => new TypeError('Load failed')
+
+  it('is sent again with the SAME id until it is answered — the letters typed as the plane moved', async () => {
+    const calls: Array<{ data: string; id: string }> = []
+    const push = createRawInputQueue(
+      (_t, data, _s, id) => {
+        calls.push({ data, id })
+        return calls.length < 3 ? Promise.reject(lost()) : Promise.resolve()
+      },
+      { retryable: () => true, nonce: 'n' }
+    )
+    push('t1', 'x')
+    await new Promise((r) => setTimeout(r, 400))
+    expect(calls.map((c) => c.data)).toEqual(['x', 'x', 'x'])
+    expect(new Set(calls.map((c) => c.id))).toEqual(new Set(['n.1']))
+    push('t1', 'y')
+    await new Promise((r) => setTimeout(r, 10))
+    expect(calls.at(-1)).toEqual({ data: 'y', id: 'n.2' })
+  })
+
+  it('is never sent again once the Mac answered, whatever it said', async () => {
+    const calls: string[] = []
+    const push = createRawInputQueue(
+      (_t, data) => {
+        calls.push(data)
+        return Promise.reject(new Error('409'))
+      },
+      { retryable: () => false }
+    )
+    push('t1', 'a')
+    await new Promise((r) => setTimeout(r, 300))
+    push('t1', 'b')
+    await new Promise((r) => setTimeout(r, 10))
+    expect(calls).toEqual(['a', 'b'])
+  })
+
+  it('is given up after giveUpMs, and the typing behind it goes', async () => {
+    let clock = 0
+    const calls: string[] = []
+    const push = createRawInputQueue(
+      (_t, data) => {
+        calls.push(data)
+        clock += 1_000
+        return data === 'a' ? Promise.reject(lost()) : Promise.resolve()
+      },
+      { retryable: () => true, giveUpMs: 2_500, now: () => clock }
+    )
+    push('t1', 'a')
+    push('t1', 'b')
+    await new Promise((r) => setTimeout(r, 900))
+    expect(calls).toEqual(['a', 'a', 'a', 'b'])
   })
 })

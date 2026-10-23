@@ -53,6 +53,17 @@ interface ParseOptions {
 }
 
 /** Turn a server answer into a value, or into the right kind of failure. */
+/** The Mac ANSWERED, with a status that is not a success: not a transport failure. */
+export class HttpStatusError extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message)
+    this.name = 'HttpStatusError'
+  }
+}
+
 async function parse<T>(response: Response, options: ParseOptions = {}): Promise<T> {
   if (!response.ok) {
     const detail = await response.json().catch(() => ({ error: String(response.status) }))
@@ -65,7 +76,7 @@ async function parse<T>(response: Response, options: ParseOptions = {}): Promise
       if (!(options.passive && failure.scope === 'read-only')) authStore().report(failure)
       throw failure
     }
-    throw new Error(message)
+    throw new HttpStatusError(message, response.status)
   }
   const text = await response.text()
   return (text ? JSON.parse(text) : undefined) as T
@@ -200,10 +211,21 @@ function passivePost(path: string, body: unknown): void {
 /**
  * Keystrokes for the terminal, ordered and coalesced (raw-input-queue.ts).
  * req() has already reported any auth failure to the store by the time the
- * queue swallows the rejection — same contract as post() above.
+ * queue swallows the rejection — same contract as post() above. A batch that
+ * got no answer at all is sent again with its id; one the Mac answered,
+ * whatever it said, is not.
  */
-const rawInput = createRawInputQueue((terminalId, data, signal) =>
-  req(apiPath(`/api/terminal/${terminalId}/raw`), 'POST', { data }, { signal })
+const rawInput = createRawInputQueue(
+  (terminalId, data, signal, id) => req(apiPath(`/api/terminal/${terminalId}/raw`), 'POST', { data, id }, { signal }),
+  // An answer from the Mac (any status, or a body that was not JSON) is not
+  // sent again: only a batch that got no answer at all may not have been
+  // typed. A 502-504 is the relay saying it could not reach the Mac.
+  {
+    retryable: (error) =>
+      error instanceof HttpStatusError
+        ? error.status >= 502 && error.status <= 504
+        : !(error instanceof AuthError) && !(error instanceof SyntaxError)
+  }
 )
 
 /**
@@ -269,9 +291,10 @@ function sharedEvents(): ReconnectingStream {
       // than a fact the moment the channel dies.
       onState: setPathLink,
       // A direct plane that cannot deliver this stream within SWITCH_PROVE_MS
-      // carries nothing a session needs (live-stream.ts): it is given up, and
-      // the old stream kept the session meanwhile. A no-op on the relay.
-      onSwitchFailed: () => planeHealth().condemn()
+      // carries nothing a session needs (live-stream.ts): the link is asked
+      // whether it is there, and the plane given up when it is not, while
+      // the old stream keeps the session. A no-op on the relay.
+      onSwitchFailed: () => planeHealth().suspect('a new stream delivered nothing')
     })
     events = stream
     // A live stream does not re-read its own URL, so a plane switch has to

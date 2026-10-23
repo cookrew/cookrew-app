@@ -51,6 +51,7 @@ import { handleStreamAdapters } from "./stream-adapters";
 import type { LoopHealthSnapshot } from "./loop-health";
 import { ROUTE_ID_RE, type CardRouteState, type RouteState } from "../shared/route";
 import { ownerSubmit } from "./ask";
+import { BATCH_ID, createOnceByKey } from "./once-by-key";
 import { MAX_ATTACHMENT_BYTES } from "./attachments";
 import type { SousDoor } from "./socket-server";
 import { wallProjection, type InboxRow } from "../shared/inbox-rank";
@@ -488,6 +489,9 @@ async function probeWarmed(board: BoardSources): Promise<void> {
     if (timer) clearTimeout(timer);
   }
 }
+
+/** Keystroke batches already typed, by terminal and the phone's batch id. */
+const rawInputOnce = createOnceByKey<Awaited<ReturnType<typeof ownerSubmit>>>();
 
 /**
  * Boot nonces already honoured, so a stream that reconnects on its own with
@@ -1462,14 +1466,22 @@ export async function handleMobileApi(
       return true;
     }
     if (method === "POST" && ptyMatch[2] === "raw") {
-      const body = await readJson<{ data?: string }>(request);
+      const body = await readJson<{ data?: string; id?: string }>(request);
       if (typeof body.data === "string") {
+        const data = body.data;
         // /raw is a producer (Sol r7 P0-2): its bytes can be a prompt plus
         // Enter, so they go through THE submit primitive — classified,
         // leased across paste+CR when submit-capable, ordinarily guarded
         // when not. A refusal is a 409 the caller can act on, never a
         // silently dropped write followed by an ok:true.
-        const verdict = await ownerSubmit(session, body.data);
+        //
+        // A batch the phone sent again after getting no answer carries the
+        // same id, and is typed once (once-by-key.ts).
+        const submit = () => ownerSubmit(session, data);
+        const verdict =
+          typeof body.id === "string" && BATCH_ID.test(body.id)
+            ? await rawInputOnce(`${terminalId}:${body.id}`, submit)
+            : await submit();
         if (!verdict.ok) {
           respondJson(response, 409, { error: verdict.reason });
           return true;

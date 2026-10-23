@@ -93,8 +93,8 @@ export interface CanvasBridge {
 }
 
 export interface CanvasBridgeDeps {
-  /** Frames going up. canvas-link's `send`. */
-  readonly send: (line: string) => void
+  /** Frames going up. canvas-link's `send`; the frame itself, for a sender that sorts them. */
+  readonly send: (line: string, frame: RelayFrame) => void
   readonly dial?: BridgeDialer
   readonly maxOpen?: number
   readonly log?: (message: string) => void
@@ -191,7 +191,7 @@ export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
   /** Local calls in flight, so the caller hanging up stops the desktop working. */
   const calls = new Map<string, BridgeCall>()
 
-  const send = (frame: RelayFrame): void => deps.send(encodeFrame(frame))
+  const send = (frame: RelayFrame): void => deps.send(encodeFrame(frame), frame)
 
   const abort = (id: string, reason: string): void => {
     arriving.delete(id)

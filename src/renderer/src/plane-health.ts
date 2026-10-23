@@ -29,6 +29,17 @@ import { RELAY_PLANE, dataPlane, setDataPlane } from './data-plane'
  * fallback stick long enough to be worth something, and the loop re-races
  * after it — the phone that walks back into the house is on the LAN again
  * within a minute, without anybody tapping anything.
+ *
+ * BUT FIRST, ASK THE LINK. Both signals are about the requests and streams
+ * riding a plane, and on the WebRTC plane the link itself can be asked: a
+ * ping the Mac answers in milliseconds when it is there (path/rtc-link.ts ·
+ * probe). Before 2026-10-24 a stream that went quiet (its heartbeat stuck in
+ * the Mac's send queue behind a snapshot or a browser card's frames) dropped a
+ * perfectly live LAN link onto the relay, the race put it back a minute
+ * later, and the badge flapped LAN/RELAY all evening. Now a link that answers
+ * keeps the plane — the stream reopens on it by itself — and only one that
+ * does not answer is given up. A plane that keeps needing the question
+ * (KEEPS_PER_WINDOW in HOLD_REPEAT_WINDOW_MS) stops being given the benefit.
  */
 
 /** Transport failures in a row before a direct plane is abandoned. */
@@ -57,7 +68,21 @@ export const HOLD_AFTER_FALLBACK_MS = 30_000
 export const HOLD_REPEAT_WINDOW_MS = 5 * 60_000
 export const HOLD_MAX_MS = 5 * 60_000
 
+/** How many times a link that answered may keep the plane within HOLD_REPEAT_WINDOW_MS. */
+export const KEEPS_PER_WINDOW = 3
+
 export type LinkHealth = 'live' | 'reconnecting' | 'failed'
+
+/**
+ * Who to ask whether the plane is still there: the WebRTC link when the plane
+ * is the link (path/companion.ts registers it), nobody otherwise. Null means
+ * there is nobody to ask, and the evidence is acted on as it stands.
+ */
+type AskAlive = (reason: string) => Promise<boolean> | null
+let liveProbe: AskAlive | null = null
+export const setPlaneLiveProbe = (probe: AskAlive | null): void => {
+  liveProbe = probe
+}
 
 export interface PlaneHealthDeps {
   readonly now?: () => number
@@ -68,6 +93,8 @@ export interface PlaneHealthDeps {
   readonly fallBack?: () => void
   /** The grace a dropped stream gets on the plane in use. */
   readonly graceMs?: () => number
+  /** Is the plane still there? setPlaneLiveProbe's by default. */
+  readonly alive?: AskAlive
 }
 
 export interface PlaneHealth {
@@ -86,7 +113,15 @@ export interface PlaneHealth {
    * pairing token to it. The hold comes with it, so the switcher cannot adopt
    * the same name again on the next tick.
    */
-  readonly condemn: () => void
+  readonly condemn: (reason?: string) => void
+  /**
+   * THIS PLANE MAY HAVE STOPPED WORKING — a stream that went silent, one that
+   * would not open on it. Asked of the link first, as the two signals above
+   * are; falls back, with the hold, only when nothing answers.
+   */
+  readonly suspect: (reason: string) => void
+  /** Why the plane was last given up, for the report. */
+  readonly lastReason: () => string | null
   /** Is the switcher holding off after a fallback? */
   readonly held: () => boolean
   /** When the current hold ends (0 when there is none), so a race can be set for it. */
@@ -102,12 +137,19 @@ export const createPlaneHealth = (deps: PlaneHealthDeps = {}): PlaneHealth => {
   const fallBack = deps.fallBack ?? ((): void => setDataPlane(RELAY_PLANE))
   const graceMs =
     deps.graceMs ?? ((): number => (dataPlane().kind === 'tailnet' ? TAILNET_STREAM_GRACE_MS : STREAM_GRACE_MS))
+  const alive = deps.alive ?? ((reason: string): Promise<boolean> | null => liveProbe?.(reason) ?? null)
 
   let failures = 0
   let holdUntil = 0
   let lastGaveAt = -Infinity
   let lastHold = 0
   let grace: unknown = null
+  let asking = false
+  /** Bumped by reset, so an answer to a question asked before it is ignored. */
+  let era = 0
+  let keeps: number[] = []
+  let lastReason: string | null = null
+  let stream: LinkHealth = 'live'
 
   const clearGrace = (): void => {
     if (grace === null) return
@@ -115,15 +157,52 @@ export const createPlaneHealth = (deps: PlaneHealthDeps = {}): PlaneHealth => {
     grace = null
   }
 
-  const give = (): void => {
-    failures = 0
-    clearGrace()
-    if (!direct()) return
+  /**
+   * Fall back, with the hold. `asked`: the link was asked and did not answer,
+   * and closing itself it has usually moved the plane already — the hold is
+   * set all the same, or the next race would knock the same dead link open.
+   */
+  const fall = (reason: string, asked = false): void => {
+    if (!direct() && !asked) return
     const at = now()
     lastHold = at - lastGaveAt < HOLD_REPEAT_WINDOW_MS ? Math.min(lastHold * 2, HOLD_MAX_MS) : HOLD_AFTER_FALLBACK_MS
     lastGaveAt = at
     holdUntil = at + lastHold
-    fallBack()
+    lastReason = reason
+    if (direct()) fallBack()
+  }
+
+  const armGrace = (): void => {
+    grace = schedule(() => {
+      grace = null
+      give('the push stream did not come back', true)
+    }, graceMs())
+  }
+
+  /** Give the plane up — after asking whoever can say it is still there, when `ask`. */
+  const give = (reason: string, ask: boolean): void => {
+    failures = 0
+    clearGrace()
+    if (!direct()) return
+    if (!ask) return fall(reason)
+    // The same question is already out; its answer covers this one too.
+    if (asking) return
+    const at = now()
+    keeps = keeps.filter((kept) => at - kept < HOLD_REPEAT_WINDOW_MS)
+    const question = keeps.length < KEEPS_PER_WINDOW ? alive(reason) : null
+    if (!question) return fall(reason)
+    asking = true
+    const askedIn = era
+    void question
+      .catch(() => false)
+      .then((answered) => {
+        if (askedIn !== era) return
+        asking = false
+        if (!answered) return fall(reason, true)
+        keeps = [...keeps, now()]
+        // Kept, and the stream is still down: it gets its grace again.
+        if (stream !== 'live' && grace === null && direct()) armGrace()
+      })
   }
 
   return {
@@ -134,9 +213,10 @@ export const createPlaneHealth = (deps: PlaneHealthDeps = {}): PlaneHealth => {
       }
       if (!direct()) return
       failures += 1
-      if (failures >= DIRECT_FAILURE_LIMIT) give()
+      if (failures >= DIRECT_FAILURE_LIMIT) give(`${DIRECT_FAILURE_LIMIT} requests in a row got no answer`, true)
     },
     link: (state) => {
+      stream = state
       if (state === 'live') {
         clearGrace()
         return
@@ -144,12 +224,11 @@ export const createPlaneHealth = (deps: PlaneHealthDeps = {}): PlaneHealth => {
       if (!direct() || grace !== null) return
       // The window is armed once per outage, not once per retry: a stream
       // backing off through five attempts must not reset its own deadline.
-      grace = schedule(() => {
-        grace = null
-        give()
-      }, graceMs())
+      armGrace()
     },
-    condemn: give,
+    condemn: (reason = 'it is not the Mac') => give(reason, false),
+    suspect: (reason) => give(reason, true),
+    lastReason: () => lastReason,
     held: () => now() < holdUntil,
     holdEndsAt: () => holdUntil,
     reset: () => {
@@ -157,6 +236,11 @@ export const createPlaneHealth = (deps: PlaneHealthDeps = {}): PlaneHealth => {
       holdUntil = 0
       lastGaveAt = -Infinity
       lastHold = 0
+      asking = false
+      era += 1
+      keeps = []
+      lastReason = null
+      stream = 'live'
       clearGrace()
     }
   }

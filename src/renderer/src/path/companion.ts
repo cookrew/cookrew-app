@@ -18,7 +18,7 @@ import { recordAttempts, type PathAttempt } from '../path-attempts'
 import { nameLive } from './name-oracle'
 import { createPathMemory, watchNetwork, type PathMemory, type PathMemoryDeps } from '../path-memory'
 import { planeFetch } from '../plane-fetch'
-import { planeHealth, type LinkHealth } from '../plane-health'
+import { HOLD_REPEAT_WINDOW_MS, KEEPS_PER_WINDOW, planeHealth, setPlaneLiveProbe, type LinkHealth } from '../plane-health'
 import { followDataPlane } from '../plane-streams'
 import { onStreamDeath } from '../stream-watch'
 import { tailnetWorthIt, warmRoundTrip } from './plane-quality'
@@ -246,16 +246,21 @@ const tellTheDesktop = createPathReporter({
 
 /** One WebRTC attempt per this long at most: each one opens a peer on the Mac. */
 const RTC_EVERY_MS = 2 * 60 * 1000
+/** After a link ends, the race that knocks it open again waits this long (the plane moves first). */
+const RACE_AFTER_END_MS = 300
 let lastRtcAt = 0
 /** How the last adopted link ended, carried by the next report and then dropped. */
 let lastEnd: RtcRow | null = null
+/** When an ended link let the next knock skip the gap, within HOLD_REPEAT_WINDOW_MS. */
+let quickKnocks: readonly number[] = []
 
 /**
  * THE DIRECT LINK BY WEBRTC (path/rtc-adopt.ts), tried on the relay only and
- * at most every two minutes. When it opens, the plane is LAN or TAILNET by
- * the Mac's word and the data moves onto it; its row rides the path report.
+ * at most every two minutes after one that did not open. When it opens, the
+ * plane is LAN or TAILNET by the Mac's word and the data moves onto it; its
+ * row rides the path report. `onEnd` hears when an adopted link ends.
  */
-const rtcKnock = async (): Promise<RtcRow[]> => {
+const rtcKnock = async (onEnd: () => void): Promise<RtcRow[]> => {
   if (typeof RTCPeerConnection !== 'function' || dataPlane().kind !== 'relay') return []
   const at = Date.now()
   if (at - lastRtcAt < RTC_EVERY_MS) return []
@@ -276,23 +281,31 @@ const rtcKnock = async (): Promise<RtcRow[]> => {
     connect,
     plane: dataPlane,
     adopt: setDataPlane,
-    // A link that dropped (the Mac restarted, the Wi-Fi blinked) is retried
-    // on the next race rather than after the two-minute gap: the gap is for a
-    // Mac that never answered, not for one that just did.
-    fallBack: () => {
-      lastRtcAt = 0
-      fallBackToRelay()
-    },
+    fallBack: fallBackToRelay,
     setLink: setRtcLink,
-    ended: (row) => void (lastEnd = row),
+    // A link that ended, however it ended (the Mac restarted, the Wi-Fi
+    // blinked, the watchdog gave it up), is knocked open again at once rather
+    // than after the two-minute gap: the gap is for a Mac that never answered,
+    // not for one that just did. Before 2026-10-24 only a link that closed
+    // itself got this; one the watchdog let go waited the full gap on RELAY.
+    // A link that keeps ending gets the gap back after KEEPS_PER_WINDOW.
+    ended: (row) => {
+      lastEnd = row
+      const at = Date.now()
+      quickKnocks = quickKnocks.filter((knocked) => at - knocked < HOLD_REPEAT_WINDOW_MS)
+      if (quickKnocks.length < KEEPS_PER_WINDOW) {
+        quickKnocks = [...quickKnocks, at]
+        lastRtcAt = 0
+      }
+      onEnd()
+    },
     classify: (address) => (isTailnetHostname(address) ? 'tailnet' : isLanHostname(address) ? 'lan' : 'other')
   }).catch(() => null)
   return probe ? [probe] : []
 }
 
 /** The race's report to the Mac, with the WebRTC attempt's row when one ran. */
-const reportRace = async (report: PathReport): Promise<void> => {
-  const rtc = await rtcKnock()
+const reportRace = async (report: PathReport, rtc: readonly RtcRow[]): Promise<void> => {
   const ended = lastEnd ? [lastEnd] : []
   lastEnd = null
   const probes = [...ended, ...rtc]
@@ -301,11 +314,45 @@ const reportRace = async (report: PathReport): Promise<void> => {
   await tellTheDesktop(probes.length > 0 ? { ...report, plane: settledPlane(), probes } : report)
 }
 
+/** What a race reports when the switcher had no rows to note: the WebRTC rows alone. */
+const reportLinkRows = (rtc: readonly RtcRow[]): void => {
+  if (rtc.length === 0 && !lastEnd) return
+  void reportRace(
+    {
+      at: Date.now(),
+      plane: settledPlane(),
+      permission: localNetworkGate(),
+      browser: currentBrowser(),
+      attempts: [],
+      context: pageContext()
+    },
+    rtc
+  )
+}
+
 const startPlaneSwitch = (): (() => void) => {
   const health = planeHealth()
   // Set by the loop at start; the ONE-AT-A-TIME guard stays the loop's, so a
   // press cannot start a second race beside the timer's.
   let raceNow: () => void = () => undefined
+  // A link that ended while the page is in front is knocked open again within
+  // a second, not at the next minute's race.
+  // One asked for while a race is running is run when it is done; the loop
+  // would drop it (one at a time).
+  let soon: ReturnType<typeof setTimeout> | null = null
+  let racing = false
+  let again = false
+  let stopped = false
+  const raceSoon = (): void => {
+    if (stopped || document.visibilityState !== 'visible' || soon !== null) return
+    soon = setTimeout(() => {
+      soon = null
+      if (racing) again = true
+      else raceNow()
+    }, RACE_AFTER_END_MS)
+  }
+  // The watchdog asks the link before it gives up the plane (plane-health.ts).
+  setPlaneLiveProbe((reason) => (dataPlane().transport === 'rtc' ? (rtcLink()?.probe(reason) ?? null) : null))
   // True for exactly one race: the one a person asked for by pressing ALLOW.
   // Every other race — the timer, `online`, a tab coming back — must never
   // raise a dialog at a phone nobody is looking at.
@@ -333,21 +380,94 @@ const startPlaneSwitch = (): (() => void) => {
       health: { note: health.note, condemn: health.condemn }
     }
   })
+  /** One race: the link, then the names (plane-switch.ts). */
+  const racePlane = async (): Promise<void> => {
+    // THE LINK FIRST. It opens in about a second where it opens at all,
+    // and on the owner's phone the names never answer (each race spent
+    // 2.5-6 s timing them out before the link was even tried). A hold
+    // means the plane just failed; the race after the hold knocks.
+    const knocked = health.held() ? [] : await rtcKnock(raceSoon)
+    let noted = false
+    await switchPlaneIfBetter({
+      plane: dataPlane,
+      card: fetchCard,
+      // The origin is sent so the Mac answers version 2 — a proof bound
+      // to the endpoint, which is the only kind this switcher accepts.
+      hello: (origin, nonce) => askHello(origin, nonce, { origin }),
+      verify: verifyHello,
+      // The zone's word on a name whose probe died without a cause, so
+      // the rows say "not published" where that is the fact and never
+      // "refused by the browser" where it is not (path/name-oracle.ts).
+      named: (origin) => nameLive(origin),
+      adopt: (plane: DataPlane) => setDataPlane(plane),
+      // A tailnet must beat the relay on a warm connection, not just
+      // answer once (path/plane-quality.ts). The LAN is the same Wi-Fi.
+      worthIt: async (origin, kind) => {
+        if (kind === 'lan') return true
+        const warm = await warmRoundTrip(async () => {
+          const result = await askHello(origin, randomNonce((bytes) => window.crypto.getRandomValues(bytes)), { origin })
+          return result.ok
+        })
+        return tailnetWorthIt(warm, pathLinkState().latencyMs)
+      },
+      nonce: () => randomNonce((bytes) => window.crypto.getRandomValues(bytes)),
+      held: () => health.held(),
+      probing: setProbing,
+      note: (rows) => {
+        noted = true
+        const settled = settledPlane()
+        // The two shapes are the same fact and are kept apart on purpose:
+        // plane-switch.ts must not import a renderer store, or the rule
+        // stops being testable without one.
+        const attempts = rows as readonly PathAttempt[]
+        recordAttempts(attempts, settled)
+        // AND TELL THE MAC, with the WebRTC attempt beside the rows, so
+        // the owner at the desk reads which way got through.
+        void reportRace(
+          {
+            at: Date.now(),
+            plane: settled,
+            permission: localNetworkGate(),
+            browser: currentBrowser(),
+            attempts: reportedAttempts(attempts),
+            context: pageContext()
+          },
+          knocked
+        )
+      },
+      permission: readLocalNetwork,
+      mayPrompt: () => {
+        const may = pressed
+        pressed = false
+        return may
+      }
+    })
+    // Skipped (the link already made this LAN), held, or no trusted
+    // names: the link's own rows still reach the Mac.
+    if (!noted) reportLinkRows(knocked)
+  }
+
   const offs: (() => void)[] = [
     recheck.stop,
+    () => setPlaneLiveProbe(null),
+    () => {
+      stopped = true
+      if (soon !== null) clearTimeout(soon)
+    },
     followDataPlane(),
     // The badge's latency is a measurement of the path it was taken on, and
     // the smoothing that keeps it steady within a path makes it a lie across
     // one. So a switch drops it and the next request re-establishes it.
     subscribeDataPlane(forgetLatency),
     // A STREAM THAT WENT SILENT ON A DIRECT PLANE is the path dying under it
-    // (Tailscale down, the Wi-Fi gone) — proof, not a hiccup, so the plane is
-    // given up at once rather than after a grace on top of the silence. A
-    // stream that never opened is one failed connect; a phone that slept
+    // (Tailscale down, the Wi-Fi gone), or the stream stuck behind bulk on a
+    // link that is fine. The link is asked, which takes a ping, and the plane
+    // given up only when it does not answer — no grace on top of the silence.
+    // A stream that never opened is one failed connect; a phone that slept
     // blames nothing (stream-watch.ts).
     onStreamDeath((why) => {
       if (dataPlane().kind === 'relay') return
-      if (why === 'silent') health.condemn()
+      if (why === 'silent') health.suspect('a stream went silent')
       else if (why === 'never-opened') health.note(false)
     }),
     // AND RACE AGAIN THE MOMENT A HOLD ENDS. The loop ticks once a minute, so
@@ -370,10 +490,11 @@ const startPlaneSwitch = (): (() => void) => {
     })(),
     // A plane that is no longer the link (the health watchdog fell back, a
     // name answered) lets the link go, so the Mac's peer is freed.
+    // Its end row says why: the watchdog's reason when it gave the plane up.
     subscribeDataPlane((next) => {
-      if (next.transport !== 'rtc') rtcLink()?.close()
+      if (next.transport !== 'rtc') rtcLink()?.close((health.held() ? health.lastReason() : null) ?? 'the plane moved')
     }),
-    () => rtcLink()?.close(),
+    () => rtcLink()?.close('the page left'),
     // Back to the front: a link that died while the phone slept is found in
     // seconds (path/rtc-link.ts · check), not when the heartbeat gets to it.
     listen('visibilitychange', () => {
@@ -405,60 +526,18 @@ const startPlaneSwitch = (): (() => void) => {
     startRaceLoop({
       everyMs: PLANE_PROBE_EVERY_MS,
       ready: (run) => void (raceNow = run),
-      race: () =>
-        switchPlaneIfBetter({
-          plane: dataPlane,
-          card: fetchCard,
-          // The origin is sent so the Mac answers version 2 — a proof bound
-          // to the endpoint, which is the only kind this switcher accepts.
-          hello: (origin, nonce) => askHello(origin, nonce, { origin }),
-          verify: verifyHello,
-          // The zone's word on a name whose probe died without a cause, so
-          // the rows say "not published" where that is the fact and never
-          // "refused by the browser" where it is not (path/name-oracle.ts).
-          named: (origin) => nameLive(origin),
-          adopt: (plane: DataPlane) => setDataPlane(plane),
-          // A tailnet must beat the relay on a warm connection, not just
-          // answer once (path/plane-quality.ts). The LAN is the same Wi-Fi.
-          worthIt: async (origin, kind) => {
-            if (kind === 'lan') return true
-            const warm = await warmRoundTrip(async () => {
-              const result = await askHello(origin, randomNonce((bytes) => window.crypto.getRandomValues(bytes)), { origin })
-              return result.ok
-            })
-            return tailnetWorthIt(warm, pathLinkState().latencyMs)
-          },
-          nonce: () => randomNonce((bytes) => window.crypto.getRandomValues(bytes)),
-          held: () => health.held(),
-          probing: setProbing,
-          note: (rows) => {
-            const settled = settledPlane()
-            // The two shapes are the same fact and are kept apart on purpose:
-            // plane-switch.ts must not import a renderer store, or the rule
-            // stops being testable without one.
-            const attempts = rows as readonly PathAttempt[]
-            recordAttempts(attempts, settled)
-            // AND TELL THE MAC, with the WebRTC attempt beside the rows, so
-            // the owner at the desk reads which way got through.
-            void reportRace({
-              at: Date.now(),
-              plane: settled,
-              permission: localNetworkGate(),
-              browser: currentBrowser(),
-              attempts: reportedAttempts(attempts),
-              context: pageContext()
-            })
-          },
-          permission: readLocalNetwork,
-          mayPrompt: () => {
-            const may = pressed
-            pressed = false
-            return may
+      race: async () => {
+        racing = true
+        try {
+          await racePlane()
+        } finally {
+          racing = false
+          if (again) {
+            again = false
+            raceSoon()
           }
-        })
-          // A Mac with no trusted names never gets a race row to report, so
-          // nothing would knock the link open; it is tried here instead.
-          .then((outcome) => (outcome === 'no-trusted' ? rtcKnock().then(() => undefined) : undefined))
+        }
+      }
     })
   ]
   return () => offs.forEach((off) => off())

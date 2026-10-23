@@ -16,6 +16,7 @@ import { describe, expect, it } from 'vitest'
 import {
   DIRECT_FAILURE_LIMIT,
   HOLD_AFTER_FALLBACK_MS,
+  KEEPS_PER_WINDOW,
   STREAM_GRACE_MS,
   createPlaneHealth
 } from '../src/renderer/src/plane-health'
@@ -175,5 +176,154 @@ describe('the grace a dropped stream gets, by the plane it is on', () => {
     expect(delays).toEqual([TAILNET_STREAM_GRACE_MS, STREAM_GRACE_MS])
     // A reconnect is a TLS handshake plus a 1 s and a 2 s backoff at ~0.5 s a round trip.
     expect(TAILNET_STREAM_GRACE_MS).toBeGreaterThanOrEqual(3 * STREAM_GRACE_MS)
+  })
+})
+
+// ASK THE LINK FIRST. On 2026-10-23 the owner's phone flapped LAN/RELAY all
+// evening: a stream that went quiet behind bulk on a live WebRTC link gave the
+// plane up, and the race put it back a minute later. Evidence that a plane
+// STOPPED WORKING now asks the link; proof it is the WRONG MACHINE does not.
+describe('asking the link before giving the plane up', () => {
+  const asked = (answers: Array<boolean | null>) => {
+    let onDirect = true
+    let fell = 0
+    let now = 1_000_000
+    let pending: (() => void) | null = null
+    const questions: string[] = []
+    const health = createPlaneHealth({
+      now: () => now,
+      schedule: (run) => {
+        pending = run
+        return 'timer'
+      },
+      cancel: () => void (pending = null),
+      direct: () => onDirect,
+      fallBack: () => {
+        fell += 1
+        onDirect = false
+      },
+      alive: (reason) => {
+        questions.push(reason)
+        const answer = answers.shift()
+        return answer === null || answer === undefined ? null : Promise.resolve(answer)
+      }
+    })
+    return {
+      health,
+      questions,
+      fell: () => fell,
+      tick: (ms: number) => void (now += ms),
+      armed: () => pending !== null,
+      fire: () => {
+        const run = pending
+        pending = null
+        run?.()
+      }
+    }
+  }
+  const settle = () => new Promise((r) => setTimeout(r, 0))
+
+  it('keeps a plane whose link answers', async () => {
+    const r = asked([true])
+    r.health.suspect('a stream went silent')
+    await settle()
+    expect(r.questions).toEqual(['a stream went silent'])
+    expect(r.fell()).toBe(0)
+    expect(r.health.held()).toBe(false)
+  })
+
+  it('gives up, with the hold and the reason, a plane whose link does not', async () => {
+    const r = asked([false])
+    r.health.suspect('a stream went silent')
+    await settle()
+    expect(r.fell()).toBe(1)
+    expect(r.health.held()).toBe(true)
+    expect(r.health.lastReason()).toBe('a stream went silent')
+  })
+
+  it('asks for the request failures and the stream grace too', async () => {
+    const r = asked([true, true])
+    for (let i = 0; i < DIRECT_FAILURE_LIMIT; i += 1) r.health.note(false)
+    await settle()
+    r.health.link('reconnecting')
+    r.fire()
+    await settle()
+    expect(r.questions).toHaveLength(2)
+    expect(r.fell()).toBe(0)
+  })
+
+  it('gives the stream its grace again when the link answered and the stream is still down', async () => {
+    const r = asked([true, false])
+    r.health.link('reconnecting')
+    r.fire()
+    await settle()
+    expect(r.armed()).toBe(true)
+    r.fire()
+    await settle()
+    expect(r.fell()).toBe(1)
+  })
+
+  it('does not condemn the wrong machine by asking it', () => {
+    const r = asked([true])
+    r.health.condemn('signed by another device')
+    expect(r.questions).toEqual([])
+    expect(r.fell()).toBe(1)
+    expect(r.health.held()).toBe(true)
+  })
+
+  it('condemns at once even while a question is out', async () => {
+    let answer!: (alive: boolean) => void
+    let fell = 0
+    const health = createPlaneHealth({
+      direct: () => fell === 0,
+      fallBack: () => void (fell += 1),
+      alive: () => new Promise<boolean>((resolve) => void (answer = resolve))
+    })
+    health.suspect('a stream went silent')
+    health.condemn('signed by another device')
+    expect(fell).toBe(1)
+    answer(false)
+    await settle()
+    expect(fell).toBe(1)
+  })
+
+  it('stops giving the benefit to a plane that keeps needing it', async () => {
+    const r = asked([true, true, true, true])
+    for (let i = 0; i < KEEPS_PER_WINDOW; i += 1) {
+      r.health.suspect('a stream went silent')
+      await settle()
+      r.tick(1_000)
+    }
+    expect(r.fell()).toBe(0)
+    r.health.suspect('a stream went silent')
+    await settle()
+    expect(r.questions).toHaveLength(KEEPS_PER_WINDOW)
+    expect(r.fell()).toBe(1)
+  })
+
+  it('holds even when the link, closing itself, already moved the plane — or the next race knocks it open again', async () => {
+    let onDirect = true
+    let fell = 0
+    const health = createPlaneHealth({
+      direct: () => onDirect,
+      fallBack: () => void (fell += 1),
+      // rtc-link.ts: no pong, so it shuts, the plane moves to the relay,
+      // and only then does the answer arrive.
+      alive: async () => {
+        onDirect = false
+        return false
+      }
+    })
+    health.suspect('a stream went silent')
+    await settle()
+    expect(fell).toBe(0)
+    expect(health.held()).toBe(true)
+    expect(health.lastReason()).toBe('a stream went silent')
+  })
+
+  it('falls back as before where there is nobody to ask', () => {
+    const r = asked([null])
+    r.health.suspect('a stream went silent')
+    expect(r.fell()).toBe(1)
   })
 })

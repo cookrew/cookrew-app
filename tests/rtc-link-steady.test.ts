@@ -11,6 +11,8 @@ import { decodeFrame, encodeFrame, type RelayFrame } from '../src/shared/relay-f
 class FakeChannel extends EventTarget {
   readyState: RTCDataChannelState = 'connecting'
   pongs = true
+  /** What this phone has queued and not yet sent: an upload going up. */
+  bufferedAmount = 0
   readonly sent: RelayFrame[] = []
   send(data: string): void {
     const frame = decodeFrame(data)
@@ -149,6 +151,62 @@ describe('coming back to the front', () => {
     link.check()
     await wait(40)
     expect(link.ended()?.reason).toBe('silent after the page came back')
+  })
+})
+
+describe('asking the Mac whether it is there (plane-health.ts asks before giving a plane up)', () => {
+  it('answers true when the Mac pongs, and keeps the link', async () => {
+    const { link } = await tracked({ checkMs: 20 })
+    expect(await link.probe('a stream went silent')).toBe(true)
+    expect(link.isOpen()).toBe(true)
+  })
+
+  it('answers false and closes with the reason when nothing comes back', async () => {
+    const { link, channel } = await tracked({ checkMs: 20 })
+    channel.pongs = false
+    expect(await link.probe('a stream went silent')).toBe(false)
+    expect(link.ended()?.reason).toBe('a stream went silent')
+  })
+
+  it('is one question at a time', async () => {
+    const { link, channel } = await tracked({ checkMs: 20 })
+    channel.pongs = false
+    const pings = (): number => channel.sent.filter((frame) => frame.t === 'ping').length
+    const before = pings()
+    const first = link.probe('one')
+    const second = link.probe('two')
+    expect(await Promise.all([first, second])).toEqual([false, false])
+    expect(pings() - before).toBe(1)
+    expect(link.ended()?.reason).toBe('one')
+  })
+
+  it('does not call an upload still leaving the phone silence', async () => {
+    const { link, channel } = await tracked({ checkMs: 20 })
+    channel.pongs = false
+    channel.bufferedAmount = 64 * 1024
+    const answer = link.probe('a stream went silent')
+    await wait(50)
+    expect(link.isOpen()).toBe(true)
+    channel.deliver({ t: 'pong', at: Date.now() })
+    expect(await answer).toBe(true)
+  })
+
+  it('asks on its own when a request has had no head for a while', async () => {
+    const { link, channel } = await tracked({ checkMs: 20 })
+    const pings = (): number => channel.sent.filter((frame) => frame.t === 'ping').length
+    const before = pings()
+    void link.request({ method: 'GET', path: '/api/slow', headers: {} }).catch(() => undefined)
+    await wait(2_600)
+    expect(pings()).toBeGreaterThan(before)
+    expect(link.isOpen()).toBe(true)
+  })
+
+  it('reports the pong round trips it saw when it ends', async () => {
+    const { link } = await tracked({ checkMs: 20 })
+    await link.probe('warm')
+    link.close('the plane moved')
+    expect(link.ended()?.reason).toBe('the plane moved')
+    expect(link.ended()?.rtt).not.toBeNull()
   })
 })
 

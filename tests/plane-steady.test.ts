@@ -264,9 +264,10 @@ describe('the hold after a fallback', () => {
 })
 
 describe('the companion acts on a dead stream and on a hold that ends', () => {
-  it('condemns a direct plane on silence and races when the hold ends', () => {
+  it('suspects a direct plane on silence (the link is asked) and races when the hold ends', () => {
     const src = readFileSync('src/renderer/src/path/companion.ts', 'utf8')
-    expect(src).toMatch(/if \(why === 'silent'\) health\.condemn\(\)/)
+    expect(src).toMatch(/if \(why === 'silent'\) health\.suspect\(/)
+    expect(src).toContain('setPlaneLiveProbe(')
     expect(src).toContain('health.holdEndsAt() - Date.now()')
   })
 })

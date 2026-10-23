@@ -24,6 +24,8 @@ import { createJoiner, socketPathOf, splitMessage } from '../shared/rtc-socket-c
 import { RELAY_BASE_HEADER } from './relay-base'
 import { RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER } from './relay-device'
 import { decodeFrame, encodeFrame } from '../shared/relay-frame'
+import { createRtcOutbox, type RtcOutbox } from './rtc-outbox'
+import { isBrowserFrame } from './socket-bridge'
 
 export const RTC_PROBE_LABEL = 'cookrew-probe'
 /**
@@ -36,12 +38,13 @@ export const RTC_BRIDGE_LABEL = 'cookrew-bridge'
 /** Raw bytes per chunk frame: 16 KB is the message size every browser takes. */
 export const RTC_CHUNK = 16 * 1024
 /**
- * A socket's channel past this many bytes queued stops reading the companion
- * until it drains below the low mark — the browser cast then holds the
- * latest frame instead of piling every one up in this process.
+ * A socket holding this many bytes not yet sent stops reading the companion
+ * until it is down to the low mark. A browser card's frames never get there
+ * (an unsent frame is replaced by the next, rtc-outbox.ts); this is for
+ * everything else a socket might send in bulk.
  */
-export const RTC_SOCKET_HIGH = 4 * 1024 * 1024
-export const RTC_SOCKET_LOW = 1024 * 1024
+export const RTC_SOCKET_HIGH = 1024 * 1024
+export const RTC_SOCKET_LOW = 256 * 1024
 /**
  * WebRTC's `disconnected` is a blip as often as an end — a phone's Wi-Fi
  * power saving drops a few consent checks and the pair comes back on its own.
@@ -105,6 +108,8 @@ interface PeerLife {
   readonly opened: (via: string | null) => void
   /** The phone said something; it is still there. */
   readonly seen: () => void
+  /** Everything this peer sends goes through here (rtc-outbox.ts). */
+  readonly outbox: RtcOutbox
 }
 
 interface PeerState {
@@ -133,6 +138,8 @@ const waitGathered = (pc: RTCPeerConnection, ms: number): Promise<void> =>
 
 export const createRtcHost = (deps: RtcHostDeps): RtcHost => {
   const peers = new Map<RTCPeerConnection, PeerState>()
+  /** Names each carried socket's lane in its peer's outbox. */
+  let sockets = 0
   const ttl = deps.ttlMs ?? RTC_PEER_TTL_MS
   const max = deps.maxPeers ?? RTC_MAX_PEERS
   const graceMs = deps.graceMs ?? RTC_DISCONNECT_GRACE_MS
@@ -166,22 +173,20 @@ export const createRtcHost = (deps: RtcHostDeps): RtcHost => {
 
   /** A bridge on a data channel: frames in, loopback requests out, frames back. */
   const bridge = (pc: RTCPeerConnection, channel: RTCDataChannel, life: PeerLife): void => {
+    const { outbox } = life
+    // One lane per exchange, so a long answer never holds up a short one;
+    // the link's own frames (ready, pong) ride a lane of their own.
     const link = createCanvasBridge({
-      send: (line) => {
-        try {
-          channel.send(line)
-        } catch {
-          // The channel went away mid-answer; the reset below cleans up.
-        }
-      },
+      send: (line, frame) => outbox.send(channel, 'id' in frame ? `x${frame.id}` : 'link', line),
       dial,
       chunk: RTC_CHUNK
     })
+    channel.bufferedAmountLow.subscribe(() => outbox.pump())
     const greet = (): void => {
       life.opened(viaOf(pc))
       // The first frame names the address this link runs on, so the phone's
       // badge says LAN or TAILNET by fact (Safari's own stats do not say).
-      channel.send(encodeFrame({ t: 'ready', name: viaOf(pc) ?? 'unknown' }))
+      outbox.send(channel, 'link', encodeFrame({ t: 'ready', name: viaOf(pc) ?? 'unknown' }))
     }
     if (channel.readyState === 'open') greet()
     else channel.stateChanged.subscribe((state) => state === 'open' && greet())
@@ -192,18 +197,21 @@ export const createRtcHost = (deps: RtcHostDeps): RtcHost => {
       if (text.startsWith('{"t":"ping"')) {
         const ping = decodeFrame(text)
         if (ping?.t === 'ping') {
-          try {
-            channel.send(encodeFrame({ t: 'pong', at: ping.at }))
-          } catch {
-            // Going down; the state handler below closes the peer.
-          }
+          outbox.send(channel, 'link', encodeFrame({ t: 'pong', at: ping.at }))
           return
         }
+      }
+      // The phone hung up on an exchange: what is still queued for it is not wanted.
+      if (text.startsWith('{"t":"end"') || text.startsWith('{"t":"abort"')) {
+        const done = decodeFrame(text)
+        if (done && 'id' in done) outbox.drop(`x${done.id}`)
       }
       link.frame(text)
     })
     channel.stateChanged.subscribe((state) => {
-      if (state === 'closed') link.reset()
+      if (state !== 'closed') return
+      outbox.forget(channel)
+      link.reset()
     })
   }
 
@@ -216,35 +224,33 @@ export const createRtcHost = (deps: RtcHostDeps): RtcHost => {
    */
   const carrySocket = (channel: RTCDataChannel, path: string, life: PeerLife): void => {
     const held: string[] = []
+    const { outbox } = life
+    const lane = `s${(sockets += 1)}`
     let open = false
     let paused = false
     let upstream: LoopbackSocket | null = null
     const toPhone = (text: string): void => {
-      try {
-        for (const piece of splitMessage(text)) channel.send(piece)
-      } catch {
-        upstream?.close()
-        return
-      }
-      if (!paused && channel.bufferedAmount > RTC_SOCKET_HIGH) {
-        paused = true
-        upstream?.pause()
-      }
+      // A frame is the whole picture: one still waiting is replaced by this one.
+      outbox.send(channel, lane, splitMessage(text), { replaceable: isBrowserFrame(text) })
+      if (paused || outbox.queued(lane) <= RTC_SOCKET_HIGH) return
+      paused = true
+      upstream?.pause()
+      outbox.whenBelow(lane, RTC_SOCKET_LOW, () => {
+        paused = false
+        upstream?.resume()
+      })
     }
     const join = createJoiner((text) => (open ? upstream?.send(text) : held.push(text)))
-    channel.bufferedAmountLowThreshold = RTC_SOCKET_LOW
-    channel.bufferedAmountLow.subscribe(() => {
-      if (!paused) return
-      paused = false
-      upstream?.resume()
-    })
+    channel.bufferedAmountLow.subscribe(() => outbox.pump())
     channel.onMessage.subscribe((data) => {
       life.seen()
       if (join(typeof data === 'string' ? data : data.toString('utf8'))) return
       upstream?.close()
     })
     channel.stateChanged.subscribe((state) => {
-      if (state === 'closed') upstream?.close()
+      if (state !== 'closed') return
+      outbox.forget(channel)
+      upstream?.close()
     })
     upstream = (deps.socket ?? dialLoopbackSocket)({
       port: 8639,
@@ -306,10 +312,12 @@ export const createRtcHost = (deps: RtcHostDeps): RtcHost => {
     let silence: ReturnType<typeof setTimeout> | undefined
     let openedAt: number | null = null
     let via: string | null = null
+    const outbox = createRtcOutbox()
     const done = (reason: string): void => {
       clearTimeout(expiry)
       clearTimeout(grace)
       clearTimeout(silence)
+      outbox.close()
       if (!peers.delete(pc)) return
       void pc.close().catch(() => undefined)
       if (openedAt !== null) {
@@ -337,7 +345,8 @@ export const createRtcHost = (deps: RtcHostDeps): RtcHost => {
         seen: () => {
           state.lastSeen = Date.now()
           silence?.refresh()
-        }
+        },
+        outbox
       })
     )
     pc.connectionStateChange.subscribe((next) => {

@@ -42,7 +42,8 @@ export const SOCKET_BRIDGE_HIGH = 2 * 1024 * 1024
  */
 export const SOCKET_BRIDGE_FRAME_MS = 250
 export const SOCKET_BRIDGE_FRAME_BACKLOG = 256 * 1024
-const isFrame = (text: string): boolean => text.startsWith('{"t":"frame"')
+/** A browser card's screencast frame: each one is the whole picture. */
+export const isBrowserFrame = (text: string): boolean => text.startsWith('{"t":"frame"')
 /** Messages per POST, and characters per message: input and viewport control are small. */
 export const SOCKET_BRIDGE_POST_MESSAGES = 64
 export const SOCKET_BRIDGE_MESSAGE_MAX = 64 * 1024
@@ -105,7 +106,7 @@ export const createSocketBridge = (deps: SocketBridgeDeps = {}): SocketBridge =>
       headers: { [RELAY_MARKER]: '1' },
       onOpen: () => send('id', { id }),
       onMessage: (text) => {
-        if (isFrame(text)) {
+        if (isBrowserFrame(text)) {
           heldFrame = text
           if (frameTimer === null) {
             frameTimer = setTimeout(flushFrame, Math.max(0, lastFrameAt + SOCKET_BRIDGE_FRAME_MS - Date.now()))

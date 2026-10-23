@@ -59,13 +59,15 @@ describe('the rtc row in a path report', () => {
     expect(report?.probes).toEqual([{ kind: 'rtc', name: '192.168.2.40', outcome: 'answered', ms: 420 }])
   })
 
-  it('runs only on the relay, at most every two minutes, and rides the race report', () => {
+  it('runs only on the relay, first in each race, and rides the race report', () => {
     const src = readFileSync('src/renderer/src/path/companion.ts', 'utf8')
     expect(src).toContain("dataPlane().kind !== 'relay'")
     expect(src).toContain('const RTC_EVERY_MS = 2 * 60 * 1000')
-    expect(src).toContain('const rtc = await rtcKnock()')
-    // A dropped link is retried on the next race, not after the gap.
-    expect(src).toMatch(/fallBack: \(\) => \{\s+lastRtcAt = 0\s+fallBackToRelay\(\)/)
+    // Before the names, unless the plane just failed.
+    expect(src).toContain('const knocked = health.held() ? [] : await rtcKnock(raceSoon)')
+    expect(src).toContain('reportLinkRows(knocked)')
+    // A link that ended, however, is knocked again at once, not after the gap.
+    expect(src).toMatch(/ended: \(row\) => \{[\s\S]{0,400}lastRtcAt = 0[\s\S]{0,40}onEnd\(\)/)
     // The knocks and the navigation home are gone with the offer that drove them.
     expect(src).not.toMatch(/probeReach|homeJump|location\.assign/)
   })

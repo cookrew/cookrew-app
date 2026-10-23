@@ -32,8 +32,16 @@ export const RTC_DEAD_MS = 30_000
  * consent checks); only one that has not healed in this long closes the link.
  */
 export const RTC_DISCONNECT_GRACE_MS = 10_000
-/** After the page comes back to the front: the Mac must answer within this. */
+/** Asked whether it is there (back to the front, a stalled request, a stream in doubt): the Mac must answer within this. */
 export const RTC_CHECK_MS = 3_000
+/**
+ * A request with no head after this long makes the link ask the Mac whether it
+ * is there. Typing on a link that died while the phone slept used to wait for
+ * the heartbeat (up to RTC_DEAD_MS) or the keystroke deadline.
+ */
+export const RTC_STALL_MS = 2_500
+/** Pong round trips kept, for the report's line about how the link was doing. */
+const RTTS_KEPT = 64
 /**
  * Raw bytes per body frame going up. A data channel message past the peer's
  * limit throws (Safari's is far below the relay's 1 MiB frame), and 16 KB is
@@ -61,6 +69,8 @@ export interface RtcLinkDeps {
 export interface RtcLinkEnd {
   readonly reason: string
   readonly afterMs: number
+  /** Pong round trips over its life: the median and the worst, null when none came. */
+  readonly rtt: { readonly p50: number; readonly max: number } | null
 }
 
 export interface RtcRequest {
@@ -80,7 +90,8 @@ export interface RtcLink {
   readonly openSocket: (path: string) => RtcWebSocket
   readonly isOpen: () => boolean
   readonly onClose: (cb: () => void) => () => void
-  readonly close: () => void
+  /** Close it; the reason is what the next report says ended it. */
+  readonly close: (reason?: string) => void
   /** Why it closed, once it has. */
   readonly ended: () => RtcLinkEnd | null
   /**
@@ -89,6 +100,12 @@ export interface RtcLink {
    * hold every request until the heartbeat noticed, up to RTC_DEAD_MS later.
    */
   readonly check: () => void
+  /**
+   * Is the Mac there? True on the first thing heard within RTC_CHECK_MS;
+   * false, and the link closed with `reason`, when nothing is. One question
+   * at a time: asked again while waiting, it is the same answer.
+   */
+  readonly probe: (reason: string) => Promise<boolean>
 }
 
 const toBase64 = (bytes: Uint8Array): string => {
@@ -110,6 +127,12 @@ interface Exchange {
   readonly head: (response: Response) => void
   readonly fail: (error: Error) => void
   headed: boolean
+}
+
+const summarise = (rtts: readonly number[]): RtcLinkEnd['rtt'] => {
+  if (rtts.length === 0) return null
+  const sorted = [...rtts].sort((a, b) => a - b)
+  return { p50: sorted[Math.floor(sorted.length / 2)], max: sorted[sorted.length - 1] }
 }
 
 const gathered = (pc: RTCPeerConnection, ms: number): Promise<void> =>
@@ -142,21 +165,23 @@ export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null>
   let next = 0
   let startedAt = now()
   let heard = now()
-  /** Messages heard, counted: a check compares counts, which a clock tick cannot blur. */
-  let messages = 0
   let endedAs: RtcLinkEnd | null = null
   let beat: ReturnType<typeof setInterval> | null = null
   let grace: ReturnType<typeof setTimeout> | null = null
   let checking: ReturnType<typeof setTimeout> | null = null
+  /** The probe waiting for the Mac to say anything, and its answer. */
+  let asking: Promise<boolean> | null = null
+  let answered: ((alive: boolean) => void) | null = null
+  const rtts: number[] = []
   const channel = pc.createDataChannel(RTC_BRIDGE_LABEL, { ordered: true })
 
   const shut = (reason: string): void => {
     if (closed) return
     closed = true
-    endedAs = { reason, afterMs: Math.round(now() - startedAt) }
+    endedAs = { reason, afterMs: Math.round(now() - startedAt), rtt: summarise(rtts) }
     if (beat !== null) clearInterval(beat)
     if (grace !== null) clearTimeout(grace)
-    if (checking !== null) clearTimeout(checking)
+    answered?.(false)
     // THE PLANE MOVES FIRST, then the requests in flight fail. In the other
     // order every one of them is a transport failure on a plane that still
     // names the link, three of them condemn it (plane-health.ts), and a blip
@@ -192,10 +217,15 @@ export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null>
 
   channel.addEventListener('message', (event) => {
     heard = now()
-    messages += 1
+    answered?.(true)
     const frame = decodeFrame(String((event as MessageEvent).data))
     if (!frame) return
     if (frame.t === 'ready') return via(frame.name)
+    if (frame.t === 'pong') {
+      rtts.push(Math.max(0, Date.now() - frame.at))
+      if (rtts.length > RTTS_KEPT) rtts.shift()
+      return
+    }
     if (!('id' in frame)) return
     const exchange = exchanges.get(frame.id)
     if (!exchange) return
@@ -280,9 +310,41 @@ export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null>
     ping()
   }, pingMs)
 
+  const probe = (reason: string): Promise<boolean> => {
+    if (closed) return Promise.resolve(false)
+    if (asking) return asking
+    asking = new Promise<boolean>((resolve) => {
+      answered = (alive) => {
+        if (checking !== null) clearTimeout(checking)
+        checking = null
+        asking = null
+        answered = null
+        resolve(alive)
+      }
+    })
+    const question = asking
+    const checkMs = deps.checkMs ?? RTC_CHECK_MS
+    const askedAt = now()
+    // The ping waits behind whatever this phone queued before it (an
+    // attachment going up), so a send buffer still draining is not silence:
+    // the question waits for it, up to RTC_DEAD_MS.
+    const verdict = (): void => {
+      if (channel.bufferedAmount > 0 && now() - askedAt < RTC_DEAD_MS) {
+        checking = setTimeout(verdict, checkMs)
+        return
+      }
+      shut(reason)
+    }
+    checking = setTimeout(verdict, checkMs)
+    ping()
+    return question
+  }
+
   const request = (input: RtcRequest): Promise<Response> =>
     new Promise<Response>((resolve, reject) => {
       const id = `r${(next += 1).toString(36)}`
+      // No head in a while: is the Mac still there at all?
+      const stall = setTimeout(() => void probe('a request got no answer, nor did a ping'), RTC_STALL_MS)
       let controller!: ReadableStreamDefaultController<Uint8Array>
       const stream = new ReadableStream<Uint8Array>({
         start: (c) => void (controller = c),
@@ -299,8 +361,12 @@ export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null>
         controller,
         stream,
         headed: false,
-        head: resolve,
+        head: (response) => {
+          clearTimeout(stall)
+          resolve(response)
+        },
         fail: (error) => {
+          clearTimeout(stall)
           if (!exchange.headed) reject(error)
           else {
             try {
@@ -339,6 +405,7 @@ export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null>
           send({ t: 'body', id, data: toBase64(slice), done: at >= body.length })
         } while (at < body.length)
       } catch (error) {
+        clearTimeout(stall)
         exchanges.delete(id)
         reject(error)
       }
@@ -357,17 +424,10 @@ export const connectRtcLink = async (deps: RtcLinkDeps): Promise<RtcLink | null>
       closers.add(cb)
       return () => void closers.delete(cb)
     },
-    close: () => shut('closed here'),
+    close: (reason) => shut(reason ?? 'closed here'),
     ended: () => endedAs,
-    check: () => {
-      if (closed || checking !== null) return
-      const before = messages
-      ping()
-      checking = setTimeout(() => {
-        checking = null
-        if (messages === before) shut('silent after the page came back')
-      }, deps.checkMs ?? RTC_CHECK_MS)
-    }
+    check: () => void probe('silent after the page came back'),
+    probe
   }
 }
 

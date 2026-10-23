@@ -146,7 +146,8 @@ describe('the opener', () => {
       onClose: () => () => undefined,
       close: () => undefined,
       ended: () => null,
-      check: () => undefined
+      check: () => undefined,
+      probe: () => Promise.resolve(true)
     }
     rtc.setRtcLink(link)
     plane.setDataPlane({ origin: '', kind: 'lan', transport: 'rtc' })

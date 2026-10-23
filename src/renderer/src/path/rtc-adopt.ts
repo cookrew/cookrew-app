@@ -54,7 +54,10 @@ export const adoptRtcLink = async (deps: RtcAdoptDeps): Promise<RtcRow> => {
   deps.setLink(link)
   link.onClose(() => {
     const end = link.ended()
-    if (end) deps.ended?.({ kind: 'rtc', name: `${link.via} closed: ${end.reason}`, outcome: 'closed', ms: end.afterMs })
+    if (end) {
+      const rtt = end.rtt ? ` (pong ${end.rtt.p50}/${end.rtt.max} ms)` : ''
+      deps.ended?.({ kind: 'rtc', name: `${link.via} closed: ${end.reason}${rtt}`, outcome: 'closed', ms: end.afterMs })
+    }
     deps.setLink(null)
     if (deps.plane().transport === 'rtc') deps.fallBack()
   })
