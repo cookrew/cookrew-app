@@ -1745,7 +1745,7 @@ function Canvas(): React.JSX.Element {
         {/* Under the levels view the canvas tools have no canvas in sight:
             the dock shows only with an agent's terminal open (level 3). The
             phone keeps it: its SOUS button is the phone's only command box. */}
-        {(view !== 'levels' || levelsTerminalId !== null || isRemoteMode()) && (view !== 'stage' || stageShowing !== null) && (
+        {(view !== 'levels' || levelsTerminalId !== null || isRemoteMode()) && (view !== 'stage' || stageShowing !== null || isRemoteMode()) && (
         <Dock
           tool={tool}
           onSelect={selectTool}
