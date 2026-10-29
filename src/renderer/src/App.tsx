@@ -1,4 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { attachmentIndex, sameAttachmentIndex, TerminalAttachmentsContext, type AttachmentIndex } from './terminal-attachments'
 import { requestJoin } from './account/open-request'
 import {
   Background,
@@ -1497,6 +1498,15 @@ function Canvas(): React.JSX.Element {
   // props (so they re-rendered) even during pan/zoom and activity, when the
   // nodes themselves are unchanged. These now change only on a real workspace
   // push.
+  // Each terminal's wired browsers and notes, for its zoomed card. Kept the
+  // same object while nothing a card shows changes (sameAttachmentIndex):
+  // the workspace object itself changes on every tick and drag.
+  const attachIndexRef = useRef<AttachmentIndex>(new Map())
+  const attachIndex = useMemo(() => {
+    const next = attachmentIndex(workspace?.nodes ?? [], workspace?.connections ?? [])
+    if (!sameAttachmentIndex(attachIndexRef.current, next)) attachIndexRef.current = next
+    return attachIndexRef.current
+  }, [workspace?.nodes, workspace?.connections])
   const terminals = useMemo(
     () => (workspace?.nodes.filter((n) => n.kind === 'terminal') ?? []) as TerminalNodeData[],
     [workspace?.nodes]
@@ -1776,6 +1786,7 @@ function Canvas(): React.JSX.Element {
           }
         />
         )}
+        <TerminalAttachmentsContext.Provider value={attachIndex}>
         <LodOverlays
           /* One attach per agent per window: main keeps one forwarder per
              terminal, so a canvas pane left zoomed under the levels would
@@ -1793,6 +1804,7 @@ function Canvas(): React.JSX.Element {
           isPhoneViewing={isPhoneViewing}
           interactiveCapability={interactiveCapability}
         />
+        </TerminalAttachmentsContext.Provider>
         {metricsOpen && (
           <Suspense fallback={null}>
             <MetricsPanel onClose={() => setMetricsOpen(false)} />

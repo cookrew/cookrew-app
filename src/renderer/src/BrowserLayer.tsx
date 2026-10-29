@@ -29,6 +29,7 @@ import { useCanvasUi } from './canvas-ui'
 import { CrIcon } from './icons'
 import { browserRenderMode, nextCapability, type StreamClient } from './browser-stream'
 import { browserHostsToRender } from './browser-host-policy'
+import { attachView, useAttachView } from './attach-view'
 
 const THUMB_INTERVAL_MS = 5000
 const THUMB_WIDTH = 512
@@ -81,14 +82,21 @@ export const BrowserLayer = memo(function BrowserLayer({
   // SHARED arbitration with terminal overlays (Magpie E2: a per-kind hook
   // let a browser view stack over the zoomed terminal and steal every tap).
   const { activeIds, rects, primaryId } = lod
-  const renderedBrowsers = browserHostsToRender(browsers, isRemoteMode(), primaryId, interactiveBrowser)
+  // A browser opened inside a zoomed terminal card (AttachPanel): the same
+  // host renders at the card's slot, or over the whole window.
+  const view = useAttachView()
+  const embed = view !== null && view.kind === 'browser' && view.rect !== null ? view : null
+  const embedded = embed === null ? undefined : browsers.find((b) => b.id === embed.itemId)
+  const policy = browserHostsToRender(browsers, isRemoteMode(), primaryId, interactiveBrowser)
+  const renderedBrowsers = embedded === undefined || policy.includes(embedded) ? policy : [...policy, embedded]
   return (
     <>
       {renderedBrowsers.map((p) => (
         <BrowserHost
           key={p.id}
           node={p}
-          rect={activeIds.has(p.id) ? (rects[p.id] ?? null) : null}
+          embedded={embed !== null && p.id === embedded?.id ? (embed.full ? 'full' : 'panel') : null}
+          rect={embed !== null && p.id === embedded?.id ? embed.rect : activeIds.has(p.id) ? (rects[p.id] ?? null) : null}
           onThumb={onThumb}
           isPhoneViewing={isPhoneViewing}
           interactiveBrowser={interactiveBrowser}
@@ -200,6 +208,7 @@ function usePopupTabOpener(browsers: BrowserNodeData[]): void {
 
 function BrowserHost({
   node,
+  embedded,
   rect,
   onThumb,
   isPhoneViewing,
@@ -207,6 +216,8 @@ function BrowserHost({
   desktopStreamToken
 }: {
   node: BrowserNodeData
+  /** Shown inside a zoomed terminal card ('panel') or over the whole window ('full'). */
+  embedded: 'panel' | 'full' | null
   /** Screen rect to render the full browser at; null = thumbnail mode. */
   rect: ScreenRect | null
   onThumb: (id: string, dataUrl: string) => void
@@ -308,8 +319,8 @@ function BrowserHost({
 
   return (
     <div
-      className={rect ? 'browser-lod' : 'browser-offscreen'}
-      style={rect ? { left: rect.x, top: rect.y, width: rect.width, height: rect.height } : undefined}
+      className={rect ? `browser-lod${embedded ? ' browser-embedded' : ''}${embedded === 'full' ? ' browser-full' : ''}` : 'browser-offscreen'}
+      style={rect && embedded !== 'full' ? { left: rect.x, top: rect.y, width: rect.width, height: rect.height } : undefined}
     >
       <div className="popout browser-popout">
         {/* TITLE ROW — one row, not two. The page's own title is the identity;
@@ -378,21 +389,46 @@ function BrowserHost({
           {/* "Open in browser" is NOT here: in full view it lives in the dock's
               bottom-right, where the tool group would be (see Dock). The header
               keeps only what re-frames the card itself. */}
-          <button
-            className="cr-btn sm popout-close"
-            title="Back to canvas"
-            aria-label="Back to canvas"
-            onClick={zoomBack}
-          >
-            <CrIcon name="collapse" />
-          </button>
-          <button
-            className="cr-btn sm popout-kill"
-            title="Close browser card (⌘W)"
-            onClick={() => requestClose(node.id)}
-          >
-            <CrIcon name="close" />
-          </button>
+          {embedded ? (
+            // Inside a terminal card these must not re-frame the canvas or delete
+            // the card: full window, and closing the item back into the strip.
+            <>
+              <button
+                className="cr-btn sm"
+                title={embedded === 'full' ? 'Exit full screen (Esc)' : 'Full screen'}
+                aria-label={embedded === 'full' ? 'Exit full screen' : 'Full screen'}
+                onClick={() => attachView.full()}
+              >
+                <CrIcon name={embedded === 'full' ? 'collapse' : 'expand'} />
+              </button>
+              <button
+                className="cr-btn sm popout-close"
+                title="Close"
+                aria-label="Close"
+                onClick={() => attachView.close()}
+              >
+                <CrIcon name="close" />
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                className="cr-btn sm popout-close"
+                title="Back to canvas"
+                aria-label="Back to canvas"
+                onClick={zoomBack}
+              >
+                <CrIcon name="collapse" />
+              </button>
+              <button
+                className="cr-btn sm popout-kill"
+                title="Close browser card (⌘W)"
+                onClick={() => requestClose(node.id)}
+              >
+                <CrIcon name="close" />
+              </button>
+            </>
+          )}
         </div>
         {tabsOpen && tabs.length > 1 && (
           <div className="browser-tabstrip">

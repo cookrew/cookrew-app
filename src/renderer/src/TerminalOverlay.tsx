@@ -1,4 +1,7 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { AttachPanel, AttachStrip } from './AttachPanel'
+import { attachView, useAttachView } from './attach-view'
+import { NO_ATTACHMENTS, TerminalAttachmentsContext } from './terminal-attachments'
 import { Terminal } from '@xterm/xterm'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import type { IClipboardProvider } from '@xterm/addon-clipboard'
@@ -145,6 +148,20 @@ function TerminalOverlay({
 }): React.JSX.Element {
   const { zoomBack, requestClose } = useCanvasUi()
   const phase = activity?.phase ?? 'idle'
+  // This terminal's own browsers and notes (canvas wiring), and the one open
+  // in the lower half, if any.
+  const attachments = useContext(TerminalAttachmentsContext).get(node.id) ?? NO_ATTACHMENTS
+  const openView = useAttachView()
+  const openItem =
+    openView !== null && openView.terminalId === node.id
+      ? (attachments.find((a) => a.node.id === openView.itemId) ?? null)
+      : null
+  // Unwired or deleted while open: nothing left to show.
+  useEffect(() => {
+    if (openView !== null && openView.terminalId === node.id && openItem === null) attachView.close(node.id)
+  }, [openView, openItem, node.id])
+  // Leaving the card closes what it had open; the browser goes back to its own card.
+  useEffect(() => () => attachView.close(node.id), [node.id])
   const [tailReady, setTailReady] = useState(false)
   const metadataReady = tailReady
   /**
@@ -1078,6 +1095,7 @@ function TerminalOverlay({
             })()}
           />
         )}
+        <div className={`popout-main${openItem !== null ? ' split' : ''}`}>
         <TranscriptView
           ref={transcriptRef}
           terminalId={node.id}
@@ -1111,6 +1129,11 @@ function TerminalOverlay({
           {/* PTY-direct for every card (owner ruling 2026-08-30). */}
           <div ref={containerRef} className="popout-terminal" />
         </TranscriptView>
+        {attachments.length > 0 && (
+          <AttachStrip terminalId={node.id} items={attachments} openId={openItem?.node.id ?? null} />
+        )}
+        {openItem !== null && openView !== null && <AttachPanel item={openItem} view={openView} cardRect={rect} />}
+        </div>
         <CheckpointTimeline
           terminalId={node.id}
           rows={rows}
