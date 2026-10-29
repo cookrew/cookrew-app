@@ -1,7 +1,7 @@
 // A zoomed terminal's own browsers and notes, inside its card.
 //
-// The strip sits at the bottom-left under the transcripts; tapping an item
-// opens it in the lower half (transcripts above, item below). A browser opens
+// The side tabs sit in the card's left column under MDL / EFF / RTE; a tab
+// opens its item in the lower half (transcripts above, item below). A browser opens
 // as its real page (the browser layer renders it into the slot measured here)
 // and can go full window; a note reads as markdown and edits in place.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
@@ -11,7 +11,7 @@ import { cookrew } from './api'
 import { attachView, type AttachView } from './attach-view'
 import { CrIcon } from './icons'
 import { renderNoteMarkdown } from './note-markdown'
-import { STRIP_LIMIT, stripItems, type TerminalAttachment } from './terminal-attachments'
+import { FIND_FROM, filterAttachments, type TerminalAttachment } from './terminal-attachments'
 import type { ScreenRect } from './zoom-lod'
 
 function label(item: TerminalAttachment): string {
@@ -20,7 +20,14 @@ function label(item: TerminalAttachment): string {
   return tab.title?.trim() || item.node.name
 }
 
-export function AttachStrip({
+/**
+ * THE SIDE TABS: the terminal's browsers and notes as a browser's vertical tab
+ * bar, in the left column under MDL / EFF / RTE. Collapsed it is that
+ * column's width — an icon and the first letters per tab; on hover (or pinned
+ * open, which is what a phone has) it widens over the transcript and shows
+ * whole names. A tab opens its item in the lower half; the open one is lit.
+ */
+export function AttachTabs({
   terminalId,
   items,
   openId
@@ -29,85 +36,63 @@ export function AttachStrip({
   items: readonly TerminalAttachment[]
   openId: string | null
 }): React.JSX.Element {
-  // null = folded (as many as fit, then "+N"); a string = the whole list, filtered by it.
-  const [query, setQuery] = useState<string | null>(null)
-  // How many fit on one row: measured, never a guess (names differ in width,
-  // cards differ in size). Starts at the cap and only shrinks until it fits;
-  // a resize starts over from the cap.
-  const [fit, setFit] = useState(STRIP_LIMIT)
-  const stripRef = useRef<HTMLDivElement | null>(null)
-  const { shown, hidden } = stripItems(items, openId, query, fit)
-  const expanded = query !== null
-  useLayoutEffect(() => {
-    const el = stripRef.current
-    if (el === null || expanded) return
-    const right = el.getBoundingClientRect().right - 8
-    const chips = [...el.querySelectorAll<HTMLElement>('.attach-chip')]
-    if (chips.length > 0 && chips[chips.length - 1].getBoundingClientRect().right > right && fit > 1) setFit(fit - 1)
-  })
-  useEffect(() => {
-    const el = stripRef.current
-    if (el === null) return
-    let width = el.clientWidth
-    const ro = new ResizeObserver(() => {
-      if (el.clientWidth !== width) {
-        width = el.clientWidth
-        setFit(STRIP_LIMIT)
-      }
-    })
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [])
+  const [query, setQuery] = useState('')
+  const [pinned, setPinned] = useState(false)
+  const shown = filterAttachments(items, query)
+  // Tabs keep the terminal's focus; only the filter takes it.
+  const keep = (e: React.MouseEvent): void => e.preventDefault()
   return (
-    <div ref={stripRef} className={`attach-strip${expanded ? ' all' : ''}`} role="toolbar" aria-label="This terminal's browsers and notes">
-      {expanded && (
-        <input
-          className="attach-filter"
-          value={query}
-          autoFocus
-          placeholder={`Filter ${items.length}`}
-          aria-label="Filter browsers and notes"
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => {
-            // Keys typed here are the filter's, not the terminal's or the canvas's.
-            e.stopPropagation()
-            if (e.key === 'Escape') setQuery(null)
-            if (e.key === 'Enter' && shown.length > 0) {
-              attachView.toggle(terminalId, shown[0].node.id, shown[0].kind)
-              setQuery(null)
-            }
-          }}
-        />
-      )}
-      {shown.map((item) => (
+    <div className="attach-tabs-slot">
+      <div className={`attach-tabs${pinned ? ' pinned' : ''}`} role="tablist" aria-orientation="vertical" aria-label="This terminal's browsers and notes">
         <button
-          key={item.node.id}
           type="button"
-          className={`attach-chip ${item.kind}${item.node.id === openId ? ' on' : ''}`}
-          title={item.kind === 'browser' ? activeBrowserTab(item.node).url : item.node.name}
-          aria-pressed={item.node.id === openId}
-          onMouseDown={(e) => {
-            if (!expanded) e.preventDefault()
-          }}
-          onClick={() => {
-            attachView.toggle(terminalId, item.node.id, item.kind)
-            setQuery(null)
-          }}
+          className="attach-tab attach-pin"
+          aria-pressed={pinned}
+          title={pinned ? 'Fold the tabs' : 'Keep the tabs open'}
+          onMouseDown={keep}
+          onClick={() => setPinned((now) => !now)}
         >
-          <CrIcon name={item.kind} />
-          <span>{label(item)}</span>
+          <span className="attach-tab-icon">{pinned ? '‹' : '›'}</span>
+          <span className="attach-tab-name">{items.length} browsers & notes</span>
         </button>
-      ))}
-      {hidden > 0 && (
-        <button type="button" className="attach-chip more" title="Show all" onMouseDown={(e) => e.preventDefault()} onClick={() => setQuery('')}>
-          +{hidden}
-        </button>
-      )}
-      {expanded && (
-        <button type="button" className="attach-chip more" title="Fold (Esc)" onClick={() => setQuery(null)}>
-          Fold
-        </button>
-      )}
+        {items.length >= FIND_FROM && (
+          <label className="attach-tabs-find" title="Filter">
+            <CrIcon name="search" />
+            <input
+              value={query}
+              placeholder={`Filter ${items.length}`}
+              aria-label="Filter browsers and notes"
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                // Keys typed here are the filter's, not the terminal's or the canvas's.
+                e.stopPropagation()
+                if (e.key === 'Escape') {
+                  setQuery('')
+                  e.currentTarget.blur()
+                }
+                if (e.key === 'Enter' && shown.length > 0) attachView.toggle(terminalId, shown[0].node.id, shown[0].kind)
+              }}
+            />
+          </label>
+        )}
+        {shown.map((item) => (
+          <button
+            key={item.node.id}
+            type="button"
+            role="tab"
+            className={`attach-tab ${item.kind}${item.node.id === openId ? ' on' : ''}`}
+            title={item.kind === 'browser' ? `${label(item)}\n${activeBrowserTab(item.node).url}` : item.node.name}
+            aria-selected={item.node.id === openId}
+            onMouseDown={keep}
+            onClick={() => attachView.toggle(terminalId, item.node.id, item.kind)}
+          >
+            <span className="attach-tab-icon">
+              <CrIcon name={item.kind} />
+            </span>
+            <span className="attach-tab-name">{label(item)}</span>
+          </button>
+        ))}
+      </div>
     </div>
   )
 }

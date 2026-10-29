@@ -1,5 +1,5 @@
 import { memo, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { AttachPanel, AttachStrip } from './AttachPanel'
+import { AttachPanel, AttachTabs } from './AttachPanel'
 import { attachView, useAttachView } from './attach-view'
 import { NO_ATTACHMENTS, TerminalAttachmentsContext } from './terminal-attachments'
 import { Terminal } from '@xterm/xterm'
@@ -1080,6 +1080,9 @@ function TerminalOverlay({
         </div>
       )}
       <div className="popout-terminal-wrap">
+        {/* The left column: the dials, then this terminal's browsers and notes as side tabs. */}
+        {(tuning.view !== null || attachments.length > 0) && (
+        <div className="popout-side">
         {tuning.view !== null && (
           <TuneRail
             view={tuning.view}
@@ -1094,6 +1097,11 @@ function TerminalOverlay({
               return dial ? { ...dial, state: cardRoute.state, open: cardRoute.open, onOpen: cardRoute.setOpen, onPick: cardRoute.pick } : null
             })()}
           />
+        )}
+        {attachments.length > 0 && (
+          <AttachTabs terminalId={node.id} items={attachments} openId={openItem?.node.id ?? null} />
+        )}
+        </div>
         )}
         <div className={`popout-main${openItem !== null ? ' split' : ''}`}>
         <TranscriptView
@@ -1129,9 +1137,6 @@ function TerminalOverlay({
           {/* PTY-direct for every card (owner ruling 2026-08-30). */}
           <div ref={containerRef} className="popout-terminal" />
         </TranscriptView>
-        {attachments.length > 0 && (
-          <AttachStrip terminalId={node.id} items={attachments} openId={openItem?.node.id ?? null} />
-        )}
         {openItem !== null && openView !== null && <AttachPanel key={openItem.node.id} item={openItem} view={openView} cardRect={rect} />}
         </div>
         <CheckpointTimeline
