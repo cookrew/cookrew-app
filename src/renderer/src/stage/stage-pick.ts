@@ -3,7 +3,7 @@
 // The stage has no canvas to pan and no zoom. Its background is a single
 // card, chosen here, and every agent is a small avatar at the right edge.
 //
-//   pinned  — what you opened or touched last; it stays until you go Back
+//   pinned  — the agent you picked or touched; it stays until you go Back
 //   choose  — the newest agent waiting on a decision (a permission, a pick)
 //   review  — the newest agent that finished a turn: read it, prompt again
 //   popped  — a browser or note that just appeared on an agent: that agent,

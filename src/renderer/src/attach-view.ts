@@ -37,6 +37,11 @@ export const attachView = {
     if (view !== null && view.terminalId === terminalId && view.itemId === itemId) set(null)
     else set({ terminalId, itemId, kind, full: false, rect: null })
   },
+  /** Open an item of this host, whatever is open now. */
+  open(terminalId: string, itemId: string, kind: AttachView['kind']): void {
+    if (view !== null && view.terminalId === terminalId && view.itemId === itemId) return
+    set({ terminalId, itemId, kind, full: false, rect: null })
+  },
   /** Close; with an id, only if that terminal's item is the open one. */
   close(terminalId?: string): void {
     if (terminalId === undefined || view?.terminalId === terminalId) set(null)

@@ -119,7 +119,7 @@ import {
   type CanvasVisualMode
 } from './canvas-visual-mode'
 import { CableHarness } from './CableHarness'
-import { stagePin } from './stage/stage-pin'
+import { stageSelect } from './stage/stage-select'
 import type { StageShowing } from './stage/StageView'
 
 /** How often a headless browser card refreshes its still. Matches the legacy
@@ -859,11 +859,13 @@ function Canvas(): React.JSX.Element {
        */
       freshCanvas = false
     ) => {
-      // On the stage a terminal asked for from elsewhere (the command box, a
-      // toast) takes the stage; anything else opens on the canvas, in sight —
-      // as it does from the levels view, which covers the canvas too.
-      if (viewRef.current === 'stage' && workspaceRef.current?.nodes.some((n) => n.id === id && n.kind === 'terminal')) {
-        stagePin.set({ terminalId: id, item: null })
+      // On the stage a card asked for from elsewhere (the command box, a
+      // toast) takes the middle: a terminal as the agent, a browser or note as
+      // itself. Anything else opens on the canvas, in sight — as it does from
+      // the levels view, which covers the canvas too.
+      const asked = viewRef.current === 'stage' ? workspaceRef.current?.nodes.find((n) => n.id === id) : undefined
+      if (asked?.kind === 'terminal' || asked?.kind === 'browser' || asked?.kind === 'note') {
+        stageSelect.set(asked.kind === 'terminal' ? { kind: 'agent', id } : { kind: 'item', id })
         return
       }
       if (viewRef.current === 'levels' || viewRef.current === 'stage') setView('canvas')

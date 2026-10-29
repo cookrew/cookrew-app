@@ -1,0 +1,84 @@
+/* ---- THE ZOOMED TERMINAL ON PAPER (2026-10-30) ----
+   The transcript, the live pane, the dials and the checkpoint rail were drawn
+   on a phosphor CRT: amber on near-black, with scanlines. The owner ruled one
+   colour for the whole app, so inside the zoomed terminal the phosphor tokens
+   mean the paper's own: cream ground, ink text, muted for the quiet lines, a
+   deep amber for emphasis. The rules that use the tokens are untouched; this
+   only says what the tokens are here, and drops the CRT effects. */
+.lod-overlay {
+  --phos-bg: var(--cream-hi);
+  --phos: var(--ink);
+  --phos-dim: var(--muted);
+  --phos-glow: #8a4b00;
+  background: var(--cream-hi);
+}
+
+.lod-overlay .ctx-transcript {
+  background-image: none;
+}
+
+.lod-overlay .cr-crt::before {
+  display: none;
+}
+
+.lod-overlay .phos-line.thinking,
+.lod-overlay .ctx-block-prompt {
+  text-shadow: none;
+}
+
+.lod-overlay .ctx-block {
+  border-top-color: var(--line-soft);
+}
+
+.lod-overlay .ctx-block.active {
+  background: rgba(255, 214, 0, 0.14);
+}
+
+.lod-overlay .ctx-block-reply code {
+  background: var(--cream-md);
+}
+
+.lod-overlay .ctx-block-reply pre {
+  background: var(--cream-md);
+  border-left-color: var(--line-soft);
+}
+
+.lod-overlay .ctx-block-reply hr {
+  border-top-color: var(--line-soft);
+}
+
+.lod-overlay .ctx-live {
+  border-top-color: rgba(21, 128, 61, 0.45);
+}
+
+.lod-overlay .ctx-live::before {
+  color: #15803d;
+}
+
+/* The dials and the side tabs: the same paper, a hairline for the column. */
+.lod-overlay .popout-side,
+.lod-overlay .cr-tune-rail,
+.lod-overlay .attach-tabs {
+  border-color: var(--line-soft);
+}
+
+.lod-overlay .cr-tune-chip,
+.lod-overlay .attach-tab {
+  border-color: var(--line-soft);
+  background: var(--cream);
+}
+
+.lod-overlay .cr-tune-chip:hover,
+.lod-overlay .attach-tab:hover {
+  background: var(--amber-soft);
+  border-color: var(--line);
+}
+
+.lod-overlay .attach-tab.on {
+  background: var(--amber);
+  border-color: var(--line);
+}
+
+.lod-overlay .xterm .xterm-viewport {
+  background-color: var(--cream-hi) !important;
+}
