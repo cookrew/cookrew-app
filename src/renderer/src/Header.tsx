@@ -10,10 +10,11 @@ import type { RouteStatus } from '../../shared/route'
 import './header.css'
 
 /**
- * The three things the stage can be showing: the levels (machines →
- * workspaces → agents, the default), the free canvas, and the board.
+ * What the window shows: the STAGE (stage/StageView.tsx) — levels, canvas and
+ * board merged into one (2026-10-30). The other three are DEPRECATED: kept
+ * reachable from the More menu, not developed further.
  */
-export type MainView = 'levels' | 'canvas' | 'agents'
+export type MainView = 'stage' | 'levels' | 'canvas' | 'agents'
 
 interface HeaderProps {
   workspaceName: string
@@ -37,8 +38,10 @@ interface HeaderProps {
   routeStatus?: RouteStatus | null
   /** Re-pull the canvas and re-establish the push channel. */
   onResync: () => void
-  /** The agent whose terminal the canvas has zoomed into: the route's last step there. */
+  /** The agent whose terminal the canvas has zoomed into (or the stage shows): the route's last step. */
   zoomedAgent?: string | null
+  /** The stage's agent's workspace, which need not be the canvas's. */
+  stageWorkspace?: string | null
   /**
    * The account avatar (identity v2, D1), or null where there is no account
    * surface — the phone companion and the demo tab feature-detect to nothing.
@@ -48,28 +51,14 @@ interface HeaderProps {
   avatar?: React.ReactNode
 }
 
-const VIEWS: ReadonlyArray<{ view: MainView; icon: 'levels' | 'canvas' | 'agent'; label: string }> = [
-  { view: 'levels', icon: 'levels', label: 'Levels' },
-  { view: 'canvas', icon: 'canvas', label: 'Canvas' },
-  { view: 'agents', icon: 'agent', label: 'Board' }
-]
-
-const viewTitle = (view: MainView, attention: number): string =>
-  view === 'levels'
-    ? 'Machines, workspaces, agents'
-    : view === 'canvas'
-      ? 'The canvas'
-      : attention > 0
-        ? `The board — ${attention} need you`
-        : 'The board (agents + elements, every workspace)'
-
 /**
  * THE ONE BAR. Two halves:
  *
  *   left  — the ROUTE (HeaderRoute.tsx): device / workspace / agent, each
  *           step a way out to its level.
- *   right — the FUNCTION BAR: the view switch, the More menu
- *           (HeaderMore.tsx) and the avatar.
+ *   right — the FUNCTION BAR: the More menu (HeaderMore.tsx, which also
+ *           holds the deprecated views) and the avatar; a way back to the
+ *           stage while one of those views is up.
  *
  * It replaces a bar that put everything on one line in the order it was
  * added — mark, path badge, avatar, switch, status, routing lamp, workspace
@@ -77,9 +66,8 @@ const viewTitle = (view: MainView, attention: number): string =>
  * behind ⋯, and each row there opens the sheet its chip used to. A zoomed
  * terminal keeps its own head: the bar only names it.
  *
- * ATTENTION LIVES ON THE SWITCH: the count of agents asking is a badge on
- * Board, the button that takes you to them. The account's waiting devices
- * ride the avatar the same way, which is why the avatar stays on the bar.
+ * Attention lives on the stage's faces now (the rose ones). The account's
+ * waiting devices ride the avatar, which is why the avatar stays on the bar.
  */
 export function Header({
   workspaceName,
@@ -94,6 +82,7 @@ export function Header({
   routeStatus,
   onResync,
   zoomedAgent = null,
+  stageWorkspace = null,
   avatar
 }: HeaderProps): React.JSX.Element {
   const remote = isRemoteMode()
@@ -108,26 +97,22 @@ export function Header({
         dir={dir}
         path={path}
         zoomedAgent={zoomedAgent}
+        stageWorkspace={stageWorkspace}
         onViewChange={onViewChange}
       />
       <div className="cr-fn" role="toolbar" aria-label="Functions">
-        <div className="cr-viewseg" role="group" aria-label="View">
-          {VIEWS.map((v) => (
-            <button
-              key={v.view}
-              type="button"
-              className={v.view === 'agents' && attentionCount > 0 ? 'attention' : undefined}
-              aria-pressed={view === v.view}
-              title={viewTitle(v.view, attentionCount)}
-              onClick={() => onViewChange(v.view)}
-            >
-              <CrIcon name={v.icon} />
-              <span className="cr-viewseg-label">{v.label}</span>
-              {v.view === 'agents' && attentionCount > 0 && <span className="cr-viewseg-badge">{attentionCount}</span>}
-            </button>
-          ))}
-        </div>
+        {/* The stage is the view; the three it merged are deprecated and live
+            in the More menu. Away on one of them, the way back is on the bar. */}
+        {view !== 'stage' && (
+          <button type="button" className="cr-fn-stage" title="Back to the stage" onClick={() => onViewChange('stage')}>
+            <CrIcon name="prev" />
+            <span>Stage</span>
+          </button>
+        )}
         <HeaderMore
+          view={view}
+          onViewChange={onViewChange}
+          attentionCount={attentionCount}
           busyCount={busyCount}
           terminalCount={terminalCount}
           connection={remote ? path : null}

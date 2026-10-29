@@ -50,6 +50,21 @@ const bar = (): string =>
     />
   )
 
+const stageBar = (): string =>
+  renderToStaticMarkup(
+    <Header
+      workspaceName="Cookrew Dev"
+      dir="/tmp"
+      terminalCount={2}
+      busyCount={0}
+      attentionCount={0}
+      view="stage"
+      onViewChange={() => undefined}
+      onWall={() => undefined}
+      onResync={() => undefined}
+    />
+  )
+
 /** The route only (the left of the bar), so what is on it can be asserted. */
 const route = (html: string): string => html.slice(html.indexOf('cr-route'), html.indexOf('cr-fn'))
 /** The function bar only (the right of the bar). */
@@ -85,11 +100,21 @@ describe('the companion bar', () => {
     expect(route(bar())).not.toContain('cr-route-agent')
   })
 
-  it('puts the view switch, the More menu and the avatar on the function bar, in that order', () => {
+  it('a deprecated view puts the way back to the stage, the More menu and the avatar on the function bar, in that order', () => {
     stubPhone()
     const html = functions(bar())
-    expect(html.indexOf('cr-viewseg')).toBeLessThan(html.indexOf('cr-more'))
+    expect(html).not.toContain('cr-viewseg')
+    expect(html.indexOf('cr-fn-stage')).toBeGreaterThan(-1)
+    expect(html.indexOf('cr-fn-stage')).toBeLessThan(html.indexOf('cr-more'))
     expect(html.indexOf('cr-more')).toBeLessThan(html.indexOf('cr-acct-avatar'))
+  })
+
+  it('on the stage the bar has no view switch at all: the views are in More', () => {
+    stubPhone()
+    const html = functions(stageBar())
+    expect(html).not.toContain('cr-fn-stage')
+    expect(html).not.toContain('cr-viewseg')
+    expect(html.indexOf('cr-more')).toBeGreaterThan(-1)
   })
 
   it('keeps everything else behind More, closed until it is opened', () => {

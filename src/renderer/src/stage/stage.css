@@ -1,0 +1,198 @@
+/* ---- THE STAGE (StageView.tsx) ----
+   One card full size on the left, the agents' faces in a column at the right.
+   Inside the stage like the levels and the board, over the canvas. */
+.cr-stage-view {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  background: var(--cream);
+  overflow: hidden;
+}
+
+.cr-stage-main {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* A containing block: the overlay's fixed position counts from here. */
+.cr-stage-term {
+  position: absolute;
+  inset: 0;
+  contain: layout paint;
+}
+
+.cr-stage-wait {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: #12100c;
+  color: #d6f5c8;
+  font: 600 12px/1 ui-monospace, Menlo, monospace;
+  letter-spacing: 0.08em;
+}
+
+/* Why this card: one quiet line over the card's bottom-right corner. */
+.cr-stage-why {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  z-index: 3;
+  padding: 3px 8px;
+  border: 1.5px solid var(--line);
+  background: var(--cream-hi);
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink);
+  pointer-events: none;
+}
+
+.cr-stage-why.choose {
+  background: var(--rose);
+  color: var(--cream-hi);
+}
+
+.cr-stage-why.review,
+.cr-stage-why.popped {
+  background: var(--amber);
+}
+
+/* ---- the faces ---- */
+.cr-rail {
+  position: relative;
+  flex: 0 0 56px;
+  display: flex;
+  flex-direction: column;
+  border-left: 2px solid var(--line);
+  background: var(--cream-hi);
+}
+
+.cr-rail-faces {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.cr-rail-faces::-webkit-scrollbar {
+  display: none;
+}
+
+.cr-rail-face {
+  position: relative;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 2px solid var(--line);
+  border-radius: 50%;
+  background: var(--cream);
+  cursor: pointer;
+}
+
+.cr-rail-face .vi-avatar,
+.cr-rail-face .vi-avatar svg {
+  width: 28px;
+  height: 28px;
+}
+
+.cr-rail-face:hover {
+  background: var(--amber-soft);
+}
+
+/* On the stage now. */
+.cr-rail-face.on {
+  box-shadow: 0 0 0 3px var(--amber);
+}
+
+/* Needs you: the board's rose, and the one thing here that moves. */
+.cr-rail-face.waiting {
+  border-color: var(--rose);
+  animation: cr-rail-ask 1.6s ease-in-out infinite;
+}
+
+.cr-rail-face.working {
+  border-color: var(--amber);
+}
+
+.cr-rail-face.offline,
+.cr-rail-face.quiet {
+  opacity: 0.55;
+}
+
+@keyframes cr-rail-ask {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(225, 29, 72, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(225, 29, 72, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cr-rail-face.waiting {
+    animation: none;
+  }
+}
+
+/* The board card as a speech bubble, to the left of its face. */
+.cr-rail-bubble {
+  position: absolute;
+  right: calc(100% + 10px);
+  z-index: 70;
+  width: min(420px, calc(100vw - 90px));
+  border: 2px solid var(--line);
+  border-radius: 10px;
+  background: var(--cream-hi);
+  box-shadow: 4px 4px 0 var(--line);
+}
+
+.cr-rail-bubble::after {
+  content: '';
+  position: absolute;
+  top: 14px;
+  right: -8px;
+  width: 12px;
+  height: 12px;
+  border-top: 2px solid var(--line);
+  border-right: 2px solid var(--line);
+  background: var(--cream-hi);
+  transform: rotate(45deg);
+}
+
+.cr-rail-bubble-body {
+  max-height: 70vh;
+  overflow: auto;
+  border-radius: 8px;
+}
+
+.cr-rail-bubble .ags-row {
+  border: 0;
+}
+
+@media (max-width: 700px) {
+  .cr-rail {
+    flex-basis: 46px;
+  }
+  .cr-rail-face {
+    width: 34px;
+    height: 34px;
+  }
+  .cr-rail-face .vi-avatar,
+  .cr-rail-face .vi-avatar svg {
+    width: 24px;
+    height: 24px;
+  }
+}

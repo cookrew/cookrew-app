@@ -8,6 +8,7 @@
 // React sees a trusted click, and the row would never act.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CrIcon } from './icons'
+import type { MainView } from './Header'
 import { StatusCoin } from './nodes/AgentAvatar'
 import { PathBadge } from './PathBadge'
 import { RoutingEntry } from './routing/RoutingPanel'
@@ -15,6 +16,10 @@ import type { RouteStatus } from '../../shared/route'
 import type { PathBadgeView } from '../../shared/path-badge'
 
 interface HeaderMoreProps {
+  view: MainView
+  onViewChange: (view: MainView) => void
+  /** Agents asking for you: the Board row says how many. */
+  attentionCount: number
   busyCount: number
   terminalCount: number
   /** The phone's path: a Connection row that refreshes and opens its sheet. */
@@ -29,7 +34,16 @@ interface HeaderMoreProps {
   demo: boolean
 }
 
+const DEPRECATED_VIEWS: ReadonlyArray<{ view: MainView; icon: 'levels' | 'canvas' | 'agent'; label: string }> = [
+  { view: 'levels', icon: 'levels', label: 'Levels' },
+  { view: 'canvas', icon: 'canvas', label: 'Canvas' },
+  { view: 'agents', icon: 'agent', label: 'Board' }
+]
+
 export function HeaderMore({
+  view,
+  onViewChange,
+  attentionCount,
   busyCount,
   terminalCount,
   connection,
@@ -131,6 +145,29 @@ export function HeaderMore({
               <kbd>/</kbd>
             </button>
           )}
+          {/* The views the stage merged: still here, no longer the way in. */}
+          <div className="cr-more-group" role="presentation">
+            Views
+          </div>
+          <button type="button" className={`cr-more-item${view === 'stage' ? ' on' : ''}`} aria-pressed={view === 'stage'} onClick={() => onViewChange('stage')}>
+            <CrIcon name="agent" />
+            <span className="cr-more-label">Stage</span>
+          </button>
+          {DEPRECATED_VIEWS.map((v) => (
+            <button
+              key={v.view}
+              type="button"
+              className={`cr-more-item deprecated${view === v.view ? ' on' : ''}`}
+              aria-pressed={view === v.view}
+              title={`${v.label} — deprecated: the stage replaces it`}
+              onClick={() => onViewChange(v.view)}
+            >
+              <CrIcon name={v.icon} />
+              <span className="cr-more-label">{v.label}</span>
+              {v.view === 'agents' && attentionCount > 0 && <span className="cr-viewseg-badge">{attentionCount}</span>}
+              <span className="cr-more-tag">deprecated</span>
+            </button>
+          ))}
           <button type="button" className="cr-more-item" onClick={onResync}>
             <CrIcon name="expand" />
             <span className="cr-more-label">Refresh</span>
