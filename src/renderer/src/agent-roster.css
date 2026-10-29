@@ -2057,3 +2057,111 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ==== a zoomed terminal's own browsers and notes (AttachPanel) ====
+   Left column = transcripts, then the strip at its bottom-left, then — when an
+   item is open — the item in the lower half. The checkpoint rail stays on the
+   right at full height. */
+.popout-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.popout-main > .ctx-transcript {
+  flex: 1 1 0;
+}
+.popout-main.split > .ctx-transcript,
+.popout-main.split > .attach-panel {
+  flex: 1 1 0;
+  min-height: 0;
+}
+.attach-strip {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 5px 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-top: 1px solid var(--line-soft);
+  background: var(--cream-hi);
+}
+.attach-strip::-webkit-scrollbar {
+  display: none;
+}
+.attach-chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  max-width: 220px;
+  height: 24px;
+  padding: 0 9px 0 6px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--cream-hi);
+  color: var(--ink);
+  font: 600 11.5px/1 var(--font-mono);
+  cursor: pointer;
+}
+.attach-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attach-chip:hover {
+  border-color: var(--line);
+}
+.attach-chip.on {
+  background: var(--amber);
+  border-color: var(--line);
+}
+.attach-panel {
+  display: flex;
+  flex-direction: column;
+  border-top: 2px solid var(--line);
+  background: var(--cream-hi);
+  min-height: 0;
+}
+/* The browser layer draws the page over this box; it only holds the space. */
+.attach-slot {
+  flex: 1;
+  min-height: 0;
+  background: var(--paper, #f5f1e6);
+}
+.attach-note-head {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  font: 600 12px/1.2 var(--font-mono);
+}
+.attach-note-head .attach-hint {
+  margin-left: auto;
+  font-weight: 400;
+  color: var(--muted);
+}
+.attach-note-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 14px;
+}
+.attach-note-editor {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  resize: none;
+}
+/* The embedded browser stacks over its terminal card (later in the DOM at the
+   same z); full window goes over everything the stage has. */
+.browser-lod.browser-full {
+  inset: 0;
+  z-index: 200;
+}
