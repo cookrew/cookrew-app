@@ -78,8 +78,10 @@ interface HeaderRouteProps {
   dir: string
   /** The phone's path, worn as a dot on the device step. */
   path: PathBadgeView
-  /** The agent zoomed on the canvas, if any. */
+  /** The agent zoomed on the canvas (or on the stage), if any. */
   zoomedAgent: string | null
+  /** The stage's agent's workspace: it can be any workspace, not the canvas's. */
+  stageWorkspace?: string | null
   onViewChange: (view: MainView) => void
 }
 
@@ -89,9 +91,10 @@ export function routeAgent(inLevels: boolean, levels: LevelsRouteState, zoomedAg
   return levels.path.agent ? (levels.names.agent ?? '…') : null
 }
 
-export function HeaderRoute({ view, workspaceName, dir, path, zoomedAgent, onViewChange }: HeaderRouteProps): React.JSX.Element {
+export function HeaderRoute({ view, workspaceName, dir, path, zoomedAgent, stageWorkspace = null, onViewChange }: HeaderRouteProps): React.JSX.Element {
   const levels = useLevelsRoute()
-  const canvasWorkspace = useActiveWorkspace(workspaceName, dir)
+  const active = useActiveWorkspace(workspaceName, dir)
+  const canvasWorkspace = stageWorkspace !== null && stageWorkspace !== active.name ? { name: stageWorkspace, icon: '🗂', dir: '' } : active
   const remote = isRemoteMode()
   // "drej-mbp.local" → "drej-mbp": the `.local` is mDNS plumbing, not a name.
   const device = (levels.names.machine ?? (remote ? path.desktopName : null) ?? 'This desktop').replace(/\.local$/i, '')

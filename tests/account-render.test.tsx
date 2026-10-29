@@ -83,10 +83,9 @@ const bar = (avatar: React.ReactNode): string =>
 const functionBar = (html: string): string => html.slice(html.indexOf('class="cr-fn"'))
 
 describe('the avatar ends the function bar (D1, moved with the one bar)', () => {
-  it('is on the function bar, after the view switch and the More menu', () => {
+  it('is on the function bar, after the More menu', () => {
     const html = functionBar(bar(<AccountAvatar status={status()} onOpen={() => undefined} />))
     expect(html).toContain('cr-acct-avatar')
-    expect(html.indexOf('cr-viewseg')).toBeLessThan(html.indexOf('cr-acct-avatar'))
     expect(html.indexOf('cr-more')).toBeLessThan(html.indexOf('cr-acct-avatar'))
   })
 

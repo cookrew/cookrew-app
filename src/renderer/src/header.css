@@ -236,6 +236,57 @@
   color: var(--cream-hi);
 }
 
+/* The views group: the stage, then the three it replaced. */
+.cr-more-group {
+  margin-top: 4px;
+  padding: 8px 8px 3px;
+  border-top: 1.5px solid var(--line);
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.cr-more-item.on {
+  background: var(--amber);
+}
+
+.cr-more-item.deprecated .cr-more-label {
+  color: var(--muted);
+}
+
+.cr-more-tag {
+  flex: 0 0 auto;
+  padding: 1px 4px;
+  border: 1px solid var(--line-soft, var(--line));
+  font-size: 7.5px;
+  color: var(--muted);
+}
+
+/* Away on a deprecated view: the way back to the stage, on the bar. */
+.cr-fn-stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px 0 6px;
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  background: var(--amber);
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.cr-fn-stage .cr-icon {
+  width: 11px;
+  height: 11px;
+}
+
 /* The path badge inside its row: the same dot and word, without the button frame. */
 .cr-more-item .cr-path {
   height: 20px;
