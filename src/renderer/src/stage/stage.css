@@ -1,6 +1,8 @@
 /* ---- THE STAGE (StageView.tsx) ----
-   One card full size on the left, the agents' faces in a column at the right.
-   Inside the stage like the levels and the board, over the canvas. */
+   Three columns on the paper: the workspace's browsers and notes, the one
+   thing you are looking at, its agents. The two side columns are one card
+   kind (StageColumns.tsx) so they read as one system. Inside the stage like
+   the levels and the board, over the canvas. */
 .cr-stage-view {
   position: absolute;
   inset: 0;
@@ -14,6 +16,9 @@
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
+  border-left: 2px solid var(--line);
+  border-right: 2px solid var(--line);
+  background: var(--cream-hi);
 }
 
 /* A containing block: the overlay's fixed position counts from here. */
@@ -28,16 +33,31 @@
   inset: 0;
   display: grid;
   place-items: center;
-  background: #12100c;
-  color: #d6f5c8;
-  font: 600 12px/1 ui-monospace, Menlo, monospace;
-  letter-spacing: 0.08em;
+  color: var(--muted);
+  font-family: var(--font-pixel);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 
-/* Why this card: one quiet line over the card's bottom-right corner. */
+/* A browser or note picked on the left, full size in the middle. */
+.stg-item-pane {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.stg-item-pane .attach-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  border-top: 0;
+}
+
+/* Why this terminal: one quiet line over its bottom-right corner. */
 .cr-stage-why {
   position: absolute;
-  right: 10px;
+  right: 40px;
   bottom: 8px;
   z-index: 3;
   padding: 3px 8px;
@@ -61,108 +81,268 @@
   background: var(--amber);
 }
 
-/* ---- the faces ---- */
-.cr-rail {
+/* ---- the side columns ---- */
+.stg-col {
   position: relative;
-  flex: 0 0 56px;
+  flex: 0 0 236px;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  border-left: 2px solid var(--line);
-  background: var(--cream-hi);
-}
-
-.cr-rail-faces {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 0;
-  overflow-y: auto;
-  scrollbar-width: none;
-}
-
-.cr-rail-faces::-webkit-scrollbar {
-  display: none;
-}
-
-.cr-rail-face {
-  position: relative;
-  flex: 0 0 auto;
-  width: 40px;
-  height: 40px;
-  padding: 0;
-  display: grid;
-  place-items: center;
-  border: 2px solid var(--line);
-  border-radius: 50%;
   background: var(--cream);
-  cursor: pointer;
 }
 
-.cr-rail-face .vi-avatar,
-.cr-rail-face .vi-avatar svg {
-  width: 28px;
-  height: 28px;
+.stg-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 10px;
+  border-bottom: 1.5px solid var(--line);
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
 }
 
-.cr-rail-face:hover {
+/* Filtered: the column says by what, in the amber that means "your pick". */
+.stg-head.filtered {
   background: var(--amber-soft);
 }
 
-/* On the stage now. */
-.cr-rail-face.on {
-  box-shadow: 0 0 0 3px var(--amber);
+.stg-head-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* Needs you: the board's rose, and the one thing here that moves. */
-.cr-rail-face.waiting {
-  border-color: var(--rose);
-  animation: cr-rail-ask 1.6s ease-in-out infinite;
+.stg-head-count {
+  flex: 0 0 auto;
+  color: var(--muted);
 }
 
-.cr-rail-face.working {
-  border-color: var(--amber);
+.stg-head-clear {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1.5px solid var(--line);
+  background: var(--cream-hi);
+  color: var(--ink);
+  cursor: pointer;
 }
 
-.cr-rail-face.offline,
-.cr-rail-face.quiet {
-  opacity: 0.55;
+.stg-head-clear .cr-icon {
+  width: 10px;
+  height: 10px;
 }
 
-@keyframes cr-rail-ask {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgba(225, 29, 72, 0.45);
-  }
-  50% {
-    box-shadow: 0 0 0 6px rgba(225, 29, 72, 0);
-  }
+.stg-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  scrollbar-width: thin;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .cr-rail-face.waiting {
-    animation: none;
-  }
+.stg-empty {
+  padding: 14px 6px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
 }
 
-/* The board card as a speech bubble, to the left of its face. */
-.cr-rail-bubble {
+/* ---- one card, both columns ---- */
+.stg-card {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1.5px solid var(--line-soft);
+  border-left: 4px solid var(--line-soft);
+  border-radius: 4px;
+  background: var(--cream-hi);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.stg-card:hover {
+  border-color: var(--line);
+}
+
+/* Picked: the amber the rest of the app uses for "this one". */
+.stg-card.on,
+.stg-card.open {
+  border-color: var(--line);
+  background: var(--amber-soft);
+  box-shadow: 2px 2px 0 var(--line);
+}
+
+.stg-card.open {
+  background: var(--amber);
+}
+
+/* In the middle by itself (following what needs you), not by your pick. */
+.stg-card.auto {
+  border-color: var(--line);
+  border-style: dashed;
+  border-left-style: solid;
+}
+
+/* The left edge says the state: rose needs you, amber working, green done. */
+.stg-card.agent.waiting {
+  border-left-color: var(--rose);
+}
+
+.stg-card.agent.working {
+  border-left-color: var(--amber-deep);
+}
+
+.stg-card.agent.done {
+  border-left-color: var(--hp);
+}
+
+.stg-card.browser {
+  border-left-color: #93c5fd;
+}
+
+.stg-card.note {
+  border-left-color: #fcd34d;
+}
+
+.stg-card.agent.offline,
+.stg-card.agent.quiet {
+  color: var(--muted);
+}
+
+.stg-card-icon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+}
+
+.stg-card-icon .cr-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.stg-card-icon.face .vi-avatar,
+.stg-card-icon.face .vi-avatar svg {
+  width: 22px;
+  height: 22px;
+}
+
+.stg-card-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stg-card-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font: 600 12.5px/1.25 var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stg-card-phase {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.stg-card.agent.waiting .stg-card-phase {
+  color: var(--rose);
+}
+
+.stg-card-line {
+  font-size: 11.5px;
+  line-height: 1.3;
+  color: var(--ink-soft);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.stg-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+  color: var(--muted);
+  font: 10.5px/1 var(--font-mono);
+}
+
+.stg-card-foot.counts {
+  gap: 10px;
+}
+
+.stg-card-foot .cr-icon {
+  width: 11px;
+  height: 11px;
+  vertical-align: -1px;
+}
+
+.stg-mini .vi-avatar,
+.stg-mini .vi-avatar svg {
+  width: 16px;
+  height: 16px;
+}
+
+.stg-tag {
+  padding: 0 4px;
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* The board card as a speech bubble, to the left of the agents. */
+.stg-bubble {
   position: absolute;
   right: calc(100% + 10px);
   z-index: 70;
-  width: min(420px, calc(100vw - 90px));
+  width: min(420px, calc(100vw - 300px));
   border: 2px solid var(--line);
   border-radius: 10px;
   background: var(--cream-hi);
   box-shadow: 4px 4px 0 var(--line);
 }
 
-.cr-rail-bubble::after {
+.stg-bubble::after {
   content: '';
   position: absolute;
-  top: 14px;
+  top: 18px;
   right: -8px;
   width: 12px;
   height: 12px;
@@ -172,27 +352,49 @@
   transform: rotate(45deg);
 }
 
-.cr-rail-bubble-body {
+.stg-bubble-body {
   max-height: 70vh;
   overflow: auto;
   border-radius: 8px;
 }
 
-.cr-rail-bubble .ags-row {
+.stg-bubble .ags-row {
   border: 0;
 }
 
+/* ---- narrow: the side columns keep their icons and give their words ---- */
+@media (max-width: 900px) {
+  .stg-col {
+    flex-basis: 188px;
+  }
+}
+
 @media (max-width: 700px) {
-  .cr-rail {
-    flex-basis: 46px;
+  .stg-col {
+    flex-basis: 52px;
   }
-  .cr-rail-face {
-    width: 34px;
-    height: 34px;
+  .stg-head {
+    justify-content: center;
+    padding: 0;
   }
-  .cr-rail-face .vi-avatar,
-  .cr-rail-face .vi-avatar svg {
-    width: 24px;
-    height: 24px;
+  .stg-head-title {
+    display: none;
+  }
+  .stg-head.filtered .stg-head-count {
+    display: none;
+  }
+  .stg-list {
+    padding: 6px 5px;
+    gap: 5px;
+  }
+  .stg-card {
+    justify-content: center;
+    padding: 6px 0;
+  }
+  .stg-card-body {
+    display: none;
+  }
+  .stg-bubble {
+    display: none;
   }
 }

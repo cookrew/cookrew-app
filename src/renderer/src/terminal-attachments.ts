@@ -75,3 +75,9 @@ export function filterAttachments(items: readonly TerminalAttachment[], query: s
 }
 
 export const TerminalAttachmentsContext = createContext<AttachmentIndex>(new Map())
+
+/**
+ * Does the terminal draw its own side tabs? Not on the stage, whose left
+ * column already lists the agent's browsers and notes (stage/StageView.tsx).
+ */
+export const SideTabsContext = createContext(true)

@@ -1,7 +1,8 @@
 import { memo, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { AttachPanel, AttachTabs } from './AttachPanel'
 import { attachView, useAttachView } from './attach-view'
-import { NO_ATTACHMENTS, TerminalAttachmentsContext } from './terminal-attachments'
+import { NO_ATTACHMENTS, SideTabsContext, TerminalAttachmentsContext } from './terminal-attachments'
+import './transcript-paper.css'
 import { Terminal } from '@xterm/xterm'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import type { IClipboardProvider } from '@xterm/addon-clipboard'
@@ -39,16 +40,34 @@ import { useAgentTuning } from './nodes/use-agent-tuning'
 import { useCardRoute } from './nodes/use-card-route'
 import { routeDialAllowed, routeDialInput } from '../../shared/route-view'
 
-const PHOSPHOR_THEME = {
-  background: '#14110A',
-  foreground: '#E9B949',
-  cursor: '#FFD77A',
-  cursorAccent: '#14110A',
-  selectionBackground: '#5C4A1F',
-  black: '#14110A',
-  brightBlack: '#8A6D1C',
-  white: '#FFD77A',
-  brightWhite: '#FFFEF5'
+/**
+ * PAPER, not phosphor (2026-10-30): the live terminal is the app's own cream
+ * and ink, like the transcript above it. A light ANSI palette — white and
+ * bright white are greys and ink, or they would vanish — and a contrast floor
+ * (minimumContrastRatio below) for the truecolor a dark-themed TUI still sends.
+ */
+const PAPER_THEME = {
+  background: '#FFFEF5',
+  foreground: '#2D2A20',
+  cursor: '#2D2A20',
+  cursorAccent: '#FFFEF5',
+  selectionBackground: '#FFF3AD',
+  black: '#2D2A20',
+  red: '#B91C1C',
+  green: '#15803D',
+  yellow: '#A16207',
+  blue: '#1D4ED8',
+  magenta: '#A21CAF',
+  cyan: '#0E7490',
+  white: '#78716C',
+  brightBlack: '#78716C',
+  brightRed: '#DC2626',
+  brightGreen: '#16A34A',
+  brightYellow: '#CA8A04',
+  brightBlue: '#2563EB',
+  brightMagenta: '#C026D3',
+  brightCyan: '#0891B2',
+  brightWhite: '#2D2A20'
 }
 
 /**
@@ -151,6 +170,7 @@ function TerminalOverlay({
   // This terminal's own browsers and notes (canvas wiring), and the one open
   // in the lower half, if any.
   const attachments = useContext(TerminalAttachmentsContext).get(node.id) ?? NO_ATTACHMENTS
+  const sideTabs = useContext(SideTabsContext)
   const openView = useAttachView()
   const openItem =
     openView !== null && openView.terminalId === node.id
@@ -389,7 +409,8 @@ function TerminalOverlay({
     if (!container) return
 
     const term = new Terminal({
-      theme: PHOSPHOR_THEME,
+      theme: PAPER_THEME,
+      minimumContrastRatio: 4.5,
       fontFamily: 'JetBrains Mono, SF Mono, Menlo, monospace',
       fontSize: 13,
       cursorBlink: true,
@@ -1081,7 +1102,7 @@ function TerminalOverlay({
       )}
       <div className="popout-terminal-wrap">
         {/* The left column: the dials, then this terminal's browsers and notes as side tabs. */}
-        {(tuning.view !== null || attachments.length > 0) && (
+        {(tuning.view !== null || (sideTabs && attachments.length > 0)) && (
         <div className="popout-side">
         {tuning.view !== null && (
           <TuneRail
@@ -1098,7 +1119,7 @@ function TerminalOverlay({
             })()}
           />
         )}
-        {attachments.length > 0 && (
+        {sideTabs && attachments.length > 0 && (
           <AttachTabs terminalId={node.id} items={attachments} openId={openItem?.node.id ?? null} />
         )}
         </div>
