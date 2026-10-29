@@ -190,12 +190,6 @@ body,
   -webkit-app-region: no-drag;
 }
 
-.cr-header-brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .cr-logo-mark {
   height: 28px;
   flex: 0 0 auto;
@@ -245,13 +239,6 @@ body.cookrew-mobile .cr-logo-mark {
   font-size: 17px;
   letter-spacing: 0.08em;
   text-shadow: 2px 2px 0 var(--amber);
-}
-
-.cr-header-meta {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  min-width: 0;
 }
 
 /* ---- CANVAS ⇄ AGENTS switch ----
@@ -321,13 +308,6 @@ body.cookrew-mobile .cr-logo-mark {
 
 .cr-viewseg button.attention:not([aria-pressed='true']) {
   animation: cr-blink 1.6s steps(2) infinite;
-}
-
-.cr-header-status {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 /* Shared on-state for toggle buttons (the roster's SELECT among them, which
@@ -413,8 +393,7 @@ body.cookrew-mobile .cr-header {
     display: none;
   }
 
-  .cr-viewseg-label,
-  .cr-header-status .cr-kicker-word {
+  .cr-viewseg-label {
     display: none;
   }
 
@@ -644,12 +623,6 @@ a.cr-btn {
   height: 9px;
   vertical-align: -1.5px;
 }
-.cr-ws-icon .cr-icon {
-  width: 12px;
-  height: 12px;
-  vertical-align: -2px;
-}
-
 .vi-pager-btn .cr-icon {
   width: calc(10px * var(--z, 1));
   height: calc(10px * var(--z, 1));
@@ -3600,41 +3573,6 @@ a.card-close {
   max-height: 100%;
 }
 
-/* ---- workspace chip (header) ----
- * ONE CHIP, ONE DOOR. The name opens the screen wall, and the wall is the
- * whole workspace surface — switching, making, directories, removing, the
- * history. The caret and its dropdown are gone, so the chip is one button
- * wearing its own border again. */
-.cr-ws {
-  position: relative;
-  display: flex;
-  align-items: stretch;
-  min-width: 0;
-}
-.cr-ws-current {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  background: var(--cream-md);
-  border: 1.5px solid var(--line);
-  border-radius: 3px;
-  padding: 3px 8px;
-  cursor: pointer;
-  min-width: 0;
-}
-.cr-ws-current:hover {
-  background: var(--amber-soft);
-}
-.cr-ws-icon {
-  font-size: 12px;
-  line-height: 1;
-}
-.cr-ws-name {
-  max-width: 200px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 /* The new-workspace form — the create sheet on the screen wall
    (WorkspaceCreateSheet.tsx). */
 .cr-ws-new {
@@ -3737,91 +3675,11 @@ body.cookrew-mobile .cr-header {
   gap: 10px;
 }
 
-/* One-line header on phones: everything shrinks except the LEDs; the
-   workspace name ellipsizes and the wordmark yields on tiny screens. */
+/* One-line header on phones: the route's names ellipsize (header.css). */
 body.cookrew-mobile .cr-header .cr-kicker {
   white-space: nowrap;
 }
 
-/* THE WORKSPACE CHIP IS A STUB ON THE PHONE. The bar has one line and the
-   name was walking off its right edge; the icon says which workspace, the
-   name keeps a few letters — a few more than before, since the caret's
-   sliver is gone. The wall has the full names. */
-body.cookrew-mobile .cr-ws-current {
-  padding: 3px 6px;
-  gap: 5px;
-  min-width: 0;
-}
-
-body.cookrew-mobile .cr-ws-name {
-  max-width: 72px;
-  font-size: 9px;
-}
-
-@media (max-width: 480px) {
-  body.cookrew-mobile .cr-logo {
-    display: none;
-  }
-
-  /* THE BAR IN PORTRAIT HAS ONE LINE AND SEVEN THINGS ON IT: the hand, the
-     path badge, the avatar, canvas/board, the status coin, the routing lamp
-     and the workspace chip. At 390 px the chip was walking off the right
-     edge (2026-10-15). The budget: every mark loses its slack, the count
-     beside the coin goes (the board has it), the chip keeps its icon only,
-     and nothing on the bar may shrink the chip — it is the one control
-     that moves the whole canvas. */
-  body.cookrew-mobile .cr-header {
-    gap: 6px;
-    padding-left: 10px;
-    padding-right: 8px;
-  }
-  body.cookrew-mobile .cr-header-brand {
-    gap: 6px;
-    min-width: 0;
-  }
-  body.cookrew-mobile .cr-hand-mark img {
-    height: 22px;
-  }
-  body.cookrew-mobile .cr-path {
-    height: 22px;
-    padding: 0 6px;
-    gap: 4px;
-    font-size: 8.5px;
-    letter-spacing: 0.04em;
-    /* The one thing on the bar that may give: on a 320 px phone the word
-       loses its tail before the chip loses its place. */
-    flex: 0 1 auto;
-    min-width: 0;
-    overflow: hidden;
-  }
-  body.cookrew-mobile .cr-path-word {
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  body.cookrew-mobile .cr-viewseg button {
-    padding: 5px 8px;
-  }
-  body.cookrew-mobile .cr-header-status {
-    gap: 0;
-  }
-  body.cookrew-mobile .cr-header-status .cr-kicker {
-    display: none;
-  }
-  body.cookrew-mobile .cr-routing-entry {
-    padding: 3px 6px;
-    gap: 0;
-  }
-  body.cookrew-mobile .cr-ws {
-    flex: 0 0 auto;
-  }
-  body.cookrew-mobile .cr-ws-current {
-    padding: 3px 6px;
-    gap: 0;
-  }
-  body.cookrew-mobile .cr-ws-name {
-    display: none;
-  }
-}
 
 body.cookrew-mobile .cr-dock {
   padding-bottom: max(10px, env(safe-area-inset-bottom));

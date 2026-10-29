@@ -54,6 +54,13 @@ describeWithChrome('the Routing panel, clicked', () => {
     await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: box!.x, y: box!.y, button: 'left', clickCount: 1 })
   }
 
+  /** Routing lives in the header's More menu (Header.tsx): open it, then the row. */
+  async function openRouting(page: CdpPage): Promise<void> {
+    await click(page, '.cr-more-btn')
+    await page.evaluate(`new Promise((resolve) => setTimeout(resolve, 120))`)
+    await click(page, '.cr-more-menu .cr-routing-entry')
+  }
+
   it('ADD → API key → deepseek types the key line once, without Enter, and focuses the pane; INSTALL types with Enter', async () => {
     const browser = await launchChrome({ width: 1280, height: 900, chrome })
     try {
@@ -68,7 +75,7 @@ describeWithChrome('the Routing panel, clicked', () => {
       await page.send('Page.navigate', { url: `http://127.0.0.1:${served!.port}/index.html` })
       await waitForCanvas(page, 90_000, 800)
       await page.evaluate("window.__routeStatus('online')")
-      await click(page, '.cr-routing-entry')
+      await openRouting(page)
       await sleep(400)
       await click(page, '.cr-routing-add .cr-routing-btn')
       await sleep(200)
@@ -122,7 +129,7 @@ describeWithChrome('the Routing panel, clicked', () => {
       await page.send('Page.navigate', { url: `http://127.0.0.1:${served!.port}/index.html` })
       await waitForCanvas(page, 90_000, 800)
       await page.evaluate("window.__routeStatus('online')")
-      await click(page, '.cr-routing-entry')
+      await openRouting(page)
       await sleep(400)
       // The pick: the chip goes on, direct goes off.
       const before = await chip(page, 'deepseek/deepseek-v4')
@@ -141,7 +148,7 @@ describeWithChrome('the Routing panel, clicked', () => {
       await escape(page)
       await sleep(300)
       expect(await page.evaluate<number>("document.querySelectorAll('.cr-routing-panel').length")).toBe(0)
-      await click(page, '.cr-routing-entry')
+      await openRouting(page)
       await sleep(500)
       expect((await chip(page, 'deepseek/deepseek-v4'))?.checked).toBe('true')
       expect((await chip(page, 'direct'))?.checked).toBe('false')
@@ -152,7 +159,7 @@ describeWithChrome('the Routing panel, clicked', () => {
       await page.evaluate('window.__routeReadLag(900)')
       await escape(page)
       await sleep(200)
-      await click(page, '.cr-routing-entry')
+      await openRouting(page)
       await sleep(150)
       const sonnet = await chip(page, 'claude/claude-sonnet-5')
       expect(sonnet).not.toBeNull()

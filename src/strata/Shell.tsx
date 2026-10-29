@@ -75,6 +75,10 @@ export interface StrataShellProps {
   modK?: boolean
   /** 'light' where the host has no dark theme (the desktop app): the system's dark mode then leaves the shell alone. */
   scheme?: 'system' | 'light'
+  /** False where the host draws the route in its own bar (the desktop app's header). */
+  topBar?: boolean
+  /** A host without the top bar's Find button asks for the finder by bumping this. */
+  findSignal?: number
 }
 
 /**
@@ -84,7 +88,7 @@ export interface StrataShellProps {
 const hostDialogOpen = (): boolean =>
   [...document.querySelectorAll('[aria-modal="true"]')].some((el) => !el.closest('.strata'))
 
-export function StrataShell({ fleet, loaded, history, terminal, loadDetail, modK = true, scheme = 'system' }: StrataShellProps) {
+export function StrataShell({ fleet, loaded, history, terminal, loadDetail, modK = true, scheme = 'system', topBar = true, findSignal = 0 }: StrataShellProps) {
   const { path, notice, clearNotice, go: navigate, out: navigateOut } = history
   const host = useRef<HTMLDivElement>(null)
   const viewport = useViewport(host)
@@ -245,6 +249,23 @@ export function StrataShell({ fleet, loaded, history, terminal, loadDetail, modK
 
   useEffect(() => () => hover.dispose(), [hover])
 
+  // The path can move from outside the shell (the desktop header's route):
+  // no finder or summary card survives into the new level.
+  const keyShown = useRef(key)
+  useEffect(() => {
+    if (keyShown.current === key) return
+    keyShown.current = key
+    setFinder(null)
+    hover.hideNow()
+  }, [key, hover])
+
+  const lastFind = useRef(findSignal)
+  useEffect(() => {
+    if (findSignal === lastFind.current) return
+    lastFind.current = findSignal
+    openFinder('')
+  }, [findSignal, openFinder])
+
   const finderContext = useMemo(() => ({ machine: path.machine, workspace: path.workspace }), [path.machine, path.workspace])
   const onFinderActive = useCallback(
     (target: StrataPath | null) => {
@@ -291,8 +312,8 @@ export function StrataShell({ fleet, loaded, history, terminal, loadDetail, modK
 
   return (
     <Probe>
-      <div className={`strata${touch ? ' touch' : ''}${reducedMotion ? ' reduced' : ''}`} data-scheme={scheme}>
-        <TopBar path={path} onBack={goOut} fleet={fleet} loaded={loaded} onGo={go} onFind={() => openFinder('')} findKey={modK ? '⌘K' : '/'} />
+      <div className={`strata${touch ? ' touch' : ''}${reducedMotion ? ' reduced' : ''}${topBar ? '' : ' bare'}`} data-scheme={scheme}>
+        {topBar && <TopBar path={path} onBack={goOut} fleet={fleet} loaded={loaded} onGo={go} onFind={() => openFinder('')} findKey={modK ? '⌘K' : '/'} />}
         <div className="stage-host" ref={host}>
           <LevelsContext.Provider value={env}>
             <Stage

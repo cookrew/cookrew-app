@@ -36,6 +36,10 @@ export type CrIconName =
   | 'clipboard'
   /** Gated marketplace preset: the chip's lock badge (§8). */
   | 'lock'
+  /** The header's More menu. */
+  | 'more'
+  /** The route's device step: this desktop. */
+  | 'device'
 
 const STROKE = {
   fill: 'none',
@@ -208,6 +212,19 @@ const ICONS: Record<CrIconName, React.JSX.Element> = {
     </g>
   ),
   dot: <circle cx="8" cy="8" r="2.7" fill="currentColor" />,
+  more: (
+    <g fill="currentColor">
+      <rect x="2.2" y="6.9" width="2.4" height="2.4" />
+      <rect x="6.8" y="6.9" width="2.4" height="2.4" />
+      <rect x="11.4" y="6.9" width="2.4" height="2.4" />
+    </g>
+  ),
+  device: (
+    <g {...STROKE}>
+      <rect x="2.2" y="2.8" width="11.6" height="8" rx="1" />
+      <path d="M5.2 13.6 H10.8 M8 10.8 V13.6" strokeLinecap="square" />
+    </g>
+  ),
   // Summary/conclusion: full text lines condensing to a short bottom line —
   // "the long version distilled to its point". Used for the conclusion title mode.
   summary: (

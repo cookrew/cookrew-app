@@ -1,35 +1,45 @@
-// THE PHONE'S BAR IN PORTRAIT: seven things on one line, and the workspace
-// chip is the one that must never be pushed off the right edge (2026-10-15,
-// the owner's iPhone at 390 px: the chip was cut off behind the routing lamp).
+// THE ONE BAR ON A PHONE: the route on the left, the function bar on the
+// right (header.css). The route gives its words, never its steps; the function
+// bar gives nothing, because everything on it moves or acts (2026-10-29, the
+// owner's iPhone: one bar, buttons top right, device / workspace / agent).
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-const css = readFileSync('src/renderer/src/styles.css', 'utf8')
-const portrait = (() => {
-  // The block is found by its own comment: `.cr-header` has rules elsewhere too.
-  const at = css.indexOf('THE BAR IN PORTRAIT HAS ONE LINE')
-  const start = css.lastIndexOf('@media (max-width: 480px)', at)
-  // Nested rules close with an indented brace; the query's own closes at column 0.
-  return css.slice(start, css.indexOf('\n}\n', at) + 3)
-})()
+const css = readFileSync('src/renderer/src/header.css', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+const block = (query: string): string => {
+  const start = css.indexOf(`@media (${query})`)
+  return start < 0 ? '' : css.slice(start, css.indexOf('\n}\n', start) + 3)
+}
+const narrow = block('max-width: 700px')
+const portrait = block('max-width: 480px')
 
-describe('the portrait bar', () => {
-  it('lives under the 480 px phone query', () => {
-    expect(portrait.startsWith('@media (max-width: 480px)')).toBe(true)
+describe('the route', () => {
+  it('may shrink, and gives the device before the workspace', () => {
+    expect(css).toMatch(/\.cr-route \{[^}]*flex: 1 1 auto[^}]*min-width: 0/)
+    expect(css).toMatch(/\.cr-route-device \{[^}]*flex-shrink: 3/)
+    expect(css).toMatch(/\.cr-route-workspace \{[^}]*flex-shrink: 2/)
   })
-  it('the workspace chip cannot shrink and shows its icon only', () => {
-    expect(portrait).toMatch(/body\.cookrew-mobile \.cr-ws \{[^}]*flex: 0 0 auto/)
-    expect(portrait).toMatch(/body\.cookrew-mobile \.cr-ws-name \{[^}]*display: none/)
+  it('names ellipsize instead of walking off the bar', () => {
+    expect(css).toMatch(/\.cr-route-label \{[^}]*text-overflow: ellipsis/)
   })
-  it('the count beside the coin goes — the board has it — and the marks lose their slack', () => {
-    expect(portrait).toMatch(/body\.cookrew-mobile \.cr-header-status \.cr-kicker \{[^}]*display: none/)
-    expect(portrait).toMatch(/body\.cookrew-mobile \.cr-header \{[^}]*gap: 6px/)
-    expect(portrait).toMatch(/body\.cookrew-mobile \.cr-hand-mark img \{[^}]*height: 22px/)
-    expect(portrait).toMatch(/body\.cookrew-mobile \.cr-viewseg button \{[^}]*padding: 5px 8px/)
+  it('names the open agent without a drag region over it, and keeps a few letters of it', () => {
+    expect(css).toMatch(/\.cr-route-here \{[^}]*min-width: 3ch[^}]*-webkit-app-region: no-drag/)
   })
-  it('the path badge is the one thing that may give, by its word, never by its place', () => {
-    expect(portrait).toMatch(/body\.cookrew-mobile \.cr-path \{[^}]*flex: 0 1 auto/)
-    expect(portrait).toMatch(/body\.cookrew-mobile \.cr-path \{[^}]*min-width: 0/)
-    expect(portrait).toMatch(/body\.cookrew-mobile \.cr-path-word \{[^}]*text-overflow: ellipsis/)
+  it('narrow: the device keeps its icon', () => {
+    expect(narrow).toMatch(/\.cr-route-device \.cr-route-label \{[^}]*display: none/)
+  })
+  it('portrait: the workspace and agent names keep a few letters', () => {
+    expect(portrait).toMatch(/\.cr-route-workspace \.cr-route-label \{[^}]*max-width: 64px/)
+    expect(portrait).toMatch(/\.cr-route-agent \.cr-route-label \{[^}]*max-width: 96px/)
+  })
+})
+
+describe('the function bar', () => {
+  it('never shrinks', () => {
+    expect(css).toMatch(/\.cr-fn \{[^}]*flex: 0 0 auto/)
+  })
+  it('opens More under its button, inside the screen', () => {
+    expect(css).toMatch(/\.cr-more-menu \{[^}]*position: absolute[^}]*right: 0/)
+    expect(css).toMatch(/\.cr-more-menu \{[^}]*max-width: calc\(100vw - 16px\)/)
   })
 })

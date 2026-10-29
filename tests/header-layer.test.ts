@@ -44,8 +44,11 @@ import { describe, expect, it } from 'vitest'
  * and both features were written on top of it as if it were not.
  */
 
+// styles.css holds the bar's box; header.css what sits on it — neither may break the layer.
 const css = stripComments(
-  readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'styles.css'), 'utf8')
+  ['styles.css', 'header.css']
+    .map((file) => readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', file), 'utf8'))
+    .join('\n')
 )
 
 /** CSS comments carry example values ("z-index above .gs-scrim (60)"). */
