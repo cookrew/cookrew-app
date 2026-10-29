@@ -1132,7 +1132,7 @@ function TerminalOverlay({
         {attachments.length > 0 && (
           <AttachStrip terminalId={node.id} items={attachments} openId={openItem?.node.id ?? null} />
         )}
-        {openItem !== null && openView !== null && <AttachPanel item={openItem} view={openView} cardRect={rect} />}
+        {openItem !== null && openView !== null && <AttachPanel key={openItem.node.id} item={openItem} view={openView} cardRect={rect} />}
         </div>
         <CheckpointTimeline
           terminalId={node.id}

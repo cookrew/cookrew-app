@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CanvasNode, Connection } from '../src/shared/model'
-import { attachmentIndex, sameAttachmentIndex } from '../src/renderer/src/terminal-attachments'
+import { attachmentIndex, sameAttachmentIndex, stripItems } from '../src/renderer/src/terminal-attachments'
 
 const term = (id: string): CanvasNode => ({ kind: 'terminal', id, name: id, preset: 'Shell', command: '', cwd: '~', orch: false, role: null, position: { x: 0, y: 0 }, size: { width: 100, height: 100 } })
 const note = (id: string, content = ''): CanvasNode => ({ kind: 'note', id, name: id, customName: null, content, locked: false, position: { x: 0, y: 0 }, size: { width: 100, height: 100 } })
@@ -30,5 +30,27 @@ describe('attachmentIndex', () => {
     expect(sameAttachmentIndex(a, attachmentIndex(moved, conns))).toBe(true)
     expect(sameAttachmentIndex(a, attachmentIndex([...nodes.filter((n) => n.id !== 'n1'), note('n1', 'edited')], conns))).toBe(false)
     expect(sameAttachmentIndex(a, attachmentIndex([...nodes.filter((n) => n.id !== 'b1'), browser('b1', 'https://other.example')], conns))).toBe(false)
+  })
+})
+
+describe('stripItems', () => {
+  const many = attachmentIndex(
+    [term('t1'), ...Array.from({ length: 12 }, (_, i) => browser(`b${i}`, `https://site${i}.example`))],
+    Array.from({ length: 12 }, (_, i) => wire('t1', `b${i}`, i))
+  ).get('t1')!
+  it('folds past the limit and counts what is hidden', () => {
+    const { shown, hidden } = stripItems(many, null, null)
+    expect(shown.map((a) => a.node.id)).toEqual(['b11', 'b10', 'b9', 'b8', 'b7', 'b6', 'b5', 'b4'])
+    expect(hidden).toBe(4)
+  })
+  it('an open item behind the fold still shows', () => {
+    const { shown, hidden } = stripItems(many, 'b0', null)
+    expect(shown.map((a) => a.node.id)).toContain('b0')
+    expect(shown).toHaveLength(8)
+    expect(hidden).toBe(4)
+  })
+  it('a query shows every match, by name or address', () => {
+    expect(stripItems(many, null, '').shown).toHaveLength(12)
+    expect(stripItems(many, null, 'site3').shown.map((a) => a.node.id)).toEqual(['b3'])
   })
 })

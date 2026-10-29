@@ -11,7 +11,7 @@ import { cookrew } from './api'
 import { attachView, type AttachView } from './attach-view'
 import { CrIcon } from './icons'
 import { renderNoteMarkdown } from './note-markdown'
-import type { TerminalAttachment } from './terminal-attachments'
+import { stripItems, type TerminalAttachment } from './terminal-attachments'
 import type { ScreenRect } from './zoom-lod'
 
 function label(item: TerminalAttachment): string {
@@ -29,22 +29,60 @@ export function AttachStrip({
   items: readonly TerminalAttachment[]
   openId: string | null
 }): React.JSX.Element {
+  // null = folded (the newest few and "+N"); a string = the whole list, filtered by it.
+  const [query, setQuery] = useState<string | null>(null)
+  const { shown, hidden } = stripItems(items, openId, query)
+  const expanded = query !== null
   return (
-    <div className="attach-strip" role="toolbar" aria-label="This terminal's browsers and notes">
-      {items.map((item) => (
+    <div className={`attach-strip${expanded ? ' all' : ''}`} role="toolbar" aria-label="This terminal's browsers and notes">
+      {expanded && (
+        <input
+          className="attach-filter"
+          value={query}
+          autoFocus
+          placeholder={`Filter ${items.length}`}
+          aria-label="Filter browsers and notes"
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            // Keys typed here are the filter's, not the terminal's or the canvas's.
+            e.stopPropagation()
+            if (e.key === 'Escape') setQuery(null)
+            if (e.key === 'Enter' && shown.length > 0) {
+              attachView.toggle(terminalId, shown[0].node.id, shown[0].kind)
+              setQuery(null)
+            }
+          }}
+        />
+      )}
+      {shown.map((item) => (
         <button
           key={item.node.id}
           type="button"
           className={`attach-chip ${item.kind}${item.node.id === openId ? ' on' : ''}`}
           title={item.kind === 'browser' ? activeBrowserTab(item.node).url : item.node.name}
           aria-pressed={item.node.id === openId}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => attachView.toggle(terminalId, item.node.id, item.kind)}
+          onMouseDown={(e) => {
+            if (!expanded) e.preventDefault()
+          }}
+          onClick={() => {
+            attachView.toggle(terminalId, item.node.id, item.kind)
+            setQuery(null)
+          }}
         >
           <CrIcon name={item.kind} />
           <span>{label(item)}</span>
         </button>
       ))}
+      {hidden > 0 && (
+        <button type="button" className="attach-chip more" title="Show all" onMouseDown={(e) => e.preventDefault()} onClick={() => setQuery('')}>
+          +{hidden}
+        </button>
+      )}
+      {expanded && (
+        <button type="button" className="attach-chip more" title="Fold (Esc)" onClick={() => setQuery(null)}>
+          Fold
+        </button>
+      )}
     </div>
   )
 }
