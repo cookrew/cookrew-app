@@ -65,4 +65,30 @@ export function sameAttachmentIndex(a: AttachmentIndex, b: AttachmentIndex): boo
   return true
 }
 
+/** How many items the strip shows before folding the rest behind "+N". */
+export const STRIP_LIMIT = 8
+
+/**
+ * The strip's visible items: the newest few, plus the open one if it is older
+ * (an item you are looking at never hides behind the fold). With a query, every
+ * item whose name or address contains it.
+ */
+export function stripItems(
+  items: readonly TerminalAttachment[],
+  openId: string | null,
+  query: string | null,
+  limit = STRIP_LIMIT
+): { shown: readonly TerminalAttachment[]; hidden: number } {
+  if (query !== null) {
+    const q = query.trim().toLowerCase()
+    const shown = q === '' ? items : items.filter((a) => face(a).toLowerCase().includes(q))
+    return { shown, hidden: 0 }
+  }
+  if (items.length <= limit) return { shown: items, hidden: 0 }
+  const head = items.slice(0, limit)
+  const open = openId === null ? undefined : items.find((a) => a.node.id === openId)
+  const shown = open === undefined || head.includes(open) ? head : [...head.slice(0, limit - 1), open]
+  return { shown, hidden: items.length - shown.length }
+}
+
 export const TerminalAttachmentsContext = createContext<AttachmentIndex>(new Map())
