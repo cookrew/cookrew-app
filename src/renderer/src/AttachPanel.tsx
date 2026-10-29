@@ -11,7 +11,7 @@ import { cookrew } from './api'
 import { attachView, type AttachView } from './attach-view'
 import { CrIcon } from './icons'
 import { renderNoteMarkdown } from './note-markdown'
-import { stripItems, type TerminalAttachment } from './terminal-attachments'
+import { STRIP_LIMIT, stripItems, type TerminalAttachment } from './terminal-attachments'
 import type { ScreenRect } from './zoom-lod'
 
 function label(item: TerminalAttachment): string {
@@ -29,12 +29,37 @@ export function AttachStrip({
   items: readonly TerminalAttachment[]
   openId: string | null
 }): React.JSX.Element {
-  // null = folded (the newest few and "+N"); a string = the whole list, filtered by it.
+  // null = folded (as many as fit, then "+N"); a string = the whole list, filtered by it.
   const [query, setQuery] = useState<string | null>(null)
-  const { shown, hidden } = stripItems(items, openId, query)
+  // How many fit on one row: measured, never a guess (names differ in width,
+  // cards differ in size). Starts at the cap and only shrinks until it fits;
+  // a resize starts over from the cap.
+  const [fit, setFit] = useState(STRIP_LIMIT)
+  const stripRef = useRef<HTMLDivElement | null>(null)
+  const { shown, hidden } = stripItems(items, openId, query, fit)
   const expanded = query !== null
+  useLayoutEffect(() => {
+    const el = stripRef.current
+    if (el === null || expanded) return
+    const right = el.getBoundingClientRect().right - 8
+    const chips = [...el.querySelectorAll<HTMLElement>('.attach-chip')]
+    if (chips.length > 0 && chips[chips.length - 1].getBoundingClientRect().right > right && fit > 1) setFit(fit - 1)
+  })
+  useEffect(() => {
+    const el = stripRef.current
+    if (el === null) return
+    let width = el.clientWidth
+    const ro = new ResizeObserver(() => {
+      if (el.clientWidth !== width) {
+        width = el.clientWidth
+        setFit(STRIP_LIMIT)
+      }
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
   return (
-    <div className={`attach-strip${expanded ? ' all' : ''}`} role="toolbar" aria-label="This terminal's browsers and notes">
+    <div ref={stripRef} className={`attach-strip${expanded ? ' all' : ''}`} role="toolbar" aria-label="This terminal's browsers and notes">
       {expanded && (
         <input
           className="attach-filter"
