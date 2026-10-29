@@ -1,29 +1,26 @@
 import { useEffect, useState } from 'react'
 import { cookrew, isRemoteMode } from './api'
-import { LocalNetworkRow } from './LocalNetworkRow'
 import { subscribeDataPlane } from './data-plane'
 import { currentPathBadge, subscribePathLink } from './path-link'
 import type { PathBadgeView } from '../../shared/path-badge'
 
 /**
- * THE PATH BADGE — top-left of the companion bar, where the hand mark was.
- *
- * It replaces the mark rather than sitting beside it because the phone's brand
- * group has room for exactly one 24 px thing and because the two do the same
- * job: the mark was the always-visible control that said "ask again", and the
- * badge is the always-visible control that says "this is how I am asking, and
- * it still works". Tapping it therefore still refreshes — that gesture is
- * three years old on this bar and nothing here is worth retraining it.
+ * THE PATH BADGE — what the companion knows about the wire it is on.
  *
  * The word is the fact, not a promise. LAN means this page was served over the
  * LAN, right now; OFFLINE means the push channel is down whatever the address
  * bar says. Nothing here probes: the companion is ALREADY on the path it is
  * describing, so a probe would be measuring a hypothesis.
+ *
+ * It used to be a button of its own at the top-left of the companion bar. That
+ * corner is the route now (device / workspace / agent), so the badge is said
+ * twice in smaller ways: its DOT rides the device step — the desktop is the
+ * thing the path reaches, and an OFFLINE grey there is still seen without a
+ * tap — and its word heads the Connection row of the More menu, which
+ * refreshes and opens the sheet as the badge's tap did.
  */
-export function PathBadge({ onRefresh }: { onRefresh: () => void }): React.JSX.Element {
+export function usePathBadge(): PathBadgeView {
   const [view, setView] = useState<PathBadgeView>(() => currentPathBadge())
-  const [open, setOpen] = useState(false)
-
   useEffect(() => {
     // The view reads two stores (path-link.ts · currentPathBadge): the link,
     // and the data plane that names the path.
@@ -31,31 +28,25 @@ export function PathBadge({ onRefresh }: { onRefresh: () => void }): React.JSX.E
     const offs = [subscribePathLink(refresh), subscribeDataPlane(refresh)]
     return () => offs.forEach((off) => off())
   }, [])
+  return view
+}
 
+/** One dot and one word, wearing the state as a class so the dot can be coloured. */
+export function PathBadge({ view }: { view: PathBadgeView }): React.JSX.Element {
   return (
-    <>
-      <button
-        type="button"
-        className={`cr-path cr-path-${view.state.toLowerCase()}`}
-        aria-label={`Connection: ${view.word}. Tap to refresh and see details.`}
-        title={view.sentence}
-        onClick={() => {
-          // Both, in this order: the refresh is what the hand did and the user
-          // expects it instantly; the sheet explains what they just refreshed.
-          onRefresh()
-          setOpen(true)
-        }}
-      >
-        <span className="cr-path-dot" aria-hidden="true" />
-        <span className="cr-path-word">{view.word}</span>
-      </button>
-      {/* UNDER the badge, not inside the sheet: the ask has to be visible
-          without a tap, because a permission nobody knows to look for is a
-          permission nobody grants. It renders nothing in three of the four
-          states, so on most phones the bar is exactly as it was. */}
-      <LocalNetworkRow />
-      {open && <PathSheet view={view} onClose={() => setOpen(false)} />}
-    </>
+    <span className={`cr-path cr-path-${view.state.toLowerCase()}`} title={view.sentence}>
+      <span className="cr-path-dot" aria-hidden="true" />
+      <span className="cr-path-word">{view.word}</span>
+    </span>
+  )
+}
+
+/** The dot alone, for the route's device step. */
+export function PathDot({ view }: { view: PathBadgeView }): React.JSX.Element {
+  return (
+    <span className={`cr-route-path cr-path-${view.state.toLowerCase()}`} role="img" aria-label={`Connection: ${view.word}`} title={view.sentence}>
+      <span className="cr-path-dot" />
+    </span>
   )
 }
 
@@ -108,18 +99,14 @@ export function PathSheet({
 }
 
 /**
- * The avatar's slot on the phone, where the violet handset icon used to sit.
- *
- * The phone sees the OWNER's account — it is the desktop's account, and the
+ * The phone's account: the OWNER's, since it is the desktop's account and the
  * phone is one of its devices — so the initials come from the desktop when it
  * can answer, and the circle is dashed when there is no account at all. It is
  * read-only here on purpose: claiming a name, changing a password and revoking
  * a device all happen where the key lives.
  */
-export function CompanionAvatar(): React.JSX.Element {
+export function useCompanionInitials(): string | null {
   const [initials, setInitials] = useState<string | null>(null)
-  const [open, setOpen] = useState(false)
-
   useEffect(() => {
     if (!isRemoteMode()) return
     let live = true
@@ -134,7 +121,13 @@ export function CompanionAvatar(): React.JSX.Element {
       .catch(() => undefined)
     return () => void (live = false)
   }, [])
+  return initials
+}
 
+/** The avatar's slot on the phone, at the end of the function bar. */
+export function CompanionAvatar(): React.JSX.Element {
+  const initials = useCompanionInitials()
+  const [open, setOpen] = useState(false)
   return (
     <>
       <button

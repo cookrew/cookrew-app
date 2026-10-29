@@ -1578,6 +1578,7 @@ function Canvas(): React.JSX.Element {
           onRouting={routeState.available ? () => setRoutingOpen(true) : undefined}
           routeStatus={routeState.state?.status ?? null}
           onResync={resync}
+          zoomedAgent={terminals.find((t) => t.id === zoomedTerminalId)?.name ?? null}
           avatar={account.avatar}
         />
         <div className="cr-stage" ref={stageRef}>

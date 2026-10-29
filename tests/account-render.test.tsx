@@ -79,19 +79,15 @@ const bar = (avatar: React.ReactNode): string =>
     />,
   )
 
-const brandGroup = (html: string): string => {
-  const start = html.indexOf('cr-header-brand')
-  const rest = html.slice(start)
-  // The brand group ends where the view switch begins.
-  return rest.slice(0, rest.indexOf('cr-viewseg'))
-}
+/** The function bar: the right of the header, from the view switch on. */
+const functionBar = (html: string): string => html.slice(html.indexOf('class="cr-fn"'))
 
-describe('the avatar joins the brand group, after the wordmark (D1)', () => {
-  it('is inside cr-header-brand and after COOKREW', () => {
-    const html = bar(<AccountAvatar status={status()} onOpen={() => undefined} />)
-    const group = brandGroup(html)
-    expect(group).toContain('cr-acct-avatar')
-    expect(group.indexOf('COOKREW')).toBeLessThan(group.indexOf('cr-acct-avatar'))
+describe('the avatar ends the function bar (D1, moved with the one bar)', () => {
+  it('is on the function bar, after the view switch and the More menu', () => {
+    const html = functionBar(bar(<AccountAvatar status={status()} onOpen={() => undefined} />))
+    expect(html).toContain('cr-acct-avatar')
+    expect(html.indexOf('cr-viewseg')).toBeLessThan(html.indexOf('cr-acct-avatar'))
+    expect(html.indexOf('cr-more')).toBeLessThan(html.indexOf('cr-acct-avatar'))
   })
 
   it('changes nothing about the bar when there is no account surface', () => {

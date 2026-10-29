@@ -2,14 +2,15 @@
 // → the agent's terminal, the same shell cookrew.dev draws for the fleet,
 // here over this desktop alone. It covers the stage like the board view: the
 // canvas keeps running underneath (its live panes must never remount), and
-// the header above keeps the way back to it.
+// the header above keeps the way back to it — and draws the route, so the
+// shell's own top bar is off here (the app has one bar).
 //
 // ⌘K stays the app's command box; the finder answers / and type-to-find.
 import { useEffect } from 'react'
 import { StrataShell } from '../../../strata/Shell'
 import type { LoadDetail, TerminalSlot } from '../../../strata/levels/env'
 import { cookrew } from '../api'
-import { useLevelsHistory } from './levels-history'
+import { useLevelsHistory, useLevelsRoute } from './levels-history'
 import { LevelsTerminal } from './LevelsTerminal'
 import { useLocalFleet, useLocalFleetLoaded } from './local-fleet'
 import './levels.css'
@@ -32,6 +33,7 @@ export function LevelsView({ onTerminal }: {
   const loaded = useLocalFleetLoaded()
   const history = useLevelsHistory(fleet, loaded)
   const agentId = history.path.agent ?? null
+  const { find } = useLevelsRoute()
 
   useEffect(() => {
     onTerminal(agentId)
@@ -40,7 +42,7 @@ export function LevelsView({ onTerminal }: {
 
   return (
     <div className="cr-levels">
-      <StrataShell fleet={fleet} loaded={loaded} history={history} terminal={terminalSlot} loadDetail={loadDetail} modK={false} scheme="light" />
+      <StrataShell fleet={fleet} loaded={loaded} history={history} terminal={terminalSlot} loadDetail={loadDetail} modK={false} scheme="light" topBar={false} findSignal={find} />
     </div>
   )
 }

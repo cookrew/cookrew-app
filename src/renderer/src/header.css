@@ -1,0 +1,293 @@
+/* ---- THE ONE BAR (Header.tsx) ----
+   The route on the left (HeaderRoute.tsx), the function bar on the right:
+   the view switch, ⋯ (HeaderMore.tsx) and the avatar. The bar's own box — height, line, layer, drag region — is the
+   .cr-header rule in styles.css; this file is what sits on it. */
+
+.cr-header {
+  gap: 12px;
+}
+
+/* ---- the route: device / workspace / agent ---- */
+
+.cr-route {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  font-family: var(--font-pixel);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.cr-route-step {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+/* The device gives first, then the workspace; the agent is what you came for. */
+.cr-route-device {
+  flex-shrink: 3;
+}
+
+.cr-route-workspace {
+  flex-shrink: 2;
+}
+
+.cr-route-sep {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  color: var(--muted);
+}
+
+.cr-route-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1.5px solid transparent;
+  border-radius: 3px;
+  background: none;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.cr-route-btn:hover {
+  background: var(--amber-soft);
+  border-color: var(--line);
+}
+
+/* The step whose level is on screen. A tap on it is still a way out: on the
+   workspace choice the device step goes to all the devices. */
+.cr-route-btn[aria-current='page'] {
+  background: var(--cream-md);
+  border-color: var(--line);
+}
+
+.cr-route-btn .cr-icon {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+}
+
+.cr-route-label {
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cr-route-emoji {
+  flex: 0 0 auto;
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* The phone's path, as the dot of the badge it was (PathBadge.tsx). */
+.cr-route-path {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+/* The open agent: where you are, so a name and not a button. Drag stays off
+   it, or its full-name tooltip never shows on the desktop. */
+.cr-route-here {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 3ch;
+  padding: 3px 6px;
+  border: 1.5px solid var(--line);
+  border-radius: 3px;
+  background: var(--cream-md);
+  -webkit-app-region: no-drag;
+}
+
+.cr-route-here .cr-icon {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+}
+
+/* ---- the function bar ---- */
+
+.cr-fn {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The ⋯ button wears the switch's frame, so the bar reads as one row of
+   controls rather than a switch with strays beside it. */
+.cr-more {
+  position: relative;
+  display: flex;
+}
+
+.cr-more-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 28px;
+  padding: 0;
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  background: var(--cream-hi);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.cr-more-btn:hover,
+.cr-more-btn.on {
+  background: var(--amber-soft);
+}
+
+.cr-more-btn .cr-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.cr-more-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  min-width: 250px;
+  max-width: calc(100vw - 16px);
+  padding: 4px;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 4px 4px 0 var(--line);
+}
+
+.cr-more-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 8px;
+  margin-bottom: 4px;
+  border-bottom: 1.5px solid var(--line);
+}
+
+.cr-more-item,
+.cr-more-row .cr-routing-entry {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background: none;
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: left;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+/* The chip hid its word on a phone (routing-panel.css); in a menu row the word is the row. */
+.cr-more-row .cr-routing-entry span.word {
+  display: inline;
+}
+
+.cr-more-item:hover,
+.cr-more-row .cr-routing-entry:hover {
+  background: var(--amber-soft);
+}
+
+.cr-more-item .cr-icon {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+}
+
+.cr-more-label {
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cr-more-item kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.cr-more-item.danger:hover {
+  background: var(--rose);
+  color: var(--cream-hi);
+}
+
+/* The path badge inside its row: the same dot and word, without the button frame. */
+.cr-more-item .cr-path {
+  height: 20px;
+  padding: 0 6px;
+  box-shadow: none;
+  cursor: inherit;
+}
+
+/* ---- narrow: icons before words ----
+   The route keeps its icons and gives its words in order of how little they
+   carry — the device's name first (the dot and the icon say which desktop),
+   then the workspace's name down to a few letters (its icon says which); the
+   agent's name keeps the most. The function bar gives nothing: every item
+   on it moves or acts. */
+@media (max-width: 700px) {
+  .cr-header {
+    gap: 8px;
+  }
+
+  .cr-route-device .cr-route-label {
+    display: none;
+  }
+
+  .cr-fn {
+    gap: 6px;
+  }
+}
+
+@media (max-width: 480px) {
+  .cr-route-btn {
+    padding: 3px 4px;
+    gap: 4px;
+  }
+
+  .cr-route-sep {
+    padding: 0 2px;
+  }
+
+  .cr-route-workspace .cr-route-label {
+    max-width: 64px;
+  }
+
+  .cr-route-agent .cr-route-label {
+    max-width: 96px;
+  }
+
+  .cr-route-here {
+    padding: 3px 4px;
+    gap: 4px;
+  }
+
+  .cr-viewseg button {
+    padding: 5px 7px;
+  }
+}
