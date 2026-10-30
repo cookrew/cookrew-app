@@ -342,3 +342,185 @@
     padding: 5px 7px;
   }
 }
+
+/* THE ZOOMED TERMINAL ON THE BAR (zoom-bar.ts). Its head is gone: one model
+   switch and CHAT/LIVE sit here left of ⋯, the rest of its head inside ⋯.
+   The slot is empty — and takes no room — with nothing zoomed. */
+.cr-zoom-slot {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.cr-zoom-slot:empty,
+.cr-more-zoom:empty {
+  display: none;
+}
+
+.cr-zoom-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* The tune rail as ONE chip of the bar's own make: the bar's line, the bar's
+   cream, its list dropping DOWN from the chip instead of out to the right. */
+.cr-tune-rail.bar {
+  width: auto;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  background: none;
+  border: none;
+  min-width: 0;
+}
+
+.cr-tune-rail.bar .cr-tune-chip {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
+  height: 28px;
+  max-width: 200px;
+  padding: 0 8px;
+  align-items: center;
+  border: 2px solid var(--line);
+  border-radius: 0;
+  box-shadow: 2px 2px 0 var(--line);
+  background: var(--cream-hi);
+  color: var(--ink);
+}
+
+.cr-tune-rail.bar .cr-tune-chip:hover,
+.cr-tune-rail.bar .cr-tune-dial.open .cr-tune-chip {
+  background: var(--amber-soft);
+}
+
+.cr-tune-rail.bar .cr-tune-k {
+  color: var(--ink-dim, var(--ink));
+  opacity: 0.6;
+}
+
+.cr-tune-rail.bar .cr-tune-v {
+  font-size: 11px;
+  min-width: 0;
+}
+
+/* The turn line and notes stay in the chip's title on the bar; a 28px chip
+   with three lines in it is a rail again. */
+.cr-tune-rail.bar .cr-tune-flag {
+  display: none;
+}
+
+.cr-tune-rail.bar .cr-tune-list {
+  top: calc(100% + 6px);
+  left: auto;
+  right: 0;
+  width: 220px;
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+  z-index: 60;
+}
+
+/* "mid-turn — the dials wait for the reply" is a fact about PICKING: the list's
+   rows say it (disabled) when the chip is opened. Hung open under a bar chip it
+   sat over the transcript for the whole turn. An error still shows: it is an
+   alert, and it goes away. */
+.cr-tune-rail.bar .cr-tune-locked {
+  display: none;
+}
+
+/* Opened while locked: the sentence sits above the (disabled) rows, so a tap
+   that does nothing says why. */
+.cr-tune-rail.bar:has(.cr-tune-dial.open) .cr-tune-locked {
+  display: block;
+  width: 220px;
+}
+
+.cr-tune-rail.bar:has(.cr-tune-locked):has(.cr-tune-dial.open) .cr-tune-list {
+  top: calc(100% + 52px);
+}
+
+.cr-tune-rail.bar .cr-tune-locked,
+.cr-tune-rail.bar .cr-tune-error {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  max-width: 260px;
+  padding: 4px 8px;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  font-size: 11px;
+  z-index: 60;
+}
+
+.cr-zoom-bar .cr-tune-rail.bar {
+  position: relative;
+}
+
+/* ⋯'s rows for the zoomed card: the translate row is the button plus its label. */
+.cr-zoom-translate {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 32px;
+  padding: 2px 8px 2px 2px;
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cr-more-zoom {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 4px;
+  border-bottom: 1.5px solid var(--line);
+}
+
+.cr-more-zoom > .cr-more-group:first-child {
+  border-top: none;
+  margin-top: 0;
+}
+
+/* The translate row's button is the row's icon, not a framed button. */
+.cr-zoom-translate .cr-btn.icon {
+  width: 22px;
+  height: 22px;
+  border: none;
+  box-shadow: none;
+  background: none;
+}
+
+/* The embed (no One Bar) keeps one slim row for the same controls. */
+.popout-header.slim {
+  justify-content: flex-end;
+  padding: 4px 8px;
+}
+
+@media (max-width: 480px) {
+  /* A phone bar holds the route, the switch, CHAT/LIVE, ⋯ and the avatar: the
+     chip shows the value only, and the agent's name gives up a little room. */
+  .cr-tune-rail.bar .cr-tune-k {
+    display: none;
+  }
+
+  .cr-tune-rail.bar .cr-tune-chip {
+    max-width: 76px;
+    padding: 0 5px;
+  }
+
+  .cr-tune-rail.bar .cr-tune-v {
+    font-size: 10px;
+  }
+
+  .cr-zoom-bar {
+    gap: 4px;
+  }
+
+  .cr-zoom-bar .cr-viewseg button {
+    padding: 5px 5px;
+    letter-spacing: 0.04em;
+  }
+}
