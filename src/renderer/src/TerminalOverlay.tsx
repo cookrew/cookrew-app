@@ -39,6 +39,7 @@ import { TuneRail } from './nodes/TuneRail'
 import { useAgentTuning } from './nodes/use-agent-tuning'
 import { useCardRoute } from './nodes/use-card-route'
 import { routeDialAllowed, routeDialInput } from '../../shared/route-view'
+import { isNight, useNight } from './color-scheme'
 
 /**
  * PAPER, not phosphor (2026-10-30): the live terminal is the app's own cream
@@ -68,6 +69,35 @@ const PAPER_THEME = {
   brightMagenta: '#C026D3',
   brightCyan: '#0891B2',
   brightWhite: '#2D2A20'
+}
+
+/**
+ * The same paper at night (color-scheme.ts, night.css): the companion in a
+ * phone's dark mode. Ground and ink are the night tokens; the colours are the
+ * light steps of the palette, so they read on the dark ground.
+ */
+const NIGHT_THEME = {
+  background: '#1D1A14',
+  foreground: '#ECE5D3',
+  cursor: '#ECE5D3',
+  cursorAccent: '#1D1A14',
+  selectionBackground: '#3B3212',
+  black: '#6F6859',
+  red: '#F87171',
+  green: '#4ADE80',
+  yellow: '#FACC15',
+  blue: '#93C5FD',
+  magenta: '#F0ABFC',
+  cyan: '#67E8F9',
+  white: '#A19887',
+  brightBlack: '#A19887',
+  brightRed: '#FCA5A5',
+  brightGreen: '#86EFAC',
+  brightYellow: '#FDE047',
+  brightBlue: '#BFDBFE',
+  brightMagenta: '#F5D0FE',
+  brightCyan: '#A5F3FC',
+  brightWhite: '#ECE5D3'
 }
 
 /**
@@ -403,13 +433,19 @@ function TerminalOverlay({
   const routeAllowed = routeDialAllowed({ remote, served: node.servedSession != null })
   const cardRoute = useCardRoute({ terminalId: node.id, enabled: routeAllowed })
 
+  // The phone flipped between light and dark while this was open.
+  const night = useNight()
+  useEffect(() => {
+    if (termRef.current) termRef.current.options.theme = night ? NIGHT_THEME : PAPER_THEME
+  }, [night])
+
   // Owner ruling 2026-08-30: the zoomed view is PTY-DIRECT for every card.
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
 
     const term = new Terminal({
-      theme: PAPER_THEME,
+      theme: isNight() ? NIGHT_THEME : PAPER_THEME,
       minimumContrastRatio: 4.5,
       fontFamily: 'JetBrains Mono, SF Mono, Menlo, monospace',
       fontSize: 13,

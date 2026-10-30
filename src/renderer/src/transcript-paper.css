@@ -82,3 +82,11 @@
 .lod-overlay .xterm .xterm-viewport {
   background-color: var(--cream-hi) !important;
 }
+
+/* The phone: the transcript's text keeps clear of the checkpoint rail (30px
+   down the right edge), or its count sits on the words (2026-10-30). */
+@media (max-width: 700px) {
+  .lod-overlay .popout-main > .ctx-transcript {
+    padding-right: 26px;
+  }
+}
