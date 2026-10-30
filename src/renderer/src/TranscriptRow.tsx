@@ -19,11 +19,12 @@
 // callback per identity (its D6 note explains why), and a memoised row must
 // receive that same callback or every render would still move every ref.
 
-import { forwardRef, memo } from 'react'
+import { forwardRef, memo, useContext } from 'react'
 import { checkpointTitle, type TitleMode } from './checkpoint-sync'
 import { MarkdownText } from './MarkdownText'
 import type { CheckpointTranslation } from './TranscriptView'
 import type { TraceBlock } from '../../shared/trace-blocks'
+import { TranscriptFaceContext } from './transcript-face'
 
 export interface TranscriptRowProps {
   /** Checkpoint identity (TurnRecord.index). */
@@ -44,6 +45,7 @@ export const TranscriptRow = memo(
     { id, block, active, placeholderHeight, titleMode, translated },
     ref
   ) {
+    const face = useContext(TranscriptFaceContext)
     return (
       <div
         className={
@@ -67,23 +69,34 @@ export const TranscriptRow = memo(
             <div className="ctx-block-prompt" data-translated={translated ? '' : undefined}>
               {(translated?.prompt ?? block.prompt) || '(empty prompt)'}
             </div>
-            {block.activity.length > 0 && (
-              <div>
-                {block.activity.map((call, i) => (
-                  <div key={i} className="ctx-block-tool">
-                    <div className="ctx-tool-call">
-                      <span className="ctx-tool-name">{call.tool}</span>
-                      {call.args && <span className="ctx-tool-args">{call.args}</span>}
+            {/* THE AGENT'S SIDE OF THE CHAT: its face, and one bubble with
+                what it ran and what it said (transcript-face.ts). */}
+            {(block.activity.length > 0 || block.reply) && (
+              <div className="ctx-chat-agent">
+                <span className="ctx-chat-face" aria-hidden="true">
+                  {face}
+                </span>
+                <div className="ctx-chat-bubble">
+                  {block.activity.length > 0 && (
+                    <div className="ctx-chat-tools">
+                      {block.activity.map((call, i) => (
+                        <div key={i} className="ctx-block-tool">
+                          <div className="ctx-tool-call">
+                            <span className="ctx-tool-name">{call.tool}</span>
+                            {call.args && <span className="ctx-tool-args">{call.args}</span>}
+                          </div>
+                          {call.result && <div className="ctx-tool-result">{call.result}</div>}
+                        </div>
+                      ))}
                     </div>
-                    {call.result && <div className="ctx-tool-result">{call.result}</div>}
-                  </div>
-                ))}
-              </div>
-            )}
-            {/* Reply renders MARKDOWN as React elements; .md is Fresco's flag. */}
-            {block.reply && (
-              <div className="ctx-block-reply md" data-translated={translated ? '' : undefined}>
-                <MarkdownText source={translated?.reply ?? block.reply} />
+                  )}
+                  {/* Reply renders MARKDOWN as React elements; .md is Fresco's flag. */}
+                  {block.reply && (
+                    <div className="ctx-block-reply md" data-translated={translated ? '' : undefined}>
+                      <MarkdownText source={translated?.reply ?? block.reply} />
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </>

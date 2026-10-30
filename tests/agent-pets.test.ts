@@ -140,11 +140,20 @@ describe('where a troop sits', () => {
     expect(petHome(0, 412)).toEqual({ x: 2, bottom: 8 })
   })
 
-  it('stands in columns, in gutters the stage keeps clear down its sides (the owner, 2026-10-31)', () => {
+  it('stands in columns down the sides, over a stage that keeps its full width (the owner, 2026-10-31)', () => {
     const css = readFileSync('src/renderer/src/pets/pets.css', 'utf8')
     const stage = readFileSync('src/renderer/src/stage/stage.css', 'utf8')
     expect(css).toMatch(/\.cr-pets \{[^}]*flex-direction: column;/)
-    expect(stage).toMatch(/\.cr-stage-view\.bedded \{\s*padding: 0 56px;/)
+    expect(stage).toMatch(/\.cr-stage-view\.bedded \{\s*padding: 0;/)
+  })
+
+  it('the transcript is a chat: your prompt on the right, the agent beside its face on the left', () => {
+    const row = readFileSync('src/renderer/src/TranscriptRow.tsx', 'utf8')
+    const paper = readFileSync('src/renderer/src/transcript-paper.css', 'utf8')
+    expect(row).toContain('<div className="ctx-chat-agent">')
+    expect(row).toContain('<div className="ctx-chat-bubble">')
+    expect(paper).toMatch(/\.lod-overlay \.ctx-block-prompt \{\s*align-self: flex-end;/)
+    expect(readFileSync('src/renderer/src/TerminalOverlay.tsx', 'utf8')).toContain('<TranscriptFaceContext.Provider value={chatFace}>')
   })
 })
 

@@ -139,14 +139,7 @@ export interface PetSpot {
   readonly bottom: number
 }
 
-/**
- * The troops stand in columns, one down each side (the owner, 2026-10-31):
- * the stage keeps a gutter this wide on each side for them (stage.css).
- */
-export const PET_GUTTER = 56
-export const PET_GUTTER_PHONE = 48
-
-/** Home: in its gutter, standing on the dock, wherever the stage ends. */
+/** Home: down its side of the screen, standing on the dock, wherever the stage ends. */
 export const petHome = (stageBottomGap: number, width: number): PetSpot => ({
   x: width <= 700 ? 2 : 4,
   bottom: Math.max(6, Math.round(stageBottomGap) + 8)
