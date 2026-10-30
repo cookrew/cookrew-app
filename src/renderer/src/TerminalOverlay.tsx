@@ -1,4 +1,4 @@
-import { memo, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AttachPanel, AttachTabs } from './AttachPanel'
 import { attachView, useAttachView } from './attach-view'
 import { NO_ATTACHMENTS, SideTabsContext, TerminalAttachmentsContext } from './terminal-attachments'
@@ -36,7 +36,7 @@ import { languageByCode } from '../../shared/translate'
 import { useCheckpointTranslation } from './use-checkpoint-translation'
 import { AgentAvatar, StatusCoin } from './nodes/AgentAvatar'
 import { TranscriptFaceContext } from './transcript-face'
-import { useTranscriptLook } from './transcript-look'
+import { useTranscriptLook, type TranscriptLook } from './transcript-look'
 import { TuneRail } from './nodes/TuneRail'
 import { useAgentTuning } from './nodes/use-agent-tuning'
 import { useCardRoute } from './nodes/use-card-route'
@@ -433,8 +433,28 @@ function TerminalOverlay({
   // The agent's face on its side of the chat (transcript-face.ts): one
   // element, so the memoised rows are not re-rendered by a new one each frame.
   const chatFace = useMemo(() => <AgentAvatar phase="idle" preset={node.preset} />, [node.preset])
-  // Chat or live (transcript-look.ts): one class on the transcript's box.
+  // Chat or the raw terminal (transcript-look.ts): one class on the box.
   const [look, setLook] = useTranscriptLook()
+  const mainRef = useRef<HTMLDivElement>(null)
+  /** Where the chat was read when the terminal took the box: null = at the newest. */
+  const chatScroll = useRef<number | null>(null)
+  const switchLook = (next: TranscriptLook): void => {
+    const box = mainRef.current?.querySelector<HTMLElement>('.ctx-transcript') ?? null
+    if (next === 'live' && look === 'chat' && box) {
+      chatScroll.current = box.scrollHeight - box.scrollTop - box.clientHeight < 24 ? null : box.scrollTop
+    }
+    setLook(next)
+  }
+  useLayoutEffect(() => {
+    const box = mainRef.current?.querySelector<HTMLElement>('.ctx-transcript') ?? null
+    if (!box) return
+    if (look === 'live') {
+      // The terminal is the whole card now: keys go to it.
+      termRef.current?.focus()
+      return
+    }
+    box.scrollTop = chatScroll.current ?? box.scrollHeight
+  }, [look])
   // The RTE dial (R2). A served session never gets this machine's route, so
   // it never gets the dial either (design D3).
   const routeAllowed = routeDialAllowed({ remote, served: node.servedSession != null })
@@ -970,9 +990,9 @@ function TerminalOverlay({
                 key={one}
                 type="button"
                 aria-pressed={look === one}
-                title={one === 'chat' ? 'Agent chat: your prompts and its replies as a conversation' : 'Live transcript: every step in order, full width'}
+                title={one === 'chat' ? 'Chat: the conversation with the agent' : "Live: the agent's own terminal, as it runs"}
                 onMouseDown={keepFocus}
-                onClick={() => setLook(one)}
+                onClick={() => switchLook(one)}
               >
                 {one === 'chat' ? 'CHAT' : 'LIVE'}
               </button>
@@ -1182,7 +1202,7 @@ function TerminalOverlay({
         )}
         </div>
         )}
-        <div className={`popout-main look-${look}${openItem !== null ? ' split' : ''}`}>
+        <div ref={mainRef} className={`popout-main look-${look}${openItem !== null ? ' split' : ''}`}>
         <TranscriptFaceContext.Provider value={chatFace}>
         <TranscriptView
           ref={transcriptRef}
@@ -1218,6 +1238,15 @@ function TerminalOverlay({
           <div ref={containerRef} className="popout-terminal" />
         </TranscriptView>
         </TranscriptFaceContext.Provider>
+        {look === 'chat' && (phase === 'thinking' || phase === 'waiting') && (
+          <ChatStatus
+            phase={phase}
+            name={node.name}
+            status={activity?.glance?.status ?? null}
+            tool={activity?.glance?.tools.at(-1) ?? null}
+            onTerminal={() => switchLook('live')}
+          />
+        )}
         {openItem !== null && openView !== null && <AttachPanel key={openItem.node.id} item={openItem} view={openView} cardRect={rect} />}
         </div>
         <CheckpointTimeline
@@ -1251,3 +1280,38 @@ function TerminalOverlay({
     </div>
   )
 }
+
+/**
+ * WHAT THE AGENT IS DOING RIGHT NOW, under the chat (transcript-look.ts).
+ * The chat shows finished exchanges; the turn in flight is this line — its
+ * status verb and newest tool call, read off the terminal by the tracker.
+ * An agent waiting on you is usually waiting on its terminal (a permission,
+ * a choice), so that one comes with the way there.
+ */
+function ChatStatus({
+  phase,
+  name,
+  status,
+  tool,
+  onTerminal
+}: {
+  phase: 'thinking' | 'waiting'
+  name: string
+  status: string | null
+  tool: string | null
+  onTerminal: () => void
+}): React.JSX.Element {
+  return (
+    <div className={`chat-status ${phase}`} role="status">
+      <span className="chat-status-dot" aria-hidden="true" />
+      <span className="chat-status-text">{phase === 'waiting' ? `${name} needs you` : (status ?? `${name} is working…`)}</span>
+      {tool && <span className="chat-status-tool">{tool}</span>}
+      {phase === 'waiting' && (
+        <button type="button" className="cr-btn sm" onClick={onTerminal}>
+          Open terminal
+        </button>
+      )}
+    </div>
+  )
+}
+
