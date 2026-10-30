@@ -1,5 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
-import { reportCrash } from './crash-report'
+import { isChunkLoadError, reloadForNewBuildNow, reportCrash } from './crash-report'
 
 interface ErrorBoundaryState {
   error: Error | null
@@ -20,11 +20,26 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBound
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
+    // A chunk of an older build: load the new one rather than crash.
+    if (isChunkLoadError(error) && reloadForNewBuildNow()) return
     reportCrash(error, info.componentStack)
   }
 
   render(): ReactNode {
     if (this.state.error) {
+      if (isChunkLoadError(this.state.error)) {
+        return (
+          <div className="crash-panel" role="status">
+            <h2>Cookrew was updated on the Mac</h2>
+            <p className="crash-note">Loading the new version…</p>
+            <div className="crash-actions">
+              <button type="button" onClick={() => window.location.reload()}>
+                Reload
+              </button>
+            </div>
+          </div>
+        )
+      }
       return (
         <div className="crash-panel" role="alert">
           <h2>Cookrew hit an error</h2>

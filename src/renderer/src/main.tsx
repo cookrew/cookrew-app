@@ -7,6 +7,7 @@ import { startPhoneBeacon } from './phone-beacon'
 import { startCompanionPathSwitch } from './path/companion'
 import { cookrew, isRemoteMode } from './api'
 import { watchBuild } from './build-watch'
+import { reloadForNewBuildNow } from './crash-report'
 import { scheduleWebglWarmup } from './gpu-warmup'
 import { bootEmbedMode } from './embed/embed-mode'
 import { applyColorScheme } from './color-scheme'
@@ -82,3 +83,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 // never uses WebGL (see TerminalOverlay), so there is nothing to warm there;
 // demo mode in a browser tab also runs it, harmlessly.
 if (!isRemoteMode()) scheduleWebglWarmup()
+
+// A chunk of an older build failed to load (Vite reports it here before the
+// import rejects): the Mac has rebuilt since this page loaded. Load the new
+// build once, before any crash screen (crash-report.ts · reloadForNewBuild).
+window.addEventListener('vite:preloadError', () => {
+  reloadForNewBuildNow()
+})
+
