@@ -541,3 +541,8 @@
 .cr-pet-use[data-use='computer'] { background: hsl(262 55% 48%); }
 .cr-pet-use[data-use='hardware'] { background: hsl(28 80% 42%); }
 .cr-pet-use[data-use='browser'] { background: hsl(150 50% 34%); }
+
+/* A card shrinking back into its face (pet-morph.ts): seen, never touched. */
+.cr-pet-card.leaving {
+  pointer-events: none;
+}

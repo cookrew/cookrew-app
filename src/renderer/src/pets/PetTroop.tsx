@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { cardPlacement, clampSpot, petClick, petHome, readSpot, type PetSpot } from './pet-pick'
+import { CONTENT_FRAMES, MORPH_EASE, MORPH_MS, morphFrames } from './pet-morph'
 import './pets.css'
 
 /**
@@ -91,6 +92,10 @@ export function PetTroop({
   const spotKey = `${storageKey}.spot`
   const tuckedKey = `${storageKey}.tucked`
   const [openId, setOpenId] = useState<string | null>(null)
+  /** The card shrinking back into its face (pet-morph.ts); gone when the morph ends. */
+  const [leavingId, setLeavingId] = useState<string | null>(null)
+  const openRef = useRef<string | null>(null)
+  openRef.current = openId
   /** The face a pointer (or the keyboard) rests on: it shows its name. */
   const [hoverId, setHoverId] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
@@ -112,6 +117,8 @@ export function PetTroop({
 
   const close = useCallback((): void => {
     draft.current = ''
+    const id = openRef.current
+    if (id) setLeavingId(id)
     setOpenId(null)
   }, [])
 
@@ -142,7 +149,7 @@ export function PetTroop({
     }
     const onDown = (event: PointerEvent): void => {
       const target = event.target as Node | null
-      if (!target || troopRef.current?.contains(target) || document.querySelector('.cr-pet-card')?.contains(target)) return
+      if (!target || troopRef.current?.contains(target) || document.querySelector('.cr-pet-card:not(.leaving)')?.contains(target)) return
       if (draft.current.trim().length > 0) return
       close()
     }
@@ -210,6 +217,10 @@ export function PetTroop({
       return
     }
     draft.current = ''
+    // Another face's card shrinks home while this one grows; the same face
+    // clicked mid-shrink grows straight back (PetCardFrame reverses).
+    if (openId && openId !== id) setLeavingId(openId)
+    else if (leavingId === id) setLeavingId(null)
     setOpenId(id)
   }
   const tuck = (): void => {
@@ -294,35 +305,58 @@ export function PetTroop({
           </button>
         )}
       </div>
-      {openId && anchor && (
-        <PetCardFrame key={openId} anchor={anchor} side={side} className={cardClass?.(openId) ?? ''} label={cardLabel(openId)}>
-          {renderCard(openId, controls)}
+      {/* ONE keyed list, so a card going from open to leaving is the same
+          card mid-morph, never a fresh one mounted unplaced. */}
+      {[...(leavingId && leavingId !== openId ? [leavingId] : []), ...(openId && anchor ? [openId] : [])].map((id) => (
+        <PetCardFrame
+          key={id}
+          anchor={petRefs.current.get(id) ?? null}
+          side={side}
+          className={cardClass?.(id) ?? ''}
+          label={cardLabel(id)}
+          leaving={id !== openId}
+          onGone={() => setLeavingId((at) => (at === id ? null : at))}
+        >
+          {renderCard(id, controls)}
         </PetCardFrame>
-      )}
+      ))}
     </>,
     document.body
   )
 }
 
-/** Where a card sits, beside its face (pet-pick.ts · cardPlacement). */
+/** Where a card sits, beside its face (pet-pick.ts · cardPlacement), and how it gets there: out of the face. */
 function PetCardFrame({
   anchor,
   side,
   className,
   label,
+  leaving = false,
+  onGone,
   children
 }: {
-  anchor: HTMLElement
+  anchor: HTMLElement | null
   side: 'left' | 'right'
   className: string
   label: string
+  /** Shrinking back into the face; onGone when the morph has ended. */
+  leaving?: boolean
+  onGone?: () => void
   children: React.ReactNode
-}): React.JSX.Element {
+}): React.JSX.Element | null {
   const ref = useRef<HTMLDivElement>(null)
   const [place, setPlace] = useState<{ left: number; top: number } | null>(null)
+  const morph = useRef<Animation[]>([])
+  const grown = useRef(false)
+  // Read at the END of a morph, not when it began: a card closed mid-grow
+  // must not snap back to full size for a frame before it goes.
+  const leavingRef = useRef(leaving)
+  leavingRef.current = leaving
+  const goneRef = useRef(onGone)
+  goneRef.current = onGone
   useLayoutEffect(() => {
     const card = ref.current
-    if (!card) return
+    if (!card || !anchor || (leaving && place)) return
     const measure = (): void => {
       const a = anchor.getBoundingClientRect()
       const c = card.getBoundingClientRect()
@@ -336,14 +370,57 @@ function PetCardFrame({
       ro.disconnect()
       window.removeEventListener('resize', measure)
     }
-  }, [anchor, side])
+  }, [anchor, side, leaving, place])
+
+  // GROW, once, on the first frame the card has its place: drawn as the
+  // face, it becomes the card before the first paint shows anything else.
+  // SHRINK when it leaves: the same frames backwards, and gone at the end.
+  // A face clicked mid-shrink turns the running morph around.
+  useLayoutEffect(() => {
+    const card = ref.current
+    if (!card || !place) return
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const running = morph.current.filter((one) => one.playState === 'running')
+    if (running.length > 0) {
+      const forward = (running[0].effect?.getTiming().direction ?? 'normal') === 'normal'
+      if (forward === leaving) for (const one of running) one.reverse()
+      return
+    }
+    if (leaving) {
+      if (reduced || !anchor || !anchor.isConnected) {
+        goneRef.current?.()
+        return
+      }
+    } else if (grown.current || reduced || !anchor) {
+      grown.current = true
+      return
+    }
+    grown.current = true
+    const face = anchor.getBoundingClientRect()
+    const box = { left: place.left, top: place.top, width: card.offsetWidth, height: card.offsetHeight }
+    const radius = getComputedStyle(card).borderRadius || '14px'
+    const timing: KeyframeAnimationOptions = { duration: MORPH_MS, easing: MORPH_EASE, direction: leaving ? 'reverse' : 'normal', fill: 'both' }
+    const shell = card.animate(morphFrames(face, box, radius), timing)
+    const inner = [...card.children].map((child) => child.animate(CONTENT_FRAMES, { ...timing, easing: 'linear' }))
+    morph.current = [shell, ...inner]
+    void shell.finished.then(
+      () => {
+        if (leavingRef.current) goneRef.current?.()
+        // The grown card keeps no animation: hover and the stylesheet own it again.
+        else for (const one of morph.current) one.cancel()
+      },
+      () => undefined
+    )
+  }, [place, leaving, anchor])
+
   return (
     <div
       ref={ref}
-      className={`cr-pet-card ${className}`}
+      className={`cr-pet-card ${className}${leaving ? ' leaving' : ''}`}
       style={place ? { left: place.left, top: place.top } : { visibility: 'hidden', left: 0, top: 0 }}
       role="dialog"
       aria-label={label}
+      aria-hidden={leaving ? true : undefined}
     >
       {children}
     </div>
