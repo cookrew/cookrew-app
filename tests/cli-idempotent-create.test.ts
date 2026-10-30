@@ -44,7 +44,7 @@ function setup(): { store: WorkspaceStore; deps: SocketServerDeps; browserComman
   store.addNode(browser('p1', 'UI · P1 Setup', 'file:///docs/ui/p1.html'))
   store.connect('velvet', 'p1')
   const browserCommand = vi.fn(() => Promise.resolve('delegated'))
-  const deps = { store, browserCommand, listWorkspaces: () => store.list() } as unknown as SocketServerDeps
+  const deps = { store, browserCommand, listWorkspaces: () => store.list(), isServed: () => false } as unknown as SocketServerDeps
   return { store, deps, browserCommand }
 }
 

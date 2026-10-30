@@ -8,6 +8,8 @@ import type { TurnTracker } from "./turn-tracker";
 import type { DispatchService } from "./dispatch";
 import type { CableSignalBus } from "./cable-signal";
 import type { CableSignal } from "../shared/cable-signal";
+import type { UseSignalBus } from "./use-signal-bus";
+import type { UseSignal } from "../shared/use-signal";
 import type { EventLog, CookrewEvent, EventQuery } from "./event-log";
 import { pageTurns, type TurnRecord } from "../shared/turn";
 import type { VersionPinRecord } from "../shared/version-pin";
@@ -281,6 +283,8 @@ export interface MobileApiDeps {
    * desktop's does. Optional: a test server without agents has none.
    */
   signalBus?: CableSignalBus;
+  /** An agent acting on a card (use-signal-bus.ts): the cursor a phone viewer of that card draws. */
+  useBus?: UseSignalBus;
   /**
    * The route program (shared/route.ts): the gateway state, the owner's one
    * default, each card's route. `routeBus` carries 'route' (the whole state,
@@ -1715,6 +1719,11 @@ export async function handleMobileApi(
     };
     const offSignal = deps.signalBus?.on(onSignal) ?? null;
     request.on("close", () => offSignal?.());
+    const onUse = (signal: UseSignal): void => {
+      if (inScopedCanvas(signal.agent) || inScopedCanvas(signal.card)) send("use", signal);
+    };
+    const offUse = deps.useBus?.on(onUse) ?? null;
+    request.on("close", () => offUse?.());
     // The route: the whole state on change (debounced by the service), one
     // card's state when its decision or turn facts land. The stream holds the
     // gateway's clock open while it is, so a phone watching sees a probe.

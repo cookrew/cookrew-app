@@ -503,6 +503,7 @@ export function createRemoteApi(): CookrewApi {
     // stream carries 'event'; queries/roster are plain GETs.
     onEvent: (cb) => subscribe('event', cb),
     onCableSignal: (cb) => subscribe('signal', cb),
+    onUseSignal: (cb) => subscribe('use', cb),
     onReachChanged: (cb) => subscribe('reach', () => cb()),
     onBuild: (cb) => subscribe<{ id?: unknown }>('build', (data) => {
       if (typeof data.id === 'string') cb(data.id)

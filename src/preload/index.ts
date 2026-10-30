@@ -444,6 +444,12 @@ const api = {
     ipcRenderer.on('card-route', listener)
     return () => ipcRenderer.removeListener('card-route', listener)
   },
+  // An agent acted on a card: the cursor over its screen (use-signal-bus.ts).
+  onUseSignal: (cb: (signal: unknown) => void) => {
+    const listener = (_e: unknown, signal: unknown): void => cb(signal)
+    ipcRenderer.on('use:signal', listener)
+    return () => ipcRenderer.removeListener('use:signal', listener)
+  },
   onCableSignal: (cb: (signal: unknown) => void) => {
     const listener = (_e: unknown, signal: unknown): void => cb(signal)
     ipcRenderer.on('cable:signal', listener)

@@ -106,6 +106,10 @@ import { ensureSecretSlotNote } from './secret-note'
 import { createScrubber } from './scrub'
 import { sousGatewayKey } from './sous-config'
 import { scrubInboxRow, scrubSousResult } from './scrub-surfaces'
+import { VphoneInstance } from './vphone-instance'
+import { createSocketGuest, vphoneSocketPath } from './vphone-socket'
+import { createUseInstances } from './use-instances'
+import { UseSignalBus } from './use-signal-bus'
 import { DEFAULT_NAME_ZONE } from '../shared/reach-names'
 import { NameCertStore } from './name-cert-store'
 import {
@@ -5210,6 +5214,16 @@ const browserCacheRoot = (): string =>
 
 // C-2 ownership: one headless process/profile per active browser node. Cast
 // viewers and trusted agent commands both resolve through this manager.
+// THE USES (use-instances.ts): a Mac display or window, an adb phone, a
+// camera — each a browser card the cast streams and the agent drives.
+// Driving THIS Mac from a viewer or an agent is a decision, never a default.
+const useInstances = createUseInstances({
+  captureDir: path.join(app.getPath('userData'), 'use-capture'),
+  computerInput: () => process.env.COOKREW_COMPUTER_INPUT === '1'
+})
+const useSignals = new UseSignalBus()
+useSignals.on((signal) => mainWindow?.webContents.send('use:signal', signal))
+
 const browserManager = new HeadlessBrowserManager({
   enabled: interactiveBrowserEnabled,
   chromePath: findChrome,
@@ -5227,7 +5241,17 @@ const browserManager = new HeadlessBrowserManager({
   resolveNode: activeBrowserNode,
   onPageState: recordHeadlessPageState,
   onTabOpened: recordHeadlessTabOpened,
-  onTabClosed: recordHeadlessTabClosed
+  onTabClosed: recordHeadlessTabClosed,
+  // A `vphone://<machine>` card is a vphone-cli guest on this Mac, reached
+  // through the machine's own socket under ~/.vphone/machines (or
+  // VPHONE_LIBRARY). The VM is the user's: never launched or stopped here.
+  vphone: {
+    makeInstance: (machine) =>
+      new VphoneInstance({ machine, guest: createSocketGuest(vphoneSocketPath(machine), { machine }) })
+  },
+  uses: { makeInstance: (target, node) => useInstances.makeInstance(target, node) },
+  // Declared below; called only after boot, never during construction.
+  onInstanceGone: (browserId) => browserCast.drop(browserId)
 })
 
 const browserCast = createBrowserCast({
@@ -5253,7 +5277,9 @@ const headlessBrowserCommands = new HeadlessBrowserCommandEngine({
   manager: browserManager,
   addNode,
   updateNode,
-  connectNodes: (aId, bId) => void store.connectAcross(aId, bId)
+  connectNodes: (aId, bId) => void store.connectAcross(aId, bId),
+  onUse: (signal) => void useSignals.emit(signal),
+  shotsDir: path.join(app.getPath('userData'), 'use-shots')
 })
 
 function rendererBrowserCommand(args: string[], terminalId: string): Promise<string> {
@@ -5334,6 +5360,8 @@ function createWindow(): void {
   const releaseRouteHold = routeService.hold()
   mainWindow.on('closed', () => {
     mainWindow = null
+    // The capture host is a hidden window: left open, it would keep the app from quitting.
+    useInstances.dispose()
     deepLinks.gone()
     releaseRouteHold()
   })
@@ -5965,6 +5993,7 @@ app.whenReady().then(() => {
     tuningBus,
     // The same cable signals the desktop gets, filtered to the stream's canvas.
     signalBus: cableSignals,
+    useBus: useSignals,
     reachBus,
     // Serves the CA-issued chain by SNI for this Mac's names, keeps the
     // self-signed one as the default, and spells the printed URLs.
@@ -6368,6 +6397,7 @@ app.on('before-quit', (event) => {
     })
     .catch(() => undefined)
     .then(() => browserManager.shutdown())
+    .then(() => useInstances.dispose())
     .catch((error) => console.error('Headless browser shutdown failed:', error))
     .finally(() => {
       appShutdownComplete = true

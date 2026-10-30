@@ -452,3 +452,24 @@
     height: 24px;
   }
 }
+
+/* A working agent's current use (AgentPets · petUse): the tool it is driving, worn under the face. */
+.cr-pet-use {
+  position: absolute;
+  left: 50%;
+  bottom: -7px;
+  transform: translateX(-50%);
+  padding: 0 4px;
+  border-radius: 6px;
+  background: var(--ink);
+  color: var(--cream);
+  font: 600 8px/12px system-ui, sans-serif;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.cr-pet-use[data-use='phone'] { background: hsl(200 70% 40%); }
+.cr-pet-use[data-use='computer'] { background: hsl(262 55% 48%); }
+.cr-pet-use[data-use='hardware'] { background: hsl(28 80% 42%); }
+.cr-pet-use[data-use='browser'] { background: hsl(150 50% 34%); }

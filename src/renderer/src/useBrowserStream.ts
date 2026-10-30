@@ -4,6 +4,7 @@ import { apiPath } from './api-base'
 import { tokenParam } from './auth-gate'
 import { useDataPlaneRoute } from './use-data-plane'
 import { openWebSocket } from './rtc-plane'
+import type { UseStatus } from '../../shared/use-signal'
 import {
   DESKTOP_STREAM_ORIGIN,
   clampViewport,
@@ -11,6 +12,7 @@ import {
   inputWithRevision,
   nextStreamStatus,
   parseStreamMessage,
+  reconnectDelayMs,
   streamCanDrive,
   streamInputAllowed,
   streamPath,
@@ -57,6 +59,10 @@ export interface BrowserStream {
   agentHeld: boolean
   transitioning: boolean
   controlAvailable: boolean
+  /** A use card's device: live, or offline and why (pixel-instance.ts). Null on a web card. */
+  deviceStatus: UseStatus | null
+  /** The socket dropped and a new one is being dialled; the last frame stays on screen. */
+  reconnecting: boolean
   /** Stable current frame permits input; decode/freshness is view-owned. */
   canDrive: boolean
   send: (msg: CastInputMsg) => void
@@ -104,6 +110,12 @@ export function useBrowserStream(
   const [agentHeld, setAgentHeld] = useState(false)
   const [transitioning, setTransitioning] = useState(false)
   const [controlAvailable, setControlAvailable] = useState(false)
+  const [deviceStatus, setDeviceStatus] = useState<UseStatus | null>(null)
+  const [reconnectNonce, setReconnectNonce] = useState(0)
+  const [reconnecting, setReconnecting] = useState(false)
+  const attemptRef = useRef(0)
+  /** Set while a reconnect run is being prepared: it keeps the last frame instead of blanking the card. */
+  const keepFrameRef = useRef(false)
 
   const wsRef = useRef<WebSocket | null>(null)
   const gotFrameRef = useRef(false)
@@ -175,6 +187,10 @@ export function useBrowserStream(
       setAgentHeld(false)
       setTransitioning(false)
       setControlAvailable(false)
+      setDeviceStatus(null)
+      setReconnecting(false)
+      attemptRef.current = 0
+      keepFrameRef.current = false
       frameRevisionRef.current = null
       viewportRevisionRef.current = null
       liveRef.current = false
@@ -182,6 +198,8 @@ export function useBrowserStream(
       transitioningRef.current = false
       return
     }
+    const keepFrame = keepFrameRef.current
+    keepFrameRef.current = false
 
     warnedRef.current = false
     gotFrameRef.current = false
@@ -192,13 +210,16 @@ export function useBrowserStream(
     agentHeldRef.current = false
     transitioningRef.current = false
     setStatus('idle')
-    setFrameUrl(null)
-    setFrameSeq(null)
-    setFrameRevision(null)
-    setLastFrameAt(null)
+    if (!keepFrame) {
+      setFrameUrl(null)
+      setFrameSeq(null)
+      setFrameRevision(null)
+      setLastFrameAt(null)
+      setEffectiveViewport(null)
+      setEffectiveMobile(null)
+      setDeviceStatus(null)
+    }
     setLive(false)
-    setEffectiveViewport(null)
-    setEffectiveMobile(null)
     setViewportRevision(null)
     setIsOwner(null)
     setOwner(null)
@@ -226,6 +247,7 @@ export function useBrowserStream(
     let ws: WebSocket | null = null
     let deadline: ReturnType<typeof setTimeout> | null = null
     let staleTimer: ReturnType<typeof setInterval> | null = null
+    let redial: ReturnType<typeof setTimeout> | null = null
 
     const sendControl = (kind: ViewportControlKind): void => {
       const size = viewportRef.current
@@ -253,6 +275,16 @@ export function useBrowserStream(
       } catch {
         // already closing
       }
+      // Dial again, by itself. The effect re-runs on the nonce; this run's
+      // cleanup clears the timer if the card closes first.
+      const attempt = attemptRef.current
+      attemptRef.current = attempt + 1
+      setReconnecting(true)
+      redial = setTimeout(() => {
+        if (disposed) return
+        keepFrameRef.current = true
+        setReconnectNonce((n) => n + 1)
+      }, reconnectDelayMs(attempt))
     }
 
     const adoptViewportRevision = (revision: number): void => {
@@ -325,6 +357,19 @@ export function useBrowserStream(
           return
         }
 
+        if (msg.kind === 'status') {
+          // The server is answering for a device; an offline one sends no
+          // frames on purpose, so the first-frame deadline does not apply.
+          if (deadline) {
+            clearTimeout(deadline)
+            deadline = null
+          }
+          attemptRef.current = 0
+          setReconnecting(false)
+          setDeviceStatus(msg.status)
+          return
+        }
+
         if (msg.kind === 'ready') {
           if (msg.w > 0 && msg.h > 0) setEffectiveViewport({ width: msg.w, height: msg.h })
           if (typeof msg.mobile === 'boolean') setEffectiveMobile(msg.mobile)
@@ -370,6 +415,8 @@ export function useBrowserStream(
         setLive(true)
         if (!gotFrameRef.current) {
           gotFrameRef.current = true
+          attemptRef.current = 0
+          setReconnecting(false)
           if (deadline) {
             clearTimeout(deadline)
             deadline = null
@@ -383,6 +430,7 @@ export function useBrowserStream(
     return () => {
       disposed = true
       liveRef.current = false
+      if (redial) clearTimeout(redial)
       if (deadline) clearTimeout(deadline)
       if (staleTimer) clearInterval(staleTimer)
       if (ws?.readyState === WebSocket.OPEN) sendControl('release')
@@ -397,7 +445,7 @@ export function useBrowserStream(
     // planeRoute is a dependency and not an unused read: a switch onto the
     // LAN has to drop this socket and open the new one, and a socket is the
     // one connection that cannot re-read its own URL (plane-streams.ts).
-  }, [browserId, open, enabled, desktopToken, advance, viewportReady, client, planeRoute])
+  }, [browserId, open, enabled, desktopToken, advance, viewportReady, client, planeRoute, reconnectNonce])
 
   // Report the actual browser-frame content box without reconnecting the socket.
   useEffect(() => {
@@ -460,6 +508,8 @@ export function useBrowserStream(
         agentHeld,
         transitioning,
         controlAvailable,
+        deviceStatus,
+        reconnecting,
         canDrive,
         send,
         claim,
@@ -481,6 +531,8 @@ export function useBrowserStream(
         agentHeld: false,
         transitioning: false,
         controlAvailable: false,
+        deviceStatus: null,
+        reconnecting: false,
         canDrive: false,
         send,
         claim,

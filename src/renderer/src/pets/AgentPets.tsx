@@ -10,6 +10,7 @@ import { checkpointViewModel, isEmptyTurnView } from '../turn-view-model'
 import type { TurnPhase } from '../../../shared/turn'
 import type { WorkspaceState } from '../../../shared/model'
 import { petMax, pickPets, type Pet, type PetMood } from './pet-pick'
+import { useOfToolLine, type ToolUse } from '../../../shared/use-signal'
 import { PetTroop, type CardControls } from './PetTroop'
 
 /**
@@ -28,6 +29,20 @@ const TICK_MS = 30_000
 
 const AVATAR: Record<PetMood, TurnPhase> = { needs: 'waiting', working: 'thinking', done: 'replied', asleep: 'idle' }
 const MOOD_WORD: Record<PetMood, string> = { needs: 'needs you', working: 'working', done: 'done', asleep: 'resting' }
+
+/**
+ * A working agent's current USE, read off its newest tool line: a pet whose
+ * agent is driving a phone, a Mac, a browser it reached on its own, or a
+ * board on the bench wears it (shared/use-signal.ts · useOfToolLine). That is
+ * the whole of what Cookrew can show for a use it does not carry — the place
+ * is unknown, the fact is not. Cookrew's own cards get a cursor instead.
+ */
+export const petUse = (pet: Pet): ToolUse | null => {
+  if (pet.mood !== 'working') return null
+  const tools = pet.row.turn?.tools ?? []
+  const newest = tools[tools.length - 1]
+  return newest ? useOfToolLine(newest) : null
+}
 
 const agoLabel = (since: number, now: number): string => {
   const mins = Math.max(0, Math.floor((now - since) / 60_000))
@@ -71,17 +86,25 @@ export function AgentPets({
   const { rows, now } = usePetRows(workspace)
   const troop = useMemo(() => pickPets(rows, { workspaceId, now, max: petMax(window.innerWidth) }), [rows, workspaceId, now])
   const byId = useMemo(() => new Map([...troop.pets, ...troop.more].map((pet) => [pet.row.id, pet])), [troop])
-  const member = (pet: Pet) => ({
-    id: pet.row.id,
-    className: pet.mood,
-    label: `${pet.row.name}, ${MOOD_WORD[pet.mood]}`,
-    face: (
-      <>
-        <AgentAvatar phase={AVATAR[pet.mood]} preset={pet.row.preset} />
-        {pet.mood === 'asleep' && <span className="cr-pet-z" aria-hidden="true">z</span>}
-      </>
-    )
-  })
+  const member = (pet: Pet) => {
+    const use = petUse(pet)
+    return {
+      id: pet.row.id,
+      className: use ? `${pet.mood} using` : pet.mood,
+      label: `${pet.row.name}, ${MOOD_WORD[pet.mood]}${use ? `, using ${use.use === 'hardware' ? 'hardware' : `a ${use.use}`} (${use.via})` : ''}`,
+      face: (
+        <>
+          <AgentAvatar phase={AVATAR[pet.mood]} preset={pet.row.preset} />
+          {pet.mood === 'asleep' && <span className="cr-pet-z" aria-hidden="true">z</span>}
+          {use && (
+            <span className="cr-pet-use" data-use={use.use} aria-hidden="true">
+              {use.via}
+            </span>
+          )}
+        </>
+      )
+    }
+  }
   return (
     <PetTroop
       side="right"

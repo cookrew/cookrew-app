@@ -28,6 +28,7 @@ import { planRecruitTarget } from '../shared/workspace-dirs'
 import { PtyManager, multiplexer, sessionNameFor, type PtySession } from './pty'
 import { askRaw, askTerminal, decodeRawEscapes } from './ask'
 import { browserVerbKind, noteVerbKind } from '../shared/cable-signal'
+import { servedUseRefusal } from './use-commands'
 import {
   DeliveryError,
   deliverAndConfirm,
@@ -543,6 +544,16 @@ export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): P
   const activeId = deps.store.focusedId
   const active = { id: activeId, name: workspaceName(deps, activeId) }
   const [sub, name] = request.args
+
+  // A served caller never reaches the owner's screens, cameras or phones
+  // (use-commands.ts · servedUseRefusal) — checked before anything resolves.
+  if (deps.isServed(me.id)) {
+    const refusal = servedUseRefusal(request.args, (cardName) => {
+      const card = deps.store.nodeByName(cardName, 'browser') as BrowserNodeData | undefined
+      return card ? (card.tabs ?? []).map((tab) => tab.url).concat(card.url) : []
+    })
+    if (refusal) throw new Error(refusal)
+  }
 
   // Only `create` cares where the CALLER lives: it anchors the new node to the
   // caller's position and connects the two, which is impossible across a
@@ -1528,6 +1539,11 @@ Usage:
                                                 (owner panes only; every read is logged)
   cookrew browser create URL ["Name"]            Create a connected browser browser
   cookrew browser snapshot|click|fill|type|key|navigate|screenshot|evaluate|html|text|info "Browser" ...
+  cookrew browser create screen://main|window://App[/Title]|adb://SERIAL|vphone://VM|cam://0 ["Name"]
+                                                A USE card: a Mac display or window (?roi=x,y,w,h), a phone, a camera
+  cookrew browser screenshot "Card" [file.jpg]   Save what the card shows; prints its point size
+  cookrew browser tap "Card" X Y | swipe "Card" X1 Y1 X2 Y2 [ms]   Point at a screen (any card)
+  cookrew browser type|key|scroll|status "Card" ...   Drive a screen card; status says live or why offline
   cookrew browser tabs "Browser"                  List the browser's tabs (pages opened by the site land here)
   cookrew browser tab-new "Browser" URL           Open a new tab in the browser
   cookrew browser tab-select|tab-close "Browser" N   Switch to / close tab N

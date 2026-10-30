@@ -10,10 +10,12 @@ import type { Duplex } from 'node:stream'
 import { randomUUID } from 'node:crypto'
 import { sanitizeInput, type MapContext } from '../shared/cast-input'
 import { sanitizeViewportMessage } from '../shared/cast-viewport'
+import type { UseStatus } from '../shared/use-signal'
 import { jpegSize } from './jpeg-size'
 import { DEFAULT_DRAIN_THRESHOLD } from './screencast-pace'
 import type { BrowserViewportState } from './browser-viewport'
-import type { FrameMeta, HeadlessInstance } from './headless-chrome'
+import type { FrameMeta } from './headless-chrome'
+import type { BrowserInstance } from './browser-instance'
 import {
   acceptKey,
   decodeFrame,
@@ -25,7 +27,7 @@ import {
 } from './ws-frame'
 
 export interface BrowserCastDeps {
-  getInstance: (browserId: string) => Promise<HeadlessInstance | null>
+  getInstance: (browserId: string) => Promise<BrowserInstance | null>
   enabled: () => boolean
   /** Per-process secret used only by the cross-origin Electron renderer. */
   desktopToken: () => string
@@ -102,6 +104,13 @@ export interface BrowserCast {
   upgrade: (req: IncomingMessage, socket: Duplex) => void
   /** Close viewer sockets only; the node manager owns Chromium shutdown. */
   shutdown: () => void
+  /**
+   * Close one card's viewers: its instance was replaced (re-addressed to
+   * another device) or removed. Left attached they would watch a stopped
+   * instance forever; closed, each redials (useBrowserStream) and lands on
+   * the new one.
+   */
+  drop: (browserId: string) => void
   activeCount: () => number
 }
 
@@ -143,7 +152,7 @@ export function createBrowserCast(deps: BrowserCastDeps): BrowserCast {
     // Install close/error listeners BEFORE awaiting Chrome startup. Node streams
     // do not replay a close event to late listeners; this ordering closes C-1's
     // startup-disconnect leak.
-    const client = new ClientConn(socket, () => clients.delete(client))
+    const client = new ClientConn(socket, () => clients.delete(client), browserId)
     clients.add(client)
     if (socket.destroyed) {
       client.close()
@@ -164,6 +173,9 @@ export function createBrowserCast(deps: BrowserCastDeps): BrowserCast {
     shutdown: () => {
       for (const client of [...clients]) client.close()
     },
+    drop: (browserId) => {
+      for (const client of [...clients]) if (client.browserId === browserId) client.close()
+    },
     activeCount: () => clients.size
   }
 }
@@ -179,7 +191,7 @@ class ClientConn {
   private latestContext: MapContext | null = null
   private deliveredRevision: number | null = null
   private drainArmed = false
-  private instance: HeadlessInstance | null = null
+  private instance: BrowserInstance | null = null
   private unsubscribeViewport: (() => void) | null = null
   private ctx: MapContext = { displayScale: 1, viewportWidth: 800, viewportHeight: 600 }
   private readonly frameContexts = new Map<number, { ctx: MapContext; revision: number }>()
@@ -189,17 +201,21 @@ class ClientConn {
     this.pushFrame(data, meta)
   private readonly viewportListener = (state: BrowserViewportState): void =>
     this.pushViewportState(state)
+  /** A use's device state: a viewer shows "offline — <why>" over the last frame instead of a frozen screen. */
+  private readonly statusListener = (status: UseStatus): void =>
+    this.wsSend(JSON.stringify({ t: 'status', ...status }))
 
   constructor(
     private readonly socket: Duplex,
-    private readonly onClosed: () => void
+    private readonly onClosed: () => void,
+    readonly browserId: string
   ) {
     socket.on('data', this.onData)
     socket.on('close', this.close)
     socket.on('error', this.close)
   }
 
-  attach(instance: HeadlessInstance): void {
+  attach(instance: BrowserInstance): void {
     if (this.closed) return
     this.instance = instance
     instance.registerViewportViewer(this.id)
@@ -211,6 +227,7 @@ class ClientConn {
       viewportHeight: viewport.height
     }
     instance.frameListeners.add(this.frameListener)
+    instance.statusListeners?.add(this.statusListener)
     this.wsSend(JSON.stringify({
       t: 'ready',
       w: viewport.width,
@@ -219,6 +236,7 @@ class ClientConn {
       revision: viewport.revision
     }))
     this.pushViewportState(viewport)
+    if (instance.status) this.statusListener(instance.status)
   }
 
   fail(message: string): void {
@@ -414,6 +432,7 @@ class ClientConn {
     this.deliveredRevision = null
     this.frameContexts.clear()
     this.instance?.frameListeners.delete(this.frameListener)
+    this.instance?.statusListeners?.delete(this.statusListener)
     this.unsubscribeViewport?.()
     this.unsubscribeViewport = null
     this.instance?.unregisterViewportViewer(this.id)

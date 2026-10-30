@@ -500,3 +500,19 @@ describe('streamSurfaceState (stable real-UI probe contract)', () => {
     expect(streamSurfaceState({ ...base, open: false })).toBe('idle')
   })
 })
+
+describe('browserRenderMode for a vphone card', () => {
+  // A virtual iPhone has no page to put in a <webview> or an <iframe>: with
+  // the headless stream it is a stream like any card; without it the card
+  // says what it needs instead of loading vphone:// into a web surface.
+  it('streams when interactive, waits when unknown, and says so when the stream is off', async () => {
+    const { browserRenderMode } = await import('../src/renderer/src/browser-stream')
+    expect(browserRenderMode({ interactive: true, client: 'desktop', selfEmbedding: false, vphone: true })).toBe('headless-stream')
+    expect(browserRenderMode({ interactive: null, client: 'desktop', selfEmbedding: false, vphone: true })).toBe('pending')
+    for (const client of ['desktop', 'remote', 'demo'] as const) {
+      expect(browserRenderMode({ interactive: false, client, selfEmbedding: false, vphone: true })).toBe('vphone-off')
+    }
+    // Absent means a web card, exactly as before.
+    expect(browserRenderMode({ interactive: false, client: 'desktop', selfEmbedding: false })).toBe('legacy-webview')
+  })
+})
