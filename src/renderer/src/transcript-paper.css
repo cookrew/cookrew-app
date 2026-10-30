@@ -319,3 +319,25 @@
   padding: 3px 7px;
   font-size: 8.5px;
 }
+
+/* A chat with nothing in it yet (TerminalOverlay · noConversation). */
+.lod-overlay .popout-main.look-chat {
+  position: relative;
+}
+
+.lod-overlay .chat-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--muted);
+  font: 13px/1.4 var(--font-body);
+  pointer-events: none;
+}
+
+.lod-overlay .chat-empty button {
+  pointer-events: auto;
+}

@@ -445,6 +445,18 @@ function TerminalOverlay({
     }
     setLook(next)
   }
+  // A card with no conversation (a plain shell, an agent before its first
+  // prompt) would be an empty chat: after a moment it says so and offers the
+  // terminal. The moment keeps it from flashing while the stream loads.
+  const [noConversation, setNoConversation] = useState(false)
+  useEffect(() => {
+    if (stream.total > 0) {
+      setNoConversation(false)
+      return
+    }
+    const timer = setTimeout(() => setNoConversation(true), 1200)
+    return () => clearTimeout(timer)
+  }, [stream.total, node.id])
   useLayoutEffect(() => {
     const box = mainRef.current?.querySelector<HTMLElement>('.ctx-transcript') ?? null
     if (!box) return
@@ -1238,6 +1250,14 @@ function TerminalOverlay({
           <div ref={containerRef} className="popout-terminal" />
         </TranscriptView>
         </TranscriptFaceContext.Provider>
+        {look === 'chat' && noConversation && phase !== 'thinking' && (
+          <div className="chat-empty">
+            <span>No conversation yet.</span>
+            <button type="button" className="cr-btn sm" onClick={() => switchLook('live')}>
+              Open terminal
+            </button>
+          </div>
+        )}
         {look === 'chat' && (phase === 'thinking' || phase === 'waiting') && (
           <ChatStatus
             phase={phase}
