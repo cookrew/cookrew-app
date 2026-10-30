@@ -1,4 +1,5 @@
 import type http from "node:http";
+import { randomUUID } from "node:crypto";
 import { appendFile } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -77,6 +78,10 @@ import { RELAY_MARKER, isLoopbackPeer } from "./relay-base";
  *
  * A plain-HTTP request from the LAN is none of these and is refused.
  */
+
+/** Open terminal streams by the id their hello announced (POST …/seed). */
+const seedStreams = new Map<string, { terminalId: string; send: (event: string, data: unknown) => void }>();
+
 export const sealedTransport = (request: {
   socket: { encrypted?: boolean; remoteAddress?: string };
   headers?: Record<string, string | string[] | undefined>;
@@ -1451,7 +1456,7 @@ export async function handleMobileApi(
   }
 
   const ptyMatch = p.match(
-    /^\/api\/terminal\/([^/]+)\/(raw|resize|stream|jump)$/,
+    /^\/api\/terminal\/([^/]+)\/(raw|resize|stream|jump|seed)$/,
   );
   if (ptyMatch) {
     const terminalId = ptyMatch[1];
@@ -1507,6 +1512,26 @@ export async function handleMobileApi(
       respondJson(response, 200, { ok: true });
       return true;
     }
+    // History for ONE viewer's live terminal (PtySession.seedFrame): sent down
+    // that viewer's own stream, named by the id its hello carried, so it lands
+    // in order with the deltas and costs no other viewer a byte.
+    if (method === "POST" && ptyMatch[2] === "seed") {
+      const body = await readJson<{ nonce?: unknown; lines?: unknown; stream?: unknown }>(request, 4096);
+      const nonce = typeof body.nonce === "string" && /^[A-Za-z0-9-]{1,64}$/.test(body.nonce) ? body.nonce : null;
+      const target = typeof body.stream === "string" ? seedStreams.get(body.stream) : undefined;
+      if (!nonce || !target || target.terminalId !== terminalId) {
+        respondJson(response, 200, { ok: false });
+        return true;
+      }
+      const frame = await session.seedFrame(Number(body.lines) || 0, nonce);
+      if (frame === null) {
+        respondJson(response, 200, { ok: false });
+        return true;
+      }
+      target.send("data", frame);
+      respondJson(response, 200, { ok: true });
+      return true;
+    }
     if (method === "POST" && ptyMatch[2] === "jump") {
       const body = await readJson<{ text?: string | null }>(request);
       if (typeof body.text === "string" && body.text.length > 0)
@@ -1525,7 +1550,10 @@ export async function handleMobileApi(
       // the client knows the mirror's size gets re-wrapped, and herdr's
       // absolute-addressed deltas then land in the wrong cells. Announcing the
       // size first lets the client size its grid BEFORE any byte arrives.
-      send("hello", session.geometry());
+      // The stream's own name, for a seed meant for this viewer alone.
+      const streamId = randomUUID();
+      seedStreams.set(streamId, { terminalId, send });
+      send("hello", { ...session.geometry(), stream: streamId });
       // A faithful ANSI frame, not plain text — see PtySession.replayFrame.
       send("data", session.replayFrame());
       const onData = (data: string): void => send("data", data);
@@ -1539,6 +1567,7 @@ export async function handleMobileApi(
       // Keepalive is startSse's job — see mobile-http.ts. Writing to the
       // response here would land plaintext inside the gzip stream.
       request.on("close", () => {
+        seedStreams.delete(streamId);
         session.removeListener("data", onData);
         session.removeListener("replay", onReplay);
         session.removeListener("exit", onExit);

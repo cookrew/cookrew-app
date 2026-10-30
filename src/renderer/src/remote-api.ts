@@ -100,6 +100,9 @@ const inFlightGets = new Map<string, Promise<unknown>>()
  */
 const SHARE_GET_MS = 10_000
 
+/** Each attached terminal's stream name, from its hello (ptySeed). */
+const seedStreamIds = new Map<string, string>()
+
 async function req<T>(path: string, method = 'GET', body?: unknown, parseOptions: ParseOptions = {}): Promise<T> {
   if (method !== 'GET' || body !== undefined) {
     // A write may change what any GET in flight would answer; nobody asking
@@ -445,6 +448,15 @@ export function createRemoteApi(): CookrewApi {
     turnSeen: (terminalId) => passivePost(apiPath(`/api/terminal/${terminalId}/seen`), {}),
     ptyResize: (terminalId, cols, rows) =>
       passivePost(apiPath(`/api/terminal/${terminalId}/resize`), { cols, rows }),
+    ptySeed: async (terminalId, nonce, lines) => {
+      const stream = seedStreamIds.get(terminalId)
+      if (!stream) return false
+      try {
+        return (await req<{ ok?: boolean }>(apiPath(`/api/terminal/${terminalId}/seed`), 'POST', { nonce, lines, stream })).ok === true
+      } catch {
+        return false
+      }
+    },
     ptyAttach: (terminalId, onData, onHello) => {
       // Healing, not hoping — see attachTerminalStream for why a bare
       // EventSource left the live pane black on the first open of an idle
@@ -455,7 +467,12 @@ export function createRemoteApi(): CookrewApi {
       const stream = attachTerminalStream(
         { open: () => openEventSource(tokenParam(apiPath(`/api/terminal/${terminalId}/stream`))) },
         onData,
-        onHello
+        (hello) => {
+          // The stream's name rides its hello: a seed is sent down it alone.
+          const id = (hello as { stream?: unknown }).stream
+          if (typeof id === 'string') seedStreamIds.set(terminalId, id)
+          onHello?.(hello)
+        }
       )
       const onVisible = (): void => {
         if (document.visibilityState === 'visible') stream.revive()

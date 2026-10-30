@@ -38,6 +38,7 @@ import { useCheckpointTranslation } from './use-checkpoint-translation'
 import { AgentAvatar, StatusCoin } from './nodes/AgentAvatar'
 import { TranscriptFaceContext } from './transcript-face'
 import { useTranscriptLook, type TranscriptLook } from './transcript-look'
+import { installLocalScroll, type LocalScroll } from './live-scroll'
 import { TuneRail } from './nodes/TuneRail'
 import { closeZoomMenu, modelSwitchKind, useZoomSlots } from './zoom-bar'
 import { useAgentTuning } from './nodes/use-agent-tuning'
@@ -449,6 +450,11 @@ function TerminalOverlay({
   const chatFace = useMemo(() => <AgentAvatar phase="idle" preset={node.preset} />, [node.preset])
   // Chat or the raw terminal (transcript-look.ts): one class on the box.
   const [look, setLook] = useTranscriptLook()
+  // Read by the terminal's mount-once setup: is the live view on screen?
+  const lookRef = useRef(look)
+  lookRef.current = look
+  /** The live terminal's local scroll (live-scroll.ts), once the terminal is up. */
+  const localScrollRef = useRef<LocalScroll | null>(null)
   const mainRef = useRef<HTMLDivElement>(null)
   /** Where the chat was read when the terminal took the box: null = at the newest. */
   const chatScroll = useRef<number | null>(null)
@@ -475,8 +481,10 @@ function TerminalOverlay({
     const box = mainRef.current?.querySelector<HTMLElement>('.ctx-transcript') ?? null
     if (!box) return
     if (look === 'live') {
-      // The terminal is the whole card now: keys go to it.
+      // The terminal is the whole card now: keys go to it, and its history
+      // is fetched so the first scroll is local (live-scroll.ts).
       termRef.current?.focus()
+      localScrollRef.current?.onLive()
       return
     }
     box.scrollTop = chatScroll.current ?? box.scrollHeight
@@ -739,9 +747,25 @@ function TerminalOverlay({
         if (settleTimer) clearTimeout(settleTimer)
         if (rekickTimer) clearTimeout(rekickTimer)
       })
+      // The live view scrolls its own copy of the pane's history (live-scroll.ts).
+      const api = cookrew()
+      const localScroll = installLocalScroll(term, {
+        seed: (nonce, lines) => api.ptySeed?.(node.id, nonce, lines) ?? Promise.resolve(false),
+        live: () => lookRef.current === 'live',
+        lines: isRemoteMode() ? 400 : 1000,
+        refreshMs: isRemoteMode() ? 8000 : 3000,
+        history: () => activityRef.current?.scrollBase ?? null
+      })
+      localScrollRef.current = localScroll
+      cleanups.push(() => {
+        localScroll.dispose()
+        if (localScrollRef.current === localScroll) localScrollRef.current = null
+      })
       const detach = cookrew().ptyAttach(
         node.id,
-        (chunk) => term.write(detoxify(chunk)),
+        (chunk) => {
+          if (localScroll.admit(chunk)) term.write(detoxify(chunk))
+        },
         ({ cols, rows }) => {
           if (disposed || cols <= 0 || rows <= 0) return
           term.resize(cols, rows)
@@ -765,6 +789,8 @@ function TerminalOverlay({
           }, 400)
         }
       )
+      // Asked only now: the attach is listening, so the seed cannot arrive unheard.
+      if (lookRef.current === 'live') localScroll.onLive()
       cleanups.push(() => {
         if (reassertTimer) clearTimeout(reassertTimer)
       })

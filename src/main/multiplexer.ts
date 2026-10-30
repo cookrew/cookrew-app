@@ -266,6 +266,12 @@ export interface Multiplexer {
    * degrade to that rather than assume depth they did not get.
    */
   captureDeep?(name: string, lines: number): string | null
+  /**
+   * The pane's recent history WITH its colours, wrapped at the pane width —
+   * what a viewer needs to scroll locally (PtySession.seedFrame). Optional and
+   * async: only a backend with an off-thread runner answers; null = no view.
+   */
+  historyAnsiAsync?(name: string, lines: number): Promise<string | null>
   scrollState(name: string): ScrollState
   /**
    * Bounded-STALE scroll state for the hot activity path, served without a
