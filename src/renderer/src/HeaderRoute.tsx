@@ -6,19 +6,44 @@
 // canvas's workspace, the levels name their own path — and every step is a
 // way out to its level:
 //
-//   device    → the devices (levels, machines)
-//   workspace → the workspace choice (levels, this desktop's workspaces)
+//   device    → every device (the stage's devices level)
+//   workspace → every workspace, as thumbnails (the stage's workspaces level)
 //   agent     → nothing; it is where you are: the terminal zoomed on the
 //               canvas, or open at the levels' last level. Only its name —
 //               the card keeps its own head and its own buttons.
 import { isRemoteMode } from './api'
 import type { MainView } from './Header'
 import { CrIcon } from './icons'
-import { levelsRoute, useLevelsRoute, WORKSPACES_PATH, type LevelsRouteState } from './levels/levels-history'
+import { useLevelsRoute, WORKSPACES_PATH, type LevelsRouteState } from './levels/levels-history'
 import { PathDot } from './PathBadge'
 import type { PathBadgeView } from '../../shared/path-badge'
 import type { StrataPath } from '../../shared/strata'
 import { useActiveWorkspace, type ActiveWorkspace } from './WorkspaceSwitcher'
+import { LOCAL_MACHINE_ID } from './levels/local-fleet'
+import { stageLevel, useStageLevel, type StageLevel } from './stage/stage-select'
+
+/**
+ * The stage's levels said as a levels path, so the route draws them the way
+ * it draws the levels: devices → this device's workspaces → one workspace →
+ * one card.
+ */
+export function stageRouteState(input: {
+  level: StageLevel
+  machine: string | null
+  workspace: { name: string; icon: string | null }
+  zoomed: string | null
+}): LevelsRouteState {
+  const { level, machine, workspace, zoomed } = input
+  const path: StrataPath =
+    level === 'devices'
+      ? {}
+      : level === 'workspaces'
+        ? { machine: LOCAL_MACHINE_ID }
+        : zoomed !== null
+          ? { machine: LOCAL_MACHINE_ID, workspace: 'loaded', agent: 'zoomed' }
+          : { machine: LOCAL_MACHINE_ID, workspace: 'loaded' }
+  return { path, names: { machine, workspace, agent: zoomed }, find: 0 }
+}
 
 export interface RouteStep {
   key: 'device' | 'workspace'
@@ -98,13 +123,21 @@ export function HeaderRoute({ view, workspaceName, dir, path, zoomedAgent, stage
   const remote = isRemoteMode()
   // "drej-mbp.local" → "drej-mbp": the `.local` is mDNS plumbing, not a name.
   const device = (levels.names.machine ?? (remote ? path.desktopName : null) ?? 'This desktop').replace(/\.local$/i, '')
-  const inLevels = view === 'levels'
-  const steps = routeSteps({ inLevels, levels, canvasWorkspace, device })
-  const agent = view === 'agents' ? null : routeAgent(inLevels, levels, zoomedAgent)
+  const level = useStageLevel()
+  // The stage reads its own levels; the deprecated views keep theirs.
+  const route =
+    view === 'stage'
+      ? stageRouteState({ level, machine: device, workspace: { name: canvasWorkspace.name, icon: canvasWorkspace.icon }, zoomed: zoomedAgent })
+      : levels
+  const inLevels = view === 'levels' || view === 'stage'
+  const steps = routeSteps({ inLevels, levels: route, canvasWorkspace, device })
+  const agent = view === 'agents' ? null : routeAgent(inLevels, route, zoomedAgent)
 
-  const go = (to: StrataPath): void => {
-    levelsRoute.go(to)
-    onViewChange('levels')
+  // Every step goes to the stage: the device to every device, the workspace
+  // to every workspace — wherever you are, the same three places.
+  const go = (step: RouteStep): void => {
+    stageLevel.set(step.key === 'device' ? 'devices' : 'workspaces')
+    onViewChange('stage')
   }
 
   return (
@@ -121,7 +154,7 @@ export function HeaderRoute({ view, workspaceName, dir, path, zoomedAgent, stage
             className="cr-route-btn"
             title={step.title}
             aria-current={step.current ? 'page' : undefined}
-            onClick={() => go(step.to)}
+            onClick={() => go(step)}
           >
             {step.key === 'device' ? (
               <>

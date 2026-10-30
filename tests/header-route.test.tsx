@@ -2,7 +2,7 @@
 // the function bar and ⋯ on the right. A zoomed terminal keeps its own head;
 // the route only names it.
 import { describe, expect, it } from 'vitest'
-import { routeAgent, routeSteps } from '../src/renderer/src/HeaderRoute'
+import { routeAgent, routeSteps, stageRouteState } from '../src/renderer/src/HeaderRoute'
 import {
   createLevelsRoute,
   LEVELS_DEVICE_KEY,
@@ -130,5 +130,23 @@ describe('the agent step', () => {
     expect(routeAgent(true, state({ machine: LOCAL_MACHINE_ID, workspace: 'w' }), 'Conductor')).toBeNull()
     // The fleet has not named it yet.
     expect(routeAgent(true, state({ machine: LOCAL_MACHINE_ID, workspace: 'w', agent: 'a' }, null), null)).toBe('…')
+  })
+})
+
+describe('the stage route', () => {
+  const ws = { name: 'Velvet', icon: '🎨' }
+  const canvasWorkspace = { name: 'Velvet', icon: '🎨', dir: '/w' }
+  const at = (level: 'devices' | 'workspaces' | 'workspace', zoomed: string | null = null) => {
+    const levels = stageRouteState({ level, machine: 'MacBook Pro', workspace: ws, zoomed })
+    return {
+      steps: routeSteps({ inLevels: true, levels, canvasWorkspace, device: 'MacBook Pro' }).map((s) => `${s.label}${s.current ? '*' : ''}`),
+      agent: routeAgent(true, levels, zoomed)
+    }
+  }
+  it('says devices → device → device / workspace → device / workspace / card', () => {
+    expect(at('devices')).toEqual({ steps: ['Devices*'], agent: null })
+    expect(at('workspaces')).toEqual({ steps: ['MacBook Pro*'], agent: null })
+    expect(at('workspace')).toEqual({ steps: ['MacBook Pro', 'Velvet*'], agent: null })
+    expect(at('workspace', 'Street')).toEqual({ steps: ['MacBook Pro', 'Velvet'], agent: 'Street' })
   })
 })

@@ -67,9 +67,12 @@ export function ItemColumn({
   selected,
   open,
   faces,
+  hot = null,
   onPick
 }: {
   items: readonly StageItemCard[]
+  /** The card that needs you, at the workspace level. */
+  hot?: string | null
   head: ColumnHead
   /** The item in the middle (item mode). */
   selected: string | null
@@ -91,7 +94,7 @@ export function ItemColumn({
               key={item.id}
               type="button"
               role="listitem"
-              className={`stg-card ${item.kind}${item.id === selected ? ' on' : ''}${item.id === open ? ' open' : ''}`}
+              className={`stg-card ${item.kind}${item.id === selected ? ' on' : ''}${item.id === open ? ' open' : ''}${item.id === hot ? ' hot' : ''}`}
               title={item.sub ? `${item.title}\n${item.sub}` : item.title}
               aria-current={item.id === selected || item.id === open ? 'true' : undefined}
               onMouseDown={(e) => e.preventDefault()}
@@ -129,9 +132,12 @@ export function AgentColumn({
   current,
   auto,
   counts,
+  hot = null,
   onPick
 }: {
   rows: readonly Row[]
+  /** The agent that needs you, at the workspace level. */
+  hot?: string | null
   head: ColumnHead
   now: number
   /** The agent whose terminal is in the middle. */
@@ -174,7 +180,7 @@ export function AgentColumn({
               key={r.id}
               type="button"
               role="listitem"
-              className={`stg-card agent ${r.phase}${r.id === current ? (auto ? ' auto' : ' on') : ''}`}
+              className={`stg-card agent ${r.phase}${r.id === current ? (auto ? ' auto' : ' on') : ''}${r.id === hot ? ' hot' : ''}`}
               aria-current={r.id === current ? 'true' : undefined}
               onPointerEnter={(e) => {
                 if (e.pointerType !== 'mouse') return
@@ -201,7 +207,7 @@ export function AgentColumn({
                 </span>
                 <span className="stg-card-phase">
                   {PHASE_WORD[r.phase]}
-                  {r.id === current && auto && <span className="stg-tag">on stage</span>}
+                  {r.id === current && auto && <span className="stg-tag">{r.id === hot ? 'needs a look' : 'on stage'}</span>}
                 </span>
                 {line && <span className="stg-card-line">{line}</span>}
                 {c && (c.browsers > 0 || c.notes > 0) && (
