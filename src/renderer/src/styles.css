@@ -2940,6 +2940,26 @@ a.card-close {
   color: var(--ink);
 }
 
+.crash-panel pre {
+  max-width: min(90vw, 720px);
+  white-space: pre-wrap;
+  word-break: break-word;
+  text-align: center;
+}
+
+.crash-note {
+  margin: 0;
+  color: var(--ink-soft, var(--ink));
+  opacity: 0.75;
+  text-align: center;
+  padding: 0 16px;
+}
+
+.crash-actions {
+  display: flex;
+  gap: 10px;
+}
+
 .react-flow__resize-control.handle {
   background: var(--amber-deep);
   border: 1px solid var(--line);

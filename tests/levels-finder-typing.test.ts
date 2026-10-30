@@ -70,7 +70,7 @@ describeWithChrome('the levels finder, typed into', () => {
       await sleep(600)
 
       const state = await page.evaluate<{ level: boolean; finder: boolean; crashed: boolean }>(
-        `({ level: !!document.querySelector('.cr-levels .level'), finder: !!document.querySelector('.cr-levels .finder'), crashed: document.body.textContent.includes('Canvas crashed') })`
+        `({ level: !!document.querySelector('.cr-levels .level'), finder: !!document.querySelector('.cr-levels .finder'), crashed: !!document.querySelector('.crash-panel') })`
       )
       expect(state).toEqual({ level: true, finder: true, crashed: false })
       expect(errors).toEqual([])
