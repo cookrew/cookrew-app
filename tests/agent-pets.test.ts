@@ -62,7 +62,7 @@ describe('who rides along', () => {
     const rows = Array.from({ length: PET_MAX + 3 }, (_, n) => row(`w${n}`, 'working', n * 1000))
     const troop = pickPets(rows, { workspaceId: 'ws', now: NOW })
     expect(troop.pets).toHaveLength(PET_MAX)
-    expect(ids(troop.more)).toEqual(['w5', 'w6', 'w7'])
+    expect(ids(troop.more)).toEqual([`w${PET_MAX}`, `w${PET_MAX + 1}`, `w${PET_MAX + 2}`])
   })
 
   it('never leaves a quiet workspace without a troop: the latest sit in, asleep', () => {
@@ -108,7 +108,7 @@ describe('which browsers and notes ride along', () => {
     expect(pickItems(items, { owners, focus: [] }).shown.map((item) => item.id)).toEqual(['n-new', 'b-mine', 'b-busy', 'n-old'])
   })
 
-  it('a phone shows fewer of each, so both troops fit one row', () => {
+  it('a phone shows fewer of each: its columns are shorter', () => {
     expect(petMax(412)).toBe(PET_MAX_PHONE)
     expect(petMax(1440)).toBe(PET_MAX)
   })
@@ -135,9 +135,16 @@ describe('where a troop sits', () => {
     expect(readSpot('{"x":30,"bottom":40}')).toEqual({ x: 30, bottom: 40 })
   })
 
-  it("is home on the stage's bed, wherever the stage ends", () => {
-    expect(petHome(56)).toEqual({ x: 8, bottom: 63 })
-    expect(petHome(0)).toEqual({ x: 8, bottom: 7 })
+  it('stands in its gutter, on the dock, wherever the stage ends', () => {
+    expect(petHome(56, 1440)).toEqual({ x: 4, bottom: 64 })
+    expect(petHome(0, 412)).toEqual({ x: 2, bottom: 8 })
+  })
+
+  it('stands in columns, in gutters the stage keeps clear down its sides (the owner, 2026-10-31)', () => {
+    const css = readFileSync('src/renderer/src/pets/pets.css', 'utf8')
+    const stage = readFileSync('src/renderer/src/stage/stage.css', 'utf8')
+    expect(css).toMatch(/\.cr-pets \{[^}]*flex-direction: column;/)
+    expect(stage).toMatch(/\.cr-stage-view\.bedded \{\s*padding: 0 56px;/)
   })
 })
 
@@ -145,16 +152,16 @@ describe("where a pet's card opens", () => {
   const view = { width: 1000, height: 800 }
   const card = { width: 340, height: 200 }
 
-  it('above the pet when it fits, centred and kept inside the screen', () => {
-    const at = cardPlacement({ left: 950, top: 700, width: 38, height: 38 }, card, view)
-    expect(at).toEqual({ left: 652, top: 490, above: true })
+  it('beside the face, toward the middle: left of the agents, right of the browsers and notes', () => {
+    expect(cardPlacement({ left: 950, top: 400, width: 38, height: 38 }, card, view, 'right')).toEqual({ left: 600, top: 319 })
+    expect(cardPlacement({ left: 10, top: 400, width: 38, height: 38 }, card, view, 'left')).toEqual({ left: 58, top: 319 })
   })
 
-  it('below the pet when the troop was dragged to the top', () => {
-    const at = cardPlacement({ left: 10, top: 20, width: 38, height: 38 }, card, view)
-    expect(at.above).toBe(false)
-    expect(at.top).toBe(68)
-    expect(at.left).toBe(8)
+  it('level with the face where it fits, never off the screen', () => {
+    expect(cardPlacement({ left: 950, top: 760, width: 38, height: 38 }, card, view, 'right').top).toBe(592)
+    expect(cardPlacement({ left: 950, top: 0, width: 38, height: 38 }, card, view, 'right').top).toBe(8)
+    // A narrow phone: the card takes what room there is.
+    expect(cardPlacement({ left: 370, top: 300, width: 34, height: 34 }, card, { width: 412, height: 915 }, 'right').left).toBe(20)
   })
 })
 

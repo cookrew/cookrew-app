@@ -15,7 +15,7 @@ import type { AgentRow } from '../agent-rows'
  */
 
 /** Pets on screen before the "+N" coin. */
-export const PET_MAX = 5
+export const PET_MAX = 8
 /** A troop is never smaller than this while the workspace has agents. */
 export const PET_MIN = 3
 /** A finished turn this recent is still news. */
@@ -71,8 +71,8 @@ export const pickPets = (
   return { pets: all.slice(0, shown), more: all.slice(shown) }
 }
 
-/** Pets on a phone before the "+N" coin: two troops share one row there. */
-export const PET_MAX_PHONE = 3
+/** Pets on a phone before the "+N" coin: its columns are shorter. */
+export const PET_MAX_PHONE = 6
 
 /** How many pets a troop shows on a screen this wide (the app's 700px phone breakpoint). */
 export const petMax = (width: number): number => (width <= 700 ? PET_MAX_PHONE : PET_MAX)
@@ -139,11 +139,18 @@ export interface PetSpot {
   readonly bottom: number
 }
 
-/** The troops' bed: the strip the stage keeps clear for them, just above the dock. */
-export const PET_BED = 50
+/**
+ * The troops stand in columns, one down each side (the owner, 2026-10-31):
+ * the stage keeps a gutter this wide on each side for them (stage.css).
+ */
+export const PET_GUTTER = 56
+export const PET_GUTTER_PHONE = 48
 
-/** Home: on the bed, in from the side, wherever the stage ends. */
-export const petHome = (stageBottomGap: number): PetSpot => ({ x: 8, bottom: Math.max(6, Math.round(stageBottomGap) + 7) })
+/** Home: in its gutter, standing on the dock, wherever the stage ends. */
+export const petHome = (stageBottomGap: number, width: number): PetSpot => ({
+  x: width <= 700 ? 2 : 4,
+  bottom: Math.max(6, Math.round(stageBottomGap) + 8)
+})
 
 /** Keep the troop on screen, whatever was saved or wherever it was dragged. */
 export const clampSpot = (
@@ -169,18 +176,20 @@ export const readSpot = (raw: string | null): PetSpot | null => {
 }
 
 /**
- * Where a pet's card opens: above the pet when it fits (the troop lives near
- * the bottom), below it when it does not, and never off the side of the screen.
+ * Where a pet's card opens: beside its face, toward the middle of the screen
+ * (the troops stand in columns down the sides), level with the face where it
+ * fits, and never off the screen.
  */
 export const cardPlacement = (
   pet: { readonly left: number; readonly top: number; readonly width: number; readonly height: number },
   card: { readonly width: number; readonly height: number },
   viewport: { readonly width: number; readonly height: number },
+  side: 'left' | 'right',
   gap = 10
-): { left: number; top: number; above: boolean } => {
-  const above = pet.top - gap - card.height >= 8 || pet.top > viewport.height - (pet.top + pet.height)
-  const top = above ? Math.max(8, pet.top - gap - card.height) : Math.min(viewport.height - card.height - 8, pet.top + pet.height + gap)
-  const centred = pet.left + pet.width / 2 - card.width / 2
-  const left = Math.min(Math.max(8, centred), Math.max(8, viewport.width - card.width - 8))
-  return { left: Math.round(left), top: Math.round(top), above }
+): { left: number; top: number } => {
+  const beside = side === 'right' ? pet.left - gap - card.width : pet.left + pet.width + gap
+  const left = Math.min(Math.max(8, beside), Math.max(8, viewport.width - card.width - 8))
+  const level = pet.top + pet.height / 2 - card.height / 2
+  const top = Math.min(Math.max(8, level), Math.max(8, viewport.height - card.height - 8))
+  return { left: Math.round(left), top: Math.round(top) }
 }
