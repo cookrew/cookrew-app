@@ -55,3 +55,59 @@ export function reportCrash(error: unknown, componentStack: string | null | unde
   }
   return report
 }
+
+/**
+ * A CHUNK THAT IS NOT THERE ANY MORE IS A NEW BUILD, NOT A BUG.
+ *
+ * Every merge rebuilds the bundle the phone loads, under new chunk names. A
+ * page loaded before the rebuild asks for a chunk name that is gone, and the
+ * import fails with one of these sentences (Chrome, Safari, Firefox). The
+ * answer is to load the page again — once: a reload within RELOAD_GUARD_MS
+ * of the last is not repeated, so a chunk that is truly missing shows the
+ * crash screen instead of looping.
+ */
+const CHUNK_ERROR =
+  /Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module|Unable to preload CSS|Loading (CSS )?chunk \S+ failed/i
+
+export const RELOAD_GUARD_MS = 30_000
+const RELOAD_KEY = 'cookrew.new-build-reload-at'
+
+export function isChunkLoadError(error: unknown): boolean {
+  const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+  return CHUNK_ERROR.test(message)
+}
+
+export interface ReloadDeps {
+  readonly storage: Pick<Storage, 'getItem' | 'setItem'> | null
+  readonly now: number
+  readonly reload: () => void
+}
+
+/** Reloads unless a reload for a new build happened within the guard; says which. */
+export function reloadForNewBuild(deps: ReloadDeps): boolean {
+  let last = 0
+  try {
+    last = Number(deps.storage?.getItem(RELOAD_KEY) ?? 0) || 0
+  } catch {
+    last = 0
+  }
+  if (deps.now - last < RELOAD_GUARD_MS) return false
+  try {
+    deps.storage?.setItem(RELOAD_KEY, String(deps.now))
+  } catch {
+    // No storage: the guard cannot hold, so do not reload at all.
+    return false
+  }
+  deps.reload()
+  return true
+}
+
+export function reloadForNewBuildNow(): boolean {
+  let storage: Storage | null = null
+  try {
+    storage = window.sessionStorage
+  } catch {
+    storage = null
+  }
+  return reloadForNewBuild({ storage, now: Date.now(), reload: () => window.location.reload() })
+}
