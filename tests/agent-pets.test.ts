@@ -14,6 +14,7 @@ import {
   clampSpot,
   moodOf,
   petHome,
+  petClick,
   petMax,
   pickItems,
   pickPets,
@@ -154,6 +155,25 @@ describe("where a pet's card opens", () => {
     expect(at.above).toBe(false)
     expect(at.top).toBe(68)
     expect(at.left).toBe(8)
+  })
+})
+
+// THE OWNER'S SKETCH (2026-10-31): hover names it, a click opens its card
+// (the synopsis and a prompt box), a second click opens it in full.
+describe('three steps to an agent', () => {
+  it('the first click opens its card; the second, with its card open, opens it in full', () => {
+    expect(petClick(null, 'a')).toBe('card')
+    expect(petClick('a', 'a')).toBe('full')
+    // Another face's card open: this one's card, not a jump into it.
+    expect(petClick('b', 'a')).toBe('card')
+  })
+
+  it('hover names the face and opens nothing; no timer opens a card', () => {
+    const troop = readFileSync('src/renderer/src/pets/PetTroop.tsx', 'utf8')
+    expect(troop).toContain('setHoverId(member.id)')
+    expect(troop).toContain('<span className="cr-pet-name" aria-hidden="true">')
+    expect(troop).not.toMatch(/ENTER_MS|LEAVE_MS|setTimeout\(\(\) => setOpenId/)
+    expect(troop).toContain("if (petClick(openId, id) === 'full')")
   })
 })
 

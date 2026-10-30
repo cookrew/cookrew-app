@@ -21,7 +21,7 @@ import { PetTroop, type CardControls } from './PetTroop'
  * whoever is working, then what finished lately). A card is the agent's latest
  * turn as the board card shows it (the same TurnView: headline, the ask, the
  * tool calls, the status or the reply) and a box to prompt it from right
- * there; open, it is the full transcript.
+ * there (the first click); the second click is the full transcript.
  */
 
 const SENT_MS = 4000
@@ -91,6 +91,7 @@ export function AgentPets({
     return {
       id: pet.row.id,
       className: use ? `${pet.mood} using` : pet.mood,
+      name: pet.row.name,
       label: `${pet.row.name}, ${MOOD_WORD[pet.mood]}${use ? `, using ${use.use === 'hardware' ? 'hardware' : `a ${use.use}`} (${use.via})` : ''}`,
       face: (
         <>
@@ -149,7 +150,6 @@ function AgentCard({ pet, now, controls }: { pet: Pet; now: number; controls: Ca
     cookrew().ptyInput(row.id, '\r')
     setDraft('')
     controls.draft('')
-    controls.pin(false)
     setSent(text)
   }
 
@@ -167,7 +167,7 @@ function AgentCard({ pet, now, controls }: { pet: Pet; now: number; controls: Ca
             {row.turnCount > 0 && <span>{row.turnCount} turns</span>}
           </span>
         </span>
-        <button type="button" className="cr-pet-card-open" onClick={controls.open} title="Open the full transcript">
+        <button type="button" className="cr-pet-card-open" onClick={controls.open} title="Open the full transcript (or click its face again)">
           OPEN
         </button>
         <button type="button" className="cr-pet-card-x" onClick={controls.close} aria-label="Close">
@@ -197,10 +197,7 @@ function AgentCard({ pet, now, controls }: { pet: Pet; now: number; controls: Ca
           onChange={(event) => {
             setDraft(event.target.value)
             controls.draft(event.target.value)
-            controls.pin(event.target.value.length > 0)
           }}
-          onFocus={() => controls.pin(true)}
-          onBlur={() => controls.pin(draft.length > 0)}
           onKeyDown={(event) => {
             // Enter sends; Shift+Enter is a new line; an IME's Enter is its own.
             if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {

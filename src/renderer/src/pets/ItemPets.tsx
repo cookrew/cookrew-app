@@ -80,6 +80,7 @@ export function ItemPets({
     id: item.id,
     className: `item ${item.kind}${onStage && item.owners.includes(onStage) ? ' mine' : ''}`,
     label: `${item.kind === 'browser' ? 'Browser' : 'Note'}: ${item.title}`,
+    name: item.title,
     face: item.kind === 'browser' ? <BrowserFace id={item.id} icon={item.icon ?? null} /> : <span className="cr-pet-note-face">{item.title.trim().charAt(0).toUpperCase() || '·'}</span>
   })
   return (

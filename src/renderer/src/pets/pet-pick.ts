@@ -130,6 +130,9 @@ export const faviconOf = (url: string): string | null => {
   }
 }
 
+/** What a click on a face does: the first opens its card, the second (card open) opens it in full. */
+export const petClick = (openId: string | null, id: string): 'card' | 'full' => (openId === id ? 'full' : 'card')
+
 /** Where a troop sits: `x` in from its own side of the screen, `bottom` up from the bottom. */
 export interface PetSpot {
   readonly x: number
