@@ -95,10 +95,11 @@ const READ_CHUNK_BYTES = 256 * 1024
 const TRACE_FILE_MEMO_CAP = 128
 
 /**
- * M8b: byte budget across cached files. A CacheEntry retains the parsed
- * LINES of the whole file (the parsers re-run over them on every append —
- * incremental I/O, not incremental parse), so its heap cost scales with FILE
- * bytes — and session files run to 90MB. A count cap alone let a reader who
+ * M8b: byte budget across cached files. A CacheEntry used to retain the
+ * LINES of the whole file, so its heap cost scaled with FILE bytes — and
+ * session files run to 90MB. Since 2026-10-30 it keeps the parsed blocks and
+ * counts only (measured: 64 MB of heap for 1.5 GB of the owner's twelve
+ * largest transcripts, 2,102 MB before), so this budget is now generous. A count cap alone let a reader who
  * browsed a dozen heavyweight transcripts pin gigabytes that nothing
  * released: the "application memory" exhaustion. bytesRead is the honest
  * proxy for what an entry retains.
@@ -249,7 +250,20 @@ interface CacheEntry {
   touchedAt: number
   /** Trailing partial line, kept as BYTES so multibyte chars never tear. */
   remainder: Buffer
-  lines: string[]
+  /**
+   * Lines fed so far — the numbering the parser's blockLines() runs on.
+   *
+   * The entry used to retain every line of the file here, only so the last
+   * block's span could be summed backwards. With the canvas polling each card
+   * inside the residency pin nothing was ever evicted, and on 2026-10-30 the
+   * main process held about 2.5 GB of raw JSONL lines five minutes after boot
+   * and died at its heap ceiling. The parser resumes from its own state, so
+   * the lines themselves are never needed again.
+   */
+  lineCount: number
+  /** Bytes of the complete lines from the LAST block's opener on — see
+   *  tailLineBytesAfter. Claude only; undefined with no block. */
+  tailLineBytes?: number
   blocks: TraceBlock[]
   compactMarkers: TraceBoundaryMarker[]
   /**
@@ -813,10 +827,7 @@ export class TraceReader {
           cached.remainder,
           (line) => fresh.push(line)
         )
-        return this.ingest(file, kind, [...cached.lines, ...fresh], remainder, info.size, {
-          parser: cached.parser,
-          fresh
-        })
+        return this.ingest(file, kind, fresh, remainder, info.size, cached)
       }
       // First read or a shrink (/rewind truncation): reload — streamed, so a
       // 90MB session file is never four copies of itself in flight.
@@ -838,28 +849,33 @@ export class TraceReader {
    * only, and everything it accumulated before stands. Without it — a first
    * read, or a shrink after a /rewind truncation — a new parser is fed every
    * line, which is the whole-file parse the resumable one is defined against.
+   * Either way `fresh` is dropped once this returns: the entry keeps counts.
    */
   private ingest(
     file: string,
     kind: 'claude' | 'codex' | 'pi',
-    lines: string[],
+    fresh: string[],
     remainder: Buffer,
     bytesRead: number,
-    carry?: { parser: TraceBlockAccumulator; fresh: string[] }
+    carry?: Pick<CacheEntry, 'parser' | 'lineCount' | 'tailLineBytes'>
   ): TraceBlock[] {
     const parser = carry?.parser ?? parserFor(kind)
-    parser.feed(carry?.fresh ?? lines)
+    parser.feed(fresh)
     const blocks = parser.blocks()
     const claude = isClaudeParser(parser) ? parser : null
-    const tailBlockBytes = claude
-      ? tailBlockSpan(lines, claude.blockLines(), remainder.length)
+    const before = carry?.lineCount ?? 0
+    const tailLineBytes = claude
+      ? tailLineBytesAfter(claude.blockLines(), before, fresh, carry?.tailLineBytes)
       : undefined
+    const tailBlockBytes =
+      tailLineBytes === undefined ? undefined : tailLineBytes + remainder.length
     TraceReader.cappedSetSized(this.cache, file, {
       file,
       bytesRead,
       touchedAt: Date.now(),
       remainder,
-      lines,
+      lineCount: before + fresh.length,
+      ...(tailLineBytes !== undefined ? { tailLineBytes } : {}),
       blocks,
       compactMarkers: claude?.markers() ?? [],
       parser,
@@ -906,6 +922,35 @@ export const TAIL_BLOCK_SPAN_CAP = 8 * 1024 * 1024
  * for that, and a window that opens mid-record simply drops its torn first
  * line the way every window here already does.
  */
+/**
+ * tailBlockSpan without the lines: the bytes of the complete lines from the
+ * last block's opener on, carried across appends as a running sum.
+ *
+ * `before` lines were fed earlier and `held` is their sum; `fresh` were just
+ * fed. Openers only move forward, so the last one is either the opener `held`
+ * was summed from (an append inside the open exchange: add the fresh lines)
+ * or one inside `fresh` (sum the fresh lines from it). Past
+ * TAIL_BLOCK_SPAN_CAP the exact figure stops mattering — the finality read
+ * declines anything that large — so the sum stops there, as tailBlockSpan's
+ * does.
+ */
+export function tailLineBytesAfter(
+  blockLines: readonly number[],
+  before: number,
+  fresh: readonly string[],
+  held: number | undefined
+): number | undefined {
+  const opener = blockLines[blockLines.length - 1]
+  if (opener === undefined || opener < 0) return undefined
+  const start = opener >= before ? opener - before : 0
+  let span = opener >= before ? 0 : held
+  if (span === undefined || start > fresh.length) return undefined
+  for (let at = start; at < fresh.length && span <= TAIL_BLOCK_SPAN_CAP; at += 1) {
+    span += Buffer.byteLength(fresh[at]) + 1
+  }
+  return span
+}
+
 export function tailBlockSpan(
   lines: readonly string[],
   blockLines: readonly number[],
