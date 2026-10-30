@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 // install-cli-LIB, not install-cli: the executable carries a shebang, and
 // vite-node on Windows inlines project .mjs imports — the unstripped `#!`
 // killed the whole suite there with "Invalid or unexpected token".
-import { launcherScript, pickBinDir } from '../scripts/install-cli-lib.mjs'
+import { launcherScript, pickBinDir, stableNodePath } from '../scripts/install-cli-lib.mjs'
 
 /**
  * `cookrew` on the system PATH. Every assertion here is a failure that was
@@ -45,6 +45,24 @@ describe('launcherScript', () => {
 
   it('tells the user how to recover when nothing resolves', () => {
     expect(script).toContain('npm run install-cli')
+  })
+})
+
+describe('stableNodePath', () => {
+  it('bakes Homebrew\'s opt link, not the versioned keg — 2026-10-30, llhttp 9.4 broke node 25.9.0_1', () => {
+    // The old keg stayed on disk and passed `-x`, so the PATH fallback never
+    // ran and every call died in dyld.
+    expect(stableNodePath(NODE, () => true)).toBe('/opt/homebrew/opt/node/bin/node')
+  })
+
+  it('keeps the keg when there is no opt link', () => {
+    expect(stableNodePath(NODE, () => false)).toBe(NODE)
+  })
+
+  it('leaves any other install alone', () => {
+    expect(stableNodePath('/Users/x/.nvm/versions/node/v22.1.0/bin/node', () => true)).toBe(
+      '/Users/x/.nvm/versions/node/v22.1.0/bin/node'
+    )
   })
 })
 
