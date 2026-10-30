@@ -37,7 +37,7 @@ const MOOD_WORD: Record<PetMood, string> = { needs: 'needs you', working: 'worki
  * the whole of what Cookrew can show for a use it does not carry — the place
  * is unknown, the fact is not. Cookrew's own cards get a cursor instead.
  */
-export const petUse = (pet: Pet): ToolUse | null => {
+const petUse = (pet: Pet): ToolUse | null => {
   if (pet.mood !== 'working') return null
   const tools = pet.row.turn?.tools ?? []
   const newest = tools[tools.length - 1]

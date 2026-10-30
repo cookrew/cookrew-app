@@ -825,6 +825,13 @@ export async function handleMobileApi(
       .then((body) => {
         const line = `${new Date().toISOString()} ${JSON.stringify(body)}\n`;
         appendFile(join(tmpdir(), "cookrew-phone-beacon.log"), line, () => undefined);
+        // A render crash on a phone (crash-report.ts): said in the dev log
+        // too, where the desktop's own crashes already land.
+        const report = body as { crash?: unknown; message?: unknown; component?: unknown };
+        if (report && report.crash === true && typeof report.message === "string") {
+          const where = typeof report.component === "string" ? report.component.split("\n").slice(0, 4).join(" ") : "";
+          console.error(`[companion] render crash: ${report.message.slice(0, 300)} — ${where.slice(0, 400)}`);
+        }
       })
       .catch(() => undefined);
     respondJson(response, 204, {});
