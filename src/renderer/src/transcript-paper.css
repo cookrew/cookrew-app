@@ -97,8 +97,10 @@
    its face (TranscriptRow.tsx): the tools it ran as chips, then its reply. The
    column is centred and kept to a reading width, so on a wide screen the pets
    down the sides float over the margin, never over the words. The live
-   terminal under the LIVE seam stays a terminal. */
-.lod-overlay .ctx-block {
+   terminal under the LIVE seam stays a terminal.
+   Scoped to .look-chat: the card's header switches between this and the
+   live look below (transcript-look.ts). */
+.lod-overlay .look-chat .ctx-block {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -110,11 +112,11 @@
   border-radius: 14px;
 }
 
-.lod-overlay .ctx-block.active {
+.lod-overlay .look-chat .ctx-block.active {
   background: rgba(255, 214, 0, 0.07);
 }
 
-.lod-overlay .ctx-block-head {
+.lod-overlay .look-chat .ctx-block-head {
   align-self: center;
   justify-content: center;
   max-width: 90%;
@@ -125,7 +127,7 @@
 }
 
 /* Yours: on the right. */
-.lod-overlay .ctx-block-prompt {
+.lod-overlay .look-chat .ctx-block-prompt {
   align-self: flex-end;
   max-width: 80%;
   padding: 8px 12px;
@@ -136,19 +138,19 @@
   font: 13.5px/1.45 var(--font-body);
 }
 
-.lod-overlay .ctx-block-prompt::before {
+.lod-overlay .look-chat .ctx-block-prompt::before {
   content: none;
 }
 
 /* The agent's: on the left, beside its face. */
-.lod-overlay .ctx-chat-agent {
+.lod-overlay .look-chat .ctx-chat-agent {
   display: flex;
   align-items: flex-start;
   gap: 8px;
   max-width: 92%;
 }
 
-.lod-overlay .ctx-chat-face {
+.lod-overlay .look-chat .ctx-chat-face {
   flex: 0 0 auto;
   display: grid;
   place-items: center;
@@ -159,13 +161,13 @@
   background: var(--cream);
 }
 
-.lod-overlay .ctx-chat-face .vi-avatar,
-.lod-overlay .ctx-chat-face .vi-avatar svg {
+.lod-overlay .look-chat .ctx-chat-face .vi-avatar,
+.lod-overlay .look-chat .ctx-chat-face .vi-avatar svg {
   width: 22px;
   height: 22px;
 }
 
-.lod-overlay .ctx-chat-bubble {
+.lod-overlay .look-chat .ctx-chat-bubble {
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -176,13 +178,13 @@
   background: var(--cream);
 }
 
-.lod-overlay .ctx-chat-tools {
+.lod-overlay .look-chat .ctx-chat-tools {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.lod-overlay .ctx-chat-bubble .ctx-block-tool {
+.lod-overlay .look-chat .ctx-chat-bubble .ctx-block-tool {
   margin: 0;
   padding: 4px 8px;
   border-radius: 8px;
@@ -190,22 +192,47 @@
   font-size: 11px;
 }
 
-.lod-overlay .ctx-chat-bubble .ctx-block-reply {
+.lod-overlay .look-chat .ctx-chat-bubble .ctx-block-reply {
   margin: 0;
   font: 13.5px/1.5 var(--font-body);
 }
 
-.lod-overlay .ctx-chat-bubble .ctx-block-reply code,
-.lod-overlay .ctx-chat-bubble .ctx-block-reply pre {
+.lod-overlay .look-chat .ctx-chat-bubble .ctx-block-reply code,
+.lod-overlay .look-chat .ctx-chat-bubble .ctx-block-reply pre {
   font-family: var(--font-mono);
   font-size: 12px;
 }
 
 @media (max-width: 700px) {
-  .lod-overlay .ctx-block-prompt {
+  .lod-overlay .look-chat .ctx-block-prompt {
     max-width: 88%;
   }
-  .lod-overlay .ctx-chat-agent {
+  .lod-overlay .look-chat .ctx-chat-agent {
     max-width: 100%;
   }
+}
+
+/* ---- THE LIVE LOOK (transcript-look.ts) ----
+   The same rows, read as they were before the chat: the chat's wrappers
+   dissolve, so heading, prompt, tool calls and reply fall back into the one
+   column the rules in styles.css lay out, and the face is not drawn. */
+.lod-overlay .look-live .ctx-chat-agent,
+.lod-overlay .look-live .ctx-chat-bubble,
+.lod-overlay .look-live .ctx-chat-tools {
+  display: contents;
+}
+
+.lod-overlay .look-live .ctx-chat-face {
+  display: none;
+}
+
+/* The chat/live switch in the card header: as tall as the buttons beside it. */
+.lod-overlay .popout-look {
+  box-shadow: none;
+  border-width: 1.5px;
+}
+
+.lod-overlay .popout-look button {
+  padding: 3px 7px;
+  font-size: 8.5px;
 }
