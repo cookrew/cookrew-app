@@ -133,9 +133,16 @@ export function buildSeededFrame(
   const body =
     above.length === 0
       ? CLEAR_SCREEN + serializer.serialize({ scrollback: screen.rows })
-      : CLEAR_SCREEN + above.join('\r\n') + '\x1b[0m' + '\r\n'.repeat(screen.rows) + '\x1b[H\x1b[2J' + screenOnNormal(serializer)
+      : LEAVE_ALTERNATE + CLEAR_SCREEN + above.join('\r\n') + '\x1b[0m' + '\r\n'.repeat(screen.rows) + '\x1b[H\x1b[2J' + screenOnNormal(serializer)
   return body + modeReplay(screen.modes) + seedMarker(nonce)
 }
+
+/**
+ * The viewer is usually ON the alternate screen already — every plain replay
+ * and herdr's own start put it there — and nothing else in a seed would take
+ * it off: the history would be written into a screen that cannot keep it.
+ */
+const LEAVE_ALTERNATE = '\x1b[?1049l'
 
 /** What serialize() puts after the switch when the alternate screen is active. */
 const TO_ALTERNATE = '\x1b[?1049h\x1b[H'

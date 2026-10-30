@@ -68,6 +68,10 @@ describe('buildSeededFrame', () => {
     expect(mirror.buffer.active.type).toBe('alternate')
     const history = ['h1', 'h2', 'h3', 'a1', 'a2', 'a3', 'a4'].join('\r\n') + '\r\n'
     const viewer = new Terminal({ cols: 30, rows, scrollback: 1000, allowProposedApi: true })
+    // Where a real viewer is when a seed arrives: on the alternate screen,
+    // put there by the attach replay (measured live).
+    await write(viewer, '\x1b[?1049h\x1b[Hold alternate screen')
+    expect(viewer.buffer.active.type).toBe('alternate')
     await write(viewer, buildSeededFrame(mirror, serializer, history, 'alt'))
     expect(viewer.buffer.active.type).toBe('normal')
     expect(visible(viewer)).toEqual(['a1', 'a2', 'a3', 'a4'])
