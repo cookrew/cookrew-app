@@ -177,7 +177,8 @@ export function adbRunner(binary: string): AdbDeps['run'] {
       execFile(binary, [...args], { timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, encoding: 'buffer' }, (error, stdout, stderr) => {
         if (error) {
           const said = Buffer.isBuffer(stderr) ? stderr.toString('utf8').trim() : ''
-          reject(new Error(said.length > 0 ? `adb: ${said.split('\n')[0]}` : `adb failed: ${error.message}`))
+          const first = said.split('\n')[0]
+          reject(new Error(said.length > 0 ? (first.startsWith('adb:') ? first : `adb: ${first}`) : `adb failed: ${error.message}`))
           return
         }
         resolve(stdout)

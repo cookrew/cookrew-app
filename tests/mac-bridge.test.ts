@@ -2,10 +2,15 @@
 // builds every event and posts none, so this never moves the owner's mouse.
 // It proves the JSON-line protocol, the closed vocabulary, and that one bad
 // line is refused without knocking the next one out of step.
+//
+// OPT-IN (COOKREW_MAC_INPUT_TEST=1), like the real-Chrome tests: building
+// CGEvents from a process macOS has not trusted can raise the system's
+// "control this computer" dialog on the owner's screen, which a routine gate
+// must never do.
 import { describe, expect, it } from 'vitest'
 import { MacInput, macKeyCode } from '../src/main/mac-bridge'
 
-describe.skipIf(process.platform !== 'darwin')('MacInput (dry)', () => {
+describe.skipIf(process.platform !== 'darwin' || process.env.COOKREW_MAC_INPUT_TEST !== '1')('MacInput (dry)', () => {
   it('answers each operation in order, and refuses a malformed one without losing step', async () => {
     const hand = new MacInput({ dry: true })
     try {
