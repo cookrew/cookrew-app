@@ -3,6 +3,7 @@ import type { HarnessRow, RouteDecision, RouteModel, RouteQuota, RouteState } fr
 import { KEY_PRESETS, ROUTING_COPY, autoGroupItem, decisionFacts, harnessTicks, quotaBar, routeChoices, statusLine, windowLabel, routeHead, ruleTitle } from '../../../shared/route-view'
 import { keyLineFor } from '../../../shared/route-lines'
 import { runningLabel, type SetupRunning } from './setup-line-state'
+import { cookrew } from '../api'
 
 /**
  * THE ROUTING PANEL'S SECTIONS. Each is a function of the route state and a
@@ -29,6 +30,48 @@ export function StatusLine({ state, onRun, running = null }: { state: RouteState
           {busy ?? `${line.action.label} · ${line.action.line}`}
         </button>
       )}
+    </div>
+  )
+}
+
+/**
+ * THE SIGN-IN PAGE, HANDED OVER. A line in the Setup card asked for a browser
+ * sign-in; the CLI opened it in the Mac's browser, which is no use to someone
+ * holding a phone. The pane printed the page's address, so the panel offers
+ * it as a link: on the phone it opens there, on the desktop it opens in the
+ * default browser again. A flow that asks for a code back is answered in the
+ * Setup terminal below, which the phone drives too.
+ */
+export function SignInLink({ running }: { running: SetupRunning | null }): React.JSX.Element | null {
+  if (running === null || running.url === null) return null
+  const url = running.url
+  let host = url
+  try {
+    host = new URL(url).host
+  } catch {
+    // an address the URL parser refuses is still shown and still a link
+  }
+  return (
+    <div className="cr-routing-signin" role="status">
+      <span>
+        <b>Sign-in waiting</b> · {host} — open it here, then come back; a code it gives you goes into the Setup terminal below.
+      </span>
+      <a
+        className="cr-routing-btn primary"
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => {
+          // The desktop opens it in the default browser; the phone's bridge has
+          // no such call, and the plain link opens it right there.
+          const open = cookrew().openExternal
+          if (!open) return
+          e.preventDefault()
+          void open(url)
+        }}
+      >
+        OPEN SIGN-IN PAGE
+      </a>
     </div>
   )
 }

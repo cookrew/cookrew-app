@@ -262,6 +262,19 @@
 .cr-routing-hint { font-family: var(--font-mono); font-size: 11px; color: var(--muted); padding: 4px 10px }
 
 /* One line for what did not happen: a refused line, a default that did not land. */
+.cr-routing-signin {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  padding: 8px 10px;
+  border: 2px solid var(--amber, #c8901a);
+  font-size: 12px;
+}
+.cr-routing-signin > span { flex: 1 1 220px }
+.cr-routing-signin a.cr-routing-btn { text-decoration: none; display: inline-flex; align-items: center }
+
 .cr-routing-bad { font-family: var(--font-mono); font-size: 11.5px; color: var(--rose); padding: 2px 8px }
 
 /* A plain button in the panel's own language. */

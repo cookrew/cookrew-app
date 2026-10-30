@@ -21,9 +21,14 @@ describe('a typed Setup line, watched', () => {
     w = observeOutput(w, `${LINE}\r\n`)
     expect(w.echoed).toBe(true)
     expect(w.done).toBe(false)
+    // Words alone are not a sign-in any more (setup-line-state: "opens at login" fooled them):
+    // the button reads the pane's own line until the pane prints the page to open.
     w = observeOutput(w, 'Finish signing in in your browser\r\n')
-    expect(runningView(w)).toEqual({ line: LINE, lastLine: 'Finish signing in in your browser', oauth: true })
-    expect(runningLabel(runningView(w), LINE)).toBe('sign-in open in your browser')
+    expect(runningView(w)).toEqual({ line: LINE, lastLine: 'Finish signing in in your browser', oauth: false, url: null })
+    expect(runningLabel(runningView(w), LINE)).toBe('running… Finish signing in in your browser')
+    w = observeOutput(w, 'https://auth.openai.com/oauth/authorize?x=1\r\n')
+    expect(runningView(w)).toMatchObject({ oauth: true, url: 'https://auth.openai.com/oauth/authorize?x=1' })
+    expect(runningLabel(runningView(w), LINE)).toBe('sign in — open the page')
     expect(runningLabel(runningView(w), 'magpie serve')).toBeNull()
     w = observeOutput(w, 'Signed in as drej.\r\n~/app $ ')
     expect(w.done).toBe(true)
@@ -38,19 +43,19 @@ describe('a typed Setup line, watched', () => {
 
   it('the button that typed the line says so and cannot be pressed again; the others stay buttons', () => {
     const state = routeFixture('absent')
-    const running = { line: state.setup.installLine, lastLine: 'Downloading magpie 0.1.1182…', oauth: false }
+    const running = { line: state.setup.installLine, lastLine: 'Downloading magpie 0.1.1182…', oauth: false, url: null }
     const html = renderToStaticMarkup(<StatusLine state={state} onRun={() => {}} running={running} />)
     expect(html).toContain('running… Downloading magpie 0.1.1182…')
     expect(html).toContain('disabled=""')
     const idle = renderToStaticMarkup(<StatusLine state={state} onRun={() => {}} running={null} />)
     expect(idle).not.toContain('disabled=""')
     const online = routeFixture('online')
-    const sub = { line: online.setup.addSubscriptionLine, lastLine: 'Finish signing in in your browser', oauth: true }
+    const sub = { line: online.setup.addSubscriptionLine, lastLine: 'Finish signing in in your browser', oauth: true, url: 'https://claude.ai/oauth/authorize?x=1' }
     const menu = renderToStaticMarkup(<AddMenu setup={online.setup} onRun={() => {}} defaultOpen running={sub} />)
-    expect(menu).toContain('sign-in open in your browser')
+    expect(menu).toContain('sign in — open the page')
     expect((menu.match(/disabled=""/g) ?? []).length).toBe(1)
-    const rows = renderToStaticMarkup(<Harnesses rows={routeFixture('offline').harnesses} onRun={() => {}} running={{ line: 'codex login', lastLine: 'Opening your browser…', oauth: true }} />)
-    expect(rows).toContain('sign-in open in your browser')
+    const rows = renderToStaticMarkup(<Harnesses rows={routeFixture('offline').harnesses} onRun={() => {}} running={{ line: 'codex login', lastLine: 'Opening your browser…', oauth: true, url: 'https://auth.openai.com/oauth/authorize?x=1' }} />)
+    expect(rows).toContain('sign in — open the page')
   })
 })
 
