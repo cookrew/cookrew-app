@@ -114,6 +114,13 @@ export const SEED_MAX_LINES = 2000
  * scrollback) and painted exactly as replayFrame paints it, modes and all.
  * The last screenful of the history IS the screen, so it is dropped rather
  * than shown twice. Ends with the seed marker.
+ *
+ * herdr's client draws on the ALTERNATE screen, which keeps no scrollback;
+ * a seed that switched the viewer there would bury its own history (measured
+ * live: the history landed, the viewer sat on the alternate screen, and the
+ * wheel had nothing to scroll). So the screen is painted on the NORMAL
+ * screen, under the history, and the viewer stays there; herdr's later
+ * deltas are absolute addresses and draw the same cells on either screen.
  */
 export function buildSeededFrame(
   screen: Pick<HeadlessTerminalType, 'rows' | 'modes'>,
@@ -126,8 +133,18 @@ export function buildSeededFrame(
   const body =
     above.length === 0
       ? CLEAR_SCREEN + serializer.serialize({ scrollback: screen.rows })
-      : CLEAR_SCREEN + above.join('\r\n') + '\x1b[0m' + '\r\n'.repeat(screen.rows) + '\x1b[H\x1b[2J' + serializer.serialize({ scrollback: 0 })
+      : CLEAR_SCREEN + above.join('\r\n') + '\x1b[0m' + '\r\n'.repeat(screen.rows) + '\x1b[H\x1b[2J' + screenOnNormal(serializer)
   return body + modeReplay(screen.modes) + seedMarker(nonce)
+}
+
+/** What serialize() puts after the switch when the alternate screen is active. */
+const TO_ALTERNATE = '\x1b[?1049h\x1b[H'
+
+/** The screen as the viewer should see it, drawn on the normal screen: the alternate screen's content when that is the one showing. */
+function screenOnNormal(serializer: Pick<SerializeAddon, 'serialize'>): string {
+  const frame = serializer.serialize({ scrollback: 0 })
+  const at = frame.indexOf(TO_ALTERNATE)
+  return at < 0 ? frame : frame.slice(at + TO_ALTERNATE.length)
 }
 
 /**

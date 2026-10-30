@@ -73,9 +73,10 @@ export function installLocalScroll(term: Terminal, deps: LocalScrollDeps): Local
   /** Behind the pane: its history grew since the seed (or no size is known and none landed). */
   const stale = (): boolean => {
     const size = history()
-    // A replay (resize, reconnect) clears the scrollback: history that was
-    // there and is gone is stale too.
-    const wiped = landedBase > 0 && term.buffer.active.baseY === 0
+    // A replay (resize, reconnect) clears the scrollback and puts the viewer
+    // back on herdr's alternate screen: history that was there and is gone
+    // is stale too.
+    const wiped = landedBase > 0 && (term.buffer.active.type !== 'normal' || term.buffer.active.baseY === 0)
     return !seeded || wiped || (size !== null && size !== seededAt)
   }
   let carry = 0
@@ -124,13 +125,14 @@ export function installLocalScroll(term: Terminal, deps: LocalScrollDeps): Local
   })
 
   term.attachCustomWheelEventHandler((event) => {
-    if (!deps.live() || unsupported || term.buffer.active.type !== 'normal') return true
+    if (!deps.live() || unsupported) return true
     const step = wheelRows(event, rowPx(), term.rows, carry)
     carry = step.carry
     event.preventDefault()
-    if (term.buffer.active.baseY === 0) {
-      // No history here yet (first seed, or a replay wiped it): hold the
-      // scroll for the seed rather than send it to the pane.
+    if (term.buffer.active.type !== 'normal' || term.buffer.active.baseY === 0) {
+      // No history here yet (first seed, or a replay wiped it and put the
+      // viewer back on the alternate screen): hold the scroll for the seed
+      // rather than send it to the pane.
       held += step.rows
       ask()
       return false
@@ -148,13 +150,13 @@ export function installLocalScroll(term: Terminal, deps: LocalScrollDeps): Local
   return {
     admit: (chunk) => {
       if (!chunk.includes(SEED_MARK)) return true
-      if (atBottom() || term.buffer.active.baseY === 0) return true
+      if (atBottom() || term.buffer.active.baseY === 0 || term.buffer.active.type !== 'normal') return true
       // Scrolled up: keep the reader's place; ask again once they are back.
       inFlight = null
       return false
     },
     onLive: () => {
-      if (stale() && (atBottom() || term.buffer.active.baseY === 0)) ask()
+      if (stale() && (atBottom() || term.buffer.active.baseY === 0 || term.buffer.active.type !== 'normal')) ask()
     },
     dispose: () => {
       disposed = true

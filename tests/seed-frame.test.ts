@@ -57,4 +57,22 @@ describe('buildSeededFrame', () => {
     expect(frame.endsWith(seedMarker('x'))).toBe(true)
     expect(frame).not.toContain('\x1b[H\x1b[2J' + '\r\n')
   })
+
+  it("herdr's alternate screen is painted on the NORMAL screen, so the history above it stays scrollable", async () => {
+    const rows = 4
+    const mirror = new Terminal({ cols: 30, rows, scrollback: 5000, allowProposedApi: true })
+    const serializer = new SerializeAddon()
+    mirror.loadAddon(serializer)
+    // herdr's client: switch to the alternate screen, then draw.
+    await write(mirror, 'normal junk\r\n\x1b[?1049h\x1b[H' + ['a1', 'a2', 'a3', 'a4'].join('\r\n'))
+    expect(mirror.buffer.active.type).toBe('alternate')
+    const history = ['h1', 'h2', 'h3', 'a1', 'a2', 'a3', 'a4'].join('\r\n') + '\r\n'
+    const viewer = new Terminal({ cols: 30, rows, scrollback: 1000, allowProposedApi: true })
+    await write(viewer, buildSeededFrame(mirror, serializer, history, 'alt'))
+    expect(viewer.buffer.active.type).toBe('normal')
+    expect(visible(viewer)).toEqual(['a1', 'a2', 'a3', 'a4'])
+    expect(all(viewer).slice(0, viewer.buffer.active.baseY).slice(0, 3)).toEqual(['h1', 'h2', 'h3'])
+    expect(all(viewer)).not.toContain('normal junk')
+  })
 })
+
