@@ -4,6 +4,7 @@ import { attachView, useAttachView } from './attach-view'
 import { NO_ATTACHMENTS, SideTabsContext, TerminalAttachmentsContext } from './terminal-attachments'
 import './transcript-paper.css'
 import { Terminal } from '@xterm/xterm'
+import { createPortal } from 'react-dom'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import type { IClipboardProvider } from '@xterm/addon-clipboard'
 import { readClipboardText, writeClipboardText } from './clipboard'
@@ -38,6 +39,7 @@ import { AgentAvatar, StatusCoin } from './nodes/AgentAvatar'
 import { TranscriptFaceContext } from './transcript-face'
 import { useTranscriptLook, type TranscriptLook } from './transcript-look'
 import { TuneRail } from './nodes/TuneRail'
+import { closeZoomMenu, modelSwitchKind, useZoomSlots } from './zoom-bar'
 import { useAgentTuning } from './nodes/use-agent-tuning'
 import { useCardRoute } from './nodes/use-card-route'
 import { routeDialAllowed, routeDialInput } from '../../shared/route-view'
@@ -144,16 +146,22 @@ export const TerminalOverlayLayer = memo(function TerminalOverlayLayer({
       {terminals
         .filter((t) => activeIds.has(t.id) && rects[t.id])
         .map((t) => (
-          <TerminalOverlayFor key={t.id} node={t} rect={rects[t.id]} />
+          <TerminalOverlayFor
+            key={t.id}
+            node={t}
+            rect={rects[t.id]}
+            // Nothing primary (a browser won): the first terminal holds the bar.
+            primary={primaryTerminal !== null ? t.id === primaryTerminal : t === terminals.find((x) => activeIds.has(x.id) && rects[x.id])}
+          />
         ))}
     </>
   )
 })
 
 /** The overlay with ITS card's activity — a per-id subscription, not App's map. */
-function TerminalOverlayFor({ node, rect }: { node: TerminalNodeData; rect: ScreenRect }): React.JSX.Element {
+function TerminalOverlayFor({ node, rect, primary }: { node: TerminalNodeData; rect: ScreenRect; primary: boolean }): React.JSX.Element {
   const activity = useActivity(node.id)
-  return <TerminalOverlay node={node} activity={activity} rect={rect} />
+  return <TerminalOverlay node={node} activity={activity} rect={rect} primary={primary} />
 }
 
 function clip(text: string, max: number): string {
@@ -191,11 +199,17 @@ const PHASE_CHIP: Record<TurnPhase, { label: string; cls: string }> = {
 function TerminalOverlay({
   node,
   activity,
-  rect
+  rect,
+  primary = true
 }: {
   node: TerminalNodeData
   activity: TerminalActivity | undefined
   rect: ScreenRect
+  /**
+   * The zoomed-in one (most covered) when several are mounted: only it puts
+   * its switch on the bar and its rows in ⋯, or two cards would share one bar.
+   */
+  primary?: boolean
 }): React.JSX.Element {
   const { zoomBack, requestClose } = useCanvasUi()
   const phase = activity?.phase ?? 'idle'
@@ -471,6 +485,14 @@ function TerminalOverlay({
   // it never gets the dial either (design D3).
   const routeAllowed = routeDialAllowed({ remote, served: node.servedSession != null })
   const cardRoute = useCardRoute({ terminalId: node.id, enabled: routeAllowed })
+  const zoomSlots = useZoomSlots()
+  // Main's choices, and only main's (route-view.routeDialInput).
+  const routeDialBase = routeDialInput({ allowed: routeAllowed, routeChoices: tuning.routeChoices, state: cardRoute.state })
+  const routeDial = routeDialBase
+    ? { ...routeDialBase, state: cardRoute.state, open: cardRoute.open, onOpen: cardRoute.setOpen, onPick: cardRoute.pick }
+    : null
+  // One switch on the bar: the route for a routed card, the model otherwise.
+  const switchKind = modelSwitchKind({ routeDial: routeDial !== null, route: cardRoute.state?.route })
 
   // The phone flipped between light and dark while this was open.
   const night = useNight()
@@ -956,6 +978,70 @@ function TerminalOverlay({
     )
   }
 
+  const pickTranslation = (code: string): void => {
+    /**
+     * NO SELECTION MEANS THE NEWEST, not nothing.
+     *
+     * This used to be disabled whenever selectedIndex was null, which
+     * on a phone is how every card opens — you tap in, you are live,
+     * and the button is dead. The reason it was dead lived in a
+     * `title` tooltip, and touch devices do not show tooltips, so it
+     * was an inert control with an invisible explanation. Live is not
+     * "no checkpoint": it is the latest one, which is exactly the
+     * body someone opening a card wants read back to them.
+     */
+    const target = selectedIndex ?? rows[rows.length - 1]?.index ?? null
+    if (target === null) {
+      translation.note('This card has no checkpoint to translate yet.')
+      return
+    }
+    // The text comes from the view that already rendered it. A
+    // checkpoint scrolled far out of the loaded window has been
+    // evicted, and saying so beats a button that looks broken.
+    const body = transcriptRef.current?.blockText(target) ?? null
+    if (body === null) {
+      translation.note(
+        `Checkpoint T${target} is not loaded yet — scroll to it and try again.`
+      )
+      return
+    }
+    translation.translate(target, body, code)
+  }
+
+  // The card's model switch and CHAT/LIVE: on the top bar, or in the slim row.
+  const barContent = (
+    <div className="cr-zoom-bar" role="group" aria-label={`${node.name}: model and view`}>
+      {tuning.view !== null && (
+        <TuneRail
+          bar
+          view={tuning.view}
+          open={tuning.open}
+          onOpen={tuning.setOpen}
+          onTurn={tuning.turn}
+          error={tuning.error}
+          onMouseDown={keepFocus}
+          knobs={switchKind === 'route' ? [] : ['model']}
+          route={switchKind === 'route' ? routeDial : null}
+        />
+      )}
+      {/* The transcript as a chat with the agent, or live as it runs. */}
+      <div className="cr-viewseg popout-look" role="group" aria-label="Transcript view">
+        {(['chat', 'live'] as const).map((one) => (
+          <button
+            key={one}
+            type="button"
+            aria-pressed={look === one}
+            title={one === 'chat' ? 'Chat: the conversation with the agent' : "Live: the agent's own terminal, as it runs"}
+            onMouseDown={keepFocus}
+            onClick={() => switchLook(one)}
+          >
+            {one === 'chat' ? 'CHAT' : 'LIVE'}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+
   return (
     <div
       className="lod-overlay"
@@ -978,116 +1064,106 @@ function TerminalOverlay({
       }}
       onDrop={onDrop}
     >
-      <div className="popout-header">
-        {/* One coin only: it carries both identity (brand mark) and status.
-            Header line mirrors the full card: coin · name · [STATUS]. */}
-        <StatusCoin phase={phase} preset={node.preset} title={`${node.name} · ${node.preset}`} />
-        <span className="popout-name" title={`${node.name} · ${node.preset}`}>
-          {node.name}
-        </span>
-        {node.brief && (
-          <span className="cr-brief popout-brief" title={node.brief}>
-            {node.brief}
-          </span>
-        )}
-        {node.orch && <span className="cr-chip amber">ORCH</span>}
-        <span className={`cr-chip${PHASE_CHIP[phase].cls}`}>{PHASE_CHIP[phase].label}</span>
-        {/* No model/effort chip up here: the zoomed card already says both on its tune rail
-            (MDL / EFF), and the same two words twice on one screen read as two facts. */}
-        <div className="popout-actions">
-          {/* The transcript as a chat with the agent, or live as it runs. */}
-          <div className="cr-viewseg popout-look" role="group" aria-label="Transcript view">
-            {(['chat', 'live'] as const).map((one) => (
-              <button
-                key={one}
-                type="button"
-                aria-pressed={look === one}
-                title={one === 'chat' ? 'Chat: the conversation with the agent' : "Live: the agent's own terminal, as it runs"}
-                onMouseDown={keepFocus}
-                onClick={() => switchLook(one)}
-              >
-                {one === 'chat' ? 'CHAT' : 'LIVE'}
-              </button>
-            ))}
+      {/* NO HEAD (owner 2026-10-31). The model switch and CHAT/LIVE sit on the
+          top bar left of ⋯; translate, titles, back and close sit inside ⋯. The
+          bar names the agent already, so the name and the phase chip that were
+          here said it a second time. zoom-bar.ts has the why of the portals.
+          A surface with no One Bar (the cookrew.dev embed) keeps one slim row. */}
+      {primary && zoomSlots.bar !== null && createPortal(barContent, zoomSlots.bar)}
+      {primary && zoomSlots.bar === null && (
+        <div className="popout-header slim">
+          {barContent}
+          <div className="popout-actions">
+            <TranslateButton
+              active={translation.showing !== null}
+              working={translation.working}
+              language={translation.language}
+              onMouseDown={keepFocus}
+              onClear={translation.clear}
+              onPick={pickTranslation}
+            />
+            <button className="cr-btn sm icon" aria-label={titleMode === 'conclusion' ? 'Titles: conclusions' : 'Titles: precise prompts'} onMouseDown={keepFocus} onClick={toggleTitleMode}>
+              <CrIcon name={titleMode === 'conclusion' ? 'summary' : 'terminal'} />
+            </button>
+            <button className="cr-btn sm icon popout-close" title="Back (Esc)" aria-label="Back" onClick={zoomBack}>
+              <CrIcon name="collapse" />
+            </button>
+            <button className="cr-btn sm icon popout-kill" title="Close card & kill session (⌘W)" aria-label="Close card & kill session" onClick={() => requestClose(node.id)}>
+              <CrIcon name="close" />
+            </button>
           </div>
-          <TranslateButton
-            active={translation.showing !== null}
-            working={translation.working}
-            language={translation.language}
-            onMouseDown={keepFocus}
-            onClear={translation.clear}
-            onPick={(code) => {
-              /**
-               * NO SELECTION MEANS THE NEWEST, not nothing.
-               *
-               * This used to be disabled whenever selectedIndex was null, which
-               * on a phone is how every card opens — you tap in, you are live,
-               * and the button is dead. The reason it was dead lived in a
-               * `title` tooltip, and touch devices do not show tooltips, so it
-               * was an inert control with an invisible explanation. Live is not
-               * "no checkpoint": it is the latest one, which is exactly the
-               * body someone opening a card wants read back to them.
-               */
-              const target = selectedIndex ?? rows[rows.length - 1]?.index ?? null
-              if (target === null) {
-                translation.note('This card has no checkpoint to translate yet.')
-                return
-              }
-              // The text comes from the view that already rendered it. A
-              // checkpoint scrolled far out of the loaded window has been
-              // evicted, and saying so beats a button that looks broken.
-              const body = transcriptRef.current?.blockText(target) ?? null
-              if (body === null) {
-                translation.note(
-                  `Checkpoint T${target} is not loaded yet — scroll to it and try again.`
-                )
-                return
-              }
-              translation.translate(target, body, code)
-            }}
-          />
-          <button
-            className="cr-btn sm icon"
-            aria-label={
-              titleMode === 'conclusion' ? 'Titles: conclusions' : 'Titles: precise prompts'
-            }
-            title={
-              titleMode === 'conclusion'
-                ? 'Checkpoint titles: conclusions — click for precise prompts'
-                : 'Checkpoint titles: precise prompts — click for conclusions'
-            }
-            onMouseDown={keepFocus}
-            onClick={toggleTitleMode}
-          >
-            <CrIcon name={titleMode === 'conclusion' ? 'summary' : 'terminal'} />
-          </button>
-          {/* The "fork from a past checkpoint" button is deprecated — fork is now
-              available per-checkpoint in the timeline (State A hold + State B
-              rows), so the standalone header button is redundant. */}
-          <button
-            className="cr-btn sm icon popout-close"
-            title="Back to canvas (Esc)"
-            aria-label="Back to canvas"
-            onClick={zoomBack}
-          >
-            <CrIcon name="collapse" />
-          </button>
-          <button
-            className="cr-btn sm icon popout-kill"
-            title="Close card & kill session (⌘W)"
-            aria-label="Close card & kill session"
-            onClick={() => requestClose(node.id)}
-          >
-            <CrIcon name="close" />
-          </button>
         </div>
-      </div>
+      )}
+      {primary && zoomSlots.menu !== null &&
+        createPortal(
+          <>
+            <div className="cr-more-group" role="presentation">
+              {node.name}
+            </div>
+            {/* Translate keeps ⋯ open: its language list opens from this row. */}
+            <div className="cr-more-row cr-zoom-translate" role="presentation">
+              <TranslateButton
+                active={translation.showing !== null}
+                working={translation.working}
+                language={translation.language}
+                onMouseDown={keepFocus}
+                onClear={() => {
+                  translation.clear()
+                  closeZoomMenu()
+                }}
+                onPick={pickTranslation}
+              />
+              <span className="cr-more-label">Translate</span>
+            </div>
+            <button
+              type="button"
+              className="cr-more-item"
+              onMouseDown={keepFocus}
+              onClick={() => {
+                toggleTitleMode()
+                closeZoomMenu()
+              }}
+            >
+              <CrIcon name={titleMode === 'conclusion' ? 'summary' : 'terminal'} />
+              <span className="cr-more-label">
+                {titleMode === 'conclusion' ? 'Titles: conclusions' : 'Titles: precise prompts'}
+              </span>
+            </button>
+            <button
+              type="button"
+              className="cr-more-item"
+              onClick={() => {
+                closeZoomMenu()
+                zoomBack()
+              }}
+            >
+              <CrIcon name="collapse" />
+              <span className="cr-more-label">Back</span>
+              <kbd>Esc</kbd>
+            </button>
+            <button
+              type="button"
+              className="cr-more-item danger"
+              onClick={() => {
+                closeZoomMenu()
+                requestClose(node.id)
+              }}
+            >
+              <CrIcon name="close" />
+              <span className="cr-more-label">Close card &amp; kill session</span>
+              <kbd>⌘W</kbd>
+            </button>
+          </>,
+          zoomSlots.menu
+        )}
       {clipNote !== null && (
         <div className="popout-clip-note" role="status">
           {clipNote}
         </div>
       )}
-      {(selectedIndex !== null || activity?.prompt) && (
+      {/* Only while a checkpoint is picked: then it says which one and is the way
+          back to live. The plain "YOU ❯ <last prompt>" line is gone (owner 2026-10-31). */}
+      {selectedIndex !== null && (
         <div className="popout-ask" title={selectedRow?.promptHead ?? selectedTitle ?? activity?.prompt ?? ''}>
           <span className="popout-ask-label">
             {/* Identity, not array position: T-number matches transcript + rail. */}
@@ -1192,27 +1268,12 @@ function TerminalOverlay({
       )}
       <div className="popout-terminal-wrap">
         {/* The left column: the dials, then this terminal's browsers and notes as side tabs. */}
-        {(tuning.view !== null || (sideTabs && attachments.length > 0)) && (
-        <div className="popout-side">
-        {tuning.view !== null && (
-          <TuneRail
-            view={tuning.view}
-            open={tuning.open}
-            onOpen={tuning.setOpen}
-            onTurn={tuning.turn}
-            error={tuning.error}
-            onMouseDown={keepFocus}
-            route={(() => {
-              // Main's choices, and only main's (route-view.routeDialInput).
-              const dial = routeDialInput({ allowed: routeAllowed, routeChoices: tuning.routeChoices, state: cardRoute.state })
-              return dial ? { ...dial, state: cardRoute.state, open: cardRoute.open, onOpen: cardRoute.setOpen, onPick: cardRoute.pick } : null
-            })()}
-          />
-        )}
+        {/* The left column: this terminal's browsers and notes as side tabs. The
+            dials moved to the top bar (one model switch; zoom-bar.ts). */}
         {sideTabs && attachments.length > 0 && (
-          <AttachTabs terminalId={node.id} items={attachments} openId={openItem?.node.id ?? null} />
-        )}
-        </div>
+          <div className="popout-side">
+            <AttachTabs terminalId={node.id} items={attachments} openId={openItem?.node.id ?? null} />
+          </div>
         )}
         <div ref={mainRef} className={`popout-main look-${look}${openItem !== null ? ' split' : ''}`}>
         <TranscriptFaceContext.Provider value={chatFace}>

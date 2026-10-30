@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { isDemoMode, isRemoteMode } from './api'
 import { HeaderMore } from './HeaderMore'
+import { setZoomBarSlot } from './zoom-bar'
 import { HeaderRoute } from './HeaderRoute'
 import { CrIcon } from './icons'
 import { levelsRoute } from './levels/levels-history'
@@ -64,7 +65,8 @@ interface HeaderProps {
  * added — mark, path badge, avatar, switch, status, routing lamp, workspace
  * chip. Whatever is neither a way to move nor a button to press now lives
  * behind ⋯, and each row there opens the sheet its chip used to. A zoomed
- * terminal keeps its own head: the bar only names it.
+ * terminal has NO head of its own any more (owner 2026-10-31): its model
+ * switch and CHAT/LIVE sit here left of ⋯, the rest of its head inside ⋯.
  *
  * Attention lives on the stage's faces now (the rose ones). The account's
  * waiting devices ride the avatar, which is why the avatar stays on the bar.
@@ -109,6 +111,9 @@ export function Header({
             <span>Stage</span>
           </button>
         )}
+        {/* The zoomed terminal's model switch and CHAT/LIVE land here, left of
+            ⋯ (zoom-bar.ts). Empty, and so invisible, with nothing zoomed. */}
+        <span className="cr-zoom-slot" ref={setZoomBarSlot} />
         <HeaderMore
           view={view}
           onViewChange={onViewChange}

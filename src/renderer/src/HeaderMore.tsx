@@ -8,6 +8,7 @@
 // React sees a trusted click, and the row would never act.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CrIcon } from './icons'
+import { registerZoomMenuClose, setZoomMenuSlot } from './zoom-bar'
 import type { MainView } from './Header'
 import { StatusCoin } from './nodes/AgentAvatar'
 import { PathBadge } from './PathBadge'
@@ -57,6 +58,11 @@ export function HeaderMore({
   const [open, setOpen] = useState(false)
   const root = useRef<HTMLDivElement>(null)
   const close = useCallback(() => setOpen(false), [])
+  // The zoomed card's rows live in a portal, so they close the menu through here.
+  useEffect(() => {
+    registerZoomMenuClose(close)
+    return () => registerZoomMenuClose(null)
+  }, [close])
 
   useEffect(() => {
     if (!open) return
@@ -122,6 +128,9 @@ export function HeaderMore({
               </span>
             )}
           </div>
+          {/* The zoomed terminal's own rows (translate, titles, back, close), first:
+              they are about what is on screen. Empty with nothing zoomed. */}
+          <div className="cr-more-zoom" ref={setZoomMenuSlot} />
           {connection && (
             <button type="button" className="cr-more-item" onClick={onConnection}>
               <PathBadge view={connection} />
