@@ -76,3 +76,25 @@ export function useZoomSlots(): ZoomSlots {
 export function modelSwitchKind(input: { routeDial: boolean; route: string | null | undefined }): 'route' | 'model' {
   return input.routeDial && typeof input.route === 'string' && input.route !== 'direct' ? 'route' : 'model'
 }
+
+/**
+ * What the ONE tune button on the bar reads (owner 2026-10-31: model, effort
+ * and route in one control). The model part is the route for a routed card and
+ * the model otherwise (modelSwitchKind), the effort follows it when the harness
+ * records one. Pure, so the words are tested without a DOM.
+ */
+export function tuneSummary(input: {
+  dials: ReadonlyArray<{ knob: string; reading: string | null; current: string | null }>
+  routeDial: boolean
+  route: string | null | undefined
+}): { model: string; effort: string | null } {
+  const pick = (knob: string): string | null => {
+    const dial = input.dials.find((d) => d.knob === knob)
+    if (!dial || dial.reading === null) return null
+    return knob === 'model' ? (dial.current ?? dial.reading) : dial.reading
+  }
+  const routed = modelSwitchKind({ routeDial: input.routeDial, route: input.route }) === 'route'
+  const route = input.route ?? ''
+  const model = routed ? route.slice(route.lastIndexOf('/') + 1) || route : (pick('model') ?? '—')
+  return { model, effort: pick('effort') }
+}

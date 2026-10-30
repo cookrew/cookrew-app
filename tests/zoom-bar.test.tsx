@@ -11,7 +11,8 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { TuneRail } from '../src/renderer/src/nodes/TuneRail'
-import { modelSwitchKind } from '../src/renderer/src/zoom-bar'
+import { modelSwitchKind, tuneSummary } from '../src/renderer/src/zoom-bar'
+import { TuneMenu } from '../src/renderer/src/nodes/TuneMenu'
 import { tuneRailView, type AgentTuningState, type TuneRailView } from '../src/shared/agent-tuning'
 
 const src = (file: string): string => readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', file), 'utf8')
@@ -76,6 +77,60 @@ describe('one switch for the model', () => {
   })
 })
 
+describe('model, effort and route in ONE button (owner 2026-10-31)', () => {
+  const dials = [
+    { knob: 'model', reading: 'claude-opus-5', current: 'opus' },
+    { knob: 'effort', reading: 'high', current: 'high' }
+  ]
+
+  it('reads the route and the effort on a routed card', () => {
+    expect(tuneSummary({ dials, routeDial: true, route: 'claude/claude-opus-5-5' })).toEqual({ model: 'claude-opus-5-5', effort: 'high' })
+    expect(tuneSummary({ dials, routeDial: true, route: 'group/smart' })).toEqual({ model: 'smart', effort: 'high' })
+  })
+
+  it('reads the model alias and the effort on a direct card', () => {
+    expect(tuneSummary({ dials, routeDial: true, route: 'direct' })).toEqual({ model: 'opus', effort: 'high' })
+    expect(tuneSummary({ dials, routeDial: false, route: null })).toEqual({ model: 'opus', effort: 'high' })
+  })
+
+  it('says nothing about effort where the harness records none, and a dash for no model yet', () => {
+    expect(tuneSummary({ dials: [{ knob: 'model', reading: null, current: null }], routeDial: false, route: null })).toEqual({ model: '—', effort: null })
+  })
+
+  it('draws one closed button with the summary — the rail is inside it, not on the bar', () => {
+    const html = renderToStaticMarkup(
+      <TuneMenu
+        view={view()}
+        open={null}
+        onOpen={() => {}}
+        onTurn={() => {}}
+        error={null}
+        route={{ state: null, choices: ['direct', 'group/smart'], open: false, onOpen: () => {}, onPick: () => {} }}
+        summary={{ model: 'claude-opus-5-5', effort: 'high' }}
+      />
+    )
+    expect(html).toContain('aria-label="Model, effort and route: claude-opus-5-5 · high"')
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).not.toContain('data-knob=')
+  })
+
+  it('draws all three dials as rows inside the open menu', () => {
+    const html = renderToStaticMarkup(
+      <TuneRail
+        menu
+        view={view()}
+        open={null}
+        onOpen={() => {}}
+        onTurn={() => {}}
+        error={null}
+        route={{ state: null, choices: ['direct'], open: false, onOpen: () => {}, onPick: () => {} }}
+      />
+    )
+    expect(html).toContain('cr-tune-rail menu')
+    for (const knob of ['model', 'effort', 'route']) expect(html).toContain(`data-knob="${knob}"`)
+  })
+})
+
 describe('the bar offers the places, the card fills them', () => {
   const header = src('Header.tsx')
   const more = src('HeaderMore.tsx')
@@ -100,11 +155,14 @@ describe('the bar offers the places, the card fills them', () => {
     expect(overlay).toContain('createPortal(barContent, zoomSlots.bar)')
   })
 
-  it('moves CHAT/LIVE and the model switch into the bar content, together', () => {
+  it('puts ONE tune button and ONE chat/live toggle on the bar, nothing else', () => {
     const bar = overlay.slice(overlay.indexOf('const barContent = ('), overlay.indexOf('const barContent = (') + 2500)
-    expect(bar).toContain('<TuneRail')
-    expect(bar).toContain("knobs={switchKind === 'route' ? [] : ['model']}")
-    expect(bar).toContain("(['chat', 'live'] as const)")
+    expect(bar).toContain('<TuneMenu')
+    expect(bar).toContain('route={routeDial}')
+    expect(bar).not.toContain('<TuneRail')
+    // One button that flips, not a two-button segment.
+    expect(bar).toContain("switchLook(look === 'chat' ? 'live' : 'chat')")
+    expect(bar).not.toContain("(['chat', 'live'] as const)")
   })
 
   it('keeps translate, titles, back and close — in ⋯, not deleted', () => {
