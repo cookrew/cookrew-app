@@ -212,18 +212,101 @@
   }
 }
 
-/* ---- THE LIVE LOOK (transcript-look.ts) ----
-   The same rows, read as they were before the chat: the chat's wrappers
-   dissolve, so heading, prompt, tool calls and reply fall back into the one
-   column the rules in styles.css lay out, and the face is not drawn. */
-.lod-overlay .look-live .ctx-chat-agent,
-.lod-overlay .look-live .ctx-chat-bubble,
-.lod-overlay .look-live .ctx-chat-tools {
-  display: contents;
+/* ---- CHAT OR THE RAW TERMINAL (transcript-look.ts) ----
+   The herdr terminal sits in the SAME box in both views — the whole
+   transcript area, laid over it — so switching never resizes the agent's
+   pane. In chat it is there unseen and untouchable (visibility: hidden also
+   keeps its keyboard out of reach); in live it is all there is. */
+.lod-overlay .look-chat .ctx-transcript,
+.lod-overlay .look-live .ctx-transcript {
+  position: relative;
 }
 
-.lod-overlay .look-live .ctx-chat-face {
+.lod-overlay .look-chat .ctx-live,
+.lod-overlay .look-live .ctx-live {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.lod-overlay .look-chat .ctx-live::before,
+.lod-overlay .look-live .ctx-live::before {
+  content: none;
+}
+
+.lod-overlay .look-chat .ctx-live {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.lod-overlay .look-live .ctx-transcript {
+  overflow: hidden;
+}
+
+.lod-overlay .look-live .ctx-transcript > :not(.ctx-live) {
   display: none;
+}
+
+/* What the agent is doing right now, under the chat (TerminalOverlay). */
+.lod-overlay .chat-status {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 7px 12px;
+  color: var(--muted);
+  font: 12.5px/1.4 var(--font-body);
+}
+
+.lod-overlay .chat-status-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--amber-deep);
+  animation: chat-status-pulse 1.4s ease-in-out infinite;
+}
+
+.lod-overlay .chat-status.waiting .chat-status-dot {
+  background: var(--rose);
+}
+
+.lod-overlay .chat-status-text {
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.lod-overlay .chat-status-tool {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11px/1.4 var(--font-mono);
+}
+
+.lod-overlay .chat-status button {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+@keyframes chat-status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lod-overlay .chat-status-dot {
+    animation: none;
+  }
 }
 
 /* The chat/live switch in the card header: as tall as the buttons beside it. */

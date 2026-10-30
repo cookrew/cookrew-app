@@ -1,18 +1,18 @@
 import { useEffect, useState } from 'react'
 
 /**
- * TWO WAYS TO READ AN AGENT'S TRANSCRIPT (owner, 2026-10-31).
+ * TWO VIEWS OF AN AGENT (owner, 2026-10-31: "chat is chat; live is the raw
+ * herdr terminal").
  *
- *   chat  — each exchange as a chat: your prompt on the right, the agent's
- *           tool calls and reply in a bubble on the left beside its face
- *           (transcript-paper.css, under .look-chat).
- *   live  — the transcript as it was before the chat: heading, prompt, tool
- *           calls, reply, one after another at the full width.
+ *   chat  — the conversation only: your prompts on the right, the agent's
+ *           tool calls and replies in bubbles on the left beside its face,
+ *           and a status strip while it works. You talk to it from the dock.
+ *   live  — the agent's own herdr terminal, filling the card, as it runs.
  *
- * Both read the SAME rows (TranscriptRow.tsx renders the chat wrappers, and
- * the live look dissolves them with display: contents), so switching is one
- * class on the card, never a re-render of a transcript that can run to
- * thousands of exchanges. One choice for every card, kept across reloads.
+ * The terminal is never unmounted and never resized by the switch: in chat it
+ * lies under the conversation, unseen, in exactly the box it fills in live
+ * (transcript-paper.css), so the agent's pane keeps its size either way. One
+ * choice for every card, kept across reloads.
  */
 
 export type TranscriptLook = 'chat' | 'live'
