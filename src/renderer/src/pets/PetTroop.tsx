@@ -356,11 +356,14 @@ function PetCardFrame({
   goneRef.current = onGone
   useLayoutEffect(() => {
     const card = ref.current
-    if (!card || !anchor || (leaving && place)) return
+    if (!card || !anchor) return
     const measure = (): void => {
       const a = anchor.getBoundingClientRect()
       const c = card.getBoundingClientRect()
-      setPlace(cardPlacement(a, { width: c.width, height: c.height }, { width: window.innerWidth, height: window.innerHeight }, side))
+      const next = cardPlacement(a, { width: c.width, height: c.height }, { width: window.innerWidth, height: window.innerHeight }, side)
+      // Only a real move is news: a fresh object every measure would re-run
+      // the morph effect for nothing (and once looped the whole app).
+      setPlace((at) => (at && at.left === next.left && at.top === next.top ? at : next))
     }
     measure()
     const ro = new ResizeObserver(measure)
@@ -370,7 +373,7 @@ function PetCardFrame({
       ro.disconnect()
       window.removeEventListener('resize', measure)
     }
-  }, [anchor, side, leaving, place])
+  }, [anchor, side])
 
   // GROW, once, on the first frame the card has its place: drawn as the
   // face, it becomes the card before the first paint shows anything else.
