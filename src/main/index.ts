@@ -106,6 +106,8 @@ import { ensureSecretSlotNote } from './secret-note'
 import { createScrubber } from './scrub'
 import { sousGatewayKey } from './sous-config'
 import { scrubInboxRow, scrubSousResult } from './scrub-surfaces'
+import { VphoneInstance } from './vphone-instance'
+import { createSocketGuest, vphoneSocketPath } from './vphone-socket'
 import { DEFAULT_NAME_ZONE } from '../shared/reach-names'
 import { NameCertStore } from './name-cert-store'
 import {
@@ -5227,7 +5229,14 @@ const browserManager = new HeadlessBrowserManager({
   resolveNode: activeBrowserNode,
   onPageState: recordHeadlessPageState,
   onTabOpened: recordHeadlessTabOpened,
-  onTabClosed: recordHeadlessTabClosed
+  onTabClosed: recordHeadlessTabClosed,
+  // A `vphone://<machine>` card is a vphone-cli guest on this Mac, reached
+  // through the machine's own socket under ~/.vphone/machines (or
+  // VPHONE_LIBRARY). The VM is the user's: never launched or stopped here.
+  vphone: {
+    makeInstance: (machine) =>
+      new VphoneInstance({ machine, guest: createSocketGuest(vphoneSocketPath(machine), { machine }) })
+  }
 })
 
 const browserCast = createBrowserCast({

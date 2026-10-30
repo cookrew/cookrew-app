@@ -59,6 +59,8 @@ export type BrowserRenderMode =
   | 'legacy-thumb'
   | 'legacy-iframe'
   | 'legacy-blocked'
+  /** A vphone card without the headless stream: nothing can draw it, and the card says so. */
+  | 'vphone-off'
 
 /**
  * Capability approval wins before every legacy exception. In particular, a
@@ -69,9 +71,12 @@ export function browserRenderMode(opts: {
   interactive: boolean | null
   client: StreamClient
   selfEmbedding: boolean
+  /** The tab is `vphone://…` — a virtual iPhone, which only the stream can show. */
+  vphone?: boolean
 }): BrowserRenderMode {
   if (opts.interactive === null) return 'pending'
   if (opts.interactive) return 'headless-stream'
+  if (opts.vphone) return 'vphone-off'
   if (opts.selfEmbedding) return 'legacy-blocked'
   if (opts.client === 'remote') return 'legacy-thumb'
   if (opts.client === 'demo') return 'legacy-iframe'

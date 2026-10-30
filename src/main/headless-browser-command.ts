@@ -9,7 +9,7 @@ import type { BrowserNodeData, BrowserTab, CanvasNode } from '../shared/model'
 import { activeBrowserTab, browserTabs } from '../shared/model'
 import type { WorkspaceStore } from './store'
 import type { HeadlessBrowserManager } from './headless-browser-manager'
-import type { HeadlessInstance } from './headless-chrome'
+import type { BrowserInstance } from './browser-instance'
 
 export interface HeadlessBrowserCommandDeps {
   store: WorkspaceStore
@@ -55,7 +55,7 @@ function selectorFor(selector: string): string {
 }
 
 async function withElement(
-  instance: HeadlessInstance,
+  instance: BrowserInstance,
   selector: string,
   action: string
 ): Promise<string> {
@@ -201,7 +201,7 @@ export class HeadlessBrowserCommandEngine {
     return node
   }
 
-  private async requireInstance(node: BrowserNodeData): Promise<HeadlessInstance> {
+  private async requireInstance(node: BrowserNodeData): Promise<BrowserInstance> {
     const instance = await this.deps.manager.syncNode(node)
     if (!instance) throw new Error(`Headless browser '${node.name}' is unavailable`)
     return instance
