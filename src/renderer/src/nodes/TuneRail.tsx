@@ -56,6 +56,8 @@ export interface TuneRailProps {
   knobs?: readonly TuneKnob[]
   /** Drawn on the top bar: a row of chips whose lists drop DOWN. */
   bar?: boolean
+  /** Drawn inside the bar's tune menu: full-width rows, lists open in place. */
+  menu?: boolean
 }
 
 export function TuneRail({
@@ -67,13 +69,14 @@ export function TuneRail({
   onMouseDown,
   route,
   knobs,
-  bar = false
+  bar = false,
+  menu = false
 }: TuneRailProps): React.JSX.Element {
   const locked = view.locked
   const shown = view.dials.filter((dial) => dial.knob !== 'route' && (knobs === undefined || knobs.includes(dial.knob)))
   const label = bar ? (route ? 'Route' : 'Model') : route ? 'Model, effort and route' : 'Model and effort'
   return (
-    <div className={`cr-tune-rail${bar ? ' bar' : ''}`} role="group" aria-label={label}>
+    <div className={`cr-tune-rail${bar ? ' bar' : ''}${menu ? ' menu' : ''}`} role="group" aria-label={label}>
       {/* The generic dials are the TYPED knobs. The route knob main lists in
           `knobs` is drawn by RouteDial below from CardRouteState — never as a
           generic dial, which would read the session file for a route. */}

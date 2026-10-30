@@ -130,6 +130,8 @@ describe('every card view carries the tag', () => {
     // and the MDL / EFF rail beside the transcript. The rail stays; the chip goes.
     const overlay = read('TerminalOverlay.tsx')
     expect(overlay, 'the zoomed header grew a second tag').not.toContain('<DialTag')
-    expect(overlay, 'the zoomed card lost its tune rail').toContain('<TuneRail')
+    // Owner, 2026-10-31: the rail moved into ONE button on the top bar (TuneMenu opens it).
+    expect(overlay, 'the zoomed card lost its tune rail').toContain('<TuneMenu')
+    expect(read('nodes/TuneMenu.tsx'), 'the tune menu no longer opens the rail').toContain('<TuneRail {...rail} menu />')
   })
 })

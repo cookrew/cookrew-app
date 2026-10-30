@@ -38,8 +38,8 @@ import { useCheckpointTranslation } from './use-checkpoint-translation'
 import { AgentAvatar, StatusCoin } from './nodes/AgentAvatar'
 import { TranscriptFaceContext } from './transcript-face'
 import { useTranscriptLook, type TranscriptLook } from './transcript-look'
-import { TuneRail } from './nodes/TuneRail'
-import { closeZoomMenu, modelSwitchKind, useZoomSlots } from './zoom-bar'
+import { closeZoomMenu, tuneSummary, useZoomSlots } from './zoom-bar'
+import { TuneMenu } from './nodes/TuneMenu'
 import { useAgentTuning } from './nodes/use-agent-tuning'
 import { useCardRoute } from './nodes/use-card-route'
 import { routeDialAllowed, routeDialInput } from '../../shared/route-view'
@@ -491,8 +491,6 @@ function TerminalOverlay({
   const routeDial = routeDialBase
     ? { ...routeDialBase, state: cardRoute.state, open: cardRoute.open, onOpen: cardRoute.setOpen, onPick: cardRoute.pick }
     : null
-  // One switch on the bar: the route for a routed card, the model otherwise.
-  const switchKind = modelSwitchKind({ routeDial: routeDial !== null, route: cardRoute.state?.route })
 
   // The phone flipped between light and dark while this was open.
   const night = useNight()
@@ -1011,34 +1009,31 @@ function TerminalOverlay({
   // The card's model switch and CHAT/LIVE: on the top bar, or in the slim row.
   const barContent = (
     <div className="cr-zoom-bar" role="group" aria-label={`${node.name}: model and view`}>
+      {/* ONE button for model, effort and route (owner 2026-10-31); it opens
+          the whole rail, each dial still its own open → pick. */}
       {tuning.view !== null && (
-        <TuneRail
-          bar
+        <TuneMenu
           view={tuning.view}
           open={tuning.open}
           onOpen={tuning.setOpen}
           onTurn={tuning.turn}
           error={tuning.error}
           onMouseDown={keepFocus}
-          knobs={switchKind === 'route' ? [] : ['model']}
-          route={switchKind === 'route' ? routeDial : null}
+          route={routeDial}
+          summary={tuneSummary({ dials: tuning.view.dials, routeDial: routeDial !== null, route: cardRoute.state?.route })}
         />
       )}
-      {/* The transcript as a chat with the agent, or live as it runs. */}
-      <div className="cr-viewseg popout-look" role="group" aria-label="Transcript view">
-        {(['chat', 'live'] as const).map((one) => (
-          <button
-            key={one}
-            type="button"
-            aria-pressed={look === one}
-            title={one === 'chat' ? 'Chat: the conversation with the agent' : "Live: the agent's own terminal, as it runs"}
-            onMouseDown={keepFocus}
-            onClick={() => switchLook(one)}
-          >
-            {one === 'chat' ? 'CHAT' : 'LIVE'}
-          </button>
-        ))}
-      </div>
+      {/* ONE toggle for the transcript: it says what is showing, a tap flips it. */}
+      <button
+        type="button"
+        className={`cr-look-toggle look-${look}`}
+        aria-label={look === 'chat' ? 'Showing chat — switch to live' : 'Showing live — switch to chat'}
+        title={look === 'chat' ? "Chat: the conversation with the agent — tap for live, the agent's own terminal" : "Live: the agent's own terminal — tap for chat"}
+        onMouseDown={keepFocus}
+        onClick={() => switchLook(look === 'chat' ? 'live' : 'chat')}
+      >
+        {look === 'chat' ? 'CHAT' : 'LIVE'}
+      </button>
     </div>
   )
 

@@ -524,3 +524,139 @@
     letter-spacing: 0.04em;
   }
 }
+
+/* THE ONE TUNE BUTTON (TuneMenu.tsx): model · effort on the bar, the whole
+   rail — MDL, EFF, RTE — in the panel it drops. */
+.cr-tune-menu {
+  position: relative;
+  display: flex;
+  min-width: 0;
+}
+
+.cr-tune-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  max-width: 220px;
+  min-width: 0;
+  padding: 0 8px;
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  background: var(--cream-hi);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.cr-tune-menu-btn:hover,
+.cr-tune-menu.open .cr-tune-menu-btn {
+  background: var(--amber-soft);
+}
+
+.cr-tune-menu-model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cr-tune-menu-effort {
+  flex: 0 0 auto;
+  opacity: 0.65;
+}
+
+.cr-tune-menu-caret {
+  flex: 0 0 auto;
+  font-size: 9px;
+  opacity: 0.6;
+}
+
+.cr-tune-menu-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 260px;
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
+  z-index: 60;
+  border: 2px solid var(--line);
+  box-shadow: 3px 3px 0 var(--line);
+  background: var(--phos-bg);
+}
+
+/* The rail as rows: label and value on one line, each list opening in place. */
+.cr-tune-rail.menu {
+  width: 100%;
+  border: none;
+  padding: 6px;
+  gap: 6px;
+}
+
+.cr-tune-rail.menu .cr-tune-chip {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+}
+
+.cr-tune-rail.menu .cr-tune-k {
+  flex: 0 0 30px;
+}
+
+.cr-tune-rail.menu .cr-tune-v {
+  flex: 1 1 auto;
+  font-size: 12px;
+}
+
+.cr-tune-rail.menu .cr-tune-list {
+  position: static;
+  width: auto;
+  margin-top: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+  box-shadow: none;
+}
+
+/* ONE toggle for the transcript: it reads what is showing; a tap flips it. */
+.cr-look-toggle {
+  flex: 0 0 auto;
+  height: 28px;
+  min-width: 52px;
+  padding: 0 8px;
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  background: var(--amber, #f2c200);
+  color: var(--ink-on-amber, #1b1712);
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+}
+
+.cr-look-toggle.look-live {
+  background: var(--cream-hi);
+  color: var(--ink);
+}
+
+@media (max-width: 480px) {
+  .cr-tune-menu-btn {
+    max-width: 112px;
+    padding: 0 6px;
+    font-size: 10px;
+  }
+
+  .cr-look-toggle {
+    min-width: 44px;
+    padding: 0 6px;
+  }
+
+  .cr-tune-menu-panel {
+    position: fixed;
+    top: 56px;
+    left: 8px;
+    right: 8px;
+    width: auto;
+  }
+}
