@@ -1584,7 +1584,7 @@ function Canvas(): React.JSX.Element {
           onRouting={routeState.available ? () => setRoutingOpen(true) : undefined}
           routeStatus={routeState.state?.status ?? null}
           onResync={resync}
-          zoomedAgent={view === 'stage' ? (stageShowing?.name ?? null) : (terminals.find((t) => t.id === zoomedTerminalId)?.name ?? null)}
+          zoomedAgent={view === 'stage' ? (stageShowing?.zoomed ? stageShowing.name : null) : (terminals.find((t) => t.id === zoomedTerminalId)?.name ?? null)}
           stageWorkspace={view === 'stage' ? (stageShowing?.workspaceName ?? null) : null}
           avatar={account.avatar}
         />
@@ -1747,7 +1747,7 @@ function Canvas(): React.JSX.Element {
         {/* Under the levels view the canvas tools have no canvas in sight:
             the dock shows only with an agent's terminal open (level 3). The
             phone keeps it: its SOUS button is the phone's only command box. */}
-        {(view !== 'levels' || levelsTerminalId !== null || isRemoteMode()) && (view !== 'stage' || stageShowing !== null || isRemoteMode()) && (
+        {(view !== 'levels' || levelsTerminalId !== null || isRemoteMode()) && (view !== 'stage' || stageShowing?.terminalId != null || isRemoteMode()) && (
         <Dock
           tool={tool}
           onSelect={selectTool}
@@ -1771,7 +1771,7 @@ function Canvas(): React.JSX.Element {
           onOrch={setOrch}
           voiceFor={
             view === 'stage'
-              ? stageShowing !== null
+              ? stageShowing?.terminalId != null
                 ? { id: stageShowing.terminalId, remote: terminals.find((t) => t.id === stageShowing.terminalId)?.servedSession != null }
                 : null
               : view === 'levels'

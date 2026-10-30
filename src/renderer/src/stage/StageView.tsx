@@ -1,5 +1,9 @@
 // THE STAGE: levels, canvas and board as one view (2026-10-30).
 //
+// Its levels follow the header's route (stage-select.ts): every device, every
+// workspace as a thumbnail (StageMap.tsx), then one workspace in columns, then
+// one card zoomed in. Below is the workspace in columns.
+//
 // Three columns. On the left, every browser and note of the workspace; on
 // the right, every agent; in the middle, the one you are looking at — an
 // agent's terminal (the zoomed view the canvas had) or a browser or note
@@ -17,7 +21,8 @@ import { attachView, useAttachView } from '../attach-view'
 import { SideTabsContext, type AttachmentIndex } from '../terminal-attachments'
 import { useCrewRows } from './crew-rows'
 import { diffPopped, pickBackground, railOrder, type PoppedItem, type StageItem, type StageTarget } from './stage-pick'
-import { firstLine, hostPath, ownersOf, stageColumns, stageSelect, useStageSelection, type StageItemCard } from './stage-select'
+import { agentLinks, firstLine, hostPath, ownersOf, stageColumns, stageSelect, useStageLevel, useStageSelection, type StageItemCard } from './stage-select'
+import { StageMap } from './StageMap'
 import { AgentColumn, ItemColumn } from './StageColumns'
 import { StageItemPane } from './StageItemPane'
 import { StageTerminal } from './StageTerminal'
@@ -27,7 +32,10 @@ import './stage.css'
 const POP_FRESH_MS = 10 * 60_000
 
 export interface StageShowing {
-  terminalId: string
+  /** Null when the card in the middle is a browser or note. */
+  terminalId: string | null
+  /** You zoomed into it (the route names it); else it is the workspace level's pick. */
+  zoomed: boolean
   name: string
   workspaceName: string
 }
@@ -89,16 +97,25 @@ export function StageView({
     if (selection.kind === 'item' && pickedItem === null) stageSelect.clear()
   }, [selection, pickedItem])
 
-  const columns = useMemo(() => stageColumns(selection, items, agents, attachIndex), [selection, items, agents, attachIndex])
+  const links = useMemo(() => agentLinks(workspace?.connections ?? [], new Set(agents.map((a) => a.id))), [workspace?.connections, agents])
+  const columns = useMemo(() => stageColumns(selection, items, agents, attachIndex, links), [selection, items, agents, attachIndex, links])
+  const level = useStageLevel()
   const view = useAttachView()
   const openInTerminal = target && view?.terminalId === target.terminalId ? view.itemId : null
 
   const shown = target ? (faces.get(target.terminalId) ?? null) : null
-  const showing = shown ? `${shown.id}\u0000${shown.name}\u0000${shown.workspaceName}` : null
+  const showing =
+    level !== 'workspace'
+      ? null
+      : pickedItem
+        ? `\u0000${pickedItem.title}\u0000${workspace?.name ?? ''}\u0000z`
+        : shown
+          ? `${shown.id}\u0000${shown.name}\u0000${shown.workspaceName}\u0000${selection.kind === 'auto' ? '' : 'z'}`
+          : null
   useEffect(() => {
     if (showing === null) return onShowing(null)
-    const [terminalId, name, workspaceName] = showing.split('\u0000')
-    onShowing({ terminalId, name, workspaceName })
+    const [terminalId, name, workspaceName, zoomed] = showing.split('\u0000')
+    onShowing({ terminalId: terminalId || null, name, workspaceName, zoomed: zoomed === 'z' })
   }, [showing, onShowing])
   useEffect(() => () => onShowing(null), [onShowing])
 
@@ -119,16 +136,28 @@ export function StageView({
     if (selection.kind === 'auto' && target) stageSelect.set({ kind: 'agent', id: target.terminalId })
   }
 
-  const filteredBy = (id: string | null, kind: 'agent' | 'item'): string | null =>
-    id === null ? null : kind === 'agent' ? (faces.get(id)?.name ?? '…') : (items.find((i) => i.id === id)?.title ?? '…')
+  // Zoomed in, both heads say what they are filtered by: the card in the middle.
+  const focus = columns.focus
+  const focusName = focus === null ? null : focus.kind === 'agent' ? (faces.get(focus.id)?.name ?? '…') : (items.find((i) => i.id === focus.id)?.title ?? '…')
+  // The workspace level marks the card that needs you, on its column too.
+  const hot = selection.kind === 'auto' && target && target.why !== 'latest' && target.why !== 'pinned' ? target : null
+
+  if (level !== 'workspace') {
+    return (
+      <div className="cr-stage-view map">
+        <StageMap level={level} loadedWorkspaceId={workspaceId} />
+      </div>
+    )
+  }
 
   return (
     <div className="cr-stage-view" data-why={pickedItem ? 'item' : (target?.why ?? 'none')}>
       <ItemColumn
         items={columns.items}
-        head={{ title: 'Browsers & notes', total: columns.items.length, filter: filteredBy(columns.itemsFor, 'agent'), onClear: back }}
+        head={{ title: 'Browsers & notes', total: columns.items.length, filter: focusName, onClear: back }}
         selected={pickedItem?.id ?? null}
         open={openInTerminal}
+        hot={hot?.item?.id ?? null}
         faces={faces}
         onPick={pickItem}
       />
@@ -152,7 +181,8 @@ export function StageView({
       </div>
       <AgentColumn
         rows={columns.agents}
-        head={{ title: 'Agents', total: columns.agents.length, filter: filteredBy(columns.agentsFor, 'item'), onClear: back }}
+        head={{ title: 'Agents', total: columns.agents.length, filter: focusName, onClear: back }}
+        hot={hot?.terminalId ?? null}
         now={now}
         current={pickedItem ? null : (target?.terminalId ?? null)}
         auto={selection.kind === 'auto'}

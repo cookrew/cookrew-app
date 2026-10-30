@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentRow } from '../src/renderer/src/agent-rows'
 import type { AttachmentIndex, TerminalAttachment } from '../src/renderer/src/terminal-attachments'
-import { firstLine, hostPath, ownersOf, stageColumns, stageSelect, type StageItemCard } from '../src/renderer/src/stage/stage-select'
+import { agentLinks, firstLine, hostPath, ownersOf, stageColumns, stageLevel, stageSelect, type StageItemCard } from '../src/renderer/src/stage/stage-select'
 
 const row = (id: string): AgentRow => ({
   id, name: id.toUpperCase(), preset: 'claude', role: null, orch: false, active: true, workspaceId: 'w', workspaceName: 'W',
@@ -28,33 +28,43 @@ describe('the wiring read both ways', () => {
 })
 
 describe('the columns', () => {
-  it('show everything while nothing is picked', () => {
+  it('the workspace level shows everything', () => {
     const c = stageColumns({ kind: 'auto' }, items, agents, index)
-    expect([c.items.length, c.agents.length, c.itemsFor, c.agentsFor]).toEqual([3, 3, null, null])
+    expect([c.items.length, c.agents.length, c.focus]).toEqual([3, 3, null])
   })
 
-  it('an agent picked: the left shows its items, newest wire first; the right keeps everyone', () => {
+  it('an agent zoomed in: its items, newest wire first; itself and the agents sharing a card with it', () => {
     const c = stageColumns({ kind: 'agent', id: 'a' }, items, agents, index)
     expect(c.items.map((i) => i.id)).toEqual(['n2', 'n1'])
-    expect(c.agents).toHaveLength(3)
-    expect(c.itemsFor).toBe('a')
+    expect(c.agents.map((r) => r.id)).toEqual(['a', 'b'])
+    expect(c.focus).toEqual({ kind: 'agent', id: 'a' })
   })
 
-  it('an agent with nothing wired shows an empty left, still filtered', () => {
-    const c = stageColumns({ kind: 'agent', id: 'c' }, items, agents, index)
-    expect([c.items.length, c.itemsFor]).toEqual([0, 'c'])
+  it('an agent cabled to another keeps it, with no card between them', () => {
+    const links = agentLinks([{ a: 'c', b: 'b' }, { a: 'c', b: 'n1' }], new Set(['a', 'b', 'c']))
+    expect(stageColumns({ kind: 'agent', id: 'c' }, items, agents, index, links).agents.map((r) => r.id)).toEqual(['b', 'c'])
+    expect(stageColumns({ kind: 'agent', id: 'c' }, items, agents, index, links).items).toEqual([])
   })
 
-  it('an item picked: the right shows its agents; the left keeps everything', () => {
+  it('an item zoomed in: itself on the left, its agents on the right', () => {
     const c = stageColumns({ kind: 'item', id: 'n1' }, items, agents, index)
+    expect(c.items.map((i) => i.id)).toEqual(['n1'])
     expect(c.agents.map((a) => a.id)).toEqual(['a', 'b'])
-    expect(c.items).toHaveLength(3)
-    expect(c.agentsFor).toBe('n1')
+    expect(c.focus).toEqual({ kind: 'item', id: 'n1' })
   })
 
   it('a pick whose card is gone filters nothing', () => {
-    expect(stageColumns({ kind: 'item', id: 'gone' }, items, agents, index).agentsFor).toBeNull()
-    expect(stageColumns({ kind: 'agent', id: 'gone' }, items, agents, index).itemsFor).toBeNull()
+    expect(stageColumns({ kind: 'item', id: 'gone' }, items, agents, index).focus).toBeNull()
+    expect(stageColumns({ kind: 'agent', id: 'gone' }, items, agents, index).focus).toBeNull()
+  })
+})
+
+describe('the levels', () => {
+  it('a pick lands on the workspace level, wherever the stage was', () => {
+    stageLevel.set('devices')
+    stageSelect.set({ kind: 'agent', id: 'zz' })
+    expect(stageLevel.get()).toBe('workspace')
+    stageSelect.clear()
   })
 })
 

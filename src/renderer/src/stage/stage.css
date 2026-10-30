@@ -362,6 +362,286 @@
   border: 0;
 }
 
+/* The card that needs you, at the workspace level: rose, and it breathes. */
+.stg-card.hot {
+  border-color: var(--rose);
+  box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.25);
+  animation: stg-hot 1.8s ease-in-out infinite;
+}
+
+@keyframes stg-hot {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.25);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(220, 38, 38, 0.08);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stg-card.hot {
+    animation: none;
+  }
+}
+
+/* ---- the upper levels: devices, then workspaces (StageMap.tsx) ---- */
+.cr-stage-view.map {
+  display: block;
+  overflow-y: auto;
+}
+
+.stg-map {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.stg-map-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 14px;
+  border-bottom: 1.5px solid var(--line);
+  background: var(--cream);
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.stg-map-title {
+  flex: 1 1 auto;
+}
+
+.stg-map-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+  padding: 16px;
+}
+
+.stg-map-grid.devices {
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+}
+
+/* One tile kind for devices and workspaces: the column card, grown up. */
+.stg-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px 11px;
+  border: 1.5px solid var(--line-soft);
+  border-left: 4px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--cream-hi);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.stg-tile:hover {
+  border-color: var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+}
+
+.stg-tile.loaded {
+  border-left-color: var(--amber-deep);
+}
+
+.stg-tile.needs {
+  border-left-color: var(--rose);
+}
+
+.stg-tile-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.stg-tile-head .cr-icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+.stg-tile-emoji {
+  flex: 0 0 auto;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.stg-tile-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 600 13px/1.2 var(--font-mono);
+}
+
+.stg-tile-foot {
+  font: 10.5px/1.3 var(--font-mono);
+  color: var(--muted);
+}
+
+.stg-tile-foot b {
+  color: var(--rose);
+  font-weight: 600;
+}
+
+.stg-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.stg-dot.live {
+  background: var(--hp);
+}
+
+.stg-dot.connecting {
+  background: var(--amber);
+}
+
+/* A device: its workspaces as small screens. */
+.stg-device-screens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.stg-device-screen {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 28px;
+  border: 1.5px solid var(--line-soft);
+  border-radius: 3px;
+  background: var(--cream);
+  font-size: 13px;
+}
+
+.stg-device-screen.focused {
+  border-color: var(--amber-deep);
+}
+
+.stg-device-screen.needs {
+  border-color: var(--rose);
+}
+
+/* A workspace: its level in miniature — items | the card that needs you | agents. */
+.stg-thumb {
+  display: grid;
+  grid-template-columns: 34px 1fr 34px;
+  gap: 6px;
+  height: 104px;
+  padding: 6px;
+  border: 1.5px solid var(--line-soft);
+  border-radius: 4px;
+  background: var(--cream);
+}
+
+.stg-thumb-col {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow: hidden;
+}
+
+.stg-thumb-col.items i {
+  flex: 0 0 auto;
+  height: 9px;
+  border-radius: 2px;
+  border-left: 3px solid #fcd34d;
+  background: var(--cream-hi);
+}
+
+.stg-thumb-col.items i.browser {
+  border-left-color: #93c5fd;
+}
+
+.stg-thumb-col.agents {
+  flex-flow: row wrap;
+  align-content: flex-start;
+}
+
+.stg-thumb-col.agents i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1px solid var(--line-soft);
+  background: var(--cream-lo);
+}
+
+.stg-thumb-col.agents i.thinking {
+  background: var(--amber);
+}
+
+.stg-thumb-col.agents i.replied {
+  background: var(--hp);
+}
+
+.stg-thumb-col.agents i.waiting {
+  background: var(--rose);
+}
+
+.stg-thumb-col.agents i.hot {
+  box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.3);
+}
+
+.stg-thumb-mid {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1.5px solid var(--line-soft);
+  border-radius: 3px;
+  background: var(--cream-hi);
+  font: 10.5px/1.25 var(--font-mono);
+  color: var(--muted);
+  text-align: center;
+}
+
+.stg-thumb-mid b {
+  color: var(--ink);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stg-thumb-mid em {
+  font-style: normal;
+  color: var(--ink-soft);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.stg-thumb-mid.waiting {
+  border-color: var(--rose);
+}
+
+.stg-thumb-mid.waiting span {
+  color: var(--rose);
+}
+
+.stg-thumb-mid.replied span {
+  color: #15803d;
+}
+
 /* ---- narrow: the side columns keep their icons and give their words ---- */
 @media (max-width: 900px) {
   .stg-col {
@@ -396,5 +676,11 @@
   }
   .stg-bubble {
     display: none;
+  }
+  .stg-map-grid,
+  .stg-map-grid.devices {
+    grid-template-columns: 1fr;
+    padding: 10px;
+    gap: 10px;
   }
 }
