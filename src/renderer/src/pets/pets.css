@@ -1,0 +1,374 @@
+/* ---- THE AGENTS AS PETS (AgentPets.tsx) ----
+   A troop of round faces over every page: above the canvas, the stage, the
+   levels, the board, the header and the dock (50), under every scrim and
+   sheet (60 and up). Drawn with the app's tokens, so it is paper by day and
+   night paper on a dark phone (night.css). */
+.cr-pets {
+  position: fixed;
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 7px 5px 4px;
+  border: 1.5px solid var(--line);
+  border-radius: 999px;
+  background: var(--cream-hi);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.cr-pets.expanded {
+  flex-wrap: wrap;
+  max-width: min(420px, calc(100vw - 16px));
+  border-radius: 22px;
+}
+
+.cr-pets-grip {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: -2px;
+  cursor: grab;
+}
+
+.cr-pets-grip:active {
+  cursor: grabbing;
+}
+
+/* One pet: a round face with a ring in its mood. */
+.cr-pet {
+  position: relative;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 2px solid var(--line-soft);
+  border-radius: 50%;
+  background: var(--cream);
+  color: var(--ink);
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+  animation: cr-pet-bob 3.2s ease-in-out infinite;
+}
+
+.cr-pet .vi-avatar {
+  width: 28px;
+  height: 28px;
+}
+
+.cr-pet .vi-avatar svg {
+  width: 28px;
+  height: 28px;
+}
+
+.cr-pet:hover,
+.cr-pet.open {
+  transform: translateY(-3px) scale(1.08);
+  box-shadow: 0 0 0 3px var(--amber-soft);
+}
+
+.cr-pet:nth-child(3n) {
+  animation-delay: -1.1s;
+}
+
+.cr-pet:nth-child(3n + 1) {
+  animation-delay: -2.2s;
+}
+
+.cr-pet.needs {
+  border-color: var(--rose);
+  animation: cr-pet-wiggle 1.6s ease-in-out infinite;
+}
+
+.cr-pet.needs::after {
+  content: '';
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--cream-hi);
+  border-radius: 50%;
+  background: var(--rose);
+}
+
+.cr-pet.working {
+  border-color: var(--amber-deep);
+  border-style: dashed;
+}
+
+.cr-pet.done {
+  border-color: var(--hp);
+}
+
+.cr-pet.asleep {
+  opacity: 0.62;
+  animation: none;
+}
+
+.cr-pet-z {
+  position: absolute;
+  top: -6px;
+  right: -1px;
+  font: 700 10px var(--font-mono);
+  color: var(--muted);
+}
+
+.cr-pet.more {
+  font: 700 11px var(--font-mono);
+  color: var(--ink-soft);
+  animation: none;
+}
+
+.cr-pet-count {
+  position: absolute;
+  bottom: -4px;
+  right: -6px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--ink);
+  color: var(--cream-hi);
+  font: 700 10px/17px var(--font-mono);
+}
+
+@keyframes cr-pet-bob {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+  50% {
+    translate: 0 -2px;
+  }
+}
+
+@keyframes cr-pet-wiggle {
+  0%,
+  70%,
+  100% {
+    rotate: 0deg;
+  }
+  76% {
+    rotate: -9deg;
+  }
+  84% {
+    rotate: 8deg;
+  }
+  92% {
+    rotate: -4deg;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cr-pet,
+  .cr-pet.needs {
+    animation: none;
+  }
+}
+
+/* ---- a pet's card ---- */
+.cr-pet-card {
+  position: fixed;
+  z-index: 56;
+  width: min(340px, calc(100vw - 16px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border: 1.5px solid var(--line);
+  border-radius: 14px;
+  background: var(--cream-hi);
+  color: var(--ink);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
+}
+
+.cr-pet-card.needs {
+  border-color: var(--rose);
+}
+
+.cr-pet-card-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.cr-pet-card-face .vi-avatar,
+.cr-pet-card-face .vi-avatar svg {
+  width: 26px;
+  height: 26px;
+}
+
+.cr-pet-card-who {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cr-pet-card-name {
+  font: 600 13.5px/1.2 var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cr-pet-card-meta {
+  display: flex;
+  gap: 8px;
+  font: 10.5px/1 var(--font-mono);
+  color: var(--muted);
+}
+
+.cr-pet-mood {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cr-pet-mood.needs {
+  color: var(--rose);
+}
+
+.cr-pet-mood.working {
+  color: var(--amber-deep);
+}
+
+.cr-pet-card-open,
+.cr-pet-card-x {
+  flex: 0 0 auto;
+  height: 24px;
+  padding: 0 8px;
+  border: 1.5px solid var(--line);
+  border-radius: 6px;
+  background: var(--cream);
+  color: var(--ink);
+  font-family: var(--font-pixel);
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.cr-pet-card-open:hover {
+  background: var(--amber-soft);
+}
+
+.cr-pet-card-x {
+  width: 24px;
+  padding: 0;
+  font: 16px/1 var(--font-mono);
+}
+
+/* The board card's own turn block (.ags-turn), taller here and scrolling. */
+.cr-pet-card-turn.ags-turn {
+  max-height: min(260px, 40vh);
+  overflow-y: auto;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--cream);
+  scrollbar-width: thin;
+}
+
+.cr-pet-card-empty {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.cr-pet-card-sent {
+  font: 11px/1.3 var(--font-mono);
+  color: var(--muted);
+}
+
+.cr-pet-card-ask {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.cr-pet-card-ask textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-height: 120px;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1.5px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--cream);
+  color: var(--ink);
+  /* 16px: iOS zooms the page into a smaller field on focus. */
+  font: 16px/1.3 var(--font-mono);
+  field-sizing: content;
+  resize: none;
+  outline: none;
+}
+
+.cr-pet-card-ask textarea:focus {
+  border-color: var(--line);
+}
+
+.cr-pet-card-send {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  background: var(--amber);
+  color: var(--on-accent, #2d2a20);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.cr-pet-card-send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+@media (min-width: 701px) {
+  .cr-pet-card-ask textarea {
+    font-size: 13px;
+  }
+}
+
+/* The phone: the troop stands up on the right edge, over the agents column
+   (which lists the same agents), not across the bottom of the terminal,
+   where the prompt line is. */
+@media (max-width: 700px) {
+  .cr-pets {
+    flex-direction: column;
+    gap: 5px;
+    padding: 4px 4px 6px;
+    border-radius: 24px;
+  }
+  .cr-pets.expanded {
+    flex-wrap: wrap-reverse;
+    max-width: none;
+    max-height: min(420px, calc(100vh - 160px));
+    border-radius: 24px;
+  }
+  .cr-pets-grip {
+    width: 30px;
+    height: 14px;
+    rotate: 90deg;
+  }
+  .cr-pet {
+    width: 34px;
+    height: 34px;
+  }
+  .cr-pet .vi-avatar,
+  .cr-pet .vi-avatar svg {
+    width: 24px;
+    height: 24px;
+  }
+}

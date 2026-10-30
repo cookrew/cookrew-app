@@ -120,6 +120,7 @@ import {
 } from './canvas-visual-mode'
 import { CableHarness } from './CableHarness'
 import { stageSelect } from './stage/stage-select'
+import { AgentPets } from './pets/AgentPets'
 import type { StageShowing } from './stage/StageView'
 
 /** How often a headless browser card refreshes its still. Matches the legacy
@@ -1898,6 +1899,9 @@ function Canvas(): React.JSX.Element {
           }}
         />
         <EventToastLayer />
+        {/* The crew as pets over every page: hover for the latest turn and a
+            prompt box, click for the full transcript (pets/AgentPets.tsx). */}
+        <AgentPets workspace={workspace} workspaceId={activeWsId} onOpen={(row) => void zoomToNode(row.id)} />
         {/* D14 · a door this Mac was serving moved to another of the account's. */}
         <DoorMovedNotice />
         <SousPill listening={ptt.listening} partial={ptt.partial} reply={sousReply} />
