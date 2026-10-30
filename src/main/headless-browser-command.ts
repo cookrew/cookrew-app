@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto'
 import type { BrowserNodeData, BrowserTab, CanvasNode } from '../shared/model'
 import { activeBrowserTab, browserTabs } from '../shared/model'
 import type { WorkspaceStore } from './store'
-import type { HeadlessBrowserManager } from './headless-browser-manager'
+import { backingOf, type HeadlessBrowserManager } from './headless-browser-manager'
 import type { BrowserInstance } from './browser-instance'
 import { parseUseUrl } from '../shared/use-url'
 import type { UseSignal } from '../shared/use-signal'
@@ -126,6 +126,18 @@ export class HeadlessBrowserCommandEngine {
         case 'navigate': {
           const url = params[0]
           if (!url) throw new Error(`Usage: cookrew browser navigate "${browserName}" URL`)
+          // ANOTHER DEVICE IS A NEW ADDRESS FOR THE CARD, not a page for the
+          // old device to open: the card's tab is re-addressed and the
+          // manager swaps the instance (its viewers redial onto the new one).
+          // A web address on a phone still opens in the phone's browser.
+          const readdressed = withActiveUrl(node, url)
+          if (target !== null || parseUseUrl(url) !== null) {
+            if (parseUseUrl(url) !== null && backingOf(readdressed) !== backingOf(node)) {
+              const updated = this.patch(node.id, { url, tabs: readdressed.tabs })
+              await this.deps.manager.syncNode(updated)
+              return `Re-addressed to ${url}`
+            }
+          }
           await instance.navigate(url)
           return `Navigated to ${url}`
         }
@@ -329,3 +341,9 @@ export class HeadlessBrowserCommandEngine {
 }
 
 const TAB_COMMANDS = new Set(['tabs', 'tab-new', 'tab-select', 'tab-close'])
+
+/** The card with its active tab pointed at `url` — what it would be, re-addressed. */
+function withActiveUrl(node: BrowserNodeData, url: string): BrowserNodeData {
+  const active = activeBrowserTab(node)
+  return { ...node, url, tabs: browserTabs(node).map((tab) => (tab.id === active.id ? { ...tab, url, title: '' } : tab)) }
+}
