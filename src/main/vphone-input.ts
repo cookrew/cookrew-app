@@ -16,8 +16,20 @@ import type { CdpInputCommand } from '../shared/cast-input'
  */
 
 export interface VphoneCall {
-  readonly method: 'input.tap' | 'input.swipe' | 'input.key' | 'input.type' | 'input.paste'
+  readonly method: 'input.tap' | 'input.swipe' | 'input.key' | 'input.type' | 'input.paste' | 'input.scroll'
   readonly params: Record<string, number | string>
+}
+
+/**
+ * The same vocabulary is every pixel device's gesture language (adb, a Mac
+ * window, pixel-instance.ts): a tap, a swipe, a named key, typed or pasted
+ * text — and, for a device with a real scroll wheel, a scroll.
+ */
+export type Gesture = VphoneCall
+
+export interface GestureMapperOptions {
+  /** A wheel is a scroll on a desktop, not a swipe of its delta (a phone has no wheel). */
+  readonly wheelAsScroll?: boolean
 }
 
 export interface ScreenPoints {
@@ -63,7 +75,8 @@ export class VphoneGestureMapper {
 
   constructor(
     private readonly now: () => number = Date.now,
-    private readonly screen: ScreenPoints = { width: 430, height: 932 }
+    private readonly screen: ScreenPoints = { width: 430, height: 932 },
+    private readonly options: GestureMapperOptions = {}
   ) {}
 
   map(command: CdpInputCommand): VphoneCall[] {
@@ -91,6 +104,11 @@ export class VphoneGestureMapper {
         return x === null || y === null ? [] : this.release(x, y)
       case 'mouseWheel': {
         const dy = num(params.deltaY)
+        if (this.options.wheelAsScroll) {
+          const dx = num(params.deltaX) ?? 0
+          if (x === null || y === null || ((dy ?? 0) === 0 && dx === 0)) return []
+          return [{ method: 'input.scroll', params: { x: Math.round(x), y: Math.round(y), dx: Math.round(dx), dy: Math.round(dy ?? 0) } }]
+        }
         if (x === null || y === null || dy === null || dy === 0) return []
         const toY = Math.min(Math.max(y - dy, 0), this.screen.height)
         return [swipe(x, y, x, toY, WHEEL_SWIPE_SECONDS)]

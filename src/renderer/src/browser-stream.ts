@@ -20,6 +20,7 @@
  * headless mode fails closed on a neutral unavailable surface.
  */
 
+import type { UseStatus } from '../../shared/use-signal'
 import type { FitRect } from './browser-frame'
 
 /** Requested screencast viewport bounds — Forge clamps 320..2048 (default 800x1400). */
@@ -59,7 +60,7 @@ export type BrowserRenderMode =
   | 'legacy-thumb'
   | 'legacy-iframe'
   | 'legacy-blocked'
-  /** A vphone card without the headless stream: nothing can draw it, and the card says so. */
+  /** A use card (a phone, a Mac window, a camera) without the headless stream: nothing can draw it, and the card says so. */
   | 'vphone-off'
 
 /**
@@ -226,6 +227,7 @@ export type StreamMessage =
   | ({ kind: 'control' } & StreamControlFields)
   | ({ kind: 'frame'; seq: number; src: string } & StreamFrameMeta)
   | { kind: 'error'; msg: string }
+  | { kind: 'status'; status: UseStatus }
 
 /**
  * Parse a server→client WS payload into a typed message, or null to ignore.
@@ -284,7 +286,27 @@ export function parseStreamMessage(raw: unknown): StreamMessage | null {
   if (obj.t === 'error') {
     return { kind: 'error', msg: typeof obj.msg === 'string' ? obj.msg : 'stream error' }
   }
+  if (obj.t === 'status') {
+    const state = obj.state
+    const use = obj.use
+    if (state !== 'connecting' && state !== 'live' && state !== 'offline') return null
+    if (use !== 'computer' && use !== 'phone' && use !== 'hardware') return null
+    return {
+      kind: 'status',
+      status: { state, use, message: typeof obj.message === 'string' ? obj.message : null, input: obj.input === true }
+    }
+  }
   return null
+}
+
+/**
+ * How long a viewer waits before dialling again after its socket dropped:
+ * a second, doubling, never more than ten. A phone on a train, a desktop
+ * restarting, a Wi-Fi hand-off — the card comes back by itself, keeping the
+ * last frame on screen meanwhile, instead of staying dead until reopened.
+ */
+export function reconnectDelayMs(attempt: number): number {
+  return Math.min(10_000, 1000 * 2 ** Math.max(0, Math.min(attempt, 4)))
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

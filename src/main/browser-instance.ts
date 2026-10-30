@@ -1,4 +1,6 @@
 import type { CdpInputCommand } from '../shared/cast-input'
+import type { UseStatus } from '../shared/use-signal'
+import type { Gesture } from './vphone-input'
 import type { ViewportMetrics } from '../shared/cast-viewport'
 import type { BrowserTab } from '../shared/model'
 import type { BrowserViewportState } from './browser-viewport'
@@ -42,4 +44,13 @@ export interface BrowserInstance {
   readonly viewport: { width: number; height: number }
   readonly viewportState: BrowserViewportState
   readonly processId: number | null
+
+  /**
+   * A USE's device state (pixel-instance.ts): live, or offline with the
+   * sentence that says why. Absent on a Chrome — a page has no cable to pull.
+   */
+  readonly status?: UseStatus
+  readonly statusListeners?: Set<(status: UseStatus) => void>
+  /** The agent's hand on a screen: gestures in viewport points, resolved once the device took them. */
+  act?(gestures: readonly Gesture[]): Promise<void>
 }

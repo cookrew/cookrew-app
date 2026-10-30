@@ -10,6 +10,7 @@ import type { Duplex } from 'node:stream'
 import { randomUUID } from 'node:crypto'
 import { sanitizeInput, type MapContext } from '../shared/cast-input'
 import { sanitizeViewportMessage } from '../shared/cast-viewport'
+import type { UseStatus } from '../shared/use-signal'
 import { jpegSize } from './jpeg-size'
 import { DEFAULT_DRAIN_THRESHOLD } from './screencast-pace'
 import type { BrowserViewportState } from './browser-viewport'
@@ -190,6 +191,9 @@ class ClientConn {
     this.pushFrame(data, meta)
   private readonly viewportListener = (state: BrowserViewportState): void =>
     this.pushViewportState(state)
+  /** A use's device state: a viewer shows "offline — <why>" over the last frame instead of a frozen screen. */
+  private readonly statusListener = (status: UseStatus): void =>
+    this.wsSend(JSON.stringify({ t: 'status', ...status }))
 
   constructor(
     private readonly socket: Duplex,
@@ -212,6 +216,7 @@ class ClientConn {
       viewportHeight: viewport.height
     }
     instance.frameListeners.add(this.frameListener)
+    instance.statusListeners?.add(this.statusListener)
     this.wsSend(JSON.stringify({
       t: 'ready',
       w: viewport.width,
@@ -220,6 +225,7 @@ class ClientConn {
       revision: viewport.revision
     }))
     this.pushViewportState(viewport)
+    if (instance.status) this.statusListener(instance.status)
   }
 
   fail(message: string): void {
@@ -415,6 +421,7 @@ class ClientConn {
     this.deliveredRevision = null
     this.frameContexts.clear()
     this.instance?.frameListeners.delete(this.frameListener)
+    this.instance?.statusListeners?.delete(this.statusListener)
     this.unsubscribeViewport?.()
     this.unsubscribeViewport = null
     this.instance?.unregisterViewportViewer(this.id)

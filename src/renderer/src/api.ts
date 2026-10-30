@@ -435,6 +435,11 @@ export interface CookrewApi {
    */
   onCableSignal?: (cb: (signal: unknown) => void) => () => void;
   /**
+   * An agent acted on a card — the cursor over its screen (shared/use-signal.ts).
+   * Optional and feature-detected, like the cable signals.
+   */
+  onUseSignal?: (cb: (signal: unknown) => void) => () => void;
+  /**
    * The Mac's addresses moved and the registry has taken the new card. The
    * companion's plane switcher races the Mac's names at once on it
    * (path/companion.ts). Optional: the demo has no Mac to move.

@@ -4,7 +4,7 @@ import type { BrowserTab } from '../shared/model'
 import { parseVphoneUrl, vphoneUrl } from '../shared/vphone-url'
 import { BrowserViewportCoordinator, type BrowserViewportState } from './browser-viewport'
 import type { FrameMeta, HeadlessPageState, HeadlessStopResult } from './headless-chrome'
-import { VphoneGestureMapper } from './vphone-input'
+import { VphoneGestureMapper, WHEEL_SWIPE_SECONDS, type Gesture } from './vphone-input'
 import type { VphoneGuest } from './vphone-socket'
 
 /**
@@ -290,6 +290,27 @@ export class VphoneInstance {
         .then(() => undefined, () => undefined)
     }
     // Look again soon: the screen is about to change.
+    this.schedule(VPHONE_FAST_POLL_MS)
+  }
+
+  /**
+   * The agent's hand (use-commands.ts): the gestures go to vphoned in order
+   * and the promise says whether it took them. A phone has no wheel, so a
+   * scroll is the swipe of its delta.
+   */
+  async act(gestures: readonly Gesture[]): Promise<void> {
+    if (this.closed || !this.started) throw new Error(`vphone machine '${this.opts.machine}' is not connected`)
+    this.lastInputAt = this.now()
+    for (const gesture of gestures) {
+      if (gesture.method === 'input.scroll') {
+        const x = Number(gesture.params.x)
+        const y = Number(gesture.params.y)
+        const toY = Math.min(Math.max(y - Number(gesture.params.dy), 0), this.points.height)
+        await this.opts.guest.rpc('input.swipe', { x1: x, y1: y, x2: x, y2: toY, seconds: WHEEL_SWIPE_SECONDS })
+      } else {
+        await this.opts.guest.rpc(gesture.method, gesture.params)
+      }
+    }
     this.schedule(VPHONE_FAST_POLL_MS)
   }
 

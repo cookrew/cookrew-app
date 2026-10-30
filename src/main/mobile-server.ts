@@ -187,6 +187,8 @@ export interface MobileServerDeps {
   tuningBus?: MobileApiDeps['tuningBus']
   /** Signals on the cables (cable-signal.ts) — passed straight through to the /api/events stream. */
   signalBus?: MobileApiDeps['signalBus']
+  /** Agents acting on cards (use-signal-bus.ts) — passed straight through to /api/events. */
+  useBus?: MobileApiDeps['useBus']
   /** The route program's endpoints and stream frames — see MobileApiDeps; passed through as-is. */
   route?: MobileApiDeps['route']
   routeBus?: MobileApiDeps['routeBus']

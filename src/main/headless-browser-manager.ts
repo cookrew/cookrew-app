@@ -10,7 +10,7 @@ import type { BrowserNodeData, BrowserTab } from '../shared/model'
 import { activeBrowserTab, browserTabs } from '../shared/model'
 import { HeadlessInstance, type HeadlessOptions, type HeadlessPageState } from './headless-chrome'
 import type { BrowserInstance } from './browser-instance'
-import { parseVphoneUrl } from '../shared/vphone-url'
+import { parseUseUrl, useUrl, type UseTarget } from '../shared/use-url'
 
 const SIZE_MIN = 320
 const SIZE_MAX = 2048
@@ -40,6 +40,11 @@ export interface HeadlessBrowserManagerDeps {
    * a Chrome pointed at an address it cannot load.
    */
   vphone?: { makeInstance: (machine: string, node: BrowserNodeData) => BrowserInstance }
+  /**
+   * EVERY OTHER USE (shared/use-url.ts): a Mac window or display, an adb
+   * phone, a camera. Absent, or answering null, the card is unavailable.
+   */
+  uses?: { makeInstance: (target: UseTarget, node: BrowserNodeData) => BrowserInstance | null }
 }
 
 interface StartingEntry {
@@ -52,6 +57,8 @@ export class HeadlessBrowserManager {
   private readonly starting = new Map<string, StartingEntry>()
   private readonly stopping = new Map<string, Promise<void>>()
   private readonly desired = new Map<string, BrowserNodeData>()
+  /** Which device backs each live card (backingOf): a card re-addressed to another device gets a new instance. */
+  private readonly backing = new Map<string, string>()
   private shuttingDown = false
   private shutdownPromise: Promise<void> | null = null
 
@@ -86,6 +93,14 @@ export class HeadlessBrowserManager {
   async syncNode(node: BrowserNodeData): Promise<BrowserInstance | null> {
     if (!this.deps.enabled() || this.shuttingDown) return null
     this.desired.set(node.id, node)
+    const live = this.instances.get(node.id)
+    if (live && this.backing.get(node.id) !== backingOf(node)) {
+      // Same card, another device: a phone card pointed at a second phone,
+      // a window card at another app. The old device is let go first.
+      this.instances.delete(node.id)
+      this.backing.delete(node.id)
+      await live.stop()
+    }
     const instance = await this.ensure(node.id)
     if (!instance) return null
     const latest = this.desired.get(node.id)
@@ -128,6 +143,7 @@ export class HeadlessBrowserManager {
     if (!node || this.shuttingDown) return null
     const instance = this.makeInstanceFor(browserId, node)
     if (!instance) return null
+    this.backing.set(browserId, backingOf(node))
     instance.onPageState = (tabId, state) => this.deps.onPageState(browserId, tabId, state)
     instance.onTabOpened = (tab) => this.deps.onTabOpened(browserId, tab)
     instance.onTabClosed = (tabId) => this.deps.onTabClosed(browserId, tabId)
@@ -163,11 +179,12 @@ export class HeadlessBrowserManager {
     }
   }
 
-  /** A phone for a vphone address, a Chrome for anything else — or nothing, when the desktop cannot provide it. */
+  /** The device a use address names, a Chrome for anything else — or nothing, when the desktop cannot provide it. */
   private makeInstanceFor(browserId: string, node: BrowserNodeData): BrowserInstance | null {
     const active = activeBrowserTab(node)
-    const phone = parseVphoneUrl(active.url)
-    if (phone) return this.deps.vphone?.makeInstance(phone.machine, node) ?? null
+    const use = parseUseUrl(active.url)
+    if (use?.kind === 'vphone') return this.deps.vphone?.makeInstance(use.name, node) ?? null
+    if (use) return this.deps.uses?.makeInstance(use, node) ?? null
     const executablePath = this.deps.chromePath()
     if (!executablePath) return null
     const options: HeadlessOptions = {
@@ -185,7 +202,10 @@ export class HeadlessBrowserManager {
   }
 
   private handleExit(browserId: string, instance: BrowserInstance): void {
-    if (this.instances.get(browserId) === instance) this.instances.delete(browserId)
+    if (this.instances.get(browserId) === instance) {
+      this.instances.delete(browserId)
+      this.backing.delete(browserId)
+    }
     const starting = this.starting.get(browserId)
     if (starting?.instance === instance) this.starting.delete(browserId)
     void instance.stop()
@@ -204,6 +224,7 @@ export class HeadlessBrowserManager {
         stopping.push(starting.promise.then(() => undefined))
       }
       const instance = this.instances.get(browserId)
+      this.backing.delete(browserId)
       if (instance) {
         this.instances.delete(browserId)
         stopping.push(instance.stop())
@@ -240,4 +261,16 @@ export class HeadlessBrowserManager {
   startingCount(): number {
     return this.starting.size
   }
+}
+
+/**
+ * The device behind a card: one string per thing that would need its own
+ * instance. A Chrome is one whatever page it is on; a vphone is its machine
+ * (the bundle after it is an app on the same phone); every other use is its
+ * whole address, roi included.
+ */
+export function backingOf(node: BrowserNodeData): string {
+  const use = parseUseUrl(activeBrowserTab(node).url)
+  if (!use) return 'chrome'
+  return use.kind === 'vphone' ? `vphone://${use.name}` : useUrl(use)
 }

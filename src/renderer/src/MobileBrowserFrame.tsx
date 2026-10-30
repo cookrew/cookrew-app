@@ -1,3 +1,4 @@
+import { UseOverlay } from './use/UseOverlay'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CrIcon } from './icons'
 import {
@@ -87,7 +88,9 @@ export function MobileBrowserFrame({
   // Observers still see and drive the shared frame. The viewport owner controls
   // layout fit only; input requires a decoded, live frame at the current revision.
   const frameReady = streaming && stream.live && stream.frameUrl !== null && streamFrameLoaded
-  const interactive = frameReady && stream.canDrive
+  // A use card whose device refuses input (a Mac nobody may drive, a camera)
+  // is watched only: no pointer handlers that would send into a void.
+  const interactive = frameReady && stream.canDrive && (stream.deviceStatus?.input ?? true)
   // Mobile keyboard bridge: the stream is an image, so tapping a remote input
   // can't raise the phone keyboard. The ⌨ button focuses a hidden field within
   // the tap gesture (the only way iOS shows the keyboard) and forwards typing.
@@ -190,8 +193,11 @@ export function MobileBrowserFrame({
 
   // Headless: the live frame, else the card's picture as the poster, else
   // nothing. The legacy flag-off phone keeps its own /thumb poll while open.
-  const src =
-    fallback === 'thumb' && !streaming
+  // Reconnecting keeps the last live frame: a dropped socket is a chip, not a blank card.
+  const holdingFrame = stream.reconnecting && stream.frameUrl !== null
+  const src = holdingFrame
+    ? stream.frameUrl
+    : fallback === 'thumb' && !streaming
       ? open
         ? frameSrc(browserId, seq)
         : null
@@ -200,7 +206,13 @@ export function MobileBrowserFrame({
   // frozen frame reads as "connecting…", not an interactive surface. Headless
   // with a poster: the picture shows and the status chip says the state — the
   // glyph would only cover the one thing worth looking at.
-  const showPlaceholder = streaming ? !frameReady : fallback === 'loading' ? poster === undefined : !loaded
+  const showPlaceholder = holdingFrame
+    ? false
+    : streaming
+      ? !frameReady && !(stream.deviceStatus !== null && stream.frameUrl !== null)
+      : fallback === 'loading'
+        ? poster === undefined
+        : !loaded
   const surfaceState = streamSurfaceState({
     open,
     status: stream.status,
@@ -476,6 +488,12 @@ export function MobileBrowserFrame({
       {/* The live dot keeps the corner to itself now that the controls sit in
           the dock — nothing left up here to make room for. */}
       {frameReady && <span className="browser-frame-live" aria-hidden="true" />}
+      <UseOverlay
+        card={browserId}
+        box={fit.width > 0 ? fit : null}
+        status={stream.deviceStatus}
+        reconnecting={stream.reconnecting}
+      />
       {src && (
         <img
           className={`browser-frame-img${showPlaceholder ? '' : ' ready'}`}
