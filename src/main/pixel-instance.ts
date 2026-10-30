@@ -36,6 +36,13 @@ export const PIXEL_FAST_POLL_MS = 150
 export const PIXEL_IDLE_POLL_MS = 800
 export const PIXEL_FAST_WINDOW_MS = 3000
 export const PIXEL_HEARTBEAT_MS = 700
+/**
+ * Nobody watching: one frame every few seconds, enough for the card's
+ * thumbnail and for `screenshot`, instead of a screencapture or an adb
+ * round trip every 800 ms for a card no one has open. A viewer arriving
+ * wakes it at once (registerViewportViewer).
+ */
+export const PIXEL_UNWATCHED_POLL_MS = 5000
 /** The longest gap between two tries at an offline device. */
 export const PIXEL_MAX_BACKOFF_MS = 5000
 /**
@@ -166,7 +173,8 @@ export class PixelInstance {
     if (this.failures > 0) {
       return Math.min(PIXEL_MAX_BACKOFF_MS, PIXEL_IDLE_POLL_MS * 2 ** Math.min(this.failures - 1, 6))
     }
-    return this.now() - this.lastInputAt < PIXEL_FAST_WINDOW_MS ? PIXEL_FAST_POLL_MS : PIXEL_IDLE_POLL_MS
+    if (this.now() - this.lastInputAt < PIXEL_FAST_WINDOW_MS) return PIXEL_FAST_POLL_MS
+    return this.frameListeners.size === 0 ? PIXEL_UNWATCHED_POLL_MS : PIXEL_IDLE_POLL_MS
   }
 
   private async tick(): Promise<void> {
@@ -317,6 +325,8 @@ export class PixelInstance {
 
   registerViewportViewer(id: string): void {
     this.viewportCoordinator.registerViewer(id)
+    // A viewer arrived at a card that was idling unwatched: a frame now.
+    if (!this.closed && !this.polling) this.schedule(PIXEL_FAST_POLL_MS)
   }
 
   offerViewport(id: string, metrics: ViewportMetrics): void {

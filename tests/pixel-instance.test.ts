@@ -10,6 +10,7 @@ import {
   PIXEL_IDLE_POLL_MS,
   PIXEL_MAX_BACKOFF_MS,
   PIXEL_OPEN_TIMEOUT_MS,
+  PIXEL_UNWATCHED_POLL_MS,
   PixelInstance,
   type PixelDevice
 } from '../src/main/pixel-instance'
@@ -107,6 +108,20 @@ describe('PixelInstance', () => {
     expect(instance.status.state).toBe('live')
     expect(state.opened).toBe(2)
     expect(exited).toBe(false)
+    await instance.stop()
+  })
+
+  it('idles at one frame every few seconds while nobody watches, and wakes for a viewer', async () => {
+    const clock = manual()
+    const { device } = fakeDevice()
+    const instance = new PixelInstance({ url: 'adb://default', device, now: clock.now, schedule: clock.schedule })
+    await instance.start()
+    expect(clock.due).toBe(PIXEL_UNWATCHED_POLL_MS)
+    instance.frameListeners.add(() => undefined)
+    instance.registerViewportViewer('phone')
+    expect(clock.due).toBe(PIXEL_FAST_POLL_MS)
+    await clock.run()
+    expect(clock.due).toBe(PIXEL_IDLE_POLL_MS)
     await instance.stop()
   })
 
