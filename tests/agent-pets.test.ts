@@ -152,7 +152,7 @@ describe('where a troop sits', () => {
     const paper = readFileSync('src/renderer/src/transcript-paper.css', 'utf8')
     expect(row).toContain('<div className="ctx-chat-agent">')
     expect(row).toContain('<div className="ctx-chat-bubble">')
-    expect(paper).toMatch(/\.lod-overlay \.ctx-block-prompt \{\s*align-self: flex-end;/)
+    expect(paper).toMatch(/\.lod-overlay \.look-chat \.ctx-block-prompt \{\s*align-self: flex-end;/)
     expect(readFileSync('src/renderer/src/TerminalOverlay.tsx', 'utf8')).toContain('<TranscriptFaceContext.Provider value={chatFace}>')
   })
 })

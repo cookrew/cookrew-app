@@ -36,6 +36,7 @@ import { languageByCode } from '../../shared/translate'
 import { useCheckpointTranslation } from './use-checkpoint-translation'
 import { AgentAvatar, StatusCoin } from './nodes/AgentAvatar'
 import { TranscriptFaceContext } from './transcript-face'
+import { useTranscriptLook } from './transcript-look'
 import { TuneRail } from './nodes/TuneRail'
 import { useAgentTuning } from './nodes/use-agent-tuning'
 import { useCardRoute } from './nodes/use-card-route'
@@ -432,6 +433,8 @@ function TerminalOverlay({
   // The agent's face on its side of the chat (transcript-face.ts): one
   // element, so the memoised rows are not re-rendered by a new one each frame.
   const chatFace = useMemo(() => <AgentAvatar phase="idle" preset={node.preset} />, [node.preset])
+  // Chat or live (transcript-look.ts): one class on the transcript's box.
+  const [look, setLook] = useTranscriptLook()
   // The RTE dial (R2). A served session never gets this machine's route, so
   // it never gets the dial either (design D3).
   const routeAllowed = routeDialAllowed({ remote, served: node.servedSession != null })
@@ -960,6 +963,21 @@ function TerminalOverlay({
         {/* No model/effort chip up here: the zoomed card already says both on its tune rail
             (MDL / EFF), and the same two words twice on one screen read as two facts. */}
         <div className="popout-actions">
+          {/* The transcript as a chat with the agent, or live as it runs. */}
+          <div className="cr-viewseg popout-look" role="group" aria-label="Transcript view">
+            {(['chat', 'live'] as const).map((one) => (
+              <button
+                key={one}
+                type="button"
+                aria-pressed={look === one}
+                title={one === 'chat' ? 'Agent chat: your prompts and its replies as a conversation' : 'Live transcript: every step in order, full width'}
+                onMouseDown={keepFocus}
+                onClick={() => setLook(one)}
+              >
+                {one === 'chat' ? 'CHAT' : 'LIVE'}
+              </button>
+            ))}
+          </div>
           <TranslateButton
             active={translation.showing !== null}
             working={translation.working}
@@ -1164,7 +1182,7 @@ function TerminalOverlay({
         )}
         </div>
         )}
-        <div className={`popout-main${openItem !== null ? ' split' : ''}`}>
+        <div className={`popout-main look-${look}${openItem !== null ? ' split' : ''}`}>
         <TranscriptFaceContext.Provider value={chatFace}>
         <TranscriptView
           ref={transcriptRef}
