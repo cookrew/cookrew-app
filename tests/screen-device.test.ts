@@ -132,4 +132,22 @@ describe('ScreenDevice', () => {
     granted = false
     await expect(device.capture()).rejects.toThrow(SCREEN_RECORDING_OFF)
   })
+
+  it('a window card refuses a click where another window covers it, and keys when it is not in front', async () => {
+    // Safari (42) is listed in front of the iPad window (43): it covers part of it.
+    const { device, ops } = bed('window://Simulator/iPad')
+    await device.open()
+    await expect(device.perform({ method: 'input.tap', params: { x: 100, y: 100 } })).rejects.toThrow(/covered there by 'Safari'/)
+    await expect(device.perform({ method: 'input.type', params: { text: 'rm -rf' } })).rejects.toThrow(/not the front window, so keys would go to 'Simulator'/)
+    // Its top strip (y 60–80) is above Safari's top edge: a click there goes through.
+    await device.perform({ method: 'input.tap', params: { x: 850, y: 10 } })
+    expect(ops).toEqual([{ op: 'click', x: 1450, y: 70 }])
+  })
+
+  it('the front window takes keys', async () => {
+    const { device, ops } = bed('window://Simulator/iPhone')
+    await device.open()
+    await device.perform({ method: 'input.key', params: { name: 'return' } })
+    expect(ops).toEqual([{ op: 'key', code: 36 }])
+  })
 })

@@ -179,3 +179,32 @@ describe.skipIf(process.platform === 'win32')('a viewer on an adb phone card', (
     expect(exited).toBe(false)
   }, 30_000)
 })
+
+describe('cast.drop', () => {
+  it('closes only that card’s viewers, so they redial onto its new instance', async () => {
+    const device = {
+      target: parseUseUrl('adb://default')!,
+      open: async () => ({ width: 10, height: 10 }),
+      capture: async () => ({ jpeg: jpegOfSize(10, 10).toString('base64') })
+    }
+    const a = new PixelInstance({ url: 'adb://default', device })
+    const b = new PixelInstance({ url: 'adb://default', device })
+    cleanups.push(() => a.stop(), () => b.stop())
+    const cast = createBrowserCast({
+      enabled: () => true,
+      desktopToken: () => 'd',
+      paired: () => true,
+      getInstance: async (id) => (id === 'card-a' ? a : b)
+    })
+    cleanups.push(() => cast.shutdown())
+    const sa = socketStub()
+    const sb = socketStub()
+    cast.upgrade(req('/api/browser/card-a/stream'), sa)
+    cast.upgrade(req('/api/browser/card-b/stream'), sb)
+    await vi.waitFor(() => expect(cast.activeCount()).toBe(2))
+    cast.drop('card-a')
+    expect(sa.destroyed).toBe(true)
+    expect(sb.destroyed).toBe(false)
+    expect(cast.activeCount()).toBe(1)
+  })
+})

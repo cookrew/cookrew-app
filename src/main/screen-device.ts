@@ -90,6 +90,7 @@ export function clipRoi(area: { width: number; height: number }, roi: Roi | null
 
 export class ScreenDevice implements PixelDevice {
   private region: Region | null = null
+  private screens: MacScreens | null = null
   private listedAt = Number.NEGATIVE_INFINITY
   private readonly file: string
   private readonly now: () => number
@@ -106,6 +107,7 @@ export class ScreenDevice implements PixelDevice {
     if (!force && this.region && this.now() - this.listedAt < RELIST_MS) return this.region
     if (this.deps.screenAccess() !== 'granted') throw new Error(SCREEN_RECORDING_OFF)
     const screens = await this.deps.list()
+    this.screens = screens
     this.listedAt = this.now()
     let area: { x: number; y: number; width: number; height: number }
     let window: MacWindow | null = null
@@ -169,7 +171,11 @@ export class ScreenDevice implements PixelDevice {
   async perform(gesture: Gesture): Promise<void> {
     const refusal = this.inputRefusal()
     if (refusal) throw new Error(refusal)
-    const region = await this.resolve()
+    // A window card's input is checked against the window list AS IT IS NOW:
+    // the card shows the window even when something covers it (captured by
+    // id), but a click lands on whatever is on top and keys go to whatever
+    // has focus. Read front to back, every time.
+    const region = await this.resolve(this.target.kind === 'window')
     const at = (x: number | string, y: number | string): { x: number; y: number } => ({
       x: region.x + clamp(Number(x), 0, region.width - 1),
       y: region.y + clamp(Number(y), 0, region.height - 1)
@@ -200,7 +206,27 @@ export class ScreenDevice implements PixelDevice {
         op = { op: 'type', text: String(p.text) }
         break
     }
+    if (region.window) this.confine(region.window, op)
     await this.deps.hand().send(op)
+  }
+
+  /** Refuses an op that would land outside the card's window, in a sentence that says what is in the way. */
+  private confine(window: MacWindow, op: MacOp): void {
+    const windows = this.screens?.windows ?? []
+    const name = window.title ? `${window.app} — ${window.title}` : window.app
+    if (op.op === 'key' || op.op === 'type') {
+      const front = windows[0]
+      if (front && front.id !== window.id) {
+        throw new Error(`'${name}' is not the front window, so keys would go to '${front.app}' — tap the card first to bring it forward`)
+      }
+      return
+    }
+    const point = op.op === 'drag' ? { x: op.x1, y: op.y1 } : op.op === 'ping' ? null : { x: op.x, y: op.y }
+    if (!point) return
+    const top = windows.find((w) => point.x >= w.x && point.x < w.x + w.width && point.y >= w.y && point.y < w.y + w.height)
+    if (top && top.id !== window.id) {
+      throw new Error(`'${name}' is covered there by '${top.app}' — bring '${window.app}' to the front first`)
+    }
   }
 
   title(): string {

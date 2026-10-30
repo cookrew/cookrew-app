@@ -182,6 +182,10 @@ export class MacInput {
       }
     })
     child.on('error', () => undefined)
+    // A write to a helper that just died is EPIPE on stdin; without a
+    // listener that is an uncaught exception in main. The exit handler
+    // already failed the waiters.
+    child.stdin.on('error', () => undefined)
     child.stderr.on('data', () => undefined)
     this.child = child
     return child

@@ -5249,7 +5249,9 @@ const browserManager = new HeadlessBrowserManager({
     makeInstance: (machine) =>
       new VphoneInstance({ machine, guest: createSocketGuest(vphoneSocketPath(machine), { machine }) })
   },
-  uses: { makeInstance: (target, node) => useInstances.makeInstance(target, node) }
+  uses: { makeInstance: (target, node) => useInstances.makeInstance(target, node) },
+  // Declared below; called only after boot, never during construction.
+  onInstanceGone: (browserId) => browserCast.drop(browserId)
 })
 
 const browserCast = createBrowserCast({

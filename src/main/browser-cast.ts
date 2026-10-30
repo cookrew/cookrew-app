@@ -104,6 +104,13 @@ export interface BrowserCast {
   upgrade: (req: IncomingMessage, socket: Duplex) => void
   /** Close viewer sockets only; the node manager owns Chromium shutdown. */
   shutdown: () => void
+  /**
+   * Close one card's viewers: its instance was replaced (re-addressed to
+   * another device) or removed. Left attached they would watch a stopped
+   * instance forever; closed, each redials (useBrowserStream) and lands on
+   * the new one.
+   */
+  drop: (browserId: string) => void
   activeCount: () => number
 }
 
@@ -145,7 +152,7 @@ export function createBrowserCast(deps: BrowserCastDeps): BrowserCast {
     // Install close/error listeners BEFORE awaiting Chrome startup. Node streams
     // do not replay a close event to late listeners; this ordering closes C-1's
     // startup-disconnect leak.
-    const client = new ClientConn(socket, () => clients.delete(client))
+    const client = new ClientConn(socket, () => clients.delete(client), browserId)
     clients.add(client)
     if (socket.destroyed) {
       client.close()
@@ -165,6 +172,9 @@ export function createBrowserCast(deps: BrowserCastDeps): BrowserCast {
     upgrade,
     shutdown: () => {
       for (const client of [...clients]) client.close()
+    },
+    drop: (browserId) => {
+      for (const client of [...clients]) if (client.browserId === browserId) client.close()
     },
     activeCount: () => clients.size
   }
@@ -197,7 +207,8 @@ class ClientConn {
 
   constructor(
     private readonly socket: Duplex,
-    private readonly onClosed: () => void
+    private readonly onClosed: () => void,
+    readonly browserId: string
   ) {
     socket.on('data', this.onData)
     socket.on('close', this.close)

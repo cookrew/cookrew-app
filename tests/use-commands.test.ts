@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { BrowserInstance } from '../src/main/browser-instance'
-import { handlesUseCommand, runUseCommand, type UseCommandContext } from '../src/main/use-commands'
+import { SERVED_USE_REFUSED, handlesUseCommand, runUseCommand, servedUseRefusal, shotName, type UseCommandContext } from '../src/main/use-commands'
 import type { Gesture } from '../src/main/vphone-input'
 import type { UseSignal } from '../src/shared/use-signal'
 import { parseUseUrl } from '../src/shared/use-url'
@@ -110,3 +110,33 @@ describe('runUseCommand', () => {
     expect(signals[0].use).toBe('browser')
   })
 })
+
+describe('screenshot names', () => {
+  it('a caller picks a name, never a place', async () => {
+    const ctx = { cardName: 'Pixel 9', now: () => 7 }
+    expect(shotName(undefined, ctx)).toBe('pixel-9-7.jpg')
+    expect(shotName('login', ctx)).toBe('login.jpg')
+    expect(shotName('a.jpeg', ctx)).toBe('a.jpeg')
+    for (const bad of ['../x.jpg', '/etc/x.jpg', 'a/b.jpg', '.zshrc', '~/x.jpg', 'a..b']) expect(() => shotName(bad, ctx), bad).toThrow(/plain file name/)
+    const { instance, ctx: full } = screenCard()
+    const out = await runUseCommand('screenshot', ['login'], instance, full)
+    expect(out.split('\n')[0]).toBe(path.join(full.shotsDir, 'login.jpg'))
+  })
+})
+
+describe('servedUseRefusal', () => {
+  const cards: Record<string, string[]> = { Web: ['https://a.test'], Phone: ['adb://default'], Mixed: ['https://a.test', 'screen://main'] }
+  const urls = (name: string) => cards[name] ?? []
+  it('refuses a served caller every way onto a use, and nothing else', () => {
+    expect(servedUseRefusal(['create', 'screen://main', 'D'], urls)).toBe(SERVED_USE_REFUSED)
+    expect(servedUseRefusal(['create', 'https://x.test', 'Phone'], urls)).toBe(SERVED_USE_REFUSED)
+    expect(servedUseRefusal(['navigate', 'Web', 'cam://0'], urls)).toBe(SERVED_USE_REFUSED)
+    expect(servedUseRefusal(['tab-new', 'Web', 'window://1Password'], urls)).toBe(SERVED_USE_REFUSED)
+    expect(servedUseRefusal(['screenshot', 'Phone'], urls)).toBe(SERVED_USE_REFUSED)
+    expect(servedUseRefusal(['tab-select', 'Mixed', '2'], urls)).toBe(SERVED_USE_REFUSED)
+    expect(servedUseRefusal(['create', 'https://x.test', 'New'], urls)).toBeNull()
+    expect(servedUseRefusal(['click', 'Web', '@e1'], urls)).toBeNull()
+    expect(servedUseRefusal(['navigate', 'Web', 'https://b.test'], urls)).toBeNull()
+  })
+})
+

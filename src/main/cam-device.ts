@@ -44,6 +44,8 @@ export const CAMERA_OFF =
 export class CamDevice implements PixelDevice {
   private key: string | null = null
   private label = ''
+  /** Stopped: a camera whose open lands after this is closed at once, never left on with its light. */
+  private closed = false
 
   constructor(
     readonly target: UseTarget,
@@ -54,8 +56,14 @@ export class CamDevice implements PixelDevice {
     const access = await this.deps.cameraAccess()
     if (access === 'asking') throw new Error(CAMERA_ASKING)
     if (access !== 'granted') throw new Error(CAMERA_OFF)
-    if (this.key) await this.deps.host().close(this.key).catch(() => undefined)
+    const old = this.key
+    this.key = null
+    if (old) await this.deps.host().close(old).catch(() => undefined)
     const opened = await this.deps.host().open(this.target.name)
+    if (this.closed) {
+      await this.deps.host().close(opened.key).catch(() => undefined)
+      throw new Error('the camera card was closed')
+    }
     this.key = opened.key
     this.label = opened.label
     return { width: opened.width, height: opened.height }
@@ -72,7 +80,9 @@ export class CamDevice implements PixelDevice {
   }
 
   async close(): Promise<void> {
-    if (this.key) await this.deps.host().close(this.key)
+    this.closed = true
+    const key = this.key
     this.key = null
+    if (key) await this.deps.host().close(key)
   }
 }

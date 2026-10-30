@@ -28,6 +28,7 @@ import { planRecruitTarget } from '../shared/workspace-dirs'
 import { PtyManager, multiplexer, sessionNameFor, type PtySession } from './pty'
 import { askRaw, askTerminal, decodeRawEscapes } from './ask'
 import { browserVerbKind, noteVerbKind } from '../shared/cable-signal'
+import { servedUseRefusal } from './use-commands'
 import {
   DeliveryError,
   deliverAndConfirm,
@@ -543,6 +544,16 @@ export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): P
   const activeId = deps.store.focusedId
   const active = { id: activeId, name: workspaceName(deps, activeId) }
   const [sub, name] = request.args
+
+  // A served caller never reaches the owner's screens, cameras or phones
+  // (use-commands.ts · servedUseRefusal) — checked before anything resolves.
+  if (deps.isServed(me.id)) {
+    const refusal = servedUseRefusal(request.args, (cardName) => {
+      const card = deps.store.nodeByName(cardName, 'browser') as BrowserNodeData | undefined
+      return card ? (card.tabs ?? []).map((tab) => tab.url).concat(card.url) : []
+    })
+    if (refusal) throw new Error(refusal)
+  }
 
   // Only `create` cares where the CALLER lives: it anchors the new node to the
   // caller's position and connects the two, which is impossible across a

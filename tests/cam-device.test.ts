@@ -53,4 +53,26 @@ describe('CamDevice', () => {
     access = 'granted'
     expect(await cam.open()).toEqual({ width: 1280, height: 720 })
   })
+
+  it('a camera whose open lands after the card closed is closed at once', async () => {
+    const { log } = host()
+    let release: (() => void) | null = null
+    const slow: CameraHost = {
+      open: async () => {
+        await new Promise<void>((r) => (release = r))
+        log.push('opened late')
+        return { key: 'late', width: 1, height: 1, label: '' }
+      },
+      grab: async () => ({ jpeg: '', width: 1, height: 1 }),
+      close: async (key) => void log.push(`close ${key}`)
+    }
+    const cam = new CamDevice(parseUseUrl('cam://0')!, { host: () => slow, cameraAccess: async () => 'granted' })
+    const opening = cam.open()
+    await new Promise((r) => setTimeout(r, 0))
+    await cam.close()
+    release!()
+    await expect(opening).rejects.toThrow(/closed/)
+    expect(log).toEqual(['opened late', 'close late'])
+  })
 })
+

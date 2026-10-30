@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import type { Use, UseTarget } from '../shared/use-url'
+import { parseUseUrl, type Use, type UseTarget } from '../shared/use-url'
 import type { UsePoint, UseSignal } from '../shared/use-signal'
 import type { BrowserInstance } from './browser-instance'
 import { vphoneKeyName, type Gesture } from './vphone-input'
@@ -11,7 +11,7 @@ import { vphoneKeyName, type Gesture } from './vphone-input'
  * A web card is driven through its DOM (headless-browser-command.ts). A
  * screen has no DOM — the agent looks at it and points:
  *
- *   cookrew browser screenshot "Card" [file.jpg]  the screen, saved; says the coordinate space
+ *   cookrew browser screenshot "Card" [name.jpg]  the screen, saved under the shots folder; says the coordinate space
  *   cookrew browser tap "Card" X Y                a tap or click at viewport points
  *   cookrew browser swipe "Card" X1 Y1 X2 Y2 [ms] a swipe or drag
  *   cookrew browser type "Card" TEXT              typed into whatever has focus
@@ -102,7 +102,7 @@ export async function runUseCommand(
         const why = instance.status?.message
         throw new Error(why ? `no frame yet — ${why}` : 'no frame yet; try again in a moment')
       }
-      const file = params[0] && sub === 'screenshot' ? path.resolve(params[0]) : path.join(ctx.shotsDir, `${slug(ctx.cardName)}-${ctx.now()}.jpg`)
+      const file = path.join(ctx.shotsDir, shotName(sub === 'screenshot' ? params[0] : undefined, ctx))
       await mkdir(path.dirname(file), { recursive: true })
       await writeFile(file, Buffer.from(jpeg, 'base64'))
       signal(ctx, 'look', null, viewport)
@@ -171,4 +171,39 @@ export async function runUseCommand(
   }
 }
 
+/**
+ * The file a screenshot goes to: ALWAYS inside the shots folder. Main writes
+ * it, outside any sandbox, so a path from the caller would be a write
+ * anywhere the owner can write — a name is all a caller chooses.
+ */
+export function shotName(requested: string | undefined, ctx: Pick<UseCommandContext, 'cardName' | 'now'>): string {
+  if (requested === undefined || requested === '') return `${slug(ctx.cardName)}-${ctx.now()}.jpg`
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/.test(requested) || requested.includes('..')) {
+    throw new Error('screenshot takes a plain file name (letters, digits, . _ -); it is saved in the shots folder and the path is printed')
+  }
+  return /\.jpe?g$/i.test(requested) ? requested : `${requested}.jpg`
+}
+
 const slug = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'card'
+
+export const SERVED_USE_REFUSED =
+  "A served session cannot use this Mac's screens, cameras or phones — those belong to the owner, not to a caller"
+
+/**
+ * THE SERVED-SESSION GATE FOR USES (required, like the secrets gate).
+ *
+ * A served pane runs a CALLER's work under Seatbelt; the uses run in main,
+ * outside it, with the owner's own grants — Screen Recording, the camera,
+ * the attached phone, and with COOKREW_COMPUTER_INPUT the keyboard. So a
+ * served caller may not create or navigate a card to a use address, nor
+ * touch a card any of whose tabs is one (a tab switch would make it one).
+ * `cardUrls` answers a card's tab addresses by name, or [] for no card.
+ */
+export function servedUseRefusal(args: readonly string[], cardUrls: (name: string) => readonly string[]): string | null {
+  const [sub, first, second] = args
+  const addresses = sub === 'create' ? [first] : sub === 'navigate' || sub === 'tab-new' ? [second] : []
+  const card = sub === 'create' ? second : first
+  const all = [...addresses, ...(card ? cardUrls(card) : [])]
+  return all.some((url) => typeof url === 'string' && parseUseUrl(url) !== null) ? SERVED_USE_REFUSED : null
+}
+

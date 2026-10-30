@@ -45,6 +45,8 @@ export interface HeadlessBrowserManagerDeps {
    * phone, a camera. Absent, or answering null, the card is unavailable.
    */
   uses?: { makeInstance: (target: UseTarget, node: BrowserNodeData) => BrowserInstance | null }
+  /** A card's instance is gone — replaced, removed or exited: its viewers are let go (browser-cast drop). */
+  onInstanceGone?: (browserId: string) => void
 }
 
 interface StartingEntry {
@@ -100,6 +102,7 @@ export class HeadlessBrowserManager {
       this.instances.delete(node.id)
       this.backing.delete(node.id)
       await live.stop()
+      this.deps.onInstanceGone?.(node.id)
     }
     const instance = await this.ensure(node.id)
     if (!instance) return null
@@ -205,6 +208,7 @@ export class HeadlessBrowserManager {
     if (this.instances.get(browserId) === instance) {
       this.instances.delete(browserId)
       this.backing.delete(browserId)
+      this.deps.onInstanceGone?.(browserId)
     }
     const starting = this.starting.get(browserId)
     if (starting?.instance === instance) this.starting.delete(browserId)
@@ -230,6 +234,7 @@ export class HeadlessBrowserManager {
         stopping.push(instance.stop())
       }
       await Promise.all(stopping)
+      if (instance) this.deps.onInstanceGone?.(browserId)
     })()
     this.stopping.set(browserId, operation)
     try {

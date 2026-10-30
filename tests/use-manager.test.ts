@@ -34,7 +34,9 @@ function bed(url: string) {
   const nodes = new Map([['card-1', card(url)]])
   const chrome = vi.fn(() => fake())
   const made: Array<{ target: UseTarget; instance: BrowserInstance }> = []
+  const gone: string[] = []
   const manager = new HeadlessBrowserManager({
+    onInstanceGone: (id) => void gone.push(id),
     enabled: () => true,
     chromePath: () => '/fake/chrome',
     profileRoot: () => '/profiles',
@@ -51,7 +53,7 @@ function bed(url: string) {
       }
     }
   })
-  return { manager, chrome, made, nodes }
+  return { manager, chrome, made, nodes, gone }
 }
 
 describe('a use card', () => {
@@ -63,15 +65,18 @@ describe('a use card', () => {
     expect(chrome).not.toHaveBeenCalled()
   })
 
-  it('re-addressed to another device: the old one is stopped, the new one made', async () => {
-    const { manager, made } = bed('adb://default')
+  it('re-addressed to another device: the old one is stopped, its viewers let go, the new one made', async () => {
+    const { manager, made, gone } = bed('adb://default')
     await manager.syncNode(card('adb://default'))
     await manager.syncNode(card('adb://default'))
     expect(made).toHaveLength(1)
     const second = await manager.syncNode(card('window://Simulator'))
     expect(made).toHaveLength(2)
     expect(made[0].instance.stop).toHaveBeenCalled()
+    expect(gone).toEqual(['card-1'])
     expect(second).toBe(made[1].instance)
+    await manager.remove('card-1')
+    expect(gone).toEqual(['card-1', 'card-1'])
   })
 
   it('a web card navigating between pages keeps its one Chrome', async () => {
