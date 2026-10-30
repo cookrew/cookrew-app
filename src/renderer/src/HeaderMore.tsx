@@ -36,7 +36,6 @@ interface HeaderMoreProps {
 
 const DEPRECATED_VIEWS: ReadonlyArray<{ view: MainView; icon: 'levels' | 'canvas' | 'agent'; label: string }> = [
   { view: 'levels', icon: 'levels', label: 'Levels' },
-  { view: 'canvas', icon: 'canvas', label: 'Canvas' },
   { view: 'agents', icon: 'agent', label: 'Board' }
 ]
 

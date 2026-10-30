@@ -1,19 +1,15 @@
 // THE STAGE: levels, canvas and board as one view (2026-10-30).
 //
 // Its levels follow the header's route (stage-select.ts): every device, every
-// workspace as a thumbnail (StageMap.tsx), then one workspace in columns, then
-// one card zoomed in. Below is the workspace in columns.
+// workspace as a thumbnail (StageMap.tsx), then one workspace, then one card
+// zoomed in. Below is the workspace.
 //
-// Three columns. On the left, every browser and note of the workspace; on
-// the right, every agent; in the middle, the one you are looking at — an
-// agent's terminal (the zoomed view the canvas had) or a browser or note
-// itself. The side columns filter each other through the canvas wiring
-// (stage-select.ts): pick an agent and the left shows its browsers and notes,
-// pick a browser or note and the right shows its agents. With nothing picked,
-// the middle follows what needs you (stage-pick.ts).
-//
-// There is no canvas to pan and no zoom: the canvas keeps running underneath,
-// so its live panes never remount, and the old views are in the More menu.
+// One card, the whole width: an agent's terminal (the zoomed view the canvas
+// had) or a browser or note itself. With nothing picked, it follows what needs
+// you (stage-pick.ts). The side columns are retired (2026-10-30): the agents
+// and the browsers and notes ride over every page as pets instead (pets/),
+// on the bed this view keeps clear along its bottom. There is no canvas under
+// it any more either: it is not rendered, so it costs nothing.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { activeBrowserTab, type TerminalNodeData, type WorkspaceState } from '../../../shared/model'
 import type { AgentRow } from '../agent-rows'
@@ -21,9 +17,8 @@ import { attachView, useAttachView } from '../attach-view'
 import { SideTabsContext, type AttachmentIndex } from '../terminal-attachments'
 import { useCrewRows } from './crew-rows'
 import { diffPopped, pickBackground, railOrder, type PoppedItem, type StageItem, type StageTarget } from './stage-pick'
-import { agentLinks, firstLine, hostPath, ownersOf, stageColumns, stageSelect, useStageLevel, useStageSelection, type StageItemCard } from './stage-select'
+import { firstLine, hostPath, ownersOf, stageSelect, useStageLevel, useStageSelection, type StageItemCard } from './stage-select'
 import { StageMap } from './StageMap'
-import { AgentColumn, ItemColumn } from './StageColumns'
 import { StageItemPane } from './StageItemPane'
 import { StageTerminal } from './StageTerminal'
 import './stage.css'
@@ -82,12 +77,6 @@ export function StageView({
     return out
   }, [workspace, owners])
 
-  const counts = useMemo(() => {
-    const out = new Map<string, { browsers: number; notes: number }>()
-    for (const [id, list] of attachIndex) out.set(id, { browsers: list.filter((a) => a.kind === 'browser').length, notes: list.filter((a) => a.kind === 'note').length })
-    return out
-  }, [attachIndex])
-
   const fresh = useMemo(() => popped.filter((p) => now - p.at < POP_FRESH_MS), [popped, now])
   const pin = selection.kind === 'agent' ? { terminalId: selection.id, item: null } : null
   const target = useMemo(() => (selection.kind === 'item' ? null : pickBackground(agents, fresh, pin)), [selection, agents, fresh, pin?.terminalId])
@@ -97,11 +86,8 @@ export function StageView({
     if (selection.kind === 'item' && pickedItem === null) stageSelect.clear()
   }, [selection, pickedItem])
 
-  const links = useMemo(() => agentLinks(workspace?.connections ?? [], new Set(agents.map((a) => a.id))), [workspace?.connections, agents])
-  const columns = useMemo(() => stageColumns(selection, items, agents, attachIndex, links), [selection, items, agents, attachIndex, links])
   const level = useStageLevel()
   const view = useAttachView()
-  const openInTerminal = target && view?.terminalId === target.terminalId ? view.itemId : null
 
   const shown = target ? (faces.get(target.terminalId) ?? null) : null
   const showing =
@@ -119,28 +105,12 @@ export function StageView({
   }, [showing, onShowing])
   useEffect(() => () => onShowing(null), [onShowing])
 
-  const pickAgent = useCallback((row: AgentRow) => stageSelect.set({ kind: 'agent', id: row.id }), [])
-  const pickItem = useCallback(
-    (item: StageItemCard) => {
-      // The picked agent's own item opens under its transcripts; anything else takes the middle.
-      if (selection.kind === 'agent' && item.owners.includes(selection.id)) attachView.toggle(selection.id, item.id, item.kind)
-      else if (selection.kind === 'item' && selection.id === item.id) stageSelect.clear()
-      else stageSelect.set({ kind: 'item', id: item.id })
-    },
-    [selection]
-  )
   const back = useCallback(() => stageSelect.clear(), [])
   // You touched it: it stays. A new arrival waits on its card instead of
   // taking the middle from under your hands.
   const hold = (): void => {
     if (selection.kind === 'auto' && target) stageSelect.set({ kind: 'agent', id: target.terminalId })
   }
-
-  // Zoomed in, both heads say what they are filtered by: the card in the middle.
-  const focus = columns.focus
-  const focusName = focus === null ? null : focus.kind === 'agent' ? (faces.get(focus.id)?.name ?? '…') : (items.find((i) => i.id === focus.id)?.title ?? '…')
-  // The workspace level marks the card that needs you, on its column too.
-  const hot = selection.kind === 'auto' && target && target.why !== 'latest' && target.why !== 'pinned' ? target : null
 
   if (level !== 'workspace') {
     return (
@@ -151,16 +121,7 @@ export function StageView({
   }
 
   return (
-    <div className="cr-stage-view" data-why={pickedItem ? 'item' : (target?.why ?? 'none')}>
-      <ItemColumn
-        items={columns.items}
-        head={{ title: 'Browsers & notes', total: columns.items.length, filter: focusName, onClear: back }}
-        selected={pickedItem?.id ?? null}
-        open={openInTerminal}
-        hot={hot?.item?.id ?? null}
-        faces={faces}
-        onPick={pickItem}
-      />
+    <div className="cr-stage-view bedded" data-why={pickedItem ? 'item' : (target?.why ?? 'none')}>
       <div className="cr-stage-main" onPointerDownCapture={hold} onKeyDownCapture={hold}>
         {pickedItem ? (
           <StageItemPane key={pickedItem.id} item={pickedItem} onClose={back} />
@@ -179,16 +140,6 @@ export function StageView({
         )}
         {target && !pickedItem && <StageWhyLine target={target} />}
       </div>
-      <AgentColumn
-        rows={columns.agents}
-        head={{ title: 'Agents', total: columns.agents.length, filter: focusName, onClear: back }}
-        hot={hot?.terminalId ?? null}
-        now={now}
-        current={pickedItem ? null : (target?.terminalId ?? null)}
-        auto={selection.kind === 'auto'}
-        counts={counts}
-        onPick={pickAgent}
-      />
     </div>
   )
 }

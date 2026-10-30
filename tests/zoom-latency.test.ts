@@ -81,11 +81,11 @@ const src = (path: string): string =>
     .replace(/^\s*\/\/.*$/gm, '')
 
 describe('who watches the viewport every frame', () => {
-  it('is LodOverlays, a leaf — never Canvas', () => {
+  it('is nobody in App — and with the canvas retired, LodOverlays is not mounted either', () => {
     const app = src('App.tsx')
     expect(app).not.toMatch(/useLodLayout\(/)
     expect(app).not.toMatch(/useViewport\(/)
-    expect(app).toMatch(/<LodOverlays/)
+    expect(app).not.toMatch(/<LodOverlays[\s>]/)
     expect(src('LodOverlays.tsx')).toMatch(/useLodLayout\(/)
   })
 

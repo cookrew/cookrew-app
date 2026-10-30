@@ -71,7 +71,7 @@ const bar = (avatar: React.ReactNode): string =>
       terminalCount={2}
       busyCount={0}
       attentionCount={0}
-      view="canvas"
+      view="stage"
       onViewChange={() => undefined}
       onWall={() => undefined}
       onResync={() => undefined}

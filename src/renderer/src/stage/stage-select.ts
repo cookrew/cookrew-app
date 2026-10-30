@@ -102,56 +102,6 @@ export function ownersOf(index: AttachmentIndex): Map<string, string[]> {
   return out
 }
 
-export interface StageColumns {
-  items: StageItemCard[]
-  agents: AgentRow[]
-  /** The card zoomed in: both sides keep only what is wired to it. */
-  focus: { kind: 'agent' | 'item'; id: string } | null
-}
-
-/**
- * What each side column shows for a selection. Order is kept: the caller's
- * order is the column's. `links` are the agent-to-agent cables.
- */
-export function stageColumns(
-  selection: StageSelection,
-  items: readonly StageItemCard[],
-  agents: readonly AgentRow[],
-  index: AttachmentIndex,
-  links: ReadonlyMap<string, ReadonlySet<string>> = new Map()
-): StageColumns {
-  if (selection.kind === 'agent' && agents.some((a) => a.id === selection.id)) {
-    const mine = new Set((index.get(selection.id) ?? []).map((a) => a.node.id))
-    const near = new Set<string>([selection.id, ...(links.get(selection.id) ?? [])])
-    for (const item of items) if (mine.has(item.id)) for (const owner of item.owners) near.add(owner)
-    return {
-      // Newest wire first, as the agent's own list has them.
-      items: (index.get(selection.id) ?? []).flatMap((a) => items.filter((i) => i.id === a.node.id)),
-      agents: agents.filter((a) => near.has(a.id)),
-      focus: { kind: 'agent', id: selection.id }
-    }
-  }
-  if (selection.kind === 'item') {
-    const item = items.find((i) => i.id === selection.id)
-    if (item) {
-      const wired = new Set(item.owners)
-      return { items: [item], agents: agents.filter((a) => wired.has(a.id)), focus: { kind: 'item', id: item.id } }
-    }
-  }
-  return { items: [...items], agents: [...agents], focus: null }
-}
-
-/** agent id → the agents a cable joins it to, either way. */
-export function agentLinks(connections: readonly { a: string; b: string }[], agentIds: ReadonlySet<string>): Map<string, Set<string>> {
-  const out = new Map<string, Set<string>>()
-  for (const { a, b } of connections) {
-    if (!agentIds.has(a) || !agentIds.has(b) || a === b) continue
-    out.set(a, (out.get(a) ?? new Set()).add(b))
-    out.set(b, (out.get(b) ?? new Set()).add(a))
-  }
-  return out
-}
-
 /** A note's first line worth reading: not blank, not a heading mark alone. */
 export function firstLine(text: string): string {
   for (const raw of text.split('\n')) {

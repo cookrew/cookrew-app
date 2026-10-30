@@ -418,7 +418,7 @@ async function idle(page, ms) {
 
 /** The header's view switch: the segment button whose label says the view. */
 const BOARD_CLICK = (view) => `(() => {
-  const label = ${JSON.stringify(view === 'agents' ? 'Board' : 'Canvas')}
+  const label = ${JSON.stringify(view === 'agents' ? 'Board' : 'Stage')}
   const button = [...document.querySelectorAll('.cr-viewseg button')].find(
     (b) => (b.querySelector('.cr-viewseg-label')?.textContent || '').trim() === label
   )
@@ -427,17 +427,21 @@ const BOARD_CLICK = (view) => `(() => {
   return true
 })()`
 
+/**
+ * The app is up: a canvas card, or — with the canvas retired (2026-10-30) and
+ * not rendered — the stage. Named for what it waited on first.
+ */
 export async function waitForCanvas(page, timeoutMs = 150_000, settleMs = 2500) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    const cards = await page.evaluate("document.querySelectorAll('.react-flow__node').length").catch(() => 0)
+    const cards = await page.evaluate("document.querySelectorAll('.react-flow__node, .cr-stage-view').length").catch(() => 0)
     if (cards > 0) {
       await sleep(settleMs) // thumbs, checkpoints and the first activity seed
       return cards
     }
     await sleep(250)
   }
-  throw new Error('the canvas never showed a card')
+  throw new Error('the app never showed a card or the stage')
 }
 
 // ---------------------------------------------------------------------------
@@ -608,7 +612,7 @@ export async function measureCompanion(
     if (opened) {
       await sleep(2000)
       result.board = { open: { dom: await page.evaluate(CENSUS), layers: await layers(), metrics: await metrics(page) } }
-      await page.evaluate(BOARD_CLICK('canvas'))
+      await page.evaluate(BOARD_CLICK('stage'))
       await sleep(1500)
       await page.send('HeapProfiler.collectGarbage').catch(() => undefined)
       await sleep(500)
