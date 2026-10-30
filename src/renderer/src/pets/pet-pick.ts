@@ -8,7 +8,8 @@ import type { AgentRow } from '../agent-rows'
  * then whoever is working, then whoever finished lately. When that leaves
  * fewer than a handful, the most recently active of the rest sit in as well,
  * asleep, so the troop never vanishes from a quiet workspace. Everyone else
- * is one tap away behind the "+N" coin.
+ * is one tap away behind the "+N" coin. The browsers and notes ride the same
+ * way, in a troop of their own (pickItems).
  *
  * Pure, so the order and the geometry are tested without a DOM.
  */
@@ -70,19 +71,76 @@ export const pickPets = (
   return { pets: all.slice(0, shown), more: all.slice(shown) }
 }
 
-/** Where the troop sits: its right and bottom offsets from the viewport's corner. */
+/** Pets on a phone before the "+N" coin: two troops share one row there. */
+export const PET_MAX_PHONE = 3
+
+/** How many pets a troop shows on a screen this wide (the app's 700px phone breakpoint). */
+export const petMax = (width: number): number => (width <= 700 ? PET_MAX_PHONE : PET_MAX)
+
+/** A browser or note, as far as choosing it needs. */
+export interface ItemLite {
+  readonly id: string
+  readonly kind: 'browser' | 'note'
+}
+
+/**
+ * Which browsers and notes ride along: the ones of the agent on stage first,
+ * then those of the agents that are working or need you (in that order),
+ * then the newest of the workspace. Items carry no clock of their own, so
+ * "newest" is the order `items` arrives in (newest first).
+ */
+export const pickItems = <T extends ItemLite>(
+  items: readonly T[],
+  options: {
+    /** item id → the agents wired to it. */
+    readonly owners: ReadonlyMap<string, readonly string[]>
+    /** Agents that matter now, most first: the one on stage, then the busy ones. */
+    readonly focus: readonly string[]
+    readonly max?: number
+  }
+): { readonly shown: readonly T[]; readonly more: readonly T[] } => {
+  const max = options.max ?? PET_MAX
+  const rank = new Map(options.focus.map((id, index) => [id, index]))
+  const scoreOf = (item: T): number =>
+    Math.min(Infinity, ...(options.owners.get(item.id) ?? []).map((owner) => rank.get(owner) ?? Infinity))
+  const ordered = items
+    .map((item, index) => ({ item, index, score: scoreOf(item) }))
+    .sort((a, b) => a.score - b.score || a.index - b.index)
+    .map((entry) => entry.item)
+  return { shown: ordered.slice(0, max), more: ordered.slice(max) }
+}
+
+/**
+ * A browser's face when the Mac has no picture of its page: the site's own
+ * icon. The Mac photographs only pages that are already running (a thumbnail
+ * must never be what launches a browser), so after a restart most cards have
+ * no picture until they are opened. Null for anything that has no site to
+ * ask (about:blank, a file, a page on this machine).
+ */
+export const faviconOf = (url: string): string | null => {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null
+    const host = parsed.hostname
+    if (!host.includes('.') || host === 'localhost' || host.startsWith('127.')) return null
+    // https only: an http icon on the https page is blocked as mixed content.
+    return `https://${parsed.host}/favicon.ico`
+  } catch {
+    return null
+  }
+}
+
+/** Where a troop sits: `x` in from its own side of the screen, `bottom` up from the bottom. */
 export interface PetSpot {
-  readonly right: number
+  readonly x: number
   readonly bottom: number
 }
 
-/** Above the dock, in from the right edge. */
-export const PET_HOME: PetSpot = { right: 18, bottom: 78 }
-/** The phone: on the right edge, over the agents column, clear of the strip and the dock. */
-export const PET_HOME_PHONE: PetSpot = { right: 7, bottom: 96 }
+/** The troops' bed: the strip the stage keeps clear for them, just above the dock. */
+export const PET_BED = 50
 
-/** Home for a screen this wide (the phone breakpoint is the app's 700px). */
-export const petHome = (width: number): PetSpot => (width <= 700 ? PET_HOME_PHONE : PET_HOME)
+/** Home: on the bed, in from the side, wherever the stage ends. */
+export const petHome = (stageBottomGap: number): PetSpot => ({ x: 8, bottom: Math.max(6, Math.round(stageBottomGap) + 7) })
 
 /** Keep the troop on screen, whatever was saved or wherever it was dragged. */
 export const clampSpot = (
@@ -90,20 +148,20 @@ export const clampSpot = (
   troop: { readonly width: number; readonly height: number },
   viewport: { readonly width: number; readonly height: number }
 ): PetSpot => ({
-  right: Math.round(Math.min(Math.max(spot.right, 4), Math.max(4, viewport.width - troop.width - 4))),
+  x: Math.round(Math.min(Math.max(spot.x, 4), Math.max(4, viewport.width - troop.width - 4))),
   bottom: Math.round(Math.min(Math.max(spot.bottom, 4), Math.max(4, viewport.height - troop.height - 4)))
 })
 
-/** A saved spot, or home when there is none or it is not one. */
-export const readSpot = (raw: string | null, home: PetSpot = PET_HOME): PetSpot => {
-  if (!raw) return home
+/** A saved spot, or null when there is none or it is not one. */
+export const readSpot = (raw: string | null): PetSpot | null => {
+  if (!raw) return null
   try {
     const value = JSON.parse(raw) as Partial<PetSpot>
-    return typeof value.right === 'number' && typeof value.bottom === 'number' && Number.isFinite(value.right) && Number.isFinite(value.bottom)
-      ? { right: value.right, bottom: value.bottom }
-      : home
+    return typeof value.x === 'number' && typeof value.bottom === 'number' && Number.isFinite(value.x) && Number.isFinite(value.bottom)
+      ? { x: value.x, bottom: value.bottom }
+      : null
   } catch {
-    return home
+    return null
   }
 }
 

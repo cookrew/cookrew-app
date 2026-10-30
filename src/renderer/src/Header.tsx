@@ -14,7 +14,7 @@ import './header.css'
  * board merged into one (2026-10-30). The other three are DEPRECATED: kept
  * reachable from the More menu, not developed further.
  */
-export type MainView = 'stage' | 'levels' | 'canvas' | 'agents'
+export type MainView = 'stage' | 'levels' | 'agents'
 
 interface HeaderProps {
   workspaceName: string

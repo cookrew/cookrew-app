@@ -1,22 +1,25 @@
-// THE AGENTS AS PETS (renderer pets/): small round avatars over every page.
-// Which agents ride along, in what order, and where the troop and a card may
-// sit are pure rules, pinned here; the wiring is pinned by its source.
+// THE PETS (renderer pets/): the agents, and the browsers and notes, as small
+// round faces over every page, with the canvas and the stage's side columns
+// retired (2026-10-30). Which ride along, in what order, and where a troop and
+// a card may sit are pure rules, pinned here; the wiring by its source.
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import type { AgentRow } from '../src/renderer/src/agent-rows'
 import {
   PET_DONE_FRESH_MS,
-  PET_HOME,
-  PET_HOME_PHONE,
   PET_MAX,
+  PET_MAX_PHONE,
   PET_MIN,
   cardPlacement,
   clampSpot,
   moodOf,
   petHome,
+  petMax,
+  pickItems,
   pickPets,
   readSpot
 } from '../src/renderer/src/pets/pet-pick'
+import { THUMB_WANTS_MAX, thumbWants } from '../src/renderer/src/pets/thumb-wants'
 
 const NOW = 10_000_000
 const row = (id: string, phase: AgentRow['phase'], ago: number, over: Partial<AgentRow> = {}): AgentRow => ({
@@ -82,24 +85,58 @@ describe('who rides along', () => {
   })
 })
 
-describe('where the troop sits', () => {
+describe('which browsers and notes ride along', () => {
+  const items = [
+    { id: 'n-new', kind: 'note' as const },
+    { id: 'b-mine', kind: 'browser' as const },
+    { id: 'b-busy', kind: 'browser' as const },
+    { id: 'n-old', kind: 'note' as const }
+  ]
+  const owners = new Map([
+    ['b-mine', ['agent-on-stage']],
+    ['b-busy', ['agent-busy']]
+  ])
+
+  it("the agent on stage's first, then the busy agents', then the newest", () => {
+    const picked = pickItems(items, { owners, focus: ['agent-on-stage', 'agent-busy'], max: 3 })
+    expect(picked.shown.map((item) => item.id)).toEqual(['b-mine', 'b-busy', 'n-new'])
+    expect(picked.more.map((item) => item.id)).toEqual(['n-old'])
+  })
+
+  it('with nobody in focus, simply the newest', () => {
+    expect(pickItems(items, { owners, focus: [] }).shown.map((item) => item.id)).toEqual(['n-new', 'b-mine', 'b-busy', 'n-old'])
+  })
+
+  it('a phone shows fewer of each, so both troops fit one row', () => {
+    expect(petMax(412)).toBe(PET_MAX_PHONE)
+    expect(petMax(1440)).toBe(PET_MAX)
+  })
+
+  it('asks for pictures of the faces it shows, never of a whole expanded troop', () => {
+    thumbWants.set(Array.from({ length: 40 }, (_, n) => `b${n}`))
+    expect(thumbWants.ids()).toHaveLength(THUMB_WANTS_MAX)
+    thumbWants.set([])
+  })
+})
+
+describe('where a troop sits', () => {
   it('is kept on screen however far it is dragged', () => {
     const troop = { width: 300, height: 50 }
     const view = { width: 1000, height: 800 }
-    expect(clampSpot({ right: -50, bottom: 9999 }, troop, view)).toEqual({ right: 4, bottom: 746 })
-    expect(clampSpot({ right: 900, bottom: -3 }, troop, view)).toEqual({ right: 696, bottom: 4 })
+    expect(clampSpot({ x: -50, bottom: 9999 }, troop, view)).toEqual({ x: 4, bottom: 746 })
+    expect(clampSpot({ x: 900, bottom: -3 }, troop, view)).toEqual({ x: 696, bottom: 4 })
   })
 
-  it('goes home when nothing, or nothing sensible, was saved', () => {
-    expect(readSpot(null)).toEqual(PET_HOME)
-    expect(readSpot('{"right":"x"}')).toEqual(PET_HOME)
-    expect(readSpot('not json', PET_HOME_PHONE)).toEqual(PET_HOME_PHONE)
-    expect(readSpot('{"right":30,"bottom":40}')).toEqual({ right: 30, bottom: 40 })
+  it('remembers a spot it was dragged to, and nothing that is not one', () => {
+    expect(readSpot(null)).toBeNull()
+    expect(readSpot('{"right":30,"bottom":40}')).toBeNull()
+    expect(readSpot('not json')).toBeNull()
+    expect(readSpot('{"x":30,"bottom":40}')).toEqual({ x: 30, bottom: 40 })
   })
 
-  it('stands on the right edge of a phone, clear of the prompt line', () => {
-    expect(petHome(412)).toBe(PET_HOME_PHONE)
-    expect(petHome(1440)).toBe(PET_HOME)
+  it("is home on the stage's bed, wherever the stage ends", () => {
+    expect(petHome(56)).toEqual({ x: 8, bottom: 63 })
+    expect(petHome(0)).toEqual({ x: 8, bottom: 7 })
   })
 })
 
@@ -121,21 +158,52 @@ describe("where a pet's card opens", () => {
 })
 
 describe('the wiring', () => {
-  const pets = readFileSync('src/renderer/src/pets/AgentPets.tsx', 'utf8')
+  const agents = readFileSync('src/renderer/src/pets/AgentPets.tsx', 'utf8')
+  const items = readFileSync('src/renderer/src/pets/ItemPets.tsx', 'utf8')
+  const troop = readFileSync('src/renderer/src/pets/PetTroop.tsx', 'utf8')
   const app = readFileSync('src/renderer/src/App.tsx', 'utf8')
+  const css = readFileSync('src/renderer/src/pets/pets.css', 'utf8')
 
-  it('rides over every page: mounted once in App, portalled to the body, under the scrims', () => {
-    expect(app).toContain('<AgentPets workspace={workspace} workspaceId={activeWsId} onOpen={(row) => void zoomToNode(row.id)} />')
-    expect(pets).toContain('document.body')
-    const css = readFileSync('src/renderer/src/pets/pets.css', 'utf8')
+  it('both troops ride over every page: mounted in App, portalled to the body, under the scrims', () => {
+    expect(app).toContain('<AgentPets workspace={workspace} workspaceId={activeWsId} onOpen={zoomToNode} />')
+    expect(app).toContain('<ItemPets')
+    expect(troop).toContain('document.body')
     expect(css).toMatch(/\.cr-pets \{[^}]*z-index: 55;/)
   })
 
   it('prompts the way the voice bar does: the words, then Enter on its own', () => {
-    expect(pets).toMatch(/ptyInput\(row\.id, text\)\s+cookrew\(\)\.ptyInput\(row\.id, '\\r'\)/)
+    expect(agents).toMatch(/ptyInput\(row\.id, text\)\s+cookrew\(\)\.ptyInput\(row\.id, '\\r'\)/)
   })
 
-  it('reads one tail, for the card that is open, never the whole board again', () => {
-    expect(pets).toContain('useStreamTails(useMemo(() => (openId ? [openId] : []), [openId]))')
+  it('reads a tail only for the card that is open, never the whole board', () => {
+    expect(agents).toContain('useStreamTails(useMemo(() => (live ? [] : [row.id]), [live, row.id]))')
+    expect(agents).not.toContain('useCrewRows')
+  })
+
+  it("a browser's face is its page's picture, and the producers are fed from the faces", () => {
+    expect(items).toContain('<img className="cr-pet-thumb" src={thumb}')
+    expect(items).toContain('thumbWants.set(')
+    expect(app.match(/thumbWants\.ids\(\)/g)).toHaveLength(2)
+  })
+})
+
+describe('the canvas and the side columns are retired', () => {
+  const app = readFileSync('src/renderer/src/App.tsx', 'utf8')
+  const stage = readFileSync('src/renderer/src/stage/StageView.tsx', 'utf8')
+  const header = readFileSync('src/renderer/src/Header.tsx', 'utf8')
+
+  it('the canvas is not rendered, nor its overlay layer: it costs no CPU or GPU', () => {
+    expect(app).not.toMatch(/<ReactFlow[\s>]/)
+    expect(app).not.toMatch(/<LodOverlays[\s>]/)
+    expect(header).toContain("export type MainView = 'stage' | 'levels' | 'agents'")
+  })
+
+  it('every card opens on the stage, wherever it was asked for from', () => {
+    expect(app).toMatch(/const zoomToNode = useCallback\([\s\S]{0,1200}stageSelect\.set\([\s\S]{0,200}if \(viewRef\.current !== 'stage'\) setView\('stage'\)/)
+  })
+
+  it('the stage is one card wide, with a bed for the pets', () => {
+    expect(stage).not.toMatch(/AgentColumn|ItemColumn/)
+    expect(stage).toContain('cr-stage-view bedded')
   })
 })

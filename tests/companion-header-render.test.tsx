@@ -43,7 +43,7 @@ const bar = (): string =>
       terminalCount={2}
       busyCount={0}
       attentionCount={0}
-      view="canvas"
+      view="agents"
       onViewChange={() => undefined}
       onWall={() => undefined}
       onResync={() => undefined}

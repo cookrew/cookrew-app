@@ -1,8 +1,9 @@
-/* ---- THE AGENTS AS PETS (AgentPets.tsx) ----
-   A troop of round faces over every page: above the canvas, the stage, the
-   levels, the board, the header and the dock (50), under every scrim and
-   sheet (60 and up). Drawn with the app's tokens, so it is paper by day and
-   night paper on a dark phone (night.css). */
+/* ---- THE PETS (PetTroop.tsx: AgentPets on the right, ItemPets on the left) ----
+   Troops of round faces over every page: above the stage, the levels, the
+   board, the header and the dock (50), under every scrim and sheet (60 and
+   up). Home is the stage's bed, the strip it keeps clear above the dock.
+   Drawn with the app's tokens, so they are paper by day and night paper on a
+   dark phone (night.css). */
 .cr-pets {
   position: fixed;
   z-index: 55;
@@ -19,9 +20,15 @@
   -webkit-user-select: none;
 }
 
+.cr-pets.left {
+  padding: 5px 4px 5px 7px;
+}
+
 .cr-pets.expanded {
   flex-wrap: wrap;
   max-width: min(420px, calc(100vw - 16px));
+  max-height: min(360px, calc(100vh - 140px));
+  overflow-y: auto;
   border-radius: 22px;
 }
 
@@ -177,6 +184,50 @@
   }
 }
 
+/* A browser: a tiny picture of its page. A note: its first letter on note paper. */
+.cr-pet.item {
+  animation: none;
+  overflow: hidden;
+}
+
+.cr-pet.item.browser {
+  border-color: #93c5fd;
+}
+
+.cr-pet.item.note {
+  border-color: #fcd34d;
+  background: var(--note-bg);
+}
+
+.cr-pet.item.mine {
+  box-shadow: 0 0 0 2px var(--amber);
+}
+
+.cr-pet.item .cr-icon {
+  width: 15px;
+  height: 15px;
+}
+
+.cr-pet-thumb {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  object-position: top center;
+}
+
+/* The site's icon, while the Mac has no picture of the page. */
+.cr-pet-icon {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}
+
+.cr-pet-note-face {
+  font: 700 14px var(--font-mono);
+  color: var(--note-text);
+}
+
 /* ---- a pet's card ---- */
 .cr-pet-card {
   position: fixed;
@@ -281,6 +332,55 @@
   scrollbar-width: thin;
 }
 
+.cr-pet-card-face.item {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+}
+
+.cr-pet-card-shot {
+  display: grid;
+  place-items: center;
+  min-height: 90px;
+  max-height: 210px;
+  overflow: hidden;
+  border: 1.5px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--cream);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cr-pet-card-shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  object-fit: cover;
+  object-position: top center;
+}
+
+.cr-pet-card-url {
+  font: 11.5px/1.3 var(--font-mono);
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cr-pet-card-note {
+  max-height: 200px;
+  margin: 0;
+  overflow: auto;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: var(--note-bg);
+  color: var(--note-text);
+  font: 12px/1.45 var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .cr-pet-card-empty {
   font-size: 12.5px;
   color: var(--muted);
@@ -341,27 +441,7 @@
   }
 }
 
-/* The phone: the troop stands up on the right edge, over the agents column
-   (which lists the same agents), not across the bottom of the terminal,
-   where the prompt line is. */
 @media (max-width: 700px) {
-  .cr-pets {
-    flex-direction: column;
-    gap: 5px;
-    padding: 4px 4px 6px;
-    border-radius: 24px;
-  }
-  .cr-pets.expanded {
-    flex-wrap: wrap-reverse;
-    max-width: none;
-    max-height: min(420px, calc(100vh - 160px));
-    border-radius: 24px;
-  }
-  .cr-pets-grip {
-    width: 30px;
-    height: 14px;
-    rotate: 90deg;
-  }
   .cr-pet {
     width: 34px;
     height: 34px;
