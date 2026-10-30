@@ -7291,6 +7291,17 @@ function registerIpc(handlers: RestoreHandlers): void {
   })
   // The popout detaches on close; without this the forwarder would keep
   // serializing every output chunk to a channel nobody listens on.
+  // History for this window's live terminal (PtySession.seedFrame): sent down
+  // ITS OWN data channel, so it lands in order with the deltas around it and
+  // goes to no other viewer.
+  ipcMain.handle('pty:seed', async (event, terminalId: string, nonce: string, lines: number) => {
+    const session = ptys.get(terminalId)
+    if (!session || typeof nonce !== 'string' || !/^[A-Za-z0-9-]{1,64}$/.test(nonce)) return false
+    const frame = await session.seedFrame(Number(lines) || 0, nonce)
+    if (frame === null || event.sender.isDestroyed()) return false
+    event.sender.send(`pty:data:${terminalId}`, frame)
+    return true
+  })
   ipcMain.on('pty:detach', (event, terminalId: string) => {
     const binding = forwarders.get(terminalId)
     // A stale/destroyed renderer must not release a replacement window's view.

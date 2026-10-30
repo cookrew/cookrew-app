@@ -409,6 +409,13 @@ export interface CookrewApi {
     onData: (data: string) => void,
     onHello?: (geometry: { cols: number; rows: number }) => void
   ) => () => void;
+  /**
+   * Ask for this viewer's live terminal to be re-sent WITH the pane's history
+   * (PtySession.seedFrame), so it scrolls locally. Arrives on the attach's own
+   * data stream, ending in the seed marker for `nonce`. False: no history
+   * here (the backend cannot read it, or the stream is not attached).
+   */
+  ptySeed?: (terminalId: string, nonce: string, lines: number) => Promise<boolean>;
   listActivity: () => Promise<TerminalActivity[]>;
   onTerminalActivity: (cb: (activity: TerminalActivity) => void) => () => void;
   /**

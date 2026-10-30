@@ -1621,6 +1621,25 @@ export class HerdrHostMultiplexer implements Multiplexer {
     }
   }
 
+  /**
+   * The pane's recent history in colour, wrapped at its width (`recent`, not
+   * `recent-unwrapped`: a viewer lays it out row for row). Measured on a
+   * busy agent: 1000 lines are ~82 KB and ~0.5 s through the CLI — which is
+   * why viewers fetch it ahead of a scroll, never during one.
+   */
+  async historyAnsiAsync(name: string, lines: number): Promise<string | null> {
+    const pane = this.paneFromInventory(name)
+    if (!pane) return null
+    try {
+      return await this.runAsync(
+        ['pane', 'read', pane.pane_id, '--source', 'recent', '--ansi', '--lines', String(Math.max(1, Math.floor(lines)))],
+        5000
+      )
+    } catch {
+      return null
+    }
+  }
+
   /** captureAsync, reaching `lines` rows back — the landing-check depth. */
   async captureDeepAsync(name: string, lines: number): Promise<string | null> {
     const pane = this.paneFromInventory(name)

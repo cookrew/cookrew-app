@@ -95,6 +95,41 @@ export function modeReplay(modes: HeadlessTerminalType['modes']): string {
   return out
 }
 
+/** The marker a seeded frame ends with, so the viewer knows its history has landed (OSC, ignored by any terminal that does not ask). */
+export const SEED_OSC = 777
+export const seedMarker = (nonce: string): string => `\x1b]${SEED_OSC};cookrew-seed;${nonce}\x07`
+/** The most history one seed may carry. */
+export const SEED_MAX_LINES = 2000
+
+/**
+ * A replay frame with the pane's history ABOVE the screen, in the viewer's
+ * scrollback — so the viewer scrolls it locally, at once, instead of asking
+ * the pane to scroll and waiting ~60–230 ms for the repaint per wheel tick
+ * (measured 2026-10-31; the owner: "live is not as smooth as chat").
+ *
+ * herdr repaints its screen in place, so nothing a viewer is sent ever
+ * scrolls into its own scrollback; the history has to be fetched from the
+ * pane (`historyAnsiAsync`) and laid in: the lines above the screen, pushed
+ * up by one screen of newlines, then the screen cleared (ED 2 does not touch
+ * scrollback) and painted exactly as replayFrame paints it, modes and all.
+ * The last screenful of the history IS the screen, so it is dropped rather
+ * than shown twice. Ends with the seed marker.
+ */
+export function buildSeededFrame(
+  screen: Pick<HeadlessTerminalType, 'rows' | 'modes'>,
+  serializer: Pick<SerializeAddon, 'serialize'>,
+  history: string,
+  nonce: string
+): string {
+  const lines = history.replace(/(\r?\n)+$/, '').split(/\r?\n/)
+  const above = lines.slice(0, Math.max(0, lines.length - screen.rows))
+  const body =
+    above.length === 0
+      ? CLEAR_SCREEN + serializer.serialize({ scrollback: screen.rows })
+      : CLEAR_SCREEN + above.join('\r\n') + '\x1b[0m' + '\r\n'.repeat(screen.rows) + '\x1b[H\x1b[2J' + serializer.serialize({ scrollback: 0 })
+  return body + modeReplay(screen.modes) + seedMarker(nonce)
+}
+
 /**
  * The process-wide multiplexer. Set once by PtyManager (which owns the config
  * file the backend needs); module-level helpers below use it so the session
@@ -758,6 +793,26 @@ export class PtySession extends EventEmitter {
    * The leading clear resets both screen and scrollback: a reattach must not
    * append this frame under whatever the viewer was showing before.
    */
+  /**
+   * A replay frame carrying the pane's history (buildSeededFrame), for ONE
+   * viewer that asked — never broadcast: a desktop scrolling must not push
+   * kilobytes of history to a phone watching the same card. The history is
+   * read off-thread; the screen is serialized the moment it lands, so the
+   * frame is the mirror's state at the instant it is sent and the deltas
+   * after it apply cleanly. Null when the backend cannot read history.
+   */
+  async seedFrame(lines: number, nonce: string): Promise<string | null> {
+    if (this.disposed || !this.mux.historyAnsiAsync) return null
+    const history = await this.mux.historyAnsiAsync(this.sessionName, Math.min(SEED_MAX_LINES, Math.max(1, lines)) + this.screen.rows)
+    if (this.disposed || history === null) return null
+    try {
+      return buildSeededFrame(this.screen, this.serializer, history, nonce)
+    } catch (error) {
+      console.error('PTY seed serialize failed:', error)
+      return null
+    }
+  }
+
   replayFrame(): string {
     if (this.disposed) return ''
     try {

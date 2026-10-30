@@ -317,6 +317,8 @@ const api = {
   ptyJump: (terminalId: string, text: string | null) =>
     ipcRenderer.send('pty:jump', terminalId, text),
   turnSeen: (terminalId: string) => ipcRenderer.send('turn:seen', terminalId),
+  ptySeed: (terminalId: string, nonce: string, lines: number): Promise<boolean> =>
+    ipcRenderer.invoke('pty:seed', terminalId, nonce, lines),
   ptyAttach: (
     terminalId: string,
     onData: (data: string) => void,
