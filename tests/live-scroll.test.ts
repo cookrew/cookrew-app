@@ -68,14 +68,19 @@ describe('installLocalScroll', () => {
     scroll.dispose()
   })
 
-  it('in chat, or on an alternate screen, the wheel is not taken', () => {
+  it('in chat the wheel is not taken; on the alternate screen (history lost) it waits for history', () => {
     const f = fakeTerm()
     let live = false
-    const scroll = installLocalScroll(f.term, { seed: async () => true, live: () => live, lines: 1000, refreshMs: 3000 })
+    const nonces: string[] = []
+    const scroll = installLocalScroll(f.term, { seed: async (n) => (nonces.push(n), true), live: () => live, lines: 1000, refreshMs: 3000 })
     expect(f.spin(-100)).toBe(true)
     live = true
     f.active.type = 'alternate'
-    expect(f.spin(-100)).toBe(true)
+    expect(f.spin(-170)).toBe(false)
+    expect(nonces).toHaveLength(1)
+    f.active.type = 'normal'
+    f.land(nonces[0], 300)
+    expect(f.scrollLines).toHaveBeenCalledWith(-10)
     scroll.dispose()
   })
 
