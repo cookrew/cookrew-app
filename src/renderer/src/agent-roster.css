@@ -2268,3 +2268,48 @@
   inset: 0;
   z-index: 200;
 }
+
+/* ---- the phone: the dials as one row over the transcript ----
+   A 46px column of three chips on a 412px phone left the transcript about
+   220px, some 22 characters a line, and the column ran empty under the chips
+   for the rest of the screen (2026-10-30). On a phone the dials are a row
+   under the ask instead: the height of one chip for the column's whole width.
+   Only when the column holds the dials alone; a terminal's side tabs keep
+   their column. */
+@media (max-width: 700px) {
+  .popout-terminal-wrap:has(> .popout-side > .cr-tune-rail:only-child) {
+    flex-direction: column;
+  }
+  .popout-side:has(> .cr-tune-rail:only-child) {
+    width: auto;
+    flex-direction: row;
+    border-right: 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .popout-side:has(> .cr-tune-rail:only-child) > .cr-tune-rail {
+    width: auto;
+    min-width: 0;
+    flex-direction: row;
+    padding: 4px 6px;
+  }
+  .popout-side:has(> .cr-tune-rail:only-child) .cr-tune-dial {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  .popout-side:has(> .cr-tune-rail:only-child) .cr-tune-chip {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 5px;
+    max-width: 150px;
+    padding: 3px 7px;
+  }
+  /* The checkpoint rail starts under the row, so its count is not behind it. */
+  .popout-terminal-wrap:has(> .popout-side > .cr-tune-rail:only-child) > .cr-ckpt-rail {
+    top: 30px;
+  }
+  /* The list opens under its chip, not beside it. */
+  .popout-side:has(> .cr-tune-rail:only-child) .cr-tune-list {
+    top: calc(100% + 4px);
+    left: 0;
+  }
+}

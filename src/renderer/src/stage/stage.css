@@ -684,3 +684,27 @@
     gap: 10px;
   }
 }
+
+/* The phone: why-this-terminal is a strip under it, never over it. Floating
+   over the bottom corner it wrapped to two lines on a 412px phone and sat on
+   the prompt line, which is where the typing goes (2026-10-30). */
+@media (max-width: 700px) {
+  .cr-stage-main:has(> .cr-stage-why) > .cr-stage-term {
+    bottom: 22px;
+  }
+  .cr-stage-why {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 8px;
+    border: 0;
+    border-top: 1.5px solid var(--line);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+}

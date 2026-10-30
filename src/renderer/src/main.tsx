@@ -1,6 +1,7 @@
 import React, { Suspense, lazy } from 'react'
 import ReactDOM from 'react-dom/client'
 import './styles.css'
+import './night.css'
 import { authStore } from './auth-gate'
 import { startPhoneBeacon } from './phone-beacon'
 import { startCompanionPathSwitch } from './path/companion'
@@ -8,6 +9,7 @@ import { cookrew, isRemoteMode } from './api'
 import { watchBuild } from './build-watch'
 import { scheduleWebglWarmup } from './gpu-warmup'
 import { bootEmbedMode } from './embed/embed-mode'
+import { applyColorScheme } from './color-scheme'
 
 // STRATA EMBED MODE (`?embed=agent`, framed by cookrew.dev's shell only): one
 // agent's full view, nothing else. Read before anything starts, because embed
@@ -15,6 +17,10 @@ import { bootEmbedMode } from './embed/embed-mode'
 // matters — the path switch, which would move this document's data plane to a
 // LAN origin or an RTC link and break the shell's same-origin frame.
 const embed = bootEmbedMode()
+
+// Light or dark before the first paint: a browser follows the system, the
+// desktop app stays paper (color-scheme.ts).
+applyColorScheme(isRemoteMode())
 const EmbedRoot = lazy(() => import('./embed/EmbedRoot'))
 // THE CANVAS APP IS A CHUNK OF ITS OWN, so an embed never downloads it (it was
 // most of the 1.7 MB index). The classic boot asks for it on this very line,
