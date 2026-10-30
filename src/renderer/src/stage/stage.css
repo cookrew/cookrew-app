@@ -104,16 +104,11 @@
   color: var(--muted);
 }
 
-/* The gutters: a column down each side kept clear for the pets, the agents on
-   the right and the browsers and notes on the left (pets/pet-pick.ts · PET_GUTTER). */
+/* The pets stand down the sides OVER the stage, which keeps its full width
+   (the owner, 2026-10-31: no narrowing). The transcript is a chat in a
+   centred reading column, so on a wide screen they float over its margin. */
 .cr-stage-view.bedded {
-  padding: 0 56px;
-}
-
-@media (max-width: 700px) {
-  .cr-stage-view.bedded {
-    padding: 0 48px;
-  }
+  padding: 0;
 }
 
 /* ---- the upper levels: devices, then workspaces (StageMap.tsx) ---- */

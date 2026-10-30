@@ -90,3 +90,122 @@
     padding-right: 26px;
   }
 }
+
+/* ---- THE TRANSCRIPT AS A CHAT WITH THE AGENT (owner, 2026-10-31) ----
+   Each checkpoint is one exchange: its heading a small centred label, your
+   prompt a bubble on the right, and the agent's side a bubble on the left with
+   its face (TranscriptRow.tsx): the tools it ran as chips, then its reply. The
+   column is centred and kept to a reading width, so on a wide screen the pets
+   down the sides float over the margin, never over the words. The live
+   terminal under the LIVE seam stays a terminal. */
+.lod-overlay .ctx-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 14px 4px 10px;
+  border-top: 0;
+  border-radius: 14px;
+}
+
+.lod-overlay .ctx-block.active {
+  background: rgba(255, 214, 0, 0.07);
+}
+
+.lod-overlay .ctx-block-head {
+  align-self: center;
+  justify-content: center;
+  max-width: 90%;
+  margin: 0;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--cream-md);
+}
+
+/* Yours: on the right. */
+.lod-overlay .ctx-block-prompt {
+  align-self: flex-end;
+  max-width: 80%;
+  padding: 8px 12px;
+  border-radius: 16px 16px 4px 16px;
+  background: var(--amber-soft);
+  color: var(--ink);
+  text-shadow: none;
+  font: 13.5px/1.45 var(--font-body);
+}
+
+.lod-overlay .ctx-block-prompt::before {
+  content: none;
+}
+
+/* The agent's: on the left, beside its face. */
+.lod-overlay .ctx-chat-agent {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 92%;
+}
+
+.lod-overlay .ctx-chat-face {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1.5px solid var(--line-soft);
+  border-radius: 50%;
+  background: var(--cream);
+}
+
+.lod-overlay .ctx-chat-face .vi-avatar,
+.lod-overlay .ctx-chat-face .vi-avatar svg {
+  width: 22px;
+  height: 22px;
+}
+
+.lod-overlay .ctx-chat-bubble {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 4px 16px 16px 16px;
+  background: var(--cream);
+}
+
+.lod-overlay .ctx-chat-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lod-overlay .ctx-chat-bubble .ctx-block-tool {
+  margin: 0;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: var(--cream-md);
+  font-size: 11px;
+}
+
+.lod-overlay .ctx-chat-bubble .ctx-block-reply {
+  margin: 0;
+  font: 13.5px/1.5 var(--font-body);
+}
+
+.lod-overlay .ctx-chat-bubble .ctx-block-reply code,
+.lod-overlay .ctx-chat-bubble .ctx-block-reply pre {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+@media (max-width: 700px) {
+  .lod-overlay .ctx-block-prompt {
+    max-width: 88%;
+  }
+  .lod-overlay .ctx-chat-agent {
+    max-width: 100%;
+  }
+}

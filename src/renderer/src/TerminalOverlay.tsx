@@ -34,7 +34,8 @@ import { CrIcon } from './icons'
 import { TranslateButton } from './TranslateButton'
 import { languageByCode } from '../../shared/translate'
 import { useCheckpointTranslation } from './use-checkpoint-translation'
-import { StatusCoin } from './nodes/AgentAvatar'
+import { AgentAvatar, StatusCoin } from './nodes/AgentAvatar'
+import { TranscriptFaceContext } from './transcript-face'
 import { TuneRail } from './nodes/TuneRail'
 import { useAgentTuning } from './nodes/use-agent-tuning'
 import { useCardRoute } from './nodes/use-card-route'
@@ -428,6 +429,9 @@ function TerminalOverlay({
   // The LEFT rail: the agent's model and effort, read off its own record and
   // turned by one typed line. Mirror of the checkpoint rail on the right.
   const tuning = useAgentTuning({ terminalId: node.id, phase, remote })
+  // The agent's face on its side of the chat (transcript-face.ts): one
+  // element, so the memoised rows are not re-rendered by a new one each frame.
+  const chatFace = useMemo(() => <AgentAvatar phase="idle" preset={node.preset} />, [node.preset])
   // The RTE dial (R2). A served session never gets this machine's route, so
   // it never gets the dial either (design D3).
   const routeAllowed = routeDialAllowed({ remote, served: node.servedSession != null })
@@ -1161,6 +1165,7 @@ function TerminalOverlay({
         </div>
         )}
         <div className={`popout-main${openItem !== null ? ' split' : ''}`}>
+        <TranscriptFaceContext.Provider value={chatFace}>
         <TranscriptView
           ref={transcriptRef}
           terminalId={node.id}
@@ -1194,6 +1199,7 @@ function TerminalOverlay({
           {/* PTY-direct for every card (owner ruling 2026-08-30). */}
           <div ref={containerRef} className="popout-terminal" />
         </TranscriptView>
+        </TranscriptFaceContext.Provider>
         {openItem !== null && openView !== null && <AttachPanel key={openItem.node.id} item={openItem} view={openView} cardRect={rect} />}
         </div>
         <CheckpointTimeline
