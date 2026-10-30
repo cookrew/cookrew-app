@@ -26,13 +26,30 @@ export interface SetupRunning {
   lastLine: string
   /** The pane asked for a browser sign-in. */
   oauth: boolean
+  /**
+   * The page that sign-in wants opened, when the pane printed one. The panel
+   * shows it as a link, because the browser the CLI opened is the MAC's: on
+   * a phone the only way to the page is to be handed its address.
+   */
+  url: string | null
 }
 
 const TAIL_MAX = 4000
 // CSI, OSC and lone ESC sequences; carriage returns become newlines.
 const CONTROL = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]|\r/g
 const PROMPT_END = /(?:^|\s)[$%❯›>#]\s*$/
-const OAUTH = /browser|sign(?:ing)?[ -]?in|log[ -]?in|oauth|authenticat/i
+/**
+ * A SIGN-IN IS A SIGN-IN WORD AND A PAGE TO OPEN. Words alone were the old
+ * test and they misfired on the owner's phone: START types `magpie autostart
+ * on`, magpie answers "magpie opens at login, in the tray", and "login"
+ * relabelled the button "sign-in open in your browser" for a sign-in that did
+ * not exist. Every real browser sign-in prints the page it opened, so the page
+ * is the evidence — and it is also the one thing a phone needs.
+ */
+const SIGN_IN = /sign(?:ing)?[ -]?in|log[ -]?in|oauth|authenticat|authori[sz]e/i
+const URL_RE = /https?:\/\/[^\s'"<>`]+/g
+/** A callback server on this Mac is where the browser RETURNS, never the page to open. */
+const LOCAL = /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/i
 
 export function startedLine(line: string): LineWatch {
   return { line, echoed: false, tail: '', done: false }
@@ -51,8 +68,20 @@ export function promptReturned(line: string): boolean {
   return PROMPT_END.test(line)
 }
 
-export function oauthPending(tail: string): boolean {
-  return OAUTH.test(tail)
+/** The last page to open in what the pane printed, trailing punctuation dropped; null when none. */
+export function signInUrl(text: string): string | null {
+  const pages = (text.match(URL_RE) ?? []).map((u) => u.replace(/[.,;:)\]]+$/, '')).filter((u) => !LOCAL.test(u))
+  return pages.length === 0 ? null : pages[pages.length - 1]
+}
+
+export function oauthPending(text: string): boolean {
+  return SIGN_IN.test(text) && signInUrl(text) !== null
+}
+
+/** What the pane said AFTER echoing the line: the typed line's own URL is not an answer. */
+function answerOf(watch: LineWatch): string {
+  const at = watch.tail.indexOf(watch.line)
+  return at < 0 ? (watch.echoed ? watch.tail : '') : watch.tail.slice(at + watch.line.length)
 }
 
 export function observeOutput(watch: LineWatch, chunk: string): LineWatch {
@@ -67,13 +96,15 @@ export function observeOutput(watch: LineWatch, chunk: string): LineWatch {
 
 export function runningView(watch: LineWatch): SetupRunning {
   const last = lastLine(watch.tail)
-  return { line: watch.line, lastLine: last.endsWith(watch.line) ? '' : last, oauth: oauthPending(watch.tail) }
+  const answer = answerOf(watch)
+  const oauth = oauthPending(answer)
+  return { line: watch.line, lastLine: last.endsWith(watch.line) ? '' : last, oauth, url: oauth ? signInUrl(answer) : null }
 }
 
 /** What a button reads while its line runs; null when it is not that line. */
 export function runningLabel(running: SetupRunning | null, line: string): string | null {
   if (running === null || running.line !== line) return null
-  if (running.oauth) return 'sign-in open in your browser'
+  if (running.oauth) return 'sign in — open the page'
   const last = running.lastLine.length > 60 ? `${running.lastLine.slice(0, 59)}…` : running.lastLine
   return last ? `running… ${last}` : 'running…'
 }

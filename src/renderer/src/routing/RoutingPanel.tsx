@@ -2,7 +2,7 @@ import type { SetupRunning } from './setup-line-state'
 import { useEffect, useState } from 'react'
 import type { HarnessRow, RouteState } from '../../../shared/route'
 import { ROUTING_COPY } from '../../../shared/route-view'
-import { Accounts, Harnesses, LiveRoutes, Rented, StatusLine, type RunLine } from './RoutingSections'
+import { Accounts, Harnesses, LiveRoutes, Rented, SignInLink, StatusLine, type RunLine } from './RoutingSections'
 import { SetupScreen } from './SetupScreen'
 import './routing-panel.css'
 
@@ -84,6 +84,7 @@ export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null
         ) : (
           <>
             <StatusLine state={state} onRun={onRun} running={running} />
+            <SignInLink running={running} />
             {error && (
               <div className="cr-routing-bad" role="alert">
                 {error}
