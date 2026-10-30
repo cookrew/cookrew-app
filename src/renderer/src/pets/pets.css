@@ -1,16 +1,17 @@
 /* ---- THE PETS (PetTroop.tsx: AgentPets on the right, ItemPets on the left) ----
    Troops of round faces over every page: above the stage, the levels, the
    board, the header and the dock (50), under every scrim and sheet (60 and
-   up). Home is the stage's bed, the strip it keeps clear above the dock.
+   up). They stand in columns in the gutters the stage keeps down its sides.
    Drawn with the app's tokens, so they are paper by day and night paper on a
    dark phone (night.css). */
 .cr-pets {
   position: fixed;
   z-index: 55;
   display: flex;
+  flex-direction: column;
   align-items: center;
   gap: 6px;
-  padding: 5px 7px 5px 4px;
+  padding: 4px;
   border: 1.5px solid var(--line);
   border-radius: 999px;
   background: var(--cream-hi);
@@ -20,23 +21,25 @@
   -webkit-user-select: none;
 }
 
-.cr-pets.left {
-  padding: 5px 4px 5px 7px;
-}
-
+/* Everyone: more columns, growing toward the middle, scrolling past a screenful. */
 .cr-pets.expanded {
   flex-wrap: wrap;
+  align-content: flex-start;
   max-width: min(420px, calc(100vw - 16px));
-  max-height: min(360px, calc(100vh - 140px));
-  overflow-y: auto;
+  max-height: calc(100vh - 160px);
+  overflow: auto;
   border-radius: 22px;
+}
+
+.cr-pets.right.expanded {
+  flex-wrap: wrap-reverse;
 }
 
 .cr-pets-grip {
   display: grid;
   place-items: center;
-  width: 16px;
-  height: 30px;
+  width: 30px;
+  height: 14px;
   padding: 0;
   border: 0;
   background: none;
@@ -44,6 +47,10 @@
   font-size: 11px;
   letter-spacing: -2px;
   cursor: grab;
+}
+
+.cr-pets-grip span {
+  rotate: 90deg;
 }
 
 .cr-pets-grip:active {
@@ -84,40 +91,53 @@
   box-shadow: 0 0 0 3px var(--amber-soft);
 }
 
-/* Hovered (or focused): the face grows into a pill with its name, in place,
-   the first of its three steps (PetTroop.tsx). No zoom: scaled text blurs. */
+/* Hovered (or focused): the face becomes a pill with its name, the first of
+   its three steps (PetTroop.tsx). The name is a tag behind the face, sliding
+   out toward the middle, so the column never widens and nothing beside it
+   moves. Behind needs no stacking context on the face: no transform, no
+   z-index, no animation there while it is named. */
 .cr-pet-name {
   display: none;
 }
 
-.cr-pet.named {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  width: auto;
-  padding: 0 12px 0 3px;
-  border-radius: 999px;
+.cr-pets .cr-pet.named {
   border-color: var(--line);
-  transform: translateY(-2px);
+  transform: none;
   animation: none;
-  z-index: 1;
+}
+
+.cr-pets .cr-pet.item.named {
+  overflow: visible;
 }
 
 .cr-pet.named .cr-pet-name {
-  display: block;
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  position: absolute;
+  top: -2px;
+  z-index: -1;
+  display: flex;
+  align-items: center;
+  height: calc(100% + 4px);
+  max-width: 220px;
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  background: var(--cream-hi);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16);
   font: 600 12px/1 var(--font-mono);
   color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   animation: cr-pet-name-in 160ms ease-out;
 }
 
-.cr-pet.named .cr-pet-thumb {
-  flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
+.cr-pets.right .cr-pet.named .cr-pet-name {
+  right: 50%;
+  padding: 0 26px 0 12px;
+}
+
+.cr-pets.left .cr-pet.named .cr-pet-name {
+  left: 50%;
+  padding: 0 12px 0 26px;
 }
 
 @keyframes cr-pet-name-in {
@@ -126,7 +146,7 @@
     opacity: 0;
   }
   to {
-    max-width: 180px;
+    max-width: 220px;
     opacity: 1;
   }
 }

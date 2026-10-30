@@ -16,8 +16,9 @@ import './pets.css'
  * tucks it into one coin; the "+N" coin shows everyone else. A card stays
  * until a tap outside (unless it holds a draft), Escape or its ×.
  *
- * Home is the stage's bed: the strip it keeps clear above the dock, so the
- * troops cover nothing until they are dragged.
+ * They stand in columns, the agents down the right, the browsers and notes
+ * down the left, in the gutters the stage keeps clear for them, so they cover
+ * nothing until they are dragged.
  */
 
 const DRAG_PX = 5
@@ -95,7 +96,7 @@ export function PetTroop({
   const [expanded, setExpanded] = useState(false)
   const [tucked, setTucked] = useState(() => stored(tuckedKey) === '1')
   const [saved, setSaved] = useState<PetSpot | null>(() => readSpot(stored(spotKey)))
-  const [home, setHome] = useState<PetSpot>(() => petHome(bedGap()))
+  const [home, setHome] = useState<PetSpot>(() => petHome(bedGap(), window.innerWidth))
   const spot = saved ?? home
   const troopRef = useRef<HTMLDivElement>(null)
   const petRefs = useRef(new Map<string, HTMLButtonElement>())
@@ -118,7 +119,7 @@ export function PetTroop({
   // kept on screen when the window shrinks or the phone turns.
   useEffect(() => {
     const keep = (): void => {
-      setHome(petHome(bedGap()))
+      setHome(petHome(bedGap(), window.innerWidth))
       const el = troopRef.current
       if (!el) return
       setSaved((at) => (at ? clampSpot(at, el.getBoundingClientRect(), { width: window.innerWidth, height: window.innerHeight }) : at))
@@ -254,7 +255,7 @@ export function PetTroop({
         onPointerUp={onPointerUp}
         onPointerCancel={() => void (drag.current = null)}
       >
-        {side === 'left' ? null : grip}
+        {grip}
         {shown.map((member) => (
           <button
             key={member.id}
@@ -266,6 +267,8 @@ export function PetTroop({
             className={`cr-pet ${member.className}${openId === member.id ? ' open' : ''}${hoverId === member.id && !tucked ? ' named' : ''}`}
             aria-label={member.label}
             aria-expanded={openId === member.id}
+            // An expanded troop scrolls, and its scroll would clip the name tag.
+            title={expanded ? member.name : undefined}
             onPointerEnter={(event) => {
               if (event.pointerType !== 'mouse' || tucked || drag.current?.moved) return
               setHoverId(member.id)
@@ -290,10 +293,9 @@ export function PetTroop({
             {expanded ? '–' : `+${more.length}`}
           </button>
         )}
-        {side === 'left' ? grip : null}
       </div>
       {openId && anchor && (
-        <PetCardFrame key={openId} anchor={anchor} className={cardClass?.(openId) ?? ''} label={cardLabel(openId)}>
+        <PetCardFrame key={openId} anchor={anchor} side={side} className={cardClass?.(openId) ?? ''} label={cardLabel(openId)}>
           {renderCard(openId, controls)}
         </PetCardFrame>
       )}
@@ -305,24 +307,26 @@ export function PetTroop({
 /** Where a card sits, beside its face (pet-pick.ts · cardPlacement). */
 function PetCardFrame({
   anchor,
+  side,
   className,
   label,
   children
 }: {
   anchor: HTMLElement
+  side: 'left' | 'right'
   className: string
   label: string
   children: React.ReactNode
 }): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
-  const [place, setPlace] = useState<{ left: number; top: number; above: boolean } | null>(null)
+  const [place, setPlace] = useState<{ left: number; top: number } | null>(null)
   useLayoutEffect(() => {
     const card = ref.current
     if (!card) return
     const measure = (): void => {
       const a = anchor.getBoundingClientRect()
       const c = card.getBoundingClientRect()
-      setPlace(cardPlacement(a, { width: c.width, height: c.height }, { width: window.innerWidth, height: window.innerHeight }))
+      setPlace(cardPlacement(a, { width: c.width, height: c.height }, { width: window.innerWidth, height: window.innerHeight }, side))
     }
     measure()
     const ro = new ResizeObserver(measure)
@@ -332,11 +336,11 @@ function PetCardFrame({
       ro.disconnect()
       window.removeEventListener('resize', measure)
     }
-  }, [anchor])
+  }, [anchor, side])
   return (
     <div
       ref={ref}
-      className={`cr-pet-card ${className}${place?.above === false ? ' below' : ''}`}
+      className={`cr-pet-card ${className}`}
       style={place ? { left: place.left, top: place.top } : { visibility: 'hidden', left: 0, top: 0 }}
       role="dialog"
       aria-label={label}

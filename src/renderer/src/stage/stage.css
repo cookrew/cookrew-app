@@ -104,13 +104,16 @@
   color: var(--muted);
 }
 
-/* The bed: a strip along the bottom kept clear for the pets (pets/pet-pick.ts · PET_BED). */
+/* The gutters: a column down each side kept clear for the pets, the agents on
+   the right and the browsers and notes on the left (pets/pet-pick.ts · PET_GUTTER). */
 .cr-stage-view.bedded {
-  padding-bottom: 50px;
+  padding: 0 56px;
 }
 
-.cr-stage-view.bedded > .cr-stage-main {
-  border-bottom: 2px solid var(--line);
+@media (max-width: 700px) {
+  .cr-stage-view.bedded {
+    padding: 0 48px;
+  }
 }
 
 /* ---- the upper levels: devices, then workspaces (StageMap.tsx) ---- */
