@@ -84,6 +84,53 @@
   box-shadow: 0 0 0 3px var(--amber-soft);
 }
 
+/* Hovered (or focused): the face grows into a pill with its name, in place,
+   the first of its three steps (PetTroop.tsx). No zoom: scaled text blurs. */
+.cr-pet-name {
+  display: none;
+}
+
+.cr-pet.named {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  padding: 0 12px 0 3px;
+  border-radius: 999px;
+  border-color: var(--line);
+  transform: translateY(-2px);
+  animation: none;
+  z-index: 1;
+}
+
+.cr-pet.named .cr-pet-name {
+  display: block;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 600 12px/1 var(--font-mono);
+  color: var(--ink);
+  animation: cr-pet-name-in 160ms ease-out;
+}
+
+.cr-pet.named .cr-pet-thumb {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+}
+
+@keyframes cr-pet-name-in {
+  from {
+    max-width: 0;
+    opacity: 0;
+  }
+  to {
+    max-width: 180px;
+    opacity: 1;
+  }
+}
+
 .cr-pet:nth-child(3n) {
   animation-delay: -1.1s;
 }
@@ -179,7 +226,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .cr-pet,
-  .cr-pet.needs {
+  .cr-pet.needs,
+  .cr-pet.named .cr-pet-name {
     animation: none;
   }
 }

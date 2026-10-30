@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { cardPlacement, clampSpot, petHome, readSpot, type PetSpot } from './pet-pick'
+import { cardPlacement, clampSpot, petClick, petHome, readSpot, type PetSpot } from './pet-pick'
 import './pets.css'
 
 /**
@@ -8,18 +8,18 @@ import './pets.css'
  *
  * Round faces in a pill that floats over every page: the agents on the right,
  * the browsers and notes on the left. Both behave the same, so they are one
- * component: rest a pointer on a face and its card opens beside it; click it
- * and it opens in full; on a phone a tap opens the card and the card's OPEN
- * goes on. Drag the troop anywhere and it remembers; the grip tucks it into
- * one coin; the "+N" coin shows everyone else. A tap outside puts a card away
- * unless the card holds a draft.
+ * component, in three steps (the owner's sketch, 2026-10-31): rest a pointer
+ * on a face and it grows into a pill with its name; click it and its card
+ * opens beside it (the synopsis, and for an agent a box to prompt it); click
+ * it again and it opens in full. A finger has no hover, so on a phone the
+ * first tap is the card. Drag the troop anywhere and it remembers; the grip
+ * tucks it into one coin; the "+N" coin shows everyone else. A card stays
+ * until a tap outside (unless it holds a draft), Escape or its ×.
  *
  * Home is the stage's bed: the strip it keeps clear above the dock, so the
  * troops cover nothing until they are dragged.
  */
 
-const ENTER_MS = 220
-const LEAVE_MS = 320
 const DRAG_PX = 5
 
 export interface TroopMember {
@@ -28,13 +28,13 @@ export interface TroopMember {
   readonly className: string
   /** What a screen reader says: name and state. */
   readonly label: string
+  /** What the face says when a pointer rests on it. */
+  readonly name: string
   readonly face: React.ReactNode
 }
 
 /** What a card's content may do to its frame. */
 export interface CardControls {
-  /** Typing holds the card open: a pointer that wanders off must not take the draft with it. */
-  readonly pin: (pinned: boolean) => void
   /** The draft, so a tap outside does not throw it away. */
   readonly draft: (text: string) => void
   readonly open: () => void
@@ -90,6 +90,8 @@ export function PetTroop({
   const spotKey = `${storageKey}.spot`
   const tuckedKey = `${storageKey}.tucked`
   const [openId, setOpenId] = useState<string | null>(null)
+  /** The face a pointer (or the keyboard) rests on: it shows its name. */
+  const [hoverId, setHoverId] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
   const [tucked, setTucked] = useState(() => stored(tuckedKey) === '1')
   const [saved, setSaved] = useState<PetSpot | null>(() => readSpot(stored(spotKey)))
@@ -97,11 +99,8 @@ export function PetTroop({
   const spot = saved ?? home
   const troopRef = useRef<HTMLDivElement>(null)
   const petRefs = useRef(new Map<string, HTMLButtonElement>())
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const pointerType = useRef<string>('mouse')
   const drag = useRef<{ x: number; y: number; spot: PetSpot; moved: boolean; id: number } | null>(null)
   const swallowClick = useRef(false)
-  const pinned = useRef(false)
   const draft = useRef('')
 
   const shown = tucked ? members.slice(0, 1) : expanded ? [...members, ...more] : members
@@ -110,22 +109,10 @@ export function PetTroop({
     onShown?.(shownKey ? shownKey.split(' ') : [])
   }, [shownKey, onShown])
 
-  const stopTimer = (): void => {
-    if (timer.current) clearTimeout(timer.current)
-    timer.current = null
-  }
-  useEffect(() => () => stopTimer(), [])
   const close = useCallback((): void => {
-    stopTimer()
-    pinned.current = false
     draft.current = ''
     setOpenId(null)
   }, [])
-  const closeSoon = (): void => {
-    stopTimer()
-    if (pinned.current) return
-    timer.current = setTimeout(() => setOpenId(null), LEAVE_MS)
-  }
 
   // Home follows the stage (the dock comes and goes); a saved spot stays put,
   // kept on screen when the window shrinks or the phone turns.
@@ -169,7 +156,6 @@ export function PetTroop({
   if (members.length === 0) return null
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>): void => {
-    pointerType.current = event.pointerType
     if (event.button !== 0) return
     drag.current = { x: event.clientX, y: event.clientY, spot, moved: false, id: event.pointerId }
   }
@@ -181,6 +167,7 @@ export function PetTroop({
     if (!at.moved && Math.hypot(dx, dy) < DRAG_PX) return
     if (!at.moved) {
       at.moved = true
+      setHoverId(null)
       close()
       event.currentTarget.setPointerCapture(event.pointerId)
     }
@@ -215,17 +202,14 @@ export function PetTroop({
       store(tuckedKey, '0')
       return
     }
-    // A mouse already saw the card on its way in; a finger has not.
-    if (pointerType.current === 'mouse') {
+    // Once: its card. Again, on the same face: in full.
+    if (petClick(openId, id) === 'full') {
       close()
       onOpen(id)
       return
     }
-    if (openId === id) close()
-    else {
-      pinned.current = true
-      setOpenId(id)
-    }
+    draft.current = ''
+    setOpenId(id)
   }
   const tuck = (): void => {
     if (consumed()) return
@@ -243,7 +227,6 @@ export function PetTroop({
   const hidden = more.length + (tucked ? members.length - 1 : 0)
   const anchor = openId ? (petRefs.current.get(openId) ?? null) : null
   const controls: CardControls = {
-    pin: (on) => void (pinned.current = on),
     draft: (text) => void (draft.current = text),
     open: () => {
       const id = openId
@@ -270,7 +253,6 @@ export function PetTroop({
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={() => void (drag.current = null)}
-        onPointerLeave={(event) => event.pointerType === 'mouse' && closeSoon()}
       >
         {side === 'left' ? null : grip}
         {shown.map((member) => (
@@ -281,21 +263,25 @@ export function PetTroop({
               else petRefs.current.delete(member.id)
             }}
             type="button"
-            className={`cr-pet ${member.className}${openId === member.id ? ' open' : ''}`}
+            className={`cr-pet ${member.className}${openId === member.id ? ' open' : ''}${hoverId === member.id && !tucked ? ' named' : ''}`}
             aria-label={member.label}
             aria-expanded={openId === member.id}
-            title={tucked ? undefined : member.label}
             onPointerEnter={(event) => {
               if (event.pointerType !== 'mouse' || tucked || drag.current?.moved) return
-              stopTimer()
-              const id = member.id
-              timer.current = setTimeout(() => setOpenId(id), openId ? 0 : ENTER_MS)
+              setHoverId(member.id)
             }}
-            // The keyboard's way in; a tap focuses too, and opens on its click.
-            onFocus={(event) => !tucked && event.currentTarget.matches(':focus-visible') && setOpenId(member.id)}
+            onPointerLeave={() => setHoverId((at) => (at === member.id ? null : at))}
+            // The keyboard names a face as a pointer does; Enter is its click.
+            onFocus={(event) => !tucked && event.currentTarget.matches(':focus-visible') && setHoverId(member.id)}
+            onBlur={() => setHoverId((at) => (at === member.id ? null : at))}
             onClick={() => clickPet(member.id)}
           >
             {member.face}
+            {!tucked && (
+              <span className="cr-pet-name" aria-hidden="true">
+                {member.name}
+              </span>
+            )}
             {tucked && hidden > 0 && <span className="cr-pet-count">{hidden + 1}</span>}
           </button>
         ))}
@@ -307,7 +293,7 @@ export function PetTroop({
         {side === 'left' ? grip : null}
       </div>
       {openId && anchor && (
-        <PetCardFrame key={openId} anchor={anchor} className={cardClass?.(openId) ?? ''} label={cardLabel(openId)} onEnter={stopTimer} onLeave={closeSoon}>
+        <PetCardFrame key={openId} anchor={anchor} className={cardClass?.(openId) ?? ''} label={cardLabel(openId)}>
           {renderCard(openId, controls)}
         </PetCardFrame>
       )}
@@ -316,20 +302,16 @@ export function PetTroop({
   )
 }
 
-/** Where a card sits, beside its face (pet-pick.ts · cardPlacement), and its hover. */
+/** Where a card sits, beside its face (pet-pick.ts · cardPlacement). */
 function PetCardFrame({
   anchor,
   className,
   label,
-  onEnter,
-  onLeave,
   children
 }: {
   anchor: HTMLElement
   className: string
   label: string
-  onEnter: () => void
-  onLeave: () => void
   children: React.ReactNode
 }): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
@@ -358,8 +340,6 @@ function PetCardFrame({
       style={place ? { left: place.left, top: place.top } : { visibility: 'hidden', left: 0, top: 0 }}
       role="dialog"
       aria-label={label}
-      onPointerEnter={onEnter}
-      onPointerLeave={(event) => event.pointerType === 'mouse' && onLeave()}
     >
       {children}
     </div>
