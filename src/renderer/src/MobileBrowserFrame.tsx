@@ -220,7 +220,13 @@ export function MobileBrowserFrame({
     live: stream.live,
     fallback
   })
-  const statusText = streamStatusText(surfaceState, stream)
+  // A use card's device that is offline on purpose is not "loading": say what it is.
+  const statusText =
+    stream.deviceStatus?.state === 'offline' && !stream.live
+      ? 'device offline'
+      : stream.deviceStatus?.state === 'connecting' && !stream.live
+        ? 'connecting to the device'
+        : streamStatusText(surfaceState, stream)
   const showControl = streaming && stream.controlAvailable
   const controlDisabled = stream.agentHeld || stream.transitioning
   const controlLabel = stream.agentHeld

@@ -122,4 +122,22 @@ describe('HeadlessBrowserCommandEngine', () => {
     expect(created).toBeDefined()
     expect(manager.syncNode).toHaveBeenLastCalledWith(created)
   })
+
+  it('navigating to another device re-addresses the card; a web address goes to the device as before', async () => {
+    const shared = store.nodeByName('Shared', 'browser') as BrowserNodeData
+    expect(await engine.run(['navigate', 'Shared', 'adb://default'], 'agent-1')).toBe('Re-addressed to adb://default')
+    const phone = store.node(shared.id) as BrowserNodeData
+    expect(phone.url).toBe('adb://default')
+    expect(phone.tabs?.[0].url).toBe('adb://default')
+    expect(instance.navigate).not.toHaveBeenCalled()
+    expect(manager.syncNode).toHaveBeenLastCalledWith(expect.objectContaining({ url: 'adb://default' }))
+    // On the phone card now: a web address opens on the phone, the card stays a phone.
+    await engine.run(['navigate', 'Shared', 'https://example.org'], 'agent-1')
+    expect(instance.navigate).toHaveBeenCalledWith('https://example.org')
+    expect((store.node(shared.id) as BrowserNodeData).url).toBe('adb://default')
+    // The same device again is not a re-address.
+    await engine.run(['navigate', 'Shared', 'adb://default'], 'agent-1')
+    expect(instance.navigate).toHaveBeenLastCalledWith('adb://default')
+  })
 })
+
