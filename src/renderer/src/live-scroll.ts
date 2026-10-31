@@ -32,6 +32,13 @@ import type { Terminal } from '@xterm/xterm'
  * again — when the reprint has had time to land, and once more if it was
  * still printing — and for a while that seed is taken even from a reader
  * scrolled up: the place they were reading is not where it was any more.
+ *
+ * A seed BUILT AT ANOTHER WIDTH is never written (owner, 2026-10-31: a blank
+ * row under every line until the agent worked again). It takes a moment to
+ * build, and a widen passes the pane through a wider size on its way
+ * (main/pty.ts · PtySession.resize): rows built that wide spill their padding
+ * onto a row of their own in this grid. Its marker names the width; another
+ * width is dropped and asked again.
  */
 
 export interface LocalScrollDeps {
@@ -57,6 +64,16 @@ export interface LocalScroll {
 export const SEED_OSC = 777
 const SEED_PREFIX = 'cookrew-seed;'
 const SEED_MARK = `\x1b]${SEED_OSC};${SEED_PREFIX}`
+
+/** The width a seed was built at, from its marker (`cookrew-seed;<nonce>;<cols>`); null when it says none. */
+export function seedCols(chunk: string): number | null {
+  const at = chunk.lastIndexOf(SEED_MARK)
+  if (at < 0) return null
+  const end = chunk.indexOf('\x07', at)
+  const fields = chunk.slice(at + SEED_MARK.length, end < 0 ? undefined : end).split(';')
+  const cols = Number(fields[1])
+  return fields.length > 1 && Number.isInteger(cols) && cols > 0 ? cols : null
+}
 const SEED_TIMEOUT_MS = 5000
 /** After a width change: ask at the first, ask again at the second if the history moved since. */
 export const RESIZE_ASK_MS = [1200, 4000] as const
@@ -136,7 +153,7 @@ export function installLocalScroll(term: Terminal, deps: LocalScrollDeps): Local
   // The seed has been parsed: history is in the scrollback, the screen is live.
   const osc = term.parser.registerOscHandler(SEED_OSC, (data) => {
     if (!data.startsWith(SEED_PREFIX)) return false
-    if (data.slice(SEED_PREFIX.length) === inFlight) inFlight = null
+    if (data.slice(SEED_PREFIX.length).split(';')[0] === inFlight) inFlight = null
     seeded = true
     seededAt = askedAt
     landedBase = term.buffer.active.baseY
@@ -191,6 +208,13 @@ export function installLocalScroll(term: Terminal, deps: LocalScrollDeps): Local
   return {
     admit: (chunk) => {
       if (!chunk.includes(SEED_MARK)) return true
+      const cols = seedCols(chunk)
+      if (cols !== null && cols !== term.cols) {
+        // Built for another width: ask again, at the next tick, at this one.
+        inFlight = null
+        lastAsk = Number.NEGATIVE_INFINITY
+        return false
+      }
       if (now() - widthAt < RESIZE_TAKE_MS) return true
       if (atBottom() || term.buffer.active.baseY === 0 || term.buffer.active.type !== 'normal') return true
       // Scrolled up: keep the reader's place; ask again once they are back.

@@ -98,7 +98,9 @@ export function modeReplay(modes: HeadlessTerminalType['modes']): string {
 
 /** The marker a seeded frame ends with, so the viewer knows its history has landed (OSC, ignored by any terminal that does not ask). */
 export const SEED_OSC = 777
-export const seedMarker = (nonce: string): string => `\x1b]${SEED_OSC};cookrew-seed;${nonce}\x07`
+/** Ends a seeded frame: the nonce it answers and the width it was built at, so a viewer at another width can refuse it (live-scroll.ts). */
+export const seedMarker = (nonce: string, cols?: number): string =>
+  `\x1b]${SEED_OSC};cookrew-seed;${nonce}${cols === undefined ? '' : `;${cols}`}\x07`
 /** The most history one seed may carry. */
 export const SEED_MAX_LINES = 2000
 
@@ -144,7 +146,7 @@ export function buildSeededFrame(
     above.length === 0
       ? CLEAR_SCREEN + serializer.serialize({ scrollback: screen.rows })
       : LEAVE_ALTERNATE + CLEAR_SCREEN + WRAP + above.join('\x1b[0m\r\n') + '\x1b[0m' + '\r\n'.repeat(screen.rows) + '\x1b[H\x1b[2J' + screenOnNormal(serializer)
-  return body + modeReplay(screen.modes) + seedMarker(nonce)
+  return body + modeReplay(screen.modes) + seedMarker(nonce, screen.cols)
 }
 
 /**
