@@ -21,6 +21,7 @@ import { StageTerminal } from './StageTerminal'
 import './stage.css'
 import { zoomStore } from '../zoom/zoom-store'
 import { AgentAvatar } from '../nodes/AgentAvatar'
+import { inkStatusOfRow } from '../zoom/ink-status'
 import { InkAvatar } from '../zoom/InkAvatar'
 import '../zoom/full-views.css'
 
@@ -30,7 +31,6 @@ const tally = (list: readonly { kind: string }[]): { browsers: number; notes: nu
   notes: list.filter((a) => a.kind === 'note').length
 })
 const WORD: Record<string, string> = { waiting: 'needs you', working: 'working', done: 'done', quiet: 'resting', offline: 'offline' }
-const PHASE = { waiting: 'waiting', working: 'thinking', done: 'replied', quiet: 'idle', offline: 'idle' } as const
 
 /** A pop older than this has been seen, or missed: it no longer takes the stage. */
 const POP_FRESH_MS = 10 * 60_000
@@ -144,7 +144,7 @@ export function StageView({
                   const row = faces.get(id)
                   return row ? (
                     <i key={id} title={row.name}>
-                      <AgentAvatar preset={row.preset} phase={PHASE[row.phase]} />
+                      <AgentAvatar id={row.id} orch={row.orch} preset={row.preset} status={inkStatusOfRow(row.phase, row.unread)} />
                       {row.name}
                     </i>
                   ) : null
@@ -159,7 +159,7 @@ export function StageView({
               {shown && (
                 <>
                   <span className="zv-fv-ink" aria-hidden="true">
-                    <InkAvatar id={shown.id} preset={shown.preset} orch={shown.orch} />
+                    <InkAvatar id={shown.id} preset={shown.preset} orch={shown.orch} status={inkStatusOfRow(shown.phase, shown.unread)} weight="large" />
                   </span>
                   <span className="zv-fv-who">
                     <b>{shown.name}</b>

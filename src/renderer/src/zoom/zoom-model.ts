@@ -17,6 +17,8 @@ export interface AgentView {
   preset: string
   orch: boolean
   phase: AgentPhase
+  /** Its last reply is still unread: the face ticks (ink-status.ts). */
+  unread?: boolean
   word: string
   line: string
   browsers: number
@@ -108,6 +110,7 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
       preset: n.preset,
       orch: n.orch === true,
       phase,
+      unread: row?.unread === true,
       word: PHASE_WORD[phase],
       line: lineOf(row, n.brief),
       browsers: list.filter((a) => a.kind === 'browser').length,

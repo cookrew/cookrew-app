@@ -94,6 +94,15 @@ describe('buildAgentRows — phase', () => {
   it('reports an inactive agent as offline whatever its last activity said', () => {
     expect(phaseOf({ phase: 'thinking' }, { active: false })).toBe('offline')
   })
+  it('marks a reply nobody has looked at yet as unread, and only that', () => {
+    const unreadOf = (a: Partial<TerminalActivity>): boolean | undefined => {
+      const out = buildAgentRows({ roster: [entry()], activities: { t1: activity(a) }, now: NOW })
+      return [...out.live, ...out.quiet][0].unread
+    }
+    expect(unreadOf({ phase: 'replied' })).toBe(true)
+    expect(unreadOf({ phase: 'idle', reply: 'all tests pass' })).toBe(false)
+    expect(unreadOf({ phase: 'thinking' })).toBe(false)
+  })
 })
 
 describe('buildAgentRows — the turn the row shows', () => {

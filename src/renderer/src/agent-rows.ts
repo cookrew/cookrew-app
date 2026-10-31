@@ -32,6 +32,8 @@ export interface AgentRow {
   cwd: string
   spawnedAt: number
   phase: AgentPhase
+  /** A finished turn whose reply nobody has looked at yet (the tracker's `replied`, cleared on view). */
+  unread?: boolean
   /** Bound from the SAME selector the canvas card uses. */
   turn: TurnViewModel | null
   turnCount: number
@@ -180,6 +182,7 @@ function rowOf(
     cwd: entry.cwd,
     spawnedAt: entry.spawnedAt,
     phase: phaseOf(activity, entry.active, turn),
+    unread: activity?.phase === 'replied',
     turn,
     turnCount: activity?.turnCount ?? 0,
     brief,

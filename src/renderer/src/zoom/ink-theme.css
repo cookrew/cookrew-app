@@ -429,12 +429,3 @@ body.cr-ink .cr-pet-note-face.browser {
   font-size: 11px;
 }
 
-/* The moods, in the panel's words: red only for the agent that waits. */
-body.cr-ink .cr-pet.waiting,
-body.cr-ink .cr-pet.needs {
-  box-shadow: inset 0 0 0 2px var(--sumi-wait);
-}
-
-body.cr-ink .cr-pet.z .cr-pet-z {
-  color: var(--sumi-muted);
-}
