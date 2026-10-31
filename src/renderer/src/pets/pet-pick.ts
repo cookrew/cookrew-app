@@ -183,19 +183,24 @@ export const readSpot = (raw: string | null): PetSpot | null => {
 /**
  * Where a pet's card opens: beside its face, toward the middle of the screen
  * (the troops stand in columns down the sides), level with the face where it
- * fits, and never off the screen.
+ * fits, and never off the screen — nor over the app's header or its bottom
+ * bar: `band` is the stage between them (UI/UX QA 2026-11-01: on a phone a
+ * face in the strip opened its card over the breadcrumb, the dial and CHAT,
+ * its close button at the screen's top edge).
  */
 export const cardPlacement = (
   pet: { readonly left: number; readonly top: number; readonly width: number; readonly height: number },
   card: { readonly width: number; readonly height: number },
   viewport: { readonly width: number; readonly height: number },
   side: 'left' | 'right',
-  gap = 10
+  gap = 10,
+  band: { readonly top: number; readonly bottom: number } = { top: 0, bottom: viewport.height }
 ): { left: number; top: number } => {
   const beside = side === 'right' ? pet.left - gap - card.width : pet.left + pet.width + gap
   const left = Math.min(Math.max(8, beside), Math.max(8, viewport.width - card.width - 8))
+  // Level with its face, inside the band: below the header, above the bottom bar.
   const level = pet.top + pet.height / 2 - card.height / 2
-  const top = Math.min(Math.max(8, level), Math.max(8, viewport.height - card.height - 8))
+  const top = Math.min(Math.max(band.top + 8, level), Math.max(band.top + 8, band.bottom - card.height - 8))
   return { left: Math.round(left), top: Math.round(top) }
 }
 

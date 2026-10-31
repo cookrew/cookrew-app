@@ -64,15 +64,20 @@ export const Counts = memo(function Counts({ browsers, notes, none = 'nothing op
   )
 }, sameProps)
 
-/** A browser's picture: the live thumbnail when there is one, else a drawn page in its tint. */
-export const Page = memo(function Page({ item, big = false }: { item: ItemView; big?: boolean }): React.JSX.Element {
+/**
+ * A browser's picture: the live thumbnail when there is one, else a drawn page in its tint.
+ * `words={false}`: the page without its address or a note's lines, for a face
+ * too small to set them legibly (the side group's column, UI/UX QA 2026-11-01:
+ * "file://age..." at about 6px). Its name is the face's own tag.
+ */
+export const Page = memo(function Page({ item, big = false, words = true }: { item: ItemView; big?: boolean; words?: boolean }): React.JSX.Element {
   const thumb = useThumb(item.id)
   if (item.kind === 'note') {
     return (
       <div className="zv-nt">
         {big && NOTE_GLYPH}
-        <b>{item.title}</b>
-        <span>{item.line || 'empty note'}</span>
+        {words && <b>{item.title}</b>}
+        {words && <span>{item.line || 'empty note'}</span>}
         <i />
         <i />
       </div>
@@ -86,7 +91,7 @@ export const Page = memo(function Page({ item, big = false }: { item: ItemView; 
             {item.initial}
           </i>
         )}
-        {item.host}
+        {words && item.host}
       </div>
       {thumb ? (
         <img className="zv-shot" src={thumb} alt="" draggable={false} />

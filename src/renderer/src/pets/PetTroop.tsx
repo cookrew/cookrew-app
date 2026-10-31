@@ -83,6 +83,14 @@ const store = (key: string, value: string): void => {
   }
 }
 
+/** The stage, between the app's header and its bottom bar: where a card may open. */
+const stageBand = (): { top: number; bottom: number } => {
+  const stage = document.querySelector('.cr-stage')
+  if (!stage) return { top: 0, bottom: window.innerHeight }
+  const r = stage.getBoundingClientRect()
+  return { top: Math.max(0, r.top), bottom: Math.min(window.innerHeight, r.bottom) }
+}
+
 /** The bed's height above the window's bottom: where the stage ends. */
 const bedGap = (): number => {
   const stage = document.querySelector('.cr-stage')
@@ -589,7 +597,11 @@ function PetCardFrame({
     const measure = (): void => {
       const a = anchor.getBoundingClientRect()
       const c = card.getBoundingClientRect()
-      const next = cardPlacement(a, { width: c.width, height: c.height }, { width: window.innerWidth, height: window.innerHeight }, side)
+      // The card's remove mark stands above its top edge (agent-card.css · .zv-del): it too stays under the header.
+      const mark = card.querySelector<HTMLElement>('.zv-del, .cr-pet-card-x')
+      const above = Math.max(0, -(mark?.offsetTop ?? 0))
+      const band = stageBand()
+      const next = cardPlacement(a, { width: c.width, height: c.height }, { width: window.innerWidth, height: window.innerHeight }, side, undefined, { top: band.top + above, bottom: band.bottom })
       // Only a real move is news: a fresh object every measure would re-run
       // the morph effect for nothing (and once looped the whole app).
       setPlace((at) => (at && at.left === next.left && at.top === next.top ? at : next))

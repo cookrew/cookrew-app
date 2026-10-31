@@ -124,7 +124,7 @@ export function ItemPets({
           )}
         </span>
         <span className={`zv-th cr-pet-page ${item.kind}`} aria-hidden="true">
-          <Page item={item.view} />
+          <Page item={item.view} words={false} />
         </span>
       </>
     )
