@@ -31,6 +31,7 @@ import { terminalKeyIntent } from './terminal-key-intent'
 import { pasteFromClipboard } from './terminal-clipboard'
 import { registerTerminalPaste } from './terminal-paste-bus'
 import { attachImeBridge } from './ime-input-bridge'
+import { attachTextareaPad } from './textarea-pad'
 import { CrIcon } from './icons'
 import { TranslateButton } from './TranslateButton'
 import { languageByCode } from '../../shared/translate'
@@ -975,6 +976,9 @@ function TerminalOverlay({
         const focusOnTap = (): void => term.focus()
         container.addEventListener('pointerup', focusOnTap, { once: true })
         cleanups.push(() => container.removeEventListener('pointerup', focusOnTap))
+        // A soft keyboard's Backspace deletes in xterm's own field; keep it
+        // from running dry or Backspace sends nothing (textarea-pad.ts).
+        if (term.textarea) cleanups.push(attachTextareaPad(term.textarea))
       }
 
       // The attach replay is plain text and cannot reconstruct a TUI's
