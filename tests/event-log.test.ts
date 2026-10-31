@@ -279,3 +279,13 @@ describe('EventLog', () => {
     })
   })
 })
+
+describe('a grouped toast reads as English', () => {
+  it('pluralises the noun and never repeats it in the verb', async () => {
+    const { groupedLine } = await import('../src/renderer/src/event-log')
+    expect(groupedLine('dispatch.interrupted', 2)).toBe('2 dispatches interrupted')
+    expect(groupedLine('dispatch.done', 3)).toBe('3 dispatches finished')
+    expect(groupedLine('terminal.killed', 2)).toBe('2 agents killed')
+    expect(groupedLine('browser.created', 4)).toBe('4 browsers created')
+  })
+})
