@@ -18,6 +18,7 @@ import {
   petMax,
   pickItems,
   pickPets,
+  nameTagSpot,
   readSpot
 } from '../src/renderer/src/pets/pet-pick'
 import { THUMB_WANTS_MAX, thumbWants } from '../src/renderer/src/pets/thumb-wants'
@@ -186,10 +187,16 @@ describe('three steps to an agent', () => {
     expect(petClick('b', 'a')).toBe('card')
   })
 
+  it('pins the name tag to the screen beside the face, toward the middle, so a scrolling troop never clips it', () => {
+    const face = { left: 1380, top: 300, width: 38, height: 38 }
+    expect(nameTagSpot(face, 'right', 1440)).toEqual({ top: 298, height: 42, right: 41 })
+    expect(nameTagSpot({ ...face, left: 20 }, 'left', 1440)).toEqual({ top: 298, height: 42, left: 39 })
+  })
+
   it('hover names the face and opens nothing; no timer opens a card', () => {
     const troop = readFileSync('src/renderer/src/pets/PetTroop.tsx', 'utf8')
-    expect(troop).toContain('setHoverId(member.id)')
-    expect(troop).toContain('<span className="cr-pet-name" aria-hidden="true">')
+    expect(troop).toContain('nameFace(member.id, event.currentTarget)')
+    expect(troop).toContain('<span className="cr-pet-name" aria-hidden="true" style={hoverId === member.id && tagSpot ? { position: \'fixed\', ...tagSpot } : undefined}>')
     expect(troop).not.toMatch(/ENTER_MS|LEAVE_MS|setTimeout\(\(\) => setOpenId/)
     expect(troop).toContain("if (petClick(openId, id) === 'full')")
   })

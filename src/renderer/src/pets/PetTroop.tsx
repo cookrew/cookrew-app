@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { cardPlacement, clampSpot, petClick, petHome, readSpot, type PetSpot } from './pet-pick'
+import { cardPlacement, clampSpot, nameTagSpot, petClick, petHome, readSpot, type PetSpot } from './pet-pick'
 import { CONTENT_FRAMES, MORPH_EASE, MORPH_MS, morphFrames } from './pet-morph'
 import './pets.css'
 
@@ -98,6 +98,12 @@ export function PetTroop({
   openRef.current = openId
   /** The face a pointer (or the keyboard) rests on: it shows its name. */
   const [hoverId, setHoverId] = useState<string | null>(null)
+  /** Where that face's name tag is pinned on the screen, read from the face when it is named. */
+  const [tagSpot, setTagSpot] = useState<ReturnType<typeof nameTagSpot> | null>(null)
+  const nameFace = (id: string, face: HTMLElement): void => {
+    setTagSpot(nameTagSpot(face.getBoundingClientRect(), side, window.innerWidth))
+    setHoverId(id)
+  }
   const [expanded, setExpanded] = useState(false)
   const [tucked, setTucked] = useState(() => stored(tuckedKey) === '1')
   const [saved, setSaved] = useState<PetSpot | null>(() => readSpot(stored(spotKey)))
@@ -278,21 +284,20 @@ export function PetTroop({
             className={`cr-pet ${member.className}${openId === member.id ? ' open' : ''}${hoverId === member.id && !tucked ? ' named' : ''}`}
             aria-label={member.label}
             aria-expanded={openId === member.id}
-            // An expanded troop scrolls, and its scroll would clip the name tag.
-            title={expanded ? member.name : undefined}
             onPointerEnter={(event) => {
               if (event.pointerType !== 'mouse' || tucked || drag.current?.moved) return
-              setHoverId(member.id)
+              nameFace(member.id, event.currentTarget)
             }}
             onPointerLeave={() => setHoverId((at) => (at === member.id ? null : at))}
             // The keyboard names a face as a pointer does; Enter is its click.
-            onFocus={(event) => !tucked && event.currentTarget.matches(':focus-visible') && setHoverId(member.id)}
+            onFocus={(event) => !tucked && event.currentTarget.matches(':focus-visible') && nameFace(member.id, event.currentTarget)}
             onBlur={() => setHoverId((at) => (at === member.id ? null : at))}
             onClick={() => clickPet(member.id)}
           >
             {member.face}
             {!tucked && (
-              <span className="cr-pet-name" aria-hidden="true">
+              // Pinned to the screen (position: fixed) so neither the troop's scroll nor its edge cuts it.
+              <span className="cr-pet-name" aria-hidden="true" style={hoverId === member.id && tagSpot ? { position: 'fixed', ...tagSpot } : undefined}>
                 {member.name}
               </span>
             )}
