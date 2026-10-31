@@ -69,3 +69,13 @@ describe('transcript-paper.css', () => {
   })
 })
 
+
+describe('the terminal keeps clear of the checkpoint rail', () => {
+  it('reserves the rail in every look, so looks and the rail never resize the pane', async () => {
+    const { readFileSync } = await import('node:fs')
+    const css = readFileSync(new URL('../src/renderer/src/transcript-paper.css', import.meta.url), 'utf8')
+    expect(css).toMatch(/\.lod-overlay \.popout-main\.look-records \.ctx-live,\s*\.lod-overlay \.popout-main\.look-live \.ctx-live \{\s*right: 30px;/)
+    const rail = readFileSync(new URL('../src/renderer/src/styles.css', import.meta.url), 'utf8')
+    expect(rail.slice(rail.indexOf('.cr-ckpt-rail {'), rail.indexOf('.cr-ckpt-rail {') + 160)).toContain('width: 30px')
+  })
+})

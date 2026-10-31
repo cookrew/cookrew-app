@@ -129,6 +129,11 @@ function languageName(code: string | null): string {
  * this layer only has work to do when the arbitration result changes — which
  * useLodLayout guarantees by handing back the same `lod` object until it does.
  */
+/** The mount kick waits until the terminal's box has been still this long. */
+const MOUNT_KICK_SETTLE_MS = 400
+/** ...but only while opening: a box change later is a resize, refitted as usual. */
+const MOUNT_SETTLE_WINDOW_MS = 3000
+
 export const TerminalOverlayLayer = memo(function TerminalOverlayLayer({
   terminals,
   lod,
@@ -977,10 +982,25 @@ function TerminalOverlay({
       // land on a wrong baseline and scatter. A double resize (SIGWINCH)
       // forces the app to repaint its real screen at the overlay size.
       // Only the viewer in use: a kick is a resize of the SHARED pane.
-      const kickTimer = setTimeout(() => {
-        if (owns()) repaintKick()
-      }, 200)
-      cleanups.push(() => clearTimeout(kickTimer))
+      //
+      // ONCE, when the box has settled: a full view lays itself out over its
+      // first moments (the head, the dock, the side groups), and a kick at a
+      // fixed 200 ms overlapped those refits — four resizes of the shared
+      // pane on one open, each a full repaint and a redraw by the agent
+      // (traced 2026-11-01). Every box change in the first moments moves it.
+      const mountedAt = Date.now()
+      let kickTimer: ReturnType<typeof setTimeout> | null = null
+      const scheduleMountKick = (): void => {
+        if (kickTimer) clearTimeout(kickTimer)
+        kickTimer = setTimeout(() => {
+          kickTimer = null
+          if (owns()) repaintKick()
+        }, MOUNT_KICK_SETTLE_MS)
+      }
+      scheduleMountKick()
+      cleanups.push(() => {
+        if (kickTimer) clearTimeout(kickTimer)
+      })
 
       // Touch scrolling: tmux runs with `mouse on`, so xterm sits in
       // mouse-tracking mode and its built-in touch scrolling is disabled
@@ -1143,6 +1163,8 @@ function TerminalOverlay({
       // hammering the TUI with SIGWINCH every frame.
       let refitTimer: ReturnType<typeof setTimeout> | null = null
       const observer = new ResizeObserver(() => {
+        // Still opening: the mount kick waits for the box to settle.
+        if (kickTimer !== null && Date.now() - mountedAt < MOUNT_SETTLE_WINDOW_MS) scheduleMountKick()
         if (refitTimer) clearTimeout(refitTimer)
         refitTimer = setTimeout(() => {
           // A viewer not in use keeps the adopted size: refitting it would

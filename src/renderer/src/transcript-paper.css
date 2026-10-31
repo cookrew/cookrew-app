@@ -235,6 +235,17 @@
   border: 0;
 }
 
+/* THE TERMINAL KEEPS CLEAR OF THE CHECKPOINT RAIL (owner's recording,
+   2026-11-01): the rail is 30px laid over the right edge, and the terminal
+   under it was fitted to the whole width, so its last columns ran under the
+   rail. The room is kept in every look, so the terminal is the same size in
+   chat, log and live, and the rail arriving after its checkpoints load does
+   not resize the shared pane. */
+.lod-overlay .popout-main.look-records .ctx-live,
+.lod-overlay .popout-main.look-live .ctx-live {
+  right: 30px;
+}
+
 .lod-overlay .look-records .ctx-live::before,
 .lod-overlay .look-live .ctx-live::before {
   content: none;
