@@ -12,7 +12,7 @@ import { SWS, type FrameEls } from './zoom-frame'
 import { useZoom, zoomStore } from './zoom-store'
 import { useZoomMotion } from './use-zoom-motion'
 import { nearestStop, RANGE, STOPS, STOP_NAMES, stepOut } from './zoom-path'
-import { useZoomFleet } from './use-zoom-fleet'
+import { useZoomFleetView } from './use-zoom-fleet'
 import './zoom.css'
 
 /**
@@ -71,7 +71,8 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   }, [])
   const zoom = useZoom()
   const rows = crew.all
-  const fleet = useZoomFleet()
+  // Only what the view draws of the fleet (use-zoom-fleet.ts · useZoomFleetView).
+  const fleet = useZoomFleetView()
   const [list, setList] = useState<WorkspaceList | null>(null)
   const [nameAsked, setNameAsked] = useState<string | null>(null)
   const localMachine = fleet.machines.find((m) => m.local)
@@ -106,7 +107,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const model = useMemo(() => buildZoomModel({
     nodes: workspace?.nodes ?? [], connections: workspace?.connections ?? [], rows, crew: crew.crew, attachIndex,
     workspaces: fleetWorkspaces.length ? fleetWorkspaces.map((w) => ({ id: w.id, name: w.name, dir: '', dirs: [], icon: w.icon ?? '🗂' })) : (list?.workspaces ?? []), activeId: workspaceId ?? list?.activeId ?? 'local', name: workspace?.name ?? 'Workspace',
-    machines: fleet.machines.map((m) => ({ id: m.id, name: m.name, local: m.local, online: m.online, detail: m.detail, workspaces: m.workspaces.map((w) => ({ id: w.id, name: w.name, agents: w.agents.map((a) => ({ harness: a.harness, phase: a.phase })), counts: w.counts })) }))
+    machines: fleet.machines
   }), [workspace?.nodes, workspace?.connections, workspace?.name, workspaceId, rows, crew.crew, attachIndex, list, fleetWorkspaces, fleet.machines])
   const modelRef = useRef(model)
   modelRef.current = model

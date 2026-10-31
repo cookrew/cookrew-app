@@ -458,3 +458,61 @@ const getFleet = (): ZoomFleet => fleetStore().get()
 export function useZoomFleet(): ZoomFleet {
   return useSyncExternalStore(subscribe, getFleet)
 }
+
+// ── what the zoom view draws of it ──────────────────────────────────────────
+
+/**
+ * The fleet as the zoom view draws it: each machine's name and state, each
+ * workspace's name, icon, counts and its agents' harness and phase. The
+ * fleet itself changes on every levels delta, a working agent's reply and
+ * status line included, and the zoom view re-rendered for each (about ten
+ * times a second at the full stop, profiled 2026-11-01) to draw none of it.
+ */
+export interface ZoomFleetView {
+  machines: {
+    id: string
+    name: string
+    local: boolean
+    online: boolean
+    detail: ZoomMachineDetail
+    workspaces: { id: string; name: string; icon: string | null; agents: { harness: string; phase: string }[]; counts: ZoomCounts | null }[]
+  }[]
+}
+
+export function fleetViewOf(fleet: ZoomFleet): ZoomFleetView {
+  return {
+    machines: fleet.machines.map((m) => ({
+      id: m.id,
+      name: m.name,
+      local: m.local,
+      online: m.online,
+      detail: m.detail,
+      workspaces: m.workspaces.map((w) => ({ id: w.id, name: w.name, icon: w.icon, agents: w.agents.map((a) => ({ harness: a.harness, phase: a.phase })), counts: w.counts }))
+    }))
+  }
+}
+
+/** The same view object until something in it changes. */
+export function createFleetViewReader(read: () => ZoomFleet): () => ZoomFleetView {
+  let lastFleet: ZoomFleet | null = null
+  let lastView: ZoomFleetView | null = null
+  let lastKey = ''
+  return () => {
+    const fleet = read()
+    if (fleet === lastFleet && lastView) return lastView
+    lastFleet = fleet
+    const view = fleetViewOf(fleet)
+    const key = JSON.stringify(view)
+    if (lastView && key === lastKey) return lastView
+    lastView = view
+    lastKey = key
+    return view
+  }
+}
+
+const getFleetView = createFleetViewReader(getFleet)
+
+export function useZoomFleetView(): ZoomFleetView {
+  return useSyncExternalStore(subscribe, getFleetView)
+}
+
