@@ -11,6 +11,7 @@ import { checkpointViewModel, isEmptyTurnView } from '../turn-view-model'
 import type { WorkspaceState } from '../../../shared/model'
 import { petMax, pickPets, type Pet, type PetMood } from './pet-pick'
 import { useOfToolLine, type ToolUse } from '../../../shared/use-signal'
+import { dockedOrder } from './pet-dock'
 import { PetTroop, type CardControls } from './PetTroop'
 import type { AttachmentIndex } from '../terminal-attachments'
 import { AgentLatest } from '../zoom/AgentLatest'
@@ -86,7 +87,8 @@ export function AgentPets({
   workspace,
   workspaceId,
   attachIndex,
-  onOpen
+  onOpen,
+  dock = null
 }: {
   workspace: WorkspaceState | null
   workspaceId: string | null
@@ -94,15 +96,28 @@ export function AgentPets({
   attachIndex: AttachmentIndex
   /** The full transcript (App: the stage, with it picked); an item id opens the item. */
   onOpen: (id: string) => void
+  /**
+   * A full view is up: the troop attaches to it (pet-dock.ts), without the
+   * agent the panel shows, the agents its browser or note is wired to first.
+   */
+  dock?: { readonly exclude: string | null; readonly first: readonly string[] } | null
 }): React.JSX.Element | null {
   const { rows, now } = usePetRows(workspace)
   const troop = useMemo(() => pickPets(rows, { workspaceId, now, max: petMax(window.innerWidth) }), [rows, workspaceId, now])
   const byId = useMemo(() => new Map([...troop.pets, ...troop.more].map((pet) => [pet.row.id, pet])), [troop])
+  // In a full view the column is the demo's: the card on the panel is not in it, the ones wired to it lead.
+  const column = useMemo(() => {
+    if (!dock) return { pets: troop.pets, more: troop.more, dim: new Set<string>() }
+    const all = [...troop.pets, ...troop.more].map((pet) => ({ id: pet.row.id, pet }))
+    const order = dockedOrder(all, dock)
+    const count = troop.pets.filter((pet) => pet.row.id !== dock.exclude).length
+    return { pets: order.members.slice(0, count).map((m) => m.pet), more: order.members.slice(count).map((m) => m.pet), dim: order.dim }
+  }, [troop, dock])
   const member = (pet: Pet) => {
     const use = petUse(pet)
     return {
       id: pet.row.id,
-      className: use ? `${pet.mood} using` : pet.mood,
+      className: `${use ? `${pet.mood} using` : pet.mood}${column.dim.has(pet.row.id) ? ' dim' : ''}`,
       name: pet.row.name,
       label: `${pet.row.name}, ${MOOD_WORD[pet.mood]}${use ? `, using ${use.use === 'hardware' ? 'hardware' : `a ${use.use}`} (${use.via})` : ''}`,
       face: (
@@ -123,8 +138,9 @@ export function AgentPets({
       side="right"
       storageKey="cookrew.pets.agents"
       label="agents"
-      members={troop.pets.map(member)}
-      more={troop.more.map(member)}
+      members={column.pets.map(member)}
+      more={column.more.map(member)}
+      dockable={dock !== null}
       onOpen={onOpen}
       cardClass={(id) => `ag-ink ag-card ${byId.get(id)?.mood ?? ''}`}
       cardLabel={(id) => `${byId.get(id)?.row.name ?? 'Agent'}'s latest turn`}

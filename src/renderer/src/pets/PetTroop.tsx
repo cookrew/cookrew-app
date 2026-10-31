@@ -3,6 +3,7 @@ import { createPortal, flushSync } from 'react-dom'
 import { cardPlacement, clampSpot, nameTagSpot, petClick, petHome, readSpot, type PetSpot } from './pet-pick'
 import { CONTENT_FRAMES, MORPH_EASE, MORPH_MS, morphFrames } from './pet-morph'
 import { CARD_PARTS, FACE_PARTS, FULL_PARTS, findParts, pageZoomEnv, waitFor, zoomStep } from './pet-zoom'
+import { dockedSpot, nearDock, sheetBox, type Box } from './pet-dock'
 import './pets.css'
 
 /**
@@ -21,9 +22,28 @@ import './pets.css'
  * They stand in columns, the agents down the right, the browsers and notes
  * down the left, in the gutters the stage keeps clear for them, so they cover
  * nothing until they are dragged.
+ *
+ * With a full view up they ATTACH to its panel (pet-dock.ts): each column
+ * stands beside the sheet, centred on it, and moves with it. Dragged off, the
+ * troop floats where it is put; dragged back to the panel's side, it snaps on.
  */
 
 const DRAG_PX = 5
+/** The glide between floating and attached, as long as the demo's step into the full view. */
+const DOCK_MS = 420
+
+const boxOf = (rect: DOMRect): Box => ({ left: rect.left, top: rect.top, width: rect.width, height: rect.height })
+
+/** The full view on screen, its sheet, and the lanes the attached troops take beside it (zoom/full-views.css). */
+const fullViewNow = (): { full: Box; sheet: Box } | null => {
+  const el = document.querySelector<HTMLElement>('.zv-fullview')
+  if (!el) return null
+  const full = boxOf(el.getBoundingClientRect())
+  if (full.width <= 0 || full.height <= 0) return null
+  const style = getComputedStyle(el)
+  const lane = (name: string): number => Number.parseFloat(style.getPropertyValue(name)) || 0
+  return { full, sheet: sheetBox(full, { left: lane('--fv-lane-left'), right: lane('--fv-lane-right') }) }
+}
 
 export interface TroopMember {
   readonly id: string
@@ -75,7 +95,8 @@ export function PetTroop({
   onShown,
   cardClass,
   cardLabel,
-  renderCard
+  renderCard,
+  dockable = false
 }: {
   side: 'left' | 'right'
   /** Where it remembers its spot and whether it is tucked. */
@@ -89,9 +110,12 @@ export function PetTroop({
   cardClass?: (id: string) => string
   cardLabel: (id: string) => string
   renderCard: (id: string, controls: CardControls) => React.ReactNode
+  /** A full view is up: the troop may attach to its panel (pet-dock.ts). */
+  dockable?: boolean
 }): React.JSX.Element | null {
   const spotKey = `${storageKey}.spot`
   const tuckedKey = `${storageKey}.tucked`
+  const attachedKey = `${storageKey}.attached`
   const [openId, setOpenId] = useState<string | null>(null)
   /** The card shrinking back into its face (pet-morph.ts); gone when the morph ends. */
   const [leavingId, setLeavingId] = useState<string | null>(null)
@@ -115,6 +139,13 @@ export function PetTroop({
   const troopRef = useRef<HTMLDivElement>(null)
   const petRefs = useRef(new Map<string, HTMLButtonElement>())
   const drag = useRef<{ x: number; y: number; spot: PetSpot; moved: boolean; id: number } | null>(null)
+  /** Attached to the full view when one is up; a drag off the panel lets go, and that is remembered. */
+  const [attached, setAttached] = useState(() => stored(attachedKey) !== '0')
+  const docked = dockable && attached
+  /** Where the attached column stands, measured off the full view (null until measured). */
+  const [dockAt, setDockAt] = useState<{ left: number; top: number } | null>(null)
+  /** A drag has brought the troop close enough to the panel to snap on when let go. */
+  const [near, setNear] = useState(false)
   const swallowClick = useRef(false)
   const draft = useRef('')
 
@@ -150,6 +181,83 @@ export function PetTroop({
       ro?.disconnect()
     }
   }, [shown.length, tucked])
+
+  // Attached: the column follows the sheet (it moves when the window, the
+  // header or the dock does). The full view is a lazy chunk, so it is looked
+  // for again until it is there.
+  useLayoutEffect(() => {
+    if (!docked) {
+      setDockAt(null)
+      return
+    }
+    let retry: ReturnType<typeof setTimeout> | null = null
+    let ro: ResizeObserver | null = null
+    let watching: Element | null = null
+    const measure = (): void => {
+      const view = fullViewNow()
+      const el = troopRef.current
+      if (!view || !el) {
+        retry = setTimeout(measure, 120)
+        return
+      }
+      const fullEl = document.querySelector('.zv-fullview')
+      if (ro && fullEl && fullEl !== watching) {
+        ro.observe(fullEl)
+        watching = fullEl
+      }
+      const rect = el.getBoundingClientRect()
+      const next = dockedSpot(side, view.full, view.sheet, { width: rect.width, height: rect.height }, { width: window.innerWidth, height: window.innerHeight })
+      setDockAt((at) => (at && at.left === next.left && at.top === next.top ? at : next))
+    }
+    ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => measure()) : null
+    if (ro && troopRef.current) ro.observe(troopRef.current)
+    measure()
+    window.addEventListener('resize', measure)
+    return () => {
+      if (retry) clearTimeout(retry)
+      ro?.disconnect()
+      window.removeEventListener('resize', measure)
+    }
+  }, [docked, side, shown.length])
+
+  // The sheet makes room for an attached column (zoom/full-views.css reads this).
+  useEffect(() => {
+    if (!docked) return
+    const name = `cr-docked-${side}`
+    document.body.classList.add(name)
+    return () => document.body.classList.remove(name)
+  }, [docked, side])
+
+  // THE GLIDE: between floating and attached each face travels from where it
+  // was to where it stands now (FLIP: transform only), as the demo's crew
+  // walks into its column. A face that was not there fades in. The faces are
+  // measured only when the troop attaches or lets go — read here, while the
+  // page still shows them where they were — never on every render.
+  const glideFrom = useRef<Map<string, DOMRect> | null>(null)
+  const wasDocked = useRef(docked)
+  if (wasDocked.current !== docked) {
+    wasDocked.current = docked
+    const from = new Map<string, DOMRect>()
+    for (const [id, el] of petRefs.current) from.set(id, el.getBoundingClientRect())
+    glideFrom.current = from
+  }
+  useLayoutEffect(() => {
+    const from = glideFrom.current
+    if (!from || (docked && dockAt === null)) return
+    glideFrom.current = null
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    for (const [id, el] of petRefs.current) {
+      const was = from.get(id)
+      const now = el.getBoundingClientRect()
+      if (!was) {
+        el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: DOCK_MS / 2, easing: 'ease-out' })
+        continue
+      }
+      const dx = was.left - now.left
+      const dy = was.top - now.top
+      if (Math.abs(dx) + Math.abs(dy) > 1) el.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], { duration: DOCK_MS, easing: MORPH_EASE })
+    }
+  }, [docked, dockAt])
 
   useEffect(() => {
     if (!openId) return
@@ -187,11 +295,23 @@ export function PetTroop({
       setHoverId(null)
       close()
       event.currentTarget.setPointerCapture(event.pointerId)
+      // Off the panel: the troop floats from where it stood in its column.
+      const el = troopRef.current
+      if (docked && el) {
+        const rect = el.getBoundingClientRect()
+        at.spot = { x: side === 'right' ? window.innerWidth - rect.right : rect.left, bottom: window.innerHeight - rect.bottom }
+        setSaved(at.spot)
+        setAttached(false)
+      }
     }
     const el = troopRef.current
     if (!el) return
     const x = side === 'right' ? at.spot.x - dx : at.spot.x + dx
     setSaved(clampSpot({ x, bottom: at.spot.bottom - dy }, el.getBoundingClientRect(), { width: window.innerWidth, height: window.innerHeight }))
+    if (dockable) {
+      const view = fullViewNow()
+      setNear(view !== null && nearDock(side, boxOf(el.getBoundingClientRect()), view.full, view.sheet))
+    }
   }
   const onPointerUp = (event: React.PointerEvent<HTMLDivElement>): void => {
     const at = drag.current
@@ -204,6 +324,14 @@ export function PetTroop({
     const rect = el.getBoundingClientRect()
     const x = side === 'right' ? window.innerWidth - rect.right : rect.left
     store(spotKey, JSON.stringify({ x: Math.round(x), bottom: Math.round(window.innerHeight - rect.bottom) }))
+    // Let go by the panel's side: it snaps on. Anywhere else: it floats there.
+    if (dockable) {
+      const view = fullViewNow()
+      const snap = view !== null && nearDock(side, boxOf(rect), view.full, view.sheet)
+      setNear(false)
+      setAttached(snap)
+      store(attachedKey, snap ? '1' : '0')
+    }
   }
   /** A press that was the end of a drag is not a click. */
   const consumed = (): boolean => {
@@ -303,14 +431,23 @@ export function PetTroop({
     <>
       <div
         ref={troopRef}
-        className={`cr-pets ${side}${tucked ? ' tucked' : ''}${expanded ? ' expanded' : ''}`}
-        style={side === 'right' ? { right: spot.x, bottom: spot.bottom } : { left: spot.x, bottom: spot.bottom }}
+        className={`cr-pets ${side}${tucked ? ' tucked' : ''}${expanded ? ' expanded' : ''}${docked ? ' docked' : ''}${near ? ' snap' : ''}`}
+        style={
+          docked && dockAt
+            ? { left: dockAt.left, top: dockAt.top }
+            : side === 'right'
+              ? { right: spot.x, bottom: spot.bottom }
+              : { left: spot.x, bottom: spot.bottom }
+        }
         role="toolbar"
         aria-label={label}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onPointerCancel={() => void (drag.current = null)}
+        onPointerCancel={() => {
+          drag.current = null
+          setNear(false)
+        }}
       >
         {grip}
         {shown.map((member) => (
