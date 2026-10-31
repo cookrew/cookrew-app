@@ -49,7 +49,7 @@ import { DEEP_LINK_SCHEME, createDeepLinkQueue, deepLinkInArgv, parseDeepLink } 
 import { DEEP_LINK_CHANNEL } from '../shared/deep-link'
 import { createRegistryTokenVerifier, registryKeyOverHttp } from './registry-token'
 import { faceWords, harnessesOf } from './served-face'
-import { askTerminal, beginShutdown, cancelAllAsks, ownerSubmit, pasteAndSubmit } from './ask'
+import { askTerminal, beginShutdown, cancelAllAsks, ownerSubmit, pasteAndSubmit, waitForReady } from './ask'
 import { CableSignalBus } from './cable-signal'
 import { defaultProducerLease } from './producer-lease'
 import {
@@ -239,6 +239,7 @@ import { HeadlessBrowserCommandEngine } from './headless-browser-command'
 import { reapOrphanBrowserProfiles, removeBrowserProfile } from './browser-profile-store'
 import { reapOrphanChrome } from './orphan-chrome'
 import { staleAgentIds } from './agent-reconcile'
+import { IdleSleep, idleSleepMsFrom } from './agent-sleep'
 import { purgeRegenerableProfileData, reapOrphanPartitions } from './browser-storage-gc'
 
 import { TraceReader, type SessionWatchSpec } from './trace'
@@ -2374,6 +2375,7 @@ const herdrPhases = createBackendPhaseGate({
 statusFeed()?.on('status', ({ sessionName, status }: StatusObservation) => {
   const terminalId = terminalIdForSessionName(sessionName)
   if (!terminalId) return
+  idleSleep.touch(terminalId, Date.now())
   lazyTerminals.observeStatus(terminalId, status)
   herdrPhases.observe(terminalId, backendPhaseOf(status), isAgentTerminal(terminalId))
   // herdr's push IS the board's phase for this pane: fold it in at once.
@@ -3157,6 +3159,134 @@ const livenessSweep = setInterval(reconcileAgentLiveness, 5 * 60_000)
 livenessSweep.unref()
 setTimeout(reconcileAgentLiveness, 30_000).unref()
 
+/**
+ * IDLE SLEEP (agent-sleep.ts). Owner, 2026-10-31: keep the TUI, stop paying
+ * for it while nobody uses it. A Claude agent with no turn, no viewer, no
+ * input and no draft in its box for COOKREW_IDLE_SLEEP_MS (default ten
+ * minutes, 0 = off) has its process ended; its conversation stays on disk and
+ * the next ask, dispatch, quick reply, phone message or LIVE resumes it.
+ *
+ * Claude only, on purpose: its wake is proven (Harden, twice, 2026-10-31) and
+ * resumes the exact session. Codex's wake depends on the herdr session being
+ * able to start codex at all — until it can, a sleeping Codex card would be a
+ * card nobody can wake.
+ */
+const IDLE_SLEEP_MS = idleSleepMsFrom(process.env.COOKREW_IDLE_SLEEP_MS)
+const idleSleep = new IdleSleep(IDLE_SLEEP_MS)
+
+/** Anything that means a person or a turn is using this agent right now. */
+function agentBusy(id: string): boolean {
+  return (
+    lazyTerminals.viewerCount(id) > 0 ||
+    turns.inTurn(id) ||
+    turns.ownerComposing(id) ||
+    agentStatus(sessionNameFor(id)) === 'working'
+  )
+}
+
+/** One multiplexer listing per sweep — the same price as the liveness sweep. */
+function sleepSweep(): void {
+  if (IDLE_SLEEP_MS <= 0) return
+  try {
+    const mux = multiplexer()
+    if (!mux?.available()) return
+    const sessions = new Set(mux.listSessions())
+    // A pane focused in herdr itself (the owner's own client, Alma on the
+    // phone) has a person at it that Cookrew's viewer count cannot see.
+    const focused = new Set(mux.focusedSessions?.() ?? [])
+    const running = store.terminalsAcross().filter((n) => sessions.has(sessionNameFor(n.id)))
+    const due = idleSleep.due(
+      running.map((n) => ({
+        id: n.id,
+        resumable: isClaudeCommand(n.command) && !!n.claudeSessionId && canRestoreExact(n),
+        served: n.servedSession != null || ptys.isServed(n.id) || servedSpawnContexts.has(store.ownerOf(n.id) ?? ''),
+        busy: agentBusy(n.id) || focused.has(sessionNameFor(n.id))
+      })),
+      Date.now()
+    )
+    for (const id of due) putAgentToSleep(id)
+  } catch (error) {
+    console.error('Idle sleep sweep failed:', error)
+  }
+}
+const sleepSweepTimer = setInterval(sleepSweep, 60_000)
+sleepSweepTimer.unref()
+
+/**
+ * End an idle agent's process and nothing else: the node, its wires, its
+ * session id and its turn history all stay, so the wake is a plain resume.
+ * Asked once more at the moment of the act — a turn can start inside the
+ * sweep's minute.
+ */
+function putAgentToSleep(id: string): void {
+  const node = store.nodeAcrossWorkspaces(id)?.node
+  if (!node || node.kind !== 'terminal' || agentBusy(id)) return
+  lazyTerminals.forget(id)
+  herdrPhases.observe(id, null, true)
+  sessionSync.unwatch(id)
+  turns.untrack(id)
+  if (ptys.get(id)) ptys.kill(id)
+  else ptys.killDetached(id)
+  agents.deactivate(id)
+  idleSleep.markAsleep(id)
+  const minutes = Math.round(IDLE_SLEEP_MS / 60_000)
+  store.withOpContext({ actor: 'agent' }, () =>
+    store.recordEvent('terminal.asleep', id, node.name, `idle ${minutes} min; wakes on the next ask, reply or LIVE`)
+  )
+}
+
+/** In-flight wakes, so two callers waking one agent share one boot. */
+const waking = new Map<string, Promise<PtySession | undefined>>()
+
+/**
+ * Bring back an agent THIS APP put to sleep, resolving with its session once
+ * the pane has stopped painting the resumed transcript (a CR sent into that
+ * window is swallowed — ask-cold-start, 2026-10-31). Anything else without a
+ * session resolves undefined, so callers keep their old answer for it.
+ */
+function wakeAgent(id: string): Promise<PtySession | undefined> {
+  const live = ptys.get(id)
+  if (live) {
+    idleSleep.takeAsleep(id)
+    return Promise.resolve(live)
+  }
+  const pending = waking.get(id)
+  if (pending) return pending
+  if (!idleSleep.takeAsleep(id)) return Promise.resolve(undefined)
+  const run = (async (): Promise<PtySession | undefined> => {
+    try {
+      const session = ensureTerminalMirror(id) ? ptys.get(id) : undefined
+      if (!session) {
+        // Could not boot: still asleep, so the next caller tries again.
+        idleSleep.markAsleep(id)
+        return undefined
+      }
+      if (!(await waitForReady(session))) console.warn(`Agent ${id} was still booting when it was woken`)
+      return session
+    } finally {
+      waking.delete(id)
+    }
+  })()
+  waking.set(id, run)
+  return run
+}
+
+/** Keystrokes for a sleeping agent, held until it is awake, then sent in order. */
+const wakeInput = new Map<string, readonly string[]>()
+function writeWhenAwake(id: string, data: string): void {
+  const queued = wakeInput.get(id)
+  if (queued) {
+    wakeInput.set(id, [...queued, data])
+    return
+  }
+  wakeInput.set(id, [data])
+  void wakeAgent(id).then((session) => {
+    const chunks = wakeInput.get(id) ?? []
+    wakeInput.delete(id)
+    for (const chunk of chunks) session?.write(chunk)
+  })
+}
+
 const oracleSweep = setInterval(() => {
   // A cold pane-pid lookup is a synchronous herdr child process, so at most
   // ONE per tick: a fleet that all boots at once warms up over a few sweeps
@@ -3500,6 +3630,7 @@ const dispatchService = new DispatchService({
   // The input box belongs to a composing owner: admission refuses and both
   // delivery legs stand down rather than pasting under their typing.
   ownerComposing: (agentId) => turns.ownerComposing(agentId),
+  wake: async (agentId) => (await wakeAgent(agentId)) !== undefined,
   // Observer probation: a native-file acceptance must see its watch actually
   // reconcile; a path that never materializes interrupts at 60s, not 10min.
   observerLive: (agentId) => sessionSync.isVerified(agentId),
@@ -6199,6 +6330,7 @@ app.whenReady().then(() => {
     restoreCheckpoint,
     undoRestore,
     ptys,
+    wakeAgent,
     voice,
     turns,
     presets: PRESETS,
@@ -7237,6 +7369,12 @@ function registerIpc(handlers: RestoreHandlers): void {
   // Terminal stream bridging renderer xterm <-> PTY
   const inputRefusalAnnounced = new Map<string, number>()
   ipcMain.on('pty:input', (_e, terminalId: string, data: string) => {
+    idleSleep.touch(terminalId, Date.now())
+    // A quick reply to a sleeping agent wakes it; the keys wait for it.
+    if (!ptys.get(terminalId) && (idleSleep.isAsleep(terminalId) || wakeInput.has(terminalId))) {
+      writeWhenAwake(terminalId, data)
+      return
+    }
     const verdict = ptys.get(terminalId)?.write(data)
     // A refused byte must be VISIBLE (Sol r8): silently vanishing keystrokes
     // during a delivery window or a contaminated box read as a broken app.

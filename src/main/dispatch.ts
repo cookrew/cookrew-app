@@ -298,6 +298,12 @@ export interface DispatchDeps {
    */
   ownerComposing?: (agentId: string) => boolean
   /**
+   * Bring back an agent this app put to sleep (agent-sleep.ts) — resolves
+   * true once its session is running and ready for input. Asked only when the
+   * session is absent; absent = no idle sleep, and absence stays `unreachable`.
+   */
+  wake?: (agentId: string) => Promise<boolean>
+  /**
    * Ask herdr what the agent is doing right now, when the backend can answer.
    * Used as EVIDENCE ONLY — a working agent proves something landed, which is
    * why an unconfirmed prompt must not be re-sent on top of it. Null when the
@@ -1407,7 +1413,11 @@ export class DispatchService {
     // (state 'failed', reason 'context-full'), not a sync 503.
     const sessionName = this.deps.sessionNameFor(agentId)
     if (!this.deps.sessionExists(sessionName)) {
-      return { status: 503, body: { error: 'unreachable' } }
+      // A sleeping agent is not an unreachable one: its conversation is on
+      // disk and the wake resumes it. Anything else without a session stays
+      // unreachable, exactly as before.
+      const woke = (await this.deps.wake?.(agentId)) === true
+      if (!woke) return { status: 503, body: { error: 'unreachable' } }
     }
     if (!this.deps.promptAgent && !this.deps.submitAgent) {
       return { status: 503, body: { error: 'backend cannot dispatch' } }
