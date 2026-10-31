@@ -227,7 +227,7 @@ describe('the wiring', () => {
 
   it("a browser's face is its page's picture, and the producers are fed from the faces", () => {
     expect(items).toContain('<img className="cr-pet-thumb" src={thumb}')
-    expect(items).toContain('thumbWants.set(')
+    expect(items).toContain("thumbWants.claim('troop'")
     expect(app.match(/thumbWants\.ids\(\)/g)).toHaveLength(2)
   })
 })

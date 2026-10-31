@@ -15,12 +15,14 @@ import type { InboxRow } from '../../shared/inbox-rank'
 import type { Alternate } from '../../shared/sous-decide'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 import type { VersionPinRecord } from '../../shared/version-pin'
-import { apiPath } from './api-base'
+import type { LevelsEvent } from '../../shared/strata'
+import { apiPath, clientBase } from './api-base'
 import { planeFetch } from './plane-fetch'
 import { planeHealth } from './plane-health'
 import { registerPlaneStream } from './plane-streams'
 import { openEventSource } from './rtc-plane'
 import { createRawInputQueue } from './raw-input-queue'
+import { relayAccountMachines } from './relay-machines'
 
 /**
  * CookrewApi over HTTP + Server-Sent-Events, used when the renderer bundle is
@@ -579,6 +581,41 @@ export function createRemoteApi(): CookrewApi {
       req<BoardSnapshotLike>(
         apiPath(`/api/board${window ? `?window=${encodeURIComponent(window)}` : ''}`)
       ),
+    // THE ZOOM NAVIGATOR'S DEVICES: the companion's levels stream (unnamed
+    // data frames, a snapshot first; EventSource reconnects onto a fresh
+    // snapshot by itself, so only a stream it gave up on — a 401 — is a
+    // refusal), and the account's desktops from cookrew.dev itself.
+    subscribeZoomFleet: (cb, refused) => {
+      // AHEALING stream, like the canvas's and the terminal's: a levels feed
+      // that dies without a reset (iOS reaping it, the Mac restarting) is
+      // otherwise never reopened, and the fleet's workspace list freezes for
+      // the life of the page.
+      const stream = new ReconnectingStream({
+        open: () => openEventSource(tokenParam(apiPath('/api/levels/stream'))),
+        onState: (state) => {
+          if (state === 'failed') refused?.()
+        },
+        backoffMs: [1000, 2000, 4000, 8000]
+      })
+      stream.on('message', (message) => {
+        try {
+          cb(JSON.parse(message.data) as LevelsEvent)
+        } catch (error) {
+          console.error('Levels stream sent a frame that is not JSON:', error)
+        }
+      })
+      const onVisible = (): void => {
+        if (document.visibilityState === 'visible') stream.revive()
+      }
+      document.addEventListener('visibilitychange', onVisible)
+      const unregister = registerPlaneStream({ restart: () => stream.restart(), revive: () => stream.revive() })
+      return () => {
+        document.removeEventListener('visibilitychange', onVisible)
+        unregister()
+        stream.close()
+      }
+    },
+    zoomFleetMachines: () => relayAccountMachines(clientBase()),
     recoverAgent: (id) => req(apiPath(`/api/agents/${id}/recover`), 'POST'),
     restoreCheckpoint: (id, checkpointIndex, targetSessionId) =>
       req(apiPath(`/api/agents/${id}/restore`), 'POST', {

@@ -19,6 +19,7 @@ import { firstLine, hostPath, ownersOf, stageSelect, useStageSelection, type Sta
 import { StageItemPane } from './StageItemPane'
 import { StageTerminal } from './StageTerminal'
 import './stage.css'
+import { zoomStore } from '../zoom/zoom-store'
 
 /** A pop older than this has been seen, or missed: it no longer takes the stage. */
 const POP_FRESH_MS = 10 * 60_000
@@ -98,7 +99,11 @@ export function StageView({
   }, [showing, onShowing])
   useEffect(() => () => onShowing(null), [onShowing])
 
-  const back = useCallback(() => stageSelect.clear(), [])
+  const back = useCallback(() => {
+    const z = zoomStore.get()
+    zoomStore.go(z.dir === 'agents' ? 2 : 0, z.dir)
+    stageSelect.clear()
+  }, [])
   // You touched it: it stays. A new arrival waits on its card instead of
   // taking the middle from under your hands.
   const hold = (): void => {

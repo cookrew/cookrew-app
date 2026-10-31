@@ -1,6 +1,6 @@
-// THE ONE BAR: the route device / workspace / agent on the left. With the
-// levels code gone (2026-10-31) the device is only a name, the workspace step
-// goes back to the workspace on the stage, and the agent is where you are.
+// THE ONE BAR: the route device / workspace / agent on the left. The device
+// step is the way out to the workspaces of this Mac (zoom −1, and −2 for every
+// device); the workspace step goes back to its crew; the agent is where you are.
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { deviceLabel, routeAgent } from '../src/renderer/src/HeaderRoute'
@@ -14,10 +14,11 @@ describe('the device step', () => {
     expect(deviceLabel(null)).toBe('This desktop')
   })
 
-  it('is a name, not a way anywhere: there are no device or workspace levels any more', () => {
+  it('is the way out: the device opens the workspaces of this Mac, and again every device', () => {
     const device = source.slice(source.indexOf('cr-route-device'), source.indexOf('cr-route-workspace'))
-    expect(device).toContain('cr-route-here')
-    expect(device).not.toContain('<button')
+    expect(device).toContain('<button')
+    expect(source).toContain('const toDevice = (): void => {')
+    expect(source).toMatch(/zoomStore\.get\(\)\.v <= -1 \? -2 : -1/)
   })
 
   it('reads the desktop from main on the desktop, and from the path on the phone', () => {
@@ -27,8 +28,8 @@ describe('the device step', () => {
 })
 
 describe('the workspace step', () => {
-  it('goes back to the workspace on the stage: the stage follows what needs you again', () => {
-    expect(source).toMatch(/const toWorkspace = \(\): void => \{\s*stageSelect\.clear\(\)\s*onViewChange\('stage'\)/)
+  it('goes back to the workspace: its crew, on the stage', () => {
+    expect(source).toMatch(/const toWorkspace = \(\): void => \{\s*stageSelect\.clear\(\)\s*zoomStore\.go\(1, 'agents'\)\s*onViewChange\('stage'\)/)
   })
 })
 

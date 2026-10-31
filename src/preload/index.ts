@@ -474,6 +474,25 @@ const api = {
   },
   /** This desktop's name for the header's device step (its account record); null when it has none. */
   machineName: () => ipcRenderer.invoke('machine:name'),
+  // THE ZOOM NAVIGATOR'S DEVICES: this desktop's levels feed, a snapshot
+  // first, then every delta, pushed; the release closes this window's stream
+  // when its last reader goes. A refused hold (the companion is not up yet)
+  // is said, so the reader can ask again.
+  subscribeZoomFleet: (cb: (event: unknown) => void, refused?: () => void) => {
+    const listener = (_e: unknown, event: unknown): void => cb(event)
+    ipcRenderer.on('zoom-fleet:event', listener)
+    const held = ipcRenderer.invoke('zoom-fleet:subscribe').then(
+      (ok: unknown) => ok === true,
+      () => false
+    )
+    void held.then((ok) => (ok ? undefined : refused?.()))
+    return () => {
+      ipcRenderer.removeListener('zoom-fleet:event', listener)
+      // Only a hold that was taken is given back: a refused one must not release another reader's.
+      void held.then((ok) => (ok ? ipcRenderer.invoke('zoom-fleet:unsubscribe') : undefined)).catch(() => undefined)
+    }
+  },
+  zoomFleetMachines: () => ipcRenderer.invoke('zoom-fleet:machines'),
   recoverAgent: (id: string) => ipcRenderer.invoke('agent:recover', id),
   restoreCheckpoint: (id: string, checkpointIndex: number, targetSessionId?: string) =>
     ipcRenderer.invoke('agent:restore-checkpoint', id, checkpointIndex, targetSessionId),

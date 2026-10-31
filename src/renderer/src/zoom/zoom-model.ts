@@ -1,0 +1,189 @@
+/**
+ * FROM THE APP'S DATA TO THE ZOOM'S MODEL. The open workspace's terminals are
+ * its agents (the roster's rows lend them a phase and a latest line); its
+ * browsers and notes are its items, owned through the cables
+ * (terminal-attachments.ts); terminal↔terminal cables are its ties; the
+ * workspace list and the roster give the other workspaces' marks.
+ */
+import type { AgentPhase, AgentRow } from '../agent-rows'
+import { activeBrowserTab, type CanvasNode, type Connection, type WorkspaceMeta } from '../../../shared/model'
+import type { AttachmentIndex } from '../terminal-attachments'
+import { hostOf, tintOf } from './zoom-layout'
+import type { FrameModel, LinkModel, TieModel } from './zoom-frame'
+
+export interface AgentView {
+  id: string
+  name: string
+  preset: string
+  orch: boolean
+  phase: AgentPhase
+  word: string
+  line: string
+  browsers: number
+  notes: number
+}
+export interface ItemView {
+  id: string
+  kind: 'browser' | 'note'
+  title: string
+  host: string
+  tint: string
+  initial: string
+  line: string
+  owners: string[]
+}
+export interface MarkView {
+  id: string
+  name: string
+  presets: string[]
+  waiting: boolean
+}
+export interface ZoomModel {
+  frame: FrameModel
+  agents: AgentView[]
+  items: ItemView[]
+  marks: MarkView[]
+  /** Every machine from the real fleet, this desktop first. */
+  machines: MachineView[]
+  name: string
+  browsers: number
+  notes: number
+}
+
+/** Another machine from the real fleet: its workspaces, or only their names when it cannot be read. */
+export interface MachineView {
+  id: string
+  name: string
+  local: boolean
+  online: boolean
+  detail: 'live' | 'connecting' | 'listed'
+  workspaces: { id: string; name: string; presets: string[]; waiting: boolean }[]
+  agents: number | null
+  waiting: number | null
+}
+
+export const PHASE_WORD: Record<AgentPhase, string> = { waiting: 'needs you', working: 'working', done: 'done', quiet: 'resting', offline: 'offline' }
+
+/** One line of what an agent last said or does now. */
+export function lineOf(row: AgentRow | undefined, brief: string | null | undefined): string {
+  const t = row?.turn
+  return t?.latest?.text?.trim() || t?.title?.trim() || t?.ask?.trim() || brief?.trim() || 'Nothing said yet.'
+}
+
+export interface ZoomInput {
+  nodes: readonly CanvasNode[]
+  connections: readonly Connection[]
+  rows: readonly AgentRow[]
+  attachIndex: AttachmentIndex
+  workspaces: readonly WorkspaceMeta[]
+  activeId: string
+  name: string
+  /** The real fleet: this desktop and the account's others, from use-zoom-fleet.ts. */
+  machines?: readonly {
+    id: string
+    name: string
+    local: boolean
+    online: boolean
+    detail: 'live' | 'connecting' | 'listed'
+    workspaces: readonly { id: string; name: string; agents: readonly { harness: string; phase: string }[]; counts: { agents: number; waiting: number } | null }[]
+  }[]
+}
+
+export function buildZoomModel(input: ZoomInput): ZoomModel {
+  const rowOf = new Map(input.rows.map((r) => [r.id, r]))
+  const agents: AgentView[] = []
+  for (const n of input.nodes) {
+    if (n.kind !== 'terminal') continue
+    const row = rowOf.get(n.id)
+    const list = input.attachIndex.get(n.id) ?? []
+    const phase: AgentPhase = row?.phase ?? 'quiet'
+    agents.push({
+      id: n.id,
+      name: n.name,
+      preset: n.preset,
+      orch: n.orch === true,
+      phase,
+      word: PHASE_WORD[phase],
+      line: lineOf(row, n.brief),
+      browsers: list.filter((a) => a.kind === 'browser').length,
+      notes: list.filter((a) => a.kind === 'note').length
+    })
+  }
+  // Orchestrators first: the first agent is on top of the stack and leads the crew.
+  agents.sort((a, b) => Number(b.orch) - Number(a.orch))
+  const agentIds = new Set(agents.map((a) => a.id))
+
+  const owners = new Map<string, string[]>()
+  for (const [terminalId, list] of input.attachIndex) {
+    if (!agentIds.has(terminalId)) continue
+    for (const a of list) owners.set(a.node.id, [...(owners.get(a.node.id) ?? []), terminalId])
+  }
+  // Newest first: nodes are kept in creation order.
+  const items: ItemView[] = []
+  for (const n of [...input.nodes].reverse()) {
+    if (n.kind === 'browser') {
+      const tab = activeBrowserTab(n)
+      const title = tab.title?.trim() || n.name
+      items.push({ id: n.id, kind: 'browser', title, host: hostOf(tab.url), tint: tintOf(n.id), initial: (title.match(/[A-Za-z0-9]/)?.[0] ?? '·').toUpperCase(), line: tab.url, owners: owners.get(n.id) ?? [] })
+    } else if (n.kind === 'note') {
+      const first = (n.content ?? '').split('\n').map((l) => l.replace(/^#+\s*/, '').trim()).find(Boolean) ?? ''
+      items.push({ id: n.id, kind: 'note', title: n.name, host: 'note', tint: tintOf(n.id), initial: '', line: first, owners: owners.get(n.id) ?? [] })
+    }
+  }
+
+  // A link per agent and item it carries, in the order the agent carries them.
+  const links: LinkModel[] = []
+  for (const a of agents) {
+    const list = input.attachIndex.get(a.id) ?? []
+    list.forEach((att, k) => {
+      const o = owners.get(att.node.id) ?? []
+      links.push({ key: `${a.id}|${att.node.id}`, agent: a.id, item: att.node.id, k, j: Math.max(0, o.indexOf(a.id)) })
+    })
+  }
+  const newestBrowser = items.find((i) => i.kind === 'browser' && i.owners.length > 0)
+  const newest = newestBrowser ? `${newestBrowser.owners[0]}|${newestBrowser.id}` : null
+
+  const ties: TieModel[] = []
+  for (const c of input.connections) {
+    if (agentIds.has(c.a) && agentIds.has(c.b)) ties.push({ key: c.id, a: c.a, b: c.b })
+  }
+
+  // The other workspaces: their agents from the roster, by workspace.
+  const marks: MarkView[] = input.workspaces
+    .filter((w) => w.id !== input.activeId)
+    .map((w) => {
+      const rows = input.rows.filter((r) => r.workspaceId === w.id)
+      return { id: w.id, name: w.name, presets: rows.map((r) => r.preset), waiting: rows.some((r) => r.phase === 'waiting') }
+    })
+  const order = input.workspaces.map((w) => w.id)
+  if (!order.includes(input.activeId)) order.unshift(input.activeId)
+
+  return {
+    frame: {
+      agents: agents.map((a) => ({ id: a.id, name: a.name, preset: a.preset, orch: a.orch, waiting: a.phase === 'waiting' })),
+      items: items.map((i) => ({ id: i.id, kind: i.kind, owners: i.owners })),
+      links,
+      ties,
+      workspaces: order,
+      otherMachines: (input.machines ?? []).filter((m) => !m.local).length,
+      active: input.activeId,
+      newest
+    },
+    agents,
+    items,
+    marks,
+    machines: (input.machines ?? []).map((m) => ({
+      id: m.id,
+      name: m.name,
+      local: m.local,
+      online: m.online,
+      detail: m.detail,
+      workspaces: m.workspaces.map((w) => ({ id: w.id, name: w.name, presets: w.agents.map((a) => a.harness), waiting: w.agents.some((a) => a.phase === 'waiting') })),
+      agents: m.workspaces.length && m.workspaces.every((w) => w.counts) ? m.workspaces.reduce((a, w) => a + (w.counts?.agents ?? 0), 0) : null,
+      waiting: m.workspaces.length && m.workspaces.every((w) => w.counts) ? m.workspaces.reduce((a, w) => a + (w.counts?.waiting ?? 0), 0) : null
+    })),
+    name: input.name,
+    browsers: items.filter((i) => i.kind === 'browser').length,
+    notes: items.filter((i) => i.kind === 'note').length
+  }
+}
