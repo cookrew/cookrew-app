@@ -48,6 +48,16 @@ export function nearestStop(dir: ZoomDir, v: number): number {
   return STOPS[dir].reduce((a, b) => (Math.abs(b - v) < Math.abs(a - v) ? b : a))
 }
 
+/**
+ * One stop out from v (owner, 2026-10-31: zoom in and out by CLICK): the next
+ * stop below where the view is, never the passage inside it. At the outermost
+ * stop there is nowhere further, so v stays.
+ */
+export function stepOut(dir: ZoomDir, v: number): number {
+  const below = STOPS[dir].filter((s) => s < v - 0.001)
+  return below.length ? Math.max(...below) : v
+}
+
 /** Where a zoom let go at v settles: inside the passage, on its nearer end; elsewhere, where it is. */
 export function settle(dir: ZoomDir, v: number): number {
   const [a, b] = PASSAGE[dir]
