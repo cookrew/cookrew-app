@@ -142,6 +142,14 @@
   content: none;
 }
 
+/* Nobody's: a harness notice sits between the two sides, small and quiet. */
+.lod-overlay .look-chat .ctx-block-notice {
+  align-self: center;
+  max-width: 92%;
+  text-align: center;
+  color: var(--muted);
+}
+
 /* The agent's: on the left, beside its face. */
 .lod-overlay .look-chat .ctx-chat-agent {
   display: flex;

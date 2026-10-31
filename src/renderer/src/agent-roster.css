@@ -1216,8 +1216,12 @@
 
 .cr-ckpt-list .cr-ckpt-row {
   position: absolute;
-  left: 0;
+  /* A tag at the bar, as wide as its words — not a bar across the lane. With
+     left:0 every laid row was a 336px slab over the transcript (phone report
+     2026-11-01: five black bars hiding the message text). The row is a flex
+     box anchored right, so it shrinks to its content and grows leftward. */
   right: 0;
+  max-width: 100%;
   transform: translateY(-50%); /* same anchoring maths as the here-marker */
   pointer-events: auto; /* HIGH-2 opt-in — see the register above */
 }
@@ -1236,11 +1240,15 @@
 }
 
 .cr-ckpt-title-text {
-  display: inline-block;
+  /* INLINE at rest: the clip's ellipsis applies only to inline content, and an
+     inline-block mover is one atomic box the clip cuts mid-letter ("Update
+     commen"). It becomes a box only while it marquees, which needs transform. */
+  display: inline;
   white-space: nowrap;
 }
 
 .cr-ckpt-title-text.marquee {
+  display: inline-block;
   animation: cr-ckpt-title-marquee 6s linear infinite alternate;
 }
 

@@ -3,6 +3,8 @@
 // model's only job here is naming: compress a live turn (prompt + tool trail
 // + output tail) into a short card title.
 
+import { isHarnessNotice, noticeLine } from './harness-notice'
+
 /** Hard cap for a card title; longer model output is cut with an ellipsis. */
 export const TITLE_MAX_CHARS = 60
 
@@ -35,7 +37,11 @@ export function buildTitlePrompt(input: TitleInput): string {
     'IMPORTANT: write the title in the SAME LANGUAGE as the user request below (Chinese request → Chinese title).',
     'Reply with the title only — no quotes, no punctuation, no explanation.',
     '',
-    `User request: ${input.prompt.slice(0, PROMPT_SNIP)}`
+    // A harness notice is no request: naming the turn after its XML gave
+    // "Task completion for task_id …" (harness-notice.ts).
+    isHarnessNotice(input.prompt)
+      ? `User request: none — a background task reported back: ${noticeLine(input.prompt).slice(0, PROMPT_SNIP)}`
+      : `User request: ${input.prompt.slice(0, PROMPT_SNIP)}`
   ]
   const tools = input.tools.slice(-MAX_TOOLS)
   if (tools.length > 0) {
