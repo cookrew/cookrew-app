@@ -15,7 +15,7 @@
 // contamination state machine, and the tracker guard's byte refusals.
 
 import { EventEmitter } from 'node:events'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   ProducerLease,
   defaultProducerLease,
@@ -360,6 +360,17 @@ describe('guardOwnerInput under contamination (Sol r7 P0-1, fail-closed per r8 P
     tracker.disposeAll()
   })
 
+  it('after a lone Esc, an Enter is refused under either reading of the pair', () => {
+    // Paired, ESC CR is a newline; read apart, the Enter submits the box.
+    // The guard runs before the write and cannot know which the TUI sees.
+    const { tracker, lease, session } = guardFixture()
+    session.emit('input', '\x1b')
+    lease.markContaminated('term-1')
+    expect(tracker.guardOwnerInput('term-1', '\r')).toBe('refused')
+    expect(tracker.guardOwnerInput('term-1', 'x')).toBe('allow')
+    tracker.disposeAll()
+  })
+
   it('terminal retirement — the generation reset — is what clears it', () => {
     const { tracker, lease, session } = guardFixture()
     lease.markContaminated('term-1')
@@ -453,6 +464,152 @@ describe('TurnTracker.ownerComposing (Sol r8 P0-1)', () => {
     expect(tracker.ownerComposing('term-1')).toBe(true)
     lease.release('term-1', owner)
     expect(tracker.ownerComposing('term-1')).toBe(false)
+    tracker.disposeAll()
+  })
+
+  it('a lone Esc keypress over an empty box does not compose (status eval r2)', () => {
+    // `/model`, then Esc to close the picker: the Esc is held back as a
+    // possible paste-marker prefix, but it puts nothing in the box. Reading
+    // the held byte as owner text refused every dispatch with "owner is
+    // composing" until the owner typed and submitted a real prompt.
+    const { tracker, session } = guardFixture()
+    session.emit('input', '/model\r')
+    session.emit('input', '\x1b')
+    expect(tracker.ownerComposing('term-1')).toBe(false)
+    tracker.disposeAll()
+  })
+
+  it('a split paste marker past the lone Esc still composes', () => {
+    const { tracker, session } = guardFixture()
+    session.emit('input', '\x1b[20')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    tracker.disposeAll()
+  })
+
+  it('an Esc whose next chunk opens a paste composes on that chunk', () => {
+    const { tracker, session } = guardFixture()
+    session.emit('input', '\x1b')
+    expect(tracker.ownerComposing('term-1')).toBe(false)
+    session.emit('input', '[200~pasted')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    tracker.disposeAll()
+  })
+
+  it('an Esc and a later, separate Enter are two keys, not Shift+Enter', () => {
+    // Held ESC + the next chunk's CR parses as Shift+Enter (a newline in the
+    // box). Seconds apart they are an Esc and an Enter on an empty box.
+    vi.useFakeTimers()
+    try {
+      const { tracker, session } = guardFixture()
+      session.emit('input', '\x1b')
+      vi.setSystemTime(Date.now() + 2_000)
+      session.emit('input', '\r')
+      expect(tracker.ownerComposing('term-1')).toBe(false)
+      tracker.disposeAll()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a Shift+Enter split across back-to-back chunks is still a newline', () => {
+    vi.useFakeTimers()
+    try {
+      const { tracker, session } = guardFixture()
+      session.emit('input', 'line1\x1b')
+      session.emit('input', '\r')
+      expect(tracker.ownerComposing('term-1')).toBe(true)
+      session.emit('input', 'line2\r')
+      expect(tracker.ownerComposing('term-1')).toBe(false)
+      tracker.disposeAll()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('the lone-Esc pairing window is 100 ms', () => {
+    vi.useFakeTimers()
+    try {
+      for (const [gap, composing] of [
+        [99, true],
+        [101, false]
+      ] as const) {
+        const { tracker, session } = guardFixture()
+        session.emit('input', '/model\r')
+        session.emit('input', '\x1b')
+        vi.setSystemTime(Date.now() + gap)
+        session.emit('input', '\r')
+        expect(tracker.ownerComposing('term-1'), `${gap} ms`).toBe(composing)
+        tracker.disposeAll()
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('over typed text an Esc never ages out: a late Enter still pairs, and the mark stands', () => {
+    // The TUI may read ESC and CR together as its newline key however far
+    // apart we wrote them; reading the Enter as a submit there would clear
+    // the mark beside the owner's text and admit a dispatch next to it.
+    vi.useFakeTimers()
+    try {
+      const { tracker, session } = guardFixture()
+      session.emit('input', 'fix @src/fo')
+      session.emit('input', '\x1b')
+      vi.setSystemTime(Date.now() + 150)
+      session.emit('input', '\r')
+      expect(tracker.ownerComposing('term-1')).toBe(true)
+      tracker.disposeAll()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('inside an open paste a held Esc is the close marker, however late', () => {
+    vi.useFakeTimers()
+    try {
+      const { tracker, session } = guardFixture()
+      session.emit('input', '\x1b[200~pasted text')
+      session.emit('input', '\x1b')
+      vi.setSystemTime(Date.now() + 2_000)
+      session.emit('input', '[201~')
+      session.emit('input', '\r')
+      expect(tracker.ownerComposing('term-1')).toBe(false)
+      tracker.disposeAll()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('typed text, a lone Esc, then backspaces over it is still the proven clear', () => {
+    vi.useFakeTimers()
+    try {
+      const { tracker, session } = guardFixture()
+      session.emit('input', 'ab')
+      session.emit('input', '\x1b')
+      vi.setSystemTime(Date.now() + 2_000)
+      session.emit('input', '\x7f\x7f')
+      expect(tracker.ownerComposing('term-1')).toBe(false)
+      tracker.disposeAll()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a held Esc paired with a Shift+Enter in the next chunk is never a proven clear', () => {
+    // ESC | CR Ctrl-U: the real box kept "line1" above the killed line.
+    const { tracker, session } = guardFixture()
+    session.emit('input', 'line1')
+    session.emit('input', '\x1b')
+    session.emit('input', '\r\x15')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
+    tracker.disposeAll()
+  })
+
+  it('an Esc after typed text keeps the typed text composing', () => {
+    const { tracker, session } = guardFixture()
+    session.emit('input', 'half typed')
+    session.emit('input', '\x1b')
+    expect(tracker.ownerComposing('term-1')).toBe(true)
     tracker.disposeAll()
   })
 
