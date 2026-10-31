@@ -7,7 +7,7 @@ import { AgentCard } from '../zoom/AgentCard'
 import { agentViewOf, itemViewOf } from '../zoom/zoom-model'
 import { petMax, pickPets, type Pet, type PetMood } from './pet-pick'
 import { useOfToolLine, type ToolUse } from '../../../shared/use-signal'
-import { dockedOrder } from './pet-dock'
+import { dockedCount, dockedOrder } from './pet-dock'
 import { PetTroop } from './PetTroop'
 
 /**
@@ -65,7 +65,7 @@ export function AgentPets({
     if (!dock) return { pets: troop.pets, more: troop.more, dim: new Set<string>() }
     const all = [...troop.pets, ...troop.more].map((pet) => ({ id: pet.row.id, pet }))
     const order = dockedOrder(all, dock)
-    const count = troop.pets.filter((pet) => pet.row.id !== dock.exclude).length
+    const count = dockedCount(troop.pets.filter((pet) => pet.row.id !== dock.exclude).length, 'right', window.innerWidth)
     return { pets: order.members.slice(0, count).map((m) => m.pet), more: order.members.slice(count).map((m) => m.pet), dim: order.dim }
   }, [troop, dock])
   const member = (pet: Pet) => {

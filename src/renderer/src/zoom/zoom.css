@@ -1861,3 +1861,68 @@
 .zv-root:not([data-moving]) .zv-overview * {
   will-change: auto;
 }
+
+/* ── a phone (2026-11-01 phone evals) ──
+   The device's marks are drawn at 0.62 inside a device seen at ~0.6, so their
+   labels are set large enough to read there, cut short before a neighbour's.
+   A name stays short enough not to run into the next one on the thumbnails'
+   shelf (zoom-layout.ts · phoneShelf).
+   At the full view the way back out is a round button in the head's corner,
+   not a pill over the agent's name. */
+@media (max-width: 759px) {
+  .zv-nm {
+    max-width: 112px;
+  }
+  /* The open workspace's label in the marks' form: seal and name in 130px
+     (380 when it grows by 2.9 on the device stop, as wide as theirs), its
+     totals on a line below. */
+  .zv-grp:not(.zv-mark-label) {
+    flex-wrap: wrap;
+    /* In a zero-width scene a wrapping box would shrink to its widest part. */
+    width: max-content;
+    max-width: 130px;
+    row-gap: 2px;
+  }
+  .zv-grp .zv-workspace-name {
+    max-width: 96px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .zv-grp:not(.zv-mark-label) .zv-tot {
+    margin-left: 28px;
+    padding-left: 2px;
+    border-left: 0;
+  }
+  .zv-mark .zv-mark-label {
+    gap: 12px;
+    max-width: 380px;
+    font-size: 32px;
+    letter-spacing: 0.04em;
+  }
+  .zv-mark .zv-mark-label > span:last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .zv-mark .zv-mark-label .zv-seal {
+    width: 52px;
+    height: 52px;
+    font-size: 30px;
+    line-height: 52px;
+  }
+}
+
+@media (max-width: 700px) {
+  .zv-root[data-full='true'] .zv-controls {
+    left: auto;
+    right: 8px;
+    transform: none;
+    padding: 3px;
+  }
+  .zv-root[data-full='true'] .zv-location {
+    display: none;
+  }
+  .zv-root[data-full='true'] .zv-back {
+    width: 36px;
+    height: 36px;
+  }
+}

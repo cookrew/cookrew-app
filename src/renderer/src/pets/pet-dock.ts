@@ -32,6 +32,20 @@ export const LANE_NARROW = 0
 export const NARROW_PX = 900
 /** How close a dragged troop's middle must come to its column's to snap on. */
 export const SNAP_PX = 90
+/**
+ * ON A PHONE (2026-11-01 phone evals): no column fits beside a 412px sheet,
+ * and one over its edge covered the transcript. At or below this width the
+ * troops stand as rows in a strip between the head and the sheet, which steps
+ * down by STRIP_PX (zoom/full-views.css · --fv-strip): the browsers and notes
+ * from the left edge, the crew from the right, a few faces each, the rest
+ * behind "+N" (stripFaces).
+ */
+export const PHONE_PX = 700
+export const STRIP_PX = 44
+export const stripFaces = (side: Side, viewportWidth: number): number => (side === 'right' ? 4 : 3) - (viewportWidth < 380 ? 1 : 0)
+/** How many faces an attached troop shows: all of them beside the sheet; on a phone, what its row in the strip holds. */
+export const dockedCount = (count: number, side: Side, viewportWidth: number): number =>
+  viewportWidth <= PHONE_PX ? Math.min(count, stripFaces(side, viewportWidth)) : count
 
 export const laneWidth = (viewportWidth: number): number => (viewportWidth < NARROW_PX ? LANE_NARROW : LANE_WIDE)
 
@@ -41,6 +55,16 @@ export function sheetBox(full: Box, lanes: { readonly left: number; readonly rig
   const right = full.left + full.width - SHEET_INSET.side - lanes.right
   const top = full.top + SHEET_INSET.top
   return { left, top, width: Math.max(0, right - left), height: Math.max(0, full.top + full.height - SHEET_INSET.bottom - top) }
+}
+
+/** The sheet as the page draws it: the full view less the insets its ::after is drawn at. */
+export function sheetOf(full: Box, inset: { readonly top: number; readonly left: number; readonly right: number; readonly bottom: number }): Box {
+  return {
+    left: full.left + inset.left,
+    top: full.top + inset.top,
+    width: Math.max(0, full.width - inset.left - inset.right),
+    height: Math.max(0, full.height - inset.top - inset.bottom)
+  }
 }
 
 /**
@@ -62,10 +86,18 @@ export function columnMiddle(side: Side, full: Box, sheet: Box, troopWidth: numb
 
 /** The attached troop's box: its middle on the column's, kept on screen and on the sheet's height. */
 export function dockedSpot(side: Side, full: Box, sheet: Box, troop: { readonly width: number; readonly height: number }, viewport: { readonly width: number; readonly height: number }): { left: number; top: number } {
+  if (viewport.width <= PHONE_PX) return stripSpot(side, sheet, troop, viewport)
   const middle = columnMiddle(side, full, sheet, troop.width)
   const left = Math.min(Math.max(0, middle.x - troop.width / 2), Math.max(0, viewport.width - troop.width))
   const top = Math.min(Math.max(sheet.top, middle.y - troop.height / 2), Math.max(sheet.top, sheet.top + sheet.height - troop.height))
   return { left: Math.round(left), top: Math.round(Math.max(0, top)) }
+}
+
+/** On a phone: a row in the strip just above the sheet, flush with the sheet's left or right edge. */
+function stripSpot(side: Side, sheet: Box, troop: { readonly width: number; readonly height: number }, viewport: { readonly width: number }): { left: number; top: number } {
+  const left = side === 'right' ? sheet.left + sheet.width - troop.width : sheet.left
+  const top = sheet.top - STRIP_PX + (STRIP_PX - troop.height) / 2
+  return { left: Math.round(Math.min(Math.max(0, left), Math.max(0, viewport.width - troop.width))), top: Math.round(Math.max(0, top)) }
 }
 
 /** A dragged troop close enough to its column to snap on: its middle near the column's, and over the sheet's height. */

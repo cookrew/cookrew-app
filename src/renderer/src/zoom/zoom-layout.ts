@@ -100,7 +100,8 @@ export function thumbsOf(
   const carrying = new Set(items.flatMap((i) => i.owners))
   const linked = agents.filter((a) => carrying.has(a.id))
   const loose = agents.filter((a) => !carrying.has(a.id))
-  const step = narrow ? Math.min(72, 560 / Math.max(1, agents.length)) : Math.min(80, 900 / Math.max(1, agents.length))
+  if (narrow) return { order, at, ...phoneShelf([...linked, ...loose], rows, rowH, shelfY) }
+  const step = Math.min(80, 900 / Math.max(1, agents.length))
   const slots = linked.length + (loose.length ? 0.6 + loose.length : 0)
   const shelf: Record<string, Pos> = {}
   linked.forEach((a, i) => (shelf[a.id] = { x: (i - (slots - 1) / 2) * step, y: shelfY }))
@@ -111,15 +112,32 @@ export function thumbsOf(
     at,
     shelf,
     shelfY,
-    box: { w: Math.max(narrow ? 520 : 820, slots * step + 120), h: gridH + 520, cy: (shelfY - 80 + gridH + 160) / 2 }
+    box: { w: Math.max(820, slots * step + 120), h: gridH + 520, cy: (shelfY - 80 + gridH + 160) / 2 }
   }
+}
+
+/** A phone's shelf: rows of SHELF_PER_ROW, a name's width apart (zoom.css caps a phone's names at 112px, 87 at the shelf's 0.78), stacked up from the grid (2026-11-01 phone evals). */
+const SHELF_PER_ROW = 4
+const SHELF_DX = 88
+const SHELF_DY = 68
+function phoneShelf(agents: readonly CrewAgent[], rows: number, rowH: number, bottomY: number): { shelf: Record<string, Pos>; shelfY: number; box: Box } {
+  const shelfRows = Math.max(1, Math.ceil(agents.length / SHELF_PER_ROW))
+  const shelfY = bottomY - (shelfRows - 1) * SHELF_DY
+  const shelf: Record<string, Pos> = {}
+  agents.forEach((a, k) => {
+    const row = Math.floor(k / SHELF_PER_ROW)
+    const inRow = Math.min(SHELF_PER_ROW, agents.length - row * SHELF_PER_ROW)
+    shelf[a.id] = { x: ((k % SHELF_PER_ROW) - (inRow - 1) / 2) * SHELF_DX, y: shelfY + row * SHELF_DY }
+  })
+  const gridH = (rows - 1) * rowH
+  return { shelf, shelfY, box: { w: 400, h: gridH + 520 + (bottomY - shelfY), cy: (shelfY - 80 + gridH + 160) / 2 } }
 }
 
 /** The device: a mark per workspace, the open one where its slot is. */
 export function deviceOf(ids: readonly string[], narrow: boolean): { at: Record<string, Pos>; box: Box; labelY: number } {
   const cols = narrow ? 2 : 3
-  const dx = narrow ? 300 : 330
-  const dy = 320
+  const dx = narrow ? 260 : 330
+  const dy = narrow ? 260 : 320
   const rows = Math.max(1, Math.ceil(ids.length / cols))
   const at: Record<string, Pos> = {}
   ids.forEach((id, g) => {
