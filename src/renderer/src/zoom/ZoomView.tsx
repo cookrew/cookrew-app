@@ -285,15 +285,6 @@ export function ZoomView({ workspace, workspaceId, attachIndex, onDelete, childr
           <button type="button" ref={bind('newseat') as React.Ref<HTMLButtonElement>} className="zv-newseat" onClick={() => setAdding(true)} title="Bring a new agent into this workspace" aria-label="New agent">
             <span aria-hidden="true">＋</span>
           </button>
-          {adding && (
-            <NewAgentCard
-              presets={presets}
-              busy={creating}
-              error={spawnError}
-              onCancel={() => { setAdding(false); setSpawnError(null) }}
-              onCreate={(name: string, preset: string, orch: boolean) => void spawn(name, preset, orch)}
-            />
-          )}
           {model.agents.filter((a) => a.phase === 'waiting').map((a) => <span key={a.id} className="zv-dot" ref={bind(`agent-dot:${a.id}`)} />)}
           <div className="zv-grp" ref={bind('label')}>
             <button type="button" className="zv-seal" onClick={() => motion.go(1, 'agents')} aria-label={`Open ${model.name} crew`}>{model.agents.length}</button>
@@ -305,6 +296,17 @@ export function ZoomView({ workspace, workspaceId, attachIndex, onDelete, childr
         </div>
         <div className="zv-panel" ref={bind('panel')} />
       </div>
+      {/* The new-agent card is a screen dialog, not a thing in the scene: it
+          stays the same size at any zoom, and its own tab order reaches it. */}
+      {adding && (
+        <NewAgentCard
+          presets={presets}
+          busy={creating}
+          error={spawnError}
+          onCancel={() => { setAdding(false); setSpawnError(null) }}
+          onCreate={(name: string, preset: string, orch: boolean) => void spawn(name, preset, orch)}
+        />
+      )}
       <nav className="zv-controls" aria-label="Semantic zoom">
         <button type="button" className="zv-back" onClick={() => { const i = stops.indexOf(selectedStop); motion.go(stops[Math.max(0, i - 1)]) }} aria-label="Zoom out">‹</button>
         <div className="zv-zoom-control">
