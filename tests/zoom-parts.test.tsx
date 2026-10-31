@@ -2,6 +2,7 @@
 // face, name, state, counts and quick reply; a link's two-faced coin and its
 // shared mark; an item's thumbnail with who uses it; a workspace mark; another
 // machine. Static markup, the house way (no DOM env).
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { AgentNode, ItemNode, LinkNode, MachineNode, MarkNode, type Bind } from '../src/renderer/src/zoom/ZoomParts'
@@ -75,5 +76,33 @@ describe('a workspace and a machine', () => {
     expect(html).toContain('Home lab')
     expect(html).toContain('listed only')
     expect(html).not.toContain('0 agents')
+  })
+})
+
+describe('the zoom is driven by clicks, not the wheel (owner, 2026-10-31)', () => {
+  const source = readFileSync('src/renderer/src/zoom/ZoomView.tsx', 'utf8')
+  it('has no wheel zoom at all: no wheel listener, no deltaY, no ctrl-pinch', () => {
+    expect(source).not.toMatch(/addEventListener\('wheel'/)
+    expect(source).not.toContain('deltaY')
+    expect(source).not.toContain('ctrlKey')
+  })
+
+  it('steps out on a click on the background, and not after a pinch or a drag', () => {
+    expect(source).toContain('stepBack')
+    expect(source).toMatch(/if \(moved\.current \|\| pinch\.current !== null\) return/)
+    // A click that landed on a node is that node's, and zooms in.
+    expect(source).toMatch(/closest\('button, input, textarea, form, a, \[role="button"\], \.zv-m, \.zv-card, \.zv-ip, \.zv-lk, \.zv-mark/)
+    // …and the handler that does step out is the same one: the guard above it,
+    // then the node test, then the step.
+    const click = source.slice(source.indexOf('onClick={(e) => {'))
+    expect(click.slice(0, 900)).toContain('stepBack()')
+  })
+
+  it('keeps the back button, the stops and Esc, and still zooms in on a click', () => {
+    expect(source).toContain('aria-label="Zoom out"')
+    expect(source).toContain('zv-stops')
+    expect(source).toMatch(/e\.key !== 'Escape'/)
+    expect(source).toContain('motion.agent(a.id)')
+    expect(source).toContain('motion.item(i.id)')
   })
 })

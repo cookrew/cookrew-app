@@ -2,7 +2,7 @@
 // device; the group is only a passage; clicks open a card, a full view, or
 // jump across. Pure rules, pinned here.
 import { describe, expect, it } from 'vitest'
-import { agentClick, clampTo, derive, itemClick, nearestStop, settle, STOPS, STOP_NAMES } from '../src/renderer/src/zoom/zoom-path'
+import { agentClick, clampTo, derive, itemClick, nearestStop, settle, stepOut, STOPS, STOP_NAMES } from '../src/renderer/src/zoom/zoom-path'
 import { brushPath, harnessMark, strokeOf } from '../src/renderer/src/zoom/ink-marks'
 
 describe('the path', () => {
@@ -66,5 +66,25 @@ describe('the ink marks', () => {
     const p = brushPath('claude')
     expect(p.body.startsWith('M')).toBe(true)
     expect(p.body.endsWith('Z')).toBe(true)
+  })
+})
+
+describe('zooming out by click (owner, 2026-10-31)', () => {
+  it('steps to the next stop in, one at a time, and never into the passage', () => {
+    expect(stepOut('agents', 3)).toBe(2)
+    expect(stepOut('agents', 2)).toBe(1)
+    expect(stepOut('agents', 1)).toBe(-1)
+    expect(stepOut('agents', -1)).toBe(-2)
+    // From between stops (a click mid-flight), the next one below.
+    expect(stepOut('agents', 2.4)).toBe(2)
+    expect(stepOut('agents', 0.3)).toBe(-1)
+  })
+
+  it('stops at the outermost stop, and follows the browser side’s own stops', () => {
+    expect(stepOut('agents', -2)).toBe(-2)
+    expect(stepOut('items', 1)).toBe(0)
+    expect(stepOut('items', 0)).toBe(-1)
+    expect(stepOut('items', -1)).toBe(-2)
+    expect(stepOut('items', -2)).toBe(-2)
   })
 })

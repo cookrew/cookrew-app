@@ -11,7 +11,7 @@ import { deviceOf, machinesAt, MACHINE_CARD } from './zoom-layout'
 import { SWS, type FrameEls } from './zoom-frame'
 import { useZoom, zoomStore } from './zoom-store'
 import { useZoomMotion } from './use-zoom-motion'
-import { nearestStop, RANGE, STOPS, STOP_NAMES } from './zoom-path'
+import { nearestStop, RANGE, STOPS, STOP_NAMES, stepOut } from './zoom-path'
 import { useZoomFleet } from './use-zoom-fleet'
 import './zoom.css'
 
@@ -115,17 +115,27 @@ export function ZoomView({ workspace, workspaceId, attachIndex, children }: {
   }, [])
   const motion = useZoomMotion(model.frame, collect, root)
   useLayoutEffect(() => { motion.wake() }, [model, size, motion.wake])
-  useEffect(() => {
-    const el = root.current?.querySelector<HTMLElement>('.zv-overview')
-    if (!el) return
-    const onWheel = (e: WheelEvent): void => {
-      if ((e.target as Element).closest('input,textarea')) return
-      e.preventDefault()
-      motion.go(zoomStore.get().v - e.deltaY * (e.ctrlKey ? 0.012 : 0.0018))
-    }
-    el.addEventListener('wheel', onWheel, { passive: false })
-    return () => el.removeEventListener('wheel', onWheel)
+  // NO WHEEL ZOOM (owner, 2026-10-31): the wheel is the page's, and in a list it
+  // scrolls that list. Zoom in and out are clicks (motion.agent / motion.item for
+  // in, the background and the back button for out), plus the stops and Esc.
+  const stepBack = useCallback(() => {
+    const z = zoomStore.get()
+    const next = stepOut(z.dir, z.v)
+    if (next !== z.v) motion.go(next, z.dir)
   }, [motion.go])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      if ((e.target as Element | null)?.closest('input, textarea, [contenteditable="true"], .xterm')) return
+      e.preventDefault()
+      stepBack()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [stepBack])
+  // A press that turned into a pinch or a drag is not the click that steps out.
+  const moved = useRef(false)
+  const swallowClick = useRef(false)
   useEffect(() => {
     thumbWants.claim('zoom', model.items.filter((i) => i.kind === 'browser').slice(0, 12).map((i) => i.id))
     return () => thumbWants.release('zoom')
@@ -184,10 +194,32 @@ export function ZoomView({ workspace, workspaceId, attachIndex, children }: {
         <Suspense fallback={null}>{zoom.full ? children : null}</Suspense>
       </div>
       <div className="zv-overview"
-        onPointerDown={(e) => { pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (pointers.current.size === 2) pinch.current = { distance: distance(), v: zoomStore.get().v } }}
-        onPointerMove={(e) => { if (!pointers.current.has(e.pointerId)) return; pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY }); const p = pinch.current; if (p && pointers.current.size === 2 && p.distance > 0) motion.go(p.v + Math.log2(distance() / p.distance) * 1.1) }}
+        onPointerDown={(e) => {
+          pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+          moved.current = false
+          if (pointers.current.size === 2) {
+            pinch.current = { distance: distance(), v: zoomStore.get().v }
+            moved.current = true
+          }
+        }}
+        onPointerMove={(e) => {
+          const at = pointers.current.get(e.pointerId)
+          if (!at) return
+          if (Math.hypot(e.clientX - at.x, e.clientY - at.y) > 6) moved.current = true
+          pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+          const p = pinch.current
+          if (p && pointers.current.size === 2 && p.distance > 0) motion.go(p.v + Math.log2(distance() / p.distance) * 1.1)
+        }}
         onPointerUp={(e) => { pointers.current.delete(e.pointerId); if (pointers.current.size < 2) pinch.current = null }}
-        onPointerCancel={(e) => { pointers.current.delete(e.pointerId); pinch.current = null }}>
+        onPointerCancel={(e) => { pointers.current.delete(e.pointerId); pinch.current = null; moved.current = true }}
+        onClick={(e) => {
+          // Nothing was pressed, or the press was a pinch or a drag: not a step out.
+          if (swallowClick.current) { swallowClick.current = false; return }
+          if (moved.current || pinch.current !== null) return
+          // A node, a card, a button, a field: its own click, which zooms in.
+          if ((e.target as Element).closest('button, input, textarea, form, a, [role="button"], .zv-m, .zv-card, .zv-ip, .zv-lk, .zv-mark, .zv-machine, .zv-machinecard, .zv-workspace-hit')) return
+          stepBack()
+        }}>
         <div className="zv-devices" ref={bind('devices')}>
           {model.machines.filter((m) => !m.local).map((m) => (
             <MachineNode key={m.id} machine={m} bind={bind} onOpen={() => setError(`${m.name} is listed, not readable from here: open it on that Mac.`)} />
