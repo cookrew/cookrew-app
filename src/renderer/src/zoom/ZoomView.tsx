@@ -126,12 +126,13 @@ export function ZoomView({ workspace, workspaceId, attachIndex, children }: {
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
-      if ((e.target as Element | null)?.closest('input, textarea, [contenteditable="true"], .xterm')) return
+      if ((e.target as Element | null)?.closest?.('input, textarea, [contenteditable="true"], .xterm')) return
       e.preventDefault()
       stepBack()
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    // Capture, so a card that stops Escape on its way up does not keep us zoomed.
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
   }, [stepBack])
   // A press that turned into a pinch or a drag is not the click that steps out.
   const moved = useRef(false)
