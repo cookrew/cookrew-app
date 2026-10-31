@@ -47,6 +47,8 @@ import { useAgentTuning } from './nodes/use-agent-tuning'
 import { useCardRoute } from './nodes/use-card-route'
 import { routeDialAllowed, routeDialInput } from '../../shared/route-view'
 import { isNight, useNight } from './color-scheme'
+import { paperCursor } from './paper-cursor'
+import { createSizeOwner, tookOthers, type PaneSize } from './pane-size'
 
 /**
  * PAPER, not phosphor (2026-10-30): the live terminal is the app's own cream
@@ -689,8 +691,11 @@ function TerminalOverlay({
        * observer re-sent the size the mount kick had just set, once per open.
        */
       let paneSize: { cols: number; rows: number } | null = null
-      const sendSize = (cols: number, rows: number): void => {
+      /** The last size this viewer asked for as its own (a repaint kick's cols-1 step is not one). */
+      let mySize: PaneSize | null = null
+      const sendSize = (cols: number, rows: number, kick = false): void => {
         paneSize = { cols, rows }
+        if (!kick) mySize = { cols, rows }
         cookrew().ptyResize(node.id, cols, rows)
       }
       /**
@@ -701,10 +706,12 @@ function TerminalOverlay({
        * takes the size back only within this long of a touch, click or key in
        * it, and a touch or click claims it at once.
        */
-      const OWN_MS = 30_000
-      let usedAt = Number.NEGATIVE_INFINITY
+      // The rule is pane-size.ts: the viewer used last owns the size, the
+      // others adopt it and stay quiet until their own next use.
+      const owner = createSizeOwner(Date.now())
+      const owns = (): boolean => owner.owns(Date.now(), document.visibilityState === 'visible')
       const claimSize = (): void => {
-        usedAt = Date.now()
+        owner.use(Date.now())
         if (disposed || container.offsetWidth <= 40) return
         try {
           fit.fit()
@@ -716,9 +723,16 @@ function TerminalOverlay({
       const onUse = (): void => claimSize()
       container.addEventListener('pointerdown', onUse, true)
       container.addEventListener('touchstart', onUse, { capture: true, passive: true })
+      // Dragging the window's edge, or turning the phone, is using it too; the
+      // refit observer then sends the new size.
+      const onWindowResize = (): void => {
+        if (document.visibilityState === 'visible') owner.use(Date.now())
+      }
+      window.addEventListener('resize', onWindowResize)
       cleanups.push(() => {
         container.removeEventListener('pointerdown', onUse, true)
         container.removeEventListener('touchstart', onUse, true)
+        window.removeEventListener('resize', onWindowResize)
       })
       const fitUntilStable = (attempt = 0): void => {
         if (disposed) return
@@ -774,7 +788,7 @@ function TerminalOverlay({
       const repaintKick = (): void => {
         if (disposed || term.cols < 21) return
         lastKickAt = Date.now()
-        sendSize(term.cols - 1, term.rows)
+        sendSize(term.cols - 1, term.rows, true)
         if (settleTimer) clearTimeout(settleTimer)
         settleTimer = setTimeout(() => {
           if (!disposed) sendSize(term.cols, term.rows)
@@ -840,7 +854,9 @@ function TerminalOverlay({
       })
       const detach = cookrew().ptyAttach(
         node.id,
-        (chunk) => {
+        (raw) => {
+          // On paper, Claude Code's white cursor cell is drawn as an ink block (paper-cursor.ts).
+          const chunk = isNight() ? raw : paperCursor(raw)
           if (localScroll.admit(chunk)) curtain.write(detoxify(chunk), (c, done) => term.write(c, done))
         },
         (hello) => {
@@ -848,14 +864,17 @@ function TerminalOverlay({
           if (disposed || cols <= 0 || rows <= 0) return
           paneSize = { cols, rows }
           term.resize(cols, rows)
-          // Another viewer resized the pane (the server says so with the new
-          // size before the new frame): adopt it, so herdr's repaints land on
-          // the right cells. Take it back only if this viewer was in use.
+          // The pane changed size (every viewer is told, the one that asked
+          // too): adopt it, so herdr's repaints land on the right cells. If it
+          // settles on a size this viewer did not ask for, somebody else is
+          // using the pane — give the size up, and take it back only on this
+          // viewer's own next touch, click or key. Never on a timer: two
+          // viewers that each took it back were the bounce.
           if ((hello as { resized?: boolean }).resized) {
-            if (document.visibilityState === 'visible' && Date.now() - usedAt < OWN_MS) {
-              if (reassertTimer) clearTimeout(reassertTimer)
-              reassertTimer = setTimeout(claimSize, 400)
-            }
+            if (reassertTimer) clearTimeout(reassertTimer)
+            reassertTimer = setTimeout(() => {
+              if (paneSize && tookOthers(paneSize, mySize)) owner.yieldTo()
+            }, 300)
             return
           }
           if (helloSeen && Date.now() - lastKickAt > 2000) {
@@ -863,7 +882,8 @@ function TerminalOverlay({
             rekickTimer = setTimeout(repaintKick, 120)
           }
           helloSeen = true
-          if (document.visibilityState !== 'visible' || !document.hasFocus()) return
+          // A reconnect: the viewer in use puts its own size back; the rest adopt.
+          if (!owns()) return
           if (reassertTimer) clearTimeout(reassertTimer)
           reassertTimer = setTimeout(() => {
             if (disposed) return
@@ -891,8 +911,10 @@ function TerminalOverlay({
       let xtermDataCount = 0
       let xtermRecent: { at: number; text: string }[] = []
       const inputSub = term.onData((input) => {
-        // Typing here is using this viewer: it keeps the pane's size (claimSize).
-        usedAt = Date.now()
+        // Typing here is using this viewer: the first key after a pause takes
+        // the pane's size back (claimSize), the rest only keep it.
+        if (!owns()) claimSize()
+        else owner.use(Date.now())
         xtermDataCount += 1
         xtermRecent = [...xtermRecent.slice(-15), { at: Date.now(), text: input }]
         cookrew().ptyInput(node.id, input)
@@ -1086,6 +1108,10 @@ function TerminalOverlay({
       const observer = new ResizeObserver(() => {
         if (refitTimer) clearTimeout(refitTimer)
         refitTimer = setTimeout(() => {
+          // A viewer not in use keeps the adopted size: refitting it would
+          // draw the pane at the wrong width here, and sending it would take
+          // the pane from the viewer someone is using (pane-size.ts).
+          if (!owns()) return
           try {
             fit.fit()
             if (paneSize?.cols !== term.cols || paneSize?.rows !== term.rows) sendSize(term.cols, term.rows)
