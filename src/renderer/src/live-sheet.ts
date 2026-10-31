@@ -21,6 +21,12 @@
 // terminal is there again. While scrolled up you read a snapshot; new output
 // is there when you come back down.
 //
+// A new width (the phone turned) ends the snapshot: a copy of the old screen
+// and history wrapped at the old width are nothing to read at the new one, so
+// the surface goes back to the bottom and is rendered again — from the seed
+// taken at the new width when it lands (live-scroll.ts). Rows alone (a
+// toolbar sliding away) leave it be.
+//
 // The pure half (colours, one line as HTML) is tested without a DOM; the
 // controller below only moves elements.
 
@@ -237,6 +243,7 @@ export function installLiveSheet(term: SheetTerminal, container: HTMLElement, de
   let disposed = false
   let refreshTimer: ReturnType<typeof setTimeout> | null = null
   let settleTimer: ReturnType<typeof setTimeout> | null = null
+  let cols = term.cols
 
   const metrics = (): { rowPx: number; cellPx: number; left: number; top: number; font: string; spacing: string; weight: string } | null => {
     const screen = term.element?.querySelector('.xterm-screen')
@@ -335,6 +342,19 @@ export function installLiveSheet(term: SheetTerminal, container: HTMLElement, de
     schedule()
   }
 
+  /** The width changed: drop the copy whatever the finger is doing, and go to the bottom. */
+  const leave = (): void => {
+    touching = false
+    if (armed) {
+      armed = false
+      sheet.classList.remove('armed')
+      spacer.style.background = ''
+      snap.innerHTML = ''
+    }
+    down.classList.remove('on')
+    sheet.scrollTop = sheet.scrollHeight
+  }
+
   const settleSoon = (): void => {
     if (settleTimer) clearTimeout(settleTimer)
     settleTimer = setTimeout(() => {
@@ -404,6 +424,10 @@ export function installLiveSheet(term: SheetTerminal, container: HTMLElement, de
     show()
   })
   const resized = term.onResize(() => {
+    if (term.cols !== cols) {
+      cols = term.cols
+      leave()
+    }
     full = true
     schedule()
   })

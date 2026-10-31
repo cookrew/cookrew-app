@@ -762,8 +762,12 @@ function TerminalOverlay({
       // grid. VS15 (U+FE0E, zero width) pins every media-control symbol to
       // TEXT presentation — same glyph, same cell width, no emoji path.
       // Remote only: desktop WebKit shapes these fine.
+      // ⏺ itself, Claude Code's mark on every line it says, becomes ● (one
+      // cell, as Claude Code prints it off the Mac): Samsung's browser draws
+      // it as an orange emoji button whatever selector follows it (owner's
+      // screenshot, 2026-10-31).
       const detoxify = (raw: string): string =>
-        isRemoteMode() ? raw.replace(/[\u23E9-\u23FA]/g, (m) => `${m}\uFE0E`) : raw
+        isRemoteMode() ? raw.replace(/\u23FA/g, '\u25CF').replace(/[\u23E9-\u23F9]/g, (m) => `${m}\uFE0E`) : raw
       /** SIGWINCH: make the TUI repaint its real screen at this size. */
       let settleTimer: ReturnType<typeof setTimeout> | null = null
       let lastKickAt = 0

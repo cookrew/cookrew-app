@@ -500,7 +500,8 @@
 
 .lod-overlay .look-log .ctx-tool-call::before,
 .lod-overlay .look-log .ctx-block-reply::before {
-  content: '⏺ ';
+  /* ● not ⏺: a phone browser may draw ⏺ as a coloured emoji button. */
+  content: '● ';
   font-family: var(--font-mono);
 }
 
