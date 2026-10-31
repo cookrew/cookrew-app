@@ -1528,6 +1528,7 @@ a.cr-btn {
 .ctx-transcript,
 .ctx-block,
 .ctx-block-prompt,
+.ctx-block-notice,
 .ctx-block-tool,
 .ctx-tool-call,
 .ctx-tool-name,
@@ -1542,6 +1543,20 @@ a.cr-btn {
 .ctx-block-prompt::before {
   content: '❯ ';
   color: var(--amber);
+}
+
+/* A turn the harness started (harness-notice.ts): not the owner's prompt, so
+   no ❯ and no bubble — one quiet line saying what woke the agent. Words, not
+   a symbol glyph: a phone font may not have one. */
+.ctx-block-notice {
+  color: var(--phos-dim);
+  font: 11.5px/1.45 var(--font-mono);
+  word-break: break-word;
+}
+
+.ctx-block-notice::before {
+  content: 'TASK · ';
+  letter-spacing: 0.08em;
 }
 
 /* tool_call lines between prompt and reply — rendered like the real TUI
