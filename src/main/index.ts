@@ -234,6 +234,7 @@ import { findChrome } from './headless-chrome'
 import { HeadlessBrowserManager } from './headless-browser-manager'
 import { HeadlessBrowserCommandEngine } from './headless-browser-command'
 import { reapOrphanBrowserProfiles, removeBrowserProfile } from './browser-profile-store'
+import { reapOrphanChrome } from './orphan-chrome'
 import { purgeRegenerableProfileData, reapOrphanPartitions } from './browser-storage-gc'
 
 import { TraceReader, type SessionWatchSpec } from './trace'
@@ -6197,6 +6198,11 @@ app.whenReady().then(() => {
   // Profiles outlive crashes, but not their browser nodes. Enumerate every
   // workspace strictly so corrupt parked state makes this fail closed.
   try {
+    // Processes BEFORE directories: a Chromium from an instance that died
+    // hard holds its profile open, so deleting the directory under it frees
+    // nothing. Orphaned by definition (ppid 1), so no live card is touched.
+    const stray = reapOrphanChrome(browserProfileRoot())
+    if (stray.length > 0) console.error(`Killed ${stray.length} orphaned browser process(es)`)
     const owned = store.allBrowserIdsStrict()
     const reaped = reapOrphanBrowserProfiles(browserProfileRoot(), owned)
     if (reaped.length > 0) console.error(`Reaped ${reaped.length} orphaned browser profile(s)`)
