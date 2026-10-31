@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseInline, parseMarkdown } from '../src/renderer/src/markdown'
+import { parseInline, parseMarkdown, type InlineNode } from '../src/renderer/src/markdown'
 
 describe('parseInline (bold / italics / inline code)', () => {
   it('keeps plain text as a single node', () => {
@@ -130,5 +130,66 @@ describe('parseMarkdown (blocks)', () => {
       { type: 'paragraph', children: [{ type: 'text', value: 'a' }] },
       { type: 'paragraph', children: [{ type: 'text', value: 'b' }] }
     ])
+  })
+})
+
+// UI/UX QA (Gauge, 2026-11-01): agents write GitHub tables often, and CHAT
+// showed them as one paragraph of pipes ("| Entry point | Before | Now |
+// |---|---|---| | cookrew ask | ..."). A well-formed table is a table now;
+// anything else stays text, as before.
+describe('parseMarkdown (GitHub tables)', () => {
+  const t = (...lines: string[]): string => lines.join('\n')
+  const text = (value: string): InlineNode[] => [{ type: 'text', value }]
+
+  it('a header row, the separator and body rows make a table', () => {
+    expect(parseMarkdown(t('| Entry point | Before | Now |', '|---|---|---|', '| cookrew ask | already resumed it | wakes it |'))).toEqual([
+      {
+        type: 'table',
+        align: [null, null, null],
+        head: [text('Entry point'), text('Before'), text('Now')],
+        rows: [[text('cookrew ask'), text('already resumed it'), text('wakes it')]]
+      }
+    ])
+  })
+
+  it('cells take inline code and bold', () => {
+    const [table] = parseMarkdown(t('| a | b |', '| --- | --- |', '| `x --y` | **yes** |'))
+    expect(table).toMatchObject({
+      type: 'table',
+      rows: [[[{ type: 'code', value: 'x --y' }], [{ type: 'strong', children: text('yes') }]]]
+    })
+  })
+
+  it('a pipe inside inline code, or escaped, stays in its cell', () => {
+    const [table] = parseMarkdown(t('| cmd | note |', '|---|---|', '| `a | b` | x \\| y |'))
+    expect(table).toMatchObject({ rows: [[[{ type: 'code', value: 'a | b' }], text('x | y')]] })
+  })
+
+  it('reads the alignment colons, and outer pipes are optional', () => {
+    const [table] = parseMarkdown(t('a | b | c', ':--- | :---: | ---:', '1 | 2 | 3'))
+    expect(table).toMatchObject({ type: 'table', align: ['left', 'center', 'right'] })
+  })
+
+  it('a short row is padded with empty cells, a long one cut to the header', () => {
+    const [table] = parseMarkdown(t('| a | b |', '|---|---|', '| 1 |', '| 1 | 2 | 3 |', '| PASS | |'))
+    expect(table).toMatchObject({ rows: [[text('1'), []], [text('1'), text('2')], [text('PASS'), []]] })
+  })
+
+  it('ends at the first line that is not a row, and may follow a paragraph line directly', () => {
+    expect(parseMarkdown(t('Here is the matrix:', '| a | b |', '|---|---|', '| 1 | 2 |', 'And after it.')).map((b) => b.type)).toEqual([
+      'paragraph',
+      'table',
+      'paragraph'
+    ])
+  })
+
+  it('a header with no separator, or a separator of the wrong width, stays plain text', () => {
+    expect(parseMarkdown(t('| a | b |', '| 1 | 2 |')).map((b) => b.type)).toEqual(['paragraph'])
+    expect(parseMarkdown(t('| a | b | c |', '|---|---|', '| 1 | 2 | 3 |')).map((b) => b.type)).toEqual(['paragraph'])
+    expect(parseMarkdown('a | b')).toEqual([{ type: 'paragraph', children: text('a | b') }])
+  })
+
+  it('a table inside a fenced code block is code', () => {
+    expect(parseMarkdown(t('```', '| a | b |', '|---|---|', '```')).map((b) => b.type)).toEqual(['code'])
   })
 })

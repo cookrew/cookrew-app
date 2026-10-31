@@ -1,11 +1,11 @@
 import { Fragment, memo } from 'react'
-import { parseMarkdown, type BlockNode, type InlineNode } from './markdown'
+import { parseMarkdown, type BlockNode, type InlineNode, type TableAlign } from './markdown'
 
 /**
  * Render a markdown reply body (unified-scroll addendum) as REACT ELEMENTS ONLY
  * — no dangerouslySetInnerHTML, no raw HTML pass-through. The pure parser
  * (markdown.ts) yields a safe AST; this walks it to STANDARD tags (strong / em /
- * code / pre / ul / ol / h1-6 / p), which Fresco styles by tag under
+ * code / pre / ul / ol / h1-6 / p / table), which Fresco styles by tag under
  * `.ctx-block-reply.md` to keep the phosphor terminal aesthetic. Anything the
  * parser didn't recognize already arrived as plain text, so it renders verbatim.
  */
@@ -69,6 +69,34 @@ function Block({ node }: { node: BlockNode }): React.JSX.Element {
           <code>{node.value}</code>
         </pre>
       )
+    case 'table':
+      // Its own box scrolls sideways: a wide table never widens the chat (a phone is 412px).
+      return (
+        <div className="md-table" role="region" aria-label="Table" tabIndex={0}>
+          <table>
+            <thead>
+              <tr>
+                {node.head.map((cell, k) => (
+                  <th key={k} style={alignOf(node.align[k])}>
+                    <Inlines nodes={cell} />
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {node.rows.map((row, r) => (
+                <tr key={r}>
+                  {row.map((cell, k) => (
+                    <td key={k} style={alignOf(node.align[k])}>
+                      <Inlines nodes={cell} />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )
     case 'list': {
       const Tag = node.ordered ? 'ol' : 'ul'
       return (
@@ -89,3 +117,6 @@ function Block({ node }: { node: BlockNode }): React.JSX.Element {
       )
   }
 }
+
+/** A column's alignment from the separator row's colons; none leaves the stylesheet's. */
+const alignOf = (align: TableAlign | undefined): React.CSSProperties | undefined => (align ? { textAlign: align } : undefined)
