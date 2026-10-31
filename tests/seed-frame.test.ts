@@ -38,7 +38,8 @@ describe('buildSeededFrame', () => {
     await write(viewer, 'stale screen from before\r\n')
     await write(viewer, buildSeededFrame(mirror, serializer, history, 'n1'))
 
-    expect(marks).toEqual(['cookrew-seed;n1'])
+    // The marker names the width the frame was built at, for the viewer to check.
+    expect(marks).toEqual([`cookrew-seed;n1;${mirror.cols}`])
     expect(visible(viewer)).toEqual(visible(mirror))
     const scrollback = all(viewer).slice(0, viewer.buffer.active.baseY)
     expect(scrollback.slice(0, 8)).toEqual(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'h7', 'h8'])
@@ -54,7 +55,7 @@ describe('buildSeededFrame', () => {
     mirror.loadAddon(serializer)
     await write(mirror, 'a\r\nb\r\nc')
     const frame = buildSeededFrame(mirror, serializer, 'a\r\nb\r\nc\r\n', 'x')
-    expect(frame.endsWith(seedMarker('x'))).toBe(true)
+    expect(frame.endsWith(seedMarker('x', 20))).toBe(true)
     expect(frame).not.toContain('\x1b[H\x1b[2J' + '\r\n')
   })
 

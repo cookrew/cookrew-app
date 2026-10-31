@@ -5,7 +5,7 @@
 // follow the pane's history size, not every repaint.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Terminal } from '@xterm/xterm'
-import { RESIZE_ASK_MS, RESIZE_TAKE_MS, SEED_OSC, installLocalScroll, wheelRows } from '../src/renderer/src/live-scroll'
+import { RESIZE_ASK_MS, RESIZE_TAKE_MS, SEED_OSC, installLocalScroll, seedCols, wheelRows } from '../src/renderer/src/live-scroll'
 
 function fakeTerm() {
   let wheel: ((e: WheelEvent) => boolean) | null = null
@@ -188,5 +188,29 @@ describe('installLocalScroll', () => {
     await vi.advanceTimersByTimeAsync(RESIZE_ASK_MS[1] + 100)
     expect(nonces).toHaveLength(0)
     scroll.dispose()
+  })
+
+  it('never writes a seed built at another width, and asks again at this one', async () => {
+    // The owner's blank row under every line: a seed built while a widen
+    // passed the pane through cols+2, written into a grid two columns narrower.
+    const f = fakeTerm() // 49 columns
+    const nonces: string[] = []
+    const scroll = installLocalScroll(f.term, { seed: async (n) => (nonces.push(n), true), live: () => true, lines: 400, refreshMs: 3000 })
+    scroll.onLive()
+    expect(nonces).toHaveLength(1)
+    expect(scroll.admit(`\x1b[2J...\x1b]777;cookrew-seed;${nonces[0]};51\x07`)).toBe(false)
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(nonces).toHaveLength(2) // asked again at once, not after the refresh
+    expect(scroll.admit(`\x1b[2J...\x1b]777;cookrew-seed;${nonces[1]};49\x07`)).toBe(true)
+    f.land(nonces[1], 300)
+    // A marker that names no width (an older main) is written as before.
+    expect(scroll.admit(`\x1b[2J...\x1b]777;cookrew-seed;old\x07`)).toBe(true)
+    scroll.dispose()
+  })
+
+  it('reads the width from the marker, and the nonce without it', () => {
+    expect(seedCols('x\x1b]777;cookrew-seed;n1;177\x07')).toBe(177)
+    expect(seedCols('x\x1b]777;cookrew-seed;n1\x07')).toBeNull()
+    expect(seedCols('no marker')).toBeNull()
   })
 })

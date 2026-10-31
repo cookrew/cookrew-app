@@ -687,7 +687,6 @@ function TerminalOverlay({
       // retry that measured the same size must not re-send it (Pilot's
       // phone-crash hunt, 2026-08-27 — the mount burst was 4–13 identical
       // resizes, each reflowing the desktop viewer too).
-      let lastSent: { cols: number; rows: number } | null = null
       /**
        * The pane's size as this viewer last knew it — what it sent, or what the
        * pane reported. A resize to the size the pane already has is not free:
@@ -746,10 +745,10 @@ function TerminalOverlay({
         try {
           if (container.offsetWidth > 40) {
             fit.fit()
-            if (lastSent?.cols !== term.cols || lastSent?.rows !== term.rows) {
-              lastSent = { cols: term.cols, rows: term.rows }
-              sendSize(term.cols, term.rows)
-            }
+            // Against the pane's size, not what this viewer last sent: a
+            // hello may have moved the pane since, and a grid refitted without
+            // telling the pane is the wrong width for every frame after.
+            if (paneSize?.cols !== term.cols || paneSize?.rows !== term.rows) sendSize(term.cols, term.rows)
           }
         } catch {
           // ignore; retried below
@@ -797,16 +796,23 @@ function TerminalOverlay({
        * next (main/pty.ts · PtySession.resize). Back within the 300 ms the
        * ownership check waits, so the passing size is not taken as another
        * viewer's.
+       *
+       * Back to the size the pane had BEFORE the kick, read then: by the
+       * settle this viewer has adopted the overshoot from main's hello, and
+       * settling on term.cols kept it — the pane grew two columns a kick and
+       * every frame overflowed the viewer's grid (owner, 2026-10-31: a blank
+       * row under every line, the input box jumping).
        */
       let settleTimer: ReturnType<typeof setTimeout> | null = null
       let lastKickAt = 0
       const repaintKick = (): void => {
         if (disposed || term.cols < 21) return
         lastKickAt = Date.now()
-        sendSize(term.cols + 1, term.rows, true)
+        const at = paneSize ?? { cols: term.cols, rows: term.rows }
+        sendSize(at.cols + 1, at.rows, true)
         if (settleTimer) clearTimeout(settleTimer)
         settleTimer = setTimeout(() => {
-          if (!disposed) sendSize(term.cols, term.rows)
+          if (!disposed) sendSize(at.cols, at.rows)
         }, 150)
       }
       kickRef.current = repaintKick
