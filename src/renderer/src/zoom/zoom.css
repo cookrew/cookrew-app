@@ -1852,3 +1852,12 @@
 }
 
 .zv-del:hover { border-color: var(--zv-wait); color: var(--zv-wait); }
+
+/* AT REST, NO PART KEEPS A LAYER (zoom-rest.ts). Every hint above is for the
+   motion: held at rest, a layer keeps the sharpest raster a dive made of it,
+   and the tiles of a magnified wash and crew ran Chromium out of tile memory —
+   it then leaves parts undrawn. Without `data-moving` the overview is painted
+   flat, each part at the scale it is shown. */
+.zv-root:not([data-moving]) .zv-overview * {
+  will-change: auto;
+}
