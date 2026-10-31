@@ -32,7 +32,6 @@ import type { TurnMatch } from "../../shared/turn-search";
 import type { TraceBoundaryMarker } from "../../shared/trace-blocks";
 import type { DoorTranscriptState } from "../../shared/door-transcript-state";
 import type { BoardRow, BoardSummary } from "../../shared/board";
-import type { LevelsAgentDetail, LevelsEvent } from "../../shared/strata";
 import type { VersionPinRecord } from "../../shared/version-pin";
 import type { ServedPaymentRail } from "../../shared/served-payment-rails";
 import type { ServeTransport } from "../../shared/serve-transport";
@@ -478,15 +477,8 @@ export interface CookrewApi {
    * feature-detect, and fall back to listBoard.
    */
   subscribeBoard?: (cb: (board: BoardSnapshotLike) => void) => () => void;
-  /**
-   * STRATA: the levels view's feed (machines -> workspaces -> agents). The
-   * first event is a snapshot, then deltas (shared/strata.ts LevelsEvent).
-   * Returns the release. Optional — feature-detect; without it the levels
-   * view says it cannot read this desktop.
-   */
-  subscribeLevels?: (cb: (event: LevelsEvent) => void) => () => void;
-  /** One agent's detail for the levels view's terminal level; null when it is gone. */
-  getLevelsAgent?: (agentId: string) => Promise<LevelsAgentDetail | null>;
+  /** This desktop's name for the header's device step; null when it has none. Optional — the phone names its desktop from the path. */
+  machineName?: () => Promise<string | null>;
   /**
    * Recover an inactive teammate as it was (agent-recover feature): re-add
    * the node bound to its session and resume. Optional — feature-detect.

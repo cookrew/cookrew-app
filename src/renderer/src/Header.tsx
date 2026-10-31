@@ -4,18 +4,18 @@ import { HeaderMore } from './HeaderMore'
 import { setZoomBarSlot } from './zoom-bar'
 import { HeaderRoute } from './HeaderRoute'
 import { CrIcon } from './icons'
-import { levelsRoute } from './levels/levels-history'
 import { LocalNetworkRow } from './LocalNetworkRow'
 import { CompanionAvatar, PathSheet, usePathBadge } from './PathBadge'
 import type { RouteStatus } from '../../shared/route'
 import './header.css'
 
 /**
- * What the window shows: the STAGE (stage/StageView.tsx) — levels, canvas and
- * board merged into one (2026-10-30). The other three are DEPRECATED: kept
- * reachable from the More menu, not developed further.
+ * What the window shows: the STAGE (stage/StageView.tsx) — canvas and board
+ * merged into one (2026-10-30). The board is DEPRECATED: kept reachable from
+ * the More menu, not developed further. The levels view is deleted
+ * (2026-10-31).
  */
-export type MainView = 'stage' | 'levels' | 'agents'
+export type MainView = 'stage' | 'agents'
 
 interface HeaderProps {
   workspaceName: string
@@ -131,7 +131,6 @@ export function Header({
           onRouting={onRouting}
           routeStatus={routeStatus ?? null}
           onWall={onWall}
-          onFind={view === 'levels' ? levelsRoute.requestFind : undefined}
           onResync={onResync}
           demo={isDemoMode()}
         />

@@ -1,100 +1,47 @@
 // THE ROUTE: the left of the header, device / workspace / agent.
 //
-// One line that says where you are, in the order the levels nest: the desktop
-// (the phone's dot says how it is reached), the workspace, and the agent whose
-// terminal is open. Every view draws it — the canvas and the board name the
-// canvas's workspace, the levels name their own path — and every step is a
-// way out to its level:
+// One line that says where you are: the desktop (the phone's dot says how it
+// is reached), the workspace, and the agent whose terminal is open.
 //
-//   device    → every device (the stage's devices level)
-//   workspace → every workspace, as thumbnails (the stage's workspaces level)
-//   agent     → nothing; it is where you are: the terminal zoomed on the
-//               canvas, or open at the levels' last level. Only its name —
-//               the card keeps its own head and its own buttons.
-import { isRemoteMode } from './api'
+//   device    → only a name: this desktop. Its devices and workspaces
+//               overview went with the levels code (2026-10-31).
+//   workspace → the stage at the workspace: back to following what needs you.
+//   agent     → nothing; it is where you are. Only its name — the card keeps
+//               its own head and its own buttons.
+import { useEffect, useState } from 'react'
+import { cookrew, isRemoteMode } from './api'
 import type { MainView } from './Header'
 import { CrIcon } from './icons'
-import { useLevelsRoute, WORKSPACES_PATH, type LevelsRouteState } from './levels/levels-history'
 import { PathDot } from './PathBadge'
 import type { PathBadgeView } from '../../shared/path-badge'
-import type { StrataPath } from '../../shared/strata'
-import { useActiveWorkspace, type ActiveWorkspace } from './WorkspaceSwitcher'
-import { LOCAL_MACHINE_ID } from './levels/local-fleet'
-import { stageLevel, useStageLevel, type StageLevel } from './stage/stage-select'
+import { useActiveWorkspace } from './WorkspaceSwitcher'
+import { stageSelect } from './stage/stage-select'
 
-/**
- * The stage's levels said as a levels path, so the route draws them the way
- * it draws the levels: devices → this device's workspaces → one workspace →
- * one card.
- */
-export function stageRouteState(input: {
-  level: StageLevel
-  machine: string | null
-  workspace: { name: string; icon: string | null }
-  zoomed: string | null
-}): LevelsRouteState {
-  const { level, machine, workspace, zoomed } = input
-  const path: StrataPath =
-    level === 'devices'
-      ? {}
-      : level === 'workspaces'
-        ? { machine: LOCAL_MACHINE_ID }
-        : zoomed !== null
-          ? { machine: LOCAL_MACHINE_ID, workspace: 'loaded', agent: 'zoomed' }
-          : { machine: LOCAL_MACHINE_ID, workspace: 'loaded' }
-  return { path, names: { machine, workspace, agent: zoomed }, find: 0 }
+/** "drej-mbp.local" → "drej-mbp": the `.local` is mDNS plumbing, not a name. */
+export function deviceLabel(name: string | null): string {
+  return (name ?? 'This desktop').replace(/\.local$/i, '')
 }
 
-export interface RouteStep {
-  key: 'device' | 'workspace'
-  label: string
-  /** The workspace's icon; the device step draws the device glyph. */
-  emoji: string | null
-  title: string
-  to: StrataPath
-  current: boolean
+/** The workspace step is current when nothing is zoomed: the stage is at the workspace. */
+export function routeAgent(view: MainView, zoomedAgent: string | null): string | null {
+  return view === 'agents' ? null : zoomedAgent
 }
 
-/**
- * The steps before the agent's. In the levels they follow the levels' own
- * path; elsewhere they name this desktop and the canvas's workspace. Either
- * way the device step goes to the devices and the workspace step to the
- * workspace choice — never "into" the workspace, which is what the levels
- * themselves are for.
- */
-export function routeSteps(input: {
-  inLevels: boolean
-  levels: LevelsRouteState
-  canvasWorkspace: ActiveWorkspace
-  device: string
-}): RouteStep[] {
-  const { inLevels, levels, canvasWorkspace, device } = input
-  const atDevices = inLevels && !levels.path.machine
-  const workspace = inLevels
-    ? levels.path.workspace
-      ? { name: levels.names.workspace?.name ?? '…', icon: levels.names.workspace?.icon ?? '🗂', dir: '' }
-      : null
-    : canvasWorkspace
-  const deviceStep: RouteStep = {
-    key: 'device',
-    label: atDevices ? 'Devices' : device,
-    emoji: null,
-    title: atDevices ? 'All devices' : `${device} — all devices`,
-    to: {},
-    current: inLevels && !workspace
-  }
-  if (!workspace) return [deviceStep]
-  return [
-    deviceStep,
-    {
-      key: 'workspace',
-      label: workspace.name,
-      emoji: workspace.icon,
-      title: `${workspace.dir ? `${workspace.dir} — ` : ''}choose a workspace`,
-      to: WORKSPACES_PATH,
-      current: inLevels && !levels.path.agent
+/** This desktop's name, asked of main once (machine:name); the phone names its desktop from the path. */
+function useMachineName(): string | null {
+  const [name, setName] = useState<string | null>(null)
+  useEffect(() => {
+    const ask = cookrew().machineName
+    if (!ask) return
+    let live = true
+    void ask()
+      .then((answer) => live && setName(answer))
+      .catch(() => undefined)
+    return () => {
+      live = false
     }
-  ]
+  }, [])
+  return name
 }
 
 interface HeaderRouteProps {
@@ -103,71 +50,50 @@ interface HeaderRouteProps {
   dir: string
   /** The phone's path, worn as a dot on the device step. */
   path: PathBadgeView
-  /** The agent zoomed on the canvas (or on the stage), if any. */
+  /** The agent zoomed on the stage, if any. */
   zoomedAgent: string | null
-  /** The stage's agent's workspace: it can be any workspace, not the canvas's. */
+  /** The stage's agent's workspace, when it is not the loaded one. */
   stageWorkspace?: string | null
   onViewChange: (view: MainView) => void
 }
 
-/** The route's last step: the open agent, by the view's own account of it. */
-export function routeAgent(inLevels: boolean, levels: LevelsRouteState, zoomedAgent: string | null): string | null {
-  if (!inLevels) return zoomedAgent
-  return levels.path.agent ? (levels.names.agent ?? '…') : null
-}
-
 export function HeaderRoute({ view, workspaceName, dir, path, zoomedAgent, stageWorkspace = null, onViewChange }: HeaderRouteProps): React.JSX.Element {
-  const levels = useLevelsRoute()
   const active = useActiveWorkspace(workspaceName, dir)
-  const canvasWorkspace = stageWorkspace !== null && stageWorkspace !== active.name ? { name: stageWorkspace, icon: '🗂', dir: '' } : active
+  const workspace = stageWorkspace !== null && stageWorkspace !== active.name ? { name: stageWorkspace, icon: '🗂', dir: '' } : active
   const remote = isRemoteMode()
-  // "drej-mbp.local" → "drej-mbp": the `.local` is mDNS plumbing, not a name.
-  const device = (levels.names.machine ?? (remote ? path.desktopName : null) ?? 'This desktop').replace(/\.local$/i, '')
-  const level = useStageLevel()
-  // The stage reads its own levels; the deprecated views keep theirs.
-  const route =
-    view === 'stage'
-      ? stageRouteState({ level, machine: device, workspace: { name: canvasWorkspace.name, icon: canvasWorkspace.icon }, zoomed: zoomedAgent })
-      : levels
-  const inLevels = view === 'levels' || view === 'stage'
-  const steps = routeSteps({ inLevels, levels: route, canvasWorkspace, device })
-  const agent = view === 'agents' ? null : routeAgent(inLevels, route, zoomedAgent)
+  const machine = useMachineName()
+  const device = deviceLabel(remote ? path.desktopName : machine)
+  const agent = routeAgent(view, zoomedAgent)
 
-  // Every step goes to the stage: the device to every device, the workspace
-  // to every workspace — wherever you are, the same three places.
-  const go = (step: RouteStep): void => {
-    stageLevel.set(step.key === 'device' ? 'devices' : 'workspaces')
+  const toWorkspace = (): void => {
+    stageSelect.clear()
     onViewChange('stage')
   }
 
   return (
     <nav className="cr-route" aria-label="Route">
-      {steps.map((step, i) => (
-        <span key={step.key} className={`cr-route-step cr-route-${step.key}`}>
-          {i > 0 && (
-            <span className="cr-route-sep" aria-hidden="true">
-              /
-            </span>
-          )}
-          <button
-            type="button"
-            className="cr-route-btn"
-            title={step.title}
-            aria-current={step.current ? 'page' : undefined}
-            onClick={() => go(step)}
-          >
-            {step.key === 'device' ? (
-              <>
-                {remote && <PathDot view={path} />}
-                <CrIcon name="device" />
-              </>
-            ) : (
-              <span className="cr-route-emoji">{step.emoji}</span>
-            )}
-            <span className="cr-route-label">{step.label}</span>
-          </button>
+      <span className="cr-route-step cr-route-device">
+        <span className="cr-route-here" title={device}>
+          {remote && <PathDot view={path} />}
+          <CrIcon name="device" />
+          <span className="cr-route-label">{device}</span>
         </span>
-      ))}
+      </span>
+      <span className="cr-route-step cr-route-workspace">
+        <span className="cr-route-sep" aria-hidden="true">
+          /
+        </span>
+        <button
+          type="button"
+          className="cr-route-btn"
+          title={`${workspace.dir ? `${workspace.dir} — ` : ''}back to the workspace`}
+          aria-current={view === 'stage' && agent === null ? 'page' : undefined}
+          onClick={toWorkspace}
+        >
+          <span className="cr-route-emoji">{workspace.icon}</span>
+          <span className="cr-route-label">{workspace.name}</span>
+        </button>
+      </span>
       {agent !== null && (
         <span className="cr-route-step cr-route-agent">
           <span className="cr-route-sep" aria-hidden="true">

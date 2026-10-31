@@ -1,8 +1,6 @@
-// THE STAGE: levels, canvas and board as one view (2026-10-30).
-//
-// Its levels follow the header's route (stage-select.ts): every device, every
-// workspace as a thumbnail (StageMap.tsx), then one workspace, then one card
-// zoomed in. Below is the workspace.
+// THE STAGE: canvas and board as one view (2026-10-30), showing the loaded
+// workspace. Its devices and workspaces levels went with the levels code
+// (2026-10-31); another workspace is reached by switching to it.
 //
 // One card, the whole width: an agent's terminal (the zoomed view the canvas
 // had) or a browser or note itself. With nothing picked, it follows what needs
@@ -17,8 +15,7 @@ import { attachView, useAttachView } from '../attach-view'
 import { SideTabsContext, type AttachmentIndex } from '../terminal-attachments'
 import { useCrewRows } from './crew-rows'
 import { diffPopped, pickBackground, railOrder, type PoppedItem, type StageItem } from './stage-pick'
-import { firstLine, hostPath, ownersOf, stageSelect, useStageLevel, useStageSelection, type StageItemCard } from './stage-select'
-import { StageMap } from './StageMap'
+import { firstLine, hostPath, ownersOf, stageSelect, useStageSelection, type StageItemCard } from './stage-select'
 import { StageItemPane } from './StageItemPane'
 import { StageTerminal } from './StageTerminal'
 import './stage.css'
@@ -86,18 +83,14 @@ export function StageView({
     if (selection.kind === 'item' && pickedItem === null) stageSelect.clear()
   }, [selection, pickedItem])
 
-  const level = useStageLevel()
   const view = useAttachView()
 
   const shown = target ? (faces.get(target.terminalId) ?? null) : null
-  const showing =
-    level !== 'workspace'
-      ? null
-      : pickedItem
-        ? `\u0000${pickedItem.title}\u0000${workspace?.name ?? ''}\u0000z`
-        : shown
-          ? `${shown.id}\u0000${shown.name}\u0000${shown.workspaceName}\u0000${selection.kind === 'auto' ? '' : 'z'}`
-          : null
+  const showing = pickedItem
+    ? `\u0000${pickedItem.title}\u0000${workspace?.name ?? ''}\u0000z`
+    : shown
+      ? `${shown.id}\u0000${shown.name}\u0000${shown.workspaceName}\u0000${selection.kind === 'auto' ? '' : 'z'}`
+      : null
   useEffect(() => {
     if (showing === null) return onShowing(null)
     const [terminalId, name, workspaceName, zoomed] = showing.split('\u0000')
@@ -112,14 +105,6 @@ export function StageView({
     if (selection.kind === 'auto' && target) stageSelect.set({ kind: 'agent', id: target.terminalId })
   }
 
-  if (level !== 'workspace') {
-    return (
-      <div className="cr-stage-view map">
-        <StageMap level={level} loadedWorkspaceId={workspaceId} />
-      </div>
-    )
-  }
-
   return (
     <div className="cr-stage-view bedded" data-why={pickedItem ? 'item' : (target?.why ?? 'none')}>
       <div className="cr-stage-main" onPointerDownCapture={hold} onKeyDownCapture={hold}>
@@ -129,7 +114,6 @@ export function StageView({
           <SideTabsContext.Provider value={false}>
             <StageTerminal
               key={target.terminalId}
-              terminalId={target.terminalId}
               local={terminals.find((t) => t.id === target.terminalId) ?? null}
               item={target.item}
               onBack={back}

@@ -29,14 +29,11 @@ interface HeaderMoreProps {
   onRouting?: () => void
   routeStatus: RouteStatus | null
   onWall: () => void
-  /** Present in the levels view: the shell's finder. */
-  onFind?: () => void
   onResync: () => void
   demo: boolean
 }
 
-const DEPRECATED_VIEWS: ReadonlyArray<{ view: MainView; icon: 'levels' | 'canvas' | 'agent'; label: string }> = [
-  { view: 'levels', icon: 'levels', label: 'Levels' },
+const DEPRECATED_VIEWS: ReadonlyArray<{ view: MainView; icon: 'canvas' | 'agent'; label: string }> = [
   { view: 'agents', icon: 'agent', label: 'Board' }
 ]
 
@@ -51,7 +48,6 @@ export function HeaderMore({
   onRouting,
   routeStatus,
   onWall,
-  onFind,
   onResync,
   demo
 }: HeaderMoreProps): React.JSX.Element {
@@ -76,8 +72,8 @@ export function HeaderMore({
         close()
         return
       }
-      // Keys pressed in the menu stay there: `/` and the arrows must not reach
-      // the levels behind it. A button's Enter and Space still press it.
+      // Keys pressed in the menu stay there: the arrows must not reach the
+      // page behind it. A button's Enter and Space still press it.
       if (root.current?.contains(e.target as Node)) e.stopPropagation()
     }
     // Tab out of the menu closes it, like a click outside.
@@ -146,13 +142,6 @@ export function HeaderMore({
             <CrIcon name="canvas" />
             <span className="cr-more-label">Workspaces…</span>
           </button>
-          {onFind && (
-            <button type="button" className="cr-more-item" onClick={onFind}>
-              <CrIcon name="search" />
-              <span className="cr-more-label">Find an agent</span>
-              <kbd>/</kbd>
-            </button>
-          )}
           {/* The views the stage merged: still here, no longer the way in. */}
           <div className="cr-more-group" role="presentation">
             Views
