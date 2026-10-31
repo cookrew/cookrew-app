@@ -700,6 +700,21 @@ export async function readHeadLines(
   } catch {
     return []
   }
+  const key = `${file}\u0000${maxLines}`
+  let identity: HeadIdentity | null = null
+  try {
+    const info = await handle.stat()
+    identity = { ino: info.ino, size: info.size, mtimeMs: info.mtimeMs }
+    const known = headCache.get(key)
+    if (known && headStillHolds(known, identity)) {
+      headCache.delete(key)
+      headCache.set(key, known)
+      await handle.close().catch(() => undefined)
+      return known.lines.slice()
+    }
+  } catch {
+    identity = null
+  }
   try {
     const chunks: Buffer[] = []
     let read = 0
@@ -725,12 +740,64 @@ export async function readHeadLines(
     // on a cap rather than at EOF, and an empty string when we stopped at a
     // final newline. Either way it is not a complete record.
     const lines = Buffer.concat(chunks).toString('utf8').split('\n')
-    return lines.slice(0, Math.min(lines.length - 1, lineCap))
+    const head = lines.slice(0, Math.min(lines.length - 1, lineCap))
+    if (identity) rememberHead(key, { ...identity, lines: head, complete: head.length >= lineCap })
+    return head
   } catch {
     return []
   } finally {
     await handle.close().catch(() => undefined)
   }
+}
+
+interface HeadIdentity {
+  ino: number
+  size: number
+  mtimeMs: number
+}
+
+/**
+ * HEADS ARE READ ONCE PER FILE, not once per probe. The rotation scan and the
+ * session-lineage walk read the head of every candidate on every pass, up to
+ * 4 MB each, and decoded it again every time (measured on the owner's Mac:
+ * 717 ms of main-thread time in 10 s, most of it UTF-8 decoding). A session
+ * file is append-only: the same inode unchanged has the same head, and a
+ * head that already reached its line cap stays the same however much the
+ * file grows. Anything else (a new inode, a shorter file, a short head that
+ * grew) is read again. Bounded by the bytes it holds, oldest out first.
+ */
+const headCache = new Map<string, HeadIdentity & { lines: string[]; complete: boolean; bytes?: number }>()
+let headCacheBytes = 0
+export const HEAD_CACHE_MAX_BYTES = 16 * 1024 * 1024
+
+function headStillHolds(known: HeadIdentity & { complete: boolean }, now: HeadIdentity): boolean {
+  if (known.ino !== now.ino) return false
+  if (known.size === now.size && known.mtimeMs === now.mtimeMs) return true
+  return known.complete && now.size >= known.size
+}
+
+function rememberHead(key: string, entry: HeadIdentity & { lines: string[]; complete: boolean }): void {
+  const bytes = entry.lines.reduce((sum, line) => sum + line.length * 2, 0)
+  const old = headCache.get(key)
+  if (old) {
+    headCacheBytes -= old.bytes ?? 0
+    headCache.delete(key)
+  }
+  // A head bigger than a quarter of the budget is not kept: it would push the rest out.
+  if (bytes > HEAD_CACHE_MAX_BYTES / 4) return
+  headCache.set(key, { ...entry, lines: entry.lines.slice(), bytes })
+  headCacheBytes += bytes
+  for (const [oldest, value] of headCache) {
+    if (headCacheBytes <= HEAD_CACHE_MAX_BYTES) break
+    headCache.delete(oldest)
+    headCacheBytes -= value.bytes ?? 0
+  }
+}
+
+/** For tests: forget every remembered head. */
+export function clearHeadCache(): void {
+  headCache.clear()
+  headCacheBytes = 0
 }
 
 function countNewlines(chunk: Buffer): number {
