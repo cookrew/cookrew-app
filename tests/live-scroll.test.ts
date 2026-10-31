@@ -59,11 +59,18 @@ describe('installLocalScroll', () => {
     scroll.dispose()
   })
 
-  it('a backend with no history leaves the wheel to the pane, as before', async () => {
+  it('a backend with no history leaves the wheel to the pane, as before — after three refusals, not one', async () => {
     const f = fakeTerm()
-    const scroll = installLocalScroll(f.term, { seed: async () => false, live: () => true, lines: 1000, refreshMs: 3000 })
+    let calls = 0
+    const scroll = installLocalScroll(f.term, { seed: async () => (calls++, false), live: () => true, lines: 1000, refreshMs: 3000 })
     scroll.onLive()
     await Promise.resolve()
+    // One refusal may be "not yet" (a phone stream not named): the wheel still waits for history.
+    expect(f.spin(-100)).toBe(false)
+    await Promise.resolve()
+    scroll.onLive()
+    await Promise.resolve()
+    expect(calls).toBe(3)
     expect(f.spin(-100)).toBe(true)
     scroll.dispose()
   })

@@ -61,6 +61,8 @@ export function wheelRows(event: Pick<WheelEvent, 'deltaY' | 'deltaMode'>, rowPx
 export function installLocalScroll(term: Terminal, deps: LocalScrollDeps): LocalScroll {
   const now = deps.now ?? Date.now
   let unsupported = false
+  /** Answers of "no history" in a row before any seed landed; one may only mean "not yet". */
+  let refusals = 0
   let inFlight: string | null = null
   let seeded = false
   let lastAsk = Number.NEGATIVE_INFINITY
@@ -99,10 +101,15 @@ export function installLocalScroll(term: Terminal, deps: LocalScrollDeps): Local
     askedAt = history() ?? -1
     void deps.seed(nonce, deps.lines).then(
       (ok) => {
-        if (ok) return
+        if (ok) {
+          refusals = 0
+          return
+        }
         if (inFlight === nonce) inFlight = null
-        // Never seeded and the backend said no: the pane keeps the wheel.
-        if (!seeded) unsupported = true
+        // Never seeded and the backend said no, three times running: the pane
+        // keeps the wheel. Once is not enough — a phone's stream may not have
+        // been named yet, and giving up then left it without history for good.
+        if (!seeded && ++refusals >= 3) unsupported = true
       },
       () => {
         if (inFlight === nonce) inFlight = null
