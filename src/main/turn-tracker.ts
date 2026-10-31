@@ -2849,7 +2849,12 @@ export class TurnTracker extends EventEmitter {
   }
 
   private hasPendingInput(t: TrackedTerminal): boolean {
-    if (t.promptBuffer.trim().length > 0) return true
+    const buffered = t.promptBuffer.trim()
+    // A slash command still in the box (typed, or pasted ahead of its Enter)
+    // makes the agent draw its command menu and repaint, which can re-emit
+    // old "⏺ …" lines; no model turn answers it until the Enter, and a UI
+    // command never opens one at all.
+    if (buffered.length > 0) return !isUiCommand(buffered) && !/^\/\S*$/.test(buffered)
     return t.lastSubmitAt !== 0 && Date.now() - t.lastSubmitAt < RESUME_WINDOW_MS
   }
 
