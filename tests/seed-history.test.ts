@@ -54,6 +54,14 @@ describe('dropReprints', () => {
   })
 })
 
+describe('dropReprints · a short reprinted paragraph', () => {
+  it('a paragraph printed once at 198 columns and again wrapped at 49 is kept once, the later copy', () => {
+    const wide = "⏺ Still no reseed. I'll check the page's state: which view it is in, whether it counts as visible, and whether a seed is stuck in flight."
+    const narrow = ["⏺ Still no reseed. I'll check the page's state:", '  which view it is in, whether it counts as', '  visible, and whether a seed is stuck in flight.']
+    expect(dropReprints(['before', wide, '', 'between', ...narrow])).toEqual(['before', 'between', ...narrow])
+  })
+})
+
 describe('cutAtScreen', () => {
   const history = ['a1', 'a2', 'the screen begins with these words here', 'and goes on', 'to the prompt']
   it('cuts where the screen begins, found by its words, though the history ran past it', () => {
@@ -66,10 +74,13 @@ describe('cutAtScreen', () => {
 })
 
 describe('clipToCells', () => {
-  it('cuts to the width in cells, keeps colour, leaves out a wide character that would straddle the edge', () => {
-    expect(clipToCells('abcdefghijkl', 10)).toBe('abcdefghij')
-    expect(clipToCells('\x1b[31mabcdefghijkl\x1b[0m', 10)).toBe('\x1b[31mabcdefghij\x1b[0m')
-    expect(clipToCells('ab历史会在后台自动补新', 9)).toBe('ab历史会')
+  it('cuts a border or padding that hangs past the edge, keeping colour', () => {
+    expect(clipToCells('abcdefgh    ', 10)).toBe('abcdefgh  ')
+    expect(clipToCells('\x1b[31m  ┌────────────┐\x1b[0m', 10)).toBe('\x1b[31m  ┌───────\x1b[0m')
     expect(clipToCells('short', 10)).toBe('short')
+  })
+  it('leaves a line whose real text hangs past the edge whole, to wrap — words are never cut', () => {
+    expect(clipToCells('abcdefghijkl', 10)).toBe('abcdefghijkl')
+    expect(clipToCells('ab历史会在后台自动补新', 9)).toBe('ab历史会在后台自动补新')
   })
 })
