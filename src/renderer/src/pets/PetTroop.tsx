@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { createPortal, flushSync } from 'react-dom'
 import { cardPlacement, clampSpot, nameTagSpot, petClick, petHome, readSpot, type PetSpot } from './pet-pick'
 import { CONTENT_FRAMES, MORPH_EASE, MORPH_MS, morphFrames } from './pet-morph'
+import { CARD_PARTS, FACE_PARTS, FULL_PARTS, findParts, pageZoomEnv, waitFor, zoomStep } from './pet-zoom'
 import './pets.css'
 
 /**
@@ -94,6 +95,8 @@ export function PetTroop({
   const [openId, setOpenId] = useState<string | null>(null)
   /** The card shrinking back into its face (pet-morph.ts); gone when the morph ends. */
   const [leavingId, setLeavingId] = useState<string | null>(null)
+  /** The card a semantic zoom grew (pet-zoom.ts): its frame plays no grow of its own. */
+  const [zoomedId, setZoomedId] = useState<string | null>(null)
   const openRef = useRef<string | null>(null)
   openRef.current = openId
   /** The face a pointer (or the keyboard) rests on: it shows its name. */
@@ -216,18 +219,57 @@ export function PetTroop({
       store(tuckedKey, '0')
       return
     }
-    // Once: its card. Again, on the same face: in full.
+    // Once: its card. Again, on the same face: in full. Each step is a
+    // semantic zoom (pet-zoom.ts) where the browser can draw one.
     if (petClick(openId, id) === 'full') {
-      close()
-      onOpen(id)
+      zoomToFull(id)
       return
     }
     draft.current = ''
+    const face = petRefs.current.get(id) ?? null
+    const zoomed = zoomStep(pageZoomEnv(), {
+      from: findParts(face, FACE_PARTS, true),
+      update: () =>
+        flushSync(() => {
+          // The card this face left goes at once; the zoom draws the change.
+          setLeavingId(null)
+          setZoomedId(id)
+          setOpenId(id)
+        }),
+      to: () => findParts(document.querySelector('.cr-pet-card:not(.leaving)'), CARD_PARTS, true)
+    })
+    if (zoomed) return
+    setZoomedId(null)
     // Another face's card shrinks home while this one grows; the same face
     // clicked mid-shrink grows straight back (PetCardFrame reverses).
     if (openId && openId !== id) setLeavingId(openId)
     else if (leavingId === id) setLeavingId(null)
     setOpenId(id)
+  }
+  /** The card zooms into the full view: it becomes the stage's middle, its turn the transcript, its name the route's. */
+  const zoomToFull = (id: string): void => {
+    const card = document.querySelector('.cr-pet-card:not(.leaving)')
+    const zoomed = zoomStep(pageZoomEnv(), {
+      from: findParts(card, CARD_PARTS, true),
+      update: async () => {
+        flushSync(() => {
+          draft.current = ''
+          setOpenId(null)
+          setLeavingId(null)
+          onOpen(id)
+        })
+        // The stage first, then the route's agent: the name and the face land there.
+        await waitFor(
+          () =>
+            document.querySelector('.cr-stage-main > .stg-item-pane') !== null ||
+            (document.querySelector('.cr-stage-main > .cr-stage-term') !== null && document.querySelector('.cr-route-agent .cr-route-here') !== null)
+        )
+      },
+      to: () => findParts(document, FULL_PARTS, false)
+    })
+    if (zoomed) return
+    close()
+    onOpen(id)
   }
   const tuck = (): void => {
     if (consumed()) return
@@ -247,9 +289,7 @@ export function PetTroop({
   const controls: CardControls = {
     draft: (text) => void (draft.current = text),
     open: () => {
-      const id = openId
-      close()
-      if (id) onOpen(id)
+      if (openId) zoomToFull(openId)
     },
     close
   }
@@ -320,6 +360,7 @@ export function PetTroop({
           className={cardClass?.(id) ?? ''}
           label={cardLabel(id)}
           leaving={id !== openId}
+          zoomed={id === zoomedId && id === openId}
           onGone={() => setLeavingId((at) => (at === id ? null : at))}
         >
           {renderCard(id, controls)}
@@ -337,6 +378,7 @@ function PetCardFrame({
   className,
   label,
   leaving = false,
+  zoomed = false,
   onGone,
   children
 }: {
@@ -346,6 +388,8 @@ function PetCardFrame({
   label: string
   /** Shrinking back into the face; onGone when the morph has ended. */
   leaving?: boolean
+  /** A semantic zoom drew its arrival (pet-zoom.ts): no grow of its own. */
+  zoomed?: boolean
   onGone?: () => void
   children: React.ReactNode
 }): React.JSX.Element | null {
@@ -399,7 +443,7 @@ function PetCardFrame({
         goneRef.current?.()
         return
       }
-    } else if (grown.current || reduced || !anchor) {
+    } else if (grown.current || reduced || !anchor || zoomed) {
       grown.current = true
       return
     }
@@ -419,7 +463,7 @@ function PetCardFrame({
       },
       () => undefined
     )
-  }, [place, leaving, anchor])
+  }, [place, leaving, anchor, zoomed])
 
   return (
     <div

@@ -351,6 +351,9 @@
 }
 
 .cr-pet-card-name {
+  /* As wide as the name, not the column: the face's name tag zooms into the word (pet-zoom.ts). */
+  align-self: flex-start;
+  max-width: 100%;
   font: 600 13.5px/1.2 var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -559,4 +562,90 @@
 /* A card shrinking back into its face (pet-morph.ts): seen, never touched. */
 .cr-pet-card.leaving {
   pointer-events: none;
+}
+
+/* ---- THE ZOOM (pet-zoom.ts): face → card → full view, as one motion ----
+   The browser moves each named part from where it was to where it lands; the
+   page around it changes at once (no page-wide crossfade), and clicks go
+   through to the page while it plays. */
+:root.pet-zoom::view-transition {
+  pointer-events: none;
+}
+
+:root.pet-zoom::view-transition-group(*) {
+  animation-duration: 340ms;
+  animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+:root.pet-zoom::view-transition-old(root),
+:root.pet-zoom::view-transition-new(root) {
+  animation: none;
+}
+
+/* The ring and the card are shapes, not pictures: they stretch to the box,
+   and the old shape hands over to the new one at once, so a face's ring is
+   never seen stretched across a card. */
+:root.pet-zoom::view-transition-old(pet-card),
+:root.pet-zoom::view-transition-new(pet-card) {
+  height: 100%;
+}
+
+:root.pet-zoom::view-transition-old(pet-card) {
+  animation: cr-pet-zoom-out 100ms ease both;
+}
+
+:root.pet-zoom::view-transition-new(pet-card) {
+  animation: cr-pet-zoom-solid 100ms ease both;
+}
+
+/* What a level adds comes in once there is room for it, never squashed;
+   what a level drops goes early, before it would be stretched. A part on
+   both levels (the turn becoming the transcript) crossfades as it travels. */
+:root.pet-zoom::view-transition-new(*):only-child {
+  animation: cr-pet-zoom-in 340ms ease both;
+}
+
+:root.pet-zoom::view-transition-old(*):only-child {
+  animation: cr-pet-zoom-out 160ms ease both;
+}
+
+/* The name tag hands over to the name early (a pill is not a word), and the
+   card's turn and box to the transcript and the dock before they are blown up. */
+:root.pet-zoom::view-transition-old(pet-name),
+:root.pet-zoom::view-transition-old(pet-turn),
+:root.pet-zoom::view-transition-old(pet-ask) {
+  animation: cr-pet-zoom-out 140ms ease both;
+}
+
+@keyframes cr-pet-zoom-in {
+  0%,
+  50% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes cr-pet-zoom-solid {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes cr-pet-zoom-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* An open face's name is in its card now: the tag does not stay behind. */
+.cr-pets .cr-pet.open .cr-pet-name {
+  display: none;
 }
