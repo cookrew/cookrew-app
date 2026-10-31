@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { KeyedStore } from './keyed-store'
 import type { TerminalActivity, TurnPhase } from '../../shared/turn'
 
@@ -87,6 +87,48 @@ export function useActivityPhaseCount(ids: readonly string[], phase: TurnPhase):
       return count
     }
   )
+}
+
+/**
+ * The whole activity map, at most once per `ms`. The first change after a
+ * quiet spell goes out at once and the last change always lands; only the
+ * ones in between are folded together. For readers high in the tree: the
+ * crew (App.tsx · useCrew) read every event and re-rendered the whole app
+ * 10 to 20 times a second while agents worked (perf, 2026-11-01).
+ */
+export function useActivitiesEvery(ms: number): Record<string, TerminalActivity> {
+  const [snapshot, setSnapshot] = useState(() => activityStore.getSnapshot())
+  useEffect(() => {
+    const read = (): void => setSnapshot(activityStore.getSnapshot())
+    const off = coalesceEvery(ms, (cb) => activityStore.subscribeGlobal(cb), read)
+    // Whatever changed between the first render and this subscription.
+    read()
+    return off
+  }, [ms])
+  return snapshot
+}
+
+/**
+ * Calls `flush` for the changes `subscribe` reports, at most once per `ms`:
+ * the first after a quiet spell at once (next task), the rest folded into one
+ * at the end of the window. Returns the unsubscribe.
+ */
+export function coalesceEvery(ms: number, subscribe: (cb: () => void) => () => void, flush: () => void, now: () => number = Date.now): () => void {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let last = Number.NEGATIVE_INFINITY
+  const fire = (): void => {
+    timer = null
+    last = now()
+    flush()
+  }
+  const off = subscribe(() => {
+    if (timer !== null) return
+    timer = setTimeout(fire, Math.max(0, last + ms - now()))
+  })
+  return () => {
+    off()
+    if (timer !== null) clearTimeout(timer)
+  }
 }
 
 /**
