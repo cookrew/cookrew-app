@@ -3,7 +3,7 @@ import { createPortal, flushSync } from 'react-dom'
 import { cardPlacement, clampSpot, nameTagSpot, petClick, petHome, readSpot, type PetSpot } from './pet-pick'
 import { CONTENT_FRAMES, MORPH_EASE, MORPH_MS, morphFrames } from './pet-morph'
 import { CARD_PARTS, FACE_PARTS, FULL_PARTS, findParts, pageZoomEnv, waitFor, zoomStep } from './pet-zoom'
-import { dockedSpot, nearDock, sheetBox, sheetOf, type Box } from './pet-dock'
+import { dockedSpot, nearDock, PHONE_PX, sheetBox, sheetOf, stripPage, type Box } from './pet-dock'
 import './pets.css'
 
 /**
@@ -137,6 +137,8 @@ export function PetTroop({
     setHoverId(id)
   }
   const [expanded, setExpanded] = useState(false)
+/** In the phone strip "+N" turns a page of the one row instead of expanding (pet-dock.ts · stripPage). */
+  const [page, setPage] = useState(0)
   const [tucked, setTucked] = useState(() => stored(tuckedKey) === '1')
   const [saved, setSaved] = useState<PetSpot | null>(() => readSpot(stored(spotKey)))
   const [home, setHome] = useState<PetSpot>(() => petHome(bedGap(), window.innerWidth))
@@ -154,7 +156,9 @@ export function PetTroop({
   const swallowClick = useRef(false)
   const draft = useRef('')
 
-  const shown = tucked ? members.slice(0, 1) : expanded ? [...members, ...more] : members
+  const strip = docked && window.innerWidth <= PHONE_PX
+  const paged = stripPage(members.length + more.length, members.length, page)
+  const shown = tucked ? members.slice(0, 1) : strip ? [...members, ...more].slice(paged.start, paged.end) : expanded ? [...members, ...more] : members
   const shownKey = shown.map((member) => member.id).join(' ')
   useEffect(() => {
     onShown?.(shownKey ? shownKey.split(' ') : [])
@@ -441,7 +445,8 @@ export function PetTroop({
   }
   const toggleMore = (): void => {
     if (consumed()) return
-    setExpanded((on) => !on)
+    if (strip) setPage((at) => (paged.last ? 0 : at + 1))
+    else setExpanded((on) => !on)
   }
 
   const hidden = more.length + (tucked ? members.length - 1 : 0)
@@ -463,7 +468,7 @@ export function PetTroop({
     <>
       <div
         ref={troopRef}
-        className={`cr-pets ag-ink ${side}${tucked ? ' tucked' : ''}${expanded ? ' expanded' : ''}${docked ? ' docked' : ''}${near ? ' snap' : ''}`}
+        className={`cr-pets ag-ink ${side}${tucked ? ' tucked' : ''}${expanded && !strip ? ' expanded' : ''}${docked ? ' docked' : ''}${near ? ' snap' : ''}`}
         style={
           docked && dockAt
             ? { left: dockAt.left, top: dockAt.top }
@@ -514,9 +519,15 @@ export function PetTroop({
           </button>
         ))}
         {!tucked && more.length > 0 && (
-          <button type="button" className="cr-pet more" title={expanded ? 'Fewer' : `${more.length} more`} onClick={toggleMore}>
-            {expanded ? '–' : `+${more.length}`}
-          </button>
+          strip ? (
+            <button type="button" className="cr-pet more" title={paged.last ? 'Back to the first' : `${paged.rest} more`} onClick={toggleMore}>
+              {paged.last ? '–' : `+${paged.rest}`}
+            </button>
+          ) : (
+            <button type="button" className="cr-pet more" title={expanded ? 'Fewer' : `${more.length} more`} onClick={toggleMore}>
+              {expanded ? '–' : `+${more.length}`}
+            </button>
+          )
         )}
       </div>
       {/* ONE keyed list, so a card going from open to leaving is the same

@@ -46,6 +46,22 @@ export const stripFaces = (side: Side, viewportWidth: number): number => (side =
 /** How many faces an attached troop shows: all of them beside the sheet; on a phone, what its row in the strip holds. */
 export const dockedCount = (count: number, side: Side, viewportWidth: number): number =>
   viewportWidth <= PHONE_PX ? Math.min(count, stripFaces(side, viewportWidth)) : count
+/**
+ * THE STRIP NEVER WRAPS (owner, 2026-11-01, Samsung Browser: with the
+ * keyboard closed the crew stood in two rows, one behind the browsers and
+ * notes, one over the transcript's top lines). "+N" used to open the troop
+ * in place, a wrapping block of every face; the tap that closes the keyboard
+ * lands on it easily. In the strip it turns a page instead: the same row,
+ * the next `size` faces, the chip saying how many are still behind it, and
+ * "–" on the last page, back to the first. `page` counts taps and wraps.
+ */
+export function stripPage(total: number, size: number, page: number): { start: number; end: number; rest: number; last: boolean } {
+  const per = Math.max(1, size)
+  const pages = Math.max(1, Math.ceil(total / per))
+  const start = (((page % pages) + pages) % pages) * per
+  const end = Math.min(total, start + per)
+  return { start, end, rest: total - end, last: end >= total }
+}
 
 export const laneWidth = (viewportWidth: number): number => (viewportWidth < NARROW_PX ? LANE_NARROW : LANE_WIDE)
 

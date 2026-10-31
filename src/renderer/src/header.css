@@ -313,6 +313,44 @@
   .cr-fn {
     gap: 6px;
   }
+
+  /* THE DIAL GIVES BEFORE THE NAMES (owner, 2026-11-01, Samsung Browser: with
+     the zoomed agent's model dial and LIVE on the bar, the route read "C." /
+     "L..", and the device's dot, icon and the workspace's icon stood on each
+     other). The function bar never shrank, so every pixel it took came out
+     of the names. Now the route has a floor it does not go under — room for
+     the device's icon and a few letters of each name, never more than the
+     bar leaves the function bar's fixed parts (LIVE, ⋯, the avatar: ~130,
+     the dial's 28 floor and the gaps) — and grows past it into whatever
+     is free; the function bar takes the rest, and in it only the zoom slot
+     gives, so the dial's model name is what ellipsizes. With nothing
+     zoomed the function bar is small and the route has the row. The
+     device, its label already gone, keeps its icons whole. */
+  .cr-route {
+    flex: 1 0 min(200px, calc(100vw - 196px));
+  }
+
+  .cr-route-device {
+    flex-shrink: 0;
+  }
+
+  .cr-fn {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .cr-fn > :not(.cr-zoom-slot) {
+    flex-shrink: 0;
+  }
+
+  .cr-zoom-slot {
+    flex: 0 1 auto;
+  }
+
+  .cr-tune-menu-btn {
+    min-width: 28px;
+    overflow: hidden;
+  }
 }
 
 @media (max-width: 480px) {
@@ -650,6 +688,12 @@
     max-width: 112px;
     padding: 0 6px;
     font-size: 10px;
+  }
+
+  /* The effort is the dial's second word: in a dial cut to a few letters it
+     left the model none (2026-11-01). It is still in the panel the dial opens. */
+  .cr-tune-menu-effort {
+    display: none;
   }
 
   .cr-look-toggle {

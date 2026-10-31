@@ -712,6 +712,20 @@
   font-weight: 600;
 }
 
+/* THE WORDS OVER THE CABLES (owner, 2026-11-01, Samsung Browser: the ties ran
+   through Forge, Velvet, Setup, Harden and Conductor, names and status words
+   alike). The ties already lie under the agents (no z-index, under .zv-m's
+   12), but a word had no paper of its own, so a stroke showed between its
+   letters. Each one now wears a patch of the page, as the face does (.zv-av):
+   a background and a spread shadow, never a padding, so the widths the
+   painter measures (zoom-frame.ts · nmW, stW, cntW) stay the text's. The open
+   card is its own paper and keeps its words bare. */
+.zv-m:not([data-card='open']) :is(.zv-nm, .zv-st, .zv-cnt) {
+  border-radius: 3px;
+  background: var(--zv-paper);
+  box-shadow: 0 0 0 3px var(--zv-paper);
+}
+
 .zv-cnt {
   position: absolute;
   left: 0;

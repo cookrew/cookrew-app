@@ -173,6 +173,14 @@ const FACE_REACH = { left: 100, right: 110, top: 56, bottom: 116 }
 /** The open card around its agent's anchor (zoom.css · .zv-card: 260 × 244 from −34, −34). */
 const CARD_RECT = { x: -34, y: -34, w: 260, h: 244 }
 const PHONE_MARGIN = 12
+/**
+ * THE STOP BAR'S ROOM (owner, 2026-11-01, Samsung Browser: Probe5 and Probe6
+ * stood under DEVICES / DEVICE / CREW / CARD / FULL and no scroll brought
+ * them out). The bar floats over the bottom of the overview (zoom.css, a
+ * phone: 8 from the edge, 5 + 40 + 5 tall with a finger's stops), so the
+ * crew and the thumbnails end that far above the edge, not at it.
+ */
+export const PHONE_BAR = 58
 /** The open card on a phone grows past 1:1 to fill the screen's width (2026-11-01 phone evals: at 1:1 it took 63%). */
 const CARD_MAX = 1.5
 /** The card and the remove mark over its corner (zoom.css · .zv-del: 222..244 across, 46 up): all of it stays on screen. */
@@ -206,12 +214,12 @@ export function phoneCamera(L: Layout, z: number, focus: string | null, w: numbe
   const minY = Math.min(...spots.map((p) => p.y)) - FACE_REACH.top
   const maxY = Math.max(...spots.map((p) => p.y)) + FACE_REACH.bottom
   const S1 = Math.min(1, (w - PHONE_MARGIN * 2) / (maxX - minX))
-  const panMax = Math.max(0, (maxY - minY) * S1 - (h - PHONE_MARGIN * 2))
+  const panMax = Math.max(0, (maxY - minY) * S1 - (h - PHONE_BAR - PHONE_MARGIN * 2))
   const p = Math.min(Math.max(pan, 0), panMax)
   const crew = {
     S: S1,
     Ox: w / 2 - ((minX + maxX) / 2) * S1,
-    Oy: panMax > 0 ? PHONE_MARGIN - minY * S1 - p : h / 2 - ((minY + maxY) / 2) * S1
+    Oy: panMax > 0 ? PHONE_MARGIN - minY * S1 - p : (h - PHONE_BAR) / 2 - ((minY + maxY) / 2) * S1
   }
   const lerpCam = (a: { S: number; Ox: number; Oy: number }, b: { S: number; Ox: number; Oy: number }, t: number) => ({
     S: Math.exp(lerp(Math.log(a.S), Math.log(b.S), t)),
@@ -232,9 +240,9 @@ export function phoneCamera(L: Layout, z: number, focus: string | null, w: numbe
 /** THE THUMBNAILS ON A PHONE: as the crew, the grid fills the screen's width and a taller grid scrolls (pan, from its top). */
 export function phoneThumbs(box: Box, w: number, h: number, pan: number): Camera {
   const S = Math.min(1, (w - PHONE_MARGIN * 2) / box.w)
-  const panMax = Math.max(0, box.h * S - (h - PHONE_MARGIN * 2))
+  const panMax = Math.max(0, box.h * S - (h - PHONE_BAR - PHONE_MARGIN * 2))
   const p = Math.min(Math.max(pan, 0), panMax)
-  return { S, Ox: w / 2, Oy: panMax > 0 ? PHONE_MARGIN - (box.cy - box.h / 2) * S - p : h / 2 - box.cy * S, panMax }
+  return { S, Ox: w / 2, Oy: panMax > 0 ? PHONE_MARGIN - (box.cy - box.h / 2) * S - p : (h - PHONE_BAR) / 2 - box.cy * S, panMax }
 }
 
 /** The camera box at agent zoom z ≥ 0. */
