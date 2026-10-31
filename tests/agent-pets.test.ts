@@ -144,6 +144,7 @@ describe('where a troop sits', () => {
     const css = readFileSync('src/renderer/src/pets/pets.css', 'utf8')
     const stage = readFileSync('src/renderer/src/stage/stage.css', 'utf8')
     expect(css).toMatch(/\.cr-pets \{[^}]*flex-direction: column;/)
+    expect(css).toMatch(/\.cr-pets\.right \{[^}]*border-color: transparent;/)
     expect(stage).toMatch(/\.cr-stage-view\.bedded \{\s*padding: 0;/)
   })
 

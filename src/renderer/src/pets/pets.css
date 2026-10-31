@@ -35,6 +35,11 @@
   flex-wrap: wrap-reverse;
 }
 
+/* The agents' troop has no outline: the faces stand on the pill's own paper. */
+.cr-pets.right {
+  border-color: transparent;
+}
+
 .cr-pets-grip {
   display: grid;
   place-items: center;
