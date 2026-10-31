@@ -88,10 +88,11 @@ export interface FinalityDeps {
  *  file's start (which decides if the first line can be trusted). */
 export async function readFileTail(
   file: string,
-  bytes: number
+  bytes: number,
+  knownSize?: number
 ): Promise<{ text: string; fromStart: boolean } | null> {
   try {
-    const { size } = await stat(file)
+    const size = knownSize ?? (await stat(file)).size
     const start = Math.max(0, size - bytes)
     const length = size - start
     const handle = await open(file, 'r')
@@ -148,10 +149,49 @@ export async function tailIsFinal(
   if (kind !== 'claude' || file.length === 0) return false
   const bytes = finalityWindowBytes(span, deps)
   if (bytes === null) return false
-  const read = deps.readTail ?? readFileTail
-  const window = await read(file, bytes)
+  if (deps.readTail) {
+    const window = await deps.readTail(file, bytes)
+    return window === null ? false : blockIsClosed(window, block.id)
+  }
+  // The same file, the same size and mtime, the same window: the same answer.
+  // An idle agent's transcript does not change, and every stream request for
+  // it used to read and parse a window of at least 256 KB again (measured on
+  // the owner's Mac: 460 ms of main-thread time in 10 s).
+  let info: { size: number; mtimeMs: number }
+  try {
+    info = await stat(file)
+  } catch (error) {
+    console.error('stream finality: tail read failed:', error)
+    return false
+  }
+  const key = `${file}\u0000${block.id}\u0000${bytes}`
+  const known = finalityAnswers.get(key)
+  if (known && known.size === info.size && known.mtimeMs === info.mtimeMs) return known.closed
+  const window = await readFileTail(file, bytes, info.size)
   if (window === null) return false
-  return blockIsClosed(window, block.id)
+  const closed = blockIsClosed(window, block.id)
+  rememberAnswer(key, { size: info.size, mtimeMs: info.mtimeMs, closed })
+  return closed
+}
+
+/** Answers per (file, block, window), for as long as the file is unchanged. */
+const finalityAnswers = new Map<string, { size: number; mtimeMs: number; closed: boolean }>()
+export const FINALITY_ANSWERS_MAX = 512
+
+function rememberAnswer(key: string, answer: { size: number; mtimeMs: number; closed: boolean }): void {
+  finalityAnswers.delete(key)
+  finalityAnswers.set(key, answer)
+  // Oldest first out: a Map iterates in insertion order.
+  while (finalityAnswers.size > FINALITY_ANSWERS_MAX) {
+    const oldest = finalityAnswers.keys().next().value
+    if (oldest === undefined) break
+    finalityAnswers.delete(oldest)
+  }
+}
+
+/** For tests: forget every remembered answer. */
+export function clearFinalityAnswers(): void {
+  finalityAnswers.clear()
 }
 
 /**
