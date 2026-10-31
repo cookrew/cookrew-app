@@ -58,6 +58,8 @@ export interface ZoomModel {
   notes: number
   /** Items the thumbs grid leaves out (the totals above still count them). */
   hiddenItems: number
+  /** The agents the device's marks draw, added up: this workspace's crew and each other workspace's. The machine's label says this number. */
+  deviceAgents: number
 }
 
 /** Another machine from the real fleet: its workspaces, or only their names when it cannot be read. */
@@ -251,6 +253,7 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
     name: input.name,
     browsers: all.filter((n) => n.kind === 'browser').length,
     notes: all.filter((n) => n.kind === 'note').length,
-    hiddenItems: Math.max(0, totalCount - items.length)
+    hiddenItems: Math.max(0, totalCount - items.length),
+    deviceAgents: agents.length + marks.reduce((n, m) => n + m.presets.length, 0)
   }
 }
