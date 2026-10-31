@@ -80,24 +80,55 @@ export function lineOf(row: AgentRow | undefined, brief: string | null | undefin
   return t?.latest?.text?.trim() || t?.title?.trim() || t?.ask?.trim() || brief?.trim() || 'Nothing said yet.'
 }
 
-/** A browser or note as the cards draw it (the zoom's thumbnails, the pet card's strip); null for anything else. */
-export function itemViewOf(n: CanvasNode, owners: string[]): ItemView | null {
+/**
+ * What a node draws as, without its owners. Nodes are replaced, never edited,
+ * when they change, so a node object always draws the same: the derived
+ * fields (a parsed URL, a note's first line out of its whole text) are kept
+ * per object and dropped with it.
+ */
+const drawn = new WeakMap<CanvasNode, Omit<ItemView, 'owners'> | null>()
+
+function drawnOf(n: CanvasNode): Omit<ItemView, 'owners'> | null {
+  const known = drawn.get(n)
+  if (known !== undefined) return known
+  let view: Omit<ItemView, 'owners'> | null = null
   if (n.kind === 'browser') {
     const tab = activeBrowserTab(n)
     const title = tab.title?.trim() || n.name
-    return { id: n.id, kind: 'browser', title, host: hostOf(tab.url), tint: tintOf(n.id), initial: (title.match(/[A-Za-z0-9]/)?.[0] ?? '·').toUpperCase(), line: tab.url, owners }
+    view = { id: n.id, kind: 'browser', title, host: hostOf(tab.url), tint: tintOf(n.id), initial: (title.match(/[A-Za-z0-9]/)?.[0] ?? '·').toUpperCase(), line: tab.url }
+  } else if (n.kind === 'note') {
+    view = { id: n.id, kind: 'note', title: n.name, host: 'note', tint: tintOf(n.id), initial: '', line: firstNoteLine(n.content ?? '') }
   }
-  if (n.kind === 'note') {
-    const first = (n.content ?? '').split('\n').map((l) => l.replace(/^#+\s*/, '').trim()).find(Boolean) ?? ''
-    return { id: n.id, kind: 'note', title: n.name, host: 'note', tint: tintOf(n.id), initial: '', line: first, owners }
+  drawn.set(n, view)
+  return view
+}
+
+/** A note's first line worth reading, its heading marks gone; it stops at that line rather than splitting the whole text. */
+function firstNoteLine(text: string): string {
+  let at = 0
+  while (at <= text.length) {
+    const end = text.indexOf('\n', at)
+    const line = text.slice(at, end < 0 ? text.length : end).replace(/^#+\s*/, '').trim()
+    if (line) return line
+    if (end < 0) break
+    at = end + 1
   }
-  return null
+  return ''
+}
+
+/** A browser or note as the cards draw it (the zoom's thumbnails, the pet card's strip); null for anything else. */
+export function itemViewOf(n: CanvasNode, owners: string[]): ItemView | null {
+  const view = drawnOf(n)
+  return view ? { ...view, owners } : null
 }
 
 export interface ZoomInput {
   nodes: readonly CanvasNode[]
   connections: readonly Connection[]
+  /** Every workspace's rows: the other workspaces' marks are drawn from them. */
   rows: readonly AgentRow[]
+  /** This workspace's crew (agent-rows.ts · crewOf): its agents. */
+  crew: readonly AgentRow[]
   attachIndex: AttachmentIndex
   workspaces: readonly WorkspaceMeta[]
   activeId: string
@@ -113,28 +144,28 @@ export interface ZoomInput {
   }[]
 }
 
-export function buildZoomModel(input: ZoomInput): ZoomModel {
-  const rowOf = new Map(input.rows.map((r) => [r.id, r]))
-  const agents: AgentView[] = []
-  for (const n of input.nodes) {
-    if (n.kind !== 'terminal') continue
-    const row = rowOf.get(n.id)
-    const list = input.attachIndex.get(n.id) ?? []
-    const phase: AgentPhase = row?.phase ?? 'quiet'
-    agents.push({
-      id: n.id,
-      name: n.name,
-      preset: n.preset,
-      orch: n.orch === true,
-      phase,
-      unread: row?.unread === true,
-      word: PHASE_WORD[phase],
-      line: lineOf(row, n.brief),
-      browsers: list.filter((a) => a.kind === 'browser').length,
-      notes: list.filter((a) => a.kind === 'note').length,
-      turn: row?.turn ?? null
-    })
+/** One agent as every view draws it, from its row in the crew (agent-rows.ts · crewOf). */
+export function agentViewOf(row: AgentRow, attachIndex: AttachmentIndex): AgentView {
+  const list = attachIndex.get(row.id) ?? []
+  const phase: AgentPhase = row.phase
+  return {
+    id: row.id,
+    name: row.name,
+    preset: row.preset,
+    orch: row.orch,
+    phase,
+    unread: row.unread === true,
+    word: PHASE_WORD[phase],
+    line: lineOf(row, row.brief),
+    browsers: list.filter((a) => a.kind === 'browser').length,
+    notes: list.filter((a) => a.kind === 'note').length,
+    turn: row.turn ?? null
   }
+}
+
+export function buildZoomModel(input: ZoomInput): ZoomModel {
+  // The crew: one row per terminal card, the same list the agent group draws (agent-rows.ts · crewOf).
+  const agents: AgentView[] = input.crew.map((row) => agentViewOf(row, input.attachIndex))
   // Orchestrators first: the first agent is on top of the stack and leads the crew.
   agents.sort((a, b) => Number(b.orch) - Number(a.orch))
   const agentIds = new Set(agents.map((a) => a.id))
@@ -144,12 +175,9 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
     if (!agentIds.has(terminalId)) continue
     for (const a of list) owners.set(a.node.id, [...(owners.get(a.node.id) ?? []), terminalId])
   }
-  // Newest first: nodes are kept in creation order.
-  const items: ItemView[] = []
-  for (const n of [...input.nodes].reverse()) {
-    const view = itemViewOf(n, owners.get(n.id) ?? [])
-    if (view) items.push(view)
-  }
+  // Newest first: nodes are kept in creation order. Only kind and owners are
+  // read for all of them; the full view is built for the few that are drawn.
+  const all = [...input.nodes].reverse().filter((n) => n.kind === 'browser' || n.kind === 'note')
 
   // A link per agent and item it carries, in the order the agent carries them.
   const links: LinkModel[] = []
@@ -164,12 +192,11 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
   // browsers and notes (292 on the owner's), and one tall strip of them is no view.
   // The ones somebody carries come first, newest first within each; the totals
   // still count them all, and the rest are said, not drawn.
-  const totalCount = items.length
-  const total = [...items]
-  const shown = [...items.filter((i) => i.owners.length > 0), ...items.filter((i) => i.owners.length === 0)].slice(0, ITEMS_SHOWN)
-  const keep = new Set(shown.map((i) => i.id))
-  items.length = 0
-  items.push(...shown)
+  const totalCount = all.length
+  const carried = (n: CanvasNode): boolean => (owners.get(n.id)?.length ?? 0) > 0
+  const shown = [...all.filter(carried), ...all.filter((n) => !carried(n))].slice(0, ITEMS_SHOWN)
+  const items: ItemView[] = shown.flatMap((n) => itemViewOf(n, owners.get(n.id) ?? []) ?? [])
+  const keep = new Set(items.map((i) => i.id))
   const keptLinks = links.filter((l) => keep.has(l.item))
   links.length = 0
   links.push(...keptLinks)
@@ -216,8 +243,8 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
       waiting: m.workspaces.length && m.workspaces.every((w) => w.counts) ? m.workspaces.reduce((a, w) => a + (w.counts?.waiting ?? 0), 0) : null
     })),
     name: input.name,
-    browsers: total.filter((i) => i.kind === 'browser').length,
-    notes: total.filter((i) => i.kind === 'note').length,
-    hiddenItems: Math.max(0, totalCount - shown.length)
+    browsers: all.filter((n) => n.kind === 'browser').length,
+    notes: all.filter((n) => n.kind === 'note').length,
+    hiddenItems: Math.max(0, totalCount - items.length)
   }
 }

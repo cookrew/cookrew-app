@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useActivitiesSnapshot } from '../activity-thumb-store'
 import { advanceClock, type ActivityClock } from '../activity-clock'
 import { useRoster } from '../agent-registry'
-import { buildAgentRows, checkpointWanted, type AgentRow } from '../agent-rows'
+import { buildAgentRows, checkpointWanted, crewOf, type AgentRow } from '../agent-rows'
 import { useStreamTails } from '../stream/use-stream-tails'
 import type { WorkspaceState } from '../../../shared/model'
 
@@ -41,4 +41,26 @@ export function useCrewRows(workspace: WorkspaceState | null): CrewRows {
     [roster, activities, checkpoints, now, changedAt, briefs]
   )
   return { live: rows.live, quiet: rows.quiet, now }
+}
+
+export interface Crew extends CrewRows {
+  /** Every row, live then quiet: the other workspaces' marks are drawn from them. */
+  all: AgentRow[]
+  /** The open workspace's crew, one row per terminal card (agent-rows.ts · crewOf). */
+  crew: AgentRow[]
+}
+
+/**
+ * The crew, read ONCE for the whole app (App.tsx): the zoom view, the stage
+ * and the agent group take it as a prop, so they agree on who is in it and in
+ * what state, and the roster's last-checkpoint reads are not run three times.
+ */
+export function useCrew(workspace: WorkspaceState | null, workspaceId: string | null): Crew {
+  const rows = useCrewRows(workspace)
+  const all = useMemo(() => [...rows.live, ...rows.quiet], [rows.live, rows.quiet])
+  const crew = useMemo(
+    () => crewOf(workspace?.nodes ?? [], all, { id: workspaceId ?? '', name: workspace?.name ?? '' }),
+    [workspace?.nodes, workspace?.name, workspaceId, all]
+  )
+  return useMemo(() => ({ ...rows, all, crew }), [rows, all, crew])
 }

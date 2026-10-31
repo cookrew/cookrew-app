@@ -250,3 +250,139 @@
   width: 22px;
   height: 22px;
 }
+
+/* ---- THE CARD, FLOATING (AgentCard.tsx) ----
+   The crew view's card where the crew view is not on screen: in a full view,
+   beside the face in the agent group. Its parts are the crew card's; here they
+   sit in a column instead of where the zoom painter puts them. */
+.cr-pet-card.ag-card {
+  width: min(330px, calc(100vw - 16px));
+  gap: 12px;
+  padding: 14px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--zv-card);
+  color: var(--zv-ink);
+  box-shadow:
+    inset 0 0 0 1px var(--zv-hair-2),
+    0 10px 28px var(--zv-shadow);
+}
+
+.ag-card .cr-pet-card-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ag-card .cr-pet-card-face {
+  flex: 0 0 auto;
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: var(--zv-paper);
+}
+
+.ag-card .cr-pet-card-face .ink-avatar {
+  display: block;
+  width: 54px;
+  height: 54px;
+}
+
+.ag-card .cr-pet-card-who {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.ag-card .cr-pet-card-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 600 20px/1.15 var(--zv-serif);
+  color: var(--zv-ink);
+}
+
+.ag-card .cr-pet-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* The crew card's state and counts, in flow (zoom.css places them absolutely). */
+.ag-card .zv-st,
+.ag-card .zv-cnt {
+  position: static;
+}
+
+.ag-card .cr-pet-card-open,
+.ag-card .cr-pet-card-x {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--zv-paper);
+  box-shadow: inset 0 0 0 1.5px var(--zv-hair-2);
+  color: var(--zv-ink);
+  font: 600 10px/1 var(--zv-mono);
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.ag-card .cr-pet-card-x {
+  width: 26px;
+  padding: 0;
+  font: 15px/1 var(--zv-mono);
+}
+
+.ag-card .cr-pet-card-open:hover,
+.ag-card .cr-pet-card-x:hover {
+  background: var(--zv-paper-2);
+}
+
+.ag-card .cr-pet-card-turn {
+  min-height: 64px;
+}
+
+.ag-thumbs {
+  display: grid;
+  grid-template-columns: repeat(3, 70px);
+  gap: 9px;
+}
+
+.ag-thumb {
+  position: relative;
+  width: 70px;
+  height: 46px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  box-shadow: 0 2px 6px var(--zv-shadow-sm);
+  cursor: pointer;
+}
+
+.ag-thumb:hover {
+  box-shadow:
+    0 0 0 1.5px var(--zv-seal),
+    0 2px 6px var(--zv-shadow-sm);
+}
+
+.ag-thumbs-none {
+  display: grid;
+  place-items: center;
+  height: 46px;
+  border: 1.5px dashed var(--zv-hair-2);
+  border-radius: 8px;
+  font: italic 10.5px/1 var(--zv-mono);
+  color: var(--zv-muted);
+}
+
+/* The crew card's reply box, in flow. */
+.ag-card .zv-reply {
+  position: relative;
+  left: auto;
+  top: auto;
+  width: auto;
+}

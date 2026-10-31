@@ -3,9 +3,9 @@
 // browsers and notes they carry through the wiring, which are shared, and the
 // newest browser that stands beside the stack at group zoom. Pure, so pinned here.
 import { describe, expect, it } from 'vitest'
-import { buildZoomModel, ITEMS_SHOWN, PHASE_WORD, lineOf } from '../src/renderer/src/zoom/zoom-model'
+import { buildZoomModel, ITEMS_SHOWN, PHASE_WORD, itemViewOf, lineOf } from '../src/renderer/src/zoom/zoom-model'
 import { attachmentIndex } from '../src/renderer/src/terminal-attachments'
-import type { AgentRow } from '../src/renderer/src/agent-rows'
+import { crewOf, type AgentRow } from '../src/renderer/src/agent-rows'
 import type { BrowserNodeData, CanvasNode, Connection, NoteNodeData, TerminalNodeData, WorkspaceMeta } from '../src/shared/model'
 
 const term = (id: string, name: string, over: Partial<TerminalNodeData> = {}): TerminalNodeData =>
@@ -24,6 +24,7 @@ function fixture(nodes: CanvasNode[], connections: Connection[], rows: AgentRow[
     nodes,
     connections,
     rows,
+    crew: crewOf(nodes, rows, { id: 'w1', name: 'Dev' }),
     attachIndex: attachmentIndex(nodes, connections),
     workspaces: [ws('w1', 'Dev'), ws('w2', 'Home')],
     activeId: 'w1',
@@ -94,7 +95,7 @@ describe('the device', () => {
 
   it('carries the real fleet machines through: counts when all their workspaces are live, null when only listed', () => {
     const m = buildZoomModel({
-      nodes: [], connections: [], rows: [], attachIndex: new Map(), workspaces: [ws('w1', 'Dev')], activeId: 'w1', name: 'Dev',
+      nodes: [], connections: [], rows: [], crew: [], attachIndex: new Map(), workspaces: [ws('w1', 'Dev')], activeId: 'w1', name: 'Dev',
       machines: [
         { id: 'me', name: 'MacBook Pro', local: true, online: true, detail: 'live', workspaces: [{ id: 'w1', name: 'Dev', agents: [{ harness: 'claude', phase: 'busy' }], counts: { agents: 3, waiting: 1 } }] },
         { id: 'other', name: 'Mac mini', local: false, online: true, detail: 'listed', workspaces: [{ id: 'z', name: 'Lab', agents: [], counts: null }] }
@@ -118,3 +119,68 @@ describe('a workspace with hundreds of browsers and notes', () => {
     expect(m.frame.links.every((l) => m.items.some((i) => i.id === l.item))).toBe(true)
   })
 })
+
+// ONE CREW (owner, 2026-11-01): the crew view and the agent group drew two lists
+// that disagreed on who was in the crew, how many, and in what state.
+describe('the one crew list (agent-rows.ts · crewOf)', () => {
+  const nodes: CanvasNode[] = [term('t1', 'Forge'), term('t2', 'Velvet', { orch: true }), term('t3', 'Sol'), browser('b1', 'https://x.dev', 'X')]
+  const rows = [row('t1', 'working', { name: 'old-name', unread: true }), row('t2', 'waiting'), row('elsewhere', 'working', { workspaceId: 'w2' })]
+
+  it('is one row per terminal card: the roster row when there is one, a quiet row when not', () => {
+    const crew = crewOf(nodes, rows, { id: 'w1', name: 'Dev' })
+    expect(crew.map((r) => [r.id, r.phase])).toEqual([['t1', 'working'], ['t2', 'waiting'], ['t3', 'quiet']])
+    // The card's name wins, and a quiet row belongs to this workspace.
+    expect(crew[0].name).toBe('Forge')
+    expect(crew[2].workspaceId).toBe('w1')
+  })
+
+  it('is what the crew view draws: the same agents in the same states', () => {
+    const crew = crewOf(nodes, rows, { id: 'w1', name: 'Dev' })
+    const m = buildZoomModel({ nodes, connections: [], rows, crew, attachIndex: attachmentIndex(nodes, []), workspaces: [ws('w1', 'Dev')], activeId: 'w1', name: 'Dev' })
+    const byId = new Map(m.agents.map((a) => [a.id, a]))
+    expect(m.agents).toHaveLength(crew.length)
+    for (const r of crew) {
+      expect(byId.get(r.id)?.phase).toBe(r.phase)
+      expect(byId.get(r.id)?.unread).toBe(r.unread === true)
+    }
+  })
+})
+
+describe('the cost of a rebuild (a workspace holds hundreds of browsers and notes)', () => {
+  /** A browser whose tabs and a note whose text count every read. */
+  const counted = (n: CanvasNode, reads: { n: number }): CanvasNode => {
+    const key = n.kind === 'browser' ? 'tabs' : 'content'
+    const value = (n as unknown as Record<string, unknown>)[key]
+    return Object.defineProperty({ ...n }, key, { get: () => (reads.n++, value), enumerable: true }) as CanvasNode
+  }
+
+  it('reads a URL or a note text only for the items the grid draws, and counts the rest', () => {
+    const reads = { n: 0 }
+    const nodes: CanvasNode[] = [term('t1', 'Forge')]
+    for (let i = 0; i < 150; i++) nodes.push(counted(browser(`b${i}`, `https://x.dev/${i}`, `Page ${i}`), reads))
+    for (let i = 0; i < 150; i++) nodes.push(counted(note(`n${i}`, `Note ${i}`, `# Note ${i}\nbody`), reads))
+    const m = fixture(nodes, [cable('c1', 't1', 'b3')])
+    expect(m.items).toHaveLength(ITEMS_SHOWN)
+    expect(m.items[0].id).toBe('b3') // the carried one first
+    expect(m.browsers).toBe(150)
+    expect(m.notes).toBe(150)
+    expect(m.hiddenItems).toBe(300 - ITEMS_SHOWN)
+    expect(reads.n).toBeLessThanOrEqual(ITEMS_SHOWN * 2)
+  })
+
+  it('a rebuild over the same nodes reads nothing again', () => {
+    const reads = { n: 0 }
+    const nodes: CanvasNode[] = [term('t1', 'Forge'), counted(browser('b1', 'https://x.dev/a', 'A'), reads), counted(note('n1', 'N', 'x'), reads)]
+    fixture(nodes, [])
+    const first = reads.n
+    fixture(nodes, [])
+    expect(reads.n).toBe(first)
+  })
+
+  it('a note says its first line worth reading, past blank lines and heading marks', () => {
+    expect(itemViewOf(note('n', 'N', '\n  \n## Plan for today \nmore'), [])?.line).toBe('Plan for today')
+    expect(itemViewOf(note('n', 'N', ''), [])?.line).toBe('')
+    expect(itemViewOf(note('n', 'N', '#\n\n'), [])?.line).toBe('')
+  })
+})
+

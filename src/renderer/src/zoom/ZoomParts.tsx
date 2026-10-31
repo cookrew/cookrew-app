@@ -1,9 +1,8 @@
 import { useState } from 'react'
-import { cookrew } from '../api'
 import { useThumb } from '../activity-thumb-store'
 import { InkAvatar, InkRing } from './InkAvatar'
 import { inkStatusOfRow } from './ink-status'
-import { AgentLatest } from './AgentLatest'
+import { CardWords, QuickReply, useQuickReply } from './quick-reply'
 import './agent-card.css'
 import type { AgentView, ItemView, MarkView, MachineView } from './zoom-model'
 
@@ -154,18 +153,7 @@ export function ItemNode({ item, names, bind, onClick, onDelete }: { item: ItemV
  * not one per agent behind the crew; the pets open this same card.
  */
 export function AgentNode({ agent, card = true, bind, onOpen, onDelete }: { agent: AgentView; card?: boolean; bind: Bind; onOpen: () => void; onDelete?: () => void }): React.JSX.Element {
-  const [draft, setDraft] = useState('')
-  const [sent, setSent] = useState<string | null>(null)
-  const send = (): void => {
-    const text = draft.trim()
-    if (!text) return
-    // The same two writes the voice bar makes: the words, then Enter on its own.
-    cookrew().ptyInput(agent.id, text)
-    cookrew().ptyInput(agent.id, '\r')
-    setDraft('')
-    setSent(text)
-    window.setTimeout(() => setSent((at) => (at === text ? null : at)), 4000)
-  }
+  const reply = useQuickReply(agent.id)
   return (
     <div ref={bind(`agent:${agent.id}`)} className={`zv-m ${agent.phase}`}>
       <div ref={bind(`agent-av:${agent.id}`)} className="zv-av" title={`${agent.name} · ${agent.word}`} {...press(onOpen, `${agent.name}, ${agent.word}`)}>
@@ -190,48 +178,16 @@ export function AgentNode({ agent, card = true, bind, onOpen, onDelete }: { agen
       {/* The card's own parts: the open card only. Mounted hidden; the painter shows them. */}
       {card && (
         <>
-        {/* Its latest turn, as the pet card says it too (AgentLatest.tsx). */}
+        {/* Its latest turn, as the floating card says it too (quick-reply.tsx). */}
         <div ref={bind(`agent-body:${agent.id}`)} className="zv-body" style={HIDDEN}>
-          {sent !== null ? (
-            <div className="ag-latest">
-              <span className="ag-you">
-                <em>You:</em> {sent}
-              </span>
-            </div>
-          ) : (
-            <AgentLatest turn={agent.turn} fallback={agent.line} />
-          )}
+          <CardWords agent={agent} sent={reply.sent} />
         </div>
         {agent.browsers + agent.notes === 0 && (
           <div ref={bind(`agent-emp:${agent.id}`)} className="zv-emp" style={HIDDEN}>
             no browser or note
           </div>
         )}
-        <form
-          ref={bind(`agent-reply:${agent.id}`)}
-          className="zv-reply"
-          style={HIDDEN}
-          onClick={(e) => e.stopPropagation()}
-          onPointerDown={(e) => e.stopPropagation()}
-          onSubmit={(e) => {
-            e.preventDefault()
-            send()
-          }}
-        >
-          <input
-            type="text"
-            value={draft}
-            placeholder={`Reply to ${agent.name}…`}
-            aria-label={`Quick reply to ${agent.name}`}
-            autoComplete="off"
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => e.stopPropagation()}
-          />
-          <button type="submit" aria-label="Send" disabled={!draft.trim()}>
-            ➜
-          </button>
-          {sent !== null && <span className="zv-sent">sent ✓</span>}
-        </form>
+        <QuickReply agent={agent} reply={reply} className="zv-reply" style={HIDDEN} formRef={bind(`agent-reply:${agent.id}`)} />
         </>
       )}
     </div>

@@ -10,10 +10,9 @@
 // it any more either: it is not rendered, so it costs nothing.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { activeBrowserTab, type TerminalNodeData, type WorkspaceState } from '../../../shared/model'
-import type { AgentRow } from '../agent-rows'
 import { attachView, useAttachView } from '../attach-view'
 import { SideTabsContext, type AttachmentIndex } from '../terminal-attachments'
-import { useCrewRows } from './crew-rows'
+import type { Crew } from './crew-rows'
 import { diffPopped, pickBackground, railOrder, type PoppedItem, type StageItem } from './stage-pick'
 import { firstLine, hostPath, ownersOf, stageSelect, useStageSelection, type StageItemCard } from './stage-select'
 import { StageItemPane } from './StageItemPane'
@@ -49,6 +48,7 @@ export function StageView({
   workspaceId,
   terminals,
   attachIndex,
+  crew,
   onShowing
 }: {
   workspace: WorkspaceState | null
@@ -56,20 +56,19 @@ export function StageView({
   workspaceId: string | null
   terminals: readonly TerminalNodeData[]
   attachIndex: AttachmentIndex
+  /** The crew, read once in App (crew-rows.ts · useCrew): the same the zoom and the agent group draw. */
+  crew: Crew
   /** The agent on the stage, for the dock's composer and the route. */
   onShowing: (showing: StageShowing | null) => void
 }): React.JSX.Element {
-  const { live, quiet, now } = useCrewRows(workspace)
+  const { now } = crew
   const selection = useStageSelection()
   const popped = usePopped(workspace, workspaceId, attachIndex)
   const owners = useMemo(() => ownersOf(attachIndex), [attachIndex])
 
-  // The workspace's agents, as the board sees them; a card the roster has
-  // not caught up with still gets a quiet row.
-  const agents = useMemo(() => {
-    const byId = new Map([...live, ...quiet].map((r) => [r.id, r]))
-    return railOrder(terminals.map((t) => byId.get(t.id) ?? quietRow(t, workspace?.name ?? '')))
-  }, [live, quiet, terminals, workspace?.name])
+  // The workspace's agents: the crew (one row per terminal card, a quiet row
+  // for one the roster has not caught up with), in rail order.
+  const agents = useMemo(() => railOrder(crew.crew), [crew.crew])
   const faces = useMemo(() => new Map(agents.map((r) => [r.id, r])), [agents])
 
   // Newest first: nodes are kept in creation order.
@@ -188,27 +187,6 @@ export function StageView({
       </div>
     </div>
   )
-}
-
-/** A card on the canvas the roster has no row for yet. */
-function quietRow(t: TerminalNodeData, workspaceName: string): AgentRow {
-  return {
-    id: t.id,
-    name: t.name,
-    preset: t.preset,
-    role: t.role ?? null,
-    orch: t.orch,
-    active: true,
-    workspaceId: '',
-    workspaceName,
-    cwd: t.cwd,
-    spawnedAt: 0,
-    phase: 'quiet',
-    turn: null,
-    turnCount: 0,
-    brief: t.brief ?? null,
-    lastActivityAt: 0
-  }
 }
 
 /** The browsers and notes that appeared on the loaded canvas while the window was open. */

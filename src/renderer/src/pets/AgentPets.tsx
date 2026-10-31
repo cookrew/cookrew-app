@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
-import { useActivitiesSnapshot } from '../activity-thumb-store'
-import { useRoster } from '../agent-registry'
-import { buildAgentRows, type AgentRow } from '../agent-rows'
+import { useMemo } from 'react'
 import { inkStatusOfRow } from '../zoom/ink-status'
 import { InkAvatar } from '../zoom/InkAvatar'
-import type { WorkspaceState } from '../../../shared/model'
+import type { AttachmentIndex } from '../terminal-attachments'
+import type { Crew } from '../stage/crew-rows'
+import { AgentCard } from '../zoom/AgentCard'
+import { agentViewOf, itemViewOf } from '../zoom/zoom-model'
 import { petMax, pickPets, type Pet, type PetMood } from './pet-pick'
 import { useOfToolLine, type ToolUse } from '../../../shared/use-signal'
 import { dockedOrder } from './pet-dock'
@@ -15,14 +15,13 @@ import { PetTroop } from './PetTroop'
  *
  * The stage's agent column is retired: this is where the crew lives now,
  * over every page. pet-pick.ts says who rides along (whoever needs you, then
- * whoever is working, then what finished lately). A click opens the agent's
- * card, and that card is the zoom view's own (ZoomParts · AgentNode): ONE
- * card instance in the app (owner, 2026-10-31), never a second drawn here.
- * The pet hands the click to `onCard`; the card's face then opens the full
- * transcript, as it does from the crew.
+ * whoever is working, then what finished lately), out of THE crew, the one
+ * list the crew view draws too (stage/crew-rows.ts · useCrew, owner
+ * 2026-11-01): the same agents, the same states, the same count behind "+N".
+ * A click floats the agent's card beside its face (zoom/AgentCard.tsx, the
+ * crew view's card, built from the same AgentView), only while it is open; a
+ * second click, or its OPEN, is the agent's full view.
  */
-
-const TICK_MS = 30_000
 
 const MOOD_WORD: Record<PetMood, string> = { needs: 'needs you', working: 'working', done: 'done', asleep: 'resting' }
 
@@ -40,48 +39,26 @@ const petUse = (pet: Pet): ToolUse | null => {
   return newest ? useOfToolLine(newest) : null
 }
 
-/** The crew, from the roster and the live tracker only: no board-wide tail read. */
-const usePetRows = (workspace: WorkspaceState | null): { rows: AgentRow[]; now: number } => {
-  const roster = useRoster()
-  const activities = useActivitiesSnapshot()
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), TICK_MS)
-    return () => clearInterval(timer)
-  }, [])
-  const briefs = useMemo(() => {
-    const out: Record<string, string> = {}
-    for (const node of workspace?.nodes ?? []) if (node.kind === 'terminal' && node.brief) out[node.id] = node.brief
-    return out
-  }, [workspace])
-  const rows = useMemo(() => {
-    const built = buildAgentRows({ roster, activities, now, briefs })
-    return [...built.live, ...built.quiet]
-  }, [roster, activities, now, briefs])
-  return { rows, now }
-}
-
 export function AgentPets({
-  workspace,
-  workspaceId,
+  crew,
+  attachIndex,
   onOpen,
-  onCard,
   dock = null
 }: {
-  workspace: WorkspaceState | null
-  workspaceId: string | null
-  /** The full transcript (App: the stage, with it picked). */
+  /** THE crew, read once in App: the same list the crew view draws. */
+  crew: Crew
+  /** Each agent's browsers and notes, for its card's counts and thumbnails. */
+  attachIndex: AttachmentIndex
+  /** The full view: an agent's, or a browser's or note's (App · zoomToNode). */
   onOpen: (id: string) => void
-  /** Its card: the zoom view's own, the one instance (App · zoomStore.openCard). */
-  onCard: (id: string) => void
   /**
    * A full view is up: the troop attaches to it (pet-dock.ts), without the
    * agent the panel shows, the agents its browser or note is wired to first.
    */
   dock?: { readonly exclude: string | null; readonly first: readonly string[] } | null
 }): React.JSX.Element | null {
-  const { rows, now } = usePetRows(workspace)
-  const troop = useMemo(() => pickPets(rows, { workspaceId, now, max: petMax(window.innerWidth) }), [rows, workspaceId, now])
+  const { now } = crew
+  const troop = useMemo(() => pickPets(crew.crew, { now, max: petMax(window.innerWidth) }), [crew.crew, now])
   const byId = useMemo(() => new Map([...troop.pets, ...troop.more].map((pet) => [pet.row.id, pet])), [troop])
   // In a full view the column is the demo's: the card on the panel is not in it, the ones wired to it lead.
   const column = useMemo(() => {
@@ -120,7 +97,26 @@ export function AgentPets({
       more={column.more.map(member)}
       dockable={dock !== null}
       onOpen={onOpen}
-      onCard={onCard}
+      cardClass={(id) => `ag-ink ag-card ${byId.get(id)?.mood ?? ''}`}
+      cardLabel={(id) => `${byId.get(id)?.row.name ?? 'Agent'}'s card`}
+      renderCard={(id, controls) => {
+        const pet = byId.get(id)
+        if (!pet) return null
+        const items = (attachIndex.get(id) ?? []).flatMap((a) => itemViewOf(a.node, [id]) ?? [])
+        return (
+          <AgentCard
+            agent={agentViewOf(pet.row, attachIndex)}
+            items={items}
+            onOpen={controls.open}
+            onClose={controls.close}
+            onDraft={controls.draft}
+            onItem={(itemId) => {
+              controls.close()
+              onOpen(itemId)
+            }}
+          />
+        )
+      }}
     />
   )
 }

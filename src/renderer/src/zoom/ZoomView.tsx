@@ -2,7 +2,7 @@ import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import type { WorkspaceList, WorkspaceState } from '../../../shared/model'
 import type { AttachmentIndex } from '../terminal-attachments'
 import { cookrew } from '../api'
-import { useCrewRows } from '../stage/crew-rows'
+import type { Crew } from '../stage/crew-rows'
 import { thumbWants } from '../pets/thumb-wants'
 import { Counts, AgentNode, ItemNode, LinkNode, MachineNode, MarkNode, NewAgentCard, type Bind } from './ZoomParts'
 import { InkRing, InkTie } from './InkAvatar'
@@ -21,10 +21,12 @@ import './zoom.css'
  * frame engine owns their transforms. No second terminal/browser is made
  * for the animation: the full view behind the shell is the real one.
  */
-export function ZoomView({ workspace, workspaceId, attachIndex, onDelete, children }: {
+export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, children }: {
   workspace: WorkspaceState | null
   workspaceId: string | null
   attachIndex: AttachmentIndex
+  /** The crew, read once in App (stage/crew-rows.ts · useCrew): the agent group draws the same. */
+  crew: Crew
   /** Asked to remove a card: the app's own confirm dialog answers (App: requestClose). */
   onDelete?: (id: string) => void
   children: React.ReactNode
@@ -44,8 +46,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, onDelete, childr
     return fn
   }, [])
   const zoom = useZoom()
-  const { live, quiet } = useCrewRows(workspace)
-  const rows = useMemo(() => [...live, ...quiet], [live, quiet])
+  const rows = crew.all
   const fleet = useZoomFleet()
   const [list, setList] = useState<WorkspaceList | null>(null)
   const [nameAsked, setNameAsked] = useState<string | null>(null)
@@ -79,10 +80,10 @@ export function ZoomView({ workspace, workspaceId, attachIndex, onDelete, childr
     return () => ro.disconnect()
   }, [])
   const model = useMemo(() => buildZoomModel({
-    nodes: workspace?.nodes ?? [], connections: workspace?.connections ?? [], rows, attachIndex,
+    nodes: workspace?.nodes ?? [], connections: workspace?.connections ?? [], rows, crew: crew.crew, attachIndex,
     workspaces: fleetWorkspaces.length ? fleetWorkspaces.map((w) => ({ id: w.id, name: w.name, dir: '', dirs: [], icon: w.icon ?? '🗂' })) : (list?.workspaces ?? []), activeId: workspaceId ?? list?.activeId ?? 'local', name: workspace?.name ?? 'Workspace',
     machines: fleet.machines.map((m) => ({ id: m.id, name: m.name, local: m.local, online: m.online, detail: m.detail, workspaces: m.workspaces.map((w) => ({ id: w.id, name: w.name, agents: w.agents.map((a) => ({ harness: a.harness, phase: a.phase })), counts: w.counts })) }))
-  }), [workspace?.nodes, workspace?.connections, workspace?.name, workspaceId, rows, attachIndex, list, fleetWorkspaces, fleet.machines])
+  }), [workspace?.nodes, workspace?.connections, workspace?.name, workspaceId, rows, crew.crew, attachIndex, list, fleetWorkspaces, fleet.machines])
   const modelRef = useRef(model)
   modelRef.current = model
   const collect = useCallback((): FrameEls | null => {
@@ -124,7 +125,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, onDelete, childr
   const motion = useZoomMotion(model.frame, collect, root)
   // ONE CARD INSTANCE (owner, 2026-10-31): the card's body, strip and reply are
   // drawn for the open card only, and for the one it is leaving while that
-  // fades, never once per agent behind the crew. The pets open THIS card.
+  // fades, never once per agent behind the crew.
   const focusId = zoom.agent ?? model.agents[0]?.id ?? null
   const [prevFocus, setPrevFocus] = useState<string | null>(null)
   const lastFocus = useRef(focusId)
@@ -136,12 +137,6 @@ export function ZoomView({ workspace, workspaceId, attachIndex, onDelete, childr
   const cardIds = useMemo(() => new Set([focusId, prevFocus].filter((id): id is string => id !== null)), [focusId, prevFocus])
   const cardKey = [...cardIds].join(' ')
   useLayoutEffect(() => { motion.wake() }, [model, size, cardKey, motion.wake])
-  useEffect(() => {
-    const ask = zoom.cardAsk
-    if (!ask) return
-    zoomStore.takeCardAsk(ask.n)
-    motion.card(ask.id)
-  }, [zoom.cardAsk, motion.card])
   // NO WHEEL ZOOM (owner, 2026-10-31): the wheel is the page's, and in a list it
   // scrolls that list. Zoom in and out are clicks (motion.agent / motion.item for
   // in, the background and the back button for out), plus the stops and Esc.
