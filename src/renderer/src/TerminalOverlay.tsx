@@ -32,6 +32,7 @@ import { pasteFromClipboard } from './terminal-clipboard'
 import { registerTerminalPaste } from './terminal-paste-bus'
 import { attachImeBridge } from './ime-input-bridge'
 import { attachPhoneField, muteXtermFieldSends } from './textarea-pad'
+import { phoneGlyphs } from './phone-glyphs'
 import { CrIcon } from './icons'
 import { TranslateButton } from './TranslateButton'
 import { languageByCode } from '../../shared/translate'
@@ -783,19 +784,10 @@ function TerminalOverlay({
       // focused one and the pane's size is not its own — re-assert its fitted
       // size. Idle viewers adopt and stay quiet, so two viewers cannot fight.
       let reassertTimer: ReturnType<typeof setTimeout> | null = null
-      // THE MURDER WEAPON (black box, 2026-08-27): both kills ended at the
-      // redraw's final chunk — Claude Code's composer line, whose U+23F5 ⏵
-      // is an EMOJI-PRESENTATION candidate on Apple platforms. iOS 26.6's
-      // text engine dies resolving that fallback inside xterm's DOM-renderer
-      // grid. VS15 (U+FE0E, zero width) pins every media-control symbol to
-      // TEXT presentation — same glyph, same cell width, no emoji path.
+      // Claude Code's media-control symbols as a phone can draw them: the iOS
+      // crash guard, ⏺ → ●, and the footer's ⏵⏵ that were tofu (phone-glyphs.ts).
       // Remote only: desktop WebKit shapes these fine.
-      // ⏺ itself, Claude Code's mark on every line it says, becomes ● (one
-      // cell, as Claude Code prints it off the Mac): Samsung's browser draws
-      // it as an orange emoji button whatever selector follows it (owner's
-      // screenshot, 2026-10-31).
-      const detoxify = (raw: string): string =>
-        isRemoteMode() ? raw.replace(/\u23FA/g, '\u25CF').replace(/[\u23E9-\u23F9]/g, (m) => `${m}\uFE0E`) : raw
+      const detoxify = (raw: string): string => (isRemoteMode() ? phoneGlyphs(raw) : raw)
       /**
        * SIGWINCH: make the TUI repaint its real screen at this size. One
        * column narrower, then back: Claude Code redraws everything only when

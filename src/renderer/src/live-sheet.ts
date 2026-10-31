@@ -135,20 +135,50 @@ export function cellStyle(cell: CellLike, palette: readonly string[], theme: She
 }
 
 /**
+ * What the terminal's own font draws at exactly one cell. The bundled
+ * JetBrains Mono subset is Latin; everything else on a line — box rules, ●, ❯,
+ * ⎿, a symbol a phone has no font for — comes from whatever fallback the
+ * device has, at that font's width, not the cell's.
+ */
+const OWN_FONT = /^[\x20-\x7e]*$/
+
+/**
  * One buffer line as HTML: runs of cells that look alike become one span, a
- * wide (CJK) glyph gets exactly two cells so the columns stay where the
- * terminal has them, and trailing plain blanks are dropped.
+ * wide (CJK) glyph gets exactly two cells and a run of glyphs from outside the
+ * terminal's font exactly its cells, so the columns stay where the terminal
+ * has them; trailing plain blanks are dropped.
+ *
+ * Held to its cells because a fallback is any width: on Samsung Browser the
+ * footer's two arrows drew as tofu wider than their cells and every column
+ * after them moved right (2026-11-01), so a row the terminal fills to its
+ * last column ran out past the edge.
  */
 export function lineHtml(line: LineLike | undefined, cols: number, palette: readonly string[], theme: SheetTheme, cellPx: number): string {
   if (!line) return ''
   let out = ''
   let runStyle = ''
+  let runBoxed = false
+  let runCells = 0
   let runText = ''
   let pendingBlank = ''
   const flush = (): void => {
     if (runText === '') return
-    out += runStyle === '' ? escapeHtml(runText) : `<span style="${runStyle}">${escapeHtml(runText)}</span>`
+    const text = escapeHtml(runText)
+    if (runBoxed) {
+      const box = `display:inline-block;width:${(runCells * cellPx).toFixed(2)}px`
+      out += `<span style="${runStyle === '' ? box : `${runStyle};${box}`}">${text}</span>`
+    } else {
+      out += runStyle === '' ? text : `<span style="${runStyle}">${text}</span>`
+    }
     runText = ''
+    runCells = 0
+  }
+  /** Continue the run, or close it and start one with this look. */
+  const join = (style: string, boxed: boolean): void => {
+    if (style === runStyle && boxed === runBoxed) return
+    flush()
+    runStyle = style
+    runBoxed = boxed
   }
   for (let x = 0; x < cols; x++) {
     const cell = line.getCell(x)
@@ -163,8 +193,7 @@ export function lineHtml(line: LineLike | undefined, cols: number, palette: read
       continue
     }
     if (pendingBlank !== '') {
-      if (runStyle !== '') flush()
-      runStyle = ''
+      join('', false)
       runText += pendingBlank
       pendingBlank = ''
     }
@@ -173,13 +202,12 @@ export function lineHtml(line: LineLike | undefined, cols: number, palette: read
       const wide = `display:inline-block;width:${(cellPx * 2).toFixed(2)}px`
       out += `<span style="${style === '' ? wide : `${style};${wide}`}">${escapeHtml(chars)}</span>`
       runStyle = ''
+      runBoxed = false
       continue
     }
-    if (style !== runStyle) {
-      flush()
-      runStyle = style
-    }
+    join(style, !OWN_FONT.test(chars))
     runText += chars
+    runCells += 1
   }
   flush()
   return out
