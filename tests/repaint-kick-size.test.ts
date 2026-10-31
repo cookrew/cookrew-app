@@ -15,7 +15,7 @@ const kick = overlay.slice(overlay.indexOf('const repaintKick'), overlay.indexOf
 
 describe('repaintKick', () => {
   it('reads the pane size once, before the nudge, and settles back to exactly that', () => {
-    expect(kick).toContain('const at = paneSize ?? { cols: term.cols, rows: term.rows }')
+    expect(kick).toContain('const at = kickBack ?? paneSize ?? { cols: term.cols, rows: term.rows }')
     expect(kick).toContain('sendSize(at.cols - 1, at.rows, true)')
     expect(kick).toContain('sendSize(at.cols, at.rows)')
   })
@@ -23,6 +23,12 @@ describe('repaintKick', () => {
   it('never settles on term.cols, which by then holds the adopted dip, and never steps wider', () => {
     expect(kick).not.toMatch(/sendSize\(term\.cols/)
     expect(kick).not.toMatch(/cols \+ 1/)
+  })
+
+  it('a kick while one is in flight goes back to the same size, not to the dip it reads now', () => {
+    // Measured: the mount kick and a second one met, 177 -> 176 -> 175, and the pane settled at 176.
+    expect(kick).toMatch(/kickBack = at\n\s*sendSize\(at\.cols - 1/)
+    expect(kick).toMatch(/settleTimer = setTimeout\(\(\) => \{\s*kickBack = null/)
   })
 
   it('a viewer waits out a dip before deciding the pane took another viewer\'s size', () => {

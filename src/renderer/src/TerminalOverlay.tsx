@@ -799,19 +799,25 @@ function TerminalOverlay({
        *
        * Back to the size the pane had BEFORE the kick, read then: by the
        * settle this viewer has adopted the dip from main's hello, and
-       * settling on term.cols would keep it.
+       * settling on term.cols would keep it. A kick while one is in flight
+       * (the mount's and a turn's end can meet) goes back to the same size:
+       * read afresh it would be the dip, and the pane lost a column a kick.
        */
       /** How long the kick's dip holds: long enough for Claude Code to redraw at it (main/pty.ts DIP_MS). */
       const KICK_DIP_MS = 400
       let settleTimer: ReturnType<typeof setTimeout> | null = null
       let lastKickAt = 0
+      /** The size an in-flight kick goes back to. */
+      let kickBack: PaneSize | null = null
       const repaintKick = (): void => {
-        const at = paneSize ?? { cols: term.cols, rows: term.rows }
+        const at = kickBack ?? paneSize ?? { cols: term.cols, rows: term.rows }
         if (disposed || at.cols < 21) return
         lastKickAt = Date.now()
+        kickBack = at
         sendSize(at.cols - 1, at.rows, true)
         if (settleTimer) clearTimeout(settleTimer)
         settleTimer = setTimeout(() => {
+          kickBack = null
           if (!disposed) sendSize(at.cols, at.rows)
         }, KICK_DIP_MS)
       }
