@@ -1,5 +1,4 @@
 import { InkAvatar } from './InkAvatar'
-import { inkStatusOfRow } from './ink-status'
 import { CardWords, QuickReply, useQuickReply } from './quick-reply'
 import { Counts, NOTE_GLYPH, Page } from './ZoomParts'
 import type { AgentView, ItemView } from './zoom-model'
@@ -70,13 +69,13 @@ export function AgentCard({
   return (
     <div className="ag-plate" style={{ left: origin, top: origin }}>
       <button type="button" className="zv-av cr-pet-card-face" style={{ transform: `scale(${face})` }} title={`Open ${agent.name} in full`} aria-label={`Open ${agent.name} in full`} onClick={onOpen}>
-        <InkAvatar id={agent.id} preset={agent.preset} orch={agent.orch} status={inkStatusOfRow(agent.phase, agent.unread)} weight="large" />
+        <InkAvatar id={agent.id} preset={agent.preset} orch={agent.orch} status={agent.status} weight="large" />
       </button>
       <div className="zv-nm cr-pet-card-name" style={at(name)}>
         {agent.name}
       </div>
       <div className="ag-meta cr-pet-card-meta" style={at(meta)}>
-        <span className={`zv-st ${agent.phase}`}>{agent.word}</span>
+        <span className={`zv-st ${agent.status}`}>{agent.word}</span>
         <span className="zv-cnt">
           <Counts browsers={agent.browsers} notes={agent.notes} />
         </span>
