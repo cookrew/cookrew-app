@@ -60,12 +60,19 @@ describe('an agent’s card', () => {
 
   // ONE CARD INSTANCE (owner, 2026-10-31): the pets draw no card of their own;
   // a pet's click opens this one (zoom-store · openCard).
-  it('is the only agent card: the pets open it rather than drawing a second', () => {
+  // ONE CARD (owner, 2026-11-01): in a full view the agent group floats THE
+  // crew card — the same parts and the same AgentView — not a look-alike of its own.
+  it('the agent group floats the crew card itself, from the same agent view', () => {
     const pets = readFileSync('src/renderer/src/pets/AgentPets.tsx', 'utf8')
-    expect(pets).not.toMatch(/function AgentCard|renderCard=|<AgentLatest|<TurnView/)
-    expect(pets).toContain('onCard={onCard}')
-    const app = readFileSync('src/renderer/src/App.tsx', 'utf8')
-    expect(app).toMatch(/const openAgentCard = useCallback\(\(id: string\) => \{[\s\S]{0,200}zoomStore\.openCard\(id\)/)
+    expect(pets).toContain('<AgentCard')
+    expect(pets).toContain('agent={agentViewOf(pet.row, attachIndex)}')
+    expect(pets).not.toMatch(/<AgentLatest|<TurnView|function AgentCard/)
+    const card = readFileSync('src/renderer/src/zoom/AgentCard.tsx', 'utf8')
+    const node = readFileSync('src/renderer/src/zoom/ZoomParts.tsx', 'utf8')
+    for (const shared of ['<CardWords agent={agent} sent={reply.sent} />', 'useQuickReply(agent.id', '<QuickReply agent={agent} reply={reply}', 'status={inkStatusOfRow(agent.phase, agent.unread)} weight="large"']) {
+      expect(card).toContain(shared)
+      expect(node).toContain(shared)
+    }
     // The zoom card grew by the two lines it now says (zoom-frame.ts · the strip and the card).
     const frame = readFileSync('src/renderer/src/zoom/zoom-frame.ts', 'utf8')
     expect(frame).toContain('y: 136 }')
@@ -154,21 +161,6 @@ describe('the zoom is driven by clicks, not the wheel (owner, 2026-10-31)', () =
     expect(source).toMatch(/e\.key !== 'Escape'/)
     expect(source).toContain('motion.agent(a.id)')
     expect(source).toContain('motion.item(i.id)')
-  })
-})
-
-describe('the one card, asked for from outside the view', () => {
-  it('a pet asks once; the view takes the ask and opens that agent’s card', async () => {
-    const { zoomStore } = await import('../src/renderer/src/zoom/zoom-store')
-    zoomStore.openCard('t9')
-    const ask = zoomStore.get().cardAsk
-    expect(ask?.id).toBe('t9')
-    zoomStore.takeCardAsk(ask!.n)
-    expect(zoomStore.get().cardAsk).toBeNull()
-    // A stale take does not clear a newer ask.
-    zoomStore.openCard('t8')
-    zoomStore.takeCardAsk(ask!.n)
-    expect(zoomStore.get().cardAsk?.id).toBe('t8')
   })
 })
 

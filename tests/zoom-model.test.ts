@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildZoomModel, ITEMS_SHOWN, PHASE_WORD, lineOf } from '../src/renderer/src/zoom/zoom-model'
 import { attachmentIndex } from '../src/renderer/src/terminal-attachments'
-import type { AgentRow } from '../src/renderer/src/agent-rows'
+import { crewOf, type AgentRow } from '../src/renderer/src/agent-rows'
 import type { BrowserNodeData, CanvasNode, Connection, NoteNodeData, TerminalNodeData, WorkspaceMeta } from '../src/shared/model'
 
 const term = (id: string, name: string, over: Partial<TerminalNodeData> = {}): TerminalNodeData =>
@@ -24,6 +24,7 @@ function fixture(nodes: CanvasNode[], connections: Connection[], rows: AgentRow[
     nodes,
     connections,
     rows,
+    crew: crewOf(nodes, rows, { id: 'w1', name: 'Dev' }),
     attachIndex: attachmentIndex(nodes, connections),
     workspaces: [ws('w1', 'Dev'), ws('w2', 'Home')],
     activeId: 'w1',
@@ -94,7 +95,7 @@ describe('the device', () => {
 
   it('carries the real fleet machines through: counts when all their workspaces are live, null when only listed', () => {
     const m = buildZoomModel({
-      nodes: [], connections: [], rows: [], attachIndex: new Map(), workspaces: [ws('w1', 'Dev')], activeId: 'w1', name: 'Dev',
+      nodes: [], connections: [], rows: [], crew: [], attachIndex: new Map(), workspaces: [ws('w1', 'Dev')], activeId: 'w1', name: 'Dev',
       machines: [
         { id: 'me', name: 'MacBook Pro', local: true, online: true, detail: 'live', workspaces: [{ id: 'w1', name: 'Dev', agents: [{ harness: 'claude', phase: 'busy' }], counts: { agents: 3, waiting: 1 } }] },
         { id: 'other', name: 'Mac mini', local: false, online: true, detail: 'listed', workspaces: [{ id: 'z', name: 'Lab', agents: [], counts: null }] }
@@ -116,5 +117,31 @@ describe('a workspace with hundreds of browsers and notes', () => {
     expect(m.browsers).toBe(41)
     expect(m.hiddenItems).toBe(41 - ITEMS_SHOWN)
     expect(m.frame.links.every((l) => m.items.some((i) => i.id === l.item))).toBe(true)
+  })
+})
+
+// ONE CREW (owner, 2026-11-01): the crew view and the agent group drew two lists
+// that disagreed on who was in the crew, how many, and in what state.
+describe('the one crew list (agent-rows.ts · crewOf)', () => {
+  const nodes: CanvasNode[] = [term('t1', 'Forge'), term('t2', 'Velvet', { orch: true }), term('t3', 'Sol'), browser('b1', 'https://x.dev', 'X')]
+  const rows = [row('t1', 'working', { name: 'old-name', unread: true }), row('t2', 'waiting'), row('elsewhere', 'working', { workspaceId: 'w2' })]
+
+  it('is one row per terminal card: the roster row when there is one, a quiet row when not', () => {
+    const crew = crewOf(nodes, rows, { id: 'w1', name: 'Dev' })
+    expect(crew.map((r) => [r.id, r.phase])).toEqual([['t1', 'working'], ['t2', 'waiting'], ['t3', 'quiet']])
+    // The card's name wins, and a quiet row belongs to this workspace.
+    expect(crew[0].name).toBe('Forge')
+    expect(crew[2].workspaceId).toBe('w1')
+  })
+
+  it('is what the crew view draws: the same agents in the same states', () => {
+    const crew = crewOf(nodes, rows, { id: 'w1', name: 'Dev' })
+    const m = buildZoomModel({ nodes, connections: [], rows, crew, attachIndex: attachmentIndex(nodes, []), workspaces: [ws('w1', 'Dev')], activeId: 'w1', name: 'Dev' })
+    const byId = new Map(m.agents.map((a) => [a.id, a]))
+    expect(m.agents).toHaveLength(crew.length)
+    for (const r of crew) {
+      expect(byId.get(r.id)?.phase).toBe(r.phase)
+      expect(byId.get(r.id)?.unread).toBe(r.unread === true)
+    }
   })
 })

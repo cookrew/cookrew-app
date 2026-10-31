@@ -97,7 +97,10 @@ export function itemViewOf(n: CanvasNode, owners: string[]): ItemView | null {
 export interface ZoomInput {
   nodes: readonly CanvasNode[]
   connections: readonly Connection[]
+  /** Every workspace's rows: the other workspaces' marks are drawn from them. */
   rows: readonly AgentRow[]
+  /** This workspace's crew (agent-rows.ts · crewOf): its agents. */
+  crew: readonly AgentRow[]
   attachIndex: AttachmentIndex
   workspaces: readonly WorkspaceMeta[]
   activeId: string
@@ -113,28 +116,28 @@ export interface ZoomInput {
   }[]
 }
 
-export function buildZoomModel(input: ZoomInput): ZoomModel {
-  const rowOf = new Map(input.rows.map((r) => [r.id, r]))
-  const agents: AgentView[] = []
-  for (const n of input.nodes) {
-    if (n.kind !== 'terminal') continue
-    const row = rowOf.get(n.id)
-    const list = input.attachIndex.get(n.id) ?? []
-    const phase: AgentPhase = row?.phase ?? 'quiet'
-    agents.push({
-      id: n.id,
-      name: n.name,
-      preset: n.preset,
-      orch: n.orch === true,
-      phase,
-      unread: row?.unread === true,
-      word: PHASE_WORD[phase],
-      line: lineOf(row, n.brief),
-      browsers: list.filter((a) => a.kind === 'browser').length,
-      notes: list.filter((a) => a.kind === 'note').length,
-      turn: row?.turn ?? null
-    })
+/** One agent as every view draws it, from its row in the crew (agent-rows.ts · crewOf). */
+export function agentViewOf(row: AgentRow, attachIndex: AttachmentIndex): AgentView {
+  const list = attachIndex.get(row.id) ?? []
+  const phase: AgentPhase = row.phase
+  return {
+    id: row.id,
+    name: row.name,
+    preset: row.preset,
+    orch: row.orch,
+    phase,
+    unread: row.unread === true,
+    word: PHASE_WORD[phase],
+    line: lineOf(row, row.brief),
+    browsers: list.filter((a) => a.kind === 'browser').length,
+    notes: list.filter((a) => a.kind === 'note').length,
+    turn: row.turn ?? null
   }
+}
+
+export function buildZoomModel(input: ZoomInput): ZoomModel {
+  // The crew: one row per terminal card, the same list the agent group draws (agent-rows.ts · crewOf).
+  const agents: AgentView[] = input.crew.map((row) => agentViewOf(row, input.attachIndex))
   // Orchestrators first: the first agent is on top of the stack and leads the crew.
   agents.sort((a, b) => Number(b.orch) - Number(a.orch))
   const agentIds = new Set(agents.map((a) => a.id))
