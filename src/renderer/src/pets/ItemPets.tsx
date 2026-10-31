@@ -4,7 +4,7 @@ import { activeBrowserTab, type WorkspaceState } from '../../../shared/model'
 import type { AttachmentIndex } from '../terminal-attachments'
 import { firstLine, hostPath, ownersOf } from '../stage/stage-select'
 import { faviconOf, petMax, pickItems } from './pet-pick'
-import { dockedOrder } from './pet-dock'
+import { dockedCount, dockedOrder } from './pet-dock'
 import { PetTroop, type CardControls } from './PetTroop'
 import { thumbWants } from './thumb-wants'
 import { InkAvatar } from '../zoom/InkAvatar'
@@ -103,7 +103,7 @@ export function ItemPets({
     if (!dock) return { shown: picked.shown, more: picked.more, dim: new Set<string>() }
     const all = [...picked.shown, ...picked.more]
     const order = dockedOrder(all, { exclude: dock.exclude, first: onStage ? all.filter((item) => item.owners.includes(onStage)).map((item) => item.id) : [] })
-    const count = picked.shown.filter((item) => item.id !== dock.exclude).length
+    const count = dockedCount(picked.shown.filter((item) => item.id !== dock.exclude).length, 'left', window.innerWidth)
     return { shown: order.members.slice(0, count), more: order.members.slice(count), dim: order.dim }
   }, [picked, dock, onStage])
   const member = useCallback((item: ItemFace) => ({

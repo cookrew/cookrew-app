@@ -172,10 +172,14 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     }
   }), [])
   const motion = useZoomMotion(model.frame, collect, root, pan)
-  /** The crew stop on a narrow screen, with more crew than fits: where a drag scrolls (no wheel: owner, 2026-10-31). */
+  // The crew and the thumbnails scroll apart: a side opened again starts at its top.
+  useEffect(() => {
+    panAt.current = 0
+  }, [zoom.dir])
+  /** The crew stop, or the thumbnails, on a narrow screen with more than fits: where a drag scrolls (no wheel: owner, 2026-10-31). */
   const canPan = (): boolean => {
     const z = zoomStore.get()
-    return panMax.current > 0 && z.dir === 'agents' && z.v > 0.9 && z.v < 1.5
+    return panMax.current > 0 && (z.dir === 'agents' ? z.v > 0.9 && z.v < 1.5 : z.v > -0.5 && z.v < 0.5)
   }
   const scrollBy = (dy: number): void => {
     panAt.current = Math.min(panMax.current, Math.max(0, panAt.current + dy))

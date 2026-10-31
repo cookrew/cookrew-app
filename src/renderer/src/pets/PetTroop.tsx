@@ -3,7 +3,7 @@ import { createPortal, flushSync } from 'react-dom'
 import { cardPlacement, clampSpot, nameTagSpot, petClick, petHome, readSpot, type PetSpot } from './pet-pick'
 import { CONTENT_FRAMES, MORPH_EASE, MORPH_MS, morphFrames } from './pet-morph'
 import { CARD_PARTS, FACE_PARTS, FULL_PARTS, findParts, pageZoomEnv, waitFor, zoomStep } from './pet-zoom'
-import { dockedSpot, nearDock, sheetBox, type Box } from './pet-dock'
+import { dockedSpot, nearDock, sheetBox, sheetOf, type Box } from './pet-dock'
 import './pets.css'
 
 /**
@@ -40,6 +40,10 @@ const fullViewNow = (): { full: Box; sheet: Box } | null => {
   if (!el) return null
   const full = boxOf(el.getBoundingClientRect())
   if (full.width <= 0 || full.height <= 0) return null
+  // The sheet where its ::after is drawn (a phone's insets and strip included); the lanes' arithmetic where that cannot be read.
+  const after = getComputedStyle(el, '::after')
+  const inset = { top: Number.parseFloat(after.top), left: Number.parseFloat(after.left), right: Number.parseFloat(after.right), bottom: Number.parseFloat(after.bottom) }
+  if (Object.values(inset).every(Number.isFinite)) return { full, sheet: sheetOf(full, inset) }
   const style = getComputedStyle(el)
   const lane = (name: string): number => Number.parseFloat(style.getPropertyValue(name)) || 0
   return { full, sheet: sheetBox(full, { left: lane('--fv-lane-left'), right: lane('--fv-lane-right') }) }

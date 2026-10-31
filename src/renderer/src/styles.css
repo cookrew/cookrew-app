@@ -1583,8 +1583,11 @@ a.cr-btn {
 }
 
 .ctx-tool-name {
+  flex: none;
   color: var(--phos);
   font-weight: 600;
+  /* A long description wraps; the tool's name never breaks ("Ba / sh" on a phone). */
+  white-space: nowrap;
 }
 
 /* the short descriptor after the name (Forge's args, head-capped 80). Parens

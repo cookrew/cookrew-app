@@ -171,6 +171,40 @@
   }
 }
 
+/* A phone: no lane and no edge to stand on, so each troop is a row in the
+   strip between the full view's head and its sheet (pet-dock.ts · PHONE_PX,
+   STRIP_PX): a few faces and "+N", the grip at its start. */
+@media (max-width: 700px) {
+  .cr-pets.docked,
+  .cr-pets.docked.left,
+  .cr-pets.docked.right {
+    flex-direction: row;
+    gap: 6px;
+    padding: 0;
+  }
+  .cr-pets.docked .cr-pets-grip {
+    width: 14px;
+    height: 28px;
+  }
+  .cr-pets.docked .cr-pets-grip span {
+    rotate: 0deg;
+  }
+  .cr-pets.docked .cr-pet,
+  .cr-pets.docked .cr-pet:not(.item):not(.more) {
+    width: 28px;
+    height: 28px;
+  }
+  .cr-pets.docked .cr-pet .vi-avatar,
+  .cr-pets.docked .cr-pet .vi-avatar svg {
+    width: 22px;
+    height: 22px;
+  }
+  .cr-pets.docked .cr-pet.item {
+    width: 38px;
+    height: 25px;
+  }
+}
+
 /* An item's two faces (ItemPets.tsx): the coin while it floats, the page
    thumbnail once attached to the full view. The coin's parts stand as the
    face's own, as they always did. */

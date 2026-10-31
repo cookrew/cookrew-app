@@ -245,3 +245,42 @@ body.cr-docked-right .zv-fullview {
     --fv-lane-right: 0px;
   }
 }
+
+/* A phone (pet-dock.ts · PHONE_PX): the attached groups are rows in a strip
+   between the head and the sheet, and the sheet steps down by it; the head is
+   one line, clear of the way back out (zoom.css), its words cut short. */
+@media (max-width: 700px) {
+  body.cr-docked-left .zv-fullview,
+  body.cr-docked-right .zv-fullview {
+    --fv-strip: 44px;
+  }
+  .zv-fullview::after {
+    top: calc(66px + var(--fv-strip, 0px));
+  }
+  .zv-fv-head {
+    flex-wrap: nowrap;
+    margin-bottom: var(--fv-strip, 0px);
+    padding-right: 52px;
+  }
+  .zv-fv-who {
+    flex: 1 1 auto;
+  }
+  .zv-fv-who b {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .zv-fv-who small {
+    flex-wrap: nowrap;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .zv-fv-used {
+    flex: none;
+    width: auto;
+    margin-left: auto;
+  }
+  .zv-fv-used em {
+    display: none;
+  }
+}
