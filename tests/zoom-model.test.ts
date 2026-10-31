@@ -3,7 +3,7 @@
 // browsers and notes they carry through the wiring, which are shared, and the
 // newest browser that stands beside the stack at group zoom. Pure, so pinned here.
 import { describe, expect, it } from 'vitest'
-import { buildZoomModel, ITEMS_SHOWN, PHASE_WORD, lineOf } from '../src/renderer/src/zoom/zoom-model'
+import { buildZoomModel, ITEMS_SHOWN, PHASE_WORD, itemViewOf, lineOf } from '../src/renderer/src/zoom/zoom-model'
 import { attachmentIndex } from '../src/renderer/src/terminal-attachments'
 import { crewOf, type AgentRow } from '../src/renderer/src/agent-rows'
 import type { BrowserNodeData, CanvasNode, Connection, NoteNodeData, TerminalNodeData, WorkspaceMeta } from '../src/shared/model'
@@ -145,3 +145,42 @@ describe('the one crew list (agent-rows.ts · crewOf)', () => {
     }
   })
 })
+
+describe('the cost of a rebuild (a workspace holds hundreds of browsers and notes)', () => {
+  /** A browser whose tabs and a note whose text count every read. */
+  const counted = (n: CanvasNode, reads: { n: number }): CanvasNode => {
+    const key = n.kind === 'browser' ? 'tabs' : 'content'
+    const value = (n as unknown as Record<string, unknown>)[key]
+    return Object.defineProperty({ ...n }, key, { get: () => (reads.n++, value), enumerable: true }) as CanvasNode
+  }
+
+  it('reads a URL or a note text only for the items the grid draws, and counts the rest', () => {
+    const reads = { n: 0 }
+    const nodes: CanvasNode[] = [term('t1', 'Forge')]
+    for (let i = 0; i < 150; i++) nodes.push(counted(browser(`b${i}`, `https://x.dev/${i}`, `Page ${i}`), reads))
+    for (let i = 0; i < 150; i++) nodes.push(counted(note(`n${i}`, `Note ${i}`, `# Note ${i}\nbody`), reads))
+    const m = fixture(nodes, [cable('c1', 't1', 'b3')])
+    expect(m.items).toHaveLength(ITEMS_SHOWN)
+    expect(m.items[0].id).toBe('b3') // the carried one first
+    expect(m.browsers).toBe(150)
+    expect(m.notes).toBe(150)
+    expect(m.hiddenItems).toBe(300 - ITEMS_SHOWN)
+    expect(reads.n).toBeLessThanOrEqual(ITEMS_SHOWN * 2)
+  })
+
+  it('a rebuild over the same nodes reads nothing again', () => {
+    const reads = { n: 0 }
+    const nodes: CanvasNode[] = [term('t1', 'Forge'), counted(browser('b1', 'https://x.dev/a', 'A'), reads), counted(note('n1', 'N', 'x'), reads)]
+    fixture(nodes, [])
+    const first = reads.n
+    fixture(nodes, [])
+    expect(reads.n).toBe(first)
+  })
+
+  it('a note says its first line worth reading, past blank lines and heading marks', () => {
+    expect(itemViewOf(note('n', 'N', '\n  \n## Plan for today \nmore'), [])?.line).toBe('Plan for today')
+    expect(itemViewOf(note('n', 'N', ''), [])?.line).toBe('')
+    expect(itemViewOf(note('n', 'N', '#\n\n'), [])?.line).toBe('')
+  })
+})
+
