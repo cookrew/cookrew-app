@@ -49,7 +49,7 @@ const same = (a: PaneSize | null, b: PaneSize | null): boolean => a !== null && 
 
 /**
  * After the pane settles on a size, was it someone else's? The pane passes
- * through sizes of our own (a repaint kick is cols-1 then cols), so the check
+ * through sizes of our own (a repaint kick is cols+1 then cols; a widen overshoots by one in main), so the check
  * is on where it ends, against the last size this viewer asked for.
  */
 export function tookOthers(settled: PaneSize, mine: PaneSize | null): boolean {

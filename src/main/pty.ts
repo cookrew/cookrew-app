@@ -149,6 +149,9 @@ export function buildSeededFrame(
  * and herdr's own start put it there — and nothing else in a seed would take
  * it off: the history would be written into a screen that cannot keep it.
  */
+/** How long a widen's overshoot holds, so the agent sees the wider size before the narrower one (resize). */
+export const WIDEN_SETTLE_MS = 200
+
 const LEAVE_ALTERNATE = '\x1b[?1049l'
 const WRAP = '\x1b[?7h'
 
@@ -436,6 +439,8 @@ export class PtySession extends EventEmitter {
   private serializer: SerializeAddon
   private lastOutputAt = 0
   private disposed = false
+  /** The second step of a widen (resize): back from the overshoot to the size asked for. */
+  private widenTimer: ReturnType<typeof setTimeout> | null = null
   /** Backend/spec are retained so a dropped herdr client can reattach in place. */
   private readonly mux: Multiplexer
   private readonly attachSpec: AttachSpec
@@ -782,7 +787,40 @@ export class PtySession extends EventEmitter {
     this.emit('input', data)
   }
 
+  /**
+   * EVERY WIDEN ENDS NARROWER (owner's desktop after the phone, 2026-10-31:
+   * the live view showed phone-width rows three and four abreast).
+   *
+   * Claude Code redraws its whole conversation when the terminal gets
+   * NARROWER and only its live region when it gets wider. On a widen, what
+   * is left on screen is the host's reflow, and herdr's reflow joins every
+   * row that was exactly full at the old width to the row after it — Claude
+   * Code pads and wraps to the width, so at a phone's 45 columns that is a
+   * row in three. So a widen goes one column past the size asked for and
+   * comes back after WIDEN_SETTLE_MS: the last step is a narrowing, Claude
+   * Code redraws at the final width, and the joined copy left in the history
+   * is an earlier copy of the same words, which the seed drops
+   * (seed-history.ts · dropReprints). The overshoot settles within the
+   * 300 ms a viewer waits before deciding a size was not its own
+   * (renderer pane-size.ts), so passing through it costs no viewer the size.
+   */
   resize(cols: number, rows: number): void {
+    if (this.widenTimer !== null) {
+      clearTimeout(this.widenTimer)
+      this.widenTimer = null
+    }
+    if (cols <= this.screen.cols) {
+      this.applySize(cols, rows)
+      return
+    }
+    this.applySize(cols + 1, rows)
+    this.widenTimer = setTimeout(() => {
+      this.widenTimer = null
+      if (!this.disposed) this.applySize(cols, rows)
+    }, WIDEN_SETTLE_MS)
+  }
+
+  private applySize(cols: number, rows: number): void {
     const changed = cols !== this.screen.cols || rows !== this.screen.rows
     try {
       this.proc.resize(cols, rows)
@@ -930,6 +968,10 @@ export class PtySession extends EventEmitter {
     if (this.reattachTimer !== null) {
       clearTimeout(this.reattachTimer)
       this.reattachTimer = null
+    }
+    if (this.widenTimer !== null) {
+      clearTimeout(this.widenTimer)
+      this.widenTimer = null
     }
     try {
       this.proc.kill()
