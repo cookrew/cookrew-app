@@ -120,7 +120,6 @@ import {
 } from './canvas-visual-mode'
 import { CableHarness } from './CableHarness'
 import { stageSelect } from './stage/stage-select'
-import { AgentPets } from './pets/AgentPets'
 import { ItemPets } from './pets/ItemPets'
 import { thumbWants } from './pets/thumb-wants'
 import { attachView } from './attach-view'
@@ -1683,9 +1682,9 @@ function Canvas(): React.JSX.Element {
           }}
         />
         <EventToastLayer />
-        {/* The crew, and the browsers and notes, as pets over every page:
-            hover for a card, click to open it (pets/). */}
-        <AgentPets workspace={workspace} workspaceId={activeWsId} onOpen={zoomToNode} />
+        {/* The browsers and notes as pets over every page: hover for a card,
+            click to open it (pets/). The crew's troop is retired: it sat over
+            the page and took its clicks (the owner, 2026-10-31). */}
         <ItemPets
           workspace={workspace}
           attachIndex={attachIndex}
