@@ -76,12 +76,25 @@ import { createNameSni } from './name-sni'
 import type { DesktopCert } from './desktop-cert'
 import { handleLevelsRoutes } from './levels/routes'
 import { levelsServiceFor, prewarmLevels, type LevelsMountOptions } from './levels/mount'
+import type { LevelsService } from './levels/service'
 
 /** What the levels need from this server: its app version, and the token to scrub by value. */
 const levelsOptions = (deps: MobileServerDeps): LevelsMountOptions => ({
   appVersion: () => deps.appVersion?.() ?? null,
   tokens: () => [activePairingToken ?? deps.pairingToken]
 })
+
+/** The deps the companion server was started with: the window's zoom fleet feed shares its levels service. */
+let levelsDeps: MobileServerDeps | null = null
+
+/**
+ * This desktop's levels service — the one the companion's /api/levels routes
+ * serve — for the window's zoom navigator (zoom-fleet.ts). Null before the
+ * server starts, or when the board is not wired.
+ */
+export function localLevelsService(): LevelsService | null {
+  return levelsDeps ? levelsServiceFor(levelsDeps, levelsOptions(levelsDeps)) : null
+}
 
 // Re-exported so existing importers keep their import path; the constants
 // themselves live in an Electron-free module so pure code can use them.
@@ -346,6 +359,7 @@ export function startMobileServer(deps: MobileServerDeps): void {
     powerBlockerId.current = powerSaveBlocker.start('prevent-app-suspension')
   }
   // STRATA: the first levels build at idle, not on the first shell's request.
+  levelsDeps = deps
   prewarmLevels(deps, levelsOptions(deps))
 
   // C1: resolve the pairing token BEFORE any route can run — every mutating

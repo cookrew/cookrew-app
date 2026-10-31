@@ -92,7 +92,9 @@ export function useActivityPhaseCount(ids: readonly string[], phase: TurnPhase):
 /** One browser's latest thumbnail data URL. Re-renders only when THIS id changes. */
 export function useThumb(id: string): string | undefined {
   const subscribe = useCallback((cb: () => void) => thumbStore.subscribeKey(id, cb), [id])
-  return useSyncExternalStore(subscribe, () => thumbStore.get(id))
+  // A third argument for the server snapshot: a card can be rendered to markup
+  // in a test without a store, and then it simply has no picture yet.
+  return useSyncExternalStore(subscribe, () => thumbStore.get(id), () => undefined)
 }
 
 /** The whole thumbnail map — for the roster sidebar. Re-renders on any change. */

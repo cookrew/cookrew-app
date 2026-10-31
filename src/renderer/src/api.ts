@@ -33,6 +33,8 @@ import type { TraceBoundaryMarker } from "../../shared/trace-blocks";
 import type { DoorTranscriptState } from "../../shared/door-transcript-state";
 import type { BoardRow, BoardSummary } from "../../shared/board";
 import type { VersionPinRecord } from "../../shared/version-pin";
+import type { LevelsEvent } from "../../shared/strata";
+import type { AccountMachines } from "../../shared/zoom-fleet";
 import type { ServedPaymentRail } from "../../shared/served-payment-rails";
 import type { ServeTransport } from "../../shared/serve-transport";
 import type {
@@ -479,6 +481,22 @@ export interface CookrewApi {
   subscribeBoard?: (cb: (board: BoardSnapshotLike) => void) => () => void;
   /** This desktop's name for the header's device step; null when it has none. Optional — the phone names its desktop from the path. */
   machineName?: () => Promise<string | null>;
+  /**
+   * THE ZOOM NAVIGATOR'S DEVICES (zoom/use-zoom-fleet.ts): this desktop's
+   * levels feed — every workspace with its agents and their wired notes and
+   * browsers (shared/strata.ts LevelsEvent): a snapshot first, then deltas.
+   * `refused` says the desktop would not open it (its levels service is not
+   * up yet, or this client may not read it); the caller asks again. Returns
+   * the release. Optional — feature-detect; without it the navigator names
+   * this desktop's workspaces from listWorkspaces.
+   */
+  subscribeZoomFleet?: (cb: (event: LevelsEvent) => void, refused?: () => void) => () => void;
+  /**
+   * The signed-in account's desktops as the registry lists them: names,
+   * presence, kind, workspace names — never addresses (shared/zoom-fleet.ts).
+   * Optional — feature-detect.
+   */
+  zoomFleetMachines?: () => Promise<AccountMachines>;
   /**
    * Recover an inactive teammate as it was (agent-recover feature): re-add
    * the node bound to its session and resume. Optional — feature-detect.

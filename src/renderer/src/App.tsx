@@ -122,6 +122,9 @@ import { stageSelect } from './stage/stage-select'
 import { AgentPets } from './pets/AgentPets'
 import { ItemPets } from './pets/ItemPets'
 import { thumbWants } from './pets/thumb-wants'
+import { ZoomView } from './zoom/ZoomView'
+import { useZoomFull } from './zoom/zoom-store'
+import { zoomStore } from './zoom/zoom-store'
 import { attachView } from './attach-view'
 import type { StageShowing } from './stage/StageView'
 
@@ -202,6 +205,7 @@ function Canvas(): React.JSX.Element {
   const interactiveCapability = useInteractiveBrowserCapability()
   const interactiveBrowser = interactiveCapability?.enabled ?? null
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null)
+  const zoomFull = useZoomFull()
   const [nodes, setNodes] = useState<Node[]>([])
   const [canvasVisualMode, setCanvasVisualMode] = useState<CanvasVisualMode>(storedCanvasVisualMode)
   const [tool, setTool] = useState<ToolId>('move')
@@ -836,7 +840,9 @@ function Canvas(): React.JSX.Element {
       // stage (StageTerminal) until that workspace is switched to. The canvas
       // is retired (2026-10-30) and is not rendered, so there is nowhere else.
       const asked = workspaceRef.current?.nodes.find((n) => n.id === id)
-      stageSelect.set(asked?.kind === 'browser' || asked?.kind === 'note' ? { kind: 'item', id } : { kind: 'agent', id })
+      const item = asked?.kind === 'browser' || asked?.kind === 'note'
+      stageSelect.set(item ? { kind: 'item', id } : { kind: 'agent', id })
+      zoomStore.jumpTo(item ? 'item' : 'agent', id)
       if (viewRef.current !== 'stage') setView('stage')
       // The canvas's own arguments (a just-created card's rect, a board row
       // landing on a canvas that just arrived) have nothing left to frame.
@@ -1518,7 +1524,9 @@ function Canvas(): React.JSX.Element {
           {view === 'stage' && (
             <Suspense fallback={null}>
               <TerminalAttachmentsContext.Provider value={attachIndex}>
-                <StageView workspace={workspace} workspaceId={activeWsId} terminals={terminals} attachIndex={attachIndex} onShowing={setStageShowing} />
+                <ZoomView workspace={workspace} workspaceId={activeWsId} attachIndex={attachIndex}>
+                  {zoomFull !== null && <StageView workspace={workspace} workspaceId={activeWsId} terminals={terminals} attachIndex={attachIndex} onShowing={setStageShowing} />}
+                </ZoomView>
               </TerminalAttachmentsContext.Provider>
             </Suspense>
           )}
@@ -1538,10 +1546,9 @@ function Canvas(): React.JSX.Element {
             </Suspense>
           )}
         </div>
-        {/* On the stage the dock shows only with an agent's terminal in the
-            middle. The phone keeps it: its SOUS button is the phone's only
-            command box. */}
-        {(view !== 'stage' || stageShowing?.terminalId != null || isRemoteMode()) && (
+        {/* The dock always holds its strip: it is where an agent is added, and
+            a dock that comes and goes resizes the stage under the zoom. Only
+            its composer waits for an agent to be in the middle (voiceFor). */}
         <Dock
           tool={tool}
           onSelect={selectTool}
@@ -1594,7 +1601,6 @@ function Canvas(): React.JSX.Element {
               : null
           }
         />
-        )}
         {metricsOpen && (
           <Suspense fallback={null}>
             <MetricsPanel onClose={() => setMetricsOpen(false)} />
@@ -1681,10 +1687,11 @@ function Canvas(): React.JSX.Element {
           isPhoneViewing={isPhoneViewing}
           interactiveCapability={interactiveCapability}
         />
-        {/* The crew, and the browsers and notes, as pets over every page:
-            hover for a card, click to open it (pets/). */}
-        <AgentPets workspace={workspace} workspaceId={activeWsId} onOpen={zoomToNode} />
-        <ItemPets
+        {/* The crew, and the browsers and notes, as pets over every page: hover
+            for a card, click to open it (pets/). On the stage they ride at the
+            full view only — the navigator draws the crew everywhere else. */}
+        {(zoomFull !== null || view !== 'stage') && <AgentPets workspace={workspace} workspaceId={activeWsId} onOpen={zoomToNode} />}
+        {(zoomFull !== null || view !== 'stage') && <ItemPets
           workspace={workspace}
           attachIndex={attachIndex}
           onStage={view === 'stage' ? (stageShowing?.terminalId ?? null) : null}
@@ -1696,7 +1703,7 @@ function Canvas(): React.JSX.Element {
             if (onStage && owners.includes(onStage) && (kind === 'browser' || kind === 'note')) attachView.toggle(onStage, id, kind)
             else zoomToNode(id)
           }}
-        />
+        />}
         {/* D14 · a door this Mac was serving moved to another of the account's. */}
         <DoorMovedNotice />
         <SousPill listening={ptt.listening} partial={ptt.partial} reply={sousReply} />

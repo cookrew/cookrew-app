@@ -73,7 +73,7 @@ export function ItemPets({
   const picked = useMemo(() => pickItems(items, { owners, focus, max: petMax(window.innerWidth) }), [items, owners, focus])
   const byId = useMemo(() => new Map(items.map((item) => [item.id, item])), [items])
   const onShown = useCallback(
-    (ids: readonly string[]) => thumbWants.set(ids.filter((id) => byId.get(id)?.kind === 'browser')),
+    (ids: readonly string[]) => thumbWants.claim('troop', ids.filter((id) => byId.get(id)?.kind === 'browser')),
     [byId]
   )
   const member = (item: ItemFace) => ({

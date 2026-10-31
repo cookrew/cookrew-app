@@ -60,6 +60,7 @@ import {
   tmuxProbeDeps
 } from './board-index'
 import { createBoardHolds } from './board-hold'
+import { registerZoomFleetIpc } from './zoom-fleet'
 import { setShellObserver } from './multiplexer'
 import { createLoopHealth } from './loop-health'
 import { loadOrCreateReadOnlyToken } from './readonly-token'
@@ -82,6 +83,7 @@ import { EventEmitter } from 'node:events'
 import {
   cachedTailnet,
   startMobileServer,
+  localLevelsService,
   mobileUrls,
   mobileEndpointList,
   uncoveredCertHosts,
@@ -7095,6 +7097,14 @@ function registerIpc(handlers: RestoreHandlers): void {
   // The header's device step: this desktop by the name its account record
   // gives it (the name /me and the phone show), else the renderer's fallback.
   ipcMain.handle('machine:name', () => accounts.account()?.name ?? null)
+  // THE ZOOM NAVIGATOR'S DEVICES (zoom-fleet.ts): this desktop's levels feed,
+  // pushed per window like the board, and the account's desktops from the
+  // registry, cut to directory facts before they reach the renderer.
+  registerZoomFleetIpc(ipcMain.handle.bind(ipcMain), {
+    service: localLevelsService,
+    authed: (pathname) => accounts.authed<unknown>(pathname),
+    deviceId: () => accounts.account()?.deviceId ?? null
+  })
   ipcMain.handle('agent:recover', (_e, id: string) => recoverAgent(id))
   // Endpoint restore channels live alongside the executor (M10).
   registerRestoreIpc(ipcMain.handle.bind(ipcMain), handlers)

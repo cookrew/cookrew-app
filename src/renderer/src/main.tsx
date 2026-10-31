@@ -2,6 +2,7 @@ import React, { Suspense, lazy } from 'react'
 import ReactDOM from 'react-dom/client'
 import './styles.css'
 import './night.css'
+import './zoom/ink-theme.css'
 import { authStore } from './auth-gate'
 import { startPhoneBeacon } from './phone-beacon'
 import { startCompanionPathSwitch } from './path/companion'
@@ -22,6 +23,9 @@ const embed = bootEmbedMode()
 // Light or dark before the first paint: a browser follows the system, the
 // desktop app stays paper (color-scheme.ts).
 applyColorScheme(isRemoteMode())
+// The ink theme before the first paint: a passive effect in App would flash the
+// old tokens for a frame on every boot.
+document.body.classList.add('cr-ink')
 const EmbedRoot = lazy(() => import('./embed/EmbedRoot'))
 // THE CANVAS APP IS A CHUNK OF ITS OWN, so an embed never downloads it (it was
 // most of the 1.7 MB index). The classic boot asks for it on this very line,

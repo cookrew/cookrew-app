@@ -1,0 +1,376 @@
+/* ---- THE INK THEME (brand draft 2026-10-31, docs/brand-ink-2026-10-31/) ----
+   Warm paper, ink in serif for what is named, mono for what is labelled, a
+   subdued amber for what is picked, red only for an agent waiting on you.
+
+   Two parts:
+   1. The palette, `--sumi-*`, on :root and always defined: new names only, so
+      it changes nothing by itself. The zoom navigator (zoom.css) draws with it
+      whether or not the app wears the theme.
+   2. The app's own tokens (styles.css :root, night.css) remapped onto the
+      palette under `body.cr-ink`, plus the few surfaces a token cannot reach
+      (the arcade bevel shadows, the pixel headings). Every rule is gated on
+      the flag, so the theme comes off by removing one class.
+
+   Night follows night.css exactly: `data-scheme='auto'` + a dark system turns
+   the palette dark; `data-scheme='light'` (the desktop) never does.
+
+   Kept out on purpose: the logo (its wordmark keeps Silkscreen and #ffd600),
+   the terminal (no rule here reaches .xterm or its canvas), --font-mono and
+   --font-screen (xterm and the CRT summaries measure with them). */
+
+:root {
+  --sumi-paper: #f4efe4;
+  --sumi-paper-2: #ebe3d3;
+  --sumi-paper-3: #e3d9c6;
+  --sumi-card: #fbf8f1;
+  --sumi-ink: #1d1a16;
+  /* 6.4:1 on paper */
+  --sumi-ink-soft: #5d554a;
+  /* 4.8:1 on paper: the quietest text that still has to be read */
+  --sumi-muted: #6f675b;
+  /* decoration only (separators, disabled) */
+  --sumi-dim: #8c8374;
+  --sumi-hair: rgba(29, 26, 22, 0.1);
+  --sumi-hair-2: rgba(29, 26, 22, 0.16);
+  --sumi-rule: rgba(29, 26, 22, 0.42);
+  /* The seal: a fill for marks and glyphs; -fill carries text (5.3:1 under
+     --sumi-on-seal); -text is the seal as small text on paper (5.3:1). */
+  --sumi-seal: #a8692b;
+  --sumi-seal-fill: #96592a;
+  --sumi-seal-text: #8f5520;
+  --sumi-on-seal: #fbf8f1;
+  /* The subdued amber: picked / primary fills, with ink on them (9:1). */
+  --sumi-gold: #e2b866;
+  --sumi-gold-soft: #f3e4c2;
+  --sumi-on-gold: #1d1a16;
+  /* Red: an agent waiting on you, and nothing else (4.7:1 on paper). */
+  --sumi-wait: #c0392b;
+  --sumi-moss: #5f8a4c;
+  --sumi-violet: #7d6a9a;
+  --sumi-violet-soft: #d9d0e8;
+  --sumi-note: #f2e6bf;
+  --sumi-note-text: #3a3322;
+  --sumi-wash: rgba(168, 140, 98, 0.16);
+  --sumi-grain: rgba(120, 100, 70, 0.06);
+  --sumi-scrim: rgba(29, 26, 22, 0.4);
+  --sumi-shadow: rgba(40, 30, 15, 0.1);
+  --sumi-shadow-sm: rgba(40, 30, 15, 0.08);
+  --sumi-lift: 0 1px 2px rgba(40, 30, 15, 0.06), 0 10px 28px rgba(40, 30, 15, 0.1);
+  --font-serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Songti SC', 'STSong', Georgia, serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-scheme='auto'] {
+    --sumi-paper: #15130f;
+    --sumi-paper-2: #1d1a15;
+    --sumi-paper-3: #27231c;
+    --sumi-card: #211e18;
+    --sumi-ink: #ece4d2;
+    /* 7:1 on night paper */
+    --sumi-ink-soft: #b3a993;
+    --sumi-muted: #9a917f;
+    --sumi-dim: #6f6859;
+    --sumi-hair: rgba(236, 228, 210, 0.1);
+    --sumi-hair-2: rgba(236, 228, 210, 0.16);
+    --sumi-rule: rgba(236, 228, 210, 0.38);
+    --sumi-seal: #c88a47;
+    --sumi-seal-fill: #c88a47;
+    --sumi-seal-text: #d49a5a;
+    --sumi-on-seal: #15130f;
+    --sumi-gold: #d6a24e;
+    --sumi-gold-soft: #3a2f1c;
+    --sumi-on-gold: #15130f;
+    --sumi-wait: #e06a55;
+    --sumi-moss: #7fae6a;
+    --sumi-violet: #a593c9;
+    --sumi-violet-soft: #3e3558;
+    --sumi-note: #362e18;
+    --sumi-note-text: #ece0bd;
+    --sumi-wash: rgba(200, 160, 100, 0.1);
+    --sumi-grain: rgba(236, 228, 210, 0.035);
+    --sumi-scrim: rgba(0, 0, 0, 0.55);
+    --sumi-shadow: rgba(0, 0, 0, 0.35);
+    --sumi-shadow-sm: rgba(0, 0, 0, 0.28);
+    --sumi-lift: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.4);
+  }
+}
+
+/* ── 2. the app's tokens, on the palette ──
+   On body, so they win over :root's light values and night.css's dark ones
+   alike; they name the palette, so they flip with it. */
+body.cr-ink {
+  --cream: var(--sumi-paper);
+  --cream-hi: var(--sumi-card);
+  --cream-md: var(--sumi-paper-2);
+  --cream-lo: var(--sumi-paper-3);
+  --ink: var(--sumi-ink);
+  --ink-soft: var(--sumi-ink-soft);
+  --muted: var(--sumi-muted);
+  --dim: var(--sumi-dim);
+  /* The 2px arcade outline becomes a soft ink line; the offset bevels drawn
+     with it fade to a faint print offset wherever they are not redrawn below. */
+  --line: var(--sumi-rule);
+  --line-soft: var(--sumi-hair-2);
+  --amber: var(--sumi-gold);
+  --amber-soft: var(--sumi-gold-soft);
+  --amber-deep: var(--sumi-seal-text);
+  --rose: var(--sumi-wait);
+  --hp: var(--sumi-moss);
+  --violet: var(--sumi-violet);
+  --violet-hi: var(--sumi-violet-soft);
+  --note-bg: var(--sumi-note);
+  --note-text: var(--sumi-note-text);
+  --on-accent: var(--sumi-on-gold);
+  /* Labels: the pixel face becomes mono, keeping each rule's size, case and
+     tracking, so nothing reflows wider. */
+  --font-pixel: var(--font-mono);
+  background: var(--sumi-paper);
+  color: var(--sumi-ink);
+}
+
+/* The page under the body (overscroll, the first frame). */
+:root:has(> body.cr-ink) {
+  background: var(--sumi-paper);
+}
+
+body.cr-ink ::selection {
+  background: var(--sumi-gold-soft);
+}
+
+/* The logo stays as it is: the wordmark keeps its pixel face and its yellow. */
+body.cr-ink .cr-logo {
+  --font-pixel: 'Silkscreen', 'Courier New', monospace;
+  --amber: #ffd600;
+}
+
+/* ── the bars ── */
+body.cr-ink .cr-header {
+  background: var(--sumi-paper);
+  border-bottom: 1px solid var(--sumi-hair-2);
+}
+
+body.cr-ink .cr-dock {
+  background: var(--sumi-paper);
+  border-top: 1px solid var(--sumi-hair-2);
+}
+
+/* The keyboard band under a risen dock, in the dock's paper. */
+body.cr-ink .cr-app::after {
+  background: var(--sumi-paper);
+}
+
+/* The route reads as a crumb in ink serif: device / workspace / agent. */
+body.cr-ink .cr-route {
+  font-family: var(--font-serif);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.005em;
+  text-transform: none;
+}
+
+body.cr-ink .cr-route-sep {
+  color: var(--sumi-dim);
+  font-weight: 400;
+}
+
+body.cr-ink .cr-route-btn {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+
+body.cr-ink .cr-route-btn:hover {
+  background: var(--sumi-wash);
+  border-color: transparent;
+}
+
+body.cr-ink .cr-route-btn[aria-current='page'] {
+  background: var(--sumi-paper-2);
+  border-color: var(--sumi-hair-2);
+}
+
+body.cr-ink .cr-route-here {
+  border: 1px solid var(--sumi-hair-2);
+  border-radius: 6px;
+  padding: 3px 8px;
+  background: var(--sumi-card);
+}
+
+/* ── controls ── */
+body.cr-ink .cr-btn {
+  border: 1.5px solid var(--sumi-rule);
+  border-radius: 6px;
+  box-shadow: none;
+  background: var(--sumi-card);
+}
+
+body.cr-ink .cr-btn:hover {
+  border-color: var(--sumi-ink);
+  background: var(--sumi-gold-soft);
+}
+
+body.cr-ink .cr-btn:active {
+  transform: translateY(1px);
+  box-shadow: none;
+}
+
+body.cr-ink .cr-btn.sm {
+  border-radius: 5px;
+}
+
+body.cr-ink .cr-btn.primary,
+body.cr-ink .cr-btn.on {
+  background: var(--sumi-gold);
+  border-color: transparent;
+  color: var(--sumi-on-gold);
+}
+
+body.cr-ink .cr-btn.primary:hover {
+  border-color: var(--sumi-ink);
+}
+
+/* What destroys something is ink, not red: red is kept for waiting. */
+body.cr-ink .cr-btn.danger {
+  background: var(--sumi-ink);
+  border-color: var(--sumi-ink);
+  color: var(--sumi-paper);
+}
+
+body.cr-ink .cr-btn.danger:hover {
+  background: var(--sumi-seal-fill);
+  border-color: var(--sumi-seal-fill);
+  color: var(--sumi-on-seal);
+}
+
+body.cr-ink .cr-more-btn {
+  border: 1.5px solid var(--sumi-rule);
+  border-radius: 6px;
+  box-shadow: none;
+  background: var(--sumi-card);
+}
+
+body.cr-ink .cr-more-btn:hover,
+body.cr-ink .cr-more-btn.on {
+  border-color: var(--sumi-ink);
+}
+
+body.cr-ink .cr-viewseg {
+  border: 1.5px solid var(--sumi-rule);
+  border-radius: 7px;
+  box-shadow: none;
+  overflow: hidden;
+  background: var(--sumi-card);
+}
+
+body.cr-ink .cr-viewseg button {
+  border-right: 1px solid var(--sumi-hair-2);
+}
+
+body.cr-ink .cr-viewseg button:last-child {
+  border-right: none;
+}
+
+body.cr-ink .cr-chip {
+  border: 1px solid var(--sumi-rule);
+  border-radius: 4px;
+  background: var(--sumi-paper-2);
+}
+
+body.cr-ink .cr-led,
+body.cr-ink .cr-led.busy,
+body.cr-ink .cr-led.red {
+  border-width: 1px;
+  box-shadow: none;
+}
+
+body.cr-ink :is(.cr-btn, .cr-more-btn, .cr-route-btn, .cr-viewseg button, .cr-chip.clickable):focus-visible {
+  outline: 2px solid var(--sumi-seal);
+  outline-offset: 2px;
+}
+
+/* ── panels, menus, sheets: paper cards that lift, not bevelled boxes ── */
+body.cr-ink :is(
+    .cr-more-menu,
+    .cr-routing-menu,
+    .cr-tune-menu-panel,
+    .tf-panel,
+    .cr-bevel,
+    .door-moved-card,
+    .spawn-toast,
+    .cr-acct-lockcard,
+    .cr-embed-drawer
+  ),
+body.cr-ink .cr-sheet.gs-sheet,
+body.cr-ink .cr-wsw-sheet .cr-ws-new {
+  border: 1px solid var(--sumi-hair-2);
+  border-radius: 12px;
+  background: var(--sumi-card);
+  box-shadow: var(--sumi-lift);
+}
+
+/* The tune menu was a CRT panel (amber on black); on paper its phosphor
+   tokens mean the paper's own, as they do in the zoomed terminal. */
+body.cr-ink .cr-tune-menu-panel {
+  --phos-bg: var(--sumi-card);
+  --phos: var(--sumi-ink);
+  --phos-dim: var(--sumi-muted);
+  --phos-glow: var(--sumi-seal-text);
+}
+
+/* A close that loses something says so with an ink edge. */
+body.cr-ink .confirm-close.danger {
+  box-shadow: inset 3px 0 0 var(--sumi-ink), var(--sumi-lift);
+}
+
+body.cr-ink :is(.tf-scrim, .gk-scrim, .gs-scrim),
+body.cr-ink .cr-sheet.gs-scrim {
+  background: var(--sumi-scrim);
+}
+
+body.cr-ink :is(.tf-title, .cr-acct-lockcard h2),
+body.cr-ink .cr-sheet .gs-sheet-head h2 {
+  font-family: var(--font-serif);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--sumi-ink);
+}
+
+body.cr-ink .cr-sheet .gs-input {
+  border: 1px solid var(--sumi-rule);
+  border-radius: 8px;
+  background: var(--sumi-paper);
+}
+
+body.cr-ink .cr-sheet .gs-input:focus {
+  border-color: var(--sumi-seal);
+  box-shadow: 0 0 0 3px var(--sumi-gold-soft);
+  outline: none;
+}
+
+/* ── names in ink serif ── */
+body.cr-ink .popout-name {
+  font-family: var(--font-serif);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+body.cr-ink .cr-pet-card-name {
+  font-family: var(--font-serif);
+  font-size: 15px;
+}
+
+/* ── the pets: paper, a hairline, a soft lift (the agents' troop has no pill) ── */
+body.cr-ink .cr-pets:not(.right) {
+  border: 1px solid var(--sumi-hair-2);
+  background: var(--sumi-card);
+  box-shadow: var(--sumi-lift);
+}
+
+body.cr-ink .cr-pet-card {
+  border: 1px solid var(--sumi-hair-2);
+  background: var(--sumi-card);
+  box-shadow: 0 14px 36px var(--sumi-shadow);
+}
