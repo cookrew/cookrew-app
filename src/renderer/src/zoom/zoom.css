@@ -1903,6 +1903,13 @@
   .zv-nm {
     max-width: 112px;
   }
+  /* The crew's small words: a phone's crew is drawn at ~0.95 (0.86 on a 375px
+     phone), so 10px read at ~6-9px; at 11px they read at 9.4px or more
+     (Gauge, 2026-11-01; tests/zoom-phone-crew-words.test.ts). */
+  .zv-scene .zv-st,
+  .zv-scene .zv-cnt {
+    font-size: 11px;
+  }
   /* The open workspace's label in the marks' form: seal and name in 130px
      (380 when it grows by 2.9 on the device stop, as wide as theirs), its
      totals on a line below. */
