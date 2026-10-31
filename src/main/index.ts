@@ -5,7 +5,7 @@ import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { WorkspaceStore } from './store'
-import { PtyManager, multiplexer, sessionNameFor } from './pty'
+import { PtyManager, multiplexer, paneSizes, sessionNameFor } from './pty'
 import { buildInbox, type InboxNode } from './inbox'
 import { cachedDispatchReader, wireInbox } from './inbox-wiring'
 import { createWindowHold } from './inbox-window-hold'
@@ -6391,6 +6391,8 @@ let appShutdownStarted = false
 let appShutdownComplete = false
 
 app.on('before-quit', (event) => {
+  // The sizes panes last had, so their mirrors start at them next launch (pane-sizes.ts).
+  paneSizes().flush()
   if (appShutdownComplete) return
   event.preventDefault()
   if (appShutdownStarted) return
