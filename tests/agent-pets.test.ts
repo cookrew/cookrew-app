@@ -210,7 +210,10 @@ describe('the wiring', () => {
   const css = readFileSync('src/renderer/src/pets/pets.css', 'utf8')
 
   it('both troops ride over every page: mounted in App, portalled to the body, under the scrims', () => {
-    expect(app).toContain('<AgentPets workspace={workspace} workspaceId={activeWsId} onOpen={zoomToNode} onCard={openAgentCard} />')
+    expect(app).toMatch(/<AgentPets\s+workspace=\{workspace\}\s+workspaceId=\{activeWsId\}\s+onOpen=\{zoomToNode\}\s+onCard=\{openAgentCard\}/)
+    // In a full view both attach to its panel (pet-dock.ts).
+    expect(app).toContain("dock={view === 'stage' && zoomFull !== null ? fullDock.agents : null}")
+    expect(app).toContain("dock={view === 'stage' && zoomFull !== null ? fullDock.items : null}")
     expect(app).toContain('<ItemPets')
     expect(troop).toContain('document.body')
     expect(css).toMatch(/\.cr-pets \{[^}]*z-index: 55;/)

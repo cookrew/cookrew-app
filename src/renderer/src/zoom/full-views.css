@@ -24,11 +24,14 @@
   --fv-serif: var(--sumi-serif, 'Iowan Old Style', Palatino, Georgia, serif);
   --fv-mono: var(--font-mono, ui-monospace, 'SF Mono', Menlo, monospace);
 
+  /* The lanes an attached side group takes beside the sheet (pets/pet-dock.ts). */
+  --fv-lane-left: 0px;
+  --fv-lane-right: 0px;
   position: absolute;
   inset: 0;
   display: flex;
   flex-direction: column;
-  padding: 14px 14px 10px;
+  padding: 14px calc(14px + var(--fv-lane-right)) 10px calc(14px + var(--fv-lane-left));
   background-color: var(--fv-paper);
   background-image: radial-gradient(var(--sumi-grain, rgba(120, 100, 70, 0.06)) 1px, transparent 1px);
   background-size: 3px 3px;
@@ -38,7 +41,7 @@
 .zv-fullview::after {
   content: '';
   position: absolute;
-  inset: 78px 14px 12px;
+  inset: 78px calc(14px + var(--fv-lane-right)) 12px calc(14px + var(--fv-lane-left));
   z-index: 0;
   border-radius: 16px;
   background: var(--fv-card);
@@ -186,4 +189,24 @@
   .zv-fv-who small { gap: 7px; font-size: 9.5px; }
   .zv-fv-used { width: 100%; margin-left: 0; }
   .zv-fullview .ctx-transcript { padding-left: 12px; padding-right: 12px; }
+}
+
+/* ---- the side groups, attached (pets/PetTroop.tsx, pets/pet-dock.ts) ----
+   As group-motion-pivot.html draws the full view: the panel in the middle,
+   the crew a column of faces beside it on the right, the browsers and notes
+   one on the left. On a wide screen the sheet steps in by a lane for each
+   attached group; below 900px there is no width to spare, and the columns
+   stand over the sheet's edges instead (pet-dock.ts · NARROW_PX). */
+body.cr-docked-left .zv-fullview {
+  --fv-lane-left: 56px;
+}
+body.cr-docked-right .zv-fullview {
+  --fv-lane-right: 56px;
+}
+@media (max-width: 899px) {
+  body.cr-docked-left .zv-fullview,
+  body.cr-docked-right .zv-fullview {
+    --fv-lane-left: 0px;
+    --fv-lane-right: 0px;
+  }
 }

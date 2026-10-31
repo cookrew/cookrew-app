@@ -118,7 +118,7 @@ import {
   type CanvasVisualMode
 } from './canvas-visual-mode'
 import { CableHarness } from './CableHarness'
-import { stageSelect } from './stage/stage-select'
+import { ownersOf, stageSelect, useStageSelection } from './stage/stage-select'
 import { AgentPets } from './pets/AgentPets'
 import { ItemPets } from './pets/ItemPets'
 import { thumbWants } from './pets/thumb-wants'
@@ -206,6 +206,8 @@ function Canvas(): React.JSX.Element {
   const interactiveBrowser = interactiveCapability?.enabled ?? null
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null)
   const zoomFull = useZoomFull()
+  /** The stage's pick: in a browser's or note's full view, which one it is (the side groups attach around it). */
+  const stagePick = useStageSelection()
   const [nodes, setNodes] = useState<Node[]>([])
   const [canvasVisualMode, setCanvasVisualMode] = useState<CanvasVisualMode>(storedCanvasVisualMode)
   const [tool, setTool] = useState<ToolId>('move')
@@ -1445,6 +1447,17 @@ function Canvas(): React.JSX.Element {
     if (!sameAttachmentIndex(attachIndexRef.current, next)) attachIndexRef.current = next
     return attachIndexRef.current
   }, [workspace?.nodes, workspace?.connections])
+  // What a full view shows, for the side groups that attach to it: never the
+  // card on the panel; around a browser or note, the agents wired to it first.
+  const fullItemId = zoomFull === 'item' && stagePick.kind === 'item' ? stagePick.id : null
+  const fullAgentId = zoomFull === 'agent' ? (stageShowing?.terminalId ?? null) : null
+  const fullDock = useMemo(
+    () => ({
+      agents: { exclude: fullAgentId, first: fullItemId ? (ownersOf(attachIndex).get(fullItemId) ?? []) : [] },
+      items: { exclude: fullItemId }
+    }),
+    [fullAgentId, fullItemId, attachIndex]
+  )
   const terminals = useMemo(
     () => (workspace?.nodes.filter((n) => n.kind === 'terminal') ?? []) as TerminalNodeData[],
     [workspace?.nodes]
@@ -1699,10 +1712,21 @@ function Canvas(): React.JSX.Element {
         {/* The crew, and the browsers and notes, as pets over every page: hover
             for a card, click to open it (pets/). On the stage they ride at the
             full view only — the navigator draws the crew everywhere else. */}
-        {(zoomFull !== null || view !== 'stage') && <AgentPets workspace={workspace} workspaceId={activeWsId} onOpen={zoomToNode} onCard={openAgentCard} />}
+        {(zoomFull !== null || view !== 'stage') && (
+          <AgentPets
+            workspace={workspace}
+            workspaceId={activeWsId}
+            onOpen={zoomToNode}
+            onCard={openAgentCard}
+            // In a full view both groups attach to its panel (pets/pet-dock.ts),
+            // as group-motion-pivot.html draws them.
+            dock={view === 'stage' && zoomFull !== null ? fullDock.agents : null}
+          />
+        )}
         {(zoomFull !== null || view !== 'stage') && <ItemPets
           workspace={workspace}
           attachIndex={attachIndex}
+          dock={view === 'stage' && zoomFull !== null ? fullDock.items : null}
           onStage={view === 'stage' ? (stageShowing?.terminalId ?? null) : null}
           onOpen={(id, owners) => {
             // The agent on stage's own browser or note opens under its

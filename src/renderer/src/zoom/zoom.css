@@ -1717,8 +1717,8 @@
 
 .zv-newcard {
   position: absolute;
-  left: 26px;
-  top: 40px;
+  right: 24px;
+  bottom: 84px;
   z-index: 60;
   width: 268px;
   display: grid;
