@@ -1,6 +1,5 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useActivitiesSnapshot, useThumb } from '../activity-thumb-store'
-import { CrIcon } from '../icons'
 import { activeBrowserTab, type WorkspaceState } from '../../../shared/model'
 import type { AttachmentIndex } from '../terminal-attachments'
 import { firstLine, hostPath, ownersOf } from '../stage/stage-select'
@@ -8,6 +7,11 @@ import { faviconOf, petMax, pickItems } from './pet-pick'
 import { dockedOrder } from './pet-dock'
 import { PetTroop, type CardControls } from './PetTroop'
 import { thumbWants } from './thumb-wants'
+import { InkAvatar } from '../zoom/InkAvatar'
+import { Page } from '../zoom/ZoomParts'
+import { itemViewOf, type ItemView } from '../zoom/zoom-model'
+import '../zoom/zoom.css'
+import '../zoom/agent-card.css'
 
 /**
  * THE BROWSERS AND NOTES AS PETS — the left-hand troop (PetTroop.tsx).
@@ -20,7 +24,7 @@ import { thumbWants } from './thumb-wants'
  * opening lines; open, it is the browser or the note in full.
  */
 
-interface ItemFace {
+export interface ItemFace {
   readonly id: string
   readonly kind: 'browser' | 'note'
   readonly title: string
@@ -30,6 +34,15 @@ interface ItemFace {
   readonly icon?: string | null
   /** A note's opening lines. */
   readonly body?: string
+  /** As the navigator draws it: the page thumbnail on its card and in the attached column. */
+  readonly view: ItemView
+}
+
+/** An agent as an item card names it: face and name, to open it from there. */
+export interface CrewFace {
+  readonly name: string
+  readonly preset: string
+  readonly orch: boolean
 }
 
 const NOTE_LINES = 8
@@ -54,17 +67,24 @@ export function ItemPets({
 }): React.JSX.Element | null {
   const activities = useActivitiesSnapshot()
   const owners = useMemo(() => ownersOf(attachIndex), [attachIndex])
-  const names = useMemo(() => new Map((workspace?.nodes ?? []).flatMap((n) => (n.kind === 'terminal' ? [[n.id, n.name] as const] : []))), [workspace])
+  const crew = useMemo(
+    () => new Map<string, CrewFace>((workspace?.nodes ?? []).flatMap((n) => (n.kind === 'terminal' ? [[n.id, { name: n.name, preset: n.preset, orch: n.orch }] as const] : []))),
+    [workspace]
+  )
   // Newest first: nodes are kept in creation order.
   const items = useMemo<ItemFace[]>(() => {
     const out: ItemFace[] = []
     for (const n of [...(workspace?.nodes ?? [])].reverse()) {
       if (n.kind === 'browser') {
         const tab = activeBrowserTab(n)
-        out.push({ id: n.id, kind: 'browser', title: tab.title?.trim() || n.name, sub: hostPath(tab.url), owners: owners.get(n.id) ?? [], icon: faviconOf(tab.url) })
+        const ids = owners.get(n.id) ?? []
+        const view = itemViewOf(n, ids)
+        if (view) out.push({ id: n.id, kind: 'browser', title: tab.title?.trim() || n.name, sub: hostPath(tab.url), owners: ids, icon: faviconOf(tab.url), view })
       } else if (n.kind === 'note') {
         const content = n.content ?? ''
-        out.push({ id: n.id, kind: 'note', title: n.name, sub: firstLine(content), owners: owners.get(n.id) ?? [], body: content.split('\n').slice(0, NOTE_LINES).join('\n') })
+        const ids = owners.get(n.id) ?? []
+        const view = itemViewOf(n, ids)
+        if (view) out.push({ id: n.id, kind: 'note', title: n.name, sub: firstLine(content), owners: ids, body: content.split('\n').slice(0, NOTE_LINES).join('\n'), view })
       }
     }
     return out
@@ -96,13 +116,23 @@ export function ItemPets({
     className: `item ${item.kind}${onStage && item.owners.includes(onStage) ? ' mine' : ''}${column.dim.has(item.id) ? ' dim' : ''}`,
     label: `${item.kind === 'browser' ? 'Browser' : 'Note'}: ${item.title}`,
     name: item.title,
-    face:
-      item.kind === 'browser' ? (
-        <BrowserFace id={item.id} icon={item.icon ?? null} title={item.title} />
-      ) : (
-        // A note's face is its first letter on paper, as the item coin draws it.
-        <span className="cr-pet-note-face">{item.title.trim().charAt(0).toUpperCase() || '·'}</span>
-      )
+    face: (
+      <>
+        {/* Floating: a coin. Attached to the full view: the page thumbnail, as
+            group-motion-pivot.html stands the other items beside the panel. */}
+        <span className="cr-pet-coin">
+          {item.kind === 'browser' ? (
+            <BrowserFace id={item.id} icon={item.icon ?? null} title={item.title} />
+          ) : (
+            // A note's face is its first letter on paper, as the item coin draws it.
+            <span className="cr-pet-note-face">{item.title.trim().charAt(0).toUpperCase() || '·'}</span>
+          )}
+        </span>
+        <span className={`zv-th cr-pet-page ${item.kind}`} aria-hidden="true">
+          <Page item={item.view} />
+        </span>
+      </>
+    )
   })
   return (
     <PetTroop
@@ -114,11 +144,21 @@ export function ItemPets({
       dockable={dock !== null}
       onShown={onShown}
       onOpen={(id) => onOpen(id, byId.get(id)?.owners ?? [])}
-      cardClass={(id) => `item ${byId.get(id)?.kind ?? ''}`}
+      cardClass={(id) => `ag-ink item-card item ${byId.get(id)?.kind ?? ''}`}
       cardLabel={(id) => byId.get(id)?.title ?? 'Item'}
       renderCard={(id, controls) => {
         const item = byId.get(id)
-        return item ? <ItemCard item={item} names={names} controls={controls} /> : null
+        return item ? (
+          <ItemCard
+            item={item}
+            crew={crew}
+            controls={controls}
+            onAgent={(agentId) => {
+              controls.close()
+              onOpen(agentId, [])
+            }}
+          />
+        ) : null
       }}
     />
   )
@@ -137,40 +177,68 @@ function BrowserFace({ id, icon, title }: { id: string; icon: string | null; tit
   return <span className="cr-pet-note-face browser">{title.trim().replace(/^[^A-Za-z0-9]*/, '').charAt(0).toUpperCase() || '·'}</span>
 }
 
-function ItemCard({ item, names, controls }: { item: ItemFace; names: ReadonlyMap<string, string>; controls: CardControls }): React.JSX.Element {
-  const thumb = useThumb(item.id)
-  const whose = item.owners.map((id) => names.get(id) ?? '…')
+/**
+ * A browser's or note's card, in the agent card's ink (zoom/agent-card.css):
+ * its seal and name, the page itself as a big thumbnail — the same Page the
+ * navigator and the agent card draw — the address or the note's opening
+ * lines, and the agents that use it, each a way to that agent.
+ */
+export function ItemCard({
+  item,
+  crew,
+  controls,
+  onAgent
+}: {
+  item: ItemFace
+  crew: ReadonlyMap<string, CrewFace>
+  controls: CardControls
+  onAgent: (id: string) => void
+}): React.JSX.Element {
+  const users = item.owners.flatMap((id) => {
+    const face = crew.get(id)
+    return face ? [{ id, ...face }] : []
+  })
   return (
     <>
       <div className="cr-pet-card-head">
-        <span className="cr-pet-card-face item">
-          <CrIcon name={item.kind === 'browser' ? 'browser' : 'note'} />
+        <span className={`cr-pet-card-face item-seal ${item.kind}`} style={item.kind === 'browser' ? { background: item.view.tint } : undefined} aria-hidden="true">
+          {item.kind === 'browser' ? item.view.initial || '·' : '¶'}
         </span>
         <span className="cr-pet-card-who">
           <span className="cr-pet-card-name">{item.title}</span>
           <span className="cr-pet-card-meta">
             <span className="cr-pet-mood">{item.kind}</span>
-            {whose.length > 0 && <span>{whose.join(', ')}</span>}
+            <span>{users.length === 0 ? 'no agent' : `used by ${users.length}`}</span>
           </span>
         </span>
-        <button type="button" className="cr-pet-card-open" onClick={controls.open} title={item.kind === 'browser' ? 'Open the page' : 'Open the note'}>
+        <button type="button" className="cr-pet-card-open" onClick={controls.open} title={item.kind === 'browser' ? 'Open the page (or click its face again)' : 'Open the note (or click its face again)'}>
           OPEN
         </button>
         <button type="button" className="cr-pet-card-x" onClick={controls.close} aria-label="Close">
           ×
         </button>
       </div>
+      <button type="button" className={`zv-th zv-big item-page ${item.kind}`} title={item.title} aria-label={`Open ${item.kind}: ${item.title}`} onClick={controls.open}>
+        <Page item={item.view} big />
+      </button>
       {item.kind === 'browser' ? (
-        <>
-          <div className="cr-pet-card-shot">
-            {thumb ? <img src={thumb} alt={item.title} draggable={false} /> : <span>No picture yet — the Mac takes one while the page is open</span>}
-          </div>
-          <div className="cr-pet-card-url" title={item.sub}>
-            {item.sub || 'about:blank'}
-          </div>
-        </>
+        <div className="item-line" title={item.view.line}>
+          {item.sub || 'about:blank'}
+        </div>
       ) : (
-        <pre className="cr-pet-card-note">{item.body?.trim() || 'An empty note.'}</pre>
+        item.body?.trim() && <pre className="item-note">{item.body.trim()}</pre>
+      )}
+      {users.length > 0 && (
+        <div className="item-users">
+          <em>used by</em>
+          {users.slice(0, 4).map((user) => (
+            <button key={user.id} type="button" className="item-user" title={`Open ${user.name}`} onClick={() => onAgent(user.id)}>
+              <InkAvatar id={user.id} preset={user.preset} orch={user.orch} />
+              <span>{user.name}</span>
+            </button>
+          ))}
+          {users.length > 4 && <span className="item-more">+{users.length - 4}</span>}
+        </div>
       )}
     </>
   )

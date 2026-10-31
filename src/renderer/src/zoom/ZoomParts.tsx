@@ -65,7 +65,7 @@ export function Counts({ browsers, notes, none = 'nothing open' }: { browsers: n
 }
 
 /** A browser's picture: the live thumbnail when there is one, else a drawn page in its tint. */
-function Page({ item, big = false }: { item: ItemView; big?: boolean }): React.JSX.Element {
+export function Page({ item, big = false }: { item: ItemView; big?: boolean }): React.JSX.Element {
   const thumb = useThumb(item.id)
   if (item.kind === 'note') {
     return (

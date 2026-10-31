@@ -72,3 +72,181 @@
     animation: none;
   }
 }
+
+/* ── a browser's or note's card (pets/ItemPets.tsx), in the agent card's ink ──
+   The agent's card is the zoom view's own now (one instance); the navigator
+   has no card for a browser or note, so this one is the troop's, and its
+   frame is drawn here, in the same ink. */
+.cr-pet-card.item-card {
+  width: min(320px, calc(100vw - 16px));
+  gap: 12px;
+  padding: 14px 14px 14px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--zv-card);
+  color: var(--zv-ink);
+  box-shadow:
+    inset 0 0 0 1px var(--zv-hair-2),
+    0 10px 28px var(--zv-shadow);
+}
+
+.item-card .cr-pet-card-head {
+  gap: 12px;
+}
+
+.item-card .cr-pet-card-face {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--zv-paper);
+}
+
+.item-card .cr-pet-card-who {
+  gap: 4px;
+}
+
+.item-card .cr-pet-card-name {
+  font: 600 19px/1.15 var(--zv-serif);
+  color: var(--zv-ink);
+}
+
+.item-card .cr-pet-card-meta {
+  align-items: center;
+  gap: 10px;
+  font: 10.5px/1 var(--zv-mono);
+  color: var(--zv-ink-soft);
+}
+
+.item-card .cr-pet-card-meta > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.item-card .cr-pet-mood {
+  font: 500 10px/1.2 var(--zv-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--zv-ink-soft);
+}
+
+.item-card .cr-pet-card-open,
+.item-card .cr-pet-card-x {
+  border: 0;
+  border-radius: 8px;
+  background: var(--zv-paper);
+  box-shadow: inset 0 0 0 1.5px var(--zv-hair-2);
+  color: var(--zv-ink);
+  font: 600 10px/1 var(--zv-mono);
+  letter-spacing: 0.08em;
+}
+
+.item-card .cr-pet-card-x {
+  border: 0;
+  border-radius: 8px;
+  background: var(--zv-paper);
+  box-shadow: inset 0 0 0 1.5px var(--zv-hair-2);
+  color: var(--zv-ink);
+  font: 600 10px/1 var(--zv-mono);
+  letter-spacing: 0.08em;
+}
+
+.item-card .cr-pet-card-open:hover,
+.item-card .cr-pet-card-x:hover {
+  background: var(--zv-paper-2);
+}
+
+.item-card .item-seal {
+  font: 600 22px/1 var(--zv-mono);
+  color: var(--zv-on-tint, #fbf8f1);
+}
+
+.item-card.note .item-seal {
+  font: 600 24px/1 var(--zv-serif);
+  color: var(--zv-ink-soft);
+  background: var(--zv-paper);
+}
+
+/* The page itself: the navigator's big thumbnail, a live picture when the Mac has one. */
+.item-card .item-page {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 168px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px var(--zv-shadow-sm);
+  cursor: pointer;
+  text-align: left;
+}
+
+.item-card .item-page:hover {
+  box-shadow:
+    0 0 0 1.5px var(--zv-seal),
+    0 2px 8px var(--zv-shadow-sm);
+}
+
+.item-card .item-page.note {
+  height: 120px;
+}
+
+.item-card .item-line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 10.5px/1.2 var(--zv-mono);
+  color: var(--zv-ink-soft);
+}
+
+.item-card .item-note {
+  max-height: 110px;
+  margin: 0;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 12.5px/1.45 var(--zv-serif);
+  color: var(--zv-ink);
+}
+
+/* Who uses it: each agent a way to that agent, as the agent card's thumbnails are to its items. */
+.item-card .item-users {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font: 10.5px/1 var(--zv-mono);
+  color: var(--zv-muted);
+}
+
+.item-card .item-users em {
+  font-style: normal;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.item-card .item-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px 2px 2px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--zv-paper);
+  color: var(--zv-ink);
+  font: 600 11.5px/1 var(--zv-serif);
+  cursor: pointer;
+}
+
+.item-card .item-user:hover {
+  box-shadow: inset 0 0 0 1.5px var(--zv-seal);
+}
+
+.item-card .item-user svg,
+.item-card .item-user .ink-avatar {
+  width: 22px;
+  height: 22px;
+}
