@@ -201,8 +201,8 @@ describe('the wiring', () => {
   const app = readFileSync('src/renderer/src/App.tsx', 'utf8')
   const css = readFileSync('src/renderer/src/pets/pets.css', 'utf8')
 
-  it('both troops ride over every page: mounted in App, portalled to the body, under the scrims', () => {
-    expect(app).toContain('<AgentPets workspace={workspace} workspaceId={activeWsId} onOpen={zoomToNode} />')
+  it('the item troop rides over every page: mounted in App, portalled to the body, under the scrims; the crew troop is not mounted', () => {
+    expect(app).not.toContain('<AgentPets')
     expect(app).toContain('<ItemPets')
     expect(troop).toContain('document.body')
     expect(css).toMatch(/\.cr-pets \{[^}]*z-index: 55;/)
