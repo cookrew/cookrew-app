@@ -577,6 +577,7 @@ export function createRemoteApi(): CookrewApi {
       const result = await req<{ agents: unknown[] }>(apiPath('/api/agents'))
       return result.agents
     },
+    onAgentChanged: (cb) => subscribe('agent', cb),
     listBoard: (window?: string) =>
       req<BoardSnapshotLike>(
         apiPath(`/api/board${window ? `?window=${encodeURIComponent(window)}` : ''}`)

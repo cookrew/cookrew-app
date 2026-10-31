@@ -45,6 +45,9 @@ class Session extends EventEmitter {
     return Date.now() - this.lastOut
   }
   /** The agent paints: the screen grows and the bytes arrive. */
+  type(bytes: string): void {
+    this.emit('input', bytes)
+  }
   paint(chunk: string): void {
     this.text += `${chunk}\n`
     this.lastOut = Date.now()
@@ -118,14 +121,33 @@ describe('done follows the finished turn without the long quiet', () => {
     expect(turns.phaseOf('t1')).toBe('replied')
   })
 
-  it('keeps the long quiet when herdr only says idle (it has stuck before)', () => {
+  it('ends just as soon when herdr says idle rather than done (round-2 eval: 3 of 8 ends took 2.7 s)', () => {
     const { turns, s } = start()
     s.paint(ENDED)
     herdr.set(s.sessionName, 'idle')
     vi.advanceTimersByTime(1200)
-    expect(turns.phaseOf('t1')).toBe('thinking')
-    vi.advanceTimersByTime(2400)
     expect(turns.phaseOf('t1')).toBe('replied')
+  })
+
+  it('never ends early while herdr still says working', () => {
+    const { turns, s } = start()
+    s.paint(ENDED)
+    herdr.set(s.sessionName, 'working')
+    vi.advanceTimersByTime(3000)
+    expect(turns.phaseOf('t1')).toBe('thinking')
+  })
+
+  it('does not take the LAST turn\'s finished line for this one (a new prompt, before its spinner)', () => {
+    const turns = new TurnTracker(async () => null)
+    const s = new Session('t1')
+    s.text = `${PROMPT}⏺ earlier answer\n\n✻ Baked for 16s\n❯ \n`
+    turns.track(s as unknown as PtySession, true)
+    herdr.set(s.sessionName, 'done') // stale: the hook has not reported the new turn yet
+    s.type('Status probe C\r')
+    expect(turns.phaseOf('t1')).toBe('thinking')
+    s.paint('❯ Status probe C') // the echo, then nothing for a while: the model is thinking
+    vi.advanceTimersByTime(2000)
+    expect(turns.phaseOf('t1')).toBe('thinking')
   })
 
   it('never ends on herdr done while a spinner is still the last status line', () => {

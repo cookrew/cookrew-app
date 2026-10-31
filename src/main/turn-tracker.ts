@@ -41,6 +41,7 @@ import {
   detectAttention,
   detectLiveWork,
   detectTurnEnded,
+  lastStatusLine,
   extractPromptEcho,
   feedPromptBuffer,
   type PromptFeed,
@@ -431,6 +432,11 @@ interface TrackedTerminal {
    * boot phantom is never mistaken for input-less boot noise at finalize.
    */
   sawInputThisTurn: boolean
+  /**
+   * The screen's last status line when this turn opened (lastStatusLine): the
+   * PREVIOUS turn's finished line, which must not end this one.
+   */
+  startStatus: string | null
   /** Epoch ms of the last self-heal viewport scan (throttle). */
   lastHealScanAt: number
   /**
@@ -1990,6 +1996,7 @@ export class TurnTracker extends EventEmitter {
       heldInput: '',
       lastSubmitAt: 0,
       sawInputThisTurn: false,
+      startStatus: null,
       lastHealScanAt: 0,
       // A mark that predates this attachment (set, then the view detached
       // and re-tracked) means the REAL box holds owner bytes this fresh
@@ -2355,8 +2362,12 @@ export class TurnTracker extends EventEmitter {
         this.schedulePush(terminalId)
         return
       }
-      // A picker or a quit is not an exchange: no turn, no working face.
+      // A picker or a quit is not an exchange: no turn, no working face —
+      // and no submit stamp either, or the picker's own drawing (and the
+      // transcript repaint when it closes, "⏺ …" / "✻ Churned for 7s") reads
+      // as agent output answering a submit and self-heals a turn anyway.
       if (isUiCommand(prompt)) {
+        t.lastSubmitAt = 0
         this.schedulePush(terminalId)
         return
       }
@@ -2655,6 +2666,7 @@ export class TurnTracker extends EventEmitter {
     // Monotonic tmux anchor when available; the screen-derived count is the
     // non-tmux fallback only (under tmux it saturates at pane rows).
     t.turnStartLine = t.session.scrollAnchor?.() ?? scrollLineOf(t.snapshot)
+    t.startStatus = lastStatusLine(t.session.viewportText())?.text ?? null
     t.phase = 'thinking'
     t.lastSubmitAt = 0
     t.sawInputThisTurn = true
@@ -2809,6 +2821,7 @@ export class TurnTracker extends EventEmitter {
       t.snapshot = t.session.fullText()
     t.outputRev += 1
       t.turnStartLine = t.session.scrollAnchor?.() ?? scrollLineOf(t.snapshot)
+      t.startStatus = lastStatusLine(t.session.viewportText())?.text ?? null
       t.turnStartedAt = Date.now()
       // Prompt-of-record, strongest first: a confirmed native delivery's
       // EXACT text (noteDispatchDelivered — the screen may show a collapsed
@@ -2889,11 +2902,18 @@ export class TurnTracker extends EventEmitter {
     // which is the feed's real value — but not FOREVER: a detector stuck at
     // 'working' would otherwise pin the turn open for the rest of the run.
     if (reported === 'working' && t.session.idleFor() < WORKING_TRUST_MS) return
-    // herdr's 'done' is its own working→idle observation; with the screen's
-    // last status line finished too, a short settle is enough. A bare 'idle'
-    // has stuck before and never shortens anything.
-    const settle = reported === 'done' && detectTurnEnded(t.session.viewportText()) ? DONE_SETTLE_MS : QUIESCENCE_MS
-    if (t.session.idleFor() < settle) return
+    // A NEW finished status line ("✻ Baked for 16s") as the screen's last one
+    // is the turn's own end: a short settle is enough. New = not the line that
+    // was last when this turn opened — that one is the previous turn's, still
+    // on screen while a new prompt waits for its first spinner. herdr only
+    // vetoes here ('working' held above, 'blocked' taken above); its 'done'
+    // and 'idle' arrive interchangeably at a turn's end (measured).
+    const idle = t.session.idleFor()
+    if (idle < DONE_SETTLE_MS) return
+    if (idle < QUIESCENCE_MS) {
+      const last = lastStatusLine(t.session.viewportText())
+      if (!last?.finished || last.text === t.startStatus) return
+    }
 
     const delta = diffOutput(t.snapshot, t.session.fullText())
     // Agents pause well past quiescence mid-turn (long tool calls, slow

@@ -460,6 +460,11 @@ const api = {
   queryEvents: (query: unknown) => ipcRenderer.invoke('events:query', query),
   countEvents: (query: unknown) => ipcRenderer.invoke('events:count', query),
   listAgents: () => ipcRenderer.invoke('agents:list'),
+  onAgentChanged: (cb: (entry: unknown) => void) => {
+    const listener = (_e: unknown, entry: unknown): void => cb(entry)
+    ipcRenderer.on('agents:changed', listener)
+    return () => ipcRenderer.removeListener('agents:changed', listener)
+  },
   listBoard: (window?: string) => ipcRenderer.invoke('board:list', window),
   // A board panel that stays open: the probe runs while at least one of
   // these holds, and every change arrives pushed instead of polled.

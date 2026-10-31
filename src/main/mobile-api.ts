@@ -1735,6 +1735,11 @@ export async function handleMobileApi(
     request.on("close", () => deps.tuningBus?.removeListener("tuning", onTuning));
     // The inbox rides the same stream, under the board's read gate; the
     // opening frame is the list as it stands, so a phone never polls for it.
+    // The roster rides it too, one changed entry per frame, as /api/agents
+    // serves it (agent-registry onChange): a page never refetches the list.
+    // Optional-called: a server embedding a bare roster (tests, older hosts) just has no frames.
+    const offAgent = deps.agents?.onChange?.((entry) => send("agent", entry));
+    if (offAgent) request.on("close", offAgent);
     if (deps.inbox && (!deps.pairingToken || canRead)) {
       // A read-only (wall) token sees the projection only (HP contract).
       const project = (rows: InboxRow[]): unknown => (hasPairing || !deps.pairingToken ? rows : wallProjection(rows));

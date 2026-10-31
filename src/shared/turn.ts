@@ -795,17 +795,22 @@ export function latestTailLines(text: string): number | null {
 }
 
 /**
- * True when the LAST status line on the screen reads as a finished turn
- * ("✻ Baked for 16s"), as opposed to a live spinner or no status line at all.
- * Read bottom-up, so a live spinner painted after an old finished line wins.
+ * The LAST status line on a screen, read bottom-up (so a live spinner painted
+ * after an old finished line wins), and whether it reads as a finished turn
+ * ("✻ Baked for 16s"). Null when the screen has no status line.
  */
-export function detectTurnEnded(screen: string): boolean {
+export function lastStatusLine(screen: string): { text: string; finished: boolean } | null {
   const lines = stripTermNoise(screen).replace(CSI_RE, '').split('\n')
   for (let i = lines.length - 1, seen = 0; i >= 0 && seen < 30; i -= 1, seen += 1) {
     const spinner = SPINNER_LINE_RE.exec(lines[i])
-    if (spinner) return COMPLETED_STATUS_RE.test(spinner[1].trim())
+    if (spinner) return { text: lines[i].trim(), finished: COMPLETED_STATUS_RE.test(spinner[1].trim()) }
   }
-  return false
+  return null
+}
+
+/** True when the last status line on the screen reads as a finished turn. */
+export function detectTurnEnded(screen: string): boolean {
+  return lastStatusLine(screen)?.finished === true
 }
 
 export function detectLiveWork(chunk: string): boolean {
