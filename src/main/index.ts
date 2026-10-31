@@ -237,6 +237,7 @@ import { HeadlessBrowserManager } from './headless-browser-manager'
 import { HeadlessBrowserCommandEngine } from './headless-browser-command'
 import { reapOrphanBrowserProfiles, removeBrowserProfile } from './browser-profile-store'
 import { reapOrphanChrome } from './orphan-chrome'
+import { staleAgentIds } from './agent-reconcile'
 import { purgeRegenerableProfileData, reapOrphanPartitions } from './browser-storage-gc'
 
 import { TraceReader, type SessionWatchSpec } from './trace'
@@ -3099,6 +3100,42 @@ function dampedSpawnSession(
  * tiny reads per sweep, and a card whose process has moved house is rebound
  * within ORACLE_SWEEP_MS instead of the 33 hours measured on 2026-09-05.
  */
+/**
+ * THE REGISTRY OUTLIVES NOTHING IT DESCRIBES (agent-reconcile.ts).
+ *
+ * `active` flips only on an explicit dismiss/kill/exit event, so a pane lost
+ * without one — a herdr restart, a dead login session, a crash — leaves a
+ * card claiming to be a resting agent with a prompt box. Measured 2026-10-31:
+ * Beacon had eight such entries, the oldest sixteen weeks old.
+ *
+ * One multiplexer listing per sweep (a synchronous herdr child), and NOTHING
+ * is marked when the multiplexer cannot be seen: blindness is not absence.
+ */
+function reconcileAgentLiveness(): void {
+  try {
+    const mux = multiplexer()
+    if (!mux?.available()) return
+    const sessions = new Set(mux.listSessions())
+    const entries = agents.list()
+    const live = new Set(
+      entries
+        .filter((e) => ptys.get(e.id) !== undefined || sessions.has(sessionNameFor(e.id)))
+        .map((e) => e.id)
+    )
+    const exempt = new Set(entries.filter((e) => servedSpawnContexts.has(e.workspaceId)).map((e) => e.id))
+    const stale = staleAgentIds({ entries, observable: true, live, exempt })
+    for (const id of stale) agents.deactivate(id)
+    if (stale.length > 0) {
+      console.error(`Reconciled ${stale.length} stale agent entr${stale.length === 1 ? 'y' : 'ies'}`)
+    }
+  } catch (error) {
+    console.error('Agent liveness reconcile failed:', error)
+  }
+}
+const livenessSweep = setInterval(reconcileAgentLiveness, 5 * 60_000)
+livenessSweep.unref()
+setTimeout(reconcileAgentLiveness, 30_000).unref()
+
 const oracleSweep = setInterval(() => {
   // A cold pane-pid lookup is a synchronous herdr child process, so at most
   // ONE per tick: a fleet that all boots at once warms up over a few sweeps
