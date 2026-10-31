@@ -31,7 +31,7 @@ import { terminalKeyIntent } from './terminal-key-intent'
 import { pasteFromClipboard } from './terminal-clipboard'
 import { registerTerminalPaste } from './terminal-paste-bus'
 import { attachImeBridge } from './ime-input-bridge'
-import { attachTextareaPad } from './textarea-pad'
+import { attachTextareaPad, withoutPad } from './textarea-pad'
 import { CrIcon } from './icons'
 import { TranslateButton } from './TranslateButton'
 import { languageByCode } from '../../shared/translate'
@@ -950,12 +950,17 @@ function TerminalOverlay({
       // deciding about (a count cannot see that — see withoutWhatXtermJustSent).
       let xtermDataCount = 0
       let xtermRecent: { at: number; text: string }[] = []
-      const inputSub = term.onData((input) => {
+      // A phone keeps padding in xterm's field (textarea-pad.ts): never sent.
+      const padded = isRemoteMode()
+      const inputSub = term.onData((data) => {
+        const input = padded ? withoutPad(data) : data
+        // Counted even when it was all padding: xterm claimed the event, and the bridge must not send it again.
+        xtermDataCount += 1
+        if (input.length === 0) return
         // Typing here is using this viewer: the first key after a pause takes
         // the pane's size back (claimSize), the rest only keep it.
         if (!owns()) claimSize()
         else owner.use(Date.now())
-        xtermDataCount += 1
         xtermRecent = [...xtermRecent.slice(-15), { at: Date.now(), text: input }]
         cookrew().ptyInput(node.id, input)
       })

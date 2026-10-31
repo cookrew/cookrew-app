@@ -11,7 +11,7 @@
 // it) or before xterm's own timers have read it.
 
 import { describe, expect, it } from 'vitest'
-import { PAD, attachTextareaPad, needsSeed } from '../src/renderer/src/textarea-pad'
+import { PAD, attachTextareaPad, needsSeed, withoutPad } from '../src/renderer/src/textarea-pad'
 
 class FakeArea extends EventTarget {
   value = ''
@@ -47,11 +47,19 @@ describe('needsSeed', () => {
     expect(needsSeed('')).toBe(true)
     expect(needsSeed('   ')).toBe(true)
   })
-  it('a field with room to delete', () => {
+  it('bare padding', () => {
     expect(needsSeed(PAD)).toBe(false)
-    expect(needsSeed(PAD + 'hello')).toBe(false)
   })
-  it('a field typed long', () => {
+  // Phone report (2026-11-01, Samsung keyboard, pinyin): every word went out
+  // again with all the words before it and the padding — the sentence so far,
+  // 32 spaces, the sentence one word longer, ... The field kept every word typed since the last
+  // Enter; when the keyboard touched anything before the caret, xterm's
+  // "what changed" (new.replace(old, '')) found nothing and sent the whole
+  // field. Typed text never stays in the field now, as the streamed browser's
+  // keyboard does it (useRemoteKeyboard.ts: re-seed after every edit).
+  it('any typed text, a word or a page', () => {
+    expect(needsSeed(PAD + 'hello')).toBe(true)
+    expect(needsSeed(PAD + '修复')).toBe(true)
     expect(needsSeed(PAD + 'x'.repeat(600))).toBe(true)
   })
 })
@@ -80,12 +88,15 @@ describe('the field never runs dry', () => {
     expect(area.value).toBe(PAD)
   })
 
-  it('leaves typed text alone while there is room', () => {
+  it('takes typed text back out once xterm has read it, so no later edit can send it again', () => {
     const { area, flush } = harness()
-    area.value = PAD + 'hey'
+    area.value = PAD + '修复'
     area.fire('input')
+    // xterm's timer, queued at keydown, reads the field first.
+    expect(area.value).toBe(PAD + '修复')
     flush()
-    expect(area.value).toBe(PAD + 'hey')
+    expect(area.value).toBe(PAD)
+    expect(area.cursor).toBe(PAD.length)
   })
 })
 
@@ -98,6 +109,44 @@ describe('what it must not touch', () => {
     flush()
     area.fire('focus')
     expect(area.value).toBe('a')
+  })
+
+  // Measured (headless xterm, CDP compositions, 2026-11-01): every input of a
+  // composition queued a re-seed BEFORE compositionend, so they ran before
+  // xterm's own commit timer (queued AT compositionend) and the committed word
+  // was gone when xterm read the field: nothing sent at all.
+  it('the committed word until xterm has read it, though the composition typed into it', () => {
+    const area = new FakeArea()
+    const queue: (() => void)[] = []
+    const later = (fn: () => void): (() => void) => {
+      queue.push(fn)
+      return () => undefined
+    }
+    // xterm's CompositionHelper: on compositionend it reads the field on its own timer.
+    let xtermRead: string | null = null
+    area.addEventListener('compositionend', () => void later(() => (xtermRead = area.value)))
+    attachTextareaPad(area, later)
+    area.fire('compositionstart')
+    area.value = PAD + 'x'
+    area.fire('input')
+    area.value = PAD + '修复'
+    area.fire('input')
+    area.fire('compositionend')
+    while (queue.length) queue.shift()!()
+    expect(xtermRead).toBe(PAD + '修复')
+    expect(area.value).toBe(PAD)
+  })
+
+  it('a re-seed queued before a composition began, once it has', () => {
+    const { area, flush } = harness()
+    area.value = PAD + 'a'
+    area.fire('input')
+    area.fire('compositionstart')
+    area.value = PAD + 'a' + 'x'
+    area.fire('compositionend')
+    // The input's timer runs first; the composition overtook it, so it stands down.
+    flush()
+    expect(area.value).toBe(PAD)
   })
 
   it('tops up once the composition has been committed', () => {
@@ -118,5 +167,23 @@ describe('what it must not touch', () => {
     flush()
     area.fire('focus')
     expect(area.value).toBe('')
+  })
+})
+
+describe('the padding is never sent', () => {
+  it('a send of the whole field loses the padding and keeps what was typed', () => {
+    expect(withoutPad(PAD + '输入')).toBe('输入')
+    // A Backspace or two may have eaten into it first.
+    expect(withoutPad(PAD.slice(3) + '输入')).toBe('输入')
+  })
+  it('a send of nothing but padding is nothing', () => {
+    expect(withoutPad(PAD)).toBe('')
+    expect(withoutPad(PAD.slice(5))).toBe('')
+  })
+  it('leaves what a person types alone: a space, a few, an indented line, a paste', () => {
+    expect(withoutPad(' ')).toBe(' ')
+    expect(withoutPad('    if (x) {')).toBe('    if (x) {')
+    expect(withoutPad('\x1b[200~' + PAD + 'x\x1b[201~')).toBe('\x1b[200~' + PAD + 'x\x1b[201~')
+    expect(withoutPad('\x7f')).toBe('\x7f')
   })
 })
