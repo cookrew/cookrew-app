@@ -19,16 +19,16 @@ export interface Frame {
 
 /** Pixel size of every 1400-wide frame in registry/assets/site (an 800-wide twin exists for each). */
 const SIZES: Record<string, [number, number]> = {
-  'intro-1.jpg': [1400, 875],
-  'intro-2.jpg': [1400, 875],
-  'intro-6.jpg': [1400, 875],
-  'qa-board.jpg': [1400, 875],
+  'intro-1.jpg': [1400, 874],
+  'intro-2.jpg': [1400, 874],
+  'intro-6.jpg': [1400, 874],
+  'qa-board.jpg': [1400, 874],
   'qa-canvas.jpg': [1400, 874],
   'promo-poster.jpg': [1400, 874],
-  'qa-history-trace.jpg': [1400, 875],
-  'qa-marketplace.jpg': [1400, 875],
+  'qa-history-trace.jpg': [1400, 874],
+  'qa-marketplace.jpg': [1400, 874],
   'qa-mobile.jpg': [700, 1400],
-  'qa-terminal-rail.jpg': [1400, 875]
+  'qa-terminal-rail.jpg': [1400, 874]
 }
 
 const frame = (file: string, alt: string, caption: string): Frame => {
@@ -49,48 +49,48 @@ export function frameImg(frame: Frame, options: { eager?: boolean; sizes?: strin
 export const FRAMES = {
   canvas: frame(
     'qa-canvas.jpg',
-    "The Cookrew canvas: five agent cards mid-task, wired to the orchestrator that dispatched them",
-    "Rested the pointer on the orchestrator of a working crew: its cables light amber and the rest of the board falls back, so what it owns is the only thing drawn bright. The five cards are on three different harnesses, each showing the brief it was handed and the answer it gave."
+    'One workspace in Cookrew: its agents as ink faces on paper, tied by the cables of who can ask whom',
+    'Clicked Cookrew Dev on the machine: its crew stood on the paper, each agent with its name and state under it, the cables between them showing who can ask whom. Lark, Finch and Moss at the top and bottom were working a small TypeScript package together.'
   ),
   task: frame(
     'intro-1.jpg',
-    "An agent card open on its record: the brief, the tool calls, the test run and the commit",
-    "Clicked an agent open on the turn it had just finished: the brief at the top, the git calls it made, the files it staged, and the commit it wrote — all of it the agent’s own work in a real repository, with the live terminal still running under the LIVE line."
+    'An agent opened to its full transcript: the tool calls, the test run and its reply',
+    'Clicked Lark twice: the card grew into its full transcript, every Bash call in mono, the test run with 22 passing, and the reply in which Lark took Finch’s review of chunk.ts and fixed the guard. The rail on the right counts its checkpoints.'
   ),
   harness: frame(
     'intro-2.jpg',
     "The dock's harness picker: Claude Code, Codex, OpenCode, Pi and a plain shell",
-    "Pressed TERMINAL in the dock over a live canvas: the picker slid up with the five harnesses Cookrew ships, Claude Code lit, the saved teams beside them and + IMPORT A TEAM at the end of the row."
+    'Pressed TERMINAL in the dock: the picker opened with the five harnesses Cookrew ships, the saved teams and + IMPORT A TEAM, and the next click on the paper places an agent on the one chosen.'
   ),
   trace: frame(
     'qa-history-trace.jpg',
-    "A checkpoint rail dragged open, every past turn listed with the title it was given",
-    "Dragged the rail up from its live end: the session’s checkpoints fanned out with the title each turn was given, one row took the focus with ROLE, FORK and REWIND beside it, and the transcript on the left scrolled to that turn — the test runs and the rename, as the agent recorded them."
+    'A checkpoint rail dragged open, every past turn listed with the title it was given',
+    'Pressed the rail at its live end and dragged up: the checkpoints opened as a list of titled turns, the one under the marker offered ROLE, FORK and REWIND, and the transcript followed back to that turn, Add JSDoc comments to export functions.'
   ),
   rail: frame(
     'qa-terminal-rail.jpg',
-    "An agent card open: the transcript on the left, its checkpoints on the rail",
-    "Clicked a working agent open: the transcript holds the turns it has taken this session, the live terminal runs under the LIVE line, and the rail on the right counts the checkpoints — one per turn, written as the turn lands."
+    'An orchestrator’s transcript: the cookrew commands it ran to hand work to its crew',
+    'Scrolled Lark’s transcript back to its first turn: one Bash call dispatched chunk.ts to Finch and kebab-case to Moss with the cookrew CLI, another polled both dispatches for their replies, and the rail on the right kept one checkpoint per turn.'
   ),
   board: frame(
     'qa-board.jpg',
-    "The Board: every agent in the workspace, its harness, its role and what it last did",
-    "Switched the header to BOARD and narrowed it to one workspace: the crew with their harness, role and workspace chips, the prompt each was last given and the answer it made — and the note they wrote, folded into the same stream."
+    'One machine with every workspace at once, each a ring of the agents in it',
+    'Clicked the machine: its seven workspaces laid out as rings, each holding its agents’ faces with the count on its label. A click on a name opens that crew; a click on the paper steps back out to the machines.'
   ),
   mobile: frame(
     'qa-mobile.jpg',
-    "The same canvas at phone width: the same cards, the same cables",
-    "Opened the phone companion against the same live workspace at 390 px with touch emulation: the crew, their cables and the note and page they are working from, in the layout a paired phone serves."
+    'The phone companion showing an agent’s full transcript, the rail down the right edge',
+    'Opened the phone companion against the same Mac at 412 px and tapped Lark twice: its transcript filled the phone, with Finch’s NaN and 1.5 findings and the 22 passing tests, the rail down the right and a key row with arrows and Esc under it.'
   ),
   workspaces: frame(
     'intro-6.jpg',
-    "The workspace wall: every workspace as a screen, this one picked with its snapshot",
-    "Pressed the workspace pill: the wall of workspaces slid in, one tilted screen each, with the shoot’s own workspace picked in front carrying a snapshot of its canvas and its directory under it."
+    'The workspace wall: every workspace as a screen with a snapshot of its paper',
+    'Opened the wall from the header menu: every workspace on this Mac as a tilted screen with a snapshot of its paper, GOAT Team picked in front with its directory under it, and OPEN, DIRECTORIES, REMOVE and HISTORY below.'
   ),
   market: frame(
     'qa-marketplace.jpg',
-    "The cookrew.dev rent strip: a served team taking calls, with what a seat costs",
-    "Opened cookrew.dev signed in: the rent strip lists the instances taking calls with what a seat costs and how many lines were opened at each today, every one carrying BUY A SEAT and OPEN — and under it, the invitation to serve your own."
+    'Import a team: a served team looked up by its cookrew.dev address, with what a seat costs',
+    'Pressed + IMPORT A TEAM, pasted cookrew.dev/@drej/cookrew-alpha and pressed LOOK UP: the sheet answered with the team, COOKREW Alpha at 1 USD a seat with Pilot answering and running the other two on the owner’s side, and CONTINUE — REVIEW THE TERMS.'
   )
 } as const
 

@@ -25,7 +25,7 @@ export const MARKET_DEFINITION =
   'The Cookrew marketplace lists served teams: teams of AI agents that stay on their author’s machine. A caller signs in with a cookrew.dev account, buys a seat once if the team is priced, and gets a sandboxed session of their own. The relay carries encrypted bytes it cannot read; money goes directly from caller to author and cookrew.dev takes no cut.'
 
 export const CHECKPOINT_DEFINITION =
-  'In Cookrew every agent turn is a checkpoint. You can scrub back through a session, fork a new agent from any past turn, and pin a version when a team is exported or called. Exporting or calling never touches the original session.'
+  'In Cookrew every agent turn is a checkpoint. You can scrub back through a session and fork a new agent from any past turn. Exporting, serving or calling a team copies from a checkpoint and never touches the original session.'
 
 /** Dated facts. The date is part of the fact; an undated number is a rumour. */
 export const FACTS = {
@@ -75,7 +75,7 @@ export const FAQ: Faq[] = [
   },
   {
     q: 'Can I use a team from a browser or from my phone?',
-    a: 'Yes. Every team page on cookrew.dev carries the team’s own terminal, the same PTY a placed card gets, drawn in the browser. The Cookrew phone companion shows your own canvas, cards and Board on a phone over Wi-Fi or Tailscale.'
+    a: 'Yes. Every team page on cookrew.dev carries the team’s own terminal, the same PTY a placed card gets, drawn in the browser. The Cookrew phone companion shows your own crew, cards and transcripts on a phone over Wi-Fi or Tailscale.'
   },
   { q: 'What is a checkpoint?', a: CHECKPOINT_DEFINITION },
   {
@@ -96,10 +96,10 @@ export const COMPARE: CompareRow[] = [
   { question: 'How many agents work at once?', chat: 'One assistant', singleAgent: 'One CLI agent per terminal', cookrew: 'A team on one canvas, wired together' },
   { question: 'Can agents hand work to each other?', chat: 'No', singleAgent: 'Sub-agents inside one harness', cookrew: 'Any harness dispatches to any other over one CLI' },
   { question: 'Can you go back to an earlier turn?', chat: 'Scroll up', singleAgent: 'Rewind in some harnesses', cookrew: 'Every turn is a checkpoint; fork an agent from any of them' },
-  { question: 'Can you see the whole team’s state?', chat: 'No', singleAgent: 'One terminal at a time', cookrew: 'The Board: phase, tokens and checkpoint per agent' },
+  { question: 'Can you see the whole team’s state?', chat: 'No', singleAgent: 'One terminal at a time', cookrew: 'Every agent’s state under its name, across machines' },
   { question: 'Can you save and reuse a team?', chat: 'No', singleAgent: 'Config files', cookrew: 'Save a team; create a workspace from it in one command' },
   { question: 'Can someone else use your team?', chat: 'Share a prompt', singleAgent: 'Share a repo', cookrew: 'Serve it at cookrew.dev; they get a live sandboxed session' },
-  { question: 'Works from a phone?', chat: 'Yes', singleAgent: 'No', cookrew: 'The companion: canvas, cards, Board, voice' }
+  { question: 'Works from a phone?', chat: 'Yes', singleAgent: 'No', cookrew: 'The companion: the same zoom, cards, transcripts, voice' }
 ]
 
 export interface FeatureSpec {
@@ -119,9 +119,9 @@ export const FEATURES: FeatureSpec[] = [
   {
     slug: 'canvas',
     title: 'A spatial canvas for AI agents: terminals, notes and browsers',
-    short: 'Every black card is a real terminal running a real agent. Notes and browsers sit beside the agent they are about, and the wires are the org chart.',
+    short: 'Every agent is a real terminal running a real agent. Click in from your machines to a crew, to one agent’s card, to its whole transcript — and click out again.',
     definition:
-      'The Cookrew canvas is an infinite spatial workspace where each agent is a card with a live terminal, a name, a role and a turn tracker; sticky notes hold specs and handovers; browser cards are real Chromium tabs an agent can drive; and wires between cards say who hands work to whom.',
+      'The Cookrew canvas is a zoom you walk by clicking: your machines, a machine’s workspaces, one workspace’s crew tied by ink cables, one agent’s card, and its whole transcript. Each agent is a live terminal with a name, a role and a turn tracker; sticky notes hold specs and handovers; browser cards are real Chromium tabs an agent can drive; and the cables say who hands work to whom.',
     pts: ['Agent terminals with a name, a role and a live turn tracker', 'Sticky notes for specs, reviews and handovers', 'Connected browser cards that agents can drive', 'Wires say who hands work to whom, and who reviews whom'],
     frames: ['canvas', 'task'],
     faq: [
@@ -145,10 +145,10 @@ export const FEATURES: FeatureSpec[] = [
   },
   {
     slug: 'checkpoints',
-    title: 'Every agent turn is a checkpoint: scrub, fork, pin',
-    short: 'Scrub back through a session, fork a new agent from any past turn, pin a version when a team is exported or called.',
+    title: 'Every agent turn is a checkpoint: scrub, fork, rewind',
+    short: 'Scrub back through a session and fork a new agent from any past turn; nothing ever touches the original.',
     definition: CHECKPOINT_DEFINITION,
-    pts: ['The rail beside the live terminal lists every turn as it lands', 'Hold to scrub: the turn list opens, version pins slide past, release to snap back to LIVE', 'Fork from turn N; the original keeps running', 'History trace: each checkpoint carries the block the agent actually produced'],
+    pts: ['The rail beside the live terminal lists every turn as it lands', 'Hold the rail and drag: the transcript follows you back; drag far and the checkpoints open as a list of titled turns', 'Fork from turn N; the original keeps running', 'History trace: each checkpoint carries the block the agent actually produced'],
     frames: ['trace', 'rail'],
     faq: [
       { q: 'What happens to my session when I fork or export?', a: 'Nothing. Forking, exporting and serving all copy from a checkpoint; the original session is never touched.' },
@@ -158,13 +158,13 @@ export const FEATURES: FeatureSpec[] = [
   },
   {
     slug: 'board',
-    title: 'The Board: every agent’s phase, tokens and checkpoint on one screen',
-    short: 'What each agent is doing, how many tokens it has spent, which checkpoint it is on. Notes, forks and session cards mix into one activity stream.',
+    title: 'Every agent’s state at a glance, across machines and workspaces',
+    short: 'Step out to your machines and every workspace shows how many agents it holds; step into one and each agent wears its state under its name.',
     definition:
-      'The Board is Cookrew’s fleet view: one row per agent across workspaces with its phase (working, waiting, unread, offline), token use and latest checkpoint, filterable by preset and role, with notes, forks and session cards folded into a searchable activity stream.',
-    pts: ['active, unread and offline rows, per agent, per workspace', 'Facet chips by preset and role; search narrows the rows', 'Cross-workspace calls show up as what they are', 'Not a log file: a team memory you can scrub'],
+      'Cookrew’s fleet view is the top of the zoom: every machine with its workspaces and how many agents each one holds, and inside a workspace every agent with its state — working, done, resting, offline or waiting on you — under its name. Red is kept for the agent that is waiting on you.',
+    pts: ['Machines, then workspaces, then a crew: one click each', 'Each agent shows working, done, resting, offline or waiting', 'Red is kept for the agent waiting on you', 'The command box gathers what is waiting on you in one list'],
     frames: ['board'],
-    faq: [{ q: 'Does the Board work for offline agents?', a: 'Yes. An agent with no live pane shows as offline with its last checkpoint; its history is still there.' }],
+    faq: [{ q: 'Does the fleet view show offline agents?', a: 'Yes. An agent with no live pane shows as offline under its name; its history is still there.' }],
     related: ['checkpoints', 'workspaces']
   },
   {
@@ -180,11 +180,11 @@ export const FEATURES: FeatureSpec[] = [
   },
   {
     slug: 'mobile',
-    title: 'The phone companion: your canvas, cards and Board on a phone',
+    title: 'The phone companion: your crew, cards and transcripts on a phone',
     short: 'Scan a QR code and the same canvas is in your pocket: tap a card for the full session, dictate a brief, hear the reply.',
     definition:
-      'The Cookrew phone companion is the same workspace served to a phone over Wi-Fi or Tailscale: light mini-cards on the canvas, a full session view per card with its rail, the Board, voice input and spoken replies, and a fixed slug URL per workspace for a bookmark.',
-    pts: ['cookrew mobile prints the QR code; scan it and you are in', 'Light mini-cards so the phone never runs out of memory', 'Voice in, spoken replies out', 'Served teams can be imported from the phone too'],
+      'The Cookrew phone companion is the same workspace served to a phone over Wi-Fi or Tailscale: the same zoom by touch — crew, card, whole transcript with its rail — voice input and spoken replies, and a fixed slug URL per workspace for a bookmark.',
+    pts: ['cookrew mobile prints the QR code; scan it and you are in', 'The same zoom by touch: crew, card, transcript', 'Voice in, spoken replies out', 'Served teams can be imported from the phone too'],
     frames: ['mobile'],
     faq: [{ q: 'Does the phone need the app installed?', a: 'No. The companion is a web page served by your desktop app; a paired phone opens it in any browser.' }],
     related: ['canvas', 'board']

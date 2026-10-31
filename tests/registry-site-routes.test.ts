@@ -130,7 +130,7 @@ describe('the pages', () => {
     const body = await team.text()
     expect(body).toContain('data-door="@drej/cookrew-alpha"')
     expect(body).toContain('https://cookrew.dev/drej/cookrew-alpha')
-    for (const asset of ['xterm.js', 'xterm.css', 'addon-fit.js', 'site.js', 'factors.js', 'seal.js', 'line.js', 'inter.woff2', 'silkscreen-700.woff2']) {
+    for (const asset of ['xterm.js', 'xterm.css', 'addon-fit.js', 'site.js', 'factors.js', 'seal.js', 'line.js', 'inter.woff2']) {
       const got = await get(`/assets/${asset}`)
       expect(got.status, asset).toBe(200)
       expect(got.headers.get('content-type')).toContain(asset.endsWith('.css') ? 'text/css' : asset.endsWith('.woff2') ? 'font/woff2' : 'text/javascript')
@@ -138,6 +138,8 @@ describe('the pages', () => {
     const font = await get('/assets/inter.woff2')
     expect(new Uint8Array(await font.arrayBuffer()).slice(0, 4)).toEqual(new Uint8Array([0x77, 0x4f, 0x46, 0x32]))
     expect((await get('/assets/nope.js')).status).toBe(404)
+    // the pixel lockup's fonts left with it: the ink brand is drawn, not set
+    expect((await get('/assets/silkscreen-700.woff2')).status).toBe(404)
     expect((await get('/assets/../package.json')).status).toBe(404)
   })
 
