@@ -26,7 +26,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { powerSaveBlocker } from 'electron'
 import type { WorkspaceStore } from './store'
 import type { GitInfo, RecoverResult, RestoreResult, WorkspaceState } from '../shared/model'
-import type { PtyManager } from './pty'
+import type { PtyManager, PtySession } from './pty'
 import type { VoiceEngine } from './voice'
 import type { TurnTracker } from './turn-tracker'
 import type { TurnRecord } from '../shared/turn'
@@ -173,6 +173,12 @@ export interface MobileServerDeps {
   /** The app's version for the levels snapshot; injected so this listener never imports electron's app. */
   appVersion?: () => string
   ptys: PtyManager
+  /**
+   * Bring back an agent the app put to sleep (agent-sleep.ts), resolving with
+   * its session once it is ready for input; undefined when it was not asleep.
+   * Absent = no idle sleep (tests, embedders): a missing PTY stays a 404.
+   */
+  wakeAgent?: (terminalId: string) => Promise<PtySession | undefined>
   voice: VoiceEngine
   turns: TurnTracker
   /** Observability event log + agent roster (mobile query endpoints). */
@@ -1660,7 +1666,8 @@ export async function handle(
 
   const inputMatch = url.pathname.match(/^\/api\/terminal\/([^/]+)\/(input|ask)$/)
   if (request.method === 'POST' && inputMatch) {
-    const session = deps.ptys.get(inputMatch[1])
+    // A sleeping agent is woken (resumed on its session) rather than refused.
+    const session = deps.ptys.get(inputMatch[1]) ?? (await deps.wakeAgent?.(inputMatch[1]))
     if (!session) {
       respondJson(response, 404, { error: 'Terminal not running' })
       return

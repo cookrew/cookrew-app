@@ -127,6 +127,17 @@ describe('the pane label IS the session name', () => {
     ])
   })
 
+  it('names the focused pane, so idle sleep never ends what a person is looking at', () => {
+    // agent-sleep.ts: Cookrew's viewer count cannot see the owner's own herdr
+    // client or Alma on the phone; herdr's `focused` flag can.
+    const focused = PANE_LIST([
+      { pane_id: 'w1:p1', label: 'cookrew_abc', focused: true },
+      { pane_id: 'w1:p2', label: 'cookrew_def', focused: false },
+      { pane_id: 'w1:p3', label: null, focused: true }
+    ])
+    expect(mux({ 'pane list': focused }).focusedSessions()).toEqual(['cookrew_abc'])
+  })
+
   it('kills by resolving the label to a pane id', () => {
     const runner = fakeRunner({ 'pane list': listing })
     new HerdrHostMultiplexer({

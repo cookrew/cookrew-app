@@ -210,6 +210,11 @@ export interface Multiplexer {
   sessionExists(name: string): boolean
   /** Session names this backend owns — never foreign ones. */
   listSessions(): string[]
+  /**
+   * Sessions a client of the backend itself has in front of a person (herdr's
+   * focused pane). Optional: absent = the backend cannot say.
+   */
+  focusedSessions?(): string[]
   killSession(name: string): void
 
   /**

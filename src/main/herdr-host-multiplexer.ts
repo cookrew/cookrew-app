@@ -97,6 +97,8 @@ export interface HerdrPane {
   agent_status?: string | null
   terminal_id?: string | null
   cwd?: string | null
+  /** A herdr client (the owner's own herdr, Alma) has this pane in front. */
+  focused?: boolean
   revision?: number
   scroll?: {
     offset_from_bottom?: number
@@ -966,6 +968,14 @@ export class HerdrHostMultiplexer implements Multiplexer {
 
   listSessions(): string[] {
     return this.panes()
+      .map((pane) => pane.label)
+      .filter((label): label is string => typeof label === 'string' && label.length > 0)
+  }
+
+  /** Sessions whose pane a herdr client has focused — someone is at it. */
+  focusedSessions(): string[] {
+    return this.panes()
+      .filter((pane) => pane.focused === true)
       .map((pane) => pane.label)
       .filter((label): label is string => typeof label === 'string' && label.length > 0)
   }
