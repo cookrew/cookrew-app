@@ -33,13 +33,37 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
 }): React.JSX.Element {
   const root = useRef<HTMLDivElement>(null)
   const registry = useRef(new Map<string, HTMLElement>())
+  /**
+   * One handler per node for its whole life, which runs the closure of the
+   * latest render: the memoised nodes (ZoomParts · sameProps) keep their
+   * handler, and a click still does what this render says.
+   */
+  const runs = useRef(new Map<string, () => void>())
+  const trampolines = useRef(new Map<string, () => void>())
+  const stable = (key: string, run: () => void): (() => void) => {
+    runs.current.set(key, run)
+    let fn = trampolines.current.get(key)
+    if (!fn) {
+      fn = () => runs.current.get(key)?.()
+      trampolines.current.set(key, fn)
+    }
+    return fn
+  }
+  /** Bumped when an element joins or leaves the registry: collect's cache key. */
+  const registryVersion = useRef(0)
+  /** Bumped when a web font finishes loading: the measured widths change. */
+  const fontsVersion = useRef(0)
+  const collected = useRef<{ model: unknown; registry: number; fonts: number; els: FrameEls } | null>(null)
   const refs = useRef(new Map<string, (el: HTMLElement | null) => void>())
   const bind = useCallback<Bind>((key) => {
     let fn = refs.current.get(key)
     if (!fn) {
       fn = (el) => {
-        if (el) registry.current.set(key, el)
-        else registry.current.delete(key)
+        if (el) {
+          if (registry.current.get(key) === el) return
+          registry.current.set(key, el)
+        } else if (!registry.current.delete(key)) return
+        registryVersion.current += 1
       }
       refs.current.set(key, fn)
     }
@@ -86,7 +110,20 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   }), [workspace?.nodes, workspace?.connections, workspace?.name, workspaceId, rows, crew.crew, attachIndex, list, fleetWorkspaces, fleet.machines])
   const modelRef = useRef(model)
   modelRef.current = model
+  /**
+   * The painter's elements and their measured widths. Asked for on every
+   * animation frame; built again only when the model, the registered elements
+   * or the loaded fonts changed (it read three offsetWidths per agent and
+   * rebuilt five maps every frame: 158 ms in 12 s of zooming, profiled).
+   */
   const collect = useCallback((): FrameEls | null => {
+    const last = collected.current
+    if (last && last.model === modelRef.current && last.registry === registryVersion.current && last.fonts === fontsVersion.current) return last.els
+    const els = collectNow()
+    collected.current = els ? { model: modelRef.current, registry: registryVersion.current, fonts: fontsVersion.current, els } : null
+    return els
+  }, [])
+  const collectNow = useCallback((): FrameEls | null => {
     const all = registry.current
     const get = (k: string): HTMLElement | null => all.get(k) ?? null
     const base = ['devices', 'device', 'scene', 'panel', 'wash', 'ring', 'label', 'newCap', 'machine'] as const
@@ -123,6 +160,17 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     return { devices: get('devices')!, device: get('device')!, scene: get('scene')!, panel: get('panel')!, wash: get('wash')!, ring: get('ring')!, label: get('label')!, labelW: get('label')!.offsetWidth, newCap: get('newCap')!, machine: get('machine')!, agents, links, items, ties, marks, next: get('newseat') }
   }, [])
   const motion = useZoomMotion(model.frame, collect, root)
+  // A web font that lands later changes every measured width: measure again.
+  useEffect(() => {
+    const fonts = typeof document !== 'undefined' ? document.fonts : undefined
+    if (!fonts?.addEventListener) return
+    const onFonts = (): void => {
+      fontsVersion.current += 1
+      motion.wake()
+    }
+    fonts.addEventListener('loadingdone', onFonts)
+    return () => fonts.removeEventListener('loadingdone', onFonts)
+  }, [motion.wake])
   // ONE CARD INSTANCE (owner, 2026-10-31): the card's body, strip and reply are
   // drawn for the open card only, and for the one it is leaving while that
   // fades, never once per agent behind the crew.
@@ -278,7 +326,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           <div className="zv-device-label" style={{ transform: `translate(${-device.box.w / 2 + 50}px, ${device.labelY}px)` }}>
             <b>{machine}</b><span>{model.frame.workspaces.length} workspaces</span><small>agents open the crew · browsers open thumbnails</small>
           </div>
-          {model.marks.map((m) => <MarkNode key={m.id} mark={m} bind={bind} onOpen={() => void switchWorkspace(m.id)} />)}
+          {model.marks.map((m) => <MarkNode key={m.id} mark={m} bind={bind} onOpen={stable(`mark:${m.id}`, () => void switchWorkspace(m.id))} />)}
           <button className="zv-workspace-hit" type="button" style={{ transform: `translate(${activeSlot.x - 90}px, ${activeSlot.y - 90}px)` }} onClick={() => motion.go(1, 'agents')} aria-label={`Open ${model.name} agents`} />
         </div>
         <div className="zv-scene" ref={bind('scene')}>
@@ -292,10 +340,10 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           ))}
           {model.frame.links.map((l) => {
             const a = agentOf.get(l.agent), i = itemOf.get(l.item)
-            return a && i ? <LinkNode key={l.key} k={l.key} agent={a} item={i} shared={i.owners.length} bind={bind} onClick={() => zoomStore.get().dir === 'items' ? motion.agent(a.id) : motion.item(i.id)} /> : null
+            return a && i ? <LinkNode key={l.key} k={l.key} agent={a} item={i} shared={i.owners.length} bind={bind} onClick={stable(`link:${l.key}`, () => (zoomStore.get().dir === 'items' ? motion.agent(a.id) : motion.item(i.id)))} /> : null
           })}
-          {model.items.map((i) => <ItemNode key={i.id} item={i} names={i.owners.map((id) => agentOf.get(id)?.name ?? id)} bind={bind} onClick={() => motion.item(i.id)} onDelete={onDelete ? () => onDelete(i.id) : undefined} />)}
-          {model.agents.map((a) => <AgentNode key={a.id} agent={a} card={cardIds.has(a.id)} bind={bind} onOpen={() => motion.agent(a.id)} onDelete={onDelete ? () => onDelete(a.id) : undefined} />)}
+          {model.items.map((i) => <ItemNode key={i.id} item={i} names={i.owners.map((id) => agentOf.get(id)?.name ?? id)} bind={bind} onClick={stable(`item:${i.id}`, () => motion.item(i.id))} onDelete={onDelete ? stable(`item-del:${i.id}`, () => onDelete(i.id)) : undefined} />)}
+          {model.agents.map((a) => <AgentNode key={a.id} agent={a} card={cardIds.has(a.id)} bind={bind} onOpen={stable(`agent:${a.id}`, () => motion.agent(a.id))} onDelete={onDelete ? stable(`agent-del:${a.id}`, () => onDelete(a.id)) : undefined} />)}
           {/* The seat for the agent that is not there yet (owner, 2026-10-31). */}
           <button type="button" ref={bind('newseat') as React.Ref<HTMLButtonElement>} className="zv-newseat" onClick={() => setAdding(true)} title="Bring a new agent into this workspace" aria-label="New agent">
             <span aria-hidden="true">＋</span>

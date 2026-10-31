@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react'
-import { useActivitiesSnapshot, useThumb } from '../activity-thumb-store'
+import { useBusyAgents, useThumb } from '../activity-thumb-store'
 import { activeBrowserTab, type WorkspaceState } from '../../../shared/model'
 import type { AttachmentIndex } from '../terminal-attachments'
 import { firstLine, hostPath, ownersOf } from '../stage/stage-select'
@@ -65,7 +65,8 @@ export function ItemPets({
    */
   dock?: { readonly exclude: string | null } | null
 }): React.JSX.Element | null {
-  const activities = useActivitiesSnapshot()
+  // Only who is busy, not every activity event (activity-thumb-store.ts · useBusyAgents).
+  const busy = useBusyAgents()
   const owners = useMemo(() => ownersOf(attachIndex), [attachIndex])
   const crew = useMemo(
     () => new Map<string, CrewFace>((workspace?.nodes ?? []).flatMap((n) => (n.kind === 'terminal' ? [[n.id, { name: n.name, preset: n.preset, orch: n.orch }] as const] : []))),
@@ -90,13 +91,7 @@ export function ItemPets({
     return out
   }, [workspace, owners])
   // The agent on stage, then the agents that are working or need you.
-  const focus = useMemo(() => {
-    const busy = Object.entries(activities)
-      .filter(([, activity]) => activity.phase === 'waiting' || activity.phase === 'thinking')
-      .sort(([, a], [, b]) => (a.phase === 'waiting' ? 0 : 1) - (b.phase === 'waiting' ? 0 : 1))
-      .map(([id]) => id)
-    return onStage ? [onStage, ...busy.filter((id) => id !== onStage)] : busy
-  }, [activities, onStage])
+  const focus = useMemo(() => (onStage ? [onStage, ...busy.filter((id) => id !== onStage)] : [...busy]), [busy, onStage])
   const picked = useMemo(() => pickItems(items, { owners, focus, max: petMax(window.innerWidth) }), [items, owners, focus])
   const byId = useMemo(() => new Map(items.map((item) => [item.id, item])), [items])
   const onShown = useCallback(
@@ -111,7 +106,7 @@ export function ItemPets({
     const count = picked.shown.filter((item) => item.id !== dock.exclude).length
     return { shown: order.members.slice(0, count), more: order.members.slice(count), dim: order.dim }
   }, [picked, dock, onStage])
-  const member = (item: ItemFace) => ({
+  const member = useCallback((item: ItemFace) => ({
     id: item.id,
     className: `item ${item.kind}${onStage && item.owners.includes(onStage) ? ' mine' : ''}${column.dim.has(item.id) ? ' dim' : ''}`,
     label: `${item.kind === 'browser' ? 'Browser' : 'Note'}: ${item.title}`,
@@ -133,14 +128,17 @@ export function ItemPets({
         </span>
       </>
     )
-  })
+  }), [onStage, column.dim])
+  // Built when the column changes, not on every render: the overflow alone is hundreds of items.
+  const shownMembers = useMemo(() => column.shown.map(member), [column.shown, member])
+  const moreMembers = useMemo(() => column.more.map(member), [column.more, member])
   return (
     <PetTroop
       side="left"
       storageKey="cookrew.pets.items"
       label="browsers and notes"
-      members={column.shown.map(member)}
-      more={column.more.map(member)}
+      members={shownMembers}
+      more={moreMembers}
       dockable={dock !== null}
       onShown={onShown}
       onOpen={(id) => onOpen(id, byId.get(id)?.owners ?? [])}
