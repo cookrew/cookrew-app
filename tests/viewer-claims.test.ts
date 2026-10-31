@@ -19,7 +19,7 @@ describe('a terminal that mounts', () => {
   })
 
   it('nudges the shared pane, on mount or reconnect, only when it owns the size', () => {
-    expect(overlay).toMatch(/const kickTimer = setTimeout\(\(\) => \{\s*if \(owns\(\)\) repaintKick\(\)/)
+    expect(overlay).toMatch(/kickTimer = setTimeout\(\(\) => \{\s*kickTimer = null\s*if \(owns\(\)\) repaintKick\(\)/)
     expect(overlay).toContain('if (helloSeen && owns() && Date.now() - lastKickAt > 2000)')
   })
 })
@@ -32,3 +32,11 @@ describe('the window starts listening for clicks at app start', () => {
     expect(at).toBeLessThan(main.indexOf('ReactDOM.createRoot('))
   })
 })
+
+describe('the mount kick runs once, when the box has settled', () => {
+  it('waits for the box to be still, and every box change while opening moves it', () => {
+    expect(overlay).toContain('}, MOUNT_KICK_SETTLE_MS)')
+    expect(overlay).toContain('if (kickTimer !== null && Date.now() - mountedAt < MOUNT_SETTLE_WINDOW_MS) scheduleMountKick()')
+  })
+})
+
