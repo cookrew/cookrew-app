@@ -154,8 +154,10 @@ export function buildSeededFrame(
  * and herdr's own start put it there — and nothing else in a seed would take
  * it off: the history would be written into a screen that cannot keep it.
  */
-/** How long a widen's overshoot holds, so the agent sees the wider size before the narrower one (resize). */
-export const WIDEN_SETTLE_MS = 200
+/** After a widen: how long the pane holds its new width before the dip, so the agent sees it first (resize). */
+export const WIDEN_SETTLE_MS = 250
+/** How long a dip one column narrower holds: long enough for the agent to redraw at it. */
+export const DIP_MS = 400
 
 const LEAVE_ALTERNATE = '\x1b[?1049l'
 const WRAP = '\x1b[?7h'
@@ -444,7 +446,7 @@ export class PtySession extends EventEmitter {
   private serializer: SerializeAddon
   private lastOutputAt = 0
   private disposed = false
-  /** The second step of a widen (resize): back from the overshoot to the size asked for. */
+  /** A widen's dip (resize): one column narrower, then back. */
   private widenTimer: ReturnType<typeof setTimeout> | null = null
   /** Backend/spec are retained so a dropped herdr client can reattach in place. */
   private readonly mux: Multiplexer
@@ -793,35 +795,40 @@ export class PtySession extends EventEmitter {
   }
 
   /**
-   * EVERY WIDEN ENDS NARROWER (owner's desktop after the phone, 2026-10-31:
-   * the live view showed phone-width rows three and four abreast).
+   * A WIDEN IS FOLLOWED BY A DIP (owner's desktop after the phone,
+   * 2026-10-31: the live view showed phone-width rows three and four abreast).
    *
    * Claude Code redraws its whole conversation when the terminal gets
-   * NARROWER and only its live region when it gets wider. On a widen, what
-   * is left on screen is the host's reflow, and herdr's reflow joins every
-   * row that was exactly full at the old width to the row after it — Claude
-   * Code pads and wraps to the width, so at a phone's 45 columns that is a
-   * row in three. So a widen goes one column past the size asked for and
-   * comes back after WIDEN_SETTLE_MS: the last step is a narrowing, Claude
-   * Code redraws at the final width, and the joined copy left in the history
-   * is an earlier copy of the same words, which the seed drops
-   * (seed-history.ts · dropReprints). The overshoot settles within the
-   * 300 ms a viewer waits before deciding a size was not its own
-   * (renderer pane-size.ts), so passing through it costs no viewer the size.
+   * NARROWER, and only when idle; on a widen it redraws nothing, and what is
+   * left on screen is herdr's reflow, which joins rows to the row after them.
+   * So after a widen settles (WIDEN_SETTLE_MS) the pane dips one column
+   * narrower for DIP_MS and comes back: the dip makes Claude Code redraw, one
+   * column short of the width, which only leaves a margin.
+   *
+   * Never PAST the width asked for (it went one column past until
+   * 2026-10-31): a render Claude Code makes at the wider size can land after
+   * the pane is back, and then every padded row spills onto a row of its own
+   * — a blank row under every line, and the input box jumping. A late render
+   * at the dip's narrower size spills nothing.
+   *
+   * A one-column widen is the end of a dip (here, or a viewer's repaint kick)
+   * and is not dipped again.
    */
   resize(cols: number, rows: number): void {
     if (this.widenTimer !== null) {
       clearTimeout(this.widenTimer)
       this.widenTimer = null
     }
-    if (cols <= this.screen.cols) {
-      this.applySize(cols, rows)
-      return
-    }
-    this.applySize(cols + 1, rows)
+    const widened = cols > this.screen.cols + 1
+    this.applySize(cols, rows)
+    if (!widened || cols < 21) return
     this.widenTimer = setTimeout(() => {
-      this.widenTimer = null
-      if (!this.disposed) this.applySize(cols, rows)
+      if (this.disposed) return
+      this.applySize(cols - 1, rows)
+      this.widenTimer = setTimeout(() => {
+        this.widenTimer = null
+        if (!this.disposed) this.applySize(cols, rows)
+      }, DIP_MS)
     }, WIDEN_SETTLE_MS)
   }
 

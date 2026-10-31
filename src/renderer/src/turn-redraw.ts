@@ -3,11 +3,12 @@ import type { TurnPhase } from '../../shared/turn'
 // A WIDEN DURING A TURN IS REDRAWN WHEN THE TURN ENDS (owner, 2026-10-31:
 // the desktop LIVE view kept phone-width rows three abreast).
 //
-// A widen ends on a one-column narrowing (main/pty.ts · PtySession.resize),
-// which makes an idle Claude Code redraw its conversation at the new width.
-// A working one does not redraw — measured: the joined rows stayed on its
-// screen after the same widen — so a widen that lands mid-turn is remembered
-// here and the repaint kick runs once the turn is at rest.
+// A widen is followed by a dip one column narrower (main/pty.ts ·
+// PtySession.resize), which makes an idle Claude Code redraw its
+// conversation. A working one does not redraw — measured: the joined rows
+// stayed on its screen after the same widen — so a widen that lands mid-turn
+// is remembered here and the repaint kick (another dip) runs once the turn is
+// at rest.
 
 const busy = (phase: TurnPhase): boolean => phase === 'thinking' || phase === 'waiting'
 

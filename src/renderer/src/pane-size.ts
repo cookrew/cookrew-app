@@ -17,6 +17,14 @@
 
 export const OWN_MS = 30_000
 
+/**
+ * How long after a resize a viewer waits before deciding the size the pane
+ * settled on was another viewer's. Longer than a dip (main/pty.ts DIP_MS,
+ * the repaint kick): the pane passes through a size one column narrower on
+ * the way, and that is nobody else's.
+ */
+export const SETTLE_CHECK_MS = 1000
+
 export interface PaneSize {
   cols: number
   rows: number
@@ -49,7 +57,7 @@ const same = (a: PaneSize | null, b: PaneSize | null): boolean => a !== null && 
 
 /**
  * After the pane settles on a size, was it someone else's? The pane passes
- * through sizes of our own (a repaint kick is cols+1 then cols; a widen overshoots by one in main), so the check
+ * through sizes of our own (a repaint kick and a widen's dip pass cols-1), so the check
  * is on where it ends, against the last size this viewer asked for.
  */
 export function tookOthers(settled: PaneSize, mine: PaneSize | null): boolean {
