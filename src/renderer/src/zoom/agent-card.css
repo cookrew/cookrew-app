@@ -305,3 +305,96 @@
     font-size: 13px;
   }
 }
+
+/* ── a browser's or note's card (pets/ItemPets.tsx), in the same ink ── */
+.ag-card.item-card .item-seal {
+  font: 600 22px/1 var(--zv-mono);
+  color: var(--zv-on-tint, #fbf8f1);
+}
+
+.ag-card.item-card.note .item-seal {
+  font: 600 24px/1 var(--zv-serif);
+  color: var(--zv-ink-soft);
+  background: var(--zv-paper);
+}
+
+/* The page itself: the navigator's big thumbnail, a live picture when the Mac has one. */
+.ag-card .item-page {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 168px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px var(--zv-shadow-sm);
+  cursor: pointer;
+  text-align: left;
+}
+
+.ag-card .item-page:hover {
+  box-shadow:
+    0 0 0 1.5px var(--zv-seal),
+    0 2px 8px var(--zv-shadow-sm);
+}
+
+.ag-card .item-page.note {
+  height: 120px;
+}
+
+.ag-card .item-line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 10.5px/1.2 var(--zv-mono);
+  color: var(--zv-ink-soft);
+}
+
+.ag-card .item-note {
+  max-height: 110px;
+  margin: 0;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 12.5px/1.45 var(--zv-serif);
+  color: var(--zv-ink);
+}
+
+/* Who uses it: each agent a way to that agent, as the agent card's thumbnails are to its items. */
+.ag-card .item-users {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font: 10.5px/1 var(--zv-mono);
+  color: var(--zv-muted);
+}
+
+.ag-card .item-users em {
+  font-style: normal;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.ag-card .item-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px 2px 2px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--zv-paper);
+  color: var(--zv-ink);
+  font: 600 11.5px/1 var(--zv-serif);
+  cursor: pointer;
+}
+
+.ag-card .item-user:hover {
+  box-shadow: inset 0 0 0 1.5px var(--zv-seal);
+}
+
+.ag-card .item-user svg,
+.ag-card .item-user .ink-avatar {
+  width: 22px;
+  height: 22px;
+}

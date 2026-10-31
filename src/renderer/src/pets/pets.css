@@ -100,6 +100,43 @@
   opacity: 1;
 }
 
+/* The demo's columns (group-motion-pivot.html, the full view): the crew as
+   ink faces at half size, 60px apart; the browsers and notes as page
+   thumbnails at 0.3 of the 168 x 108 thumbnail, 64px apart. */
+.cr-pets.docked.right {
+  gap: 26px;
+}
+
+.cr-pets.docked .cr-pet:not(.item):not(.more) {
+  width: 34px;
+  height: 34px;
+}
+
+.cr-pets.docked.left {
+  gap: 30px;
+}
+
+.cr-pets.docked .cr-pet.item {
+  width: 52px;
+  height: 34px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  overflow: visible;
+}
+
+.cr-pets.docked .cr-pet.item .cr-pet-coin {
+  display: none;
+}
+
+.cr-pets.docked .cr-pet.item .cr-pet-page {
+  display: block;
+}
+
+.cr-pets.docked .cr-pet.item.mine .cr-pet-page {
+  box-shadow: 0 0 0 2px var(--amber), 0 2px 6px rgba(0, 0, 0, 0.12);
+}
+
 /* Dragged close enough to the panel's side to snap on when let go. */
 .cr-pets.snap {
   outline: 2px dashed var(--amber-deep);
@@ -121,6 +158,29 @@
     width: 24px;
     height: 24px;
   }
+  .cr-pets.docked .cr-pet.item {
+    width: 44px;
+    height: 29px;
+  }
+  .cr-pets.docked.left,
+  .cr-pets.docked.right {
+    gap: 18px;
+  }
+}
+
+/* An item's two faces (ItemPets.tsx): the coin while it floats, the page
+   thumbnail once attached to the full view. The coin's parts stand as the
+   face's own, as they always did. */
+.cr-pet-coin {
+  display: contents;
+}
+
+.cr-pet-page {
+  display: none;
+  inset: 0;
+  border-radius: 5px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+  pointer-events: none;
 }
 
 /* One pet: a round face with a ring in its mood. */

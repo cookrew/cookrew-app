@@ -431,7 +431,7 @@ export function PetTroop({
     <>
       <div
         ref={troopRef}
-        className={`cr-pets ${side}${tucked ? ' tucked' : ''}${expanded ? ' expanded' : ''}${docked ? ' docked' : ''}${near ? ' snap' : ''}`}
+        className={`cr-pets ag-ink ${side}${tucked ? ' tucked' : ''}${expanded ? ' expanded' : ''}${docked ? ' docked' : ''}${near ? ' snap' : ''}`}
         style={
           docked && dockAt
             ? { left: dockAt.left, top: dockAt.top }
