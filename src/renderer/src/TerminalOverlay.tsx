@@ -693,6 +693,33 @@ function TerminalOverlay({
         paneSize = { cols, rows }
         cookrew().ptyResize(node.id, cols, rows)
       }
+      /**
+       * WHO OWNS THE PANE'S SIZE: the viewer someone used last. Window focus
+       * is no test — the desktop window keeps it while the owner reads on the
+       * phone, and two "focused" viewers would resize the shared pane back and
+       * forth, each resize a full replay and a Claude Code reprint. So a viewer
+       * takes the size back only within this long of a touch, click or key in
+       * it, and a touch or click claims it at once.
+       */
+      const OWN_MS = 30_000
+      let usedAt = Number.NEGATIVE_INFINITY
+      const claimSize = (): void => {
+        usedAt = Date.now()
+        if (disposed || container.offsetWidth <= 40) return
+        try {
+          fit.fit()
+          if (paneSize?.cols !== term.cols || paneSize?.rows !== term.rows) sendSize(term.cols, term.rows)
+        } catch {
+          // container may be mid-teardown
+        }
+      }
+      const onUse = (): void => claimSize()
+      container.addEventListener('pointerdown', onUse, true)
+      container.addEventListener('touchstart', onUse, { capture: true, passive: true })
+      cleanups.push(() => {
+        container.removeEventListener('pointerdown', onUse, true)
+        container.removeEventListener('touchstart', onUse, true)
+      })
       const fitUntilStable = (attempt = 0): void => {
         if (disposed) return
         try {
@@ -812,10 +839,21 @@ function TerminalOverlay({
         (chunk) => {
           if (localScroll.admit(chunk)) curtain.write(detoxify(chunk), (c, done) => term.write(c, done))
         },
-        ({ cols, rows }) => {
+        (hello) => {
+          const { cols, rows } = hello
           if (disposed || cols <= 0 || rows <= 0) return
           paneSize = { cols, rows }
           term.resize(cols, rows)
+          // Another viewer resized the pane (the server says so with the new
+          // size before the new frame): adopt it, so herdr's repaints land on
+          // the right cells. Take it back only if this viewer was in use.
+          if ((hello as { resized?: boolean }).resized) {
+            if (document.visibilityState === 'visible' && Date.now() - usedAt < OWN_MS) {
+              if (reassertTimer) clearTimeout(reassertTimer)
+              reassertTimer = setTimeout(claimSize, 400)
+            }
+            return
+          }
           if (helloSeen && Date.now() - lastKickAt > 2000) {
             if (rekickTimer) clearTimeout(rekickTimer)
             rekickTimer = setTimeout(repaintKick, 120)
@@ -849,6 +887,8 @@ function TerminalOverlay({
       let xtermDataCount = 0
       let xtermRecent: { at: number; text: string }[] = []
       const inputSub = term.onData((input) => {
+        // Typing here is using this viewer: it keeps the pane's size (claimSize).
+        usedAt = Date.now()
         xtermDataCount += 1
         xtermRecent = [...xtermRecent.slice(-15), { at: Date.now(), text: input }]
         cookrew().ptyInput(node.id, input)

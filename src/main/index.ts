@@ -7266,6 +7266,10 @@ function registerIpc(handlers: RestoreHandlers): void {
         dropForwarder(terminalId, binding)
         return
       }
+      // The NEW size first, as an attach sends it: a viewer that kept its old
+      // grid applied herdr's deltas for another size to it — the phone's
+      // garbled screen and doubled lines when the desktop resized the pane.
+      event.sender.send(`pty:hello:${terminalId}`, { ...session.geometry(), resized: true })
       event.sender.send(`pty:data:${terminalId}`, frame)
     }
     const onDestroyed = (): void => dropForwarder(terminalId, binding)

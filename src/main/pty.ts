@@ -5,6 +5,7 @@ import { homedir, tmpdir } from 'node:os'
 import pty, { IPty } from 'node-pty'
 import xtermHeadless from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
+import { clipToCells, cutAtScreen, dropReprints } from './seed-history'
 import { sanitizeAgentEnv } from './multiplexer'
 import { paneEnv } from './pane-env'
 import type { AttachSpec, Multiplexer, PaneCardInfo } from './multiplexer'
@@ -123,17 +124,24 @@ export const SEED_MAX_LINES = 2000
  * deltas are absolute addresses and draw the same cells on either screen.
  */
 export function buildSeededFrame(
-  screen: Pick<HeadlessTerminalType, 'rows' | 'modes'>,
+  screen: Pick<HeadlessTerminalType, 'rows' | 'cols' | 'modes'>,
   serializer: Pick<SerializeAddon, 'serialize'>,
   history: string,
-  nonce: string
+  nonce: string,
+  /** The screen's rows as text: where it begins in the history (seed-history.ts · cutAtScreen). */
+  screenText: readonly string[] = []
 ): string {
   const lines = history.replace(/(\r?\n)+$/, '').split(/\r?\n/)
-  const above = lines.slice(0, Math.max(0, lines.length - screen.rows))
+  // What the screen already shows is cut off by its own words, and a run
+  // that a resize reprinted is kept once — the later copy (seed-history.ts).
+  const above = dropReprints(cutAtScreen(lines, screenText, screen.rows), screenText).map((line) => clipToCells(line, screen.cols))
+  // Each row is cut to the screen's width (a row printed before a resize can
+  // be wider), and written with line wrap OFF as a backstop: nothing spills
+  // a character or two onto a line of its own.
   const body =
     above.length === 0
       ? CLEAR_SCREEN + serializer.serialize({ scrollback: screen.rows })
-      : LEAVE_ALTERNATE + CLEAR_SCREEN + above.join('\r\n') + '\x1b[0m' + '\r\n'.repeat(screen.rows) + '\x1b[H\x1b[2J' + screenOnNormal(serializer)
+      : LEAVE_ALTERNATE + CLEAR_SCREEN + NO_WRAP + above.join('\x1b[0m\r\n') + '\x1b[0m' + WRAP + '\r\n'.repeat(screen.rows) + '\x1b[H\x1b[2J' + screenOnNormal(serializer)
   return body + modeReplay(screen.modes) + seedMarker(nonce)
 }
 
@@ -143,6 +151,8 @@ export function buildSeededFrame(
  * it off: the history would be written into a screen that cannot keep it.
  */
 const LEAVE_ALTERNATE = '\x1b[?1049l'
+const NO_WRAP = '\x1b[?7l'
+const WRAP = '\x1b[?7h'
 
 /** What serialize() puts after the switch when the alternate screen is active. */
 const TO_ALTERNATE = '\x1b[?1049h\x1b[H'
@@ -826,11 +836,23 @@ export class PtySession extends EventEmitter {
    * after it apply cleanly. Null when the backend cannot read history.
    */
   async seedFrame(lines: number, nonce: string): Promise<string | null> {
+    return this.seedFrameAt(lines, nonce)
+  }
+
+  /** The screen the viewer sees, as text rows (the alternate screen when herdr is on it). */
+  private screenText(): string[] {
+    const buffer = this.screen.buffer.active
+    const rows: string[] = []
+    for (let y = buffer.baseY; y < buffer.baseY + this.screen.rows; y++) rows.push(buffer.getLine(y)?.translateToString(true) ?? '')
+    return rows
+  }
+
+  private async seedFrameAt(lines: number, nonce: string): Promise<string | null> {
     if (this.disposed || !this.mux.historyAnsiAsync) return null
     const history = await this.mux.historyAnsiAsync(this.sessionName, Math.min(SEED_MAX_LINES, Math.max(1, lines)) + this.screen.rows)
     if (this.disposed || history === null) return null
     try {
-      return buildSeededFrame(this.screen, this.serializer, history, nonce)
+      return buildSeededFrame(this.screen, this.serializer, history, nonce, this.screenText())
     } catch (error) {
       console.error('PTY seed serialize failed:', error)
       return null
