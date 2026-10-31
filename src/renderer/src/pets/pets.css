@@ -35,9 +35,18 @@
   flex-wrap: wrap-reverse;
 }
 
-/* The agents' troop has no outline: the faces stand on the pill's own paper. */
+/* The agents' troop has no pill: the faces float on the page, and the gaps
+   between them let clicks through to what is under them (the owner,
+   2026-10-31). Only the faces and the grip take the pointer. */
 .cr-pets.right {
   border-color: transparent;
+  background: none;
+  box-shadow: none;
+  pointer-events: none;
+}
+
+.cr-pets.right > * {
+  pointer-events: auto;
 }
 
 .cr-pets-grip {
