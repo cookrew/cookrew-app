@@ -11,6 +11,7 @@ import { activeBrowserTab, type CanvasNode, type Connection, type WorkspaceMeta 
 import type { AttachmentIndex } from '../terminal-attachments'
 import { hostOf, tintOf } from './zoom-layout'
 import type { FrameModel, LinkModel, TieModel } from './zoom-frame'
+import { inkStatusOfRow, statusWord, type InkStatus } from './ink-status'
 
 export interface AgentView {
   id: string
@@ -20,6 +21,8 @@ export interface AgentView {
   phase: AgentPhase
   /** Its last reply is still unread: the face ticks (ink-status.ts). */
   unread?: boolean
+  /** What its face draws (ink-status.ts · inkStatusOfRow); the word and its colour follow it. */
+  status: InkStatus
   word: string
   line: string
   browsers: number
@@ -72,8 +75,6 @@ export interface MachineView {
 /** How many browsers and notes the thumbs grid draws. */
 export const ITEMS_SHOWN = 12
 
-export const PHASE_WORD: Record<AgentPhase, string> = { waiting: 'needs you', working: 'working', done: 'done', quiet: 'resting', offline: 'offline' }
-
 /** One line of what an agent last said or does now. */
 export function lineOf(row: AgentRow | undefined, brief: string | null | undefined): string {
   const t = row?.turn
@@ -88,6 +89,9 @@ export function lineOf(row: AgentRow | undefined, brief: string | null | undefin
  */
 const drawn = new WeakMap<CanvasNode, Omit<ItemView, 'owners'> | null>()
 
+/** A browser's letter, on its coin, its card and its full view's head: the title's first letter or digit. */
+export const itemInitial = (title: string): string => (title.match(/[A-Za-z0-9]/)?.[0] ?? '·').toUpperCase()
+
 function drawnOf(n: CanvasNode): Omit<ItemView, 'owners'> | null {
   const known = drawn.get(n)
   if (known !== undefined) return known
@@ -95,7 +99,7 @@ function drawnOf(n: CanvasNode): Omit<ItemView, 'owners'> | null {
   if (n.kind === 'browser') {
     const tab = activeBrowserTab(n)
     const title = tab.title?.trim() || n.name
-    view = { id: n.id, kind: 'browser', title, host: hostOf(tab.url), tint: tintOf(n.id), initial: (title.match(/[A-Za-z0-9]/)?.[0] ?? '·').toUpperCase(), line: tab.url }
+    view = { id: n.id, kind: 'browser', title, host: hostOf(tab.url), tint: tintOf(n.id), initial: itemInitial(title), line: tab.url }
   } else if (n.kind === 'note') {
     view = { id: n.id, kind: 'note', title: n.name, host: 'note', tint: tintOf(n.id), initial: '', line: firstNoteLine(n.content ?? '') }
   }
@@ -148,6 +152,7 @@ export interface ZoomInput {
 export function agentViewOf(row: AgentRow, attachIndex: AttachmentIndex): AgentView {
   const list = attachIndex.get(row.id) ?? []
   const phase: AgentPhase = row.phase
+  const status = inkStatusOfRow(phase, row.unread === true)
   return {
     id: row.id,
     name: row.name,
@@ -155,7 +160,8 @@ export function agentViewOf(row: AgentRow, attachIndex: AttachmentIndex): AgentV
     orch: row.orch,
     phase,
     unread: row.unread === true,
-    word: PHASE_WORD[phase],
+    status,
+    word: statusWord(status),
     line: lineOf(row, row.brief),
     browsers: list.filter((a) => a.kind === 'browser').length,
     notes: list.filter((a) => a.kind === 'note').length,

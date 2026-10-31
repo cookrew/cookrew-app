@@ -2,7 +2,6 @@ import { memo, useState } from 'react'
 import { sameProps } from './same-props'
 import { useThumb } from '../activity-thumb-store'
 import { InkAvatar, InkRing } from './InkAvatar'
-import { inkStatusOfRow } from './ink-status'
 import { CardWords, QuickReply, useQuickReply } from './quick-reply'
 import './agent-card.css'
 import type { AgentView, ItemView, MarkView, MachineView } from './zoom-model'
@@ -64,15 +63,20 @@ export const Counts = memo(function Counts({ browsers, notes, none = 'nothing op
   )
 }, sameProps)
 
-/** A browser's picture: the live thumbnail when there is one, else a drawn page in its tint. */
-export const Page = memo(function Page({ item, big = false }: { item: ItemView; big?: boolean }): React.JSX.Element {
+/**
+ * A browser's picture: the live thumbnail when there is one, else a drawn page in its tint.
+ * `words={false}`: the page without its address or a note's lines, for a face
+ * too small to set them legibly (the side group's column, UI/UX QA 2026-11-01:
+ * "file://age..." at about 6px). Its name is the face's own tag.
+ */
+export const Page = memo(function Page({ item, big = false, words = true }: { item: ItemView; big?: boolean; words?: boolean }): React.JSX.Element {
   const thumb = useThumb(item.id)
   if (item.kind === 'note') {
     return (
       <div className="zv-nt">
         {big && NOTE_GLYPH}
-        <b>{item.title}</b>
-        <span>{item.line || 'empty note'}</span>
+        {words && <b>{item.title}</b>}
+        {words && <span>{item.line || 'empty note'}</span>}
         <i />
         <i />
       </div>
@@ -86,7 +90,7 @@ export const Page = memo(function Page({ item, big = false }: { item: ItemView; 
             {item.initial}
           </i>
         )}
-        {item.host}
+        {words && item.host}
       </div>
       {thumb ? (
         <img className="zv-shot" src={thumb} alt="" draggable={false} />
@@ -158,7 +162,7 @@ export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onO
   return (
     <div ref={bind(`agent:${agent.id}`)} className={`zv-m ${agent.phase}`}>
       <div ref={bind(`agent-av:${agent.id}`)} className="zv-av" title={`${agent.name} · ${agent.word}`} {...press(onOpen, `${agent.name}, ${agent.word}`)}>
-        <InkAvatar id={agent.id} preset={agent.preset} orch={agent.orch} status={inkStatusOfRow(agent.phase, agent.unread)} weight="large" />
+        <InkAvatar id={agent.id} preset={agent.preset} orch={agent.orch} status={agent.status} weight="large" />
       </div>
       <div ref={bind(`agent-nm:${agent.id}`)} className="zv-nm" {...press(onOpen, `${agent.name}, ${agent.word}`)}>
         {agent.name}
@@ -170,7 +174,7 @@ export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onO
           ×
         </button>
       )}
-      <div ref={bind(`agent-st:${agent.id}`)} className={`zv-st ${agent.phase}`}>
+      <div ref={bind(`agent-st:${agent.id}`)} className={`zv-st ${agent.status}`}>
         {agent.word}
       </div>
       <div ref={bind(`agent-cnt:${agent.id}`)} className="zv-cnt">

@@ -134,7 +134,7 @@ function phoneShelf(agents: readonly CrewAgent[], rows: number, rowH: number, bo
 }
 
 /** The device: a mark per workspace, the open one where its slot is. */
-export function deviceOf(ids: readonly string[], narrow: boolean): { at: Record<string, Pos>; box: Box; labelY: number } {
+export function deviceOf(ids: readonly string[], narrow: boolean): { at: Record<string, Pos>; box: Box; labelY: number; dx: number } {
   const cols = narrow ? 2 : 3
   const dx = narrow ? 260 : 330
   const dy = narrow ? 260 : 320
@@ -146,7 +146,7 @@ export function deviceOf(ids: readonly string[], narrow: boolean): { at: Record<
     at[id] = { x: ((g % cols) - (inRow - 1) / 2) * dx, y: (row - (rows - 1) / 2) * dy }
   })
   const h = rows * dy + 120
-  return { at, box: { w: Math.max(cols, Math.min(cols, ids.length)) * dx + 120, h, cy: -20 }, labelY: -((rows - 1) / 2) * dy - 200 }
+  return { at, box: { w: Math.max(cols, Math.min(cols, ids.length)) * dx + 120, h, cy: -20 }, labelY: -((rows - 1) / 2) * dy - 200, dx }
 }
 
 /** The account's other machines: a row (wrapping) under this Mac's screen, inside the devices camera. */

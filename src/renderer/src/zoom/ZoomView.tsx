@@ -8,7 +8,7 @@ import { Counts, AgentNode, ItemNode, LinkNode, MachineNode, MarkNode, NewAgentC
 import { InkRing, InkTie } from './InkAvatar'
 import { buildZoomModel } from './zoom-model'
 import { deviceOf, machinesAt, MACHINE_CARD } from './zoom-layout'
-import { SWS, type FrameEls } from './zoom-frame'
+import { deviceWords, SWS, type FrameEls } from './zoom-frame'
 import { useZoom, zoomStore } from './zoom-store'
 import { useZoomMotion } from './use-zoom-motion'
 import { nearestStop, RANGE, STOPS, STOP_NAMES, stepOut } from './zoom-path'
@@ -159,7 +159,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     }
     for (const t of modelRef.current.frame.ties) { const el = get(`tie:${t.key}`); if (el) ties.set(t.key, el) }
     for (const m of modelRef.current.marks) { const el = get(`mark:${m.id}`); if (el) marks.set(m.id, el) }
-    return { devices: get('devices')!, device: get('device')!, scene: get('scene')!, panel: get('panel')!, wash: get('wash')!, ring: get('ring')!, label: get('label')!, labelW: get('label')!.offsetWidth, newCap: get('newCap')!, machine: get('machine')!, agents, links, items, ties, marks, next: get('newseat') }
+    return { devices: get('devices')!, device: get('device')!, scene: get('scene')!, panel: get('panel')!, wash: get('wash')!, ring: get('ring')!, label: get('label')!, labelW: get('label')!.offsetWidth, labelH: get('label')!.offsetHeight, newCap: get('newCap')!, machine: get('machine')!, agents, links, items, ties, marks, next: get('newseat') }
   }, [])
   // THE CREW SCROLLS ON A PHONE (zoom-frame.ts · phoneCamera): the crew is
   // drawn at a readable size, so a tall one scrolls (by a drag) instead of shrinking.
@@ -243,12 +243,19 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const itemOf = useMemo(() => new Map(model.items.map((i) => [i.id, i])), [model.items])
   const device = useMemo(() => deviceOf(model.frame.workspaces, size.w < 760), [model.frame.workspaces, size.w])
   const activeSlot = device.at[model.frame.active] ?? { x: 0, y: 0 }
+  // The device stop's words grow to be read at the size the device is seen (zoom-frame.ts · deviceWords).
+  const words = useMemo(() => deviceWords(device, size.w, size.h, size.w < 760), [device, size])
   // Static placement on the device: the real active workspace is rendered by the scene layer.
   useLayoutEffect(() => {
     for (const m of model.marks) {
       const el = registry.current.get(`mark:${m.id}`)
       const at = device.at[m.id]
       if (el && at) el.style.transform = `translate(${at.x}px, ${at.y}px) scale(${SWS})`
+      const label = el?.querySelector<HTMLElement>('.zv-mark-label')
+      if (label) {
+        label.style.transform = `translateX(-50%) scale(${words.markK.toFixed(4)})`
+        label.style.maxWidth = `${Math.round(words.markMax)}px`
+      }
     }
     const machineEl = registry.current.get('machine')
     if (machineEl) {
@@ -265,7 +272,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       const at = places.at[i]
       if (el && at) el.style.transform = `translate(${at.x - MACHINE_CARD.w / 2}px, ${at.y - MACHINE_CARD.h / 2}px)`
     })
-  }, [device, model.marks, model.machines])
+  }, [device, words, model.marks, model.machines])
   /** A new agent, from the seat at the end of the crew: the dock's own call (make-card.ts). */
   const spawn = useCallback(async (name: string, preset: string, orch: boolean) => {
     setCreating(true)
@@ -355,7 +362,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           </button>
         </div>
         <div className="zv-device" ref={bind('device')}>
-          <div className="zv-device-label" style={{ transform: `translate(${-device.box.w / 2 + 50}px, ${device.labelY}px)` }}>
+          <div className="zv-device-label" style={{ transform: `translate(${-device.box.w / 2 + 50}px, ${device.labelY}px) scale(${words.titleK.toFixed(4)})`, maxWidth: Math.round(words.titleMax) }}>
             <b>{machine}</b><span>{model.frame.workspaces.length} workspaces</span><small>agents open the crew · browsers open thumbnails</small>
           </div>
           {model.marks.map((m) => <MarkNode key={m.id} mark={m} bind={bind} onOpen={stable(`mark:${m.id}`, () => void switchWorkspace(m.id))} />)}

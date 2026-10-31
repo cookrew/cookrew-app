@@ -22,4 +22,14 @@ export function inkStatusOfRow(phase: AgentPhase, unread = false): InkStatus {
   return phase
 }
 
+/**
+ * THE WORD UNDER A FACE says what the face draws (Gauge, 2026-11-01: agents
+ * whose reply was read hours ago said DONE in amber over the bare idle face).
+ * A read reply rests, as a quiet agent does; "done", the amber word, is the
+ * unread reply only.
+ */
+const WORD_OF: Record<InkStatus, string> = { idle: 'resting', working: 'working', waiting: 'needs you', done: 'done', offline: 'offline' }
+
+export const statusWord = (status: InkStatus): string => WORD_OF[status]
+
 export const cornerOf = (status: InkStatus): CornerMark | null => (status === 'done' ? 'tick' : status === 'offline' ? 'zee' : null)

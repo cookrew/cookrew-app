@@ -285,6 +285,40 @@ body.cr-docked-right .zv-fullview {
   }
 }
 
+/* CLEAR OF THE WAY BACK OUT (UI/UX QA 2026-11-01: a long title ran under the
+   centred "‹ browsers & notes" pill, zoom.css · data-full). Above a phone the
+   pill stands at the middle of the top, over the head: each side of the head
+   keeps to its own half, less the pill's half (--fv-back-clear), less the
+   28px the middle moves when only one side group is attached, and cuts its
+   words short. The title also gives up the face and the gap before it (68px).
+   A phone has its own: the way back is a round button in the corner. */
+@media (min-width: 701px) {
+  .zv-fullview {
+    --fv-back-clear: 96px;
+  }
+  .zv-fv-who {
+    max-width: calc(50% - 68px - 28px - var(--fv-back-clear));
+  }
+  .zv-fv-who b,
+  .zv-fv-who small {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .zv-fv-who small {
+    flex-wrap: nowrap;
+  }
+  /* An item's line is one run of text (kind · address): a block, so it can end in an ellipsis. */
+  .zv-fullview.item .zv-fv-who small {
+    display: block;
+  }
+  .zv-fv-used {
+    max-width: calc(50% - 28px - var(--fv-back-clear));
+    overflow: hidden;
+    white-space: nowrap;
+  }
+}
+
 /* Checkpoint tags on paper: the cream skin is in styles.css (on-cream); here
    only their edge, so an opaque tag reads as a tag over the transcript. The
    row carries the surface, so the focused tag's wrapper adds no square one. */

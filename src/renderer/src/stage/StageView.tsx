@@ -20,8 +20,9 @@ import { StageTerminal } from './StageTerminal'
 import './stage.css'
 import { zoomStore } from '../zoom/zoom-store'
 import { AgentAvatar } from '../nodes/AgentAvatar'
-import { inkStatusOfRow } from '../zoom/ink-status'
+import { inkStatusOfRow, statusWord } from '../zoom/ink-status'
 import { InkAvatar } from '../zoom/InkAvatar'
+import { itemInitial } from '../zoom/zoom-model'
 import '../zoom/full-views.css'
 
 /** How many of each kind an agent carries, for the head. */
@@ -29,7 +30,6 @@ const tally = (list: readonly { kind: string }[]): { browsers: number; notes: nu
   browsers: list.filter((a) => a.kind === 'browser').length,
   notes: list.filter((a) => a.kind === 'note').length
 })
-const WORD: Record<string, string> = { waiting: 'needs you', working: 'working', done: 'done', quiet: 'resting', offline: 'offline' }
 
 /** A pop older than this has been seen, or missed: it no longer takes the stage. */
 const POP_FRESH_MS = 10 * 60_000
@@ -97,6 +97,8 @@ export function StageView({
   const view = useAttachView()
 
   const shown = target ? (faces.get(target.terminalId) ?? null) : null
+  // The head's word says what its face draws (ink-status.ts · statusWord).
+  const shownStatus = shown ? inkStatusOfRow(shown.phase, shown.unread) : 'idle'
   const showing = pickedItem
     ? `\u0000${pickedItem.title}\u0000${workspace?.name ?? ''}\u0000z`
     : shown
@@ -130,7 +132,7 @@ export function StageView({
           <div className="zv-fullview item">
             <header className="zv-fv-head">
               <span className={`zv-fv-face ${pickedItem.kind}`} aria-hidden="true">
-                {pickedItem.kind === 'note' ? '¶' : (pickedItem.sub.match(/[A-Za-z0-9]/)?.[0] ?? '·').toUpperCase()}
+                {itemFaceLetter(pickedItem)}
               </span>
               <span className="zv-fv-who">
                 <b>{pickedItem.title}</b>
@@ -158,12 +160,12 @@ export function StageView({
               {shown && (
                 <>
                   <span className="zv-fv-ink" aria-hidden="true">
-                    <InkAvatar id={shown.id} preset={shown.preset} orch={shown.orch} status={inkStatusOfRow(shown.phase, shown.unread)} weight="large" />
+                    <InkAvatar id={shown.id} preset={shown.preset} orch={shown.orch} status={shownStatus} weight="large" />
                   </span>
                   <span className="zv-fv-who">
                     <b>{shown.name}</b>
                     <small>
-                      <span className={`zv-fv-state ${shown.phase}`}>{WORD[shown.phase]}</span>
+                      <span className={`zv-fv-state ${shownStatus}`}>{statusWord(shownStatus)}</span>
                       {counts.browsers > 0 && <span>{counts.browsers} browser{counts.browsers === 1 ? '' : 's'}</span>}
                       {counts.notes > 0 && <span>{counts.notes} note{counts.notes === 1 ? '' : 's'}</span>}
                       {counts.browsers + counts.notes === 0 && <span>nothing open</span>}
@@ -188,6 +190,14 @@ export function StageView({
     </div>
   )
 }
+
+/**
+ * The letter on a browser's full-view head: its title's, as its card and its
+ * coin draw it (zoom-model.ts · itemInitial). It once took the address's, so a
+ * file:// page read "U" (for /Users) on the head and "D" on its card.
+ */
+export const itemFaceLetter = (item: { readonly kind: 'browser' | 'note'; readonly title: string }): string =>
+  item.kind === 'note' ? '¶' : itemInitial(item.title)
 
 /** The browsers and notes that appeared on the loaded canvas while the window was open. */
 function usePopped(workspace: WorkspaceState | null, workspaceId: string | null, attachIndex: AttachmentIndex): readonly PoppedItem[] {
