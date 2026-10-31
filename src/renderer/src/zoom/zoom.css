@@ -1684,3 +1684,131 @@
   outline: 3px solid var(--zv-seal);
   outline-offset: 4px;
 }
+
+/* ── the seat for the agent that is not there yet, and its card ─────────────
+   With the canvas retired there is no pane to click, so the crew ends with one
+   empty seat. It is a dashed ring with a plus, the same paper as the faces. */
+.zv-newseat {
+  appearance: none;
+  position: absolute;
+  left: -32px;
+  top: -32px;
+  width: 64px;
+  height: 64px;
+  margin: 0;
+  padding: 0;
+  border: 3px dashed var(--zv-hair-2);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--zv-muted);
+  font: 300 26px/1 var(--zv-serif);
+  cursor: pointer;
+  transform-origin: 32px 32px;
+  pointer-events: auto;
+}
+
+.zv-newseat:hover,
+.zv-newseat:focus-visible {
+  border-color: var(--zv-seal);
+  color: var(--zv-seal);
+  outline: none;
+  background: var(--zv-card);
+}
+
+.zv-newcard {
+  position: absolute;
+  left: 26px;
+  top: 40px;
+  z-index: 60;
+  width: 268px;
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--zv-card);
+  box-shadow: inset 0 0 0 1px var(--zv-hair-2), 0 14px 36px var(--zv-shadow);
+  font: 12px/1.4 var(--zv-mono);
+  color: var(--zv-ink);
+}
+
+.zv-newcard-title { font: 600 15px/1.2 var(--zv-serif); }
+
+.zv-newcard-harness {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.zv-newcard-harness button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 4px;
+  border: 1px solid var(--zv-hair-2);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--zv-soft, var(--zv-ink-soft));
+  font: 10.5px/1 var(--zv-mono);
+  cursor: pointer;
+}
+
+.zv-newcard-harness button.on { border-color: var(--zv-seal); color: var(--zv-ink); }
+.zv-newcard-harness .ink-avatar { width: 18px; height: 18px; }
+
+.zv-newcard-name {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--zv-hair-2);
+  border-radius: 8px;
+  background: var(--zv-paper);
+  color: var(--zv-ink);
+  font: 12px/1 var(--zv-mono);
+}
+
+.zv-newcard-name:focus { outline: 2px solid var(--zv-seal); outline-offset: 1px; }
+.zv-newcard-orch { display: flex; align-items: center; gap: 7px; font-size: 10.5px; color: var(--zv-muted); }
+.zv-newcard-error { color: var(--zv-wait); font-size: 10.5px; }
+.zv-newcard-acts { display: flex; justify-content: flex-end; gap: 8px; }
+
+.zv-newcard-acts button {
+  padding: 6px 12px;
+  border: 1.5px solid var(--zv-ink);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--zv-ink);
+  font: 11px/1 var(--zv-mono);
+  cursor: pointer;
+}
+
+.zv-newcard-acts button.primary { background: var(--zv-ink); color: var(--zv-card); }
+.zv-newcard-acts button:disabled { opacity: 0.5; cursor: default; }
+
+/* ── removal: one small mark, only where the card is open ──────────────────
+   A card's × is the way out of the workspace; the app's confirm dialog does
+   the asking, so nothing is removed by a stray click. */
+.zv-del {
+  position: absolute;
+  left: 222px;
+  top: -46px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--zv-hair-2);
+  border-radius: 50%;
+  background: var(--zv-card);
+  color: var(--zv-muted);
+  font: 13px/1 var(--zv-mono);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.zv-m[data-card='open'] .zv-del,
+.zv-ip:hover .zv-del,
+.zv-ip:focus-within .zv-del {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.zv-del:hover { border-color: var(--zv-wait); color: var(--zv-wait); }
