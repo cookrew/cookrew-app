@@ -12,25 +12,34 @@
  * The streamed browser's keyboard hit the same wall (useRemoteKeyboard.ts) and
  * the cure is the same: padding before the cursor. Here it goes only BEFORE —
  * xterm assumes the cursor sits at the end of the field (a composition starts
- * at value.length) — and is topped up only when it runs low or the field has
- * grown long, never mid-composition and never before xterm has read the field:
- * the re-seed is queued after the input event, behind the timers xterm queued
- * at keydown and compositionend. The padding is never sent; xterm sends what
- * changed, not what is there.
+ * at value.length) — and, as there, the field is put back to bare padding
+ * after EVERY edit: never mid-composition and never before xterm has read the
+ * field (the re-seed is queued after the input event, behind the timers xterm
+ * queued at keydown and compositionend).
+ *
+ * After every edit, not only when it ran low (phone report 2026-11-01, Samsung
+ * keyboard, pinyin): kept, the typed text piled up in the field until Enter,
+ * and each word went out again with every word before it and the padding.
+ * xterm's "what changed" is new.replace(old, ''); once the keyboard touches
+ * anything before the caret, old is no longer inside new and xterm sends the
+ * whole field. With nothing but padding in it, there is nothing old to resend,
+ * and withoutPad keeps the padding itself from ever reaching the agent.
  */
 
 /** Spaces: no word for a keyboard to predict on, nothing to autocorrect. */
 export const PAD = ' '.repeat(32)
 
-/** Fewer than this left and the next few Backspaces could find the field empty. */
-const LOW = 8
-
-/** Typed text piles up in the field; past this it is cleared back to padding. */
-const HIGH = 512
-
-/** Whether the field should be put back to bare padding. */
+/** Whether the field should be put back to bare padding: whenever it is anything else. */
 export function needsSeed(value: string): boolean {
-  return value.length < LOW || value.length > HIGH
+  return value !== PAD
+}
+
+/** A run of spaces this long at the head of one send is the padding (a few Backspaces may have eaten into it), never typing. */
+const PAD_RUN = new RegExp(`^ {${PAD.length - 8},}`)
+
+/** What xterm sends, without the padding, should a send ever carry the whole field. */
+export function withoutPad(data: string): string {
+  return data.replace(PAD_RUN, '')
 }
 
 /** The slice of a textarea the pad needs; a test can fake it. */
@@ -49,6 +58,8 @@ export function attachTextareaPad(
   }
 ): () => void {
   let composing = false
+  /** Counts compositions begun: a re-seed queued before one began stands down (seedLater). */
+  let compositions = 0
   const pending = new Set<() => void>()
 
   const seedIfDry = (): void => {
@@ -56,15 +67,22 @@ export function attachTextareaPad(
     textarea.value = PAD
     textarea.setSelectionRange(PAD.length, PAD.length)
   }
+  // Queued behind xterm's own read of the field. A composition's inputs queue
+  // nothing: their timers would run before the one xterm queues AT
+  // compositionend, and wipe the committed word before it is read. The
+  // composition's re-seed is compositionend's own, queued after xterm's.
   const seedLater = (): void => {
+    if (composing) return
+    const at = compositions
     const cancel = later(() => {
       pending.delete(cancel)
-      seedIfDry()
+      if (at === compositions) seedIfDry()
     })
     pending.add(cancel)
   }
   const onCompositionStart = (): void => {
     composing = true
+    compositions += 1
   }
   const onCompositionEnd = (): void => {
     composing = false
