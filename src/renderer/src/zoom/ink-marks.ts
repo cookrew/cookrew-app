@@ -166,7 +166,27 @@ const ensoClosed = (): Mark => ({ kind: 'spline', pts: arc(50, 50.5, 44, -1.95, 
 /** The ownership tie: one bowed stroke, heavy at the owner, dry at the member. */
 const tie = (): Mark => ({ kind: 'spline', pts: [[3, 50, 0.75], [22, 48.8, 1.05], [52, 48.5, 1], [80, 49.3, 0.8], [97, 50.4, 0.45]] })
 
-export const MARKS = { claude, codex, opencode, pi, shell, enso, ensoClosed, tie }
+/**
+ * The status brush (InkAvatar's status): red that rides the ensō, landing
+ * where the ensō lands and running the same way. Working is a third of a turn
+ * laid head first, so the wet drop leads as it laps; waiting runs past a full
+ * turn and presses its lift over its landing.
+ */
+const LAND = -1.95
+const ringWorking = (): Mark => ({ kind: 'spline', pts: arc(50, 50.5, 44.7, LAND + TAU * 0.3, LAND, 1.25, 0.4) })
+const ringWaiting = (): Mark => ({ kind: 'spline', pts: arc(50, 50.5, 45.2, LAND, LAND + TAU * 1.06, 1.3, 0.75, 44) })
+/** Where the corner marks sit: the ensō's top-right shoulder, where the old unread dot was. */
+export const CORNER = { x: 86, y: 14 }
+const atCorner = (pts: Pt[]): Pt[] => pts.map(([x, y, p]) => [CORNER.x + x, CORNER.y + y, p])
+/** Done: a tick in one stroke, a short press down and a long flick up; a repeated point keeps the corner sharp. */
+const tick = (): Mark => ({ kind: 'linear', pts: atCorner([[-12, 0, 0.7], [-4, 9.5, 1.15], [-4, 9.5, 1.15], [14, -13.5, 0.4]]) })
+/** Offline: a z in one stroke. */
+const zee = (): Mark => ({
+  kind: 'linear',
+  pts: atCorner([[-7.8, -8.2, 0.75], [7.2, -8.9, 1], [7.2, -8.9, 1], [-7.8, 7.9, 1.05], [-7.8, 7.9, 1.05], [8.4, 7.2, 0.6]])
+})
+
+export const MARKS = { claude, codex, opencode, pi, shell, enso, ensoClosed, tie, ringWorking, ringWaiting, tick, zee }
 export type MarkName = keyof typeof MARKS
 export type HarnessMark = 'claude' | 'codex' | 'opencode' | 'pi' | 'shell'
 

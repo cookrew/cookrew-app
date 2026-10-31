@@ -1537,7 +1537,7 @@ function Canvas(): React.JSX.Element {
           {view === 'stage' && (
             <Suspense fallback={null}>
               <TerminalAttachmentsContext.Provider value={attachIndex}>
-                <ZoomView workspace={workspace} workspaceId={activeWsId} attachIndex={attachIndex}>
+                <ZoomView workspace={workspace} workspaceId={activeWsId} attachIndex={attachIndex} onDelete={requestClose}>
                   {zoomFull !== null && <StageView workspace={workspace} workspaceId={activeWsId} terminals={terminals} attachIndex={attachIndex} onShowing={setStageShowing} />}
                 </ZoomView>
               </TerminalAttachmentsContext.Provider>
@@ -1707,6 +1707,7 @@ function Canvas(): React.JSX.Element {
           <AgentPets
             workspace={workspace}
             workspaceId={activeWsId}
+            attachIndex={attachIndex}
             onOpen={zoomToNode}
             // In a full view both groups attach to its panel (pets/pet-dock.ts),
             // as group-motion-pivot.html draws them.

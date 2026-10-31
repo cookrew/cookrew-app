@@ -4,32 +4,37 @@ import { useActivitiesSnapshot } from '../activity-thumb-store'
 import { useRoster } from '../agent-registry'
 import { buildAgentRows, type AgentRow } from '../agent-rows'
 import { AgentAvatar } from '../nodes/AgentAvatar'
+import { inkStatusOfRow } from '../zoom/ink-status'
 import { InkAvatar } from '../zoom/InkAvatar'
-import { TurnView } from '../nodes/TurnView'
 import { useStreamTails } from '../stream/use-stream-tails'
 import { checkpointViewModel, isEmptyTurnView } from '../turn-view-model'
-import type { TurnPhase } from '../../../shared/turn'
 import type { WorkspaceState } from '../../../shared/model'
 import { petMax, pickPets, type Pet, type PetMood } from './pet-pick'
 import { useOfToolLine, type ToolUse } from '../../../shared/use-signal'
 import { dockedOrder } from './pet-dock'
 import { PetTroop, type CardControls } from './PetTroop'
+import type { AttachmentIndex } from '../terminal-attachments'
+import { AgentLatest } from '../zoom/AgentLatest'
+import { Counts, Page } from '../zoom/ZoomParts'
+import { itemViewOf, type ItemView } from '../zoom/zoom-model'
+import '../zoom/zoom.css'
+import '../zoom/agent-card.css'
 
 /**
  * THE AGENTS AS PETS — the right-hand troop (PetTroop.tsx).
  *
  * The stage's agent column is retired: this is where the crew lives now,
  * over every page. pet-pick.ts says who rides along (whoever needs you, then
- * whoever is working, then what finished lately). A card is the agent's latest
- * turn as the board card shows it (the same TurnView: headline, the ask, the
- * tool calls, the status or the reply) and a box to prompt it from right
- * there (the first click); the second click is the full transcript.
+ * whoever is working, then what finished lately). A card (the first click) is
+ * the zoom's agent card, one card in one look (zoom/agent-card.css): its face
+ * and state, its latest turn (zoom/AgentLatest.tsx: headline, the ask, the
+ * tool it runs, the live status), three of its browsers and notes, and a box
+ * to prompt it; the second click is the full transcript.
  */
 
 const SENT_MS = 4000
 const TICK_MS = 30_000
 
-const AVATAR: Record<PetMood, TurnPhase> = { needs: 'waiting', working: 'thinking', done: 'replied', asleep: 'idle' }
 const MOOD_WORD: Record<PetMood, string> = { needs: 'needs you', working: 'working', done: 'done', asleep: 'resting' }
 
 /**
@@ -75,15 +80,21 @@ const usePetRows = (workspace: WorkspaceState | null): { rows: AgentRow[]; now: 
   return { rows, now }
 }
 
+/** Thumbnails a card shows, as the zoom card does. */
+const CARD_THUMBS = 3
+
 export function AgentPets({
   workspace,
   workspaceId,
+  attachIndex,
   onOpen,
   dock = null
 }: {
   workspace: WorkspaceState | null
   workspaceId: string | null
-  /** The full transcript (App: the stage, with it picked). */
+  /** Each agent's browsers and notes, for the card's counts and thumbnails. */
+  attachIndex: AttachmentIndex
+  /** The full transcript (App: the stage, with it picked); an item id opens the item. */
   onOpen: (id: string) => void
   /**
    * A full view is up: the troop attaches to it (pet-dock.ts), without the
@@ -112,8 +123,7 @@ export function AgentPets({
       face: (
         <>
           {/* The navigator's ink face, so the side group and the full view are one family. */}
-          <InkAvatar id={pet.row.id} preset={pet.row.preset} orch={pet.row.orch} />
-          {pet.mood === 'asleep' && <span className="cr-pet-z" aria-hidden="true">z</span>}
+          <InkAvatar id={pet.row.id} preset={pet.row.preset} orch={pet.row.orch} status={inkStatusOfRow(pet.row.phase, pet.row.unread)} />
           {use && (
             <span className="cr-pet-use" data-use={use.use} aria-hidden="true">
               {use.via}
@@ -132,18 +142,44 @@ export function AgentPets({
       more={column.more.map(member)}
       dockable={dock !== null}
       onOpen={onOpen}
-      cardClass={(id) => byId.get(id)?.mood ?? ''}
+      cardClass={(id) => `ag-ink ag-card ${byId.get(id)?.mood ?? ''}`}
       cardLabel={(id) => `${byId.get(id)?.row.name ?? 'Agent'}'s latest turn`}
       renderCard={(id, controls) => {
         const pet = byId.get(id)
-        return pet ? <AgentCard pet={pet} now={now} controls={controls} /> : null
+        if (!pet) return null
+        const carried = attachIndex.get(id) ?? []
+        return (
+          <AgentCard
+            pet={pet}
+            now={now}
+            controls={controls}
+            carried={carried.flatMap((a) => itemViewOf(a.node, [id]) ?? [])}
+            onItem={(itemId) => {
+              controls.close()
+              onOpen(itemId)
+            }}
+          />
+        )
       }}
     />
   )
 }
 
-/** One agent's card: its latest turn, and a box to prompt it. */
-function AgentCard({ pet, now, controls }: { pet: Pet; now: number; controls: CardControls }): React.JSX.Element {
+/** One agent's card: its face and state, its latest turn, its browsers and notes, and a box to prompt it. */
+function AgentCard({
+  pet,
+  now,
+  controls,
+  carried,
+  onItem
+}: {
+  pet: Pet
+  now: number
+  controls: CardControls
+  /** Its browsers and notes, newest wire first. */
+  carried: readonly ItemView[]
+  onItem: (id: string) => void
+}): React.JSX.Element {
   const { row, mood } = pet
   const [draft, setDraft] = useState('')
   const [sent, setSent] = useState<string | null>(null)
@@ -175,14 +211,14 @@ function AgentCard({ pet, now, controls }: { pet: Pet; now: number; controls: Ca
     <>
       <div className="cr-pet-card-head">
         <span className="cr-pet-card-face">
-          <AgentAvatar phase={AVATAR[mood]} preset={row.preset} />
+          <AgentAvatar id={row.id} orch={row.orch} status={inkStatusOfRow(row.phase, row.unread)} preset={row.preset} />
         </span>
         <span className="cr-pet-card-who">
           <span className="cr-pet-card-name">{row.name}</span>
           <span className="cr-pet-card-meta">
             <span className={`cr-pet-mood ${mood}`}>{MOOD_WORD[mood]}</span>
-            <span>{agoLabel(row.lastActivityAt, now)}</span>
-            {row.turnCount > 0 && <span>{row.turnCount} turns</span>}
+            <Counts browsers={carried.filter((i) => i.kind === 'browser').length} notes={carried.filter((i) => i.kind === 'note').length} none="" />
+            <span title={row.turnCount > 0 ? `${row.turnCount} turns` : undefined}>{agoLabel(row.lastActivityAt, now)}</span>
           </span>
         </span>
         <button type="button" className="cr-pet-card-open" onClick={controls.open} title="Open the full transcript (or click its face again)">
@@ -192,16 +228,23 @@ function AgentCard({ pet, now, controls }: { pet: Pet; now: number; controls: Ca
           ×
         </button>
       </div>
-      <div className="cr-pet-card-turn ags-turn">
-        {turn ? <TurnView model={turn} /> : <span className="cr-pet-card-empty">{row.brief ?? 'Nothing said yet.'}</span>}
-      </div>
+      <AgentLatest turn={turn} fallback={row.brief ?? 'Nothing said yet.'} />
+      {carried.length > 0 && (
+        <div className="ag-thumbs">
+          {carried.slice(0, CARD_THUMBS).map((item) => (
+            <button key={item.id} type="button" className={`zv-th ag-thumb ${item.kind}`} title={item.title} aria-label={`Open ${item.kind}: ${item.title}`} onClick={() => onItem(item.id)}>
+              <Page item={item} big />
+            </button>
+          ))}
+        </div>
+      )}
       {sent !== null && (
         <div className="cr-pet-card-sent" role="status">
           sent — {sent.length > 80 ? `${sent.slice(0, 80)}…` : sent}
         </div>
       )}
       <form
-        className="cr-pet-card-ask"
+        className="ag-reply"
         onSubmit={(event) => {
           event.preventDefault()
           send()
@@ -210,7 +253,7 @@ function AgentCard({ pet, now, controls }: { pet: Pet; now: number; controls: Ca
         <textarea
           value={draft}
           rows={1}
-          placeholder={`Prompt ${row.name}…`}
+          placeholder={`Reply to ${row.name}…`}
           aria-label={`Prompt ${row.name}`}
           onChange={(event) => {
             setDraft(event.target.value)
@@ -224,7 +267,7 @@ function AgentCard({ pet, now, controls }: { pet: Pet; now: number; controls: Ca
             }
           }}
         />
-        <button type="submit" className="cr-pet-card-send" disabled={draft.trim().length === 0} aria-label="Send">
+        <button type="submit" disabled={draft.trim().length === 0} aria-label="Send">
           ➜
         </button>
       </form>

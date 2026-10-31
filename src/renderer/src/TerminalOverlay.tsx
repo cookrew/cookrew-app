@@ -458,7 +458,7 @@ function TerminalOverlay({
   const tuning = useAgentTuning({ terminalId: node.id, phase, remote })
   // The agent's face on its side of the chat (transcript-face.ts): one
   // element, so the memoised rows are not re-rendered by a new one each frame.
-  const chatFace = useMemo(() => <AgentAvatar phase="idle" preset={node.preset} />, [node.preset])
+  const chatFace = useMemo(() => <AgentAvatar id={node.id} orch={node.orch === true} status="idle" preset={node.preset} />, [node.id, node.orch, node.preset])
   // Chat or the raw terminal (transcript-look.ts): one class on the box.
   const [look, setLook] = useTranscriptLook()
   // Read by the terminal's mount-once setup: is the live view on screen?

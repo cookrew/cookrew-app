@@ -50,13 +50,14 @@ export function stackOf(agents: readonly CrewAgent[]): Record<string, Pos & { s:
 export const crewOrder = (agents: readonly CrewAgent[]): CrewAgent[] => [...agents.filter((a) => a.orch), ...agents.filter((a) => !a.orch)]
 
 /** The crew: orchestrators in a row on top, everyone else in rows under them. */
-export function crewOf(agents: readonly CrewAgent[], narrow: boolean): { at: Record<string, Pos>; box: Box } {
+export function crewOf(agents: readonly CrewAgent[], narrow: boolean): { at: Record<string, Pos>; next: Pos; box: Box } {
   const cols = narrow ? 3 : 5
   const leads = agents.filter((a) => a.orch)
   const rest = agents.filter((a) => !a.orch)
   const rows: CrewAgent[][] = []
   if (leads.length) for (let i = 0; i < leads.length; i += cols) rows.push(leads.slice(i, i + cols))
   for (let i = 0; i < rest.length; i += cols) rows.push(rest.slice(i, i + cols))
+  if (rows.length === 0) rows.push([])
   const at: Record<string, Pos> = {}
   const top = -((rows.length - 1) * ROW) / 2 - 10
   rows.forEach((row, r) => {
@@ -64,9 +65,16 @@ export function crewOf(agents: readonly CrewAgent[], narrow: boolean): { at: Rec
       at[a.id] = { x: (c - (row.length - 1) / 2) * COL, y: top + r * ROW }
     })
   })
-  const wideRow = Math.max(1, ...rows.map((r) => r.length))
+  // A seat at the end of the crew, for the agent that is not there yet: it is
+  // how one is made when there is no canvas to click on (owner, 2026-10-31).
+  const last = rows.length - 1
+  const lastRow = rows[last]
+  const next = lastRow.length < cols
+    ? { x: (lastRow.length - (lastRow.length - 1) / 2 - 0.5) * COL, y: top + last * ROW }
+    : { x: ((lastRow.length - 1) / 2 + 1) * COL, y: top + last * ROW }
+  const wideRow = Math.max(1, ...rows.map((r) => r.length)) + (lastRow.length < cols ? 1 : 0)
   // Room for the orbiting coins on the right and a card opening down and right.
-  return { at, box: { w: Math.max(560, wideRow * COL + 360), h: Math.max(420, rows.length * ROW + 300), cy: 40 } }
+  return { at, next, box: { w: Math.max(560, wideRow * COL + 360), h: Math.max(420, rows.length * ROW + 300), cy: 40 } }
 }
 
 /** The items' grid, most shared first, and the shelf the agents step up into. */

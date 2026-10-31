@@ -6,7 +6,7 @@
    owns.
 
    Geometry is in scene units around a part's anchor point, as zoom-frame.ts
-   reads it: an agent's avatar is 64 px about its anchor, its card 260 × 212
+   reads it: an agent's avatar is 64 px about its anchor, its card 260 × 244
    from (−34, −34), a link's thumbnail 70 × 46 over a 22 px coin, an item's
    own thumbnail 168 × 108. Parts the painter moves are zero-size boxes at
    (0, 0), so their default transform origin IS the anchor.
@@ -16,7 +16,10 @@
    error (45); all under the header and dock (50) and the pets (55). The root
    makes no stacking context, so sheets opened from the stage keep theirs. */
 
-.zv-root {
+/* The ink tokens, on the zoom and on anything else that draws an agent's
+   card in them (the pet card, agent-card.css). */
+.zv-root,
+.ag-ink {
   --zv-paper: var(--sumi-paper, #f4efe4);
   --zv-paper-2: var(--sumi-paper-2, #ebe3d3);
   --zv-card: var(--sumi-card, #fbf8f1);
@@ -40,7 +43,9 @@
   --zv-mono: var(--font-mono, ui-monospace, 'SF Mono', Menlo, monospace);
   /* Text on a browser's tint (the coin's initial, the favicon). */
   --zv-on-tint: #fbf8f1;
+}
 
+.zv-root {
   position: absolute;
   inset: 0;
   overflow: hidden;
@@ -142,6 +147,67 @@
   stroke-width: 0.42;
   stroke-linecap: round;
   opacity: 0.82;
+}
+
+/* ── an agent's status in ink (InkAvatar status, ink-status.ts) ──
+   Red rides the ensō: working laps a third of a turn, waiting closes the ring
+   and blinks it with the harness mark (red too), done ticks the shoulder in
+   red, offline fades the ink under an ink z. Motion is a rotation and an
+   opacity only; idle, done and offline stand still. */
+.ink-avatar :is(.ink-zhu, .ink-glyph) {
+  --zv-ink-status: var(--sumi-wait, #c0392b);
+}
+
+.ink-avatar .ink-zhu,
+.ink-avatar.waiting .ink-glyph {
+  --zv-ink: var(--zv-ink-status);
+}
+
+.ink-avatar .ink-lap {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ink-lap 1.8s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+}
+
+.ink-avatar.waiting :is(.ink-zhu, .ink-glyph) {
+  animation: ink-blink 1.2s ease-in-out infinite;
+}
+
+.ink-avatar .ink-corner {
+  animation: ink-in 0.4s ease-out both;
+}
+
+.ink-avatar.offline .ink-own {
+  opacity: 0.34;
+}
+
+.ink-avatar.offline .ink-corner {
+  opacity: 0.8;
+}
+
+@keyframes ink-lap {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes ink-blink {
+  50% {
+    opacity: 0.2;
+  }
+}
+
+@keyframes ink-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ink-avatar :is(.ink-lap, .ink-zhu, .ink-glyph, .ink-corner),
+  .ink-avatar.waiting :is(.ink-zhu, .ink-glyph) {
+    animation: none;
+  }
 }
 
 .ink-tie .ink-bristle {
@@ -528,7 +594,7 @@
   left: -34px;
   top: -34px;
   width: 260px;
-  height: 212px;
+  height: 244px;
   border-radius: 14px;
   background: var(--zv-card);
   box-shadow:
@@ -568,10 +634,6 @@
   height: 64px;
 }
 
-/* Offline: the ink goes pale (the avatar's own opacity is the painter's). */
-.zv-m.offline .zv-av .ink-avatar {
-  opacity: 0.4;
-}
 
 .zv-nm,
 .zv-st,
@@ -629,15 +691,12 @@
   will-change: transform, opacity;
 }
 
-/* Two lines at most: the strip of thumbnails starts at 81. */
+/* The latest block (AgentLatest.tsx, agent-card.css): four lines at most, one
+   each, so the strip of thumbnails starts at 113. */
 .zv-body {
   width: 228px;
-  max-height: 32px;
+  max-height: 64px;
   overflow: hidden;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow-wrap: anywhere;
   font: 11.5px/16px var(--zv-mono);
   color: var(--zv-ink-soft);
   transform-origin: 0 0;
@@ -653,7 +712,7 @@
 .zv-emp {
   position: absolute;
   left: -18px;
-  top: 81px;
+  top: 113px;
   width: 228px;
   height: 46px;
   display: grid;
@@ -669,7 +728,7 @@
 .zv-reply {
   position: absolute;
   left: -18px;
-  top: 138px;
+  top: 170px;
   width: 228px;
   height: 30px;
   margin: 0;
@@ -1630,3 +1689,131 @@
   outline: 3px solid var(--zv-seal);
   outline-offset: 4px;
 }
+
+/* ── the seat for the agent that is not there yet, and its card ─────────────
+   With the canvas retired there is no pane to click, so the crew ends with one
+   empty seat. It is a dashed ring with a plus, the same paper as the faces. */
+.zv-newseat {
+  appearance: none;
+  position: absolute;
+  left: -32px;
+  top: -32px;
+  width: 64px;
+  height: 64px;
+  margin: 0;
+  padding: 0;
+  border: 3px dashed var(--zv-hair-2);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--zv-muted);
+  font: 300 26px/1 var(--zv-serif);
+  cursor: pointer;
+  transform-origin: 32px 32px;
+  pointer-events: auto;
+}
+
+.zv-newseat:hover,
+.zv-newseat:focus-visible {
+  border-color: var(--zv-seal);
+  color: var(--zv-seal);
+  outline: none;
+  background: var(--zv-card);
+}
+
+.zv-newcard {
+  position: absolute;
+  left: 26px;
+  top: 40px;
+  z-index: 60;
+  width: 268px;
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--zv-card);
+  box-shadow: inset 0 0 0 1px var(--zv-hair-2), 0 14px 36px var(--zv-shadow);
+  font: 12px/1.4 var(--zv-mono);
+  color: var(--zv-ink);
+}
+
+.zv-newcard-title { font: 600 15px/1.2 var(--zv-serif); }
+
+.zv-newcard-harness {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.zv-newcard-harness button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 4px;
+  border: 1px solid var(--zv-hair-2);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--zv-soft, var(--zv-ink-soft));
+  font: 10.5px/1 var(--zv-mono);
+  cursor: pointer;
+}
+
+.zv-newcard-harness button.on { border-color: var(--zv-seal); color: var(--zv-ink); }
+.zv-newcard-harness .ink-avatar { width: 18px; height: 18px; }
+
+.zv-newcard-name {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--zv-hair-2);
+  border-radius: 8px;
+  background: var(--zv-paper);
+  color: var(--zv-ink);
+  font: 12px/1 var(--zv-mono);
+}
+
+.zv-newcard-name:focus { outline: 2px solid var(--zv-seal); outline-offset: 1px; }
+.zv-newcard-orch { display: flex; align-items: center; gap: 7px; font-size: 10.5px; color: var(--zv-muted); }
+.zv-newcard-error { color: var(--zv-wait); font-size: 10.5px; }
+.zv-newcard-acts { display: flex; justify-content: flex-end; gap: 8px; }
+
+.zv-newcard-acts button {
+  padding: 6px 12px;
+  border: 1.5px solid var(--zv-ink);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--zv-ink);
+  font: 11px/1 var(--zv-mono);
+  cursor: pointer;
+}
+
+.zv-newcard-acts button.primary { background: var(--zv-ink); color: var(--zv-card); }
+.zv-newcard-acts button:disabled { opacity: 0.5; cursor: default; }
+
+/* ── removal: one small mark, only where the card is open ──────────────────
+   A card's × is the way out of the workspace; the app's confirm dialog does
+   the asking, so nothing is removed by a stray click. */
+.zv-del {
+  position: absolute;
+  left: 222px;
+  top: -46px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--zv-hair-2);
+  border-radius: 50%;
+  background: var(--zv-card);
+  color: var(--zv-muted);
+  font: 13px/1 var(--zv-mono);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.zv-m[data-card='open'] .zv-del,
+.zv-ip:hover .zv-del,
+.zv-ip:focus-within .zv-del {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.zv-del:hover { border-color: var(--zv-wait); color: var(--zv-wait); }

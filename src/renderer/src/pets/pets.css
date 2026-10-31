@@ -225,43 +225,14 @@
   animation-delay: -2.2s;
 }
 
+/* The ink face carries the status (InkAvatar status): no border colour, no dot. */
 .cr-pet.needs {
-  border-color: var(--rose);
   animation: cr-pet-wiggle 1.6s ease-in-out infinite;
-}
-
-.cr-pet.needs::after {
-  content: '';
-  position: absolute;
-  top: -2px;
-  right: -2px;
-  width: 10px;
-  height: 10px;
-  border: 2px solid var(--cream-hi);
-  border-radius: 50%;
-  background: var(--rose);
-}
-
-.cr-pet.working {
-  border-color: var(--amber-deep);
-  border-style: dashed;
-}
-
-.cr-pet.done {
-  border-color: var(--hp);
 }
 
 .cr-pet.asleep {
   opacity: 0.62;
   animation: none;
-}
-
-.cr-pet-z {
-  position: absolute;
-  top: -6px;
-  right: -1px;
-  font: 700 10px var(--font-mono);
-  color: var(--muted);
 }
 
 .cr-pet.more {

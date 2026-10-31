@@ -6,6 +6,7 @@
  * workspace list and the roster give the other workspaces' marks.
  */
 import type { AgentPhase, AgentRow } from '../agent-rows'
+import type { TurnViewModel } from '../turn-view-model'
 import { activeBrowserTab, type CanvasNode, type Connection, type WorkspaceMeta } from '../../../shared/model'
 import type { AttachmentIndex } from '../terminal-attachments'
 import { hostOf, tintOf } from './zoom-layout'
@@ -17,10 +18,14 @@ export interface AgentView {
   preset: string
   orch: boolean
   phase: AgentPhase
+  /** Its last reply is still unread: the face ticks (ink-status.ts). */
+  unread?: boolean
   word: string
   line: string
   browsers: number
   notes: number
+  /** Its latest turn, for the card's latest block (AgentLatest.tsx); null when none is known. */
+  turn: TurnViewModel | null
 }
 export interface ItemView {
   id: string
@@ -75,6 +80,20 @@ export function lineOf(row: AgentRow | undefined, brief: string | null | undefin
   return t?.latest?.text?.trim() || t?.title?.trim() || t?.ask?.trim() || brief?.trim() || 'Nothing said yet.'
 }
 
+/** A browser or note as the cards draw it (the zoom's thumbnails, the pet card's strip); null for anything else. */
+export function itemViewOf(n: CanvasNode, owners: string[]): ItemView | null {
+  if (n.kind === 'browser') {
+    const tab = activeBrowserTab(n)
+    const title = tab.title?.trim() || n.name
+    return { id: n.id, kind: 'browser', title, host: hostOf(tab.url), tint: tintOf(n.id), initial: (title.match(/[A-Za-z0-9]/)?.[0] ?? '·').toUpperCase(), line: tab.url, owners }
+  }
+  if (n.kind === 'note') {
+    const first = (n.content ?? '').split('\n').map((l) => l.replace(/^#+\s*/, '').trim()).find(Boolean) ?? ''
+    return { id: n.id, kind: 'note', title: n.name, host: 'note', tint: tintOf(n.id), initial: '', line: first, owners }
+  }
+  return null
+}
+
 export interface ZoomInput {
   nodes: readonly CanvasNode[]
   connections: readonly Connection[]
@@ -108,10 +127,12 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
       preset: n.preset,
       orch: n.orch === true,
       phase,
+      unread: row?.unread === true,
       word: PHASE_WORD[phase],
       line: lineOf(row, n.brief),
       browsers: list.filter((a) => a.kind === 'browser').length,
-      notes: list.filter((a) => a.kind === 'note').length
+      notes: list.filter((a) => a.kind === 'note').length,
+      turn: row?.turn ?? null
     })
   }
   // Orchestrators first: the first agent is on top of the stack and leads the crew.
@@ -126,14 +147,8 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
   // Newest first: nodes are kept in creation order.
   const items: ItemView[] = []
   for (const n of [...input.nodes].reverse()) {
-    if (n.kind === 'browser') {
-      const tab = activeBrowserTab(n)
-      const title = tab.title?.trim() || n.name
-      items.push({ id: n.id, kind: 'browser', title, host: hostOf(tab.url), tint: tintOf(n.id), initial: (title.match(/[A-Za-z0-9]/)?.[0] ?? '·').toUpperCase(), line: tab.url, owners: owners.get(n.id) ?? [] })
-    } else if (n.kind === 'note') {
-      const first = (n.content ?? '').split('\n').map((l) => l.replace(/^#+\s*/, '').trim()).find(Boolean) ?? ''
-      items.push({ id: n.id, kind: 'note', title: n.name, host: 'note', tint: tintOf(n.id), initial: '', line: first, owners: owners.get(n.id) ?? [] })
-    }
+    const view = itemViewOf(n, owners.get(n.id) ?? [])
+    if (view) items.push(view)
   }
 
   // A link per agent and item it carries, in the order the agent carries them.
