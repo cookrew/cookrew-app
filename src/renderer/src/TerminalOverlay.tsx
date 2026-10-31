@@ -49,6 +49,7 @@ import { routeDialAllowed, routeDialInput } from '../../shared/route-view'
 import { isNight, useNight } from './color-scheme'
 import { paperCursor } from './paper-cursor'
 import { createSizeOwner, tookOthers, type PaneSize } from './pane-size'
+import { createTurnRedraw } from './turn-redraw'
 
 /**
  * PAPER, not phosphor (2026-10-30): the live terminal is the app's own cream
@@ -253,6 +254,11 @@ function TerminalOverlay({
    */
   const activityRef = useRef(activity)
   activityRef.current = activity
+  // A widen mid-turn is redrawn when the turn ends (turn-redraw.ts); the
+  // terminal effect below fills in the kick and the ownership test.
+  const turnRedraw = useRef(createTurnRedraw())
+  const kickRef = useRef<(() => void) | null>(null)
+  const ownsRef = useRef<() => boolean>(() => false)
   // Drag-in attachments: dragenter/leave bubble from every child of the
   // overlay, so a plain boolean would flicker — count enters vs leaves.
   const [dropReady, setDropReady] = useState(false)
@@ -694,6 +700,7 @@ function TerminalOverlay({
       /** The last size this viewer asked for as its own (a repaint kick's cols-1 step is not one). */
       let mySize: PaneSize | null = null
       const sendSize = (cols: number, rows: number, kick = false): void => {
+        if (!kick && paneSize && cols > paneSize.cols) turnRedraw.current.widened(activityRef.current?.phase ?? 'idle')
         paneSize = { cols, rows }
         if (!kick) mySize = { cols, rows }
         cookrew().ptyResize(node.id, cols, rows)
@@ -802,6 +809,8 @@ function TerminalOverlay({
           if (!disposed) sendSize(term.cols, term.rows)
         }, 150)
       }
+      kickRef.current = repaintKick
+      ownsRef.current = owns
       /**
        * A RE-hello is a reconnect, and a reconnect may have found a mirror
        * that was rebuilt while the link was down — whose replay frame is an
@@ -870,6 +879,9 @@ function TerminalOverlay({
         (hello) => {
           const { cols, rows } = hello
           if (disposed || cols <= 0 || rows <= 0) return
+          if ((hello as { resized?: boolean }).resized && paneSize && cols > paneSize.cols) {
+            turnRedraw.current.widened(activityRef.current?.phase ?? 'idle')
+          }
           paneSize = { cols, rows }
           term.resize(cols, rows)
           // The pane changed size (every viewer is told, the one that asked
@@ -1159,6 +1171,12 @@ function TerminalOverlay({
   useEffect(() => {
     if (phase === 'replied') cookrew().turnSeen(node.id)
   }, [phase, node.id])
+
+  // The turn came to rest after a widen it was too busy to redraw for: the
+  // viewer that owns the size nudges it once (repaintKick).
+  useEffect(() => {
+    if (turnRedraw.current.settled(phase) && ownsRef.current()) kickRef.current?.()
+  }, [phase])
 
   const hasFiles = (e: React.DragEvent): boolean =>
     Array.from(e.dataTransfer.types).includes('Files')
