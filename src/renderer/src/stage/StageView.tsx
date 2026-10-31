@@ -20,6 +20,17 @@ import { StageItemPane } from './StageItemPane'
 import { StageTerminal } from './StageTerminal'
 import './stage.css'
 import { zoomStore } from '../zoom/zoom-store'
+import { AgentAvatar } from '../nodes/AgentAvatar'
+import { InkAvatar } from '../zoom/InkAvatar'
+import './zoom/full-views.css'
+
+/** How many of each kind an agent carries, for the head. */
+const tally = (list: readonly { kind: string }[]): { browsers: number; notes: number } => ({
+  browsers: list.filter((a) => a.kind === 'browser').length,
+  notes: list.filter((a) => a.kind === 'note').length
+})
+const WORD: Record<string, string> = { waiting: 'needs you', working: 'working', done: 'done', quiet: 'resting', offline: 'offline' }
+const PHASE = { waiting: 'waiting', working: 'thinking', done: 'replied', quiet: 'idle', offline: 'idle' } as const
 
 /** A pop older than this has been seen, or missed: it no longer takes the stage. */
 const POP_FRESH_MS = 10 * 60_000
@@ -110,20 +121,67 @@ export function StageView({
     if (selection.kind === 'auto' && target) stageSelect.set({ kind: 'agent', id: target.terminalId })
   }
 
+  // The full view wears the navigator's frame (zoom/full-views.css): a paper
+  // panel with the agent's head on it, or the browser's or note's.
+  const counts = tally(target ? (attachIndex.get(target.terminalId) ?? []) : [])
   return (
     <div className="cr-stage-view bedded" data-why={pickedItem ? 'item' : (target?.why ?? 'none')}>
       <div className="cr-stage-main" onPointerDownCapture={hold} onKeyDownCapture={hold}>
         {pickedItem ? (
-          <StageItemPane key={pickedItem.id} item={pickedItem} onClose={back} />
+          <div className="zv-fullview item">
+            <header className="zv-fv-head">
+              <span className={`zv-fv-face ${pickedItem.kind}`} aria-hidden="true">
+                {pickedItem.kind === 'note' ? '¶' : (pickedItem.sub.match(/[A-Za-z0-9]/)?.[0] ?? '·').toUpperCase()}
+              </span>
+              <span className="zv-fv-who">
+                <b>{pickedItem.title}</b>
+                <small>{pickedItem.kind} · {pickedItem.sub}</small>
+              </span>
+              <span className="zv-fv-used">
+                <em>used by</em>
+                {pickedItem.owners.length === 0 && <i>no agent</i>}
+                {pickedItem.owners.slice(0, 4).map((id) => {
+                  const row = faces.get(id)
+                  return row ? (
+                    <i key={id} title={row.name}>
+                      <AgentAvatar preset={row.preset} phase={PHASE[row.phase]} />
+                      {row.name}
+                    </i>
+                  ) : null
+                })}
+              </span>
+            </header>
+            <StageItemPane key={pickedItem.id} item={pickedItem} onClose={back} />
+          </div>
         ) : target ? (
-          <SideTabsContext.Provider value={false}>
-            <StageTerminal
-              key={target.terminalId}
-              local={terminals.find((t) => t.id === target.terminalId) ?? null}
-              item={target.item}
-              onBack={back}
-            />
-          </SideTabsContext.Provider>
+          <div className="zv-fullview agent">
+            <header className="zv-fv-head">
+              {shown && (
+                <>
+                  <span className="zv-fv-ink" aria-hidden="true">
+                    <InkAvatar id={shown.id} preset={shown.preset} orch={shown.orch} />
+                  </span>
+                  <span className="zv-fv-who">
+                    <b>{shown.name}</b>
+                    <small>
+                      <span className={`zv-fv-state ${shown.phase}`}>{WORD[shown.phase]}</span>
+                      {counts.browsers > 0 && <span>{counts.browsers} browser{counts.browsers === 1 ? '' : 's'}</span>}
+                      {counts.notes > 0 && <span>{counts.notes} note{counts.notes === 1 ? '' : 's'}</span>}
+                      {counts.browsers + counts.notes === 0 && <span>nothing open</span>}
+                    </small>
+                  </span>
+                </>
+              )}
+            </header>
+            <SideTabsContext.Provider value={false}>
+              <StageTerminal
+                key={target.terminalId}
+                local={terminals.find((t) => t.id === target.terminalId) ?? null}
+                item={target.item}
+                onBack={back}
+              />
+            </SideTabsContext.Provider>
+          </div>
         ) : (
           <div className="cr-stage-wait">No agent here yet</div>
         )}

@@ -1,0 +1,189 @@
+/* ---- THE FULL VIEWS, ON THE PANEL (StageView.tsx, zoom/full-views.css) ----
+   The navigator's last stop is not a page of plain cream with a browser's
+   chrome on it: it is the same panel the demo drew
+   (docs/brand-ink-2026-10-31/group-motion-pivot.html) — a sheet of paper with
+   the agent's head on it (its ensō, its name in serif, its state and what it
+   carries), the transcript on the paper, the browsers and notes as tabs down
+   the right, and the prompt box at the foot. The browser's and the note's own
+   full view wear the same sheet, with who uses it.
+
+   Everything here is scoped to .zv-fullview, so nothing outside the navigator
+   moves. The tokens are the ink theme's (zoom/ink-theme.css); the fallbacks are
+   the demo's own paper. */
+
+.zv-fullview {
+  --fv-paper: var(--sumi-paper, #f4efe4);
+  --fv-card: var(--sumi-card, #fbf8f1);
+  --fv-ink: var(--sumi-ink, #1d1a16);
+  --fv-soft: var(--sumi-ink-soft, #5d554a);
+  --fv-muted: var(--sumi-muted, #6f675b);
+  --fv-hair: var(--sumi-hair, rgba(29, 26, 22, 0.1));
+  --fv-hair-2: var(--sumi-hair-2, rgba(29, 26, 22, 0.16));
+  --fv-seal: var(--sumi-seal, #a8692b);
+  --fv-wait: var(--sumi-wait, #c0392b);
+  --fv-serif: var(--sumi-serif, 'Iowan Old Style', Palatino, Georgia, serif);
+  --fv-mono: var(--font-mono, ui-monospace, 'SF Mono', Menlo, monospace);
+
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 14px 10px;
+  background-color: var(--fv-paper);
+  background-image: radial-gradient(var(--sumi-grain, rgba(120, 100, 70, 0.06)) 1px, transparent 1px);
+  background-size: 3px 3px;
+}
+
+/* The sheet: the panel the transcript and the page sit on. */
+.zv-fullview::after {
+  content: '';
+  position: absolute;
+  inset: 78px 14px 12px;
+  z-index: 0;
+  border-radius: 16px;
+  background: var(--fv-card);
+  box-shadow: inset 0 0 0 1px var(--fv-hair-2), 0 14px 40px rgba(40, 30, 15, 0.12);
+  pointer-events: none;
+}
+
+/* ---- the head ---- */
+.zv-fv-head {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 54px;
+  padding: 4px 10px 10px;
+  color: var(--fv-ink);
+}
+.zv-fv-ink { display: block; width: 46px; height: 46px; flex: none; }
+.zv-fv-ink svg { display: block; width: 100%; height: 100%; }
+.zv-fv-face {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--fv-card);
+  box-shadow: inset 0 0 0 1px var(--fv-hair-2);
+  font: 600 16px/1 var(--fv-mono);
+  color: var(--fv-ink);
+}
+.zv-fv-face.browser { color: #fbf8f1; background: var(--fv-seal); box-shadow: none; }
+.zv-fv-who { display: grid; gap: 3px; min-width: 0; }
+.zv-fv-who b { font: 600 21px/1.15 var(--fv-serif); letter-spacing: 0.01em; }
+.zv-fv-who small { display: flex; flex-wrap: wrap; gap: 10px; font: 10.5px/1.2 var(--fv-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--fv-muted); }
+.zv-fv-state { color: var(--fv-soft); }
+.zv-fv-state.waiting { color: var(--fv-wait); }
+.zv-fv-used { margin-left: auto; display: flex; align-items: center; gap: 10px; font: 11px/1 var(--fv-mono); color: var(--fv-muted); }
+.zv-fv-used em { font-style: normal; letter-spacing: 0.12em; text-transform: uppercase; }
+.zv-fv-used i { display: flex; align-items: center; gap: 5px; font-style: normal; color: var(--fv-ink); }
+.zv-fv-used .vi-avatar, .zv-fv-used .vi-avatar svg { width: 20px; height: 20px; }
+
+/* The real pane sits on the sheet, inside its edge. */
+.zv-fullview.agent .cr-stage-term,
+.zv-fullview.item .stg-item-pane {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0 6px 2px;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+/* ---- the transcript, set as the demo sets it ---- */
+.zv-fullview .lod-overlay {
+  background: transparent;
+}
+.zv-fullview .popout-header.slim {
+  min-height: 34px;
+  padding: 2px 6px 6px;
+  background: transparent;
+  border: 0;
+}
+/* A prompt is the owner's line: the seal, then the words. Prose is serif;
+   tool calls stay mono, because that is what they are. */
+.zv-fullview .ctx-block-prompt,
+.zv-fullview .phos-line.you {
+  font-family: var(--fv-serif);
+  font-size: 14.5px;
+  color: var(--fv-ink);
+}
+.zv-fullview .ctx-block-prompt::before,
+.zv-fullview .look-chat .ctx-block-prompt::before {
+  color: var(--fv-seal);
+}
+.zv-fullview .ctx-block-reply,
+.zv-fullview .ctx-block-reply p,
+.zv-fullview .look-chat .ctx-chat-bubble {
+  font-family: var(--fv-serif);
+}
+.zv-fullview .ctx-block-reply code,
+.zv-fullview .ctx-block-reply pre,
+.zv-fullview .ctx-block-tool {
+  font-family: var(--fv-mono);
+}
+/* The paper's own margins: a reading column, not a wall of text. */
+.zv-fullview .ctx-transcript { padding-left: 30px; padding-right: 30px; }
+
+/* ---- the tabs: the demo's thumbnails, down the right ---- */
+.zv-fullview .popout-side {
+  background: transparent;
+  border-left: 0;
+  padding-right: 2px;
+}
+.zv-fullview .attach-tabs {
+  gap: 8px;
+  background: transparent;
+  border: 0;
+}
+.zv-fullview .attach-tab {
+  border-radius: 8px;
+  background: var(--fv-card);
+  box-shadow: inset 0 0 0 1px var(--fv-hair), 0 2px 6px rgba(40, 30, 15, 0.06);
+  font-family: var(--fv-mono);
+  color: var(--fv-soft);
+}
+.zv-fullview .attach-tab.on {
+  box-shadow: inset 0 0 0 1.5px var(--fv-seal);
+  color: var(--fv-ink);
+}
+.zv-fullview .attach-tabs-slot .attach-tab-name { font-size: 11px; }
+
+/* The browser or note itself, on the sheet. */
+.zv-fullview .attach-panel {
+  background: transparent;
+  border: 0;
+}
+.zv-fullview .attach-note-head {
+  font-family: var(--fv-serif);
+  color: var(--fv-ink);
+}
+.zv-fullview .note-editor,
+.zv-fullview .note-body,
+.zv-fullview .attach-note-body {
+  font-family: var(--fv-serif);
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--fv-ink);
+}
+
+/* The dials and the status line keep their place, in the panel's colours. */
+.zv-fullview .chat-status { font-family: var(--fv-mono); color: var(--fv-muted); }
+.zv-fullview .chat-status.waiting .chat-status-dot { background: var(--fv-wait); }
+.zv-fullview .chat-empty { font-family: var(--fv-serif); color: var(--fv-muted); }
+
+/* A phone is one column: the head wraps, the tabs shrink. */
+@media (max-width: 700px) {
+  .zv-fullview { padding: 8px 8px 6px; }
+  .zv-fullview::after { inset: 66px 8px 8px; }
+  .zv-fv-head { gap: 9px; padding: 2px 4px 8px; }
+  .zv-fv-ink { width: 34px; height: 34px; }
+  .zv-fv-who b { font-size: 17px; }
+  .zv-fv-who small { gap: 7px; font-size: 9.5px; }
+  .zv-fv-used { width: 100%; margin-left: 0; }
+  .zv-fullview .ctx-transcript { padding-left: 12px; padding-right: 12px; }
+}
