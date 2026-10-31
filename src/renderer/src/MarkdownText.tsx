@@ -26,7 +26,24 @@ export const MarkdownText = memo(function MarkdownText({
   )
 })
 
-function Inlines({ nodes }: { nodes: InlineNode[] }): React.JSX.Element {
+/**
+ * A code span in a table cell may break only after its own punctuation — a
+ * `/`, `.` or `_` between word characters (`src/` `main/` `index.` `ts`) —
+ * never inside a word: the cell wraps only between words (UI/UX QA r4).
+ */
+export const CODE_BREAK_RE = /(?<=\w[/._])(?=\w)/
+
+function cellCode(value: string): React.ReactNode {
+  const parts = value.split(CODE_BREAK_RE)
+  return parts.map((part, k) => (
+    <Fragment key={k}>
+      {k > 0 && <wbr />}
+      {part}
+    </Fragment>
+  ))
+}
+
+function Inlines({ nodes, cell = false }: { nodes: InlineNode[]; cell?: boolean }): React.JSX.Element {
   return (
     <>
       {nodes.map((node, i) => {
@@ -34,17 +51,17 @@ function Inlines({ nodes }: { nodes: InlineNode[] }): React.JSX.Element {
           case 'strong':
             return (
               <strong key={i}>
-                <Inlines nodes={node.children} />
+                <Inlines nodes={node.children} cell={cell} />
               </strong>
             )
           case 'em':
             return (
               <em key={i}>
-                <Inlines nodes={node.children} />
+                <Inlines nodes={node.children} cell={cell} />
               </em>
             )
           case 'code':
-            return <code key={i}>{node.value}</code>
+            return <code key={i}>{cell ? cellCode(node.value) : node.value}</code>
           default:
             return <Fragment key={i}>{node.value}</Fragment>
         }
@@ -78,7 +95,7 @@ function Block({ node }: { node: BlockNode }): React.JSX.Element {
               <tr>
                 {node.head.map((cell, k) => (
                   <th key={k} style={alignOf(node.align[k])}>
-                    <Inlines nodes={cell} />
+                    <Inlines nodes={cell} cell />
                   </th>
                 ))}
               </tr>
@@ -88,7 +105,7 @@ function Block({ node }: { node: BlockNode }): React.JSX.Element {
                 <tr key={r}>
                   {row.map((cell, k) => (
                     <td key={k} style={alignOf(node.align[k])}>
-                      <Inlines nodes={cell} />
+                      <Inlines nodes={cell} cell />
                     </td>
                   ))}
                 </tr>
