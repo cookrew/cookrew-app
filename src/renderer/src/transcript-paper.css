@@ -388,3 +388,76 @@
 .lod-overlay .xterm-rows {
   pointer-events: none;
 }
+
+/* THE PHONE'S HISTORY SURFACE (live-sheet.ts): a native scroll page over the
+   live terminal. See-through at the bottom, so the live terminal shows and a
+   tap reaches it; opaque from the moment a finger lands, with a copy of the
+   screen in the spacer, so the browser scrolls a plain page like the chat. */
+.lod-overlay .popout-terminal {
+  position: relative;
+}
+
+.cr-live-sheet {
+  position: absolute;
+  inset: 0;
+  z-index: 11;
+  display: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  scrollbar-width: none;
+}
+
+.cr-live-sheet::-webkit-scrollbar {
+  display: none;
+}
+
+.lod-overlay .look-live .cr-live-sheet.on {
+  display: block;
+}
+
+.cr-live-sheet-hist {
+  white-space: pre;
+  overflow: hidden;
+}
+
+.cr-live-sheet-hist > div,
+.cr-live-sheet-snap > div {
+  height: var(--row);
+  overflow: hidden;
+  white-space: pre;
+}
+
+.cr-live-sheet-screen {
+  position: relative;
+}
+
+.cr-live-sheet-snap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  white-space: pre;
+}
+
+/* Bottom CENTRE: on the phone stage the agent rail overhangs the right edge. */
+.cr-live-sheet-down {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 14px;
+  z-index: 12;
+  display: none;
+  padding: 6px 10px;
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  background: var(--amber, #f2c200);
+  color: var(--ink-on-amber, #1b1712);
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+}
+
+.lod-overlay .look-live .cr-live-sheet-down.on {
+  display: block;
+}

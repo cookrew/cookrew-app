@@ -40,6 +40,7 @@ import { TranscriptFaceContext } from './transcript-face'
 import { useTranscriptLook, type TranscriptLook } from './transcript-look'
 import { installLocalScroll, type LocalScroll } from './live-scroll'
 import { createCurtain, domCurtainDeps, subRowShift } from './live-curtain'
+import { installLiveSheet, type LiveSheet } from './live-sheet'
 import { closeZoomMenu, tuneSummary, useZoomSlots } from './zoom-bar'
 import { TuneMenu } from './nodes/TuneMenu'
 import { useAgentTuning } from './nodes/use-agent-tuning'
@@ -456,6 +457,8 @@ function TerminalOverlay({
   lookRef.current = look
   /** The live terminal's local scroll (live-scroll.ts), once the terminal is up. */
   const localScrollRef = useRef<LocalScroll | null>(null)
+  /** The phone's native-scroll history surface (live-sheet.ts), once the terminal is up. */
+  const liveSheetRef = useRef<LiveSheet | null>(null)
   const mainRef = useRef<HTMLDivElement>(null)
   /** Where the chat was read when the terminal took the box: null = at the newest. */
   const chatScroll = useRef<number | null>(null)
@@ -486,8 +489,10 @@ function TerminalOverlay({
       // is fetched so the first scroll is local (live-scroll.ts).
       termRef.current?.focus()
       localScrollRef.current?.onLive()
+      liveSheetRef.current?.sync()
       return
     }
+    liveSheetRef.current?.sync()
     box.scrollTop = chatScroll.current ?? box.scrollHeight
   }, [look])
   // The RTE dial (R2). A served session never gets this machine's route, so
@@ -778,6 +783,26 @@ function TerminalOverlay({
         )
       )
       cleanups.push(() => curtain.dispose())
+      // ON A PHONE the history scrolls as a native page over the terminal, the
+      // way the chat does, instead of a row at a time (live-sheet.ts).
+      if (isRemoteMode()) {
+        const liveSheet = installLiveSheet(term, container, {
+          live: () => lookRef.current === 'live',
+          wantHistory: () => localScroll.onLive()
+        })
+        // A seed replaces the history; this handler runs before live-scroll's
+        // and passes the sequence on (false).
+        const seedSeen = term.parser.registerOscHandler(777, (data) => {
+          if (data.startsWith('cookrew-seed;')) liveSheet.invalidate()
+          return false
+        })
+        liveSheetRef.current = liveSheet
+        cleanups.push(() => {
+          seedSeen.dispose()
+          liveSheet.dispose()
+          if (liveSheetRef.current === liveSheet) liveSheetRef.current = null
+        })
+      }
       cleanups.push(() => {
         localScroll.dispose()
         if (localScrollRef.current === localScroll) localScrollRef.current = null
@@ -929,7 +954,13 @@ function TerminalOverlay({
         glideRaf = 0
       }
 
+      /** A touch on the phone's history surface scrolls natively; the bridge must not touch it. */
+      const onSheet = (e: TouchEvent): boolean => (e.target as Element | null)?.closest?.('.cr-live-sheet.on') != null
       const onTouchStart = (e: TouchEvent): void => {
+        if (onSheet(e)) {
+          touchY = null
+          return
+        }
         stopGlide()
         // A finger landing mid-fling keeps the rows where they are: the shift
         // and its remainder carry on under the new drag instead of snapping.
@@ -945,6 +976,7 @@ function TerminalOverlay({
         }
       }
       const onTouchMove = (e: TouchEvent): void => {
+        if (onSheet(e)) return
         if (touchY === null || e.touches.length !== 1 || !trackingEl()) return
         const touch = e.touches[0]
         lastTouch = { x: touch.clientX, y: touch.clientY }
