@@ -102,6 +102,26 @@ const SHARE_GET_MS = 10_000
 
 /** Each attached terminal's stream name, from its hello (ptySeed). */
 const seedStreamIds = new Map<string, string>()
+/** Seeds asked for before the stream's hello named it: answered when it does. */
+const seedStreamWaiters = new Map<string, Array<(id: string | null) => void>>()
+
+/** The stream's name, waiting a little for a hello still on its way (a card opened straight into LIVE asks first). */
+function seedStreamId(terminalId: string, waitMs = 5000): Promise<string | null> {
+  const known = seedStreamIds.get(terminalId)
+  if (known) return Promise.resolve(known)
+  return new Promise((resolve) => {
+    const list = seedStreamWaiters.get(terminalId) ?? []
+    const timer = setTimeout(() => done(null), waitMs)
+    const done = (id: string | null): void => {
+      clearTimeout(timer)
+      const rest = (seedStreamWaiters.get(terminalId) ?? []).filter((one) => one !== done)
+      if (rest.length > 0) seedStreamWaiters.set(terminalId, rest)
+      else seedStreamWaiters.delete(terminalId)
+      resolve(id)
+    }
+    seedStreamWaiters.set(terminalId, [...list, done])
+  })
+}
 
 async function req<T>(path: string, method = 'GET', body?: unknown, parseOptions: ParseOptions = {}): Promise<T> {
   if (method !== 'GET' || body !== undefined) {
@@ -449,7 +469,7 @@ export function createRemoteApi(): CookrewApi {
     ptyResize: (terminalId, cols, rows) =>
       passivePost(apiPath(`/api/terminal/${terminalId}/resize`), { cols, rows }),
     ptySeed: async (terminalId, nonce, lines) => {
-      const stream = seedStreamIds.get(terminalId)
+      const stream = await seedStreamId(terminalId)
       if (!stream) return false
       try {
         return (await req<{ ok?: boolean }>(apiPath(`/api/terminal/${terminalId}/seed`), 'POST', { nonce, lines, stream })).ok === true
@@ -470,7 +490,10 @@ export function createRemoteApi(): CookrewApi {
         (hello) => {
           // The stream's name rides its hello: a seed is sent down it alone.
           const id = (hello as { stream?: unknown }).stream
-          if (typeof id === 'string') seedStreamIds.set(terminalId, id)
+          if (typeof id === 'string') {
+            seedStreamIds.set(terminalId, id)
+            for (const waiter of seedStreamWaiters.get(terminalId) ?? []) waiter(id)
+          }
           onHello?.(hello)
         }
       )
