@@ -19,6 +19,11 @@ export interface ZoomState {
   full: 'agent' | 'item' | null
   /** Bumped when a jump across is asked for: the view plays the crossfade, not the chase. */
   jump: number
+  /**
+   * An agent's card asked for from outside the view (a pet): the view opens
+   * ITS card, the one instance there is (ZoomView consumes this). Null once taken.
+   */
+  cardAsk: { id: string; n: number } | null
 }
 
 const KEY = 'cookrew.zoom'
@@ -35,7 +40,8 @@ const read = (): Pick<ZoomState, 'dir' | 'v'> => {
   }
 }
 
-let state: ZoomState = { ...read(), agent: null, item: null, full: null, jump: 0 }
+let state: ZoomState = { ...read(), agent: null, item: null, full: null, jump: 0, cardAsk: null }
+let asks = 0
 const listeners = new Set<() => void>()
 
 const emit = (): void => {
@@ -80,6 +86,18 @@ export const zoomStore = {
   jumpTo(kind: 'agent' | 'item', id: string): void {
     state = kind === 'agent' ? { ...state, dir: 'agents', v: 3, agent: id, full: 'agent', jump: state.jump + 1 } : { ...state, dir: 'items', v: 1, item: id, full: 'item', jump: state.jump + 1 }
     persist()
+    emit()
+  },
+  /** Open this agent's card in the view, from wherever the view is (a pet's click). */
+  openCard(id: string): void {
+    asks += 1
+    state = { ...state, cardAsk: { id, n: asks } }
+    emit()
+  },
+  /** The view took the ask. */
+  takeCardAsk(n: number): void {
+    if (state.cardAsk?.n !== n) return
+    state = { ...state, cardAsk: null }
     emit()
   },
   setFull(full: ZoomState['full']): void {

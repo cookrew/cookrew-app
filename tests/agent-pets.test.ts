@@ -210,7 +210,7 @@ describe('the wiring', () => {
   const css = readFileSync('src/renderer/src/pets/pets.css', 'utf8')
 
   it('both troops ride over every page: mounted in App, portalled to the body, under the scrims', () => {
-    expect(app).toMatch(/<AgentPets\s+workspace=\{workspace\}\s+workspaceId=\{activeWsId\}\s+attachIndex=\{attachIndex\}\s+onOpen=\{zoomToNode\}/)
+    expect(app).toMatch(/<AgentPets\s+workspace=\{workspace\}\s+workspaceId=\{activeWsId\}\s+onOpen=\{zoomToNode\}\s+onCard=\{openAgentCard\}/)
     // In a full view both attach to its panel (pet-dock.ts).
     expect(app).toContain("dock={view === 'stage' && zoomFull !== null ? fullDock.agents : null}")
     expect(app).toContain("dock={view === 'stage' && zoomFull !== null ? fullDock.items : null}")
@@ -219,12 +219,13 @@ describe('the wiring', () => {
     expect(css).toMatch(/\.cr-pets \{[^}]*z-index: 55;/)
   })
 
-  it('prompts the way the voice bar does: the words, then Enter on its own', () => {
-    expect(agents).toMatch(/ptyInput\(row\.id, text\)\s+cookrew\(\)\.ptyInput\(row\.id, '\\r'\)/)
+  it("the card's prompt (the zoom card's, the one instance) is the voice bar's two writes", () => {
+    const parts = readFileSync('src/renderer/src/zoom/ZoomParts.tsx', 'utf8')
+    expect(parts).toMatch(/ptyInput\(agent\.id, text\)\s+cookrew\(\)\.ptyInput\(agent\.id, '\\r'\)/)
   })
 
-  it('reads a tail only for the card that is open, never the whole board', () => {
-    expect(agents).toContain('useStreamTails(useMemo(() => (live ? [] : [row.id]), [live, row.id]))')
+  it('reads no tail and no board of its own: the pets only pick faces, the card is the view\'s', () => {
+    expect(agents).not.toContain('useStreamTails')
     expect(agents).not.toContain('useCrewRows')
   })
 

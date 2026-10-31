@@ -2039,6 +2039,8 @@ export class TurnTracker extends EventEmitter {
     session.on('replay', t.onReplay)
     session.on('exit', t.onExit)
     this.tracked.set(session.terminalId, t)
+    // herdr may have reported the question before this mirror existed.
+    if (this.backendPhase.get(session.terminalId)?.phase === 'waiting') this.healBlocked(t)
   }
 
   /**
@@ -2134,10 +2136,33 @@ export class TurnTracker extends EventEmitter {
     if (current?.phase === phase && current.agent === agent) return
     this.backendPhase.set(terminalId, { phase, agent, at: current?.phase === phase ? current.at : Date.now() })
     // A tracked terminal reports its own truth; announcing this one would
-    // race the real screen for the same card.
-    if (!this.tracked.has(terminalId)) {
+    // race the real screen for the same card. The one thing its screen cannot
+    // report is a question that was already up when it attached.
+    const t = this.tracked.get(terminalId)
+    if (!t) {
       this.announce(this.backendActivity(terminalId, phase, agent))
+    } else if (phase === 'waiting') {
+      this.healBlocked(t)
     }
+  }
+
+  /**
+   * A tracked agent at rest whose multiplexer says it is blocked on the human.
+   *
+   * The screen alone never finds this: "waiting" is decided by poll(), which
+   * only runs inside a turn the tracker saw open, and a question that was
+   * already up when the mirror attached (a card opened on it, a restart, a
+   * workspace switch) prints nothing until someone answers. herdr's blocked
+   * rules read the approval or question box itself, so a POSITIVE blocked is
+   * trusted here the way poll() trusts it: open the missed turn (self-heal,
+   * as a live spinner would) and hold it waiting. Output resumes 'thinking'
+   * through handleData, and quiescence ends it as ever.
+   */
+  private healBlocked(t: TrackedTerminal): void {
+    if (!t.agent || (t.phase !== 'idle' && t.phase !== 'replied')) return
+    this.resumeThinking(t)
+    t.phase = 'waiting'
+    this.push(t)
   }
 
   /**

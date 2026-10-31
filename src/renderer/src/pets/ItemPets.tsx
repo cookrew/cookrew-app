@@ -144,7 +144,7 @@ export function ItemPets({
       dockable={dock !== null}
       onShown={onShown}
       onOpen={(id) => onOpen(id, byId.get(id)?.owners ?? [])}
-      cardClass={(id) => `ag-ink ag-card item-card item ${byId.get(id)?.kind ?? ''}`}
+      cardClass={(id) => `ag-ink item-card item ${byId.get(id)?.kind ?? ''}`}
       cardLabel={(id) => byId.get(id)?.title ?? 'Item'}
       renderCard={(id, controls) => {
         const item = byId.get(id)

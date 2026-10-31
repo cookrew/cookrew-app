@@ -54,7 +54,7 @@ describe("a browser's or note's card", () => {
   })
 
   it('wears the agent card frame', () => {
-    expect(readFileSync('src/renderer/src/pets/ItemPets.tsx', 'utf8')).toContain('`ag-ink ag-card item-card item ${byId.get(id)?.kind ?? \'\'}`')
+    expect(readFileSync('src/renderer/src/pets/ItemPets.tsx', 'utf8')).toContain('`ag-ink item-card item ${byId.get(id)?.kind ?? \'\'}`')
   })
 })
 
