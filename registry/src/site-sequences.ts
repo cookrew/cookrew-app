@@ -57,7 +57,7 @@ export const SEQUENCES: Readonly<Record<string, readonly Step[]>> = {
     {
       "file": "seq-checkpoints-2.jpg",
       "title": "Further back, an earlier turn",
-      "caption": "Dragged further: the marker reached the second turn, Add JSDoc comments to export functions, and the transcript followed it there. The row under the marker offers ROLE, FORK and REWIND.",
+      "caption": "Dragged further: the marker reached the second turn, Update comments and rerun tests, and the transcript followed it there. The row under the marker offers ROLE, FORK and REWIND.",
       "width": 1400,
       "height": 874
     }

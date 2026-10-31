@@ -65,7 +65,7 @@ export const FRAMES = {
   trace: frame(
     'qa-history-trace.jpg',
     'A checkpoint rail dragged open, every past turn listed with the title it was given',
-    'Pressed the rail at its live end and dragged up: the checkpoints opened as a list of titled turns, the one under the marker offered ROLE, FORK and REWIND, and the transcript followed back to that turn, Add JSDoc comments to export functions.'
+    'Pressed the rail at its live end and dragged up: the checkpoints opened as a list of titled turns, the one under the marker offered ROLE, FORK and REWIND, and the transcript followed back to that turn, Update comments and rerun tests.'
   ),
   rail: frame(
     'qa-terminal-rail.jpg',
