@@ -24,7 +24,7 @@ import { webCopy } from './v3-copy'
  *             Everything a link may never do (install, pay, open a session)
  *             is still one deliberate click after the facts are on screen.
  *
- * Fonts are the app's four (Silkscreen, VT323, JetBrains Mono, Inter), served
+ * Fonts are the ink theme's two webfonts (JetBrains Mono, Inter; the serif is the reader's own), served
  * from this origin out of the bundle; recorded frames come from this
  * repository on GitHub, pinned to the commit the bundle was built from, so the
  * bundle stays small enough for its ConfigMap and no third party is in the
@@ -222,17 +222,14 @@ export function respondPage(response: ServerResponse, rendered: Page): void {
   response.end(payload)
 }
 
-/** The header mark: the glove and its glasses. */
+/** The header mark: the ink lockup (site-brand.ts), still. */
 const LOGO = BRAND_MARK_SVG
 
 /** The app's four fonts, from the bundle; `optional` because a font that arrives late must not shift the page — they are preloaded, so it rarely does. */
 const FONT_FACES = `
 @font-face{font-family:'Inter';font-style:normal;font-weight:400 700;font-display:optional;src:url(${SITE_FONTS}inter.woff2?v=${ASSET_VERSION}) format('woff2')}
-@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400 700;font-display:optional;src:url(${SITE_FONTS}jetbrains-mono.woff2?v=${ASSET_VERSION}) format('woff2')}
-@font-face{font-family:'Silkscreen';font-style:normal;font-weight:400;font-display:swap;src:url(${SITE_FONTS}silkscreen-400.woff2?v=${ASSET_VERSION}) format('woff2')}
-@font-face{font-family:'Silkscreen';font-style:normal;font-weight:700;font-display:swap;src:url(${SITE_FONTS}silkscreen-700.woff2?v=${ASSET_VERSION}) format('woff2')}
-@font-face{font-family:'VT323';font-style:normal;font-weight:400;font-display:optional;src:url(${SITE_FONTS}vt323-400.woff2?v=${ASSET_VERSION}) format('woff2')}`
-const PRECONNECT = `<link rel="preconnect" href="https://raw.githubusercontent.com" crossorigin><link rel="preload" as="font" type="font/woff2" href="${SITE_FONTS}inter.woff2?v=${ASSET_VERSION}" crossorigin><link rel="preload" as="font" type="font/woff2" href="${SITE_FONTS}silkscreen-700.woff2?v=${ASSET_VERSION}" crossorigin>`
+@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400 700;font-display:optional;src:url(${SITE_FONTS}jetbrains-mono.woff2?v=${ASSET_VERSION}) format('woff2')}`
+const PRECONNECT = `<link rel="preconnect" href="https://raw.githubusercontent.com" crossorigin><link rel="preload" as="font" type="font/woff2" href="${SITE_FONTS}inter.woff2?v=${ASSET_VERSION}" crossorigin>`
 
 function head(options: ShellOptions): string {
   const url = options.path === undefined ? null : `${SITE_ORIGIN}${options.path}`
@@ -303,7 +300,7 @@ function shell(options: ShellOptions, main: string): string {
 <html lang="en"><head>${head(options)}${styles}<style>${FONT_FACES}${SITE_STYLE}${ACCOUNT_STYLE}</style>${scripts}</head>
 <body>
 <header class="hdr"><div class="wrap">
-<a class="mark" href="/">${LOGO}<span>COOKREW</span></a>
+<a class="mark" href="/" aria-label="Cookrew home">${LOGO}</a>
 <span class="chip">an open-source spatial workspace for AI agents</span>
 <nav class="top">${nav}${account}</nav>
 </div></header>
@@ -361,7 +358,7 @@ a{color:inherit}
 .hdr .wrap{display:flex;align-items:center;gap:14px;min-height:56px;flex-wrap:wrap;padding-top:8px;padding-bottom:8px}
 @media (max-width:760px){.hdr .wrap>.chip{display:none}.hdr nav.top{margin-left:0;width:100%}}
 .mark{display:flex;align-items:center;gap:9px;text-decoration:none;font:700 15px var(--font-pixel);letter-spacing:.12em}
-.mark-coo{width:40px;height:28px;display:block;flex:0 0 auto;overflow:visible}
+.mark-coo{width:104px;height:31px;display:block;flex:0 0 auto;overflow:visible;color:var(--ink)}
 
 nav.top{display:flex;gap:6px;margin-left:auto;flex-wrap:wrap}
 .chip{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:uppercase;color:var(--ink);background:var(--cream-md);border:1px solid var(--line);padding:2px 6px;white-space:nowrap;display:inline-flex;align-items:center;gap:5px}
@@ -644,7 +641,6 @@ h1,h2,h3,.ttl,.serif{font-family:var(--font-serif);font-weight:600;letter-spacin
 h1{letter-spacing:-.01em;line-height:1.08}h2{font-weight:600}
 .lede{font-family:var(--font-serif);color:var(--ink-soft)}
 .hdr{background:color-mix(in srgb,var(--cream) 88%,transparent);backdrop-filter:saturate(1.1) blur(8px);-webkit-backdrop-filter:saturate(1.1) blur(8px)}
-.mark span{font-family:'Silkscreen','Courier New',monospace}
 .chip{font:500 10px var(--font-mono);letter-spacing:.08em;border-radius:4px;padding:2px 7px;background:var(--cream-md)}
 .chip.amber{background:var(--amber-soft);color:var(--amber-deep);border-color:transparent}
 .chip.violet{background:var(--violet-hi);color:var(--ink);border-color:transparent}
@@ -695,6 +691,10 @@ section+section::before,.hero+.wrap::before{content:'';position:absolute;top:0;l
 @media (prefers-color-scheme:dark){section+section::before{filter:invert(1)}}
 footer nav a{border-radius:5px}
 .wrap.market{padding-top:30px;padding-bottom:44px}
+.term{background:var(--cream-hi)}.term .out{font:13px/1.5 var(--font-mono);color:var(--ink)}
+.term .out .d{color:var(--muted)}.term .out .g{color:var(--amber-deep)}.term .out .h{color:var(--hp)}.term .out .r{color:var(--rose)}
+.term .gate{background:color-mix(in srgb,var(--cream) 82%,transparent);backdrop-filter:blur(2px)}
+.l3card{background:var(--cream-hi)!important;color:var(--ink)!important;box-shadow:var(--lift)!important;border:1px solid var(--hair)!important}
 .motion{display:grid;gap:18px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin:12px 0 30px}
 .motion figure.shot video{aspect-ratio:auto;height:auto}
 .motion figure.shot figcaption{align-items:flex-start}.motion figure.shot figcaption b{font-size:15px;color:var(--ink)}

@@ -80,9 +80,10 @@ export function canonicalInstallUrl(origin: string, presetId: string): string {
 }
 
 const STYLE = `
-:root { color-scheme: light dark; --fg: #1a1a1a; --dim: #6b6b6b; --bg: #fbfaf8; --line: #e4e1dc; }
+/* The site's ink palette (site-shell.ts): paper and ink by day, ink and paper by night. */
+:root { color-scheme: light dark; --fg: #1d1a16; --dim: #6f675b; --bg: #f4efe4; --card: #fbf8f1; --line: rgba(29,26,22,.16); --seal: #a8692b; }
 @media (prefers-color-scheme: dark) {
-  :root { --fg: #ececec; --dim: #9a9a9a; --bg: #171717; --line: #2e2e2e; }
+  :root { --fg: #ece4d2; --dim: #9a917f; --bg: #15130f; --card: #211e18; --line: rgba(236,228,210,.16); --seal: #c88a47; }
 }
 * { box-sizing: border-box; }
 body {
@@ -91,14 +92,14 @@ body {
   display: flex; justify-content: center;
 }
 main { width: 100%; max-width: 34rem; }
-h1 { font-size: 1.6rem; line-height: 1.2; margin: 0 0 .35rem; overflow-wrap: anywhere; }
+h1 { font: 600 1.75rem/1.15 "Iowan Old Style", Palatino, "Songti SC", Georgia, serif; margin: 0 0 .35rem; overflow-wrap: anywhere; }
 .byline { color: var(--dim); margin: 0 0 1.75rem; overflow-wrap: anywhere; }
 .lede { margin: 0 0 1.75rem; }
 .note { color: var(--dim); font-size: .9rem; }
-.gated { border-left: 3px solid var(--line); padding-left: .85rem; margin: 1.75rem 0; }
+.gated { border-left: 3px solid var(--seal); padding-left: .85rem; margin: 1.75rem 0; }
 code {
   display: block; padding: .7rem .85rem; margin: .5rem 0 1.75rem;
-  border: 1px solid var(--line); border-radius: 8px;
+  border: 1px solid var(--line); border-left: 3px solid var(--seal); border-radius: 8px; background: var(--card);
   font: .85rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
   overflow-wrap: anywhere; user-select: all;
 }

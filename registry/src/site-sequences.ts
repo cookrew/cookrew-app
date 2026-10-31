@@ -10,130 +10,102 @@ export const SEQUENCES: Readonly<Record<string, readonly Step[]>> = {
   "canvas": [
     {
       "file": "seq-canvas-1.jpg",
-      "title": "The crew at work on one canvas",
-      "caption": "Five agents on three harnesses — Claude Code, Codex and Pi — working a scratch TypeScript repo together: each card carries the brief it was given, what it answered and how many checkpoints it has taken, with the note one of them wrote and the page it opened sitting under its own card.",
+      "title": "One workspace, its crew",
+      "caption": "Clicked Cookrew Dev on the machine: its agents stand on the paper as ink faces, each with its name and state under it (DONE, WORKING, RESTING, OFFLINE), and the cables between them show who can ask whom. Lark, Finch and Moss are a three-agent crew working a small TypeScript package.",
       "width": 1400,
       "height": 874
     },
     {
       "file": "seq-canvas-2.jpg",
-      "title": "A card opened, its rail scrubbed",
-      "caption": "Clicked Mason open and dragged its checkpoint rail up from the live end: the rail fanned out into the eight turns it had taken — the test runs, the rename, the README line, the commit — and the transcript on the left followed the drag to the turn under the marker.",
+      "title": "One click opens a card",
+      "caption": "Clicked Lark: its card opened where it stood, with its state, the last thing it said and a box to reply in, while the rest of the crew stays on the paper around it.",
       "width": 1400,
-      "height": 875
+      "height": 874
     },
     {
       "file": "seq-canvas-3.jpg",
-      "title": "An agent stops to ask, in its own prompt",
-      "caption": "Quill reached a decision it would not take alone — what the cut looks like when text is truncated — and raised Claude Code’s own question prompt for it. The card went to NEEDS ATTENTION and the work stopped there, with the two options named and nothing chosen.",
+      "title": "Again, and it is the whole transcript",
+      "caption": "Clicked Lark again: the card grew into its full view, the transcript on a paper sheet with every tool call in mono, Finch’s answer folded into Lark’s reply, and the checkpoint rail on the right. The crew waits down the right edge; Esc steps back out.",
       "width": 1400,
-      "height": 875
+      "height": 874
     }
   ],
   "harnesses": [
     {
       "file": "seq-harnesses-1.jpg",
-      "title": "The harness picker, Shell chosen",
-      "caption": "Pressed TERMINAL in the dock over the live canvas and chose SHELL: the picker shows the five harnesses Cookrew ships — Claude Code, Codex, OpenCode, Pi and a plain shell — then the teams saved on this machine, then + IMPORT A TEAM.",
+      "title": "The harness picker",
+      "caption": "Pressed TERMINAL in the dock: the picker lists the harnesses Cookrew ships (Claude Code, Codex, OpenCode, Pi and a plain shell) and + IMPORT A TEAM. The next click on the paper places an agent on the one chosen.",
       "width": 1400,
-      "height": 875
+      "height": 874
     },
     {
       "file": "seq-harnesses-2.jpg",
-      "title": "Claude Code chosen",
-      "caption": "Chose CLAUDE CODE in the same picker: the lit chip moved from Shell to Claude Code, and the next click on the canvas would place an agent on that harness. The crew behind it is already mixed — Codex and Pi answer on this board too.",
+      "title": "Pi in the same crew",
+      "caption": "Clicked Moss, which runs on Pi: its card carries the same state line, last reply and reply box as Lark’s on Claude Code. The harness decides what runs in the terminal, not how the crew sees it.",
       "width": 1400,
-      "height": 875
-    },
-    {
-      "file": "seq-harnesses-3.jpg",
-      "title": "Import a team, opened",
-      "caption": "Pressed + IMPORT A TEAM: the sheet opened over the canvas with its address field, the teams saved on this machine under it, and — under those — the seats this account already holds, including one granted at @drej/cookrew-alpha.",
-      "width": 1400,
-      "height": 875
+      "height": 874
     }
   ],
   "checkpoints": [
     {
       "file": "seq-checkpoints-1.jpg",
-      "title": "A card open on its rail",
-      "caption": "Clicked Mason open after a morning of work: the finished turn sits above the LIVE line, the live terminal runs under it, and the rail on the right counts the eight checkpoints it has taken in this session.",
+      "title": "Drag the rail, the transcript follows",
+      "caption": "Pressed Lark’s rail at its live end and dragged up a little: the checkpoints opened as a list of titled turns, and the transcript rode back to the third, where Lark asked Finch to review chunk.ts.",
       "width": 1400,
-      "height": 875
+      "height": 874
     },
     {
       "file": "seq-checkpoints-2.jpg",
-      "title": "Mid-scrub on the rail",
-      "caption": "Pressed the rail at its live end and dragged upward: the checkpoints fanned out with the title each turn was given — the suite run, the 999 B and 1 PB cases, the rename to UNITS, the README line — and the transcript followed the marker.",
+      "title": "Further back, an earlier turn",
+      "caption": "Dragged further: the marker reached the second turn, Add JSDoc comments to export functions, and the transcript followed it there. The row under the marker offers ROLE, FORK and REWIND.",
       "width": 1400,
-      "height": 875
-    },
-    {
-      "file": "seq-checkpoints-3.jpg",
-      "title": "What a past turn offers",
-      "caption": "Held the pointer on one row of the fanned list until its actions surfaced: ROLE, FORK and REWIND — fork starts a new agent from that checkpoint and leaves this one running, untouched.",
-      "width": 1400,
-      "height": 875
+      "height": 874
     }
   ],
   "board": [
     {
       "file": "seq-board-1.jpg",
-      "title": "The Board, one row per agent",
-      "caption": "Switched the header to BOARD and narrowed it to this workspace: one row per agent with its harness, role and workspace chips, the prompt it was last given, what it answered and its checkpoint count — and the note the crew wrote, folded into the same stream.",
+      "title": "Every machine, its workspaces",
+      "caption": "Stepped all the way out: this Mac drawn as a laptop with its seven workspaces on the screen, each a ring of the agents in it.",
       "width": 1400,
-      "height": 875
+      "height": 874
     },
     {
       "file": "seq-board-2.jpg",
-      "title": "A facet chip narrows the roster",
-      "caption": "Clicked the SITE SHOOT chip in the Board’s facet bar: the roster dropped from the whole fleet to the five agents in this workspace, and CLEAR appeared at the head of the bar.",
+      "title": "One machine, every workspace at once",
+      "caption": "Clicked the laptop: the seven workspaces laid out as rings, each holding its agents’ faces with the count on its label. A click on a name opens that crew.",
       "width": 1400,
-      "height": 875
-    },
-    {
-      "file": "seq-board-3.jpg",
-      "title": "Searched the transcripts",
-      "caption": "Typed roundTo into the Board’s search: one agent of 721 answered, with the checkpoint the hit landed in and the words around it — read from the agent’s own transcript, not from a log.",
-      "width": 1400,
-      "height": 875
+      "height": 874
     }
   ],
   "cli": [
     {
       "file": "seq-cli-1.jpg",
       "title": "The CLI people and agents share",
-      "caption": "Asked an agent to run cookrew list and cookrew status and show the output: it printed the crew it is wired to and what each one is doing — the same two commands a person types, run by the agent itself.",
+      "caption": "Lark’s own transcript: it handed out the work with the cookrew CLI, one Bash call dispatching chunk.ts to Finch and kebab-case to Moss and another polling both dispatches for their replies. They are the same commands a person types.",
       "width": 1400,
-      "height": 878
+      "height": 874
     }
   ],
   "mobile": [
     {
       "file": "seq-mobile-1.jpg",
-      "title": "The same canvas at phone width",
-      "caption": "Opened the phone companion against the same live workspace at 390 px with touch emulation: the cards keep their turn, their harness chip and their checkpoint count, and the dock sits along the bottom.",
+      "title": "The crew at phone width",
+      "caption": "The phone companion against the same Mac at 412 px: the same crew on the same paper, and the stops (devices, device, crew, card, full) along the bottom by the thumb.",
       "width": 700,
       "height": 1400
     },
     {
       "file": "seq-mobile-2.jpg",
-      "title": "A card tapped open on the phone",
-      "caption": "Tapped Mason on the phone: it takes the screen with its name and status at the top, the turn it is on, the rail down the right edge, and the phone’s own key row under it.",
+      "title": "A card, tapped",
+      "caption": "Tapped Lark: its card opened over the crew, as it does on the desktop.",
       "width": 700,
       "height": 1400
     },
     {
       "file": "seq-mobile-3.jpg",
-      "title": "The Board on the phone",
-      "caption": "Tapped BOARD on the phone and searched for this workspace: the same roster in the narrow layout, each row carrying its harness and role chips and what the agent last did.",
-      "width": 700,
-      "height": 1400
-    },
-    {
-      "file": "seq-mobile-4.jpg",
-      "title": "The dock picker on the phone",
-      "caption": "Tapped TERMINAL in the phone’s dock: the harness picker opened above it with the same five harnesses and + IMPORT A TEAM the desktop shows, at thumb size.",
+      "title": "The transcript on the phone",
+      "caption": "Tapped again: Lark’s transcript fills the phone, with Finch’s NaN and 1.5 findings and the 22 passing tests, the rail down the right and a key row with arrows and Esc under it.",
       "width": 700,
       "height": 1400
     }
@@ -142,25 +114,25 @@ export const SEQUENCES: Readonly<Record<string, readonly Step[]>> = {
     {
       "file": "seq-workspaces-1.jpg",
       "title": "The workspace wall",
-      "caption": "Pressed the workspace pill: the wall slid in as tilted screens with Site Shoot picked in front, its directory under it and a snapshot of the canvas on its face, and BACK, DIRECTORIES, REMOVE and HISTORY below.",
+      "caption": "Opened the wall from the header menu: every workspace on this Mac as a tilted screen with a snapshot of its paper, GOAT Team picked in front with its directory under it, and OPEN, DIRECTORIES, REMOVE and HISTORY below.",
       "width": 1400,
-      "height": 875
+      "height": 874
     }
   ],
   "marketplace": [
     {
       "file": "seq-marketplace-1.jpg",
-      "title": "The marketplace, signed in",
-      "caption": "Opened cookrew.dev/market signed in as a reader who holds no seats yet: the Your agents strip says so in as many words, and under the finder the listed team shows its own terminal — Pilot, ready, three agents behind the door — with what a seat costs.",
+      "title": "Import a team, opened",
+      "caption": "Pressed + IMPORT A TEAM in the dock: the sheet asks for the address whoever runs the team gave you, and lists the teams saved on this machine, which only you see.",
       "width": 1400,
-      "height": 875
+      "height": 874
     },
     {
       "file": "seq-marketplace-2.jpg",
-      "title": "A team page: one line, one strip",
-      "caption": "Opened a live team page as a reader with no seat: the page is one line — who answers, for how many agents, on which models, taking calls — over one strip carrying the team’s own terminal and its checkpoints, with BUY A SEAT · $1 and a note that the seat follows you to any device.",
+      "title": "A seat, looked up",
+      "caption": "Pasted cookrew.dev/@drej/cookrew-alpha and pressed LOOK UP: the sheet answered with the team (COOKREW Alpha, 1 USD a seat, Pilot answering and running the other two on the owner’s side) and CONTINUE — REVIEW THE TERMS.",
       "width": 1400,
-      "height": 875
+      "height": 874
     }
   ]
 }

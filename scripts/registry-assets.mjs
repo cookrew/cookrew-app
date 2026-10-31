@@ -91,11 +91,6 @@ const FILES = [
   ['line.js', 'line.js', 'text/javascript; charset=utf-8'],
   ['inter.woff2', 'fonts/inter.woff2', 'font/woff2', 'base64'],
   ['jetbrains-mono.woff2', 'fonts/jetbrains-mono.woff2', 'font/woff2', 'base64'],
-  ['silkscreen-400.woff2', 'fonts/silkscreen-400.woff2', 'font/woff2', 'base64'],
-  ['silkscreen-700.woff2', 'fonts/silkscreen-700.woff2', 'font/woff2', 'base64'],
-  ['vt323-400.woff2', 'fonts/vt323-400.woff2', 'font/woff2', 'base64'],
-  // the brand's glove: a small grayscale+alpha bitmap; the lockup references it, the favicon inlines it
-  ['glove.png', 'site/glove.png', 'image/png', 'base64']
 ]
 
 const entries = FILES.map(([name, file, type, encoding]) => {

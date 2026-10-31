@@ -168,10 +168,15 @@
   }
 
   /* ── the terminal ──────────────────────────────────────────────────────── */
+  // The app's terminal colours (TerminalOverlay.tsx PAPER_THEME / NIGHT_THEME) on the ink
+  // palette: ink on paper by day, paper on ink by night, picked once at open as the app does.
+  const night = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
   const term = new window.Terminal({
     fontFamily: "'JetBrains Mono', 'SF Mono', Menlo, monospace",
     fontSize: 13,
-    theme: { background: '#14110a', foreground: '#e9b949', cursor: '#ffd77a', selectionBackground: '#8a6d1c' },
+    theme: night
+      ? { background: '#15130f', foreground: '#ece4d2', cursor: '#ece4d2', cursorAccent: '#15130f', selectionBackground: '#3a2f1c' }
+      : { background: '#fbf8f1', foreground: '#1d1a16', cursor: '#1d1a16', cursorAccent: '#fbf8f1', selectionBackground: '#f3e4c2' },
     cursorBlink: true,
     scrollback: 5000,
     convertEol: false
