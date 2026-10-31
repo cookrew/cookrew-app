@@ -18,10 +18,10 @@ const part = (): HTMLElement => ({ style: {} }) as unknown as HTMLElement
 /** The owner's workspace label ("13 COOKREW DEV 216 83"): about this wide and tall at 11px. */
 export const LABEL = { w: 200, h: 24 }
 
-export function paintAt(model: FrameModel, st: Partial<FrameState> & { sv: number; w: number; h: number; narrow: boolean }) {
+export function paintAt(model: FrameModel, st: Partial<FrameState> & { sv: number; w: number; h: number; narrow: boolean }, size: { w: number; h: number } = LABEL) {
   const els = {
     devices: part(), device: part(), scene: part(), panel: part(), wash: part(), ring: part(), label: part(), newCap: part(), machine: part(),
-    labelW: LABEL.w, labelH: LABEL.h,
+    labelW: size.w, labelH: size.h,
     agents: new Map(), links: new Map(), items: new Map(), ties: new Map(), marks: new Map(), next: null
   } as unknown as FrameEls
   const L = layoutOf(model, st.narrow)
@@ -31,9 +31,9 @@ export function paintAt(model: FrameModel, st: Partial<FrameState> & { sv: numbe
   const lt = nums(els.label.style.transform, 'translate')
   const lk = els.label.style.transform.includes('scale(') ? nums(els.label.style.transform, 'scale')[0] : 1
   // The label scales about its centre (zoom.css · .zv-grp has no origin of its own).
-  const cx = scene.t[0] + (lt[0] + LABEL.w / 2) * scene.s
-  const cy = scene.t[1] + (lt[1] + LABEL.h / 2) * scene.s
-  const hw = (LABEL.w * lk * scene.s) / 2
-  const hh = (LABEL.h * lk * scene.s) / 2
-  return { L, out, scene, label: { left: cx - hw, right: cx + hw, top: cy - hh, bottom: cy + hh, k: lk } }
+  const cx = scene.t[0] + (lt[0] + size.w / 2) * scene.s
+  const cy = scene.t[1] + (lt[1] + size.h / 2) * scene.s
+  const hw = (size.w * lk * scene.s) / 2
+  const hh = (size.h * lk * scene.s) / 2
+  return { L, out, scene, label: { left: cx - hw, right: cx + hw, top: cy - hh, bottom: cy + hh, k: lk, o: Number(els.label.style.opacity) } }
 }
