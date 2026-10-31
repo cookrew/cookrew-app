@@ -2,7 +2,7 @@
 // resize reprinted is kept once (the later copy, whatever its width), and
 // the history is cut where the screen begins, by the screen's own words.
 import { describe, expect, it } from 'vitest'
-import { clipToCells, cutAtScreen, dropReprints, stripAnsi, textKey } from '../src/main/seed-history'
+import { clipToCells, cutAtScreen, dropReprintedMessages, dropReprints, stripAnsi, textKey } from '../src/main/seed-history'
 
 /** An answer as Claude prints it, hard-wrapped at `width` columns. */
 const answer = (width: number): string[] => {
@@ -82,5 +82,57 @@ describe('clipToCells', () => {
   it('leaves a line whose real text hangs past the edge whole, to wrap — words are never cut', () => {
     expect(clipToCells('abcdefghijkl', 10)).toBe('abcdefghijkl')
     expect(clipToCells('ab历史会在后台自动补新', 9)).toBe('ab历史会在后台自动补新')
+  })
+})
+
+describe('whole messages, kept once (dropReprintedMessages)', () => {
+  // The shape read off a live pane, 2026-10-31: the same exchange printed
+  // three times, the middle copy narrow-wrapped, the first with a row of an
+  // old diff left in it — which is what broke dropReprints' run.
+  const exchange = (garbage: string, wrap = false): string[] => [
+    '✻ Crunched for 12s · done 2:03 PM',
+    '',
+    '❯ 怎么给你这个目录的权限呢 ？',
+    '',
+    wrap ? '⏺ 不建议去开这个目录的权限，换个' : '⏺ 不建议去开这个目录的权限，换个保存位置更简单。',
+    garbage,
+    '  原因：这是 macOS 截屏工具的临时文件夹。',
+    '⏺ Bash(ls ~/Desktop)',
+    '  ⎿ Screen Recording.mov'
+  ]
+  const later = ['✻ Cooked for 15s · done 2:05 PM', '❯ /Users/drej/Desktop/Screen Recording.mov 往回翻', '⏺ Pulling frames out of it.']
+
+  it('keeps the newest copy of a reprinted exchange, garbage rows and narrow copies included', () => {
+    const lines = [...exchange('          + size, the        710 +      // others adopt'), ...exchange('', true), ...exchange(''), ...later]
+    const kept = dropReprintedMessages(lines)
+    expect(kept).toEqual([...exchange(''), ...later])
+  })
+
+  it('a head with old cells past its end is still the same message', () => {
+    const lines = ['⏺ 不建议去开这个目录的权限，换个保存位置更简单。      x7 ', 'old body', '⏺ 不建议去开这个目录的权限，换个保存位置更简单。', 'new body']
+    expect(dropReprintedMessages(lines)).toEqual(['⏺ 不建议去开这个目录的权限，换个保存位置更简单。', 'new body'])
+  })
+
+  it('never drops a tool call or a short prompt that really ran twice', () => {
+    const lines = [
+      '❯ merge',
+      '⏺ Merged into dev as 6d8a72c, checked in the real app.',
+      '⏺ Bash(npx tsc --noEmit -p tsconfig.web.json)',
+      '  ⎿ (No output)',
+      '❯ merge',
+      '⏺ Merged into dev as 0d90fce; the phone strip is gone too.',
+      '⏺ Bash(npx tsc --noEmit -p tsconfig.web.json)',
+      '  ⎿ (No output)'
+    ]
+    expect(dropReprintedMessages(lines)).toEqual(lines)
+  })
+
+  it('a message the screen already shows goes from the history', () => {
+    const lines = ['❯ older question here please', '⏺ An older answer that the screen shows again.', 'body']
+    expect(dropReprintedMessages(lines, ['⏺ An older answer that the screen shows again.'])).toEqual(['❯ older question here please'])
+  })
+
+  it('history with no message heads passes as it is', () => {
+    expect(dropReprintedMessages(['$ ls', 'a  b  c', '$ ls', 'a  b  c'])).toEqual(['$ ls', 'a  b  c', '$ ls', 'a  b  c'])
   })
 })

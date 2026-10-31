@@ -5,7 +5,7 @@ import { homedir, tmpdir } from 'node:os'
 import pty, { IPty } from 'node-pty'
 import xtermHeadless from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
-import { clipToCells, cutAtScreen, dropReprints } from './seed-history'
+import { clipToCells, cutAtScreen, dropReprintedMessages, dropReprints } from './seed-history'
 import { sanitizeAgentEnv } from './multiplexer'
 import { paneEnv } from './pane-env'
 import type { AttachSpec, Multiplexer, PaneCardInfo } from './multiplexer'
@@ -134,7 +134,10 @@ export function buildSeededFrame(
   const lines = history.replace(/(\r?\n)+$/, '').split(/\r?\n/)
   // What the screen already shows is cut off by its own words, and a run
   // that a resize reprinted is kept once — the later copy (seed-history.ts).
-  const above = dropReprints(cutAtScreen(lines, screenText, screen.rows), screenText).map((line) => clipToCells(line, screen.cols))
+  // A copy a redraw left garbled is caught by its messages' heads (dropReprintedMessages).
+  const above = dropReprintedMessages(dropReprints(cutAtScreen(lines, screenText, screen.rows), screenText), screenText).map((line) =>
+    clipToCells(line, screen.cols)
+  )
   // A row printed before a resize can be wider than the screen: a border or
   // padding past the edge is cut (clipToCells); real text wraps, whole.
   const body =
