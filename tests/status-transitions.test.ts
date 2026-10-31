@@ -164,3 +164,38 @@ describe('detectTurnEnded reads the LAST status line', () => {
   it('is false when a live spinner follows it', () => expect(detectTurnEnded(`${ENDED}\n${SPIN}`)).toBe(false))
   it('is false with no status line at all', () => expect(detectTurnEnded('⏺ hello\n❯ ')).toBe(false))
 })
+
+// Status eval r5, desktop step 3: Enter on the menu, then working → waiting
+// for 394 ms → working. herdr still said blocked after the menu closed, and
+// the answer's spinner was not up yet.
+describe('right after a menu answer', () => {
+  it("a stale blocked with the menu gone does not bounce back to waiting", () => {
+    const { turns, s } = start()
+    herdr.set(s.sessionName, 'blocked')
+    s.show(MENU)
+    vi.advanceTimersByTime(400)
+    expect(turns.phaseOf('t1')).toBe('waiting')
+    s.type('\r')
+    expect(turns.phaseOf('t1')).toBe('thinking')
+    s.show('') // the menu closes; no spinner yet
+    for (let ms = 0; ms < 1200; ms += 100) {
+      vi.advanceTimersByTime(100)
+      expect(turns.phaseOf('t1')).toBe('thinking')
+    }
+    s.show(SPIN)
+    herdr.set(s.sessionName, 'working')
+    vi.advanceTimersByTime(400)
+    expect(turns.phaseOf('t1')).toBe('thinking')
+  })
+
+  it('a question still on screen after the Enter is waiting at once', () => {
+    const { turns, s } = start()
+    herdr.set(s.sessionName, 'blocked')
+    s.show(MENU)
+    vi.advanceTimersByTime(400)
+    s.type('\r')
+    s.show(MENU) // the Enter landed on a row that keeps the menu up
+    vi.advanceTimersByTime(400)
+    expect(turns.phaseOf('t1')).toBe('waiting')
+  })
+})
