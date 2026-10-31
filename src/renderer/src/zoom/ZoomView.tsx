@@ -160,7 +160,29 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     for (const m of modelRef.current.marks) { const el = get(`mark:${m.id}`); if (el) marks.set(m.id, el) }
     return { devices: get('devices')!, device: get('device')!, scene: get('scene')!, panel: get('panel')!, wash: get('wash')!, ring: get('ring')!, label: get('label')!, labelW: get('label')!.offsetWidth, newCap: get('newCap')!, machine: get('machine')!, agents, links, items, ties, marks, next: get('newseat') }
   }, [])
-  const motion = useZoomMotion(model.frame, collect, root)
+  // THE CREW SCROLLS ON A PHONE (zoom-frame.ts · phoneCamera): the crew is
+  // drawn at a readable size, so a tall one scrolls (by a drag) instead of shrinking.
+  const panAt = useRef(0)
+  const panMax = useRef(0)
+  const pan = useMemo(() => ({
+    get: () => panAt.current,
+    setMax: (max: number) => {
+      panMax.current = max
+      if (panAt.current > max) panAt.current = max
+    }
+  }), [])
+  const motion = useZoomMotion(model.frame, collect, root, pan)
+  /** The crew stop on a narrow screen, with more crew than fits: where a drag scrolls (no wheel: owner, 2026-10-31). */
+  const canPan = (): boolean => {
+    const z = zoomStore.get()
+    return panMax.current > 0 && z.dir === 'agents' && z.v > 0.9 && z.v < 1.5
+  }
+  const scrollBy = (dy: number): void => {
+    panAt.current = Math.min(panMax.current, Math.max(0, panAt.current + dy))
+    motion.wake()
+  }
+  const drag = useRef<{ y: number; pan: number; on: boolean } | null>(null)
+  const panned = useRef(false)
   // A web font that lands later changes every measured width: measure again.
   useEffect(() => {
     const fonts = typeof document !== 'undefined' ? document.fonts : undefined
@@ -291,6 +313,8 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         onPointerDown={(e) => {
           pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
           moved.current = false
+          panned.current = false
+          drag.current = pointers.current.size === 1 && canPan() ? { y: e.clientY, pan: panAt.current, on: false } : null
           if (pointers.current.size === 2) {
             pinch.current = { distance: distance(), v: zoomStore.get().v }
             moved.current = true
@@ -301,10 +325,25 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           if (!at) return
           if (Math.hypot(e.clientX - at.x, e.clientY - at.y) > 6) moved.current = true
           pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+          const d = drag.current
+          if (d && pointers.current.size === 1) {
+            if (!d.on && Math.abs(e.clientY - d.y) > 6) d.on = true
+            if (d.on) {
+              panned.current = true
+              scrollBy(d.pan + (d.y - e.clientY) - panAt.current)
+            }
+          }
           const p = pinch.current
           if (p && pointers.current.size === 2 && p.distance > 0) motion.go(p.v + Math.log2(distance() / p.distance) * 1.1)
         }}
-        onPointerUp={(e) => { pointers.current.delete(e.pointerId); if (pointers.current.size < 2) pinch.current = null }}
+        onPointerUp={(e) => { pointers.current.delete(e.pointerId); if (pointers.current.size < 2) pinch.current = null; drag.current = null }}
+        // A drag that scrolled the crew is not a click on the face it ended on.
+        onClickCapture={(e) => {
+          if (!panned.current) return
+          panned.current = false
+          e.stopPropagation()
+          e.preventDefault()
+        }}
         onPointerCancel={(e) => { pointers.current.delete(e.pointerId); pinch.current = null; moved.current = true }}
         onClick={(e) => {
           // Nothing was pressed, or the press was a pinch or a drag: not a step out.
