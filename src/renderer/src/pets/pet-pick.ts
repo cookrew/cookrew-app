@@ -37,6 +37,17 @@ export interface PetTroop {
 
 const RANK: Record<PetMood, number> = { needs: 0, working: 1, done: 2, asleep: 3 }
 
+/** By name as a person reads it ("agent 2" before "agent 10"), then by id, so two never trade places. */
+export const byName = (a: AgentRow, b: AgentRow): number =>
+  a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }) || a.id.localeCompare(b.id)
+
+/**
+ * Within a mood: the working agents by NAME (owner, 2026-11-01): they all act
+ * all the time, and ordered by who acted last they traded places under the
+ * pointer every few seconds. The others by how recently they acted.
+ */
+const withinMood = (a: Pet, b: Pet): number => (a.mood === 'working' ? byName(a.row, b.row) : b.row.lastActivityAt - a.row.lastActivityAt)
+
 /** What a pet is up to, or null when it does not ride along on its own. */
 export const moodOf = (row: AgentRow, now: number): PetMood | null => {
   if (!row.active) return null
@@ -60,7 +71,7 @@ export const pickPets = (
       const mood = moodOf(row, options.now)
       return mood ? [{ row, mood }] : []
     })
-    .sort((a, b) => RANK[a.mood] - RANK[b.mood] || b.row.lastActivityAt - a.row.lastActivityAt)
+    .sort((a, b) => RANK[a.mood] - RANK[b.mood] || withinMood(a, b))
   const awakeIds = new Set(awake.map((pet) => pet.row.id))
   const asleep = here
     .filter((row) => !awakeIds.has(row.id))

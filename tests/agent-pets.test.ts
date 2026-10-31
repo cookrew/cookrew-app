@@ -53,6 +53,26 @@ describe('who rides along', () => {
     expect(troop.pets.map((pet) => pet.mood)).toEqual(['needs', 'needs', 'working', 'done'])
   })
 
+  // The owner, 2026-11-01: the working agents kept trading places as each one
+  // acted. They stand by name, and stay put however often they act.
+  it('stands the working agents by name, and keeps them there whoever acted last', () => {
+    const crew = [row('t3', 'working', 1_000, { name: 'Velvet' }), row('t1', 'working', 50_000, { name: 'Forge' }), row('t2', 'working', 9_000, { name: 'agent 10' }), row('t4', 'working', 7_000, { name: 'agent 2' })]
+    const first = pickPets(crew, { now: NOW }).pets.map((pet) => pet.row.name)
+    expect(first).toEqual(['agent 2', 'agent 10', 'Forge', 'Velvet'])
+    const later = crew.map((r) => ({ ...r, lastActivityAt: NOW - Math.floor(Math.random() * 60_000) }))
+    expect(pickPets(later, { now: NOW }).pets.map((pet) => pet.row.name)).toEqual(first)
+  })
+
+  it('the browsers and notes wear no pill either, as the agents do', () => {
+    const css = readFileSync('src/renderer/src/pets/pets.css', 'utf8')
+    expect(css).toMatch(/\.cr-pets\.right,\s*\.cr-pets\.left \{[^}]*background: none;/)
+  })
+
+  it("a browser in a slot wears the demo's page: rounded 10px, one hairline, no ink edge", () => {
+    const css = readFileSync('src/renderer/src/zoom/full-views.css', 'utf8')
+    expect(css).toMatch(/\.browser-lod\.browser-embedded:not\(\.browser-full\) \.popout \{\s*border: 0;\s*border-radius: 10px;/)
+  })
+
   it('a finished turn stops being news after a while', () => {
     expect(moodOf(row('a', 'done', PET_DONE_FRESH_MS - 1), NOW)).toBe('done')
     expect(moodOf(row('a', 'done', PET_DONE_FRESH_MS + 1), NOW)).toBeNull()
@@ -147,8 +167,8 @@ describe('where a troop sits', () => {
     const css = readFileSync('src/renderer/src/pets/pets.css', 'utf8')
     const stage = readFileSync('src/renderer/src/stage/stage.css', 'utf8')
     expect(css).toMatch(/\.cr-pets \{[^}]*flex-direction: column;/)
-    expect(css).toMatch(/\.cr-pets\.right \{[^}]*background: none;[^}]*box-shadow: none;[^}]*pointer-events: none;/)
-    expect(css).toMatch(/\.cr-pets\.right > \* \{\s*pointer-events: auto;/)
+    expect(css).toMatch(/\.cr-pets\.right,\s*\.cr-pets\.left \{[^}]*background: none;[^}]*box-shadow: none;[^}]*pointer-events: none;/)
+    expect(css).toMatch(/\.cr-pets\.right > \*,\s*\.cr-pets\.left > \* \{\s*pointer-events: auto;/)
     expect(stage).toMatch(/\.cr-stage-view\.bedded \{\s*padding: 0;/)
   })
 
