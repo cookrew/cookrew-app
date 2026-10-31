@@ -274,6 +274,24 @@ export function isCommandPrompt(text: string): boolean {
   return /^\/[a-z][a-z0-9-]*(\s|$)/.test(text.trim())
 }
 
+/**
+ * Slash commands that only drive the agent's own UI (a picker, a screen, a
+ * quit) and never run a model turn. A turn is never opened for these; every
+ * other command (/compact, a skill like /code-review, /init) can do real
+ * work and is judged by what it printed when it ends.
+ */
+const UI_COMMANDS = new Set([
+  'add-dir', 'agents', 'bug', 'clear', 'config', 'context', 'cost', 'doctor', 'effort', 'exit', 'export', 'fast',
+  'feedback', 'help', 'hooks', 'ide', 'login', 'logout', 'mcp', 'memory', 'model', 'output-style', 'permissions',
+  'plugin', 'privacy-settings', 'quit', 'release-notes', 'resume', 'rewind', 'skills', 'status', 'statusline',
+  'terminal-setup', 'theme', 'upgrade', 'usage', 'vim'
+])
+
+export function isUiCommand(text: string): boolean {
+  const m = /^\/([a-z][a-z0-9-]*)(\s|$)/.exec(text.trim())
+  return m !== null && UI_COMMANDS.has(m[1])
+}
+
 /** Normalized prompt key for phantom-echo matching (mirrors the fork matcher). */
 function phantomPromptKey(prompt: string): string {
   return prompt.trim().replace(/\s+/g, ' ').toLowerCase().slice(0, 48)
@@ -774,6 +792,20 @@ export function latestTailLines(text: string): number | null {
     }
   }
   return null
+}
+
+/**
+ * True when the LAST status line on the screen reads as a finished turn
+ * ("✻ Baked for 16s"), as opposed to a live spinner or no status line at all.
+ * Read bottom-up, so a live spinner painted after an old finished line wins.
+ */
+export function detectTurnEnded(screen: string): boolean {
+  const lines = stripTermNoise(screen).replace(CSI_RE, '').split('\n')
+  for (let i = lines.length - 1, seen = 0; i >= 0 && seen < 30; i -= 1, seen += 1) {
+    const spinner = SPINNER_LINE_RE.exec(lines[i])
+    if (spinner) return COMPLETED_STATUS_RE.test(spinner[1].trim())
+  }
+  return false
 }
 
 export function detectLiveWork(chunk: string): boolean {

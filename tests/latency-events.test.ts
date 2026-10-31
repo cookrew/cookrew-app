@@ -224,7 +224,8 @@ describe('TurnTracker announces a completed turn with its duration', () => {
     vi.useFakeTimers()
     const { tracker, session, turns } = makeTracker()
     await runTurn(session, '/clear', 3000)
-    expect(tracker.list()[0].phase).toBe('replied')
+    // A UI-only command opens no turn: the agent rests (status-commands.test.ts).
+    expect(tracker.list()[0].phase).toBe('idle')
     expect(turns).toEqual([])
     tracker.disposeAll()
   })
