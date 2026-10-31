@@ -142,7 +142,7 @@ describe('the Claude accumulator agrees with the whole-file parse at every split
     accumulator.feed([toolResult('tu3', T0 + 32000), reply('a7', 'fourth done', T0 + 33000)])
     expect(accumulator.blocks()).toHaveLength(4)
     expect(accumulator.blocks()[3]).toBe(open)
-    expect(open.reply).toBe('calling tu3\nfourth done')
+    expect(open.reply).toBe('calling tu3\n\nfourth done')
     expect(open.activity[0].result).toBe('out tu3')
   })
 })
