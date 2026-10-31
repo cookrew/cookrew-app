@@ -635,6 +635,11 @@
   cursor: pointer;
 }
 
+.cr-look-toggle.look-log {
+  background: var(--ink);
+  color: var(--cream-hi);
+}
+
 .cr-look-toggle.look-live {
   background: var(--cream-hi);
   color: var(--ink);

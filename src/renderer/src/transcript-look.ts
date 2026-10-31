@@ -1,25 +1,45 @@
 import { useEffect, useState } from 'react'
 
 /**
- * TWO VIEWS OF AN AGENT (owner, 2026-10-31: "chat is chat; live is the raw
- * herdr terminal").
+ * THREE VIEWS OF AN AGENT, TWO SOURCES (owner, 2026-10-31: render the live
+ * transcript from the chat's data, so switching changes the drawing, not the
+ * source).
  *
- *   chat  — the conversation only: your prompts on the right, the agent's
- *           tool calls and replies in bubbles on the left beside its face,
- *           and a status strip while it works. You talk to it from the dock.
- *   live  — the agent's own herdr terminal, filling the card, as it runs.
+ *   chat  — the conversation record as a chat: your prompts on the right,
+ *           the agent's tool calls and replies in bubbles beside its face.
+ *   log   — THE SAME RECORD, drawn the way the agent's terminal draws it:
+ *           monospace, ❯ prompts, ⏺ tool calls and replies, ⎿ results. Same
+ *           rows as the chat (TranscriptRow), restyled by one class, so it
+ *           cannot show a reprint, a wrong width or a half-painted screen —
+ *           the screen is not where it comes from.
+ *   live  — the agent's own herdr terminal, filling the card: for what the
+ *           record does not hold (a permission prompt, a choice, a TUI).
  *
- * The terminal is never unmounted and never resized by the switch: in chat it
- * lies under the conversation, unseen, in exactly the box it fills in live
- * (transcript-paper.css), so the agent's pane keeps its size either way. One
- * choice for every card, kept across reloads.
+ * chat and log are the RECORD views (isRecordLook): the terminal lies under
+ * them unseen, in exactly the box it fills in live (transcript-paper.css), so
+ * no switch resizes the agent's pane. One choice for every card, kept.
  */
 
-export type TranscriptLook = 'chat' | 'live'
+export type TranscriptLook = 'chat' | 'log' | 'live'
 
 export const TRANSCRIPT_LOOK_KEY = 'cookrew.transcript-look'
 
-export const transcriptLookOf = (raw: string | null | undefined): TranscriptLook => (raw === 'live' ? 'live' : 'chat')
+export const transcriptLookOf = (raw: string | null | undefined): TranscriptLook =>
+  raw === 'live' || raw === 'log' ? raw : 'chat'
+
+/** chat and log draw the conversation record; live is the raw terminal. */
+export const isRecordLook = (look: TranscriptLook): boolean => look !== 'live'
+
+/** The toggle's order: chat → log → live → chat. */
+export const nextLook = (look: TranscriptLook): TranscriptLook => (look === 'chat' ? 'log' : look === 'log' ? 'live' : 'chat')
+
+export const LOOK_LABEL: Record<TranscriptLook, string> = { chat: 'CHAT', log: 'LOG', live: 'LIVE' }
+
+export const LOOK_TITLE: Record<TranscriptLook, string> = {
+  chat: "Chat: the conversation with the agent — tap for the log, the same conversation as the terminal draws it",
+  log: "Log: the conversation as the agent's terminal draws it, from the record — tap for live, the agent's own terminal",
+  live: "Live: the agent's own terminal — tap for chat"
+}
 
 const listeners = new Set<(look: TranscriptLook) => void>()
 let current: TranscriptLook | null = null

@@ -161,7 +161,7 @@ describe('the bar offers the places, the card fills them', () => {
     expect(bar).toContain('route={routeDial}')
     expect(bar).not.toContain('<TuneRail')
     // One button that flips, not a two-button segment.
-    expect(bar).toContain("switchLook(look === 'chat' ? 'live' : 'chat')")
+    expect(bar).toContain("switchLook(nextLook(look))")
     expect(bar).not.toContain("(['chat', 'live'] as const)")
   })
 
