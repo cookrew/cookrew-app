@@ -48,6 +48,8 @@ export interface ZoomModel {
   name: string
   browsers: number
   notes: number
+  /** Items the thumbs grid leaves out (the totals above still count them). */
+  hiddenItems: number
 }
 
 /** Another machine from the real fleet: its workspaces, or only their names when it cannot be read. */
@@ -61,6 +63,9 @@ export interface MachineView {
   agents: number | null
   waiting: number | null
 }
+
+/** How many browsers and notes the thumbs grid draws. */
+export const ITEMS_SHOWN = 12
 
 export const PHASE_WORD: Record<AgentPhase, string> = { waiting: 'needs you', working: 'working', done: 'done', quiet: 'resting', offline: 'offline' }
 
@@ -140,6 +145,19 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
       links.push({ key: `${a.id}|${att.node.id}`, agent: a.id, item: att.node.id, k, j: Math.max(0, o.indexOf(a.id)) })
     })
   }
+  // The thumbs grid draws a screenful, not a board: a workspace can hold hundreds of
+  // browsers and notes (292 on the owner's), and one tall strip of them is no view.
+  // The ones somebody carries come first, newest first within each; the totals
+  // still count them all, and the rest are said, not drawn.
+  const totalCount = items.length
+  const total = [...items]
+  const shown = [...items.filter((i) => i.owners.length > 0), ...items.filter((i) => i.owners.length === 0)].slice(0, ITEMS_SHOWN)
+  const keep = new Set(shown.map((i) => i.id))
+  items.length = 0
+  items.push(...shown)
+  const keptLinks = links.filter((l) => keep.has(l.item))
+  links.length = 0
+  links.push(...keptLinks)
   const newestBrowser = items.find((i) => i.kind === 'browser' && i.owners.length > 0)
   const newest = newestBrowser ? `${newestBrowser.owners[0]}|${newestBrowser.id}` : null
 
@@ -183,7 +201,8 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
       waiting: m.workspaces.length && m.workspaces.every((w) => w.counts) ? m.workspaces.reduce((a, w) => a + (w.counts?.waiting ?? 0), 0) : null
     })),
     name: input.name,
-    browsers: items.filter((i) => i.kind === 'browser').length,
-    notes: items.filter((i) => i.kind === 'note').length
+    browsers: total.filter((i) => i.kind === 'browser').length,
+    notes: total.filter((i) => i.kind === 'note').length,
+    hiddenItems: Math.max(0, totalCount - shown.length)
   }
 }
