@@ -118,8 +118,13 @@ export function put(el: Put | null | undefined, transform: string | null, opacit
   if (el._o !== o) {
     el.style.opacity = String(o)
     el._o = o
-    // What cannot be seen cannot be pressed.
+    // What cannot be seen cannot be pressed, nor painted. Every part rides a
+    // layer of its own (will-change), and a layer at opacity 0 keeps its tiles:
+    // with enough of them Chromium runs out of tile memory and leaves holes in
+    // the parts that ARE shown (owner's screenshots, 2026-11-01). Hidden, a
+    // part draws nothing; its layer stays, so showing it again is one raster.
     el.style.pointerEvents = o < 0.05 ? 'none' : ''
+    el.style.visibility = o === 0 ? 'hidden' : ''
   }
 }
 

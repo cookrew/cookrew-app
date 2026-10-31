@@ -3,6 +3,7 @@ import { agentClick, derive, itemClick, settle, type ZoomDir } from './zoom-path
 import { layoutOf, paint, type FrameEls, type FrameModel } from './zoom-frame'
 import { zoomStore } from './zoom-store'
 import { stageSelect } from '../stage/stage-select'
+import { createRestFlag } from './zoom-rest'
 
 /** The compositor-facing part of the navigator. React builds nodes; this owns the moving values. */
 export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null, root: React.RefObject<HTMLDivElement>) {
@@ -22,6 +23,8 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
     let narrowWas = false
     let layout: ReturnType<typeof layoutOf> | null = null
     let jump = zoomStore.get().jump
+    // The compositor hints live while the loop moves, never at rest (zoom-rest.ts).
+    const rest = createRestFlag(() => root.current)
     const tick = (now: number): void => {
       raf = 0
       if (!alive) return
@@ -116,8 +119,13 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
         if (el.node.style.zIndex !== String(level)) el.node.style.zIndex = String(level)
       }
       const state = zoomStore.get()
-      if (at.v !== state.v || at.leaving || at.pending) raf = requestAnimationFrame(tick)
-      else last = 0
+      if (at.v !== state.v || at.leaving || at.pending) {
+        rest.moving()
+        raf = requestAnimationFrame(tick)
+      } else {
+        last = 0
+        rest.settled()
+      }
     }
     kick.current = () => {
       if (!raf && alive) raf = requestAnimationFrame(tick)
@@ -128,6 +136,7 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
     kick.current()
     return () => {
       alive = false
+      rest.dispose()
       if (raf) cancelAnimationFrame(raf)
       observer.disconnect()
       unsub()
