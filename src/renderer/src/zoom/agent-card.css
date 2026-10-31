@@ -253,136 +253,89 @@
 
 /* ---- THE CARD, FLOATING (AgentCard.tsx) ----
    The crew view's card where the crew view is not on screen: in a full view,
-   beside the face in the agent group. Its parts are the crew card's; here they
-   sit in a column instead of where the zoom painter puts them. */
+   beside the face in the agent group. Not a layout of its own: the crew
+   card's box (zoom.css · .zv-card, 260x244) with its parts at the painter's
+   positions (AgentCard · CARD_POSE), so the two cards are one look (owner,
+   2026-11-01). Only what the troop's generic card styles would change, and
+   what the painter does by script, is set here. */
 .cr-pet-card.ag-card {
-  width: min(330px, calc(100vw - 16px));
-  gap: 12px;
-  padding: 14px;
+  display: block;
+  width: 260px;
+  height: 244px;
+  padding: 0;
   border: 0;
   border-radius: 14px;
   background: var(--zv-card);
   color: var(--zv-ink);
   box-shadow:
     inset 0 0 0 1px var(--zv-hair-2),
-    0 10px 28px var(--zv-shadow);
+    0 8px 22px var(--zv-shadow);
 }
 
-.ag-card .cr-pet-card-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+/* The face's centre: every part is placed from here, as on the scene. */
+.ag-plate {
+  position: absolute;
+  width: 0;
+  height: 0;
 }
 
-.ag-card .cr-pet-card-face {
-  flex: 0 0 auto;
-  width: 54px;
-  height: 54px;
-  border-radius: 50%;
-  background: var(--zv-paper);
+/* The parts are buttons here (a click on the scene is the painter's). */
+.ag-plate .zv-av,
+.ag-plate .zv-lk {
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font: inherit;
+  color: inherit;
 }
 
-.ag-card .cr-pet-card-face .ink-avatar {
+.ag-plate .zv-lk {
+  background: none;
+}
+
+.ag-plate .zv-lk .zv-th,
+.ag-plate .zv-lk .zv-coin,
+.ag-plate .zv-lk .zv-face {
   display: block;
-  width: 54px;
-  height: 54px;
 }
 
-.ag-card .cr-pet-card-who {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.ag-card .cr-pet-card-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font: 600 20px/1.15 var(--zv-serif);
-  color: var(--zv-ink);
-}
-
-.ag-card .cr-pet-card-meta {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-/* The crew card's state and counts, in flow (zoom.css places them absolutely). */
-.ag-card .zv-st,
-.ag-card .zv-cnt {
-  position: static;
-}
-
-.ag-card .cr-pet-card-open,
-.ag-card .cr-pet-card-x {
-  flex: 0 0 auto;
-  height: 26px;
-  padding: 0 9px;
-  border: 0;
-  border-radius: 8px;
-  background: var(--zv-paper);
-  box-shadow: inset 0 0 0 1.5px var(--zv-hair-2);
-  color: var(--zv-ink);
-  font: 600 10px/1 var(--zv-mono);
-  letter-spacing: 0.08em;
-  cursor: pointer;
-}
-
-.ag-card .cr-pet-card-x {
-  width: 26px;
-  padding: 0;
-  font: 15px/1 var(--zv-mono);
-}
-
-.ag-card .cr-pet-card-open:hover,
-.ag-card .cr-pet-card-x:hover {
-  background: var(--zv-paper-2);
-}
-
-.ag-card .cr-pet-card-turn {
-  min-height: 64px;
-}
-
-.ag-thumbs {
-  display: grid;
-  grid-template-columns: repeat(3, 70px);
-  gap: 9px;
-}
-
-.ag-thumb {
-  position: relative;
-  width: 70px;
-  height: 46px;
-  padding: 0;
-  border: 0;
-  border-radius: 5px;
-  box-shadow: 0 2px 6px var(--zv-shadow-sm);
-  cursor: pointer;
-}
-
-.ag-thumb:hover {
+.ag-plate .zv-lk:hover .zv-th {
   box-shadow:
     0 0 0 1.5px var(--zv-seal),
     0 2px 6px var(--zv-shadow-sm);
 }
 
-.ag-thumbs-none {
-  display: grid;
-  place-items: center;
-  height: 46px;
-  border: 1.5px dashed var(--zv-hair-2);
-  border-radius: 8px;
-  font: italic 10.5px/1 var(--zv-mono);
-  color: var(--zv-muted);
+/* The troop's own card names are mono and muted: the crew card's are not. */
+.ag-plate .cr-pet-card-name {
+  align-self: auto;
+  max-width: 188px;
+  font: 600 15px/1.2 var(--zv-serif);
 }
 
-/* The crew card's reply box, in flow. */
-.ag-card .zv-reply {
-  position: relative;
-  left: auto;
-  top: auto;
-  width: auto;
+.ag-meta {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font: inherit;
+  color: inherit;
+}
+
+/* The crew card's state and counts, side by side (the painter puts the counts 10px after the state). */
+.ag-meta .zv-st,
+.ag-meta .zv-cnt {
+  position: static;
+}
+
+.ag-meta .zv-cnt {
+  margin-top: 1px;
+}
+
+/* The crew card's × shows on the open card; this card is always open. */
+.ag-plate .zv-del {
+  opacity: 1;
+  pointer-events: auto;
 }

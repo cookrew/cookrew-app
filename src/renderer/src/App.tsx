@@ -1720,6 +1720,7 @@ function Canvas(): React.JSX.Element {
                 crew={crew}
                 attachIndex={attachIndex}
                 onOpen={zoomToNode}
+                onDelete={requestClose}
                 // In a full view both groups attach to its panel (pets/pet-dock.ts),
                 // as group-motion-pivot.html draws them.
                 dock={view === 'stage' && zoomFull !== null ? fullDock.agents : null}

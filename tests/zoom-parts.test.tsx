@@ -73,6 +73,23 @@ describe('an agent’s card', () => {
       expect(card).toContain(shared)
       expect(node).toContain(shared)
     }
+    // ONE LOOK (owner, 2026-11-01: "the two cards are still not the same"): the
+    // floating card puts the parts where the painter puts them on the open
+    // card, with the crew card's classes, and has no buttons of its own.
+    const frame0 = readFileSync('src/renderer/src/zoom/zoom-frame.ts', 'utf8')
+    expect(frame0).toContain('lerp(-e.nmW / 2, 30, nx), y: lerp(42, -24, ny)')
+    expect(frame0).toContain('lerp(62, -2, ny)')
+    expect(frame0).toContain('translate(-18px, ${f1(32')
+    expect(frame0).toContain('const slot = { x: 17 + 79 * l.k, y: 136 }')
+    expect(frame0).toContain('cx: lerp(0, -27, grow),')
+    expect(frame0).toContain('cs: lerp(1, 0.45, grow)')
+    expect(card).toContain('name: { x: 30, y: -24 }')
+    expect(card).toContain('meta: { x: 30, y: -2 }')
+    expect(card).toContain('body: { x: -18, y: 32 }')
+    expect(card).toContain('thumb: (k: number) => ({ x: 17 + 79 * k, y: 136 })')
+    expect(card).toContain('coin: { x: -27, y: -18, s: 0.45 }')
+    for (const cls of ['zv-av', 'zv-nm', 'zv-body', 'zv-lk', 'zv-th', 'zv-coin', 'zv-reply', 'zv-del', 'zv-emp']) expect(card).toContain(cls)
+    expect(card).not.toMatch(/className="cr-pet-card-open|className="cr-pet-card-x|\n\s*OPEN\n/)
     // The zoom card grew by the two lines it now says (zoom-frame.ts · the strip and the card).
     const frame = readFileSync('src/renderer/src/zoom/zoom-frame.ts', 'utf8')
     expect(frame).toContain('y: 136 }')
