@@ -124,12 +124,17 @@ export function LinkNode({ k, item, agent, shared, bind, onClick }: { k: string;
 }
 
 /** An item's own thumbnail in the thumbs grid: the page, its title, who uses it. */
-export function ItemNode({ item, names, bind, onClick }: { item: ItemView; names: string[]; bind: Bind; onClick: () => void }): React.JSX.Element {
+export function ItemNode({ item, names, bind, onClick, onDelete }: { item: ItemView; names: string[]; bind: Bind; onClick: () => void; onDelete?: () => void }): React.JSX.Element {
   return (
     <div ref={bind(`item:${item.id}`)} className={`zv-ip ${item.kind}`} title={item.title} {...press(onClick, `${item.kind}: ${item.title}`)}>
       <div className={`zv-th zv-big ${item.kind}`}>
         <Page item={item} big />
       </div>
+      {onDelete && (
+        <button type="button" className="zv-del" title={`Remove ${item.title}`} aria-label={`Remove ${item.title}`} onClick={(e) => { e.stopPropagation(); onDelete() }}>
+          ×
+        </button>
+      )}
       <div ref={bind(`item-ttl:${item.id}`)} className="zv-ttl">
         <b>{item.title}</b>
         <span>{item.kind === 'browser' ? item.host : 'note'}</span>
@@ -140,7 +145,7 @@ export function ItemNode({ item, names, bind, onClick }: { item: ItemView; names
 }
 
 /** One agent: its card (drawn under), its ink face, its words, and the card's quick reply. */
-export function AgentNode({ agent, bind, onOpen }: { agent: AgentView; bind: Bind; onOpen: () => void }): React.JSX.Element {
+export function AgentNode({ agent, bind, onOpen, onDelete }: { agent: AgentView; bind: Bind; onOpen: () => void; onDelete?: () => void }): React.JSX.Element {
   const [draft, setDraft] = useState('')
   const [sent, setSent] = useState<string | null>(null)
   const send = (): void => {
@@ -161,6 +166,13 @@ export function AgentNode({ agent, bind, onOpen }: { agent: AgentView; bind: Bin
       <div ref={bind(`agent-nm:${agent.id}`)} className="zv-nm" {...press(onOpen, `${agent.name}, ${agent.word}`)}>
         {agent.name}
       </div>
+      {onDelete && (
+        // Deletion is a small mark on the open card, never a stray click: the
+        // app's own confirm dialog takes it from here.
+        <button type="button" className="zv-del" title={`Remove ${agent.name}`} aria-label={`Remove ${agent.name}`} onClick={(e) => { e.stopPropagation(); onDelete() }}>
+          ×
+        </button>
+      )}
       <div ref={bind(`agent-st:${agent.id}`)} className={`zv-st ${agent.phase}`}>
         {agent.word}
       </div>
@@ -272,5 +284,45 @@ export function MachineNode({ machine, bind, onOpen }: { machine: MachineView; b
         </small>
       </div>
     </div>
+  )
+}
+
+/**
+ * THE NEW AGENT (owner, 2026-10-31): with the canvas retired there is no pane to
+ * click, so the crew keeps one empty seat at its end. Pressing it opens this
+ * card — the harnesses this Mac knows, a name, and Create — and the agent is
+ * made the way the dock makes one.
+ */
+export function NewAgentCard({ presets, busy, error, onCancel, onCreate }: {
+  presets: readonly string[]
+  busy: boolean
+  error: string | null
+  onCancel: () => void
+  onCreate: (name: string, preset: string, orch: boolean) => void
+}): React.JSX.Element {
+  const [preset, setPreset] = useState(presets[0] ?? 'Claude Code')
+  const [name, setName] = useState('')
+  const [orch, setOrch] = useState(false)
+  const submit = (): void => onCreate(name.trim() || preset, preset, orch)
+  return (
+    <form className="zv-newcard" role="dialog" aria-label="New agent" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); submit() }}>
+      <b className="zv-newcard-title">A new agent</b>
+      <div className="zv-newcard-harness" role="group" aria-label="Harness">
+        {presets.map((p) => (
+          <button key={p} type="button" className={p === preset ? 'on' : ''} aria-pressed={p === preset} onClick={() => setPreset(p)}>
+            <InkAvatar id={`pick:${p}`} preset={p} />
+            <span>{p}</span>
+          </button>
+        ))}
+        {presets.length === 0 && <span className="zv-none">no harness in the dock</span>}
+      </div>
+      <input className="zv-newcard-name" value={name} placeholder={preset} aria-label="Its name" onChange={(e) => setName(e.target.value)} autoFocus />
+      <label className="zv-newcard-orch"><input type="checkbox" checked={orch} onChange={(e) => setOrch(e.target.checked)} /> leads the crew</label>
+      {error && <span className="zv-newcard-error" role="alert">{error}</span>}
+      <div className="zv-newcard-acts">
+        <button type="button" onClick={onCancel}>cancel</button>
+        <button type="submit" className="primary" disabled={busy || presets.length === 0}>{busy ? 'making…' : 'create'}</button>
+      </div>
+    </form>
   )
 }
