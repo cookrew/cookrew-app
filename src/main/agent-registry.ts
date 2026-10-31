@@ -55,6 +55,7 @@ function isEntry(value: unknown): value is AgentRegistryEntry {
 
 export class AgentRegistry {
   private entries: AgentRegistryEntry[]
+  private readonly listeners = new Set<(entry: AgentRegistryEntry) => void>()
 
   constructor(private file = path.join(homedir(), '.cookrew', 'agents.json')) {
     this.entries = this.load()
@@ -77,6 +78,26 @@ export class AgentRegistry {
       writeFileSync(this.file, JSON.stringify(this.entries, null, 2), 'utf8')
     } catch (error) {
       console.error('Failed to save agent registry:', error)
+    }
+  }
+
+  /**
+   * Hear each changed entry (spawn, respawn, deactivation): pages hold the
+   * roster they fetched and merge these in, or an agent that exits stays
+   * resting on screen until something remounts it.
+   */
+  onChange(listener: (entry: AgentRegistryEntry) => void): () => void {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
+  private announce(entry: AgentRegistryEntry): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(entry)
+      } catch (error) {
+        console.error('Agent registry listener failed:', error)
+      }
     }
   }
 
@@ -105,6 +126,7 @@ export class AgentRegistry {
       ? this.entries.map((e) => (e.id === input.id ? entry : e))
       : [...this.entries, entry]
     this.save()
+    this.announce(entry)
     return entry
   }
 
@@ -120,10 +142,11 @@ export class AgentRegistry {
 
   /** Dismiss/kill/agent exit — the entry stays for the roster, marked inactive. */
   deactivate(id: string): void {
-    if (!this.lookup(id)) return
-    this.entries = this.entries.map((e) =>
-      e.id === id ? { ...e, active: false, updatedAt: Date.now() } : e
-    )
+    const prior = this.lookup(id)
+    if (!prior || !prior.active) return
+    const entry = { ...prior, active: false, updatedAt: Date.now() }
+    this.entries = this.entries.map((e) => (e.id === id ? entry : e))
     this.save()
+    this.announce(entry)
   }
 }

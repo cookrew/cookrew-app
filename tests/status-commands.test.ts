@@ -59,6 +59,20 @@ describe('slash commands', () => {
     expect(turns.phaseOf('t1')).toBe('idle')
   })
 
+  it('the repaint after closing a picker does not open a turn either (round-2 eval, 3 of 5 runs)', () => {
+    const { turns, s } = tracked()
+    s.text = '❯ Reply OK and nothing else.\n⏺ OK\n\n✻ Churned for 7s\n❯ \n' // the last exchange is on screen
+    s.type('/model\r')
+    s.paint('  Select model\n❯ 1. Default (recommended)\n  2. Opus')
+    expect(turns.phaseOf('t1')).toBe('idle')
+    vi.advanceTimersByTime(4000)
+    s.type('\x1b') // Esc closes the picker; Claude repaints the transcript's bottom
+    s.paint('❯ Reply OK and nothing else.\n⏺ OK\n\n✻ Churned for 7s')
+    expect(turns.phaseOf('t1')).toBe('idle')
+    vi.advanceTimersByTime(4000)
+    expect(turns.phaseOf('t1')).toBe('idle')
+  })
+
   it('a command turn that ran no model turn rests, it is not an unread reply', () => {
     const { turns, s } = tracked()
     s.type('/compact\r')

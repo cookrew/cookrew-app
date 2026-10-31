@@ -467,6 +467,8 @@ export interface CookrewApi {
   queryEvents?: (query?: unknown) => Promise<unknown[]>;
   countEvents?: (query?: unknown) => Promise<Record<string, number>>;
   listAgents?: () => Promise<unknown[]>;
+  /** One changed registry entry (spawn, respawn, exit) as it happens. Optional, feature-detected. */
+  onAgentChanged?: (cb: (entry: unknown) => void) => () => void;
   /**
    * Activity Board snapshot (cross-workspace task view). Optional and
    * feature-detected like listAgents — an older bridge shows the roster

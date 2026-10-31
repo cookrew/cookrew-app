@@ -747,6 +747,10 @@ const routeService = new RouteService({
   },
   terminalsAcross: () => store.terminalsAcross()
 })
+// The roster a page holds learns each change as it happens (agent-registry onChange).
+agents.onChange((entry) => {
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('agents:changed', entry)
+})
 routeService.on('route', (state) => {
   if (mainWindow && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('route', state)
   routeBus.emit('route', state)
