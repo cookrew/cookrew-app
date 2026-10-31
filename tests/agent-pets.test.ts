@@ -144,7 +144,8 @@ describe('where a troop sits', () => {
     const css = readFileSync('src/renderer/src/pets/pets.css', 'utf8')
     const stage = readFileSync('src/renderer/src/stage/stage.css', 'utf8')
     expect(css).toMatch(/\.cr-pets \{[^}]*flex-direction: column;/)
-    expect(css).toMatch(/\.cr-pets\.right \{[^}]*border-color: transparent;/)
+    expect(css).toMatch(/\.cr-pets\.right \{[^}]*background: none;[^}]*box-shadow: none;[^}]*pointer-events: none;/)
+    expect(css).toMatch(/\.cr-pets\.right > \* \{\s*pointer-events: auto;/)
     expect(stage).toMatch(/\.cr-stage-view\.bedded \{\s*padding: 0;/)
   })
 
@@ -201,8 +202,8 @@ describe('the wiring', () => {
   const app = readFileSync('src/renderer/src/App.tsx', 'utf8')
   const css = readFileSync('src/renderer/src/pets/pets.css', 'utf8')
 
-  it('the item troop rides over every page: mounted in App, portalled to the body, under the scrims; the crew troop is not mounted', () => {
-    expect(app).not.toContain('<AgentPets')
+  it('both troops ride over every page: mounted in App, portalled to the body, under the scrims', () => {
+    expect(app).toContain('<AgentPets workspace={workspace} workspaceId={activeWsId} onOpen={zoomToNode} />')
     expect(app).toContain('<ItemPets')
     expect(troop).toContain('document.body')
     expect(css).toMatch(/\.cr-pets \{[^}]*z-index: 55;/)
