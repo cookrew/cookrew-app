@@ -48,7 +48,8 @@ import { useCardRoute } from './nodes/use-card-route'
 import { routeDialAllowed, routeDialInput } from '../../shared/route-view'
 import { isNight, useNight } from './color-scheme'
 import { paperCursor } from './paper-cursor'
-import { createSizeOwner, SETTLE_CHECK_MS, tookOthers, type PaneSize } from './pane-size'
+import { createSizeOwner, openedAt, SETTLE_CHECK_MS, tookOthers, type PaneSize } from './pane-size'
+import { lastUserInputAt } from './user-input'
 import { createTurnRedraw } from './turn-redraw'
 
 /**
@@ -714,7 +715,7 @@ function TerminalOverlay({
        */
       // The rule is pane-size.ts: the viewer used last owns the size, the
       // others adopt it and stay quiet until their own next use.
-      const owner = createSizeOwner(Date.now())
+      const owner = createSizeOwner(openedAt(Date.now(), lastUserInputAt()))
       const owns = (): boolean => owner.owns(Date.now(), document.visibilityState === 'visible')
       const claimSize = (): void => {
         owner.use(Date.now())
@@ -741,7 +742,8 @@ function TerminalOverlay({
         window.removeEventListener('resize', onWindowResize)
       })
       const fitUntilStable = (attempt = 0): void => {
-        if (disposed) return
+        // A viewer nobody opened keeps the pane's size: the hello sets its grid.
+        if (disposed || !owns()) return
         try {
           if (container.offsetWidth > 40) {
             fit.fit()
@@ -909,7 +911,7 @@ function TerminalOverlay({
             }, SETTLE_CHECK_MS)
             return
           }
-          if (helloSeen && Date.now() - lastKickAt > 2000) {
+          if (helloSeen && owns() && Date.now() - lastKickAt > 2000) {
             if (rekickTimer) clearTimeout(rekickTimer)
             rekickTimer = setTimeout(repaintKick, 120)
           }
@@ -974,7 +976,10 @@ function TerminalOverlay({
       // internal screen state — incremental redraws (ink/Claude Code) then
       // land on a wrong baseline and scatter. A double resize (SIGWINCH)
       // forces the app to repaint its real screen at the overlay size.
-      const kickTimer = setTimeout(repaintKick, 200)
+      // Only the viewer in use: a kick is a resize of the SHARED pane.
+      const kickTimer = setTimeout(() => {
+        if (owns()) repaintKick()
+      }, 200)
       cleanups.push(() => clearTimeout(kickTimer))
 
       // Touch scrolling: tmux runs with `mouse on`, so xterm sits in

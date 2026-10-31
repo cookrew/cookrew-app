@@ -39,8 +39,23 @@ export interface SizeOwner {
   owns: (now: number, visible: boolean) => boolean
 }
 
+/** How soon after a click, tap or key a terminal that mounts counts as opened by someone. */
+export const OPEN_CLAIM_MS = 5000
+
+/**
+ * The time a viewer that mounts now counts as used at. Opening a terminal is
+ * using it only when someone opened it: the desktop's stage mounts terminals
+ * on its own as it follows what needs you, and a mount that took the size
+ * then yanked the shared pane from the phone in the owner's hand — every
+ * yank a reflow of the phone's history and a Claude Code redraw (owner,
+ * 2026-10-31: "the phone's and the desktop's transcripts interfere").
+ */
+export function openedAt(now: number, lastInputAt: number): number {
+  return now - lastInputAt < OPEN_CLAIM_MS ? now : Number.NEGATIVE_INFINITY
+}
+
 export function createSizeOwner(openedAt: number): SizeOwner {
-  // Opening a terminal is using it.
+  // Opening a terminal is using it, when someone opened it (openedAt).
   let usedAt = openedAt
   return {
     use: (now) => {
