@@ -3,6 +3,7 @@ import path from 'node:path'
 import { claudeProjectDir } from './claude-fork'
 import {
   ROTATION_RESUME_MIN_UUIDS,
+  headFact,
   headMessageUuids,
   isReplayContinuation,
   readHeadLines,
@@ -77,6 +78,10 @@ export interface LineageStep {
 export interface SessionFs {
   listSessionFiles: (dir: string) => string[]
   headLines: (file: string) => Promise<string[]>
+  /** The head's declared predecessor; absent, it is read from headLines. */
+  edge?: (file: string) => Promise<ReturnType<typeof rotationEdgeOf>>
+  /** The head's message uuids; absent, they are read from headLines. */
+  headUuids?: (file: string) => Promise<string[]>
 }
 
 /** Why an overlap-based join was declined. Never a silent skip. */
@@ -93,8 +98,14 @@ const defaultFs: SessionFs = {
       return []
     }
   },
-  headLines: (file) => readHeadLines(file, LINEAGE_HEAD_LINES)
+  headLines: (file) => readHeadLines(file, LINEAGE_HEAD_LINES),
+  // Kept per file (claude-rotation.ts · headFact): a head is megabytes, the facts a few bytes.
+  edge: (file) => headFact(file, LINEAGE_HEAD_LINES, 'edge', rotationEdgeOf),
+  headUuids: (file) => headFact(file, LINEAGE_HEAD_LINES, 'uuids', headMessageUuids)
 }
+
+const uuidsOf = async (fs: SessionFs, file: string): Promise<string[]> =>
+  fs.headUuids ? fs.headUuids(file) : headMessageUuids(await fs.headLines(file))
 
 /**
  * The predecessor of a file that declares NO boundary — the /clear case.
@@ -119,7 +130,7 @@ export async function overlapPredecessor(
   candidates: readonly LineageStep[],
   fs: SessionFs
 ): Promise<{ step: LineageStep } | { refused: JoinRefusal }> {
-  const own = headMessageUuids(await fs.headLines(file))
+  const own = await uuidsOf(fs, file)
   if (own.length < ROTATION_RESUME_MIN_UUIDS) {
     return {
       refused: {
@@ -131,7 +142,7 @@ export async function overlapPredecessor(
 
   const clearing: { step: LineageStep; ratio: number }[] = []
   for (const candidate of candidates) {
-    const theirs = new Set(headMessageUuids(await fs.headLines(candidate.file)))
+    const theirs = new Set(await uuidsOf(fs, candidate.file))
     if (theirs.size === 0) continue
     const overlap = replayOverlap(own, theirs)
     if (isReplayContinuation(overlap)) clearing.push({ step: candidate, ratio: overlap.ratio })
@@ -187,7 +198,7 @@ export async function sessionChain(
     if (!names.has(name)) break // predecessor named but not present
     const file = path.join(dir, name)
     chain.push({ sessionId: current, file })
-    const edge = rotationEdgeOf(await fs.headLines(file))
+    const edge = fs.edge ? await fs.edge(file) : rotationEdgeOf(await fs.headLines(file))
     if (edge && edge.predecessorId !== current) {
       current = edge.predecessorId
       continue

@@ -25,7 +25,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   return { ...real, default: { ...real, open }, open }
 })
 
-const { clearHeadCache, readHeadLines } = await import('../src/main/claude-rotation')
+const { clearHeadCache, headFact, readHeadLines } = await import('../src/main/claude-rotation')
 const { clearFinalityAnswers, tailIsFinal } = await import('../src/main/stream-finality')
 
 let dir = ''
@@ -85,3 +85,37 @@ describe('the head of a session file', () => {
     expect(await readHeadLines(file, 4)).toEqual(['{"y":1}', '{"y":2}', '{"y":3}', '{"y":4}'])
   })
 })
+
+describe('a small fact about a head (the lineage walk: a head is megabytes, its facts a few bytes)', () => {
+  const lines = (n: number) => Array.from({ length: n }, (_, i) => `{"n":${i}}`).join('\n') + '\n'
+
+  it('is computed once while the file is unchanged, and kept as it grows once the head was whole', async () => {
+    const file = path.join(dir, 'f.jsonl')
+    writeFileSync(file, lines(10))
+    let computed = 0
+    const count = (head: readonly string[]) => (computed++, head.length)
+    expect(await headFact(file, 4, 'count', count)).toBe(4)
+    expect(await headFact(file, 4, 'count', count)).toBe(4)
+    appendFileSync(file, lines(3))
+    expect(await headFact(file, 4, 'count', count)).toBe(4)
+    expect(computed).toBe(1)
+  })
+
+  it('is computed again after a short head grew, and per name', async () => {
+    const file = path.join(dir, 'g.jsonl')
+    writeFileSync(file, lines(2))
+    const count = (head: readonly string[]) => head.length
+    expect(await headFact(file, 4, 'count', count)).toBe(2)
+    appendFileSync(file, lines(5))
+    expect(await headFact(file, 4, 'count', count)).toBe(4)
+    expect(await headFact(file, 4, 'first', (head) => head[0])).toBe('{"n":0}')
+  })
+
+  it("the walk's own reader takes its edge and uuids through it", async () => {
+    const { readFileSync } = await import('node:fs')
+    const walk = readFileSync(path.join(__dirname, '..', 'src/main/session-lineage-walk.ts'), 'utf8')
+    expect(walk).toContain("edge: (file) => headFact(file, LINEAGE_HEAD_LINES, 'edge', rotationEdgeOf)")
+    expect(walk).toContain("headUuids: (file) => headFact(file, LINEAGE_HEAD_LINES, 'uuids', headMessageUuids)")
+  })
+})
+
