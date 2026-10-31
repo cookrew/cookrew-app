@@ -33,13 +33,21 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
 }): React.JSX.Element {
   const root = useRef<HTMLDivElement>(null)
   const registry = useRef(new Map<string, HTMLElement>())
+  /** Bumped when an element joins or leaves the registry: collect's cache key. */
+  const registryVersion = useRef(0)
+  /** Bumped when a web font finishes loading: the measured widths change. */
+  const fontsVersion = useRef(0)
+  const collected = useRef<{ model: unknown; registry: number; fonts: number; els: FrameEls } | null>(null)
   const refs = useRef(new Map<string, (el: HTMLElement | null) => void>())
   const bind = useCallback<Bind>((key) => {
     let fn = refs.current.get(key)
     if (!fn) {
       fn = (el) => {
-        if (el) registry.current.set(key, el)
-        else registry.current.delete(key)
+        if (el) {
+          if (registry.current.get(key) === el) return
+          registry.current.set(key, el)
+        } else if (!registry.current.delete(key)) return
+        registryVersion.current += 1
       }
       refs.current.set(key, fn)
     }
@@ -86,7 +94,20 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   }), [workspace?.nodes, workspace?.connections, workspace?.name, workspaceId, rows, crew.crew, attachIndex, list, fleetWorkspaces, fleet.machines])
   const modelRef = useRef(model)
   modelRef.current = model
+  /**
+   * The painter's elements and their measured widths. Asked for on every
+   * animation frame; built again only when the model, the registered elements
+   * or the loaded fonts changed (it read three offsetWidths per agent and
+   * rebuilt five maps every frame: 158 ms in 12 s of zooming, profiled).
+   */
   const collect = useCallback((): FrameEls | null => {
+    const last = collected.current
+    if (last && last.model === modelRef.current && last.registry === registryVersion.current && last.fonts === fontsVersion.current) return last.els
+    const els = collectNow()
+    collected.current = els ? { model: modelRef.current, registry: registryVersion.current, fonts: fontsVersion.current, els } : null
+    return els
+  }, [])
+  const collectNow = useCallback((): FrameEls | null => {
     const all = registry.current
     const get = (k: string): HTMLElement | null => all.get(k) ?? null
     const base = ['devices', 'device', 'scene', 'panel', 'wash', 'ring', 'label', 'newCap', 'machine'] as const
@@ -123,6 +144,17 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     return { devices: get('devices')!, device: get('device')!, scene: get('scene')!, panel: get('panel')!, wash: get('wash')!, ring: get('ring')!, label: get('label')!, labelW: get('label')!.offsetWidth, newCap: get('newCap')!, machine: get('machine')!, agents, links, items, ties, marks, next: get('newseat') }
   }, [])
   const motion = useZoomMotion(model.frame, collect, root)
+  // A web font that lands later changes every measured width: measure again.
+  useEffect(() => {
+    const fonts = typeof document !== 'undefined' ? document.fonts : undefined
+    if (!fonts?.addEventListener) return
+    const onFonts = (): void => {
+      fontsVersion.current += 1
+      motion.wake()
+    }
+    fonts.addEventListener('loadingdone', onFonts)
+    return () => fonts.removeEventListener('loadingdone', onFonts)
+  }, [motion.wake])
   // ONE CARD INSTANCE (owner, 2026-10-31): the card's body, strip and reply are
   // drawn for the open card only, and for the one it is leaving while that
   // fades, never once per agent behind the crew.
