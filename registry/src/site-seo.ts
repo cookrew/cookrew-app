@@ -188,7 +188,7 @@ export function webManifest(): string {
     start_url: '/',
     display: 'browser',
     background_color: '#faf8f4',
-    theme_color: '#ffd600',
+    theme_color: '#f4efe4',
     icons: [{ src: '/favicon.svg', sizes: 'any', type: 'image/svg+xml' }]
   })
 }

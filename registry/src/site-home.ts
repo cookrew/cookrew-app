@@ -18,7 +18,7 @@ import { commitsSection, compareTable, featuresGrid } from './site-features'
 import { faqPage, organization, softwareApplication, teamList, webPage } from './site-seo'
 import { BRAND_LOCKUP_CSS, BRAND_LOCKUP_HTML } from './site-brand'
 import type { SampleArt } from './site-art-manifest'
-import { STRATA_STAGE_CSS, sampleStage } from './site-strata'
+import { MOTION, PROMO, type Motion } from './site-motion'
 
 /**
  * THE FRONT PAGE — one page, top to bottom (owner ruling, 2026-09-06).
@@ -241,23 +241,28 @@ function dock(input: HomeInput): string {
 }
 
 /**
- * THE PROMO — fifteen seconds, muted, looping, in the hero where the still frame was.
- *
- * It is the product, not a render: the shipped App driven with real input in a headless Chrome
- * (docs/shoot-fixture, the shoot script in scratchpad/shoot) across four beats — a fleet mid-turn,
- * an agent that stops to ask and is answered ON the card, a card opened on its transcript and
- * checkpoint rail, and the harness with one card's cables lit. The bookends are the site's own
- * lockup, rendered from site-brand.ts rather than copied from it.
- *
- * The crew, its transcripts and the pages in the browser cards are WRITTEN — English, every word
- * of them — not replayed from the owner's sessions as the first cut was: the site is in English
- * and half those sessions are not. The file lives with the frames on GitHub; the registry bundle
- * has no room for a megabyte. No script: <video autoplay muted loop playsinline> needs none, and a
- * reader whose browser refuses autoplay sees the poster, which is the fleet beat.
+ * THE PROMO — the hero's video: the running app, recorded in its ink theme
+ * (2026-10-31), walking the semantic zoom by click from the machines down to
+ * one agent's full transcript and back out. Real agents in the owner's own
+ * workspace, real cables, real replies; nothing staged, nothing written for
+ * the shot. The file lives with the frames on GitHub; the bundle has no room
+ * for it. No script: <video autoplay muted loop playsinline> needs none, and
+ * a reader whose browser refuses autoplay sees the poster.
  */
 function promo(): string {
   const poster = `${SITE_FRAMES}promo-poster.jpg`
-  return `<figure class="shot promo"><video autoplay muted loop playsinline preload="metadata" poster="${esc(poster)}" width="1400" height="874" aria-label="Thirteen seconds of Cookrew: a crew of agents working one repository together, one of them stopping to ask its owner a question and being answered in its own prompt, a card opened on its checkpoints, and the orchestrator's cables lit as it hands out the next piece of work"><source src="${SITE_FRAMES}promo.mp4" type="video/mp4"></video><figcaption><span class="rec">● REC</span>Thirteen seconds of a real session: five agents on three harnesses building a small TypeScript package together; one of them reaches a decision only its owner can make, raises Claude Code’s own question prompt and waits — NEEDS ATTENTION on its card — until the answer is given in that prompt, then says which way it will go and carries on; a card opens on the eight checkpoints it has taken, one per turn; and the orchestrator’s cables light as it hands out the next piece of work. Nothing is staged: the repository, the commits and the question are the crew’s own. <a href="/features/ai-agents-on-one-canvas">The canvas, frame by frame →</a></figcaption></figure>`
+  return `<figure class="shot promo"><video autoplay muted loop playsinline preload="metadata" poster="${esc(poster)}" width="1400" height="874" aria-label="${esc(PROMO.label)}"><source src="${SITE_FRAMES}promo.mp4" type="video/mp4"></video><figcaption><span class="rec">● REC</span>${esc(PROMO.caption)}</figcaption></figure>`
+}
+
+/**
+ * THE ZOOM, RECORDED — one short clip per step of the navigator, each the
+ * real app answering one click. They loop muted and carry a poster, so a
+ * reader whose browser refuses autoplay still sees the step.
+ */
+function motionStrip(): string {
+  const clip = (m: Motion): string =>
+    `<figure class="shot"><video autoplay muted loop playsinline preload="none" poster="${SITE_FRAMES}${m.file}.jpg" width="${m.w}" height="${m.h}" aria-label="${esc(m.title)}"><source src="${SITE_FRAMES}${m.file}.mp4" type="video/mp4"></video><figcaption><span class="rec">${esc(m.step)}</span><span><b class="serif">${esc(m.title)}</b> — ${esc(m.caption)}</span></figcaption></figure>`
+  return `<div class="motion" id="zoom">${MOTION.map(clip).join('')}</div>`
 }
 
 /** GET STARTED: the two steps, the crew builder, and the two questions people ask first. */
@@ -281,12 +286,13 @@ $ cookrew orch "Forge"</code>
 }
 
 /** FEATURES: every one with its recorded frame, then what each thing can do, the questions, the proof. */
-function featuresSection(commits: readonly Commit[] | null, withPromo: boolean): string {
+function featuresSection(commits: readonly Commit[] | null): string {
   return `<section id="features"><div class="wrap">
 <p class="kicker"><span class="no">FEATURES</span>recorded, not described</p>
 <h2>What Cookrew does</h2>
 <p class="lede">${esc(DEFINITION)}</p>
-${withPromo ? promo() : ''}
+<h3 class="mkt-h" style="margin-top:6px">The zoom, recorded<span class="chip">one click each · the running app</span></h3>
+${motionStrip()}
 ${featuresGrid()}
 <h3 id="compare" style="margin-top:32px">A chat tab, one CLI agent, or a team</h3>${compareTable()}
 <h3 id="faq" style="margin-top:32px">Questions and answers</h3><div class="faq">${FAQ.map((f) => `<details><summary>${esc(f.q)}</summary><p>${esc(f.a)}</p></details>`).join('')}</div>
@@ -308,6 +314,7 @@ function catalog(release: Release | null): string {
     ['#serve', 'Save and serve a team', true],
     ['#build', 'What your orch runs', true],
     ['#features', 'Features', false],
+    ['#zoom', 'The zoom, recorded', true],
     ['#compare', 'Chat tab, one agent, or a team', true],
     ['#faq', 'Questions', true],
     ['#built', 'What landed on dev', true]
@@ -355,7 +362,7 @@ export function homePage(input: HomeInput): Page {
       ...(input.account ? { account: input.account, cache: 0 } : {}),
       description: DESCRIPTION,
       path: '/',
-      ...(input.art ? {} : { preload: [`${SITE_FRAMES}promo-poster.jpg`] }),
+      preload: [`${SITE_FRAMES}promo-poster.jpg`],
       jsonLd: [
         organization(),
         softwareApplication(input.release),
@@ -372,13 +379,13 @@ export function homePage(input: HomeInput): Page {
     },
     `<div class="wrap home">
 <div class="home-body">
-<style>${BRAND_LOCKUP_CSS}${input.art ? STRATA_STAGE_CSS : ''}</style>
-<div class="hero${input.art ? ' levels' : ''}"><div class="wrap">
+<style>${BRAND_LOCKUP_CSS}</style>
+<div class="hero"><div class="wrap">
 <div>${BRAND_LOCKUP_HTML}<span class="tagline">OPEN SOURCE · ${FACTS.harnesses.slice(0, 4).join(' · ').toUpperCase()}</span>
 <h1>${esc(HEADLINE)}</h1>
 <p class="lede">${esc(ONE_LINE)} Every turn is a checkpoint.</p>
 ${heroButtons(input.release, live)}</div>
-${input.art ? sampleStage(input.art) : `<div>${promo()}</div>`}
+<div>${promo()}</div>
 </div></div>
 
 <div class="wrap" style="padding:0">${rentStrip(input)}${dock(input)}</div>
@@ -387,7 +394,7 @@ ${marketSection(input)}
 
 ${startSection()}
 
-${featuresSection(input.commits ?? null, Boolean(input.art))}
+${featuresSection(input.commits ?? null)}
 </div>
 ${catalog(input.release)}
 </div>`
