@@ -71,6 +71,58 @@
   cursor: grabbing;
 }
 
+/* ATTACHED TO THE FULL VIEW (pet-dock.ts): a column of faces beside the
+   panel, the demo's spacing, no pill; only the faces take the pointer. The
+   ones not wired to the panel's card stand dimmed behind those that are. */
+.cr-pets.docked {
+  gap: 14px;
+  padding: 6px 0;
+  border-color: transparent;
+  background: none;
+  box-shadow: none;
+  pointer-events: none;
+}
+
+.cr-pets.docked > * {
+  pointer-events: auto;
+}
+
+.cr-pets.docked .cr-pet {
+  animation: none;
+}
+
+.cr-pets.docked .cr-pet.dim {
+  opacity: 0.42;
+}
+
+.cr-pets.docked .cr-pet.dim:hover,
+.cr-pets.docked .cr-pet.dim.open {
+  opacity: 1;
+}
+
+/* Dragged close enough to the panel's side to snap on when let go. */
+.cr-pets.snap {
+  outline: 2px dashed var(--amber-deep);
+  outline-offset: 6px;
+  border-radius: 999px;
+}
+
+/* No lane on a narrow screen: the column stands over the sheet's edge, smaller. */
+@media (max-width: 899px) {
+  .cr-pets.docked {
+    gap: 10px;
+  }
+  .cr-pets.docked .cr-pet {
+    width: 32px;
+    height: 32px;
+  }
+  .cr-pets.docked .cr-pet .vi-avatar,
+  .cr-pets.docked .cr-pet .vi-avatar svg {
+    width: 24px;
+    height: 24px;
+  }
+}
+
 /* One pet: a round face with a ring in its mood. */
 .cr-pet {
   position: relative;

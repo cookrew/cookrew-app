@@ -5,6 +5,7 @@ import { activeBrowserTab, type WorkspaceState } from '../../../shared/model'
 import type { AttachmentIndex } from '../terminal-attachments'
 import { firstLine, hostPath, ownersOf } from '../stage/stage-select'
 import { faviconOf, petMax, pickItems } from './pet-pick'
+import { dockedOrder } from './pet-dock'
 import { PetTroop, type CardControls } from './PetTroop'
 import { thumbWants } from './thumb-wants'
 
@@ -37,13 +38,19 @@ export function ItemPets({
   workspace,
   attachIndex,
   onStage,
-  onOpen
+  onOpen,
+  dock = null
 }: {
   workspace: WorkspaceState | null
   attachIndex: AttachmentIndex
   /** The agent whose terminal the stage shows: its items ride first. */
   onStage: string | null
   onOpen: (id: string, owners: readonly string[]) => void
+  /**
+   * A full view is up: the troop attaches to it (pet-dock.ts), without the
+   * browser or note the panel shows; the agent on stage's own lead, the rest dimmed.
+   */
+  dock?: { readonly exclude: string | null } | null
 }): React.JSX.Element | null {
   const activities = useActivitiesSnapshot()
   const owners = useMemo(() => ownersOf(attachIndex), [attachIndex])
@@ -76,9 +83,17 @@ export function ItemPets({
     (ids: readonly string[]) => thumbWants.claim('troop', ids.filter((id) => byId.get(id)?.kind === 'browser')),
     [byId]
   )
+  // In a full view the column is the demo's: the card on the panel is not in it, the agent's own lead.
+  const column = useMemo(() => {
+    if (!dock) return { shown: picked.shown, more: picked.more, dim: new Set<string>() }
+    const all = [...picked.shown, ...picked.more]
+    const order = dockedOrder(all, { exclude: dock.exclude, first: onStage ? all.filter((item) => item.owners.includes(onStage)).map((item) => item.id) : [] })
+    const count = picked.shown.filter((item) => item.id !== dock.exclude).length
+    return { shown: order.members.slice(0, count), more: order.members.slice(count), dim: order.dim }
+  }, [picked, dock, onStage])
   const member = (item: ItemFace) => ({
     id: item.id,
-    className: `item ${item.kind}${onStage && item.owners.includes(onStage) ? ' mine' : ''}`,
+    className: `item ${item.kind}${onStage && item.owners.includes(onStage) ? ' mine' : ''}${column.dim.has(item.id) ? ' dim' : ''}`,
     label: `${item.kind === 'browser' ? 'Browser' : 'Note'}: ${item.title}`,
     name: item.title,
     face:
@@ -94,8 +109,9 @@ export function ItemPets({
       side="left"
       storageKey="cookrew.pets.items"
       label="browsers and notes"
-      members={picked.shown.map(member)}
-      more={picked.more.map(member)}
+      members={column.shown.map(member)}
+      more={column.more.map(member)}
+      dockable={dock !== null}
       onShown={onShown}
       onOpen={(id) => onOpen(id, byId.get(id)?.owners ?? [])}
       cardClass={(id) => `item ${byId.get(id)?.kind ?? ''}`}
