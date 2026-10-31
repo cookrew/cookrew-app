@@ -11,6 +11,7 @@
  * and not a sequence of awaited replies.
  */
 import { spawn } from 'node:child_process'
+import { guardChromeWithParent, reapOrphans } from './chrome-reaper.mjs'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { createConnection } from 'node:net'
 import { createHash, randomBytes } from 'node:crypto'
@@ -60,7 +61,11 @@ export async function launchChrome({ userDataDir, headless = true, extraArgs = [
     ...extraArgs,
     'about:blank'
   ]
+  // The profile path IS the marker: a Chrome still running on this profile
+  // belonged to a launcher that is gone (chrome-reaper.mjs).
+  reapOrphans(userDataDir)
   const child = spawn(binary, args, { stdio: ['ignore', 'ignore', 'ignore'] })
+  const guard = guardChromeWithParent({ childPid: child.pid })
   const deadline = Date.now() + 15_000
   while (Date.now() < deadline) {
     if (existsSync(portFile)) {
@@ -73,6 +78,7 @@ export async function launchChrome({ userDataDir, headless = true, extraArgs = [
     await sleep(100)
   }
   child.kill('SIGKILL')
+  guard.stop()
   throw new Error('Chrome did not open its debugging port in 15 s')
 }
 

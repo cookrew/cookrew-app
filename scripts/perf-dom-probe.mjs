@@ -39,6 +39,7 @@
  * log. It is never printed.
  */
 import { spawn } from 'node:child_process'
+import { guardChromeWithParent, reapOrphans } from './chrome-reaper.mjs'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import http from 'node:http'
 import { createServer } from 'node:net'
@@ -83,6 +84,10 @@ function freePort() {
 
 export async function launchChrome({ width, height, chrome = findChrome() }) {
   if (!chrome) throw new Error('no Chrome binary found (set COOKREW_CHROME)')
+  // Anything left by an earlier run whose worker was killed on timeout dies
+  // first (chrome-reaper.mjs); a live Chrome's parent is alive, so it never
+  // matches. Ten of these had piled up by 2026-10-31, ~3.6 GB.
+  reapOrphans('cookrew-dom-probe-')
   const port = await freePort()
   const profile = mkdtempSync(path.join(tmpdir(), 'cookrew-dom-probe-'))
   const child = spawn(
@@ -103,6 +108,9 @@ export async function launchChrome({ width, height, chrome = findChrome() }) {
     ],
     { stdio: 'ignore' }
   )
+  // Chrome does not notice when this process dies — the vitest worker killed
+  // on timeout never reaches kill(). The guard is a detached shell that does.
+  const guard = guardChromeWithParent({ childPid: child.pid })
   const deadline = Date.now() + 15_000
   while (Date.now() < deadline) {
     try {
@@ -124,6 +132,7 @@ export async function launchChrome({ width, height, chrome = findChrome() }) {
       })
       child.kill('SIGKILL')
       await exited
+      guard.stop()
       // Best effort: the profile is a temp dir and Chrome may still be
       // writing it when the kill lands (ENOTEMPTY on the macOS CI runner).
       // A profile left in tmp is nothing; a teardown that throws fails the
