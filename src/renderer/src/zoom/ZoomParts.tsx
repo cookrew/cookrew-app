@@ -3,6 +3,8 @@ import { cookrew } from '../api'
 import { useThumb } from '../activity-thumb-store'
 import { InkAvatar, InkRing } from './InkAvatar'
 import { inkStatusOfRow } from './ink-status'
+import { AgentLatest } from './AgentLatest'
+import './agent-card.css'
 import type { AgentView, ItemView, MarkView, MachineView } from './zoom-model'
 
 /**
@@ -60,7 +62,7 @@ export function Counts({ browsers, notes, none = 'nothing open' }: { browsers: n
 }
 
 /** A browser's picture: the live thumbnail when there is one, else a drawn page in its tint. */
-function Page({ item, big = false }: { item: ItemView; big?: boolean }): React.JSX.Element {
+export function Page({ item, big = false }: { item: ItemView; big?: boolean }): React.JSX.Element {
   const thumb = useThumb(item.id)
   if (item.kind === 'note') {
     return (
@@ -165,13 +167,16 @@ export function AgentNode({ agent, bind, onOpen }: { agent: AgentView; bind: Bin
       <div ref={bind(`agent-cnt:${agent.id}`)} className="zv-cnt">
         <Counts browsers={agent.browsers} notes={agent.notes} />
       </div>
+      {/* Its latest turn, as the pet card says it too (AgentLatest.tsx). */}
       <div ref={bind(`agent-body:${agent.id}`)} className="zv-body">
         {sent !== null ? (
-          <>
-            <b>You</b> · {sent}
-          </>
+          <div className="ag-latest">
+            <span className="ag-you">
+              <em>You:</em> {sent}
+            </span>
+          </div>
         ) : (
-          agent.line
+          <AgentLatest turn={agent.turn} fallback={agent.line} />
         )}
       </div>
       {agent.browsers + agent.notes === 0 && (
