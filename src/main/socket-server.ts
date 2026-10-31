@@ -27,7 +27,7 @@ import { readProxyConfig, tailnetProxyGaps } from './proxy-bypass'
 import { AgentRegistry, AgentRegistryEntry } from './agent-registry'
 import { planRecruitTarget } from '../shared/workspace-dirs'
 import { PtyManager, multiplexer, sessionNameFor, type PtySession } from './pty'
-import { askRaw, askTerminal, decodeRawEscapes } from './ask'
+import { askRaw, askTerminal, decodeRawEscapes, waitForReady } from './ask'
 import { browserVerbKind, noteVerbKind } from '../shared/cable-signal'
 import { servedUseRefusal } from './use-commands'
 import {
@@ -826,6 +826,7 @@ async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<stri
   if (!name) throw new Error('Usage: cookrew ask "Agent Name" "prompt" | cookrew ask "Agent" --raw "bytes"')
   const target = reachCard(request, deps, name, 'terminal', 'ask') as TerminalNodeData
   let session = deps.ptys.get(target.id)
+  let cold = false
   if (!session) {
     // Cross-workspace / after reboot: the tmux session may be alive with its
     // PTY detached (workspace switch drops clients). Reattach through the
@@ -836,9 +837,19 @@ async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<stri
       console.error('Reattach failed:', error)
     }
     session = deps.ptys.get(target.id)
+    cold = true
   }
   // Still transient during a workspace switch (PTYs rebuilding) — retried once.
   if (!session) throw new RetryableDispatchError(`Agent '${target.name}' has no running terminal`)
+  // A pane we just spawned is still painting its resumed transcript, and a
+  // carriage return sent into that window is swallowed while the brief stays
+  // in the box (measured live 2026-10-31: the whole ask came back
+  // `unsubmitted`, and the same CR worked once the pane went quiet). Wait for
+  // quiet before the first byte goes in. A warm agent pays nothing.
+  if (cold) {
+    const ready = await waitForReady(session)
+    if (!ready) console.warn(`Agent '${target.name}' was still booting when the ask was delivered`)
+  }
   if (request.flags.raw) {
     return askRaw(session, decodeRawEscapes(String(request.flags.raw)))
   }
@@ -1593,7 +1604,7 @@ Usage:
   cookrew ask "Agent" "prompt"                  Send a prompt to any agent in your workspace, wait for the reply
                                                 (asking, checking, reading a note or driving a browser by name
                                                 wires you to it if you were not already)
-  cookrew ask "Agent" --raw "bytes"             Send raw input (\\n Enter, \\t Tab, \\e ESC, \\xNN byte)
+  cookrew ask "Agent" --raw "bytes"             Send raw input (\\n or \\r Enter, \\t Tab, \\e ESC, \\xNN byte)
   cookrew check "Agent"                         Read the agent's current terminal output
   cookrew ask "Agent" "prompt" --no-wait        Dispatch without blocking; prints a dispatchId
   cookrew dispatch <dispatchId>                 What became of THAT dispatch (id-correlated)
