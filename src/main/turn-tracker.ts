@@ -39,6 +39,7 @@ import {
   isCommandPrompt,
   detectAttention,
   detectLiveWork,
+  detectTurnEnded,
   extractPromptEcho,
   feedPromptBuffer,
   type PromptFeed,
@@ -51,6 +52,12 @@ import {
 
 /** Output silence that counts as "the agent finished its turn". */
 const QUIESCENCE_MS = 2500
+/**
+ * The silence that is enough when herdr has ALREADY watched the turn end
+ * ('done') and the screen's last status line is a finished one: two witnesses
+ * that agree, so only a repaint's worth of settle is left to wait out.
+ */
+const DONE_SETTLE_MS = 600
 /**
  * How long a herdr 'working' report holds a turn open with NO output at all.
  * Long enough for slow silent tool calls, short enough that a detector stuck
@@ -2744,7 +2751,11 @@ export class TurnTracker extends EventEmitter {
     // one place the derived-activity cache has to be invalidated from.
     t.outputRev += 1
     if (t.phase === 'waiting') {
-      t.phase = 'thinking'
+      // A question box repaints as it is navigated: while herdr still reads it
+      // as blocked and no spinner runs, that is the same question.
+      if (agentStatus(t.session.sessionName) !== 'blocked' || detectLiveWork(data) || detectLiveWork(t.session.viewportText())) {
+        t.phase = 'thinking'
+      }
     } else if (
       t.agent &&
       (t.phase === 'replied' || t.phase === 'idle') &&
@@ -2846,11 +2857,23 @@ export class TurnTracker extends EventEmitter {
     // corroboration (output quiet AND no live spinner) that was always
     // required before herdr existed. Cheap to check, immune to a stuck feed.
     const reported = agentStatus(t.session.sessionName)
+    // Blocked is read off the approval or question box itself, so it needs no
+    // quiet to be believed: waiting at once — unless a spinner is live, which
+    // is the answer already running while herdr's blocked goes stale.
+    if (reported === 'blocked' && !detectLiveWork(t.session.viewportText())) {
+      t.phase = 'waiting'
+      this.push(t)
+      return
+    }
     // Hold while herdr says working — this survives long silent tool calls,
     // which is the feed's real value — but not FOREVER: a detector stuck at
     // 'working' would otherwise pin the turn open for the rest of the run.
     if (reported === 'working' && t.session.idleFor() < WORKING_TRUST_MS) return
-    if (t.session.idleFor() < QUIESCENCE_MS) return
+    // herdr's 'done' is its own working→idle observation; with the screen's
+    // last status line finished too, a short settle is enough. A bare 'idle'
+    // has stuck before and never shortens anything.
+    const settle = reported === 'done' && detectTurnEnded(t.session.viewportText()) ? DONE_SETTLE_MS : QUIESCENCE_MS
+    if (t.session.idleFor() < settle) return
 
     const delta = diffOutput(t.snapshot, t.session.fullText())
     // Agents pause well past quiescence mid-turn (long tool calls, slow
