@@ -186,3 +186,18 @@ export const cardPlacement = (
   const top = Math.min(Math.max(8, level), Math.max(8, viewport.height - card.height - 8))
   return { left: Math.round(left), top: Math.round(top) }
 }
+
+/**
+ * Where a hovered face's name tag sits on the screen: level with the face,
+ * sliding out from its middle toward the middle of the screen. It is pinned
+ * to the screen, not to the troop, so a troop that scrolls never clips it.
+ */
+export const nameTagSpot = (
+  pet: { readonly left: number; readonly top: number; readonly width: number; readonly height: number },
+  side: 'left' | 'right',
+  viewportWidth: number
+): { top: number; height: number; left?: number; right?: number } => {
+  const middle = pet.left + pet.width / 2
+  const spot = { top: Math.round(pet.top - 2), height: Math.round(pet.height + 4) }
+  return side === 'right' ? { ...spot, right: Math.round(viewportWidth - middle) } : { ...spot, left: Math.round(middle) }
+}
