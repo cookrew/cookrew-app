@@ -1,7 +1,7 @@
 // The crew as the board sees it — every workspace, each agent's phase and its
 // latest checkpoint — from the board's own sources (RosterPanel.tsx), so an
 // avatar's bubble says exactly what its board card said.
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, createContext, createElement, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useActivitiesEvery } from '../activity-thumb-store'
 import { advanceClock, type ActivityClock } from '../activity-clock'
 import { useRoster } from '../agent-registry'
@@ -69,3 +69,26 @@ export function useCrew(workspace: WorkspaceState | null, workspaceId: string | 
   )
   return useMemo(() => ({ ...rows, all, crew }), [rows, all, crew])
 }
+
+/**
+ * THE CREW, ONE READER, IN CONTEXT. The crew changes with agent activity
+ * (coalesced, CREW_ACTIVITY_MS), and while App read it every change
+ * re-rendered the whole app — header, dock, menus, every icon — to hand it to
+ * three components (about 3.5 renders a second with agents working,
+ * profiled 2026-11-01). Read here, only the readers below re-render: App's
+ * tree is the same elements and React skips it.
+ */
+const CrewContext = createContext<Crew | null>(null)
+
+export function CrewProvider({ workspace, workspaceId, children }: { workspace: WorkspaceState | null; workspaceId: string | null; children: ReactNode }): React.JSX.Element {
+  const crew = useCrew(workspace, workspaceId)
+  return createElement(CrewContext.Provider, { value: crew }, children)
+}
+
+/** Renders `children(crew)` with the provider's crew; re-renders with it. */
+export function WithCrew({ children }: { children: (crew: Crew) => ReactNode }): React.JSX.Element {
+  const crew = useContext(CrewContext)
+  if (crew === null) throw new Error('WithCrew needs a CrewProvider above it')
+  return createElement(Fragment, null, children(crew))
+}
+

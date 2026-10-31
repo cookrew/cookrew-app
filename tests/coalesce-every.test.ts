@@ -53,3 +53,12 @@ describe('the crew', () => {
     expect(src).not.toContain('useActivitiesSnapshot()')
   })
 })
+
+describe('the crew lives in context, not in App', () => {
+  it('App provides it and its three readers take it from context, so a crew change does not re-render the app', () => {
+    const app = readFileSync(path.join(__dirname, '..', 'src/renderer/src/App.tsx'), 'utf8')
+    expect(app).not.toMatch(/useCrew\(/)
+    expect(app).toContain('<CrewProvider workspace={workspace} workspaceId={activeWsId}>')
+    expect(app.match(/<WithCrew>/g)?.length).toBe(2)
+  })
+})
