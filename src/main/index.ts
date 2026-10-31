@@ -30,6 +30,7 @@ import {
 import { resolveRotationChain, rotationCommitVerdict } from './claude-rotation'
 import { BootLatency, shouldTimeBoot, type BootSample } from './boot-latency'
 import { TurnTracker, type CompletedTurn } from './turn-tracker'
+import { createBackendPhaseGate } from './backend-phase-gate'
 import { TurnStore } from './turn-store'
 import {
   DispatchService,
@@ -2354,11 +2355,27 @@ const lazyTerminals = new LazyTerminalAttachments({
 const backendPhaseOf = (status: HerdrStatus): TurnPhase | null =>
   status === 'working' ? 'thinking' : status === 'blocked' ? 'waiting' : null
 
+// herdr's word reaches the tracker through the pane: a slash command's own
+// UI (the /model picker) is not a turn, whatever herdr's screen guess says.
+const herdrPhases = createBackendPhaseGate({
+  read: async (terminalId) => {
+    const mux = multiplexer()
+    const name = sessionNameFor(terminalId)
+    if (mux instanceof HerdrHostMultiplexer) return mux.captureAsync(name)
+    return mux?.capture(name) ?? null
+  },
+  current: (terminalId) => {
+    const status = agentStatus(sessionNameFor(terminalId))
+    return status ? backendPhaseOf(status) : null
+  },
+  apply: (terminalId, phase, agent) => turns.observeBackendPhase(terminalId, phase, agent)
+})
+
 statusFeed()?.on('status', ({ sessionName, status }: StatusObservation) => {
   const terminalId = terminalIdForSessionName(sessionName)
   if (!terminalId) return
   lazyTerminals.observeStatus(terminalId, status)
-  turns.observeBackendPhase(terminalId, backendPhaseOf(status), isAgentTerminal(terminalId))
+  herdrPhases.observe(terminalId, backendPhaseOf(status), isAgentTerminal(terminalId))
   // herdr's push IS the board's phase for this pane: fold it in at once.
   void boardProbe.invalidate(terminalId)
 })
@@ -2386,7 +2403,7 @@ function syncBackendPhases(): void {
   for (const terminal of store.terminalsAcross()) {
     const status = agentStatus(sessionNameFor(terminal.id))
     if (status) lazyTerminals.observeStatus(terminal.id, status)
-    turns.observeBackendPhase(
+    herdrPhases.observe(
       terminal.id,
       status ? backendPhaseOf(status) : null,
       terminal.command.trim().length > 0
@@ -4111,7 +4128,7 @@ function retireTerminal(id: string, why: string): void {
   lazyTerminals.forget(id)
   // A retired terminal has no phase; leaving one behind is a board row and a
   // drain reference that outlive the card.
-  turns.observeBackendPhase(id, null)
+  herdrPhases.observe(id, null, true)
   sessionSync.unwatch(id)
   turns.untrack(id)
   // Unsettled dial turns belong to the pane that was asked; a reborn id

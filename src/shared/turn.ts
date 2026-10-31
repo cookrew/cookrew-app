@@ -749,9 +749,10 @@ export function detectAgentActivity(chunk: string): boolean {
 /**
  * Completed-turn status body: "Brewed for 4m 15s" — past-tense verb plus
  * elapsed time. Checked before the live hints because completed lines can
- * also carry counters ("Baked for 1m 6s · ↓ 2.1k tokens").
+ * also carry counters ("Baked for 1m 6s · ↓ 2.1k tokens"). Letters, not
+ * `\w`: Claude Code also picks accented verbs ("Sautéed for 18s").
  */
-const COMPLETED_STATUS_RE = /^\w+ed for\s+\d/i
+const COMPLETED_STATUS_RE = /^\p{L}+ed for\s+\d/iu
 /**
  * In-flight markers on a spinner body: streaming ellipsis, parenthesised
  * progress, token counters, or the (older-TUI) interrupt hint.
@@ -811,6 +812,43 @@ export function lastStatusLine(screen: string): { text: string; finished: boolea
 /** True when the last status line on the screen reads as a finished turn. */
 export function detectTurnEnded(screen: string): boolean {
   return lastStatusLine(screen)?.finished === true
+}
+
+/** A full-width horizontal rule: the composer's frame in Claude Code and Codex. */
+const RULE_LINE_RE = /^\s*[─━]{10,}\s*$/
+/** A submitted prompt's echo starts at column 0; an indented one is reply text. */
+const ECHO_AT_START_RE = /^[>❯]\s+(\S.*)$/
+
+/**
+ * Is the agent showing its own UI for a slash command right now — the
+ * `/model` picker, or the screen it leaves behind once closed? True when the
+ * newest prompt echo on screen is a UI-only command and no agent entry
+ * ("⏺ …") or live spinner came after it.
+ *
+ * The multiplexer's screen guess reads that picker as work, then as a
+ * question (a numbered menu); neither is a turn. Entries only count above the
+ * last rule: below it sit the picker's own rows ("● High effort").
+ */
+export function uiCommandOpen(screen: string): boolean {
+  // A live spinner anywhere is a turn running, whatever sits in the box.
+  if (detectLiveWork(screen)) return false
+  const lines = stripTermNoise(screen).replace(CSI_RE, '').split('\n')
+  let aboveRule = false
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i]
+    if (RULE_LINE_RE.test(line)) {
+      aboveRule = true
+      continue
+    }
+    const entry = ENTRY_RE.exec(line)
+    if (aboveRule && entry !== null && entry[1].trim().length > 0) return false
+    const echo = ECHO_AT_START_RE.exec(line)
+    if (!echo || MENU_ROW_RE.test(echo[1])) continue
+    // The input box (a rule right above it) holds a draft, not a submit.
+    if (i > 0 && RULE_LINE_RE.test(lines[i - 1])) continue
+    return aboveRule && isUiCommand(echo[1])
+  }
+  return false
 }
 
 export function detectLiveWork(chunk: string): boolean {

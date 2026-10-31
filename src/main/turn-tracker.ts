@@ -84,6 +84,12 @@ const HEAL_SCAN_MS = 1000
  */
 const LONE_ESC_PAIR_MS = 100
 /**
+ * After a menu answer, herdr's "blocked" lags the menu closing by a few
+ * hundred ms, and the answer's spinner is not up yet: inside this window
+ * blocked is believed only while the screen still shows a question.
+ */
+const ANSWER_GRACE_MS = 1500
+/**
  * Paced Sous title-backfill: one record per tick so a burst never trips the
  * summarizer's breaker (which would null out a whole sequential pass).
  */
@@ -434,6 +440,8 @@ interface TrackedTerminal {
   heldInput: string
   /** Epoch ms heldInput was last set; ages out a lone ESC (LONE_ESC_PAIR_MS). */
   heldAt: number
+  /** Epoch ms of the last menu answer (ANSWER_GRACE_MS); 0 when none. */
+  answeredAt: number
   /** Epoch ms of the last Enter that did NOT start or answer a turn; 0 when consumed. */
   lastSubmitAt: number
   /**
@@ -2007,6 +2015,7 @@ export class TurnTracker extends EventEmitter {
       inPaste: false,
       heldInput: '',
       heldAt: 0,
+      answeredAt: 0,
       lastSubmitAt: 0,
       sawInputThisTurn: false,
       startStatus: null,
@@ -2354,6 +2363,7 @@ export class TurnTracker extends EventEmitter {
       // submitted text is the real first prompt, so fall through to startTurn.
       t.phase = 'thinking'
       t.lastSubmitAt = 0
+      t.answeredAt = Date.now()
       this.push(t)
       return
     }
@@ -2391,6 +2401,18 @@ export class TurnTracker extends EventEmitter {
     // No submit: the input box content changed (typing, paste) — surface it
     // as pendingInput on the next throttled push.
     this.schedulePush(terminalId)
+  }
+
+  /**
+   * Is herdr's "blocked" still the screen's truth? Not once the answer's
+   * spinner runs, and not just after a menu answer unless a question is
+   * still drawn (the answer landed on "Type something", or a second question).
+   */
+  private blockedOnScreen(t: TrackedTerminal): boolean {
+    const screen = t.session.viewportText()
+    if (detectLiveWork(screen)) return false
+    if (Date.now() - t.answeredAt >= ANSWER_GRACE_MS) return true
+    return detectAttention(cleanTurnLines(screen))
   }
 
   /** Can the held carry age out? Only a lone ESC over an empty box, no paste open. */
@@ -2941,7 +2963,7 @@ export class TurnTracker extends EventEmitter {
     // Blocked is read off the approval or question box itself, so it needs no
     // quiet to be believed: waiting at once — unless a spinner is live, which
     // is the answer already running while herdr's blocked goes stale.
-    if (reported === 'blocked' && !detectLiveWork(t.session.viewportText())) {
+    if (reported === 'blocked' && this.blockedOnScreen(t)) {
       t.phase = 'waiting'
       this.push(t)
       return
