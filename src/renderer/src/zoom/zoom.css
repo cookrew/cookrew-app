@@ -396,19 +396,55 @@
   outline-offset: 4px;
 }
 
-/* ── the workspace's own ground: its wash and its ring ── */
+/* ── the workspace's own ground: its wash and its ring ──
+   The wash's soft edge is two gradient fades multiplied (a mask), not a
+   blurred shadow. At the crew stop the wash is magnified several times in a
+   layer of its own, and a GPU blurs a magnified shadow tile by tile: each
+   tile's approximation differed, and the edge came out as flat light and dark
+   rectangles across the background (owner's screenshot, 2026-11-01). A
+   gradient is the same exact value per pixel in every tile. The box is the
+   old one plus its shadow (1200x540, spread 28, blur 48): 76px each side,
+   the fade centred where the shadow's was. */
 .zv-wash {
   position: absolute;
   left: 0;
   top: 0;
-  width: 1200px;
-  height: 540px;
-  margin: -270px 0 0 -600px;
-  border-radius: 64px;
+  width: 1352px;
+  height: 692px;
+  margin: -346px 0 0 -676px;
   background: var(--zv-wash);
-  box-shadow: 0 0 48px 28px var(--zv-wash);
+  -webkit-mask-image: var(--zv-wash-fade-x), var(--zv-wash-fade-y);
+  mask-image: var(--zv-wash-fade-x), var(--zv-wash-fade-y);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
   pointer-events: none;
   will-change: transform, opacity;
+  --zv-wash-fade-x: linear-gradient(
+    to right,
+    transparent 0,
+    rgba(0, 0, 0, 0.16) 24px,
+    rgba(0, 0, 0, 0.5) 48px,
+    rgba(0, 0, 0, 0.84) 72px,
+    #000 96px,
+    #000 calc(100% - 96px),
+    rgba(0, 0, 0, 0.84) calc(100% - 72px),
+    rgba(0, 0, 0, 0.5) calc(100% - 48px),
+    rgba(0, 0, 0, 0.16) calc(100% - 24px),
+    transparent 100%
+  );
+  --zv-wash-fade-y: linear-gradient(
+    to bottom,
+    transparent 0,
+    rgba(0, 0, 0, 0.16) 24px,
+    rgba(0, 0, 0, 0.5) 48px,
+    rgba(0, 0, 0, 0.84) 72px,
+    #000 96px,
+    #000 calc(100% - 96px),
+    rgba(0, 0, 0, 0.84) calc(100% - 72px),
+    rgba(0, 0, 0, 0.5) calc(100% - 48px),
+    rgba(0, 0, 0, 0.16) calc(100% - 24px),
+    transparent 100%
+  );
 }
 
 .zv-ring {
