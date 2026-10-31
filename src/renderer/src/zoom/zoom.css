@@ -48,6 +48,8 @@
   position: absolute;
   inset: 0;
   overflow: hidden;
+  /* Clipped, never a scroll box: see .zv-overview. */
+  overflow: clip;
   background: var(--zv-paper);
 }
 
@@ -76,7 +78,15 @@
   position: absolute;
   inset: 0;
   z-index: 41;
+  /* CLIPPED, NEVER SCROLLED (Gauge, 2026-11-01, shots/r4/phone-2-card.png: the
+     open card's left third and the label cut off at the left edge). The
+     painter places every part from (0, 0) of this box (zoom-frame.ts), but
+     `hidden` still makes a scroll box: a scroll into view (a test driver's tap,
+     a Tab focus, a phone keyboard over the reply box) scrolled it by the parts
+     drawn past the edge, and the whole scene slid off its camera. `clip` cannot
+     be scrolled; `hidden` stays for an engine without it (ZoomView resets it). */
   overflow: hidden;
+  overflow: clip;
   opacity: var(--zv-cover, 1);
   background-color: var(--zv-paper);
   background-image: radial-gradient(var(--zv-grain) 1px, transparent 1px);

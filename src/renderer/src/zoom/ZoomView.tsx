@@ -33,6 +33,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   children: React.ReactNode
 }): React.JSX.Element {
   const root = useRef<HTMLDivElement>(null)
+  const overview = useRef<HTMLDivElement>(null)
   const registry = useRef(new Map<string, HTMLElement>())
   /**
    * One handler per node for its whole life, which runs the closure of the
@@ -213,6 +214,19 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const cardIds = useMemo(() => new Set([focusId, prevFocus].filter((id): id is string => id !== null)), [focusId, prevFocus])
   const cardKey = [...cardIds].join(' ')
   useLayoutEffect(() => { motion.wake() }, [model, size, cardKey, motion.wake])
+  // THE VIEW IS NEVER SCROLLED (zoom.css · .zv-overview): the painter draws
+  // from its (0, 0). Where `overflow: clip` is not known, a scroll that
+  // happens anyway is put back at once.
+  useEffect(() => {
+    const boxes = [root.current, overview.current].filter((el): el is HTMLDivElement => el !== null)
+    const pin = (e: Event): void => {
+      const el = e.currentTarget as HTMLElement
+      if (el.scrollLeft !== 0) el.scrollLeft = 0
+      if (el.scrollTop !== 0) el.scrollTop = 0
+    }
+    for (const el of boxes) el.addEventListener('scroll', pin, { passive: true })
+    return () => { for (const el of boxes) el.removeEventListener('scroll', pin) }
+  }, [])
   // NO WHEEL ZOOM (owner, 2026-10-31): the wheel is the page's, and in a list it
   // scrolls that list. Zoom in and out are clicks (motion.agent / motion.item for
   // in, the background and the back button for out), plus the stops and Esc.
@@ -308,7 +322,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         {/* Its own boundary: the real full view is a lazy chunk, and waiting for it must never blank the navigator. */}
         <Suspense fallback={null}>{zoom.full ? children : null}</Suspense>
       </div>
-      <div className="zv-overview"
+      <div className="zv-overview" ref={overview}
         onPointerDown={(e) => {
           pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
           moved.current = false
