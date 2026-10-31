@@ -5,6 +5,7 @@ import { homedir, tmpdir } from 'node:os'
 import pty, { IPty } from 'node-pty'
 import xtermHeadless from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
+import { createPaneSizes } from './pane-sizes'
 import { clipToCells, cutAtScreen, dropReprintedMessages, dropReprints } from './seed-history'
 import { sanitizeAgentEnv } from './multiplexer'
 import { paneEnv } from './pane-env'
@@ -44,6 +45,9 @@ export const TMUX_LABEL = TMUX_LABEL_CONST
 
 /** Stable per-user dir; the socket pointer lives here for the PATH-installed CLI. */
 const COOKREW_HOME = path.join(homedir(), '.cookrew')
+let sharedPaneSizes: ReturnType<typeof createPaneSizes> | null = null
+/** The sizes panes last had, kept in ~/.cookrew (pane-sizes.ts). */
+export const paneSizes = (): ReturnType<typeof createPaneSizes> => (sharedPaneSizes ??= createPaneSizes(path.join(COOKREW_HOME, 'pane-sizes.json')))
 
 /**
  * Erase screen + scrollback + home the cursor. Every replay starts here so a
@@ -851,7 +855,10 @@ export class PtySession extends EventEmitter {
     // decide whether the agent is producing output, and a synthetic
     // full-screen repaint there reads as agent activity — it would reset
     // quiescence and mint phantom checkpoints. Only viewers subscribe here.
-    if (changed && !this.disposed) this.emit('replay', this.replayFrame())
+    if (changed && !this.disposed) {
+      this.emit('resized', { cols, rows })
+      this.emit('replay', this.replayFrame())
+    }
   }
 
   /**
@@ -1387,8 +1394,12 @@ export class PtyManager {
     if (workspaceId) this.ownership.claim(options.terminalId, workspaceId)
     const existing = this.sessions.get(options.terminalId)
     if (existing) return existing
+    // Started at the size the pane last had (pane-sizes.ts): the mirror's
+    // attach sizes the shared pane, and the default would shrink it.
+    const known = options.cols === undefined && options.rows === undefined ? paneSizes().get(options.terminalId) : null
     const session = new PtySession({
       ...options,
+      ...(known ? { cols: known.cols, rows: known.rows } : {}),
       socketPath: this.socketPath,
       cliDir: this.runtimeDir,
       tmuxConf: this.tmuxConf
@@ -1404,6 +1415,7 @@ export class PtyManager {
       this.ownership.release(options.terminalId)
     })
     this.sessions.set(options.terminalId, session)
+    session.on('resized', (size: { cols: number; rows: number }) => paneSizes().remember(options.terminalId, size))
     // A pane created after the subscription was made is not covered by it.
     // A workspace switch spawns every terminal synchronously, so collapse that
     // burst to one subscription rebuild after the last pane exists.

@@ -12,6 +12,7 @@ import { reloadForNewBuildNow } from './crash-report'
 import { scheduleWebglWarmup } from './gpu-warmup'
 import { bootEmbedMode } from './embed/embed-mode'
 import { applyColorScheme } from './color-scheme'
+import { watchUserInput } from './user-input'
 
 // STRATA EMBED MODE (`?embed=agent`, framed by cookrew.dev's shell only): one
 // agent's full view, nothing else. Read before anything starts, because embed
@@ -66,6 +67,9 @@ if (onBuild) {
     }
   })
 }
+
+// Before anything can be clicked: a terminal opened by a click takes its pane's size (pane-size.ts · openedAt).
+watchUserInput()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
