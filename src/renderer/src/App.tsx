@@ -1690,7 +1690,7 @@ function Canvas(): React.JSX.Element {
         {/* The crew, and the browsers and notes, as pets over every page: hover
             for a card, click to open it (pets/). On the stage they ride at the
             full view only — the navigator draws the crew everywhere else. */}
-        {(zoomFull !== null || view !== 'stage') && <AgentPets workspace={workspace} workspaceId={activeWsId} onOpen={zoomToNode} />}
+        {(zoomFull !== null || view !== 'stage') && <AgentPets workspace={workspace} workspaceId={activeWsId} attachIndex={attachIndex} onOpen={zoomToNode} />}
         {(zoomFull !== null || view !== 'stage') && <ItemPets
           workspace={workspace}
           attachIndex={attachIndex}

@@ -149,7 +149,7 @@ export function layoutOf(model: FrameModel, narrow: boolean): Layout {
   return {
     stack: stackOf(model.agents),
     crew,
-    cardBox: { ...crew.box, w: crew.box.w + 240, h: crew.box.h + 220, cy: crew.box.cy + 60 },
+    cardBox: { ...crew.box, w: crew.box.w + 240, h: crew.box.h + 252, cy: crew.box.cy + 60 },
     thumbs: thumbsOf(model.items, model.agents, narrow),
     device,
     devicesBox: { w: Math.max(screen.w + 200, machines.rows ? 3 * 420 + 200 : 0), h: half * 2 + 200, cy: 40 }
@@ -256,7 +256,7 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const cBase = ramp(zi, 1.3, 1.85) * gone
     const ce = ease(cBase)
     put(e.cardl, `translate(${f1(x)}px, ${f1(y)}px)`, focused ? 1 - ramp(z, 2.04, 2.14) : away)
-    put(e.card, `scale(${f4(lerp(64 / 260, 1, ce) * lerp(1, 0.5, pm))}, ${f4(lerp(64 / 212, 1, ce) * lerp(1, 0.5, pm))})`, cBase)
+    put(e.card, `scale(${f4(lerp(64 / 260, 1, ce) * lerp(1, 0.5, pm))}, ${f4(lerp(64 / 244, 1, ce) * lerp(1, 0.5, pm))})`, cBase)
     const n = zi <= 1 ? 0 : zi - 1
     const nx = ease(ramp(n, 0, 0.6))
     const ny = ease(ramp(n, 0.4, 1))
@@ -288,7 +288,7 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const zi = zz <= 1 ? zz : zm[l.agent] ?? 1
     const a = ((-28 + l.k * 32) * Math.PI) / 180
     const sat = { x: 50 * Math.cos(a), y: 50 * Math.sin(a) }
-    const slot = { x: 17 + 79 * l.k, y: 104 }
+    const slot = { x: 17 + 79 * l.k, y: 136 }
     const out = ease(clamp01((zz - 0.7 - l.k * 0.05) / 0.25)) * (l.k < 4 ? 1 : 0)
     const grow = ease(ramp(zi, 1.3 + l.k * 0.04, 1.85)) * (l.k < 3 ? 1 : 0)
     let r = {
@@ -397,7 +397,7 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
   let amt = 0
   if (st.dir === 'agents' && st.focus && agentAt[st.focus]) {
     const p = agentAt[st.focus]
-    fromRect = { x: Ox + (p.x - 34) * S, y: Oy + (p.y - 34) * S, w: 260 * S, h: 212 * S }
+    fromRect = { x: Ox + (p.x - 34) * S, y: Oy + (p.y - 34) * S, w: 260 * S, h: 244 * S }
     amt = toFull
     put(els.panel, null, ramp(z, 2, 2.08))
   } else if (st.dir === 'items' && st.focusItem && L.thumbs.at[st.focusItem]) {

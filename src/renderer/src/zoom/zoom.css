@@ -6,7 +6,7 @@
    owns.
 
    Geometry is in scene units around a part's anchor point, as zoom-frame.ts
-   reads it: an agent's avatar is 64 px about its anchor, its card 260 × 212
+   reads it: an agent's avatar is 64 px about its anchor, its card 260 × 244
    from (−34, −34), a link's thumbnail 70 × 46 over a 22 px coin, an item's
    own thumbnail 168 × 108. Parts the painter moves are zero-size boxes at
    (0, 0), so their default transform origin IS the anchor.
@@ -16,7 +16,10 @@
    error (45); all under the header and dock (50) and the pets (55). The root
    makes no stacking context, so sheets opened from the stage keep theirs. */
 
-.zv-root {
+/* The ink tokens, on the zoom and on anything else that draws an agent's
+   card in them (the pet card, agent-card.css). */
+.zv-root,
+.ag-ink {
   --zv-paper: var(--sumi-paper, #f4efe4);
   --zv-paper-2: var(--sumi-paper-2, #ebe3d3);
   --zv-card: var(--sumi-card, #fbf8f1);
@@ -40,7 +43,9 @@
   --zv-mono: var(--font-mono, ui-monospace, 'SF Mono', Menlo, monospace);
   /* Text on a browser's tint (the coin's initial, the favicon). */
   --zv-on-tint: #fbf8f1;
+}
 
+.zv-root {
   position: absolute;
   inset: 0;
   overflow: hidden;
@@ -528,7 +533,7 @@
   left: -34px;
   top: -34px;
   width: 260px;
-  height: 212px;
+  height: 244px;
   border-radius: 14px;
   background: var(--zv-card);
   box-shadow:
@@ -629,15 +634,12 @@
   will-change: transform, opacity;
 }
 
-/* Two lines at most: the strip of thumbnails starts at 81. */
+/* The latest block (AgentLatest.tsx, agent-card.css): four lines at most, one
+   each, so the strip of thumbnails starts at 113. */
 .zv-body {
   width: 228px;
-  max-height: 32px;
+  max-height: 64px;
   overflow: hidden;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow-wrap: anywhere;
   font: 11.5px/16px var(--zv-mono);
   color: var(--zv-ink-soft);
   transform-origin: 0 0;
@@ -653,7 +655,7 @@
 .zv-emp {
   position: absolute;
   left: -18px;
-  top: 81px;
+  top: 113px;
   width: 228px;
   height: 46px;
   display: grid;
@@ -669,7 +671,7 @@
 .zv-reply {
   position: absolute;
   left: -18px;
-  top: 138px;
+  top: 170px;
   width: 228px;
   height: 30px;
   margin: 0;

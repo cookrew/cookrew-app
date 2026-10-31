@@ -11,7 +11,7 @@ import type { AgentView, ItemView, MachineView, MarkView } from '../src/renderer
 const bind: Bind = () => () => undefined
 const agent = (over: Partial<AgentView> = {}): AgentView => ({
   id: 't1', name: 'Forge', preset: 'Claude Code', orch: false, phase: 'waiting', word: 'needs you',
-  line: 'push feat/route-core to origin? needs your yes', browsers: 2, notes: 1, ...over
+  line: 'push feat/route-core to origin? needs your yes', browsers: 2, notes: 1, turn: null, ...over
 })
 const item = (over: Partial<ItemView> = {}): ItemView => ({
   id: 'b1', kind: 'browser', title: 'PR #82', host: 'github.com/cookrew', tint: '#5d6b7a', initial: 'P',
@@ -30,6 +30,44 @@ describe('an agent’s card', () => {
     // A face can be reached and pressed from the keyboard.
     expect(html).toContain('role="button"')
     expect(html).toContain('tabindex="0"')
+  })
+
+  // One card, one latest (the owner, 2026-10-31): the turn the pet card says,
+  // on the zoom card too — headline, your ask, the tool it runs, its status.
+  it('says its latest turn, as the pet card does', () => {
+    const turn = {
+      title: 'Brewing TypeScript refactor',
+      ask: '可以开发了',
+      tools: ['Read(a.ts)', 'Bash(sed -n 1,20p nodes/AgentAvatar.tsx)'],
+      latest: { text: 'Brewing… (6m 5s)', tone: 'working' as const },
+      pendingInput: null,
+      tail: null
+    }
+    const html = renderToStaticMarkup(<AgentNode agent={agent({ phase: 'working', word: 'working', turn })} bind={bind} onOpen={() => undefined} />)
+    expect(html).toContain('<b class="ag-title">Brewing TypeScript refactor</b>')
+    expect(html).toContain('<em>You:</em> 可以开发了')
+    // The newest tool only: the card has four lines.
+    expect(html).toContain('Bash(sed -n 1,20p nodes/AgentAvatar.tsx)')
+    expect(html).not.toContain('Read(a.ts)')
+    expect(html).toContain('ag-now working')
+    expect(html).not.toContain('push feat/route-core')
+  })
+
+  it('falls back to its one line when no turn is known', () => {
+    const html = renderToStaticMarkup(<AgentNode agent={agent()} bind={bind} onOpen={() => undefined} />)
+    expect(html).toContain('<span class="ag-now done">push feat/route-core')
+  })
+
+  it('is the pet card too: the same latest block, thumbnails and ink (pets/AgentPets.tsx)', () => {
+    const pets = readFileSync('src/renderer/src/pets/AgentPets.tsx', 'utf8')
+    expect(pets).toContain('<AgentLatest turn={turn}')
+    expect(pets).toContain('<Page item={item} big />')
+    expect(pets).toContain('`ag-ink ag-card ${')
+    expect(pets).not.toContain('<TurnView')
+    // The zoom card grew by the two lines it now says (zoom-frame.ts · the strip and the card).
+    const frame = readFileSync('src/renderer/src/zoom/zoom-frame.ts', 'utf8')
+    expect(frame).toContain('y: 136 }')
+    expect(frame).toContain('64 / 244')
   })
 
   it('says so when an agent carries nothing, and keeps the same card shape', () => {
