@@ -57,7 +57,7 @@ describe('parseClaudeTrace (full-trace blocks)', () => {
       id: 'u1',
       index: 1,
       prompt: 'first ask\nwith a second line',
-      reply: 'working on it\nall green'
+      reply: 'working on it\n\nall green'
     })
     expect(blocks[0].activity).toEqual([
       { tool: 'Bash', args: 'npm test', result: '160 tests passed' }
@@ -158,7 +158,7 @@ describe('parsePiTrace (active session-tree branch)', () => {
 
     expect(parsePiTrace(lines)).toEqual([
       {
-        id: 'u1', index: 1, prompt: 'Inspect it', reply: 'Checking.\nFound it.',
+        id: 'u1', index: 1, prompt: 'Inspect it', reply: 'Checking.\n\nFound it.',
         activity: [{ tool: 'read', args: 'src/a.ts', result: 'file body' }],
         startedAt: Date.parse('2026-08-03T00:00:01Z'),
         endedAt: Date.parse('2026-08-03T00:00:04Z')

@@ -293,8 +293,10 @@ export function createClaudeTraceAccumulator(): ClaudeTraceAccumulator {
             if (typeof raw.id === 'string') pendingCalls.set(raw.id, call)
           }
         }
+        // Each message the agent sends is its own paragraph: a single newline
+        // is a soft break in Markdown, and the chat read three messages as one.
         if (texts.length > 0) {
-          current.reply = current.reply.length > 0 ? `${current.reply}\n${texts.join('\n')}` : texts.join('\n')
+          current.reply = current.reply.length > 0 ? `${current.reply}\n\n${texts.join('\n')}` : texts.join('\n')
         }
         current.endedAt = timeMs(entry.timestamp, current.endedAt)
       }
@@ -680,7 +682,7 @@ function createPiBlockBuilder(): PiBlockBuilder {
       }
       if (texts.length > 0) {
         const text = texts.join('\n')
-        current.reply = current.reply ? `${current.reply}\n${text}` : text
+        current.reply = current.reply ? `${current.reply}\n\n${text}` : text
       }
       // FINALITY tracks the LATEST assistant message's stopReason, exactly
       // like Claude's stop_reason rule (verified on real session files):

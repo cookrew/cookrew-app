@@ -509,6 +509,16 @@
   color: #15803d;
 }
 
+/* The call flows as one line of text that wraps, as the terminal prints it;
+   the chat's flex row let long args squeeze the name into "Ba / sh". */
+.lod-overlay .look-log .ctx-tool-call {
+  display: block;
+}
+
+.lod-overlay .look-log .ctx-tool-name {
+  white-space: nowrap;
+}
+
 .lod-overlay .look-log .ctx-tool-result {
   margin-left: 2ch;
   max-height: 7.5em;
