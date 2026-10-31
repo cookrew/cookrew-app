@@ -381,6 +381,64 @@ describe('an answer with no body', () => {
     expect(bridge.of('b').filter((frame) => frame.t === 'end').length).toBe(1)
   })
 
+  /**
+   * MEASURED in the running app, 2026-11-01: 124 loopback sockets held open,
+   * every one a relayed beacon whose 204 the bridge ended on the head and
+   * never read. A response nobody reads never emits `end`, so the http client
+   * never hands its socket back, and the server side never arms its own
+   * keep-alive clock either: two sockets per beacon, for the life of the app.
+   */
+  it('lets go of the local connection behind a 204', async () => {
+    const bodies: string[] = []
+    // Answered before the body is read, as the real beacon route does.
+    const quiet = createServer((request, response) => {
+      const chunks: Buffer[] = []
+      request.on('data', (chunk: Buffer) => void chunks.push(chunk))
+      request.on('end', () => void bodies.push(Buffer.concat(chunks).toString('utf8')))
+      response.writeHead(204)
+      response.end()
+    })
+    quiet.keepAliveTimeout = 75_000
+    await new Promise<void>((resolve) => quiet.listen(0, '127.0.0.1', resolve))
+    const quietPort = (quiet.address() as AddressInfo).port
+    const connections = (): Promise<number> =>
+      new Promise((resolve, reject) => quiet.getConnections((error, count) => (error ? reject(error) : resolve(count))))
+    try {
+      const bridge = standUp({ dial: loopbackDialer(quietPort) })
+      for (const id of ['b1', 'b2', 'b3']) {
+        bridge.frame({ t: 'open', id, method: 'POST', path: '/api/beacon', headers: {} })
+        bridge.frame({ t: 'body', id, data: Buffer.from('{"t":1}').toString('base64'), done: true })
+      }
+      await until(() => ['b1', 'b2', 'b3'].every((id) => ended(bridge.of(id))), 'three beacons to end')
+      const deadline = Date.now() + 1000
+      while ((await connections()) > 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(await connections()).toBe(0)
+      // Letting go after the head must not cost the beacon its line.
+      expect(bodies).toEqual(['{"t":1}', '{"t":1}', '{"t":1}'])
+    } finally {
+      quiet.closeAllConnections()
+      await new Promise<void>((resolve) => quiet.close(() => resolve()))
+    }
+  })
+
+  it('lets go of a call that answered synchronously, after its body is written', async () => {
+    const calls: string[] = []
+    const synchronous: BridgeDialer = (_input, onResponse) => {
+      onResponse({ status: 204, headers: {}, onData: () => undefined, onEnd: () => undefined })
+      return {
+        write: () => void calls.push('write'),
+        end: () => void calls.push('end'),
+        destroy: () => void calls.push('destroy')
+      }
+    }
+    const bridge = standUp({ dial: synchronous })
+    bridge.frame({ t: 'open', id: 's', method: 'POST', path: '/api/beacon', headers: {} })
+    bridge.frame({ t: 'body', id: 's', data: Buffer.from('{"t":1}').toString('base64'), done: true })
+    await until(() => ended(bridge.of('s')), 'the synchronous 204 to end', 500)
+    expect(calls).toEqual(['write', 'end', 'destroy'])
+    expect(bridge.open()).toBe(0)
+  })
+
   it('treats 304 and 1xx the same way', async () => {
     for (const status of [304, 101]) {
       const stuck: BridgeDialer = (_input, onResponse) => {
