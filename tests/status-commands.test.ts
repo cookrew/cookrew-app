@@ -50,6 +50,35 @@ describe('slash commands', () => {
     for (const c of ['/compact', '/code-review', '/init', 'fix /model picker', 'hello']) expect(isUiCommand(c)).toBe(false)
   })
 
+  it('a pasted UI command waiting for its Enter does not self-heal on a transcript repaint (status eval r3)', () => {
+    // `cookrew ask --raw "/model\r"` pastes "/model" and sends the Enter
+    // ~150 ms later. Claude Code redraws in that gap and can re-emit an old
+    // "⏺ …" line; read as work answering pending input, it opened a turn.
+    const { turns, s } = tracked()
+    s.type('\x1b[200~/model\x1b[201~')
+    s.paint('⏺ DONE')
+    expect(turns.phaseOf('t1')).toBe('idle')
+    vi.advanceTimersByTime(150)
+    s.type('\r')
+    s.paint('  Select model\n❯ 1. Default (recommended)\n  2. Opus')
+    vi.advanceTimersByTime(4000)
+    expect(turns.phaseOf('t1')).toBe('idle')
+  })
+
+  it('a slash command still being typed does not self-heal either', () => {
+    const { turns, s } = tracked()
+    s.type('/mo')
+    s.paint('⏺ DONE')
+    expect(turns.phaseOf('t1')).toBe('idle')
+  })
+
+  it('pending prompt text followed by agent output still self-heals', () => {
+    const { turns, s } = tracked()
+    s.type('\x1b[200~fix the bug\x1b[201~')
+    s.paint('⏺ Reading the file')
+    expect(turns.phaseOf('t1')).toBe('thinking')
+  })
+
   it('a UI-only command never shows the agent working', () => {
     const { turns, s } = tracked()
     s.type('/model\r')
