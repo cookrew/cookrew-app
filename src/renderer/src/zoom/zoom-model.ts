@@ -88,6 +88,9 @@ export function lineOf(row: AgentRow | undefined, brief: string | null | undefin
  */
 const drawn = new WeakMap<CanvasNode, Omit<ItemView, 'owners'> | null>()
 
+/** A browser's letter, on its coin, its card and its full view's head: the title's first letter or digit. */
+export const itemInitial = (title: string): string => (title.match(/[A-Za-z0-9]/)?.[0] ?? '·').toUpperCase()
+
 function drawnOf(n: CanvasNode): Omit<ItemView, 'owners'> | null {
   const known = drawn.get(n)
   if (known !== undefined) return known
@@ -95,7 +98,7 @@ function drawnOf(n: CanvasNode): Omit<ItemView, 'owners'> | null {
   if (n.kind === 'browser') {
     const tab = activeBrowserTab(n)
     const title = tab.title?.trim() || n.name
-    view = { id: n.id, kind: 'browser', title, host: hostOf(tab.url), tint: tintOf(n.id), initial: (title.match(/[A-Za-z0-9]/)?.[0] ?? '·').toUpperCase(), line: tab.url }
+    view = { id: n.id, kind: 'browser', title, host: hostOf(tab.url), tint: tintOf(n.id), initial: itemInitial(title), line: tab.url }
   } else if (n.kind === 'note') {
     view = { id: n.id, kind: 'note', title: n.name, host: 'note', tint: tintOf(n.id), initial: '', line: firstNoteLine(n.content ?? '') }
   }

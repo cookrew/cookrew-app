@@ -22,6 +22,7 @@ import { zoomStore } from '../zoom/zoom-store'
 import { AgentAvatar } from '../nodes/AgentAvatar'
 import { inkStatusOfRow } from '../zoom/ink-status'
 import { InkAvatar } from '../zoom/InkAvatar'
+import { itemInitial } from '../zoom/zoom-model'
 import '../zoom/full-views.css'
 
 /** How many of each kind an agent carries, for the head. */
@@ -130,7 +131,7 @@ export function StageView({
           <div className="zv-fullview item">
             <header className="zv-fv-head">
               <span className={`zv-fv-face ${pickedItem.kind}`} aria-hidden="true">
-                {pickedItem.kind === 'note' ? '¶' : (pickedItem.sub.match(/[A-Za-z0-9]/)?.[0] ?? '·').toUpperCase()}
+                {itemFaceLetter(pickedItem)}
               </span>
               <span className="zv-fv-who">
                 <b>{pickedItem.title}</b>
@@ -188,6 +189,14 @@ export function StageView({
     </div>
   )
 }
+
+/**
+ * The letter on a browser's full-view head: its title's, as its card and its
+ * coin draw it (zoom-model.ts · itemInitial). It once took the address's, so a
+ * file:// page read "U" (for /Users) on the head and "D" on its card.
+ */
+export const itemFaceLetter = (item: { readonly kind: 'browser' | 'note'; readonly title: string }): string =>
+  item.kind === 'note' ? '¶' : itemInitial(item.title)
 
 /** The browsers and notes that appeared on the loaded canvas while the window was open. */
 function usePopped(workspace: WorkspaceState | null, workspaceId: string | null, attachIndex: AttachmentIndex): readonly PoppedItem[] {
