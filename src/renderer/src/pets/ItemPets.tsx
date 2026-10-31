@@ -81,7 +81,13 @@ export function ItemPets({
     className: `item ${item.kind}${onStage && item.owners.includes(onStage) ? ' mine' : ''}`,
     label: `${item.kind === 'browser' ? 'Browser' : 'Note'}: ${item.title}`,
     name: item.title,
-    face: item.kind === 'browser' ? <BrowserFace id={item.id} icon={item.icon ?? null} /> : <span className="cr-pet-note-face">{item.title.trim().charAt(0).toUpperCase() || '·'}</span>
+    face:
+      item.kind === 'browser' ? (
+        <BrowserFace id={item.id} icon={item.icon ?? null} title={item.title} />
+      ) : (
+        // A note's face is its first letter on paper, as the item coin draws it.
+        <span className="cr-pet-note-face">{item.title.trim().charAt(0).toUpperCase() || '·'}</span>
+      )
   })
   return (
     <PetTroop
@@ -106,12 +112,13 @@ export function ItemPets({
  * A browser's face: a tiny picture of its page; the site's icon while the Mac
  * has none (pet-pick.ts · faviconOf); the globe when there is neither.
  */
-function BrowserFace({ id, icon }: { id: string; icon: string | null }): React.JSX.Element {
+function BrowserFace({ id, icon, title }: { id: string; icon: string | null; title: string }): React.JSX.Element {
   const thumb = useThumb(id)
   const [iconFailed, setIconFailed] = useState(false)
   if (thumb) return <img className="cr-pet-thumb" src={thumb} alt="" draggable={false} />
   if (icon && !iconFailed) return <img className="cr-pet-icon" src={icon} alt="" draggable={false} referrerPolicy="no-referrer" onError={() => setIconFailed(true)} />
-  return <CrIcon name="browser" />
+  // No picture and no favicon: its own seal, as the navigator's coin draws it.
+  return <span className="cr-pet-note-face browser">{title.trim().replace(/^[^A-Za-z0-9]*/, '').charAt(0).toUpperCase() || '·'}</span>
 }
 
 function ItemCard({ item, names, controls }: { item: ItemFace; names: ReadonlyMap<string, string>; controls: CardControls }): React.JSX.Element {
