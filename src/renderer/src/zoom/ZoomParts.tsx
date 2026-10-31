@@ -2,7 +2,6 @@ import { memo, useState } from 'react'
 import { sameProps } from './same-props'
 import { useThumb } from '../activity-thumb-store'
 import { InkAvatar, InkRing } from './InkAvatar'
-import { inkStatusOfRow } from './ink-status'
 import { CardWords, QuickReply, useQuickReply } from './quick-reply'
 import './agent-card.css'
 import type { AgentView, ItemView, MarkView, MachineView } from './zoom-model'
@@ -163,7 +162,7 @@ export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onO
   return (
     <div ref={bind(`agent:${agent.id}`)} className={`zv-m ${agent.phase}`}>
       <div ref={bind(`agent-av:${agent.id}`)} className="zv-av" title={`${agent.name} · ${agent.word}`} {...press(onOpen, `${agent.name}, ${agent.word}`)}>
-        <InkAvatar id={agent.id} preset={agent.preset} orch={agent.orch} status={inkStatusOfRow(agent.phase, agent.unread)} weight="large" />
+        <InkAvatar id={agent.id} preset={agent.preset} orch={agent.orch} status={agent.status} weight="large" />
       </div>
       <div ref={bind(`agent-nm:${agent.id}`)} className="zv-nm" {...press(onOpen, `${agent.name}, ${agent.word}`)}>
         {agent.name}
@@ -175,7 +174,7 @@ export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onO
           ×
         </button>
       )}
-      <div ref={bind(`agent-st:${agent.id}`)} className={`zv-st ${agent.phase}`}>
+      <div ref={bind(`agent-st:${agent.id}`)} className={`zv-st ${agent.status}`}>
         {agent.word}
       </div>
       <div ref={bind(`agent-cnt:${agent.id}`)} className="zv-cnt">

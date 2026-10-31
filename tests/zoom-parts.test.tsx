@@ -10,7 +10,7 @@ import type { AgentView, ItemView, MachineView, MarkView } from '../src/renderer
 
 const bind: Bind = () => () => undefined
 const agent = (over: Partial<AgentView> = {}): AgentView => ({
-  id: 't1', name: 'Forge', preset: 'Claude Code', orch: false, phase: 'waiting', word: 'needs you',
+  id: 't1', name: 'Forge', preset: 'Claude Code', orch: false, phase: 'waiting', status: 'waiting', word: 'needs you',
   line: 'push feat/route-core to origin? needs your yes', browsers: 2, notes: 1, turn: null, ...over
 })
 const item = (over: Partial<ItemView> = {}): ItemView => ({
@@ -43,7 +43,7 @@ describe('an agent’s card', () => {
       pendingInput: null,
       tail: null
     }
-    const html = renderToStaticMarkup(<AgentNode agent={agent({ phase: 'working', word: 'working', turn })} bind={bind} onOpen={() => undefined} />)
+    const html = renderToStaticMarkup(<AgentNode agent={agent({ phase: 'working', status: 'working', word: 'working', turn })} bind={bind} onOpen={() => undefined} />)
     expect(html).toContain('<b class="ag-title">Brewing TypeScript refactor</b>')
     expect(html).toContain('<em>You:</em> 可以开发了')
     // The newest tool only: the card has four lines.
@@ -69,7 +69,7 @@ describe('an agent’s card', () => {
     expect(pets).not.toMatch(/<AgentLatest|<TurnView|function AgentCard/)
     const card = readFileSync('src/renderer/src/zoom/AgentCard.tsx', 'utf8')
     const node = readFileSync('src/renderer/src/zoom/ZoomParts.tsx', 'utf8')
-    for (const shared of ['<CardWords agent={agent} sent={reply.sent} />', 'useQuickReply(agent.id', '<QuickReply agent={agent} reply={reply}', 'status={inkStatusOfRow(agent.phase, agent.unread)} weight="large"']) {
+    for (const shared of ['<CardWords agent={agent} sent={reply.sent} />', 'useQuickReply(agent.id', '<QuickReply agent={agent} reply={reply}', 'status={agent.status} weight="large"']) {
       expect(card).toContain(shared)
       expect(node).toContain(shared)
     }

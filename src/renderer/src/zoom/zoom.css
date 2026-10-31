@@ -294,15 +294,23 @@
   outline-offset: 6px;
 }
 
-/* ── the device: its workspaces, a mark each ── */
+/* ── the device: its workspaces, a mark each ──
+   The machine's name and hint grow (scale, from their top-left corner) to be
+   read where the device is seen small, and wrap inside the device's width
+   (ZoomView · deviceWords sets both inline): the hint takes a line of its own
+   rather than running off a phone's edge (Gauge, 2026-11-01). */
 .zv-device-label {
   position: absolute;
   left: 0;
   top: 0;
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 12px;
+  gap: 6px 12px;
+  /* In a zero-width layer a wrapping box would shrink to its widest word: it takes its full line, up to the max-width. */
+  width: max-content;
   white-space: nowrap;
+  transform-origin: 0 0;
   pointer-events: none;
 }
 
@@ -321,8 +329,9 @@
 .zv-device-label small {
   padding-left: 12px;
   border-left: 1px solid var(--zv-hair-2);
-  font: italic 11px/1 var(--zv-mono);
+  font: italic 11px/1.3 var(--zv-mono);
   color: var(--zv-muted);
+  white-space: normal;
 }
 
 /* Another workspace: drawn once, placed once (translate + scale inline). The
@@ -376,6 +385,13 @@
 .zv-mark .zv-mark-label {
   top: 108px;
   transform: translateX(-50%);
+  /* It grows from under the ring (ZoomView · deviceWords, inline), cut short before a neighbour's. */
+  transform-origin: 50% 0;
+}
+
+.zv-mark .zv-mark-label > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* The open workspace's place on the device: a round, invisible button over
@@ -1912,10 +1928,6 @@
     max-width: 380px;
     font-size: 32px;
     letter-spacing: 0.04em;
-  }
-  .zv-mark .zv-mark-label > span:last-child {
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
   .zv-mark .zv-mark-label .zv-seal {
     width: 52px;

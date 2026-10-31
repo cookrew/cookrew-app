@@ -3,7 +3,7 @@
 // browsers and notes they carry through the wiring, which are shared, and the
 // newest browser that stands beside the stack at group zoom. Pure, so pinned here.
 import { describe, expect, it } from 'vitest'
-import { buildZoomModel, ITEMS_SHOWN, PHASE_WORD, itemViewOf, lineOf } from '../src/renderer/src/zoom/zoom-model'
+import { buildZoomModel, ITEMS_SHOWN, itemViewOf, lineOf } from '../src/renderer/src/zoom/zoom-model'
 import { attachmentIndex } from '../src/renderer/src/terminal-attachments'
 import { crewOf, type AgentRow } from '../src/renderer/src/agent-rows'
 import type { BrowserNodeData, CanvasNode, Connection, NoteNodeData, TerminalNodeData, WorkspaceMeta } from '../src/shared/model'
@@ -40,7 +40,7 @@ describe('the crew', () => {
       [row('t1', 'waiting', { turn: { title: 'push?', ask: 'push it', tools: [], latest: { text: 'push feat to origin?', tone: 'waiting' }, pendingInput: null, tail: null } as AgentRow['turn'] }), row('t2', 'working')]
     )
     expect(m.agents.map((a) => a.id)).toEqual(['t2', 't1'])
-    expect(m.agents[0]).toMatchObject({ orch: true, word: PHASE_WORD.working, line: 'Nothing said yet.' })
+    expect(m.agents[0]).toMatchObject({ orch: true, word: 'working', line: 'Nothing said yet.' })
     expect(m.agents[1]).toMatchObject({ word: 'needs you', line: 'push feat to origin?' })
     expect(m.frame.agents.map((a) => a.waiting)).toEqual([false, true])
   })
