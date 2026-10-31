@@ -397,8 +397,10 @@ body.cr-ink .cr-pet .ink-avatar {
   height: 100%;
 }
 
+/* The pet's own ink only: the status layers (ink-zhu: the working lap, the
+   waiting ring, the done tick) carry their red through --zv-ink (zoom.css). */
 body.cr-ink .cr-pet .ink-avatar .ink-body {
-  fill: var(--sumi-ink);
+  fill: var(--zv-ink, var(--sumi-ink));
 }
 
 body.cr-ink .cr-pet-name {

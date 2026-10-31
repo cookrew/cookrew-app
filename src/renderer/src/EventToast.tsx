@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { cookrew } from './api'
 import { CrIcon, type CrIconName } from './icons'
 import { RoleAvatar } from './nodes/RoleAvatar'
-import { coalesceIndex, eventMeta, kindFor, onEvent } from './event-log'
+import { coalesceIndex, eventMeta, groupedLine, kindFor, onEvent } from './event-log'
 import './agent-roster.css'
 
 /** How long a toast lingers after its last update before auto-dismissing. */
@@ -115,7 +115,7 @@ function EventToastCard({
   const primary =
     toast.count === 1
       ? `${toast.entityName} ${meta.verb}`
-      : `${toast.count} ${meta.noun}s ${meta.verb}`
+      : groupedLine(toast.type, toast.count)
 
   return (
     <div
