@@ -37,7 +37,7 @@ import { languageByCode } from '../../shared/translate'
 import { useCheckpointTranslation } from './use-checkpoint-translation'
 import { AgentAvatar, StatusCoin } from './nodes/AgentAvatar'
 import { TranscriptFaceContext } from './transcript-face'
-import { useTranscriptLook, type TranscriptLook } from './transcript-look'
+import { LOOK_LABEL, LOOK_TITLE, isRecordLook, nextLook, useTranscriptLook, type TranscriptLook } from './transcript-look'
 import { installLocalScroll, type LocalScroll } from './live-scroll'
 import { createCurtain, domCurtainDeps, subRowShift } from './live-curtain'
 import { installLiveSheet, type LiveSheet } from './live-sheet'
@@ -464,7 +464,7 @@ function TerminalOverlay({
   const chatScroll = useRef<number | null>(null)
   const switchLook = (next: TranscriptLook): void => {
     const box = mainRef.current?.querySelector<HTMLElement>('.ctx-transcript') ?? null
-    if (next === 'live' && look === 'chat' && box) {
+    if (next === 'live' && isRecordLook(look) && box) {
       chatScroll.current = box.scrollHeight - box.scrollTop - box.clientHeight < 24 ? null : box.scrollTop
     }
     setLook(next)
@@ -1190,12 +1190,12 @@ function TerminalOverlay({
       <button
         type="button"
         className={`cr-look-toggle look-${look}`}
-        aria-label={look === 'chat' ? 'Showing chat — switch to live' : 'Showing live — switch to chat'}
-        title={look === 'chat' ? "Chat: the conversation with the agent — tap for live, the agent's own terminal" : "Live: the agent's own terminal — tap for chat"}
+        aria-label={`Showing ${look} — switch to ${nextLook(look)}`}
+        title={LOOK_TITLE[look]}
         onMouseDown={keepFocus}
-        onClick={() => switchLook(look === 'chat' ? 'live' : 'chat')}
+        onClick={() => switchLook(nextLook(look))}
       >
-        {look === 'chat' ? 'CHAT' : 'LIVE'}
+        {LOOK_LABEL[look]}
       </button>
     </div>
   )
@@ -1433,7 +1433,7 @@ function TerminalOverlay({
             <AttachTabs terminalId={node.id} items={attachments} openId={openItem?.node.id ?? null} />
           </div>
         )}
-        <div ref={mainRef} className={`popout-main look-${look}${openItem !== null ? ' split' : ''}`}>
+        <div ref={mainRef} className={`popout-main look-${look}${isRecordLook(look) ? ' look-records' : ''}${openItem !== null ? ' split' : ''}`}>
         <TranscriptFaceContext.Provider value={chatFace}>
         <TranscriptView
           ref={transcriptRef}
@@ -1469,7 +1469,7 @@ function TerminalOverlay({
           <div ref={containerRef} className="popout-terminal" />
         </TranscriptView>
         </TranscriptFaceContext.Provider>
-        {look === 'chat' && noConversation && phase !== 'thinking' && (
+        {isRecordLook(look) && noConversation && phase !== 'thinking' && (
           <div className="chat-empty">
             <span>No conversation yet.</span>
             <button type="button" className="cr-btn sm" onClick={() => switchLook('live')}>
@@ -1477,7 +1477,7 @@ function TerminalOverlay({
             </button>
           </div>
         )}
-        {look === 'chat' && (phase === 'thinking' || phase === 'waiting') && (
+        {isRecordLook(look) && (phase === 'thinking' || phase === 'waiting') && (
           <ChatStatus
             phase={phase}
             name={node.name}

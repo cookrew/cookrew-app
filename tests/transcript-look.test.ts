@@ -5,7 +5,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { TRANSCRIPT_LOOK_KEY, setTranscriptLook, transcriptLookOf } from '../src/renderer/src/transcript-look'
+import { TRANSCRIPT_LOOK_KEY, isRecordLook, nextLook, setTranscriptLook, transcriptLookOf } from '../src/renderer/src/transcript-look'
 
 describe('transcriptLookOf', () => {
   it('is chat unless live was chosen', () => {
@@ -13,6 +13,14 @@ describe('transcriptLookOf', () => {
     expect(transcriptLookOf('chat')).toBe('chat')
     expect(transcriptLookOf('live')).toBe('live')
     expect(transcriptLookOf('board')).toBe('chat')
+    expect(transcriptLookOf('log')).toBe('log')
+  })
+
+  it('cycles chat → log → live → chat; chat and log draw the record', () => {
+    expect(nextLook('chat')).toBe('log')
+    expect(nextLook('log')).toBe('live')
+    expect(nextLook('live')).toBe('chat')
+    expect(['chat', 'log', 'live'].map((l) => isRecordLook(l as 'chat'))).toEqual([true, true, false])
   })
 })
 
@@ -42,14 +50,22 @@ describe('transcript-paper.css', () => {
   })
 
   it('gives the terminal the same box in both views: the whole transcript area', () => {
-    expect(views).toMatch(/\.lod-overlay \.look-chat \.ctx-live,\s*\.lod-overlay \.look-live \.ctx-live \{[^}]*position: absolute;[^}]*top: 0;[^}]*height: 100%;/)
+    expect(views).toMatch(/\.lod-overlay \.look-records \.ctx-live,\s*\.lod-overlay \.look-live \.ctx-live \{[^}]*position: absolute;[^}]*top: 0;[^}]*height: 100%;/)
   })
 
-  it('in chat the terminal is there but unseen and untouchable', () => {
-    expect(rule('.lod-overlay .look-chat .ctx-live')).toMatch(/visibility: hidden;[\s\S]*pointer-events: none;/)
+  it('in chat and log the terminal is there but unseen and untouchable', () => {
+    expect(rule('.lod-overlay .look-records .ctx-live')).toMatch(/visibility: hidden;[\s\S]*pointer-events: none;/)
   })
 
   it('in live the terminal is all there is', () => {
     expect(rule('.lod-overlay .look-live .ctx-transcript > :not(.ctx-live)')).toMatch(/display: none;/)
   })
+
+  it('the log look is the same rows restyled: wrappers dissolved, no face, terminal markers', () => {
+    const log = css.slice(css.indexOf('THE LOG LOOK'))
+    expect(log).toMatch(/\.look-log \.ctx-chat-agent,[\s\S]*\.look-log \.ctx-chat-tools \{\s*display: contents;/)
+    expect(log).toMatch(/\.look-log \.ctx-chat-face \{\s*display: none;/)
+    expect(log).toMatch(/\.look-log \.ctx-tool-call::before,[\s\S]*content: '⏺ ';/)
+  })
 })
+

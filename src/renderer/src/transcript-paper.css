@@ -217,12 +217,12 @@
    transcript area, laid over it — so switching never resizes the agent's
    pane. In chat it is there unseen and untouchable (visibility: hidden also
    keeps its keyboard out of reach); in live it is all there is. */
-.lod-overlay .look-chat .ctx-transcript,
+.lod-overlay .look-records .ctx-transcript,
 .lod-overlay .look-live .ctx-transcript {
   position: relative;
 }
 
-.lod-overlay .look-chat .ctx-live,
+.lod-overlay .look-records .ctx-live,
 .lod-overlay .look-live .ctx-live {
   position: absolute;
   top: 0;
@@ -235,12 +235,12 @@
   border: 0;
 }
 
-.lod-overlay .look-chat .ctx-live::before,
+.lod-overlay .look-records .ctx-live::before,
 .lod-overlay .look-live .ctx-live::before {
   content: none;
 }
 
-.lod-overlay .look-chat .ctx-live {
+.lod-overlay .look-records .ctx-live {
   visibility: hidden;
   pointer-events: none;
 }
@@ -261,7 +261,7 @@
    chat. herdr answers each resize with a full replay for every viewer and
    wipes the live view's history (measured 2026-10-31: 756 px tall in chat,
    787 in live). The chat leaves room for it at its end instead. */
-.lod-overlay .popout-main.look-chat > .ctx-transcript {
+.lod-overlay .popout-main.look-records > .ctx-transcript {
   padding-bottom: 40px;
 }
 
@@ -337,7 +337,7 @@
 }
 
 /* A chat with nothing in it yet (TerminalOverlay · noConversation). */
-.lod-overlay .popout-main.look-chat {
+.lod-overlay .popout-main.look-records {
   position: relative;
 }
 
@@ -461,3 +461,70 @@
 .lod-overlay .look-live .cr-live-sheet-down.on {
   display: block;
 }
+
+/* ---- THE LOG LOOK (transcript-look.ts): the record, drawn as the terminal ----
+   The same rows as the chat. The chat's wrappers dissolve, the face goes, and
+   the rows read as Claude Code prints them: ❯ your prompt, ⏺ each tool call
+   with ⎿ its result kept to a few lines, ⏺ the reply. Every line comes from
+   the conversation record, never from the screen. */
+.lod-overlay .look-log .ctx-chat-agent,
+.lod-overlay .look-log .ctx-chat-bubble,
+.lod-overlay .look-log .ctx-chat-tools {
+  display: contents;
+}
+
+.lod-overlay .look-log .ctx-chat-face {
+  display: none;
+}
+
+.lod-overlay .look-log .ctx-block {
+  padding: 8px 14px 10px;
+  font: 13px/1.5 var(--font-mono);
+}
+
+.lod-overlay .look-log .ctx-block-head {
+  opacity: 0.7;
+}
+
+.lod-overlay .look-log .ctx-block-prompt {
+  margin: 4px 0 6px;
+  padding: 3px 8px;
+  background: var(--cream-md);
+  font: 13px/1.5 var(--font-mono);
+}
+
+.lod-overlay .look-log .ctx-block-tool {
+  margin-top: 6px;
+  font: 12.5px/1.5 var(--font-mono);
+}
+
+.lod-overlay .look-log .ctx-tool-call::before,
+.lod-overlay .look-log .ctx-block-reply::before {
+  content: '⏺ ';
+  font-family: var(--font-mono);
+}
+
+.lod-overlay .look-log .ctx-tool-call::before {
+  color: #15803d;
+}
+
+.lod-overlay .look-log .ctx-tool-result {
+  margin-left: 2ch;
+  max-height: 7.5em;
+  overflow: hidden;
+  font: 12px/1.5 var(--font-mono);
+}
+
+.lod-overlay .look-log .ctx-block-reply {
+  margin-top: 8px;
+  font: 13px/1.5 var(--font-mono);
+}
+
+.lod-overlay .look-log .ctx-block-reply.md > p:first-child {
+  display: inline;
+}
+
+.lod-overlay .look-log .ctx-block-reply * {
+  font-family: var(--font-mono);
+}
+
