@@ -191,6 +191,48 @@ function rowOf(
   }
 }
 
+/**
+ * THE ROW AN UNCHANGED AGENT ALREADY HAS. Every activity push rebuilt a row
+ * for every agent in every workspace (about 370 on the owner's Mac), each
+ * deriving its turn view again, though a push changes one or two agents
+ * (profiled while zooming: buildAgentRows 557 ms in 13 s). The activity store
+ * replaces an agent's object only when it changes, and the roster's entries
+ * hold still between registry pushes, so the same inputs by identity give
+ * back the same row object, which also lets memoised views skip it.
+ */
+interface RowInputs {
+  entry: AgentRegistryEntry
+  activity: TerminalActivity | undefined
+  checkpoint: LatestCheckpoint | null | undefined
+  changedAt: number | undefined
+  brief: string | null
+  row: AgentRow
+}
+const lastRows = new Map<string, RowInputs>()
+
+function rowFor(
+  entry: AgentRegistryEntry,
+  activity: TerminalActivity | undefined,
+  checkpoint: LatestCheckpoint | null | undefined,
+  changedAt: number | undefined,
+  brief: string | null,
+): AgentRow {
+  const last = lastRows.get(entry.id)
+  if (
+    last &&
+    last.entry === entry &&
+    last.activity === activity &&
+    last.checkpoint === checkpoint &&
+    last.changedAt === changedAt &&
+    last.brief === brief
+  ) {
+    return last.row
+  }
+  const row = rowOf(entry, activity, checkpoint, changedAt, brief)
+  lastRows.set(entry.id, { entry, activity, checkpoint, changedAt, brief, row })
+  return row
+}
+
 /** Facets over the WHOLE roster, in first-seen order. */
 function facetsOf(roster: AgentRegistryEntry[]): WorkspaceFacet[] {
   const byId = new Map<string, WorkspaceFacet>()
@@ -222,8 +264,13 @@ export function buildAgentRows(input: AgentRowsInput): AgentRows {
   const rows = roster
     .filter((entry) => workspaceId === null || entry.workspaceId === workspaceId)
     .map((entry) =>
-      rowOf(entry, activities[entry.id], checkpoints[entry.id], changedAt[entry.id], briefs[entry.id] ?? null),
+      rowFor(entry, activities[entry.id], checkpoints[entry.id], changedAt[entry.id], briefs[entry.id] ?? null),
     )
+  // Agents that left the roster take their rows with them.
+  if (lastRows.size > roster.length * 2 + 64) {
+    const present = new Set(roster.map((entry) => entry.id))
+    for (const id of lastRows.keys()) if (!present.has(id)) lastRows.delete(id)
+  }
 
   // A row is quiet when there is nothing to say about it — no turn tracked
   // and no checkpoint on file. Everything else earns a place on the timeline,
