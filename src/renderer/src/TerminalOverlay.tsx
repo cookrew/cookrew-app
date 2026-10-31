@@ -48,7 +48,7 @@ import { useCardRoute } from './nodes/use-card-route'
 import { routeDialAllowed, routeDialInput } from '../../shared/route-view'
 import { isNight, useNight } from './color-scheme'
 import { paperCursor } from './paper-cursor'
-import { createSizeOwner, tookOthers, type PaneSize } from './pane-size'
+import { createSizeOwner, SETTLE_CHECK_MS, tookOthers, type PaneSize } from './pane-size'
 import { createTurnRedraw } from './turn-redraw'
 
 /**
@@ -789,31 +789,31 @@ function TerminalOverlay({
       const detoxify = (raw: string): string =>
         isRemoteMode() ? raw.replace(/\u23FA/g, '\u25CF').replace(/[\u23E9-\u23F9]/g, (m) => `${m}\uFE0E`) : raw
       /**
-       * SIGWINCH: make the TUI repaint its real screen at this size. Wider
-       * first, then back: Claude Code redraws everything only when the
-       * terminal gets NARROWER, and a last step that widened would leave the
-       * host's reflow on screen, rows that were exactly full joined to the
-       * next (main/pty.ts · PtySession.resize). Back within the 300 ms the
-       * ownership check waits, so the passing size is not taken as another
-       * viewer's.
+       * SIGWINCH: make the TUI repaint its real screen at this size. One
+       * column narrower, then back: Claude Code redraws everything only when
+       * the terminal gets NARROWER, and a render it makes at the dip that
+       * lands late only leaves a margin. Never wider first: a late render at
+       * a wider size spills every padded row onto a row of its own (owner,
+       * 2026-10-31: a blank row under every line, the input box jumping;
+       * main/pty.ts · PtySession.resize).
        *
        * Back to the size the pane had BEFORE the kick, read then: by the
-       * settle this viewer has adopted the overshoot from main's hello, and
-       * settling on term.cols kept it — the pane grew two columns a kick and
-       * every frame overflowed the viewer's grid (owner, 2026-10-31: a blank
-       * row under every line, the input box jumping).
+       * settle this viewer has adopted the dip from main's hello, and
+       * settling on term.cols would keep it.
        */
+      /** How long the kick's dip holds: long enough for Claude Code to redraw at it (main/pty.ts DIP_MS). */
+      const KICK_DIP_MS = 400
       let settleTimer: ReturnType<typeof setTimeout> | null = null
       let lastKickAt = 0
       const repaintKick = (): void => {
-        if (disposed || term.cols < 21) return
-        lastKickAt = Date.now()
         const at = paneSize ?? { cols: term.cols, rows: term.rows }
-        sendSize(at.cols + 1, at.rows, true)
+        if (disposed || at.cols < 21) return
+        lastKickAt = Date.now()
+        sendSize(at.cols - 1, at.rows, true)
         if (settleTimer) clearTimeout(settleTimer)
         settleTimer = setTimeout(() => {
           if (!disposed) sendSize(at.cols, at.rows)
-        }, 150)
+        }, KICK_DIP_MS)
       }
       kickRef.current = repaintKick
       ownsRef.current = owns
@@ -900,7 +900,7 @@ function TerminalOverlay({
             if (reassertTimer) clearTimeout(reassertTimer)
             reassertTimer = setTimeout(() => {
               if (paneSize && tookOthers(paneSize, mySize)) owner.yieldTo()
-            }, 300)
+            }, SETTLE_CHECK_MS)
             return
           }
           if (helloSeen && Date.now() - lastKickAt > 2000) {
