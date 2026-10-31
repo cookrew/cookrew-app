@@ -38,7 +38,8 @@ import { tuningStore } from './tuning-store'
 import { CardMenu, type CardMenuAnchor } from './CardMenu'
 import { LodOverlays } from './LodOverlays'
 import { browserInFullView } from './dock-target'
-import { useInteractiveBrowserCapability } from './BrowserLayer'
+import { BrowserLayer, useInteractiveBrowserCapability } from './BrowserLayer'
+import type { LodLayout } from './zoom-lod'
 import {
   recordThumbFailure,
   recordThumbSuccess,
@@ -157,6 +158,8 @@ function storedMainView(): MainView {
 
 /** The canvas's terminal overlays while the levels hold the window (a stable empty list). */
 const NO_TERMINALS: TerminalNodeData[] = []
+/** The browser host's layout with the canvas retired: no card is zoomed, so no rects. */
+const NO_CANVAS_LOD: LodLayout = { activeIds: new Set(), rects: {}, primaryId: null }
 
 function storedCanvasVisualMode(): CanvasVisualMode {
   try {
@@ -1682,6 +1685,18 @@ function Canvas(): React.JSX.Element {
           }}
         />
         <EventToastLayer />
+        {/* THE BROWSER HOST: every browser page lives in BrowserLayer and is
+            drawn at the slot a stage pane or a terminal's lower half measures
+            (attach-view.ts). It rode inside the canvas's LodOverlays, and
+            retiring the canvas took it along — every browser slot stayed
+            empty (owner, 2026-10-31). No canvas, so no card rects. */}
+        <BrowserLayer
+          browsers={browsers}
+          lod={NO_CANVAS_LOD}
+          onThumb={onThumb}
+          isPhoneViewing={isPhoneViewing}
+          interactiveCapability={interactiveCapability}
+        />
         {/* The browsers and notes as pets over every page: hover for a card,
             click to open it (pets/). The crew's troop is retired: it sat over
             the page and took its clicks (the owner, 2026-10-31). */}
