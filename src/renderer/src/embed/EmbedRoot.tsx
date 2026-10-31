@@ -224,6 +224,7 @@ export default function EmbedRoot({ mode }: { mode: EmbedMode }): React.JSX.Elem
           orch={false}
           onOrch={noop}
           connectHint={null}
+          onMake={noop}
           voiceFor={node ? { id: node.id, remote: node.servedSession != null } : null}
           browserFor={null}
           boardFor={null}

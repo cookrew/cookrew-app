@@ -750,6 +750,12 @@ a.cr-btn {
   animation: cr-fadein 160ms ease-out;
 }
 
+/* A card the dock could not make says why, where the hint stands. */
+.cr-dock-hint.error {
+  color: var(--danger, #c0392b);
+  border-color: currentColor;
+}
+
 /* ---- selection bar (Figma model: selected elements grow actions) ---- */
 
 /* Floats over the canvas just above the dock, centered — by auto margins,

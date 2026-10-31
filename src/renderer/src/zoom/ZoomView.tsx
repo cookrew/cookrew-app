@@ -13,6 +13,7 @@ import { useZoom, zoomStore } from './zoom-store'
 import { useZoomMotion } from './use-zoom-motion'
 import { nearestStop, RANGE, STOPS, STOP_NAMES, stepOut } from './zoom-path'
 import { useZoomFleetView } from './use-zoom-fleet'
+import { makeAgent } from './make-card'
 import './zoom.css'
 
 /**
@@ -265,28 +266,15 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       if (el && at) el.style.transform = `translate(${at.x - MACHINE_CARD.w / 2}px, ${at.y - MACHINE_CARD.h / 2}px)`
     })
   }, [device, model.marks, model.machines])
-  /** A new agent, from the seat at the end of the crew: the dock's own call, without a canvas point. */
+  /** A new agent, from the seat at the end of the crew: the dock's own call (make-card.ts). */
   const spawn = useCallback(async (name: string, preset: string, orch: boolean) => {
-    const api = cookrew()
-    if (!api.createTerminal) {
-      setSpawnError('This build cannot create an agent.')
-      return
-    }
     setCreating(true)
     setSpawnError(null)
-    try {
-      const created = await api.createTerminal({ name, preset, position: { x: 0, y: 0 }, orch })
-      setAdding(false)
-      if (created?.id) {
-        zoomStore.focusAgent(created.id)
-        zoomStore.go(2, 'agents')
-      }
-    } catch (e) {
-      setSpawnError(`That agent could not be made: ${String(e)}`)
-    } finally {
-      setCreating(false)
-    }
-  }, [])
+    const made = await makeAgent(cookrew(), { name, preset, orch }, workspace?.nodes ?? [])
+    setCreating(false)
+    if (made.ok) setAdding(false)
+    else setSpawnError(made.error)
+  }, [workspace?.nodes])
   const switchWorkspace = useCallback(async (id: string) => {
     setError(null)
     try {
