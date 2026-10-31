@@ -253,9 +253,25 @@
   display: none;
 }
 
-/* What the agent is doing right now, under the chat (TerminalOverlay). */
+/* What the agent is doing right now, under the chat (TerminalOverlay).
+   It FLOATS over the bottom of the card and takes no room: in the flow it
+   shortened the transcript box by its own height, and the terminal laid in
+   that box — the agent's SHARED pane — was resized every time the strip came
+   or went: on CHAT → LIVE, and whenever the agent started or stopped work in
+   chat. herdr answers each resize with a full replay for every viewer and
+   wipes the live view's history (measured 2026-10-31: 756 px tall in chat,
+   787 in live). The chat leaves room for it at its end instead. */
+.lod-overlay .popout-main.look-chat > .ctx-transcript {
+  padding-bottom: 40px;
+}
+
 .lod-overlay .chat-status {
-  flex: 0 0 auto;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  background: var(--cream-hi);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -340,4 +356,22 @@
 
 .lod-overlay .chat-empty button {
   pointer-events: auto;
+}
+
+/* The copy of the painted rows held over a full repaint (live-curtain.ts). */
+.xterm .xterm-screen > .cr-live-curtain {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* The swipe shifts the screen by less than a row (TerminalOverlay); the
+   terminal's own box clips it, so it never slides over the bar or the dock. */
+.lod-overlay .look-live .popout-terminal {
+  overflow: hidden;
 }
