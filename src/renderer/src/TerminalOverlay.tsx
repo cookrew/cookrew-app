@@ -31,7 +31,7 @@ import { terminalKeyIntent } from './terminal-key-intent'
 import { pasteFromClipboard } from './terminal-clipboard'
 import { registerTerminalPaste } from './terminal-paste-bus'
 import { attachImeBridge } from './ime-input-bridge'
-import { attachTextareaPad, withoutPad } from './textarea-pad'
+import { attachPhoneField, muteXtermFieldSends } from './textarea-pad'
 import { CrIcon } from './icons'
 import { TranslateButton } from './TranslateButton'
 import { languageByCode } from '../../shared/translate'
@@ -943,6 +943,21 @@ function TerminalOverlay({
       cleanups.push(() => {
         if (reassertTimer) clearTimeout(reassertTimer)
       })
+      // Typing here is using this viewer: the first key after a pause takes
+      // the pane's size back (claimSize), the rest only keep it.
+      const typed = (input: string): void => {
+        if (!owns()) claimSize()
+        else owner.use(Date.now())
+        cookrew().ptyInput(node.id, input)
+      }
+      // On a phone the keyboard's field is the truth (textarea-pad.ts): xterm
+      // sends its keys, the field sends its edits, so a composition update
+      // replaces the word instead of appending it. Should xterm's internals not
+      // be the shape the mute expects, the field stays xterm's and the bridge's.
+      const phoneField =
+        isRemoteMode() && term.textarea && muteXtermFieldSends(term)
+          ? attachPhoneField(term.textarea, container, { send: typed })
+          : null
       // Counts every emit so the IME bridge can tell whether xterm already
       // claimed an input event — see ime-input-bridge.ts for why iOS needs one.
       // Count AND a short log of what was sent: the bridge needs the text to
@@ -950,27 +965,23 @@ function TerminalOverlay({
       // deciding about (a count cannot see that — see withoutWhatXtermJustSent).
       let xtermDataCount = 0
       let xtermRecent: { at: number; text: string }[] = []
-      // A phone keeps padding in xterm's field (textarea-pad.ts): never sent.
-      const padded = isRemoteMode()
       const inputSub = term.onData((data) => {
-        const input = padded ? withoutPad(data) : data
-        // Counted even when it was all padding: xterm claimed the event, and the bridge must not send it again.
         xtermDataCount += 1
-        if (input.length === 0) return
-        // Typing here is using this viewer: the first key after a pause takes
-        // the pane's size back (claimSize), the rest only keep it.
-        if (!owns()) claimSize()
-        else owner.use(Date.now())
-        xtermRecent = [...xtermRecent.slice(-15), { at: Date.now(), text: input }]
-        cookrew().ptyInput(node.id, input)
+        phoneField?.xtermSent(data)
+        xtermRecent = [...xtermRecent.slice(-15), { at: Date.now(), text: data }]
+        typed(data)
       })
-      cleanups.push(
-        attachImeBridge(
-          container,
-          () => ({ count: xtermDataCount, log: xtermRecent }),
-          (text) => cookrew().ptyInput(node.id, text)
+      if (phoneField) {
+        cleanups.push(() => phoneField.detach())
+      } else {
+        cleanups.push(
+          attachImeBridge(
+            container,
+            () => ({ count: xtermDataCount, log: xtermRecent }),
+            (text) => cookrew().ptyInput(node.id, text)
+          )
         )
-      )
+      }
       // Focus pops the software keyboard AND (with a small-font textarea)
       // iOS's page auto-zoom — on a phone that fired the zoom/resize loop the
       // moment the overlay opened. Desktop keeps instant focus; the phone
@@ -981,9 +992,6 @@ function TerminalOverlay({
         const focusOnTap = (): void => term.focus()
         container.addEventListener('pointerup', focusOnTap, { once: true })
         cleanups.push(() => container.removeEventListener('pointerup', focusOnTap))
-        // A soft keyboard's Backspace deletes in xterm's own field; keep it
-        // from running dry or Backspace sends nothing (textarea-pad.ts).
-        if (term.textarea) cleanups.push(attachTextareaPad(term.textarea))
       }
 
       // The attach replay is plain text and cannot reconstruct a TUI's
