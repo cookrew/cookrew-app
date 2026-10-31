@@ -58,8 +58,9 @@ export interface AgentEls {
   nm: Put
   st: Put
   cnt: Put
-  body: Put
-  reply: Put
+  /** The card's own parts, mounted for the open card only (ZoomView · cardIds): null elsewhere. */
+  body: Put | null
+  reply: Put | null
   emp: Put | null
   dot: Put | null
   nmW: number

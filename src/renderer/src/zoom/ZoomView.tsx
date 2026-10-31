@@ -94,11 +94,12 @@ export function ZoomView({ workspace, workspaceId, attachIndex, children }: {
       const nm = get(`agent-nm:${a.id}`)
       const st = get(`agent-st:${a.id}`)
       const cnt = get(`agent-cnt:${a.id}`)
+      // The card's own parts exist for the open card only (cardIds): absent is not missing.
       const body = get(`agent-body:${a.id}`)
       const reply = get(`agent-reply:${a.id}`)
       const card = get(`agent-card:${a.id}`)
       const cardl = get(`agent-cardl:${a.id}`)
-      if (!node || !av || !nm || !st || !cnt || !body || !reply || !card || !cardl) continue
+      if (!node || !av || !nm || !st || !cnt || !card || !cardl) continue
       agents.set(a.id, { node, av, nm, st, cnt, body, reply, card, cardl, emp: get(`agent-emp:${a.id}`), dot: get(`agent-dot:${a.id}`), nmW: nm.offsetWidth, stW: st.offsetWidth, cntW: cnt.offsetWidth })
     }
     for (const l of modelRef.current.frame.links) {
@@ -114,7 +115,26 @@ export function ZoomView({ workspace, workspaceId, attachIndex, children }: {
     return { devices: get('devices')!, device: get('device')!, scene: get('scene')!, panel: get('panel')!, wash: get('wash')!, ring: get('ring')!, label: get('label')!, labelW: get('label')!.offsetWidth, newCap: get('newCap')!, machine: get('machine')!, agents, links, items, ties, marks }
   }, [])
   const motion = useZoomMotion(model.frame, collect, root)
-  useLayoutEffect(() => { motion.wake() }, [model, size, motion.wake])
+  // ONE CARD INSTANCE (owner, 2026-10-31): the card's body, strip and reply are
+  // drawn for the open card only, and for the one it is leaving while that
+  // fades, never once per agent behind the crew. The pets open THIS card.
+  const focusId = zoom.agent ?? model.agents[0]?.id ?? null
+  const [prevFocus, setPrevFocus] = useState<string | null>(null)
+  const lastFocus = useRef(focusId)
+  useEffect(() => {
+    if (lastFocus.current === focusId) return
+    setPrevFocus(lastFocus.current)
+    lastFocus.current = focusId
+  }, [focusId])
+  const cardIds = useMemo(() => new Set([focusId, prevFocus].filter((id): id is string => id !== null)), [focusId, prevFocus])
+  const cardKey = [...cardIds].join(' ')
+  useLayoutEffect(() => { motion.wake() }, [model, size, cardKey, motion.wake])
+  useEffect(() => {
+    const ask = zoom.cardAsk
+    if (!ask) return
+    zoomStore.takeCardAsk(ask.n)
+    motion.card(ask.id)
+  }, [zoom.cardAsk, motion.card])
   // NO WHEEL ZOOM (owner, 2026-10-31): the wheel is the page's, and in a list it
   // scrolls that list. Zoom in and out are clicks (motion.agent / motion.item for
   // in, the background and the back button for out), plus the stops and Esc.
@@ -251,7 +271,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, children }: {
             return a && i ? <LinkNode key={l.key} k={l.key} agent={a} item={i} shared={i.owners.length} bind={bind} onClick={() => zoomStore.get().dir === 'items' ? motion.agent(a.id) : motion.item(i.id)} /> : null
           })}
           {model.items.map((i) => <ItemNode key={i.id} item={i} names={i.owners.map((id) => agentOf.get(id)?.name ?? id)} bind={bind} onClick={() => motion.item(i.id)} />)}
-          {model.agents.map((a) => <AgentNode key={a.id} agent={a} bind={bind} onOpen={() => motion.agent(a.id)} />)}
+          {model.agents.map((a) => <AgentNode key={a.id} agent={a} card={cardIds.has(a.id)} bind={bind} onOpen={() => motion.agent(a.id)} />)}
           {model.agents.filter((a) => a.phase === 'waiting').map((a) => <span key={a.id} className="zv-dot" ref={bind(`agent-dot:${a.id}`)} />)}
           <div className="zv-grp" ref={bind('label')}>
             <button type="button" className="zv-seal" onClick={() => motion.go(1, 'agents')} aria-label={`Open ${model.name} crew`}>{model.agents.length}</button>

@@ -16,10 +16,7 @@
    error (45); all under the header and dock (50) and the pets (55). The root
    makes no stacking context, so sheets opened from the stage keep theirs. */
 
-/* The ink tokens, on the zoom and on anything else that draws an agent's
-   card in them (the pet card, agent-card.css). */
-.zv-root,
-.ag-ink {
+.zv-root {
   --zv-paper: var(--sumi-paper, #f4efe4);
   --zv-paper-2: var(--sumi-paper-2, #ebe3d3);
   --zv-card: var(--sumi-card, #fbf8f1);
@@ -43,9 +40,7 @@
   --zv-mono: var(--font-mono, ui-monospace, 'SF Mono', Menlo, monospace);
   /* Text on a browser's tint (the coin's initial, the favicon). */
   --zv-on-tint: #fbf8f1;
-}
 
-.zv-root {
   position: absolute;
   inset: 0;
   overflow: hidden;

@@ -74,8 +74,9 @@ export function PetTroop({
   onOpen,
   onShown,
   cardClass,
-  cardLabel,
-  renderCard
+  cardLabel = () => '',
+  renderCard,
+  onCard
 }: {
   side: 'left' | 'right'
   /** Where it remembers its spot and whether it is tucked. */
@@ -87,8 +88,14 @@ export function PetTroop({
   /** The faces on screen, for whoever feeds them pictures. */
   onShown?: (ids: readonly string[]) => void
   cardClass?: (id: string) => string
-  cardLabel: (id: string) => string
-  renderCard: (id: string, controls: CardControls) => React.ReactNode
+  cardLabel?: (id: string) => string
+  /** The troop's own card for a face; absent when the card lives elsewhere (onCard). */
+  renderCard?: (id: string, controls: CardControls) => React.ReactNode
+  /**
+   * A face's card is not the troop's to draw: a click hands it here (the
+   * agents: the zoom view opens ITS card, the one instance, zoom-store · openCard).
+   */
+  onCard?: (id: string) => void
 }): React.JSX.Element | null {
   const spotKey = `${storageKey}.spot`
   const tuckedKey = `${storageKey}.tucked`
@@ -217,6 +224,11 @@ export function PetTroop({
     if (tucked) {
       setTucked(false)
       store(tuckedKey, '0')
+      return
+    }
+    // The card lives elsewhere: hand the click over, draw nothing here.
+    if (onCard) {
+      onCard(id)
       return
     }
     // Once: its card. Again, on the same face: in full. Each step is a
@@ -363,7 +375,7 @@ export function PetTroop({
           zoomed={id === zoomedId && id === openId}
           onGone={() => setLeavingId((at) => (at === id ? null : at))}
         >
-          {renderCard(id, controls)}
+          {renderCard?.(id, controls)}
         </PetCardFrame>
       ))}
     </>,
