@@ -22,7 +22,7 @@ import './stage.css'
 import { zoomStore } from '../zoom/zoom-store'
 import { AgentAvatar } from '../nodes/AgentAvatar'
 import { InkAvatar } from '../zoom/InkAvatar'
-import './zoom/full-views.css'
+import '../zoom/full-views.css'
 
 /** How many of each kind an agent carries, for the head. */
 const tally = (list: readonly { kind: string }[]): { browsers: number; notes: number } => ({
