@@ -15,8 +15,6 @@
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
-  border-left: 2px solid var(--line);
-  border-right: 2px solid var(--line);
   background: var(--cream-hi);
 }
 
@@ -25,6 +23,12 @@
   position: absolute;
   inset: 0;
   contain: layout paint;
+}
+
+/* The stage's terminal is the page, not a card on it: no frame (owner,
+   2026-10-31). The canvas keeps its card's frame. */
+.cr-stage-term .lod-overlay {
+  border: 0;
 }
 
 .cr-stage-wait {
@@ -51,33 +55,6 @@
   flex: 1 1 auto;
   min-height: 0;
   border-top: 0;
-}
-
-/* Why this terminal: one quiet line over its bottom-right corner. */
-.cr-stage-why {
-  position: absolute;
-  right: 40px;
-  bottom: 8px;
-  z-index: 3;
-  padding: 3px 8px;
-  border: 1.5px solid var(--line);
-  background: var(--cream-hi);
-  font-family: var(--font-pixel);
-  font-size: 8.5px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--ink);
-  pointer-events: none;
-}
-
-.cr-stage-why.choose {
-  background: var(--rose);
-  color: var(--cream-hi);
-}
-
-.cr-stage-why.review,
-.cr-stage-why.popped {
-  background: var(--amber);
 }
 
 /* The upper levels' heads still use these (StageMap.tsx). */
@@ -375,29 +352,5 @@
     grid-template-columns: 1fr;
     padding: 10px;
     gap: 10px;
-  }
-}
-
-/* The phone: why-this-terminal is a strip under it, never over it. Floating
-   over the bottom corner it wrapped to two lines on a 412px phone and sat on
-   the prompt line, which is where the typing goes (2026-10-30). */
-@media (max-width: 700px) {
-  .cr-stage-main:has(> .cr-stage-why) > .cr-stage-term {
-    bottom: 22px;
-  }
-  .cr-stage-why {
-    left: 0;
-    right: 0;
-    bottom: 0;
-    height: 22px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0 8px;
-    border: 0;
-    border-top: 1.5px solid var(--line);
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
   }
 }

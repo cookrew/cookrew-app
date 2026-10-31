@@ -16,7 +16,7 @@ import type { AgentRow } from '../agent-rows'
 import { attachView, useAttachView } from '../attach-view'
 import { SideTabsContext, type AttachmentIndex } from '../terminal-attachments'
 import { useCrewRows } from './crew-rows'
-import { diffPopped, pickBackground, railOrder, type PoppedItem, type StageItem, type StageTarget } from './stage-pick'
+import { diffPopped, pickBackground, railOrder, type PoppedItem, type StageItem } from './stage-pick'
 import { firstLine, hostPath, ownersOf, stageSelect, useStageLevel, useStageSelection, type StageItemCard } from './stage-select'
 import { StageMap } from './StageMap'
 import { StageItemPane } from './StageItemPane'
@@ -138,24 +138,7 @@ export function StageView({
         ) : (
           <div className="cr-stage-wait">No agent here yet</div>
         )}
-        {target && !pickedItem && <StageWhyLine target={target} />}
       </div>
-    </div>
-  )
-}
-
-const WHY: Record<StageTarget['why'], string> = {
-  pinned: 'Picked — Back returns to what needs you',
-  choose: 'Needs your choice',
-  review: 'Finished — review or prompt it',
-  popped: 'A new card to review',
-  latest: 'Nothing needs you — the latest agent'
-}
-
-function StageWhyLine({ target }: { target: StageTarget }): React.JSX.Element {
-  return (
-    <div className={`cr-stage-why ${target.why}`} role="status">
-      {WHY[target.why]}
     </div>
   )
 }
