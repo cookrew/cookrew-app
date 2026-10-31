@@ -120,7 +120,7 @@ import {
 import { CableHarness } from './CableHarness'
 import { ownersOf, stageSelect, useStageSelection } from './stage/stage-select'
 import { AgentPets } from './pets/AgentPets'
-import { useCrew } from './stage/crew-rows'
+import { CrewProvider, WithCrew } from './stage/crew-rows'
 import { ItemPets } from './pets/ItemPets'
 import { thumbWants } from './pets/thumb-wants'
 import { ZoomView } from './zoom/ZoomView'
@@ -1433,10 +1433,10 @@ function Canvas(): React.JSX.Element {
   // Each terminal's wired browsers and notes, for its zoomed card. Kept the
   // same object while nothing a card shows changes (sameAttachmentIndex):
   // the workspace object itself changes on every tick and drag.
-  // THE CREW, READ ONCE (stage/crew-rows.ts · useCrew): the zoom view, the
-  // stage and the agent group all draw this one list, so they agree on who is
-  // in it, how many, and in what state.
-  const crew = useCrew(workspace, activeWsId)
+  // THE CREW, READ ONCE (stage/crew-rows.ts · CrewProvider): the zoom view,
+  // the stage and the agent group all draw this one list, so they agree on
+  // who is in it, how many, and in what state. In context, not here: a crew
+  // change re-renders those three, not the whole app.
   const attachIndexRef = useRef<AttachmentIndex>(new Map())
   const attachIndex = useMemo(() => {
     const next = attachmentIndex(workspace?.nodes ?? [], workspace?.connections ?? [])
@@ -1512,6 +1512,7 @@ function Canvas(): React.JSX.Element {
 
   return (
     <CanvasUiContext.Provider value={ui}>
+      <CrewProvider workspace={workspace} workspaceId={activeWsId}>
       <div className={`cr cr-app tool-${tool}${clipping ? ' clipping' : ''}`}>
         <Header
           workspaceName={workspace?.name ?? 'Cookrew'}
@@ -1542,9 +1543,13 @@ function Canvas(): React.JSX.Element {
           {view === 'stage' && (
             <Suspense fallback={null}>
               <TerminalAttachmentsContext.Provider value={attachIndex}>
-                <ZoomView workspace={workspace} workspaceId={activeWsId} attachIndex={attachIndex} crew={crew} onDelete={requestClose}>
-                  {zoomFull !== null && <StageView workspace={workspace} workspaceId={activeWsId} terminals={terminals} attachIndex={attachIndex} crew={crew} onShowing={setStageShowing} />}
-                </ZoomView>
+                <WithCrew>
+                  {(crew) => (
+                    <ZoomView workspace={workspace} workspaceId={activeWsId} attachIndex={attachIndex} crew={crew} onDelete={requestClose}>
+                      {zoomFull !== null && <StageView workspace={workspace} workspaceId={activeWsId} terminals={terminals} attachIndex={attachIndex} crew={crew} onShowing={setStageShowing} />}
+                    </ZoomView>
+                  )}
+                </WithCrew>
               </TerminalAttachmentsContext.Provider>
             </Suspense>
           )}
@@ -1709,14 +1714,18 @@ function Canvas(): React.JSX.Element {
             for a card, click to open it (pets/). On the stage they ride at the
             full view only — the navigator draws the crew everywhere else. */}
         {(zoomFull !== null || view !== 'stage') && (
-          <AgentPets
-            crew={crew}
-            attachIndex={attachIndex}
-            onOpen={zoomToNode}
-            // In a full view both groups attach to its panel (pets/pet-dock.ts),
-            // as group-motion-pivot.html draws them.
-            dock={view === 'stage' && zoomFull !== null ? fullDock.agents : null}
-          />
+          <WithCrew>
+            {(crew) => (
+              <AgentPets
+                crew={crew}
+                attachIndex={attachIndex}
+                onOpen={zoomToNode}
+                // In a full view both groups attach to its panel (pets/pet-dock.ts),
+                // as group-motion-pivot.html draws them.
+                dock={view === 'stage' && zoomFull !== null ? fullDock.agents : null}
+              />
+            )}
+          </WithCrew>
         )}
         {(zoomFull !== null || view !== 'stage') && <ItemPets
           workspace={workspace}
@@ -1742,6 +1751,7 @@ function Canvas(): React.JSX.Element {
         {account.overlays}
         <ReauthOverlay />
       </div>
+      </CrewProvider>
     </CanvasUiContext.Provider>
   )
 }
