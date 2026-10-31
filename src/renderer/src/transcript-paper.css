@@ -50,12 +50,58 @@
 /* A GitHub table in a reply (MarkdownText · md-table; UI/UX QA 2026-11-01:
    CHAT showed them as a paragraph of pipes). Paper like the rest of the chat:
    hairline rules, the header on the darker cream, cells top-aligned so a long
-   one does not float its neighbours. The box scrolls sideways on its own, so
-   a wide table never widens the bubble or the page; cells wrap until a word
-   would break, then the box scrolls. */
-.lod-overlay .ctx-block-reply .md-table {
+   one does not float its neighbours. The table is laid out to its box and its
+   columns wrap to fit; only when they cannot (a word or a code span wider
+   than its share) does the box scroll sideways on its own, so a wide table
+   never widens the bubble or the page — and then the cut edge fades while
+   there is more off that side (MarkdownText · TableBox, data-more). */
+.lod-overlay .ctx-block-reply .md-table-box {
+  position: relative;
   max-width: 100%;
   margin: 6px 0;
+}
+
+.lod-overlay .ctx-block-reply .md-table-box::before,
+.lod-overlay .ctx-block-reply .md-table-box::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  z-index: 1;
+  width: 28px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.lod-overlay .ctx-block-reply .md-table-box::before {
+  left: 1px;
+  border-radius: 8px 0 0 8px;
+  background:
+    linear-gradient(to right, rgba(40, 30, 15, 0.12), transparent 5px),
+    linear-gradient(to right, var(--cream-hi), transparent);
+}
+
+.lod-overlay .ctx-block-reply .md-table-box::after {
+  right: 1px;
+  border-radius: 0 8px 8px 0;
+  background:
+    linear-gradient(to left, rgba(40, 30, 15, 0.12), transparent 5px),
+    linear-gradient(to left, var(--cream-hi), transparent);
+}
+
+.lod-overlay .ctx-block-reply .md-table-box[data-more='right']::after,
+.lod-overlay .ctx-block-reply .md-table-box[data-more='both']::after {
+  opacity: 1;
+}
+
+.lod-overlay .ctx-block-reply .md-table-box[data-more='left']::before,
+.lod-overlay .ctx-block-reply .md-table-box[data-more='both']::before {
+  opacity: 1;
+}
+
+.lod-overlay .ctx-block-reply .md-table {
+  max-width: 100%;
   overflow-x: auto;
   overscroll-behavior-x: contain;
   -webkit-overflow-scrolling: touch;
@@ -70,8 +116,7 @@
 }
 
 .lod-overlay .ctx-block-reply .md-table table {
-  width: max-content;
-  min-width: 100%;
+  width: 100%;
   border-collapse: collapse;
   font-size: 0.93em;
   line-height: 1.4;
@@ -79,7 +124,6 @@
 
 .lod-overlay .ctx-block-reply .md-table th,
 .lod-overlay .ctx-block-reply .md-table td {
-  max-width: 28em;
   padding: 5px 10px;
   border-bottom: 1px solid var(--line-soft);
   text-align: left;

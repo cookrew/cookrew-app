@@ -1,4 +1,4 @@
-import { Fragment, memo } from 'react'
+import { Fragment, memo, useLayoutEffect, useRef, useState } from 'react'
 import { parseMarkdown, type BlockNode, type InlineNode, type TableAlign } from './markdown'
 
 /**
@@ -72,7 +72,7 @@ function Block({ node }: { node: BlockNode }): React.JSX.Element {
     case 'table':
       // Its own box scrolls sideways: a wide table never widens the chat (a phone is 412px).
       return (
-        <div className="md-table" role="region" aria-label="Table" tabIndex={0}>
+        <TableBox>
           <table>
             <thead>
               <tr>
@@ -95,7 +95,7 @@ function Block({ node }: { node: BlockNode }): React.JSX.Element {
               ))}
             </tbody>
           </table>
-        </div>
+        </TableBox>
       )
     case 'list': {
       const Tag = node.ordered ? 'ol' : 'ul'
@@ -120,3 +120,45 @@ function Block({ node }: { node: BlockNode }): React.JSX.Element {
 
 /** A column's alignment from the separator row's colons; none leaves the stylesheet's. */
 const alignOf = (align: TableAlign | undefined): React.CSSProperties | undefined => (align ? { textAlign: align } : undefined)
+
+/** Which side of a table's box has more of it off screen: null when it all fits. */
+export function tableEdge(box: { readonly scrollLeft: number; readonly clientWidth: number; readonly scrollWidth: number }): 'left' | 'right' | 'both' | null {
+  const left = box.scrollLeft > 1
+  const right = box.scrollLeft + box.clientWidth < box.scrollWidth - 1
+  return left && right ? 'both' : left ? 'left' : right ? 'right' : null
+}
+
+/**
+ * A table's box: it scrolls sideways only when the columns cannot wrap to fit
+ * (transcript-paper.css), and then says so — the outer box fades the cut edge
+ * while there is more off that side (UI/UX QA 2026-11-01: on a phone the
+ * columns just stopped). Read on scroll and on resize, never per frame.
+ */
+function TableBox({ children }: { children: React.ReactNode }): React.JSX.Element {
+  const ref = useRef<HTMLDivElement>(null)
+  const [edge, setEdge] = useState<ReturnType<typeof tableEdge>>(null)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const read = (): void => {
+      const next = tableEdge(el)
+      setEdge((at) => (at === next ? at : next))
+    }
+    read()
+    el.addEventListener('scroll', read, { passive: true })
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(read) : null
+    ro?.observe(el)
+    if (el.firstElementChild) ro?.observe(el.firstElementChild)
+    return () => {
+      el.removeEventListener('scroll', read)
+      ro?.disconnect()
+    }
+  }, [])
+  return (
+    <div className="md-table-box" data-more={edge ?? undefined}>
+      <div ref={ref} className="md-table" role="region" aria-label="Table" tabIndex={0}>
+        {children}
+      </div>
+    </div>
+  )
+}
