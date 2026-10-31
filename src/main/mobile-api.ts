@@ -1698,6 +1698,14 @@ export async function handleMobileApi(
 
   if (method === "GET" && p === "/api/events") {
     const send = startSse(response);
+    // ONE close listener for the whole stream. Every source below hands its
+    // teardown here; eleven `request.on("close")` calls on one request were
+    // what Node kept reporting as a MaxListeners leak.
+    const teardown: Array<() => void> = [];
+    const onClose = (off: () => void): void => void teardown.push(off);
+    request.on("close", () => {
+      for (const off of teardown) off();
+    });
     // The opening workspace snapshot is skipped ONCE per boot: the client
     // says `?boot=<nonce>` (remote-api sharedEvents) because it is fetching
     // /api/workspace at this very moment, and the same document twice is the
@@ -1713,7 +1721,7 @@ export async function handleMobileApi(
       send("build", { id: deps.build.id() });
       const onBuild = (id: string): void => send("build", { id });
       deps.build.bus.on("build", onBuild);
-      request.on("close", () => deps.build?.bus.removeListener("build", onBuild));
+      onClose(() => deps.build?.bus.removeListener("build", onBuild));
     }
     // Sous's zoom / zoom-back, so the phone and the TV follow the owner's
     // voice. A scoped stream only hears about its own canvas.
@@ -1721,7 +1729,7 @@ export async function handleMobileApi(
       if (scope === null || event.workspaceId === scope) send("ui", event);
     };
     deps.uiBus?.on("command", onUi);
-    request.on("close", () => deps.uiBus?.removeListener("command", onUi));
+    onClose(() => deps.uiBus?.removeListener("command", onUi));
     // Activities are keyed by terminal id across every workspace, so a scoped
     // stream filters them or it leaks other canvases' agents into this one.
     const inScopedCanvas = (terminalId: string): boolean =>
@@ -1732,14 +1740,14 @@ export async function handleMobileApi(
       if (inScopedCanvas(row.terminalId)) send("tuning", row);
     };
     deps.tuningBus?.on("tuning", onTuning);
-    request.on("close", () => deps.tuningBus?.removeListener("tuning", onTuning));
+    onClose(() => deps.tuningBus?.removeListener("tuning", onTuning));
     // The inbox rides the same stream, under the board's read gate; the
     // opening frame is the list as it stands, so a phone never polls for it.
     // The roster rides it too, one changed entry per frame, as /api/agents
     // serves it (agent-registry onChange): a page never refetches the list.
     // Optional-called: a server embedding a bare roster (tests, older hosts) just has no frames.
     const offAgent = deps.agents?.onChange?.((entry) => send("agent", entry));
-    if (offAgent) request.on("close", offAgent);
+    if (offAgent) onClose(offAgent);
     if (deps.inbox && (!deps.pairingToken || canRead)) {
       // A read-only (wall) token sees the projection only (HP contract).
       const project = (rows: InboxRow[]): unknown => (hasPairing || !deps.pairingToken ? rows : wallProjection(rows));
@@ -1748,7 +1756,7 @@ export async function handleMobileApi(
       const release = deps.inboxHold?.() ?? null;
       send("inbox", { rows: project(deps.inbox()) });
       deps.inboxBus?.on("inbox", onInbox);
-      request.on("close", () => {
+      onClose(() => {
         deps.inboxBus?.removeListener("inbox", onInbox);
         release?.();
       });
@@ -1758,18 +1766,18 @@ export async function handleMobileApi(
     if (hasPairing || !deps.pairingToken) {
       const onSous = (frame: unknown): void => send("sous", frame);
       deps.sousBus?.on("sous", onSous);
-      request.on("close", () => deps.sousBus?.removeListener("sous", onSous));
+      onClose(() => deps.sousBus?.removeListener("sous", onSous));
     }
     const onSignal = (signal: CableSignal): void => {
       if (inScopedCanvas(signal.from) || inScopedCanvas(signal.to)) send("signal", signal);
     };
     const offSignal = deps.signalBus?.on(onSignal) ?? null;
-    request.on("close", () => offSignal?.());
+    onClose(() => offSignal?.());
     const onUse = (signal: UseSignal): void => {
       if (inScopedCanvas(signal.agent) || inScopedCanvas(signal.card)) send("use", signal);
     };
     const offUse = deps.useBus?.on(onUse) ?? null;
-    request.on("close", () => offUse?.());
+    onClose(() => offUse?.());
     // The route: the whole state on change (debounced by the service), one
     // card's state when its decision or turn facts land. The stream holds the
     // gateway's clock open while it is, so a phone watching sees a probe.
@@ -1780,7 +1788,7 @@ export async function handleMobileApi(
     deps.routeBus?.on("route", onRoute);
     deps.routeBus?.on("card-route", onCardRoute);
     const releaseRoute = deps.route?.hold() ?? null;
-    request.on("close", () => {
+    onClose(() => {
       deps.routeBus?.removeListener("route", onRoute);
       deps.routeBus?.removeListener("card-route", onCardRoute);
       releaseRoute?.();
@@ -1788,7 +1796,7 @@ export async function handleMobileApi(
     // The Mac's addresses moved and the zone knows the new names: look now.
     const onReach = (): void => send("reach", { at: Date.now() });
     deps.reachBus?.on("changed", onReach);
-    request.on("close", () => deps.reachBus?.removeListener("changed", onReach));
+    onClose(() => deps.reachBus?.removeListener("changed", onReach));
     for (const activity of turns.list()) {
       if (inScopedCanvas((activity as { terminalId: string }).terminalId)) {
         send("activity", activity);
@@ -1887,7 +1895,7 @@ export async function handleMobileApi(
       store.on("change", onBoardSignal);
       store.on("workspaces", onBoardSignal);
     }
-    request.on("close", () => {
+    onClose(() => {
       // Symmetric with the attach above — an unremoved scoped listener is a
       // leak per disconnected phone, and phones disconnect constantly.
       if (scope === null) {

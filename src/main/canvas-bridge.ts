@@ -208,13 +208,16 @@ export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
   const answer = (id: string, exchange: Exchange): void => {
     const seal = exchange.sealed === undefined ? {} : { sealed: exchange.sealed }
     let ended = false
+    /** Set when the answer is over on its head and its local call must be let go. */
+    let discard = false
+    let call: BridgeCall | null = null
     const end = (): void => {
       if (ended) return
       ended = true
       calls.delete(id)
       send({ t: 'end', id })
     }
-    const call = dial(
+    const dialed = dial(
       { method: exchange.method, path: exchange.path, headers: exchange.headers },
       (response) => {
         send({ t: 'head', id, status: response.status, headers: response.headers, ...seal })
@@ -225,6 +228,17 @@ export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
         // for 120 s until sixteen of them shut the door (`too_many_exchanges`).
         if (bodiless(response.status)) {
           end()
+          // And the LOCAL call is over too. A response nobody reads never
+          // emits `end`, so the http client never hands its socket back and
+          // the server never arms its keep-alive clock: measured 2026-11-01 as
+          // 124 loopback sockets on each side, one pair per relayed beacon,
+          // for the life of the app. Destroyed rather than drained: draining
+          // waits on an `end` the 09-08 204 never sent. The cost is a body
+          // still unsent when the head lands, which no route has today (a
+          // beacon is one small write). A dialer that answered synchronously
+          // has no call yet; it is let go below, once its body is written.
+          discard = true
+          call?.destroy()
           return
         }
         response.onData((chunk) => {
@@ -254,9 +268,11 @@ export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
     )
     // A dialer that answers synchronously has ended before the call is on the
     // books; a call that is over is not in flight.
-    if (!ended) calls.set(id, call)
-    if (exchange.bytes > 0) call.write(Buffer.concat(exchange.body as Buffer[]))
-    call.end()
+    call = dialed
+    if (!ended) calls.set(id, dialed)
+    if (exchange.bytes > 0) dialed.write(Buffer.concat(exchange.body as Buffer[]))
+    dialed.end()
+    if (discard) dialed.destroy()
   }
 
   return {
