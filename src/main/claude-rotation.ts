@@ -794,10 +794,46 @@ function rememberHead(key: string, entry: HeadIdentity & { lines: string[]; comp
   }
 }
 
-/** For tests: forget every remembered head. */
+/**
+ * A SMALL FACT ABOUT A HEAD, kept per file. Some heads are megabytes (the
+ * first 256 lines of the owner's sessions run to 6 to 13 MB, capped at
+ * ROTATION_HEAD_BYTES), too big for the line cache, and a caller that needs
+ * only the declared predecessor or the message uuids decoded 4 MB per file
+ * per walk (measured: readHeadLines 714 ms in 12 s with the line cache on).
+ * The fact is kept under the same rule as the lines: the same inode
+ * unchanged, or grown after a head that had already reached its cap.
+ */
+const headFacts = new Map<string, HeadIdentity & { complete: boolean; value: unknown }>()
+export const HEAD_FACTS_MAX = 4096
+
+export async function headFact<T>(file: string, maxLines: number, name: string, compute: (lines: readonly string[]) => T): Promise<T> {
+  let identity: HeadIdentity
+  try {
+    const info = await stat(file)
+    identity = { ino: info.ino, size: info.size, mtimeMs: info.mtimeMs }
+  } catch {
+    return compute([])
+  }
+  const key = `${name}\u0000${maxLines}\u0000${file}`
+  const known = headFacts.get(key)
+  if (known && headStillHolds(known, identity)) return known.value as T
+  const lines = await readHeadLines(file, maxLines)
+  const value = compute(lines)
+  headFacts.delete(key)
+  headFacts.set(key, { ...identity, complete: lines.length >= Math.max(1, maxLines), value })
+  while (headFacts.size > HEAD_FACTS_MAX) {
+    const oldest = headFacts.keys().next().value
+    if (oldest === undefined) break
+    headFacts.delete(oldest)
+  }
+  return value
+}
+
+/** For tests: forget every remembered head and head fact. */
 export function clearHeadCache(): void {
   headCache.clear()
   headCacheBytes = 0
+  headFacts.clear()
 }
 
 function countNewlines(chunk: Buffer): number {
