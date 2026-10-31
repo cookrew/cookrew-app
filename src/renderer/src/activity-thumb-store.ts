@@ -1,4 +1,4 @@
-import { useCallback, useSyncExternalStore } from 'react'
+import { useCallback, useMemo, useSyncExternalStore } from 'react'
 import { KeyedStore } from './keyed-store'
 import type { TerminalActivity, TurnPhase } from '../../shared/turn'
 
@@ -87,6 +87,31 @@ export function useActivityPhaseCount(ids: readonly string[], phase: TurnPhase):
       return count
     }
   )
+}
+
+/**
+ * The agents that are busy: waiting on you first, then thinking, each group
+ * in the map's order, as one string (ids joined by spaces). A string, so a
+ * reader re-renders when the list changes, not on every activity event:
+ * the item pets read the whole map for this and rebuilt every item's JSX
+ * several times a second while any agent worked (perf, 2026-11-01).
+ */
+export function busyAgentsKey(activities: Readonly<Record<string, TerminalActivity>>): string {
+  const waiting: string[] = []
+  const thinking: string[] = []
+  for (const [id, activity] of Object.entries(activities)) {
+    if (activity.phase === 'waiting') waiting.push(id)
+    else if (activity.phase === 'thinking') thinking.push(id)
+  }
+  return [...waiting, ...thinking].join(' ')
+}
+
+export function useBusyAgents(): readonly string[] {
+  const key = useSyncExternalStore(
+    (cb) => activityStore.subscribeGlobal(cb),
+    () => busyAgentsKey(activityStore.getSnapshot())
+  )
+  return useMemo(() => (key ? key.split(' ') : []), [key])
 }
 
 /** One browser's latest thumbnail data URL. Re-renders only when THIS id changes. */
