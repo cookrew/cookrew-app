@@ -129,7 +129,12 @@
   text-align: left;
   vertical-align: top;
   white-space: normal;
+  /* Only between words: the reply's word-break: break-word (styles.css) would
+     let a narrow screen squeeze a table by splitting them ("alread y"). Past
+     that the box scrolls, with the edge cue. */
+  word-break: normal;
   overflow-wrap: normal;
+  hyphens: manual;
 }
 
 .lod-overlay .ctx-block-reply .md-table th + th,
@@ -148,7 +153,9 @@
 }
 
 .lod-overlay .ctx-block-reply .md-table code {
-  white-space: nowrap;
+  /* Breaks at its spaces, and after its own / . _ (MarkdownText · cellCode). */
+  white-space: normal;
+  word-break: normal;
 }
 
 .lod-overlay .ctx-live {

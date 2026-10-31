@@ -60,3 +60,28 @@ describe('which side of a scrolled table has more (tableEdge)', () => {
     expect(tableEdge({ scrollLeft: 348, clientWidth: 274, scrollWidth: 622 })).toBe('left')
   })
 })
+
+// Gauge r4: on a phone d7619cca squeezed Conductor's table into its 272px box
+// by splitting words ("alread y resum ed it"): the reply's own
+// word-break: break-word reached the cells. A cell wraps only between words;
+// past that the box scrolls, with the edge cue.
+describe('a cell never breaks inside a word', () => {
+  const css = readFileSync(new URL('../src/renderer/src/transcript-paper.css', import.meta.url), 'utf8')
+  const cells = css.match(/\.ctx-block-reply \.md-table th,\s*\.lod-overlay \.ctx-block-reply \.md-table td \{([^}]*)\}/)?.[1] ?? ''
+
+  it("undoes the reply's break-anywhere for its cells", () => {
+    const reply = readFileSync(new URL('../src/renderer/src/styles.css', import.meta.url), 'utf8').match(/\n\.ctx-block-reply \{([^}]*)\}/)?.[1] ?? ''
+    expect(reply).toMatch(/word-break:\s*break-word/)
+    expect(cells).toMatch(/word-break:\s*normal/)
+    expect(cells).toMatch(/overflow-wrap:\s*normal/)
+    expect(cells).toMatch(/hyphens:\s*manual/)
+  })
+
+  it('inline code in a cell may break only after its own punctuation', () => {
+    const out = html(['| file | note |', '|---|---|', '| `src/main/index.ts` | `ask --no-wait` |'].join('\n'))
+    expect(out).toContain('<code>src/<wbr/>main/<wbr/>index.<wbr/>ts</code>')
+    expect(out).toContain('<code>ask --no-wait</code>')
+    // Outside a table a code span is set as it always was.
+    expect(html('run `src/main/index.ts` now')).toContain('<code>src/main/index.ts</code>')
+  })
+})
