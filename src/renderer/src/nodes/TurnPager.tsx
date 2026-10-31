@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { isHarnessNotice, noticeLine } from '../../../shared/harness-notice'
 import type { TurnRecord } from '../../../shared/turn'
 import { cookrew } from '../api'
 import { CrIcon } from '../icons'
@@ -183,9 +184,16 @@ export function TurnPagerBar({ paging }: { paging: TurnPaging }): React.JSX.Elem
 export function PastTurnView({ record }: { record: TurnRecord }): React.JSX.Element {
   return (
     <>
-      <div className="vi-you">
-        <span className="vi-you-label">You:</span> {record.prompt || '(empty prompt)'}
-      </div>
+      {/* A turn the harness started is not yours (harness-notice.ts). */}
+      {isHarnessNotice(record.prompt) ? (
+        <div className="vi-you vi-notice">
+          <span className="vi-you-label">Task:</span> {noticeLine(record.prompt)}
+        </div>
+      ) : (
+        <div className="vi-you">
+          <span className="vi-you-label">You:</span> {record.prompt || '(empty prompt)'}
+        </div>
+      )}
       <div className="vi-msg vi-past-reply">{record.reply || '(no visible output this turn)'}</div>
       <div className="vi-past-meta">
         checkpoint {record.index}

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { isHarnessNotice, noticeLine } from '../../shared/harness-notice'
 import type { TurnRecord } from '../../shared/turn'
 
 /**
@@ -48,8 +49,10 @@ export function useTitleMode(): [TitleMode, () => void] {
  * back to the prompt when no title was generated.
  */
 export function checkpointTitle(record: TurnRecord, mode: TitleMode): string {
-  if (mode === 'precise') return record.prompt || '(empty prompt)'
-  return record.title || record.prompt || '(empty prompt)'
+  // A harness notice is titled by what it says, never by its XML (harness-notice.ts).
+  const prompt = isHarnessNotice(record.prompt) ? noticeLine(record.prompt) : record.prompt
+  if (mode === 'precise') return prompt || '(empty prompt)'
+  return record.title || prompt || '(empty prompt)'
 }
 
 /**

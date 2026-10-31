@@ -23,6 +23,7 @@ import { forwardRef, memo, useContext } from 'react'
 import { checkpointTitle, type TitleMode } from './checkpoint-sync'
 import { MarkdownText } from './MarkdownText'
 import type { CheckpointTranslation } from './TranscriptView'
+import { isHarnessNotice, noticeLine } from '../../shared/harness-notice'
 import type { TraceBlock } from '../../shared/trace-blocks'
 import { TranscriptFaceContext } from './transcript-face'
 
@@ -66,9 +67,17 @@ export const TranscriptRow = memo(
                 which case the words shown are the translation's. Marked, so
                 "these are not the words that were typed" is visible rather
                 than inferred. */}
-            <div className="ctx-block-prompt" data-translated={translated ? '' : undefined}>
-              {(translated?.prompt ?? block.prompt) || '(empty prompt)'}
-            </div>
+            {/* A turn the harness started is not the owner's bubble: one quiet
+                line saying what woke the agent (harness-notice.ts). */}
+            {isHarnessNotice(block.prompt) ? (
+              <div className="ctx-block-notice" role="note">
+                {noticeLine(block.prompt)}
+              </div>
+            ) : (
+              <div className="ctx-block-prompt" data-translated={translated ? '' : undefined}>
+                {(translated?.prompt ?? block.prompt) || '(empty prompt)'}
+              </div>
+            )}
             {/* THE AGENT'S SIDE OF THE CHAT: its face, and one bubble with
                 what it ran and what it said (transcript-face.ts). */}
             {(block.activity.length > 0 || block.reply) && (

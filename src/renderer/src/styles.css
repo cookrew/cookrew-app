@@ -1528,6 +1528,7 @@ a.cr-btn {
 .ctx-transcript,
 .ctx-block,
 .ctx-block-prompt,
+.ctx-block-notice,
 .ctx-block-tool,
 .ctx-tool-call,
 .ctx-tool-name,
@@ -1542,6 +1543,20 @@ a.cr-btn {
 .ctx-block-prompt::before {
   content: '❯ ';
   color: var(--amber);
+}
+
+/* A turn the harness started (harness-notice.ts): not the owner's prompt, so
+   no ❯ and no bubble — one quiet line saying what woke the agent. Words, not
+   a symbol glyph: a phone font may not have one. */
+.ctx-block-notice {
+  color: var(--phos-dim);
+  font: 11.5px/1.45 var(--font-mono);
+  word-break: break-word;
+}
+
+.ctx-block-notice::before {
+  content: 'TASK · ';
+  letter-spacing: 0.08em;
 }
 
 /* tool_call lines between prompt and reply — rendered like the real TUI
@@ -4055,6 +4070,18 @@ body.cookrew-mobile .cookrew-minimap {
   display: none;
 }
 
+/* Unrevealed, the strip takes no room. At opacity 0 alone it still held ~200px
+   of every row, so each title was squeezed into what was left and cut short.
+   Out of flow, not display:none: its buttons stay focusable, and a focused one
+   reveals the strip (focus-within) back in place. */
+.cr-ckpt-row:not(:hover):not(:focus-within):not(.acting) .cr-ckpt-row-actions {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
 /* Inline "save as role" input, shown in place of the row actions. */
 .cr-ckpt-saverole {
   display: flex;
@@ -4521,13 +4548,26 @@ body.cookrew-mobile .cookrew-minimap {
 /* F5 made rows OPAQUE, which means they now carry a surface colour — and a
    dark one on a cream rail is a black slab. The dark defaults get cream
    counterparts here so the opacity fix does not become a theming bug the first
-   time .on-cream is used. */
-.cr-ckpt-rail.on-cream .cr-ckpt-row {
+   time .on-cream is used.
+
+   The paper full view (.zv-fullview) IS that context, and nothing set
+   .on-cream there: its CHAT view drew the fan as black slabs over a cream
+   transcript (phone report 2026-11-01). It takes the same skin by selector;
+   the tokens are the night scheme's too, so it follows the scheme. */
+.cr-ckpt-rail.on-cream .cr-ckpt-row,
+.cr-ckpt-rail.on-cream .cr-ckpt-fan-focus,
+.zv-fullview .cr-ckpt-rail .cr-ckpt-row {
   background: var(--cream-hi);
 }
 
-.cr-ckpt-rail.on-cream .cr-ckpt-row.active {
+.cr-ckpt-rail.on-cream .cr-ckpt-row.active,
+.zv-fullview .cr-ckpt-rail .cr-ckpt-row.active {
   background: var(--amber-soft);
+}
+
+.cr-ckpt-rail.on-cream .cr-ckpt-row:not(.active):not(.live) .cr-ckpt-dot i,
+.zv-fullview .cr-ckpt-rail .cr-ckpt-row:not(.active):not(.live) .cr-ckpt-dot i {
+  background: var(--cream-hi);
 }
 
 .cr-ckpt-rail.on-cream .cr-ckpt-line {
@@ -4543,21 +4583,25 @@ body.cookrew-mobile .cookrew-minimap {
   border-color: var(--cream-hi);
 }
 
-.cr-ckpt-rail.on-cream .cr-ckpt-row-title {
+.cr-ckpt-rail.on-cream .cr-ckpt-row-title,
+.zv-fullview .cr-ckpt-rail .cr-ckpt-row-title {
   color: var(--ink);
 }
 
-.cr-ckpt-rail.on-cream .cr-ckpt-row:hover {
+.cr-ckpt-rail.on-cream .cr-ckpt-row:hover,
+.zv-fullview .cr-ckpt-rail .cr-ckpt-row:hover {
   background: var(--amber-soft);
 }
 
-.cr-ckpt-rail.on-cream .cr-ckpt-action {
+.cr-ckpt-rail.on-cream .cr-ckpt-action,
+.zv-fullview .cr-ckpt-rail .cr-ckpt-action {
   color: var(--ink);
   background: var(--cream-hi);
   border: 1.5px solid var(--line);
 }
 
-.cr-ckpt-rail.on-cream .cr-ckpt-action:hover {
+.cr-ckpt-rail.on-cream .cr-ckpt-action:hover,
+.zv-fullview .cr-ckpt-rail .cr-ckpt-action:hover {
   background: var(--amber-soft);
   border-color: var(--line);
   color: var(--ink);
