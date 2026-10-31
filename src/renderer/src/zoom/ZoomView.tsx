@@ -362,7 +362,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           </button>
         </div>
         <div className="zv-device" ref={bind('device')}>
-          <div className="zv-device-label" style={{ transform: `translate(${-device.box.w / 2 + 50}px, ${device.labelY}px) scale(${words.titleK.toFixed(4)})`, maxWidth: Math.round(words.titleMax) }}>
+          <div className="zv-device-label" style={{ transform: `translate(${-device.box.w / 2 + 50}px, ${device.titleBottom}px) scale(${words.titleK.toFixed(4)}) translateY(-100%)`, maxWidth: Math.round(words.titleMax) }}>
             <b>{machine}</b><span>{model.frame.workspaces.length} workspaces</span><small>agents open the crew · browsers open thumbnails</small>
           </div>
           {model.marks.map((m) => <MarkNode key={m.id} mark={m} bind={bind} onOpen={stable(`mark:${m.id}`, () => void switchWorkspace(m.id))} />)}

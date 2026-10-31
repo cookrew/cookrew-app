@@ -252,9 +252,12 @@ function cardCam(L: Layout, focus: string | null, w: number, h: number, margin: 
 export function crewLabelAt(L: Layout, narrow: boolean): Pos {
   const top = Math.min(0, ...Object.values(L.crew.at).map((p) => p.y))
   if (!narrow) return { x: -L.crew.box.w / 2 + 70, y: top - 90 }
+  // A phone's label wraps to two lines (zoom.css: 130px wide): it ends above the faces' reach.
   const spots = [...Object.values(L.crew.at), L.crew.next]
-  return { x: Math.min(...spots.map((p) => p.x)) - FACE_REACH.left, y: top - 90 }
+  return { x: Math.min(...spots.map((p) => p.x)) - FACE_REACH.left, y: top - FACE_REACH.top - 8 - PHONE_LABEL_H }
 }
+/** A phone's workspace label at most: seal over totals, two lines (zoom.css · .zv-grp at 759px). */
+const PHONE_LABEL_H = 56
 
 /**
  * THE OPEN CARD ON A DESKTOP (Gauge, 2026-11-01: at the card stop the card was
@@ -291,6 +294,74 @@ export function keepOnScreen(box: { x: number; y: number; w: number; h: number; 
   const cx = into(cam.Ox + (box.x + box.w / 2) * cam.S, half.x, LABEL_MARGIN, w - LABEL_MARGIN)
   const cy = into(cam.Oy + (box.y + box.h / 2) * cam.S, half.y, LABEL_MARGIN - scrolled, h - LABEL_MARGIN)
   return { x: (cx - cam.Ox) / cam.S - box.w / 2, y: (cy - cam.Oy) / cam.S - box.h / 2 }
+}
+
+/** The camera the card stop rests at (z = 2): deskCamera's and phoneCamera's end. */
+export function cardStopCamera(L: Layout, focus: string | null, w: number, h: number, narrow: boolean): Cam {
+  return narrow ? cardCam(L, focus, w, h, PHONE_MARGIN, CARD_MAX) : cardCam(L, focus, w, h - DESK_BAR, DESK_MARGIN, DESK_CARD_S)
+}
+
+export interface Rect {
+  left: number
+  top: number
+  right: number
+  bottom: number
+}
+const overlaps = (a: Rect, b: Rect): boolean => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
+
+/** What the label must never cover at the card stop, on screen: every other agent's face, name and counts, the open card, the empty seat. */
+export function cardStopTaken(L: Layout, focus: string | null, cam: Cam): Rect[] {
+  const S = cam.S
+  const at = (p: Pos): Pos => ({ x: cam.Ox + p.x * S, y: cam.Oy + p.y * S })
+  const taken: Rect[] = []
+  for (const [id, p] of Object.entries(L.crew.at)) {
+    const a = at(p)
+    taken.push(
+      id === focus
+        ? { left: a.x + CARD_SEEN.x * S, top: a.y + CARD_SEEN.y * S, right: a.x + (CARD_SEEN.x + CARD_SEEN.w) * S, bottom: a.y + (CARD_SEEN.y + CARD_SEEN.h) * S }
+        : { left: a.x - FACE_REACH.left * S, top: a.y - FACE_REACH.top * S, right: a.x + FACE_REACH.right * S, bottom: a.y + FACE_REACH.bottom * S }
+    )
+  }
+  const seat = at(L.crew.next)
+  taken.push({ left: seat.x - 40 * S, top: seat.y - 40 * S, right: seat.x + 40 * S, bottom: seat.y + 40 * S })
+  return taken
+}
+
+/**
+ * THE WORKSPACE'S LABEL AT THE CARD STOP (Gauge, 2026-11-01: clamped into
+ * the corner it sat on Moss's face on a desktop and on Forge's on a phone;
+ * it must stay on screen and never cover a face or a name). The camera there
+ * is known, so is every face it shows: the label takes the first free place
+ * among the screen's corners, above and below the card, and along its top
+ * and bottom edges. Its top-left corner on screen, or null when the screen
+ * has no free place: then it fades rather than cover anyone.
+ */
+export function cardStopLabel(L: Layout, focus: string | null, w: number, h: number, narrow: boolean, label: { w: number; h: number }): Pos | null {
+  const cam = cardStopCamera(L, focus, w, h, narrow)
+  const taken = cardStopTaken(L, focus, cam)
+  const lw = label.w * cam.S
+  const lh = label.h * cam.S
+  const M = LABEL_MARGIN
+  const floor = h - (narrow ? PHONE_BAR : DESK_BAR)
+  const card = taken[Object.keys(L.crew.at).indexOf(focus ?? '')] ?? null
+  const spots: Pos[] = [
+    { x: M, y: M },
+    { x: w - M - lw, y: M }
+  ]
+  if (card) {
+    spots.push({ x: card.left, y: card.top - 8 - lh }, { x: card.right - lw, y: card.top - 8 - lh }, { x: card.left, y: card.bottom + 8 }, { x: card.right - lw, y: card.bottom + 8 })
+  }
+  spots.push({ x: M, y: floor - M - lh }, { x: w - M - lw, y: floor - M - lh })
+  const step = Math.max(24, lw / 3)
+  for (let x = M + step; x < w - M - lw; x += step) spots.push({ x, y: M }, { x, y: floor - M - lh })
+  const pad = 4
+  return (
+    spots.find((p) => {
+      if (p.x < M - 0.5 || p.y < M - 0.5 || p.x + lw > w - M + 0.5 || p.y + lh > floor + 0.5) return false
+      const r = { left: p.x - pad, top: p.y - pad, right: p.x + lw + pad, bottom: p.y + lh + pad }
+      return !taken.some((t) => overlaps(r, t))
+    }) ?? null
+  )
 }
 
 /**
@@ -592,7 +663,19 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     h,
     Math.min(st.pan ?? 0, panMax)
   )
-  put(els.label, `translate(${f1(lab.x)}px, ${f1(lab.y)}px)${Math.abs(lk - 1) < 1e-4 ? '' : ` scale(${f4(lk)})`}`, (1 - toFull) * (1 - ramp(iz * pc, 0, 0.3)))
+  // Toward the card stop it goes, on screen, to the free place that stop leaves it (cardStopLabel), or fades.
+  let labAt = lab
+  let labSeen = 1
+  if (z > 1 && st.dir === 'agents') {
+    const k = ease(clamp01(z - 1))
+    const spot = cardStopLabel(L, st.focus, w, h, st.narrow, { w: els.labelW, h: els.labelH })
+    if (spot) {
+      const sx = lerp(Ox + lab.x * S, spot.x, k)
+      const sy = lerp(Oy + lab.y * S, spot.y, k)
+      labAt = { x: (sx - Ox) / S, y: (sy - Oy) / S }
+    } else labSeen = 1 - k
+  }
+  put(els.label, `translate(${f1(labAt.x)}px, ${f1(labAt.y)}px)${Math.abs(lk - 1) < 1e-4 ? '' : ` scale(${f4(lk)})`}`, labSeen * (1 - toFull) * (1 - ramp(iz * pc, 0, 0.3)))
   put(els.newCap, `translate(${f1(NEW_POSE.x - 52)}px, ${f1(NEW_POSE.y + 40)}px)`, model.newest ? (1 - ramp(z, 0.05, 0.3)) * (1 - pc) : 0)
 
   // ── the full-view panel: in screen space, from the focused card (or thumbnail) to the whole view ──
