@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
+import { sameProps } from './same-props'
 import { useThumb } from '../activity-thumb-store'
 import { InkAvatar, InkRing } from './InkAvatar'
 import { inkStatusOfRow } from './ink-status'
@@ -43,7 +44,7 @@ export const NOTE_GLYPH = (
 )
 
 /** "▭ 2 ▤ 1": browsers and notes, zero counts left out; "nothing open" when both are. */
-export function Counts({ browsers, notes, none = 'nothing open' }: { browsers: number; notes: number; none?: string }): React.JSX.Element {
+export const Counts = memo(function Counts({ browsers, notes, none = 'nothing open' }: { browsers: number; notes: number; none?: string }): React.JSX.Element {
   if (browsers + notes === 0) return <span className="zv-none">{none}</span>
   return (
     <>
@@ -61,10 +62,10 @@ export function Counts({ browsers, notes, none = 'nothing open' }: { browsers: n
       )}
     </>
   )
-}
+}, sameProps)
 
 /** A browser's picture: the live thumbnail when there is one, else a drawn page in its tint. */
-export function Page({ item, big = false }: { item: ItemView; big?: boolean }): React.JSX.Element {
+export const Page = memo(function Page({ item, big = false }: { item: ItemView; big?: boolean }): React.JSX.Element {
   const thumb = useThumb(item.id)
   if (item.kind === 'note') {
     return (
@@ -98,10 +99,10 @@ export function Page({ item, big = false }: { item: ItemView; big?: boolean }): 
       )}
     </>
   )
-}
+}, sameProps)
 
 /** One agent–item link: a small thumbnail (on a card) over a two-faced coin (the item; flipped, the agent). */
-export function LinkNode({ k, item, agent, shared, bind, onClick }: { k: string; item: ItemView; agent: AgentView; shared: number; bind: Bind; onClick: () => void }): React.JSX.Element {
+export const LinkNode = memo(function LinkNode({ k, item, agent, shared, bind, onClick }: { k: string; item: ItemView; agent: AgentView; shared: number; bind: Bind; onClick: () => void }): React.JSX.Element {
   return (
     <div ref={bind(`link:${k}`)} className={`zv-lk ${item.kind}`} title={`${item.title} · ${agent.name}${shared > 1 ? ` · shared by ${shared}` : ''}`} {...press(onClick, `${item.title}, carried by ${agent.name}`)}>
       <div ref={bind(`link-th:${k}`)} className={`zv-th ${item.kind}`}>
@@ -123,10 +124,10 @@ export function LinkNode({ k, item, agent, shared, bind, onClick }: { k: string;
       )}
     </div>
   )
-}
+}, sameProps)
 
 /** An item's own thumbnail in the thumbs grid: the page, its title, who uses it. */
-export function ItemNode({ item, names, bind, onClick, onDelete }: { item: ItemView; names: string[]; bind: Bind; onClick: () => void; onDelete?: () => void }): React.JSX.Element {
+export const ItemNode = memo(function ItemNode({ item, names, bind, onClick, onDelete }: { item: ItemView; names: string[]; bind: Bind; onClick: () => void; onDelete?: () => void }): React.JSX.Element {
   return (
     <div ref={bind(`item:${item.id}`)} className={`zv-ip ${item.kind}`} title={item.title} {...press(onClick, `${item.kind}: ${item.title}`)}>
       <div className={`zv-th zv-big ${item.kind}`}>
@@ -144,7 +145,7 @@ export function ItemNode({ item, names, bind, onClick, onDelete }: { item: ItemV
       </div>
     </div>
   )
-}
+}, sameProps)
 
 /**
  * One agent: its ink face, name, state and counts, always (the crew draws
@@ -152,7 +153,7 @@ export function ItemNode({ item, names, bind, onClick, onDelete }: { item: ItemV
  * parts: its latest, the empty strip and the quick reply. One card instance,
  * not one per agent behind the crew; the pets open this same card.
  */
-export function AgentNode({ agent, card = true, bind, onOpen, onDelete }: { agent: AgentView; card?: boolean; bind: Bind; onOpen: () => void; onDelete?: () => void }): React.JSX.Element {
+export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onOpen, onDelete }: { agent: AgentView; card?: boolean; bind: Bind; onOpen: () => void; onDelete?: () => void }): React.JSX.Element {
   const reply = useQuickReply(agent.id)
   return (
     <div ref={bind(`agent:${agent.id}`)} className={`zv-m ${agent.phase}`}>
@@ -192,10 +193,10 @@ export function AgentNode({ agent, card = true, bind, onOpen, onDelete }: { agen
       )}
     </div>
   )
-}
+}, sameProps)
 
 /** Another workspace on the device: its ring, its agents' stack, its seal and name. */
-export function MarkNode({ mark, bind, onOpen }: { mark: MarkView; bind: Bind; onOpen: () => void }): React.JSX.Element {
+export const MarkNode = memo(function MarkNode({ mark, bind, onOpen }: { mark: MarkView; bind: Bind; onOpen: () => void }): React.JSX.Element {
   const n = mark.presets.length
   const shown = mark.presets.slice(0, 9)
   const mid = (shown.length - 1) / 2
@@ -221,7 +222,7 @@ export function MarkNode({ mark, bind, onOpen }: { mark: MarkView; bind: Bind; o
       </div>
     </div>
   )
-}
+}, sameProps)
 
 /**
  * Another machine on the devices stop, from the real fleet: its frame, the
