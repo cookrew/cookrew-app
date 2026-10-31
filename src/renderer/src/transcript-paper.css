@@ -375,3 +375,16 @@
 .lod-overlay .look-live .popout-terminal {
   overflow: hidden;
 }
+
+/* A FINGER NEVER LANDS ON A ROW (owner, 2026-10-31: "dragging live is still
+   stuck"). Touch events stay bound to the element the finger first landed on.
+   The DOM renderer rebuilds the rows' contents on every scroll, so after the
+   first row step that element was gone from the page, and the rest of the
+   swipe went to a detached node: one touchmove, no touchend, one row per
+   swipe (measured on the phone page; the chat got 27 moves for the same
+   swipe). The rows take no pointer, so the finger lands on .xterm-screen,
+   which stays. Selection, links and clicks are worked out by xterm from
+   coordinates on the screen, not from the row under the pointer. */
+.lod-overlay .xterm-rows {
+  pointer-events: none;
+}

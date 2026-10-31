@@ -147,3 +147,12 @@ describe('the agent’s shared pane is not resized by this viewer for nothing', 
     expect(read('TerminalOverlay.tsx')).toContain('curtain.write(detoxify(chunk), (c, done) => term.write(c, done))')
   })
 })
+
+describe('a swipe on the live terminal keeps its touch target', () => {
+  it('makes the rows non-targetable, so the finger is on the screen, not on a row the renderer replaces', () => {
+    const css = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'src', 'renderer', 'src', 'transcript-paper.css'), 'utf8') as string
+    const at = css.indexOf('.lod-overlay .xterm-rows {')
+    expect(at).toBeGreaterThan(0)
+    expect(css.slice(at, css.indexOf('}', at))).toContain('pointer-events: none')
+  })
+})
