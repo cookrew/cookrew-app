@@ -35,17 +35,20 @@
   flex-wrap: wrap-reverse;
 }
 
-/* The agents' troop has no pill: the faces float on the page, and the gaps
+/* Neither troop has a pill: the faces float on the page, and the gaps
    between them let clicks through to what is under them (the owner,
-   2026-10-31). Only the faces and the grip take the pointer. */
-.cr-pets.right {
+   2026-10-31 for the agents, 2026-11-01 for the browsers and notes, "the same
+   as the agents"). Only the faces and the grip take the pointer. */
+.cr-pets.right,
+.cr-pets.left {
   border-color: transparent;
   background: none;
   box-shadow: none;
   pointer-events: none;
 }
 
-.cr-pets.right > * {
+.cr-pets.right > *,
+.cr-pets.left > * {
   pointer-events: auto;
 }
 

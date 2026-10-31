@@ -179,6 +179,41 @@
 .zv-fullview .chat-status.waiting .chat-status-dot { background: var(--fv-wait); }
 .zv-fullview .chat-empty { font-family: var(--fv-serif); color: var(--fv-muted); }
 
+/* THE BROWSER, ON THE PAPER (owner, 2026-11-01). A browser drawn in a slot —
+   its own full view, or under an agent's transcript — kept the canvas card's
+   square frame and its 2px ink edge, unlike the note and the agent beside it.
+   It wears the demo's page now (group-motion-pivot.html · .ipage): rounded
+   10px, one hairline, a soft shadow, and its address bar on the second paper
+   over a hairline. BrowserLayer draws it outside .zv-fullview, so the ink
+   tokens are read directly. Full window (browser-full) stays edge to edge. */
+.browser-lod.browser-embedded:not(.browser-full) .popout {
+  border: 0;
+  border-radius: 10px;
+  background: var(--sumi-paper, #f4efe4);
+  box-shadow:
+    inset 0 0 0 1px var(--sumi-hair-2, rgba(29, 26, 22, 0.16)),
+    0 6px 20px rgba(40, 30, 15, 0.08);
+}
+.browser-lod.browser-embedded:not(.browser-full) .popout-header {
+  background: var(--sumi-paper-2, #ebe3d3);
+  border-bottom: 1px solid var(--sumi-hair, rgba(29, 26, 22, 0.1));
+}
+.browser-lod.browser-embedded:not(.browser-full) .popout-header .cr-btn {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--sumi-hair-2, rgba(29, 26, 22, 0.16));
+  color: var(--sumi-ink, #1d1a16);
+}
+.browser-lod.browser-embedded:not(.browser-full) .popout-header .cr-btn:hover {
+  background: var(--sumi-paper, #f4efe4);
+}
+.browser-lod.browser-embedded:not(.browser-full) .browser-address,
+.browser-lod.browser-embedded:not(.browser-full) .browser-idplate {
+  border-radius: 6px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
 /* A phone is one column: the head wraps, the tabs shrink. */
 @media (max-width: 700px) {
   .zv-fullview { padding: 8px 8px 6px; }
