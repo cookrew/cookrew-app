@@ -78,5 +78,19 @@ describe('buildSeededFrame', () => {
     expect(all(viewer).slice(0, viewer.buffer.active.baseY).slice(0, 3)).toEqual(['h1', 'h2', 'h3'])
     expect(all(viewer)).not.toContain('normal junk')
   })
+
+  it('a line wider than the viewer is clipped, not spilled onto a line of its own', async () => {
+    const mirror = new Terminal({ cols: 10, rows: 2, scrollback: 100, allowProposedApi: true })
+    const serializer = new SerializeAddon()
+    mirror.loadAddon(serializer)
+    await write(mirror, 's1\r\ns2')
+    const viewer = new Terminal({ cols: 10, rows: 2, scrollback: 100, allowProposedApi: true })
+    await write(viewer, buildSeededFrame(mirror, serializer, ['h1', 'abcdefghijkl', 'h3', 's1', 's2'].join('\r\n'), 'w', ['s1', 's2']))
+    const back = all(viewer).slice(0, viewer.buffer.active.baseY)
+    expect(back).toEqual(['h1', 'abcdefghij', 'h3'])
+    // Wrap is back on for herdr's own output.
+    await write(viewer, '\x1b[2;1Hxxxxxxxxxxyy')
+    expect(viewer.buffer.active.getLine(viewer.buffer.active.baseY + 1)?.translateToString(true)).toBe('yy')
+  })
 })
 
