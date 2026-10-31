@@ -10,6 +10,7 @@ import { apiPath } from './api-base'
 import { planeFetch } from './plane-fetch'
 import { authHeaders } from './auth-gate'
 import { isRemoteMode } from './api'
+import { tapEventSource } from './sse-tap'
 
 const BEACON_MS = 3000
 
@@ -18,19 +19,10 @@ const wire = { sse: 0, sseMsgs: 0, fetches: 0, lagMax: 0 }
 function installTaps(): void {
   const RealES = window.EventSource
   if (RealES) {
-    const Wrapped = function (this: EventSource, ...args: ConstructorParameters<typeof EventSource>) {
-      const es = new RealES(...args)
-      const realAdd = es.addEventListener.bind(es)
-      es.addEventListener = ((type: string, fn: EventListener, opts?: AddEventListenerOptions) =>
-        realAdd(type, ((e: MessageEvent) => {
-          wire.sse += (e?.data ?? '').length || 0
-          wire.sseMsgs += 1
-          return fn(e)
-        }) as EventListener, opts)) as typeof es.addEventListener
-      return es
-    } as unknown as typeof EventSource
-    Wrapped.prototype = RealES.prototype
-    window.EventSource = Wrapped
+    window.EventSource = tapEventSource(RealES, (data) => {
+      wire.sse += data.length
+      wire.sseMsgs += 1
+    })
   }
   const realFetch = window.fetch.bind(window)
   window.fetch = (input, init) => {
