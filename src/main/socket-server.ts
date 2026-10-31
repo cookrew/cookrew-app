@@ -19,6 +19,7 @@ import {
 } from '../shared/model'
 import { resolveCallerTerminalId } from '../shared/caller-identity'
 import { WorkspaceStore, WorkspaceNodeHit } from './store'
+import { reachByName, type ReachKind } from './ask-reach'
 import type { PairingHandout } from '../shared/account-v2'
 import type { MobileEndpoint } from './mobile-endpoints'
 import { renderMobileHelp, renderRotated } from './mobile-cli-text'
@@ -492,7 +493,66 @@ function findConnected(
       .find((e) => e.active && e.name.toLowerCase() === name.toLowerCase())
     if (entry) return terminalFromRegistry(entry)
   }
-  throw new Error(`${kind === 'terminal' ? 'Agent' : kind} '${name}' not found among your connections. Run 'cookrew list'.`)
+  throw new Error(`${kind === 'terminal' ? 'Agent' : kind} '${name}' is not wired to you. Run 'cookrew list'.`)
+}
+
+/**
+ * The card a teammate names: from its wires, else from its own canvas
+ * (ask-reach.ts). Reaching an unwired card lays the cable, its event labelled
+ * with the verb that asked — the inquiry IS the relation (owner, 2026-10-31).
+ * A served caller is held to its wires.
+ */
+export function reachCard(
+  request: CliRequest,
+  deps: SocketServerDeps,
+  name: string | undefined,
+  kind: ReachKind,
+  via: string
+): CanvasNode {
+  const label = kind === 'terminal' ? 'Agent' : kind === 'note' ? 'Note' : 'Browser'
+  if (!name) throw new Error(`Missing ${label.toLowerCase()} name. Run 'cookrew list'.`)
+  const me = self(request, deps)
+  if (kind === 'terminal' && name.toLowerCase() === me.name.toLowerCase()) {
+    throw new Error(`That is you ('${me.name}') — ask a teammate. Run 'cookrew list'.`)
+  }
+  const hit = reachByName({
+    selfId: me.id,
+    name,
+    kind,
+    wired: connectedOf(deps.store, me.id),
+    canvas: ownCanvas(deps, me.id)
+  })
+  if (hit) {
+    if (hit.wire) wire(deps, me, hit.node.id, via)
+    return hit.node
+  }
+  // Reboot fallback: a teammate the workspace files lost but the durable
+  // registry still tracks as active (agent-registry-spawn-broadca).
+  if (kind === 'terminal') {
+    const entry = deps.agents
+      .list()
+      .find((e) => e.active && e.name.toLowerCase() === name.toLowerCase())
+    if (entry) return terminalFromRegistry(entry)
+  }
+  throw new Error(
+    `${label} '${name}' not found in your workspace or among your connections. Run 'cookrew list --canvas'.`
+  )
+}
+
+/** The caller's own canvas, or null when it may only reach what it is wired to. */
+function ownCanvas(
+  deps: SocketServerDeps,
+  selfId: string
+): { workspaceId: string; nodes: readonly CanvasNode[] } | null {
+  if (deps.isServed(selfId)) return null
+  const workspaceId = deps.store.ownerOf(selfId)
+  if (workspaceId === undefined) return null
+  return { workspaceId, nodes: deps.store.workspaceState(workspaceId).nodes }
+}
+
+/** Lay the cable an inquiry made, attributed to the asker and the verb. */
+function wire(deps: SocketServerDeps, me: TerminalNodeData, otherId: string, via: string): void {
+  deps.store.withOpContext({ actor: me.orch ? 'orch' : 'agent', via }, () => deps.store.connectAcross(me.id, otherId))
 }
 
 /**
@@ -635,6 +695,12 @@ export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): P
   const kind = browserVerbKind(sub ?? '')
   const browser = name ? deps.store.nodeByName(name, 'browser') : undefined
   if (kind && browser) {
+    // Driving or reading a page of your own canvas wires you to it. Checked
+    // in memory first: this runs on every click of a browser session.
+    const ownCanvasIsActive = deps.store.ownerOf(me.id) === deps.store.focusedId
+    if (ownCanvasIsActive && !deps.isServed(me.id) && !deps.store.isConnected(me.id, browser.id)) {
+      wire(deps, me, browser.id, `browser ${sub}`)
+    }
     deps.signal?.(kind === 'write' ? { from: me.id, to: browser.id, kind } : { from: browser.id, to: me.id, kind })
   }
   return result
@@ -696,7 +762,12 @@ export function cmdList(request: CliRequest, deps: SocketServerDeps): string {
   const wiredIds = new Set(connected.map((h) => h.node.id))
   const unwired = canvas.filter((n) => n.id !== me.id && !wiredIds.has(n.id))
   if (unwired.length > 0) {
-    lines.push('', `${unwired.length} more card${unwired.length === 1 ? '' : 's'} on this canvas ${unwired.length === 1 ? 'is' : 'are'} not wired to you — \`cookrew list --canvas\` lists every card and who it is wired to.`)
+    const count = `${unwired.length} more card${unwired.length === 1 ? '' : 's'} on this canvas ${unwired.length === 1 ? 'is' : 'are'} not wired to you`
+    // Askable by name unless the caller is served (ask-reach.ts).
+    const reach = deps.isServed(me.id)
+      ? ''
+      : ' yet; you can ask, read or drive any of them by name, and that wires you to it'
+    lines.push('', `${count}${reach} — \`cookrew list --canvas\` lists every card and who it is wired to.`)
   }
   return lines.join('\n')
 }
@@ -753,7 +824,7 @@ function cmdListAll(deps: SocketServerDeps): string {
 async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const [name, prompt] = request.args
   if (!name) throw new Error('Usage: cookrew ask "Agent Name" "prompt" | cookrew ask "Agent" --raw "bytes"')
-  const target = findConnected(request, deps, name, 'terminal') as TerminalNodeData
+  const target = reachCard(request, deps, name, 'terminal', 'ask') as TerminalNodeData
   let session = deps.ptys.get(target.id)
   if (!session) {
     // Cross-workspace / after reboot: the tmux session may be alive with its
@@ -773,7 +844,7 @@ async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<stri
   }
   if (!prompt) throw new Error('Missing prompt')
   // The asking pane, for the cable between the two. Already resolved once by
-  // findConnected; resolving is cheap and the id is what the canvas needs.
+  // reachCard; resolving is cheap and the id is what the canvas needs.
   const me = self(request, deps)
   // No armed-dispatch check here, on purpose (Sol r5 P0-1): a route-level
   // refusal would only be a fast path with a check-to-submit race behind it.
@@ -927,7 +998,7 @@ function cmdDispatch(request: CliRequest, deps: SocketServerDeps): string {
 function cmdCheck(request: CliRequest, deps: SocketServerDeps): string {
   const [name] = request.args
   if (!name) throw new Error('Usage: cookrew check "Agent Name"')
-  const target = findConnected(request, deps, name, 'terminal') as TerminalNodeData
+  const target = reachCard(request, deps, name, 'terminal', 'check') as TerminalNodeData
   let session = deps.ptys.get(target.id)
   if (!session) {
     // Cross-workspace / after reboot: the tmux session may be alive with its
@@ -1012,7 +1083,7 @@ export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
       return `Created note "${note.name}"`
     }
     case 'read': {
-      const note = findConnected(request, deps, rest[0], 'note') as NoteNodeData
+      const note = reachCard(request, deps, rest[0], 'note', 'note read') as NoteNodeData
       // Reading takes the note's words out: the pulse runs note → agent.
       deps.signal?.({ from: note.id, to: me.id, kind: noteVerbKind('read') ?? 'read' })
       const lines = note.content.split('\n')
@@ -1023,7 +1094,7 @@ export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
       return [`[${lines.length} lines total]`, ...numbered].join('\n')
     }
     case 'write': {
-      const note = findConnected(request, deps, rest[0], 'note') as NoteNodeData
+      const note = reachCard(request, deps, rest[0], 'note', 'note write') as NoteNodeData
       if (note.locked) throw new Error(`Note '${note.name}' is locked`)
       deps.store.writeNote(note.id, rest[1] ?? '')
       // Writing puts words in: agent → note.
@@ -1031,7 +1102,7 @@ export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
       return 'OK'
     }
     case 'edit': {
-      const note = findConnected(request, deps, rest[0], 'note') as NoteNodeData
+      const note = reachCard(request, deps, rest[0], 'note', 'note edit') as NoteNodeData
       if (note.locked) throw new Error(`Note '${note.name}' is locked`)
       const [, oldText, newText] = rest
       if (oldText === undefined || newText === undefined) {
@@ -1519,7 +1590,9 @@ const HELP_TEXT = `Cookrew — an open-source spatial workspace for AI agents.
 
 Usage:
   cookrew list                                  List connected agents, notes, and browsers
-  cookrew ask "Agent" "prompt"                  Send a prompt to a connected agent, wait for the reply
+  cookrew ask "Agent" "prompt"                  Send a prompt to any agent in your workspace, wait for the reply
+                                                (asking, checking, reading a note or driving a browser by name
+                                                wires you to it if you were not already)
   cookrew ask "Agent" --raw "bytes"             Send raw input (\\n Enter, \\t Tab, \\e ESC, \\xNN byte)
   cookrew check "Agent"                         Read the agent's current terminal output
   cookrew ask "Agent" "prompt" --no-wait        Dispatch without blocking; prints a dispatchId
@@ -1531,7 +1604,7 @@ Usage:
   cookrew note read "Name" [offset] [limit]     Read a note with line numbers
   cookrew note write "Name" "content"           Replace a note's content
   cookrew note edit "Name" "old" "new"          Replace a substring within a note
-  cookrew note delete "Name"                    Remove a connected note (destructive)
+  cookrew note delete "Name"                    Remove a note wired to you (destructive)
   cookrew secret exec <name> -- <command…>      Run a command with the secret as COOKREW_SECRET_<NAME> in its environment
                                                 (its children inherit it; nothing is printed — the better of the two paths)
   cookrew secret read <name>                    Print a sealed secret — into the pane and its transcript; prefer exec
