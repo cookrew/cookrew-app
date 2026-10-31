@@ -48,12 +48,13 @@ export const moodOf = (row: AgentRow, now: number): PetMood | null => {
 
 export const pickPets = (
   rows: readonly AgentRow[],
-  options: { readonly workspaceId: string | null; readonly now: number; readonly max?: number }
+  options: { readonly now: number; readonly max?: number }
 ): PetTroop => {
   const max = options.max ?? PET_MAX
-  // The loaded workspace only: its agents are the ones a prompt can reach and
-  // the live tracker knows about.
-  const here = rows.filter((row) => row.active && (options.workspaceId === null || row.workspaceId === options.workspaceId))
+  // THE crew (agent-rows.ts · crewOf): every agent the crew view draws, so the
+  // troop and the crew agree on how many there are. None is left out here; an
+  // inactive one rides asleep, as the crew draws it offline.
+  const here = rows
   const awake = here
     .flatMap((row): Pet[] => {
       const mood = moodOf(row, options.now)

@@ -47,7 +47,7 @@ describe('who rides along', () => {
   it('whoever needs you first, then whoever is working, then what finished lately', () => {
     const troop = pickPets(
       [row('done', 'done', 60_000), row('work', 'working', 5_000), row('need', 'waiting', 90_000), row('need2', 'waiting', 1_000)],
-      { workspaceId: 'ws', now: NOW }
+      { now: NOW }
     )
     expect(ids(troop.pets)).toEqual(['need2', 'need', 'work', 'done'])
     expect(troop.pets.map((pet) => pet.mood)).toEqual(['needs', 'needs', 'working', 'done'])
@@ -61,29 +61,31 @@ describe('who rides along', () => {
 
   it('puts the rest behind the +N coin, in the same order', () => {
     const rows = Array.from({ length: PET_MAX + 3 }, (_, n) => row(`w${n}`, 'working', n * 1000))
-    const troop = pickPets(rows, { workspaceId: 'ws', now: NOW })
+    const troop = pickPets(rows, { now: NOW })
     expect(troop.pets).toHaveLength(PET_MAX)
     expect(ids(troop.more)).toEqual([`w${PET_MAX}`, `w${PET_MAX + 1}`, `w${PET_MAX + 2}`])
   })
 
   it('never leaves a quiet workspace without a troop: the latest sit in, asleep', () => {
-    const troop = pickPets([row('old', 'done', 3 * 3600_000), row('older', 'quiet', 9 * 3600_000), row('oldest', 'offline', 99 * 3600_000), row('x', 'quiet', 999 * 3600_000)], {
-      workspaceId: 'ws',
-      now: NOW
-    })
+    const troop = pickPets([row('old', 'done', 3 * 3600_000), row('older', 'quiet', 9 * 3600_000), row('oldest', 'offline', 99 * 3600_000), row('x', 'quiet', 999 * 3600_000)], { now: NOW })
     expect(ids(troop.pets)).toEqual(['old', 'older', 'oldest'])
     expect(troop.pets.every((pet) => pet.mood === 'asleep')).toBe(true)
     expect(troop.pets).toHaveLength(PET_MIN)
     expect(ids(troop.more)).toEqual(['x'])
   })
 
-  it('only the loaded workspace: its agents are the ones a prompt reaches', () => {
-    const troop = pickPets([row('here', 'working', 1), row('there', 'waiting', 1, { workspaceId: 'other' })], { workspaceId: 'ws', now: NOW })
-    expect(ids([...troop.pets, ...troop.more])).toEqual(['here'])
+  // THE CREW (owner, 2026-11-01): the group and the crew view disagreed on how
+  // many agents there were. The group drops nobody now: an inactive agent rides
+  // asleep, as the crew view draws it offline.
+  it('keeps every agent of the crew, so its count is the crew view\'s', () => {
+    const crew = [row('a', 'working', 1), row('b', 'offline', 9, { active: false }), row('c', 'quiet', 99), row('d', 'done', 3 * 3600_000)]
+    const troop = pickPets(crew, { now: NOW, max: 2 })
+    expect(troop.pets.length + troop.more.length).toBe(crew.length)
+    expect([...troop.pets, ...troop.more].find((pet) => pet.row.id === 'b')?.mood).toBe('asleep')
   })
 
   it('no agents, no troop', () => {
-    expect(pickPets([], { workspaceId: 'ws', now: NOW }).pets).toEqual([])
+    expect(pickPets([], { now: NOW }).pets).toEqual([])
   })
 })
 
@@ -210,7 +212,7 @@ describe('the wiring', () => {
   const css = readFileSync('src/renderer/src/pets/pets.css', 'utf8')
 
   it('both troops ride over every page: mounted in App, portalled to the body, under the scrims', () => {
-    expect(app).toMatch(/<AgentPets\s+workspace=\{workspace\}\s+workspaceId=\{activeWsId\}\s+onOpen=\{zoomToNode\}\s+onCard=\{openAgentCard\}/)
+    expect(app).toMatch(/<AgentPets\s+crew=\{crew\}\s+attachIndex=\{attachIndex\}\s+onOpen=\{zoomToNode\}/)
     // In a full view both attach to its panel (pet-dock.ts).
     expect(app).toContain("dock={view === 'stage' && zoomFull !== null ? fullDock.agents : null}")
     expect(app).toContain("dock={view === 'stage' && zoomFull !== null ? fullDock.items : null}")
@@ -219,9 +221,9 @@ describe('the wiring', () => {
     expect(css).toMatch(/\.cr-pets \{[^}]*z-index: 55;/)
   })
 
-  it("the card's prompt (the zoom card's, the one instance) is the voice bar's two writes", () => {
-    const parts = readFileSync('src/renderer/src/zoom/ZoomParts.tsx', 'utf8')
-    expect(parts).toMatch(/ptyInput\(agent\.id, text\)\s+cookrew\(\)\.ptyInput\(agent\.id, '\\r'\)/)
+  it("the card's reply box (one copy, quick-reply.tsx) is the voice bar's two writes", () => {
+    const parts = readFileSync('src/renderer/src/zoom/quick-reply.tsx', 'utf8')
+    expect(parts).toMatch(/ptyInput\(agentId, text\)\s+cookrew\(\)\.ptyInput\(agentId, '\\r'\)/)
   })
 
   it('reads no tail and no board of its own: the pets only pick faces, the card is the view\'s', () => {

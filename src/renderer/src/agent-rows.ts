@@ -7,6 +7,7 @@ import {
 import type { ActivityClock } from './activity-clock'
 import type { AgentRegistryEntry } from './agent-registry'
 import type { TerminalActivity } from '../../shared/turn'
+import type { CanvasNode, TerminalNodeData } from '../../shared/model'
 
 /**
  * Rows for the agents sidebar: the durable roster (who exists, everywhere)
@@ -239,4 +240,49 @@ export function buildAgentRows(input: AgentRowsInput): AgentRows {
     )
 
   return { live, quiet, workspaces }
+}
+
+/** A terminal card the roster has no row for yet: a quiet row, so it is still counted and drawn. */
+export function quietRowOf(t: TerminalNodeData, workspace: { readonly id: string; readonly name: string }): AgentRow {
+  return {
+    id: t.id,
+    name: t.name,
+    preset: t.preset,
+    role: t.role ?? null,
+    orch: t.orch === true,
+    active: true,
+    workspaceId: workspace.id,
+    workspaceName: workspace.name,
+    cwd: t.cwd,
+    spawnedAt: 0,
+    phase: 'quiet',
+    turn: null,
+    turnCount: 0,
+    brief: t.brief ?? null,
+    lastActivityAt: 0
+  }
+}
+
+/**
+ * THE CREW OF THE OPEN WORKSPACE, ONE LIST FOR EVERY VIEW OF IT (owner,
+ * 2026-11-01: the agent group and the crew view disagreed on who was in it,
+ * how many, and in what state). One row per terminal card, in card order:
+ * its roster row when there is one (phase, turn, unread, as useCrewRows reads
+ * them, with the last checkpoint behind them), a quiet row when there is not.
+ * The card's own name, harness and lead flag win, as the crew view draws them.
+ * The zoom view (zoom-model.ts), the stage and the agent group read this.
+ */
+export function crewOf(
+  nodes: readonly CanvasNode[],
+  rows: readonly AgentRow[],
+  workspace: { readonly id: string; readonly name: string }
+): AgentRow[] {
+  const rowOf = new Map(rows.map((r) => [r.id, r]))
+  const out: AgentRow[] = []
+  for (const n of nodes) {
+    if (n.kind !== 'terminal') continue
+    const row = rowOf.get(n.id)
+    out.push(row ? { ...row, name: n.name, preset: n.preset, orch: n.orch === true, brief: row.brief ?? n.brief ?? null } : quietRowOf(n, workspace))
+  }
+  return out
 }

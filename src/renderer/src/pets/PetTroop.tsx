@@ -96,7 +96,6 @@ export function PetTroop({
   cardClass,
   cardLabel = () => '',
   renderCard,
-  onCard,
   dockable = false
 }: {
   side: 'left' | 'right'
@@ -110,13 +109,8 @@ export function PetTroop({
   onShown?: (ids: readonly string[]) => void
   cardClass?: (id: string) => string
   cardLabel?: (id: string) => string
-  /** The troop's own card for a face; absent when the card lives elsewhere (onCard). */
+  /** The troop's own card for a face. */
   renderCard?: (id: string, controls: CardControls) => React.ReactNode
-  /**
-   * A face's card is not the troop's to draw: a click hands it here (the
-   * agents: the zoom view opens ITS card, the one instance, zoom-store · openCard).
-   */
-  onCard?: (id: string) => void
   /** A full view is up: the troop may attach to its panel (pet-dock.ts). */
   dockable?: boolean
 }): React.JSX.Element | null {
@@ -241,12 +235,32 @@ export function PetTroop({
   // measured only when the troop attaches or lets go — read here, while the
   // page still shows them where they were — never on every render.
   const glideFrom = useRef<Map<string, DOMRect> | null>(null)
+  /** Where a face that was not in the column comes from: the panel's agent mark (the demo's F.avatar). */
+  const enterFrom = useRef<DOMRect | null>(null)
   const wasDocked = useRef(docked)
-  if (wasDocked.current !== docked) {
-    wasDocked.current = docked
+  const wasShown = useRef(shownKey)
+  const measureFaces = (): Map<string, DOMRect> => {
     const from = new Map<string, DOMRect>()
     for (const [id, el] of petRefs.current) from.set(id, el.getBoundingClientRect())
-    glideFrom.current = from
+    return from
+  }
+  if (wasDocked.current !== docked) {
+    wasDocked.current = docked
+    glideFrom.current = measureFaces()
+    enterFrom.current = null
+  }
+  // AND WHEN THE FULL VIEW CHANGES HANDS (group-motion-pivot.html, owner
+  // 2026-11-01): the column takes the agent that was open and gives up the one
+  // now open. Those staying glide to their new places; the one that was open
+  // comes out of the panel's agent mark into the column. The newly open one's
+  // way in is the card's own zoom into the full view (pet-zoom.ts).
+  if (wasShown.current !== shownKey) {
+    wasShown.current = shownKey
+    if (docked && !glideFrom.current) {
+      glideFrom.current = measureFaces()
+      // The agents' column only: the panel's mark is an agent's.
+      enterFrom.current = side === 'right' ? (document.querySelector(FULL_PARTS.face ?? '')?.getBoundingClientRect() ?? null) : null
+    }
   }
   useLayoutEffect(() => {
     const from = glideFrom.current
@@ -257,14 +271,21 @@ export function PetTroop({
       const was = from.get(id)
       const now = el.getBoundingClientRect()
       if (!was) {
-        el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: DOCK_MS / 2, easing: 'ease-out' })
+        const mark = enterFrom.current
+        if (mark && mark.width > 0 && now.width > 0) {
+          const dx = mark.left + mark.width / 2 - (now.left + now.width / 2)
+          const dy = mark.top + mark.height / 2 - (now.top + now.height / 2)
+          const k = mark.width / now.width
+          el.animate([{ transform: `translate(${dx}px, ${dy}px) scale(${k})`, opacity: 0.4 }, { transform: 'none', opacity: 1 }], { duration: DOCK_MS, easing: MORPH_EASE })
+        } else el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: DOCK_MS / 2, easing: 'ease-out' })
         continue
       }
       const dx = was.left - now.left
       const dy = was.top - now.top
       if (Math.abs(dx) + Math.abs(dy) > 1) el.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], { duration: DOCK_MS, easing: MORPH_EASE })
     }
-  }, [docked, dockAt])
+    enterFrom.current = null
+  }, [docked, dockAt, shownKey])
 
   useEffect(() => {
     if (!openId) return
@@ -352,11 +373,6 @@ export function PetTroop({
     if (tucked) {
       setTucked(false)
       store(tuckedKey, '0')
-      return
-    }
-    // The card lives elsewhere: hand the click over, draw nothing here.
-    if (onCard) {
-      onCard(id)
       return
     }
     // Once: its card. Again, on the same face: in full. Each step is a

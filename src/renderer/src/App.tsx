@@ -120,6 +120,7 @@ import {
 import { CableHarness } from './CableHarness'
 import { ownersOf, stageSelect, useStageSelection } from './stage/stage-select'
 import { AgentPets } from './pets/AgentPets'
+import { useCrew } from './stage/crew-rows'
 import { ItemPets } from './pets/ItemPets'
 import { thumbWants } from './pets/thumb-wants'
 import { ZoomView } from './zoom/ZoomView'
@@ -825,15 +826,6 @@ function Canvas(): React.JSX.Element {
   }, [closeCommand])
 
   // Open a card: on the stage, wherever it was asked for from.
-  // An agent's CARD, asked for by a pet: the zoom view's own card, the one
-  // instance (zoom-store · openCard); the stage picks the agent too, so its
-  // card's face opens the right full view.
-  const openAgentCard = useCallback((id: string) => {
-    stageSelect.set({ kind: 'agent', id })
-    zoomStore.openCard(id)
-    if (viewRef.current !== 'stage') setView('stage')
-  }, [])
-
   const zoomToNode = useCallback(
     (
       id: string,
@@ -1441,6 +1433,10 @@ function Canvas(): React.JSX.Element {
   // Each terminal's wired browsers and notes, for its zoomed card. Kept the
   // same object while nothing a card shows changes (sameAttachmentIndex):
   // the workspace object itself changes on every tick and drag.
+  // THE CREW, READ ONCE (stage/crew-rows.ts · useCrew): the zoom view, the
+  // stage and the agent group all draw this one list, so they agree on who is
+  // in it, how many, and in what state.
+  const crew = useCrew(workspace, activeWsId)
   const attachIndexRef = useRef<AttachmentIndex>(new Map())
   const attachIndex = useMemo(() => {
     const next = attachmentIndex(workspace?.nodes ?? [], workspace?.connections ?? [])
@@ -1546,8 +1542,8 @@ function Canvas(): React.JSX.Element {
           {view === 'stage' && (
             <Suspense fallback={null}>
               <TerminalAttachmentsContext.Provider value={attachIndex}>
-                <ZoomView workspace={workspace} workspaceId={activeWsId} attachIndex={attachIndex} onDelete={requestClose}>
-                  {zoomFull !== null && <StageView workspace={workspace} workspaceId={activeWsId} terminals={terminals} attachIndex={attachIndex} onShowing={setStageShowing} />}
+                <ZoomView workspace={workspace} workspaceId={activeWsId} attachIndex={attachIndex} crew={crew} onDelete={requestClose}>
+                  {zoomFull !== null && <StageView workspace={workspace} workspaceId={activeWsId} terminals={terminals} attachIndex={attachIndex} crew={crew} onShowing={setStageShowing} />}
                 </ZoomView>
               </TerminalAttachmentsContext.Provider>
             </Suspense>
@@ -1714,10 +1710,9 @@ function Canvas(): React.JSX.Element {
             full view only — the navigator draws the crew everywhere else. */}
         {(zoomFull !== null || view !== 'stage') && (
           <AgentPets
-            workspace={workspace}
-            workspaceId={activeWsId}
+            crew={crew}
+            attachIndex={attachIndex}
             onOpen={zoomToNode}
-            onCard={openAgentCard}
             // In a full view both groups attach to its panel (pets/pet-dock.ts),
             // as group-motion-pivot.html draws them.
             dock={view === 'stage' && zoomFull !== null ? fullDock.agents : null}
