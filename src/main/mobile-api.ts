@@ -1559,7 +1559,12 @@ export async function handleMobileApi(
       const onData = (data: string): void => send("data", data);
       // Geometry changed: the server re-serialized at the new size. Applying
       // it verbatim is what keeps this viewer's addressing valid.
-      const onReplay = (frame: string): void => send("data", frame);
+      // The NEW size before the new frame, as on attach: another viewer resized
+      // the shared pane, and this one must not keep painting at the old size.
+      const onReplay = (frame: string): void => {
+        send("hello", { ...session.geometry(), stream: streamId, resized: true });
+        send("data", frame);
+      };
       const onExit = (): void => send("exit", {});
       session.on("data", onData);
       session.on("replay", onReplay);
