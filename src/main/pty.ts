@@ -135,13 +135,12 @@ export function buildSeededFrame(
   // What the screen already shows is cut off by its own words, and a run
   // that a resize reprinted is kept once — the later copy (seed-history.ts).
   const above = dropReprints(cutAtScreen(lines, screenText, screen.rows), screenText).map((line) => clipToCells(line, screen.cols))
-  // Each row is cut to the screen's width (a row printed before a resize can
-  // be wider), and written with line wrap OFF as a backstop: nothing spills
-  // a character or two onto a line of its own.
+  // A row printed before a resize can be wider than the screen: a border or
+  // padding past the edge is cut (clipToCells); real text wraps, whole.
   const body =
     above.length === 0
       ? CLEAR_SCREEN + serializer.serialize({ scrollback: screen.rows })
-      : LEAVE_ALTERNATE + CLEAR_SCREEN + NO_WRAP + above.join('\x1b[0m\r\n') + '\x1b[0m' + WRAP + '\r\n'.repeat(screen.rows) + '\x1b[H\x1b[2J' + screenOnNormal(serializer)
+      : LEAVE_ALTERNATE + CLEAR_SCREEN + WRAP + above.join('\x1b[0m\r\n') + '\x1b[0m' + '\r\n'.repeat(screen.rows) + '\x1b[H\x1b[2J' + screenOnNormal(serializer)
   return body + modeReplay(screen.modes) + seedMarker(nonce)
 }
 
@@ -151,7 +150,6 @@ export function buildSeededFrame(
  * it off: the history would be written into a screen that cannot keep it.
  */
 const LEAVE_ALTERNATE = '\x1b[?1049l'
-const NO_WRAP = '\x1b[?7l'
 const WRAP = '\x1b[?7h'
 
 /** What serialize() puts after the switch when the alternate screen is active. */

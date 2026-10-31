@@ -29,7 +29,7 @@ export const textKey = (line: string): string =>
   stripAnsi(line).replace(/[\s ─-╿︎️]/g, '')
 
 /** A repeat must run this long (in key characters) to count as a reprint, not a phrase said twice. */
-export const REPRINT_MIN = 400
+export const REPRINT_MIN = 100
 const GRAM = 32
 
 /**
@@ -132,13 +132,16 @@ export function cellWidth(code: number): number {
 }
 
 /**
- * An ANSI line cut to `cols` cells, its escapes kept: a row printed before a
- * resize, wider than the viewer, ends at the edge instead of wrapping one or
- * two characters onto a line of their own. A wide character that would
- * straddle the edge is left out.
+ * An ANSI line cut to `cols` cells, its escapes kept — but ONLY when what
+ * hangs past the edge is spaces or box lines (a border or padding printed at
+ * a wider width): that is cut instead of wrapping onto a line of its own.
+ * When real text hangs past the edge the line is returned whole and wraps,
+ * because cutting it loses words (measured: a paragraph printed at 198
+ * columns lost two thirds of itself at 49).
  */
 export function clipToCells(line: string, cols: number): string {
   let out = ''
+  let over = ''
   let used = 0
   let i = 0
   while (i < line.length) {
@@ -153,7 +156,8 @@ export function clipToCells(line: string, cols: number): string {
     const ch = String.fromCodePoint(code)
     const w = cellWidth(code)
     if (used + w > cols) {
-      // Past the edge: keep only escapes from here on (colour resets).
+      // Past the edge: escapes are kept (colour resets), the text is weighed.
+      over += ch
       i += ch.length
       continue
     }
@@ -161,5 +165,5 @@ export function clipToCells(line: string, cols: number): string {
     used += w
     i += ch.length
   }
-  return out
+  return /^[\s ─-╿]*$/.test(over) ? out : line
 }
