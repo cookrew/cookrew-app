@@ -82,6 +82,7 @@ describe('the dock offers SOUS on the phone', () => {
     orch: false,
     onOrch: () => undefined,
     connectHint: null,
+    onMake: () => undefined,
     voiceFor: null,
     browserFor: null,
     boardFor: null

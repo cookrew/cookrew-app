@@ -126,6 +126,7 @@ import { thumbWants } from './pets/thumb-wants'
 import { ZoomView } from './zoom/ZoomView'
 import { useZoomFull } from './zoom/zoom-store'
 import { zoomStore } from './zoom/zoom-store'
+import { importTeam, makeAgent, makeItem, type Made } from './zoom/make-card'
 import { attachView } from './attach-view'
 import type { StageShowing } from './stage/StageView'
 
@@ -362,7 +363,6 @@ function Canvas(): React.JSX.Element {
   const jumpRef = useRef<JumpController<Node> | null>(null)
   const knownWsIdRef = useRef<string | null>(null)
   const reactFlow = useReactFlow()
-  const { screenToFlowPosition } = reactFlow
   const browsersRef = useRef<BrowserNodeData[]>([])
   const draggingRef = useRef(false)
   /** Viewport before the last zoomToNode, so ⤢ CANVAS can return to it. */
@@ -975,6 +975,10 @@ function Canvas(): React.JSX.Element {
     onError: (message) => setSousReply({ text: message, refused: true })
   })
 
+  /** The dock is making a card (zoom/make-card.ts), and why the last one failed. */
+  const [making, setMaking] = useState(false)
+  const [makeError, setMakeError] = useState<string | null>(null)
+  const makingRef = useRef(false)
   /**
    * Dock tool selection. There is no MOVE button — the resting hand is what
    * every tool falls back to: re-clicking the active tool stands it down,
@@ -984,6 +988,24 @@ function Canvas(): React.JSX.Element {
   const selectTool = useCallback((next: ToolId) => {
     setTool((prev) => (prev === next ? 'move' : next))
     setClipping(false)
+    setMakeError(null)
+  }, [])
+  /**
+   * The dock MAKES, it no longer places (the canvas is retired): a chip or
+   * NOTE / BROWSER makes its card at once in the active workspace, through
+   * the crew seat's own path (zoom/make-card.ts). One at a time, so a double
+   * press makes one card.
+   */
+  const make = useCallback(async (run: () => Promise<Made>) => {
+    if (makingRef.current) return
+    makingRef.current = true
+    setMaking(true)
+    setMakeError(null)
+    const made = await run()
+    makingRef.current = false
+    setMaking(false)
+    if (made.ok) setTool('move')
+    else setMakeError(made.error)
   }, [])
   /** The clipboard toggle: arming it stands any placement tool down. */
   const toggleClipping = useCallback(() => {
@@ -1318,76 +1340,6 @@ function Canvas(): React.JSX.Element {
     [tool, connectFrom]
   )
 
-  const onPaneClick = useCallback(
-    async (event: React.MouseEvent) => {
-      const position = screenToFlowPosition({ x: event.clientX, y: event.clientY })
-      if (tool === 'terminal') {
-        // A SAVED TEMPLATE placed as a preset IMPORTS a session: a new
-        // workspace forked from the template — team, worktree, workdir —
-        // switched to. Not a terminal on this canvas, so it returns before
-        // createTerminal. The click that "placed" it is the confirm.
-        if (!role && templates.includes(preset)) {
-          try {
-            await cookrew().templateImport(preset, position)
-          } catch (error) {
-            console.error('Importing template failed:', error)
-          } finally {
-            setTool('move')
-          }
-          return
-        }
-        // window.prompt is unsupported in Electron — creation uses the
-        // preset (or saved-role) chips in the dock; a role boots its preset
-        // with the role prompt injected once the TUI is quiet (roleName path).
-        const selectedRole = role ? roles.find((r) => r.name === role) : undefined
-        const created = await cookrew().createTerminal(
-          selectedRole
-            ? { name: selectedRole.name, preset: selectedRole.preset, roleName: selectedRole.name, position, orch }
-            : { name: preset, preset, position, orch }
-        )
-        setTool('move')
-        // A new code agent zooms straight into its live terminal so the
-        // first prompt can be typed immediately; plain shells stay as
-        // overview cards.
-        if (created.kind === 'terminal' && created.preset !== 'Shell') {
-          zoomToNode(created.id, { ...created.position, ...created.size })
-        }
-      } else if (tool === 'note') {
-        const note: CanvasNode = {
-          kind: 'note',
-          id: crypto.randomUUID(),
-          name: 'untitled',
-          customName: null,
-          content: '',
-          locked: false,
-          position,
-          size: { width: 280, height: 220 }
-        }
-        await cookrew().addNode(note)
-        setTool('move')
-      } else if (tool === 'browser') {
-        const browser: CanvasNode = {
-          kind: 'browser',
-          id: crypto.randomUUID(),
-          name: 'Browser',
-          url: 'https://example.com',
-          position,
-          size: { width: 720, height: 560 }
-        }
-        await cookrew().addNode(browser)
-        setTool('move')
-      } else {
-        // A pane click while clipping clears the pick — the canvas-wide
-        // "click again to cancel". Arming no tool just stands connect down.
-        if (clipping) setPicked((prev) => (prev.size === 0 ? prev : new Set()))
-        setConnectFrom(null)
-      }
-    },
-    // templates is CONSULTED above; leaving it out freezes the closure and a
-    // template placement falls through to plain terminal creation.
-    [tool, preset, role, roles, orch, clipping, templates, screenToFlowPosition, zoomToNode]
-  )
-
   // STABLE, on purpose. React Flow hands these three straight to every
   // NodeWrapper as props, and NodeWrapper is memo'd on them: an inline arrow
   // here is a new identity per Canvas render, which re-rendered EVERY mounted
@@ -1583,12 +1535,26 @@ function Canvas(): React.JSX.Element {
           onPreset={(name) => {
             setPreset(name)
             setRole(null)
+            // A saved team opens a session of its own; a harness joins this crew.
+            void make(() =>
+              templates.includes(name)
+                ? importTeam(cookrew(), name)
+                : makeAgent(cookrew(), { name, preset: name, orch }, workspace?.nodes ?? [])
+            )
           }}
           roles={roles}
           role={role}
           onRole={(name) => {
             setRole(name)
+            const chosen = roles.find((r) => r.name === name)
+            if (!chosen) return
+            void make(() =>
+              makeAgent(cookrew(), { name: chosen.name, preset: chosen.preset, roleName: chosen.name, orch }, workspace?.nodes ?? [])
+            )
           }}
+          onMake={(kind) => void make(() => makeItem(cookrew(), kind, workspace?.nodes ?? []))}
+          making={making}
+          makeError={makeError}
           onImportServed={() => setImportServedOpen(true)}
           onSous={isRemoteMode() ? openCommand : undefined}
           orch={orch}
@@ -1685,8 +1651,7 @@ function Canvas(): React.JSX.Element {
           error={newestError(routeState.error, setupTerminal.error)}
           onAddToDock={(harness) => {
             // "In the dock" as Cookrew can make it true today: the harness
-            // becomes the dock's active preset, so the next click on the
-            // canvas places it.
+            // becomes the dock's active preset, its chip lit in the row.
             setPreset(harness.name)
             setRole(null)
             setRoutingOpen(false)

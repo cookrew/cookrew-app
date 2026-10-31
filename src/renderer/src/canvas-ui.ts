@@ -13,6 +13,15 @@ import type { JumpOutcome } from './cross-workspace-jump'
 export type ToolId = 'move' | 'terminal' | 'note' | 'browser' | 'connect'
 
 /**
+ * THE CANVAS IS RETIRED (owner, 2026-10-30): it is not rendered, and the zoom
+ * view is the app's only view. CONNECT and the clipboard toggle act on canvas
+ * cards alone, so the dock does not show them while this holds; TERMINAL,
+ * NOTE and BROWSER make their card at once instead of waiting for a click on
+ * a canvas (zoom/make-card.ts).
+ */
+export const CANVAS_RETIRED = true
+
+/**
  * Canvas-wide UI state shared with node components: the active tool (so
  * cards don't hijack clicks while connecting), the clipboard toggle, and the
  * semantic-zoom navigation. Clicking a card zooms the viewport until the card
