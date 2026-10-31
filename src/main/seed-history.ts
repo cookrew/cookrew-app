@@ -167,3 +167,85 @@ export function clipToCells(line: string, cols: number): string {
   }
   return /^[\s ─-╿]*$/.test(over) ? out : line
 }
+
+/**
+ * WHOLE MESSAGES, KEPT ONCE (owner's recording, 2026-10-31: scrolling LIVE
+ * back showed the same answer four times).
+ *
+ * dropReprints matches long runs of identical text, and a reprint is not
+ * always identical: when Claude Code redraws at another width, rows it did not
+ * repaint keep cells from the old screen (measured on a live pane: a copy of a
+ * reply with a row of an earlier diff in the middle of it). The run breaks at
+ * that row and every older copy survived.
+ *
+ * What does survive a redraw intact is the HEAD of each message: `⏺` a reply
+ * or a tool call, `❯` a prompt, `✻ … · done 2:05 PM` the end of a turn. So the
+ * history is cut into messages at their heads and read from the newest end;
+ * a message whose head appears again later is an older copy and goes, with
+ * its body, garbage and all. Heads match on their first words (sameHead), so
+ * a head narrow-wrapped at another width, or with old cells past its end,
+ * still matches.
+ *
+ * Heads that legitimately repeat — a tool call run twice, a prompt like
+ * "merge" — are WEAK: they never drop anything by themselves, and go only
+ * inside a copy, when the strong head they follow (a reply, a prompt, a done
+ * line) went too.
+ */
+const HEAD = /^\s{0,1}([⏺●❯]|[✻✳✢✶✽*]\s.*·\s*done\s+\d)/
+const TOOL_HEAD = /^[⏺●]\s*[A-Z][\w-]*\(/
+/** Key characters a head needs to identify a message on its own. */
+export const STRONG_HEAD_MIN = 12
+
+const headOf = (line: string): string | null => {
+  const text = stripAnsi(line)
+  return HEAD.test(text) ? text : null
+}
+
+/**
+ * Two heads are one message when they agree as far as both go, up to this
+ * many key characters: a copy can be narrow-wrapped shorter, or carry an old
+ * row's cells past its end, and still be the same message.
+ */
+export const HEAD_MATCH = 48
+const sameHead = (a: string, b: string): boolean => {
+  const n = Math.min(a.length, b.length, HEAD_MATCH)
+  return n >= STRONG_HEAD_MIN && a.slice(0, n) === b.slice(0, n)
+}
+
+export function dropReprintedMessages(lines: readonly string[], trailing: readonly string[] = []): string[] {
+  // Each message: its first line, its head's key, and whether that key can identify it alone.
+  const starts: { at: number; key: string; strong: boolean }[] = []
+  lines.forEach((line, at) => {
+    const head = headOf(line)
+    if (head === null) return
+    const key = textKey(head)
+    starts.push({ at, key, strong: key.length >= STRONG_HEAD_MIN && !TOOL_HEAD.test(head.trimStart()) })
+  })
+  if (starts.length === 0) return [...lines]
+  // The screen holds the newest copy of what it shows.
+  const seen: string[] = trailing.flatMap((line) => {
+    const head = headOf(line)
+    const key = head === null ? '' : textKey(head)
+    return key.length >= STRONG_HEAD_MIN ? [key] : []
+  })
+  const dropMessage = new Array<boolean>(starts.length).fill(false)
+  for (let m = starts.length - 1; m >= 0; m--) {
+    const { key, strong } = starts[m]
+    if (!strong) continue
+    if (seen.some((later) => sameHead(key, later))) dropMessage[m] = true
+    else seen.push(key)
+  }
+  // A weak message goes with the strong one it follows.
+  let lastStrongDropped = false
+  for (let m = 0; m < starts.length; m++) {
+    if (starts[m].strong) lastStrongDropped = dropMessage[m]
+    else dropMessage[m] = lastStrongDropped
+  }
+  const drop = new Array<boolean>(lines.length).fill(false)
+  starts.forEach((start, m) => {
+    if (!dropMessage[m]) return
+    const end = m + 1 < starts.length ? starts[m + 1].at : lines.length
+    for (let j = start.at; j < end; j++) drop[j] = true
+  })
+  return lines.filter((_, j) => !drop[j])
+}
