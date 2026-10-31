@@ -20,9 +20,9 @@ export interface Motion {
 
 export const PROMO = {
   label:
-    'Thirty-five seconds of the running app: out to the machines, into one workspace whose fourteen agents are tied by ink cables, one agent\u2019s card, its whole transcript, and back out — one click each',
+    'Thirty-six seconds of the running app: out to the machines, into one workspace whose sixteen agents are tied by ink cables, one agent\u2019s card, its whole transcript, and back out — one click each',
   caption:
-    'Thirty-five seconds of the running app, recorded on 1 November 2026. A click on the empty paper steps out to the machines — this Mac, its seven workspaces on the screen; a click on it comes back in; a click on Cookrew Dev raises its fourteen agents tied by ink cables; Lark opens as a card, then as its whole transcript, and Esc and a click on the paper step back out. Lark, Finch and Moss were set a small TypeScript package for the shoot and did the work themselves; the rest are the owner\u2019s own crew.'
+    'Thirty-six seconds of the running app, recorded on 1 November 2026. A click on the empty paper steps out to the machines — this Mac, its seven workspaces on the screen; a click on it comes back in; a click on Cookrew Dev raises its sixteen agents tied by ink cables; Lark opens as a card, then as its whole transcript, and Esc and a click on the paper step back out. Lark, Finch and Moss were set a small TypeScript package for the shoot and did the work themselves; the rest are the owner\u2019s own crew.'
 }
 
 export const MOTION: readonly Motion[] = [
@@ -42,7 +42,7 @@ export const MOTION: readonly Motion[] = [
     step: 'CREW',
     title: 'One workspace, its crew',
     caption:
-      'Clicked Cookrew Dev: its fourteen agents rose out of the mark as ensō faces, the cables between them drawn as ink strokes, each one’s state — working, done, offline — under its name.'
+      'Clicked Cookrew Dev: its sixteen agents rose out of the mark as ensō faces, the cables between them drawn as ink strokes, each one’s state — working, done, offline — under its name.'
   },
   {
     file: 'motion-card',
