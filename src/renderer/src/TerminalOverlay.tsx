@@ -39,6 +39,7 @@ import { AgentAvatar, StatusCoin } from './nodes/AgentAvatar'
 import { TranscriptFaceContext } from './transcript-face'
 import { useTranscriptLook, type TranscriptLook } from './transcript-look'
 import { installLocalScroll, type LocalScroll } from './live-scroll'
+import { createCurtain, domCurtainDeps, subRowShift } from './live-curtain'
 import { closeZoomMenu, tuneSummary, useZoomSlots } from './zoom-bar'
 import { TuneMenu } from './nodes/TuneMenu'
 import { useAgentTuning } from './nodes/use-agent-tuning'
@@ -674,6 +675,19 @@ function TerminalOverlay({
       // phone-crash hunt, 2026-08-27 — the mount burst was 4–13 identical
       // resizes, each reflowing the desktop viewer too).
       let lastSent: { cols: number; rows: number } | null = null
+      /**
+       * The pane's size as this viewer last knew it — what it sent, or what the
+       * pane reported. A resize to the size the pane already has is not free:
+       * herdr answers EVERY resize with a full replay (`\e[2J\e[3J…`), which
+       * repaints every viewer and wipes the history the live view scrolls
+       * (live-scroll.ts). Measured on the phone page, 2026-10-31: the refit
+       * observer re-sent the size the mount kick had just set, once per open.
+       */
+      let paneSize: { cols: number; rows: number } | null = null
+      const sendSize = (cols: number, rows: number): void => {
+        paneSize = { cols, rows }
+        cookrew().ptyResize(node.id, cols, rows)
+      }
       const fitUntilStable = (attempt = 0): void => {
         if (disposed) return
         try {
@@ -681,7 +695,7 @@ function TerminalOverlay({
             fit.fit()
             if (lastSent?.cols !== term.cols || lastSent?.rows !== term.rows) {
               lastSent = { cols: term.cols, rows: term.rows }
-              cookrew().ptyResize(node.id, term.cols, term.rows)
+              sendSize(term.cols, term.rows)
             }
           }
         } catch {
@@ -724,10 +738,10 @@ function TerminalOverlay({
       const repaintKick = (): void => {
         if (disposed || term.cols < 21) return
         lastKickAt = Date.now()
-        cookrew().ptyResize(node.id, term.cols - 1, term.rows)
+        sendSize(term.cols - 1, term.rows)
         if (settleTimer) clearTimeout(settleTimer)
         settleTimer = setTimeout(() => {
-          if (!disposed) cookrew().ptyResize(node.id, term.cols, term.rows)
+          if (!disposed) sendSize(term.cols, term.rows)
         }, 60)
       }
       /**
@@ -755,6 +769,15 @@ function TerminalOverlay({
         history: () => activityRef.current?.scrollBase ?? null
       })
       localScrollRef.current = localScroll
+      // Full repaints (a replay, the history seed) land under a copy of the
+      // painted rows, so the reader never sees one half-parsed (live-curtain.ts).
+      const curtain = createCurtain(
+        domCurtainDeps(
+          () => term.element?.querySelector('.xterm-screen') ?? null,
+          () => term.options.theme?.background ?? PAPER_THEME.background
+        )
+      )
+      cleanups.push(() => curtain.dispose())
       cleanups.push(() => {
         localScroll.dispose()
         if (localScrollRef.current === localScroll) localScrollRef.current = null
@@ -762,10 +785,11 @@ function TerminalOverlay({
       const detach = cookrew().ptyAttach(
         node.id,
         (chunk) => {
-          if (localScroll.admit(chunk)) term.write(detoxify(chunk))
+          if (localScroll.admit(chunk)) curtain.write(detoxify(chunk), (c, done) => term.write(c, done))
         },
         ({ cols, rows }) => {
           if (disposed || cols <= 0 || rows <= 0) return
+          paneSize = { cols, rows }
           term.resize(cols, rows)
           if (helloSeen && Date.now() - lastKickAt > 2000) {
             if (rekickTimer) clearTimeout(rekickTimer)
@@ -779,7 +803,7 @@ function TerminalOverlay({
             try {
               fit.fit()
               if (term.cols !== cols || term.rows !== rows) {
-                cookrew().ptyResize(node.id, term.cols, term.rows)
+                sendSize(term.cols, term.rows)
               }
             } catch {
               // container may be mid-teardown
@@ -851,10 +875,32 @@ function TerminalOverlay({
       const trackingEl = (): Element | null =>
         container.querySelector('.xterm.enable-mouse-events')
 
+      /**
+       * THE ROWS FOLLOW THE FINGER (owner, 2026-10-31: "swiping live is not as
+       * smooth as chat"). A swipe moves the scrollback a whole row at a time;
+       * between two steps the screen is shifted by the pixels left over, so it
+       * moves with the finger and the next step lands where the shift had
+       * brought it. Only while the live view scrolls its OWN history — a wheel
+       * that goes to the pane cannot be followed. The row height is the one
+       * live-scroll.ts divides by, or the two disagree and a row is skipped.
+       */
+      const screenEl = (): HTMLElement | null => term.element?.querySelector<HTMLElement>('.xterm-screen') ?? null
+      const rowHeight = (): number => {
+        const h = screenEl()?.getBoundingClientRect().height ?? 0
+        return h > 0 ? Math.max(8, h / Math.max(1, term.rows)) : Math.max(12, container.clientHeight / Math.max(term.rows, 1))
+      }
+      const localHistory = (): boolean =>
+        lookRef.current === 'live' && term.buffer.active.type === 'normal' && term.buffer.active.baseY > 0
+      const shiftRows = (px: number, settle = false): void => {
+        const el = screenEl()
+        if (!el) return
+        el.style.transition = settle ? 'transform 140ms ease-out' : 'none'
+        el.style.transform = px === 0 ? '' : `translateY(${px}px)`
+      }
       const emitScroll = (px: number): void => {
         const target = trackingEl()
         if (!target || !lastTouch) return
-        const rowPx = Math.max(12, container.clientHeight / Math.max(term.rows, 1))
+        const rowPx = rowHeight()
         carry += px
         while (Math.abs(carry) >= rowPx) {
           const sign = carry > 0 ? 1 : -1
@@ -870,6 +916,12 @@ function TerminalOverlay({
           )
           carry -= sign * rowPx
         }
+        const buf = term.buffer.active
+        shiftRows(
+          localHistory()
+            ? subRowShift({ carry, rowPx, atTop: buf.viewportY <= 0, atBottom: buf.viewportY >= buf.baseY })
+            : 0
+        )
       }
 
       const stopGlide = (): void => {
@@ -879,7 +931,12 @@ function TerminalOverlay({
 
       const onTouchStart = (e: TouchEvent): void => {
         stopGlide()
-        carry = 0
+        // A finger landing mid-fling keeps the rows where they are: the shift
+        // and its remainder carry on under the new drag instead of snapping.
+        if (!localHistory()) {
+          carry = 0
+          shiftRows(0)
+        }
         if (e.touches.length === 1) {
           touchY = e.touches[0].clientY
           history = [{ t: performance.now(), y: touchY }]
@@ -904,13 +961,18 @@ function TerminalOverlay({
       const onTouchEnd = (): void => {
         const wasTracking = touchY !== null
         touchY = null
-        if (!wasTracking || history.length < 2) return
+        if (!wasTracking) return
+        const settle = (): void => {
+          carry = 0
+          shiftRows(0, true)
+        }
+        if (history.length < 2) return settle()
         const newest = history[history.length - 1]
         const oldest = history[0]
         const span = newest.t - oldest.t
-        if (span <= 0) return
+        if (span <= 0) return settle()
         const velocity = (oldest.y - newest.y) / span
-        if (Math.abs(velocity) < 0.25) return
+        if (Math.abs(velocity) < 0.25) return settle()
         glideV = Math.max(-3, Math.min(3, velocity))
         let lastFrame = performance.now()
         const frame = (now: number): void => {
@@ -919,12 +981,15 @@ function TerminalOverlay({
           emitScroll(glideV * dt)
           glideV *= Math.pow(0.92, dt / 16.7)
           glideRaf = Math.abs(glideV) > 0.04 ? requestAnimationFrame(frame) : 0
+          if (glideRaf === 0) settle()
         }
         glideRaf = requestAnimationFrame(frame)
       }
       const onTouchCancel = (): void => {
         touchY = null
         history = []
+        carry = 0
+        shiftRows(0, true)
       }
       container.addEventListener('touchstart', onTouchStart, { passive: true })
       container.addEventListener('touchmove', onTouchMove, { passive: false })
@@ -947,7 +1012,7 @@ function TerminalOverlay({
         refitTimer = setTimeout(() => {
           try {
             fit.fit()
-            cookrew().ptyResize(node.id, term.cols, term.rows)
+            if (paneSize?.cols !== term.cols || paneSize?.rows !== term.rows) sendSize(term.cols, term.rows)
           } catch {
             // container may be mid-teardown
           }
