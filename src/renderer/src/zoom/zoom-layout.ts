@@ -139,8 +139,17 @@ function phoneShelf(agents: readonly CrewAgent[], rows: number, rowH: number, bo
   return { shelf, shelfY, box: { w: 400, h: gridH + 520 + (bottomY - shelfY), cy: (shelfY - 80 + gridH + 160) / 2 } }
 }
 
-/** The device: a mark per workspace, the open one where its slot is. */
-export function deviceOf(ids: readonly string[], narrow: boolean): { at: Record<string, Pos>; box: Box; labelY: number; dx: number } {
+/** How far a mark's tile (its wash, zoom-frame.ts · SWS) reaches above its centre on the device. */
+const TILE_TOP = 100
+/**
+ * Room kept over the first row for the machine's name and hint, which grow to
+ * be read and wrap (zoom-frame.ts · deviceWords): on a phone up to four lines
+ * at ~1.7x (Gauge, 2026-11-01: the hint's second line ran into the first tile).
+ */
+const TITLE_ROOM = { wide: 100, narrow: 180 }
+
+/** The device: a mark per workspace, the open one where its slot is; its title ends `titleBottom`, clear of the first row's tiles. */
+export function deviceOf(ids: readonly string[], narrow: boolean): { at: Record<string, Pos>; box: Box; titleBottom: number; dx: number } {
   const cols = narrow ? 2 : 3
   const dx = narrow ? 260 : 330
   const dy = narrow ? 260 : 320
@@ -151,8 +160,10 @@ export function deviceOf(ids: readonly string[], narrow: boolean): { at: Record<
     const inRow = Math.min(cols, ids.length - row * cols)
     at[id] = { x: ((g % cols) - (inRow - 1) / 2) * dx, y: (row - (rows - 1) / 2) * dy }
   })
-  const h = rows * dy + 120
-  return { at, box: { w: Math.max(cols, Math.min(cols, ids.length)) * dx + 120, h, cy: -20 }, labelY: -((rows - 1) / 2) * dy - 200, dx }
+  const titleBottom = -((rows - 1) / 2) * dy - TILE_TOP - 14
+  const bottom = -20 + (rows * dy + 120) / 2
+  const top = Math.min(-20 - (rows * dy + 120) / 2, titleBottom - (narrow ? TITLE_ROOM.narrow : TITLE_ROOM.wide))
+  return { at, box: { w: Math.max(cols, Math.min(cols, ids.length)) * dx + 120, h: bottom - top, cy: (top + bottom) / 2 }, titleBottom, dx }
 }
 
 /** The account's other machines: a row (wrapping) under this Mac's screen, inside the devices camera. */

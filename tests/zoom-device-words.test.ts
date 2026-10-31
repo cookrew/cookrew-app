@@ -70,7 +70,7 @@ describe('the device stop on a phone', () => {
     expect(css).toMatch(/\.zv-device-label \{[^}]*flex-wrap: wrap;[^}]*width: max-content;[^}]*transform-origin: 0 0;/)
     expect(css).toMatch(/\.zv-device-label small \{[^}]*white-space: normal;/)
     const view = readFileSync('src/renderer/src/zoom/ZoomView.tsx', 'utf8')
-    expect(view).toContain('scale(${words.titleK.toFixed(4)})`, maxWidth: Math.round(words.titleMax)')
+    expect(view).toContain('scale(${words.titleK.toFixed(4)}) translateY(-100%)`, maxWidth: Math.round(words.titleMax)')
     expect(view).toContain("label.style.maxWidth = `${Math.round(words.markMax)}px`")
   })
 })
