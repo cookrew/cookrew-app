@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { cookrew } from '../api'
 import { useThumb } from '../activity-thumb-store'
 import { InkAvatar, InkRing } from './InkAvatar'
+import { inkStatusOfRow } from './ink-status'
 import { AgentLatest } from './AgentLatest'
 import './agent-card.css'
 import type { AgentView, ItemView, MarkView, MachineView } from './zoom-model'
@@ -155,7 +156,7 @@ export function AgentNode({ agent, bind, onOpen }: { agent: AgentView; bind: Bin
   return (
     <div ref={bind(`agent:${agent.id}`)} className={`zv-m ${agent.phase}`}>
       <div ref={bind(`agent-av:${agent.id}`)} className="zv-av" title={`${agent.name} · ${agent.word}`} {...press(onOpen, `${agent.name}, ${agent.word}`)}>
-        <InkAvatar id={agent.id} preset={agent.preset} orch={agent.orch} />
+        <InkAvatar id={agent.id} preset={agent.preset} orch={agent.orch} status={inkStatusOfRow(agent.phase, agent.unread)} weight="large" />
       </div>
       <div ref={bind(`agent-nm:${agent.id}`)} className="zv-nm" {...press(onOpen, `${agent.name}, ${agent.word}`)}>
         {agent.name}

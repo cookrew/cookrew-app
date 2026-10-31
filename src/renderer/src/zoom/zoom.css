@@ -149,6 +149,67 @@
   opacity: 0.82;
 }
 
+/* ── an agent's status in ink (InkAvatar status, ink-status.ts) ──
+   Red rides the ensō: working laps a third of a turn, waiting closes the ring
+   and blinks it with the harness mark (red too), done ticks the shoulder in
+   red, offline fades the ink under an ink z. Motion is a rotation and an
+   opacity only; idle, done and offline stand still. */
+.ink-avatar :is(.ink-zhu, .ink-glyph) {
+  --zv-ink-status: var(--sumi-wait, #c0392b);
+}
+
+.ink-avatar .ink-zhu,
+.ink-avatar.waiting .ink-glyph {
+  --zv-ink: var(--zv-ink-status);
+}
+
+.ink-avatar .ink-lap {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ink-lap 1.8s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+}
+
+.ink-avatar.waiting :is(.ink-zhu, .ink-glyph) {
+  animation: ink-blink 1.2s ease-in-out infinite;
+}
+
+.ink-avatar .ink-corner {
+  animation: ink-in 0.4s ease-out both;
+}
+
+.ink-avatar.offline .ink-own {
+  opacity: 0.34;
+}
+
+.ink-avatar.offline .ink-corner {
+  opacity: 0.8;
+}
+
+@keyframes ink-lap {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes ink-blink {
+  50% {
+    opacity: 0.2;
+  }
+}
+
+@keyframes ink-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ink-avatar :is(.ink-lap, .ink-zhu, .ink-glyph, .ink-corner),
+  .ink-avatar.waiting :is(.ink-zhu, .ink-glyph) {
+    animation: none;
+  }
+}
+
 .ink-tie .ink-bristle {
   stroke-width: 0.3;
 }
@@ -573,10 +634,6 @@
   height: 64px;
 }
 
-/* Offline: the ink goes pale (the avatar's own opacity is the painter's). */
-.zv-m.offline .zv-av .ink-avatar {
-  opacity: 0.4;
-}
 
 .zv-nm,
 .zv-st,

@@ -3,6 +3,7 @@ import { NodeHandles } from './NodeHandles'
 import { CardPick } from './CardPick'
 import { CardClose } from './CardClose'
 import { AgentAvatar, StatusCoin } from './AgentAvatar'
+import { inkStatusOfTurn } from '../zoom/ink-status'
 import { CardCallerAvatars } from './CallerAvatars'
 import { GitChip } from '../GitChip'
 import { CrIcon } from '../icons'
@@ -97,7 +98,7 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
         <NodeHandles />
         <CardPick id={node.id} />
         <div className="vi-mini node-header">
-          <StatusCoin phase={phase} preset={node.preset} />
+          <StatusCoin phase={phase} preset={node.preset} id={node.id} />
           {/* THE TILE IS THE CARD, most of the time.
               This view was left out of the first cut on the reasoning that it
               names no harness, so a tag had nothing to sit beside. True, and
@@ -164,7 +165,7 @@ export function TerminalNode({ data, selected }: NodeProps): React.JSX.Element {
       {/* Header always names the agent (vibe-island session-card scheme).
           The coin avatar IS the status indicator — no second status coin. */}
       <div className="node-header vi-head">
-        <AgentAvatar phase={phase} preset={node.preset} />
+        <AgentAvatar id={node.id} orch={node.orch === true} status={inkStatusOfTurn(phase)} preset={node.preset} />
         <div className="vi-title" title={node.name}>
           {node.name}
           {node.brief && (

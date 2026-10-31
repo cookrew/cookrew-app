@@ -4,10 +4,10 @@ import { useActivitiesSnapshot } from '../activity-thumb-store'
 import { useRoster } from '../agent-registry'
 import { buildAgentRows, type AgentRow } from '../agent-rows'
 import { AgentAvatar } from '../nodes/AgentAvatar'
+import { inkStatusOfRow } from '../zoom/ink-status'
 import { InkAvatar } from '../zoom/InkAvatar'
 import { useStreamTails } from '../stream/use-stream-tails'
 import { checkpointViewModel, isEmptyTurnView } from '../turn-view-model'
-import type { TurnPhase } from '../../../shared/turn'
 import type { WorkspaceState } from '../../../shared/model'
 import { petMax, pickPets, type Pet, type PetMood } from './pet-pick'
 import { useOfToolLine, type ToolUse } from '../../../shared/use-signal'
@@ -34,7 +34,6 @@ import '../zoom/agent-card.css'
 const SENT_MS = 4000
 const TICK_MS = 30_000
 
-const AVATAR: Record<PetMood, TurnPhase> = { needs: 'waiting', working: 'thinking', done: 'replied', asleep: 'idle' }
 const MOOD_WORD: Record<PetMood, string> = { needs: 'needs you', working: 'working', done: 'done', asleep: 'resting' }
 
 /**
@@ -109,8 +108,7 @@ export function AgentPets({
       face: (
         <>
           {/* The navigator's ink face, so the side group and the full view are one family. */}
-          <InkAvatar id={pet.row.id} preset={pet.row.preset} orch={pet.row.orch} />
-          {pet.mood === 'asleep' && <span className="cr-pet-z" aria-hidden="true">z</span>}
+          <InkAvatar id={pet.row.id} preset={pet.row.preset} orch={pet.row.orch} status={inkStatusOfRow(pet.row.phase, pet.row.unread)} />
           {use && (
             <span className="cr-pet-use" data-use={use.use} aria-hidden="true">
               {use.via}
@@ -197,7 +195,7 @@ function AgentCard({
     <>
       <div className="cr-pet-card-head">
         <span className="cr-pet-card-face">
-          <AgentAvatar phase={AVATAR[mood]} preset={row.preset} />
+          <AgentAvatar id={row.id} orch={row.orch} status={inkStatusOfRow(row.phase, row.unread)} preset={row.preset} />
         </span>
         <span className="cr-pet-card-who">
           <span className="cr-pet-card-name">{row.name}</span>
