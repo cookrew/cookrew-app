@@ -43,6 +43,7 @@ export function AgentPets({
   crew,
   attachIndex,
   onOpen,
+  onDelete,
   dock = null
 }: {
   /** THE crew, read once in App: the same list the crew view draws. */
@@ -51,6 +52,8 @@ export function AgentPets({
   attachIndex: AttachmentIndex
   /** The full view: an agent's, or a browser's or note's (App · zoomToNode). */
   onOpen: (id: string) => void
+  /** Remove an agent, the confirm dialog first (App · requestClose): the card's ×, as on the crew card. */
+  onDelete?: (id: string) => void
   /**
    * A full view is up: the troop attaches to it (pet-dock.ts), without the
    * agent the panel shows, the agents its browser or note is wired to first.
@@ -108,7 +111,14 @@ export function AgentPets({
             agent={agentViewOf(pet.row, attachIndex)}
             items={items}
             onOpen={controls.open}
-            onClose={controls.close}
+            onDelete={
+              onDelete
+                ? () => {
+                    controls.close()
+                    onDelete(id)
+                  }
+                : undefined
+            }
             onDraft={controls.draft}
             onItem={(itemId) => {
               controls.close()
