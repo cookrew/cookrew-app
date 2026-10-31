@@ -6,9 +6,15 @@ import { stageSelect } from '../stage/stage-select'
 import { createRestFlag } from './zoom-rest'
 
 /** The compositor-facing part of the navigator. React builds nodes; this owns the moving values. */
-export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null, root: React.RefObject<HTMLDivElement>) {
-  const m = useRef({ model, collect })
-  m.current = { model, collect }
+/** The crew's scroll on a narrow screen: the view owns it (a drag, the wheel), the painter clamps it. */
+export interface ZoomPan {
+  get: () => number
+  setMax: (max: number) => void
+}
+
+export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null, root: React.RefObject<HTMLDivElement>, pan?: ZoomPan) {
+  const m = useRef({ model, collect, pan })
+  m.current = { model, collect, pan }
   const moving = useRef({ v: zoomStore.get().v, dir: zoomStore.get().dir, leaving: null as string | null, amount: 0, pending: null as { id: string; full: boolean } | null })
   const kick = useRef<() => void>(() => undefined)
   const snapTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -96,7 +102,8 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
       } else if (lastSelection.current !== null) {
         lastSelection.current = null
       }
-      const out = paint(m.current.model, layout, els, { dir: at.dir, sv: at.v, focus, leaving: at.leaving, leavingAmt: at.amount, focusItem, w, h, narrow })
+      const out = paint(m.current.model, layout, els, { dir: at.dir, sv: at.v, focus, leaving: at.leaving, leavingAmt: at.amount, focusItem, w, h, narrow, pan: m.current.pan?.get() ?? 0 })
+      m.current.pan?.setMax(out.panMax)
       // The real view fades in under the shell as the shell's own cover goes.
       env.style.setProperty('--zv-full-opacity', String(1 - out.cover))
       env.style.setProperty('--zv-cover', String(out.cover))

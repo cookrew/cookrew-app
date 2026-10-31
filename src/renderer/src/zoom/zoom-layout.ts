@@ -51,7 +51,8 @@ export const crewOrder = (agents: readonly CrewAgent[]): CrewAgent[] => [...agen
 
 /** The crew: orchestrators in a row on top, everyone else in rows under them. */
 export function crewOf(agents: readonly CrewAgent[], narrow: boolean): { at: Record<string, Pos>; next: Pos; box: Box } {
-  const cols = narrow ? 3 : 5
+  // Two on a phone: three at 200px apart drew every face at 0.4 (owner, 2026-11-01).
+  const cols = narrow ? 2 : 5
   const leads = agents.filter((a) => a.orch)
   const rest = agents.filter((a) => !a.orch)
   const rows: CrewAgent[][] = []

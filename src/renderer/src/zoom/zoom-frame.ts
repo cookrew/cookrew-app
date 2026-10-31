@@ -97,12 +97,16 @@ export interface FrameState {
   w: number
   h: number
   narrow: boolean
+  /** How far the crew is scrolled down on a narrow screen, in px (phoneCamera clamps it). */
+  pan?: number
 }
 
 /** What the view reports after a frame: how opaque it still is (it hands over to the real full view), and the scene's scale. */
 export interface FrameOut {
   cover: number
   scale: number
+  /** How far the crew can scroll on a narrow screen, in px: 0 when it fits. */
+  panMax: number
 }
 
 const f1 = (n: number): string => n.toFixed(1)
@@ -164,6 +168,59 @@ export function layoutOf(model: FrameModel, narrow: boolean): Layout {
   }
 }
 
+/** A face's reach around its anchor: its labels below, its coins to the right (zoom.css). */
+const FACE_REACH = { left: 100, right: 110, top: 56, bottom: 116 }
+/** The open card around its agent's anchor (zoom.css · .zv-card: 260 × 244 from −34, −34). */
+const CARD_RECT = { x: -34, y: -34, w: 260, h: 244 }
+const PHONE_MARGIN = 12
+
+export interface Camera {
+  S: number
+  Ox: number
+  Oy: number
+  panMax: number
+}
+
+/**
+ * THE CAMERA ON A PHONE (owner, 2026-11-01: "too small"). The desktop camera
+ * fits the crew's whole box, room for coins and a card to the right included,
+ * into the window; on a 412px phone that drew every face at 0.4. Here:
+ *   crew  the crew's own width fills the screen (at most 1:1), and a crew taller
+ *         than the screen scrolls (`pan`, from the top), instead of shrinking;
+ *   card  the open card itself fills the screen, at most 1:1.
+ * Between the group and the crew, and the crew and the card, the camera moves
+ * with the zoom value, as the desktop's does.
+ */
+export function phoneCamera(L: Layout, z: number, focus: string | null, w: number, h: number, pan: number): Camera {
+  const spots = [...Object.values(L.crew.at), L.crew.next]
+  const minX = Math.min(...spots.map((p) => p.x)) - FACE_REACH.left
+  const maxX = Math.max(...spots.map((p) => p.x)) + FACE_REACH.right
+  const minY = Math.min(...spots.map((p) => p.y)) - FACE_REACH.top
+  const maxY = Math.max(...spots.map((p) => p.y)) + FACE_REACH.bottom
+  const S1 = Math.min(1, (w - PHONE_MARGIN * 2) / (maxX - minX))
+  const panMax = Math.max(0, (maxY - minY) * S1 - (h - PHONE_MARGIN * 2))
+  const p = Math.min(Math.max(pan, 0), panMax)
+  const crew = {
+    S: S1,
+    Ox: w / 2 - ((minX + maxX) / 2) * S1,
+    Oy: panMax > 0 ? PHONE_MARGIN - minY * S1 - p : h / 2 - ((minY + maxY) / 2) * S1
+  }
+  const lerpCam = (a: { S: number; Ox: number; Oy: number }, b: { S: number; Ox: number; Oy: number }, t: number) => ({
+    S: Math.exp(lerp(Math.log(a.S), Math.log(b.S), t)),
+    Ox: lerp(a.Ox, b.Ox, t),
+    Oy: lerp(a.Oy, b.Oy, t)
+  })
+  if (z <= 1) {
+    const S0 = fitScale(GROUP_BOX, w, h)
+    return { ...lerpCam({ S: S0, Ox: w / 2, Oy: h / 2 - GROUP_BOX.cy * S0 }, crew, ease(clamp01(z))), panMax }
+  }
+  const at = (focus && L.crew.at[focus]) || { x: 0, y: 0 }
+  const cx = at.x + CARD_RECT.x + CARD_RECT.w / 2
+  const cy = at.y + CARD_RECT.y + CARD_RECT.h / 2
+  const S2 = Math.min(1, (w - PHONE_MARGIN * 2) / CARD_RECT.w, (h - PHONE_MARGIN * 2) / CARD_RECT.h)
+  return { ...lerpCam(crew, { S: S2, Ox: w / 2 - cx * S2, Oy: h / 2 - cy * S2 }, ease(clamp01(z - 1))), panMax }
+}
+
 /** The camera box at agent zoom z ≥ 0. */
 function boxAt(L: Layout, z: number): Box {
   const mix = (a: Box, b: Box, t: number): Box => ({ w: lerp(a.w, b.w, t), h: lerp(a.h, b.h, t), cy: lerp(a.cy, b.cy, t) })
@@ -184,6 +241,14 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
   let aS = fit(bA)
   let aOx = w / 2
   let aOy = h / 2 - bA.cy * aS
+  let panMax = 0
+  if (st.narrow) {
+    const cam = phoneCamera(L, z, st.focus, w, h, st.pan ?? 0)
+    aS = cam.S
+    aOx = cam.Ox
+    aOy = cam.Oy
+    panMax = cam.panMax
+  }
   const slot: Pos = L.device.at[model.active] ?? { x: 0, y: 0 }
   const camD = fit(L.device.box)
   let dS: number
@@ -429,5 +494,5 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     put(els.panel, `translate(${f1(tx)}px, ${f1(ty)}px) scale(${f4(sw)}, ${f4(shh)})`, (els.panel._o ?? 0) > 0 ? els.panel._o : 0)
   }
   const cover = st.dir === 'agents' ? 1 - ramp(z, 2.86, 2.99) : 1 - ramp(I, 0.86, 0.99)
-  return { cover, scale: S }
+  return { cover, scale: S, panMax }
 }
