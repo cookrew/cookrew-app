@@ -23,3 +23,12 @@ describe('a terminal that mounts', () => {
     expect(overlay).toContain('if (helloSeen && owns() && Date.now() - lastKickAt > 2000)')
   })
 })
+
+describe('the window starts listening for clicks at app start', () => {
+  it('so the click that opens the first terminal after a load counts', () => {
+    const main = readFileSync(path.join(__dirname, '..', 'src/renderer/src', 'main.tsx'), 'utf8')
+    const at = main.indexOf('watchUserInput()\n')
+    expect(at).toBeGreaterThan(0)
+    expect(at).toBeLessThan(main.indexOf('ReactDOM.createRoot('))
+  })
+})
