@@ -2,7 +2,7 @@
 // latest checkpoint — from the board's own sources (RosterPanel.tsx), so an
 // avatar's bubble says exactly what its board card said.
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useActivitiesSnapshot } from '../activity-thumb-store'
+import { useActivitiesEvery } from '../activity-thumb-store'
 import { advanceClock, type ActivityClock } from '../activity-clock'
 import { useRoster } from '../agent-registry'
 import { buildAgentRows, checkpointWanted, crewOf, type AgentRow } from '../agent-rows'
@@ -11,6 +11,11 @@ import type { WorkspaceState } from '../../../shared/model'
 
 /** One clock for every relative label on the stage. */
 const TICK_MS = 30_000
+/**
+ * The crew is read at the top of the app, so its activity is coalesced: at
+ * most one update this often (activity-thumb-store.ts · useActivitiesEvery).
+ */
+export const CREW_ACTIVITY_MS = 300
 
 export interface CrewRows {
   live: AgentRow[]
@@ -20,7 +25,7 @@ export interface CrewRows {
 
 export function useCrewRows(workspace: WorkspaceState | null): CrewRows {
   const roster = useRoster()
-  const activities = useActivitiesSnapshot()
+  const activities = useActivitiesEvery(CREW_ACTIVITY_MS)
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), TICK_MS)
