@@ -782,17 +782,25 @@ function TerminalOverlay({
       // screenshot, 2026-10-31).
       const detoxify = (raw: string): string =>
         isRemoteMode() ? raw.replace(/\u23FA/g, '\u25CF').replace(/[\u23E9-\u23F9]/g, (m) => `${m}\uFE0E`) : raw
-      /** SIGWINCH: make the TUI repaint its real screen at this size. */
+      /**
+       * SIGWINCH: make the TUI repaint its real screen at this size. Wider
+       * first, then back: Claude Code redraws everything only when the
+       * terminal gets NARROWER, and a last step that widened would leave the
+       * host's reflow on screen, rows that were exactly full joined to the
+       * next (main/pty.ts · PtySession.resize). Back within the 300 ms the
+       * ownership check waits, so the passing size is not taken as another
+       * viewer's.
+       */
       let settleTimer: ReturnType<typeof setTimeout> | null = null
       let lastKickAt = 0
       const repaintKick = (): void => {
         if (disposed || term.cols < 21) return
         lastKickAt = Date.now()
-        sendSize(term.cols - 1, term.rows, true)
+        sendSize(term.cols + 1, term.rows, true)
         if (settleTimer) clearTimeout(settleTimer)
         settleTimer = setTimeout(() => {
           if (!disposed) sendSize(term.cols, term.rows)
-        }, 60)
+        }, 150)
       }
       /**
        * A RE-hello is a reconnect, and a reconnect may have found a mirror
