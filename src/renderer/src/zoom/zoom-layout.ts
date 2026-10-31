@@ -70,9 +70,15 @@ export function crewOf(agents: readonly CrewAgent[], narrow: boolean): { at: Rec
   // how one is made when there is no canvas to click on (owner, 2026-10-31).
   const last = rows.length - 1
   const lastRow = rows[last]
+  // On a phone a full last row sends the seat to a row of its own, under the
+  // first column: beside the row it stood in a third column, and the phone's
+  // camera, which frames every seat, drew the crew small and off-centre (Gauge,
+  // 2026-11-01: 15 agents at 0.64, centred on x=139 of 412).
   const next = lastRow.length < cols
     ? { x: (lastRow.length - (lastRow.length - 1) / 2 - 0.5) * COL, y: top + last * ROW }
-    : { x: ((lastRow.length - 1) / 2 + 1) * COL, y: top + last * ROW }
+    : narrow
+      ? { x: (-(cols - 1) / 2) * COL, y: top + (last + 1) * ROW }
+      : { x: ((lastRow.length - 1) / 2 + 1) * COL, y: top + last * ROW }
   const wideRow = Math.max(1, ...rows.map((r) => r.length)) + (lastRow.length < cols ? 1 : 0)
   // Room for the orbiting coins on the right and a card opening down and right.
   return { at, next, box: { w: Math.max(560, wideRow * COL + 360), h: Math.max(420, rows.length * ROW + 300), cy: 40 } }

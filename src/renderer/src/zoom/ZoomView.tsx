@@ -358,7 +358,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           ))}
           <button type="button" className="zv-machine" ref={bind('machine') as React.Ref<HTMLButtonElement>} onClick={() => motion.go(-1)} aria-label={`Open ${machine}`}>
             <span className="zv-machine-deck" />
-            <span className="zv-machine-label"><b>{machine}</b><small>{model.frame.workspaces.length} workspaces · {rows.length} agents</small></span>
+            <span className="zv-machine-label"><b>{machine}</b><small>{model.frame.workspaces.length} workspaces · {model.deviceAgents} agents</small></span>
           </button>
         </div>
         <div className="zv-device" ref={bind('device')}>
