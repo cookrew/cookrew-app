@@ -37,6 +37,7 @@ import {
   dedupePhantomEchoes,
   detectAgentActivity,
   isCommandPrompt,
+  isUiCommand,
   detectAttention,
   detectLiveWork,
   detectTurnEnded,
@@ -2354,6 +2355,11 @@ export class TurnTracker extends EventEmitter {
         this.schedulePush(terminalId)
         return
       }
+      // A picker or a quit is not an exchange: no turn, no working face.
+      if (isUiCommand(prompt)) {
+        this.schedulePush(terminalId)
+        return
+      }
       this.startTurn(t, prompt)
       return
     }
@@ -2834,6 +2840,20 @@ export class TurnTracker extends EventEmitter {
     this.push(t)
   }
 
+  /**
+   * A discarded turn leaves the terminal where it rested before it: the last
+   * real exchange, unread or seen. Never 'replied' over nothing — the card
+   * reads 'replied' as an unread reply and ticks it done.
+   */
+  private rest(t: TrackedTerminal): void {
+    const last = this.liveHistory(t.session.terminalId).at(-1)
+    t.prompt = last?.prompt ?? null
+    t.reply = last?.reply ?? null
+    t.title = last?.title ?? null
+    t.phase = last && last.seenAt === undefined ? 'replied' : 'idle'
+    this.push(t)
+  }
+
   private poll(t: TrackedTerminal): void {
     if (t.phase !== 'thinking') return
     const elapsed = Date.now() - t.turnStartedAt
@@ -2918,7 +2938,7 @@ export class TurnTracker extends EventEmitter {
     // otherwise finalize looking input-less and be discarded (the Codex
     // first-ask drop). sawInputThisTurn survives the resume.
     if (t.prompt === null && !t.sawInputThisTurn) {
-      this.push(t)
+      this.rest(t)
       return
     }
     // A typed slash command (/rewind, /clear …) is a UI action, not an
@@ -2926,7 +2946,10 @@ export class TurnTracker extends EventEmitter {
     // message, so a scrape checkpoint here would break the 1:1 with the
     // session list. Discard it; a real '/…' prompt is re-added on reconcile.
     if (t.prompt !== null && isCommandPrompt(t.prompt)) {
-      this.push(t)
+      // A command that ran a model turn (a skill) printed a finished-turn
+      // line: its reply is real and unread. Anything else rests.
+      if (detectTurnEnded(delta)) this.push(t)
+      else this.rest(t)
       return
     }
     // A real exchange just ended: announce how long it took (latency spec

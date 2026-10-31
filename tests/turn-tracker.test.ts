@@ -193,11 +193,12 @@ describe('TurnTracker self-healing', () => {
     vi.useFakeTimers()
     const { tracker, session } = makeTracker()
     session.emit('input', '/rewind\r')
-    expect(phaseOf(tracker)).toBe('thinking')
+    // A UI-only command opens no turn at all: no working face (status-commands.test.ts).
+    expect(phaseOf(tracker)).toBe('idle')
     session.full = 'Rewind to which checkpoint?' // the /rewind dialog output
     session.idle = 99_999
     await vi.advanceTimersByTimeAsync(3000)
-    expect(phaseOf(tracker)).toBe('replied')
+    expect(phaseOf(tracker)).toBe('idle')
     expect(tracker.history('term-1')).toHaveLength(0)
     tracker.disposeAll()
   })
@@ -250,7 +251,8 @@ describe('TurnTracker recovered turns (empty-prompt history bug)', () => {
     session.full = 'OpenAI Codex v0.144.6\nWelcome'
     session.idle = 99_999
     await vi.advanceTimersByTimeAsync(3000)
-    expect(phaseOf(tracker)).toBe('replied')
+    // Discarded, so it rests: 'replied' would read as an unread reply.
+    expect(phaseOf(tracker)).toBe('idle')
     expect(tracker.history('term-1')).toHaveLength(0)
     tracker.disposeAll()
   })
@@ -268,7 +270,7 @@ describe('TurnTracker recovered turns (empty-prompt history bug)', () => {
     session.full = 'OpenAI Codex v0.145.0\nWelcome'
     session.idle = 99_999
     await vi.advanceTimersByTimeAsync(3000)
-    expect(phaseOf(tracker)).toBe('replied')
+    expect(phaseOf(tracker)).toBe('idle')
     expect(tracker.history('term-1')).toHaveLength(0)
 
     // The ask arrives (input seen), then agent output triggers a resume that
@@ -313,7 +315,7 @@ describe('TurnTracker recovered turns (empty-prompt history bug)', () => {
     // The "turn" ends with no output beyond the snapshot — tracker noise.
     session.idle = 99_999
     await vi.advanceTimersByTimeAsync(3000)
-    expect(phaseOf(tracker)).toBe('replied')
+    expect(phaseOf(tracker)).toBe('idle')
     expect(tracker.history('term-1')).toHaveLength(0)
     tracker.disposeAll()
   })
