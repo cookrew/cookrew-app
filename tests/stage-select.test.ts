@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentRow } from '../src/renderer/src/agent-rows'
 import type { AttachmentIndex, TerminalAttachment } from '../src/renderer/src/terminal-attachments'
-import { firstLine, hostPath, ownersOf, stageLevel, stageSelect, type StageItemCard } from '../src/renderer/src/stage/stage-select'
+import { firstLine, hostPath, ownersOf, stageSelect, type StageItemCard } from '../src/renderer/src/stage/stage-select'
 
 const row = (id: string): AgentRow => ({
   id, name: id.toUpperCase(), preset: 'claude', role: null, orch: false, active: true, workspaceId: 'w', workspaceName: 'W',
@@ -24,15 +24,6 @@ describe('the wiring read both ways', () => {
     expect(owners.get('n1')).toEqual(['a', 'b'])
     expect(owners.get('n2')).toEqual(['a'])
     expect(owners.get('n3')).toBeUndefined()
-  })
-})
-
-describe('the levels', () => {
-  it('a pick lands on the workspace level, wherever the stage was', () => {
-    stageLevel.set('devices')
-    stageSelect.set({ kind: 'agent', id: 'zz' })
-    expect(stageLevel.get()).toBe('workspace')
-    stageSelect.clear()
   })
 })
 

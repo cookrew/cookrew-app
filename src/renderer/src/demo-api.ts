@@ -12,7 +12,6 @@ import { rankInbox } from '../../shared/inbox-rank'
 import { checkBrief } from '../../shared/workspace-brief'
 import type { Alternate } from '../../shared/sous-decide'
 import type { CookrewApi } from './api'
-import { demoLevelsDetail, demoLevelsSnapshot } from './levels/demo-levels'
 
 /**
  * Browser demo backend: when the renderer runs outside Electron (plain
@@ -394,16 +393,6 @@ export function createDemoApi(): CookrewApi {
       return () => ptyListeners.delete(terminalId)
     },
 
-    subscribeLevels: (cb) => {
-      let live = true
-      void demoLevelsSnapshot().then((levels) => {
-        if (live && levels) cb({ type: 'snapshot', snapshot: levels })
-      })
-      return () => {
-        live = false
-      }
-    },
-    getLevelsAgent: demoLevelsDetail,
     listActivity: () => Promise.resolve([]),
     onTerminalActivity: () => () => undefined,
     routeState: () => {

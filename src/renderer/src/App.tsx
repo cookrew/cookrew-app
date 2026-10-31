@@ -96,9 +96,7 @@ import { DoorMovedNotice } from './DoorMovedNotice'
 // Opened by a tap, never at boot: each panel is its own chunk (perf lane L7).
 const RosterPanel = lazy(() => import('./RosterPanel').then((m) => ({ default: m.RosterPanel })))
 const MetricsPanel = lazy(() => import('./MetricsPanel').then((m) => ({ default: m.MetricsPanel })))
-// The levels view is the default, but the Strata shell and its figures are their own chunk.
 const StageView = lazy(() => import('./stage/StageView').then((m) => ({ default: m.StageView })))
-const LevelsView = lazy(() => import('./levels/LevelsView').then((m) => ({ default: m.LevelsView })))
 import { GateSheet } from './GateSheet'
 import { ImportServedSheet } from './ImportServedSheet'
 import { useAccountSurface } from './account/AccountSurface'
@@ -147,9 +145,9 @@ const VISUAL_MODE_ICON: Record<CanvasVisualMode, 'canvas' | 'connect' | 'agent' 
 }
 
 /**
- * The view a window opens on: the stage, always (2026-10-30). Levels, canvas
- * and board are merged into it; the three old views are deprecated, reachable
- * from the More menu, and never remembered.
+ * The view a window opens on: the stage, always (2026-10-30). Canvas and
+ * board are merged into it; the board is deprecated, reachable from the More
+ * menu, and never remembered. The levels view is deleted (2026-10-31).
  */
 const MAIN_VIEW_KEY = 'cookrew-main-view'
 
@@ -157,8 +155,6 @@ function storedMainView(): MainView {
   return 'stage'
 }
 
-/** The canvas's terminal overlays while the levels hold the window (a stable empty list). */
-const NO_TERMINALS: TerminalNodeData[] = []
 /** The browser host's layout with the canvas retired: no card is zoomed, so no rects. */
 const NO_CANVAS_LOD: LodLayout = { activeIds: new Set(), rects: {}, primaryId: null }
 
@@ -268,11 +264,9 @@ function Canvas(): React.JSX.Element {
     try {
       window.localStorage.setItem(MAIN_VIEW_KEY, view)
     } catch {
-      // Storage blocked: the next window opens on the levels, the default.
+      // Storage blocked: the next window opens on the stage, the default.
     }
   }, [view])
-  /** The agent whose terminal the levels view has open (level 3), else null: the dock follows it. */
-  const [levelsTerminalId, setLevelsTerminalId] = useState<string | null>(null)
   /** The agent on the stage: the dock's composer and the route follow it. */
   const [stageShowing, setStageShowing] = useState<StageShowing | null>(null)
   /** Activity metrics / history panel (opened from the workspace popout). */
@@ -838,9 +832,9 @@ function Canvas(): React.JSX.Element {
     ) => {
       // A card asked for from anywhere (the pets, the command box, a toast,
       // the board) takes the stage's middle: a browser or note as itself,
-      // anything else as the agent — one from another workspace too, which
-      // the stage reads through the levels (StageTerminal). The canvas is
-      // retired (2026-10-30) and is not rendered, so there is nowhere else.
+      // anything else as the agent. One from another workspace says so on the
+      // stage (StageTerminal) until that workspace is switched to. The canvas
+      // is retired (2026-10-30) and is not rendered, so there is nowhere else.
       const asked = workspaceRef.current?.nodes.find((n) => n.id === id)
       stageSelect.set(asked?.kind === 'browser' || asked?.kind === 'note' ? { kind: 'item', id } : { kind: 'agent', id })
       if (viewRef.current !== 'stage') setView('stage')
@@ -1203,8 +1197,6 @@ function Canvas(): React.JSX.Element {
   // — so ESC always escapes, even from the mid-zoom loop above.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      // Under the levels view Esc is the levels' own "out" (strata/input/keys.ts).
-      if (viewRef.current === 'levels') return
       if (e.key === 'Escape' && (zoomedNodeIdRef.current || zoomedTerminalIdRef.current)) {
         e.preventDefault()
         zoomBack()
@@ -1530,11 +1522,6 @@ function Canvas(): React.JSX.Element {
               </TerminalAttachmentsContext.Provider>
             </Suspense>
           )}
-          {view === 'levels' && (
-            <Suspense fallback={null}>
-              <LevelsView onTerminal={setLevelsTerminalId} />
-            </Suspense>
-          )}
           {view === 'agents' && (
             <Suspense fallback={null}>
             <RosterPanel
@@ -1551,10 +1538,10 @@ function Canvas(): React.JSX.Element {
             </Suspense>
           )}
         </div>
-        {/* Under the levels view the canvas tools have no canvas in sight:
-            the dock shows only with an agent's terminal open (level 3). The
-            phone keeps it: its SOUS button is the phone's only command box. */}
-        {(view !== 'levels' || levelsTerminalId !== null || isRemoteMode()) && (view !== 'stage' || stageShowing?.terminalId != null || isRemoteMode()) && (
+        {/* On the stage the dock shows only with an agent's terminal in the
+            middle. The phone keeps it: its SOUS button is the phone's only
+            command box. */}
+        {(view !== 'stage' || stageShowing?.terminalId != null || isRemoteMode()) && (
         <Dock
           tool={tool}
           onSelect={selectTool}
@@ -1580,10 +1567,6 @@ function Canvas(): React.JSX.Element {
             view === 'stage'
               ? stageShowing?.terminalId != null
                 ? { id: stageShowing.terminalId, remote: terminals.find((t) => t.id === stageShowing.terminalId)?.servedSession != null }
-                : null
-              : view === 'levels'
-              ? levelsTerminalId !== null
-                ? { id: levelsTerminalId, remote: terminals.find((t) => t.id === levelsTerminalId)?.servedSession != null }
                 : null
               : zoomedTerminalId && terminals.some((t) => t.id === zoomedTerminalId)
               ? {

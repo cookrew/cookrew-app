@@ -1,14 +1,12 @@
 // WHERE THE STAGE IS, and what each column shows because of it.
 //
-// Four levels, one route (device / workspace / card in the header):
+// Two levels of the loaded workspace, one route (workspace / card in the header):
 //
-//   devices    — every device
-//   workspaces — every workspace of the device, as thumbnails
-//   workspace  — one workspace: all its browsers and notes, all its agents,
-//                and the newest card that needs you in the middle
+//   workspace  — all its browsers and notes, all its agents, and the newest
+//                card that needs you in the middle
 //   card       — one card zoomed in: the sides keep only what is wired to it
 //
-// The last two are the same three columns; the selection below says which.
+// Both are the same three columns; the selection below says which.
 //
 // The stage is three columns: the workspace's browsers and notes on the left,
 // the thing you are looking at in the middle, its agents on the right. The
@@ -36,33 +34,9 @@ const listeners = new Set<() => void>()
 
 const same = (a: StageSelection, b: StageSelection): boolean => a.kind === b.kind && (a.kind === 'auto' || a.id === (b as { id: string }).id)
 
-export type StageLevel = 'devices' | 'workspaces' | 'workspace'
-
-let level: StageLevel = 'workspace'
-const levelListeners = new Set<() => void>()
-
-export const stageLevel = {
-  get: (): StageLevel => level,
-  set(next: StageLevel): void {
-    if (next === level) return
-    level = next
-    for (const listener of levelListeners) listener()
-  },
-  subscribe(listener: () => void): () => void {
-    levelListeners.add(listener)
-    return () => {
-      levelListeners.delete(listener)
-    }
-  }
-}
-
-export const useStageLevel = (): StageLevel => useSyncExternalStore(stageLevel.subscribe, stageLevel.get, stageLevel.get)
-
 export const stageSelect = {
   get: (): StageSelection => selection,
   set(next: StageSelection): void {
-    // A pick is always on a workspace's columns.
-    if (next.kind !== 'auto') stageLevel.set('workspace')
     if (same(selection, next)) return
     selection = next
     for (const listener of listeners) listener()

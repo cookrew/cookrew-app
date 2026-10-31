@@ -240,7 +240,7 @@ describe('the canvas and the side columns are retired', () => {
   it('the canvas is not rendered, nor its overlay layer: it costs no CPU or GPU', () => {
     expect(app).not.toMatch(/<ReactFlow[\s>]/)
     expect(app).not.toMatch(/<LodOverlays[\s>]/)
-    expect(header).toContain("export type MainView = 'stage' | 'levels' | 'agents'")
+    expect(header).toContain("export type MainView = 'stage' | 'agents'")
   })
 
   it('every card opens on the stage, wherever it was asked for from', () => {

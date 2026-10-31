@@ -1,15 +1,13 @@
 // The stage's background when it is an agent: its terminal, full size — the
 // same TerminalOverlayLayer → TerminalOverlay the canvas zooms into, with its
-// side tabs, its lower half and its own head. An agent in another workspace
-// is read from the levels detail; the PTY attaches across workspaces.
+// side tabs, its lower half and its own head. Only the loaded workspace's
+// agents open here; another workspace's agent opens after switching to it.
 //
 // Its box is a containing block (stage.css), so the overlay's fixed position
 // counts from the box and the rect is simply the box.
 import { Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { cookrew } from '../api'
 import { attachView, useAttachView } from '../attach-view'
 import { CanvasUiContext, useCanvasUi, type CanvasUi } from '../canvas-ui'
-import { nodeOfDetail } from '../embed/embed-node'
 import type { LodLayout } from '../zoom-lod'
 import type { TerminalNodeData } from '../../../shared/model'
 import type { StageItem } from './stage-pick'
@@ -19,13 +17,11 @@ const TerminalOverlayLayer = lazy(() => import('../TerminalOverlay').then((m) =>
 const noop = (): void => undefined
 
 export function StageTerminal({
-  terminalId,
   local,
   item,
   onBack
 }: {
-  terminalId: string
-  /** The card, when it is on the loaded canvas; else it is read from the levels detail. */
+  /** The card on the loaded workspace; null when it is not there. */
   local: TerminalNodeData | null
   /** Open in the lower half once, when the stage shows this agent for it. */
   item: StageItem | null
@@ -35,9 +31,6 @@ export function StageTerminal({
   const canvas = useCanvasUi()
   const box = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState<{ w: number; h: number } | null>(null)
-  const [remote, setRemote] = useState<TerminalNodeData | null>(null)
-  const [missing, setMissing] = useState<string | null>(null)
-
   useLayoutEffect(() => {
     const el = box.current
     if (!el) return
@@ -48,31 +41,8 @@ export function StageTerminal({
     return () => ro.disconnect()
   }, [])
 
-  useEffect(() => {
-    setRemote(null)
-    setMissing(null)
-    if (local !== null) return
-    const read = cookrew().getLevelsAgent
-    if (!read) {
-      setMissing('This desktop cannot open agents from other workspaces yet.')
-      return
-    }
-    let live = true
-    void read(terminalId)
-      .then((detail) => {
-        if (!live) return
-        if (detail) setRemote(nodeOfDetail(detail))
-        else setMissing('That agent is not here any more.')
-      })
-      .catch((error) => live && setMissing(String(error?.message ?? error)))
-    return () => {
-      live = false
-    }
-  }, [terminalId, local])
-
-  const node = local ?? remote
-  // A card on this canvas closes for real (with the canvas's own confirm);
-  // one from another workspace only steps back, like the levels' terminal.
+  const node = local
+  // The card closes for real, with the canvas's own confirm.
   const ui = useMemo<CanvasUi>(
     () => ({
       ...canvas,
@@ -80,10 +50,9 @@ export function StageTerminal({
       clipping: false,
       zoomToNode: noop,
       jumpToNode: async () => 'missed',
-      zoomBack: onBack,
-      requestClose: local !== null ? canvas.requestClose : onBack
+      zoomBack: onBack
     }),
-    [canvas, onBack, local]
+    [canvas, onBack]
   )
   const lod = useMemo<LodLayout | null>(
     () =>
@@ -112,8 +81,8 @@ export function StageTerminal({
           </Suspense>
         </CanvasUiContext.Provider>
       ) : (
-        <div className="cr-stage-wait" aria-busy={missing === null}>
-          {missing ?? 'OPENING…'}
+        <div className="cr-stage-wait" aria-busy={node !== null}>
+          {node === null ? 'That agent is not in this workspace. Switch to its workspace to open it.' : 'OPENING…'}
         </div>
       )}
     </div>
