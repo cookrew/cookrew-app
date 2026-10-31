@@ -94,8 +94,9 @@ export function PetTroop({
   onOpen,
   onShown,
   cardClass,
-  cardLabel,
+  cardLabel = () => '',
   renderCard,
+  onCard,
   dockable = false
 }: {
   side: 'left' | 'right'
@@ -108,8 +109,14 @@ export function PetTroop({
   /** The faces on screen, for whoever feeds them pictures. */
   onShown?: (ids: readonly string[]) => void
   cardClass?: (id: string) => string
-  cardLabel: (id: string) => string
-  renderCard: (id: string, controls: CardControls) => React.ReactNode
+  cardLabel?: (id: string) => string
+  /** The troop's own card for a face; absent when the card lives elsewhere (onCard). */
+  renderCard?: (id: string, controls: CardControls) => React.ReactNode
+  /**
+   * A face's card is not the troop's to draw: a click hands it here (the
+   * agents: the zoom view opens ITS card, the one instance, zoom-store · openCard).
+   */
+  onCard?: (id: string) => void
   /** A full view is up: the troop may attach to its panel (pet-dock.ts). */
   dockable?: boolean
 }): React.JSX.Element | null {
@@ -347,6 +354,11 @@ export function PetTroop({
       store(tuckedKey, '0')
       return
     }
+    // The card lives elsewhere: hand the click over, draw nothing here.
+    if (onCard) {
+      onCard(id)
+      return
+    }
     // Once: its card. Again, on the same face: in full. Each step is a
     // semantic zoom (pet-zoom.ts) where the browser can draw one.
     if (petClick(openId, id) === 'full') {
@@ -500,7 +512,7 @@ export function PetTroop({
           zoomed={id === zoomedId && id === openId}
           onGone={() => setLeavingId((at) => (at === id ? null : at))}
         >
-          {renderCard(id, controls)}
+          {renderCard?.(id, controls)}
         </PetCardFrame>
       ))}
     </>,

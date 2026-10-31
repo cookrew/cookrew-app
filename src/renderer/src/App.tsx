@@ -825,6 +825,15 @@ function Canvas(): React.JSX.Element {
   }, [closeCommand])
 
   // Open a card: on the stage, wherever it was asked for from.
+  // An agent's CARD, asked for by a pet: the zoom view's own card, the one
+  // instance (zoom-store · openCard); the stage picks the agent too, so its
+  // card's face opens the right full view.
+  const openAgentCard = useCallback((id: string) => {
+    stageSelect.set({ kind: 'agent', id })
+    zoomStore.openCard(id)
+    if (viewRef.current !== 'stage') setView('stage')
+  }, [])
+
   const zoomToNode = useCallback(
     (
       id: string,
@@ -1707,8 +1716,8 @@ function Canvas(): React.JSX.Element {
           <AgentPets
             workspace={workspace}
             workspaceId={activeWsId}
-            attachIndex={attachIndex}
             onOpen={zoomToNode}
+            onCard={openAgentCard}
             // In a full view both groups attach to its panel (pets/pet-dock.ts),
             // as group-motion-pivot.html draws them.
             dock={view === 'stage' && zoomFull !== null ? fullDock.agents : null}

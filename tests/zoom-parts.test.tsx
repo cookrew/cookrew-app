@@ -58,16 +58,28 @@ describe('an agent’s card', () => {
     expect(html).toContain('<span class="ag-now done">push feat/route-core')
   })
 
-  it('is the pet card too: the same latest block, thumbnails and ink (pets/AgentPets.tsx)', () => {
+  // ONE CARD INSTANCE (owner, 2026-10-31): the pets draw no card of their own;
+  // a pet's click opens this one (zoom-store · openCard).
+  it('is the only agent card: the pets open it rather than drawing a second', () => {
     const pets = readFileSync('src/renderer/src/pets/AgentPets.tsx', 'utf8')
-    expect(pets).toContain('<AgentLatest turn={turn}')
-    expect(pets).toContain('<Page item={item} big />')
-    expect(pets).toContain('`ag-ink ag-card ${')
-    expect(pets).not.toContain('<TurnView')
+    expect(pets).not.toMatch(/function AgentCard|renderCard=|<AgentLatest|<TurnView/)
+    expect(pets).toContain('onCard={onCard}')
+    const app = readFileSync('src/renderer/src/App.tsx', 'utf8')
+    expect(app).toMatch(/const openAgentCard = useCallback\(\(id: string\) => \{[\s\S]{0,200}zoomStore\.openCard\(id\)/)
     // The zoom card grew by the two lines it now says (zoom-frame.ts · the strip and the card).
     const frame = readFileSync('src/renderer/src/zoom/zoom-frame.ts', 'utf8')
     expect(frame).toContain('y: 136 }')
     expect(frame).toContain('64 / 244')
+  })
+
+  it('draws its card parts only when it is the open card, never once per agent behind the crew', () => {
+    const closed = renderToStaticMarkup(<AgentNode agent={agent()} card={false} bind={bind} onOpen={() => undefined} />)
+    expect(closed).toContain('Forge')
+    expect(closed).not.toContain('zv-body')
+    expect(closed).not.toContain('zv-reply')
+    expect(closed).not.toContain('zv-emp')
+    const view = readFileSync('src/renderer/src/zoom/ZoomView.tsx', 'utf8')
+    expect(view).toContain('card={cardIds.has(a.id)}')
   })
 
   it('says so when an agent carries nothing, and keeps the same card shape', () => {
@@ -142,6 +154,21 @@ describe('the zoom is driven by clicks, not the wheel (owner, 2026-10-31)', () =
     expect(source).toMatch(/e\.key !== 'Escape'/)
     expect(source).toContain('motion.agent(a.id)')
     expect(source).toContain('motion.item(i.id)')
+  })
+})
+
+describe('the one card, asked for from outside the view', () => {
+  it('a pet asks once; the view takes the ask and opens that agent’s card', async () => {
+    const { zoomStore } = await import('../src/renderer/src/zoom/zoom-store')
+    zoomStore.openCard('t9')
+    const ask = zoomStore.get().cardAsk
+    expect(ask?.id).toBe('t9')
+    zoomStore.takeCardAsk(ask!.n)
+    expect(zoomStore.get().cardAsk).toBeNull()
+    // A stale take does not clear a newer ask.
+    zoomStore.openCard('t8')
+    zoomStore.takeCardAsk(ask!.n)
+    expect(zoomStore.get().cardAsk?.id).toBe('t8')
   })
 })
 

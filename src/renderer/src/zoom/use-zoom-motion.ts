@@ -166,6 +166,27 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
     go(action.v, 'agents')
   }, [go])
 
+  /**
+   * Open this agent's CARD (not its full view), from wherever the view is: the
+   * one card instance a pet asks for (zoom-store · openCard). From a full
+   * view the view comes back to the card first, as a refocus does.
+   */
+  const card = useCallback((id: string) => {
+    const s = zoomStore.get()
+    const v = moving.current.v
+    if (s.dir === 'agents' && v > 1.5 && s.agent !== id) {
+      if (v > 2.02) {
+        moving.current.pending = { id, full: false }
+        return go(2, 'agents')
+      }
+      moving.current.leaving = s.agent
+      moving.current.amount = Math.max(0, Math.min(1, v - 1))
+      moving.current.v = Math.min(v, 1)
+    }
+    zoomStore.focusAgent(id)
+    go(2, 'agents')
+  }, [go])
+
   const item = useCallback((id: string) => {
     const s = zoomStore.get()
     const action = itemClick(s.dir, moving.current.v)
@@ -175,5 +196,5 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
     if (action.kind === 'set') go(action.v, action.dir)
   }, [go])
 
-  return { go, agent, item, wake }
+  return { go, agent, card, item, wake }
 }

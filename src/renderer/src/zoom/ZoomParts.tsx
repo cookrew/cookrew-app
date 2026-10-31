@@ -27,6 +27,9 @@ const press = (onClick: () => void, label: string): React.HTMLAttributes<HTMLEle
   }
 })
 
+/** A part's first frame, before the painter's: hidden, so a card opening never flashes its parts. */
+const HIDDEN: React.CSSProperties = { opacity: 0 }
+
 export const PAGE_GLYPH = (
   <svg className="zv-glyph" viewBox="0 0 12 12" aria-hidden="true">
     <rect x="1" y="1.5" width="10" height="9" rx="1.2" />
@@ -62,7 +65,7 @@ export function Counts({ browsers, notes, none = 'nothing open' }: { browsers: n
 }
 
 /** A browser's picture: the live thumbnail when there is one, else a drawn page in its tint. */
-export function Page({ item, big = false }: { item: ItemView; big?: boolean }): React.JSX.Element {
+function Page({ item, big = false }: { item: ItemView; big?: boolean }): React.JSX.Element {
   const thumb = useThumb(item.id)
   if (item.kind === 'note') {
     return (
@@ -144,8 +147,13 @@ export function ItemNode({ item, names, bind, onClick, onDelete }: { item: ItemV
   )
 }
 
-/** One agent: its card (drawn under), its ink face, its words, and the card's quick reply. */
-export function AgentNode({ agent, bind, onOpen, onDelete }: { agent: AgentView; bind: Bind; onOpen: () => void; onDelete?: () => void }): React.JSX.Element {
+/**
+ * One agent: its ink face, name, state and counts, always (the crew draws
+ * them); and, when `card` (the open card, ZoomView · cardIds), the card's own
+ * parts: its latest, the empty strip and the quick reply. One card instance,
+ * not one per agent behind the crew; the pets open this same card.
+ */
+export function AgentNode({ agent, card = true, bind, onOpen, onDelete }: { agent: AgentView; card?: boolean; bind: Bind; onOpen: () => void; onDelete?: () => void }): React.JSX.Element {
   const [draft, setDraft] = useState('')
   const [sent, setSent] = useState<string | null>(null)
   const send = (): void => {
@@ -179,47 +187,53 @@ export function AgentNode({ agent, bind, onOpen, onDelete }: { agent: AgentView;
       <div ref={bind(`agent-cnt:${agent.id}`)} className="zv-cnt">
         <Counts browsers={agent.browsers} notes={agent.notes} />
       </div>
-      {/* Its latest turn, as the pet card says it too (AgentLatest.tsx). */}
-      <div ref={bind(`agent-body:${agent.id}`)} className="zv-body">
-        {sent !== null ? (
-          <div className="ag-latest">
-            <span className="ag-you">
-              <em>You:</em> {sent}
-            </span>
-          </div>
-        ) : (
-          <AgentLatest turn={agent.turn} fallback={agent.line} />
-        )}
-      </div>
-      {agent.browsers + agent.notes === 0 && (
-        <div ref={bind(`agent-emp:${agent.id}`)} className="zv-emp">
-          no browser or note
+      {/* The card's own parts: the open card only. Mounted hidden; the painter shows them. */}
+      {card && (
+        <>
+        {/* Its latest turn, as the pet card says it too (AgentLatest.tsx). */}
+        <div ref={bind(`agent-body:${agent.id}`)} className="zv-body" style={HIDDEN}>
+          {sent !== null ? (
+            <div className="ag-latest">
+              <span className="ag-you">
+                <em>You:</em> {sent}
+              </span>
+            </div>
+          ) : (
+            <AgentLatest turn={agent.turn} fallback={agent.line} />
+          )}
         </div>
+        {agent.browsers + agent.notes === 0 && (
+          <div ref={bind(`agent-emp:${agent.id}`)} className="zv-emp" style={HIDDEN}>
+            no browser or note
+          </div>
+        )}
+        <form
+          ref={bind(`agent-reply:${agent.id}`)}
+          className="zv-reply"
+          style={HIDDEN}
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          onSubmit={(e) => {
+            e.preventDefault()
+            send()
+          }}
+        >
+          <input
+            type="text"
+            value={draft}
+            placeholder={`Reply to ${agent.name}…`}
+            aria-label={`Quick reply to ${agent.name}`}
+            autoComplete="off"
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => e.stopPropagation()}
+          />
+          <button type="submit" aria-label="Send" disabled={!draft.trim()}>
+            ➜
+          </button>
+          {sent !== null && <span className="zv-sent">sent ✓</span>}
+        </form>
+        </>
       )}
-      <form
-        ref={bind(`agent-reply:${agent.id}`)}
-        className="zv-reply"
-        onClick={(e) => e.stopPropagation()}
-        onPointerDown={(e) => e.stopPropagation()}
-        onSubmit={(e) => {
-          e.preventDefault()
-          send()
-        }}
-      >
-        <input
-          type="text"
-          value={draft}
-          placeholder={`Reply to ${agent.name}…`}
-          aria-label={`Quick reply to ${agent.name}`}
-          autoComplete="off"
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => e.stopPropagation()}
-        />
-        <button type="submit" aria-label="Send" disabled={!draft.trim()}>
-          ➜
-        </button>
-        {sent !== null && <span className="zv-sent">sent ✓</span>}
-      </form>
     </div>
   )
 }
