@@ -5,7 +5,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { AgentNode, ItemNode, LinkNode, MachineNode, MarkNode, type Bind } from '../src/renderer/src/zoom/ZoomParts'
+import { AgentNode, ItemNode, LinkNode, MachineNode, MarkNode, NewAgentCard, type Bind } from '../src/renderer/src/zoom/ZoomParts'
 import type { AgentView, ItemView, MachineView, MarkView } from '../src/renderer/src/zoom/zoom-model'
 
 const bind: Bind = () => () => undefined
@@ -142,5 +142,35 @@ describe('the zoom is driven by clicks, not the wheel (owner, 2026-10-31)', () =
     expect(source).toMatch(/e\.key !== 'Escape'/)
     expect(source).toContain('motion.agent(a.id)')
     expect(source).toContain('motion.item(i.id)')
+  })
+})
+
+describe('making and removing an agent (owner, 2026-10-31)', () => {
+  it('the new-agent card offers the dock’s harnesses, a name and a lead box', () => {
+    const html = renderToStaticMarkup(<NewAgentCard presets={['Claude Code', 'Codex', 'Pi']} busy={false} error={null} onCancel={() => undefined} onCreate={() => undefined} />)
+    expect(html).toContain('A new agent')
+    expect(html).toContain('Claude Code')
+    expect(html).toContain('Codex')
+    expect(html).toContain('leads the crew')
+    expect(html).toContain('>create<')
+    expect(html).toContain('aria-pressed="true"')
+    expect(html).not.toContain('making…')
+  })
+
+  it('says it cannot make one without a harness, and shows why when it fails', () => {
+    const none = renderToStaticMarkup(<NewAgentCard presets={[]} busy={false} error={null} onCancel={() => undefined} onCreate={() => undefined} />)
+    expect(none).toContain('no harness in the dock')
+    const failed = renderToStaticMarkup(<NewAgentCard presets={['Pi']} busy error={'That agent could not be made: nope'} onCancel={() => undefined} onCreate={() => undefined} />)
+    expect(failed).toContain('That agent could not be made')
+    expect(failed).toContain('making…')
+  })
+
+  it('a card carries its own way out, and only when it is asked for', () => {
+    const without = renderToStaticMarkup(<AgentNode agent={agent()} bind={bind} onOpen={() => undefined} />)
+    expect(without).not.toContain('zv-del')
+    const withIt = renderToStaticMarkup(<AgentNode agent={agent()} bind={bind} onOpen={() => undefined} onDelete={() => undefined} />)
+    expect(withIt).toContain('Remove Forge')
+    const thumb = renderToStaticMarkup(<ItemNode item={item()} names={[]} bind={bind} onClick={() => undefined} onDelete={() => undefined} />)
+    expect(thumb).toContain('Remove PR #82')
   })
 })

@@ -102,6 +102,9 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
       for (const a of m.current.model.agents) {
         const el = els.agents.get(a.id)
         if (!el) continue
+        const open = a.id === focus && at.v > 1.2
+        const flag = open ? 'open' : ''
+        if (el.node.dataset.card !== flag) el.node.dataset.card = flag
         const level = a.id === focus && at.v > 1.01 ? 40 : a.id === at.leaving ? 36 : 10
         if (el.node.style.zIndex !== String(level + 2)) el.node.style.zIndex = String(level + 2)
         if (el.cardl.style.zIndex !== String(level)) el.cardl.style.zIndex = String(level)

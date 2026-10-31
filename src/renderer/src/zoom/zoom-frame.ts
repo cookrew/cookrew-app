@@ -81,6 +81,8 @@ export interface FrameEls {
   items: Map<string, { node: Put; ttl: Put }>
   ties: Map<string, Put>
   marks: Map<string, Put>
+  /** The empty seat at the end of the crew: the way a new agent is made. */
+  next: Put | null
   machine: Put
 }
 
@@ -381,6 +383,13 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const cut = 36 * Math.min(a.s, b.s)
     const shown = Math.max(0, len - 2 * cut)
     put(el, `translate(${f1(a.x + Math.cos(ang) * cut)}px, ${f1(a.y + Math.sin(ang) * cut)}px) rotate(${f4(ang)}rad) scale(${f4(shown / 400)}, 1)`, len < 2 * cut + 4 ? 0 : tieIn)
+  }
+
+  // The empty seat: at the end of the crew, gone at group zoom and past the cards.
+  {
+    const seat = L.crew.next
+    const seen = ramp(z, 0.85, 1.05) * (1 - ramp(z, 2.05, 2.3)) * (1 - pc)
+    put(els.next, `translate(${f1(seat.x)}px, ${f1(seat.y)}px) scale(${f4(lerp(0.7, 1, ease(ramp(z, 0.85, 1.05))))})`, seen)
   }
 
   // ── the label: under the ring, then the crew's corner, then above the shelf ──
