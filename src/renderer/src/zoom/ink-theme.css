@@ -195,6 +195,13 @@ body.cr-ink .cr-route-here {
   padding: 3px 8px;
   background: var(--sumi-card);
 }
+/* A portrait phone: the steps' padding goes to the names (header.css · the
+   dial gives before the names, 2026-11-01); 8px a side was 48px of a 200px route. */
+@media (max-width: 480px) {
+  body.cr-ink :is(.cr-route-btn, .cr-route-here) {
+    padding: 3px 4px;
+  }
+}
 
 /* ── controls ── */
 body.cr-ink .cr-btn {

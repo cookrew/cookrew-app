@@ -173,12 +173,17 @@
 
 /* A phone: no lane and no edge to stand on, so each troop is a row in the
    strip between the full view's head and its sheet (pet-dock.ts · PHONE_PX,
-   STRIP_PX): a few faces and "+N", the grip at its start. */
+   STRIP_PX): a few faces and "+N", the grip at its start. ONE row, always
+   (owner, 2026-11-01: a wrapped crew hid behind the browsers and covered the
+   transcript): "+N" turns a page of it (pet-dock.ts · stripPage), and
+   should an expanded troop ever land here it still does not wrap. */
 @media (max-width: 700px) {
   .cr-pets.docked,
   .cr-pets.docked.left,
-  .cr-pets.docked.right {
+  .cr-pets.docked.right,
+  .cr-pets.docked.expanded {
     flex-direction: row;
+    flex-wrap: nowrap;
     gap: 6px;
     padding: 0;
   }

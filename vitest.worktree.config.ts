@@ -18,7 +18,7 @@ export default defineConfig({
   root: ROOT,
   esbuild: { jsx: 'automatic' },
   test: {
-    include: ['tests/zoom-*.test.ts', 'tests/zoom-*.test.tsx', 'tests/agent-pets.test.ts', 'tests/pet-morph.test.ts', 'tests/header-route.test.tsx', 'tests/night-scheme.test.ts', 'tests/header-layer.test.ts', 'tests/levels-removed.test.ts'],
+    include: ['tests/zoom-*.test.ts', 'tests/zoom-*.test.tsx', 'tests/agent-pets.test.ts', 'tests/pet-morph.test.ts', 'tests/header-route.test.tsx', 'tests/night-scheme.test.ts', 'tests/header-layer.test.ts', 'tests/levels-removed.test.ts', 'tests/pet-dock.test.ts', 'tests/pet-strip-row.test.ts', 'tests/phone-header-bar.test.ts', 'tests/header-dial-gives.test.ts'],
     exclude: ['**/node_modules/**', '**/dist/**', '**/out/**']
   }
 })
