@@ -30,7 +30,8 @@ describe('the zoom scene hands its memoised nodes stable handlers', () => {
     const { readFileSync } = await import('node:fs')
     const view = readFileSync(new URL('../src/renderer/src/zoom/ZoomView.tsx', import.meta.url), 'utf8')
     const scene = view.slice(view.indexOf('{model.marks.map((m) => <MarkNode'), view.indexOf('The seat for the agent that is not there yet'))
-    expect(scene).not.toMatch(/on(Open|Click|Delete)=\{\(\) =>/)
+    // The memoised nodes only: plain buttons and divs may take arrows.
+    expect(scene).not.toMatch(/<(MarkNode|LinkNode|ItemNode|AgentNode) [^\n]*on(Open|Click|Delete)=\{\(\) =>/)
     expect(scene).not.toMatch(/\? \(\) => onDelete\(/)
     expect((scene.match(/stable\(`/g) ?? []).length).toBe(6)
   })
