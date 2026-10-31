@@ -83,6 +83,8 @@ describe('an agent’s card', () => {
     expect(frame0).toContain('const slot = { x: 17 + 79 * l.k, y: 136 }')
     expect(frame0).toContain('cx: lerp(0, -27, grow),')
     expect(frame0).toContain('cs: lerp(1, 0.45, grow)')
+    expect(frame0).toContain('lerp(1, 0.62, ease(clamp01(zi - 1)))')
+    expect(card).toContain('face: 0.62,')
     expect(card).toContain('name: { x: 30, y: -24 }')
     expect(card).toContain('meta: { x: 30, y: -2 }')
     expect(card).toContain('body: { x: -18, y: 32 }')

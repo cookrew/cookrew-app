@@ -35,6 +35,8 @@ export const CARD_THUMBS = 3
  */
 export const CARD_POSE = {
   origin: 34,
+  /** The face is drawn at this scale on the open card (the painter's lerp(1, 0.62, …)). */
+  face: 0.62,
   name: { x: 30, y: -24 },
   meta: { x: 30, y: -2 },
   body: { x: -18, y: 32 },
@@ -64,10 +66,10 @@ export function AgentCard({
   onDraft: (text: string) => void
 }): React.JSX.Element {
   const reply = useQuickReply(agent.id, onDraft)
-  const { origin, name, meta, body, thumb, coin } = CARD_POSE
+  const { origin, face, name, meta, body, thumb, coin } = CARD_POSE
   return (
     <div className="ag-plate" style={{ left: origin, top: origin }}>
-      <button type="button" className="zv-av cr-pet-card-face" title={`Open ${agent.name} in full`} aria-label={`Open ${agent.name} in full`} onClick={onOpen}>
+      <button type="button" className="zv-av cr-pet-card-face" style={{ transform: `scale(${face})` }} title={`Open ${agent.name} in full`} aria-label={`Open ${agent.name} in full`} onClick={onOpen}>
         <InkAvatar id={agent.id} preset={agent.preset} orch={agent.orch} status={inkStatusOfRow(agent.phase, agent.unread)} weight="large" />
       </button>
       <div className="zv-nm cr-pet-card-name" style={at(name)}>
