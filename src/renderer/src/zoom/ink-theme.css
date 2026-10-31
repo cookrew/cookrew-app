@@ -374,3 +374,67 @@ body.cr-ink .cr-pet-card {
   background: var(--sumi-card);
   box-shadow: 0 14px 36px var(--sumi-shadow);
 }
+
+/* ── the side groups in the full view's language (owner, 2026-10-31) ──
+   The agents' troop and the browsers' and notes' troop wear the same faces
+   the navigator draws: an ink stroke on the paper, a hairline ring, the name
+   in serif when it is named. Nothing here changes their size or their place. */
+body.cr-ink .cr-pet {
+  border: 1px solid var(--sumi-hair-2);
+  background: var(--sumi-card);
+  box-shadow: 0 2px 6px var(--sumi-shadow-sm);
+  animation: none;
+}
+
+body.cr-ink .cr-pet:hover,
+body.cr-ink .cr-pet.open {
+  box-shadow: 0 0 0 3px var(--sumi-gold-soft), 0 4px 12px var(--sumi-shadow);
+}
+
+body.cr-ink .cr-pet .ink-avatar {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+body.cr-ink .cr-pet .ink-avatar .ink-body {
+  fill: var(--sumi-ink);
+}
+
+body.cr-ink .cr-pet-name {
+  border: 1px solid var(--sumi-hair-2);
+  background: var(--sumi-card);
+  font-family: var(--font-serif);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--sumi-ink);
+}
+
+/* A note's letter, and a browser with no picture: the item coin's own seal. */
+body.cr-ink .cr-pet-note-face {
+  font-family: var(--font-serif);
+  font-size: 15px;
+  color: var(--sumi-ink);
+}
+
+body.cr-ink .cr-pet-note-face.browser {
+  color: var(--sumi-on-seal);
+  background: var(--sumi-seal);
+  border-radius: 50%;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+}
+
+/* The moods, in the panel's words: red only for the agent that waits. */
+body.cr-ink .cr-pet.waiting,
+body.cr-ink .cr-pet.needs {
+  box-shadow: inset 0 0 0 2px var(--sumi-wait);
+}
+
+body.cr-ink .cr-pet.z .cr-pet-z {
+  color: var(--sumi-muted);
+}

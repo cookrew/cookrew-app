@@ -4,6 +4,7 @@ import { useActivitiesSnapshot } from '../activity-thumb-store'
 import { useRoster } from '../agent-registry'
 import { buildAgentRows, type AgentRow } from '../agent-rows'
 import { AgentAvatar } from '../nodes/AgentAvatar'
+import { InkAvatar } from '../zoom/InkAvatar'
 import { TurnView } from '../nodes/TurnView'
 import { useStreamTails } from '../stream/use-stream-tails'
 import { checkpointViewModel, isEmptyTurnView } from '../turn-view-model'
@@ -95,7 +96,8 @@ export function AgentPets({
       label: `${pet.row.name}, ${MOOD_WORD[pet.mood]}${use ? `, using ${use.use === 'hardware' ? 'hardware' : `a ${use.use}`} (${use.via})` : ''}`,
       face: (
         <>
-          <AgentAvatar phase={AVATAR[pet.mood]} preset={pet.row.preset} />
+          {/* The navigator's ink face, so the side group and the full view are one family. */}
+          <InkAvatar id={pet.row.id} preset={pet.row.preset} orch={pet.row.orch} />
           {pet.mood === 'asleep' && <span className="cr-pet-z" aria-hidden="true">z</span>}
           {use && (
             <span className="cr-pet-use" data-use={use.use} aria-hidden="true">
