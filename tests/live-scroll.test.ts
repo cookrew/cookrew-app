@@ -5,14 +5,17 @@
 // follow the pane's history size, not every repaint.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Terminal } from '@xterm/xterm'
-import { SEED_OSC, installLocalScroll, wheelRows } from '../src/renderer/src/live-scroll'
+import { RESIZE_ASK_MS, RESIZE_TAKE_MS, SEED_OSC, installLocalScroll, wheelRows } from '../src/renderer/src/live-scroll'
 
 function fakeTerm() {
   let wheel: ((e: WheelEvent) => boolean) | null = null
   let osc: ((data: string) => boolean) | null = null
+  let onResize: ((size: { cols: number; rows: number }) => void) | null = null
   const active = { type: 'normal' as 'normal' | 'alternate', viewportY: 0, baseY: 0 }
   const term = {
+    cols: 49,
     rows: 40,
+    onResize: (fn: (size: { cols: number; rows: number }) => void) => { onResize = fn; return { dispose: () => { onResize = null } } },
     element: undefined,
     buffer: { active },
     parser: { registerOscHandler: (id: number, fn: (d: string) => boolean) => { expect(id).toBe(SEED_OSC); osc = fn; return { dispose: () => { osc = null } } } },
@@ -22,7 +25,9 @@ function fakeTerm() {
   const spin = (deltaY: number) => wheel!({ deltaY, deltaMode: 0, preventDefault: () => undefined } as unknown as WheelEvent)
   /** A seed for `nonce` parsed: `base` lines of history now in the scrollback, viewer at the bottom. */
   const land = (nonce: string, base: number) => { active.baseY = base; active.viewportY = base; osc!(`cookrew-seed;${nonce}`) }
-  return { term: term as unknown as Terminal, active, spin, land, scrollLines: term.scrollLines }
+  /** The grid took a new size (a fit, or another viewer's size adopted). */
+  const resize = (cols: number, rows: number) => { term.cols = cols; term.rows = rows; onResize!({ cols, rows }) }
+  return { term: term as unknown as Terminal, active, spin, land, resize, scrollLines: term.scrollLines }
 }
 
 beforeEach(() => {
@@ -122,6 +127,66 @@ describe('installLocalScroll', () => {
     f.active.viewportY = 0
     await vi.advanceTimersByTimeAsync(3000)
     expect(nonces).toHaveLength(3)
+    scroll.dispose()
+  })
+
+  it('a new width asks again once the reprint has landed, and once more if the history moved', async () => {
+    const f = fakeTerm()
+    let size = 100
+    const nonces: string[] = []
+    // A long refresh, so only the width change can be asking.
+    const scroll = installLocalScroll(f.term, { seed: async (n) => (nonces.push(n), true), live: () => true, lines: 400, refreshMs: 60_000, history: () => size })
+    scroll.onLive()
+    f.land(nonces[0], 500)
+    f.resize(98, 22) // the phone turned
+    f.resize(99, 22) // ...and the fit settled: one round of asks, from the last change
+    await vi.advanceTimersByTimeAsync(RESIZE_ASK_MS[0] - 1)
+    expect(nonces).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(nonces).toHaveLength(2)
+    f.land(nonces[1], 520)
+    size = 180 // Claude Code was still printing at the new width
+    await vi.advanceTimersByTimeAsync(RESIZE_ASK_MS[1] - RESIZE_ASK_MS[0])
+    expect(nonces).toHaveLength(3)
+    scroll.dispose()
+  })
+
+  it('a new height alone is not a new width: no asks', async () => {
+    const f = fakeTerm()
+    const nonces: string[] = []
+    const scroll = installLocalScroll(f.term, { seed: async (n) => (nonces.push(n), true), live: () => true, lines: 400, refreshMs: 60_000, history: () => 100 })
+    scroll.onLive()
+    f.land(nonces[0], 500)
+    f.resize(49, 30) // a toolbar slid away
+    await vi.advanceTimersByTimeAsync(RESIZE_ASK_MS[1] + 100)
+    expect(nonces).toHaveLength(1)
+    scroll.dispose()
+  })
+
+  it('after a new width the seed is taken even from a reader scrolled up — for a while', async () => {
+    const f = fakeTerm()
+    const nonces: string[] = []
+    const scroll = installLocalScroll(f.term, { seed: async (n) => (nonces.push(n), true), live: () => true, lines: 400, refreshMs: 60_000 })
+    scroll.onLive()
+    f.land(nonces[0], 500)
+    f.spin(-170)
+    const seed = `\x1b[2J\x1b[3J\x1b[H...\x1b]777;cookrew-seed;wide\x07`
+    expect(scroll.admit(seed)).toBe(false)
+    f.resize(99, 40)
+    expect(scroll.admit(seed)).toBe(true) // their place was at the old width
+    await vi.advanceTimersByTimeAsync(RESIZE_TAKE_MS)
+    f.active.viewportY = 100
+    expect(scroll.admit(seed)).toBe(false) // settled: a reader's place is theirs again
+    scroll.dispose()
+  })
+
+  it('in chat a new width asks nothing (the live view seeds when it comes up)', async () => {
+    const f = fakeTerm()
+    const nonces: string[] = []
+    const scroll = installLocalScroll(f.term, { seed: async (n) => (nonces.push(n), true), live: () => false, lines: 400, refreshMs: 60_000 })
+    f.resize(99, 40)
+    await vi.advanceTimersByTimeAsync(RESIZE_ASK_MS[1] + 100)
+    expect(nonces).toHaveLength(0)
     scroll.dispose()
   })
 })

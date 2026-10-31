@@ -65,7 +65,7 @@ describe('transcript-paper.css', () => {
     const log = css.slice(css.indexOf('THE LOG LOOK'))
     expect(log).toMatch(/\.look-log \.ctx-chat-agent,[\s\S]*\.look-log \.ctx-chat-tools \{\s*display: contents;/)
     expect(log).toMatch(/\.look-log \.ctx-chat-face \{\s*display: none;/)
-    expect(log).toMatch(/\.look-log \.ctx-tool-call::before,[\s\S]*content: '⏺ ';/)
+    expect(log).toMatch(/\.look-log \.ctx-tool-call::before,[\s\S]*content: '● ';/)
   })
 })
 

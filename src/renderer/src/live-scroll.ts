@@ -23,6 +23,15 @@ import type { Terminal } from '@xterm/xterm'
  * A reader scrolled up keeps their place: a seed that arrives then is
  * DROPPED (admit), which is safe — it is a full replay of a screen this
  * viewer already has, and the deltas after it apply to that screen as well.
+ *
+ * A NEW WIDTH (owner, 2026-10-31: the phone turned and the history stayed
+ * portrait-narrow) makes the history wrong twice over: the scrollback was
+ * wrapped at the old width, and Claude Code answers the resize by printing
+ * its recent conversation again at the new one (main/seed-history.ts keeps
+ * that later copy). So once the width settles the history is asked for
+ * again — when the reprint has had time to land, and once more if it was
+ * still printing — and for a while that seed is taken even from a reader
+ * scrolled up: the place they were reading is not where it was any more.
  */
 
 export interface LocalScrollDeps {
@@ -49,6 +58,10 @@ export const SEED_OSC = 777
 const SEED_PREFIX = 'cookrew-seed;'
 const SEED_MARK = `\x1b]${SEED_OSC};${SEED_PREFIX}`
 const SEED_TIMEOUT_MS = 5000
+/** After a width change: ask at the first, ask again at the second if the history moved since. */
+export const RESIZE_ASK_MS = [1200, 4000] as const
+/** After a width change, seeds are taken even from a reader scrolled up for this long. */
+export const RESIZE_TAKE_MS = 8000
 
 /** Rows to move for one wheel event, carrying the remainder; pure for the tests. */
 export function wheelRows(event: Pick<WheelEvent, 'deltaY' | 'deltaMode'>, rowPx: number, rows: number, carry: number): { rows: number; carry: number } {
@@ -84,6 +97,9 @@ export function installLocalScroll(term: Terminal, deps: LocalScrollDeps): Local
   let carry = 0
   let held = 0
   let disposed = false
+  let cols = term.cols
+  let widthAt = Number.NEGATIVE_INFINITY
+  let resizeTimers: ReturnType<typeof setTimeout>[] = []
 
   const rowPx = (): number => {
     const height = term.element?.querySelector('.xterm-screen')?.getBoundingClientRect().height ?? 0
@@ -148,6 +164,24 @@ export function installLocalScroll(term: Terminal, deps: LocalScrollDeps): Local
     return false
   })
 
+  // Rows alone (a phone's toolbar sliding away) change no line's wrapping.
+  const resized = term.onResize((size) => {
+    if (size.cols === cols) return
+    cols = size.cols
+    widthAt = now()
+    for (const pending of resizeTimers) clearTimeout(pending)
+    resizeTimers = RESIZE_ASK_MS.map((ms, i) =>
+      setTimeout(() => {
+        if (disposed || !deps.live() || document.visibilityState !== 'visible') return
+        if (i === 0) {
+          // An answer still on its way was read at the old width.
+          inFlight = null
+          ask()
+        } else if (stale()) ask()
+      }, ms)
+    )
+  })
+
   const timer = setInterval(() => {
     if (!deps.live() || !stale() || !atBottom() || document.visibilityState !== 'visible') return
     if (now() - lastAsk < deps.refreshMs) return
@@ -157,6 +191,7 @@ export function installLocalScroll(term: Terminal, deps: LocalScrollDeps): Local
   return {
     admit: (chunk) => {
       if (!chunk.includes(SEED_MARK)) return true
+      if (now() - widthAt < RESIZE_TAKE_MS) return true
       if (atBottom() || term.buffer.active.baseY === 0 || term.buffer.active.type !== 'normal') return true
       // Scrolled up: keep the reader's place; ask again once they are back.
       inFlight = null
@@ -168,6 +203,8 @@ export function installLocalScroll(term: Terminal, deps: LocalScrollDeps): Local
     dispose: () => {
       disposed = true
       clearInterval(timer)
+      for (const pending of resizeTimers) clearTimeout(pending)
+      resized.dispose()
       osc.dispose()
       term.attachCustomWheelEventHandler(() => true)
     }
