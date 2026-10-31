@@ -3,7 +3,7 @@
 // browsers and notes they carry through the wiring, which are shared, and the
 // newest browser that stands beside the stack at group zoom. Pure, so pinned here.
 import { describe, expect, it } from 'vitest'
-import { buildZoomModel, PHASE_WORD, lineOf } from '../src/renderer/src/zoom/zoom-model'
+import { buildZoomModel, ITEMS_SHOWN, PHASE_WORD, lineOf } from '../src/renderer/src/zoom/zoom-model'
 import { attachmentIndex } from '../src/renderer/src/terminal-attachments'
 import type { AgentRow } from '../src/renderer/src/agent-rows'
 import type { BrowserNodeData, CanvasNode, Connection, NoteNodeData, TerminalNodeData, WorkspaceMeta } from '../src/shared/model'
@@ -103,5 +103,18 @@ describe('the device', () => {
     expect(m.machines.map((x) => x.name)).toEqual(['MacBook Pro', 'Mac mini'])
     expect(m.machines[0]).toMatchObject({ agents: 3, waiting: 1 })
     expect(m.machines[1]).toMatchObject({ agents: null, waiting: null })
+  })
+})
+
+describe('a workspace with hundreds of browsers and notes', () => {
+  it('draws a screenful in the thumbs grid, carried ones first, and still counts them all', () => {
+    const loose = Array.from({ length: 40 }, (_, n) => browser(`l${n}`, `https://l${n}.dev`, `L${n}`))
+    const nodes = [term('t1', 'A'), browser('kept', 'https://k.dev', 'Kept'), ...loose]
+    const m = fixture(nodes, [cable('c1', 't1', 'kept')])
+    expect(m.items).toHaveLength(ITEMS_SHOWN)
+    expect(m.items[0].id).toBe('kept')
+    expect(m.browsers).toBe(41)
+    expect(m.hiddenItems).toBe(41 - ITEMS_SHOWN)
+    expect(m.frame.links.every((l) => m.items.some((i) => i.id === l.item))).toBe(true)
   })
 })
