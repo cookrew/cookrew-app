@@ -98,6 +98,8 @@ export function installLocalScroll(term: Terminal, deps: LocalScrollDeps): Local
   let lastAsk = Number.NEGATIVE_INFINITY
   /** The history size the newest seed was read at; -1 = none. */
   let seededAt = -1
+  /** The grid width the newest seed was written into; a reflow since has garbled it. */
+  let seededCols = -1
   let askedAt = -1
   /** Lines of history the newest seed left in the scrollback. */
   let landedBase = 0
@@ -109,7 +111,9 @@ export function installLocalScroll(term: Terminal, deps: LocalScrollDeps): Local
     // back on herdr's alternate screen: history that was there and is gone
     // is stale too.
     const wiped = landedBase > 0 && (term.buffer.active.type !== 'normal' || term.buffer.active.baseY === 0)
-    return !seeded || wiped || (size !== null && size !== seededAt)
+    // A grid that changed width reflowed the history: rows padded at one
+    // width split or join at another (another viewer took the pane's size).
+    return !seeded || wiped || seededCols !== term.cols || (size !== null && size !== seededAt)
   }
   let carry = 0
   let held = 0
@@ -156,6 +160,7 @@ export function installLocalScroll(term: Terminal, deps: LocalScrollDeps): Local
     if (data.slice(SEED_PREFIX.length).split(';')[0] === inFlight) inFlight = null
     seeded = true
     seededAt = askedAt
+    seededCols = term.cols
     landedBase = term.buffer.active.baseY
     if (held !== 0) {
       term.scrollLines(held)
@@ -204,6 +209,13 @@ export function installLocalScroll(term: Terminal, deps: LocalScrollDeps): Local
     if (now() - lastAsk < deps.refreshMs) return
     ask()
   }, Math.max(500, Math.floor(deps.refreshMs / 2)))
+  // Back on screen (the phone picked up again): a history reflowed while it
+  // was away is replaced now, not at the next tick.
+  const onVisible = (): void => {
+    if (document.visibilityState === 'visible' && deps.live() && stale() && atBottom()) ask()
+  }
+  const listens = typeof document.addEventListener === 'function'
+  if (listens) document.addEventListener('visibilitychange', onVisible)
 
   return {
     admit: (chunk) => {
@@ -227,6 +239,7 @@ export function installLocalScroll(term: Terminal, deps: LocalScrollDeps): Local
     dispose: () => {
       disposed = true
       clearInterval(timer)
+      if (listens) document.removeEventListener('visibilitychange', onVisible)
       for (const pending of resizeTimers) clearTimeout(pending)
       resized.dispose()
       osc.dispose()

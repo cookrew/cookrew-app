@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createSizeOwner, OWN_MS, tookOthers } from '../src/renderer/src/pane-size'
+import { createSizeOwner, OPEN_CLAIM_MS, OWN_MS, openedAt, tookOthers } from '../src/renderer/src/pane-size'
 
 describe("who sets a shared pane's size", () => {
   it('a viewer owns the size when it was opened or used, while it is visible', () => {
@@ -33,5 +33,16 @@ describe("who sets a shared pane's size", () => {
     expect(tookOthers({ cols: 100, rows: 40 }, { cols: 100, rows: 40 })).toBe(false)
     expect(tookOthers({ cols: 46, rows: 34 }, { cols: 100, rows: 40 })).toBe(true)
     expect(tookOthers({ cols: 46, rows: 34 }, null)).toBe(true)
+  })
+
+  it('a terminal the app mounted on its own does not take the size; one someone opened does', () => {
+    // The desktop's stage follows what needs you and mounts the terminal with nobody at the desktop.
+    const auto = createSizeOwner(openedAt(100_000, Number.NEGATIVE_INFINITY))
+    expect(auto.owns(100_001, true)).toBe(false)
+    const stale = createSizeOwner(openedAt(100_000, 100_000 - OPEN_CLAIM_MS))
+    expect(stale.owns(100_001, true)).toBe(false)
+    // A click on its pet a moment ago opened it.
+    const clicked = createSizeOwner(openedAt(100_000, 99_800))
+    expect(clicked.owns(100_001, true)).toBe(true)
   })
 })

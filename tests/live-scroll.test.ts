@@ -213,4 +213,23 @@ describe('installLocalScroll', () => {
     expect(seedCols('x\x1b]777;cookrew-seed;n1\x07')).toBeNull()
     expect(seedCols('no marker')).toBeNull()
   })
+
+  it('a history the grid reflowed while the view was away is asked for again when it is back', async () => {
+    // Another viewer took the pane's size while this one sat in chat: xterm
+    // reflowed the seeded rows into the new width, padding split and joined.
+    const f = fakeTerm()
+    let live = true
+    const nonces: string[] = []
+    const scroll = installLocalScroll(f.term, { seed: async (n) => (nonces.push(n), true), live: () => live, lines: 400, refreshMs: 3000, history: () => 100 })
+    scroll.onLive()
+    f.land(nonces[0], 500)
+    live = false
+    f.resize(99, 40)
+    await vi.advanceTimersByTimeAsync(RESIZE_ASK_MS[1] + 3000)
+    expect(nonces).toHaveLength(1)
+    live = true
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(nonces).toHaveLength(2)
+    scroll.dispose()
+  })
 })
