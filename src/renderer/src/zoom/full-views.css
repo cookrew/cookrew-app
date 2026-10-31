@@ -284,3 +284,17 @@ body.cr-docked-right .zv-fullview {
     display: none;
   }
 }
+
+/* Checkpoint tags on paper: the cream skin is in styles.css (on-cream); here
+   only their edge, so an opaque tag reads as a tag over the transcript. The
+   row carries the surface, so the focused tag's wrapper adds no square one. */
+.zv-fullview .cr-ckpt-rail .cr-ckpt-row {
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px var(--fv-hair-2), 0 2px 8px rgba(40, 30, 15, 0.1);
+}
+.zv-fullview .cr-ckpt-rail .cr-ckpt-row.active::after {
+  border-radius: 0 6px 6px 0;
+}
+.zv-fullview .cr-ckpt-fan-focus {
+  background: transparent;
+}
