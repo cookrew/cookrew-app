@@ -5,6 +5,7 @@ import { cookrew } from '../api'
 import type { Crew } from '../stage/crew-rows'
 import { thumbWants } from '../pets/thumb-wants'
 import { Counts, AgentNode, ItemNode, LinkNode, MachineNode, MarkNode, type Bind } from './ZoomParts'
+import { followDrafts } from '../prompt/draft-follow'
 import { InkRing, InkTie } from './InkAvatar'
 import { buildZoomModel } from './zoom-model'
 import { defaultCrewCols, defaultDeviceCols, deviceOf, machinesAt, MACHINE_CARD } from './zoom-layout'
@@ -144,7 +145,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       const card = get(`agent-card:${a.id}`)
       const cardl = get(`agent-cardl:${a.id}`)
       if (!node || !av || !nm || !st || !cnt || !card || !cardl) continue
-      agents.set(a.id, { node, av, nm, st, cnt, body, reply, card, cardl, emp: get(`agent-emp:${a.id}`), dot: get(`agent-dot:${a.id}`), nmW: nm.offsetWidth, stW: st.offsetWidth, cntW: cnt.offsetWidth })
+      agents.set(a.id, { node, av, nm, st, cnt, dft: get(`agent-dft:${a.id}`), body, reply, card, cardl, emp: get(`agent-emp:${a.id}`), dot: get(`agent-dot:${a.id}`), nmW: nm.offsetWidth, stW: st.offsetWidth, cntW: cnt.offsetWidth })
     }
     for (const l of modelRef.current.frame.links) {
       const node = get(`link:${l.key}`), th = get(`link-th:${l.key}`), coin = get(`link-coin:${l.key}`)
@@ -178,6 +179,8 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     [model.frame, crewCols, deviceCols]
   )
   const motion = useZoomMotion(frame, collect, root, pan)
+  // The crew shows each agent's unsent words: keep them in step with its line (draft-follow.ts).
+  useEffect(() => followDrafts(), [])
   // The crew and the thumbnails scroll apart: a side opened again starts at its top.
   useEffect(() => {
     panAt.current = 0

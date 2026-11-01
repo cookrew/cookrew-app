@@ -23,6 +23,9 @@ export function setDraft(key: string, text: string): void {
   for (const cb of listeners) cb()
 }
 
+/** The agents that hold a draft now (the new agent's draft is no agent's). */
+export const draftedAgents = (): string[] => [...drafts.keys()].filter((key) => key !== NEW_AGENT)
+
 export function subscribeDrafts(cb: () => void): () => void {
   listeners.add(cb)
   return () => void listeners.delete(cb)

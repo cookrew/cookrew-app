@@ -752,6 +752,45 @@
   box-shadow: 0 0 0 3px var(--zv-paper);
 }
 
+/* No browser or note: the line says nothing, and a patch of paper with no
+   words on it would be a smudge over the ties. */
+.zv-cnt:empty {
+  display: none;
+}
+
+/* WHAT IS TYPED, UNSENT (owner, 2026-11-01): under the face, on the counts'
+   line or the one below it (zoom-frame.ts). The painter puts the box at the
+   face's centre line; the words centre themselves on it, as their width moves
+   with every key. One line, cut at an ellipsis, a column's width at most. */
+.zv-dft {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.zv-dft > span {
+  display: block;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  border-radius: 3px;
+  background: var(--zv-paper);
+  box-shadow: 0 0 0 3px var(--zv-paper);
+  font: italic 10.5px/1.2 var(--zv-mono);
+  color: var(--zv-ink);
+}
+
+.zv-dft > span::after {
+  content: '\258d';
+  margin-left: 1px;
+  font-style: normal;
+  color: var(--zv-ink-soft);
+}
+
 .zv-cnt {
   position: absolute;
   left: 0;
@@ -1780,6 +1819,10 @@
      (Gauge, 2026-11-01; tests/zoom-phone-crew-words.test.ts). */
   .zv-scene .zv-st,
   .zv-scene .zv-cnt {
+    font-size: 11px;
+  }
+  /* The typed words under a face, as large as its other words. */
+  .zv-scene .zv-dft > span {
     font-size: 11px;
   }
   /* The open workspace's label in the marks' form: seal and name in 130px
