@@ -251,7 +251,7 @@ async function runBrowserCommand(args: string[], terminalId: string): Promise<st
   const [sub, ...rest] = args
   if (sub === 'create') {
     const [url, name] = rest
-    if (!url) throw new Error('Usage: cookrew browser create URL ["Name"]')
+    if (!url) throw new Error('Usage: cookrew browser create URL ["Name"] [--workspace <name>]')
     return createBrowser(url, name ?? 'Browser', terminalId)
   }
 
