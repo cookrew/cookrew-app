@@ -33,6 +33,9 @@ const stubWindow = (): void => {
   ;(globalThis as unknown as { localStorage: unknown }).localStorage = storage
 }
 
+/** A cold import of the sheet's whole tree: slow on a loaded machine, not wrong. */
+const COLD_MS = 30_000
+
 const load = async () => {
   vi.resetModules()
   stubWindow()
@@ -80,7 +83,7 @@ describe("an artifact on the agent's sheet has a ×, as the agent has", () => {
     expect(html.match(/class="zv-del zv-fv-art-del"/g)).toHaveLength(2)
     // A button inside a button is invalid HTML: the × sits beside the thumbnail.
     expect(html).not.toMatch(/<button[^>]*class="zv-fv-art[ "][^>]*>(?:(?!<\/button>).)*<button/s)
-  })
+  }, COLD_MS)
 
   it('the × asks to remove that card and does not also open it', async () => {
     const { ArtifactThumb } = await load()
@@ -94,19 +97,45 @@ describe("an artifact on the agent's sheet has a ×, as the agent has", () => {
     expect(onRemove).toHaveBeenCalledTimes(1)
     expect(stopPropagation).toHaveBeenCalled()
     expect(onOpen).not.toHaveBeenCalled()
-  })
+  }, COLD_MS)
 
   it('a shared card says the others lose it too, before the dialog does', async () => {
     const { ArtifactThumb } = await load()
     const tree = ArtifactThumb({ view: view({ owners: ['t1', 't2', 't3'] }), on: false, onOpen: () => undefined, onRemove: () => undefined })
     const mark = elements(tree).find((el) => el.props['aria-label'] === 'Remove PR #82')
     expect(mark?.props.title).toBe('Remove PR #82 — 3 agents use it')
-  })
+  }, COLD_MS)
 
   it('it goes through CanvasUi.requestClose, the one confirm dialog, never removeNode', () => {
     const src = readFileSync(join(__dirname, '../src/renderer/src/stage/AgentArtifacts.tsx'), 'utf8')
     expect(src).toMatch(/useCanvasUi\(\)/)
     expect(src).toMatch(/requestClose\(view\.id\)/)
     expect(src).not.toMatch(/removeNode/)
+  })
+})
+
+// The thumbs grid's own × (ZoomParts · ItemNode) reused the agent card's
+// offset (left 222, top -46 from the face); an item's origin is its
+// thumbnail's centre, so the mark floated far right of the picture (owner's
+// screenshot, 2026-11-01: "not aligned").
+describe("an item tile's × sits on its thumbnail", () => {
+  const css = readFileSync(join(__dirname, '../src/renderer/src/zoom/zoom.css'), 'utf8')
+  const rule = (selector: string): Record<string, number> => {
+    const at = css.indexOf(`\n${selector} {`)
+    expect(at, selector).toBeGreaterThan(-1)
+    const body = css.slice(at, css.indexOf('}', at))
+    return Object.fromEntries([...body.matchAll(/(left|top|width|height):\s*(-?\d+)px/g)].map((m) => [m[1], Number(m[2])]))
+  }
+
+  it('inside the top right corner, never past its edges', () => {
+    const th = rule('.zv-ip > .zv-th')
+    const del = { ...rule('.zv-del'), ...rule('.zv-ip > .zv-del') }
+    expect(del.left).toBeGreaterThanOrEqual(th.left)
+    expect(del.top).toBeGreaterThanOrEqual(th.top)
+    expect(del.left + del.width).toBeLessThanOrEqual(th.left + th.width)
+    expect(del.top + del.height).toBeLessThanOrEqual(th.top + th.height)
+    // The corner: its right edge near the thumbnail's, its top near the top.
+    expect(th.left + th.width - (del.left + del.width)).toBeLessThanOrEqual(8)
+    expect(del.top - th.top).toBeLessThanOrEqual(8)
   })
 })
