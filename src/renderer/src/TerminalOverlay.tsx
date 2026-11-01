@@ -1580,6 +1580,9 @@ function TerminalOverlay({
         {openItem !== null && openView !== null && <AttachPanel key={openItem.node.id} item={openItem} view={openView} cardRect={rect} />}
         {primary && (headTools ? createPortal(lookToggle, headTools) : lookToggle)}
         </div>
+        {/* CHAT is a plain conversation with its own scrollbar (transcript-paper.css,
+            owner 2026-11-01); LOG and LIVE keep the checkpoint rail. */}
+        {look !== 'chat' && (
         <CheckpointTimeline
           terminalId={node.id}
           rows={rows}
@@ -1599,6 +1602,7 @@ function TerminalOverlay({
           onScrub={(fraction) => transcriptRef.current?.scrubTo(fraction)}
           onReach={stream.reach}
         />
+        )}
       </div>
       {dropReady && (
         <div className="attach-drop-hint">
