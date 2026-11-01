@@ -516,3 +516,12 @@ describe('browserRenderMode for a vphone card', () => {
     expect(browserRenderMode({ interactive: false, client: 'desktop', selfEmbedding: false })).toBe('legacy-webview')
   })
 })
+
+describe('parseStreamMessage: a page’s copy (page-copy.ts)', () => {
+  it('reads the copied text, and ignores an empty or malformed one', () => {
+    expect(parseStreamMessage('{"t":"copy","text":"the words"}')).toEqual({ kind: 'copy', text: 'the words' })
+    expect(parseStreamMessage('{"t":"copy","text":""}')).toBeNull()
+    expect(parseStreamMessage('{"t":"copy","text":7}')).toBeNull()
+    expect(parseStreamMessage('{"t":"copy"}')).toBeNull()
+  })
+})

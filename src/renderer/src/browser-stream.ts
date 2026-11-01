@@ -228,6 +228,8 @@ export type StreamMessage =
   | ({ kind: 'frame'; seq: number; src: string } & StreamFrameMeta)
   | { kind: 'error'; msg: string }
   | { kind: 'status'; status: UseStatus }
+  /** The page copied this right after the viewer's own input: it goes on the viewer's clipboard. */
+  | { kind: 'copy'; text: string }
 
 /**
  * Parse a server→client WS payload into a typed message, or null to ignore.
@@ -285,6 +287,9 @@ export function parseStreamMessage(raw: unknown): StreamMessage | null {
   }
   if (obj.t === 'error') {
     return { kind: 'error', msg: typeof obj.msg === 'string' ? obj.msg : 'stream error' }
+  }
+  if (obj.t === 'copy') {
+    return typeof obj.text === 'string' && obj.text.length > 0 ? { kind: 'copy', text: obj.text } : null
   }
   if (obj.t === 'status') {
     const state = obj.state

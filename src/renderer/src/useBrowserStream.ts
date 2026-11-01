@@ -5,6 +5,7 @@ import { tokenParam } from './auth-gate'
 import { useDataPlaneRoute } from './use-data-plane'
 import { openWebSocket } from './rtc-plane'
 import type { UseStatus } from '../../shared/use-signal'
+import { writeClipboardText } from './clipboard'
 import {
   DESKTOP_STREAM_ORIGIN,
   clampViewport,
@@ -354,6 +355,15 @@ export function useBrowserStream(
         if (msg.kind === 'error') {
           console.error(`[browser-stream] server error for ${browserId}: ${msg.msg}`)
           fail('error')
+          return
+        }
+
+        if (msg.kind === 'copy') {
+          // The page's copy happened inside the card's own Chrome: put it on
+          // this machine's clipboard, where the owner will paste it (page-copy.ts).
+          void writeClipboardText(msg.text).then((ok) => {
+            if (!ok) console.error(`[browser-stream] the page's copy could not reach the clipboard for ${browserId}`)
+          })
           return
         }
 

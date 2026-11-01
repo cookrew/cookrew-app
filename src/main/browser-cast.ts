@@ -13,6 +13,7 @@ import { sanitizeViewportMessage } from '../shared/cast-viewport'
 import type { UseStatus } from '../shared/use-signal'
 import { jpegSize } from './jpeg-size'
 import { DEFAULT_DRAIN_THRESHOLD } from './screencast-pace'
+import { copyArmed } from './page-copy'
 import type { BrowserViewportState } from './browser-viewport'
 import type { FrameMeta } from './headless-chrome'
 import type { BrowserInstance } from './browser-instance'
@@ -204,6 +205,16 @@ class ClientConn {
   /** A use's device state: a viewer shows "offline — <why>" over the last frame instead of a frozen screen. */
   private readonly statusListener = (status: UseStatus): void =>
     this.wsSend(JSON.stringify({ t: 'status', ...status }))
+  /** When this viewer's own input last reached the page: a copy right after it is theirs (page-copy.ts). */
+  private lastInputAt: number | null = null
+  /**
+   * The page copied: this viewer's clipboard gets it only if this viewer just
+   * acted on the page. A page copying on its own, or after another viewer's
+   * click, writes nobody's clipboard here.
+   */
+  private readonly copyListener = (text: string): void => {
+    if (copyArmed(this.lastInputAt, Date.now())) this.wsSend(JSON.stringify({ t: 'copy', text }))
+  }
 
   constructor(
     private readonly socket: Duplex,
@@ -228,6 +239,7 @@ class ClientConn {
     }
     instance.frameListeners.add(this.frameListener)
     instance.statusListeners?.add(this.statusListener)
+    instance.copyListeners?.add(this.copyListener)
     this.wsSend(JSON.stringify({
       t: 'ready',
       w: viewport.width,
@@ -397,6 +409,7 @@ class ClientConn {
     const commands = sanitizeInput(raw, frameContext?.ctx ?? this.ctx)
     if (!commands) return
     for (const command of commands) instance.dispatchInput(command.method, command.params)
+    this.lastInputAt = Date.now()
   }
 
   private wsSend(message: string): void {
@@ -433,6 +446,7 @@ class ClientConn {
     this.frameContexts.clear()
     this.instance?.frameListeners.delete(this.frameListener)
     this.instance?.statusListeners?.delete(this.statusListener)
+    this.instance?.copyListeners?.delete(this.copyListener)
     this.unsubscribeViewport?.()
     this.unsubscribeViewport = null
     this.instance?.unregisterViewportViewer(this.id)
