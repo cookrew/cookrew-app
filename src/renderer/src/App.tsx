@@ -127,6 +127,7 @@ import { useZoomFull } from './zoom/zoom-store'
 import { zoomStore } from './zoom/zoom-store'
 import { importTeam, makeAgent, makeItem, type Made } from './zoom/make-card'
 import { attachView } from './attach-view'
+import { installStatusChime } from './chime-sound'
 import type { StageShowing } from './stage/StageView'
 
 /** How often a headless browser card refreshes its still. Matches the legacy
@@ -581,6 +582,9 @@ function Canvas(): React.JSX.Element {
       off()
     }
   }, [])
+
+  // A chime when an agent finishes or needs you (status-chime.ts decides when).
+  useEffect(() => installStatusChime(), [])
 
   // WHAT EACH AGENT IS RUNNING ON (tuning-store). One snapshot for the whole
   // fleet, then a push per card when — and only when — its dials change. The
