@@ -108,10 +108,7 @@ import { apiPath } from './api-base'
 import { planeFetch } from './plane-fetch'
 import { authHeaders } from './auth-gate'
 import { CrIcon } from './icons'
-import { SousPill } from './SousPill'
 import { CommandBox } from './CommandBox'
-import { speakSous } from './sous-speak'
-import { usePushToTalk } from './use-push-to-talk'
 import {
   canvasVisualModeOf,
   nextCanvasVisualMode,
@@ -946,37 +943,6 @@ function Canvas(): React.JSX.Element {
     [zoomToNode, zoomBack]
   )
 
-  // Hold ⌘ to talk. On the canvas the sentence is a command; over a zoomed
-  // terminal it is dictation for that agent (shared/sous-intent decides, from
-  // the surface). What comes back is said aloud and shown for a beat.
-  const [sousReply, setSousReply] = useState<{ text: string; refused: boolean } | null>(null)
-  useEffect(() => {
-    if (!sousReply) return
-    const timer = window.setTimeout(() => setSousReply(null), 3500)
-    return () => window.clearTimeout(timer)
-  }, [sousReply])
-  const ptt = usePushToTalk({
-    enabled: true,
-    onFinal: (text, alternates) => {
-      if (!text.trim()) return
-      const zoomed = zoomedTerminalIdRef.current
-      const ctx = zoomed
-        ? { surface: 'zoom' as const, focusedAgentId: zoomed, alternates }
-        : { surface: 'canvas' as const, alternates }
-      void cookrew()
-        .sousCommand(text, ctx)
-        .then((result) => {
-          if (!result.spoken) return
-          // What landed, next to what was said about it — the cleaned-up
-          // sentence is the thing the owner wants to check.
-          const shown = result.text ? `${result.spoken} · ${result.text}` : result.spoken
-          setSousReply({ text: shown, refused: result.intent === 'refused' })
-          speakSous(result.spoken)
-        })
-    },
-    onError: (message) => setSousReply({ text: message, refused: true })
-  })
-
   /** The dock is making a card (zoom/make-card.ts), and why the last one failed. */
   const [making, setMaking] = useState(false)
   const [makeError, setMakeError] = useState<string | null>(null)
@@ -1745,7 +1711,6 @@ function Canvas(): React.JSX.Element {
         <DoorMovedNotice />
         {/* Terminals from an earlier macOS login cannot resolve names or open apps. */}
         <TerminalSessionNotice />
-        <SousPill listening={ptt.listening} partial={ptt.partial} reply={sousReply} />
         {/* R3 · the one box: ⌘K on the desktop, the bottom bar on the phone. */}
         <CommandBox open={commandOpen} onClose={closeCommand} phone={isRemoteMode()} />
         {/* Identity: the sheets and the lock. Mounted here, after everything
