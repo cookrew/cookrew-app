@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { CanvasNode } from '../../../shared/model'
 import { cookrew } from '../api'
-import { useActivity } from '../activity-thumb-store'
 import { CrIcon } from '../icons'
 import { VoiceBar } from '../VoiceBar'
 import { makeAgent } from '../zoom/make-card'
 import { zoomStore } from '../zoom/zoom-store'
 import { nameFromPrompt } from './agent-name'
 import { lastHarness, rememberHarness } from './harness-pref'
-import { draftKey, useDraft } from './prompt-draft'
+import { endLine, lineTextFor, submitLine, typeLine, useLiveLine } from './live-line'
+import { draftKey, getDraft, useDraft } from './prompt-draft'
 import { mentionTarget, promptTargetOf } from './prompt-target'
 import { sendToAgent } from './send'
 import './global-prompt.css'
@@ -18,10 +18,11 @@ import './global-prompt.css'
  * app, right after the dock's buttons.
  *
  *   @agent   in an agent's full view, or with its card open, the box talks to
- *            that agent: Enter sends into its own terminal, so the reply shows
- *            in CHAT, LOG and LIVE alike. Its draft is the card's reply box's
- *            draft (prompt-draft.ts). × (or Backspace on an empty box) lets
- *            go of the agent.
+ *            that agent. Its draft IS the agent's own input line (live-line.ts):
+ *            typed there as it is written, so LIVE shows it, and words typed
+ *            in LIVE show here; Enter submits it. The card's reply box is the
+ *            same draft (prompt-draft.ts). × (or Backspace on an empty box)
+ *            lets go of the agent.
  *   nobody   the prompt makes a new agent in this workspace, named from the
  *            prompt, on the harness last used — the chip picks another. It
  *            stands in for the crew's old ＋ seat.
@@ -99,7 +100,26 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   }, [picking])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const activity = useActivity(to?.id ?? '')
+  const activity = useLiveLine(to?.id ?? null)
+  const names = agents.map((a) => a.name)
+  /** The draft, and the agent's line with it (unless an IME is mid-word). */
+  const write = (next: string, composing = false): void => {
+    setText(next)
+    if (to && !composing) typeLine(to.id, lineTextFor(next, to.id, mentionTarget(next, agents), names))
+  }
+  // Words held back while the agent asked a question go in once it is done asking.
+  const asked = useRef<{ id: string | null; waiting: boolean }>({ id: null, waiting: false })
+  const phase = activity?.phase
+  useEffect(() => {
+    const waiting = phase === 'waiting'
+    const id = to?.id ?? null
+    if (id && asked.current.id === id && asked.current.waiting && !waiting) {
+      const draft = getDraft(draftKey(id))
+      typeLine(id, lineTextFor(draft, id, mentionTarget(draft, agents), names))
+    }
+    asked.current = { id, waiting }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, to?.id])
 
   const makeNew = async (prompt: string): Promise<void> => {
     setBusy(true)
@@ -114,18 +134,20 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     setError(null)
     // "@Other …" goes to Other, whoever the box is carrying.
     const mention = mentionTarget(text, agents)
-    if (mention) {
+    if (mention && mention.id !== to?.id) {
       if (!mention.text) return
       sendToAgent(mention.id, mention.text)
+      // Enter took whatever sat in Other's line along with the words.
+      endLine(mention.id)
       setText('')
       return
     }
     if (to) {
+      const words = mention ? mention.text : text
       // A bare Enter only where its terminal is in sight: from a card it
       // could answer a permission prompt nobody is looking at.
-      if (!text.trim() && to.id !== fullAgentId) return
-      sendToAgent(to.id, text)
-      setText('')
+      if (!words.trim() && to.id !== fullAgentId) return
+      submitLine(to.id, words.trim() ? words : '')
       return
     }
     const prompt = text.trim()
@@ -195,7 +217,8 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
         aria-label={to ? `Prompt ${to.name}` : 'Prompt for a new agent'}
         autoComplete="off"
         disabled={busy}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => write(e.target.value, (e.nativeEvent as InputEvent).isComposing === true)}
+        onCompositionEnd={(e) => write(e.currentTarget.value)}
         onFocus={() => setHeld({ id: to?.id ?? null })}
         onBlur={() => setHeld(null)}
         onKeyDown={(e) => {
@@ -208,7 +231,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           if (e.key === 'Escape') e.currentTarget.blur()
         }}
       />
-      {to && <VoiceBar key={to.id} terminalId={to.id} activity={activity} remote={to.remote} onDictation={(words) => setText(text.trim() ? `${text.trimEnd()} ${words}` : words)} sendButton={false} />}
+      {to && <VoiceBar key={to.id} terminalId={to.id} activity={activity} remote={to.remote} onDictation={(words) => write(text.trim() ? `${text.trimEnd()} ${words}` : words)} sendButton={false} />}
       <button type="submit" className="cr-btn sm primary" title={to ? 'Send (Enter)' : 'Make the agent (Enter)'} aria-label="Send" disabled={busy || (!text.trim() && to?.id !== fullAgentId) || (!to && !text.trim())}>
         <CrIcon name="send" />
       </button>

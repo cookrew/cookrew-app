@@ -241,9 +241,12 @@ describe('the wiring', () => {
     expect(css).toMatch(/\.cr-pets \{[^}]*z-index: 55;/)
   })
 
-  it("the card's reply box (one copy, quick-reply.tsx) is the voice bar's two writes", () => {
+  it("the card's reply box (one copy, quick-reply.tsx) writes the agent's own line, then Enter", () => {
     const parts = readFileSync('src/renderer/src/zoom/quick-reply.tsx', 'utf8')
-    expect(parts).toMatch(/ptyInput\(agentId, text\)\s+cookrew\(\)\.ptyInput\(agentId, '\\r'\)/)
+    expect(parts).toMatch(/typeLine\(agentId, text\)/)
+    expect(parts).toMatch(/submitLine\(agentId, text\)/)
+    const line = readFileSync('src/renderer/src/prompt/live-line.ts', 'utf8')
+    expect(line).toMatch(/typeLine\(agentId, text, true\)\s+cookrew\(\)\.ptyInput\(agentId, '\\r'\)/)
   })
 
   it('reads no tail and no board of its own: the pets only pick faces, the card is the view\'s', () => {

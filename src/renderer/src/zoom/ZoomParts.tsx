@@ -158,7 +158,7 @@ export const ItemNode = memo(function ItemNode({ item, names, bind, onClick, onD
  * not one per agent behind the crew; the pets open this same card.
  */
 export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onOpen, onDelete }: { agent: AgentView; card?: boolean; bind: Bind; onOpen: () => void; onDelete?: () => void }): React.JSX.Element {
-  const reply = useQuickReply(agent.id)
+  const reply = useQuickReply(agent.id, undefined, card)
   return (
     <div ref={bind(`agent:${agent.id}`)} className={`zv-m ${agent.phase}`}>
       <div ref={bind(`agent-av:${agent.id}`)} className="zv-av" title={`${agent.name} · ${agent.word}`} {...press(onOpen, `${agent.name}, ${agent.word}`)}>
