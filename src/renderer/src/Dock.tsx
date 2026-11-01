@@ -9,7 +9,7 @@ import { RoleAvatar } from './nodes/RoleAvatar'
 /** What a dock button does: open the preset row, or make its card at once. */
 export type DockTool =
   | { id: 'terminal'; label: string; title: string; icon: CrIconName; act: 'arm' }
-  | { id: 'note' | 'browser'; label: string; title: string; icon: CrIconName; act: 'make' }
+  | { id: 'note' | 'browser'; label: string; title: string; icon: CrIconName; act: 'make'; canvasOnly: true }
   | { id: 'connect'; label: string; title: string; icon: CrIconName; act: 'arm'; canvasOnly: true }
 
 /**
@@ -19,11 +19,15 @@ export type DockTool =
  * CONNECT needs canvas cards to wire, so it is left out while the canvas is
  * retired, and so is the clipboard toggle (not a tool, a pressed TOGGLE over
  * the resting hand, rendered before the tools).
+ *
+ * NOTE and BROWSER are left out too (owner, 2026-11-01): a note or a browser
+ * is made inside an agent, from its full view's browsers-and-notes column
+ * (stage/AgentArtifacts.tsx), so it is wired to the agent that holds it.
  */
 const TOOLS: readonly DockTool[] = [
   { id: 'terminal', label: 'TERMINAL', title: 'New agent — pick a harness, role or team', icon: 'terminal', act: 'arm' },
-  { id: 'note', label: 'NOTE', title: 'New note in this workspace', icon: 'note', act: 'make' },
-  { id: 'browser', label: 'BROWSER', title: 'New browser in this workspace', icon: 'browser', act: 'make' },
+  { id: 'note', label: 'NOTE', title: 'New note in this workspace', icon: 'note', act: 'make', canvasOnly: true },
+  { id: 'browser', label: 'BROWSER', title: 'New browser in this workspace', icon: 'browser', act: 'make', canvasOnly: true },
   { id: 'connect', label: 'CONNECT', title: 'CONNECT', icon: 'connect', act: 'arm', canvasOnly: true }
 ]
 

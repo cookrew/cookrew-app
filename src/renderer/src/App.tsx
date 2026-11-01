@@ -1717,7 +1717,9 @@ function Canvas(): React.JSX.Element {
             )}
           </WithCrew>
         )}
-        {(zoomFull !== null || view !== 'stage') && <ItemPets
+        {/* Not beside an agent's full view: its browsers and notes attach to
+            its own sheet there (stage/AgentArtifacts.tsx · owner, 2026-11-01). */}
+        {(zoomFull === 'item' || view !== 'stage') && <ItemPets
           workspace={workspace}
           attachIndex={attachIndex}
           dock={view === 'stage' && zoomFull !== null ? fullDock.items : null}
