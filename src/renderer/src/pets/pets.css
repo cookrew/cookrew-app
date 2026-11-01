@@ -104,10 +104,11 @@
 }
 
 /* The demo's columns (group-motion-pivot.html, the full view): the crew as
-   ink faces at half size, 60px apart; the browsers and notes as page
-   thumbnails at 0.3 of the 168 x 108 thumbnail, 64px apart. */
+   ink faces at half size, the browsers and notes as page thumbnails at 0.3 of
+   the 168 x 108 thumbnail. Close, one gap for both (owner, 2026-11-01: the
+   demo's 60px and 64px steps left them strewn down the edge). */
 .cr-pets.docked.right {
-  gap: 26px;
+  gap: 12px;
 }
 
 .cr-pets.docked .cr-pet:not(.item):not(.more) {
@@ -116,7 +117,7 @@
 }
 
 .cr-pets.docked.left {
-  gap: 30px;
+  gap: 12px;
 }
 
 .cr-pets.docked .cr-pet.item {
@@ -167,7 +168,7 @@
   }
   .cr-pets.docked.left,
   .cr-pets.docked.right {
-    gap: 18px;
+    gap: 10px;
   }
 }
 

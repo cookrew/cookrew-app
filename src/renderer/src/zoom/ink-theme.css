@@ -376,6 +376,17 @@ body.cr-ink .cr-pets:not(.right) {
   box-shadow: var(--sumi-lift);
 }
 
+/* Beside a desktop full view the browsers' and notes' troop has no frame
+   either, like the agents' (owner, 2026-11-01). The phone strip keeps it: it
+   sits over the transcript, and the paper is what its faces read on. */
+@media (min-width: 701px) {
+  body.cr-ink .cr-pets.docked {
+    border-color: transparent;
+    background: none;
+    box-shadow: none;
+  }
+}
+
 body.cr-ink .cr-pet-card {
   border: 1px solid var(--sumi-hair-2);
   background: var(--sumi-card);
