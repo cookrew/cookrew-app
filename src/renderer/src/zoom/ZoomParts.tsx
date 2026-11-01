@@ -3,6 +3,7 @@ import { sameProps } from './same-props'
 import { useThumb } from '../activity-thumb-store'
 import { InkAvatar, InkRing } from './InkAvatar'
 import { CardWords, QuickReply, useQuickReply } from './quick-reply'
+import { typingOf } from './typing-line'
 import './agent-card.css'
 import type { AgentView, ItemView, MarkView, MachineView } from './zoom-model'
 
@@ -42,9 +43,13 @@ export const NOTE_GLYPH = (
   </svg>
 )
 
-/** "▭ 2 ▤ 1": browsers and notes, zero counts left out; "nothing open" when both are. */
-export const Counts = memo(function Counts({ browsers, notes, none = 'nothing open' }: { browsers: number; notes: number; none?: string }): React.JSX.Element {
-  if (browsers + notes === 0) return <span className="zv-none">{none}</span>
+/**
+ * "▭ 2 ▤ 1": browsers and notes, zero counts left out. When both are, `none`
+ * if one is given, else nothing: under an agent's face "nothing open" was
+ * noise (owner, 2026-11-01).
+ */
+export const Counts = memo(function Counts({ browsers, notes, none }: { browsers: number; notes: number; none?: string }): React.JSX.Element | null {
+  if (browsers + notes === 0) return none ? <span className="zv-none">{none}</span> : null
   return (
     <>
       {browsers > 0 && (
@@ -153,12 +158,13 @@ export const ItemNode = memo(function ItemNode({ item, names, bind, onClick, onD
 
 /**
  * One agent: its ink face, name, state and counts, always (the crew draws
- * them); and, when `card` (the open card, ZoomView · cardIds), the card's own
+ * them), and the words it has typed unsent (typing-line.ts); and, when `card` (the open card, ZoomView · cardIds), the card's own
  * parts: its latest, the empty strip and the quick reply. One card instance,
  * not one per agent behind the crew; the pets open this same card.
  */
 export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onOpen, onDelete }: { agent: AgentView; card?: boolean; bind: Bind; onOpen: () => void; onDelete?: () => void }): React.JSX.Element {
   const reply = useQuickReply(agent.id, undefined, card)
+  const typing = typingOf(reply.draft, agent.turn?.pendingInput, agent.name)
   return (
     <div ref={bind(`agent:${agent.id}`)} className={`zv-m ${agent.phase}`}>
       <div ref={bind(`agent-av:${agent.id}`)} className="zv-av" title={`${agent.name} · ${agent.word}`} {...press(onOpen, `${agent.name}, ${agent.word}`)}>
@@ -179,6 +185,10 @@ export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onO
       </div>
       <div ref={bind(`agent-cnt:${agent.id}`)} className="zv-cnt">
         <Counts browsers={agent.browsers} notes={agent.notes} />
+      </div>
+      {/* Always mounted, so the painter holds it; empty when nothing is typed. */}
+      <div ref={bind(`agent-dft:${agent.id}`)} className="zv-dft" style={HIDDEN}>
+        {typing && <span>{typing}</span>}
       </div>
       {/* The card's own parts: the open card only. Mounted hidden; the painter shows them. */}
       {card && (

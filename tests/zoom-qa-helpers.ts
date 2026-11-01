@@ -1,6 +1,6 @@
 // Shared by the zoom QA tests (Gauge, 2026-11-01): a crew model, and a paint()
 // run on stand-in elements that reads back what the painter wrote.
-import { layoutOf, paint, type FrameEls, type FrameModel, type FrameState } from '../src/renderer/src/zoom/zoom-frame'
+import { layoutOf, paint, type AgentEls, type FrameEls, type FrameModel, type FrameState } from '../src/renderer/src/zoom/zoom-frame'
 
 export const modelOf = (agents: number, workspaces = 1): FrameModel => ({
   agents: Array.from({ length: agents }, (_, i) => ({ id: `a${i}`, name: `A${i}`, preset: 'Claude Code', orch: i === 0, waiting: false })),
@@ -18,11 +18,11 @@ const part = (): HTMLElement => ({ style: {} }) as unknown as HTMLElement
 /** The owner's workspace label ("13 COOKREW DEV 216 83"): about this wide and tall at 11px. */
 export const LABEL = { w: 200, h: 24 }
 
-export function paintAt(model: FrameModel, st: Partial<FrameState> & { sv: number; w: number; h: number; narrow: boolean }, size: { w: number; h: number } = LABEL) {
+export function paintAt(model: FrameModel, st: Partial<FrameState> & { sv: number; w: number; h: number; narrow: boolean }, size: { w: number; h: number } = LABEL, agents: Map<string, AgentEls> = new Map()) {
   const els = {
     devices: part(), device: part(), scene: part(), panel: part(), wash: part(), ring: part(), label: part(), newCap: part(), machine: part(),
     labelW: size.w, labelH: size.h,
-    agents: new Map(), links: new Map(), items: new Map(), ties: new Map(), marks: new Map(), next: null
+    agents, links: new Map(), items: new Map(), ties: new Map(), marks: new Map(), next: null
   } as unknown as FrameEls
   const L = layoutOf(model, st.narrow)
   const out = paint(model, L, els, { dir: 'agents', focus: model.agents[0]?.id ?? null, leaving: null, leavingAmt: 0, focusItem: null, ...st })

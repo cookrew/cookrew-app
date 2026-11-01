@@ -64,6 +64,8 @@ export interface AgentEls {
   nm: Put
   st: Put
   cnt: Put
+  /** The words it has typed unsent, under its counts (ZoomParts · AgentNode); null where not mounted. */
+  dft: Put | null
   /** The card's own parts, mounted for the open card only (ZoomView · cardIds): null elsewhere. */
   body: Put | null
   reply: Put | null
@@ -533,6 +535,10 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     put(e.st, `translate(${f1(lerp(-e.stW / 2, 30, nx))}px, ${f1(lerp(62, -2, ny) + (1 - stIn) * -18)}px)`, stIn * gone * words)
     const cntIn = ramp(z, 0.62, 0.95)
     put(e.cnt, `translate(${f1(lerp(-e.cntW / 2, 30 + e.stW + 10, nx))}px, ${f1(lerp(80, -1, ny) + (1 - cntIn) * -10)}px)`, cntIn * gone * words)
+    // The typed words: centred by their own CSS (their width moves with every
+    // key, the measured ones only with the model), on the counts' line when
+    // there are none. The open card's reply box holds them, so they go there.
+    put(e.dft, `translate(0px, ${f1((e.cntW > 0 ? 96 : 80) + (1 - cntIn) * -10)}px)`, cntIn * gone * words * (1 - nx))
     const b = ramp(zi, 1.6, 1.97)
     put(e.body, `translate(-18px, ${f1(32 + (1 - b) * 10)}px)`, b * gone * words)
     put(e.emp, null, ramp(zi, 1.6, 1.97) * gone * words)
