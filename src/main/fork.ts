@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto'
 import { ownerSubmit } from './ask'
 import { DEFAULT_TERMINAL_SIZE, TerminalNodeData, uniqueName } from '../shared/model'
 import { buildForkPreamble, buildResumeForkNotice } from '../shared/fork'
-import { stripSessionFlags } from '../shared/claude-fork'
+import { isClaudeCommand, stripSessionFlags } from '../shared/claude-fork'
 import { forkClaudeSession } from './claude-fork'
 import { isPiCommand, stripPiSessionFlags } from './pi-bind'
 import type { WorkspaceStore } from './store'
@@ -39,6 +39,21 @@ const BOOT_POLL_MS = 300
 const BOOT_QUIET_MS = 1500
 /** Inject anyway after this long, so a chatty TUI can't stall the fork. */
 const BOOT_TIMEOUT_MS = 25000
+
+/**
+ * HAS CLAUDE DRAWN ITS INPUT BOX? (2026-11-01: a prompt made from the global
+ * box arrived as "gent prompt inputbox…".) The pane runs `clear; exec claude`,
+ * and node can sit silent for longer than BOOT_QUIET_MS before Claude draws
+ * anything: the quiet came before the TUI read its input, and the paste's
+ * first character went with the terminal's mode switch. So a Claude session
+ * also waits for its composer — the prompt mark between the box's two rules,
+ * or the hint line under it.
+ */
+export function claudeComposerDrawn(screen: string): boolean {
+  const lines = screen.split('\n')
+  if (lines.some((line) => /\? for shortcuts|bypass(?:ing)? permissions|shift\+tab to cycle/i.test(line))) return true
+  return lines.some((line) => /^\s*[─━]{10,}\s*$/.test(line)) && lines.some((line) => /^\s*(?:│\s*)?[❯>]\s?/.test(line))
+}
 /**
  * Create the fork node (placed beside its source, wired to it with an edge)
  * and kick off context injection. Returns as soon as the card exists — the
@@ -179,10 +194,11 @@ export function forkContextReady(nodeId: string): Promise<void> {
  */
 export async function injectWhenReady(session: PtySession, preamble: string): Promise<void> {
   const startedAt = Date.now()
+  const claude = isClaudeCommand(session.command ?? '')
   await new Promise<void>((resolve) => {
     const timer = setInterval(() => {
       const idle = session.idleFor()
-      const booted = Number.isFinite(idle) && idle >= BOOT_QUIET_MS
+      const booted = Number.isFinite(idle) && idle >= BOOT_QUIET_MS && (!claude || claudeComposerDrawn(session.viewportText()))
       if (booted || Date.now() - startedAt >= BOOT_TIMEOUT_MS) {
         clearInterval(timer)
         resolve()
