@@ -209,6 +209,20 @@
     width: 38px;
     height: 25px;
   }
+  /* STACKED (owner, 2026-11-02): in an agent's full view the troop shares the
+     head row with CHAT ✎+ ⊕+ (pet-dock.ts · rowSpot), so each face lies over
+     the one before it and shows 16 px of it; "+N" keeps its own room. The one
+     a finger rests on, or that is open, comes to the top. */
+  .cr-pets.docked .cr-pet:not(.more) + .cr-pet:not(.more) {
+    margin-left: -18px;
+  }
+  .cr-pets.docked .cr-pet.item + .cr-pet.item {
+    margin-left: -28px;
+  }
+  .cr-pets.docked .cr-pet:hover,
+  .cr-pets.docked .cr-pet.open {
+    z-index: 1;
+  }
 }
 
 /* An item's two faces (ItemPets.tsx): the coin while it floats, the page

@@ -1002,3 +1002,98 @@
     max-height: calc(100dvh - 140px - var(--kb-inset, 0px));
   }
 }
+
+/* ---- AN AGENT'S FULL VIEW ON A PHONE (owner, 2026-11-02) ----
+   The bar is "‹ face name · state": the device and workspace steps fold into
+   ‹ (the round ‹'s own step out), and the full view draws who it is into the
+   slot (route-slot.ts) — so its head below keeps only its tools. Above a
+   phone the route is the route, and these two stay hidden. */
+.cr-route-back,
+.cr-route-full {
+  display: none;
+}
+
+@media (max-width: 700px) {
+  .cr-route.has-full .cr-route-device,
+  .cr-route.has-full .cr-route-workspace {
+    display: none;
+  }
+
+  /* The agent's own step stays until the full view has drawn into the slot. */
+  .cr-route.has-full:has(.cr-route-full:not(:empty)) .cr-route-agent,
+  .cr-route.has-full .cr-route-agent .cr-route-sep {
+    display: none;
+  }
+
+  .cr-route.has-full .cr-route-back {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    margin: 0 4px 0 0;
+    padding: 0 0 3px;
+    border: 1.5px solid var(--sumi-hair-2, var(--line));
+    border-radius: 50%;
+    background: var(--sumi-card, var(--cream-hi));
+    color: var(--sumi-ink, var(--ink));
+    font: 600 20px/1 var(--sumi-serif, Georgia, serif);
+    cursor: pointer;
+    -webkit-app-region: no-drag;
+  }
+
+  .cr-route.has-full .cr-route-full:not(:empty) {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  .cr-route-face {
+    flex: none;
+    display: block;
+    width: 30px;
+    height: 30px;
+  }
+
+  .cr-route-face svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  .cr-route-who {
+    min-width: 0;
+    display: grid;
+    gap: 0;
+  }
+
+  .cr-route-who b {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-family: var(--sumi-serif, 'Iowan Old Style', Palatino, Georgia, serif);
+    font-weight: 600;
+    line-height: 1.05;
+    color: var(--sumi-ink, var(--ink));
+  }
+
+  .cr-route-who small {
+    display: flex;
+    gap: 8px;
+    overflow: hidden;
+    white-space: nowrap;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    line-height: 1.1;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--sumi-muted, var(--muted));
+  }
+
+  .cr-route-who .waiting {
+    color: var(--sumi-wait, var(--danger, #c0392b));
+  }
+}

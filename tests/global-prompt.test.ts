@@ -171,7 +171,7 @@ describe('the box, drawn', () => {
     const agents = [{ id: 'l', name: 'Lark', remote: false }]
     const full = renderToStaticMarkup(createElement(GlobalPrompt, { fullAgentId: 'l', agents, harnesses: ['Claude Code', 'Codex'], nodes: [] }))
     expect(full).toContain('@Lark')
-    expect(full).toContain('placeholder="Prompt Lark… # a note or browser"')
+    expect(full).toContain('placeholder="Reply… · # a note or browser"')
     expect(full).toContain('voice-bar')
     expect(full.match(/aria-label="Send"/g)?.length).toBe(1)
     const none = renderToStaticMarkup(createElement(GlobalPrompt, { fullAgentId: null, agents, harnesses: ['Claude Code', 'Codex'], nodes: [] }))

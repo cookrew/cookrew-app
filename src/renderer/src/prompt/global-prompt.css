@@ -211,6 +211,11 @@
   cursor: progress;
 }
 
+/* The agent's keys behind one button: a phone's (below); a wider screen keeps them in line. */
+.cr-prompt-keys {
+  display: none;
+}
+
 .cr-prompt-error {
   flex: 0 1 auto;
   max-width: 34%;
@@ -238,26 +243,30 @@
     padding: 6px;
   }
 
+  /* Row 1: the words, and Send at their end (owner, 2026-11-02). */
   body.cookrew-mobile .cr-prompt input {
-    order: -1;
-    flex: 1 1 100%;
+    order: -2;
+    flex: 1 1 calc(100% - 56px);
     height: 36px;
     padding: 0 6px;
     font-size: 16px;
   }
 
+  /* Row 2 never wraps: the chips shorten before the mic and ⌨ move. */
   body.cookrew-mobile .cr-prompt-to {
     flex: 0 1 auto;
     min-width: 0;
-    max-width: 45%;
+    max-width: 38%;
   }
 
   body.cookrew-mobile .cr-prompt-new {
     max-width: 45%;
   }
 
-  /* The thumb's two buttons: a real tap size, pushed to the row's end. */
+  /* The thumb's buttons: a real tap size. Send ends the words' row; the mic
+     and ⌨ end the chips' row. */
   body.cookrew-mobile .cr-prompt .voice-mic,
+  body.cookrew-mobile .cr-prompt .cr-prompt-keys,
   body.cookrew-mobile .cr-prompt > button[type='submit'] {
     flex: none;
     min-width: 44px;
@@ -266,11 +275,32 @@
     justify-content: center;
   }
 
-  body.cookrew-mobile .cr-prompt .voice-mic + button[type='submit'] {
+  body.cookrew-mobile .cr-prompt > button[type='submit'] {
+    order: -1;
     margin-left: 0;
   }
 
+  body.cookrew-mobile .cr-prompt .voice-mic + .cr-prompt-keys {
+    margin-left: 0;
+  }
+
+  body.cookrew-mobile .cr-prompt .cr-prompt-keys {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  body.cookrew-mobile .cr-prompt .cr-prompt-keys.open {
+    box-shadow: inset 0 0 0 1.5px var(--sumi-seal, var(--amber-deep));
+    color: var(--sumi-seal, var(--amber-deep));
+  }
+
+  /* The agent's keys open by themselves while it waits on you (GlobalPrompt · keysFolded). */
+  body.cookrew-mobile .cr-prompt.keys-folded .voice-bar {
+    display: none;
+  }
+
   body.cookrew-mobile .cr-prompt .voice-mic .cr-icon,
+  body.cookrew-mobile .cr-prompt .cr-prompt-keys .cr-icon,
   body.cookrew-mobile .cr-prompt > button[type='submit'] .cr-icon {
     width: 16px;
     height: 16px;
@@ -432,10 +462,17 @@
 @media (max-width: 700px) {
   /* A phone box's second row holds the left chip, this, the mic and Send:
      the chip shows the model only, and gives up room first. */
+  /* Grown from 0, the model never wraps the row: it takes what the name
+     (capped at 38%) and the mic and ⌨ leave, up to its own width — the whole
+     "claude-opus-5-5" beside a short name, an ellipsis beside a long one. */
   .cr-prompt .cr-tune-menu {
-    flex: 0 1 auto;
+    flex: 1 1 0;
     min-width: 0;
-    max-width: none;
+    max-width: max-content;
+  }
+
+  .cr-prompt .cr-tune-menu-btn {
+    overflow: hidden;
   }
 
   .cr-prompt .cr-tune-menu-effort {

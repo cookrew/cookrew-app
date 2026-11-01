@@ -116,6 +116,27 @@ function stripSpot(side: Side, sheet: Box, troop: { readonly width: number; read
   return { left: Math.round(Math.min(Math.max(0, left), Math.max(0, viewport.width - troop.width))), top: Math.round(Math.max(0, top)) }
 }
 
+/**
+ * AN AGENT'S FULL VIEW ON A PHONE (owner, 2026-11-02): the head is one row of
+ * tools (CHAT ✎+ ⊕+ at its right), its name on the bar above, and the troops
+ * stand in that same row instead of a strip of their own: the crew from the
+ * row's left, as the design draws it — unless the browsers and notes stand
+ * there (`shared`), when the crew ends just before the tools. `row` is the
+ * head's box and where its tools begin.
+ */
+export const ROW_GAP_PX = 8
+export function rowSpot(
+  side: Side,
+  row: Box & { readonly toolsLeft: number },
+  troop: { readonly width: number; readonly height: number },
+  viewport: { readonly width: number },
+  shared = false
+): { left: number; top: number } {
+  const wanted = side === 'right' && shared ? row.toolsLeft - ROW_GAP_PX - troop.width : row.left
+  const left = Math.min(Math.max(row.left, wanted), Math.max(0, viewport.width - troop.width))
+  return { left: Math.round(left), top: Math.round(row.top + (row.height - troop.height) / 2) }
+}
+
 /** A dragged troop close enough to its column to snap on: its middle near the column's, and over the sheet's height. */
 export function nearDock(side: Side, troop: Box, full: Box, sheet: Box): boolean {
   const middle = columnMiddle(side, full, sheet, troop.width)
