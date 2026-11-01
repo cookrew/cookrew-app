@@ -171,6 +171,17 @@
   border-top: 0;
 }
 
+/* A screenshot on its way into the prompt (prompt-attach.ts). */
+.cr-prompt-note {
+  flex: none;
+  font: 11px/1.2 var(--font-mono);
+  color: var(--sumi-muted, var(--muted));
+}
+
+.cr-prompt.attaching input {
+  cursor: progress;
+}
+
 .cr-prompt-error {
   flex: 0 1 auto;
   max-width: 34%;

@@ -54,6 +54,12 @@ describe("Enter in the agent's prompt box sends", () => {
     expect(html).toMatch(/term-key/)
   })
 
+  it('the box says a screenshot can be pasted or dropped into it, for an agent and for a new one', async () => {
+    const html = await render({ id: 'a1', name: 'Gauge', remote: false })
+    expect(html).toMatch(/<input[^>]*title="Paste or drop a screenshot: its path goes into the prompt"/)
+    expect(html).not.toContain('attaching…')
+  })
+
   it('Send is the only submit button, so implicit submission goes to it', async () => {
     for (const remote of [false, true]) {
       const html = await render({ id: 'a1', name: 'Gauge', remote })
