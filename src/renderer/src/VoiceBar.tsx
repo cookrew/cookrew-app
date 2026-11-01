@@ -166,6 +166,7 @@ function TermKeys({ terminalId }: { terminalId: string }): React.JSX.Element {
       {TERM_KEYS.map((key) => (
         <button
           key={key.title}
+          type="button"
           className={`cr-btn sm term-key${key.icon ? ' term-key-icon' : ''}`}
           tabIndex={-1}
           title={key.title}
@@ -292,6 +293,7 @@ export function VoiceBar({
       {!remote && <AttachButton terminalId={terminalId} />}
       {hasRecognition && (
         <button
+          type="button"
           className={`cr-btn sm voice-mic${listening ? ' listening' : ''}`}
           title="Voice dictation"
           onMouseDown={keepFocus}
@@ -304,6 +306,7 @@ export function VoiceBar({
         <span className="voice-ghost">{text.trim() ? text : 'Listening…'}</span>
       )}
       <button
+        type="button"
         className={`cr-btn sm voice-speak${speakReplies ? ' on' : ''}`}
         title="Speak replies aloud"
         onMouseDown={keepFocus}
@@ -314,6 +317,7 @@ export function VoiceBar({
       <TermKeys terminalId={terminalId} />
       {sendButton && (
         <button
+          type="button"
           className="cr-btn sm primary"
           title="Send (Enter)"
           onMouseDown={keepFocus}
