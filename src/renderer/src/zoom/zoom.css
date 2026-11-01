@@ -1871,3 +1871,60 @@
     height: 36px;
   }
 }
+
+/* ── agents per row (ZoomView · crew-cols.ts): a small pill at the crew's top right ── */
+.zv-cols {
+  position: absolute;
+  z-index: 44;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 4px 4px 10px;
+  border-radius: 999px;
+  background: var(--zv-card);
+  box-shadow:
+    inset 0 0 0 1px var(--zv-hair-2),
+    0 6px 18px var(--zv-shadow);
+  color: var(--zv-ink-soft);
+  font: 10px/1 var(--zv-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  animation: zv-controls-in 180ms ease-out;
+}
+
+.zv-cols > span {
+  margin-right: 4px;
+}
+
+.zv-cols button {
+  appearance: none;
+  width: 26px;
+  height: 26px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--zv-ink-soft);
+  font: 600 12px/1 var(--zv-mono);
+  cursor: pointer;
+}
+
+.zv-cols button[aria-pressed='true'] {
+  background: var(--zv-ink);
+  color: var(--zv-paper);
+}
+
+.zv-cols button:focus-visible {
+  outline: 2px solid var(--zv-seal);
+  outline-offset: 2px;
+}
+
+@media (max-width: 700px) {
+  .zv-cols button {
+    width: 32px;
+    height: 32px;
+  }
+}

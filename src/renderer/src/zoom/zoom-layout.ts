@@ -49,10 +49,18 @@ export function stackOf(agents: readonly CrewAgent[]): Record<string, Pos & { s:
 /** Orchestrators first, then the rest in their given order. */
 export const crewOrder = (agents: readonly CrewAgent[]): CrewAgent[] => [...agents.filter((a) => a.orch), ...agents.filter((a) => !a.orch)]
 
-/** The crew: orchestrators in a row on top, everyone else in rows under them. */
-export function crewOf(agents: readonly CrewAgent[], narrow: boolean): { at: Record<string, Pos>; next: Pos; box: Box } {
-  // Two on a phone: three at 200px apart drew every face at 0.4 (owner, 2026-11-01).
-  const cols = narrow ? 2 : 5
+/**
+ * Agents per row the owner can pick (owner, 2026-11-01: "a row of 3, 4 or 5
+ * columns to choose from"). A phone keeps 2 among them: it is its default.
+ */
+export const CREW_COLS = { wide: [3, 4, 5], narrow: [2, 3, 4, 5] } as const
+
+/** Two on a phone: three at 200px apart drew every face at 0.4 (owner, 2026-11-01). */
+export const defaultCrewCols = (narrow: boolean): number => (narrow ? 2 : 5)
+
+/** The crew: orchestrators in a row on top, everyone else in rows under them, `cols` to a row (the pick, else the default). */
+export function crewOf(agents: readonly CrewAgent[], narrow: boolean, picked?: number): { at: Record<string, Pos>; next: Pos; box: Box } {
+  const cols = picked ?? defaultCrewCols(narrow)
   const leads = agents.filter((a) => a.orch)
   const rest = agents.filter((a) => !a.orch)
   const rows: CrewAgent[][] = []
