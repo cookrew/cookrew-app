@@ -449,3 +449,84 @@ body.cr-ink .cr-pet-note-face.browser {
   font-size: 11px;
 }
 
+
+/* ── the board's search box (BoardSearch.tsx): ⋯'s paper frame ── */
+body.cr-ink .cr-board-box {
+  border: 1.5px solid var(--sumi-rule);
+  border-radius: 6px;
+  box-shadow: none;
+  background: var(--sumi-card);
+  color: var(--sumi-muted);
+}
+
+body.cr-ink .cr-board-box:hover,
+body.cr-ink .cr-board-search.open .cr-board-box {
+  border-color: var(--sumi-ink);
+}
+
+body.cr-ink .cr-board-search.open .cr-board-box {
+  background: var(--sumi-card);
+  color: var(--sumi-ink);
+}
+
+body.cr-ink .cr-board-box:focus-within {
+  border-color: var(--sumi-seal);
+}
+
+/* The board hanging under the box is one sheet of paper: the facet strip and
+   the list lose their own boxes, a hairline parts them. */
+body.cr-ink .roster-panel.popover .roster-facets {
+  padding: 0 2px;
+  background: transparent;
+  border: 0;
+}
+
+body.cr-ink .roster-panel.popover .roster-list {
+  border: 0;
+  border-top: 1px solid var(--sumi-hair-2);
+  background: transparent;
+}
+
+/* A violet chip (the board's workspace tag) kept its light text on the ink
+   chip's paper fill, and read as nothing: ink on the soft violet instead. */
+body.cr-ink .cr-chip.violet {
+  background: var(--sumi-violet-soft);
+  border-color: transparent;
+  color: var(--sumi-ink);
+}
+
+body.cr-ink .cr-board-input {
+  font-family: var(--font-serif);
+  font-size: 14px;
+  color: var(--sumi-ink);
+}
+
+body.cr-ink .cr-board-input::placeholder {
+  font-style: italic;
+  color: var(--sumi-muted);
+}
+
+body.cr-ink .cr-board-kbd {
+  border-color: var(--sumi-hair-2);
+  background: var(--sumi-paper-2);
+  color: var(--sumi-muted);
+}
+
+body.cr-ink .cr-board-clear:hover {
+  background: var(--sumi-paper-2);
+  color: var(--sumi-ink);
+}
+
+body.cr-ink .cr-board-loading {
+  border: 1px solid var(--sumi-hair-2);
+  border-radius: 12px;
+  background: var(--sumi-card);
+  box-shadow: var(--sumi-lift);
+  color: var(--sumi-muted);
+}
+
+@media (max-width: 700px) {
+  body.cr-ink .cr-board-input {
+    font-size: 16px;
+  }
+}

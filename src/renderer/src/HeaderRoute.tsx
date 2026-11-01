@@ -23,9 +23,13 @@ export function deviceLabel(name: string | null): string {
   return (name ?? 'This desktop').replace(/\.local$/i, '')
 }
 
-/** The workspace step is current when nothing is zoomed: the stage is at the workspace. */
-export function routeAgent(view: MainView, zoomedAgent: string | null): string | null {
-  return view === 'agents' ? null : zoomedAgent
+/**
+ * The workspace step is current when nothing is zoomed: the stage is at the
+ * workspace. The stage is the only view now (the board drops under the bar
+ * instead of replacing the stage), so the agent step follows the zoom alone.
+ */
+export function routeAgent(_view: MainView, zoomedAgent: string | null): string | null {
+  return zoomedAgent
 }
 
 /** This desktop's name, asked of main once (machine:name); the phone names its desktop from the path. */
