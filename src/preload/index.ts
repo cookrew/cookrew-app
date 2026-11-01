@@ -368,6 +368,8 @@ const api = {
   // returns the absolute path to paste into the terminal.
   saveAttachmentBytes: (name: string, bytes: Uint8Array) =>
     ipcRenderer.invoke('attach:save', name, bytes),
+  // A prompt's picture (main/prompt-image.ts), asked for once a view scrolls to it.
+  readImage: (ref: unknown) => ipcRenderer.invoke('image:read', ref),
 
   listActivity: () => ipcRenderer.invoke('activity:list'),
   listTurns: (terminalId: string) => ipcRenderer.invoke('turn:history', terminalId),

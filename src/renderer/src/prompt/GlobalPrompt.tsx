@@ -24,6 +24,8 @@ import { sendToAgent } from './send'
 import { useDictation } from './use-dictation'
 import { usePromptAttach } from './use-prompt-attach'
 import { useDropZone } from './drop-zone'
+import { PictureStrip, picturesOfDraft } from '../pictures/PictureStrip'
+import { withoutImagePath } from '../../../shared/prompt-images'
 import { keyboardCoverNow, riseOver, type RiseAnchor } from './rise-anchor'
 import './global-prompt.css'
 
@@ -506,6 +508,11 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           {error}
         </span>
       )}
+      <PictureStrip
+        pictures={picturesOfDraft(text)}
+        className="cr-prompt-pics"
+        onRemove={(picture) => picture.path && write(withoutImagePath(text, picture.path))}
+      />
       {dropOver && (
         <div className="attach-drop-hint cr-prompt-drop">
           <span>

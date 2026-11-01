@@ -1,3 +1,4 @@
+import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
 import type { CardRouteState, RouteState } from '../../shared/route'
 import { AuthError, authStore, tokenParam, type AuthScope } from './auth-gate'
 import { ReconnectingStream, attachTerminalStream } from './live-stream'
@@ -186,6 +187,24 @@ async function upload(name: string, body: Blob): Promise<string> {
     })
   )
   return result.path
+}
+
+/**
+ * A prompt's picture, as raw bytes (mobile-api · /api/image). A picture that
+ * is not there, or not the phone's to see, is a 404: nothing to draw.
+ */
+async function readImage(ref: ImageRef): Promise<ImageBytes | null> {
+  const query =
+    'path' in ref
+      ? `path=${encodeURIComponent(ref.path)}`
+      : `file=${encodeURIComponent(ref.file)}&uuid=${encodeURIComponent(ref.uuid)}&i=${ref.i}`
+  const url = 'path' in ref ? apiPath(`/api/image?${query}`) : apiPath(`/api/terminal/${encodeURIComponent(ref.terminalId)}/image?${query}`)
+  const headers: Record<string, string> = {}
+  const token = authStore().token()
+  if (token) headers.authorization = `Bearer ${token}`
+  const response = await planeFetch(url, { headers })
+  if (!response.ok) return null
+  return { mime: response.headers.get('content-type') ?? 'image/png', bytes: new Uint8Array(await response.arrayBuffer()) }
 }
 
 /**
@@ -454,6 +473,7 @@ export function createRemoteApi(): CookrewApi {
     saveAttachmentBytes: (name, bytes) =>
       upload(name, new Blob([new Uint8Array(bytes).slice().buffer])),
     pickFiles: () => Promise.resolve([]),
+    readImage,
 
     // Ordered and coalesced — see raw-input-queue.ts: one request in flight
     // per terminal, later bytes ride the next request as a single batch.

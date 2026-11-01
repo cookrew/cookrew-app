@@ -1,3 +1,4 @@
+import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
 import type { DeepLink } from '../../shared/deep-link'
 import type { AnsweredRow, QueueRow, RowAction } from '../../shared/account-requests'
 import type { CardRoute, CardRouteState, RouteState } from '../../shared/route';
@@ -365,6 +366,8 @@ export interface CookrewApi {
    */
   attachFiles: (files: File[]) => Promise<string[]>;
   saveAttachmentBytes: (name: string, bytes: Uint8Array) => Promise<string>;
+  /** A prompt's picture (shared/prompt-images.ts), or null when there is none to show. */
+  readImage: (ref: ImageRef) => Promise<ImageBytes | null>;
   /** Native multi-file picker (desktop only; returns [] elsewhere). */
   pickFiles: () => Promise<string[]>;
   ptyInput: (terminalId: string, data: string) => void;
