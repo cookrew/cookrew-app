@@ -47,6 +47,8 @@ export interface FrameModel {
   active: string
   /** The newest browser's link: at group zoom it stands beside the stack. */
   newest: string | null
+  /** Agents per row, as the owner picked them (crew-cols.ts); absent, the form factor's default. */
+  crewCols?: number
 }
 
 type Put = HTMLElement & { _t?: string; _o?: number }
@@ -151,7 +153,7 @@ export interface Layout {
 }
 
 export function layoutOf(model: FrameModel, narrow: boolean): Layout {
-  const crew = crewOf(model.agents, narrow)
+  const crew = crewOf(model.agents, narrow, model.crewCols)
   const device = deviceOf(model.workspaces, narrow)
   const screen = { w: device.box.w * SDEV + 28, h: device.box.h * SDEV + 28 }
   const machines = machinesAt(model.otherMachines, device.box, narrow)
