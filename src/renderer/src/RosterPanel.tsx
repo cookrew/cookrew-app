@@ -63,6 +63,8 @@ export function RosterPanel({
   onEditingChange,
   onClose,
   onOpenGrants,
+  query: queryProp,
+  onQueryChange,
   variant = 'modal',
 }: {
   /** Opens WHO CAN CALL — the next step after an agent becomes exportable. */
@@ -93,8 +95,13 @@ export function RosterPanel({
    * `view` fills the stage as one of the two main views, where the header's
    * switch is what leaves it — so there is no scrim to dismiss and no ✕, which
    * would otherwise be a second, differently-shaped way out of the same place.
+   * `popover` drops under the header's search box (BoardSearch.tsx), which owns
+   * the query, Esc and the outside click, so the panel draws no field of its own.
    */
-  variant?: 'modal' | 'view'
+  variant?: 'modal' | 'view' | 'popover'
+  /** The search, CONTROLLED by the header's box in the popover. Absent → local. */
+  query?: string
+  onQueryChange?: (query: string) => void
 }): React.JSX.Element {
   const roster = useRoster()
   const { zoomToNode, jumpToNode } = useCanvasUi()
@@ -111,7 +118,10 @@ export function RosterPanel({
   const [phoneRowLimit, setPhoneRowLimit] = useState(PHONE_BOARD_PAGE_SIZE)
   const eventLimit = boardEventLimit(phoneWindowed)
   const [selected, setSelected] = useState<string | null>(null)
-  const [query, setQuery] = useState('')
+  const [localQuery, setLocalQuery] = useState('')
+  const query = queryProp ?? localQuery
+  const setQuery = onQueryChange ?? setLocalQuery
+  const popover = variant === 'popover'
   /** Edit mode: rows become checkboxes and the footer becomes team actions. */
   const [localEditing, setLocalEditing] = useState(false)
   const editing = editingProp ?? localEditing
@@ -294,6 +304,8 @@ export function RosterPanel({
   }
 
   useEffect(() => {
+    // The popover's Esc belongs to its search box, which clears before it closes.
+    if (popover) return
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
         e.stopPropagation()
@@ -302,7 +314,7 @@ export function RosterPanel({
     }
     window.addEventListener('keydown', onKey, { capture: true })
     return () => window.removeEventListener('keydown', onKey, { capture: true })
-  }, [onClose])
+  }, [onClose, popover])
 
   // Auto-dismiss the recover toast.
   useEffect(() => {
@@ -521,11 +533,11 @@ export function RosterPanel({
 
   return (
     <div
-      className={variant === 'view' ? 'roster-view' : 'tf-scrim'}
-      onClick={variant === 'view' ? undefined : onClose}
+      className={variant === 'view' ? 'roster-view' : popover ? 'roster-pop' : 'tf-scrim'}
+      onClick={variant === 'modal' ? onClose : undefined}
     >
       <div
-        className="tf-panel roster-panel"
+        className={`tf-panel roster-panel${popover ? ' popover' : ''}`}
         onClick={(e) => e.stopPropagation()}
         onFocusCapture={(e) => {
           if ((e.target as Element).closest?.('.roster-search, .roster-facets')) setSearchHot(true)
@@ -547,6 +559,17 @@ export function RosterPanel({
               what was said. It lives in the header's top-right and never grabs
               focus on its own: opening BOARD lands on the roster. Conversation
               text covers the LOADED workspace only. */}
+          {popover ? (
+            <button
+              type="button"
+              className={`cr-btn sm${editing ? ' primary' : ''}`}
+              aria-pressed={editing}
+              title={editing ? 'Done selecting' : 'Select agents to fork into a team'}
+              onClick={() => setEditing(!editing)}
+            >
+              {editing ? 'DONE' : 'SELECT'}
+            </button>
+          ) : (
           <div className="roster-search">
             <CrIcon name="search" />
             <input
@@ -568,6 +591,7 @@ export function RosterPanel({
               </button>
             )}
           </div>
+          )}
           {variant === 'modal' && (
             <button className="cr-btn sm icon tf-close" title="Close" onClick={onClose}>
               <CrIcon name="close" />
@@ -588,7 +612,8 @@ export function RosterPanel({
             while the search field is hot; at rest, only the chips that are
             ON — a list narrowed by something you cannot see is a list that
             looks short for no reason. */}
-        {(searchHot || filterActive(filter)) && (
+        {/* The popover IS the hot search: its box is focused to open it. */}
+        {(searchHot || popover || filterActive(filter)) && (
           <FacetBar facets={facets} filter={filter} atRest={!searchHot} onChange={setFilter} />
         )}
 
@@ -638,7 +663,9 @@ export function RosterPanel({
           <div className="roster-edit-bar">
             <span className="roster-edit-count">{picked.size} SELECTED</span>
             <span className="roster-edit-spacer" />
-            {typeof cookrew().teamClipSet === 'function' && (
+            {/* COPY/CUT stage for the canvas's paste, and the canvas is
+                retired: the popover offers only what still lands somewhere. */}
+            {!popover && typeof cookrew().teamClipSet === 'function' && (
               <>
                 <button
                   className="cr-btn sm"

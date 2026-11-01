@@ -3,7 +3,6 @@ import { isDemoMode, isRemoteMode } from './api'
 import { HeaderMore } from './HeaderMore'
 import { setZoomBarSlot } from './zoom-bar'
 import { HeaderRoute } from './HeaderRoute'
-import { CrIcon } from './icons'
 import { LocalNetworkRow } from './LocalNetworkRow'
 import { CompanionAvatar, PathSheet, usePathBadge } from './PathBadge'
 import type { RouteStatus } from '../../shared/route'
@@ -11,18 +10,17 @@ import './header.css'
 
 /**
  * What the window shows: the STAGE (stage/StageView.tsx) — canvas and board
- * merged into one (2026-10-30). The board is DEPRECATED: kept reachable from
- * the More menu, not developed further. The levels view is deleted
- * (2026-10-31).
+ * merged into one (2026-10-30). The levels view is deleted (2026-10-31), and
+ * the board is no longer a view: it is the search box on this bar
+ * (BoardSearch.tsx, owner 2026-11-01).
  */
-export type MainView = 'stage' | 'agents'
+export type MainView = 'stage'
 
 interface HeaderProps {
   workspaceName: string
   dir: string
   terminalCount: number
   busyCount: number
-  attentionCount: number
   /** Which view the stage is showing — drives the pressed state of the switch. */
   view: MainView
   onViewChange: (view: MainView) => void
@@ -50,6 +48,8 @@ interface HeaderProps {
    * identity state lives in src/renderer/src/account.
    */
   avatar?: React.ReactNode
+  /** The board's search box (BoardSearch.tsx), left of ⋯. Passed in, like the avatar. */
+  search?: React.ReactNode
 }
 
 /**
@@ -57,9 +57,8 @@ interface HeaderProps {
  *
  *   left  — the ROUTE (HeaderRoute.tsx): device / workspace / agent, each
  *           step a way out to its level.
- *   right — the FUNCTION BAR: the More menu (HeaderMore.tsx, which also
- *           holds the deprecated views) and the avatar; a way back to the
- *           stage while one of those views is up.
+ *   right — the FUNCTION BAR: the board's search box (BoardSearch.tsx),
+ *           the More menu (HeaderMore.tsx) and the avatar.
  *
  * It replaces a bar that put everything on one line in the order it was
  * added — mark, path badge, avatar, switch, status, routing lamp, workspace
@@ -68,7 +67,8 @@ interface HeaderProps {
  * terminal has NO head of its own any more (owner 2026-10-31): its model
  * switch and CHAT/LIVE sit here left of ⋯, the rest of its head inside ⋯.
  *
- * Attention lives on the stage's faces now (the rose ones). The account's
+ * Attention lives on the stage's faces (the rose ones) and as a count on the
+ * board's box while it is closed. The account's
  * waiting devices ride the avatar, which is why the avatar stays on the bar.
  */
 export function Header({
@@ -76,7 +76,6 @@ export function Header({
   dir,
   terminalCount,
   busyCount,
-  attentionCount,
   view,
   onViewChange,
   onWall,
@@ -85,7 +84,8 @@ export function Header({
   onResync,
   zoomedAgent = null,
   stageWorkspace = null,
-  avatar
+  avatar,
+  search
 }: HeaderProps): React.JSX.Element {
   const remote = isRemoteMode()
   const path = usePathBadge()
@@ -103,21 +103,12 @@ export function Header({
         onViewChange={onViewChange}
       />
       <div className="cr-fn" role="toolbar" aria-label="Functions">
-        {/* The stage is the view; the three it merged are deprecated and live
-            in the More menu. Away on one of them, the way back is on the bar. */}
-        {view !== 'stage' && (
-          <button type="button" className="cr-fn-stage" title="Back to the stage" onClick={() => onViewChange('stage')}>
-            <CrIcon name="prev" />
-            <span>Stage</span>
-          </button>
-        )}
         {/* The zoomed terminal's model switch and CHAT/LIVE land here, left of
             ⋯ (zoom-bar.ts). Empty, and so invisible, with nothing zoomed. */}
         <span className="cr-zoom-slot" ref={setZoomBarSlot} />
+        {/* The board, as a search box: right where a search is looked for. */}
+        {search}
         <HeaderMore
-          view={view}
-          onViewChange={onViewChange}
-          attentionCount={attentionCount}
           busyCount={busyCount}
           terminalCount={terminalCount}
           connection={remote ? path : null}

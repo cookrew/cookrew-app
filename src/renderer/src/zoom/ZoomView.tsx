@@ -242,7 +242,8 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
-      if ((e.target as Element | null)?.closest?.('input, textarea, [contenteditable="true"], .xterm')) return
+      // The board's box and its panel own their Esc (BoardSearch.tsx).
+      if ((e.target as Element | null)?.closest?.('input, textarea, [contenteditable="true"], .xterm, .cr-board-search, .cr-board-pop')) return
       e.preventDefault()
       stepBack()
     }

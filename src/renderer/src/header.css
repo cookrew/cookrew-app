@@ -320,14 +320,14 @@
      other). The function bar never shrank, so every pixel it took came out
      of the names. Now the route has a floor it does not go under — room for
      the device's icon and a few letters of each name, never more than the
-     bar leaves the function bar's fixed parts (LIVE, ⋯, the avatar: ~130,
-     the dial's 28 floor and the gaps) — and grows past it into whatever
+     bar leaves the function bar's fixed parts (LIVE, the board's magnifier,
+     ⋯, the avatar: ~166, the dial's 28 floor and the gaps) — and grows past it into whatever
      is free; the function bar takes the rest, and in it only the zoom slot
      gives, so the dial's model name is what ellipsizes. With nothing
      zoomed the function bar is small and the route has the row. The
      device, its label already gone, keeps its icons whole. */
   .cr-route {
-    flex: 1 0 min(200px, calc(100vw - 196px));
+    flex: 1 0 min(200px, calc(100vw - 232px));
   }
 
   .cr-route-device {
@@ -707,5 +707,249 @@
     left: 8px;
     right: 8px;
     width: auto;
+  }
+}
+
+/* ---- THE BOARD, AS A SEARCH BOX (BoardSearch.tsx, owner 2026-11-01) ----
+   Left of ⋯, in ⋯'s frame and height, so the function bar reads as one row.
+   It widens while open; the board itself hangs under the bar's right edge,
+   portalled to <body> above the pets (55) and under the sheets (60+). */
+.cr-board-search {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.cr-board-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 210px;
+  height: 28px;
+  padding: 0 6px 0 8px;
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  background: var(--cream-hi);
+  color: var(--muted);
+  cursor: text;
+  -webkit-app-region: no-drag;
+  transition: width 160ms ease;
+}
+
+.cr-board-search.open .cr-board-box {
+  width: 320px;
+  background: var(--cream);
+  color: var(--ink);
+}
+
+.cr-board-box > .cr-icon {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+}
+
+.cr-board-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.cr-board-input::placeholder {
+  color: var(--dim);
+}
+
+/* The box draws its own ×: the engine's cancel glyph would be a second one. */
+.cr-board-input::-webkit-search-cancel-button,
+.cr-board-input::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.cr-board-kbd {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 15px;
+  color: var(--muted);
+}
+
+.cr-board-badge {
+  flex: 0 0 auto;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--rose);
+  color: var(--cream-hi);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cr-board-clear {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.cr-board-clear:hover {
+  background: var(--cream-lo);
+  color: var(--ink);
+}
+
+.cr-board-clear .cr-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.cr-board-pop {
+  position: fixed;
+  right: 12px;
+  z-index: 58;
+  width: min(560px, calc(100vw - 24px));
+  display: flex;
+  animation: cr-board-drop 140ms ease-out;
+}
+
+@keyframes cr-board-drop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cr-board-box {
+    transition: none;
+  }
+
+  .cr-board-pop {
+    animation: none;
+  }
+}
+
+.cr-board-loading {
+  width: 100%;
+  padding: 14px;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* The roster's panel, hanging: as wide as the drop, as tall as the window
+   leaves above the dock. Its own field is the box on the bar. */
+.roster-pop {
+  display: flex;
+  width: 100%;
+}
+
+.roster-panel.popover {
+  width: 100%;
+  max-height: min(72vh, 720px);
+  padding: 10px 12px 12px;
+}
+
+.roster-panel.popover .roster-list {
+  min-height: 0;
+}
+
+/* A desktop narrow enough to crowd the route: the box keeps ⋯'s footprint
+   plus a few letters, and still opens wide. */
+@media (max-width: 900px) {
+  .cr-board-box {
+    width: 150px;
+  }
+
+  .cr-board-kbd {
+    display: none;
+  }
+}
+
+/* PHONE: a magnifier the size of ⋯. Open, the box lies across the whole bar,
+   over the route, and the board drops edge to edge under it. */
+@media (max-width: 700px) {
+  .cr-board-box {
+    width: 30px;
+    padding: 0;
+    justify-content: center;
+    gap: 0;
+    position: relative;
+  }
+
+  .cr-board-box > .cr-icon {
+    width: 14px;
+    height: 14px;
+  }
+
+  .cr-board-search:not(.open) .cr-board-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .cr-board-search:not(.open) .cr-board-badge {
+    position: absolute;
+    top: -7px;
+    right: -7px;
+    min-width: 14px;
+    height: 14px;
+    font-size: 9px;
+  }
+
+  .cr-board-search.open .cr-board-box {
+    position: absolute;
+    z-index: 2;
+    left: 8px;
+    right: 8px;
+    top: 50%;
+    width: auto;
+    height: 32px;
+    padding: 0 6px 0 10px;
+    gap: 8px;
+    justify-content: flex-start;
+    transform: translateY(-50%);
+  }
+
+  /* 16px: iOS zooms the page into any field set smaller. */
+  .cr-board-input {
+    font-size: 16px;
+  }
+
+  .cr-board-pop {
+    left: 8px;
+    right: 8px;
+    width: auto;
+  }
+
+  .roster-panel.popover {
+    max-height: calc(100dvh - 140px - var(--kb-inset, 0px));
   }
 }

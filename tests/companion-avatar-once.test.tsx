@@ -54,7 +54,6 @@ function Bar(): React.JSX.Element {
       dir="/tmp"
       terminalCount={1}
       busyCount={0}
-      attentionCount={0}
       view="stage"
       onViewChange={() => undefined}
       onWall={() => undefined}

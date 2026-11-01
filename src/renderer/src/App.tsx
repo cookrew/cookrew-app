@@ -33,6 +33,7 @@ import { newestError } from './routing/newest-error'
 import { BrowserNode } from './nodes/BrowserNode'
 import { CableEdge } from './CableEdge'
 import { Header, type MainView } from './Header'
+import { BoardSearch } from './BoardSearch'
 import { Dock } from './Dock'
 import { tuningStore } from './tuning-store'
 import { CardMenu, type CardMenuAnchor } from './CardMenu'
@@ -96,7 +97,6 @@ import { EventToastLayer } from './EventToast'
 import { DoorMovedNotice } from './DoorMovedNotice'
 import { TerminalSessionNotice } from './TerminalSessionNotice'
 // Opened by a tap, never at boot: each panel is its own chunk (perf lane L7).
-const RosterPanel = lazy(() => import('./RosterPanel').then((m) => ({ default: m.RosterPanel })))
 const MetricsPanel = lazy(() => import('./MetricsPanel').then((m) => ({ default: m.MetricsPanel })))
 const StageView = lazy(() => import('./stage/StageView').then((m) => ({ default: m.StageView })))
 import { GateSheet } from './GateSheet'
@@ -150,8 +150,8 @@ const VISUAL_MODE_ICON: Record<CanvasVisualMode, 'canvas' | 'connect' | 'agent' 
 
 /**
  * The view a window opens on: the stage, always (2026-10-30). Canvas and
- * board are merged into it; the board is deprecated, reachable from the More
- * menu, and never remembered. The levels view is deleted (2026-10-31).
+ * board are merged into it, and the board came back as the header's search
+ * box (BoardSearch.tsx, 2026-11-01). The levels view is deleted (2026-10-31).
  */
 const MAIN_VIEW_KEY = 'cookrew-main-view'
 
@@ -278,8 +278,6 @@ function Canvas(): React.JSX.Element {
   const [stageShowing, setStageShowing] = useState<StageShowing | null>(null)
   /** Activity metrics / history panel (opened from the workspace popout). */
   const [metricsOpen, setMetricsOpen] = useState(false)
-  /** Board selection mode — the dock's slid-in clipboard button drives it. */
-  const [boardSelecting, setBoardSelecting] = useState(false)
   /**
    * Node awaiting a close confirmation. Every ✕ routes here instead of calling
    * removeNode, so there is one dialog and no close button can skip it.
@@ -713,11 +711,6 @@ function Canvas(): React.JSX.Element {
   useEffect(() => {
     if (!clipping) setHoverId(null)
   }, [clipping])
-  // Leaving the board view stands its selection mode down.
-  useEffect(() => {
-    if (view !== 'agents') setBoardSelecting(false)
-  }, [view])
-
   /** Mirrors for the ⌘A handler (stable subscription, fresh reads). */
   const viewRef = useRef<MainView>(view)
   viewRef.current = view
@@ -1466,7 +1459,6 @@ function Canvas(): React.JSX.Element {
           dir={workspace?.dir ?? ''}
           terminalCount={terminals.length}
           busyCount={busyCount}
-          attentionCount={attentionCount}
           view={view}
           onViewChange={setView}
           onWall={wall.open}
@@ -1476,6 +1468,7 @@ function Canvas(): React.JSX.Element {
           zoomedAgent={view === 'stage' ? (stageShowing?.zoomed ? stageShowing.name : null) : (terminals.find((t) => t.id === zoomedTerminalId)?.name ?? null)}
           stageWorkspace={view === 'stage' ? (stageShowing?.workspaceName ?? null) : null}
           avatar={account.avatar}
+          search={<BoardSearch workspace={workspace} activeWorkspaceId={activeWsId} attentionCount={attentionCount} />}
         />
         <div className="cr-stage" ref={stageRef}>
           {/* THE CANVAS IS RETIRED (owner, 2026-10-30): it is not rendered, so
@@ -1498,21 +1491,6 @@ function Canvas(): React.JSX.Element {
                   )}
                 </WithCrew>
               </TerminalAttachmentsContext.Provider>
-            </Suspense>
-          )}
-          {view === 'agents' && (
-            <Suspense fallback={null}>
-            <RosterPanel
-              workspace={workspace}
-              activeWorkspaceId={activeWsId}
-              picked={picked}
-              onTogglePick={togglePick}
-              editing={boardSelecting}
-              onEditingChange={setBoardSelecting}
-              onClipStaged={() => setView('stage')}
-              variant="view"
-              onClose={() => setView('stage')}
-            />
             </Suspense>
           )}
         </div>
@@ -1572,14 +1550,8 @@ function Canvas(): React.JSX.Element {
               : null
           }
           browserFor={browserInFullView(overlayPrimaryId, browsers)}
-          /* Board view: the canvas tools glide out and the board's
-             clipboard selection toggle glides in — the SAME dock, the same
-             motion as zooming a terminal. */
-          boardFor={
-            view === 'agents'
-              ? { editing: boardSelecting, onToggle: () => setBoardSelecting((v) => !v) }
-              : null
-          }
+          /* The board is the header's search box now; its dock toggle is unused. */
+          boardFor={null}
           connectHint={
             tool === 'connect'
               ? connectFrom

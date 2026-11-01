@@ -17,7 +17,7 @@ const ink = readFileSync('src/renderer/src/zoom/ink-theme.css', 'utf8').replace(
 
 describe('on a phone', () => {
   it('the route keeps a floor and does not shrink under it', () => {
-    expect(narrow).toMatch(/\.cr-route \{[^}]*flex: 1 0 min\(200px, calc\(100vw - 196px\)\)/)
+    expect(narrow).toMatch(/\.cr-route \{[^}]*flex: 1 0 min\(200px, calc\(100vw - 232px\)\)/)
   })
 
   it("the device's icons stay whole", () => {

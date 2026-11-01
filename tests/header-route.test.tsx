@@ -38,8 +38,4 @@ describe('the agent step', () => {
     expect(routeAgent('stage', 'Conductor')).toBe('Conductor')
     expect(routeAgent('stage', null)).toBeNull()
   })
-
-  it('is not drawn over the board', () => {
-    expect(routeAgent('agents', 'Conductor')).toBeNull()
-  })
 })

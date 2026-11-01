@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Header } from '../src/renderer/src/Header'
+import { BoardSearch } from '../src/renderer/src/BoardSearch'
 import { PathBadge, PathDot, PathSheet } from '../src/renderer/src/PathBadge'
 import { pathBadgeView } from '../src/shared/path-badge'
 import { currentPathBadge } from '../src/renderer/src/path-link'
@@ -35,33 +36,18 @@ const stubDesktop = (): void => {
   }
 }
 
-const bar = (): string =>
+const bar = (attention = 0): string =>
   renderToStaticMarkup(
     <Header
       workspaceName="Cookrew Dev"
       dir="/tmp"
       terminalCount={2}
       busyCount={0}
-      attentionCount={0}
-      view="agents"
-      onViewChange={() => undefined}
-      onWall={() => undefined}
-      onResync={() => undefined}
-    />
-  )
-
-const stageBar = (): string =>
-  renderToStaticMarkup(
-    <Header
-      workspaceName="Cookrew Dev"
-      dir="/tmp"
-      terminalCount={2}
-      busyCount={0}
-      attentionCount={0}
       view="stage"
       onViewChange={() => undefined}
       onWall={() => undefined}
       onResync={() => undefined}
+      search={<BoardSearch workspace={null} activeWorkspaceId={null} attentionCount={attention} />}
     />
   )
 
@@ -100,21 +86,33 @@ describe('the companion bar', () => {
     expect(route(bar())).not.toContain('cr-route-agent')
   })
 
-  it('a deprecated view puts the way back to the stage, the More menu and the avatar on the function bar, in that order', () => {
+  it("puts the board's search box, the More menu and the avatar on the function bar, in that order", () => {
     stubPhone()
     const html = functions(bar())
-    expect(html).not.toContain('cr-viewseg')
-    expect(html.indexOf('cr-fn-stage')).toBeGreaterThan(-1)
-    expect(html.indexOf('cr-fn-stage')).toBeLessThan(html.indexOf('cr-more'))
+    expect(html.indexOf('cr-board-search')).toBeGreaterThan(-1)
+    expect(html.indexOf('cr-board-search')).toBeLessThan(html.indexOf('cr-more'))
     expect(html.indexOf('cr-more')).toBeLessThan(html.indexOf('cr-acct-avatar'))
   })
 
-  it('on the stage the bar has no view switch at all: the views are in More', () => {
+  it('has no view switch and no way back: the board drops under the bar, the stage stays', () => {
     stubPhone()
-    const html = functions(stageBar())
+    const html = functions(bar())
     expect(html).not.toContain('cr-fn-stage')
     expect(html).not.toContain('cr-viewseg')
-    expect(html.indexOf('cr-more')).toBeGreaterThan(-1)
+  })
+
+  it('keeps the board folded until the box is used', () => {
+    stubPhone()
+    const html = bar()
+    expect(html).toContain('aria-label="Search the board"')
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).not.toContain('cr-board-pop')
+  })
+
+  it('counts the agents waiting on you on the folded box', () => {
+    stubPhone()
+    expect(bar(3)).toMatch(/class="cr-board-badge"[^>]*>3</)
+    expect(bar(0)).not.toContain('cr-board-badge')
   })
 
   it('keeps everything else behind More, closed until it is opened', () => {

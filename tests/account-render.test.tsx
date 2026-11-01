@@ -70,7 +70,6 @@ const bar = (avatar: React.ReactNode): string =>
       dir="/tmp"
       terminalCount={2}
       busyCount={0}
-      attentionCount={0}
       view="stage"
       onViewChange={() => undefined}
       onWall={() => undefined}
