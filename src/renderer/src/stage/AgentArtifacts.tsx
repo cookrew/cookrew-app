@@ -7,16 +7,19 @@
 // makeItemFor) and the whole crew reads it from there.
 //
 // A thumbnail opens its card under the transcript, as the old side tabs did;
-// clicking the open one closes it.
+// clicking the open one closes it. Its × removes the card, as the agent's own
+// × does (owner, 2026-11-01): through CanvasUi.requestClose, so the app's one
+// confirm dialog asks first.
 import { useEffect, useMemo, useState } from 'react'
 import type { CanvasNode } from '../../../shared/model'
 import { cookrew } from '../api'
 import { attachView, useAttachView } from '../attach-view'
+import { useCanvasUi } from '../canvas-ui'
 import { CrIcon } from '../icons'
 import { thumbWants } from '../pets/thumb-wants'
 import type { TerminalAttachment } from '../terminal-attachments'
 import { makeItemFor } from '../zoom/make-card'
-import { itemViewOf } from '../zoom/zoom-model'
+import { itemViewOf, type ItemView } from '../zoom/zoom-model'
 import { Page } from '../zoom/ZoomParts'
 
 export function AgentArtifacts({
@@ -33,6 +36,7 @@ export function AgentArtifacts({
   /** The workspace's cards: a new one is stored beside them, under a name none has. */
   nodes: readonly CanvasNode[]
 }): React.JSX.Element {
+  const { requestClose } = useCanvasUi()
   const open = useAttachView()
   const openId = open?.terminalId === agent.id ? open.itemId : null
   const [making, setMaking] = useState<'note' | 'browser' | null>(null)
@@ -104,25 +108,65 @@ export function AgentArtifacts({
         </p>
       )}
       <div className="zv-fv-arts-list">
-        {views.map((view) => {
-          const shared = view.owners.length
-          return (
-            <button
-              key={view.id}
-              type="button"
-              className={`zv-fv-art ${view.kind}${view.id === openId ? ' on' : ''}`}
-              title={`${view.title}${view.kind === 'browser' ? `\n${view.line}` : ''}${shared > 1 ? `\nshared by ${shared} agents` : ''}`}
-              aria-pressed={view.id === openId}
-              onClick={() => attachView.toggle(agent.id, view.id, view.kind)}
-            >
-              <span className={`zv-th zv-big ${view.kind}`}>
-                <Page item={view} big />
-                {shared > 1 && <em>×{shared}</em>}
-              </span>
-            </button>
-          )
-        })}
+        {views.map((view) => (
+          <ArtifactThumb
+            key={view.id}
+            view={view}
+            on={view.id === openId}
+            onOpen={() => attachView.toggle(agent.id, view.id, view.kind)}
+            onRemove={() => requestClose(view.id)}
+          />
+        ))}
       </div>
     </aside>
+  )
+}
+
+/**
+ * One browser or note on the sheet: its thumbnail, which opens it, and beside
+ * it (never inside: a button holds no button) the × that removes it, shown on
+ * hover or focus as the thumbs grid's is (zoom.css · .zv-del).
+ */
+export function ArtifactThumb({
+  view,
+  on,
+  onOpen,
+  onRemove
+}: {
+  view: ItemView
+  /** Open under the transcript now. */
+  on: boolean
+  onOpen: () => void
+  /** Ask to remove it: the app's confirm dialog answers (App · requestClose). */
+  onRemove: () => void
+}): React.JSX.Element {
+  const shared = view.owners.length
+  return (
+    <div className={`zv-fv-art-cell ${view.kind}`}>
+      <button
+        type="button"
+        className={`zv-fv-art ${view.kind}${on ? ' on' : ''}`}
+        title={`${view.title}${view.kind === 'browser' ? `\n${view.line}` : ''}${shared > 1 ? `\nshared by ${shared} agents` : ''}`}
+        aria-pressed={on}
+        onClick={onOpen}
+      >
+        <span className={`zv-th zv-big ${view.kind}`}>
+          <Page item={view} big />
+          {shared > 1 && <em>×{shared}</em>}
+        </span>
+      </button>
+      <button
+        type="button"
+        className="zv-del zv-fv-art-del"
+        title={`Remove ${view.title}${shared > 1 ? ` — ${shared} agents use it` : ''}`}
+        aria-label={`Remove ${view.title}`}
+        onClick={(e) => {
+          e.stopPropagation()
+          onRemove()
+        }}
+      >
+        ×
+      </button>
+    </div>
   )
 }
