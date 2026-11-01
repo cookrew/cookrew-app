@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { cookrew } from '../api'
 import { AgentLatest } from './AgentLatest'
+import { draftKey, useDraft } from '../prompt/prompt-draft'
+import { sendToAgent } from '../prompt/send'
 import type { AgentView } from './zoom-model'
 
 /**
@@ -8,6 +9,9 @@ import type { AgentView } from './zoom-model'
  * view's card (ZoomParts · AgentNode) and the card the agent group floats in
  * a full view (AgentCard.tsx) draw these, so an agent says the same thing and
  * takes a reply the same way wherever its card is.
+ *
+ * The draft is the agent's ONE draft (prompt/prompt-draft.ts): the global
+ * prompt box at the foot, carrying @agent, reads and writes the same text.
  */
 
 /** How long a sent reply stands in the card's words. */
@@ -22,14 +26,14 @@ export interface QuickReplyState {
 }
 
 export function useQuickReply(agentId: string, onDraft?: (text: string) => void): QuickReplyState {
-  const [draft, setDraftState] = useState('')
+  const [draft, setDraftState] = useDraft(draftKey(agentId))
   const [sent, setSent] = useState<string | null>(null)
   const setDraft = useCallback(
     (text: string) => {
       setDraftState(text)
       onDraft?.(text)
     },
-    [onDraft]
+    [onDraft, setDraftState]
   )
   useEffect(() => {
     if (sent === null) return
@@ -39,9 +43,7 @@ export function useQuickReply(agentId: string, onDraft?: (text: string) => void)
   const send = (): void => {
     const text = draft.trim()
     if (!text) return
-    // The same two writes the voice bar makes: the words, then Enter on its own.
-    cookrew().ptyInput(agentId, text)
-    cookrew().ptyInput(agentId, '\r')
+    sendToAgent(agentId, text)
     setDraft('')
     setSent(text)
   }

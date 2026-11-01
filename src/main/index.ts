@@ -4394,6 +4394,11 @@ interface CreateTerminalOpts {
   /** Boot a fresh agent from a saved role instead of a bare preset. */
   roleName?: string
   /**
+   * Its first prompt, submitted once the agent's TUI is quiet (the global
+   * prompt box makes an agent from a prompt; owner, 2026-11-01).
+   */
+  prompt?: string
+  /**
    * Run THIS instead of the preset's command. Used by a placed remote-orch
    * card, whose command is a line to someone else's orch, not a local harness.
    */
@@ -4432,12 +4437,13 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
   }
   const added = store.addNode(terminal)
   spawnTracked(added as TerminalNodeData)
-  if (role) {
+  // A bare shell takes no first prompt: typed into zsh, the words would run as a command.
+  const first = typeof opts.prompt === 'string' && terminal.command.trim() ? opts.prompt.trim() : ''
+  const boot = [role ? buildRoleBootMessage(role.name, role.rolePrompt) : '', first].filter(Boolean).join('\n\n')
+  if (boot) {
     const session = ptys.get(added.id)
     if (session) {
-      injectWhenReady(session, buildRoleBootMessage(role.name, role.rolePrompt)).catch((error) =>
-        console.error('Role boot injection failed:', error)
-      )
+      injectWhenReady(session, boot).catch((error) => console.error('Boot prompt injection failed:', error))
     }
   }
   return added

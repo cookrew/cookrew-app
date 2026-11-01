@@ -1,0 +1,165 @@
+/* ---- THE GLOBAL PROMPT (prompt/GlobalPrompt.tsx; owner, 2026-11-01) ----
+   One box at the foot of the app, right after the dock's buttons, taking the
+   rest of the row. In ink: the card's paper, one hairline, @agent in the seal. */
+
+.cr-prompt {
+  position: relative;
+  flex: 1 1 360px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 3px 4px 3px 6px;
+  border-radius: 12px;
+  background: var(--sumi-card, var(--cream-hi));
+  box-shadow: inset 0 0 0 1.5px var(--sumi-hair-2, var(--line));
+}
+
+.cr-prompt:focus-within {
+  box-shadow: inset 0 0 0 1.5px var(--sumi-seal, var(--amber-deep));
+}
+
+.cr-prompt input {
+  flex: 1 1 auto;
+  min-width: 80px;
+  height: 32px;
+  margin: 0;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  outline: none;
+  font: 13px/1 var(--font-mono);
+  color: var(--sumi-ink, var(--ink));
+}
+
+.cr-prompt input::placeholder {
+  color: var(--sumi-muted, var(--muted));
+}
+
+.cr-prompt-to,
+.cr-prompt-harness {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 40%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--sumi-paper-2, var(--cream-md));
+  white-space: nowrap;
+  font: 600 11.5px/1 var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
+.cr-prompt-to b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--sumi-seal, var(--amber-deep));
+}
+
+.cr-prompt-to button {
+  appearance: none;
+  margin: 0;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: 14px/1 var(--font-mono);
+  color: var(--sumi-muted, var(--muted));
+}
+
+.cr-prompt-new {
+  flex: none;
+  display: inline-flex;
+}
+
+.cr-prompt-harness {
+  cursor: pointer;
+  color: var(--sumi-ink-soft, var(--ink-soft));
+}
+
+.cr-prompt-harness:hover,
+.cr-prompt-to button:hover {
+  color: var(--sumi-seal, var(--amber-deep));
+}
+
+/* Fixed, over the dock: the dock clips anything that hangs out of it. */
+.cr-prompt-menu {
+  position: fixed;
+  z-index: 200;
+  display: grid;
+  min-width: 170px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--sumi-card, var(--cream-hi));
+  box-shadow:
+    inset 0 0 0 1px var(--sumi-hair-2, var(--line)),
+    0 10px 30px rgba(40, 30, 15, 0.16);
+}
+
+.cr-prompt-menu button {
+  appearance: none;
+  margin: 0;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  font: 12px/1.2 var(--font-mono);
+  color: var(--sumi-ink, var(--ink));
+}
+
+.cr-prompt-menu button[aria-checked='true'] {
+  background: var(--sumi-paper-2, var(--cream-md));
+  color: var(--sumi-seal, var(--amber-deep));
+}
+
+.cr-prompt-menu button:hover {
+  background: var(--sumi-paper-2, var(--cream-md));
+}
+
+.cr-prompt .voice-bar {
+  flex: none;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  border-top: 0;
+}
+
+.cr-prompt-error {
+  flex: 0 1 auto;
+  max-width: 34%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11px/1.2 var(--font-mono);
+  color: var(--sumi-wait, var(--danger, #c0392b));
+}
+
+/* A phone: the box takes its own row above the buttons, and the agent's keys
+   (arrows, paste, Esc, the mic) a row of their own inside it. */
+body.cookrew-mobile .cr-prompt {
+  order: -1;
+  flex-basis: 100%;
+  flex-wrap: wrap;
+}
+
+body.cookrew-mobile .cr-prompt input {
+  font-size: 16px;
+}
+
+/* With an agent in the box, the tools step aside on a phone, as the old
+   composer did: the box and the agent's keys are what the thumb needs. */
+body.cookrew-mobile .cr-dock:has(.cr-prompt.to-agent) .cr-dock-tools {
+  display: none;
+}
+
+body.cookrew-mobile .cr-prompt .voice-bar {
+  order: 3;
+  flex-basis: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}

@@ -1,6 +1,7 @@
 import type { CanvasNode } from '../../../shared/model'
 import type { CookrewApi } from '../api'
 import { zoomStore } from './zoom-store'
+import { rememberHarness } from '../prompt/harness-pref'
 
 /**
  * MAKING A CARD WITH THE CANVAS RETIRED (2026-10-30). There is no pane to
@@ -37,6 +38,8 @@ export interface AgentChoice {
   orch: boolean
   /** Boot from a saved role: its preset with the role prompt. */
   roleName?: string
+  /** Its first prompt (the global prompt box), submitted once it has booted. */
+  prompt?: string
 }
 
 /** A new agent in the active workspace; the zoom opens its card in the crew. */
@@ -48,8 +51,11 @@ export async function makeAgent(api: MakeApi, choice: AgentChoice, nodes: readon
       preset: choice.preset,
       position: nextSpot(nodes),
       orch: choice.orch,
-      ...(choice.roleName ? { roleName: choice.roleName } : {})
+      ...(choice.roleName ? { roleName: choice.roleName } : {}),
+      ...(choice.prompt ? { prompt: choice.prompt } : {})
     })
+    // The next agent the prompt box makes takes the harness last used.
+    if (!choice.roleName) rememberHarness(choice.preset)
     if (created?.id) {
       zoomStore.focusAgent(created.id)
       zoomStore.go(2, 'agents')

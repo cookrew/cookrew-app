@@ -348,6 +348,8 @@ export interface CookrewApi {
     orch: boolean;
     /** Boot from a saved role (rolePrompt injected once the TUI is quiet). */
     roleName?: string;
+    /** Its first prompt, submitted once the TUI is quiet. */
+    prompt?: string;
   }) => Promise<CanvasNode>;
   /**
    * Resolve dropped/picked File objects to absolute paths on the machine
