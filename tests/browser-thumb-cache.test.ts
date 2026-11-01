@@ -191,3 +191,36 @@ describe('the version follows the pixels', () => {
     expect(cache.frame('b1')!.at).toBe(at)
   })
 })
+
+describe('a capture that never ends (2026-11-01)', () => {
+  it('an asker is answered after waitMs with the frame held, and the capture is let go of after giveUpMs', async () => {
+    let calls = 0
+    const cache = new BrowserThumbCache({ capture: () => { calls += 1; return new Promise<string | null>(() => undefined) }, waitMs: 20, giveUpMs: 60, freshMs: 0 })
+    const started = Date.now()
+    await cache.refresh('b1')
+    expect(Date.now() - started).toBeLessThan(500)
+    // A second asker while it hangs joins it and is answered as quickly.
+    await cache.refresh('b1')
+    expect(calls).toBe(1)
+    await new Promise((r) => setTimeout(r, 90))
+    // Let go of: the next ask takes a new picture.
+    await cache.refresh('b1')
+    expect(calls).toBe(2)
+  })
+
+  it('a quick capture is still awaited in full', async () => {
+    const cache = new BrowserThumbCache({ capture: async () => Buffer.from('jpeg').toString('base64'), waitMs: 1000 })
+    await cache.refresh('b1')
+    expect(cache.frame('b1')?.type).toBe('image/jpeg')
+  })
+})
+
+describe("the companion's thumb poll (App.tsx)", () => {
+  it('sends one batch at a time and lets a stuck one go, so it never holds the connections keystrokes need', async () => {
+    const { readFileSync } = await import('node:fs')
+    const app = readFileSync('src/renderer/src/App.tsx', 'utf8')
+    expect(app).toMatch(/if \(document\.hidden \|\| inFlight\) return/)
+    expect(app).toMatch(/setTimeout\(\(\) => batch\.abort\(\), THUMB_BATCH_TIMEOUT_MS\)/)
+    expect(app).toMatch(/signal: batch\.signal/)
+  })
+})
