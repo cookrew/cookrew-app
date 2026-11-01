@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Notification, powerMonitor, shell } from 'electron'
 import path from 'node:path'
+import { readTerminalSession } from './terminal-session'
 import { chmodSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -6337,6 +6338,8 @@ app.whenReady().then(() => {
     routeBus,
     // The screen wall's pictures, for the phone (GET /api/workspaces/shots).
     workspaceShots: currentWorkspaceShots,
+    // Terminals from an earlier login, for the phone (GET /api/terminal-session).
+    terminalSession: () => readTerminalSession(),
     // Attach-free dispatch (v4 §3): the two /api routes answer 503 without it.
     dispatch: dispatchService,
     // While a dispatch is armed, the HTTP input/ask producers refuse 409 —
@@ -7094,6 +7097,8 @@ function registerIpc(handlers: RestoreHandlers): void {
     return workspaceShots.capture(id, rect)
   })
   ipcMain.handle('workspace:shots', () => currentWorkspaceShots())
+  /** Whether the terminals' herdr server predates this macOS login (terminal-session.ts). */
+  ipcMain.handle('terminals:session', () => readTerminalSession())
 
   ipcMain.handle('workspace:switch', (_e, id: string) => {
     switchWorkspace(id)

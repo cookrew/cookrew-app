@@ -93,6 +93,7 @@ import { snapCardChanges, MOUSE_SNAP_PX, TOUCH_SNAP_PX, SnapGuide } from './card
 import { SnapGuides } from './SnapGuides'
 import { EventToastLayer } from './EventToast'
 import { DoorMovedNotice } from './DoorMovedNotice'
+import { TerminalSessionNotice } from './TerminalSessionNotice'
 // Opened by a tap, never at boot: each panel is its own chunk (perf lane L7).
 const RosterPanel = lazy(() => import('./RosterPanel').then((m) => ({ default: m.RosterPanel })))
 const MetricsPanel = lazy(() => import('./MetricsPanel').then((m) => ({ default: m.MetricsPanel })))
@@ -1716,6 +1717,8 @@ function Canvas(): React.JSX.Element {
         />}
         {/* D14 · a door this Mac was serving moved to another of the account's. */}
         <DoorMovedNotice />
+        {/* Terminals from an earlier macOS login cannot resolve names or open apps. */}
+        <TerminalSessionNotice />
         <SousPill listening={ptt.listening} partial={ptt.partial} reply={sousReply} />
         {/* R3 · the one box: ⌘K on the desktop, the bottom bar on the phone. */}
         <CommandBox open={commandOpen} onClose={closeCommand} phone={isRemoteMode()} />
