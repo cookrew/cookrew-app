@@ -54,13 +54,27 @@ export function AgentArtifacts({
     return () => thumbWants.release('fv-arts')
   }, [browserKey])
 
+  // The new card opens under the transcript once it is among the agent's own:
+  // opened sooner, the terminal closes it again as unwired (TerminalOverlay).
+  const [opening, setOpening] = useState<{ id: string; kind: 'note' | 'browser' } | null>(null)
+  useEffect(() => {
+    if (!opening) return
+    if (items.some((item) => item.node.id === opening.id)) {
+      attachView.open(agent.id, opening.id, opening.kind)
+      setOpening(null)
+      return
+    }
+    const giveUp = setTimeout(() => setOpening(null), 10_000)
+    return () => clearTimeout(giveUp)
+  }, [opening, items, agent.id])
+
   const make = async (kind: 'note' | 'browser'): Promise<void> => {
     setMaking(kind)
     setError(null)
     const made = await makeItemFor(cookrew(), kind, agent, nodes)
     setMaking(null)
     if (!made.ok) setError(made.error)
-    else if (made.id) attachView.open(agent.id, made.id, kind)
+    else if (made.id) setOpening({ id: made.id, kind })
   }
 
   return (
