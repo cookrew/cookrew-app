@@ -201,6 +201,9 @@ export function toScrollState(pane: HerdrPane | null): ScrollState {
   }
 }
 
+/** Discard the terminal's pending input; a no-op without a tty or without perl. */
+const FLUSH_TYPEAHEAD = `perl -MPOSIX -e 'tcflush(0, TCIFLUSH)' 2>/dev/null`
+
 /**
  * The boot script's contents.
  *
@@ -213,6 +216,13 @@ export function toScrollState(pane: HerdrPane | null): ScrollState {
  * The `exec` is load-bearing: it replaces the pane's shell with the agent, so
  * the pane pid IS the agent pid — which is how codex rollouts are bound by
  * lsof. The single quotes are the same containment tmux's boot script uses.
+ *
+ * The typeahead flush is the backstop for bootIntoPane's retypes (2026-11-01:
+ * an agent's first message was its own boot line, twice). A shell slow in its
+ * rc init holds every typed line in the terminal; it runs the first, which
+ * execs this script, and whatever is still queued would be the agent's first
+ * input. Dropping it here, before the exec, means no boot line ever reaches an
+ * agent, whatever the shell took.
  */
 export function bootCommand(spec: AttachSpec): string {
   const inner = commandWithArgs(spec)
@@ -225,6 +235,7 @@ export function bootCommand(spec: AttachSpec): string {
     `export COOKREW_CLI='${path.posix.join(spec.cliDir, 'cookrew')}'`,
     `export PATH='${spec.path}'`,
     ...routeExports(spec),
+    FLUSH_TYPEAHEAD,
     `exec ${inner}`
   ].join('; ')
 }
@@ -1422,6 +1433,11 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // So: retype ONLY while the ROOT process is still a bare shell (positive
     // evidence the boot has not begun), a full beat apart, with ctrl+u making
     // each attempt self-cleaning.
+    //
+    // A bare root is ALSO what a shell still in its rc init looks like (11-01:
+    // an oh-my-zsh compinit held a fresh pane for 10-30 s). Its keys were not
+    // dropped, they are queued, and the terminal echoes them — so a boot line
+    // still standing last on the screen is waiting its turn, and is not retyped.
     const deadline = Date.now() + this.settleMs * 6
     const waitABeat = this.pollBackoff()
     type()
@@ -1430,11 +1446,34 @@ export class HerdrHostMultiplexer implements Multiplexer {
       const seen = this.paneRuns(paneId, expected, spec.sessionName)
       if (seen === 'agent') return
       if (seen === 'shell' && Date.now() - lastTypedAt >= this.settleMs) {
-        type()
+        if (!this.bootLineWaiting(paneId, spec.sessionName)) type()
         lastTypedAt = Date.now()
       }
       if (Date.now() >= deadline) return
       waitABeat()
+    }
+  }
+
+  /**
+   * Is this session's boot line the last thing the pane shows? Then the shell
+   * has not read it yet: the terminal echoed it and nothing came after. A
+   * prompt drawn under it means the shell is past its rc and the line is gone
+   * (run, or flushed with the rest of the typeahead), and so does a dead
+   * agent's line on a restored husk. Unknown counts as no, which retypes
+   * exactly as before: the boot script's typeahead flush keeps a stacked line
+   * out of the agent either way.
+   */
+  private bootLineWaiting(paneId: string, sessionName: string): boolean {
+    try {
+      const screen = this.herdr(['pane', 'read', paneId, '--source', 'recent-unwrapped'])
+      const last = screen
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .pop()
+      return last?.includes(`boot-${sessionName}.sh`) ?? false
+    } catch {
+      return false
     }
   }
 
