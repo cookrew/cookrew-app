@@ -38,3 +38,26 @@ export function imageAttachmentName(mimeType: string, stamp: string): string {
   const ext = EXT_OVERRIDES[subtype.toLowerCase()] ?? (cleaned.length > 0 ? cleaned : 'png')
   return `pasted-image-${stamp}.${ext}`
 }
+
+/** Where pasted image bytes go: the attach store (cookrew().saveAttachmentBytes). */
+export interface ImageSaver {
+  saveAttachmentBytes: (name: string, bytes: Uint8Array) => Promise<string>
+}
+
+/**
+ * Save pasted images through the attach store, in order, and return their
+ * absolute paths. Shared by the terminal's paste and the prompt boxes'.
+ */
+export async function saveClipboardImages(
+  images: ReadonlyArray<{ type: string; arrayBuffer: () => Promise<ArrayBuffer> }>,
+  saver: ImageSaver,
+  stamp = String(Date.now())
+): Promise<string[]> {
+  const paths: string[] = []
+  for (const [i, image] of images.entries()) {
+    const bytes = new Uint8Array(await image.arrayBuffer())
+    const name = imageAttachmentName(image.type, images.length > 1 ? `${stamp}-${i + 1}` : stamp)
+    paths.push(await saver.saveAttachmentBytes(name, bytes))
+  }
+  return paths
+}

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AgentLatest } from './AgentLatest'
 import { draftKey, useDraft } from '../prompt/prompt-draft'
 import { submitLine, typeLine, useLiveLine } from '../prompt/live-line'
+import { usePromptAttach } from '../prompt/use-prompt-attach'
 import type { AgentView } from './zoom-model'
 
 /**
@@ -18,6 +19,8 @@ import type { AgentView } from './zoom-model'
 
 /** How long a sent reply stands in the card's words. */
 const SENT_MS = 4000
+/** How long a word about a screenshot that did not attach stands in the box. */
+const NOTE_MS = 5000
 
 export interface QuickReplyState {
   readonly draft: string
@@ -75,7 +78,7 @@ export function CardWords({ agent, sent }: { agent: AgentView; sent: string | nu
   return <AgentLatest turn={agent.turn} fallback={agent.line} />
 }
 
-/** The quick reply: one line, Enter sends. */
+/** The quick reply: one line, Enter sends; a screenshot pasted or dropped goes in as its path. */
 export function QuickReply({
   agent,
   reply,
@@ -89,6 +92,14 @@ export function QuickReply({
   style?: React.CSSProperties
   formRef?: (el: HTMLElement | null) => void
 }): React.JSX.Element {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [note, setNote] = useState<string | null>(null)
+  useEffect(() => {
+    if (note === null) return
+    const timer = setTimeout(() => setNote(null), NOTE_MS)
+    return () => clearTimeout(timer)
+  }, [note])
+  const attach = usePromptAttach({ draftKey: draftKey(agent.id), write: reply.setDraft, inputRef, onError: setNote })
   return (
     <form
       ref={formRef}
@@ -96,12 +107,15 @@ export function QuickReply({
       style={style}
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
+      onDragOver={attach.onDragOver}
+      onDrop={attach.onDrop}
       onSubmit={(e) => {
         e.preventDefault()
         reply.send()
       }}
     >
       <input
+        ref={inputRef}
         type="text"
         value={reply.draft}
         placeholder={`Reply to ${agent.name}…`}
@@ -110,11 +124,23 @@ export function QuickReply({
         onChange={(e) => reply.setDraft(e.target.value, (e.nativeEvent as InputEvent).isComposing === true)}
         onCompositionEnd={(e) => reply.setDraft(e.currentTarget.value)}
         onKeyDown={(e) => e.stopPropagation()}
+        onPaste={attach.onPaste}
       />
       <button type="submit" aria-label="Send" disabled={!reply.draft.trim()}>
         ➜
       </button>
       {reply.sent !== null && <span className="zv-sent">sent ✓</span>}
+      {attach.attaching ? (
+        <span className="zv-sent zv-attach-note" role="status">
+          attaching…
+        </span>
+      ) : (
+        note !== null && (
+          <span className="zv-sent zv-attach-note failed" role="alert" title={note}>
+            {note}
+          </span>
+        )
+      )}
     </form>
   )
 }

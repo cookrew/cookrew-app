@@ -20,7 +20,7 @@
  */
 import { useSyncExternalStore } from 'react'
 import type { WorkspaceList } from '../../../shared/model'
-import type { LevelsAgent, LevelsAttachment, LevelsEvent, LevelsSnapshot, LevelsWorkspace, MachineProfile, WorkspaceTrait } from '../../../shared/strata'
+import type { LevelsAgent, LevelsAttachment, LevelsEvent, LevelsSnapshot, LevelsWorkspace, MachineDisplay, MachineProfile, WorkspaceTrait } from '../../../shared/strata'
 import type { AccountMachine, AccountMachines, AccountMachinesRefusal } from '../../../shared/zoom-fleet'
 import { foldLevels } from '../../../strata/fleet/levels-fold'
 import { cookrew, type CookrewApi } from '../api'
@@ -72,6 +72,8 @@ export interface ZoomFleetMachine {
   lastSeenAt: number | null
   appVersion: string | null
   profile: MachineProfile | null
+  /** This desktop's display, from its own feed; another desktop's is not known. */
+  display?: MachineDisplay | null
   detail: ZoomMachineDetail
   focusedWorkspaceId: string | null
   workspaces: ZoomFleetWorkspace[]
@@ -187,6 +189,7 @@ function localMachine(parts: FleetParts, row: AccountMachine | undefined): ZoomF
     lastSeenAt: levels?.at ?? row?.lastSeenAt ?? null,
     appVersion: levels?.machine.appVersion ?? row?.appVersion ?? null,
     profile: levels?.machine.profile ?? row?.profile ?? null,
+    display: levels?.machine.display ?? null,
     detail: parts.link === 'none' ? 'listed' : parts.link === 'live' && levels ? 'live' : 'connecting',
     focusedWorkspaceId,
     workspaces,
@@ -475,6 +478,7 @@ export interface ZoomFleetView {
     local: boolean
     online: boolean
     detail: ZoomMachineDetail
+    display: MachineDisplay | null
     workspaces: { id: string; name: string; icon: string | null; agents: { harness: string; phase: string }[]; counts: ZoomCounts | null }[]
   }[]
 }
@@ -487,6 +491,7 @@ export function fleetViewOf(fleet: ZoomFleet): ZoomFleetView {
       local: m.local,
       online: m.online,
       detail: m.detail,
+      display: m.display ?? null,
       workspaces: m.workspaces.map((w) => ({ id: w.id, name: w.name, icon: w.icon, agents: w.agents.map((a) => ({ harness: a.harness, phase: a.phase })), counts: w.counts }))
     }))
   }

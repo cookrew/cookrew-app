@@ -171,6 +171,34 @@
   border-top: 0;
 }
 
+/* Dictating (use-dictation.ts): the words so far stand in the box, not yet
+   the draft, until the ear closes. */
+.cr-prompt.listening input {
+  color: var(--sumi-muted, var(--muted));
+  font-style: italic;
+}
+
+/* A screenshot on its way into the prompt (prompt-attach.ts). */
+.cr-prompt-note {
+  flex: none;
+  font: 11px/1.2 var(--font-mono);
+  color: var(--sumi-muted, var(--muted));
+}
+
+/* What Sous said back to a spoken command: a beat, never wider than the box. */
+.cr-prompt-sous {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 34%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cr-prompt.attaching input {
+  cursor: progress;
+}
+
 .cr-prompt-error {
   flex: 0 1 auto;
   max-width: 34%;
@@ -182,7 +210,7 @@
 }
 
 /* A phone: the box takes its own row above the buttons, and the agent's keys
-   (arrows, paste, Esc, the mic) a row of their own inside it. The width
+   (arrows, paste, Esc) a row of their own inside it; the mic stays by Send. The width
    gates it, not the class alone: the companion carries cookrew-mobile in a
    desktop browser too, where the box belongs on the buttons' row. */
 @media (max-width: 700px) {
@@ -200,6 +228,14 @@
      composer did: the box and the agent's keys are what the thumb needs. */
   body.cookrew-mobile .cr-dock:has(.cr-prompt.to-agent) .cr-dock-tools {
     display: none;
+  }
+
+  /* Sous's reply and an error get a line of their own under the box. */
+  body.cookrew-mobile .cr-prompt .cr-prompt-sous,
+  body.cookrew-mobile .cr-prompt .cr-prompt-error {
+    order: 4;
+    flex-basis: 100%;
+    max-width: 100%;
   }
 
   body.cookrew-mobile .cr-prompt .voice-bar {

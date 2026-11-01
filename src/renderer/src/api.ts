@@ -730,9 +730,10 @@ export interface CookrewApi {
   inboxAct?: (id: string) => Promise<{ ok: boolean; error?: string; dispatchId?: string }>;
   inboxDismiss?: (id: string) => Promise<{ ok: boolean }>;
   /**
-   * Hold ⌘ to talk (desktop only — the phone dictates through the Web Speech
-   * API in VoiceBar). Main spawns the on-device recognizer on start, SIGINTs
-   * it on stop, and streams ready / partial / final / error here.
+   * The Mac's ear for the prompt box (prompt/use-dictation.ts: its mic, or ⌘
+   * held) — desktop only; the phone dictates through the Web Speech API. Main
+   * spawns the on-device recognizer on start, SIGINTs it on stop, and streams
+   * ready / partial / final / error here.
    */
   listenAvailable: () => Promise<boolean>;
   listenStart: () => Promise<boolean>;

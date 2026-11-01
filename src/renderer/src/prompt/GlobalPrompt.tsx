@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { CanvasNode } from '../../../shared/model'
-import { cookrew } from '../api'
+import { addressedToSous } from '../../../shared/sous-intent'
+import { cookrew, isRemoteMode } from '../api'
 import { CrIcon } from '../icons'
+import { speakSous } from '../sous-speak'
 import { VoiceBar } from '../VoiceBar'
 import { makeAgent } from '../zoom/make-card'
 import { zoomStore } from '../zoom/zoom-store'
@@ -9,9 +11,12 @@ import { nameFromPrompt } from '../../../shared/agent-name'
 import { lastHarness, rememberHarness } from './harness-pref'
 import { artifactRefs, expandRefs, pendingName, suggestionsFor, type ArtifactRef, type PromptArtifact } from './artifact-refs'
 import { endLine, lineTextFor, submitLine, typeLine, useLiveLine } from './live-line'
-import { draftKey, getDraft, useDraft } from './prompt-draft'
+import { withHeard } from './dictation'
+import { draftKey, getDraft, setDraft, useDraft } from './prompt-draft'
 import { mentionTarget, promptTargetOf } from './prompt-target'
 import { sendToAgent } from './send'
+import { useDictation } from './use-dictation'
+import { usePromptAttach } from './use-prompt-attach'
 import './global-prompt.css'
 
 /**
@@ -32,6 +37,13 @@ import './global-prompt.css'
  * "@Name the rest" sends to that agent from anywhere. "#Name" names a note or
  * a browser of this workspace (artifact-refs.ts): it is sent as what it is,
  * and wired to the agent it goes to. Typing "@" or "#" offers the names.
+ * A screenshot pasted or a file dropped goes in as its path
+ * (prompt-attach.ts).
+ *
+ * VOICE lands here too, and only here (use-dictation.ts): the mic, or ⌘
+ * held, puts the words into the draft to be read and sent, for an agent or
+ * for a new one. A sentence addressed to Sous ("Sous, switch to …") goes to
+ * Sous instead; if it was no command after all, it lands in the draft.
  */
 
 export interface PromptAgent {
@@ -74,7 +86,10 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   // While the box has focus its agent holds still: the view may move on (a
   // newly waiting agent takes the stage), the words being typed may not.
   const [held, setHeld] = useState<{ id: string | null } | null>(null)
-  const targetId = held && (held.id === null || agents.some((a) => a.id === held.id)) ? held.id : viewed
+  // So do they while it listens: the words go where they were meant for.
+  const [aim, setAim] = useState<{ id: string | null } | null>(null)
+  const pinned = aim ?? held
+  const targetId = pinned && (pinned.id === null || agents.some((a) => a.id === pinned.id)) ? pinned.id : viewed
   const target = agents.find((a) => a.id === targetId) ?? null
   // Let go of @agent until the view moves to another one.
   const [released, setReleased] = useState<string | null>(null)
@@ -117,6 +132,62 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     setText(next)
     if (to && !composing) typeLine(to.id, lineTextFor(next, to.id, mentionTarget(next, agents), names, artifacts))
   }
+
+  /**
+   * Heard words into the draft of the agent they were meant for, as that
+   * draft is NOW: the owner may have typed on while the ear closed, and Sous
+   * may answer after an edit.
+   */
+  const aimRef = useRef<string | null>(null)
+  const landRef = useRef((_words: string, _id: string | null): void => undefined)
+  landRef.current = (words, id) => {
+    const next = withHeard(getDraft(draftKey(id)), words)
+    setDraft(draftKey(id), next)
+    if (id && agents.some((a) => a.id === id)) typeLine(id, lineTextFor(next, id, mentionTarget(next, agents), names, artifacts))
+  }
+  /** What Sous said back to a spoken command, for a beat. */
+  const [sous, setSous] = useState<string | null>(null)
+  useEffect(() => {
+    if (!sous) return
+    const timer = window.setTimeout(() => setSous(null), 3500)
+    return () => window.clearTimeout(timer)
+  }, [sous])
+  const dictation = useDictation({
+    onStart: () => {
+      setError(null)
+      aimRef.current = to?.id ?? null
+      setAim({ id: aimRef.current })
+    },
+    onFinal: (words, alternates) => {
+      const id = aimRef.current
+      setAim(null)
+      // The Mac's other ear may have caught "Sous" where the first one heard
+      // another syllable: any reading addressed to Sous asks Sous.
+      const readings = [words, ...alternates]
+      const addressed = readings.find(addressedToSous)
+      if (!addressed) return landRef.current(words, id)
+      void cookrew()
+        .sousCommand(addressed, { surface: isRemoteMode() ? 'phone' : 'canvas', alternates: readings.filter((r) => r !== addressed) })
+        .then((result) => {
+          if (result.intent === 'none') return landRef.current(words, id)
+          // Refused: the sentence stays, to be fixed and said (or sent) again.
+          if (result.intent === 'refused') {
+            landRef.current(words, id)
+            setError(result.spoken || `Sous could not do "${words}".`)
+          } else setSous(result.spoken || null)
+          speakSous(result.spoken)
+        })
+        .catch((e: unknown) => {
+          landRef.current(words, id)
+          setError(`Sous did not answer: ${String(e)}`)
+        })
+    },
+    onError: (message) => {
+      setAim(null)
+      setError(message)
+    }
+  })
+  const hearing = dictation.phase === 'hearing'
   // Words held back while the agent asked a question go in once it is done asking.
   const asked = useRef<{ id: string | null; waiting: boolean }>({ id: null, waiting: false })
   const phase = activity?.phase
@@ -188,6 +259,13 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
 
   // "@…" and "#…" offer the names they could become, while the box has focus.
   const inputRef = useRef<HTMLInputElement>(null)
+  const attach = usePromptAttach({
+    draftKey: draftKey(to?.id ?? null),
+    write,
+    inputRef,
+    refusal: to?.remote ? `Screenshots stay on this machine: ${to.name} runs elsewhere.` : null,
+    onError: setError
+  })
   const [dismissedAt, setDismissedAt] = useState<string | null>(null)
   const [sel, setSel] = useState(0)
   const pending = held ? pendingName(text, { '@': names, '#': artifacts.map((a) => a.name) }) : null
@@ -215,9 +293,12 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
 
   return (
     <form
-      className={`cr-prompt${to ? ' to-agent' : ' to-new'}`}
+      className={`cr-prompt${to ? ' to-agent' : ' to-new'}${attach.attaching ? ' attaching' : ''}${hearing ? ' listening' : ''}`}
+      onDragOver={attach.onDragOver}
+      onDrop={attach.onDrop}
       onSubmit={(e) => {
         e.preventDefault()
+        if (dictation.listening) return
         submit()
       }}
     >
@@ -286,18 +367,34 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       <input
         ref={inputRef}
         type="text"
-        value={text}
-        placeholder={to ? `Prompt ${to.name}… # a note or browser` : 'A new agent takes this task: describe it…'}
+        value={hearing ? withHeard(text, dictation.heard) : text}
+        readOnly={hearing}
+        placeholder={hearing ? 'Listening…' : to ? `Prompt ${to.name}… # a note or browser` : 'A new agent takes this task: describe it…'}
         aria-label={to ? `Prompt ${to.name}` : 'Prompt for a new agent'}
+        title="Paste or drop a screenshot: its path goes into the prompt"
         autoComplete="off"
         disabled={busy}
-        onChange={(e) => write(e.target.value, (e.nativeEvent as InputEvent).isComposing === true)}
-        onCompositionEnd={(e) => write(e.currentTarget.value)}
+        onPaste={attach.onPaste}
+        onChange={(e) => {
+          if (!hearing) write(e.target.value, (e.nativeEvent as InputEvent).isComposing === true)
+        }}
+        onCompositionEnd={(e) => {
+          // The shown value carries the heard words while listening; they land once, from the ear.
+          if (!hearing) write(e.currentTarget.value)
+        }}
         onFocus={() => setHeld({ id: to?.id ?? null })}
         onBlur={() => setHeld(null)}
         onKeyDown={(e) => {
           // The zoom's keys (Esc steps out) are not this box's.
           e.stopPropagation()
+          // Enter while listening closes the ear: the words land, and are sent
+          // by the next Enter, once they have been seen. (Send is disabled
+          // meanwhile, so the form would not even see this Enter.)
+          if (e.key === 'Enter' && dictation.listening) {
+            e.preventDefault()
+            dictation.stop()
+            return
+          }
           if (suggesting) {
             const step = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0
             if (step !== 0) {
@@ -323,10 +420,39 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           if (e.key === 'Escape') e.currentTarget.blur()
         }}
       />
-      {to && <VoiceBar key={to.id} terminalId={to.id} activity={activity} remote={to.remote} onDictation={(words) => write(text.trim() ? `${text.trimEnd()} ${words}` : words)} sendButton={false} />}
-      <button type="submit" className="cr-btn sm primary" title={to ? 'Send (Enter)' : 'Make the agent (Enter)'} aria-label="Send" disabled={busy || (!text.trim() && to?.id !== fullAgentId) || (!to && !text.trim())}>
+      {to && <VoiceBar key={to.id} terminalId={to.id} activity={activity} remote={to.remote} />}
+      {dictation.ear && (
+        <button
+          type="button"
+          className={`cr-btn sm voice-mic${dictation.listening ? ' listening' : ''}`}
+          title={dictation.listening ? 'Stop: the words go into the prompt' : 'Dictate into the prompt (or hold ⌘)'}
+          aria-label={dictation.listening ? 'Stop dictating' : 'Dictate'}
+          aria-pressed={dictation.listening}
+          // Keep the caret where it was: the words land in the draft either way.
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={dictation.toggle}
+        >
+          <CrIcon name="mic" />
+        </button>
+      )}
+      <button type="submit" className="cr-btn sm primary" title={to ? 'Send (Enter)' : 'Make the agent (Enter)'} aria-label="Send" disabled={busy || dictation.listening || (!text.trim() && to?.id !== fullAgentId) || (!to && !text.trim())}>
         <CrIcon name="send" />
       </button>
+      {attach.attaching && (
+        <span className="cr-prompt-note" role="status">
+          attaching…
+        </span>
+      )}
+      {dictation.phase === 'closing' && dictation.heard.trim() && (
+        <span className="cr-prompt-note cr-prompt-sous" role="status" title={dictation.heard}>
+          … {dictation.heard}
+        </span>
+      )}
+      {sous && !error && (
+        <span className="cr-prompt-note cr-prompt-sous" role="status" title={sous}>
+          Sous: {sous}
+        </span>
+      )}
       {error && (
         <span className="cr-prompt-error" role="alert" title={error}>
           {error}

@@ -188,6 +188,19 @@ const CJK_RE = /\p{Script=Han}/u
 const TRAILING_PUNCT_RE = /[\s。．.!！?？,，;；]+$/u
 /** "Sous, …" (or its Chinese spellings) — the address that makes prose a command in the zoom view. */
 const SOUS_ADDRESS_RE = /^(?:sous|苏斯|小厨)\s*[,，:：、]?\s*/iu
+/**
+ * The sentence is spoken TO Sous ("Sous, …", or one of its Chinese names —
+ * SOUS_ADDRESS_RE). Whether it is
+ * also a command is parseUtterance's call; the prompt box only needs to know
+ * that it should ask.
+ */
+export function addressedToSous(raw: string): boolean {
+  const said = raw.trim()
+  // A word that only starts like the name is not the name: "Sousa", "sous-vide",
+  // and the Chinese word for kitchen, which begins with Sous's second name.
+  if (/^sous[\p{L}\p{N}-]/iu.test(said) || /^\u5c0f\u53a8\u623f/u.test(said)) return false
+  return SOUS_ADDRESS_RE.test(said)
+}
 const BROWSER_EN_RE = /\s+with\s+(?:a\s+|an\s+)?browser\b/i
 const BROWSER_ZH_RE = /\s*(?:带|加|配|和)\s*(?:一个|个)?\s*浏览器/u
 const SEP = '[，,：:]'

@@ -5,7 +5,7 @@
 import type { EventEmitter } from 'node:events'
 import type { AgentTuning } from '../../shared/agent-tuning'
 import type { GitInfo, TerminalNodeData } from '../../shared/model'
-import type { Harness, MachineProfile } from '../../shared/strata'
+import type { Harness, MachineDisplay, MachineProfile } from '../../shared/strata'
 import type { BoardSources } from '../board-index'
 import { harnessFor } from '../harness'
 import type { Scrub } from '../scrub'
@@ -30,6 +30,8 @@ export interface LevelsRuntime {
     name: () => string | null
     appVersion: string | null
     profile: () => MachineProfile
+    /** Its display in points, read each time (zoom draws the screen at its proportions); absent off Electron. */
+    display?: () => MachineDisplay | null
   }
   /** Subscribe to the profile probe's answer (it lands once, shortly after start). */
   onProfile?: (listener: () => void) => () => void
@@ -77,7 +79,8 @@ export function levelsSourcesFrom(runtime: LevelsRuntime): LevelsSources {
     harnessOf: harnessOfNode,
     machine: () => {
       const profile = runtime.machine.profile()
-      return { name: runtime.machine.name() ?? profile.label ?? 'This desktop', appVersion: runtime.machine.appVersion, profile }
+      const display = runtime.machine.display?.() ?? null
+      return { name: runtime.machine.name() ?? profile.label ?? 'This desktop', appVersion: runtime.machine.appVersion, profile, ...(display ? { display } : {}) }
     },
     onChange: (listener) => {
       for (const signal of STORE_SIGNALS) store.on(signal, listener)

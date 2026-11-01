@@ -1928,3 +1928,18 @@
     height: 32px;
   }
 }
+
+/* A screenshot on its way into the reply (prompt/prompt-attach.ts), or why
+   it did not go: in the same place as "sent ✓", held while it saves. */
+.zv-attach-note {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: none;
+}
+
+.zv-attach-note.failed {
+  color: var(--sumi-wait, var(--danger, #c0392b));
+  animation: zv-sent 5s ease forwards;
+}
