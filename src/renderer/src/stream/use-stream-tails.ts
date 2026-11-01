@@ -19,6 +19,7 @@ import { useEffect, useRef, useState } from 'react'
 import { hasLatestPush, subscribeLatestChanged } from '../latest-changed-bus'
 import { cookrew, isRemoteMode } from '../api'
 import { pickStreamTransport } from './use-stream'
+import { readEach } from './read-each'
 import type { StreamTransport } from './stream-transport'
 import type { LatestCheckpoint } from '../turn-view-model'
 
@@ -27,6 +28,12 @@ const PUSH_BACKSTOP_MS = 10_000
 const POLL_ONLY_MS = 3000
 /** Longer than the overview fit's first frame, shorter than a person notices. */
 export const FIRST_READ_DELAY_MS = 200
+/**
+ * Board reads in flight at once on the companion (read-each.ts): one, so a
+ * keystroke or a seed always finds a free connection. The desktop reads over
+ * IPC and has no such limit.
+ */
+export const REMOTE_READS_AT_ONCE = 1
 
 interface WatchBridge {
   watchLatest?: (terminalId: string) => Promise<void> | void
@@ -66,14 +73,18 @@ export function useStreamTail(terminalId: string, active: boolean): LatestCheckp
     const transport = pickStreamTransport()
     const bridge = cookrew() as unknown as WatchBridge
     let cancelled = false
+    let reading = false
     const read = async (): Promise<void> => {
-      if (document.hidden || !activeRef.current) return
+      if (reading || document.hidden || !activeRef.current) return
+      reading = true
       try {
         const preview = await previewOf(transport, terminalId)
         if (!cancelled) setCheckpoint(preview)
       } catch {
         // A transient read miss must not blank a shown checkpoint; keep the
         // last good one until the next tick succeeds.
+      } finally {
+        reading = false
       }
     }
     // A BEAT before the first read. A card mounts at whatever zoom the canvas
@@ -147,8 +158,16 @@ export function useStreamTails(
         // A transient miss keeps the last good value until the next tick.
       }
     }
+    // One sweep at a time: a sweep still running when the timer fires is
+    // not joined by another (on the phone a sweep of forty tails outlasts the
+    // 3 s poll, and the overlap piled up without end).
+    let sweeping = false
     const readAll = (): void => {
-      for (const id of wanted) void readOne(id)
+      if (sweeping || document.hidden) return
+      sweeping = true
+      void readEach(wanted, readOne, isRemoteMode() ? REMOTE_READS_AT_ONCE : wanted.length).finally(() => {
+        sweeping = false
+      })
     }
     readAll()
 
