@@ -63,6 +63,22 @@ export function barStop(dir: ZoomDir, v: number): number {
 }
 
 /**
+ * THE SWITCH (owner, 2026-11-01): no slider; the bar's last stop is two,
+ * agents | artifacts, the two ways into a workspace. In it, the other one is
+ * the switch across; above it, each opens the workspace by its side.
+ */
+export const BAR_SIDES: readonly { dir: ZoomDir; v: number; name: string }[] = [
+  { dir: 'agents', v: 1, name: 'agents' },
+  { dir: 'items', v: 0, name: 'artifacts' }
+]
+
+/** The side lit at v: the one the view is on once it is in the workspace (a card, a full view too); none above it. */
+export function barSide(dir: ZoomDir, v: number): ZoomDir | null {
+  const stops = BAR_STOPS[dir]
+  return barStop(dir, v) === stops[stops.length - 1] ? dir : null
+}
+
+/**
  * One stop out from v (owner, 2026-10-31: zoom in and out by CLICK): the next
  * stop below where the view is, never the passage inside it. At the outermost
  * stop there is nowhere further, so v stays.

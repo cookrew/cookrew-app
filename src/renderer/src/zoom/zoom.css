@@ -1364,77 +1364,13 @@
 }
 
 .zv-zoom-control {
-  display: grid;
-  gap: 3px;
-  width: 340px;
+  width: 380px;
   min-width: 0;
-}
-
-.zv-zoom-control input[type='range'] {
-  appearance: none;
-  -webkit-appearance: none;
-  display: block;
-  width: 100%;
-  height: 16px;
-  margin: 0;
-  background: transparent;
-  cursor: pointer;
-}
-
-.zv-zoom-control input[type='range']::-webkit-slider-runnable-track {
-  height: 2px;
-  border-radius: 1px;
-  background: var(--zv-rule);
-}
-
-.zv-zoom-control input[type='range']::-moz-range-track {
-  height: 2px;
-  border-radius: 1px;
-  background: var(--zv-rule);
-}
-
-.zv-zoom-control input[type='range']::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
-  margin-top: -6px;
-  border: 0;
-  border-radius: 50%;
-  background: var(--zv-seal-fill);
-  box-shadow:
-    0 0 0 3px var(--zv-card),
-    0 0 0 4px var(--zv-hair-2);
-}
-
-.zv-zoom-control input[type='range']::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
-  border: 0;
-  border-radius: 50%;
-  background: var(--zv-seal-fill);
-  box-shadow:
-    0 0 0 3px var(--zv-card),
-    0 0 0 4px var(--zv-hair-2);
-}
-
-.zv-zoom-control input[type='range']:focus {
-  outline: none;
-}
-
-.zv-zoom-control input[type='range']:focus-visible::-webkit-slider-thumb {
-  box-shadow:
-    0 0 0 3px var(--zv-card),
-    0 0 0 5px var(--zv-seal);
-}
-
-.zv-zoom-control input[type='range']:focus-visible::-moz-range-thumb {
-  box-shadow:
-    0 0 0 3px var(--zv-card),
-    0 0 0 5px var(--zv-seal);
 }
 
 .zv-stops {
   display: flex;
+  align-items: center;
   gap: 2px;
 }
 
@@ -1453,8 +1389,22 @@
   font: 10px/1 var(--zv-mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
+  min-height: 28px;
   color: var(--zv-ink-soft);
   cursor: pointer;
+}
+
+/* The last stop is the switch (owner, 2026-11-01): agents | artifacts, one
+   outlined pair, so in the workspace the other side is one press away. */
+.zv-side {
+  display: flex;
+  flex: 2 1 0;
+  min-width: 0;
+  gap: 2px;
+  margin-left: 6px;
+  border-radius: 999px;
+  outline: 1px solid var(--zv-hair-2);
+  outline-offset: 1px;
 }
 
 .zv-stops button[aria-current] {
@@ -1464,6 +1414,8 @@
 
 .zv-location {
   flex: none;
+  /* As wide as "artifacts", so the switch does not slide under the pointer when it flips. */
+  min-width: 4.4em;
   padding-left: 10px;
   border-left: 1px solid var(--zv-hair-2);
   white-space: nowrap;
@@ -1625,10 +1577,8 @@
   }
 }
 
-/* A phone pinches for the in-between: the slider and the side's name give
-   their room to the stops. */
+/* A phone: the side's name gives its room to the stops. */
 @media (max-width: 520px) {
-  .zv-zoom-control input[type='range'],
   .zv-location {
     display: none;
   }

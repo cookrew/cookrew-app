@@ -13,7 +13,7 @@ import { PerRowPill } from './PerRowPill'
 import { deviceWords, SWS, type FrameEls } from './zoom-frame'
 import { useZoom, zoomStore } from './zoom-store'
 import { useZoomMotion } from './use-zoom-motion'
-import { BAR_NAMES, BAR_STOPS, barStop, RANGE, stepOut } from './zoom-path'
+import { BAR_NAMES, BAR_SIDES, BAR_STOPS, barSide, barStop, stepOut } from './zoom-path'
 import { useZoomFleetView } from './use-zoom-fleet'
 import './zoom.css'
 
@@ -303,11 +303,11 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     } catch (e) { setError(`Cannot open workspace: ${String(e)}`) }
   }, [])
   const newest = model.items.find((i) => model.frame.links.some((l) => l.key === model.frame.newest && l.item === i.id))
-  const stops = BAR_STOPS[zoom.dir]
+  // The stops above the workspace are the same on both sides; the last is the switch.
+  const stops = BAR_STOPS[zoom.dir].slice(0, -1)
   const names = BAR_NAMES[zoom.dir]
   const selectedStop = barStop(zoom.dir, zoom.v)
-  // The slider spans the bar's stops; a card or a full view sits at its end.
-  const barMax = stops[stops.length - 1]
+  const side = barSide(zoom.dir, zoom.v)
   // Pinch only changes the scene; the full terminal keeps its own native scroll.
   const pointers = useRef(new Map<number, { x: number; y: number }>())
   const pinch = useRef<{ distance: number; v: number } | null>(null)
@@ -417,8 +417,12 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       <nav className="zv-controls" aria-label="Semantic zoom">
         <button type="button" className="zv-back" onClick={stepBack} aria-label="Zoom out">‹</button>
         <div className="zv-zoom-control">
-          <input aria-label="Zoom level" type="range" min={RANGE[zoom.dir][0]} max={barMax} step={0.01} value={Math.min(zoom.v, barMax)} onChange={(e) => motion.go(Number(e.target.value))} />
-          <div className="zv-stops">{stops.map((v, i) => <button key={v} type="button" aria-current={selectedStop === v ? 'step' : undefined} onClick={() => motion.go(v)}>{names[i]}</button>)}</div>
+          <div className="zv-stops">
+            {stops.map((v, i) => <button key={v} type="button" aria-current={selectedStop === v ? 'step' : undefined} onClick={() => motion.go(v)}>{names[i]}</button>)}
+            <div className="zv-side" role="group" aria-label="Agents or artifacts">
+              {BAR_SIDES.map((s) => <button key={s.dir} type="button" aria-current={side === s.dir ? 'step' : undefined} onClick={() => motion.go(s.v, s.dir)}>{s.name}</button>)}
+            </div>
+          </div>
         </div>
         <span className="zv-location">{zoom.dir === 'agents' ? 'agents' : 'artifacts'}</span>
       </nav>

@@ -2,7 +2,7 @@
 // device; the group is only a passage; clicks open a card, a full view, or
 // jump across. Pure rules, pinned here.
 import { describe, expect, it } from 'vitest'
-import { agentClick, BAR_NAMES, BAR_STOPS, barStop, clampTo, derive, itemClick, nearestStop, settle, stepOut } from '../src/renderer/src/zoom/zoom-path'
+import { agentClick, BAR_NAMES, BAR_SIDES, BAR_STOPS, barSide, barStop, clampTo, derive, itemClick, nearestStop, settle, stepOut } from '../src/renderer/src/zoom/zoom-path'
 import { brushPath, harnessMark, strokeOf } from '../src/renderer/src/zoom/ink-marks'
 
 describe('the path', () => {
@@ -52,6 +52,23 @@ describe('the path', () => {
     // Out a step still walks every stop: full → card → crew.
     expect(stepOut('agents', 3)).toBe(2)
     expect(stepOut('agents', 2)).toBe(1)
+  })
+
+  // Owner, 2026-11-01: no slider; the agents view switches to the artifacts and back.
+  it('the last stop is a switch: agents | artifacts, each opening the workspace by its side', () => {
+    expect(BAR_SIDES.map((s) => s.name)).toEqual(['agents', 'artifacts'])
+    expect(BAR_SIDES.map((s) => [s.dir, s.v])).toEqual([['agents', 1], ['items', 0]])
+    // Each side's v is that side's deepest bar stop.
+    for (const s of BAR_SIDES) expect(s.v).toBe(BAR_STOPS[s.dir][BAR_STOPS[s.dir].length - 1])
+    // Lit only once the view is in the workspace, and then it is the side it is on.
+    expect(barSide('agents', -2)).toBeNull()
+    expect(barSide('agents', -1)).toBeNull()
+    expect(barSide('items', -1)).toBeNull()
+    expect(barSide('agents', 1)).toBe('agents')
+    expect(barSide('agents', 2)).toBe('agents')
+    expect(barSide('agents', 3)).toBe('agents')
+    expect(barSide('items', 0)).toBe('items')
+    expect(barSide('items', 1)).toBe('items')
   })
 })
 

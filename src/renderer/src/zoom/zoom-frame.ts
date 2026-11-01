@@ -273,7 +273,7 @@ const PHONE_LABEL_H = 56
  * state word (10px) at 14px. Up to the crew it frames the crew's box, as before.
  */
 export const DESK_CARD_S = 1.4
-/** The stop bar over the bottom of a desktop's overview (zoom.css · .zv-controls: 14 up, 50 tall). */
+/** The stop bar over the bottom of a desktop's overview (zoom.css · .zv-controls: 14 up, 46 tall). */
 const DESK_BAR = 72
 const DESK_MARGIN = 16
 export function deskCamera(L: Layout, z: number, focus: string | null, w: number, h: number): Camera {
