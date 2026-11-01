@@ -1,16 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 
 /**
- * THE PHONE PAGE TAKES A DROPPED SCREENSHOT (owner, 2026-11-01): the way the
- * transcripts view does. A file dragged anywhere over the page shows the
- * same DROP TO ATTACH cue, and once dropped it goes into the prompt box as
- * its path (use-prompt-attach.ts · dropFiles), as a drop on the box itself
- * does. On a phone the box is a short strip at the foot; the page is what a
- * finger can hit.
+ * THE PROMPT BOX AS A DROP ZONE (owner, 2026-11-01): a screenshot dragged
+ * over the box shows the transcripts view's DROP TO ATTACH cue over the box,
+ * and once dropped goes into it as its path (use-prompt-attach.ts ·
+ * dropFiles). The whole box takes it, chips and keys included, not only the
+ * text field: on a phone the field is a sliver. The page around the box takes
+ * nothing (owner: the whole page was too wide a target).
  *
- * Whatever takes a drop itself keeps it: the transcript (TerminalOverlay),
- * a card's reply box and the prompt box cancel the drag where it is, so the
- * page leaves alone any drag that arrives here already cancelled.
+ * Whatever inside the zone takes a drop itself keeps it: the zone leaves
+ * alone a drag that reaches it already cancelled.
  */
 
 interface DragLike {
@@ -19,7 +18,7 @@ interface DragLike {
   preventDefault: () => void
 }
 
-export interface PageDropHandlers {
+export interface DropZoneHandlers {
   /** The cue shows (true) or goes (false). */
   readonly onOver: (over: boolean) => void
   readonly onFiles: (files: File[]) => void
@@ -28,15 +27,15 @@ export interface PageDropHandlers {
 const carriesFiles = (e: DragLike): boolean => Array.from(e.dataTransfer?.types ?? []).includes('Files')
 
 /**
- * Listens on `target` (the window) for file drags; returns the unlisten.
+ * Listens on `target` (the zone's element) for file drags; returns the unlisten.
  *
  * The cue follows dragover, which fires over and over while a drag hovers:
  * shown where nothing below took the drag, gone where something did. Enter
- * and leave are counted so the cue goes when the drag leaves the page, and
+ * and leave are counted so the cue goes when the drag leaves the zone, and
  * every drop (seen first, in the capture phase) puts the count back to zero,
  * a drop some other zone took included.
  */
-export function listenPageDrop(target: EventTarget, { onOver, onFiles }: PageDropHandlers): () => void {
+export function listenDropZone(target: EventTarget, { onOver, onFiles }: DropZoneHandlers): () => void {
   let depth = 0
   const done = (): void => {
     depth = 0
@@ -79,20 +78,21 @@ export function listenPageDrop(target: EventTarget, { onOver, onFiles }: PageDro
   }
 }
 
-/** The page as a drop zone while `enabled`; true while a file drag hovers a part of it that takes none itself. */
-export function usePageDrop(enabled: boolean, onFiles: (files: File[]) => void): boolean {
+/** The element as a drop zone; true while a file drag hovers a part of it that takes none itself. */
+export function useDropZone(zone: React.RefObject<HTMLElement | null>, onFiles: (files: File[]) => void): boolean {
   const [over, setOver] = useState(false)
   const take = useRef(onFiles)
   useEffect(() => {
     take.current = onFiles
   })
   useEffect(() => {
-    if (!enabled) return
-    const stop = listenPageDrop(window, { onOver: setOver, onFiles: (files) => take.current(files) })
+    const el = zone.current
+    if (!el) return
+    const stop = listenDropZone(el, { onOver: setOver, onFiles: (files) => take.current(files) })
     return () => {
       stop()
       setOver(false)
     }
-  }, [enabled])
-  return enabled && over
+  }, [zone])
+  return over
 }

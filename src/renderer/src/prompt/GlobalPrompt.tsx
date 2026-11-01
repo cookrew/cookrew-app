@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { createPortal } from 'react-dom'
 import type { CanvasNode } from '../../../shared/model'
 import { addressedToSous } from '../../../shared/sous-intent'
 import { cookrew, isRemoteMode } from '../api'
@@ -24,7 +23,7 @@ import { boxPin, boxTargetId, heldAfter, mentionTarget, promptTargetOf, viewKeyO
 import { sendToAgent } from './send'
 import { useDictation } from './use-dictation'
 import { usePromptAttach } from './use-prompt-attach'
-import { usePageDrop } from './page-drop'
+import { useDropZone } from './drop-zone'
 import './global-prompt.css'
 
 /**
@@ -301,8 +300,9 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     refusal: to?.remote ? `Screenshots stay on this machine: ${to.name} runs elsewhere.` : null,
     onError: setError
   })
-  // The phone page takes a screenshot dropped anywhere on it, as the transcripts view does.
-  const pageDrop = usePageDrop(isRemoteMode(), attach.dropFiles)
+  // The whole box takes a dropped screenshot, with the transcripts view's cue over it.
+  const formRef = useRef<HTMLFormElement>(null)
+  const dropOver = useDropZone(formRef, attach.dropFiles)
   const [dismissedAt, setDismissedAt] = useState<string | null>(null)
   const [sel, setSel] = useState(0)
   const pending = held ? pendingName(text, { '@': names, '#': artifacts.map((a) => a.name) }) : null
@@ -330,9 +330,8 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
 
   return (
     <form
+      ref={formRef}
       className={`cr-prompt${to ? ' to-agent' : ' to-new'}${attach.attaching ? ' attaching' : ''}${hearing ? ' listening' : ''}`}
-      onDragOver={attach.onDragOver}
-      onDrop={attach.onDrop}
       onSubmit={(e) => {
         e.preventDefault()
         if (dictation.listening) return
@@ -487,15 +486,13 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           {error}
         </span>
       )}
-      {pageDrop &&
-        createPortal(
-          <div className="attach-drop-hint cr-page-drop">
-            <span>
-              <CrIcon name="attach" /> {to?.remote ? 'ATTACHMENTS STAY HERE — THIS TEAM RUNS ELSEWHERE' : 'DROP TO ATTACH'}
-            </span>
-          </div>,
-          document.body
-        )}
+      {dropOver && (
+        <div className="attach-drop-hint cr-prompt-drop">
+          <span>
+            <CrIcon name="attach" /> {to?.remote ? 'ATTACHMENTS STAY HERE — THIS TEAM RUNS ELSEWHERE' : 'DROP TO ATTACH'}
+          </span>
+        </div>
+      )}
     </form>
   )
 }

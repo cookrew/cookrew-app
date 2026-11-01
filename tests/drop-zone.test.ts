@@ -1,11 +1,10 @@
-// THE PHONE PAGE TAKES A DROPPED SCREENSHOT (owner, 2026-11-01: as the
-// transcripts view does). A file dragged anywhere over the page shows the
-// DROP TO ATTACH cue and, dropped, goes into the prompt box as its path. A
-// zone that takes the drop itself (the transcript, a card's reply box, the
-// box) keeps it: the page leaves a drag alone once something cancelled it.
+// THE PROMPT BOX AS A DROP ZONE (owner, 2026-11-01). A screenshot dragged
+// over the box shows the transcripts view's DROP TO ATTACH cue over the box
+// and, dropped, goes into it as its path. Only the box: the whole page was
+// too wide a target. A part inside that takes the drop itself keeps it.
 
 import { describe, expect, it, vi } from 'vitest'
-import { listenPageDrop } from '../src/renderer/src/prompt/page-drop'
+import { listenDropZone } from '../src/renderer/src/prompt/drop-zone'
 
 const SHOT = { name: 'shot.png' } as File
 
@@ -16,19 +15,19 @@ interface Drag extends Event {
 const drag = (type: string, { files = [SHOT], types = ['Files'] }: { files?: File[]; types?: string[] } = {}): Drag =>
   Object.assign(new Event(type, { cancelable: true }), { dataTransfer: { types, files, dropEffect: 'none' } })
 
-/** The page, with `zone` standing in for a part of it that takes a drop itself. */
-const page = (zone = false): { target: EventTarget; onOver: ReturnType<typeof vi.fn>; onFiles: ReturnType<typeof vi.fn>; stop: () => void } => {
+/** The box, with `inner` standing in for a part of it that takes a drop itself. */
+const box = (inner = false): { target: EventTarget; onOver: ReturnType<typeof vi.fn>; onFiles: ReturnType<typeof vi.fn>; stop: () => void } => {
   const target = new EventTarget()
-  if (zone) for (const type of ['dragover', 'drop']) target.addEventListener(type, (e) => e.preventDefault())
+  if (inner) for (const type of ['dragover', 'drop']) target.addEventListener(type, (e) => e.preventDefault())
   const onOver = vi.fn()
   const onFiles = vi.fn()
-  const stop = listenPageDrop(target, { onOver, onFiles })
+  const stop = listenDropZone(target, { onOver, onFiles })
   return { target, onOver, onFiles, stop }
 }
 
-describe('the page as a drop zone', () => {
-  it('a file dragged over the page shows the cue and claims the drag', () => {
-    const { target, onOver } = page()
+describe('the prompt box as a drop zone', () => {
+  it('a file dragged over the box shows the cue and claims the drag', () => {
+    const { target, onOver } = box()
     const over = drag('dragover')
     target.dispatchEvent(over)
     expect(over.defaultPrevented).toBe(true)
@@ -37,7 +36,7 @@ describe('the page as a drop zone', () => {
   })
 
   it('a dropped screenshot goes to the prompt box, and the cue goes', () => {
-    const { target, onOver, onFiles } = page()
+    const { target, onOver, onFiles } = box()
     target.dispatchEvent(drag('dragover'))
     const drop = drag('drop')
     target.dispatchEvent(drop)
@@ -46,8 +45,8 @@ describe('the page as a drop zone', () => {
     expect(onOver).toHaveBeenLastCalledWith(false)
   })
 
-  it('a drag something below took (the transcript, a reply box) is left to it', () => {
-    const { target, onOver, onFiles } = page(true)
+  it('a drag a part inside took is left to it', () => {
+    const { target, onOver, onFiles } = box(true)
     target.dispatchEvent(drag('dragover'))
     expect(onOver).toHaveBeenLastCalledWith(false)
     expect(onOver).not.toHaveBeenCalledWith(true)
@@ -56,8 +55,8 @@ describe('the page as a drop zone', () => {
     expect(onOver).toHaveBeenLastCalledWith(false)
   })
 
-  it('a drag of text, not files, is not the page’s', () => {
-    const { target, onOver, onFiles } = page()
+  it('a drag of text, not files, is not the box’s', () => {
+    const { target, onOver, onFiles } = box()
     const over = drag('dragover', { files: [], types: ['text/plain'] })
     target.dispatchEvent(over)
     target.dispatchEvent(drag('drop', { files: [], types: ['text/plain'] }))
@@ -66,8 +65,8 @@ describe('the page as a drop zone', () => {
     expect(onFiles).not.toHaveBeenCalled()
   })
 
-  it('the cue goes when the drag leaves the page, not when it moves from one part to the next', () => {
-    const { target, onOver } = page()
+  it('the cue goes when the drag leaves the box, not when it moves from one part to the next', () => {
+    const { target, onOver } = box()
     target.dispatchEvent(drag('dragenter'))
     target.dispatchEvent(drag('dragover'))
     target.dispatchEvent(drag('dragenter'))
@@ -78,7 +77,7 @@ describe('the page as a drop zone', () => {
   })
 
   it('a drop another zone took still resets the count, so the next drag can leave', () => {
-    const { target, onOver } = page()
+    const { target, onOver } = box()
     target.dispatchEvent(drag('dragenter'))
     target.dispatchEvent(drag('dragenter'))
     target.dispatchEvent(drag('drop'))
@@ -88,8 +87,8 @@ describe('the page as a drop zone', () => {
     expect(onOver).toHaveBeenLastCalledWith(false)
   })
 
-  it('unlistened, the page takes nothing', () => {
-    const { target, onOver, onFiles, stop } = page()
+  it('unlistened, the box takes nothing', () => {
+    const { target, onOver, onFiles, stop } = box()
     stop()
     const over = drag('dragover')
     target.dispatchEvent(over)

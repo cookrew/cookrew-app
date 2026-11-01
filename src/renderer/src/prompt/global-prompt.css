@@ -395,8 +395,13 @@
   }
 }
 
-/* The phone page as a drop zone (page-drop.ts): the transcripts view's cue, over the whole page. */
-.attach-drop-hint.cr-page-drop {
-  position: fixed;
-  z-index: 1000;
+/* The box as a drop zone (drop-zone.ts): the transcripts view's cue, over the box alone. */
+.attach-drop-hint.cr-prompt-drop {
+  border-radius: inherit;
+  z-index: 20;
+}
+
+.cr-prompt-drop span {
+  padding: 6px 12px;
+  text-align: center;
 }
