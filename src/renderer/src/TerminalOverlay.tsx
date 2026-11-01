@@ -40,6 +40,7 @@ import { useCheckpointTranslation } from './use-checkpoint-translation'
 import { AgentAvatar, StatusCoin } from './nodes/AgentAvatar'
 import { TranscriptFaceContext } from './transcript-face'
 import { LOOK_LABEL, LOOK_TITLE, isRecordLook, nextLook, useTranscriptLook, type TranscriptLook } from './transcript-look'
+import { shouldAttachTerminal } from './terminal-view-mode'
 import { installLocalScroll, type LocalScroll } from './live-scroll'
 import { createCurtain, domCurtainDeps, subRowShift } from './live-curtain'
 import { installLiveSheet, type LiveSheet } from './live-sheet'
@@ -528,8 +529,15 @@ function TerminalOverlay({
     if (termRef.current) termRef.current.options.theme = night ? NIGHT_THEME : PAPER_THEME
   }, [night])
 
-  // Owner ruling 2026-08-30: the zoomed view is PTY-DIRECT for every card.
+  // Owner ruling 2026-08-30: LIVE is PTY-DIRECT. CHAT and LOG are record
+  // views: mounting xterm there kept a herdr mirror (and its agent process)
+  // alive even when nobody was looking at the terminal. Record views must
+  // remain mirrorless so idle sleep can end the TUI process.
   useEffect(() => {
+    if (!shouldAttachTerminal(look)) {
+      termRef.current = null
+      return
+    }
     const container = containerRef.current
     if (!container) return
 
@@ -1205,7 +1213,7 @@ function TerminalOverlay({
       // dispose in reverse: detach stream/observers before killing the term
       for (const cleanup of cleanups.reverse()) cleanup()
     }
-  }, [node.id])
+  }, [look, node.id])
 
   // Live-tail-only clip (unified-scroll item 1): when the turn is at rest, keep
   // only Forge's tail boundary in the live layer; the trace owns older
