@@ -18,6 +18,8 @@ import type { FrameMeta, HeadlessPageState, HeadlessStopResult } from './headles
  */
 export interface BrowserInstance {
   readonly frameListeners: Set<(jpegBase64: string, meta: FrameMeta) => void>
+  /** Text the page copied (page-copy.ts). Absent where nothing copies — a phone's screen. */
+  readonly copyListeners?: Set<(text: string) => void>
   onExit: () => void
   onPageState: (tabId: string, state: HeadlessPageState) => void
   onTabOpened: (tab: BrowserTab) => void
