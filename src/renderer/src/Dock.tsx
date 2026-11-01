@@ -87,8 +87,6 @@ interface DockProps {
   makeError?: string | null
   /** Import a served team by its address — places ONE orch interface card. */
   onImportServed?: () => void
-  /** The phone's way into the Sous box — it has no ⌘K. Absent on the desktop. */
-  onSous?: () => void
   /** Zoomed-in terminal: the global prompt carries @agent for it. */
   voiceFor: { id: string; remote: boolean } | null
   /** This workspace's agents: the prompt's @names and its targets. */
@@ -139,7 +137,6 @@ export function Dock({
   making = false,
   makeError = null,
   onImportServed,
-  onSous,
   voiceFor,
   agents,
   nodes,
@@ -184,21 +181,8 @@ export function Dock({
   return (
     <footer className={`cr-dock${slidIn ? ' zoomed' : ''}`}>
       <div className="dock-pane dock-canvas" aria-hidden={slidIn}>
-        {(onSous || !CANVAS_RETIRED || tools.length > 0) && (
+        {(!CANVAS_RETIRED || tools.length > 0) && (
           <div className="cr-dock-tools">
-            {/* SOUS leads the row on the phone: the box is summoned, not parked
-                along the bottom — parked, it covered this very row (IMG_3770). */}
-            {onSous && (
-              <button
-                className="cr-btn tool icon"
-                title="Tell the crew what to do"
-                aria-label="SOUS"
-                tabIndex={slidIn ? -1 : 0}
-                onClick={onSous}
-              >
-                <CrIcon name="search" className="tool-icon" />
-              </button>
-            )}
             {/* The clipboard toggle leads the tools: it is the one control
                 that is NOT a tool, so it wears a pressed state instead of
                 the active-tool highlight — the same glyph and contract as

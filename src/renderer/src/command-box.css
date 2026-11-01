@@ -105,7 +105,7 @@
 .cmd-alts { display: flex; gap: 6px; flex-wrap: wrap; width: 100%; }
 .cmd-alts button { font-size: 12px; }
 
-/* The phone: summoned by the dock's SOUS button (no ⌘K there), the box is a
+/* The phone (a keyboard's ⌘K; the dock's SOUS button is gone, 2026-11-01): the box is a
    sheet along the bottom, above the safe area, lifted by the keyboard the
    way the dock is; the rows fold to three; its own ✕ closes it. Parked there
    permanently it covered the dock's tool and preset rows (IMG_3770). */

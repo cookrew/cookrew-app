@@ -176,7 +176,7 @@ describe('the box, drawn', () => {
     expect(full.match(/aria-label="Send"/g)?.length).toBe(1)
     const none = renderToStaticMarkup(createElement(GlobalPrompt, { fullAgentId: null, agents, harnesses: ['Claude Code', 'Codex'], nodes: [] }))
     expect(none).toContain('＋ Claude Code ▾')
-    expect(none).toContain('A new agent takes this task')
+    expect(none).toContain('Describe a task for a new agent')
     expect(none).not.toContain('voice-bar')
   })
 })

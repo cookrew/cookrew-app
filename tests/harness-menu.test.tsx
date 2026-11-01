@@ -160,10 +160,10 @@ describe('the dock, with the TERMINAL button retired', () => {
     expect(html).toContain('＋ Claude Code ▾')
   }, 20_000)
 
-  it('the phone keeps its SOUS key in the tool row', async () => {
-    const html = await render({ onSous: () => undefined })
-    expect(html).toContain('aria-label="SOUS"')
-    expect(html).not.toContain('aria-label="TERMINAL"')
+  it('the phone has no SOUS key either: the box is the one way in, so no tool row', async () => {
+    const html = await render()
+    expect(html).not.toContain('aria-label="SOUS"')
+    expect(html).not.toContain('cr-dock-tools')
   })
 
   it('the chip says ORCH while the next agent will lead', async () => {
