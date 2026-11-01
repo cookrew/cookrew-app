@@ -546,7 +546,7 @@ export function reachCard(
     if (entry) return terminalFromRegistry(entry)
   }
   throw new Error(
-    `${label} '${name}' not found in your workspace or among your connections. Run 'cookrew list --canvas'.`
+    `${label} '${name}' not found in your workspace or among your connections. Run 'cookrew list --workspace'.`
   )
 }
 
@@ -776,6 +776,11 @@ function workspaceName(deps: SocketServerDeps, id: string): string {
 
 export function cmdList(request: CliRequest, deps: SocketServerDeps): string {
   if (request.flags.all) return cmdListAll(deps)
+  // `list --workspace [name]` is the one spelling now (owner, 2026-11-01):
+  // the workspace's every card, not just the ones wired to you. `--canvas`
+  // still works so an agent's old habit is not a broken command, and says
+  // nothing: a deprecation notice in the output of a tool call is noise.
+  if (request.flags.workspace !== undefined) return cmdListCanvas(request, deps)
   if (request.flags.canvas) return cmdListCanvas(request, deps)
   const me = self(request, deps)
   // Relative to where the CALLER lives. An agent in workspace B asking what it
@@ -831,7 +836,7 @@ export function cmdList(request: CliRequest, deps: SocketServerDeps): string {
     const reach = deps.isServed(me.id)
       ? ''
       : ' yet; you can ask, read or drive any of them by name, and that wires you to it'
-    lines.push('', `${count}${reach} — \`cookrew list --canvas\` lists every card and who it is wired to.`)
+    lines.push('', `${count}${reach} — \`cookrew list --workspace\` lists every card and who it is wired to.`)
   }
   return lines.join('\n')
 }
@@ -844,7 +849,9 @@ export function cmdList(request: CliRequest, deps: SocketServerDeps): string {
 function cmdListCanvas(request: CliRequest, deps: SocketServerDeps): string {
   const me = self(request, deps)
   const home = deps.store.workspaceOfNode(me.id)
-  const wanted = typeof request.flags.workspace === 'string' ? String(request.flags.workspace) : null
+  // `list --workspace` alone means "mine"; with a value it names one.
+  const named = typeof request.flags.workspace === 'string' ? String(request.flags.workspace) : null
+  const wanted = request.flags.workspace === true ? null : named
   // Reading follows the same rule as writing: your own workspace, or one you
   // name when you have none. Naming another agent's is refused.
   const scope = cliWorkspaceScope({
@@ -1675,6 +1682,7 @@ const HELP_TEXT = `Cookrew — an open-source spatial workspace for AI agents.
 
 Usage:
   cookrew list                                  List connected agents, notes, and browsers
+  cookrew list --workspace [<name>]             Every card in your workspace (or the one named)
   cookrew ask "Agent" "prompt"                  Send a prompt to any agent in your workspace, wait for the reply
                                                 (asking, checking, reading a note or driving a browser by name
                                                 wires you to it if you were not already)

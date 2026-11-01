@@ -100,16 +100,26 @@ describe('browser create — the caller’s workspace, not the focused one', () 
   })
 })
 
-describe('list --canvas — the same scope rule as writing', () => {
+describe('list --workspace — the same scope rule as writing', () => {
+  it('is the one spelling: list --workspace alone is mine, --canvas still answers', () => {
+    const { store, deps, home } = setup()
+    const me = store.addNode(terminal('t1', 'Conductor')) as TerminalNodeData
+    store.addNodeToWorkspace(home, { kind: 'browser', id: 'b1', name: 'Mine', url: 'https://a.test', position: { x: 0, y: 0 }, size: { width: 1, height: 1 } } as BrowserNodeData)
+    expect(cmdList(request([], me.id, { workspace: true }), deps)).toContain('"Mine"')
+    expect(cmdList(request([], me.id, { workspace: 'Home' }), deps)).toContain('"Mine"')
+    // The old flag is not a broken command for an agent that still types it.
+    expect(cmdList(request([], me.id, { canvas: true }), deps)).toContain('"Mine"')
+  })
+
   it('lists the caller’s own workspace, and a named one only when it is theirs', () => {
     const { store, deps, home, other } = setup()
     const me = store.addNode(terminal('t1', 'Conductor')) as TerminalNodeData
     store.addNodeToWorkspace(home, { kind: 'browser', id: 'b1', name: 'Mine', url: 'https://a.test', position: { x: 0, y: 0 }, size: { width: 1, height: 1 } } as BrowserNodeData)
     store.addNodeToWorkspace(other, { kind: 'browser', id: 'b2', name: 'Theirs', url: 'https://b.test', position: { x: 0, y: 0 }, size: { width: 1, height: 1 } } as BrowserNodeData)
     store.switchWorkspace(other)
-    const mine = cmdList(request([], me.id, { canvas: true }), deps)
+    const mine = cmdList(request([], me.id, { workspace: true }), deps)
     expect(mine).toContain('"Mine"')
     expect(mine).not.toContain('"Theirs"')
-    expect(() => cmdList(request([], me.id, { canvas: true, workspace: 'Other' }), deps)).toThrow(/own workspace/)
+    expect(() => cmdList(request([], me.id, { workspace: 'Other' }), deps)).toThrow(/own workspace/)
   })
 })

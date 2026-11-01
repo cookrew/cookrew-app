@@ -5492,7 +5492,7 @@ function rendererBrowserCommand(args: string[], terminalId: string): Promise<str
  * A browser card made in a workspace that is not on screen (an agent's own,
  * while the owner looks elsewhere). No engine is booted — the page runs when
  * that workspace is shown — and the card is wired to its caller the same way
- * the on-screen path wires it, so `cookrew list --canvas` sees it there.
+ * the on-screen path wires it, so `cookrew list --workspace` sees it there.
  */
 function createBrowserInWorkspace(card: { url: string; name: string; terminalId: string; workspaceId: string }): {
   name: string
