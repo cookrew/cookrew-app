@@ -1,6 +1,7 @@
 import { CANVAS_RETIRED, type ToolId } from './canvas-ui'
 import type { AgentRole, CanvasNode } from '../../shared/model'
 import { GlobalPrompt, type PromptAgent } from './prompt/GlobalPrompt'
+import { SHELL_PRESET } from './prompt/harness-pref'
 import type { PromptArtifact } from './prompt/artifact-refs'
 import { useKeyboardInset } from './keyboard-inset'
 import { CrIcon, type CrIconName } from './icons'
@@ -9,7 +10,7 @@ import { RoleAvatar } from './nodes/RoleAvatar'
 
 /** What a dock button does: open the preset row, or make its card at once. */
 export type DockTool =
-  | { id: 'terminal'; label: string; title: string; icon: CrIconName; act: 'arm' }
+  | { id: 'terminal'; label: string; title: string; icon: CrIconName; act: 'arm'; canvasOnly: true }
   | { id: 'note' | 'browser'; label: string; title: string; icon: CrIconName; act: 'make'; canvasOnly: true }
   | { id: 'connect'; label: string; title: string; icon: CrIconName; act: 'arm'; canvasOnly: true }
 
@@ -24,9 +25,14 @@ export type DockTool =
  * NOTE and BROWSER are left out too (owner, 2026-11-01): a note or a browser
  * is made inside an agent, from its full view's browsers-and-notes column
  * (stage/AgentArtifacts.tsx), so it is wired to the agent that holds it.
+ *
+ * And so is TERMINAL (owner, 2026-11-01): the prompt box's ＋ menu
+ * (prompt/HarnessMenu.tsx) carries all its row held — the harnesses, a bare
+ * shell, the roles, the saved teams, the import and ORCH. Its row below only
+ * opens on a canvas brought back, where TERMINAL arms a placement.
  */
 const TOOLS: readonly DockTool[] = [
-  { id: 'terminal', label: 'TERMINAL', title: 'New agent — pick a harness, role or team', icon: 'terminal', act: 'arm' },
+  { id: 'terminal', label: 'TERMINAL', title: 'New agent — pick a harness, role or team', icon: 'terminal', act: 'arm', canvasOnly: true },
   { id: 'note', label: 'NOTE', title: 'New note in this workspace', icon: 'note', act: 'make', canvasOnly: true },
   { id: 'browser', label: 'BROWSER', title: 'New browser in this workspace', icon: 'browser', act: 'make', canvasOnly: true },
   { id: 'connect', label: 'CONNECT', title: 'CONNECT', icon: 'connect', act: 'arm', canvasOnly: true }
@@ -150,8 +156,20 @@ export function Dock({
   // session of a team — so the row tells them apart by name.
   const savedTeams = presets.filter((name) => templates.includes(name))
   const harnesses = presets.filter((name) => !templates.includes(name))
-  // A prompt is for an agent: a bare shell would run its words as a command.
-  const promptHarnesses = harnesses.filter((name) => name !== 'Shell')
+  // A prompt is for an agent: a bare shell would run its words as a command,
+  // so the box's menu offers it as an act, made at once.
+  const promptHarnesses = harnesses.filter((name) => name !== SHELL_PRESET)
+  const acts = {
+    shell: harnesses.includes(SHELL_PRESET),
+    roles: roles.map((r) => r.name),
+    teams: savedTeams,
+    onPreset,
+    onRole,
+    onImportServed,
+    onOrch,
+    making
+  }
+  const tools = dockTools()
   // Ride above the on-screen keyboard (Defect 2). The lift itself now lives in
   // CSS (`.cr-dock` reads `--kb-inset`), which this hook publishes; the zoomed
   // terminal overlay rises off the SAME variable, so the bar and the transcript
@@ -166,51 +184,53 @@ export function Dock({
   return (
     <footer className={`cr-dock${slidIn ? ' zoomed' : ''}`}>
       <div className="dock-pane dock-canvas" aria-hidden={slidIn}>
-        <div className="cr-dock-tools">
-          {/* SOUS leads the row on the phone: the box is summoned, not parked
-              along the bottom — parked, it covered this very row (IMG_3770). */}
-          {onSous && (
-            <button
-              className="cr-btn tool icon"
-              title="Tell the crew what to do"
-              aria-label="SOUS"
-              tabIndex={slidIn ? -1 : 0}
-              onClick={onSous}
-            >
-              <CrIcon name="search" className="tool-icon" />
-            </button>
-          )}
-          {/* The clipboard toggle leads the tools: it is the one control
-              that is NOT a tool, so it wears a pressed state instead of
-              the active-tool highlight — the same glyph and contract as
-              the board view's selection toggle. Canvas cards only. */}
-          {!CANVAS_RETIRED && (
-            <button
-              className={`cr-btn tool icon${clipping ? ' primary' : ''}`}
-              title={clipping ? 'Done selecting' : 'Select cards — click to pick, click again to cancel'}
-              aria-label="CLIPBOARD"
-              aria-pressed={clipping}
-              tabIndex={slidIn ? -1 : 0}
-              onClick={onToggleClipping}
-            >
-              <CrIcon name="clipboard" className="tool-icon" />
-            </button>
-          )}
-          {dockTools().map((t) => (
-            <button
-              key={t.id}
-              className={`cr-btn tool icon${t.act === 'arm' && tool === t.id ? ' primary' : ''}`}
-              title={t.title}
-              aria-label={t.label}
-              tabIndex={slidIn ? -1 : 0}
-              disabled={t.act === 'make' && making}
-              onClick={() => (t.act === 'make' ? onMake(t.id) : onSelect(t.id))}
-            >
-              <CrIcon name={t.icon} className="tool-icon" />
-            </button>
-          ))}
-        </div>
-        {!slidIn && <GlobalPrompt fullAgentId={voiceFor?.id ?? null} agents={agents} harnesses={promptHarnesses} nodes={nodes} orch={orch} artifacts={artifacts} />}
+        {(onSous || !CANVAS_RETIRED || tools.length > 0) && (
+          <div className="cr-dock-tools">
+            {/* SOUS leads the row on the phone: the box is summoned, not parked
+                along the bottom — parked, it covered this very row (IMG_3770). */}
+            {onSous && (
+              <button
+                className="cr-btn tool icon"
+                title="Tell the crew what to do"
+                aria-label="SOUS"
+                tabIndex={slidIn ? -1 : 0}
+                onClick={onSous}
+              >
+                <CrIcon name="search" className="tool-icon" />
+              </button>
+            )}
+            {/* The clipboard toggle leads the tools: it is the one control
+                that is NOT a tool, so it wears a pressed state instead of
+                the active-tool highlight — the same glyph and contract as
+                the board view's selection toggle. Canvas cards only. */}
+            {!CANVAS_RETIRED && (
+              <button
+                className={`cr-btn tool icon${clipping ? ' primary' : ''}`}
+                title={clipping ? 'Done selecting' : 'Select cards — click to pick, click again to cancel'}
+                aria-label="CLIPBOARD"
+                aria-pressed={clipping}
+                tabIndex={slidIn ? -1 : 0}
+                onClick={onToggleClipping}
+              >
+                <CrIcon name="clipboard" className="tool-icon" />
+              </button>
+            )}
+            {tools.map((t) => (
+              <button
+                key={t.id}
+                className={`cr-btn tool icon${t.act === 'arm' && tool === t.id ? ' primary' : ''}`}
+                title={t.title}
+                aria-label={t.label}
+                tabIndex={slidIn ? -1 : 0}
+                disabled={t.act === 'make' && making}
+                onClick={() => (t.act === 'make' ? onMake(t.id) : onSelect(t.id))}
+              >
+                <CrIcon name={t.icon} className="tool-icon" />
+              </button>
+            ))}
+          </div>
+        )}
+        {!slidIn && <GlobalPrompt fullAgentId={voiceFor?.id ?? null} agents={agents} harnesses={promptHarnesses} nodes={nodes} orch={orch} artifacts={artifacts} acts={acts} />}
         {!slidIn && tool === 'terminal' && (
           <div className="cr-dock-presets">
             {/* FAMILIES, SAID OUT LOUD.

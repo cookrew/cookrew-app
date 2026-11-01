@@ -84,18 +84,18 @@ describe('the dock in the zoom view shows only what works there', () => {
   it('the canvas is retired, so the canvas-only controls are left out', async () => {
     expect(CANVAS_RETIRED).toBe(true)
     const { dockTools } = await dock()
-    // NOTE and BROWSER are made inside an agent now (stage/AgentArtifacts.tsx).
-    expect(dockTools(true).map((t) => t.label)).toEqual(['TERMINAL'])
-    // A canvas brought back gets CONNECT back, nothing else changes.
+    // NOTE and BROWSER are made inside an agent now (stage/AgentArtifacts.tsx),
+    // and TERMINAL's row lives in the prompt box's ＋ menu (prompt/HarnessMenu.tsx).
+    expect(dockTools(true).map((t) => t.label)).toEqual([])
+    // A canvas brought back gets them all back.
     expect(dockTools(false).map((t) => t.label)).toEqual(['TERMINAL', 'NOTE', 'BROWSER', 'CONNECT'])
     // The first test imports the dock's whole tree, cold.
   }, 20_000)
 
-  it('renders no CONNECT, no CLIPBOARD, no NOTE and no BROWSER, and keeps TERMINAL', async () => {
+  it('renders no CONNECT, no CLIPBOARD, no NOTE, no BROWSER and no TERMINAL', async () => {
     const { Dock } = await dock()
     const html = renderToStaticMarkup(<Dock {...props} />)
-    for (const label of ['CONNECT', 'CLIPBOARD', 'NOTE', 'BROWSER']) expect(html).not.toContain(`aria-label="${label}"`)
-    expect(html).toContain('aria-label="TERMINAL"')
+    for (const label of ['CONNECT', 'CLIPBOARD', 'NOTE', 'BROWSER', 'TERMINAL']) expect(html).not.toContain(`aria-label="${label}"`)
   })
 
   it('no hint, title or label speaks of a canvas, whichever tool is up', async () => {
@@ -108,6 +108,7 @@ describe('the dock in the zoom view shows only what works there', () => {
     expect(readable(board)).not.toMatch(/canvas/i)
   })
 
+  // The row is only reachable from a canvas brought back (TERMINAL is canvas-only now).
   it('TERMINAL opens the preset row with a hint that a pick makes the agent now', async () => {
     const { Dock } = await dock()
     const html = renderToStaticMarkup(<Dock {...props} tool="terminal" />)
@@ -124,7 +125,7 @@ describe('the dock in the zoom view shows only what works there', () => {
     const idle = tools(renderToStaticMarkup(<Dock {...props} tool="terminal" />))
     expect(idle).not.toContain('disabled=""')
     const busy = tools(renderToStaticMarkup(<Dock {...props} tool="terminal" making />))
-    // 3 harnesses + 1 role + 1 team; TERMINAL stays pressable to close the row.
+    // 3 harnesses + 1 role + 1 team.
     expect(busy.match(/disabled=""/g)?.length).toBe(5)
   })
 

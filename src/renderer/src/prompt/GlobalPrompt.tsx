@@ -9,6 +9,7 @@ import { makeAgent } from '../zoom/make-card'
 import { zoomStore } from '../zoom/zoom-store'
 import { nameFromPrompt } from './agent-name'
 import { lastHarness, rememberHarness } from './harness-pref'
+import { HarnessMenu, type NewMenuActs } from './HarnessMenu'
 import { artifactRefs, expandRefs, pendingName, suggestionsFor, type ArtifactRef, type PromptArtifact } from './artifact-refs'
 import { endLine, lineTextFor, submitLine, typeLine, useLiveLine } from './live-line'
 import { withHeard } from './dictation'
@@ -31,7 +32,8 @@ import './global-prompt.css'
  *            lets go of the agent.
  *   nobody   the prompt makes a new agent in this workspace, named from the
  *            prompt, on the harness last used — the chip picks another. It
- *            stands in for the crew's old ＋ seat.
+ *            stands in for the crew's old ＋ seat, and its menu for the
+ *            dock's retired TERMINAL button (HarnessMenu.tsx).
  *
  * "@Name the rest" sends to that agent from anywhere. "#Name" names a note or
  * a browser of this workspace (artifact-refs.ts): it is sent as what it is,
@@ -64,6 +66,8 @@ interface GlobalPromptProps {
   orch?: boolean
   /** The workspace's notes and browsers, for "#Name". */
   artifacts?: readonly PromptArtifact[]
+  /** What the ＋ menu opens at once: a shell, roles, saved teams, ORCH (HarnessMenu.tsx). */
+  acts?: NewMenuActs
 }
 
 type Suggestion = { name: string; kind: 'agent' | 'note' | 'browser' }
@@ -79,7 +83,7 @@ function useCardAgent(): string | null {
   )
 }
 
-export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = false, artifacts = NO_ARTIFACTS }: GlobalPromptProps): React.JSX.Element {
+export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = false, artifacts = NO_ARTIFACTS, acts }: GlobalPromptProps): React.JSX.Element {
   const cardAgent = useCardAgent()
   const viewed = fullAgentId ?? cardAgent
   // While the box has focus its agent holds still: the view may move on (a
@@ -323,23 +327,16 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
             className="cr-prompt-harness"
             aria-haspopup="menu"
             aria-expanded={picking !== null}
-            title="The harness the new agent runs"
+            title={orch ? 'The harness the new agent runs · ORCH: it leads the crew' : 'The harness the new agent runs — or open a shell or a team'}
             onClick={(e) => {
               const r = e.currentTarget.getBoundingClientRect()
               setPicking((open) => (open ? null : { left: r.left, bottom: window.innerHeight - r.top + 6 }))
             }}
           >
-            ＋ {harness} ▾
+            ＋ {harness}
+            {orch && <small className="cr-prompt-orch">ORCH</small>} ▾
           </button>
-          {picking && (
-            <span className="cr-prompt-menu" role="menu" style={{ left: picking.left, bottom: picking.bottom }}>
-              {harnesses.map((name) => (
-                <button key={name} type="button" role="menuitemradio" aria-checked={name === harness} onClick={() => pick(name)}>
-                  {name}
-                </button>
-              ))}
-            </span>
-          )}
+          {picking && <HarnessMenu at={picking} harnesses={harnesses} harness={harness} onPick={pick} orch={orch} acts={acts} onDone={() => setPicking(null)} />}
         </span>
       )}
       {suggesting && anchor && pending && (
