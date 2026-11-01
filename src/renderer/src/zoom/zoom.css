@@ -1795,6 +1795,16 @@
 
 .zv-del:hover { border-color: var(--zv-wait); color: var(--zv-wait); }
 
+/* An item tile's origin is its thumbnail's centre (.zv-ip > .zv-th, 168x108),
+   not a card's face: the card's offset put the × some 140px right of the
+   picture (owner, 2026-11-01). It sits inside the thumbnail's top right
+   corner, as on the agent's sheet (full-views.css · .zv-fv-art-del). */
+.zv-ip > .zv-del {
+  left: 56px;
+  top: -48px;
+  z-index: 1;
+}
+
 /* AT REST, NO PART KEEPS A LAYER (zoom-rest.ts). Every hint above is for the
    motion: held at rest, a layer keeps the sharpest raster a dive made of it,
    and the tiles of a magnified wash and crew ran Chromium out of tile memory —
