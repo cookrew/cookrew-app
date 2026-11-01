@@ -78,6 +78,7 @@ export function AttachButton({ terminalId }: { terminalId: string }): React.JSX.
   return (
     <>
       <button
+        type="button"
         className={`cr-btn sm voice-attach${busy ? ' busy' : ''}`}
         title="Attach files (paste their paths into the terminal)"
         onClick={pick}
