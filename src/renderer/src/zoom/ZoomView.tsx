@@ -255,7 +255,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const agentOf = useMemo(() => new Map(model.agents.map((a) => [a.id, a])), [model.agents])
   // The grid's items and the coins' others: a coin's face is drawn either way.
   const itemOf = useMemo(() => new Map([...model.items, ...model.coinItems].map((i) => [i.id, i])), [model.items, model.coinItems])
-  const device = useMemo(() => deviceOf(model.frame.workspaces, size.w < 760), [model.frame.workspaces, size.w])
+  const device = useMemo(() => deviceOf(model.frame.workspaces, size.w < 760, model.frame.screenAspect), [model.frame.workspaces, model.frame.screenAspect, size.w])
   const activeSlot = device.at[model.frame.active] ?? { x: 0, y: 0 }
   // The device stop's words grow to be read at the size the device is seen (zoom-frame.ts · deviceWords).
   const words = useMemo(() => deviceWords(device, size.w, size.h, size.w < 760), [device, size])
@@ -273,14 +273,15 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     }
     const machineEl = registry.current.get('machine')
     if (machineEl) {
-      const sw = device.box.w * 0.5, sh = device.box.h * 0.5
+      // The screen at the display's proportions (zoom-layout.ts · screenOf), the device view centred in it.
+      const sw = device.screen.w * 0.5, sh = device.screen.h * 0.5
       machineEl.style.width = `${sw + 28}px`
       machineEl.style.height = `${sh + 28}px`
       machineEl.style.transform = `translate(${-sw / 2 - 14}px, ${-sh / 2 - 14}px)`
     }
     // The account's other machines: rows under this Mac's screen, inside the devices camera.
     const others = model.machines.filter((m) => !m.local)
-    const places = machinesAt(others.length, device.box, device.box.w < 700)
+    const places = machinesAt(others.length, device.screen, device.box.w < 700)
     others.forEach((m, i) => {
       const el = registry.current.get(`machinecard:${m.id}`)
       const at = places.at[i]

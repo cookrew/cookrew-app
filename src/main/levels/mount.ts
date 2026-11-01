@@ -5,7 +5,7 @@
 import type { EventEmitter } from 'node:events'
 import type { AgentTuning } from '../../shared/agent-tuning'
 import type { GitInfo } from '../../shared/model'
-import type { MachineProfile } from '../../shared/strata'
+import type { MachineDisplay, MachineProfile } from '../../shared/strata'
 import type { BoardSources } from '../board-index'
 import { machineProfile, provisionalProfile } from '../machine-profile'
 import { createScrubber } from '../scrub'
@@ -47,6 +47,8 @@ export interface LevelsMountOptions {
   appVersion: () => string | null
   /** Tokens this desktop holds (the pairing token): scrubbed by value from every line. */
   tokens: () => readonly (string | null | undefined)[]
+  /** The desktop's display (machine-display.ts); absent, the feed sends none. */
+  display?: () => MachineDisplay | null
 }
 
 export function levelsServiceFor(deps: LevelsMountDeps, options: LevelsMountOptions): LevelsService | null {
@@ -65,7 +67,8 @@ export function levelsServiceFor(deps: LevelsMountDeps, options: LevelsMountOpti
       machine: {
         name: () => deps.identity?.account()?.name ?? null,
         appVersion: options.appVersion(),
-        profile: () => profile
+        profile: () => profile,
+        display: options.display
       },
       onProfile: (listener) => {
         profileListeners.add(listener)

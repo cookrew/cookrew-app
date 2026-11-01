@@ -9,7 +9,7 @@ import type { AgentPhase, AgentRow } from '../agent-rows'
 import type { TurnViewModel } from '../turn-view-model'
 import { activeBrowserTab, type CanvasNode, type Connection, type WorkspaceMeta } from '../../../shared/model'
 import type { AttachmentIndex } from '../terminal-attachments'
-import { hostOf, tintOf } from './zoom-layout'
+import { hostOf, screenAspectOf, tintOf } from './zoom-layout'
 import type { FrameModel, LinkModel, TieModel } from './zoom-frame'
 import { inkStatusOfRow, statusWord, type InkStatus } from './ink-status'
 
@@ -156,6 +156,8 @@ export interface ZoomInput {
     local: boolean
     online: boolean
     detail: 'live' | 'connecting' | 'listed'
+    /** Its display in points, as its own feed tells it: the screen it is drawn with. */
+    display?: { w: number; h: number } | null
     workspaces: readonly { id: string; name: string; agents: readonly { harness: string; phase: string }[]; counts: { agents: number; waiting: number } | null }[]
   }[]
 }
@@ -246,6 +248,7 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
       ties,
       workspaces: order,
       otherMachines: (input.machines ?? []).filter((m) => !m.local).length,
+      screenAspect: screenAspectOf(input.machines?.find((m) => m.local)?.display),
       active: input.activeId,
       newest
     },

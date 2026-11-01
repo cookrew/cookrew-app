@@ -55,6 +55,16 @@ export interface MachineProfile {
   evidence: string[]
 }
 
+/**
+ * The desktop's display in points (a laptop's own panel, else the primary):
+ * the zoom draws the machine's screen at its proportions. Sent in the levels
+ * feed only, never to the registry.
+ */
+export interface MachineDisplay {
+  w: number
+  h: number
+}
+
 /** One machine of the signed-in account, as the registry lists it (level 0). */
 export interface FleetMachine {
   /** Registry desktop id: stable across renames. */
@@ -208,7 +218,7 @@ export interface LevelsSnapshot {
   /** Monotonic per desktop process; each event carries the rev it produces. */
   rev: number
   at: number
-  machine: { name: string; appVersion: string | null; profile: MachineProfile }
+  machine: { name: string; appVersion: string | null; profile: MachineProfile; display?: MachineDisplay | null }
   focusedWorkspaceId: string | null
   workspaces: LevelsWorkspace[]
 }

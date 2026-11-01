@@ -23,7 +23,7 @@ import { loadOrCreatePairingToken, rotatePairingToken } from './pairing-token'
 import type { VersionPinRecord } from '../shared/version-pin'
 import { readTailnetAsync, type CertHosts, type TailnetIdentity } from './tailscale'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { powerSaveBlocker } from 'electron'
+import { powerSaveBlocker, screen } from 'electron'
 import type { WorkspaceStore } from './store'
 import type { GitInfo, RecoverResult, RestoreResult, WorkspaceState } from '../shared/model'
 import type { PtyManager, PtySession } from './pty'
@@ -76,12 +76,14 @@ import { createNameSni } from './name-sni'
 import type { DesktopCert } from './desktop-cert'
 import { handleLevelsRoutes } from './levels/routes'
 import { levelsServiceFor, prewarmLevels, type LevelsMountOptions } from './levels/mount'
+import { readMachineDisplay } from './machine-display'
 import type { LevelsService } from './levels/service'
 
 /** What the levels need from this server: its app version, and the token to scrub by value. */
 const levelsOptions = (deps: MobileServerDeps): LevelsMountOptions => ({
   appVersion: () => deps.appVersion?.() ?? null,
-  tokens: () => [activePairingToken ?? deps.pairingToken]
+  tokens: () => [activePairingToken ?? deps.pairingToken],
+  display: () => readMachineDisplay(() => screen)
 })
 
 /** The deps the companion server was started with: the window's zoom fleet feed shares its levels service. */

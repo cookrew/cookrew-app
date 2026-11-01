@@ -156,8 +156,27 @@ const TILE_TOP = 100
  */
 const TITLE_ROOM = { wide: 100, narrow: 180 }
 
-/** The device: a mark per workspace, the open one where its slot is; its title ends `titleBottom`, clear of the first row's tiles. */
-export function deviceOf(ids: readonly string[], narrow: boolean): { at: Record<string, Pos>; box: Box; titleBottom: number; dx: number } {
+/** A machine's screen when its display is not known: a MacBook's 16:10. */
+export const DEFAULT_SCREEN_ASPECT = 16 / 10
+
+/** A display's width over its height, kept to shapes a screen has (a portrait monitor down to 0.4, an ultrawide up to 4). */
+export function screenAspectOf(display: { w: number; h: number } | null | undefined): number {
+  if (!display || !(display.w > 0) || !(display.h > 0)) return DEFAULT_SCREEN_ASPECT
+  return Math.min(4, Math.max(0.4, display.w / display.h))
+}
+
+/**
+ * THE MACHINE'S SCREEN around the device view: the view's box grown, about
+ * the same centre, to the real display's proportions (owner, 2026-11-01: the
+ * screen drew as tall as its grid of workspaces, near square, on a 16:10 Mac).
+ * The camera at the device stop still frames the view alone.
+ */
+export function screenOf(box: Box, aspect: number): Box {
+  return box.w / box.h < aspect ? { ...box, w: box.h * aspect } : { ...box, h: box.w / aspect }
+}
+
+/** The device: a mark per workspace, the open one where its slot is; its title ends `titleBottom`, clear of the first row's tiles; `screen` holds it at the display's proportions. */
+export function deviceOf(ids: readonly string[], narrow: boolean, aspect = DEFAULT_SCREEN_ASPECT): { at: Record<string, Pos>; box: Box; screen: Box; titleBottom: number; dx: number } {
   const cols = narrow ? 2 : 3
   const dx = narrow ? 260 : 330
   const dy = narrow ? 260 : 320
@@ -171,15 +190,16 @@ export function deviceOf(ids: readonly string[], narrow: boolean): { at: Record<
   const titleBottom = -((rows - 1) / 2) * dy - TILE_TOP - 14
   const bottom = -20 + (rows * dy + 120) / 2
   const top = Math.min(-20 - (rows * dy + 120) / 2, titleBottom - (narrow ? TITLE_ROOM.narrow : TITLE_ROOM.wide))
-  return { at, box: { w: Math.max(cols, Math.min(cols, ids.length)) * dx + 120, h: bottom - top, cy: (top + bottom) / 2 }, titleBottom, dx }
+  const box = { w: Math.max(cols, Math.min(cols, ids.length)) * dx + 120, h: bottom - top, cy: (top + bottom) / 2 }
+  return { at, box, screen: screenOf(box, aspect), titleBottom, dx }
 }
 
-/** The account's other machines: a row (wrapping) under this Mac's screen, inside the devices camera. */
+/** The account's other machines: a row (wrapping) under this Mac's screen (deviceOf · screen), inside the devices camera. */
 export const MACHINE_CARD = { w: 380, h: 220, gap: 40 }
-export function machinesAt(count: number, device: Box, narrow: boolean): { at: Pos[]; rows: number } {
+export function machinesAt(count: number, screen: Box, narrow: boolean): { at: Pos[]; rows: number } {
   const perRow = narrow ? 1 : 3
   const rows = Math.ceil(count / perRow)
-  const top = device.h / 2 + 120
+  const top = screen.h / 2 + 120
   const at: Pos[] = []
   for (let i = 0; i < count; i++) {
     const row = Math.floor(i / perRow)
