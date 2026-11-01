@@ -743,7 +743,7 @@ export function createRemoteApi(): CookrewApi {
     onInbox: (cb) => subscribe<{ rows: InboxRow[] }>('inbox', (frame) => cb(frame.rows)),
     inboxAct: (id) => req<{ ok: boolean }>(apiPath(`/api/inbox/${encodeURIComponent(id)}/act`), 'POST', {}),
     inboxDismiss: (id) => req<{ ok: boolean }>(apiPath(`/api/inbox/${encodeURIComponent(id)}/dismiss`), 'POST', {}),
-    // The phone hears through its own browser (VoiceBar); the Mac's ear is
+    // The phone hears through its own browser (prompt/use-dictation.ts); the Mac's ear is
     // the desktop's alone.
     listenAvailable: () => Promise.resolve(false),
     listenStart: () => Promise.resolve(false),
