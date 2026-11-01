@@ -1,5 +1,7 @@
 import { CrIcon } from './icons'
 import type { NoteNodeData } from '../../shared/model'
+import type { ItemSnippet } from './item-search'
+import { MatchLine } from './MatchLine'
 
 /**
  * One note on the board. DATA CONTRACT: binds the same source its canvas
@@ -12,6 +14,7 @@ export function NoteRow({
   workspaceName,
   selected,
   selectable = false,
+  match = null,
   onOpen
 }: {
   node: NoteNodeData
@@ -19,6 +22,8 @@ export function NoteRow({
   selected: boolean
   /** Edit mode: the row ticks instead of handing off to the canvas. */
   selectable?: boolean
+  /** A search hit in the body: the passage replaces the opening lines. */
+  match?: ItemSnippet | null
   onOpen: (id: string) => void
 }): React.JSX.Element {
   return (
@@ -51,7 +56,7 @@ export function NoteRow({
           {node.locked && <span className="cr-chip">LOCKED</span>}
           <span className="cr-chip violet">{workspaceName}</span>
         </span>
-        <span className="ags-note-context">{noteExcerpt(node.content)}</span>
+        {match ? <MatchLine match={match} /> : <span className="ags-note-context">{noteExcerpt(node.content)}</span>}
       </span>
     </div>
   )

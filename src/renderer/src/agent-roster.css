@@ -2321,3 +2321,91 @@
     left: 0;
   }
 }
+
+/* ---- search by kind (board-sections.ts): agents, browsers, notes ----
+   A strip of kinds while a search is up, a head over each kind's section,
+   and an "all N" row under a section ALL cut short. */
+.roster-kinds {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.roster-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream-hi);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.roster-kind:hover {
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.roster-kind.on {
+  border-color: var(--line);
+  background: var(--amber-soft);
+  color: var(--ink);
+}
+
+.roster-kind-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.roster-kind-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px 4px;
+  background: var(--cream-lo);
+  border-bottom: 1px solid var(--line-soft);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.roster-kind-more {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--line-soft);
+  background: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: left;
+  color: var(--amber-deep);
+  cursor: pointer;
+}
+
+.roster-kind-more:hover {
+  background: var(--cream-lo);
+}
+
+.ags-item-hit-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ags-mark {
+  padding: 0 1px;
+  background: var(--amber);
+  color: var(--ink);
+}

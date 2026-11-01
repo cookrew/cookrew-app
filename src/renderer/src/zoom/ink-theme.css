@@ -530,3 +530,59 @@ body.cr-ink .cr-board-loading {
     font-size: 16px;
   }
 }
+
+/* ── the board's search by kind (board-sections.ts) ── */
+body.cr-ink .roster-kind {
+  border: 1px solid var(--sumi-hair-2);
+  border-radius: 999px;
+  background: var(--sumi-card);
+  color: var(--sumi-ink-soft);
+}
+
+body.cr-ink .roster-kind:hover {
+  border-color: var(--sumi-rule);
+  color: var(--sumi-ink);
+}
+
+body.cr-ink .roster-kind.on {
+  border-color: var(--sumi-ink);
+  background: var(--sumi-ink);
+  color: var(--sumi-paper);
+}
+
+body.cr-ink .roster-kind.on .roster-kind-count {
+  color: var(--sumi-paper-3);
+}
+
+body.cr-ink .roster-kind-head {
+  background: var(--sumi-card);
+  border-bottom: 1px solid var(--sumi-hair-2);
+  font-family: var(--font-serif);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-transform: capitalize;
+  color: var(--sumi-ink);
+}
+
+body.cr-ink .roster-kind-head .roster-kind-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--sumi-muted);
+}
+
+body.cr-ink .roster-kind-more {
+  border-bottom: 1px solid var(--sumi-hair);
+  color: var(--sumi-seal-text);
+}
+
+body.cr-ink .roster-kind-more:hover {
+  background: var(--sumi-paper-2);
+}
+
+body.cr-ink .ags-mark {
+  border-radius: 2px;
+  background: var(--sumi-seal-fill);
+  color: var(--sumi-on-seal);
+}
