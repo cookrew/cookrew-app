@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { createContext, useEffect, useState } from 'react'
 
 /**
  * THREE VIEWS OF AN AGENT, TWO SOURCES (owner, 2026-10-31: render the live
@@ -26,6 +26,9 @@ export const TRANSCRIPT_LOOK_KEY = 'cookrew.transcript-look'
 
 export const transcriptLookOf = (raw: string | null | undefined): TranscriptLook =>
   raw === 'live' || raw === 'log' ? raw : 'chat'
+
+/** The look the rows are drawn in (TranscriptRow.tsx): the chat folds an agent's steps, the log prints them all. */
+export const TranscriptLookContext = createContext<TranscriptLook>('chat')
 
 /** chat and log draw the conversation record; live is the raw terminal. */
 export const isRecordLook = (look: TranscriptLook): boolean => look !== 'live'

@@ -140,7 +140,8 @@ function sameTail(a: TailFrame | null, b: TailFrame): boolean {
     a.block.reply === b.block.reply &&
     a.block.prompt === b.block.prompt &&
     a.block.endedAt === b.block.endedAt &&
-    a.block.activity.length === b.block.activity.length
+    a.block.activity.length === b.block.activity.length &&
+    (a.block.thoughts?.length ?? 0) === (b.block.thoughts?.length ?? 0)
   )
 }
 

@@ -39,7 +39,7 @@ import { languageByCode } from '../../shared/translate'
 import { useCheckpointTranslation } from './use-checkpoint-translation'
 import { AgentAvatar, StatusCoin } from './nodes/AgentAvatar'
 import { TranscriptFaceContext } from './transcript-face'
-import { LOOK_LABEL, LOOK_TITLE, isRecordLook, nextLook, useTranscriptLook, type TranscriptLook } from './transcript-look'
+import { LOOK_LABEL, LOOK_TITLE, TranscriptLookContext, isRecordLook, nextLook, useTranscriptLook, type TranscriptLook } from './transcript-look'
 import { shouldAttachTerminal } from './terminal-view-mode'
 import { installLocalScroll, type LocalScroll } from './live-scroll'
 import { createCurtain, domCurtainDeps, subRowShift } from './live-curtain'
@@ -1549,6 +1549,7 @@ function TerminalOverlay({
         )}
         <div ref={mainRef} className={`popout-main look-${look}${isRecordLook(look) ? ' look-records' : ''}${openItem !== null ? ' split' : ''}`}>
         <TranscriptFaceContext.Provider value={chatFace}>
+        <TranscriptLookContext.Provider value={look}>
         <TranscriptView
           ref={transcriptRef}
           terminalId={node.id}
@@ -1582,6 +1583,7 @@ function TerminalOverlay({
           {/* PTY-direct for every card (owner ruling 2026-08-30). */}
           <div ref={containerRef} className="popout-terminal" />
         </TranscriptView>
+        </TranscriptLookContext.Provider>
         </TranscriptFaceContext.Provider>
         {isRecordLook(look) && noConversation && phase !== 'thinking' && (
           <div className="chat-empty">

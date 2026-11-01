@@ -60,7 +60,7 @@ describe('parseClaudeTrace (full-trace blocks)', () => {
       reply: 'working on it\n\nall green'
     })
     expect(blocks[0].activity).toEqual([
-      { tool: 'Bash', args: 'npm test', result: '160 tests passed' }
+      { tool: 'Bash', args: 'npm test', result: '160 tests passed', at: 'working on it'.length }
     ])
     expect(blocks[0].startedAt).toBe(T0)
     expect(blocks[0].endedAt).toBe(T0 + 3000)
@@ -159,7 +159,7 @@ describe('parsePiTrace (active session-tree branch)', () => {
     expect(parsePiTrace(lines)).toEqual([
       {
         id: 'u1', index: 1, prompt: 'Inspect it', reply: 'Checking.\n\nFound it.',
-        activity: [{ tool: 'read', args: 'src/a.ts', result: 'file body' }],
+        activity: [{ tool: 'read', args: 'src/a.ts', result: 'file body', at: 'Checking.'.length }],
         startedAt: Date.parse('2026-08-03T00:00:01Z'),
         endedAt: Date.parse('2026-08-03T00:00:04Z')
       },
@@ -229,7 +229,7 @@ describe('claude tool_use args summary (bare-parens bug)', () => {
       ])
     )
     expect(blocks[0].activity).toEqual([
-      { tool: 'Bash', args: 'Run the test suite', result: '' }
+      { tool: 'Bash', args: 'Run the test suite', result: '', at: 0 }
     ])
   })
 
@@ -251,14 +251,14 @@ describe('claude tool_use args summary (bare-parens bug)', () => {
         { type: 'tool_use', id: 'tu3', name: 'Grep', input: { pattern: 'foo' } }
       ])
     )
-    expect(blocks[0].activity).toEqual([{ tool: 'Grep', args: 'foo', result: '' }])
+    expect(blocks[0].activity).toEqual([{ tool: 'Grep', args: 'foo', result: '', at: 0 }])
   })
 
   it('handles non-object and empty inputs without noise', () => {
     const blocks = parseClaudeTrace(
       entry([{ type: 'tool_use', id: 'tu1', name: 'NoteRead', input: {} }])
     )
-    expect(blocks[0].activity).toEqual([{ tool: 'NoteRead', args: '', result: '' }])
+    expect(blocks[0].activity).toEqual([{ tool: 'NoteRead', args: '', result: '', at: 0 }])
   })
 })
 

@@ -322,6 +322,85 @@
   font-size: 12px;
 }
 
+/* THE AGENT'S STEPS, FOLDED (chat-fold.ts; owner, 2026-11-01): one quiet line
+   over the answer says what it did; tapped, its thinking, its words between
+   steps and its tool calls read in order, under a hairline. */
+.lod-overlay .look-chat .ctx-chat-process + .ctx-block-reply {
+  margin-top: 6px;
+}
+
+.lod-overlay .look-chat .ctx-process-toggle {
+  appearance: none;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  max-width: 100%;
+  margin: 0;
+  padding: 2px 8px 2px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: 11px/1.4 var(--font-mono);
+  letter-spacing: 0.02em;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lod-overlay .look-chat .ctx-process-toggle:hover {
+  background: var(--cream-md);
+  color: var(--ink);
+}
+
+.lod-overlay .look-chat .ctx-process-label {
+  flex: none;
+}
+
+.lod-overlay .look-chat .ctx-process-label::before {
+  content: '▸';
+  display: inline-block;
+  width: 1.2em;
+  transition: transform 120ms ease;
+}
+
+.lod-overlay .look-chat .ctx-chat-process.open .ctx-process-label::before {
+  transform: rotate(90deg);
+}
+
+/* While the turn has no answer yet: what it is doing now, on the same line. */
+.lod-overlay .look-chat .ctx-process-now {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  opacity: 0.8;
+}
+
+.lod-overlay .look-chat .ctx-chat-process .ctx-chat-tools {
+  margin: 4px 0 0 9px;
+  padding-left: 10px;
+  border-left: 2px solid var(--line-soft);
+}
+
+.lod-overlay .look-chat .ctx-block-thought {
+  color: var(--muted);
+  font: italic 12px/1.5 var(--font-body);
+  white-space: pre-wrap;
+}
+
+.lod-overlay .look-chat .ctx-block-said {
+  color: var(--muted);
+  font: 12.5px/1.5 var(--font-body);
+}
+
+.lod-overlay .look-chat .ctx-block-said > :first-child {
+  margin-top: 0;
+}
+
+.lod-overlay .look-chat .ctx-block-said > :last-child {
+  margin-bottom: 0;
+}
+
 @media (max-width: 700px) {
   .lod-overlay .look-chat .ctx-block-prompt {
     max-width: 88%;
@@ -599,8 +678,35 @@
    the conversation record, never from the screen. */
 .lod-overlay .look-log .ctx-chat-agent,
 .lod-overlay .look-log .ctx-chat-bubble,
+.lod-overlay .look-log .ctx-chat-process,
 .lod-overlay .look-log .ctx-chat-tools {
   display: contents;
+}
+
+/* The log prints every step, as the terminal does: no fold line, and no
+   thinking (the terminal keeps that folded too). The words between steps
+   read as replies. */
+.lod-overlay .look-log .ctx-process-toggle,
+.lod-overlay .look-log .ctx-block-thought {
+  display: none;
+}
+
+.lod-overlay .look-log .ctx-block-said {
+  margin-top: 8px;
+  font: 13px/1.5 var(--font-mono);
+}
+
+.lod-overlay .look-log .ctx-block-said::before {
+  content: '● ';
+  font-family: var(--font-mono);
+}
+
+.lod-overlay .look-log .ctx-block-said.md > p:first-child {
+  display: inline;
+}
+
+.lod-overlay .look-log .ctx-block-said * {
+  font-family: var(--font-mono);
 }
 
 .lod-overlay .look-log .ctx-chat-face {
