@@ -6,7 +6,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 import { nameFromPrompt } from '../src/shared/agent-name'
-import { mentionTarget, promptTargetOf } from '../src/renderer/src/prompt/prompt-target'
+import { boxPin, boxTargetId, heldAfter, mentionTarget, promptTargetOf, viewKeyOf } from '../src/renderer/src/prompt/prompt-target'
 import { draftKey, getDraft, setDraft, subscribeDrafts } from '../src/renderer/src/prompt/prompt-draft'
 import { lastHarness, rememberHarness } from '../src/renderer/src/prompt/harness-pref'
 
@@ -45,6 +45,72 @@ describe('promptTargetOf', () => {
     expect(promptTargetOf({ zoom: zoom(1, 'a2'), fullAgentId: null })).toBeNull()
     expect(promptTargetOf({ zoom: zoom(-1, 'a2'), fullAgentId: null })).toBeNull()
     expect(promptTargetOf({ zoom: zoom(1, 'a2', 'items'), fullAgentId: null })).toBeNull()
+  })
+})
+
+// LET GO, THEN COME BACK (owner, 2026-11-01): Backspace on an empty box let
+// go of @agent ("＋ harness"), and stepping into an agent's card or full view
+// never brought @agent back while the box kept its focus (a phone tap does):
+// the focus hold pinned "nobody". Wanted: a release lasts only while the view
+// stays put, and only words showing in the box hold it still.
+describe('boxTargetId', () => {
+  const known = (id: string): boolean => ['a1', 'a2'].includes(id)
+  const card = (id: string | null): string => viewKeyOf(null, id)
+  const full = (id: string): string => viewKeyOf(id, id)
+  const box = (o: { viewed: string | null; view: string; pin?: { id: string | null } | null; released?: string | null }): string | null =>
+    boxTargetId({ viewed: o.viewed, viewKey: o.view, pin: o.pin ?? null, released: o.released ?? null, known })
+
+  it('with nothing typed, the box carries whoever the view shows', () => {
+    expect(box({ viewed: 'a1', view: card('a1') })).toBe('a1')
+    expect(box({ viewed: null, view: card(null) })).toBeNull()
+  })
+
+  it('a release lets go of the viewed agent while the view stays put', () => {
+    expect(box({ viewed: 'a1', view: card('a1'), released: card('a1') })).toBeNull()
+  })
+
+  it("a release ends when the view moves: another agent's card, or the same agent's full view", () => {
+    expect(box({ viewed: 'a2', view: card('a2'), released: card('a1') })).toBe('a2')
+    expect(box({ viewed: 'a1', view: full('a1'), released: card('a1') })).toBe('a1')
+  })
+
+  it('a card and the full view of one agent are different views', () => {
+    expect(viewKeyOf(null, 'a1')).not.toBe(viewKeyOf('a1', 'a1'))
+  })
+
+  it('typed words hold the box still while the view moves on', () => {
+    expect(box({ viewed: 'a2', view: card('a2'), pin: { id: 'a1' } })).toBe('a1')
+    expect(box({ viewed: 'a2', view: card('a2'), pin: { id: null } })).toBeNull()
+  })
+
+  it('a hold on an agent that is gone falls back to the view', () => {
+    expect(box({ viewed: 'a2', view: card('a2'), pin: { id: 'gone' } })).toBe('a2')
+  })
+})
+
+describe('what pins the box', () => {
+  const known = (id: string): boolean => ['a1', 'a2'].includes(id)
+  it('words showing in the focused box pin it; an empty box, or one not focused, does not', () => {
+    expect(boxPin(null, { id: 'a1' }, 'fix it')).toEqual({ id: 'a1' })
+    expect(boxPin(null, { id: null }, 'a new task')).toEqual({ id: null })
+    expect(boxPin(null, { id: 'a1' }, '')).toBeNull()
+    expect(boxPin(null, null, 'fix it')).toBeNull()
+  })
+  it('the ear pins it while it listens, words or not', () => {
+    expect(boxPin({ id: 'a2' }, { id: 'a1' }, '')).toEqual({ id: 'a2' })
+  })
+  it('an empty box hands its hold to whoever it carries now: after a send, after a release, after the view moved', () => {
+    expect(heldAfter({ id: 'a1' }, { boxId: 'a2', heldWords: '', known })).toEqual({ id: 'a2' })
+    expect(heldAfter({ id: 'a1' }, { boxId: null, heldWords: '', known })).toEqual({ id: null })
+  })
+  it('words keep the hold where it is', () => {
+    const held = { id: 'a1' }
+    expect(heldAfter(held, { boxId: 'a2', heldWords: 'fix it', known })).toBe(held)
+    expect(heldAfter(held, { boxId: 'a1', heldWords: '', known })).toBe(held)
+    expect(heldAfter(null, { boxId: 'a1', heldWords: '', known })).toBeNull()
+  })
+  it('a hold on an agent that is gone moves to whoever the box carries', () => {
+    expect(heldAfter({ id: 'gone' }, { boxId: 'a2', heldWords: 'fix it', known })).toEqual({ id: 'a2' })
   })
 })
 

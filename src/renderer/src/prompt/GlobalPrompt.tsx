@@ -14,7 +14,7 @@ import { artifactRefs, expandRefs, pendingName, suggestionsFor, type ArtifactRef
 import { endLine, lineTextFor, submitLine, typeLine, useLiveLine } from './live-line'
 import { withHeard } from './dictation'
 import { draftKey, getDraft, setDraft, useDraft } from './prompt-draft'
-import { mentionTarget, promptTargetOf } from './prompt-target'
+import { boxPin, boxTargetId, heldAfter, mentionTarget, promptTargetOf, viewKeyOf } from './prompt-target'
 import { sendToAgent } from './send'
 import { useDictation } from './use-dictation'
 import { usePromptAttach } from './use-prompt-attach'
@@ -29,7 +29,8 @@ import './global-prompt.css'
  *            typed there as it is written, so LIVE shows it, and words typed
  *            in LIVE show here; Enter submits it. The card's reply box is the
  *            same draft (prompt-draft.ts). × (or Backspace on an empty box)
- *            lets go of the agent.
+ *            lets go of the agent until the view moves: stepping into any
+ *            agent's card or full view brings @agent back.
  *   nobody   the prompt makes a new agent in this workspace, named from the
  *            prompt (a stand-in at once, Sous's name once it answers), on the
  *            harness last used — the chip picks another. It stands in for the
@@ -87,18 +88,25 @@ function useCardAgent(): string | null {
 export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = false, artifacts = NO_ARTIFACTS, acts }: GlobalPromptProps): React.JSX.Element {
   const cardAgent = useCardAgent()
   const viewed = fullAgentId ?? cardAgent
-  // While the box has focus its agent holds still: the view may move on (a
-  // newly waiting agent takes the stage), the words being typed may not.
+  const viewKey = viewKeyOf(fullAgentId, cardAgent)
+  const known = (id: string): boolean => agents.some((a) => a.id === id)
+  // While the box has focus, words showing in it hold its agent still: the
+  // view may move on (a newly waiting agent takes the stage), the words being
+  // typed may not. An empty box follows the view (prompt-target.ts).
   const [held, setHeld] = useState<{ id: string | null } | null>(null)
+  const heldWords = useDraft(draftKey(held?.id ?? null))[0]
   // So do they while it listens: the words go where they were meant for.
   const [aim, setAim] = useState<{ id: string | null } | null>(null)
-  const pinned = aim ?? held
-  const targetId = pinned && (pinned.id === null || agents.some((a) => a.id === pinned.id)) ? pinned.id : viewed
-  const target = agents.find((a) => a.id === targetId) ?? null
-  // Let go of @agent until the view moves to another one.
+  // Let go of @agent (in the view it was let go in) until the view moves.
   const [released, setReleased] = useState<string | null>(null)
-  useEffect(() => setReleased(null), [targetId])
-  const to = target && target.id !== released ? target : null
+  useEffect(() => setReleased(null), [viewKey])
+  const targetId = boxTargetId({ viewed, viewKey, pin: boxPin(aim, held, heldWords), released, known })
+  const to = agents.find((a) => a.id === targetId) ?? null
+  // An empty box's hold moves with it, so the words typed next stay put.
+  useEffect(() => {
+    const next = heldAfter(held, { boxId: to?.id ?? null, heldWords, known })
+    if (next !== held) setHeld(next)
+  })
 
   const [text, setText] = useDraft(draftKey(to?.id ?? null))
   // The harness last used — read again whenever the offered list changes (the
@@ -313,10 +321,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
             type="button"
             aria-label={`Stop prompting ${to.name}`}
             title="Prompt nobody: a new agent takes it"
-            onClick={() => {
-              setReleased(to.id)
-              setHeld(null)
-            }}
+            onClick={() => setReleased(viewKey)}
           >
             ×
           </button>
@@ -348,7 +353,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
               type="button"
               role="option"
               aria-selected={i === chosen}
-              // Keep the input's focus (and its held agent) while picking.
+              // Keep the input's focus (and the agent its words hold) while picking.
               onMouseDown={(e) => {
                 e.preventDefault()
                 choose(option.name)
@@ -410,10 +415,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
               return
             }
           }
-          if (e.key === 'Backspace' && !e.repeat && to && text === '') {
-            setReleased(to.id)
-            setHeld({ id: null })
-          }
+          if (e.key === 'Backspace' && !e.repeat && to && text === '') setReleased(viewKey)
           if (e.key === 'Escape') e.currentTarget.blur()
         }}
       />
