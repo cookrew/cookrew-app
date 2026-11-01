@@ -12,6 +12,7 @@ import { endLine, lineTextFor, submitLine, typeLine, useLiveLine } from './live-
 import { draftKey, getDraft, useDraft } from './prompt-draft'
 import { mentionTarget, promptTargetOf } from './prompt-target'
 import { sendToAgent } from './send'
+import { usePromptAttach } from './use-prompt-attach'
 import './global-prompt.css'
 
 /**
@@ -31,6 +32,8 @@ import './global-prompt.css'
  * "@Name the rest" sends to that agent from anywhere. "#Name" names a note or
  * a browser of this workspace (artifact-refs.ts): it is sent as what it is,
  * and wired to the agent it goes to. Typing "@" or "#" offers the names.
+ * A screenshot pasted or a file dropped goes in as its path
+ * (prompt-attach.ts).
  */
 
 export interface PromptAgent {
@@ -187,6 +190,13 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
 
   // "@…" and "#…" offer the names they could become, while the box has focus.
   const inputRef = useRef<HTMLInputElement>(null)
+  const attach = usePromptAttach({
+    draftKey: draftKey(to?.id ?? null),
+    write,
+    inputRef,
+    refusal: to?.remote ? `Screenshots stay on this machine: ${to.name} runs elsewhere.` : null,
+    onError: setError
+  })
   const [dismissedAt, setDismissedAt] = useState<string | null>(null)
   const [sel, setSel] = useState(0)
   const pending = held ? pendingName(text, { '@': names, '#': artifacts.map((a) => a.name) }) : null
@@ -214,7 +224,9 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
 
   return (
     <form
-      className={`cr-prompt${to ? ' to-agent' : ' to-new'}`}
+      className={`cr-prompt${to ? ' to-agent' : ' to-new'}${attach.attaching ? ' attaching' : ''}`}
+      onDragOver={attach.onDragOver}
+      onDrop={attach.onDrop}
       onSubmit={(e) => {
         e.preventDefault()
         submit()
@@ -288,8 +300,10 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
         value={text}
         placeholder={to ? `Prompt ${to.name}… # a note or browser` : 'A new agent takes this task: describe it…'}
         aria-label={to ? `Prompt ${to.name}` : 'Prompt for a new agent'}
+        title="Paste or drop a screenshot: its path goes into the prompt"
         autoComplete="off"
         disabled={busy}
+        onPaste={attach.onPaste}
         onChange={(e) => write(e.target.value, (e.nativeEvent as InputEvent).isComposing === true)}
         onCompositionEnd={(e) => write(e.currentTarget.value)}
         onFocus={() => setHeld({ id: to?.id ?? null })}
@@ -326,6 +340,11 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       <button type="submit" className="cr-btn sm primary" title={to ? 'Send (Enter)' : 'Make the agent (Enter)'} aria-label="Send" disabled={busy || (!text.trim() && to?.id !== fullAgentId) || (!to && !text.trim())}>
         <CrIcon name="send" />
       </button>
+      {attach.attaching && (
+        <span className="cr-prompt-note" role="status">
+          attaching…
+        </span>
+      )}
       {error && (
         <span className="cr-prompt-error" role="alert" title={error}>
           {error}

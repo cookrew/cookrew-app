@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { buildAttachmentPaste } from '../../shared/attach'
 import { cookrew, hasNativeWebview } from './api'
-import { imageAttachmentName } from './clipboard-image'
+import { saveClipboardImages } from './clipboard-image'
 import { CrIcon } from './icons'
 
 /**
@@ -30,14 +30,7 @@ export async function pasteClipboardImages(
   terminalId: string,
   images: Array<{ type: string; arrayBuffer: () => Promise<ArrayBuffer> }>
 ): Promise<void> {
-  const stamp = String(Date.now())
-  const paths: string[] = []
-  for (const [i, image] of images.entries()) {
-    const bytes = new Uint8Array(await image.arrayBuffer())
-    const name = imageAttachmentName(image.type, images.length > 1 ? `${stamp}-${i + 1}` : stamp)
-    paths.push(await cookrew().saveAttachmentBytes(name, bytes))
-  }
-  pastePaths(terminalId, paths)
+  pastePaths(terminalId, await saveClipboardImages(images, cookrew()))
 }
 
 /**
