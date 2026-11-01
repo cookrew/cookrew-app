@@ -683,6 +683,50 @@
   color: var(--ink);
 }
 
+/* In the transcript's own top-right corner (owner, 2026-11-01), level with the
+   full view's "browsers & notes" head (zoom/full-views.css · .zv-fv-arts-head:
+   18px down, 24px tall), in that head's make: mono, hairline, quiet. */
+.lod-overlay .popout-main {
+  position: relative;
+}
+
+.cr-look-toggle.cr-look-corner {
+  position: absolute;
+  top: 18px;
+  /* Clear of the checkpoint rail's line, which runs down the box's right edge. */
+  right: 24px;
+  z-index: 6;
+  height: 24px;
+  min-width: 48px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px var(--sumi-hair-2, var(--line));
+  background: var(--sumi-card, var(--cream-hi));
+  color: var(--sumi-ink, var(--ink));
+  font: 10px/1 var(--font-mono);
+  letter-spacing: 0.14em;
+}
+
+.cr-look-toggle.cr-look-corner:hover {
+  background: var(--sumi-gold-soft, var(--amber-soft));
+}
+
+.cr-look-toggle.cr-look-corner.look-log {
+  background: var(--sumi-ink, var(--ink));
+  color: var(--sumi-card, var(--cream-hi));
+}
+
+.cr-look-toggle.cr-look-corner.look-live {
+  box-shadow: inset 0 0 0 1px var(--sumi-seal, var(--amber-deep));
+  color: var(--sumi-seal, var(--amber-deep));
+}
+
+.cr-look-toggle.cr-look-corner:focus-visible {
+  outline: 2px solid var(--sumi-seal, var(--amber-deep));
+  outline-offset: 2px;
+}
+
 @media (max-width: 480px) {
   .cr-tune-menu-btn {
     max-width: 112px;

@@ -130,8 +130,12 @@ describe('every card view carries the tag', () => {
     // and the MDL / EFF rail beside the transcript. The rail stays; the chip goes.
     const overlay = read('TerminalOverlay.tsx')
     expect(overlay, 'the zoomed header grew a second tag').not.toContain('<DialTag')
-    // Owner, 2026-10-31: the rail moved into ONE button on the top bar (TuneMenu opens it).
-    expect(overlay, 'the zoomed card lost its tune rail').toContain('<TuneMenu')
+    // Owner, 2026-10-31: the rail moved into ONE button on the top bar (TuneMenu opens it);
+    // 2026-11-01: that button sits in the prompt box, for the agent the box is aimed at
+    // (CardTune); the embed, which has no box, still draws it in its slim row.
+    expect(overlay, 'the embed lost its tune button').toContain('<CardTune')
+    expect(read('prompt/GlobalPrompt.tsx'), 'the prompt box lost the tune button').toContain('<CardTune')
+    expect(read('nodes/CardTune.tsx'), 'CardTune no longer draws the one button').toContain('<TuneMenu')
     expect(read('nodes/TuneMenu.tsx'), 'the tune menu no longer opens the rail').toContain('<TuneRail {...rail} menu />')
   })
 })

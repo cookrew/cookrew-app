@@ -136,6 +136,7 @@ import {
   WorkspaceMeta
 } from '../shared/model'
 import { DEFAULT_ORCH_PRESET, PRESETS } from './presets'
+import { launchCommand } from '../shared/launch-tune'
 import { GatewayMonitor } from './route/gateway'
 import { RouteService } from './route/service'
 import { magpieInstalled } from './route/discovery'
@@ -4484,6 +4485,13 @@ interface CreateTerminalOpts {
    */
   autoName?: boolean
   /**
+   * The model and effort a new agent starts on (the prompt box's tune chip,
+   * owner 2026-11-01): launch flags, checked against the harness's offer
+   * (shared/launch-tune). A role or a `command` keeps its own line. Unknown:
+   * it arrives over IPC and HTTP, and launchCommand keeps only what it offers.
+   */
+  tune?: unknown
+  /**
    * Run THIS instead of the preset's command. Used by a placed remote-orch
    * card, whose command is a line to someone else's orch, not a local harness.
    */
@@ -4512,7 +4520,7 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
     id: randomUUID(),
     name: opts.name || role?.name || preset.name,
     preset: role ? role.preset : preset.name,
-    command: opts.command ?? (role ? role.command : preset.command),
+    command: opts.command ?? (role ? role.command : launchCommand(preset.command, opts.tune)),
     cwd: opts.cwd ?? store.focusedState.dir,
     orch: opts.orch ?? false,
     role: role ? role.name : null,

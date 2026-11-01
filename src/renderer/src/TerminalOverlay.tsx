@@ -44,11 +44,8 @@ import { shouldAttachTerminal } from './terminal-view-mode'
 import { installLocalScroll, type LocalScroll } from './live-scroll'
 import { createCurtain, domCurtainDeps, subRowShift } from './live-curtain'
 import { installLiveSheet, type LiveSheet } from './live-sheet'
-import { closeZoomMenu, tuneSummary, useZoomSlots } from './zoom-bar'
-import { TuneMenu } from './nodes/TuneMenu'
-import { useAgentTuning } from './nodes/use-agent-tuning'
-import { useCardRoute } from './nodes/use-card-route'
-import { routeDialAllowed, routeDialInput } from '../../shared/route-view'
+import { closeZoomMenu, useZoomSlots } from './zoom-bar'
+import { CardTune } from './nodes/CardTune'
 import { isNight, useNight } from './color-scheme'
 import { paperCursor } from './paper-cursor'
 import { createSizeOwner, openedAt, SETTLE_CHECK_MS, tookOthers, type PaneSize } from './pane-size'
@@ -461,9 +458,6 @@ function TerminalOverlay({
 
   const keepFocus = (e: React.MouseEvent): void => e.preventDefault()
 
-  // The LEFT rail: the agent's model and effort, read off its own record and
-  // turned by one typed line. Mirror of the checkpoint rail on the right.
-  const tuning = useAgentTuning({ terminalId: node.id, phase, remote })
   // The agent's face on its side of the chat (transcript-face.ts): one
   // element, so the memoised rows are not re-rendered by a new one each frame.
   const chatFace = useMemo(() => <AgentAvatar id={node.id} orch={node.orch === true} status="idle" preset={node.preset} />, [node.id, node.orch, node.preset])
@@ -512,16 +506,9 @@ function TerminalOverlay({
     liveSheetRef.current?.sync()
     box.scrollTop = chatScroll.current ?? box.scrollHeight
   }, [look])
-  // The RTE dial (R2). A served session never gets this machine's route, so
-  // it never gets the dial either (design D3).
-  const routeAllowed = routeDialAllowed({ remote, served: node.servedSession != null })
-  const cardRoute = useCardRoute({ terminalId: node.id, enabled: routeAllowed })
+  // The model · effort · route button left for the prompt box (CardTune.tsx,
+  // owner 2026-11-01); only the embed, which has no box, still draws it here.
   const zoomSlots = useZoomSlots()
-  // Main's choices, and only main's (route-view.routeDialInput).
-  const routeDialBase = routeDialInput({ allowed: routeAllowed, routeChoices: tuning.routeChoices, state: cardRoute.state })
-  const routeDial = routeDialBase
-    ? { ...routeDialBase, state: cardRoute.state, open: cardRoute.open, onOpen: cardRoute.setOpen, onPick: cardRoute.pick }
-    : null
 
   // The phone flipped between light and dark while this was open.
   const night = useNight()
@@ -1283,35 +1270,20 @@ function TerminalOverlay({
     translation.translate(target, body, code)
   }
 
-  // The card's model switch and CHAT/LIVE: on the top bar, or in the slim row.
-  const barContent = (
-    <div className="cr-zoom-bar" role="group" aria-label={`${node.name}: model and view`}>
-      {/* ONE button for model, effort and route (owner 2026-10-31); it opens
-          the whole rail, each dial still its own open → pick. */}
-      {tuning.view !== null && (
-        <TuneMenu
-          view={tuning.view}
-          open={tuning.open}
-          onOpen={tuning.setOpen}
-          onTurn={tuning.turn}
-          error={tuning.error}
-          onMouseDown={keepFocus}
-          route={routeDial}
-          summary={tuneSummary({ dials: tuning.view.dials, routeDial: routeDial !== null, route: cardRoute.state?.route })}
-        />
-      )}
-      {/* ONE toggle for the transcript: it says what is showing, a tap flips it. */}
-      <button
-        type="button"
-        className={`cr-look-toggle look-${look}`}
-        aria-label={`Showing ${look} — switch to ${nextLook(look)}`}
-        title={LOOK_TITLE[look]}
-        onMouseDown={keepFocus}
-        onClick={() => switchLook(nextLook(look))}
-      >
-        {LOOK_LABEL[look]}
-      </button>
-    </div>
+  // ONE toggle for the transcript: it says what is showing, a tap flips it. It
+  // sits in the transcript's own top-right corner, level with the sheet's
+  // "browsers & notes" head (owner 2026-11-01), not on the top bar.
+  const lookToggle = (
+    <button
+      type="button"
+      className={`cr-look-toggle cr-look-corner look-${look}`}
+      aria-label={`Showing ${look} — switch to ${nextLook(look)}`}
+      title={LOOK_TITLE[look]}
+      onMouseDown={keepFocus}
+      onClick={() => switchLook(nextLook(look))}
+    >
+      {LOOK_LABEL[look]}
+    </button>
   )
 
   return (
@@ -1336,15 +1308,16 @@ function TerminalOverlay({
       }}
       onDrop={onDrop}
     >
-      {/* NO HEAD (owner 2026-10-31). The model switch and CHAT/LIVE sit on the
-          top bar left of ⋯; translate, titles, back and close sit inside ⋯. The
-          bar names the agent already, so the name and the phase chip that were
-          here said it a second time. zoom-bar.ts has the why of the portals.
-          A surface with no One Bar (the cookrew.dev embed) keeps one slim row. */}
-      {primary && zoomSlots.bar !== null && createPortal(barContent, zoomSlots.bar)}
+      {/* NO HEAD (owner 2026-10-31). Translate, titles, back and close sit
+          inside ⋯ on the top bar; the model switch sits in the prompt box and
+          CHAT/LIVE in the transcript's corner (owner 2026-11-01). The bar names
+          the agent already, so the name and the phase chip that were here said
+          it a second time. zoom-bar.ts has the why of the portals. A surface
+          with no One Bar (the cookrew.dev embed) has no prompt box either, so
+          it keeps one slim row with the model switch. */}
       {primary && zoomSlots.bar === null && (
         <div className="popout-header slim">
-          {barContent}
+          <CardTune terminalId={node.id} phase={phase} remote={remote} onMouseDown={keepFocus} />
           <div className="popout-actions">
             <TranslateButton
               active={translation.showing !== null}
@@ -1539,9 +1512,8 @@ function TerminalOverlay({
         </div>
       )}
       <div className="popout-terminal-wrap">
-        {/* The left column: the dials, then this terminal's browsers and notes as side tabs. */}
         {/* The left column: this terminal's browsers and notes as side tabs. The
-            dials moved to the top bar (one model switch; zoom-bar.ts). */}
+            dials moved to the prompt box (one model switch; CardTune.tsx). */}
         {sideTabs && attachments.length > 0 && (
           <div className="popout-side">
             <AttachTabs terminalId={node.id} items={attachments} openId={openItem?.node.id ?? null} />
@@ -1603,6 +1575,7 @@ function TerminalOverlay({
           />
         )}
         {openItem !== null && openView !== null && <AttachPanel key={openItem.node.id} item={openItem} view={openView} cardRect={rect} />}
+        {primary && lookToggle}
         </div>
         <CheckpointTimeline
           terminalId={node.id}

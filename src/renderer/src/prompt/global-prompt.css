@@ -313,3 +313,84 @@
   font: 700 9px/1.2 var(--font-mono);
   letter-spacing: 0.04em;
 }
+
+/* ---- THE TUNE CHIP (owner, 2026-11-01): beside the left chip, in its pill ----
+   Aimed at an agent it is that agent's own model · effort · route button
+   (nodes/CardTune.tsx → TuneMenu, rising); with nobody targeted, the new
+   agent's pick (NewAgentTune.tsx). Both read as the harness chip does. */
+.cr-prompt-tune,
+.cr-prompt .cr-tune-menu-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: auto;
+  max-width: 34%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 999px;
+  box-shadow: none;
+  background: var(--sumi-paper-2, var(--cream-md));
+  white-space: nowrap;
+  cursor: pointer;
+  font: 600 11.5px/1 var(--font-mono);
+  letter-spacing: 0.02em;
+  color: var(--sumi-ink-soft, var(--ink-soft));
+}
+
+.cr-prompt .cr-tune-menu {
+  flex: none;
+  max-width: 34%;
+}
+
+.cr-prompt .cr-tune-menu-btn {
+  max-width: 100%;
+}
+
+.cr-prompt-tune:hover,
+.cr-prompt .cr-tune-menu-btn:hover,
+.cr-prompt .cr-tune-menu.open .cr-tune-menu-btn {
+  background: var(--sumi-paper-2, var(--cream-md));
+  color: var(--sumi-seal, var(--amber-deep));
+}
+
+/* The live agent's menu rises over the dock, fixed: the dock clips it otherwise. */
+.cr-tune-menu-panel.rise {
+  position: fixed;
+  top: auto;
+  right: auto;
+  z-index: 200;
+}
+
+/* The new agent's two lists, one under the other; the first needs no rule above it. */
+.cr-prompt-tune-knob {
+  display: grid;
+}
+
+.cr-prompt-tune-knob:first-child .cr-prompt-menu-family {
+  margin-top: 0;
+  border-top: 0;
+}
+
+@media (max-width: 700px) {
+  /* A phone box holds the left chip, this, the words and send: the chip
+     shows the model only, and gives up room first. */
+  .cr-prompt .cr-tune-menu,
+  .cr-prompt-tune {
+    max-width: 28%;
+  }
+
+  .cr-prompt .cr-tune-menu-effort {
+    display: none;
+  }
+
+  .cr-prompt-tune {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .cr-tune-menu-panel.rise {
+    right: 8px;
+    width: auto;
+  }
+}

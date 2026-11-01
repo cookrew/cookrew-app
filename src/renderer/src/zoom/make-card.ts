@@ -1,4 +1,5 @@
 import type { CanvasNode } from '../../../shared/model'
+import type { LaunchTune } from '../../../shared/launch-tune'
 import type { CookrewApi } from '../api'
 import { zoomStore } from './zoom-store'
 import { rememberHarness } from '../prompt/harness-pref'
@@ -42,6 +43,8 @@ export interface AgentChoice {
   prompt?: string
   /** `name` is a stand-in read off `prompt`: Sous names the card once it answers. */
   autoName?: boolean
+  /** The model and effort it starts on (the prompt box's tune chip; shared/launch-tune). */
+  tune?: LaunchTune
 }
 
 /** A new agent in the active workspace; the zoom opens its card in the crew. */
@@ -55,7 +58,8 @@ export async function makeAgent(api: MakeApi, choice: AgentChoice, nodes: readon
       orch: choice.orch,
       ...(choice.roleName ? { roleName: choice.roleName } : {}),
       ...(choice.prompt ? { prompt: choice.prompt } : {}),
-      ...(choice.prompt && choice.autoName ? { autoName: true } : {})
+      ...(choice.prompt && choice.autoName ? { autoName: true } : {}),
+      ...(choice.tune && Object.keys(choice.tune).length > 0 ? { tune: choice.tune } : {})
     })
     // The next agent the prompt box makes takes the harness last used.
     if (!choice.roleName) rememberHarness(choice.preset)

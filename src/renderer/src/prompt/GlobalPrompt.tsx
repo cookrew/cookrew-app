@@ -6,9 +6,14 @@ import { CrIcon } from '../icons'
 import { speakSous } from '../sous-speak'
 import { VoiceBar } from '../VoiceBar'
 import { makeAgent } from '../zoom/make-card'
+import { CardTune } from '../nodes/CardTune'
+import { launchOffer, type LaunchKnob } from '../../../shared/launch-tune'
 import { zoomStore } from '../zoom/zoom-store'
 import { nameFromPrompt } from '../../../shared/agent-name'
 import { lastHarness, rememberHarness } from './harness-pref'
+import { lastLaunchTune, offeredPart, rememberLaunchTune, withLaunchKnob } from './launch-pref'
+import { NewAgentTune } from './NewAgentTune'
+import { usePresetCommands } from './use-preset-commands'
 import { HarnessMenu, type NewMenuActs } from './HarnessMenu'
 import { artifactRefs, expandRefs, pendingName, suggestionsFor, type ArtifactRef, type PromptArtifact } from './artifact-refs'
 import { endLine, lineTextFor, submitLine, typeLine, useLiveLine } from './live-line'
@@ -35,6 +40,11 @@ import './global-prompt.css'
  *            harness last used — the chip picks another. It stands in for the
  *            crew's old ＋ seat, and its menu for the dock's retired TERMINAL
  *            button (HarnessMenu.tsx).
+ *
+ * THE TUNE CHIP sits beside the left chip (owner, 2026-11-01; it left the top
+ * bar): aimed at an agent it is that agent's own model · effort · route
+ * button (CardTune.tsx), turned live; with nobody targeted it picks what the
+ * new agent starts on (NewAgentTune.tsx), sent as launch flags.
  *
  * "@Name the rest" sends to that agent from anywhere. "#Name" names a note or
  * a browser of this workspace (artifact-refs.ts): it is sent as what it is,
@@ -127,6 +137,16 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       window.removeEventListener('keydown', close, true)
     }
   }, [picking])
+  // The new agent's model and effort: sticky like the harness, sent only as
+  // far as the harness takes them (shared/launch-tune).
+  const commands = usePresetCommands()
+  const offer = launchOffer(commands.get(harness) ?? '')
+  const [launchTune, setLaunchTune] = useState(lastLaunchTune)
+  const pickLaunch = (knob: LaunchKnob, value: string | null): void => {
+    const next = withLaunchKnob(launchTune, knob, value)
+    setLaunchTune(next)
+    rememberLaunchTune(next)
+  }
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const activity = useLiveLine(to?.id ?? null)
@@ -227,7 +247,8 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     setBusy(true)
     setError(null)
     const { words: prompt, refs } = said(raw)
-    const made = await makeAgent(cookrew(), { name: nameFromPrompt(prompt), preset: harness, orch, prompt, autoName: true }, nodes)
+    const tune = offeredPart(launchTune, offer)
+    const made = await makeAgent(cookrew(), { name: nameFromPrompt(prompt), preset: harness, orch, prompt, autoName: true, tune }, nodes)
     setBusy(false)
     if (!made.ok) return setError(made.error)
     if (made.id) wireRefs(made.id, refs)
@@ -339,6 +360,11 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           </button>
           {picking && <HarnessMenu at={picking} harnesses={harnesses} harness={harness} onPick={pick} orch={orch} acts={acts} onDone={() => setPicking(null)} />}
         </span>
+      )}
+      {to ? (
+        <CardTune key={to.id} terminalId={to.id} phase={activity?.phase ?? 'idle'} remote={to.remote} onMouseDown={(e) => e.preventDefault()} rise />
+      ) : (
+        offer && <NewAgentTune offer={offer} tune={offeredPart(launchTune, offer)} onPick={pickLaunch} />
       )}
       {suggesting && anchor && pending && (
         <span className="cr-prompt-menu cr-prompt-suggest" role="listbox" aria-label={pending.sigil === '@' ? 'Agents' : 'Notes and browsers'} style={{ left: anchor.left, bottom: window.innerHeight - anchor.top + 6 }}>

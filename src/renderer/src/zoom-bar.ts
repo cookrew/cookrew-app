@@ -2,9 +2,11 @@
 //
 // The zoomed card no longer draws a head of its own (owner 2026-10-31: the
 // head, the "YOU ❯" line and the MDL/EFF/RTE rail were three rows of a phone
-// screen spent on chrome). Its model switch and its CHAT/LIVE toggle sit on
-// the top bar, left of ⋯, and the rest of what the head held — translate,
-// titles, back, close — sits inside ⋯.
+// screen spent on chrome). What the head held — translate, titles, back,
+// close — sits inside ⋯. Its model switch sat on the bar too until 2026-11-01,
+// when it moved into the prompt box (nodes/CardTune.tsx) and CHAT/LIVE into
+// the transcript's own corner; the bar's slot stays as the sign that a One Bar
+// is there (the embed, with none, keeps a slim row of its own).
 //
 // The bar does not know the card and should not: the card's state (its look,
 // its dials, its translation) stays where it lives, in TerminalOverlay. The

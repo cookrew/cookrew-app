@@ -139,6 +139,8 @@ export interface MobileOps {
     roleName?: string;
     prompt?: string;
     autoName?: boolean;
+    /** A new agent's model and effort (shared/launch-tune); main checks it. */
+    tune?: unknown;
   }) => CanvasNode;
   forkTerminal: (sourceId: string, turnIndex?: number) => TerminalNodeData;
   listWorkspaces: () => WorkspaceList;
@@ -1096,6 +1098,7 @@ export async function handleMobileApi(
       roleName?: string;
       prompt?: string;
       autoName?: boolean;
+      tune?: unknown;
     }>(request);
     try {
       respondJson(response, 200, ops.createTerminal(opts));
