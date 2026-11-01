@@ -5488,6 +5488,41 @@ function rendererBrowserCommand(args: string[], terminalId: string): Promise<str
   return promise
 }
 
+/**
+ * A browser card made in a workspace that is not on screen (an agent's own,
+ * while the owner looks elsewhere). No engine is booted — the page runs when
+ * that workspace is shown — and the card is wired to its caller the same way
+ * the on-screen path wires it, so `cookrew list --canvas` sees it there.
+ */
+function createBrowserInWorkspace(card: { url: string; name: string; terminalId: string; workspaceId: string }): {
+  name: string
+  adopted: boolean
+} {
+  const state = store.workspaceState(card.workspaceId)
+  const existing = state.nodes.find(
+    (n): n is BrowserNodeData => n.kind === 'browser' && n.name.toLowerCase() === card.name.toLowerCase()
+  )
+  if (existing) {
+    if (!store.connectedTo(card.terminalId).some((n) => n.id === existing.id)) store.connect(card.terminalId, existing.id)
+    return { name: existing.name, adopted: true }
+  }
+  const anchor = store.node(card.terminalId)
+  const tab: BrowserTab = { id: randomUUID(), url: card.url, title: '' }
+  const node: BrowserNodeData = {
+    kind: 'browser',
+    id: randomUUID(),
+    name: card.name,
+    url: card.url,
+    tabs: [tab],
+    activeTabId: tab.id,
+    position: { x: (anchor?.position.x ?? 0) + (anchor?.size.width ?? 640) + 80, y: anchor?.position.y ?? 0 },
+    size: { width: 720, height: 560 }
+  }
+  const added = store.addNodeToWorkspace(card.workspaceId, node) as BrowserNodeData
+  if (anchor) store.connect(card.terminalId, added.id)
+  return { name: added.name, adopted: false }
+}
+
 function browserCommand(args: string[], terminalId: string): Promise<string> {
   return interactiveBrowserEnabled()
     ? headlessBrowserCommands.run(args, terminalId)
@@ -6103,6 +6138,7 @@ app.whenReady().then(() => {
     forkTerminal,
     routines,
     browserCommand,
+    createBrowserInWorkspace,
     notify: showNotification,
     captureWindow,
     injectInput,

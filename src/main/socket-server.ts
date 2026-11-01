@@ -85,6 +85,17 @@ export interface SocketServerDeps {
   routines: RoutineScheduler
   /** Ask the renderer to run a browser command; resolves with its output. */
   browserCommand: (args: string[], terminalId: string) => Promise<string>
+  /**
+   * Make a browser card in a workspace that is NOT on screen (an agent's own,
+   * while the owner looks at another). No engine is booted for it: the page
+   * runs when that workspace is shown. Absent in a test server that has none.
+   */
+  createBrowserInWorkspace?: (card: {
+    url: string
+    name: string
+    terminalId: string
+    workspaceId: string
+  }) => { name: string; adopted: boolean }
   notify: (message: string) => void
   /** Debug helper: capture the app window to a PNG, returns the file path. */
   captureWindow: () => Promise<string>
@@ -592,6 +603,43 @@ export function browserWorkspaceError(scope: {
   return null
 }
 
+/**
+ * WHICH WORKSPACE A CLI CALL MAY TOUCH (owner, 2026-11-01).
+ *
+ * An agent may make cards in ITS OWN workspace and nowhere else: `--workspace`
+ * is how it says which one it means, and naming another is refused rather than
+ * quietly done. A caller with no home workspace (a plain shell after a reboot)
+ * may name any. Pure, so the wording is pinned by tests.
+ */
+export function cliWorkspaceScope(input: {
+  wanted: string | null
+  /** Every workspace, for resolving a name or an id. */
+  all: readonly { id: string; name: string }[]
+  /** Where the calling terminal lives; null for a caller no workspace holds. */
+  caller: { id: string; name: string } | null
+  focused: string
+}): { id: string; name: string } {
+  const { wanted, all, caller, focused } = input
+  const byName = (value: string): { id: string; name: string } | undefined =>
+    all.find((w) => w.id === value) ?? all.find((w) => w.name.toLowerCase() === value.toLowerCase())
+  if (wanted !== null && wanted !== '') {
+    const found = byName(wanted)
+    if (!found) throw new Error(`No workspace called '${wanted}'. You have: ${all.map((w) => w.name).join(', ')}.`)
+    if (caller !== null && found.id !== caller.id) {
+      throw new Error(
+        `You can only make cards in your own workspace ("${caller.name}"), not "${found.name}". ` +
+          `Nothing was created. Ask the owner to switch, or keep the card in "${caller.name}".`
+      )
+    }
+    return found
+  }
+  // No flag: the caller's own workspace, never the one the owner happens to be looking at.
+  if (caller !== null) return caller
+  const current = all.find((w) => w.id === focused)
+  if (!current) throw new Error('No workspace is open.')
+  return current
+}
+
 export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const me = self(request, deps)
   // DELIBERATELY focus, not the caller's workspace. Everything below resolves
@@ -620,13 +668,29 @@ export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): P
   // workspace boundary. Every other subcommand just needs the BROWSER to be
   // here, so a caller parked elsewhere must keep working (it did before).
   if (sub === 'create') {
-    if (!deps.store.node(me.id)) {
-      const home = deps.store.workspaceOfNode(me.id)
-      const error = browserWorkspaceError({
-        active,
-        caller: home ? { id: home.id, name: home.name } : undefined
-      })
-      if (error) throw new Error(error)
+    const home = deps.store.workspaceOfNode(me.id)
+    const wanted = typeof request.flags.workspace === 'string' ? String(request.flags.workspace) : null
+    // WHERE the card goes: the caller's own workspace unless it says otherwise,
+    // and never a workspace that is not its own (cliWorkspaceScope).
+    const scope = cliWorkspaceScope({
+      wanted,
+      all: deps.listWorkspaces().workspaces,
+      caller: home ? { id: home.id, name: home.name } : null,
+      focused: activeId
+    })
+    // A card made where nobody is looking is stored, not driven: the page runs
+    // when that workspace is shown. Same name-adoption rule as on screen.
+    if (scope.id !== activeId) {
+      const [, url, requestedName] = request.args
+      if (!url) throw new Error('Usage: cookrew browser create URL ["Name"] [--workspace <name>] [--new]')
+      if (!deps.createBrowserInWorkspace) {
+        throw new Error(`This build cannot make a card in "${scope.name}" while "${active.name}" is on screen.`)
+      }
+      const made = deps.createBrowserInWorkspace({ url, name: requestedName || 'Browser', terminalId: me.id, workspaceId: scope.id })
+      return (
+        `Created browser "${made.name}" in workspace "${scope.name}"` +
+        (made.adopted ? ' (it was already there — wired to you and navigated)' : ' — it opens when that workspace is shown')
+      )
     }
     // me.id, NOT request.terminalId. The raw id is the env the caller's process
     // INHERITED — for an agent the harness spawned in the background that is
@@ -779,7 +843,17 @@ export function cmdList(request: CliRequest, deps: SocketServerDeps): string {
  */
 function cmdListCanvas(request: CliRequest, deps: SocketServerDeps): string {
   const me = self(request, deps)
-  const activeId = deps.store.ownerOf(me.id) ?? deps.store.focusedId
+  const home = deps.store.workspaceOfNode(me.id)
+  const wanted = typeof request.flags.workspace === 'string' ? String(request.flags.workspace) : null
+  // Reading follows the same rule as writing: your own workspace, or one you
+  // name when you have none. Naming another agent's is refused.
+  const scope = cliWorkspaceScope({
+    wanted,
+    all: deps.listWorkspaces().workspaces,
+    caller: home ? { id: home.id, name: home.name } : null,
+    focused: deps.store.focusedId
+  })
+  const activeId = scope.id
   const nodes = deps.store.workspaceState(activeId).nodes
   const wsName = deps.listWorkspaces().workspaces.find((w) => w.id === activeId)?.name ?? activeId
   const terminalNames = (id: string): string[] =>
@@ -1621,7 +1695,8 @@ Usage:
   cookrew secret read <name>                    Print a sealed secret — into the pane and its transcript; prefer exec
   cookrew secret list                           Sealed secret names, never values
                                                 (owner panes only; every read is logged)
-  cookrew browser create URL ["Name"]            Create a connected browser browser
+  cookrew browser create URL ["Name"] [--workspace <name>] [--new]
+                                                Create a browser card in YOUR workspace
   cookrew browser snapshot|click|fill|type|key|navigate|screenshot|evaluate|html|text|info "Browser" ...
   cookrew browser create screen://main|window://App[/Title]|adb://SERIAL|vphone://VM|cam://0 ["Name"]
                                                 A USE card: a Mac display or window (?roi=x,y,w,h), a phone, a camera
