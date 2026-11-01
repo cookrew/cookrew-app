@@ -140,26 +140,30 @@
 }
 
 /* A phone: the box takes its own row above the buttons, and the agent's keys
-   (arrows, paste, Esc, the mic) a row of their own inside it. */
-body.cookrew-mobile .cr-prompt {
-  order: -1;
-  flex-basis: 100%;
-  flex-wrap: wrap;
-}
+   (arrows, paste, Esc, the mic) a row of their own inside it. The width
+   gates it, not the class alone: the companion carries cookrew-mobile in a
+   desktop browser too, where the box belongs on the buttons' row. */
+@media (max-width: 700px) {
+  body.cookrew-mobile .cr-prompt {
+    order: -1;
+    flex-basis: 100%;
+    flex-wrap: wrap;
+  }
 
-body.cookrew-mobile .cr-prompt input {
-  font-size: 16px;
-}
+  body.cookrew-mobile .cr-prompt input {
+    font-size: 16px;
+  }
 
-/* With an agent in the box, the tools step aside on a phone, as the old
-   composer did: the box and the agent's keys are what the thumb needs. */
-body.cookrew-mobile .cr-dock:has(.cr-prompt.to-agent) .cr-dock-tools {
-  display: none;
-}
+  /* With an agent in the box, the tools step aside on a phone, as the old
+     composer did: the box and the agent's keys are what the thumb needs. */
+  body.cookrew-mobile .cr-dock:has(.cr-prompt.to-agent) .cr-dock-tools {
+    display: none;
+  }
 
-body.cookrew-mobile .cr-prompt .voice-bar {
-  order: 3;
-  flex-basis: 100%;
-  overflow-x: auto;
-  scrollbar-width: none;
+  body.cookrew-mobile .cr-prompt .voice-bar {
+    order: 3;
+    flex-basis: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
 }
