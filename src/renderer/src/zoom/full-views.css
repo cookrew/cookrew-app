@@ -132,6 +132,72 @@
 /* The paper's own margins: a reading column, not a wall of text. */
 .zv-fullview .ctx-transcript { padding-left: 30px; padding-right: 30px; }
 
+/* CHAT TAKES THE SHEET'S WIDTH (owner, 2026-11-01): the bubbles reach out to
+   both sides of the paper instead of standing in an 860px column, so a wide
+   screen shows more of the conversation. */
+.zv-fullview .popout-main.look-chat > .ctx-transcript { padding-left: 16px; padding-right: 16px; }
+.zv-fullview .lod-overlay .look-chat .ctx-block,
+.zv-fullview .lod-overlay .popout-main.look-chat .chat-status { max-width: none; }
+
+/* LOG, SET AS THE DEMO SETS ITS TRANSCRIPT (owner, 2026-11-01;
+   group-motion-pivot.html · .tx): no boxes and no terminal glyph soup — your
+   line opens with YOU in the seal's mono, the agent's words are serif prose,
+   and its tool calls are one quiet mono line each, their results kept short
+   under them. A reading column on the left of the paper, as the demo has it. */
+.zv-fullview .lod-overlay .look-log .ctx-block {
+  display: grid;
+  gap: 10px;
+  max-width: 820px;
+  padding: 12px 0 14px;
+  border-top: 0;
+  font: 13.5px/1.45 var(--fv-serif);
+  color: var(--fv-ink);
+}
+.zv-fullview .lod-overlay .look-log .ctx-block.active { background: transparent; }
+.zv-fullview .lod-overlay .look-log .ctx-block-head {
+  opacity: 1;
+  font: 10px/1 var(--fv-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fv-muted);
+}
+.zv-fullview .lod-overlay .look-log .ctx-block-prompt {
+  margin: 0;
+  padding: 0;
+  background: none;
+  font: 13.5px/1.45 var(--fv-serif);
+  color: var(--fv-ink);
+}
+.zv-fullview .lod-overlay .look-log .ctx-block-prompt::before {
+  content: 'You';
+  margin-right: 10px;
+  font: 600 11.5px/1 var(--fv-mono);
+  letter-spacing: 0.04em;
+  color: var(--fv-seal);
+}
+.zv-fullview .lod-overlay .look-log .ctx-block-tool {
+  margin: 0;
+  font: 11.5px/1.4 var(--fv-mono);
+  color: var(--fv-soft);
+}
+.zv-fullview .lod-overlay .look-log .ctx-tool-call::before {
+  color: var(--fv-soft);
+}
+.zv-fullview .lod-overlay .look-log .ctx-tool-result {
+  font: 11px/1.4 var(--fv-mono);
+  color: var(--fv-muted);
+}
+.zv-fullview .lod-overlay .look-log .ctx-block-reply {
+  margin: 0;
+  font: 13.5px/1.45 var(--fv-serif);
+  color: var(--fv-ink);
+}
+.zv-fullview .lod-overlay .look-log .ctx-block-reply::before { content: none; }
+.zv-fullview .lod-overlay .look-log .ctx-block-reply * { font-family: var(--fv-serif); }
+.zv-fullview .lod-overlay .look-log .ctx-block-reply code,
+.zv-fullview .lod-overlay .look-log .ctx-block-reply pre,
+.zv-fullview .lod-overlay .look-log .ctx-block-reply pre * { font-family: var(--fv-mono); font-size: 12px; }
+
 /* ---- the tabs: the demo's thumbnails, down the right ---- */
 .zv-fullview .popout-side {
   background: transparent;
@@ -224,6 +290,11 @@
   .zv-fv-who small { gap: 7px; font-size: 9.5px; }
   .zv-fv-used { width: 100%; margin-left: 0; }
   .zv-fullview .ctx-transcript { padding-left: 12px; padding-right: 12px; }
+  .zv-fullview .popout-main.look-chat > .ctx-transcript { padding-left: 8px; padding-right: 8px; }
+  .zv-fullview .lod-overlay .look-log .ctx-block { font-size: 16px; }
+  .zv-fullview .lod-overlay .look-log .ctx-block-prompt,
+  .zv-fullview .lod-overlay .look-log .ctx-block-reply { font-size: 16px; }
+  .zv-fullview .lod-overlay .look-log .ctx-block-tool { font-size: 14px; }
 }
 
 /* ---- the side groups, attached (pets/PetTroop.tsx, pets/pet-dock.ts) ----
