@@ -44,6 +44,8 @@ export interface FrameModel {
   workspaces: readonly string[]
   /** How many machines the account lists besides this one: they sit under its screen. */
   otherMachines: number
+  /** This machine's display, width over height (zoom-layout.ts · screenAspectOf); absent, a 16:10. */
+  screenAspect?: number
   active: string
   /** The newest browser's link: at group zoom it stands beside the stack. */
   newest: string | null
@@ -154,11 +156,11 @@ export interface Layout {
 
 export function layoutOf(model: FrameModel, narrow: boolean): Layout {
   const crew = crewOf(model.agents, narrow, model.crewCols)
-  const device = deviceOf(model.workspaces, narrow)
-  const screen = { w: device.box.w * SDEV + 28, h: device.box.h * SDEV + 28 }
-  const machines = machinesAt(model.otherMachines, device.box, narrow)
+  const device = deviceOf(model.workspaces, narrow, model.screenAspect)
+  const screen = { w: device.screen.w * SDEV + 28, h: device.screen.h * SDEV + 28 }
+  const machines = machinesAt(model.otherMachines, device.screen, narrow)
   // The other machines are part of the devices stop: the camera must frame them too.
-  const mTop = device.box.h / 2 + 120
+  const mTop = device.screen.h / 2 + 120
   const mBottom = machines.rows ? mTop + machines.rows * 260 : -Infinity
   const half = Math.max(screen.h / 2 + 60, mBottom)
   return {
