@@ -707,7 +707,6 @@ function TerminalOverlay({
       /** The last size this viewer asked for as its own (a repaint kick's cols-1 step is not one). */
       let mySize: PaneSize | null = null
       const sendSize = (cols: number, rows: number, kick = false): void => {
-        if (!kick && paneSize && cols > paneSize.cols) turnRedraw.current.widened(activityRef.current?.phase ?? 'idle')
         paneSize = { cols, rows }
         if (!kick) mySize = { cols, rows }
         cookrew().ptyResize(node.id, cols, rows)
@@ -891,9 +890,12 @@ function TerminalOverlay({
         (hello) => {
           const { cols, rows } = hello
           if (disposed || cols <= 0 || rows <= 0) return
-          if ((hello as { resized?: boolean }).resized && paneSize && cols > paneSize.cols) {
-            turnRedraw.current.widened(activityRef.current?.phase ?? 'idle')
-          }
+          // A widen is judged HERE, on the size the pane reports (every resize is
+          // echoed, to the viewer that asked too), never on what a viewer asks:
+          // an ask recorded first would hide its own widen from the echo. A
+          // kick's dip and its way back are no widen (turn-redraw.ts · DIP_MEMORY_MS).
+          if ((hello as { resized?: boolean }).resized) turnRedraw.current.sized(cols, activityRef.current?.phase ?? 'idle', Date.now())
+          else turnRedraw.current.note(cols, Date.now())
           paneSize = { cols, rows }
           term.resize(cols, rows)
           // The pane changed size (every viewer is told, the one that asked
