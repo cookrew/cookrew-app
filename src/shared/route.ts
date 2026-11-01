@@ -152,6 +152,8 @@ export interface RouteState {
    * line scripts/route-auto-group.mjs prints, never by the app.
    */
   autoGroup: boolean
+  /** Every agent Cookrew spawns is handed Magpie's one MCP hub (main/route/shared-mcp.ts); on unless turned off. */
+  sharedMcp: boolean
   /** addKeyLine is the BARE stem `magpie provider add ` ending in one space: the renderer appends the preset, the user pastes the key. */
   setup: Omit<RouteSetupLines, 'addKeyLine'> & { addKeyLine: string }
 }

@@ -285,3 +285,27 @@ describe('what the rail will say (route-view)', () => {
     expect(html).toContain('2 tries · claude rested · 429')
   })
 })
+
+describe('the MCP switch', () => {
+  const pick = (html: string, label: string): RegExpMatchArray | null =>
+    html.match(new RegExp(`role="radio" aria-checked="(true|false)" class="cr-routing-pick[^"]*">${label}<`))
+
+  it('reads "shared" by default, with what that means', () => {
+    const html = paint(routeFixture('online'), { onSetSharedMcp: () => {} })
+    expect(html).toContain('aria-label="MCP servers for spawned agents"')
+    expect(pick(html, 'shared')?.[1]).toBe('true')
+    expect(pick(html, 'own')?.[1]).toBe('false')
+    expect(html).toContain('one copy of each MCP server for every agent')
+  })
+
+  it('reads "own" when turned off, and says it applies from the next spawn', () => {
+    const html = paint({ ...routeFixture('online'), sharedMcp: false }, { onSetSharedMcp: () => {} })
+    expect(pick(html, 'own')?.[1]).toBe('true')
+    expect(html).toContain('from the next spawn')
+  })
+
+  it('is not drawn without a gateway or on a bridge that cannot set it', () => {
+    expect(paint(routeFixture('offline'), { onSetSharedMcp: () => {} })).not.toContain('MCP servers for spawned agents')
+    expect(paint(routeFixture('online'))).not.toContain('MCP servers for spawned agents')
+  })
+})

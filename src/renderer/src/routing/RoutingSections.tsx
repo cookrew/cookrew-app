@@ -260,11 +260,13 @@ export function Accounts({
   state,
   onRun,
   onSetDefault,
+  onSetSharedMcp,
   running = null
 }: {
   state: RouteState
   onRun: RunLine
   onSetDefault: (model: string | null) => void
+  onSetSharedMcp?: (on: boolean) => void
   running?: SetupRunning | null
 }): React.JSX.Element {
   if (state.status !== 'online') {
@@ -309,6 +311,7 @@ export function Accounts({
           )
         })}
       </div>
+      {onSetSharedMcp && <SharedMcp on={state.sharedMcp} onSet={onSetSharedMcp} />}
       <details className="cr-routing-fold">
         <summary>▸ Model catalogue · {state.models.length} · /v1/models</summary>
         <div>
@@ -318,6 +321,34 @@ export function Accounts({
         </div>
       </details>
     </>
+  )
+}
+
+/** One MCP hub for every agent (shared) or each agent its own (own); read at each agent's next spawn. */
+function SharedMcp({ on, onSet }: { on: boolean; onSet: (on: boolean) => void }): React.JSX.Element {
+  const picks: { value: boolean; label: string }[] = [
+    { value: true, label: ROUTING_COPY.mcpShared },
+    { value: false, label: ROUTING_COPY.mcpOwn }
+  ]
+  return (
+    <div className="cr-routing-default" role="radiogroup" aria-label="MCP servers for spawned agents">
+      <span className="cr-routing-seg" style={{ margin: 0 }}>
+        {ROUTING_COPY.mcpLabel}
+      </span>
+      {picks.map((p) => (
+        <button
+          key={p.label}
+          type="button"
+          role="radio"
+          aria-checked={on === p.value}
+          className={`cr-routing-pick${on === p.value ? ' on' : ''}`}
+          onClick={() => onSet(p.value)}
+        >
+          {p.label}
+        </button>
+      ))}
+      <span className="small">{on ? ROUTING_COPY.mcpSharedNote : ROUTING_COPY.mcpOwnNote}</span>
+    </div>
   )
 }
 

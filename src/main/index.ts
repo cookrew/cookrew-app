@@ -2891,6 +2891,11 @@ function spawnTracked(t: {
   // here, at the spawn, so what the process got is what the node records as
   // `routeEffective`; a served session gets none (the service refuses it).
   const route = cardNode?.kind === 'terminal' ? routeService.envFor(cardNode) : null
+  // Magpie's one MCP hub, handed to every agent so the fleet shares one copy
+  // of each MCP server (route/shared-mcp.ts). Appended AFTER the route's args:
+  // claude's --mcp-config is variadic and must be last on the line.
+  const mcpArgs = cardNode?.kind === 'terminal' && !served ? routeService.sharedMcpFor(cardNode) : []
+  const spawnRoute = route && !served ? { env: route.env, args: [...route.args, ...mcpArgs] } : null
   const fresh = !ptys.get(t.id)
   const session = ptys.spawn(
     {
@@ -2899,7 +2904,7 @@ function spawnTracked(t: {
       cwd: t.cwd,
       card,
       served,
-      ...(route && !served ? { route: { env: route.env, args: route.args } } : {})
+      ...(spawnRoute ? { route: spawnRoute } : {})
     },
     owner
   )
@@ -6430,6 +6435,7 @@ app.whenReady().then(() => {
     route: {
       state: () => routeService.state(),
       setDefault: (model) => routeService.setDefault(model),
+      setSharedMcp: (on) => routeService.setSharedMcp(on),
       cardState: (id) => routeService.cardState(id),
       setCardRoute: (id, route) => routeService.setCardRoute(id, route),
       health: () => routeService.health(),
@@ -7244,6 +7250,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   // The route (route program): read on demand, pushed on change (routeService).
   ipcMain.handle('route:state', () => routeService.refresh())
   ipcMain.handle('route:set-default', (_e, model: string | null) => routeService.setDefault(model))
+  ipcMain.handle('route:set-shared-mcp', (_e, on: boolean) => routeService.setSharedMcp(on === true))
   ipcMain.handle('terminal:route', (_e, terminalId: string) => routeService.cardState(terminalId))
   ipcMain.handle('terminal:route-set', (_e, terminalId: string, route: string) =>
     routeService.setCardRoute(terminalId, route)
