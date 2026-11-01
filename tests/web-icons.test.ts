@@ -13,6 +13,8 @@ import { describe, expect, it } from 'vitest'
  */
 const root = path.resolve(__dirname, '..')
 const index = readFileSync(path.join(root, 'src/renderer/index.html'), 'utf8')
+// The icons sit at the web root: the companion reads a first path segment as a workspace
+// slug, so /brand/icon.svg would be answered "No workspace at /brand".
 const publicDir = path.join(root, 'src/renderer/public')
 
 /** Width and height out of a PNG's IHDR — no image library for two numbers. */
@@ -24,18 +26,18 @@ function pngSize(file: string): [number, number] {
 
 describe('the web build wears the ink COO', () => {
   it('names the tab icon, the iOS icon and the manifest in index.html', () => {
-    expect(index).toContain('<link rel="icon" href="/brand/icon.svg" type="image/svg+xml" />')
-    expect(index).toContain('<link rel="apple-touch-icon" href="/brand/icon-180.png" />')
-    expect(index).toContain('<link rel="manifest" href="/brand/manifest.webmanifest" />')
+    expect(index).toContain('<link rel="icon" href="/favicon.svg" type="image/svg+xml" />')
+    expect(index).toContain('<link rel="apple-touch-icon" href="/apple-touch-icon.png" />')
+    expect(index).toContain('<link rel="manifest" href="/manifest.webmanifest" />')
     expect(index).toContain('<meta name="theme-color" content="#f4efe4" />')
   })
 
   it('ships every file the page names, at the size each slot wants', () => {
     const want: Array<[string, [number, number] | null]> = [
-      ['brand/icon.svg', null],
-      ['brand/icon-180.png', [180, 180]],
-      ['brand/icon-192.png', [192, 192]],
-      ['brand/icon-512.png', [512, 512]]
+      ['favicon.svg', null],
+      ['apple-touch-icon.png', [180, 180]],
+      ['icon-192.png', [192, 192]],
+      ['icon-512.png', [512, 512]]
     ]
     for (const [name, size] of want) {
       const file = path.join(publicDir, name)
@@ -45,7 +47,7 @@ describe('the web build wears the ink COO', () => {
   })
 
   it('the SVG is the ink mark on paper, drawn as paths and not a bitmap', () => {
-    const svg = readFileSync(path.join(publicDir, 'brand/icon.svg'), 'utf8')
+    const svg = readFileSync(path.join(publicDir, 'favicon.svg'), 'utf8')
     expect(svg).toContain('fill="#f4efe4"')
     expect(svg).toContain('fill="#1b1814"')
     expect(svg).not.toContain('<image')
@@ -55,7 +57,7 @@ describe('the web build wears the ink COO', () => {
   })
 
   it('the manifest stands alone as an app and points at icons that exist', () => {
-    const manifest = JSON.parse(readFileSync(path.join(publicDir, 'brand/manifest.webmanifest'), 'utf8'))
+    const manifest = JSON.parse(readFileSync(path.join(publicDir, 'manifest.webmanifest'), 'utf8'))
     expect(manifest.name).toBe('Cookrew')
     expect(manifest.display).toBe('standalone')
     expect(manifest.theme_color).toBe('#f4efe4')

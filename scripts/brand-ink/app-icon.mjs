@@ -8,9 +8,11 @@
 // App:   resources/icon.png (1024, rounded tile) + resources/icon.icns.
 //        The Dock icon is read at startup (src/main/index.ts · app.dock.setIcon), so the running
 //        app picks it up on the next launch; packaged builds bundle the .icns.
-// Web:   src/renderer/public/brand/icon.svg, icon-180.png, icon-192.png, icon-512.png and
-//        manifest.webmanifest. These are SQUARE and full-bleed on purpose: iOS and Android
-//        apply their own mask, so a corner radius baked in would be rounded twice.
+// Web:   src/renderer/public/{favicon.svg,apple-touch-icon.png,icon-192.png,icon-512.png,
+//        manifest.webmanifest}. These are SQUARE and full-bleed on purpose: iOS and Android
+//        apply their own mask, so a corner radius baked in would be rounded twice. They sit at
+//        the web root because the companion reads a first path segment as a workspace slug —
+//        /brand/icon.svg is answered "No workspace at /brand".
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
@@ -138,11 +140,11 @@ header.write('icns', 0, 'ascii')
 header.writeUInt32BE(total, 4)
 writeFileSync(join(appOut, 'icon.icns'), Buffer.concat([header, ...chunks]))
 
-const webOut = join(root, 'src', 'renderer', 'public', 'brand')
+const webOut = join(root, 'src', 'renderer', 'public')
 mkdirSync(webOut, { recursive: true })
-writeFileSync(join(webOut, 'icon.svg'), stamp({ rounded: false }) + '\n')
+writeFileSync(join(webOut, 'favicon.svg'), stamp({ rounded: false }) + '\n')
 const square = render(stamp({ rounded: false }), 'web')
-for (const [px, name] of [[512, 'icon-512.png'], [192, 'icon-192.png'], [180, 'icon-180.png']]) {
+for (const [px, name] of [[512, 'icon-512.png'], [192, 'icon-192.png'], [180, 'apple-touch-icon.png']]) {
   execFileSync('sips', ['-s', 'format', 'png', '-Z', String(px), square, '--out', join(webOut, name)], { stdio: 'ignore' })
 }
 const manifest = {
@@ -155,10 +157,10 @@ const manifest = {
   background_color: PAPER,
   theme_color: PAPER,
   icons: [
-    { src: '/brand/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
-    { src: '/brand/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' }
+    { src: '/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+    { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' }
   ]
 }
 writeFileSync(join(webOut, 'manifest.webmanifest'), JSON.stringify(manifest, null, 2) + '\n')
 
-console.log('wrote resources/icon.{png,icns} and src/renderer/public/brand/{icon.svg,icon-180,192,512.png,manifest.webmanifest}')
+console.log('wrote resources/icon.{png,icns} and src/renderer/public/{favicon.svg,apple-touch-icon.png,icon-192,512.png,manifest.webmanifest}')
