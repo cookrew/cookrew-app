@@ -43,6 +43,7 @@
   /* Dark ink on every bright accent fill (night-scheme.test.ts keeps this
      list in step with the sheets: a new amber or green fill must be added). */
   :root[data-scheme='auto'] :is(
+    .ags-mark,
     .ags-recover-coin,
     .ags-tick.on,
     .attach-tab.on,
@@ -99,6 +100,7 @@
     .voice-speak.on
   ),
   :root[data-scheme='auto'] :is(
+    .ags-mark,
     .ags-recover-coin,
     .ags-tick.on,
     .attach-tab.on,

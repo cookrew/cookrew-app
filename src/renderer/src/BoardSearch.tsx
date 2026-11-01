@@ -107,7 +107,7 @@ export function BoardSearch({ workspace, activeWorkspaceId, attentionCount }: Bo
           className="cr-board-input"
           type="search"
           value={query}
-          placeholder="Search agents…"
+          placeholder="Search agents, browsers, notes…"
           aria-label="Search the board"
           aria-expanded={open}
           aria-controls={open ? 'cr-board-pop' : undefined}

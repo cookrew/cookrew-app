@@ -1,6 +1,8 @@
 import { CrIcon } from './icons'
 import type { BrowserNodeData } from '../../shared/model'
 import { activeBrowserTab, browserTabs } from '../../shared/model'
+import type { ItemSnippet } from './item-search'
+import { MatchLine } from './MatchLine'
 
 /**
  * One browser on the board. DATA CONTRACT: binds the same sources its
@@ -15,6 +17,7 @@ export function BrowserRow({
   workspaceName,
   selected,
   selectable = false,
+  match = null,
   onOpen
 }: {
   node: BrowserNodeData
@@ -24,6 +27,8 @@ export function BrowserRow({
   selected: boolean
   /** Edit mode: the row ticks instead of handing off to the canvas. */
   selectable?: boolean
+  /** A search hit in a tab that is not the one showing: that tab's line. */
+  match?: ItemSnippet | null
   onOpen: (id: string) => void
 }): React.JSX.Element {
   const tab = activeBrowserTab(node)
@@ -71,6 +76,7 @@ export function BrowserRow({
             {tab.title && <span className="ags-el-url-dim"> — {tab.url}</span>}
           </span>
         </span>
+        {match && <MatchLine match={match} />}
       </span>
     </div>
   )
