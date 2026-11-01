@@ -394,3 +394,9 @@
     width: auto;
   }
 }
+
+/* The phone page as a drop zone (page-drop.ts): the transcripts view's cue, over the whole page. */
+.attach-drop-hint.cr-page-drop {
+  position: fixed;
+  z-index: 1000;
+}
