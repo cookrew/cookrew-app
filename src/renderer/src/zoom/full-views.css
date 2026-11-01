@@ -102,12 +102,24 @@
    paper, under a mono label; each one the navigator's big thumbnail, ×N when
    it is shared. The two small buttons by the label make a note or a browser
    for this agent — the dock no longer does. */
+/* Here the body IS the sheet: the ::after's fixed 78px top sat 9px below
+   wherever the head really ended, and the transcript's top showed above it. */
+.zv-fullview.agent::after {
+  content: none;
+}
 .zv-fullview.agent .zv-fv-body {
   position: relative;
   z-index: 1;
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
+  margin-bottom: 2px;
+  padding-top: 6px;
+  overflow: hidden;
+  border: 1px solid var(--fv-hair-2);
+  border-radius: 16px;
+  background: var(--fv-card);
+  box-shadow: 0 14px 40px rgba(40, 30, 15, 0.12);
 }
 .zv-fullview.agent .zv-fv-body > .cr-stage-term {
   min-width: 0;
