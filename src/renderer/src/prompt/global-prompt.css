@@ -245,3 +245,59 @@
     scrollbar-width: none;
   }
 }
+
+/* The ＋ menu (HarnessMenu.tsx): the harnesses, then what opens at once. */
+.cr-prompt-new-menu {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.cr-prompt-menu-family {
+  margin: 6px 0 2px;
+  padding: 6px 10px 2px;
+  border-top: 1px solid var(--sumi-hair-2, var(--line));
+  font: 600 9.5px/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  color: var(--sumi-ink-soft, var(--ink-soft));
+  opacity: 0.8;
+}
+
+.cr-prompt-menu-teams {
+  display: grid;
+  max-height: 168px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.cr-prompt-menu button small,
+.cr-prompt-menu-orch small {
+  margin-left: 6px;
+  font-size: 10px;
+  color: var(--sumi-ink-soft, var(--ink-soft));
+}
+
+.cr-prompt-menu button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.cr-prompt-menu-orch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 8px 10px 5px;
+  border-top: 1px solid var(--sumi-hair-2, var(--line));
+  cursor: pointer;
+  font: 600 11px/1 var(--font-mono);
+  color: var(--sumi-ink, var(--ink));
+}
+
+.cr-prompt-orch {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--sumi-seal, var(--amber-deep));
+  color: var(--sumi-card, var(--cream-hi));
+  font: 700 9px/1.2 var(--font-mono);
+  letter-spacing: 0.04em;
+}

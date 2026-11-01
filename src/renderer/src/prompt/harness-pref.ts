@@ -3,6 +3,9 @@
  * an agent, whichever way it was made; the prompt box's picker changes it.
  */
 
+/** A bare shell: made from the ＋ menu, never the box's harness (it takes no prompt). */
+export const SHELL_PRESET = 'Shell'
+
 const KEY = 'cookrew.new-agent-harness'
 const FALLBACK = 'Claude Code'
 
@@ -19,6 +22,8 @@ export function lastHarness(offered: readonly string[]): string {
 }
 
 export function rememberHarness(name: string): void {
+  // A shell opened from the menu leaves the harness the box was on.
+  if (name === SHELL_PRESET) return
   try {
     localStorage.setItem(KEY, name)
   } catch {
