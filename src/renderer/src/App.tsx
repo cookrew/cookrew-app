@@ -1436,6 +1436,13 @@ function Canvas(): React.JSX.Element {
     () => terminals.map((t) => ({ id: t.id, name: t.name, remote: t.servedSession != null })),
     [terminals]
   )
+  /** The prompt's "#Name": every note and browser of the workspace, and who holds it. */
+  const promptArtifacts = useMemo(() => {
+    const owners = ownersOf(attachIndex)
+    return (workspace?.nodes ?? []).flatMap((n) =>
+      n.kind === 'note' || n.kind === 'browser' ? [{ id: n.id, name: n.name, kind: n.kind, owners: owners.get(n.id) ?? [] }] : []
+    )
+  }, [workspace?.nodes, attachIndex])
   // The snapshot poll reads this instead of `browsers`, so it subscribes once
   // rather than tearing down its interval on every workspace push.
   browsersRef.current = browsers
@@ -1582,6 +1589,7 @@ function Canvas(): React.JSX.Element {
           orch={orch}
           onOrch={setOrch}
           agents={promptAgents}
+          artifacts={promptArtifacts}
           nodes={workspace?.nodes ?? NO_NODES}
           voiceFor={
             view === 'stage'
@@ -1717,7 +1725,9 @@ function Canvas(): React.JSX.Element {
             )}
           </WithCrew>
         )}
-        {(zoomFull !== null || view !== 'stage') && <ItemPets
+        {/* Not beside an agent's full view: its browsers and notes attach to
+            its own sheet there (stage/AgentArtifacts.tsx · owner, 2026-11-01). */}
+        {(zoomFull === 'item' || view !== 'stage') && <ItemPets
           workspace={workspace}
           attachIndex={attachIndex}
           dock={view === 'stage' && zoomFull !== null ? fullDock.items : null}

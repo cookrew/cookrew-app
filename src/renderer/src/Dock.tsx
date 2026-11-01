@@ -1,6 +1,7 @@
 import { CANVAS_RETIRED, type ToolId } from './canvas-ui'
 import type { AgentRole, CanvasNode } from '../../shared/model'
 import { GlobalPrompt, type PromptAgent } from './prompt/GlobalPrompt'
+import type { PromptArtifact } from './prompt/artifact-refs'
 import { useKeyboardInset } from './keyboard-inset'
 import { CrIcon, type CrIconName } from './icons'
 import { AgentSprite } from './nodes/AgentSprite'
@@ -9,7 +10,7 @@ import { RoleAvatar } from './nodes/RoleAvatar'
 /** What a dock button does: open the preset row, or make its card at once. */
 export type DockTool =
   | { id: 'terminal'; label: string; title: string; icon: CrIconName; act: 'arm' }
-  | { id: 'note' | 'browser'; label: string; title: string; icon: CrIconName; act: 'make' }
+  | { id: 'note' | 'browser'; label: string; title: string; icon: CrIconName; act: 'make'; canvasOnly: true }
   | { id: 'connect'; label: string; title: string; icon: CrIconName; act: 'arm'; canvasOnly: true }
 
 /**
@@ -19,11 +20,15 @@ export type DockTool =
  * CONNECT needs canvas cards to wire, so it is left out while the canvas is
  * retired, and so is the clipboard toggle (not a tool, a pressed TOGGLE over
  * the resting hand, rendered before the tools).
+ *
+ * NOTE and BROWSER are left out too (owner, 2026-11-01): a note or a browser
+ * is made inside an agent, from its full view's browsers-and-notes column
+ * (stage/AgentArtifacts.tsx), so it is wired to the agent that holds it.
  */
 const TOOLS: readonly DockTool[] = [
   { id: 'terminal', label: 'TERMINAL', title: 'New agent — pick a harness, role or team', icon: 'terminal', act: 'arm' },
-  { id: 'note', label: 'NOTE', title: 'New note in this workspace', icon: 'note', act: 'make' },
-  { id: 'browser', label: 'BROWSER', title: 'New browser in this workspace', icon: 'browser', act: 'make' },
+  { id: 'note', label: 'NOTE', title: 'New note in this workspace', icon: 'note', act: 'make', canvasOnly: true },
+  { id: 'browser', label: 'BROWSER', title: 'New browser in this workspace', icon: 'browser', act: 'make', canvasOnly: true },
   { id: 'connect', label: 'CONNECT', title: 'CONNECT', icon: 'connect', act: 'arm', canvasOnly: true }
 ]
 
@@ -84,6 +89,8 @@ interface DockProps {
   agents: readonly PromptAgent[]
   /** This workspace's cards: a new agent is stored beside them. */
   nodes: readonly CanvasNode[]
+  /** The workspace's notes and browsers, for the prompt's "#Name". */
+  artifacts?: readonly PromptArtifact[]
   /**
    * Zoomed-in browser: the whole bar stands down so the page keeps its height.
    * The controls that DO apply there (viewport fit, keyboard, open in browser)
@@ -130,6 +137,7 @@ export function Dock({
   voiceFor,
   agents,
   nodes,
+  artifacts,
   browserFor,
   boardFor
 }: DockProps): React.JSX.Element {
@@ -202,7 +210,7 @@ export function Dock({
             </button>
           ))}
         </div>
-        {!slidIn && <GlobalPrompt fullAgentId={voiceFor?.id ?? null} agents={agents} harnesses={promptHarnesses} nodes={nodes} orch={orch} />}
+        {!slidIn && <GlobalPrompt fullAgentId={voiceFor?.id ?? null} agents={agents} harnesses={promptHarnesses} nodes={nodes} orch={orch} artifacts={artifacts} />}
         {!slidIn && tool === 'terminal' && (
           <div className="cr-dock-presets">
             {/* FAMILIES, SAID OUT LOUD.

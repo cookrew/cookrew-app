@@ -84,17 +84,18 @@ describe('the dock in the zoom view shows only what works there', () => {
   it('the canvas is retired, so the canvas-only controls are left out', async () => {
     expect(CANVAS_RETIRED).toBe(true)
     const { dockTools } = await dock()
-    expect(dockTools(true).map((t) => t.label)).toEqual(['TERMINAL', 'NOTE', 'BROWSER'])
+    // NOTE and BROWSER are made inside an agent now (stage/AgentArtifacts.tsx).
+    expect(dockTools(true).map((t) => t.label)).toEqual(['TERMINAL'])
     // A canvas brought back gets CONNECT back, nothing else changes.
     expect(dockTools(false).map((t) => t.label)).toEqual(['TERMINAL', 'NOTE', 'BROWSER', 'CONNECT'])
-  })
+    // The first test imports the dock's whole tree, cold.
+  }, 20_000)
 
-  it('renders no CONNECT and no CLIPBOARD, and keeps TERMINAL, NOTE and BROWSER', async () => {
+  it('renders no CONNECT, no CLIPBOARD, no NOTE and no BROWSER, and keeps TERMINAL', async () => {
     const { Dock } = await dock()
     const html = renderToStaticMarkup(<Dock {...props} />)
-    expect(html).not.toContain('aria-label="CONNECT"')
-    expect(html).not.toContain('aria-label="CLIPBOARD"')
-    for (const label of ['TERMINAL', 'NOTE', 'BROWSER']) expect(html).toContain(`aria-label="${label}"`)
+    for (const label of ['CONNECT', 'CLIPBOARD', 'NOTE', 'BROWSER']) expect(html).not.toContain(`aria-label="${label}"`)
+    expect(html).toContain('aria-label="TERMINAL"')
   })
 
   it('no hint, title or label speaks of a canvas, whichever tool is up', async () => {
@@ -116,15 +117,15 @@ describe('the dock in the zoom view shows only what works there', () => {
     expect(html).toContain('my-team')
   })
 
-  it('while a card is being made, the chips and NOTE / BROWSER hold still', async () => {
+  it('while a card is being made, the chips hold still', async () => {
     const { Dock } = await dock()
     // The global prompt's own send waits for words; it is not one of the tools.
     const tools = (html: string): string => html.replace(/<form class="cr-prompt[\s\S]*?<\/form>/, '')
     const idle = tools(renderToStaticMarkup(<Dock {...props} tool="terminal" />))
     expect(idle).not.toContain('disabled=""')
     const busy = tools(renderToStaticMarkup(<Dock {...props} tool="terminal" making />))
-    // 3 harnesses + 1 role + 1 team + NOTE + BROWSER; TERMINAL stays pressable to close the row.
-    expect(busy.match(/disabled=""/g)?.length).toBe(7)
+    // 3 harnesses + 1 role + 1 team; TERMINAL stays pressable to close the row.
+    expect(busy.match(/disabled=""/g)?.length).toBe(5)
   })
 
   it('a card that could not be made says why, where the hint was', async () => {
@@ -133,7 +134,7 @@ describe('the dock in the zoom view shows only what works there', () => {
     expect(html).toContain('role="alert"')
     expect(html).toContain('That agent could not be made: boom')
     expect(html).not.toContain('PICK ONE TO ADD IT HERE NOW')
-    // NOTE and BROWSER arm no row, so their error shows with no tool up.
+    // An error with no tool up still shows.
     expect(renderToStaticMarkup(<Dock {...props} makeError="That note could not be made: x" />)).toContain('That note could not be made: x')
   })
 })
@@ -216,5 +217,40 @@ describe('one way to make a card', () => {
     expect(app).toContain("from './zoom/make-card'")
     expect(app).not.toContain('onPaneClick')
     expect(app).toMatch(/onMake=\{\(kind\) => void make\(\(\) => makeItem\(/)
+  })
+})
+
+describe('a note or a browser is made inside an agent (owner, 2026-11-01)', () => {
+  it('is wired to the agent, named after it under a name the workspace does not have', async () => {
+    const { makeItemFor, freeName } = await import('../src/renderer/src/zoom/make-card')
+    expect(freeName('Forge note', ['forge note', 'Forge note 2'])).toBe('Forge note 3')
+    expect(freeName('Forge browser', [])).toBe('Forge browser')
+    const added: CanvasNode[] = []
+    const wires: [string, string][] = []
+    const api = {
+      addNode: async (node: CanvasNode) => (added.push(node), node),
+      connectNodes: async (a: string, b: string) => (wires.push([a, b]), { id: 'c1', a, b })
+    }
+    const made = await makeItemFor(api as never, 'note', { id: 't1', name: 'Forge' }, [node(0, 0, 10, 10)])
+    expect(made.ok).toBe(true)
+    expect(added[0]).toMatchObject({ kind: 'note', name: 'Forge note' })
+    expect(wires).toEqual([['t1', added[0].id]])
+  })
+
+  it('says so when the wire fails, and never navigates away from the agent', async () => {
+    const { makeItemFor } = await import('../src/renderer/src/zoom/make-card')
+    const { zoomStore } = await import('../src/renderer/src/zoom/zoom-store')
+    const before = zoomStore.get()
+    const api = { addNode: async (node: CanvasNode) => node, connectNodes: async () => { throw new Error('nope') } }
+    const made = await makeItemFor(api as never, 'browser', { id: 't1', name: 'Forge' })
+    expect(made).toEqual({ ok: false, error: 'The browser was made but could not be given to Forge: Error: nope' })
+    expect(zoomStore.get()).toEqual(before)
+  })
+
+  it("the agent's full view carries the column, and the left troop stays off beside it", () => {
+    const stage = readFileSync('src/renderer/src/stage/StageView.tsx', 'utf8')
+    expect(stage).toMatch(/<AgentArtifacts/)
+    const app = readFileSync('src/renderer/src/App.tsx', 'utf8')
+    expect(app).toMatch(/\(zoomFull === 'item' \|\| view !== 'stage'\) && <ItemPets/)
   })
 })

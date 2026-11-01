@@ -9,14 +9,15 @@
 // on the bed this view keeps clear along its bottom. There is no canvas under
 // it any more either: it is not rendered, so it costs nothing.
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { activeBrowserTab, type TerminalNodeData, type WorkspaceState } from '../../../shared/model'
+import { activeBrowserTab, type CanvasNode, type TerminalNodeData, type WorkspaceState } from '../../../shared/model'
 import { attachView, useAttachView } from '../attach-view'
-import { SideTabsContext, type AttachmentIndex } from '../terminal-attachments'
+import { NO_ATTACHMENTS, SideTabsContext, type AttachmentIndex } from '../terminal-attachments'
 import type { Crew } from './crew-rows'
 import { diffPopped, pickBackground, railOrder, type PoppedItem, type StageItem } from './stage-pick'
 import { firstLine, hostPath, ownersOf, stageSelect, useStageSelection, type StageItemCard } from './stage-select'
 import { StageItemPane } from './StageItemPane'
 import { StageTerminal } from './StageTerminal'
+import { AgentArtifacts } from './AgentArtifacts'
 import './stage.css'
 import { zoomStore } from '../zoom/zoom-store'
 import { AgentAvatar } from '../nodes/AgentAvatar'
@@ -30,6 +31,8 @@ const tally = (list: readonly { kind: string }[]): { browsers: number; notes: nu
   browsers: list.filter((a) => a.kind === 'browser').length,
   notes: list.filter((a) => a.kind === 'note').length
 })
+
+const NO_NODES: readonly CanvasNode[] = []
 
 /** A pop older than this has been seen, or missed: it no longer takes the stage. */
 const POP_FRESH_MS = 10 * 60_000
@@ -174,14 +177,26 @@ export function StageView({
                 </>
               )}
             </header>
-            <SideTabsContext.Provider value={false}>
-              <StageTerminal
-                key={target.terminalId}
-                local={terminals.find((t) => t.id === target.terminalId) ?? null}
-                item={target.item}
-                onBack={back}
-              />
-            </SideTabsContext.Provider>
+            {/* The terminal, and beside it on the same paper the agent's browsers
+                and notes (AgentArtifacts.tsx): its own side tabs stay off. */}
+            <div className="zv-fv-body">
+              <SideTabsContext.Provider value={false}>
+                <StageTerminal
+                  key={target.terminalId}
+                  local={terminals.find((t) => t.id === target.terminalId) ?? null}
+                  item={target.item}
+                  onBack={back}
+                />
+              </SideTabsContext.Provider>
+              {shown && (
+                <AgentArtifacts
+                  agent={{ id: shown.id, name: shown.name }}
+                  items={attachIndex.get(shown.id) ?? NO_ATTACHMENTS}
+                  owners={owners}
+                  nodes={workspace?.nodes ?? NO_NODES}
+                />
+              )}
+            </div>
           </div>
         ) : (
           <div className="cr-stage-wait">No agent here yet</div>

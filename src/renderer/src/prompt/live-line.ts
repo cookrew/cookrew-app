@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import type { TerminalActivity } from '../../../shared/turn'
 import { useActivity, activityStore } from '../activity-thumb-store'
 import { cookrew } from '../api'
+import { artifactRefs, expandRefs, pendingName, type PromptArtifact } from './artifact-refs'
 import { draftKey, getDraft, setDraft } from './prompt-draft'
 
 /**
@@ -51,13 +52,26 @@ export function keysFor(from: string, to: string): string {
 /**
  * What the agent's line should hold for this draft. "@Other …" is for
  * Other, so none of it goes into this agent's line — nor does an "@" that is
- * still on its way to naming an agent. "@Self …" is just the words.
+ * still on its way to naming an agent. "@Self …" is just the words. A whole
+ * "#Name" goes in as what it is (artifact-refs.ts), one still being typed
+ * waits for its name.
  */
-export function lineTextFor(text: string, targetId: string, mention: { id: string; text: string } | null, agentNames: readonly string[]): string {
-  if (mention) return mention.id === targetId ? mention.text : ''
-  const naming = /^\s*@(\S*)$/u.exec(text)
-  if (naming && agentNames.some((name) => name.toLowerCase().startsWith(naming[1].toLowerCase()))) return ''
-  return text
+export function lineTextFor(
+  text: string,
+  targetId: string,
+  mention: { id: string; text: string } | null,
+  agentNames: readonly string[],
+  artifacts: readonly PromptArtifact[] = []
+): string {
+  let body = text
+  if (mention) body = mention.id === targetId ? mention.text : ''
+  else {
+    const naming = /^\s*@(\S*)$/u.exec(text)
+    if (naming && agentNames.some((name) => name.toLowerCase().startsWith(naming[1].toLowerCase()))) return ''
+  }
+  const pending = pendingName(body, { '@': [], '#': artifacts.map((a) => a.name) })
+  if (pending) body = body.slice(0, pending.start)
+  return expandRefs(body, artifactRefs(body, artifacts))
 }
 
 function lineOf(agentId: string): Line {
