@@ -2,6 +2,7 @@ import type { DeepLink } from '../../shared/deep-link'
 import type { AnsweredRow, QueueRow, RowAction } from '../../shared/account-requests'
 import type { CardRoute, CardRouteState, RouteState } from '../../shared/route';
 import type { AgentTuning, AgentTuningState, TuneKnob } from '../../shared/agent-tuning'
+import type { LaunchTune } from '../../shared/launch-tune'
 import type { TranslateResult } from '../../shared/translate'
 import type { Surface as SousSurface } from '../../shared/sous-intent'
 import type { SousCommandResult } from '../../main/sous-control'
@@ -354,6 +355,8 @@ export interface CookrewApi {
     prompt?: string;
     /** `name` is a stand-in read off `prompt`: Sous names the card once it answers. */
     autoName?: boolean;
+    /** The model and effort it starts on, as launch flags (shared/launch-tune). */
+    tune?: LaunchTune;
   }) => Promise<CanvasNode>;
   /**
    * Resolve dropped/picked File objects to absolute paths on the machine

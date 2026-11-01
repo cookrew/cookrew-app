@@ -103,8 +103,10 @@ export function Header({
         onViewChange={onViewChange}
       />
       <div className="cr-fn" role="toolbar" aria-label="Functions">
-        {/* The zoomed terminal's model switch and CHAT/LIVE land here, left of
-            ⋯ (zoom-bar.ts). Empty, and so invisible, with nothing zoomed. */}
+        {/* The zoomed terminal's place left of ⋯ (zoom-bar.ts): empty, and so
+            invisible, since its model switch went to the prompt box and
+            CHAT/LIVE to the transcript (2026-11-01); its presence tells the
+            card that a One Bar is here. */}
         <span className="cr-zoom-slot" ref={setZoomBarSlot} />
         {/* The board, as a search box: right where a search is looked for. */}
         {search}

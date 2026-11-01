@@ -149,20 +149,41 @@ describe('the bar offers the places, the card fills them', () => {
     expect(more).toContain('registerZoomMenuClose(close)')
   })
 
-  it('draws no head on a surface that has the bar — only the embed keeps a slim row', () => {
+  it('draws no head on a surface that has the bar — only the embed keeps a slim row, with the tune button', () => {
     expect(overlay).not.toMatch(/<div className="popout-header">/)
-    expect(overlay).toContain('zoomSlots.bar === null && (\n        <div className="popout-header slim">')
-    expect(overlay).toContain('createPortal(barContent, zoomSlots.bar)')
+    const slim = overlay.slice(overlay.indexOf('zoomSlots.bar === null && (\n        <div className="popout-header slim">'))
+    expect(slim.length).toBeGreaterThan(0)
+    expect(slim.slice(0, 400)).toContain('<CardTune terminalId={node.id}')
   })
 
-  it('puts ONE tune button and ONE chat/live toggle on the bar, nothing else', () => {
-    const bar = overlay.slice(overlay.indexOf('const barContent = ('), overlay.indexOf('const barContent = (') + 2500)
-    expect(bar).toContain('<TuneMenu')
-    expect(bar).toContain('route={routeDial}')
-    expect(bar).not.toContain('<TuneRail')
+  it('puts nothing of the card on the top bar any more (owner 2026-11-01)', () => {
+    expect(overlay).not.toContain('createPortal(barContent, zoomSlots.bar)')
+    expect(overlay).not.toContain('<TuneMenu')
+    expect(overlay).not.toContain('useAgentTuning(')
+  })
+
+  it('draws ONE chat/log/live toggle in the transcript’s own corner', () => {
+    const toggle = overlay.slice(overlay.indexOf('const lookToggle = ('), overlay.indexOf('const lookToggle = (') + 600)
+    expect(toggle).toContain('cr-look-toggle cr-look-corner')
     // One button that flips, not a two-button segment.
-    expect(bar).toContain("switchLook(nextLook(look))")
-    expect(bar).not.toContain("(['chat', 'live'] as const)")
+    expect(toggle).toContain('switchLook(nextLook(look))')
+    expect(overlay).not.toContain("(['chat', 'live'] as const)")
+    // Inside the transcript's box (popout-main), after what it holds.
+    const main = overlay.slice(overlay.indexOf('<div ref={mainRef}'), overlay.indexOf('<CheckpointTimeline'))
+    expect(main).toContain('{primary && lookToggle}')
+  })
+
+  it('lines the corner toggle up with the sheet’s "browsers & notes" head', () => {
+    const header = readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'header.css'), 'utf8')
+    const full = readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'zoom', 'full-views.css'), 'utf8')
+    const corner = header.slice(header.indexOf('.cr-look-toggle.cr-look-corner {'))
+    const arts = full.slice(full.indexOf('.zv-fv-arts {'))
+    const btn = full.slice(full.indexOf('.zv-fv-arts-btn {'))
+    // The column's top padding = the toggle's top; the head's buttons' height = the toggle's.
+    expect(arts.slice(0, 300)).toMatch(/padding: 18px /)
+    expect(corner.slice(0, 200)).toContain('top: 18px;')
+    expect(btn.slice(0, 300)).toContain('height: 24px;')
+    expect(corner.slice(0, 300)).toContain('height: 24px;')
   })
 
   it('keeps translate, titles, back and close — in ⋯, not deleted', () => {
@@ -182,8 +203,8 @@ describe('the bar offers the places, the card fills them', () => {
     expect(side).toContain('<AttachTabs')
   })
 
-  it('lets only the primary overlay take the bar when several are mounted', () => {
-    expect(overlay).toContain('{primary && zoomSlots.bar !== null && createPortal(barContent, zoomSlots.bar)}')
+  it('lets only the primary overlay draw the toggle and fill ⋯ when several are mounted', () => {
+    expect(overlay).toContain('{primary && lookToggle}')
     expect(overlay).toContain('{primary && zoomSlots.menu !== null &&')
   })
 })
