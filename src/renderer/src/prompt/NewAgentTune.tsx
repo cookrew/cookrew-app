@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { keyboardCoverNow, riseOver, riseStyle, typesIntoBox, type RiseAnchor } from './rise-anchor'
 import { LAUNCH_KNOBS, launchTuneLabel, type LaunchKnob, type LaunchOffer, type LaunchTune } from '../../../shared/launch-tune'
 
 /**
@@ -10,7 +11,9 @@ import { LAUNCH_KNOBS, launchTuneLabel, type LaunchKnob, type LaunchOffer, type 
  *
  * Its menu is fixed over the chip, as the harness menu is: the dock clips
  * anything that hangs out of it. A pick keeps the menu open, so both knobs
- * can be set in one visit; outside, Esc or the chip closes it.
+ * can be set in one visit; outside, Esc or the chip closes it. The host puts
+ * the caret in the box on each pick (GlobalPrompt), and the menu rides the
+ * keyboard that may bring up (rise-anchor.ts); typing the prompt closes it.
  */
 
 const KNOB_LABEL: Record<LaunchKnob, string> = { model: 'MODEL', effort: 'EFFORT' }
@@ -26,12 +29,16 @@ export function NewAgentTune({
   tune: LaunchTune
   onPick: (knob: LaunchKnob, value: string | null) => void
 }): React.JSX.Element {
-  const [at, setAt] = useState<{ left: number; bottom: number } | null>(null)
+  const [at, setAt] = useState<RiseAnchor | null>(null)
   useEffect(() => {
     if (!at) return
     const close = (e: Event): void => {
-      if (e instanceof KeyboardEvent && e.key !== 'Escape') return
-      if (e.target instanceof Element && e.target.closest('.cr-prompt-tune-menu, .cr-prompt-tune')) return
+      if (e instanceof KeyboardEvent) {
+        if (e.key === 'Escape') {
+          // The menu's Esc: the box keeps the caret a pick put there.
+          e.stopPropagation()
+        } else if (!typesIntoBox(e)) return
+      } else if (e.target instanceof Element && e.target.closest('.cr-prompt-tune-menu, .cr-prompt-tune')) return
       setAt(null)
     }
     window.addEventListener('pointerdown', close, true)
@@ -54,8 +61,8 @@ export function NewAgentTune({
         title="The model and effort the new agent starts on — default leaves them to the harness"
         onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => {
-          const r = e.currentTarget.getBoundingClientRect()
-          setAt((open) => (open ? null : { left: r.left, bottom: window.innerHeight - r.top + 6 }))
+          const next = riseOver(e.currentTarget.getBoundingClientRect(), window.innerHeight, keyboardCoverNow())
+          setAt((open) => (open ? null : next))
         }}
       >
         {label} ▾
@@ -64,7 +71,7 @@ export function NewAgentTune({
         <span
           className="cr-prompt-menu cr-prompt-tune-menu"
           role="menu"
-          style={{ left: at.left, bottom: at.bottom, maxHeight: `calc(100vh - ${at.bottom + GAP}px)` }}
+          style={riseStyle(at, GAP)}
         >
           {LAUNCH_KNOBS.map((knob) => (
             <span key={knob} className="cr-prompt-tune-knob" role="group" aria-label={KNOB_LABEL[knob]}>

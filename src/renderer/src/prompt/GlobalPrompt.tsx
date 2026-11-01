@@ -24,6 +24,7 @@ import { sendToAgent } from './send'
 import { useDictation } from './use-dictation'
 import { usePromptAttach } from './use-prompt-attach'
 import { useDropZone } from './drop-zone'
+import { keyboardCoverNow, riseOver, type RiseAnchor } from './rise-anchor'
 import './global-prompt.css'
 
 /**
@@ -46,7 +47,9 @@ import './global-prompt.css'
  * THE TUNE CHIP sits beside the left chip (owner, 2026-11-01; it left the top
  * bar): aimed at an agent it is that agent's own model · effort · route
  * button (CardTune.tsx), turned live; with nobody targeted it picks what the
- * new agent starts on (NewAgentTune.tsx), sent as launch flags.
+ * new agent starts on (NewAgentTune.tsx), sent as launch flags. Every pick in
+ * a chip (the harness, a model, an effort, a route) puts the caret back in the
+ * box, so the prompt is typed next (owner, 2026-11-01).
  *
  * "@Name the rest" sends to that agent from anywhere. "#Name" names a note or
  * a browser of this workspace (artifact-refs.ts): it is sent as what it is,
@@ -130,13 +133,16 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offered])
   /** The harness menu, anchored over its chip: the dock clips anything that hangs out of it. */
-  const [picking, setPicking] = useState<{ left: number; bottom: number } | null>(null)
+  const [picking, setPicking] = useState<RiseAnchor | null>(null)
   useEffect(() => setPicking(null), [to?.id])
   useEffect(() => {
     if (!picking) return
     const close = (e: Event): void => {
-      if (e instanceof KeyboardEvent && e.key !== 'Escape') return
-      if (e.target instanceof Element && e.target.closest('.cr-prompt-menu, .cr-prompt-harness')) return
+      if (e instanceof KeyboardEvent) {
+        if (e.key !== 'Escape') return
+        // The menu's Esc: the box behind it keeps its caret.
+        e.stopPropagation()
+      } else if (e.target instanceof Element && e.target.closest('.cr-prompt-menu, .cr-prompt-harness')) return
       setPicking(null)
     }
     window.addEventListener('pointerdown', close, true)
@@ -320,12 +326,15 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     inputRef.current?.focus()
   }
   const anchor = suggesting ? inputRef.current?.getBoundingClientRect() : undefined
+  /** A chip's pick is made: the prompt is what comes next. */
+  const focusBox = (): void => inputRef.current?.focus()
 
   const pick = (name: string): void => {
     picked.current = name
     setHarness(name)
     rememberHarness(name)
     setPicking(null)
+    focusBox()
   }
 
   return (
@@ -359,8 +368,8 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
             aria-expanded={picking !== null}
             title={orch ? 'The harness the new agent runs · ORCH: it leads the crew' : 'The harness the new agent runs — or open a shell or a team'}
             onClick={(e) => {
-              const r = e.currentTarget.getBoundingClientRect()
-              setPicking((open) => (open ? null : { left: r.left, bottom: window.innerHeight - r.top + 6 }))
+              const at = riseOver(e.currentTarget.getBoundingClientRect(), window.innerHeight, keyboardCoverNow())
+              setPicking((open) => (open ? null : at))
             }}
           >
             ＋ {harness}
@@ -372,9 +381,18 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       {/* The chip and the voice bar are siblings in this form: one key each,
           never the bare agent id twice, or a retarget leaves the old chip behind. */}
       {to ? (
-        <CardTune key={`tune:${to.id}`} terminalId={to.id} phase={activity?.phase ?? 'idle'} remote={to.remote} onMouseDown={(e) => e.preventDefault()} rise />
+        <CardTune key={`tune:${to.id}`} terminalId={to.id} phase={activity?.phase ?? 'idle'} remote={to.remote} onMouseDown={(e) => e.preventDefault()} rise onTurned={focusBox} />
       ) : (
-        offer && <NewAgentTune offer={offer} tune={offeredPart(launchTune, offer)} onPick={pickLaunch} />
+        offer && (
+          <NewAgentTune
+            offer={offer}
+            tune={offeredPart(launchTune, offer)}
+            onPick={(knob, value) => {
+              pickLaunch(knob, value)
+              focusBox()
+            }}
+          />
+        )
       )}
       {suggesting && anchor && pending && (
         <span className="cr-prompt-menu cr-prompt-suggest" role="listbox" aria-label={pending.sigil === '@' ? 'Agents' : 'Notes and browsers'} style={{ left: anchor.left, bottom: window.innerHeight - anchor.top + 6 }}>

@@ -68,7 +68,7 @@ describe('the box carries it', () => {
   it('draws the aimed agent’s own tune button, rising over the dock', () => {
     expect(box).toContain('<CardTune key={`tune:${to.id}`} terminalId={to.id}')
     const line = box.split('\n').find((l) => l.includes('<CardTune key=')) ?? ''
-    expect(line).toContain(' rise />')
+    expect(line).toMatch(/\srise[\s/]/)
   })
 
   // Owner 2026-11-01: every agent the box was aimed at left its tune chip
@@ -82,7 +82,7 @@ describe('the box carries it', () => {
   })
 
   it('draws the new agent’s chip only for a harness that takes a pick, and sends the pick with the prompt', () => {
-    expect(box).toContain('offer && <NewAgentTune offer={offer}')
+    expect(box).toMatch(/offer && \(?\s*<NewAgentTune\s+offer=\{offer\}/)
     expect(box).toContain('autoName: true, tune }')
   })
 })

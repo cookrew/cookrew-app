@@ -24,16 +24,27 @@ export interface CardTuneProps {
   onMouseDown?: (e: React.MouseEvent) => void
   /** Open up from the foot of the app (TuneMenu · rise). */
   rise?: boolean
+  /** A dial was turned or a route picked: the prompt box takes the caret back (owner 2026-11-01). */
+  onTurned?: () => void
 }
 
-export function CardTune({ terminalId, phase, remote, onMouseDown, rise = false }: CardTuneProps): React.JSX.Element | null {
+export function CardTune({ terminalId, phase, remote, onMouseDown, rise = false, onTurned }: CardTuneProps): React.JSX.Element | null {
   const tuning = useAgentTuning({ terminalId, phase, remote })
   const routeAllowed = routeDialAllowed({ remote, served: remote })
   const cardRoute = useCardRoute({ terminalId, enabled: routeAllowed })
   // Main's choices, and only main's (route-view.routeDialInput).
   const routeDialBase = routeDialInput({ allowed: routeAllowed, routeChoices: tuning.routeChoices, state: cardRoute.state })
   const routeDial = routeDialBase
-    ? { ...routeDialBase, state: cardRoute.state, open: cardRoute.open, onOpen: cardRoute.setOpen, onPick: cardRoute.pick }
+    ? {
+        ...routeDialBase,
+        state: cardRoute.state,
+        open: cardRoute.open,
+        onOpen: cardRoute.setOpen,
+        onPick: (route: string) => {
+          cardRoute.pick(route)
+          onTurned?.()
+        }
+      }
     : null
   if (tuning.view === null) return null
   return (
@@ -41,7 +52,10 @@ export function CardTune({ terminalId, phase, remote, onMouseDown, rise = false 
       view={tuning.view}
       open={tuning.open}
       onOpen={tuning.setOpen}
-      onTurn={tuning.turn}
+      onTurn={(knob, value) => {
+        tuning.turn(knob, value)
+        onTurned?.()
+      }}
       error={tuning.error}
       onMouseDown={onMouseDown}
       rise={rise}
