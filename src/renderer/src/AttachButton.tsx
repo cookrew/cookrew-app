@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { buildAttachmentPaste } from '../../shared/attach'
 import { cookrew, hasNativeWebview } from './api'
 import { saveClipboardImages } from './clipboard-image'
+import { pathsForFiles } from './dropped-files'
 import { CrIcon } from './icons'
 
 /**
@@ -11,8 +12,8 @@ import { CrIcon } from './icons'
  */
 export async function attachFilesToTerminal(terminalId: string, files: File[]): Promise<void> {
   if (files.length === 0) return
-  const paths = await cookrew().attachFiles(files)
-  pastePaths(terminalId, paths)
+  // A screenshot dragged from its thumbnail is saved, not pasted as a path that is about to vanish.
+  pastePaths(terminalId, (await pathsForFiles(files, cookrew())).filter((p) => p !== ''))
 }
 
 function pastePaths(terminalId: string, paths: string[]): void {

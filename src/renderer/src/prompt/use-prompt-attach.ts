@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { cookrew } from '../api'
 import { getDraft } from './prompt-draft'
-import { insertAttached, pastedImages, pathsForFiles, saveClipboardImages, type Caret } from './prompt-attach'
+import { pathsForFiles } from '../dropped-files'
+import { insertAttached, pastedImages, saveClipboardImages, type Caret } from './prompt-attach'
 
 /**
  * A prompt box's screenshots (prompt-attach.ts): ⌘V of an image, or a file
