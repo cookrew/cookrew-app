@@ -5,7 +5,7 @@
 // last used unless another is picked.
 
 import { beforeEach, describe, expect, it } from 'vitest'
-import { nameFromPrompt } from '../src/renderer/src/prompt/agent-name'
+import { nameFromPrompt } from '../src/shared/agent-name'
 import { mentionTarget, promptTargetOf } from '../src/renderer/src/prompt/prompt-target'
 import { draftKey, getDraft, setDraft, subscribeDrafts } from '../src/renderer/src/prompt/prompt-draft'
 import { lastHarness, rememberHarness } from '../src/renderer/src/prompt/harness-pref'

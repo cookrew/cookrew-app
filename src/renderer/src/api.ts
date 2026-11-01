@@ -352,6 +352,8 @@ export interface CookrewApi {
     roleName?: string;
     /** Its first prompt, submitted once the TUI is quiet. */
     prompt?: string;
+    /** `name` is a stand-in read off `prompt`: Sous names the card once it answers. */
+    autoName?: boolean;
   }) => Promise<CanvasNode>;
   /**
    * Resolve dropped/picked File objects to absolute paths on the machine

@@ -11,6 +11,8 @@ import { buildInbox, type InboxNode } from './inbox'
 import { cachedDispatchReader, wireInbox } from './inbox-wiring'
 import { createWindowHold } from './inbox-window-hold'
 import { deliverToRecruit } from './recruit-delivery'
+import { nameAgent } from './agent-namer'
+import { planRename, stillStandIn, type RenameOutcome } from './agent-rename'
 import { recruitPatch, spawnInjectionFor } from './recruit-node'
 import { placeBeside, type Alternate, type DecideCandidate, type Harness } from '../shared/sous-decide'
 import { SousLedger } from './sous-ledger'
@@ -4116,16 +4118,53 @@ function updateNode(id: string, patch: Partial<CanvasNode>): CanvasNode | undefi
     void browserManager.syncNode(updated).catch(() => undefined)
   }
   // A renamed/re-roled terminal re-binds its pane chrome (herdr only — the
-  // method is absent elsewhere). The name the pane wears comes from the
+  // method is absent elsewhere): the pane title, and on a rename its tab and
+  // its entry in the agent directory. The name the pane wears comes from the
   // store, so this runs AFTER the patch lands.
   if (updated?.kind === 'terminal' && ('name' in patch || 'role' in patch)) {
     multiplexer()?.reportPaneCard?.(sessionNameFor(id), paneCard(updated))
+    if ('name' in patch) {
+      multiplexer()?.renameTab?.(sessionNameFor(id), updated.name)
+      agents.rename(id, updated.name)
+    }
   }
   return updated
 }
 
 function workspaceName(id: string): string {
   return store.list().workspaces.find((w) => w.id === id)?.name ?? id
+}
+
+/**
+ * Rename an agent (agent-rename.ts): checked against its workspace's other
+ * cards, then through updateNode, so herdr's pane title and tab follow. Shared
+ * by `cookrew rename`, `cookrew recruit` and a name Sous picks from a prompt.
+ */
+function renameTerminal(id: string, wanted: string, onClash: 'refuse' | 'suffix'): RenameOutcome {
+  const hit = store.nodeAcrossWorkspaces(id)
+  if (!hit || hit.node.kind !== 'terminal') return { ok: false, error: 'That agent is not on any canvas.' }
+  const plan = planRename({
+    id,
+    current: hit.node.name,
+    wanted,
+    siblings: store.workspaceState(hit.workspaceId).nodes,
+    onClash
+  })
+  if (plan.ok && plan.changed) updateNode(id, { name: plan.name })
+  return plan
+}
+
+/**
+ * The name Sous picks for a card made from a prompt (agent-namer.ts), once it
+ * answers. Null when it has nothing better, or when the card was renamed
+ * while it thought: the card then wears a choice, and a guess never
+ * overwrites one.
+ */
+async function autoNameTerminal(id: string, standIn: string, prompt: string): Promise<RenameOutcome | null> {
+  const picked = await nameAgent(prompt)
+  if (!picked) return null
+  if (!stillStandIn(store.nodeAcrossWorkspaces(id)?.node.name, standIn)) return null
+  return renameTerminal(id, picked, 'suffix')
 }
 
 /**
@@ -4400,6 +4439,11 @@ interface CreateTerminalOpts {
    */
   prompt?: string
   /**
+   * `name` is a stand-in read off `prompt` (the global prompt box): Sous names
+   * the card properly once it answers, unless it was renamed meanwhile.
+   */
+  autoName?: boolean
+  /**
    * Run THIS instead of the preset's command. Used by a placed remote-orch
    * card, whose command is a line to someone else's orch, not a local harness.
    */
@@ -4446,6 +4490,9 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
     if (session) {
       injectWhenReady(session, boot).catch((error) => console.error('Boot prompt injection failed:', error))
     }
+  }
+  if (opts.autoName && first) {
+    void autoNameTerminal(added.id, added.name, first).catch((error) => console.error('Naming the new agent failed:', error))
   }
   return added
 }
@@ -5841,7 +5888,8 @@ app.whenReady().then(() => {
     },
     connect: (a, b) => store.connectAcross(a, b),
     rename: (id, name) => {
-      updateNode(id, { name })
+      const renamed = renameTerminal(id, name, 'refuse')
+      if (!renamed.ok) throw new Error(renamed.error)
     },
     // Short by nature (one spoken sentence), so the owner-submit primitive is
     // the right sink: it holds the producer lease and answers at submission,
@@ -6140,6 +6188,10 @@ app.whenReady().then(() => {
     // route uses, so a CLI-minted dispatch and an API-minted one are one
     // record with one lifecycle.
     dispatch: dispatchService,
+    // `cookrew rename` and `cookrew recruit --prompt`: the same rename the
+    // prompt box's model-picked name goes through, herdr's chrome included.
+    renameTerminal,
+    autoNameTerminal,
     // The cable between the asking pane and the agent it asks lights twice.
     signal: (moment) => void cableSignals.emit(moment),
     forkTerminal,

@@ -1204,3 +1204,49 @@ describe('the card binding — Cookrew names in herdr chrome', () => {
     expect(runner.calls.some((c) => c.args[0] === 'workspace')).toBe(false)
   })
 })
+
+describe('renameTab — the tab follows a rename when the pane has it to itself', () => {
+  const TAB = (tab: unknown): string => JSON.stringify({ id: 'cli:tab:get', result: { type: 'tab_info', tab } })
+  const renames = (runner: { calls: Call[] }): Call[] =>
+    runner.calls.filter((c) => c.args[0] === 'tab' && c.args[1] === 'rename')
+
+  it('renames a tab that holds only this pane', () => {
+    const runner = fakeRunner({
+      'pane list': PANE_LIST([{ pane_id: 'w2:pA7', label: 'cookrew_abc', tab_id: 'w2:t33' }]),
+      'tab get': TAB({ tab_id: 'w2:t33', label: 'Finch', pane_count: 1 })
+    })
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner }).renameTab('cookrew_abc', '顶栏模型切换')
+    expect(renames(runner).map((c) => c.args)).toEqual([['tab', 'rename', 'w2:t33', '顶栏模型切换']])
+  })
+
+  it('leaves a shared tab alone — it names none of its panes', () => {
+    const runner = fakeRunner({
+      'pane list': PANE_LIST([{ pane_id: 'w2:p1', label: 'cookrew_abc', tab_id: 'w2:t1' }]),
+      'tab get': TAB({ tab_id: 'w2:t1', label: 'Cookrew', pane_count: 4 })
+    })
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner }).renameTab('cookrew_abc', 'New')
+    expect(renames(runner)).toEqual([])
+  })
+
+  it('does nothing when the label already matches, the pane is gone, or herdr answers garbage', () => {
+    const same = fakeRunner({
+      'pane list': PANE_LIST([{ pane_id: 'w2:p1', label: 'cookrew_abc', tab_id: 'w2:t1' }]),
+      'tab get': TAB({ tab_id: 'w2:t1', label: 'New', pane_count: 1 })
+    })
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner: same }).renameTab('cookrew_abc', 'New')
+    expect(renames(same)).toEqual([])
+
+    const gone = fakeRunner({ 'pane list': PANE_LIST([]) })
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner: gone }).renameTab('cookrew_abc', 'New')
+    expect(renames(gone)).toEqual([])
+
+    const garbage = fakeRunner({
+      'pane list': PANE_LIST([{ pane_id: 'w2:p1', label: 'cookrew_abc', tab_id: 'w2:t1' }]),
+      'tab get': 'not json'
+    })
+    expect(() =>
+      new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner: garbage }).renameTab('cookrew_abc', 'New')
+    ).not.toThrow()
+    expect(renames(garbage)).toEqual([])
+  })
+})

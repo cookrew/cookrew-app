@@ -5,7 +5,7 @@ import { CrIcon } from '../icons'
 import { VoiceBar } from '../VoiceBar'
 import { makeAgent } from '../zoom/make-card'
 import { zoomStore } from '../zoom/zoom-store'
-import { nameFromPrompt } from './agent-name'
+import { nameFromPrompt } from '../../../shared/agent-name'
 import { lastHarness, rememberHarness } from './harness-pref'
 import { artifactRefs, expandRefs, pendingName, suggestionsFor, type ArtifactRef, type PromptArtifact } from './artifact-refs'
 import { endLine, lineTextFor, submitLine, typeLine, useLiveLine } from './live-line'
@@ -25,8 +25,9 @@ import './global-prompt.css'
  *            same draft (prompt-draft.ts). × (or Backspace on an empty box)
  *            lets go of the agent.
  *   nobody   the prompt makes a new agent in this workspace, named from the
- *            prompt, on the harness last used — the chip picks another. It
- *            stands in for the crew's old ＋ seat.
+ *            prompt (a stand-in at once, Sous's name once it answers), on the
+ *            harness last used — the chip picks another. It stands in for the
+ *            crew's old ＋ seat.
  *
  * "@Name the rest" sends to that agent from anywhere. "#Name" names a note or
  * a browser of this workspace (artifact-refs.ts): it is sent as what it is,
@@ -151,7 +152,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     setBusy(true)
     setError(null)
     const { words: prompt, refs } = said(raw)
-    const made = await makeAgent(cookrew(), { name: nameFromPrompt(prompt), preset: harness, orch, prompt }, nodes)
+    const made = await makeAgent(cookrew(), { name: nameFromPrompt(prompt), preset: harness, orch, prompt, autoName: true }, nodes)
     setBusy(false)
     if (!made.ok) return setError(made.error)
     if (made.id) wireRefs(made.id, refs)

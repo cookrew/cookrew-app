@@ -140,6 +140,20 @@ export class AgentRegistry {
     this.save()
   }
 
+  /**
+   * A renamed card's entry follows it at once, not at its next spawn: `--as
+   * "Name"` falls back to this directory, and an old name must not keep
+   * resolving to the agent after it was given up.
+   */
+  rename(id: string, name: string): void {
+    const prior = this.lookup(id)
+    if (!prior || prior.name === name) return
+    const entry = { ...prior, name, updatedAt: Date.now() }
+    this.entries = this.entries.map((e) => (e.id === id ? entry : e))
+    this.save()
+    this.announce(entry)
+  }
+
   /** Dismiss/kill/agent exit — the entry stays for the roster, marked inactive. */
   deactivate(id: string): void {
     const prior = this.lookup(id)
