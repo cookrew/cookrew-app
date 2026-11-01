@@ -14,6 +14,8 @@ export interface PromptAttach {
   readonly onPaste: (e: React.ClipboardEvent<HTMLInputElement>) => void
   readonly onDragOver: (e: React.DragEvent) => void
   readonly onDrop: (e: React.DragEvent) => void
+  /** Files dropped somewhere else that this box takes (page-drop.ts). */
+  readonly dropFiles: (files: File[]) => void
   /** A screenshot is being saved. */
   readonly attaching: boolean
 }
@@ -67,6 +69,10 @@ export function usePromptAttach({ draftKey, write, inputRef, refusal = null, onE
       })
   }
 
+  const dropFiles = (files: File[]): void => {
+    if (files.length > 0) attach(() => pathsForFiles(files, cookrew()))
+  }
+
   return {
     onPaste: (e) => {
       const images = pastedImages(e.clipboardData)
@@ -84,9 +90,9 @@ export function usePromptAttach({ draftKey, write, inputRef, refusal = null, onE
       if (!carrying(e)) return
       e.preventDefault()
       e.stopPropagation()
-      const files = Array.from(e.dataTransfer.files)
-      if (files.length > 0) attach(() => pathsForFiles(files, cookrew()))
+      dropFiles(Array.from(e.dataTransfer.files))
     },
+    dropFiles,
     attaching: saving > 0
   }
 }
