@@ -236,6 +236,38 @@
   bottom: 6px;
   font-size: 10px;
 }
+/* Its ×, as the agent's (zoom.css · .zv-del): inside the thumbnail's top
+   right corner, since the list scrolls and would clip a mark above its edge;
+   shown on hover or focus, always where there is no hover (a phone). */
+.zv-fv-art-cell {
+  position: relative;
+  flex: none;
+  /* Hug the thumbnail: stretched to the column, the corner was the column's. */
+  align-self: flex-start;
+}
+.zv-fv-art-cell > .zv-fv-art-del {
+  left: auto;
+  right: 6px;
+  top: 6px;
+  z-index: 1;
+  border-color: var(--fv-hair-2);
+  background: var(--fv-card);
+}
+.zv-fv-art-cell:hover > .zv-fv-art-del,
+.zv-fv-art-cell:focus-within > .zv-fv-art-del {
+  opacity: 1;
+  pointer-events: auto;
+}
+.zv-fv-art-cell > .zv-fv-art-del:hover {
+  border-color: var(--fv-wait);
+  color: var(--fv-wait);
+}
+@media (hover: none) {
+  .zv-fv-art-cell > .zv-fv-art-del {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
 
 /* ---- the transcript, set as the demo sets it ---- */
 .zv-fullview .lod-overlay {
