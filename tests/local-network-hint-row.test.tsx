@@ -131,4 +131,14 @@ describe('the row as it renders', () => {
     expect(markup).toContain('site settings')
     expect(markup).not.toContain('</button>')
   })
+
+  it('hides the ask once the reader pressed it and the browser still says prompt', () => {
+    const view = askRow({ permission: 'prompt', offered: true, asked: true, attempts: [attempt()] })
+    expect(view.kind).toBe('hidden')
+  })
+
+  it('keeps the refusal sentence after a press', () => {
+    const view = askRow({ permission: 'denied', offered: true, asked: true, attempts: [attempt()] })
+    expect(view.kind).toBe('denied')
+  })
 })

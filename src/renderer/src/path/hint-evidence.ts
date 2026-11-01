@@ -52,6 +52,8 @@ export interface AskRowState {
   readonly permission: LocalNetworkState
   /** True once the switcher has a trusted name to point the ask at. */
   readonly offered: boolean
+  /** True once the reader pressed ALLOW (local-network-gate.ts · localNetworkAsked). */
+  readonly asked?: boolean
   /** The rows of the LAST race, exactly as the "why this path" panel has them. */
   readonly attempts: readonly PathAttempt[]
 }
@@ -66,6 +68,9 @@ const HIDDEN: AskRowView = { kind: 'hidden', sentence: '' }
  *   denied                 the browser will not re-prompt; say where the switch
  *                          is instead of offering a dead button.
  *   not prompt, or nowhere granted, unsupported, or no trusted name yet.
+ *   already pressed        the press was the reader's answer; a 'prompt' after
+ *                          it means no dialog could be raised, and the same
+ *                          button would do the same nothing again.
  *   answered hint-less     THE NEW ONE. The permission will read 'prompt' for
  *                          the life of this session and there is nothing behind
  *                          it; the probe already got through the other way.
@@ -78,7 +83,7 @@ export const localNetworkAskRow = (state: AskRowState): AskRowView => {
   if (state.permission === 'denied') {
     return { kind: 'denied', sentence: LOCAL_NETWORK_COPY.denied }
   }
-  if (state.permission !== 'prompt' || !state.offered) return HIDDEN
+  if (state.permission !== 'prompt' || !state.offered || state.asked) return HIDDEN
   if (answeredWithoutHint(state.attempts)) return HIDDEN
   return {
     kind: 'ask',

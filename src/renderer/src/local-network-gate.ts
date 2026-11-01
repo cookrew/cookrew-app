@@ -17,9 +17,61 @@ import type { LocalNetworkState } from './local-network'
  * persists.
  */
 
+/**
+ * THE PRESS SPENDS THE ASK, AND THE PAGE REMEMBERS IT.
+ *
+ * THE INCIDENT: the owner's Android, Chrome 155, 2026-11-02. Every press sent
+ * the annotated probe at the Mac's LAN name, the name timed out from that
+ * phone, Chrome never reached an address it could ask about, and the
+ * permission read 'prompt' again — so the row stayed, its button greyed for
+ * the ask's whole deadline and then lit again, a control that visibly did
+ * nothing. A press is the reader's answer whatever the browser makes of it:
+ * granted hides the row anyway, denied has its own sentence, and a 'prompt'
+ * that raised no dialog has nothing left to offer.
+ *
+ * Kept in localStorage because the companion reloads often and a dead button
+ * that returns on every load is the same complaint. It expires after a month:
+ * a browser update resets the permission (Chrome 143 → 155 did), and a network
+ * that changed may let the next press raise a real dialog.
+ */
+export const LOCAL_NETWORK_ASKED_KEY = 'cookrew.localNetwork.askedAt'
+export const LOCAL_NETWORK_ASK_AGAIN_MS = 30 * 24 * 60 * 60 * 1000
+
+const storage = (): Storage | null => {
+  try {
+    const store = (globalThis as { localStorage?: Storage }).localStorage
+    return store && typeof store.getItem === 'function' ? store : null
+  } catch {
+    // Storage can throw on access (private modes, sandboxed frames).
+    return null
+  }
+}
+
+const readAsked = (): boolean => {
+  try {
+    const at = Number(storage()?.getItem(LOCAL_NETWORK_ASKED_KEY) ?? NaN)
+    return Number.isFinite(at) && Date.now() - at < LOCAL_NETWORK_ASK_AGAIN_MS
+  } catch {
+    return false
+  }
+}
+
+const writeAsked = (): void => {
+  try {
+    storage()?.setItem(LOCAL_NETWORK_ASKED_KEY, String(Date.now()))
+  } catch {
+    // Remembered for the life of the page only; the press still counts.
+  }
+}
+
 let state: LocalNetworkState = 'unsupported'
 let ask: (() => Promise<void>) | null = null
+let asked = readAsked()
 const listeners = new Set<(next: LocalNetworkState) => void>()
+
+const tell = (): void => {
+  for (const listener of listeners) listener(state)
+}
 
 export const localNetworkGate = (): LocalNetworkState => state
 
@@ -29,13 +81,16 @@ export const localNetworkOffered = (): boolean => ask !== null
 export const setLocalNetwork = (next: LocalNetworkState): void => {
   if (state === next) return
   state = next
-  for (const listener of listeners) listener(state)
+  tell()
 }
+
+/** True once the reader pressed ALLOW (this page, or within the last month). */
+export const localNetworkAsked = (): boolean => asked
 
 /** Register the ask for the life of the switcher; call the result to drop it. */
 export const offerLocalNetwork = (handler: () => Promise<void>): (() => void) => {
   ask = handler
-  for (const listener of listeners) listener(state)
+  tell()
   return () => {
     if (ask === handler) ask = null
   }
@@ -44,6 +99,9 @@ export const offerLocalNetwork = (handler: () => Promise<void>): (() => void) =>
 /**
  * The reader pressed ALLOW. Exactly one attempt, and never a retry.
  *
+ * The press is recorded BEFORE the probe, so the row is gone on the press and
+ * not after a deadline that, on a name the phone cannot reach, is 30 s.
+ *
  * A rejection is swallowed on purpose: the handler's whole job is to update
  * this store, so a failure has already been recorded as whatever the
  * permission store now says, and there is nothing a caller could usefully do.
@@ -51,6 +109,9 @@ export const offerLocalNetwork = (handler: () => Promise<void>): (() => void) =>
 export const acceptLocalNetwork = async (): Promise<void> => {
   const handler = ask
   if (!handler) return
+  asked = true
+  writeAsked()
+  tell()
   try {
     await handler()
   } catch {
@@ -69,5 +130,11 @@ export const subscribeLocalNetwork = (
 export const resetLocalNetworkGate = (): void => {
   state = 'unsupported'
   ask = null
+  asked = false
+  try {
+    storage()?.removeItem(LOCAL_NETWORK_ASKED_KEY)
+  } catch {
+    // Nothing stored, or nowhere to store it.
+  }
   listeners.clear()
 }
