@@ -1414,6 +1414,11 @@ function Canvas(): React.JSX.Element {
     () => (workspace?.nodes.filter((n) => n.kind === 'browser') ?? []) as BrowserNodeData[],
     [workspace?.nodes]
   )
+  /** The global prompt's agents: its @names, and who it can talk to. */
+  const promptAgents = useMemo(
+    () => terminals.map((t) => ({ id: t.id, name: t.name, remote: t.servedSession != null })),
+    [terminals]
+  )
   // The snapshot poll reads this instead of `browsers`, so it subscribes once
   // rather than tearing down its interval on every workspace push.
   browsersRef.current = browsers
@@ -1559,6 +1564,8 @@ function Canvas(): React.JSX.Element {
           onSous={isRemoteMode() ? openCommand : undefined}
           orch={orch}
           onOrch={setOrch}
+          agents={promptAgents}
+          nodes={workspace?.nodes ?? NO_NODES}
           voiceFor={
             view === 'stage'
               ? stageShowing?.terminalId != null
@@ -1721,6 +1728,9 @@ function Canvas(): React.JSX.Element {
     </CanvasUiContext.Provider>
   )
 }
+
+/** One empty list, so a missing workspace does not hand the dock a new array every render. */
+const NO_NODES: readonly CanvasNode[] = []
 
 export default function App(): React.JSX.Element {
   return (

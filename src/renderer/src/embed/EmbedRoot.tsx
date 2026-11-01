@@ -226,6 +226,8 @@ export default function EmbedRoot({ mode }: { mode: EmbedMode }): React.JSX.Elem
           connectHint={null}
           onMake={noop}
           voiceFor={node ? { id: node.id, remote: node.servedSession != null } : null}
+          agents={node ? [{ id: node.id, name: node.name, remote: node.servedSession != null }] : []}
+          nodes={[]}
           browserFor={null}
           boardFor={null}
         />

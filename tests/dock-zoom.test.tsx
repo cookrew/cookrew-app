@@ -59,6 +59,8 @@ const props = {
   connectHint: null,
   onMake: () => undefined,
   voiceFor: null,
+  agents: [],
+  nodes: [],
   browserFor: null,
   boardFor: null
 }
@@ -116,9 +118,11 @@ describe('the dock in the zoom view shows only what works there', () => {
 
   it('while a card is being made, the chips and NOTE / BROWSER hold still', async () => {
     const { Dock } = await dock()
-    const idle = renderToStaticMarkup(<Dock {...props} tool="terminal" />)
+    // The global prompt's own send waits for words; it is not one of the tools.
+    const tools = (html: string): string => html.replace(/<form class="cr-prompt[\s\S]*?<\/form>/, '')
+    const idle = tools(renderToStaticMarkup(<Dock {...props} tool="terminal" />))
     expect(idle).not.toContain('disabled=""')
-    const busy = renderToStaticMarkup(<Dock {...props} tool="terminal" making />)
+    const busy = tools(renderToStaticMarkup(<Dock {...props} tool="terminal" making />))
     // 3 harnesses + 1 role + 1 team + NOTE + BROWSER; TERMINAL stays pressable to close the row.
     expect(busy.match(/disabled=""/g)?.length).toBe(7)
   })
@@ -202,10 +206,12 @@ describe('where a made card is stored', () => {
 describe('one way to make a card', () => {
   const src = (p: string): string => readFileSync(join(__dirname, '..', p), 'utf8')
 
-  it('the crew seat and the dock both go through make-card, and the pane-click placement is gone', () => {
-    const view = src('src/renderer/src/zoom/ZoomView.tsx')
-    expect(view).toContain("from './make-card'")
-    expect(view).not.toContain('createTerminal(')
+  it('the global prompt and the dock both go through make-card, and the pane-click placement is gone', () => {
+    // The crew's ＋ seat gave way to the global prompt (owner, 2026-11-01).
+    const prompt = src('src/renderer/src/prompt/GlobalPrompt.tsx')
+    expect(prompt).toContain("from '../zoom/make-card'")
+    expect(prompt).not.toContain('createTerminal(')
+    expect(src('src/renderer/src/zoom/ZoomView.tsx')).not.toContain('createTerminal(')
     const app = src('src/renderer/src/App.tsx')
     expect(app).toContain("from './zoom/make-card'")
     expect(app).not.toContain('onPaneClick')

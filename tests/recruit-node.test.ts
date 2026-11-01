@@ -58,7 +58,9 @@ describe('index.ts wiring — the recruit, the one injection path, and role boot
 
   it('role boot is keyed on a SAVED role resolved from opts.roleName at creation, never on node text', () => {
     expect(main).toContain('const role = opts.roleName ? roles.get(opts.roleName) : undefined')
-    expect(main).toContain('injectWhenReady(session, buildRoleBootMessage(role.name, role.rolePrompt))')
+    // The role's boot message leads; a first prompt from the global prompt box follows it, one injection.
+    expect(main).toContain("const boot = [role ? buildRoleBootMessage(role.name, role.rolePrompt) : '', first]")
+    expect(main).toContain('injectWhenReady(session, boot)')
     // the respawn is a kill + spawnTracked, with no injection of its own
     expect(main).toMatch(/respawn: async \(id\) => \{[^}]*spawnTracked\(node\)[^}]*\}/)
     expect(main).not.toMatch(/respawn: async \(id\) => \{[^}]*inject[^}]*\}/)

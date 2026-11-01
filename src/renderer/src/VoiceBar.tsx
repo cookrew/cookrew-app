@@ -201,12 +201,21 @@ function TermKeys({ terminalId }: { terminalId: string }): React.JSX.Element {
 export function VoiceBar({
   terminalId,
   activity,
-  remote = false
+  remote = false,
+  onDictation,
+  sendButton = true
 }: {
   terminalId: string
   activity: TerminalActivity | undefined
   /** The terminal is a line into a session elsewhere: nothing here attaches. */
   remote?: boolean
+  /**
+   * Dictated words go here instead of straight into the terminal: the global
+   * prompt box (prompt/GlobalPrompt.tsx) takes them as its draft, to send.
+   */
+  onDictation?: (text: string) => void
+  /** The global prompt box has its own send; the bar then draws none. */
+  sendButton?: boolean
 }): React.JSX.Element {
   const [text, setText] = useState('')
   const [listening, setListening] = useState(false)
@@ -261,7 +270,11 @@ export function VoiceBar({
     recognizer.onend = () => {
       setListening(false)
       recognizerRef.current = null
-      if (textRef.current.trim()) send()
+      if (!textRef.current.trim()) return
+      if (onDictation) {
+        onDictation(textRef.current.trim())
+        setText('')
+      } else send()
     }
     setListening(true)
     setText('')
@@ -299,14 +312,16 @@ export function VoiceBar({
         <CrIcon name="speaker" />
       </button>
       <TermKeys terminalId={terminalId} />
-      <button
-        className="cr-btn sm primary"
-        title="Send (Enter)"
-        onMouseDown={keepFocus}
-        onClick={() => send()}
-      >
-        <CrIcon name="send" />
-      </button>
+      {sendButton && (
+        <button
+          className="cr-btn sm primary"
+          title="Send (Enter)"
+          onMouseDown={keepFocus}
+          onClick={() => send()}
+        >
+          <CrIcon name="send" />
+        </button>
+      )}
     </div>
   )
 }

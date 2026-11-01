@@ -4,7 +4,7 @@ import type { AttachmentIndex } from '../terminal-attachments'
 import { cookrew } from '../api'
 import type { Crew } from '../stage/crew-rows'
 import { thumbWants } from '../pets/thumb-wants'
-import { Counts, AgentNode, ItemNode, LinkNode, MachineNode, MarkNode, NewAgentCard, type Bind } from './ZoomParts'
+import { Counts, AgentNode, ItemNode, LinkNode, MachineNode, MarkNode, type Bind } from './ZoomParts'
 import { InkRing, InkTie } from './InkAvatar'
 import { buildZoomModel } from './zoom-model'
 import { deviceOf, machinesAt, MACHINE_CARD } from './zoom-layout'
@@ -13,7 +13,6 @@ import { useZoom, zoomStore } from './zoom-store'
 import { useZoomMotion } from './use-zoom-motion'
 import { BAR_NAMES, BAR_STOPS, barStop, RANGE, stepOut } from './zoom-path'
 import { useZoomFleetView } from './use-zoom-fleet'
-import { makeAgent } from './make-card'
 import './zoom.css'
 
 /**
@@ -82,16 +81,11 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   // The fleet's name is the one the phone can know: remote-api has no machineName().
   const machine = (nameAsked ?? localMachine?.name ?? 'This desktop').replace(/\.local$/i, '')
   const [error, setError] = useState<string | null>(null)
-  const [presets, setPresets] = useState<string[]>([])
-  const [adding, setAdding] = useState(false)
-  const [creating, setCreating] = useState(false)
-  const [spawnError, setSpawnError] = useState<string | null>(null)
   const [size, setSize] = useState({ w: 1000, h: 700 })
   useEffect(() => {
     let alive = true
     void cookrew().listWorkspaces().then((l) => alive && setList(l)).catch((e) => alive && setError(`Cannot read workspaces: ${String(e)}`))
     const off = cookrew().onWorkspaceList((l) => setList(l))
-    void cookrew().listPresets().then((list) => alive && setPresets(list.map((p) => p.name))).catch(() => undefined)
     void cookrew().machineName?.().then((s) => alive && s && setNameAsked(s.replace(/\.local$/i, ''))).catch(() => undefined)
     return () => { alive = false; off() }
   }, [])
@@ -287,15 +281,6 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       if (el && at) el.style.transform = `translate(${at.x - MACHINE_CARD.w / 2}px, ${at.y - MACHINE_CARD.h / 2}px)`
     })
   }, [device, words, model.marks, model.machines])
-  /** A new agent, from the seat at the end of the crew: the dock's own call (make-card.ts). */
-  const spawn = useCallback(async (name: string, preset: string, orch: boolean) => {
-    setCreating(true)
-    setSpawnError(null)
-    const made = await makeAgent(cookrew(), { name, preset, orch }, workspace?.nodes ?? [])
-    setCreating(false)
-    if (made.ok) setAdding(false)
-    else setSpawnError(made.error)
-  }, [workspace?.nodes])
   const switchWorkspace = useCallback(async (id: string) => {
     setError(null)
     try {
@@ -399,10 +384,6 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           })}
           {model.items.map((i) => <ItemNode key={i.id} item={i} names={i.owners.map((id) => agentOf.get(id)?.name ?? id)} bind={bind} onClick={stable(`item:${i.id}`, () => motion.item(i.id))} onDelete={onDelete ? stable(`item-del:${i.id}`, () => onDelete(i.id)) : undefined} />)}
           {model.agents.map((a) => <AgentNode key={a.id} agent={a} card={cardIds.has(a.id)} bind={bind} onOpen={stable(`agent:${a.id}`, () => motion.agent(a.id))} onDelete={onDelete ? stable(`agent-del:${a.id}`, () => onDelete(a.id)) : undefined} />)}
-          {/* The seat for the agent that is not there yet (owner, 2026-10-31). */}
-          <button type="button" ref={bind('newseat') as React.Ref<HTMLButtonElement>} className="zv-newseat" onClick={() => setAdding(true)} title="Bring a new agent into this workspace" aria-label="New agent">
-            <span aria-hidden="true">＋</span>
-          </button>
           {model.agents.filter((a) => a.phase === 'waiting').map((a) => <span key={a.id} className="zv-dot" ref={bind(`agent-dot:${a.id}`)} />)}
           <div className="zv-grp" ref={bind('label')}>
             <button type="button" className="zv-seal" onClick={() => motion.go(1, 'agents')} aria-label={`Open ${model.name} crew`}>{model.agents.length}</button>
@@ -414,17 +395,6 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         </div>
         <div className="zv-panel" ref={bind('panel')} />
       </div>
-      {/* The new-agent card is a screen dialog, not a thing in the scene: it
-          stays the same size at any zoom, and its own tab order reaches it. */}
-      {adding && (
-        <NewAgentCard
-          presets={presets}
-          busy={creating}
-          error={spawnError}
-          onCancel={() => { setAdding(false); setSpawnError(null) }}
-          onCreate={(name: string, preset: string, orch: boolean) => void spawn(name, preset, orch)}
-        />
-      )}
       <nav className="zv-controls" aria-label="Semantic zoom">
         <button type="button" className="zv-back" onClick={stepBack} aria-label="Zoom out">‹</button>
         <div className="zv-zoom-control">

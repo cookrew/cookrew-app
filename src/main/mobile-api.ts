@@ -136,6 +136,7 @@ export interface MobileOps {
     position?: { x: number; y: number };
     orch?: boolean;
     roleName?: string;
+    prompt?: string;
   }) => CanvasNode;
   forkTerminal: (sourceId: string, turnIndex?: number) => TerminalNodeData;
   listWorkspaces: () => WorkspaceList;
@@ -1072,6 +1073,7 @@ export async function handleMobileApi(
       position?: { x: number; y: number };
       orch?: boolean;
       roleName?: string;
+      prompt?: string;
     }>(request);
     try {
       respondJson(response, 200, ops.createTerminal(opts));

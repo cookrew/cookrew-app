@@ -84,6 +84,8 @@ describe('the dock offers SOUS on the phone', () => {
     connectHint: null,
     onMake: () => undefined,
     voiceFor: null,
+    agents: [],
+    nodes: [],
     browserFor: null,
     boardFor: null
   }

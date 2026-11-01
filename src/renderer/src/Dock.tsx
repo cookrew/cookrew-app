@@ -1,7 +1,6 @@
 import { CANVAS_RETIRED, type ToolId } from './canvas-ui'
-import type { AgentRole } from '../../shared/model'
-import { useActivity } from './activity-thumb-store'
-import { VoiceBar } from './VoiceBar'
+import type { AgentRole, CanvasNode } from '../../shared/model'
+import { GlobalPrompt, type PromptAgent } from './prompt/GlobalPrompt'
 import { useKeyboardInset } from './keyboard-inset'
 import { CrIcon, type CrIconName } from './icons'
 import { AgentSprite } from './nodes/AgentSprite'
@@ -79,8 +78,12 @@ interface DockProps {
   onImportServed?: () => void
   /** The phone's way into the Sous box — it has no ⌘K. Absent on the desktop. */
   onSous?: () => void
-  /** Zoomed-in terminal: the dock swaps the tool group for its composer. */
+  /** Zoomed-in terminal: the global prompt carries @agent for it. */
   voiceFor: { id: string; remote: boolean } | null
+  /** This workspace's agents: the prompt's @names and its targets. */
+  agents: readonly PromptAgent[]
+  /** This workspace's cards: a new agent is stored beside them. */
+  nodes: readonly CanvasNode[]
   /**
    * Zoomed-in browser: the whole bar stands down so the page keeps its height.
    * The controls that DO apply there (viewport fit, keyboard, open in browser)
@@ -96,12 +99,13 @@ interface DockProps {
 }
 
 /**
- * Cookrew-style bottom dock, one bar with two sliding groups. At rest:
- * the tool group (left) plus preset chips and hint. Zoomed into a
- * terminal: the tools glide out left and the send group (attach / mic /
- * speak / send — no input box, the terminal itself is the input) glides
- * in from the right. Zoomed into a browser the bar is absent entirely —
- * see the early return.
+ * Cookrew-style bottom dock: the tool group, then THE GLOBAL PROMPT (owner,
+ * 2026-11-01; prompt/GlobalPrompt.tsx) — one prompt box for the whole app,
+ * carrying @agent in an agent's full view or open card, and making a new
+ * agent from the prompt when there is none. The preset chips and the hint
+ * wrap below. The board view still glides the tools out for its clipboard
+ * toggle. Zoomed into a browser the bar is absent entirely — see the early
+ * return.
  */
 export function Dock({
   tool,
@@ -124,21 +128,22 @@ export function Dock({
   onImportServed,
   onSous,
   voiceFor,
+  agents,
+  nodes,
   browserFor,
   boardFor
 }: DockProps): React.JSX.Element {
   const hint = tool === 'connect' ? connectHint : (HINTS[tool] ?? null)
-  // The composer's terminal, subscribed HERE: App used to hand the activity
-  // down, which re-rendered the whole app on every event of a zoomed agent.
-  const voiceActivity = useActivity(voiceFor?.id ?? '')
-  /** Either occupant of the slide-in pane parks the canvas tools. */
-  const slidIn = voiceFor !== null || boardFor !== null
+  /** The board's toggle parks the canvas tools; a full view no longer does. */
+  const slidIn = boardFor !== null
   // `presets` arrives as harnesses AND saved teams in one list, because a
   // saved team IS a terminal preset to the placement path. To a person they
   // are not the same act at all — one boots an agent here, the other opens a
   // session of a team — so the row tells them apart by name.
   const savedTeams = presets.filter((name) => templates.includes(name))
   const harnesses = presets.filter((name) => !templates.includes(name))
+  // A prompt is for an agent: a bare shell would run its words as a command.
+  const promptHarnesses = harnesses.filter((name) => name !== 'Shell')
   // Ride above the on-screen keyboard (Defect 2). The lift itself now lives in
   // CSS (`.cr-dock` reads `--kb-inset`), which this hook publishes; the zoomed
   // terminal overlay rises off the SAME variable, so the bar and the transcript
@@ -197,6 +202,7 @@ export function Dock({
             </button>
           ))}
         </div>
+        {!slidIn && <GlobalPrompt fullAgentId={voiceFor?.id ?? null} agents={agents} harnesses={promptHarnesses} nodes={nodes} orch={orch} />}
         {!slidIn && tool === 'terminal' && (
           <div className="cr-dock-presets">
             {/* FAMILIES, SAID OUT LOUD.
@@ -271,15 +277,7 @@ export function Dock({
         )}
       </div>
       <div className="dock-pane dock-send" aria-hidden={!slidIn}>
-        {voiceFor && (
-          <VoiceBar
-            key={voiceFor.id}
-            terminalId={voiceFor.id}
-            activity={voiceActivity}
-            remote={voiceFor.remote}
-          />
-        )}
-        {!voiceFor && boardFor && (
+        {boardFor && (
           <button
             className={`cr-btn tool icon${boardFor.editing ? ' primary' : ''}`}
             title={
