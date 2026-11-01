@@ -1,10 +1,11 @@
 // AN IDLE AGENT SLEEPS; THE NEXT ASK OR LIVE WAKES IT ON THE SAME SESSION.
 //
 // Owner, 2026-10-31: keep the TUI, but stop paying for it when nobody uses it —
-// 10 minutes with no turn, no viewer and no input ends the process; the
+// a window with no turn, no viewer and no input ends the process; the
 // conversation stays on disk and comes back by resume. Measured that day: an
 // idle agent's tree is 450–700 MB (claude plus its MCP children), and 14 of 16
-// agents were idle.
+// agents were idle. 2026-11-01: the window is an hour, and this clock only
+// nominates — agent-sleep-evidence.test.ts covers who actually sleeps.
 import { describe, expect, it } from 'vitest'
 import { IdleSleep, idleSleepMsFrom, type SleepFacts } from '../src/main/agent-sleep'
 
@@ -79,16 +80,46 @@ describe('IdleSleep — who is due to sleep', () => {
   })
 })
 
+describe('IdleSleep.restart — the evidence moves the clock', () => {
+  it('counts the window from the newest sign of life the evidence found', () => {
+    const s = new IdleSleep(60 * MIN)
+    s.due([facts()], 0)
+    expect(s.due([facts()], 60 * MIN)).toEqual(['a'])
+    // Claude said busy at minute 60: a fresh hour from there.
+    s.restart('a', 60 * MIN)
+    expect(s.due([facts()], 119 * MIN)).toEqual([])
+    expect(s.due([facts()], 120 * MIN)).toEqual(['a'])
+  })
+
+  it('a loop waking in the future holds the clock past its wakeup', () => {
+    const s = new IdleSleep(60 * MIN)
+    s.due([facts()], 0)
+    s.restart('a', 90 * MIN)
+    expect(s.due([facts()], 149 * MIN)).toEqual([])
+    expect(s.due([facts()], 150 * MIN)).toEqual(['a'])
+  })
+
+  it('never moves the clock backwards, and ignores ids it does not watch', () => {
+    const s = new IdleSleep(60 * MIN)
+    s.due([facts()], 0)
+    s.touch('a', 30 * MIN)
+    s.restart('a', 10 * MIN)
+    expect(s.due([facts()], 89 * MIN)).toEqual([])
+    s.restart('ghost', 0)
+    expect(s.due([facts({ id: 'ghost' })], 200 * MIN)).toEqual([])
+  })
+})
+
 describe('idleSleepMsFrom — the env knob', () => {
-  it('defaults to the owner\'s ten minutes', () => {
-    expect(idleSleepMsFrom(undefined)).toBe(10 * MIN)
+  it('defaults to an hour (owner, 2026-11-01: ten minutes was unreasonable)', () => {
+    expect(idleSleepMsFrom(undefined)).toBe(60 * MIN)
   })
   it('takes milliseconds, 0 turns it off', () => {
     expect(idleSleepMsFrom('300000')).toBe(5 * MIN)
     expect(idleSleepMsFrom('0')).toBe(0)
   })
   it('ignores garbage rather than sleeping everyone', () => {
-    expect(idleSleepMsFrom('soon')).toBe(10 * MIN)
-    expect(idleSleepMsFrom('-5')).toBe(10 * MIN)
+    expect(idleSleepMsFrom('soon')).toBe(60 * MIN)
+    expect(idleSleepMsFrom('-5')).toBe(60 * MIN)
   })
 })

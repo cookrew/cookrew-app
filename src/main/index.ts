@@ -197,6 +197,7 @@ import { isChromiumErrorPage } from '../shared/browser-navigation'
 import {
   claudeSessionFile,
   claudeSpawnCommand,
+  realCwd,
   resolveClaudeSessionId,
   resumeRoleSession,
   roleSessionDir,
@@ -241,6 +242,7 @@ import { reapOrphanBrowserProfiles, removeBrowserProfile } from './browser-profi
 import { reapOrphanChrome } from './orphan-chrome'
 import { staleAgentIds } from './agent-reconcile'
 import { IdleSleep, idleSleepMsFrom } from './agent-sleep'
+import { gatherSleepEvidence, paneHolder, quietSince, readProcTable } from './agent-sleep-evidence'
 import { purgeRegenerableProfileData, reapOrphanPartitions } from './browser-storage-gc'
 
 import { TraceReader, type SessionWatchSpec } from './trace'
@@ -3163,9 +3165,11 @@ setTimeout(reconcileAgentLiveness, 30_000).unref()
 /**
  * IDLE SLEEP (agent-sleep.ts). Owner, 2026-10-31: keep the TUI, stop paying
  * for it while nobody uses it. A Claude agent with no turn, no viewer, no
- * input and no draft in its box for COOKREW_IDLE_SLEEP_MS (default ten
- * minutes, 0 = off) has its process ended; its conversation stays on disk and
- * the next ask, dispatch, quick reply, phone message or LIVE resumes it.
+ * input and no draft in its box for COOKREW_IDLE_SLEEP_MS (default an hour,
+ * 0 = off) is NOMINATED; it sleeps only when Claude's own record agrees
+ * (agent-sleep-evidence.ts — 2026-11-01, mid-turn agents were being ended).
+ * Its conversation stays on disk and the next ask, dispatch, quick reply,
+ * phone message or LIVE resumes it.
  *
  * Claude only, on purpose: its wake is proven (Harden, twice, 2026-10-31) and
  * resumes the exact session. Codex's wake depends on the herdr session being
@@ -3205,9 +3209,53 @@ function sleepSweep(): void {
       })),
       Date.now()
     )
-    for (const id of due) putAgentToSleep(id)
+    if (due.length > 0) void confirmSleep(due)
   } catch (error) {
     console.error('Idle sleep sweep failed:', error)
+  }
+}
+
+/** Cold pane-pid lookups are synchronous herdr calls: at most this many per pass. */
+const SLEEP_COLD_LOOKUPS = 2
+let confirmingSleep = false
+
+/**
+ * The clock nominated these; the agent's own process decides. Claude must say
+ * idle, nothing it started may still be running, and its newest sign of life
+ * (status change, transcript or subagent write, a loop's next wakeup) must be
+ * a whole window old. Otherwise the window restarts from that sign of life.
+ */
+async function confirmSleep(due: readonly string[]): Promise<void> {
+  if (confirmingSleep) return
+  confirmingSleep = true
+  try {
+    const procs = await readProcTable()
+    let coldLookups = 0
+    for (const id of due) {
+      const node = store.nodeAcrossWorkspaces(id)?.node
+      if (!node || node.kind !== 'terminal' || !node.claudeSessionId) continue
+      // Left nominated: the next sweep warms it, a minute later.
+      if (!panePids.isWarm(id) && coldLookups++ >= SLEEP_COLD_LOOKUPS) continue
+      const holders = liveSessionHolders()
+      const now = Date.now()
+      const evidence = await gatherSleepEvidence({
+        holder: paneHolder(panePids.pidOf(id), holders, node.cwd, realCwd),
+        holders,
+        procs,
+        transcript: claudeSessionFile(node.cwd, node.claudeSessionId),
+        now
+      })
+      const quiet = quietSince(evidence, now)
+      if (now - quiet.at < IDLE_SLEEP_MS) {
+        idleSleep.restart(id, quiet.at)
+        continue
+      }
+      putAgentToSleep(id, now - quiet.at)
+    }
+  } catch (error) {
+    console.error('Idle sleep confirm failed:', error)
+  } finally {
+    confirmingSleep = false
   }
 }
 const sleepSweepTimer = setInterval(sleepSweep, 60_000)
@@ -3219,7 +3267,7 @@ sleepSweepTimer.unref()
  * Asked once more at the moment of the act — a turn can start inside the
  * sweep's minute.
  */
-function putAgentToSleep(id: string): void {
+function putAgentToSleep(id: string, quietMs: number): void {
   const node = store.nodeAcrossWorkspaces(id)?.node
   if (!node || node.kind !== 'terminal' || agentBusy(id)) return
   lazyTerminals.forget(id)
@@ -3230,7 +3278,7 @@ function putAgentToSleep(id: string): void {
   else ptys.killDetached(id)
   agents.deactivate(id)
   idleSleep.markAsleep(id)
-  const minutes = Math.round(IDLE_SLEEP_MS / 60_000)
+  const minutes = Math.round(quietMs / 60_000)
   store.withOpContext({ actor: 'agent' }, () =>
     store.recordEvent('terminal.asleep', id, node.name, `idle ${minutes} min; wakes on the next ask, reply or LIVE`)
   )

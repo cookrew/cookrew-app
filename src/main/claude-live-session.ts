@@ -44,6 +44,14 @@ export interface SessionHolder {
   kind: string
   /** The process's working directory as it recorded it; null when absent. */
   cwd?: string | null
+  /**
+   * Claude's own word on its turn: 'busy' from the first token of a turn
+   * (API retries included) to its end, 'idle' at the prompt. Absent on a
+   * claude too old to write it.
+   */
+  status?: string
+  /** When `status` last changed, ms since the epoch. */
+  statusSince?: number
 }
 
 export interface LiveSessionFs {
@@ -99,17 +107,21 @@ export function liveSessionHolders(
     try {
       const record: unknown = JSON.parse(fs.read(path.join(sessionsDir, name)))
       if (!record || typeof record !== 'object') continue
-      const { sessionId, kind, cwd } = record as {
+      const { sessionId, kind, cwd, status, statusUpdatedAt } = record as {
         sessionId?: unknown
         kind?: unknown
         cwd?: unknown
+        status?: unknown
+        statusUpdatedAt?: unknown
       }
       if (typeof sessionId !== 'string' || sessionId.length === 0) continue
       holders.push({
         pid,
         sessionId,
         kind: typeof kind === 'string' ? kind : 'unknown',
-        cwd: typeof cwd === 'string' && cwd.length > 0 ? cwd : null
+        cwd: typeof cwd === 'string' && cwd.length > 0 ? cwd : null,
+        ...(typeof status === 'string' && status.length > 0 ? { status } : {}),
+        ...(typeof statusUpdatedAt === 'number' && Number.isFinite(statusUpdatedAt) ? { statusSince: statusUpdatedAt } : {})
       })
     } catch {
       // Unparseable or vanished mid-read — treat as no claim.
