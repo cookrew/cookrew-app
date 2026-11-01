@@ -2,6 +2,7 @@ import { memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState
 import { AttachPanel, AttachTabs } from './AttachPanel'
 import { attachView, useAttachView } from './attach-view'
 import { NO_ATTACHMENTS, SideTabsContext, TerminalAttachmentsContext } from './terminal-attachments'
+import { HeadToolsContext } from './head-tools'
 import './transcript-paper.css'
 import { Terminal } from '@xterm/xterm'
 import { createPortal } from 'react-dom'
@@ -229,6 +230,7 @@ function TerminalOverlay({
   // in the lower half, if any.
   const attachments = useContext(TerminalAttachmentsContext).get(node.id) ?? NO_ATTACHMENTS
   const sideTabs = useContext(SideTabsContext)
+  const headTools = useContext(HeadToolsContext)
   const openView = useAttachView()
   const openItem =
     openView !== null && openView.terminalId === node.id
@@ -1270,9 +1272,10 @@ function TerminalOverlay({
     translation.translate(target, body, code)
   }
 
-  // ONE toggle for the transcript: it says what is showing, a tap flips it. It
-  // sits in the transcript's own top-right corner, level with the sheet's
-  // "browsers & notes" head (owner 2026-11-01), not on the top bar.
+  // ONE toggle for the transcript: it says what is showing, a tap flips it.
+  // In a full view it stands in the head's tools, over the sheet's top-right
+  // corner beside NOTE+ and BROWSER+ (head-tools.ts, owner 2026-11-01);
+  // elsewhere in the transcript's own top-right corner. Never on the top bar.
   const lookToggle = (
     <button
       type="button"
@@ -1575,7 +1578,7 @@ function TerminalOverlay({
           />
         )}
         {openItem !== null && openView !== null && <AttachPanel key={openItem.node.id} item={openItem} view={openView} cardRect={rect} />}
-        {primary && lookToggle}
+        {primary && (headTools ? createPortal(lookToggle, headTools) : lookToggle)}
         </div>
         <CheckpointTimeline
           terminalId={node.id}
