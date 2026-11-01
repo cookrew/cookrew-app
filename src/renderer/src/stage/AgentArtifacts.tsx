@@ -11,6 +11,7 @@
 // × does (owner, 2026-11-01): through CanvasUi.requestClose, so the app's one
 // confirm dialog asks first.
 import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { CanvasNode } from '../../../shared/model'
 import { cookrew } from '../api'
 import { attachView, useAttachView } from '../attach-view'
@@ -26,7 +27,8 @@ export function AgentArtifacts({
   agent,
   items,
   owners,
-  nodes
+  nodes,
+  makeSlot = null
 }: {
   agent: { id: string; name: string }
   /** The agent's own browsers and notes, newest wire first (terminal-attachments.ts). */
@@ -35,6 +37,8 @@ export function AgentArtifacts({
   owners: ReadonlyMap<string, readonly string[]>
   /** The workspace's cards: a new one is stored beside them, under a name none has. */
   nodes: readonly CanvasNode[]
+  /** The full view's head tools (head-tools.ts): NOTE+ and BROWSER+ stand there, over the sheet's corner. */
+  makeSlot?: HTMLElement | null
 }): React.JSX.Element {
   const { requestClose } = useCanvasUi()
   const open = useAttachView()
@@ -81,26 +85,30 @@ export function AgentArtifacts({
     else if (made.id) setOpening({ id: made.id, kind })
   }
 
+  const makeButtons = (
+    <span className="zv-fv-arts-make">
+      {(['note', 'browser'] as const).map((kind) => (
+        <button
+          key={kind}
+          type="button"
+          className="zv-fv-arts-btn"
+          title={`New ${kind} for ${agent.name} — the crew can read it`}
+          aria-label={`New ${kind} for ${agent.name}`}
+          disabled={making !== null}
+          onClick={() => void make(kind)}
+        >
+          <CrIcon name={kind} />
+          <b aria-hidden="true">+</b>
+        </button>
+      ))}
+    </span>
+  )
+
   return (
     <aside className="zv-fv-arts" aria-label={`${agent.name}'s browsers and notes`}>
       <header className="zv-fv-arts-head">
         <span>{views.length ? 'browsers & notes' : 'no browser or note'}</span>
-        <span className="zv-fv-arts-make">
-          {(['note', 'browser'] as const).map((kind) => (
-            <button
-              key={kind}
-              type="button"
-              className="zv-fv-arts-btn"
-              title={`New ${kind} for ${agent.name} — the crew can read it`}
-              aria-label={`New ${kind} for ${agent.name}`}
-              disabled={making !== null}
-              onClick={() => void make(kind)}
-            >
-              <CrIcon name={kind} />
-              <b aria-hidden="true">+</b>
-            </button>
-          ))}
-        </span>
+        {makeSlot ? createPortal(makeButtons, makeSlot) : makeButtons}
       </header>
       {error && (
         <p className="zv-fv-arts-error" role="alert">

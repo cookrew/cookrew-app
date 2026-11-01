@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { activeBrowserTab, type CanvasNode, type TerminalNodeData, type WorkspaceState } from '../../../shared/model'
 import { attachView, useAttachView } from '../attach-view'
 import { NO_ATTACHMENTS, SideTabsContext, type AttachmentIndex } from '../terminal-attachments'
+import { HeadToolsContext } from '../head-tools'
 import type { Crew } from './crew-rows'
 import { diffPopped, pickBackground, railOrder, type PoppedItem, type StageItem } from './stage-pick'
 import { firstLine, hostPath, ownersOf, stageSelect, useStageSelection, type StageItemCard } from './stage-select'
@@ -98,6 +99,9 @@ export function StageView({
   }, [selection, pickedItem])
 
   const view = useAttachView()
+  // The head's tools (head-tools.ts): the transcript's toggle, then NOTE+ and BROWSER+.
+  const [lookSlot, setLookSlot] = useState<HTMLElement | null>(null)
+  const [makeSlot, setMakeSlot] = useState<HTMLElement | null>(null)
 
   const shown = target ? (faces.get(target.terminalId) ?? null) : null
   // The head's word says what its face draws (ink-status.ts · statusWord).
@@ -176,17 +180,24 @@ export function StageView({
                   </span>
                 </>
               )}
+              {/* Over the sheet's top-right corner (owner, 2026-11-01). */}
+              <span className="zv-fv-tools">
+                <span className="zv-fv-tool-look" ref={setLookSlot} />
+                <span className="zv-fv-tool-make" ref={setMakeSlot} />
+              </span>
             </header>
             {/* The terminal, and beside it on the same paper the agent's browsers
                 and notes (AgentArtifacts.tsx): its own side tabs stay off. */}
             <div className="zv-fv-body">
               <SideTabsContext.Provider value={false}>
-                <StageTerminal
-                  key={target.terminalId}
-                  local={terminals.find((t) => t.id === target.terminalId) ?? null}
-                  item={target.item}
-                  onBack={back}
-                />
+                <HeadToolsContext.Provider value={lookSlot}>
+                  <StageTerminal
+                    key={target.terminalId}
+                    local={terminals.find((t) => t.id === target.terminalId) ?? null}
+                    item={target.item}
+                    onBack={back}
+                  />
+                </HeadToolsContext.Provider>
               </SideTabsContext.Provider>
               {shown && (
                 <AgentArtifacts
@@ -194,6 +205,7 @@ export function StageView({
                   items={attachIndex.get(shown.id) ?? NO_ATTACHMENTS}
                   owners={owners}
                   nodes={workspace?.nodes ?? NO_NODES}
+                  makeSlot={makeSlot}
                 />
               )}
             </div>

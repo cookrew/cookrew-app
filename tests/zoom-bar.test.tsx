@@ -162,28 +162,42 @@ describe('the bar offers the places, the card fills them', () => {
     expect(overlay).not.toContain('useAgentTuning(')
   })
 
-  it('draws ONE chat/log/live toggle in the transcript’s own corner', () => {
+  it('draws ONE chat/log/live toggle: in the full view’s head tools, else in the transcript’s own corner', () => {
     const toggle = overlay.slice(overlay.indexOf('const lookToggle = ('), overlay.indexOf('const lookToggle = (') + 600)
     expect(toggle).toContain('cr-look-toggle cr-look-corner')
     // One button that flips, not a two-button segment.
     expect(toggle).toContain('switchLook(nextLook(look))')
     expect(overlay).not.toContain("(['chat', 'live'] as const)")
-    // Inside the transcript's box (popout-main), after what it holds.
+    // A full view's head takes it (head-tools.ts); with none, the transcript's box (popout-main) keeps it.
     const main = overlay.slice(overlay.indexOf('<div ref={mainRef}'), overlay.indexOf('<CheckpointTimeline'))
-    expect(main).toContain('{primary && lookToggle}')
+    expect(main).toContain('{primary && (headTools ? createPortal(lookToggle, headTools) : lookToggle)}')
+    expect(overlay).toContain('useContext(HeadToolsContext)')
   })
 
-  it('lines the corner toggle up with the sheet’s "browsers & notes" head', () => {
-    const header = readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'header.css'), 'utf8')
-    const full = readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'zoom', 'full-views.css'), 'utf8')
-    const corner = header.slice(header.indexOf('.cr-look-toggle.cr-look-corner {'))
-    const arts = full.slice(full.indexOf('.zv-fv-arts {'))
-    const btn = full.slice(full.indexOf('.zv-fv-arts-btn {'))
-    // The column's top padding = the toggle's top; the head's buttons' height = the toggle's.
-    expect(arts.slice(0, 300)).toMatch(/padding: 18px /)
-    expect(corner.slice(0, 200)).toContain('top: 18px;')
-    expect(btn.slice(0, 300)).toContain('height: 24px;')
-    expect(corner.slice(0, 300)).toContain('height: 24px;')
+  // Owner, 2026-11-01: "these three buttons, together above the transcript's
+  // big white box, by its top-right rounded corner".
+  it('stands the toggle, NOTE+ and BROWSER+ in one row over the sheet’s top-right corner', () => {
+    const src = (...p: string[]) => readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', ...p), 'utf8')
+    const stage = src('stage', 'StageView.tsx')
+    const arts = src('stage', 'AgentArtifacts.tsx')
+    const full = src('zoom', 'full-views.css')
+    // In the head, the toggle's place before the make buttons'.
+    const head = stage.slice(stage.indexOf('<div className="zv-fullview agent">'), stage.indexOf('<div className="zv-fv-body">'))
+    expect(head.indexOf('ref={setLookSlot}')).toBeGreaterThan(0)
+    expect(head.indexOf('ref={setLookSlot}')).toBeLessThan(head.indexOf('ref={setMakeSlot}'))
+    expect(stage).toContain('<HeadToolsContext.Provider value={lookSlot}>')
+    expect(stage).toContain('makeSlot={makeSlot}')
+    expect(arts).toContain('createPortal(makeButtons, makeSlot)')
+    // Right-aligned at the head's foot, its right edge on the sheet's: the head's padding given back.
+    const tools = full.slice(full.indexOf('.zv-fv-tools {'), full.indexOf('}', full.indexOf('.zv-fv-tools {')))
+    const headRule = full.slice(full.indexOf('.zv-fv-head {'), full.indexOf('}', full.indexOf('.zv-fv-head {')))
+    const pad = Number(headRule.match(/padding: \S+ (\d+)px/)?.[1])
+    expect(tools).toContain('margin-left: auto;')
+    expect(tools).toContain('align-self: flex-end;')
+    expect(tools).toContain(`margin-right: -${pad}px;`)
+    // One height for all three.
+    expect(full).toMatch(/\.zv-fv-tools \.cr-look-toggle\.cr-look-corner \{\s*position: static;\s*height: 28px;/)
+    expect(full).toMatch(/\.zv-fv-tools \.zv-fv-arts-btn \{\s*width: 30px;\s*height: 28px;/)
   })
 
   it('keeps translate, titles, back and close — in ⋯, not deleted', () => {
@@ -204,7 +218,7 @@ describe('the bar offers the places, the card fills them', () => {
   })
 
   it('lets only the primary overlay draw the toggle and fill ⋯ when several are mounted', () => {
-    expect(overlay).toContain('{primary && lookToggle}')
+    expect(overlay).toContain('{primary && (headTools ? createPortal(lookToggle, headTools) : lookToggle)}')
     expect(overlay).toContain('{primary && zoomSlots.menu !== null &&')
   })
 })

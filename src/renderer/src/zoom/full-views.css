@@ -147,6 +147,39 @@
   display: inline-flex;
   gap: 4px;
 }
+
+/* ---- the head's tools, over the sheet's top-right corner (owner, 2026-11-01) ----
+   CHAT/LOG/LIVE, then NOTE+ and BROWSER+ (head-tools.ts): one row at the head's
+   foot, its right edge on the sheet's (the head's 10px padding given back),
+   6px above the sheet. */
+.zv-fv-tools {
+  margin-left: auto;
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: -10px;
+  margin-bottom: -4px;
+}
+.zv-fv-tools > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.zv-fv-tools > span:empty {
+  display: none;
+}
+.zv-fv-tools .zv-fv-arts-make {
+  gap: 6px;
+}
+.zv-fv-tools .cr-look-toggle.cr-look-corner {
+  position: static;
+  height: 28px;
+}
+.zv-fv-tools .zv-fv-arts-btn {
+  width: 30px;
+  height: 28px;
+}
 .zv-fv-arts-btn {
   appearance: none;
   position: relative;
@@ -475,6 +508,8 @@
   .zv-fv-art { width: 104px; height: 68px; }
   .zv-fv-art > .zv-th em { font-size: 9px; }
   .zv-fv-arts-btn { width: 32px; height: 30px; }
+  .zv-fv-tools .zv-fv-arts-btn { width: 32px; height: 30px; }
+  .zv-fv-tools .cr-look-toggle.cr-look-corner { height: 30px; }
 }
 
 /* ---- the side groups, attached (pets/PetTroop.tsx, pets/pet-dock.ts) ----
@@ -533,6 +568,11 @@ body.cr-docked-right .zv-fullview {
   }
   .zv-fv-used em {
     display: none;
+  }
+  /* The head's right 52px is the round way back's: the tools stop short of it. */
+  .zv-fv-tools {
+    flex: none;
+    margin-right: 0;
   }
 }
 
