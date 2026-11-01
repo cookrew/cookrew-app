@@ -591,16 +591,19 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const first = firstLink.get(l.item) ?? l
     const G = first === l ? A : agentLink(first, z)
     const gs = lerp(0.34, 0.42, G.grow)
+    // A coin whose item the grid does not draw stays with its agent and fades as the thumbs unfold.
+    const docks = l.item in L.thumbs.at
     const home = L.thumbs.at[l.item] ?? { x: 0, y: 0 }
-    const k1 = ease(ramp(P, 0.06 + l.j * 0.03, 0.46))
-    const k2 = ease(ramp(P, 0.5, 0.94))
-    const flip = ease(ramp(P, 0.12 + l.j * 0.03, 0.48))
+    const k1 = docks ? ease(ramp(P, 0.06 + l.j * 0.03, 0.46)) : 0
+    const k2 = docks ? ease(ramp(P, 0.5, 0.94)) : 0
+    const flip = docks ? ease(ramp(P, 0.12 + l.j * 0.03, 0.48)) : 0
     const B = { x: home.x + 84 - 16 - l.j * 21, y: home.y + 46 }
     const x = lerp(lerp(A.x, G.x + 84 * gs - 16 - l.j * 21, k1), B.x, k2)
     const y = lerp(lerp(A.y, G.y + 46 * gs, k1), B.y, k2)
     const focusedAgent = l.agent === st.focus
     const fade = (focusedAgent ? 1 - toFull : 1 - ramp(z, 2, 2.25)) * (1 - ramp(iz * pc, 0, 0.3))
-    put(el.node, `translate(${f1(x)}px, ${f1(y)}px) scale(${f4(lerp(lerp(A.s, 1, k1), 1.2, k2))})`, lerp(A.o, 1, ramp(P, 0, 0.3)) * fade)
+    const seen = docks ? lerp(A.o, 1, ramp(P, 0, 0.3)) : A.o * (1 - ramp(P, 0, 0.25))
+    put(el.node, `translate(${f1(x)}px, ${f1(y)}px) scale(${f4(lerp(lerp(A.s, 1, k1), 1.2, k2))})`, seen * fade)
     put(el.th, `scale(${f4(lerp(A.thsx, 22 / 70, k1))}, ${f4(lerp(A.thsy, 22 / 46, k1))})`, A.th * (1 - ramp(P, 0, 0.25)))
     put(el.coin, `translate(${f1(lerp(A.cx, 0, k1))}px, ${f1(lerp(A.cy, 0, k1))}px) perspective(240px) rotateY(${(180 * flip).toFixed(1)}deg) scale(${lerp(A.cs, 1, k1).toFixed(3)})`)
     if (el.badge) put(el.badge, null, A.o * (1 - ramp(z, 1.25, 1.55)) * (1 - ramp(P, 0, 0.25)))
