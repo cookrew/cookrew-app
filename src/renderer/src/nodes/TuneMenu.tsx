@@ -8,6 +8,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { TuneRail, type TuneRailProps } from './TuneRail'
+import { keyboardCoverNow, riseOver, riseStyle, typesIntoBox, type RiseAnchor } from '../prompt/rise-anchor'
 
 export interface TuneMenuProps extends Omit<TuneRailProps, 'bar' | 'menu' | 'knobs'> {
   summary: { model: string; effort: string | null }
@@ -25,7 +26,7 @@ const PANEL_WIDTH = 260
 
 export function TuneMenu({ summary, rise = false, ...rail }: TuneMenuProps): React.JSX.Element {
   const [shown, setShown] = useState(false)
-  const [risen, setRisen] = useState<{ left: number; bottom: number } | null>(null)
+  const [risen, setRisen] = useState<RiseAnchor | null>(null)
   const root = useRef<HTMLDivElement>(null)
   const { onOpen } = rail
 
@@ -39,6 +40,8 @@ export function TuneMenu({ summary, rise = false, ...rail }: TuneMenuProps): Rea
       if (!root.current?.contains(e.target as Node)) close()
     }
     const onKey = (e: KeyboardEvent): void => {
+      // Risen over the prompt box, the panel closes once the prompt is typed.
+      if (rise && typesIntoBox(e)) return close()
       if (e.key !== 'Escape') return
       // The menu's Esc, not the zoom-back behind it.
       e.stopPropagation()
@@ -51,7 +54,7 @@ export function TuneMenu({ summary, rise = false, ...rail }: TuneMenuProps): Rea
       document.removeEventListener('pointerdown', onPointer, true)
       document.removeEventListener('keydown', onKey, true)
     }
-  }, [shown, onOpen])
+  }, [shown, onOpen, rise])
 
   const label = summary.effort !== null ? `${summary.model} · ${summary.effort}` : summary.model
   return (
@@ -68,7 +71,8 @@ export function TuneMenu({ summary, rise = false, ...rail }: TuneMenuProps): Rea
           if (rise && !shown) {
             const r = e.currentTarget.getBoundingClientRect()
             const left = Math.max(EDGE, Math.min(r.left, window.innerWidth - PANEL_WIDTH - EDGE))
-            setRisen({ left, bottom: window.innerHeight - r.top + 6 })
+            // Riding the keyboard: a pick puts the caret in the box, which may bring it up.
+            setRisen(riseOver({ left, top: r.top }, window.innerHeight, keyboardCoverNow()))
           }
           setShown((now) => !now)
           if (shown) onOpen(null)
@@ -83,7 +87,7 @@ export function TuneMenu({ summary, rise = false, ...rail }: TuneMenuProps): Rea
       {shown && (
         <div
           className={`cr-tune-menu-panel${rise ? ' rise' : ''}`}
-          style={rise && risen ? { left: risen.left, bottom: risen.bottom, maxHeight: `calc(100vh - ${risen.bottom + EDGE}px)` } : undefined}
+          style={rise && risen ? riseStyle(risen, EDGE) : undefined}
         >
           <TuneRail {...rail} menu />
         </div>

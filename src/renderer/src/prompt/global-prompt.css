@@ -246,8 +246,11 @@
   }
 }
 
-/* The ＋ menu (HarnessMenu.tsx): the harnesses, then what opens at once. */
-.cr-prompt-new-menu {
+/* The ＋ menu (HarnessMenu.tsx): the harnesses, then what opens at once. The
+   new agent's tune menu scrolls too: it stays open after a pick, and the
+   keyboard that pick brings up on a phone takes its room (rise-anchor.ts). */
+.cr-prompt-new-menu,
+.cr-prompt-tune-menu {
   overflow-y: auto;
   overscroll-behavior: contain;
 }

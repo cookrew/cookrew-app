@@ -1,4 +1,5 @@
 import { SHELL_PRESET } from './harness-pref'
+import { riseStyle, type RiseAnchor } from './rise-anchor'
 
 /**
  * THE ＋ MENU (owner, 2026-11-01: "add a Shell and the button on the left can retire").
@@ -29,7 +30,7 @@ export interface NewMenuActs {
 
 interface HarnessMenuProps {
   /** Anchored over the chip, fixed: the dock clips anything that hangs out of it. */
-  at: { left: number; bottom: number }
+  at: RiseAnchor
   harnesses: readonly string[]
   harness: string
   onPick: (name: string) => void
@@ -52,7 +53,7 @@ export function HarnessMenu({ at, harnesses, harness, onPick, orch, acts, onDone
     <span
       className="cr-prompt-menu cr-prompt-new-menu"
       role="menu"
-      style={{ left: at.left, bottom: at.bottom, maxHeight: `calc(100vh - ${at.bottom + GAP}px)` }}
+      style={riseStyle(at, GAP)}
     >
       {harnesses.map((name) => (
         <button key={name} type="button" role="menuitemradio" aria-checked={name === harness} onClick={() => onPick(name)}>
