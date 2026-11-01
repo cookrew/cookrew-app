@@ -1851,10 +1851,11 @@
     font-size: 32px;
     letter-spacing: 0.04em;
   }
+  /* The seal's number as large as the name beside it: both read at caption (zoom-frame.ts · deviceWords). */
   .zv-mark .zv-mark-label .zv-seal {
     width: 52px;
     height: 52px;
-    font-size: 30px;
+    font-size: 32px;
     line-height: 52px;
   }
 }

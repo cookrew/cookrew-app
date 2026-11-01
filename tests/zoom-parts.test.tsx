@@ -77,8 +77,8 @@ describe('an agent’s card', () => {
     // floating card puts the parts where the painter puts them on the open
     // card, with the crew card's classes, and has no buttons of its own.
     const frame0 = readFileSync('src/renderer/src/zoom/zoom-frame.ts', 'utf8')
-    expect(frame0).toContain('lerp(-e.nmW / 2, 30, nx), y: lerp(42, -24, ny)')
-    expect(frame0).toContain('lerp(62, -2, ny)')
+    expect(frame0).toContain('lerp(-e.nmW / 2, 30, nx), y: lerp(U.nameTop, -24, ny)')
+    expect(frame0).toContain('lerp(stTop, -2, ny)')
     expect(frame0).toContain('translate(-18px, ${f1(32')
     expect(frame0).toContain('const slot = { x: 17 + 79 * l.k, y: 136 }')
     expect(frame0).toContain('cx: lerp(0, -27, grow),')

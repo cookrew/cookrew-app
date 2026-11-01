@@ -28,9 +28,11 @@ describe('the route', () => {
   it('narrow: the device keeps its icon', () => {
     expect(narrow).toMatch(/\.cr-route-device \.cr-route-label \{[^}]*display: none/)
   })
-  it('portrait: the workspace and agent names keep a few letters', () => {
-    expect(portrait).toMatch(/\.cr-route-workspace \.cr-route-label \{[^}]*max-width: 64px/)
-    expect(portrait).toMatch(/\.cr-route-agent \.cr-route-label \{[^}]*max-width: 96px/)
+  // The phone's type (owner, 2026-11-02): at 16px a 64px cap read "Cookr…" with half the bar
+  // free, so the names take the room the bar leaves them, each down to a few letters.
+  it('portrait: the workspace and agent names take the free room and keep a few letters', () => {
+    expect(portrait).toMatch(/\.cr-route-workspace \.cr-route-label \{[^}]*max-width: none;[^}]*min-width: 2\.5em/)
+    expect(portrait).toMatch(/\.cr-route-agent \.cr-route-label \{[^}]*max-width: none;[^}]*min-width: 3em/)
   })
 })
 

@@ -30,8 +30,9 @@ export interface CrewItem {
   owners: readonly string[]
 }
 
-const COL = 200
-const ROW = 175
+/** The crew's column and row pitch, in scene px (scene-words.ts reads them to fit the words under a face). */
+export const COL = 200
+export const ROW = 175
 
 /** The stack in the ring: drawn bottom → top, the first agent (an orchestrator if there is one) on top. */
 export function stackOf(agents: readonly CrewAgent[]): Record<string, Pos & { s: number; r: number }> {
@@ -132,7 +133,7 @@ export function thumbsOf(
 
 /** A phone's shelf: rows of SHELF_PER_ROW, a name's width apart (zoom.css caps a phone's names at 112px, 87 at the shelf's 0.78), stacked up from the grid (2026-11-01 phone evals). */
 const SHELF_PER_ROW = 4
-const SHELF_DX = 88
+export const SHELF_DX = 88
 const SHELF_DY = 68
 function phoneShelf(agents: readonly CrewAgent[], rows: number, rowH: number, bottomY: number): { shelf: Record<string, Pos>; shelfY: number; box: Box } {
   const shelfRows = Math.max(1, Math.ceil(agents.length / SHELF_PER_ROW))
