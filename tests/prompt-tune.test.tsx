@@ -66,9 +66,19 @@ describe('the box carries it', () => {
   const box = src('prompt/GlobalPrompt.tsx')
 
   it('draws the aimed agent’s own tune button, rising over the dock', () => {
-    expect(box).toContain('<CardTune key={to.id} terminalId={to.id}')
-    const line = box.split('\n').find((l) => l.includes('<CardTune key={to.id}')) ?? ''
+    expect(box).toContain('<CardTune key={`tune:${to.id}`} terminalId={to.id}')
+    const line = box.split('\n').find((l) => l.includes('<CardTune key=')) ?? ''
     expect(line).toContain(' rise />')
+  })
+
+  // Owner 2026-11-01: every agent the box was aimed at left its tune chip
+  // behind. The chip and the voice bar are both children of the form, and both
+  // were keyed by the agent's id alone; React met two children with one key and
+  // lost track of the old chip on every retarget.
+  it('keys each of its children apart, so a retarget leaves no chip behind', () => {
+    const keys = [...box.matchAll(/\bkey=\{([^}]*\bto\.id\b[^}]*)\}/g)].map((m) => m[1])
+    expect(keys.length).toBeGreaterThanOrEqual(2)
+    expect(new Set(keys).size).toBe(keys.length)
   })
 
   it('draws the new agent’s chip only for a harness that takes a pick, and sends the pick with the prompt', () => {
