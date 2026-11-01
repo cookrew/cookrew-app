@@ -382,6 +382,14 @@ export interface Multiplexer {
   reportPaneCard?(name: string, card: PaneCardInfo): void
 
   /**
+   * The session's tab wears its card's name after a rename, when the session
+   * has the tab to itself (herdr; a tab is labelled once at creation and
+   * otherwise keeps a name the card no longer has). Same display-only, best
+   * effort contract as reportPaneCard.
+   */
+  renameTab?(name: string, label: string): void
+
+  /**
    * The workspace-level half of the binding: the backend's workspace wears
    * the ACTIVE Cookrew workspace's name, with tokens carrying the identity
    * (Cookrew's workspace id, primary dir). Same display-only, best-effort

@@ -26,6 +26,9 @@ import { renderMobileHelp, renderRotated } from './mobile-cli-text'
 import { readProxyConfig, tailnetProxyGaps } from './proxy-bypass'
 import { AgentRegistry, AgentRegistryEntry } from './agent-registry'
 import { planRecruitTarget } from '../shared/workspace-dirs'
+import { cleanAgentName, nameFromPrompt } from '../shared/agent-name'
+import type { RenameOutcome } from './agent-rename'
+import { deliverToRecruit } from './recruit-delivery'
 import { PtyManager, multiplexer, sessionNameFor, type PtySession } from './pty'
 import { askRaw, askTerminal, decodeRawEscapes, waitForReady } from './ask'
 import { browserVerbKind, noteVerbKind } from '../shared/cable-signal'
@@ -69,6 +72,17 @@ export interface SocketServerDeps {
   signal?: (moment: { from: string; to: string; kind: 'ask' | 'answer' | 'write' | 'read' }) => void
   /** Durable global agent directory (~/.cookrew/agents.json). */
   agents: AgentRegistry
+  /**
+   * Rename an agent: checked against its workspace's other cards, then the
+   * store and herdr's pane title and tab (index.ts · renameTerminal). Absent in
+   * a test server that has none: `cookrew rename` then says so.
+   */
+  renameTerminal?: (id: string, wanted: string, onClash: 'refuse' | 'suffix') => RenameOutcome
+  /**
+   * Sous's name for a card recruited from a prompt, once it answers (null: it
+   * had none, or the card was renamed meanwhile). index.ts · autoNameTerminal.
+   */
+  autoNameTerminal?: (id: string, standIn: string, prompt: string) => Promise<RenameOutcome | null>
   /**
    * The sealed slots (secrets-store.ts) and their audit line. Absent in a
    * test server that has none: `cookrew secret` then says so and exits 3.
@@ -268,6 +282,8 @@ async function dispatch(request: CliRequest, deps: SocketServerDeps): Promise<st
       return cmdConnect(request, deps)
     case 'recruit':
       return cmdRecruit(request, deps)
+    case 'rename':
+      return cmdRename(request, deps)
     case 'dismiss':
       return cmdDismiss(request, deps)
     case 'orch':
@@ -1236,15 +1252,37 @@ function cmdConnect(request: CliRequest, deps: SocketServerDeps): string {
   return `Connected "${a.name}" and "${b.name}"`
 }
 
-function cmdRecruit(request: CliRequest, deps: SocketServerDeps): string {
-  const me = requireOrch(request, deps)
-  const [name] = request.args
+const RECRUIT_USAGE =
+  'Usage: cookrew recruit ["Name"] [--prompt "task"] [--preset P] [--role R] [--dir PATH]\n' +
+  '  With --prompt and no name, the agent is named from its prompt (Sous), the way /rename titles a chat.'
+
+/**
+ * `cookrew recruit` (owner, 2026-11-01): ANY agent may make a teammate in its
+ * own workspace, wired to it — the Orch alone may also place one in another
+ * workspace, or grow its workspace by a directory. `--prompt` is the new
+ * agent's first prompt: it goes in through the dispatch engine (the verified
+ * path Sous's recruit uses, recruit-delivery.ts) and, with no name given,
+ * names the card — Sous's pick, else a stand-in read off the words. The answer
+ * comes back once both have settled, so the name it prints is the one to ask.
+ */
+export async function cmdRecruit(request: CliRequest, deps: SocketServerDeps): Promise<string> {
+  if (request.flags.help) return RECRUIT_USAGE
+  const me = self(request, deps)
+  const [nameArg] = request.args
+  const chosen = nameArg === undefined ? '' : cleanAgentName(nameArg)
+  if (nameArg !== undefined && chosen === '') throw new Error(`That is not a name. ${RECRUIT_USAGE}`)
+  const promptFlag = request.flags.prompt
+  const prompt = typeof promptFlag === 'string' ? promptFlag.trim() : ''
+  if (promptFlag !== undefined && prompt === '') throw new Error(`--prompt needs the task in quotes. ${RECRUIT_USAGE}`)
+  if (prompt && !deps.dispatch) throw new Error('This build cannot hand a recruit its prompt (no dispatch engine).')
   const presetName = String(request.flags.preset ?? 'Claude Code')
   const preset = PRESETS.find((p) => p.name.toLowerCase() === presetName.toLowerCase())
   if (!preset) {
     throw new Error(`Unknown preset '${presetName}'. Run 'cookrew preset list'.`)
   }
   const command = request.flags.command ? String(request.flags.command) : preset.command
+  // A bare shell takes no first prompt: typed into zsh, the words would run as a command.
+  if (prompt && !command.trim()) throw new Error(`The ${preset.name} preset is a bare shell; it takes no --prompt.`)
   const dirFlag = request.flags.dir ? String(request.flags.dir) : null
   const cwd = dirFlag ?? me.cwd
   // Layer 2 (cross-workspace-orch-fix-dec): --dir routes to the workspace
@@ -1256,24 +1294,39 @@ function cmdRecruit(request: CliRequest, deps: SocketServerDeps): string {
     home.id,
     dirFlag
   )
+  if (!me.orch && (plan.workspaceId !== home.id || plan.autoAddDir)) {
+    throw new Error(
+      `${dirFlag} is not a directory of your workspace ("${home.name}"). Only the Orch recruits elsewhere or adds a directory; ` +
+        'leave out --dir to recruit beside you. Nothing was created.'
+    )
+  }
+  // A name the caller chose is the address it will ask by: refused when taken,
+  // never quietly suffixed into one it does not know (agent-rename.ts).
+  if (chosen && deps.store.workspaceState(plan.workspaceId).nodes.some((n) => n.name.trim().toLowerCase() === chosen.toLowerCase())) {
+    throw new Error(`"${chosen}" is already a card in this workspace. Pick another name, or leave it out and give --prompt. Nothing was created.`)
+  }
   if (plan.autoAddDir) deps.addWorkspaceDir(home.id, plan.autoAddDir)
   const siblings = connectedOf(deps.store, me.id).filter((h) => h.node.kind === 'terminal').length
+  const standIn = chosen || (prompt ? nameFromPrompt(prompt) : preset.name)
   const terminal: TerminalNodeData = {
     kind: 'terminal',
     id: randomUUID(),
-    name: name || preset.name,
+    name: standIn,
     preset: preset.name,
     command,
     cwd,
     orch: false,
     role: request.flags.role ? String(request.flags.role) : null,
+    // The prompt is the card's BRIEF (display only, never typed on a respawn;
+    // recruit-node.ts) — it goes in once, through the dispatch below.
+    ...(prompt ? { brief: prompt } : {}),
     position: {
       x: me.position.x + (siblings + 1) * (DEFAULT_TERMINAL_SIZE.width + 60),
       y: me.position.y + 120
     },
     size: DEFAULT_TERMINAL_SIZE
   }
-  const added = deps.store.withOpContext({ actor: 'orch', via: 'recruit' }, () => {
+  const added = deps.store.withOpContext({ actor: me.orch ? 'orch' : 'agent', via: 'recruit' }, () => {
     const node = deps.store.addNodeToWorkspace(plan.workspaceId, terminal) as TerminalNodeData
     deps.store.connectAcross(me.id, node.id)
     return node
@@ -1281,7 +1334,24 @@ function cmdRecruit(request: CliRequest, deps: SocketServerDeps): string {
   deps.spawnTerminal(added)
   const wsName = (id: string): string =>
     deps.listWorkspaces().workspaces.find((w) => w.id === id)?.name ?? id
-  const lines = [`Recruited "${added.name}" (${preset.name}) into workspace "${wsName(plan.workspaceId)}"`]
+
+  // Named and briefed side by side: the name needs no running agent, and the
+  // brief waits for the harness's prompt anyway.
+  const [named, delivered] = await Promise.all([
+    prompt && !chosen && deps.autoNameTerminal
+      ? deps.autoNameTerminal(added.id, added.name, prompt).catch(() => null)
+      : Promise.resolve(null),
+    prompt && deps.dispatch
+      ? deliverToRecruit(deps.dispatch, { nodeId: added.id, sentence: prompt, originId: me.id }).then(
+          ({ dispatchId }) => ({ ok: true as const, dispatchId }),
+          (error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) })
+        )
+      : Promise.resolve(null)
+  ])
+  const name = named?.ok ? named.name : added.name
+
+  const lines = [`Recruited "${name}" (${preset.name}) into workspace "${wsName(plan.workspaceId)}", wired to you`]
+  if (named?.ok && named.changed) lines.push(`Named from its prompt by Sous (stand-in was "${added.name}")`)
   if (plan.autoAddDir) {
     lines.push(`Added ${plan.autoAddDir} to workspace "${home.name}" (no workspace owned it)`)
   }
@@ -1289,10 +1359,53 @@ function cmdRecruit(request: CliRequest, deps: SocketServerDeps): string {
   // against the ORCH's own workspace — it is the one being surprised.
   if (plan.workspaceId !== (deps.store.ownerOf(me.id) ?? deps.store.focusedId)) {
     lines.push(
-      `⚠ "${added.name}" lives in workspace "${wsName(plan.workspaceId)}", not the active one — switch with: cookrew workspace switch "${wsName(plan.workspaceId)}"`
+      `⚠ "${name}" lives in workspace "${wsName(plan.workspaceId)}", not the active one — switch with: cookrew workspace switch "${wsName(plan.workspaceId)}"`
     )
   }
+  if (delivered?.ok) lines.push(`Prompt delivered (dispatch ${delivered.dispatchId}). Follow it: cookrew status "${name}"`)
+  if (delivered && !delivered.ok) {
+    // The card exists either way; say so, and fail, so a script does not
+    // carry on as if the work had started.
+    lines.push(`⚠ The prompt did not reach "${name}": ${delivered.error}. Send it again: cookrew ask "${name}" "…"`)
+    throw new Error(lines.join('\n'))
+  }
   return lines.join('\n')
+}
+
+/** The agent `cookrew rename "Agent" "New"` may rename: you, one wired to you, or (the Orch) any in its workspace. */
+function renameTarget(deps: SocketServerDeps, me: TerminalNodeData, name: string): TerminalNodeData {
+  const wanted = name.trim().toLowerCase()
+  const named = (n: CanvasNode): n is TerminalNodeData => n.kind === 'terminal' && n.name.trim().toLowerCase() === wanted
+  if (me.name.trim().toLowerCase() === wanted) return me
+  const wired = connectedOf(deps.store, me.id).find((h) => named(h.node))
+  if (wired) return wired.node as TerminalNodeData
+  const home = deps.store.ownerOf(me.id)
+  const mine = me.orch && home ? deps.store.workspaceState(home).nodes.find(named) : undefined
+  if (mine) return mine
+  throw new Error(
+    `'${name}' is not you or an agent wired to you${me.orch ? ' or in your workspace' : ''}. ` +
+      `Rename yourself with: cookrew rename "New name". Run 'cookrew list'.`
+  )
+}
+
+/**
+ * `cookrew rename ["Agent"] "New name"` (owner, 2026-11-01): one argument
+ * renames the caller, the way /rename names the chat it is typed in. herdr's
+ * pane title and tab follow. A name another card of the workspace wears is
+ * refused, not suffixed: a name is the address `cookrew ask` resolves.
+ */
+export function cmdRename(request: CliRequest, deps: SocketServerDeps): string {
+  const usage = 'Usage: cookrew rename "New name"  |  cookrew rename "Agent" "New name"'
+  if (request.flags.help) return usage
+  if (!deps.renameTerminal) throw new Error('This build cannot rename an agent.')
+  const me = self(request, deps)
+  const [first, second] = request.args
+  if (first === undefined || request.args.length > 2) throw new Error(usage)
+  const target = second === undefined ? me : renameTarget(deps, me, first)
+  const done = deps.renameTerminal(target.id, second ?? first, 'refuse')
+  if (!done.ok) throw new Error(done.error)
+  if (!done.changed) return `"${done.name}" is already called that.`
+  return `Renamed "${target.name}" → "${done.name}"`
 }
 
 function cmdFork(request: CliRequest, deps: SocketServerDeps): string {
@@ -1715,7 +1828,11 @@ Usage:
   cookrew browser tab-new "Browser" URL           Open a new tab in the browser
   cookrew browser tab-select|tab-close "Browser" N   Switch to / close tab N
   cookrew connect "From" "To"                   (Orch) Wire two nodes together
-  cookrew recruit "Name" [--preset P] [--role R] [--dir PATH]   (Orch) Spawn a teammate
+  cookrew recruit ["Name"] [--prompt "task"] [--preset P] [--role R] [--dir PATH]
+                                                Spawn a teammate wired to you, in your workspace (any agent);
+                                                --prompt is its first prompt, and with no name it is named
+                                                from the prompt (Sous). --dir elsewhere is Orch only
+  cookrew rename ["Agent"] "New name"           Rename yourself (or an agent wired to you); herdr follows
   cookrew dismiss "Name"                        (Orch) Remove a teammate
   cookrew orch "Name"                           Make this agent the workspace's orch (the door)
   cookrew fork "Agent" [--turn N]               (Orch) Fork a NEW agent from a past turn (original untouched)

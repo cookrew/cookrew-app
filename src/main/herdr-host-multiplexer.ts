@@ -91,6 +91,8 @@ export interface HerdrPane {
   label?: string | null
   /** The workspace this pane lives in — herdr always answers it. */
   workspace_id?: string | null
+  /** The tab this pane sits in; a pane alone in its tab names it (renameTab). */
+  tab_id?: string | null
   /** herdr's own view of which agent runs here — set by report-agent. */
   agent?: string | null
   /** herdr's current lifecycle state for this pane, when it has one. */
@@ -1131,6 +1133,30 @@ export class HerdrHostMultiplexer implements Multiplexer {
       '--token', `cookrew_workspace=${card.workspace}`,
       '--token', `cookrew_cwd=${card.cwd}`
     ])
+  }
+
+  /**
+   * The pane's TAB wears the card's name too, when the pane has it to itself.
+   *
+   * The pane title follows a rename (reportPaneCard), but a tab is labelled
+   * once, when it is made — Alma's service gives every Cookrew pane its own
+   * tab named after the card's title at that moment — and kept that label
+   * through every rename after (measured: a card renamed from a Chinese
+   * prompt still sat in a tab labelled "Finch"). A tab holding several panes is
+   * shared, and names none of them. Display-only, best effort.
+   */
+  renameTab(name: string, label: string): void {
+    const tabId = this.paneFor(name)?.tab_id
+    if (!tabId || label.length === 0) return
+    try {
+      const tab = parseEnvelope(this.herdr(['tab', 'get', tabId]))?.tab as
+        | { pane_count?: number; label?: string }
+        | undefined
+      if (tab?.pane_count !== 1 || tab.label === label) return
+      this.quiet(['tab', 'rename', tabId, label])
+    } catch {
+      // Best effort by contract — the label is chrome, never control flow.
+    }
   }
 
   /**

@@ -40,6 +40,8 @@ export interface AgentChoice {
   roleName?: string
   /** Its first prompt (the global prompt box), submitted once it has booted. */
   prompt?: string
+  /** `name` is a stand-in read off `prompt`: Sous names the card once it answers. */
+  autoName?: boolean
 }
 
 /** A new agent in the active workspace; the zoom opens its card in the crew. */
@@ -52,7 +54,8 @@ export async function makeAgent(api: MakeApi, choice: AgentChoice, nodes: readon
       position: nextSpot(nodes),
       orch: choice.orch,
       ...(choice.roleName ? { roleName: choice.roleName } : {}),
-      ...(choice.prompt ? { prompt: choice.prompt } : {})
+      ...(choice.prompt ? { prompt: choice.prompt } : {}),
+      ...(choice.prompt && choice.autoName ? { autoName: true } : {})
     })
     // The next agent the prompt box makes takes the harness last used.
     if (!choice.roleName) rememberHarness(choice.preset)
