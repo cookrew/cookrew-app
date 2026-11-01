@@ -62,4 +62,19 @@ describe('waitForReady — a pane that is still painting is not ready', () => {
     await waitForReady(still, { quietMs: 30, pollMs: 10, minMs: 150, timeoutMs: 2000 })
     expect(Date.now() - started).toBeGreaterThanOrEqual(140)
   })
+
+  it('waits for the input box to be drawn, not only for a quiet pane', async () => {
+    // `clear; exec claude`: the pane can be silent before Claude draws a thing.
+    const still = fakeSession(['', '', '', '', '', '', '', '', '> '])
+    let looks = 0
+    const ready = await waitForReady(still, {
+      quietMs: 20,
+      pollMs: 10,
+      minMs: 0,
+      timeoutMs: 2000,
+      drawn: () => ++looks >= 6
+    })
+    expect(ready).toBe(true)
+    expect(looks).toBeGreaterThanOrEqual(6)
+  })
 })

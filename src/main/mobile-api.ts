@@ -407,6 +407,12 @@ export interface MobileApiDeps {
    * both. Absent = no serialization (embedders/tests without a tracker).
    */
   hasArmedDispatch?: (terminalId: string) => boolean;
+  /**
+   * Keys for an agent that is offline or still waking: true when they were
+   * taken (its wake started, they are typed once it is up), false when the
+   * running session takes them as usual (agent-wake.ts · hold).
+   */
+  holdInput?: (terminalId: string, data: string) => boolean;
   /** Acquire/release the local PTY mirror for a zoomed phone transcript. */
   acquireTerminalView?: (terminalId: string) => boolean;
   releaseTerminalView?: (terminalId: string) => void;
@@ -503,8 +509,10 @@ async function probeWarmed(board: BoardSources): Promise<void> {
   }
 }
 
+/** A /raw batch's outcome; null = no running terminal, and nothing to wake. */
+type RawVerdict = Awaited<ReturnType<typeof ownerSubmit>> | null;
 /** Keystroke batches already typed, by terminal and the phone's batch id. */
-const rawInputOnce = createOnceByKey<Awaited<ReturnType<typeof ownerSubmit>>>();
+const rawInputOnce = createOnceByKey<RawVerdict>();
 
 /**
  * Boot nonces already honoured, so a stream that reconnects on its own with
@@ -1490,11 +1498,6 @@ export async function handleMobileApi(
       return true;
     }
     const session = ptys.get(terminalId);
-    if (!session) {
-      if (openingStream) deps.releaseTerminalView?.(terminalId);
-      respondJson(response, 404, { error: "Terminal not running" });
-      return true;
-    }
     if (method === "POST" && ptyMatch[2] === "raw") {
       const body = await readJson<{ data?: string; id?: string }>(request);
       if (typeof body.data === "string") {
@@ -1505,19 +1508,40 @@ export async function handleMobileApi(
         // when not. A refusal is a 409 the caller can act on, never a
         // silently dropped write followed by an ok:true.
         //
+        // An agent that is offline (or still waking) takes the keys too:
+        // the first wakes it, and they are typed once it is up. Answered at
+        // once, so the phone's deadline never runs out on a boot.
+        //
         // A batch the phone sent again after getting no answer carries the
         // same id, and is typed once (once-by-key.ts).
-        const submit = () => ownerSubmit(session, data);
+        const submit = async (): Promise<RawVerdict> =>
+          deps.holdInput?.(terminalId, data) === true
+            ? { ok: true, submitted: false }
+            : session
+              ? ownerSubmit(session, data)
+              : null;
         const verdict =
           typeof body.id === "string" && BATCH_ID.test(body.id)
             ? await rawInputOnce(`${terminalId}:${body.id}`, submit)
             : await submit();
+        if (verdict === null) {
+          respondJson(response, 404, { error: "Terminal not running" });
+          return true;
+        }
         if (!verdict.ok) {
           respondJson(response, 409, { error: verdict.reason });
           return true;
         }
+      } else if (!session) {
+        respondJson(response, 404, { error: "Terminal not running" });
+        return true;
       }
       respondJson(response, 200, { ok: true });
+      return true;
+    }
+    if (!session) {
+      if (openingStream) deps.releaseTerminalView?.(terminalId);
+      respondJson(response, 404, { error: "Terminal not running" });
       return true;
     }
     if (method === "POST" && ptyMatch[2] === "resize") {
