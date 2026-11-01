@@ -123,6 +123,46 @@
   background: var(--sumi-paper-2, var(--cream-md));
 }
 
+/* "@…" and "#…": the names they could become, in the harness menu's paper. */
+.cr-prompt-suggest {
+  min-width: 220px;
+  max-width: min(420px, calc(100vw - 24px));
+}
+
+.cr-prompt-suggest button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cr-prompt-suggest button .cr-icon {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  color: var(--sumi-ink-soft, var(--ink-soft));
+}
+
+.cr-prompt-suggest button span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cr-prompt-suggest button small {
+  flex: none;
+  font: 10px/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sumi-muted, var(--muted));
+}
+
+.cr-prompt-suggest button[aria-selected='true'] {
+  background: var(--sumi-paper-2, var(--cream-md));
+  color: var(--sumi-seal, var(--amber-deep));
+}
+
 .cr-prompt .voice-bar {
   flex: none;
   min-width: 0;

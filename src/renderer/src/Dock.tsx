@@ -1,6 +1,7 @@
 import { CANVAS_RETIRED, type ToolId } from './canvas-ui'
 import type { AgentRole, CanvasNode } from '../../shared/model'
 import { GlobalPrompt, type PromptAgent } from './prompt/GlobalPrompt'
+import type { PromptArtifact } from './prompt/artifact-refs'
 import { useKeyboardInset } from './keyboard-inset'
 import { CrIcon, type CrIconName } from './icons'
 import { AgentSprite } from './nodes/AgentSprite'
@@ -88,6 +89,8 @@ interface DockProps {
   agents: readonly PromptAgent[]
   /** This workspace's cards: a new agent is stored beside them. */
   nodes: readonly CanvasNode[]
+  /** The workspace's notes and browsers, for the prompt's "#Name". */
+  artifacts?: readonly PromptArtifact[]
   /**
    * Zoomed-in browser: the whole bar stands down so the page keeps its height.
    * The controls that DO apply there (viewport fit, keyboard, open in browser)
@@ -134,6 +137,7 @@ export function Dock({
   voiceFor,
   agents,
   nodes,
+  artifacts,
   browserFor,
   boardFor
 }: DockProps): React.JSX.Element {
@@ -206,7 +210,7 @@ export function Dock({
             </button>
           ))}
         </div>
-        {!slidIn && <GlobalPrompt fullAgentId={voiceFor?.id ?? null} agents={agents} harnesses={promptHarnesses} nodes={nodes} orch={orch} />}
+        {!slidIn && <GlobalPrompt fullAgentId={voiceFor?.id ?? null} agents={agents} harnesses={promptHarnesses} nodes={nodes} orch={orch} artifacts={artifacts} />}
         {!slidIn && tool === 'terminal' && (
           <div className="cr-dock-presets">
             {/* FAMILIES, SAID OUT LOUD.
