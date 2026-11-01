@@ -7,7 +7,8 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { saveClipboardImages } from '../src/renderer/src/clipboard-image'
-import { insertAttached, pastedImages, pathsForFiles, withPaths } from '../src/renderer/src/prompt/prompt-attach'
+import { insertAttached, pastedImages, withPaths } from '../src/renderer/src/prompt/prompt-attach'
+import { isTemporaryDrop, pathsForFiles } from '../src/renderer/src/dropped-files'
 
 const SHOT = '/Users/me/.cookrew/attachments/pasted-image-1.png'
 
@@ -83,6 +84,37 @@ describe('pathsForFiles', () => {
       '/tmp/a.png',
       '/Users/me/.cookrew/attachments/Screenshot 1.png'
     ])
+  })
+})
+
+describe('a screenshot dragged from its floating thumbnail', () => {
+  // macOS hands the drag a file in TemporaryItems and deletes it once the drag
+  // is over (owner, 2026-11-01: the path that reached the agent was already
+  // gone). The bytes are read at the drop and kept in the attach store.
+  const TEMP = '/var/folders/7t/x/T/TemporaryItems/NSIRD_screencaptureui_LiGsXW/Screenshot 2026-11-01 at 8.07.47 PM.png'
+  const file = (name: string) => ({ name, type: 'image/png', arrayBuffer: vi.fn(() => Promise.resolve(new Uint8Array([9]).buffer)) })
+
+  it('knows a path the system takes away from one that stays', () => {
+    expect(isTemporaryDrop(TEMP)).toBe(true)
+    expect(isTemporaryDrop('/Users/me/Desktop/Screenshot 2026-11-01 at 8.07.47 PM.png')).toBe(false)
+    expect(isTemporaryDrop('/Users/me/.cookrew/attachments/a.png')).toBe(false)
+  })
+
+  it('is saved from its bytes, never handed on as the temporary path', async () => {
+    const shot = file('Screenshot 2026-11-01 at 8.07.47 PM.png')
+    const api = {
+      attachFiles: vi.fn(async () => [TEMP]),
+      saveAttachmentBytes: vi.fn(async (name: string) => `/Users/me/.cookrew/attachments/${name}`)
+    }
+    expect(await pathsForFiles([shot], api)).toEqual(['/Users/me/.cookrew/attachments/Screenshot 2026-11-01 at 8.07.47 PM.png'])
+    expect(api.saveAttachmentBytes.mock.calls[0][1]).toEqual(new Uint8Array([9]))
+  })
+
+  it('a file that stays where it lies is not read at all', async () => {
+    const kept = file('big.mov')
+    const api = { attachFiles: vi.fn(async () => ['/Users/me/Movies/big.mov']), saveAttachmentBytes: vi.fn() }
+    expect(await pathsForFiles([kept], api)).toEqual(['/Users/me/Movies/big.mov'])
+    expect(kept.arrayBuffer).not.toHaveBeenCalled()
   })
 })
 

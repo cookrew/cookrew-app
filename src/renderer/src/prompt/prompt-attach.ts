@@ -1,10 +1,10 @@
 import { shellQuotePath } from '../../../shared/attach'
-import { imageFilesFromClipboardItems, saveClipboardImages, type ClipboardItemLike, type ImageSaver } from '../clipboard-image'
+import { imageFilesFromClipboardItems, saveClipboardImages, type ClipboardItemLike } from '../clipboard-image'
 
 /**
  * SCREENSHOTS IN THE PROMPT BOX (owner, 2026-11-01). A screenshot pasted into
  * a prompt box, or a file dropped on it, is saved the way the terminal saves
- * one (clipboard-image.ts, the attach store), and its absolute path goes into
+ * one (clipboard-image.ts, dropped-files.ts, the attach store), and its absolute path goes into
  * the draft at the caret. The draft is the agent's own input line
  * (live-line.ts), so the agent reads the file itself, as it does a path the
  * paperclip pastes; a new agent's first prompt carries it the same way.
@@ -43,28 +43,6 @@ export function insertAttached(then: string, now: string, at: Caret | null, path
 /** The images a paste carries; none for a text paste, which the box takes as typed. */
 export function pastedImages<F>(data: { items?: ArrayLike<ClipboardItemLike<F>> } | null): F[] {
   return data?.items ? imageFilesFromClipboardItems(Array.from(data.items)) : []
-}
-
-export interface FileAttacher extends ImageSaver {
-  attachFiles: (files: File[]) => Promise<string[]>
-}
-
-type DroppedFile = { name: string; type: string; arrayBuffer: () => Promise<ArrayBuffer> }
-
-/**
- * Dropped files, as paths: each where it lies (a phone uploads it), and one
- * with no path of its own — a screenshot dragged from its floating thumbnail
- * can arrive as bytes only — saved from its bytes.
- */
-export async function pathsForFiles(files: readonly DroppedFile[], api: FileAttacher): Promise<string[]> {
-  const found = await api.attachFiles(files as File[])
-  return Promise.all(
-    files.map(async (file, i) => {
-      const at = found[i]
-      if (at) return at
-      return api.saveAttachmentBytes(file.name || 'file', new Uint8Array(await file.arrayBuffer()))
-    })
-  )
 }
 
 export { saveClipboardImages }
