@@ -49,6 +49,7 @@ import {
   shouldSnapshotLocally,
   thumbPollList,
   THUMB_BATCH_MAX,
+  THUMB_BATCH_TIMEOUT_MS,
   applyThumbBatch,
   knownVersions,
   viewportBrowserIds,
@@ -1156,9 +1157,14 @@ function Canvas(): React.JSX.Element {
   const thumbVersionsRef = useRef<Readonly<Record<string, number>>>({})
   useEffect(() => {
     if (!shouldPollThumbs({ remote: isRemoteMode(), interactive: interactiveBrowser })) return
+    // ONE BATCH AT A TIME, AND NEVER FOR LONG (2026-11-01): a batch the Mac
+    // did not answer (one page's screenshot hung) used to be joined by
+    // another every 5 s, until they held every free HTTP/1.1 connection and
+    // the keystrokes typed in LIVE queued behind them.
+    let inFlight: AbortController | null = null
     const tick = (): void => {
       // A page nobody is looking at needs no pictures.
-      if (document.hidden) return
+      if (document.hidden || inFlight) return
       // ONLY WHAT THE SCREEN SHOWS, IN ONE EXCHANGE, ONLY WHEN CHANGED. The
       // poll used to walk every browser card on the canvas eight at a time,
       // one request each with ?v= so nothing could ever be cached — through
@@ -1188,7 +1194,10 @@ function Canvas(): React.JSX.Element {
       // A HEADER, not ?token=. This is an ordinary fetch and can set one, so
       // the token stays out of the URL — see tokenParam, which exists only
       // for the two EventSources that genuinely cannot.
-      void planeFetch(apiPath(`/api/browser/thumbs?${params.toString()}`), { headers: authHeaders() })
+      const batch = new AbortController()
+      inFlight = batch
+      const giveUp = setTimeout(() => batch.abort(), THUMB_BATCH_TIMEOUT_MS)
+      void planeFetch(apiPath(`/api/browser/thumbs?${params.toString()}`), { headers: authHeaders(), signal: batch.signal })
         .then((r) => (r.ok ? (r.json() as Promise<{ frames: ThumbBatchFrame[] }>) : null))
         .then((body) => {
           if (!body) {
@@ -1215,10 +1224,17 @@ function Canvas(): React.JSX.Element {
           }
         })
         .catch(failAll)
+        .finally(() => {
+          clearTimeout(giveUp)
+          if (inFlight === batch) inFlight = null
+        })
     }
     tick()
     const timer = setInterval(tick, 5000)
-    return () => clearInterval(timer)
+    return () => {
+      clearInterval(timer)
+      inFlight?.abort()
+    }
   }, [interactiveBrowser, reactFlow, visibleBrowserIds])
 
   // ESC dismisses the top overlay: modal panels (team fork / roster / metrics /
