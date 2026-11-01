@@ -11,7 +11,7 @@ import { deviceOf, machinesAt, MACHINE_CARD } from './zoom-layout'
 import { deviceWords, SWS, type FrameEls } from './zoom-frame'
 import { useZoom, zoomStore } from './zoom-store'
 import { useZoomMotion } from './use-zoom-motion'
-import { nearestStop, RANGE, STOPS, STOP_NAMES, stepOut } from './zoom-path'
+import { BAR_NAMES, BAR_STOPS, barStop, RANGE, stepOut } from './zoom-path'
 import { useZoomFleetView } from './use-zoom-fleet'
 import { makeAgent } from './make-card'
 import './zoom.css'
@@ -306,9 +306,11 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     } catch (e) { setError(`Cannot open workspace: ${String(e)}`) }
   }, [])
   const newest = model.items.find((i) => model.frame.links.some((l) => l.key === model.frame.newest && l.item === i.id))
-  const stops = STOPS[zoom.dir]
-  const names = STOP_NAMES[zoom.dir]
-  const selectedStop = nearestStop(zoom.dir, zoom.v)
+  const stops = BAR_STOPS[zoom.dir]
+  const names = BAR_NAMES[zoom.dir]
+  const selectedStop = barStop(zoom.dir, zoom.v)
+  // The slider spans the bar's stops; a card or a full view sits at its end.
+  const barMax = stops[stops.length - 1]
   // Pinch only changes the scene; the full terminal keeps its own native scroll.
   const pointers = useRef(new Map<number, { x: number; y: number }>())
   const pinch = useRef<{ distance: number; v: number } | null>(null)
@@ -405,7 +407,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           <div className="zv-grp" ref={bind('label')}>
             <button type="button" className="zv-seal" onClick={() => motion.go(1, 'agents')} aria-label={`Open ${model.name} crew`}>{model.agents.length}</button>
             <button type="button" className="zv-workspace-name" onClick={() => motion.go(1, 'agents')}>{model.name}</button>
-            <button type="button" className="zv-tot" onClick={() => motion.go(0, 'items')} aria-label={`Open ${model.name} browsers and notes`} title={model.hiddenItems ? `${model.hiddenItems} more not drawn in the grid` : undefined}><Counts browsers={model.browsers} notes={model.notes} none="no items" /></button>
+            <button type="button" className="zv-tot" onClick={() => motion.go(0, 'items')} aria-label={`Open ${model.name} artifacts`} title={model.hiddenItems ? `${model.hiddenItems} more not drawn in the grid` : undefined}><Counts browsers={model.browsers} notes={model.notes} none="no items" /></button>
           </div>
           <div className="zv-newcap" ref={bind('newCap')}>{newest ? <>newest · {newest.title}</> : null}</div>
           {model.agents.length === 0 && <div className="zv-empty">No agents here yet. Add an agent from the dock.</div>}
@@ -424,12 +426,12 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         />
       )}
       <nav className="zv-controls" aria-label="Semantic zoom">
-        <button type="button" className="zv-back" onClick={() => { const i = stops.indexOf(selectedStop); motion.go(stops[Math.max(0, i - 1)]) }} aria-label="Zoom out">‹</button>
+        <button type="button" className="zv-back" onClick={stepBack} aria-label="Zoom out">‹</button>
         <div className="zv-zoom-control">
-          <input aria-label="Zoom level" type="range" min={RANGE[zoom.dir][0]} max={RANGE[zoom.dir][1]} step={0.01} value={zoom.v} onChange={(e) => motion.go(Number(e.target.value))} />
+          <input aria-label="Zoom level" type="range" min={RANGE[zoom.dir][0]} max={barMax} step={0.01} value={Math.min(zoom.v, barMax)} onChange={(e) => motion.go(Number(e.target.value))} />
           <div className="zv-stops">{stops.map((v, i) => <button key={v} type="button" aria-current={selectedStop === v ? 'step' : undefined} onClick={() => motion.go(v)}>{names[i]}</button>)}</div>
         </div>
-        <span className="zv-location">{zoom.dir === 'agents' ? 'agents' : 'browsers & notes'}</span>
+        <span className="zv-location">{zoom.dir === 'agents' ? 'agents' : 'artifacts'}</span>
       </nav>
       {error && <div role="alert" className="zv-error">{error}<button type="button" onClick={() => setError(null)} aria-label="Dismiss error">×</button></div>}
     </div>

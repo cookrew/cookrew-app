@@ -15,9 +15,15 @@ export type ZoomDir = 'agents' | 'items'
 
 export const RANGE: Record<ZoomDir, readonly [number, number]> = { agents: [-2, 3], items: [-2, 1] }
 export const STOPS: Record<ZoomDir, readonly number[]> = { agents: [-2, -1, 1, 2, 3], items: [-2, -1, 0, 1] }
-export const STOP_NAMES: Record<ZoomDir, readonly string[]> = {
-  agents: ['devices', 'device', 'crew', 'card', 'full'],
-  items: ['devices', 'device', 'thumbs', 'full']
+/**
+ * THE BAR (owner, 2026-11-01): the stops it names. The card is a small thing
+ * inside the crew, and a full view has its own way back, so neither gets a
+ * stop of its own; the names are what each stop shows, not what it zooms.
+ */
+export const BAR_STOPS: Record<ZoomDir, readonly number[]> = { agents: [-2, -1, 1], items: [-2, -1, 0] }
+export const BAR_NAMES: Record<ZoomDir, readonly string[]> = {
+  agents: ['devices', 'workspaces', 'agents'],
+  items: ['devices', 'workspaces', 'artifacts']
 }
 /** The stretch that is only a passage: the zoom never rests inside it. */
 export const PASSAGE: Record<ZoomDir, readonly [number, number]> = { agents: [-1, 1], items: [-1, 0] }
@@ -46,6 +52,14 @@ export const clampTo = (dir: ZoomDir, v: number): number => Math.max(RANGE[dir][
 /** The stop nearest v on this side. */
 export function nearestStop(dir: ZoomDir, v: number): number {
   return STOPS[dir].reduce((a, b) => (Math.abs(b - v) < Math.abs(a - v) ? b : a))
+}
+
+/** The bar stop lit at v: the nearest, and the deepest one for anything past it (a card, a full view). */
+export function barStop(dir: ZoomDir, v: number): number {
+  const stops = BAR_STOPS[dir]
+  const deepest = stops[stops.length - 1]
+  if (v >= deepest) return deepest
+  return stops.reduce((a, b) => (Math.abs(b - v) < Math.abs(a - v) ? b : a))
 }
 
 /**

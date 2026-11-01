@@ -2,7 +2,7 @@
 // device; the group is only a passage; clicks open a card, a full view, or
 // jump across. Pure rules, pinned here.
 import { describe, expect, it } from 'vitest'
-import { agentClick, clampTo, derive, itemClick, nearestStop, settle, stepOut, STOPS, STOP_NAMES } from '../src/renderer/src/zoom/zoom-path'
+import { agentClick, BAR_NAMES, BAR_STOPS, barStop, clampTo, derive, itemClick, nearestStop, settle, stepOut } from '../src/renderer/src/zoom/zoom-path'
 import { brushPath, harnessMark, strokeOf } from '../src/renderer/src/zoom/ink-marks'
 
 describe('the path', () => {
@@ -30,8 +30,28 @@ describe('the path', () => {
     expect(nearestStop('agents', 0.2)).toBe(1)
     expect(nearestStop('agents', -0.2)).toBe(-1)
     expect(clampTo('items', 2)).toBe(1)
-    expect(STOPS.agents.length).toBe(STOP_NAMES.agents.length)
-    expect(STOPS.items.length).toBe(STOP_NAMES.items.length)
+    expect(BAR_STOPS.agents.length).toBe(BAR_NAMES.agents.length)
+    expect(BAR_STOPS.items.length).toBe(BAR_NAMES.items.length)
+  })
+
+  // Owner, 2026-11-01: the card is a small thing inside the crew, and the full
+  // view has its own way back, so neither gets a stop on the bar; the names
+  // are what each stop shows.
+  it('the bar names three stops per side; the card and the full view light the last one', () => {
+    expect(BAR_NAMES.agents).toEqual(['devices', 'workspaces', 'agents'])
+    expect(BAR_NAMES.items).toEqual(['devices', 'workspaces', 'artifacts'])
+    expect(barStop('agents', -2)).toBe(-2)
+    expect(barStop('agents', -1)).toBe(-1)
+    expect(barStop('agents', -0.7)).toBe(-1)
+    expect(barStop('agents', 0.2)).toBe(1)
+    expect(barStop('agents', 1)).toBe(1)
+    expect(barStop('agents', 2)).toBe(1)
+    expect(barStop('agents', 3)).toBe(1)
+    expect(barStop('items', 0)).toBe(0)
+    expect(barStop('items', 1)).toBe(0)
+    // Out a step still walks every stop: full → card → crew.
+    expect(stepOut('agents', 3)).toBe(2)
+    expect(stepOut('agents', 2)).toBe(1)
   })
 })
 
