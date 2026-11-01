@@ -177,6 +177,7 @@ export function traceBlockOf(block: TraceBlock & StreamBlockExtras): TraceBlock 
     prompt: block.prompt,
     reply: block.reply,
     activity: block.activity,
+    ...(block.thoughts !== undefined ? { thoughts: block.thoughts } : {}),
     startedAt: block.startedAt,
     endedAt: block.endedAt,
     ...(block.final !== undefined ? { final: block.final } : {}),
