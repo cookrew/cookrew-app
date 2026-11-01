@@ -21,7 +21,9 @@
 }
 
 .cr-prompt input {
-  flex: 1 1 auto;
+  /* From zero, not the input's own 20 characters: on a phone that width alone
+     pushed the send button to a row of its own. */
+  flex: 1 1 0;
   min-width: 80px;
   height: 32px;
   margin: 0;
