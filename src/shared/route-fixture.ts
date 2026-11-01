@@ -30,6 +30,7 @@ export function routeFixture(status: RouteState['status'] = 'online', over: Part
     gateway: status === 'absent' ? null : { url: 'http://127.0.0.1:3425', v1: 'http://127.0.0.1:3425/v1', port: 3425, version: '0.1.1182', source: 'plugin' },
     why: null,
     defaultModel: online ? 'group/smart' : null,
+    sharedMcp: true,
     providers: online ? 3 : 0,
     models: online
       ? [

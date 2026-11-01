@@ -404,6 +404,11 @@ export function createDemoApi(): CookrewApi {
       routeChanged()
       return Promise.resolve(route)
     },
+    routeSetSharedMcp: (on) => {
+      route = { ...route, sharedMcp: on }
+      routeChanged()
+      return Promise.resolve(route)
+    },
     terminalRoute: (terminalId) =>
       Promise.resolve(
         cardRoutes.get(terminalId) ??

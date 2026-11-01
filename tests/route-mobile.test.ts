@@ -28,6 +28,7 @@ function routeState(status: RouteState['status']): RouteState {
     harnesses: [],
     checkedAt: 1,
     autoGroup: false,
+    sharedMcp: true,
     setup: { installLine: 'i', serveLine: 's', pluginLine: 'p', addSubscriptionLine: 'a', addKeyLine: 'k ', addLocalLine: 'l', addGroupLine: 'g' }
   }
 }
@@ -42,6 +43,10 @@ function fakeRoute() {
     state: () => state,
     setDefault: (model) => {
       state = { ...state, defaultModel: model }
+      return state
+    },
+    setSharedMcp: (on) => {
+      state = { ...state, sharedMcp: on }
       return state
     },
     cardState: card,
@@ -103,6 +108,19 @@ describe('the route over HTTP', () => {
     expect(((await put.json()) as CardRouteState).route).toBe('deepseek/deepseek-chat')
     expect((await call(port, '/api/terminal/card-1/route', { method: 'PUT', body: JSON.stringify({}) })).status).toBe(400)
     expect((await call(port, '/api/terminal/ghost/route', { method: 'PUT', body: JSON.stringify({ route: 'direct' }) })).status).toBe(404)
+  })
+
+  it('PUT /api/route/shared-mcp takes a boolean only; the wall token cannot flip it', async () => {
+    const fake = fakeRoute()
+    const port = await startApi({ route: fake.route, wallToken: 'wall-token' })
+    const off = await call(port, '/api/route/shared-mcp', { method: 'PUT', body: JSON.stringify({ on: false }) })
+    expect(off.status).toBe(200)
+    expect(((await off.json()) as RouteState).sharedMcp).toBe(false)
+    expect((await call(port, '/api/route/shared-mcp', { method: 'PUT', body: JSON.stringify({ on: 'yes' }) })).status).toBe(400)
+    expect((await call(port, '/api/route/shared-mcp', { method: 'PUT', body: JSON.stringify({}) })).status).toBe(400)
+    const wall = await fetch(`http://127.0.0.1:${port}/api/route/shared-mcp`, { method: 'PUT', headers: { authorization: 'Bearer wall-token', 'content-type': 'application/json' }, body: '{"on":true}' })
+    expect(wall.status).not.toBe(200)
+    expect(fake.route.state().sharedMcp).toBe(false)
   })
 
   it('a PUT without the pairing token is refused; a server without the service answers 404', async () => {

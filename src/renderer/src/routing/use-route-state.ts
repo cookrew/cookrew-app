@@ -27,6 +27,8 @@ export interface RouteStateControls {
   state: RouteState | null
   available: boolean
   setDefault: (model: string | null) => void
+  /** The shared-MCP switch; the next spawn of each agent reads it. */
+  setSharedMcp: (on: boolean) => void
   /** Ask main for the state now — the panel opening, nothing else. */
   reread: () => void
   /** Why the last default pick did not land, with when — the panel shows the newest of its sources. */
@@ -96,5 +98,17 @@ export function useRouteState(): RouteStateControls {
       .catch((e: unknown) => setError({ text: `default not set: ${e instanceof Error ? e.message : String(e)}`, at: Date.now() }))
   }
 
-  return { state, available, setDefault, reread, error }
+  const setSharedMcp = (on: boolean): void => {
+    const api = cookrew()
+    if (!api.routeSetSharedMcp) return
+    setError(null)
+    api
+      .routeSetSharedMcp(on)
+      .then((next) => {
+        if (alive.current) apply(next)
+      })
+      .catch((e: unknown) => setError({ text: `MCP switch not set: ${e instanceof Error ? e.message : String(e)}`, at: Date.now() }))
+  }
+
+  return { state, available, setDefault, setSharedMcp, reread, error }
 }

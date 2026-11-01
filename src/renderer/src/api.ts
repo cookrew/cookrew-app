@@ -441,6 +441,7 @@ export interface CookrewApi {
    */
   routeState?: () => Promise<RouteState>;
   routeSetDefault?: (model: string | null) => Promise<RouteState>;
+  routeSetSharedMcp?: (on: boolean) => Promise<RouteState>;
   terminalRoute?: (terminalId: string) => Promise<CardRouteState>;
   terminalRouteSet?: (terminalId: string, route: CardRoute) => Promise<CardRouteState | { error: string }>;
   onRoute?: (cb: (state: RouteState) => void) => () => void;

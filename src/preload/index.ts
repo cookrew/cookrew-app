@@ -436,6 +436,7 @@ const api = {
   // default, and each card's route. Pushed, never polled, like the dials.
   routeState: () => ipcRenderer.invoke('route:state'),
   routeSetDefault: (model: string | null) => ipcRenderer.invoke('route:set-default', model),
+  routeSetSharedMcp: (on: boolean) => ipcRenderer.invoke('route:set-shared-mcp', on),
   terminalRoute: (terminalId: string) => ipcRenderer.invoke('terminal:route', terminalId),
   terminalRouteSet: (terminalId: string, route: string) => ipcRenderer.invoke('terminal:route-set', terminalId, route),
   onRoute: (cb: (state: unknown) => void) => {

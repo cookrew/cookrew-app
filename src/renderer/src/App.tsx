@@ -1622,6 +1622,7 @@ function Canvas(): React.JSX.Element {
           focusTick={setupTerminal.focusTick}
           running={setupTerminal.running}
           onSetDefault={routeState.setDefault}
+          onSetSharedMcp={routeState.setSharedMcp}
           error={newestError(routeState.error, setupTerminal.error)}
           onAddToDock={(harness) => {
             // "In the dock" as Cookrew can make it true today: the harness

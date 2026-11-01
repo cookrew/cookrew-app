@@ -303,6 +303,7 @@ export interface MobileApiDeps {
   route?: {
     state: () => RouteState;
     setDefault: (model: string | null) => RouteState;
+    setSharedMcp: (on: boolean) => RouteState;
     cardState: (terminalId: string) => CardRouteState;
     setCardRoute: (terminalId: string, route: string) => Promise<CardRouteState | { error: string }>;
     health: () => { status: string; source: string | null; providers: number; live: number };
@@ -690,6 +691,15 @@ export async function handleMobileApi(
       return true;
     }
     respondJson(response, 200, deps.route.setDefault(body.model === "" ? null : body.model));
+    return true;
+  }
+  if (p === "/api/route/shared-mcp" && method === "PUT" && deps.route) {
+    const body = await readJson<{ on?: unknown }>(request);
+    if (typeof body.on !== "boolean") {
+      respondJson(response, 400, { ok: false, reason: "on must be a boolean" });
+      return true;
+    }
+    respondJson(response, 200, deps.route.setSharedMcp(body.on));
     return true;
   }
   const routeMatch = p.match(/^\/api\/terminal\/([^/]+)\/route$/);

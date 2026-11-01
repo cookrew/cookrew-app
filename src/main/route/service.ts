@@ -22,6 +22,7 @@ import { DEFAULT_PORT } from './discovery'
 import type { GatewayMonitor, GatewayProbe } from './gateway'
 import { ADD_KEY_STEM, HarnessScan, groupLineFor, setupLines } from './setup'
 import { keyFor, readRouteKeys, type RouteKeys } from './route-keys'
+import { sharedMcpArgs } from './shared-mcp'
 
 /**
  * THE ROUTE SERVICE — one object main keeps, every route question answered
@@ -114,6 +115,8 @@ export class RouteService extends EventEmitter {
   private quotas: RouteQuota[] = []
   private live: RouteDecision[] = []
   private ownerDefault: string | null
+  /** Hand every spawned agent Magpie's one MCP hub (shared-mcp.ts). On unless the owner turned it off. */
+  private sharedMcp: boolean
   private readonly offlineAtSpawn = new Set<string>()
   /** Cards whose running process was handed a route — the only ones a turn is followed for. */
   private readonly routed = new Set<string>()
@@ -127,7 +130,9 @@ export class RouteService extends EventEmitter {
 
   constructor(private readonly deps: RouteServiceDeps) {
     super()
-    this.ownerDefault = this.readOwnerDefault()
+    const settings = this.readSettings()
+    this.ownerDefault = settings.defaultModel
+    this.sharedMcp = settings.sharedMcp
     this.scan = deps.scan ?? new HarnessScan({ home: deps.home, pathEnv: deps.pathEnv, dockCommands: deps.dockCommands, harnessOfCommand: (c) => deps.harnessOf(c) })
     this.decisions = new RouteDecisions({
       fetch: (input, init) => deps.fetch(input, init),
@@ -170,6 +175,7 @@ export class RouteService extends EventEmitter {
       harnesses: this.scan.rows(),
       checkedAt: probe.checkedAt,
       autoGroup: this.models.some((m) => m.id === 'group/auto'),
+      sharedMcp: this.sharedMcp,
       setup: { ...lines, addKeyLine: ADD_KEY_STEM, addGroupLine: groupLineFor(this.models.map((m) => m.id)) }
     }
   }
@@ -192,10 +198,31 @@ export class RouteService extends EventEmitter {
 
   setDefault(model: string | null): RouteState {
     this.ownerDefault = model
-    const file = path.join(this.deps.home, '.cookrew', DEFAULT_FILE)
-    ;(this.deps.writeFile ?? writeFile0600)(file, `${JSON.stringify({ defaultModel: model })}\n`)
+    this.writeSettings()
     this.announce()
     return this.state()
+  }
+
+  /** The shared-MCP switch. A running agent keeps what it was spawned with; the next spawn reads this. */
+  setSharedMcp(on: boolean): RouteState {
+    this.sharedMcp = on
+    this.writeSettings()
+    this.announce()
+    return this.state()
+  }
+
+  /**
+   * The args that hand this card's process Magpie's MCP hub, appended LAST to
+   * its command (claude's --mcp-config is variadic). Nothing for a served
+   * seat, while the gateway is not online, with the switch off, or for a
+   * card whose harness takes no per-process MCP entry.
+   */
+  sharedMcpFor(node: TerminalNodeData): string[] {
+    if (!this.sharedMcp || this.isServedNode(node)) return []
+    const probe = this.deps.monitor.probe
+    if (probe.status !== 'online' || !probe.gateway) return []
+    const harness = this.deps.harnessOf(node.command)
+    return harness ? sharedMcpArgs(harness, probe.gateway.url) : []
   }
 
   /** The panel, a rail or the main window is looking: the monitor's clock runs while it does. */
@@ -429,15 +456,29 @@ export class RouteService extends EventEmitter {
     this.emit('card-route', { terminalId, ...this.cardState(terminalId) })
   }
 
-  private readOwnerDefault(): string | null {
-    const file = path.join(this.deps.home, '.cookrew', DEFAULT_FILE)
-    if (!existsSync(file)) return null
+  private settingsFile(): string {
+    return path.join(this.deps.home, '.cookrew', DEFAULT_FILE)
+  }
+
+  /** route.json: the owner's default model and the shared-MCP switch (absent = on). */
+  private readSettings(): { defaultModel: string | null; sharedMcp: boolean } {
+    const fallback = { defaultModel: null, sharedMcp: true }
+    const file = this.settingsFile()
+    if (!existsSync(file)) return fallback
     try {
-      const parsed = JSON.parse(readFileSync(file, 'utf8')) as { defaultModel?: unknown }
-      return typeof parsed.defaultModel === 'string' && parsed.defaultModel !== '' ? parsed.defaultModel : null
+      const parsed = JSON.parse(readFileSync(file, 'utf8')) as { defaultModel?: unknown; sharedMcp?: unknown }
+      return {
+        defaultModel: typeof parsed.defaultModel === 'string' && parsed.defaultModel !== '' ? parsed.defaultModel : null,
+        sharedMcp: parsed.sharedMcp !== false
+      }
     } catch {
-      return null
+      return fallback
     }
+  }
+
+  private writeSettings(): void {
+    const body = { defaultModel: this.ownerDefault, ...(this.sharedMcp ? {} : { sharedMcp: false }) }
+    ;(this.deps.writeFile ?? writeFile0600)(this.settingsFile(), `${JSON.stringify(body)}\n`)
   }
 }
 
