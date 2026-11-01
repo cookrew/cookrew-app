@@ -223,18 +223,38 @@
   border-radius: 14px;
 }
 
+/* A PLAIN CONVERSATION (owner, 2026-11-01): the turn the reader is at wears
+   no gold edge and no tint, and an exchange has no checkpoint heading over it
+   (its "T1 …" pill repeated the prompt word for word). The checkpoints stay
+   with LOG and LIVE, and their rail (TerminalOverlay · look !== 'chat'). */
 .lod-overlay .look-chat .ctx-block.active {
-  background: rgba(255, 214, 0, 0.07);
+  background: transparent;
+  box-shadow: none;
 }
 
 .lod-overlay .look-chat .ctx-block-head {
-  align-self: center;
-  justify-content: center;
-  max-width: 90%;
-  margin: 0;
-  padding: 2px 10px;
+  display: none;
+}
+
+/* With no rail, the chat's own scrollbar is the way through it: dragging it
+   moves the conversation itself. The trace surface hides the native bar
+   (styles.css · ONE scrollbar total); the chat shows it again, thin and
+   quiet. The standard properties win in Chromium; Safari reads the pseudo. */
+.lod-overlay .look-chat > .ctx-transcript {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sumi-muted, #6f675b) transparent;
+}
+
+.lod-overlay .look-chat > .ctx-transcript::-webkit-scrollbar {
+  display: block;
+  width: 8px;
+  height: 8px;
+}
+
+.lod-overlay .look-chat > .ctx-transcript::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
   border-radius: 999px;
-  background: var(--cream-md);
+  background: var(--sumi-muted, #6f675b) padding-box;
 }
 
 /* Yours: on the right. */
