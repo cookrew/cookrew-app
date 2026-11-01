@@ -7,8 +7,9 @@ import { thumbWants } from '../pets/thumb-wants'
 import { Counts, AgentNode, ItemNode, LinkNode, MachineNode, MarkNode, type Bind } from './ZoomParts'
 import { InkRing, InkTie } from './InkAvatar'
 import { buildZoomModel } from './zoom-model'
-import { CREW_COLS, defaultCrewCols, deviceOf, machinesAt, MACHINE_CARD } from './zoom-layout'
-import { useCrewCols } from './crew-cols'
+import { defaultCrewCols, defaultDeviceCols, deviceOf, machinesAt, MACHINE_CARD } from './zoom-layout'
+import { useCrewCols, usePerRow } from './crew-cols'
+import { PerRowPill } from './PerRowPill'
 import { deviceWords, SWS, type FrameEls } from './zoom-frame'
 import { useZoom, zoomStore } from './zoom-store'
 import { useZoomMotion } from './use-zoom-motion'
@@ -168,10 +169,14 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       if (panAt.current > max) panAt.current = max
     }
   }), [])
-  // Agents per row, as the owner picked them on this device (crew-cols.ts).
+  // Agents and workspaces per row, as the owner picked them on this device (crew-cols.ts).
   const narrow = size.w < 760
   const [crewCols, setCrewCols] = useCrewCols(narrow)
-  const frame = useMemo(() => (crewCols === null ? model.frame : { ...model.frame, crewCols }), [model.frame, crewCols])
+  const [deviceCols, setDeviceCols] = usePerRow('device', narrow)
+  const frame = useMemo(
+    () => (crewCols === null && deviceCols === null ? model.frame : { ...model.frame, crewCols: crewCols ?? undefined, deviceCols: deviceCols ?? undefined }),
+    [model.frame, crewCols, deviceCols]
+  )
   const motion = useZoomMotion(frame, collect, root, pan)
   // The crew and the thumbnails scroll apart: a side opened again starts at its top.
   useEffect(() => {
@@ -255,7 +260,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const agentOf = useMemo(() => new Map(model.agents.map((a) => [a.id, a])), [model.agents])
   // The grid's items and the coins' others: a coin's face is drawn either way.
   const itemOf = useMemo(() => new Map([...model.items, ...model.coinItems].map((i) => [i.id, i])), [model.items, model.coinItems])
-  const device = useMemo(() => deviceOf(model.frame.workspaces, size.w < 760, model.frame.screenAspect), [model.frame.workspaces, model.frame.screenAspect, size.w])
+  const device = useMemo(() => deviceOf(model.frame.workspaces, narrow, model.frame.screenAspect, deviceCols ?? undefined), [model.frame.workspaces, model.frame.screenAspect, narrow, deviceCols])
   const activeSlot = device.at[model.frame.active] ?? { x: 0, y: 0 }
   // The device stop's words grow to be read at the size the device is seen (zoom-frame.ts · deviceWords).
   const words = useMemo(() => deviceWords(device, size.w, size.h, size.w < 760), [device, size])
@@ -402,14 +407,12 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         </div>
         <div className="zv-panel" ref={bind('panel')} />
       </div>
-      {/* Agents per row: at the crew only, where it is seen (owner, 2026-11-01). */}
+      {/* Per row: at the crew and at the workspaces, each where its row is seen (owner, 2026-11-01). */}
       {zoom.dir === 'agents' && !zoom.full && Math.abs(zoom.v - 1) < 0.25 && model.agents.length > 0 && (
-        <div className="zv-cols" role="group" aria-label="Agents per row">
-          <span aria-hidden="true">per row</span>
-          {(narrow ? CREW_COLS.narrow : CREW_COLS.wide).map((n) => (
-            <button key={n} type="button" aria-pressed={(crewCols ?? defaultCrewCols(narrow)) === n} onClick={() => setCrewCols(n)} aria-label={`${n} agents per row`}>{n}</button>
-          ))}
-        </div>
+        <PerRowPill what="agents" narrow={narrow} cols={crewCols ?? defaultCrewCols(narrow)} onPick={setCrewCols} />
+      )}
+      {!zoom.full && Math.abs(zoom.v + 1) < 0.25 && model.frame.workspaces.length > 1 && (
+        <PerRowPill what="workspaces" narrow={narrow} cols={deviceCols ?? defaultDeviceCols(narrow)} onPick={setDeviceCols} />
       )}
       <nav className="zv-controls" aria-label="Semantic zoom">
         <button type="button" className="zv-back" onClick={stepBack} aria-label="Zoom out">‹</button>

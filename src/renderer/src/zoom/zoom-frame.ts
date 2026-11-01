@@ -51,6 +51,8 @@ export interface FrameModel {
   newest: string | null
   /** Agents per row, as the owner picked them (crew-cols.ts); absent, the form factor's default. */
   crewCols?: number
+  /** Workspaces per row on the device, as the owner picked them (crew-cols.ts); absent, the form factor's default. */
+  deviceCols?: number
 }
 
 type Put = HTMLElement & { _t?: string; _o?: number }
@@ -156,7 +158,7 @@ export interface Layout {
 
 export function layoutOf(model: FrameModel, narrow: boolean): Layout {
   const crew = crewOf(model.agents, narrow, model.crewCols)
-  const device = deviceOf(model.workspaces, narrow, model.screenAspect)
+  const device = deviceOf(model.workspaces, narrow, model.screenAspect, model.deviceCols)
   const screen = { w: device.screen.w * SDEV + 28, h: device.screen.h * SDEV + 28 }
   const machines = machinesAt(model.otherMachines, device.screen, narrow)
   // The other machines are part of the devices stop: the camera must frame them too.

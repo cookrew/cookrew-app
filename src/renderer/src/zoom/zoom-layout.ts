@@ -175,9 +175,22 @@ export function screenOf(box: Box, aspect: number): Box {
   return box.w / box.h < aspect ? { ...box, w: box.h * aspect } : { ...box, h: box.w / aspect }
 }
 
-/** The device: a mark per workspace, the open one where its slot is; its title ends `titleBottom`, clear of the first row's tiles; `screen` holds it at the display's proportions. */
-export function deviceOf(ids: readonly string[], narrow: boolean, aspect = DEFAULT_SCREEN_ASPECT): { at: Record<string, Pos>; box: Box; screen: Box; titleBottom: number; dx: number } {
-  const cols = narrow ? 2 : 3
+/**
+ * Workspaces per row on the device: the same pick as the crew's (owner,
+ * 2026-11-01: "per row 3 4 5 at the workspaces view too"), remembered apart
+ * from it. Unpicked, the device keeps its old 2 on a phone and 3 on a desk.
+ */
+export const DEVICE_COLS = CREW_COLS
+export const defaultDeviceCols = (narrow: boolean): number => (narrow ? 2 : 3)
+
+/** The device: a mark per workspace, `cols` to a row (the pick, else the default), the open one where its slot is; its title ends `titleBottom`, clear of the first row's tiles; `screen` holds it at the display's proportions. */
+export function deviceOf(
+  ids: readonly string[],
+  narrow: boolean,
+  aspect = DEFAULT_SCREEN_ASPECT,
+  picked?: number
+): { at: Record<string, Pos>; box: Box; screen: Box; titleBottom: number; dx: number } {
+  const cols = picked ?? defaultDeviceCols(narrow)
   const dx = narrow ? 260 : 330
   const dy = narrow ? 260 : 320
   const rows = Math.max(1, Math.ceil(ids.length / cols))
@@ -190,7 +203,7 @@ export function deviceOf(ids: readonly string[], narrow: boolean, aspect = DEFAU
   const titleBottom = -((rows - 1) / 2) * dy - TILE_TOP - 14
   const bottom = -20 + (rows * dy + 120) / 2
   const top = Math.min(-20 - (rows * dy + 120) / 2, titleBottom - (narrow ? TITLE_ROOM.narrow : TITLE_ROOM.wide))
-  const box = { w: Math.max(cols, Math.min(cols, ids.length)) * dx + 120, h: bottom - top, cy: (top + bottom) / 2 }
+  const box = { w: cols * dx + 120, h: bottom - top, cy: (top + bottom) / 2 }
   return { at, box, screen: screenOf(box, aspect), titleBottom, dx }
 }
 
