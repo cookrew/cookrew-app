@@ -370,8 +370,10 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           {picking && <HarnessMenu at={picking} harnesses={harnesses} harness={harness} onPick={pick} orch={orch} acts={acts} onDone={() => setPicking(null)} />}
         </span>
       )}
+      {/* The chip and the voice bar are siblings in this form: one key each,
+          never the bare agent id twice, or a retarget leaves the old chip behind. */}
       {to ? (
-        <CardTune key={to.id} terminalId={to.id} phase={activity?.phase ?? 'idle'} remote={to.remote} onMouseDown={(e) => e.preventDefault()} rise />
+        <CardTune key={`tune:${to.id}`} terminalId={to.id} phase={activity?.phase ?? 'idle'} remote={to.remote} onMouseDown={(e) => e.preventDefault()} rise />
       ) : (
         offer && <NewAgentTune offer={offer} tune={offeredPart(launchTune, offer)} onPick={pickLaunch} />
       )}
@@ -449,7 +451,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           if (e.key === 'Escape') e.currentTarget.blur()
         }}
       />
-      {to && <VoiceBar key={to.id} terminalId={to.id} activity={activity} remote={to.remote} />}
+      {to && <VoiceBar key={`voice:${to.id}`} terminalId={to.id} activity={activity} remote={to.remote} />}
       {dictation.ear && (
         <button
           type="button"
